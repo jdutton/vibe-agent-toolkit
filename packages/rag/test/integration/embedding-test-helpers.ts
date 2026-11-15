@@ -25,3 +25,11 @@ export async function assertBatchEmbedding(
     expect(embedding).toHaveLength(expectedDimensions);
   }
 }
+
+/**
+ * Assert that an embedding is L2-normalized: its magnitude is 1 to two places.
+ */
+export function assertUnitMagnitude(embedding: readonly number[]): void {
+  const magnitude = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
+  expect(magnitude).toBeCloseTo(1, 2);
+}

@@ -60,7 +60,7 @@ function main(): void {
 
   const packageDirs = readdirSync(PACKAGES_DIR, { withFileTypes: true })
     // Followed: a workspace package reached through a link is still a package.
-    .filter((dirent) => direntKindFollowingSync(PACKAGES_DIR, dirent) === 'directory')
+    .filter((dirent) => direntKindFollowingSync(PACKAGES_DIR, dirent, PACKAGES_DIR) === 'directory')
     .map((dirent) => dirent.name);
 
   const totalFixed = packageDirs.reduce((total, packageDir) => total + processPackage(packageDir), 0);

@@ -1,6 +1,19 @@
 # Resource Projection
 
-**Status markers used throughout:** ✅ shipped — 🔷 proposed, not yet built.
+**Status markers used throughout:** ✅ shipped — 🔷 proposed, not yet built — 🎯 **Target, per
+[fact-extractors.md](./fact-extractors.md)**: decided, not yet built.
+
+🎯 **Target, per [fact-extractors.md](./fact-extractors.md): the projection becomes a fact store.**
+Its invariants, settled decisions and enforcers are the ones in [Fact Extractors](./fact-extractors.md),
+and every hazard it enforces or accepts is a row in the
+[hazard register](./fact-extractors-hazard-register.md); this document does not restate them. Each
+section below keeps its description of what ships today and carries a 🎯 note for the target beside
+it. Where a 🎯 note and the shipped description differ, the shipped description is what the code does
+and the 🎯 note is what the change building it makes true; that change rewrites the section and drops
+the note. Two things do not change: a key covers every input its cached value depends on — the target
+generalises that rule from the content key to every stored artifact — and `check`'s whole-run
+supervision, which `query` shares under `--budget` (opt-in there; without it a query runs in one
+process, unbounded, and Ctrl-C ends it).
 
 ## 1. Overview
 
@@ -19,6 +32,12 @@ Dispositions, tags, problems and relationships are all many-to-many. Adding a zo
 quality code, or an edge-resolution state is adding rows, never migrating the schema. Extensibility
 lives in the vocabularies, which stay open; the table shapes are few and are meant to stay stable.
 
+🎯 **Target, per [fact-extractors.md](./fact-extractors.md): what the store holds.** Two kinds of
+fact. **Per-file facts** are row sets, one per (content key × extractor instance), each identified by
+its `row_set_key` and shared by every path, tree and repository holding those bytes. **Extent facts**
+say where content lives in one tree, including which instances read each path. **Per-run relations**
+(resolve outputs and core producers) are computed per run or read from a memo.
+
 ## 2. What's shipped today, vs. the proposed blob-keyed schema
 
 **The stage-2 parse cache's actual output shape today (✅ shipped) is not the table set below** — it's
@@ -35,6 +54,13 @@ depends on this — and frontmatter is kept as YAML **source**, never JSON. A co
 correctness testing, `packages/cli/src/pipeline-oracles/types.ts` (`ParseFactRow`, `EnumerationRow`,
 `ConditionFact`), exists as a test oracle, not as a queryable projection.
 
+🎯 **Target, per [fact-extractors.md](./fact-extractors.md) (I2a): the content key is the bytes
+alone.** The parser kind leaves the preimage and `CONTENT_KEY_PATTERN`, which carries no display
+label and stays the one pattern every consumer shares. The content key and `checksum` remain separate
+columns. The parse cache and its `ParseFacts` tenant retire, and the store becomes the one persistent
+tier for per-file facts. The per-format tables are renamed per instance (`<instance>__<table>`), a
+`Breaking` query-surface change. Today the key is `<parserKind>.<sha256>`, as described above.
+
 **The table sets in §2 and §3 below are the proposed (🔷), unbuilt blob-keyed schema** — carried
 over from the (retired, uncommitted) design spec as the target shape for stage 3 ("projection
 publication and export") to build toward, not a description of what exists in code today. (The prose
@@ -50,16 +76,26 @@ generated JSON Schema — `packages/resources/src/schemas/projection-blobs.ts` a
 `PROJECTION_SCHEMA_VERSION` is removed, and a *stored* projection would take a derived digest of the
 row schemas' shape instead (the parse cache's `parseFactsShapeSource()` is the pattern).
 
-**Population is ✅ real for the twelve shipped tables.** `populate()` derives rows from `ParseFacts`
-and `ResourceRegistry` at runtime, and `vat resources query` writes them into a per-run in-memory
-store. What remains 🔷 proposed is the REMAINDER described below: columns the parser does not yet
-carry, and the zone modeling several tables depend on.
+**Population is ✅ real for the fifteen shipped tables.** `populate()` derives rows from `ParseFacts`
+and `ResourceRegistry` at runtime, and `vat resources query` loads them into a run database opened
+in memory for that run. What remains 🔷 proposed is the REMAINDER described below: columns the
+parser does not yet carry, and the zone modeling several tables depend on.
+
+🎯 **Target, per [fact-extractors.md](./fact-extractors.md): querying and provenance.** Each run
+hydrates a fresh database with only the relations its statements need, rows restricted to the bound
+tree's extent, and the store is never attached while a statement runs. A relation the run did not
+hydrate does not exist there, so a statement reaching it refuses instead of reading it empty (I1).
+That replaces copying the whole projection per run — today `vat resources query` loads all of it
+into the run database, as the paragraph above describes.
+Every report says what it was bound to (I1).
 
 ⚠️ `edges` was listed among the tables with a partial source and does **not** belong: it has **zero
 producers as a MATERIALISED TABLE**, and `edge_resolutions` alongside it. ⚠️ **They are not
 unimplemented.** `resolveEdges()` COMPUTES both per lens, and `vat resources query` /
-`vat resources check` expose them as derived relations beside `lens_contexts` — nothing *stores*
-them, something *evaluates* them (see [zones.md §5](zones.md#5-references-and-edges)
+`vat resources check` expose them as derived relations beside `lens_contexts`,
+`claude_context_chains`, `claude_context_loads` and `changed_files` — nothing *stores*
+them, something *evaluates* them, and a lens is evaluated only when a declared statement names one
+of its relations (see [zones.md §5](zones.md#5-references-and-edges)
 and §9 item 3). Several columns (e.g. `wordCount`, `proseCodeUnits`, `codeBlockCodeUnits`, `sectionCount`,
 `slugOccurrence`, `column`, `inCodeSpan`, `inFence`) require new parser output that `ParseFacts`
 does not yet carry; `resource_realizations`, `resource_zones` beyond a single default "tree" zone, and
@@ -73,6 +109,8 @@ boundaries) that does not exist anywhere in the codebase yet — a separate, lar
 | `blob_references` | ordinal, raw ref, text, line, column, `startOffset`/`endOffset` (UTF-16 code units), syntactic form, lexical features (extension, leading `@`, slash count, variable-expansion syntax, in-code-span, in-fence) |
 | `blob_sections` | ordinal, depth, title, slug, slug occurrence, parent, line span, bytes (UTF-8), tokens |
 | `blob_conditions` | `(blob, code, severity, message, line)` — parse-time oddities |
+| `harness_blob_facts` | `(blob, harness)`, the bytes and tokens the harness INJECTS for it as a memory file (`injectedBytes`, `injectedTokens`), the `paths:` globs it scopes the file by (`paths`, JSON, read the harness's way) — derived lazily, only for blobs the harness reaches ([zones.md](zones.md#harness_blob_facts-and-harness_blob_imports--a-harnesss-content-rules-derived-on-reach)) |
+| `harness_blob_imports` | `(blob, harness, ordinal)`, raw ref, target, line — the `@` imports the named harness's own extractor reads ([zones.md](zones.md#harness_blob_facts-and-harness_blob_imports--a-harnesss-content-rules-derived-on-reach)) |
 
 **The proposed schema would store frontmatter as a JSON column, not DuckDB's `VARIANT`.** (Measured
 against `@duckdb/duckdb-wasm` v1.5.4, 2026-08 — a claim about another vendor's product, worth
@@ -96,7 +134,7 @@ fields on the shipped cache entry rather than as a separate row shape.
 
 ### Why not a columnar engine — and why the published half of that spike is the wrong build
 
-The projection ships on SQLite (`packages/projection-sqlite`, opt-in). DuckDB was spiked in 2026-08
+The projection ships on SQLite (`packages/projection-sqlite`, on by default). DuckDB was spiked in 2026-08
 and not adopted. The spike is recorded here for one reason: it ran against `@duckdb/duckdb-wasm`
 v1.5.4, and a **2026-08-17 correction established that wasm was the wrong build to spike**. Without
 both halves written down, the next person to revisit a columnar engine re-runs a spike whose answer
@@ -128,10 +166,13 @@ by default rather than skipped, so the gate does not hold and the bytes reach ad
 ## 3. Path-dependent tables (🔷 proposed) — rebuilt by joining, cheap, disposable
 
 Most of the tables in this section are 🔷 proposed, continuing the schema from §2 — with two
-exceptions, because saying "none" here contradicts §2. `roots`, `resources`, `resource_realizations`
-and `resource_tags` ship as real `PROJECTION_TABLES` entries and are populated at runtime; `edges`
-and `edge_resolutions` exist as **derived relations** (`DERIVED_TABLES`), computed per lens by
-`resolveEdges()` and never materialised. They
+exceptions, because saying "none" here contradicts §2. `roots`, `resources`, `resource_realizations`,
+`resource_tags` and `claude_rule_patterns` ship as real `PROJECTION_TABLES` entries and are populated
+at runtime; `edges` and `edge_resolutions` exist as **derived relations** (`DERIVED_TABLES`),
+computed per lens by `resolveEdges()` and never materialised, as do `claude_context_chains` and
+`claude_context_loads`, computed by the claude-context lens, and `changed_files` — the files under
+the root that differ from the merge base of `--base <ref>` and HEAD, computed by the changed-files
+lens from git rather than the projection, the one lens that can refuse ([zones.md](zones.md)). They
 carry everything that depends on *where* content lives, not what it is, and are designed to be cheap
 to rebuild by joining against the blob-keyed tables above, so they'd carry no durability promise of
 their own.
@@ -143,11 +184,18 @@ their own.
 | `resource_realizations` | `(resource_id, zone_id, path)` — one resource id can have many paths (e.g. a source registry and a build-output registry sharing node identity) |
 | `resource_zones` | `(resource_id, zone_kind, zone_id, role)`; `zone_kind ∈ {skill, plugin, marketplace, collection, package, tree}`; tree `role ∈ {source, dist, vendored}` |
 | `resource_tags` | `(resource_id, tag, value, source)`; `source ∈ {filename, config, frontmatter, zone, harness-convention}` |
+| `claude_rule_patterns` (✅ shipped) | `(resource_id, ordinal)` — one row per `paths:` glob of one `.claude/rules` file, with `pattern`, `literal_prefix`, `witness_path` and `status ∈ {matched, inert, unevaluated, gitignored}`. Keyed on the rules file's IDENTITY, not on an extent, and carrying no context column, for the reason [zones.md §4](zones.md#the-claude_rule_patterns-table--four-statuses-one-witness) gives |
 | `edges` + `edge_resolutions` | ⚠️ **This row previously described `edges` as carrying `dst_resource` / `dst_anchor` directly. That shape is wrong and the shipped schema rejects it** — a scalar destination cannot hold a many-candidate resolution, and choosing one winner *is* the last-write-wins defect per-lens resolution exists to remove. The destination lives on a separate `edge_resolutions` table, one row per candidate. See [zones.md §5](zones.md#5-references-and-edges), which is authoritative for this model; `packages/resources/src/schemas/projection-edges.ts` is the shipped shape. Resolution is per **resolution context**, not per zone id. |
 
 **`roots` is a table, so `path` alone is never an identifier.** Any SQL check's column contract must
 return a root (or a resource id), never a bare `path`, or a federated corpus with two roots sharing a
 relative path becomes ambiguous.
+
+🎯 **Target, per [fact-extractors.md](./fact-extractors.md) (I4): path-dependent tables gain the
+routing record,** the store's only routing fact. Which instances read a path is an extent fact and
+never enters a `row_set_key`; the chosen variant enters as an option; `mime` enters only through those
+two. Routability is a traversal rule, owned by [fact-extractors.md](./fact-extractors.md#settled-decisions);
+`routable` below describes how it is enforced today.
 
 **Content key ≠ `checksum`, and both must be kept as separate columns.** Both are real and shipped
 today, in different roles. `checksum` is `SHA256` of the *decoded* UTF-8 string (`checksum.ts`);
@@ -196,14 +244,18 @@ than against taste** (`packages/resources/src/projection/agentic-tags.ts` carrie
   measurement that motivated `selected` is a **base rate, not a rule**, so the tag ships with no
   `loading` value at all until something reads frontmatter.
 
-  ⚠️ **Two consequences, and the second is a correction the budget check now implements.** First,
-  VAT's own `claude-rules` collection *requires* `paths:` — deliberately stricter than the vendor,
-  because an unscoped rule is charged to every session whether or not the work touches what it
-  guards, and that cost is precisely what this check exists to surface. Second, the design's
-  instruction to **exclude rules files from the always-loaded chain sum is right only for rules
-  that carry `paths:`**. A rule that omits it *is* always-loaded, and excluding it under-reports
-  exactly the file whose cost is worst — the same direction of error the `loading` rank rule exists
-  to prevent. The rule is `paths:` present → `selected` (excluded), absent → `always` (charged).
+  ⚠️ **Two consequences, and the second is a correction the launch-charge accounting now
+  implements.** First, VAT's own `claude-rules` collection *requires* `paths:` — deliberately
+  stricter than the vendor, because an unscoped rule is charged to every session whether or not the
+  work touches what it guards, and that cost is precisely what `launchCharge` exists to surface.
+  Second, the design's
+  instruction to **exclude rules files from the always-loaded chain sum is right only for rules the
+  harness actually scopes by their patterns**. A rule that omits `paths:` *is* always-loaded, and
+  excluding it under-reports exactly the file whose cost is worst — the same direction of error the
+  `loading` rank rule exists to prevent. The test is `declaresPaths`, not the presence of the key:
+  a `paths:` that normalises to nothing, or to `**` alone, leaves the rule always-loaded in the
+  harness too ([evidence](../external/claude-code-rules-paths-behaviour.md)). Scoped → `selected`
+  (excluded), otherwise → `always` (charged).
 
   ⭐ **The magnitude, so nobody "simplifies" the rule back to a class-wide answer.** The same
   refusal to read frontmatter fails in the other direction too, and that direction has a measured
@@ -216,13 +268,14 @@ than against taste** (`packages/resources/src/projection/agentic-tags.ts` carrie
   tell whether this correction was cosmetic or dominant, and a future edit that flattens it back to
   "rules files are `always`" has nothing to argue against.
 
-  ⭐ **This passage shipped BEFORE the code obeyed it, and that gap was a real defect.**
-  `alwaysLoadedBudget`'s `qualifies()` excluded every rule admission, so `vat claude budget` and
-  `vat claude context` disagreed about the same directory — the query lane classed an unscoped root
-  rule `always`, the check dropped it, and a repo whose root rules omit `paths:` was told *"Every
+  ⭐ **This passage shipped BEFORE the code obeyed it, and that gap was a real defect.** The
+  launch-charge predicate (then `alwaysLoadedBudget`'s `qualifies()`, now `admissionLoadsAtLaunch` in
+  `claude-context-launch-charge.ts`) excluded every rule admission, so the two readings of the same
+  directory disagreed — the query lane classed an unscoped root rule `always`, the now-removed
+  `vat claude budget` check dropped it, and a repo whose root rules omit `paths:` was told *"Every
   instruction chain checked is within budget."* Unreachable from VAT's own tree, where all rules
-  carry `paths:`, which is why nothing went red for it. `qualifies()` now admits `root-rule` and
-  only `root-rule`; the path-scoped kinds stay excluded, for the reason above.
+  carry `paths:`, which is why nothing went red for it. `admissionLoadsAtLaunch` now admits
+  `root-rule` and only `root-rule`; the path-scoped kinds stay excluded, for the reason above.
 - **`AGENTS.md` is not `always`.** Claude Code reads `CLAUDE.md`, not `AGENTS.md`; the latter is
   charged only where a `CLAUDE.md` imports it. Its class is a property of the import graph, so it
   too ships with no `loading` value.
@@ -315,7 +368,22 @@ run's actual wall-clock saving comes from. Conflating the two is the mistake thi
 prevent: a blob-SHA memo (🔷 proposed) is a lane-specific shortcut *into* the lane-agnostic object
 cache, not a replacement for either layer.
 
+🎯 **Target, per [fact-extractors.md](./fact-extractors.md) (I2, I2a): the extent key covers every
+input its derivation observed,** including the code that derived it, the effective routing, git's
+repo-local file inputs and binary. Every hit is
+checked against the stat tuple under the racy rule, and every byte consumed is re-hashed at use.
+Extent derivation stays full until the incremental extent lands, its design blind-reviewed.
+
 ## 5. Cache properties (parse cache, ✅ shipped stage 2)
+
+🎯 **Target, per [fact-extractors.md](./fact-extractors.md): the namespace and eviction.** The
+namespace isolates the shapes of the core and store-protocol tables and the code identity of the
+store-protocol implementation, and only those. Instance schemas and extractor and resolve code
+identity live in `row_set_key` and the resolve memo key, never in the namespace, so an extractor edit
+misses only what changed. Package version and worktree path leave the namespace once every stored
+tier carries code identity — until then the version-based namespacing below is what ships. Eviction
+covers every tier, extents included, and never makes a running answer read facts as absent (I7). A
+move or restore clears leases.
 
 - **Disposable.** No durability promise, no generations, no compaction, no CI-restore contract, no
   on-disk format obligation to adopters. Recovery is "rescan." ⚠️ **OS purge is the eviction policy
@@ -453,6 +521,9 @@ and one finding dissolves most of the demand for the door.
   HEAD and parsed at a commit from last year must land on the same entry, or any historical pass
   re-parses the entire corpus from cold.
 
+  🎯 **Target, per [fact-extractors.md](./fact-extractors.md):** nothing path-, origin- or
+  commit-derived enters the content key or a `row_set_key`.
+
 **Validation stays HEAD-only by design**, and that is not a gap waiting to be filled. Checking a
 historical document against today's config is an anachronism — it reports findings that were not
 findings when the document was written, under rules that did not exist.
@@ -474,8 +545,10 @@ which a bare commit key cannot express.
 
 - ✅ **Shipped** (stages 1b/2): the pipeline restructure and the object-level, content-addressed parse
   cache described in §5.
-- ✅ **Shipped** (stage 3, schema only): the ten projection table shapes as Zod schemas with
-  generated JSON Schema, carrying no contract-version constant. Includes the `blob_links` →
+- ✅ **Shipped** (stage 3, schema only): the projection table shapes as Zod schemas with
+  generated JSON Schema, carrying no contract-version constant. `PROJECTION_TABLES`
+  (`packages/resources/src/projection/table-registry.ts`) is the enumeration — read the count there
+  rather than from prose here, which is how "ten" survived three tables past its truth. Includes the `blob_links` →
   `blob_references` rename — the old name was a claim the data cannot make (a markdown link is
   certainly a link, an `@`-prefixed token is not), so the table now records syntactic shape and
   lexical features rather than classified link types. Classification needs the corpus, and the
@@ -485,7 +558,12 @@ which a bare commit key cannot express.
 - ✅ **Shipped** (stage 3): population of those tables from `ParseFacts`/`ResourceRegistry` at
   runtime, and export.
 - 🔷 **Proposed** (beyond stage 3): the git-lane and non-git-lane change-detection manifests from
-  the scanning doc; the blob-SHA memo.
+  the scanning doc; the blob-SHA memo. 🎯 Per [fact-extractors.md](./fact-extractors.md), the
+  git-lane change-detection delta is **not decided** — extent derivation stays full until the
+  incremental extent's design passes a blind review — and the non-git manifest stays proposed.
+- 🎯 **Target, per [fact-extractors.md](./fact-extractors.md): the fact store** — per-file row sets
+  under `row_set_key`, extent facts, per-run hydration and the extractor contract, governed by that
+  document's invariants and its [hazard register](./fact-extractors-hazard-register.md).
 - ✅ **Shipped** (stage 4): `resource_tags` has a producer. `AgenticConventionContributor`
   (`stratum: 'base'`, `readsBlobs: false`) classifies every realization by path and emits the
   convention vocabulary plus a `loading` row; it is registered in the repo-wide lane after the
@@ -503,15 +581,57 @@ which a bare commit key cannot express.
     vocabulary the earlier draft listed: the first belongs to the npm Changesets release tool that
     no agent harness reads, and the other three are the skill packager's and a lens's outputs
     rather than functions of a path.
-- ✅ **Consumed as of 2026-08-23.** `resource_tags` has its first reader: the always-loaded
-  context-budget check reads the `claude-md` tag to decide which realizations set an instruction
-  chain (`packages/resources/src/projection/claude-context-budget-sweep.ts › claudeMdIdentities()`,
-  and the same lookup in `claude-context-accounting.ts`'s caller). It ships as `vat claude budget`,
-  a command of its own rather than a check folded into `vat resources validate` — a validation run
-  must not emit findings nobody asked for. `lens_entry_points` remains unbuilt, and the check does
-  not join against it. A populated table is still not evidence of a *useful* one any more than a
-  typed one was evidence of a populated one; what changed is that this one now has a consumer that
-  would break if it went empty.
+- ✅ **Consumed as of 2026-08-23.** `resource_tags` has its first reader: the claude-context lens
+  reads the `claude-md` and `rules-file` tags to decide which realizations set an instruction chain
+  (`packages/resources/src/projection/claude-context-regions.ts › instructedDirectories()`, consumed by
+  both `claude-context-relations.ts` and `claude-context-cost-map.ts`). It surfaces as published rows
+  — `claude_context_chains` / `claude_context_loads` via `vat resources query` / `vat resources
+  check`, and a whole-tree cost map via `vat claude context` — never as a check folded into
+  `vat resources validate`; a validation run must not emit findings nobody asked for.
+  `lens_entry_points` remains unbuilt, and neither reader joins against it. A populated table is
+  still not evidence of a *useful* one any more than a typed one was evidence of a populated one;
+  what changed is that this one now has a consumer that would break if it went empty.
+- ✅ **Shipped: `claude_rule_patterns`, the thirteenth materialised table.**
+  `ClaudeRulesScopeContributor` emits one row per `paths:` glob of one `.claude/rules` file — see
+  §3's row and [zones.md §4](zones.md#the-claude_rule_patterns-table--four-statuses-one-witness)
+  for the key, the four statuses and why a witness rather than a match count. Every resources lane
+  registers its producer, so it is populated whichever verb wrote the store; `vat resources query`
+  and `vat resources check` are the verbs that read it.
+- ✅ **Shipped: `harness_blob_facts` and `harness_blob_imports`, the fourteenth and fifteenth
+  materialised tables** — a coding harness's own `@`-import extractor, injected-text measure and
+  `paths:` reader, as content-keyed facts partitioned by `harness`
+  ([zones.md](zones.md#harness_blob_facts-and-harness_blob_imports--a-harnesss-content-rules-derived-on-reach)).
+  Unlike the other blob facts, these are derived lazily — only for the blobs one harness's entry
+  points and declared import extents reach — by a harness pass inside `populate()`'s closure
+  fixpoint; an absent row means "not reached", never zero, and a strict reader throws rather than
+  coercing it. The `claude-import` closure dialect and `vat claude context` read them; the loader
+  differential (`packages/resources/test/helpers/claude-loader-differential.ts`) holds both to a
+  reference port of the binary.
+- ✅ **Shipped: the first consumer that is a RULE.** `CLAUDE_RULE_GLOB_INERT` ships as the built-in
+  check `claude-rule-glob-inert` — a TypeScript predicate over `claude_rule_patterns` carrying a
+  documented `sqlTwin`, run whether or not a project declares any `resources.checks`. The invariant
+  that keeps a default-on rule from making the query engine mandatory is
+  [cli.md](./cli.md#-no-built-in-check-may-be-sql); the code's entry is in
+  [validation-codes.md](../validation-codes.md#claude_rule_glob_inert). Its companion
+  `claude-rule-frontmatter-invalid` reports the rules files whose frontmatter did not parse — the
+  ones whose globs never reached the pattern table
+  ([validation-codes.md](../validation-codes.md#claude_rule_frontmatter_invalid)).
+- ✅ **Shipped: a declined symlink is a row, not a silence.** The filesystem extent still realizes
+  no symlink path, but every link its enumerator met is a `realization_conditions` row at the
+  link's path — `EXTENT_SYMLINK_NOT_REALIZED`, or `EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT` when the
+  target resolves outside the root, `EXTENT_SYMLINK_TARGET_UNRESOLVED` when it resolves to
+  nothing, or `EXTENT_SYMLINK_TARGET_UNREADABLE` when the OS refused or failed the lookup, or
+  the link's chain was refused before the kernel was asked — a hop through a network path, which
+  a Windows kernel would answer by offering the operator's credentials to the host (class
+  `refused`, errno `LINK_CHAIN_REFUSED`). Its class is in the row's `targetFaultClass` column,
+  never only in `message`; a query about declined
+  links asks for all four
+  ([validation-codes.md](../validation-codes.md#extent_symlink_not_realized)).
+- ✅ **Shipped: the store is on by default.** The extent- and blob-scoped tables now cross
+  invocations without an opt-in (`VAT_PROJECTION_STORE=off`, or `VAT_CACHE=0` for every cache, is
+  the way back), and the blob tier is bounded by a `blob_keys` manifest rather than growing without
+  limit. [`packages/projection-sqlite/README.md`](../../packages/projection-sqlite/README.md) owns
+  the layout, the retention and the measurements.
 
 > ✅ **The Zones revisions below have LANDED** — this note is kept as the record of what changed and
 > why, not as a warning about pending work. Zone modelling was originally deferred past population
@@ -547,6 +667,9 @@ which a bare commit key cannot express.
 
 ## Related
 
+- [Fact Extractors](./fact-extractors.md) — the decided target for this store: invariants I0–I11,
+  settled decisions and their rejected alternatives; every 🎯 note above defers to it. Its
+  [hazard register](./fact-extractors-hazard-register.md) lists what the store enforces or accepts.
 - [Zones](./zones.md) — the lens model these tables are read through: storage vs. viewer zones,
   per-zone resolution, resource identity and realizations, and the contributor seam.
 - [Resource Scanning and Object Caching](./resource-scanning-and-caching.md) — the input side: how

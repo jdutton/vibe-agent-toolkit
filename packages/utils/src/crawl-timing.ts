@@ -409,7 +409,7 @@ export const CRAWL_BLOB_POPULATE_ID = 'blob-population:derive';
 
 /**
  * Synthetic contributor id for the merge driver's attempt to answer a population
- * from a {@link ProjectionStore} instead of deriving it.
+ * from a `FactStore` instead of deriving it.
  *
  * **A row here is the only way a dump can tell a cache HIT from a subject that
  * exercised nothing.** Both look identical from the totals — a hit files no
@@ -425,7 +425,7 @@ export const CRAWL_STORE_READ_ID = 'projection-store:read';
 
 /**
  * Synthetic contributor id for writing a freshly derived population back to a
- * {@link ProjectionStore}.
+ * `FactStore`.
  *
  * Filed only on a miss, which is what makes the pair readable: a run with a read
  * row and no write row is a hit, a run with both is a miss that paid to populate
@@ -616,7 +616,10 @@ const entries = new Map<string, EntryAccumulator>();
  *
  * Read ONCE, here, from `process.env` — see this module's header.
  */
-let dumpDirectory: string | null = normalizeTimingDirectory(process.env['VAT_CRAWL_TIMING']);
+let dumpDirectory: string | null = ensureTimingDirectory(
+  DUMP_NOUN,
+  normalizeTimingDirectory(process.env['VAT_CRAWL_TIMING']),
+);
 
 /**
  * The hot path's gate. A plain boolean rather than `dumpDirectory !== null` so
@@ -708,8 +711,9 @@ function writeDump(): string | null {
   return writeTimingDump(DUMP_NOUN, dumpDirectory, DUMP_BASENAME, buildDump);
 }
 
+// The directory was made above, or the seam is off: one that could not be made
+// was reported once there, and an exit write would only report it again.
 if (dumpDirectory !== null) {
-  ensureTimingDirectory(DUMP_NOUN, dumpDirectory);
   // Registered ONLY when enabled: a disabled seam must not even add a listener.
   process.on('exit', () => {
     writeDump();
@@ -903,10 +907,9 @@ export function recordContributorInvocation(timing: {
  * @param directory - Where {@link __writeCrawlTimingDumpForTest} writes, or `null` to disable
  */
 export function __setCrawlTimingForTest(directory: string | null): void {
-  dumpDirectory = normalizeTimingDirectory(directory ?? undefined);
+  dumpDirectory = ensureTimingDirectory(DUMP_NOUN, normalizeTimingDirectory(directory ?? undefined));
   timingEnabled = dumpDirectory !== null;
   entries.clear();
-  if (dumpDirectory !== null) ensureTimingDirectory(DUMP_NOUN, dumpDirectory);
 }
 
 /**

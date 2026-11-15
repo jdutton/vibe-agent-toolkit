@@ -32,10 +32,12 @@ describe('whole-module subpath entries', () => {
     const mod = await import('../src/git.js');
     expect(typeof mod.runGit).toBe('function');
     expect(typeof mod.runGitOrThrow).toBe('function');
+    expect(typeof mod.runGitBytes).toBe('function');
 
     const barrel: Record<string, unknown> = await import('../src/index.js');
     expect('runGit' in barrel).toBe(false);
     expect('runGitOrThrow' in barrel).toBe(false);
+    expect('runGitBytes' in barrel).toBe(false);
   });
 
   /**
@@ -177,6 +179,29 @@ describe('whole-module subpath entries', () => {
     // whichever half is unasserted is the one a later edit deletes.
     expect(typeof mod.createTempCorpus).toBe('function');
     expect(typeof mod.replantableCorpus).toBe('function');
+    // The fs fault injector other packages' fault matrices import across the boundary.
+    expect(typeof mod.installFaultFs).toBe('function');
+    expect(typeof mod.injectedErrnoError).toBe('function');
+    expect(typeof mod.faultRuleOf).toBe('function');
+    expect(typeof mod.faultFsSpecOf).toBe('function');
+    expect(typeof mod.snapshotTree).toBe('function');
+    expect(typeof mod.diffSnapshots).toBe('function');
+    expect(typeof mod.subtree).toBe('function');
+    expect(typeof mod.untracedFs).toBe('function');
+    expect(typeof mod.overOutputRowsMarkdown).toBe('function');
+    // The absence-cause matcher: planted in resources and claude-marketplace suites, read by the CLI's census.
+    expect(typeof mod.expectAbsenceCause).toBe('function');
+  });
+
+  // The harness's vocabulary is exported BY NAME: an `export *` of `fault-spec.ts` made its op table
+  // (`OPS`) this subpath's API. Both ways: every value the module defines is either exported here or
+  // named below as withheld, so a new one is a deliberate choice, and a withheld one cannot leak back.
+  it('./testing exposes the fault vocabulary by name, and withholds the harness\'s own op table', async () => {
+    const barrel: Record<string, unknown> = await import('../src/testing.js');
+    const vocabulary = Object.keys(await import('../src/testing/fault-spec.js'));
+    const withheld = vocabulary.filter((name) => !(name in barrel));
+    expect(withheld).toEqual(['OPS']);
+    expect(new Set(vocabulary.filter((name) => name in barrel))).toEqual(new Set(['INJECTED_ERRNOS', 'faultFsSpecOf', 'faultRuleOf', 'injectedErrnoError']));
   });
 
   it('./asset exposes asset reference resolution', async () => {

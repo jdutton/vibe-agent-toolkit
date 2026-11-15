@@ -82,6 +82,11 @@ const WELL_KNOWN_BASENAMES = new Map<string, string>(
  * ⚠️ `text/plain` here means **prose** — it is the value that routes to the markdown
  * parser (see {@link parserKindForMimeType}). Never assign it to a format that
  * merely happens to be text, such as a lockfile; give that its own type.
+ *
+ * ⚠️ Every type here is a TEXT format, and {@link isTextMimeType} relies on it: a
+ * binary format (an image, an archive) has no entry, so its realizations carry a
+ * null `mime`. Adding one here would make every such file read as text that
+ * failed to decode.
  */
 const EXTENSION_GROUPS: ReadonlyArray<readonly [readonly string[], string]> = [
   // Documents — the only entries that route to a parser.
@@ -124,6 +129,9 @@ const EXTENSION_GROUPS: ReadonlyArray<readonly [readonly string[], string]> = [
 const EXTENSION_TYPES = new Map<string, string>(
   EXTENSION_GROUPS.flatMap(([extensions, mimeType]) => extensions.map((ext): [string, string] => [ext, mimeType])),
 );
+
+/** Every type the two tables above assign — each of them a text format. */
+const TABLE_TYPES: ReadonlySet<string> = new Set([...WELL_KNOWN_BASENAMES.values(), ...EXTENSION_TYPES.values()]);
 
 /** MIME type → parser. Absent means "run no document parser over this". */
 const PARSER_BY_MIME_TYPE = new Map<string, DocumentParserKind>([
@@ -228,4 +236,24 @@ function mediaTypeOf(mimeType: string): string {
  */
 export function parserKindForMimeType(mimeType: string | null): DocumentParserKind | null {
   return mimeType === null ? null : (PARSER_BY_MIME_TYPE.get(mediaTypeOf(mimeType)) ?? null);
+}
+
+/**
+ * Whether a recorded type says the file is TEXT — so bytes there that are not
+ * text are a finding, not the ordinary shape of a repository.
+ *
+ * True for any `text/*` type, any `+xml` or `+json` structured-syntax suffix
+ * (RFC 6839), and every type the extension and basename tables assign (all text
+ * formats; see {@link EXTENSION_GROUPS}). False for `null` — "no type recorded",
+ * which is what an image or an archive gets, since neither has a table entry.
+ *
+ * @param mimeType - A realization's `mime`, from {@link mimeTypeForPath} or a
+ *   collection's declared `mimeType`, or `null`
+ * @returns True when the type promises text
+ */
+export function isTextMimeType(mimeType: string | null): boolean {
+  if (mimeType === null) return false;
+  const mediaType = mediaTypeOf(mimeType);
+  return mediaType.startsWith('text/') || mediaType.endsWith('+xml') || mediaType.endsWith('+json')
+    || TABLE_TYPES.has(mediaType);
 }

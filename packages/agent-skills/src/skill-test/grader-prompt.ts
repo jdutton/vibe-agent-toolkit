@@ -321,8 +321,7 @@ const REQUIRED_PATTERNS: { test: RegExp; label: string }[] = [
   { test: /browser|viewer/i, label: 'must explicitly forbid opening a browser/viewer' },
   { test: /iterat/i, label: 'must forbid iterating on / improving the skill' },
   { test: /runNonce/i, label: 'must carry the nonce directive (runNonce)' },
-  // A grader that emits `friction` as bare strings used to abort the whole run;
-  // the prompt MUST always spell out the friction object shape to prevent that.
+  // The prompt MUST always spell out the friction object shape: bare strings abort the run.
   { test: /"friction" item MUST be a JSON object/, label: 'must spell out the friction item object shape' },
   { test: /"evalId" MUST be exactly: "/, label: 'must render the evalId directive as a JSON string' },
 ];
@@ -346,12 +345,8 @@ export const GRADER_PROMPT_INVARIANT_LABELS: readonly string[] = REQUIRED_PATTER
  * written. The markers are NOT regexes: they are compared as exact strings built
  * from the run's nonce.
  *
- * That distinction is the fix for a real hole. These used to be
- * `/===BEGIN EVAL SPEC \S+ \(untrusted/` — `\S+` where the nonce belongs — so ANY
- * non-space token satisfied the check, and a suite that wrapped its own payload in
- * `===BEGIN EVAL SPEC ZZZZ (untrusted …)===` / `===END EVAL SPEC ZZZZ===` passed
- * the fence check with the payload sitting un-excised in the instruction region.
- * A forgeable marker defeats the entire point of noncing the fences.
+ * A marker matched by `\S+` where the nonce belongs would be forgeable by the
+ * suite itself, which defeats the entire point of noncing the fences.
  */
 const FENCED_BLOCKS: { intro: RegExp; fence: string; label: string }[] = [
   {
@@ -361,8 +356,7 @@ const FENCED_BLOCKS: { intro: RegExp; fence: string; label: string }[] = [
     label: 'subject manifest block',
   },
   {
-    // The suite's own expectations/expected_output — same provenance as the
-    // manifest, and previously sitting in the INSTRUCTION region unfenced.
+    // The suite's own expectations/expected_output — same provenance as the manifest.
     intro: /Grade each of the following expectations/,
     fence: EVAL_SPEC_FENCE,
     label: 'eval expectations/expected_output block',

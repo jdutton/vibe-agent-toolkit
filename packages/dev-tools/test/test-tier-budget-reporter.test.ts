@@ -3,6 +3,8 @@
  * normalisation, and the reporter's two side effects (a printed verdict and a
  * non-zero exit code).
  */
+import { sep } from 'node:path';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -46,7 +48,8 @@ describe('repoRelative', () => {
     expect(repoRelative('/repo/packages/x/test/a.test.ts', '/repo/')).toBe('packages/x/test/a.test.ts');
   });
 
-  it('normalises a Windows root and compares the drive letter case-insensitively', () => {
+  // Gated: the input is a NATIVE path, and a backslash is a separator only on win32 (a filename character on POSIX).
+  it.skipIf(sep !== '\\')('normalises a Windows root and compares the drive letter case-insensitively', () => {
     expect(repoRelative('c:/repo/packages/x/test/a.test.ts', 'C:\\repo\\')).toBe('packages/x/test/a.test.ts');
   });
 

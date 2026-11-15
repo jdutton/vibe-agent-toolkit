@@ -272,7 +272,6 @@ Recommended structure for Agent Skills:
 ```
 my-skill/
 ├── SKILL.md              # Main skill file
-├── agent.yaml            # VAT agent manifest (after import)
 ├── reference/            # Reference documentation
 │   ├── api-spec.md
 │   └── examples.md
@@ -361,9 +360,6 @@ vat audit my-skill/SKILL.md
 
 # Validate all skills
 vat audit skills/
-
-# Import to VAT format
-vat agent import my-skill/SKILL.md
 ```
 
 ### Pre-Commit Workflow
@@ -470,7 +466,7 @@ description: Validates YAML configuration files against JSON schemas. Supports Y
 
 ### 3. Tags (VAT-Specific)
 
-If using VAT agent format, add tags:
+Add tags under the standard `metadata` key:
 
 ```yaml
 metadata:
@@ -485,7 +481,7 @@ metadata:
 
 ### Version Your Skills
 
-Use semantic versioning in VAT agents:
+Record a semantic version under `metadata`:
 
 ```yaml
 metadata:
@@ -532,21 +528,9 @@ Before releasing a skill:
 
 ### Automated Testing (VAT)
 
-If using VAT agents, add test cases:
-
-```markdown
-# test/test-cases.md
-
-## Test: JSON Validation
-
-**Input:**
-```json
-{"name": "test"}
-```
-
-**Expected Output:**
-Valid JSON structure
-```
+Behaviorally test a packaged skill in isolation with `vat skill test run`: it runs the skill's
+eval suite against a blind executor and grades the result. The `vat-skill-testing` skill in VAT's
+plugin covers configuring evals, auth modes and reading the verdict.
 
 ## Security Considerations
 
@@ -590,7 +574,6 @@ This guide is based on the specification but adds VAT-specific best practices an
 ## Related Documentation
 
 - [Audit Command](../../packages/cli/docs/audit.md) - `vat audit` usage; codes in [validation-codes.md](../validation-codes.md)
-- [Import Command](../cli/import.md) - Converting skills to VAT format
 - [agent-skills Package](../../packages/agent-skills/README.md) - Validation API
 
 ## Getting Help
@@ -613,7 +596,7 @@ Before sharing your skill:
 - [ ] No reserved words (claude, anthropic)
 - [ ] No XML characters in name or description
 - [ ] Skill length under 5000 lines
-- [ ] Audit validation passes (`vat agent audit`)
+- [ ] Audit validation passes (`vat audit`)
 - [ ] Tested in target environment (console/IDE)
 
 Following these best practices will ensure your Agent Skills are high-quality, maintainable, and work reliably across all environments.

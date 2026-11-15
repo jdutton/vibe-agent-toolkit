@@ -4,8 +4,7 @@ import { parse } from 'yaml';
 
 import { upsertTestConfig } from '../../src/skill-test/configure-writer.js';
 
-const BASE = `version: 1
-skills:
+const BASE = `skills:
   include: ["skills/**/SKILL.md"]
   config:
     my-skill:
@@ -20,7 +19,7 @@ skills:
  * existing test block (report-tool) and one without (acme-skill).
  * The goal: prove upsertTestConfig never reflows content it didn't touch.
  */
-const RICH_FIXTURE = `version: 1  # config version comment
+const RICH_FIXTURE = `# config comment
 skills:
   include: ["skills/**/SKILL.md"]  # flow array with inline comment
   config:
@@ -76,7 +75,7 @@ describe('upsertTestConfig', () => {
   });
 
   it('creates skills.config.<skill> when the skill is not yet present', () => {
-    const out = upsertTestConfig('version: 1\nskills:\n  include: ["s/**/SKILL.md"]\n', 'new-skill', { auth: 'auto' });
+    const out = upsertTestConfig('skills:\n  include: ["s/**/SKILL.md"]\n', 'new-skill', { auth: 'auto' });
     const parsed = parse(out) as { skills: { config: Record<string, { test: Record<string, unknown> }> } };
     expect(parsed.skills.config['new-skill']?.test?.['auth']).toBe('auto');
   });
@@ -108,7 +107,7 @@ describe('upsertTestConfig — byte-surgical regression', () => {
     const anchor = '\n    report-tool:';
     expect(tailFrom(out, anchor)).toBe(tailFrom(RICH_FIXTURE, anchor));
     // Inline comments, flow array, and long string in the pre-insertion section are intact.
-    expect(out).toContain('# config version comment');
+    expect(out).toContain('# config comment');
     expect(out).toContain('["skills/**/SKILL.md"]  # flow array with inline comment');
     expect(out).toContain('"A very long description that is definitely more than eighty characters wide to verify no line-wrap avoidance"');
     expect(out).toContain('# opt-out');

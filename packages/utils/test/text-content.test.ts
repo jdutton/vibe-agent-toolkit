@@ -20,7 +20,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { normalizedTmpdir } from '../src/path-utils.js';
 import { safePath } from '../src/path.js';
-import { decodeTextContent, type TextEncoding } from '../src/text-content.js';
+import { decodeTextContent, decodeUtf8Exactly, type TextEncoding } from '../src/text-content.js';
 import { readTextContent, readTextContentSync } from '../src/text-file.js';
 
 /** One heading and one link — enough that a wrong decode cannot parse as markdown. */
@@ -339,5 +339,22 @@ describe('readTextContent reads through the same seam', () => {
     const direct = decodeTextContent(bytes);
     expect(await readTextContent(file)).toEqual(direct);
     expect(readTextContentSync(file)).toEqual(direct);
+  });
+});
+
+describe('decodeUtf8Exactly', () => {
+  it.for([
+    { name: 'ASCII', bytes: [0x61, 0x2e, 0x6d, 0x64], text: 'a.md' },
+    { name: 'a two-byte character', bytes: [0xc3, 0xa9], text: 'é' },
+    { name: 'a literal U+FFFD', bytes: [0xef, 0xbf, 0xbd], text: '�' },
+    // A UTF-8 BOM is a character of the name, never a signature to strip.
+    { name: 'a leading UTF-8 BOM', bytes: [0xef, 0xbb, 0xbf, 0x61], text: `${String.fromCodePoint(0xfe_ff)}a` },
+    // A UTF-16 BOM is not UTF-8, never a reason to decode as UTF-16.
+    { name: 'a UTF-16LE BOM', bytes: [0xff, 0xfe, 0x61, 0x00], text: undefined },
+    { name: 'a stray continuation byte', bytes: [0x61, 0x80], text: undefined },
+    { name: 'an encoded surrogate', bytes: [0xed, 0xa0, 0x80], text: undefined },
+    { name: 'a truncated sequence', bytes: [0xc3], text: undefined },
+  ])('decodes $name to exactly what the bytes spell, or nothing', ({ bytes, text }) => {
+    expect(decodeUtf8Exactly(Uint8Array.from(bytes))).toBe(text);
   });
 });

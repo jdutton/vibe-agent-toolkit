@@ -3,7 +3,7 @@ import { describe, it } from 'vitest';
 import { expectRulePasses, RULE_TESTER_CASES, type RuleCases } from '../rule-tester.js';
 
 const NAME = 'no-self-package-import';
-const AGENT_RUNTIME = [{ packageName: '@vibe-agent-toolkit/agent-runtime' }];
+const RESOURCES = [{ packageName: '@vibe-agent-toolkit/resources' }];
 
 /**
  * `no-self-package-import` is told which package it is inside, via a required
@@ -11,9 +11,10 @@ const AGENT_RUNTIME = [{ packageName: '@vibe-agent-toolkit/agent-runtime' }];
  * subpath must require nothing at all (`subpath-purity.test.ts`). That also makes
  * these cases independent of the working directory the suite runs from.
  *
- * The load-bearing case is `selfImportOfTheShippedDefect`: the exact import that
- * reddened CI on both ubuntu and windows at `0e8b74f9`. A guard nobody has
- * watched fire on the real defect is an assumption, not a guard.
+ * The load-bearing case is `selfImportOfTheShippedDefect`: the shape of the import
+ * that reddened CI on both ubuntu and windows at `0e8b74f9` (a type import from a
+ * package's own barrel, inside that package). A guard nobody has watched fire on
+ * the real defect is an assumption, not a guard.
  *
  * The other one worth naming is the `rag` / `rag-lancedb` leg. Matching a
  * self-reference with `startsWith(packageName)` alone would report
@@ -24,12 +25,12 @@ const CASES: RuleCases = {
   valid: [
     {
       name: 'the relative import that replaced the defect',
-      options: AGENT_RUNTIME,
-      code: "import type { SessionStore } from './types.js';",
+      options: RESOURCES,
+      code: "import type { ResourceMetadata } from './types.js';",
     },
     {
       name: 'a genuinely different package',
-      options: AGENT_RUNTIME,
+      options: RESOURCES,
       code: "import { safePath } from '@vibe-agent-toolkit/utils';",
     },
     {
@@ -39,51 +40,51 @@ const CASES: RuleCases = {
     },
     {
       name: 'a node builtin',
-      options: AGENT_RUNTIME,
+      options: RESOURCES,
       code: "import { readFile } from 'node:fs/promises';",
     },
   ],
   invalid: [
     {
       name: 'selfImportOfTheShippedDefect',
-      options: AGENT_RUNTIME,
-      code: "import type { SessionStore } from '@vibe-agent-toolkit/agent-runtime';",
+      options: RESOURCES,
+      code: "import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';",
       errors: [{ messageId: 'useRelativeImport' }],
     },
     {
       name: 'a declared subpath of the same package',
-      options: AGENT_RUNTIME,
-      code: "import { makeSession } from '@vibe-agent-toolkit/agent-runtime/session/test-helpers';",
+      options: RESOURCES,
+      code: "import { parseMarkdownContent } from '@vibe-agent-toolkit/resources/parse-conformance';",
       errors: [{ messageId: 'useRelativeImport' }],
     },
     {
       name: 'a barrel re-exporting through its own name',
-      options: AGENT_RUNTIME,
-      code: "export * from '@vibe-agent-toolkit/agent-runtime';",
+      options: RESOURCES,
+      code: "export * from '@vibe-agent-toolkit/resources';",
       errors: [{ messageId: 'useRelativeImport' }],
     },
     {
       name: 'a named re-export through its own name',
-      options: AGENT_RUNTIME,
-      code: "export { SessionNotFoundError } from '@vibe-agent-toolkit/agent-runtime';",
+      options: RESOURCES,
+      code: "export { ResourceRegistry } from '@vibe-agent-toolkit/resources';",
       errors: [{ messageId: 'useRelativeImport' }],
     },
     {
       name: 'a dynamic import',
-      options: AGENT_RUNTIME,
-      code: "const m = await import('@vibe-agent-toolkit/agent-runtime');",
+      options: RESOURCES,
+      code: "const m = await import('@vibe-agent-toolkit/resources');",
       errors: [{ messageId: 'useRelativeImport' }],
     },
     {
       name: 'an import() in TYPE position, which no other visitor reaches',
-      options: AGENT_RUNTIME,
-      code: "type S = import('@vibe-agent-toolkit/agent-runtime').SessionStore;",
+      options: RESOURCES,
+      code: "type S = import('@vibe-agent-toolkit/resources').ResourceMetadata;",
       errors: [{ messageId: 'useRelativeImport' }],
     },
     {
       name: 'a require() call',
-      options: AGENT_RUNTIME,
-      code: "const m = require('@vibe-agent-toolkit/agent-runtime');",
+      options: RESOURCES,
+      code: "const m = require('@vibe-agent-toolkit/resources');",
       errors: [{ messageId: 'useRelativeImport' }],
     },
   ],

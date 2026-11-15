@@ -5,15 +5,25 @@
  * finds matching SKILL.md files, and extracts skill names from frontmatter.
  */
 
-import { existsSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import type { PluginLocalSkillIndex } from '@vibe-agent-toolkit/agent-skills';
-import { parseFileCached } from '@vibe-agent-toolkit/resources';
-import type { SkillsConfig } from '@vibe-agent-toolkit/resources';
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import {
+  type ParseDispatcher,
+  parseFileCached,
+  type ParseRefusedResource,
+  parseRefusedEntryFor,
+  parseRefusedMessage,
+  type ParseResult,
+  type ParseRoute,
+  type SkillsConfig,
+  withParseDispatcher,
+} from '@vibe-agent-toolkit/resources';
+import { followedKindSync, forEachInOrder, fsFaultOf, issueLocation, mapConcurrentFailingInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory, type UnreadablePolicy } from '@vibe-agent-toolkit/utils/crawl';
 import picomatch from 'picomatch';
+
+import { CommandRefusalError } from '../../utils/command-refusal.js';
 
 import type { DiscoveredSkill } from './command-helpers.js';
 
@@ -28,7 +38,7 @@ import type { DiscoveredSkill } from './command-helpers.js';
  * would then confidently work from. The right answer for `vat skills validate`,
  * `vat skills build`, `vat verify` and the rest, which must not act on a
  * population they could not see. Discovery owns the sentence, which is why the
- * arm is a literal here rather than the crawler's `{ refuse: { root, remedy } }`.
+ * arm is a literal here rather than the crawler's `{ refuse: { root, remedy, side } }`.
  *
  * `{ degrade }` — for a caller whose honest answer is to keep going: `vat
  * audit`, which reports an unreadable path as `SCAN_PATH_UNREADABLE` and
@@ -52,6 +62,74 @@ const DISCOVERY_EXCLUDE = [
   '**/coverage/**',
 ];
 
+/** What one SKILL.md read gave a lane: its parse, or the parse worker's refusal of it for this run. */
+type SkillDocumentRead =
+  | { readonly kind: 'parsed'; readonly document: ParseResult }
+  | { readonly kind: 'refused'; readonly refused: ParseRefusedResource };
+
+/** A skill's name, or the refusal that left it with none this run can read — never a fallback. */
+type SkillNameRead =
+  | { readonly kind: 'named'; readonly name: string }
+  | { readonly kind: 'refused'; readonly refused: ParseRefusedResource };
+
+/**
+ * What config discovery found: the skills it could name, and the SKILL.md files the parse
+ * worker refused for this run. Both required: a refused skill has no name to key its config
+ * by, so each caller reports these through the not-admitted contract or refuses the run.
+ */
+interface SkillDiscovery {
+  readonly skills: DiscoveredSkill[];
+  readonly parseRefused: readonly ParseRefusedResource[];
+}
+
+/**
+ * Parse a SKILL.md in the bounded worker (`parseFileCached`). A per-run refusal is carried as
+ * `refused`; every other error — a broken parser install included — is rethrown.
+ */
+export async function skillDocumentOrRefused(skillPath: string, route: ParseRoute): Promise<SkillDocumentRead> {
+  try {
+    return { kind: 'parsed', document: await parseFileCached(skillPath, 'markdown', route) };
+  } catch (error) {
+    const refused = parseRefusedEntryFor(skillPath, error);
+    if (refused === undefined) throw error;
+    return { kind: 'refused', refused };
+  }
+}
+
+/** What a refused SKILL.md cost a lane that needed its skill's name. */
+const SKILL_NAME_UNREAD = 'the skill it defines has no name this run can read, and nothing was done with it';
+
+/**
+ * The refusal of a run that needed the name of a skill whose SKILL.md the parse worker refused:
+ * `INPUT_UNREADABLE` for a limit, `RUN_INCOMPLETE` for a dead worker, in the not-admitted sentence.
+ */
+export function skillParseRefusal(entry: ParseRefusedResource, locationRoot: string): CommandRefusalError {
+  const message = parseRefusedMessage(entry, issueLocation(entry.filePath, locationRoot), SKILL_NAME_UNREAD);
+  return new CommandRefusalError(entry.code === 'RESOURCE_PARSE_WORKER_DIED' ? 'RUN_INCOMPLETE' : 'INPUT_UNREADABLE', message);
+}
+
+/** The discovered skills, or the run's refusal when any SKILL.md was refused: for a verb that cannot act on what it could not name. */
+export function namedSkillsOrRefuse(discovery: SkillDiscovery, locationRoot: string): DiscoveredSkill[] {
+  const [first] = discovery.parseRefused;
+  if (first !== undefined) throw skillParseRefusal(first, locationRoot);
+  return discovery.skills;
+}
+
+/** The name `read` resolves to, or the run's refusal when the parse worker refused `skillMdPath`. */
+export async function declaredNameOrRefuse(
+  skillMdPath: string,
+  read: Promise<string | undefined>,
+  locationRoot: string,
+): Promise<string | undefined> {
+  try {
+    return await read;
+  } catch (error) {
+    const refused = parseRefusedEntryFor(skillMdPath, error);
+    if (refused === undefined) throw error;
+    throw skillParseRefusal(refused, locationRoot);
+  }
+}
+
 /**
  * Read a skill's name from SKILL.md frontmatter, falling back to its H1 title and
  * then its filename. The Claude plugin build and `vat verify` reach it through
@@ -66,15 +144,18 @@ const DISCOVERY_EXCLUDE = [
  * packaging validator refuses it as `SKILL_MISSING_FRONTMATTER`, located at the
  * file's path. Excluding it here instead would shrink the denominator silently,
  * which is the exact tell-less drop `includeUntracked` below exists to prevent.
+ *
+ * A SKILL.md the parse worker refuses has no name: it is `refused`, never a key.
  */
-async function readSkillName(skillPath: string): Promise<string | undefined> {
-  const parsed = await parseFileCached(skillPath, 'markdown');
+async function readSkillName(skillPath: string, dispatcher: ParseDispatcher): Promise<SkillNameRead> {
+  const read = await skillDocumentOrRefused(skillPath, { dispatcher });
+  if (read.kind === 'refused') return read;
   // The H1 fallback below reads the SAME bytes the parse already decoded, so it
-  // uses `parsed.content` rather than a second read of the same path.
-  const content = parsed.content;
-  const name = parsed.frontmatter?.['name'];
+  // uses `content` rather than a second read of the same path.
+  const { content, frontmatter } = read.document;
+  const name = frontmatter?.['name'];
   if (typeof name === 'string' && name.length > 0) {
-    return name;
+    return { kind: 'named', name };
   }
   // Fallback: try H1 title
   // `[ \t]` is a single fixed-width class, not a quantifier, so it cannot compete
@@ -82,9 +163,9 @@ async function readSkillName(skillPath: string): Promise<string | undefined> {
   // old `\s+([^\n]+)` form backtrack super-linearly. .trim() below is unchanged.
   const h1Match = /^#[ \t]([^\n]*)$/m.exec(content);
   if (h1Match?.[1]) {
-    return h1Match[1].trim();
+    return { kind: 'named', name: h1Match[1].trim() };
   }
-  return basename(skillPath, '.md');
+  return { kind: 'named', name: basename(skillPath, '.md') };
 }
 
 /**
@@ -97,22 +178,32 @@ async function readSkillName(skillPath: string): Promise<string | undefined> {
 export type PluginLocalSkillNames = ReadonlyMap<string, string>;
 
 /**
- * The declared name of the plugin-local skill in `skillSourceDir` ({@link readSkillName}),
- * else `skillDirPath`'s trailing segment. The plugin build and `vat verify` both name a
- * plugin-local skill through THIS, so they look up the same config.
+ * The name of the plugin-local skill in `skillSourceDir` ({@link readSkillName}), or its
+ * refusal. The plugin build and `vat verify` both name a plugin-local skill through THIS,
+ * so they look up the same config. `dispatcher` is required: the run's, or `undefined` for one
+ * read, which holds its own for the call.
  */
-export async function readPluginLocalSkillName(skillSourceDir: string, skillDirPath: string): Promise<string> {
-  return (await readSkillName(safePath.join(skillSourceDir, 'SKILL.md'))) ?? basename(skillDirPath);
+export function readPluginLocalSkillName(skillSourceDir: string, dispatcher: ParseDispatcher | undefined): Promise<SkillNameRead> {
+  return withParseDispatcher((run) => readSkillName(safePath.join(skillSourceDir, 'SKILL.md'), run), { dispatcher });
 }
 
-/** {@link PluginLocalSkillNames} for every location in `pluginLocal`. */
-export async function readPluginLocalSkillNames(pluginLocal: PluginLocalSkillIndex): Promise<PluginLocalSkillNames> {
-  const names = new Map<string, string>();
+/** {@link PluginLocalSkillNames} for every location in `pluginLocal`, or the run's refusal ({@link skillParseRefusal}). */
+export async function readPluginLocalSkillNames(pluginLocal: PluginLocalSkillIndex, locationRoot: string): Promise<PluginLocalSkillNames> {
+  // The first location per resolved directory, as before; their reads are independent.
+  const firstByKey = new Map<string, (typeof pluginLocal.locations)[number]>();
   for (const loc of pluginLocal.locations) {
     const key = safePath.resolve(loc.skillSourceDir);
-    if (!names.has(key)) names.set(key, await readPluginLocalSkillName(loc.skillSourceDir, loc.skillDirPath));
+    if (!firstByKey.has(key)) firstByKey.set(key, loc);
   }
-  return names;
+  const entries = [...firstByKey];
+  const read = await withParseDispatcher((dispatcher) =>
+    mapConcurrentFailingInOrder(entries, ([, loc]) => readPluginLocalSkillName(loc.skillSourceDir, dispatcher)),
+  );
+  return new Map(entries.map(([key], index) => {
+    const name = read[index] as SkillNameRead;
+    if (name.kind === 'refused') throw skillParseRefusal(name.refused, locationRoot);
+    return [key, name.name];
+  }));
 }
 
 /**
@@ -156,20 +247,36 @@ function groupIncludePatternsByBase(
 }
 
 /**
+ * Whether a scan root resolves to nothing, its links read beneath the project root first. A probe
+ * that could not examine it (the OS refused it, or its chain names a network path) is NOT absent:
+ * the crawl is asked, and its `unreadable` policy decides — refusing the run or degrading past the
+ * base by name — exactly as for a base whose listing is refused.
+ */
+function baseAbsent(base: string, projectRoot: string): boolean {
+  try {
+    return followedKindSync(base, projectRoot) === 'absent';
+  } catch (error) {
+    if (fsFaultOf(error) === undefined) throw error;
+    return false;
+  }
+}
+
+/**
  * Crawl one effective scan root. Returns absolute paths, or an empty array if
  * the root does not exist (mirrors audit's filesystem-first tolerance for
  * patterns pointing at nothing).
  */
-async function crawlOneBase(
+function crawlOneBase(
   base: string,
   globs: string[],
   projectRoot: string,
   unreadable: DiscoveryUnreadablePolicy,
 ): Promise<string[]> {
-  if (!existsSync(base)) {
-    return [];
+  if (baseAbsent(base, projectRoot)) {
+    return Promise.resolve([]);
   }
   return crawlDirectory({
+    outputs: [],
     baseDir: base,
     include: globs,
     exclude: DISCOVERY_EXCLUDE,
@@ -197,7 +304,7 @@ async function crawlOneBase(
     // (see {@link DiscoveryUnreadablePolicy}); the refusal is then reported by
     // that caller, and the crawl continues past the directory.
     unreadable: unreadable === 'refuse'
-      ? { refuse: { root: projectRoot, remedy: SKILLS_INCLUDE_REMEDY } }
+      ? { refuse: { root: projectRoot, remedy: SKILLS_INCLUDE_REMEDY, side: 'source' } }
       : unreadable,
   });
 }
@@ -223,13 +330,13 @@ export const SKILLS_INCLUDE_REMEDY =
  * @param projectRoot - Absolute path to project root (where config yaml lives)
  * @param unreadable - What to do with a directory the crawl cannot list —
  *   see {@link DiscoveryUnreadablePolicy}; required, no default
- * @returns Array of discovered skills with names and source paths
+ * @returns The skills it named, with their source paths, and the SKILL.md files the parse worker refused
  */
 export async function discoverSkillsFromConfig(
   skillsConfig: SkillsConfig,
   projectRoot: string,
   unreadable: DiscoveryUnreadablePolicy,
-): Promise<DiscoveredSkill[]> {
+): Promise<SkillDiscovery> {
   const { include, exclude } = skillsConfig;
 
   const patternsByBase = groupIncludePatternsByBase(include, projectRoot);
@@ -238,7 +345,9 @@ export async function discoverSkillsFromConfig(
     : null;
 
   const foundAbsPaths = new Set<string>();
-  for (const [base, globs] of patternsByBase) {
+  // One base at a time: under `'refuse'` the first unlistable directory in
+  // pattern order is the one named, and a degrade handler hears them in order.
+  await forEachInOrder(patternsByBase, async ([base, globs]) => {
     const crawled = await crawlOneBase(base, globs, projectRoot, unreadable);
     for (const absPath of crawled) {
       if (userExcludeMatcher) {
@@ -247,12 +356,19 @@ export async function discoverSkillsFromConfig(
       }
       foundAbsPaths.add(safePath.resolve(absPath));
     }
-  }
+  });
 
-  const discovered: DiscoveredSkill[] = [];
-  for (const skillPath of foundAbsPaths) {
-    const name = await readSkillName(skillPath);
-    if (name) discovered.push({ name, sourcePath: skillPath });
+  // Independent reads, kept in discovery order.
+  const skillPaths = [...foundAbsPaths];
+  const names = await withParseDispatcher((dispatcher) =>
+    mapConcurrentFailingInOrder(skillPaths, (skillPath) => readSkillName(skillPath, dispatcher)),
+  );
+  const skills: DiscoveredSkill[] = [];
+  const parseRefused: ParseRefusedResource[] = [];
+  for (const [index, sourcePath] of skillPaths.entries()) {
+    const read = names[index] as SkillNameRead;
+    if (read.kind === 'refused') parseRefused.push(read.refused);
+    else if (read.name) skills.push({ name: read.name, sourcePath });
   }
-  return discovered;
+  return { skills, parseRefused };
 }

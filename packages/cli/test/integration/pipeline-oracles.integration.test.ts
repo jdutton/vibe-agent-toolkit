@@ -97,6 +97,23 @@ function expectGolden(name: string, actual: string): void {
   expect(readFileSync(goldenPath, 'utf-8'), `golden drift in ${name}.\n${ORACLE_UPDATE_HINT}`).toBe(actual);
 }
 
+/**
+ * Fail unless every lane kept the same file on every duplicate id.
+ *
+ * First-added-wins is the registry's rule, so a lane that arrives in a different
+ * order keeps a different file — two commands over one tree validating different
+ * members, with nothing in either output saying so.
+ *
+ * @param snapshots - Every lane's snapshot over one corpus
+ */
+function expectOneWinnerPerCollision(snapshots: Map<string, EnumerationSnapshot>): void {
+  const reference = required(snapshots, 'resources').collisions;
+  expect(reference, 'the corpus plants a duplicate id').not.toHaveLength(0);
+  for (const [laneId, snapshot] of snapshots) {
+    expect(snapshot.collisions, `lane ${laneId}`).toEqual(reference);
+  }
+}
+
 /** A disposable corpus root, outside any repository until asked otherwise. */
 function makeCorpusRoot(label: string): string {
   return mkdtempSync(safePath.join(normalizedTmpdir(), `vat-oracle-${label}-`));
@@ -115,9 +132,16 @@ async function captureCorpusFacts(root: string): Promise<ParseFactSnapshot> {
   return captureParseFactSnapshot(absolute, { corpusRoot: root, corpus: NON_GIT_CORPUS });
 }
 
+/**
+ * Each route's snapshots, by lane — module-level so the cross-route describe
+ * below can hold the two routes against each other once both have captured.
+ */
+const gitSnapshots = new Map<string, EnumerationSnapshot>();
+const walkSnapshots = new Map<string, EnumerationSnapshot>();
+
 describe('enumeration snapshot — git route (ordered golden)', () => {
   let root: string;
-  const snapshots = new Map<string, EnumerationSnapshot>();
+  const snapshots = gitSnapshots;
 
   beforeAll(async () => {
     root = makeCorpusRoot('git');
@@ -157,12 +181,17 @@ describe('enumeration snapshot — git route (ordered golden)', () => {
 
   it('records a first-added-wins drop, and names which file won', () => {
     // Two distinct paths slugify to one resource id, so one of them is silently
-    // dropped. Which one depends purely on arrival order — the property no
-    // snapshot here may sort away.
+    // dropped. Which one is decided by the registry's admission order (code-unit
+    // order of the path), never by the enumerator — so every lane keeps the same
+    // file, which the test after this one holds.
     const snapshot = snapshots.get('resources');
     expect(snapshot?.collisions).toHaveLength(1);
     expect(snapshot?.collisions[0]?.existingPath).toBe('dup-hyphen/note.md');
     expect(snapshot?.collisions[0]?.conflictingPath).toBe('dup/hyphen-note.md');
+  });
+
+  it('keeps one file on each duplicate id, on every lane', () => {
+    expectOneWinnerPerCollision(snapshots);
   });
 
   it('shows the lanes disagreeing about what the corpus is', () => {
@@ -191,7 +220,7 @@ describe('enumeration snapshot — git route (ordered golden)', () => {
 
 describe('enumeration snapshot — walk route (no git anywhere above the corpus)', () => {
   let root: string;
-  const snapshots = new Map<string, EnumerationSnapshot>();
+  const snapshots = walkSnapshots;
 
   beforeAll(async () => {
     root = makeCorpusRoot('nogit');
@@ -224,10 +253,15 @@ describe('enumeration snapshot — walk route (no git anywhere above the corpus)
     );
   });
 
+  it('keeps one file on each duplicate id, on every lane', () => {
+    expectOneWinnerPerCollision(snapshots);
+  });
+
   it('is order-stable within a host, even though the order is not portable', async () => {
-    // readdir order cannot be asserted across filesystems, but it MUST be
-    // reproducible on one — first-added-wins means an unstable order changes
-    // which colliding file survives from run to run.
+    // readdir order cannot be asserted across filesystems, and it no longer
+    // decides the winner: the registry orders every batch itself. The crawl's
+    // hand-over order is still recorded, so it must at least reproduce on one
+    // host, and the registry's order must not move with it.
     const lane = laneById('resources');
     const first = await captureEnumerationSnapshot(lane, { corpusRoot: root, corpus: NON_GIT_CORPUS });
     const second = await captureEnumerationSnapshot(lane, { corpusRoot: root, corpus: NON_GIT_CORPUS });
@@ -241,6 +275,18 @@ describe('enumeration snapshot — walk route (no git anywhere above the corpus)
     // variable, different population — stated rather than discovered later.
     const paths = snapshots.get('resources')?.enumerated.map((row) => row.path) ?? [];
     expect(paths).toContain(GITIGNORED_FILE);
+  });
+});
+
+describe('enumeration snapshot — the two routes against each other', () => {
+  // `expectOneWinnerPerCollision` compares lanes WITHIN a route, so it cannot
+  // see the walk and git keeping different files — the divergence the
+  // registry's admission order exists to close. Same corpus shape, both routes:
+  // every lane must record the same collision on each.
+  it.each(LANES.map((lane) => lane.id))('%s keeps the same file on the walk as on git', (laneId) => {
+    const onGit = required(gitSnapshots, laneId).collisions;
+    expect(onGit, 'the corpus plants a duplicate id').not.toHaveLength(0);
+    expect(required(walkSnapshots, laneId).collisions).toEqual(onGit);
   });
 });
 

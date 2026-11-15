@@ -1,7 +1,7 @@
 /**
  * The `Projection` container and the mutable builder that populates it.
  *
- * A projection is nothing but rows: twelve tables, each a flat array, produced
+ * A projection is nothing but rows: the tables `PROJECTION_TABLES` declares, each a flat array, produced
  * by contributors that never interpret one another's output. This module owns
  * two things and deliberately nothing else — the shape of that row set, and the
  * single **population** invariant no individual row can observe.
@@ -40,6 +40,8 @@ import type {
   BlobRow,
   BlobSectionRow,
 } from '../schemas/projection-blobs.js';
+import type { ClaudeRulePatternRow } from '../schemas/projection-claude-rules.js';
+import type { HarnessBlobFactsRow, HarnessBlobImportRow } from '../schemas/projection-harness.js';
 import { CONDITION_WITHOUT_REFERENCE } from '../schemas/projection-resources.js';
 import type {
   ContentState,
@@ -52,7 +54,7 @@ import type {
 } from '../schemas/projection-resources.js';
 import type { ResolutionContextRow, ZoneProvenanceRow } from '../schemas/projection-zones.js';
 
-import { readKeyedContent, type RunContentCache } from './content-cache.js';
+import { isSizeRefusal, readKeyedContent, type RunContentCache } from './content-cache.js';
 import { errorLabel } from './error-label.js';
 import { ResourceIdentityMap } from './identity.js';
 import type { CollectionMimeResolver } from './realizations.js';
@@ -95,7 +97,7 @@ const NO_PARSER_KIND: ParserKind = 'none';
 const KEY_SEPARATOR = '\u0000';
 
 /**
- * The twelve materialised tables of the resource projection.
+ * The fifteen materialised tables of the resource projection.
  *
  * `edges`, `edge_resolutions` and `lens_entry_points` are absent on purpose:
  * zones.md §2 places them in the derived-per-lens column, so they are the
@@ -115,6 +117,20 @@ export interface Projection {
   readonly resourceTags: readonly ResourceTagRow[];
   /** Population-time conditions, chiefly path collisions. */
   readonly realizationConditions: readonly RealizationConditionRow[];
+  /**
+   * One row per `paths:` glob of one `.claude/rules` file, and what it scopes.
+   *
+   * Produced by `ClaudeRulesScopeContributor`, which is the ONE producer — the
+   * table is merged by primary key rather than partitioned per context, so a
+   * second producer covering an identity this one already covered would win or
+   * lose by ordering.
+   *
+   * ⚠️ Empty in a projection whose lane did not register that contributor. It
+   * reads blobs, so a lane running under `CONTENT_PARSING_SKIP` cannot have it.
+   * Every resources lane registers it; the claude-context discovery pass is the
+   * one skipping lane.
+   */
+  readonly claudeRulePatterns: readonly ClaudeRulePatternRow[];
   /** Zone entities — extents and lenses. */
   readonly resolutionContexts: readonly ResolutionContextRow[];
   /** Which contributor produced which extent, and the digest that makes runs comparable. */
@@ -127,6 +143,14 @@ export interface Projection {
   readonly blobSections: readonly BlobSectionRow[];
   /** Blob-keyed parse conditions. */
   readonly blobConditions: readonly BlobConditionRow[];
+  /**
+   * `(blob, harness)`-keyed: what a harness injects for a blob, and the
+   * `paths:` globs it scopes it by. Absent = not derived, never zero — read it
+   * through `harnessFactsIndex`.
+   */
+  readonly harnessBlobFacts: readonly HarnessBlobFactsRow[];
+  /** `(blob, harness)`-keyed imports — each harness's own extractor, not VAT's lexer. */
+  readonly harnessBlobImports: readonly HarnessBlobImportRow[];
 }
 
 /**
@@ -140,7 +164,7 @@ export interface Projection {
  *
  * The arrays are **live**, not snapshots: the merge driver hands the same base
  * to successive strata, and a closure contributor must see what the base
- * stratum contributed. Copying twelve tables per contributor per fixpoint
+ * stratum contributed. Copying every table per contributor per fixpoint
  * iteration would be the alternative, and it buys nothing the `readonly` types
  * do not already state.
  */
@@ -178,7 +202,7 @@ export interface ProjectionBase extends Projection {
    * per-contributor cache would reintroduce exactly the cross-extent re-read it
    * exists to remove.
    */
-  readonly contentCache?: RunContentCache | undefined;
+  readonly contentCache: RunContentCache;
   /**
    * The run's parse routing, or absent when nothing declared a type.
    *
@@ -199,7 +223,7 @@ type RowKey<T> = (row: T) => string;
 /**
  * One table: insertion-ordered rows plus a key index.
  *
- * Twelve near-identical `add` implementations would be twelve places for the
+ * Fifteen near-identical `add` implementations would be fifteen places for the
  * de-duplication rule to drift, so there is one, parameterised by the key.
  */
 class ProjectionTable<T> {
@@ -307,7 +331,7 @@ class ProjectionTable<T> {
  *
  * {@link ProjectionBuilder.ensureContentKey} is the one method that **rewrites**
  * a row rather than adding one, and it is confined to a single transition:
- * `deferred` → `keyed`/`unreadable` on `resource_realizations`. No other column
+ * `deferred` → `keyed`/`unreadable`/`oversize` on `resource_realizations`. No other column
  * moves, and no row is created — so the `(extentId, path)` invariant above is
  * untouched by it.
  */
@@ -327,8 +351,24 @@ export class ProjectionBuilder {
   readonly #tags = new ProjectionTable<ResourceTagRow>(
     (row) => compositeKey(row.resourceId, row.tag, row.value, row.source),
   );
+  // `sourcePath`/`sourceLine`/`sourceRef` are IN the key, not merely carried:
+  // two DIFFERENT unresolved `@` references in the same file share `(extentId,
+  // path, code, resourceId)` (`CLOSURE_REFERENCE_UNRESOLVED` anchors `path` to
+  // the REFERRER, so it cannot distinguish them either), and two members of one
+  // closure refused through the same target on the same line with the same
+  // spelling share everything but `sourcePath`. Any narrower key keeps only
+  // the first-encountered reference and drops the rest. The fixpoint's own
+  // re-emission of the SAME reference is still a no-op: it re-derives an
+  // identical `(sourcePath, line, rawRef)` triple every pass.
   readonly #realizationConditions = new ProjectionTable<RealizationConditionRow>(
-    (row) => compositeKey(row.extentId, row.path, row.code, row.resourceId),
+    (row) => compositeKey(row.extentId, row.path, row.code, row.resourceId, row.sourcePath, row.sourceLine, row.sourceRef),
+  );
+  // Keyed on the IDENTITY and the glob's slot in its own `paths:` list, never on
+  // an extent: a rules file is re-realized under every import closure that
+  // reaches it, and its `paths:` list is a property of the file rather than of
+  // any one extent's view of it.
+  readonly #claudeRulePatterns = new ProjectionTable<ClaudeRulePatternRow>(
+    (row) => compositeKey(row.resourceId, row.ordinal),
   );
   readonly #contexts = new ProjectionTable<ResolutionContextRow>((row) => row.contextId);
   // Replaces rather than keeps: a closure contributor re-runs to a fixpoint, and
@@ -349,10 +389,16 @@ export class ProjectionBuilder {
   readonly #blobConditions = new ProjectionTable<BlobConditionRow>(
     (row) => compositeKey(row.blob, row.code, row.line, row.message),
   );
+  readonly #harnessBlobFacts = new ProjectionTable<HarnessBlobFactsRow>(
+    (row) => compositeKey(row.blob, row.harness),
+  );
+  readonly #harnessBlobImports = new ProjectionTable<HarnessBlobImportRow>(
+    (row) => compositeKey(row.blob, row.harness, row.ordinal),
+  );
 
   readonly #gitTracker: GitTracker | undefined;
 
-  readonly #contentCache: RunContentCache | undefined;
+  readonly #contentCache: RunContentCache;
 
   #base: ProjectionBase | undefined;
 
@@ -378,11 +424,11 @@ export class ProjectionBuilder {
     /** Optional git oracle supplying index casing to identity minting. */
     gitTracker?: GitTracker | undefined;
     /**
-     * Optional per-run read-and-key memo, shared with every contributor and with
-     * the blob-derivation stage. Omitted by a caller assembling a builder by
-     * hand that wants each read to touch disk.
+     * The run's read-and-key memo, shared with every contributor and with the
+     * blob-derivation stage. Required: it carries the run's parse input cap, so a
+     * builder without one would read past the cap its parses refuse at.
      */
-    contentCache?: RunContentCache | undefined;
+    contentCache: RunContentCache;
     /**
      * The run's collection-declared parse routing, or omitted to type every
      * path from `mime-type.ts`'s tables alone.
@@ -523,6 +569,10 @@ export class ProjectionBuilder {
    *   to make the failure indistinguishable from the deliberate no-op — the
    *   state column said `unreadable`, but no row said why and no counter said
    *   anyone had tried.
+   * - A file refused by its size (too large to decode, or a parsed kind past the run's input
+   *   cap) rewrites the rows to `oversize` with a null key
+   *   and no condition — the same state, and the same silence, as the eager
+   *   path in `keyOrState` — and still counts as an attempt.
    *
    * ## Idempotent, and observably so
    *
@@ -583,6 +633,13 @@ export class ProjectionBuilder {
         this.#contentCache,
       );
     } catch (error) {
+      // Refused by its size: the same `oversize` the eager path (`keyOrState`)
+      // records, and like it no condition row — the state column IS the fact,
+      // and nothing about the file needs explaining beyond its size.
+      if (isSizeRefusal(error)) {
+        this.#rewriteRealizations(deferred, null, 'oversize');
+        return null;
+      }
       // A row per extent that deferred this path, not one row for the path: a
       // condition is keyed on `(extentId, path)` like the realization it is
       // about, and a single row would leave the other extents' realizations
@@ -640,10 +697,25 @@ export class ProjectionBuilder {
    * Record a population-time condition.
    *
    * @param row - The condition row
-   * @returns True when recorded, false when this exact condition was already present
+   * @returns True when recorded, false when a row already occupies this key
+   *   (`extentId`, `path`, `code`, `resourceId`, `sourceLine`, `sourceRef`)
    */
   addCondition(row: RealizationConditionRow): boolean {
     return this.#realizationConditions.add(row) === undefined;
+  }
+
+  /**
+   * Record one `paths:` glob of one `.claude/rules` file.
+   *
+   * Reached from `mergeContribution` for every row a contributor declares in
+   * `ExtentContribution.claudeRulePatterns` — see {@link Projection.claudeRulePatterns}
+   * for the single-producer rule.
+   *
+   * @param row - The pattern row
+   * @returns True when recorded, false when this `(resourceId, ordinal)` was already present
+   */
+  addClaudeRulePattern(row: ClaudeRulePatternRow): boolean {
+    return this.#claudeRulePatterns.add(row) === undefined;
   }
 
   /**
@@ -707,6 +779,26 @@ export class ProjectionBuilder {
   }
 
   /**
+   * Record what one harness does with one blob's bytes.
+   *
+   * @param row - The facts row
+   * @returns True when recorded, false when this `(blob, harness)` was already present
+   */
+  addHarnessBlobFacts(row: HarnessBlobFactsRow): boolean {
+    return this.#harnessBlobFacts.add(row) === undefined;
+  }
+
+  /**
+   * Record one import a harness reads out of a blob.
+   *
+   * @param row - The import row
+   * @returns True when recorded, false when this `(blob, harness, ordinal)` was already present
+   */
+  addHarnessBlobImport(row: HarnessBlobImportRow): boolean {
+    return this.#harnessBlobImports.add(row) === undefined;
+  }
+
+  /**
    * Restamp a set of realization rows with one `(contentKey, contentState)` pair.
    *
    * The two columns are written together and never separately: the schema pins
@@ -745,7 +837,7 @@ export class ProjectionBuilder {
       // `exactOptionalPropertyTypes` distinguishes an absent key from one
       // holding `undefined`, and the field is declared optional.
       ...(this.#gitTracker !== undefined && { gitTracker: this.#gitTracker }),
-      ...(this.#contentCache !== undefined && { contentCache: this.#contentCache }),
+      contentCache: this.#contentCache,
       ...(this.#mimeResolver !== undefined && { mimeResolver: this.#mimeResolver }),
       roots: this.#roots.rows,
       resources: this.#resources.rows,
@@ -753,12 +845,15 @@ export class ProjectionBuilder {
       resourceExtents: this.#extents.rows,
       resourceTags: this.#tags.rows,
       realizationConditions: this.#realizationConditions.rows,
+      claudeRulePatterns: this.#claudeRulePatterns.rows,
       resolutionContexts: this.#contexts.rows,
       zoneProvenance: this.#provenance.rows,
       blobs: this.#blobs.rows,
       blobReferences: this.#blobReferences.rows,
       blobSections: this.#blobSections.rows,
       blobConditions: this.#blobConditions.rows,
+      harnessBlobFacts: this.#harnessBlobFacts.rows,
+      harnessBlobImports: this.#harnessBlobImports.rows,
     };
     return this.#base;
   }
@@ -779,12 +874,15 @@ export class ProjectionBuilder {
       resourceExtents: this.#extents.snapshot(),
       resourceTags: this.#tags.snapshot(),
       realizationConditions: this.#realizationConditions.snapshot(),
+      claudeRulePatterns: this.#claudeRulePatterns.snapshot(),
       resolutionContexts: this.#contexts.snapshot(),
       zoneProvenance: this.#provenance.snapshot(),
       blobs: this.#blobs.snapshot(),
       blobReferences: this.#blobReferences.snapshot(),
       blobSections: this.#blobSections.snapshot(),
       blobConditions: this.#blobConditions.snapshot(),
+      harnessBlobFacts: this.#harnessBlobFacts.snapshot(),
+      harnessBlobImports: this.#harnessBlobImports.snapshot(),
     });
   }
 }

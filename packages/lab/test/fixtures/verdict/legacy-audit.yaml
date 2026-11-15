@@ -1,0 +1,40 @@
+root: /abs/path/to/scan/root
+status: warning
+summary:
+  filesScanned: 3
+  filesPassed: 1
+  filesWithWarnings: 1
+  filesWithErrors: 1
+issueCounts:
+  errors: 1
+  warnings: 1
+  info: 0
+issues:
+  - code: RESOURCE_CHECK_BROKEN
+    severity: error
+    message: "Config declares no skills.include globs"
+duration: "48ms"
+files:
+  - path: plugins/p
+    status: error
+    type: plugin
+    issueCounts:
+      errors: 1
+      warnings: 0
+      info: 0
+    issues:
+      - code: MARKETPLACE_MISSING_MANIFEST
+        severity: error
+        message: ".claude-plugin/marketplace.json not found"
+  - path: plugins/q
+    status: warning
+    type: skill
+    issueCounts:
+      errors: 0
+      warnings: 1
+      info: 0
+    issues:
+      - location: plugins/q/SKILL.md
+        code: SKILL_TOO_LONG
+        severity: warning
+        message: "Skill exceeds 5000 lines"

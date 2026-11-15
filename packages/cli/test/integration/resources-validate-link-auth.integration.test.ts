@@ -66,7 +66,6 @@ function writeLinkAuthOnlyProject(tempDir: string, origin: string): void {
   writeTestFile(
     safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
     [
-      'version: 1',
       'resources:',
       '  include:',
       '    - "docs/**/*.md"',
@@ -117,7 +116,7 @@ describe('vat resources validate honours resources.linkAuth without resources.co
     expect(recording.seen.map((request) => request.headers.authorization)).toEqual([`Bearer ${TOKEN}`]);
     expect(recording.seen[0]?.url).toBe('/acme/widgets/blob/main/docs/api.md');
     // And with the server answering 200 there is nothing to report.
-    expect(parsed['issueSummary'] ?? {}).toEqual({});
+    expect(parsed['findings']).toEqual([]);
     expect(result.status).toBe(0);
   });
 
@@ -130,7 +129,7 @@ describe('vat resources validate honours resources.linkAuth without resources.co
     // The code family that only the authenticated lane emits. Without the
     // config the run would instead say `EXTERNAL_URL_ERROR` (DNS on the
     // original host) — a different lane answering a different question.
-    expect(parsed['issueSummary']).toEqual({ LINK_AUTH_UNVERIFIED: 1 });
+    expect((parsed['findings'] as { code: string }[]).map((finding) => finding.code)).toEqual(['LINK_AUTH_UNVERIFIED']);
     expect(recording.seen).toHaveLength(0);
   });
 });
@@ -152,8 +151,11 @@ describe('vat resources validate honours resources.linkAuth without resources.co
  */
 function expectRefusedByName(status: number | null, error: unknown): void {
   expect(status).toBe(2);
-  expect(String(error)).toMatch(/resources\.linkAuth providers\[0\]/);
-  expect(String(error)).toMatch(/rewrite\[0\]\.when/);
+  // A config defect is the config's refusal — never INTERNAL_ERROR.
+  expect(error).toMatchObject({ code: 'CONFIG_INVALID' });
+  const { message } = error as { message: string };
+  expect(message).toMatch(/resources\.linkAuth providers\[0\]/);
+  expect(message).toMatch(/rewrite\[0\]\.when/);
 }
 
 describe('vat resources validate refuses a linkAuth provider that cannot compile (integration)', () => {
@@ -164,7 +166,6 @@ describe('vat resources validate refuses a linkAuth provider that cannot compile
     writeTestFile(
       safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
       [
-        'version: 1',
         'resources:',
         '  include:',
         '    - "docs/**/*.md"',
@@ -206,9 +207,10 @@ describe('vat resources validate refuses a linkAuth provider that cannot compile
 
     expectRefusedByName(result.status, parsed['error']);
     expect(parsed['status']).toBe('error');
-    // The tell of the old behaviour: a count of links "checked" that nothing
-    // had fetched. A refused run reports no such count at all.
-    expect(parsed['linksChecked']).toBeUndefined();
+    // The tell of the old behaviour: a green run over links nothing had
+    // fetched. A refused run examined nothing and published no data.
+    expect(parsed['examined']).toBe(0);
+    expect(parsed['data']).toBeNull();
   });
 
   /**
@@ -227,7 +229,7 @@ describe('vat resources validate refuses a linkAuth provider that cannot compile
     );
 
     expectRefusedByName(result.status, parsed['error']);
-    expect(parsed['linksChecked']).toBeUndefined();
+    expect(parsed['data']).toBeNull();
   });
 
   it('`vat validate` (the pre-commit verb) exits 2 by name on the same config', async () => {
@@ -236,9 +238,11 @@ describe('vat resources validate refuses a linkAuth provider that cannot compile
       env: { [TOKEN_ENV]: TOKEN },
     });
 
-    const phases = parsed['phases'] as { name: string; exitCode: number; report: Record<string, unknown> }[];
+    // The run did not finish; the resources phase carries the refusal by name.
+    const { phases } = parsed['data'] as { phases: { name: string; status: string; error?: unknown }[] };
     const resources = phases.find((phase) => phase.name === 'resources');
-    expectRefusedByName(result.status, resources?.report['error']);
-    expect(resources?.exitCode).toBe(2);
+    expect(parsed['error']).toMatchObject({ code: 'RUN_INCOMPLETE' });
+    expect(resources?.status).toBe('error');
+    expectRefusedByName(result.status, resources?.error);
   });
 });

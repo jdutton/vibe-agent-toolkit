@@ -22,11 +22,14 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { PassThrough } from 'node:stream';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 
 import {
   createProgressWriter,
+  endWhenSupervisorGone,
+  letSupervisorLossSurface,
   parseProgressLog,
   unitInFlight,
   type ProgressEntry,
@@ -37,10 +40,29 @@ import { cleanupTestTempDir, createTestTempDir } from '../system/test-common.js'
 const POPULATION: ProgressEntry = {
   kind: 'population',
   population: 'derived',
+  lensPopulation: 'derived',
   populationMs: 1234.5,
   lensMs: 12.5,
+  lensesEvaluated: ['authored-link'],
   membersEnumerated: 12,
 };
+
+/**
+ * The line written immediately before the population's: the files the population did not admit.
+ * A finding, not an empty list, so a parser that dropped the line would be seen to.
+ */
+const NOT_ADMITTED: ProgressEntry = {
+  kind: 'not-admitted',
+  findings: [{
+    code: 'RESOURCE_PARSE_LIMIT_EXCEEDED',
+    severity: 'warning',
+    message: "'docs/deep.md' was enumerated but its parse was stopped at its stackMb limit (1 MiB), so no check saw its rows.",
+    location: 'docs/deep.md',
+  }],
+};
+
+/** The line the child writes the moment it has booted, before any work. */
+const STARTED: ProgressEntry = { kind: 'started' };
 
 /** One complete check: the `start` that precedes the statement and its cost. */
 const FIRST_START: ProgressEntry = { kind: 'start', name: 'no-markdown' };
@@ -54,9 +76,19 @@ function logOf(...entries: readonly ProgressEntry[]): string {
 
 describe('parseProgressLog', () => {
   it('reads the entries a completed unit wrote, in order', () => {
-    const entries = parseProgressLog(logOf(POPULATION, FIRST_START, FIRST_COST));
+    const entries = parseProgressLog(logOf(NOT_ADMITTED, POPULATION, FIRST_START, FIRST_COST));
 
-    expect(entries).toStrictEqual([POPULATION, FIRST_START, FIRST_COST]);
+    expect(entries).toStrictEqual([NOT_ADMITTED, POPULATION, FIRST_START, FIRST_COST]);
+  });
+
+  it('drops a population line still carrying the not-admitted findings it used to hold', () => {
+    // The findings moved to their own line, which `query` shares. A writer that kept them on the
+    // population line must not half-parse: the strict schema drops the line, and the control
+    // proves the same line parses without the stray field.
+    const stale = { ...POPULATION, notAdmitted: [] };
+
+    expect(parseProgressLog(`${JSON.stringify(stale)}\n`)).toStrictEqual([]);
+    expect(parseProgressLog(logOf(POPULATION))).toStrictEqual([POPULATION]);
   });
 
   it('drops a TRUNCATED final line instead of throwing', () => {
@@ -90,6 +122,14 @@ describe('parseProgressLog', () => {
     expect(entries).toStrictEqual([]);
   });
 
+  // `examined` is a count, as the published cost record states it: a log can never rebuild one
+  // the completed document's schema would refuse.
+  it.each([['a negative', -1], ['a fractional', 1.5]])('refuses a check line whose examined count is %s number', (_what, examined) => {
+    const line = JSON.stringify({ kind: 'check', name: 'x', durationMs: 1, rows: 0, examined });
+
+    expect(parseProgressLog(`${line}\n`)).toStrictEqual([]);
+  });
+
   it('reads an empty log as no entries', () => {
     expect(parseProgressLog('')).toStrictEqual([]);
   });
@@ -102,20 +142,27 @@ describe('unitInFlight', () => {
     expect(inFlight).toStrictEqual({ kind: 'check', name: 'no-orphans' });
   });
 
-  it('reports the POPULATION when no population line ever arrived', () => {
-    // 🔑 There is no projection and therefore no honest document — the caller
-    // has to refuse rather than publish a report with invented extent.
-    expect(unitInFlight([])).toStrictEqual({ kind: 'population' });
+  it('reports the POPULATION when the child booted and no population line arrived', () => {
+    // 🔑 There is no projection, so the caller publishes its population fields
+    // as null rather than inventing an extent.
+    expect(unitInFlight([STARTED])).toStrictEqual({ kind: 'population' });
   });
 
-  it('keys the population sentinel on the POPULATION LINE, not on an empty log', () => {
-    // A synthetic log — a real run cannot start a check before it populates —
-    // and that is the point: it pins the DISCRIMINATOR. The cheaper
-    // implementation (`entries.length === 0`) passes the case above and fails
-    // here, and it is wrong for the reason that matters: "no projection" is a
-    // claim about the population line, and an empty log is only one way to
-    // arrive at it.
-    expect(unitInFlight([FIRST_START])).toStrictEqual({ kind: 'population' });
+  it('reports STARTUP when the child never said it had booted', () => {
+    // 🔑 Its own unit: Node and the CLI were still loading, nothing had touched
+    // the tree, and the remedy is not "size the budget against your population".
+    expect(unitInFlight([])).toStrictEqual({ kind: 'startup' });
+  });
+
+  it('keys each sentinel on ITS OWN line, not on an empty log', () => {
+    // Synthetic logs — a real run cannot start a check before it boots or
+    // populates — and that is the point: they pin the DISCRIMINATORS. The
+    // cheaper implementation (`entries.length === 0`) passes the cases above and
+    // fails here, and it is wrong for the reason that matters: "no projection"
+    // is a claim about the population line and "not booted" is a claim about the
+    // started line, and an empty log is only one way to arrive at either.
+    expect(unitInFlight([STARTED, FIRST_START])).toStrictEqual({ kind: 'population' });
+    expect(unitInFlight([FIRST_START])).toStrictEqual({ kind: 'startup' });
   });
 
   it('reports no unit in flight when every started check also completed', () => {
@@ -134,7 +181,7 @@ describe('createProgressWriter', () => {
     const dir = createTestTempDir('vat-check-progress-');
     try {
       const path = `${dir}/progress.jsonl`;
-      const write = createProgressWriter(path);
+      const write = createProgressWriter({ progressLog: path });
 
       write(POPULATION);
       const afterFirst = readFileSync(path, 'utf-8');
@@ -146,5 +193,90 @@ describe('createProgressWriter', () => {
     } finally {
       cleanupTestTempDir(dir);
     }
+  });
+});
+
+/** The supervisor pid the listener names. */
+const SUPERVISOR_PID = 4242;
+
+/** Install the supervisor-gone listener on a stream this test owns, with `process.exit` and stderr captured. */
+function listen(): { stdin: PassThrough; exit: MockInstance; stderr: MockInstance } {
+  const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+  const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  const stdin = new PassThrough();
+  endWhenSupervisorGone('resources check', SUPERVISOR_PID, stdin);
+  return { stdin, exit, stderr };
+}
+
+describe('endWhenSupervisorGone', () => {
+  // 🚨 A supervisor killed where none of its code runs (SIGKILL, an OOM killer, a Windows
+  // TerminateProcess) cannot take its child down. The OS closes the stdin pipe the supervisor held,
+  // and the child must end itself on that end-of-file rather than run on unbounded.
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('does nothing while the supervisor holds the pipe open', async () => {
+    const { exit, stderr } = listen();
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(exit).not.toHaveBeenCalled();
+    expect(stderr).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['its end of the pipe closes (end-of-file)', (stdin: PassThrough) => stdin.end()],
+    ['the pipe breaks (a read error)', (stdin: PassThrough) => stdin.destroy(new Error('EPIPE'))],
+  ])('ends the child — exit 2, one stderr line naming the supervisor — when %s', async (_label, sever) => {
+    const { stdin, exit, stderr } = listen();
+
+    sever(stdin);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(exit.mock.calls).toStrictEqual([[2]]);
+    expect(stderr).toHaveBeenCalledOnce();
+    expect(String(stderr.mock.calls[0]?.[0])).toContain(`pid ${String(SUPERVISOR_PID)}`);
+  });
+
+  // A child that finishes must never be held open by the stream it listens on.
+  it('unreferences the stream it listens on', () => {
+    vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const stdin = Object.assign(new PassThrough(), { unref: vi.fn() });
+
+    endWhenSupervisorGone('resources check', SUPERVISOR_PID, stdin);
+
+    expect(stdin.unref).toHaveBeenCalledOnce();
+  });
+
+  it('names the query, never a check, when the supervised run is `vat resources query --budget`', async () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const stdin = new PassThrough();
+    endWhenSupervisorGone('resources query', SUPERVISOR_PID, stdin);
+
+    stdin.end();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(exit.mock.calls).toStrictEqual([[2]]);
+    const line = String(stderr.mock.calls[0]?.[0]);
+    expect(line).toMatch(/^vat resources query: /);
+    expect(line).toContain(`pid ${String(SUPERVISOR_PID)}`);
+    expect(line).not.toMatch(/\bchecks?\b/i);
+  });
+});
+
+describe('letSupervisorLossSurface', () => {
+  // The child's synchronous check loop holds the thread; an end-of-file pending meanwhile must be
+  // read — and end the child — before it publishes. Its system proof is
+  // `checks-supervisor-orphan-loop.system.test.ts`; this pins that it crosses event-loop turns.
+  it('resolves only after the event loop has turned twice', async () => {
+    const turns: string[] = [];
+    setImmediate(() => turns.push('first'));
+    setImmediate(() => setImmediate(() => turns.push('second')));
+
+    await letSupervisorLossSurface();
+
+    expect(turns).toStrictEqual(['first', 'second']);
   });
 });

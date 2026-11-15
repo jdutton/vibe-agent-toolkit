@@ -59,13 +59,15 @@ import {
 } from '@vibe-agent-toolkit/agent-skills';
 import {
   ContributorRegistry,
-  DISCARD_BLOB_POPULATION,
+  crawlSourceFor,
+  DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
   ProjectionBuilder,
   populate,
   type JsonValue,
   type Projection,
   type ProjectionBase,
+  RunContentCache,
 } from '@vibe-agent-toolkit/resources';
 import {
   mkdirSyncReal,
@@ -75,8 +77,8 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory } from '@vibe-agent-toolkit/utils/crawl';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
-import { refuseUnreadableFixture } from '@vibe-agent-toolkit/utils/testing';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { atLeastTierTimeout, refuseUnreadableFixture } from '@vibe-agent-toolkit/utils/testing';
+import { beforeAll, describe, expect, inject, it } from 'vitest';
 
 import { crawlSkillLinkRegistry, INVENTORY_REFUSED_GITIGNORED, inventoryExtentContributorId, inventoryExtentDeclaration, InventorySkillExtentContributor } from '../../src/index.js';
 
@@ -205,7 +207,11 @@ const FIXTURE_FILES: Readonly<Record<string, string>> = {
   'skills/demo/CLAUDE.md': '# claude\n\n[behind claude](./behind-claude.md)\n',
   'skills/demo/behind-claude.md': '# behind claude\n',
   'skills/demo/nested/inner.md': '# inner\n',
-  'skills/demo/asset.txt': 'asset\n',
+  // Parses as markdown, but no `**/*.md` registry includes it: the walker ships
+  // it and never opens it, so the document behind it must stay OUT of the
+  // closure too. Without this line the lane's leaf rule had no behavioural test.
+  'skills/demo/asset.txt': 'asset\n\n[behind the asset](./behind-asset.md)\n',
+  'skills/demo/behind-asset.md': '# behind asset\n',
   'ignored/secret.md': '# secret\n\n[behind the ignored hub](./behind-secret.md)\n',
   'ignored/behind-secret.md': '# behind secret\n',
 };
@@ -261,6 +267,7 @@ const IGNORED_PATHS = ['ignored/secret.md', 'ignored/behind-secret.md'] as const
  */
 async function discoverSkills(root: string): Promise<CorpusSkill[]> {
   const found = await crawlDirectory({
+    outputs: [],
     baseDir: root,
     unreadable: refuseUnreadableFixture(root),
     include: ['**/SKILL.md'],
@@ -294,7 +301,7 @@ function baseFrom(
   extentIds: ReadonlySet<string>,
   gitTracker: GitTracker | undefined,
 ): ProjectionBase {
-  const builder = new ProjectionBuilder({ root, gitTracker });
+  const builder = new ProjectionBuilder({ root, gitTracker, contentCache: new RunContentCache() });
   builder.addRoot({ id: builder.identities.rootId, path: safePath.resolve(root) });
 
   for (const row of projection.resources) builder.addResource(row);
@@ -320,7 +327,7 @@ async function populateCorpus(
   gitTracker: GitTracker | undefined,
 ): Promise<{ projection: Projection; extentIdByName: Map<string, string> }> {
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor());
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
 
   const parameters: Record<string, JsonValue> = {};
   for (const skill of skills) {
@@ -328,11 +335,10 @@ async function populateCorpus(
     parameters[inventoryExtentContributorId(skill.name)] = declarationFor(skill, gitTracker !== undefined);
   }
 
-  const projection = await populate({
+  const { projection } = await populate({
     root,
     registry,
     parameters,
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
     ...(gitTracker !== undefined && { gitTracker }),
   });
 
@@ -456,6 +462,7 @@ function walkOptionsFor(corpus: Corpus, skill: CorpusSkill): WalkLinkGraphOption
     projectRoot: corpus.spec.root,
     skillRootPath: skill.absolutePath,
     excludeNavigationFiles: true,
+    ownOutputDir: undefined,
   };
   if (corpus.gitTracker !== undefined) {
     options.gitTracker = corpus.gitTracker;
@@ -647,7 +654,7 @@ beforeAll(async () => {
     'crawlSkillLinkRegistry ms': Number(corpus.preparationMs.registry.toFixed(0)),
     'populate ms': Number(corpus.preparationMs.populate.toFixed(0)),
   })));
-}, 3_600_000);
+}, atLeastTierTimeout(inject('tierHookTimeout'), 3_600_000));
 
 // ============================================================================
 // The experiment
@@ -686,7 +693,7 @@ describe('inventory extent as a shadow of collectLinkedFiles', () => {
     expect(followed).toBeGreaterThan(0);
 
     expect(renderDivergences(divergences)).toEqual([]);
-  }, 1_800_000);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 1_800_000));
 
   it('FIXTURE: with a tracker, the gitignore rule closes the only remaining difference', async () => {
     const corpus = corpusAt(FIXTURE_CORPUS, WITH_TRACKER);
@@ -706,7 +713,7 @@ describe('inventory extent as a shadow of collectLinkedFiles', () => {
       expect(walker).not.toContain(ignored);
       expect(closure).not.toContain(ignored);
     }
-  }, 600_000);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 600_000));
 
   it('FIXTURE NEGATIVE CONTROL: stripping the gitignore rule brings the difference back', async () => {
     // Without this, the agreement above is unfalsifiable: it is exactly what a
@@ -761,7 +768,7 @@ describe('inventory extent as a shadow of collectLinkedFiles', () => {
     // Still a superset in the closure's direction: nothing the walker linked went
     // missing, which is what makes this a NARROWING problem throughout.
     expect(divergences.flatMap((row) => row.walkerOnly)).toEqual([]);
-  }, 600_000);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 600_000));
 
   it('FIXTURE: records what the NO-TRACKER state can and cannot do, as a measurement', async () => {
     // ⛔ The one place the two arms are NOT equivalent, pinned rather than left to
@@ -791,5 +798,5 @@ describe('inventory extent as a shadow of collectLinkedFiles', () => {
       expect(closure).toContain(ignored);
     }
     expect(divergence?.walkerOnly).toEqual([]);
-  }, 600_000);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 600_000));
 });

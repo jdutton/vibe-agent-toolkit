@@ -18,7 +18,7 @@
  * adopters are not typechecked: an omitted policy is refused up front, by
  * name, before any directory is listed — not on the first refusal, and never
  * silently. What each arm DOES is pinned beside the walk and the git route in
- * `file-crawler-refused-listing.test.ts` / `file-crawler-git-refused-listing.test.ts`.
+ * `file-crawler-refused-listing.test.ts` / `integration/file-crawler-git-refused-listing.integration.test.ts`.
  */
 import { writeFileSync } from 'node:fs';
 
@@ -33,7 +33,7 @@ import { createGitRepo } from './test-helpers.js';
 
 /** Every entry point that lists directories, called WITHOUT a policy. */
 const WITHOUT_POLICY = [
-  ['crawlDirectorySync', (root: string) => crawlDirectorySync({ baseDir: root, respectGitignore: false } as never)],
+  ['crawlDirectorySync', (root: string) => crawlDirectorySync({ outputs: [], baseDir: root, respectGitignore: false } as never)],
   ['gitLsFiles', (root: string) => gitLsFiles({ cwd: root, includeUntracked: true } as never)],
   ['gitLsOthers', (root: string) => gitLsOthers({ cwd: root, ignored: true, directory: true } as never)],
 ] as const;
@@ -60,5 +60,11 @@ describe('the unreadable policy is required at runtime, not only at the type lev
     expect(() => call(root)).toThrow(/`unreadable`/);
     expect(() => call(root)).toThrow(/refuse/);
     expect(() => call(root)).toThrow(/degrade/);
+  });
+
+  it('crawlDirectorySync refuses omitted outputs by name: the one declaration of what the verb writes has no default', () => {
+    const omitted = (): unknown => crawlDirectorySync({ baseDir: root, respectGitignore: false, unreadable: { degrade: () => undefined } } as never);
+    expect(omitted).toThrow(TypeError);
+    expect(omitted).toThrow(/`outputs` is required/);
   });
 });

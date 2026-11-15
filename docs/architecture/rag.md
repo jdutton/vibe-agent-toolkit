@@ -319,23 +319,11 @@ vat rag index --config docs-rag   # Uses named store
 vat rag query "error handling"     # Uses default store
 ```
 
-**Use When**: Building production agents, complex projects with multiple RAG stores.
+**Use When**: Production projects, or projects with multiple RAG stores.
 
-### Pattern 3: Agent Knowledge Base
+### Pattern 3: Querying a Store from Code
 
-Agent manifest references RAG store:
-
-```yaml
-# agent.yaml
-spec:
-  tools:
-    - name: knowledge_base
-      type: rag
-      config:
-        store: docs-rag  # References config
-```
-
-Agent queries at runtime:
+Your own code queries a built store read-only:
 
 ```typescript
 const ragProvider = await createRAGProvider({
@@ -351,7 +339,7 @@ const result = await ragProvider.query({
 // Use result.chunks for context
 ```
 
-**Use When**: Building agents that need to reference documentation.
+**Use When**: Your own application needs to retrieve from indexed documentation.
 
 ### Pattern 4: Multi-Store Project
 
@@ -563,13 +551,21 @@ declaring one.
 
 ### Problem: Database corruption
 
-**Symptoms**: `Error: Invalid LanceDB file`
+**Symptoms**: `vat rag index`, `vat rag stats` or `vat rag query` refuses with `INPUT_UNREADABLE`, saying the `rag_chunks` table cannot be read (its files are damaged)
 
 **Solutions**:
-1. Clear and rebuild: `vat rag clear && vat rag index`
+1. Clear and rebuild: `vat rag clear && vat rag index` — `clear` removes the database without opening it, so it works on a damaged one. It moves the database off its path whole before deleting it, so a deletion the OS stops leaves nothing at the database path: the refusal names where the rest is
 2. Check disk space (>100MB free)
 3. Verify no concurrent writes
 4. Update LanceDB: `bun update @lancedb/lancedb`
+
+The refusal names its cause, and two causes are not corruption. "The OS refuses <path> (EACCES)"
+is a permissions problem: fix the ownership or mode of the path it names — `vat rag clear` would
+fail on the same files. "Is not one this build of vat rag index writes" names the columns or vector
+size that differ (another tool's table, or an index built with another metadata schema or embedding
+model): clear and rebuild, as for damage. All three verbs check the table's columns and vector size
+before they read or write it, so `vat rag index` refuses such a table without adding or removing a
+row.
 
 ### Problem: Query results not relevant
 

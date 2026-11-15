@@ -7,7 +7,7 @@
 
 import { normalize, sep } from 'node:path';
 
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 /**
  * Normalize a path to projectPath format
@@ -27,7 +27,7 @@ export function normalizeProjectPath(path: string): string {
   normalized = normalized.replace(/^file:\/\/\/?/, '');
 
   // Convert to forward slashes first (handles Windows backslashes)
-  normalized = toForwardSlash(normalized);
+  normalized = toForwardSlashAnyPlatform(normalized);
 
   // Remove leading / or // (after converting backslashes)
   normalized = normalized.replace(/^\/+/, '');

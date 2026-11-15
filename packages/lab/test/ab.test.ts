@@ -24,9 +24,9 @@
 import { mkdtemp, readdir } from 'node:fs/promises';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
-import type { ReportEnvelope } from '../src/envelope/envelope.js';
+import type { currentHost, ReportEnvelope, ReportHost } from '../src/envelope/envelope.js';
 import {
   abExitCondition,
   type AbResult,
@@ -37,9 +37,35 @@ import {
   renderAb,
   runAb,
 } from '../src/harness/ab.js';
+import { type ArmEnvironment, buildArmEnv, EMPTY_ARM_ENVIRONMENT } from '../src/harness/arm-env.js';
 import { MEASURABLE_COMMANDS } from '../src/harness/commands.js';
+import type { EstimatorKind } from '../src/harness/estimator.js';
 import { buildReportEnvelope } from '../src/harness/report.js';
 import type { CaptureRequest, ResolvedInstrument, ResolvedSubject } from '../src/harness/types.js';
+
+/**
+ * The host every fake capture stamps, read once per effective `NODE_OPTIONS`.
+ * A real read starts a Node child for V8's heap limit, which is the bulk of a
+ * fake capture's cost and nothing this file asserts on. The host varies only
+ * with the `NODE_OPTIONS` the arm's environment resolves to, so two arms that
+ * resolve to the same value share one read.
+ */
+vi.mock('../src/envelope/envelope.js', async (importOriginal) => {
+  const original = await importOriginal<{ currentHost: typeof currentHost }>();
+  const hosts = new Map<string, ReportHost>();
+  return {
+    ...original,
+    currentHost: (env: ArmEnvironment): ReportHost => {
+      const key = buildArmEnv(process.env, env)['NODE_OPTIONS'] ?? '';
+      let host = hosts.get(key);
+      if (host === undefined) {
+        host = original.currentHost(env);
+        hosts.set(key, host);
+      }
+      return host;
+    },
+  };
+});
 
 let tempDir: string;
 
@@ -55,7 +81,7 @@ const DISAGREE = 'PAIRS DISAGREE';
 
 /** The fake facet's body: one value per command, and nothing else. */
 interface FakeBody {
-  readonly commands: readonly { readonly name: string; readonly failed: boolean; readonly value: number }[];
+  readonly commands: readonly { readonly name: string; readonly failed: boolean; readonly value: number; readonly lost: string | null }[];
 }
 
 /** Never opened — the fake facet's capture spawns nothing. */
@@ -77,7 +103,7 @@ function arm(commit: string): ResolvedInstrument {
   return {
     command: 'node',
     leadingArgs: ['/nowhere/bin.js'],
-    version: { version: '0.2.0', commit: commit.repeat(40), dirty: false },
+    version: { version: '0.2.0', commit: commit.repeat(40), dirty: false, closure: 'c'.repeat(64) },
   };
 }
 
@@ -107,10 +133,16 @@ interface FixtureOptions {
   readonly script: readonly PairScript[];
   readonly control?: boolean;
   readonly noiseFloor?: number;
-  /** Extra environment for arm A's children only. */
-  readonly envA?: Readonly<Record<string, string>>;
-  /** Extra environment for arm B's children only. */
-  readonly envB?: Readonly<Record<string, string>>;
+  /** Arm A's environment; absent means it sets nothing. */
+  readonly envA?: ArmEnvironment;
+  /** Arm B's environment; absent means it sets nothing. */
+  readonly envB?: ArmEnvironment;
+  /** The facet's estimator; absent means `min`. */
+  readonly estimator?: EstimatorKind;
+  /** Why arm B's capture is lost (a run out of heap), per pair; absent means none is. */
+  readonly bLost?: readonly (string | null)[];
+  /** Per pair, whether arm B's capture published no row for the command at all; absent means it always did. */
+  readonly bAbsent?: readonly boolean[];
 }
 
 /** A run's outcome plus the capture order it produced. */
@@ -119,7 +151,7 @@ interface FixtureRun {
   /** One entry per capture, naming the arm — the ordering evidence. */
   readonly order: readonly string[];
   /** The `env` each capture was asked for, in capture order. */
-  readonly envs: readonly (Readonly<Record<string, string>> | undefined)[];
+  readonly envs: readonly ArmEnvironment[];
 }
 
 /**
@@ -150,7 +182,7 @@ function comparisonFor(script: PairScript | undefined): RefusalLike | Comparison
  */
 async function runFixture(options: FixtureOptions, label: string): Promise<FixtureRun> {
   const order: string[] = [];
-  const envs: (Readonly<Record<string, string>> | undefined)[] = [];
+  const envs: ArmEnvironment[] = [];
   let compared = 0;
 
   const capture = (request: CaptureRequest): Promise<ReportEnvelope<FakeBody>> => {
@@ -162,11 +194,13 @@ async function runFixture(options: FixtureOptions, label: string): Promise<Fixtu
     const name = armIndex === 0 ? 'A' : 'B';
     const values = armIndex === 0 ? options.aValues : options.bValues;
     const value = values[Math.floor(order.length / 2)] ?? 0;
+    const lost = armIndex === 1 ? (options.bLost?.[Math.floor(order.length / 2)] ?? null) : null;
+    const absent = armIndex === 1 && options.bAbsent?.[Math.floor(order.length / 2)] === true;
     order.push(name);
     return Promise.resolve(
       buildReportEnvelope('fake', request, {
-        commands: [{ name: COMMAND, failed: false, value }],
-      }),
+        commands: absent ? [] : [{ name: COMMAND, failed: lost !== null, value, lost }],
+      }, []),
     );
   };
 
@@ -181,13 +215,15 @@ async function runFixture(options: FixtureOptions, label: string): Promise<Fixtu
     control: options.control === true,
     noiseFloor: options.noiseFloor ?? null,
     outDir: safePath.join(tempDir, label),
-    ...(options.envA === undefined ? {} : { envA: options.envA }),
-    ...(options.envB === undefined ? {} : { envB: options.envB }),
+    armsRoot: safePath.join(tempDir, `${label}-arms`),
+    envA: options.envA ?? EMPTY_ARM_ENVIRONMENT,
+    envB: options.envB ?? EMPTY_ARM_ENVIRONMENT,
     now: () => new Date().toISOString(),
     capture,
     compare: () => comparisonFor(options.script[compared++]),
+    estimator: options.estimator ?? 'min',
     estimate: (report): readonly FacetEstimate[] =>
-      report.body.commands.map((row) => ({ name: row.name, value: row.value, unit: 'ms' })),
+      report.body.commands.map((row) => ({ name: row.name, value: row.value, unit: 'ms', lost: row.lost })),
   };
 
   return { result: await runAb(spec), order, envs };
@@ -250,7 +286,7 @@ describe('runAb — the arms alternate', () => {
 });
 
 describe('runAb — an arm can carry its own configuration', () => {
-  const POOL_ON = { VAT_PARSE_POOL: '1' };
+  const POOL_ON: ArmEnvironment = { set: { VAT_PARSE_POOL_SIZE: '1' }, unset: [] };
 
   it('hands each arm its OWN env, so one build can be measured in two configurations', async () => {
     // The pool-on/pool-off A/B: one build, two settings. Without this the only
@@ -269,7 +305,7 @@ describe('runAb — an arm can carry its own configuration', () => {
     );
 
     // Capture order is A B A B, so B's env must land on captures 1 and 3 only.
-    expect(envs).toEqual([undefined, POOL_ON, undefined, POOL_ON]);
+    expect(envs).toEqual([EMPTY_ARM_ENVIRONMENT, POOL_ON, EMPTY_ARM_ENVIRONMENT, POOL_ON]);
   });
 
   it('does not leak one arm’s env into the other when BOTH are set', async () => {
@@ -279,13 +315,13 @@ describe('runAb — an arm can carry its own configuration', () => {
         aValues: [10],
         bValues: [20],
         script: ['changed'],
-        envA: { VAT_PARSE_POOL: '0' },
+        envA: { set: { VAT_PARSE_POOL_SIZE: '0' }, unset: [] },
         envB: POOL_ON,
       },
       'env-both-arms',
     );
 
-    expect(envs).toEqual([{ VAT_PARSE_POOL: '0' }, POOL_ON]);
+    expect(envs).toEqual([{ set: { VAT_PARSE_POOL_SIZE: '0' }, unset: [] }, POOL_ON]);
   });
 
   it('publishes each arm’s env on the result, so the report can disclose it', async () => {
@@ -303,7 +339,7 @@ describe('runAb — an arm can carry its own configuration', () => {
       'env-published',
     );
 
-    expect(result.envA).toBeUndefined();
+    expect(result.envA).toEqual(EMPTY_ARM_ENVIRONMENT);
     expect(result.envB).toEqual(POOL_ON);
   });
 });
@@ -330,6 +366,25 @@ describe('runAb — the estimator', () => {
     expect(row.effect).toBe(-10);
   });
 
+  it('takes the median instead when the facet declares it, and says so', async () => {
+    const { result } = await runFixture(
+      {
+        pairs: 3,
+        aValues: [200, 100, 500],
+        bValues: [90, 90, 90],
+        script: ['changed', 'changed', 'changed'],
+        estimator: 'median',
+      },
+      'estimator-median',
+    );
+
+    const row = only(result);
+    expect(row.a?.value).toBe(200);
+    // Median-to-median: 90 - 200, not 90 - 100.
+    expect(row.effect).toBe(-110);
+    expect(renderAb(result)).toContain('Estimator: MEDIAN across pairs');
+  });
+
   it('keeps every per-pair value, so a reader can check the two statistics', async () => {
     const { result } = await runFixture(
       { pairs: 2, aValues: [30, 10], bValues: [10, 10], script: ['unchanged', 'unchanged'] },
@@ -337,6 +392,90 @@ describe('runAb — the estimator', () => {
     );
 
     expect(only(result).a?.samples).toEqual([30, 10]);
+  });
+});
+
+describe('runAb — an arm whose run was lost', () => {
+  it('reports that the arm ran out of heap, never a statistic over its surviving pairs', async () => {
+    const { result } = await runFixture(
+      {
+        pairs: 3,
+        aValues: [100, 100, 100],
+        bValues: [200, 0, 210],
+        bLost: [null, 'ran out of heap', null],
+        script: ['changed', 'changed', 'changed'],
+        estimator: 'median',
+      },
+      'lost',
+    );
+
+    const row = only(result);
+    expect(row.lost).toEqual({ a: null, b: 'ran out of heap in 1 of 3 pairs' });
+    // The survivors' median would be a number, and an understated one: no headline effect at all.
+    expect(row.effect).toBeNull();
+    const text = renderAb(result);
+    expect(text).toContain('B: ran out of heap in 1 of 3 pairs');
+    expect(text).toContain('effect: NONE — arm B ran out of heap in 1 of 3 pairs');
+  });
+
+  it('calls a pair whose arm published no estimate at all LOST, naming why, and reports no effect', async () => {
+    const { result } = await runFixture(
+      {
+        pairs: 3,
+        aValues: [100, 100, 100],
+        bValues: [200, 0, 210],
+        bAbsent: [false, true, false],
+        script: ['changed', 'changed', 'changed'],
+      },
+      'absent',
+    );
+
+    const row = only(result);
+    expect(row.lost).toEqual({ a: null, b: 'published no estimate in 1 of 3 pairs' });
+    expect(row.effect).toBeNull();
+    expect(renderAb(result)).toContain('effect: NONE — arm B published no estimate in 1 of 3 pairs');
+  });
+});
+
+describe('runAb — no pair comparable', () => {
+  it('prints no effect when every pair was refused, though both arms published numbers', async () => {
+    const { result } = await runFixture(
+      {
+        pairs: 2,
+        aValues: [10, 10],
+        bValues: [50, 50],
+        script: [{ refusal: 'REFUSED: two axes moved' }, { refusal: 'REFUSED: two axes moved' }],
+      },
+      'none-comparable',
+    );
+
+    expect(only(result).effect).toBeNull();
+    const text = renderAb(result);
+    expect(text).toContain('effect: NONE — no pair was comparable');
+    expect(text).not.toContain('effect (B - A)');
+  });
+
+  // Every facet: a pair counts toward an effect only when its comparison judged the command changed
+  // or unchanged. `unmeasurable`, `added`, `removed`, `below-resolution`… judged nothing.
+  it.each(['unmeasurable', 'added', 'below-resolution'])('prints no effect when every pair said %s, naming why', async (kind) => {
+    const { result } = await runFixture(
+      { pairs: 2, aValues: [10, 10], bValues: [50, 50], script: [kind, kind] },
+      `none-judged-${kind}`,
+    );
+
+    expect(only(result).effect).toBeNull();
+    const text = renderAb(result);
+    expect(text).toContain(`effect: NONE — no pair judged it changed or unchanged (every pair said: ${kind})`);
+    expect(text).not.toContain('effect (B - A)');
+  });
+
+  it('takes the effect when one pair judged it, though another pair did not', async () => {
+    const { result } = await runFixture(
+      { pairs: 2, aValues: [10, 10], bValues: [50, 50], script: ['unmeasurable', 'unchanged'] },
+      'one-judged',
+    );
+
+    expect(only(result).effect).toBe(40);
   });
 });
 
@@ -469,8 +608,8 @@ describe('renderAb', () => {
     const rendered = renderAb(result);
     expect(rendered).toContain('arms ALTERNATED (A B A B …)');
     expect(rendered).toContain('Estimator: MIN across pairs');
-    expect(rendered).toContain('Instrument A: vat 0.2.0 (aaaaaaaa)');
-    expect(rendered).toContain('Instrument B: vat 0.2.0 (bbbbbbbb)');
+    expect(rendered).toContain('Instrument A: vat 0.2.0 (aaaaaaaa, closure cccccccccccc)');
+    expect(rendered).toContain('Instrument B: vat 0.2.0 (bbbbbbbb, closure cccccccccccc)');
     expect(rendered).toContain(result.outDir);
   });
 
@@ -483,14 +622,33 @@ describe('renderAb', () => {
         aValues: [100],
         bValues: [60],
         script: ['changed'],
-        envB: { VAT_PARSE_POOL: '1' },
+        envB: { set: { VAT_PARSE_POOL_SIZE: '1' }, unset: [] },
       },
       'render-config',
     );
 
     const rendered = renderAb(result);
     expect(rendered).toContain('Config A: (none)');
-    expect(rendered).toContain('Config B: VAT_PARSE_POOL=1');
+    expect(rendered).toContain('Config B: VAT_PARSE_POOL_SIZE=1');
+  });
+
+  it('discloses an UNSET as configuration, not as an arm that set nothing', async () => {
+    // Removing a variable the operator's shell carries is a real difference
+    // between arms; rendering it as `(none)` would hide the only visible axis.
+    const { result } = await runFixture(
+      {
+        pairs: 1,
+        aValues: [100],
+        bValues: [60],
+        script: ['changed'],
+        envB: { set: {}, unset: ['CLAUDE_CONFIG_DIR'] },
+      },
+      'render-unset',
+    );
+
+    const rendered = renderAb(result);
+    expect(rendered).toContain('Config A: (none)');
+    expect(rendered).toContain('Config B: -CLAUDE_CONFIG_DIR');
   });
 
   it('says nothing about config when neither arm set any, rather than printing empty lines', async () => {

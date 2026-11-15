@@ -1,8 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { LOADING_TAG } from '../../src/projection/agentic-tags.js';
+import { LOADING_TAG, RULE_SCOPE_TAG } from '../../src/projection/agentic-tags.js';
 import { CLAUDE_IMPORT_KIND } from '../../src/projection/contributors/claude-import-extent.js';
-import { RULE_SCOPE_TAG } from '../../src/projection/contributors/claude-rules-scope.js';
 import type { Projection } from '../../src/projection/projection.js';
 
 import { buildClaudeContextTree, byCodePoint, removeClaudeContextTree } from './claude-context-tree.js';
@@ -35,14 +34,14 @@ beforeAll(async () => {
   const tree = await buildClaudeContextTree(TREE);
   suiteDir = tree.dir;
   projection = tree.projection;
-}, 60_000);
+});
 
 afterAll(async () => {
   // Generous, and deliberately so: a recursive `rm` over a temp tree has timed
   // out at Vitest's 10s hook default on Windows CI, which fails the whole file
   // for a reason that has nothing to do with what it tests.
   await removeClaudeContextTree(suiteDir);
-}, 60_000);
+});
 
 /** The extent id of one root's import closure, read back off provenance. */
 function extentFor(rootRelativePath: string): string {
@@ -176,5 +175,5 @@ describe('buildClaudeContextPopulation in a repository', () => {
     } finally {
       await removeClaudeContextTree(tree.dir);
     }
-  }, 60_000);
+  });
 });

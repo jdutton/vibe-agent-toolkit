@@ -35,6 +35,17 @@ import {
   type YAMLMap,
 } from 'yaml';
 
+import { VatError } from '../errors/vat-error.js';
+
+/**
+ * The code {@link updateYamlIn} throws when the INPUT document cannot take the
+ * edit — it is not YAML, or the path lands on a collection or runs through a
+ * scalar. The input's shape, not a defect: a caller editing an adopter's file
+ * reports it as that file's problem. Its other throws (an empty path, a failed
+ * post-condition) stay uncoded — they are the caller's or this module's bug.
+ */
+export const YAML_EDIT_INPUT_REFUSED_CODE = 'YAML_EDIT_INPUT_REFUSED';
+
 /** A path into a YAML document: map keys (strings) and/or sequence indices. */
 export type YamlPath = (string | number)[];
 
@@ -60,9 +71,10 @@ const NO_WRAP = { lineWidth: 0 } as const;
  * @param path - Key/index path to the scalar to set.
  * @param value - The scalar value to write (string, number, boolean, or null).
  * @returns The updated document text.
- * @throws If `text` is not valid YAML, if `path` is empty, or if `path` resolves
- *   to a collection that would be clobbered by a scalar (or an intermediate
- *   ancestor is a scalar that cannot hold a child).
+ * @throws A `VatError` coded {@link YAML_EDIT_INPUT_REFUSED_CODE} if `text` is
+ *   not valid YAML, or `path` resolves to a collection that would be clobbered
+ *   by a scalar (or an intermediate ancestor is a scalar that cannot hold a
+ *   child); a plain `Error` if `path` is empty.
  *
  * @example
  * updateYamlIn('model: haiku   # note\n', ['model'], 'opus')
@@ -76,7 +88,7 @@ export function updateYamlIn(text: string, path: YamlPath, value: YamlScalarValu
   const eol = detectEol(text);
   const doc = parseDocument(text, { prettyErrors: true });
   if (doc.errors.length > 0) {
-    throw new Error(`updateYamlIn: input is not valid YAML: ${doc.errors[0]?.message ?? 'unknown'}`);
+    throw new VatError(YAML_EDIT_INPUT_REFUSED_CODE, `updateYamlIn: input is not valid YAML: ${doc.errors[0]?.message ?? 'unknown'}`);
   }
 
   const existing = doc.getIn(path, true);
@@ -85,7 +97,8 @@ export function updateYamlIn(text: string, path: YamlPath, value: YamlScalarValu
   if (isScalar(existing)) {
     result = replaceScalarToken(text, existing.range, value, eol);
   } else if (isCollection(existing)) {
-    throw new Error(
+    throw new VatError(
+      YAML_EDIT_INPUT_REFUSED_CODE,
       `updateYamlIn: refusing to overwrite the collection at [${path.join(', ')}] with a scalar`,
     );
   } else {
@@ -197,7 +210,8 @@ function findInsertionTarget(doc: Document, path: YamlPath): InsertionTarget {
     if (isMap(node)) {
       return { map: node, remaining: path.slice(i) };
     }
-    throw new Error(
+    throw new VatError(
+      YAML_EDIT_INPUT_REFUSED_CODE,
       `updateYamlIn: cannot insert at [${path.join(', ')}] — ancestor [${prefix.join(', ')}] is not a map`,
     );
   }

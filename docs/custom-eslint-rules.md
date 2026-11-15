@@ -184,8 +184,21 @@ bare `'common.ts'` used to be a substring match, which silently exempted every p
 CONTAINING it.
 
 A rule that cannot be green on the whole tree today lands as a **ratchet**: enable it with an
-explicit allowlist of today's offending files (a reason beside each), so a listed file that becomes
-clean fails until delisted and an unlisted new site fails at once. The list may only shrink.
+explicit allowlist of today's offending files (a reason beside each, or one reason in the list's
+comment when every entry shares it), so a listed file that becomes clean fails until delisted and
+an unlisted new site fails at once. The list may only shrink.
+Register the list in `packages/dev-tools/test/eslint-allowlist-ratchets.test.ts`, which lints each
+listed file with the exemption lifted and requires the entries to be sorted source files —
+`no-existssync` (`NO_EXISTSSYNC_RATCHET`, the product files still asking `existsSync` instead of
+`pathPresent`) and `no-io-in-unit-tier` are the shape. A permanent allowlist registers the same way:
+`no-link-following-fs` (`LINK_FOLLOWING_FS_CALLS`) lists the one guarded module,
+`utils/src/link-following.ts`, and the files whose every link-following call acts on the operator's
+own path, each with its reason — never a ratchet of offenders, and asserted both ways all the same.
+A file-level exemption cannot see a new call in a file already listed, so this list pins the EXACT
+number of calls the rule flags in each file, and the ratchet test fails on one more or one fewer.
+When it reaches zero, delete the mechanism, not just the entries: the rule's schema then refuses
+the option, as `no-literal-process-exit` (`allow`, `derived.legacy`) and `no-stdout-outside-writer`
+(`allowFiles`) do.
 
 ## Why This Matters for Agentic Development
 

@@ -57,10 +57,11 @@ external fact, not a validity decision.
 ## The config file's `version:` key
 
 `vibe-agent-toolkit.config.yaml` used to open with `version: 1`, checked by a `z.literal(1)` — the
-exact shape this rule bans, and the last one the tree carried. The key is now **accepted and
-ignored** (`version: z.unknown().optional()`): the strict schema decides whether a config can be
-read, and no integer in the file gets a vote. A config still carrying `version: 1` loads
-unchanged; a new config need not carry the key at all. Nothing reads it.
+exact shape this rule bans — and later carried the key as "accepted and ignored". Both are gone: the
+key no longer exists in `ProjectConfigSchema`, so `version:` is treated like any other unrecognized
+root key: the loaders warn, naming the key and the file, and drop it; the config still loads.
+A config states no version; the npm package version is the only one. Delete the line from any config
+that still has it.
 
 ## Enforcement
 

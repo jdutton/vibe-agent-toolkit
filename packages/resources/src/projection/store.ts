@@ -1,6 +1,8 @@
 /**
- * The seam a projection **store** implements — the named interface that lets a
- * storage backend be swapped without changing anything above it.
+ * The storage port, {@link FactStore}: the one seam a projection **store**
+ * implements — the named interface that lets a storage backend be swapped
+ * without changing anything above it. A backend is chosen and injected by the
+ * CLI; nothing in this package names one.
  *
  * A store is a cache, not an export. Nothing here promises durability, a stable
  * on-disk format, or a migration path: recovery is always "populate it again".
@@ -23,9 +25,9 @@
  *
  * | | `projection-sqlite` | a file-per-table backend |
  * |---|---|---|
- * | {@link ProjectionStore.writeBlobFacts} | `INSERT … ON CONFLICT DO NOTHING`, one transaction | a staged file per table, renamed into a content-addressed directory |
- * | {@link ProjectionStore.writeExtent} | delete-then-insert under the key, one transaction | a file per table under `root=…/tree=…/`, published through a manifest |
- * | {@link ProjectionStore.readExtent} | `SELECT … WHERE rootId = ? AND treeHash = ?` | read the manifest, then scan exactly the files it lists |
+ * | {@link FactStore.writeBlobFacts} | `INSERT … ON CONFLICT DO NOTHING`, one transaction | a staged file per table, renamed into a content-addressed directory |
+ * | {@link FactStore.writeExtent} | delete-then-insert under the key, one transaction | a file per table under `root=…/tree=…/`, published through a manifest |
+ * | {@link FactStore.readExtent} | `SELECT … WHERE rootId = ? AND treeHash = ?` | read the manifest, then scan exactly the files it lists |
  *
  * Neither column is awkward, which is what the seam had to demonstrate. Only the
  * first column ships: a columnar backend was built and then **removed**, because
@@ -35,7 +37,7 @@
  *
  * ## Why the two scopes are separate operations
  *
- * {@link ProjectionTableScope} splits the twelve tables in two, and the split is
+ * {@link ProjectionTableScope} splits the tables in two, and the split is
  * a difference in *lifetime*, not a tidy grouping:
  *
  * - Blob-scoped rows are a pure function of bytes, so they are **global**. Two
@@ -62,6 +64,7 @@
  *   pull. Beyond that, the cache lives under `vatCacheNamespaceRoot()` and
  *   inherits that tenant's policy: the namespace moves on every release, and OS
  *   tmpdir purge is what reclaims a directory this build no longer opens.
+ *   (Provisional: this section is rewritten when eviction moves behind the port.)
  * - **No version or format discriminator in the data.** What separates one
  *   build's rows from another's is {@link projectionShapeDigest}, in the path —
  *   derived from the schemas, never declared.
@@ -77,14 +80,14 @@ import { PROJECTION_TABLES, type ProjectionRow, type ProjectionTableName } from 
 /** Hex digits kept from the shape digest. Short on purpose — it is a path component. */
 const SHAPE_DIGEST_LENGTH = 12;
 
-/** Pure and mildly expensive: twelve schemas through the JSON Schema converter. */
+/** Pure and mildly expensive: fifteen schemas through the JSON Schema converter. */
 let memoizedShapeDigest: string | undefined;
 
 /**
  * The table names of one scope, split in the type system rather than by hand.
  *
  * Reads each entry's declared `scope` back out of {@link PROJECTION_TABLES},
- * so a thirteenth table joins the right bundle by declaring its scope in the
+ * so a new table joins the right bundle by declaring its scope in the
  * registry and nowhere else. A hand-written union here would be a second list
  * to keep in sync, which is the drift the registry exists to prevent.
  */
@@ -145,14 +148,17 @@ export interface ExtentKey {
 }
 
 /**
- * A storage backend for the resource projection.
+ * The storage port: what a backend for the resource projection implements,
+ * and all that a caller holding one may do — read and write blob facts, read an
+ * extent, write one additively, and close. It carries no SQL: see "No query"
+ * in this module's header.
  *
  * Every method is asynchronous because a backend may be — one running its engine
  * out of process, or over a network, has no synchronous option. A synchronous
  * backend — `projection-sqlite` is entirely synchronous — simply returns
  * already-resolved promises, which costs it nothing and keeps one interface.
  */
-export interface ProjectionStore {
+export interface FactStore {
   /**
    * Record facts about blobs, keyed by content.
    *
@@ -162,7 +168,14 @@ export interface ProjectionStore {
    * without any coordination — the worst case is duplicated work, never
    * disagreeing data.
    *
-   * @param rows - The four blob-scoped tables; any of them may be empty
+   * ⛔ **A partitioned table is written per `(blob, partition)` pair**
+   * (`ProjectionTableSpec.partitionColumn` — the harness tables). Their rows
+   * are derived lazily, only for what one tree reaches, so one write can carry
+   * a key's `blobs` row and none of its harness facts. A write must never
+   * remove a pair it carries no rows for; a pair it does carry replaces what
+   * the store held for that pair.
+   *
+   * @param rows - The blob-scoped tables; any of them may be empty
    */
   writeBlobFacts(rows: BlobScopedRows): Promise<void>;
 
@@ -270,7 +283,7 @@ export interface ProjectionStore {
  * old one is cold, and the OS tmpdir purge that already owns this cache's
  * eviction reclaims it. That is the whole mechanism.
  *
- * Four inputs, because all four change what is stored:
+ * Every input below changes what is stored:
  *
  * - each table's **row schema shape**, prose stripped, so rewording a
  *   `.describe()` cannot cool the cache while adding an optional field does;
@@ -281,7 +294,9 @@ export interface ProjectionStore {
  * - its **context column**, which decides what a write replaces. Rows already
  *   filed under one partitioning would survive a write that partitions
  *   differently, so a store written before the change and read after it holds
- *   rows this build would never have kept.
+ *   rows this build would never have kept;
+ * - its **partition column** (the harness tables' `harness`), which decides
+ *   what a lazy blob-tier write replaces, for the same reason.
  *
  * @returns Twelve lowercase hex digits, stable across processes and rebuilds
  *
@@ -298,7 +313,7 @@ export function projectionShapeDigest(): string {
   for (const spec of Object.values(PROJECTION_TABLES)) {
     hash.update(
       `\0${spec.name}\0${spec.scope}\0${spec.primaryKey.join(',')}`
-      + `\0${spec.contextColumn ?? ''}\0${schemaShapeSource(spec.schema)}`,
+      + `\0${spec.contextColumn ?? ''}\0${spec.partitionColumn ?? ''}\0${schemaShapeSource(spec.schema)}`,
     );
   }
   memoizedShapeDigest = hash.digest('hex').slice(0, SHAPE_DIGEST_LENGTH);

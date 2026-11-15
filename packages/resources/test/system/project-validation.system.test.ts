@@ -23,6 +23,7 @@ describe('System Test: Project Link Validation (Dogfooding)', () => {
     // Crawl the entire project for markdown files
     await registry.crawl({
       unreadable: 'refuse',
+      outputs: [],
       baseDir: projectRoot,
       include: ['**/*.md'],
       exclude: [
@@ -107,5 +108,5 @@ describe('System Test: Project Link Validation (Dogfooding)', () => {
 
     // Ensure we actually validated some files
     expect(stats.totalResources).toBeGreaterThan(0);
-  }, 60_000); // 60 second timeout — crawls entire monorepo
+  });
 });

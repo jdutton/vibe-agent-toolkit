@@ -2,24 +2,19 @@
  * Filesystem utilities
  */
 
-// ⚠️ The sync half is reached through the DEFAULT object (`nodeFs.existsSync`),
-// not as named imports, and that is load-bearing rather than stylistic. Node
-// snapshots a builtin's named ESM exports at import time, so `vi.spyOn(fs,
-// 'existsSync')` cannot see a call made through a named binding — the spy
-// attaches and counts zero, which reads exactly like "this function performs no
-// I/O". `pathSpellingFrom` and `realpathFrom` are guarded by precisely that
-// assertion (they must reach neither `readdir` nor this pair), so a "tidy-up"
-// back to named imports would silently disarm the guard. The async half below
-// already uses the default object for the same reason.
-import nodeFs from 'node:fs';
+// ⚠️ Every fs call here is reached through a DEFAULT object (`fs.readdir`), and every
+// link-following one through `link-following.ts`, which does the same: Node snapshots a
+// builtin's named ESM exports at import time, so a `vi.spyOn` cannot see a call made through
+// a named binding — the spy attaches and counts zero, which reads exactly like "this function
+// performs no I/O". `pathSpellingFrom` and `realpathRowFrom` are guarded by precisely that
+// assertion, so a "tidy-up" to named imports would silently disarm the guard.
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { promisify } from 'node:util';
 
-import { FollowedWalk } from './dirent-kind.js';
-import { isFilesystemAccessError } from './errors/errno.js';
-import { VatError } from './errors/vat-error.js';
-import { isUnderRoot } from './path-containment.js';
+import { type FsFaultClass, fsFaultOf, isRetryableShortageError, isUnresolvableLinkError } from './errors/errno-table.js';
+import { linkResolutionFault } from './errors/fs-fault.js';
+import { everyInOrder } from './in-order.js';
+import { followedRealpath, followedStatSync } from './link-following.js';
 import { toForwardSlash, toNfc } from './path-core.js';
 import { safePath } from './path-utils.js';
 
@@ -27,12 +22,12 @@ import { safePath } from './path-utils.js';
  * What one path looked like the first time this run asked.
  *
  * The two fields are deliberately NOT collapsed into a single `stat` result:
- * they record the outcome of `existsSync` and of `statSync` *separately*,
+ * they record whether anything resolves there and what the `stat` said *separately*,
  * because callers distinguish three states and only two of them are "the stat
  * worked". See {@link FsLookupCache.probe}.
  */
 export interface PathProbe {
-  /** `existsSync` — follows symlinks, so a dangling link reads as absent. */
+  /** Whether the path resolves (its chain read first) — a dangling link or a cycle reads as absent. */
   readonly exists: boolean;
   /**
    * `statSync().isDirectory()`.
@@ -77,7 +72,7 @@ export type DirectoryListing =
 /**
  * Turn a `readdir` rejection into the failure it actually is.
  *
- * ⚠️ **`isFilesystemAccessError` is deliberately NOT used here, and that is not
+ * ⚠️ **`fsFaultOf` is deliberately NOT used here, and that is not
  * an oversight.** It answers a different question — *"is this the environment's
  * fault or a bug in our code?"* — and to answer it, it deliberately groups
  * `ENOENT` together with `EACCES`. That grouping IS the conflation this function
@@ -93,42 +88,44 @@ export type DirectoryListing =
  * @returns The listing outcome that error stands for
  */
 export function listingFailure(error: unknown): DirectoryListing {
-  const code =
-    typeof error === 'object' && error !== null && 'code' in error
-      ? (error as { code: unknown }).code
-      : undefined;
-
-  // `ENOTDIR` is absence too: a path component that is a file is a directory
-  // that does not exist, which is exactly what the caller has to report.
-  if (code === 'ENOENT' || code === 'ENOTDIR') return { outcome: 'absent' };
+  const facts = fsFaultOf(error);
+  // The `absent` class holds `ENOTDIR` too: a path component that is a file is a
+  // directory that does not exist, which is exactly what the caller has to report.
+  if (facts?.faultClass === 'absent') return { outcome: 'absent' };
+  if (facts !== undefined) return { outcome: 'unreadable', code: facts.errno };
+  // An errno outside the classifier's table is still a refusal, reported as itself.
+  const code = typeof error === 'object' && error !== null && 'code' in error ? (error as { code: unknown }).code : undefined;
   return { outcome: 'unreadable', code: typeof code === 'string' ? code : 'UNKNOWN' };
 }
 
 /**
- * Refusal errnos that a *re-ask* can legitimately answer differently.
+ * Whether a listing refused with `code` could be answered differently by a later
+ * ask — {@link isRetryableShortageError}: busy, or out of descriptors.
  *
- * ⚠️ **This set decides what may be MEMOIZED, which makes it a correctness
- * boundary rather than a taxonomy.** `EACCES` (a mode bit) and `ELOOP` (a
- * committed symlink cycle) are facts about the tree: they hold for the whole
- * run, re-asking buys the same refusal, and caching them is exactly what
- * {@link FsLookupCache} is for. Descriptor exhaustion is not a fact about the
- * tree at all — it is a fact about this process at one instant — and a memo
- * that keeps one un-verifies every path under that directory for the rest of
- * the run, producing a burst of findings that a re-run does not reproduce.
+ * ⚠️ **This decides what may be MEMOIZED, which makes it a correctness boundary
+ * rather than a taxonomy.** `EACCES` (a mode bit) and `ELOOP` (a committed
+ * symlink cycle) are facts about the tree: they hold for the whole run, re-asking
+ * buys the same refusal, and caching them is exactly what {@link FsLookupCache}
+ * is for. A descriptor shortage or a busy handle is not a fact about the tree at
+ * all — it is a fact about this process at one instant — and a memo that keeps
+ * one un-verifies every path under that directory for the rest of the run,
+ * producing a burst of findings that a re-run does not reproduce.
  *
- * **Deliberately short, and everything unlisted is treated as stable.** The two
- * mistakes are not symmetric: memoizing a transient refusal costs a burst of
- * wrong answers *within one run*, while re-asking a stable one costs an
- * unbounded number of syscalls on a `--x` directory that will refuse every one
- * of them — and on a dead network mount, each of those blocks. `EAGAIN` is
- * included because it is literally "try again"; `ETIMEDOUT`/`ESTALE`/`EBUSY`
- * are not, because a re-ask against failing hardware or a hung mount is the
- * storm this set exists to avoid.
+ * **Everything else is treated as stable.** The two mistakes are not symmetric:
+ * memoizing a transient refusal costs a burst of wrong answers *within one run*,
+ * while re-asking a stable one costs an unbounded number of syscalls on a `--x`
+ * directory that will refuse every one of them. The `device` class (`ETIMEDOUT`,
+ * `ESTALE`, `EIO`) stays stable — a re-ask against failing hardware or a hung
+ * mount is the storm this boundary exists to avoid — and so does a full disk
+ * (`ENOSPC`, `EDQUOT`): re-asking frees no space, and the clause below would
+ * tell the reader to re-run.
  */
-const TRANSIENT_LISTING_ERRNOS: ReadonlySet<string> = new Set(['EMFILE', 'ENFILE', 'EAGAIN']);
+function isTransientListingCode(code: string): boolean {
+  return isRetryableShortageError({ code });
+}
 
 /**
- * The clause a finding prints about a refusal {@link TRANSIENT_LISTING_ERRNOS}
+ * The clause a finding prints about a refusal {@link isTransientListingCode}
  * calls transient — owned here, beside the list, so it describes every member.
  *
  * 🪤 Both consumers of `AbsenceCause.transient` used to write their own: "`X`
@@ -143,12 +140,12 @@ const TRANSIENT_LISTING_ERRNOS: ReadonlySet<string> = new Set(['EMFILE', 'ENFILE
  *   trailing punctuation so a caller can continue the sentence
  */
 export function transientRefusalClause(code: string): string {
-  return `${code} is a transient shortage (a descriptor or other resource this process ran out of for a moment), not a permission`;
+  return `${code} is a transient shortage (a descriptor this process ran out of, or something busy, for a moment), not a permission`;
 }
 
 /** Whether this listing failed in a way a later ask could get past. */
 function isTransientRefusal(listing: DirectoryListing): boolean {
-  return listing.outcome === 'unreadable' && TRANSIENT_LISTING_ERRNOS.has(listing.code);
+  return listing.outcome === 'unreadable' && isTransientListingCode(listing.code);
 }
 
 /** How many probes a {@link FsLookupCache} answered, and how many cost syscalls. */
@@ -193,7 +190,7 @@ export class FsLookupCache {
   readonly #listings = new Map<string, Promise<DirectoryListing>>();
 
   /** Path → its canonical path, falling back to the resolved path. */
-  readonly #realpaths = new Map<string, Promise<string>>();
+  readonly #realpaths = new Map<string, Promise<RealpathRow>>();
 
   /** Path → the existence/kind pair recorded the first time it was probed. */
   readonly #probes = new Map<string, PathProbe>();
@@ -204,6 +201,14 @@ export class FsLookupCache {
 
   /** The listings turned into spelling indexes, built on first use. */
   #spellingIndex: DirectorySpellingIndex | undefined;
+
+  /** The tree every path this cache follows is crawled in: the operator's own input (`link-following.ts`). */
+  readonly #within: string;
+
+  /** @param within - The tree this run's paths are crawled in — a project or skill root the operator named */
+  constructor(within: string) {
+    this.#within = within;
+  }
 
   /**
    * The three-way spelling index over this cache's listings — one per run, for
@@ -239,12 +244,12 @@ export class FsLookupCache {
   /**
    * Does this path exist, and is it a directory — asked once per run.
    *
-   * **Both syscalls are preserved, in order, exactly as an uncached caller
-   * would make them.** `existsSync` then `statSync` is not the same as one
-   * `statSync`: the pair distinguishes "absent" from "present but unstattable",
-   * and the link walker's classifier branches differently on each. Collapsing
-   * them would be a behaviour change wearing the shape of an optimization, so
-   * this method deduplicates the pair rather than replacing it.
+   * One followed `stat`, its link chain read beneath this cache's tree first
+   * (`followedStatSync`): a path that resolves to nothing — absent, dangling, a
+   * cycle — is `{ exists: false }`; a probe the OS refused, or a chain VAT will not
+   * hand the kernel (a link to a network or device path), is present with NO
+   * answer (`isDirectory: null`), which the link walker reports as an unreadable
+   * target — so the refusal is SEEN, never read as "not there".
    *
    * Synchronous, unlike this class's other two lookups, because its caller (the
    * skill link-graph walker) is synchronous throughout. One oracle answering
@@ -259,23 +264,16 @@ export class FsLookupCache {
     if (cached !== undefined) return cached;
 
     this.#probeMisses++;
-    const exists = nodeFs.existsSync(targetPath);
+    let exists = true;
     let isDirectory: boolean | null = null;
-    if (exists) {
-      try {
-        isDirectory = nodeFs.statSync(targetPath).isDirectory();
-      } catch (error) {
-        // Present to `existsSync` but unstattable — a permission change or a
-        // delete racing between the two calls. `null` records "no answer" rather
-        // than guessing `false`, which would read as "it is a file", and the
-        // link walker reports it as an unreadable target — so the refusal is
-        // SEEN, not swallowed. A bug from under the stat is not a refusal and
-        // stays loud; `isFilesystemAccessError` is the right predicate here
-        // precisely because it groups every environmental errno together and
-        // excludes a `TypeError`.
-        if (!isFilesystemAccessError(error)) throw error;
-        isDirectory = null;
-      }
+    try {
+      const stats = followedStatSync(targetPath, this.#within);
+      exists = stats !== undefined;
+      isDirectory = stats === undefined ? null : stats.isDirectory();
+    } catch (error) {
+      // A bug from under the stat is not a refusal and stays loud: only a fault
+      // the classifier knows, or VAT's own refusal of the chain, is "no answer".
+      if (linkResolutionFault(error) === undefined) exists = false;
     }
 
     const result: PathProbe = { exists, isDirectory };
@@ -319,9 +317,16 @@ export class FsLookupCache {
    * is idempotent at a root (`'/'` on posix, `'C:/'` for a drive, `'//server/share/'`
    * for a UNC share), so without it the walk never terminates.
    *
-   * Errno is deliberately not inspected. EACCES on an existing file and ELOOP on
-   * a symlink cycle land in the same catch as ENOENT, and for all three the
-   * ancestor's namespace is a strictly better answer than the lexical one.
+   * Every filesystem failure walks up, and the row says which kind it was
+   * ({@link linkResolutionFault}, the one predicate): a path that resolves to
+   * nothing (ENOENT, ELOOP on a cycle, …) carries `fault: null`, and one the OS
+   * DECLINED (`EACCES`/`EPERM`) or could not look at carries the fault — errno
+   * and class — for the judge to report against that ONE target. Never a
+   * rejection: this column is filled over every link target in one
+   * `Promise.all`, and one refused target must not abort the run and lose every
+   * other finding. The ancestor answer is still the containment answer: a
+   * target outside the root is outside whatever refused beneath it. A bug
+   * (no errno) rejects as itself.
    *
    * ⚠️ **`promisify(nodeFs.realpath)` — NOT `fs/promises.realpath`. Node ships two
    * different realpaths and they do not agree.** `fs.realpathSync` and the
@@ -359,9 +364,10 @@ export class FsLookupCache {
    * The wrapper is allocated only on a cache MISS, i.e. once per actual syscall.
    *
    * @param targetPath - Path to canonicalize
-   * @returns Canonical path with forward slashes on every platform
+   * @returns The canonical path with forward slashes on every platform, and the
+   *   fault (or `null`) that sent the answer to an ancestor
    */
-  realpath(targetPath: string): Promise<string> {
+  realpath(targetPath: string): Promise<RealpathRow> {
     const cached = this.#realpaths.get(targetPath);
     if (cached !== undefined) return cached;
 
@@ -372,9 +378,16 @@ export class FsLookupCache {
     // sibling lookups: the rule matches a member call on an fs object, and the
     // path is passed to the promisified wrapper instead. The path is
     // caller-validated all the same.
-    const pending = promisify(nodeFs.realpath)(targetPath)
-      .then(toForwardSlash)
-      .catch(() => this.#canonicalizeViaAncestor(targetPath));
+    // The kernel is asked only once the link chain has been read and shown local
+    // (`assertLocalChain`); a chain it refuses is this target's fault, like any other.
+    const pending = Promise.resolve()
+      .then(() => followedRealpath(targetPath, this.#within))
+      .then((real): RealpathRow => ({ path: toForwardSlash(real), fault: null }))
+      .catch((error: unknown) => {
+        const facts = linkResolutionFault(error);
+        const fault = facts === undefined ? null : { errno: facts.errno, faultClass: facts.faultClass, error };
+        return this.#canonicalizeViaAncestor(targetPath, fault);
+      });
     this.#realpaths.set(targetPath, pending);
     return pending;
   }
@@ -389,17 +402,20 @@ export class FsLookupCache {
    * before any of this can start.
    *
    * @param targetPath - Path that could not be canonicalized
-   * @returns Canonical ancestor plus the missing remainder, forward-slashed
+   * @param fault - Why it could not, when the OS declined or could not look; `null` when it resolves to nothing
+   * @returns Canonical ancestor plus the missing remainder, forward-slashed, with
+   *   this path's own fault — or, when it has none, the ancestor's
    */
-  async #canonicalizeViaAncestor(targetPath: string): Promise<string> {
+  async #canonicalizeViaAncestor(targetPath: string, fault: RealpathFault | null): Promise<RealpathRow> {
     const absolutePath = safePath.resolve(targetPath);
     const parent = toForwardSlash(path.dirname(absolutePath));
     // Fixpoint at a filesystem root — `/`, `C:/`, `//server/share/` — where
     // `dirname` returns its own input. Nothing left to walk, and no guard means
     // no termination.
-    if (parent === absolutePath) return absolutePath;
+    if (parent === absolutePath) return { path: absolutePath, fault };
 
-    return safePath.join(await this.realpath(parent), path.basename(absolutePath));
+    const ancestor = await this.realpath(parent);
+    return { path: safePath.join(ancestor.path, path.basename(absolutePath)), fault: fault ?? ancestor.fault };
   }
 
   /**
@@ -407,7 +423,7 @@ export class FsLookupCache {
    *
    * A *stable* failure is cached like a success: re-asking a directory whose
    * mode bits refuse us, or whose path is a symlink cycle, is the same failed
-   * syscall. A **transient** one is not — see {@link TRANSIENT_LISTING_ERRNOS}.
+   * syscall. A **transient** one is not — see {@link isTransientListingCode}.
    *
    * ⚠️ **The transient entry is dropped only once the promise has SETTLED, and
    * that timing is the whole design.** Deleting the row up front, or refusing to
@@ -463,71 +479,6 @@ export class FsLookupCache {
       this.#listings.delete(dirPath);
     }
     return listing;
-  }
-}
-
-/** Thrown when a link inside the tree being copied points outside it. */
-export class CopyLinkEscapesSourceError extends VatError {
-  constructor(link: string, src: string) {
-    super(
-      'COPY_LINK_ESCAPES_SOURCE',
-      `Refusing to copy ${link}: it is a symlink to a path outside ${src}. ` +
-        'A copy follows links, so this would ship content the source tree does not own — ' +
-        'replace the link with the files, or point it inside the tree.',
-    );
-  }
-}
-
-/**
- * Recursively copy a directory, following symlinks — contained to `src`.
- *
- * A link is copied as what it points at (a linked directory as its tree, a
- * linked file as its bytes; a dangling link fails loudly in `stat`). Two
- * refusals bound that: a link whose target is not under `src` throws
- * {@link CopyLinkEscapesSourceError} — `scripts/etc -> /etc` used to copy
- * `/etc` into `dist` — and a link that leads the walk back into a directory
- * it already entered throws `DirectoryWalkRevisitedError` (`scripts/loop -> .`
- * used to create `dest/loop/loop/…` until `ENAMETOOLONG`, writing every file
- * at every level first). Adopter-authored trees reach this through
- * `vat agent build`, so neither shape is exotic.
- *
- * @param src - Source directory path
- * @param dest - Destination directory path
- *
- * @example
- * await copyDirectory('/source/dir', '/dest/dir');
- */
-export async function copyDirectory(src: string, dest: string): Promise<void> {
-  const walk = new FollowedWalk();
-  walk.enter(src);
-  await copyTree(src, dest, src, walk);
-}
-
-/** One level of {@link copyDirectory}; every directory it recurses into has been `enter`ed. */
-async function copyTree(src: string, dest: string, root: string, walk: FollowedWalk): Promise<void> {
-  await fs.mkdir(dest, { recursive: true });
-  const entries = await fs.readdir(src, { withFileTypes: true });
-
-  for (const entry of entries) {
-    const srcPath = safePath.join(src, entry.name);
-    const destPath = safePath.join(dest, entry.name);
-
-    // (Inline rather than `direntKindFollowing`: that module imports this one.)
-    let isDirectory = entry.isDirectory();
-    if (entry.isSymbolicLink()) {
-      isDirectory = (await fs.stat(srcPath)).isDirectory();
-      // Revisit first, so a link back into the tree is named as the loop it
-      // is; then containment, so a link out is named as the escape it is.
-      if (isDirectory) walk.enter(srcPath);
-      if (isUnderRoot(root, srcPath) !== 'inside') throw new CopyLinkEscapesSourceError(srcPath, root);
-    } else if (isDirectory) {
-      walk.enter(srcPath);
-    }
-    if (isDirectory) {
-      await copyTree(srcPath, destPath, root, walk);
-    } else {
-      await fs.copyFile(srcPath, destPath);
-    }
   }
 }
 
@@ -663,7 +614,7 @@ export type AbsenceCause =
       readonly directory: string;
       /**
        * Whether re-running could get a different answer — see
-       * {@link TRANSIENT_LISTING_ERRNOS}.
+       * {@link isTransientListingCode}.
        *
        * Derived once, here, rather than by each consumer: two lanes write a
        * "re-run before investigating" remedy off this fact, and a second errno
@@ -695,12 +646,41 @@ export function directoryRefusalFor(
     kind: 'directory_unreadable',
     code: listing.code,
     directory: toForwardSlash(directory),
-    transient: TRANSIENT_LISTING_ERRNOS.has(listing.code),
+    transient: isTransientListingCode(listing.code),
   };
 }
 
 /**
+ * The refusal a failed `stat` or `readdir` of a scan ROOT stands for, or
+ * `undefined` when the root is simply absent (`ENOENT`/`ENOTDIR`).
+ *
+ * For a caller that must decide whether a root exists before it scans it: an
+ * `existsSync` answers `false` for an untraversable parent too, and the root
+ * then reads as scanned and empty.
+ *
+ * @param error - What the `stat` or `readdir` of `directory` threw
+ * @param directory - The root that was asked about
+ */
+export function rootListingRefusal(error: unknown, directory: string): DirectoryRefusal | undefined {
+  const listing = listingFailure(error);
+  return listing.outcome === 'unreadable' ? directoryRefusalFor(listing, directory) : undefined;
+}
+
+/**
  * The cause for a listing that produced no index.
+ *
+ * ⛔ One link, one answer. A directory whose listing failed with an errno the ONE link predicate
+ * ({@link isUnresolvableLinkError}) calls "resolves to nothing" — the `absent` class, and a link
+ * loop (`ELOOP`) — is ABSENCE here, exactly as the realpath beside this walk
+ * ({@link FsLookupCache.realpath}, through `linkResolutionFault`) answers the same errno, and as the
+ * projection extent and every install lane do. This walk used to call a looping directory
+ * "unreadable" while that realpath called the same link a link to nothing: two answers for one
+ * link. Every other failed listing stays a refusal with its errno: declined or failed (`EACCES`,
+ * `EIO`, Windows' `UNKNOWN`), and Windows' ambiguous `EINVAL` / `ENAMETOOLONG`, each of which libuv
+ * answers for more than one Win32 error.
+ *
+ * {@link listingFailure} itself keeps `absent` to `ENOENT`/`ENOTDIR`: the crawler reads it to
+ * decide what it could not ENUMERATE, a different question from whether a link target exists.
  *
  * @param listing - A `readdir` outcome that is not `listed`
  * @param directory - The directory that was asked about
@@ -710,7 +690,7 @@ function absenceCauseFor(
   listing: Exclude<DirectoryListing, { outcome: 'listed' }>,
   directory: string
 ): AbsenceCause {
-  if (listing.outcome === 'absent') return { kind: 'no_such_entry' };
+  if (listing.outcome === 'absent' || isUnresolvableLinkError({ code: listing.code })) return { kind: 'no_such_entry' };
   return directoryRefusalFor(listing, directory);
 }
 
@@ -963,18 +943,19 @@ export class DirectorySpellingIndex {
     const actual: string[] = [];
     let worst: Exclude<FilenameMatch, 'absent'> = 'exact';
     let directory = root;
+    let absent: PathSpelling | undefined;
 
-    for (const segment of segments) {
-      // Sequential by necessity: which directory holds the next component
-      // depends on how this one is really spelled. Every listing is memoized,
-      // so a run pays per DIRECTORY, not per path and not per component.
+    // In order by necessity: which directory holds the next component depends
+    // on how this one is really spelled. Every listing is memoized, so a run
+    // pays per DIRECTORY, not per path and not per component.
+    await everyInOrder(segments, async (segment) => {
       const found = await this.lookup(directory, segment);
       if (found.match === 'absent') {
         // The cause travels with the verdict rather than being re-derived: by
         // the time a caller reports this, the directory that refused is
         // several frames gone and nothing else can tell the two absences
         // apart. So does what was learned ABOVE it — see `verified`.
-        return {
+        absent = {
           match: 'absent',
           askedPath,
           actualPath: '',
@@ -985,12 +966,15 @@ export class DirectorySpellingIndex {
             actualPath: actual.join('/'),
           },
         };
+        return false;
       }
 
       if (SPELLING_RANK[found.match] > SPELLING_RANK[worst]) worst = found.match;
       actual.push(found.actualName);
       directory = safePath.join(directory, found.actualName);
-    }
+      return true;
+    });
+    if (absent !== undefined) return absent;
 
     return { match: worst, askedPath, actualPath: actual.join('/') };
   }
@@ -1174,23 +1158,51 @@ export function pathSpellingFrom(
 }
 
 /**
- * The materialized realpath column: path → its canonical path.
+ * Why a path's canonical answer came from an ancestor although something is
+ * there to resolve: the OS declined (`EACCES`, `EPERM`), ran short or could not
+ * look. Carried on the row so a judge reports it against that ONE target.
+ */
+export interface RealpathFault {
+  readonly errno: string;
+  readonly faultClass: FsFaultClass;
+  /** The resolution's own error — what a caller classifies when the path is the run's own (the project root), not a target. */
+  readonly error: unknown;
+}
+
+/** One row of the realpath column. */
+export interface RealpathRow {
+  /** The canonical path, forward-slashed — from the deepest ancestor that resolved when the path itself did not. */
+  readonly path: string;
+  /**
+   * `null` when the path resolved, or resolves to nothing (dangling, a cycle);
+   * otherwise the fault that kept it from resolving. Required, never optional,
+   * so every WRITER of a row must decide it. The type does not make a reader ask:
+   * one that uses `path` alone still compiles, and reads a faulted row as the
+   * nearest ancestor that resolved. Every judge of a link target reads `fault`
+   * before it trusts `path` (`gitIgnoreSafetyIssue` beside `isWithinProjectFrom`).
+   */
+  readonly fault: RealpathFault | null;
+}
+
+/**
+ * The materialized realpath column: path → its canonical path and the fault, if
+ * any, that kept it from resolving.
  *
- * Every filled row is a string — never `null`, never `undefined`.
+ * Every filled row is a {@link RealpathRow} — never `null`, never `undefined`.
  * {@link FsLookupCache.realpath} answers a path it cannot canonicalize from that
  * path's deepest existing ancestor rather than failing, because a path that does
  * not exist has no realpath and a caller comparing paths still needs an answer.
  * That fallback IS the contract, and it is what lets `undefined` out of this map
- * mean exactly one thing: *absent key*. See {@link realpathFrom}.
+ * mean exactly one thing: *absent key*. See {@link realpathRowFrom}.
  */
-export type RealpathTable = ReadonlyMap<string, string>;
+export type RealpathTable = ReadonlyMap<string, RealpathRow>;
 
 /**
  * Canonicalize every path in `paths` — the only place I/O is legal for this
  * fact, and the pass that must run *before* any judging.
  *
  * ⚠️ **Rows are keyed by the input path string exactly as given** — not a
- * dirname, not a re-resolved form. {@link realpathFrom} looks that same string
+ * dirname, not a re-resolved form. {@link realpathRowFrom} looks that same string
  * up, so any normalization applied here and not there is a silent miss (a loud
  * one, in fact: the judge throws). Contrast {@link fillPathSpellings}, which
  * keys by (walk root, target) *because* many references share one walk; here the
@@ -1213,7 +1225,7 @@ export async function fillRealpaths(
 ): Promise<RealpathTable> {
   const distinctPaths = new Set(paths);
 
-  const table = new Map<string, string>();
+  const table = new Map<string, RealpathRow>();
   await Promise.all(
     [...distinctPaths].map(async (filePath) => {
       table.set(filePath, await fsCache.realpath(filePath));
@@ -1224,7 +1236,8 @@ export async function fillRealpaths(
 }
 
 /**
- * Read the canonical path for `filePath` out of an already-filled table. Pure.
+ * Read the row for `filePath` — its canonical path and the fault, if any, that
+ * kept it from resolving — out of an already-filled table. Pure.
  *
  * **A miss throws rather than degrading to a recomputed realpath.** The fill set
  * is derived from exactly the paths the judge will be asked about, so a missing
@@ -1247,20 +1260,20 @@ export async function fillRealpaths(
  *
  * @param table - Table filled by {@link fillRealpaths}
  * @param filePath - Path being asked about, as it was handed to the fill
- * @returns The canonical path, with forward slashes on every platform
+ * @returns The row: the canonical path, with forward slashes on every platform, and its fault
  * @throws If `table` holds no row for `filePath`
  */
-export function realpathFrom(table: RealpathTable, filePath: string): string {
-  // `undefined` can only mean "absent key": a filled row is always a string,
+export function realpathRowFrom(table: RealpathTable, filePath: string): RealpathRow {
+  // `undefined` can only mean "absent key": a filled row is always a row,
   // because `FsLookupCache.realpath` falls back to the deepest existing
   // ancestor's canonical path rather than leaving an unresolvable path without
   // an answer.
-  const realPath = table.get(filePath);
-  if (realPath === undefined) {
+  const row = table.get(filePath);
+  if (row === undefined) {
     throw new Error(
       `No canonical path for "${filePath}". Fill it with fillRealpaths() before judging.`
     );
   }
 
-  return realPath;
+  return row;
 }

@@ -101,10 +101,11 @@ Description:
 
 Output (the shared report envelope; schema: packages/cli/schemas/okf-validate.json):
   status:    ok | findings | error
-  examined:  every document opened and judged, across every bundle. Zero with
-             a data.notice means nothing was checked: no okf.bundles declared,
-             or a declared root that holds no .md at all (a root one level too
-             deep reads exactly like this)
+  examined:  every document opened and judged, across every bundle. Zero
+             means nothing was checked — no okf.bundles declared, or every
+             declared root holds no .md at all (a root one level too deep
+             reads exactly like this) — and the run is refused as
+             RESOURCE_CHECK_BROKEN at error, exit 1; data.notice says why
   findings:  {code, severity, message, location, line?, link?} — location is
              the project-relative path of the document to open
   summary:   {errors, warnings, info}; exit 1 iff errors > 0
@@ -112,12 +113,14 @@ Output (the shared report envelope; schema: packages/cli/schemas/okf-validate.js
              declaredOkfVersion?} — root as the config wrote it, never absolute
 
 Exit Codes:
-  0 - No error-severity findings
-  1 - At least one error-severity finding. Anything unreadable — the bundle
-      root, one subdirectory, or one document — is reported as a finding naming
-      exactly what could not be read, so the rest of that bundle and every other
-      bundle in the run are still checked and still reported
-  2 - System error (no config file, unknown bundle name)
+  0 - No error-severity findings, and at least one document examined
+  1 - At least one error-severity finding, or nothing examined
+      (RESOURCE_CHECK_BROKEN). An unreadable subdirectory or document is a
+      finding naming exactly what could not be read, so the rest of that bundle
+      and every other bundle are still checked and still reported
+  2 - The run could not do its job: no config file, an unknown bundle name
+      (USAGE_INVALID), or a bundle root the OS will not list (INPUT_UNREADABLE —
+      every other bundle's findings are still published with it)
 
 Example:
   $ vat okf validate knowledge --format json

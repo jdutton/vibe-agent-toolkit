@@ -23,6 +23,7 @@
  */
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { toForwardSlash } from '@vibe-agent-toolkit/utils/path';
 import type { Reporter, TestModule } from 'vitest/node';
 
 import {
@@ -61,10 +62,6 @@ export interface BudgetVerdict {
   readonly budgetMs: number;
   /** The entry's stale line (`STALE_FRACTION` × its `measuredMs`); 0 for an unlisted file. */
   readonly staleBelowMs: number;
-}
-
-function toForwardSlash(p: string): string {
-  return p.replaceAll('\\', '/');
 }
 
 function withTrailingSlash(p: string): string {
@@ -110,8 +107,7 @@ function judgeOne(
     if (sample.state === 'passed' && sample.durationMs < staleBelowMs) {
       return { kind: 'stale-entry', file: sample.file, tier, durationMs: sample.durationMs, budgetMs, staleBelowMs };
     }
-    // An entry buys headroom over its own measurement, never exemption: a
-    // listed file used to have no ceiling at all.
+    // An entry buys headroom over its own measurement, never exemption.
     const ceilingMs = Math.max(budgetMs, entry.measuredMs * LISTED_HEADROOM_FACTOR);
     if (sample.durationMs > ceilingMs) {
       return { kind: 'listed-over-headroom', file: sample.file, tier, durationMs: sample.durationMs, budgetMs: ceilingMs, staleBelowMs };

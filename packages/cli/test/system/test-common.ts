@@ -7,9 +7,9 @@ import type { SpawnOptionsWithoutStdio, SpawnSyncReturns } from 'node:child_proc
 import { spawn as nodeSpawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import { dirname as pathDirname, join as pathJoin, resolve as pathResolve } from 'node:path';
-import { fileURLToPath as urlFileURLToPath } from 'node:url';
+import { fileURLToPath as urlFileURLToPath, pathToFileURL } from 'node:url';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { createTempDir, removeTempDir, tempDirTracker } from '@vibe-agent-toolkit/utils/testing';
 import { expect } from 'vitest';
@@ -20,7 +20,6 @@ export { spawnSync } from 'node:child_process';
 export * as fs from 'node:fs';
 export { dirname } from 'node:path';
 export const join = safePath.join.bind(safePath);
-export const resolve = safePath.resolve.bind(safePath);
 export { fileURLToPath } from 'node:url';
 export { describe, expect } from 'vitest';
 export { safePath } from '@vibe-agent-toolkit/utils';
@@ -59,6 +58,16 @@ export function getFixturePath(testFileUrl: string, fixtureName: string): string
  * invoked from the monorepo root or from packages/cli directly.
  * @param testFileUrl - import.meta.url from the test file
  */
+/**
+ * The `nodeArgs` that load the in-process fault injector into a spawned binary before it runs
+ * (`VAT_FAULT_FS` says what to fail). A `file:` URL, never a path: node's `--import` reads a
+ * Windows absolute path's drive letter as a URL scheme and refuses to load it.
+ */
+export function faultPreloadArgs(testFileUrl: string): readonly string[] {
+  const preload = safePath.join(getMonorepoRoot(testFileUrl), 'packages', 'utils', 'dist', 'testing', 'fault-fs-preload.js');
+  return ['--import', pathToFileURL(preload).href];
+}
+
 export function getMonorepoRoot(testFileUrl: string): string {
   const testDir = pathDirname(urlFileURLToPath(testFileUrl));
   return pathResolve(testDir, '../../../..');
@@ -70,6 +79,18 @@ export function getMonorepoRoot(testFileUrl: string): string {
  */
 export function createTestTempDir(prefix: string): string {
   return createTempDir(prefix);
+}
+
+/**
+ * Write a tree of files under `dir`: each key a `/`-separated path relative to
+ * it, each value the file's UTF-8 content. Parent directories are created.
+ */
+export function writeFileTree(dir: string, files: Readonly<Record<string, string>>): void {
+  for (const [relative, content] of Object.entries(files)) {
+    const target = safePath.join(dir, relative);
+    mkdirSyncReal(pathDirname(target), { recursive: true });
+    fs.writeFileSync(target, content, 'utf-8');
+  }
 }
 
 /**
@@ -203,12 +224,15 @@ function mergeEnvWithOverrides(overrides: Record<string, string>): NodeJS.Proces
   return merged;
 }
 
-async function spawnAndCollect(
+/** What a spawned command may print on either stream before it is killed, unless the caller states more. */
+const DEFAULT_COLLECT_MAX_BUFFER = 10 * 1024 * 1024;
+
+function spawnAndCollect(
   command: string,
   args: string[],
   options: SpawnOptionsWithoutStdio,
+  maxBuffer = DEFAULT_COLLECT_MAX_BUFFER,
 ): Promise<SpawnSyncReturns<string>> {
-  const maxBuffer = 10 * 1024 * 1024;
 
   return new Promise((resolvePromise) => {
     const child = nodeSpawn(command, args, options);
@@ -267,16 +291,20 @@ async function spawnAndCollect(
 /**
  * Execute CLI command and return result
  * Handles ESLint suppressions for test execution
+ *
+ * `nodeArgs` go to node itself, before the binary: `['--import', preload]` runs a module first.
+ * `maxBuffer` is the bytes either stream may carry before the run is killed (10 MiB unless stated):
+ * a caller whose document is measured larger states the measured size.
  */
-export async function executeCli(
+export function executeCli(
   binPath: string,
   args: string[],
-  options?: { cwd?: string; env?: Record<string, string> }
+  options?: { cwd?: string; env?: Record<string, string>; nodeArgs?: readonly string[]; maxBuffer?: number }
 ): Promise<SpawnSyncReturns<string>> {
-  return spawnAndCollect('node', [binPath, ...args], {
+  return spawnAndCollect('node', [...(options?.nodeArgs ?? []), binPath, ...args], {
     cwd: options?.cwd,
     env: options?.env ? mergeEnvWithOverrides(options.env) : undefined,
-  });
+  }, options?.maxBuffer);
 }
 
 /**
@@ -325,7 +353,7 @@ export async function buildSkillsThenPlugin(
  * @param args - Arguments to pass to vat command
  * @param options - Optional execution options
  */
-export async function executeBunVat(
+export function executeBunVat(
   testFileUrl: string,
   args: string[],
   options?: { cwd?: string }
@@ -364,6 +392,35 @@ export function fakeHomeEnv(fakeHome: string): Record<string, string> {
     // not any shell-level CLAUDE_CONFIG_DIR that may be set in the test runner's env.
     CLAUDE_CONFIG_DIR: pathJoin(fakeHome, '.claude'),
   };
+}
+
+/**
+ * A scratch directory for one suite whose runs must not reach the real home,
+ * Claude config or temp directory: `home/.claude` and `tmp` are created under
+ * it, and {@link isolatedScratchEnv} points the CLI at them.
+ *
+ * @param prefix - The scratch directory's name prefix under the OS temp dir
+ * @returns The scratch directory
+ */
+export function createIsolatedScratch(prefix: string): string {
+  const scratch = fs.mkdtempSync(safePath.join(normalizedTmpdir(), prefix));
+  mkdirSyncReal(safePath.join(scratch, 'home', '.claude'), { recursive: true });
+  mkdirSyncReal(safePath.join(scratch, 'tmp'), { recursive: true });
+  return scratch;
+}
+
+/**
+ * The environment that aims a CLI run at an {@link createIsolatedScratch}
+ * directory: `HOME`, `USERPROFILE`, `CLAUDE_CONFIG_DIR`, and the temp directory
+ * under all three names — `TMPDIR` on POSIX; `TEMP`, then `TMP`, on Windows, where
+ * setting `TMPDIR` alone left the run in the shared `%TEMP%`.
+ *
+ * @param scratch - The scratch directory
+ * @returns The environment entries
+ */
+export function isolatedScratchEnv(scratch: string): Record<string, string> {
+  const tmp = safePath.join(scratch, 'tmp');
+  return { ...fakeHomeEnv(safePath.join(scratch, 'home')), TMPDIR: tmp, TEMP: tmp, TMP: tmp };
 }
 
 /**
@@ -432,7 +489,7 @@ export function createSkillsConfigYaml(
   includeGlobs: string[],
   excludeGlobs?: string[]
 ): string {
-  let content = `version: 1\nskills:\n  include:\n`;
+  let content = `skills:\n  include:\n`;
   for (const glob of includeGlobs) {
     content += `    - "${glob}"\n`;
   }
@@ -465,3 +522,4 @@ version: 1.0.0
 This is ${description ?? 'a test skill'}.
 `;
 }
+

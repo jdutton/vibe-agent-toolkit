@@ -39,10 +39,6 @@ my-skills-project/
 │   │   ├── SKILL.md                    # router skill (optional, for multi-skill bundles)
 │   │   └── my-skill.md
 │   └── content/                        # non-skill markdown (RAG, collections)
-├── agents/                             # TypeScript portable agents (optional)
-│   └── my-agent/
-│       ├── agent.yaml
-│       └── src/
 ├── schemas/                            # JSON Schemas for resource collections
 ├── docs/                               # project documentation
 └── dist/                               # generated (gitignored): vat build output
@@ -99,9 +95,9 @@ Sections and the skills that own their details:
 
 | Section | Owning skill |
 |---|---|
-| Top-level structure, section orientation (a `version:` key is accepted and ignored — the npm package version is the only version VAT has) | this skill (`vat-adoption-and-configuration`) |
+| Top-level structure, section orientation (there is no `version:` key — the npm package version is the only version VAT has) | this skill (`vat-adoption-and-configuration`) |
 | `skills:` (include, defaults, per-skill config, packagingOptions) | `vibe-agent-toolkit:vat-skill-authoring` |
-| `resources:` (collections, schemas, validation modes) | `vibe-agent-toolkit:vat-knowledge-resources` |
+| `resources:` (collections, schemas, validation modes, SQL checks (`resources.checks`)) | `vibe-agent-toolkit:vat-knowledge-resources` |
 | `claude:` (marketplaces, plugins, publish, owner) | `vibe-agent-toolkit:vat-skill-distribution` |
 | `rag:` (stores, embedding providers) | `vibe-agent-toolkit:vat-rag` |
 
@@ -123,8 +119,6 @@ In practice, prefer one `vibe-agent-toolkit.config.yaml` per git repository. Mul
 - Genuinely unrelated projects that happen to share a monorepo and each ship their own skills.
 
 If you are tempted to use nested configs to "share" or "override" settings across related skills, fold everything into one project-level config instead — that's what `skills.defaults` and `skills.config.<name>` are for.
-
-(Note: `agent.yaml`, the manifest for TypeScript portable agents, is a separate surface with its own rules and is out of scope for this guidance — see `vibe-agent-toolkit:vat-agent-authoring`.)
 
 ## `package.json` Wiring
 
@@ -173,13 +167,26 @@ phases:
         run: vat verify
 ```
 
-`vat validate` runs the source-only checks — links and SKILL.md frontmatter — that need no build; it's cheap enough to run on every pre-commit or as the first CI-before-build gate. `vat verify` runs the full artifact check (resources → skills → marketplace → consistency) against the built `dist/` tree; it's the authoritative gate before `npm publish`, so it runs after `vat build`. In this repo's own config, `bun run validate` already does this — adopters typically mirror the pattern.
+`vat validate` runs the source-only checks — links, the project's `resources.checks` SQL plus VAT's built-in checks, and SKILL.md frontmatter — that need no build, so it is the first CI-before-build gate. It populates the resource projection twice (the checks run in a supervised child of their own), so time it on your tree before putting it in a pre-commit hook. `vat verify` runs the full artifact check (resources → skills → marketplace → consistency) against the built `dist/` tree; it's the authoritative gate before `npm publish`, so it runs after `vat build`. In this repo's own config, `bun run validate` already does this — adopters typically mirror the pattern.
+
+`vat validate` runs the declared `resources.checks` (standing SQL assertions) and VAT's default-on built-in checks as its `checks` phase whenever `resources:` is configured — the same supervised run as `vat resources check`, under that command's default bound (300 s without progress), which `vat validate` cannot change. `vat verify` does not run them. Reach for `vat resources check` directly when you need `--check <name>` or a different `--budget` — a larger budget lets the checks pass there, not inside `vat validate`. Otherwise do not add a `vat resources check` CI step beside `vat validate`: it runs the same checks twice. What interrupting a checks run does on each platform: `vat resources check --help`. See `vibe-agent-toolkit:vat-knowledge-resources`.
+
+## VAT writes a cache to disk, and CI should know where
+
+Every resource-scanning verb populates a projection and, by default, keeps it in a SQLite file
+under `<tmpdir>/.vat-cache/` — about 71 MB for a 12,600-file repository, bounded at three trees
+per repository and 50,000 content keys. `vat cache clear` reclaims it.
+
+- **Set `VAT_PROJECTION_STORE_DIR` per CI job.** Concurrent jobs on one runner otherwise write
+  into the same file.
+- **`VAT_PROJECTION_STORE=off`** opts out of the store alone; **`VAT_CACHE=0`** vetoes every VAT
+  cache. Either costs a full re-derivation on every run.
 
 ## First-Time Setup Checklist
 
 1. `npm install -g vibe-agent-toolkit` (or add to local deps)
 2. `vat --help` — confirm the CLI resolves
-3. Create `vibe-agent-toolkit.config.yaml` with the sections you need (no `version:` key — one is accepted and ignored)
+3. Create `vibe-agent-toolkit.config.yaml` with the sections you need (no `version:` key — it is an unrecognized root key)
 4. Add `resources/skills/SKILL.md` or a kebab-case SKILL.md file and stage it in git (the skill discovery crawler uses `git ls-files` by default — untracked new files are skipped)
 5. `vat skills validate` — report any issues before building
 6. `vat build` — produces `dist/` artifacts
@@ -196,9 +203,8 @@ phases:
 ## References
 
 - `vibe-agent-toolkit:vat-skill-authoring` — SKILL.md frontmatter, body structure, references, packagingOptions
-- `vibe-agent-toolkit:vat-agent-authoring` — TypeScript agent archetypes and runtime adapters
 - `vibe-agent-toolkit:vat-skill-distribution` — `vat build` / `vat verify` / marketplace / npm publish
-- `vibe-agent-toolkit:vat-knowledge-resources` — `resources:` collections and frontmatter schemas
+- `vibe-agent-toolkit:vat-knowledge-resources` — `resources:` collections, frontmatter schemas, and `vat resources check` (standing SQL assertions)
 - `vibe-agent-toolkit:vat-rag` — `rag:` stores, embedding providers, `vat rag index/query`
 - `vibe-agent-toolkit:vat-audit` — `vat audit` for plugins, marketplaces, and installed skills
 - `vibe-agent-toolkit:vat-skill-review` — pre-publication quality checklist

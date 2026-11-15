@@ -1,0 +1,192 @@
+/**
+ * The Claude-context lane takes its import roots from the STORE when the store
+ * already holds this tree's enumeration.
+ *
+ * ## Why a real tree, and why it is then emptied
+ *
+ * The claim is *negative* — that nothing was crawled — and a negative claim
+ * about the filesystem is only falsifiable if the filesystem can answer
+ * differently. So the first population runs against a real tree and files its
+ * extent; the second runs against the same root with **every file removed**.
+ * The root directory itself stays, because `rootIdFor` resolves the real path
+ * and would otherwise fall back to the nearest surviving ancestor, minting a
+ * different root id and turning the hit under test into a trivially missed key.
+ *
+ * ⚠️ `treeUnchanged()` answering `true` over an emptied tree is a deliberate
+ * lie, and it is the instrument: the store is keyed on a tree hash the caller
+ * supplies, so holding that hash still while the tree moves is the only way to
+ * separate *"the roots came from the store"* from *"the roots came from a crawl
+ * that happened to agree"*. Nothing outside a test may hold it still.
+ *
+ * Before the lane consulted the store, the second run crawled an empty tree,
+ * discovered no roots, registered no `ClaudeImportExtentContributor`, and
+ * therefore asked the store for a strictly narrower question than the first run
+ * had answered — so the hydrated projection came back with **zero** claude-import
+ * contexts while reporting success. That is the red this file was written from.
+ */
+
+import { rm } from 'node:fs/promises';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import {
+  buildClaudeContextPopulation,
+  type ClaudeContextPopulation,
+} from '../../src/projection/claude-context-population.js';
+import { AgenticConventionContributor } from '../../src/projection/contributors/agentic-convention.js';
+import {
+  CLAUDE_IMPORT_KIND,
+  ClaudeImportExtentContributor,
+} from '../../src/projection/contributors/claude-import-extent.js';
+import { ClaudeRulesScopeContributor } from '../../src/projection/contributors/claude-rules-scope.js';
+import { type PopulationCache } from '../../src/projection/merge.js';
+import type { Projection } from '../../src/projection/projection.js';
+import type { ExtentKey, ExtentScopedRows } from '../../src/projection/store.js';
+import { FakeFactStore } from '../fake-fact-store.js';
+import { plantTree, razeTree } from '../helpers/temp-corpus.js';
+
+/** Opaque to the store, and held CONSTANT across the emptying — see the header. */
+const TREE_HASH = 'tree-1111111111111111111111111111111111111111';
+
+/** Two `CLAUDE.md` and two rules files, so a count of 4 cannot be an accident of one. */
+const TREE: Readonly<Record<string, string>> = {
+  'CLAUDE.md': '# Root\n\n@docs/handbook.md\n',
+  'docs/handbook.md': '# Handbook\n',
+  'docs/CLAUDE.md': '# Docs\n',
+  '.claude/rules/always.md': '---\ndescription: always on\n---\n\nAlways.\n',
+  '.claude/rules/typescript.md': '---\npaths: ["**/*.ts"]\n---\n\nTS only.\n',
+};
+
+let root: string | undefined;
+
+afterEach(async () => {
+  await razeTree(root);
+  root = undefined;
+});
+
+/**
+ * Populate `root` through `store`, under the frozen tree hash.
+ *
+ * @param store - The store double both runs share
+ * @returns The projection the lane produced, and where its roots and rows came from
+ */
+async function populateThrough(store: FakeFactStore): Promise<ClaudeContextPopulation> {
+  const cache: PopulationCache = { store, treeHash: TREE_HASH, treeUnchanged: () => true };
+  return buildClaudeContextPopulation({
+    root: root ?? '',
+    cache,
+  });
+}
+
+/** A store whose next extent read misses once, as a read taken before a concurrent write. */
+class LateStore extends FakeFactStore {
+  missNext = false;
+  missed = 0;
+
+  override readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
+    if (!this.missNext) return super.readExtent(key);
+    this.missNext = false;
+    this.missed += 1;
+    return Promise.resolve(undefined);
+  }
+}
+
+/** Every claude-import extent the projection registered. */
+function importContexts(projection: Projection): readonly string[] {
+  return projection.resolutionContexts
+    .filter((row) => row.kind === CLAUDE_IMPORT_KIND)
+    .map((row) => row.contextId);
+}
+
+/** Remove every entry under the root, leaving the root directory itself. */
+async function emptyTree(): Promise<void> {
+  for (const relative of ['CLAUDE.md', 'docs', '.claude']) {
+    await rm(safePath.join(root ?? '', relative), { recursive: true, force: true });
+  }
+}
+
+describe('buildClaudeContextPopulation root discovery', () => {
+  it('crawls for the roots when the store holds nothing (positive control)', async () => {
+    root = await plantTree('vat-claude-store-roots-', TREE);
+    const store = new FakeFactStore();
+
+    const first = await populateThrough(store);
+
+    // The control for both assertions below: the crawl DOES find four roots on
+    // this tree, and an emptied tree is a genuinely different answer rather
+    // than one the fixture could never distinguish.
+    expect(importContexts(first.projection)).toHaveLength(4);
+    expect(store.writeExtentCalls).toBe(1);
+    expect(first.population).toBe('derived');
+  });
+
+  it('takes the roots from the store rather than crawling for them', async () => {
+    root = await plantTree('vat-claude-store-roots-', TREE);
+    const store = new FakeFactStore();
+    const first = await populateThrough(store);
+
+    await emptyTree();
+    const second = await populateThrough(store);
+
+    // Identical extents over a tree that no longer holds a single file: the
+    // root list cannot have come from the filesystem.
+    expect(importContexts(second.projection)).toEqual(importContexts(first.projection));
+    expect(importContexts(second.projection)).toHaveLength(4);
+    // One provenance for both halves: the root list AND the real pass.
+    expect(second.population).toBe('store');
+  });
+
+  it('keeps the pre-read key equal to the population key — the tripwire', async () => {
+    // `readStoredMembership` is handed the SAME options object `populate`
+    // gets, before the classifiers and one import contributor per root have
+    // been registered. The two keys can only diverge if one of those later
+    // registrations declares a `registrationQuestion`, which `storeKeyFor`
+    // folds into the tree hash — so this pins that none does.
+    //
+    // ⚠️ A divergence would cost speed, not correctness: the pre-read would
+    // simply stop hitting and the lane would crawl, exactly as the case below
+    // shows it does. This test is what makes that a decision rather than a
+    // silent, permanent regression back to two populations per run.
+    const declared = [
+      new AgenticConventionContributor(),
+      new ClaudeRulesScopeContributor(),
+      new ClaudeImportExtentContributor('CLAUDE.md'),
+    ].filter((contributor) => contributor.registrationQuestion !== undefined);
+
+    expect(declared.map((contributor) => contributor.id)).toEqual([]);
+  });
+
+  it('is derived when the root list was crawled, even though the real pass hit the store', async () => {
+    root = await plantTree('vat-claude-store-roots-', TREE);
+    const store = new LateStore();
+    await populateThrough(store);
+
+    // The two passes read the store separately, so a concurrent run can file
+    // the extent between them: the first read misses as if it came before that write.
+    store.missNext = true;
+    const second = await populateThrough(store);
+
+    expect(store.missed).toBe(1);
+    // The real pass was served, not re-derived: nothing new was filed.
+    expect(store.writeExtentCalls).toBe(1);
+    expect(importContexts(second.projection)).toHaveLength(4);
+    expect(second.population).toBe('derived');
+  });
+
+  it('crawls again once the store cannot answer for this tree', async () => {
+    root = await plantTree('vat-claude-store-roots-', TREE);
+    const store = new FakeFactStore();
+    await populateThrough(store);
+
+    await emptyTree();
+    // A DIFFERENT store — the same emptied tree the case above served from the
+    // stored rows. Without an answer to read, the lane crawls, finds nothing,
+    // and says so. This is what keeps the assertion above from passing because
+    // the lane stopped looking at the tree altogether.
+    const cold = await populateThrough(new FakeFactStore());
+
+    expect(importContexts(cold.projection)).toEqual([]);
+    expect(cold.population).toBe('derived');
+  });
+});

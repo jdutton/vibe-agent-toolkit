@@ -11,13 +11,15 @@
  */
 
 
-import { cpSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import {
+  applyTreePlan,
+  followedKindSync,
   isAbsolutePath,
   mkdirSyncReal,
   normalizedTmpdir,
+  planTreeChanges,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
@@ -41,13 +43,18 @@ function defaultCacheDir(): string {
   return toForwardSlash(safePath.join(normalizedTmpdir(), 'vat-compat-empirical-cache'));
 }
 
+/** Whether something resolves at `path`, its own link the edge: VAT's cache dirs and the operator's own source paths. */
+function present(path: string): boolean {
+  return followedKindSync(path, path) !== 'absent';
+}
+
 function ensureDir(dir: string): void {
-  if (!existsSync(dir)) {
+  if (!present(dir)) {
     mkdirSyncReal(dir, { recursive: true });
   }
 }
 
-function stageLocal(entry: CorpusEntry, source: Extract<SkillSource, { kind: 'local' }>, projectRoot: string, cacheDir: string): StagedSkill {
+async function stageLocal(entry: CorpusEntry, source: Extract<SkillSource, { kind: 'local' }>, projectRoot: string, cacheDir: string): Promise<StagedSkill> {
   const stageDir = safePath.join(cacheDir, 'local', entry.id);
   ensureDir(safePath.join(cacheDir, 'local'));
 
@@ -55,16 +62,23 @@ function stageLocal(entry: CorpusEntry, source: Extract<SkillSource, { kind: 'lo
     ? toForwardSlash(source.path)
     : safePath.join(projectRoot, source.path);
 
-  if (!existsSync(absSource)) {
+  if (!present(absSource)) {
     throw new Error(`local skill source does not exist: ${absSource}`);
   }
 
-  if (existsSync(stageDir)) {
+  if (present(stageDir)) {
     return finalizeStage(entry, stageDir);
   }
 
-  ensureDir(stageDir);
-  cpSync(absSource, stageDir, { recursive: true });
+  // Staged beside its name and swapped in whole: a copy that fails leaves no half-staged
+  // directory for the reuse above to mistake for a complete one.
+  await applyTreePlan(await planTreeChanges([{
+    op: 'replace',
+    dest: stageDir,
+    ownership: { kind: 'vat-state' },
+    fill: { from: 'copy', source: absSource, side: 'source', links: 'preserve' },
+    label: `staged local skill ${entry.id}`,
+  }]));
   return finalizeStage(entry, stageDir);
 }
 
@@ -114,7 +128,7 @@ function stageGit(entry: CorpusEntry, source: Extract<SkillSource, { kind: 'git'
   const repoSlug = source.repo.replaceAll(/[^a-zA-Z0-9-]/g, '_');
   const stageDir = safePath.join(cacheDir, 'git', `${repoSlug}-${source.ref}`);
 
-  if (existsSync(stageDir)) {
+  if (present(stageDir)) {
     if (!SHA_REF_RE.test(source.ref)) {
       refreshGitRef(stageDir, source.ref);
     }
@@ -139,19 +153,20 @@ function stageGit(entry: CorpusEntry, source: Extract<SkillSource, { kind: 'git'
 function finalizeStage(entry: CorpusEntry, stageDir: string): StagedSkill {
   const rootDir = toForwardSlash(stageDir);
   const skillPath = safePath.join(rootDir, entry.skillRelPath);
-  if (!existsSync(skillPath)) {
+  // A cloned repository's content: its links are read beneath the stage before the kernel is asked.
+  if (followedKindSync(skillPath, rootDir) === 'absent') {
     throw new Error(`skill file missing at ${skillPath} (rel=${entry.skillRelPath}) for entry ${entry.id}`);
   }
   return { entryId: entry.id, rootDir, skillPath };
 }
 
-export function fetchSource(entry: CorpusEntry, projectRoot: string, options: FetchOptions = {}): StagedSkill {
+export async function fetchSource(entry: CorpusEntry, projectRoot: string, options: FetchOptions = {}): Promise<StagedSkill> {
   const cacheDir = options.cacheDir ?? defaultCacheDir();
   ensureDir(cacheDir);
 
   switch (entry.source.kind) {
     case 'local':
-      return stageLocal(entry, entry.source, projectRoot, cacheDir);
+      return await stageLocal(entry, entry.source, projectRoot, cacheDir);
     case 'git':
       return stageGit(entry, entry.source, cacheDir);
     case 'npm':

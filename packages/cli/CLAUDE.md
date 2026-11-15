@@ -38,10 +38,10 @@ Rationale, the "right place for logic" table, and a before/after worked example 
 ### Quick Check: Does This Belong in CLI?
 
 Ask yourself:
-1. **"Could another package need this logic?"** → If yes, move to utils or the specific runtime package
+1. **"Could another package need this logic?"** → If yes, move to utils or the specific domain package
 2. **"Is this about user interaction?"** → If yes, CLI is probably fine
 3. **"Does this involve file paths/resolution?"** → Probably belongs in utils or the consumer package
-4. **"Is this domain logic?"** → Belongs in the domain package (agent-config, rag, runtime-*, etc.)
+4. **"Is this domain logic?"** → Belongs in the domain package (agent-skills, resources, rag, etc.)
 
 `vat audit`'s subject CLASSIFICATION is its own; its enumeration is the `crawl` lane — see
 [`.claude/rules/audit-scanning-independence.md`](../../.claude/rules/audit-scanning-independence.md),
@@ -62,6 +62,7 @@ whenever you touch a command file under `src/commands/` or a doc under `docs/`.
 
 ## Command Implementation, Output, and Testing Patterns
 
-The command file skeleton, the `handleCommandError` pattern, and CLI-specific system-test
-patterns live in [`../../docs/architecture/cli.md`](../../docs/architecture/cli.md) — see
-"Command Structure", "Error Handling", and "Testing Patterns".
+The command file skeleton, the report contract (`endWithReport` / `endWithRefusal`, the
+`PUBLISHED_SHAPES` registry), and CLI-specific system-test patterns live in
+[`../../docs/architecture/cli.md`](../../docs/architecture/cli.md) — see "Command Structure",
+"Error Handling", "The report contract", and "Testing Patterns".

@@ -67,6 +67,28 @@ export function removeTempDir(dir: string): void {
 }
 
 /**
+ * Declare that a path handed over by code under test lies in a temp dir the
+ * test owns, and check it: `root` must be inside the host tmpdir and `path`
+ * must not leave `root`. It returns the canonical path — resolved, no `..`
+ * segment left — so what a test goes on to build from it is the place the
+ * check vouched for. The built-output rule reads the result as a temp path, so
+ * a `dist/` segment under it reads no workspace package's build.
+ *
+ * @param path - The path to vouch for (it need not exist yet)
+ * @param root - The temp directory the test minted that holds it
+ * @returns `path`, resolved
+ * @throws When `root` is outside the host tmpdir, or `path` outside `root`
+ */
+export function underTemp(path: string, root: string): string {
+  if (isUnderRoot(normalizedTmpdir(), root) !== 'inside') {
+    throw new Error(`underTemp: ${root} is not inside the host tmpdir ${normalizedTmpdir()}`);
+  }
+  const canonical = safePath.resolve(path);
+  if (isUnderRoot(root, canonical) === 'outside') throw new Error(`underTemp: ${path} is not inside the temp dir ${root}`);
+  return canonical;
+}
+
+/**
  * A factory that remembers every directory it minted, so one `afterEach`
  * removes them all.
  *
@@ -93,6 +115,73 @@ export function tempDirTracker(prefix: string): { create: () => string; cleanupA
       minted.length = 0;
     },
   };
+}
+
+/** The environment variables the host temp directory is read from: TMPDIR (POSIX), TEMP and TMP (win32). */
+const TMPDIR_ENV_NAMES = ['TMPDIR', 'TEMP', 'TMP'] as const;
+
+/**
+ * ⛔ DESTRUCTIVE CODE: make a fresh scratch directory THE temp directory for one test.
+ *
+ * `enter()` mints the scratch under the real temp directory and points `TMPDIR` / `TEMP` /
+ * `TMP` at it; `leave()` restores them and removes the scratch. Everything a verb makes and
+ * disposes of under the temp directory — and every child a test spawns, which inherits the
+ * environment — then lands in the scratch, so neither the run nor a mutation of its disposal
+ * code can reach the real temp directory. Framework-free: the caller registers the two with its
+ * runner (`beforeEach(enter)`, `afterEach(leave)`).
+ *
+ * @param prefix - The scratch directory's prefix, so a leaked one names its suite
+ */
+export function scratchTmpdirEnv(prefix: string): { enter: () => string; leave: () => void; current: () => string } {
+  let scratch: string | undefined;
+  let saved: ReadonlyArray<readonly [string, string | undefined]> = [];
+  return {
+    enter: () => {
+      // Made under the REAL temp directory, then made the temp directory.
+      scratch = createTempDir(prefix);
+      saved = TMPDIR_ENV_NAMES.map((name) => [name, process.env[name]] as const);
+      for (const name of TMPDIR_ENV_NAMES) process.env[name] = scratch;
+      return scratch;
+    },
+    leave: () => {
+      for (const [name, value] of saved) {
+        if (value === undefined) Reflect.deleteProperty(process.env, name);
+        else process.env[name] = value;
+      }
+      saved = [];
+      if (scratch !== undefined) removeTempDir(scratch);
+      scratch = undefined;
+    },
+    current: () => {
+      if (scratch === undefined) throw new Error('scratchTmpdirEnv: no scratch outside enter()/leave()');
+      return scratch;
+    },
+  };
+}
+
+/** The two hook registrars of a test runner (vitest's, jest's): `testing/` stays framework-free. */
+export interface EachTestHooks {
+  readonly beforeEach: (hook: () => void) => void;
+  readonly afterEach: (hook: () => void) => void;
+}
+
+/**
+ * {@link scratchTmpdirEnv}, registered with the runner for every test of a suite: register it at
+ * the top of the suite, before anything that runs a verb.
+ *
+ * @param prefix - The scratch directory's prefix, so a leaked one names its suite
+ * @param hooks - The runner's `beforeEach` / `afterEach`
+ * @returns The current test's scratch directory
+ */
+export function registerScratchTmpdir(prefix: string, hooks: EachTestHooks): () => string {
+  const scratch = scratchTmpdirEnv(prefix);
+  hooks.beforeEach(() => {
+    scratch.enter();
+  });
+  hooks.afterEach(() => {
+    scratch.leave();
+  });
+  return scratch.current;
 }
 
 /**

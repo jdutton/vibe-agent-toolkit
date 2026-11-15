@@ -8,8 +8,10 @@
  * `workingFingerprint` arrived after both suites were written).
  */
 
+import { availableParallelism } from 'node:os';
+
 import type { Coordinate } from '../src/envelope/coordinate.js';
-import type { ReportEnvelope } from '../src/envelope/envelope.js';
+import type { ReportEnvelope, ReportHost } from '../src/envelope/envelope.js';
 import type { LoadReadings } from '../src/harness/types.js';
 
 /**
@@ -39,7 +41,18 @@ export const COORDINATE: Coordinate = {
     dirty: false,
     workingFingerprint: null,
   },
-  instrument: { version: '0.1.42', commit: '1'.repeat(40), dirty: false },
+  instrument: { version: '0.1.42', commit: '1'.repeat(40), dirty: false, closure: 'c'.repeat(64) },
+};
+
+/** This machine, with no inherited NODE_OPTIONS. */
+export const HOST: ReportHost = {
+  platform: process.platform,
+  arch: process.arch,
+  node: process.version,
+  nodeOptions: '',
+  heapSizeLimit: 4_345_298_944,
+  totalMem: 17_179_869_184,
+  availableParallelism: availableParallelism(),
 };
 
 /**
@@ -53,6 +66,10 @@ export function makeReport(over: Partial<ReportEnvelope<unknown>> = {}): ReportE
     facet: 'perf',
     coordinate: COORDINATE,
     capturedAt: '2026-08-09T00:00:00.000Z',
+    removedEnv: [],
+    npmNetworkEnv: [],
+    exits: [],
+    host: HOST,
     body: { commands: [] },
     ...over,
   };

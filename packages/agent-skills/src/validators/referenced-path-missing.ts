@@ -108,11 +108,9 @@
  * bundled subdirectory and which carries no glob character.
  */
 
-import { existsSync } from 'node:fs';
-
-import { parseMarkdown } from '@vibe-agent-toolkit/resources';
+import { parseFileCached, type ParseRoute, withParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { everywhere, mapConcurrentFailingInOrder, pathPresent, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 import {
   CLAUDE_WEB_REFERENCES_SUBDIR,
@@ -120,6 +118,7 @@ import {
   type PackagingTarget,
   TARGET_SUBDIR_CATEGORIES,
 } from '../content-type-routing.js';
+import { parseRefusalIssue } from '../parse-refusal-issues.js';
 
 /**
  * Subdirectories a packaged skill may bundle resources into.
@@ -147,7 +146,7 @@ const NON_LITERAL = /[*?<>{}[\]]/u;
  * dropped — and a build drop referenced as `./scripts/setup.mjs` is the very case
  * this module exists for.
  *
- * ⚠️ The `toForwardSlash` call also normalizes `scripts\x.mjs`, and this comment
+ * ⚠️ The `toForwardSlashAnyPlatform` call also normalizes `scripts\x.mjs`, and this comment
  * used to claim that as a third recognized spelling. It is UNREACHABLE from the
  * shipped lexer, which only emits a run containing one of `/ $ % @` — a
  * backslash-only path never becomes a candidate, so no Windows-authored token
@@ -160,11 +159,11 @@ const NON_LITERAL = /[*?<>{}[\]]/u;
  * matters for what happens downstream — any `..`. A token carrying `..` is not a
  * claim about the bundle's contents, and it is the segment that would otherwise
  * turn verbatim markdown content into a traversal by the time it reaches
- * `existsSync`.
+ * the presence probe.
  */
 function bundleRelativeSegments(token: string): string[] | null {
   if (NON_LITERAL.test(token)) return null;
-  const segments = toForwardSlash(token).split('/');
+  const segments = toForwardSlashAnyPlatform(token).split('/');
   if (segments[0] === '.') segments.shift();
   if (segments.length < 2) return null;
   if (segments.some(segment => segment === '' || segment === '.' || segment === '..')) return null;
@@ -199,17 +198,20 @@ export function isBundledSubdirPath(token: string): boolean {
  * `scripts\x.mjs` and `scripts/x.mjs` one finding with one `link` anchor, so a
  * single allow glob waives all three spellings of the same reference.
  *
- * Goes through `parseMarkdown` rather than reaching for the lexer directly, for
- * two reasons. It keeps ONE definition of "path-shaped token" in the codebase —
- * `isCandidate` in `reference-lexer.ts` already requires a slash and a file
- * extension, which is this check's admission rule too, so re-deriving it here
- * would be a second matcher to drift. And `parseMarkdown` is the package's lazy
- * wrapper: a value import of the lexer would pull the remark stack into the eager
- * module graph of every `@vibe-agent-toolkit/resources` consumer (~730ms on
- * Windows), which `module-load-budget.integration.test.ts` exists to prevent.
+ * Goes through the parse route (`parseFileCached`) rather than reaching for the
+ * lexer directly, for two reasons. It keeps ONE definition of "path-shaped
+ * token" in the codebase — `isCandidate` in `reference-lexer.ts` already
+ * requires a slash and a file extension, which is this check's admission rule
+ * too, so re-deriving it here would be a second matcher to drift. And the parse
+ * runs in the bounded worker (ADR I8): a document no worker admits is refused
+ * under the worker's limit, never parsed on this thread.
+ *
+ * @param filePath - A packaged markdown document (the verb's destination side)
+ * @param route - The run's parse dispatcher
+ * @returns The bundle-relative path candidates it names
  */
-export async function bundledPathCandidates(filePath: string): Promise<string[]> {
-  const parsed = await parseMarkdown(filePath);
+export async function bundledPathCandidates(filePath: string, route: ParseRoute): Promise<string[]> {
+  const parsed = await parseFileCached(filePath, 'markdown', { ...route, side: 'destination' });
   const out = new Set<string>();
   for (const ref of parsed.lexicalReferences ?? []) {
     // NOT the markdown-link exclusion — see the module docstring. This drops
@@ -248,7 +250,9 @@ export async function bundledPathCandidates(filePath: string): Promise<string[]>
  * argument rather than needing its own.
  */
 function bundleHas(skillDir: string, rel: string): boolean {
-  return existsSync(safePath.join(skillDir, rel));
+  // `skillDir` is VAT's own packaged output: the tree the probe is in. A refused probe or link chain
+  // is the output's fault, thrown — never a "missing" warning about a path VAT could not look at.
+  return pathPresent(safePath.join(skillDir, rel), { follow: skillDir }, everywhere('destination'), 'probe');
 }
 
 /**
@@ -287,7 +291,7 @@ function bundleHas(skillDir: string, rel: string): boolean {
  * So a candidate is only missing if it is absent under BOTH its authored
  * spelling and its routed one. The suppression is deliberately narrow — a
  * basename-for-basename relocation, which is exactly the shape routing produces
- * — and it costs one extra `existsSync` on a path that already failed one.
+ * — and it costs one extra presence probe on a path that already failed one.
  */
 function routedSpelling(rel: string, target: PackagingTarget): string {
   const basename = rel.slice(rel.lastIndexOf('/') + 1);
@@ -343,7 +347,7 @@ function routedSpelling(rel: string, target: PackagingTarget): string {
  *   production caller ever passed either: the only caller is the packager, via
  *   `checkMissingReferencedPaths`, and it genuinely does not know the plugin root
  *   — it packages one skill into its own output directory before any plugin is
- *   assembled. `vat build`'s `validateShippedPluginSkillLinks` does walk a whole
+ *   assembled. `vat build`'s `checkShippedPluginSkillLinks` does walk a whole
  *   plugin tree, and wiring this there was considered and REJECTED: it runs only
  *   `checkBrokenPackagedLinks`, its documented stance is the opposite one (a skill
  *   is a self-contained portable unit, so an escape from its own directory is a
@@ -366,8 +370,25 @@ export async function detectMissingReferencedPaths(
   const registryEntry = CODE_REGISTRY.PACKAGED_REFERENCED_PATH_MISSING;
   const issues: ValidationIssue[] = [];
 
-  for (const docFile of docFiles) {
-    const candidates = await bundledPathCandidates(docFile);
+  // Independent reads; a failure is the first by document order, and the issues
+  // are folded in that order.
+  // A document the worker refuses (a limit, a dead worker) is a finding at that
+  // document and its neighbours are still checked; any other failure still
+  // fails the check. One dispatcher for every document.
+  const candidatesByDoc = await withParseDispatcher((dispatcher) =>
+    mapConcurrentFailingInOrder(docFiles, (docFile) =>
+      bundledPathCandidates(docFile, { dispatcher }).catch((error: unknown) => {
+        const limit = parseRefusalIssue(error, docFile, skillDir);
+        if (limit === undefined) throw error;
+        return limit;
+      })));
+  for (const [index, docFile] of docFiles.entries()) {
+    const scanned = candidatesByDoc[index] ?? [];
+    if (!Array.isArray(scanned)) {
+      issues.push(scanned);
+      continue;
+    }
+    const candidates = scanned;
     const missing = candidates.filter(
       rel => !bundleHas(skillDir, rel) && !bundleHas(skillDir, routedSpelling(rel, target)),
     );

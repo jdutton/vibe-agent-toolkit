@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import { assembleClaudeArgs, killProcessTree } from '../../src/skill-test/spawn-claude.js';
+import { assembleClaudeArgs } from '../../src/skill-test/spawn-claude.js';
 
 describe('assembleClaudeArgs', () => {
   // eslint-disable sonarjs/publicly-writable-directories -- test fixtures
@@ -154,56 +154,5 @@ describe('assembleClaudeArgs', () => {
       MAX_TURNS, '30',
       MAX_BUDGET, '2',
     ]);
-  });
-});
-
-describe('killProcessTree', () => {
-  const onPosix = process.platform !== 'win32';
-
-  it('no-ops (no kill) when the child has no pid', () => {
-    const spy = vi.spyOn(process, 'kill').mockImplementation(() => true);
-    try {
-      killProcessTree({ pid: undefined });
-      expect(spy).not.toHaveBeenCalled();
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
-  it.skipIf(!onPosix)('SIGKILLs the whole process group via the negated pid on POSIX', () => {
-    const spy = vi.spyOn(process, 'kill').mockImplementation(() => true);
-    try {
-      killProcessTree({ pid: 4242 });
-      expect(spy).toHaveBeenCalledWith(-4242, 'SIGKILL');
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
-  it.skipIf(!onPosix).each(['ESRCH', 'EPERM'])('reads %s as "the group is already gone" and says nothing', (code) => {
-    // ESRCH: no such group. EPERM: the group id has been recycled to a process
-    // this uid may not signal — which, for a group WE created and would have
-    // permission over, also means every process of ours in it has exited.
-    const spy = vi.spyOn(process, 'kill').mockImplementation(() => {
-      throw Object.assign(new Error(code), { code });
-    });
-    try {
-      expect(() => killProcessTree({ pid: 9999 })).not.toThrow();
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
-  it.skipIf(!onPosix)('lets anything else thrown by the kill stay loud instead of reporting the tree reaped', () => {
-    // The catch used to be blind: a bug here read as "already dead", and an
-    // in-flight `claude` kept billing tokens with the reaper reporting success.
-    const spy = vi.spyOn(process, 'kill').mockImplementation(() => {
-      throw new TypeError('kill is not a function');
-    });
-    try {
-      expect(() => killProcessTree({ pid: 9999 })).toThrow(TypeError);
-    } finally {
-      spy.mockRestore();
-    }
   });
 });

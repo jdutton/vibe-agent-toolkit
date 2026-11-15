@@ -1,6 +1,7 @@
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
+import { RunContentCache } from '../src/projection/content-cache.js';
 import type { ExtentContribution } from '../src/projection/contributor.js';
 import {
   CLAUDE_IMPORT_KIND,
@@ -17,7 +18,7 @@ import {
 import { ProjectionBuilder, type ProjectionBase } from '../src/projection/projection.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
-import { addFile } from './helpers/claude-context-fixture.js';
+import { addFileWithFacts } from './helpers/claude-context-fixture.js';
 import { projectionRealizationRow } from './test-helpers.js';
 
 /**
@@ -117,13 +118,13 @@ function addDirectory(builder: ProjectionBuilder, path: string): void {
  * tree. {@link addFile} keys by content, exactly as production does.
  */
 function buildBase(files: readonly FixtureFile[]): ProjectionBase {
-  const builder = new ProjectionBuilder({ root: ROOT });
+  const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() });
   for (const file of files) {
     if (file.kind === 'directory') {
       addDirectory(builder, file.path);
       continue;
     }
-    addFile(builder, { path: file.path, refs: [], markdown: file.markdown }, ROOT);
+    addFileWithFacts(builder, { path: file.path, refs: [], markdown: file.markdown }, ROOT);
   }
   return builder.base();
 }
@@ -151,18 +152,27 @@ function conditionCodes(contribution: ExtentContribution): string[] {
 }
 
 describe('claudeImportExtentDeclaration', () => {
-  it('follows ONLY at-prefixed tokens, under the claude-import dialect, to four hops', () => {
+  it('follows the harness\'s own imports, under the claude-import dialect, to four hops', () => {
     // Every field is load-bearing and every one is asserted, because each is a
     // place a default would be silently wrong: the schema's `follow` default is
-    // the three markdown forms (which the harness does not load), its
-    // `referenceDialect` default is `href` (under which no import resolves at
-    // all), and its `maxDepth` default is `'full'` (which the vendor bounds).
+    // the three markdown forms (refused beside `claude-import`, whose edges are
+    // `harness_blob_imports` rows no form selects), its `referenceDialect`
+    // default is `href` (VAT's lexer, which reads different imports), and its
+    // `maxDepth` default is `'full'` (which the vendor bounds).
     expect(claudeImportExtentDeclaration(DOCS_CLAUDE_MD)).toEqual({
       kind: CLAUDE_IMPORT_KIND,
       closureFrom: DOCS_CLAUDE_MD,
-      follow: ['at-prefixed'],
+      follow: [],
       referenceDialect: 'claude-import',
       maxDepth: 4,
+      // NULL here, and the two packaging lanes declare `['markdown']` — the
+      // difference is the vendor, not an oversight. `isRoutable` is
+      // `walk-link-graph.ts`'s rule about what a SKILL BUNDLE walks through;
+      // Claude Code's `@`-import resolver is not that walker and VAT has no
+      // vendor statement that it stops at a non-markdown import. Declaring a
+      // narrowing nothing measured would be a claim, so the default stands
+      // until an import lane is measured against the real harness.
+      traverseGlobs: null,
       refusals: [],
       admitPaths: [],
     });
@@ -374,12 +384,12 @@ describe('ClaudeImportExtentContributor — remaining §10 cases', () => {
   });
 
   it('never follows a markdown link, however inviting', async () => {
-    // `follow: ['at-prefixed']` is the load-bearing line. The schema DEFAULT is
-    // the three markdown forms, and taking it here would drag the entire linked
-    // docs tree into a budget the harness never charges.
+    // The edges are `harness_blob_imports` rows. Following markdown links out of
+    // a CLAUDE.md would drag the entire linked docs tree into a budget the
+    // harness never charges.
     const contribution = await contributeFrom(
       [
-        { path: ROOT_CLAUDE_MD, markdown: 'See [the guide](guide.md) and @real.md.\n' },
+        { path: ROOT_CLAUDE_MD, markdown: 'See [the guide](guide.md) and @real.md\n' },
         { path: 'guide.md', markdown: '# guide\n' },
         { path: 'real.md', markdown: '# real\n' },
       ],
@@ -389,11 +399,9 @@ describe('ClaudeImportExtentContributor — remaining §10 cases', () => {
     expect(memberPaths(contribution)).toEqual([ROOT_CLAUDE_MD, 'real.md']);
   });
 
-  it('does not follow @${VAR}/path.md, because the lexer calls it env-anchored', async () => {
-    // 🪤 Pinned as a BOUND, not as a wish. `reference-lexer.ts`'s `classify`
-    // gives a token carrying a variable expansion `env-anchored` whatever else
-    // it looks like, so `follow: ['at-prefixed']` never selects it. Asserting it
-    // here is what stops the day it changes from being a silent behaviour shift.
+  it('does not follow @${VAR}/path.md, because the harness does not call it an import', async () => {
+    // `Ayn` wants a bare path to open with `[a-zA-Z0-9._-]`, so a `$`-led token
+    // never becomes a `harness_blob_imports` row — and so leaves no condition.
     const contribution = await contributeFrom(
       [
         { path: ROOT_CLAUDE_MD, markdown: '@${HOME}/notes.md\n' },

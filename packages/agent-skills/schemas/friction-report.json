@@ -12,9 +12,9 @@
               "severity": {
                 "type": "string",
                 "enum": [
-                  "high",
-                  "medium",
-                  "low"
+                  "error",
+                  "warning",
+                  "info"
                 ]
               },
               "category": {

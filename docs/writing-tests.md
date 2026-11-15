@@ -1,6 +1,6 @@
 # Writing Tests Guide
 
-**CRITICAL**: Code duplication in tests will block commits and PR merges. Follow these patterns to avoid duplication from the start.
+**CRITICAL**: Code duplication in tests fails the full gate (`bun run validate`, CI) and blocks PR merges. Follow these patterns to avoid duplication from the start.
 
 ## Quick Reference
 
@@ -8,7 +8,7 @@
 1. Create `test/test-helpers.ts` if it doesn't exist
 2. After writing 2-3 similar tests, extract a `setupXTestSuite()` helper
 3. Use `toForwardSlash()` from `@vibe-agent-toolkit/utils` for cross-platform path comparisons
-4. Run `bun run duplication-check` before committing
+4. Run `bun run duplication-check` before pushing
 
 ## Test File Organization
 
@@ -34,7 +34,21 @@ packages/my-package/
 |------|----------|---------|---------------------|----------------------------|------------------|--------------|
 | **Unit** | `test/*.test.ts` | Test functions/classes in isolation | < 100 ms | 1,000 ms | 15 s (150 s Windows) | Mock external deps |
 | **Integration** | `test/integration/*.integration.test.ts` | Test multiple modules together | < 5 s | 5,000 ms | 60 s (15 min Windows) | Real file system, DBs |
-| **System** | `test/system/*.system.test.ts` | End-to-end workflows | < 30 s | 30,000 ms | 120 s | Real external services |
+| **System** | `test/system/*.system.test.ts` | End-to-end workflows | < 30 s | 30,000 ms | 120 s (15 min Windows) | Real external services |
+
+A per-test or per-hook timeout in the integration and system tiers is **omitted** (the tier
+default applies) or written as a **budget over the tier's value** —
+`atLeastTierTimeout(inject('tierTestTimeout'), 600_000)`, with `atLeastTierTimeout` from
+`@vibe-agent-toolkit/utils/testing` and `inject` from `vitest`. The result is
+`max(tier default, budget)`: the platform-scaled default is the floor, the measured budget a
+ceiling, so a Unix run keeps the budget exactly and Windows gets `max(900 s, budget)`.
+Never a bare literal — it replaces the default with one number for every machine (a `60_000`
+that was 1× the Unix default was 1/15 of the Windows one) — and never a multiple of the
+default: `inject(...) * 60` turned a 1-hour Unix budget into 15 hours on Windows, so a hang
+burned the CI job's allowance and named no test. The system tier's own defaults are floors the
+same way: `max(120 s, platform)` per test, `max(300 s, platform)` per hook. The CI `validate`
+job carries `timeout-minutes` sized from measured runs, so a hang still ends the job.
+(enforced by: `local/no-literal-test-timeout`, which accepts a number only as the helper's budget)
 
 ### The per-file duration budget
 
@@ -64,8 +78,8 @@ bounds nothing an unlisted file is not already bound to; the allowlist test refu
 and the seed script prints `DELIST` for one that has become so.
 
 **When the reporter fails your new or changed file:** first ask whether the file is in the right
-tier (a unit file that builds a real temp tree, spawns a process or inits a repo belongs in
-integration). The same question is asked at the desk by `local/no-io-in-unit-tier`, which flags
+tier (a unit file that builds a real temp tree belongs in integration; one that spawns a process —
+`git init` included — belongs in system, per the classification table below). The same question is asked at the desk by `local/no-io-in-unit-tier`, which flags
 `mkdtemp*`, `spawn*`, `exec*` and `child_process` imports in a unit-tier file; its `allowFiles`
 ratchet in `eslint.config.js` names today's 116 offenders and may only shrink. The two ratchets
 overlap by only a third — I/O is not the only thing that makes a file slow — so a file leaving one
@@ -87,6 +101,93 @@ output. Their failure messages carry the regeneration command; the procedure is 
 first** (`bun run build`), then run the one file from its package directory with the env var set.
 Regenerating from a stale `dist/` writes a stale golden that passes.
 
+### Reading a package's built output
+
+A test or package script that reads a workspace package's `dist/` needs turbo to run the task that
+PRODUCES that path before the reader's task. That ordering also puts the producer's hash into the
+reader's hash, so a rebuild re-runs the reader. Without it, a cold run reads a missing `dist/` and
+a warm run reads a stale one. `validate-structure` (`checkBuiltOutputEdges`) derives every such
+read and checks it against turbo's own `--dry=json` graph.
+
+**What it scans.** The rule reads these files:
+
+- every source file under a package's `test/`, except `fixtures/` and `golden/`;
+- every `src/**/*.test.*`;
+- the `src/` test helpers (`testing/`, `*test-helpers*`);
+- the vitest setup and global-setup files at the repo root or a package root;
+- every `package.json` script, word by word.
+
+**What it does not scan.** The rule is not complete. These reads are out of scope and go
+unchecked, so keep a `dist/` path out of them or route it through a scanned file:
+
+- product `src/` code that a test calls (a path a product function builds is unknown to the
+  scan where the test receives it, which makes that test's use a finding, not the function);
+- the TypeScript files a package script runs (`tsx src/x.ts`): the script word is judged, the
+  file's body is not;
+- a bin a script runs by name (`vat …`): it resolves only through a declared dependency, which
+  `^build` already orders.
+
+In the scanned files, every expression handed to a path sink is one of three kinds when it has a
+`dist` segment, compared case-insensitively. A path sink is a `join`/`resolve` call bound by its
+import to `node:path`/`path` or to `safePath` from `@vibe-agent-toolkit/utils` (a local function
+named `join` is none), `new URL`, a module load, a specifier resolution (`require.resolve`,
+`import.meta.resolve`), a process launch (also through `promisify`) or an fs read. The three
+kinds:
+
+- **Resolved.** Every piece is known, and it lands exactly on `packages/<dir>/dist/…` or
+  `node_modules/<workspace pkg>/dist/…`, each segment matching in case. It starts at a repo
+  location: the file's directory, a relative or workspace-package specifier, or a value that
+  traces to one. Relative text with no anchor resolves from the package directory, the working
+  directory of a test and of a script. Reads of the reader's own package count too. A path is
+  absolute only when it starts with an absolute literal; text after a `+` is appended, never a
+  new root.
+- **Temp.** It starts at `tmpdir()` or `mkdtemp*` imported from `node:os`/`node:fs`, or at a
+  temp-dir helper of `@vibe-agent-toolkit/utils`, and no `..` climbs out of that temp dir. When
+  the path comes from something the scan does not follow (a product function's result), wrap it
+  in `underTemp(path, tempRoot)`: at run time it asserts `path` is inside the temp dir and
+  returns it canonical, no `..` segment left. A path that starts with an absolute literal is
+  also no reach.
+- **Unresolved.** Every other one, a finding at `file:line`, never a skip: a piece not known
+  anywhere in it (an untraceable parameter, a call site the scan cannot enumerate, a `let` given
+  an unknown value, a value a cycle guard cut short), a fully known path that lands on no
+  package's `dist/` or on one only when case is ignored, a temp path a `..` climbs out of, and a
+  relative path whose working directory is not the package's: handed to a launch with a `cwd`
+  option or to a shell (`exec*`, `shell: true`), built in a root-level setup file, or run by a
+  script after a `cd`. A file that does not parse is also a finding.
+
+A value with no `dist` segment is none of these.
+
+**Who reads.** A reach in a test file belongs to the tier task of every test that loads that file,
+directly or through relative imports, in any package. A reach in a file no test loads is a finding.
+A reach in a setup file belongs to every tier task of its scope: every package's, for one at the
+repo root. A reach in a script belongs to every turbo task whose command runs that script, by
+`bun run <s>` or bun's `bun <s>` shorthand. A sibling read in a script that no task runs is a
+finding.
+
+**Who produces.** Any task of the reached package whose declared `outputs`, less its
+`excludedOutputs`, cover the path, each glob matched whole: `dist/**/*.d.ts` does not cover
+`dist/bin.js`, and a directory read whole is covered only by a glob holding that tree
+(`dist/**`). One such task ordered first is enough. A read that may reach
+past its static part has a further requirement: one with a non-static tail, or a directory read
+whole. For each task whose outputs lie under that part, one task covering them must also be
+ordered. Declared outputs are what the rule trusts. A task that does not produce a path its glob
+claims must exclude it, as a `!dist/skills/**` entry does for a package whose `build:skills`, not
+its `build`, writes those files.
+
+**Wiring the edge.** Use a `workspace:*` devDependency when the reader may depend on the producer's
+package, the producer is that package's `build`, and the dependency makes no cycle. `^build` then
+orders every task of the reader. Otherwise, add the producer to the `dependsOn` of a
+`<pkg>#<task>` entry in `turbo.json`. Two cases need that entry: a cycle, which the cli and its
+dependents would make, and a producer other than `build`. Such an entry REPLACES the generic
+task's definition instead of merging with it. A `<pkg>#test:<tier>` entry, in the root
+`turbo.json` or as a `test:<tier>` task of a package's own `turbo.json`, is checked against the
+root's generic tier both ways. Its `env`, `outputs` and `cache` must equal the generic's: an added
+env var or output splits or widens what the tier caches as surely as a dropped one. Its
+`dependsOn` and `inputs` must keep all of the generic's and may add more: the added producer is
+the point of the entry, and an added input (the trees a repo-wide test reads) only widens the
+hash. An omitted or empty `inputs` reads as `$TURBO_DEFAULT$`, so an entry that lists inputs
+must list `$TURBO_DEFAULT$` too. (enforced by: `validate-structure`, `checkBuiltOutputEdges`)
+
 ### Test Classification Rules
 
 Misclassified tests are the #1 cause of flaky CI and slow unit test suites. If your test does any of the following, it is **NOT a unit test**:
@@ -101,18 +202,16 @@ Misclassified tests are the #1 cause of flaky CI and slow unit test suites. If y
 
 **Unit tests must be deterministic, fast, and isolated.** Mock all I/O, network, and heavy dependencies. If you're unsure, ask: "Would this test fail on an airplane?" If yes, it's not a unit test.
 
-**Network-dependent integration tests** should use `describe.skipIf(!!process.env.CI)` if they hit external services that may be unreachable in CI:
+**HTTP behaviour is tested against a local server, never a public host.** A suite that fetches
+a live site fails on that site's uptime and bot policy, not on our code, and it cannot make the
+site send a 500, a 429 that clears on the third try, or no answer at all. Start a `node:http`
+server on `127.0.0.1`, port 0, once per file (`startLinkTestServer` in
+`packages/resources/test/test-helpers.ts` records every request it receives). For a name that
+must fail DNS, use the reserved `.invalid` TLD (RFC 2606), which no resolver answers.
 
-```typescript
-// Tests that make real HTTP requests — skip in CI where egress may be restricted
-describe.skipIf(!!process.env.CI)('ExternalLinkValidator (integration)', () => {
-  // ...
-});
-```
-
-Note that `bun run validate` (the full gate) runs with `CI=1` locally — see the two-tier gate in
-`vibe-validate.config.yaml` — so a suite gated this way runs only when its tier is invoked directly
-(`bun run test:integration`), never inside a gate.
+Only a suite whose subject IS a public service (cloning a GitHub repository) reaches the network,
+and it is gated on `NET_AVAILABLE=1`, which CI sets: `describe.skipIf(process.env.NET_AVAILABLE !== '1')`.
+Never gate on `CI`: `bun run validate` sets `CI=1` locally, so such a suite runs nowhere.
 
 **Platform skips need a reason at the site.** Every `it.skipIf(process.platform === 'win32')` /
 `describe.skipIf(...)` carries a one-line comment naming the mechanism that cannot run there (a
@@ -128,7 +227,11 @@ Large test data for system/integration tests should be stored as compressed arch
 SonarQube analyzing third-party code:
 
 **Pattern**: `packages/X/test/fixtures/*.zip` (committed)
-**Extraction**: Use cross-platform libraries (e.g., `adm-zip` npm package) in test setup
+**Extraction**: `extractArchive` from `@vibe-agent-toolkit/utils/archive` in test setup — the one
+module that may import `adm-zip` or `tar` (`no-restricted-imports`; a test helper is not exempt)
+**Building one in a test**: `tarFixture` / `zipFixture` from `@vibe-agent-toolkit/utils/testing`
+write an archive byte by byte with no library, so a test can make the entries no library will
+write (a link, `../x`, a name listed twice); `hostileArchiveRows` is the shared table of them
 **Location**: Extract to temp directories during test execution (gitignored)
 
 **Why compressed archives?**
@@ -139,12 +242,12 @@ SonarQube analyzing third-party code:
 
 **Why ZIP instead of TAR.GZ?**
 - ZIP extraction is significantly faster on Windows (3-5s vs 100+ seconds)
-- `adm-zip` is pure JavaScript and works consistently across platforms
+- The ZIP reader is pure JavaScript and works consistently across platforms
 - Similar compression ratio to TAR.GZ (~7% larger, acceptable trade-off)
 
 **Example**: `packages/cli/test/fixtures/claude-plugins-snapshot.zip`
 - Contains snapshot of real ~/.claude/plugins directory
-- Extracted by `test-fixture-loader.ts` during test setup using `adm-zip`
+- Extracted by `test-fixture-loader.ts` during test setup through `extractArchive`
 - Tests run against extracted version in temp directory
 
 For small test data (<10 files), raw files in `test/fixtures/` are fine.
@@ -527,7 +630,7 @@ While writing tests:
 ### Running the Check
 
 ```bash
-# Before every commit
+# Before pushing (the full gate and CI run it; the commit hook does not)
 bun run duplication-check
 
 # If it fails
@@ -715,7 +818,7 @@ When writing tests:
 **Classification:**
 - [ ] Test is in the right tier (no network/ML/process spawning in unit tests)
 - [ ] The file runs inside its tier's per-file budget, or its allowlist entry names why it cannot
-- [ ] Network-dependent integration tests use `describe.skipIf(!!process.env.CI)` if needed
+- [ ] HTTP behaviour runs against a local server; only a suite whose subject is a public service gates on `NET_AVAILABLE=1`
 - [ ] Every platform skip has a one-line reason at the site
 
 **Cross-platform:**
@@ -733,7 +836,7 @@ When writing tests:
 - [ ] Used `vi.useFakeTimers()` instead of real `setTimeout` for time-dependent tests
 
 **Quality:**
-- [ ] Ran `bun run duplication-check` before committing
+- [ ] Ran `bun run duplication-check` before pushing
 - [ ] No code duplication detected
 
 ## Real-World Impact

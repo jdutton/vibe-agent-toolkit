@@ -29,6 +29,9 @@ config ([`docs/writing-tests.md`](../../docs/writing-tests.md#the-per-file-durat
 - Goldens (`packaged-output-drift`, `pipeline-oracles`) compare BUILT output: `bun run build`
   first, then `UPDATE_DRIFT_GOLDEN=1` on the one file from its package directory, and read the
   diff — it must be exactly your edit.
+- A test that reads a workspace package's built `dist/` needs turbo to order the task producing it
+  first: [`docs/writing-tests.md`](../../docs/writing-tests.md#reading-a-packages-built-output).
+  (enforced by: `validate-structure`, `checkBuiltOutputEdges`)
 - A test under this rule runs real processes: use `NODE_EXECUTABLE` / `gitExecutable()` from
   `@vibe-agent-toolkit/utils/testing` rather than spawning `node` or `git` by name.
   (enforced by: `local/no-bare-executable-spawn`, repo-wide, no allowlist)

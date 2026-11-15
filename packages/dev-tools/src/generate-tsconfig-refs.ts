@@ -5,9 +5,9 @@
  * The root `tsconfig.json` references every TypeScript project under
  * `packages/` (a package with a `tsconfig.json` AND a `build` script), and each
  * project references the workspace packages it declares in ANY dependency
- * field. Dev dependencies count: `vat-development-agents` compiles through a
- * transformer shipped by `resource-compiler`, which it lists as a devDependency,
- * so `tsc --build` must build that first. A reference to a package `src/` never
+ * field. Dev dependencies count: a package whose build runs code from a
+ * workspace devDependency (a compiler transformer, a generator) needs that
+ * package built first. A reference to a package `src/` never
  * imports costs one extra ordering edge; a missing one is a build that reads a
  * stale or absent `dist/`.
  *

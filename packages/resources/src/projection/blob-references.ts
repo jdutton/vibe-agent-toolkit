@@ -126,7 +126,8 @@ export type PositionedLink = ResourceLink & {
  *
  * The single definition of "droppable", exported because more than one place
  * needs to agree with it. {@link astCandidates} rejects on it, `emitBlobRows`
- * counts the rejects by difference (`referencesSkippedForMissingLine`), and a
+ * counts the rejects by difference (`referencesSkippedForMissingLine`, in
+ * `populateBlobs`' public result (`BlobPopulationResult`), a run counter no stored row carries), and a
  * consumer enumerating *which* links were dropped has to ask the same question
  * — asking a narrower one (`link.line === undefined`) would silently miss a
  * link that carried a line and no offsets, which is exactly the shape the HTML

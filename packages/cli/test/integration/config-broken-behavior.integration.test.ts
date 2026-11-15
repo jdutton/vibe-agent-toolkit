@@ -44,6 +44,7 @@
 import fs from 'node:fs';
 
 import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { resolveSkillPackagingConfig } from '../../src/skill-resolution/packaging-config.js';
@@ -70,8 +71,8 @@ const MISATTRIBUTED = 'the projection membership lane failed';
  */
 function writePluginFixture(root: string): string {
   const pluginDir = safePath.join(root, 'plugin');
-  fs.mkdirSync(safePath.join(pluginDir, '.claude-plugin'), { recursive: true });
-  fs.mkdirSync(safePath.join(pluginDir, 'skills', 'demo'), { recursive: true });
+  mkdirSyncReal(safePath.join(pluginDir, '.claude-plugin'), { recursive: true });
+  mkdirSyncReal(safePath.join(pluginDir, 'skills', 'demo'), { recursive: true });
   fs.writeFileSync(
     safePath.join(pluginDir, '.claude-plugin', 'plugin.json'),
     JSON.stringify({ name: 'demo-plugin', description: 'A demo plugin.', version: '0.0.1' }),
@@ -109,7 +110,7 @@ describe('broken governing config behavior (integration)', () => {
     fs.writeFileSync(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), 'resources: 42\n');
 
     skillPath = safePath.join(tempDir, 'resources', 'skills', 'SKILL.md');
-    fs.mkdirSync(safePath.join(tempDir, 'resources', 'skills'), { recursive: true });
+    mkdirSyncReal(safePath.join(tempDir, 'resources', 'skills'), { recursive: true });
     fs.writeFileSync(
       skillPath,
       `---
@@ -167,7 +168,9 @@ Body content for a skill under a broken governing config.
     // consumer parsing it sees a status rather than a truncated answer.
     expect(result.stdout).toContain('status: error');
     expect(result.stdout).toContain('Failed to load config');
-    expect(result.stderr).toContain('claude context failed');
+    // The adopter's config is the mistake: coded CONFIG_INVALID, never VAT's INTERNAL_ERROR.
+    expect(result.stdout).toContain('code: CONFIG_INVALID');
+    expect(result.stderr).toContain('Failed to load config');
   });
 
   it('vat inventory tolerates the broken config, exits 0, and blames the CONFIG rather than its own lane', async () => {

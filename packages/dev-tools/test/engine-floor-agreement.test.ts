@@ -55,7 +55,7 @@ const CLI = 'packages/cli/package.json';
 const UTILS = 'packages/utils/package.json';
 const LAB = 'packages/lab/package.json';
 const DEV_TOOLS = 'packages/dev-tools/package.json';
-const TEST_AGENTS = 'packages/test-agents/package.json';
+const PRIVATE_PKG = 'packages/private-example/package.json';
 const A = 'packages/a/package.json';
 const B = 'packages/b/package.json';
 const C = 'packages/c/package.json';
@@ -134,7 +134,7 @@ describe('findEngineFloorDisagreements', () => {
     const findings = findEngineFloorDisagreements(ROOT_FLOOR, [
       pkg({ path: DEV_TOOLS, isPrivate: true, engineNode: undefined }),
       pkg({ path: LAB, isPrivate: true, engineNode: undefined }),
-      pkg({ path: TEST_AGENTS, isPrivate: true, engineNode: undefined }),
+      pkg({ path: PRIVATE_PKG, isPrivate: true, engineNode: undefined }),
     ]);
 
     expect(findings).toEqual([]);

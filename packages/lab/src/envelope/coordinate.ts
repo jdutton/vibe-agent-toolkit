@@ -106,17 +106,40 @@ export interface InstrumentVersion {
    * {@link InstrumentVersionSchema} enforces the pairing, because a `false` on a
    * `dist:` arm would be a confident claim of cleanliness nobody checked.
    *
-   * **There is deliberately no instrument working-fingerprint**, and that is not
-   * an oversight of the kind {@link SubjectVersion.workingFingerprint} fixes.
-   * What ran is the *built* output, not the source tree: a fingerprint over the
-   * checkout would be a precise identifier for something that is not the thing
-   * measured — you can edit source and never rebuild, which is the very failure
-   * this field exists to disclose. So a dirty instrument is not identified by
-   * anything the harness can cheaply read, and the honest substitute is to say
-   * so loudly wherever two reports are held together. See `instrumentTrustNotes`
-   * in `harness/render.ts`.
+   * A dirty arm's bytes are identified by {@link InstrumentVersion.closure},
+   * not by anything read from its source checkout: what ran is the BUILT
+   * output, and a fingerprint over the source would precisely identify
+   * something that is not the thing measured (you can edit source and never
+   * rebuild — the very failure this field exists to disclose).
    */
   readonly dirty: boolean | null;
+  /**
+   * SHA-256 over the arm's whole module closure (see `harness/closure.ts`): the
+   * BYTES of the cli package and of every `@vibe-agent-toolkit/*` package it
+   * resolves, transitively, each as its `package.json` plus every file under its
+   * `dist/`; plus the resolved `name@version` — not the bytes — of every
+   * third-party package in that same closure. One definition for every kind — an
+   * `npx:` arm's starts at its installed cli — so a third-party dependency
+   * resolved at another version makes another instrument, for every kind.
+   *
+   * A report stored by an earlier lab whose closure was computed by another
+   * definition compares as a different instrument: re-capture it. Nothing
+   * detects that, and no version marker records the definition.
+   *
+   * **The field that identifies the BYTES.** A `dist:` arm has no commit, so
+   * before this two `dist:` arms of one version were the same instrument to
+   * every comparison whatever they were built from; and a dependency's `dist/`
+   * can be rebuilt while every version string stays put. A dirty `tree:` arm
+   * is identified by it too, which is what lets two dirty builds at one commit
+   * finally compare unequal when their outputs differ.
+   *
+   * Every resolved build carries one. Required, never null, and `.strict()`: a
+   * stored report without one — from before the field existed, or an `npx:` report
+   * from before the lab installed the pin itself (`harness/npx-install.ts`), which
+   * may have measured another version than it names — is refused, not defaulted:
+   * the lab's documented refusal policy.
+   */
+  readonly closure: string;
 }
 
 /** A complete three-axis coordinate. */
@@ -175,6 +198,9 @@ export const SubjectVersionSchema = SubjectVersionVariants.superRefine((value, c
   });
 });
 
+/** Why a stored instrument with no closure digest is refused rather than compared. */
+const NO_CLOSURE = 'the instrument has no closure digest: it may have measured another version than it names';
+
 /**
  * Axis C, with the one cross-field rule the object shape cannot express alone.
  *
@@ -189,6 +215,9 @@ export const InstrumentVersionSchema = z
     version: z.string().min(1),
     commit: z.string().min(1).nullable(),
     dirty: z.boolean().nullable(),
+    closure: z
+      .string({ invalid_type_error: NO_CLOSURE, required_error: NO_CLOSURE })
+      .regex(/^[0-9a-f]{64}$/, 'a closure digest is 64 lowercase hex characters'),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -253,23 +282,24 @@ function sameSubjectVersion(a: SubjectVersion, b: SubjectVersion): boolean {
  * Is this the same build of the instrument?
  *
  * `dirty` participates because a dirty build and a clean build at one commit are
- * not the same binary, however identical their stamps look otherwise.
+ * not the same binary, however identical their stamps look otherwise; `closure`
+ * participates because it is the one field that names the bytes — two `dist:`
+ * arms of one version, or two dirty builds at one commit, differ only there.
  *
- * **Two dirty arms at one commit still compare equal here, and that is a known
- * limit rather than a claim.** Nothing cheap identifies a dirty build's bytes —
- * see {@link InstrumentVersion.dirty} — so equality is the only answer this
- * function can honestly give, and it is `instrumentTrustNotes` in
- * `harness/render.ts` that tells the reader not to lean on it. Silently
- * returning `false` instead would break reflexivity and make a `--control` run
- * (the same instrument entered as both arms, to measure the noise floor) report
- * that the instrument axis moved.
+ * Reflexive by construction: `--control` enters ONE resolved instrument as both
+ * arms, so its closure matches itself and the instrument axis never moves.
  *
  * @param a - One instrument version
  * @param b - The other
- * @returns `true` when version, commit and dirtiness all match
+ * @returns `true` when version, commit, dirtiness and closure all match
  */
-function sameInstrument(a: InstrumentVersion, b: InstrumentVersion): boolean {
-  return a.version === b.version && a.commit === b.commit && a.dirty === b.dirty;
+export function sameInstrument(a: InstrumentVersion, b: InstrumentVersion): boolean {
+  return (
+    a.version === b.version &&
+    a.commit === b.commit &&
+    a.dirty === b.dirty &&
+    a.closure === b.closure
+  );
 }
 
 /**

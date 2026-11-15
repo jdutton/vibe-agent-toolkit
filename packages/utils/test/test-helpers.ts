@@ -8,6 +8,7 @@ import fs from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
+import type { UnreadablePolicy } from '../src/listing-refusal.js';
 import { mkdirSyncReal } from '../src/path-utils.js';
 import { resetProjectRootCaches } from '../src/project-utils.js';
 import { gitExecutable } from '../src/testing/executables.js';
@@ -98,6 +99,22 @@ export async function setupNestedDirectory(
   return { srcDir, destDir };
 }
 
+/** Run `fn` with `PATH` emptied, so spawning `git` fails with ENOENT and `gitIsMissing()` is true. */
+export function withoutGit<T>(fn: () => T): T {
+  const saved = process.env['PATH'];
+  try {
+    process.env['PATH'] = '';
+    return fn();
+  } finally {
+    process.env['PATH'] = saved;
+  }
+}
+
+/** A git spawn that failed with `code` (ENOENT, ETIMEDOUT, ...), as Node reports one: no exit status, no stderr. */
+export function gitSpawnFailure(code: string): { ok: false; stderr: string; error: Error } {
+  return { ok: false, stderr: '', error: Object.assign(new Error(`spawnSync git ${code}`), { code }) };
+}
+
 /**
  * The errno `code` a call throws with, or `undefined` when it does not throw.
  *
@@ -129,4 +146,15 @@ export function plantOpenAndLockedTree(root: string): { locked: string } {
   writeFileSync(safePath.join(open, 'ok.md'), '# ok\n');
   writeFileSync(safePath.join(locked, 't.md'), '# t\n');
   return { locked };
+}
+
+/**
+ * The refuse policy the refused-listing suites assert against: stop, on the `source` side,
+ * with `remedy` as the adopter's sentence.
+ *
+ * @param root - The root the refused directory is expressed against
+ * @param remedy - The remedy the suite asserts appears in the message
+ */
+export function refuseOnSource(root: string, remedy: string): UnreadablePolicy {
+  return { refuse: { root, remedy, side: 'source' } };
 }

@@ -4,7 +4,7 @@
  * things: the readdir walk, where a refusal means nothing beneath the
  * directory was seen, and the `git ls-files --others` route, where the index
  * has already named every TRACKED file beneath it and only the untracked ones
- * are missing (`file-crawler-git-refused-listing.test.ts` pins that listing).
+ * are missing (`integration/file-crawler-git-refused-listing.integration.test.ts` pins that listing).
  *
  * The sentence therefore may not assert what was enumerated beneath the
  * directory — one route or the other would contradict it in the same report —
@@ -35,6 +35,16 @@ describe('refusedListingMessage', () => {
     // The hazard, stated so it holds on both routes.
     expect(message).toMatch(/no other listing named is absent from every count/);
     expect(message).toMatch(/cannot be told from a complete one/);
+  });
+
+  // A cloned repository names the directory: shown by its escapes, never as the characters it holds.
+  it('shows a hostile directory name by its escapes', () => {
+    const rlo = String.fromCodePoint(0x20_2e);
+    const message = refusedListingMessage(refusal(`${ROOT}/a${rlo}b`), { root: ROOT, remedy: REMEDY });
+
+    const bs = '\\';
+    expect(message).toContain(`the directory 'a${bs}u202eb'`);
+    expect(message).not.toContain(rlo);
   });
 
   it('asserts nothing about what WAS enumerated beneath the directory — the git route lists tracked members', () => {

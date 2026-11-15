@@ -233,8 +233,10 @@ function missingDraft(document: string, link: ResourceLink): OkfFindingDraft {
  * `readdir` returns `EACCES`, so the link this reported as broken was a link
  * that works, and the remedy it printed asked the author to write a document
  * that is already there. `EMFILE`/`ENFILE` (descriptor exhaustion under
- * concurrency) and `ELOOP` reach the same verdict without any permission being
- * unusual at all.
+ * concurrency) reach the same verdict without any permission being unusual at
+ * all. A directory that loops (`ELOOP`) does not: a cycle resolves to nothing,
+ * so the index answers `no_such_entry` and the link is `OKF_BROKEN_CROSS_LINK`,
+ * the answer every other lane gives a link to nothing.
  *
  * 🔑 **The code is `OKF_SUBDIRECTORY_UNREADABLE`, deliberately reused rather
  * than split.** It is the same condition discovery reports when it meets the

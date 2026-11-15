@@ -38,8 +38,17 @@ export interface BuildHookOptions {
    * Injectable spawn function for unit testing.
    * Defaults to node:child_process spawnSync when not provided.
    */
-  spawnFn?: (cmd: string, opts: { shell: boolean; cwd: string; stdio: 'inherit' }) => { status: number | null };
+  spawnFn?: (cmd: string, opts: { shell: boolean; cwd: string; stdio: BuildHookStdio }) => { status: number | null };
 }
+
+/**
+ * Where the hook's streams go: its stdin and stderr are this process's, and its STDOUT is sent
+ * straight to this process's stderr (fd 2). The verb's stdout carries its report and nothing else —
+ * a hook that prints (`npm run build`) would otherwise put its lines ahead of the document — and a
+ * pipe would buffer the hook's output under `spawnSync`'s `maxBuffer`, killing a chatty build.
+ */
+export type BuildHookStdio = ['inherit', 2, 'inherit'];
+const BUILD_HOOK_STDIO: BuildHookStdio = ['inherit', 2, 'inherit'];
 
 /** Thrown when the pre-stage build command exits with a non-zero code. Maps to preflight (exit 2). */
 export class BuildHookError extends VatError {
@@ -50,14 +59,14 @@ export class BuildHookError extends VatError {
 }
 
 /**
- * Default spawn implementation: runs the command in a shell with stdio inherited.
+ * Default spawn implementation: runs the command in a shell, its stdout on this process's stderr ({@link BuildHookStdio}).
  *
  * `build:` is a developer-authored shell command from the adopter's own config
  * (vibe-agent-toolkit.config.yaml), equivalent to running `pnpm bundle:report` at the
  * terminal. It is NOT arbitrary user input. The adopter already acknowledges running
  * skill code via --i-understand-this-runs-skill-code.
  */
-function defaultSpawn(cmd: string, opts: { shell: boolean; cwd: string; stdio: 'inherit' }): { status: number | null } {
+function defaultSpawn(cmd: string, opts: { shell: boolean; cwd: string; stdio: BuildHookStdio }): { status: number | null } {
    
   return spawnSync(cmd, { ...opts, shell: true });
 }
@@ -74,7 +83,7 @@ export function runPreStageBuild(opts: BuildHookOptions): void {
   if (buildCommand === undefined) return;
 
   const spawn = opts.spawnFn ?? defaultSpawn;
-  const result = spawn(buildCommand, { shell: true, cwd: configRoot, stdio: 'inherit' });
+  const result = spawn(buildCommand, { shell: true, cwd: configRoot, stdio: BUILD_HOOK_STDIO });
   const status = result.status ?? -1;
 
   if (status !== 0) {

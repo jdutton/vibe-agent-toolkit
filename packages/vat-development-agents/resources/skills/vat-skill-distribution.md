@@ -101,7 +101,7 @@ This is the scenario where `vat.replaces` is needed:
 
 ### How it works
 
-When a VAT package is installed (via postinstall hook or `--dev`), the installer reads `vat.replaces` from `package.json` and — **before** installing the new plugin:
+When a VAT package is installed (via postinstall hook or `--dev`), the installer reads `vat.replaces` from `package.json` and checks every entry **before anything changes** — a malformed entry refuses the install with nothing removed. It applies them only **after** the new marketplace is copied and registered, so a failed install never leaves the old plugin gone and the new one absent:
 
 1. For each name in `replaces.plugins`: uninstalls `<name>@<marketplace>` — removes plugin directory, cache entry, registry entry, and `settings.json` entry
 2. For each name in `replaces.flatSkills`: deletes `~/.claude/skills/<name>` — removes legacy pre-0.1.20 flat installs
@@ -413,8 +413,10 @@ The config schema accepts `claude.managedSettings: <path>`, but **no command rea
 For uploading skills directly to `claude.ai/settings/capabilities`:
 
 ```bash
-vat skills package ./SKILL.md -o ./dist/ --target claude-web
+vat skills package ./SKILL.md -o ./dist/my-skill --target claude-web
 ```
+
+`-o` names the package directory itself, and the ZIP lands beside it (`./dist/my-skill.zip`). An `-o` that already holds anything is refused (`USAGE_INVALID`) and left untouched; pass `--force` to replace a previous package there.
 
 Produces a ZIP:
 ```
@@ -467,7 +469,7 @@ already exists at build time — run your own build step first and point `files:
 | Install via npx (developer/IT) | `npx vibe-agent-toolkit claude plugin install npm:@org/pkg` |
 | List installed plugins | `vat claude plugin list` |
 | Uninstall a plugin | `vat claude plugin uninstall --all` |
-| Package for claude.ai upload | `vat skills package ./SKILL.md -o ./dist/ --target claude-web` |
+| Package for claude.ai upload | `vat skills package ./SKILL.md -o ./dist/my-skill --target claude-web` |
 
 ## Running VAT Without Global Install
 

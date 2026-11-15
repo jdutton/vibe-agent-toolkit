@@ -72,11 +72,11 @@ type ParseArm = { pathContains: string; error: Error } | undefined;
 // is the shipped one.
 vi.mock('@vibe-agent-toolkit/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof ResourcesModule>();
-  const parseFileCached = async (filePath: string, kind: ResourcesModule.ParserKind) => {
+  const parseFileCached = async (filePath: string, kind: ResourcesModule.DocumentParserKind, route: ResourcesModule.ParseRoute) => {
     if (failures.load) return Promise.reject(failures.load);
     return failures.parseFor && filePath.includes(failures.parseFor.pathContains)
       ? Promise.reject(failures.parseFor.error)
-      : actual.parseFileCached(filePath, kind);
+      : actual.parseFileCached(filePath, kind, route);
   };
   return { ...actual, parseFileCached };
 });
@@ -173,7 +173,9 @@ describe('an ordinary parse failure during skill link traversal', () => {
       // SKILL.md keeps parsing, so both linked documents are still discovered
       // and queued; only they fail.
       pathContains: 'linked-',
-      error: new Error('unexpected token'),
+      // A failure on `classifyParseFailure`'s allowlist — a read the OS refused
+      // for the file. An unbranded `Error` is VAT's defect and is rethrown.
+      error: Object.assign(new Error("EACCES: permission denied, open 'linked-a.md'"), { code: 'EACCES', syscall: 'open', path: 'linked-a.md' }),
     };
     const skillPath = writeSkill();
 

@@ -1,16 +1,28 @@
 import { writeFile } from 'node:fs/promises';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { refuseAsyncFs, refuseSyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   parsePluginJsonFiles,
+  readAuthorPluginJson,
   verifyNoCaseCollidingPluginNames,
   verifyPluginDirCaseMatch,
 } from '../../../../src/commands/claude/plugin/plugin-validators.js';
+import { refusalCodeOf } from '../../../../src/utils/command-refusal.js';
 import { createTempDirTracker } from '../../../system/test-common.js';
 
 const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-plugin-val-');
+
+/** Run `body`, lift `restore` afterwards, and return what it rejected with (`undefined` when it resolved). */
+async function refusedWith(restore: () => void, body: () => Promise<unknown>): Promise<unknown> {
+  try {
+    return await body().then(() => undefined, (error: unknown) => error);
+  } finally {
+    restore();
+  }
+}
 
 describe('plugin-validators', () => {
   afterEach(() => cleanupTempDirs());
@@ -81,6 +93,47 @@ describe('plugin-validators', () => {
       const plugin = safePath.join(root, 'plugins', 'p1');
       mkdirSyncReal(plugin, { recursive: true });
       await expect(parsePluginJsonFiles(plugin)).resolves.toBeUndefined();
+    });
+  });
+
+  // A refusal is not an absence: each reader used to ask `existsSync`, which
+  // answers false for EACCES too, so a plugin file the OS refused was skipped
+  // as if it were not there.
+  describe('a refused read is INPUT_UNREADABLE, never absent', () => {
+    it('verifyPluginDirCaseMatch over a plugins/ dir it may not list', async () => {
+      const root = createTempDir();
+      mkdirSyncReal(safePath.join(root, 'plugins', 'p1'), { recursive: true });
+      const error = await refusedWith(
+        refuseAsyncFs('readdir', safePath.join(root, 'plugins'), 'EACCES'),
+        () => verifyPluginDirCaseMatch(root, 'p1'),
+      );
+      expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
+    });
+
+    it('parsePluginJsonFiles over a hooks.json it may not read', async () => {
+      const root = createTempDir();
+      mkdirSyncReal(safePath.join(root, 'hooks'), { recursive: true });
+      const hooks = safePath.join(root, 'hooks', 'hooks.json');
+      await writeFile(hooks, '{}');
+      const error = await refusedWith(refuseAsyncFs('readFile', hooks, 'EACCES'), () => parsePluginJsonFiles(root));
+      expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
+      expect((error as Error).message).toContain('EACCES');
+      expect((error as Error).message).not.toContain('not valid JSON');
+    });
+
+    it('readAuthorPluginJson: absent is undefined, refused and not-JSON are INPUT_UNREADABLE', async () => {
+      const root = createTempDir();
+      expect(readAuthorPluginJson(root)).toBeUndefined();
+
+      mkdirSyncReal(safePath.join(root, '.claude-plugin'), { recursive: true });
+      const manifest = safePath.join(root, '.claude-plugin', 'plugin.json');
+      await writeFile(manifest, '{ not json');
+      expect(refusalCodeOf(await refusedWith(() => undefined, async () => readAuthorPluginJson(root)))).toBe('INPUT_UNREADABLE');
+
+      await writeFile(manifest, '{"name":"p"}');
+      expect(readAuthorPluginJson(root)).toStrictEqual({ name: 'p' });
+      const error = await refusedWith(refuseSyncFs('readFileSync', manifest, 'EACCES'), async () => readAuthorPluginJson(root));
+      expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
     });
   });
 });

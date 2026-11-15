@@ -181,10 +181,15 @@ export async function getOrCreateGitTracker(gitRoot: string): Promise<GitTracker
  * {@link resetGitTrackerCache} itself between phases, exactly as this module's
  * own tests do in `beforeEach`.
  */
-export const gitTrackerForProjectRoot: GitTrackerSource = async (projectRoot) => {
-  const gitRoot = gitFindRoot(projectRoot);
+export const gitTrackerForProjectRoot: GitTrackerSource = (projectRoot) => {
+  let gitRoot: string | null;
+  try {
+    gitRoot = gitFindRoot(projectRoot);
+  } catch (error) {
+    return Promise.reject(error as Error);
+  }
   if (gitRoot === null) {
-    return undefined;
+    return Promise.resolve(undefined);
   }
   // No catch, deliberately. "Not a repository" and "git did not answer" are
   // both absorbed INSIDE `GitTracker.initialize()` (a null listing, a tracker
@@ -256,9 +261,12 @@ const REPO_SOURCE: SkillTreeProvenance = 'repo-source';
  * Canonicalising the SKILL.md before deriving the git root is what keeps the
  * second fix honest — the tracker's own keys are built from the root it is given,
  * so a canonical lookup against a non-canonical root would miss every time.
+ *
+ * @param within - The tree `filePath` was crawled in (the audit's scan root), whose links are read
+ *   before the kernel follows them; `filePath` itself when it is the operator's own path
  */
-function canonicalPath(filePath: string): string {
-  return toForwardSlash(normalizePath(safePath.resolve(filePath)));
+function canonicalPath(filePath: string, within: string): string {
+  return toForwardSlash(normalizePath(safePath.resolve(filePath), { within }));
 }
 
 /**
@@ -291,7 +299,8 @@ function isUnderClaudeInstallRoot(canonicalAbsolutePath: string): boolean {
   // marketplacesDir is nested under pluginsDir; listed anyway so the set reads as
   // the three install destinations rather than as an accident of layout.
   return [pluginsDir, skillsDir, marketplacesDir].some((dir) =>
-    isWithin(canonicalPath(dir), canonicalAbsolutePath),
+    // An install root is the operator's own configuration (`CLAUDE_CONFIG_DIR`/`HOME`), never a crawled entry.
+    isWithin(canonicalPath(dir, dir), canonicalAbsolutePath),
   );
 }
 
@@ -299,8 +308,8 @@ function isUnderClaudeInstallRoot(canonicalAbsolutePath: string): boolean {
  * Classify the tree holding `skillMdPath`. See this module's header for the
  * reasoning behind each clause and the order they are applied in.
  */
-export async function classifyScannedSkillTree(skillMdPath: string): Promise<SkillTreeProvenance> {
-  const absolute = canonicalPath(skillMdPath);
+export async function classifyScannedSkillTree(skillMdPath: string, within: string): Promise<SkillTreeProvenance> {
+  const absolute = canonicalPath(skillMdPath, within);
   const memoized = provenanceCache.get(absolute);
   if (memoized !== undefined) {
     return memoized;
@@ -348,8 +357,8 @@ async function classifyUncached(absolute: string): Promise<SkillTreeProvenance> 
  * skill, and a scan rooted above `<claudeDir>/skills` reaches an install root
  * from outside one.
  */
-export async function crawlOwnsSubtree(skillMdPath: string): Promise<boolean> {
-  return (await classifyScannedSkillTree(skillMdPath)) !== REPO_SOURCE;
+export async function crawlOwnsSubtree(skillMdPath: string, within: string): Promise<boolean> {
+  return (await classifyScannedSkillTree(skillMdPath, within)) !== REPO_SOURCE;
 }
 
 /**
@@ -367,7 +376,7 @@ export async function crawlOwnsSubtree(skillMdPath: string): Promise<boolean> {
  * a relativizer shared by ~20 producers, and only its CALLER knows whether "the
  * anchor root itself" is a subject its findings can have; for the producers that
  * anchor a file against a containing directory, subject-equals-anchor cannot
- * happen at all. The sibling `Location: (validation.allow.<CODE>)` findings look
+ * happen at all. The sibling `(validation.allow.<CODE>): …` findings look
  * like this defect and are NOT it: those are `ALLOW_UNUSED`/`ALLOW_EXPIRED` meta
  * issues that carry no `location` whatsoever (only a `field` pointing into the
  * project config), which `formatIssueAnchor` renders as `(field)` on purpose.
@@ -409,11 +418,11 @@ export async function distributedTreeFindings(
   crawlTree: boolean,
 ): Promise<ValidationIssue[]> {
   if (!crawlTree) return [];
-  const provenance = await classifyScannedSkillTree(skillPath);
+  const provenance = await classifyScannedSkillTree(skillPath, locationRoot);
   if (provenance === REPO_SOURCE) return [];
 
   const treeRoot = safePath.resolve(skillPath, '..');
-  const present = detectPackagedAgentInstructionFiles(treeRoot, locationRoot, []);
+  const present = detectPackagedAgentInstructionFiles(treeRoot, locationRoot, [], []);
   if (provenance === 'distributed') return present;
 
   // Provenance is unknown. Report the unknown, not the files: calling them

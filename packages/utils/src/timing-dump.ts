@@ -50,6 +50,7 @@
 
 import { writeFileSync } from 'node:fs';
 
+import { isAlreadyExistsError } from './errors/errno-table.js';
 import { safePath } from './path-core.js';
 import { mkdirSyncReal } from './path-utils.js';
 
@@ -149,16 +150,23 @@ export function reportTimingDumpFailure(noun: string, target: string, error: unk
  *
  * Done once when the seam turns on rather than at exit, so a bad path is
  * reported while there is still a run to abandon — and so the exit handler does
- * the minimum possible work.
+ * the minimum possible work. A seam takes the answer as its directory: on a
+ * failure it is `null`, so the seam is off and no later write reports the same
+ * failure again.
  *
  * @param noun - What the seam is called, for the failure line
- * @param directory - Directory dumps will be written to
+ * @param directory - Directory dumps will be written to, or `null` for a seam that is off
+ * @returns The directory, or `null` when the seam is off or the directory could
+ *   not be made (and the failure has been reported, once)
  */
-export function ensureTimingDirectory(noun: string, directory: string): void {
+export function ensureTimingDirectory(noun: string, directory: string | null): string | null {
+  if (directory === null) return null;
   try {
     mkdirSyncReal(directory, { recursive: true });
+    return directory;
   } catch (error) {
     reportTimingDumpFailure(noun, directory, error);
+    return null;
   }
 }
 
@@ -195,16 +203,6 @@ function timingDumpCandidate(directory: string, stem: string, collision: number)
 }
 
 /**
- * Whether a caught write failure means somebody else already holds the name.
- *
- * @param error - Whatever `writeFileSync` threw
- * @returns `true` only for `EEXIST`, which is a lost race and not a fault
- */
-function isNameAlreadyTaken(error: unknown): boolean {
-  return error instanceof Error && 'code' in error && error.code === 'EEXIST';
-}
-
-/**
  * Claim a name by creating it, and fill it in the same operation.
  *
  * Choosing the name and writing it CANNOT be two steps: whatever separates them
@@ -227,7 +225,7 @@ function claimTimingDump(directory: string, basename: string, contents: string):
       writeFileSync(candidate, contents, { encoding: 'utf-8', flag: EXCLUSIVE_CREATE });
       return { outcome: 'written', path: candidate };
     } catch (error) {
-      if (!isNameAlreadyTaken(error)) return { outcome: 'failed', path: candidate, error };
+      if (!isAlreadyExistsError(error)) return { outcome: 'failed', path: candidate, error };
     }
   }
   return {

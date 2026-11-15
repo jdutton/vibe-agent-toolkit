@@ -7,7 +7,7 @@
  * and are silently skipped.
  */
 
-import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { anchoredAt, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { issueLocation } from '@vibe-agent-toolkit/utils';
 
 import type { MarketplaceInventory } from '../types.js';
@@ -18,8 +18,7 @@ export function detectMarketplacePluginSourceMissing(inv: MarketplaceInventory, 
 		.map(p => ({
 			severity: 'error' as const,
 			code: 'MARKETPLACE_PLUGIN_SOURCE_MISSING' as const,
-			message: `Marketplace declares plugin with source "${p.manifestPath}" but the path does not exist.`,
-			location: issueLocation(p.resolvedPath, locationRoot),
+			...anchoredAt(`Marketplace declares plugin with source "${p.manifestPath}" but the path does not exist.`, issueLocation(p.resolvedPath, locationRoot)),
 			fix: 'Correct the source path or remove the entry from marketplace.plugins[].',
 		}));
 }

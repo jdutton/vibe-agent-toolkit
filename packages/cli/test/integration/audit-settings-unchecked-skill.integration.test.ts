@@ -64,7 +64,7 @@ function auditPlugin(pluginDir: string): ReturnType<typeof auditWithSettings> {
 }
 
 function issueCodes(report: Report): string[] {
-  return report.files.flatMap((f) => f.issues ?? []).map((i) => i.code);
+  return report.findings.map((i) => i.code);
 }
 
 describe('vat audit --compat --settings with a skill whose frontmatter cannot be parsed', () => {

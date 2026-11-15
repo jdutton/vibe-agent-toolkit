@@ -14,9 +14,8 @@ import { readWorkspaceGraph } from '../src/workspace-graph.js';
  * vitest.config.ts — the UNIT config — whose `exclude` drops
  * `**\/*.integration.test.ts` and `**\/*.system.test.ts`. The suite therefore
  * runs NOWHERE while the script still exits 0, so CI stays green and nobody
- * notices. That is exactly what happened to agent-config, agent-skills,
- * dev-tools, gateway-mcp and rag: five packages shipped a
- * vitest.integration.config.ts whose tests had never executed.
+ * notices: a package can ship a vitest.integration.config.ts whose tests have
+ * never executed.
  *
  * The guard is driven off TWO independent signals, either of which is enough
  * to pull a package into scope: a suite config file on disk, OR matching

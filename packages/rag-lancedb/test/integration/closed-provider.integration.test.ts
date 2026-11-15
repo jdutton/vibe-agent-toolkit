@@ -26,6 +26,7 @@ import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
+import { listAllTableNames } from '../../src/table-names.js';
 import {
   createStubEmbeddingProvider,
   createTestMarkdownFile,
@@ -42,7 +43,7 @@ afterEach(suite.afterEach);
  */
 async function tablesOnDisk(): Promise<string[]> {
   const connection = await lancedb.connect(suite.dbPath);
-  const names = await connection.tableNames();
+  const names = await listAllTableNames(connection);
   connection.close();
   return names.sort((x, y) => x.localeCompare(y));
 }

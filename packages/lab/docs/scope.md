@@ -58,11 +58,9 @@ and `src/qa-snapshot/` stay exactly where they are, reachable only by writing a 
 `src/` rather than under `test/` because no test file in this repo is typechecked and their
 compile-time exhaustiveness guards would assert nothing from there.
 
-> Its three whole-command stdout/exit captures already go through `spawnSync` of the vat binary, so
-> that third of the instrument *is* lab-shaped and is the piece still to move here, as an output-diff
-> facet. The split is already latent in the existing artifact set. ⚠️ It has no caller at all today —
-> `captureSnapshot`'s `includeCommands` is now only ever passed `false`, because `vat pipeline
-> snapshot` was the one caller that passed `true`.
+> Its three whole-command stdout/exit captures were the lab-shaped third of the instrument, and
+> they have moved: they are the `verdict` facet ([Facets](facets.md#the-verdict-facet)), which
+> absorbed them together with the one output normalizer. `captureSnapshot` is the oracle half only.
 >
 > Removing the verb recovers `dist/pipeline-oracles` + `dist/qa-snapshot` + `dist/commands/pipeline`
 > from the published tarball. Measured with `npm pack --dry-run --json`, not `du -sk` — which pads

@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { acquireHarnessLock, HarnessLockBusyError, installSignalCleanup } from '../../src/skill-test/lock.js';
@@ -25,6 +26,14 @@ describe('acquireHarnessLock', () => {
   it('acquires then releases', () => {
     const lock = acquireHarnessLock(root);
     expect(() => lock.release()).not.toThrow();
+  });
+
+  // A lockfile the OS will not let the run create (a full disk, a read-only root) is
+  // the run not finishing — RUN_INCOMPLETE — never an uncoded errno (INTERNAL_ERROR).
+  it('codes a lockfile the OS refuses to create as the run\'s output (a destination fault)', async () => {
+    await withSyncFsRefused('openSync', safePath.join(root, '.vat-skill-test.lock'), 'ENOSPC', () => {
+      expect(() => acquireHarnessLock(root)).toThrow(expect.objectContaining({ code: 'FS_FAULT', side: 'destination', faultClass: 'exhausted' }));
+    });
   });
 
   it('a second acquire fails fast while held', () => {
@@ -93,41 +102,57 @@ describe('acquireHarnessLock', () => {
   });
 });
 
+/** The raise and the exit, stubbed: what dying of the signal would have done to this process. */
+function stubEnding(): ReturnType<typeof vi.spyOn> {
+  vi.spyOn(process, 'kill').mockImplementation(() => true);
+  vi.spyOn(Atomics, 'wait').mockImplementation(() => 'timed-out');
+  return vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+}
+
 describe('installSignalCleanup', () => {
-  it('registers SIGINT and SIGTERM handlers and removes them on dispose', () => {
-    const beforeInt = process.listenerCount('SIGINT');
-    const beforeTerm = process.listenerCount('SIGTERM');
+  const SIGNALS = ['SIGTERM', 'SIGHUP', 'SIGINT', 'SIGQUIT', 'SIGBREAK'] as const;
+  const counts = (): number[] => SIGNALS.map((signal) => process.listenerCount(signal));
 
-    const remove = installSignalCleanup({ onSignal: () => {}, exit: () => {} });
-    expect(process.listenerCount('SIGINT')).toBe(beforeInt + 1);
-    expect(process.listenerCount('SIGTERM')).toBe(beforeTerm + 1);
-
-    remove();
-    expect(process.listenerCount('SIGINT')).toBe(beforeInt);
-    expect(process.listenerCount('SIGTERM')).toBe(beforeTerm);
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
-  it('runs onSignal and exits 130 on SIGINT, self-removing the handler', () => {
-    let cleaned = false;
-    const exitCodes: number[] = [];
-    installSignalCleanup({ onSignal: () => { cleaned = true; }, exit: (c) => { exitCodes.push(c); } });
+  it('guards every terminating signal and removes the guard on dispose', () => {
+    const before = counts();
 
-    const before = process.listenerCount('SIGINT');
-    process.emit('SIGINT');
+    const guard = installSignalCleanup(() => Promise.resolve());
+    expect(counts()).toStrictEqual(before.map((count) => count + 1));
 
-    expect(cleaned).toBe(true);
-    expect(exitCodes).toEqual([130]); // 128 + SIGINT(2)
-    // The handler removed itself, so no listener leaks even on the signal path.
-    expect(process.listenerCount('SIGINT')).toBe(before - 1);
+    expect(guard.release()).toBe(true);
+    expect(counts()).toStrictEqual(before);
   });
 
-  it('exits 143 on SIGTERM', () => {
-    const exitCodes: number[] = [];
-    const remove = installSignalCleanup({ onSignal: () => {}, exit: (c) => { exitCodes.push(c); } });
+  // 🚨 A terminal Ctrl-C under the `vat` wrapper delivers SIGINT twice. The handler used to remove
+  // itself on the first, so the second met the default disposition mid-cleanup and leaked the lock.
+  it('runs onSignal ONCE, swallows a repeat while it runs, and ends only once it has settled', async () => {
+    const exit = stubEnding();
+    const before = counts();
+    let finishCleanup: () => void = () => {};
+    const onSignal = vi.fn(() => new Promise<void>((resolve) => { finishCleanup = resolve; }));
+    installSignalCleanup(onSignal);
 
-    process.emit('SIGTERM');
-    expect(exitCodes).toEqual([143]); // 128 + SIGTERM(15)
+    process.emit('SIGINT', 'SIGINT');
+    process.emit('SIGINT', 'SIGINT');
+    await Promise.resolve();
 
-    remove(); // idempotent after the handler already self-removed
+    expect(onSignal).toHaveBeenCalledOnce();
+    expect(counts()).toStrictEqual(before.map((count) => count + 1));
+    expect(exit).not.toHaveBeenCalled();
+    finishCleanup();
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(2); });
+    expect(counts()).toStrictEqual(before);
+  });
+
+  it('ends even when cleanup rejects', async () => {
+    const exit = stubEnding();
+    installSignalCleanup(() => Promise.reject(new Error('cleanup failed')));
+
+    process.emit('SIGTERM', 'SIGTERM');
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(2); });
   });
 });

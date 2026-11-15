@@ -15,6 +15,8 @@
  * are chosen to be the *nearest miss* rather than an obviously different shape.
  */
 
+import { sep } from 'node:path';
+
 import { compareCodeUnits } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -239,7 +241,8 @@ describe('pluginRootsFrom', () => {
     expect(pluginRootsFrom([path as string]).size).toBe(0);
   });
 
-  it('normalises separators and case, like the classifier does', () => {
+  // Gated: the input is a NATIVE path, and a backslash is a separator only on win32 (a filename character on POSIX).
+  it.skipIf(sep !== '\\')('normalises separators and case, like the classifier does', () => {
     expect([...pluginRootsFrom([String.raw`Plugins\Mine\.claude-plugin\plugin.json`])]).toEqual(['plugins/mine']);
   });
 });
@@ -247,7 +250,8 @@ describe('pluginRootsFrom', () => {
 describe('classifyPath — normalisation', () => {
   // Deleting toForwardSlash() left the predecessor's suite green: no fixture
   // carried a Windows separator, and every matcher compares '/' literally.
-  it('classifies a Windows-shaped path', () => {
+  // Gated: the input is a NATIVE path, and a backslash is a separator only on win32 (a filename character on POSIX).
+  it.skipIf(sep !== '\\')('classifies a Windows-shaped path', () => {
     expect(tagsOf(String.raw`packages\cli\.claude\rules\x.md`, 'x.md')).toContain(RULES_FILE);
     expect(tagsOf(String.raw`apps\web\.claude\agents\a.md`, 'a.md')).toContain(SUBAGENT);
   });
@@ -257,6 +261,14 @@ describe('classifyPath — normalisation', () => {
   it('classifies an upper-cased directory', () => {
     expect(tagsOf('.CLAUDE/RULES/x.md', 'x.md')).toContain(RULES_FILE);
     expect(tagsOf('Packages/CLI/.Claude/Agents/A.md', 'a.md')).toContain(SUBAGENT);
+  });
+
+  // The directory is looked up by name, so its case is the filesystem's; the
+  // extension is a string test on the `readdir` name (`Le.name.endsWith(".md")`
+  // in `Lke`, docs/external/claude-code-memory-loader.md), exact on every OS.
+  it('never classifies a rules file whose extension is not exactly `.md`', () => {
+    expect(tagsOf('.claude/rules/LOUD.MD', 'loud.md')).not.toContain(RULES_FILE);
+    expect(tagsOf('.claude/rules/Mixed.Md', 'mixed.md')).not.toContain(RULES_FILE);
   });
 });
 

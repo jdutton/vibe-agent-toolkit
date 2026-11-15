@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/rag-lancedb",
-  "version": "0.2.0-rc.8",
+  "version": "0.2.0-rc.15",
   "type": "module",
   "description": "LanceDB implementation of RAG interfaces for vibe-agent-toolkit",
   "keywords": [
@@ -12,7 +12,7 @@
   "author": "Jeff Dutton",
   "license": "MIT",
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.16.0"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -33,10 +33,11 @@
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:system": "vitest run --config vitest.system.config.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "VAT_LINT_TASK=1 eslint . --max-warnings=0"
   },
   "dependencies": {
-    "@lancedb/lancedb": "^0.23.0",
+    "@lancedb/lancedb": "^0.39.0",
     "@vibe-agent-toolkit/rag": "workspace:*",
     "@vibe-agent-toolkit/resources": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",

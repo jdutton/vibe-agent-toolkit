@@ -8,7 +8,7 @@
  * promises to fail loudly on.
  */
 
-import { readContentWithKey } from '@vibe-agent-toolkit/resources';
+import { ParseLimitError, readContentWithKey } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -47,5 +47,13 @@ describe('a path the snapshot cannot read', () => {
     await expect(
       captureParseFactSnapshot(fixture.absolutePaths(), { corpusRoot: fixture.root(), corpus: 'x' }),
     ).rejects.toMatchObject({ code: 'EACCES' });
+  });
+
+  it('skips one its read refused at the parse input cap, as it skips a parse the pool refused', async () => {
+    vi.mocked(readContentWithKey).mockRejectedValueOnce(new ParseLimitError('inputBytes', 8, 9));
+
+    const snapshot = await captureParseFactSnapshot(fixture.absolutePaths(), { corpusRoot: fixture.root(), corpus: 'x' });
+
+    expect(snapshot.rows).toStrictEqual([]);
   });
 });

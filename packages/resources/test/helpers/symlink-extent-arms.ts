@@ -20,10 +20,11 @@
  * defect this pair now covers lived in exactly one arm.
  */
 
+import { forEachInOrder } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll } from 'vitest';
 
 import type { ExtentContribution } from '../../src/projection/contributor.js';
-import { FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
+import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
 import {
   FilesystemCrawlSource,
   GitCrawlSource,
@@ -50,8 +51,8 @@ export const WALK_ARM = 'walk, followSymlinks: false';
 export const GIT_ARM = 'git snapshot + prune list';
 
 export const SYMLINK_ARMS: readonly (readonly [string, (root: string) => CrawlSource])[] = [
-  [WALK_ARM, (root: string): CrawlSource => new FilesystemCrawlSource(root)],
-  [GIT_ARM, (root: string): CrawlSource => new GitCrawlSource(root)],
+  [WALK_ARM, (root: string): CrawlSource => new FilesystemCrawlSource(root, [])],
+  [GIT_ARM, (root: string): CrawlSource => new GitCrawlSource(root, [])],
 ];
 
 /** Live access to one planted fixture and the contribution each arm produced. */
@@ -106,13 +107,15 @@ export function setupSymlinkExtentSuite(spec: SymlinkFixtureSpec): SymlinkExtent
 
   beforeAll(async () => {
     planted = plantSymlinkFixture(spec);
-    for (const [label, sourceFor] of SYMLINK_ARMS) {
+    const root = planted.root;
+    // One arm at a time over the same planted tree.
+    await forEachInOrder(SYMLINK_ARMS, async ([label, sourceFor]) => {
       const { contribution } = await buildExtentContribution(
-        planted.root,
-        new FilesystemExtentContributor(sourceFor),
+        root,
+        new FilesystemExtentContributor(sourceFor, DEFAULT_CONTENT_DEMAND),
       );
       byArm.set(label, contribution);
-    }
+    });
   });
 
   afterAll(() => {

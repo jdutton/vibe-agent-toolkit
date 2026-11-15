@@ -1,4 +1,5 @@
 import { writeFileSync } from 'node:fs';
+import { sep } from 'node:path';
 
 import { beforeAll, beforeEach, afterAll, describe, expect, it } from 'vitest';
 
@@ -6,6 +7,7 @@ import {
   BUILD_OUTPUT_GLOBS,
   crawlDirectorySync,
   crawlPathFilter,
+  NEVER_CONTENT_GLOBS,
   NEVER_CRAWL_GLOBS,
 } from '../src/file-crawler.js';
 import { mkdirSyncReal, safePath, toForwardSlash } from '../src/path-utils.js';
@@ -49,6 +51,44 @@ describe('the canonical crawl-exclusion lists', () => {
   });
 });
 
+describe('NEVER_CONTENT_GLOBS — the never-authored part of NEVER_CRAWL_GLOBS', () => {
+  it('is exactly dependencies, git internals, worktree copies and staging residue', () => {
+    expect([...NEVER_CONTENT_GLOBS]).toEqual([
+      '**/node_modules/**',
+      '**/.git/**',
+      '**/.worktrees/**',
+      '**/.claude/worktrees/**',
+      '**/.*.vat-staged-*',
+      '**/.*.vat-staged-*/**',
+    ]);
+  });
+
+  it('is NEVER_CRAWL_GLOBS less only the tool-output names an author may also use', () => {
+    expect(NEVER_CRAWL_GLOBS.filter((glob) => !NEVER_CONTENT_GLOBS.includes(glob)).toSorted((a, b) => a.localeCompare(b)))
+      .toEqual(['**/.test-output/**', '**/.turbo/**', '**/coverage/**']);
+  });
+
+  it('cannot be mutated by a consumer, and neither can the lists it is composed beside', () => {
+    expect(Object.isFrozen(NEVER_CONTENT_GLOBS)).toBe(true);
+    expect(Object.isFrozen(NEVER_CRAWL_GLOBS)).toBe(true);
+    expect(Object.isFrozen(BUILD_OUTPUT_GLOBS)).toBe(true);
+  });
+});
+
+describe('a build\'s staging residue is never crawled', () => {
+  const isMember = crawlPathFilter(['**/*'], [...NEVER_CRAWL_GLOBS]);
+
+  it('excludes a staged tree, everything under it, and a staged file', () => {
+    expect(isMember('out/.skill.vat-staged-0a1b2c3d')).toBe(false);
+    expect(isMember('out/.skill.vat-staged-0a1b2c3d/SKILL.md')).toBe(false);
+    expect(isMember('.SKILL.md.vat-staged-0a1b2c3d.previous')).toBe(false);
+  });
+
+  it('admits a name that merely mentions the infix without the leading dot', () => {
+    expect(isMember('notes/skill.vat-staged-0a1b2c3d/SKILL.md')).toBe(true);
+  });
+});
+
 describe('crawlPathFilter — the one matcher both crawl lanes and the projection share', () => {
   it('excludes a directory named by a directory-shaped glob, via the trailing-slash retry', () => {
     const isMember = crawlPathFilter(['**/*'], ['docs/legacy/**']);
@@ -72,10 +112,19 @@ describe('crawlPathFilter — the one matcher both crawl lanes and the projectio
     expect(isMember('.claude/skills/a.md')).toBe(true);
   });
 
-  it('normalizes separators, so a Windows-shaped path meets the same globs', () => {
+  // Gated: the filter takes NATIVE paths, and `docs\guide.md` is a nested native path only on win32.
+  it.skipIf(sep !== '\\')('normalizes separators, so a Windows-shaped path meets the same globs', () => {
     const isMember = crawlPathFilter(['docs/**/*.md'], []);
 
     expect(isMember(String.raw`docs\guide.md`)).toBe(true);
+  });
+
+  // Gated: on win32 the backslash is a separator, and the case above is the contract there.
+  it.skipIf(sep === '\\')('keeps a POSIX backslash as a filename character, so the name sits at the root', () => {
+    const isMember = crawlPathFilter(['docs/**/*.md'], []);
+
+    expect(isMember(String.raw`docs\guide.md`)).toBe(false);
+    expect(isMember('docs/guide.md')).toBe(true);
   });
 });
 
@@ -106,7 +155,7 @@ describe('.turbo is excluded by the crawler that ships, not just by the list', (
     writeFileSync(safePath.join(tempDir, 'docs', 'guide.md'), '# Guide');
      
 
-    const found = crawlDirectorySync({ baseDir: tempDir, unreadable: refuseUnreadableFixture(tempDir), respectGitignore: false }).map((p) =>
+    const found = crawlDirectorySync({ outputs: [], baseDir: tempDir, unreadable: refuseUnreadableFixture(tempDir), respectGitignore: false }).map((p) =>
       toForwardSlash(p),
     );
 

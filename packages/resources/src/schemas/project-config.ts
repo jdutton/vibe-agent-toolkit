@@ -1,5 +1,5 @@
 import { ValidationConfigSchema } from '@vibe-agent-toolkit/schema';
-import { globMagicRemainder, hasParentTraversalSegment, isAbsoluteAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { globMagicRemainder, hasParentTraversalSegment, isAbsoluteAnyPlatform, isSingleFsSegment } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 import {
@@ -8,6 +8,8 @@ import {
   isArdNameSegment,
   isArdPublisherDomain,
 } from '../ard/entry-schema.js';
+import { NOT_ADMITTED_CODE_LIST } from '../not-admitted.js';
+import { BUILTIN_CHECK_NAMES } from '../projection/builtin-check-names.js';
 
 import { LinkAuthConfigSchema } from './link-auth.js';
 import { ReferenceSyntacticFormSchema } from './projection-blobs.js';
@@ -180,6 +182,13 @@ export type CollectionConfig = z.infer<typeof CollectionConfigSchema>;
  *
  * See `projection/sql-checks.ts` for how rows become findings.
  */
+/**
+ * What a check's `examined` statement must return — the ONE statement of that contract. The
+ * config description, the `allowEmpty` refusal, the runtime refusal's `reason.allowed` and the
+ * CLI's help all quote it, so a change to the contract is a change to this line.
+ */
+export const EXAMINED_ALLOWED = 'exactly one row with one column holding a non-negative integer, as SELECT COUNT(*) returns';
+
 export const ResourceCheckSchema = z.object({
   description: z.string().min(1)
     .describe('What this check asserts, in the author\'s own words. REQUIRED: it becomes the finding\'s message, and a check whose intent is only inferable from its SQL is one nobody can review or act on.'),
@@ -187,8 +196,25 @@ export const ResourceCheckSchema = z.object({
     .describe('One read-only SQL statement selecting the VIOLATING rows — zero rows is a pass. It must BEGIN with `SELECT`, `WITH` or `VALUES`; the first significant token decides, and anything else — `ATTACH`, `PRAGMA`, `EXPLAIN`, any write — is refused before it reaches SQLite, because a statement the engine accepts without producing rows cannot be told apart from a check that passed. (`EXPLAIN` is refused even though it is side-effect free: it is a PREFIX, and admitting one would mean deciding safety by looking past the first token.) Each returned row becomes one finding; a selected `path` column anchors that finding to the file. Runs against the same projection `vat resources query` reads, under PRAGMA query_only. A second statement is refused — SQLite would compile only the first and discard the rest without error — but a COMMENT after the terminating semicolon is accepted (`... ;  -- see ADR-14`), which SQL written as a YAML block scalar ends with routinely.'),
   severity: z.enum(['error', 'warning', 'info'])
     .optional()
-    .describe('How a violation is reported. Defaults to `error` — the safe direction, since a check whose author did not think about severity is still an assertion they wanted enforced. An adopter can override it per code through resources.validation.severity, including to `ignore`.'),
-}).strict().describe('A SQL assertion over the resource projection');
+    .describe('How a violation is reported; a row whose `finding_severity` column holds `error`, `warning` or `info` overrides it for that row. Defaults to `error` — the safe direction, since a check whose author did not think about severity is still an assertion they wanted enforced. An adopter can override it per code through resources.validation.severity, including to `ignore`.'),
+  examined: z.string().min(1).optional()
+    .describe(`A second read-only SQL statement over the same projection that returns ONE count — ${EXAMINED_ALLOWED} — of what this check ranged over, e.g. \`SELECT COUNT(*) FROM resource_realizations WHERE path LIKE 'skills/%'\` for a check about skills. Any other result is RESOURCE_CHECK_BROKEN with a \`reason\` naming what came back. The violations statement cannot reveal its own denominator: zero violations over a thousand files and zero violations over nothing are the same answer. Declared, the count is published on the check's \`checks[]\` entry as \`examined\`, and a count of 0 is refused as RESOURCE_CHECK_EXAMINED_NOTHING (error, not overridable) unless \`allowEmpty: true\`. Held to every rule \`sql\` is (it must begin with SELECT, WITH or VALUES; one statement), timed and charged to this check, and a failure to run it is RESOURCE_CHECK_BROKEN.`),
+  allowEmpty: z.literal(true).optional()
+    .describe('Declare that an `examined` count of 0 is a legitimate answer for this check — a rule about a directory that may not exist yet. The run then passes over zero and publishes `examined: 0` beside `allowEmpty: true`, so the exemption is visible in every report. Only valid with `examined`: without one there is no count for it to excuse, and the config is refused. Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead.'),
+}).strict().superRefine((check, context) => {
+  // 🔑 Refused rather than ignored: `allowEmpty` alone reads as protection the
+  // check does not have — nothing is counted, so nothing is ever refused, and
+  // the line would sit in a config looking like a decision someone made.
+  if (check.allowEmpty === true && check.examined === undefined) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['allowEmpty'],
+      message: '`allowEmpty` only excuses an `examined` count of 0, and this check declares no `examined` statement.'
+        + ` Either declare \`examined\` (a statement returning ${EXAMINED_ALLOWED}: the count of what the check`
+        + ' ranges over) or remove `allowEmpty`.',
+    });
+  }
+}).describe('A SQL assertion over the resource projection');
 
 export type ResourceCheck = z.infer<typeof ResourceCheckSchema>;
 
@@ -229,8 +255,18 @@ export const ResourcesConfigSchema = z.object({
     .describe('Validation framework config: severity overrides and per-code allow entries (applied inside ResourceRegistry.validate)'),
   linkAuth: LinkAuthConfigSchema.optional()
     .describe('Authenticated external link resolution config (issue #113 / link-auth engine)'),
-  checks: z.record(z.string(), ResourceCheckSchema).optional()
-    .describe('Named SQL assertions over the resource projection, run by `vat resources check`. Each key becomes a CUSTOM:<name> validation code.'),
+  checks: z.record(z.string(), ResourceCheckSchema).superRefine((checks, context) => {
+    // 🔑 One identity per check: findings, the progress log and cost records are keyed on the name.
+    for (const name of Object.keys(checks).filter((key) => BUILTIN_CHECK_NAMES.includes(key))) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [name],
+        message: `"${name}" is a built-in check's name, and the built-in always runs, so rename this check`
+          + ' (a copy of a built-in\'s sqlTwin needs a name of its own).',
+      });
+    }
+  }).optional()
+    .describe('Named SQL assertions over the resource projection, run by `vat resources check`. Each key becomes a CUSTOM:<name> validation code. A key may not be a built-in check\'s name.'),
 }).strict().describe('Resources section of project configuration');
 
 export type ResourcesConfig = z.infer<typeof ResourcesConfigSchema>;
@@ -338,7 +374,7 @@ export type SkillExecutableEntry = z.infer<typeof SkillExecutableEntrySchema>;
 /**
  * A typed "skill source" descriptor as it appears in vibe-agent-toolkit.config.yaml.
  *
- * This is the CONFIG representation. Task 13's staging maps it onto Plan 1's
+ * This is the CONFIG representation. Staging maps it onto the
  * runtime `SkillSource` union before calling `resolveSkillSource`. Kept here so
  * `configure`/`run` parse a single strict source of truth.
  */
@@ -400,6 +436,27 @@ export const TestConfigSchema = z.object({
 export type TestConfig = z.infer<typeof TestConfigSchema>;
 
 /**
+ * A skill's `validation`: the shared framework config, less the codes a file not
+ * admitted is reported under. Those resolve under `resources.validation` alone —
+ * every skill lane splits them out before its own framework runs — so a skill
+ * key naming one would parse and do nothing. Refused here, naming where it goes.
+ */
+const SkillValidationConfigSchema = ValidationConfigSchema.superRefine((config, context) => {
+  for (const field of ['severity', 'allow'] as const) {
+    for (const code of Object.keys(config[field] ?? {})) {
+      if (!(NOT_ADMITTED_CODE_LIST as readonly string[]).includes(code)) continue;
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [field, code],
+        message: `\`${code}\` reports a file the resource crawl did not admit, and only`
+          + ' `resources.validation` resolves it — a skill\'s `validation` never sees it.'
+          + ` Move this \`${field}\` entry to \`resources.validation.${field}\`.`,
+      });
+    }
+  }
+});
+
+/**
  * Skill packaging configuration.
  *
  * Controls how a skill is bundled: link-follow depth, resource naming,
@@ -413,8 +470,8 @@ export const SkillPackagingConfigSchema = z.object({
   stripPrefix: z.string().optional(),
   excludeNavigationFiles: z.boolean().optional(),
   excludeReferencesFromBundle: ExcludeReferencesFromBundleSchema.optional(),
-  validation: ValidationConfigSchema.optional()
-    .describe('Validation framework config: severity overrides and per-path allow entries'),
+  validation: SkillValidationConfigSchema.optional()
+    .describe('Validation framework config: severity overrides and per-path allow entries. Not the codes of a file not admitted (RESOURCE_UNREADABLE, RESOURCE_PARSE_LIMIT_EXCEEDED, RESOURCE_PARSE_WORKER_DIED): those belong in resources.validation.'),
   targets: z.array(z.enum(['claude-chat', 'claude-cowork', 'claude-code'])).optional()
     .describe('Declared runtime targets for this skill. Suppresses non-applicable compat verdicts.'),
   files: z.array(SkillFileEntrySchema).optional().describe('Explicit source→dest file mappings for build artifacts, unlinked files, or routing overrides'),
@@ -592,16 +649,28 @@ export const ExtentDeclarationSchema = z.object({
   closureFrom: z.string().min(1)
     .describe('Root-relative path of the extent root — the one member admitted unconditionally, before any traversal. A reference that resolves BACK to it is skipped in silence: the root is a member by declaration, so a self-link has nothing left to refuse and nothing for the hop budget to hold back, and a row about it would contradict the admission. That is the same verdict walk-link-graph.ts gives a link back to its own skillRootPath.'),
   follow: z.array(ReferenceSyntacticFormSchema).default(['markdown-link', 'markdown-link-reference', 'markdown-definition'])
-    .describe('Which blob_references syntactic forms the closure traverses. Defaults to the three markdown forms; an @-prefixed or bare token is ambiguous at the blob layer, so following one is an explicit choice.'),
+    .describe('Which blob_references syntactic forms the closure traverses under the "href" dialect. Defaults to the three markdown forms; an @-prefixed or bare token is ambiguous at the blob layer, so following one is an explicit choice. MUST be [] under "claude-import", whose edges are harness_blob_imports rather than blob_references — a form list there would read as a filter that filters nothing.'),
   referenceDialect: ReferenceDialectSchema.default('href')
-    .describe('How this closure INTERPRETS the tokens it follows. Defaults to "href" — RFC 3986 through resolveLocalHref — so every declaration written before this field existed is unchanged. "claude-import" is the only correct reading of an at-prefixed token in a CLAUDE.md or .claude/rules file: a leading @ is stripped, ~/ expands to the home directory (landing OUTSIDE the corpus, which is the healthy state the vendor recommends for sharing instructions across worktrees), and a leading / is filesystem-absolute rather than root-relative. Inert data, so it rides onto zone_provenance.parameterSet verbatim and the store correctly treats two runs over one tree under different dialects as two different questions.'),
+    .describe('Which edges this closure follows and how it INTERPRETS them. Defaults to "href": blob_references rows of the follow forms, resolved under RFC 3986 through resolveLocalHref. "claude-import" is Claude Code\'s own @-import reading of a CLAUDE.md, rules file or anything they import: the edges are harness_blob_imports rows — the harness\'s extractor, not VAT\'s lexer — resolved as the harness resolves them: ~ and ~/ expand to the home directory (landing OUTSIDE the corpus, which is the healthy state the vendor recommends for sharing instructions across worktrees), a leading / is filesystem-absolute, anything else is relative to the importing file\'s directory, with no percent-decoding. Inert data, so it rides onto zone_provenance.parameterSet verbatim and the store correctly treats two runs over one tree under different dialects as two different questions.'),
   maxDepth: z.union([z.number().int().min(0), z.literal('full')]).default('full')
     .describe('Reference hops from the root, or "full" for an unbounded closure. Same union as skills packaging linkFollowDepth, so one concept has one spelling.'),
+  traverseGlobs: z.array(z.string().min(1)).min(1).nullable().default(null)
+    .describe('Which targets this closure walks THROUGH, as root-relative globs (dot files included). A target matching none is a LEAF: admitted as a member WITHOUT being charged against maxDepth — bundling it enqueues nothing, so there is no hop for the budget to bound — and never traversed, so its own references are not this extent\'s edges. Checked BEFORE the depth bound and AFTER the refusal cascade, which is the order walk-link-graph.ts checks them in. Null (the default) means every target is a door and every target is charged. An EMPTY list is refused: it would walk through nothing while reading like "no restriction". The build lanes declare the glob their registry crawls (["**/*.md"]), because walk-link-graph.ts traverses registry MEMBERS — a parser-kind rule is wider, since .txt and README parse as markdown yet ship unopened. The root is always traversed.'),
   refusals: z.array(ExtentRefusalRuleSchema).default([])
     .describe('ORDERED refusal cascade — FIRST MATCH WINS, and the winning rule\'s label is what the refusal reports as its condition code. THE ORDER IS BEHAVIOUR: a candidate matching two rules is attributed to the earlier one, the same way walk-link-graph.ts\'s classifyExclusion attributes a directory that is also pattern-matched to "directory-target" rather than to "pattern-matched". Never rewrite this as a set or a record. A refused candidate is neither admitted nor traversed through, so the subtree reachable only through it is refused with it.'),
   admitPaths: z.array(z.string().min(1)).default([])
     .describe('Exact root-relative paths admitted even when a refusals rule matches them. The same rule closureFrom already gets: an explicit declaration outranks a net, because a glob never named the file it caught. Checked BEFORE the cascade, so an admitted path never reports a refusal label. Matched by exact string equality against the root-relative, forward-slashed path — never a prefix or glob test, since the explicit-vs-glob distinction is the whole point of the field.'),
-}).strict().describe('A closure-defined extent declaration (zones.md §7.3)');
+}).strict().superRefine((declaration, context) => {
+  // One field, one meaning: under `claude-import` the edges are not
+  // blob_references rows, so a form list could only ever be ignored.
+  if (declaration.referenceDialect === 'claude-import' && declaration.follow.length > 0) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['follow'],
+      message: 'follow must be [] under referenceDialect "claude-import": its edges are harness_blob_imports rows, which no syntactic form selects',
+    });
+  }
+}).describe('A closure-defined extent declaration (zones.md §7.3)');
 
 export type ExtentDeclaration = z.infer<typeof ExtentDeclarationSchema>;
 
@@ -782,7 +851,14 @@ export type ClaudeMarketplaceConfig = z.infer<typeof ClaudeMarketplaceSchema>;
 export const ClaudeConfigSchema = z.object({
   managedSettings: z.string().optional()
     .describe('Path to managed-settings.json for schema validation (relative to config file)'),
-  marketplaces: z.record(z.string(), ClaudeMarketplaceSchema).optional()
+  // The name is a directory under dist/.claude/plugins/marketplaces/ that `vat claude plugin
+  // build` removes and rebuilds, so it must be exactly one path segment.
+  marketplaces: z.record(
+    z.string().refine(isSingleFsSegment, {
+      message: String.raw`marketplace name must be a single path segment (not empty, ".", or "..", and no "/", "\", NUL or drive prefix)`,
+    }),
+    ClaudeMarketplaceSchema,
+  ).optional()
     .describe('Named map of Claude plugin marketplaces (never singleton)'),
 }).strict().describe('Claude-specific project configuration');
 
@@ -1032,12 +1108,6 @@ export type ArdConfig = z.infer<typeof ArdConfigSchema>;
  * Complete project configuration schema.
  */
 export const ProjectConfigSchema = z.object({
-  // Accepted and ignored; the npm package version is the only version this
-  // project has. The strict schema decides whether a config can be read — no
-  // integer in the file gets a vote. The key stays declared so a config still
-  // carrying the historical `version: 1` is not refused as an unknown key.
-  version: z.unknown().optional()
-    .describe('Accepted and ignored. The npm package version is the only version VAT has; a `version:` key of any value is not read.'),
   skills: SkillsConfigSchema.optional()
     .describe('Skills discovery and packaging configuration'),
   resources: ResourcesConfigSchema.optional()

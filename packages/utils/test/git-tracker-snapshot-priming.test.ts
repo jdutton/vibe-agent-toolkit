@@ -65,7 +65,7 @@ function git(cwd: string, ...args: string[]): void {
  * Moving the same work into the test BODY puts it under `testTimeout` —
  * `platformTestTimeout`, 900 s on win32 — which is the budget sized for real
  * I/O. Nothing about the work changed; only which clock bounds it. This is also
- * exactly what the sibling suite `git-snapshot-cache.test.ts` already does, so
+ * exactly what the sibling suite `integration/git-snapshot-cache.integration.test.ts` already does, so
  * the two files now agree.
  *
  * ⛔ Do not "tidy" this back into a `beforeEach`, and do not answer it with a
@@ -98,7 +98,7 @@ describe('GitTracker priming from an open snapshot', () => {
     await withGitSnapshotCache(async () => {
       // Somebody else's snapshot — in production this is the projection store
       // taking one to key itself, before the tracker is ever initialized.
-      expect(gitTreeSnapshot({ cwd: root })).not.toBeNull();
+      expect(gitTreeSnapshot({ cwd: root }).ok).toBe(true);
 
       // Created AFTER, so the two routes now disagree about it.
       writeFileSync(safePath.join(root, APPEARED_AFTER), 'x\n');
@@ -145,7 +145,7 @@ describe('GitTracker priming from an open snapshot', () => {
     const root = makeRepo();
 
     await withGitSnapshotCache(async () => {
-      expect(gitTreeSnapshot({ cwd: root })).not.toBeNull();
+      expect(gitTreeSnapshot({ cwd: root }).ok).toBe(true);
       writeFileSync(safePath.join(root, APPEARED_AFTER), 'x\n');
 
       const tracker = new GitTracker(root);

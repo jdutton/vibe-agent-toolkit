@@ -7,9 +7,9 @@
  * - skillsDir (~/.claude/skills): legacy skills (symlinks or directories)
  */
 
-import { existsSync, lstatSync, readdirSync } from 'node:fs';
+import { lstatSync, readdirSync } from 'node:fs';
 
-import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { classifyFsFault, isPathAbsentError, isTreeChangeResidue, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
 
@@ -58,8 +58,9 @@ export function listLocalPlugins(paths: ClaudeUserPaths): PluginListResult {
 
 function collectPlugins(paths: ClaudeUserPaths): ListedPlugin[] {
   const plugins: ListedPlugin[] = [];
-  const installedPlugins = readInstalledPlugins(paths);
-  const knownMarketplaces = readKnownMarketplaces(paths);
+  // A listing only reads Claude's state: it is this verb's input.
+  const installedPlugins = readInstalledPlugins(paths, 'source');
+  const knownMarketplaces = readKnownMarketplaces(paths, 'source');
 
   for (const [pluginKey, entries] of Object.entries(installedPlugins.plugins)) {
     const atIdx = pluginKey.lastIndexOf('@');
@@ -83,12 +84,11 @@ function collectPlugins(paths: ClaudeUserPaths): ListedPlugin[] {
 function collectLegacySkills(paths: ClaudeUserPaths): ListedLegacySkill[] {
   const legacySkills: ListedLegacySkill[] = [];
 
-  if (!existsSync(paths.skillsDir)) return legacySkills;
-
   try {
     const entries = readdirSync(paths.skillsDir, { withFileTypes: true });
     for (const entry of entries) {
-      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+      // A tree-change leftover (`.<name>.vat-staged-*`) beside a skill is not a skill.
+      if (isTreeChangeResidue(entry.name) || (!entry.isDirectory() && !entry.isSymbolicLink())) continue;
       const skillPath = safePath.join(paths.skillsDir, entry.name);
       const stat = lstatSync(skillPath);
       legacySkills.push({
@@ -98,11 +98,14 @@ function collectLegacySkills(paths: ClaudeUserPaths): ListedLegacySkill[] {
       });
     }
   } catch (error) {
-    // A skillsDir (or an entry in it) that vanished between `existsSync` and the
-    // read is the concurrent-deletion race: the entries collected so far are the
-    // answer. A listing the OS REFUSES is not — reporting it as "no legacy skills"
-    // is the quiet answer that is wrong, so the refusal reaches `vat plugins list`.
-    if (!isPathAbsentError(error)) throw error;
+    // No skillsDir — or one (or an entry in it) that vanished during the read, the
+    // concurrent-deletion race — is no legacy skills beyond those collected so far.
+    // A listing the OS REFUSES is not: reporting it as "no legacy skills" is the
+    // quiet answer that is wrong, so the refusal reaches `vat plugins list`. The
+    // listing itself is the probe: nothing asks first whether the directory exists.
+    if (!isPathAbsentError(error)) {
+      throw classifyFsFault(error, { side: 'source', origin: 'content', action: 'list the legacy skills directory', path: paths.skillsDir });
+    }
   }
 
   return legacySkills;

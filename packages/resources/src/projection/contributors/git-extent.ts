@@ -40,8 +40,9 @@
 
 import {
   crawlDirectory,
-  NEVER_CRAWL_GLOBS,
+  NEVER_CONTENT_GLOBS,
 } from '@vibe-agent-toolkit/utils/crawl';
+import { gitNoAnswerError } from '@vibe-agent-toolkit/utils/git';
 
 import type {
   ResourceExtentRow,
@@ -104,8 +105,9 @@ export class GitExtentContributor implements ExtentContributor {
    *   git's answer, and narrowing it with globs would produce an extent whose
    *   name says "git" and whose membership does not.
    * @returns The git extent's context, resources, realizations and memberships
-   * @throws When the base carries no git oracle, or git did not answer for this
-   *   root — an empty git extent is a confident wrong answer, not a result
+   * @throws When the base carries no git oracle, or git gave no answer for this
+   *   root (`gitNoAnswerError`: a git missing from PATH, or the tree) — an empty
+   *   git extent is a confident wrong answer, not a result
    */
   async contribute(base: ProjectionBase, _parameters: JsonValue): Promise<ExtentContribution> {
     const tracker = base.gitTracker;
@@ -118,9 +120,9 @@ export class GitExtentContributor implements ExtentContributor {
     }
     await tracker.initialize({ includeUntracked: true });
     if (!tracker.isUsable()) {
-      throw new Error(
-        `git did not answer for "${base.root}" — it is not a git repository, or git could not read it.`
-        + ' Reporting an empty git extent would be indistinguishable from an empty repository, so this is an error.',
+      throw gitNoAnswerError(
+        base.root,
+        'Reporting an empty git extent would be indistinguishable from an empty repository, so this is an error.',
       );
     }
 
@@ -136,14 +138,17 @@ export class GitExtentContributor implements ExtentContributor {
       role: null,
     }];
 
-    // NEVER_CRAWL_GLOBS only, deliberately: the default exclude also drops
+    // NEVER_CONTENT_GLOBS only, deliberately: the default exclude also drops
     // `dist/`, and a tracked file under `dist/` IS in git's extent whatever any
-    // authored-content lane thinks of it.
+    // authored-content lane thinks of it — as is a tracked `coverage/` or
+    // `.turbo/`, which an author may have named a directory. An ignored one
+    // never reaches here (`respectGitignore`).
     const absolutePaths = await crawlDirectory({
+      outputs: [],
       baseDir: base.root,
       respectGitignore: true,
       includeUntracked: true,
-      exclude: [...NEVER_CRAWL_GLOBS],
+      exclude: [...NEVER_CONTENT_GLOBS],
       // 🚨 Reached on the git route too, not only when the walk answers: with
       // `includeUntracked` git walks the working tree, and a directory it could
       // not open is handed here off its stderr — the only place git says so.
@@ -151,20 +156,20 @@ export class GitExtentContributor implements ExtentContributor {
       // not ignored), so the answer is the projection's stop-not-degrade one,
       // for the caching reason `crawl-source.ts` gives. A locked directory
       // that IS ignored never reaches here: git prunes it by name.
-      unreadable: { refuse: { root: base.root, remedy: listingRefusalRemedy(base.root) } },
+      unreadable: { refuse: { root: base.root, remedy: listingRefusalRemedy(base.root), side: 'source' } },
     });
 
     const resources = new Map<string, ResourceRow>();
     const memberships = new Map<string, ResourceExtentRow>();
     const realizations: ResourceRealizationRow[] = await Promise.all(
-      absolutePaths.map(async (absolutePath) =>
+      absolutePaths.map((absolutePath) =>
         collectRealization(absolutePath, base.identities.idFor(absolutePath), {
           root: base.root,
           extentId,
           gitTracker: tracker,
           // Shared with every other contributor: a tracked file is realized here
           // and in the filesystem extent, and only one of those may read it.
-          ...(base.contentCache !== undefined && { contentCache: base.contentCache }),
+          contentCache: base.contentCache,
           // Shared for the same reason and one more: the resolver accumulates
           // conflicts, so this extent and the filesystem extent realizing the
           // same mistyped file must report it ONCE between them.
@@ -200,6 +205,8 @@ export class GitExtentContributor implements ExtentContributor {
       // unique root-relative paths cannot produce.
       tags: [],
       conditions: [],
+      // Classification, like `tags` — and this contributor enumerates.
+      claudeRulePatterns: [],
     };
   }
 }

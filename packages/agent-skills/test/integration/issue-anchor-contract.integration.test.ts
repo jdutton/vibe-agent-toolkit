@@ -68,7 +68,7 @@ beforeAll(async () => {
   mkdirSyncReal(safePath.join(skillDir, 'ignored'), { recursive: true });
   mkdirSyncReal(safePath.join(tempDir, 'outside'), { recursive: true });
 
-  fs.writeFileSync(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+  fs.writeFileSync(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), '{}\n');
   fs.writeFileSync(safePath.join(tempDir, 'outside', 'escape.md'), '# Escape\n');
   fs.writeFileSync(safePath.join(skillDir, 'refs', 'real.md'), '# Real\n');
   fs.writeFileSync(safePath.join(skillDir, 'refs', 'orphan.md'), '# Orphan\n');
@@ -98,9 +98,11 @@ beforeAll(async () => {
   const gitTracker = new GitTracker(tempDir);
   await gitTracker.initialize();
 
-  const validated = await validateSkill({ skillPath, checkUnreferencedFiles: true, validation: {} });
-  const packaged = await validateSkillForPackaging(skillPath, undefined, 'source', {
+  const validated = await validateSkill({ dispatcher: undefined, resourcesValidation: {}, side: 'source', skillPath, checkUnreferencedFiles: true, validation: {} });
+  const packaged = await validateSkillForPackaging(skillPath, {}, undefined, 'source', {
+    dispatcher: undefined,
     unreadable: 'refuse',
+    outputs: [],
     gitTracker,
     locationRoot: tempDir,
   });

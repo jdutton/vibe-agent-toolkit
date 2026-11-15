@@ -1,69 +1,69 @@
 /**
- * Frontmatter YAML decoding, kept apart from the markdown parser.
+ * Frontmatter YAML decoding: the one place a frontmatter block's YAML is
+ * decoded, run by the markdown parser inside a parse worker.
  *
- * This function is the one piece of parsing a cache HIT still performs
- * (`parse-cache.ts` rehydrates `frontmatter` from the stored YAML source rather
- * than storing the parsed object). It lives in its own module because importing
- * it from `link-parser.js` dragged the entire remark stack with it — measured at
- * ~730ms of module load on Windows, on top of `yaml`'s own ~78ms — so a fully
- * warm scan, in which nothing is ever parsed, still paid to load a markdown
- * parser it never called.
+ * ## Why only the worker runs it
  *
- * `link-parser.js` imports it and `parseMarkdownContent` still calls it, so cold
- * and warm continue to run the same code — the property the docstring below
- * exists to protect.
+ * `yaml`'s composer recurses once per nesting level, so a deep block overflows
+ * the stack of whatever thread decodes it: on the main thread a 1,000-level
+ * `a: [[[…]]]` already does. A decode on the parent would therefore be an
+ * unbounded parse beside the bounded one (ADR I8), and its outcome would hang
+ * on the thread's stack, not on the bytes. So the worker decodes, under its
+ * `stackMb`, and sends the mapping back encoded (`frontmatter-codec.ts`); the
+ * parent and a parse-cache hit rebuild it from that encoding and never call
+ * this module. Neither `parse-cache.ts` nor `parse-pool.ts` imports it.
  */
 
 import * as yaml from 'yaml';
+
+import { isPlainMapping } from './frontmatter-codec.js';
+import { isStackOverflow } from './parse-limits.js';
 
 /**
  * What a frontmatter block's YAML source means — the single implementation of
  * that decision.
  *
- * ## Why this is exported
- *
- * A parse cache stores {@link ParseResult.frontmatterSource} (the source is
- * JSON-safe; the parsed object is not) and must rebuild `frontmatter` /
- * `frontmatterError` on a hit. If it re-implemented the decision below it would
- * become a second implementation free to drift from this one — the same class
- * of defect as any parallel resolver. It calls this instead, so cold and warm
- * run *the same code*.
- *
- * The two properties that second caller depends on, and which must not be
- * broken: it is **pure** (no state, no I/O, no AST) and **total** (never
- * throws, for any string — a YAML failure comes back as `frontmatterError`).
- *
  * ## Acceptance rules (behaviour-preserving — do not "improve" these)
  *
- * - Empty or whitespace-only source → `{}`. No frontmatter, no error.
- * - Parses to a non-null, non-array object → `{ frontmatter }`.
- * - Parses to anything else (a bare scalar, `null`, a sequence) → `{}`. The
- *   value is silently ignored, exactly as it always has been.
- * - Throws → `{ frontmatterError }`.
+ * - Empty, whitespace-only, or decoding to YAML `null` (`~`, `null`,
+ *   comment-only) → `{}`. The block declares nothing; no error.
+ * - Parses to a PLAIN mapping (prototype `Object.prototype` or `null`,
+ *   {@link isPlainMapping}) → `{ frontmatter }`.
+ * - Parses to anything else — a sequence, a scalar, or a non-plain object such
+ *   as the `Set` of a `!!set` root, the `Map` of `!!omap`, the `Date` of
+ *   `!!timestamp` or the `Buffer` of `!!binary` → `{ frontmatterNotAMapping: true }`:
+ *   no keys can be read from it, and the projection's `blob_conditions` and the
+ *   OKF judges say so. A non-plain root admitted as `frontmatter` would reach a
+ *   parent that cannot rebuild it (the codec's decode accepts only a mapping
+ *   root) and every consumer that reads keys off it. Carried on the result because only the decoded VALUE
+ *   tells it from a block that declares nothing, and the parent never decodes.
+ * - Invalid YAML → `{ frontmatterError }`: a function of the bytes.
+ * - A stack overflow, bare or wrapped by `yaml` → **thrown**. It is a `stackMb`
+ *   breach, a function of the thread's stack and never of the bytes, so it must
+ *   not become a `frontmatterError` a cache would store (ADR I6). The worker
+ *   reports it as the breach.
  *
  * Keys are spread conditionally, so the result never carries an
- * undefined-valued key (see {@link cleanupEmptyChildren} for why that matters).
+ * undefined-valued key.
  *
  * @param source - A frontmatter block's YAML body, delimiters excluded
- * @returns The frontmatter object, the error message, or neither
+ * @returns The frontmatter object, the error message, the non-mapping flag, or none of them
+ * @throws The stack overflow, when decoding the block overflowed this thread's stack
  */
 export function parseFrontmatterSource(source: string): {
   frontmatter?: Record<string, unknown>;
   frontmatterError?: string;
+  frontmatterNotAMapping?: true;
 } {
-  if (source.trim() === '') {
-    // Empty frontmatter block
-    return {};
-  }
-
+  if (source.trim() === '') return {};
+  let parsed: unknown;
   try {
-    const parsed: unknown = yaml.parse(source);
-    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-      return { frontmatter: parsed as Record<string, unknown> };
-    }
-    return {};
+    parsed = yaml.parse(source);
   } catch (error) {
-    // Capture YAML parsing error for validation reporting
+    if (isStackOverflow(error)) throw error;
     return { frontmatterError: error instanceof Error ? error.message : String(error) };
   }
+  if (parsed === null) return {};
+  if (isPlainMapping(parsed)) return { frontmatter: parsed };
+  return { frontmatterNotAMapping: true };
 }

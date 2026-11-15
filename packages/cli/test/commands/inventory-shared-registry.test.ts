@@ -93,7 +93,9 @@ vi.mock('@vibe-agent-toolkit/utils/crawl', async (importOriginal) => {
       crawlBaseDirs.push(options.baseDir);
       const base = safePath.resolve(options.baseDir);
       if (failingCrawlRoots.some((dir) => safePath.resolve(dir) === base)) {
-        throw new Error(CRAWL_FAILURE_MESSAGE);
+        // The OS refusing a read, as `node:fs` raises it — the premise above. An
+        // unbranded `Error` would be VAT's own defect, which no lane degrades.
+        throw Object.assign(new Error(`EACCES: ${CRAWL_FAILURE_MESSAGE}`), { code: 'EACCES', syscall: 'scandir', path: base });
       }
       return actual.crawlDirectory(options);
     },
@@ -144,7 +146,7 @@ const PROJECT_CONFIG_FILE = 'vibe-agent-toolkit.config.yaml';
 
 /** Anchor `findProjectRoot` at `dir`. */
 function writeProjectConfig(dir: string): void {
-  writeFixtureFile(safePath.join(dir, PROJECT_CONFIG_FILE), 'version: 1\n');
+  writeFixtureFile(safePath.join(dir, PROJECT_CONFIG_FILE), '{}\n');
 }
 
 /** A plugin manifest plus one skill per {@link SKILL_NAMES}, each linking one sibling doc. */

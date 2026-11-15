@@ -32,14 +32,19 @@
  * reason instrumenting it further would look like an improvement and not be one.
  */
 
+import { ExitCode, exitCodeForReport } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
 import type { ProgressEntry } from '../../src/commands/resources/check-progress.js';
-import { unitInFlight } from '../../src/commands/resources/check-progress.js';
+import { parseProgressLog, unitInFlight } from '../../src/commands/resources/check-progress.js';
+import { CHECK_REPORT_SCHEMA } from '../../src/commands/resources/check-schema.js';
 import {
   type AbnormalDeath,
+  type CheckInvocation,
+  NODE_FATAL_ABORT_EXIT_CODE,
   parseBudgetSeconds,
   pollWatchdog,
+  readCompletedDocument,
   requireSupervisableFlags,
   resolveChildEnding,
   resolveSilentCompletion,
@@ -50,14 +55,21 @@ import {
   buildCheckOutputData,
   buildInterruptedCheckInput,
   type CheckPayloadInput,
-  NODE_FATAL_ABORT_EXIT_CODE,
+  runProjectChecks,
 } from '../../src/commands/resources/check.js';
+import { NO_COLUMNS } from '../helpers/no-columns.js';
 
 /** The log lines a run writes before it hangs on its second rule. */
 const POPULATION: ProgressEntry = {
   kind: 'population',
   population: 'store',
+  // NOT the default, and not the run's own `population` either: a rebuild that
+  // dropped the field or copied its neighbour into it would still read 'none'
+  // or 'store' and pass.
+  lensPopulation: 'derived',
   populationMs: 1180,
+  lensMs: 340,
+  lensesEvaluated: ['claude-context'],
   membersEnumerated: 8123,
 };
 const FIRST_COST: ProgressEntry = { kind: 'check', name: 'no-markdown', durationMs: 4.25, rows: 3 };
@@ -70,14 +82,25 @@ const BROKEN_COST: ProgressEntry = {
   broken: true,
 };
 
+/** A check whose statement FINISHED and whose rows were still being converted when the run stopped. */
+const CONVERTING_START: ProgressEntry = { kind: 'start', name: 'big-select' };
+const CONVERTING: ProgressEntry = { kind: 'converting', name: 'big-select', durationMs: 2.5, rows: 40_000 };
+
+/** A check whose violations statement FINISHED and whose declared `examined` statement was running when the run stopped. */
+const EXAMINING_START: ProgressEntry = { kind: 'start', name: 'counted' };
+const EXAMINING: ProgressEntry = { kind: 'examining', name: 'counted', durationMs: 1.5, rows: 2 };
+
+/** The line the child writes the moment it has booted, before any work. */
+const STARTED: ProgressEntry = { kind: 'started' };
+
 /** The line that says every statement is done and the document is being built. */
-const CHECKS_DONE: ProgressEntry = { kind: 'checks-complete' };
+const CHECKS_DONE: ProgressEntry = { kind: 'statements-complete' };
 
 /** A watchdog that has seen nothing yet, at time zero. */
 const FRESH: WatchdogState = { bytesSeen: 0, quietSince: 0 };
 
-/** Whatever a supervising parent handed its child as `--cost-log`. */
-const A_COST_LOG = 'progress.jsonl';
+/** What a supervising parent — THIS process, as the child's parent — hands its child as `--supervised-by`. */
+const supervisedBy = (invoker: CheckInvocation, pid = process.ppid): string => `${invoker}:${String(pid)}:progress.jsonl`;
 /** Node's own heap abort — the signal a runaway that SELECTS rows dies of. */
 const ABORTED = 'SIGABRT';
 /** A binary that is not there, for the spawn-failure cases. */
@@ -145,23 +168,23 @@ describe('parseBudgetSeconds', () => {
 });
 
 describe('runsInThisProcess — the fork', () => {
-  it('does the work HERE when a cost log was handed to it', () => {
+  it('does the work HERE when it is a supervised child', () => {
     // 🚨 The recursion guard, and the reason it is a named function rather than
-    // a condition inline in the command. `--cost-log` is what a supervising
+    // a condition inline in the command. `--supervised-by` is what a supervising
     // parent passes its child; a child that read the budget instead would spawn
     // a child of its own, and so on. Note the budget is the DEFAULT here — the
-    // cost log has to win against it, not merely alongside it.
-    expect(runsInThisProcess({ costLog: A_COST_LOG, budgetSecs: 300 })).toBe(true);
+    // flag has to win against it, not merely alongside it.
+    expect(runsInThisProcess({ supervisedBy: supervisedBy('standalone'), budgetSecs: 300 })).toBe(true);
   });
 
   it('does the work HERE when the operator removed the bound', () => {
     // `--budget 0` buys nothing from a child: there is nothing to supervise, and
     // a spawn would cost a second process startup for no bound at all.
-    expect(runsInThisProcess({ costLog: undefined, budgetSecs: 0 })).toBe(true);
+    expect(runsInThisProcess({ supervisedBy: undefined, budgetSecs: 0 })).toBe(true);
   });
 
-  it('supervises a child when there is a bound and no cost log', () => {
-    expect(runsInThisProcess({ costLog: undefined, budgetSecs: 300 })).toBe(false);
+  it('supervises a child when there is a bound and it is not a supervised child', () => {
+    expect(runsInThisProcess({ supervisedBy: undefined, budgetSecs: 300 })).toBe(false);
   });
 });
 
@@ -225,15 +248,17 @@ describe('pollWatchdog', () => {
  * The recovered payload for a run killed while `runaway` was in flight.
  *
  * @param entries - What the child's log held, defaulting to the hang above
+ * @param invocation - Who ran the checks, defaulting to the operator's own `vat resources check`
  * @returns The input the document is built from
  */
 function killed(
   entries: readonly ProgressEntry[] = [POPULATION, FIRST_COST, HUNG_START],
+  invocation: CheckInvocation = 'standalone',
 ): CheckPayloadInput {
   return buildInterruptedCheckInput({
     entries,
     root: '/corpus',
-    ending: { kind: 'budget', budgetSecs: 2 },
+    ending: { kind: 'budget', budgetSecs: 2, invocation },
     durationMs: 3400,
   });
 }
@@ -270,18 +295,50 @@ function diedOf(
   return buildInterruptedCheckInput({
     entries,
     root: '/corpus',
-    ending: { kind: 'abnormal', death },
+    ending: { kind: 'abnormal', death, invocation: 'standalone' },
     durationMs: 3400,
   });
 }
 
 describe('buildInterruptedCheckInput', () => {
   it('carries the population the child actually reported, never a fabricated one', () => {
-    const input = killed();
+    const { populated } = killed();
 
-    expect(input.population).toBe('store');
-    expect(input.populationMs).toBe(1180);
-    expect(input.membersEnumerated).toBe(8123);
+    expect(populated?.population).toBe('store');
+    expect(populated?.lensPopulation).toBe('derived');
+    expect(populated?.lensesEvaluated).toStrictEqual(['claude-context']);
+    expect(populated?.populationMs).toBe(1180);
+    expect(populated?.membersEnumerated).toBe(8123);
+  });
+
+  it('still reports the files the population did not admit, as resolved before the checks ran', () => {
+    // The population's not-admitted findings are computed before any check runs
+    // and carried on their own line, so a run killed mid-check still fails on them —
+    // at the severity `resources.validation` resolved them to, never re-defaulted.
+    const notAdmitted = [
+      { code: 'RESOURCE_UNREADABLE', severity: 'warning', message: "'docs/locked.md' was enumerated but could not be read, so no check saw its rows.", location: 'docs/locked.md' },
+    ] as const;
+    const input = killed([{ kind: 'not-admitted', findings: [...notAdmitted] }, POPULATION, FIRST_COST, HUNG_START]);
+
+    expect(input.issues.filter((issue) => issue.code === 'RESOURCE_UNREADABLE')).toStrictEqual([...notAdmitted]);
+    expect(input.issues[0]?.code).toBe('RESOURCE_UNREADABLE');
+  });
+
+  it('keeps them as findings when the run stopped before its population line: RUN_INCOMPLETE, the finding beside it', () => {
+    // The not-admitted line is written immediately BEFORE the population's, so a kill between the
+    // two leaves a run with no population and a finding. The refusal's message is the run-integrity
+    // sentence alone; the unadmitted file stays a finding, with its code and its location.
+    const unreadable = {
+      code: 'RESOURCE_UNREADABLE', severity: 'warning', message: "'docs/locked.md' could not be read.", location: 'docs/locked.md',
+    } as const;
+    const report = buildCheckOutputData(killed([STARTED, { kind: 'not-admitted', findings: [unreadable] }]));
+
+    expect(report.status).toBe('error');
+    expect(report.error?.code).toBe('RUN_INCOMPLETE');
+    expect(report.error?.message).toContain('before its population completed');
+    expect(report.error?.message).not.toContain('docs/locked.md');
+    expect(report.findings.map((finding) => finding.code)).toStrictEqual(['RESOURCE_UNREADABLE']);
+    expect(report.findings[0]?.location).toBe('docs/locked.md');
   });
 
   it('keeps the checks that COMPLETED, with the rows each selected', () => {
@@ -367,10 +424,26 @@ describe('buildInterruptedCheckInput', () => {
     expect(finding?.message).toContain('no check was running');
   });
 
+  it('never claims an EMPTY `checks` list "DID complete"', () => {
+    // 🚨 The notice about missing violations was appended unconditionally, so a
+    // run that completed no check told the operator the checks it listed — none —
+    // had completed. It must say there is nothing missing instead.
+    const [finding] = killed([POPULATION]).issues;
+
+    expect(finding?.message).not.toContain('DID complete');
+    expect(finding?.message).toContain('No check completed');
+  });
+
+  it('still says what is missing when some checks DID complete', () => {
+    const [finding] = killed().issues;
+
+    expect(finding?.message).toContain('DID complete');
+  });
+
   it('HEDGES that window, because a run that finished every rule also lands in it', () => {
     // 🚨 The hedge ("or after the last one") was deleted on the strength of
-    // `checks-complete` — but the last check's cost is filed BEFORE its rows are
-    // turned into issues, and `checks-complete` is written after that. A kill in
+    // `statements-complete` — but the last check's cost is filed BEFORE its rows are
+    // turned into issues, and `statements-complete` is written after that. A kill in
     // between leaves a log of nothing but completed checks, which reads as
     // `idle` — and the unhedged sentence then tells an operator whose run
     // completed forty rules that it died "between the population and the first
@@ -380,26 +453,75 @@ describe('buildInterruptedCheckInput', () => {
     expect(finding?.message).toContain('after the last one');
   });
 
-  it('REFUSES to build a document when population never completed', () => {
-    // 🔑 There is no projection, so `population`, `populationSecs` and
-    // `membersEnumerated` have no honest value — and `membersEnumerated: 0` is
-    // the exact shape that already means "this gate asserted nothing", which
-    // would be a second, wrong claim. An operator error (exit 2) is the truthful
-    // ending.
-    expect(() => killed([])).toThrow(/population/i);
+  it('is an ERROR document — exit 2 — when the population never completed', () => {
+    // 🔑 The exit code follows the CAUSE. Nothing was examined, so this is a
+    // command that could not do its job (`status: error`, exit 2), not a gate
+    // that failed. It used to THROW here, which lost the document; it is now
+    // published, and the code is derived from it rather than chosen by the caller.
+    const payload = buildCheckOutputData(killed([STARTED]));
+
+    expect(payload.status).toBe('error');
+    expect(exitCodeForReport(payload)).toBe(ExitCode.ERROR);
+    expect(payload.error.code).toBe('RUN_INCOMPLETE');
+    expect(payload.error.message).toContain('before its population completed');
+    // The envelope's error branch: the reason is in `error`, not in `findings`.
+    expect(payload.findings).toStrictEqual([]);
+    // No refusal document carries `durationMs`.
+    expect(payload).not.toHaveProperty('durationMs');
+    expect(CHECK_REPORT_SCHEMA.safeParse(payload).success).toBe(true);
   });
 
-  it('names the budget in the refusal, so the operator can raise it', () => {
-    // 🚨 This asserted `/2/`, and the sentence beside it says population is
-    // "~1.2s warm here but 33-35s" — so deleting the interpolated budget left it
-    // GREEN on the digit in an unrelated measurement. Assert the words.
-    expect(() => killed([])).toThrow(/no progress for 2s/);
+  it('is a FINDINGS document — exit 1 — when a check was in flight', () => {
+    // The other cause: the tree was examined and a rule would not return, so
+    // that rule is broken and the gate fails.
+    const payload = buildCheckOutputData(killed());
+
+    expect(payload.status).toBe('findings');
+    expect(exitCodeForReport(payload)).toBe(ExitCode.FINDINGS);
+  });
+
+  it('publishes the population as NULL, never as a fabricated value', () => {
+    // 🔑 There is no projection, so `population`, `populationSecs`, `lensSecs`
+    // and `lensesEvaluated` have no honest value. `[]` would claim "no check
+    // asked for a lens" and `0` would claim "free" — both are statements about a
+    // population that never happened. `examined: 0` is the one number that is
+    // simply TRUE here: nothing was examined, and the finding says why.
+    const payload = buildCheckOutputData(killed([STARTED]));
+
+    expect(payload.examined).toBe(0);
+    expect(payload.data.population).toBeNull();
+    // `null`, not `'none'`: no population happened at all, lens or otherwise.
+    expect(payload.data.lensPopulation).toBeNull();
+    expect(payload.data.populationSecs).toBeNull();
+    expect(payload.data.lensSecs).toBeNull();
+    expect(payload.data.lensesEvaluated).toBeNull();
+    expect(payload.data.checksRun).toBe(0);
+  });
+
+  it('names the budget and the population in that error, so the operator can raise it', () => {
+    // 🚨 Asserted with the words, not a digit: the sentence beside it quotes
+    // measured timings, and a bare `/2/` was once satisfied by one of those.
+    const { error } = buildCheckOutputData(killed([STARTED]));
+
+    expect(error.message).toContain('no progress for 2s');
+    expect(error.message).toContain('before its population completed');
+  });
+
+  it('says the child had not finished STARTING when the log is empty — also exit 2', () => {
+    // 🔑 A different unit with a different remedy. Before the `started` line the
+    // child is still loading Node and the CLI — no tree has been touched — so
+    // sizing the budget against the population would be the wrong advice.
+    const payload = buildCheckOutputData(killed([]));
+
+    expect(exitCodeForReport(payload)).toBe(ExitCode.ERROR);
+    expect(payload.error.message).toContain('before the child process had finished starting');
+    expect(payload.error.message).not.toContain('before its population completed');
   });
 });
 
 describe('parseBudgetSeconds — the EMPTY value', () => {
   // 🚨 The defect: `Number('')` is 0, and 0 is this flag's documented escape
-  // hatch — "no bound, may hang forever". So `--budget "$CHECK_BUDGET"` with the
+  // hatch — "no bound, may hang forever". So `--budget "$BUDGET"` with the
   // variable unset did not shorten the bound and did not refuse; it silently
   // REMOVED the bound, on the one flag whose whole job is to stop an unattended
   // job hanging. An unset shell variable is a far more common CI accident than
@@ -413,6 +535,11 @@ describe('parseBudgetSeconds — the EMPTY value', () => {
     expect(() => parseBudgetSeconds(raw)).toThrow(/--budget/);
   });
 
+  it('names a neutral variable in that refusal, since `query` refuses it too', () => {
+    expect(() => parseBudgetSeconds('')).toThrow(/--budget "\$BUDGET"/);
+    expect(() => parseBudgetSeconds('')).not.toThrow(/CHECK_/);
+  });
+
   it('still accepts hex, deliberately', () => {
     // `Number('0x10')` is 16, and that is KEPT. Hex is unambiguous, it cannot
     // arise from an unset variable, and refusing it would buy nothing. Recorded
@@ -422,33 +549,59 @@ describe('parseBudgetSeconds — the EMPTY value', () => {
 });
 
 describe('requireSupervisableFlags', () => {
-  // 🚨 The defect: `--cost-log` wins the fork unconditionally, so
-  // `--budget 60 --cost-log /tmp/x` ran UNBOUNDED and said nothing. An
+  // 🚨 The defect: `--supervised-by` wins the fork unconditionally, so
+  // `--budget 60` beside it ran UNBOUNDED and said nothing. An
   // explicitly-passed, documented flag must never be silently inert.
-  it('refuses an explicit budget alongside --cost-log', () => {
+  it('refuses an explicit budget alongside --supervised-by', () => {
     expect(() => requireSupervisableFlags({
-      costLog: A_COST_LOG, budgetRaw: '60', budgetSecs: 60,
-    })).toThrow(/--cost-log/);
+      supervisedBy: supervisedBy('standalone'), budgetRaw: '60', budgetSecs: 60,
+    })).toThrow(/--budget cannot be combined with --supervised-by/);
   });
 
-  it('allows --cost-log on its own — that is the child the parent spawns', () => {
-    // ⚠️ The real spawn path. `childArgs` appends `--cost-log` and does NOT
-    // forward `--budget`, so the supervised lane must survive this guard.
+  it.each(['standalone', 'phase'] as const)('reads --supervised-by %s from the parent that spawned it — the real spawn path', (invoker) => {
+    // ⚠️ `childArgs` appends `--supervised-by` and does NOT forward `--budget`, so the
+    // supervised lane must survive this guard — and hand back what the value carried.
+    expect(requireSupervisableFlags({
+      supervisedBy: supervisedBy(invoker), budgetRaw: undefined, budgetSecs: 300,
+    })).toStrictEqual({ invoker, supervisorPid: process.ppid, progressLog: 'progress.jsonl' });
+  });
+
+  it('keeps a progress log whose path holds a colon (a Windows drive)', () => {
+    const WINDOWS_LOG = String.raw`C:\tmp\vat-check-1\progress.jsonl`;
+    expect(requireSupervisableFlags({
+      supervisedBy: `phase:${String(process.ppid)}:${WINDOWS_LOG}`, budgetRaw: undefined, budgetSecs: 300,
+    })?.progressLog).toBe(WINDOWS_LOG);
+  });
+
+  // 🚨 Passed by hand, the flag ran the checks unbounded and printed none of the run's notices.
+  // The value names its supervisor's pid, and a process whose parent is not that pid is refused.
+  it('refuses --supervised-by naming a supervisor that is not this process\'s parent', () => {
     expect(() => requireSupervisableFlags({
-      costLog: A_COST_LOG, budgetRaw: undefined, budgetSecs: 300,
+      supervisedBy: supervisedBy('standalone', process.ppid + 1), budgetRaw: undefined, budgetSecs: 300,
+    })).toThrow(/was not spawned by the supervisor it names/);
+  });
+
+  it.each([
+    ['an unknown invoker', `operator:${String(process.ppid)}:progress.jsonl`],
+    ['no pid', 'phase:progress.jsonl'],
+    ['no progress log', `phase:${String(process.ppid)}:`],
+    ['a bare path', '/tmp/progress.jsonl'],
+  ])('refuses a --supervised-by value with %s', (_label, value) => {
+    expect(() => requireSupervisableFlags({
+      supervisedBy: value, budgetRaw: undefined, budgetSecs: 300,
+    })).toThrow(/is not a value a supervisor writes/);
+  });
+
+  it('allows --budget 0 with --supervised-by: both say "no supervision"', () => {
+    expect(() => requireSupervisableFlags({
+      supervisedBy: supervisedBy('standalone'), budgetRaw: '0', budgetSecs: 0,
     })).not.toThrow();
   });
 
-  it('allows --budget 0 with --cost-log: both say "no supervision"', () => {
-    expect(() => requireSupervisableFlags({
-      costLog: A_COST_LOG, budgetRaw: '0', budgetSecs: 0,
-    })).not.toThrow();
-  });
-
-  it('allows a budget with no cost log — the ordinary supervised run', () => {
-    expect(() => requireSupervisableFlags({
-      costLog: undefined, budgetRaw: '60', budgetSecs: 60,
-    })).not.toThrow();
+  it('allows a budget in a process that is not a supervised child — the ordinary supervised run', () => {
+    expect(requireSupervisableFlags({
+      supervisedBy: undefined, budgetRaw: '60', budgetSecs: 60,
+    })).toBeUndefined();
   });
 });
 
@@ -576,6 +729,85 @@ describe('resolveSilentCompletion — the WINDOWS half of the signal-death defec
   });
 });
 
+describe('readCompletedDocument — a completion whose document does not survive the trip', () => {
+  // 🚨 One situation, one ending. A child that exits having written a document
+  // cut off mid-write (or anything that is not this verb's document) is the
+  // silent completion's sibling, not a VAT defect: it publishes the interrupted
+  // document from the progress log, exit 1 — never INTERNAL_ERROR, exit 2.
+  it('reads a truncated document as an abnormal death carrying the code', () => {
+    const read = readCompletedDocument('resources check', A_DOCUMENT, 1, 'yaml');
+
+    expect(read).toMatchObject({ death: { kind: 'unparseable-output', code: 1 } });
+  });
+
+  it('publishes the interrupted document for it — findings, exit 1, not a refusal', () => {
+    const read = readCompletedDocument('resources check', `{"status": "ok", "exam`, 0, 'json');
+    if (!('death' in read)) throw new Error('a truncated document was accepted');
+    const report = buildCheckOutputData(diedOf(read.death));
+
+    expect(report.status).toBe('findings');
+    expect(report.findings.map((finding) => finding.code)).toContain('RESOURCE_CHECK_BROKEN');
+    expect(report.findings[0]?.message).toContain('exited 0');
+    expect(exitCodeForReport(report)).toBe(ExitCode.FINDINGS);
+  });
+
+  it('accepts a whole document whose exit the child agreed with', () => {
+    // ⛔ The negative control: without it "always a death" passes the two above.
+    const whole = buildCheckOutputData(diedOf({ kind: 'no-status' }));
+    const read = readCompletedDocument('resources check', JSON.stringify(whole), exitCodeForReport(whole), 'json');
+
+    expect(read).toMatchObject({ document: { report: { status: whole.status } } });
+  });
+});
+
+describe('readCompletedDocument — a child whose exit DISAGREES with its own document', () => {
+  /** A whole, clean report: the shape a child that finished every check writes. */
+  const clean = (): string => JSON.stringify(buildCheckOutputData({
+    root: '/corpus',
+    durationMs: 1200,
+    populated: {
+      population: 'store',
+      lensPopulation: 'none',
+      populationMs: 1180,
+      lensMs: 0,
+      lensesEvaluated: [],
+      membersEnumerated: 8123,
+    },
+    issues: [],
+    costs: [{ name: 'no-markdown', durationMs: 4.25, rows: 0 }],
+  }));
+
+  // 🚨 The defect: the parent forwards the DOCUMENT's code, never the process's, so a complete `ok`
+  // report followed by a non-zero exit was published as a clean pass.
+  it('refuses to forward a clean report the child then exited 3 on', () => {
+    const read = readCompletedDocument('resources check', clean(), 3, 'json');
+
+    expect(read).toStrictEqual({ death: { kind: 'exit-disagrees', code: 3, documentExit: ExitCode.OK } });
+  });
+
+  it('publishes RESOURCE_CHECK_BROKEN, exit 1, naming both codes and saying the run did finish', () => {
+    const read = readCompletedDocument('resources check', clean(), 3, 'json');
+    if (!('death' in read)) throw new Error('a disagreeing exit was forwarded');
+    const report = buildCheckOutputData(diedOf(read.death, [POPULATION, FIRST_COST, CHECKS_DONE]));
+    const message = report.findings[0]?.message ?? '';
+
+    expect(report.findings.map((finding) => finding.code)).toContain('RESOURCE_CHECK_BROKEN');
+    expect(exitCodeForReport(report)).toBe(ExitCode.FINDINGS);
+    expect(message).toContain('exit contradicts its own report');
+    expect(message).toContain('verdict is exit 0');
+    expect(message).toContain('exited 3');
+    // Not the mid-run death sentence: this child finished every check.
+    expect(message).not.toContain('DIED before it finished');
+  });
+
+  it('forwards a report whose non-zero exit IS the one it implies (the negative control)', () => {
+    const findings = buildCheckOutputData(diedOf({ kind: 'no-status' }));
+
+    expect(exitCodeForReport(findings)).toBe(ExitCode.FINDINGS);
+    expect(readCompletedDocument('resources check', JSON.stringify(findings), ExitCode.FINDINGS, 'json')).toHaveProperty('document');
+  });
+});
+
 describe('the document a SILENT completion publishes', () => {
   /** The Windows shape: exited with a code that encodes an abort, said nothing. */
   const aborted = (): CheckPayloadInput =>
@@ -692,15 +924,23 @@ describe('the document a run that DIED publishes', () => {
     expect(killed().issues[0]?.message).toMatch(/Raise it with `--budget/);
   });
 
-  it('refuses a document when the child died before its population', () => {
-    expect(() => died(ABORTED, [])).toThrow(/SIGABRT/);
+  it('publishes an ERROR document when the child died before its population', () => {
+    // The same cause as a budget kill there: nothing was examined, so exit 2 —
+    // with the document published, not thrown away.
+    const payload = buildCheckOutputData(died(ABORTED, [STARTED]));
+
+    expect(exitCodeForReport(payload)).toBe(ExitCode.ERROR);
+    expect(payload.data.population).toBeNull();
+    expect(payload.error.message).toContain(ABORTED);
   });
 
-  it('does not blame the budget in that refusal either', () => {
+  it('does not blame the budget in that error either', () => {
     // 🪤 The name promises an ABSENCE and the assertion was a presence, so a
-    // refusal that said both things would have passed. Both halves now.
-    expect(() => died(ABORTED, [])).toThrow(/died|terminated/i);
-    expect(() => died(ABORTED, [])).not.toThrow(/Raise it with `--budget/);
+    // message that said both things would have passed. Both halves now.
+    const message = buildCheckOutputData(died(ABORTED, [STARTED])).error.message;
+
+    expect(message).toMatch(/died|terminated/i);
+    expect(message).not.toMatch(/Raise it with `--budget/);
   });
 
   it('names the binary when the child could not be spawned at all', () => {
@@ -710,6 +950,7 @@ describe('the document a run that DIED publishes', () => {
       ending: {
         kind: 'abnormal',
         death: NOT_INSTALLED,
+        invocation: 'standalone',
       },
       durationMs: 12,
     });
@@ -763,10 +1004,10 @@ describe('resolveChildEnding — a kill the kernel REFUSED', () => {
       code: null,
       signal: null,
       killed: true,
-      killFailure: { detail: KILL_REFUSED, pid: ORPHAN_PID },
+      killFailure: { detail: KILL_REFUSED, pid: ORPHAN_PID, refused: true },
     })).toStrictEqual({
       kind: 'abnormal',
-      death: { kind: 'kill-failed', detail: KILL_REFUSED, pid: ORPHAN_PID },
+      death: { kind: 'kill-failed', detail: KILL_REFUSED, pid: ORPHAN_PID, refused: true },
     });
   });
 
@@ -791,7 +1032,7 @@ describe('resolveChildEnding — a kill the kernel REFUSED', () => {
       code: 0,
       signal: null,
       killed: true,
-      killFailure: { detail: KILL_REFUSED, pid: ORPHAN_PID },
+      killFailure: { detail: KILL_REFUSED, pid: ORPHAN_PID, refused: true },
     })).toStrictEqual({ kind: 'completed', code: 0 });
   });
 });
@@ -799,7 +1040,7 @@ describe('resolveChildEnding — a kill the kernel REFUSED', () => {
 describe('the document a run whose KILL was refused publishes', () => {
   /** The recovered payload for a breach whose SIGKILL the kernel refused. */
   const refused = (): CheckPayloadInput =>
-    diedOf({ kind: 'kill-failed', detail: KILL_REFUSED, pid: ORPHAN_PID });
+    diedOf({ kind: 'kill-failed', detail: KILL_REFUSED, pid: ORPHAN_PID, refused: true });
 
   it('says the kill was refused, and hands over the pid still running', () => {
     const [finding] = refused().issues;
@@ -832,6 +1073,18 @@ describe('the document a run whose KILL was refused publishes', () => {
 
   it('never claims the watchdog did not fire — it fired and was rebuffed', () => {
     expect(refused().issues[0]?.message).not.toContain('watchdog never fired');
+  });
+
+  // A SIGKILL the kernel ACCEPTED that still did not end the child (uninterruptible I/O) is not a
+  // refusal, and blaming EPERM would send the operator after a permission that was never denied.
+  it('a kill that was accepted and did not end the child says so — never "refused", never EPERM — in both sentences', () => {
+    const [finding] = diedOf({ kind: 'kill-failed', detail: 'accepted 20 times', pid: ORPHAN_PID, refused: false }).issues;
+
+    expect(finding?.message).toContain('DID NOT END IT');
+    expect(finding?.message).toContain('uninterruptible I/O');
+    expect(finding?.message).toContain(String(ORPHAN_PID));
+    expect(finding?.message).not.toContain('REFUSED (');
+    expect(finding?.message).not.toContain('EPERM');
   });
 });
 
@@ -900,6 +1153,64 @@ describe('the remedy each ending earns', () => {
   });
 });
 
+/**
+ * Each row carries the clause only ITS unit's message says (where the kill landed) and the remedy
+ * its branch gives, so a row whose message came from the wrong branch (or the generic one) reds
+ * instead of passing on the shared `--budget` clause.
+ *
+ * `idle` is a log of completed checks only: no unit in flight, which earns the statement remedy.
+ * `converting` is a check whose statement FINISHED and whose rows were still becoming findings —
+ * its own state, so a kill there is never blamed on a statement that would not return.
+ */
+const BRANCHES: ReadonlyArray<readonly [string, readonly ProgressEntry[], string, string]> = [
+  // An empty log is a child that never booted; `started` alone is one that was populating.
+  ['startup', [], 'before the child process had finished starting', 'Node and vat were still loading'],
+  ['population', [STARTED], 'before its population completed', 'Population is legitimately slow'],
+  ['a statement', [POPULATION, FIRST_COST, HUNG_START], 'while the check "', 'A statement that will not finish'],
+  ['idle', [POPULATION, FIRST_COST], 'after the last one had filed its cost', 'A statement that will not finish'],
+  ['converting', [POPULATION, FIRST_COST, CONVERTING_START, CONVERTING], 'while its rows were being converted', 'the conversion runs in this process'],
+  ['examining', [POPULATION, FIRST_COST, EXAMINING_START, EXAMINING], 'while its examined statement was running', 'A statement that will not finish'],
+  ['reporting', [POPULATION, FIRST_COST, CHECKS_DONE], 'while its document was being assembled', 'the SIZE of the document'],
+];
+const BRANCH_MARKERS = BRANCHES.map(([, , marker]) => marker);
+const BRANCH_REMEDIES = [...new Set(BRANCHES.map(([, , , remedy]) => remedy))];
+
+/** A `--budget` mention that is not part of the spelled-out `vat resources check` command. */
+const BARE_BUDGET = /(?<!vat resources check )`--budget/;
+
+/** Asserts `message` carries `marker` and `remedy`, and no OTHER row's marker or remedy. */
+function expectOnlyBranch(message: string, marker: string, remedy: string): void {
+  expect(message).toContain(marker);
+  expect(message).toContain(remedy);
+  for (const other of [...BRANCH_MARKERS, ...BRANCH_REMEDIES].filter((candidate) => candidate !== marker && candidate !== remedy)) {
+    expect(message).not.toContain(other);
+  }
+}
+
+/**
+ * 🔑 A kill's remedy names only a flag the running verb accepts. `--budget` is `vat resources
+ * check`'s alone: standalone, the remedy names the flag; as `vat validate`'s `checks` phase, it
+ * names the whole `vat resources check --budget <seconds>` command and never the bare flag,
+ * which `vat validate` would reject as an unknown option.
+ */
+describe('a budget kill remedy, by who ran the checks', () => {
+  it.each(BRANCHES)('as a phase, during %s: names `vat resources check --budget`, never the bare flag', (_branch, entries, marker, remedy) => {
+    const message = killed(entries, 'phase').issues[0]?.message ?? '';
+
+    expectOnlyBranch(message, marker, remedy);
+    expect(message).toContain('`vat resources check --budget <seconds>`');
+    expect(message).not.toMatch(BARE_BUDGET);
+  });
+
+  it.each(BRANCHES)('standalone, during %s: names the `--budget` flag itself', (_branch, entries, marker, remedy) => {
+    const message = killed(entries, 'standalone').issues[0]?.message ?? '';
+
+    expectOnlyBranch(message, marker, remedy);
+    expect(message).toMatch(BARE_BUDGET);
+    expect(message).not.toContain('vat resources check --budget');
+  });
+});
+
 describe('a budget kill during the REPORTING phase', () => {
   /** The recovered payload for a run killed after every check had finished. */
   const reporting = (): CheckPayloadInput =>
@@ -911,7 +1222,7 @@ describe('a budget kill during the REPORTING phase', () => {
   // "a statement that will not finish cannot be stopped from inside the process
   // — the query is synchronous and holds the event loop". There were no checks
   // after it and no statement was running. Measured: 2,000,000 issues take
-  // ~17 s to serialise after `checks-complete`, so this is easy to reach.
+  // ~17 s to serialise after `statements-complete`, so this is easy to reach.
   it('blames the DOCUMENT, not a statement that would not finish', () => {
     const [finding] = reporting().issues;
 
@@ -957,5 +1268,195 @@ describe('parseBudgetSeconds — a value that is ZERO without saying so', () => 
     // 16 and stays 16. Only a value that MEANS zero without saying so is
     // refused.
     expect(parseBudgetSeconds('0x10')).toBe(16);
+  });
+});
+
+/**
+ * 🔑 The `converting` state. The check's statement FINISHED and its rows were being turned into
+ * findings — work that runs in this process, after the timed span. A kill there used to read as
+ * `while the check "X" was running`, whose remedy says a statement would not finish: false.
+ */
+describe('a run stopped while a check\'s rows were being converted', () => {
+  const converting = (): CheckPayloadInput => killed([POPULATION, FIRST_COST, CONVERTING_START, CONVERTING]);
+
+  it('keeps the converting line through the log reader, which drops any line it does not know', () => {
+    expect(parseProgressLog(`${JSON.stringify(CONVERTING)}\n`)).toStrictEqual([CONVERTING]);
+  });
+
+  it('reads as converting, naming the check and the rows its statement selected', () => {
+    expect(unitInFlight([POPULATION, FIRST_COST, CONVERTING_START, CONVERTING]))
+      .toStrictEqual({ kind: 'converting', name: 'big-select', rows: 40_000 });
+  });
+
+  it('records the check as broken WITH the rows it selected — its statement did complete', () => {
+    expect(converting().costs).toStrictEqual([
+      { name: 'no-markdown', durationMs: 4.25, rows: 3 },
+      { name: 'big-select', durationMs: 2.5, rows: 40_000, broken: true },
+    ]);
+  });
+
+  it('says where it stopped, and never blames a statement that would not return', () => {
+    const [stopped, broken] = converting().issues;
+
+    expect(stopped?.message).toContain('after the check "big-select" had finished its statement (40000 rows), while its rows were being converted');
+    expect(stopped?.message).not.toContain('A statement that will not finish');
+    expect(stopped?.message).not.toContain('was running');
+    expect(broken?.code).toBe('RESOURCE_CHECK_BROKEN');
+    expect(broken?.message).toContain('"big-select"');
+    expect(broken?.message).toContain('converted');
+  });
+
+  it('publishes a schema-valid document that fails the gate', () => {
+    const report = buildCheckOutputData(converting());
+
+    expect(CHECK_REPORT_SCHEMA.safeParse(report).success).toBe(true);
+    expect(exitCodeForReport(report)).toBe(ExitCode.FINDINGS);
+  });
+
+  it('is what the loop itself leaves on disk when it is killed inside a conversion', () => {
+    // The fault injection: the sink stops the run the instant the loop files `converting`, which
+    // is exactly the log a SIGKILL during the conversion leaves behind.
+    const seen: ProgressEntry[] = [];
+    const stall = new Error('killed inside the conversion');
+    expect(() => runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: [],
+      checks: { 'big-select': { description: 'big', sql: 'SELECT path FROM a' } },
+      only: undefined,
+      ask: () => [{ path: 'a.md' }, { path: 'b.md' }],
+      validation: undefined,
+      membersEnumerated: 2,
+      now: () => 0,
+      onProgress: (entry) => {
+        seen.push(entry);
+        if (entry.kind === 'converting') throw stall;
+      },
+    })).toThrow(stall);
+
+    const message = killed([POPULATION, ...seen]).issues[0]?.message ?? '';
+    expect(message).toContain('while its rows were being converted');
+    expect(message).not.toContain('A statement that will not finish');
+  });
+});
+
+/**
+ * 🔑 The `examining` state. A check that declares `examined` runs a SECOND statement after its
+ * violations statement; a kill there is a statement that would not return, and the message must
+ * name it as the examined statement — never as the violations statement, which had finished.
+ */
+describe('a run stopped while a check\'s examined statement was running', () => {
+  const examining = (): CheckPayloadInput => killed([POPULATION, FIRST_COST, EXAMINING_START, EXAMINING]);
+
+  it('keeps the examining line through the log reader, which drops any line it does not know', () => {
+    expect(parseProgressLog(`${JSON.stringify(EXAMINING)}\n`)).toStrictEqual([EXAMINING]);
+  });
+
+  it('keeps a completed check\'s examined count and allowEmpty through the log reader', () => {
+    const counted: ProgressEntry = { kind: 'check', name: 'counted', durationMs: 3, rows: 0, examined: 0, allowEmpty: true };
+    expect(parseProgressLog(`${JSON.stringify(counted)}\n`)).toStrictEqual([counted]);
+  });
+
+  it('reads as examining, naming the check and the rows its violations statement selected', () => {
+    expect(unitInFlight([POPULATION, FIRST_COST, EXAMINING_START, EXAMINING]))
+      .toStrictEqual({ kind: 'examining', name: 'counted', rows: 2 });
+  });
+
+  it('records the check as broken WITH its rows and WITHOUT an examined count', () => {
+    expect(examining().costs).toStrictEqual([
+      { name: 'no-markdown', durationMs: 4.25, rows: 3 },
+      { name: 'counted', durationMs: 1.5, rows: 2, broken: true },
+    ]);
+  });
+
+  it('names the examined statement, never the violations statement, as the one in flight', () => {
+    const [stopped, broken] = examining().issues;
+
+    expect(stopped?.message).toContain('after the check "counted" had finished its violations statement (2 rows), while its examined statement was running');
+    expect(stopped?.message).not.toContain('while the check "counted" was running');
+    expect(broken?.code).toBe('RESOURCE_CHECK_BROKEN');
+    expect(broken?.message).toContain('"counted"');
+    expect(broken?.message).toContain('examined statement');
+  });
+
+  it('carries a completed check\'s examined count onto the recovered cost', () => {
+    const counted: ProgressEntry = { kind: 'check', name: 'counted', durationMs: 3, rows: 1, examined: 9 };
+    expect(killed([POPULATION, counted, HUNG_START]).costs)
+      .toStrictEqual([{ name: 'counted', durationMs: 3, rows: 1, examined: 9 }]);
+  });
+
+  it('re-derives the refusal for a completed check that counted 0, since the child\'s findings died with it', () => {
+    const empty: ProgressEntry = { kind: 'check', name: 'counted', durationMs: 3, rows: 0, examined: 0 };
+    const allowed: ProgressEntry = { kind: 'check', name: 'allowed', durationMs: 3, rows: 0, examined: 0, allowEmpty: true };
+    const codes = killed([POPULATION, empty, allowed, HUNG_START]).issues.map((issue) => [issue.code, issue.message.includes('"counted"')]);
+
+    expect(codes).toContainEqual(['RESOURCE_CHECK_EXAMINED_NOTHING', true]);
+    expect(codes.filter(([code]) => code === 'RESOURCE_CHECK_EXAMINED_NOTHING')).toHaveLength(1);
+  });
+
+  it('is what the loop itself leaves on disk when it is killed inside the examined statement', () => {
+    const seen: ProgressEntry[] = [];
+    const stall = new Error('killed inside the examined statement');
+    expect(() => runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: [],
+      checks: { counted: { description: 'counted', sql: 'SELECT path FROM a', examined: 'SELECT path FROM b' } },
+      only: undefined,
+      ask: () => [{ path: 'a.md' }],
+      validation: undefined,
+      membersEnumerated: 2,
+      now: () => 0,
+      onProgress: (entry) => {
+        seen.push(entry);
+        if (entry.kind === 'examining') throw stall;
+      },
+    })).toThrow(stall);
+
+    const message = killed([POPULATION, ...seen]).issues[0]?.message ?? '';
+    expect(message).toContain('while its examined statement was running');
+    expect(seen.map((entry) => entry.kind)).toStrictEqual(['start', 'examining']);
+  });
+});
+
+/**
+ * 🔑 Killed-run parity. A check that COMPLETED broken before the kill filed its cost; its finding
+ * died with the child. The rebuild must publish that finding exactly as a completed run does —
+ * code, `check`, message and `reason` — or the same check reads differently by how the run ended.
+ */
+describe('a killed run rebuilds a check that completed broken exactly as a completed run publishes it', () => {
+  const BROKEN_CHECKS = {
+    graded: { description: 'graded', sql: 'SELECT graded' },
+    shapeless: { description: 'shapeless', sql: 'SELECT shapeless', examined: 'SELECT nothing' },
+    throws: { description: 'throws', sql: 'SELECT throws' },
+    hangs: { description: 'hangs', sql: 'SELECT hangs' },
+  };
+  const ask = (sql: string): Record<string, unknown>[] => {
+    if (sql === 'SELECT graded') return [{ path: 'a.md', finding_severity: 'high' }];
+    if (sql === 'SELECT throws') throw new Error('no such column: nope');
+    if (sql === 'SELECT nothing') return [];
+    return [{ path: 'b.md' }];
+  };
+  const run = (onProgress?: (entry: ProgressEntry) => void): ReturnType<typeof runProjectChecks> => runProjectChecks({
+    warn: () => undefined,
+    columnsOf: NO_COLUMNS,
+    builtins: [], checks: BROKEN_CHECKS, only: undefined, ask, validation: undefined, membersEnumerated: 2, now: () => 0, onProgress,
+  });
+
+  it.each(['graded', 'shapeless', 'throws'])('re-derives %s\'s RESOURCE_CHECK_BROKEN, check and reason', (name) => {
+    const completed = run().issues.filter((issue) => issue.check === name);
+    const seen: ProgressEntry[] = [];
+    const stall = new Error('killed while the last check hangs');
+    expect(() => run((entry) => {
+      seen.push(entry);
+      if (entry.kind === 'start' && entry.name === 'hangs') throw stall;
+    })).toThrow(stall);
+    // Through the log reader, which drops a line its schema does not declare.
+    const logged = parseProgressLog(`${seen.map((entry) => JSON.stringify(entry)).join('\n')}\n`);
+
+    const rebuilt = killed([POPULATION, ...logged]).issues.filter((issue) => issue.check === name);
+
+    expect(completed.map((issue) => issue.code)).toStrictEqual(['RESOURCE_CHECK_BROKEN']);
+    expect(rebuilt).toStrictEqual(completed);
   });
 });

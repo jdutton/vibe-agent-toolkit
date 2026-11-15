@@ -19,15 +19,17 @@ describe(NAME, () => {
   it(RULE_TESTER_CASES, () => {
     expectRulePasses(NAME, unsafeCallRuleCases({
       unsafeFn: 'tmpdir', unsafeModule: 'node:os', safeFn: 'normalizedTmpdir',
-      safeModule: SAFE_FS_MODULE, exemptPath: PATH_UTILS_IMPL,
+      safeModule: SAFE_FS_MODULE, exemptPath: PATH_UTILS_IMPL, rewrite: 'fix',
     }));
   });
 
   it('points the fix at the configured seam', () => {
     expectRulePasses(NAME, safeModuleCases(
       UNSAFE,
-      `\nimport { normalizedTmpdir } from '${SEAM}';\nconst r = normalizedTmpdir();`,
+      // One pass keeps `tmpdir`'s import; the dead-import leg drops it on the next.
+      `import { tmpdir } from 'node:os';\nimport { normalizedTmpdir } from '${SEAM}';\nconst r = normalizedTmpdir();`,
       [{ messageId: 'noUnsafeOperation' }],
+      `import { normalizedTmpdir } from '${SEAM}';\nconst r = normalizedTmpdir();`,
     ));
   });
 
@@ -42,7 +44,7 @@ describe(NAME, () => {
 /**
  * A dangling MEMBER, which a `no-undef` fixpoint check is blind to.
  *
- * `no-os-tmpdir` is the one rule with `checkMemberExpression`, and its fixer
+ * `no-os-tmpdir` was the first rule to report a member call, and its fixer
  * rewrote only the property — turning `os.tmpdir()` into
  * `os.normalizedTmpdir()`, a method that does not exist on the `node:os`
  * namespace. The replacement is a free function from this package, and the
@@ -65,6 +67,26 @@ describe(NAME, () => {
  * forms belong in the same set — and the false positives must stay rejected,
  * which is what the negative rows pin.
  */
+/**
+ * A bare `tmpdir()` is reported only when it resolves through scope to `node:os`'s own
+ * export — however it was bound — and never by name alone (see the `memfs` and
+ * local-function valid cases in `factory-cases.ts`).
+ */
+describe('a bare tmpdir() is reported however node:os bound it', () => {
+  const cfg = ruleConfig(NAME);
+  it.each([
+    ['an aliased import', "import { tmpdir as t } from 'node:os';\nexport const a = t();"],
+    ['a destructured require()', "const { tmpdir } = require('node:os');\nexport const a = tmpdir();"],
+    ['a destructured await import()', "export async function f() {\n  const { tmpdir } = await import('os');\n  return tmpdir();\n}"],
+  ])('%s', (_label, source) => {
+    expect(lint(source, cfg)).toHaveLength(1);
+  });
+
+  it('a destructured require() of another module is not', () => {
+    expect(lint("const { tmpdir } = require('memfs');\nexport const a = tmpdir();", cfg)).toStrictEqual([]);
+  });
+});
+
 describe('os.tmpdir() is rewritten to a free call, however the namespace was bound', () => {
   const cfg = ruleConfig(NAME);
   const DYNAMIC = "export async function f() {\n  const os = await import('node:os');\n  return os.tmpdir();\n}";
@@ -83,6 +105,20 @@ describe('os.tmpdir() is rewritten to a free call, however the namespace was bou
     expect(output).not.toMatch(/\bos\s*\.\s*normalizedTmpdir\b/);
     expect(output.match(/(?<![.\w])normalizedTmpdir\(\)/g)).toHaveLength(sites);
     expect(lint(output, cfg)).toStrictEqual([]);
+  });
+
+  // A `var` can be the unbraced body of a control statement; removing it would make the NEXT
+  // statement that body (`if (x) main();`), a silent change in what the program does.
+  it.each([
+    ['if', 'if (process.env.DEBUG) var os = require("node:os");'],
+    ['else', 'if (process.env.DEBUG) {} else var os = require("node:os");'],
+    ['while', 'while (retry()) var os = require("node:os");'],
+    ['for', 'for (;retry();) var os = require("node:os");'],
+    ['a label', 'tag: var os = require("node:os");'],
+  ])('a dead require() that is the unbraced body of %s is kept', (_label, declaration) => {
+    const source = `import { normalizedTmpdir } from '${SAFE_FS_MODULE}';\n${declaration}\nmain();\nexport const a = normalizedTmpdir();`;
+
+    expect(fix(source, cfg).output).toContain(declaration);
   });
 
   it.each([

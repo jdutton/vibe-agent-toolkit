@@ -14,6 +14,10 @@ jobs:
   validate:
     name: Run vibe-validate validation
     runs-on: ${{ matrix.os }}
+    # A hang must end the job with the test named, not burn GitHub's 6 h default.
+    # Measured 2026-11-01: ubuntu 40-41 min, windows 52 min to 1 h 53 min on a slow
+    # runner. Each ceiling is about 1.6x its platform's slowest run.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 180 || 70 }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -43,9 +47,9 @@ jobs:
           fi
         env:
           CONTRABAND_TOKENS: ${{ secrets.CONTRABAND_TOKENS }}
-      # NET_AVAILABLE: the four network suites (external-link-validator,
-      # external-url-validation, audit-git-url, corpus-scan) skip unless it is
-      # set; a hosted runner has the network, so this is the tier that runs them.
+      # NET_AVAILABLE: the two network suites (audit-git-url, corpus-scan, which
+      # clone from GitHub) skip unless it is set; a hosted runner has the
+      # network, so this is the tier that runs them.
       # Locally they stay opt-in (`NET_AVAILABLE=1 bun run validate`).
       - name: Run validation
         run: bun run validate

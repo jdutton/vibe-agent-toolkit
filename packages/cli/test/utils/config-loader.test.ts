@@ -11,6 +11,25 @@ import {
   resetLoadedConfigCache,
 } from '../../src/utils/config-loader.js';
 
+/**
+ * Load a config and capture what the loader wrote to stderr. The loader writes
+ * its warning straight to stderr, so that is where it has to be caught;
+ * asserting on a return value would pass with nothing printed.
+ */
+function loadConfigCapturingStderr(dir: string): { config: ReturnType<typeof loadConfig>; writes: string[] } {
+  const writes: string[] = [];
+  const originalWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+    writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    return { config: loadConfig(dir, 'source'), writes };
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+}
+
 describe('loadConfig', () => {
   const suite = setupSyncTempDirSuite('vat-config');
   let tempDir: string;
@@ -25,14 +44,13 @@ describe('loadConfig', () => {
   });
 
   it('should return undefined when no file exists', () => {
-    const result = loadConfig(tempDir);
+    const result = loadConfig(tempDir, 'source');
     expect(result).toBeUndefined();
   });
 
   it('should load and parse valid config file', () => {
     const configPath = safePath.join(tempDir, CONFIG_FILENAME);
-    const configContent = `version: 1
-resources:
+    const configContent = `resources:
   exclude:
     - "node_modules/**"
   collections:
@@ -42,7 +60,7 @@ resources:
 `;
     fs.writeFileSync(configPath, configContent);
 
-    const result = loadConfig(tempDir);
+    const result = loadConfig(tempDir, 'source');
     expect(result?.resources?.exclude).toEqual(['node_modules/**']);
     expect(result?.resources?.collections?.docs?.include).toEqual(['docs/**/*.md']);
   });
@@ -52,16 +70,19 @@ resources:
     const configContent = `resources: 42\n`; // a section of the wrong type refuses
     fs.writeFileSync(configPath, configContent);
 
-    expect(() => loadConfig(tempDir)).toThrow();
+    expect(() => loadConfig(tempDir, 'source')).toThrow();
   });
 
-  it('ignores the `version` key whatever its value', () => {
-    // The npm package version is the only version VAT has; a stale
-    // `version: 1` (or any other value) in an adopter config is not read.
+  it('warns about a version key, naming it and the file, and drops it', () => {
+    // The npm package version is the only version VAT has; the root key is
+    // deleted and an unrecognized key like any other.
     const configPath = safePath.join(tempDir, CONFIG_FILENAME);
     fs.writeFileSync(configPath, `version: 2\nresources:\n  exclude: ['node_modules/**']\n`);
+    const { config, writes } = loadConfigCapturingStderr(tempDir);
 
-    expect(loadConfig(tempDir)?.resources?.exclude).toEqual(['node_modules/**']);
+    expect(config?.resources?.exclude).toEqual(['node_modules/**']);
+    expect(writes.join('')).toContain('unrecognized key "version"');
+    expect(writes.join('')).toContain(configPath);
   });
 
   it('WARNS about a key VAT removed, in words the adopter can act on, and loads anyway', () => {
@@ -76,25 +97,12 @@ resources:
     // read the section it sat in. Every assertion about the MESSAGE is kept —
     // that half was the point — and only the outcome changed.
     const configPath = safePath.join(tempDir, CONFIG_FILENAME);
-    fs.writeFileSync(configPath, 'version: 1\nresources:\n  metadata:\n    frontmatter: true\n');
+    fs.writeFileSync(configPath, 'resources:\n  metadata:\n    frontmatter: true\n');
 
-    const warnings: string[] = [];
-    const originalWrite = process.stderr.write.bind(process.stderr);
-    // The loader writes its warning straight to stderr, so that is where it has
-    // to be caught; asserting on a return value would pass with nothing printed.
-    process.stderr.write = ((chunk: string | Uint8Array): boolean => {
-      warnings.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
-      return true;
-    }) as typeof process.stderr.write;
-    let config: ReturnType<typeof loadConfig>;
-    try {
-      config = loadConfig(tempDir);
-    } finally {
-      process.stderr.write = originalWrite;
-    }
+    const { config, writes: warnings } = loadConfigCapturingStderr(tempDir);
 
     // It LOADED, and the unknown key is gone from what VAT will act on.
-    expect(config?.version).toBe(1);
+    expect(config).toBeDefined();
     expect((config?.resources as Record<string, unknown> | undefined)?.['metadata']).toBeUndefined();
 
     const message = warnings.join('');
@@ -112,9 +120,9 @@ resources:
     // act on a config it misunderstood, which is a different thing from a word
     // it does not know.
     const configPath = safePath.join(tempDir, CONFIG_FILENAME);
-    fs.writeFileSync(configPath, 'version: 1\nskills:\n  include: not-an-array\n');
+    fs.writeFileSync(configPath, 'skills:\n  include: not-an-array\n');
 
-    expect(() => loadConfig(tempDir)).toThrow(/Expected array/);
+    expect(() => loadConfig(tempDir, 'source')).toThrow(/Expected array/);
   });
 
   it('should throw on invalid YAML syntax', () => {
@@ -122,13 +130,12 @@ resources:
     const configContent = `invalid: yaml: syntax:\n`;
     fs.writeFileSync(configPath, configContent);
 
-    expect(() => loadConfig(tempDir)).toThrow();
+    expect(() => loadConfig(tempDir, 'source')).toThrow();
   });
 
   it('should load config with resource collections', () => {
     const configPath = safePath.join(tempDir, CONFIG_FILENAME);
-    const configContent = `version: 1
-resources:
+    const configContent = `resources:
   exclude:
     - "**/node_modules/**"
     - "**/dist/**"
@@ -145,7 +152,7 @@ resources:
 `;
     fs.writeFileSync(configPath, configContent);
 
-    const result = loadConfig(tempDir);
+    const result = loadConfig(tempDir, 'source');
     expect(result?.resources?.collections).toBeDefined();
     expect(result?.resources?.collections?.['project-docs']).toBeDefined();
     expect(result?.resources?.collections?.['project-docs']?.include).toEqual([
@@ -157,8 +164,7 @@ resources:
 
   it('should load config with claude: section', () => {
     const configPath = safePath.join(tempDir, CONFIG_FILENAME);
-    const configContent = `version: 1
-claude:
+    const configContent = `claude:
   marketplaces:
     my-tools:
       owner:
@@ -170,7 +176,7 @@ claude:
 `;
     fs.writeFileSync(configPath, configContent);
 
-    const result = loadConfig(tempDir);
+    const result = loadConfig(tempDir, 'source');
     expect(result?.claude).toBeDefined();
     expect(result?.claude?.marketplaces?.['my-tools']).toBeDefined();
     expect(result?.claude?.marketplaces?.['my-tools']?.owner?.name).toBe('My Org');
@@ -180,8 +186,7 @@ claude:
 
   it('should load complete config with resources and claude sections', () => {
     const configPath = safePath.join(tempDir, CONFIG_FILENAME);
-    const configContent = `version: 1
-resources:
+    const configContent = `resources:
   exclude:
     - "**/node_modules/**"
   collections:
@@ -200,8 +205,7 @@ claude:
 `;
     fs.writeFileSync(configPath, configContent);
 
-    const result = loadConfig(tempDir);
-    expect(result?.version).toBe(1);
+    const result = loadConfig(tempDir, 'source');
     expect(result?.resources?.collections?.docs).toBeDefined();
     expect(result?.claude?.marketplaces?.['vat-skills']?.owner?.name).toBe(
       'vibe-agent-toolkit contributors'
@@ -210,7 +214,7 @@ claude:
 });
 
 const CACHED_CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
-const VALID_CONFIG_YAML = 'version: 1\n';
+const VALID_CONFIG_YAML = '{}\n';
 
 function writeConfigToDir(dir: string, content: string): string {
   const configPath = safePath.join(dir, CACHED_CONFIG_FILENAME);
@@ -234,39 +238,39 @@ describe('loadConfigCached (Layer 2 cache — spec §8 / §13.5)', () => {
   it('returns cached config without re-parsing on second call', () => {
     writeConfigToDir(tempDir, VALID_CONFIG_YAML);
 
-    const first = loadConfigCached(tempDir);
-    expect(first?.version).toBe(1);
+    const first = loadConfigCached(tempDir, 'source');
+    expect(first).toEqual({});
 
     // Mutate to broken yaml. If the cache hits, we still get the previous
     // parsed result — proving the second call did not re-parse.
     writeConfigToDir(tempDir, ':::: not yaml :::\n');
 
-    const second = loadConfigCached(tempDir);
+    const second = loadConfigCached(tempDir, 'source');
     expect(second).toBe(first); // same object reference proves cache hit
   });
 
   it('caches "not found" as undefined (no re-stat per call)', () => {
     // tempDir has no config file. First call returns undefined.
-    const first = loadConfigCached(tempDir);
+    const first = loadConfigCached(tempDir, 'source');
     expect(first).toBeUndefined();
 
     // Even if we now write a config, the cached undefined wins until reset.
     writeConfigToDir(tempDir, VALID_CONFIG_YAML);
 
-    const second = loadConfigCached(tempDir);
+    const second = loadConfigCached(tempDir, 'source');
     expect(second).toBeUndefined();
   });
 
   it('resetLoadedConfigCache() clears the cache', () => {
     // Same setup as above: cache `undefined` then mutate.
-    const first = loadConfigCached(tempDir);
+    const first = loadConfigCached(tempDir, 'source');
     expect(first).toBeUndefined();
 
     writeConfigToDir(tempDir, VALID_CONFIG_YAML);
     resetLoadedConfigCache();
 
-    const fresh = loadConfigCached(tempDir);
-    expect(fresh?.version).toBe(1);
+    const fresh = loadConfigCached(tempDir, 'source');
+    expect(fresh).toEqual({});
   });
 
   it('warns ONCE per config path across calls, and again after a reset', () => {
@@ -278,7 +282,7 @@ describe('loadConfigCached (Layer 2 cache — spec §8 / §13.5)', () => {
     // run `loadConfig` is reached from four places, so the missed mutation is four
     // duplicate warning blocks — the "hundreds of identical lines" the ledger
     // exists to prevent.
-    writeConfigToDir(tempDir, 'version: 1\nresources:\n  metadata:\n    frontmatter: true\n');
+    writeConfigToDir(tempDir, 'resources:\n  metadata:\n    frontmatter: true\n');
 
     const warnings: string[] = [];
     const originalWrite = process.stderr.write.bind(process.stderr);
@@ -290,16 +294,16 @@ describe('loadConfigCached (Layer 2 cache — spec §8 / §13.5)', () => {
       // TWO loads of the SAME config. `loadConfigCached` short-circuits on the
       // second, so `loadConfig` is called directly as well — the ledger, not the
       // parse cache, has to be what silences the repeat.
-      loadConfigCached(tempDir);
-      loadConfig(tempDir);
-      loadConfig(tempDir);
+      loadConfigCached(tempDir, 'source');
+      loadConfig(tempDir, 'source');
+      loadConfig(tempDir, 'source');
 
       expect(warnings).toHaveLength(1);
 
       // The ledger is part of the cache's state: a reset must let the warning
       // through again, or a test that edits a fixture between runs sees nothing.
       resetLoadedConfigCache();
-      loadConfig(tempDir);
+      loadConfig(tempDir, 'source');
       expect(warnings).toHaveLength(2);
     } finally {
       process.stderr.write = originalWrite;
@@ -314,15 +318,15 @@ describe('loadConfigCached (Layer 2 cache — spec §8 / §13.5)', () => {
     // section of the wrong type.
     writeConfigToDir(tempDir, 'resources: 42\n');
 
-    expect(() => loadConfigCached(tempDir)).toThrow(ConfigLoadError);
+    expect(() => loadConfigCached(tempDir, 'source')).toThrow(ConfigLoadError);
 
     // The error is cached: even fixing the file re-throws the SAME error without
     // re-parsing, until the cache is reset (mirrors the success-cache behavior).
     writeConfigToDir(tempDir, VALID_CONFIG_YAML);
-    expect(() => loadConfigCached(tempDir)).toThrow(ConfigLoadError);
+    expect(() => loadConfigCached(tempDir, 'source')).toThrow(ConfigLoadError);
 
     // After a reset, the now-valid file parses cleanly.
     resetLoadedConfigCache();
-    expect(loadConfigCached(tempDir)).toBeDefined();
+    expect(loadConfigCached(tempDir, 'source')).toBeDefined();
   });
 });

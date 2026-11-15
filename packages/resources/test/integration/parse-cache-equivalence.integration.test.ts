@@ -54,18 +54,16 @@ Start at [the api](./api.md) and then [the notes][notes].
  * Frontmatter whose values JSON cannot carry.
  *
  * `.inf` and `.nan` become `Infinity`/`NaN`, which `JSON.stringify` writes as
- * `null`; `!!binary` becomes a `Buffer`, which it rewrites as `{type,data}`; the
- * cyclic anchor makes it **throw**. Present here because the cache stores the
- * YAML *source* and re-parses it on a hit — a cache that stored the parsed
- * object would corrupt the first three and silently never store the fourth, and
- * only a document like this one can tell the two designs apart.
+ * `null`; `!!binary` becomes a `Buffer`, which it rewrites as `{type,data}`.
+ * Present here because the cache stores the YAML *source* and re-parses it on a
+ * hit — a cache that stored the parsed object would corrupt all three, and only
+ * a document like this one can tell the two designs apart. (No cyclic anchor: it
+ * nests without end, so `outputDepth` refuses it and no run ever files it.)
  */
 const EXOTIC_DOC = `---
 ratio: .inf
 missing: .nan
 blob: !!binary "d2F2ZQ=="
-loop: &node
-  back: *node
 ---
 
 # Exotic

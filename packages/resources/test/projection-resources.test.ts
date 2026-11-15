@@ -212,6 +212,7 @@ describe('RealizationConditionRowSchema', () => {
     targetExists: true,
     matchedPattern: '**/agents/**',
     matchedPayload: { ruleIndex: 1, template: 'see {{path}}' },
+    targetFaultClass: null,
   };
 
   it('accepts a refusal condition carrying the reference that provoked it', () => {
@@ -238,7 +239,7 @@ describe('RealizationConditionRowSchema', () => {
 });
 
 describe('CONDITION_WITHOUT_REFERENCE', () => {
-  it('nulls every provenance column and names no other', () => {
+  it('nulls every provenance column and the target-fault column, and names no other', () => {
     // Pinned as a SET, not spot-checked: the constant's whole job is to be the
     // complete "no reference behind this" answer, so a column added to the row
     // and forgotten here must fail rather than silently leave producers short
@@ -247,7 +248,7 @@ describe('CONDITION_WITHOUT_REFERENCE', () => {
     // comparator the lint config is opinionated about, and the constant's own
     // order is deterministic and readable.
     expect(Object.keys(CONDITION_WITHOUT_REFERENCE)).toEqual([
-      'sourcePath', 'sourceLine', 'sourceRef', 'targetExists', 'matchedPattern', 'matchedPayload',
+      'sourcePath', 'sourceLine', 'sourceRef', 'targetExists', 'matchedPattern', 'matchedPayload', 'targetFaultClass',
     ]);
     expect(Object.values(CONDITION_WITHOUT_REFERENCE).every((value) => value === null)).toBe(true);
   });

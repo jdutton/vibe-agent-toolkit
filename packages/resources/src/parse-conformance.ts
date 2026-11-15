@@ -53,6 +53,16 @@ import {
 import { remarkParser } from './remark-parser.js';
 import { type ParseFacts, parseFactsShapeSource } from './schemas/parse-facts.js';
 
+/**
+ * The in-process composer and processor, for the private parser bake-off
+ * (`dev-tools/src/parser-bakeoff.ts`), which times a parser-under-test against
+ * remark on the calling thread. This subpath is the ONE sanctioned in-process
+ * harness: no shipped `src` imports it, and no other subpath publishes a parser
+ * (`parser-import-boundary.test.ts`, dev-tools).
+ */
+export { parseMarkdownContent } from './link-parser.js';
+export { createMarkdownProcessor } from './markdown-processor.js';
+
 /** One document to compare the two implementations over. */
 export interface ConformanceDocument {
   /** How the document is named in findings — a path, or a fixture's label. */

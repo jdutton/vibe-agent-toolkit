@@ -7,9 +7,9 @@
  * exactly the same `lstat`, and one fact must have one implementation.
  */
 
-import { lstatSync, realpathSync, statSync } from 'node:fs';
+import { lstatSync } from 'node:fs';
 
-import { isFilesystemAccessError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { followedStatSync, type FsFaultFacts, fsFaultOf, isLinkChainRefusedError, linkResolutionFault, realpathNativeSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import { matchesCollection } from '../collection-matcher.js';
@@ -23,7 +23,7 @@ import {
   type ResourceRealizationRow,
 } from '../schemas/projection-resources.js';
 
-import { readKeyedContent, type RunContentCache } from './content-cache.js';
+import { isSizeRefusal, readKeyedContent, type RunContentCache } from './content-cache.js';
 import { canonicalJson } from './digest.js';
 
 /**
@@ -69,7 +69,10 @@ export function relativize(absolutePath: string, root: string): string {
  *   happens.
  * - `deferGitignored` — key unless the row's own `gitignored` column is true.
  */
-export type ContentDemand = 'eager' | 'deferred' | 'deferGitignored';
+export const CONTENT_DEMANDS = ['eager', 'deferred', 'deferGitignored'] as const;
+
+/** One of {@link CONTENT_DEMANDS}. */
+export type ContentDemand = (typeof CONTENT_DEMANDS)[number];
 
 /**
  * What an enumerator already established about a path, so no `lstat` is needed.
@@ -105,15 +108,15 @@ export interface RealizationContext {
   /** Absent (or unusable) when the root is not a git repository. */
   gitTracker?: GitTracker | undefined;
   /**
-   * The run's content cache, so one path keyed in two extents is read once.
-   *
-   * Optional because this function is also called outside a population — the
-   * CLI's enumeration oracle keys a single path with no run to belong to — and a
-   * cache with a lifetime of one call would be a pure cost. Inside `populate` it
-   * is always present, threaded from the builder through
-   * {@link ProjectionBase.contentCache}.
+   * The run's content cache, so one path keyed in two extents is read once, and
+   * every read is held to the run's parse input cap; inside `populate` it is
+   * always the builder's, threaded through {@link ProjectionBase.contentCache}.
+   * `null` only for a caller outside a population that wants the bytes
+   * themselves and parses none of them — the CLI's enumeration oracle, which keys
+   * a single path with no run to belong to: such a read has no cap
+   * (`readKeyedContent`).
    */
-  contentCache?: RunContentCache | undefined;
+  contentCache: RunContentCache | null;
   /**
    * Whether this extent wants the bytes keyed. Absent means {@link ContentDemand}
    * `'eager'` — the historical behaviour, and the reason no existing caller had
@@ -121,22 +124,10 @@ export interface RealizationContext {
    */
   contentDemand?: ContentDemand | undefined;
   /**
-   * A byte identity the enumerator already computed for THIS path — the git
-   * source's blob OID, when it has a sound one.
-   *
-   * Only ever a lookup into the run's cache, so that a second path holding
-   * identical bytes costs no read; never the key a parse is filed under. Absent
-   * for every path a walk found, and absent for symlinks and submodules even
-   * under git — see `EnumeratedPath.contentHint`, which is where the mode is
-   * visible and therefore where the exclusion belongs.
-   */
-  contentHint?: string | undefined;
-  /**
    * The enumerator's own answer to "what is this path", when it had one.
    *
-   * Authoritative, unlike {@link RealizationContext.contentHint}, which is only
-   * ever a cache lookup whose miss is free: supplying this **replaces** the
-   * `lstat`, it does not accelerate it. So a source may set it only from
+   * Authoritative: supplying this **replaces** the `lstat`, it does not
+   * accelerate it. So a source may set it only from
    * something it genuinely observed — see {@link PathShape} for the exact bar —
    * and absence means "ask the filesystem", which is what every caller that has
    * not opted in continues to do.
@@ -185,9 +176,11 @@ interface PathObservation {
  * Ask the filesystem.
  *
  * @param absolutePath - Path to stat
- * @returns What `lstat` (and, for a link, `stat`) said
+ * @param root - The corpus root the path is crawled in: a link's chain is read beneath it before
+ *   the kernel follows it (`link-following.ts`)
+ * @returns What `lstat` (and, for a link, a followed `stat`) said
  */
-function statObservation(absolutePath: string): PathObservation {
+function statObservation(absolutePath: string, root: string): PathObservation {
   try {
     const link = lstatSync(absolutePath);
     if (!link.isSymbolicLink()) {
@@ -200,7 +193,8 @@ function statObservation(absolutePath: string): PathObservation {
       };
     }
     try {
-      const target = statSync(absolutePath);
+      const target = followedStatSync(absolutePath, root);
+      if (target === undefined) return unresolvedLink(link.mtime);
       return {
         exists: true,
         isDirectory: target.isDirectory(),
@@ -209,23 +203,18 @@ function statObservation(absolutePath: string): PathObservation {
         mtime: link.mtime,
       };
     } catch (error) {
-      // The target is not there, or the OS will not follow the link to it
-      // (ELOOP, EACCES on the target's directory): either way this process
-      // cannot resolve it, which is what the column says.
-      if (!isFilesystemAccessError(error)) throw error;
-      return {
-        exists: true,
-        isDirectory: false,
-        isSymlink: true,
-        symlinkResolves: false,
-        mtime: link.mtime,
-      };
+      // The OS will not follow the link to its target (EACCES on the target's
+      // directory), or VAT will not hand the kernel its chain (a hop naming a
+      // network or device path): either way this process cannot resolve it,
+      // which is what the column says.
+      if (!isLinkChainRefusedError(error) && fsFaultOf(error) === undefined) throw error;
+      return unresolvedLink(link.mtime);
     }
   } catch (error) {
     // Absent, or the filesystem refused to look — `exists` is false and every
     // other column takes its "we could not look" default rather than a guess.
     // A bug in this function is not "could not look" and stays loud.
-    if (!isFilesystemAccessError(error)) throw error;
+    if (fsFaultOf(error) === undefined) throw error;
     return {
       exists: false,
       isDirectory: false,
@@ -234,6 +223,17 @@ function statObservation(absolutePath: string): PathObservation {
       mtime: null,
     };
   }
+}
+
+/** A symbolic link this process cannot resolve: dangling, a loop, refused by the OS or by VAT. */
+function unresolvedLink(mtime: Date): PathObservation {
+  return {
+    exists: true,
+    isDirectory: false,
+    isSymlink: true,
+    symlinkResolves: false,
+    mtime,
+  };
 }
 
 /**
@@ -284,7 +284,7 @@ export async function collectRealization(
 ): Promise<ResourceRealizationRow> {
   const { exists, isDirectory, isSymlink, symlinkResolves, mtime }
     = context.observedShape === undefined
-      ? statObservation(absolutePath)
+      ? statObservation(absolutePath, context.root)
       : shapeObservation(context.observedShape);
 
   // `isIgnoredByActiveSet`, NOT `isIgnored`, and the difference is 59× on this
@@ -366,7 +366,19 @@ export async function collectRealization(
 }
 
 /**
- * A path's real location, or `null` when it cannot be resolved.
+ * Where a path really lives, as {@link resolveRealPath} answers it.
+ *
+ * `nowhere` is one answer with its reason: `fault: null` when the OS looked and
+ * found nothing (absent, dangling, a cycle), and the fault — errno and class —
+ * when it declined or failed to look. A read lane reports that fault against the
+ * one path; it never stops the run.
+ */
+export type RealPathResolution =
+  | { readonly kind: 'resolved'; readonly path: string }
+  | { readonly kind: 'nowhere'; readonly fault: FsFaultFacts | null };
+
+/**
+ * A path's real location, or why it has none.
  *
  * Exported so a population pass can group by identity without resolving twice,
  * and because "two paths are the same file" is a question only the real path
@@ -375,20 +387,20 @@ export async function collectRealization(
  * already contains.
  *
  * Distinct from `identity.ts`'s ancestor-walking fallback on purpose: this one
- * reports unresolvability as `null` rather than inventing a spelling, because
- * its callers are asking *whether* a path resolves.
+ * reports unresolvability rather than inventing a spelling, because its callers
+ * are asking *whether* a path resolves.
  *
  * @param absolutePath - Path to resolve
- * @returns Forward-slashed real path, or null
+ * @param within - The tree the path is crawled in (the corpus root): its link chain is read beneath
+ *   it before the kernel is asked (`link-following.ts`)
+ * @returns The forward-slashed real path, or `nowhere` with the fault (or `null`) that says why
+ * @throws The resolution's error when it carries no errno — a bug stays loud
  */
-export function realPathOrNull(absolutePath: string): string | null {
+export function resolveRealPath(absolutePath: string, within: string): RealPathResolution {
   try {
-    return toForwardSlash(realpathSync.native(absolutePath));
+    return { kind: 'resolved', path: realpathNativeSync(absolutePath, within) };
   } catch (error) {
-    // Absent, dangling, a cycle, or refused: the filesystem will not resolve
-    // it, which is the `null` this answers. A bug is not that.
-    if (!isFilesystemAccessError(error)) throw error;
-    return null;
+    return { kind: 'nowhere', fault: linkResolutionFault(error) ?? null };
   }
 }
 
@@ -412,7 +424,11 @@ interface ObservedPath {
  *    consumer could not tell a corpus of directories from one it declined to
  *    read.
  * 2. **The demand policy defers.** No read happens at all; that is the saving.
- * 3. **Otherwise read.** Success keys it; a throw is `unreadable`.
+ * 3. **Otherwise read.** Success keys it; a file refused by its size is
+ *    `oversize`, never read — too large to decode, or, for a kind a parser
+ *    reads, past the run's parse input cap (the run's cache holds it to it);
+ *    a filesystem refusal is `unreadable`; anything else is a bug and is
+ *    rethrown.
  *
  * A read failure is a fact about the corpus, not an error in the harness — an
  * unreadable file must show up as a row with a null key, not abort the
@@ -451,13 +467,17 @@ async function keyOrState(
       // kind back off that prefix.
       parserKindForMimeType(mime) ?? NO_PARSER_KIND,
       context.contentCache,
-      context.contentHint,
     );
     return { contentKey: keyed.key, contentState: 'keyed' };
   } catch (error) {
+    // Refused by its size before any read (see `readDecodableBytes`): too large
+    // to become a string, or past the parse input cap a parser would refuse it at.
+    if (isSizeRefusal(error)) {
+      return { contentKey: null, contentState: 'oversize' };
+    }
     // `unreadable` means the filesystem refused the bytes, and that is the
     // only thing it may mean: a bug in the keying is not a fact about the corpus.
-    if (!isFilesystemAccessError(error)) throw error;
+    if (fsFaultOf(error) === undefined) throw error;
     return { contentKey: null, contentState: 'unreadable' };
   }
 }

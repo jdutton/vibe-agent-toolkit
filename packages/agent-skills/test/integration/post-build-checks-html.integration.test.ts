@@ -5,6 +5,7 @@
  * checkUnreferencedFiles hard-filtered to .md, causing broken links
  * INSIDE bundled HTML to ship with a green build.
  */
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
@@ -118,5 +119,20 @@ describe('post-build checks: HTML/HTM file support', () => {
         .map(i => i.location);
       expect(unreferencedLocations).not.toContain(`${RESOURCES_DIR}/linked-page.html`);
     });
+  });
+
+  // The packager refuses a refused file before writing, so a packaged HTML file the worker
+  // refuses here was refused on this read-back: a finding at it, never a raw `ParseLimitError`.
+  it('reports a packaged HTML file the parse worker refuses as RESOURCE_PARSE_LIMIT_EXCEEDED at it', async () => {
+    mkdirSyncReal(safePath.join(outputDir, RESOURCES_DIR), { recursive: true });
+    writeSkillMd(outputDir, `${RESOURCES_DIR}/page.html`);
+    writeFileSync(
+      safePath.join(outputDir, RESOURCES_DIR, 'page.html'),
+      `<!-- ${randomUUID()} -->\n${'<a href="../SKILL.md">l</a>\n'.repeat(20_000)}`,
+    );
+
+    const issues = await checkBrokenPackagedLinks(outputDir);
+
+    expect(issues).toEqual([expect.objectContaining({ code: 'RESOURCE_PARSE_LIMIT_EXCEEDED', location: `${RESOURCES_DIR}/page.html` })]);
   });
 });

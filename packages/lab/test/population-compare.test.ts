@@ -168,6 +168,6 @@ describe('comparePopulation', () => {
 
     expect(comparison.ok).toBe(false);
     if (comparison.ok) return;
-    expect(comparison.refusal).toContain("is not a 'population' body");
+    expect(comparison.refusal).toMatch(/'population' report was captured by a lab whose report shape differs.*re-capture it/u);
   });
 });

@@ -4,27 +4,10 @@
 
 **CRITICAL**: All packages in this monorepo share the same version. When any package changes, all packages are bumped together. This ensures compatibility and simplifies dependency management.
 
-Current packages (19 published, 1 private):
-- @vibe-agent-toolkit/schema
-- @vibe-agent-toolkit/utils
-- @vibe-agent-toolkit/discovery
-- @vibe-agent-toolkit/resources
-- @vibe-agent-toolkit/rag
-- @vibe-agent-toolkit/rag-lancedb
-- @vibe-agent-toolkit/agent-config
-- @vibe-agent-toolkit/agent-runtime
-- @vibe-agent-toolkit/runtime-claude-agent-sdk
-- @vibe-agent-toolkit/agent-skills
-- @vibe-agent-toolkit/runtime-langchain
-- @vibe-agent-toolkit/runtime-openai
-- @vibe-agent-toolkit/runtime-vercel-ai-sdk
-- @vibe-agent-toolkit/transports
-- @vibe-agent-toolkit/cli
-- @vibe-agent-toolkit/gateway-mcp
-- @vibe-agent-toolkit/vat-development-agents
-- @vibe-agent-toolkit/vat-example-cat-agents
-- vibe-agent-toolkit (umbrella package)
-- @vibe-agent-toolkit/dev-tools (PRIVATE - not published)
+Every package under `packages/` without `"private": true` in its `package.json` is published,
+`vibe-agent-toolkit` (the umbrella that provides the `vat` command) among them; the package table in
+the root [`CLAUDE.md`](../CLAUDE.md) shows which ship. The publish order is derived from the
+workspace dependency graph, not kept by hand.
 
 ## Version Bump Workflow
 

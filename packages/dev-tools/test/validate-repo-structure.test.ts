@@ -17,7 +17,7 @@ import {
   runGitOrThrow,
 } from '@vibe-agent-toolkit/utils/git';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
   classifySeverityCountsLane,
@@ -74,7 +74,7 @@ export interface AuditOutcome {
 describe('classifySeverityCountsLane — regression guards', () => {
   it('sees a lane that calls the shared collapse, whatever it names its findings', () => {
     const result = classifySeverityCountsLane(`
-      const status = calculateValidationStatus(rows);
+      const status = resultStatus(rows);
     `);
     expect(result).toEqual({ isLane: true, publishesCounts: true });
   });
@@ -85,7 +85,28 @@ describe('classifySeverityCountsLane — regression guards', () => {
     // literal nor a counts property — the migration that FIXED the lane erased
     // it from the population (three commands went "stale" the day they moved).
     const result = classifySeverityCountsLane(`
-      return buildReport<CheckData>({ examined, findings, data });
+      return buildReport<CheckData>({ examined, findings, data, gate });
+    `);
+    expect(result).toEqual({ isLane: true, publishesCounts: true });
+  });
+
+  it('sees a lane that describes its result through the shared describeIssues', () => {
+    // `describeIssues` derives status, summary and the sentence through
+    // `summarizeIssues`; a validator migrated onto it calls neither by name.
+    const result = classifySeverityCountsLane(`
+      return { path, type, ...describeIssues(issues, 'claude-plugin'), issues };
+    `);
+    expect(result).toEqual({ isLane: true, publishesCounts: true });
+  });
+
+  it('sees a lane that publishes the envelope through the run-integrity pass', () => {
+    // `withRunIntegrity` is the pass every report takes on its way out, and it
+    // rebuilds the envelope — so a lane that hands a report to it (the corpus
+    // runner, writing each plugin's audit report) publishes `summary` without
+    // spelling the builder's name.
+    const result = classifySeverityCountsLane(`
+      const document = withRunIntegrity(located, AUDIT_EXAMINED);
+      return { audit: { status: document.status, findings_emitted: document.findings.length } };
     `);
     expect(result).toEqual({ isLane: true, publishesCounts: true });
   });
@@ -95,7 +116,7 @@ describe('classifySeverityCountsLane — regression guards', () => {
     // recogniser keys on, not the call.
     const aliased = `
       import { buildReport as buildEnvelope } from '@vibe-agent-toolkit/schema';
-      const r = buildEnvelope({ examined: 1, findings, data });
+      const r = buildEnvelope({ examined: 1, findings, data, gate: { strict: false } });
     `;
     expect(classifySeverityCountsLane(aliased)).toEqual({ isLane: true, publishesCounts: true });
   });
@@ -195,6 +216,34 @@ describe('classifySeverityCountsLane — named status types', () => {
     expect(classifySeverityCountsLane(lane).publishesCounts).toBe(false);
   });
 
+  it('sees the library result shape: a literal status with a `summary: SeverityCounts` field, and a `resultStatus` call', () => {
+    // `ValidationResult` moved from `issueCounts` to `summary: SeverityCounts`
+    // beside `status: 'ok' | 'findings'`. A recogniser that only knew the old
+    // property name would read the migrated declaration as a REGRESSION.
+    const declared = `
+      import type { SeverityCounts } from '@vibe-agent-toolkit/schema';
+      export interface LaneResult {
+        status: 'ok' | 'findings';
+        description: string;
+        issues: string[];
+        summary: SeverityCounts;
+      }
+    `;
+    expect(classifySeverityCountsLane(declared)).toEqual({ isLane: true, publishesCounts: true });
+    // Deriving the status through the ONE shared derivation is a lane on its own.
+    const derived = `
+      export function build(issues: Issue[]) { return { status: resultStatus(issues) }; }
+    `;
+    expect(classifySeverityCountsLane(derived).isLane).toBe(true);
+    // A human sentence named `summary` is not a counts block.
+    const sentence = `
+      export interface LaneResult { status: 'ok' | 'findings'; issues: string[];
+        summary: string;
+      }
+    `;
+    expect(classifySeverityCountsLane(sentence)).toEqual({ isLane: true, publishesCounts: false });
+  });
+
   it('still sees the counts field VANISH from a lane that merely imports the type', () => {
     // The regression the bucket notes for `phase-utils.ts`, `skills/package.ts`
     // and `validators/types.ts` exist to catch. All three conform via the counts
@@ -256,34 +305,31 @@ function repoWithStagingStates(): string {
   return root;
 }
 
-/**
- * The population, with separators normalised so Windows compares equal.
- *
- * @returns Every path the gate would read
- */
-function population(): readonly string[] {
-  return contrabandPopulation(repoWithStagingStates()).map((p) => toForwardSlash(p));
-}
-
 describe('contrabandPopulation — what the confidentiality gate is allowed to miss', () => {
+  // One fixture repo for the block: every case reads the same population, and a
+  // repo per case (five git spawns, a commit among them) timed out under gate load.
+  let population: readonly string[] = [];
+  beforeAll(() => {
+    population = contrabandPopulation(repoWithStagingStates()).map((p) => toForwardSlash(p));
+  });
+
   it('includes a brand-new untracked file, because that is what the commit will publish', () => {
-    expect(population()).toContain(NEW_FILE);
+    expect(population).toContain(NEW_FILE);
   });
 
   it('still includes tracked files', () => {
-    expect(population()).toContain(TRACKED_FILE);
+    expect(population).toContain(TRACKED_FILE);
   });
 
   it('excludes ignored files, which no commit will publish', () => {
     // Not pedantry: the token list itself may be a gitignored file in the repo
     // root, so a population that swept ignored files would report the list of
     // secrets as a leak of them.
-    expect(population()).not.toContain(IGNORED_FILE);
+    expect(population).not.toContain(IGNORED_FILE);
   });
 
   it('lists each path once, however many git listings named it', () => {
-    const paths = population();
-    expect(new Set(paths).size).toBe(paths.length);
+    expect(new Set(population).size).toBe(population.length);
   });
 });
 
@@ -326,12 +372,12 @@ describe('readTrackedFile — what an unreadable tracked file does to the gate',
 });
 
 describe('walkDirectory — a directory the walk could not list', () => {
-  it('is a no-op over a directory that does not exist', async () => {
+  it('is a no-op over a directory that does not exist', () => {
     const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'walk-dir-'));
     const seen: string[] = [];
 
-    await walkDirectory(safePath.join(root, 'absent'), 'absent', {
-      onFile: async ({ relPath }) => {
+    walkDirectory(safePath.join(root, 'absent'), 'absent', {
+      onFile: ({ relPath }) => {
         seen.push(relPath);
       },
     });
@@ -339,7 +385,7 @@ describe('walkDirectory — a directory the walk could not list', () => {
     expect(seen).toEqual([]);
   });
 
-  it.skipIf(CANNOT_DENY_READS)('throws rather than reporting the directory as empty when the listing is refused', async () => {
+  it.skipIf(CANNOT_DENY_READS)('throws rather than reporting the directory as empty when the listing is refused', () => {
     const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'walk-dir-'));
     const locked = safePath.join(root, 'locked');
     mkdirSyncReal(locked, { recursive: true });
@@ -347,7 +393,7 @@ describe('walkDirectory — a directory the walk could not list', () => {
     chmodSync(locked, 0o000);
 
     try {
-      await expect(walkDirectory(locked, 'locked', {})).rejects.toMatchObject({ code: 'EACCES' });
+      expect(() => walkDirectory(locked, 'locked', {})).toThrow(expect.objectContaining({ code: 'EACCES' }));
     } finally {
       chmodSync(locked, 0o700);
     }

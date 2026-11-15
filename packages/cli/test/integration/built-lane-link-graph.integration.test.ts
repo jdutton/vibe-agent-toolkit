@@ -61,7 +61,7 @@ const roots: string[] = [];
 function makeProject(label: string): { root: string; skillPath: string } {
   const root = mkdtempSync(safePath.join(normalizedTmpdir(), `vat-bundling-${label}-`));
   roots.push(root);
-  writeFileSync(safePath.join(root, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n', 'utf-8');
+  writeFileSync(safePath.join(root, 'vibe-agent-toolkit.config.yaml'), '{}\n', 'utf-8');
   for (const [relativePath, contents] of Object.entries(BUNDLING_SKILL_FILES)) {
     const absolutePath = safePath.join(root, relativePath);
     mkdirSyncReal(safePath.resolve(absolutePath, '..'), { recursive: true });
@@ -79,7 +79,7 @@ afterEach(() => {
 describe('bundling skill fixture — the built lane cannot see what it bundled', () => {
   it('sees the bundled reference at SOURCE', async () => {
     const { skillPath } = makeProject('source');
-    const result = await validateSkillForPackaging(skillPath, undefined, 'source');
+    const result = await validateSkillForPackaging(skillPath, {}, undefined, 'source');
     expect(result.metadata.fileCount).toBe(2);
     expect(result.metadata.directFileCount).toBe(1);
     expect(result.metadata.maxLinkDepth).toBe(1);
@@ -129,7 +129,7 @@ describe('bundling skill fixture — the built lane cannot see what it bundled',
     const inside = await packageSkill(skillPath, {
       outputPath: safePath.join(root, 'dist', 'skills', SKILL_NAME),
     });
-    const source = await validateSkillForPackaging(skillPath, undefined, 'source');
+    const source = await validateSkillForPackaging(skillPath, {}, undefined, 'source');
 
     expect(inside.postBuildValidation?.metadata.totalLines).toBeLessThan(source.metadata.totalLines);
   });

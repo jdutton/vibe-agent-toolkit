@@ -43,7 +43,7 @@ export function setupInstallTestSuite(testPrefix: string, testFileUrl: string): 
       suite.tempDir = createTestTempDir(testPrefix);
       suite.projectDir = safePath.join(suite.tempDir, 'project');
       suite.skillsDir = safePath.join(suite.projectDir, '.claude', 'skills');
-      fs.mkdirSync(suite.skillsDir, { recursive: true });
+      mkdirSyncReal(suite.skillsDir, { recursive: true });
     },
     afterEach: () => {
       if (suite.tempDir) {
@@ -76,42 +76,6 @@ export function executeSkillsCommandAndExpectYaml(
 
   const parsed = yaml.parse(result.stdout) as Record<string, unknown>;
   return { result, parsed };
-}
-
-/**
- * Create a test project with package.json containing vat.skills[] metadata
- * and optionally create built skill directories under dist/skills/
- *
- * In the new API, vat.skills is a flat string array (just names).
- *
- * Shared between skills-install-dev and skills-uninstall system tests
- */
-export function setupDevTestProject(
-  baseDir: string,
-  name: string,
-  skills: Array<{ name: string; built: boolean }>
-): string {
-  const projectDir = safePath.join(baseDir, name);
-  mkdirSyncReal(projectDir, { recursive: true });
-
-  fs.writeFileSync(
-    safePath.join(projectDir, 'package.json'),
-    JSON.stringify({
-      name: '@test/my-package',
-      version: '1.0.0',
-      vat: { version: '1.0', type: 'agent-bundle', skills: skills.map(s => s.name) },
-    })
-  );
-
-  for (const skill of skills) {
-    if (skill.built) {
-      const skillDir = safePath.join(projectDir, 'dist', 'skills', skill.name);
-      mkdirSyncReal(skillDir, { recursive: true });
-      fs.writeFileSync(safePath.join(skillDir, 'SKILL.md'), `# ${skill.name}\nTest skill content`);
-    }
-  }
-
-  return projectDir;
 }
 
 /**

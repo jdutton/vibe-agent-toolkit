@@ -1,9 +1,11 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { expectAbsenceCause } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { ParseCache } from '../src/parse-cache.js';
+import { withParseDispatcher } from '../src/parse-dispatcher.js';
 import {
   BLOB_CONTENT_CHANGED,
   BLOB_NOT_TEXT,
@@ -14,9 +16,9 @@ import {
 } from '../src/projection/blob-population.js';
 import { RunContentCache } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
-import { ClosureExtentContributor } from '../src/projection/contributors/closure-extent.js';
 import { extentContextId } from '../src/projection/contributors/context-id.js';
-import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
+import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
+import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { rootIdFor } from '../src/projection/identity.js';
 import { afterClosurePromotion, populate } from '../src/projection/merge.js';
 import {
@@ -32,7 +34,7 @@ import {
   baseBuilderForRoot,
   type RealizationOrder,
 } from './blob-fixture-population.js';
-import { setupSubdirTestSuite } from './test-helpers.js';
+import { registryWithClosure, setupSubdirTestSuite } from './test-helpers.js';
 
 const SKILL_KIND = 'skill';
 const EXTENT_NAME = 'foo-bundle';
@@ -290,31 +292,14 @@ function closureDeclaration(): Record<string, JsonValue> {
   };
 }
 
-function registryWithClosure(): ContributorRegistry {
-  const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor());
-  registry.register(new ClosureExtentContributor(EXTENT_NAME, SKILL_KIND));
-  return registry;
-}
-
-/** Run the whole driver over the skill corpus, capturing the stage's counters. */
-async function populateSkillCorpus(): Promise<{ projection: Projection; counts: BlobPopulationResult }> {
-  let counts: BlobPopulationResult | undefined;
-  const projection = await populate({
+/** Run the whole driver over the skill corpus. */
+async function populateSkillCorpus(): Promise<{ projection: Projection }> {
+  const { projection } = await populate({
     root: suite.tempDir,
-    registry: registryWithClosure(),
+    registry: registryWithClosure(EXTENT_NAME, SKILL_KIND),
     parameters: { [`closure:${EXTENT_NAME}`]: closureDeclaration() },
-    onBlobPopulation: (result) => {
-      counts = result;
-    },
   });
-  expect(counts).toBeDefined();
-  return { projection, counts: counts ?? unreachableCounts() };
-}
-
-/** Only reachable if the assertion above stopped asserting. */
-function unreachableCounts(): BlobPopulationResult {
-  throw new Error('populate() did not report blob-population counts');
+  return { projection };
 }
 
 /** Paths realized in one extent, in code-unit order. */
@@ -362,14 +347,15 @@ describe('populateBlobs, through populate()', () => {
     // columns they feed are required and positive, and both are handled by
     // skipping rather than defaulting to line 1. These two counters are the only
     // way that skip is observable — a skipped row is, definitionally, absent.
-    const { counts } = await populateSkillCorpus();
+    const counts = await populateBlobs(await baseBuilderFor(), { parseCache: NO_CACHE });
 
     expect(counts.headingsSkippedForMissingLine).toBe(0);
     expect(counts.referencesSkippedForMissingLine).toBe(0);
   });
 
   it('derives one blob per file and attributes every directory it skipped', async () => {
-    const { projection, counts } = await populateSkillCorpus();
+    const { projection } = await populateSkillCorpus();
+    const counts = await populateBlobs(await baseBuilderFor(), { parseCache: NO_CACHE });
 
     expect(counts.blobsDerived).toBe(SKILL_CORPUS.length);
     expect(projection.blobs).toHaveLength(SKILL_CORPUS.length);
@@ -394,6 +380,40 @@ describe('populateBlobs', () => {
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
   beforeEach(suite.beforeEach);
+
+  it('derives no harness facts, so a source file no loader reaches is never lexed as a memory file', async () => {
+    // `@param` is exactly the token the harness's `@` extractor would read an
+    // import out of — the eager stage used to lex every blob for it.
+    await writeCorpus([{ path: 'src/a.ts', content: '/** @param widgets - the acme widgets */\nexport const a = 1;\n' }], ['src']);
+    const builder = await baseBuilderFor();
+
+    await populateBlobs(builder, { parseCache: NO_CACHE });
+
+    expect(builder.base().blobs).toHaveLength(1);
+    expect(builder.base().harnessBlobFacts).toHaveLength(0);
+    expect(builder.base().harnessBlobImports).toHaveLength(0);
+  });
+
+  it('derives harness facts through populate() for exactly what a memory file reaches, read from disk', async () => {
+    await writeCorpus([
+      { path: 'CLAUDE.md', content: '# Acme\n\n@src/a.ts\n' },
+      { path: 'src/a.ts', content: '/** @param widgets - the acme widgets */\nexport const a = 1;\n' },
+      { path: 'src/b.ts', content: '/** @param gadgets - never imported */\nexport const b = 1;\n' },
+    ], ['src']);
+    const registry = new ContributorRegistry();
+    registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
+
+    const { projection } = await populate({ root: suite.tempDir, registry });
+
+    const keyOf = (path: string): string => {
+      const key = projection.resourceRealizations.find((row) => row.path === path)?.contentKey;
+      if (typeof key !== 'string') throw new TypeError(`fixture: ${path} was not keyed`);
+      return key;
+    };
+    const derived = new Set(projection.harnessBlobFacts.map((row) => row.blob));
+    expect([...derived].sort(byCodeUnit)).toEqual([keyOf('CLAUDE.md'), keyOf('src/a.ts')].sort(byCodeUnit));
+    expect(derived.has(keyOf('src/b.ts'))).toBe(false);
+  });
 
   it('derives once per distinct content key, not once per realization', async () => {
     await writeCorpus([
@@ -446,6 +466,8 @@ describe('populateBlobs', () => {
     expect(counts.blobsDerived).toBe(1);
     const conditions = projection.blobConditions.filter((row) => row.code === BLOB_UNREADABLE);
     expect(conditions).toHaveLength(1);
+    // The absence-cause member this test seeds (the CLI's absence-seeds.ts names it).
+    expect(expectAbsenceCause(projection, { code: BLOB_UNREADABLE })).toHaveLength(1);
     expect(conditions[0]?.message).toContain(DOC_A);
     // Evidence, never `$HOME`: every other path column in the projection is
     // root-relative, and an fs error's own message embeds the absolute path.
@@ -472,8 +494,13 @@ describe('populateBlobs', () => {
     expect(projection.blobs).toHaveLength(1);
     const conditions = projection.blobConditions.filter((row) => row.code === BLOB_NOT_TEXT);
     expect(conditions).toHaveLength(1);
-    expect(conditions[0]?.message).toContain('archive.md');
+    // Path-free: the row lives in a content-addressed tier shared across roots.
+    // The file is reached through the key instead.
+    expect(conditions[0]?.message).not.toContain('archive.md');
     expect(conditions[0]?.message).not.toContain(suite.tempDir);
+    const archive = projection.resourceRealizations.find((row) => row.path === 'archive.md');
+    expect(archive?.contentKey).toBeDefined();
+    expect(conditions[0]?.blob).toBe(archive?.contentKey);
   });
 
   it('derives a text file with no extension, so the refusal is about bytes and not names', async () => {
@@ -512,6 +539,8 @@ describe('populateBlobs', () => {
     expect(counts.blobsDerived).toBe(0);
     expect(projection.blobs).toHaveLength(0);
     expect(projection.blobConditions.map((row) => row.code)).toEqual([BLOB_CONTENT_CHANGED]);
+    // The absence-cause member this test seeds (the CLI's absence-seeds.ts names it).
+    expect(expectAbsenceCause(projection, { code: BLOB_CONTENT_CHANGED })).toHaveLength(1);
   });
 
   // The two tests below pin the semantics the per-run content cache chose, and
@@ -664,43 +693,21 @@ describe('afterClosurePromotion', () => {
     await writeCorpus(DEMAND_CORPUS);
   });
 
-  it('reports nothing at all when the closure stratum promoted no realization', async () => {
+  it('derives the blob a promotion keyed, and only that one', async () => {
     const cache = new RunContentCache();
     const builder = await builderWithDeferredPath(DOC_A, DEMAND_CORPUS, cache);
     await populateBlobs(builder, { parseCache: NO_CACHE });
-
-    const report = await afterClosurePromotion(builder, builder.contentPromotionAttempts);
-
-    // An ABSENT key, not a zeroed result: "the stage did not need to run again"
-    // and "it ran again and derived nothing" are different facts.
-    expect(report).toEqual({});
-    expect('afterClosurePromotion' in report).toBe(false);
-  });
-
-  it('reports the post-fixpoint run as its own result rather than merging counters', async () => {
-    const cache = new RunContentCache();
-    const builder = await builderWithDeferredPath(DOC_A, DEMAND_CORPUS, cache);
-    const first = await populateBlobs(builder, { parseCache: NO_CACHE });
+    expect(builder.build().blobs).toHaveLength(1);
     const before = builder.contentPromotionAttempts;
-    await builder.ensureContentKey(DOC_A);
+    const key = await builder.ensureContentKey(DOC_A);
 
-    const report = await afterClosurePromotion(builder, before);
+    await withParseDispatcher(async (dispatcher) => afterClosurePromotion(builder, before, dispatcher), { cache: NO_CACHE });
 
-    expect(report.afterClosurePromotion?.blobsDerived).toBe(1);
-    // The reason there is no honest sum: the second pass counts as "already
-    // present" nearly every blob the first pass derived, so adding the two
-    // reports a corpus larger than the corpus.
-    expect(first.blobsAlreadyPresent).toBe(0);
-    expect(report.afterClosurePromotion?.blobsAlreadyPresent).toBe(1);
     expect(builder.build().blobs).toHaveLength(2);
+    expect(builder.build().blobs.map((row) => row.contentKey)).toContain(key);
   });
 
-  it('reports a promotion whose every read FAILED, rather than the deliberate no-op', async () => {
-    // The defect: the gate read `contentPromotions`, the SUCCESS counter, which
-    // `ensureContentKey` leaves untouched when the read throws. So a closure
-    // stratum that demanded bytes and could not read one of them returned the
-    // identical `{}` as a stratum where nobody asked at all — one corpus of
-    // unreadable files and one deliberate no-op, emitting one signal.
+  it('records a promotion whose every read FAILED on the realization, with no blob', async () => {
     const cache = new RunContentCache();
     const builder = await builderWithDeferredPath(DOC_A, DEMAND_CORPUS, cache);
     await populateBlobs(builder, { parseCache: NO_CACHE });
@@ -715,15 +722,12 @@ describe('afterClosurePromotion', () => {
     expect(builder.contentPromotionAttempts).toBe(before + 1);
     expect(builder.contentPromotions).toBe(0);
 
-    const report = await afterClosurePromotion(builder, before);
+    await withParseDispatcher(async (dispatcher) => afterClosurePromotion(builder, before, dispatcher), { cache: NO_CACHE });
 
-    // PRESENT — the whole point. A `{}` here would be the no-op's answer.
-    expect('afterClosurePromotion' in report).toBe(true);
-    // And honest about what it found: nothing new was derivable, because no key
-    // entered the projection.
-    expect(report.afterClosurePromotion?.blobsDerived).toBe(0);
-    // The row that carries the cause. `blobsUnreadable` cannot: there is no blob
-    // and therefore no content key to hang a `blob_conditions` row on.
+    // Nothing new was derivable, because no key entered the projection.
+    expect(builder.build().blobs).toHaveLength(1);
+    // The row that carries the cause. A `blob_conditions` row cannot: there is
+    // no blob and therefore no content key to hang one on.
     expect(builder.build().realizationConditions.map((row) => row.code))
       .toEqual([REALIZATION_PROMOTION_UNREADABLE]);
   });
@@ -743,7 +747,7 @@ describe('populateBlobs, over blobs no document parser routes to', () => {
   it('gives it a blobs row with a real token estimate, rather than refusing it', async () => {
     // The whole reason `none` is a third shape and not a fourth refusal. With no
     // `blobs` row there is no `tokenEstimate`, `whatLoadsAt` reports
-    // `tokens: null`, and `chargeOf` answers `unknown-size` — a live accounting
+    // `tokens: null`, and `sizeCliffOf` answers `unmeasured` — a live accounting
     // state that would appear the moment a CLAUDE.md imports a `.ts` file.
     const { projection, unparsedKey } = await deriveBothRoutes();
     const row = projection.blobs.find((blob) => blob.contentKey === unparsedKey);

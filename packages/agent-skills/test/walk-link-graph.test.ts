@@ -4,16 +4,18 @@ import { dirname } from 'node:path';
 import { DeferredArtifacts } from '@vibe-agent-toolkit/resources';
 import type { ResourceLink, ResourceMetadata, SkillFileEntry } from '@vibe-agent-toolkit/resources';
 import {
+  createSymlink,
   CRAWL_PASS_INSIDE,
   CRAWL_WALKER_GITIGNORE_ID,
   CRAWL_WALKER_ID,
   FsLookupCache,
   mkdirSyncReal,
   safePath,
+  symlinkCapability,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 import type { PathProbe } from '@vibe-agent-toolkit/utils';
-import { __readCrawlTimingSnapshot, __setCrawlTimingForTest } from '@vibe-agent-toolkit/utils/testing';
+import { __readCrawlTimingSnapshot, __setCrawlTimingForTest, installFaultFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { walkerExclusionsToIssues } from '../src/validators/walker-to-issues.js';
@@ -129,6 +131,7 @@ function walkOnDiskLink(opts: {
   return walkLinkGraph(SKILL_ID, registry, {
     maxDepth: 5,
     excludeRules: [],
+    ownOutputDir: undefined,
     projectRoot: opts.tmpDir,
     skillRootPath: skillPath,
     ...opts.overrides,
@@ -223,6 +226,7 @@ function walkDeclaredAgentInstruction(sources: string[]): ReturnType<typeof walk
   return walkLinkGraph(SKILL_ID, registry, {
     maxDepth: 5,
     excludeRules: [],
+    ownOutputDir: undefined,
     projectRoot: tmpDir,
     skillRootPath: skillPath,
     deferredArtifacts: makeDeferredArtifactsFromRelPaths({
@@ -355,8 +359,8 @@ function createMockResource(
 class UnstattableProbe extends FsLookupCache {
   readonly #unstattable: string;
 
-  constructor(unstattable: string) {
-    super();
+  constructor(unstattable: string, within: string) {
+    super(within);
     this.#unstattable = unstattable;
   }
 
@@ -418,6 +422,7 @@ function walkThroughHtml(overrides?: Partial<WalkLinkGraphOptions>): {
   const result = walkLinkGraph(SKILL_ID, registry, {
     maxDepth: 5,
     excludeRules: [],
+    ownOutputDir: undefined,
     projectRoot: root,
     skillRootPath: skillPath,
     ...overrides,
@@ -438,6 +443,7 @@ function defaultOptions(overrides?: Partial<WalkLinkGraphOptions>): WalkLinkGrap
   return {
     maxDepth: 5,
     excludeRules: [],
+    ownOutputDir: undefined,
     projectRoot: PROJECT_ROOT,
     skillRootPath: SKILL_PATH,
     ...overrides,
@@ -1503,7 +1509,7 @@ describe('walkLinkGraph', () => {
         createLocalLink('asset from docs', '../asset.png'),
       ]);
 
-      const pathProbe = new FsLookupCache();
+      const pathProbe = new FsLookupCache(root);
       walkLinkGraph(SKILL_ID, createMockRegistry([skill, guide]), {
         maxDepth: 5,
         excludeRules: [],
@@ -1541,7 +1547,7 @@ describe('walkLinkGraph', () => {
         tmpDir,
         linkText: 'unreadable',
         linkRel: targetRel,
-        overrides: { pathProbe: new UnstattableProbe(target) },
+        overrides: { pathProbe: new UnstattableProbe(target, tmpDir) },
       });
 
       expect(result.excludedReferences).toHaveLength(1);
@@ -1551,6 +1557,51 @@ describe('walkLinkGraph', () => {
       // a second, quieter silence.
       const issues = walkerExclusionsToIssues(result.excludedReferences, tmpDir);
       expect(issues.map(i => i.code)).toEqual(['LINK_TARGET_UNREADABLE']);
+    });
+
+    // The walk's OWN probe (none injected) reads a target's link chain before the kernel follows
+    // it: an `lstat` the OS refuses on the way is that target's fault — reported, never "absent",
+    // and the kernel is never asked to follow the link.
+    it('reports a linked target whose chain the OS refused, without asking the kernel to follow it', ({ skip }) => {
+      const cap = symlinkCapability() ?? skip();
+      const tmpDir = getTempDir();
+      writeFileSync(safePath.join(tmpDir, 'real.md'), '# Real\n');
+      mkdirSyncReal(safePath.join(tmpDir, 'refs'), { recursive: true });
+      const link = safePath.join(tmpDir, 'refs', 'a.md');
+      createSymlink(cap, '../real.md', link, 'file');
+
+      const session = installFaultFs({ within: tmpDir, faults: [{ op: 'lstat', path: (path) => path === link, errno: 'EACCES' }] });
+      let result: ReturnType<typeof walkLinkGraph>;
+      try {
+        result = walkOnDiskLink({ tmpDir, linkText: 'a', linkRel: 'refs/a.md' });
+      } finally {
+        session.restore();
+      }
+
+      expect(result.excludedReferences.map(r => r.excludeReason)).toEqual(['unreadable-target']);
+      expect(session.calls.filter(c => c.op === 'stat' && c.path === toForwardSlash(link))).toEqual([]);
+    });
+
+    // Windows only: the walk reads link text by the HOST's rules, and POSIX reads `//host/share` as a
+    // local absolute path (it resolves to nothing there). Under win32 it is a UNC path, the SMB leak.
+    it.skipIf(process.platform !== 'win32')('reports a linked target whose link text names a network path, and never follows it', ({ skip }) => {
+      const cap = symlinkCapability() ?? skip();
+      const tmpDir = getTempDir();
+      mkdirSyncReal(safePath.join(tmpDir, 'refs'), { recursive: true });
+      const link = safePath.join(tmpDir, 'refs', 'a.md');
+      createSymlink(cap, '//evil-host/share/a.md', link, 'file');
+
+      const session = installFaultFs({ within: tmpDir });
+      let result: ReturnType<typeof walkLinkGraph>;
+      try {
+        result = walkOnDiskLink({ tmpDir, linkText: 'a', linkRel: 'refs/a.md' });
+      } finally {
+        session.restore();
+      }
+
+      // Refused, not "missing": a network text is never handed to the kernel.
+      expect(result.excludedReferences.map(r => r.excludeReason)).toEqual(['unreadable-target']);
+      expect(session.calls.filter(c => c.op === 'stat' && c.path === toForwardSlash(link))).toEqual([]);
     });
 
     it('builds its own probe when the caller supplies none', () => {

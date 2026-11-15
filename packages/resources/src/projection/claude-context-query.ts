@@ -18,12 +18,16 @@
  * places edges in the derived-per-lens column and is the exact position Ruling B
  * upheld when it declined to materialise `lens_entry_points`; and columns on
  * `resource_extents` cannot represent a diamond without widening a key five other
- * extent kinds depend on. So {@link closureProvenance} re-runs the SAME traversal
- * the contributor ran — not a second resolver, the same `traverseClosure` — and
- * this module joins the result onto membership.
+ * extent kinds depend on. So the launch walk (`claude-context-walk.ts`) asks the
+ * closure primitive's own resolver for each file's edges — not a second
+ * resolver — and records the importer and depth it reached each file at.
  *
- * A member the map cannot attribute renders `viaPath: null, depth: null` and is
- * listed in `unattributedImports`. Never a fabricated parent.
+ * ⭐ What loads, and when, is the WALK's answer, not the membership table's: the
+ * harness walks depth-first with one visited set per launch and filters rules
+ * closures entry by entry, which no union of per-root closures reproduces. A
+ * member the membership table holds under a walked root but {@link closureProvenance}
+ * cannot attribute is still listed in `unattributedImports`, as a disagreement
+ * between two tables — never charged under a fabricated parent.
  *
  * ## Everything that does not vary with the queried path is derived ONCE
  *
@@ -43,10 +47,11 @@
  * the sweep quadratic: measured at 11.4 ms per answer on a 2,195-blob tree and
  * 52 ms on an 8,768-blob one, a 4.6× rise for a 4.0× larger projection.
  *
- * What stays per-query is what genuinely varies: the ancestry chain
- * ({@link claudeAncestry}), the rule selection ({@link selectRules}), which
- * closures this query's admissions charge, and the condition grading — whose
- * escalation depends on `walkedExtents` and therefore on the path.
+ * What stays per-query is what genuinely varies: the launch walk
+ * (`claude-context-walk.ts`, which memoizes its own per-projection index), the
+ * rule selection ({@link selectRules}), which closures this query walked, and
+ * the condition grading — whose escalation depends on `walkedExtents` and
+ * therefore on the path.
  *
  * ### Why the memo is safe
  *
@@ -69,34 +74,62 @@
  * `realpathSync.native`; see *"🪤 A symlink and its target do NOT reliably share
  * one identity"* in `identity.ts`. One row per identity,
  * carrying every admission the ANSWER recorded — which for a diamond is one, not
- * two: the closure's visited set declines the second edge, so that edge is a hop
- * the traversal refused rather than an admission the row is hiding.
+ * two: the launch's visited set declines the second edge, so that edge is a hop
+ * the walk refused rather than an admission the row is hiding.
  */
 
 import { strongerSeverity, type Severity } from '@vibe-agent-toolkit/schema';
+import { safePath } from '@vibe-agent-toolkit/utils';
 
+import { estimateTokens } from '../link-classify.js';
+import type { ParseRefusedResource } from '../resource-registry.js';
 import { ExtentDeclarationSchema } from '../schemas/project-config.js';
 import type { BlobReferenceRow, BlobRow } from '../schemas/projection-blobs.js';
+import type { ClaudeContextFinding } from '../schemas/projection-claude-context.js';
+import type { HarnessBlobImportRow } from '../schemas/projection-harness.js';
 import type {
   RealizationConditionRow,
   ResourceExtentRow,
   ResourceRealizationRow,
 } from '../schemas/projection-resources.js';
 
-import { claudeAncestry } from './claude-context-ancestry.js';
+import { CLAUDE_MD_TAG, classifyPath } from './agentic-tags.js';
+import { parseRefusalOf } from './blob-refusals.js';
+import { ancestorDirectories } from './claude-context-ancestry.js';
 import { selectRules, type RuleAdmission } from './claude-context-rules.js';
+import { launchWalk, readWalk } from './claude-context-walk.js';
 import {
   CLAUDE_IMPORT_CONTRIBUTOR_ID_PREFIX,
 } from './contributors/claude-import-extent.js';
 import {
   closureProvenance,
+  CLOSURE_DEPTH_EXCEEDED,
+  CLOSURE_REFERENCE_OUTSIDE_ROOT,
+  CLOSURE_ROOT_ABSENT,
   type ImportProvenance,
 } from './contributors/closure-extent.js';
-import type { Projection } from './projection.js';
+import { isDeclinedSymlinkCode } from './contributors/filesystem-extent.js';
+import { CLAUDE_CODE } from './harness/claude-code.js';
+import { harnessFactsIndex, type HarnessFactsIndex } from './harness/facts-index.js';
+import type { LoadTrigger, MemoryKind } from './harness/profile.js';
+import { REALIZATION_PATH_COLLISION, type Projection } from './projection.js';
 
 /** Why one resource is in the answer. A row may carry several. */
 export type Admission =
-  | { readonly kind: 'ancestry'; readonly dir: string }
+  | {
+      readonly kind: 'ancestry';
+      readonly dir: string;
+      /**
+       * Whether the walk loaded this through the `CLAUDE.local.md` slot rather
+       * than the `CLAUDE.md`/`.claude/CLAUDE.md` slot — `claudeAncestry`'s own
+       * `local` flag on the chain entry (`claude-context-ancestry.ts`), carried
+       * here rather than re-derived from the FILENAME: a rules file (any
+       * `.claude/rules/*.md`) is ALWAYS `Project` in the vendor's own model,
+       * whatever it happens to be named, and only an `ancestry` admission can
+       * ever be `local`.
+       */
+      readonly local: boolean;
+    }
   | RuleAdmission
   | {
       readonly kind: 'import';
@@ -112,12 +145,24 @@ export type LoadClass = 'always' | 'on-demand';
 export interface LoadedRow {
   readonly resourceId: string;
   readonly path: string;
-  /** `blobs.tokenEstimate`, or null when this realization has no blob — never 0. */
+  /**
+   * `harness_blob_facts.injectedTokens` — the text the harness injects, not
+   * the file — or null when this realization has no blob. A blob with no facts
+   * row is never null here: it throws `HarnessFactsAbsentError`.
+   */
   readonly tokens: number | null;
   /** `blobs.bytes`, or null when this realization has no blob. */
   readonly bytes: number | null;
   readonly loadClass: LoadClass;
   readonly admissions: readonly Admission[];
+  /**
+   * `CLAUDE_CODE.renderHeader`, estimated — the header line the harness prints
+   * immediately before this file's content. Unlike {@link tokens}, never null:
+   * it depends only on the absolute path, which loader branch loaded the file
+   * (`Project`/`Local`) and whether it entered at launch or on a read, never on
+   * measured content, so it is always known.
+   */
+  readonly headerTokens: number;
 }
 
 /**
@@ -134,16 +179,13 @@ export interface LoadedRow {
  * vocabulary spelled it `warning`, with a private translation function as "the
  * one place the two meet" — the seventh severity vocabulary in the tree. There
  * is one now, and it is the shared one.
+ *
+ * The shape itself is {@link ClaudeContextFindingSchema}'s
+ * (`schemas/projection-claude-context.ts`) — `harness`, `why` and `affects`
+ * added on top of what this report always carried, never a second shape a
+ * caller has to reconcile against the schema's own.
  */
-export interface GradedCondition {
-  readonly code: string;
-  readonly severity: Severity;
-  readonly path: string;
-  readonly sourcePath: string | null;
-  readonly sourceLine: number | null;
-  readonly sourceRef: string | null;
-  readonly message: string;
-}
+export type GradedCondition = ClaudeContextFinding;
 
 /** The answer, when the queried path is one the projection realizes. */
 export interface LoadedContextAnswer {
@@ -156,6 +198,23 @@ export interface LoadedContextAnswer {
   readonly conditions: readonly GradedCondition[];
   readonly overBudgetRules: readonly string[];
   readonly unattributedImports: readonly string[];
+  /**
+   * Every file this query reached whose harness facts the run REFUSED,
+   * path-ordered. ⛔ Not an empty-cost row: a refused rule's `paths:` were never
+   * read, so it is in no row at all (whether it loads is unknown), and a
+   * refused file under a `CLAUDE.md` is a row whose `tokens` is null. Either
+   * way the answer is incomplete, and this is where it says so.
+   */
+  readonly refused: readonly RefusedContextFile[];
+}
+
+/**
+ * A file a context query reached and could not measure, because this run
+ * refused its facts — under the not-admitted contract's own code and reason.
+ */
+export interface RefusedContextFile extends Omit<ParseRefusedResource, 'filePath'> {
+  /** Root-relative path. */
+  readonly path: string;
 }
 
 /**
@@ -195,25 +254,136 @@ export function whatLoadsAt(projection: Projection, inputPath: string): LoadedCo
   const directory = isFile ? (realization?.dir ?? '') : inputPath;
   const file = isFile ? inputPath : null;
 
-  const { admissions, overBudget } = baseAdmissions(projection, directory, file);
-
-  // Snapshotted BEFORE the import pass, because that pass adds to `admissions`:
-  // only closures rooted at something the ANCESTRY and RULE passes admitted are
-  // relevant, and letting an import's own members seed further roots would walk
-  // the whole tree's instruction graph rather than this directory's.
-  const admittedIds = new Set(admissions.keys());
-  const imports = applyImportClosures(index, admittedIds, admissions);
+  const { admissions, classes, roots, overBudget, refused } = loadedAt(projection, directory, file);
+  // `importReport` (via `buildImportIndex`) throws when the projection carries
+  // no root, so `rootPath` below is guaranteed present past this line — but it
+  // is asserted explicitly rather than defaulted, the same way `hopsOf` does.
+  const imports = importReport(index, roots);
+  const rootPath = projection.roots[0]?.path;
+  if (rootPath === undefined) {
+    throw new Error('whatLoadsAt reached rowsFor with no root; the render header resolves an absolute path against it.');
+  }
 
   return {
     kind: 'answer',
     input: inputPath,
     directory,
     file,
-    rows: rowsFor(index, admissions),
-    conditions: gradeConditions(projection, index, imports.walkedExtents),
+    rows: rowsFor(index, admissions, classes, rootPath),
+    conditions: gradeConditions(projection, index, imports.walkedExtents, directory),
     overBudgetRules: overBudget,
     unattributedImports: imports.unattributed,
+    refused,
   };
+}
+
+/**
+ * The reached files whose facts this run refused, each with the refusal its
+ * blob condition records, path-ordered and once each.
+ *
+ * @param projection - The populated projection
+ * @param paths - Root-relative paths the walk reported refused, possibly repeated
+ * @returns One entry per path
+ * @throws {Error} When a path the walk called refused has no refusal row — the
+ *   walk and the conditions read one table, so that is a VAT defect
+ */
+function refusedFiles(projection: Projection, paths: readonly string[]): RefusedContextFile[] {
+  if (paths.length === 0) return [];
+  const index = contextQueryIndexFor(projection);
+  const refusalByKey = new Map<string, Omit<ParseRefusedResource, 'filePath'>>();
+  for (const row of projection.blobConditions) {
+    const refusal = parseRefusalOf(row);
+    if (refusal !== undefined && !refusalByKey.has(row.blob)) refusalByKey.set(row.blob, refusal);
+  }
+  return [...new Set(paths)].sort(comparePaths).map((path) => {
+    const key = index.realizationByPath.get(path)?.contentKey;
+    const refusal = key === undefined || key === null ? undefined : refusalByKey.get(key);
+    if (refusal === undefined) throw new Error(`whatLoadsAt: ${path} was reached as refused but carries no refusal row. This is a VAT bug.`);
+    return { path, ...refusal };
+  });
+}
+
+/** The rule admissions that load a rule ON DEMAND — the `paths:` family. */
+const ON_DEMAND_RULE_KINDS: ReadonlySet<Admission['kind']> = new Set([
+  'glob-rule',
+  'glob-rule-covers-dir',
+  'glob-rule-may-fire',
+]);
+
+/**
+ * Every admission this query records, each identity's load class, and the
+ * import roots whose closures the answer reports on.
+ *
+ * ⭐ The LAUNCH half is {@link launchWalk} — the harness's own walk, replayed —
+ * and nothing else decides it: a file is `always` exactly when that walk loads
+ * it (or reaches it and skips it at the cliff, which the accounting labels).
+ * The ON-DEMAND half, for a FILE query, is {@link readWalk} — what reading the
+ * file adds: path-scoped rules AND path-scoped imports, each judged on its own
+ * `paths:` — minus what the launch already loaded. For a DIRECTORY query no
+ * file is read, so it is the ∀/∃ path-scoped rules the selection admits.
+ *
+ * `selectRules`' `root-rule` and `nested-rule` admissions are not read: an
+ * unscoped rule in a directory on the walk is the walk's, and a second source
+ * for it would be a second answer to one question.
+ *
+ * @param projection - The populated projection
+ * @param directory - The query's directory — the session's working directory
+ * @param file - The query's file, or null for a directory query
+ * @returns Admissions and classes by `resourceId`, walked roots, over-budget
+ *   rules, and the reached files whose facts were refused, path-ordered
+ */
+function loadedAt(
+  projection: Projection,
+  directory: string,
+  file: string | null,
+): {
+  admissions: Map<string, Admission[]>;
+  classes: Map<string, LoadClass>;
+  roots: ReadonlySet<string>;
+  overBudget: readonly string[];
+  refused: readonly RefusedContextFile[];
+} {
+  const admissions = new Map<string, Admission[]>();
+  const classes = new Map<string, LoadClass>();
+  const walk = launchWalk(projection, directory);
+  for (const entry of walk.reached) {
+    push(admissions, entry.resourceId, entry.admission);
+    classes.set(entry.resourceId, 'always');
+  }
+  // A file only the cliff kept from the launch is listed under the route that
+  // was cut, so the accounting can say why it costs nothing — and it takes
+  // `always` from that route only when nothing else loads it on demand.
+  const prunedOnly = new Set<string>();
+  for (const entry of walk.pruned) {
+    push(admissions, entry.resourceId, entry.admission);
+    classes.set(entry.resourceId, 'always');
+    prunedOnly.add(entry.resourceId);
+  }
+
+  const selection = selectRules({
+    realizations: projection.resourceRealizations,
+    tags: projection.resourceTags,
+    facts: harnessFactsIndex(projection, CLAUDE_CODE.id),
+    queryDir: directory,
+    queryFile: file,
+  });
+  const roots = new Set(walk.roots);
+  // A file query takes its on-demand set from the read walk, never from the
+  // selection's file lane: the walk also reaches path-scoped IMPORTS, and it
+  // spends a file once per read, as `y3` does. Both ask one matcher
+  // (`pathScopedMatch`), so they cannot disagree about a rule.
+  const onDemand = file === null
+    ? selection.rules.filter((rule) => ON_DEMAND_RULE_KINDS.has(rule.admission.kind))
+    : readWalk(projection, directory, file);
+  for (const entry of onDemand) {
+    push(admissions, entry.resourceId, entry.admission);
+    if (entry.admission.kind !== 'import') roots.add(entry.path);
+    if (!classes.has(entry.resourceId) || prunedOnly.has(entry.resourceId)) classes.set(entry.resourceId, 'on-demand');
+  }
+  // The launch walk reaches every rules closure the read walk can (same
+  // directories, no `within` bound), so its refused list covers both halves.
+  const refused = refusedFiles(projection, walk.refused.map((entry) => entry.path));
+  return { admissions, classes, roots, overBudget: selection.overBudget, refused };
 }
 
 /**
@@ -242,6 +412,8 @@ interface ImportClosure {
    * one no query can ever admit.
    */
   readonly rootId: string | undefined;
+  /** The declared root's root-relative path. */
+  readonly rootPath: string;
   readonly members: readonly ClosureMember[];
 }
 
@@ -282,6 +454,8 @@ interface RealizationIndex {
  */
 interface ContextQueryIndex extends RealizationIndex {
   readonly blobByContentKey: ReadonlyMap<string, BlobRow>;
+  /** Claude Code's facts per blob — absent is a thrown error, never zero. */
+  readonly facts: HarnessFactsIndex;
   /** Reference key → whether the token is path-shaped — `severityFor`'s `shapeOf`. */
   readonly pathShapeByReference: ReadonlyMap<string, boolean>;
   /**
@@ -333,10 +507,12 @@ function contextQueryIndexFor(projection: Projection): ContextQueryIndex {
 function buildContextQueryIndex(projection: Projection): ContextQueryIndex {
   const realizations = indexRealizations(projection.resourceRealizations);
   let imports: ImportIndex | undefined;
+  const facts = harnessFactsIndex(projection, CLAUDE_CODE.id);
   return {
     ...realizations,
     blobByContentKey: new Map(projection.blobs.map((row) => [row.contentKey, row])),
-    pathShapeByReference: indexReferenceShapes(projection.blobReferences),
+    facts,
+    pathShapeByReference: indexReferenceShapes(projection.blobReferences, facts.imports()),
     importClosures: () => (imports ??= buildImportIndex(projection, realizations)),
   };
 }
@@ -377,17 +553,27 @@ function indexRealizations(rows: readonly ResourceRealizationRow[]): Realization
 /**
  * Reference key → whether the token is PATH-SHAPED, for {@link severityFor}.
  *
- * A column read, never a second parse of the token — see {@link gradeConditions}.
+ * Both edge tables, because a condition's reference came from whichever one
+ * its closure walks: `blob_references` under `href` (the lexer's own
+ * `hasExtension`/`slashCount` columns, read rather than re-derived) and
+ * `harness_blob_imports` under `claude-import` — the harness's OWN shape rule
+ * (`CLAUDE_CODE.importShape`: a target naming a directory component is a
+ * path, anything else is bare), not the lexer's extension test.
  *
  * @param references - `blob_references`, in projection order
+ * @param imports - Claude Code's `harness_blob_imports`, in projection order
  * @returns The shape map, last row winning as the per-query build did
  */
 function indexReferenceShapes(
   references: readonly BlobReferenceRow[],
+  imports: readonly HarnessBlobImportRow[],
 ): ReadonlyMap<string, boolean> {
   const shapes = new Map<string, boolean>();
   for (const reference of references) {
     shapes.set(referenceKey(reference), reference.hasExtension || reference.slashCount > 0);
+  }
+  for (const entry of imports) {
+    shapes.set(referenceKey(entry), CLAUDE_CODE.importShape(entry.target) === 'path');
   }
   return shapes;
 }
@@ -415,82 +601,29 @@ function membershipsByExtent(
 }
 
 /**
- * The ancestry and rule-scope admissions for one query — the two passes that
- * decide which `CLAUDE.md`/`CLAUDE.local.md` files and `.claude/rules` files
- * this query loads BEFORE any import is followed.
+ * What the answer reports about the import closures rooted at the files this
+ * query walked: which extents it walked, and which of their members
+ * `closureProvenance` could not attribute to an importer.
  *
- * Split out of {@link whatLoadsAt} to stay under the cognitive-complexity
- * ceiling: the two `for` loops here plus the import-closure loop together
- * exceed it in one body, and this is the half the brief names to extract.
- * {@link applyImportClosures} is the other half, and the two stay separate
- * because the set of already-admitted ids has to be snapshotted between them —
- * see the call site.
- *
- * @param projection - The populated projection
- * @param directory - The query's directory
- * @param file - The query's file, or null for a directory query
- * @returns Every ancestry/rule admission, keyed by `resourceId`, plus the
- *   rule-scope pass's over-budget report
- */
-function baseAdmissions(
-  projection: Projection,
-  directory: string,
-  file: string | null,
-): { admissions: Map<string, Admission[]>; overBudget: readonly string[] } {
-  const admissions = new Map<string, Admission[]>();
-  for (const entry of claudeAncestry(projection.resourceRealizations, projection.resourceTags, directory)) {
-    push(admissions, entry.resourceId, { kind: 'ancestry', dir: entry.dir });
-  }
-
-  const selection = selectRules({
-    realizations: projection.resourceRealizations,
-    tags: projection.resourceTags,
-    blobs: projection.blobs,
-    queryDir: directory,
-    queryFile: file,
-  });
-  // Both primitives dedupe by identity internally — `claudeAncestry` over its
-  // chain, `selectRules` over `resource_realizations`' `(extentId, path)` rows —
-  // so this seam adds no guard of its own. A second guard here would be a
-  // doubled mechanism: it would keep passing after the source one broke, and it
-  // could only ever mask the `overBudget` half `selectRules` also emits.
-  for (const rule of selection.rules) {
-    push(admissions, rule.resourceId, rule.admission);
-  }
-
-  return { admissions, overBudget: selection.overBudget };
-}
-
-/**
- * Fold every relevant import closure's members into `admissions`.
- *
- * Only the closures this query ADMITTED are charged: an import extent rooted at
- * a `CLAUDE.md` the query never reached is an extent for some other directory's
- * session, and charging it here is exactly the tree-global over-report
- * `rule-scope` exists to prevent. That filter is per-query; the closures
- * themselves are not, and live in {@link ImportIndex}.
+ * The closures no longer decide what loads — {@link launchWalk} does — but
+ * their conditions still belong to the answer that walked their root, and a
+ * member the membership table holds with no provenance is still a disagreement
+ * between two tables the reader should see.
  *
  * @param index - The projection's index
- * @param admittedIds - Resource ids the ancestry and rule passes already admitted
- * @param admissions - The admission map, mutated in place
- * @returns The root-relative path of every import member `closureProvenance`
- *   could not attribute a parent to — deduplicated, because one path may be an
- *   unattributable member of two different closures and the field is a SET of
- *   paths the answer cannot explain, not a tally of how often it failed — plus
- *   the extents actually walked, which is what scopes {@link gradeConditions}
+ * @param roots - Root-relative paths of every file this query walked from
+ * @returns The walked extents, and the unattributed members, deduplicated
  */
-function applyImportClosures(
+function importReport(
   index: ContextQueryIndex,
-  admittedIds: ReadonlySet<string>,
-  admissions: Map<string, Admission[]>,
+  roots: ReadonlySet<string>,
 ): { unattributed: string[]; walkedExtents: ReadonlySet<string> } {
   const unattributed = new Set<string>();
   const walkedExtents = new Set<string>();
   for (const closure of index.importClosures().closures) {
-    if (closure.rootId === undefined || !admittedIds.has(closure.rootId)) continue;
+    if (!roots.has(closure.rootPath)) continue;
     walkedExtents.add(closure.extentId);
     for (const membership of closure.members) {
-      push(admissions, membership.resourceId, membership.admission);
       if (membership.admission.kind === 'import' && membership.admission.depth === null) {
         unattributed.add(membership.path);
       }
@@ -546,12 +679,17 @@ function buildImportIndex(projection: Projection, realizations: RealizationIndex
     const provenance = closureProvenance({
       root,
       resourceRealizations: projection.resourceRealizations,
+      blobs: projection.blobs,
       blobReferences: projection.blobReferences,
+      blobConditions: projection.blobConditions,
+      harnessBlobFacts: projection.harnessBlobFacts,
+      harnessBlobImports: projection.harnessBlobImports,
       declaration,
     });
     closures.push({
       extentId: provenanceRow.contextId,
       rootId: realizations.idByPath.get(declaration.closureFrom),
+      rootPath: declaration.closureFrom,
       members: membersOf(
         byExtent.get(provenanceRow.contextId) ?? [],
         declaration.closureFrom,
@@ -613,14 +751,18 @@ function membersOf(
  *
  * @param index - The projection's index
  * @param admissions - `resourceId` → every admission that reached it
+ * @param classes - `resourceId` → its load class, decided by {@link loadedAt}
+ * @param rootAbsolutePath - The corpus root's absolute path, for the header's
+ *   absolute path
  * @returns One row per identity, path-ordered
  */
 function rowsFor(
   index: ContextQueryIndex,
   admissions: ReadonlyMap<string, readonly Admission[]>,
+  classes: ReadonlyMap<string, LoadClass>,
+  rootAbsolutePath: string,
 ): LoadedRow[] {
-  const classes = loadClasses(admissions, index.idByPath);
-
+  const localRoots = localAncestryRootPaths(index, admissions);
   const rows: LoadedRow[] = [];
   for (const [resourceId, list] of admissions) {
     const realization = index.firstRealizationById.get(resourceId);
@@ -628,121 +770,107 @@ function rowsFor(
     const blob = realization.contentKey === null
       ? undefined
       : index.blobByContentKey.get(realization.contentKey);
+    const loadClass = classes.get(resourceId) ?? 'on-demand';
     rows.push({
       resourceId,
       path: realization.path,
-      tokens: blob?.tokenEstimate ?? null,
+      // `null` (unmeasured) only for a file with no blob, or one whose facts
+      // this run refused (reported by the population). A keyed, walked blob
+      // with no facts row otherwise throws — reading it as unmeasured would hide a bug.
+      tokens: blob === undefined || index.facts.refused(blob.contentKey)
+        ? null
+        : index.facts.requireFacts(blob.contentKey, realization.path).injectedTokens,
       bytes: blob?.bytes ?? null,
-      loadClass: classes.get(resourceId) ?? 'on-demand',
+      loadClass,
       admissions: list,
+      headerTokens: headerTokensFor(rootAbsolutePath, realization.path, list, loadClass, localRoots),
     });
   }
   return rows.sort((left, right) => comparePaths(left.path, right.path));
 }
 
 /**
- * Every admitted identity's load class, resolved together.
+ * Root-relative paths of every identity the walk admitted through the `Local`
+ * ancestry slot — `CLAUDE.local.md`, never `CLAUDE.md`/`.claude/CLAUDE.md`.
  *
- * ⛔ An `import` admission is NOT launch-time on its own. The harness loads a
- * closure's members when it loads the closure's ROOT, so a `@`-import out of a
- * nested `.claude/rules` file — a file the session loads on demand — pulls its
- * targets in on demand too. Reading the admission alone said `always`, which
- * over-reported the launch-time budget for every adopter whose nested rules
- * import shared docs. So the class of an import member is the class of its
- * closure root, and this is resolved as a set rather than per row.
+ * ⛔ **Read off the `ancestry` admission's own {@link Admission.local} flag —
+ * never re-derived from a filename.** A rules file (`.claude/rules/*.md`) is
+ * `Project` in the vendor's own model however it happens to be NAMED — nothing
+ * stops one being called `.claude/rules/CLAUDE.local.md`, and a basename test
+ * would mislabel exactly that file `Local`. Only an `ancestry` admission can
+ * ever be `local`, so scanning for that one kind is sound by construction: no
+ * other admission kind carries the flag at all.
  *
- * The propagation is a least fixpoint over a two-element lattice, and the rule
- * at a join is **`always` wins**: a member reachable from an `always` root and
- * an `on-demand` root IS loaded at launch by the first, and under-reporting is
- * the one direction a context-budget answer cannot tolerate. Because `always`
- * only ever spreads, the fixpoint is unique and independent of iteration order.
- *
- * The loop is needed rather than a single lookup because a closure root can be
- * `always` only by import: a nested rules file at the fourth hop of a
- * `CLAUDE.md`'s closure is launch-time by that import, its own closure carries
- * the fifth hop the outer one refused (`maxDepth: 4`), and that member must
- * inherit the same class.
- *
+ * @param index - The projection's index, for the identity → path lookup
  * @param admissions - `resourceId` → every admission that reached it
- * @param idOf - Root-relative path → `resourceId`, for resolving closure roots
- * @returns Each admitted identity's load class
+ * @returns Paths of every `Local`-slot ancestry root
  */
-function loadClasses(
+function localAncestryRootPaths(
+  index: ContextQueryIndex,
   admissions: ReadonlyMap<string, readonly Admission[]>,
-  idOf: ReadonlyMap<string, string>,
-): Map<string, LoadClass> {
-  const classes = new Map<string, LoadClass>();
-  for (const [resourceId, list] of admissions) classes.set(resourceId, baseLoadClass(list));
-
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const [resourceId, list] of admissions) {
-      if (classes.get(resourceId) === 'always') continue;
-      if (!importsFromAlwaysRoot(list, classes, idOf)) continue;
-      classes.set(resourceId, 'always');
-      changed = true;
-    }
+): ReadonlySet<string> {
+  const paths = new Set<string>();
+  for (const [resourceId, list] of admissions) {
+    if (!list.some((admission) => admission.kind === 'ancestry' && admission.local)) continue;
+    const path = index.firstRealizationById.get(resourceId)?.path;
+    if (path !== undefined) paths.add(path);
   }
-  return classes;
+  return paths;
 }
 
 /**
- * The load class an identity earns from its OWN admissions, ignoring imports.
+ * The header {@link CLAUDE_CODE.renderHeader} renders before one row's
+ * content, estimated.
  *
- * `always` wins among these too: a file that is both an ancestor and a nested
- * rule is loaded at launch either way.
+ * `kind` is `Local` iff the row's own CHAIN ROOT is one of {@link localRoots}
+ * (an import inherits its importer's type, exactly as the harness's own `type`
+ * parameter does, per `docs/external/claude-code-memory-loader.md`); everything
+ * else `Project`. The chain root is the FIRST admission's `rootPath` for an
+ * `import`, or the row's own path for every other admission kind — the row IS
+ * its own chain root at depth 0 (an ancestry entry, a rules file, a rule's own
+ * import root).
  *
- * ⛔ A `glob-rule` is NOT in this set, and the omission is the whole point. The
- * vendor puts *"rules that load on demand, including path-scoped rules and rules
- * in nested `.claude/rules/` directories"* in ONE class, and an earlier draft
- * acted on the second half of that sentence while carrying the first half
- * through unchanged. Matching a `paths:` glob decides WHETHER the rule is in
- * this query's answer at all; it does not promote it to launch time. The tell is
- * that it cannot: the same file is `glob-rule` for a FILE query and
- * `glob-rule-may-fire` for the DIRECTORY above it, so classing the first
- * `always` would make more precision about the query change when the harness
- * loads the file — a contradiction, not a refinement. `root-rule` stays because
- * an unscoped root rule genuinely does load at launch.
+ * ⚠️ **The first admission decides, not the "deciding" one `admissionLoadsAtLaunch`
+ * names.** Every push into a row's admission list happens in walk order — the
+ * launch walk's `reached`, then its `pruned`, then the on-demand pass — so the
+ * first admission is the launch-side one whenever the row was ever reached at
+ * launch, which is exactly the case `trigger` needs it to agree with. The one
+ * state where the two CAN disagree is a file the cliff pruned at launch (never
+ * rendered) that a later on-demand pass also reaches and reclassifies
+ * `on-demand` — there `admissions[0]` is still the pruned launch admission
+ * while `trigger` reads `read`, so `chainRoot`, and therefore `kind`, can be
+ * stale for that row. It CAN be charged on-demand (a pruned launch attempt is
+ * not evidence nothing ever reads the file). The disagreement stays
+ * unobservable in the number this returns purely because `renderHeader` never
+ * consults `kind` on a `read` trigger — the on-read attachment carries no
+ * per-kind suffix at all (`docs/external/claude-code-memory-loader.md`'s
+ * `nested_memory` branch) — so a wrong `kind` passed alongside `trigger:
+ * 'read'` changes nothing about the returned estimate.
  *
- * ⛔ `glob-rule-covers-dir` is NOT in this set either, and it is the one that
- * looks like it should be. A ∀ rule matches every file under the query directory,
- * so it reads as a second `CLAUDE.md` for that directory — but a directory-scoped
- * `CLAUDE.md` loads when the SESSION starts and a path-scoped rule loads when the
- * agent touches a matching file, and those are different moments. The same
- * contradiction as above settles it: that rule is `glob-rule` for a file query
- * one level down, so classing the ∀ form `always` would make the launch-time
- * budget depend on how precisely the question was asked. ∀ is the BURDEN signal
- * the `on-demand` total earns from naming the pattern, never a load class.
+ * `trigger` is `launch` exactly when `loadClass` is `always` — the harness's
+ * kind suffix and joiner-free rendering apply to a launch entry and only to
+ * one, and {@link LoadClass} is already the query's own answer to "does this
+ * load at launch".
  *
- * @param admissions - Every admission that reached one identity
- * @returns `always` when a non-import admission loads at launch, else `on-demand`
+ * @param rootAbsolutePath - The corpus root's absolute path
+ * @param path - The row's own root-relative path
+ * @param admissions - Every admission that reached this identity, in push order
+ * @param loadClass - The row's decided load class
+ * @param localRoots - Paths of every `Local`-slot ancestry root in this answer
+ * @returns The header's estimated token count
  */
-function baseLoadClass(admissions: readonly Admission[]): LoadClass {
-  const always = admissions.some(
-    (admission) => admission.kind === 'ancestry' || admission.kind === 'root-rule',
-  );
-  return always ? 'always' : 'on-demand';
-}
-
-/**
- * Does any of this identity's import admissions name a launch-time closure root?
- *
- * @param admissions - Every admission that reached one identity
- * @param classes - The classes resolved so far, mid-fixpoint
- * @param idOf - Root-relative path → `resourceId`
- * @returns True when at least one closure root is currently classed `always`
- */
-function importsFromAlwaysRoot(
+function headerTokensFor(
+  rootAbsolutePath: string,
+  path: string,
   admissions: readonly Admission[],
-  classes: ReadonlyMap<string, LoadClass>,
-  idOf: ReadonlyMap<string, string>,
-): boolean {
-  return admissions.some((admission) => {
-    if (admission.kind !== 'import') return false;
-    const rootId = idOf.get(admission.rootPath);
-    return rootId !== undefined && classes.get(rootId) === 'always';
-  });
+  loadClass: LoadClass,
+  localRoots: ReadonlySet<string>,
+): number {
+  const deciding = admissions[0];
+  const chainRoot = deciding?.kind === 'import' ? deciding.rootPath : path;
+  const kind: MemoryKind = localRoots.has(chainRoot) ? 'Local' : 'Project';
+  const trigger: LoadTrigger = loadClass === 'always' ? 'launch' : 'read';
+  return estimateTokens(CLAUDE_CODE.renderHeader(safePath.join(rootAbsolutePath, path), kind, trigger));
 }
 
 /**
@@ -779,33 +907,209 @@ function importsFromAlwaysRoot(
  * non-closure extent, and only an import extent can be "some other directory's
  * session". {@link ImportIndex.extentIds} is the half that does not vary.
  *
+ * A declined-link row (any code {@link isDeclinedSymlinkCode} accepts) is
+ * base-extent and so tree-global too, and is scoped the same way — see
+ * {@link linkBearsOn}. ⛔ Every declined-link code, never one: an out-of-root or
+ * unresolved link is recorded under its own code and is exactly as absent from
+ * the answer as any other.
+ *
  * @param projection - The populated projection, for `realization_conditions`
  * @param index - The projection's index
  * @param walkedExtents - Context ids of the import closures this query charged
- * @returns Every in-scope condition, with its report severity
+ * @param directory - The queried directory, root-relative, `''` for the root
+ * @returns Every in-scope condition, with its report severity, its loader-rule
+ *   explanation and — for a member of a walked import closure — the chain that
+ *   reaches it
  */
 function gradeConditions(
   projection: Projection,
   index: ContextQueryIndex,
   walkedExtents: ReadonlySet<string>,
+  directory: string,
 ): GradedCondition[] {
-  const importExtentIds = index.importClosures().extentIds;
+  const closures = index.importClosures();
+  const closuresByExtentId = new Map(closures.closures.map((closure) => [closure.extentId, closure]));
+  const chain = new Set(ancestorDirectories(directory));
 
   return projection.realizationConditions
-    .filter((row) => !importExtentIds.has(row.extentId) || walkedExtents.has(row.extentId))
-    .map((row) => ({
-      code: row.code,
-      severity: strongerSeverity(
-        row.severity,
-        severityFor(row, index.pathShapeByReference, index.contentKeyByPath),
-      ),
-      path: row.path,
-      sourcePath: row.sourcePath,
-      sourceLine: row.sourceLine,
-      sourceRef: row.sourceRef,
-      message: row.message,
-    }));
+    .filter((row) => !closures.extentIds.has(row.extentId) || walkedExtents.has(row.extentId))
+    .filter((row) => !isDeclinedSymlinkCode(row.code) || linkBearsOn(row.path, directory, chain))
+    .map((row) => {
+      const path = row.sourcePath ?? row.path;
+      return {
+        code: row.code,
+        severity: strongerSeverity(
+          row.severity,
+          severityFor(row, index.pathShapeByReference, index.contentKeyByPath),
+        ),
+        harness: CLAUDE_CODE.id,
+        path,
+        subject: row.path === path ? null : row.path,
+        line: row.sourceLine,
+        ref: row.sourceRef,
+        message: row.message,
+        why: whyFor(row.code),
+        affects: affectsFor(path, closuresByExtentId.get(row.extentId)),
+      };
+    });
 }
+
+/**
+ * `why` for every code this report can explain in terms of a specific Claude
+ * Code loader branch or a named VAT producer — see
+ * `docs/external/claude-code-memory-loader.md` for the harness-loader entries.
+ *
+ * `CLOSURE_DEPTH_EXCEEDED` IS a harness loader branch — `oQe` refuses to
+ * descend once depth reaches `Pyn` (5), so it gets a citation like the other
+ * two, not {@link DEFAULT_WHY}. `REALIZATION_PATH_COLLISION` and
+ * `CLOSURE_ROOT_ABSENT` are population-time facts with no harness branch to
+ * cite at all, so they name their own VAT producer instead of a loader
+ * function — {@link DEFAULT_WHY} would be honest for them too, but a fixed
+ * producer is more useful than a generic fallback where one is known.
+ *
+ * Only an opaque refusal-cascade label (a caller-supplied string this module
+ * cannot enumerate — and one the claude-import closures never declare, since
+ * they carry no refusals) reaches {@link DEFAULT_WHY} today.
+ */
+const WHY_TEXTS: Readonly<Record<string, string>> = {
+  [UNRESOLVED_CODE]:
+    'Claude Code\'s import reader ($q, through Cge\'s "absent" branch) returns nothing for a target'
+    + ' that resolves to no file: no error, no event — the import is silently skipped and nothing'
+    + ' under this reference is ever injected.',
+  [CLOSURE_REFERENCE_OUTSIDE_ROOT]:
+    'Claude Code only follows an import past the population root when the target passes its own'
+    + ' NO() containment check or the session\'s external includes are approved'
+    + ' (hasClaudeMdExternalIncludesApproved) — a per-user decision this tree cannot show, so'
+    + ' whether this loads depends on that approval, not on anything the tree states.',
+  [CLOSURE_DEPTH_EXCEEDED]:
+    'Claude Code\'s import walk (`oQe`) refuses to descend once depth reaches `Pyn` (5): the root'
+    + ' is depth 0 and four hops load, so a target reachable only at the fifth hop or deeper is'
+    + ' never followed, however real the file is.',
+  [REALIZATION_PATH_COLLISION]:
+    'Not a Claude Code loader branch: VAT\'s own ProjectionBuilder enforces one realization per'
+    + ' (extent, path), so a second identity claiming a path already taken is recorded here rather'
+    + ' than silently overwriting the first.',
+  [CLOSURE_ROOT_ABSENT]:
+    'Not a Claude Code loader branch: the closure primitive\'s own check that a declared'
+    + ' `closureFrom` realizes somewhere in this projection — nothing the harness itself decides.',
+};
+
+/**
+ * `why` for a `realization_conditions` code {@link WHY_TEXTS} does not name —
+ * today, only an opaque refusal-cascade label. Honest rather than a fabricated
+ * loader citation: it names what it IS (a VAT-produced fact) without claiming
+ * which harness branch produced it, matching this module's own `why` field
+ * description on {@link ClaudeContextFindingSchema}.
+ */
+const DEFAULT_WHY = 'Not a Claude Code loader branch: a VAT-produced fact — see `message` for what was'
+  + ' observed and `code` for which check raised it.';
+
+/**
+ * @param code - `realization_conditions.code`
+ * @returns The loader-rule (or named-producer) explanation for this code
+ */
+function whyFor(code: string): string {
+  return WHY_TEXTS[code] ?? DEFAULT_WHY;
+}
+
+/**
+ * The import chain from a walked closure's entry point to `path`, when `path`
+ * belongs to one.
+ *
+ * @param path - The finding's own location — {@link gradeConditions}' `path`
+ * @param closure - The closure `path`'s condition was filed under, or
+ *   undefined when it was not an import closure at all (a base-extent
+ *   condition)
+ * @returns `affects`, or null when `path` names no walked import closure —
+ *   including a base-extent condition and a closure member
+ *   {@link closureProvenance} could not attribute
+ */
+function affectsFor(path: string, closure: ImportClosure | undefined): GradedCondition['affects'] {
+  if (closure === undefined) return null;
+  const chain = chainTo(path, closure);
+  return chain === null ? null : { chain, hop: chain.length - 1 };
+}
+
+/**
+ * `path`'s import chain within `closure`, root-down — walked by following each
+ * member's `viaPath` BACKWARD from `path` to `closure.rootPath`, using the same
+ * per-member provenance {@link membersOf} already attached. Not a second
+ * `closureProvenance` call: the members list already carries what that walk
+ * found.
+ *
+ * @param path - The path to trace back to the closure's root
+ * @param closure - The closure to trace it within
+ * @returns The chain root-first ending at `path`, or null when `path` is not
+ *   `closure.rootPath` and cannot be traced all the way back to it — an
+ *   unattributed member (`viaPath: null` at a nonzero depth) breaks the trace,
+ *   and reporting a guessed parent there would launder a "cannot say" into a fact
+ */
+function chainTo(path: string, closure: ImportClosure): string[] | null {
+  if (path === closure.rootPath) return [closure.rootPath];
+  const admissionByPath = new Map(closure.members.map((member) => [member.path, member.admission]));
+  const chain: string[] = [];
+  const visited = new Set<string>();
+  let current = path;
+  while (current !== closure.rootPath) {
+    if (visited.has(current)) return null;
+    visited.add(current);
+    chain.unshift(current);
+    const admission = admissionByPath.get(current);
+    if (admission?.kind !== 'import' || admission.viaPath === null) return null;
+    current = admission.viaPath;
+  }
+  chain.unshift(closure.rootPath);
+  return chain;
+}
+
+/**
+ * Whether a declined link at `linkPath` could hide something a session started
+ * in `directory` loads — the only links its answer names.
+ *
+ * Without this every answer carried every link in the tree: one
+ * `CLAUDE.md -> AGENTS.md` in a sibling directory was ~400 characters of noise
+ * in every directory's answer. A link bears on the query when it is
+ *
+ * - beneath the queried directory — it may BE, or hide, an on-demand file;
+ * - a `CLAUDE.md`-family name in a directory on the chain — a launch-time file; or
+ * - at or under ANY `.claude/rules` — a path-scoped rule is selected by glob
+ *   tree-wide, and a nested one is tried root-relative too (`matchingForms`),
+ *   so it can load for a directory outside its own; or
+ * - at or under a `.claude` directory on the chain — the root's
+ *   `.claude/CLAUDE.md`, a nested `.claude` a session there reads.
+ *
+ * Both decided by path SEGMENT, never by extension: the vendor's shared-rules
+ * pattern links a whole DIRECTORY, `.claude/rules/shared -> ~/shared-claude-rules`.
+ *
+ * The `CLAUDE.md` family is classified by its PATH through the shipped
+ * classifier, as a realization would be: a link has no tags because it has no
+ * realization. The empty plugin-root set is exact here, not a default — the
+ * convention asked about does not consult it.
+ *
+ * @param linkPath - Root-relative link path
+ * @param directory - The queried directory, `''` for the root
+ * @param chain - `ancestorDirectories(directory)`
+ * @returns True when the answer should carry the link's row
+ */
+function linkBearsOn(linkPath: string, directory: string, chain: ReadonlySet<string>): boolean {
+  const slash = linkPath.lastIndexOf('/');
+  const parent = slash === -1 ? '' : linkPath.slice(0, slash);
+  // Beneath the queried directory: it is one of the link's own ancestors.
+  if (ancestorDirectories(parent).includes(directory)) return true;
+  if (DOT_CLAUDE_RULES_SEGMENT.test(linkPath)) return true;
+  for (const match of linkPath.matchAll(DOT_CLAUDE_SEGMENT)) {
+    // The directory holding this `.claude` — `''` at the root.
+    if (chain.has(linkPath.slice(0, Math.max(match.index, 0)))) return true;
+  }
+  const tags = classifyPath(linkPath, linkPath.slice(slash + 1).toLowerCase(), new Set());
+  return tags.some((row) => row.tag === CLAUDE_MD_TAG) && chain.has(parent);
+}
+
+/** A `.claude` path segment; `index` is where the holding directory's spelling ends. */
+const DOT_CLAUDE_SEGMENT = /(?:^|\/)\.claude(?=\/|$)/g;
+
+/** A `.claude/rules` directory, or anything beneath one, at any depth. No `g`: `test` stays stateless. */
+const DOT_CLAUDE_RULES_SEGMENT = /(?:^|\/)\.claude\/rules(?:\/|$)/;
 
 /**
  * The escalation this report applies to one condition, before its stored
@@ -856,7 +1160,7 @@ function severityFor(
  * @param reference - One `blob_references` row
  * @returns The composite key
  */
-function referenceKey(reference: BlobReferenceRow): string {
+function referenceKey(reference: Pick<BlobReferenceRow, 'blob' | 'line' | 'rawRef'>): string {
   return joinKey(reference.blob, reference.line, reference.rawRef);
 }
 

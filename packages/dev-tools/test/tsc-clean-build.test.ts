@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { setupSyncTempDirSuite , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from 'vitest';
 
@@ -26,7 +27,7 @@ function emitGroup(
   options: { withSource: boolean; sourceRelative?: string },
 ): { js: string; declaration: string } {
   const distDir = safePath.join(packageRoot, 'dist');
-  fs.mkdirSync(distDir, { recursive: true });
+  mkdirSyncReal(distDir, { recursive: true });
   const sourceRelative = options.sourceRelative ?? `../src/${name}.ts`;
 
   const js = safePath.join(distDir, `${name}.js`);
@@ -41,7 +42,7 @@ function emitGroup(
 
   if (options.withSource) {
     const source = safePath.resolve(distDir, sourceRelative);
-    fs.mkdirSync(safePath.join(source, '..'), { recursive: true });
+    mkdirSyncReal(safePath.join(source, '..'), { recursive: true });
     fs.writeFileSync(source, EMPTY_MODULE);
   }
   return { js, declaration };
@@ -90,7 +91,7 @@ describe('pruneStaleEmit', () => {
 
   it('leaves output that no declaration map claims — later build steps write into dist too', () => {
     const distDir = safePath.join(tempDir, 'dist');
-    fs.mkdirSync(safePath.join(distDir, 'bin'), { recursive: true });
+    mkdirSyncReal(safePath.join(distDir, 'bin'), { recursive: true });
     // prepare-bin.ts's extensionless shim, copy-yaml-assets.ts's assets, and the
     // JSON schemas generate:schemas writes all land here after tsc has run.
     const shim = safePath.join(distDir, 'bin', 'vat');
@@ -104,7 +105,7 @@ describe('pruneStaleEmit', () => {
 
   it('leaves output alone when the declaration map is unreadable rather than guessing', () => {
     const distDir = safePath.join(tempDir, 'dist');
-    fs.mkdirSync(distDir, { recursive: true });
+    mkdirSyncReal(distDir, { recursive: true });
     fs.writeFileSync(safePath.join(distDir, BARREL_JS), EMPTY_MODULE);
     fs.writeFileSync(safePath.join(distDir, 'index.d.ts.map'), 'not json');
 
@@ -193,7 +194,7 @@ describe('prepareForBuild', () => {
  */
 function stage(packageRoot: string, relativePath: string, contents = EMPTY_MODULE): string {
   const file = safePath.join(stagingDir(packageRoot), relativePath);
-  fs.mkdirSync(safePath.join(file, '..'), { recursive: true });
+  mkdirSyncReal(safePath.join(file, '..'), { recursive: true });
   fs.writeFileSync(file, contents);
   return file;
 }
@@ -298,7 +299,7 @@ describe('promoteStagedEmit', () => {
   );
 
   it('propagates a rename failure that no amount of waiting would clear', () => {
-    fs.mkdirSync(distPath(tempDir, BARREL_JS), { recursive: true });
+    mkdirSyncReal(distPath(tempDir, BARREL_JS), { recursive: true });
     fs.writeFileSync(distPath(tempDir, `${BARREL_JS}/occupant`), EMPTY_MODULE);
     stage(tempDir, BARREL_JS);
 

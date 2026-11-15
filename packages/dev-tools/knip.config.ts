@@ -96,9 +96,16 @@ const config: KnipConfig = {
     // The io facet's counter is a THIRD entry point, and an invisible one: it is
     // loaded into the measured process via `NODE_OPTIONS=--require`, so nothing
     // in this repo ever imports it. Without it listed here knip reads a
-    // load-bearing file as dead and deletes it on the next cleanup.
+    // load-bearing file as dead and deletes it on the next cleanup. The memory
+    // facet's probe is preloaded the same way, and its spawner is run by path.
     'packages/lab': {
-      entry: ['src/index.ts', 'src/bin/vat-lab.ts', 'src/facets/io/counter.cts'],
+      entry: [
+        'src/index.ts',
+        'src/bin/vat-lab.ts',
+        'src/facets/io/counter.cts',
+        'src/facets/memory/rss-probe.cts',
+        'src/facets/memory/rss-spawner.ts',
+      ],
     },
 
     // CLI: Commander.js wires commands from bin.ts, not index.ts
@@ -143,19 +150,11 @@ const config: KnipConfig = {
       project: [SRC_TS],
     },
 
+    // resources: the parse worker is an entry point the pool starts by path
+    // (`new Worker(entry)`), so nothing imports it and its imports would read as unused.
     'packages/resources': {
-      entry: sourceEntriesFromExports('resources'),
+      entry: [...sourceEntriesFromExports('resources'), 'src/parse-worker.ts'],
       project: [SRC_TS],
-    },
-
-    'packages/agent-runtime': {
-      entry: sourceEntriesFromExports('agent-runtime'),
-      project: [SRC_TS],
-    },
-
-    // Runtime adapters: some deps provide types or are used in tests/examples
-    'packages/runtime-vercel-ai-sdk': {
-      ignoreDependencies: ['@ai-sdk/provider', '@ai-sdk/provider-utils'],
     },
 
     // utils: the `./eslint` subpath is hand-written CommonJS outside src/. Its
@@ -170,33 +169,6 @@ const config: KnipConfig = {
       entry: [...sourceEntriesFromExports('utils'), 'eslint/index.cjs', 'eslint/rules/*.cjs'],
       project: [SRC_TS, 'eslint/*.cjs', 'eslint/rules/*.cjs'],
       ignoreDependencies: ['eslint'],
-    },
-
-    // vat-development-agents has standalone agent files + TS compiler plugin
-    'packages/vat-development-agents': {
-      entry: ['src/agents/*.ts'],
-      ignoreDependencies: [
-        '@vibe-agent-toolkit/schema',
-        // Invoked as `tspc` via `--compiler=tspc` passed to tsc-clean-build.ts — knip's
-        // script-token scanner only matches a bin name as its own token, not inside a flag value.
-        'ts-patch',
-      ],
-      // tsconfig includes resources/**/*.md which knip can't resolve as imports
-      ignoreUnresolved: ['.*'],
-    },
-
-    // Example package: devDeps used in examples/ directory (outside knip src/ project scope)
-    'packages/vat-example-cat-agents': {
-      entry: sourceEntriesFromExports('vat-example-cat-agents'),
-      project: [SRC_TS],
-      ignoreDependencies: [
-        '@ai-sdk/openai',
-        '@anthropic-ai/sdk',
-        '@langchain/openai',
-        '@vibe-agent-toolkit/runtime-.*',
-        'ai',
-        'openai',
-      ],
     },
 
     // Umbrella package: re-exports CLI for global install

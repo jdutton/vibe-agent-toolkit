@@ -10,10 +10,10 @@
  * so they live here and are projected onto the realization row.
  */
 
-import { realPathOrNull, type ResourceRealizationRow } from '@vibe-agent-toolkit/resources';
+import { resolveRealPath, type ResourceRealizationRow } from '@vibe-agent-toolkit/resources';
 import { relativeEscapesRoot, safePath } from '@vibe-agent-toolkit/utils';
 
-import type { EnumerationRow } from './types.js';
+import type { EnumerationRow, TargetPlacement } from './types.js';
 
 /**
  * The extent id the oracle labels its realizations with.
@@ -68,10 +68,14 @@ export function toEnumerationRow(
  *
  * @param rows - The lane's enumerated rows, in capture order
  * @param absolutePaths - The same paths, absolute, in the same order
+ * @param corpusRoot - The corpus they were crawled in: links beneath it are read before followed
  */
-export function markAliases(rows: EnumerationRow[], absolutePaths: readonly string[]): void {
+export function markAliases(rows: EnumerationRow[], absolutePaths: readonly string[], corpusRoot: string): void {
   const counts = new Map<string, number>();
-  const reals: (string | null)[] = absolutePaths.map((absolutePath) => realPathOrNull(absolutePath));
+  const reals: (string | null)[] = absolutePaths.map((absolutePath) => {
+    const resolution = resolveRealPath(absolutePath, corpusRoot);
+    return resolution.kind === 'resolved' ? resolution.path : null;
+  });
 
   for (const real of reals) {
     if (real !== null) {
@@ -90,13 +94,15 @@ export function markAliases(rows: EnumerationRow[], absolutePaths: readonly stri
  *
  * @param absolutePath - Path to resolve
  * @param corpusRoot - Root the corpus was crawled from
- * @returns True when inside, false when outside, null when unresolvable
+ * @returns True when inside, false when outside, null when it resolves to
+ *   nothing, and the errno when the OS declined or failed the resolution — that
+ *   one row's fact, never the end of the snapshot
  */
-function resolveInsideRoot(absolutePath: string, corpusRoot: string): boolean | null {
-  const real = realPathOrNull(absolutePath);
-  if (real === null) {
-    return null;
+function resolveInsideRoot(absolutePath: string, corpusRoot: string): TargetPlacement {
+  const resolution = resolveRealPath(absolutePath, corpusRoot);
+  if (resolution.kind === 'nowhere') {
+    return resolution.fault === null ? null : { fault: resolution.fault.errno };
   }
-  const rel = safePath.relative(corpusRoot, real);
+  const rel = safePath.relative(corpusRoot, resolution.path);
   return rel !== '' && !relativeEscapesRoot(rel);
 }

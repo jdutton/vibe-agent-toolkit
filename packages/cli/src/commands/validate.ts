@@ -8,64 +8,76 @@
  *
  * Config-driven: a surface is validated only when its block is present in
  * vibe-agent-toolkit.config.yaml. A project with no `skills:` block simply
- * does not run skill validation — no error, no noise.
+ * does not run skill validation; one that configures nothing at all examines
+ * nothing, and the writer refuses that run.
  *
  * Distinct from `vat verify`, which validates the *built* dist artifacts
  * (marketplace tree, files-config dests, distribution consistency). `vat
  * validate` runs the source-level validators only and never requires a build.
  *
  * DECISION (revisitable): `vat validate` deliberately covers source-level
- * surfaces only (resources, skills) and excludes marketplace-artifact
+ * surfaces only (resources, their checks, skills) and excludes marketplace-artifact
  * validation. Marketplace validation runs against the built dist tree, which
  * would couple `vat validate` to a prior `vat build` and overlap `vat verify`.
- * Keeping it build-free makes `vat validate` safe for pre-commit / CI-before-
- * build. If a single "validate the whole shippable thing" command is later
+ * Keeping it build-free lets it run in CI before a build; time it on your tree
+ * before putting it in a pre-commit hook — the checks phase builds a projection
+ * of the whole tracked tree. If a single "validate the whole shippable thing" command is later
  * wanted, fold the marketplace phase in here (mirror verify.ts).
  */
 
 import { type ProjectConfig } from '@vibe-agent-toolkit/resources';
+import { forEachInOrder } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
-import { handleCommandError } from '../utils/command-error.js';
+import { marksOperandRefusalByHand } from '../command-tree.js';
+import { baseOption } from '../utils/base-option.js';
 import { loadConfig } from '../utils/config-loader.js';
+import { endWithReport } from '../utils/document-writer.js';
 import { createLogger } from '../utils/logger.js';
-import { writeYamlOutput } from '../utils/output.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
+import { withPopulationCache } from '../utils/projection-store.js';
 
 import {
   addRetiredOnlyOption,
-  aggregatePhaseIssueCounts,
-  aggregatePhaseStatus,
   applyPhaseSelection,
   decidePhaseSelection,
-  exitCodeForPhases,
+  orchestrate,
+  ORCHESTRATOR_FORMAT,
   rejectRetiredOnly,
   runPhase,
+  shipsPluginLocalSkills,
+  skillsPhaseExamined,
   type Phase,
   type PhaseResult,
   type PhaseSelection,
   type PhaseVocabulary,
 } from './phase-utils.js';
 import { rejectPositionalArguments } from './positional-args.js';
+import { CHECK_REPORT_SCHEMA, RESOURCES_CHECK_EXAMINED } from './resources/check-schema.js';
+import { DEFAULT_BUDGET_SECONDS, SUPERVISION_SIGNAL_CONTRACT } from './resources/check-supervisor.js';
+import { runResourcesCheckPhase } from './resources/check.js';
+import { RESOURCES_VALIDATE_EXAMINED, RESOURCES_VALIDATE_REPORT_SCHEMA } from './resources/validate-schema.js';
 import { runResourcesValidatePhase } from './resources/validate.js';
+import { SKILLS_VALIDATE_EXAMINED, SKILLS_VALIDATE_REPORT_SCHEMA } from './skills/validate-schema.js';
 import { runSkillsValidatePhase } from './skills/validate.js';
 
-/** Surfaces `vat validate` knows how to run, in stable execution order. */
-const VALID_SURFACES = ['resources', 'skills'] as const;
+/**
+ * Surfaces `vat validate` knows how to run, in stable execution order. `checks` runs whenever
+ * `resources:` is configured, directly after `resources`. Its supervised child derives its own
+ * population of the tree — it does not read the one the `resources` phase built.
+ */
+const VALID_SURFACES = ['resources', 'checks', 'skills'] as const;
 
 const VALIDATE_VOCABULARY: PhaseVocabulary = {
   noun: 'Surface',
   verb: 'validate',
   validNames: VALID_SURFACES,
   noop: {
-    // A bare run with nothing configured is a clean no-op (exit 0: the command
-    // doesn't check what it doesn't know about) — but silent success
-    // on stdout alone is indistinguishable, to anyone watching only the exit
-    // code, from a run that actually validated something. Warn on stderr so a
-    // config typo (e.g. `recources:`) doesn't masquerade as "all good."
+    // A bare run with nothing configured examines nothing, which the writer
+    // refuses (exit 1): a gate that checked nothing is not a pass. The stderr
+    // warning names the likely cause, a config typo such as `recources:`.
     warning:
       'No resources: or skills: block found in vibe-agent-toolkit.config.yaml — nothing to validate. If this is unexpected, check your config.',
-    note: 'No configured validators (no resources or skills block in vibe-agent-toolkit.config.yaml).',
   },
 };
 
@@ -74,11 +86,16 @@ export interface ValidateCommandOptions {
   only?: string;
   debug?: boolean;
   verbose?: boolean;
+  /** `--base <ref>`, forwarded to the checks phase for `changed_files`. */
+  base?: string;
 }
 
 /**
  * Measured full-run duration on the 90-skill / 1,041-document adopter, cited by
- * the retired-`--only` message: resources 13.9s + skills 19.3s.
+ * the retired-`--only` message: resources 13.9s + skills 19.3s. ⚠️ Measured
+ * BEFORE the `checks` phase existed and before the resources phase asked the
+ * full population's question (blob stage included) — so it is a historical
+ * figure (the message says "measured"), not today's cost.
  */
 const VALIDATE_FULL_RUN_SECONDS = 35;
 
@@ -86,50 +103,87 @@ const VALIDATE_FULL_RUN_SECONDS = 35;
 const COMMAND_NAME = 'vat validate';
 
 export function createValidateTopLevelCommand(): Command {
-  const command = new Command('validate');
+  // Refuses operands in its action, with a better message than commander's.
+  const command = marksOperandRefusalByHand(new Command('validate'));
 
   addRetiredOnlyOption(command)
-    .description('Validate configured surfaces from source (resources + skills) — no build required')
+    .description('Validate configured surfaces from source (resources, their checks, skills) — no build required')
     .option('--debug', 'Enable debug logging')
     .option('-v, --verbose', 'Show every finding, not just the collapsed counts')
+    .addOption(baseOption())
     .action(validateTopLevelCommand)
     .addHelpText(
       'after',
       `
 Description:
-  Runs the source-level validators (resources, skills) the project's config
-  declares — and only those. A surface whose config block is absent is skipped
-  (a project with no skills block does not run skill validation; no error, no
-  noise, but a stderr warning if nothing at all is configured).
+  Runs the source-level validators (resources, checks, skills) the project's
+  config declares — and only those. A surface whose config block is absent is skipped
+  (a project with no skills block does not run skill validation). A project
+  that configures nothing examines nothing, which is refused (exit 1) with a
+  stderr warning naming the likely config typo.
 
-  A run is a WHOLE run: '--only' was removed (a full run is ~35s, and the flag
-  let a renamed config key silently drop a CI gate's coverage). 'vat build'
-  keeps its '--only', where a phase costs minutes rather than seconds.
+  A run is a WHOLE run: '--only' was removed (the flag let a renamed config
+  key silently drop a CI gate's coverage). 'vat build' keeps its '--only',
+  where a phase costs minutes rather than seconds.
 
   Source-level only. Unlike 'vat verify', this never inspects built dist
   artifacts and never requires a build.
 
   Surfaces (run in this order):
     resources  → link integrity, collection frontmatter schemas (when 'resources:' configured)
+    checks     → VAT's built-in checks plus the project's resources.checks SQL, exactly as
+                 'vat resources check' runs them over the whole TRACKED TREE —
+                 resources.include/exclude do not scope it (when 'resources:'
+                 configured); its phase entry is that command's own report
     skills     → SKILL.md frontmatter and packaging validation (when 'skills:' configured)
 
+  --base <ref> reaches the checks phase only: a check reading changed_files
+  compares the tree with the merge base of <ref> and HEAD, and without it
+  that check fails as RESOURCE_CHECK_BROKEN (exit 1) naming the fix. The
+  exit code does not tell the faults apart; the finding's reason.refusal
+  does (USAGE_INVALID, BACKEND_UNAVAILABLE, INPUT_UNREADABLE). No other
+  check reads it.
+
 Output:
-  ONE YAML document → stdout
-    per surface: status (success | warning | error | system-error) plus the
-    validator's exitCode — a surface that could not run is never reported as a
-    surface that failed validation. The validator's own
-    report is captured and nested under 'report', so the whole run stays a
-    single parseable document ('vat validate | jq' works). A surface's status
-    comes from the validator's REPORTED status, not from its exit code — an
-    exit code cannot express 'warning'.
-  Progress and validation errors → stderr (streamed live)
+  ONE report envelope (YAML) → stdout: status (ok | findings | error),
+  examined (the sum over every surface), summary {errors, warnings, info},
+  findings (every surface's, flat), and data.phases — one entry per surface
+  with its own status, examined, summary, error (when it did not finish) and
+  the surface's own data. Schema: packages/cli/schemas/orchestrator.json.
+  Progress and findings → stderr (streamed live), each finding as
+  "location:line: severity: message [code]", its fix (when it has one) on
+  the next line, indented, as "Fix: ..." — every error, errors first; the
+  warning and info findings only with --verbose
 
 Exit Codes:
-  0 - All configured validators passed (or nothing configured to validate)
-  1 - Validation errors found, or the retired '--only' flag was passed
-  2 - System error (this command's own, or propagated from a validator that
-      could not run: it exited 2, or reported 'system-error' for itself), or a
-      usage error such as passing a path
+  0 - Every surface finished and no finding is an error (warning and info
+      findings never fail)
+  1 - An error finding — a resources.checks row at error, or, once the checks
+      child's population was in, RESOURCE_CHECK_BROKEN: a statement that was
+      refused, or the child killed by the checks bound, dead, publishing a
+      report that could not be read, or exiting against its own report — or a
+      configured phase examined nothing: an include that matches no file, say
+      (RESOURCE_CHECK_BROKEN, naming the unit)
+  2 - The run could not do its job: a surface did not finish (RUN_INCOMPLETE,
+      the finished surfaces still in data.phases) — including a checks child
+      that could not be started, refused (before its population — its config,
+      say — or after it), or was killed, died or exited against its report
+      before its population completed, or a checks supervisor that could not
+      watch its child — a path argument or the retired '--only'
+      (USAGE_INVALID), no project root. One exit 2 publishes NO document: a
+      signal on Windows, or one that cannot kill this process (PID 1) — see
+      the signal paragraph below
+
+${SUPERVISION_SIGNAL_CONTRACT}
+
+Checks bound:
+  The checks phase runs the supervised child of 'vat resources check' under
+  that command's default bound: the child is killed after ${DEFAULT_BUDGET_SECONDS}s WITHOUT
+  PROGRESS (each check finishing resets it; the population reports only when it
+  finishes, so for the population it is a total bound). This release has no
+  way to give 'vat validate' more time. 'vat resources check --budget <seconds>'
+  runs the same checks on their own with a larger bound, so they can pass
+  there, but that does not make 'vat validate' pass.
 
 Arguments:
   None. Scope comes from vibe-agent-toolkit.config.yaml, never from the command
@@ -163,11 +217,19 @@ Example:
  *
  * `only` is still passed to {@link decidePhaseSelection} as `undefined`: that
  * helper is shared with `vat build`, which keeps its own `--only`.
+ *
+ * @param config - The project's config, or undefined when there is none
+ * @param run - The run's inputs, all required
+ * @param run.root - The project root this run resolved; the `checks` phase's child checks exactly it
+ * @param run.verbose - Forwarded to the resources, checks and skills phases
+ * @param run.debug - Forwarded to the `checks` phase's child
+ * @param run.base - `--base <ref>`, forwarded to the `checks` phase's child; undefined when none was given
  */
 export function selectValidateSurfaces(
   config: ProjectConfig | undefined,
-  verbose = false,
+  run: { readonly root: string; readonly verbose: boolean; readonly debug: boolean; readonly base: string | undefined },
 ): PhaseSelection {
+  const { root, verbose, debug, base } = run;
   // Forwarded to every surface, exactly as `vat verify` forwards its own. Both
   // validators already accept `-v, --verbose`; only this command lacked the
   // flag, which made the collapsed warning/info detail unreachable HERE while
@@ -179,13 +241,27 @@ export function selectValidateSurfaces(
   if (config?.resources) {
     phases.push({
       name: 'resources',
+      schema: RESOURCES_VALIDATE_REPORT_SCHEMA,
+      examined: RESOURCES_VALIDATE_EXAMINED,
       run: () => runResourcesValidatePhase(undefined, { verbose }),
+    });
+    // Whenever `resources:` is configured — a project with no `resources.checks` still runs VAT's
+    // built-in set — and directly after `resources`. The phase report is the supervised child's own.
+    phases.push({
+      name: 'checks',
+      schema: CHECK_REPORT_SCHEMA,
+      examined: RESOURCES_CHECK_EXAMINED,
+      run: () => runResourcesCheckPhase({ root, debug, verbose, base }),
     });
   }
 
   if (config?.skills) {
     phases.push({
       name: 'skills',
+      schema: SKILLS_VALIDATE_REPORT_SCHEMA,
+      // The phase validates the POOL (`skills.include`); a project whose skills are all plugin-local has
+      // none, and its block is there for their config. The cwd is where the phase itself loads the config.
+      examined: skillsPhaseExamined(SKILLS_VALIDATE_EXAMINED, () => shipsPluginLocalSkills(config, process.cwd())),
       run: () => runSkillsValidatePhase(undefined, { verbose }),
     });
   }
@@ -193,70 +269,81 @@ export function selectValidateSurfaces(
   return decidePhaseSelection(undefined, phases, VALIDATE_VOCABULARY);
 }
 
+/**
+ * Run every surface inside ONE projection-store scope, so the in-process lanes
+ * share one database and one `git write-tree` instead of taking one each. The
+ * measurement, and why the hoist is admissible here and nowhere else, are in
+ * `docs/architecture/resource-scanning-and-caching.md` §3.7.
+ *
+ * ⚠️ One scope is one git snapshot for the in-process phases. `vat validate`
+ * writes nothing into the tree — source-level and build-free by the decision at
+ * the top of this file — so no phase can miss another's output. A verb whose
+ * phases produce files for the next to read (`vat build`) must not be hoisted
+ * this way, and is not.
+ *
+ * ⚠️ The `checks` phase is OUTSIDE that sharing: it is a supervised CHILD
+ * process, so it takes its own git snapshot and opens the projection store
+ * while this process holds it open inside the scope below. It asks the resources
+ * phase's question, so with a store selected it is served that phase's rows.
+ *
+ * @param projectRoot - The resolved project root, which every surface roots at
+ * @param phases - The surfaces to run, in order
+ * @param logger - Where the per-surface banner goes
+ * @param results - Where each surface's result is recorded as it finishes, so
+ *   a later throw still publishes the finished ones
+ */
+async function runPhasesUnderOnePopulation(
+  projectRoot: string,
+  phases: readonly Phase[],
+  logger: ReturnType<typeof createLogger>,
+  results: PhaseResult[],
+): Promise<void> {
+  await withPopulationCache({ root: projectRoot }, async () => {
+    // In order, deliberately: surfaces are announced in a fixed order and their
+    // stderr streams live, so overlapping them would interleave two running
+    // reports into one unreadable channel.
+    await forEachInOrder(phases, async (phase) => {
+      logger.info(`\n▶ Surface: ${phase.name}`);
+      results.push(await runPhase(phase));
+    });
+  });
+}
+
 async function validateTopLevelCommand(
   options: ValidateCommandOptions,
   command: Command,
 ): Promise<void> {
-  // First, and before requireProjectRoot: `vat validate docs/` used to be
-  // accepted, have its path discarded, run wide over every configured surface
-  // and report success. Nothing below can un-tell that lie, so the run ends
-  // here. (`vat resources validate <path>` is the path-taking form.)
-  rejectPositionalArguments(
-    command.args,
-    COMMAND_NAME,
-    'validates every source surface vibe-agent-toolkit.config.yaml declares',
-  );
-
-  // Before requireProjectRoot: a retired flag is a usage error, and answering it
-  // with "no vibe-agent-toolkit.config.yaml found" would diagnose the wrong
-  // problem for anyone running the old invocation outside a project.
-  rejectRetiredOnly(options.only, COMMAND_NAME, VALIDATE_FULL_RUN_SECONDS);
-
   const logger = createLogger(options.debug ? { debug: true } : {});
-  const startTime = Date.now();
 
-  try {
-    // Inside the try: outside it, "no project here" was an unhandled rejection,
-    // Node's default exit 1 — which the exit-code contract reads as FINDINGS.
+  const report = await orchestrate(async (results) => {
+    // First, and before requireProjectRoot: `vat validate docs/` used to be
+    // accepted, have its path discarded, run wide over every configured surface
+    // and report success. (`vat resources validate <path>` is the path-taking form.)
+    rejectPositionalArguments(
+      command.args,
+      COMMAND_NAME,
+      'validates every source surface vibe-agent-toolkit.config.yaml declares',
+    );
+    // Before requireProjectRoot: a retired flag is a usage error, and answering it
+    // with "no vibe-agent-toolkit.config.yaml found" would diagnose the wrong problem.
+    rejectRetiredOnly(options.only, COMMAND_NAME, VALIDATE_FULL_RUN_SECONDS);
+
     // requireProjectRoot returns the discovered root; read config from there so a
     // subdirectory invocation doesn't load an empty config and falsely pass.
     const projectRoot = requireProjectRoot(process.cwd(), COMMAND_NAME);
     const phases = applyPhaseSelection(
-      selectValidateSurfaces(loadConfig(projectRoot), options.verbose === true),
+      selectValidateSurfaces(loadConfig(projectRoot, 'source'), {
+        root: projectRoot,
+        verbose: options.verbose === true,
+        debug: options.debug === true,
+        base: options.base,
+      }),
       logger,
-      startTime,
     );
 
-    logger.info(`✅ vat validate (surfaces: ${phases.map((p) => p.name).join(' → ')})`);
-
-    const phaseResults: PhaseResult[] = [];
-    for (const phase of phases) {
-      logger.info(`\n▶ Surface: ${phase.name}`);
-      // Awaited in the loop, deliberately: surfaces are announced in a fixed
-      // order and their stderr streams live, so overlapping them would
-      // interleave two running reports into one unreadable channel.
-      phaseResults.push(await runPhase(phase));
-    }
-
-    // A surface whose validator could not RUN (exit 2, or a self-reported
-    // system error) is not one that failed validation: it exits 2, so a CI gate can
-    // tell a broken config from a broken link.
-    // `issueCounts` beside `status` because a status alone cannot express a
-    // three-valued distribution, and this document published none at all: a
-    // consumer that wanted "did anything need acting on" had to either trust a
-    // bare `status` or hand-sum the phases. `status: warning` on a warnings-only
-    // repo is correct and deliberate — `success` means "nothing to act on", not
-    // "nothing to see" — so gate on `issueCounts.errors` or the exit code, both
-    // of which stay 0 through any number of warnings.
-    writeYamlOutput({
-      status: aggregatePhaseStatus(phaseResults),
-      issueCounts: aggregatePhaseIssueCounts(phaseResults),
-      phases: phaseResults,
-      duration: `${Date.now() - startTime}ms`,
-    });
-
-    process.exit(exitCodeForPhases(phaseResults));
-  } catch (error) {
-    handleCommandError(error, logger, startTime, 'Validate');
-  }
+    // A header, not a verdict: no ✅ before anything has run.
+    logger.info(`🔍 vat validate (surfaces: ${phases.map((p) => p.name).join(' → ')})`);
+    await runPhasesUnderOnePopulation(projectRoot, phases, logger, results);
+  });
+  endWithReport('validate', report, ORCHESTRATOR_FORMAT);
 }

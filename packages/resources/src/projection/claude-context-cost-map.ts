@@ -27,16 +27,17 @@
  * needs an answer per directory, this module issues one `whatLoadsAt` per working
  * location whatever the regions do, so {@link ContextCostMap.queriedDirectories}
  * EQUALS {@link ContextCostMap.evaluatedDirectories} on a healthy tree. That is
- * the opposite of `sweepAlwaysLoadedBudgets`, which needs the always half only
- * and so really does query nine times instead of 589. Anyone reading a collapse
+ * the opposite of `claudeContextRelations`, which queries once per chain and
+ * so really does query nine times instead of 589 — and pays for it by keying
+ * its on-demand rows to the representative. Anyone reading a collapse
  * into the counter here would be reading one that is not there.
  *
  * ## No threshold, no verdict, no severity — deliberately
  *
- * `vat claude context` has no gate and is not going to have one; comparing a
- * total against a number is `vat claude budget`'s job, and the two are separate
- * verbs on purpose. So nothing here imports `claude-context-budget.ts`, nothing
- * grades, and nothing sorts by anything but cost. A map that also judged would
+ * `vat claude context` has no gate and is not going to have one, and VAT ships
+ * no threshold anywhere: comparing a total against a number is the adopter's
+ * call, made in `resources.checks` over the claude-context relations. So nothing
+ * here grades, and nothing sorts by anything but cost. A map that also judged would
  * make every future threshold argument a change to the map.
  *
  * ## Nothing here is a floor, and nothing here is a ceiling
@@ -49,9 +50,8 @@
  */
 
 import { account, type AccountedContext, type AccountedRow } from './claude-context-accounting.js';
-import { whatLoadsAt } from './claude-context-query.js';
+import { whatLoadsAt, type RefusedContextFile } from './claude-context-query.js';
 import {
-  claudeMdIdentities,
   comparePaths,
   contextRegions,
   type ContextRegion,
@@ -213,6 +213,13 @@ export interface ContextCostMap {
    * directories.length` would leave a reader guessing why the two disagree.
    */
   readonly skippedUnknownLocations: number;
+  /**
+   * Every file some query in this map reached whose facts the run refused,
+   * once each, path-ordered. ⛔ No figure above includes them — a refused rule
+   * is in no row at all — so a non-empty list means every total here is short
+   * by an unknown amount.
+   */
+  readonly refused: readonly RefusedContextFile[];
 }
 
 /**
@@ -226,9 +233,9 @@ export interface ContextCostMap {
 export function buildContextCostMap(projection: Projection): ContextCostMap {
   const state: MapState = {
     projection,
-    claudeMdIds: claudeMdIdentities(projection),
     answers: new Map(),
     queries: 0,
+    refused: new Map(),
   };
 
   const regions: RegionCost[] = [];
@@ -257,6 +264,7 @@ export function buildContextCostMap(projection: Projection): ContextCostMap {
     queriedDirectories: state.queries,
     evaluatedDirectories: evaluated,
     skippedUnknownLocations: skipped,
+    refused: [...state.refused.values()].sort((left, right) => comparePaths(left.path, right.path)),
   };
 }
 
@@ -269,7 +277,6 @@ export function buildContextCostMap(projection: Projection): ContextCostMap {
  */
 interface MapState {
   readonly projection: Projection;
-  readonly claudeMdIds: ReadonlySet<string>;
   /**
    * Directory → its accounted answer.
    *
@@ -280,6 +287,8 @@ interface MapState {
   readonly answers: Map<string, AccountedContext | null>;
   /** `whatLoadsAt` calls issued so far — see {@link ContextCostMap.queriedDirectories}. */
   queries: number;
+  /** Path → every refused file any answer so far reached — see {@link ContextCostMap.refused}. */
+  readonly refused: Map<string, RefusedContextFile>;
 }
 
 /**
@@ -299,7 +308,8 @@ function accountOnce(state: MapState, directory: string): AccountedContext | nul
 
   state.queries += 1;
   const answer = whatLoadsAt(state.projection, directory);
-  const accounted = answer.kind === 'unknown' ? null : account(answer, state.claudeMdIds);
+  const accounted = answer.kind === 'unknown' ? null : account(answer);
+  if (answer.kind === 'answer') for (const file of answer.refused) state.refused.set(file.path, file);
   state.answers.set(directory, accounted);
   return accounted;
 }
@@ -342,7 +352,7 @@ function collectDirectories(
       // module then sorts on — and a ranked table whose numbers descend
       // non-monotonically reads as a bug in the measurement.
       totalTokens: cost.alwaysTokens + local.totals.onDemandTokens,
-      unknownTokenRows: countCharge(rowsOfClass(local, 'on-demand'), 'unknown-size'),
+      unknownTokenRows: countSizeCliff(rowsOfClass(local, 'on-demand'), 'unmeasured'),
     });
   }
   return skipped;
@@ -400,9 +410,9 @@ function regionCostOf(region: ContextRegion, chain: AccountedContext): RegionCos
     representative: region.representative,
     locationCount: region.locations.length,
     alwaysTokens: chain.totals.alwaysTokens,
-    unknownTokenRows: countCharge(alwaysRows, 'unknown-size'),
-    skippedOversizeRows: countCharge(alwaysRows, 'oversize-skipped'),
-    prunedRows: countCharge(alwaysRows, 'pruned-by-oversize'),
+    unknownTokenRows: countSizeCliff(alwaysRows, 'unmeasured'),
+    skippedOversizeRows: countSizeCliff(alwaysRows, 'oversize-skipped'),
+    prunedRows: countSizeCliff(alwaysRows, 'pruned-by-oversize'),
     alwaysRows,
   };
 }
@@ -428,8 +438,8 @@ function rowsOfClass(
  * @param charge - The charge state to count
  * @returns The count
  */
-function countCharge(rows: readonly AccountedRow[], charge: AccountedRow['charge']): number {
-  return rows.filter((row) => row.charge === charge).length;
+function countSizeCliff(rows: readonly AccountedRow[], sizeCliff: AccountedRow['sizeCliff']): number {
+  return rows.filter((row) => row.sizeCliff === sizeCliff).length;
 }
 
 /**

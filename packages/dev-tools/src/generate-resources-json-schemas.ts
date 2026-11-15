@@ -15,16 +15,22 @@
  * target added here and never generated — fails a unit test rather than
  * shipping a stale artifact. See `pin-emitted-schemas.ts`.
  *
- * The **twelve table** schemas are not listed by hand: they come from
+ * The **table** schemas are not listed by hand: they come from
  * `PROJECTION_TABLES`, the single registry that also supplies `exportProjection`
- * its primary keys. This file used to enumerate fifteen schemas in one
- * undifferentiated list, which is how three non-tables came to sit
- * indistinguishably among twelve tables — see below.
+ * its primary keys.
  */
 
+import { presenceImplies } from '@vibe-agent-toolkit/schema';
+
+import { BUILTIN_CHECK_NAMES } from '../../resources/src/projection/builtin-check-names.js';
 import { PROJECTION_TABLES } from '../../resources/src/projection/table-registry.js';
 import { OkfConceptFrontmatterSchema } from '../../resources/src/schemas/okf-concept.js';
 import { ProjectConfigSchema } from '../../resources/src/schemas/project-config.js';
+import { ChangedFileRowSchema } from '../../resources/src/schemas/projection-changed-files.js';
+import {
+  ClaudeContextChainRowSchema,
+  ClaudeContextLoadRowSchema,
+} from '../../resources/src/schemas/projection-claude-context.js';
 import {
   EdgeResolutionRowSchema,
   EdgeRowSchema,
@@ -43,13 +49,12 @@ export const RESOURCES_SCHEMAS_DIR = `${PROJECT_ROOT}/packages/resources/schemas
  * `edges`, `edge_resolutions` and `lens_entry_points` are absent from
  * {@link PROJECTION_TABLES} on purpose — zones.md §2 places them in the
  * derived-per-lens column, so they are the output of evaluating a lens rather
- * than rows anything materialises. ⚠️ They ARE referenced under `projection/`
- * now: `derived-table-registry.ts` imports `EdgeRowSchema` and
- * `EdgeResolutionRowSchema` to declare the derived relations. This docstring
- * used to say nothing did.
+ * than rows anything materialises. ⚠️ They ARE referenced under `projection/`:
+ * `derived-table-registry.ts` imports `EdgeRowSchema` and
+ * `EdgeResolutionRowSchema` to declare the derived relations.
  * They still have committed JSON Schemas, so they are still generated; the list
  * is separate so that "generated but not a table" is a visible, deliberate
- * category rather than three entries indistinguishable from the twelve.
+ * category rather than three entries indistinguishable from the thirteen.
  *
  * Adding a schema here is therefore a claim: *this row shape is published but
  * no projection table holds it.* Anything that IS a table belongs in the
@@ -59,6 +64,9 @@ const NON_TABLE_ROW_SCHEMAS: readonly EmittedSchemaTarget[] = [
   { name: 'projection-edges', schema: EdgeRowSchema },
   { name: 'projection-edge-resolutions', schema: EdgeResolutionRowSchema },
   { name: 'projection-lens-entry-points', schema: LensEntryPointRowSchema },
+  { name: 'projection-claude-context-chains', schema: ClaudeContextChainRowSchema },
+  { name: 'projection-claude-context-loads', schema: ClaudeContextLoadRowSchema },
+  { name: 'projection-changed-files', schema: ChangedFileRowSchema },
 ];
 
 /**
@@ -89,8 +97,43 @@ const EXTERNAL_FORMAT_SCHEMAS: readonly EmittedSchemaTarget[] = [
  * never be one the published schema refuses, or the reverse.
  */
 const CONFIG_SCHEMAS: readonly EmittedSchemaTarget[] = [
-  { name: 'project-config', schema: ProjectConfigSchema },
+  { name: 'project-config', schema: ProjectConfigSchema, postProcess: emitCheckRefusals },
 ];
+
+/** A JSON Schema node, as the rendered document holds it. */
+type SchemaNode = Record<string, unknown>;
+
+/**
+ * The node at `path` under `node`, or a throw naming the first step that is missing — a refusal
+ * this generator can no longer place must fail the build, never be dropped from the artifact.
+ */
+function nodeAt(node: SchemaNode, path: readonly string[]): SchemaNode {
+  let at = node;
+  for (const [index, step] of path.entries()) {
+    const next = at[step];
+    if (typeof next !== 'object' || next === null) {
+      throw new Error(`project-config.json has no ${path.slice(0, index + 1).join('.')}: the check refusals cannot be emitted`);
+    }
+    at = next as SchemaNode;
+  }
+  return at;
+}
+
+/**
+ * Emit the two `resources.checks` refusals `ProjectConfigSchema` states as Zod refinements, which
+ * `zod-to-json-schema` drops: a key equal to a built-in check's name (`propertyNames`), and
+ * `allowEmpty` without `examined` (`presenceImplies`, the one spelling of a dependent requirement).
+ * Without them the published artifact accepts a config `loadConfig` refuses.
+ */
+function emitCheckRefusals(document: SchemaNode): void {
+  const checks = nodeAt(document, ['definitions', 'project-config', 'properties', 'resources', 'properties', 'checks']);
+  checks['propertyNames'] = { not: { enum: [...BUILTIN_CHECK_NAMES] } };
+  const entry = nodeAt(checks, ['additionalProperties']);
+  if (entry['allOf'] !== undefined) {
+    throw new Error('project-config.json checks entry already carries an allOf: the allowEmpty refusal cannot be emitted beside it');
+  }
+  entry['allOf'] = [presenceImplies('allowEmpty', { required: ['examined'] })];
+}
 
 /** Every JSON Schema `packages/resources` ships under `schemas/`. */
 export const RESOURCES_SCHEMA_TARGETS: readonly EmittedSchemaTarget[] = [

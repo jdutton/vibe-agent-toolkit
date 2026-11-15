@@ -11,9 +11,10 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import * as fs from 'node:fs';
+
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -31,7 +32,7 @@ import {
 // validation output if scanned.
 function buildProject(parentDir: string, rootName: string): string {
   const rootDir = safePath.join(parentDir, rootName);
-  fs.mkdirSync(rootDir, { recursive: true });
+  mkdirSyncReal(rootDir, { recursive: true });
 
   // Initialize a git repo so gitignore-aware scanning works
   spawnSync(gitExecutable(), ['init'], { cwd: rootDir, stdio: 'pipe' });
@@ -61,7 +62,7 @@ echo hello
     '.claude/worktrees/wt-abc/skills/hello',
   ]) {
     const skillDir = safePath.join(rootDir, relSkillDir);
-    fs.mkdirSync(skillDir, { recursive: true });
+    mkdirSyncReal(skillDir, { recursive: true });
     writeTestFile(safePath.join(skillDir, 'SKILL.md'), skillBody);
   }
 
@@ -94,9 +95,9 @@ describe('Audit default artifact excludes (system test)', () => {
 
     expect(result.status).toBe(0);
     // Only the source skill should be scanned — 1 file, not 4.
-    expect(parsed['summary']).toMatchObject({ filesScanned: 1 });
+    expect(parsed['examined']).toBe(1);
 
-    const files = parsed['files'] as Array<{ path: string }>;
+    const files = (parsed['data'] as { files: Array<{ path: string }> }).files;
     const paths = files.map(f => f.path);
     expect(paths).toEqual([
       expect.stringContaining('skills/hello/SKILL.md'),
@@ -117,9 +118,9 @@ describe('Audit default artifact excludes (system test)', () => {
     expect(result.status).toBe(0);
     // The source skill and its gitignored dist/ mirror — 2, not 4: the two
     // copies under never-crawl directories stay out whatever the flag says.
-    expect(parsed['summary']).toMatchObject({ filesScanned: 2 });
+    expect(parsed['examined']).toBe(2);
 
-    const files = parsed['files'] as Array<{ path: string }>;
+    const files = (parsed['data'] as { files: Array<{ path: string }> }).files;
     const paths = files.map(f => f.path);
     expect(paths.some(p => DIST_SEGMENT.test(p))).toBe(true);
     expect(paths.some(p => p.includes('node_modules'))).toBe(false);
@@ -130,7 +131,7 @@ describe('Audit default artifact excludes (system test)', () => {
     const rootDir = buildProject(tempDir, 'exclude-additive');
     // Add one extra skill in an unusual location.
     const customDir = safePath.join(rootDir, 'vendor/skill-copy');
-    fs.mkdirSync(customDir, { recursive: true });
+    mkdirSyncReal(customDir, { recursive: true });
     writeTestFile(
       safePath.join(customDir, 'SKILL.md'),
       `---
@@ -151,6 +152,6 @@ description: A vendored skill copy that should be excluded when the user adds it
 
     expect(result.status).toBe(0);
     // Still only the real source skill — defaults AND user exclude applied.
-    expect(parsed['summary']).toMatchObject({ filesScanned: 1 });
+    expect(parsed['examined']).toBe(1);
   });
 });

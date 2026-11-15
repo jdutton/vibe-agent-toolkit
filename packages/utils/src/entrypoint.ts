@@ -17,8 +17,8 @@ import { normalizePath } from './path-utils.js';
  * Was this module invoked as the process entrypoint, rather than imported?
  *
  * ⛔ **Do not reach for `import.meta.main` here.** It shipped in Node 24.2 and
- * 22.18; this repo declares a floor of `>=22.13.0`, and on a real 22.13.0 the
- * property is `undefined`:
+ * 22.18; this repo declares a floor of `>=22.16.0`, and on a real 22.13.0 and
+ * 22.16.0 the property is `undefined`:
  *
  * ```
  * $ node-v22.13.0 --input-type=module -e "console.log(import.meta.main)"  -> undefined
@@ -72,5 +72,6 @@ export function isEntrypoint(
   // the path unchanged when it cannot — which is the right answer here, since
   // the string comparison above has already decided the two differ and an
   // unresolvable path carries no symlink information to compare.
-  return toForwardSlash(normalizePath(modulePath)) === toForwardSlash(normalizePath(invokedPath));
+  // Both are the process's own entry points, not a crawled path: each is its own edge.
+  return toForwardSlash(normalizePath(modulePath, { within: modulePath })) === toForwardSlash(normalizePath(invokedPath, { within: invokedPath }));
 }

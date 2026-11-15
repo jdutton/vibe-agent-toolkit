@@ -3,11 +3,16 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import diagnosticsChannel from 'node:diagnostics_channel';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import path from 'node:path';
+import { Worker } from 'node:worker_threads';
 
 import {
+  forEachInOrder,
   isPathAbsentError,
   mkdirSyncReal,
   normalizedTmpdir,
@@ -15,16 +20,24 @@ import {
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
+import { readDecodableBytes } from '@vibe-agent-toolkit/utils/fs';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
-import { gitExecutable, removeScratchDir, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
-import { afterAll, beforeAll, beforeEach, expect, type Assertion } from 'vitest';
+import { createTempDir, gitExecutable, removeScratchDir, removeTempDir, setupAsyncTempDirSuite, type FaultFsSession } from '@vibe-agent-toolkit/utils/testing';
+import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, vi, type Assertion } from 'vitest';
 
 import { ExternalLinkValidator } from '../src/external-link-validator.js';
-import { parseMarkdown } from '../src/link-parser.js';
+import { parseHtmlContent } from '../src/html-link-parser.js';
+import { parseMarkdownContent, type ParseResult } from '../src/link-parser.js';
 import type { FragmentIndex, ValidateLinkOptions as LinkValidatorOptions } from '../src/link-validator.js';
 import { validateLink } from '../src/link-validator.js';
 import { mimeTypeForPath } from '../src/mime-type.js';
-import type { ExtentContribution, ExtentContributor } from '../src/projection/contributor.js';
+import { resolveParseLimits, workerHeapCeilingMb } from '../src/parse-limits.js';
+import { RunContentCache } from '../src/projection/content-cache.js';
+import { ContributorRegistry, type ExtentContribution, type ExtentContributor } from '../src/projection/contributor.js';
+import { ClosureExtentContributor } from '../src/projection/contributors/closure-extent.js';
+import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
+import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 import {
@@ -68,6 +81,44 @@ export function writeFileIn(rootDir: string, relativePath: string, contents: str
  * // Now tempDir is a valid git repository
  * ```
  */
+/** A file's fault-fs session and scratch directories: {@link faultFsScratch}. */
+export interface FaultFsScratch {
+  /** A new temp directory, removed after the test. */
+  tempDir(prefix: string): string;
+  /** Keep `installed` as the test's session, restored after the test; returns it. */
+  watch(installed: FaultFsSession): FaultFsSession;
+  /** The test's session, if one was installed. */
+  readonly session: FaultFsSession | undefined;
+}
+
+/**
+ * Called once at a test file's module scope: each test's fault-fs session is restored and its
+ * scratch directories removed after it.
+ */
+export function faultFsScratch(): FaultFsScratch {
+  let session: FaultFsSession | undefined;
+  const dirs: string[] = [];
+  afterEach(() => {
+    session?.restore();
+    session = undefined;
+    for (const dir of dirs.splice(0)) removeTempDir(dir);
+  });
+  return {
+    tempDir: (prefix) => {
+      const dir = createTempDir(prefix);
+      dirs.push(dir);
+      return dir;
+    },
+    watch: (installed) => {
+      session = installed;
+      return installed;
+    },
+    get session() {
+      return session;
+    },
+  };
+}
+
 export function createGitRepo(directory: string): string {
   spawnSync(gitExecutable(), ['init'], { cwd: directory, stdio: 'pipe' });
   // `gitFindRoot()` memoizes `null` for any directory a prior walk climbed
@@ -345,6 +396,66 @@ export function setupExternalLinkValidatorSuite(
   return suite;
 }
 
+/**
+ * Answers one request to a {@link LinkTestServer} route.
+ *
+ * `seen` is how many earlier requests with the same method reached the same
+ * path, so a route can fail the first N attempts and then succeed.
+ */
+export type LinkTestRoute = (request: IncomingMessage, response: ServerResponse, seen: number) => void;
+
+/** A local HTTP server on 127.0.0.1 that records every request it receives. */
+export interface LinkTestServer {
+  /** `http://127.0.0.1:<port>`, no trailing slash. */
+  readonly origin: string;
+  /** Absolute URL for a route path such as `/ok`. */
+  url(routePath: string): string;
+  /** Methods of every request that reached `routePath`, in arrival order. */
+  requests(routePath: string): string[];
+  /** Destroys open sockets (a route may never answer) and stops listening. */
+  close(): Promise<void>;
+}
+
+/**
+ * Start a {@link LinkTestServer} on an ephemeral loopback port.
+ *
+ * External-link tests use this rather than a public host: a suite that checks
+ * a live site fails on that site's uptime and bot policy, not on our code. A
+ * path no route claims answers 404.
+ *
+ * @param routes - Handlers keyed by request path
+ */
+export async function startLinkTestServer(routes: Readonly<Record<string, LinkTestRoute>>): Promise<LinkTestServer> {
+  const log = new Map<string, string[]>();
+  const server = createServer((request, response) => {
+    const routePath = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+    const method = request.method ?? 'GET';
+    const methods = log.get(routePath) ?? [];
+    const seen = methods.filter((m) => m === method).length;
+    methods.push(method);
+    log.set(routePath, methods);
+    const route = routes[routePath];
+    if (route === undefined) {
+      response.writeHead(404).end();
+      return;
+    }
+    route(request, response, seen);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  const origin = `http://127.0.0.1:${String(port)}`;
+  return {
+    origin,
+    url: (routePath) => `${origin}${routePath}`,
+    requests: (routePath) => [...(log.get(routePath) ?? [])],
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.closeAllConnections();
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  };
+}
+
 // ============================================================================
 // Link validation helpers
 // ============================================================================
@@ -476,7 +587,30 @@ export interface WriteAndParseOptions {
   /** Markdown content to write */
   content: string;
   /** Assertions to run on parse result */
-  assertions: (_: Awaited<ReturnType<typeof parseMarkdown>>) => Promise<void> | void;
+  assertions: (_: ParseResult) => Promise<void> | void;
+}
+
+/**
+ * Read a file as the crawl lane reads one — its raw bytes, decoded as text — and
+ * run a parser composer on it IN-PROCESS. For the parser's own unit tests only:
+ * shipped code parses through the bounded worker (`parseFileCached`).
+ */
+async function parseFileInProcess(
+  filePath: string,
+  parse: (content: string, sizeBytes: number) => ParseResult,
+): Promise<ParseResult> {
+  const bytes = await readDecodableBytes(filePath, () => undefined);
+  return parse(decodeTextContent(bytes).text, bytes.byteLength);
+}
+
+/** The markdown composer over one file, in-process ({@link parseFileInProcess}). */
+export function parseMarkdownFile(filePath: string): Promise<ParseResult> {
+  return parseFileInProcess(filePath, parseMarkdownContent);
+}
+
+/** The HTML parser over one file, in-process ({@link parseFileInProcess}). */
+export function parseHtmlFile(filePath: string): Promise<ParseResult> {
+  return parseFileInProcess(filePath, parseHtmlContent);
 }
 
 /**
@@ -485,11 +619,11 @@ export interface WriteAndParseOptions {
  */
 export async function writeAndParse(
   options: WriteAndParseOptions,
-): Promise<Awaited<ReturnType<typeof parseMarkdown>>> {
+): Promise<ParseResult> {
   const { filePath, content, assertions } = options;
 
   await writeFile(filePath, content, 'utf-8');
-  const parsedResult = await parseMarkdown(filePath);
+  const parsedResult = await parseMarkdownFile(filePath);
   await assertions(parsedResult);
 
   return parsedResult;
@@ -717,7 +851,7 @@ export async function buildExtentContribution(
 ): Promise<{ contribution: ExtentContribution; rootId: string }> {
   const tracker = new GitTracker(root);
   await tracker.initialize({ includeUntracked: true });
-  const builder = new ProjectionBuilder({ root, gitTracker: tracker });
+  const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache() });
 
   return {
     contribution: await contributor.contribute(builder.base(), null),
@@ -750,9 +884,10 @@ export async function writeCorpusFiles(
   directories: readonly string[],
   corpus: readonly CorpusFile[],
 ): Promise<void> {
-  for (const directory of directories) {
+  // In order: a directory may be the parent of a later one.
+  await forEachInOrder(directories, async (directory) => {
     await mkdir(safePath.join(root, directory), { recursive: true });
-  }
+  });
   await Promise.all(
     corpus.map((file) =>
       writeFile(safePath.join(root, file.path), file.content, 'utf-8'),
@@ -862,6 +997,18 @@ export function projectionRealizationRow(row: {
 }
 
 /**
+ * Files anywhere under `root`, 0 when it does not exist — how many entries a
+ * parse cache holds, to prove a refused parse stored nothing.
+ *
+ * @param root - A directory
+ * @returns The file count
+ */
+export async function countFilesUnder(root: string): Promise<number> {
+  const entries = await readdir(root, { recursive: true, withFileTypes: true }).catch(() => []);
+  return entries.filter((entry) => entry.isFile()).length;
+}
+
+/**
  * Node's own count of live worker threads owned by this thread.
  *
  * Shared because two suites assert on it — `parse-pool.test.ts` for the pool's
@@ -884,6 +1031,79 @@ export function projectionRealizationRow(row: {
 export function workerThreadCount(): number {
   const report = process.report?.getReport() as { workers?: unknown[] } | undefined;
   return Array.isArray(report?.workers) ? report.workers.length : 0;
+}
+
+const MIB = 1_048_576;
+
+/** What {@link stubParkingMachine} may override; each defaults to a machine that parks. */
+export interface ParkingMachine {
+  /** The memory this process may use, in MiB: 6,144 holds the park cap at exactly one. */
+  readonly memoryMb?: number;
+  /** V8's old-generation ceiling a parse thread reads, in MiB; defaults to an unflagged process's. */
+  readonly ceilingMb?: number;
+  /** The used heap every heap read reports, in bytes; real when absent. */
+  readonly usedBytes?: number;
+}
+
+/**
+ * Make this process one a shut-down pool parks threads on, whatever runner it is.
+ *
+ * Whether a thread parks depends on the machine: its memory (`parkedThreadRoom`) and the heap
+ * ceiling its threads read, which a process `--max-old-space-size` lowers — the unit tier runs
+ * Windows forks at 512 MiB, where the pool applies 256 MiB and parks nothing. A test of parking
+ * that leaves either to the runner asserts the wrong thing on another one, so it stubs both:
+ * `process.constrainedMemory` (taken as the machine's when below `os.totalmem()`, so a runner
+ * needs at least `memoryMb`), and every worker's heap read, whose ceiling is held at what an
+ * unflagged process reads — `workerHeapCeilingMb` of the default limit above the young generation.
+ * Small documents only: the stubbed ceiling also feeds the heap sampler, so under a real lowered
+ * flag a document that allocates past the true ceiling dies in V8 instead of refusing at `heapMb`.
+ *
+ * @param machine - What to hold the machine at; see {@link ParkingMachine}
+ */
+export function stubParkingMachine(machine: ParkingMachine = {}): void {
+  vi.spyOn(process, 'constrainedMemory').mockReturnValue((machine.memoryMb ?? 6144) * MIB);
+  const ceilingMb = machine.ceilingMb ?? workerHeapCeilingMb(resolveParseLimits(undefined).heapMb);
+  const real = Worker.prototype.getHeapStatistics;
+  vi.spyOn(Worker.prototype, 'getHeapStatistics').mockImplementation(async function (this: Worker) {
+    const heap = await real.call(this);
+    const youngMb = this.resourceLimits?.maxYoungGenerationSizeMb ?? 0;
+    return {
+      ...heap,
+      heap_size_limit: (youngMb + ceilingMb) * MIB,
+      ...(machine.usedBytes === undefined ? {} : { used_heap_size: machine.usedBytes }),
+    };
+  });
+}
+
+/**
+ * Run `body`, counting every worker thread from its construction to its real
+ * `exit` — the widest the live set ever got.
+ *
+ * Node's report ({@link workerThreadCount}) drops a thread the moment it is
+ * told to terminate and lists a new one only once it runs, so a replacement
+ * started beside a thread still exiting is invisible to it; the
+ * `worker_threads` diagnostics channel is not.
+ *
+ * @param body - The work to watch
+ * @returns What `body` returned, and the widest live count while it ran
+ */
+export async function widestLiveWorkerThreads<T>(body: () => Promise<T>): Promise<{ value: T; widest: number }> {
+  let live = 0;
+  let widest = 0;
+  const onWorker = (message: unknown): void => {
+    live += 1;
+    widest = Math.max(widest, live);
+    (message as { worker: Worker }).worker.once('exit', () => {
+      live -= 1;
+    });
+  };
+  diagnosticsChannel.subscribe('worker_threads', onWorker);
+  try {
+    const value = await body();
+    return { value, widest };
+  } finally {
+    diagnosticsChannel.unsubscribe('worker_threads', onWorker);
+  }
 }
 
 /** A fixture writer that isolates every file and cleans up after the suite. */
@@ -925,4 +1145,18 @@ export function scratchFixtureWriter(prefix: string): ScratchFixtureWriter {
       await Promise.all(dirs.splice(0).map((dir) => removeScratchDir(dir)));
     },
   };
+}
+
+/**
+ * The two shipped contributors a closure fixture measures, in registration order: the
+ * filesystem extent over a tree the run only reads, then the closure extent.
+ *
+ * @param extentName - The closure extent's name
+ * @param kind - The kind the closure extent declares
+ */
+export function registryWithClosure(extentName: string, kind: string): ContributorRegistry {
+  const registry = new ContributorRegistry();
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
+  registry.register(new ClosureExtentContributor(extentName, kind));
+  return registry;
 }

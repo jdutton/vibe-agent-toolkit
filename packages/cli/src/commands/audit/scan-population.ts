@@ -113,7 +113,7 @@ export function resolveProjectExcludes(scanDir: string, logger: ScanLogger): Exc
 
   let patterns: readonly string[];
   try {
-    patterns = loadConfig(projectRoot)?.resources?.exclude ?? [];
+    patterns = loadConfig(projectRoot, 'source')?.resources?.exclude ?? [];
   } catch (err) {
     // Audit is a bulk linter over trees it does not own; a broken governing
     // config must not abort the scan. `warn`, not `debug`: EVERY
@@ -360,6 +360,7 @@ export async function enumerateAuditPopulation(options: AuditScanOptions): Promi
   // so it prunes inside the crawl; the project's `resources.exclude` is
   // project-relative and is applied below, against every ancestor.
   const listed = await crawlDirectory({
+    outputs: [],
     baseDir: resolvedScanDir,
     include: recursive ? [...SUBJECT_INCLUDE] : [...TOP_LEVEL_INCLUDE],
     exclude: [...NEVER_CRAWL_GLOBS, ...userExcludes, ...(recursive ? [] : [TOP_LEVEL_PRUNE])],

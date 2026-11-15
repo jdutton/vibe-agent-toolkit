@@ -363,29 +363,25 @@ describe('SkillsConfigSchema', () => {
 
 describe('ProjectConfigSchema', () => {
   it('accepts a minimal valid project config', () => {
-    const result = ProjectConfigSchema.safeParse({ version: 1 });
+    const result = ProjectConfigSchema.safeParse({});
     expect(result.success).toBe(true);
   });
 
-  describe('the `version` key is accepted and ignored', () => {
-    // The npm package version is the only version this project has: the strict
-    // schema decides whether a config can be read, and no integer in the file
-    // gets a vote. A stale `version: 1` in an adopter config is harmless; so is
-    // its absence, and so is any other value.
+  describe('the `version` key is deleted', () => {
+    // The npm package version is the only version this project has. The key is
+    // an unrecognized root key like any other, whatever its value.
     it.each([
-      ['absent', {}],
       ['the historical 1', { version: 1 }],
       ['another number', { version: 2 }],
       ['a string', { version: 'banana' }],
       ['null', { version: null }],
-    ])('parses with the key %s', (_label, config) => {
-      expect(ProjectConfigSchema.safeParse(config).success).toBe(true);
+    ])('refuses the key %s', (_label, config) => {
+      expect(ProjectConfigSchema.safeParse(config).success).toBe(false);
     });
   });
 
   it('rejects unknown top-level keys', () => {
     const result = ProjectConfigSchema.safeParse({
-      version: 1,
       bogusRoot: 'nope',
     });
     expect(result.success).toBe(false);
@@ -393,7 +389,6 @@ describe('ProjectConfigSchema', () => {
 
   it('parses a top-level test: { graderModel, concurrency } node', () => {
     const result = ProjectConfigSchema.safeParse({
-      version: 1,
       test: { graderModel: GRADER_MODEL, concurrency: 4 },
     });
     expect(result.success).toBe(true);
@@ -404,7 +399,6 @@ describe('ProjectConfigSchema', () => {
 
   it('rejects an unknown key under the top-level test node (strict)', () => {
     expectStrictRejection(ProjectConfigSchema, {
-      version: 1,
       test: { graderModel: GRADER_MODEL, bogus: true },
     });
   });
@@ -711,5 +705,27 @@ describe('ClaudeMarketplaceSchema (pool filter)', () => {
       plugins: [{ name: 'test', skills: '*' }],
     });
     expect(result.success).toBe(true);
+  });
+});
+
+describe('ClaudeConfigSchema marketplace names', () => {
+  // A marketplace name is joined into dist/.claude/plugins/marketplaces/<name>, and `vat claude
+  // plugin build` removes that directory before rebuilding it — a name that is not one path
+  // segment would aim the removal outside dist/.
+  const marketplace = { owner: { name: 'Test Org' }, plugins: [{ name: 'p1', skills: [] }] };
+  const parseWithMarketplace = (name: string) =>
+    ProjectConfigSchema.safeParse({ claude: { marketplaces: { [name]: marketplace } } });
+
+  it.each(['../../../../victim', '..', '.', 'a/b', String.raw`a\b`, '', 'C:evil'])(
+    'refuses marketplace name %j',
+    (name) => {
+      const result = parseWithMarketplace(name);
+      expect(result.success).toBe(false);
+      expect(JSON.stringify(result.error?.issues)).toContain('marketplace name');
+    },
+  );
+
+  it('accepts a single-segment marketplace name', () => {
+    expect(parseWithMarketplace('my-marketplace').success).toBe(true);
   });
 });

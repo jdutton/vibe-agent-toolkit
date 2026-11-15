@@ -11,14 +11,14 @@
  * varies, so a hydrated projection and a freshly populated one are either the
  * same document or they are not. Every hit assertion below is therefore
  * `serializeProjection(hydrated) === serializeProjection(populated)` — one
- * comparison over twelve tables, which no per-table deep-equal could match for
+ * comparison over every table, which no per-table deep-equal could match for
  * either coverage or honesty. A bespoke comparison would have to *choose* which
  * columns to compare, and the columns a hydration bug drops are exactly the ones
  * nobody thinks to list.
  *
  * ## The store double
  *
- * {@link FakeProjectionStore} (`fake-projection-store.ts`) is deliberately the
+ * {@link FakeFactStore} (`fake-fact-store.ts`) is deliberately the
  * dumbest store that can answer, and its header says why it lives in this
  * package's tests rather than in `projection-sqlite`. What is under test here
  * is the driver's *reuse rule*, which is backend-independent by construction.
@@ -33,6 +33,8 @@
  */
 
 
+import { writeFile } from 'node:fs/promises';
+
 import { CRAWL_STORE_READ_ID, CRAWL_STORE_WRITE_ID, safePath } from '@vibe-agent-toolkit/utils';
 import {
   GitTracker,
@@ -40,19 +42,23 @@ import {
 import { __readCrawlTimingSnapshot, __setCrawlTimingForTest } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { resolveParseLimits } from '../src/parse-limits.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { ClosureExtentContributor } from '../src/projection/contributors/closure-extent.js';
-import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
-import { EXTENT_SOURCE_ENV, EXTENT_SOURCE_GIT } from '../src/projection/crawl-source.js';
+import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
+import { crawlSourceFor, EXTENT_SOURCE_ENV, EXTENT_SOURCE_GIT } from '../src/projection/crawl-source.js';
 import { serializeProjection } from '../src/projection/export.js';
-import { CONTENT_PARSING_SKIP, DISCARD_BLOB_POPULATION, populate } from '../src/projection/merge.js';
+import { CONTENT_PARSING_SKIP, describeStoreMiss, populate, type PopulationOutcome, storeMissOf } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import type { ContentDemand } from '../src/projection/realizations.js';
-import type { BlobScopedRows, ExtentScopedRows, ProjectionStore } from '../src/projection/store.js';
+import type { BlobScopedRows, ExtentKey, ExtentScopedRows, FactStore } from '../src/projection/store.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
-import { FakeProjectionStore } from './fake-projection-store.js';
+import { FakeFactStore } from './fake-fact-store.js';
 import { setupSubdirTestSuite, useCorpusSuite } from './test-helpers.js';
+
+/** A self-referencing YAML anchor: it nests without end, so `outputDepth` refuses it at once. */
+const CYCLIC_FRONTMATTER_DOC = '---\ncyc: &anchor\n  self: *anchor\n---\n\n# Cyclic\n';
 
 // ---------------------------------------------------------------------------
 // Fixture
@@ -84,8 +90,15 @@ const DOC_C = 'skills/foo/c.md';
  */
 const CORPUS: readonly { readonly path: string; readonly content: string }[] = [
   { path: ROOT_DOC, content: '---\nname: foo\n---\n\n# Foo\n\nSee [b](./b.md).\n' },
-  { path: DOC_B, content: '# B\n\nOn to [c](./c.md).\n' },
-  { path: DOC_C, content: '# C\n\nNothing links out of here.\n' },
+  // The `paths:` is a harness-read `harness_blob_facts.paths` value the round trip must bring back.
+  { path: DOC_B, content: '---\npaths: "skills/**, docs/*.md"\n---\n# B\n\nOn to [c](./c.md).\n' },
+  // The `@b.md` is no link and no closure edge here; it is a Claude import, so the
+  // blob tier carries a `harness_blob_imports` row the round trip must bring back.
+  { path: DOC_C, content: '# C\n\nNothing links out of here. See @b.md, though.\n' },
+  // The harness facts are derived only for what Claude Code REACHES, so a memory
+  // file has to reach B and C for the blob tier to carry any `harness_blob_*`
+  // rows for the round trip to bring back.
+  { path: 'CLAUDE.md', content: '# Acme widgets\n\n@skills/foo/b.md\n\n@skills/foo/c.md\n' },
 ];
 
 /**
@@ -117,7 +130,7 @@ const FULL_DEPTH_DECLARATION: JsonValue = {
  */
 const ONE_HOP_DECLARATION: JsonValue = { ...FULL_DEPTH_DECLARATION, maxDepth: 1 };
 
-/** What a {@link BrokenProjectionStore} throws. */
+/** What a {@link BrokenFactStore} throws. */
 const STORE_FAILURE = 'the projection store is unreachable';
 
 /**
@@ -127,7 +140,7 @@ const STORE_FAILURE = 'the projection store is unreachable';
  * Every method throws, so no test can accidentally pass by reaching a working
  * one behind it.
  */
-class BrokenProjectionStore implements ProjectionStore {
+class BrokenFactStore implements FactStore {
   /** @returns Never */
   async writeBlobFacts(): Promise<void> {
     throw new Error(STORE_FAILURE);
@@ -154,6 +167,51 @@ class BrokenProjectionStore implements ProjectionStore {
   }
 }
 
+/**
+ * A store holding every blob row but the harness tables' — the state another
+ * root's run leaves behind when it filed the same bytes without reaching them.
+ * Delegates everything else to a real double.
+ */
+class HarnesslessFactStore implements FactStore {
+  /**
+   * @param inner - The store whose answers are served, minus the harness rows
+   */
+  constructor(private readonly inner: FactStore) {}
+
+  /** @param rows - Passed through */
+  writeBlobFacts(rows: BlobScopedRows): Promise<void> {
+    return this.inner.writeBlobFacts(rows);
+  }
+
+  /**
+   * @param contentKeys - The keys to look up
+   * @returns What the inner store holds, with both harness tables empty
+   */
+  async readBlobFacts(contentKeys: readonly string[]): Promise<BlobScopedRows> {
+    return { ...(await this.inner.readBlobFacts(contentKeys)), harnessBlobFacts: [], harnessBlobImports: [] };
+  }
+
+  /**
+   * @param key - Passed through
+   * @param rows - Passed through
+   */
+  writeExtent(key: ExtentKey, rows: ExtentScopedRows): Promise<void> {
+    return this.inner.writeExtent(key, rows);
+  }
+
+  /**
+   * @param key - Passed through
+   * @returns The inner store's extent
+   */
+  readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
+    return this.inner.readExtent(key);
+  }
+
+  /** @returns The inner store's close */
+  close(): Promise<void> {
+    return this.inner.close();
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Driving the corpus
@@ -163,18 +221,12 @@ class BrokenProjectionStore implements ProjectionStore {
  * The filesystem extent alone — a population that reads no blob table.
  *
  * @param contentDemand - What this registration asks be keyed, or omitted to
- *   leave the historical default in place. Constructed by the no-argument form
- *   when omitted rather than by passing the default literal, so the arm that
- *   states nothing stays the arm that shipped
+ *   register under `DEFAULT_CONTENT_DEMAND`, the demand every resources lane uses
  * @returns A registry holding one contributor
  */
 function filesystemOnly(contentDemand?: ContentDemand): ContributorRegistry {
   const registry = new ContributorRegistry();
-  registry.register(
-    contentDemand === undefined
-      ? new FilesystemExtentContributor()
-      : new FilesystemExtentContributor(undefined, contentDemand),
-  );
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), contentDemand ?? DEFAULT_CONTENT_DEMAND));
   return registry;
 }
 
@@ -187,10 +239,12 @@ function filesystemAndClosure(): ContributorRegistry {
 
 /** What one population run is asked to do. */
 interface RunRequest {
+  /** What the cache reports when asked whether the tree still matches its key. Default true. */
+  readonly treeUnchanged?: boolean;
   /** The contributors to register. */
   readonly registry: ContributorRegistry;
   /** The store to cache through, or omitted to run with no cache at all. */
-  readonly store?: ProjectionStore;
+  readonly store?: FactStore;
   /** Which tree the store is keyed on; defaults to {@link TREE_HASH}. */
   readonly treeHash?: string;
   /** The closure declaration; defaults to {@link FULL_DEPTH_DECLARATION}. */
@@ -211,6 +265,8 @@ interface RunRequest {
 interface Run {
   /** The projection itself, for row-count controls. */
   readonly projection: Projection;
+  /** Where `populate()` says the projection came from, and what it did with the store. */
+  readonly outcome: PopulationOutcome;
   /** {@link serializeProjection} of it — the oracle every hit is compared on. */
   readonly document: string;
   /**
@@ -230,7 +286,7 @@ interface Run {
  */
 async function run(request: RunRequest): Promise<Run> {
   const contributorRuns: string[] = [];
-  const projection = await populate({
+  const { projection, outcome } = await populate({
     root: suite.tempDir,
     registry: request.registry,
     // Handed on every run, registered or not: `requestedContributors` reads the
@@ -240,14 +296,19 @@ async function run(request: RunRequest): Promise<Run> {
     onContributorTiming: (timing) => {
       contributorRuns.push(`${timing.contributorId}@${timing.pass}`);
     },
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
     ...(request.store === undefined
       ? {}
-      : { cache: { store: request.store, treeHash: request.treeHash ?? TREE_HASH } }),
+      : {
+        cache: {
+          store: request.store,
+          treeHash: request.treeHash ?? TREE_HASH,
+          treeUnchanged: () => request.treeUnchanged ?? true,
+        },
+      }),
     ...(request.contentParsing === undefined ? {} : { contentParsing: request.contentParsing }),
     ...(request.gitTracker === undefined ? {} : { gitTracker: request.gitTracker }),
   });
-  return { projection, document: serializeProjection(projection), contributorRuns };
+  return { projection, outcome, document: serializeProjection(projection), contributorRuns };
 }
 
 /** Where this suite points the crawl-timing seam. Beneath the fixture, removed with it. */
@@ -304,6 +365,8 @@ describe('populate through a projection store', () => {
       expect(projection.blobs.length).toBeGreaterThanOrEqual(CORPUS.length);
       expect(projection.blobReferences.length).toBeGreaterThanOrEqual(2);
       expect(projection.blobSections.length).toBeGreaterThan(0);
+      expect(projection.harnessBlobImports.length).toBeGreaterThan(0);
+      expect(projection.harnessBlobFacts.some((row) => row.paths !== null)).toBe(true);
       // And the roots row the driver places itself.
       expect(projection.roots).toHaveLength(1);
     });
@@ -315,7 +378,7 @@ describe('populate through a projection store', () => {
       // `roots`, `resources` and `resourceTags` by reachability rather than by
       // reading them back under a context, and this is where that reconstruction
       // is falsified: a single dropped or surplus row moves the document.
-      const store = new FakeProjectionStore();
+      const store = new FakeFactStore();
       const populated = await run({ registry: filesystemAndClosure(), store });
       const hydrated = await run({ registry: filesystemAndClosure(), store });
 
@@ -334,7 +397,7 @@ describe('populate through a projection store', () => {
       // produces the identical document too, which is what makes this file's
       // oracle usable in the first place. The saving is only observable as work
       // that did not happen.
-      const store = new FakeProjectionStore();
+      const store = new FakeFactStore();
       const populated = await run({ registry: filesystemAndClosure(), store });
       const hydrated = await run({ registry: filesystemAndClosure(), store });
 
@@ -344,7 +407,7 @@ describe('populate through a projection store', () => {
     });
 
     it('writes both tiers on the miss and neither on the hit', async () => {
-      const store = new FakeProjectionStore();
+      const store = new FakeFactStore();
 
       await run({ registry: filesystemAndClosure(), store });
       expect(store.writeBlobFactsCalls).toBe(1);
@@ -358,6 +421,56 @@ describe('populate through a projection store', () => {
       expect(store.writeExtentCalls).toBe(1);
       expect(store.readExtentCalls).toBe(2);
     });
+
+    it('reports a written miss and then a hit, so provenance is the outcome and not a contributor count', async () => {
+      const store = new FakeFactStore();
+      const populated = await run({ registry: filesystemAndClosure(), store });
+      const hydrated = await run({ registry: filesystemAndClosure(), store });
+
+      expect(populated.outcome).toEqual({ population: 'derived', stored: 'written' });
+      expect(hydrated.outcome).toEqual({ population: 'store', stored: 'hit' });
+    });
+
+    it('counts and names the store miss a persisting refusal costs every run (I10)', async () => {
+      // A refused parse is filed nowhere (I6), so its key is held by no store
+      // and every run re-derives the whole population while it persists. That
+      // cost is allowed only counted and named: never a silent miss.
+      //
+      // Refused at its nesting depth: a self-referencing YAML anchor nests
+      // without end, so `outputDepth` stops it at once. Which limit refuses is
+      // not under test, and a row-cap breach parses 16,385 links on every run
+      // (~0.8 s each here, past the 15 s test timeout on a loaded CI box). Not
+      // the input cap: a file past it is refused by its size before it is read,
+      // an `oversize` row the store holds (the test below).
+      await writeFile(safePath.join(suite.tempDir, 'deep.md'), CYCLIC_FRONTMATTER_DOC, 'utf-8');
+      const store = new FakeFactStore();
+
+      const cold = await run({ registry: filesystemAndClosure(), store });
+      const warm = await run({ registry: filesystemAndClosure(), store });
+
+      // The cold run met no stored extent, so no refusal caused its miss.
+      expect(cold.outcome).toEqual({ population: 'derived', stored: 'written' });
+      expect(warm.outcome).toEqual({ population: 'derived', stored: 'written', storeMiss: { refusedPairs: 1 } });
+      expect(describeStoreMiss(storeMissOf(warm.outcome))).toBe(
+        'store miss: 1 refused pair is held by no store, so the whole population was re-derived; it is re-derived on every run while the refusal persists',
+      );
+      expect(describeStoreMiss(storeMissOf(cold.outcome))).toBeUndefined();
+    });
+
+    it('holds a file past the input cap as a row, so it costs no store miss', async () => {
+      // Refused by its size before a byte is read, as the parse would refuse it:
+      // an `oversize` realization with no key, not a refused pair. The cap is in
+      // the store key, so the verdict is a fact the store may hold.
+      await writeFile(safePath.join(suite.tempDir, 'huge.md'), 'x'.repeat(resolveParseLimits(undefined).inputBytes + 1), 'utf-8');
+      const store = new FakeFactStore();
+
+      const cold = await run({ registry: filesystemAndClosure(), store });
+      const warm = await run({ registry: filesystemAndClosure(), store });
+
+      expect(cold.outcome).toEqual({ population: 'derived', stored: 'written' });
+      expect(warm.outcome).toEqual({ population: 'store', stored: 'hit' });
+      expect(warm.document).toBe(cold.document);
+    });
   });
 
   describe('off by default', () => {
@@ -367,7 +480,7 @@ describe('populate through a projection store', () => {
       // rather than the hit, because the miss is the arm that also writes — a
       // driver that mutated the projection on its way into the store would show
       // up here and nowhere else.
-      const store = new FakeProjectionStore();
+      const store = new FakeFactStore();
       const uncached = await run({ registry: filesystemAndClosure() });
       const missed = await run({ registry: filesystemAndClosure(), store });
 
@@ -378,7 +491,7 @@ describe('populate through a projection store', () => {
       // Cheap, and it pins the thing an eventual "default store" would break:
       // a store the caller did not opt into must not be consulted, or a stale
       // process-wide cache starts answering runs that never asked for one.
-      const store = new FakeProjectionStore();
+      const store = new FakeFactStore();
 
       await run({ registry: filesystemAndClosure() });
 
@@ -386,6 +499,12 @@ describe('populate through a projection store', () => {
       expect(store.writeExtentCalls).toBe(0);
       expect(store.readBlobFactsCalls).toBe(0);
       expect(store.writeBlobFactsCalls).toBe(0);
+    });
+
+    it('reports a derived population with no store', async () => {
+      const uncached = await run({ registry: filesystemAndClosure() });
+
+      expect(uncached.outcome).toEqual({ population: 'derived', stored: 'no-store' });
     });
   });
 
@@ -404,7 +523,7 @@ describe('populate through a projection store', () => {
     // reasons that have nothing to do with the key.
 
     it('misses when one run had a git oracle and the other did not', async () => {
-      const store = new FakeProjectionStore();
+      const store = new FakeFactStore();
       const tracker = new GitTracker(suite.tempDir);
       await tracker.initialize();
 
@@ -419,7 +538,7 @@ describe('populate through a projection store', () => {
     });
 
     it('misses when the two runs selected different enumerators', async () => {
-      const store = new FakeProjectionStore();
+      const store = new FakeFactStore();
       await run({ registry: filesystemAndClosure(), store });
 
       process.env[EXTENT_SOURCE_ENV] = EXTENT_SOURCE_GIT;
@@ -452,7 +571,7 @@ describe('populate through a projection store', () => {
       // failure the coverage rule was written for, arriving by the one route it
       // does not cover — and it is reachable by default the moment two lanes
       // over one tree ask the same registered question under different demands.
-      const store = new FakeProjectionStore();
+      const store = new FakeFactStore();
       const deferred = await run({
         registry: filesystemOnly('deferred'),
         store,
@@ -475,7 +594,7 @@ describe('populate through a projection store', () => {
       // The control for the miss above, and it is what stops the fix being "add
       // something that never matches". Two `'deferred'` runs are one question
       // and must still share an answer.
-      const store = new FakeProjectionStore();
+      const store = new FakeFactStore();
       const first = await run({
         registry: filesystemOnly('deferred'),
         store,
@@ -495,7 +614,7 @@ describe('populate through a projection store', () => {
       // The control. Without it, the two misses above are satisfied by a key
       // that never matches anything — which is the failure mode a
       // separation test cannot otherwise distinguish from success.
-      const store = new FakeProjectionStore();
+      const store = new FakeFactStore();
       const tracker = new GitTracker(suite.tempDir);
       await tracker.initialize();
 
@@ -512,7 +631,7 @@ describe('populate through a projection store', () => {
       // `ExtentKey` is `(rootId, treeHash)` and both halves are load-bearing. A
       // hash that matched loosely would serve one tree's rows for another's, and
       // the rows would be internally consistent — the worst kind of wrong.
-      const store = new FakeProjectionStore();
+      const store = new FakeFactStore();
       await run({ registry: filesystemAndClosure(), store });
 
       const other = await run({
@@ -525,12 +644,32 @@ describe('populate through a projection store', () => {
       expect(store.writeExtentCalls).toBe(2);
     });
 
+    it('files NO extent when the tree moved while it was being derived', async () => {
+      // ⛔ The key is the hash taken when the run STARTED; the rows are what it
+      // READ. An edit landing between the two filed the edited rows under the
+      // unedited key, and once the edit was reverted every later run was served
+      // them — a wrong answer that outlived the edit that caused it.
+      const store = new FakeFactStore();
+      const moved = await run({ registry: filesystemAndClosure(), store, treeUnchanged: false });
+
+      expect(store.writeExtentCalls).toBe(0);
+      // The silent skip is a named outcome, so a caller cannot read it as a write.
+      expect(moved.outcome).toEqual({ population: 'derived', stored: 'skipped-tree-changed' });
+
+      // Nothing was filed, so the same key is a miss rather than a stale hit.
+      const next = await run({ registry: filesystemAndClosure(), store });
+      expect(next.contributorRuns.length).toBeGreaterThan(0);
+      // The positive control: an unmoved tree files, so the zero above is the
+      // guard and not a store that never writes.
+      expect(store.writeExtentCalls).toBe(1);
+    });
+
     it('misses when the run registered a contributor the stored extent never ran', async () => {
       // The key names a TREE, never a QUESTION. A stored filesystem extent
       // answers half of `{filesystem, closure}`, and half an answer here is a
       // projection whose closure extent is its own declared root — populated,
       // plausible and wrong.
-      const store = new FakeProjectionStore();
+      const store = new FakeFactStore();
       await run({ registry: filesystemOnly(), store });
 
       const broader = await run({ registry: filesystemAndClosure(), store });
@@ -551,7 +690,7 @@ describe('populate through a projection store', () => {
       // than as "no row mentions the closure context", because the latter would
       // miss a dropped row, a duplicated identity, or a surplus `resourceTags`
       // entry that the reachability reconstruction dragged along.
-      const store = new FakeProjectionStore();
+      const store = new FakeFactStore();
       const bare = await run({ registry: filesystemOnly() });
       await run({ registry: filesystemAndClosure(), store });
 
@@ -566,7 +705,7 @@ describe('populate through a projection store', () => {
       // handed a declaration, so `closure:foo-bundle` at `maxDepth: 'full'` and
       // at `maxDepth: 1` are different extents wearing one name — and reusing
       // one for the other returns a confidently wrong membership.
-      const store = new FakeProjectionStore();
+      const store = new FakeFactStore();
       await run({ registry: filesystemAndClosure(), store });
 
       const bounded = await run({
@@ -581,6 +720,21 @@ describe('populate through a projection store', () => {
   });
 
   describe('blob coverage', () => {
+    it('misses a blob tier that covers every key but lacks a reached blob\'s harness facts', async () => {
+      // The harness facts are derived lazily and written per `(blob, harness)`,
+      // so a blob tier can hold every key's `blobs` row and still lack the
+      // facts of a blob THIS tree reaches. Served, that absence would throw at
+      // the first strict reader; `blobFactsCover` alone calls it a hit.
+      const store = new FakeFactStore();
+      const populated = await run({ registry: filesystemAndClosure(), store });
+      expect(populated.projection.harnessBlobFacts.length).toBeGreaterThan(0);
+
+      const second = await run({ registry: filesystemAndClosure(), store: new HarnesslessFactStore(store) });
+
+      expect(second.contributorRuns).toContain(`${FILESYSTEM_ID}@1`);
+      expect(second.document).toBe(populated.document);
+    });
+
     it('misses an extent stored by a run that declined to derive blobs', async () => {
       // A `'skip'` run still writes its extent — that is what lets the next
       // command share the enumeration — but that extent names content keys the
@@ -591,7 +745,7 @@ describe('populate through a projection store', () => {
       // The registry is filesystem-only on BOTH arms, because a registered blob
       // reader makes `'skip'` throw outright — the miss under test is the one
       // that survives that refusal.
-      const store = new FakeProjectionStore();
+      const store = new FakeFactStore();
       const skipped = await run({ registry: filesystemOnly(), store, contentParsing: CONTENT_PARSING_SKIP });
       expect(skipped.projection.blobs).toStrictEqual([]);
       expect(store.writeExtentCalls).toBe(1);
@@ -612,7 +766,7 @@ describe('populate through a projection store', () => {
       // that declined to derive the tier must also decline to read it back, or a
       // hit would hand it four tables a populate would have left empty and
       // hydrated would stop being indistinguishable from populated.
-      const store = new FakeProjectionStore();
+      const store = new FakeFactStore();
       const populated = await run({ registry: filesystemOnly(), store, contentParsing: CONTENT_PARSING_SKIP });
 
       const hydrated = await run({ registry: filesystemOnly(), store, contentParsing: CONTENT_PARSING_SKIP });
@@ -639,7 +793,7 @@ describe('populate through a projection store', () => {
       // The unchanged read count is the whole assertion. A refusal that happened
       // AFTER the read would throw the identical error and pass a test that only
       // checked `rejects`.
-      const store = new FakeProjectionStore();
+      const store = new FakeFactStore();
       await run({ registry: filesystemAndClosure(), store });
       const readsBeforeTheRefusal = store.readExtentCalls;
 
@@ -657,7 +811,7 @@ describe('populate through a projection store', () => {
       // to write for a week goes unnoticed while every run pays full price and
       // reports success. The whole value of the cache is unobservable from the
       // outside; only the error is.
-      await expect(run({ registry: filesystemAndClosure(), store: new BrokenProjectionStore() }))
+      await expect(run({ registry: filesystemAndClosure(), store: new BrokenFactStore() }))
         .rejects.toThrow(STORE_FAILURE);
     });
   });
@@ -666,7 +820,7 @@ describe('populate through a projection store', () => {
     it('files a read row and a write row on a miss', async () => {
       __setCrawlTimingForTest(dumpDir());
 
-      await run({ registry: filesystemAndClosure(), store: new FakeProjectionStore() });
+      await run({ registry: filesystemAndClosure(), store: new FakeFactStore() });
 
       expect(storeTimingIds()).toEqual([CRAWL_STORE_READ_ID, CRAWL_STORE_WRITE_ID]);
     });
@@ -677,7 +831,7 @@ describe('populate through a projection store', () => {
       // the read row a hit is indistinguishable from a subject that exercised
       // nothing at all — which has already turned one A/B into a measurement of
       // noise.
-      const store = new FakeProjectionStore();
+      const store = new FakeFactStore();
       await run({ registry: filesystemAndClosure(), store });
 
       // Re-arming clears the accumulators, so what follows is the hit alone.

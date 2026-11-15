@@ -31,9 +31,14 @@ async function cleanWithoutExemption(files: readonly string[]): Promise<string[]
     cwd: REPO_ROOT,
     overrideConfig: [{
       files: [...files],
-      // The repo config names its tsconfig relative to `tsconfigRootDir`, which
-      // typescript-eslint defaults to the PROCESS cwd — the package dir here.
-      languageOptions: { parserOptions: { tsconfigRootDir: REPO_ROOT } },
+      // `tsconfigRootDir` because typescript-eslint defaults it to the PROCESS cwd
+      // — the package dir here. `projectService` instead of a per-package
+      // `tsconfig.eslint.json`: the files span several packages, and one program
+      // spanning them all is the whole-monorepo program that crossed the
+      // integration tier's 1024MB heap cap (measured 1.10GB peak). Each file's
+      // own package tsconfig answers the same type question — the same 23/23
+      // files trip the pair — at 0.77GB.
+      languageOptions: { parserOptions: { tsconfigRootDir: REPO_ROOT, project: null, projectService: true } },
       rules: Object.fromEntries(RULES.map((rule) => [rule, 'error'])),
     }],
   });
@@ -56,5 +61,5 @@ describe('NO_UNSAFE_BACKLOG only names files that still carry a no-unsafe findin
       'These files are clean under both no-unsafe rules. Delete their NO_UNSAFE_BACKLOG entries in '
         + 'eslint.config.js — the list may only shrink, and a stale entry hides the next offender.',
     ).toEqual([]);
-  }, 60_000);
+  });
 });

@@ -59,30 +59,38 @@
  * {@link DIST_BIN_CANDIDATES} name `dist/bin.js`, the CLI's own entry point, and
  * a caller who names the wrapper by hand is told why rather than obeyed.
  *
- * `kind: 'npx'` is the one route still exposed to this: `npx` runs the published
- * package's `bin`, which *is* the wrapper, so a published instrument remains
- * subject to cwd re-resolution. Known limitation, recorded rather than papered
- * over.
+ * `kind: 'npx'` is never run through `npx`: `npx` runs the published package's
+ * `bin`, which *is* the wrapper, and an adopter with vat installed had its own
+ * copy measured under the pinned name. So the spec is installed under the arms
+ * root and resolved to that install's `dist/bin.js` (see `npx-install.ts`).
+ * The spec must be `vibe-agent-toolkit` or `@vibe-agent-toolkit/cli` pinned to an
+ * exact version: npm reads anything else — a path, a URL, a tarball, a git ref, an
+ * alias — as something other than a published version, and any other package could
+ * carry other code under the cli's name, under a label that looks pinned.
  *
  * ## Windows
  *
- * Paths are produced through `safePath` (forward slashes everywhere). The `npx`
- * case returns the **bare** command `npx`, never `npx.cmd` and never a resolved
- * path: the toolkit's spawn wrappers (`safeExecResult`, `spawnHardened`) already
- * resolve bare names through `which.sync` — which finds `npx.cmd` on Windows —
- * and switch on `shell: true` for `.cmd`/`.bat` shims, as Node's DEP0190
- * requires. Hardcoding the extension here would duplicate that decision and
- * break the moment it changes.
+ * Paths are produced through `safePath` (forward slashes everywhere). Every kind
+ * resolves to `node <entry>` — `process.execPath` — so no `.cmd` shim is ever run.
  */
 
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
-import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { everyInOrder, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
+import * as semver from 'semver';
 import { z } from 'zod';
 
+import { closureDigest } from './closure.js';
 import { hasUncommittedChanges } from './git-state.js';
+import {
+  installNpxInstrument,
+  type NpmPin,
+  type NpxInstallSite,
+  VAT_PACKAGE_NAMES,
+  type VatPackageName,
+} from './npx-install.js';
 import type { InstrumentSource, ResolvedInstrument } from './types.js';
 
 /**
@@ -95,15 +103,17 @@ import type { InstrumentSource, ResolvedInstrument } from './types.js';
  * through it would spawn whatever vat the *subject* has installed while the
  * report went on naming the build under test. The vat CLI made this same call
  * for the same reason while it still spawned a child per phase; that spawn is
- * gone, and the surviving instance of the choice is `resolveBinPath()` in
- * `packages/cli/src/qa-snapshot/capture.ts`, which runs the command UNDER TEST
- * as a real process and resolves `bin.js` directly so it cannot be diverted to
- * an adopter's local install.
+ * gone, and the surviving instance of the choice is `resolveVatBinPath()` in
+ * `packages/cli/src/utils/vat-bin-path.ts`, which resolves `bin.js` directly so
+ * a spawned child cannot be diverted to an adopter's local install.
  */
 const TREE_BIN_RELATIVE = 'packages/cli/dist/bin.js';
 
 /** Where a vat checkout keeps the manifest that carries the version. */
 const TREE_PACKAGE_JSON_RELATIVE = 'packages/cli/package.json';
+
+/** The cli package inside a checkout — where a tree arm's module closure starts. */
+const TREE_CLI_PACKAGE_RELATIVE = 'packages/cli';
 
 /**
  * Entry points looked for when `kind: 'dist'` names a directory rather than a
@@ -129,34 +139,21 @@ const HEX = /^[0-9a-f]+$/;
 /** Lengths of a concrete git object id: SHA-1, and SHA-256 repositories. */
 const COMMIT_LENGTHS = new Set([40, 64]);
 
-/** `1.2.3` — the mandatory part of a pinned npm version. */
-const CORE_VERSION_SHAPE = /^\d+\.\d+\.\d+$/;
-
-/** Everything after the first `-` or `+`: prerelease and/or build metadata. */
-const VERSION_SUFFIX_SHAPE = /^[0-9A-Za-z.+-]+$/;
-
-/** Where prerelease/build metadata starts, if it does. */
-const VERSION_SUFFIX_START = /[-+]/;
+/** Where build metadata starts: npm strips it, so no installed manifest carries it. */
+const BUILD_METADATA_START = '+';
 
 /**
  * Is this string a *concrete* version, as opposed to a range or a dist-tag?
- *
- * Split-then-match rather than one regex on purpose: composing the two parts
- * into a single pattern needs a quantifier inside a quantifier, which is a
- * backtracking hazard over caller-supplied text. Each half here is anchored and
- * flat.
+ * Strict semver, as `semver` reads it, spelled exactly as `semver` would print
+ * it: a leading zero, an empty prerelease identifier, a `v` or `=` prefix are
+ * all refused. Build metadata is refused before this is asked ({@link pinOf}).
  *
  * @param value - The text after the spec's version separator
- * @returns `true` for `1.2.3`, `1.2.3-rc.5`, `1.0.0+build.7`; `false` for
- *   `latest`, `^0.1.0`, `0.1`
+ * @returns `true` for `1.2.3`, `1.2.3-rc.5`; `false` for `latest`, `^0.1.0`,
+ *   `0.1`, `01.2.3`, `1.2.3-rc.05`
  */
 function isPinnedVersion(value: string): boolean {
-  const boundary = value.search(VERSION_SUFFIX_START);
-  if (boundary === -1) return CORE_VERSION_SHAPE.test(value);
-  return (
-    CORE_VERSION_SHAPE.test(value.slice(0, boundary)) &&
-    VERSION_SUFFIX_SHAPE.test(value.slice(boundary + 1))
-  );
+  return semver.valid(value) === value;
 }
 
 /**
@@ -196,8 +193,19 @@ const NO_FALLBACK_NOTE =
  * @returns Its canonical form
  */
 async function canonicalPath(path: string): Promise<string> {
-  const real = safePath.resolve(await realpath(path));
+  const real = await realPathOf(path);
   return process.platform === 'win32' ? real.toLowerCase() : real;
+}
+
+/**
+ * An operator-named path with its symlinks resolved, casing as the filesystem
+ * reports it — the one place this module follows links.
+ *
+ * @param path - An existing absolute path the operator supplied
+ * @returns Its real path, forward slashes
+ */
+async function realPathOf(path: string): Promise<string> {
+  return safePath.resolve(await realpath(path));
 }
 
 /**
@@ -303,19 +311,17 @@ async function readManifestVersion(manifestPath: string, kind: string): Promise<
  * @throws {Error} when no manifest exists anywhere above `startDir`
  */
 async function findNearestManifest(startDir: string, subject: string): Promise<string> {
-  let current = safePath.resolve(startDir);
-  for (;;) {
-    const candidate = safePath.join(current, 'package.json');
-    if (await isRegularFile(candidate)) return candidate;
-    const parent = safePath.resolve(dirname(current));
-    if (parent === current) {
-      throw new Error(
-        `resolveInstrument({ kind: 'dist' }): no package.json above ${subject}, ` +
-          `so the vat version cannot be determined. ${NO_FALLBACK_NOTE}`,
-      );
-    }
-    current = parent;
+  const current = safePath.resolve(startDir);
+  const candidate = safePath.join(current, 'package.json');
+  if (await isRegularFile(candidate)) return candidate;
+  const parent = safePath.resolve(dirname(current));
+  if (parent === current) {
+    throw new Error(
+      `resolveInstrument({ kind: 'dist' }): no package.json above ${subject}, ` +
+        `so the vat version cannot be determined. ${NO_FALLBACK_NOTE}`,
+    );
   }
+  return findNearestManifest(parent, subject);
 }
 
 /**
@@ -402,11 +408,17 @@ async function resolveTree(path: string): Promise<ResolvedInstrument> {
   // files differently and label one report's two axes by two definitions of
   // "dirty", which no reader could see.
   const dirty = hasUncommittedChanges(treeRoot, `the instrument checkout at ${treeRoot}`);
+  // The bytes, beside the commit: a dirty build is otherwise named only by a
+  // HEAD whose bytes did not run. See `closure.ts`.
+  // Its ceiling is the checkout: a workspace's packages and their dependencies all
+  // install under its root `node_modules`, and nothing above it is the tree's. A closure
+  // that does not resolve is an arm refusal, as for every kind.
+  const closure = closureDigest(safePath.join(treeRoot, TREE_CLI_PACKAGE_RELATIVE), treeRoot);
 
   return {
     command: process.execPath,
     leadingArgs: [binPath],
-    version: { version, commit, dirty },
+    version: { version, commit, dirty, closure },
     root: treeRoot,
   };
 }
@@ -427,9 +439,14 @@ async function locateDistBin(target: string): Promise<string> {
   }
 
   const candidates = DIST_BIN_CANDIDATES.map((relative) => safePath.join(target, relative));
-  for (const candidate of candidates) {
-    if (await isRegularFile(candidate)) return candidate;
-  }
+  let found: string | undefined;
+  // In order: the first candidate present wins.
+  await everyInOrder(candidates, async (candidate) => {
+    if (!(await isRegularFile(candidate))) return true;
+    found = candidate;
+    return false;
+  });
+  if (found !== undefined) return found;
 
   // A dist with the wrapper but no `bin.js` is a specific, diagnosable state —
   // half a build, or a `bin/` directory mistaken for the entry point. Saying
@@ -449,6 +466,67 @@ async function locateDistBin(target: string): Promise<string> {
 }
 
 /**
+ * The root a `dist:` package belongs to — its closure's ceiling (`closure.ts`):
+ * what an install or checkout put there for it to resolve, and nothing above.
+ *
+ * - **A package inside a `node_modules`** (a `dist:` pointed into an npm prefix):
+ *   the directory holding the OUTERMOST `node_modules` of its real path — the
+ *   install's prefix, the same ceiling an `npx:` arm of those bytes uses, so the
+ *   two stamp one closure.
+ * - **Otherwise, the nearest directory, from the package up, whose `package.json`
+ *   declares `workspaces`** — a `dist:` pointed into a checkout resolves from the
+ *   workspace root's `node_modules`, as a `tree:` arm of it does. Nearest, so a
+ *   worktree nested in another checkout stops at its own root.
+ * - **Otherwise the package itself:** a standalone package resolves only from
+ *   its own `node_modules`.
+ *
+ * @param packageRoot - The `dist:` package's directory
+ * @returns The ceiling, a real path
+ * @throws {Error} when an ancestor's `package.json` cannot be read as JSON
+ */
+async function distClosureCeiling(packageRoot: string): Promise<string> {
+  const real = await realPathOf(packageRoot);
+  const ancestors: string[] = [];
+  for (let dir = real; ; dir = safePath.resolve(dir, '..')) {
+    ancestors.push(dir);
+    if (dir === safePath.resolve(dir, '..')) break;
+  }
+  const outermost = ancestors.findLast((dir) => basename(dir) === 'node_modules');
+  if (outermost !== undefined) return safePath.resolve(outermost, '..');
+  return (await nearestWorkspaceRoot(real)) ?? real;
+}
+
+/**
+ * @param dir - A real directory
+ * @returns The nearest directory, from `dir` up, whose `package.json` declares `workspaces`
+ * @throws {Error} when an ancestor's `package.json` cannot be read as JSON
+ */
+async function nearestWorkspaceRoot(dir: string): Promise<string | undefined> {
+  if (await declaresWorkspaces(safePath.join(dir, 'package.json'))) return dir;
+  const parent = safePath.resolve(dir, '..');
+  return parent === dir ? undefined : nearestWorkspaceRoot(parent);
+}
+
+/**
+ * @param manifestPath - A `package.json` that may not exist
+ * @returns Whether it exists and declares `workspaces`
+ * @throws {Error} when it exists but is not JSON
+ */
+async function declaresWorkspaces(manifestPath: string): Promise<boolean> {
+  if (!(await isRegularFile(manifestPath))) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(manifestPath, 'utf8'));
+  } catch (error) {
+    throw new Error(
+      `resolveInstrument({ kind: 'dist' }): ${manifestPath} is not valid JSON ` +
+        `(${error instanceof Error ? error.message : String(error)}), so the root its dist: package belongs to is unknown.`,
+    );
+  }
+  return typeof parsed === 'object' && parsed !== null && 'workspaces' in parsed;
+}
+
+/**
  * Resolve a built artifact. There is no checkout behind it, so `commit` is
  * `null` — a recorded absence rather than a guess.
  *
@@ -461,85 +539,115 @@ async function resolveDist(path: string): Promise<ResolvedInstrument> {
   const binPath = await locateDistBin(target);
   const manifestPath = await findNearestManifest(dirname(binPath), binPath);
   const version = await readManifestVersion(manifestPath, 'dist');
+  // The package root, not the path the caller named: `dist:` accepts a bin
+  // file as readily as a directory, and rooting sites at the file's own
+  // directory would make every site outside `dist/bin` look foreign.
+  const packageRoot = safePath.resolve(dirname(manifestPath));
 
   return {
     command: process.execPath,
     leadingArgs: [binPath],
     // `dirty: null` for the same reason `commit` is: there is no checkout to
     // ask. A `false` here would be a confident claim of cleanliness over a build
-    // whose provenance nobody inspected.
-    version: { version, commit: null, dirty: null },
-    // The package root, not the path the caller named: `dist:` accepts a bin
-    // file as readily as a directory, and rooting sites at the file's own
-    // directory would make every site outside `dist/bin` look foreign.
-    root: safePath.resolve(dirname(manifestPath)),
+    // whose provenance nobody inspected. The closure is what tells two `dist:`
+    // arms of one version apart, and one that does not resolve is an arm refusal — see `closure.ts`.
+    version: { version, commit: null, dirty: null, closure: closureDigest(packageRoot, await distClosureCeiling(packageRoot)) },
+    root: packageRoot,
   };
 }
 
 /**
- * Extract the pinned version from an npm spec.
- *
- * @param spec - An npm package spec
- * @returns The pinned version, or `null` when the spec names no concrete version
+ * @param name - What precedes the spec's version separator
+ * @returns `true` for exactly the names in {@link VAT_PACKAGE_NAMES}
  */
-function pinnedVersionOf(spec: string): string | null {
-  const at = spec.lastIndexOf('@');
-  // `-1` is a bare name; `0` is the scope sigil of `@scope/pkg`. Neither pins.
-  if (at <= 0) return null;
-  const version = spec.slice(at + 1);
-  return isPinnedVersion(version) ? version : null;
+function isVatPackageName(name: string): name is VatPackageName {
+  return (VAT_PACKAGE_NAMES as readonly string[]).includes(name);
 }
 
 /**
- * Resolve a published version run through `npx`.
+ * Split an `npx:` spec into the VAT package it names and the version it pins. Pure:
+ * `parseInstrument` calls it so every verb refuses a bad spec before any setup.
  *
- * @param spec - An npm spec pinned to a concrete version
- * @returns The resolved instrument
- * @throws {Error} when the spec is empty or names no concrete version
+ * @param spec - What follows `npx:`
+ * @returns The package and the pinned version
+ * @throws {Error} when the spec is empty, pins no concrete version, or names a package other than
+ *   `vibe-agent-toolkit` or `@vibe-agent-toolkit/cli`
  */
-function resolveNpx(spec: string): ResolvedInstrument {
+export function pinOf(spec: string): NpmPin {
   const trimmed = spec.trim();
-  if (trimmed === '') {
-    throw new Error("resolveInstrument({ kind: 'npx' }): the spec is empty.");
-  }
-
-  const version = pinnedVersionOf(trimmed);
-  if (version === null) {
+  if (trimmed === '') throw new Error('the npx: spec is empty.');
+  const at = trimmed.lastIndexOf('@');
+  // `-1` is a bare name; `0` is the scope sigil of `@scope/pkg`. Neither pins.
+  const version = at <= 0 ? '' : trimmed.slice(at + 1);
+  const metadata = version.indexOf(BUILD_METADATA_START);
+  if (metadata !== -1) {
     throw new Error(
-      `resolveInstrument({ kind: 'npx' }): the spec "${trimmed}" is not pinned to a concrete ` +
-        'version. npx would resolve it against the registry at run time, so two reports ' +
+      `the npx: spec "${trimmed}" carries build metadata (${version.slice(metadata)}), which npm strips: ` +
+        `the installed cli could never carry the version it names. Pin "${version.slice(0, metadata)}".`,
+    );
+  }
+  if (!isPinnedVersion(version)) {
+    throw new Error(
+      `the npx: spec "${trimmed}" is not pinned to a concrete ` +
+        'version. npm would resolve it against the registry at run time, so two reports ' +
         'stamped from it would claim to be the same instrument while potentially being ' +
         `different builds. Pin it, e.g. "${trimmed}@0.1.41".`,
     );
   }
-
-  return {
-    // Bare on purpose — the spawn wrappers resolve it (and `npx.cmd` on Windows).
-    command: 'npx',
-    leadingArgs: ['--yes', trimmed],
-    // A published tarball carries no provenance: no commit, and therefore
-    // nothing that could have been dirty.
-    version: { version, commit: null, dirty: null },
-  };
+  const name = trimmed.slice(0, at);
+  if (!isVatPackageName(name)) {
+    throw new Error(
+      `the npx: spec "${trimmed}" does not name VAT: only ${VAT_PACKAGE_NAMES.join(' and ')} are installed ` +
+        'under a pinned label. Any other spec — another package, a path, URL, tarball, git ref or alias — ' +
+        'could install other code that passes as the pinned cli. ' +
+        `Name VAT, e.g. "vibe-agent-toolkit@${version}". ${NO_FALLBACK_NOTE}`,
+    );
+  }
+  return { name, version };
 }
 
 /**
- * Resolve a named vat into something runnable plus the axis-C coordinate every
- * report it produces will carry.
+ * A named vat resolved as far as it can be before any setup: a `tree:` or `dist:`
+ * build completely, an `npx:` build to its checked pin — its install needs the
+ * invocation's arms root, which does not exist yet. Made by {@link prepareInstrument};
+ * finished by {@link resolveInstrument}.
+ */
+export type PreparedInstrument =
+  | { readonly kind: 'built'; readonly instrument: ResolvedInstrument }
+  | { readonly kind: 'npx'; readonly pin: NpmPin };
+
+/**
+ * Resolve everything a named vat can be resolved to without setting anything up,
+ * so every verb refuses a bad build before it creates `--out` or an arms root.
  *
  * @param source - How the caller named the vat
- * @returns An executable, its leading arguments, and the instrument version
+ * @returns The prepared instrument
  * @throws {Error} naming the offending path or spec whenever the named vat
  *   cannot be found or cannot supply its coordinate. Resolution failures are
  *   errors, never fallbacks — see the module header.
  */
-export async function resolveInstrument(source: InstrumentSource): Promise<ResolvedInstrument> {
+export async function prepareInstrument(source: InstrumentSource): Promise<PreparedInstrument> {
   switch (source.kind) {
     case 'tree':
-      return resolveTree(source.path);
+      return { kind: 'built', instrument: await resolveTree(source.path) };
     case 'dist':
-      return resolveDist(source.path);
+      return { kind: 'built', instrument: await resolveDist(source.path) };
     case 'npx':
-      return resolveNpx(source.spec);
+      return { kind: 'npx', pin: pinOf(source.spec) };
   }
+}
+
+/**
+ * Finish a prepared vat into something runnable plus the axis-C coordinate every
+ * report it produces will carry: install an `npx:` pin under the arms root.
+ *
+ * @param prepared - From {@link prepareInstrument}
+ * @param npx - Where an `npx:` build is installed (under the invocation's arms root)
+ * @returns An executable, its leading arguments, and the instrument version
+ * @throws {Error} when an `npx:` install is refused — see `npx-install.ts`
+ */
+export function resolveInstrument(prepared: PreparedInstrument, npx: NpxInstallSite): Promise<ResolvedInstrument> {
+  // A published tarball carries no provenance: no commit, and therefore nothing that could
+  // have been dirty; its closure is the installed cli's.
+  return prepared.kind === 'built' ? Promise.resolve(prepared.instrument) : installNpxInstrument(prepared.pin, npx);
 }

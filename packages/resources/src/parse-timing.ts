@@ -59,13 +59,13 @@
  *
  * ## What the counts do and do not reconcile
  *
- * `cache.hits`/`cache.misses` count every parser kind, because `parseKeyed`
+ * `cache.hits`/`cache.misses` count every parser kind, because the dispatcher
  * routes both kinds through one cache. Document counts are now per kind, so the
  * cache's population and the parsers' population are finally comparable — but
  * they are still **not** equal, and nothing here derives one from the other:
- * several call sites (`parseMarkdown(filePath)`, `parseHtml(filePath)`) reach a
- * parser without consulting the cache at all, so the parse counts can exceed the
- * misses. Every term is recorded where the work happens; what is left over is
+ * every parse now goes through the dispatcher, which counts a miss before a
+ * worker parses, but a miss whose parse is refused completes no document, so the
+ * two can still differ. Every term is recorded where the work happens; what is left over is
  * left to a reader who now has all of them.
  *
  * ## Why the process-level CPU reading is one syscall and the passes are not
@@ -122,9 +122,12 @@ import {
   ensureTimingDirectory,
   normalizeTimingDirectory,
   readTimingProcess,
+  readWorkCounters,
   type TimingProcess,
   writeTimingDump,
 } from '@vibe-agent-toolkit/utils';
+
+import type { ReuseCheck } from './parse-limits.js';
 
 /**
  * The passes the instrumented parsers are bracketed at, as array indices.
@@ -203,8 +206,8 @@ export type ParsePassSlot = (typeof ParsePass)[keyof typeof ParsePass];
  * - `projection/blob-population.ts`'s `unparsedFacts` runs **three real passes
  *   over the full content** — `findLexicalReferences`, `measureContent` and
  *   `estimateTokens` — on every non-prose file. ❌ That work is real, it is
- *   unattributed, and it is the lane `claude context`, `claude budget` and cold
- *   population all use.
+ *   unattributed, and it is the lane `claude context`, the claude-context SQL
+ *   relations and cold population all use.
  *
  * The gap is **bounded, not zero**: the same three passes measured 605 ms +
  * 469 ms + 0.585 ms over 8,713 documents / 108.9 MB, so on an adopter tree whose
@@ -298,6 +301,25 @@ export const TierPass = {
   WorkerJob: 6,
   /** Worker-side `postMessage` of the reply — the facts clone. */
   WorkerReply: 7,
+  /**
+   * A reused thread's check of its own heap before a job (`settleReusedHeap`), charged the
+   * thread's own reads and any collection. Recorded on the main thread, one call for every check
+   * whose report reaches the pool — from a thread retired or stopped since included.
+   *
+   * ⚠️ A lower bound, not every check made: the pool stops listening to a thread as it
+   * terminates it, so a check still in flight then — its job stopped at its clock before the
+   * report was delivered, or the pool shut down — is made and never counted, and neither is its
+   * collection or its retirement. The retirement rate ({@link TierPass.ReuseRetire} over this) is
+   * therefore over the checks the pool heard. See {@link recordReuseCheck}.
+   */
+  ReuseCheck: 8,
+  /** The forced full collections among those checks, charged each collection's own time. */
+  ReuseCollect: 9,
+  /**
+   * The checks that retired their thread, charged the check. Its calls over
+   * {@link TierPass.ReuseCheck}'s are the pool's retirement rate.
+   */
+  ReuseRetire: 10,
 } as const;
 
 /** One of {@link TierPass}'s slot indices. */
@@ -320,6 +342,9 @@ export const TIER_PASS_NAMES: readonly string[] = [
   'wire-attach',
   'worker-job',
   'worker-reply',
+  'reuse-check',
+  'reuse-collect',
+  'reuse-retire',
 ];
 
 /** How many slots {@link ParsePass} declares. */
@@ -455,6 +480,19 @@ export interface ParseThreadTiming {
    * measure. Always every row, even at zero.
    */
   tier: ParseTimingPass[];
+  /**
+   * The used heap each reused-thread check left its thread holding as its job started, after the
+   * collection when one ran — in MiB, summed and at its largest; divide the sum by the
+   * `reuse-check` row's calls for the mean. Zero but on the main thread, which records the checks
+   * every thread reports. See {@link recordReuseCheck}.
+   */
+  reuseHeap: ParseReuseHeap;
+}
+
+/** See {@link ParseThreadTiming.reuseHeap}. */
+export interface ParseReuseHeap {
+  settledMibTotal: number;
+  settledMibMax: number;
 }
 
 /**
@@ -532,8 +570,7 @@ const tierCalls = new Float64Array(TIER_PASS_NAMES.length);
 const documentCounts = new Float64Array(PARSE_KIND_SHAPES.length);
 const documentBytes = new Float64Array(PARSE_KIND_SHAPES.length);
 
-let cacheHits = 0;
-let cacheMisses = 0;
+const reuseHeap: ParseReuseHeap = { settledMibTotal: 0, settledMibMax: 0 };
 
 /**
  * Counters other threads of this process have handed over, in arrival order.
@@ -552,13 +589,33 @@ const reportedThreads: ParseThreadTiming[] = [];
  * Read ONCE, here, from `process.env`. See the module docstring for why this
  * deliberately differs from `parse-cache.ts`'s per-construction rule.
  */
-let dumpDirectory: string | null = normalizeTimingDirectory(process.env['VAT_PARSE_TIMING']);
+let dumpDirectory: string | null = isMainThread
+  ? ensureTimingDirectory(DUMP_NOUN, normalizeTimingDirectory(process.env['VAT_PARSE_TIMING']))
+  : normalizeTimingDirectory(process.env['VAT_PARSE_TIMING']);
 
 /**
  * The hot path's gate. A plain boolean rather than `dumpDirectory !== null` so
  * every instrumented call site costs one predictable branch on a memory load.
  */
 let timingEnabled = dumpDirectory !== null;
+
+/**
+ * The parse-cache outcomes on this thread, read from the work counters.
+ *
+ * A hit is a document the parser did NOT have to run over; a miss is one
+ * dispatched to a parser, counted once however many times it was dispatched
+ * (`parse.redispatched` holds the rest), so hits plus misses is the documents
+ * the cache was asked for. The block reads `parse.cache.hit` and
+ * `parse.dispatched` as they stand rather than counting them a second time or
+ * against a baseline of its own: one counting site and one reset per number. A
+ * test that wants the block at zero zeroes the work counters.
+ *
+ * @returns Hits and misses on this thread
+ */
+function cacheOutcomes(): { hits: number; misses: number } {
+  const counted = readWorkCounters();
+  return { hits: counted['parse.cache.hit'], misses: counted['parse.dispatched'] };
+}
 
 /**
  * One pass row, read out of the flat accumulators.
@@ -603,13 +660,14 @@ function kindGroup(shape: ParseKindShape, index: number): ParseTimingKind {
 function buildThreadTiming(): ParseThreadTiming {
   return {
     threadId,
-    cache: { hits: cacheHits, misses: cacheMisses },
+    cache: cacheOutcomes(),
     kinds: PARSE_KIND_SHAPES.map((shape, index) => kindGroup(shape, index)),
     tier: TIER_PASS_NAMES.map((name, slot) => ({
       pass: name,
       calls: tierCalls[slot] ?? 0,
       elapsedMs: tierElapsedMs[slot] ?? 0,
     })),
+    reuseHeap: { ...reuseHeap },
   };
 }
 
@@ -646,7 +704,8 @@ function writeDump(): string | null {
  * Zero every accumulator.
  *
  * The process wall/CPU readings are NOT here: they are lifetime figures taken
- * fresh at dump time, so there is nothing of theirs to zero.
+ * fresh at dump time, so there is nothing of theirs to zero. Nor is the `cache`
+ * block: it is the work counters, which only their own reset zeroes.
  */
 function resetAccumulators(): void {
   passElapsedMs.fill(0);
@@ -655,23 +714,31 @@ function resetAccumulators(): void {
   tierCalls.fill(0);
   documentCounts.fill(0);
   documentBytes.fill(0);
-  cacheHits = 0;
-  cacheMisses = 0;
+  reuseHeap.settledMibTotal = 0;
+  reuseHeap.settledMibMax = 0;
   reportedThreads.length = 0;
 }
 
-if (dumpDirectory !== null) {
-  ensureTimingDirectory(DUMP_NOUN, dumpDirectory);
-  // Registered ONLY when enabled, and ONLY on the main thread: this process
-  // writes exactly one dump, carrying every thread. A worker registering this
-  // listener would file a second, partial file reporting the same whole-process
-  // lifetime — see `ParseTimingDump`. Its counters travel over the pool's
-  // channel instead.
-  if (isMainThread) {
-    process.on('exit', () => {
-      writeDump();
-    });
-  }
+// Registered ONLY when enabled, and ONLY on the main thread: this process
+// writes exactly one dump, carrying every thread. A worker registering this
+// listener would file a second, partial file reporting the same whole-process
+// lifetime — see `ParseTimingDump`. Its counters travel over the pool's channel
+// instead, which is also why only the main thread makes the directory above: a
+// directory that could not be made is reported once, there, and the seam is off.
+if (dumpDirectory !== null && isMainThread) {
+  process.on('exit', () => {
+    writeDump();
+  });
+}
+
+/**
+ * Whether this thread is recording parse timings — the parse pool parks no
+ * thread while it is, because a parked thread's counters reach no dump.
+ *
+ * @returns `true` when a dump directory is set
+ */
+export function parseTimingEnabled(): boolean {
+  return timingEnabled;
 }
 
 /**
@@ -711,6 +778,37 @@ export function recordTierPass(pass: TierPassSlot, startedAt: number): void {
   const elapsed = performance.now() - startedAt;
   tierElapsedMs[pass] = (tierElapsedMs[pass] ?? 0) + elapsed;
   tierCalls[pass] = (tierCalls[pass] ?? 0) + 1;
+}
+
+/**
+ * Charge a time a thread measured itself to a tier pass.
+ *
+ * @param pass - Which tier slot to charge
+ * @param elapsedMs - The time, in ms
+ */
+function chargeTierPass(pass: TierPassSlot, elapsedMs: number): void {
+  tierElapsedMs[pass] = (tierElapsedMs[pass] ?? 0) + elapsedMs;
+  tierCalls[pass] = (tierCalls[pass] ?? 0) + 1;
+}
+
+/**
+ * Record one reused thread's check of its own heap before a job, as that thread reported it: the
+ * check, its collection and its retirement as tier rows ({@link TierPass.ReuseCheck},
+ * {@link TierPass.ReuseCollect}, {@link TierPass.ReuseRetire}) charged the times the thread
+ * measured, and the heap it settled to ({@link ParseThreadTiming.reuseHeap}). Recorded by the
+ * parent as the report arrives, so a thread terminated later — one this check retired, above all
+ * — is still counted, where its own counters would never reach a dump.
+ *
+ * @param check - The thread's report ({@link ReuseCheck})
+ */
+export function recordReuseCheck(check: ReuseCheck): void {
+  if (!timingEnabled) return;
+  chargeTierPass(TierPass.ReuseCheck, check.checkMs);
+  if (check.collectMs !== null) chargeTierPass(TierPass.ReuseCollect, check.collectMs);
+  if (check.retire) chargeTierPass(TierPass.ReuseRetire, check.checkMs);
+  const settledMib = check.usedBytes / 1_048_576;
+  reuseHeap.settledMibTotal += settledMib;
+  reuseHeap.settledMibMax = Math.max(reuseHeap.settledMibMax, settledMib);
 }
 
 /**
@@ -755,18 +853,6 @@ export function recordThreadTiming(thread: ParseThreadTiming): void {
   reportedThreads.push(thread);
 }
 
-/** Count one parse-cache hit — a document the parser did NOT have to run over. */
-export function recordParseCacheHit(): void {
-  if (!timingEnabled) return;
-  cacheHits += 1;
-}
-
-/** Count one parse-cache miss — a document that reached a parser. */
-export function recordParseCacheMiss(): void {
-  if (!timingEnabled) return;
-  cacheMisses += 1;
-}
-
 /**
  * TEST ONLY. Turn the seam on (writing to `directory`) or off, and zero every
  * accumulator.
@@ -780,10 +866,9 @@ export function recordParseCacheMiss(): void {
  * @param directory - Where {@link __writeParseTimingDumpForTest} writes, or `null` to disable
  */
 export function __setParseTimingForTest(directory: string | null): void {
-  dumpDirectory = normalizeTimingDirectory(directory ?? undefined);
+  dumpDirectory = ensureTimingDirectory(DUMP_NOUN, normalizeTimingDirectory(directory ?? undefined));
   timingEnabled = dumpDirectory !== null;
   resetAccumulators();
-  if (dumpDirectory !== null) ensureTimingDirectory(DUMP_NOUN, dumpDirectory);
 }
 
 /**

@@ -68,7 +68,7 @@ noting skills must be discoverable before being committed.
 
 **Demonstrated, not merely reasoned about** (2026-08-16, against the pre-rule code): on a two-file
 repository with one committed and one uncommitted markdown file, each carrying a broken link, `vat
-resources validate` reported `filesScanned: 1` and one finding. The uncommitted file's broken link
+resources validate` reported `filesScanned: 1` and one finding (field names as that build printed them; today's report calls the count `examined`). The uncommitted file's broken link
 was not missed *quietly* — it was invisible, and the command exited green about the half it could
 see. That measurement is the evidence behind §2.1, and it is what the registry's
 `includeUntracked: true` now fixes on the default lane; §3.4's opt-in projection lane reaches the
@@ -191,7 +191,7 @@ Three constraints this table encodes, each of which has already been got wrong o
   divergence between them shows up only as a wrong answer somewhere downstream.
 
 **None of this depends on a columnar store.** Sourcing (this section) and persistence (a
-`ProjectionStore` substrate) are separable: the git lane already yields a content key per path and an exact whole-tree
+`FactStore` substrate) are separable: the git lane already yields a content key per path and an exact whole-tree
 invalidation key, which is the entire input a persisted table would need. Doing the sourcing work
 first is what makes the persistence work worth doing — and it banks most of the win on its own.
 
@@ -285,8 +285,9 @@ to be discovered.
 ### 3.4 ✅ The resources lane on the projection — shipped opt-in, and what it measured
 
 `ResourceRegistry.crawl()` takes an optional `populationSource`. Supplied, the file list comes from
-a base-only projection (`buildResourcePopulation` → `FilesystemExtentContributor`) instead of from
-`crawlDirectory`; omitted, nothing changes. The CLI selects the lane at its boundary with
+the resources population (`buildResourcePopulation`, a membership view over the same stored
+population `vat resources query` reads) instead of from `crawlDirectory`; omitted, nothing
+changes. The CLI selects the lane at its boundary with
 `VAT_RESOURCES_CRAWL=projection`, which covers `vat resources scan`/`validate`, `vat rag index` and
 the pipeline oracles in one place — they all load through `loadResourcesWithConfig`.
 
@@ -331,12 +332,12 @@ pinned by `packages/cli/test/integration/enumeration-symlink-divergence.integrat
 pin covers the git-vs-manual-walk pair. **This lane is a third behaviour and is not covered by it** —
 resolving §4's proposed within-snapshot resolution is what would collapse all three.
 
-**Measured 2026-08-16.**
+**Measured 2026-08-16.** The counts below are the `filesScanned` field of the build that was measured; the report has since renamed it `examined`, and the same sweep renamed `errorsFound` to `summary.errors` and `status: success` to `status: ok`. The numbers are unchanged; only the labels are translated.
 
 | subject | walker | projection | note |
 |---|---|---|---|
-| git repo, 1 committed + 1 untracked broken link | `filesScanned: 1` | `filesScanned: 2` | the untracked file's real broken link, found. ⚠️ **The walker column is pre-§2.1**; both arms are 2 today |
-| git repo, 2 committed symlinks | `filesScanned: 3` | `filesScanned: 1` | the symlink paths are not members |
+| git repo, 1 committed + 1 untracked broken link | `examined: 1` | `examined: 2` | the untracked file's real broken link, found. ⚠️ **The walker column is pre-§2.1**; both arms are 2 today |
+| git repo, 2 committed symlinks | `examined: 3` | `examined: 1` | the symlink paths are not members |
 | non-git anchored corpus, 198 files / 90 HTML / 3,950 links | 112 files, 0.085 s | 112 files, 0.926 s | output **byte-identical** but for `durationSecs` |
 | ...its `resource-registry:enumerate` row | 2.7 ms | 851.9 ms | **316×** |
 | adopter git working tree, 1,378 resource files across 8 collections | 1.02 s | 4.99 s | **4.9×**, output byte-identical but for `durationSecs` |
@@ -346,8 +347,8 @@ resolving §4's proposed within-snapshot resolution is what would collapse all t
 anything** — including that it, too, is a pre-§2.1 walker arm. That tree carried zero untracked files and zero committed symlinks at measurement time,
 so the two lanes had no population to disagree over — "byte-identical" there is agreement on
 *today's tree state*, not a property of the lanes. Re-measured with one untracked `roadmap.md`
-carrying a broken link added to it, the same tree gives `filesScanned` 1,378 → **1,379**,
-`errorsFound` 0 → **1**, and `status: success` → **`error`**. **So on that adopter the flip costs
+carrying a broken link added to it, the same tree gives `filesScanned` (today `examined`) 1,378 → **1,379**,
+`errorsFound` (today `summary.errors`) 0 → **1**, and the status flipped from `success` (today `ok`) to a failing one (today `findings`). **So on that adopter the flip costs
 ~4× wall clock and changes no finding until somebody has uncommitted work — at which point it turns
 a green run red, which is the entire point of the lane.** Sizing the flip from the clean-tree run
 alone would be sizing a fixture that cannot distinguish.
@@ -404,6 +405,11 @@ the same cost; the resources lane merely pointed the projection at trees big eno
 `packages/utils/src/text-content.ts`, and `local/no-raw-text-decode` makes any other route a lint
 error.** Like §2.1 this is a binding statement rather than a note — this repository has no ADRs, so a
 decision lives in an architecture document or in the docstring of the thing it governs.
+
+A NAME is not file content and has its own decode, in the same module: `decodeUtf8Exactly()` turns
+bytes git holds for a committed path or a link's text into the text they spell, or into nothing when
+they are not UTF-8 — no BOM sniffed or stripped, no U+FFFD substituted — so a name is judged as
+written or refused, never re-spelled.
 
 #### Why the seam is a `utils` primitive and not a `resources` one
 
@@ -510,14 +516,10 @@ are two documents as far as the cache is concerned, which is correct: their byte
 
 #### What this cost, stated because it is a real regression
 
-The old refusal was **loud**: `BLOB_NOT_TEXT`, naming the path. That loudness was also, accidentally,
-a floor under `RunContentCache`'s `#byHint` lane. A blob OID is many-to-one against working-tree
-bytes, and `working-tree-encoding` divergence between two paths sharing an OID is one of the two
-mechanisms that can change the text served. Before, a path handed the wrong encoding's characters
-could not produce plausible facts, because it could not produce facts at all. Now it can. Nothing new
-became unsound — the many-to-one OID was always the cause, and no decoder fixed that — but the one
-mechanism whose divergence used to announce itself no longer does. The analysis lives in
-`projection/content-cache.ts` beside the measurements.
+The old refusal was **loud**: `BLOB_NOT_TEXT`, naming the path. A silently decoded file no longer
+announces itself. That loudness was once also an accidental floor under a cross-path blob-OID hint,
+which could hand one path another's `working-tree-encoding` text; the hint has since been removed
+([Content Keying and Git §6.3](./content-keying-and-git.md)), so every path decodes its own bytes.
 
 #### Not every `'utf-8'` read is a content read — the line, stated once
 
@@ -607,6 +609,114 @@ never a committed document, so **this section is where the class lives**; the ta
 not a pointer to follow. (Unrelated: `docs/validation-codes.md` has its own *decision record* D7,
 about directory-index resolution. Different sequence, different subject.)
 
+### 3.7 ✅ The projection STORE is on by default — the measurement that paid for the flip
+
+`VAT_PROJECTION_STORE` used to select the store and default to off, on the rule that a cache's win
+is a claim about cost and a default flipped before the cost is measured is a claim nobody checked.
+The evidence arrived, so the default moved and the variable became an escape hatch rather than a
+selector (`packages/cli/src/utils/projection-store.ts`, `projectionStoreSelected`).
+
+`vat resources query "SELECT count(*) FROM resources"`, three runs per arm, store directory outside
+the corpus:
+
+| Corpus | Files | Store OFF | ON, cold | ON, warm | Warm | Store |
+|---|---|---|---|---|---|---|
+| An adopter monorepo | 12,602 | 5,787 / 4,341 / 4,309 ms | 4,895 ms | 1,273 / 1,244 ms | **3.5×** | 71.2 MB |
+| VAT itself | 3,257 | 1,638 / 1,412 / 1,386 ms | 1,597 ms | 600 / 573 ms | **2.4×** | 18.2 MB |
+
+**The cold arm is never slower than the OFF arm, which is the half a flip can get wrong.**
+`vat resources validate` — a narrower question over the same trees — moves less (adopter
+1,949 → 1,447 ms, VAT 733 → 518 ms).
+
+⚠️ Flipping this makes the store every adopter's problem, so the bound came first: `projection-sqlite`
+bounds the blob tier as well as the extent tier — see `DEFAULT_RETAINED_BLOB_KEYS` there.
+
+**One scope for a whole multi-surface run.** Every lane opens its own
+`withPopulationCache` bracket, because each has to be correct when its command runs alone — so a
+multi-lane run opened a database and took a `git write-tree` per lane. `vat validate` therefore
+holds one bracket over all its surfaces (`runPhasesUnderOnePopulation`), and a nested scope over the
+same repository joins the open one. Interleaved A/B on the 12,602-file adopter tree, four runs per
+arm: cold 6,140 / 4,961 ms → 5,228 / 4,281 ms, warm 3,509–3,812 ms → 3,354–3,496 ms, with
+`git-tracker:initialize` falling from 132–159 ms to 57–64 ms as the second surface reads the first's
+snapshot instead of taking its own.
+
+⚠️ **That hoist is admissible for `vat validate` specifically, and is not a free refactor**: one
+scope is one git snapshot for every in-process phase. `vat validate` writes nothing into the tree,
+so no phase can miss another's output. A verb whose phases produce files for the next to read
+(`vat build`) must not be hoisted this way, and is not. Its `checks` phase is a supervised child
+process OUTSIDE that scope: it takes its own git snapshot, and opens — and on a miss writes — the
+projection store while the parent holds it open. `validate-checks-phase.system.test.ts` smoke-tests
+that pair on a fixture: the first run's checks phase reports `population: derived` with a store left
+on disk, and the next run's reports `population: store`.
+
+**Where the store is shared, within and across invocations.** The selector is read from the
+environment. Every phase but `checks` runs in the process that read it — phases used to be child
+processes inheriting it across a `spawnSync`, which reached the same place by a longer route — and
+the `checks` child inherits the orchestrator's environment, so no `vat validate` phase can see a
+different selection from the one its orchestrator did.
+
+That sharing has a within-verb instance. `vat build`'s two phases — `skills build` and
+`claude plugin build` — both reach the lane through `withResourcePopulationSource`
+(`resource-loader.ts`), rooted at the same directory, so phase 2 reads the extent phase 1 wrote.
+Measured on `packages/vat-development-agents` with `VAT_CRAWL_TIMING`: with a cold store, phase 1
+files `builtin:filesystem` 39.2 ms and `projection-store:write` 10.1 ms; phase 2 files neither, and
+its `resource-registry:enumerate` reads 3.6 ms against phase 1's 66.6 ms. It did NOT need the closure
+to emit reasons, which an earlier reading expected: the packaging lanes consume
+`resource_realizations` and let `walkLinkGraph` keep running on top of the registry, so the base
+extent alone answers them. The cross-INVOCATION win is unchanged and independent: `vat validate` and
+`vat verify` spawn a byte-identical `resources validate` child, so the second hits the store.
+
+⚠️ One packaging enumeration is still on the walk: `vat claude plugin build`'s per-skill post-build
+validation, which reaches `crawlAndResolveRegistry` in `packaging-validator.ts` without a source —
+its `withResourcePopulationSource` bracket closes around `createProjectRegistry` and does not span
+the marketplace loop. `vat skills build` no longer does: it holds one bracket over the whole run, and
+the registry memo is keyed on the population source.
+
+⚠️ `VAT_PROJECTION_STORE=sqlite` is redundant with the default now, and is kept because every
+measurement arm, CI job and adopter script written while the store was opt-in spells it. It is not a
+shim for a renamed thing — it is the one backend's own name. An unrecognised value (`duckdb`, say)
+leaves the store selected rather than refusing: there is one backend, so a refusal has no
+alternative to offer. The day a second exists is the day that variable becomes an enumeration.
+
+### 3.8 ✅ Every parse is bounded — one route, in a worker, under limits
+
+Both crawl lanes reach the parser through one `ParseDispatcher`, and every cache miss is parsed in a
+worker thread of the parse pool (`parse-pool.ts`). There is no in-process route: `VAT_PARSE_POOL=0`
+and the below-threshold main-thread parse are gone, because a parse on the run's own thread cannot be
+stopped ([Fact Extractors](./fact-extractors.md) I8). Below the activation threshold the pool runs
+one job at a time; `VAT_PARSE_POOL_SIZE` and `VAT_PARSE_POOL_MIN_MISSES` still size it.
+
+Each job runs under `ParseLimits` (`parse-limits.ts`): wall clock (`timeMs`, from the moment the
+job's parser has loaded; a cold worker's load runs on a clock of its own, `JobClock`), heap (`heapMb`), stack depth (`stackMb`), output rows and bytes
+(`outputRows`, `outputBytes`, checked in the worker before anything is cached) and input size
+(`inputBytes`: one comparison, `inputBytesBreach`, in one unit — the bytes the content came
+from. A file is refused by its size before it is read (`readContentWithKey`; a lane parsing for
+a route reads through `readContentForParse`, under its dispatcher's cap), and the read hands on a
+`MeasuredContent` carrying that size, so nothing downstream re-measures it; content never read is
+measured as its UTF-8 bytes (`inMemoryContent`), and a ZIP entry by its declared size
+(`parseInputRefusal`). `ParseDispatcher.parse` refuses in-memory content before the cache is
+consulted, and `parseFrontmatter` refuses the whole content before it cuts out the block, so no
+lane parses part of an oversize document. A cache hit is held to the dispatcher's own output caps.)
+Time and heap breaches kill and replace the worker; stack and output breaches are reported by it.
+Either way the job rejects with `ParseLimitError`. A projection realization refused at the input cap
+is `contentState: 'oversize'` with no blob, reported as `RESOURCE_PARSE_LIMIT_EXCEEDED` like the
+registry lane's refusal of the same file. The projection lane refuses that one blob
+(`BLOB_PARSE_LIMIT_EXCEEDED`, a per-run code `storableBlobFacts` never stores); the registry lane
+reports `RESOURCE_PARSE_LIMIT_EXCEEDED` and admits every other file. A worker that dies holding a
+job — it exits, or an uncaught error kills it — rejects with `ParseWorkerDiedError`, handled the same
+way (`BLOB_PARSE_WORKER_DIED`, `RESOURCE_PARSE_WORKER_DIED`): nothing says the bytes caused it, so it
+is never a stored `BLOB_PARSE_FAILED`. Nothing about a breach or a death persists (I6): no cache
+entry, no stored condition, so the next run parses the file again.
+
+Frontmatter YAML is decoded in the worker too, and only there: the worker sends the decoded mapping
+back in a flat tagged encoding (`frontmatter-codec.ts`) that the parse cache stores beside the raw
+source, so neither a worker answer nor a cache hit decodes YAML on the main thread. `vat rag index`
+parses nothing: it chunks by the facts the registry derived on this route and reads only the text.
+
+⚠️ A process-wide `--max-old-space-size` (in `NODE_OPTIONS` or `execArgv`) overrides a worker's
+`resourceLimits`, so the heap ceiling is also enforced by sampling the worker's heap every 50 ms.
+The defaults, how they were measured and the headroom rule are in
+[Fact Extractors — Parse Limits](./fact-extractors-limits.md).
 
 ## 4. Symlinks
 
@@ -668,17 +778,15 @@ side (tree-shape caching vs. the blob-keyed tables).
   `getGitTreeHash()` as the underlying primitive. **Half-built** — read this bullet's ⚠️ correction
   below before extending it, then note precisely where the line now falls:
 
-  ✅ The *within-run* half exists. `GitCrawlSource` carries each path's on-disk blob OID as
-  `EnumeratedPath.contentHint`, and `RunContentCache.read()` uses it as a `(hint, parserKind)` lookup
-  so a second path holding identical bytes costs no read at all — reported as `hintHits`, separately
-  from `hits`, because it is the one saving whose soundness rests on something outside that class.
-  All three conditions the correction imposes are enforced structurally: the stored key is still
-  hashed from bytes, a hint hit returns the content so no row goes back to disk, and mode-`120000`
-  entries never reach the field because they are not members at all (§3.3).
+  ⛔ The *within-run* half was built and removed. A cross-path `(blob OID, parserKind)` hint let a
+  second path holding the same OID skip its read, but an OID names *cleaned* content, so under a
+  per-path clean/smudge filter or `working-tree-encoding` it filed the second path under the first
+  path's key with the first path's text ([Content Keying and Git §6.3](./content-keying-and-git.md)).
+  Every path is now read and keyed from its own bytes, and the snapshot carries no OID.
 
   🔷 The *cross-run* half — a persisted `(blobSha, parserKind) → contentKey` memo, and the
-  snapshot-to-snapshot manifest diff — remains unbuilt. That is where the warm-cache prize in the
-  table below actually lives: within one run a hint only pays where a corpus holds duplicate bytes.
+  snapshot-to-snapshot manifest diff — remains unbuilt, and inherits the same unsoundness: any
+  design here must first show the OID-to-bytes mapping is one-to-one for the paths it serves.
 
   Measured 2026-08-16 on an adopter working tree (8,496 tracked paths, macOS, warm), which sizes the
   prize against the `filesystem` extent this would accelerate (`builtin:filesystem`, 1,537 ms warm /
@@ -705,11 +813,12 @@ side (tree-shape caching vs. the blob-keyed tables).
   symlink as a blob holding the link **target string**, so two symlinks with the same relative
   target but different resolutions share an OID while VAT follows them and the parser reads
   through; and a key derived at enumeration and used to file a parse performed later binds the old
-  key to new bytes. Its rule: **a git SHA may be used as a *lookup hint* whose miss is free — it
-  must never be the key.**
+  key to new bytes. Its rule now: **a git OID must never be the key, and may not stand in for a
+  read** — one OID can name two working-tree byte strings.
 
-  The `(blobSha, parserKind) → contentKey` memo proposed above *is* that permitted hint, so the two
-  documents do agree — but only under three conditions the table above does not state:
+  So the `(blobSha, parserKind) → contentKey` memo proposed above is not permitted as stated. Even
+  where the OID-to-bytes mapping were shown one-to-one, three further conditions the table above
+  does not state would apply:
 
   - **The saving is warm-only.** A cold memo misses on every path and hashes on read anyway.
     "Replaces enumeration *and* the SHA-256 read" is a warm-cache claim written as an unconditional

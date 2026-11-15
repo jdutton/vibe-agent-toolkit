@@ -5,7 +5,7 @@
  *
  * ## `addFile` lives here, and only here
  *
- * Plan A's Task 1 established that a synthetic `{ rawRef, syntacticForm }` pair
+ * A synthetic `{ rawRef, syntacticForm }` pair
  * is a row the shipped lexer can never emit — `{ rawRef: 'b.md', syntacticForm:
  * 'at-prefixed' }` shipped once and left the `@`-following path green while
  * never once resolving a real `@` token. `addFile`'s `markdown` branch is the
@@ -34,20 +34,22 @@
  * ## The corpus root does not exist on disk — deliberately
  *
  * `closureProvenance` is a pure function of the tables it is handed, never of
- * the filesystem, and `ABSENT_ROOT` is what makes that a testable claim rather
+ * the filesystem, and `CLAUDE_CONTEXT_FIXTURE_ROOT` is what makes that a testable claim rather
  * than an assertion: if a resolution path ever started `stat`-ing, a fixture
  * rooted at a real directory would never catch it. `whatLoadsAt` inherits the
  * same claim — it reads only materialised tables — so it gets the same root.
  */
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, safePath } from '@vibe-agent-toolkit/utils';
 import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 
-import { computeContentKey } from '../../src/content-key.js';
+import { computeContentKey, inMemoryContent } from '../../src/content-key.js';
 import { parseMarkdownContent } from '../../src/link-parser.js';
 import { mimeTypeForPath } from '../../src/mime-type.js';
-import { blobRowFor } from '../../src/projection/blob-facts.js';
+import { blobRowFor, harnessRowsFor } from '../../src/projection/blob-facts.js';
 import { blobReferencesFor } from '../../src/projection/blob-references.js';
+import { claudeMemoryFactsOf } from '../../src/projection/claude-memory.js';
+import { RunContentCache } from '../../src/projection/content-cache.js';
 import type { ExtentContribution } from '../../src/projection/contributor.js';
 import { AgenticConventionContributor } from '../../src/projection/contributors/agentic-convention.js';
 import {
@@ -59,6 +61,14 @@ import {
 } from '../../src/projection/contributors/claude-import-extent.js';
 import { ClaudeRulesScopeContributor } from '../../src/projection/contributors/claude-rules-scope.js';
 import { extentContextId } from '../../src/projection/contributors/context-id.js';
+import { extentDigest } from '../../src/projection/digest.js';
+import { CLAUDE_CODE } from '../../src/projection/harness/claude-code.js';
+import {
+  assertHarnessSettled,
+  runHarnessPass,
+  type HarnessContentReader,
+  type HarnessFactsDeriver,
+} from '../../src/projection/harness/harness-pass.js';
 import { ProjectionBuilder, type Projection, type ProjectionBase } from '../../src/projection/projection.js';
 import type { BlobReferenceRow, ReferenceSyntacticForm } from '../../src/schemas/projection-blobs.js';
 import type { ResourceRealizationRow } from '../../src/schemas/projection-resources.js';
@@ -286,8 +296,35 @@ export function addFile(builder: ProjectionBuilder, file: FixtureFile, root: str
     builder.addBlobReference(row);
   }
   if (file.markdown !== undefined) {
+    // No harness facts here: production derives them LAZILY, for what the
+    // harness reaches (`harness/harness-pass.ts`), and so does
+    // {@link claudeContextFixture}. A suite testing the closure PRIMITIVE over
+    // an arbitrary graph, where "every blob is derived" is the precondition,
+    // uses {@link addFileWithFacts}.
     builder.addBlob(blobRowForFixture(contentKey, file.markdown));
   }
+}
+
+/**
+ * {@link addFile}, plus Claude Code's facts for the file's markdown — through
+ * the SHIPPED extractor, so the in-memory and on-disk lanes have one answer to
+ * "which `@` is an import".
+ *
+ * For a suite testing the closure primitive over an arbitrary graph, whose
+ * precondition is that every blob is derived. A suite about what the HARNESS
+ * reaches builds with {@link claudeContextFixture}, which derives lazily as
+ * production does.
+ *
+ * @param builder - The builder under construction
+ * @param file - The fixture file
+ * @param root - The absolute corpus root
+ */
+export function addFileWithFacts(builder: ProjectionBuilder, file: FixtureFile, root: string): void {
+  addFile(builder, file, root);
+  if (file.markdown === undefined || file.deferred === true) return;
+  const harness = harnessRowsFor(contentKeyFor(file), CLAUDE_CODE.id, claudeMemoryFactsOf(file.markdown));
+  for (const row of harness.imports) builder.addHarnessBlobImport(row);
+  builder.addHarnessBlobFacts(harness.facts);
 }
 
 /**
@@ -365,10 +402,21 @@ function addDirectory(builder: ProjectionBuilder, dirPath: string, root: string)
   builder.addRealization(realizationRow(resourceId, dirPath, null, true));
 }
 
-/** The two tables `closureProvenance` reads — see {@link closureFixtureFrom}. */
+/**
+ * The harness pass's deriver for an in-memory fixture: the shipped reader, run
+ * in-process — a fixture has no pool, and its files are never pathological.
+ * Production derives through the run's dispatcher (`dispatcherHarnessFacts`).
+ */
+export const IN_PROCESS_HARNESS_FACTS: HarnessFactsDeriver = (_harness, input) => Promise.resolve(claudeMemoryFactsOf(input.content));
+
+/** The tables `closureProvenance` reads — see {@link closureFixtureFrom}. */
 export interface ClosureFixture {
   readonly resourceRealizations: ProjectionBase['resourceRealizations'];
+  readonly blobs: ProjectionBase['blobs'];
   readonly blobReferences: ProjectionBase['blobReferences'];
+  readonly blobConditions: ProjectionBase['blobConditions'];
+  readonly harnessBlobFacts: ProjectionBase['harnessBlobFacts'];
+  readonly harnessBlobImports: ProjectionBase['harnessBlobImports'];
 }
 
 /**
@@ -383,7 +431,7 @@ export interface ClosureFixture {
  * `inFence` — is whatever `parseMarkdownContent` and `blobReferencesFor` really
  * compute for the text.
  *
- * The root is a PARAMETER, not this module's {@link ABSENT_ROOT}:
+ * The root is a PARAMETER, not this module's {@link CLAUDE_CONTEXT_FIXTURE_ROOT}:
  * `closureProvenance` takes `input.root` directly rather than reading it off a
  * `ProjectionBase`, and a fixture that could only ever build against one
  * hardcoded root could not pin that the query is parametric in it.
@@ -398,15 +446,22 @@ export interface ClosureFixture {
  *
  * @param root - The absolute corpus root every path is realized relative to
  * @param files - Root-relative path → markdown source
- * @returns Just the two tables `closureProvenance` reads
+ * @returns Just the tables `closureProvenance` reads
  */
 export function closureFixtureFrom(root: string, files: Record<string, string>): ClosureFixture {
-  const builder = new ProjectionBuilder({ root });
+  const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache() });
   for (const [path, markdown] of Object.entries(files)) {
-    addFile(builder, { path, refs: [], markdown }, root);
+    addFileWithFacts(builder, { path, refs: [], markdown }, root);
   }
   const base = builder.base();
-  return { resourceRealizations: base.resourceRealizations, blobReferences: base.blobReferences };
+  return {
+    resourceRealizations: base.resourceRealizations,
+    blobs: base.blobs,
+    blobReferences: base.blobReferences,
+    blobConditions: base.blobConditions,
+    harnessBlobFacts: base.harnessBlobFacts,
+    harnessBlobImports: base.harnessBlobImports,
+  };
 }
 
 /** Merge one contributor's rows into the builder under construction. */
@@ -417,10 +472,57 @@ function applyContribution(builder: ProjectionBuilder, contribution: ExtentContr
   for (const row of contribution.memberships) builder.addExtentMembership(row);
   for (const row of contribution.tags) builder.addTag(row);
   for (const row of contribution.conditions) builder.addCondition(row);
+  // Kept in step with `mergeContribution` in `merge.ts`: this fixture bypasses
+  // the driver, so a table it forgets is a table the fixture's projection is
+  // silently missing while the real lane carries it.
+  for (const row of contribution.claudeRulePatterns) builder.addClaudeRulePattern(row);
 }
 
-/** A corpus root that is never touched on disk — see the module docstring. */
-const ABSENT_ROOT = '/vat-corpus/claude-context-query-fixture';
+/** Rounds {@link claudeContextFixture} allows its closure stratum before calling it unsettled. */
+const MAX_FIXTURE_ROUNDS = 10;
+
+/**
+ * One round of the closure stratum: the rules-scope classifier, then one
+ * import extent per detected `@`-import root.
+ *
+ * `zone_provenance` rows are added by hand, because `contribute()` alone never
+ * writes them — in the real driver (`merge.ts::runContributor`) that is the
+ * MERGE layer's job, which this fixture bypasses.
+ *
+ * @param builder - The builder under construction
+ * @param base - Its live base
+ * @returns Each contribution's digest, in contributor order — the fixpoint's
+ *   convergence oracle, as `merge.ts::runContributor` returns it
+ */
+async function contributeClosureStratum(builder: ProjectionBuilder, base: ProjectionBase): Promise<string[]> {
+  const rulesScope = await new ClaudeRulesScopeContributor().contribute(base, {});
+  applyContribution(builder, rulesScope);
+  const digests = [extentDigest(rulesScope)];
+  await forEachInOrder(claudeImportRootsFrom(base.resourceRealizations), async (rootRelativePath) => {
+    const declaration = claudeImportExtentDeclaration(rootRelativePath);
+    const contributor = new ClaudeImportExtentContributor(rootRelativePath);
+    const contribution = await contributor.contribute(base, declaration as unknown as JsonValue);
+    applyContribution(builder, contribution);
+    digests.push(extentDigest(contribution));
+    builder.addProvenance({
+      contextId: extentContextId(CLAUDE_IMPORT_KIND, builder.identities.rootId, rootRelativePath),
+      contributorId: claudeImportContributorId(rootRelativePath),
+      parameterSet: declaration as unknown as JsonValue,
+      extentDigest: 'fixture',
+    });
+  });
+  return digests;
+}
+
+/**
+ * A corpus root that is never touched on disk — see the module docstring.
+ *
+ * Exported so a suite that needs the ABSOLUTE path of a row (a rendered
+ * header, for instance) can build one with
+ * `safePath.join(CLAUDE_CONTEXT_FIXTURE_ROOT, row.path)` rather than
+ * hardcoding a second copy of this string.
+ */
+export const CLAUDE_CONTEXT_FIXTURE_ROOT = '/vat-corpus/claude-context-query-fixture';
 
 /** {@link claudeContextFixture}'s options. */
 export interface ClaudeContextFixtureOptions {
@@ -455,8 +557,8 @@ export async function claudeContextFixture(
   files: Record<string, string>,
   options: ClaudeContextFixtureOptions = {},
 ): Promise<Projection> {
-  const root = ABSENT_ROOT;
-  const builder = new ProjectionBuilder({ root });
+  const root = CLAUDE_CONTEXT_FIXTURE_ROOT;
+  const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache() });
   builder.addRoot({ id: builder.identities.rootId, path: root });
 
   const deferred = new Set(options.deferred ?? []);
@@ -471,23 +573,34 @@ export async function claudeContextFixture(
   // row a contributor below adds becomes visible to the NEXT contributor
   // through this same reference — see `ProjectionBuilder.base()`.
   const base: ProjectionBase = builder.base();
+  const readContent: HarnessContentReader = (entry) => {
+    const content = files[entry.path];
+    return Promise.resolve(content === undefined ? null : inMemoryContent(content));
+  };
 
   applyContribution(builder, await new AgenticConventionContributor().contribute(base, {}));
-  // Reads `base.blobs`, so it must run after every blob row above is in.
-  applyContribution(builder, await new ClaudeRulesScopeContributor().contribute(base, {}));
 
-  for (const rootRelativePath of claudeImportRootsFrom(base.resourceRealizations)) {
-    const declaration = claudeImportExtentDeclaration(rootRelativePath);
-    const contributor = new ClaudeImportExtentContributor(rootRelativePath);
-    const contribution = await contributor.contribute(base, declaration as unknown as JsonValue);
-    applyContribution(builder, contribution);
-    builder.addProvenance({
-      contextId: extentContextId(CLAUDE_IMPORT_KIND, builder.identities.rootId, rootRelativePath),
-      contributorId: claudeImportContributorId(rootRelativePath),
-      parameterSet: declaration as unknown as JsonValue,
-      extentDigest: 'fixture',
-    });
-  }
+  // `merge.ts::populate`'s order, in miniature: the harness pass before the
+  // closure contributors, then contributors and pass alternately until NEITHER
+  // moves — `iterateClosure`'s rule. The closure contributors read facts in
+  // `frontier` mode, so a member whose facts arrive in one round is followed
+  // in the next; and a contributor still changing its answer is unsettled
+  // whatever the pass did.
+  await runHarnessPass(builder, [CLAUDE_CODE], readContent, IN_PROCESS_HARNESS_FACTS);
+  const settle = async (round: number, digests: readonly string[]): Promise<void> => {
+    if (round > MAX_FIXTURE_ROUNDS) {
+      throw new Error(`claudeContextFixture: the closure stratum was still moving after ${MAX_FIXTURE_ROUNDS} rounds.`);
+    }
+    const next = await contributeClosureStratum(builder, base);
+    const { derived } = await runHarnessPass(builder, [CLAUDE_CODE], readContent, IN_PROCESS_HARNESS_FACTS);
+    const contributorsMoved = next.join('\0') !== digests.join('\0');
+    if (derived === 0 && !contributorsMoved) return;
+    return settle(round + 1, next);
+  };
+  await settle(1, []);
+  // The producer's own post-populate guard: every blob the harness reaches has
+  // its facts. Nothing the fixture's reader is handed can be unreadable.
+  assertHarnessSettled(builder.base(), [CLAUDE_CODE], new Set());
 
   return builder.build();
 }

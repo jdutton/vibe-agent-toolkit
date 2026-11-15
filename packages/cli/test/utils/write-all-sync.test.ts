@@ -1,7 +1,7 @@
 /**
  * Unit tests for `writeAllSync` — the drain loop behind every piped byte this
- * CLI emits (`writeYamlOutput` for command summaries, `writeHelpSync` for
- * `--help --verbose`).
+ * CLI writes synchronously (`writeStdoutSync`: `writeHelpSync` for
+ * `--help --verbose`, and a forwarded child document).
  *
  * The loop exists for two conditions that are painful to provoke on a real fd
  * and trivial to state against an injected writer:

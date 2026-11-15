@@ -3,14 +3,16 @@
  * to invent the parts the ARD specification does not define.
  */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { exitCodeForReport, type ExitDeterminingDocument } from '@vibe-agent-toolkit/schema';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 
+import { ARD_EMIT_REPORT_SCHEMA } from '../src/commands/ard/emit-schema.js';
 import {
-  ARD_EMIT_REPORT_SCHEMA,
   ArdConfigMissingError,
   ardEmitCommand,
   buildArdEmitReport,
@@ -19,6 +21,7 @@ import {
 } from '../src/commands/ard/emit.js';
 import { createArdCommand } from '../src/commands/ard/index.js';
 import { collectArdSurfaces } from '../src/commands/ard/surfaces.js';
+import { refusalCodeOf } from '../src/utils/command-refusal.js';
 
 import {
   CONFIG_YAML_ARD_DOT_NAMESPACE,
@@ -186,7 +189,7 @@ describe('runArdEmit', () => {
     const root = projectWithSkill(workDir, 'schema-accepts', CONFIG_YAML_WITH_ARD);
     const { result } = await emitAndRead(root);
 
-    expect(ARD_EMIT_REPORT_SCHEMA.safeParse(buildArdEmitReport(result)).success).toBe(true);
+    expect(ARD_EMIT_REPORT_SCHEMA.safeParse(buildArdEmitReport(result, { strict: false })).success).toBe(true);
   });
 
   it('refuses when the project declares no `ard` block at all', async () => {
@@ -217,7 +220,8 @@ describe('runArdEmit — a config key VAT removed does not take the command down
     const root = projectWithSkill(workDir, 'removed-key', CONFIG_YAML_WITH_ARD_AND_REMOVED_KEY);
     const { stderr, exitCalls } = await captureEmit(root);
 
-    expect(exitCalls).toEqual([]);
+    // Every ending exits through the code its report derives — 0 here.
+    expect(exitCalls).toEqual([[0]]);
     expect(existsSync(safePath.join(root, 'out', 'ard.json'))).toBe(true);
     expect(stderr).toContain(`unrecognized key "${REMOVED_RESOURCES_KEY}"`);
     expect(stderr).toContain('Ignoring the unknown key(s) and continuing');
@@ -329,6 +333,19 @@ describe('runArdEmit — which of the three absences it is', () => {
     ).rejects.toThrow(/does not exist/i);
   });
 
+  it.skipIf(CANNOT_DENY_READS)('refuses a root the OS will not stat as INPUT_UNREADABLE, never as absent', async () => {
+    const parent = safePath.join(workDir, 'untraversable-root');
+    mkdirSyncReal(safePath.join(parent, 'project'), { recursive: true });
+    chmodSync(parent, 0o000);
+    try {
+      const failure = await runArdEmit({ projectRoot: safePath.join(parent, 'project'), output: safePath.join(workDir, 'y.json') })
+        .then(() => undefined, (error: unknown) => error);
+      expect(refusalCodeOf(failure)).toBe('INPUT_UNREADABLE');
+    } finally {
+      chmodSync(parent, 0o755);
+    }
+  });
+
   it('says the config FILE is missing when the root exists but carries none', async () => {
     const root = projectWith(workDir, 'no-file', CONFIG_YAML_WITHOUT_ARD);
     removeConfigFile(root);
@@ -344,6 +361,21 @@ describe('runArdEmit — which of the three absences it is', () => {
     await expect(
       runArdEmit({ projectRoot: root, output: safePath.join(root, 'ard.json') })
     ).rejects.toThrow(/`ard:`/);
+  });
+});
+
+describe('ardEmitCommand — an --output the OS will not write', () => {
+  it('publishes RUN_INCOMPLETE at exit 2, never INTERNAL_ERROR', async () => {
+    const root = projectWithSkill(workDir, 'unwritable-output', CONFIG_YAML_WITH_ARD);
+    // A FILE where the output's parent directory must be: the mkdir fails on every platform.
+    writeFileSync(safePath.join(root, 'out'), 'not a directory\n');
+
+    const { stdout, exitCalls } = await captureEmit(root, { format: 'json' });
+
+    expect(exitCalls).toEqual([[2]]);
+    const document = JSON.parse(stdout) as { status: string; error?: { code: string } };
+    expect(document.status).toBe('error');
+    expect(document.error?.code).toBe('RUN_INCOMPLETE');
   });
 });
 
@@ -402,7 +434,7 @@ describe('ardEmitCommand exit codes agree with the help text', () => {
     expect(exitOneLine).toMatch(/derived/);
   });
 
-  it('publishes exit 2 as a system error, not an internal failure', () => {
+  it('publishes exit 2 as a refusal naming its code, not an internal failure', () => {
     const emit = createArdCommand().commands.find((c) => c.name() === 'emit');
     // `helpInformation()` renders only the generated body — the Exit Codes
     // block lives in an `addHelpText('after')` hook, which only `outputHelp()`
@@ -411,7 +443,9 @@ describe('ardEmitCommand exit codes agree with the help text', () => {
     emit?.configureOutput({ writeOut: (chunk) => { help += chunk; } });
     emit?.outputHelp();
 
-    expect(help).toMatch(/2 - System error/);
+    expect(help).toMatch(/2 - The command could not do its job/);
+    expect(help).toMatch(/USAGE_INVALID/);
+    expect(help).toMatch(/CONFIG_INVALID/);
     expect(help).not.toMatch(/Unexpected internal failure/);
   });
 });
@@ -477,7 +511,16 @@ describe('runArdEmit — a bare override block that loses is NAMED, not dropped'
 
     expect(stderr).toContain(`ard.entries.${PUBLISHED_SKILL}`);
     expect(stderr).toContain(`ard.entries."skill:${PUBLISHED_SKILL}"`);
-    expect(exitCalls).toEqual([]);
+    expect(exitCalls).toEqual([[0]]);
+  });
+
+  it('says so on stderr under --format json too, as the report carries it', async () => {
+    const root = projectWithSkill(workDir, 'shadowed-stderr-json', CONFIG_YAML_ARD_SHADOWED_KEYS);
+    const { stdout, stderr } = await captureEmit(root, { format: 'json' });
+
+    const findings = (JSON.parse(stdout) as { findings: Array<{ code: string }> }).findings;
+    expect(findings.length).toBeGreaterThan(0);
+    for (const { code } of findings) expect(stderr).toContain(`[${code}]`);
   });
 });
 
@@ -523,7 +566,6 @@ describe('createArdCommand', () => {
 describe('ardEmitCommand — a zero-entry run is machine-readable and documented', () => {
   /** A config naming one skill that is on disk and one that is not. */
   const CONFIG_YAML_ARD_ONE_GHOST = [
-    'version: 1',
     'skills:',
     '  include: ["skills/**/SKILL.md"]',
     '  config:',
@@ -544,7 +586,6 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
    * skip branch and proves nothing about the empty one.
    */
   const CONFIG_YAML_ARD_NO_SURFACES = [
-    'version: 1',
     'ard:',
     `  publisher: ${FIXTURE_PUBLISHER}`,
     '  baseUrl: https://example.com/catalog',
@@ -590,14 +631,20 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
     expect(fullReport['status']).toBe('ok');
   });
 
-  it('keeps the default exit code at 0 over an empty manifest', async () => {
+  it('refuses an empty manifest — nothing examined is exit 1, not a clean pass', async () => {
     const root = projectWith(workDir, 'default-exit-empty', CONFIG_YAML_ARD_NO_SURFACES);
 
     const { exitCalls, stdout } = await captureEmit(root, { format: 'json' });
 
-    // Nothing declared, nothing skipped: the denominator is what says so.
-    expect(reportFrom(stdout)).toMatchObject({ status: 'ok', examined: 0, data: { entryCount: 0, skippedCount: 0 } });
-    expect(exitCalls).toEqual([]);
+    // Nothing declared, nothing skipped: the denominator says so, and the writer
+    // refuses a run that examined nothing, as it does for every report verb.
+    expect(reportFrom(stdout)).toMatchObject({
+      status: 'findings',
+      examined: 0,
+      findings: [expect.objectContaining({ code: 'RESOURCE_CHECK_BROKEN', severity: 'error' })],
+      data: { entryCount: 0, skippedCount: 0 },
+    });
+    expect(exitCalls).toEqual([[1]]);
   });
 
   it('exits 1 under --strict when the manifest advertises nothing, skips or not', async () => {
@@ -607,6 +654,8 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
 
     expect(exitCalls).toEqual([[1]]);
     expect(stderr).toMatch(/--strict: the manifest advertises nothing/);
+    // As the one finding line every finding prints as.
+    expect(stderr).toMatch(/^ *error: --strict: the manifest advertises nothing.* \[[A-Z_]+\]$/mu);
   });
 
   // The other half of the same gate, and a DIFFERENT run shape: entries were
@@ -626,7 +675,7 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
   it('exits 0 under --strict when every configured surface was emitted', async () => {
     const root = projectWithSkill(workDir, 'strict-clean', CONFIG_YAML_WITH_ARD);
 
-    expect((await captureEmit(root, { strict: true })).exitCalls).toEqual([]);
+    expect((await captureEmit(root, { strict: true })).exitCalls).toEqual([[0]]);
   });
 
   // 🪤 Every case above calls the handler directly, which cannot see whether
@@ -661,7 +710,12 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
     // Commander's own "unknown option" path exits 1 too — renaming the option
     // in the parser left this case green until it asserted on the message only
     // the gate writes.
-    expect(stderr).toMatch(/--strict: 1 configured surface was not advertised/);
+    // The refusal is a FINDING in the published report now — the document and
+    // the exit code say the same thing — rather than a stderr line beside a
+    // report that still read `ok`.
+    const strictFinding = (reportFrom(stdout)['findings'] as Array<{ code: string; message: string }>)
+      .find((finding) => finding.code === 'ARD_STRICT_REFUSED');
+    expect(strictFinding?.message).toMatch(/--strict: 1 configured surface was not advertised/);
     expect(stderr).not.toMatch(/unknown option/i);
     expect(exitCalls).toEqual([[1]]);
   });
@@ -672,16 +726,20 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
   it('publishes the zero-entry case and its gate in the exit-code contract', () => {
     const help = emitHelpText();
 
-    // The whole exit-0 BLOCK, not its first line: the contract wraps, and an
-    // assertion scoped to one line would pass or fail on where the text breaks
-    // rather than on what it says.
+    // Whole BLOCKS, not first lines: the contract wraps, and an assertion
+    // scoped to one line would pass or fail on where the text breaks rather
+    // than on what it says.
     const lines = help.split('\n');
     const zeroAt = lines.findIndex((line) => line.includes('0 - '));
     const oneAt = lines.findIndex((line) => line.includes('1 - '));
+    const twoAt = lines.findIndex((line) => line.includes('2 - '));
     const exitZeroBlock = lines.slice(zeroAt, oneAt).join(' ');
+    const exitOneBlock = lines.slice(oneAt, twoAt).join(' ');
 
     expect(exitZeroBlock).toMatch(/skip/i);
-    expect(exitZeroBlock).toMatch(/advertises nothing/i);
+    // A block reaching no surface examined nothing: refused at 1, never a clean 0.
+    expect(exitOneBlock).toMatch(/reaches no surface/i);
+    expect(exitOneBlock).toMatch(/RESOURCE_CHECK_BROKEN/);
     expect(help).toMatch(/--strict/);
     expect(help).toMatch(/--format/);
   });
@@ -690,8 +748,8 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
 /**
  * A `--format json` run is a promise about a CHANNEL, not about the happy path.
  *
- * `handleCommandError` states the rule this suite enforces — "format is not
- * decoration ... a caller that has a --format option MUST pass it" — because a
+ * The rule this suite enforces — a caller that has a `--format` option MUST
+ * publish its failure in that format — exists because a
  * CI wrapper reading stdout gets a parse error on top of whatever went wrong,
  * and has to guess at the second failure to find the first. `ard emit` honoured
  * it on the success path alone, and dropped it on every EXPECTED failure it
@@ -703,8 +761,8 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
  * prompted it, which would pin the instance.
  *
  * ⚠️ The third case was written as a CONTROL — an arm expected to pass already,
- * because it exits 2 and exit 2 was believed to route through
- * `handleCommandError`, which honours the format. It failed with the other two.
+ * because it exits 2 and exit 2 was believed to route through the
+ * last-resort failure handler, which honoured the format. It failed with the other two.
  * Both `ArdConfigMissingError` codes leave through one inline `return`, so the
  * "unexpected failure" handler was never on this path at all and the defect was
  * a third wider than the reasoning that found it. The arm stays, now as a case
@@ -718,16 +776,20 @@ describe('ardEmitCommand — every exit path honours --format json', () => {
       path: 'the project declares no `ard` block',
       root: (): string => projectWith(workDir, 'json-no-ard-block', CONFIG_YAML_WITHOUT_ARD),
       exitCode: 1,
+      // A finding about the PROJECT — it used to be the envelope's ERROR branch
+      // at exit 1, a document and a code that disagreed.
+      status: 'findings',
     },
     {
       path: 'a surface cannot be derived into a conformant entry',
       root: (): string =>
         projectWithSkill(workDir, 'json-derivation-fails', CONFIG_YAML_ARD_WITHOUT_BASE_URL),
       exitCode: 1,
+      status: 'findings',
     },
     {
-      // The control: this path already routes through `handleCommandError`,
-      // which takes the format and honours it.
+      // Once the control: this path was believed to reach the format-honouring
+      // failure handler. It now ends through the writer's refusal.
       path: 'no config file is found at all',
       root: (): string => {
         const root = projectWith(workDir, 'json-no-config', CONFIG_YAML_WITHOUT_ARD);
@@ -735,10 +797,11 @@ describe('ardEmitCommand — every exit path honours --format json', () => {
         return root;
       },
       exitCode: 2,
+      status: 'error',
     },
   ] as const;
 
-  it.each(exitPaths)('publishes a JSON document when $path', async ({ root, exitCode }) => {
+  it.each(exitPaths)('publishes a JSON document when $path', async ({ root, exitCode, status }) => {
     const { stdout, exitCalls } = await captureEmit(root(), { format: 'json' });
 
     expect(exitCalls).toEqual([[exitCode]]);
@@ -746,6 +809,9 @@ describe('ardEmitCommand — every exit path honours --format json', () => {
     // Parseable, not merely non-empty: the failure this closes is a consumer's
     // `jq` choking, which an unparseable byte would reproduce exactly.
     expect(() => JSON.parse(stdout) as unknown).not.toThrow();
-    expect(JSON.parse(stdout)).toMatchObject({ status: 'error' });
+    const report = JSON.parse(stdout) as ExitDeterminingDocument;
+    expect(report).toMatchObject({ status });
+    // The code is the one the published document derives, on every path.
+    expect(exitCodeForReport(report)).toBe(exitCode);
   });
 });

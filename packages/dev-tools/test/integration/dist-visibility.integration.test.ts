@@ -21,9 +21,10 @@ import * as fs from 'node:fs';
 import { delimiter } from 'node:path';
 
 import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { spawnHardened } from '@vibe-agent-toolkit/utils/process';
-import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { atLeastTierTimeout, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
+import { afterAll, beforeAll, beforeEach, describe, expect, inject, it } from 'vitest';
 
 
 const TSC_CLEAN_BUILD = safePath.resolve(import.meta.dirname, '../../src/tsc-clean-build.ts');
@@ -40,7 +41,7 @@ interface Fixture {
 
 function writeFixture(root: string): Fixture {
   const srcDir = safePath.join(root, 'src');
-  fs.mkdirSync(srcDir, { recursive: true });
+  mkdirSyncReal(srcDir, { recursive: true });
 
   fs.writeFileSync(
     safePath.join(root, 'tsconfig.json'),
@@ -199,7 +200,7 @@ describe('dist visibility during a rebuild', () => {
     const violations = await sampleDuringRebuild(fixture);
 
     expect(violations).toEqual([]);
-  }, 120_000);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 120_000));
 
   it('never exposes a missing or partial barrel while a changed package is rebuilt', async () => {
     await buildOnce(fixture.root);
@@ -211,5 +212,5 @@ describe('dist visibility during a rebuild', () => {
     const violations = await sampleDuringRebuild(fixture);
 
     expect(violations).toEqual([]);
-  }, 120_000);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 120_000));
 });

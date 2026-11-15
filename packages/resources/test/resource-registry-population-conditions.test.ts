@@ -34,11 +34,13 @@ const DOC = 'docs/guide.md';
 const LOCKED = 'build/locked';
 const MIME_CONFLICT = 'COLLECTION_MIME_CONFLICT';
 const UNLISTABLE = 'EXTENT_DIRECTORY_UNLISTABLE';
+const SYMLINK_NOT_REALIZED = 'EXTENT_SYMLINK_NOT_REALIZED';
+/** The other declined-link code — the same decline, target outside the root. */
+const SYMLINK_OUTSIDE_ROOT = 'EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT';
 
 /** Two collections over `docs/**`, agreeing or not on the file's type. */
 function configTyping(second: string | undefined): ProjectConfig {
   return {
-    version: 1,
     resources: {
       collections: {
         prose: { include: ['docs/**'], mimeType: 'text/markdown' },
@@ -51,7 +53,7 @@ function configTyping(second: string | undefined): ProjectConfig {
 /** Crawl `root` under `config` on the walk lane (no population source) and validate. */
 async function validateWalk(root: string, config: ProjectConfig): Promise<ValidationIssue[]> {
   const registry = new ResourceRegistry({ baseDir: root, config });
-  await registry.crawl({ unreadable: 'refuse', baseDir: root, include: ['**/*.md'] });
+  await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: root, include: ['**/*.md'] });
   return (await registry.validate({ skipGitIgnoreCheck: true })).issues;
 }
 
@@ -59,7 +61,11 @@ async function validateWalk(root: string, config: ProjectConfig): Promise<Valida
 function sourceWith(root: string, conditions: readonly RealizationConditionRow[]): ResourcePopulationSource {
   return {
     root,
-    enumerate: async () => ({ paths: [safePath.join(root, DOC)], conditions }),
+    enumerate: async () => ({
+      paths: [safePath.join(root, DOC)],
+      conditions,
+      outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem',
+    }),
   };
 }
 
@@ -118,7 +124,7 @@ describe('ResourceRegistry surfaces population-time conditions', () => {
     /** Crawl `root` over a source carrying `rows`; the registry is returned before validation. */
     const crawledWith = async (rows: Parameters<typeof sourceWith>[1]): Promise<ResourceRegistry> => {
       const registry = new ResourceRegistry({ baseDir: root });
-      await registry.crawl({ unreadable: 'refuse', baseDir: root, include: ['**/*.md'], populationSource: sourceWith(root, rows) });
+      await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: root, include: ['**/*.md'], populationSource: sourceWith(root, rows) });
       return registry;
     };
     const unlistableIssues = async (registry: ResourceRegistry) => {
@@ -149,6 +155,46 @@ describe('ResourceRegistry surfaces population-time conditions', () => {
 
     it('surfaces nothing when the source carries no conditions (control)', async () => {
       expect(await unlistableIssues(await crawledWith([]))).toEqual([]);
+    });
+
+    it('surfaces a declined link unless the crawl excludes its path — under EITHER code', async () => {
+      const linkRow = (path: string, code = SYMLINK_NOT_REALIZED): RealizationConditionRow => ({
+        ...unlistableRow(path, 'info'),
+        code,
+        message: `'${path}' is a symbolic link`,
+      });
+      const registry = new ResourceRegistry({ baseDir: root });
+      await registry.crawl({
+        unreadable: 'refuse',
+        outputs: [],
+        baseDir: root,
+        include: ['**/*.md'],
+        exclude: ['vendor/**'],
+        populationSource: sourceWith(root, [
+          linkRow('docs/CLAUDE.md'),
+          linkRow('vendor/CLAUDE.md'),
+          linkRow('docs/linkdir'),
+          // ⭐ The out-of-root arm, on both sides of the exclude. Whether a link
+          // is this crawl's business is decided by the link's OWN path, so the
+          // second code must be treated identically — a filter written on one
+          // code would keep the excluded one and report `vendor/`.
+          linkRow('docs/shared', SYMLINK_OUTSIDE_ROOT),
+          linkRow('vendor/shared', SYMLINK_OUTSIDE_ROOT),
+          unlistableRow('vendor/locked'),
+        ]),
+      });
+      const { issues } = await registry.validate({ skipGitIgnoreCheck: true });
+
+      // Only the EXCLUDED links are dropped. The directory link stays although no
+      // `**/*.md` include matches its own name: it may hold members, as the
+      // vendor's `.claude/rules/shared -> ~/shared-rules` does. Every other
+      // condition is kept whole.
+      expect(issues.filter((issue) => issue.code === SYMLINK_NOT_REALIZED).map((issue) => issue.location))
+        .toEqual(['docs/CLAUDE.md', 'docs/linkdir']);
+      expect(issues.filter((issue) => issue.code === SYMLINK_OUTSIDE_ROOT).map((issue) => issue.location))
+        .toEqual(['docs/shared']);
+      expect(issues.filter((issue) => issue.code === UNLISTABLE).map((issue) => issue.location))
+        .toEqual(['vendor/locked']);
     });
 
     it('clears them with the rest of the registry', async () => {

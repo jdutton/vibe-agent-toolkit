@@ -19,12 +19,11 @@
  * are identical before and after either fix, so an output assertion passes on the
  * quadratic and proves nothing.
  *
- * OBSERVABILITY. The count is read from a `node:fs` MODULE mock (passthrough +
- * collector), the only seam that sees this call: `test-input.ts` imports
- * `existsSync` as an ESM named binding, which a counter installed on the `fs`
- * default export or on the CJS module object does not intercept (measured: 0 of
- * the calls), and which a `--require` preload sees only partially. `vi.spyOn` on a
- * module namespace throws outright.
+ * OBSERVABILITY. The count is read from a `@vibe-agent-toolkit/utils` MODULE mock
+ * (passthrough + collector) of `pathPresent`, the presence probe `test-input.ts`
+ * asks: it imports it as an ESM named binding, which a counter installed on the
+ * module object does not intercept, and `vi.spyOn` on a module namespace throws
+ * outright.
  *
  * FIXTURE. DISTINCT skill directories, none of which carries a suite. The
  * distinctness is load-bearing: the probe memoizes by path, so a fixture whose
@@ -33,10 +32,12 @@
  * on VAT's own repo, where the whole project is 2 distinct skill roots: 2² = 4.
  */
 
-import type * as NodeFs from 'node:fs';
 import * as fs from 'node:fs';
 
+
+import type * as Utils from '@vibe-agent-toolkit/utils';
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_EVALS_SUBPATH } from '../../src/skill-test/eval-suite-isolation.js';
@@ -46,14 +47,13 @@ import { createSkillContent, setupTempDir } from '../test-helpers.js';
 
 const { suiteProbes } = vi.hoisted(() => ({ suiteProbes: [] as string[] }));
 
-vi.mock('node:fs', async (importOriginal) => {
-  const real = await importOriginal<typeof NodeFs>();
-  const collect = (target: Parameters<NodeFs['existsSync']>[0]): boolean => {
-    const probed = String(target);
-    if (probed.replaceAll('\\', '/').endsWith(DEFAULT_EVALS_SUBPATH)) suiteProbes.push(probed);
-    return real.existsSync(target);
+vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
+  const real = await importOriginal<typeof Utils>();
+  const collect: typeof real.pathPresent = (target, mode, side, absence) => {
+    if (real.toForwardSlash(target).endsWith(DEFAULT_EVALS_SUBPATH)) suiteProbes.push(target);
+    return real.pathPresent(target, mode, side, absence);
   };
-  return { ...real, default: real, existsSync: collect };
+  return { ...real, pathPresent: collect };
 });
 
 const { getTempDir } = setupTempDir('test-input-probe-once-');
@@ -85,7 +85,7 @@ describe('validateSkillForPackaging - declared test-input resolution', () => {
       config: {},
     }));
 
-    await validateSkillForPackaging(skillPath, {}, 'source', { unreadable: 'refuse', projectSkills });
+    await validateSkillForPackaging(skillPath, {}, {}, 'source', { dispatcher: undefined, unreadable: 'refuse', outputs: [], projectSkills });
 
     const expected = [tempDir, ...SIBLING_DIRS.map((n) => safePath.join(tempDir, n))].map(suitePathFor);
     // Every skill root IS reached — without this the count assertion below passes vacuously.
@@ -129,7 +129,7 @@ describe('a run-scoped conventional-suite probe', () => {
     const names = ['batched-a', 'batched-b'];
     const skillDirs = names.map((name) => safePath.join(tempDir, name));
     for (const [index, skillDir] of skillDirs.entries()) {
-      fs.mkdirSync(skillDir, { recursive: true });
+      mkdirSyncReal(skillDir, { recursive: true });
       fs.writeFileSync(
         safePath.join(skillDir, 'SKILL.md'),
         createSkillContent({
@@ -142,8 +142,10 @@ describe('a run-scoped conventional-suite probe', () => {
     const suiteProbe = conventionalSuiteProbe();
 
     for (const skillDir of skillDirs) {
-      await validateSkillForPackaging(safePath.join(skillDir, 'SKILL.md'), {}, 'source', {
+      await validateSkillForPackaging(safePath.join(skillDir, 'SKILL.md'), {}, {}, 'source', {
+        dispatcher: undefined,
         unreadable: 'refuse',
+        outputs: [],
         projectSkills,
         suiteProbe,
       });

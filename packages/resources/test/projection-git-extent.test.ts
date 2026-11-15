@@ -25,10 +25,11 @@ import {
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory, NEVER_CRAWL_GLOBS } from '@vibe-agent-toolkit/utils/crawl';
-import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { GIT_NO_ANSWER_CODE, GIT_NOT_FOUND_CODE, GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { refuseUnreadableFixture } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { RunContentCache } from '../src/projection/content-cache.js';
 import type { ExtentContribution } from '../src/projection/contributor.js';
 import { extentContextId } from '../src/projection/contributors/context-id.js';
 import {
@@ -188,6 +189,7 @@ describe('git and filesystem extents disagree — the proving rung', () => {
     // Deliberately a LOCAL filesystem enumeration rather than the filesystem
     // contributor: the same claim, provable without coupling two modules.
     const walked = await crawlDirectory({
+      outputs: [],
       baseDir: root,
       unreadable: refuseUnreadableFixture(root),
       respectGitignore: false,
@@ -228,7 +230,7 @@ describe('GitExtentContributor without a git oracle on the base', () => {
     // spawned its own `git ls-files` would pay a second subprocess and could
     // answer index-casing questions differently from the ResourceIdentityMap
     // that minted the ids in its own rows.
-    const builder = new ProjectionBuilder({ root });
+    const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache() });
 
     await expect(new GitExtentContributor().contribute(builder.base(), null))
       .rejects.toThrow(/no git oracle/iu);
@@ -242,11 +244,26 @@ describe('GitExtentContributor outside a repository', () => {
     // be a confident wrong answer.
     const bare = toForwardSlash(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-git-extent-nogit-')));
     try {
-      const builder = new ProjectionBuilder({ root: bare, gitTracker: new GitTracker(bare) });
+      const builder = new ProjectionBuilder({ root: bare, gitTracker: new GitTracker(bare), contentCache: new RunContentCache() });
 
       await expect(new GitExtentContributor().contribute(builder.base(), null))
-        .rejects.toThrow(/not a git repository|did not answer/iu);
+        .rejects.toMatchObject({ code: GIT_NO_ANSWER_CODE, message: expect.stringMatching(/not a git repository/u) });
     } finally {
+      rmSync(bare, { recursive: true, force: true });
+    }
+  });
+
+  it('names a git missing from PATH rather than blaming the repository', async () => {
+    const bare = toForwardSlash(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-git-extent-nobinary-')));
+    const savedPath = process.env['PATH'];
+    try {
+      process.env['PATH'] = '';
+      const builder = new ProjectionBuilder({ root: bare, gitTracker: new GitTracker(bare), contentCache: new RunContentCache() });
+
+      await expect(new GitExtentContributor().contribute(builder.base(), null))
+        .rejects.toMatchObject({ code: GIT_NOT_FOUND_CODE, message: expect.stringMatching(/git was not found on PATH/u) });
+    } finally {
+      process.env['PATH'] = savedPath;
       rmSync(bare, { recursive: true, force: true });
     }
   });

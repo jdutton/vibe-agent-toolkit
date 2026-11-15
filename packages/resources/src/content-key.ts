@@ -68,18 +68,11 @@
  *
  * The rule this module enforces instead: **hash on read, in-process, over the
  * bytes handed to the parser.** {@link readContentWithKey} exists so a caller
- * cannot key one read and parse another. A git SHA may still be used as a
- * *lookup hint* whose miss is free — it must never be the key.
- *
- * A hint's **hit** is only free if the hint is one-to-one against working-tree
- * bytes, and a blob OID is not: it names the *cleaned* content, so one OID can
- * name two different working-tree byte strings in one repository at one instant.
- * What a hit then costs is mostly a key that does not describe this path's
- * bytes — a later fresh read of the path misses — and, only where `filter.*` or
- * `working-tree-encoding` config diverges between the sharing paths, the text
- * served as well. `RunContentCache.#byHint` in `projection/content-cache.ts`
- * holds the measurements, separates those two costs, and names the lane exposed
- * to it.
+ * cannot key one read and parse another. A git blob OID may not stand in for
+ * that read either: it names the *cleaned* content, so one OID can name two
+ * different working-tree byte strings in one repository at one instant (a
+ * per-path clean/smudge filter, `working-tree-encoding` or `eol`), and serving
+ * one path the other's read files it under the wrong key with the wrong text.
  *
  * ## Why the preimage is RAW BYTES and not the decoded string
  *
@@ -126,11 +119,13 @@
  */
 
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 
+import { countWork } from '@vibe-agent-toolkit/utils';
+import { readDecodableBytes } from '@vibe-agent-toolkit/utils/fs';
 import { decodeTextContent, type TextProvenance } from '@vibe-agent-toolkit/utils/text';
 
 import { type DocumentParserKind, mimeTypeForPath, parserKindForMimeType } from './mime-type.js';
+import { inputBytesBreach } from './parse-limits.js';
 
 /**
  * The kind that means "no document parser runs on this".
@@ -251,6 +246,8 @@ export function parserKindForPath(filePath: string): ParserKind {
  * ```
  */
 export function computeContentKey(bytes: Uint8Array, parserKind: ParserKind): string {
+  countWork('content.hashed', 1);
+  countWork('content.hashedBytes', bytes.byteLength);
   const digest = createHash('sha256')
     .update(`${KEY_DOMAIN}\0${parserKind}\0`, 'utf-8')
     .update(bytes)
@@ -311,11 +308,30 @@ export interface KeyedContent<K extends ParserKind = ParserKind> {
 }
 
 /**
+ * Content and the size of the bytes it came from — what a lane holds content to the parse input
+ * cap by. A read's {@link KeyedContent} is one, measured in its raw bytes; content that was never
+ * read is one through {@link inMemoryContent}. Required wherever content is held to the cap, so a
+ * lane holding a read cannot re-measure its text in another unit.
+ */
+export type MeasuredContent = Pick<KeyedContent, 'content' | 'byteLength'>;
+
+/**
+ * Content that was never read from bytes (a string built or handed over in memory), measured as
+ * its UTF-8 bytes, the unit a key over it is computed in.
+ *
+ * @param content - The text
+ * @returns The text, measured
+ */
+export function inMemoryContent(content: string): MeasuredContent {
+  return { content, byteLength: Buffer.byteLength(content, 'utf8') };
+}
+
+/**
  * Content that routes to a real document parser — i.e. not `none`.
  *
- * The type `parseKeyed` takes, so "hand these bytes to a parser" is unreachable
+ * The type a parse dispatcher takes, so "hand these bytes to a parser" is unreachable
  * for a blob that has no parser. Expressing it in the type rather than as a
- * runtime branch inside `parseKeyed` is the whole point: the alternative is a
+ * runtime branch inside the dispatcher is the whole point: the alternative is a
  * throw, or an empty `ParseResult` invented on the caller's behalf, at a place
  * that has no idea what the caller wanted. A producer that silently emits
  * nothing is a bug nursery; a compile error at the call site is not.
@@ -346,34 +362,61 @@ export function isParsableContent(keyed: KeyedContent): keyed is ParsableContent
  * ## Why `parserKind` is a REQUIRED argument and not defaulted to the extension
  *
  * The key must name the parser that will actually run, not the one the
- * extension implies, and those genuinely differ in shipped code:
- * `rag-lancedb/src/lancedb-rag-provider.ts` hands every resource — including the
- * `.html` ones the registry crawls — to the **markdown** parser. Defaulting to
- * {@link parserKindForPath} would file that document's markdown facts under
- * `k2.html.<digest>`, the same key the registry's genuine HTML parse uses, and
- * one lane would then be served the other's facts. That is a well-formed entry
- * with the wrong contents — the failure class fail-soft explicitly does not
- * cover (see parse-cache.ts).
+ * extension implies, and those can differ: a collection's declared `mimeType`
+ * routes a file to a parser its extension does not name. Defaulting to
+ * {@link parserKindForPath} would file one parser's facts under the key the
+ * other parser's facts use, and one caller would then be served the other's
+ * facts. That is a well-formed entry with the wrong contents — the failure
+ * class fail-soft explicitly does not cover (see parse-cache.ts).
  *
  * Making it required rather than defaulted is deliberate: a default here is
  * silent at every call site that gets it wrong, and correct at none that a
  * reviewer can see.
  *
+ * ## Why `inputBytes` is REQUIRED too
+ *
+ * Every read made for a parse holds the file to the run's parse input cap here, by its `fstat`
+ * size, before a byte is read (a lane parsing for a route reads through
+ * `readContentForParse`), and the comparison is `inputBytesBreach`'s, so a file past the cap is the
+ * same `ParseLimitError` (`inputBytes`, naming the cap alone) on every one. `null` says the read is for the bytes themselves (a content key no parse
+ * follows), and each caller says which it is: an optional cap was omitted by every caller that
+ * never thought about it. The cap applies only to a kind a parser reads; a `none` read is never
+ * parsed, so it is never capped. Accepted: re-reads that hand nothing to a parser read the file
+ * directly and are not held to the cap — the compat detectors' re-read of a linked file the skill validator already parsed under the cap, its implicit-reference scan, the packager's read-back of a packaged markdown file for its links, and the compatibility analyzer's Python import scan.
+ *
  * @param filePath - Absolute path to read
  * @param parserKind - The parser this content will actually be handed to.
  *   Callers that route by extension pass `parserKindForPath(filePath)`.
+ * @param inputBytes - The run's parse input cap, or `null` when the read is for the bytes themselves
  * @returns The content, its key, and the parser it routes to
  * @throws Whatever `readFile` throws — callers decide whether a read failure is
- *   fatal or a miss
+ *   fatal or a miss — `TextTooLargeError` (`TEXT_TOO_LARGE`) for a file too
+ *   large to decode, which is neither: the bytes are readable, just not as one
+ *   string — and a `ParseLimitError` (`inputBytes`) for a parsed kind past `inputBytes`
  */
 export async function readContentWithKey<K extends ParserKind>(
   filePath: string,
   parserKind: K,
+  inputBytes: number | null,
 ): Promise<KeyedContent<K>> {
   // Read as bytes and decode here, rather than letting readFile decode: the key
   // must be over what was on disk, the decode is lossy, and `readFile(path,
   // 'utf-8')` offers no BOM or encoding handling at all.
-  const bytes = await readFile(filePath);
+  //
+  // The one read path, `readDecodableBytes` (a pipe or device is refused, never waited on; sized
+  // by `fstat` on the handle it reads, so a rename cannot substitute another file): a file past the
+  // input cap, or too large to become a string at all (`TextTooLargeError`), is refused before a
+  // byte is read, rather than read whole (up to 2 GiB) only for the parse or the decode to refuse it.
+  const cap = inputBytes !== null && parserKind !== NO_PARSER_KIND ? inputBytes : null;
+  const bytes = await readDecodableBytes(filePath, (size) => {
+    const breach = cap === null ? undefined : inputBytesBreach(size, cap);
+    if (breach !== undefined) {
+      // The projection lane's read, and `readContentForParse`'s: a refused read
+      // never reaches `ParseDispatcher.parse`, so this is never counted twice.
+      countWork('parse.refused.inputCap.read', 1);
+      throw breach;
+    }
+  });
   // `decodeTextContent` is the ONE decoder — see `utils`' text-content.ts. The
   // bytes handed to `computeContentKey` are the same ones, undecoded, on purpose:
   // this function COMPOSES a decode with a raw-bytes key.
@@ -382,6 +425,34 @@ export async function readContentWithKey<K extends ParserKind>(
   // `TextProvenance` holds. A decoder that learns to report a fourth fact about
   // its input then reaches the projection without an edit here — and, more to the
   // point, cannot be silently dropped here either.
+  return keyBytes(bytes, parserKind);
+}
+
+/**
+ * Key a document a caller already holds as a string — the same struct
+ * {@link readContentWithKey} builds from a file.
+ *
+ * The bytes keyed are the string's UTF-8 encoding, and they are decoded back
+ * through the one decoder, so what is parsed is exactly what the key covers: a
+ * leading U+FEFF is stripped as a BOM and a lone surrogate becomes U+FFFD, the
+ * same as for those bytes read from disk.
+ *
+ * @param text - The document
+ * @param parserKind - The parser this content will actually be handed to
+ * @returns The content, its key, and the parser it routes to
+ */
+export function keyContent<K extends ParserKind>(text: string, parserKind: K): KeyedContent<K> {
+  return keyBytes(Buffer.from(text, 'utf-8'), parserKind);
+}
+
+/**
+ * Decode and key one buffer of raw bytes: the composition both entry points share.
+ *
+ * @param bytes - The raw bytes
+ * @param parserKind - The parser they route to
+ * @returns The keyed content
+ */
+function keyBytes<K extends ParserKind>(bytes: Uint8Array, parserKind: K): KeyedContent<K> {
   const { text, ...decoding } = decodeTextContent(bytes);
   return {
     content: text,

@@ -28,6 +28,8 @@
  * not arms, so a lane that changed between repeats is not what it detects.
  */
 
+import { mapInOrder } from '@vibe-agent-toolkit/utils';
+
 import type { ReportEnvelope } from '../../envelope/envelope.js';
 import { trackedPaths } from '../../harness/git-state.js';
 import { judgeLoad, readLoad } from '../../harness/load-guard.js';
@@ -168,7 +170,7 @@ function rowFor(measurement: SpecMeasurement): PopulationCommandStats {
   const { spec, args, cache, results, failure } = measurement;
   const base: RowBase = { name: spec.name, args, cache };
 
-  if (results.length === 0) return failedRow(base, 0, 'no repeats were requested');
+  // `armRunFailure` owns the rule, a failed priming run and no repeats at all included.
   if (failure !== null) return failedRow(base, results.length, failure);
 
   const documents = readEveryRepeat(measurement);
@@ -211,15 +213,17 @@ function rowFor(measurement: SpecMeasurement): PopulationCommandStats {
  * @param options - See {@link CapturePopulationOptions}
  * @returns A complete report envelope, ready to store
  */
-export function capturePopulation(
+export async function capturePopulation(
   options: CapturePopulationOptions,
-): ReportEnvelope<PopulationBody> {
+): Promise<ReportEnvelope<PopulationBody>> {
   const loadBefore = readLoad();
-  const commands = options.commands.map((spec) => rowFor(measureSpec(options, spec)));
+  const measured = await mapInOrder(options.commands, (spec) => measureSpec(options, spec));
   const loadAfter = readLoad();
 
-  return buildReportEnvelope(POPULATION_FACET, options, {
-    commands,
-    load: judgeLoad(loadBefore.loadAvg1, loadAfter.loadAvg1, loadAfter.cpus),
-  });
+  return buildReportEnvelope(
+    POPULATION_FACET,
+    options,
+    { commands: measured.map((measurement) => rowFor(measurement)), load: judgeLoad(loadBefore.loadAvg1, loadAfter.loadAvg1, loadAfter.cpus) },
+    measured,
+  );
 }

@@ -28,6 +28,7 @@
  * index-based assertion would pass today and pin the wrong sentence tomorrow.
  */
 
+import { exitCodeForReport, type ExitDeterminingDocument } from '@vibe-agent-toolkit/schema';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { createSuiteContext, executeCli, getMonorepoRoot } from './test-common.js';
@@ -215,7 +216,7 @@ describe.skipIf(process.platform === 'win32')('vat claude context', () => {
   // ⛔ "Never renders an unknown size as zero" is NOT asserted here, and that is
   // deliberate. Every file in this repository has a measured blob, so no row on
   // this tree has `tokens: null` — a loop pairing `row.tokens === null` with
-  // `row.charge === 'unknown-size'` compares `false === false` on every row and
+  // `row.sizeCliff === 'unmeasured'` compares `false === false` on every row and
   // passes vacuously, and it would keep passing if the renderer were changed to
   // `${row.tokens ?? 0} tokens`. It also asserts a property of `account()`
   // rather than of the CLI, and `account()` pins it directly. The renderer's
@@ -227,8 +228,8 @@ describe.skipIf(process.platform === 'win32')('vat claude context', () => {
     expect(envelope.boundsStatement).toContain(BOUNDS_PHRASE);
     // Looked up by id, never by position: the list is grouped by direction, so
     // every entry added to a group shifts the ones after it.
-    const cliff = envelope.limits?.find((limit) => limit.id === 'cliff-scope');
-    expect(cliff?.direction).toBe('scope');
+    const scope = envelope.limits?.find((limit) => limit.id === 'main-conversation-only');
+    expect(scope?.direction).toBe('scope');
     expect(envelope.modelledBehaviours?.length).toBeGreaterThan(0);
     // ⛔ And NOT on the answer. The limits bound the method, so a per-answer copy
     // is both a lie about scope and, on a sweep, tens of megabytes of one
@@ -271,6 +272,25 @@ describe.skipIf(process.platform === 'win32')('vat claude context', () => {
       { cwd: repoRoot },
     );
 
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('outside the corpus root');
+  });
+});
+
+describe('vat claude context refusals', () => {
+  beforeAll(context.setup);
+
+  it('claude context publishes through the writer: a refusal is exit 2 with error.code', async () => {
+    const result = await executeCli(
+      context.binPath,
+      ['claude', 'context', '../..', '--format', 'json'],
+      { cwd: repoRoot },
+    );
+    const document = JSON.parse(result.stdout) as ExitDeterminingDocument & { error: unknown };
+
+    // The refusal envelope's error branch: the invocation's mistake, coded — never a bare string.
+    expect(document, result.stdout).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' }, gate: { strict: false } });
+    expect(result.status).toBe(exitCodeForReport(document));
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('outside the corpus root');
   });
@@ -357,9 +377,8 @@ describe('vat claude context with several paths', () => {
     // cold cache — only to then reject what they typed.
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('outside the corpus root');
-    // ⛔ NOT `toBe('')`. `handleCommandError` writes its `status: error` block to
-    // stdout even under `--format json` — a real defect, tracked separately, and
-    // asserting an empty stdout here would pin a fix this change does not make.
+    // ⛔ NOT `toBe('')`. A refusal publishes its `status: error` document on
+    // stdout, so an empty stdout is not the property.
     // What must hold is that a refused run publishes no MEASUREMENT: no
     // envelope, no answers, nothing a consumer could read as context that loads.
     //
@@ -487,7 +506,7 @@ describe.skipIf(process.platform === 'win32')('vat claude context --all', () => 
 
   it('carries the limits on the ENVELOPE and on no region', () => {
     expect(envelope.boundsStatement).toContain(BOUNDS_PHRASE);
-    expect(envelope.limits?.find((limit) => limit.id === 'cliff-scope')?.direction).toBe('scope');
+    expect(envelope.limits?.find((limit) => limit.id === 'main-conversation-only')?.direction).toBe('scope');
     expect(envelope.modelledBehaviours?.length).toBeGreaterThan(0);
 
     for (const region of envelope.costMap?.regions ?? []) {

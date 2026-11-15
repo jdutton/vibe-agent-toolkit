@@ -10,6 +10,7 @@
 import { homedir } from 'node:os';
 
 import { safePath } from './path-utils.js';
+import { requireTestScratch } from './test-scratch-guard.js';
 
 export const SKILL_TARGET_NAMES = [
   'claude',
@@ -141,7 +142,8 @@ export function resolveSkillTarget(
   }
 
   const entry = SKILL_TARGETS[target];
-  const base = scope === 'user' ? homedir() : cwd;
+  // Fail closed in a test process: a user-scope skills directory under the real home is somebody's.
+  const base = scope === 'user' ? requireTestScratch(homedir(), `The home directory (user scope of ${target})`) : cwd;
   const rel = scope === 'user' ? entry.userRel : entry.projectRel;
   return safePath.join(base, rel);
 }

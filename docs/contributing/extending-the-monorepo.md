@@ -10,10 +10,12 @@ must fire at creation time (the package-list registration); everything else is h
    extending `../../tsconfig.base.json` with `"composite": true`, `src/`, `test/`, and a `README.md`
    with usage examples.
 2. Use `workspace:*` for every internal dependency.
-3. Nothing to register: `private` in `package.json` decides whether it publishes, and the publish
-   order is derived from workspace dependencies (`publishedPackagesInDependencyOrder()` in
-   `packages/dev-tools/src/workspace-graph.ts`). tsconfig references are generated — run
-   `bun run --cwd packages/dev-tools generate:tsconfig-refs` (see the next step).
+3. Nothing to register by hand: `private` in `package.json` decides whether it publishes, and the
+   publish order is derived from workspace dependencies (`publishedPackagesInDependencyOrder()` in
+   `packages/dev-tools/src/workspace-graph.ts`). Generated files: tsconfig references
+   (`bun run --cwd packages/dev-tools generate:tsconfig-refs`, see the next step) and the lint wiring
+   (`bun run generate:lint-config`: `tsconfig.eslint.json` and any `turbo.json` lint inputs; the
+   `lint` script is `VAT_LINT_TASK=1 eslint . --max-warnings=0`). `validate-structure` checks both.
 4. Do **not** hand-edit `tsconfig.json` `references` (root or per-package): they are generated from
    workspace dependencies by `bun run generate:tsconfig-refs`, and `validate-structure` checks the
    committed file against the generator.
@@ -64,8 +66,10 @@ commit the regenerated `.json` beside the `.ts` change. There is no `*.schema.js
 2. Keep the command focused and composable; orchestrate other packages, never duplicate their
    logic — the walk, the merge, the validation live in the library package.
 3. Help text follows `.claude/rules/cli-help-text.md` (fires when you edit a command file).
-4. Every command exits `0` ok / `1` findings / `2` usage or system error, through the shared
-   `ExitCode` enum and `handleCommandError`; a `--json` output registers its report schema.
+4. Every command publishes through the one writer (`utils/document-writer.ts`): register the verb
+   in `PUBLISHED_SHAPES` (`src/report-schemas.ts`), end with `endWithReport` / `endWithRefusal`, and
+   the exit code (`0` ok / `1` findings / `2` could not do its job) derives from the document —
+   see "The report contract" in [`docs/architecture/cli.md`](../architecture/cli.md).
 5. Update [`command-lane-table.md`](command-lane-table.md) if the command reads the filesystem to
    build a population — the table is the bounded list of walkers.
 6. Handle errors with a user-facing message that names the config mechanism that fixes it.

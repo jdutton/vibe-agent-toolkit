@@ -16,16 +16,40 @@
  *   their own tree — green tick, cannot run.
  */
 
-import fs, { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 import { API_SKILL_MAX_UPLOAD_BYTES } from '@vibe-agent-toolkit/agent-skills';
+import { ParseLimitError, withParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import type * as ArchiveModule from '@vibe-agent-toolkit/utils/archive';
+import { installFaultFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { inspectZipArchive, warnUnportableReferences } from '../src/commands/claude/org/skills.js';
 
 import type { ZipFixtureEntry } from './helpers/zip-fixtures.js';
 import { skillMdBytes, writeZipFixture } from './helpers/zip-fixtures.js';
+
+/** Every entry an archive this suite opened has inflated, by name: the one decompression seam. */
+const inflated = vi.hoisted(() => [] as string[]);
+
+vi.mock('@vibe-agent-toolkit/utils/archive', async (importOriginal) => {
+  const actual = await importOriginal<typeof ArchiveModule>();
+  return {
+    ...actual,
+    openArchive: async (...args: Parameters<typeof actual.openArchive>) => {
+      const opened = await actual.openArchive(...args);
+      return {
+        label: opened.label,
+        entries: opened.entries,
+        read: (entry: Parameters<typeof opened.read>[0]) => {
+          inflated.push(entry.name);
+          return opened.read(entry);
+        },
+      };
+    },
+  };
+});
 
 let tempDir: string;
 
@@ -100,8 +124,10 @@ describe('inspectZipArchive', () => {
     // is the authority on. Degrade, do not destroy — and say so: this used to
     // be a bare `undefined`, which the caller turned into silence about every
     // check it then skipped.
+    // And it hands back the bytes it read — the ONE read — for the caller to send as they are.
     await expect(inspectZipArchive(notAZip)).resolves.toEqual({
       archiveUnreadable: expect.stringMatching(/zip|format|header/i),
+      bytes: Buffer.from('this is not a zip archive'),
     });
   });
 
@@ -109,34 +135,40 @@ describe('inspectZipArchive', () => {
     // The caller already holds the archive's bytes when this runs, so a refusal
     // here is not a parse disagreement. It stays loud, by errno.
     const zipPath = writeZip('refused.zip', [[SKILL_MD, skillMdBytes('demo')]]);
-    const realRead = fs.readFileSync;
-    const spy = vi.spyOn(fs, 'readFileSync').mockImplementation((target, ...rest) => {
-      if (String(target) === zipPath) {
-        throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
-      }
-      return (realRead as (...args: unknown[]) => Buffer)(target, ...rest);
-    });
+    const session = installFaultFs({ within: tempDir, faults: [{ family: 'read', path: (path) => path === zipPath, errno: 'EACCES' }] });
     try {
-      await expect(inspectZipArchive(zipPath)).rejects.toMatchObject({ code: 'EACCES' });
+      // Classified as the INPUT's (a source fault on the argument), carrying the errno it was refused with.
+      await expect(inspectZipArchive(zipPath)).rejects.toMatchObject({ code: 'FS_FAULT', side: 'source', origin: 'argument', errno: 'EACCES', cause: { code: 'EACCES' } });
+      expect(session.fired).toHaveLength(1);
     } finally {
-      spy.mockRestore();
+      session.restore();
     }
   });
 
   /**
    * "Shallowest wins" was implemented as "SHORTEST ENTRY NAME wins", which is a
    * different rule wherever a short deep path meets a long shallow one. Here
-   * `a/b/SKILL.md` is 12 characters at depth 2 and `my-skill-bundle/SKILL.md` is
-   * 24 at depth 1: the length rule elects the bundled FIXTURE, so VAT reported
-   * the fixture's name and advised the operator to `--title` it.
+   * `my-skill-bundle/a/SKILL.md` would once have lost to nothing and a shorter
+   * deep name won; now the skill's SKILL.md is the one the layout rule places —
+   * directly inside the archive's one top-level folder — and no other.
    */
-  it('elects the SKILL.md at the shallowest DEPTH, not the one with the shortest name', async () => {
+  it('reads the name from the SKILL.md the layout rule places, never from one deeper in the bundle', async () => {
     const zipPath = writeZip('depth-vs-length.zip', [
+      ['my-skill-bundle/a/SKILL.md', skillMdBytes('nested-fixture')],
+      ['my-skill-bundle/SKILL.md', skillMdBytes('bundle')],
+    ]);
+
+    await expect(inspectZipArchive(zipPath)).resolves.toMatchObject({ declaredName: 'bundle', bundleRoot: 'my-skill-bundle' });
+  });
+
+  // The one layout rule the two install verbs share: a second top-level folder is not a skill ZIP.
+  it('refuses an archive whose SKILL.md sits beside a second top-level folder, as the input it is', async () => {
+    const zipPath = writeZip('two-top-level.zip', [
       ['my-skill-bundle/SKILL.md', skillMdBytes('bundle')],
       ['a/b/SKILL.md', skillMdBytes('nested-fixture')],
     ]);
 
-    await expect(inspectZipArchive(zipPath)).resolves.toMatchObject({ declaredName: 'bundle' });
+    await expect(inspectZipArchive(zipPath)).rejects.toMatchObject({ refusal: 'INPUT_UNREADABLE', message: expect.stringContaining('is not a skill ZIP') });
   });
 
   /**
@@ -172,15 +204,15 @@ describe('inspectZipArchive', () => {
   });
 
   /**
-   * `getData()` used to sit OUTSIDE the try/catch that guards the archive read.
-   * adm-zip throws from it on BAD_CRC, on any compression method but
+   * The read of an entry used to sit OUTSIDE the try/catch that guards the archive read.
+   * The archive module refuses one on a bad CRC, on any compression method but
    * store/deflate, and on a password-protected entry — so those escaped and
    * killed `install <x>.zip` on exit 2, contradicting this function's own stance
    * that an archive VAT cannot parse is not an archive VAT should block.
    *
    * The unsupported-method case is minted by hand rather than mocked: the
    * central directory's compression-method field is the one byte pair that
-   * decides it, and adm-zip refuses the entry the moment it is asked to inflate.
+   * decides it, and the reader refuses the entry the moment it is asked to inflate.
    * The SIZE total must survive, because it never needed the entry's bytes.
    */
   it('survives an entry it cannot decompress, keeping the size total it read from headers', async () => {
@@ -205,16 +237,36 @@ describe('inspectZipArchive', () => {
   });
 
   /**
-   * `getData()` allocates whatever `header.size` claims, and a header can claim
-   * anything. Bounding it is the only thing standing between an archive and an
-   * allocation VAT performs on its say-so.
+   * The elected SKILL.md is held to the parse input cap, as every lane that reads
+   * a SKILL.md off disk holds it: a large one still declares its name, and one
+   * past the cap is the same refusal, never a skill that "declares no name".
    */
-  it('does not inflate a SKILL.md far larger than any real one', async () => {
-    const zipPath = writeZip('huge-skill-md.zip', [
+  it('reads the name a SKILL.md larger than the portability checks read declares', async () => {
+    const zipPath = writeZip('large-skill-md.zip', [
       [SKILL_MD, skillMdBytes('demo', 'x'.repeat(2 * 1024 * 1024))],
     ]);
+    inflated.length = 0;
 
-    await expect(inspectZipArchive(zipPath)).resolves.toMatchObject({ declaredName: undefined });
+    await expect(inspectZipArchive(zipPath)).resolves.toMatchObject({ declaredName: 'demo' });
+    // The inflation spy is live: the over-cap case below is judged by it.
+    expect(inflated).toContain(SKILL_MD);
+  });
+
+  it('refuses a SKILL.md past the parse input cap with the cap the path lanes refuse it at, before inflating it', async () => {
+    const cap = await withParseDispatcher((dispatcher) => Promise.resolve(dispatcher.inputBytes));
+    const head = skillMdBytes('demo', '');
+    const zipPath = writeZip('over-cap-skill-md.zip', [
+      [SKILL_MD, Buffer.concat([head, Buffer.alloc(cap + 1 - head.length, 0x78)])],
+    ]);
+
+    inflated.length = 0;
+
+    await expect(inspectZipArchive(zipPath)).rejects.toMatchObject({
+      refusal: 'INPUT_UNREADABLE',
+      message: expect.stringContaining(new ParseLimitError('inputBytes', cap).bound),
+    });
+    // Refused on its declared size: the parse reads only what inflated, and would refuse it too.
+    expect(inflated).toStrictEqual([]);
   });
 
   /**

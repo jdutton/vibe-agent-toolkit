@@ -43,6 +43,8 @@ describe('estimate', () => {
     // The control on the control: a median WOULD have been 200 here, and that is
     // the number this estimator exists not to report.
     expect(result.min).not.toBe(200);
+    // Reported beside it, for a facet whose noise moves both ways.
+    expect(result.median).toBe(200);
   });
 
   it('keeps the samples in the order they were taken, so drift stays visible', () => {

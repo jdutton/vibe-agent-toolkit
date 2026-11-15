@@ -1,3 +1,5 @@
+import { sep } from 'node:path';
+
 import type { ScanResult } from '@vibe-agent-toolkit/discovery';
 import { describe, it, expect } from 'vitest';
 
@@ -122,7 +124,8 @@ describe('validateSkillFilename', () => {
     expect(result.basename).toBe('SKILL.md');
   });
 
-  it('should extract basename correctly on Windows paths', () => {
+  // Gated: the input is a NATIVE path, and a backslash is a separator only on win32 (a filename character on POSIX).
+  it.skipIf(sep !== '\\')('should extract basename correctly on Windows paths', () => {
     const result = validateSkillFilename(String.raw`C:\Users\name\project\SKILL.md`);
 
     expect(result.valid).toBe(true);

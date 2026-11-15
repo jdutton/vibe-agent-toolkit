@@ -23,7 +23,7 @@
  * The rule is a FLOOR, deliberately syntactic: the clause is fine if either
  *
  * 1. the error binding is REFERENCED anywhere in the body — narrowing on it
- *    (`isFilesystemAccessError(e)`, `e instanceof X`, `e.code === 'ENOENT'`),
+ *    (`fsFaultOf(e)`, `e instanceof X`, `e.code === 'ENOENT'`),
  *    carrying it into a report (`errors.push(String(e))`, `{ ok: false, error }`),
  *    or logging it — or
  * 2. the body THROWS (a rethrow, or a translation into a louder error), at the

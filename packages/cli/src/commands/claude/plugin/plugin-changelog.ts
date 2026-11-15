@@ -1,6 +1,4 @@
-import { existsSync } from 'node:fs';
-
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { everywhere, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
 
 /**
  * Resolve the per-plugin CHANGELOG file path for a marketplace publish.
@@ -15,15 +13,21 @@ import { safePath } from '@vibe-agent-toolkit/utils';
  * The default path is anchored to the plugin's *source* dir (the `source`
  * field on the marketplace plugin entry, default `plugins/<name>`). Callers
  * pass the resolved source dir directly — this helper does not assume layout.
+ *
+ * @param within - The project root the plugin source lives in: every link on the way is read
+ *   before the kernel follows it
+ * @throws {FsFaultError} on side `source` when the OS refuses the probe — never read as "no changelog"
  */
 export function resolvePluginChangelogPath(
   pluginSourceDir: string,
   entry: { changelog?: string | undefined },
+  within: string,
 ): string | undefined {
+  const present = (path: string): boolean => pathPresent(path, { follow: within }, everywhere('source'), 'probe');
   if (entry.changelog) {
     const configured = safePath.join(pluginSourceDir, entry.changelog);
-    return existsSync(configured) ? configured : undefined;
+    return present(configured) ? configured : undefined;
   }
   const defaulted = safePath.join(pluginSourceDir, 'CHANGELOG.md');
-  return existsSync(defaulted) ? defaulted : undefined;
+  return present(defaulted) ? defaulted : undefined;
 }

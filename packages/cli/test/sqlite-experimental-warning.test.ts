@@ -21,6 +21,7 @@
  * the tests below spend most of their assertions proving what the filter does
  * NOT swallow.
  */
+import type { Projection } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -47,7 +48,7 @@ vi.mock('@vibe-agent-toolkit/projection-sqlite', () => {
   process.emitWarning(control);
 
   return {
-    openEphemeralProjectionStore: (): unknown => ({ close: (): void => undefined }),
+    openRunDatabase: (): unknown => ({ close: (): void => undefined }),
   };
 });
 
@@ -285,8 +286,8 @@ describe('installSqliteWarningFilter', () => {
  *
  * Measured: mutating `projection-store.ts` so the filter is never installed —
  * `const restoreWarnings = ((): void => undefined);` — left 10 of 10 tests in
- * this file passing, and `grep -rln "openEphemeralQueryStore" packages/cli/test`
- * returned nothing. Every assertion was about a pure function, and the product
+ * this file passing, and no test in `packages/cli/test` called the run-database
+ * opener. Every assertion was about a pure function, and the product
  * claim ("`vat resources query` stops printing the ExperimentalWarning") rested
  * entirely on a call site no test reached. Deleting that call site was free.
  *
@@ -305,8 +306,9 @@ describe('the query lane installs the filter where the backend loads', () => {
       }) as typeof process.emitWarning);
 
     try {
-      const { openEphemeralQueryStore } = await import('../src/utils/projection-store.js');
-      await openEphemeralQueryStore();
+      const { openRunDatabase } = await import('../src/utils/projection-store.js');
+      // The mocked backend ignores the projection; only the load matters here.
+      await openRunDatabase({} as Projection);
 
       // Not vacuous: the control warning proves the spy was reachable and the
       // module really evaluated. An empty `emitted` would pass a "nothing was

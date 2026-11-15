@@ -280,7 +280,7 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
    * Uses a single promise to avoid race conditions when multiple
    * embed calls happen concurrently.
    */
-  private async initialize(): Promise<LoadedModel> {
+  private initialize(): Promise<LoadedModel> {
     this.initPromise ??= this.loadModel();
     return this.initPromise;
   }

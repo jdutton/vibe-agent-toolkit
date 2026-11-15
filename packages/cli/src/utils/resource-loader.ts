@@ -9,8 +9,10 @@ import {
   gitExtentSelected,
   ResourceRegistry,
   type CrawlOptions,
+  type CrawlPopulation,
   type CrawlSourceKind,
   type PopulationCache,
+  type PopulationOutcome,
   type ProjectConfig,
   type ResourcePopulationSource,
   type ResourceRegistryOptions,
@@ -18,6 +20,7 @@ import {
 import { relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { GitTracker, gitTreeSnapshot } from '@vibe-agent-toolkit/utils/git';
 
+import { CommandRefusalError } from './command-refusal.js';
 import { loadConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
 import { collectionsOption } from './population-wiring.js';
@@ -30,7 +33,43 @@ import { withPopulationCache } from './projection-store.js';
  * `walk` is the incumbent `crawlDirectory` route; `projection` is the
  * projection lane behind {@link RESOURCES_CRAWL_ENV}.
  */
-export type ResourceCrawlLane = 'walk' | 'projection';
+export type ResourceCrawlLane = CrawlPopulation['lane'];
+
+/**
+ * The published `population` an observation implies: `null` for the walk —
+ * offered no source, or declined the one it was offered — because nothing was
+ * populated from or into the store.
+ *
+ * @param observation - The load's one observation
+ * @returns `'store'`, `'derived'` or `null`
+ */
+export function publishedPopulation(observation: CrawlPopulation): PopulationOutcome['population'] | null {
+  return observation.lane === 'walk' ? null : observation.outcome.population;
+}
+
+/**
+ * Which enumerator the projection lane used, or `null` when the walk ran and
+ * there was no extent to source.
+ *
+ * Reported for the same reason the lane is, one level down. The lane
+ * distinguishes the walk from the projection; it does NOT distinguish the
+ * projection's two enumerators, and `VAT_EXTENT_SOURCE` is exactly the axis a
+ * flip decision turns on. Without this, both arms of that A/B report
+ * `projection` and two identical populations mean either "the enumerators
+ * agree" or "the switch was ignored" — indistinguishable, and the second is
+ * reachable, because `crawlSourceFor` falls back to the walk without saying so
+ * when the root is not in a repository.
+ *
+ * 🪤 NOT a cache-hit marker: on a hit no enumerator runs and it still names the
+ * one this process selected, because the source is chosen before the store is
+ * asked.
+ *
+ * @param population - The load's population
+ * @returns The enumerator, or `null` for the walk
+ */
+export function extentSourceOf(population: CrawlPopulation): CrawlSourceKind | null {
+  return population.lane === 'walk' ? null : population.extentSource;
+}
 
 export interface ResourceLoadResult {
   scanPath: string;
@@ -39,30 +78,20 @@ export interface ResourceLoadResult {
   registry: ResourceRegistry;
   gitTracker: GitTracker | undefined;
   /**
-   * Which lane enumerated, as a fact about the run rather than about the
-   * environment that requested it.
+   * Where the population came from: the `CrawlPopulation` the crawl itself
+   * returned, carried here unchanged — the one channel, so a load cannot report
+   * a lane its crawl did not take. `{ lane: 'walk' }` both when the projection
+   * lane is not selected and when the crawl declined the source.
    *
-   * Reported so that a population can be held against another one: two scans of
-   * the same tree that disagree are only interpretable if each says which
-   * enumerator produced it. Reading the env var back instead would prove what
-   * was ASKED for, never what happened — a distinction that has already voided
-   * one whole A/B on this codebase, where both arms silently ran the incumbent.
+   * Reported as a fact about the run rather than about the environment that
+   * requested it: two scans of the same tree that disagree are only
+   * interpretable if each says which enumerator produced it. Reading the env var
+   * back instead would prove what was ASKED for, never what happened — a
+   * distinction that has already voided one whole A/B on this codebase, where
+   * both arms silently ran the incumbent. See {@link publishedPopulation} and
+   * {@link extentSourceOf} for the two views callers publish.
    */
-  lane: ResourceCrawlLane;
-  /**
-   * Which enumerator the projection lane used, or `null` when the walk ran and
-   * there was no extent to source.
-   *
-   * Reported for the same reason {@link ResourceCrawlLane} is, one level down.
-   * `lane` distinguishes the walk from the projection; it does NOT distinguish
-   * the projection's two enumerators, and `VAT_EXTENT_SOURCE` is exactly the
-   * axis a flip decision turns on. Without this, both arms of that A/B report
-   * `projection` and two identical populations mean either "the enumerators
-   * agree" or "the switch was ignored" — indistinguishable, and the second is
-   * reachable, because `crawlSourceFor` falls back to the walk without saying
-   * so when the root is not in a repository.
-   */
-  extentSource: CrawlSourceKind | null;
+  population: CrawlPopulation;
 }
 
 /**
@@ -108,6 +137,31 @@ export function scopeIncludeToSubtree(include: readonly string[], relDir: string
 }
 
 /**
+ * Refuse a `--collection` that names no collection the project declares.
+ *
+ * A typo'd filter used to run the verb over zero resources and answer with a
+ * run-integrity finding (or, in `scan`, a zero count under the typo'd name) —
+ * a report about a collection that does not exist. It is the invocation's
+ * mistake, and `resources validate` and `resources scan` refuse it the same way.
+ * A declared collection that matched no file is NOT refused here: that is a run
+ * over nothing, and the writer's run-integrity refusal says so.
+ *
+ * @param config - The loaded project config, when there is one
+ * @param collection - The `--collection` value, when one was passed
+ * @throws {CommandRefusalError} `USAGE_INVALID` naming the declared collections
+ */
+export function assertDeclaredCollection(config: ProjectConfig | undefined, collection: string | undefined): void {
+  if (collection === undefined) return;
+  const declared = Object.keys(config?.resources?.collections ?? {});
+  if (declared.includes(collection)) return;
+  throw new CommandRefusalError(
+    'USAGE_INVALID',
+    `--collection ${collection} names no collection in resources.collections`
+      + ` (declared: ${declared.length === 0 ? 'none' : declared.join(', ')})`,
+  );
+}
+
+/**
  * Build the crawl options for an explicit path argument.
  *
  * The path argument RESTATES which tree to scan; it does not license scanning
@@ -140,7 +194,7 @@ function crawlOptionsForPath(
       `${resolved} is outside projectRoot ${projectRoot}; ` +
         `resources include/exclude patterns from the config do not apply to it`,
     );
-    return { baseDir: resolved, unreadable: RESOURCES_UNREADABLE };
+    return { baseDir: resolved, unreadable: RESOURCES_UNREADABLE, outputs: [] };
   }
 
   // The crawler used to perform this check itself, because it received the path
@@ -152,6 +206,8 @@ function crawlOptionsForPath(
   return {
     baseDir: projectRoot,
     unreadable: RESOURCES_UNREADABLE,
+    // Every resources verb only reads the tree it crawls.
+    outputs: [],
     include: scopeIncludeToSubtree(DEFAULT_RESOURCE_INCLUDE, normalizedRelDir),
     ...(config?.resources?.exclude ? { exclude: config.resources.exclude } : {}),
   };
@@ -196,6 +252,22 @@ export const RESOURCES_CRAWL_PROJECTION = 'projection';
 export const RESOURCES_CRAWL_WALK = 'walk';
 
 /**
+ * The debug line naming the lane a crawl was offered, for every verb that
+ * offers one. Each lane says it — a marker only one lane emitted would make the
+ * other identifiable by ABSENCE, which is indistinguishable from a build too
+ * old to have either lane — and there is no source only when the walk was
+ * selected, so the walk's line names {@link RESOURCES_CRAWL_WALK}.
+ *
+ * @param populationSource - The source offered to the crawl, if any
+ * @returns The line to log
+ */
+export function crawlLaneDebugLine(populationSource: ResourcePopulationSource | undefined): string {
+  return populationSource === undefined
+    ? `Enumerating via the incumbent walk (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_WALK})`
+    : `Enumerating via the projection lane (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_PROJECTION})`;
+}
+
+/**
  * Whether this process should source the resources population from a projection.
  *
  * **Defaults to the projection lane.** Both lanes now enumerate
@@ -213,6 +285,12 @@ export const RESOURCES_CRAWL_WALK = 'walk';
  * `LINK_BROKEN_FILE` is not reported on this lane.** That is a real loss, it is
  * known, and it is the cost this default was accepted at; closing it is its own
  * change (teaching an extent to admit `120000` entries as their own paths).
+ * The omission is no longer SILENT — each declined link is an `info` row under
+ * one of the four declined-link codes (`EXTENT_SYMLINK_NOT_REALIZED`,
+ * `EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT`, `EXTENT_SYMLINK_TARGET_UNRESOLVED` for a
+ * dangling in-root target, `EXTENT_SYMLINK_TARGET_UNREADABLE` for one the OS
+ * would not resolve) — but no such row is a `LINK_BROKEN_FILE`
+ * finding.
  * {@link RESOURCES_CRAWL_WALK} is the one-value escape hatch meanwhile.
  *
  * Read from the environment at each call rather than memoized at module load:
@@ -250,13 +328,12 @@ export function resourcesProjectionCrawlSelected(): boolean {
  * would admit the ignored half of a git tree rather than decline it. See
  * `buildResourcePopulation`.
  *
+ * The enumeration's outcome and enumerator travel back on what `enumerate`
+ * returns, and from there on what `ResourceRegistry.crawl` returns — never on a
+ * side channel this closure writes to.
+ *
  * @param root - The root this source may answer for, and no other
  * @param gitTracker - The run's ignore oracle
- * @param observeExtentSource - Called with the enumerator that actually ran,
- *   once per enumerated root. The value cannot be recovered afterwards by
- *   re-reading the environment — see {@link ResourceLoadResult.extentSource}.
- *   🪤 On a cache hit NO enumerator runs and this still reports the one this
- *   process selected, because the source is chosen before the store is asked
  * @param cache - The run's projection store, or `undefined` to enumerate every
  *   time. A SEPARATE selector from {@link RESOURCES_CRAWL_ENV}: which lane
  *   enumerates and whether its answer is cached are independent choices, and a
@@ -266,19 +343,18 @@ export function resourcesProjectionCrawlSelected(): boolean {
 function populationSourceFor(
   root: string,
   gitTracker: GitTracker,
-  observeExtentSource: (kind: CrawlSourceKind) => void,
-  cache: PopulationCache | undefined
+  cache: PopulationCache | undefined,
 ): ResourcePopulationSource | undefined {
   if (!resourcesProjectionCrawlSelected()) {
     return undefined;
   }
   return {
     root: safePath.resolve(root),
-    enumerate: async (enumeratedRoot: string) => {
-      const population = await buildResourcePopulation({
+    // `outputs` come from the crawl that asks (the registry's one declaration of what its verb writes).
+    enumerate: (enumeratedRoot: string, outputs: readonly string[]) =>
+      buildResourcePopulation({
         root: enumeratedRoot,
-        gitTracker,
-        ...(cache !== undefined && { cache }),
+        outputs,
         // `enumeratedRoot` and this source's own `root` are the SAME directory,
         // always: `populationFrom` compares them and declines outright when they
         // differ, so `enumerate` is never called for another tree. Reading the
@@ -286,11 +362,10 @@ function populationSourceFor(
         // against a second root — it is how the declaration and the enumeration
         // are kept demonstrably on one tree at the point of use, with no second
         // variable to fall out of step with the one that was checked.
+        gitTracker,
+        ...(cache !== undefined && { cache }),
         ...collectionsOption(enumeratedRoot),
-      });
-      observeExtentSource(population.extentSource);
-      return { paths: population.paths, conditions: population.conditions };
-    },
+      }),
   };
 }
 
@@ -325,39 +400,39 @@ function populationSourceFor(
  * @param options.gitTracker - An already-initialized tracker to reuse. Omit to
  *   have one built, which costs a `git ls-files` spawn — and only when the lane
  *   is actually selected
- * @param options.observeExtentSource - Called with the enumerator that ran, once
- *   per enumerated root. 🪤 NOT a cache-hit marker: on a hit no enumerator runs
- *   and this still reports the one this process selected
  * @param work - Given the source, or `undefined` when the walk stays selected
  * @returns Whatever `work` returned
  */
-export async function withResourcePopulationSource<T>(
+export function withResourcePopulationSource<T>(
   options: {
     root: string;
     gitTracker?: GitTracker | undefined;
-    observeExtentSource?: ((kind: CrawlSourceKind) => void) | undefined;
   },
   work: (populationSource: ResourcePopulationSource | undefined) => Promise<T>,
 ): Promise<T> {
-  // Checked before anything is built or opened: an unselected lane must cost
-  // nothing, or every command pays a tracker and a store to decline them.
-  if (!resourcesProjectionCrawlSelected()) {
-    return work(undefined);
-  }
-
-  const gitTracker = options.gitTracker ?? new GitTracker(options.root);
-
-  return withPopulationCache({ root: options.root }, async (cache) => {
-    // Initialized inside the bracket for the reason `loadResourcesWithConfig`
-    // gives at its own call: the store has already taken the snapshot that
-    // answers this tracker's question, so asking git again is a spawn spent
-    // rebuilding a set the process is holding.
-    if (options.gitTracker === undefined) {
-      await gitTracker.initialize();
+  try {
+    // Checked before anything is built or opened: an unselected lane must cost
+    // nothing, or every command pays a tracker and a store to decline them.
+    if (!resourcesProjectionCrawlSelected()) {
+      return work(undefined);
     }
 
-    return work(populationSourceFor(options.root, gitTracker, options.observeExtentSource ?? (() => undefined), cache));
-  });
+    const gitTracker = options.gitTracker ?? new GitTracker(options.root);
+
+    return withPopulationCache({ root: options.root }, async (cache) => {
+      // Initialized inside the bracket for the reason `loadResourcesWithConfig`
+      // gives at its own call: the store has already taken the snapshot that
+      // answers this tracker's question, so asking git again is a spawn spent
+      // rebuilding a set the process is holding.
+      if (options.gitTracker === undefined) {
+        await gitTracker.initialize();
+      }
+
+      return work(populationSourceFor(options.root, gitTracker, cache));
+    });
+  } catch (error) {
+    return Promise.reject(error as Error);
+  }
 }
 
 /**
@@ -386,7 +461,8 @@ export async function withResourcePopulationSource<T>(
  * @param pathArg - Path argument from CLI (optional)
  * @param projectRoot - Pre-resolved project root from the CLI boundary
  * @param logger - Logger instance
- * @returns Resource load result with registry and metadata
+ * @returns Resource load result with registry, metadata and the population the
+ *   crawl returned
  */
 export async function loadResourcesWithConfig(
   pathArg: string | undefined,
@@ -394,7 +470,7 @@ export async function loadResourcesWithConfig(
   logger: Logger,
 ): Promise<ResourceLoadResult> {
   // Config lookup is anchored at the resolved projectRoot.
-  const config = loadConfig(projectRoot);
+  const config = loadConfig(projectRoot, 'source');
 
   if (config) {
     logger.debug(`Loaded config from ${projectRoot}`);
@@ -440,6 +516,7 @@ export async function loadResourcesWithConfig(
     crawlOptions = {
       baseDir: projectRoot,
       unreadable: RESOURCES_UNREADABLE,
+      outputs: [],
       // Apply include patterns from config (if specified)
       ...(config?.resources?.include ? { include: config.resources.include } : {}),
       // Apply exclude patterns from config (if specified)
@@ -450,11 +527,10 @@ export async function loadResourcesWithConfig(
   // Which lane enumerates. Applied to the options both branches above produced,
   // so the path-argument case and the whole-root case cannot end up on different
   // crawlers — the bug shape this file already carries one fix for.
-  let extentSource: CrawlSourceKind | null = null;
   // The store brackets the crawl and is closed however the crawl ends. Nothing
   // outside this bracket can reach it: the population source is called from
   // inside `registry.crawl` and nowhere else.
-  const lane = await withPopulationCache({ root: projectRoot }, async (cache) => {
+  const population = await withPopulationCache({ root: projectRoot }, async (cache) => {
     // The git enumerator takes a `gitTreeSnapshot` during the crawl below no matter
     // what. Taking it HERE instead is the same snapshot moved a few lines earlier —
     // the open bracket memoizes it, so the enumerator's own call becomes a lookup —
@@ -484,23 +560,15 @@ export async function loadResourcesWithConfig(
     await gitTracker.initialize();
     logger.debug(`GitTracker initialized with ${gitTracker.getStats().cacheSize} tracked files`);
 
-    const populationSource = populationSourceFor(projectRoot, gitTracker, (kind) => {
-      extentSource = kind;
-    }, cache);
-    const selected: ResourceCrawlLane = populationSource ? 'projection' : 'walk';
+    const populationSource = populationSourceFor(projectRoot, gitTracker, cache);
+    logger.debug(crawlLaneDebugLine(populationSource));
     if (populationSource) {
-      logger.debug(`Enumerating via the projection lane (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_PROJECTION})`);
       crawlOptions = { ...crawlOptions, populationSource };
-    } else {
-      // Said for the same reason the projection branch says it, and the symmetry
-      // is the point: a marker that only one lane emits makes the other lane
-      // identifiable by ABSENCE, which is indistinguishable from a build too old
-      // to have either lane.
-      logger.debug(`Enumerating via the incumbent walk (${RESOURCES_CRAWL_ENV} unset)`);
     }
 
-    await registry.crawl(crawlOptions);
-    return selected;
+    // Read off what the crawl RETURNED, so a crawl that declined the source
+    // reports the walk it actually took — with no enumerator.
+    return (await registry.crawl(crawlOptions)).population;
   });
 
   return {
@@ -509,7 +577,6 @@ export async function loadResourcesWithConfig(
     config,
     registry,
     gitTracker,
-    lane,
-    extentSource,
+    population,
   };
 }

@@ -13,13 +13,20 @@ import path from 'node:path';
 
 import { CODE_REGISTRY, createRegistryIssue, type IssueCode, runSingleUnitValidation, type ValidationConfig, type ValidationIssue, type ValidationIssueCode } from '@vibe-agent-toolkit/schema';
 import {
+  ASSET_REFERENCE_UNREADABLE_CODE,
+  ASSET_REFERENCE_UNRESOLVED_CODE,
   CRAWL_REGISTRY_ADMIT_ID,
   CRAWL_REGISTRY_ENUMERATE_ID,
+  classifyFsFault,
+  compareCodeUnits,
   CRAWL_REGISTRY_RESOLVE_LINKS_ID,
   crawlTimingStart,
+  forEachInOrder,
   FsLookupCache,
   issueLocation,
+  isVatError,
   recordRegistryPass,
+  requireFollowedStat,
   resolveAssetReference,
   safePath,
   toForwardSlash,
@@ -28,9 +35,11 @@ import {
   withOuterBracket,
 } from '@vibe-agent-toolkit/utils';
 import {
+  BUILD_OUTPUT_GLOBS,
   crawlDirectory,
   type CrawlOptions as UtilsCrawlOptions,
   crawlPathFilter,
+  NEVER_CONTENT_GLOBS,
   type UnreadablePolicy,
 } from '@vibe-agent-toolkit/utils/crawl';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
@@ -54,11 +63,15 @@ import { estimateTokens } from './link-classify.js';
 import type { ParseResult } from './link-parser.js';
 import { fillLinkFacts, fragmentIndex, judgeLink, resolveLinkEntries, unreadableTargetsFrom, type FragmentIndex, type JudgeLinkOptions, type LinkEntry, type ValidateLinkOptions } from './link-validator.js';
 import { parserKindForMimeType } from './mime-type.js';
+import { type NotAdmittedLog, notAdmittedIssues, parseRefusedEntry } from './not-admitted.js';
 import { ParseCache, type ParseCacheStats, vatCacheRoot } from './parse-cache.js';
 import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } from './parse-dispatcher.js';
+import { isReadFailure, readFailureCode } from './parse-failure.js';
+import { isPerRunParseRefusal, type PerRunParseRefusal } from './parse-limits.js';
 // A value import, and acyclic: `crawl-source.ts` reaches only `utils` and a
 // type from `realizations.ts`, never back into the registry. The remedy is
 // shared so the walk lane refuses with the projection's exact sentence.
+import { isDeclinedSymlinkCode } from './projection/contributors/filesystem-extent.js';
 import { listingRefusalRemedy } from './projection/crawl-source.js';
 import {
   collectionMimeConflictFinding,
@@ -69,7 +82,7 @@ import {
 // Type-only, and that is what keeps it acyclic: the projection's population
 // builder is a CALLER of the registry's world, not a dependency of it, so the
 // import is erased before any module graph exists at runtime.
-import type { ResourcePopulationSource } from './projection/resource-population.js';
+import type { CrawlPopulation, ResourceEnumeration, ResourcePopulationSource } from './projection/resource-population.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { SHA256 } from './schemas/checksum.js';
 import type { ProjectConfig, ValidationMode } from './schemas/project-config.js';
@@ -96,53 +109,6 @@ export interface DuplicateIdCollision {
   existingPath: string;
   /** Absolute path of the file that arrived later and was skipped. */
   conflictingPath: string;
-}
-
-/**
- * Filesystem errno codes that mean "this path could not be read", as opposed to
- * "VAT is broken".
- *
- * Deliberately an allow-list rather than a catch-all. Demoting every non-
- * duplicate error to a finding would silently convert a parser or indexing
- * defect into a per-file warning, and the corpus-wide symptom of that is a
- * quietly shrinking population — the exact failure mode this code exists to
- * make loud.
- *
- * `ELOOP` is the symlink cycle; `ENOENT` the dangling symlink and the file
- * deleted between enumeration and parse; `EISDIR`/`ENOTDIR` a path whose type
- * changed underneath the crawl.
- *
- * Being an allow-list is also what makes this boundary safe for the parser load
- * that now happens inside `addResource`: a failed load arrives as
- * `ParserUnavailableError`, whose `code` is `VAT_PARSER_UNAVAILABLE` and is
- * therefore not a member, so it is never demoted. That holds by construction —
- * no `isParserUnavailable` call is needed here, and adding one would suggest
- * this set could otherwise contain it.
- */
-const READ_FAILURE_CODES: ReadonlySet<string> = new Set([
-  'EACCES',
-  'EISDIR',
-  'ELOOP',
-  'EMFILE',
-  'ENAMETOOLONG',
-  'ENFILE',
-  'ENOENT',
-  'ENOTDIR',
-  'EPERM',
-]);
-
-/**
- * Whether an error is a filesystem read failure rather than a defect.
- *
- * @param error - The thrown value
- * @returns True when the error carries a recognized filesystem errno code
- */
-function isReadFailure(error: unknown): error is Error & { code: string } {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  const { code } = error as { code?: unknown };
-  return typeof code === 'string' && READ_FAILURE_CODES.has(code);
 }
 
 /**
@@ -178,7 +144,26 @@ export interface UnreadableResource {
 type PreparedResource =
   | { outcome: 'admitted'; resource: ResourceMetadata }
   | { outcome: 'unreadable'; filePath: string; reason: string; code?: string; error: Error }
+  | { outcome: 'parse-refused'; filePath: string; error: PerRunParseRefusal }
   | { outcome: 'failed'; error: unknown };
+
+/**
+ * One enumerated file whose parse this run refused — stopped at a limit, or lost
+ * with the worker that held it — and so is absent from the registry despite the
+ * crawl having found it. Never stored: the next run parses it again (ADR I6).
+ *
+ * The one shape every lane reports a refusal from — a crawl's log, a
+ * single-file add's throw, and a projection's refusal rows alike — so
+ * `parseRefusedMessage` says it in one sentence wherever it was met.
+ */
+export interface ParseRefusedResource {
+  /** Absolute path of the file that was enumerated but not admitted. */
+  readonly filePath: string;
+  /** The finding code every consumer reports it under. */
+  readonly code: 'RESOURCE_PARSE_LIMIT_EXCEEDED' | 'RESOURCE_PARSE_WORKER_DIED';
+  /** What stopped the parse, e.g. `its parse was stopped at its stackMb limit (1 MiB stack)`. */
+  readonly reason: string;
+}
 
 export class DuplicateResourceIdError extends VatError {
   readonly id: string;
@@ -204,6 +189,16 @@ export class DuplicateResourceIdError extends VatError {
  * recognized here.
  */
 export const DEFAULT_RESOURCE_INCLUDE: readonly string[] = ['**/*.md', '**/*.html', '**/*.htm'];
+
+/**
+ * What a resource crawl excludes when the caller supplies no `exclude` of its own:
+ * only what can never be authored content (`NEVER_CONTENT_GLOBS` — dependencies, git
+ * internals, worktree copies, a build's staging residue) and build output. Not
+ * `coverage/` or `.turbo/`, which an author may name a directory. A caller's
+ * `exclude` REPLACES it; spread this to keep it. Exported for the same reason as
+ * {@link DEFAULT_RESOURCE_INCLUDE}: one home, never a restated copy.
+ */
+export const DEFAULT_RESOURCE_EXCLUDE: readonly string[] = Object.freeze([...NEVER_CONTENT_GLOBS, ...BUILD_OUTPUT_GLOBS]);
 
 /**
  * The (bound, offered) root pairs already announced, so a run that crawls the
@@ -313,10 +308,19 @@ export interface CrawlOptions {
   unreadable: RegistryUnreadablePolicy;
   /** Include patterns (default: {@link DEFAULT_RESOURCE_INCLUDE}) */
   include?: string[];
-  /** Exclude patterns (default: node_modules, .git, dist) */
+  /** Exclude patterns, replacing the default (default: {@link DEFAULT_RESOURCE_EXCLUDE}) */
   exclude?: string[];
   /** Follow symbolic links (default: false) */
   followSymlinks?: boolean;
+  /**
+   * The trees the calling verb WRITES — its output and the staging it builds it in — or `[]`
+   * for a verb that only reads: the one declaration of which side a fault is on. A fault at
+   * (or a refused listing of) a directory that is, lies in, or holds one of them — the base of
+   * a project the verb writes into included — is the destination's; anything else the input's.
+   * Required: only the caller knows, and a default would put every omitted caller's output
+   * faults on the input.
+   */
+  outputs: readonly string[];
   /**
    * Where the file list comes from — omit for the incumbent `crawlDirectory`
    * walk, supply one to source it from a projection instead.
@@ -338,6 +342,40 @@ export interface CrawlOptions {
    * for the guard and why it declines rather than throwing.
    */
   populationSource?: ResourcePopulationSource;
+}
+
+/**
+ * What one {@link ResourceRegistry.crawl} admitted, and where its population came from.
+ */
+export interface RegistryCrawl {
+  /** The admitted resources, in admission order — see {@link admissionOrder}. */
+  readonly resources: ResourceMetadata[];
+  /** Which lane answered, and for the projection lane the enumeration's own outcome and enumerator. */
+  readonly population: CrawlPopulation;
+}
+
+/**
+ * The ONE order the registry admits files in: by resolved path, in UTF-16
+ * code-unit order (`compareCodeUnits`).
+ *
+ * First-added-wins on a duplicate id is decided by admission order, so the
+ * order belongs to the registry and not to whoever enumerated. Its scope is ONE
+ * admission batch — an {@link ResourceRegistry.addResources} call, so a whole
+ * crawl — and never evicts a file an earlier batch registered; a caller that
+ * admits a batch one {@link ResourceRegistry.addResource} at a time (the
+ * packager's bundled assets) orders it through this same function first: a walk lists by
+ * directory, git lists by byte, a stored extent comes back in SQLite's order,
+ * and each would keep a different file. Code-unit order equals git's UTF-8 byte
+ * order except where a character above U+FFFF meets one in U+E000–U+FFFF.
+ *
+ * @param filePaths - The files to admit, in any order and any spelling
+ * @returns A new array in admission order; the input is not reordered
+ */
+export function admissionOrder(filePaths: readonly string[]): string[] {
+  return filePaths
+    .map((filePath) => ({ filePath, key: safePath.resolve(filePath) }))
+    .sort((left, right) => compareCodeUnits(left.key, right.key))
+    .map(({ filePath }) => filePath);
 }
 
 /**
@@ -364,7 +402,7 @@ export interface ResourceRegistryOptions {
   /**
    * How, and whether, to move this registry's parsing off the main thread.
    *
-   * Defaults are what a command gets — OFF, unless `VAT_PARSE_POOL=1` — and the
+   * Defaults are what a command gets — there is no off switch — and the
    * meaning of every field is {@link ParsePoolPolicy}'s, shared verbatim with
    * the projection lane so the two cannot reach different verdicts about a
    * switch that has already been measured once.
@@ -492,7 +530,7 @@ function collectionSchemaCacheKey(resolvedSchemaPath: string, mode: ValidationMo
  * What a resource is when nothing parses it.
  *
  * `parserKindForPath` answers `none` for every type that is neither prose nor
- * markup, and `parseKeyed` refuses that kind in its SIGNATURE — so this is not a
+ * markup, and the dispatcher refuses that kind in its SIGNATURE — so this is not a
  * fallback the registry may forget, it is the other half of a decision the
  * compiler insists on. The alternative was the status quo ante, where a `.ts`
  * file went to `remark-parse` and came back with reference-style "links" made of
@@ -569,7 +607,7 @@ async function readAndCompileSchema(
  *
  * // Add resources
  * await registry.addResource('/project/README.md');
- * await registry.crawl({ baseDir: '/project/docs', unreadable: 'refuse' });
+ * await registry.crawl({ baseDir: '/project/docs', unreadable: 'refuse', outputs: [] });
  *
  * // Validate all links
  * const result = await registry.validate();
@@ -603,7 +641,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * it caches directory *listings*, so a registry that outlives an edit (watch mode,
    * a server) must not answer the next run from the previous run's snapshot.
    */
-  private fsCache: FsLookupCache = new FsLookupCache();
+  private fsCache: FsLookupCache = new FsLookupCache(locationRoot(undefined));
 
   /**
    * Disk-backed parse cache, created on first parse unless injected.
@@ -720,6 +758,15 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private unreadableResources: UnreadableResource[] = [];
 
   /**
+   * Files whose parse this run refused (`parse-limits.ts`): stopped at a limit,
+   * or lost with the worker that held it. Not admitted this run. Cleared by
+   * clear(). Surfaced as RESOURCE_PARSE_LIMIT_EXCEEDED or
+   * RESOURCE_PARSE_WORKER_DIED issues in validate(). Nothing about them is
+   * stored, so the next run parses them again.
+   */
+  private parseRefusedResources: ParseRefusedResource[] = [];
+
+  /**
    * Population-time conditions the population source handed over with the
    * paths — the projection's `realization_conditions` for the extents the lane
    * registered. Empty on the walk lane, which has no projection. Cleared by
@@ -743,11 +790,41 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
+   * Files whose parse this run refused, in the order `addResources` met them.
+   *
+   * ⛔ Not optional to read. Such a file is in no other list this registry
+   * keeps: not admitted, not unreadable, not in `getAllResources()`. A consumer
+   * that crawls and never calls {@link validate} must report every entry here
+   * as an error finding and count it as examined, exactly as it reports
+   * {@link getUnreadableResources}; otherwise a pathological document silently
+   * drops out of its output at exit 0. Every crawl in `src` is held to this by
+   * `packages/dev-tools/test/parse-refusal-readers.test.ts`.
+   *
+   * @returns A copy of the refusal log, oldest first
+   */
+  getParseRefusedResources(): ParseRefusedResource[] {
+    return [...this.parseRefusedResources];
+  }
+
+  /**
+   * Both logs of files this registry enumerated and did not admit
+   * ({@link getUnreadableResources}, {@link getParseRefusedResources}), in the
+   * shape the one not-admitted contract reads (`not-admitted.ts`): every verb
+   * turns them into findings and counts them in `examined` through it.
+   *
+   * @returns Copies of both logs
+   */
+  getNotAdmitted(): NotAdmittedLog {
+    return { unreadable: this.getUnreadableResources(), parseRefused: this.getParseRefusedResources() };
+  }
+
+  /**
    * Duplicate-id drops, in the order `addResources` made them.
    *
-   * Exposed because arrival order is behaviour, not bookkeeping: the rule is
+   * Exposed because admission order is behaviour, not bookkeeping: the rule is
    * first-added-wins, so which of two colliding files gets validated, bundled
-   * and rewritten is decided by enumeration order. `validate()` turns these
+   * and rewritten is decided by admission order (see {@link admissionOrder}),
+   * which is the registry's own and not the enumerator's. `validate()` turns these
    * into `DUPLICATE_RESOURCE_ID` issues; a caller that needs to compare
    * populations across a refactor needs the raw drops, because an issue list
    * says a collision happened without saying which file survived it.
@@ -866,30 +943,33 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   /**
    * Create a registry by crawling a directory.
    *
-   * Combines registry creation and directory crawling in a single operation.
+   * Combines registry creation and directory crawling in a single operation,
+   * and returns what {@link ResourceRegistry.crawl} returned beside the
+   * registry — one route to a crawl, one shape for its answer, so a caller built
+   * here can say which lane enumerated exactly as a `crawl()` caller can.
    *
    * @param crawlOptions - Crawl options including baseDir
    * @param registryOptions - Additional registry options
-   * @returns New registry with crawled resources
+   * @returns The new registry, and the crawl's resources and population
    *
    * @example
    * ```typescript
-   * const registry = await ResourceRegistry.fromCrawl({
+   * const { registry, population } = await ResourceRegistry.fromCrawl({
    *   baseDir: '/project/docs',
+   *   outputs: [],
    *   unreadable: 'refuse', // or { degrade } — see RegistryUnreadablePolicy
    *   include: ['**.md'],
    *   exclude: ['node_modules'],
    * });
-   * console.log(`Crawled ${registry.size()} resources`);
+   * console.log(`Crawled ${registry.size()} resources on the ${population.lane} lane`);
    * ```
    */
   static async fromCrawl(
     crawlOptions: CrawlOptions,
     registryOptions?: Omit<ResourceRegistryOptions, 'baseDir'>,
-  ): Promise<ResourceRegistry> {
+  ): Promise<RegistryCrawl & { readonly registry: ResourceRegistry }> {
     const registry = new ResourceRegistry({ ...registryOptions, baseDir: crawlOptions.baseDir });
-    await registry.crawl(crawlOptions);
-    return registry;
+    return { registry, ...(await registry.crawl(crawlOptions)) };
   }
 
   /**
@@ -930,10 +1010,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   async addResource(filePath: string): Promise<ResourceMetadata> {
     const startedAt = crawlTimingStart();
-    // Its own dispatcher, which can never activate: one document cannot clear
-    // the miss threshold, so `shutdown()` closes nothing and the width stays 1.
-    // Built anyway rather than special-cased, so this route and `addResources`
-    // reach the parser through exactly one code path.
+    // Its own dispatcher, so this route and `addResources` reach the parser
+    // through exactly one code path: a miss parses in a bounded one-shot worker
+    // (I8), and `shutdown()` closes it. A hit spawns nothing.
     const dispatcher = new ParseDispatcher(this.parseCache(), this.parsePoolPolicy);
     try {
       const prepared = await this.prepareAdmission(filePath, dispatcher);
@@ -979,6 +1058,10 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     try {
       return { outcome: 'admitted', resource: await this.readAndKey(filePath, dispatcher) };
     } catch (error) {
+      // A parse stopped at a limit, or lost with its worker, is the run's, not
+      // the file's or VAT's: a finding, so one runaway document never fails the
+      // whole crawl (ADR I6, I8).
+      if (isPerRunParseRefusal(error)) return { outcome: 'parse-refused', filePath, error };
       if (isReadFailure(error)) {
         // A file the crawl handed us that we cannot read. Recorded, not thrown:
         // previously this terminated `vat resources scan|validate` and `vat
@@ -995,14 +1078,15 @@ export class ResourceRegistry implements ResourceCollectionInterface {
           filePath,
           reason: error.message,
           error,
-          ...(typeof (error as { code?: unknown }).code === 'string' && {
-            code: (error as { code: string }).code,
-          }),
+          code: readFailureCode(error),
         };
       }
-      // Not a read failure: a genuine defect in parsing, which must not be
-      // demoted to a finding. Carried, not thrown — see the docblock.
-      return { outcome: 'failed', error };
+      // Not a per-file read failure: a genuine defect in parsing, which must not
+      // be demoted to a finding, or a fault that is not the file's (the machine out
+      // of descriptors, disk or quota; a failing device) — classified here, at the
+      // read, so it refuses by the table rather than as a raw errno. Carried, not
+      // thrown — see the docblock.
+      return { outcome: 'failed', error: classifyFsFault(error, { side: 'source', origin: 'content', action: `read ${filePath}`, path: filePath }) };
     }
   }
 
@@ -1068,20 +1152,22 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // THE read. Everything below is a function of these bytes plus one stat —
     // this used to be two whole-file reads (parse, then checksum) and two stats.
     // The discriminator runs exactly ONCE here and its answer rides on `keyed`
-    // into both the content key and the parser selection in `parseKeyed`:
+    // into both the content key and the parser selection in the dispatcher:
     // parser selection is part of a document's parse identity (content-key.ts),
     // and running the discriminator twice is how the parse route and the key's
     // parse-route component drift apart.
     //
     // See {@link parserKindFor} for why the routing goes through the run's
     // resolver rather than `parserKindForPath`.
-    const keyed = await readContentWithKey(absolutePath, this.parserKindFor(absolutePath));
+    // Held to the run's parse input cap by its size, before it is read (a kind
+    // nothing parses is never capped: see `readContentWithKey`).
+    const keyed = await readContentWithKey(absolutePath, this.parserKindFor(absolutePath), dispatcher.inputBytes);
 
     // Parse from the bytes already in hand — or from a cache entry filed under
-    // the key those bytes just produced. See `parseKeyed` for the interception.
+    // the key those bytes just produced. See `ParseDispatcher.parse`.
     //
     // …unless nothing parses this at all. `parserKindForPath` answers `none` for
-    // every type that is neither prose nor markup, and `parseKeyed` refuses that
+    // every type that is neither prose nor markup, and the dispatcher refuses that
     // kind by TYPE rather than by throwing, so the branch cannot be forgotten.
     // See {@link unparsedResourceFacts} for what a resource is without a parse.
     const parseResult = isParsableContent(keyed)
@@ -1099,7 +1185,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // extra `stat` on a path that has already paid a whole read and a parse.
     //
     // THE stat — one call serving both `modifiedAt` and `sizeBytes`.
-    const stats = await fs.stat(absolutePath);
+    // Its link chain read beneath the crawl base first (`link-following.ts`).
+    const stats = await requireFollowedStat(absolutePath, locationRoot(this.baseDir));
 
     // Checksum from the bytes already decoded, not a second read of the file.
     // It hashes the DECODED STRING, which is a different keyspace from
@@ -1146,7 +1233,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * be.
    *
    * **THE sequential half.** Every mutation this class performs during a crawl
-   * happens here, and it is called in `filePaths` order, which is what makes the
+   * happens here, and it is called in admission order, which is what makes the
    * output a function of the corpus rather than of the machine. Three separate
    * guarantees rest on that, and only the first one is loud when it breaks:
    *
@@ -1167,6 +1254,10 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   private emitPreparedResource(prepared: PreparedResource): ResourceMetadata | undefined {
     if (prepared.outcome === 'failed') throw prepared.error;
+    if (prepared.outcome === 'parse-refused') {
+      this.parseRefusedResources.push(parseRefusedEntry(prepared.filePath, prepared.error));
+      return undefined;
+    }
     if (prepared.outcome === 'unreadable') {
       this.unreadableResources.push({
         filePath: prepared.filePath,
@@ -1203,7 +1294,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
 
   /**
    * Add multiple resources to the registry: read and parse with a bounded
-   * fan-out, then register in input order.
+   * fan-out, then register in admission order (see {@link admissionOrder}).
    *
    * ## Why this is no longer a sequential loop
    *
@@ -1212,17 +1303,21 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * it is unchanged — what changed is where it is discharged. Reading and
    * parsing happen concurrently in {@link prepareAdmission}, which decides
    * everything and mutates nothing; every mutation happens in
-   * {@link emitPreparedResource}, in `filePaths` order. So duplicate detection
+   * {@link emitPreparedResource}, in admission order. So duplicate detection
    * is still strictly ordered while the parse — 70% of this command's wall clock
    * on a real adopter — is not.
    *
    * ⭐ **At width 1, which is what ships today, this is the old loop exactly**:
    * one file prepared, one file emitted, before the next is touched.
    *
-   * @param filePaths - Array of file paths to add
-   * @returns Array of parsed resource metadata, in `filePaths` order
+   * @param filePaths - The file paths to add, in any order: the registry sorts
+   *   them into admission order, so the code-unit-first of two paths with one id
+   *   IN THIS CALL wins however the caller listed them. The order is per batch: a
+   *   file an earlier call registered keeps its id, and a later path that sorts
+   *   before it is the one recorded as the collision
+   * @returns Array of parsed resource metadata, in admission order
    * @throws Error if any file fails for a reason that is not a read failure or
-   *   a duplicate id — raised for the FIRST such file in `filePaths` order, not
+   *   a duplicate id — raised for the FIRST such file in admission order, not
    *   for whichever preparation happened to finish first
    *
    * @example
@@ -1234,7 +1329,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * ]);
    * ```
    */
-  async addResources(filePaths: string[]): Promise<ResourceMetadata[]> {
+  async addResources(filePaths: readonly string[]): Promise<ResourceMetadata[]> {
+    const ordered = admissionOrder(filePaths);
     // ⛔ Nothing is pre-loaded here, deliberately. A `loadParsersFor(filePaths)`
     // hoist stood on this line to keep a broken INSTALL out of the demotion
     // below, and it cost every fully warm crawl the ~730 ms remark load for
@@ -1248,9 +1344,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     const dispatcher = new ParseDispatcher(this.parseCache(), this.parsePoolPolicy);
     try {
       await driveInOrder(
-        filePaths,
+        ordered,
         dispatcher,
-        async (filePath) => this.prepareAdmission(filePath, dispatcher),
+        (filePath) => this.prepareAdmission(filePath, dispatcher),
         (prepared) => {
           try {
             const admitted = this.emitPreparedResource(prepared);
@@ -1269,7 +1365,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         // collection declarations, both already in memory, so this answers
         // without a `stat` and without a read.
         (from) =>
-          tallyParsable(filePaths, from, (filePath) =>
+          tallyParsable(ordered, from, (filePath) =>
             this.parserKindFor(safePath.resolve(filePath)),
           ),
       );
@@ -1287,30 +1383,37 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
-   * Crawl a directory and add all matching markdown files.
+   * Crawl a directory and add all matching markdown files, as ONE
+   * {@link addResources} batch — so the whole crawl is admitted in one
+   * admission order, however the files were enumerated.
    *
    * @param options - Crawl options (baseDir, the required `unreadable` policy, include, exclude patterns)
-   * @returns Array of all added resources
+   * @returns The admitted resources, in admission order, and where their file
+   *   list came from: `{ lane: 'walk' }` when the directory was walked (no source,
+   *   or a source this crawl declined), otherwise the outcome and enumerator the
+   *   source's enumeration carried
    *
    * @example
    * ```typescript
    * // Crawl docs directory, excluding node_modules
-   * const resources = await registry.crawl({
+   * const { resources, population } = await registry.crawl({
    *   baseDir: './docs',
+   *   outputs: [],
    *   unreadable: 'refuse',
    *   include: ['**\/*.md'],
    *   exclude: ['**\/node_modules/**']
    * });
    * ```
    */
-  async crawl(options: CrawlOptions): Promise<ResourceMetadata[]> {
+  async crawl(options: CrawlOptions): Promise<RegistryCrawl> {
     const {
       baseDir,
       include = [...DEFAULT_RESOURCE_INCLUDE],
-      exclude = ['**/node_modules/**', '**/.git/**', '**/dist/**'],
+      exclude = [...DEFAULT_RESOURCE_EXCLUDE],
       followSymlinks = false,
       unreadable,
       populationSource,
+      outputs,
     } = options;
     requireRegistryUnreadablePolicy(unreadable);
     if (populationSource !== undefined && unreadable !== 'refuse') {
@@ -1333,6 +1436,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       followSymlinks,
       absolute: true,
       filesOnly: true,
+      outputs,
       // The validation universe is `tracked ∪ (untracked ∧ ¬ignored)` — what a
       // commit made right now WOULD contain. Without this, `crawlDirectory`'s
       // `git ls-files` fast path answers tracked-only, so a brand-new,
@@ -1357,7 +1461,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       // prunes it by name) and is a warning row on the projection, never an
       // abort. Under `{ degrade }` the refusal is the caller's to report.
       unreadable: unreadable === 'refuse'
-        ? { refuse: { root: baseDir, remedy: listingRefusalRemedy(baseDir) } }
+        ? { refuse: { root: baseDir, remedy: listingRefusalRemedy(baseDir), side: 'source' } }
         : unreadable,
     };
 
@@ -1390,18 +1494,22 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // where something does.
     //
     // `populationFrom` may DECLINE — see its root guard — and a decline falls
-    // back to the walk rather than to an empty list. `??` and not `||`: an empty
-    // ARRAY is a legitimate population (a tree with no admitted members) and must
-    // not re-trigger the walk, while `undefined` is the refusal.
+    // back to the walk rather than to an empty list. `undefined` is the refusal;
+    // an empty `admitted` is a legitimate population (a tree with no admitted
+    // members) and must not re-trigger the walk.
     const enumerationStartedAt = crawlTimingStart();
     const sourced = populationSource
-      ? await withOuterBracket(() => this.populationFrom(populationSource, baseDir, include, exclude))
+      ? await withOuterBracket(() => this.populationFrom(populationSource, baseDir, include, exclude, outputs))
       : undefined;
-    const files = sourced ?? await crawlDirectory(crawlOptions);
+    const files = sourced?.admitted ?? await crawlDirectory(crawlOptions);
     recordRegistryPass(CRAWL_REGISTRY_ENUMERATE_ID, enumerationStartedAt);
 
-    // Add all found files
-    return await this.addResources(files);
+    // The walk answered whenever no enumeration did, declined or never offered —
+    // said HERE, beside the files, so it cannot be told apart from them.
+    const population: CrawlPopulation = sourced === undefined
+      ? { lane: 'walk' }
+      : { lane: 'projection', outcome: sourced.enumeration.outcome, extentSource: sourced.enumeration.extentSource };
+    return { resources: await this.addResources(files), population };
   }
 
   /**
@@ -1444,33 +1552,44 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * @param baseDir - The basis the caller's globs are written against
    * @param include - Include globs
    * @param exclude - Exclude globs
-   * @returns Absolute paths of the admitted files, or `undefined` when the source
-   *   is bound to a different root and the caller should walk instead
+   * @returns Absolute paths of the admitted files with the enumeration they came
+   *   from, or `undefined` when the source is bound to a different root and the
+   *   caller should walk instead
    */
   private async populationFrom(
     source: ResourcePopulationSource,
     baseDir: string,
     include: string[],
     exclude: string[],
-  ): Promise<string[] | undefined> {
+    outputs: readonly string[],
+  ): Promise<{ admitted: string[]; enumeration: ResourceEnumeration } | undefined> {
     const base = safePath.resolve(baseDir);
     if (!sameDirectory(source.root, base)) {
       warnPopulationRootMismatch(source.root, base);
       return undefined;
     }
     const isMember = crawlPathFilter(include, exclude);
-    const { paths, conditions } = await source.enumerate(base);
+    const enumeration = await source.enumerate(base, outputs);
+    const { paths, conditions } = enumeration;
     // Kept whole, not narrowed by `include`/`exclude`: a condition is about the
     // enumeration, and a gap the enumerator met outside this crawl's globs is
     // still a gap in the population the projection will answer queries from.
-    this.populationConditions = conditions;
+    // ONE exception: a declined link under an EXCLUDED path is dropped — an
+    // excluded `vendor/CLAUDE.md` link is no more this crawl's business than an
+    // excluded file. Only the exclude half applies: a DIRECTORY link matches no
+    // `**/*.md` include by its own name, yet may hold members
+    // (`.claude/rules/shared -> ~/shared-rules`).
+    const notExcluded = crawlPathFilter(['**/*'], exclude);
+    this.populationConditions = conditions.filter(
+      (row) => !isDeclinedSymlinkCode(row.code) || notExcluded(row.path),
+    );
     const admitted: string[] = [];
     for (const absolutePath of paths) {
       if (isMember(safePath.relative(base, absolutePath))) {
         admitted.push(absolutePath);
       }
     }
-    return admitted;
+    return { admitted, enumeration };
   }
 
   /**
@@ -1603,27 +1722,17 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
-   * Emit RESOURCE_UNREADABLE errors for reads that failed during addResources().
-   *
-   * The message states that the file was **skipped**, because the consequence
-   * a reader needs is not "a read failed" but "this file is in none of the
-   * counts you are about to read".
+   * RESOURCE_UNREADABLE, RESOURCE_PARSE_LIMIT_EXCEEDED and
+   * RESOURCE_PARSE_WORKER_DIED errors for every file addResources() enumerated
+   * and did not admit, through the one contract every verb reports them with
+   * (`not-admitted.ts`). Unresolved: `validate()` runs the framework over them
+   * with everything else.
    * @private
    */
-  private collectUnreadableResourceErrors(): ValidationIssue[] {
-    return this.unreadableResources.map(({ filePath, code }) => {
-      const where = issueLocation(filePath, locationRoot(this.baseDir));
-      const errno = code === undefined ? '' : ` (${code})`;
-      return createRegistryIssue(
-        'RESOURCE_UNREADABLE',
-        // `reason` (the raw fs error message) is deliberately omitted: Node's fs
-        // errors embed the absolute path (e.g. "ENOENT: ... open '/Users/...'"),
-        // which would leak the developer's home directory into CI logs -- the
-        // same class of leak `where` was computed to avoid. The errno code is
-        // signal enough; see the ValidationIssue docstring's `location` contract.
-        `'${where}' was enumerated but could not be read, so it was skipped and is absent from every count in this report${errno}.`,
-        { location: where },
-      );
+  private collectNotAdmittedErrors(): ValidationIssue[] {
+    return notAdmittedIssues(this.getNotAdmitted(), {
+      locationRoot: locationRoot(this.baseDir),
+      consequence: 'it was skipped: nothing in it was checked',
     });
   }
 
@@ -1675,11 +1784,12 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       skipGitIgnoreCheck,
     });
 
-    // The files this run enumerated and could NOT read, as the judge's lookup:
-    // an anchor into one of them cannot be checked, and the judge says so
-    // (LINK_TARGET_UNREADABLE) instead of `skip`ping it as if the file held no
-    // headings. Built once from the existing log — a view, not a second ledger.
-    const unreadableTargets = unreadableTargetsFrom(this.unreadableResources);
+    // The files this run enumerated and did NOT admit — unreadable, or their
+    // parse refused — as the judge's lookup: an anchor into one of them cannot
+    // be checked, and the judge says so (LINK_TARGET_UNREADABLE) instead of
+    // `skip`ping it as if the file held no headings. Built once from both logs
+    // (`getNotAdmitted()`) — a view, not a second ledger.
+    const unreadableTargets = unreadableTargetsFrom(this.getNotAdmitted());
 
     // Only pass options if projectRoot is defined (exactOptionalPropertyTypes requirement)
     const judgeOptions: JudgeLinkOptions = this.baseDir === undefined
@@ -1747,10 +1857,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       return issues;
     }
 
-    for (const resource of this.resourcesByPath.values()) {
+    // In order: issues follow resource order.
+    await forEachInOrder(this.resourcesByPath.values(), async (resource) => {
       // Skip if resource has no collections
       if (!resource.collections || resource.collections.length === 0) {
-        continue;
+        return;
       }
 
       // Validate against each collection's schema
@@ -1761,7 +1872,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         skipGitIgnoreCheck,
       );
       issues.push(...collectionIssues);
-    }
+    });
 
     return issues;
   }
@@ -1782,12 +1893,14 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       return issues;
     }
 
-    for (const collectionId of resource.collections) {
-      const collection = this.config.resources.collections[collectionId];
+    const collections = this.config.resources.collections;
+    // In order: issues follow the resource's collection order.
+    await forEachInOrder(resource.collections, async (collectionId) => {
+      const collection = collections[collectionId];
 
       // Skip if collection has no validation or no schema
       if (!collection?.validation?.frontmatterSchema) {
-        continue;
+        return;
       }
 
       const collectionIssues = await this.validateAgainstCollectionSchema(
@@ -1798,7 +1911,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         skipGitIgnoreCheck,
       );
       issues.push(...collectionIssues);
-    }
+    });
 
     return issues;
   }
@@ -1826,10 +1939,27 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       return [];
     }
 
-    const schemaPath = resolveAssetReference(
-      validation.frontmatterSchema,
-      this.baseDir ?? process.cwd(),
-    );
+    const schemaSpecifier = validation.frontmatterSchema;
+    const schemaFailure = (error: unknown): ValidationIssue[] => [
+      createRegistryIssue(
+        'FRONTMATTER_SCHEMA_ERROR',
+        `Failed to load or parse frontmatter schema '${schemaSpecifier}': ${error instanceof Error ? error.message : String(error)}`,
+        { location: issueLocation(resource.filePath, locationRoot(this.baseDir)), line: 1 },
+      ),
+    ];
+
+    // A bare specifier that resolves to nothing (package not installed, or its
+    // `exports` target not on disk) — or to a package Node cannot read (a
+    // malformed package.json) — is the config's schema not loading, the same
+    // finding as a schema path naming no file. Only those codes: any other
+    // throw is not about the schema reference.
+    let schemaPath: string;
+    try {
+      schemaPath = resolveAssetReference(schemaSpecifier, this.baseDir ?? process.cwd());
+    } catch (error) {
+      if (!isVatError(error, ASSET_REFERENCE_UNRESOLVED_CODE) && !isVatError(error, ASSET_REFERENCE_UNREADABLE_CODE)) throw error;
+      return schemaFailure(error);
+    }
 
     // Determine validation mode (default to permissive)
     const mode = validation.mode ?? 'permissive';
@@ -1847,7 +1977,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // false statement about it. The same reasoning applies more sharply to
     // `validateFrontmatterLinks` below: it is link validation, not schema
     // handling, and the fact tables it reads throw ON PURPOSE
-    // (`realpathFrom`/`pathSpellingFrom` crash on a missing row so that a
+    // (`realpathRowFrom`/`pathSpellingFrom` crash on a missing row so that a
     // fill/judge divergence names its own remedy). That crash must reach the
     // operator intact rather than be reworded into a schema complaint — do not
     // re-wrap either call.
@@ -1873,14 +2003,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       compiled = loaded.compiled;
     } catch (error) {
       // Handle missing or invalid schema files gracefully
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      return [
-        createRegistryIssue(
-          'FRONTMATTER_SCHEMA_ERROR',
-          `Failed to load or parse frontmatter schema '${validation.frontmatterSchema}': ${errorMessage}`,
-          { location: issueLocation(resource.filePath, locationRoot(this.baseDir)), line: 1 },
-        ),
-      ];
+      return schemaFailure(error);
     }
 
     // Validate frontmatter against JSON Schema
@@ -1896,7 +2019,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     if (validation.checkFrontmatterLinks !== false && resource.frontmatter) {
       // Same lookup the body-link judge gets (see `validateAllLinks`), so a
       // frontmatter reference with an anchor into a locked file is a finding too.
-      const unreadableTargets = unreadableTargetsFrom(this.unreadableResources);
+      const unreadableTargets = unreadableTargetsFrom(this.getNotAdmitted());
       const linkOptions: ValidateLinkOptions = this.baseDir === undefined
         ? { fsCache: this.fsCache, skipGitIgnoreCheck, unreadableTargets }
         : {
@@ -1934,7 +2057,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    *
    * @private
    */
-  private async loadCollectionSchema(
+  private loadCollectionSchema(
     schemaPath: string,
     mode: ValidationMode,
     fsModule: typeof fs,
@@ -1986,7 +2109,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
 
     // Fresh per run: directory listings are a snapshot, and a registry can outlive
     // the state it was validated against.
-    this.fsCache = new FsLookupCache();
+    this.fsCache = new FsLookupCache(locationRoot(this.baseDir));
 
     // Build fragment index for anchor validation
     const fragmentsByFile = this.buildFragmentIndex();
@@ -2005,7 +2128,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       ...this.collectHtmlParseErrors(),
       ...this.collectUnresolvedReferenceIssues(),
       ...this.collectDuplicateIdErrors(),
-      ...this.collectUnreadableResourceErrors(),
+      ...this.collectNotAdmittedErrors(),
       ...this.collectPopulationConditionIssues(),
     );
 
@@ -2445,6 +2568,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     this.resourcesByChecksum.clear();
     this.duplicateIdCollisions = [];
     this.unreadableResources = [];
+    this.parseRefusedResources = [];
     this.populationConditions = [];
     // The resolver's conflict accumulator belongs to the files it typed; a fresh
     // crawl types afresh and must not re-report the previous population's.

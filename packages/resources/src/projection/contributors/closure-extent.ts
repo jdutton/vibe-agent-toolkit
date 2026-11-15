@@ -32,11 +32,18 @@
  *
  * ## Edges come from the base projection, never from a fresh parse
  *
- * `blob_references` is keyed by **blob**, so the walk goes resource →
- * realization → `contentKey` → reference rows, and resolves each `rawRef`
- * relative to that realization's path. Re-parsing would be a second opinion
- * nothing reconciles, and would make a closure extent's membership depend on
- * whether the file changed since the base was populated.
+ * The edge table is keyed by **blob**, so the walk goes resource → realization →
+ * `contentKey` → edge rows, and resolves each one relative to that realization's
+ * path. Re-parsing would be a second opinion nothing reconciles, and would make
+ * a closure extent's membership depend on whether the file changed since the
+ * base was populated.
+ *
+ * WHICH table is the declaration's `referenceDialect`: `href` walks
+ * `blob_references`, filtered by `follow`; `claude-import` walks
+ * `harness_blob_imports` for the harness that reads that dialect — Claude
+ * Code's own `@` extractor under `claude-import` — whose rows are
+ * imports by the harness's definition, so no syntactic-form filter applies and
+ * the schema refuses a `follow` list beside it.
  *
  * Consequently this contributor performs **no filesystem I/O of its own**: it is
  * a pure function of the base plus the declaration. The one exception is
@@ -106,6 +113,7 @@ import {
   CRAWL_CLOSURE_RESOLVE_ID,
   CRAWL_PASS_INSIDE,
   crawlTimingStart,
+  promised,
   recordCrawlPass,
 } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
@@ -114,8 +122,10 @@ import {
   ExtentDeclarationSchema,
   type ExtentDeclaration,
   type ExtentRefusalRule,
+  type ReferenceDialect,
 } from '../../schemas/project-config.js';
-import type { BlobReferenceRow } from '../../schemas/projection-blobs.js';
+import type { BlobConditionRow, BlobReferenceRow, BlobRow } from '../../schemas/projection-blobs.js';
+import type { HarnessBlobFactsRow, HarnessBlobImportRow } from '../../schemas/projection-harness.js';
 import { CONDITION_WITHOUT_REFERENCE } from '../../schemas/projection-resources.js';
 import type {
   RealizationConditionRow,
@@ -126,6 +136,8 @@ import type {
 import type { JsonValue } from '../../schemas/projection-shared.js';
 import type { ResolutionContextRow } from '../../schemas/projection-zones.js';
 import type { ContributorStratum, ExtentContribution, ExtentContributor } from '../contributor.js';
+import { harnessFactsIndex } from '../harness/facts-index.js';
+import { harnessForDialect } from '../harness/profile.js';
 import type { Projection, ProjectionBase } from '../projection.js';
 import { isNonLocalRef, resolveReferencePath } from '../reference-resolution.js';
 
@@ -187,8 +199,17 @@ export const CLOSURE_ROOT_ABSENT = 'CLOSURE_ROOT_ABSENT';
  */
 export const CLOSURE_DEPTH_EXCEEDED = 'CLOSURE_DEPTH_EXCEEDED';
 
-/** Where the walk currently is: a root-relative path and its hop count from the root. */
-type Hop = readonly [path: string, depth: number];
+/**
+ * Where the walk currently is: a root-relative path, its hop count from the
+ * root, and whether the walk goes THROUGH it.
+ *
+ * A non-traversable hop is a LEAF — admitted as a member, never enqueued. The
+ * flag rides on the hop rather than being recomputed at the queue because the
+ * one place that can answer it is {@link hopFor}, which already holds the
+ * target row; re-deriving it from a path at the loop would be a second reading
+ * of the same question.
+ */
+type Hop = readonly [path: string, depth: number, traversable: boolean];
 
 /** Everything one traversal needs, gathered once from the base. */
 interface WalkContext {
@@ -197,8 +218,12 @@ interface WalkContext {
   readonly extentId: string;
   /** Root-relative path → the realizations the base holds for it, in base order. */
   readonly byPath: ReadonlyMap<string, readonly ResourceRealizationRow[]>;
-  /** `blobs.contentKey` → its reference rows, in ordinal order. */
-  readonly byBlob: ReadonlyMap<string, readonly BlobReferenceRow[]>;
+  /**
+   * `blobs.contentKey` → the edges this declaration follows out of it, in
+   * ordinal order. `path` is where the walk reached the blob — named by the
+   * error a strict source throws for a blob with no harness facts.
+   */
+  readonly edgesOf: (contentKey: string, path: string) => readonly ClosureEdge[];
   /**
    * The FIRST `refusals` rule that catches this candidate, or `undefined` when
    * the declaration admits it.
@@ -225,6 +250,11 @@ interface WalkContext {
    * in this module's docstring true.
    */
   readonly refusalOf: (candidate: ResourceRealizationRow) => ExtentRefusalRule | undefined;
+  /**
+   * Does the walk go THROUGH this target? Compiled once from `traverseGlobs`;
+   * always true when the declaration names none.
+   */
+  readonly isDoor: (path: string) => boolean;
 }
 
 /**
@@ -243,7 +273,7 @@ export class ClosureExtentContributor implements ExtentContributor {
   /**
    * True, and it is this contributor's defining dependency: its edges ARE
    * `blob_references` rows (see "Edges come from the base projection, never from
-   * a fresh parse"). With the blob stage skipped, `byBlob` is empty, every
+   * a fresh parse"). With the blob stage skipped, the edge index is empty, every
    * extent is its declared root and nothing else, and the fixpoint converges on
    * iteration one — reporting success. That is why the driver refuses to skip
    * the stage while this is registered rather than quietly obliging.
@@ -279,7 +309,7 @@ export class ClosureExtentContributor implements ExtentContributor {
    * @throws When `parameters` is not a valid declaration, or names a `kind` other
    *   than the one this contributor is registered under
    */
-  async contribute(base: ProjectionBase, parameters: JsonValue): Promise<ExtentContribution> {
+  contribute(base: ProjectionBase, parameters: JsonValue): Promise<ExtentContribution> {
     // Bracketed from the inside, under a synthetic id shared by every declared
     // extent — see `crawl-timing.ts`. The merge driver already records this
     // invocation per extent and per fixpoint pass; what only an inner bracket can
@@ -287,7 +317,7 @@ export class ClosureExtentContributor implements ExtentContributor {
     // and the provenance rows the driver wraps around it.
     const startedAt = crawlTimingStart();
     try {
-      return this.#contribute(base, parameters);
+      return promised(() => this.#contribute(base, parameters));
     } finally {
       recordCrawlPass(CRAWL_CLOSURE_CONTRIBUTE_ID, 'closure', CRAWL_PASS_INSIDE, startedAt);
     }
@@ -329,8 +359,10 @@ export class ClosureExtentContributor implements ExtentContributor {
       declaration,
       extentId,
       byPath: realizationsByPathFor(base),
-      byBlob: referencesByBlobFor(base),
+      // Inside the closure fixpoint: a blob with no harness facts is frontier.
+      edgesOf: edgeSourceFor(base, declaration, 'frontier'),
       refusalOf: refusalMatcher(declaration, base),
+      isDoor: doorMatcher(declaration.traverseGlobs),
     });
 
     return { contexts: [context], ...walk };
@@ -386,7 +418,7 @@ function traverseClosure(
 
   const admitted: AdmittedHop[] = [{ path: rootPath, depth: 0, viaPath: null }];
   const visited = new Set<string>([rootPath]);
-  const queue: Hop[] = [[rootPath, 0]];
+  const queue: Hop[] = [[rootPath, 0, true]];
 
   while (queue.length > 0) {
     const hop = queue.shift();
@@ -406,7 +438,13 @@ function traverseClosure(
       if (visited.has(next[0])) continue;
       visited.add(next[0]);
       admitted.push({ path: next[0], depth: next[1], viaPath: path });
-      queue.push(next);
+      // ⚠️ MEMBERSHIP and TRAVERSAL part company here, and only here. A leaf is
+      // admitted on the line above like any other member; it is simply not a
+      // door, so nothing behind it is this extent's. Enqueuing one anyway would
+      // follow whatever `blob_references` happens to hold for a `.ts` or a
+      // `.png` — the walker parses neither — and the extent would grow through a
+      // file the packager treats as cargo.
+      if (next[2]) queue.push(next);
     }
   }
 
@@ -445,7 +483,9 @@ function walkClosure(walk: WalkContext): Omit<ExtentContribution, 'contexts'> {
     memberships.push({ resourceId: first.resourceId, extentId: walk.extentId });
   }
 
-  return { resources, realizations, memberships, tags: [], conditions };
+  // A closure declares MEMBERSHIP; it classifies nothing, so both classification
+  // tables are empty here.
+  return { resources, realizations, memberships, tags: [], conditions, claudeRulePatterns: [] };
 }
 
 /**
@@ -470,7 +510,14 @@ export interface ClosureProvenanceInput {
   /** Absolute, already-resolved corpus root — `roots[0].path`. */
   readonly root: string;
   readonly resourceRealizations: readonly ResourceRealizationRow[];
+  /** Which content keys have content at all — a key with none has no facts to require. */
+  readonly blobs: readonly BlobRow[];
   readonly blobReferences: readonly BlobReferenceRow[];
+  /** Which blobs' harness facts this run refused (`HarnessFactsIndex.refused`). */
+  readonly blobConditions: readonly BlobConditionRow[];
+  /** The harness tables — passed whole (identity-stable), so the memos below can serve them. */
+  readonly harnessBlobFacts: readonly HarnessBlobFactsRow[];
+  readonly harnessBlobImports: readonly HarnessBlobImportRow[];
   /** The declaration the extent ran under — `zone_provenance.parameterSet`. */
   readonly declaration: ExtentDeclaration;
 }
@@ -530,7 +577,12 @@ const provenanceBaseMemo = new WeakMap<readonly ResourceRealizationRow[], Proven
  * @returns True when the memoized view is this call's view
  */
 function servesProvenanceInput(base: ProvenanceBase, input: ClosureProvenanceInput): boolean {
-  return base.root === input.root && base.blobReferences === input.blobReferences;
+  return base.root === input.root
+    && base.blobs === input.blobs
+    && base.blobReferences === input.blobReferences
+    && base.blobConditions === input.blobConditions
+    && base.harnessBlobFacts === input.harnessBlobFacts
+    && base.harnessBlobImports === input.harnessBlobImports;
 }
 
 /**
@@ -545,7 +597,11 @@ function provenanceBaseFor(input: ClosureProvenanceInput): ProvenanceBase {
   const base: ProvenanceBase = {
     root: input.root,
     resourceRealizations: input.resourceRealizations,
+    blobs: input.blobs,
     blobReferences: input.blobReferences,
+    blobConditions: input.blobConditions,
+    harnessBlobFacts: input.harnessBlobFacts,
+    harnessBlobImports: input.harnessBlobImports,
   };
   provenanceBaseMemo.set(input.resourceRealizations, base);
   return base;
@@ -576,6 +632,46 @@ function provenanceBaseFor(input: ClosureProvenanceInput): ProvenanceBase {
 export function closureProvenance(
   input: ClosureProvenanceInput,
 ): ReadonlyMap<string, ImportProvenance> {
+  const provenance = new Map<string, ImportProvenance>();
+  for (const hop of traverseClosure(queryWalkFor(input), [])) {
+    provenance.set(hop.path, { depth: hop.depth, viaPath: hop.viaPath });
+  }
+  return provenance;
+}
+
+/**
+ * The paths one closure ROOT's own references lead to, in reference order —
+ * its first hop and nothing beyond it.
+ *
+ * For a caller that must walk the import graph in an order of its own: the
+ * harness's launch walk is depth-first with ONE visited set shared across every
+ * root, which no single closure's breadth-first traversal reproduces. ⛔ Still
+ * not a second resolver: it is {@link outboundHops} — the same `hopFor`, the
+ * same follow filter, the same dialect — asked about the root alone. A leaf is
+ * included like any target; a target equal to the root is not (a self-import).
+ *
+ * @param input - The root, the two materialised tables, and a declaration whose
+ *   `closureFrom` is the file asked about
+ * @returns Realized target paths, first occurrence of each, in reference order
+ * @throws Under the same refusal guard as {@link closureProvenance}
+ */
+export function closureHopsFrom(input: ClosureProvenanceInput): readonly string[] {
+  const walk = queryWalkFor(input);
+  const root = input.declaration.closureFrom;
+  const targets = outboundHops(root, walk.byPath.get(root) ?? [], 0, walk, []).map((hop) => hop[0]);
+  return [...new Set(targets)];
+}
+
+/**
+ * The walk context a query-side reader runs under — the provenance view, a
+ * no-op refusal matcher, and an extent id nothing is ever keyed to.
+ *
+ * @param input - The root, the two materialised tables, and the declaration
+ * @returns The context
+ * @throws When the declaration carries refusal rules. The no-op refusal matcher
+ *   is EQUIVALENT to the real one only when `refusals` is empty
+ */
+function queryWalkFor(input: ClosureProvenanceInput): WalkContext {
   if (input.declaration.refusals.length > 0) {
     throw new Error(
       `closureProvenance cannot answer for a declaration carrying ${input.declaration.refusals.length} refusals rule(s):`
@@ -586,7 +682,7 @@ export function closureProvenance(
 
   const partialBase = provenanceBaseFor(input);
 
-  const walk: WalkContext = {
+  return {
     base: partialBase as unknown as ProjectionBase,
     declaration: input.declaration,
     // Never read on this path: no row is emitted, so nothing is keyed to an
@@ -594,16 +690,15 @@ export function closureProvenance(
     // cannot mistake it for a real extent this map belongs to.
     extentId: PROVENANCE_ONLY_EXTENT_ID,
     byPath: realizationsByPathFor(partialBase),
-    byBlob: referencesByBlobFor(partialBase),
+    // Outside the fixpoint — the query and the launch walk — so strict: a
+    // reached blob with no harness facts is a producer bug, never "no edges".
+    // Hardcoded rather than a caller's choice, because no caller of
+    // `closureProvenance`/`closureHopsFrom` is ever inside the fixpoint.
+    edgesOf: edgeSourceFor(partialBase, input.declaration, 'strict'),
     // Sound only under the guard above.
     refusalOf: () => undefined,
+    isDoor: doorMatcher(input.declaration.traverseGlobs),
   };
-
-  const provenance = new Map<string, ImportProvenance>();
-  for (const hop of traverseClosure(walk, [])) {
-    provenance.set(hop.path, { depth: hop.depth, viaPath: hop.viaPath });
-  }
-  return provenance;
 }
 
 /**
@@ -618,7 +713,7 @@ export function closureProvenance(
  * @param depth - The referring member's hop count
  * @param walk - The traversal's indexed inputs
  * @param conditions - Collector for references that resolve to nothing
- * @returns Candidate hops, already filtered by `follow`, code context and excludes
+ * @returns Candidate hops, from the edges the declaration follows
  */
 function outboundHops(
   path: string,
@@ -633,8 +728,8 @@ function outboundHops(
   for (const row of rows) {
     if (row.contentKey === null || seenBlobs.has(row.contentKey)) continue;
     seenBlobs.add(row.contentKey);
-    for (const reference of walk.byBlob.get(row.contentKey) ?? []) {
-      const hop = hopFor(reference, path, depth, row.resourceId, walk, conditions);
+    for (const edge of walk.edgesOf(row.contentKey, row.path)) {
+      const hop = hopFor(edge, path, depth, row.resourceId, walk, conditions);
       if (hop !== undefined) hops.push(hop);
     }
   }
@@ -648,7 +743,7 @@ function outboundHops(
  * Extracted from {@link outboundHops} to stay under the cognitive-complexity
  * ceiling: the two loops and the four filters together exceed it.
  *
- * @param reference - One `blob_references` row
+ * @param reference - One edge the declaration follows
  * @param path - The referring member's root-relative path
  * @param depth - The referring member's hop count
  * @param resourceId - The referring member's identity, for a condition row
@@ -657,14 +752,14 @@ function outboundHops(
  * @returns The hop, or undefined when this reference is not an edge of this extent
  */
 function hopFor(
-  reference: BlobReferenceRow,
+  reference: ClosureEdge,
   path: string,
   depth: number,
   resourceId: string,
   walk: WalkContext,
   conditions: RealizationConditionRow[],
 ): Hop | undefined {
-  if (!shouldFollow(reference, walk.declaration)) return undefined;
+  const token = resolutionTokenOf(reference);
   // A non-local reference is not a broken local one. `walkLinkGraph` filters on
   // `isLocalFileLink` *before* resolving; this traversal's edges come from
   // `blob_references`, which records the raw token and not the link type, so the
@@ -672,9 +767,9 @@ function hopFor(
   // resolves against the referring directory, finds nothing, and lands in the
   // condition table as an unresolved *local* reference — a false claim about the
   // document, and one that would fire on essentially every real skill.
-  if (isNonLocalRef(reference.rawRef)) return undefined;
+  if (isNonLocalRef(token)) return undefined;
 
-  const resolution = resolveReference(reference.rawRef, path, walk);
+  const resolution = resolveReference(token, path, walk);
   if (resolution.kind === 'outside-root') {
     conditions.push(outsideRootCondition(walk.extentId, resolution.path, path, reference));
     return undefined;
@@ -726,6 +821,15 @@ function hopFor(
     conditions.push(refusedCondition(walk.extentId, target, refusal, path, reference));
     return undefined;
   }
+  // A LEAF is admitted before the budget is consulted, and the order is the
+  // behaviour: `walk-link-graph.ts` tests `isRoutable` BEFORE its depth check in
+  // `processRegistryResource`, and reaches its plain-asset branch without a
+  // depth test at all. Both say the same thing — "bundling this enqueues
+  // nothing, so there is no hop for a limit to bound" — and charging it anyway
+  // is what made a bounded closure disagree with the packager about the image
+  // hanging off a document at the frontier. Declared, never assumed: a
+  // declaration that names no `traverseGlobs` charges every target.
+  if (!walk.isDoor(target.path)) return [target.path, depth + 1, false];
   // The depth bound is checked LAST, and after the refusal — the order is
   // `classifyExclusion`-before-`processRegistryResource`, which is the order
   // `walk-link-graph.ts` checks them in. It matters because both can apply to
@@ -736,7 +840,24 @@ function hopFor(
     conditions.push(depthExceededCondition(walk.extentId, target, path, reference));
     return undefined;
   }
-  return [target.path, depth + 1];
+  return [target.path, depth + 1, true];
+}
+
+/**
+ * Compile a declaration's door globs: which targets the walk goes THROUGH.
+ *
+ * ⛔ Globs, not parser kinds. The packager traverses REGISTRY members and its
+ * registry is a glob; `parserKindForPath` also calls `.txt`, `.markdown` and
+ * `README` markdown, so a kind-keyed rule walked through files the build ships
+ * unopened and admitted documents it never ships. `dot: true`, as the crawl
+ * that builds the registry uses.
+ *
+ * @param globs - The declared door globs, or null for "every target"
+ * @returns A matcher over root-relative paths
+ */
+function doorMatcher(globs: ExtentDeclaration['traverseGlobs']): (path: string) => boolean {
+  if (globs === null) return () => true;
+  return picomatch([...globs], { dot: true });
 }
 
 /**
@@ -753,6 +874,59 @@ function hopFor(
 function shouldFollow(reference: BlobReferenceRow, declaration: ExtentDeclaration): boolean {
   if (reference.inFence || reference.inCodeSpan) return false;
   return declaration.follow.includes(reference.syntacticForm);
+}
+
+/**
+ * One edge the walk follows: a `blob_references` row under `href`, a
+ * `harness_blob_imports` row under a harness dialect (`claude-import`). Both carry `rawRef` and
+ * `line`, which is all a condition row reports.
+ */
+type ClosureEdge = BlobReferenceRow | HarnessBlobImportRow;
+
+/**
+ * The spelling resolution reads: an href's `rawRef` as authored, or a Claude
+ * import's `target` — already unescaped and cut by the harness's extractor.
+ *
+ * @param edge - One edge
+ * @returns The token {@link resolveReference} resolves
+ */
+function resolutionTokenOf(edge: ClosureEdge): string {
+  return 'target' in edge ? edge.target : edge.rawRef;
+}
+
+/**
+ * How an edge source reads a blob that has no harness facts row.
+ *
+ * - `frontier` — ONLY the closure contributor, running inside the fixpoint: a
+ *   blob the stratum has only just reached has not had its facts derived YET,
+ *   and a later pass derives them before the fixpoint settles. No edges this pass.
+ * - `strict` — everything outside the fixpoint: the harness reached the blob, so
+ *   an absent row is a producer bug and throws `HarnessFactsAbsentError`.
+ *
+ * A required parameter of {@link edgeSourceFor}, never defaulted: omitting it
+ * must not compile, because the default would be a silent `[]`.
+ */
+type HarnessFactsStrictness = 'frontier' | 'strict';
+
+/**
+ * The edges a declaration follows out of one blob — the ONE place the dialect
+ * picks its table.
+ *
+ * @param base - The tables the edges come from
+ * @param declaration - The extent declaration
+ * @param strictness - How a blob with no harness facts reads; see {@link HarnessFactsStrictness}
+ * @returns `contentKey` → its followed edges, in ordinal order
+ */
+function edgeSourceFor(
+  base: IndexableBase,
+  declaration: ExtentDeclaration,
+  strictness: HarnessFactsStrictness,
+): (contentKey: string, path: string) => readonly ClosureEdge[] {
+  if (declaration.referenceDialect !== 'href') {
+    return harnessImportsByBlobFor(base, declaration.referenceDialect, strictness);
+  }
+  const references = referencesByBlobFor(base);
+  return (contentKey) => (references.get(contentKey) ?? []).filter((reference) => shouldFollow(reference, declaration));
 }
 
 /**
@@ -1151,7 +1325,7 @@ function memberResource(resourceId: string, walk: WalkContext): ResourceRow {
  */
 function referenceProvenance(
   fromPath: string,
-  reference: BlobReferenceRow,
+  reference: ClosureEdge,
 ): Pick<RealizationConditionRow, 'sourcePath' | 'sourceLine' | 'sourceRef'> {
   return { sourcePath: fromPath, sourceLine: reference.line, sourceRef: reference.rawRef };
 }
@@ -1180,7 +1354,7 @@ function unresolvedCondition(
   extentId: string,
   fromPath: string,
   resourceId: string,
-  reference: BlobReferenceRow,
+  reference: ClosureEdge,
 ): RealizationConditionRow {
   return {
     extentId,
@@ -1194,6 +1368,7 @@ function unresolvedCondition(
     targetExists: null,
     matchedPattern: null,
     matchedPayload: null,
+    targetFaultClass: null,
   };
 }
 
@@ -1223,7 +1398,7 @@ function outsideRootCondition(
   extentId: string,
   targetPath: string,
   fromPath: string,
-  reference: BlobReferenceRow,
+  reference: ClosureEdge,
 ): RealizationConditionRow {
   return {
     extentId,
@@ -1237,6 +1412,7 @@ function outsideRootCondition(
     targetExists: null,
     matchedPattern: null,
     matchedPayload: null,
+    targetFaultClass: null,
   };
 }
 
@@ -1258,8 +1434,11 @@ function outsideRootCondition(
  * Emitted **once per refused reference**, not once per refused path, matching
  * both {@link unresolvedCondition} and `walkLinkGraph`'s own
  * `excludedReferences` — a target linked from three documents was refused three
- * times. The rows are identical, and `ProjectionBuilder`'s condition table keys
- * on `(extentId, path, code, resourceId)`, so a population records one.
+ * times. `ProjectionBuilder`'s condition table keys on `(extentId, path, code,
+ * resourceId, sourcePath, sourceLine, sourceRef)`, so a population records one
+ * row per distinguishable reference — three DIFFERENT referring lines, in one
+ * file or in three, survive as three rows, and only an identical re-emission (the fixpoint re-deriving the same
+ * reference) collapses.
  *
  * ## The refusal's PROVENANCE, which is the rest of what `LinkResolution` carries
  *
@@ -1284,11 +1463,15 @@ function outsideRootCondition(
  *   contributes no vocabulary here either: it neither reads nor validates it,
  *   exactly as it neither reads nor validates `label`.
  *
- * ⚠️ One row per refused REFERENCE is emitted, but `ProjectionBuilder` keys the
- * condition table on `(extentId, path, code, resourceId)` — so a target refused
- * through three references records ONE row, carrying the FIRST reference's
- * provenance. The witness is a witness, not the list; `blob_references` is where
- * the list lives.
+ * ⚠️ One row per refused REFERENCE is emitted, and `ProjectionBuilder` keys the
+ * condition table on `(extentId, path, code, resourceId, sourcePath,
+ * sourceLine, sourceRef)` — so a target refused through three references AT
+ * THREE POSITIONS records three rows, whether the positions lie in one
+ * referring file or in three. Two references collapse to one only when they
+ * share a position exactly (an identical re-emission, or two identical
+ * references on one line of one file), and the survivor carries the first
+ * one's provenance. `blob_references` is where the complete list lives
+ * regardless.
  *
  * @param extentId - The closure extent
  * @param target - The refused candidate's realization row
@@ -1302,7 +1485,7 @@ function refusedCondition(
   target: ResourceRealizationRow,
   rule: ExtentRefusalRule,
   fromPath: string,
-  reference: BlobReferenceRow,
+  reference: ClosureEdge,
 ): RealizationConditionRow {
   return {
     extentId,
@@ -1316,6 +1499,7 @@ function refusedCondition(
     targetExists: target.exists,
     matchedPattern: rule.patterns[0] ?? null,
     matchedPayload: rule.payload,
+    targetFaultClass: null,
   };
 }
 
@@ -1337,10 +1521,10 @@ function refusedCondition(
  * attaches `matchedRule` only for `pattern-matched`).
  *
  * ⚠️ Emitted once per REFERENCE, like every other closure condition, and
- * `ProjectionBuilder` keys the condition table on
- * `(extentId, path, code, resourceId)` — so a target held back at the boundary
- * through three references records one row carrying the first reference's
- * provenance.
+ * `ProjectionBuilder` keys the condition table on `(extentId, path, code,
+ * resourceId, sourcePath, sourceLine, sourceRef)` — so a target held back at the boundary
+ * through three references AT THREE POSITIONS records three rows, collapsing
+ * only where two references share a position exactly.
  *
  * A path can never carry both this code and a refusal label: {@link refusalOf}
  * is a function of the candidate ROW, and {@link resolveReference} always
@@ -1357,7 +1541,7 @@ function depthExceededCondition(
   extentId: string,
   target: ResourceRealizationRow,
   fromPath: string,
-  reference: BlobReferenceRow,
+  reference: ClosureEdge,
 ): RealizationConditionRow {
   return {
     extentId,
@@ -1371,6 +1555,7 @@ function depthExceededCondition(
     targetExists: target.exists,
     matchedPattern: null,
     matchedPayload: null,
+    targetFaultClass: null,
   };
 }
 
@@ -1406,7 +1591,10 @@ function rootAbsentCondition(extentId: string, rootPath: string): RealizationCon
  * `ProjectionBase` nor a `Projection`, only these two materialised tables plus
  * the root `WalkContext.base` separately needs.
  */
-type IndexableBase = Pick<Projection, 'resourceRealizations' | 'blobReferences'>;
+type IndexableBase = Pick<
+  Projection,
+  'resourceRealizations' | 'blobs' | 'blobReferences' | 'blobConditions' | 'harnessBlobFacts' | 'harnessBlobImports'
+>;
 
 /**
  * One memo entry: an index, plus the row count that was its whole premise.
@@ -1536,32 +1724,79 @@ function referencesByBlobFor(base: IndexableBase): ReadonlyMap<string, readonly 
     referencesByBlobMemo,
     base,
     base.blobReferences.length,
-    () => indexReferencesByBlob(base),
+    () => indexByBlob(base.blobReferences),
   );
 }
 
 /**
- * Index the base's reference candidates by blob, in ordinal order.
+ * The imports the harness reading `dialect` follows out of one blob, through
+ * the harness facts index (memoized per base and row counts, on
+ * {@link referencesByBlobMemo}'s terms).
  *
- * Sorted rather than trusted: `ordinal` is the documented order of a blob's
- * references, and the table's insertion order is whatever the parse layer
- * happened to add rows in.
+ * A key with no `blobs` row at all (unreadable, or refused as not text) has no
+ * content to have facts OF, and follows nothing in either mode — a question
+ * about content, not facts, answered as it always was. A blob whose facts this
+ * run refused (`HarnessFactsIndex.refused`) follows nothing either.
+ *
+ * ⚠️ A blob that EXISTS with no facts row reads per `strictness`: `frontier`
+ * gives no edges — "not yet", not zero, because the closure contributor runs
+ * inside the fixpoint where a later pass derives it; `strict` throws.
  *
  * @param base - The projection built so far
- * @returns `contentKey` → its reference rows, ordinal-ordered
+ * @param dialect - The harness dialect the extent declares
+ * @param strictness - How a blob with no harness facts reads
+ * @returns `contentKey` → its import rows, ordinal-ordered
  */
-function indexReferencesByBlob(base: IndexableBase): ReadonlyMap<string, readonly BlobReferenceRow[]> {
-  const byBlob = new Map<string, BlobReferenceRow[]>();
-  for (const row of base.blobReferences) {
-    const rows = byBlob.get(row.blob);
-    if (rows === undefined) {
+function harnessImportsByBlobFor(
+  base: IndexableBase,
+  dialect: Exclude<ReferenceDialect, 'href'>,
+  strictness: HarnessFactsStrictness,
+): (contentKey: string, path: string) => readonly HarnessBlobImportRow[] {
+  const index = harnessFactsIndex(base, harnessForDialect(dialect).id);
+  if (strictness === 'frontier') {
+    return (contentKey) => index.factsOf(contentKey) === undefined ? [] : index.requireImports(contentKey, null);
+  }
+  const derived = blobKeysFor(base);
+  return (contentKey, path) => derived.has(contentKey) && !index.refused(contentKey) ? index.requireImports(contentKey, path) : [];
+}
+
+/** Per-run memo of the `blobs` key set, on {@link referencesByBlobMemo}'s terms. */
+const blobKeysMemo = new WeakMap<IndexableBase, MemoizedIndex<ReadonlySet<string>>>();
+
+/**
+ * Every content key with a `blobs` row, built once per table state.
+ *
+ * @param base - The projection built so far
+ * @returns The derived content keys
+ */
+function blobKeysFor(base: IndexableBase): ReadonlySet<string> {
+  return memoizedIndexFor(blobKeysMemo, base, base.blobs.length, () => new Set(base.blobs.map((row) => row.contentKey)));
+}
+
+/**
+ * Index one blob-keyed edge table by blob, in ordinal order.
+ *
+ * Sorted rather than trusted: `ordinal` is the documented order of a blob's
+ * edges, and the table's insertion order is whatever the derivation stage
+ * happened to add rows in.
+ *
+ * @param rows - A blob-keyed edge table
+ * @returns `contentKey` → its rows, ordinal-ordered
+ */
+function indexByBlob<Row extends { readonly blob: string; readonly ordinal: number }>(
+  rows: readonly Row[],
+): ReadonlyMap<string, readonly Row[]> {
+  const byBlob = new Map<string, Row[]>();
+  for (const row of rows) {
+    const list = byBlob.get(row.blob);
+    if (list === undefined) {
       byBlob.set(row.blob, [row]);
     } else {
-      rows.push(row);
+      list.push(row);
     }
   }
-  for (const rows of byBlob.values()) {
-    rows.sort((left, right) => left.ordinal - right.ordinal);
+  for (const list of byBlob.values()) {
+    list.sort((left, right) => left.ordinal - right.ordinal);
   }
   return byBlob;
 }

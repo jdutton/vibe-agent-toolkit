@@ -2,30 +2,28 @@
 
 [![CI](https://github.com/jdutton/vibe-agent-toolkit/actions/workflows/validate.yml/badge.svg)](https://github.com/jdutton/vibe-agent-toolkit/actions) [![codecov](https://codecov.io/gh/jdutton/vibe-agent-toolkit/branch/main/graph/badge.svg)](https://codecov.io/gh/jdutton/vibe-agent-toolkit) [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=jdutton_vibe-agent-toolkit&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=jdutton_vibe-agent-toolkit) [![Node](https://img.shields.io/badge/node-22%20%7C%2024-brightgreen.svg)](https://nodejs.org/) [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue.svg)](https://www.typescriptlang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A toolkit for testing and packaging portable AI agents that work across various LLMs, frameworks, deployment targets, and orchestrators.
+A toolkit for skills, plugins, marketplaces and knowledge resources. VAT audits Claude skills, plugins, marketplaces and settings; validates, builds, tests and publishes skills and plugins; validates markdown knowledge resources against schemas and link integrity; and indexes and queries them for RAG and through the resource projection. VAT is not an agent runtime.
 
 ## Features
 
-### Agent Development
-- 🤖 **Multi-LLM Support** - Build agents that work with Claude, GPT, and other LLMs
-- 🔌 **Framework Agnostic** - Support for various agent frameworks
-- 📦 **Portable Packaging** - Deploy across different orchestrators and platforms
-- ✅ **Agent Testing** - Comprehensive testing for agent behaviors and interactions
+### Skills and Knowledge Resources
 - 🔍 **Agent Skills Validation** - Audit skills for quality, compatibility, and best practices
+- ✅ **Skill Testing** - Behaviorally test a packaged skill in isolation (`vat skill test`)
+- 📚 **Knowledge Resources** - Markdown collections with frontmatter schemas and link integrity
+- 🔎 **RAG and Projection** - Index and query markdown (`vat rag`); ask SQL questions of the resource projection (`vat resources query`)
 - 🩺 **Environment Diagnostics** - Doctor command checks setup and health
 
 ### Skills Distribution
-- 📦 **VAT Distribution Standard** - Package-based distribution for skills, agents, and tools
+- 📦 **VAT Distribution Standard** - Package-based distribution for skills and plugins
 - 🔨 **Build Infrastructure** - `vat skills build` creates distributable skill packages
 - ⬇️ **Smart Installation** - Install skills from npm, local directories, or zip files
 - 📋 **Registry Tracking** - Track installed skills for updates and management
-- 🎯 **Multi-Artifact Support** - Distribute skills, agents, pure functions, and runtimes together
 
 **Install skills:**
 ```bash
-vat skills install npm:@vibe-agent-toolkit/vat-example-cat-agents
-vat skills install ./path/to/local/package
-vat skills list --installed
+vat claude plugin install npm:@vibe-agent-toolkit/vat-development-agents
+vat skills install ./path/to/local/package --target claude --scope user
+vat skills list --user
 ```
 
 See [Distributing VAT Skills Guide](./docs/guides/distributing-vat-skills.md) for creating your own distributable packages.
@@ -52,7 +50,7 @@ Or from within a Claude Code session:
 claude plugin marketplace add jdutton/vibe-agent-toolkit#claude-marketplace --scope project
 ```
 
-This gives Claude Code 8 skills for building, packaging, and distributing agent skills. See the [marketplace branch](https://github.com/jdutton/vibe-agent-toolkit/tree/claude-marketplace) for the full skill list.
+This gives Claude Code VAT's skills for building, packaging, and distributing agent skills. See the [marketplace branch](https://github.com/jdutton/vibe-agent-toolkit/tree/claude-marketplace) for the full skill list.
 
 **Pre-release channel:** To track the latest pre-release builds, use `#claude-marketplace-next` instead.
 
@@ -84,7 +82,7 @@ See [Audit Documentation](packages/cli/docs/audit.md) for complete reference.
 
 ### Development Infrastructure
 - 🚀 **Bun** - Fast package manager and runtime
-- 📦 **Monorepo** - Workspace-based package management for agent components
+- 📦 **Monorepo** - Workspace-based package management
 - 🔒 **TypeScript** - Strict type checking with composite projects
 - ✅ **Vitest** - Fast unit, integration, and system testing
 - 🔍 **ESLint** - Maximum strictness with sonarjs, unicorn, and security plugins
@@ -110,11 +108,10 @@ vat resources scan docs/
 vat resources validate docs/
 ```
 
-Audit and import Agent Skills:
+Audit an Agent Skill:
 
 ```bash
-vat agent audit my-skill/SKILL.md
-vat agent import my-skill/SKILL.md
+vat audit my-skill/SKILL.md
 ```
 
 Diagnose project setup:
@@ -149,8 +146,8 @@ bun run build
 ### Development
 
 ```bash
-# Run full validation (recommended)
-bunx vv validate
+# Run full validation (recommended) — the full tier, as CI runs it
+bun run validate
 
 # Or run test suites individually:
 bun run test:unit          # Unit tests only
@@ -370,7 +367,7 @@ Minimum thresholds enforced:
 
 Uses jscpd with a baseline approach:
 - Existing duplication is baselined
-- New duplication blocks commits
+- New duplication fails the full gate (`bun run validate`, CI)
 - Update baseline: `bun run duplication-update-baseline`
 
 ### TypeScript
@@ -392,15 +389,9 @@ bun run validate
 bun run pre-commit
 ```
 
-Validation runs:
-1. TypeScript type checking
-2. ESLint (strict)
-3. Code duplication check
-4. Build
-5. Unit tests
-6. Integration tests (optional)
-7. Coverage report
-8. System tests (optional)
+The commit hook runs build, typecheck and ESLint. The full gate — `bun run validate`, and CI on
+Ubuntu and Windows — adds the repository checks, the `vat` dogfood steps, and the unit,
+integration and system tests; `vibe-validate.config.yaml` is the step list.
 
 ## CI/CD
 
@@ -484,8 +475,6 @@ bun run validate
 # Run pre-commit checks
 bun run pre-commit
 ```
-
-The example package (`packages/example-utils/`) demonstrates testing patterns and will be replaced with agent-specific packages.
 
 ## Learn More
 

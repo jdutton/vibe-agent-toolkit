@@ -15,9 +15,10 @@
  *   points at. For a walk that must NOT follow (a delete, a size count of
  *   what `rm -rf` will remove, a bundle that travels as a tarball).
  * - {@link direntKindFollowing} — stat semantics. A link is answered by its
- *   target: `'file'`, `'directory'`, or `'dangling'`. For a walk over a tree
- *   the caller trusts (its own build output, a dev-mode install, a fixture),
- *   where a link is simply how the entry got there.
+ *   target: `'file'`, `'directory'`, or `'dangling'`. The link's chain is read
+ *   by its text beneath the tree the walk is in (`within`) before the kernel
+ *   follows it (`link-following.ts`): a cycle is `'dangling'`, a link to a
+ *   network or device path a `LinkChainRefusedError`.
  *
  * Neither helper decides for the caller. A `'symlink'` or `'dangling'` that
  * the caller ignores is still ignored — but it is ignored in a `case` the
@@ -25,13 +26,9 @@
  */
 
 import type { Dirent } from 'node:fs';
-import { statSync } from 'node:fs';
-import fs from 'node:fs/promises';
 
-import { isPathAbsentError } from './errors/errno.js';
-import { VatError } from './errors/vat-error.js';
-import { toForwardSlash } from './path-core.js';
-import { normalizePath, safePath } from './path-utils.js';
+import { type FollowedPathKind, followedKind, followedKindSync } from './link-following.js';
+import { safePath } from './path-core.js';
 
 /** What the entry itself is. A link is a link. */
 export type DirentKind = 'file' | 'directory' | 'symlink' | 'other';
@@ -59,77 +56,32 @@ function kindOfStats(stats: { isFile(): boolean; isDirectory(): boolean }): Foll
   return 'other';
 }
 
+/** A followed kind, a link that resolves to nothing named `dangling`. */
+function followed(kind: FollowedPathKind): FollowedKind {
+  return kind === 'absent' ? 'dangling' : kind;
+}
+
 /**
- * Classify an entry by what it resolves to, following a link with one `stat`.
+ * Classify an entry by what it resolves to, following a link only once its
+ * chain is read beneath `within` (`link-following.ts`).
  *
- * A non-link entry costs no syscall. A link whose target is absent is
- * `'dangling'`; a link the OS refuses to resolve (`ELOOP`, `EACCES`) is a
- * refusal, not an absence, and stays loud.
+ * A non-link entry costs no syscall. A link that resolves to nothing — absent,
+ * a cycle — is `'dangling'`; a probe the OS refuses (`EACCES`) is a refusal, not
+ * an absence, and stays loud, raw, for the caller's classifier.
  *
  * @param dir - The directory `entry` was listed from
  * @param entry - A `Dirent` from a `withFileTypes` listing of `dir`
+ * @param within - The tree the walk is in: the operator's own input
  * @returns The target's kind, or `'dangling'`
+ * @throws LinkChainRefusedError for a link to a network or device path
  */
-export function direntKindFollowingSync(dir: string, entry: Dirent): FollowedKind {
+export function direntKindFollowingSync(dir: string, entry: Dirent, within: string): FollowedKind {
   if (!entry.isSymbolicLink()) return kindOfStats(entry);
-  try {
-    return kindOfStats(statSync(safePath.join(dir, entry.name)));
-  } catch (error) {
-    if (isPathAbsentError(error)) return 'dangling';
-    throw error;
-  }
+  return followed(followedKindSync(safePath.join(dir, entry.name), within));
 }
 
 /** The async counterpart of {@link direntKindFollowingSync}. */
-export async function direntKindFollowing(dir: string, entry: Dirent): Promise<FollowedKind> {
+export async function direntKindFollowing(dir: string, entry: Dirent, within: string): Promise<FollowedKind> {
   if (!entry.isSymbolicLink()) return kindOfStats(entry);
-  try {
-    return kindOfStats(await fs.stat(safePath.join(dir, entry.name)));
-  } catch (error) {
-    if (isPathAbsentError(error)) return 'dangling';
-    throw error;
-  }
-}
-
-/** Thrown when a following walk is led back into a directory it has already entered. */
-export class DirectoryWalkRevisitedError extends VatError {
-  constructor(dir: string, enteredAs: string) {
-    super(
-      'DIRECTORY_WALK_REVISITED',
-      `Refusing to enter ${dir}: it is the directory already walked as ${enteredAs} — a symlink leads the walk back into itself.`,
-    );
-  }
-}
-
-/**
- * The directories a FOLLOWING walk has entered, by realpath, so a link that
- * leads back into the walk is refused instead of recursed until
- * `ENAMETOOLONG`.
- *
- * A walk that follows links (`direntKindFollowing`) has no cycle guard by
- * construction: `scripts/loop -> .` makes a copy create `dest/loop/loop/…`,
- * writing every file at every level first, and a hashing walk do the same in
- * memory. Every following walk holds one of these and calls {@link enter}
- * on every directory it recurses into — the root included. A REVISIT is
- * refused, not just a cycle: two links to one directory make the walk's
- * output ambiguous (which spelling is the file's path?), and a refusal that
- * names both spellings is the answer the author can act on.
- */
-export class FollowedWalk {
-  readonly #entered = new Map<string, string>();
-
-  /**
-   * Record that the walk is entering `dir`. Synchronous on purpose — one
-   * realpath per directory entered is nothing beside the listing itself, and
-   * the sync and async walkers then share one guard.
-   *
-   * @param dir - A directory the walk is about to list, in any spelling
-   * @throws {DirectoryWalkRevisitedError} When its realpath was entered before
-   */
-  enter(dir: string): void {
-    const real = toForwardSlash(normalizePath(dir));
-    const before = this.#entered.get(real);
-    if (before !== undefined) throw new DirectoryWalkRevisitedError(dir, before);
-    this.#entered.set(real, dir);
-  }
+  return followed(await followedKind(safePath.join(dir, entry.name), within));
 }

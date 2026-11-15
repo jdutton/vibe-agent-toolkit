@@ -17,5 +17,5 @@ export async function resolveVendoredSource(
   }
   const hash = await hashDirectory(ctx.vendoredDir);
   const stagedDir = await stageDirInto(ctx.vendoredDir, ctx, `vendored-${hash}`);
-  return { stagedDir, identity: `vendored:${hash}` };
+  return { stagedDir, identity: `vendored:${hash}`, leftovers: [] };
 }

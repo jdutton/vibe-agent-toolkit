@@ -1,7 +1,7 @@
 {
   "name": "@vibe-agent-toolkit/schema",
-  "version": "0.2.0-rc.8",
-  "description": "JSON Schema definitions and TypeScript types for VAT agent manifest format",
+  "version": "0.2.0-rc.15",
+  "description": "Shared VAT contracts: validation codes, issues, reports, exit codes, project config and package.json vat metadata as Zod schemas, types and JSON Schema",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -23,11 +23,11 @@
     "test:unit": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
+    "lint": "VAT_LINT_TASK=1 eslint . --max-warnings=0",
     "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging"
   },
   "keywords": [
     "vat",
-    "agent",
     "schema",
     "json-schema",
     "validation"
@@ -48,6 +48,6 @@
   "author": "Jeff Dutton",
   "license": "MIT",
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.16.0"
   }
 }

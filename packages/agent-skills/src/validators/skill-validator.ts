@@ -1,24 +1,50 @@
 import * as fs from 'node:fs';
 import { basename, dirname } from 'node:path';
 
-import { isLocalFileLink, isParserUnavailable, parseFileCached, resolveLocalHref, type LinkType } from '@vibe-agent-toolkit/resources';
 import {
-  calculateValidationStatus,
-  countBySeverity,
+  classifyParseFailure,
+  isLocalFileLink,
+  type NotAdmittedRoots,
+  partitionNotAdmitted,
+  parseFileCached,
+  type ParseDispatcher,
+  readContentForParse,
+  resolveLocalHref,
+  type LinkType,
+  type MeasuredContent,
+  withParseDispatcher,
+} from '@vibe-agent-toolkit/resources';
+import {
+  anchoredAt,
   createRegistryIssue,
   runSingleUnitValidation,
   type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, isPathAbsentError, issueLocation, relativeEscapesRoot, safePath } from '@vibe-agent-toolkit/utils';
+import {
+  everywhere,
+  findProjectRoot,
+  followedKindSync,
+  type FollowedPathKind,
+  forEachInOrder,
+  type FsFaultFacts,
+  isPathAbsentError,
+  issueLocation,
+  linkResolutionFault,
+  pathPresent,
+  relativeEscapesRoot,
+  safePath,
+} from '@vibe-agent-toolkit/utils';
 
 
 import type { EvidenceRecord } from '../evidence/index.js';
+import { parseRefusalIssue } from '../parse-refusal-issues.js';
 import { parseFrontmatter } from '../parsers/frontmatter-parser.js';
 
 import { detectBundledResourceWithoutLinks } from './bundled-resource-link-detection.js';
 import { observationToIssue, runCompatDetectors } from './compat-detectors.js';
 import { detectUndeclaredCrossSkillAuth } from './cross-skill-dependency-detection.js';
+import { describeIssues } from './describe-issues.js';
 import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
 import { detectNonImperativeBody } from './imperative-body-detection.js';
 import { detectKebabCaseViolation } from './kebab-case-detection.js';
@@ -36,40 +62,72 @@ import { isNeverPackagedBasename } from './validation-rules.js';
  * @param options - Validation options
  * @returns Validation result with all validation issues
  */
-export async function validateSkill(options: ValidateOptions): Promise<ValidationResult> {
-  const { skillPath, isVATGenerated = false } = options;
+export function validateSkill(options: ValidateOptions): Promise<ValidationResult> {
+  // One dispatcher for every parse this validation makes — the frontmatter and
+  // the whole link walk — or the run's, when the caller holds one.
+  return withParseDispatcher((dispatcher) => validateSkillOn(options, dispatcher), { dispatcher: options.dispatcher });
+}
+
+/**
+ * {@link validateSkill}, on a dispatcher.
+ *
+ * @param options - Validation options
+ * @param dispatcher - Where every parse runs
+ * @returns Validation result with all validation issues
+ */
+async function validateSkillOn(options: ValidateOptions, dispatcher: ParseDispatcher): Promise<ValidationResult> {
+  const { skillPath } = options;
 
   // Root every emitted location is relative to. A batching caller supplies its
   // scan root; otherwise fall back to the same chain
   // `validateSkillForPackaging` uses (config root -> git root -> skill dir) so
   // the two skills-lane entry points cannot disagree about the coordinate
   // system their issues are expressed in.
-  const locationRoot = options.locationRoot ?? findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
+  const projectRoot = findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
+  const locationRoot = options.locationRoot ?? projectRoot;
   const skillLocation = issueLocation(skillPath, locationRoot);
+  const policy: ResultPolicy = {
+    validation: options.validation,
+    resourcesValidation: options.resourcesValidation,
+    roots: { locationRoot, projectRoot },
+  };
 
   const issues: ValidationIssue[] = [];
   const allEvidence: EvidenceRecord[] = [];
 
-  // Validate file exists
-  if (!fs.existsSync(skillPath)) {
+  // Validate file exists. The skill's directory is the tree: the SKILL.md entry's link chain is read
+  // by text before the kernel follows it, and a refused probe is the caller's side's fault — never "does not exist".
+  if (!pathPresent(skillPath, { follow: dirname(skillPath) }, everywhere(options.side), 'probe')) {
     issues.push({
       severity: 'error',
       code: 'SKILL_MISSING_FRONTMATTER',
       message: 'File does not exist',
       location: skillLocation,
     });
-    return buildResult(skillPath, isVATGenerated, issues, options.validation);
+    return buildResult(skillPath, issues, policy);
   }
 
-  // Read file
-  const content = fs.readFileSync(skillPath, 'utf-8');
+  // Read file — held to the parse input cap by its size before it is read, as every lane that
+  // parses it is: past the cap, the limit, never a frontmatter parse of the block at its top.
+  let read: MeasuredContent;
+  try {
+    read = await readContentForParse(skillPath, 'markdown', { dispatcher });
+  } catch (error) {
+    const refused = parseRefusalIssue(error, skillPath, locationRoot);
+    if (refused === undefined) throw error;
+    issues.push(refused);
+    return buildResult(skillPath, issues, policy);
+  }
+  const { content } = read;
   const lineCount = content.split('\n').length;
 
   // Parse frontmatter
-  const parseResult = parseFrontmatter(content);
+  const parseResult = await parseFrontmatter(read, { dispatcher });
 
   if (!parseResult.success) {
-    issues.push({
+    // Frontmatter the worker refused (a limit, a dead worker) is there, and is
+    // the author's to simplify: the parse limit, never "add the frontmatter you have".
+    issues.push(parseRefusalIssue(parseResult.cause, skillPath, locationRoot) ?? {
       severity: 'error',
       code: 'SKILL_MISSING_FRONTMATTER',
       message: parseResult.error,
@@ -78,7 +136,7 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
       fix: 'Add YAML frontmatter with name and description fields',
     });
 
-    return buildResult(skillPath, isVATGenerated, issues, options.validation, { lineCount });
+    return buildResult(skillPath, issues, policy, { lineCount });
   }
 
   const { frontmatter } = parseResult;
@@ -101,7 +159,7 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   // and the gray-zone second-person-opener heuristic from the plugin-dev
   // cross-walk (info severity).
   issues.push(
-    ...validateFrontmatterSchema(frontmatter, isVATGenerated, skillLocation),
+    ...validateFrontmatterSchema(frontmatter, skillLocation),
     ...validateFrontmatterRules(frontmatter, skillLocation),
     ...detectUndeclaredCrossSkillAuth(frontmatter, parseResult.body, skillLocation),
     ...detectNonImperativeBody(parseResult.body, skillLocation),
@@ -113,7 +171,7 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   // Compat capability detection: collect raw evidence, derive observations,
   // surface each observation as an issue (severity comes from CODE_REGISTRY).
   const { evidence: rootEvidence, observations: rootObservations } =
-    runCompatDetectors(content, skillPath, locationRoot);
+    runCompatDetectors(content, skillPath, locationRoot, frontmatter);
   allEvidence.push(...rootEvidence);
   for (const obs of rootObservations) {
     issues.push(observationToIssue(obs, skillLocation));
@@ -135,7 +193,7 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
 
   // Transitive link traversal (BFS)
   const skillDir = options.rootDir ?? dirname(skillPath);
-  const linkedFiles = await traverseLinks(skillPath, skillDir, locationRoot, issues, allEvidence);
+  const linkedFiles = await traverseLinks(skillPath, skillDir, locationRoot, issues, allEvidence, dispatcher);
 
   // Bundled-resource link detection — fires after link traversal so the
   // linkedFiles set reflects everything reachable from SKILL.md.
@@ -144,6 +202,7 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
     skillDir,
     linkedFiles.map((lf) => lf.path),
     locationRoot,
+    options.side,
   );
   issues.push(...bundledResourceIssues);
 
@@ -155,7 +214,7 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   // Build metadata
   const metadata = buildMetadata(frontmatter, lineCount);
 
-  const result = buildResult(skillPath, isVATGenerated, issues, options.validation, metadata);
+  const result = buildResult(skillPath, issues, policy, metadata);
 
   if (linkedFiles.length > 0) {
     // Derived from the RESOLVED issues, so an ignored finding cannot resurface here.
@@ -191,6 +250,21 @@ function isExemptFromUnreferencedCheck(fileName: string): boolean {
 }
 
 /**
+ * What a link target resolves to, beneath the skill directory `within`: its link chain is read by
+ * text before the kernel follows it. A probe the OS refused, or a chain VAT will not hand the kernel
+ * (a link to a network or device path), is that ONE target's fault — returned for the caller to
+ * report, never read as "not found" and never the end of the walk.
+ */
+function linkTargetKind(target: string, within: string): { kind: FollowedPathKind; fault: FsFaultFacts | undefined } {
+  try {
+    return { kind: followedKindSync(target, within), fault: undefined };
+  } catch (error) {
+    const fault = linkResolutionFault(error);
+    return { kind: 'absent', fault };
+  }
+}
+
+/**
  * Validate a single local_file link: boundary check, existence check.
  *
  * @returns 'boundary' | 'broken' | 'valid' indicating the link status
@@ -221,17 +295,37 @@ function validateLocalLink(
   // broken link (error), not be silently swallowed as a boundary warning.
   // LINK_OUTSIDE_SKILL_DIR (below) only applies when the target actually
   // exists outside the boundary.
-  if (!fs.existsSync(resolvedPath)) {
+  // A target VAT could not check: reported, never bundled, never parsed.
+  const unreadable = (why: string): { status: 'broken'; resolvedPath: string } => {
+    issues.push(createRegistryIssue('LINK_TARGET_UNREADABLE', `${why}: ${link.href}`, {
+      location: issueLocation(currentPath, locationRoot),
+      ...(link.line !== undefined && { line: link.line }),
+      link: link.href,
+    }));
+    return { status: 'broken', resolvedPath };
+  };
+  const { kind, fault } = linkTargetKind(resolvedPath, skillDir);
+  if (fault !== undefined) {
+    return unreadable(`Link target could not be examined (${fault.errno}), so it has not been checked`);
+  }
+  if (kind === 'absent') {
     issues.push({
       severity: 'error',
       code: 'LINK_INTEGRITY_BROKEN',
-      message: `Link target not found: ${link.href}`,
-      location: issueLocation(currentPath, locationRoot),
+      ...anchoredAt(`Link target not found: ${link.href}`, issueLocation(currentPath, locationRoot)),
       ...(link.line !== undefined && { line: link.line }),
       link: link.href,
       fix: 'Fix link path or restore missing file',
     });
     return { status: 'broken', resolvedPath };
+  }
+
+  // A named pipe, socket or device has no content to check or bundle, and opening
+  // a pipe blocks until a writer appears — so it is refused here, before the walk
+  // would parse it or the packager copy it (a non-markdown one used to be dropped
+  // from the bundle silently, leaving the packaged link dangling).
+  if (kind === 'other') {
+    return unreadable('Link target is not a regular file (a named pipe, socket or device), so it has no content to check or bundle');
   }
 
   if (escapesBoundary) {
@@ -311,43 +405,45 @@ async function traverseLinks(
   locationRoot: string,
   issues: ValidationIssue[],
   allEvidence: EvidenceRecord[],
+  dispatcher: ParseDispatcher,
 ): Promise<LinkedFileWalkRecord[]> {
   const resolvedSkillPath = safePath.resolve(skillPath);
   const visited = new Set<string>([resolvedSkillPath]);
   const linkedFiles: LinkedFileWalkRecord[] = [];
   const queue: string[] = [resolvedSkillPath];
 
-  while (queue.length > 0) {
-    const currentPath = queue.shift();
-    if (!currentPath) {
-      break;
-    }
-
+  // In order: a breadth-first worklist growing from its own results, guarded by
+  // `visited`, whose parses share one cache.
+  await forEachInOrder(queue, async (currentPath) => {
     let parseResult;
     try {
-      parseResult = await parseFileCached(currentPath, 'markdown');
+      parseResult = await parseFileCached(currentPath, 'markdown', { dispatcher });
     } catch (error) {
-      // A broken INSTALL, not a broken document. The parser arrives by
-      // `import()` from inside `parseFileCached` — lazily, past the parse
-      // cache's hit-path return, so a fully warm validation loads no parser at
-      // all — which puts a loader failure in this catch. Unguarded it minted one
-      // `LINK_INTEGRITY_BROKEN` per file, blamed every innocent document, never
-      // walked the link graph, and still exited 0 on "passed with warnings".
-      //
-      // A type check rather than a hoisted `loadParser` above the loop: that
-      // also works and costs every warm run the ~730 ms remark load for parses
-      // that never happen. `isParserUnavailable` matches one type VAT
-      // constructs at one place, so it is complete by construction — not the
-      // guessed blocklist of Node loader codes that was deleted.
-      if (isParserUnavailable(error)) throw error;
+      // A broken INSTALL, not a broken document. The parser loads in the
+      // worker — lazily, only on a cache miss, so a fully warm validation loads
+      // no parser at all — which puts a loader failure in this catch. Unguarded
+      // it minted one `LINK_INTEGRITY_BROKEN` per file, blamed every innocent
+      // document, never walked the link graph, and still exited 0. The
+      // classifier is an allowlist: it rethrows that, and every other VAT
+      // defect, untouched.
+      classifyParseFailure(error);
+
+      // A document the worker refused (a limit, a dead worker) is not "could
+      // not be parsed, so skipped": nothing in it was checked, and it is the
+      // author's to simplify — an error, under the code and sentence the crawl
+      // lanes use.
+      const limit = parseRefusalIssue(error, currentPath, locationRoot);
+      if (limit !== undefined) {
+        issues.push(limit);
+        return;
+      }
 
       issues.push({
         severity: 'warning',
         code: 'LINK_INTEGRITY_BROKEN',
-        message: `File exists but could not be parsed: ${issueLocation(currentPath, locationRoot)}`,
-        location: issueLocation(currentPath, locationRoot),
+        ...anchoredAt(`File exists but could not be parsed: ${issueLocation(currentPath, locationRoot)}`, issueLocation(currentPath, locationRoot)),
       });
-      continue;
+      return;
     }
 
     const processed = processFileLinks(parseResult, currentPath, skillDir, locationRoot, issues, visited);
@@ -359,7 +455,7 @@ async function traverseLinks(
     if (currentPath !== resolvedSkillPath) {
       const linkedContent = fs.readFileSync(currentPath, 'utf-8');
       const { evidence: linkedEvidence, observations: linkedObservations } =
-        runCompatDetectors(linkedContent, currentPath, locationRoot);
+        runCompatDetectors(linkedContent, currentPath, locationRoot, parseResult.frontmatter);
       allEvidence.push(...linkedEvidence);
       issues.push(...linkedObservations.map(obs => observationToIssue(obs, issueLocation(currentPath, locationRoot))));
       // Same detector on each linked file, mirroring the per-bundled-file call
@@ -388,7 +484,7 @@ async function traverseLinks(
         linksValidated: processed.linksValidated,
       });
     }
-  }
+  });
 
   return linkedFiles;
 }
@@ -444,16 +540,14 @@ function detectUnreferencedFiles(
       issues.push({
         severity: 'info',
         code: 'SKILL_IMPLICIT_REFERENCE',
-        message: `File implicitly referenced (not via markdown link) in ${basename(ref.foundIn)}: ${ref.matchedText}`,
-        location: issueLocation(absPath, locationRoot),
+        ...anchoredAt(`File implicitly referenced (not via markdown link) in ${basename(ref.foundIn)}: ${ref.matchedText}`, issueLocation(absPath, locationRoot)),
         fix: 'Consider using a standard markdown link [text](path) for better tooling support',
       });
     } else {
       issues.push({
         severity: 'info',
         code: 'SKILL_UNREFERENCED_FILE',
-        message: `Markdown file not referenced from SKILL.md link graph: ${relPath}`,
-        location: issueLocation(absPath, locationRoot),
+        ...anchoredAt(`Markdown file not referenced from SKILL.md link graph: ${relPath}`, issueLocation(absPath, locationRoot)),
         fix: 'Add a link to this file from SKILL.md or a linked document, or remove the file',
       });
     }
@@ -678,26 +772,30 @@ function buildMetadata(
   return metadata;
 }
 
-/** The ONE exit for this lane: resolves every issue against `validation`. */
+/** What resolves this lane's findings: the skill's `validation`, and the project's `resources.validation` for a file not admitted. */
+interface ResultPolicy {
+  readonly validation: ValidationConfig;
+  readonly resourcesValidation: ValidationConfig;
+  readonly roots: NotAdmittedRoots;
+}
+
+/**
+ * The ONE exit for this lane: resolves every issue against `validation`, except
+ * a file not admitted — that is `resources.validation`'s alone (`partitionNotAdmitted`).
+ */
 function buildResult(
   skillPath: string,
-  isVATGenerated: boolean,
   rawIssues: readonly ValidationIssue[],
-  validation: ValidationConfig,
+  policy: ResultPolicy,
   metadata?: ValidationResult['metadata']
 ): ValidationResult {
-  const issues = runSingleUnitValidation(rawIssues, validation).emitted;
-  const issueCounts = countBySeverity(issues);
-
-  const summary = `${issueCounts.errors} errors, ${issueCounts.warnings} warnings, ${issueCounts.info} info`;
-
+  const { rest, notAdmitted } = partitionNotAdmitted(rawIssues, policy.resourcesValidation, policy.roots);
+  const issues = [...runSingleUnitValidation(rest, policy.validation).emitted, ...notAdmitted];
   const result: ValidationResult = {
     path: skillPath,
-    type: isVATGenerated ? 'vat-agent' : 'agent-skill',
-    status: calculateValidationStatus(issues),
-    summary,
+    type: 'agent-skill',
+    ...describeIssues(issues, 'agent-skill'),
     issues,
-    issueCounts,
   };
 
   if (metadata) {

@@ -1,5 +1,13 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  // The local cache (`.turbo/cache` of the main checkout, shared by every linked
+  // worktree) had no eviction and reached 9.7 GB. Entries go after 30 days; the
+  // size cap sits above what 30 days of entries measured (2.8 GB on 2026-11-14),
+  // so it only bites if the rate of new entries roughly doubles — a cap below
+  // that would silently shorten the 30-day window. No `cacheDir`: the default is
+  // what shares the cache across worktrees.
+  "cacheMaxAge": "30d",
+  "cacheMaxSize": "5GB",
   "tasks": {
     // `*.tsbuildinfo` is a build output and must be cached with `dist/**`, not left
     // behind. Restoring `dist/` without it puts the package in a state TypeScript
@@ -19,19 +27,12 @@
     // They must NOT be listed as workspace deps of CLI — that creates a cycle.
     // Instead, declare the binary dependency here using package#task syntax so
     // turbo waits for CLI before building each adopter.
-    // To register a new adopter package, add a "<pkg>#build" entry below.
-    // `generated/**` is an output: `build` runs `generate:resources` into it and
-    // `src/` imports from it, so a cache hit that restored only `dist/` left
-    // `typecheck` (which depends on `^build`, not this package's own `build`)
-    // failing on a clean clone or after a clean of ignored files.
+    // A new adopter package needs the same edge on whichever task runs the binary
+    // ("<pkg>#build", or "<pkg>#build:skills" below); `checkBuiltOutputEdges`
+    // (validate-structure) fails until it is there.
     "@vibe-agent-toolkit/vat-development-agents#build": {
       "dependsOn": ["@vibe-agent-toolkit/cli#build", "^build"],
-      "outputs": ["dist/**", "*.tsbuildinfo", "agents/**", "generated/**"],
-      "cache": true
-    },
-    "@vibe-agent-toolkit/vat-example-cat-agents#build": {
-      "dependsOn": ["^build"],
-      "outputs": ["dist/**", "*.tsbuildinfo", "generated/**"],
+      "outputs": ["dist/**"],
       "cache": true
     },
     "build:skills": {
@@ -39,49 +40,106 @@
       "outputs": ["dist/skills/**"],
       "cache": true
     },
-    // cat-agents runs the CLI *binary* from `build:skills`, not from `build`, so the
-    // adopter registration above does not cover it. Without this edge turbo is free to
-    // start `node ../cli/dist/bin/vat.js skills build` while a transitive dependency of
-    // the CLI is mid-rebuild. Observed as a hard, repeating failure: gateway-mcp's
-    // `dist/` was removed at the instant the CLI tried to import it
-    // (`ERR_MODULE_NOT_FOUND` on gateway-mcp/dist/index.js), turbo then killed the
-    // gateway build (130) so nothing was cached, and the next run raced identically.
-    // Warm caches hid it until a change upstream of gateway-mcp forced a cache miss.
-    //
-    // `tsc-clean-build.ts` no longer deletes `dist/` before emitting, so an
-    // undeclared edge now degrades to "the reader sees the previous complete build"
-    // instead of a crash. That is a safety net, not a substitute: keep declaring the
-    // edge. Any task that runs the CLI binary reads a dozen packages' `dist/`, and
-    // only an explicit edge makes turbo order them — or rebuild the CLI when they change.
-    "@vibe-agent-toolkit/vat-example-cat-agents#build:skills": {
-      "dependsOn": ["@vibe-agent-toolkit/cli#build", "build"],
-      "outputs": ["dist/skills/**"],
-      "cache": true
-    },
-    // `typecheck` also depends on the package's OWN `build` for the two
-    // packages whose `src/` imports generated code; see the adopter entries.
     "typecheck": {
       "dependsOn": ["^build"],
       "outputs": [],
       "cache": true
     },
-    "@vibe-agent-toolkit/vat-development-agents#typecheck": {
-      "dependsOn": ["^build", "build"],
-      "outputs": [],
-      "cache": true
-    },
-    "@vibe-agent-toolkit/vat-example-cat-agents#typecheck": {
-      "dependsOn": ["^build", "build"],
-      "outputs": [],
-      "cache": true
-    },
+    // One ESLint process per package, each type-checking only its own program
+    // (`tsconfig.eslint.json`): a whole-monorepo program peaked at about 3 GB.
+    // TURBO is the lint cache, never ESLint's `--cache`: ESLint keys a file on
+    // its own mtime and size, so an unchanged caller replays a clean verdict
+    // after a type-aware change elsewhere. A lint's inputs are everything its
+    // program and its rules read:
+    // - its own files (`$TURBO_DEFAULT$`); any change re-lints the whole package;
+    // - every package's emitted declarations, `dist/**/*.d.ts` and `*.d.cts`,
+    //   which is all a package sees of another through a package import (and of
+    //   itself, for a test importing it by name). `.d.ts.map` is not an input:
+    //   its line positions move with any edit. An edit that leaves every
+    //   declaration byte-identical re-lints only its own package; one that
+    //   changes a declaration re-lints every package;
+    // - every `package.json` (exports, types, and the library-rule off-list);
+    // - the files a package reaches by a RELATIVE import into another package
+    //   (a shared test helper, a dev-tools generator), and what those import in
+    //   turn: listed per package in a generated `packages/<pkg>/turbo.json`
+    //   (`bun run generate:lint-config`; `validate-structure` checks it);
+    // - the rule sources, `eslint-config-support.js` and the ignore files
+    //   (`eslint.config.js` reads all of them for every package);
+    // - `bun.lock`: a program reaching another package's source reads that
+    //   package's external types, which this package's own external-dependency
+    //   hash does not cover; and the installed linter and TypeScript manifests,
+    //   because a worktree sharing this cache may have pulled a lockfile change
+    //   without installing it.
+    // No `dependsOn`: `^build` would fold the upstream build's hash in, and that
+    // changes with every source edit. The root `lint` script runs `turbo run
+    // build` first and then sets `VAT_LINT_BUILT` (passed through, unhashed); a
+    // package's `lint` without it is refused by `eslint.config.js`.
     "lint": {
       "dependsOn": [],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/utils/eslint/**",
+        "$TURBO_ROOT$/packages/*/dist/**/*.d.ts",
+        "$TURBO_ROOT$/packages/*/dist/**/*.d.cts",
+        "$TURBO_ROOT$/packages/*/package.json",
+        "$TURBO_ROOT$/bun.lock",
+        "$TURBO_ROOT$/eslint-config-support.js",
+        "$TURBO_ROOT$/.gitignore",
+        "$TURBO_ROOT$/packages/dev-tools/corpus/compat-empirical/run/.gitignore",
+        "$TURBO_ROOT$/node_modules/typescript/package.json",
+        "$TURBO_ROOT$/node_modules/eslint/package.json",
+        "$TURBO_ROOT$/node_modules/@eslint/js/package.json",
+        "$TURBO_ROOT$/node_modules/@eslint-community/eslint-plugin-eslint-comments/package.json",
+        "$TURBO_ROOT$/node_modules/@typescript-eslint/eslint-plugin/package.json",
+        "$TURBO_ROOT$/node_modules/@typescript-eslint/parser/package.json",
+        "$TURBO_ROOT$/node_modules/eslint-plugin-import/package.json",
+        "$TURBO_ROOT$/node_modules/eslint-plugin-n/package.json",
+        "$TURBO_ROOT$/node_modules/eslint-plugin-security/package.json",
+        "$TURBO_ROOT$/node_modules/eslint-plugin-sonarjs/package.json",
+        "$TURBO_ROOT$/node_modules/eslint-plugin-unicorn/package.json",
+        "$TURBO_ROOT$/node_modules/.bun/@typescript-eslint+*/node_modules/@typescript-eslint/*/package.json"
+      ],
+      "passThroughEnv": ["VAT_LINT_BUILT"],
       "outputs": [],
       "cache": true
     },
+    // The root's own scripts (`eslint.config.js`, the vitest setup files): no
+    // package lints them. Not `//#lint`, which would run the root `lint` script —
+    // `turbo run lint` itself. Its inputs are what `eslint . --ignore-pattern
+    // 'packages/**'` lints: one glob per place holding such a file, each with a
+    // literal prefix so turbo never walks node_modules, .git or another session's
+    // worktree (`generate-lint-config.ts --check` derives the places from ESLint
+    // and checks them both ways). Plus what `eslint.config.js` reads (every
+    // manifest, for the library-rule off-list; the ignore files), the rules and
+    // the installed linter.
+    "//#lint:root": {
+      "inputs": [
+        "*.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
+        "package.json", "packages/*/package.json", ".gitignore", "packages/dev-tools/corpus/compat-empirical/run/.gitignore",
+        "packages/utils/eslint/**",
+        "node_modules/typescript/package.json",
+        "node_modules/eslint/package.json",
+        "node_modules/@eslint/js/package.json",
+        "node_modules/@eslint-community/eslint-plugin-eslint-comments/package.json",
+        "node_modules/@typescript-eslint/eslint-plugin/package.json",
+        "node_modules/@typescript-eslint/parser/package.json",
+        "node_modules/eslint-plugin-import/package.json",
+        "node_modules/eslint-plugin-n/package.json",
+        "node_modules/eslint-plugin-security/package.json",
+        "node_modules/eslint-plugin-sonarjs/package.json",
+        "node_modules/eslint-plugin-unicorn/package.json",
+        "$TURBO_ROOT$/node_modules/.bun/@typescript-eslint+*/node_modules/@typescript-eslint/*/package.json"
+      ],
+      "outputs": [],
+      "cache": true
+    },
+    // `docs/validation-codes.md` is read by unit suites in more than one package
+    // (schema's emitted-codes check, agent-skills' doc suite, cli's fs-fault
+    // refusals): an edit to it must not replay any package's cached pass. Every
+    // per-package `test:unit` override below keeps these inputs as a superset.
     "test:unit": {
       "dependsOn": ["^build", "build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/docs/validation-codes.md"],
       "outputs": [],
       "cache": true
     },
@@ -89,17 +147,157 @@
       "dependsOn": ["^build", "build"],
       "outputs": [],
       "cache": true,
-      // `CI` is hashed HERE and nowhere else: two network-dependent integration
-      // suites gate on `process.env.CI`, so a CI run and a local run of this
-      // task execute different populations and must not share a cache entry.
+      // `CI` is hashed HERE and nowhere else, because a CI run and a local run of
+      // this task test different things and must not share a cache entry. utils'
+      // `realpath-native-folder-mount.integration.test.ts` fails under CI, and
+      // skips locally, when the host cannot mount a VHD. dev-tools'
+      // `pre-publish-known-defects.integration.test.ts` spawns `pre-publish-check`,
+      // which skips its git checks when `CI` is set. The network suites are not
+      // the reason: they are system tests gated on `NET_AVAILABLE` (`globalEnv`).
       // Every other task sees `CI` through `globalPassThroughEnv` without it
       // entering the hash — see that key below.
       "env": ["CI"]
+    },
+    // --- Suites that read committed files OUTSIDE their package ---
+    // A task's default inputs are its own package's files, so a suite that reads
+    // the repository replays a cached pass over an edit it never saw. Each entry
+    // below names what its suite reads; `$TURBO_DEFAULT$` keeps the package's own
+    // files. When an integration suite starts reading another tree, add it here.
+    //
+    // cli: `tagged-report-examples.integration.test.ts` validates every tagged
+    // fenced example in every tracked `.md` of the repository. An input glob
+    // outside the package is matched on disk, not against git, so the four
+    // untracked trees that hold markdown are excluded — they would only churn
+    // the hash. Erring wide is safe here (a spare cache miss); erring narrow is
+    // the cached pass this entry exists to prevent.
+    "@vibe-agent-toolkit/cli#test:integration": {
+      "dependsOn": ["^build", "build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/**/*.md",
+        "!$TURBO_ROOT$/**/node_modules/**",
+        "!$TURBO_ROOT$/**/dist/**",
+        "!$TURBO_ROOT$/.superpowers/**",
+        "!$TURBO_ROOT$/.claude/worktrees/**"
+      ],
+      "outputs": [],
+      "cache": true,
+      "env": ["CI"]
+    },
+    // lab: `committed-verdict-deltas.integration.test.ts` resolves every
+    // `changelog:` reference of the committed deltas file against the changelog,
+    // and `vat-lab-cli-dist.integration.test.ts` resolves THIS checkout's built
+    // CLI as a `dist:` arm — the same closure edge as the unit task below.
+    "@vibe-agent-toolkit/lab#test:integration": {
+      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/cli#build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/CHANGELOG.md", "$TURBO_ROOT$/.changes/**"],
+      "outputs": [],
+      "cache": true,
+      "env": ["CI"]
+    },
+    // lab: `instrument.test.ts` resolves THIS checkout's
+    // built CLI as a `dist:` arm and digest its whole module closure — the `dist/`
+    // of the cli and of every `@vibe-agent-toolkit/*` package it depends on. lab
+    // declares only `schema` and `utils`, so `^build` orders neither the cli nor
+    // the rest of that closure: a cold run can test before they exist. The cli's
+    // own `build` depends on `^build`, so this one edge orders the whole closure,
+    // and folds its hash in so a rebuilt closure re-runs the suite. Not a
+    // workspace dependency: that would make lab's BUILD wait on the cli too.
+    // dev-tools: `turbo-test-concurrency.test.ts` imports EVERY package's
+    // integration and system config (and each package's `test:system` script) to
+    // check its worker cap, so an edit to one must re-run it rather than replay its
+    // cached pass. Scoped here, not in `globalDependencies`, which would make that
+    // edit cold for every task. The scan of every package's test tree for reads of
+    // built output runs in the integration tier and in validate-structure, not here,
+    // so no package's test tree is an input of this task.
+    // schema: `emitted-codes-documented.test.ts` collects every `code:` literal
+    // under every package's `src/` and requires each in `docs/validation-codes.md`,
+    // and the registry ↔ doc suites read that doc too. Without these inputs a new
+    // emitted code in another package replayed schema's cached pass locally and
+    // was caught only by CI's cold run.
+    "@vibe-agent-toolkit/schema#test:unit": {
+      "dependsOn": ["^build", "build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/*/src/**", "$TURBO_ROOT$/docs/validation-codes.md"],
+      "outputs": [],
+      "cache": true
+    },
+    "@vibe-agent-toolkit/dev-tools#test:unit": {
+      "dependsOn": ["^build", "build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/docs/validation-codes.md", "$TURBO_ROOT$/packages/*/vitest.integration.config.ts", "$TURBO_ROOT$/packages/*/vitest.system.config.ts", "$TURBO_ROOT$/packages/*/package.json"],
+      "outputs": [],
+      "cache": true
+    },
+    // dev-tools: `built-output-scan.integration.test.ts` is the real-tree control of
+    // `checkBuiltOutputEdges`: it scans every package's test tree, `src/` test
+    // helpers, scripts and the vitest setup files, so an edit to any of them — or
+    // to the turbo config the rule reads beside them — must re-run it rather than
+    // replay a cached pass. The entry keeps the generic tier's env, outputs, cache
+    // and dependsOn, and its inputs as a superset: the parity check enforces it.
+    "@vibe-agent-toolkit/dev-tools#test:integration": {
+      "dependsOn": ["^build", "build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/*/test/**",
+        "$TURBO_ROOT$/packages/*/src/**",
+        "$TURBO_ROOT$/packages/*/package.json",
+        "$TURBO_ROOT$/packages/*/turbo.json",
+        "$TURBO_ROOT$/turbo.json",
+        "$TURBO_ROOT$/vitest.*setup.*"
+      ],
+      "outputs": [],
+      "cache": true,
+      "env": ["CI"]
+    },
+    "@vibe-agent-toolkit/lab#test:unit": {
+      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/cli#build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/docs/validation-codes.md"],
+      "outputs": [],
+      "cache": true
+    },
+    // lab: the system tier times THIS checkout's built CLI as its candidate
+    // (`test/system/candidate-subject.ts`, `cli/dist`) — the same closure edge.
+    "@vibe-agent-toolkit/lab#test:system": {
+      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/cli#build"],
+      "outputs": [],
+      "cache": true
     },
     "test:system": {
       "dependsOn": ["^build", "build"],
       "outputs": [],
       "cache": true
+    },
+    // --- Suites that execute a sibling package's BUILT output ---
+    // A test that spawns or imports a package's `dist/` needs the task that produces
+    // that output ordered first — and its hash folded in, so a rebuild re-runs the
+    // suite. A `workspace:*` devDependency does that through `^build` when it makes
+    // no cycle; each entry below would be one (the cli depends on resources and
+    // rag-lancedb; lab depends on resources), so the edge is explicit instead.
+    // `checkBuiltOutputEdges` (validate-structure) derives every such read from the
+    // test files and package scripts, and fails when turbo's own graph orders no task
+    // whose declared outputs cover it.
+    // A `<pkg>#<task>` entry REPLACES the generic task's settings, it does not merge
+    // with them: each copies the generic `dependsOn`, `outputs`, `inputs`, `cache` and
+    // `env` — `checkBuiltOutputEdges` fails a `<pkg>#test:<tier>` entry that drops one.
+    //
+    // rag-lancedb: `cli-dogfooding.system.test.ts` runs `packages/cli/dist/bin.js`.
+    "@vibe-agent-toolkit/rag-lancedb#test:system": {
+      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/cli#build"],
+      "outputs": [],
+      "cache": true
+    },
+    // resources: `external-url-validation.system.test.ts` runs the cli's `dist/bin/vat.js`.
+    "@vibe-agent-toolkit/resources#test:system": {
+      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/cli#build"],
+      "outputs": [],
+      "cache": true
+    },
+    // resources: `git-crawl-io-cost.integration.test.ts` preloads the lab's built I/O
+    // counter (`lab/dist/facets/io/counter.cjs`).
+    "@vibe-agent-toolkit/resources#test:integration": {
+      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/lab#build"],
+      "outputs": [],
+      "cache": true,
+      "env": ["CI"]
     },
     // --- Native-memory serialisation ---
     // The root `test:integration` / `test:system` scripts ran turbo with
@@ -113,8 +311,11 @@
     // packages so no two of them overlap, and the root scripts run the rest at
     // `--concurrency=4`. A task hash folds in its `dependsOn` hashes, so a change
     // to rag's tests re-runs rag-lancedb's — a small, deliberate price for an
-    // edge turbo can see. When a package starts loading a native model in its
-    // integration or system tier, add it to this chain.
+    // edge turbo can see. When a package's integration tier starts holding native
+    // memory on that scale, add it to this chain. The system tier is not chained:
+    // its model holders were measured at under 0.5 GB per process (see
+    // `createSystemTestConfig` in vitest.shared.ts) — re-measure if that changes
+    // (not enforced, beyond the per-fork RSS detector the system tier carries).
     "@vibe-agent-toolkit/rag-lancedb#test:integration": {
       "dependsOn": ["^build", "build", "@vibe-agent-toolkit/rag#test:integration"],
       "outputs": [],
@@ -126,24 +327,6 @@
       "outputs": [],
       "cache": true,
       "env": ["CI"]
-    },
-    // `packaged-output-drift.system.test.ts` lives in vat-development-agents but compares
-    // TWO packages' `dist/skills` trees against committed goldens — the second is cat-agents,
-    // the repo's only multi-file bundle and the only place the link rewriter rewrites a link
-    // in a packaged non-SKILL.md file. cat-agents is not a workspace dependency of
-    // vat-development-agents, so without this edge the generic `test:system` above gives the
-    // gate neither ordering nor invalidation:
-    //   - ORDERING: `turbo run test:system` on a clean clone can run the gate before
-    //     cat-agents' skills exist. The gate now FAILS on an absent build rather than
-    //     skipping, so that would be a spurious red.
-    //   - INVALIDATION: a turbo task hash folds in its dependencies' hashes, so this edge is
-    //     what makes a change to cat-agents' packaged output re-run the gate. Without it a
-    //     rewriter change to cat-agents' bundle replays a cached green from a run that never
-    //     saw it — a cached verdict on work it could not have measured.
-    "@vibe-agent-toolkit/vat-development-agents#test:system": {
-      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/vat-example-cat-agents#build:skills"],
-      "outputs": [],
-      "cache": true
     },
     "test:coverage": {
       "dependsOn": ["^build"],
@@ -177,6 +360,7 @@
     "vitest.*.config.ts",
     "vitest.shared.ts",
     "vitest.setup.js",
+    "vitest.fork-rss-budget.setup.js",
     "packages/dev-tools/src/copy-yaml-assets.ts",
     // Loaded by vitest.shared.ts into every tier's reporters: the per-file
     // duration ratchet and its allowlist are inputs of every test task, so an
@@ -185,7 +369,10 @@
     "packages/dev-tools/src/test-tier-budget-allowlist.ts"
   ],
   // `CI` reaches every task (turbo's strict env mode would otherwise strip it)
-  // but is hashed only where it changes what runs: `test:integration` above.
+  // but is hashed only in `test:integration` above. One unit suite also reads
+  // it: cli's `absence-causes.test.ts` adds a stricter assertion on Linux under
+  // `CI`. CI restores no turbo cache, so that branch always runs there; only a
+  // local Linux run can replay one mode's pass for the other.
   // Hashing it globally split every cache entry in two between the pre-commit
   // hook (CI unset) and `bun run validate` (CI=1), so each re-ran the other's
   // build, typecheck and unit tests.

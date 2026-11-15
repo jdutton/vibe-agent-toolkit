@@ -25,27 +25,34 @@
  * entries; each `pluginResults[]` names the entry it satisfies. A declared
  * entry with no result did not resolve to a directory and is refused, by name.
  * A marketplace whose entries are all remote has nothing local to resolve and
- * stays green; a marketplace with no entries at all likewise; a directory no
- * entry names is listed under `undeclared` and stays green — it cannot ship.
+ * stays green — each remote entry counts as examined, since the manifest's
+ * schema is its whole validation. A directory no entry names is listed under
+ * `data.undeclared` and stays green — it cannot ship. A manifest with no entry
+ * at all examined nothing, and the WRITER refuses that (one
+ * `RESOURCE_CHECK_BROKEN`), from the registry's declared denominator.
  *
  * ## Why the assertion is on the builder
  *
  * `buildMarketplaceValidateReport` is the one function every emission — bail or
- * full run, command line or `vat verify` phase — passes through, and it derives
- * `status` from the issues it publishes, so "declared plugin unresolved, status
- * clean" is unrepresentable rather than merely unwritten. Pure, so no
+ * full run, command line or `vat verify` phase — passes through, and
+ * `buildReport` derives `status` from the findings it publishes, so "declared
+ * plugin unresolved, status clean" is unrepresentable rather than merely
+ * unwritten. Each case reads the document the writer would PUBLISH
+ * (`publishedReport`), so the zero-examined pass is in the picture too. Pure, so no
  * marketplace on disk is needed to pin it; the resolution itself is pinned
  * against real trees in `validate-declared-sources.test.ts`.
  */
 
 import { describe, expect, it } from 'vitest';
 
+import type { MarketplaceValidateReport } from '../../../../src/commands/claude/marketplace/validate-schema.js';
 import {
   buildMarketplaceValidateReport,
   type LocalPluginResult,
   type LocalPluginSource,
   type MarketplaceValidateReportInput,
 } from '../../../../src/commands/claude/marketplace/validate.js';
+import { publishedReport } from '../../../../src/utils/document-writer.js';
 
 /** The code the run-integrity refusal carries, shared with every other gate. */
 const RUN_INTEGRITY_CODE = 'RESOURCE_CHECK_BROKEN';
@@ -57,21 +64,22 @@ const BETA: LocalPluginSource = { name: 'beta', source: './plugins/beta' };
 function validated(entry: LocalPluginSource): LocalPluginResult {
   return {
     ...entry,
+    manifestRead: true,
     result: {
       path: `/mp-nc/${entry.source}`,
       type: 'claude-plugin',
-      status: 'success',
-      summary: 'Valid plugin',
+      status: 'ok',
+      description: 'Valid plugin',
       issues: [],
-      issueCounts: { errors: 0, warnings: 0, info: 0 },
+      summary: { errors: 0, warnings: 0, info: 0 },
       metadata: { name: entry.name },
     },
   };
 }
 
 /**
- * A report over a marketplace whose manifest declares `local` (among `entries`
- * entries in total) and whose run validated `results`.
+ * The published report over a marketplace whose manifest declares `local`
+ * (among `entries` entries in total) and whose run validated `results`.
  *
  * ONE builder for every case — control included — so a case cannot differ from
  * its neighbour in a field nobody meant to change.
@@ -81,55 +89,59 @@ function reportFor(
   entries: number,
   results: readonly LocalPluginResult[],
   extra: Partial<MarketplaceValidateReportInput> = {},
-): Record<string, unknown> {
-  return buildMarketplaceValidateReport({
+): MarketplaceValidateReport {
+  return publishedReport('claude marketplace validate', buildMarketplaceValidateReport({
     root: '/mp-nc',
     marketplace: { name: 'mp', pluginEntries: entries, localPluginSources: [...local] },
     pluginResults: results,
     undeclared: [],
     refused: [],
+    unread: [],
     issues: [],
-    duration: '3ms',
+    durationMs: 3,
     ...extra,
-  });
+  }));
 }
 
-/** The refusal a verbose report carries, if any. */
-function refusalIn(data: Record<string, unknown>): { message: string } | undefined {
-  const issues = data['issues'] as Array<{ code: string; message: string }>;
-  return issues.find((issue) => issue.code === RUN_INTEGRITY_CODE);
+/** The run-integrity refusal a report carries, if any. */
+function refusalIn(report: MarketplaceValidateReport): { message: string } | undefined {
+  return report.findings.find((finding) => finding.code === RUN_INTEGRITY_CODE);
+}
+
+/** The codes a report publishes, in order. */
+function codesOf(report: MarketplaceValidateReport): string[] {
+  return report.findings.map((finding) => finding.code);
 }
 
 describe('marketplace validate — a declared local plugin the run did not validate', () => {
   it('refuses with ONE RESOURCE_CHECK_BROKEN at error when none of the declared plugins resolved', () => {
     // 🔑 The original defect. Delete the guard and this reds: no issue was
-    // collected, so the document reads `status: success` beside nothing that
-    // says two plugins went unlooked-at.
-    const data = reportFor([ALPHA, BETA], 2, []);
+    // collected, so the document reads clean beside nothing that says two
+    // plugins went unlooked-at. The writer's zero-examined pass stands down
+    // behind the site's more specific refusal: ONE finding, not two.
+    const report = reportFor([ALPHA, BETA], 2, []);
 
-    expect(data['status']).toBe('error');
-    expect(data['pluginsValidated']).toBe(0);
-    expect(data['issueCounts']).toEqual({ errors: 1, warnings: 0, info: 0 });
-    expect(data['issues']).toEqual([
-      { unlocated: true, errors: 1, codes: { [RUN_INTEGRITY_CODE]: 1 } },
-    ]);
+    expect(report.status).toBe('findings');
+    expect(report.examined).toBe(0);
+    expect(report.summary).toEqual({ errors: 1, warnings: 0, info: 0 });
+    expect(codesOf(report)).toEqual([RUN_INTEGRITY_CODE]);
+    expect(refusalIn(report)?.message).toContain('declares 2 plugin(s)');
   });
 
   it('refuses when a DIFFERENT directory was validated in place of the declared one', () => {
     // 🔑 The count-semantics defect. One plugin validated, one declared: by
     // number that is full coverage. By identity `alpha` has no result.
     const stray: LocalPluginSource = { name: 'stray', source: './plugins/stray' };
-    const data = reportFor([ALPHA], 1, [validated(stray)], { verbose: true });
+    const report = reportFor([ALPHA], 1, [validated(stray)]);
 
-    expect(data['status']).toBe('error');
-    expect(data['pluginsValidated']).toBe(1);
-    expect(refusalIn(data)?.message).toContain('`alpha` (./plugins/alpha)');
-    expect(refusalIn(data)?.message).not.toContain('stray');
+    expect(report.summary.errors).toBe(1);
+    expect(report.data.plugins.map((plugin) => plugin.name)).toEqual(['stray']);
+    expect(refusalIn(report)?.message).toContain('`alpha` (./plugins/alpha)');
+    expect(refusalIn(report)?.message).not.toContain('stray');
   });
 
   it('names every unresolved source and both numbers, and never claims a plugin is broken', () => {
-    const data = reportFor([ALPHA, BETA], 3, [], { verbose: true });
-    const refusal = refusalIn(data);
+    const refusal = refusalIn(reportFor([ALPHA, BETA], 3, []));
 
     expect(refusal?.message).toContain('declares 2 plugin(s)');
     expect(refusal?.message).toContain('validated 0');
@@ -143,44 +155,45 @@ describe('marketplace validate — a declared local plugin the run did not valid
     // 🔑 Nothing in the marketplace package checks that a declared local source
     // directory exists, so "declares 2, validated 1" is one plugin silently
     // unvalidated at exit 0 — the same class as zero, one step in.
-    const data = reportFor([ALPHA, BETA], 2, [validated(ALPHA)], { verbose: true });
+    const report = reportFor([ALPHA, BETA], 2, [validated(ALPHA)]);
 
-    expect(data['status']).toBe('error');
-    expect(data['pluginsValidated']).toBe(1);
-    expect(data['issueCounts']).toEqual({ errors: 1, warnings: 0, info: 0 });
-    expect(refusalIn(data)?.message).toContain('`beta` (./plugins/beta)');
-    expect(refusalIn(data)?.message).not.toContain('`alpha`');
+    expect(report.examined).toBe(1);
+    expect(report.summary).toEqual({ errors: 1, warnings: 0, info: 0 });
+    expect(refusalIn(report)?.message).toContain('`beta` (./plugins/beta)');
+    expect(refusalIn(report)?.message).not.toContain('`alpha`');
   });
 
-  it('stays green for a marketplace whose entries are all remote', () => {
-    // 🔑 The guard against the over-correction the brief warns about: a
-    // git/npm-sourced marketplace has nothing local to resolve, and its
-    // manifest WAS validated.
-    const data = reportFor([], 2, []);
+  it('stays green for a marketplace whose entries are all remote — each entry counts as examined', () => {
+    // 🔑 The guard against the over-correction: a git/npm-sourced marketplace
+    // has nothing local to resolve, and its manifest WAS validated. Were the
+    // remote entries not counted, the writer's zero-examined pass would fail it.
+    const report = reportFor([], 2, []);
 
-    expect(data['status']).toBe('success');
-    expect(data['pluginsValidated']).toBe(0);
-    expect(data['issueCounts']).toEqual({ errors: 0, warnings: 0, info: 0 });
-    expect(data['issues']).toEqual([]);
+    expect(report.status).toBe('ok');
+    expect(report.examined).toBe(2);
+    expect(report.findings).toEqual([]);
   });
 
-  it('stays green for a manifest with no entries at all', () => {
-    expect(reportFor([], 0, [])['status']).toBe('success');
+  it('refuses a manifest with no entries at all: nothing was examined', () => {
+    const report = reportFor([], 0, []);
+
+    expect(report.examined).toBe(0);
+    expect(codesOf(report)).toEqual([RUN_INTEGRITY_CODE]);
+    expect(refusalIn(report)?.message).toContain('0 plugin entries');
   });
 
   it('stays silent once every declared local plugin was validated, and publishes each by name', () => {
     // 🔑 The positive control: every declared entry has its result, and a real
     // finding is the only way it gates. The row names the entry it satisfies,
     // which is what makes the document's own refusal derivable from it.
-    const data = reportFor([ALPHA, BETA], 2, [validated(ALPHA), validated(BETA)]);
-    const plugins = data['plugins'] as Array<{ name: string; source: string; path: string }>;
+    const report = reportFor([ALPHA, BETA], 2, [validated(ALPHA), validated(BETA)]);
 
-    expect(data['status']).toBe('success');
-    expect(data['pluginsValidated']).toBe(2);
-    expect(data['issues']).toEqual([]);
-    expect(plugins.map((p) => [p.name, p.source, p.path])).toEqual([
-      ['alpha', './plugins/alpha', 'plugins/alpha'],
-      ['beta', './plugins/beta', 'plugins/beta'],
+    expect(report.status).toBe('ok');
+    expect(report.examined).toBe(2);
+    expect(report.findings).toEqual([]);
+    expect(report.data.plugins.map((p) => [p.name, p.source, p.path, p.manifestRead, p.status])).toEqual([
+      ['alpha', './plugins/alpha', 'plugins/alpha', true, 'ok'],
+      ['beta', './plugins/beta', 'plugins/beta', true, 'ok'],
     ]);
   });
 
@@ -188,44 +201,44 @@ describe('marketplace validate — a declared local plugin the run did not valid
     // A `plugins/` dir may hold a directory the manifest does not list. It
     // cannot be installed, so it is not a plugin that went unvalidated; it is
     // published so a reader can see it beside the declared ones.
-    const data = reportFor([ALPHA], 1, [validated(ALPHA)], { undeclared: ['plugins/stray'] });
+    const report = reportFor([ALPHA], 1, [validated(ALPHA)], { undeclared: ['plugins/stray'] });
 
-    expect(data['status']).toBe('success');
-    expect(data['undeclared']).toEqual(['plugins/stray']);
-    expect(data['issues']).toEqual([]);
+    expect(report.status).toBe('ok');
+    expect(report.data.undeclared).toEqual(['plugins/stray']);
+    expect(report.findings).toEqual([]);
   });
 
-  it('derives status from the issues it publishes, so a promoted finding gates', () => {
-    // The builder owns the status derivation; a caller can no longer hand it
-    // a `status` that disagrees with `issues`.
-    const data = reportFor([ALPHA], 1, [validated(ALPHA)], {
+  it('derives status from the findings it publishes, so a promoted finding gates', () => {
+    const report = reportFor([ALPHA], 1, [validated(ALPHA)], {
       issues: [
         { code: 'PLUGIN_MISSING_VERSION', severity: 'error', message: 'no version', location: 'plugins/alpha/.claude-plugin/plugin.json' },
       ],
     });
 
-    expect(data['status']).toBe('error');
-    expect(data['issueCounts']).toEqual({ errors: 1, warnings: 0, info: 0 });
-    expect(data['summary']).toBe('1 error(s), 0 warning(s), 0 info');
+    expect(report.status).toBe('findings');
+    expect(report.summary).toEqual({ errors: 1, warnings: 0, info: 0 });
+    expect(codesOf(report)).toEqual(['PLUGIN_MISSING_VERSION']);
   });
 
-  it('keeps the manifest\'s own summary on the bail path, and no refusal beside it', () => {
-    // A manifest that failed to parse carries no sources, so nothing is
-    // "expected" — the manifest error is the whole finding, and the refusal
-    // must not pile a second report on top of it.
-    const data = buildMarketplaceValidateReport({
+  it('publishes a missing manifest as its finding, with the writer\'s zero-examined refusal beside it', () => {
+    // The rule: the writer's zero-examined pass stands down ONLY behind a
+    // refusal-kind finding (`withRunIntegrity` has one stand-down rule).
+    // `MARKETPLACE_MISSING_MANIFEST` is a finding, so a missing manifest —
+    // which examined no plugin entry — publishes BOTH. This replaces the old
+    // "no pile-on" pin (the manifest error alone); the exit code is 1 either way.
+    const report = publishedReport('claude marketplace validate', buildMarketplaceValidateReport({
       root: '/mp-nc',
       marketplace: undefined,
       pluginResults: [],
       undeclared: [],
       refused: [],
+      unread: [],
       issues: [{ code: 'MARKETPLACE_MISSING_MANIFEST', severity: 'error', message: 'missing' }],
-      bailSummary: 'Marketplace manifest missing',
-      duration: '2ms',
-    });
+      durationMs: 2,
+    }));
 
-    expect(data['status']).toBe('error');
-    expect(data['summary']).toBe('Marketplace manifest missing');
-    expect(data['issueCounts']).toEqual({ errors: 1, warnings: 0, info: 0 });
+    expect(report.status).toBe('findings');
+    expect(report.data.marketplace).toBeNull();
+    expect(codesOf(report)).toEqual(['MARKETPLACE_MISSING_MANIFEST', RUN_INTEGRITY_CODE]);
   });
 });

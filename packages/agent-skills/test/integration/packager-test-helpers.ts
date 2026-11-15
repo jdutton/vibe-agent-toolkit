@@ -23,7 +23,8 @@ import { packageSkill } from '../../src/skill-packager.js';
 export async function buildExampleSkill(projectRoot: string): Promise<{ outputPath: string }> {
   const skillPath = safePath.join(projectRoot, 'skills', 'example', 'SKILL.md');
   const outputPath = safePath.join(projectRoot, 'dist', 'example');
-  const result = await packageSkill(skillPath, { outputPath, formats: ['directory'] });
+  // `dist/example` is a build directory the fixture owns: a second build replaces the first.
+  const result = await packageSkill(skillPath, { outputPath, formats: ['directory'], replaceExistingOutput: true });
   expect(result.hasErrors).toBe(false);
   return { outputPath };
 }

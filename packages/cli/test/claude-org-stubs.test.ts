@@ -1,36 +1,55 @@
 import { OrgApiClient } from '@vibe-agent-toolkit/claude-marketplace';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import type { Command } from 'commander';
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import yaml from 'yaml';
 
-import { writeNotYetImplementedStub } from '../src/commands/claude/org/stubs.js';
+import { createOrgApiKeysCommand } from '../src/commands/claude/org/api-keys.js';
+import { createOrgInvitesCommand } from '../src/commands/claude/org/invites.js';
 import { createOrgUsersCommand } from '../src/commands/claude/org/users.js';
 import { createOrgWorkspacesCommand } from '../src/commands/claude/org/workspaces.js';
-
-/** Capture everything the stub writes to stdout for one invocation. */
-function captureStub(command: string): string {
-  const chunks: string[] = [];
-  const spy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
-    chunks.push(String(chunk));
-    return true;
-  });
-  try {
-    writeNotYetImplementedStub(command);
-  } finally {
-    spy.mockRestore();
-  }
-  return chunks.join('');
-}
+import { reportShapeFor } from '../src/report-schemas.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('writeNotYetImplementedStub', () => {
-  it('emits the machine-readable status and the command name', () => {
-    const output = captureStub('org users update');
+/** One stub leaf: its registered verb, the group that holds it, and an argv that satisfies its options. */
+const STUB_LEAVES: ReadonlyArray<readonly [verb: string, makeGroup: () => Command, argv: readonly string[]]> = [
+  ['claude org api-keys update', createOrgApiKeysCommand, ['update', 'key_1', '--name', 'n']],
+  ['claude org invites create', createOrgInvitesCommand, ['create', '--email', 'a@example.com', '--role', 'user']],
+  ['claude org invites delete', createOrgInvitesCommand, ['delete', 'inv_1']],
+  ['claude org users update', createOrgUsersCommand, ['update', 'user_1', '--role', 'admin']],
+  ['claude org users remove', createOrgUsersCommand, ['remove', 'user_1']],
+  ['claude org workspaces create', createOrgWorkspacesCommand, ['create', '--name', 'w']],
+  ['claude org workspaces archive', createOrgWorkspacesCommand, ['archive', 'ws_1']],
+  ['claude org workspaces members add', createOrgWorkspacesCommand, ['members', 'add', 'ws_1', '--user-id', 'u', '--role', 'workspace_user']],
+  ['claude org workspaces members update', createOrgWorkspacesCommand, ['members', 'update', 'ws_1', '--user-id', 'u', '--role', 'r']],
+  ['claude org workspaces members remove', createOrgWorkspacesCommand, ['members', 'remove', 'ws_1', '--user-id', 'u']],
+];
 
-    expect(output).toContain('status: not-yet-implemented\n');
-    expect(output).toContain('command: "org users update"\n');
+/** Run one stub leaf through its real action: the stdout it publishes and the code it ends on. */
+async function runStub(makeGroup: () => Command, argv: readonly string[]): Promise<{ stdout: string; exitCode: unknown }> {
+  const chunks: string[] = [];
+  vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+    chunks.push(String(chunk));
+    return true;
+  });
+  vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+  await makeGroup().parseAsync([...argv], { from: 'user' });
+  return { stdout: chunks.join(''), exitCode: exit.mock.calls[0]?.[0] };
+}
+
+describe('the not-implemented stub leaves', () => {
+  it.each(STUB_LEAVES)('a stub publishes status error, error.code NOT_IMPLEMENTED, exit 2: %s', async (verb, makeGroup, argv) => {
+    const { stdout, exitCode } = await runStub(makeGroup, argv);
+    const document = reportShapeFor(verb).schema.parse(yaml.parse(stdout)) as { status: string; error?: { code: string }; examined: number };
+
+    expect(document.status).toBe('error');
+    expect(document.error?.code).toBe('NOT_IMPLEMENTED');
+    expect(document.examined).toBe(0);
+    expect(exitCode).toBe(ExitCode.ERROR);
   });
 
   /**
@@ -40,21 +59,16 @@ describe('writeNotYetImplementedStub', () => {
    * therefore be true at ANY future version — which means it must not name a
    * version or a release at all.
    */
-  it('makes no dated promise: no version number and no release timeline', () => {
-    const output = captureStub('org users update');
+  it('makes no dated promise: no version number and no release timeline', async () => {
+    const { stdout } = await runStub(createOrgUsersCommand, ['update', 'user_1', '--role', 'admin']);
+    const message = (yaml.parse(stdout) as { error: { message: string } }).error.message;
 
     // Bounded quantifiers: an unbounded `\d+\.\d+\.\d+` is a backtracking hazard
     // (sonarjs/slow-regex). Four digits per segment covers any real semver.
-    expect(output).not.toMatch(/\d{1,4}\.\d{1,4}\.\d{1,4}/);
-    expect(output).not.toMatch(/plannedFor/i);
-    expect(output).not.toMatch(/next release|future release|coming (in|soon)/i);
-  });
-
-  it('emits valid YAML front-matter delimiters around the payload', () => {
-    const output = captureStub('org api-keys update');
-
-    expect(output.startsWith('---\n')).toBe(true);
-    expect(output).toContain('command: "org api-keys update"\n');
+    expect(message).not.toMatch(/\d{1,4}\.\d{1,4}\.\d{1,4}/);
+    expect(message).not.toMatch(/plannedFor/i);
+    expect(message).not.toMatch(/next release|future release|coming (in|soon)/i);
+    expect(message).toContain('Anthropic Console');
   });
 });
 

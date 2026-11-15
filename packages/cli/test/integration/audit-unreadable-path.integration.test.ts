@@ -20,6 +20,7 @@ import fs from 'node:fs';
 import { dirname } from 'node:path';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
@@ -44,7 +45,7 @@ const READABLE = 0o755;
 function writerUnder(root: string): (rel: string, body: string) => string {
   return (rel, body) => {
     const abs = safePath.join(root, rel);
-    fs.mkdirSync(dirname(abs), { recursive: true });
+    mkdirSyncReal(dirname(abs), { recursive: true });
     fs.writeFileSync(abs, body);
     return abs;
   };
@@ -69,7 +70,7 @@ beforeAll(() => {
   tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-audit-unreadable-'));
   skillDir = safePath.join(tempDir, SKILL_DIR);
   unreadableDir = safePath.join(skillDir, UNREADABLE_SUBDIR);
-  fs.mkdirSync(unreadableDir, { recursive: true });
+  mkdirSyncReal(unreadableDir, { recursive: true });
   fs.writeFileSync(
     safePath.join(skillDir, 'SKILL.md'),
     '---\nname: demo\ndescription: A demo skill used to exercise the unreadable-path guard.\n---\n\n# Demo\n',
@@ -117,9 +118,10 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit with an unreadable subdirectory', 
     fs.chmodSync(unreadableDir, UNREADABLE);
     const results = await auditSkillDir();
 
-    expect(results.some(r => r.status === 'error')).toBe(false);
+    expect(results.some(r => r.summary.errors > 0)).toBe(false);
     const unreadable = results.find(r => r.issues.some(i => i.code === 'SCAN_PATH_UNREADABLE'));
-    expect(unreadable?.status).toBe('warning');
+    expect(unreadable?.summary.errors).toBe(0);
+    expect(unreadable?.summary.warnings).toBeGreaterThan(0);
   });
 
   it('anchors the finding at the unreadable directory, relative to the scan root', async () => {
@@ -162,7 +164,7 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit with an unreadable subdirectory', 
 
     const codes = results.flatMap(r => r.issues.map(i => i.code));
     expect(codes).toContain('PACKAGED_AGENT_INSTRUCTION_FILE');
-    expect(results.some(r => r.status === 'error')).toBe(false);
+    expect(results.some(r => r.summary.errors > 0)).toBe(false);
     const unreadable = results.flatMap(r => r.issues).filter(i => i.code === 'SCAN_PATH_UNREADABLE');
     expect(unreadable.map(i => i.location)).toEqual([UNREADABLE_SUBDIR]);
     expect(unreadable[0]?.message).toMatch(/EACCES/);
@@ -203,8 +205,8 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit with an unreadable file', () => {
     scanRoot = safePath.join(fileTempDir, 'skills');
     const goodDir = safePath.join(scanRoot, 'good');
     const badDir = safePath.join(scanRoot, 'bad');
-    fs.mkdirSync(goodDir, { recursive: true });
-    fs.mkdirSync(badDir, { recursive: true });
+    mkdirSyncReal(goodDir, { recursive: true });
+    mkdirSyncReal(badDir, { recursive: true });
     fs.writeFileSync(
       safePath.join(goodDir, 'SKILL.md'),
       '---\nname: good\ndescription: A readable skill that must survive an unreadable sibling.\n---\n\n# Good\n',
@@ -245,7 +247,7 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit with an unreadable file', () => {
     // destroyed along with every other finding the run had collected.
     expect(codes).toContain('PACKAGED_AGENT_INSTRUCTION_FILE');
     expect(codes).toContain('SCAN_PATH_UNREADABLE');
-    expect(results.some(r => r.status === 'error')).toBe(false);
+    expect(results.some(r => r.summary.errors > 0)).toBe(false);
   });
 
   it('anchors the finding at the unreadable file itself', async () => {
@@ -271,7 +273,7 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit with an unreadable file', () => {
     );
 
     expect(results.flatMap(r => r.issues).map(i => i.code)).toContain('SCAN_PATH_UNREADABLE');
-    expect(results.some(r => r.status === 'error')).toBe(false);
+    expect(results.some(r => r.summary.errors > 0)).toBe(false);
   });
 
   // `issueLocation` is `path.relative`, so it answers '' when the subject IS the
@@ -323,13 +325,13 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit under a config whose skills.includ
   let alphaSkillMd: string;
 
   interface ReportIssue { code: string; location?: string }
-  interface ReportFile { path: string; type: string; issues: ReportIssue[] }
-  interface Report { status: string; files: ReportFile[] }
+  interface ReportFile { path: string; type: string }
+  interface Report { status: string; findings: ReportIssue[]; data: { files: ReportFile[] } }
 
   /** Each lane's target and where it anchors the refused directory. */
-  const lanes: Array<{ lane: string; target: () => string; expectedLocation: string; alphaPath: string }> = [
-    { lane: 'directory', target: () => projectDir, expectedLocation: `skills/${LOCKED_DIR}`, alphaPath: 'skills/alpha/SKILL.md' },
-    { lane: 'single-file', target: () => alphaSkillMd, expectedLocation: `../${LOCKED_DIR}`, alphaPath: 'SKILL.md' },
+  const lanes: Array<{ lane: string; target: () => string; expectedLocation: string; outsideRoot: boolean; alphaPath: string }> = [
+    { lane: 'directory', target: () => projectDir, expectedLocation: `skills/${LOCKED_DIR}`, outsideRoot: false, alphaPath: 'skills/alpha/SKILL.md' },
+    { lane: 'single-file', target: () => alphaSkillMd, expectedLocation: `../${LOCKED_DIR}`, outsideRoot: true, alphaPath: 'SKILL.md' },
   ];
 
   function audit(target: string): { exit: number | null; stderr: string; report: Report } {
@@ -338,7 +340,7 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit under a config whose skills.includ
   }
 
   function issuesWithCode(report: Report, code: string): ReportIssue[] {
-    return report.files.flatMap((f) => f.issues).filter((i) => i.code === code);
+    return report.findings.filter((i) => i.code === code);
   }
 
   function discoveryWarnings(stderr: string): string[] {
@@ -349,14 +351,14 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit under a config whose skills.includ
     projectDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-audit-locked-include-'));
     fs.writeFileSync(
       safePath.join(projectDir, 'vibe-agent-toolkit.config.yaml'),
-      'version: 1\nskills:\n  include:\n    - "skills/*/SKILL.md"\n',
+      'skills:\n  include:\n    - "skills/*/SKILL.md"\n',
     );
     // `description: Short.` is the control: config-aware validation flags it as
     // DESCRIPTION_TOO_VAGUE and the config-free validator does not, so its
     // presence is what tells "validated under the config" from "downgraded".
     const write = (name: string): string => {
       const dir = safePath.join(projectDir, 'skills', name);
-      fs.mkdirSync(dir, { recursive: true });
+      mkdirSyncReal(dir, { recursive: true });
       const target = safePath.join(dir, 'SKILL.md');
       fs.writeFileSync(target, `---\nname: ${name}\ndescription: Short.\n---\n\n# ${name}\n\nBody.\n`);
       return target;
@@ -382,18 +384,20 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit under a config whose skills.includ
     expect(discoveryWarnings(stderr)).toEqual([]);
   });
 
-  it.each(lanes)('$lane lane: files the refusal once, on the directory, and the status says so', ({ target, expectedLocation }) => {
+  it.each(lanes)('$lane lane: files the refusal once, on the directory, and the status says so', ({ target, expectedLocation, outsideRoot }) => {
     fs.chmodSync(lockedDir, UNREADABLE);
     const { exit, report } = audit(target());
 
-    // The audit contract: status carries the findings, the exit code says the run completed.
+    // A warning is a finding, not a failure: `findings`, and nothing at error severity to gate on.
     expect(exit).toBe(0);
-    expect(report.status).not.toBe('success');
+    expect(report.status).toBe('findings');
     // In the directory lane TWO lanes meet `skills/locked` — the walk's per-entry
     // guard and the refused discovery — and the report must carry the fact once.
     // In the single-file lane there is no walk, so the refused discovery is the
     // ONLY report, anchored against the skill's own root.
-    expect(issuesWithCode(report, 'SCAN_PATH_UNREADABLE').map((i) => i.location)).toEqual([expectedLocation]);
+    // A directory outside the run's root (`../locked`) is no `location`: it closes the message instead.
+    const anchors = issuesWithCode(report, 'SCAN_PATH_UNREADABLE').map((i) => [i.location, i.message.endsWith(` (${expectedLocation})`)]);
+    expect(anchors).toEqual([outsideRoot ? [undefined, true] : [expectedLocation, false]]);
   });
 
   it.each(lanes)('$lane lane: warns once on stderr, naming the directory, WITHOUT --debug', ({ target }) => {
@@ -407,15 +411,18 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit under a config whose skills.includ
     expect(warnings[0]).toContain('skills.include');
   });
 
-  /** Audit `target` with the sibling locked and return alpha's row. */
+  /** Audit `target` with the sibling locked and return alpha's row and the findings located in it. */
   const alphaUnderLockedSibling = (target: () => string, alphaPath: string) => {
     fs.chmodSync(lockedDir, UNREADABLE);
     const { report } = audit(target());
-    return report.files.find((f) => f.path === alphaPath);
+    return {
+      row: report.data.files.find((f) => f.path === alphaPath),
+      findings: report.findings.filter((f) => f.location === alphaPath),
+    };
   };
 
   it.each(lanes)('$lane lane: the readable skill is still validated, not dropped with the directory', ({ target, alphaPath }) => {
-    expect(alphaUnderLockedSibling(target, alphaPath)?.type).toBe('agent-skill');
+    expect(alphaUnderLockedSibling(target, alphaPath).row?.type).toBe('agent-skill');
   });
 
   // THE regression as the operator sees it: the config loaded, alpha is readable
@@ -425,7 +432,7 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit under a config whose skills.includ
   // a degrade handler so discovery enumerates AROUND the refused directory
   // instead of refusing, and every other caller keeps the refuse-by-name default.
   it.each(lanes)('$lane lane: the readable skill keeps its config-aware finding despite the unreadable sibling', ({ target, alphaPath }) => {
-    expect(alphaUnderLockedSibling(target, alphaPath)?.issues.map((i) => i.code)).toContain(CONFIG_AWARE_CODE);
+    expect(alphaUnderLockedSibling(target, alphaPath).findings.map((i) => i.code)).toContain(CONFIG_AWARE_CODE);
   });
 });
 
@@ -515,10 +522,11 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit of a plugin with a SKILL.md it can
  * `SCAN_PATH_UNREADABLE`, warning, exit 0 — and it is filed once even though
  * the distributed-tree detector meets the same directory.
  *
- * And the other half of the same contract, driven through the CLI: a root with
- * NOTHING readable audited zero files. The refusal row is not a scanned file,
- * so `filesScanned` is 0 and the run ends on the zero-files refusal (exit 1)
- * instead of `filesScanned: 1, filesPassed: 0`, `status: warning`, exit 0.
+ * And the other half, driven through the CLI: a ROOT the OS will not list is
+ * not a degraded run but one that could not start — exit 2, the same ending
+ * `vat resources validate`, `check`, `query` and `scan` give the same argument.
+ * It used to be scanned anyway and end on the zero-files refusal at exit 1: one
+ * outcome, two codes across verbs.
  */
 describe.skipIf(CANNOT_DENY_READS)('vat audit of a plugin with a skill directory it cannot list', () => {
   let pluginTempDir: string;
@@ -543,27 +551,32 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit of a plugin with a skill directory
 
   it('files the refusal once as SCAN_PATH_UNREADABLE on the plugin — never as PLUGIN_INVALID_JSON — and exits 0', () => {
     const result = runAuditCli(pluginDir);
-    const report = parseYaml(result.stdout) as { status: string; summary: Record<string, number>; files: Array<{ path: string; issues: Array<{ code: string; location?: string }> }> };
-    const issues = report.files.flatMap((f) => f.issues);
+    const report = parseYaml(result.stdout) as {
+      status: string;
+      summary: { errors: number; warnings: number };
+      findings: Array<{ code: string; location?: string }>;
+      data: { counts: Record<string, number>; files: Array<{ path: string }> };
+    };
+    const issues = report.findings;
 
     expect(result.status, result.stderr).toBe(0);
-    expect(report.status).toBe('warning');
+    expect(report.status).toBe('findings');
+    expect(report.summary.errors).toBe(0);
+    expect(report.summary.warnings).toBeGreaterThan(0);
     expect(issues.map((i) => i.code)).not.toContain('PLUGIN_INVALID_JSON');
     expect(issues.filter((i) => i.code === 'SCAN_PATH_UNREADABLE').map((i) => i.location)).toEqual(['skills/lockeddir']);
     // The readable sibling still scanned, and the refusal is not a scanned file.
-    expect(report.files.some((f) => f.path.endsWith('skills/good/SKILL.md'))).toBe(true);
-    expect(report.summary['pathsUnreadable']).toBe(0);
+    expect(report.data.files.some((f) => f.path.endsWith('skills/good/SKILL.md'))).toBe(true);
+    expect(report.data.counts['pathsUnreadable']).toBe(0);
   });
 
-  it('a root with nothing readable audits zero files: the refusal is not counted, so the run is refused at exit 1', () => {
+  it('a root the OS will not list could not be audited at all: exit 2, the invocation\'s ending', () => {
     const result = runAuditCli(lockedSkillDir);
-    const report = parseYaml(result.stdout) as { status: string; summary: Record<string, number>; issues?: Array<{ code: string }>; files: Array<{ issues: Array<{ code: string }> }> };
+    const report = parseYaml(result.stdout) as { status: string; error?: { code: string; message: string } };
 
-    expect(result.status, result.stderr).toBe(1);
+    expect(result.status, result.stderr).toBe(2);
     expect(report.status).toBe('error');
-    expect(report.summary['filesScanned']).toBe(0);
-    expect(report.summary['pathsUnreadable']).toBe(1);
-    expect(report.files.flatMap((f) => f.issues).map((i) => i.code)).toEqual(['SCAN_PATH_UNREADABLE']);
-    expect(report.issues?.map((i) => i.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
+    expect(report.error?.code).toBe('INPUT_UNREADABLE');
+    expect(report.error?.message).toContain('(EACCES)');
   });
 });

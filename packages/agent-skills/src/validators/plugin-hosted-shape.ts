@@ -35,18 +35,23 @@
  * docs/contributing/plugin-distribution-findings.md
  */
 
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+import { followedKindSync, issueLocation, safePath, withFsFaultSync } from '@vibe-agent-toolkit/utils';
 
 /** How many bin/ entries to name in the message before eliding. */
 const SAMPLE_LIMIT = 3;
 
 function listBinEntries(pluginPath: string): string[] {
   const binDir = safePath.join(pluginPath, 'bin');
-  if (!existsSync(binDir)) return [];
-  if (!statSync(binDir).isDirectory()) return [];
+  // The plugin directory is the tree inspected: the `bin` link chain beneath it is read first, and a
+  // refused probe is the plugin's fault, never "no bin/".
+  const kind = withFsFaultSync(
+    { side: 'source', origin: 'content', action: `examine ${binDir}`, path: binDir },
+    () => followedKindSync(binDir, pluginPath),
+  );
+  if (kind !== 'directory') return [];
   return readdirSync(binDir);
 }
 

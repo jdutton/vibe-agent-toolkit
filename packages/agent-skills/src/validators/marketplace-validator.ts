@@ -1,15 +1,17 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 
-import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { classifyFsFault, isFsFaultError, issueLocation, promised, safePath } from '@vibe-agent-toolkit/utils';
 
 import { MarketplaceManifestSchema } from '../schemas/marketplace-manifest.js';
 
 import { type AnchorRootOptions, resolveAnchorRoot } from './anchor-root.js';
+import { describeIssues } from './describe-issues.js';
 import type { ValidationResult } from './types.js';
 import { generateFixSuggestion } from './validation-utils.js';
 
 const MARKETPLACE_TYPE = 'marketplace' as const;
+const UNREADABLE_CODE = 'SCAN_PATH_UNREADABLE' as const;
 
 /**
  * Validate a marketplace directory structure against the MarketplaceManifestSchema.
@@ -19,39 +21,43 @@ const MARKETPLACE_TYPE = 'marketplace' as const;
  * @param options - Anchor base for emitted locations (see {@link AnchorRootOptions})
  * @returns Validation result with issues
  */
-export async function validateMarketplace(
+export function validateMarketplace(
 	marketplacePath: string,
 	options?: AnchorRootOptions,
 ): Promise<ValidationResult> {
+	return promised(() => validateMarketplaceNow(marketplacePath, options));
+}
+
+/** The synchronous body of {@link validateMarketplace}. */
+function validateMarketplaceNow(marketplacePath: string, options?: AnchorRootOptions): ValidationResult {
 	const issues: ValidationIssue[] = [];
 	const marketplaceJsonPath = safePath.join(marketplacePath, '.claude-plugin', 'marketplace.json');
 	// Anchor contract: relative to the run's ONE stated root, never absolute.
 	const location = issueLocation(marketplaceJsonPath, resolveAnchorRoot(options?.locationRoot, marketplacePath));
 
-	// Check marketplace.json exists
-	if (!existsSync(marketplaceJsonPath)) {
-		issues.push({
-			severity: 'error',
+	// One read decides all three outcomes. A separate `existsSync` would read a
+	// refused parent as "absent", and one `try` around read + parse would read a
+	// refused file as "invalid JSON" — both send the reader to the wrong fix.
+	let content: string;
+	try {
+		content = readFileSync(marketplaceJsonPath, 'utf-8');
+	} catch (error) {
+		const halted = manifestReadFailure(error, location, {
 			code: 'MARKETPLACE_MISSING_MANIFEST',
 			message: 'Marketplace manifest not found',
-			location,
 			fix: 'Create .claude-plugin/marketplace.json with required fields (name, owner, plugins)',
 		});
-
+		issues.push(halted);
 		return {
 			path: marketplacePath,
 			type: MARKETPLACE_TYPE,
-			status: 'error',
-			summary: 'Marketplace manifest missing',
+			...describeIssues(issues, MARKETPLACE_TYPE, `Marketplace manifest ${halted.code === UNREADABLE_CODE ? 'unreadable' : 'missing'}`),
 			issues,
-			issueCounts: countBySeverity(issues),
 		};
 	}
 
-	// Parse and validate marketplace.json
 	let marketplaceData: unknown;
 	try {
-		const content = readFileSync(marketplaceJsonPath, 'utf-8');
 		marketplaceData = JSON.parse(content);
 	} catch (error) {
 		issues.push({
@@ -65,10 +71,8 @@ export async function validateMarketplace(
 		return {
 			path: marketplacePath,
 			type: MARKETPLACE_TYPE,
-			status: 'error',
-			summary: 'Marketplace manifest is invalid JSON',
+			...describeIssues(issues, MARKETPLACE_TYPE, 'Marketplace manifest is invalid JSON'),
 			issues,
-			issueCounts: countBySeverity(issues),
 		};
 	}
 
@@ -87,16 +91,11 @@ export async function validateMarketplace(
 		}
 	}
 
-	const status = calculateValidationStatus(issues);
-
 	const validationResult: ValidationResult = {
 		path: marketplacePath,
 		type: MARKETPLACE_TYPE,
-		status,
-		summary:
-			status === 'success' ? 'Valid marketplace' : `Found ${issues.length} issue(s)`,
+		...describeIssues(issues, MARKETPLACE_TYPE),
 		issues,
-		issueCounts: countBySeverity(issues),
 	};
 
 	if (result.success) {
@@ -116,4 +115,55 @@ export async function validateMarketplace(
 	}
 
 	return validationResult;
+}
+
+/** The finding a manifest validator files when its manifest is absent. */
+export interface MissingManifestFinding {
+	code: ValidationIssue['code'];
+	message: string;
+	fix: string;
+}
+
+/**
+ * The finding for a failed manifest read, decided by the one classifier: an
+ * `absent` fault is the validator's own "missing" finding; any other filesystem
+ * fault is `SCAN_PATH_UNREADABLE` naming the errno — never the absolute path,
+ * which the OS message carries and a published finding must not — except a
+ * capacity fault (`exhausted`, `busy`), which is thrown classified: the machine,
+ * not the manifest. Anything that is not a filesystem fault is a defect and is
+ * rethrown.
+ *
+ * The ONE decision for every JSON manifest/registry validator — the marketplace
+ * and registry validators here and the plugin validator in claude-marketplace —
+ * so they cannot drift on what counts as "missing" versus "unreadable".
+ *
+ * @param error - What the manifest read threw
+ * @param location - The manifest, anchored to the run's root
+ * @param missing - The validator's own finding for an absent manifest
+ */
+export function manifestReadFailure(
+	error: unknown,
+	location: string,
+	missing: MissingManifestFinding,
+): ValidationIssue {
+	const fault = classifyFsFault(error, { side: 'source', origin: 'content', action: `read ${location}` });
+	if (!isFsFaultError(fault)) {
+		throw fault;
+	}
+	if (fault.faultClass === 'absent') {
+		return { severity: 'error', code: missing.code, message: missing.message, location, fix: missing.fix };
+	}
+	// The machine ran out or was busy: nothing about the manifest is known, so it is the run's refusal, never a finding.
+	if (fault.faultClass === 'exhausted' || fault.faultClass === 'busy') {
+		throw fault;
+	}
+	const entry = CODE_REGISTRY.SCAN_PATH_UNREADABLE;
+	return {
+		severity: entry.defaultSeverity,
+		code: UNREADABLE_CODE,
+		message: `${entry.description} (${location}: read refused with ${fault.errno})`,
+		location,
+		fix: entry.fix,
+		reference: entry.reference,
+	};
 }

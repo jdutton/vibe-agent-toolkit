@@ -14,7 +14,8 @@
  * any scale, while nested struct access fails at scale.
  */
 
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { atLeastTierTimeout } from '@vibe-agent-toolkit/utils/testing';
+import { afterEach, beforeEach, describe, expect, inject, it } from 'vitest';
 
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
 import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite } from '../test-helpers.js';
@@ -183,5 +184,5 @@ ${paragraph.repeat(3)}
     // ⚠️ This is a ceiling on a REAL HANG, so it is deliberately not unbounded.
     // If the honest cost ever approaches this, make the corpus smaller or stub
     // the embedder — do not raise the number again.
-  }, 300000);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 300_000));
 });

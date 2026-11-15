@@ -1,11 +1,13 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { ParseCache, ParseDispatcher, type ParseRoute } from '@vibe-agent-toolkit/resources';
 import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, type SymlinkCapability } from '@vibe-agent-toolkit/utils';
-import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
+import { registerScratchTmpdir, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, expect } from 'vitest';
 import type { z } from 'zod';
 
+import { packageSkillInto, type PackageSkillOptions, type PackageSkillResult } from '../src/skill-packager.js';
 import { validateSkill } from '../src/validators/skill-validator.js';
 import type { LinkedFileValidationResult, ValidationResult } from '../src/validators/types.js';
 
@@ -13,6 +15,34 @@ import type { LinkedFileValidationResult, ValidationResult } from '../src/valida
  * Setup temporary directory for tests
  * Automatically creates and cleans up temp dir before/after each test
  */
+/**
+ * One parse route for a whole test file: a one-thread dispatcher over a
+ * DISABLED cache, shut down after the file. Every parse runs in the bounded
+ * worker, as shipped code's does, and no test reads another's cache entry.
+ *
+ * @returns The route to pass wherever a `ParseRoute` is taken
+ */
+export function setupParseRoute(): ParseRoute {
+  const dispatcher = new ParseDispatcher(new ParseCache({ enabled: false }), { size: 1 });
+  afterAll(() => dispatcher.shutdown());
+  return { dispatcher };
+}
+
+/**
+ * Package `skillPath` IN PLACE into `options.outputPath`: written whether or not its post-build
+ * checks pass, for a test that inspects what the packager wrote. `packageSkill` lands only a
+ * package that passed its own checks, so a test of what a failing package holds asks this.
+ *
+ * @param skillPath - The SKILL.md
+ * @param options - Packaging options; `outputPath` is where the bundle is written
+ */
+export async function packageInPlace(
+  skillPath: string,
+  options: Omit<PackageSkillOptions, 'replaceExistingOutput' | 'dryRun'> & { outputPath: string },
+): Promise<PackageSkillResult> {
+  return (await packageSkillInto(skillPath, options.outputPath, options, [])).result;
+}
+
 export function setupTempDir(prefix: string): { getTempDir: () => string } {
   const suite = setupSyncTempDirSuite(prefix);
   beforeAll(suite.beforeAll);
@@ -76,6 +106,7 @@ export function stubStageResult(subjectStagedDir: string): unknown {
     subjectPluginRoot: null,
     skippedOptional: [],
     subjectEvalSuiteHeld: false,
+    leftovers: [],
   };
 }
 
@@ -111,13 +142,13 @@ export function setupStubbedHarnessSubject<T>(
 /**
  * Create a SKILL.md file with given content and validate it
  */
-export async function createSkillAndValidate(
+export function createSkillAndValidate(
   tempDir: string,
   content: string,
 ): Promise<ValidationResult> {
   const skillPath = safePath.join(tempDir, 'SKILL.md');
   fs.writeFileSync(skillPath, content);
-  return validateSkill({ skillPath, validation: {} });
+  return validateSkill({ dispatcher: undefined, resourcesValidation: {}, side: 'source', skillPath, validation: {} });
 }
 
 /**
@@ -162,11 +193,12 @@ export function createTransitiveSkillStructure(
  * @param rootDir - Root directory for resolving links
  * @returns Validation result
  */
-export async function validateSkillWithTransitiveChecking(
+export function validateSkillWithTransitiveChecking(
   skillPath: string,
   rootDir?: string,
 ): Promise<ValidationResult> {
-  return validateSkill({
+  return validateSkill({ dispatcher: undefined, resourcesValidation: {},
+    side: 'source',
     skillPath,
     rootDir: rootDir ?? path.dirname(skillPath),
     validation: {},
@@ -180,11 +212,12 @@ export async function validateSkillWithTransitiveChecking(
  * @param rootDir - Root directory for scanning files
  * @returns Validation result
  */
-export async function validateSkillWithUnreferencedFileCheck(
+export function validateSkillWithUnreferencedFileCheck(
   skillPath: string,
   rootDir: string,
 ): Promise<ValidationResult> {
-  return validateSkill({
+  return validateSkill({ dispatcher: undefined, resourcesValidation: {},
+    side: 'source',
     skillPath,
     rootDir,
     checkUnreferencedFiles: true,
@@ -395,7 +428,7 @@ export function assertValidationError<T extends z.ZodTypeAny>(
  * Assert that validation result is successful (no errors)
  */
 export function assertValidationSuccess(result: ValidationResult): void {
-	expect(result.status).toBe('success');
+	expect(result.summary).toMatchObject({ errors: 0, warnings: 0 });
 	expect(result.issues.filter((i) => i.severity === 'error')).toHaveLength(0);
 }
 
@@ -406,10 +439,29 @@ export function assertSingleError(
 	result: ValidationResult,
 	code: string,
 ): void {
-	expect(result.status).toBe('error');
+	expect(result.status).toBe('findings');
+	expect(result.summary).toEqual({ errors: 1, warnings: 0, info: 0 });
 	expect(result.issues).toHaveLength(1);
 	expect(result.issues[0]?.code).toBe(code);
 	expect(result.issues[0]?.severity).toBe('error');
+}
+
+/**
+ * A manifest the OS would not read is reported as a path that was not scanned
+ * (`SCAN_PATH_UNREADABLE`, naming the errno) — never as `*_INVALID_JSON`, whose
+ * fix ("fix the JSON syntax") would send the reader to a file they cannot open.
+ */
+export function assertSingleUnreadable(
+	result: ValidationResult,
+	location: string,
+	errno: string,
+): void {
+	expect(result.issues.map((issue) => issue.code)).toEqual(['SCAN_PATH_UNREADABLE']);
+	expect(result.issues[0]?.severity).toBe('warning');
+	expect(result.issues[0]?.location).toBe(location);
+	expect(result.issues[0]?.message).toContain(errno);
+	expect(result.issues[0]?.message).not.toMatch(/parse|syntax/i);
+	expect(result.issues[0]?.fix).not.toMatch(/syntax/i);
 }
 
 const CLAUDE_PLUGIN_DIR = '.claude-plugin';
@@ -514,7 +566,7 @@ export async function setupPackagingValidationTest(
 	const content = createSkillContent(contentOptions, bodyContent);
 	const { skillPath } = createTransitiveSkillStructure(tempDir, linkedFiles, content);
 
-	return validateSkillForPackaging(skillPath, metadata as never);
+	return validateSkillForPackaging(skillPath, {}, metadata as never);
 }
 
 /**
@@ -543,7 +595,7 @@ export async function setupTransitiveValidationTest(
 	const skillContent = createSkillContent(contentOptions, skillBody);
 	const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 
-	return validateSkillForPackaging(skillPath);
+	return validateSkillForPackaging(skillPath, {});
 }
 
 /**
@@ -572,7 +624,7 @@ export async function setupNavigationValidationTest(
 	const skillContent = createSkillContent(contentOptions, skillBody);
 	const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 
-	const result = await validateSkillForPackaging(skillPath);
+	const result = await validateSkillForPackaging(skillPath, {});
 
 	return {
 		result,
@@ -582,3 +634,17 @@ export async function setupNavigationValidationTest(
 	};
 }
 
+
+/**
+ * ⛔ DESTRUCTIVE CODE: make a fresh scratch THE temp directory (`TMPDIR` / `TEMP` / `TMP`) for
+ * each test (`scratchTmpdirEnv`). Everything the harness derives under the temp directory — and
+ * every child it spawns — lands there, so no test, and no mutation of the disposal code under
+ * test, can reach the real temp directory. Register it at the top of a suite.
+ *
+ * @param prefix - The scratch directory's prefix; neutral words only — the executor's working
+ *   directory lives under it, and its prompt must not name a test
+ * @returns The current test's scratch directory
+ */
+export function useScratchTmpdir(prefix: string): () => string {
+  return registerScratchTmpdir(prefix, { beforeEach, afterEach });
+}

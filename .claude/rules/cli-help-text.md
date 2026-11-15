@@ -52,10 +52,10 @@ Users need to know:
 **Example**:
 ```typescript
 Output:
-  - status: success/error
-  - filesScanned: number of markdown files found
-  - linksFound: total links discovered
-  - duration: scan time in milliseconds
+  - status: ok | findings | error
+  - examined: number of markdown files found
+  - findings / summary: what was wrong, and the severity counts
+  - data.linksFound: total links discovered
 
 Output Format:
   YAML summary → stdout (for programmatic parsing)

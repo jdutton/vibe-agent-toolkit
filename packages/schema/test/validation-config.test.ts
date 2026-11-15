@@ -52,66 +52,60 @@ describe('ValidationConfigSchema', () => {
   });
 });
 
-describe('ValidationConfigSchema — thresholds', () => {
-  it('parses a thresholds block with alwaysLoadedContextTokens', () => {
+describe('ValidationConfigSchema — no thresholds surface', () => {
+  // VAT ships no numeric knob any more: the always-loaded context BUDGET was the
+  // only one, and it is gone with the verdict it moved. The outer object is
+  // `.strict()`, so a config still carrying the retired key is a loud error
+  // rather than a value that silently does nothing — which is what an adopter
+  // needs to be told when the surface it configured no longer exists.
+  it('rejects a thresholds block, so a retired knob cannot look like it still applies', () => {
     const result = ValidationConfigSchema.safeParse({
       thresholds: { alwaysLoadedContextTokens: 12_000 },
     });
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects even an empty thresholds block', () => {
+    expect(ValidationConfigSchema.safeParse({ thresholds: {} }).success).toBe(false);
   });
 
   it('parses a config with no thresholds key at all', () => {
     const result = ValidationConfigSchema.safeParse({ severity: {} });
     expect(result.success).toBe(true);
   });
-
-  it('parses an empty thresholds block', () => {
-    const result = ValidationConfigSchema.safeParse({ thresholds: {} });
-    expect(result.success).toBe(true);
-  });
-
-  it.each([
-    ['a non-integer', 12_000.5],
-    ['zero', 0],
-    ['a negative number', -1],
-    ['a string', '12000'],
-  ])('rejects %s alwaysLoadedContextTokens', (_label, value) => {
-    const result = ValidationConfigSchema.safeParse({
-      thresholds: { alwaysLoadedContextTokens: value },
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it('is strict inside thresholds — rejects an unknown threshold key', () => {
-    const result = ValidationConfigSchema.safeParse({
-      thresholds: { alwaysLoadedContextTokens: 12_000, alwaysLoadedContextTokenz: 9 },
-    });
-    expect(result.success).toBe(false);
-  });
 });
 
 // Proves the new code actually reached IssueCodeSchema: `severity` and `allow`
 // are keyed by the registry enum, so a config naming a code the registry does not
-// hold is rejected. If ALWAYS_LOADED_CONTEXT_BUDGET were missing from
+// hold is rejected. If CLAUDE_RULE_GLOB_INERT were missing from
 // CODE_REGISTRY these two would fail exactly like the LNIK_ typo test above.
-describe('ValidationConfigSchema — ALWAYS_LOADED_CONTEXT_BUDGET is an overridable code', () => {
-  it('accepts a severity override for ALWAYS_LOADED_CONTEXT_BUDGET', () => {
+describe('ValidationConfigSchema — CLAUDE_RULE_GLOB_INERT is an overridable code', () => {
+  it('accepts a severity override for CLAUDE_RULE_GLOB_INERT', () => {
     const result = ValidationConfigSchema.safeParse({
-      severity: { ALWAYS_LOADED_CONTEXT_BUDGET: 'ignore' },
+      severity: { CLAUDE_RULE_GLOB_INERT: 'ignore' },
     });
     expect(result.success).toBe(true);
   });
 
-  it('accepts an allow entry keyed by ALWAYS_LOADED_CONTEXT_BUDGET', () => {
+  it('accepts an allow entry keyed by CLAUDE_RULE_GLOB_INERT', () => {
     const result = ValidationConfigSchema.safeParse({
       allow: {
-        ALWAYS_LOADED_CONTEXT_BUDGET: [
-          { paths: ['docs/**'], reason: 'docs tree is read by humans, not loaded as context' },
+        CLAUDE_RULE_GLOB_INERT: [
+          { paths: ['docs/**'], reason: 'the generated tree is scoped by a glob written ahead of it' },
         ],
       },
     });
     expect(result.success).toBe(true);
   });
+});
+
+describe('ValidationConfigSchema — the two new projection codes are overridable', () => {
+  it.each(['CLAUDE_RULE_FRONTMATTER_INVALID', 'EXTENT_SYMLINK_NOT_REALIZED'])(
+    'accepts a severity override for %s',
+    (code) => {
+      expect(ValidationConfigSchema.safeParse({ severity: { [code]: 'ignore' } }).success).toBe(true);
+    },
+  );
 });
 
 describe('AllowEntrySchema', () => {
@@ -210,6 +204,17 @@ describe('ValidationConfigSchema — the CUSTOM: override namespace', () => {
     expect(result.success).toBe(false);
   });
 
+  // `vat skills build` / `vat skills package` / `vat verify` / `vat skill test run` / `vat doctor` / `vat rag index` / `vat corpus scan` decide these codes' severity themselves; an override would parse and do nothing.
+  it.each(['SKILL_BUILD_TARGET_NOT_BUILDABLE', 'SKILL_PACKAGING_FAILED', 'SKILL_PACKAGE_TOO_LARGE', 'FILES_CONFIG_DEST_MISSING', 'SKILL_TEST_EVAL_FAILED', 'DOCTOR_CHECK_FAILED', 'DOCTOR_CHECK_WARNED', 'RAG_DOCUMENT_INDEX_FAILED', 'CORPUS_ENTRY_INCOMPLETE'])(
+    'rejects the non-overridable packaging code %s as a severity or allow key',
+    (code) => {
+      // Control: the same shapes parse for an overridable code, so a refusal below is about the key.
+      expect(ValidationConfigSchema.safeParse({ allow: { LINK_DROPPED_BY_DEPTH: [{ paths: ['**'], reason: 'x' }] } }).success).toBe(true);
+      expect(ValidationConfigSchema.safeParse({ severity: { [code]: 'ignore' } }).success).toBe(false);
+      expect(ValidationConfigSchema.safeParse({ allow: { [code]: [{ paths: ['**'], reason: 'x' }] } }).success).toBe(false);
+    },
+  );
+
   /**
    * The refusal MESSAGE, which used to send half its readers to the wrong place.
    *
@@ -260,11 +265,12 @@ describe('ValidationConfigSchema — the CUSTOM: override namespace', () => {
 
   it('rejects a custom key under `allow`, because the allow filter would ignore it', () => {
     // 🔑 A deliberate ASYMMETRY, not an oversight. `severity` reaches a check's
-    // findings through `resolveIssueSeverity`, which is code-agnostic. `allow`
-    // does not: the allow filter is `IssueCode`-typed and `vat resources check`
-    // never runs it, so a `CUSTOM:` allow entry would parse, do nothing, and
-    // report nothing — an adopter would believe a path was exempted when every
-    // finding under it still failed their build.
+    // findings through `resolveFindings`, which resolves a non-registry code's
+    // override. `allow` does not: a `CUSTOM:` check's finding is located at
+    // whatever its SQL selected, never a path an allow glob is written against,
+    // so a `CUSTOM:` allow entry would parse and exempt nothing the adopter
+    // meant — they would believe a path was exempted when every finding under
+    // it still failed their build.
     //
     // A loud config error is the honest answer, and this pins that the widening
     // above did not leak into the field where it would be inert.
@@ -284,4 +290,39 @@ describe('customCheckCode', () => {
     expect(isCustomCheckCode(customCheckCode('my-check'))).toBe(true);
     expect(isCustomCheckCode(CUSTOM_CHECK_CODE_PREFIX)).toBe(false);
   });
+});
+
+describe('ValidationConfigSchema — refusal codes are not config keys', () => {
+  // 🔑 A refusal says a run could not do its job. It has no legitimate
+  // `ignore` and no path to waive, so it is refused under BOTH maps — and the
+  // severity refusal still names the code as deliberately non-overridable.
+  it.each(['RESOURCE_CHECK_BROKEN', 'RESOURCE_CHECK_EXAMINED_NOTHING', 'INTERNAL_ERROR'])(
+    'refuses a refusal code as a severity key and as an allow key (%s)',
+    (code) => {
+      const message = refusalFor(code);
+      expect(message).toContain(code);
+      expect(message).toContain('refusal');
+      const allow = ValidationConfigSchema.safeParse({ allow: { [code]: [{ reason: 'no' }] } });
+      expect(allow.success).toBe(false);
+    },
+  );
+
+  it('still parses a finding code under both maps', () => {
+    const result = ValidationConfigSchema.safeParse({
+      severity: { LINK_MISSING_TARGET: 'warning' },
+      allow: { LINK_MISSING_TARGET: [{ reason: 'positive control' }] },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it.each(['my-check', 'INTERNAL_ERROR', 'RESOURCE_CHECK_BROKEN'])(
+    'still parses the severity key CUSTOM:%s — a refusal-code guard must not reach the custom namespace',
+    (name) => {
+      // The CUSTOM: positive control for this block's refusals: a check NAMED
+      // after a refusal code is the adopter's own and is overridable, so a guard
+      // matching the code by substring or suffix would wrongly refuse it here.
+      const result = ValidationConfigSchema.safeParse({ severity: { [customCheckCode(name)]: 'ignore' } });
+      expect(result.success).toBe(true);
+    },
+  );
 });

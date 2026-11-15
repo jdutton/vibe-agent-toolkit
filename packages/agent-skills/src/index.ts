@@ -3,14 +3,15 @@
  * Build, validate, and package agent skills in the Agent Skills format
  */
 
-export { buildAgentSkill, type BuildOptions, type BuildResult } from './builder.js';
-
 export {
   createProjectRegistry,
   extractH1Title,
   packageSkill,
+  packageSkillInto,
   packageSkills,
   packagingConfigToPackageOptions,
+  reanchorStagedResult,
+  stagedPathMapper,
   ZipSizeLimitError,
   type PackageSkillOptions,
   type PackageSkillResult,
@@ -28,6 +29,9 @@ export {
   type WalkableRegistry,
   type WalkLinkGraphOptions,
 } from './walk-link-graph.js';
+
+// A document the crawl refused to parse, named the same way in every skill lane.
+export { refusedAmong, SKILL_REACHED_REFUSAL_CONSEQUENCE } from './parse-refusal-issues.js';
 
 // The skill extent (zones §7.3): the closure primitive under a skill's name,
 // plus the translation of `SkillPackagingConfig` into the declaration that
@@ -93,6 +97,7 @@ export {
 } from './parsers/frontmatter-parser.js';
 
 export { declaredSkillNameIn, readDeclaredSkillName } from './skill-identity.js';
+export { hostAddedToSkillZip, skillZipLayout, type SkillZipEntry, type SkillZipLayout } from './skill-zip-layout.js';
 
 export { type AnchorRootOptions, resolveAnchorRoot } from './validators/anchor-root.js';
 export { generateFixSuggestion } from './validators/validation-utils.js';
@@ -118,11 +123,13 @@ export { materializeIssue, type MaterializeOpts } from './validators/rule-engine
 export { detectHostedIncompatibleShape } from './validators/plugin-hosted-shape.js';
 export {
   deriveObservations,
+  detectorFrontmatter,
   observationToIssue,
   runCompatDetectors,
   type DetectorOutput,
 } from './validators/compat-detectors.js';
-export { validateMarketplace } from './validators/marketplace-validator.js';
+export { describeIssues } from './validators/describe-issues.js';
+export { manifestReadFailure, type MissingManifestFinding, validateMarketplace } from './validators/marketplace-validator.js';
 export { validateSkill } from './validators/skill-validator.js';
 export { validate, type UnifiedValidateOptions } from './validators/unified-validator.js';
 export { detectResourceFormat, enumerateSurfaces } from './validators/format-detection.js';
@@ -164,17 +171,18 @@ export type {
   Surface,
 } from './validators/types.js';
 
-export {
-  importSkillToAgent,
-  type ImportOptions,
-  type ImportResult,
-} from './import.js';
+// Packaging refusals of a skill's own content, told apart from defects by code
+export { asPackagerRefusal, isSkillPackagingInputError, SKILL_PACKAGE_CHECKS_FAILED_CODE, SKILL_PACKAGING_INPUT_INVALID_CODE, SkillPackageChecksFailedError } from './packaging-errors.js';
 
 // Skill source primitives
-export { cloneGitSource, type GitCloneResult } from './skill-source/git-clone.js';
+export { cloneGitSource, GIT_SUBPATH_INVALID_CODE, type GitCloneResult } from './skill-source/git-clone.js';
 
 // Unified skill-source resolution (spec §11c)
-export { resolveSkillSource, type ResolveSkillSourceOptions } from './skill-source/resolve-skill-source.js';
+export { locateSkillSource, resolveSkillSource, type ResolveSkillSourceOptions } from './skill-source/resolve-skill-source.js';
+// What `locateSkillSource` throws for an npm source spec with no version pin.
+export { SKILL_SOURCE_SPEC_INVALID_CODE } from './skill-source/sources/npm-source.js';
+// What `resolveSkillSource` throws for a source tree that holds a symlink (one the OS will not read is an `FsFaultError`).
+export { SKILL_SOURCE_UNREADABLE_CODE, SkillSourceUnreadableError } from './skill-source/stage.js';
 export type {
   SkillSource,
   ResolvedSkillSource,
@@ -208,6 +216,8 @@ export type {
   DeclaredList,
   HookRef,
   InstallInventory,
+  InventoryProjection,
+  InventorySerialized,
   LspRef,
   MarketplaceInventory,
   McpRef,
@@ -222,8 +232,10 @@ export {
   isMarketplaceInventory,
   isPluginInventory,
   isSkillInventory,
-  serializeInventory,
-  serializeInventoryShallow,
+  countInventories,
+  InventorySerializedSchema,
+  serializedInventory,
+  unreadableParseErrors,
   detectDeclaredButMissing,
   detectMarketplacePluginSourceMissing,
   detectPresentButUndeclared,
@@ -246,7 +258,9 @@ export {
 
 export {
   computeTreeCopiedSkillLocations,
+  getMarketplaceOutputDir,
   getPluginOutputDir,
+  pluginDirInMarketplace,
   getPluginSourceDir,
   indexPluginLocalSkills,
   listPluginSourceSkillDirs,
@@ -256,3 +270,4 @@ export {
   type PluginLocalSkillIndex,
   type PluginSkillExclusion,
 } from './plugin-distribution-layout.js';
+export { LINK_GRAPH_MEMBER_GLOBS } from './link-graph-members.js';

@@ -6,6 +6,7 @@
  * The directory-existence probe is injected so these tests touch no real filesystem.
  */
 
+import { toForwardSlash } from '@vibe-agent-toolkit/utils/path';
 import { describe, expect, it } from 'vitest';
 
 import { detectPluginLayout } from '../../src/skill-test/plugin-layout.js';
@@ -19,7 +20,7 @@ import { detectPluginLayout } from '../../src/skill-test/plugin-layout.js';
  * forward-slash paths (the `.claude-plugin/plugin.json` markers under test).
  */
 function makeProbe(present: Set<string>): (p: string) => boolean {
-  return (p: string): boolean => present.has(p.replaceAll('\\', '/'));
+  return (p: string): boolean => present.has(toForwardSlash(p));
 }
 
 describe('detectPluginLayout', () => {

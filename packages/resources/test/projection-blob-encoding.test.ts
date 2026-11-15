@@ -90,7 +90,7 @@ describe('the blobs table records how its text was decoded', () => {
   it('records a BOM-announced UTF-16LE document as a FACT, with nothing lost', async () => {
     await writeBinaryFixture(suite.tempDir, 'powershell-notes.md', UTF16LE_WITH_BOM);
 
-    const { report, projection } = await populateFixtureRoot(suite.tempDir);
+    const { projection } = await populateFixtureRoot(suite.tempDir);
     const blob = onlyBlob(projection);
 
     expect(blob.encoding).toBe('utf-16le');
@@ -99,7 +99,7 @@ describe('the blobs table records how its text was decoded', () => {
     // Positive control on that zero: the document really was decoded, not merely
     // admitted. A byte-wise reading of these bytes is NUL-interleaved garbage in
     // which neither the heading nor the link exists.
-    expect(report.blobsDerived).toBe(1);
+    expect(projection.blobs).toHaveLength(1);
     expect(blob.headingCount).toBe(1);
     expect(projection.blobReferences.map((row) => row.rawRef)).toEqual(['./b.md']);
   });
@@ -122,14 +122,14 @@ describe('the blobs table records how its text was decoded', () => {
   it('counts what a windows-1252 document loses when it is read as UTF-8', async () => {
     await writeBinaryFixture(suite.tempDir, 'legacy.md', WINDOWS_1252_BYTES);
 
-    const { report, projection } = await populateFixtureRoot(suite.tempDir);
+    const { projection } = await populateFixtureRoot(suite.tempDir);
     const blob = onlyBlob(projection);
 
     // The whole point: this file was NOT refused. It has a blob row, a heading,
     // a token estimate — everything a clean document has — and its text is
     // mojibake. `replacementCharacters` is the only column that says so.
-    expect(report.blobsDerived).toBe(1);
-    expect(report.blobsNotText).toBe(0);
+    expect(projection.blobs).toHaveLength(1);
+    expect(projection.blobConditions).toHaveLength(0);
     expect(blob.encoding).toBe('utf-8');
     expect(blob.encodingSource).toBe('assumed');
     expect(blob.replacementCharacters).toBe(WINDOWS_1252_HIGH_BYTES);
@@ -157,15 +157,15 @@ describe('a mis-decoded corpus says so, and a clean one stays silent', () => {
     await writeBinaryFixture(suite.tempDir, 'legacy.md', WINDOWS_1252_BYTES);
     await writeBinaryFixture(suite.tempDir, 'plain.md', Buffer.from(DOC, 'utf-8'));
 
-    const { report } = await populateFixtureRoot(suite.tempDir);
+    const { projection } = await populateFixtureRoot(suite.tempDir);
 
     // The premise, so the line below is about a mis-decode rather than about an
     // empty corpus: two blobs were derived and exactly one of them lost
     // characters. Nothing was declined, so no refusal bucket is involved.
-    expect(report.blobsDerived).toBe(2);
-    expect(report.blobsDecodedWithReplacements).toBe(1);
+    expect(projection.blobs).toHaveLength(2);
+    expect(projection.blobs.filter((row) => row.replacementCharacters > 0)).toHaveLength(1);
 
-    const line = describeBlobRefusals(report);
+    const line = describeBlobRefusals(projection);
     expect(line).toBeDefined();
     expect(line).toContain('mis-decoded 1 of 2 blob(s) into 5 replacement character(s)');
     expect(line).toContain('all with no BOM, so the encoding was assumed');
@@ -184,11 +184,11 @@ describe('a mis-decoded corpus says so, and a clean one stays silent', () => {
       Buffer.from('# café ± 3° — naïve\n', 'utf-8'),
     );
 
-    const { report, projection } = await populateFixtureRoot(suite.tempDir);
+    const { projection } = await populateFixtureRoot(suite.tempDir);
 
-    expect(report.blobsDerived).toBe(2);
+    expect(projection.blobs).toHaveLength(2);
     expect(projection.blobs.every((row) => row.replacementCharacters === 0)).toBe(true);
-    expect(report.blobsDecodedWithReplacements).toBe(0);
-    expect(describeBlobRefusals(report)).toBeUndefined();
+    expect(projection.blobs.filter((row) => row.replacementCharacters > 0)).toHaveLength(0);
+    expect(describeBlobRefusals(projection)).toBeUndefined();
   });
 });

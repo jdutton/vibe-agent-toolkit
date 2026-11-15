@@ -26,7 +26,7 @@ import { crawlAndResolveRegistry, resetPackagingRegistryCache } from '../../src/
 async function buildDegraded(root: string, locked: string): Promise<DirectoryRefusal[]> {
   const handed: DirectoryRefusal[] = [];
   await withReaddirSyncRefused(locked, 'EACCES', () =>
-    crawlAndResolveRegistry(root, { unreadable: { degrade: (r) => { handed.push(r); } } }));
+    crawlAndResolveRegistry(root, { outputs: [], unreadable: { degrade: (r) => { handed.push(r); } } }));
   return handed;
 }
 
@@ -61,15 +61,15 @@ describe('crawlAndResolveRegistry replays memoized refusals under each caller po
     expect(handed.map((r) => r.directory)).toEqual([toForwardSlash(locked)]);
 
     // The directory is readable again by now — the memo, not the filesystem, must answer.
-    await expect(crawlAndResolveRegistry(root, { unreadable: 'refuse' })).rejects.toBeInstanceOf(DirectoryListingRefusedError);
-    await expect(crawlAndResolveRegistry(root, { unreadable: 'refuse' })).rejects.toThrow("the directory 'docs/locked'");
+    await expect(crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' })).rejects.toBeInstanceOf(DirectoryListingRefusedError);
+    await expect(crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' })).rejects.toThrow("the directory 'docs/locked'");
   });
 
   it('a second { degrade } caller is told about the refusal the one crawl met', async () => {
     await buildDegraded(root, locked);
 
     const second: DirectoryRefusal[] = [];
-    const registry = await crawlAndResolveRegistry(root, { unreadable: { degrade: (r) => { second.push(r); } } });
+    const registry = await crawlAndResolveRegistry(root, { outputs: [], unreadable: { degrade: (r) => { second.push(r); } } });
     expect(second.map((r) => ({ directory: r.directory, code: r.code }))).toEqual([
       { directory: toForwardSlash(locked), code: 'EACCES' },
     ]);
@@ -77,10 +77,27 @@ describe('crawlAndResolveRegistry replays memoized refusals under each caller po
     expect(admittedUnder(root, registry)).toEqual(['docs/open/ok.md']);
   });
 
-  it("a registry built under 'refuse' carries no refusals, so a later { degrade } caller's handler is never called", async () => {
-    const first = await crawlAndResolveRegistry(root, { unreadable: 'refuse' });
+  it("waiters on a rejected crawl share ONE retry under the first waiter's policy, even a { degrade } waiter", async () => {
     const handed: DirectoryRefusal[] = [];
-    const second = await crawlAndResolveRegistry(root, { unreadable: { degrade: (r) => { handed.push(r); } } });
+    const outcomes = await withReaddirSyncRefused(locked, 'EACCES', () => Promise.allSettled([
+      crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' }),
+      crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' }),
+      crawlAndResolveRegistry(root, { outputs: [], unreadable: { degrade: (r) => { handed.push(r); } } }),
+    ]));
+
+    // The second caller's retry rejects under ITS 'refuse' ruling, and the third shares that
+    // outcome: no crawl of its own, so its handler is never called.
+    expect(outcomes.map((outcome) => outcome.status)).toEqual(['rejected', 'rejected', 'rejected']);
+    const [, retried, degradeWaiter] = outcomes as PromiseRejectedResult[];
+    expect(degradeWaiter?.reason).toBe(retried?.reason);
+    expect(degradeWaiter?.reason).toBeInstanceOf(DirectoryListingRefusedError);
+    expect(handed).toEqual([]);
+  });
+
+  it("a registry built under 'refuse' carries no refusals, so a later { degrade } caller's handler is never called", async () => {
+    const first = await crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' });
+    const handed: DirectoryRefusal[] = [];
+    const second = await crawlAndResolveRegistry(root, { outputs: [], unreadable: { degrade: (r) => { handed.push(r); } } });
     expect(second).toBe(first);
     expect(handed).toEqual([]);
     expect(admittedUnder(root, first).toSorted((a, b) => a.localeCompare(b))).toEqual(['docs/locked/t.md', 'docs/open/ok.md']);

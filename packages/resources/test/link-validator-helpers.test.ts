@@ -44,13 +44,13 @@ const LINK_ABSOLUTE_NO_ROOT = '/foo.md';
  * answers a path it cannot canonicalize with `safePath.resolve()`, which is the
  * identity for an already-absolute POSIX path. Writing the table by hand instead
  * of calling `fillRealpaths` keeps these unit tests free of both I/O and a
- * platform-dependent root — which is exactly what `realpathFrom` taking a table
- * rather than a cache is for.
+ * platform-dependent root — which is exactly what `realpathRowFrom` taking a table
+ * rather than a cache is for. Each row is a canonical path with no fault.
  *
  * ⚠️ A missing row THROWS, so every target below must be listed here.
  */
 const REALPATHS: RealpathTable = new Map(
-  [PROJECT_ROOT, TARGET_FOO, TARGET_SECRET, TARGET_OUTSIDE].map((p) => [p, p]),
+  [PROJECT_ROOT, TARGET_FOO, TARGET_SECRET, TARGET_OUTSIDE].map((p) => [p, { path: p, fault: null }]),
 );
 
 function makeOptions(overrides: Partial<GitIgnoreCheckOptions> = {}): GitIgnoreCheckOptions {
@@ -259,8 +259,12 @@ describe('fileExistenceIssue', () => {
       SOURCE,
     );
     expect(issue?.code).toBe('LINK_BROKEN_FILE');
-    expect(issue?.message).toBe(`File not found: ${issueLocation(TARGET_MISSING, process.cwd())}`);
-    expect(issue?.location).toBe(issueLocation(SOURCE, process.cwd()));
+    // The source lies outside cwd, so its cwd-relative spelling climbs: it is
+    // no `location`, and is named in the message instead.
+    expect(issue?.message).toBe(
+      `File not found: ${issueLocation(TARGET_MISSING, process.cwd())} (${issueLocation(SOURCE, process.cwd())})`,
+    );
+    expect(issue).not.toHaveProperty('location');
   });
 
   it('carries no `suggestion` when it has none to make', () => {

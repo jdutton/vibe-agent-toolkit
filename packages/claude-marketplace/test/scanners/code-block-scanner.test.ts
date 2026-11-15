@@ -6,22 +6,22 @@ import { bashCodeBlock, TEST_LOCATION_ROOT } from '../test-helpers.js';
 describe('scanCodeBlocks', () => {
   it('returns empty array for markdown with no code blocks', () => {
     const content = '# Hello\n\nThis is plain markdown with no code.';
-    const result = scanCodeBlocks(content, 'SKILL.md', TEST_LOCATION_ROOT);
+    const result = scanCodeBlocks(content, 'SKILL.md', TEST_LOCATION_ROOT, undefined);
     expect(result).toEqual([]);
   });
 
   it('emits FENCED_SHELL_BLOCK evidence for a bash code block', () => {
-    const result = scanCodeBlocks(bashCodeBlock('python3 scripts/calc.py'), 'SKILL.md', TEST_LOCATION_ROOT);
+    const result = scanCodeBlocks(bashCodeBlock('python3 scripts/calc.py'), 'SKILL.md', TEST_LOCATION_ROOT, undefined);
     expect(result.some(e => e.patternId === 'FENCED_SHELL_BLOCK')).toBe(true);
   });
 
   it('emits EXTERNAL_CLI_AZ for an az invocation in a shell block', () => {
-    const result = scanCodeBlocks(bashCodeBlock('az group list'), 'SKILL.md', TEST_LOCATION_ROOT);
+    const result = scanCodeBlocks(bashCodeBlock('az group list'), 'SKILL.md', TEST_LOCATION_ROOT, undefined);
     expect(result.some(e => e.patternId === 'EXTERNAL_CLI_AZ')).toBe(true);
   });
 
   it('emits BROWSER_AUTH_AZ_LOGIN for an az login invocation', () => {
-    const result = scanCodeBlocks(bashCodeBlock('az login'), 'SKILL.md', TEST_LOCATION_ROOT);
+    const result = scanCodeBlocks(bashCodeBlock('az login'), 'SKILL.md', TEST_LOCATION_ROOT, undefined);
     expect(result.some(e => e.patternId === 'BROWSER_AUTH_AZ_LOGIN')).toBe(true);
   });
 
@@ -34,7 +34,7 @@ describe('scanCodeBlocks', () => {
       '```',
     ].join('\n');
 
-    const result = scanCodeBlocks(content, 'skills/finance/SKILL.md', TEST_LOCATION_ROOT);
+    const result = scanCodeBlocks(content, 'skills/finance/SKILL.md', TEST_LOCATION_ROOT, undefined);
     const fenced = result.find(e => e.patternId === 'FENCED_SHELL_BLOCK');
     expect(fenced?.location.file).toBe('skills/finance/SKILL.md');
     expect(fenced?.location.line).toBeGreaterThan(0);
@@ -53,7 +53,7 @@ describe('scanCodeBlocks', () => {
       '```',
     ].join('\n');
 
-    const result = scanCodeBlocks(content, 'SKILL.md', TEST_LOCATION_ROOT);
+    const result = scanCodeBlocks(content, 'SKILL.md', TEST_LOCATION_ROOT, undefined);
     expect(result.some(e => e.patternId === 'EXTERNAL_CLI_AZ')).toBe(true);
     expect(result.some(e => e.patternId === 'EXTERNAL_CLI_AWS')).toBe(true);
   });
@@ -69,7 +69,7 @@ describe('scanCodeBlocks', () => {
       '```',
     ].join('\n');
 
-    const result = scanCodeBlocks(content, 'SKILL.md', TEST_LOCATION_ROOT);
+    const result = scanCodeBlocks(content, 'SKILL.md', TEST_LOCATION_ROOT, undefined);
     expect(result).toEqual([]);
   });
 });

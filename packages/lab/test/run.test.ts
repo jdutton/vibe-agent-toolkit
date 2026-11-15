@@ -15,13 +15,16 @@
  */
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
-import { runCommand } from '../src/harness/run.js';
+import { EMPTY_ARM_ENVIRONMENT } from '../src/harness/arm-env.js';
+import { runCommand, runExit } from '../src/harness/run.js';
 import type { ResolvedInstrument, RunOptions, RunResult } from '../src/harness/types.js';
 
+import { cleanupProbes, PROBE_ECHO_ENV, PROBE_VERSION, setupProbe } from './command-probe.js';
+
 /** Axis C is irrelevant to these tests; every instrument below shares one. */
-const VERSION = { version: '0.0.0-test', commit: null };
+const VERSION = PROBE_VERSION;
 
 /** A stand-in instrument: `node -e`, with the script arriving as the command's args. */
 const NODE_EVAL: ResolvedInstrument = {
@@ -37,15 +40,27 @@ const NODE_EVAL: ResolvedInstrument = {
  * @param extra - Env and timeout, when a test varies them
  * @returns The harness's result
  */
-function runScript(script: string, extra: Omit<RunOptions, 'cwd'> = {}): RunResult {
+function runScript(
+  script: string,
+  extra: Omit<RunOptions, 'cwd'> = { env: EMPTY_ARM_ENVIRONMENT },
+): RunResult {
   return runCommand(NODE_EVAL, [script], { cwd: process.cwd(), ...extra });
 }
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+afterAll(() => {
+  cleanupProbes();
+});
 
 describe('runCommand', () => {
   it('reports a successful run: exit 0, its stdout, and a real duration', () => {
     const result = runScript("process.stdout.write('measured')");
 
     expect(result.exitCode).toBe(0);
+    expect(result.started).toBe(true);
     expect(result.spawnError).toBeNull();
     expect(result.stdout).toBe('measured');
     expect(Number.isFinite(result.wallMs)).toBe(true);
@@ -71,9 +86,12 @@ describe('runCommand', () => {
     const missing = safePath.join(normalizedTmpdir(), 'vat-lab-no-such-binary-9f31c7');
     const neverRan = runCommand({ command: missing, leadingArgs: [], version: VERSION }, [], {
       cwd: process.cwd(),
+      env: EMPTY_ARM_ENVIRONMENT,
     });
 
     expect(neverRan.exitCode).toBeNull();
+    expect(neverRan.started).toBe(false);
+    expect(runExit(neverRan)).toBe('not-run');
     expect(neverRan.spawnError).not.toBeNull();
     expect(neverRan.spawnError).toContain('ENOENT');
     // Even a run that never happened reports a real, non-negative duration —
@@ -90,10 +108,12 @@ describe('runCommand', () => {
     const unresolvable = runCommand(
       { command: 'vat-lab-no-such-command-9f31c7', leadingArgs: [], version: VERSION },
       [],
-      { cwd: process.cwd() },
+      { cwd: process.cwd(), env: EMPTY_ARM_ENVIRONMENT },
     );
 
     expect(unresolvable.exitCode).toBeNull();
+    expect(unresolvable.started).toBe(false);
+    expect(runExit(unresolvable)).toBe('not-run');
     expect(unresolvable.spawnError).toContain('could not resolve command');
   });
 
@@ -106,7 +126,7 @@ describe('runCommand', () => {
       'process.stdout.write(JSON.stringify({' +
         ' mine: process.env.LAB_ENV_PROBE ?? null,' +
         ' inherited: process.env.PATH ?? null }))',
-      { env: { LAB_ENV_PROBE: 'probe-value' } },
+      { env: { set: { LAB_ENV_PROBE: 'probe-value' }, unset: [] } },
     );
 
     expect(result.exitCode).toBe(0);
@@ -116,10 +136,30 @@ describe('runCommand', () => {
     expect(seen.inherited).toBe(process.env.PATH);
   });
 
-  it('reports a timeout kill as a spawn error with no exit code', () => {
-    const result = runScript('setTimeout(function () {}, 30000);', { timeoutMs: 200 });
+  it('passes the arm environment to the child and nothing arm-owned it did not set', () => {
+    // The parent's shell exported a VAT_BIN — the leak this contract exists to
+    // stop. It must not reach the child, while the arm's own variable must.
+    vi.stubEnv('VAT_BIN', '/leak');
+    const probe = setupProbe('lab-run-env-');
+
+    const result = runCommand(probe.instrument, [], {
+      cwd: probe.cwd,
+      env: { set: { LAB_X: 'x', [PROBE_ECHO_ENV]: 'VAT_BIN,LAB_X' }, unset: [] },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toStrictEqual({ VAT_BIN: null, LAB_X: 'x' });
+  });
+
+  it('reports a timeout kill as a spawn error with no exit code, from a process that did start', () => {
+    const result = runScript('setTimeout(function () {}, 30000);', {
+      env: EMPTY_ARM_ENVIRONMENT,
+      timeoutMs: 200,
+    });
 
     expect(result.exitCode).toBeNull();
+    expect(result.started).toBe(true);
+    expect(runExit(result)).toBe('killed');
     expect(result.spawnError).not.toBeNull();
   });
 });

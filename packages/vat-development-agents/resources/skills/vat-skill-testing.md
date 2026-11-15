@@ -93,7 +93,7 @@ excerpt to read.
 
 ## Exit Codes
 
-The same three-way contract as every other `vat` command; when the harness could not run, a `Reason: <reason>` line on stderr says why.
+The same three-way contract as every other `vat` command, derived from the YAML report on stdout (schema `packages/cli/schemas/skill-test-run.json`). When the harness could not run, the report's `error.code` says which refusal (`BACKEND_UNAVAILABLE` for a missing `claude`, `USAGE_INVALID`, `CONFIG_INVALID`, `INPUT_UNREADABLE` — including bootstrap — or `INTERNAL_ERROR`) and a `Reason: <reason>` line on stderr restates it.
 
 | Code | Meaning |
 |---|---|
@@ -116,7 +116,7 @@ esac
 
 **On a `--baseline` run that block is necessary but not sufficient.** Exit `0` says the treatment arm completed; it says nothing about whether the comparison exists. If your gate is about the *lift*, read the artifact, not the exit code — require `baselineDelta.delta !== null`, `baselineIntegrity.controlArmFailures` empty, `baselineIntegrity.comparable` true, `baselineIntegrity.degraded` empty, and `baselineIntegrity.contaminated` false. Treat a missing or unparseable `baseline.json` as a failure, exactly as for `grading.json`.
 
-Which specific evals failed lives in `results/grading.json`, never in the exit code.
+Which evals failed is in the report — one `SKILL_TEST_EVAL_FAILED` finding per failed eval, `location` the `evals.json` and `field` the eval id (at `warning` under `--allow-eval-failure`) — and why in `results/grading.json`; never in the exit code.
 
 > **A timed-out run may leave `results/` incomplete or a `grading.json` unparseable.** Any consumer reading `grading.json` must treat an unparseable or missing file as a **failure**, not crash on it. The exit code (2, `Reason: internal`) already tells you the run did not complete; do not trust a partial artifact.
 >
@@ -420,8 +420,10 @@ Supported values: `subscription`, `api-key`.
 `vat skill test configure` writes knobs to `skills.config.<skill>.test` in `vibe-agent-toolkit.config.yaml` using a comment-preserving YAML upsert — your existing comments are not destroyed:
 
 ```bash
-vat skill test configure my-skill --auth subscription --require-auth subscription
+vat skill test configure my-skill --auth subscription
 ```
+
+`configure` has no `--require-auth` flag. Persist the guard by adding `requireAuth:` under the skill's `test:` block by hand, or pass `--require-auth` to each `run`.
 
 Prefer `configure` over adding raw YAML by hand; it validates the values before writing.
 
@@ -437,7 +439,7 @@ Two config homes: **per-skill** knobs live in `skills.config.<skill>.test`; the 
 | `--grader-model <id>` | `graderModel` | **global** | **Grader** (judge) model, independent of `--model`. Default `claude-sonnet-5`. |
 | `--concurrency <n>` | `concurrency` | **global** | Max evals run in parallel (default 4). |
 | `--baseline` / `--no-baseline` | `baseline` | per-skill | A/B the skill's INSTRUCTIONS (skill declared vs withheld). Not a capability control — check `baselineIntegrity` in `baseline.json`. Runs every eval **twice** (an executor *and* a grader spawn per arm), so it roughly **doubles** the spend, and `--max-budget-usd` is a per-spawn cap. A committed `baseline: true` therefore doubles every operator's run; it is announced on stderr when it applies, and `--no-baseline` turns it off for one run. |
-| `--allow-eval-failure` | — | — | Opt out of the fail-closed default so a failing (or fail-fast-gated) eval exits `0` (interactive use). By **default** a failing eval exits `4`. |
+| `--allow-eval-failure` | — | — | Opt out of the fail-closed default so a failing (or fail-fast-gated) eval exits `0` (interactive use). By **default** a failing eval exits `1`. |
 | `--with name=<src>` | `with` | per-skill | Stage a **required** companion skill the subject can invoke (`workspace:`/`npm:`/`url:`/`path:`/`vendored`). A `path:` source that maps to a **declared** skill is **built** first, exactly like the subject, so its `files:` artifacts are injected — a companion backed by a bundled executable stages functional. Its build failure fails the run. Unresolvable source, or a duplicate name across subject/`--with`/`--with-optional`, exits `2`. |
 | `--with-optional name=<src>` | `optional` | per-skill | Stage an **optional** companion; skipped with a stderr warning if its source can't be resolved. Also built when it maps to a declared skill, but a build failure falls back to the raw (unbuilt) source **only** when non-destructive — a `pool`-distribution build, or no build attempted (`--no-build`/`--dry-run`). A failed `plugin-local` build fails the run, because the marketplace build wipes its output tree first and staging would read from a deleted tree. |
 | `--env KEY=VALUE` | `env` | per-skill | Inject an env var into the **executor** spawn (`${fixturesDir}`, `${stagedSkillDir}`, `${harnessRoot}`, `${resultsDir}` interpolate). Protected names (PATH, auth, model) cannot be overridden. |
@@ -458,7 +460,7 @@ Both `test:` blocks are validated under a **strict** schema (VAT-produced config
 
 `results/friction.json` lists packaging issues observed during the run. Each item has:
 
-- `severity`: `high` | `medium` | `low`
+- `severity`: `error` | `warning` | `info` (the shared report vocabulary)
 - `category`: one of the five VAT-owned categories below
 - `message`: human-readable description
 - `subjectFile` (optional): the file the friction is attributed to
@@ -506,8 +508,8 @@ vat skill test run https://github.com/org/repo.git#main:dist/skills/my-skill/ \
   --allow-unverified-skill-source \
   --i-understand-this-runs-skill-code
 
-# Persist auth knobs to config
-vat skill test configure my-skill --auth subscription --require-auth subscription
+# Persist the auth knob to config (requireAuth has no configure flag)
+vat skill test configure my-skill --auth subscription
 
 # Get full help
 vat skill test --help

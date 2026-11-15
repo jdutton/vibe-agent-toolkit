@@ -209,7 +209,7 @@ claude:
         name: Your Name or Org
       publish:
         branch: claude-marketplace          # default
-        remote: origin                      # git remote name, or full URL for cross-repo publish
+        remote: origin                      # git remote name, or full URL for cross-repo publish (never starting with "-")
         changelog: docs/marketplace-changelog.md
         readme: docs/marketplace-readme.md
         license: mit                        # SPDX identifier or file path
@@ -283,7 +283,10 @@ When publishing to a **separate repository** (via `publish.remote`), the default
 
 1. Create a PAT with `contents: write` permission on the marketplace repo
 2. Store it as a repository secret (e.g., `MARKETPLACE_GITHUB_PUSH_TOKEN`)
-3. Expose it as `GH_TOKEN` in your workflow — `vat claude marketplace publish` uses `GH_TOKEN` (or `GITHUB_TOKEN`) to authenticate pushes
+3. Expose it as `GH_TOKEN` in your workflow — `vat claude marketplace publish` uses `GH_TOKEN` (or `GITHUB_TOKEN`) to authenticate to the remote, and only to an `https://github.com/` remote. It needs git 2.31 or newer to do so, and refuses on an older git. The token never appears in a URL or on a process command line: it is passed as an `http.https://github.com/.extraheader` entry appended to your own `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` entries, which are kept (`GIT_CONFIG_PARAMETERS`, i.e. inherited `git -c` values, is not). While a token applies:
+   - every extra header you configured that applies to github.com — `http.extraheader` or `http.https://github.com/.extraheader`, in any config file or env entry — is dropped for the publish, and only the token's header is sent;
+   - an extra header you key to a **more specific** URL (e.g. `http.https://github.com/org/repo.extraheader`) outranks the token's, so git sends yours and **not** the token. Remove it, or unset `GH_TOKEN`/`GITHUB_TOKEN` and authenticate with it alone;
+   - `GIT_CONFIG_COUNT` must be plain decimal, or the publish is refused.
 
 ```yaml
 # .github/workflows/marketplace-publish.yml
@@ -306,9 +309,10 @@ There are two layers: **source** validation (no build required) and **built-arti
 `vat validate` runs every source validator the config declares — and only those — discovered from `vibe-agent-toolkit.config.yaml`:
 
 1. `resources validate` — links, frontmatter, schemas (when `resources:` configured)
-2. `skills validate` — SKILL.md structure, frontmatter (when `skills:` configured)
+2. `resources check` — VAT's built-in checks plus every `resources.checks` SQL statement, over the whole tracked tree — `resources.include`/`exclude` do not scope it (whenever `resources:` is configured)
+3. `skills validate` — SKILL.md structure, frontmatter (when `skills:` configured)
 
-It is source-level only and **never requires a build**, so it is safe for pre-commit and CI-before-build. A surface with no config block is simply skipped (no error, no noise).
+It is source-level only and **never requires a build**, so it is the first CI-before-build gate. The checks phase builds its own projection of the whole tracked tree, so time it on your tree before putting it in a pre-commit hook. A surface with no config block is simply skipped (no error, no noise).
 
 > **Decision (revisitable):** `vat validate` deliberately excludes marketplace-artifact validation. The marketplace check runs against the built `dist/` tree, which would couple `vat validate` to a prior `vat build` and overlap `vat verify`. Marketplace validation lives in `vat verify` (built mode) and `vat claude marketplace validate` (standalone). See issue #128.
 
@@ -516,7 +520,7 @@ plugins:
         dest: hooks/compiled-hook.mjs         # relative to plugin output dir
 ```
 
-`dest` cannot escape the plugin output dir and cannot target `.claude-plugin/plugin.json` (owned by merge-write). Overwrites are allowed and logged at info level.
+`dest` cannot escape the plugin output dir, cannot land inside `skills/` (owned by the skill stream — use that skill's own `files:`), and cannot target `.claude-plugin/plugin.json` (owned by merge-write). All three are decided by the place `dest` names, not its spelling: `./skills/x`, `docs/../skills/x` and `Skills/x` are refused as `skills/x` is (`CONFIG_INVALID`). A later entry overwrites an earlier one's file, or a tree-copied file, and says so at info level; a `dest` that lands on a directory, or under a file, refuses the build.
 
 ### What the verbatim tree-copy leaves behind
 

@@ -64,7 +64,7 @@ Taken to its limit, a **bare filename with no `/` exempts that filename everywhe
 
 The option **replaces** any default rather than merging with it, and unknown option keys are a config error — a typo'd `exemptFile` must fail loudly rather than quietly exempt nothing.
 
-The rules taking `exemptFiles` are `no-raw-node-path`, `no-os-tmpdir`, `no-fs-mkdirSync`, `no-fs-realpathSync`, `no-child-process-execSync`, `no-fs-promises-cp`, `no-raw-text-decode` and `no-bare-symlink-in-tests`.
+The rules taking `exemptFiles` are `no-raw-node-path`, `no-os-tmpdir`, `no-fs-mkdirSync`, `no-fs-realpathSync`, `no-child-process-execSync`, `no-raw-text-decode`, `no-bare-symlink-in-tests`, `no-adhoc-errno` and `no-destructive-fs` (the last takes directory entries too: a trailing `/` makes an entry a directory).
 
 ## Rules
 
@@ -73,14 +73,14 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:cla
 **The auto-fix writes the import to the subpath in that column**, not to the barrel — `--fix` on a raw `path.join()` inserts `import { safePath } from '@vibe-agent-toolkit/utils/path'`. A file that already reaches the helper through the barrel keeps its existing import and only has the call rewritten: adding a second binding of the same name is a `SyntaxError`, not a redundant import.
 
 <!-- gen:eslint-rules -->
-35 rules; 7 auto-fix. `configs.recommended` enables 18 of them (16 at `error`, 2 at `warn`); `—` in the last column means the rule ships but must be enabled by name.
+43 rules; 4 auto-fix. `configs.recommended` enables 17 of them (15 at `error`, 2 at `warn`); `—` in the last column means the rule ships but must be enabled by name.
 
 #### Path handling
 
 | Rule | Bans | Use instead | Subpath | Fix | `recommended` |
 |---|---|---|---|---|---|
-| `no-hardcoded-path-split` | `split('/')` / `split('\\')` on a path | `path.basename()`, or `toForwardSlash()` first | `/path` |  | `error` |
-| `no-manual-path-normalize` | hand-rolled `.replace(/\\/g, '/')` | `toForwardSlash()` | `/path` | ✓ | `error` |
+| `no-hardcoded-path-split` | `split('/')` / `split('\\')` on a path | `path.basename()`, or `toForwardSlash()` / `toForwardSlashAnyPlatform()` first | `/path` |  | `error` |
+| `no-manual-path-normalize` | hand-rolled `.replace(/\\/g, '/')` / `split(path.sep).join('/')` | `toForwardSlash()` (native paths) / `toForwardSlashAnyPlatform()` (authored text) | `/path` | ✓ | `error` |
 | `no-path-operations-in-comparisons` | raw `path.*()` results in string comparisons | wrap in `toForwardSlash()` | `/path` |  | `error` |
 | `no-path-sep-in-strings` | `path.sep` embedded in a string literal | `toForwardSlash()` | `/path` |  | `error` |
 | `no-path-startswith` | `path.startsWith()` on a raw path | `toForwardSlash()` first | `/path` |  | `error` |
@@ -91,13 +91,18 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:cla
 
 | Rule | Bans | Use instead | Subpath | Fix | `recommended` |
 |---|---|---|---|---|---|
+| `no-adhoc-errno` | an errno name (`ENOENT`, `EACCES`, …) as a string in a classifying position, and a catch that reads `e.code` then builds a refusal with `cause: e` | `fsFaultOf(e)` / `classifyFsFault(e, …)`, or a single-errno predicate such as `isPathAbsentError(e)` | — |  | — |
 | `no-bare-executable-spawn` | Disallow spawning 'git' or 'node' by bare name — resolve the executable once (process.execPath; NODE_EXECUTABLE / gitExecutable() in tests) and spawn the absolute path | — | — |  | `error` |
 | `no-bare-symlink-in-tests` | unguarded `fs.symlinkSync()` / `fs.promises.symlink()` | in tests: `createSymlink(cap, …)` / `createSymlinkAsync(cap, …)`; in shipped code: a win32 junction, or a `catch` naming the privilege | `/testing` |  | — |
-| `no-child-process-execSync` | `child_process.execSync()` | `safeExecSync()` | `/process` | ✓ | `error` |
-| `no-fs-mkdirSync` | `fs.mkdirSync()` | `mkdirSyncReal()` | `/fs` | ✓ | `error` |
-| `no-fs-promises-cp` | `cp()` from `node:fs/promises` (drops nested files on Node 22) | `cpSync()` from `node:fs` | — | ✓ | `error` |
-| `no-fs-realpathSync` | `fs.realpathSync()` | `normalizePath()` | `/fs` | ✓ | `error` |
+| `no-child-process-execSync` | `child_process.execSync()` | `safeExecSync(binary, args)` | `/process` | suggestion | `error` |
+| `no-destructive-fs` | recursive `rm`/`rmSync`, `rmdir`, `rename`, `cp` and `copyFile` from `node:fs` / `node:fs/promises` (and their `Sync` forms), called or passed as values | `planTreeChanges()` / `applyTreePlan()`, `renameFileAtomic()`, `replaceFile()`, `copyTree()`, `withTempDir()` / `disposeTempDir()` | — |  | — |
+| `no-existssync` | `existsSync()` from `node:fs` — called, handed on, destructured or re-exported — under `packages/*/src/` | `pathPresent(path, mode, sideOf, absence)` (absent only on an absence; every other errno a classified `FS_FAULT`) | — |  | — |
+| `no-fs-mkdirSync` | `fs.mkdirSync()` | `mkdirSyncReal()` | `/fs` | ✓ result unused, else suggestion | `error` |
+| `no-fs-realpathSync` | `fs.realpathSync()` | `normalizePath(target, { within })` | `/fs` | suggestion | `error` |
+| `no-link-following-fs` | `stat`/`statSync`/`existsSync`/`realpath`/`realpathSync`, and `symlink`/`symlinkSync` called with no type, from `node:fs` or `node:fs/promises` under `packages/*/src/` | `followedStatSync`/`followedKindSync`/`realpathNativeSync(path, within)` or `pathPresent(path, { follow: within }, …)` | — |  | — |
 | `no-os-tmpdir` | `os.tmpdir()` (8.3 short names on Windows) | `normalizedTmpdir()` | `/fs` | ✓ | `error` |
+| `no-raw-signal-listener` | `process.on(<signal>, …)`, `process.off(<signal>, …)`, `once(process, <signal>)` and `process.on(<non-literal>, …)` | `handleTerminatingSignals()` | `/process` |  | — |
+| `no-text-git-object-read` | an argv whose subcommand reads the object store, unless it is the first argument of `runGitBytes(…)` | `runGitBytes()`, decoding the bytes where they are judged | `/git` |  | — |
 | `no-unix-shell-commands` | `tar`, `grep`, `rm`, `echo`, … spawned directly | Node APIs, or a portable script fixture | — |  | `error` |
 
 #### URLs and dynamic imports
@@ -142,6 +147,7 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:cla
 
 | Rule | Bans | Use instead | Subpath | Fix | `recommended` |
 |---|---|---|---|---|---|
+| `no-literal-test-timeout` | `it(name, fn, 60_000)`, `beforeAll(fn, tier * 12)`, `{ timeout: isWin ? 900_000 : 60_000 }` | the tier default, or `atLeastTierTimeout(inject('tierTestTimeout'), budget)` | — |  | — |
 | `no-test-scoped-functions` | helper functions declared inside `describe`/`it` | module scope | — |  | — |
 | `prefer-startswith-over-regex` | `/^foo/.test(s)`, `` /^\*glob/.test(s) ``, `const RE = /^foo/; RE.test(s)` | `s.startsWith('foo')` | — |  | `error` |
 | `require-justified-skip` | unannotated `it.skip`/`it.todo`, tautological assertions, empty test bodies | a `SKIP(#123): reason` annotation, or a real assertion | — |  | — |
@@ -158,7 +164,9 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:cla
 | `no-io-in-unit-tier` | Disallow child_process imports and mkdtemp/spawn/exec calls in unit-tier test files — a test that spawns or writes to disk belongs in the integration or system tier | — | — |  | — |
 | `no-literal-process-exit` | Disallow process.exit(<number>) and process.exitCode = <number> — name the meaning with the ExitCode enum so every command shares one exit contract | — | — |  | — |
 | `no-registry-count-pin` | Disallow pinning the size of an imported registry with a literal in tests — toHaveLength(27) on something pulled from src is a change detector fixed by retyping | — | — |  | — |
+| `no-stdout-outside-writer` | Disallow writing stdout under a command directory except through the one document writer — process.stdout.write, console.log and the stdout helpers publish a shape nothing validates | — | — |  | — |
 | `no-version-literal` | Disallow z.literal(<number>) on a version-named field and <X>_VERSION = <number> constants — a hand-bumped integer deciding data validity is the shape CLAUDE.md bans | — | — |  | — |
+| `projection-sqlite-import-boundary` | Disallow importing @vibe-agent-toolkit/projection-sqlite outside the files the config names — the storage backend is chosen and injected at one edge | — | — |  | — |
 <!-- /gen:eslint-rules -->
 
 ### Pointing the fix at your own re-export seam — `safeModule`
@@ -171,6 +179,8 @@ If your repo re-exports these helpers through its own module, the defaults above
 ```
 
 It is **per-rule**, not one shared `settings` key, because a seam need not split its symbols the way this package does — an adopter whose narrow entry carried `normalizedTmpdir()` but not `safePath` needed the two rules pointed at different modules, which a single key cannot express. Note the two lines above therefore name *different* modules. It composes with `exemptFiles`, and it changes the error message as well as the fix, so the advice never names a module you don't use. Every rule that names a module accepts it, including the ones that only advise and never fix.
+
+Two rules describe a call shape your wrapper need not share: `no-fs-realpathSync` (`normalizePath(target, { within })`) and `no-child-process-execSync` (`safeExecSync(binary, args)`). Pointed at a `safeModule` outside `@vibe-agent-toolkit/utils`, their message names the function and your module but no argument spelling, and they offer no editor suggestion — the suggestion would append this package's argument (`{ within: TREE_CRAWLED_IN }`, `ARGV_FROM_SHELL_STRING`) to your wrapper's call. The rule cannot tell a wrapper from a plain re-export, so a module that only re-exports this package's function gets no suggestion either.
 
 > **Point each rule at a module that exports the symbol *that rule writes*, not merely one that resolves.** This is the failure mode worth spending a minute on, because it is the quiet one. A `safeModule` that doesn't resolve fails loudly and immediately. A `safeModule` that resolves but lacks the symbol passes every resolution check — including an explicit `import()` probe — and then throws `Cannot read properties of undefined` at each call site, once per fixed file. Aim `no-raw-node-path` at an entry without `safePath` and you get a green `--fix`, a green install, and thousands of latent `TypeError`s. The rules cannot check this for you: verifying it would mean resolving and importing your module from inside the linter, which is neither its job nor reliable from wherever ESLint happens to be running.
 
@@ -192,8 +202,8 @@ privilege produces a visible `skip()` rather than a failure or a silently-swallo
 code** there is deliberately no wrapper to route through: `createSymlink()` lives on the `/testing`
 subpath, and pointing production code at a test helper would be worse advice than the bare call.
 There the guidance is a junction for a directory link on win32 (no elevation required), or catching
-the failure and naming the missing privilege. Declaring a platform out of scope is legitimate —
-say so in an `eslint-disable` justification, which is what `vat agent install --dev` does.
+the failure and naming the missing privilege. Declaring a platform out of scope, or taking the
+junction form deliberately, is legitimate — say so in an `eslint-disable` justification.
 
 `exemptFiles` matters here: the implementation file holding the sanctioned `symlinkSync` is not a
 test file, so it needs an explicit exemption once the rule covers shipped code.
@@ -216,7 +226,7 @@ Not in `recommended` because the first half depends on **your** Node floor — a
 
 `try { return statSync(p); } catch { return null; }` answers three different questions with one word. *Not there* is what the author meant. *Refused* — `EACCES`, `EPERM`, `ELOOP` — is a file that exists and could not be read, now reported as absent. *Bug* — a `TypeError` two frames down — is a defect, now reported as a file that is not there. All three exit 0, and the tool is quietest exactly where it is most wrong.
 
-The rule is a floor, deliberately syntactic: a catch is fine if it **references its error binding anywhere** in the body (`isFilesystemAccessError(e)`, `e instanceof X`, `e.code === 'ENOENT'`, `errors.push(String(e))`, `log.warn(e)`) or **throws at its own level** (a rethrow, or a translation into a louder error; a `throw` inside a nested function is a promise to fail later, not a rethrow). It cannot tell `narrow(e)` from `log(e)` and does not try. What it guarantees is the weaker, enforceable property — *the error was looked at before it was discarded* — which every one of the shipped defects lacked.
+The rule is a floor, deliberately syntactic: a catch is fine if it **references its error binding anywhere** in the body (`fsFaultOf(e)`, `e instanceof X`, `e.code === 'ENOENT'`, `errors.push(String(e))`, `log.warn(e)`) or **throws at its own level** (a rethrow, or a translation into a louder error; a `throw` inside a nested function is a promise to fail later, not a rethrow). It cannot tell `narrow(e)` from `log(e)` and does not try. What it guarantees is the weaker, enforceable property — *the error was looked at before it was discarded* — which every one of the shipped defects lacked.
 
 This is the one seam `tsc` cannot see. When a callee learns to throw where it used to return — a crawler that starts refusing an unreadable directory instead of skipping it — every caller whose contract changed by TYPE fails to compile and gets fixed; the caller with a blind `catch` compiles unchanged and absorbs the new refusal. That is how a refuse-by-default crawler shipped under a `catch { return null }` that turned `vat audit` into a scan of nothing.
 
@@ -276,6 +286,8 @@ It is latent by construction, and worse, **it is invisible to any tree that has 
 Every rule marked `—` in the table ships without riding in `recommended`, and each states its reason beside its own `recommended: false` in `eslint/rules/<rule>.cjs`. The reasons fall into a few families:
 
 **Test-style opinions** — `no-test-scoped-functions` (where a helper may be declared) and `require-justified-skip` (the annotation grammar for a disabled test). Neither is a portability or correctness fact, and installing this package for `safePath.join()` should not also import someone else's test conventions. Both are worth turning on deliberately.
+
+**Names a value only your runner config can provide** — `no-literal-test-timeout`. Its remedy is a multiple of the tier timeout your vitest config hands its tests (`provide`/`inject`); this pack cannot supply that value, so the rule cannot ride in `recommended`.
 
 **Unsound, pending a rewrite** — `no-unsafe-root-join`. It keys on whether an identifier's *name* ends in `root` rather than on whether any segment is caller-controlled, which makes it noisy and blind at the same time. Measured against 4,670 files of real adopter source: 108 findings, none autofixable. Verified behaviour:
 
@@ -354,13 +366,13 @@ The criterion for `warn` is **migration volume**, not how real the finding is �
 
 ### Running `--fix` over a large backlog
 
-Every rule that rewrites a call *and* edits imports fixes **all** of a file's call sites in a single pass, and `packages/utils/test/eslint/autofix-fixpoint.test.ts` holds each of them to that: it runs `--fix` to its fixpoint and then asks `no-undef` whether the result still binds every identifier.
+Every rule that rewrites a call *and* edits imports fixes **all** of a file's call sites in one `--fix` run, and `packages/utils/test/eslint/autofix-fixpoint.test.ts` holds each of them to that: it runs `--fix` to its fixpoint and then asks `no-undef` whether the result still binds every identifier. Every one of those fixes carries the import it needs (one shared contract, `createSafeImporter` in `rules/safe-import.cjs`), so each is also correct applied alone from an editor; the price is that the fixes overlap, so a file with several call sites takes two passes of ESLint's fix loop — the first adds the import, the second rewrites the rest.
 
 That test exists because the answer used to be no. ESLint merges the fixes one `fix()` yields into a **single range spanning `min..max`**, and applies only non-overlapping ranges per pass — so a fix touching both the import and its own call site spanned everything in between, N call sites produced N nested ranges, and ESLint kept one. The rule then went quiet, because the import specifier its detection keyed on was what had just been removed. `--fix` reached a stable fixpoint over source that no longer compiles and exited clean; you found out at `tsc`. An adopter measured **146 files left with a dangling reference** across one ~4,900-site sweep, worst single file 75 unrewritten calls.
 
-`eslint-disable` interacts with this in a way worth knowing about, because it is not obvious and it took an adversarial run to find. ESLint invokes a rule's `fix()` **before** the disable filter discards the problem, so a suppressed report still consumes any once-per-file edit its rule was holding. Where that edit is an import *insert*, the rules either re-emit it from every report or carry a repair leg that recognises the orphaned call and supplies the missing import on the next pass — so a disabled call site costs an extra pass, not a broken file. Where it is an import *removal*, the removal is latched and simply goes away with the discarded report, leaving an unused import for `no-unused-vars` to point at rather than a call with nothing behind it. `exemptFiles` remains the supported way to opt a whole file out.
+`eslint-disable` interacts with this in a way worth knowing about, because it is not obvious and it took an adversarial run to find. ESLint invokes a rule's `fix()` **before** the disable filter discards the problem, so a suppressed report would consume any once-per-file edit a rule held. So no rule holds one: every report re-emits the import insert, and `no-raw-node-path` also carries a repair leg that recognises a call an older release orphaned and supplies the missing import. No report's fix ever *removes* an import: a removal carried by any one report would land while a suppressed call still reads the binding, and the output would lint clean and throw `ReferenceError`. Removal belongs to the dead-import leg alone, on the next pass, once scope shows nothing references the binding. `exemptFiles` remains the supported way to opt a whole file out.
 
-Two more things a fixer here will not do: delete a `type`-only, aliased, or re-exported specifier (removing a re-exported one produced output that did not parse), and insert an import *between* a leading `eslint-disable-next-line` and the statement it protects, which would silently revoke the suppression.
+Two more things a fixer here will not do: delete a `type`-only or re-exported specifier (removing a re-exported one produced output that did not parse), and insert an import *between* a leading `eslint-disable-next-line` and the statement it protects, which would silently revoke the suppression.
 
 #### The binding left behind
 
@@ -372,7 +384,8 @@ Deliberately narrow:
 
 - **A closed list of modules** — `node:path`, `node:os`, `node:fs`, `node:fs/promises`, `node:child_process` and their bare spellings. All Node builtins, all side-effect-free with certainty decided when the rule was written. This is *not* a general unused-import rule and will not become one; for blanket cleanup, `eslint-plugin-unused-imports` already exists and already autofixes.
 - **Only in a file this rule migrated** — the safe symbol must be bound AND the rule's own replacement must actually be called in the file (`safePath.join(…)`, `normalizedTmpdir()`, `toForwardSlash(…)`). "The safe symbol is in scope" alone is not evidence: `safePath` arrives for reasons that have nothing to do with a call this pack consumed, and an import that was dead already — dead before the pack ever ran — was then deleted as though this fixer had orphaned it. A dead import in a file this pack never touched is somebody else's business.
-- **Only whole declarations, only with zero references left** — evaluated against the source as it stands on that pass, so the removal always lands *after* the rewrite that consumed the last reference, never speculatively beside it. A partially-dead declaration (`import path, { sep }` with `sep` still live) is left alone, as are bare `import 'node:path'` side-effect imports and anything carrying a `type` specifier.
+- **Only with zero references left — a whole declaration, or a dead named specifier the rule rewrites beside a live one** (`join` in `import { join, dirname }`) — evaluated against the source as it stands on that pass, so the removal always lands *after* the rewrite that consumed the last reference, never speculatively beside it. A partially-dead declaration (`import path, { sep }` with `sep` still live) is left alone, as are bare `import 'node:path'` side-effect imports and anything carrying a `type` specifier.
+- **Only a statement directly in a block, a `switch` case, a `static {}` block, a namespace body or the top level** — never the unbraced body of an `if`/`else`/loop/label, whose removal would make the next statement that body. Where the statement before has no `;` of its own, or a string would become a directive, the removal leaves a lone `;` instead, so the code around it means what it meant.
 
 This cannot be delegated: `@typescript-eslint/no-unused-vars` declares `meta.fixable: 'code'` but emits only a **suggestion** for an unused import, and `--fix` never applies suggestions; `sonarjs/unused-import` declares no fixer at all. Verified with both enabled alongside these rules in one `verifyAndFix` — the import survived. Those rules abstain for a good reason, since removing an import can change behaviour; a rule that *created* the orphan knows it just consumed the last reference and knows the module, so it can act where a generic rule cannot.
 

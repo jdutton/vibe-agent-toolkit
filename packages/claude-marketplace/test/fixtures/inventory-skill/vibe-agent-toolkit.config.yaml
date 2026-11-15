@@ -5,4 +5,3 @@
 # This fixture had not yet grown slow enough to blow the 60s timeout the way
 # extract-plugin.test.ts did, but it is the same latent bug — the cost is a
 # function of the repo it happens to sit in, so it gets worse on its own.
-version: 1

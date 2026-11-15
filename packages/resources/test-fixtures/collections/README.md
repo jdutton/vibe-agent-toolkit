@@ -146,7 +146,7 @@ if (!config) throw new Error('fixture config not found');
 const registry = new ResourceRegistry({ config, baseDir: fixturesDir });
 
 // Crawl and validate
-await registry.crawl({ baseDir: fixturesDir, unreadable: 'refuse' });
+await registry.crawl({ outputs: [], baseDir: fixturesDir, unreadable: 'refuse' });
 const issues = await registry.validate();
 
 // Should find 7 validation errors

@@ -6,7 +6,6 @@
  */
 
 export {
-  assertInventoryHasParseErrors,
   assertValidationFailureWithError,
   executeAndParseYaml,
   executeCli,
@@ -29,6 +28,7 @@ export type { TestProjectOptions } from './project-setup.js';
 export {
   executeRagCommandInEmptyProject,
   executeRagQueryAndExpectSuccess,
+  FINDER_DS_STORE,
   setupIndexedRagTest,
   setupRagTestProject,
   setupRagTestSuite,
@@ -37,7 +37,6 @@ export {
 export {
   createInstalledSkillDir,
   executeSkillsCommandAndExpectYaml,
-  setupDevTestProject,
   setupInstallTestSuite,
 } from './skills-setup.js';
 
@@ -50,4 +49,4 @@ export {
 
 export { createMarkdownGitFixture } from './projection-fixture.js';
 
-export { MCPTestClient } from './mcp-client.js';
+export { expectSecsWithinRun } from './duration-bound.js';

@@ -25,7 +25,7 @@ import {
   type ParsePoolPolicy,
   tallyParsable,
 } from '../src/parse-dispatcher.js';
-import { defaultParsePoolSize, type ParsePool, type ParsePoolOptions } from '../src/parse-pool.js';
+import { defaultParsePoolSize, type ParsePool } from '../src/parse-pool.js';
 
 import { type CacheOutcomes, inertPool, mutableCache } from './parse-dispatcher-fixture.js';
 
@@ -67,34 +67,29 @@ interface Sizing {
 }
 
 /**
- * Run one sizing decision and report the width the pool was asked for.
+ * Run one sizing decision and report the width it settled on.
  *
  * @param sizing - The sample, the remainder and the run's cache outcomes
- * @returns The size the pool was built with, or `null` when none was built
+ * @returns The dispatcher's width; 1 when it did not widen
  */
-async function widthFor(sizing: Sizing): Promise<number | null> {
-  let asked: number | null = null;
+async function widthFor(sizing: Sizing): Promise<number> {
   const { cache, accrue } = mutableCache();
   const dispatcher = new ParseDispatcher(cache, {
-    enabled: true,
     missThreshold: 1,
     ...sizing.policy,
-    createPool: (options?: ParsePoolOptions): ParsePool => {
-      asked = options?.size ?? null;
-      return inertPool();
-    },
+    createPool: (): ParsePool => inertPool(),
   });
   for (const document of sizing.sample) await dispatcher.parse(document);
   accrue(sizing.outcomes ?? { misses: sizing.sample.length });
   dispatcher.considerActivation(() => sizing.remaining);
-  return asked;
+  return dispatcher.width;
 }
 
 /**
  * Whether this box can afford a useful pool at all.
  *
  * A machine with fewer than three cores caps below {@link MINIMUM_WORKERS}, so
- * it must start no pool however rich the corpus is. Asserted from the other side
+ * it must never widen however rich the corpus is. Asserted from the other side
  * rather than skipped: a skip on a small CI runner is a hole.
  */
 const CAN_AFFORD_A_POOL = defaultParsePoolSize() >= 2;
@@ -108,7 +103,7 @@ describe('sizing the pool from parsable BYTES', () => {
       remaining: remainderOf({ markdown: LONG_TAIL }),
     });
 
-    expect(width).toBe(CAN_AFFORD_A_POOL ? 2 : null);
+    expect(width).toBe(CAN_AFFORD_A_POOL ? 2 : 1);
   });
 
   it('buys none for the same COUNT of stub documents', async () => {
@@ -120,7 +115,7 @@ describe('sizing the pool from parsable BYTES', () => {
       remaining: remainderOf({ markdown: LONG_TAIL }),
     });
 
-    expect(width).toBeNull();
+    expect(width).toBe(1);
   });
 
   it('buys none for the same BYTES of HTML', async () => {
@@ -132,7 +127,7 @@ describe('sizing the pool from parsable BYTES', () => {
       remaining: remainderOf({ html: LONG_TAIL }),
     });
 
-    expect(width).toBeNull();
+    expect(width).toBe(1);
   });
 
   it('makes no claim about a kind it has no sample of', async () => {
@@ -144,7 +139,7 @@ describe('sizing the pool from parsable BYTES', () => {
       remaining: remainderOf({ html: LONG_TAIL * 100 }),
     });
 
-    expect(width).toBeNull();
+    expect(width).toBe(1);
   });
 
   it('discounts the remainder by the run\'s own cache hit rate', async () => {
@@ -158,7 +153,7 @@ describe('sizing the pool from parsable BYTES', () => {
       outcomes: { hits: 900, misses: 100 },
     });
 
-    expect(width).toBeNull();
+    expect(width).toBe(1);
   });
 
   it('caps a corpus that could pay for any number of threads', async () => {
@@ -167,26 +162,22 @@ describe('sizing the pool from parsable BYTES', () => {
       remaining: remainderOf({ markdown: 1_000_000 }),
     });
 
-    expect(width).toBe(CAN_AFFORD_A_POOL ? defaultParsePoolSize() : null);
+    expect(width).toBe(CAN_AFFORD_A_POOL ? defaultParsePoolSize() : 1);
   });
 
-  it('never starts a pool of one, however the arithmetic lands', async () => {
-    // A one-worker pool parallelizes nothing — width is the fan-out, so the main
-    // thread hands over a document and then waits for a thread to do work it
-    // could have done itself, having paid a structured clone each way and a
-    // remark load once. Measured at +723 ms: the pool's whole fixed cost, bought
-    // and not used. The two ways of spending nothing are "no pool" and "a pool
-    // that helps"; there is no third.
+  it('never widens for a remainder that pays for only one thread', async () => {
+    // Every miss already runs in one worker; widening is worth deciding only
+    // when a SECOND thread pays.
     const width = await widthFor({
       sample: [sampleDocument('markdown', TYPICAL_DOCUMENT_BYTES)],
       // ~1.5 s of parse: enough for one worker's share, not for two.
       remaining: remainderOf({ markdown: 215 }),
     });
 
-    expect(width).toBeNull();
+    expect(width).toBe(1);
   });
 
-  it('scans the remainder ONCE even when the answer is "no pool"', async () => {
+  it('scans the remainder ONCE even when the answer is "do not widen"', async () => {
     // 🚨 The loop offers this decision after every emission, and the tally
     // behind it is an O(remaining) scan. A decline that did not stick would
     // re-scan at every one of them — O(n²) over the corpus — for an answer that
@@ -196,7 +187,6 @@ describe('sizing the pool from parsable BYTES', () => {
     let scans = 0;
     const { cache, accrue } = mutableCache();
     const dispatcher = new ParseDispatcher(cache, {
-      enabled: true,
       missThreshold: 1,
       createPool: (): ParsePool => inertPool(),
     });
@@ -214,20 +204,16 @@ describe('sizing the pool from parsable BYTES', () => {
   });
 
   it('leaves an explicitly sized pool alone, and never scans the remainder for it', async () => {
+    const NAMED_WIDTH = 6;
     // A caller that named a width knows something the estimate does not, and the
     // scan behind the remainder is O(remaining) — paying for it to discard the
     // answer is the cost the callback shape exists to avoid.
     let scans = 0;
     const { cache, accrue } = mutableCache();
-    let asked: number | null = null;
     const dispatcher = new ParseDispatcher(cache, {
-      enabled: true,
       missThreshold: 1,
-      size: 6,
-      createPool: (options?: ParsePoolOptions): ParsePool => {
-        asked = options?.size ?? null;
-        return inertPool();
-      },
+      size: NAMED_WIDTH,
+      createPool: (): ParsePool => inertPool(),
     });
     accrue({ misses: 1 });
     dispatcher.considerActivation(() => {
@@ -235,7 +221,7 @@ describe('sizing the pool from parsable BYTES', () => {
       return remainderOf({ markdown: LONG_TAIL });
     });
 
-    expect(asked).toBe(6);
+    expect(dispatcher.width).toBe(NAMED_WIDTH);
     expect(scans).toBe(0);
   });
 });

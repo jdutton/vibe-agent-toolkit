@@ -19,15 +19,16 @@
  * Returns counts keyed to the spec's YAML summary extension.
  */
 
-import { existsSync } from 'node:fs';
-import { copyFile, lstat, mkdir, readdir, realpath, stat } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { lstat, readdir } from 'node:fs/promises';
 
 import { AGENT_INSTRUCTION_FILE_PATTERNS, toAnyDepthGlobs } from '@vibe-agent-toolkit/agent-skills';
-import { isGlob, isPathAbsentError, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
+import { assertUnresolvableLink, everywhere, forEachInOrder, type FsFaultContext, isGlob, mapConcurrentFailingInOrder, pathPresent, realpathNative, requireFollowedStat, safePath, toForwardSlash, VatError, withFsFault } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory, crawlPathFilter } from '@vibe-agent-toolkit/utils/crawl';
 import { gitFindRoot } from '@vibe-agent-toolkit/utils/git';
 import picomatch from 'picomatch';
+
+import { PLUGIN_SYMLINK_REFUSED_CODE } from '../../../utils/command-error-codes.js';
+import { copyFileIntoMarketplace } from '../../../utils/marketplace-io.js';
 
 export interface TreeCopyOptions {
   sourceDir: string;
@@ -170,7 +171,7 @@ export class PluginSymlinkRefusedError extends VatError {
   constructor(refused: readonly RefusedSymlink[]) {
     const lines = refused.map((entry) => `  - '${entry.path}' ${describeRefusal(entry)}`);
     super(
-      'PLUGIN_SYMLINK_REFUSED',
+      PLUGIN_SYMLINK_REFUSED_CODE,
       `Refusing to copy the plugin source: ${refused.length} symbolic link(s) cannot be shipped in a bundle,`
         + ` so nothing was copied.\n${lines.join('\n')}\n`
         + 'Replace each link with the file it points at, or name it in the plugin\'s `exclude:` list to leave'
@@ -301,12 +302,30 @@ async function partitionByLstat(
 ): Promise<{ regular: SourceEntry[]; links: SourceEntry[] }> {
   const regular: SourceEntry[] = [];
   const links: SourceEntry[] = [];
-  for (const abs of files) {
+  // The plugin's source is this build's INPUT: an entry the OS will not examine is the source's fault.
+  const isLink = await mapConcurrentFailingInOrder(files, (abs) =>
+    withFsFault({ side: 'source', origin: 'content', action: 'examine the plugin file', path: abs }, async () => (await lstat(abs)).isSymbolicLink()));
+  for (const [index, abs] of files.entries()) {
     const entry = { abs, rel: toForwardSlash(safePath.relative(sourceDir, abs)) };
-    const info = await lstat(abs);
-    (info.isSymbolicLink() ? links : regular).push(entry);
+    (isLink[index] === true ? links : regular).push(entry);
   }
   return { regular, links };
+}
+
+/**
+ * The fault context for a call on the plugin source tree.
+ *
+ * The source directory itself is named by the project config
+ * (`getPluginSourceDir`), so a refusal of it is config-origin; anything beneath
+ * it was found inside that input, so it is content-origin.
+ *
+ * @param sourceDir - The plugin source directory
+ * @param action - What the call was doing, for the message
+ * @param path - The path the call acted on
+ * @returns The context for {@link withFsFault}
+ */
+function pluginSourceFault(sourceDir: string, action: string, path: string): FsFaultContext {
+  return { side: 'source', origin: path === sourceDir ? 'config' : 'content', action, path };
 }
 
 /**
@@ -337,17 +356,19 @@ async function sweepSymlinks(
 ): Promise<SourceEntry[]> {
   const found: SourceEntry[] = [];
   const walk = async (dir: string): Promise<void> => {
-    const entries = await readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
+    // The plugin's source is this build's INPUT: a listing the OS refuses is the source's fault.
+    const entries = await withFsFault(pluginSourceFault(sourceDir, 'list the plugin source', dir), () => readdir(dir, { withFileTypes: true }));
+    // In order: `found` is depth-first listing order.
+    await forEachInOrder(entries, async (entry) => {
       const abs = safePath.join(dir, entry.name);
       const rel = toForwardSlash(safePath.relative(sourceDir, abs));
-      if (!isMember(rel)) continue;
+      if (!isMember(rel)) return;
       if (entry.isSymbolicLink()) {
         found.push({ abs, rel });
       } else if (entry.isDirectory()) {
         await walk(abs);
       }
-    }
+    });
   };
   await walk(sourceDir);
   return found;
@@ -375,29 +396,32 @@ function isUnderSource(real: string, realSource: string): boolean {
  */
 async function classifySymlink(
   link: SourceEntry,
+  sourceDir: string,
   realSource: string,
   shipped: ReadonlySet<string>,
 ): Promise<RefusedSymlink | 'file'> {
   let real: string;
   try {
-    real = toForwardSlash(await realpath(link.abs));
+    // The chain is read beneath the plugin source first: a link to a network path is refused (a
+    // classified source fault, below) before the kernel is asked to follow it.
+    real = await realpathNative(link.abs, sourceDir);
   } catch (error) {
-    // 'unresolvable' is what the message says it is: dangling, or a loop. A
-    // link whose target the OS REFUSES to resolve is neither — it resolves to
-    // something this process may not see — and reporting it as dangling sends
-    // the operator to fix a link that is fine.
-    if (!isPathAbsentError(error) && !isSymlinkLoop(error)) throw error;
+    // 'unresolvable' is what the message says it is: the OS looked and found
+    // nothing (dangling, a loop, reparse data Windows cannot follow). A link
+    // whose target the OS REFUSES to resolve, or could not look at (EIO, and
+    // Windows' ambiguous UNKNOWN), is neither — reporting it as dangling sends
+    // the operator to fix a link that is fine — so it stops the copy as the
+    // classified fault every write lane gives: the input's, with the "check the
+    // permission / share" remedy.
+    // The action names the link: a refusal on its chain names the place refused, which may be its target.
+    assertUnresolvableLink(error, { side: 'source', origin: 'content', action: `resolve the symbolic link ${link.rel}`, path: link.abs });
     return { path: link.rel, reason: 'unresolvable' };
   }
   if (!isUnderSource(real, realSource)) return { path: link.rel, reason: 'escapes-source' };
-  if ((await stat(real)).isDirectory()) return { path: link.rel, reason: 'directory' };
+  const targetStat = await withFsFault({ side: 'source', origin: 'content', action: 'examine the symbolic link target', path: real }, () => requireFollowedStat(real, realSource));
+  if (targetStat.isDirectory()) return { path: link.rel, reason: 'directory' };
   const target = toForwardSlash(safePath.relative(realSource, real));
   return shipped.has(target) ? 'file' : { path: link.rel, reason: 'target-excluded', target };
-}
-
-/** `realpath` on a link that chases its own tail. */
-function isSymlinkLoop(error: unknown): boolean {
-  return (error as { code?: unknown } | null)?.code === 'ELOOP';
 }
 
 /**
@@ -413,12 +437,14 @@ async function judgeSymlinks(
   const copyable: SourceEntry[] = [];
   const refused: RefusedSymlink[] = [];
   if (links.length === 0) return { copyable, refused };
-  const realSource = toForwardSlash(await realpath(sourceDir));
-  for (const link of [...links].toSorted((a, b) => a.rel.localeCompare(b.rel))) {
-    const verdict = await classifySymlink(link, realSource, shipped);
+  const realSource = await withFsFault(pluginSourceFault(sourceDir, 'resolve the plugin source', sourceDir), () => realpathNative(sourceDir, sourceDir));
+  const sorted = [...links].toSorted((a, b) => a.rel.localeCompare(b.rel));
+  const verdicts = await mapConcurrentFailingInOrder(sorted, (link) => classifySymlink(link, sourceDir, realSource, shipped));
+  for (const [index, link] of sorted.entries()) {
+    const verdict = verdicts[index];
     if (verdict === 'file') {
       copyable.push(link);
-    } else {
+    } else if (verdict !== undefined) {
       refused.push(verdict);
     }
   }
@@ -437,12 +463,14 @@ export async function treeCopyPlugin(options: TreeCopyOptions): Promise<TreeCopy
     symlinksCopied: [],
   };
 
-  if (!existsSync(sourceDir)) {
+  // The plugin source is the tree this copy reads: every probe passes it as `within`, and a probe
+  // the OS refuses is the source's fault, never "nothing to copy".
+  if (!pathPresent(sourceDir, { follow: sourceDir }, everywhere('source'), 'probe')) {
     return result;
   }
 
   const authorMarketplaceJson = safePath.join(sourceDir, '.claude-plugin', 'marketplace.json');
-  if (existsSync(authorMarketplaceJson) && warn) {
+  if (warn && pathPresent(authorMarketplaceJson, { follow: sourceDir }, everywhere('source'), 'probe')) {
     warn(
       `Ignoring ${toForwardSlash(authorMarketplaceJson)}: marketplace.json is VAT-generated ` +
         `at the marketplace level and cannot be supplied per-plugin.`,
@@ -463,6 +491,7 @@ export async function treeCopyPlugin(options: TreeCopyOptions): Promise<TreeCopy
   // Only the walk route lists directories; inside a repository `git ls-files`
   // answers and a refusal surfaces on the file copy instead.
   const files = await crawlDirectory({
+    outputs: [],
     baseDir: sourceDir,
     include: ['**/*'],
     exclude,
@@ -474,6 +503,7 @@ export async function treeCopyPlugin(options: TreeCopyOptions): Promise<TreeCopy
         root: sourceDir,
         remedy:
           'Fix the permissions on that directory, or name it in the plugin\'s `exclude:` list to leave it out of the bundle deliberately.',
+        side: 'source',
       },
     },
   });
@@ -512,19 +542,19 @@ export async function treeCopyPlugin(options: TreeCopyOptions): Promise<TreeCopy
     throw new PluginSymlinkRefusedError(refused);
   }
 
-  for (const entry of [...shippedRegular, ...copyable]) {
-    const target = safePath.join(destDir, entry.rel);
-    await mkdir(dirname(target), { recursive: true });
+  // In order: bundle writes, where the first failed copy is the one reported.
+  await forEachInOrder([...shippedRegular, ...copyable], async (entry) => {
     // `copyFile` follows a symlink, which is the point for the in-tree file
-    // links that reach here: the bundle carries the target's bytes.
-    await copyFile(entry.abs, target);
+    // links that reach here: the bundle carries the target's bytes. The plugin
+    // file is read first (INPUT_UNREADABLE), then the bundle written (RUN_INCOMPLETE).
+    await copyFileIntoMarketplace(entry.abs, { root: destDir, relative: entry.rel }, `plugin file ${entry.rel}`, `${entry.rel} into the plugin bundle`);
     result.filesCopied += 1;
 
     const bucket = classifyRelative(entry.rel);
     if (bucket) {
       result[bucket] += 1;
     }
-  }
+  });
   result.symlinksCopied = copyable.map((entry) => entry.rel);
 
   // A typo'd or wrong-shaped exclude pattern used to be perfectly silent: the

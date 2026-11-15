@@ -22,7 +22,7 @@ import { resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { openSqliteProjectionStore, type SqliteStoreOptions } from '../../src/store.js';
+import { openSqliteFactStore, type SqliteStoreOptions } from '../../src/store.js';
 
 /** The writer script, beside this file. */
 const WRITER = resolveFromImportMeta(import.meta.url, 'store-writer-child.mjs');
@@ -87,7 +87,7 @@ function runWriter(
 
 /** Open a store on the shared directory. */
 function open(options: Omit<SqliteStoreOptions, 'directory'> = {}) {
-  return openSqliteProjectionStore({ ...options, directory });
+  return openSqliteFactStore({ ...options, directory });
 }
 
 describe('connection configuration', () => {
@@ -117,7 +117,7 @@ describe('connection configuration', () => {
     for (const [index, result] of results.entries()) {
       expect(result.code, `opener ${index}: ${result.stderr}`).toBe(0);
     }
-  }, 30_000);
+  });
 });
 
 describe('concurrent writers', () => {
@@ -157,7 +157,7 @@ describe('concurrent writers', () => {
     } finally {
       await store.close();
     }
-  }, 30_000);
+  });
 
   it('never shows a reader half of a replaced extent', async () => {
     let writing = true;
@@ -197,5 +197,5 @@ describe('concurrent writers', () => {
     // the extent is not evidence of anything.
     expect(samples, `${attempts} attempts`).toBeGreaterThan(0);
     expect(torn).toBe(0);
-  }, 30_000);
+  });
 });

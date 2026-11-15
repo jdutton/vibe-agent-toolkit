@@ -133,8 +133,8 @@ function makePromptMap(): Map<string, TriggerPrompt> {
   ]);
 }
 
-function fakeStage(): { entryId: string; rootDir: string; skillPath: string } {
-  return { entryId: SKILL_A, rootDir: '/fake', skillPath: '/fake/SKILL.md' };
+function fakeStage(): Promise<{ entryId: string; rootDir: string; skillPath: string }> {
+  return Promise.resolve({ entryId: SKILL_A, rootDir: '/fake', skillPath: '/fake/SKILL.md' });
 }
 
 /**

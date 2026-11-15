@@ -10,7 +10,7 @@ import { chmodSync, readdirSync, rmSync } from 'node:fs';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { isFilesystemAccessError } from '../../src/errors/errno.js';
+import { fsFaultOf } from '../../src/errors/errno-table.js';
 import { mkdirSyncReal, safePath } from '../../src/path-utils.js';
 import { CANNOT_DENY_READS, PERMISSIONS_ENFORCED } from '../../src/testing/platform-gates.js';
 import { createTempDir, removeTempDir } from '../../src/testing/temp-dir.js';
@@ -38,7 +38,7 @@ describe('platform-gates', () => {
       readdirSync(locked);
     } catch (error) {
       // Only the OS refusing counts; anything else is a broken fixture.
-      if (!isFilesystemAccessError(error)) throw error;
+      if (fsFaultOf(error) === undefined) throw error;
       refused = true;
     }
     expect(refused).toBe(!CANNOT_DENY_READS);

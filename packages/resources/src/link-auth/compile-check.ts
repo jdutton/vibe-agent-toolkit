@@ -36,6 +36,9 @@ import type { Provider } from './resolve.js';
 import { compileWhen, namedGroupsOf } from './rewrite.js';
 import { templateReferences } from './template.js';
 
+/** The code every {@link LinkAuthConfigError} carries — a config defect a caller refuses by code. */
+export const LINK_AUTH_CONFIG_CODE = 'LINK_AUTH_CONFIG';
+
 /**
  * Thrown when a provider in `resources.linkAuth` cannot be compiled. The
  * message names the provider (index and host), the field, and the underlying
@@ -47,7 +50,7 @@ export class LinkAuthConfigError extends VatError {
 
   constructor(providerLabel: string, field: string, cause: unknown) {
     const detail = cause instanceof Error ? cause.message : String(cause);
-    super('LINK_AUTH_CONFIG', `resources.linkAuth ${providerLabel}: ${field} — ${detail}`);
+    super(LINK_AUTH_CONFIG_CODE, `resources.linkAuth ${providerLabel}: ${field} — ${detail}`);
     this.field = field;
   }
 }

@@ -202,9 +202,8 @@ describe('publishedPackagesInDependencyOrder on the real tree', () => {
   });
 
   it('never publishes a package before a runtime dependency', () => {
-    // The two defects the hand list carried: runtime-claude-agent-sdk before
-    // claude-marketplace, and cli before gateway-mcp. Asserted as the general
-    // property, so the next reordering is caught wherever it lands.
+    // Asserted as the general property — every runtime dependency publishes
+    // first — so a reordering is caught wherever it lands.
     const position = new Map(order.map((dir, index) => [dir, index] as const));
     const violations: string[] = [];
     for (const dir of order) {

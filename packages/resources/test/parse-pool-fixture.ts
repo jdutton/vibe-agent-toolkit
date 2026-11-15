@@ -30,7 +30,8 @@ export interface PoolRecord {
 /** How a fake pool should behave beyond parsing. */
 export interface FakePoolBehaviour {
   /**
-   * Reject every dispatched document with the error this builds from its bytes.
+   * Reject a dispatched document with the error this builds from its bytes, or
+   * parse it normally when this returns `undefined`.
    *
    * A FUNCTION of the content, not a fixed `Error`, because "which failure
    * surfaced" is a question one shared error object cannot answer: two documents
@@ -38,7 +39,7 @@ export interface FakePoolBehaviour {
    * from a completion-ordered one. A caller that does not care ignores the
    * argument.
    */
-  failWith?: (content: string) => Error;
+  failWith?: (content: string) => Error | undefined;
   /** Answer in reverse dispatch order, so completion order ≠ emission order. */
   reverseCompletion?: boolean;
   /**
@@ -75,19 +76,22 @@ const COMPLETION_STEP_MS = 4;
 /**
  * How far the reversed ladder counts down from.
  *
- * Larger than the fixtures that care about completion order, so the first
- * document dispatched is the last to answer. Floored at zero below, so a fixture
- * with hundreds of documents — which cannot care about the ladder anyway —
- * simply runs it out rather than asking for a negative delay.
+ * Larger than the fixtures that care about completion order (the widest
+ * dispatches eleven), so the first document dispatched is the last to answer.
+ * A reversed fixture that dispatches this many documents throws: from here the
+ * delays stop falling, so its later documents would answer in dispatch order
+ * and an order assertion over them would pass for the wrong reason. No higher
+ * than it needs to be: every reversed fixture's first document waits the whole
+ * ladder, on every test that uses one.
  */
-const LADDER_TOP = 32;
+const LADDER_TOP = 16;
 
 /**
  * Pause, so a fake pool can answer out of dispatch order.
  *
  * @param ms - How long to wait
  */
-async function delay(ms: number): Promise<void> {
+function delay(ms: number): Promise<void> {
   return new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
@@ -119,6 +123,11 @@ export function fakePool(
     ): Promise<ParseResult> => {
       record.calls += 1;
       const dispatchIndex = record.calls;
+      if (behaviour.reverseCompletion === true && dispatchIndex >= LADDER_TOP) {
+        throw new Error(
+          `fakePool: reverseCompletion dispatched document ${String(dispatchIndex)}, past the ladder (${String(LADDER_TOP)}); its order is no longer reversed. Raise LADDER_TOP.`,
+        );
+      }
       record.inFlight += 1;
       record.maxInFlight = Math.max(record.maxInFlight, record.inFlight);
       try {
@@ -127,10 +136,11 @@ export function fakePool(
         // wide the fan-out was, and every order assertion would be vacuous.
         await delay(
           behaviour.reverseCompletion === true
-            ? Math.max(0, LADDER_TOP - dispatchIndex) * COMPLETION_STEP_MS
+            ? (LADDER_TOP - dispatchIndex) * COMPLETION_STEP_MS
             : 1,
         );
-        if (behaviour.failWith !== undefined) throw behaviour.failWith(content);
+        const failure = behaviour.failWith?.(content);
+        if (failure !== undefined) throw failure;
         if (behaviour.emptyFacts === true) return emptyParse(content, byteLength);
         return kind === 'html'
           ? parseHtmlContent(content, byteLength)
@@ -144,11 +154,13 @@ export function fakePool(
     // It throws rather than answering `null`, so a change that starts routing
     // here fails loudly instead of falling through to a cache read that finds
     // nothing.
-    parseIntoCache: async (): Promise<never> => {
-      throw new Error('cache transport is not exercised by these suites');
-    },
-    shutdown: async (): Promise<void> => {
+    parseIntoCache: (): Promise<never> =>
+      Promise.reject(new Error('cache transport is not exercised by these suites')),
+    // Never reached either: neither suite runs a harness read.
+    harnessFacts: (): Promise<never> => Promise.reject(new Error('harness reads are not exercised by these suites')),
+    shutdown: (): Promise<void> => {
       record.shutdowns += 1;
+      return Promise.resolve();
     },
   };
 

@@ -32,7 +32,7 @@ describe('RAG query command (system test)', () => {
     expect(output.stats).toBeDefined();
     expect(output.stats.totalMatches).toBeGreaterThan(0);
     expect(output.stats.searchDurationMs).toBeGreaterThan(0);
-    expect(output.stats.embedding.model).toBeDefined();
+    expect(output.stats.embedding?.model).toBeDefined();
     expect(Array.isArray(output.chunks)).toBe(true);
     expect(output.chunks.length).toBeGreaterThan(0);
 
@@ -46,8 +46,7 @@ describe('RAG query command (system test)', () => {
     expect(firstChunk?.embeddingModel).toBeDefined();
 
     // Verify content is full (not truncated)
-    const content = firstChunk?.content as string;
-    expect(content.length).toBeGreaterThan(0);
+    expect(firstChunk?.content.length).toBeGreaterThan(0);
   });
 
   it('should limit results with --limit flag', () => {
@@ -68,7 +67,8 @@ describe('RAG query command (system test)', () => {
     );
 
     expect(result.status).toBe(2); // System error
-    expect(parsed.status).toBe('error');
+    // Nothing indexed is the input's refusal, not a VAT defect.
+    expect(parsed).toMatchObject({ status: 'error', error: { code: 'INPUT_UNREADABLE' } });
     expect(result.stderr).toContain('No data indexed yet');
   });
 });

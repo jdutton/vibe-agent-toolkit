@@ -9,7 +9,7 @@ export function makeComponentRef(manifestPath: string, exists: boolean): Compone
 	return { manifestPath, resolvedPath: `/abs/${manifestPath}`, exists };
 }
 
-export function makeHookRef(manifestPath: string, exists: boolean, inline?: object): HookRef {
+export function makeHookRef(manifestPath: string, exists: boolean, inline?: Record<string, unknown>): HookRef {
 	return { manifestPath, resolvedPath: `/abs/${manifestPath}`, exists, ...(inline ? { inline } : {}) };
 }
 

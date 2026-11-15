@@ -73,6 +73,8 @@ import {
 } from '../../envelope/coordinate.js';
 import { refuseDifferentFacets, type ReportEnvelope } from '../../envelope/envelope.js';
 import { bothSides, pairByKey, type Pairing } from '../../harness/diff.js';
+import { recaptureRefusal } from '../../harness/dumps.js';
+import { stabilityCaveat } from '../../harness/facet-compare.js';
 
 import {
   IO_FACET,
@@ -277,14 +279,7 @@ function readIoBody(
   // report predating the field is refused by this very schema.
   const parsed = IoBodySchema.safeParse(envelope.body);
   if (parsed.success) return { body: parsed.data as IoBody };
-  const problems = parsed.error.issues
-    .map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
-    .join('; ');
-  return {
-    refusal:
-      `REFUSED: the ${side} report's header claims facet '${IO_FACET}', but its body is not an ` +
-      `'${IO_FACET}' body and re-capturing that side is the only fix — ${problems}`,
-  };
+  return { refusal: recaptureRefusal(`the ${side} '${IO_FACET}' report`, parsed.error) };
 }
 
 /**
@@ -324,24 +319,6 @@ function unmeasurableReason(before: IoCommandStats, after: IoCommandStats): stri
     // command records 436 user calls warm and 568 cold, and that 132-call gap is
     // the cache mode rather than anything about the subject.
     return `cache mode differs (${before.cache} vs ${after.cache})`;
-  }
-  return null;
-}
-
-/**
- * What one side's `stable` flag costs the comparison, or `null` when nothing.
- *
- * @param row - That side's row
- * @param side - How to name it in the reason
- * @returns A clause for the refusal reason, or `null`
- */
-function stabilityCaveat(row: IoCommandStats, side: string): string | null {
-  if (row.stable === false) return `the ${side} row's own repeats disagreed with each other`;
-  if (row.stable === null) {
-    return (
-      `the ${side} row's determinism was never tested ` +
-      `(${String(row.comparedRuns)} compared repeats, so nothing could disagree)`
-    );
   }
   return null;
 }

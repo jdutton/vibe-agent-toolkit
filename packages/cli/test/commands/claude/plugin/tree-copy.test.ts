@@ -1,9 +1,11 @@
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
-import { mkdir, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 
 import {
   createSymlink,
+  FS_FAULT_CODE,
   mkdirSyncReal,
+  realpathNative,
   safePath,
   symlinkCapability,
 } from '@vibe-agent-toolkit/utils';
@@ -18,13 +20,15 @@ import {
   type TreeCopyOptions,
   type TreeCopyResult,
 } from '../../../../src/commands/claude/plugin/tree-copy.js';
+import { refusalCodeOf } from '../../../../src/utils/command-refusal.js';
 import { errno, realBehind, refusingOnly } from '../../../helpers/refusal-doubles.js';
 import { createTempDirTracker } from '../../../system/test-common.js';
 
-// `realpath` is a named import in the copy, so the one refused-resolution case
-// injects at the module seam. Every other case resolves for real through it.
-vi.mock('node:fs/promises', async (importOriginal) =>
-  (await import('../../../helpers/refusal-doubles.js')).spiedModule(importOriginal, ['realpath']));
+// The copy resolves every link through `realpathNative` (the native realpath with its one
+// fallback), so the refused-resolution cases inject at that module seam. Every other case
+// resolves for real through it.
+vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) =>
+  (await import('../../../helpers/refusal-doubles.js')).spiedModule(importOriginal, ['realpathNative']));
 
 /**
  * Seed a plugin source and tree-copy it with the given `exclude:` patterns.
@@ -406,6 +410,20 @@ describe.skipIf(!symlinkCapability())('treeCopyPlugin — symlinks, both crawl r
     ['git', gitRoute],
   ];
 
+  /** Make resolving `hooks/alias.json -> hooks.json` fail with `code`, and run `body` with the double in place. */
+  async function withAliasResolutionFailing(code: string, body: (fx: SymlinkFixture) => Promise<void>): Promise<void> {
+    const fx = await seedPlugin();
+    fx.link('alias.json', 'hooks.json');
+    vi.mocked(realpathNative).mockImplementation(
+      refusingOnly(safePath.join(fx.src, 'hooks', 'alias.json'), errno(code), realBehind(realpathNative)),
+    );
+    try {
+      await body(fx);
+    } finally {
+      vi.mocked(realpathNative).mockRestore();
+    }
+  }
+
   async function copyExpectingRefusal(
     fx: SymlinkFixture,
     options: Pick<TreeCopyOptions, 'exclude' | 'excludeSkillDirs'> = {},
@@ -596,19 +614,37 @@ describe.skipIf(!symlinkCapability())('treeCopyPlugin — symlinks, both crawl r
     expectNothingCopied(fx);
   });
 
-  it('lets a link the OS refuses to resolve through as itself, not as dangling', async () => {
-    // 'unresolvable' means dangling or a loop. A link whose target the process
-    // may not see resolves fine for everyone else, and telling the operator to
-    // fix it is the wrong remedy.
+  // 'unresolvable' means the link resolves to nothing: one errno-table predicate decides it, for
+  // this verb and the install lanes alike, and nothing else is 'unresolvable'.
+  //
+  // A link whose target the process may not see (EACCES/EPERM) resolves fine for everyone else; an
+  // OS that could not look (EIO, and Windows' UNKNOWN — a missing share and refused credentials
+  // alike — EINVAL and ENAMETOOLONG, which Windows answers for a reparse point it cannot follow and
+  // for a bad name alike) says nothing about the link. Telling the operator to fix it is the wrong remedy, and this
+  // is a WRITE lane, so each stops the copy as the classified source fault naming the link — the
+  // answer the install lanes give, which the CLI publishes as INPUT_UNREADABLE, never INTERNAL_ERROR.
+  it.each(['EACCES', 'EPERM', 'EIO', 'UNKNOWN', 'EINVAL', 'ENAMETOOLONG'])('stops the copy on %s resolving a link as the classified source fault, never as an unresolvable link', async (code) => {
+    await withAliasResolutionFailing(code, async (fx) => {
+      const thrown = await treeCopyPlugin({ sourceDir: fx.src, destDir: fx.dest }).then(() => undefined, (error: unknown) => error);
+      expect(thrown).toMatchObject({ code: FS_FAULT_CODE, errno: code, side: 'source', path: safePath.join(fx.src, 'hooks', 'alias.json') });
+      expect(refusalCodeOf(thrown)).toBe('INPUT_UNREADABLE');
+      expectNothingCopied(fx);
+    });
+  });
+
+  // The plugin source directory is named by the project config (`getPluginSourceDir`), not found
+  // inside another input: a refusal of the directory itself is a CONFIG-origin fault, whose cause
+  // sentence points at the config — never "an input found inside another input".
+  it('classifies a refusal of the plugin source directory itself as config-origin', async () => {
     const fx = await seedPlugin();
     fx.link('alias.json', 'hooks.json');
-    vi.mocked(realpath).mockImplementation(
-      refusingOnly(safePath.join(fx.src, 'hooks', 'alias.json'), errno('EACCES'), realBehind(realpath)),
-    );
+    vi.mocked(realpathNative).mockImplementation(refusingOnly(fx.src, errno('EACCES'), realBehind(realpathNative)));
     try {
-      await expect(treeCopyPlugin({ sourceDir: fx.src, destDir: fx.dest })).rejects.toMatchObject({ code: 'EACCES' });
+      const thrown = await treeCopyPlugin({ sourceDir: fx.src, destDir: fx.dest }).then(() => undefined, (error: unknown) => error);
+      expect(thrown).toMatchObject({ code: FS_FAULT_CODE, errno: 'EACCES', side: 'source', origin: 'config', path: fx.src });
+      expectNothingCopied(fx);
     } finally {
-      vi.mocked(realpath).mockRestore();
+      vi.mocked(realpathNative).mockRestore();
     }
   });
 });

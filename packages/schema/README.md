@@ -1,6 +1,10 @@
 # @vibe-agent-toolkit/schema
 
-JSON Schema definitions and TypeScript types for VAT agent manifest format.
+The shared contracts every VAT package speaks: the validation code registry,
+validation issues and the report envelope, severities, the exit-code contract,
+the project validation config, and the package.json `vat` metadata. Each is a Zod
+schema with its TypeScript type; the config and package metadata are also
+published as JSON Schema.
 
 ## Installation
 
@@ -8,117 +12,33 @@ JSON Schema definitions and TypeScript types for VAT agent manifest format.
 bun add @vibe-agent-toolkit/schema
 ```
 
-## Usage
-
-### TypeScript (Zod Schemas)
-
-```typescript
-import { AgentManifestSchema, type AgentManifest } from '@vibe-agent-toolkit/schema';
-
-// Validate agent.yaml data
-const result = AgentManifestSchema.safeParse(data);
-
-if (result.success) {
-  const agent: AgentManifest = result.data;
-  console.log('Valid agent:', agent.metadata.name);
-} else {
-  console.error('Validation errors:', result.error.issues);
-}
-```
-
-### JSON Schema (External Tools)
+## JSON Schema (External Tools)
 
 JSON Schema files are available in the `schemas/` directory:
 
 ```typescript
-import agentManifestSchema from '@vibe-agent-toolkit/schema/schemas/agent-manifest.json';
+import vatPackageMetadataSchema from '@vibe-agent-toolkit/schema/schemas/vat-package-metadata.json';
 ```
 
 Available schemas:
-- `agent-manifest.json` - Complete agent manifest
-- `agent-metadata.json` - Agent metadata
-- `llm-config.json` - LLM configuration
-- `agent-interface.json` - Input/output interface
-- `tool.json` - Tool definitions
-- `resource-registry.json` - Resource registry
+- `validation-config.json` - the `validation` block of `vibe-agent-toolkit.config.yaml`
 - `vat-package-metadata.json` - VAT package.json metadata (distribution standard)
 
 ## Exported Schemas
 
-### Core Schemas
-
-- `AgentManifestSchema` - Complete agent.yaml structure
-- `AgentMetadataSchema` - Agent metadata (name, version, etc.)
-- `AgentSpecSchema` - Agent specification (LLM, tools, resources)
+- `ValidationConfigSchema` - project validation config (severity overrides, allow entries)
 - `VatPackageMetadataSchema` - package.json `vat` field for distribution
+- `VatSkillMetadataSchema` - one skill name in `vat.skills`
+- `ValidationIssueSchema`, `FindingSchema`, `reportSchema` - issues, findings and the report envelope
 
-### Component Schemas
-
-- `LLMConfigSchema` - LLM configuration with alternatives
-- `ToolSchema` - Tool definitions
-- `AgentInterfaceSchema` - Input/output schemas
-- `ResourceRegistrySchema` - Resource registry
-- `PromptsConfigSchema` - Prompt configuration
-- `CredentialsConfigSchema` - Credentials requirements
-
-### Utility Schemas
-
-- `SchemaRefSchema` - JSON Schema $ref format
-- `ToolAlternativeSchema` - Tool alternatives
-- `BuildMetadataSchema` - Build metadata
-
-## TypeScript Types
-
-All schemas export corresponding TypeScript types:
-
-```typescript
-import type {
-  AgentManifest,
-  AgentMetadata,
-  AgentSpec,
-  LLMConfig,
-  Tool,
-  AgentInterface,
-} from '@vibe-agent-toolkit/schema';
-```
-
-## Validation Examples
-
-### Validate agent.yaml
-
-```typescript
-import { AgentManifestSchema } from '@vibe-agent-toolkit/schema';
-import { readFileSync } from 'node:fs';
-import YAML from 'yaml';
-
-// Load agent.yaml
-const content = readFileSync('agent.yaml', 'utf-8');
-const data = YAML.parse(content);
-
-// Validate
-const result = AgentManifestSchema.safeParse(data);
-
-if (!result.success) {
-  console.error('Validation failed:');
-  result.error.issues.forEach(issue => {
-    console.error(`- ${issue.path.join('.')}: ${issue.message}`);
-  });
-  process.exit(1);
-}
-
-console.log('✅ Valid agent manifest');
-```
-
-### Validate package.json VAT metadata
+## Validate package.json VAT metadata
 
 ```typescript
 import { VatPackageMetadataSchema } from '@vibe-agent-toolkit/schema';
 import { readFileSync } from 'node:fs';
 
-// Load package.json
 const packageJson = JSON.parse(readFileSync('package.json', 'utf-8'));
 
-// Validate vat field
 if (packageJson.vat) {
   const result = VatPackageMetadataSchema.safeParse(packageJson.vat);
 
@@ -129,28 +49,18 @@ if (packageJson.vat) {
     });
     process.exit(1);
   }
-
-  console.log('✅ Valid VAT metadata');
 }
 ```
 
 ## Schema Generation
 
-JSON Schemas are automatically generated from Zod schemas during build:
+JSON Schemas are generated from the Zod schemas during build:
 
 ```bash
 bun run generate:schemas
 ```
 
-This ensures TypeScript types and JSON Schemas stay in sync.
-
-## API Version
-
-Current API version: `vat.dev/v1`
-
-Future versions will be released as:
-- Breaking changes: `vat.dev/v2`
-- Non-breaking additions: Compatible within `v1`
+The set generated is `JSON_SCHEMA_TARGETS` in `src/json-schema-targets.ts`.
 
 ## License
 

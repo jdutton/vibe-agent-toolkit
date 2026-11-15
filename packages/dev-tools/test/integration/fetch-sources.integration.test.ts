@@ -9,11 +9,12 @@
  */
 
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { PERMISSIONS_ENFORCED } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { fetchSource } from '../../src/compat-empirical/corpus/fetch-sources.js';
@@ -71,7 +72,7 @@ afterEach(() => {
 });
 
 describe('refreshGitRef (moved annotated tag regression)', () => {
-  it('returns the new tag commit after the upstream tag moves', () => {
+  it('returns the new tag commit after the upstream tag moves', async () => {
     const entry: CorpusEntry = {
       id: 'tag-test',
       bucket: 'own',
@@ -81,15 +82,60 @@ describe('refreshGitRef (moved annotated tag regression)', () => {
       triggerPromptRefs: ['pos', 'neg'],
     };
 
-    const first = fetchSource(entry, tmpRoot, { cacheDir });
+    const first = await fetchSource(entry, tmpRoot, { cacheDir });
     expect(readFileSync(first.skillPath, 'utf8')).toBe('initial');
 
     makeCommit('updated');
     moveTag('HEAD');
 
-    const second = fetchSource(entry, tmpRoot, { cacheDir });
+    const second = await fetchSource(entry, tmpRoot, { cacheDir });
     // Without `git fetch --tags --force`, this assertion is the regression
     // signal: the staged checkout would still be `initial`.
     expect(readFileSync(second.skillPath, 'utf8')).toBe('updated');
+  });
+});
+
+/** A local skill source under this test's root: one SKILL.md. */
+function writeLocalSource(): string {
+  const source = safePath.join(tmpRoot, 'local-skill');
+  mkdirSyncReal(source, { recursive: true });
+  writeFileSync(safePath.join(source, SKILL_FILE), 'local', 'utf8');
+  return source;
+}
+
+describe('stageLocal', () => {
+  const entry: CorpusEntry = {
+    id: 'local-test',
+    bucket: 'own',
+    source: { kind: 'local', path: 'local-skill' },
+    skillRelPath: SKILL_FILE,
+    expectedCapabilities: [],
+    triggerPromptRefs: ['pos', 'neg'],
+  };
+
+  it('stages a copy of the local source, and reuses it once staged', async () => {
+    const source = writeLocalSource();
+
+    const first = await fetchSource(entry, tmpRoot, { cacheDir });
+    expect(readFileSync(first.skillPath, 'utf8')).toBe('local');
+    expect(first.rootDir).not.toBe(source);
+
+    writeFileSync(safePath.join(source, SKILL_FILE), 'edited', 'utf8');
+    const second = await fetchSource(entry, tmpRoot, { cacheDir });
+    expect(readFileSync(second.skillPath, 'utf8')).toBe('local');
+  });
+
+  // A half-copied stage directory would be reused on every later run as if complete.
+  it.skipIf(!PERMISSIONS_ENFORCED)('leaves no stage directory behind when the source cannot be copied', async () => {
+    const source = writeLocalSource();
+    const unreadable = safePath.join(source, 'secret.md');
+    writeFileSync(unreadable, 'x', { mode: 0o000 });
+
+    try {
+      await expect(fetchSource(entry, tmpRoot, { cacheDir })).rejects.toThrow();
+    } finally {
+      chmodSync(unreadable, 0o644);
+    }
+    expect(existsSync(safePath.join(cacheDir, 'local', entry.id))).toBe(false);
   });
 });

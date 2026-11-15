@@ -1,7 +1,8 @@
 # Project Development Guidelines
 
-Rules for anyone (human or agent) working on vibe-agent-toolkit — a TypeScript monorepo for
-building, testing and distributing portable AI agents and skills. Architecture and every how-to
+Rules for anyone (human or agent) working on vibe-agent-toolkit — a TypeScript monorepo of tooling
+for skills, plugins, marketplaces and knowledge resources (audit, build and distribution, RAG, the
+resource projection); it is not an agent runtime. Architecture and every how-to
 live in [`docs/`](docs/README.md); this file carries only rules that prevent a specific mistake.
 **Convention: every rule here ends with `(enforced by: <check>)` or `(not enforced)`** — if you add
 a rule, tag it; if you add an enforcer, retag the rule.
@@ -64,36 +65,27 @@ Bun workspaces, `tsc --build` (every package `composite: true`, internal deps `w
 ESLint, vibe-validate, GitHub Actions (Node 24 × Ubuntu/Windows) — [`docs/build-system.md`](docs/build-system.md).
 `utils` depends on no internal package; the direction is utils → resources → rag/agent-skills → cli;
 `cli` orchestrates, never owns domain logic ([`packages/cli/CLAUDE.md`](packages/cli/CLAUDE.md)).
-(enforced by: `bun run typecheck` for the build wiring; the direction is not enforced)
+(enforced by: `bun run typecheck` for the build wiring; `local/projection-sqlite-import-boundary` for importers
+of `projection-sqlite` only; the rest of the direction is not enforced)
 
 <!-- gen:packages-tree -->
 | Package | Ships | Purpose |
 |---|---|---|
-| `agent-config` | yes | Agent manifest loading and validation |
-| `agent-runtime` | yes | Runtime framework for building and executing portable AI agents |
 | `agent-skills` | yes | Build, validate, and package agent skills in the Agent Skills format |
 | `claude-marketplace` | yes | Claude plugin marketplace tools: compatibility analysis, provenance tracking, enterprise config |
 | `cli` | yes | Command-line interface for vibe-agent-toolkit |
 | `dev-tools` | private | Development tools for the monorepo |
-| `discovery` | yes | Intelligent file discovery for VAT agents and Agent Skills |
-| `gateway-mcp` | yes | MCP Gateway for exposing VAT agents through Model Context Protocol |
+| `discovery` | yes | File discovery for Agent Skills and markdown resources |
 | `lab` | private | Quality lab: generate and compare analyzable reports across projects, project versions, and vat versions |
 | `projection-sqlite` | yes | SQLite-backed projection store for VAT, on Node's built-in node:sqlite |
 | `rag` | yes | Abstract RAG (Retrieval-Augmented Generation) interfaces and shared implementations |
 | `rag-lancedb` | yes | LanceDB implementation of RAG interfaces for vibe-agent-toolkit |
 | `resource-compiler` | yes | Compile markdown resources to TypeScript with full IDE support |
 | `resources` | yes | Markdown resource parsing, validation, and link integrity checking |
-| `runtime-claude-agent-sdk` | yes | Claude Agent SDK runtime adapter for VAT agents |
-| `runtime-langchain` | yes | LangChain.js runtime adapter for VAT agents |
-| `runtime-openai` | yes | OpenAI SDK runtime adapter for VAT agents |
-| `runtime-vercel-ai-sdk` | yes | Vercel AI SDK runtime adapter for VAT agents |
-| `schema` | yes | JSON Schema definitions and TypeScript types for VAT agent manifest format |
-| `test-agents` | private | Simple test agents for validating runtime adapters (internal use only) |
-| `transports` | yes | Transport adapters for VAT conversational agents |
+| `schema` | yes | Shared VAT contracts: validation codes, issues, reports, exit codes, project config and package.json vat metadata as Zod schemas, types and JSON Schema |
 | `utils` | yes | Core utility functions shared across the vibe-agent-toolkit packages |
-| `vat-development-agents` | yes | VAT development agents - dogfooding the vibe-agent-toolkit |
-| `vat-example-cat-agents` | yes | Example agents: quirky cat agents demonstrating VAT patterns |
-| `vibe-agent-toolkit` | yes | Modular toolkit for building, testing, and deploying portable AI agents |
+| `vat-development-agents` | yes | VAT's own Claude Code plugin: skills for building with vibe-agent-toolkit |
+| `vibe-agent-toolkit` | yes | Toolkit for skills, plugins, marketplaces and knowledge resources: audit, build, distribute, RAG and projection |
 <!-- /gen:packages-tree -->
 
 **Adding a package, utility, schema, CLI command or dev tool**:
@@ -110,7 +102,8 @@ nothing to register; `tsconfig.json` `references` are generated, never hand-edit
   Custom rules live in `packages/utils/eslint/` — see
   [`docs/custom-eslint-rules.md`](docs/custom-eslint-rules.md). (enforced by: `bun run lint`)
 - **Zero code duplication.** When `duplication-check` fails, refactor — extract to a shared helper;
-  the baseline is never updated to accept a clone. (enforced by: `bun run duplication-check`)
+  the baseline is never updated to accept a clone. (enforced by: `bun run duplication-check`, full
+  tier only)
 - SonarCloud runs automatic analysis: fix every smell it reports at its cause; **never `NOSONAR`**
   ([why](docs/contributing/traps.md#nosonar-does-nothing-under-sonarcloud-automatic-analysis)), never
   argue one away. In its PR comment, New, Accepted and Security Hotspots must all be zero — "Quality
@@ -141,20 +134,36 @@ the coverage job in CI — never in a turbo lane; not on Windows).
    unchanged tree cheap (~40 s warm), not instant.
    (enforced by: `vibe-validate.config.yaml` + `package.json` `scripts.validate`)
 3. **Trust the exit code, not the summary.** `bun run validate` never replays vibe-validate's cache.
-   The pre-commit HOOK does, and a cached hook verdict is a pre-commit-TIER verdict — never a full
-   one. A real full run is minutes; a sub-second "pass" means nothing ran. Never read a verdict
+   The pre-commit HOOK does: it replays whatever verdict is cached for the tree (a full-tier red or
+   green, or its own smaller tier's pass), so a hook pass is never evidence of a full pass. A real
+   full run is minutes; a sub-second "pass" means nothing ran. Never read a verdict
    through a pipe (`validate | tail` reports `tail`'s status): redirect to a file and capture `$?`.
    (not enforced)
 4. Ask before committing: present what changed and that validation passed. Conventional-commit
    messages. (not enforced)
 
 **The gate has two tiers** (enforced by: `runScope: ci` in `vibe-validate.config.yaml`):
-- **pre-commit tier** — `git commit` (Husky → `vibe-validate pre-commit`) runs build, typecheck,
-  lint, duplication and unit tests only (~66 s warm on macOS); every other step is `runScope: ci`.
-- **full tier** — `bun run validate` and CI run every step: the above plus knip, repo structure,
-  publish readiness, link validation, the `vat` dogfood steps, integration and system tests. It sets
+- **pre-commit tier** — `git commit` (Husky → `vibe-validate pre-commit`) runs build, typecheck
+  and lint only (seconds with warm caches); every other step is `runScope: ci`. Run
+  `bun run test:unit` yourself when the change calls for it. The hook replays a cached verdict
+  for the tree, a red full-tier run included: `VV_FORCE_EXECUTION=1 git commit` runs the commit
+  tier afresh. (not enforced)
+- **full tier** — `bun run validate` and CI run every step: the above plus duplication, knip,
+  repo structure, publish readiness, link validation, the `vat` dogfood steps, unit, integration
+  and system tests. It sets
   `CI=1` (vibe-validate's only `runScope` switch) and `--force` (the tree-hash cache records a
   skipped step as passed, so it cannot tell the tiers apart).
+- **Lint is one ESLint per package, cached by turbo, never by ESLint.** Run it only as
+  `bun run lint`/`lint:fix`: they build first, and a package `lint` without that build is refused.
+  Each package lints on its own program (`tsconfig.eslint.json`); never add `--cache` (an unchanged
+  caller replays clean after an `async` change elsewhere). Lint wiring is generated by
+  `bun run generate:lint-config`. The root never depends on a workspace package: that puts the
+  package in every task's hash. How it is keyed: [`docs/build-system.md`](docs/build-system.md#lint).
+  (enforced by: `validate-structure` (every `lint` script exactly, generated `tsconfig.eslint.json`
+  and `packages/*/turbo.json` lint inputs from each TypeScript program, ESLint ignoring what the
+  tracked ignore files ignore, the ignore-file list, the config's relative imports, the
+  linter-manifest inputs and the `lint:root` places, each both ways) and `eslint.config.js` (refuses
+  an unbuilt package lint); the root dependency is not enforced)
 - **A green commit is NOT a green PR.** Run `bun run validate` before pushing; CI runs the full
   tier on ubuntu and Windows.
 
@@ -182,12 +191,6 @@ Never hand-roll a probe: it measures once and is never reviewed. If the lab cann
 that is the finding — extend it or say so.
 [`packages/lab/README.md`](packages/lab/README.md), [scope](packages/lab/docs/scope.md). (not enforced)
 
-## Demos
-
-Every demo goes through a runtime adapter and supports every compatible runtime — never direct
-agent execution. Reference implementation and patterns: [`.claude/rules/demos.md`](.claude/rules/demos.md).
-(not enforced)
-
 ## Agent-facing skills for VAT work
 
 `packages/vat-development-agents/resources/skills/` ships the `vibe-agent-toolkit` plugin. **When a
@@ -203,7 +206,6 @@ directory's `CLAUDE.md`) and read the diff — it must be exactly your edit.
 | `coherence-audit` | Auditing a codebase for COHERENCE rather than bugs — does every lane implement one contract, does a status tell the truth, is a passing test suite blind |
 | `markdown-rewriting` | Programmatic markdown/frontmatter edits — moving files, updating references, schema-evolution migrations; comment-preserving FrontmatterEditor + rewriteBodyLinks |
 | `vat-adoption-and-configuration` | New project setup, `vibe-agent-toolkit.config.yaml` orientation, repo structure, vibe-validate integration, npm postinstall |
-| `vat-agent-authoring` | TypeScript agent archetypes, `agent.yaml`, result envelopes, orchestration, runtime adapters |
 | `vat-audit` | `vat audit` on plugins, marketplaces, skills, or settings — including `--compat`, `--exclude`, `--user`, CI use |
 | `vat-enterprise-org` | Anthropic Admin API: org users, cost/usage, workspace skills, `ANTHROPIC_ADMIN_API_KEY` |
 | `vat-knowledge-resources` | Markdown collections, `resources:` config, frontmatter schema validation, `vat resources validate` · Asking the resource projection SQL questions (`vat resources query`) or declaring standing SQL assertions that gate CI (`vat resources check`, `--budget`) |
@@ -221,7 +223,7 @@ directory's `CLAUDE.md`) and read the diff — it must be exactly your edit.
   failure that looks like something else goes in `traps.md`.
   <!-- gen:contributing-docs -->
   `baseline-control-adopter-response.md`, `command-lane-table.md`, `content-routing.md`,
-  `cowork-driver-spike.md`, `drift-classes.md`, `extending-the-monorepo.md`,
+  `cowork-driver-spike.md`, `drift-classes.md`, `extending-the-monorepo.md`, `known-defects.md`,
   `no-version-constants.md`, `plugin-distribution-findings.md`, `pull-request-checklist.md`,
   `subagent-execution.md`, `traps.md`, `vat-debugging.md`, `vat-install-architecture.md`,
   `vat-linkauth-contributing.md`
@@ -233,4 +235,4 @@ directory's `CLAUDE.md`) and read the diff — it must be exactly your edit.
 - Dev tooling is TypeScript under `packages/dev-tools/src/` (never shell scripts), same quality bar;
   every script is indexed in [`packages/dev-tools/README.md`](packages/dev-tools/README.md).
 - [Architecture](docs/architecture/README.md) · [Best practices](docs/best-practices.md) ·
-  [Structured outputs](docs/structured-outputs.md) · CI: `.github/workflows/validate.yml`.
+  CI: `.github/workflows/validate.yml`.

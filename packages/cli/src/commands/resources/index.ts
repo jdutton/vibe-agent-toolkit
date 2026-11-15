@@ -2,10 +2,14 @@
  * Resources command group
  */
 
+import { EXAMINED_ALLOWED } from '@vibe-agent-toolkit/resources';
 import { Command, Option } from 'commander';
 
+import { baseOption } from '../../utils/base-option.js';
 import { collectRepeated } from '../../utils/repeatable-option.js';
 
+import { builtinCheckList, builtinSqlTwins } from './builtin-help.js';
+import { SUPERVISION_SIGNAL_CONTRACT } from './check-supervisor.js';
 import { checkCommand } from './check.js';
 import { queryCommand } from './query.js';
 import { scanCommand } from './scan.js';
@@ -14,24 +18,92 @@ import { validateCommand } from './validate.js';
 /** What every subcommand's `--debug` flag says it does. */
 const DEBUG_HELP = 'Enable debug logging';
 
-/** The two serializations `scan` and `query` offer of one document. */
+/**
+ * The derived relations and the one filter that makes a budget sum correct.
+ *
+ * Shared by `query` and `check` because a declared check is where the wrong
+ * sum does its damage: it gates silently on a number four times too large.
+ */
+const DERIVED_RELATIONS_HELP = `Derived relations (evaluated only when a statement names one):
+  edges, edge_resolutions, lens_contexts -- the resolved link graph.
+  claude_context_chains, claude_context_loads -- what Claude Code loads at
+  each working location, the rows behind vat claude context.
+
+  VAT ships no context budget: what a launch chain may cost is your call,
+  written as your own check over these rows. A launch sum MUST count only
+  launchCharge = 'charged':
+
+    SELECT l.chainId,
+           SUM(CASE WHEN l.launchCharge = 'charged' THEN l.bytes END) AS bytes,
+           SUM(l.launchCharge = 'unknown-size') AS unsized
+      FROM claude_context_loads l
+     GROUP BY l.chainId
+
+  claude_context_loads also carries every path-scoped rule and every file
+  that is not paid at launch; unfiltered, the same sum on one adopter was
+  wrong by 725,714 bytes. sizeCliff is NOT the filter -- it is the 4 MiB
+  CLAUDE.md cliff's verdict, and 'loaded' holds rows no launch charges.
+
+  An 'unknown-size' row has no bytes and SUM() skips NULL, so the unsized
+  count is what stops a chain whose largest file could not be sized from
+  passing. (A WHERE on 'charged' would also filter those rows away.)
+
+  changed_files -- what this change touched under the root: path, status
+  (added | modified | deleted | renamed | type-changed), oldPath and
+  similarity (for a rename). The working tree, staged or not, plus untracked
+  files git does not ignore, is snapshotted as one tree and diffed against
+  the MERGE BASE of --base <ref> and HEAD, so what <ref> moved since is never
+  listed and a move is a rename whether or not it was git-added. A
+  conflicted file is listed as it stands on disk, markers and all. A
+  statement reading it without --base, with a ref that names no commit or
+  has several merge bases (USAGE_INVALID), with a git that did not finish
+  (BACKEND_UNAVAILABLE), or over a tree that cannot answer -- no merge base,
+  a shallow clone cut short of it, no commits, not a working tree
+  (INPUT_UNREADABLE) -- is REFUSED, never answered with an empty relation. query exits 2 with that code as error.code; a check is
+  RESOURCE_CHECK_BROKEN with it as reason.refusal. --base is read only when
+  a statement names it:
+
+    SELECT c.path FROM changed_files c
+     WHERE c.path LIKE 'docs/specs/%' AND c.status != 'deleted'`;
+
+/** The serializations the resources verbs offer of one document. */
 const OUTPUT_YAML = 'yaml';
 const OUTPUT_JSON = 'json';
+const OUTPUT_TEXT = 'text';
 
 /**
- * The `--format` option `scan` and `query` share.
+ * A verb's `--format` option, refusing any value it does not offer.
  *
  * A factory rather than a shared instance: Commander mutates an `Option` as it
  * is added, so one object handed to two commands is one object two commands
- * disagree about. `validate` deliberately does NOT use this — it offers a third
- * format, `text`, which is a different question.
+ * disagree about. `.choices()` because a bare `.option()` let `validate
+ * --format bogus` fall through to YAML at exit 0.
  *
+ * @param choices - The formats this verb offers; the first is the default
  * @returns A fresh option for one command
  */
+function formatOption(...choices: [string, ...string[]]): Option {
+  return new Option('--format <format>', `Output format: ${choices.join(', ')} (default ${choices[0]})`)
+    .choices(choices)
+    .default(choices[0]);
+}
+
+/**
+ * The hidden `--supervised-by` option `query` and `check` share.
+ *
+ * Hidden because it is not an operator's flag: it is how a supervising parent tells the child it
+ * spawned to do the work rather than spawn one of its own — who started it, the parent's pid, and
+ * where to append its progress, in ONE value. Passed by hand it is refused (the pid is not the
+ * process's parent). Documenting it would invite adopters to depend on a file whose only contract
+ * is the `.strict()` schema the same build reads it with.
+ */
+function supervisedByOption(): Option {
+  return new Option('--supervised-by <spec>', 'Internal: <standalone|phase>:<supervisor pid>:<progress log>').hideHelp();
+}
+
+/** The `--format` option `scan`, `query` and `check` share. */
 function yamlOrJsonFormat(): Option {
-  return new Option('--format <format>', 'Output format: yaml (default) or json')
-    .choices([OUTPUT_YAML, OUTPUT_JSON])
-    .default(OUTPUT_YAML);
+  return formatOption(OUTPUT_YAML, OUTPUT_JSON);
 }
 
 export function createResourcesCommand(): Command {
@@ -63,9 +135,9 @@ Configuration:
       'after',
       `
 Description:
-  Scans for markdown files and reports statistics. Outputs YAML to stdout,
-  or JSON with --format json (the same document, for consumers without a
-  YAML parser).
+  Scans for markdown files and reports what it found. Publishes the shared
+  report envelope on stdout as YAML, or JSON with --format json (the same
+  document; schema: packages/cli/schemas/resources-scan.json).
 
 Path Argument Behavior:
   WITH path: Scans all *.md/*.html recursively under path, still applying the
@@ -74,14 +146,34 @@ Path Argument Behavior:
 
 Filtering:
   --collection <id>: Only scan files in specified collection
-                     (requires config mode - no path argument)
+                     (requires config mode - no path argument). A name
+                     resources.collections does not declare is refused (exit 2)
 
-Output Fields:
-  status, filesScanned, linksFound, anchorsFound, durationSecs
-  root: The one absolute path every reported file path is relative to
-  lane: Which enumerator produced the population — 'walk' or 'projection'
-  collections: Per-collection resource counts (resourceCount)
-  files: (only with --verbose) Array with per-file details
+Output Fields (the shared report envelope):
+  status:     ok | findings | error. findings means a file was enumerated
+              but not admitted (RESOURCE_UNREADABLE, RESOURCE_PARSE_LIMIT_EXCEEDED,
+              RESOURCE_PARSE_WORKER_DIED), or it scanned NOTHING
+              (RESOURCE_CHECK_BROKEN)
+  examined:   Files enumerated, admitted or not
+  durationMs: Wall time of the run
+  data.root:  The one absolute path every data.files[].path is relative to
+  data.lane:  Which enumerator produced the population — 'walk' or 'projection'
+  data.extentSource:
+              The projection lane's enumerator ('git' or 'filesystem'), or
+              null for the walk
+  data.collections:
+              Per-collection resource counts ({resourceCount}); {} when none
+  data.files: (only with --verbose) {path, links, anchors, checksum} per file
+
+Exit Codes:
+  0 - Scanned at least one file, and admitted every file it enumerated
+  1 - A file it could not read or whose parse was refused, or scanned nothing
+      (RESOURCE_CHECK_BROKEN): the path or config enumerates no markdown, or
+      --collection names a collection no file matched
+  2 - The scan could not run: [path] names no directory, a directory the OS
+      will not list, an undeclared --collection, or an unusable config
+  The code is derived from the document's status and summary, never chosen
+  beside it.
 
 Requirements:
   projectRoot: optional (falls back to cwd with a warning)
@@ -108,6 +200,13 @@ Examples:
       'A value bound to the next ? placeholder in the statement (repeatable, bound in the order given)',
       collectRepeated,
     )
+    .addOption(baseOption())
+    .option(
+      '--budget <seconds>',
+      'Run the statement in a child process killed after this many seconds without progress'
+      + ' (none by default; 0 equals omitting it)',
+    )
+    .addOption(supervisedByOption())
     .addOption(yamlOrJsonFormat())
     .action(queryCommand)
     .addHelpText(
@@ -156,18 +255,69 @@ One query, and read-only:
   error, so trailing text would be silently ignored. A comment after the
   terminating semicolon is fine ('SELECT 1;  -- see ADR-14').
 
-Output Fields:
-  status, root, rowCount, durationSecs
-  population: 'derived' or 'store' -- whether the rows were built this run or
+Bounding the run (--budget):
+  Without --budget the statement runs in this process, as it always has: no
+  second process, nothing more loaded, and Ctrl-C ends it, because no process
+  running the SQL installs a signal handler. A statement that never returns
+  runs until you stop it.
+
+  --budget <seconds> runs it in a child process instead, killed once it goes
+  that long WITHOUT PROGRESS. The clock resets when the child has booted, when
+  its population completes, and when the statement returns. A run killed, or
+  dead of anything else, before it finished has no answer: status: error,
+  RUN_INCOMPLETE, exit 2, and the message says where it stopped. A healthy
+  statement slower than the budget is killed too: one statement is one unit.
+
+  --budget 0 equals omitting it. A value that is blank, negative, not a
+  number, or that parses to zero without being written 0 (1e-400, -0) is
+  refused (USAGE_INVALID, exit 2).
+
+  Under --budget the statement and every --param travel on the child's
+  command line, which every platform bounds; a statement too long for it is
+  RUN_INCOMPLETE, and its message names --budget 0. This process holds the
+  child's whole answer before writing it, so a result large enough can
+  exhaust this process's memory where the unbounded run would have written
+  it.
+
+  The contract below applies only under --budget; without it, Ctrl-C ends
+  the one process, as it always has.
+
+${SUPERVISION_SIGNAL_CONTRACT}
+
+Output Fields (the shared report envelope; schema: packages/cli/schemas/resources-query.json):
+  status:     ok | findings | error. A statement that selects NO row over a
+              populated tree is ok -- an empty answer is an answer
+  examined:   Resources in the population the statement ran over (the
+              tracked tree), never the rows it selected. 0 is refused as
+              RESOURCE_CHECK_BROKEN: a statement over nothing answers nothing
+  durationMs: Wall time of the run
+  data.root:  The project the statement was asked about
+  data.columns:
+              The statement's result columns, in order -- present even when it
+              selected no row
+  data.population: 'derived' or 'store' -- whether the rows were built this run or
               read from the projection store. Reported because it cannot be
               inferred: a correct hit and a correct re-derivation produce
               identical rows
-  populationSecs:
+  data.populationSecs:
               What that population cost. The store's whole job is to make it
               cheap, so this is the number that says whether it did
-  rows:       The selected rows, exactly as SQLite holds them -- a boolean as
+  data.lensSecs:
+              What evaluating the derived relations cost. Not part of
+              populationSecs: a store hit does not make a lens cheaper
+  data.lensesEvaluated:
+              Which lenses that covers -- only those whose relations the
+              statement names. An empty list is a statement that asked for
+              none, not a lens that stopped running
+  data.lensPopulation:
+              'none', 'derived' or 'store' -- the same tell for a lens that
+              populates its own lane (claude-context). 'none' when no evaluated
+              lens populated anything
+  data.rows:  The selected rows, exactly as SQLite holds them -- a boolean as
               0/1, a date and a JSON column as text. Values are NOT decoded,
               because decoding needs a table spec and arbitrary SQL has none
+
+${DERIVED_RELATIONS_HELP}
 
 Path Argument:
   [path] says where to LOOK FOR the project -- root discovery walks up from
@@ -179,9 +329,16 @@ Path Argument:
   exist, or is not a directory, is refused (exit 2).
 
 Exit Codes:
-  0 - The statement ran
-  2 - The statement was refused (not a query, a second statement, a placeholder
-      with no --param behind it), [path] names no directory, or the crawl failed
+  0 - The statement ran over a populated tree (whatever it selected)
+  1 - The population was empty (RESOURCE_CHECK_BROKEN)
+  2 - The statement was refused -- not a query, a second statement, a
+      placeholder with no --param behind it, a name the projection lacks
+      (USAGE_INVALID) -- a derived relation it reads could not be evaluated
+      (that relation's own code), or [path] names no directory, or the
+      crawl failed, or a --budget run was killed or died before it finished
+      (RUN_INCOMPLETE)
+  The code is derived from the document's status and summary, never chosen
+  beside it.
 
 Requirements:
   projectRoot: optional (falls back to cwd with a warning)
@@ -189,42 +346,99 @@ Requirements:
 
 Examples:
   $ vat resources query 'SELECT path FROM resource_realizations LIMIT 5'
+  $ vat resources query --budget 30 'SELECT COUNT(*) AS n FROM blob_references'
   $ vat resources query 'SELECT COUNT(*) AS n FROM blobs'
   $ vat resources query 'SELECT * FROM blob_conditions'      # what was refused
-  $ vat resources query 'SELECT target FROM blob_references WHERE kind = ?' --param markdown-link
+  $ vat resources query 'SELECT rawRef FROM blob_references WHERE syntacticForm = ?' --param markdown-link
+  $ vat resources query "SELECT pattern FROM claude_rule_patterns WHERE status = 'inert'"
 `
     );
 
   resources
     .command('check [path]')
-    .description('Run the project\'s declared SQL assertions over its resource projection')
+    .description('Run VAT\'s built-in checks and the project\'s declared SQL assertions over its resource projection')
     .option('--debug', DEBUG_HELP)
-    .option('--check <name>', 'Run only this check, by its key in resources.checks')
+    .option(
+      '--check <name>',
+      'Run only this check, by its built-in name or its key in resources.checks'
+      + ' (a lens is evaluated only when the selected statements name one of its relations, so this also skips the cost of lenses only other checks read)',
+    )
+    .addOption(baseOption())
+    .option('-v, --verbose', 'Print warning and info findings on stderr too, not only the errors')
     .option(
       '--budget <seconds>',
       'Kill the run if it goes this long without completing a unit of work'
       + ' (default: 300; 0 removes the bound and can then hang forever)',
     )
-    .addOption(
-      // Hidden because it is not an operator's flag: it is how a supervising
-      // parent tells the child it spawned to do the work rather than spawn one
-      // of its own, and where to append its progress. Documenting it would
-      // invite adopters to depend on a file whose only contract is the
-      // `.strict()` schema the same build reads it with.
-      new Option('--cost-log <path>', 'Internal: append per-unit progress here').hideHelp(),
-    )
+    .addOption(supervisedByOption())
     .addOption(yamlOrJsonFormat())
     .action(checkCommand)
     .addHelpText(
       'after',
       `
 Description:
-  Runs every assertion declared under \`resources.checks\` in
-  vibe-agent-toolkit.config.yaml against the same projection \`vat resources
-  query\` reads, and fails the run when any error-severity check is violated.
+  Runs VAT's built-in checks, plus every assertion declared under
+  \`resources.checks\` in vibe-agent-toolkit.config.yaml, against the same
+  projection \`vat resources query\` reads -- and fails the run when any
+  error-severity check is violated.
 
   A query answers a question once. This runs the questions a project decided
   were worth asking every time.
+
+Built-in checks (run with or without a config file):
+${builtinCheckList()}
+
+  Each later check covers the one before it. A rules file whose frontmatter
+  VAT cannot read puts no glob in claude_rule_patterns, so the inert check
+  cannot see its globs -- that is what the frontmatter check is for (the
+  usual cause is an unquoted glob starting with * , a YAML alias). A rules
+  file reached through a SYMLINK is realized at no path at all, so it has
+  neither pattern rows nor a blob and both of those checks pass on it --
+  that is what the link check is for.
+
+  They are TypeScript predicates over the projection's rows, never SQL, so
+  adding one never makes a query engine part of anybody's gate. Config only
+  ADDS to this set or moves a severity in it -- a directory with no
+  vibe-agent-toolkit.config.yaml runs exactly the same built-ins.
+
+  Severity moves through the CODE, like any other code vat emits:
+
+    resources:
+      validation:
+        severity:
+          CLAUDE_RULE_GLOB_INERT: ignore   # or warning / error
+
+  Not CUSTOM:<name> -- that space is for checks YOU declare, below.
+
+  --check <name> takes a built-in name exactly as it takes a declared key.
+  In data.checks each built-in entry carries \`builtin: true\`, so a rule vat
+  supplied is distinguishable from one this project wrote.
+
+Asking a built-in's question yourself:
+  The facts are ordinary projection rows, so the built-in is the default
+  REPORT and not the only way to ask. Copy one of these into resources.checks
+  under a name of its own (a built-in's name is refused) and narrow it -- a
+  WHERE clause, a different severity, your own message:
+
+${builtinSqlTwins()}
+
+  Note \`status = 'inert'\` and not \`status != 'matched'\`: 'unevaluated'
+  means vat never ran the matcher for that one pattern (it exhausted the
+  expansion budget; the rule's other patterns are still evaluated), and 'gitignored' means the glob covers ignored files vat never
+  reads but Claude Code does. Neither status means the glob is dead.
+
+${DERIVED_RELATIONS_HELP}
+
+  A ratchet -- no file may grow past its recorded size -- needs no new
+  mechanism. Carry the baseline inline and select what grew:
+
+    sql: |
+      WITH baseline(path, ceiling) AS (VALUES ('CLAUDE.md', 6200))
+      SELECT r.path, b.bytes, baseline.ceiling
+        FROM baseline
+        JOIN resource_realizations r ON r.path = baseline.path
+        JOIN blobs b ON b.contentKey = r.contentKey
+       WHERE b.bytes > baseline.ceiling
 
 Declaring a check:
   resources:
@@ -235,11 +449,40 @@ Declaring a check:
         severity: error        # optional; error is the default
 
   The statement selects the VIOLATIONS -- zero rows is a pass. Each returned
-  row becomes one finding, and its columns are that finding's evidence; a
-  selected \`path\` column anchors the finding to the file.
+  row becomes one finding, and its columns are that finding's evidence.
+
+  Four column names are RESERVED, matched exactly (case-sensitive):
+    path              anchors the finding to that file
+    finding_severity  error | warning | info -- this row's severity; NULL
+                      means the check's declared one
+    finding_line      1-based line in that file; NULL omits it
+    finding_column    1-based column in that line; needs a finding_line
+  Any other value in a reserved column (finding_severity 'high' or 'Error',
+  finding_line 0) FAILS the check as RESOURCE_CHECK_BROKEN rather than being
+  guessed at. A column that differs only in case (Finding_Line) is a warning,
+  and is evidence only.
+
+  No projection table has a finding_* column, so SELECT * never sets one: a
+  table's own severity, line or column is evidence. Alias on purpose to place
+  a finding: SELECT r.path, b.line AS finding_line FROM ...
 
   Findings are ordinary validation issues with the code CUSTOM:<name>, so
   resources.validation.severity can downgrade or ignore one you inherited.
+
+  Optional per check: examined: <SQL> -- a second statement returning ONE
+  count of what the check ranged over: ${EXAMINED_ALLOWED}.
+  Any other result is RESOURCE_CHECK_BROKEN.
+  Zero violations over nothing reads exactly like zero over everything, so
+  a check that declares examined publishes
+  examined: N on its data.checks entry, and N = 0 FAILS the run as
+  RESOURCE_CHECK_EXAMINED_NOTHING (error, not overridable; the check's own
+  violations are still reported). allowEmpty: true declares zero legitimate:
+  no finding, and every data.checks entry of that check carries
+  allowEmpty: true, whatever it counted.
+  allowEmpty without examined is refused at config load. An examined
+  statement that fails is RESOURCE_CHECK_BROKEN. examined is OPTIONAL: a
+  check without it can pass over an empty population. Declare it; a
+  consumer can require it on every data.checks entry.
 
   A check's SQL runs through the same surface as vat resources query, so
   the same rule applies: it must be a query, beginning SELECT, WITH or VALUES.
@@ -287,11 +530,14 @@ A check with NOTHING TO RUN OVER fails the same way:
   sparse CI checkout, or a root that resolved somewhere other than intended.
 
 A run with NO CHECKS AT ALL fails too:
-  Declaring none is reported the same way and for a stronger reason: a gate
-  that checked nothing produces the same document as a gate that was deleted,
-  so \`data.checksRun: 0\` is RESOURCE_CHECK_BROKEN at error and exit 1. If this
-  project deliberately has no checks, take the command out of the pipeline
-  rather than leaving a step that can only pass.
+  \`data.checksRun: 0\` is RESOURCE_CHECK_BROKEN at error and exit 1, for the
+  same reason: a gate that checked nothing produces the same document as a
+  gate that was deleted.
+
+  Declaring none of your own no longer reaches that state -- the built-ins
+  above run regardless, so checksRun is never 0 for that reason. You get a
+  stderr warning instead, and data.checks names exactly what did run. Reaching
+  0 now means not even a built-in executed, which is a bug in vat.
 
 A run that HANGS is killed and reported, not waited on:
   A check's SQL is adopter-authored and unbounded -- an accidental cross join
@@ -300,10 +546,11 @@ A run that HANGS is killed and reported, not waited on:
   So the work runs in a child process and --budget <seconds> bounds it.
 
   The budget is time WITHOUT PROGRESS, not total runtime: the clock resets
-  every time the run finishes a unit (the population, then each check, then
-  once more when the checks are done and the document is being built). So a
-  large repository with many rules is never at risk while its rules keep
-  finishing. Default 300.
+  every time the run finishes a unit (the child's startup, the population,
+  then each check, then once more when the checks are done and the document
+  is being built). So a large repository with many rules is never at risk
+  while its rules keep finishing, and a slow boot on a loaded machine is not
+  charged to the population. Default 300.
 
   That per-unit property holds for the CHECKS. It does NOT hold for the
   population, which reports progress only when it FINISHES -- so for that one
@@ -315,49 +562,82 @@ A run that HANGS is killed and reported, not waited on:
   a cold parse cache; a 9,992-file adopter tree is ~5s warm and 16.5s cold. On
   a tree much larger than that with a cold parse cache, raise the bound.
 
-  An interrupted run NEVER exits 0 and never looks like a pass. There are two
-  ways to be interrupted and they are reported differently:
+  A run that did not finish NEVER exits 0 and never looks like a pass. It is
+  reported three different ways -- two interruptions, and a child whose own
+  exit contradicts its report:
 
-    Killed by the budget -- exit 1, status: error, and a RESOURCE_CHECK_BROKEN
-    finding naming the check that was in flight and the bound that was blown.
+    Killed by the budget -- exit 1, status: findings, and a
+    RESOURCE_CHECK_BROKEN finding naming the unit that was in flight (a named
+    check, or the document being built) and the bound that was blown.
 
     Died -- the child ran out of memory materialising a result set (Node aborts
     with SIGABRT), or something outside killed it (a runner's OOM killer sends
     SIGKILL, a step timeout or a cancelled job sends SIGTERM), or it crashed in
-    native code (SIGSEGV), or it could not be started at all. Also exit 1,
-    status: error, RESOURCE_CHECK_BROKEN -- naming what ended it, with the
-    remedy that ending actually earns, and saying plainly that raising --budget
-    is not it.
+    native code (SIGSEGV), or it could not be started at all. Once the
+    population is in, also exit 1, status: findings, RESOURCE_CHECK_BROKEN --
+    naming what ended it, with the remedy that ending actually earns, and
+    saying plainly that raising --budget is not it.
 
-  Either way the checks that COMPLETED keep their entry under checks (including
+    Contradicted -- the child wrote a complete report and then exited with a
+    code that report does not derive. Neither is trusted, and the report is
+    replaced: once the population is in, exit 1, status: findings,
+    RESOURCE_CHECK_BROKEN saying so.
+
+  Every way, the checks that COMPLETED keep their entry under checks (including
   rows), but their individual violations are NOT in issues -- the progress the
   child records is costs, not findings. Read that issue list as incomplete.
 
-  Interrupted before the population finished, there is no projection and no
-  honest document: that is an operator error (exit 2) saying which of the two
+  Interrupted before the population finished -- killed, dead or contradicted
+  during the child's startup or its population -- nothing was examined, so
+  the command could not do its job: exit 2, status: error. The document is
+  still published, with data.population, populationSecs, lensSecs and
+  lensesEvaluated null, examined 0, and \`error\` naming the phase and what
   happened.
 
-  --budget cannot be combined with --cost-log (exit 2): --cost-log means the
-  work runs in this process, where the budget could not be enforced.
 
   --budget 0 removes the bound and runs everything in this process. Nothing
   will then stop a runaway statement. It has to be written exactly 0: an empty
   --budget, and any other value that PARSES to zero (1e-400 underflows, -0 is
   negative zero), are refused rather than read as 0 -- an unset shell variable
   must not silently remove the bound.
-  Ctrl-C still works at a keyboard, because this command installs no signal
-  handler -- do not add one, a process blocked in synchronous SQLite survives
-  SIGINT once a handler exists.
+  Ctrl-C still works at a keyboard. Under --budget 0 this process runs the
+  SQL and installs no signal handler -- a process blocked in synchronous
+  SQLite survives SIGINT once a handler exists. Supervised, the child runs
+  the SQL in the terminal's process group and installs no handler either, so
+  a terminal's Ctrl-C ends it directly; the supervising process handles the
+  terminating signals while it supervises, only to SIGKILL the child and
+  then end of the same signal.
+
+${SUPERVISION_SIGNAL_CONTRACT}
+
+Output:
+  The document goes to stdout. stderr carries each finding for a reader as
+  "  location:line: severity: message [code]", indented two spaces, and its
+  fix, when it has one, on the next line as "    Fix: ...": every error,
+  errors first, and the warning and info ones only with --verbose.
 
 Output Fields (the shared report envelope; schema: packages/cli/schemas/resources-check.json):
-  status:    ok | findings | error -- a literal statement about \`findings\`
+  status:    ok | findings | error -- a literal statement about \`findings\`.
+             An interrupted run is \`findings\` (its RESOURCE_CHECK_BROKEN is
+             one); \`error\` is a run that produced no document -- exit 2
   examined:  How many members the projection enumerated -- the corpus the
              checks ran AGAINST, where data.checksRun is how many rules ran.
              Four checks over 8,000 files and four over 0 are otherwise the
              same document, and only one of them is a gate. It counts the
              TRACKED TREE and not your configured resource set, so it is
-             legitimately far larger than scan's filesScanned -- see above
-  findings:  One row per violation ({code, severity, message, location?})
+             legitimately far larger than scan's examined -- see above
+  findings:  One row per violation ({code, severity, message, location?,
+             line?, column?}). A finding one check produced (its violation,
+             or a broken / examined-nothing refusal about it) also carries
+             check: <name>; a declared check's violation carries evidence:
+             the row's non-reserved columns as SQLite returned them (a BLOB
+             as the message renders it), plus path when its text is no
+             location (absolute, climbing, empty): that finding has no
+             location. A path that is not text breaks the check. Rows it could not read carry reason: {column, value,
+             row, allowed}; an examined statement that returned no count,
+             {statement, rows, columns?, value?, allowed}; a statement over
+             a derived relation that refused, {refusal: <that code>}. A
+             whole-run finding has no check
   summary:   {errors, warnings, info} over findings; exit 1 iff errors > 0
   durationMs: wall time of the whole run
   data.checksRun:
@@ -365,30 +645,49 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
              findings from NO checks are otherwise the same document
   data.checks:
              What each check COST -- {name, durationSecs, rows} per check, or
-             {name, durationSecs, broken} for one whose statement threw. rows
-             is what the statement SELECTED, and it is a memory signal: rows
-             are fully materialised. It is not a finding count -- a severity
-             override of 'ignore' drops findings the statement still selected,
-             so sum(rows) and summary legitimately disagree
+             {name, durationSecs, broken} for one whose statement threw, plus
+             \`builtin: true\` on the ones vat supplied (absent, never false, on
+             a rule you declared), and examined (+ allowEmpty) on a check that
+             declares examined, once that statement completed -- absent, never
+             0, otherwise -- and examinedNothing: true exactly when that check
+             earned RESOURCE_CHECK_EXAMINED_NOTHING, and nearMisses: the
+             columns that nearly name a reserved one (case and _ aside,
+             or a bare severity, line or column; the stderr
+             warning's, absent when none). rows is what the check SELECTED, and it is
+             a memory signal: rows are fully materialised. It is not a finding
+             count -- a severity override of 'ignore' drops findings the check
+             still selected, so sum(rows) and summary legitimately disagree
   data.populationSecs, data.lensSecs, data.population, data.root:
              What the shared population cost, and where it came from. NOT
              charged to any check: every check's durationSecs is its own
-             statement and nothing else, so populationSecs is the term that
-             reconciles them against durationMs
+             statement and nothing else, so populationSecs + lensSecs are the
+             terms that reconcile them against durationMs. Null (all of them,
+             with lensesEvaluated) only on a run interrupted before its
+             population completed
+  data.lensesEvaluated:
+             Which lenses lensSecs covers -- those whose relations some check
+             names. Empty means no check read a derived relation
+  data.lensPopulation:
+             'none', 'derived' or 'store' -- where a populating lens's own rows
+             came from; 'none' when no evaluated lens populated anything. Null
+             as data.population is
 
 Exit Codes:
   0 - No error-severity findings
-  1 - At least one (a violation, a broken check, an empty corpus, no check
-      having run at all, a run killed for making no progress within --budget,
-      or a run whose child DIED)
+  1 - At least one (a violation, a broken check, an empty corpus, a check
+      whose declared examined statement counted 0, no check
+      having run at all, or a run killed by --budget, DEAD, or contradicted
+      by its own exit once its population was in)
   2 - System error, an unknown --check name, a [path] that names no directory,
-      an unusable --budget (an empty one, one that means zero without being
-      written 0, or one passed with --cost-log), or a run interrupted before
-      its population completed
+      an unusable --budget (an empty one, or one that means zero without being
+      written 0), or a run killed, dead or contradicted before its population
+      completed
+  The code is derived from the document's status and summary, never chosen
+  beside it: status error is 2, error-severity findings are 1.
 
 Examples:
   $ vat resources check
-  $ vat resources check --check orphan-skills
+  $ vat resources check --check claude-rule-glob-inert   # one built-in
   $ vat resources check --budget 60
 `
     );
@@ -397,10 +696,14 @@ Examples:
     .command('validate [path]')
     .description('Validate markdown resources (link integrity, anchors)')
     .option('--debug', DEBUG_HELP)
-    .option('-v, --verbose', 'Show all scanned resources, including those without issues')
+    .option('-v, --verbose', 'Print warning and info findings on stderr too, and publish a data.files row per resource')
     .option('--frontmatter-schema <path>', 'Validate frontmatter against JSON Schema file (.json or .yaml)')
-    .option('--validation-mode <mode>', 'Validation mode for schemas: strict (default) or permissive', 'strict')
-    .option('--format <format>', 'Output format: yaml (default), json, or text', 'yaml')
+    .addOption(
+      new Option('--validation-mode <mode>', 'Validation mode for schemas: strict (default) or permissive')
+        .choices(['strict', 'permissive'])
+        .default('strict'),
+    )
+    .addOption(formatOption(OUTPUT_YAML, OUTPUT_JSON, OUTPUT_TEXT))
     .option('--collection <id>', 'Filter by collection ID')
     .option('--check-external-urls', 'Validate external URLs (default: false, slow operation)')
     .option('--check-html-anchors', 'Strictly validate HTML fragment anchors against element ids (default: false; HTML fragments are often runtime-defined by JS)')
@@ -435,53 +738,63 @@ Path Argument Behavior:
 
 Filtering:
   --collection <id>: Only validate files in specified collection
-                     (requires config mode - no path argument)
+                     (requires config mode - no path argument). It scopes the
+                     whole report -- findings, examined and so the exit code --
+                     to that collection's files. A finding at a path that is no
+                     resource (a file the collection matched and could not read)
+                     stays in it. A name resources.collections does not declare
+                     is refused (USAGE_INVALID, exit 2)
 
 Output Formats:
   --format yaml (default)
-    Structured YAML output to stdout. Errors grouped by file.
+    The shared report envelope on stdout (schema:
+    packages/cli/schemas/resources-validate.json).
 
   --format json
-    Structured JSON output to stdout. Issues grouped by file.
+    The same document as JSON.
 
   --format text
-    Human-readable format. Issues to stderr as
-    file:line:column: severity: message
+    One line per finding on stdout, location:line: severity: message [code],
+    then a status line with the counts and the number of resources examined.
 
-Output Fields (success):
-  status, filesScanned, linksChecked, durationSecs, validationMode
-  collections: Per-collection stats (resourceCount, hasSchema, validationMode)
+  Under yaml and json, stderr carries the same lines for a reader: every error
+  finding, errors first, and the warning and info ones only with --verbose.
 
-Output Fields (issues found):
-  A field named error* counts ERROR-severity issues only — the ones that fail
-  the run. A field named issue* counts issues of every severity.
+Output Fields (the shared report envelope):
+  status:     ok | findings | error -- ok when nothing was found, findings when
+              anything was (at any severity), error when the run could not
+              finish (exit 2, with error.code saying which refusal)
+  examined:   Resources validated
+  findings:   Every finding, flat -- {code, severity, message, location, line?,
+              link?, fix?, reference?}; location is relative to data.root
+  summary:    {errors, warnings, info} over findings; exit 1 iff errors > 0
+  durationMs: Wall time of the run
+  data.root:  The project root, the one base every location and path is
+              relative to
+  data.collections:
+              Per configured collection: resourceCount, hasSchema,
+              validationMode?, filesWithErrors, and summary over the findings
+              in its files; {} when the project configures none
+  data.population:
+              'store' or 'derived' -- whether the membership was served from
+              the projection store or derived this run (derived too under
+              VAT_PROJECTION_STORE=0, which skips only the store). null only
+              when no projection enumerated it: the walk lane ran
+              (VAT_RESOURCES_CRAWL=walk), or the crawl declined a projection
+              bound to another root and walked
 
-  status: success | warning | error — the worst ACTIONABLE severity found, the
-          same vocabulary every other vat validation lane reports. An info-only
-          run is success; issueCounts below says what was actually seen.
-  filesScanned, durationSecs
-  errorsFound: Count of error-severity issues (drives the exit code)
-  filesWithErrors: Files carrying at least one error-severity issue
-  issueCounts: {errors, warnings, info} — every issue, split by severity
-  issueSummary: Count of each issue code, ALL severities
-  collections: Per-collection stats including filesWithErrors, errorCount
-  issues: One row per file with findings, carrying only that file's counts
-          ({file, errors?, warnings?, info?, codes}). A zero bucket is omitted,
-          and a file that emitted nothing has no row — filesScanned above stays
-          the true denominator.
-
-  filesScanned: 0 is never a pass. A run that scanned no file (a --collection
-  that matched nothing, a path with no markdown, an enumeration emptied by
-  exclude or a sparse checkout) is reported as RESOURCE_CHECK_BROKEN at error
-  and exits 1 — the document is not a verdict, and the code is not overridable.
+  examined: 0 is never a pass. A run that validated no resource (a
+  declared --collection that matched no file, a path with no markdown, an enumeration
+  emptied by exclude or a sparse checkout) carries RESOURCE_CHECK_BROKEN at
+  error and exits 1 — the document is not a verdict, and the code is not
+  overridable. The same finding line goes to stderr, or under --format text
+  is a line of the stdout document instead.
 
 Verbosity:
   -v, --verbose
-    Replaces each file's counts row with its per-issue detail (line, column,
-    code, severity, message) — the pre-summary shape. That form is for
-    '> file' then grep, not for reading. Every other field above is a total
-    about the run and is identical in both modes.
-    --format text is unaffected: it already prints one line per issue.
+    Adds data.files: one {path, status, summary} row per resource validated,
+    the clean ones included, and prints warning and info findings on stderr
+    beside the errors. Every envelope field is identical in both modes.
 
 Validation Checks:
   - Internal file links (relative paths)
@@ -547,7 +860,16 @@ Frontmatter Validation:
       - Extra fields should not cause validation failures
 
 Exit Codes:
-  0 - Success  |  1 - Validation errors  |  2 - System error
+  0 - No error-severity finding (warnings and info never fail it)
+  1 - At least one error-severity finding, or nothing validated
+      (RESOURCE_CHECK_BROKEN)
+  2 - The run could not finish: [path] or --frontmatter-schema names nothing
+      (USAGE_INVALID), an input the OS will not read (INPUT_UNREADABLE), or an
+      unusable config (CONFIG_INVALID). Also invalid usage rejected before the
+      verb runs -- an unknown option, or a --format or --validation-mode value
+      outside its choices: Commander's message on stderr, no document
+  The code is derived from the document's status and summary, never chosen
+  beside it.
 
 Requirements:
   projectRoot: optional (falls back to cwd with a warning)

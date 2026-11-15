@@ -22,7 +22,7 @@ import {
   type PopulationCommandStats,
 } from '../src/facets/population/types.js';
 
-import { CLEAN_LOAD, COORDINATE } from './report-fixtures.js';
+import { CLEAN_LOAD, COORDINATE, HOST } from './report-fixtures.js';
 
 const COMMAND = 'resources-population';
 
@@ -59,6 +59,10 @@ function report(...commands: PopulationCommandStats[]): ReportEnvelope<Populatio
     facet: POPULATION_FACET,
     coordinate: COORDINATE,
     capturedAt: '2026-08-17T00:00:00.000Z',
+    removedEnv: [],
+    npmNetworkEnv: [],
+    host: HOST,
+    exits: [],
     body: { commands, load: CLEAN_LOAD },
   };
 }

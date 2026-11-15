@@ -293,7 +293,7 @@ log('Updating workspace packages...', 'blue');
 const packagesDir = safePath.join(PROJECT_ROOT, 'packages');
 const hasPackages =
   existsSync(packagesDir) &&
-  readdirSync(packagesDir, { withFileTypes: true }).some((dirent) => direntKindFollowingSync(packagesDir, dirent) === 'directory');
+  readdirSync(packagesDir, { withFileTypes: true }).some((dirent) => direntKindFollowingSync(packagesDir, dirent, packagesDir) === 'directory');
 
 if (hasPackages) {
   // Update all workspace packages

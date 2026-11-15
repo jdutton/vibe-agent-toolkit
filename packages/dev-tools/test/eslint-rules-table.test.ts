@@ -20,6 +20,10 @@ const FIXTURE: PluginLike = {
       },
     },
     'alpha-rule': { meta: { docs: { description: 'uncategorised', recommended: true, recommendedSeverity: 'warn' } } },
+    // Fixable only to clean up its own dead import: every call is a suggestion.
+    'no-suggest-x': { meta: { docs: { description: 's', category: 'Path handling', fix: 'suggest', recommended: false }, fixable: 'code' } },
+    // Autofixes a call only where its result is discarded.
+    'no-stmt-x': { meta: { docs: { description: 't', category: 'Path handling', fix: 'statement', recommended: false }, fixable: 'code' } },
   },
 };
 
@@ -27,7 +31,7 @@ describe('renderEslintRulesTable', () => {
   const lines = renderEslintRulesTable(FIXTURE);
 
   it('summarises counts from the entries', () => {
-    expect(lines[0]).toContain('3 rules; 1 auto-fix. `configs.recommended` enables 2 of them (1 at `error`, 1 at `warn`)');
+    expect(lines[0]).toContain('5 rules; 2 auto-fix. `configs.recommended` enables 2 of them (1 at `error`, 1 at `warn`)');
   });
 
   it('orders categories by the documented rank, then the uncategorised bucket last', () => {
@@ -39,6 +43,11 @@ describe('renderEslintRulesTable', () => {
     expect(lines).toContain('| `no-raw-x` | `x()` | `safeX()` | `/path` | ✓ | `error` |');
     expect(lines).toContain('| `alpha-rule` | uncategorised | — | — |  | `warn` |');
     expect(lines).toContain('| `zeta-rule` | later category | — | — |  | — |');
+  });
+
+  it('says suggestion-only, and statement-only autofix, rather than a bare ✓', () => {
+    expect(lines).toContain('| `no-suggest-x` | s | — | — | suggestion | — |');
+    expect(lines).toContain('| `no-stmt-x` | t | — | — | ✓ result unused, else suggestion | — |');
   });
 
   it('ends on the last table row, not a blank the block framing would double', () => {

@@ -10,11 +10,12 @@
  */
 
 import {
+  admissionOrder,
   collectRealization,
   relativize,
   type ResourceRegistry,
 } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { mapInOrder, safePath } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory } from '@vibe-agent-toolkit/utils/crawl';
 import { gitFindRoot, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
@@ -77,18 +78,20 @@ export async function captureEnumerationSnapshot(
     ...lane.crawlOptions(corpusRoot),
     unreadable: oracleRefuses(corpusRoot),
   });
-  const enumerated: EnumerationRow[] = [];
-  for (const absolutePath of crawled) {
+  // In order: a measurement over the crawl's own order, one file at a time.
+  const enumerated: EnumerationRow[] = await mapInOrder(crawled, async (absolutePath) => {
     const realization = await collectRealization(absolutePath, ORACLE_RESOURCE_ID, {
       root: corpusRoot,
       extentId: ORACLE_EXTENT_ID,
+      // The oracle keys each file for the bytes themselves and parses none: no run, no cap.
+      contentCache: null,
       ...(gitTracker !== undefined && { gitTracker }),
     });
-    enumerated.push(toEnumerationRow(realization, absolutePath, corpusRoot));
-  }
+    return toEnumerationRow(realization, absolutePath, corpusRoot);
+  });
   // Aliasing is a property of the population, not of a path, so it can only be
   // answered once the whole lane has been walked.
-  markAliases(enumerated, crawled);
+  markAliases(enumerated, crawled, corpusRoot);
 
   // Post-deduplication, ordered, from the lane's real production builder. The
   // builder can throw — see EnumerationSnapshot.buildError — and a lane that
@@ -151,11 +154,11 @@ function describeError(error: unknown, corpusRoot: string): string {
  * reported in the snapshot where a golden diff will show it.
  *
  * @param enumerated - Rows from the restated crawl
- * @param admitted - Paths the registry kept, in arrival order
+ * @param admitted - Paths the registry kept, in the order it admitted them
  * @param collisions - Duplicate-id drops
  * @returns Human-readable drift descriptions; empty when the two reconcile
  */
-function reconcile(
+export function reconcile(
   enumerated: readonly EnumerationRow[],
   admitted: readonly string[],
   collisions: readonly CollisionRow[],
@@ -176,14 +179,19 @@ function reconcile(
   }
 
   // Order matters as much as membership: first-added-wins means a reordering
-  // changes which colliding file survives even when the set is identical.
-  const expectedOrder = enumerated
-    .map((row) => row.path)
-    .filter((path) => !droppedPaths.has(path));
+  // changes which colliding file survives even when the set is identical. The
+  // registry orders every batch itself, so the expected order is
+  // `admissionOrder()` over what survived — never the crawl's own order, which
+  // is the enumerator's (NTFS lists case-insensitively). Every path here is
+  // corpus-relative, so resolving them adds one shared prefix and keeps the
+  // registry's key order.
+  const expectedOrder = admissionOrder(
+    enumerated.map((row) => row.path).filter((path) => !droppedPaths.has(path)),
+  );
   if (expectedOrder.length === admitted.length) {
     for (const [index, path] of expectedOrder.entries()) {
       if (admitted[index] !== path) {
-        drift.push(`order-differs-at-${String(index)}: crawl=${path} registry=${String(admitted[index])}`);
+        drift.push(`order-differs-at-${String(index)}: admission=${path} registry=${String(admitted[index])}`);
         break;
       }
     }

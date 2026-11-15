@@ -5,7 +5,7 @@ description: Use when authoring or revising a SKILL.md file — frontmatter, bod
 
 # VAT Skill Authoring: SKILL.md Structure and Packaging
 
-This skill covers authoring SKILL.md files for portable Claude skills: frontmatter shape, body structure, reference links, the packaging options that control how the skill is bundled for distribution, and how to build the Node scripts a skill ships so they still run on the machine that installs it. For the TypeScript agent side (archetypes, result envelopes, orchestration, runtime adapters) use `vibe-agent-toolkit:vat-agent-authoring`.
+This skill covers authoring SKILL.md files for portable Claude skills: frontmatter shape, body structure, reference links, the packaging options that control how the skill is bundled for distribution, and how to build the Node scripts a skill ships so they still run on the machine that installs it.
 
 ## SKILL.md Structure
 
@@ -217,16 +217,16 @@ Import from the narrow subpath rather than the `.` barrel. The package sets `"si
 | `@vibe-agent-toolkit/utils/path` | `safePath.join/resolve/relative`, `toForwardSlash`, `toAbsolutePath`, `getRelativePath`, `isAbsolutePath`, `isAbsoluteAnyPlatform`, `hasParentTraversalSegment` |
 | `@vibe-agent-toolkit/utils/fs` | `normalizePath`, `normalizedTmpdir`, `mkdirSyncReal`, `resolveFromImportMeta`, `dynamicImportPath` |
 | `@vibe-agent-toolkit/utils/process` | `safeExecSync`, `safeExecResult`, `spawnHardened`, `shouldUseShell`, `windowsShellQuote`, `buildWindowsShellLine`, `makeStdioBlocking` |
-| `@vibe-agent-toolkit/utils/git` | `runGit`, `runGitOrThrow`, `gitFindRoot`, `gitLsFiles`, `isGitIgnored`, `loadGitignoreRules`, `GitTracker` |
+| `@vibe-agent-toolkit/utils/git` | `runGit`, `runGitOrThrow`, `runGitBytes`, `gitFindRoot`, `gitLsFiles`, `isGitIgnored`, `loadGitignoreRules`, `GitTracker` |
 
 The concrete failures these prevent:
 
 - **Path comparisons that fail only on Windows.** `path.join()` returns `a\b` there and `a/b` everywhere else, so the same file compares unequal to itself, misses in a `Map` keyed by path, and never matches a forward-slash glob. Everything on `./path` returns forward slashes on every platform — use it for comparisons, `Map` keys, globs, and anything you print.
-- **A temp directory that doesn't exist.** `os.tmpdir()` can hand back an 8.3 short path on Windows (`C:\Users\RUNNER~1\…`), which is not string-equal to the long path you build later, so `existsSync` reports false on a directory you just created. Use `normalizedTmpdir()`, `mkdirSyncReal()`, and `normalizePath()`. These return **OS-native** separators on purpose — they resolve real filesystem identity through `realpathSync.native()`, which is what expands short names. Wrap them in `toForwardSlash()` at the moment you need the string for a comparison, not before.
+- **A temp directory that doesn't exist.** `os.tmpdir()` can hand back an 8.3 short path on Windows (`C:\Users\RUNNER~1\…`), which is not string-equal to the long path you build later, so `existsSync` reports false on a directory you just created. Use `normalizedTmpdir()`, `mkdirSyncReal()`, and `normalizePath(target, { within })` (`within` is the tree `target` sits in, or `target` itself for your own input). These return **OS-native** separators on purpose — they resolve real filesystem identity through `realpathSync.native()`, which is what expands short names. Wrap them in `toForwardSlash()` at the moment you need the string for a comparison, not before.
 - **Spawning an npm-installed CLI.** On Windows those are `.cmd`/`.bat` shims that cannot be spawned directly; a naive `spawn` fails with `EINVAL` or `ENOENT`. Use `spawnHardened()` for async streaming work and `safeExecSync()`/`safeExecResult()` for synchronous calls — they pick the shell correctly and quote for it. `shouldUseShell()`, `windowsShellQuote()`, and `buildWindowsShellLine()` are there if you must hand-roll the invocation.
 - **`await import()` of an absolute path.** Windows rejects a bare absolute path as a module specifier (`ERR_UNSUPPORTED_ESM_URL_SCHEME`) because it is not a `file://` URL. Use `dynamicImportPath()`, and `resolveFromImportMeta()` for paths relative to an `import.meta.url`.
 - **Output truncated by `process.exit()`.** A published bin can exit before stdout flushes, printing nothing on the run that mattered. `makeStdioBlocking()` closes that.
-- **Build guards and gates that need git.** `gitFindRoot()`, `gitLsFiles()`, `isGitIgnored()`, `loadGitignoreRules()`, and `GitTracker` (cached, for repeated checks) cover repository introspection without shelling out by hand. To run git yourself, use `runGit()`/`runGitOrThrow()` from the same subpath: `safeExecSync()` refuses the `git` binary outright, so the scrubbed environment is what you get by construction rather than by remembering to ask for it.
+- **Build guards and gates that need git.** `gitFindRoot()`, `gitLsFiles()`, `isGitIgnored()`, `loadGitignoreRules()`, and `GitTracker` (cached, for repeated checks) cover repository introspection without shelling out by hand. To run git yourself, use `runGit()`/`runGitOrThrow()` from the same subpath: `safeExecSync()` refuses the `git` binary outright, so the scrubbed environment is what you get by construction rather than by remembering to ask for it. Read what a commit holds (`ls-tree`, `cat-file`, `show`) with `runGitBytes()`: paths and blobs are bytes, and a UTF-8 decode re-spells any that are not UTF-8.
 
 If your project writes this kind of tooling regularly, ban raw `path.join`/`resolve`/`relative` with a lint rule and point it at `safePath` — the separator bug is invisible on the author's machine and only ever appears in someone else's CI.
 

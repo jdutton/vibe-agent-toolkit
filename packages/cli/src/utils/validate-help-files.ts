@@ -6,12 +6,11 @@
  * rather than runtime errors when users request verbose help.
  */
 
-import { existsSync, readdirSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { followedKindSync, safePath } from '@vibe-agent-toolkit/utils';
 import { isEntrypoint } from '@vibe-agent-toolkit/utils/process';
 
 /**
@@ -26,7 +25,6 @@ const REQUIRED_HELP_FILES = [
   'index.md',      // Root-level verbose help (vat --help --verbose)
   'resources.md',  // Resources command verbose help (vat resources --help --verbose)
   'rag.md',        // RAG command verbose help (vat rag --help --verbose)
-  'agent.md',      // Agent command verbose help (vat agent --help --verbose)
 ] as const;
 
 /**
@@ -43,7 +41,6 @@ const REQUIRED_HELP_FILES = [
 const PROSE_ONLY_HELP_FILES = new Set([
   'audit.md',
   'doctor.md',
-  'mcp.md',
   'skills.md',
   'skill-test.md',
 ]);
@@ -63,7 +60,8 @@ export function validateHelpFiles(): void {
 
   for (const filename of REQUIRED_HELP_FILES) {
     const helpPath = safePath.join(docsDir, filename);
-    if (!existsSync(helpPath)) {
+    // VAT's own shipped docs, beneath its own package root.
+    if (followedKindSync(helpPath, packageRoot) === 'absent') {
       missingFiles.push(filename);
     }
   }
@@ -115,13 +113,8 @@ export function validateHelpFiles(): void {
  * nothing, which is the exact opposite of the "fail fast" this file exists for.
  */
 if (isEntrypoint(import.meta.url)) {
-  try {
-    validateHelpFiles();
-    console.log('✓ All required help documentation files exist');
-    process.exit(ExitCode.OK);
-  } catch (error) {
-    console.error('✗ Help file validation failed:');
-    console.error((error as Error).message);
-    process.exit(ExitCode.FINDINGS);
-  }
+  // Not a `vat` verb, so it publishes no document and decides no exit code: a
+  // failure throws, and the build runner ends non-zero on the uncaught throw.
+  validateHelpFiles();
+  console.log('✓ All required help documentation files exist');
 }

@@ -16,9 +16,6 @@
  * the file's own directory, not a document base.
  */
 
-import { stat } from 'node:fs/promises';
-
-import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import { parse, type DefaultTreeAdapterMap } from 'parse5';
 
 import { classifyLink, estimateTokens } from './link-classify.js';
@@ -46,7 +43,7 @@ export interface HtmlDocument {
 
 /**
  * Parse an HTML source string with source-location info and collect parser
- * errors. Shared by `parseHtml` (link/anchor extraction) and `rewriteHtmlLinks`
+ * errors. Shared by `parseHtmlContent` (link/anchor extraction) and `rewriteHtmlLinks`
  * (attribute offset splicing).
  */
 export function parseHtmlDocument(source: string): HtmlDocument {
@@ -466,7 +463,7 @@ function visitElement(element: P5Element, collector: LinkCollector): void {
 /**
  * Parse HTML source text into a `ParseResult`.
  *
- * This is the content-addressable half of `parseHtml`: a pure function of its
+ * The composer the parse worker runs (`parser-loader.ts`): a pure function of its
  * two arguments with no filesystem access, no path handling and no I/O, so the
  * same `(content, sizeBytes)` pair always yields the same result and callers may
  * cache it keyed on the content.
@@ -477,7 +474,7 @@ function visitElement(element: P5Element, collector: LinkCollector): void {
  * and `content.length` are computed from the *decoded* string and diverge from
  * it on malformed UTF-8 (lone surrogates decode to U+FFFD, changing the byte
  * count). Making it a parameter keeps the choice of authority with the caller
- * that actually has the file — see `parseHtml`, which passes `stat().size`.
+ * that actually has the file — the dispatcher passes the raw byte count it read.
  *
  * @param content - The HTML source text.
  * @param sizeBytes - Byte size to report; the caller owns where it comes from.
@@ -544,20 +541,4 @@ export function parseHtmlContent(content: string, sizeBytes: number): ParseResul
   recordParsePass(ParsePass.HtmlTotal, totalStartedAt);
 
   return result;
-}
-
-/**
- * Parse an HTML file into a `ParseResult`.
- *
- * @param filePath - Absolute path to the HTML file.
- */
-export async function parseHtml(filePath: string): Promise<ParseResult> {
-  // `readTextContent`, never `readFile(path, 'utf-8')`: this reads a CORPUS
-  // document, whose encoding VAT does not choose. See text-content.ts.
-  const [decoded, stats] = await Promise.all([
-    readTextContent(filePath),
-    stat(filePath),
-  ]);
-
-  return parseHtmlContent(decoded.text, stats.size);
 }

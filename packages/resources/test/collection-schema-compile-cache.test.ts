@@ -69,7 +69,7 @@ function configForSchemas(
       validation: { frontmatterSchema: schema, mode: mode ?? 'strict' },
     };
   }
-  return { version: 1, resources: { collections } };
+  return { resources: { collections } };
 }
 
 /** Write `count` documents whose frontmatter has a title but no description. */

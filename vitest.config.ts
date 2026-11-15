@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-import { inlineDeps, maxTestWorkers, rootSerialReporters, unitExecArgv, unitPool, unitTestTimeout } from './vitest.shared.js';
+import { inlineDeps, maxTestWorkers, rootSerialReporters, unitExecArgv, unitPool, unitTierTimeouts } from './vitest.shared.js';
 
 export default defineConfig({
   test: {
@@ -18,7 +18,7 @@ export default defineConfig({
       '**/*.integration.test.ts', // Integration tests run separately
       '**/*.system.test.ts', // System tests run separately (e2e, longer running)
     ],
-    testTimeout: unitTestTimeout,
+    ...unitTierTimeouts,
     // Shared with every package's own config — see `inlineDeps`.
     server: { deps: { inline: inlineDeps } },
     // See `createUnitTestConfig` in vitest.shared.ts for why this is set —
@@ -74,14 +74,36 @@ export default defineConfig({
         'packages/cli/src/pipeline-oracles/symlink-divergence.ts', // Needs real symlinks
         'packages/cli/src/pipeline-oracles/enumeration-snapshot.ts', // Crawls a tree
         'packages/cli/src/pipeline-oracles/lanes.ts', // Spawns the CLI per lane
-        'packages/cli/src/pipeline-oracles/path-facts.ts', // stat/realpath over a real tree
         'packages/cli/src/qa-snapshot/capture.ts', // Spawns commands, writes artifacts
+        // The real-filesystem test infrastructure under `utils/src/testing`: it ships in `src/`
+        // because every package's integration tests import it, and it can only be exercised
+        // against a real tree. FILE BY FILE, as above: `temp-dir.ts`, `executables.ts`,
+        // `platform-gates.ts` and `fault-spec.ts` (the harness's vocabulary and its `VAT_FAULT_FS`
+        // spec parser, unit-tested) beside them stay measured.
+        'packages/utils/src/testing/fault-fs.ts', // The half that patches node:fs; it holds no parser and is exercised only by the integration tier's reach tests
+        'packages/utils/src/testing/tree-snapshot.ts', // Walks and hashes a real tree
+        'packages/utils/src/testing/hostile-tree.ts', // Builds FIFOs, sockets and links on disk
+        // The tree-change primitive's syscall modules: every function in them is a filesystem
+        // call path, and their tests are the fault matrix and the `tree-change-*` files of the
+        // uninstrumented integration tier. FILE BY FILE: the primitive's decisions stay measured
+        // and unit-tested — `plan.ts`, `staging-names.ts` (the names), `identity-compare.ts`
+        // (sameness, containment and the once-per-entry memo over identities already read),
+        // `rollback-error.ts`, and the two modules that hold what the excluded ones decide:
+        // `apply-decisions.ts` (whose fault a failed fill is, whether a destination changed since
+        // the plan, thrown-versus-warning at finalize, the made-parents bound, the rename retry
+        // policy, the temp-directory guard) and `copy-decisions.ts` (fresh / merge, the two-names
+        // refusal). A decision added to an excluded file belongs in one of those two instead.
+        'packages/utils/src/tree-change/apply.ts', // stage / park / swap / rollback: mkdir, rename, rm — its decisions are apply-decisions.ts's
+        'packages/utils/src/tree-change/files.ts', // rename with retry, removal, whole-file replace, temp-dir disposal — its decisions are apply-decisions.ts's
+        'packages/utils/src/tree-change/identity.ts', // lstat / stat / realpath of an entry; what it decides from them is in identity-compare.ts
+        'packages/utils/src/tree-change/tree-walk.ts', // opendir / open / fstat over a tree
+        'packages/utils/src/tree-change/copy-tree.ts', // Reads and writes every file of a tree
+        'packages/utils/src/tree-change/readable-tree.ts', // Opens every file of a tree
+        'packages/utils/src/errors/path-present.ts', // One stat / lstat wrapper; its tests need a real path and a refused one
         'packages/lab/src/bin/**', // CLI entry point — same category as packages/cli/src/bin/**
         'packages/resource-compiler/src/cli/**', // CLI commands (integration test only)
         'packages/resource-compiler/src/language-service/**', // VSCode integration (not unit testable)
         'packages/resource-compiler/src/compiler/markdown-compiler.ts', // Orchestrator with comprehensive integration tests
-        'packages/vat-development-agents/src/**', // Agent packages (integration test only)
-        'packages/vat-example-cat-agents/src/**', // Agent packages (integration test only)
       ],
       // ⛔ A RATCHET: these only go up, and ONE measurement seeds them — the
       // coverage job in `coverage.yml` (Linux, the exact Node floor). A run on
@@ -98,10 +120,10 @@ export default defineConfig({
       // justified file by file. Never lower one by hand: a drop is a coverage
       // regression to fix, or an exclusion to justify in place.
       thresholds: {
-        statements: 82,
-        branches: 77,
-        functions: 86,
-        lines: 83,
+        statements: 85,
+        branches: 79,
+        functions: 88,
+        lines: 86,
         autoUpdate: process.env['COVERAGE_RATCHET'] === 'write' ? (measured: number) => Math.floor(measured) : false,
       },
     },

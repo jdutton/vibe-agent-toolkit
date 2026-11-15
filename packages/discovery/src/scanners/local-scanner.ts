@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { followedKindSync, fsFaultOf, isPathAbsentError, requireFollowedStatSync, safePath } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory, type DirectoryRefusal, NEVER_CRAWL_GLOBS } from '@vibe-agent-toolkit/utils/crawl';
 import { gitFindRoot, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
@@ -13,13 +13,8 @@ import type { DetectedFormat, ScanOptions, ScanResult, ScanSummary } from '../ty
  * Directories that should ALWAYS be excluded from scanning to prevent catastrophic performance.
  * These contain tens of thousands of files and are never useful for discovery.
  *
- * Taken from `NEVER_CRAWL_GLOBS` rather than restated: this list and the crawler's
- * disagreed for as long as both existed (this one had both worktree paths, the
- * crawler's had neither), which meant "which directories does VAT refuse to walk"
- * had two answers depending on the entry point.
- *
  * `dist/` is NOT in it, and that omission is load-bearing: this scanner's whole
- * job is to find agents and skills and CLASSIFY each as source or build output
+ * job is to find skills and CLASSIFY each as source or build output
  * (`ScanResult.buildOutputs`), so a scanner that cannot walk `dist/` reports zero
  * build outputs and calls it a clean scan. It lives in `BUILD_OUTPUT_GLOBS`, which
  * the crawler's default excludes and this lane deliberately does not spread.
@@ -27,7 +22,26 @@ import type { DetectedFormat, ScanOptions, ScanResult, ScanSummary } from '../ty
 const PERFORMANCE_POISON: readonly string[] = NEVER_CRAWL_GLOBS;
 
 /**
- * Scan local filesystem for VAT agents and Agent Skills
+ * Stat the scan root, telling absence from refusal. `existsSync` answers false
+ * for a path under a directory without search permission, which used to be
+ * reported as "does not exist". A refusal keeps the OS error as `cause`, so a
+ * caller classifying by errno (`fsFaultOf`) still sees it. The root is the operator's own
+ * argument, so it is its own `within` (`link-following.ts`).
+ */
+function statScanRoot(absolutePath: string): fs.Stats {
+  try {
+    return requireFollowedStatSync(absolutePath, absolutePath);
+  } catch (error) {
+    if (isPathAbsentError(error)) {
+      throw new Error(`Path does not exist: ${absolutePath}`, { cause: error });
+    }
+    if (fsFaultOf(error) === undefined) throw error;
+    throw new Error(`Path cannot be read (${String((error as NodeJS.ErrnoException).code)}): ${absolutePath}`, { cause: error });
+  }
+}
+
+/**
+ * Scan local filesystem for Agent Skills and markdown resources
  *
  * @param options - Scan options
  * @returns Scan summary with all discovered files
@@ -38,12 +52,7 @@ export async function scan(options: ScanOptions): Promise<ScanSummary> {
   // Resolve to absolute path
   const absolutePath = safePath.resolve(targetPath);
 
-  // Check if target exists
-  if (!fs.existsSync(absolutePath)) {
-    throw new Error(`Path does not exist: ${absolutePath}`);
-  }
-
-  const stat = fs.statSync(absolutePath);
+  const stat = statScanRoot(absolutePath);
 
   // Determine scan root for relative paths
   const scanRoot = stat.isDirectory() ? absolutePath : path.dirname(absolutePath);
@@ -63,16 +72,18 @@ export async function scan(options: ScanOptions): Promise<ScanSummary> {
       const crawlExclusions = [...PERFORMANCE_POISON, ...(exclude ?? [])];
 
       filePaths = await crawlDirectory({
+        outputs: [],
         baseDir: absolutePath,
         respectGitignore: false, // We handle gitignore separately
         exclude: crawlExclusions, // Skip poison directories during crawl (not after)
         unreadable: { degrade: (refusal) => unreadable.push(refusal) },
       });
     } else {
-      // Non-recursive: only immediate children
+      // Non-recursive: only immediate children, a linked one followed with its chain read
+      // beneath the scan root first (`link-following.ts`). A dangling link is not a file.
       filePaths = fs.readdirSync(absolutePath)
         .map(name => safePath.join(absolutePath, name))
-        .filter(p => fs.statSync(p).isFile());
+        .filter(p => followedKindSync(p, absolutePath) === 'file');
     }
   } else {
     throw new Error(`Path is neither file nor directory: ${absolutePath}`);

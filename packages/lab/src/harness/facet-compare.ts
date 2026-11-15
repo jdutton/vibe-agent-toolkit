@@ -25,7 +25,7 @@ import {
 import { refuseDifferentFacets, type ReportEnvelope } from '../envelope/envelope.js';
 
 import { bothSides, pairByKey, type Pairing } from './diff.js';
-import { describeIssues } from './dumps.js';
+import { type describeIssues, recaptureRefusal } from './dumps.js';
 
 // One door for a facet's comparator. The subtraction primitives and the
 // two-sided caveat helper live in their own modules — they are useful without a
@@ -38,7 +38,8 @@ export {
   type DeltaThresholds,
   type LabelledRow,
   labelledMovements,
-  type MsDelta,
+  type MagnitudeDelta,
+  magnitudeDelta,
   msDelta,
   type RowMovement,
   type RowMovementKind,
@@ -109,12 +110,7 @@ function readBody<TBody>(
 ): { body: TBody } | { refusal: string } {
   const parsed = contract.schema.safeParse(envelope.body);
   if (parsed.success) return { body: parsed.data as TBody };
-  return {
-    refusal:
-      `REFUSED: the ${side} report's header claims facet '${contract.facet}', but its body is ` +
-      `not a '${contract.facet}' body and re-capturing that side is the only fix — ` +
-      describeIssues(parsed.error),
-  };
+  return { refusal: recaptureRefusal(`the ${side} '${contract.facet}' report`, parsed.error) };
 }
 
 /**
@@ -342,4 +338,30 @@ export function cacheModeCaveat(
   return before.cache === after.cache
     ? null
     : `cache mode differs (${before.cache} vs ${after.cache})`;
+}
+
+/**
+ * What one side's `stable` flag costs an exact-equality comparison, or `null`
+ * when it costs nothing.
+ *
+ * Shared by every facet whose counts are compared exactly (`io`, `work`): a
+ * `false` says the row's own repeats disagreed, and a `null` says they were
+ * never numerous enough to disagree — neither warrants reading an exact delta.
+ *
+ * @param row - That side's row
+ * @param side - How to name it in the reason
+ * @returns A clause for the refusal reason, or `null`
+ */
+export function stabilityCaveat(
+  row: { readonly stable: boolean | null; readonly comparedRuns: number },
+  side: string,
+): string | null {
+  if (row.stable === false) return `the ${side} row's own repeats disagreed with each other`;
+  if (row.stable === null) {
+    return (
+      `the ${side} row's determinism was never tested ` +
+      `(${String(row.comparedRuns)} compared repeats, so nothing could disagree)`
+    );
+  }
+  return null;
 }

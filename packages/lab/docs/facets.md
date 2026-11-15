@@ -3,20 +3,90 @@
 A **facet** is one kind of measurement. It decides what goes in a report's `body`; the envelope
 decides everything needed to know whether two bodies may be held next to each other.
 
-## The two shapes
+## The shapes
 
 Facets are not all the same shape, and conflating them produces reports that answer neither question
 well.
 
-**Learning facets** — skill lint, compatibility prediction. The output is findings about code we do
-not own, and each finding needs per-finding provenance plus a **bidirectional verdict**: is this our
-false positive, or their real defect? That bidirectionality is the entire value of scanning upstream.
-A sweep that can only say "237 warnings" teaches nothing; one that can say "of 237, 12 are our rule
-being wrong" improves vat.
+**Verdict facets** — `verdict`. The output is what vat DECIDED: an exit code and a multiset of
+findings per verb, plus the normalized document it printed. The comparator is exact — multiset
+difference for findings, string equality for documents — and every difference must be accounted for
+by a committed, reviewed declaration, in both directions. See [The verdict facet](#the-verdict-facet).
 
 **Measurement facets** — resource integrity, performance, I/O accounting. The output is numbers, and
 numbers need spread. A single sample is not a measurement; a median over repeats with the spread
 reported alongside is.
+
+`memory` is one of these, and its number needs its scope stated, because "peak RSS" names three
+different figures. A preload (`rss-probe.cts`, on `NODE_OPTIONS` like `io`'s counter) writes a
+node process's peak resident set at exit (ahead of vat's own exit listeners), in kilobytes: `VmHWM` from `/proc/self/status` on Linux,
+`process.resourceUsage().maxRSS` on macOS and Windows. That figure **includes worker threads**
+(they share the process: a 400 MB allocation in a worker raises it by ~400 MB) and **excludes the
+parent**. Linux's `maxRSS` does not: it survives `exec`, and a forked child starts with a copy of
+its parent's resident set, so a vat launched by a 300 MB parent through `sh -c exec` — how `npx`
+and a shell launch it — read as 300 MB or more. `VmHWM` belongs to the exec'd image alone. macOS's
+`maxRSS` carries nothing over: measured, a vat stand-in under a node parent holding 0, 300 and
+600 MB peaked at 75.4, 75.4 and 75.3 MB. So a repeat is launched straight from the lab, with no
+intermediate launcher — an `npx:` build included: every facet resolves it to its install's
+`@vibe-agent-toolkit/cli/dist/bin.js`, run with `node` as a `dist:` build is, never through npx's
+cwd-resolving wrapper (`harness/npx-install.ts`). `test/integration/memory-probe.integration.test.ts`
+pins the independence, and it can only go red on Linux: macOS's `maxRSS` carries nothing over, and
+the test needs `sh`, so it is skipped on Windows, where a process is created rather than forked —
+argued there, not measured. A command that writes its subject (`build`) runs in a copy of it, which
+the lab cannot make on Windows, so that spec is refused there; a repeat that changed the copy outside
+its declared `writes` (`dist/`) fails. In a git checkout that check sees only git's population —
+tracked files and untracked ones no ignore rule matches — so a write to a gitignored path (or under
+`.git/`) outside `writes` is not caught; outside a checkout every file is checked.
+
+It is one figure per process, and only vat's own processes write one: a process is vat's when its
+main script (`process.argv[1]`, its own links read) belongs to the `vibe-agent-toolkit` launcher or the
+`@vibe-agent-toolkit/cli` package — the nearest `package.json` above it says which, and a `private`
+one never does (the monorepo's root is named `vibe-agent-toolkit` too). The probe
+decides that from the install alone, so every vat ever published is measurable, and `npm` under
+`npx`, a `node -e` or a tool vat spawns writes nothing and never stands in for vat's peak.
+A repeat's sample is the LARGEST vat process's peak, never a sum: high-water marks from different
+moments were never resident together. How many vat processes reported is counted beside it, and a
+change in that count is a CHANGED verdict on its own, across instrument kinds too: every kind runs
+`dist/bin.js` straight, so one count means one thing. A peak is the platform's allocator and the
+Node build's V8 as much as vat's, so two reports whose envelopes record a different `host`
+(`process.platform`, `process.arch`, `process.version`, the `NODE_OPTIONS` the arm hands its
+children, the V8 heap limit a child of the arm gets — a `--max-old-space-size`, or a different
+machine's memory, moves a peak — and `os.availableParallelism()`, from which vat sizes its parse
+pool, each thread with its own heap) are refused, naming both. The host's total memory is recorded too.
+
+A repeat that leaves no vat peak — killed, out of heap, or no process with a vat main script —
+fails the row; it is never read as a small number. A row any of whose runs vat says a parse failed in
+(its population warning, `… (N parse failed …)`, matched by the lab's own pattern for every build —
+the lab imports nothing of vat's to read it) is failed and NOT marked `outOfHeap`, whatever the run
+exited with and whatever the warning says the parse threw — a worker vat's pool caught at its heap
+limit (`[ERR_WORKER_OUT_OF_MEMORY]`) included: documents went unparsed, so the run did less work, and
+it compares UNMEASURABLE, never CHANGED. A row any of whose runs ran out of heap process-fatally (a
+stderr line outside that warning names `JavaScript heap out of memory` or `reaching memory limit` —
+Node's worker message, which says "JS heap" — a warm arm's unmeasured priming run included) is failed
+and marked `outOfHeap` WHATEVER the run exited with. Stderr is the only thing read, so a death the
+process swallowed without printing is invisible. Against a measured other
+side an `outOfHeap` row compares CHANGED with no ratio — the worst regression never reads as no delta. A row whose
+repeats disagree on how many vat processes reported (`1/2/1`) is different: it is failed, naming the
+counts, and compares UNMEASURABLE, not CHANGED — a repeat that lost a process's peak is a defect of
+the capture, not evidence the command moved, and its largest-process peaks are not samples of one
+thing. (A count that differs BETWEEN two rows, each agreeing with itself, is CHANGED, above.) CHANGED needs the median delta to clear three bars at once: 10% of the
+smaller median (`perf`'s relative gate), 8 MiB, and the two arms' combined min–max spread.
+
+**The memory threshold.** The 8 MiB floor is four times the largest median move an A-vs-A null run
+made at 5 repeats a side; a default capture takes 3, so its own spread, not this table, is what the
+spread bar sees. Measured 2026-11-02 on an Apple-silicon Mac (10 CPUs, load average 20–30 from other work —
+contaminated), one `dist:` build of vat 0.2.0-rc.12 against this repository, 5 warm repeats a side:
+
+| Command | A median | B median | Δ median | A spread | B spread |
+|---|---|---|---|---|---|
+| `resources-validate` | 198.4 MiB | 198.7 MiB | +0.3 MiB | 0.7 MiB | 0.7 MiB |
+| `audit` | 195.5 MiB | 197.5 MiB | +2.0 MiB (1.0%) | 3.2 MiB | 5.0 MiB |
+| `skills-validate` | 138.5 MiB | 138.4 MiB | −0.1 MiB | 0.5 MiB | 0.9 MiB |
+
+Every pair compared `unchanged`. The 10% relative gate is `perf`'s, borrowed rather than derived
+from this run (ten times its largest relative move, 1.0%), and above ~80 MiB — every command here —
+it, not the floor, is the bar that binds. Re-measure on a quiet machine and on
+Linux before tightening either.
 
 **Extent facets** — `population`. The output is a *set*, and a set needs neither spread nor
 tolerance: the comparator is exact set difference, and one member's difference is real. The
@@ -70,13 +140,14 @@ way) but a **refusal** on a `population` row, whose schema extends the shared on
 nothing but the subject's own claim, and `null` is the label an old-but-honest build gets, so a
 subject that printed a corrupt lane must not read the same as one that printed none.
 
-⚠️ **On the default `io` spec the lane is honestly `null`.** `resources-scan` — what a bare `io run`
-measures — prints YAML, and the lab reads a lane out of JSON only: it carries no YAML parser, and a
-regex over the `lane:` line would be a second parser that drifts from the first. `null` means *the
-output did not say*, and it is spelled `lane UNREPORTED by the subject's output` on the row. To
-carry the arm on an `io` row, measure the spec that prints JSON: `--command resources-population`.
-That is also why the two arms of an `io` A/B over the default spec read as `arm UNPROVEN on both
-sides` rather than as agreeing.
+Every reader in the lab — `lane.ts`, and the `population` and `verdict` facets — goes through one
+document reader (`harness/document-shape.ts`), which parses JSON first and YAML second (`yaml`'s
+`parseAllDocuments`, single document, a leading `---` tolerated). So a row measured over the
+default `io run` spec (`resources-scan`, which prints YAML) reads its real lane, the same as one
+measured over `--command resources-population` (JSON) — both go through the same parser, and
+neither is privileged. `null` still means *the output did not say* — the build is too old to
+report a lane, or the output is not a document this reader can classify at all — and it is spelled
+`lane UNREPORTED by the subject's output` on the row.
 
 Mixing the two specs in one compare produces NO arm clause at all: the comparator pairs command
 rows by name, a `resources-scan` row never pairs with a `resources-population` row, and the
@@ -86,14 +157,15 @@ lane on one side and not the other — a `resources-population` row measured und
 old to print `lane`, against one measured under a current build — and it is never rendered as an
 arm change.
 
-Both use the same coordinate header. The comparator knows which kind it is holding and diffs
-accordingly — set differences for findings, distribution differences for numbers.
+Every shape uses the same coordinate header. The comparator knows which kind it is holding and
+diffs accordingly — multiset differences for findings, set differences for populations,
+distribution differences for numbers.
 
 ## The contract
 
 A facet owns:
 
-- **A stable `facet` name** — `io`, `perf`, `sweep`, `calibrate`. It goes in the envelope header and
+- **A stable `facet` name** — `perf`, `io`, `parse`, `crawl`, `population`, `verdict`, `memory`, `work`. It goes in the envelope header and
   two reports with different names are refused against each other.
 - **A body schema** — strict, and validated by the facet after it has confirmed the header names it.
   The envelope reader deliberately does not validate bodies; it does not know their shapes.
@@ -136,14 +208,231 @@ being measured, not a promise the lab can make on its behalf: if repeats *disagr
 nondeterministic, and that is a finding in its own right rather than noise to be averaged away. The
 facet reports a `stable` flag so the comparator knows whether it is entitled to read an exact delta.
 
-One consequence for repeat counts: in `warm` mode the first repeat populates vat's on-disk cache and
-therefore systematically differs from the rest, so it is a warm-up and is discarded. Verifying
-stability then needs two more, which makes three the smallest honest number of repeats.
+One consequence for repeat counts: repeat 0 is a warm-up and is discarded. It no longer differs by
+VAT's own caches — a `warm` arm is primed by an unmeasured run before it, and a `cold` arm's store
+and parse cache are reset before every repeat — but it is still the capture's first touch of the
+subject's files. Verifying stability then needs two more, which makes three the smallest honest
+number of repeats.
+
+## The work facet
+
+`work` reads vat's own work counters (`countWork` in `@vibe-agent-toolkit/utils`): store rows
+decoded, reads and writes per store lane, extents derived and served, store-miss pairs, parse cache
+hits, dispatches and refusals, content hashed, git calls. They need vat's internals, so vat counts
+them at the code sites that do the work, and each vat process (the `vat` wrapper and the CLI) dumps
+every counter, zeros included, at exit when `VAT_WORK_COUNTERS` names a directory. The lab injects
+nothing; it sets that variable per repeat, as `crawl` sets its own.
+
+- A repeat's reading is the SUM over every dump in its directory. A repeat with no `cli` dump is
+  refused: the wrapper alone does almost nothing and would read as a command that did no work. A
+  repeat that exited on a signal fails the row through the shared repeat rule, before any dump is
+  read.
+- It takes at least three repeats (`--runs` refuses fewer), discards repeat 0, compares repeats
+  1..n-1 and reports the last, with `stable` as in `io`: `null` below two compared repeats, and also
+  `null` when a repeat refused a parse under load (`loadRefusedRepeats`), because such a refusal
+  moves the counters downstream of the parse. That counts the compared repeats and, in `warm` mode,
+  the warm-up, which fills the cache they read; a cold warm-up is never read. Either way the exact
+  verdict is withheld.
+- The dump schema is strict and has no version field. Its counter names come from the utils tuple,
+  so a dump from a NEWER vat carrying a counter this lab does not know is refused; an OLDER vat's
+  missing counter is absent from the row, and `compare` reports it as added or removed. Run the lab
+  from the newer side, as with `io`. That stops working across a change that renames or drops a
+  counter: the older vat's dump then carries a name the newer lab does not know, so no lab build
+  reads dumps from both sides of it. The rename of the `store.*.ephemeral` counters to
+  `hydration.*` is one such change.
+- Counters compare exactly, with one declared exception table (`comparedExactly` in
+  `work/types.ts`): `parse.refused.load` depends on machine load and `parse.redispatched` on a cache
+  entry vanishing mid-run, so both are reported in every mode; in
+  `cold` mode `parse.dispatched` and `parse.cache.hit` are reported too, because the dispatcher's
+  look-ahead window can have two files with one content key in flight and both miss. A
+  reported-only counter is printed and listed when it moves, never makes `stable` false and never
+  makes a command `changed`.
+- It reports. There is no ceiling, threshold or gate in the facet. `ab` compares
+  `store.rows.decoded.persistent`; a row without that counter, or whose repeats give no warrant, is
+  lost, never zero.
+
+## The verdict facet
+
+`vat-lab verdict run|compare` is the crucible: it compares what two vat builds DECIDE over a set of
+real trees, and every wave-A document change is measured with it. Source:
+`src/facets/verdict/`.
+
+```bash
+vat-lab verdict run --subjects <file> --instrument <spec> [--env K=V] [--unset K] --out <dir>
+vat-lab verdict compare <baselineDir> <candidateDir> [--deltas <file>] [--control]
+```
+
+**Subjects** come from a local YAML file that is never committed — `--subjects` is required and has
+no default, because a default path is a place someone eventually commits by accident. Each subject
+is an alias (`crucible-1`, never an adopter's name), a path (relative paths resolve against the
+file's directory), a verb list, an optional `contextPath` (required iff `context-path` is listed),
+`sqlFiles` (required iff `resources-query` is listed), `buildVerbs`, and `unmeasurableBuildVerbs` —
+a map from build verb to the reason this subject cannot complete it (for example a skill whose
+`files:` entry names an artifact only the subject's own build produces).
+
+**An exclusion is a narrow claim the lab checks, never a verb it skips.** The claim is: on this
+subject, in every arm, this verb REFUSES — it exits 2 and publishes a refusal the lab can read (a
+refusal code, or an older build's refusal sentence). Exit 2 alone is not that: a command line the
+binary rejects also exits 2, and prints nothing. A verb named in `unmeasurableBuildVerbs` still runs in every
+arm — after the build verbs the subject can complete, because a build that stops half-way leaves a
+half-written `dist/` whose extent differs between two builds, and `verify` must not measure that
+leftover (`planBuildVerbs` in `verbs.ts` decides the order and the exclusions together). Its row is
+captured and compared like any other row, and the exclusion accounts for exactly ONE thing: the
+UNMEASURED delta of a row that **refused at exit 2 in both arms**, which a control would otherwise
+have to declare against an empty deltas file. Then the row is listed under **EXCLUDED** with each arm's exit
+code and the refusal codes its document published, and counted in the verdict line. Never a pass.
+
+Everything else about an excluded row is observed exactly as on a row nobody excluded, and fails the
+compare unless the committed deltas file declares it:
+
+- an arm that crashed, hung, exited anything but 2, or exited 2 with empty or unparseable output (or
+  a document that refuses nothing) — the row's `UNMEASURED` delta appears, with a line saying the
+  exclusion did not hold, beside its `exit` and `refusal` deltas where those moved. This holds when
+  BOTH arms do it, so in a control too;
+- both arms exiting 2 with different **refusal codes** — a `refusal` delta (below);
+- one arm completing the verb — `exit` and `UNMEASURED` deltas, which is how a tree that fixes the
+  verb is declared (`exit: {from: 2, to: 0}`, `unmeasured: true`, and the `refusal` that went away) while the control still passes.
+
+An exclusion BOTH arms disprove by measuring the verb is a **STALE EXCLUSION**: it fails the compare
+(exit 1), no deltas entry can declare it, and the remedy is to remove it from the subjects file.
+
+Naming every build verb is refused (set `buildVerbs: false`), as is naming one without `buildVerbs`
+or with a reason under 20 characters; two captures that exclude different verbs are refused as
+coming from two files, and a stored capture whose exclusion names no row is refused as malformed.
+
+**The verb matrix** (`verbs.ts`): `audit`, `skills-validate` (with `--verbose`, which is what makes
+legacy `skills validate` publish its finding list), `resources-validate`, `resources-check`,
+`context-all`, `context-path`, and `resources-query` once per SQL file (row `resources-query:<file>`).
+`buildVerbs: true` adds `build`, `verify` and `marketplace-publish-dry-run`, run in an APFS clone
+(`cp -c -R` per entry, minus `.claude/worktrees`, then the clone's `origin` removed) under the OS
+temp directory — macOS only, and refused for a git worktree subject, whose clone would share the
+real repository's config. Each verb's argv is a function of the arm's `InstrumentVersion`, so a
+future per-arm divergence is one function, not a second matrix.
+
+**Per-arm environment.** Each arm runs under a cleared environment (no inherited `VAT_*`, temp, XDG,
+Claude or global git config) plus the caller's `--env`/`--unset`, and gets lab-owned directories
+under `<arms root>/<alias>/` — the invocation's `--arms-dir`, else a fresh run directory under the OS
+temp directory: `VAT_PROJECTION_STORE_DIR=<arms root>/<alias>/store` (a private projection store, so
+the second arm never reads what the first wrote), `TMPDIR`/`TEMP`/`TMP` at its `tmp/`, and `HOME`
+and `CLAUDE_CONFIG_DIR` at its empty `home/`. An arm naming any of them is refused. Only the
+caller's part is recorded in the body (`arm`), because those paths differ between any two captures
+and would make every pair of arms distinguishable. **Nothing the lab writes lands inside a
+subject** — VAT itself is one: an `--out` or arms root inside any subject path is refused.
+
+**Prepared clone.** `--prepared <alias>=<prepared.path>` runs that alias in the clone `perf arms`
+prepared instead of at its subjects-file path; the body records it as `preparedClone` (`null` when
+the alias ran at its own path), and `verdict union` refuses a capture that was not run there. The
+clone outlives `perf arms` once its report is written: out of a default run directory it is moved
+to `<base>/clone-XXXXXX/clone` and the run directory removed whole (if that move fails, the clone
+stays at `<run>/clone` and the run directory is kept); under `--keep-arms` or `--arms-dir` it stays
+at `<arms root>/clone`. Either way the arms report's `prepared.path` names where it is, and `perf
+arms` prints `Prepared clone kept at <path>; remove it when done` — removing it is the operator's.
+The prerequisites ran at the pre-move path, so an artifact that recorded an absolute path into the
+clone may be stale.
+
+**Two layers**, per (alias, verb) row:
+
+1. **Verdict** — exit code plus the finding multiset, read by `extract.ts`. It recognises a
+   `Report<T>` by the envelope identity keys (`ENVELOPE_IDENTITY_KEYS` in
+   `harness/document-shape.ts`: `status`, `examined`, `findings`, `summary`, `data`) with a numeric
+   `examined` and an array `findings` — never by a version string — and reads every legacy shape
+   with one structural rule. This layer stays failable while a document is reshaped.
+2. **Document** — stdout after the ONE normalizer (`normalize.ts`: absolute roots, line endings,
+   and wall-clock fields; no rewrite without a measurement behind it), string-compared, with a diff
+   excerpt of at most 80 lines in the render.
+
+A row is **UNMEASURED** when, in either arm, the verb did not run, exited 2, or printed stdout the
+lab could not parse. Two unmeasured arms trivially agree, so an unmeasured row is a delta in its own
+right and is never rendered as "no change". Its findings and document are not evidence, but two
+things still are, and both are compared: its **exit code**, and the **refusal codes** its document
+published — `error.code` at the root, then each named phase's as `<phase>:<code>`, in document order
+(`refusalCodes` in `extract.ts`). A build that turns a user's mistake into `INTERNAL_ERROR`, or the
+reverse, moves neither the exit code nor "unmeasured"; it shows as a `refusal` delta. Messages are
+not compared — they name temp directories that differ run to run. An older build's refusal is a
+sentence with no code: it is still a refusal, read as `(uncoded)`. An EMPTY list means the run
+published no refusal at all — empty or unparseable stdout, or a document that refuses nothing.
+
+**Findings the baseline only tallied.** A legacy composite document (rc.11 `vat verify`) itemizes
+some findings and publishes the rest only as per-owner tallies (`{info: 10, warnings: 2, codes:
+{LINK_DROPPED_BY_DEPTH: 12}}` under each skill or file), which layer 1 cannot see — so a build that
+itemizes the same findings reads as thousands of added ones. A row shows ONE `findings-itemized`
+delta, instead of one `finding-added` per covered finding, only when all of these hold:
+
+- the baseline tallied something and the candidate tallies nothing;
+- no finding with a tallied code was removed;
+- per **code**, the candidate adds exactly as many findings as the baseline tallied;
+- per **severity**, likewise;
+- every **phase** that tallied publishes the same severity counts in both arms (an older build's
+  `phases[].issueCounts`, a report's `data.phases[].summary`). A phase that tallied and publishes
+  no counts in either arm is not a match.
+
+One tallied finding gained, lost, re-coded, re-graded or moved to another phase breaks an equality,
+and every added finding is then observed one by one. The rule covers only codes the baseline
+tallied: a finding with any other code — and every finding the baseline itemized itself — is still
+compared by identity and observed one by one. A tally owner whose severity counts do not sum to its
+code counts is not read at all.
+
+Two things a match does NOT establish, because the baseline did not publish them in a form a report's
+flat `findings[]` can be checked against: the count per (code, severity) **pair** — it published the
+two margins — and which skill or file each covered finding belongs to. A tally's owner does name one
+(`skillName`, `file`, `location`), but the report merges every phase into one list that names no
+owner, so an owner-by-owner match is not defined. A count-preserving swap inside one phase is
+therefore invisible to this rule.
+
+**What may be compared.** Exactly one axis may move, and it must be the instrument. A moved subject
+or subject version is refused — re-capture the baseline immediately before the candidate. Two
+captures of one instrument are a control whether or not the caller said so: `movedAxes = []` needs
+`--control`, and indistinguishable arms (same instrument including its closure digest, same arm
+environment) are refused without it.
+
+**The deltas file** — `data/verdict-deltas.yaml`, committed and reviewed, the default for
+`--deltas` (resolved from the lab package, not the cwd). It names one `baseline` (the baseline arm's
+vat version; a compare against any other is refused) and entries keyed by subject alias and verb,
+each declaring any of `exit {from, to}`, `refusal {from, to}` (the refusal codes of an unmeasured
+row, each a list in document order), `findingsAdded`, `findingsRemoved`, `document: reshaped`,
+`unmeasured: true` and `findings: itemized`, with a `reason` and a `changelog` reference.
+
+A declared finding names its full identity — `code`, `severity`, `scope`, and its location EITHER as
+`location` or as `locationDigest`, the SHA-256 of the location. A location is a path inside the
+subject and can spell who the subject is, which this file must never hold; the digest pins the same
+identity without the path (a compare prints `[locationDigest …]` beside every observed finding, to
+copy from). Either way a finding of the same code and severity at any other location is undeclared,
+and the declaration unused.
+
+A `changelog` reference is `.changes/<fragment>.md#<id>` or `CHANGELOG.md#<id>` and must name exactly
+ONE bullet: the bullet carrying the marker `<!-- verdict-delta:<id> -->` (on the bullet's line or an
+indented continuation of it). An id no bullet carries, or two do, is a refusal; a heading is never a
+target — a section holds hundreds of bullets and vouches for none of them. The marker travels with
+the bullet when `bump-version` folds the fragment into `CHANGELOG.md`. It is checked **both ways**: an
+observed delta no entry declares fails, and a declared delta that did not occur fails — as a
+multiset, item by item. Every entry is validated, none filtered: an entry naming an alias the run
+did not cover, or a verb that alias did not run, is a refusal.
+
+Two consequences of layer 2 for a declaration:
+
+- **A finding or exit change needs `document: reshaped` too.** Any finding or exit move also changes
+  the normalized document, so the document delta is observed alongside it. An entry that declares
+  only the exit or the findings leaves that document delta undeclared, and the compare fails.
+- **Once a row declares `document: reshaped`, any further reshape on that row goes through unseen.**
+  Layer 2 is one string equality per row, so a declared reshape covers every document difference on
+  that (alias, verb), including ones nobody reviewed. Layer 1 is still exact on that row: every
+  exit or finding move must still be declared item by item. Read the diff excerpt the render prints
+  for an accepted row; the declaration does not vouch for it.
+
+A partial run uses a partial
+subjects file and a matching deltas file. `compare` exits `1` on any undeclared or unused delta, `2`
+on any refusal, `0` otherwise.
+
+**The planted-delta proof.** `test/integration/verdict-planted-delta.integration.test.ts` plants a
+delta through two probe instruments with distinct closures: an undeclared exit and finding delta
+fails, a declared delta that did not occur fails, the exact declaration passes, and both-arms-exit-2
+and both-arms-unparseable rows fail as unmeasured. Those cases were seen red before the control and
+refusal cases were written, because a compare that reported nothing would satisfy the latter.
 
 ## Room to split into sub-packages later
 
 Each facet lives in its own directory and depends only on the envelope core — never on another facet.
-That seam is deliberate: if the lab later splits into `lab-perf`, `lab-sweep` and friends, extraction
+That seam is deliberate: if the lab later splits into `lab-perf`, `lab-verdict` and friends, extraction
 is a move rather than a rewrite, and the envelope becomes the shared core they all depend on.
 
 Splitting before there is a reason to is not worth it. Keeping the seam clean so that splitting stays

@@ -47,6 +47,7 @@
 import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
   type AbsenceCause,
+  classifyFsFault,
   type FilenameMatch,
   fillPathSpellings,
   fillRealpaths,
@@ -55,6 +56,8 @@ import {
   pathSpellingFrom,
   type PathSpellingRequest,
   type PathSpellingTable,
+  type RealpathFault,
+  realpathRowFrom,
   type RealpathTable,
   safePath,
   spellingWalkRoot,
@@ -69,10 +72,12 @@ import {
 } from '@vibe-agent-toolkit/utils/git';
 
 import type { DeferredArtifacts } from './deferred-artifacts.js';
+import type { NotAdmittedLog } from './not-admitted.js';
 import type { ResourceLink } from './types.js';
 import {
   isWithinProjectFrom,
   locationRoot,
+  projectRootResolution,
   resolveLocalHref,
   type ResolveLocalHrefResult,
 } from './utils.js';
@@ -230,7 +235,7 @@ export function linkTargets(resolved: Iterable<ResolvedLinkEntry>): PathSpelling
  * The pass-1′ columns the judge reads. Fill both with {@link fillLinkFacts}.
  *
  * ⚠️ **A missing row in either table THROWS**, by design (`pathSpellingFrom`,
- * `realpathFrom`): a divergence between the filled set and the judged set is a
+ * `realpathRowFrom`): a divergence between the filled set and the judged set is a
  * programming error, and a crash names it — where a silent recompute would only
  * make the run slower and a `null` degradation would answer wrongly. The
  * corollary is that the fill and the judge must also agree on *whether a column
@@ -307,8 +312,10 @@ export interface JudgeLinkOptions extends LinkFactTables {
    */
   deferredArtifacts?: DeferredArtifacts;
   /**
-   * Files the population enumerated but could not READ — the registry's
-   * `RESOURCE_UNREADABLE` set, as {@link unreadableTargetsFrom} shapes it.
+   * Files the population enumerated and did not admit — could not READ
+   * (`RESOURCE_UNREADABLE`) or whose parse was refused
+   * (`RESOURCE_PARSE_LIMIT_EXCEEDED` / `RESOURCE_PARSE_WORKER_DIED`) — as
+   * {@link unreadableTargetsFrom} shapes the registry's two logs.
    *
    * 🪤 **Without it, a link INTO such a file reads as clean.** The file is on
    * disk and its parent lists it, so existence passes; but it never entered the
@@ -320,36 +327,48 @@ export interface JudgeLinkOptions extends LinkFactTables {
    * because VAT was never asked to read it" from "not indexed because VAT was
    * refused", and reports the second as `LINK_TARGET_UNREADABLE`.
    *
-   * Not a second ledger: it is a lookup VIEW over the list the registry
-   * already keeps (`getUnreadableResources()`), built once per run.
+   * A refused parse is the same gap: the file never entered the fragment index
+   * either, so its anchors are unverified too.
+   *
+   * Not a second ledger: it is a lookup VIEW over the logs the registry
+   * already keeps (`getNotAdmitted()`), built once per run.
    */
   unreadableTargets?: UnreadableTargets;
 }
 
 /**
- * The files a run could not read, keyed for the judge: NFC-normalised absolute
- * path → the errno the platform gave, or `undefined` when it gave none.
+ * The files a run enumerated and did not admit, keyed for the judge:
+ * NFC-normalised absolute path → why its anchors cannot be looked up, and what
+ * clears that.
  *
  * Keyed the way {@link fragmentIndex} keys — NFC, see that function — because
  * it is queried with the same derived-from-link-text path `checkAnchor` is, and
  * for the same reason: on macOS the enumerated spelling and the link's spelling
  * of one file routinely differ in normalization form.
  */
-export type UnreadableTargets = ReadonlyMap<string, string | undefined>;
+export type UnreadableTargets = ReadonlyMap<string, { readonly why: string; readonly remedy: string }>;
 
 /**
- * Shape the registry's unreadable-file log into the judge's lookup.
+ * Shape the registry's two not-admitted logs into the judge's lookup.
  *
- * @param unreadable - Files that were enumerated and could not be read, each
- *   with the errno the platform reported when it reported one
+ * @param log - Files enumerated and not read (each with the errno the platform
+ *   reported, when it reported one), and files whose parse was refused
  * @returns The lookup {@link JudgeLinkOptions.unreadableTargets} takes
  */
-export function unreadableTargetsFrom(
-  unreadable: Iterable<{ readonly filePath: string; readonly code?: string | undefined }>,
-): UnreadableTargets {
-  const targets = new Map<string, string | undefined>();
-  for (const { filePath, code } of unreadable) {
-    targets.set(toNfc(filePath), code);
+export function unreadableTargetsFrom(log: NotAdmittedLog): UnreadableTargets {
+  const targets = new Map<string, { why: string; remedy: string }>();
+  for (const { filePath, code } of log.unreadable) {
+    const errno = code === undefined ? '' : ` (${code})`;
+    targets.set(toNfc(filePath), {
+      why: `it could not be read${errno}, so it holds no headings this run could look the anchor up in (it is the file reported as RESOURCE_UNREADABLE)`,
+      remedy: 'Fix the permissions on that file, then validate again.',
+    });
+  }
+  for (const { filePath, code, reason } of log.parseRefused) {
+    targets.set(toNfc(filePath), {
+      why: `${reason}, so its anchors are unverified (it is the file reported as ${code})`,
+      remedy: 'Simplify or exclude that file, then validate again.',
+    });
   }
   return targets;
 }
@@ -401,7 +420,7 @@ export interface ValidateLinkOptions extends LinkPolicyOptions {
  * exact regression the realpath column exists to remove. So the fill asks this
  * predicate too, and fills an EMPTY table when it is false.
  *
- * ⚠️ **Never inline this condition on either side.** `realpathFrom` throws on a
+ * ⚠️ **Never inline this condition on either side.** `realpathRowFrom` throws on a
  * missing row, so a fill that skips the column while the judge still reads it is
  * not a slow path — it is a crash in a shipped command, and in the frontmatter
  * lane not even a legible one (see {@link LinkFactTables}).
@@ -464,9 +483,16 @@ export function needsRealpathColumn<
  * this canonicalizes every resolved target. Narrowing it to "targets that exist"
  * would mean recomputing the existence verdict here, i.e. two computations kept
  * in step: precisely the drift hazard {@link linkTargets} exists to close. A
- * superset is always safe (`realpathFrom` throws only on a *missing* row), and
- * it costs one failed `realpath` per broken link — which a green corpus does not
- * pay at all. Do not "optimize" this into a bug.
+ * superset is always safe (`realpathRowFrom` throws only on a *missing* row, and
+ * a target the OS declined to resolve is a row carrying its fault, never a
+ * rejection), and it costs one failed `realpath` per broken link — which a green
+ * corpus does not pay at all. Do not "optimize" this into a bug.
+ *
+ * The project root is the one row whose fault stops the run: it is not a link
+ * target but the namespace every target is compared in, and a containment answer
+ * against a root the OS would not resolve is no answer.
+ *
+ * @throws FsFaultError (source) when the OS declines or fails to resolve the project root
  *
  * The project root is a row of its own, and that is where half the measured
  * syscalls went: canonicalizing a run-constant root once per *link* was the
@@ -490,8 +516,21 @@ export async function fillLinkFacts(
       ? fillRealpaths([...targets.map(({ target }) => target), policy.projectRoot], fsCache)
       : Promise.resolve<RealpathTable>(new Map()),
   ]);
+  if (policy.projectRoot !== undefined) refuseUnresolvedRoot(realpaths, policy.projectRoot);
 
   return { spellings, realpaths };
+}
+
+/**
+ * Throw the project root's resolution fault, if its row carries one.
+ *
+ * @param realpaths - The filled column (empty when the gate is closed)
+ * @param projectRoot - The project root, a row of that column when it is filled
+ */
+function refuseUnresolvedRoot(realpaths: RealpathTable, projectRoot: string): void {
+  const fault = realpaths.get(projectRoot)?.fault;
+  if (fault === undefined || fault === null) return;
+  throw classifyFsFault(fault.error, projectRootResolution(projectRoot));
 }
 
 /**
@@ -643,7 +682,7 @@ export async function validateLink(
   // a fresh instance is exactly the old, un-memoized behaviour.
   const tables = await fillLinkFacts(
     [entry],
-    options?.fsCache ?? new FsLookupCache(),
+    options?.fsCache ?? new FsLookupCache(locationRoot(options?.projectRoot)),
     options ?? {},
   );
 
@@ -986,14 +1025,29 @@ export function gitIgnoreSafetyIssue(
   // the per-path spawn.
   //
   // When no tracker is threaded in, fall back to isGitIgnored (one-off spawn).
-  const sourceIsIgnored = options.gitTracker
-    ? options.gitTracker.isIgnoredByActiveSet(sourceFilePath)
-    : isGitIgnored(sourceFilePath, options.projectRoot);
-  const targetIsIgnored = options.gitTracker
-    ? options.gitTracker.isIgnoredByActiveSet(resolvedTarget)
-    : isGitIgnored(resolvedTarget, options.projectRoot);
+  const isIgnored = (path: string): boolean => options.gitTracker
+    ? options.gitTracker.isIgnoredByActiveSet(path)
+    : isGitIgnored(path, options.projectRoot);
 
-  if (sourceIsIgnored || !targetIsIgnored) return null;
+  // An ignored source can leak nothing, whatever its target is — asked before the
+  // target's resolution, so a refused target never draws a "check could not run"
+  // for a check whose answer was already "no leak".
+  if (isIgnored(sourceFilePath)) return null;
+
+  // Inside by its ancestor, but the OS declined (or failed) to resolve the
+  // target itself: where it really leads is unknown. FAIL-CLOSED: the lexical
+  // path is still asked, and a target git ignores AS WRITTEN is the leak itself
+  // (`LINK_TO_GITIGNORED`), never the overridable "not checked" finding — so an
+  // adopter who downgrades `LINK_TARGET_UNREADABLE` silences only the case no
+  // answer exists for (the written path is tracked, where a hop leads is not).
+  // Reported against this one link — never a reason to stop the run.
+  const targetIsIgnored = isIgnored(resolvedTarget);
+  const { fault } = realpathRowFrom(options.realpaths, resolvedTarget);
+  if (fault !== null && !targetIsIgnored) {
+    return unresolvedTargetIssue(fault, link, sourceFilePath, resolvedTarget, options.projectRoot);
+  }
+
+  if (!targetIsIgnored) return null;
 
   // A files:-declared DEST that already exists on disk and is gitignored is
   // the expected post-build state of a materialized build artifact (gitignored
@@ -1096,7 +1150,7 @@ function validateLocalFileLink(
  * promise — so one transient descriptor exhaustion silently unvalidated every
  * link under that directory for the rest of the run, at exit 0. Both halves are
  * closed: the cache drops a *transient* refusal once it has settled (see
- * `TRANSIENT_LISTING_ERRNOS`), and the cause now carries the errno and the
+ * `isTransientListingCode`), and the cause now carries the errno and the
  * directory, so the message below can say which one and why.
  *
  * 🔑 `LINK_TARGET_UNREADABLE` rather than a new code: it is the registry's
@@ -1148,6 +1202,30 @@ function unreadableTargetIssue(
   return createRegistryIssue(
     'LINK_TARGET_UNREADABLE',
     `Link target ${target} was NOT checked: listing the directory "${directory}" was refused (${refusal.code}). This is not a report that the link is broken — a directory can be traversable while refusing a listing (POSIX \`--x\`), in which case the target opens exactly as written. ${unverified}, so treat this as a gap in the run rather than as a clean result. ${remedy}`,
+    linkExtras(link, sourceFilePath, projectRoot),
+  );
+}
+
+/**
+ * The issue for a link target the walk found but the OS would not RESOLVE
+ * (`EACCES`/`EPERM` on a hop of a link chain, a device fault): its errno and
+ * class named, so the remedy can be aimed.
+ *
+ * 🔑 `LINK_TARGET_UNREADABLE`, the registry's word for "this target was not
+ * checked", for the same reason {@link unreadableTargetIssue} uses it — the
+ * realpath column's refusal is that same fact reached through a different
+ * syscall, and a second code would be a second vocabulary for it.
+ */
+function unresolvedTargetIssue(
+  fault: RealpathFault,
+  link: ResourceLink,
+  sourceFilePath: string,
+  resolvedTarget: string,
+  projectRoot: string,
+): ValidationIssue {
+  return createRegistryIssue(
+    'LINK_TARGET_UNREADABLE',
+    `Link target ${messagePath(resolvedTarget, projectRoot)} was NOT checked for a gitignore leak: resolving where it really leads failed (${fault.errno}, ${fault.faultClass}). The file is there; where a link on its path points is unknown, so treat this as a gap in the run rather than as a clean result. Fix the permission or the device on that path, then validate again.`,
     linkExtras(link, sourceFilePath, projectRoot),
   );
 }
@@ -1219,7 +1297,8 @@ function judgeVerifiedTarget(
 }
 
 /**
- * The issue an anchor into a file the population could not READ earns.
+ * The issue an anchor into a file the population could not READ, or whose parse
+ * it refused, earns.
  *
  * The file-level counterpart of {@link unreadableTargetIssue}, and the same
  * code for the same reason: `LINK_TARGET_UNREADABLE` is the registry's word
@@ -1245,15 +1324,13 @@ function unreadableFileAnchorIssue(
   options: Pick<JudgeLinkOptions, 'unreadableTargets' | 'projectRoot'>,
 ): ValidationIssue | null {
   // NFC on both sides — the same key rule as `fragmentIndex`/`checkAnchor`.
-  const key = toNfc(resolvedPath);
-  if (!options.unreadableTargets?.has(key)) return null;
-  const code = options.unreadableTargets.get(key);
-  const errno = code === undefined ? '' : ` (${code})`;
+  const gap = options.unreadableTargets?.get(toNfc(resolvedPath));
+  if (gap === undefined) return null;
   const target = messagePath(resolvedPath, options.projectRoot);
 
   return createRegistryIssue(
     'LINK_TARGET_UNREADABLE',
-    `Link anchor #${anchor} in ${target} was NOT checked: the file exists and is spelled as written, but it could not be read${errno}, so it holds no headings this run could look the anchor up in (it is the file reported as RESOURCE_UNREADABLE). Its anchor is unverified, so treat this as a gap in the run rather than as a clean result. Fix the permissions on that file, then validate again.`,
+    `Link anchor #${anchor} in ${target} was NOT checked: the file exists and is spelled as written, but ${gap.why}. Its anchor is unverified, so treat this as a gap in the run rather than as a clean result. ${gap.remedy}`,
     linkExtras(link, sourceFilePath, options.projectRoot),
   );
 }

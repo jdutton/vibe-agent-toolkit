@@ -7,7 +7,7 @@ import { expectRulePasses, RULE_TESTER_CASES, type RuleCases } from '../rule-tes
  * to run, so the process exits 0 having executed nothing.
  *
  * - `import.meta.main` is `undefined` before Node 24.2 / 22.18 — measured
- *   `undefined` on a real 22.13.0, which is a floor this repo declares.
+ *   `undefined` on a real 22.13.0 and on 22.16.0, the floor this repo declares.
  * - `import.meta.url === pathToFileURL(process.argv[1]).href` is a raw string
  *   compare with no realpath, so it is `false` whenever the script was reached
  *   through a symlink (every `node_modules/.bin` shim). Measured false on both

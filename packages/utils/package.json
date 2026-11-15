@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/utils",
-  "version": "0.2.0-rc.8",
+  "version": "0.2.0-rc.15",
   "type": "module",
   "description": "Core utility functions shared across the vibe-agent-toolkit packages",
   "sideEffects": [
@@ -17,7 +17,7 @@
   "author": "Jeff Dutton",
   "license": "MIT",
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.16.0"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -66,6 +66,10 @@
       "types": "./dist/testing.d.ts",
       "import": "./dist/testing.js"
     },
+    "./archive": {
+      "types": "./dist/archive.d.ts",
+      "import": "./dist/archive.js"
+    },
     "./asset": {
       "types": "./dist/asset.d.ts",
       "import": "./dist/asset.js"
@@ -93,14 +97,18 @@
     "build": "tsx ../dev-tools/src/tsc-clean-build.ts",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:system": "vitest run --config vitest.system.config.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
+    "lint": "VAT_LINT_TASK=1 eslint . --max-warnings=0",
     "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging"
   },
   "dependencies": {
     "@vibe-validate/git": "0.20.1",
+    "adm-zip": "^0.6.1",
     "ignore": "^7.0.5",
     "picomatch": "^4.0.3",
+    "tar": "^7.5.7",
     "which": "^5.0.0",
     "yaml": "^2.9.0"
   },
@@ -113,6 +121,7 @@
     }
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
     "@types/which": "^3.0.4",
     "zod": "^3.25.0"
   },

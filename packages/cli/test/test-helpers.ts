@@ -1,9 +1,10 @@
-import { type SpawnSyncReturns, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
-import { NODE_EXECUTABLE, gitExecutable } from '@vibe-agent-toolkit/utils/testing';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 
 import type { AuditCommandOptions } from '../src/commands/audit.js';
 import { deriveScanRoot, getValidationResults, resetAuditCaches } from '../src/commands/audit.js';
@@ -19,20 +20,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 export const binPath = safePath.resolve(__dirname, '../dist/bin.js');
 
 /**
- * Execute a CLI command using the built bin.js
- * Safe for use in tests - binPath is resolved at module load time
- */
-export function runCliCommand(command: string, ...args: string[]): SpawnSyncReturns<string> {
-  return spawnSync(NODE_EXECUTABLE, [binPath, command, ...args], {
-    encoding: 'utf-8',
-  });
-}
-
-/**
  * Run `vat audit` validation directly against a target path (no CLI subprocess).
  * options.recursive defaults to true (recursive by default); set to false to disable.
  */
-export async function runAudit(
+export function runAudit(
   targetPath: string,
   options: AuditCommandOptions = {}
 ): ReturnType<typeof getValidationResults> {
@@ -92,6 +83,37 @@ export function commitTestFixture(dir: string, message = 'fixture'): void {
   initTestGitRepo(dir);
   gitAddAll(dir);
   spawnSync(gitExecutable(), ['-C', dir, 'commit', '-q', '-m', message], { stdio: 'ignore' });
+}
+
+/**
+ * Write `files` (root-relative path → content) under `root`, outside any git
+ * repository — the corpus a filesystem crawl enumerates.
+ *
+ * @param root - The corpus root, created as needed
+ * @param files - What to write
+ * @returns `root`
+ */
+export function writeCorpus(root: string, files: Readonly<Record<string, string | Buffer>>): string {
+  for (const [relative, content] of Object.entries(files)) {
+    const absolute = safePath.join(root, relative);
+    mkdirSyncReal(dirname(absolute), { recursive: true });
+    writeFileSync(absolute, content);
+  }
+  return root;
+}
+
+/**
+ * Write `files` (root-relative path → content) under `root`, then commit them
+ * as a git fixture.
+ *
+ * @param root - The corpus root, created as needed
+ * @param files - What to write
+ * @returns `root`
+ */
+export function writeCommittedCorpus(root: string, files: Readonly<Record<string, string | Buffer>>): string {
+  writeCorpus(root, files);
+  commitTestFixture(root);
+  return root;
 }
 
 /**

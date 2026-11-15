@@ -48,11 +48,19 @@
  * what the mode does, so both are exercised here now.
  */
 
+import { BUILTIN_CHECK_NAMES } from '@vibe-agent-toolkit/resources';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
 
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
+
 import { cleanupTestTempDir, fs, getBinPath, safePath } from './test-common.js';
 import { createMarkdownGitFixture, executeCli } from './test-helpers/index.js';
+import { measureBudget, type MeasuredBudget } from './test-helpers/measure-check-budget.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-8-');
 
 const binPath = getBinPath(import.meta.url);
 
@@ -106,37 +114,21 @@ const CHILD_HEAP_CAP = { NODE_OPTIONS: '--max-old-space-size=192' };
 
 /** A cheap statement that selects the fixture's markdown files. */
 const MD_ROWS = "SELECT path FROM resource_realizations WHERE ext = '.md'";
+/** A statement naming a claude-context relation that selects nothing, so the lens runs and passes. */
+const CONTEXT_LOADS_NONE = "SELECT 'x' AS path FROM claude_context_loads WHERE 1 = 0";
 /** A cheap statement that selects nothing, so a run over it is a clean pass. */
 const TXT_ROWS = "SELECT path FROM resource_realizations WHERE ext = '.txt'";
 
-/**
- * The floor under the killed cases' bound. Small, so the suite does not pay for
- * it on an idle machine.
- */
-const BUDGET_FLOOR_SECONDS = 2;
-
-/**
- * How many measured baselines of headroom the bound gets over the population.
- *
- * 🪤 **The bound cannot be a literal, and a literal is what shipped.** The
- * budget is time WITHOUT progress, and the population is ONE unit — so a bound
- * that does not clear the population kills the run before it starts, and the
- * command exits 2 ("no projection to report on") instead of the 1 these cases
- * assert. A flat 2 s cleared it comfortably on an idle machine and did not clear
- * it when this file ran inside the full system suite: one CI run reported
- * `expected 2 to be 1`, and the same file passed 7/7 in isolation minutes later.
- * That is not a regression in the product, it is a test whose premise silently
- * acquired a second requirement — that a population fit inside a hardcoded
- * number of seconds — and the machine decides whether it holds.
- *
- * So the bound is derived from {@link baselineMs}, the probe this file already
- * takes: a real run of the same verb over the same tree. A loaded machine moves
- * the baseline and the bound together, which is the whole point of measuring it.
- */
-const BUDGET_BASELINE_HEADROOM = 3;
-
 /** The hidden flag a supervising parent hands its child. */
-const COST_LOG_FLAG = '--cost-log';
+const SUPERVISED_BY_FLAG = '--supervised-by';
+
+/**
+ * A `--supervised-by` value the `vat` process this test spawns accepts: it names THIS process,
+ * which is that process's parent (`executeCli` spawns the binary directly).
+ */
+function asOurChild(progressLog: string): string {
+  return `standalone:${String(process.pid)}:${progressLog}`;
+}
 
 /**
  * How many times the measured baseline plus the budget the kill may take.
@@ -154,7 +146,7 @@ function writeChecks(...entries: readonly (readonly [string, string])[]): void {
     .join('');
   fs.writeFileSync(
     safePath.join(projectDir, 'vibe-agent-toolkit.config.yaml'),
-    `version: 1\nresources:\n  checks:\n${checks}`,
+    `resources:\n  checks:\n${checks}`,
     'utf-8',
   );
 }
@@ -213,28 +205,34 @@ interface PublishedCheck {
   rows?: number;
 }
 
+/**
+ * Probe the machine beside a killed case and derive its bound ({@link measureBudget}).
+ *
+ * It writes the probe's config, so a caller writes its own checks AFTER.
+ *
+ * @returns The baseline and the bound
+ */
+function measureThisBudget(): MeasuredBudget {
+  return measureBudget(() => {
+    writeChecks(['quick', TXT_ROWS]);
+    return check('--budget', '0').elapsedMs;
+  });
+}
+
+/**
+ * A bound no population can fit inside: one millisecond.
+ *
+ * 🔑 Deterministic without depending on load. The watchdog's first look is one
+ * poll interval (50 ms) after the spawn, and by then the child has not even
+ * finished loading Node and the CLI, let alone crawled a tree — so the kill lands
+ * before the population on every machine, loaded or idle. That is the ending
+ * that used to exit 2 with `status: error` under load and exit 1 without it.
+ */
+const PRE_POPULATION_BUDGET = '0.001';
+
 describe('vat resources check --budget', () => {
-  /** A real run of the same verb over the same tree, in-process and complete. */
-  let baselineMs: number;
-
-  /**
-   * The bound the killed cases pass, in seconds — derived, never a literal.
-   *
-   * See {@link BUDGET_BASELINE_HEADROOM} for what a literal cost.
-   */
-  let budgetSeconds: number;
-
   beforeAll(() => {
     projectDir = createMarkdownGitFixture('vat-check-budget-');
-
-    // 🪤 The threshold PROBE, not a literal. What a spawn, a population and one
-    // cheap statement cost on THIS machine, measured by doing it.
-    writeChecks(['quick', TXT_ROWS]);
-    baselineMs = check('--budget', '0').elapsedMs;
-    budgetSeconds = Math.max(
-      BUDGET_FLOOR_SECONDS,
-      Math.ceil((baselineMs / 1000) * BUDGET_BASELINE_HEADROOM),
-    );
   });
 
   afterAll(() => {
@@ -250,13 +248,17 @@ describe('vat resources check --budget', () => {
 
     expect(status).toBe(0);
     expect(doc['status']).toBe('ok');
-    expect(data(doc)['checksRun']).toBe(1);
+    // 🪤 The RELATIONSHIP, not a literal: one declared check plus every
+    // built-in. A literal here re-types a number that lives in `BUILTIN_CHECKS`
+    // and goes red the day a built-in ships — which is exactly what it did.
+    expect(data(doc)['checksRun']).toBe(1 + BUILTIN_CHECK_NAMES.length);
     expect(doc['examined']).toBeGreaterThan(0);
   });
 
   it('KILLS a statement that never finishes, and fails the run naming it', () => {
     // 🔑 The whole point. Without the bound this case does not fail — it never
     // returns, and neither does the CI job it stands for.
+    const { baselineMs, budgetSeconds } = measureThisBudget();
     writeChecks(['runaway', RUNAWAY_SQL]);
 
     const { status, doc, elapsedMs } = check('--budget', String(budgetSeconds));
@@ -283,18 +285,50 @@ describe('vat resources check --budget', () => {
     // A killed run is still evidence. The cheap rule finished and was priced
     // before the runaway was entered, and that is exactly what the progress log
     // exists to preserve across a SIGKILL.
+    const { budgetSeconds } = measureThisBudget();
     writeChecks(['quick', MD_ROWS], ['runaway', RUNAWAY_SQL]);
 
     const { status, doc } = check('--budget', String(budgetSeconds));
 
     expect(status).toBe(1);
     const checks = data(doc)['checks'] as PublishedCheck[];
-    expect(checks.map((entry) => entry.name)).toStrictEqual(['quick']);
+    // Every built-in plus the cheap declared rule, and NOT the runaway: the
+    // built-ins are part of the default set, so they complete and are priced
+    // before the statement that hangs is ever entered.
+    expect(checks.map((entry) => entry.name)).toStrictEqual([...BUILTIN_CHECK_NAMES, 'quick']);
     // Two markdown files in the fixture, so a truthful count is above zero — a
     // `rows: 0` here would mean the list was reconstructed rather than recovered.
-    expect(checks[0]?.rows).toBeGreaterThan(0);
+    expect(checks.find((entry) => entry.name === 'quick')?.rows).toBeGreaterThan(0);
     // And the population the child actually reported, never a fabricated one.
     expect(doc['examined']).toBeGreaterThan(0);
+  });
+
+  it('ends a run killed BEFORE its population as an ERROR — exit 2 — and still publishes it', () => {
+    // 🚨 The defect: the same kill had two exit codes decided by timing, and the
+    // earlier one THREW — no document at all. The code now follows the CAUSE,
+    // read off the published document: a kill during a check is a broken check
+    // (exit 1, the cases above); a kill before the population examined nothing,
+    // so the command could not do its job (exit 2). This case forces that landing
+    // deterministically — no machine-load dependence.
+    writeChecks(['quick', TXT_ROWS]);
+
+    const { status, doc } = check('--budget', PRE_POPULATION_BUDGET);
+
+    expect(status).toBe(2);
+    expect(doc['status']).toBe('error');
+    // `RUN_INCOMPLETE`: the run started and was stopped before its population finished.
+    expect(doc['error']).toMatchObject({ code: 'RUN_INCOMPLETE', message: expect.stringContaining(`no progress for ${PRE_POPULATION_BUDGET}s`) });
+    // The envelope's error branch: the reason is in `error`, not in `findings`.
+    expect(doc['findings']).toStrictEqual([]);
+    // 🔑 NULL, never a fabricated zero or a guessed origin: there was no
+    // projection, and `examined: 0` is the one number that is simply true —
+    // nothing was examined.
+    expect(doc['examined']).toBe(0);
+    expect(data(doc)['population']).toBeNull();
+    expect(data(doc)['populationSecs']).toBeNull();
+    expect(data(doc)['lensSecs']).toBeNull();
+    expect(data(doc)['lensesEvaluated']).toBeNull();
+    expect(data(doc)['checksRun']).toBe(0);
   });
 
   it('FAILS a run whose child died of memory, and never reports it as a pass', () => {
@@ -319,7 +353,7 @@ describe('vat resources check --budget', () => {
     // ⛔ NOT the watchdog's advice. Raising the bound does not help a run that
     // exhausted its heap, and telling this operator to do it wastes their time.
     expect(finding?.message).not.toMatch(/no progress/);
-  }, 120_000);
+  });
 
   it('refuses a budget that is not a number, as an operator error', () => {
     writeChecks(['quick', TXT_ROWS]);
@@ -328,42 +362,90 @@ describe('vat resources check --budget', () => {
 
     // 2, not 1: a mistyped flag is an operator error, not a content violation.
     expect(status).toBe(2);
-    expect(doc['error']).toContain('--budget');
+    expect(doc['error']).toMatchObject({ code: 'USAGE_INVALID', message: expect.stringContaining('--budget') });
   });
 
-  it('writes one progress line per unit when given --cost-log', () => {
+  it('writes one progress line per unit when given --supervised-by', () => {
     // The child lane, observed directly. A supervisor that cannot see the
     // child's progress cannot tell a slow run from a hung one, so this is the
     // signal the whole bound is built on.
-    writeChecks(['quick', MD_ROWS]);
+    // The second check names a claude-context relation, so the population line
+    // carries a lens provenance a constant could not fake: not `none`, and the
+    // same value the finished document publishes.
+    writeChecks(['quick', MD_ROWS], ['lensed', CONTEXT_LOADS_NONE]);
     const logPath = safePath.join(projectDir, 'progress.jsonl');
 
-    const { status } = check(COST_LOG_FLAG, logPath);
+    // As the supervisor this test stands in for writes it: naming this process, the child's parent.
+    // ⚠️ The child ends itself at end-of-file on stdin (its supervisor gone), and `executeCli`
+    // hands it THIS worker's stdin — which vitest holds open as a pipe. Run from a stdin at EOF,
+    // this case would end the child with exit 2 before its first line, and red loudly.
+    const { status, doc } = check(SUPERVISED_BY_FLAG, asOurChild(logPath));
 
     expect(status).toBe(1);
-    const kinds = fs.readFileSync(logPath, 'utf-8')
+    const lines = fs.readFileSync(logPath, 'utf-8')
       .split('\n')
       .filter((line) => line.trim() !== '')
-      .map((line) => (JSON.parse(line) as { kind: string }).kind);
-    // 🔑 `checks-complete` is the LAST line and it is not decoration: after the
+      .map((line) => JSON.parse(line) as { kind: string; lensPopulation?: string });
+    const kinds = lines.map((line) => line.kind);
+    const populationLine = lines.find((line) => line.kind === 'population');
+    expect(populationLine?.lensPopulation).not.toBe('none');
+    expect(populationLine?.lensPopulation).toBe(data(doc)['lensPopulation']);
+    // 🔑 `statements-complete` is the LAST line and it is not decoration: after the
     // final cost the child still resolves severities and serialises the
     // document, and it used to emit nothing at all during that phase — so a
     // budget that expired there SIGKILLed a run which already had its answer.
     // This line gives serialisation a fresh window, for one `appendFileSync`.
-    expect(kinds).toStrictEqual(['population', 'start', 'check', 'checks-complete']);
+    //
+    // 🪤 One `start`/`check` pair per UNIT, built-ins first, so their count is derived from
+    // `BUILTIN_CHECK_NAMES` rather than written out. A declared check's rows are converted in
+    // this process, announced by a `converting` line between the two.
+    //
+    // 🔑 `started` is the FIRST line, written the moment the child has booted,
+    // so the watchdog stops charging Node's startup and the CLI's import to the
+    // population — a loaded machine slows the boot, and that is not the tree's
+    // cost to be killed for.
+    expect(kinds).toStrictEqual([
+      'started',
+      'not-admitted',
+      'population',
+      ...BUILTIN_CHECK_NAMES.flatMap(() => ['start', 'check']),
+      ...['quick', 'lensed'].flatMap(() => ['start', 'converting', 'check']),
+      'statements-complete',
+    ]);
   });
 
-  it('refuses --budget alongside --cost-log rather than silently ignoring the bound', () => {
-    // 🚨 `--cost-log` wins the supervise-or-work fork unconditionally, so
-    // `--budget 60 --cost-log x` ran with NO bound and said nothing about it. An
-    // explicitly-passed, documented flag must never be silently inert.
+  it('refuses --budget alongside --supervised-by rather than silently ignoring the bound', () => {
+    // 🚨 `--supervised-by` wins the supervise-or-work fork unconditionally, so `--budget 60` beside
+    // it ran with NO bound and said nothing. An explicitly-passed, documented flag must never be
+    // silently inert. The flag is otherwise VALID here (it names this process, the run's parent),
+    // so the sentence asserted is this refusal's and no other's.
     writeChecks(['quick', TXT_ROWS]);
 
     const { status, doc } = check(
-      '--budget', '60', COST_LOG_FLAG, safePath.join(projectDir, 'ignored.jsonl'),
+      '--budget', '60', SUPERVISED_BY_FLAG, asOurChild(safePath.join(projectDir, 'ignored.jsonl')),
     );
 
     expect(status).toBe(2);
-    expect(doc['error']).toContain(COST_LOG_FLAG);
+    expect(doc['error']).toMatchObject({
+      code: 'USAGE_INVALID',
+      message: expect.stringContaining('--budget cannot be combined with --supervised-by'),
+    });
+  });
+
+  it('refuses --supervised-by passed by hand: no supervisor is watching, so the run would be unbounded and silent', () => {
+    // 🚨 The flag used to be tolerated by hand: an unsupervised run, none of the run's notices, a
+    // log nobody read. It names its supervisor's pid now, and a process whose parent is not that
+    // supervisor is refused in plain words — before anything runs.
+    writeChecks(['quick', TXT_ROWS]);
+    const logPath = safePath.join(projectDir, 'by-hand.jsonl');
+
+    const { status, doc } = check(SUPERVISED_BY_FLAG, `standalone:${String(process.pid + 1)}:${logPath}`);
+
+    expect(status).toBe(2);
+    expect(doc['error']).toMatchObject({
+      code: 'USAGE_INVALID',
+      message: expect.stringContaining('is not an operator\'s flag'),
+    });
+    expect(fs.existsSync(logPath)).toBe(false);
   });
 });

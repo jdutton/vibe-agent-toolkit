@@ -5,18 +5,46 @@
  * Verifies mixed resource types, error detection, and successful validation.
  */
 
-import * as fs from 'node:fs';
 
+import { pathToFileURL } from 'node:url';
+
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
+import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import yaml from 'yaml';
+
+import { AUDIT_REPORT_SCHEMA } from '../../src/commands/audit-schema.js';
 
 import {
   cleanupTestTempDir,
+  commitAllAndPushMain,
   createTestTempDir,
   executeCli,
   getBinPath,
+  initGitRepoWithRemote,
   writeTestFile,
 } from './test-common.js';
+
+/** Write `content` at `path`, creating its directory. */
+function writeNested(path: string, content: string): void {
+  mkdirSyncReal(safePath.resolve(path, '..'), { recursive: true });
+  writeTestFile(path, content);
+}
+
+/** A skill nothing complains about, at any severity. */
+const CLEAN_SKILL = `---
+name: clean
+description: Reviews widgets for quality. Use when a reviewer wants a checklist walkthrough of a widget in depth.
+---
+
+# clean
+
+Purpose statement goes here.
+
+Does one thing well.
+`;
 
 describe('Audit Workflows (system test)', () => {
   let binPath: string;
@@ -36,11 +64,11 @@ describe('Audit Workflows (system test)', () => {
 
   it('should handle mixed resource directory (marketplace + plugins + skills)', async () => {
     const mixedDir = safePath.join(tempDir, 'mixed');
-    fs.mkdirSync(mixedDir, { recursive: true });
+    mkdirSyncReal(mixedDir, { recursive: true });
 
     // Create a marketplace structure
     const marketplaceDir = safePath.join(mixedDir, 'my-marketplace');
-    fs.mkdirSync(marketplaceDir, { recursive: true });
+    mkdirSyncReal(marketplaceDir, { recursive: true });
     writeTestFile(
       safePath.join(marketplaceDir, '.claude-plugin'),
       JSON.stringify({
@@ -64,7 +92,7 @@ Test content.
 
     // Create a standalone plugin
     const pluginDir = safePath.join(mixedDir, 'my-plugin');
-    fs.mkdirSync(pluginDir, { recursive: true });
+    mkdirSyncReal(pluginDir, { recursive: true });
     writeTestFile(
       safePath.join(pluginDir, '.claude-plugin'),
       JSON.stringify({
@@ -114,12 +142,12 @@ Test content.
 
   it('should detect and report multiple validation errors', async () => {
     const errorDir = safePath.join(tempDir, 'errors');
-    fs.mkdirSync(errorDir, { recursive: true });
+    mkdirSyncReal(errorDir, { recursive: true });
 
     // Create an invalid skill (invalid name format — uppercase not allowed)
     // Note: must create subdirectory since scanDirectory only finds SKILL.md in directories
     const errorDir1 = safePath.join(errorDir, 'skill1');
-    fs.mkdirSync(errorDir1, { recursive: true });
+    mkdirSyncReal(errorDir1, { recursive: true });
     writeTestFile(
       safePath.join(errorDir1, 'SKILL.md'),
       `---
@@ -135,7 +163,7 @@ Test content.
 
     // Create another invalid skill (name too long — exceeds 64 chars)
     const errorDir2 = safePath.join(errorDir, 'skill2');
-    fs.mkdirSync(errorDir2, { recursive: true });
+    mkdirSyncReal(errorDir2, { recursive: true });
     writeTestFile(
       safePath.join(errorDir2, 'SKILL.md'),
       `---
@@ -166,11 +194,11 @@ Test content.
 
   it('should exit with 0 for fully valid resources', async () => {
     const validDir = safePath.join(tempDir, 'valid');
-    fs.mkdirSync(validDir, { recursive: true });
+    mkdirSyncReal(validDir, { recursive: true });
 
     // Create valid skills (each in subdirectory since scanDirectory looks for SKILL.md)
     const validDir1 = safePath.join(validDir, 'skill1');
-    fs.mkdirSync(validDir1, { recursive: true });
+    mkdirSyncReal(validDir1, { recursive: true });
     writeTestFile(
       safePath.join(validDir1, 'SKILL.md'),
       `---
@@ -185,7 +213,7 @@ Test content.
     );
 
     const validDir2 = safePath.join(validDir, 'skill2');
-    fs.mkdirSync(validDir2, { recursive: true });
+    mkdirSyncReal(validDir2, { recursive: true });
     writeTestFile(
       safePath.join(validDir2, 'SKILL.md'),
       `---
@@ -220,7 +248,7 @@ Test content.
   it('should scan recursively by default without --recursive flag', async () => {
     const nestedDir = safePath.join(tempDir, 'nested-default');
     const nestedSkillDir = safePath.join(nestedDir, 'deeply', 'nested', 'skill-dir');
-    fs.mkdirSync(nestedSkillDir, { recursive: true });
+    mkdirSyncReal(nestedSkillDir, { recursive: true });
 
     writeTestFile(
       safePath.join(nestedSkillDir, 'SKILL.md'),
@@ -247,13 +275,13 @@ This skill is deeply nested to verify recursive scanning is the default.
     expect(result.stdout).toBeTruthy();
 
     // The nested skill should appear in output, confirming recursive scan found it
-    expect(result.stdout).toContain('nested-skill');
+    expect(result.stdout).toContain('deeply/nested/skill-dir/SKILL.md');
   });
 
   it('should NOT scan subdirectories with --no-recursive flag', async () => {
     const noRecurseDir = safePath.join(tempDir, 'no-recurse');
     const subDir = safePath.join(noRecurseDir, 'subdir');
-    fs.mkdirSync(subDir, { recursive: true });
+    mkdirSyncReal(subDir, { recursive: true });
 
     // Create SKILL.md only in the subdirectory (not the top level)
     writeTestFile(
@@ -279,19 +307,21 @@ This skill should not be found when using --no-recursive.
     // code follows `status`.
     expect(result.status).toBe(1);
 
-    // The scan ran and produced output (e.g., filesScanned count)
-    expect(result.stdout).toContain('filesScanned');
+    // The scan ran and published its denominator: zero files examined.
+    const report = AUDIT_REPORT_SCHEMA.parse(yaml.parse(result.stdout));
+    expect(report.examined).toBe(0);
+    expect(report.findings.map((finding) => finding.code)).toStrictEqual(['RESOURCE_CHECK_BROKEN']);
 
     // The subdir skill should NOT appear in output
-    expect(result.stdout).not.toContain('subdir-skill');
+    expect(result.stdout).not.toContain('subdir/SKILL.md');
   });
 
   it('should exclude paths matching --exclude glob', async () => {
     const excludeDir = safePath.join(tempDir, 'exclude-test');
     const distDir = safePath.join(excludeDir, 'dist');
     const srcDir = safePath.join(excludeDir, 'src');
-    fs.mkdirSync(distDir, { recursive: true });
-    fs.mkdirSync(srcDir, { recursive: true });
+    mkdirSyncReal(distDir, { recursive: true });
+    mkdirSyncReal(srcDir, { recursive: true });
 
     // Create a skill in dist/ (should be excluded)
     writeTestFile(
@@ -330,9 +360,63 @@ This skill is in src/ and should be included.
     expect(result.status).toBe(0);
 
     // src-skill SHOULD appear in output (it was not excluded)
-    expect(result.stdout).toContain('src-skill');
+    expect(result.stdout).toContain('src/SKILL.md');
 
     // dist-skill should NOT be in output
-    expect(result.stdout).not.toContain('dist-skill');
+    expect(result.stdout).not.toContain('dist/SKILL.md');
+  });
+
+  it('publishes the report envelope, parsed by its registered schema, for a clean tree', async () => {
+    const cleanDir = safePath.join(tempDir, 'envelope-clean');
+    writeNested(safePath.join(cleanDir, 'skills', 'clean', 'SKILL.md'), CLEAN_SKILL);
+
+    const result = await executeCli(binPath, ['audit', cleanDir], { cwd: tempDir });
+
+    const report = AUDIT_REPORT_SCHEMA.parse(yaml.parse(result.stdout));
+    expect(report.status, result.stdout).toBe('ok');
+    expect(report.examined).toBe(1);
+    expect(report.gate).toStrictEqual({ strict: false });
+    expect(result.status).toBe(ExitCode.OK);
+  });
+
+  it('publishes status findings, not error, for an error-severity finding, and exits 1', async () => {
+    const brokenDir = safePath.join(tempDir, 'envelope-findings');
+    writeNested(
+      safePath.join(brokenDir, 'skills', 'broken', 'SKILL.md'),
+      '---\nname: Invalid_Skill_Name\ndescription: Has invalid name format\n---\n\n# Broken\n',
+    );
+
+    const result = await executeCli(binPath, ['audit', brokenDir], { cwd: tempDir });
+
+    const report = AUDIT_REPORT_SCHEMA.parse(yaml.parse(result.stdout));
+    // `error` is reserved for a run that did not finish; this one finished and found something.
+    expect(report.status, result.stdout).toBe('findings');
+    expect(report.summary.errors).toBeGreaterThan(0);
+    // Every finding names the file to open, relative to the stated root.
+    expect(new Set(report.findings.map((finding) => finding.location))).toStrictEqual(new Set(['skills/broken/SKILL.md']));
+    expect(report.data.counts.filesWithErrors).toBe(1);
+    expect(result.status).toBe(ExitCode.FINDINGS);
+  });
+
+  it('publishes root null only for a URL audit', async () => {
+    const localDir = safePath.join(tempDir, 'url-source');
+    writeNested(safePath.join(localDir, 'skills', 'clean', 'SKILL.md'), CLEAN_SKILL);
+    const bare = safePath.join(tempDir, 'url-origin.git');
+    mkdirSyncReal(bare, { recursive: true });
+    runGitOrThrow(['init', '-q', '--bare', '--initial-branch=main'], { cwd: bare });
+    initGitRepoWithRemote(localDir, bare);
+    commitAllAndPushMain(localDir);
+
+    const local = AUDIT_REPORT_SCHEMA.parse(yaml.parse((await executeCli(binPath, ['audit', localDir], { cwd: tempDir })).stdout));
+    expect(local.data.root).toBe(safePath.resolve(localDir));
+    expect(local.data.provenance).toBeNull();
+
+    const url = await executeCli(binPath, ['audit', pathToFileURL(bare).href], { cwd: tempDir });
+    const remote = AUDIT_REPORT_SCHEMA.parse(yaml.parse(url.stdout));
+    // The clone lives in a random tempdir nothing downstream can resolve, so the
+    // provenance names the base instead and every path is relative to the clone.
+    expect(remote.data.root, url.stdout).toBeNull();
+    expect(remote.data.provenance).toMatchObject({ url: pathToFileURL(bare).href, ref: 'HEAD' });
+    expect(remote.data.files.map((file) => file.path)).toStrictEqual(['skills/clean/SKILL.md']);
   });
 });

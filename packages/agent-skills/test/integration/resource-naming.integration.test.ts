@@ -10,6 +10,7 @@ import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/u
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { packageSkill } from '../../src/skill-packager.js';
+import { packageInPlace } from '../test-helpers.js';
 
 const KB_PATH = 'knowledge-base';
 const GUIDES_PATH = 'guides';
@@ -76,7 +77,8 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
       // 90-skill build. It is now an ordinary finding on the issue channel —
       // still severity `error`, so the build still fails, but attributable and
       // configurable like every other code.
-      const result = await packageSkill(skillPath, {
+      // In place: the finding is the subject; `packageSkill` lands only a package that passed its checks.
+      const result = await packageInPlace(skillPath, {
         outputPath,
         resourceNaming: BASENAME_STRATEGY,
         excludeNavigationFiles: false,

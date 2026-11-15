@@ -27,13 +27,67 @@ side uses — one definition, in `harness/git-state.ts`, so a single report cann
 of the word. See "A dirty instrument is measured, but never mistaken for a commit" below.
 
 **A built artifact.** A path straight to a `dist/`, for comparing two builds without two checkouts.
-Prefer a working tree when you have one: a `dist/` has no checkout to ask, so its coordinate records
-`commit: null`, and two `dist:` arms carrying the same version are indistinguishable to
-`movedAxes` — it will report that *no* axis moved for what is genuinely a two-build comparison.
+A `dist/` has no checkout to ask, so its coordinate records `commit: null` — and what tells two
+`dist:` arms of one version apart is the **closure digest** (below), which `movedAxes` compares and
+the header prints as `closure <first 12 hex>`. Prefer a working tree when you have one: the digest
+names the bytes, but only a commit names the source they were built from.
 
-**A released version.** `npx @vibe-agent-toolkit/cli@0.1.41` — the case that makes "did we get better
-since the last release?" a one-liner. The commit is unknown here and the coordinate records `null`
-rather than guessing.
+**A released version.** `npx:vibe-agent-toolkit@0.1.41` — the case that makes "did we get better
+since the last release?" a one-liner. The spec must be `vibe-agent-toolkit` or
+`@vibe-agent-toolkit/cli` pinned to an exact version, refused before any setup otherwise: any other
+package, a range, a dist-tag, a path, a URL, a tarball, a git ref or an `npm:` alias. The
+pin is installed under the arms root and run as that install's `dist/bin.js` (below). The commit is
+unknown here and the coordinate records `null` rather than guessing; the closure is the one digest
+every kind stamps (below), taken from the installed cli — so an `npx:` build and a `dist:` build of
+the same install are one instrument, as are the umbrella and cli pins of one version. Third-party
+ranges float in the install, so two installs of one pin that resolved a third-party package at
+different versions are two instruments.
+
+### The closure digest — arm identity by what it runs
+
+`InstrumentVersion.closure` is a SHA-256 over the arm's whole module closure
+([`harness/closure.ts`](../src/harness/closure.ts)) — one definition for every kind: `tree:` starts
+it at `packages/cli`, `dist:` at the package that owns the named `dist/`, `npx:` at the installed
+`@vibe-agent-toolkit/cli`.
+
+- **`@vibe-agent-toolkit/*` packages by their bytes.** The cli and every `@vibe-agent-toolkit/*`
+  package in its transitive dependency closure, each as its `package.json` plus every file under
+  its `dist/`, `*.tsbuildinfo` excluded.
+- **Third-party packages by their resolved `name@version`, never their bytes.** Every third-party
+  package in that same closure. Another version resolved — a range that floated in an `npx:`
+  install, a lockfile bump in a checkout — is another instrument; the same version with other
+  bytes is not.
+
+- **Why.** The version cannot see the case that matters most: a dependency's `dist/` rebuilt while
+  every `package.json` stays put. Before the digest, two `dist:` arms of one version were the same
+  instrument to every comparison, whatever they had been built from.
+- **What resolves.** Each dependency is found the way Node finds it — `<dir>/node_modules/<name>`
+  from the depending package upward, nearest first, through any symlink — so one walk serves a bun
+  workspace and an npm prefix. The walk follows `dependencies`, and the `optionalDependencies` and
+  optional peers (`peerDependenciesMeta`, `optional: true`) that are present: the cli's `rag` and
+  `rag-lancedb` are optional peers npm installs only when asked for, passed over when missing and
+  digested like any other VAT package when installed. The stub an `npx:` install writes for a
+  missing optional peer is passed over as absent. Required peers are not followed.
+- **Never above a ceiling.** Resolution stops at a ceiling: an `npx:` arm's install prefix; a
+  `tree:` arm's checkout root; for a `dist:` arm, the directory holding the outermost
+  `node_modules` of the package's real path when it lies in one (an npm prefix — the ceiling an
+  `npx:` arm of those bytes uses), else the nearest directory from the package up whose
+  `package.json` declares `workspaces` (the checkout a `tree:` arm of it would name), else the
+  package itself. A dependency found only above the ceiling, or whose real directory lies outside
+  it, is not part of the arm.
+- **Errors, never fallbacks.** A declared dependency that does not resolve under the ceiling, or a
+  `@vibe-agent-toolkit/*` closure member with no `dist/`, throws naming it — a digest of less than
+  what runs would match another arm missing the same thing. For an `npx:` arm it is a `REFUSED:`.
+- **Reports from an earlier definition.** A report stored by an earlier lab whose closure was
+  computed differently (before third-party versions were part of it, say) compares as a different
+  instrument from a fresh capture of the same build: re-capture it. Nothing detects this, and no
+  version marker records which definition made a digest.
+- **Stored reports.** The field is required and never null under the `.strict()` schema, so a report
+  stored without one is refused on read — the lab's refusal policy, not a defect. That includes an
+  `npx:` report from before the lab installed the pin itself: it may have measured another version
+  than it names; re-capture it. The store names a
+  commit-less build `vat-<version>-closure-<first 8 hex>`, so a second `dist:` build of one version
+  never overwrites the first.
 
 ### Never the `vat` wrapper
 
@@ -45,13 +99,52 @@ the version and commit read from the checkout that was named. Both arms of an A/
 resolve to the same third binary and agree.
 
 So the tree and dist routes resolve `bin.js` and **refuse** the wrapper by name rather than falling
-back to it. The CLI reached the same conclusion independently for its own phase subprocesses — see
-`resolveBinPath()` in `packages/cli/src/commands/phase-utils.ts`.
+back to it. The CLI reached the same conclusion independently: `resolveVatBinPath()` in
+`packages/cli/src/utils/vat-bin-path.ts` is its one resolver of the real `bin.js`. (The qa-snapshot
+kept a second copy for its whole-command half; that half moved here as the `verdict` facet and the
+copy was deleted with it.)
 
-The `npx` route is the one exception, and a known limitation: `npx` runs the published package's
-`bin` entry, which *is* the wrapper. A subject with its own vat installed can therefore capture an
-`npx:` arm. Compare published versions on a subject that does not depend on vat, or use `dist:`
-against an unpacked tarball.
+The `npx` route is no exception: `npx` runs the published package's `bin` entry, which *is* the
+wrapper, and a subject with its own vat installed captured an `npx:` arm — a report stamped with the
+pin measured the subject's version. So an `npx:` build is never run through npx: the pinned spec is
+installed under the arms root and resolved to its cli's `dist/bin.js`
+([`harness/npx-install.ts`](../src/harness/npx-install.ts)). Running `bin.js` directly is the
+protection: it is the CLI itself and delegates to no other copy. The entry is looked for only where
+the named package's own cli lives (the hoisted `node_modules/@vibe-agent-toolkit/cli`, and for the
+umbrella its own dependency nested under it). The install is refused unless that cli's
+`package.json` names `@vibe-agent-toolkit/cli` (an alias keeps the real package's name) at the pin
+and the entry's real path lies inside the install; the entry is then run once with `--version` to
+prove `bin.js` and its static imports load — not to check its version, which `--version` reads from
+that same `package.json`. These checks run once per install, before any repeat, and each failure
+— npm failing included — is an arm refusal, printed as one `REFUSED:` line. npm runs as
+`node <npm-cli.js>` with no shell on every platform, so a timeout kills npm itself, not a `cmd.exe`
+above it. It is the npm bundled with the Node that runs the lab (`process.execPath`), never one
+found on PATH: POSIX `<prefix>/lib/node_modules/npm/bin/npm-cli.js` (`<prefix>` the parent of
+`node`'s directory), Windows `node_modules/npm/bin/npm-cli.js` beside `node.exe` — the official
+Node layout, npm bundled beside node. A Node with no bundled npm there — a distribution-packaged
+Node such as Debian's, whose npm lives at `/usr/share/nodejs/npm` — is refused, naming the path
+looked for. A timeout kills npm's own node process, not any child it started: VAT's dependency
+closure has no git or script steps, and the next cold reset of the install arm clears a partial
+install. The install is laid out hoisted: `--install-strategy=hoisted` is on npm's command line,
+which beats an `install-strategy=linked` in the operator's `.npmrc`, and an install still holding a
+linked package directory or a `node_modules/.store` is refused.
+
+**What stays inside an `npx:` install, and what does not.** Node resolves a bare module name up the
+directory tree, past the install and the arms root. The install is refused, naming the path, when
+any directory above its prefix — up to the filesystem root — holds a `node_modules` entry. The
+check runs once, at install time, and the default arms root lies under the system temp directory,
+whose ancestors other users may write to: `/tmp` on Linux (`/tmp/node_modules` is world-writable)
+and `C:\` on Windows. **On a shared host, pass `--arms-dir` under your home.** For every optional
+peer (`peerDependenciesMeta`, `optional: true`) that any package of the install declares and that
+does not resolve from that package inside the install, the lab writes a stub package at the
+install's top-level `node_modules`; Node stops there and fails the load as not found — the
+package's own "not installed". Never stubbed: a name any installed package lists in
+`optionalDependencies` (npm skipped it as optional or for another platform, and the closure treats
+it as absent), and an optional-peer name that is not a valid package name (a legacy uppercase
+name), which is skipped, not a refusal of the whole install. Every arm clears an inherited
+`NODE_PATH`. What remains outside the install: Node's CommonJS global folders —
+`$HOME/.node_modules`, `$HOME/.node_libraries` (the arm's own, empty home) and `$PREFIX/lib/node`
+of the Node that runs.
 
 ## A dirty instrument is measured, but never mistaken for a commit
 
@@ -69,8 +162,8 @@ was not the one under test. That is a correctness bug in the instrument, not a c
 is invisible at the moment it matters: the numbers are present and the header is well-formed.
 
 So `InstrumentVersion.dirty` now travels in every report, the shared header renders it as
-`vat 0.2.0-rc.2 (7b65ba86, DIRTY working tree)`, and `sameInstrument` counts it — a dirty build and
-the clean commit it branched from are two instruments.
+`vat 0.2.0-rc.2 (7b65ba86, DIRTY working tree, closure 3f09a1c4b2de)`, and `sameInstrument` counts
+it — a dirty build and the clean commit it branched from are two instruments.
 
 **A dirty A/B is legitimate and is never refused.** Editing, measuring and watching the number move is
 the commonest thing anyone does with a perf tool. What it must never do is *read* as a
@@ -78,13 +171,14 @@ commit-to-commit result, so `instrumentTrustNotes` prints a banner above every c
 `ab` run where either arm is dirty, where the two arms differ in dirtiness, or where an arm carries
 no commit at all.
 
-**There is deliberately no instrument working-fingerprint**, unlike axis B. What ran is the *built*
+**A dirty build is identified by its closure digest, never by its source.** What ran is the *built*
 output; a fingerprint over the source checkout would precisely identify something that is not the
 thing measured, since you can edit source and never rebuild — which is the very failure the label
-discloses. The consequence is stated rather than papered over: two dirty arms at one commit compare
-*equal* on axis C, and the banner is the only thing that keeps a reader from concluding the
-instrument was held still. In the store, a dirty instrument's report is instead named by *when it was
-observed*, so a second dirty run can never silently overwrite the first.
+discloses. The closure digest is taken over the built `dist/` trees instead, so two dirty arms at one
+commit compare *unequal* on axis C exactly when the bytes they ran differ. No commit reproduces a
+dirty build, so the banner still stands above every such result. In the store, a dirty instrument's
+report is named by *when it was observed*, so a second dirty run can never silently overwrite the
+first.
 
 ## Where the subject comes from
 
@@ -93,8 +187,28 @@ resolves the ref to a commit at fetch time and stamps it. For a folder with no g
 content fingerprint instead, which is the only thing that makes two runs over a working directory
 comparable.
 
-`VAT_ROOT_DIR` is the existing mechanism for pointing vat at a project other than its own cwd, and
-the harness drives it rather than inventing a parallel path.
+No lab code drives `VAT_ROOT_DIR` — or any other variable that selects which vat runs. That is the
+arm-environment contract (see "Each arm's environment" below): `VAT_ROOT_DIR`, `VAT_BIN` and the
+other arm-owned variables are stripped from every child, never inherited, and reach a child only
+when the arm itself sets them with `--env`. A nested `vat` call from a subject's own npm scripts or
+hooks stays in the arm only because the arm says so (`--env VAT_BIN=<bin.js>` for a `tree:` or
+`dist:` arm, `--env VAT_ROOT_DIR=<shim>` for a build whose wrapper predates `VAT_BIN`). No arm kind
+— `tree:`, `dist:` or `npx:` — sets either itself, so without that `--env` a nested `vat` call
+resolves through the subject's own install, not the build under test. An `npx:` install lives at
+a lab-internal path emptied each run, so only the commands the lab runs itself measure the pin;
+for a pinned baseline whose nested calls are pinned too, use a
+`dist:` arm over a private install of the release plus a shim
+([recipe](../../../docs/contributing/vat-debugging.md#crucible-runs)).
+
+Every timed arm — the `verdict` facet's included — also gets lab-owned directories on top of its
+own settings: a private projection store, temp directory, empty home (`HOME` and
+`CLAUDE_CONFIG_DIR`) and npm cache under the invocation's **arms root** (`--arms-dir`, else a fresh
+`run-*` directory under `<os tmpdir>/vat-lab-arms-<user>/`), never under `--out` and never inside a
+subject. The default `run-*` directory is removed when the capture ends, passed or failed, unless
+`--keep-arms`; the output says which (`Removed arms under …` / `Kept arms under …`). An `--env` or
+`--unset` naming one of those variables is refused. Because the verdict
+facet's subjects include VAT's own tree, it also refuses an `--out` inside any subject — see
+[The verdict facet](facets.md#the-verdict-facet).
 
 ## Which commands get measured
 
@@ -109,8 +223,8 @@ It is also the only way a second facet can have defaults at all without importin
 the [facet contract](facets.md) forbids.
 
 The default is a default, not a definition. `MEASURABLE_COMMANDS` in the same file is the named
-registry — the three defaults plus `inventory`, `validate`, `verify`, `resources-population`,
-`claude-context-all`, `claude-context`, `claude-budget`, `skills-validate` and `skills-list` — and
+registry — the three defaults plus `inventory`, `validate`, `build`, `verify`, `resources-population`,
+`claude-context-all`, `claude-context`, `skills-validate` and `skills-list` — and
 `vat-lab <facet> run --command <name>` selects from
 it. Adding an entry to the registry changes what a caller *can* ask for and nothing about what a
 bare run measures. The flag is repeatable
@@ -144,26 +258,26 @@ one side printed and the other did not — a `resources-population` row from a b
 print `lane` against a current one — and the `[A → B]` arrow appears only when both sides named
 an arm and the two differ (the four clauses are tabled in [Facets](facets.md)).
 
-`validate` and `verify` take no `{subject}` argument: both **reject** a positional path and take
-their scope from the config at the working directory, which the harness has already set to the
-subject. `verify` reads the built `dist/` tree, so a subject measured with it must have been built.
+`validate`, `build` and `verify` take no `{subject}` argument: each **rejects** a positional path and
+takes its scope from the config at the working directory, which the harness has already set to the
+subject. `build` WRITES the subject's `dist/` and is committed to exit 0 only — a `vat build` that
+exits 1 stopped at an error finding and skipped its later phases. A spec names what it writes
+(`writes: ['dist']`, required on every spec), and an arm with any written directory never runs in
+the real subject: it runs in `<arm>/subject`, one copy per capture (APFS copy-on-write on macOS, a
+real `cp -R` on Linux, minus the regenerable caches), with each written directory deleted inside it
+before every repeat (warm priming included) so no repeat times an incremental build, and the copy
+removed when the arm ends. It refuses Windows, a git-worktree subject (git in the copy would write
+the real repository's worktree index), and a writing step whose arguments name the real subject.
+`verify` reads the built `dist/` tree, so a subject measured with it must have been built.
 `claude-context-all` is subject-less for the same reason — `--all` sweeps every path the projection
-realized and takes no positional. So is `claude-budget`, and there for a sharper reason than
-convention: it **rejects** (exit 2) any path resolving outside the root it discovered, so a
-positional naming the subject fails from every working directory except the subject itself.
+realized and takes no positional.
 
 ## Reaching the rest of the enumerating verbs
 
 `docs/contributing/command-lane-table.md` counts **25 commands that enumerate a corpus**, and those
-are the ones where a cost regression actually hurts. This registry reaches ten of them. That gap is
-the reason `claude-budget`, `skills-validate` and `skills-list` are here:
+are the ones where a cost regression actually hurts. This registry reaches nine of them. That gap is
+the reason `skills-validate` and `skills-list` are here:
 
-- **`claude-budget`** was the largest hole. It shares `claude-context`'s lane, route and population
-  exactly — same `buildClaudeContextPopulation`, same two `populate()` passes, same single crawl —
-  but asks a different question of it: `context` answers for the paths named, while `budget` sweeps
-  every working location through `sweepAlwaysLoadedBudgets()`. Its per-answer cost therefore grows
-  with the number of regions in the tree, and the `claude-context` pair is blind to that by
-  construction, because both of its arms hold the query count fixed.
 - **`skills-validate`** is the `registry-md-html` lane's cheapest read-only door. Every other
   command that builds that registry — `skills build`, `skills package`, `claude plugin build`,
   `agent build`, `skill test run` — writes output; `audit` and `verify` reach it but bundle other
@@ -206,6 +320,7 @@ every facet through the same `createFacetCommand` factory that builds `run` and 
 ```
 vat-lab perf ab <subject> --instrument-a tree:<path> --instrument-b tree:<path> \
   [--pairs 6] [--runs 3] [--cache warm|cold] [--command <name>] [--out <dir>] \
+  [--env-a K=V] [--env-b K=V] [--unset-a K] [--unset-b K] \
   [--control] [--noise-floor <value>]
 ```
 
@@ -214,23 +329,45 @@ Four properties, each of which the hand-rolled version had no way to enforce:
 **Whole arms alternate — A B A B …, never all of A then all of B.** A machine drifts over minutes, and
 a block design charges every bit of that drift to whichever arm ran during it. Alternation turns a
 systematic bias into a per-pair one, which shows up as pairs disagreeing — a signal you can read.
-The second reason is specific to this harness: vat namespaces its dev parse cache per build, so each
-arm's *first* invocation is cold whatever `--cache` says. Alternation makes that recur symmetrically
-instead of hiding inside one arm's aggregate.
+The second reason is specific to this harness: each arm has its own `tmp/`, so its parse cache is
+its own, and a warm arm is primed by one unmeasured run before its first measured repeat — no arm's
+first measured invocation inherits the other's cache. Alternation keeps whatever cold start remains
+(the OS page cache, the build's first start) symmetric instead of hiding inside one arm's aggregate.
 
-**The estimator is `min`, with `p25` reported beside it — never a median, never a mean.** Every sample
-is the true cost plus a non-negative contamination, so the smallest is the closest thing to a clean
-observation. Across a handful of samples, one cold repeat is enough to move a median and not the min.
+**The estimator is the facet's own, `min` or `median`, with `p25` reported beside it — never a
+mean.** A time is the true cost plus a non-negative contamination, so the smallest is the closest
+thing to a clean observation, and one cold repeat is enough to move a median and not the min: every
+facet but `memory` takes the min. A peak RSS moves both ways with when a collection lands, so its min
+is the luckiest collection; `memory ab` takes the median, of each capture's median repeat.
 
 **Every pair's verdict is reported, and so is whether they agreed.** A single pair settles nothing —
 two pairs in a prior session actively contradicted each other. Disagreement prints as
 `⚠ PAIRS DISAGREE` and exits `ExitCode.ERROR` (unmeasurable); it is never averaged into a
 consensus no pair reported.
 
+**A capture with no usable measurement is LOST, and a lost capture voids the effect.** A failed row
+(named by its failure, or `memory`'s `ran out of heap`), a row of an exact-count facet (`io`,
+`work`) whose own repeats disagreed or were never tested (named by the reason its `compare` gives),
+and a capture that published no estimate for the command (`published no estimate`) are all lost:
+the arm prints `<reason> in N of M pairs` and
+the effect is `NONE`, never a statistic of the pairs that happened to succeed, which would understate
+whatever failed the others. Nor is there an effect unless at least one pair's comparison judged the
+command `changed` or `unchanged`, in every facet: when every pair refused, the line is
+`effect: NONE — no pair was comparable`; when the pairs only said something else (`unmeasurable`,
+`added`, `removed`, `below-resolution`), it is `effect: NONE — no pair judged it changed or
+unchanged (every pair said: …)`.
+
 **`--control` runs the same instrument as both arms**, which measures the machine rather than a
 difference between builds, and whatever effect it reports *is* the noise floor. Feed the largest of
 those back as `--noise-floor` and any smaller effect is reported as `INDISTINGUISHABLE FROM NOISE`.
 Without one, every run says `Noise floor: UNMEASURED` rather than letting silence read as confidence.
+
+**Two indistinguishable arms are refused unless `--control` says so.** When both arms resolve to the
+same instrument — version, commit, dirty *and* closure digest — and run under the same environment,
+`ab` exits `ExitCode.ERROR` with `REFUSED: the two arms are indistinguishable`. Measured without that
+refusal, a same-bytes A/B publishes the machine's noise as a difference between builds. One build in
+two configurations (`--env-a X=1`, or an `--unset-b`) is a real A/B and is accepted; so is a
+`--control`, which declares the noise floor is what it is measuring.
 
 `ab` orchestrates and does not measure: capture, comparison and the per-command verdicts all belong to
 the facet and arrive as functions, so it works for facets that do not exist yet and cannot acquire an
@@ -240,31 +377,76 @@ is. Every capture is written through the normal store, under `<out>/ab-<stamp>/p
 per-pair directory is load-bearing, because two pairs of one arm share a coordinate and therefore a
 filename.
 
-## Which exit codes mean the run finished
+## The exit a run commits to
 
-A command declares its own, as `completedExitCodes`; absent means `[0]`. vat's convention is `0`
-success, `1` validation findings, `2` system error — so `validate`, `verify` and `resources-validate`
-accept `[0, 1]`, because a validator exiting 1 ran the whole corpus and merely had something to
-report at the end of it. Without that, those three were unmeasurable on any real project: every real
-project has findings, so every repeat "failed" and every row was poisoned. `audit` accepts `[0, 1]`
-for the same reason; `resources-scan` keeps the `[0]` default — it is documented as exiting 0
-whatever it finds.
+Every step carries ONE `ExitCommitment` (`harness/commands.ts`), of one of two kinds, and a
+repetition that exits outside it is a failed measurement. vat's convention is `0` success, `1`
+validation findings, `2` system error.
 
-Exit `2` is never accepted. That run did not complete, and its duration is the duration of giving
+- **`observed`** — the default for `<facet> run` and `<facet> ab`. A command may exit any code its
+  verb declares as a completed run: `0` alone, or `0` and `1` for a gate (`resources-validate`,
+  `audit`, `validate`, `verify`, `skills-validate` and their `-ci` spellings). So a bare run over a
+  real project with findings measures, as it always has.
+- **`exact`** — one committed code. Every step of `perf arms` is `exact` (`0` unless
+  `--expect-exit <build>:<sequence>:<step>=<code>` says otherwise: a CI step has one committed
+  outcome), and `--expect-exit <command>=<code>` makes a command of `run`/`ab` `exact`.
+
+Whatever the kind, every repetition must exit ALIKE (`summarizeRepeatFailures`): a set where one
+repeat exited `0` and another `1` did two different amounts of work, and a median over it describes
+neither. Every report records each measured step's commitment and its outcome (the envelope's
+`exits`; an arms report's per-arm `exits`): `shared` with the `code` every repetition exited,
+`not-run` when no repetition ran the step (never reached, or its process never started: `ENOENT`,
+`E2BIG`, an unresolvable command), `killed` when its process started in every repetition and was
+killed with no code (a timeout, a signal, `ENOBUFS`), or `disagreed` when they did different
+things, with `seen` listing each distinct one (a code, `killed`, `not-run`). An expectation naming a command the run
+does not measure is refused rather than silently leaving the default in force, and so is a code
+outside `0`–`255`.
+
+Exit `2` is never committed, and no verb declares it completed. That run did not complete, and its duration is the duration of giving
 up — fast enough that timing it reads as an improvement.
 
-Two rules then apply to a row's repeats, in `summarizeRepeatFailures`, shared so both facets phrase
-them alike: **any failure poisons the whole row**, and **the accepted codes must be uniform across
-the repeats**. The second is what stops a set where one repeat exited 0 and another exited 1 from
-being averaged: both completed, but they did different amounts of work, and a median over the mixture
-describes neither.
+This is a `perf`/`io` question ("is this duration worth trusting?"), not the `verdict` facet's.
+`harness/outcome.ts`'s `runOutcome` has no committed exit and no accept list: every exit code
+a run produces — `2` included — comes back `{ kind: 'exited', exitCode }`, because a verdict
+measures what vat DECIDED, a refusal among those decisions. Only a process that never produced an
+exit code at all comes back `{ kind: 'not-run' }`.
+
+One rule then applies to a row's repeats, in `summarizeRepeatFailures`, shared so every facet
+phrases it alike: **any failure poisons the whole row**.
 
 ## Two properties the harness must preserve
 
-**Env injection must reach the child.** The I/O facet works by `NODE_OPTIONS=--require`, and the
-preload propagates to descendants automatically, so any node process vat spawns records its own PID.
-The harness must not clobber `env` when spawning, or the facet silently measures less than the
-command did.
+**Each arm's environment: inherited, then cleared, then the arm's own.** A child's environment is
+`process.env` minus `ARM_OWNED_ENV_KEYS`, minus every inherited `VAT_*` name and the names git
+exports into a hook, minus — for a VAT step — the temp, XDG, Claude, git-config, git-template and
+exec-path state in `CLEARED_ENV_NAMES` and every inherited `npm_config_*` (any case) but the
+network allow list (`NPM_NETWORK`: registry, proxies, CA, `strict-ssl`), then the arm
+directories' variables (which include `GIT_CONFIG_NOSYSTEM=1` and `GIT_ATTR_NOSYSTEM=1`), then the
+arm's `unset` and `set` ([`harness/arm-env.ts`](../src/harness/arm-env.ts),
+[`harness/arm-dirs.ts`](../src/harness/arm-dirs.ts)). A tool step (`pnpm install`, a build) loses
+only the `VAT_*` and hook-git names: pnpm needs the real `~/.npmrc`. One input stays outside every
+arm: the machine-level Claude managed-settings policy, read from a fixed system path no variable
+redirects — the same file for every arm on one machine, so consistent across arms, not isolated. Each report records both lists of names the arm's steps went without, and the names of the npm network settings they kept (`npmNetworkEnv`). Every `RunOptions` and `CaptureRequest` carries
+this `ArmEnvironment` as a **required** field — `EMPTY_ARM_ENVIRONMENT` when the arm sets nothing —
+because an optional environment is a seam whose omission compiles, and the omission is the leak.
+
+- **Inherited, because injection must reach the child.** The I/O facet works by
+  `NODE_OPTIONS=--require`, and the preload propagates to descendants automatically, so any node
+  process vat spawns records its own PID. The harness must not clobber `env` when spawning, or the
+  facet silently measures less than the command did. It reads the base `NODE_OPTIONS` from the
+  environment the child will actually get, so an arm that unsets it is honoured.
+- **Except the arm-owned keys** — `VAT_BIN`, `VAT_ROOT_DIR`, `VAT_TEST_ROOT`, `VAT_CONTEXT`,
+  `VAT_CONTEXT_PATH`: exactly the variables the CLI wrapper (`packages/cli/src/bin/vat.ts`) reads to
+  decide *which* vat runs, minus its diagnostic `VAT_DEBUG`. They are never inherited, only set.
+  A `VAT_BIN` exported in the operator's shell would otherwise reach both arms of an A/B and make
+  them one build measured twice. `arm-env.test.ts` derives the wrapper's set from its source, so a
+  resolution variable the wrapper gains reds the lab until the lab owns it too.
+- **`unset` removes what an arm must run without** (a user-level config override such as
+  `XDG_DATA_HOME`). It cannot name a variable the arm's directories own — `--unset CLAUDE_CONFIG_DIR`
+  is refused, because every arm already points it at its own empty home. Unset is not absent: `sameArmEnvironment` counts it, and `ab` prints it as `-KEY` in the arm's
+  `Config` line. A key both set and unset is refused before anything runs.
+- **Flags.** `run` takes `--env K=V` and `--unset K` (repeatable); `ab` takes them per arm as
+  `--env-a`/`--env-b` and `--unset-a`/`--unset-b`.
 
 ⚠️ **A one-PID report is not a symptom.** `tree:` and `dist:` resolve `packages/cli/dist/bin.js` and
 refuse the context-detecting wrapper, so the measured vat does its work in a single process — the

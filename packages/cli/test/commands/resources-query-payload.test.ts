@@ -1,5 +1,5 @@
 /**
- * `vat resources query`'s two pure pieces: the document it emits, and the
+ * `vat resources query`'s two pure pieces: the report it publishes, and the
  * message it substitutes for an engine-level refusal.
  *
  * Both are exported for this reason and no other — the command itself spawns a
@@ -8,14 +8,25 @@
  * shown. These are pure: no file system, no clock, no exit.
  */
 
-import { PROJECTION_TABLES } from '@vibe-agent-toolkit/resources';
+import { PROJECTION_STATEMENT_REFUSED_CODE, PROJECTION_TABLES, allDerivedSpecs } from '@vibe-agent-toolkit/resources';
+import { VatError } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import {
-  buildProjectionQueryOutputData,
+  RESOURCES_QUERY_REPORT_SCHEMA,
+  type ResourcesQueryReport,
+} from '../../src/commands/resources/query-schema.js';
+import {
+  buildProjectionQueryReport,
   type ProjectionQueryPayloadInput,
 } from '../../src/commands/resources/query.js';
-import { describeQueryFailure } from '../../src/utils/projection-query.js';
+import { refusalCodeOf } from '../../src/utils/command-refusal.js';
+import { describedFailure, describeQueryFailure, refusedStatement } from '../../src/utils/projection-query.js';
+
+/** Every derived relation absent, as in a run whose statements named none of them. */
+const NONE_EVALUATED: ReadonlySet<string> = new Set(allDerivedSpecs().map((spec) => spec.name));
+/** Nothing absent: the compile probe, which carries every relation. */
+const ALL_PRESENT: ReadonlySet<string> = new Set();
 
 /** A stand-in for whatever a statement selected. Two rows, so a count of 1 cannot pass. */
 const ROWS: readonly Record<string, unknown>[] = [
@@ -24,163 +35,148 @@ const ROWS: readonly Record<string, unknown>[] = [
 ];
 
 /**
- * One document, with only the fields a given test is about stated.
+ * One report, with only the fields a given test is about stated.
  *
  * The defaults are deliberately unremarkable and deliberately DISTINCT from one
  * another: no two of them share a value, so a test that pins a field is pinning
  * that field rather than accidentally matching its neighbour. Overriding is how
- * a test says what it is about.
+ * a test says what it is about. Every report is parsed with the published
+ * schema, so a field the schema would refuse is red here, not only on stdout.
  */
-function payloadFor(
-  overrides: Partial<ProjectionQueryPayloadInput> = {},
-): Record<string, unknown> {
-  return buildProjectionQueryOutputData({
+function reportFor(overrides: Partial<ProjectionQueryPayloadInput> = {}): ResourcesQueryReport {
+  const report = buildProjectionQueryReport({
+    columns: ['path', 'headingCount'],
     rows: ROWS,
+    membersEnumerated: 7,
     root: '/corpus',
     population: 'derived',
+    lensPopulation: 'none',
     durationMs: 1060,
     populationMs: 190,
     lensMs: 27,
+    // Required on the input, and stated here rather than left to a test that
+    // happens to override it: a document built without it took the bounds
+    // helper's `includes` on `undefined`, which typecheck cannot catch because
+    // test files are not typechecked.
+    lensesEvaluated: [],
     ...overrides,
   });
+  RESOURCES_QUERY_REPORT_SCHEMA.parse(report);
+  return report;
 }
 
-describe('the query payload', () => {
+/** The report's own `data` — the query's part of the envelope. */
+function dataOf(overrides: Partial<ProjectionQueryPayloadInput> = {}): Record<string, unknown> {
+  return reportFor(overrides).data as unknown as Record<string, unknown>;
+}
+
+describe('the query report', () => {
+  it('counts the POPULATION as examined, so zero rows over a populated tree is ok', () => {
+    // 🔑 The denominator is what the statement ran OVER, never what it
+    // selected: "nothing matched" is an answer, and publishing it as a finding
+    // would fail every query whose honest answer is empty.
+    const report = reportFor({ rows: [], membersEnumerated: 7 });
+
+    expect(report.status).toBe('ok');
+    expect(report.examined).toBe(7);
+    expect(report.findings).toEqual([]);
+    expect((report.data as { rows: unknown[] }).rows).toStrictEqual([]);
+  });
+
+  it('publishes the columns even when the statement selected no row', () => {
+    // Rows alone cannot carry the shape of an empty answer.
+    expect(dataOf({ rows: [], columns: ['path'] })['columns']).toEqual(['path']);
+  });
+
+  it('reports where the lens population came from, beside the resources population', () => {
+    expect(dataOf({ lensPopulation: 'store' })['lensPopulation']).toBe('store');
+    expect(dataOf({ lensPopulation: 'derived' })['lensPopulation']).toBe('derived');
+    expect(dataOf({ lensPopulation: 'none' })['lensPopulation']).toBe('none');
+  });
+
   it('reports where its rows came from, which is the only cache tell there is', () => {
     // 🔑 The field this document exists to carry. A correct store hit and a
     // correct re-derivation produce byte-identical rows, so nothing in `rows`
     // can answer "did the cache work" — only this can, and only because the
     // command observes contributor records rather than inspecting the result.
-    const served = payloadFor({ population: 'store' });
-    const derived = payloadFor({ population: 'derived' });
+    const served = dataOf({ population: 'store' });
+    const derived = dataOf({ population: 'derived' });
 
     expect(served['population']).toBe('store');
     expect(derived['population']).toBe('derived');
-    // The discriminator: two documents that differ ONLY in the tell. If the
-    // field were dropped these would be equal, and this suite would be pinning
-    // a duration.
+    // The discriminator: two documents that differ ONLY in the tell.
     expect(served['population']).not.toBe(derived['population']);
   });
 
   it('says what the population cost, so the tell is a number and not just a label', () => {
-    // 🔑 The companion to `population`. Measured as this field on this
-    // repository with the parse cache warm, the two origins are 1.16-1.18 s
-    // derived against 0.29-0.31 s served, so a reader who is told only
-    // `population: store` has to take the saving on faith — and the saving is
-    // the entire reason the store exists. Reported in seconds, like every other
-    // duration in a vat document.
-    //
-    // ⚠️ The millisecond inputs below are STAND-INS chosen to serialize
-    // distinctly, not measurements. This builder is pure and never runs a
-    // population; what the real spread is belongs to the docstring above and to
-    // the system suite, which is the only place a real clock is involved.
-    const served = payloadFor({ population: 'store', populationMs: 294 });
-    const derived = payloadFor({ population: 'derived', populationMs: 1170 });
+    // 🔑 The companion to `population`. Measured on this repository with the
+    // parse cache warm, the two origins are 1.16-1.18 s derived against
+    // 0.29-0.31 s served, so a reader who is told only `population: store` has
+    // to take the saving on faith. The millisecond inputs below are STAND-INS
+    // chosen to serialize distinctly, not measurements.
+    const served = dataOf({ population: 'store', populationMs: 294 });
+    const derived = dataOf({ population: 'derived', populationMs: 1170 });
 
-    // 5e-11 windows: EXACTNESS assertions, not tolerances. 0.294 and 1.17 must
-    // stay distinguishable from each other and from the millisecond inputs.
+    // 5e-11 windows: EXACTNESS assertions, not tolerances.
     expect(served['populationSecs']).toBeCloseTo(0.294, 10);
     expect(derived['populationSecs']).toBeCloseTo(1.17, 10);
   });
 
   it('reports the population cost separately from the whole run', () => {
     // 🪤 The two are NOT the same number and must not be wired to the same
-    // input. `durationMs` is the wall time of the command; `populationMs` is the
-    // shared setup inside it, which is what a per-statement cost has to be read
-    // against. Defaults here are distinct so a swap of the two fields is red.
-    const payload = payloadFor({ durationMs: 1500, populationMs: 400 });
+    // input: the run's wall time is the envelope's `durationMs`; the population
+    // is the shared setup inside it.
+    const report = reportFor({ durationMs: 1500, populationMs: 400 });
 
-    expect(payload['durationSecs']).toBeCloseTo(1.5, 10);
-    expect(payload['populationSecs']).toBeCloseTo(0.4, 10);
+    expect(report.durationMs).toBe(1500);
+    expect((report.data as { populationSecs: number }).populationSecs).toBeCloseTo(0.4, 10);
   });
 
   it('keeps a sub-millisecond population non-zero', () => {
-    // 🔑 The whole reason the measurement is `performance.now()` and not
-    // `Date.now()`. A warm store population can land under a millisecond; a
-    // clock with millisecond granularity reports that as `0`, which reads as
-    // "not measured" rather than "very fast". `formatDurationSecs` is three
-    // SIGNIFICANT figures, so a fractional millisecond survives serialization.
-    const payload = payloadFor({ populationMs: 0.4 });
+    // 🔑 Why the measurement is `performance.now()`: a warm store population
+    // can land under a millisecond, and a rounded `0` reads as "not measured".
+    const data = dataOf({ populationMs: 0.4 });
 
-    // 5e-11 window: tight enough that a rounded-to-`0` value still reds, which
-    // is the whole point of the case. The `not.toBe(0)` below restates it.
-    expect(payload['populationSecs']).toBeCloseTo(0.0004, 10);
-    expect(payload['populationSecs']).not.toBe(0);
+    expect(data['populationSecs']).toBeCloseTo(0.0004, 10);
+    expect(data['populationSecs']).not.toBe(0);
   });
 
   it('publishes what the LENS cost, as a field of its own', () => {
-    // 🚨 `lensSecs` shipped on both verbs with NO test naming it: deleting
-    // either producing line left the whole suite green. An unconditional cost
-    // that nothing pins is one that can quietly disappear, and this field is
-    // the only evidence anyone would have if the lens ever grew expensive
-    // enough to deserve a flag.
-    //
-    // Distinct from `populationMs` in the fixture so wiring the two to one
-    // input is red rather than invisible.
-    const payload = payloadFor({ populationMs: 400, lensMs: 27 });
+    // 🚨 `lensSecs` once shipped with no test naming it. Distinct from
+    // `populationMs` in the fixture so wiring the two to one input is red.
+    const report = reportFor({ populationMs: 400, lensMs: 27 });
+    const data = report.data as { lensSecs: number; populationSecs: number };
 
-    expect(payload['lensSecs']).toBeCloseTo(0.027, 10);
-    expect(payload['populationSecs']).toBeCloseTo(0.4, 10);
-    // 🔑 The two spans are DISJOINT — the population clock stops before the
-    // lens runs. It shipped otherwise, with `populationSecs` silently
-    // containing `lensSecs` while three docstrings said it did not, so anyone
-    // adding them over-counted. Neither may exceed the run that contains both.
-    const total = (payload['populationSecs'] as number) + (payload['lensSecs'] as number);
-    expect(total).toBeLessThanOrEqual(payload['durationSecs'] as number);
+    expect(data.lensSecs).toBeCloseTo(0.027, 10);
+    expect(data.populationSecs).toBeCloseTo(0.4, 10);
+    // 🔑 The two spans are DISJOINT; neither may exceed the run containing both.
+    expect((data.populationSecs + data.lensSecs) * 1000).toBeLessThanOrEqual(report.durationMs ?? 0);
   });
 
   it('places the population cost immediately after the population origin', () => {
-    // This document is read by a human first and parsed second, and the pair
-    // only reads as a pair when the two fields are adjacent: "served — and here
-    // is what that saved you". Field ORDER is therefore part of the shape, not
-    // an accident of the object literal.
-    const keys = Object.keys(payloadFor());
+    // Field ORDER is part of the shape: the pair reads as a pair only adjacent.
+    const keys = Object.keys(dataOf());
 
-    expect(keys).toContain('population');
     expect(keys[keys.indexOf('population') + 1]).toBe('populationSecs');
   });
 
   it('publishes no `engine` field, because there is only one engine now', () => {
-    // ⚠️ A deliberate ABSENCE, pinned. An earlier version published
-    // `engine: sqlite | ephemeral` to say which database answered the SQL. It is
-    // gone because the answer is always the same: the statement runs against a
-    // per-run in-memory database holding this tree and nothing else, and the
-    // on-disk store is a population cache that is never queried.
-    //
-    // 🪤 This pin is about the DOCUMENT, and it must not be read as a guard on
-    // the defect the field used to describe. `buildProjectionQueryOutputData` is
-    // a pure record builder that never sees a database: pointing the SQL back at
-    // the store shared by every root on the machine would need no `engine` field
-    // and would leave this assertion green all the way through the regression.
-    //
-    // What can actually fail on that is the two-root system test — two corpora,
-    // ONE store directory, warmed from the corpus the question is not about
-    // (`test/system/resources-query.system.test.ts`). This one is kept because a
-    // re-added field is real drift in a shape consumers parse, which is the only
-    // claim a pure builder is entitled to make.
-    const payload = payloadFor();
+    // ⚠️ A deliberate ABSENCE, pinned. The statement always runs against a
+    // per-run in-memory database; the two-root system test is what can fail on
+    // the defect the old field described — this pins only the shape.
+    const data = dataOf();
 
-    expect(payload).not.toHaveProperty('engine');
-    expect(payload['population']).toBe('derived');
+    expect(data).not.toHaveProperty('engine');
+    expect(data['population']).toBe('derived');
   });
 
-  it('states the row count beside the rows', () => {
-    const payload = payloadFor({ durationMs: 5 });
+  it('publishes the rows and the root, and no second count beside `rows`', () => {
+    const data = dataOf();
 
-    expect(payload['status']).toBe('success');
-    expect(payload['rowCount']).toBe(2);
-    expect(payload['rows']).toBe(ROWS);
-    expect(payload['root']).toBe('/corpus');
-  });
-
-  it('reports a count of zero rather than omitting the count', () => {
-    // An empty result is an ANSWER — "nothing matched" — and a document that
-    // dropped the field would make it indistinguishable from a build too old to
-    // report one.
-    const payload = payloadFor({ rows: [], population: 'store', durationMs: 3 });
-
-    expect(payload['rowCount']).toBe(0);
-    expect(payload['rows']).toStrictEqual([]);
+    expect(data['rows']).toEqual(ROWS);
+    expect(data['root']).toBe('/corpus');
+    // `rows.length` is the count; a `rowCount` beside it is a second answer.
+    expect(data).not.toHaveProperty('rowCount');
   });
 });
 
@@ -193,22 +189,114 @@ describe('the failure message', () => {
     const message = describeQueryFailure(
       'SELECT contentHash FROM blobs',
       'no such column: contentHash',
+      NONE_EVALUATED,
     );
 
     expect(message).toContain('no such column: contentHash');
     expect(message).toContain(PROJECTION_TABLES.blobs.name);
     expect(message).toContain('contentKey');
-    // Only the table that was named — a listing of all twelve would bury it.
+    // Only the table that was named — a listing of all thirteen would bury it.
     expect(message).not.toContain(PROJECTION_TABLES.blobSections.name);
   });
 
   it('lists every table when the statement named none of them', () => {
-    const message = describeQueryFailure('SELECT * FROM nope', 'no such table: nope');
+    const message = describeQueryFailure('SELECT * FROM nope', 'no such table: nope', NONE_EVALUATED);
 
     expect(message).toContain('no such table: nope');
     for (const spec of Object.values(PROJECTION_TABLES)) {
       expect(message).toContain(spec.name);
     }
+  });
+
+  it.each([
+    ['edges', 'SELECT COUNT(*) FROM edges', 'no such table: edges'],
+    ['a schema-qualified spelling', 'SELECT COUNT(*) FROM main.edges', 'no such table: main.edges'],
+    ['another case', 'SELECT COUNT(*) FROM EDGES', 'no such table: EDGES'],
+  ])('explains a DERIVED relation missing as "not evaluated for this run": %s', (_what, sql, engine) => {
+    // 🚨 The run database has no table for a relation no lens filled, so this
+    // engine message is the refusal of an unevaluated relation — not a typo. A
+    // listing of "what you could have named" would include the very relation
+    // SQLite just said is missing, and read as a contradiction.
+    const message = describeQueryFailure(sql, engine, NONE_EVALUATED);
+
+    expect(message).toContain(engine);
+    expect(message).toMatch(/edges.*not evaluated for this run/s);
+    expect(message).toContain('Declare this statement');
+  });
+
+  it('names EVERY derived relation from the registry, not a hand-kept list', () => {
+    for (const spec of allDerivedSpecs()) {
+      expect(describeQueryFailure(`SELECT * FROM ${spec.name}`, `no such table: ${spec.name}`, NONE_EVALUATED))
+        .toContain('not evaluated for this run');
+    }
+  });
+
+  it('refuses a statement naming a REFUSED relation before it runs, with that lens\'s code and fix', () => {
+    // 🚨 Decided from the relations the statement NAMES, never from the engine's text: SQLite
+    // names only the FIRST missing table, so a typo beside `changed_files` used to hide the
+    // lens's refusal behind "no such table: typo_tbl" and a USAGE_INVALID that was not the fix.
+    const refusals = new Map([['changed_files', { refused: 'Pass --base <ref>.', refusal: 'INPUT_UNREADABLE' as const }]]);
+
+    const error = refusedStatement('SELECT t.x, c.path FROM typo_tbl t, changed_files c', refusals);
+
+    expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
+    expect(error?.message).toContain('could not be evaluated for this run: Pass --base <ref>.');
+    expect(error?.message).not.toContain('Declare this statement');
+  });
+
+  it('refuses nothing a statement does not name: a comment or a literal mentioning the relation is not a read', () => {
+    const refusals = new Map([['changed_files', { refused: 'Pass --base <ref>.', refusal: 'USAGE_INVALID' as const }]]);
+
+    expect(refusedStatement("SELECT 'changed_files' AS x -- changed_files", refusals)).toBeUndefined();
+    expect(refusedStatement('SELECT path FROM resource_realizations', refusals)).toBeUndefined();
+  });
+
+  it.each([
+    'SELECT COUNT(*) AS changed_files FROM resource_realizations',
+    'SELECT COUNT(*) as Changed_Files FROM resource_realizations',
+    'SELECT COUNT(*) AS "changed_files" FROM resource_realizations',
+    'SELECT COUNT(*) AS\n  [changed_files] FROM resource_realizations',
+  ])('refuses nothing for a column alias spelled like the relation: %s', (sql) => {
+    const refusals = new Map([['changed_files', { refused: 'Pass --base <ref>.', refusal: 'USAGE_INVALID' as const }]]);
+
+    expect(refusedStatement(sql, refusals)).toBeUndefined();
+  });
+
+  it.each([
+    ['opening a WITH', 'WITH changed_files AS (SELECT 1 AS path) SELECT path FROM changed_files'],
+    ['RECURSIVE, quoted and with a column list', 'with recursive "Changed_Files"(path) as (select 1) select path from changed_files'],
+    ['after another CTE', 'WITH a AS (SELECT 1), changed_files AS (SELECT 2 AS path) SELECT path FROM changed_files'],
+    ['MATERIALIZED', 'WITH changed_files AS NOT MATERIALIZED (SELECT 1 AS path) SELECT path FROM changed_files'],
+  ])('refuses a CTE named changed_files, %s, as a reserved name — never with the --base remedy', (_what, sql) => {
+    // With or without a base: the name is the relation's, so the CTE either shadows it or trips its refusal.
+    for (const refusals of [new Map(), new Map([['changed_files', { refused: 'Pass --base <ref>.', refusal: 'USAGE_INVALID' as const }]])]) {
+      const error = refusedStatement(sql, refusals);
+
+      expect(refusalCodeOf(error)).toBe('USAGE_INVALID');
+      expect(error?.message).toBe('`changed_files` is a reserved relation name; rename the CTE.');
+    }
+  });
+
+  it('refuses no CTE of another name, nor a statement that only mentions one in a literal', () => {
+    expect(refusedStatement('WITH changes AS (SELECT path FROM resource_realizations) SELECT path FROM changes', new Map())).toBeUndefined();
+    expect(refusedStatement("SELECT 'WITH changed_files AS (' AS x FROM resource_realizations", new Map())).toBeUndefined();
+  });
+
+  it('still refuses a statement that reads the relation beside an alias of the same name', () => {
+    const refusals = new Map([['changed_files', { refused: 'Pass --base <ref>.', refusal: 'USAGE_INVALID' as const }]]);
+
+    expect(refusalCodeOf(refusedStatement('SELECT COUNT(*) AS changed_files FROM changed_files', refusals))).toBe('USAGE_INVALID');
+  });
+
+  it('keeps a statement failure\'s own code and never reads a code out of the engine\'s text', () => {
+    const engine = new VatError(PROJECTION_STATEMENT_REFUSED_CODE, 'no such table: changed_files');
+
+    expect(refusalCodeOf(describedFailure('SELECT path FROM changed_files', engine, ALL_PRESENT))).toBe('USAGE_INVALID');
+  });
+
+  it('does not call a missing PROJECTION table unevaluated', () => {
+    expect(describeQueryFailure('SELECT * FROM edgesx', 'no such table: edgesx', NONE_EVALUATED))
+      .not.toContain('not evaluated');
   });
 
   it('leaves a refusal that is not about a name exactly as the engine phrased it', () => {
@@ -220,6 +308,7 @@ describe('the failure message', () => {
     const write = describeQueryFailure(
       'DELETE FROM blobs',
       'attempt to write a readonly database',
+      NONE_EVALUATED,
     );
 
     expect(write).toBe('attempt to write a readonly database');

@@ -65,8 +65,9 @@ Derivation:
   A marketplace, an OKF bundle and an MCP server are emitted ONLY when the
   author supplies \`ard.entries."<kind>:<name>".type\`; the specification names
   no media type for any of them, and VAT does not guess. Skipped surfaces are
-  reported on stderr — including a \`skills.config\` key that discovery does not
-  find, which is never advertised.
+  findings — including a \`skills.config\` key that discovery does not find,
+  which is never advertised — on stderr under every format, and in the report
+  under \`--format json\`.
 
   \`ard.entries\` is keyed by "<kind>:<name>" — skills, marketplaces and OKF
   bundles are independent key spaces, so a bare name that matches two of them
@@ -83,16 +84,23 @@ Requirements:
                  \`data\` and emission fails.
 
 Exit Codes:
-  0 - Manifest written — INCLUDING one that advertises nothing. An empty
-      \`entries\` list is a legal ARD document, and skipped surfaces are reported
-      on stderr at this exit code. Gate on \`--format json\` (the report
-      envelope: \`examined\`, \`findings\`, \`summary\`, \`data.entryCount\`,
-      \`data.skippedCount\`; schema: packages/cli/schemas/ard-emit.json), or
-      make both conditions fail with \`--strict\`
-  1 - No \`ard:\` block in the config, or a surface could not be derived. Under
-      \`--strict\`, also an empty manifest or a skipped surface
-  2 - System error (no project root, no config file, invalid config, unexpected
-      internal failure)
+  0 - Manifest written over at least one configured surface. Skipped surfaces
+      are findings at this exit code (on stderr too). Gate on \`--format json\` (the
+      report envelope: \`examined\`, \`findings\`, \`summary\`, \`gate\`,
+      \`data.entryCount\`, \`data.skippedCount\`; schema:
+      packages/cli/schemas/ard-emit.json), or make skips fail with \`--strict\`
+  1 - No \`ard:\` block, or a surface that could not be derived — each an
+      error-severity finding about the PROJECT (ARD_NOT_CONFIGURED,
+      ARD_DERIVATION_FAILED), with \`data.outputPath\` null as nothing was
+      written. An \`ard:\` block that reaches no surface at all examined
+      nothing, and is refused (RESOURCE_CHECK_BROKEN). Under \`--strict\`, also
+      an empty manifest or a skipped surface (ARD_STRICT_REFUSED). The code is
+      derived from the published report, never chosen beside it
+  2 - The command could not do its job; \`error.code\` says which: USAGE_INVALID
+      (no such project root), CONFIG_INVALID (no config file, or one that does
+      not parse), INPUT_UNREADABLE (a config the OS will not read),
+      RUN_INCOMPLETE (the OS refused the --output write), INTERNAL_ERROR (a
+      VAT defect)
 
 Example:
   $ vat ard emit --format json --strict

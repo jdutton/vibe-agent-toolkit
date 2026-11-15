@@ -52,6 +52,7 @@ import {
   type TierPassStats,
   mergeParseDumps,
   PARSE_TIMING_DIR_ENV,
+  ParseDumpSchema,
   type ParseDump,
   type ParseDumpKind,
   type ParseDumpPass,
@@ -134,6 +135,7 @@ function thread(over: Partial<ParseThreadDump> = {}): ParseThreadDump {
     cache: { hits: 0, misses: 10 },
     kinds: [markdownGroup(), emptyHtmlGroup()],
     tier: [],
+    reuseHeap: { settledMibTotal: 0, settledMibMax: 0 },
     ...over,
   };
 }
@@ -559,6 +561,34 @@ describe('mergeParseDumps — the tier, and which thread paid for it', () => {
     expect(merged.workerThreads).toBe(2);
   });
 
+  it('sums the heap reused-thread checks settled to across processes, and keeps the largest', () => {
+    const merged = mergeParseDumps([
+      dump(1, { reuseHeap: { settledMibTotal: 30, settledMibMax: 12 } }),
+      dump(2, { reuseHeap: { settledMibTotal: 10, settledMibMax: 9 } }),
+    ]);
+
+    expect(merged.reuseHeap).toEqual({ settledMibTotal: 40, settledMibMax: 12 });
+  });
+
+  it('reads a dump from a build that predates the reused-thread check, and reports its heap as not measured', () => {
+    // 0.2.0-rc.14 and earlier wrote no `reuseHeap`: their dumps stay readable, and say nothing about it.
+    const { threadId, cache, kinds, tier } = thread();
+    const read = ParseDumpSchema.safeParse({ pid: 1, process: DEFAULT_LIFETIME, threads: [{ threadId, cache, kinds, tier }] });
+
+    expect(read.success).toBe(true);
+    expect(mergeParseDumps([read.data as ParseDump]).reuseHeap).toBeNull();
+  });
+
+  it('reports the reused-thread heap once any thread of the run reported it, a zero included', () => {
+    const { threadId, cache, kinds, tier } = thread();
+    const merged = mergeParseDumps([
+      { pid: 1, process: DEFAULT_LIFETIME, threads: [{ threadId, cache, kinds, tier, reuseHeap: null }] },
+      dump(2, { reuseHeap: { settledMibTotal: 0, settledMibMax: 0 } }),
+    ]);
+
+    expect(merged.reuseHeap).toEqual({ settledMibTotal: 0, settledMibMax: 0 });
+  });
+
   it('counts every thread as a main thread when the run had no workers', () => {
     // Two PROCESSES, each a main thread and nothing else. The contrast case for
     // the one above — three thread records either way, completely different run.
@@ -608,6 +638,7 @@ describe('attributionOf — the states that all look like zero', () => {
       workerThreads: 0,
       kinds: [],
       tier: [],
+      reuseHeap: { settledMibTotal: 0, settledMibMax: 0 },
       documents,
       bytes: 0,
       cacheHits: hits,
@@ -959,6 +990,14 @@ describe('ParseBodySchema', () => {
   it('accepts a well-formed body', () => {
     const parsed = ParseBodySchema.safeParse(parseBody([parseCommand()]));
     expect(parsed.success ? null : parsed.error.message).toBeNull();
+  });
+
+  it('reads a report written before the reused-thread heap was reported, as not measured', () => {
+    const older: Record<string, unknown> = { ...parseCommand() };
+    delete older['reuseHeap'];
+    const parsed = ParseBodySchema.safeParse({ commands: [older], load: parseBody([]).load });
+
+    expect(parsed.success ? parsed.data.commands[0]?.reuseHeap : parsed.error.message).toBeNull();
   });
 
   it('accepts a negative unattributed remainder', () => {

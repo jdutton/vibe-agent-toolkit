@@ -13,6 +13,8 @@ describe('packagingConfigToPackageOptions', () => {
     const out = packagingConfigToPackageOptions({}, anchors, [], conventionalSuiteProbe());
     expect(out).toMatchObject({
       outputPath: '/repo/dist/skills/x',
+      // The lanes converting through here own their build directory: a previous build is replaced.
+      replaceExistingOutput: true,
       formats: ['directory'],
       rewriteLinks: true,
       basePath: dirname(anchors.skillPath),

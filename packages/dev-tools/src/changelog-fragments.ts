@@ -2,10 +2,7 @@
  * Changelog fragments: one `.changes/<topic>.md` per branch or topic, folded
  * into `CHANGELOG.md` by the stable version bump.
  *
- * Every branch used to edit the same `## [Unreleased]` block of one 900-line
- * file, so every rebase conflicted there and the conflict was resolved by
- * hand — the trap being that "keep ours" silently drops what theirs added. A
- * fragment is a file only its branch touches: no two branches conflict on it,
+ * A fragment is a file only its branch touches: no two branches conflict on it,
  * and `bump-version <stable>` is the one place they meet, appending each
  * fragment's bullets under the matching `### Section` of the new version
  * heading and deleting the fragment.
@@ -147,7 +144,7 @@ export function listFragmentFiles(repoRoot: string): string[] {
     const dir = safePath.join(repoRoot, CHANGES_DIR);
     return readdirSync(dir, { withFileTypes: true })
       // Followed: a linked fragment is a fragment.
-      .filter((entry) => direntKindFollowingSync(dir, entry) === 'file' && entry.name.endsWith('.md') && entry.name !== 'README.md')
+      .filter((entry) => direntKindFollowingSync(dir, entry, dir) === 'file' && entry.name.endsWith('.md') && entry.name !== 'README.md')
       .map((entry) => `${CHANGES_DIR}/${entry.name}`)
       .sort((a, b) => a.localeCompare(b));
   } catch (error) {

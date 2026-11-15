@@ -13,6 +13,7 @@ export {
   PathEscapesRootError,
   safePath,
   toForwardSlash,
+  toForwardSlashAnyPlatform,
   toNfc,
   isAbsolutePath,
   isAbsoluteAnyPlatform,

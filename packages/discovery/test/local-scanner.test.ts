@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { setupSyncTempDirSuite, withReaddirSyncRefused } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
@@ -32,10 +33,33 @@ describe('scan', () => {
     expect(result.results[0]?.path).toBe(skillPath);
   });
 
+  // A path under a directory without search permission is not absent — the OS
+  // refused to look. `existsSync` answers false there, which used to become
+  // "Path does not exist" and send the reader hunting for a typo.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'reports a root under an untraversable directory as unreadable, not as nonexistent',
+    async () => {
+      const locked = safePath.join(tempDir, 'locked');
+      mkdirSyncReal(safePath.join(locked, 'skills'), { recursive: true });
+      fs.chmodSync(locked, 0o000);
+      try {
+        const failure = await scan({ path: safePath.join(locked, 'skills') }).then(
+          () => undefined,
+          (error: unknown) => error as NodeJS.ErrnoException,
+        );
+        expect(failure?.message).not.toMatch(/does not exist/);
+        expect(failure?.message).toMatch(/cannot be read \(EACCES\)/);
+        expect((failure?.cause as NodeJS.ErrnoException | undefined)?.code).toBe('EACCES');
+      } finally {
+        fs.chmodSync(locked, 0o755);
+      }
+    },
+  );
+
   it('should scan directory non-recursively', async () => {
     fs.writeFileSync(safePath.join(tempDir, 'SKILL.md'), '# Skill');
     fs.writeFileSync(safePath.join(tempDir, 'README.md'), '# Readme');
-    fs.mkdirSync(safePath.join(tempDir, 'sub'));
+    mkdirSyncReal(safePath.join(tempDir, 'sub'));
     fs.writeFileSync(safePath.join(tempDir, 'sub', 'agent.yaml'), 'name: test');
 
     const result = await scan({ path: tempDir, recursive: false });
@@ -47,14 +71,14 @@ describe('scan', () => {
 
   it('should scan directory recursively', async () => {
     fs.writeFileSync(safePath.join(tempDir, 'SKILL.md'), '# Skill');
-    fs.mkdirSync(safePath.join(tempDir, 'sub'));
+    mkdirSyncReal(safePath.join(tempDir, 'sub'));
     fs.writeFileSync(safePath.join(tempDir, 'sub', 'agent.yaml'), 'name: test');
 
     const result = await scan({ path: tempDir, recursive: true });
 
     expect(result.totalScanned).toBe(2);
     expect(result.byFormat['agent-skill']).toBe(1);
-    expect(result.byFormat['vat-agent']).toBe(1);
+    expect(result.byFormat['unknown']).toBe(1);
   });
 
   it('should respect include patterns', async () => {
@@ -71,7 +95,7 @@ describe('scan', () => {
   });
 
   it('should respect exclude patterns', async () => {
-    fs.mkdirSync(safePath.join(tempDir, 'node_modules'));
+    mkdirSyncReal(safePath.join(tempDir, 'node_modules'));
     fs.writeFileSync(safePath.join(tempDir, 'README.md'), '# Readme');
     fs.writeFileSync(safePath.join(tempDir, 'node_modules', 'pkg.md'), '# Pkg');
 
@@ -93,7 +117,7 @@ describe('scan', () => {
     spawnSync(gitPath, ['config', 'user.name', 'Test User'], { cwd: tempDir, stdio: 'pipe' });
 
     fs.writeFileSync(safePath.join(tempDir, '.gitignore'), 'dist/\n');
-    fs.mkdirSync(safePath.join(tempDir, 'dist'));
+    mkdirSyncReal(safePath.join(tempDir, 'dist'));
     fs.writeFileSync(safePath.join(tempDir, 'dist', 'SKILL.md'), '# Built');
     fs.writeFileSync(safePath.join(tempDir, 'SKILL.md'), '# Source');
 
@@ -118,10 +142,10 @@ describe('scan', () => {
   // root-owned plugin dir). The refusal is a `readdirSync` spy so it runs on
   // every platform and as root.
   it('reports a directory it could not list beside the skills it could', async () => {
-    fs.mkdirSync(safePath.join(tempDir, 'open'), { recursive: true });
+    mkdirSyncReal(safePath.join(tempDir, 'open'), { recursive: true });
     fs.writeFileSync(safePath.join(tempDir, 'open', 'SKILL.md'), '# Open');
     const locked = safePath.join(tempDir, 'locked');
-    fs.mkdirSync(locked, { recursive: true });
+    mkdirSyncReal(locked, { recursive: true });
     fs.writeFileSync(safePath.join(locked, 'SKILL.md'), '# Locked');
 
     const result = await withReaddirSyncRefused(locked, 'EACCES', () =>
@@ -141,7 +165,7 @@ describe('scan', () => {
   });
 
   it('discovers a skill inside a dot-directory', async () => {
-    fs.mkdirSync(safePath.join(tempDir, '.claude', 'skills', 'house'), { recursive: true });
+    mkdirSyncReal(safePath.join(tempDir, '.claude', 'skills', 'house'), { recursive: true });
     fs.writeFileSync(safePath.join(tempDir, '.claude', 'skills', 'house', 'SKILL.md'), '# House');
 
     const result = await scan({ path: tempDir, recursive: true, include: ['**/SKILL.md'] });

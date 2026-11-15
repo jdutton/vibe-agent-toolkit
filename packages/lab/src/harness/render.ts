@@ -22,11 +22,18 @@ import type {
   SubjectVersion,
 } from '../envelope/coordinate.js';
 
-import type { CountDelta, MsDelta } from './delta.js';
+import type { CountDelta, MagnitudeDelta } from './delta.js';
 import type { LoadReadings } from './types.js';
 
 /** How many characters of a hash identify it in a header. */
 export const SHORT_HASH = 8;
+
+/**
+ * How much of a closure digest a header prints — longer than a commit's
+ * {@link SHORT_HASH}, because a closure has no history to disambiguate it and
+ * the header is where two arms are told apart by eye.
+ */
+const CLOSURE_LABEL_LENGTH = 12;
 
 /** Decimal places for a millisecond figure. */
 const MS_PRECISION = 1;
@@ -94,7 +101,7 @@ export function share(value: number, total: number): string {
  * @param value - The pair and its difference
  * @returns `921.6ms -> 812.0ms (-109.6ms)`
  */
-export function msPair(value: MsDelta): string {
+export function msPair(value: MagnitudeDelta): string {
   return `${ms(value.before)} -> ${ms(value.after)} (${signedMs(value.delta)})`;
 }
 
@@ -105,7 +112,7 @@ export function msPair(value: MsDelta): string {
  * @param value - The pair and its difference
  * @returns `total 921.6ms -> 812.0ms (-109.6ms)`
  */
-export function msMovement(label: string, value: MsDelta): string {
+export function msMovement(label: string, value: MagnitudeDelta): string {
   return `${label} ${msPair(value)}`;
 }
 
@@ -154,6 +161,10 @@ export function versionLabel(version: SubjectVersion): string {
 /**
  * Name an instrument build for a header.
  *
+ * The closure digest's first {@link CLOSURE_LABEL_LENGTH} hex characters ride
+ * along: for a `dist:` arm it is the ONLY thing on the line that tells two
+ * builds of one version apart.
+ *
  * A dirty instrument says so in the same words the subject line uses, and for
  * the same reason: the bytes that ran were not the bytes at that commit, so the
  * commit alone is a claim the report cannot support. Rendering the two axes
@@ -166,7 +177,7 @@ export function versionLabel(version: SubjectVersion): string {
 export function instrumentLabel(instrument: InstrumentVersion): string {
   const build = instrument.commit === null ? 'released' : instrument.commit.slice(0, SHORT_HASH);
   const dirty = instrument.dirty === true ? ', DIRTY working tree' : '';
-  return `vat ${instrument.version} (${build}${dirty})`;
+  return `vat ${instrument.version} (${build}${dirty}, closure ${instrument.closure.slice(0, CLOSURE_LABEL_LENGTH)})`;
 }
 
 /**
@@ -214,14 +225,15 @@ function sidesWhere(
  * legitimate thing to run during development, and forbidding it would forbid the
  * commonest use of the tool:
  *
- * - **A dirty arm.** Its `commit` names bytes that did not run. Nothing cheap
- *   identifies what did (see {@link InstrumentVersion.dirty}), so two dirty arms
- *   at one commit compare *equal* on axis C — this note is the only thing
- *   standing between that and a reader concluding the instrument was held still.
- * - **An arm with no commit at all** — a `dist:` path or an `npx:` spec. Two
- *   such arms carrying the same version are indistinguishable to `movedAxes`,
- *   which will report that *no* axis moved for what is genuinely a two-build
- *   comparison.
+ * - **A dirty arm.** Its `commit` names bytes that did not run. Only the
+ *   closure digest identifies what did (see {@link InstrumentVersion.closure}),
+ *   and no commit can be quoted for it — so the result is never a
+ *   commit-to-commit one, and this note is what keeps a reader from reading it
+ *   as one.
+ * - **An arm with no commit at all** — a `dist:` path or an `npx:` spec. Its
+ *   source provenance is unknown. A `dist:` arm's bytes are still pinned by its
+ *   closure digest (which `movedAxes` compares); an `npx:` arm by its pinned
+ *   version and its install's closure digest.
  *
  * @param before - The baseline instrument
  * @param after - The instrument compared against it
@@ -237,8 +249,8 @@ export function instrumentTrustNotes(
   if (dirty !== null) {
     notes.push(
       `⚠ INSTRUMENT NOT PINNED — ${dirty} built from a DIRTY working tree. The commit in the ` +
-        'header names bytes that did not run, so this is NOT a commit-to-commit result. Nothing ' +
-        'identifies a dirty build, so two dirty arms at one commit are indistinguishable here.',
+        'header names bytes that did not run, so this is NOT a commit-to-commit result. Only the ' +
+        'closure digest identifies a dirty build, and no commit reproduces it.',
     );
   }
   if (before.dirty !== after.dirty) {
@@ -253,8 +265,8 @@ export function instrumentTrustNotes(
   if (unpinned !== null) {
     notes.push(
       `⚠ NO COMMIT ON ${unpinned.toUpperCase()} — a dist: path or an npx: spec carries no ` +
-        'provenance, so two such arms at one version look identical to the axis check and it ' +
-        'will report that nothing moved. Prefer tree: when you have a checkout.',
+        'source provenance: a dist: arm is identified only by its closure digest, an npx: arm ' +
+        'by its version and the closure digest of its install. Prefer tree: when you have a checkout.',
     );
   }
 

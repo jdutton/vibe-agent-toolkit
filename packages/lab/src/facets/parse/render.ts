@@ -387,7 +387,7 @@ function tierLine(row: TierRowStats): string {
 function tierLines(row: ParseCommandStats): readonly string[] {
   const charged = row.tier.filter((pass) => pass.calls > 0);
   if (charged.length === 0) {
-    // Every row at zero. Printing eight `0.0ms` lines would read as "the tier is
+    // Every row at zero. Printing a `0.0ms` line per tier pass would read as "the tier is
     // free", which is the same lie a zeroed parser kind tells one level up — and
     // here it usually means the measured build has no tier seam at all.
     return [];
@@ -397,6 +397,26 @@ function tierLines(row: ParseCommandStats): readonly string[] {
       `${counted(row.mainThreads, 'main thread')} and ` +
       `${counted(row.workerThreads, 'parse worker thread')}:`,
     ...charged.map((pass) => tierLine(pass)),
+    ...reuseHeapLines(row),
+  ];
+}
+
+/**
+ * The heap the parse pool's reused-thread checks settled to, as a mean over the checks the
+ * `reuse-check` row counts, and the largest — the figure the reused-thread bound is judged against.
+ *
+ * @param row - The command's statistics
+ * @returns One line, or nothing when no reused thread was checked; `not measured` when the
+ *   instrument reported no reused-thread heap at all (a build that predates the check)
+ */
+function reuseHeapLines(row: ParseCommandStats): readonly string[] {
+  const label = '        reused-thread heap as its job started: ';
+  if (row.reuseHeap === null) return [`${label}not measured (this instrument does not report it)`];
+  const checks = row.tier.find((pass) => pass.pass === 'reuse-check')?.calls ?? 0;
+  if (checks === 0) return [];
+  const mean = row.reuseHeap.settledMibTotal / checks;
+  return [
+    `${label}${mean.toFixed(1)} MiB mean, ${row.reuseHeap.settledMibMax.toFixed(1)} MiB max, over ${tally(checks)} checks`,
   ];
 }
 

@@ -17,14 +17,14 @@ describe('resolvePluginChangelogPath', () => {
     mkdirSyncReal(safePath.join(sourceDir, 'docs'), { recursive: true });
     writeFileSync(customPath, '# Changes\n');
 
-    const result = resolvePluginChangelogPath(sourceDir, { changelog: 'docs/CHANGES.md' });
+    const result = resolvePluginChangelogPath(sourceDir, { changelog: 'docs/CHANGES.md' }, sourceDir);
     expect(result).toBe(customPath);
   });
 
   it('returns undefined when config-supplied path does not exist', () => {
     const sourceDir = createTempDir();
 
-    const result = resolvePluginChangelogPath(sourceDir, { changelog: 'missing/CHANGES.md' });
+    const result = resolvePluginChangelogPath(sourceDir, { changelog: 'missing/CHANGES.md' }, sourceDir);
     expect(result).toBeUndefined();
   });
 
@@ -33,14 +33,14 @@ describe('resolvePluginChangelogPath', () => {
     const defaultPath = safePath.join(sourceDir, 'CHANGELOG.md');
     writeFileSync(defaultPath, '# Changelog\n');
 
-    const result = resolvePluginChangelogPath(sourceDir, {});
+    const result = resolvePluginChangelogPath(sourceDir, {}, sourceDir);
     expect(result).toBe(defaultPath);
   });
 
   it('returns undefined when no CHANGELOG.md exists and no config provided', () => {
     const sourceDir = createTempDir();
 
-    const result = resolvePluginChangelogPath(sourceDir, {});
+    const result = resolvePluginChangelogPath(sourceDir, {}, sourceDir);
     expect(result).toBeUndefined();
   });
 
@@ -49,7 +49,7 @@ describe('resolvePluginChangelogPath', () => {
     const defaultPath = safePath.join(sourceDir, 'CHANGELOG.md');
     writeFileSync(defaultPath, '# Changelog\n');
 
-    const result = resolvePluginChangelogPath(sourceDir, { changelog: '' });
+    const result = resolvePluginChangelogPath(sourceDir, { changelog: '' }, sourceDir);
     expect(result).toBe(defaultPath);
   });
 });

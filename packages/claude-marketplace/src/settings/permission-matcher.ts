@@ -122,7 +122,7 @@
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import { relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { relativeEscapesRoot, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 import { collapseParentSegments, compilePathPattern, matchesPathPattern, witnessOf } from './path-pattern.js';
 
@@ -1465,12 +1465,14 @@ function splitPathPrefix(spelling: string, cwd: string): { root: string; rest: s
  * `platform` is Node's `path` for the platform to answer for. Production
  * passes `path`; the suite passes `path.win32` so the cross-drive case is
  * pinned on the CI legs that are not Windows. Every result is forward-slashed
- * here, which is the guarantee `safePath` exists to give and the reason the
- * raw `relative`/`resolve` are reached through a parameter rather than
- * through it: `safePath` is bound to the host platform.
+ * here, by `platform`'s OWN separator rather than the host's — which is the
+ * guarantee `safePath` exists to give and the reason the raw
+ * `relative`/`resolve` are reached through a parameter: `safePath` is bound to
+ * the host platform.
  */
 export function relativePathUnderRoot(root: string, filePath: string, platform: typeof path): string | undefined {
-  const relative = toForwardSlash(platform.relative(root, platform.resolve(root, filePath)));
+  const native = platform.relative(root, platform.resolve(root, filePath));
+  const relative = platform.sep === '\\' ? toForwardSlashAnyPlatform(native) : native;
   if (relativeEscapesRoot(relative)) return undefined;
   return relative;
 }

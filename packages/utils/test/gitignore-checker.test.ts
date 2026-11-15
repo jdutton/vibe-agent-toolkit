@@ -39,7 +39,7 @@ describe('gitignore-checker', () => {
 
     it('should find git root in parent directory', () => {
       const subDir = safePath.join(gitRoot, 'subdir');
-      fs.mkdirSync(subDir);
+      mkdirSyncReal(subDir);
 
       const result = gitFindRoot(subDir);
       expect(result).toBe(gitRoot);
@@ -47,7 +47,7 @@ describe('gitignore-checker', () => {
 
     it('should find git root in deeply nested directory', () => {
       const deepDir = safePath.join(gitRoot, 'a', 'b', 'c');
-      fs.mkdirSync(deepDir, { recursive: true });
+      mkdirSyncReal(deepDir, { recursive: true });
 
       const result = gitFindRoot(deepDir);
       expect(result).toBe(gitRoot);
@@ -90,7 +90,7 @@ describe('gitignore-checker', () => {
       fs.writeFileSync(rootGitignore, '*.log\n');
 
       const subDir = safePath.join(gitRoot, 'subdir');
-      fs.mkdirSync(subDir);
+      mkdirSyncReal(subDir);
       const subGitignore = safePath.join(subDir, GITIGNORE_FILENAME);
       fs.writeFileSync(subGitignore, '*.tmp\n');
 
@@ -123,7 +123,7 @@ describe('gitignore-checker', () => {
     it('throws EISDIR for a DIRECTORY named .gitignore, on every platform', () => {
       // Reaches the same catch as the chmod case without needing POSIX modes or
       // a non-root user: `existsSync` says yes, `readFileSync` refuses.
-      fs.mkdirSync(safePath.join(gitRoot, GITIGNORE_FILENAME));
+      mkdirSyncReal(safePath.join(gitRoot, GITIGNORE_FILENAME));
       expect(() => loadGitignoreRules(gitRoot)).toThrow(/EISDIR/);
     });
   });

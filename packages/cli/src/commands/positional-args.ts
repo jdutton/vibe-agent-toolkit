@@ -1,12 +1,12 @@
 /**
  * Rejection of positional arguments on commands that take none.
  *
- * Shared by the config-driven top-level orchestrators (`vat verify`,
- * `vat validate`), which operate on the whole project as the config describes
- * it and have no path-shaped subject at all.
+ * Shared by the config-driven top-level orchestrators (`vat build`,
+ * `vat verify`, `vat validate`), which operate on the whole project as the
+ * config describes it and have no path-shaped subject at all.
  */
 
-import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { CommandRefusalError } from '../utils/command-refusal.js';
 
 /**
  * Fail the run when a caller passed a positional argument to a command that
@@ -20,20 +20,22 @@ import { ExitCode } from '@vibe-agent-toolkit/schema';
  * guess. The whole point of this fix is diagnosability, so the message is
  * written by hand and this rejection runs first in the action instead.
  *
- * **Why exit 2, not Commander's usage-error 1.** On both of these commands exit
- * 1 is documented as "validation errors found". A usage error reported as 1
- * tells a CI gate the project's artifacts are broken when in fact nothing was
- * inspected — a different wrong answer to the same question, not a fix. Exit 2
- * is this repo's "the run could not tell you anything about your artifacts",
- * which is exactly true here. (It therefore diverges from `rejectRetiredOnly`,
- * which chose 1 to keep a pre-existing failing CI gate failing; there is no
- * such continuity to preserve for an argument that used to be *accepted*.)
+ * ⚠️ Every other command DOES get `.allowExcessArguments(false)`, from
+ * `applyCommandTreePolicy` (`command-tree.ts`), which would reject the operand
+ * before this action ever ran. A caller of this function must therefore build
+ * its command through `marksOperandRefusalByHand` to keep its operands.
+ *
+ * **Why a refusal (`USAGE_INVALID`, exit 2), not Commander's usage-error 1.**
+ * Exit 1 is "findings". A usage error reported as 1 tells a CI gate the
+ * project's artifacts are broken when in fact nothing was inspected. The
+ * orchestrator's catch publishes the refusal as its document.
  *
  * @param operands - The command's parsed positional operands (`command.args`).
  * @param command - Command name for the message, e.g. `vat verify`.
  * @param operatesOn - One clause completing "<command> …", saying what the
  *   command actually runs against, so the reader learns why a path is
  *   meaningless rather than merely that it was refused.
+ * @throws CommandRefusalError `USAGE_INVALID` when any operand was passed
  */
 export function rejectPositionalArguments(
   operands: readonly string[],
@@ -44,7 +46,8 @@ export function rejectPositionalArguments(
 
   const listed = operands.map((operand) => `'${operand}'`).join(', ');
 
-  process.stderr.write(
+  throw new CommandRefusalError(
+    'USAGE_INVALID',
     `error: '${command}' does not take a path argument (got: ${listed}).\n` +
       `\n` +
       `  '${command}' ${operatesOn}, so there is nothing for a path to scope.\n` +
@@ -55,7 +58,6 @@ export function rejectPositionalArguments(
       `\n` +
       `  Fix: run '${command}' with no arguments, and scope it in\n` +
       `  vibe-agent-toolkit.config.yaml.\n` +
-      `  To inspect ONE skill or bundle by path, use: vat skill review <path>\n`,
+      `  To inspect ONE skill or bundle by path, use: vat skill review <path>`,
   );
-  process.exit(ExitCode.ERROR);
 }

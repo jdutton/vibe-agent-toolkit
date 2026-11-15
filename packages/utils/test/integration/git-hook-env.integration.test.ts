@@ -2,8 +2,8 @@
  * Every git helper that takes a caller-supplied path must survive the
  * environment a git hook exports into it.
  *
- * `vat resources validate` runs from `vibe-validate`'s `pre-commit`, so these
- * functions really do execute inside `git commit`. Measured against a real hook
+ * `vat resources validate` can run from a git pre-commit hook (adopters run it there; this repo
+ * runs it in the full tier), so these functions really do execute inside `git commit`. Measured against a real hook
  * on 2026-08-16: a **worktree's** pre-commit exports absolute `GIT_DIR` and
  * `GIT_INDEX_FILE` pointing into `<main>/.git/worktrees/<name>`, and asked about
  * an unrelated repository from there, `gitLsFiles` returned the files of the

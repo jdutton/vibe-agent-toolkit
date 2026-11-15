@@ -6,25 +6,29 @@
  * without installing them.
  */
 
-import { existsSync, readdirSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
-import { readDeclaredSkillName } from '@vibe-agent-toolkit/agent-skills';
+import { materializeIssue, readDeclaredSkillName } from '@vibe-agent-toolkit/agent-skills';
 import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { scan, type ScanSummary } from '@vibe-agent-toolkit/discovery';
-import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { notAdmittedFindings, type ParseDispatcher, type ParseRefusedResource, parseRefusedEntryFor, withParseDispatcher } from '@vibe-agent-toolkit/resources';
+import { buildReport, toFindings, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { direntKindFollowingSync, isTreeChangeResidue, mapInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 
+import { refusalCodeOf } from '../../utils/command-refusal.js';
 import { loadConfig } from '../../utils/config-loader.js';
+import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { createLogger } from '../../utils/logger.js';
+import { assertReadableDirectoryArgument } from '../../utils/project-root-policy.js';
 import { relativizePathEntries } from '../../utils/relativize-paths.js';
 import { discoverSkills, validateSkillFilename } from '../../utils/skill-discovery.js';
 import { scanUserContext } from '../../utils/user-context-scanner.js';
 
-import { isNpmOrTarballSource, removeResolvedTempDirs, resolveNpmOrTarballSource } from './source-resolvers.js';
+import type { SkillsListReport } from './list-schema.js';
+import { holdsSkillMd, isNpmOrTarballSource, readSourceDir, resolveNpmOrTarballSource, withResolvedTempDirs } from './source-resolvers.js';
 
-export interface SkillsListCommandOptions {
+interface SkillsListCommandOptions {
   user?: boolean;
   verbose?: boolean;
   debug?: boolean;
@@ -42,83 +46,117 @@ interface DiscoveredSkill {
  *
  * `vat skills list` is the preview for `vat skills install`, which keys on the
  * declared name — so listing a directory leaf here would name a directory the
- * install never creates. The leaf is only a fallback for a SKILL.md too damaged
- * to declare anything; `vat audit` reports that separately.
+ * install never creates. The leaf is only a fallback for a SKILL.md that declares
+ * no name; `vat audit` reports that separately. One the parse worker refused is
+ * listed under no name: it is the listing's not-admitted finding.
  */
-function extractSkillName(skillPath: string): string {
-  return readDeclaredSkillName(skillPath) ?? basename(dirname(skillPath));
+async function extractSkillName(skillPath: string, dispatcher: ParseDispatcher): Promise<string | ParseRefusedResource> {
+  try {
+    return (await readDeclaredSkillName(skillPath, { dispatcher })) ?? basename(dirname(skillPath));
+  } catch (error) {
+    const refused = parseRefusedEntryFor(skillPath, error);
+    if (refused === undefined) throw error;
+    return refused;
+  }
+}
+
+/** The skills a listing named, and the SKILL.md files the parse worker refused for this run. */
+interface ListedSkills {
+  skills: DiscoveredSkill[];
+  parseRefused: ParseRefusedResource[];
 }
 
 /**
  * Convert discovered skills to DiscoveredSkill format with validation
  */
-function processDiscoveredSkills(
+async function processDiscoveredSkills(
   discoveredSkills: Array<{ path: string }>
-): DiscoveredSkill[] {
-  return discoveredSkills.map(s => {
+): Promise<ListedSkills> {
+  // One parse dispatcher for the listing: each name is read from its SKILL.md's
+  // frontmatter on the bounded route, and a cold listing pays one worker start.
+  const names = await withParseDispatcher((dispatcher) =>
+    mapInOrder(discoveredSkills, (s) => extractSkillName(s.path, dispatcher)),
+  );
+  const listed: ListedSkills = { skills: [], parseRefused: [] };
+  for (const [index, s] of discoveredSkills.entries()) {
+    const name = names[index] as string | ParseRefusedResource;
+    if (typeof name !== 'string') {
+      listed.parseRefused.push(name);
+      continue;
+    }
     const filenameCheck = validateSkillFilename(s.path);
-    const skill: DiscoveredSkill = {
-      path: s.path,
-      name: extractSkillName(s.path),
-      valid: filenameCheck.valid,
-    };
+    const skill: DiscoveredSkill = { path: s.path, name, valid: filenameCheck.valid };
     // Only add warning if it exists (exactOptionalPropertyTypes)
     if (filenameCheck.message !== undefined) {
       skill.warning = filenameCheck.message;
     }
-    return skill;
+    listed.skills.push(skill);
+  }
+  return listed;
+}
+
+/** `vat skills list` has no `--strict`: its one finding is a warning about what it could not see. */
+const GATE = { strict: false } as const;
+
+/** What one listing run found: the skills, where they are relative to, and what it could not list. */
+interface Listing extends ListedSkills {
+  context: string;
+  /** The ONE base every published path is relative to. */
+  root: string;
+  unreadable: readonly DirectoryRefusal[];
+  /** Temp directories the listing could not remove once it was done: one `TREE_CLEANUP_INCOMPLETE` warning each. */
+  leftovers: readonly ValidationIssue[];
+  /** Search roots scanned — see `SKILLS_LIST_EXAMINED`. */
+  examined: number;
+  /** The project's `resources.validation`, which resolves a SKILL.md not admitted; `{}` outside a project. */
+  validation: ValidationConfig;
+}
+
+/**
+ * The `SCAN_PATH_UNREADABLE` warning for a directory the scan could not list:
+ * the count is then a floor, not the answer, and the document a CI wrapper
+ * reads is where that has to be said — stderr is not.
+ */
+function unlistableDirectoryFinding(refusal: DirectoryRefusal, root: string): ValidationIssue {
+  const location = toForwardSlash(safePath.relative(root, refusal.directory)) || '.';
+  return materializeIssue('SCAN_PATH_UNREADABLE', {
+    location,
+    detail: `${location}: listing was refused with ${refusal.code}; any skill beneath it is missing from this list`,
   });
 }
 
 /**
- * Render the skills payload as YAML.
- *
- * Pure — returns the document rather than writing it — so the emitted shape,
- * `path` included, is under unit test instead of only under a CLI spawn.
+ * Build the report. Pure: no file system, no `process.exit` — so the emitted
+ * shape, `path` included, is under unit test instead of only under a CLI spawn.
  *
  * `root` is stated once and is the only absolute path in the document; every
- * `path` beneath it is relative to it. Absolute paths here named the operator's
- * home directory on every `--user` run and made two machines' output undiffable.
+ * `path` beneath it, skill and finding alike, is relative to it. Absolute paths
+ * here named the operator's home directory on every `--user` run and made two
+ * machines' output undiffable.
+ *
+ * @param listing - What the run found, and the roots it scanned
+ * @param durationMs - How long the run took
  */
-export function formatSkillsYaml(
-  skills: readonly DiscoveredSkill[],
-  context: string,
-  root: string,
-  unreadable: readonly DirectoryRefusal[],
-): string {
-  const lines = [
-    '---',
-    // `warning`, not `success`, when the scan could not list a directory: the
-    // count below is then a floor, not the answer, and the document a CI
-    // wrapper diffs is the place that has to say so — stderr is not.
-    `status: ${unreadable.length === 0 ? 'success' : 'warning'}`,
-    `root: ${root}`,
-    `context: ${context}`,
-    `skillsFound: ${skills.length}`,
-    'skills:',
-  ];
-
-  for (const skill of relativizePathEntries(skills, root)) {
-    lines.push(`  - name: ${skill.name}`, `    path: ${skill.path}`, `    valid: ${skill.valid}`);
-    if (skill.warning) {
-      lines.push(`    warning: "${skill.warning}"`);
-    }
-  }
-
-  // Same root-relative coordinates as every skill path above, and REQUIRED of
-  // every caller (no default): a lane that inherited `[]` would publish
-  // `status: success` over a listing it knows to be short.
-  if (unreadable.length > 0) {
-    lines.push('unreadable:');
-    for (const refusal of unreadable) {
-      lines.push(
-        `  - path: ${toForwardSlash(safePath.relative(root, refusal.directory)) || '.'}`,
-        `    code: ${refusal.code}`,
-      );
-    }
-  }
-
-  return `${lines.join('\n')}\n`;
+export function buildSkillsListReport(listing: Listing, durationMs: number): SkillsListReport {
+  return buildReport({
+    examined: listing.examined,
+    findings: [
+      ...toFindings(listing.unreadable.map((refusal) => unlistableDirectoryFinding(refusal, listing.root))),
+      ...toFindings(listing.leftovers),
+      ...toFindings(notAdmittedFindings(
+        { unreadable: [], parseRefused: listing.parseRefused },
+        { locationRoot: listing.root, consequence: 'it is missing from this list' },
+        listing.validation,
+      )),
+    ],
+    data: {
+      root: listing.root,
+      context: listing.context,
+      skills: relativizePathEntries(listing.skills, listing.root),
+    },
+    gate: GATE,
+    durationMs,
+  });
 }
 
 /**
@@ -168,64 +206,90 @@ function outputSkillsHuman(
 }
 
 /**
- * Scan a dist/skills/ directory tree for SKILL.md files and return DiscoveredSkill[].
+ * Scan a dist/skills/ directory tree for SKILL.md files and list them ({@link ListedSkills}).
  * Each immediate subdirectory that contains a SKILL.md is treated as one skill.
  */
-function scanSkillsDir(skillsDir: string): DiscoveredSkill[] {
-  const entries = readdirSync(skillsDir, { withFileTypes: true });
-  const skills: DiscoveredSkill[] = [];
+function scanSkillsDir(skillsDir: string): Promise<ListedSkills> {
+  const found: Array<{ path: string }> = [];
 
-  for (const entry of entries) {
+  for (const entry of readSourceDir(skillsDir, 'environment')) {
     // Followed: a `--dev` install is a symlinked skill directory and is listed.
-    if (direntKindFollowingSync(skillsDir, entry) !== 'directory') continue;
+    // A tree-change leftover (`.<name>.vat-staged-*`: an interrupted build's staged or parked bundle) is not a skill.
+    if (isTreeChangeResidue(entry.name) || direntKindFollowingSync(skillsDir, entry, skillsDir) !== 'directory') continue;
     const candidate = safePath.join(skillsDir, entry.name);
-    const skillMd = safePath.join(candidate, 'SKILL.md');
-    if (existsSync(skillMd)) {
-      const filenameCheck = validateSkillFilename(skillMd);
-      const skill: DiscoveredSkill = {
-        path: skillMd,
-        name: extractSkillName(skillMd),
-        valid: filenameCheck.valid,
-      };
-      if (filenameCheck.message !== undefined) {
-        skill.warning = filenameCheck.message;
-      }
-      skills.push(skill);
+    if (holdsSkillMd(candidate, skillsDir, 'environment')) {
+      found.push({ path: safePath.join(candidate, 'SKILL.md') });
     }
   }
 
-  return skills;
+  return processDiscoveredSkills(found);
 }
 
 /**
  * List skills from an npm: or .tgz/.tar.gz source without installing.
  */
-async function listFromNpmSource(
-  source: string,
-  logger: ReturnType<typeof createLogger>,
-  options: SkillsListCommandOptions,
-): Promise<void> {
+async function listFromNpmSource(source: string, logger: ReturnType<typeof createLogger>): Promise<Listing> {
   logger.info(`📋 Inspecting npm/tgz source: ${source}`);
 
   const resolved = await resolveNpmOrTarballSource(source);
+  // The extracted package's own skills dir is the base — the enclosing temp
+  // directory is an implementation detail nobody can act on. `[]` is a
+  // statement, not a default: this is one listing of a tree this process just
+  // extracted, and a listing it cannot read refuses the run instead.
+  const { value: listed, leftovers } = await withResolvedTempDirs(resolved.tempDirs, () => scanSkillsDir(resolved.skillsDir));
+  return { ...listed, context: 'npm', root: resolved.skillsDir, unreadable: [], leftovers, examined: 1, validation: {} };
+}
 
-  try {
-    const skills = scanSkillsDir(resolved.skillsDir);
-    // The extracted package's own skills dir is the base — the enclosing temp
-    // directory is an implementation detail nobody can act on.
-    // `[]` is a statement, not a default: `scanSkillsDir` is a `readdirSync`
-    // over a tree this process just extracted, so there is no walk that can be
-    // refused short of the extraction itself failing.
-    process.stdout.write(formatSkillsYaml(skills, 'npm', resolved.skillsDir, []));
-    outputSkillsHuman(skills, [], logger, options);
-  } finally {
-    // AFTER the exit below used to sit inside the `try`, which meant this
-    // `finally` never ran on the success path — `process.exit` does not unwind
-    // — and every `vat skills list npm:…` left its extracted package in the
-    // temp dir.
-    await removeResolvedTempDirs(resolved.tempDirs, logger);
-  }
-  process.exit(ExitCode.OK);
+/** `--user`: Claude's `plugins/` and `skills/` directories — both scanned, an absent one empty. */
+async function listUserSkills(logger: ReturnType<typeof createLogger>): Promise<Listing> {
+  logger.info('📋 Listing user-installed skills');
+
+  const { plugins, skills: standaloneSkills, unreadable } = await scanUserContext();
+  return {
+    ...(await processDiscoveredSkills(discoverSkills([...plugins, ...standaloneSkills]))),
+    context: 'user',
+    // `scanUserContext` covers ~/.claude/plugins and ~/.claude/skills, so
+    // their common parent is the base that spans both.
+    root: getClaudeUserPaths().claudeDir,
+    unreadable,
+    leftovers: [],
+    examined: USER_SEARCH_ROOTS,
+    validation: {},
+  };
+}
+
+/** Claude's `plugins/` and `skills/` directories. */
+const USER_SEARCH_ROOTS = 2;
+
+/** A project directory: the argument (refused when it names no readable directory), or the cwd. */
+async function listProjectSkills(pathArg: string | undefined, logger: ReturnType<typeof createLogger>): Promise<Listing> {
+  const rootDir = pathArg === undefined ? process.cwd() : assertReadableDirectoryArgument(pathArg);
+  logger.info(`📋 Listing skills in: ${rootDir}`);
+
+  const config = loadConfig(rootDir, 'source');
+  const scanResult: ScanSummary = await scan({
+    path: rootDir,
+    recursive: true,
+    include: config?.resources?.include ?? [],
+    exclude: config?.resources?.exclude ?? [],
+  });
+
+  return {
+    ...(await processDiscoveredSkills(discoverSkills(scanResult.results))),
+    context: 'project',
+    root: safePath.resolve(rootDir),
+    unreadable: scanResult.unreadable,
+    leftovers: [],
+    examined: 1,
+    validation: config?.resources?.validation ?? {},
+  };
+}
+
+function gatherListing(pathArg: string | undefined, options: SkillsListCommandOptions, logger: ReturnType<typeof createLogger>): Promise<Listing> {
+  // npm: or .tgz/.tar.gz source — inspect without installing
+  if (pathArg !== undefined && isNpmOrTarballSource(pathArg)) return listFromNpmSource(pathArg, logger);
+  if (options.user) return listUserSkills(logger);
+  return listProjectSkills(pathArg, logger);
 }
 
 export async function listCommand(
@@ -233,65 +297,19 @@ export async function listCommand(
   options: SkillsListCommandOptions
 ): Promise<void> {
   const logger = createLogger(options.debug ? { debug: true } : {});
+  const startTime = Date.now();
 
+  let listing: Listing;
   try {
-    // npm: or .tgz/.tar.gz source — inspect without installing
-    if (pathArg !== undefined && isNpmOrTarballSource(pathArg)) {
-      await listFromNpmSource(pathArg, logger, options);
-      return; // process.exit(ExitCode.OK) called inside listFromNpmSource
-    }
-
-    let skills: DiscoveredSkill[];
-    let context: string;
-    // The ONE base every reported path is relative to. User and project runs
-    // scan different trees, so each names its own.
-    let root: string;
-    let unreadable: DirectoryRefusal[];
-
-    if (options.user) {
-      // User context: scan ~/.claude
-      logger.info('📋 Listing user-installed skills');
-
-      const { plugins, skills: standaloneSkills, unreadable: userUnreadable } = await scanUserContext();
-      unreadable = userUnreadable;
-      const allResources = [...plugins, ...standaloneSkills];
-      const discoveredSkills = discoverSkills(allResources);
-      skills = processDiscoveredSkills(discoveredSkills);
-      context = 'user';
-      // `scanUserContext` covers ~/.claude/plugins and ~/.claude/skills, so
-      // their common parent is the base that spans both.
-      root = getClaudeUserPaths().claudeDir;
-    } else {
-      // Project context: use resources config
-      const rootDir = pathArg ?? process.cwd();
-      logger.info(`📋 Listing skills in: ${rootDir}`);
-
-      const config = loadConfig(rootDir);
-
-      const scanResult: ScanSummary = await scan({
-        path: rootDir,
-        recursive: true,
-        include: config?.resources?.include ?? [],
-        exclude: config?.resources?.exclude ?? [],
-      });
-
-      const discoveredSkills = discoverSkills(scanResult.results);
-      skills = processDiscoveredSkills(discoveredSkills);
-      context = 'project';
-      root = safePath.resolve(rootDir);
-      unreadable = scanResult.unreadable;
-    }
-
-    // Output YAML to stdout
-    process.stdout.write(formatSkillsYaml(skills, context, root, unreadable));
-
-    // Human-friendly output to stderr
-    outputSkillsHuman(skills, unreadable, logger, options);
-
-    process.exit(ExitCode.OK);
+    listing = await gatherListing(pathArg, options, logger);
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    logger.error(`Failed to list skills: ${errorMessage}`);
-    process.exit(ExitCode.ERROR);
+    endWithRefusal('skills list', refusalCodeOf(error), error, 'yaml', GATE, NOTHING_FINISHED);
   }
+
+  // Human-friendly output to stderr, then the report on stdout.
+  outputSkillsHuman(listing.skills, listing.unreadable, logger, options);
+  endWithReport('skills list', buildSkillsListReport(listing, Date.now() - startTime), 'yaml');
 }
+
+/** Test-facing seam: the pure decisions of this module, reached by its unit tests. */
+export const __internal = { outputSkillsHuman };

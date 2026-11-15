@@ -1,7 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { type ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import {
   CRAWL_PASS_INSIDE,
   CRAWL_REGISTRY_ADMIT_ID,
@@ -16,6 +16,7 @@ import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import {
   __readCrawlTimingSnapshot,
   __setCrawlTimingForTest,
+  overOutputRowsMarkdown,
   setupAsyncTempDirSuite,
   withReaddirSyncRefused,
 } from '@vibe-agent-toolkit/utils/testing';
@@ -37,7 +38,7 @@ const REFERENCE_BODY = '# reference\n';
 const FIXTURE_DIR = safePath.resolve(__dirname, '../fixtures/inventory-skill');
 const SKILL_MD = safePath.resolve(FIXTURE_DIR, SKILL_FILENAME);
 
-/** The SKILL.md of the divergence fixture: one committed link, one late link, one ignored link. */
+/** The SKILL.md of the divergence fixture: one tracked link, one late link, one ignored link. */
 const DIVERGENT_SKILL_MD = [
 	'---',
 	'name: divergent-skill',
@@ -59,16 +60,19 @@ function writeRepoFile(root: string, relative: string, contents: string): void {
 }
 
 /**
- * `git init` + `add` + `commit` the fixture repository.
+ * `git init` + `add` the fixture repository — tracked in the index, never committed.
  *
  * Not ceremony: `crawlSkillLinkRegistry` reaches its file set through
  * `git ls-files`, and `.gitignore` needs a repository to mean anything at all
- * ([[tmpdir-fixture-has-no-gitignore]]). The commit is what makes the tracker's
- * snapshot a real one rather than a listing of loose files.
+ * ([[tmpdir-fixture-has-no-gitignore]]). The staged index is what makes the
+ * tracker's snapshot a real one rather than a listing of loose files:
+ * `ls-files --cached` reads the index, and nothing here reads `HEAD`. A commit
+ * would add the slowest spawn of the three, plus the detached
+ * `git maintenance run --auto` it starts, to a hook bound by the unit tier's
+ * hook timeout.
  */
-function commitRepo(root: string): void {
-	const identity = ['-c', 'user.email=t@example.com', '-c', 'user.name=t'];
-	const steps = [['init', '-q'], ['add', '-A'], [...identity, 'commit', '-qm', 'fixture']];
+function stageRepo(root: string): void {
+	const steps = [['init', '-q'], ['add', '-A']];
 	for (const args of steps) {
 		runGitOrThrow(args, { cwd: root });
 	}
@@ -81,6 +85,7 @@ async function extractWith(
 	source: GitTrackerSource,
 ): Promise<{ linked: string[]; parseErrors: Array<{ path: string; message: string }> }> {
 	const inv = await extractClaudeSkillInventory(skillMdPath, {
+		dispatcher: undefined,
 		sharedRegistry: registry,
 		gitTrackerSource: source,
 	});
@@ -92,7 +97,7 @@ describe('extractClaudeSkillInventory', () => {
 		// `NO_GIT_TRACKER`, not an omitted argument: these two cases are about
 		// frontmatter and parseErrors, and the tracker-less walk they run in is a
 		// choice they are making, not a default they fell into.
-		const inv = await extractClaudeSkillInventory(SKILL_MD, { gitTrackerSource: NO_GIT_TRACKER });
+		const inv = await extractClaudeSkillInventory(SKILL_MD, { dispatcher: undefined, gitTrackerSource: NO_GIT_TRACKER });
 
 		expect(inv.kind).toBe('skill');
 		expect(inv.vendor).toBe('claude-code');
@@ -107,7 +112,7 @@ describe('extractClaudeSkillInventory', () => {
 
 	it('returns a ClaudeSkillInventory with parseErrors when SKILL.md does not exist', async () => {
 		const nonExistent = safePath.resolve(FIXTURE_DIR, 'does-not-exist/SKILL.md');
-		const inv = await extractClaudeSkillInventory(nonExistent, { gitTrackerSource: NO_GIT_TRACKER });
+		const inv = await extractClaudeSkillInventory(nonExistent, { dispatcher: undefined, gitTrackerSource: NO_GIT_TRACKER });
 
 		expect(inv.kind).toBe('skill');
 		expect(inv.vendor).toBe('claude-code');
@@ -246,7 +251,7 @@ describe('extractClaudeSkillInventory tracker-state divergence', () => {
 		writeRepoFile(repoRoot, SKILL_FILENAME, DIVERGENT_SKILL_MD);
 		writeRepoFile(repoRoot, REFERENCE_FILENAME, REFERENCE_BODY);
 		writeRepoFile(repoRoot, IGNORED_NOTE_FILENAME, '# ignored\n');
-		commitRepo(repoRoot);
+		stageRepo(repoRoot);
 
 		// The snapshot is taken HERE — before `late-note.md` exists. Everything the
 		// tracker will ever say about this repository is fixed at this line.
@@ -363,10 +368,50 @@ describe('crawlSkillLinkRegistry on a directory it cannot list', () => {
 
 	it('surfaces on the skill as a link-walk parse error, not as a shorter inventory', async () => {
 		const inv = await withReaddirSyncRefused(locked, 'EACCES', () =>
-			extractClaudeSkillInventory(safePath.join(root, SKILL_FILENAME), { gitTrackerSource: NO_GIT_TRACKER }),
+			extractClaudeSkillInventory(safePath.join(root, SKILL_FILENAME), { dispatcher: undefined, gitTrackerSource: NO_GIT_TRACKER }),
 		);
 		expect(inv.parseErrors.map(e => e.message)).toEqual([
 			expect.stringMatching(/^link walk failed: Listing the directory 'locked' was refused \(EACCES\)/),
+		]);
+	});
+});
+
+/**
+ * A linked document whose parse the crawl refused is not admitted, so the walk
+ * found it on disk and listed it as an opaque linked asset — nothing said it was
+ * never parsed. It is now a parse-error row on the skill naming the file and the
+ * refusal code. The seed is `overOutputRowsMarkdown`: over the default
+ * `outputRows` and under the heap limit whatever `--max-old-space-size` runs.
+ */
+describe('a linked document whose parse the registry refused', () => {
+	const suite = setupAsyncTempDirSuite('extract-skill-parse-refused');
+	let root = '';
+
+	beforeAll(async () => {
+		await suite.beforeAll();
+		await suite.beforeEach();
+		root = safePath.join(suite.getTempDir(), 'refused');
+		writeRepoFile(root, SKILL_FILENAME, DIVERGENT_SKILL_MD.replace(`[Late note](./${LATE_NOTE_FILENAME})\n`, ''));
+		writeRepoFile(root, REFERENCE_FILENAME, overOutputRowsMarkdown(SKILL_FILENAME));
+		writeRepoFile(root, IGNORED_NOTE_FILENAME, '# note\n');
+		resetProjectRootCaches();
+	});
+
+	afterAll(suite.afterAll);
+
+	it('records a parse-error row naming the file and its refusal code', async () => {
+		const projectRoot = findProjectRoot(root) ?? root;
+		const registry = new ResourceRegistry({ baseDir: projectRoot });
+		await registry.addResources([SKILL_FILENAME, REFERENCE_FILENAME, IGNORED_NOTE_FILENAME].map((name) => safePath.join(root, name)));
+		registry.resolveLinks();
+		const refusedPath = safePath.join(root, REFERENCE_FILENAME);
+		// The fixture breaches only where it means to: the SKILL.md itself is admitted.
+		expect(registry.getParseRefusedResources().map((entry) => entry.filePath)).toEqual([refusedPath]);
+
+		const { parseErrors } = await extractWith(safePath.join(root, SKILL_FILENAME), registry, NO_GIT_TRACKER);
+
+		expect(parseErrors).toEqual([
+			{ path: refusedPath, message: expect.stringContaining('outputRows') as unknown, parseRefused: 'RESOURCE_PARSE_LIMIT_EXCEEDED' },
 		]);
 	});
 });
@@ -382,7 +427,7 @@ describe('crawlSkillLinkRegistry crawl-timing', () => {
 		writeRepoFile(timedRoot, SKILL_FILENAME, DIVERGENT_SKILL_MD);
 		writeRepoFile(timedRoot, REFERENCE_FILENAME, REFERENCE_BODY);
 		writeRepoFile(timedRoot, LATE_NOTE_FILENAME, '# late\n');
-		commitRepo(timedRoot);
+		stageRepo(timedRoot);
 	});
 
 	afterAll(suite.afterAll);

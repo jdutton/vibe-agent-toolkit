@@ -2,10 +2,13 @@
  * ESLint rule to disallow splitting strings by hardcoded path separators
  *
  * Using .split('/') or .split('\\') on file paths breaks on Windows/Unix.
- * Use path.basename(), path.dirname(), or normalize with toForwardSlash() first.
+ * Use path.basename(), path.dirname(), or normalize first: toForwardSlash() for a
+ * NATIVE path (fs, path.*, the VCS — converts only where the host separator is a
+ * backslash), toForwardSlashAnyPlatform() for AUTHOR-WRITTEN text (hrefs, globs,
+ * config values, archive entries — converts every backslash on every host).
  *
  * This rule is smart enough to detect when paths are already normalized:
- * - Inline: toForwardSlash(path).split('/') ✅
+ * - Inline: toForwardSlash(path).split('/') ✅ (either converter)
  * - Variable: const normalized = toForwardSlash(path); normalized.split('/') ✅
  *
  * @example
@@ -24,6 +27,9 @@
  * // ✅ GOOD - normalize then split (variable)
  * const normalizedPath = toForwardSlash(filePath);
  * const parts = normalizedPath.split('/');
+ *
+ * // ✅ GOOD - authored text (a glob, an href) converts on every host
+ * const segments = toForwardSlashAnyPlatform(pattern).split('/');
  */
 
 const {
@@ -31,6 +37,14 @@ const {
   SAFE_PATH_MODULE,
   resolveSafeModule,
 } = require('./safe-import.cjs');
+
+/** The converters whose result is forward-slashed, so splitting it on `/` is safe. */
+const NORMALIZERS = new Set(['toForwardSlash', 'toForwardSlashAnyPlatform']);
+
+/** A direct call to one of {@link NORMALIZERS}? */
+function isNormalizerCall(node) {
+  return node?.type === 'CallExpression' && node.callee.type === 'Identifier' && NORMALIZERS.has(node.callee.name);
+}
 
 module.exports = {
   meta: {
@@ -40,7 +54,7 @@ module.exports = {
         'Disallow splitting strings by hardcoded path separators',
       category: 'Path handling',
       bans: "`split('/')` / `split('\\\\')` on a path",
-      useInstead: '`path.basename()`, or `toForwardSlash()` first',
+      useInstead: '`path.basename()`, or `toForwardSlash()` / `toForwardSlashAnyPlatform()` first',
       subpath: '/path',
       recommended: true,
       recommendedSeverity: 'error',
@@ -48,26 +62,22 @@ module.exports = {
     messages: {
       noHardcodedSplit:
         String.raw`Avoid .split('/') or .split('\') on file paths (breaks on Windows/Unix). ` +
-        'Use path.basename() to extract filename, or toForwardSlash() from {{safeModule}} to normalize paths first.',
+        'Use path.basename() to extract filename, or normalize first with toForwardSlash() (native paths) ' +
+        'or toForwardSlashAnyPlatform() (authored text such as globs and hrefs) from {{safeModule}}.',
     },
     schema: [SAFE_MODULE_ONLY_SCHEMA],
   },
 
   create(context) {
     const reportData = { safeModule: resolveSafeModule(context, SAFE_PATH_MODULE) };
-    // Track variables that were assigned from toForwardSlash()
+    // Track variables that were assigned from a normalizer
     const normalizedVariables = new Set();
 
     return {
       // Track variable declarations
       VariableDeclarator(node) {
-        // Check if this variable is assigned from toForwardSlash()
-        if (
-          node.init?.type === 'CallExpression' &&
-          node.init.callee.type === 'Identifier' &&
-          node.init.callee.name === 'toForwardSlash' &&
-          node.id.type === 'Identifier'
-        ) {
+        // Check if this variable is assigned from a normalizer
+        if (isNormalizerCall(node.init) && node.id.type === 'Identifier') {
           normalizedVariables.add(node.id.name);
         }
       },
@@ -107,11 +117,7 @@ module.exports = {
         const object = node.callee.object;
 
         // Case 1: Inline normalization - toForwardSlash(...).split('/')
-        if (
-          object.type === 'CallExpression' &&
-          object.callee.type === 'Identifier' &&
-          object.callee.name === 'toForwardSlash'
-        ) {
+        if (isNormalizerCall(object)) {
           return; // Safe - normalized inline
         }
 

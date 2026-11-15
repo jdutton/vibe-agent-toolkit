@@ -4,7 +4,7 @@
  * command's design and must not drift away from the checklist.
  */
 
-import { CODE_REGISTRY } from '@vibe-agent-toolkit/schema';
+import { CODE_REGISTRY, FindingCodeSchema } from '@vibe-agent-toolkit/schema';
 import { describe, it, expect } from 'vitest';
 
 import {
@@ -27,7 +27,6 @@ describe('review-checklist.sectionForCode', () => {
     // Naming
     ['SKILL_NAME_INVALID', SEC_NAMING],
     ['RESERVED_WORD_IN_NAME', SEC_NAMING],
-    ['SKILL_NAME_XML_TAGS', SEC_NAMING],
     ['SKILL_NAME_MISMATCHES_DIR', SEC_NAMING],
     // Description
     ['SKILL_MISSING_DESCRIPTION', SEC_DESCRIPTION],
@@ -120,12 +119,24 @@ describe('review-checklist.sectionForCode', () => {
 const FALLS_TO_CATCH_ALL: ReadonlySet<string> = new Set([
   'ALLOW_EXPIRED',
   'ALLOW_UNUSED',
-  'ALWAYS_LOADED_CONTEXT_BUDGET',
+  // Emitted over a project's `.claude/rules` tree, which a skill review does not walk —
+  // the same reason the resource/link-graph codes below fall through. The link
+  // one joins them for the same reason and not a weaker one: it is a finding
+  // about a repository's own rules tree, reported by `vat resources check` over
+  // `realization_conditions`, and a skill review never enumerates that tree — so
+  // a section here would be a heading no skill review can ever fill.
+  'CLAUDE_RULE_FRONTMATTER_INVALID',
+  'CLAUDE_RULE_GLOB_INERT',
+  'CLAUDE_RULE_LINK_UNCHECKED',
   'COLLECTION_MIME_CONFLICT',
   'COMPONENT_DECLARED_BUT_MISSING',
   'COMPONENT_PRESENT_BUT_UNDECLARED',
   'DUPLICATE_RESOURCE_ID',
   'EXTENT_DIRECTORY_UNLISTABLE',
+  'EXTENT_SYMLINK_NOT_REALIZED',
+  'EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT',
+  'EXTENT_SYMLINK_TARGET_UNREADABLE',
+  'EXTENT_SYMLINK_TARGET_UNRESOLVED',
   'EXTERNAL_URL_DEAD',
   'EXTERNAL_URL_ERROR',
   'EXTERNAL_URL_TIMEOUT',
@@ -165,6 +176,8 @@ const FALLS_TO_CATCH_ALL: ReadonlySet<string> = new Set([
   'PLUGIN_TOPLEVEL_BIN_DIR',
   'REFERENCE_TARGET_MISSING',
   'REGISTRY_SHAPE_DRIFT',
+  'RESOURCE_PARSE_LIMIT_EXCEEDED',
+  'RESOURCE_PARSE_WORKER_DIED',
   'RESOURCE_UNREADABLE',
   'SCAN_PATH_UNREADABLE',
   'SKILL_BODY_NOT_IMPERATIVE',
@@ -175,7 +188,10 @@ const FALLS_TO_CATCH_ALL: ReadonlySet<string> = new Set([
 ]);
 
 describe('review-checklist accounts for every registry code', () => {
-  const registryCodes = Object.keys(CODE_REGISTRY);
+  // FINDING codes only. A refusal code says the run could not do its job — the
+  // review ends on it (exit 2) or publishes it as a run-integrity finding — so
+  // it is never a checklist item to group under a section.
+  const registryCodes: readonly string[] = FindingCodeSchema.options;
 
   it('reads a non-empty registry, so the checks below cannot pass vacuously', () => {
     expect(registryCodes.length).toBeGreaterThan(50);

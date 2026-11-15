@@ -1,0 +1,334 @@
+/**
+ * A cloned repository is untrusted input, and its symbolic links are part of
+ * it. `cloneGitSource` used to judge the `#ref:subpath` lexically, so a
+ * committed `skills -> /somewhere/outside` passed and every reader that
+ * followed `targetDir` read the operator's own files as the repository's.
+ *
+ * Integration tier: each case commits links into a real repository and clones
+ * it with real git. The cases that judge a link by its TEXT commit it straight
+ * into the index (`links`), so they run on every host, Windows CI included —
+ * where the clone must be refused from the object store, before a checkout
+ * writes the link and Git for Windows resolves it. The cases that need the
+ * kernel to follow a checked-out link are POSIX only: git on Windows checks a
+ * link out as a plain file unless `core.symlinks` is on.
+ */
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+
+import {
+  COPY_LINK_ESCAPES_SOURCE_CODE,
+  createSymlink,
+  FS_FAULT_CODE,
+  mkdirSyncReal,
+  normalizedTmpdir,
+  safePath,
+  symlinkCapability,
+} from '@vibe-agent-toolkit/utils';
+import { parseGitUrl, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { installFaultFs } from '@vibe-agent-toolkit/utils/testing';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { cloneGitSource, GIT_CLONE_FAILED_CODE, GIT_SUBPATH_INVALID_CODE } from '../../src/skill-source/git-clone.js';
+import { makeBareRepoWithSkill } from '../skill-source/test-helpers.js';
+
+/** A directory outside every clone, holding a file no clone owns. */
+let outside: string;
+const cleanups: Array<() => void> = [];
+
+beforeAll(() => {
+  outside = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-gc-outside-'));
+  writeFileSync(safePath.join(outside, 'SKILL.md'), '# not the repository\'s\n');
+  cleanups.push(() => rmSync(outside, { recursive: true, force: true }));
+});
+
+afterAll(() => {
+  for (const cleanup of cleanups) cleanup();
+});
+
+/** Clone a repo whose work-tree `shape` built, at `#main:<subpath>`. */
+function cloneShaped(shape: (workDir: string) => void, subpath?: string): () => ReturnType<typeof cloneGitSource> {
+  return cloneShapedInto(shape, subpath).clone;
+}
+
+/** {@link cloneShaped}, and the directory the clone lands in; `links` committed into the index as text. */
+function cloneShapedInto(shape: (workDir: string) => void, subpath?: string, links: Readonly<Record<string, string>> = {}): { clone: () => ReturnType<typeof cloneGitSource>; tempdir: string } {
+  const repo = makeBareRepoWithSkill({ skillSubdir: 'plugins/foo', beforeCommit: shape, links });
+  cleanups.push(repo.cleanup);
+  const tempdir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-gc-link-'));
+  cleanups.push(() => rmSync(tempdir, { recursive: true, force: true }));
+  const url = subpath === undefined ? `${repo.bareUrl}#main` : `${repo.bareUrl}#main:${subpath}`;
+  return { clone: () => cloneGitSource(parseGitUrl(url), tempdir), tempdir };
+}
+
+/**
+ * A repository whose one commit holds only `links`, each a mode-`120000` entry whose blob is the
+ * given BYTES — no UTF-8 round trip on the way in — and the directory a `#main:plugins/foo` clone of it lands in.
+ */
+function cloneByteLinks(links: Readonly<Record<string, Buffer>>): { clone: () => ReturnType<typeof cloneGitSource>; tempdir: string } {
+  return cloneIndexEntries(Object.entries(links).map(([path, bytes]) => ({ mode: '120000', quotedPath: path, bytes })));
+}
+
+/** One index entry, its path spelled C-quoted as `update-index --index-info` reads it: `\377` is the byte 0xFF. */
+interface IndexEntry {
+  readonly mode: '100644' | '120000';
+  readonly quotedPath: string;
+  readonly bytes: Buffer;
+}
+
+/**
+ * A repository whose one commit holds exactly `entries`, built in the index and the object store —
+ * never on disk, so a path whose bytes are not UTF-8 (which APFS refuses to create) is committed on
+ * every host — and the directory a `#main:plugins/foo` clone of it lands in.
+ */
+function cloneIndexEntries(entries: readonly IndexEntry[]): { clone: () => ReturnType<typeof cloneGitSource>; tempdir: string } {
+  const work = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-gc-bytes-'));
+  const tempdir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-gc-bytes-clone-'));
+  cleanups.push(() => rmSync(work, { recursive: true, force: true }), () => rmSync(tempdir, { recursive: true, force: true }));
+  const git = (args: string[], input?: string): string =>
+    runGitOrThrow(['-c', 'user.name=T', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd: work, ...(input === undefined ? {} : { input }) });
+  git(['init', '--initial-branch=main']);
+  const records = entries.map((entry, index) => {
+    const blobFile = safePath.join(work, '.git', `blob-${index.toString()}`);
+    writeFileSync(blobFile, entry.bytes);
+    return `${entry.mode} ${git(['hash-object', '-w', blobFile])}\t"${entry.quotedPath}"\n`;
+  });
+  git(['update-index', '--index-info'], records.join(''));
+  git(['commit', '-m', 'index entries']);
+  return { clone: () => cloneGitSource(parseGitUrl(`${pathToFileURL(work).href}#main:plugins/foo`), tempdir), tempdir };
+}
+
+/** Every filesystem call the clone made that names the link's target: the kernel asked to resolve it. */
+function callsNaming(tempdir: string, clone: () => unknown, needle: string): { thrown: unknown; asked: string[] } {
+  const session = installFaultFs({ within: tempdir });
+  let thrown: unknown;
+  try {
+    clone();
+  } catch (error) {
+    thrown = error;
+  } finally {
+    session.restore();
+  }
+  return { thrown, asked: session.calls.filter((call) => call.path.includes(needle)).map((call) => `${call.op} ${call.path}`) };
+}
+
+/** A UNC text. On POSIX it is one relative filename, so the kernel asked about it shows as a call naming it. */
+const UNC = String.raw`\\attacker\share\x`;
+const noShape = (): void => undefined;
+
+/** The clone, with `op` on the path ending `suffix` refused `EACCES`, fails as the source's own fault. */
+function expectSourceSideRefusal(clone: () => unknown, tempdir: string, op: 'lstat' | 'readlink', suffix: string): void {
+  const session = installFaultFs({ within: tempdir, faults: [{ op, path: (path) => path.endsWith(suffix), errno: 'EACCES' }] });
+  try {
+    expect(clone).toThrow(expect.objectContaining({ code: FS_FAULT_CODE, errno: 'EACCES', side: 'source', origin: 'content' }));
+  } finally {
+    session.restore();
+  }
+}
+
+// R11-WIN-I1/I2: on every host — the Windows leg is the one these exist for. The clone is refused
+// from the object store: no call names the share, and nothing but `.git` was ever written.
+describe('cloneGitSource refuses a committed link by its text before checkout, on every host', () => {
+  it('refuses a committed UNC link before any filesystem call resolves its target', () => {
+    const { clone, tempdir } = cloneShapedInto(noShape, 'plugins/foo', { 'plugins/foo/smb': UNC });
+    const { thrown, asked } = callsNaming(tempdir, clone, 'attacker');
+    expect(thrown).toEqual(expect.objectContaining({ code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('"plugins/foo/smb" is a symbolic link whose target leads through a network path') }));
+    expect(asked).toEqual([]);
+    expect(readdirSync(tempdir)).toEqual(['.git']);
+  });
+
+  it('refuses a subpath that leads through a committed UNC link, as the subpath, before checkout', () => {
+    const { clone, tempdir } = cloneShapedInto(noShape, 'skills/deeper', { skills: UNC });
+    const { thrown, asked } = callsNaming(tempdir, clone, 'attacker');
+    expect(thrown).toEqual(expect.objectContaining({ code: GIT_SUBPATH_INVALID_CODE, message: expect.stringMatching(/escapes the cloned repository: skills\/deeper/) }));
+    expect(asked).toEqual([]);
+    expect(readdirSync(tempdir)).toEqual(['.git']);
+  });
+
+  // Every link of the commit: the checkout writes them all, wherever the subpath points.
+  it.for([
+    ['a UNC link outside the subpath', 'docs/smb', UNC],
+    ['a namespaced UNC link', 'plugins/foo/ns', String.raw`\\?\UNC\attacker\share`],
+    ['a drive-relative link', 'plugins/foo/drv', 'C:attacker'],
+    ['a link whose text climbs out by string', 'plugins/foo/up', String.raw`..\..\..\attacker`],
+  ] as const)('refuses %s before checkout', ([, path, text]) => {
+    const { clone, tempdir } = cloneShapedInto(noShape, 'plugins/foo', { [path]: text });
+    expect(clone).toThrow(expect.objectContaining({ code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining(`"${path}" is a symbolic link`) }));
+    expect(readdirSync(tempdir)).toEqual(['.git']);
+  });
+
+  // R11-CONTRACT-M2/M3, R11-SEC-M1/M2: the clone's content is the input; a probe of it the OS
+  // refuses is the input's fault (`INPUT_UNREADABLE`), as in the install lane — never raw, never VAT's own.
+  it('classifies a refused probe of the subpath itself as a fault on the source side', () => {
+    const { clone, tempdir } = cloneShapedInto(noShape, 'plugins/foo');
+    expectSourceSideRefusal(clone, tempdir, 'lstat', '/plugins/foo');
+  });
+
+  // R12-SEC-C1 with real git: a link blob is BYTES, and one that is not UTF-8 must neither shift
+  // the reading of the next link nor pass as a relative text.
+  it('refuses a committed link whose blob is 0xFF bytes, before checkout', () => {
+    const { clone, tempdir } = cloneByteLinks({ 'plugins/foo/ff': Buffer.alloc(4, 0xff) });
+    expect(clone).toThrow(expect.objectContaining({ code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('"plugins/foo/ff" is a symbolic link whose text is not portable') }));
+    expect(readdirSync(tempdir)).toEqual(['.git']);
+  });
+
+  it('refuses the forged-header pair of R12-SEC-C1 before checkout', () => {
+    const forging = Buffer.concat([Buffer.alloc(6, 0xff), Buffer.alloc(20, 0x61), Buffer.from('\nx blob 2\nok')]);
+    const { clone, tempdir } = cloneByteLinks({ 'plugins/foo/a': forging, 'plugins/foo/b': Buffer.from(UNC) });
+    expect(clone).toThrow(expect.objectContaining({ code: COPY_LINK_ESCAPES_SOURCE_CODE }));
+    expect(readdirSync(tempdir)).toEqual(['.git']);
+  });
+
+  // A committed PATH is bytes too: one that is not UTF-8 has no spelling VAT can judge and then
+  // read by, and two such paths can decode to one string.
+  it.for([
+    ['a file', '100644', String.raw`plugins/foo/\377.md`, String.raw`plugins/foo/\xff.md`],
+    ['a directory of a file', '100644', String.raw`plugins/\303(/SKILL.md`, String.raw`plugins/\xc3(/SKILL.md`],
+    ['a link', '120000', String.raw`plugins/foo/\376`, String.raw`plugins/foo/\xfe`],
+  ] as const)('refuses a commit holding %s whose path is not UTF-8, before checkout', ([, mode, quotedPath, shown]) => {
+    const { clone, tempdir } = cloneIndexEntries([
+      { mode: '100644', quotedPath: 'plugins/foo/SKILL.md', bytes: Buffer.from('# skill\n') },
+      { mode, quotedPath, bytes: Buffer.from('SKILL.md') },
+    ]);
+    expect(clone).toThrow(expect.objectContaining({ code: GIT_CLONE_FAILED_CODE, message: expect.stringContaining(`holds a path that is not UTF-8 ("${shown}")`) }));
+    expect(readdirSync(tempdir)).toEqual(['.git']);
+  });
+
+  it('checks out a commit whose paths are non-ASCII UTF-8 (positive control for the path refusal)', () => {
+    const { clone, tempdir } = cloneIndexEntries([
+      { mode: '100644', quotedPath: 'plugins/foo/SKILL.md', bytes: Buffer.from('# skill\n') },
+      { mode: '100644', quotedPath: String.raw`plugins/foo/\303\251.md`, bytes: Buffer.from('é\n') },
+    ]);
+    expect(clone().targetDir).toMatch(/plugins\/foo$/);
+    const names = readdirSync(safePath.join(tempdir, 'plugins', 'foo')).map((name) => name.normalize('NFC'));
+    expect(names).toHaveLength(2);
+    expect(names).toEqual(expect.arrayContaining(['SKILL.md', 'é.md']));
+  });
+
+  // The names the repository checked out reach the absent-subpath message escaped: a bidi override
+  // and a C1 CSI (both names every host can hold) would otherwise act on the operator's terminal.
+  it('lists the checked-out names of an absent subpath escaped, never raw', () => {
+    const { clone } = cloneIndexEntries([{ mode: '100644', quotedPath: String.raw`\342\200\256x\302\233y/SKILL.md`, bytes: Buffer.from('# skill\n') }]);
+    // One clone, every assertion on its refusal: a second clone into the same tempdir fails otherwise.
+    let thrown: unknown;
+    try {
+      clone();
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toEqual(expect.objectContaining({ code: GIT_SUBPATH_INVALID_CODE, message: expect.stringMatching(/Repo root contains: .*"\\u202ex\\u009by"/) }));
+    for (const code of [0x20_2e, 0x9b]) expect((thrown as Error).message).not.toContain(String.fromCodePoint(code));
+  });
+
+  // A repository chooses how many names its root holds: the refusal lists 50 and counts the rest.
+  it('lists only the first 50 names of a crowded root, counting the rest', () => {
+    const entries = Array.from({ length: 53 }, (_, index) => ({ mode: '100644', quotedPath: `n${index.toString().padStart(2, '0')}`, bytes: Buffer.from('x\n') }));
+    const { clone } = cloneIndexEntries(entries);
+    let thrown: unknown;
+    try {
+      clone();
+    } catch (error) {
+      thrown = error;
+    }
+    const message = (thrown as Error).message;
+    // 53 committed names and the clone's own `.git`.
+    const listed = message.slice(message.indexOf('Repo root contains: '));
+    expect(listed.match(/"[^"]*"/g)).toHaveLength(50);
+    expect(listed.endsWith(' and 4 more.')).toBe(true);
+  });
+
+  it('checks out a commit whose links\' texts stay inside (positive control)', () => {
+    const { clone } = cloneShapedInto(noShape, 'plugins/foo', { 'plugins/foo/alias.md': 'SKILL.md' });
+    expect(clone().targetDir).toMatch(/plugins\/foo$/);
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('cloneGitSource refuses links out of the clone', () => {
+  it('refuses a subpath that is itself a committed link to a directory outside the clone', ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const clone = cloneShaped((work) => createSymlink(cap, outside, safePath.join(work, 'skills')), 'skills');
+    expect(clone).toThrow(expect.objectContaining({
+      code: GIT_SUBPATH_INVALID_CODE,
+      message: expect.stringMatching(/escapes the cloned repository: skills/),
+    }));
+  });
+
+  it('refuses a link inside the selected subtree whose target is outside the clone', ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const clone = cloneShaped((work) => createSymlink(cap, outside, safePath.join(work, 'plugins/foo/evil')), 'plugins/foo');
+    expect(clone).toThrow(expect.objectContaining({
+      code: COPY_LINK_ESCAPES_SOURCE_CODE,
+      message: expect.stringContaining('"plugins/foo/evil" is a symbolic link whose target leads through an absolute path'),
+    }));
+  });
+
+  it('refuses a second-hop escape: an inside link into a sibling that holds a link out', ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const clone = cloneShaped((work) => {
+      mkdirSyncReal(safePath.join(work, 'shared'));
+      createSymlink(cap, outside, safePath.join(work, 'shared', 'out'));
+      createSymlink(cap, '../../shared', safePath.join(work, 'plugins/foo/shared'));
+    }, 'plugins/foo');
+    expect(clone).toThrow(expect.objectContaining({ code: COPY_LINK_ESCAPES_SOURCE_CODE }));
+  });
+
+  it('refuses a dangling link aimed outside the clone', ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const clone = cloneShaped(
+      (work) => createSymlink(cap, safePath.join(outside, 'not-there'), safePath.join(work, 'plugins/foo/later')),
+      'plugins/foo',
+    );
+    expect(clone).toThrow(expect.objectContaining({ code: COPY_LINK_ESCAPES_SOURCE_CODE }));
+  });
+
+  // The SUBPATH itself dangling: followLink's rule covered only links found while walking, so
+  // this one reached readdir and left as a raw ENOENT instead of the subpath's refusal.
+  it.for([
+    ['aimed outside the clone', (): string => safePath.join(outside, 'not-there'), /escapes the cloned repository: skills\/esc/],
+    ['aimed inside the clone', (): string => 'nowhere', /not found in cloned repo: skills\/esc/],
+  ] as const)('refuses a subpath that is itself a dangling link %s, as the subpath', ([, target, message], { skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const clone = cloneShaped((work) => {
+      mkdirSyncReal(safePath.join(work, 'skills'));
+      createSymlink(cap, target(), safePath.join(work, 'skills', 'esc'));
+    }, 'skills/esc');
+    expect(clone).toThrow(expect.objectContaining({ code: GIT_SUBPATH_INVALID_CODE, message: expect.stringMatching(message) }));
+  });
+
+  it('classifies a refused readlink of a link under the subpath as a fault on the source side', ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const { clone, tempdir } = cloneShapedInto((work) => createSymlink(cap, 'SKILL.md', safePath.join(work, 'plugins/foo/l'), 'file'), 'plugins/foo');
+    expectSourceSideRefusal(clone, tempdir, 'readlink', '/plugins/foo/l');
+  });
+
+  it('accepts links that stay inside the clone, including a link to its own directory', ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const clone = cloneShaped((work) => {
+      mkdirSyncReal(safePath.join(work, 'docs'));
+      writeFileSync(safePath.join(work, 'docs', 'guide.md'), '# guide\n');
+      createSymlink(cap, '../../docs', safePath.join(work, 'plugins/foo/docs'));
+      createSymlink(cap, '.', safePath.join(work, 'plugins/foo/self'));
+    }, 'plugins/foo');
+    expect(clone().targetDir).toMatch(/plugins\/foo$/);
+  });
+
+  // R11-CONTRACT-C1: a REAL cycle (`a -> b`, `b -> a`: the kernel answers ELOOP) resolves to
+  // nothing, in every lane — under the subpath it reads nothing, as a dangle does; as the subpath it
+  // names nothing. Never an `environment` fault, never a raw ELOOP.
+  it('accepts a real link cycle under the subpath, as a link that leads to nothing', ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const clone = cloneShaped((work) => {
+      createSymlink(cap, 'b', safePath.join(work, 'plugins/foo/a'), 'file');
+      createSymlink(cap, 'a', safePath.join(work, 'plugins/foo/b'), 'file');
+    }, 'plugins/foo');
+    expect(clone().targetDir).toMatch(/plugins\/foo$/);
+  });
+
+  it('refuses a subpath that is a real link cycle as a subpath the clone does not hold', ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const clone = cloneShaped((work) => {
+      createSymlink(cap, 'loop2', safePath.join(work, 'loop'), 'dir');
+      createSymlink(cap, 'loop', safePath.join(work, 'loop2'), 'dir');
+    }, 'loop');
+    expect(clone).toThrow(expect.objectContaining({ code: GIT_SUBPATH_INVALID_CODE, message: expect.stringMatching(/not found in cloned repo: loop/) }));
+  });
+});

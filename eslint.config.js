@@ -4,12 +4,14 @@ import eslint from '@eslint/js';
 import eslintComments from '@eslint-community/eslint-plugin-eslint-comments';
 import tseslint from '@typescript-eslint/eslint-plugin';
 import tsparser from '@typescript-eslint/parser';
-import localRules from '@vibe-agent-toolkit/utils/eslint';
 import importPlugin from 'eslint-plugin-import';
 import pluginNode from 'eslint-plugin-n';
 import security from 'eslint-plugin-security';
 import sonarjs from 'eslint-plugin-sonarjs';
 import unicorn from 'eslint-plugin-unicorn';
+
+import { declaredTypesFiles, gitignorePatterns, IGNORE_FILES, lintTaskRefusal } from './eslint-config-support.js';
+import localRules from './packages/utils/eslint/index.cjs';
 
 /**
  * Simple, strict ESLint configuration
@@ -44,7 +46,9 @@ const PATH_IMPL_EXEMPT = { exemptFiles: [
   'packages/utils/src/path-utils.ts',
   'packages/utils/test/path-utils.test.ts',
 ] };
-const PATH_UTILS_EXEMPT = { exemptFiles: ['packages/utils/src/path-utils.ts'] };
+// `link-following.ts` is the one module that asks the kernel to follow a link (`realpathSync`
+// among it), each call only once the chain is read: it is the safe replacement, as path-utils is.
+const PATH_UTILS_EXEMPT = { exemptFiles: ['packages/utils/src/path-utils.ts', 'packages/utils/src/link-following.ts'] };
 const SAFE_EXEC_EXEMPT = { exemptFiles: ['packages/utils/src/safe-exec.ts'] };
 
 /**
@@ -71,15 +75,10 @@ const SAFE_EXEC_EXEMPT = { exemptFiles: ['packages/utils/src/safe-exec.ts'] };
  * A file that leaves one list usually leaves the other; check both.
  */
 const UNIT_TIER_IO_RATCHET = { allowFiles: [
-  'packages/agent-config/test/loader/manifest-loader.test.ts',
-  'packages/agent-config/test/validator/agent-validator.test.ts',
-  'packages/agent-runtime/test/session/file-session-store.test.ts',
   'packages/agent-skills/test/files-config.test.ts',
   'packages/agent-skills/test/skill-identity.test.ts',
   'packages/agent-skills/test/skill-source/content-hash.test.ts',
-  'packages/agent-skills/test/skill-source/fetch-cache.test.ts',
   'packages/agent-skills/test/skill-source/git-clone-env.test.ts',
-  'packages/agent-skills/test/skill-source/git-clone.test.ts',
   'packages/agent-skills/test/skill-source/stage.test.ts',
   'packages/agent-skills/test/skill-source/url-source.test.ts',
   'packages/agent-skills/test/skill-source/vendored-source.test.ts',
@@ -107,7 +106,6 @@ const UNIT_TIER_IO_RATCHET = { allowFiles: [
   'packages/cli/test/ard-emit.test.ts',
   'packages/cli/test/commands/audit/nothing-audited.test.ts',
   'packages/cli/test/commands/audit/resources-severity.test.ts',
-  'packages/cli/test/commands/cache-control.test.ts',
   'packages/cli/test/commands/claude/marketplace/publish-tree.test.ts',
   'packages/cli/test/commands/claude/marketplace/validate-declared-sources.test.ts',
   'packages/cli/test/commands/consistency-check.test.ts',
@@ -122,7 +120,6 @@ const UNIT_TIER_IO_RATCHET = { allowFiles: [
   'packages/cli/test/commands/skills/validate-non-skill-discovered.test.ts',
   'packages/cli/test/commands/skills/validate-nothing-checked.test.ts',
   'packages/cli/test/org-skill-upload-payload.test.ts',
-  'packages/cli/test/utils/agent-runner.test.ts',
   'packages/cli/test/utils/resource-population-source.test.ts',
   'packages/cli/test/utils/user-context-scanner.test.ts',
   'packages/cli/test/verify-vendor-licensing.test.ts',
@@ -139,14 +136,12 @@ const UNIT_TIER_IO_RATCHET = { allowFiles: [
   'packages/lab/test/crawl-dump.test.ts',
   'packages/lab/test/instrument.test.ts',
   'packages/lab/test/io-capture.test.ts',
-  'packages/lab/test/io-counter.test.ts',
   'packages/lab/test/io-dump.test.ts',
   'packages/lab/test/parse-capture.test.ts',
   'packages/lab/test/parse-dump.test.ts',
   'packages/lab/test/store.test.ts',
   'packages/lab/test/vat-lab-cli.test.ts',
   'packages/projection-sqlite/test/derived-tables.test.ts',
-  'packages/projection-sqlite/test/ephemeral-store.test.ts',
   'packages/projection-sqlite/test/query.test.ts',
   'packages/projection-sqlite/test/store.test.ts',
   'packages/rag/test/embedding-providers/onnx-model-download.test.ts',
@@ -177,7 +172,6 @@ const UNIT_TIER_IO_RATCHET = { allowFiles: [
   'packages/utils/test/asset-reference.test.ts',
   'packages/utils/test/crawl-timing-shared.test.ts',
   'packages/utils/test/entrypoint.test.ts',
-  'packages/utils/test/git-snapshot-cache.test.ts',
   'packages/utils/test/git-tracker-snapshot-priming.test.ts',
   'packages/utils/test/git-tracker.test.ts',
   'packages/utils/test/git-utils.test.ts',
@@ -206,53 +200,145 @@ const UNIT_TIER_IO_RATCHET = { allowFiles: [
  * tell an enumeration (`ENUM` — a `readdir`, the shape the rule exists for)
  * from a probe or a copy, and retire the enumerations first.
  */
+/** Named once: two ratchets list this file. */
+const DOCTOR_COMMAND_FILE = 'packages/cli/src/commands/doctor.ts';
+/** Named once: the bootstrap that builds utils, so it can import none of the primitives three rules point at. */
+const CLEAN_BUILD_FILE = 'packages/dev-tools/src/clean-build.ts';
+/** Named once: three lists (existsSync, link-following, unsafe-member) name each of these maintainer tools. */
+const BUMP_VERSION_FILE = 'packages/dev-tools/src/bump-version.ts';
+const PRE_PUBLISH_CHECK_FILE = 'packages/dev-tools/src/pre-publish-check.ts';
+/** Every package's TypeScript product source — the scope of the `src`-only blocks below. */
+const PRODUCT_SOURCE_TS = 'packages/*/src/**/*.ts';
+
+/** `local/no-raw-signal-listener` over product source; `allow` names the one helper that listens. */
+const NO_RAW_SIGNAL_LISTENER = ['error', { allow: ['packages/utils/src/terminating-signals.ts'] }];
+
 const COMMANDS_IMPORT_BOUNDARY_RATCHET = { allowFiles: [
-  'packages/cli/src/commands/agent/install.ts',                       // access/mkdir/lstat/rm/symlink — install-dir mutation
-  'packages/cli/src/commands/agent/installed.ts',                     // ENUM: readdir of the install dir
-  'packages/cli/src/commands/agent/uninstall.ts',                     // access/lstat/rm — install-dir mutation
-  'packages/cli/src/commands/ard/emit.ts',                            // existsSync probe
   'packages/cli/src/commands/audit.ts',                               // existsSync/stat probes only — the walker is gone (audit/scan-population.ts)
-  'packages/cli/src/commands/audit/git-url-clone.ts',                 // mkdtemp/rm — clone scratch dir
   'packages/cli/src/commands/build.ts',                               // ENUM: readdir for phase output; existsSync probes
-  'packages/cli/src/commands/cache/clear.ts',                         // ENUM: readdir of the cache dir; rm
-  'packages/cli/src/commands/claude/marketplace/changelog-utils.ts',  // readFileSync
-  'packages/cli/src/commands/claude/marketplace/git-publish.ts',      // ENUM: readdirSync of the publish tree; mkdtemp/cp/rm
-  'packages/cli/src/commands/claude/marketplace/license-utils.ts',    // readFileSync
-  'packages/cli/src/commands/claude/marketplace/publish-tree.ts',     // writeFile/cp/readFileSync — publish tree assembly
-  'packages/cli/src/commands/claude/marketplace/publish.ts',          // mkdtempSync
+  'packages/cli/src/commands/cache/clear.ts',                         // ENUM: readdir/lstat measuring the cache before its remove plan
+  'packages/cli/src/commands/claude/marketplace/git-publish.ts',      // ENUM: readdirSync of the publish tree
   'packages/cli/src/commands/claude/marketplace/validate.ts',         // ENUM: readdirSync over plugins/ and skills/ (lane table: raw-readdir)
   'packages/cli/src/commands/claude/org/skills.ts',                   // ENUM: readdirSync collectFiles + node_modules listing (lane table: raw-readdir)
   'packages/cli/src/commands/claude/plugin/build.ts',                 // ENUM: readdir; mkdir/cp/writeFile — marketplace build
   'packages/cli/src/commands/claude/plugin/helpers.ts',               // existsSync/stat probes, readFile
-  'packages/cli/src/commands/claude/plugin/install.ts',               // ENUM: readdirSync ×4; rm/mkdir/cp/symlink — registry + tree copy (audit-A §1.2)
-  'packages/cli/src/commands/claude/plugin/plugin-changelog.ts',      // existsSync probes
-  'packages/cli/src/commands/claude/plugin/plugin-files.ts',          // existsSync/mkdir/copyFile
+  'packages/cli/src/commands/claude/plugin/install.ts',               // ENUM: readdirSync ×1 (package listing); statSync; mkdir — the zip lane's staging dir
   'packages/cli/src/commands/claude/plugin/plugin-validators.ts',     // ENUM: readdir; readFile
   'packages/cli/src/commands/claude/plugin/tree-copy.ts',             // ENUM: readdir; realpath/lstat/copyFile — tree copy
-  'packages/cli/src/commands/claude/plugin/uninstall.ts',             // readFileSync
-  'packages/cli/src/commands/consistency-check.ts',                   // existsSync probes
-  'packages/cli/src/commands/corpus/report.ts',                       // mkdirSync/writeFileSync — report output
-  'packages/cli/src/commands/corpus/runner.ts',                       // writeFileSync/existsSync
+  'packages/cli/src/commands/corpus/report.ts',                       // mkdirSync — the run directory
+  'packages/cli/src/commands/corpus/runner.ts',                       // writeFileSync — review.md and the validation overlay
   'packages/cli/src/commands/corpus/scan.ts',                         // mkdirSync/readFileSync
-  'packages/cli/src/commands/corpus/seed.ts',                         // existsSync/readFileSync
-  'packages/cli/src/commands/doctor.ts',                              // readFileSync/existsSync probes
-  'packages/cli/src/commands/inventory.ts',                           // existsSync probes
+  DOCTOR_COMMAND_FILE,                                                // readFileSync/existsSync probes
   'packages/cli/src/commands/resources/check-progress.ts',            // appendFileSync — cost log
-  'packages/cli/src/commands/resources/check-supervisor.ts',          // stat/readFileSync/mkdtemp/rm — child supervision (audit-A §1.2)
+  'packages/cli/src/commands/resources/check-supervisor.ts',          // stat/readFileSync — child supervision (audit-A §1.2)
   'packages/cli/src/commands/resources/validate.ts',                  // readFile
-  'packages/cli/src/commands/skill/review.ts',                        // existsSync/stat probes
-  'packages/cli/src/commands/skill/test/configure.ts',                // readFileSync/writeFileSync — config edit
-  'packages/cli/src/commands/skill/test/run.ts',                      // existsSync probes
-  'packages/cli/src/commands/skills/build.ts',                        // mkdir/rename/rm/mkdtemp — staging
-  'packages/cli/src/commands/skills/install.ts',                      // ENUM: readdirSync ×2; rm/cp/mkdtemp/lstat
-  'packages/cli/src/commands/skills/list.ts',                         // ENUM: readdirSync of ~/.claude/skills under --user (lane table: raw-readdir)
-  'packages/cli/src/commands/skills/package.ts',                      // existsSync/stat probes
-  'packages/cli/src/commands/skills/scope-guard.ts',                  // existsSync/stat probes
-  'packages/cli/src/commands/skills/shared.ts',                       // existsSync probes, readFile
-  'packages/cli/src/commands/skills/skill-discovery.ts',              // existsSync probe
-  'packages/cli/src/commands/skills/source-resolvers.ts',             // mkdtemp/existsSync/rm — source staging
-  'packages/cli/src/commands/verify.ts',                              // stat/existsSync probes
+  'packages/cli/src/commands/skills/source-resolvers.ts',             // ENUM: readdirSync of an install/list source dir; existsSync — source staging
 ] };
+
+/**
+ * Ratchet for `local/no-existssync`: the product-source FILES that still ask
+ * `existsSync`, which answers `false` for a path it could not look at (`EACCES`,
+ * `ELOOP`) exactly as for one that is not there — the one reason for every entry. The
+ * list may only SHRINK — an entry leaves when its file asks `pathPresent(path, mode, side,
+ * absence)` from `@vibe-agent-toolkit/utils` instead; a new call is a lint error, not a
+ * new line here. Both directions are asserted: `dev-tools/test/eslint-allowlist-ratchets.test.ts`
+ * lints every listed file with the exemption lifted and fails on one the rule no
+ * longer fires on. `packages/dev-tools/src/clean-build.ts` builds utils, so it can
+ * only leave by not asking.
+ */
+const NO_EXISTSSYNC_RATCHET = { allowFiles: [
+  BUMP_VERSION_FILE,
+  CLEAN_BUILD_FILE,
+  'packages/dev-tools/src/common.ts',
+  'packages/dev-tools/src/compat-empirical/index.ts',
+  'packages/dev-tools/src/compat-empirical/runtimes/shared/manual-driver.ts',
+  'packages/dev-tools/src/derived-artifact-rules.ts',
+  'packages/dev-tools/src/extract-changelog.ts',
+  'packages/dev-tools/src/import-marketplace.ts',
+  'packages/dev-tools/src/jscpd-check-new.ts',
+  'packages/dev-tools/src/link-workspace-packages.ts',
+  PRE_PUBLISH_CHECK_FILE,
+  'packages/dev-tools/src/prepare-bin.ts',
+  'packages/dev-tools/src/publish-with-rollback.ts',
+  'packages/dev-tools/src/test-tier-budget-seed.ts',
+  'packages/dev-tools/src/validate-repo-structure.ts',
+  'packages/dev-tools/src/validate-version.ts',
+  'packages/dev-tools/src/workspace-graph.ts',
+  'packages/lab/src/facets/io/counter.cts',
+  'packages/lab/src/facets/verdict/capture.ts',
+  'packages/lab/src/harness/preload.ts',
+  'packages/utils/src/asset-reference.ts',
+  'packages/utils/src/testing/platform-gates.ts',
+] };
+
+/**
+ * The files that may import `@vibe-agent-toolkit/projection-sqlite`, the storage backend: its own
+ * package, the one CLI module that picks and injects it, and the CLI's tests. Everything else is
+ * written against the `FactStore` port in `resources`, so `local/projection-sqlite-import-boundary`
+ * is enabled everywhere these do not match. Asserted both ways against the tree by
+ * `dev-tools/test/integration/projection-sqlite-import-boundary.integration.test.ts`: every
+ * importer is listed, and every entry matches an importer.
+ */
+export const PROJECTION_SQLITE_IMPORTERS = [
+  'packages/projection-sqlite/**',
+  'packages/cli/src/utils/projection-store.ts',
+  'packages/cli/test/**',
+];
+
+/**
+ * The allowlist of `local/no-link-following-fs`: the files of product source that may ask the
+ * kernel to FOLLOW a link (`stat`, `existsSync`, `realpath`, an untyped `symlink`) with no walk of
+ * the chain first, and HOW MANY such calls each holds. NOT a ratchet of offenders — every crawled
+ * or untrusted path asks `link-following.ts`. Each entry says why every such call in it acts on the
+ * operator's own path. Asserted both ways, per call, by
+ * `dev-tools/test/eslint-allowlist-ratchets.test.ts`: a listed file whose count of flagged calls is
+ * not exactly the one pinned here — one more, or one fewer — is red, so a new call in a listed file
+ * is reviewed like a call anywhere else.
+ */
+export const LINK_FOLLOWING_FS_CALLS = {
+  // Private, unshipped maintainer tooling, run by the operator on this repository's own checkout:
+  // every probed path is the repo's own (its packages, `dist`, changelog, version files, VAT's own
+  // cache) — never an adopter's tree and never fetched content (`fetch-sources.ts`, which stages
+  // cloned repositories, asks `link-following.ts` and is not listed).
+  [BUMP_VERSION_FILE]: 1,
+  [CLEAN_BUILD_FILE]: 5,
+  'packages/dev-tools/src/common.ts': 3,
+  'packages/dev-tools/src/compat-empirical/index.ts': 5,
+  'packages/dev-tools/src/compat-empirical/runtimes/shared/manual-driver.ts': 1,
+  'packages/dev-tools/src/copy-yaml-assets.ts': 1,
+  'packages/dev-tools/src/derived-artifact-rules.ts': 3,
+  'packages/dev-tools/src/extract-changelog.ts': 1,
+  'packages/dev-tools/src/import-marketplace.ts': 1,
+  'packages/dev-tools/src/jscpd-check-new.ts': 1,
+  'packages/dev-tools/src/link-workspace-packages.ts': 5,
+  [PRE_PUBLISH_CHECK_FILE]: 6,
+  'packages/dev-tools/src/prepare-bin.ts': 2,
+  'packages/dev-tools/src/publish-with-rollback.ts': 2,
+  'packages/dev-tools/src/resolve-workspace-deps.ts': 1,
+  'packages/dev-tools/src/test-tier-budget-seed.ts': 2,
+  'packages/dev-tools/src/validate-repo-structure.ts': 2,
+  'packages/dev-tools/src/validate-version.ts': 2,
+  'packages/dev-tools/src/workspace-graph.ts': 1,
+  // The quality lab (private): its instrument, harness and captures act on the operator's own
+  // checkouts and installs and on the lab's own capture directories, never on a crawled entry.
+  'packages/lab/src/facets/io/counter.cts': 1,
+  'packages/lab/src/facets/verdict/capture.ts': 1,
+  'packages/lab/src/harness/closure.ts': 1,
+  'packages/lab/src/harness/instrument.ts': 2,
+  // The preload a facet injects: a lab-built file at the lab's own dist path, or a caller's override.
+  'packages/lab/src/harness/preload.ts': 1,
+  'packages/lab/src/harness/subject.ts': 1,
+  // Names the file Node's resolver computed inside an installed package, for an error message only.
+  'packages/utils/src/asset-reference.ts': 1,
+  // The guarded module: every call here runs only after the chain is read, or on the operator's own root.
+  'packages/utils/src/link-following.ts': 12,
+  // Test-support fixtures: each probes a path the test itself built or the test host's own tools.
+  'packages/utils/src/testing/archive-fixtures.ts': 1,
+  'packages/utils/src/testing/executables.ts': 1,
+  'packages/utils/src/testing/platform-gates.ts': 1,
+};
+
+const LINK_FOLLOWING_FS_ALLOW = { allowFiles: Object.keys(LINK_FOLLOWING_FS_CALLS) };
 
 /**
  * Files still carrying `@typescript-eslint/no-unsafe-member-access` /
@@ -264,14 +350,12 @@ const COMMANDS_IMPORT_BOUNDARY_RATCHET = { allowFiles: [
 export const NO_UNSAFE_BACKLOG = [
   'packages/agent-skills/src/skill-test/pipeline.ts', // 1
   'packages/cli/src/bin.ts', // 1
-  'packages/cli/src/commands/corpus/seed.ts', // 1
-  'packages/cli/src/commands/doctor.ts', // 9
-  'packages/cli/src/commands/resources/validate.ts', // 1
+  DOCTOR_COMMAND_FILE, // 9
   'packages/cli/src/utils/config-loader.ts', // 1
   'packages/cli/src/version.ts', // 3
-  'packages/dev-tools/src/bump-version.ts', // 15
+  BUMP_VERSION_FILE, // 15
   'packages/dev-tools/src/determine-publish-tags.ts', // 3
-  'packages/dev-tools/src/pre-publish-check.ts', // 3
+  PRE_PUBLISH_CHECK_FILE, // 3
   'packages/rag/src/embedding-providers/openai-embedding-provider.ts', // 2
   'packages/resource-compiler/src/language-service/completions.ts', // 20
   'packages/resource-compiler/src/language-service/definitions.ts', // 15
@@ -282,30 +366,13 @@ export const NO_UNSAFE_BACKLOG = [
   'packages/resources/src/link-auth/expand-macro.ts', // 1
   'packages/utils/src/yaml/surgical-yaml.ts', // 2
   'packages/utils/src/zod-introspection.ts', // 9
-  'packages/vat-example-cat-agents/src/mcp-collections.ts', // 1
-  'packages/vat-example-cat-agents/src/one-shot-llm-analyzer/description-parser.ts', // 1
-  'packages/vat-example-cat-agents/src/one-shot-llm-analyzer/photo-analyzer.ts', // 1
 ];
 
 /**
- * One `local/no-self-package-import` block per workspace package, each naming
- * that package and scoped to the sources it compiles.
- *
- * The rule does not read `package.json` itself on purpose. Every RULE module on
- * the `./eslint` subpath requires nothing at all — not `eslint`, not a
- * third-party package, not even a Node builtin — which is what keeps `eslint` an
- * optional peer dependency and the pack shippable as a subpath of a runtime
- * package (`packages/utils/test/eslint/subpath-purity.test.ts` asserts the empty
- * set for the rules, and exactly `node:fs` + `node:path` for the entry point
- * that lists them).
- * This file is not on that subpath: it already runs in full Node, so reading the
- * manifests here costs the invariant nothing.
- *
- * `src/**` is exactly what every package's tsconfig `include`s. Test and example
- * trees are excluded from every package build and import their own package by
- * name deliberately, to exercise the public entry point the way a consumer does.
+ * Every workspace package: its directory under `packages/` and its manifest name. Read
+ * here rather than by a rule module — see {@link selfImportConfigs} for why.
  */
-function selfImportConfigs() {
+function workspacePackages() {
   // 🪤 Resolved against THIS FILE, never against the cwd. `readdirSync('packages')`
   // is relative to wherever eslint was started, so any invocation from inside a
   // package — `turbo run lint`, which sets cwd to the package it is linting —
@@ -326,12 +393,114 @@ function selfImportConfigs() {
       if (!existsSync(manifest)) return [];
       const { name } = JSON.parse(readFileSync(manifest, 'utf8'));
       if (typeof name !== 'string' || name.length === 0) return [];
-      return [{
-        files: [`packages/${entry.name}/src/**/*.ts`, `packages/${entry.name}/src/**/*.cts`],
-        plugins: { local: localRules },
-        rules: { 'local/no-self-package-import': ['error', { packageName: name }] },
-      }];
+      return [{ dir: entry.name, name }];
     });
+}
+
+/**
+ * The libraries a plugin rule can be aimed at, each with how the plugin's own metadata names it:
+ * the rule's name, or its `meta.docs.description`. A rule matching a marker whose `packages` no
+ * manifest here depends on inspects calls into code this repo never runs — it can never fire, and
+ * it still costs time on every file (sonarjs's `aws-*` were 9% of lint time; `dompurify-unsafe-config`
+ * is type-aware). Adopting one of these libraries turns its rules back on with no edit here.
+ */
+const LIBRARY_RULE_MARKERS = [
+  { packages: ['aws-cdk-lib'], name: /^aws-/ },
+  { packages: ['dompurify', 'isomorphic-dompurify'], name: /dompurify/i, description: /\bDOMPurify\b/ },
+  { packages: ['react'], name: /^(?:jsx-|.*react)/i, description: /\b(?:React|JSX)\b/ },
+  { packages: ['@angular/core'], name: /angular/i, description: /\bAngular\b/ },
+  { packages: ['mocha'], description: /\bMocha\b/ },
+  { packages: ['express'], description: /\bExpress\b/ },
+];
+
+/** Every package named in any dependency field of the root or a workspace manifest. */
+function declaredDependencies() {
+  const manifests = [new URL('package.json', import.meta.url), ...workspacePackages().map(({ dir }) => new URL(`packages/${dir}/package.json`, import.meta.url))];
+  return new Set(manifests.flatMap((manifest) => {
+    const json = JSON.parse(readFileSync(manifest, 'utf8'));
+    return ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'].flatMap((field) => Object.keys(json[field] ?? {}));
+  }));
+}
+
+/** `off` for every sonarjs and security rule a {@link LIBRARY_RULE_MARKERS} entry claims for an absent library. */
+function unusedLibraryRulesOff() {
+  const declared = declaredDependencies();
+  const absent = LIBRARY_RULE_MARKERS.filter((marker) => !marker.packages.some((pkg) => declared.has(pkg)));
+  const aimedAtAbsent = (name, rule) => absent.some((marker) =>
+    marker.name?.test(name) || marker.description?.test(rule.meta?.docs?.description ?? ''));
+  return Object.fromEntries(
+    [['sonarjs', sonarjs], ['security', security]].flatMap(([prefix, plugin]) =>
+      Object.entries(plugin.rules).filter(([name, rule]) => aimedAtAbsent(name, rule)).map(([name]) => [`${prefix}/${name}`, 'off'])),
+  );
+}
+
+/**
+ * A package's `lint` script (`VAT_LINT_TASK=1 eslint .`) refuses to run unless the root `lint`
+ * script built first and every workspace package's declared types exist (`lintTaskRefusal()` in
+ * `eslint-config-support.js` holds the contract). Turbo keys a lint on the emitted declarations and
+ * has no `dependsOn`, so nothing inside turbo orders it after a build.
+ */
+function assertBuiltBeforeLintTask() {
+  const refusal = lintTaskRefusal(process.env, () => workspacePackages().flatMap(({ dir }) => {
+    const where = `packages/${dir}/package.json`;
+    const manifest = JSON.parse(readFileSync(new URL(where, import.meta.url), 'utf8'));
+    return declaredTypesFiles(manifest, where)
+      .filter((types) => !existsSync(new URL(`packages/${dir}/${types}`, import.meta.url)))
+      .map((types) => `packages/${dir}/${types.replace(/^\.\//, '')}`);
+  }));
+  if (refusal !== undefined) throw new Error(refusal);
+}
+
+/**
+ * One block per workspace package giving its TypeScript files their own type-checked program,
+ * from the package's generated `tsconfig.eslint.json`. A package's `lint` runs in its own process
+ * and builds only its own program: one program of the whole monorepo peaked at about 3 GB.
+ */
+function typedProgramConfigs() {
+  assertBuiltBeforeLintTask();
+  return workspacePackages().map(({ dir }) => ({
+    files: [`packages/${dir}/**/*.ts`, `packages/${dir}/**/*.cts`],
+    languageOptions: {
+      parserOptions: {
+        project: `./packages/${dir}/tsconfig.eslint.json`,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+  }));
+}
+
+/**
+ * One `local/no-self-package-import` block per workspace package, each naming
+ * that package and scoped to the sources it compiles.
+ *
+ * The rule does not read `package.json` itself on purpose. Every RULE module on
+ * the `./eslint` subpath requires nothing at all — not `eslint`, not a
+ * third-party package, not even a Node builtin — which is what keeps `eslint` an
+ * optional peer dependency and the pack shippable as a subpath of a runtime
+ * package (`packages/utils/test/eslint/subpath-purity.test.ts` asserts the empty
+ * set for the rules, and exactly `node:fs` + `node:path` for the entry point
+ * that lists them).
+ * This file is not on that subpath: it already runs in full Node, so reading the
+ * manifests here costs the invariant nothing.
+ *
+ * `src/**` is exactly what every package's tsconfig `include`s. Test and example
+ * trees are excluded from every package build and import their own package by
+ * name deliberately, to exercise the public entry point the way a consumer does.
+ */
+function selfImportConfigs() {
+  return workspacePackages().map(({ dir, name }) => ({
+    files: [`packages/${dir}/src/**/*.ts`, `packages/${dir}/src/**/*.cts`],
+    plugins: { local: localRules },
+    rules: { 'local/no-self-package-import': ['error', { packageName: name }] },
+  }));
+}
+
+/**
+ * Every ignore file's patterns as flat-config ignores (`gitignorePatterns()` in
+ * `eslint-config-support.js`), so ESLint never lints a file turbo does not hash.
+ */
+function gitignoredPatterns() {
+  return IGNORE_FILES.flatMap((file) => gitignorePatterns(readFileSync(new URL(file, import.meta.url), 'utf8'), file));
 }
 
 // Local rules — agentic code safety. Apply to both TS and JS source.
@@ -356,7 +525,6 @@ const localRulesConfig = {
   // `recommended`: this tree has no backlog left to burn down.
   'local/no-raw-node-path': ['error', PATH_IMPL_EXEMPT],
   'local/no-test-scoped-functions': 'error',
-  'local/no-fs-promises-cp': 'error',
   'local/no-url-pathname-for-fs': 'error',
   'local/no-bare-dynamic-import-path': 'error',
   'local/no-file-url-string-concat': 'error',
@@ -379,12 +547,61 @@ const localRulesConfig = {
   // test lane's ability to skip), so the implementation file needs a real
   // exemption or the rule fires on the very helper it points everyone at.
   'local/no-bare-symlink-in-tests': ['error', {
-    exemptFiles: ['packages/utils/src/test-helpers.ts'],
+    exemptFiles: [
+      'packages/utils/src/test-helpers.ts',
+      // The tree-change primitive: `copyTree` under `links: 'preserve'` recreates the source's own links. A host
+      // that cannot make one raises the raw errno, classified at the caller's boundary like every other write.
+      'packages/utils/src/tree-change/copy-tree.ts',
+      // The tree-change applier: a `link` fill stages the link a `--dev` lane installs. A host that cannot make
+      // one raises the raw errno, classified `destination` with every other staging write.
+      'packages/utils/src/tree-change/apply.ts',
+      // `linkDevSkills`, the one link `vat claude plugin install --dev` makes (each built skill, into the plugin tree it
+      // stages). `--dev` is refused on win32 before anything is planned, so the privilege hazard is unreachable; a
+      // refused link is a raw errno the applier classifies `destination` with every other staging write.
+      'packages/claude-marketplace/src/install/dev-skill-links.ts',
+    ],
+  }],
+  // One classifier decides what an errno means (`fsFaultOf` / `classifyFsFault` and the
+  // single-errno predicates). Every entry below is STRUCTURAL — a file that must spell
+  // errnos to do its job — never an allowlist of offenders: there is no ratchet to grow.
+  'local/no-adhoc-errno': ['error', {
+    exemptFiles: [
+      // The errno -> class table and the single-errno predicates: the one place an errno gets a meaning.
+      'packages/utils/src/errors/errno-table.ts',
+      // The classifier itself, built on the table.
+      'packages/utils/src/errors/fs-fault.ts',
+      // Parses git's stderr TEXT into errnos, so the classifier can read them.
+      'packages/utils/src/errors/git-errno.ts',
+      // The fault harness's vocabulary: the errnos it raises, which it does not classify.
+      'packages/utils/src/testing/fault-spec.ts',
+      // The rule's own errno vocabulary.
+      'packages/utils/eslint/rules/no-adhoc-errno.cjs',
+      // Bootstrap: it builds utils, so it cannot import the classifier it would ask.
+      CLEAN_BUILD_FILE,
+    ],
+  }],
+  // One protocol owns every recursive remove, rename and copy: the tree-change primitive.
+  // No allowlist of offenders: each entry below is STRUCTURAL, a place that must touch the
+  // raw functions to do its job, and every other site migrated.
+  'local/no-destructive-fs': ['error', {
+    exemptFiles: [
+      // The tree-change primitive itself: the plan/apply, the copy, the file helpers.
+      'packages/utils/src/tree-change/',
+      // Test infrastructure that ships in `src` (scratch trees, hostile trees) and its barrel.
+      'packages/utils/src/testing/',
+      'packages/utils/src/testing.ts',
+      // Test-support files beside the specs (fixtures, helpers): test code that is not a
+      // `*.test.ts`, so the rule's own test-file category does not reach it. Every package's.
+      ...workspacePackages().map(({ dir }) => `packages/${dir}/test/`),
+      // Bootstrap: it builds utils, so it cannot import the primitive it would ask. It keeps
+      // per-FILE promotion (its documented invariant), never a tree swap.
+      CLEAN_BUILD_FILE,
+    ],
   }],
   // ⛔ The mechanism behind `isEntrypoint()`. Enabled here rather than inherited
   // from `configs.recommended` because it is excluded there: `import.meta.main`
   // is only wrong below Node 24.2 / 22.18, which is a fact about the CONSUMER's
-  // floor. It is a fact about OURS — this repo declares `>=22.13.0`, where the
+  // floor. It is a fact about OURS — this repo declares `>=22.16.0`, where the
   // property is `undefined` — so every such guard here is dead code that exits 0.
   //
   // This is the half of the fix that is not a comment. Three prose
@@ -413,14 +630,28 @@ const localRulesConfig = {
   // Five vocabularies used to coexist (skill test read 1 as "the harness
   // broke", audit exited 0 over `status: error`, the lab had a 3) and the
   // orchestrator read all of them as one. No backlog: 176 sites were migrated
-  // the day this was enabled. `allow` is not a ratchet of product code — it
-  // names the three EXAMPLE scripts that are not vat verbs and would otherwise
-  // take a dependency on `schema` for one line each.
-  'local/no-literal-process-exit': ['error', { allow: [
-    'packages/gateway-mcp/examples/example-helpers.ts',
-    'packages/vat-development-agents/agents/agent-generator/validate-agent.ts',
-    'packages/vat-example-cat-agents/examples/photo-analysis-demo.ts',
-  ] }],
+  // the day this was enabled. No file is exempt.
+  //
+  // `derived` is the second floor, for the `vat` verbs: an exit code is DERIVED
+  // from the document the verb published (`exitCodeForReport`), never decided
+  // beside it — one outcome shipped with different codes in different verbs
+  // because each call site mapped it by hand. `ExitCode.FINDINGS` may not be
+  // named under `packages/cli/src/`, and an exit takes OK, ERROR or a
+  // derivation. No file is exempt, and the rule takes no exemption list.
+  'local/no-literal-process-exit': ['error', {
+    derived: {
+      paths: ['packages/cli/src/'],
+      calls: ['exitCodeForReport', 'exitCodeOfChild', 'exitCodeForCommanderEnding', 'exitCodeForExternal', 'endWithReport', 'endWithRefusal', 'writeExternalDocument'],
+    },
+  }],
+  // ONE stdout writer for the `vat` verbs: under `commands/` a document leaves
+  // through `utils/document-writer.ts` (validated against its registered schema,
+  // exit derived from what was written) and nowhere else — `process.stdout.write`,
+  // the stdout `console` methods and the stdout helpers (called or handed
+  // on) are errors. No file is exempt, and the rule takes no exemption list.
+  'local/no-stdout-outside-writer': ['error', {
+    paths: ['packages/cli/src/commands/'],
+  }],
   // The containment trio, from the sweep that watched a delete, a copy and an
   // uninstall walk out of their root. No backlog and no ratchet: every site
   // was fixed the day these were enabled, so the next `startsWith('..')`, the
@@ -507,16 +738,107 @@ const unicornRulesConfig = {
 // approved `js-yaml`; the lint rule is the durable record, so the docs point
 // here). Applied to both TS and JS blocks below.
 const OPEN_FRONTMATTER_MESSAGE = 'Use openFrontmatter from @vibe-agent-toolkit/resources — preserves comments.';
-const noRestrictedImportsConfig = ['error', {
-  paths: [
-    {
-      name: 'js-yaml',
-      message: 'Use `yaml` (eemeli) — the one YAML library in this repo; see noRestrictedImportsConfig in eslint.config.js. Frontmatter writes: openFrontmatter from @vibe-agent-toolkit/resources.',
-    },
-    { name: 'gray-matter', message: OPEN_FRONTMATTER_MESSAGE },
-    { name: 'front-matter', message: OPEN_FRONTMATTER_MESSAGE },
-  ],
-}];
+const YAML_LIBRARY_BAN = [
+  {
+    name: 'js-yaml',
+    message: 'Use `yaml` (eemeli) — the one YAML library in this repo; see noRestrictedImportsConfig in eslint.config.js. Frontmatter writes: openFrontmatter from @vibe-agent-toolkit/resources.',
+  },
+  { name: 'gray-matter', message: OPEN_FRONTMATTER_MESSAGE },
+  { name: 'front-matter', message: OPEN_FRONTMATTER_MESSAGE },
+];
+
+// The ONE owner of "which code may open an archive". Every tarball and ZIP VAT
+// reads, extracts or writes goes through `packages/utils/src/archive/`
+// (`@vibe-agent-toolkit/utils/archive`): one entry policy, one set of limits,
+// one writer that never creates a link. Five extract lanes each with their own
+// rules is how a crafted tarball came to install a directory it did not hold,
+// so `tar` and `adm-zip` are banned everywhere else — product source and tests
+// alike. A test that needs an archive builds it with `tarFixture` / `zipFixture`
+// from `@vibe-agent-toolkit/utils/testing`, which are written byte by byte so
+// they can express the archives a library refuses to write.
+const ARCHIVE_MODULE_FILES = 'packages/utils/src/archive/**';
+const ARCHIVE_LIBRARY_MESSAGE = 'Open an archive only through @vibe-agent-toolkit/utils/archive (listArchive / extractArchive / zipOfDirectory): the one entry policy and the one set of limits live there. A test builds one with tarFixture / zipFixture from @vibe-agent-toolkit/utils/testing.';
+const ARCHIVE_LIBRARY_BAN = [
+  { name: 'adm-zip', message: ARCHIVE_LIBRARY_MESSAGE },
+  { name: 'tar', message: ARCHIVE_LIBRARY_MESSAGE },
+];
+// A SUBPATH is the same library: `tar/extract` is the whole link-creating extractor, and adm-zip
+// has no `exports` map, so every file of it is importable. A group with a slash is anchored, so
+// `./tar/x.js` and `tarball` are not caught.
+const ARCHIVE_LIBRARY_SUBPATH_BAN = [{ group: ['tar/**', 'adm-zip/**'], message: ARCHIVE_LIBRARY_MESSAGE }];
+// `no-restricted-imports` reads static imports only; these are the same ban for the dynamic
+// shapes code is written in: `await import('tar/x')`, `require('tar')`, a `createRequire` result
+// under a `req…` name (`req`, `requireFn`), `createRequire(import.meta.url)('adm-zip')` under any
+// spelling of `createRequire`, `module.require('tar')`, `require.call(null, 'tar')` — each with its
+// specifier as a string or as a template literal that holds no expression. (TypeScript's
+// `import tar = require('tar')` is an import declaration to `no-restricted-imports`, which fires on it.)
+//
+// The selectors ENUMERATE call shapes, so they stop a mistake, not an evasion. Not seen: a
+// specifier computed at run time (`import(name)`, a template with an expression); a loader under a
+// name not starting `req` (`load('tar')` reads as an ordinary call, as `list('tar', bytes)` in the
+// archive tests is one); `require.apply(…)`, `(0, require)(…)`; a relative path into
+// `node_modules`. Vitest's loaders are left to each ban: the archive tests mock `adm-zip` under the
+// archive module (`vi.mock('adm-zip', importOriginal)`), which is how that module is tested.
+const ARCHIVE_LIBRARY_SPECIFIER = String.raw`/^(adm-zip|tar)(\u002f|$)/`;
+/** A call argument, or an import source, at `path` matching `pattern`: a string literal, or a template literal with no expression. */
+const specifierAt = (path, pattern) => [
+  `[${path}.value=${pattern}]`,
+  `[${path}.type='TemplateLiteral'][${path}.expressions.length=0][${path}.quasis.0.value.cooked=${pattern}]`,
+];
+/** `import()` and every require-shaped call of a specifier matching `pattern`, each reported with `message`. */
+const restrictedSpecifierSyntax = (pattern, message) => {
+  const firstArgument = specifierAt('arguments.0', pattern);
+  return [
+    ...specifierAt('source', pattern).map((specifier) => `ImportExpression${specifier}`),
+    // `require(x)`, `req(x)`, `requireFn(x)`.
+    ...firstArgument.map((specifier) => `CallExpression[callee.name=/^req/i]${specifier}`),
+    // `createRequire(import.meta.url)(x)`, under any spelling of `createRequire`.
+    ...firstArgument.map((specifier) => `CallExpression[callee.type='CallExpression']${specifier}`),
+    // `module.require(x)`.
+    ...firstArgument.map((specifier) => `CallExpression[callee.property.name='require']${specifier}`),
+    // `require.call(thisArg, x)`.
+    ...specifierAt('arguments.1', pattern).map((specifier) => `CallExpression[callee.object.name=/^req/i][callee.property.name='call']${specifier}`),
+  ].map((selector) => ({ selector, message }));
+};
+const ARCHIVE_LIBRARY_RESTRICTED_SYNTAX = restrictedSpecifierSyntax(ARCHIVE_LIBRARY_SPECIFIER, ARCHIVE_LIBRARY_MESSAGE);
+
+// Every file carries the dynamic half; only the archive module drops it.
+const RESTRICTED_SPECIFIER_SYNTAX = ARCHIVE_LIBRARY_RESTRICTED_SYNTAX;
+
+const noRestrictedImportsConfig = ['error', { paths: [...YAML_LIBRARY_BAN, ...ARCHIVE_LIBRARY_BAN], patterns: ARCHIVE_LIBRARY_SUBPATH_BAN }];
+
+// No dispatch on error PROSE, and no bare `Error` subclass: the `src`-only
+// restrictions, named so the archive module's block below can keep them while
+// dropping the archive-library ban that every other file carries.
+const ERROR_CONTRACT_RESTRICTED_SYNTAX = [
+  {
+    selector: "CallExpression[callee.type='MemberExpression'][callee.object.type='MemberExpression'][callee.object.property.name='message'][callee.property.name=/^(includes|startsWith|endsWith|match|search)$/]",
+    message: 'Do not dispatch on an error message. Dispatch on its code (`isVatError(err, code)`), its class (`instanceof`), or an errno predicate (`isPathAbsentError`) — prose is for humans and changes when it is improved.',
+  },
+  {
+    selector: "CallExpression[callee.type='MemberExpression'][callee.property.name='test'][arguments.0.type='MemberExpression'][arguments.0.property.name='message']",
+    message: 'Do not test a regex against an error message. Dispatch on its code (`isVatError(err, code)`), its class (`instanceof`), or an errno predicate (`isPathAbsentError`).',
+  },
+  // Every VAT error carries a `code`: a class that extends the bare
+  // `Error` has none, and the contract above has nothing to dispatch on.
+  // One such class survived the sweep by being added after it.
+  {
+    selector: "ClassDeclaration[superClass.name='Error']",
+    message: 'Extend `VatError` from @vibe-agent-toolkit/utils (with a SCREAMING_SNAKE code), not the bare `Error` — every VAT error carries a code a catch block can dispatch on.',
+  },
+];
+
+// git's silence about a root has ONE classifier (`gitNoAnswerFor` in packages/utils/src/git-no-answer.ts):
+// a git missing from PATH is coded apart from "not a repository, or unreadable". A site that wrote its
+// own sentence blamed the repository for a git that never ran (INTERNAL_ERROR instead of
+// BACKEND_UNAVAILABLE). Banned as literals in product `src` everywhere but the classifier; no backlog.
+const GIT_NO_ANSWER_PROSE = '/git (was not found on PATH|did not answer for)/';
+const GIT_NO_ANSWER_MESSAGE = 'Classify git\'s silence with gitNoAnswerFor / gitNoAnswerError (or GIT_NOT_FOUND_REMEDY) from @vibe-agent-toolkit/utils/git — never write the sentence yourself: a missing binary must not be blamed on the repository.';
+const GIT_NO_ANSWER_RESTRICTED_SYNTAX = [
+  { selector: `Literal[value=${GIT_NO_ANSWER_PROSE}]`, message: GIT_NO_ANSWER_MESSAGE },
+  { selector: `TemplateElement[value.raw=${GIT_NO_ANSWER_PROSE}]`, message: GIT_NO_ANSWER_MESSAGE },
+];
+const GIT_NO_ANSWER_CLASSIFIER_FILE = 'packages/utils/src/git-no-answer.ts';
 
 // General rules that apply to both TS and JS — except `no-unused-vars`,
 // which the TS block overrides with the @typescript-eslint variant.
@@ -551,13 +873,33 @@ const generalRulesConfig = {
   // when this landed, and a bare directive is a suppression nobody can review.
   // `eslint-enable` is exempt: the matching disable holds the reason.
   'eslint-comments/require-description': ['error', { ignore: ['eslint-enable'] }],
+
+  // Mirror SonarCloud S9382 and S7503, which ARE these two core rules (their
+  // messages are ESLint's byte for byte), so the class fails at the desk rather
+  // than on a PR — in JS as in TS, since Sonar analyses both. Core
+  // `require-await`, deliberately NOT `@typescript-eslint/require-await`: that
+  // one exempts an `async` function returning a promise, and Sonar does not.
+  //
+  // Independent work: `Promise.all`, or `mapWithConcurrency` for a
+  // population-sized list. Work whose ORDER is the contract: `forEachInOrder` /
+  // `mapInOrder` / `everyInOrder` from `@vibe-agent-toolkit/utils` (or, in a JS
+  // file that cannot import workspace TS, a sequential promise chain), with a
+  // one-line reason at the call site — never a disable. `*.test.ts` files are
+  // exempt below because Sonar does not analyse them; `test/` helpers are not.
+  'no-await-in-loop': 'error',
+  'require-await': 'error',
 };
 
 export default [
   // Global ignores
   {
     ignores: [
+      // Everything git ignores, at the depth git ignores it — see `gitignoredPatterns()`.
+      ...gitignoredPatterns(),
       'dist/',
+      // Every package's build output too, wherever eslint is pointed: `eslint packages` must
+      // judge sources, never their compiled copies (an exempt source's `dist` twin is not exempt).
+      '**/dist/**',
       'build/',
       'coverage/',
       'node_modules/',
@@ -569,11 +911,13 @@ export default [
       '**/generated/',
       '**/*.d.ts',
       '**/*.d.cts',  // same intent as *.d.ts — a `.cts` declaration file is still a declaration file
-      'vitest.config.ts',
-      'vitest.*.config.ts',
+      // Every `*.config.ts` (vitest's, knip's), wherever eslint is started — a package's
+      // `lint` runs from that package, so a root-relative `vitest.config.ts` would miss its own.
+      '**/*.config.ts',
       'vitest.shared.ts',
       'vitest.setup.js',
       '.claude/worktrees/',  // Claude Code worktrees
+      '.superpowers/',  // Gitignored working material (specs, scratch reproductions): never committed, never product
       '**/test-fixtures/**',  // Test fixture data (third-party code)
       '**/test/fixtures/**',  // Test fixture data (emulates user/3p content)
       '**/transformer-fixtures/**',  // Transformer test fixtures (sample code)
@@ -585,6 +929,8 @@ export default [
   eslint.configs.recommended,
   sonarjs.configs.recommended,
   security.configs.recommended,
+  // Rules aimed at a library no package here depends on — see `unusedLibraryRulesOff()`.
+  { rules: unusedLibraryRulesOff() },
 
   // Main configuration - applies to ALL TypeScript files
   {
@@ -600,7 +946,8 @@ export default [
       parserOptions: {
         ecmaVersion: 2024,
         sourceType: 'module',
-        project: './tsconfig.eslint.json',
+        // No `project` here: each package's files get their OWN program — see
+        // `typedProgramConfigs()`.
       },
       globals: {
         NodeJS: 'readonly',
@@ -625,6 +972,9 @@ export default [
       ...generalRulesConfig,
 
       'no-restricted-imports': noRestrictedImportsConfig,
+      // The `import()` / `require` half of the archive-library ban, for every
+      // TS file. The `src`-only block below restates it beside the error-contract selectors.
+      'no-restricted-syntax': ['error', ...RESTRICTED_SPECIFIER_SYNTAX],
 
       // TypeScript-specific (use @typescript-eslint variant of no-unused-vars)
       'no-unused-vars': 'off',
@@ -680,7 +1030,7 @@ export default [
   // one that is clean. Adding a file here is the thing this block exists to
   // make visible.
   {
-    files: ['packages/*/src/**/*.ts'],
+    files: [PRODUCT_SOURCE_TS],
     ignores: NO_UNSAFE_BACKLOG,
     rules: {
       '@typescript-eslint/no-unsafe-member-access': 'error',
@@ -712,32 +1062,50 @@ export default [
   // them and is caught by review, not by lint — one such site exists
   // legitimately (vendor prose in `claude/org/skills.ts`).
   {
-    files: ['packages/*/src/**/*.ts'],
+    files: [PRODUCT_SOURCE_TS],
     rules: {
       'local/explicit-zod-strictness': ['error', { allowDefaultStripIn: [] }],
-      'no-restricted-syntax': ['error',
-        {
-          selector: "CallExpression[callee.type='MemberExpression'][callee.object.type='MemberExpression'][callee.object.property.name='message'][callee.property.name=/^(includes|startsWith|endsWith|match|search)$/]",
-          message: 'Do not dispatch on an error message. Dispatch on its code (`isVatError(err, code)`), its class (`instanceof`), or an errno predicate (`isPathAbsentError`) — prose is for humans and changes when it is improved.',
-        },
-        {
-          selector: "CallExpression[callee.type='MemberExpression'][callee.property.name='test'][arguments.0.type='MemberExpression'][arguments.0.property.name='message']",
-          message: 'Do not test a regex against an error message. Dispatch on its code (`isVatError(err, code)`), its class (`instanceof`), or an errno predicate (`isPathAbsentError`).',
-        },
-        // Every VAT error carries a `code`: a class that extends the bare
-        // `Error` has none, and the contract above has nothing to dispatch on.
-        // One such class survived the sweep by being added after it.
-        {
-          selector: "ClassDeclaration[superClass.name='Error']",
-          message: 'Extend `VatError` from @vibe-agent-toolkit/utils (with a SCREAMING_SNAKE code), not the bare `Error` — every VAT error carries a code a catch block can dispatch on.',
-        },
-      ],
+      'no-restricted-syntax': ['error', ...ERROR_CONTRACT_RESTRICTED_SYNTAX, ...GIT_NO_ANSWER_RESTRICTED_SYNTAX, ...RESTRICTED_SPECIFIER_SYNTAX],
     },
   },
-  // The base class itself is the one legitimate `extends Error` in `src`.
+  // The git-silence classifier: the one file that may spell its two sentences (see GIT_NO_ANSWER_PROSE).
+  {
+    files: [GIT_NO_ANSWER_CLASSIFIER_FILE],
+    rules: { 'no-restricted-syntax': ['error', ...ERROR_CONTRACT_RESTRICTED_SYNTAX, ...RESTRICTED_SPECIFIER_SYNTAX] },
+  },
+  // The archive module: the one place `tar` and `adm-zip` may be imported (see
+  // ARCHIVE_LIBRARY_BAN). It keeps every other restriction its neighbours carry.
+  {
+    files: [ARCHIVE_MODULE_FILES],
+    rules: {
+      'no-restricted-imports': ['error', { paths: YAML_LIBRARY_BAN }],
+      'no-restricted-syntax': ['error', ...ERROR_CONTRACT_RESTRICTED_SYNTAX, ...GIT_NO_ANSWER_RESTRICTED_SYNTAX],
+    },
+  },
+  // `existsSync` folds "could not look" into "absent", over product `src/` (the rule
+  // itself skips anything else, tests and test-support included). A ratchet: see the
+  // list's own comment.
+  {
+    files: [PRODUCT_SOURCE_TS, 'packages/*/src/**/*.cts'],
+    rules: {
+      // ONE way to handle a terminating signal: `handleTerminatingSignals`. A hand-written
+      // handler that removed itself on the first signal let the second (a terminal Ctrl-C under
+      // the `vat` wrapper delivers two) kill the process mid-cleanup — a clone and a lock leaked.
+      // No backlog: every site was migrated the day this was enabled. `allow` names the helper.
+      'local/no-raw-signal-listener': NO_RAW_SIGNAL_LISTENER,
+      'local/no-existssync': ['error', NO_EXISTSSYNC_RATCHET],
+      'local/no-link-following-fs': ['error', LINK_FOLLOWING_FS_ALLOW],
+      // Committed paths and blobs are bytes: an object-store read (`ls-tree`, `cat-file`,
+      // `diff-tree`, `rev-list`, `show`) goes
+      // through `runGitBytes`, never a runner that decodes stdout as UTF-8. No backlog, no allowlist.
+      'local/no-text-git-object-read': 'error',
+    },
+  },
+  // The base class itself is the one legitimate `extends Error` in `src`: the error-contract
+  // selectors are lifted for it, and the specifier bans every other file carries are not.
   {
     files: ['packages/utils/src/errors/vat-error.ts'],
-    rules: { 'no-restricted-syntax': 'off' },
+    rules: { 'no-restricted-syntax': ['error', ...RESTRICTED_SPECIFIER_SYNTAX] },
   },
 
   // Plain JS / CJS / MJS files (eslint configs, dev-tools scripts, the rule
@@ -774,6 +1142,7 @@ export default [
       ...generalRulesConfig,
 
       'no-restricted-imports': noRestrictedImportsConfig,
+      'no-restricted-syntax': ['error', ...RESTRICTED_SPECIFIER_SYNTAX],
 
       // JS-only: use the core no-unused-vars (the TS block uses the
       // @typescript-eslint variant instead).
@@ -783,6 +1152,21 @@ export default [
         caughtErrorsIgnorePattern: '^_',
       }],
     },
+  },
+
+  // Every `.mts` — no TS block above matches one — is parsed as TypeScript (no type information:
+  // nothing here needs it) and carries the import bans, `test/` included.
+  {
+    files: ['**/*.mts'],
+    languageOptions: { parser: tsparser, parserOptions: { ecmaVersion: 2024, sourceType: 'module' } },
+    rules: { 'no-restricted-imports': noRestrictedImportsConfig, 'no-restricted-syntax': ['error', ...RESTRICTED_SPECIFIER_SYNTAX] },
+  },
+  // Product source in the module flavours the TS blocks above do not match: a `.mts`, `.js` or
+  // `.mjs` under `src/` handles a signal the same way, so the one-installation ban reaches it too.
+  {
+    files: ['packages/*/src/**/*.{mts,js,mjs}'],
+    plugins: { local: localRules },
+    rules: { 'local/no-raw-signal-listener': NO_RAW_SIGNAL_LISTENER },
   },
 
   // CommonJS-specific overrides — `.cjs` and `.cts` files are CJS by intent, so
@@ -833,16 +1217,33 @@ export default [
     },
   },
 
-  // Override for factory-based test files
-  // These files generate complete test suites dynamically via factory functions
-  // ESLint's static analysis doesn't recognize dynamically generated tests
+  // ONE timeout contract for the integration and system tiers: a per-test or
+  // per-hook timeout is omitted (the tier's platform-scaled default applies) or
+  // is `atLeastTierTimeout(inject('tierTestTimeout' | 'tierHookTimeout'), budget)`
+  // (vitest.shared.ts provides both): the default is the floor, the budget a
+  // ceiling. A literal `60_000` was 1/15 of the Windows default and timed out
+  // there on runner speed alone; a multiple scaled an hour by 15. No backlog:
+  // every site was migrated the day this was enabled.
   {
     files: [
-      '**/runtime-*/test/pure-function.test.ts',
-      '**/runtime-*/test/llm-analyzer.test.ts',
+      'packages/*/test/integration/**/*.ts',
+      'packages/*/test/system/**/*.ts',
+      'packages/*/{src,test}/**/*.integration.test.ts',
+      'packages/*/{src,test}/**/*.system.test.ts',
     ],
     rules: {
-      'sonarjs/no-empty-test-file': 'off',
+      'local/no-literal-test-timeout': 'error',
+    },
+  },
+
+  // Test FILES only — Sonar's main scope is every file except `*.test.ts`, so a
+  // test body may await in a loop (a scenario that must run step by step) and
+  // `test/**` helpers stay held to both rules. See the main block.
+  {
+    files: ['**/*.test.ts'],
+    rules: {
+      'no-await-in-loop': 'off',
+      'require-await': 'off',
     },
   },
 
@@ -945,6 +1346,7 @@ export default [
   // it can bite. Test and example trees are excluded from every package build and
   // import their own package by name deliberately — see the rule's header and the
   // `recommended: false` note in `packages/utils/eslint/rules/no-self-package-import.cjs`.
+  ...typedProgramConfigs(),
   ...selfImportConfigs(),
 
   // Scoped: enforce safePath.joinUnderRoot() for security-root path joins
@@ -961,6 +1363,19 @@ export default [
     },
     rules: {
       'local/no-unsafe-root-join': 'error',
+    },
+  },
+  // The storage backend is chosen and injected at one edge (see PROJECTION_SQLITE_IMPORTERS).
+  // Its own rule rather than `no-restricted-imports`: flat config replaces a rule's options per
+  // matching block, so an exemption block would drop every other ban that rule carries there.
+  {
+    files: ['**/*.{ts,cts,mts,js,cjs,mjs}'],
+    ignores: PROJECTION_SQLITE_IMPORTERS,
+    plugins: {
+      local: localRules,
+    },
+    rules: {
+      'local/projection-sqlite-import-boundary': 'error',
     },
   },
 ];

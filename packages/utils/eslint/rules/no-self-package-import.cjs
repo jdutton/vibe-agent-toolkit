@@ -6,11 +6,11 @@
  * `@scope/foo`.
  *
  * @example
- * // ❌ BAD — packages/agent-runtime/src/session/file-session-store.ts
- * import type { SessionStore } from '@vibe-agent-toolkit/agent-runtime';
+ * // ❌ BAD — packages/resources/src/resource-registry.ts
+ * import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
  *
  * // ✅ GOOD
- * import type { SessionStore } from './types.js';
+ * import type { ResourceMetadata } from './types.js';
  *
  * ## Why this is a build-breaker and not a style preference
  *

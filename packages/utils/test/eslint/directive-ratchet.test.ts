@@ -41,25 +41,32 @@ const REPO_ROOT = resolveFromImportMeta(import.meta.url, '..', '..', '..', '..')
  * reason in the diff; delete it at zero.
  */
 const CEILINGS: Readonly<Record<string, number>> = {
-  '@typescript-eslint/await-thenable': 1,
   '@typescript-eslint/explicit-module-boundary-types': 6,
-  '@typescript-eslint/no-explicit-any': 24,
-  '@typescript-eslint/no-non-null-assertion': 1,
+  '@typescript-eslint/no-explicit-any': 9,
   '@typescript-eslint/no-require-imports': 1,
   '@typescript-eslint/prefer-nullish-coalescing': 2,
   'import/order': 1,
-  'local/no-bare-dynamic-import-path': 1,
-  'local/no-bare-symlink-in-tests': 3,
+  'local/no-bare-symlink-in-tests': 1,
   // `failure-reason.ts`: a property read that throws IS "declared nothing";
-  // reason inline at the directive.
-  'local/no-blind-catch': 2,
+  // `parse-worker.ts` `acquireCollector`: any refusal means "no collector", whose
+  // fallback is the same for every cause. Reasons inline at the directives.
+  'local/no-blind-catch': 3,
   // The two lexical helpers the rule points every caller at, plus the one
   // import-specifier classifier that is not a containment check at all.
   'local/no-dotdot-containment': 3,
   // +1 each: `clean-build.ts` is the build script of `utils` itself and
-  // cannot import the wrappers from a `dist/` it has not produced.
-  'local/no-fs-mkdirSync': 5,
-  'local/no-hardcoded-path-split': 9,
+  // cannot import the wrappers from a `dist/` it has not produced; the lab's io
+  // `counter.cts` captures the raw function to wrap it.
+  'local/no-fs-mkdirSync': 6,
+  // One in `claude-context-rules.ts` (`globSegments`, its only split) splits
+  // `paths:` globs, whose separator is the gitignore dialect's `/` on every
+  // host — and a `\` there is an ESCAPE, so normalising it would change the
+  // glob; one in `builtin-checks.ts`
+  // splits a `realization_conditions.path`, forward-slashed by `relativize()`.
+  'local/no-hardcoded-path-split': 10,
+  // `path-core.ts`: `toForwardSlashAnyPlatform` is the converter the rule's
+  // autofix writes, so its own body is the one hand-rolled replace.
+  'local/no-manual-path-normalize': 1,
   'local/no-path-startswith': 11,
   'local/no-raw-node-path': 2,
   'local/no-raw-text-decode': 6,
@@ -71,22 +78,19 @@ const CEILINGS: Readonly<Record<string, number>> = {
   'no-void': 1,
   'security/detect-child-process': 1,
   // `generate-tsconfig-refs.ts`: assembled from a module constant, never input.
-  'security/detect-non-literal-regexp': 21,
+  'security/detect-non-literal-regexp': 19,
   'security/detect-possible-timing-attacks': 1,
-  'security/detect-unsafe-regex': 10,
+  'security/detect-unsafe-regex': 8,
   'sonarjs/cognitive-complexity': 2,
-  'sonarjs/deprecation': 3,
   'sonarjs/different-types-comparison': 1,
   'sonarjs/disabled-auto-escaping': 1,
-  'sonarjs/function-return-type': 3,
+  'sonarjs/function-return-type': 2,
   'sonarjs/no-alphabetical-sort': 1,
   'sonarjs/no-nested-functions': 1,
   'sonarjs/no-os-command-from-path': 1,
-  'sonarjs/pseudo-random': 4,
-  'sonarjs/regex-complexity': 2,
-  'sonarjs/unused-import': 4,
+  'sonarjs/regex-complexity': 1,
   'sonarjs/void-use': 1,
-  'unicorn/prefer-structured-clone': 5,
+  'unicorn/prefer-structured-clone': 4,
 };
 
 /** `// eslint-disable…` or `/* eslint-disable…` — a directive, as opposed to prose that mentions one. */

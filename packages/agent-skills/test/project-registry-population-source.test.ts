@@ -35,7 +35,7 @@ import {
   type BlobScopedRows,
   type ExtentKey,
   type ExtentScopedRows,
-  type ProjectionStore,
+  type FactStore,
   type ResourcePopulationSource,
 } from '@vibe-agent-toolkit/resources';
 import { createAllowUsageLedger } from '@vibe-agent-toolkit/schema';
@@ -77,7 +77,7 @@ const SKILL_MD = [
  * which is what makes "no key was ever written" a statement about the guard and
  * not about a lucky cache hit.
  */
-function recordingStore(): ProjectionStore & { touchedRootIds: string[] } {
+function recordingStore(): FactStore & { touchedRootIds: string[] } {
   const touchedRootIds: string[] = [];
   return {
     touchedRootIds,
@@ -95,6 +95,7 @@ function recordingStore(): ProjectionStore & { touchedRootIds: string[] } {
   };
 }
 
+
 /**
  * A REAL projection-backed source bound to `boundRoot`, over `store`.
  *
@@ -104,7 +105,7 @@ function recordingStore(): ProjectionStore & { touchedRootIds: string[] } {
  */
 function projectionSource(
   boundRoot: string,
-  store: ProjectionStore,
+  store: FactStore,
 ): { source: ResourcePopulationSource; offeredRoots: string[] } {
   const offeredRoots: string[] = [];
   return {
@@ -113,11 +114,10 @@ function projectionSource(
       root: boundRoot,
       enumerate: async (root: string) => {
         offeredRoots.push(root);
-        const population = await buildResourcePopulation({
-          root,
-          cache: { store, treeHash: 'test-tree-hash' },
+        const population = await buildResourcePopulation({ outputs: [], root,
+          cache: { store, treeUnchanged: () => true, treeHash: 'test-tree-hash' },
         });
-        return { paths: population.paths, conditions: population.conditions };
+        return population;
       },
     },
   };
@@ -142,11 +142,12 @@ describe('createProjectRegistry populationSource', () => {
     // here.
     const offeredRoots: string[] = [];
     const registry = await createProjectRegistry(root, {
+      outputs: [],
       populationSource: {
         root,
         enumerate: async (enumeratedRoot) => {
           offeredRoots.push(enumeratedRoot);
-          return { paths: [kept], conditions: [] };
+          return { paths: [kept], conditions: [], outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem' };
         },
       },
     });
@@ -165,7 +166,11 @@ describe('createProjectRegistry populationSource', () => {
     // Everything the extent would enumerate, handed over verbatim — the shape a
     // real projection population arrives in.
     const registry = await createProjectRegistry(root, {
-      populationSource: { root, enumerate: async () => ({ paths: [markdown, html, text, vendored], conditions: [] }) },
+      outputs: [],
+      populationSource: {
+        root,
+        enumerate: async () => ({ paths: [markdown, html, text, vendored], conditions: [], outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem' }),
+      },
     });
 
     expect(memberPaths(root, registry)).toEqual(['docs/guide.md']);
@@ -176,7 +181,7 @@ describe('createProjectRegistry populationSource', () => {
     write(root, 'docs/a.md', '# a\n');
     write(root, 'docs/b.md', '# b\n');
 
-    const registry = await createProjectRegistry(root);
+    const registry = await createProjectRegistry(root, { outputs: [] });
 
     expect(memberPaths(root, registry)).toEqual(['docs/a.md', 'docs/b.md']);
   });
@@ -203,11 +208,12 @@ describe('packageSkills populationSource', () => {
       root,
       createAllowUsageLedger(),
       {
+        outputs: [safePath.join(root, 'out')],
         populationSource: {
           root,
           enumerate: async (enumeratedRoot) => {
             offeredRoots.push(enumeratedRoot);
-            return { paths: [skillPath], conditions: [] };
+            return { paths: [skillPath], conditions: [], outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem' };
           },
         },
       },
@@ -215,6 +221,34 @@ describe('packageSkills populationSource', () => {
 
     expect(outcomes.map((outcome) => outcome.status)).toEqual(['built']);
     expect(offeredRoots).toEqual([safePath.resolve(root)]);
+  });
+});
+
+describe('a built skill validated against a shared registry that predates the build', () => {
+  beforeEach(() => {
+    resetProjectRootCaches();
+    resetPackagingRegistryCache();
+  });
+
+  // The shared registry "covers" the bundle by directory alone — it was crawled before the build
+  // wrote it — so the bundle must be layered over it exactly as over the memoized crawl.
+  it('layers the bundle over the shared registry too, so its links are followed', async () => {
+    const root = getTempDir();
+    write(root, 'vibe-agent-toolkit.config.yaml', '{}\n');
+    write(root, 'docs/readme.md', '# Readme\n');
+    const registry = await createProjectRegistry(root, { unreadable: 'refuse', outputs: [] });
+    const builtSkillPath = write(root, 'out/demo/SKILL.md', `${SKILL_MD}\nSee [the reference](./reference.md).\n`);
+    write(root, 'out/demo/reference.md', '# Reference\n');
+
+    const result = await validateSkillForPackaging(builtSkillPath, {}, undefined, 'built', {
+      dispatcher: undefined,
+      registry,
+      unreadable: 'refuse',
+      outputs: [safePath.join(root, 'out', 'demo')],
+    });
+
+    // SKILL.md and the reference it links: both read, from the bundle the shared registry lacks.
+    expect(result.metadata.fileCount).toBe(2);
   });
 });
 
@@ -236,7 +270,7 @@ describe('the packaging validator\'s own project root, against a source bound to
     const store = recordingStore();
     const { source, offeredRoots } = projectionSource(root, store);
 
-    await validateSkillForPackaging(builtSkillPath, undefined, 'built', { unreadable: 'refuse', populationSource: source });
+    await validateSkillForPackaging(builtSkillPath, {}, undefined, 'built', { dispatcher: undefined, unreadable: 'refuse', outputs: [safePath.join(root, 'dist', 'skills', 'demo')], populationSource: source });
 
     // The POSITIVE CONTROL for the next test: same helper, same store shape, and
     // here the lane really does run and really does key an extent. Without it,
@@ -255,8 +289,10 @@ describe('the packaging validator\'s own project root, against a source bound to
     const store = recordingStore();
     const { source, offeredRoots } = projectionSource(root, store);
 
-    const result = await validateSkillForPackaging(builtSkillPath, undefined, 'built', {
+    const result = await validateSkillForPackaging(builtSkillPath, {}, undefined, 'built', {
+      dispatcher: undefined,
       unreadable: 'refuse',
+      outputs: [outputRoot],
       populationSource: source,
     });
 

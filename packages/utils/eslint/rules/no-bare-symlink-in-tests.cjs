@@ -11,9 +11,8 @@
  *   production code at it would be worse advice than the bare call. Prefer a
  *   junction for a directory link on win32, or catch the failure and name the
  *   missing privilege. An `eslint-disable` justification is the sanctioned way
- *   to say "this platform is deliberately out of scope" — see
- *   `cli/src/commands/agent/install.ts`, where `--dev` is knowingly unavailable
- *   on an unprivileged Windows and fails saying exactly that.
+ *   to say "this is the guarded form" — see `dev-tools/src/link-workspace-packages.ts`,
+ *   which makes a junction on win32 and names the package a failure was for.
  *
  * ⚠️ **The name is now narrower than the rule.** It covers shipped code too;
  * renaming it is a public-API change to `@vibe-agent-toolkit/utils/eslint` and

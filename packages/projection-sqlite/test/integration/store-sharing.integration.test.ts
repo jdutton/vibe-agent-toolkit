@@ -32,7 +32,7 @@
  * Each child emits `serializeProjection`'s bytes: every table sorted by its
  * primary key, every row's keys in the registry's column order, and
  * `roots.path` — the one column that legitimately differs between runs —
- * redacted. So "B hydrated what A derived" is one string comparison over twelve
+ * redacted. So "B hydrated what A derived" is one string comparison over thirteen
  * tables. A bespoke per-table deep-equal would have to *choose* which columns to
  * compare, and the columns a hydration bug drops are exactly the ones nobody
  * thinks to list.
@@ -66,7 +66,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 import { resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { atLeastTierTimeout } from '@vibe-agent-toolkit/utils/testing';
+import { afterEach, beforeEach, describe, expect, inject, it } from 'vitest';
 
 /** The population script, beside this file. */
 const CHILD = resolveFromImportMeta(import.meta.url, 'store-sharing-child.mjs');
@@ -132,6 +133,10 @@ const BINARY_ASSET = {
   bytes: new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00, 0x01, 0x02, 0x00, 0xff]),
 } as const;
 
+/** The outcome of a run the store answered, and of one that derived and wrote. */
+const HIT = { population: 'store', stored: 'hit' } as const;
+const WRITTEN = { population: 'derived', stored: 'written' } as const;
+
 /** What one child process reported. */
 interface Population {
   /**
@@ -141,7 +146,13 @@ interface Population {
    */
   readonly contributorRuns: readonly string[];
   /**
-   * `serializeProjection`'s bytes: twelve primary-key-sorted, path-redacted
+   * `populate()`'s own outcome — what a consumer publishes. Asserted beside
+   * `contributorRuns`, which is the work that did or did not happen, so a
+   * verdict that disagrees with the work goes red.
+   */
+  readonly outcome: { readonly population: string; readonly stored: string };
+  /**
+   * `serializeProjection`'s bytes: thirteen primary-key-sorted, path-redacted
    * tables whose rows carry their keys in the registry's column order.
    *
    * The string and not the parsed tables, so the comparison below is over the
@@ -290,7 +301,7 @@ describe('the fixture', () => {
     expect(counts['blobConditions']).toBeGreaterThanOrEqual(1);
     // And the roots row the driver places itself.
     expect(counts['roots']).toBe(1);
-  }, 60_000);
+  });
 });
 
 describe('a second process reading a first process\'s extent', () => {
@@ -308,7 +319,9 @@ describe('a second process reading a first process\'s extent', () => {
     // documents. The oracle can prove a hydration wrong; only the absence of
     // contributor work can prove a hydration HAPPENED.
     expect(second.contributorRuns).toEqual([]);
+    expect(second.outcome).toEqual(HIT);
     expect(first.contributorRuns.length).toBeGreaterThan(0);
+    expect(first.outcome).toEqual(WRITTEN);
     // `selectRequestedRows` rebuilds `roots`, `resources` and `resourceTags` by
     // reachability rather than reading them back under a context, and this is
     // where that reconstruction is falsified across a process boundary: one
@@ -318,7 +331,7 @@ describe('a second process reading a first process\'s extent', () => {
     // it would produce the same values and a different document, and that is a
     // real defect for anyone diffing this output against a committed golden.
     expect(second.document).toBe(first.document);
-  }, 60_000);
+  });
 
   it('runs no contributor at all, which is the only proof the store answered', async () => {
     // Separated from the comparison above because the two prove different
@@ -335,7 +348,8 @@ describe('a second process reading a first process\'s extent', () => {
     expect(first.contributorRuns).toContain('closure:alpha@1');
     expect(first.contributorRuns).toContain('closure:beta@1');
     expect(second.contributorRuns).toHaveLength(0);
-  }, 60_000);
+    expect(second.outcome).toEqual(HIT);
+  });
 });
 
 describe('the additive write, which only two processes can see', () => {
@@ -359,6 +373,7 @@ describe('the additive write, which only two processes can see', () => {
     // for the wrong reason. First: the narrow process must genuinely have
     // MISSED, or it wrote nothing and there was never anything to survive.
     expect(narrow.contributorRuns.length).toBeGreaterThan(0);
+    expect(narrow.outcome).toEqual(WRITTEN);
     // Second: its write must genuinely be narrower — it carries the filesystem
     // extent and `gamma`, and none of the broad run's two closures. Were the
     // two writes the same width, wholesale replacement would be indistinguishable
@@ -372,10 +387,11 @@ describe('the additive write, which only two processes can see', () => {
     // narrower write left another question's contexts alone.
     const again = await runPopulation('broad');
     expect(again.contributorRuns).toEqual([]);
+    expect(again.outcome).toEqual(HIT);
     // And it is the same answer, not merely an answer: a merge that kept the
     // rows but corrupted them would still report a hit.
     expect(again.document).toBe(broad.document);
-  }, 90_000);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 90_000));
 });
 
 describe('a cold store', () => {
@@ -413,5 +429,5 @@ describe('a cold store', () => {
     // agreement above trivially.
     const first = readPopulation(outcomes[0] as ChildOutcome);
     expect(first.counts['zoneProvenance']).toBe(3);
-  }, 90_000);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 90_000));
 });

@@ -3,7 +3,7 @@
  *
  * Rolls `EvidenceRecord`s up into `CAPABILITY_*` observations. Callers
  * supply the local-shell pattern-ID set (which differs per subject — skills
- * check fewer patterns than full plugins) and a subject label for summary
+ * check fewer patterns than full plugins) and a subject label for description
  * wording.
  */
 
@@ -13,7 +13,7 @@ import {
 } from './interpreter-detection.js';
 import type { EvidenceRecord, Observation } from './types.js';
 
-/** Subject of derivation — controls observation summary wording. */
+/** Subject of derivation — controls observation description wording. */
 export type DerivationSubject = 'skill' | 'plugin';
 
 export interface DeriveObservationsOptions {
@@ -97,7 +97,7 @@ export function deriveObservationsFromEvidence(
   if (localShell.length > 0) {
     out.push({
       code: 'CAPABILITY_LOCAL_SHELL',
-      summary: `${subjectCap} requires a local shell environment.`,
+      description: `${subjectCap} requires a local shell environment.`,
       supportingEvidence: dedupePatternIds(localShell),
     });
   }
@@ -109,7 +109,7 @@ export function deriveObservationsFromEvidence(
     if (!records) continue;
     out.push({
       code: 'CAPABILITY_EXTERNAL_CLI',
-      summary: `${subjectCap} invokes external CLI: ${binary}.`,
+      description: `${subjectCap} invokes external CLI: ${binary}.`,
       payload: { binary },
       supportingEvidence: dedupePatternIds(records),
     });
@@ -119,7 +119,7 @@ export function deriveObservationsFromEvidence(
   if (browserAuth.length > 0) {
     out.push({
       code: 'CAPABILITY_BROWSER_AUTH',
-      summary: `${subjectCap} requires an interactive browser authentication flow.`,
+      description: `${subjectCap} requires an interactive browser authentication flow.`,
       supportingEvidence: dedupePatternIds(browserAuth),
     });
   }

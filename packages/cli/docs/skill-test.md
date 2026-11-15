@@ -51,7 +51,17 @@ VAT reads liberally as adopter-authored data.)
 
 `vat skill test configure <skill>` writes the **per-skill** block using a
 comment-preserving YAML upsert, and validates values before writing. Prefer it over
-hand-editing.
+hand-editing. It publishes the report envelope on stdout (schema
+`packages/cli/schemas/skill-test-configure.json`): `status: ok`, `examined: 1`, and
+`data: { configPath, skill }`, `configPath` relative to the working directory. With
+`--print` it writes nothing to disk and stdout is the updated config text alone — no
+report — so `vat skill test configure my-skill --max-turns 20 --print > new.yaml`
+yields a usable file. A refusal exits `2` with `error.code`: `USAGE_INVALID` (an invalid
+knob value, a skill the config's `skills.include` does not discover — configure a skill
+after declaring it — or no project root), `CONFIG_INVALID` (no config file at the project root, or
+the edit would leave it failing its schema), `INPUT_UNREADABLE`, or `RUN_INCOMPLETE`
+(the write failed). An unknown key already in the config is a stderr warning, never a
+refusal.
 
 ## Per-skill knobs (`skills.config.<skill>.test`)
 
@@ -80,7 +90,15 @@ A **source descriptor** is one of `{ workspace: <pkg> }`, `{ npm: <spec> }`,
 command line the same sources are written as `name=workspace:<pkg>`,
 `name=npm:<spec>`, `name=url:<u>`, `name=path:<dir>`, or `name=vendored` — the CLI
 form requires an explicit companion `name=`, the config form derives it from the
-resolved skill.
+resolved skill. An npm spec must be version-pinned (`@scope/pkg@1.2.3`, with an
+optional `/subpath` — a file or directory inside the installed package, or a subpath
+its `exports` map declares; with none, the package's own directory is staged) and
+installed under the project root. A required npm source that names nothing (a package
+that is not installed, an unpinned spec, a subpath naming nothing in the package or
+climbing out of it) and a scoped specifier given as a `path:` are refused before
+anything is staged — `USAGE_INVALID` from the command line, `CONFIG_INVALID` from the
+config. A `path:` source naming a directory that does not exist is refused when it is
+staged, as `INPUT_UNREADABLE`, like any source the OS will not read.
 
 ### Companion staging and builds
 
@@ -154,39 +172,78 @@ The suite is never copied into anything the executor can reach. Each eval's decl
 | `--refresh` | Force a full re-stage, ignoring existing staged content. |
 | `--keep` | Keep the harness directory after the run (needed to inspect `results/`). |
 | `--dry-run` | Build and stage exactly as a real run would, then stop without spawning Claude — no session, no tokens. It **does build** (when `--i-understand-this-runs-skill-code` is passed), because the question a dry run answers is "what happens if I drop this flag", and a preview built from a stale `dist/` answers it wrongly. **Without** the acknowledgement it does not build — building runs the repo's `test.build` hook, an arbitrary shell command — so it falls back to an existing `dist/` and warns it may be stale. `--no-build` skips the build either way. |
-| `--out <dir>` / `--workdir <dir>` | Override the harness output / working directory. |
-| `--allow-eval-failure` | Opt out of fail-closed: exit `0` even when an eval fails. For interactive iteration. |
+| `--out <dir>` / `--workdir <dir>` | Override the harness output / working directory. An existing `--out` must already be a directory and, on POSIX, `0700`: VAT creates a new one `0700`, and never changes the mode of one you made (Windows has no mode check). |
+| `--allow-eval-failure` | Opt out of fail-closed: each failed eval is published as a `warning` finding instead of an `error`, so the run exits `0`. For interactive iteration. |
 | `--allow-unverified-skill-source` | Skip the vendored manifest integrity check. |
 | `--debug` | Enable debug logging. |
 
+## The report
+
+`vat skill test run` publishes the report envelope on stdout (schema
+`packages/cli/schemas/skill-test-run.json`), and nothing else — the `Summary:` line that
+used to be stdout's one machine-readable channel is gone from it. The human verdict line
+stays on stderr as `Summary: <line>`, beside `Harness:`, `Results:`, `Workspaces:` and
+`Reason:`.
+
+- `examined` — the evals the run graded; on `--dry-run`, which grades nothing, the evals
+  it staged.
+- `findings` — one `SKILL_TEST_EVAL_FAILED` per eval that ran and did not pass (an output
+  expectation, or its tool verdict): `location` the suite's `evals.json` relative to the
+  project root (omitted when it lies outside the project), `field` the eval's `id`. `error` by default,
+  `warning` under `--allow-eval-failure`. Evals a fail-fast tier gate skipped are not
+  listed: they never ran, and the failure that fired the gate is.
+- `data.skill` — the reference as passed; `data.description` — the verdict line
+  (`PASS 3/3`, `FAIL 1/2 (1 tool)`, the dry-run preview); `data.evals` — `{ id, passed }`
+  per graded eval; `data.artifacts.frictionReport` — the `friction.json` written, or `null`
+  on a dry run; `data.artifacts.outputDir` — the harness root (`--out`), of which a
+  default run keeps only `results/`.
+
 ## Exit codes
 
-The same three-way contract as every other `vat` command, so a CI consumer can
-tolerate eval failures while failing closed on a harness that could not run.
+The same three-way contract as every other `vat` command, derived from the published
+document, so a CI consumer can tolerate eval failures while failing closed on a harness
+that could not run.
 
-- `0` - Run completed, all expectations passed (or `--allow-eval-failure` suppressed a failing verdict)
-- `1` - **Eval failure** — the run completed and produced a valid `grading.json`; expectations did not all pass
-- `2` - The harness could not run. A `Reason: <reason>` line on stderr says why:
-  - `internal` — the harness broke (executor/grader crash, stall, timeout, grader nonce failure)
-  - `preflight` — the environment or inputs need fixing (bad config, unresolvable required companion, auth guard, missing security ack, `build` hook failed)
-  - `bootstrap` — `evals.json` was absent, so VAT wrote a starter template next to the skill source; fill it in and re-run
+- `0` - Every eval passed (or `--allow-eval-failure` published the failures as warnings)
+- `1` - **Eval failure** — the run completed and an `error` finding names each eval that did not pass
+- `2` - The harness could not run: `status: error`, and `error.code` says which refusal.
+  A `Reason: <reason>` line on stderr restates it for a CI log — `internal` exactly for
+  `INTERNAL_ERROR`, `bootstrap` for a scaffolded `evals.json`, `preflight` for the rest.
+  Each code is decided where the cause was seen, never read back from a message. A skill
+  build that threw is classified by what it threw: a coded cause keeps its own code (a
+  directory the OS will not list is `INPUT_UNREADABLE` from a build exactly as from
+  resolution), and an uncoded one is `INTERNAL_ERROR`:
+
+| `error.code` | `Reason:` | When |
+|---|---|---|
+| `BACKEND_UNAVAILABLE` | `preflight` | No `claude` binary on `PATH`, or one too old for a flag the spawn needs |
+| `USAGE_INVALID` | `preflight` | An invalid flag value, an auth guard the credentials do not meet, the missing security ack, an unsafe `--workdir`, an `--out` that exists and is not a directory, or (POSIX only — Windows has no mode check) is not `0700` (VAT never changes its mode — `chmod 700` it, or name one that does not exist yet), a held harness lock, a skill name the config does not declare (or `--no-build` with no dist), a bad `env` token, a failing `test.build` hook, a repeated staged name, a `--with` source, `--evals` or skill reference that names nothing (an npm package that is not installed, an npm spec with no version pin or a subpath naming nothing in the package, a scoped specifier given as a path) |
+| `CONFIG_INVALID` | `preflight` | The governing `vibe-agent-toolkit.config.yaml` does not parse or fails its schema (subject's or a companion's), or its `test.with` or `test.evals` names nothing (the same cases as the flags). An optional companion (`--with-optional`, `test.optional`) that names nothing is skipped with a warning instead |
+| `INPUT_UNREADABLE` | `preflight` | A declared eval input or dependency is absent, the `evals.json` is not a valid suite, the vendored copy fails its manifest, a config or directory the OS will not read, a `--with name=path:<dir>` companion that does not exist, an npm package that is installed but whose `package.json` Node cannot read, or a source holding a file or directory the OS will not read or a symlink (named) |
+| `INPUT_UNREADABLE` | `bootstrap` | `evals.json` was absent, so VAT wrote a starter template next to the skill source; fill it in and re-run |
+| `RUN_INCOMPLETE` | `preflight` | The packager refused the subject's (or a required companion's) own content — a `files:` source absent, a `SKILL.md` bundled as a resource. A `SKILL_PACKAGING_FAILED` finding at the skill's `SKILL.md` says what to change. Also, with no finding: an output the OS will not let the run write — the harness root (`--out` under a read-only directory), its lockfile, the staged skill copies and manifest, the `results/` files, a dist bundle — a full disk or a read-only directory. Known gap: a disk so full that a skill build's git snapshot of the project fails first is still `INTERNAL_ERROR` |
+| `INTERNAL_ERROR` | `internal` | The harness broke (executor/grader crash, stall, timeout, grader nonce or skew failure); the stack is on stderr |
 
 ```bash
 vat skill test run my-skill --i-understand-this-runs-skill-code
 case $? in
   0) ;;
   1) echo "evals failed (tolerated)" ;;
-  *) exit 1 ;;    # harness could not run — fail the build; read Reason: on stderr
+  *) exit 1 ;;    # harness could not run — fail the build; read error.code
 esac
 ```
 
 ## Results
 
-With `--keep`, the harness directory retains a `results/` tree that VAT is the sole
-writer of:
+The harness root keeps a `results/` tree (named on stderr as `Results:`) that VAT is
+the sole writer of — the harness writes it, not the CLI, and validates each file against
+its schema before the run reports:
 
 - `grading.json` - per-expectation verdicts and the pass/total summary
-- `friction.json` - packaging issues observed during the run (advisory)
+- `friction.json` - packaging issues observed during the run (advisory). Each item's
+  `severity` is `error|warning|info`, the vocabulary every VAT report uses. The grader is
+  still asked for `high|medium|low`; VAT maps it (`high`->`error`, `medium`->`warning`,
+  `low`->`info`) once, when it parses the grader's fragment.
 - `tool-eval.json` - tool-expectation verdicts; always written, so check
   `.evals.length` rather than file existence
 
@@ -204,11 +261,83 @@ vat skill test run my-skill --model claude-opus-5 --grader-model claude-sonnet-5
 vat skill test run router-skill --with helper=path:./skills/helper \
   --i-understand-this-runs-skill-code
 
-# Persist knobs instead of passing them every time
-vat skill test configure my-skill --auth subscription --require-auth subscription
+# Persist knobs instead of passing them every time (`requireAuth` has no
+# configure flag: set it under the skill's `test:` block by hand, or pass
+# --require-auth to each `run`)
+vat skill test configure my-skill --auth subscription
 ```
 
 ## See Also
 
 - [skills.md](./skills.md) - `vat skills` (plural): packaging, validation, install
 - [index.md](./index.md) - full CLI command index
+
+## Example reports
+
+Each block below is a real document from the built CLI, trimmed where noted; `packages/cli/test/integration/tagged-report-examples.integration.test.ts` validates every `vat-report=<verb>` block against that verb's registered schema.
+
+### `skill test configure`
+
+The test block written to the config. Produced by `vat skill test configure test-skill-2 --auth inherit`.
+
+```yaml vat-report=skill test configure
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+data:
+  configPath: vibe-agent-toolkit.config.yaml
+  skill: test-skill-2
+```
+
+### `skill test run`
+
+A dry run: what a real run would do, with nothing spawned and no eval graded. Produced by `vat skill test run ./test-skill-1 --dry-run --i-understand-this-runs-skill-code --out ./out`; the absolute paths are shortened.
+
+```yaml vat-report=skill test run
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+data:
+  skill: ./test-skill-1
+  description: |-
+    [dry-run] A real run would: stage the source dir as-is, then spawn claude.
+    [dry-run] Would run 1 executor→grader spawn pair at concurrency 4 — 2 claude sessions in total.
+    [dry-run] --max-budget-usd is PER SPAWN ($5), not per run: worst case ≈ $10.00 across those 2 sessions.
+    [dry-run] Executor (no --model; claude default); grader model claude-sonnet-5 (prompt via stdin).
+    [dry-run] Staged manifest: 1 entry | fingerprint: 33dee44374157bdc92af00c90fc5de39d2a3d974795a707a73c575ecf6488b4d
+    [dry-run] Provenance would be written to: /home/me/project/out/results/provenance.json
+  evals: []
+  artifacts:
+    frictionReport: null
+    outputDir: /home/me/project/out
+```
+
+Refused without the security acknowledgment: an `error` document, exit `2`. Produced by `vat skill test run test-skill-1`.
+
+```yaml vat-report=skill test run
+status: error
+examined: 0
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+error:
+  code: USAGE_INVALID
+  message: Security acknowledgment required. Pass --i-understand-this-runs-skill-code to proceed.
+data: null
+```

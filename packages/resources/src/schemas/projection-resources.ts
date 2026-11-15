@@ -1,9 +1,19 @@
 import { SeveritySchema } from '@vibe-agent-toolkit/schema';
+import { FS_FAULT_ERRNOS_BY_CLASS, type FsFaultClass } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 import { ContentKeySchema, JsonValueSchema } from './projection-shared.js';
 
 const EXTENT_FK_DESC = 'Foreign key to resolution_contexts.contextId, species "extent"';
+
+/**
+ * The classes a link resolution the OS declined or could not complete can carry: utils' one
+ * vocabulary less `absent` — the OS that looked and found nothing is EXTENT_SYMLINK_TARGET_UNRESOLVED,
+ * whose row carries no class.
+ */
+const TARGET_FAULT_CLASSES = (Object.keys(FS_FAULT_ERRNOS_BY_CLASS) as FsFaultClass[]).filter(
+  (faultClass): faultClass is Exclude<FsFaultClass, 'absent'> => faultClass !== 'absent',
+) as [Exclude<FsFaultClass, 'absent'>, ...Array<Exclude<FsFaultClass, 'absent'>>];
 
 /**
  * A row of the `roots` table — a federated corpus root.
@@ -112,12 +122,19 @@ export type ResourceRow = z.infer<typeof ResourceRowSchema>;
  * - `deferred` — this path has bytes, but no consumer has asked for them yet,
  *   so they were never read. **This is not a failure**, and it is the only
  *   member that a later pass can legitimately turn into `keyed`.
- * - `unreadable` — a read was attempted and it threw. A fact about the corpus
- *   (a permissions quirk, a vanished file), never an error in the harness.
+ * - `unreadable` — a read was attempted and the filesystem refused it. A fact
+ *   about the corpus (a permissions quirk, a vanished file), never an error in
+ *   the harness — and never anything but the filesystem's refusal.
+ * - `oversize` — the file was refused by its size and never read: too large to
+ *   decode into a JS string (past `MAX_DECODABLE_BYTES`, V8's string-length
+ *   limit), or, for a type a parser reads, past the population's parse input cap
+ *   (`inputBytes`), which a parse would refuse it at anyway. Not `unreadable`:
+ *   nothing is wrong with the file's permissions, and a reader sent to check them
+ *   would find nothing.
  * - `none` — there are no bytes here to key at all: the path is absent, or a
  *   directory, or a dangling symlink.
  */
-export const ContentStateSchema = z.enum(['keyed', 'deferred', 'unreadable', 'none'])
+export const ContentStateSchema = z.enum(['keyed', 'deferred', 'unreadable', 'oversize', 'none'])
   .describe('Why this realization does or does not carry a content key');
 
 export type ContentState = z.infer<typeof ContentStateSchema>;
@@ -289,9 +306,12 @@ export type ResourceExtentRow = z.infer<typeof ResourceExtentRowSchema>;
  * the issue the shipped walker produces.
  *
  * **Columns, not a sibling table.** The relation is 1:1 with the row: the
- * table's key is `(extentId, path, code, resourceId)`, so a target refused
- * through three references records ONE row, and a sibling table would be a
- * one-to-one join keyed on a four-column composite — a join that buys nothing
+ * table's key is `(extentId, path, code, resourceId, sourcePath, sourceLine,
+ * sourceRef)`, so two references that provoke the SAME code at the SAME path
+ * but sit at different positions — a different referring file, a different
+ * line, or the same line spelled differently — each record their own row; a
+ * sibling table would be a one-to-one join keyed on a seven-column composite —
+ * a join that buys nothing
  * and an FK no other table in the projection has. Sparsity is not an argument
  * against: `symlinkResolves`, `resourceId` and `vatId` are all "null unless
  * this row is that kind of row", and the alternative — an absent key — is the
@@ -305,12 +325,16 @@ export type ResourceExtentRow = z.infer<typeof ResourceExtentRowSchema>;
  * {@link CONDITION_WITHOUT_REFERENCE} at those sites so the intent is stated
  * rather than inferred from six null literals.
  *
- * ⚠️ **The provenance is ONE witness, not the list.** The table's grain is
- * unchanged — the key does not include these columns, so `ProjectionBuilder`
- * keeps the first row and drops the rest, and the surviving row names the
- * first reference that provoked the condition (first in blob order, then
- * `blob_references.ordinal`). A consumer that needs every reference to a
- * refused path reads `blob_references`, which is where that list lives.
+ * ⚠️ **The provenance still collapses to ONE witness when the key genuinely
+ * repeats** — the fixpoint's own re-emission of the identical reference every
+ * pass (same referring file, same line, same `rawRef`). `ProjectionBuilder`
+ * keeps the first row filed under a key and drops the rest, so a re-emission
+ * is a no-op. Two DIFFERENT referring files whose reference sits at the same
+ * line with the identical spelling are distinguishable — the key carries
+ * `sourcePath` — and record two rows. A consumer that needs every reference to
+ * a refused path, not just every distinguishable one (two identical references
+ * on one line of one file), reads `blob_references`, which is where the full
+ * list lives.
  *
  * `sourcePath` repeats `path` for a condition anchored to the referring file
  * (`CLOSURE_REFERENCE_UNRESOLVED` names the file an author can open, since its
@@ -338,17 +362,22 @@ export const RealizationConditionRowSchema = z.object({
     .describe('The FIRST glob declared by the refusal rule that matched — the rule\'s identifying pattern, read the same way packaging-validator.ts reads matchedRule.patterns[0]. Names WHICH rule, not which of its globs fired; the code column already says why. Null when the matching rule declares no patterns (it refused by basename, kind or flag), and for every condition no refusal rule produced.'),
   matchedPayload: JsonValueSchema
     .describe('The matched refusal rule\'s OPAQUE payload, copied verbatim from the declaration and never interpreted — the channel for caller vocabulary the primitive has no column for (the skill translation carries an excludeReferencesFromBundle rule\'s index and its template here). Null when the rule declared none, and for every condition no refusal rule produced.'),
+  targetFaultClass: z.enum(TARGET_FAULT_CLASSES).nullable()
+    .describe('The fault class (the FsFaultClass vocabulary less absent: refused, exhausted, wrong-type, occupied, busy, unsupported, device) of a resolution the OS declined or could not complete — set on EXTENT_SYMLINK_TARGET_UNREADABLE, where it says WHY the link could not be followed, so a query or check reads the cause from a column and never from message. Null on every other condition: nothing was looked up, or the OS looked and found nothing.'),
 }).strict().describe('A row of the path-dependent `realization_conditions` table');
 
 export type RealizationConditionRow = z.infer<typeof RealizationConditionRowSchema>;
 
 /**
- * The six provenance columns, all null — a condition **no reference provoked**.
+ * The six provenance columns, all null — a condition **no reference provoked**
+ * — and `targetFaultClass`, null because no lookup failed.
  *
  * Spread at every such producer (`REALIZATION_PATH_COLLISION`,
  * `CLOSURE_ROOT_ABSENT`, the package and plugin extents' locate failures) so
  * the row states "there is no reference behind this" once, by name, instead of
- * repeating six null literals that a reader has to recognise as a set.
+ * repeating seven null literals that a reader has to recognise as a set. The one
+ * producer that knows a fault (a declined link whose resolution the OS refused)
+ * spreads it and then states its class.
  */
 export const CONDITION_WITHOUT_REFERENCE = {
   sourcePath: null,
@@ -357,9 +386,10 @@ export const CONDITION_WITHOUT_REFERENCE = {
   targetExists: null,
   matchedPattern: null,
   matchedPayload: null,
+  targetFaultClass: null,
 } as const satisfies Pick<
   RealizationConditionRow,
-  'sourcePath' | 'sourceLine' | 'sourceRef' | 'targetExists' | 'matchedPattern' | 'matchedPayload'
+  'sourcePath' | 'sourceLine' | 'sourceRef' | 'targetExists' | 'matchedPattern' | 'matchedPayload' | 'targetFaultClass'
 >;
 
 /**

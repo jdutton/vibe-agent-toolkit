@@ -29,6 +29,7 @@ import {
   resolveBasePath,
   resolveRewriteLinks,
 } from '../../src/commands/skills/package.js';
+import { subcommand } from '../help-text-helpers.js';
 
 /** The positional `<skill-path>` used throughout, deep enough that dirname bites. */
 const SKILL_ARG = 'skills/demo/SKILL.md';
@@ -54,14 +55,6 @@ function parseOptions(root: Command, target: Command, argv: string[]): Record<st
   target.action(() => { /* displace the real handler */ });
   root.parse(argv, { from: 'user' });
   return target.opts();
-}
-
-function subcommand(root: Command, name: string): Command {
-  const found = root.commands.find((candidate) => candidate.name() === name);
-  if (!found) {
-    throw new Error(`command factory no longer exposes a '${name}' subcommand`);
-  }
-  return found;
 }
 
 /** Options Commander builds for a real `vat resources validate` invocation. */

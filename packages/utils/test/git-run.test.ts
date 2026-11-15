@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { runGit, runGitOrThrow } from '../src/git-run.js';
+import { gitIsMissing, runGit, runGitBytes, runGitOrThrow } from '../src/git-run.js';
 import {
   getToolVersion,
   isToolAvailable,
@@ -121,6 +121,30 @@ describe('runGit', () => {
   });
 });
 
+describe('runGitBytes', () => {
+  it('returns stdout as the bytes git wrote: multi-byte UTF-8 kept as its bytes, whitespace untrimmed', () => {
+    // `stripspace` echoes its stdin less trailing whitespace: the leading spaces and final LF are data.
+    const result = runGitBytes(['stripspace'], { input: '  é ok  \n' });
+    expect(result.ok).toBe(true);
+    expect(Buffer.isBuffer(result.stdout)).toBe(true);
+    expect(result.stdout).toEqual(Buffer.from([0x20, 0x20, 0xc3, 0xa9, 0x20, 0x6f, 0x6b, 0x0a]));
+  });
+
+  it('decodes git\'s own stderr as the text git wrote, not as its hex transport', () => {
+    const result = runGitBytes(['definitely-not-a-subcommand-é']);
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain('definitely-not-a-subcommand-é');
+    expect(result.stderr).toBe(result.stderr.trim());
+  });
+
+  it('reports a spawn-level failure with its own message, as runGit does', () => {
+    const result = runGitBytes(['--version'], { maxBuffer: 1 });
+    expect(result.ok).toBe(false);
+    expect(result.error).toBeDefined();
+    expect(result.stderr).toBe(result.error?.message);
+  });
+});
+
 describe('runGitOrThrow', () => {
   it('returns stdout on success', () => {
     expect(runGitOrThrow(['--version'])).toMatch(/^git version /);
@@ -130,5 +154,21 @@ describe('runGitOrThrow', () => {
     expect(() => runGitOrThrow(['definitely-not-a-subcommand'])).toThrow(
       /git definitely-not-a-subcommand failed/,
     );
+  });
+});
+
+describe('gitIsMissing', () => {
+  it('is false where git runs', () => {
+    expect(gitIsMissing()).toBe(false);
+  });
+
+  it('is true when PATH holds no git', () => {
+    const saved = process.env['PATH'];
+    try {
+      process.env['PATH'] = '';
+      expect(gitIsMissing()).toBe(true);
+    } finally {
+      process.env['PATH'] = saved;
+    }
   });
 });

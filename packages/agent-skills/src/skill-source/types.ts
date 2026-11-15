@@ -39,6 +39,13 @@ export interface ResolvedSkillSource {
    *   vendored  -> vendored manifest hash
    */
   identity: string;
+  /**
+   * What resolving left behind once the source WAS resolved: a temporary directory the OS would
+   * not remove (`withTempDir`'s `leftover`), each the classified fault naming it. Never a refusal
+   * of the resolution — the caller reports each as a `TREE_CLEANUP_INCOMPLETE` warning beside its
+   * work. Empty for a source that made no temporary directory. Required: no lane can drop one.
+   */
+  leftovers: readonly unknown[];
 }
 
 /** Resolution context shared by every source kind. */

@@ -1,12 +1,33 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  assertRenderableLicense,
   isFilePath,
   generateLicenseText,
   isSpdxIdentifier,
   RENDERABLE_SPDX_IDS,
   UNRENDERABLE_SPDX_IDS,
 } from '../../../../src/commands/claude/marketplace/license-utils.js';
+import { refusalCodeOf } from '../../../../src/utils/command-refusal.js';
+import { thrownBy } from '../../../helpers/refusal-doubles.js';
+
+// The license value is the config's: a value VAT cannot render is CONFIG_INVALID
+// wherever it is judged — at option resolution (publish) and at text generation.
+describe('an unusable license value refuses CONFIG_INVALID', () => {
+  const unrenderable = [...UNRENDERABLE_SPDX_IDS.keys()][0] ?? '';
+
+  it.each([unrenderable, 'not-a-license'])('assertRenderableLicense(%s)', (value) => {
+    expect(refusalCodeOf(thrownBy(() => assertRenderableLicense(value)))).toBe('CONFIG_INVALID');
+  });
+
+  it('generateLicenseText refuses the same value the same way', () => {
+    expect(refusalCodeOf(thrownBy(() => generateLicenseText(unrenderable, 'Org', 2026)))).toBe('CONFIG_INVALID');
+  });
+
+  it('accepts a renderable one', () => {
+    expect(() => assertRenderableLicense('mit')).not.toThrow();
+  });
+});
 
 /**
  * Phrases that prove the output is text *about* a license rather than the

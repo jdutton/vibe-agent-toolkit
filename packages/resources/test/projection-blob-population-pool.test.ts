@@ -27,19 +27,30 @@
  *   `finally` is the only thing that can hold it.
  */
 
+import diagnosticsChannel from 'node:diagnostics_channel';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
 
 import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { expectAbsenceCause } from '@vibe-agent-toolkit/utils/testing';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
-import { ParseCache } from '../src/parse-cache.js';
-import { createParsePool, defaultParsePoolSize, type ParsePool } from '../src/parse-pool.js';
-import { populateBlobs, type BlobPopulationResult } from '../src/projection/blob-population.js';
+import { isParserUnavailable, ParseCache } from '../src/parse-cache.js';
+import {
+  __closeParkedParseWorkersForTest,
+  __parkedParseWorkerCountForTest,
+  __setParseWorkerEntryForTest,
+  createParsePool,
+  defaultParsePoolSize,
+  type ParsePool,
+} from '../src/parse-pool.js';
+import { BLOB_PARSE_FAILED, BLOB_PARSE_WORKER_DIED, populateBlobs, type BlobPopulationResult } from '../src/projection/blob-population.js';
+import { describeBlobRefusals } from '../src/projection/blob-refusals.js';
 import type { Projection } from '../src/projection/projection.js';
 
-import { baseBuilderForRoot } from './blob-fixture-population.js';
+import { baseBuilderForRoot, conditionsWithCode } from './blob-fixture-population.js';
 import { fakePool } from './parse-pool-fixture.js';
-import { setupSubdirTestSuite, workerThreadCount } from './test-helpers.js';
+import { setupSubdirTestSuite, stubParkingMachine, workerThreadCount } from './test-helpers.js';
 
 /**
  * A cache that never touches disk, for every test whose subject is the loop.
@@ -174,13 +185,13 @@ function blobTablesOf(projection: Projection): {
 /**
  * Derive the loop corpus once.
  *
- * `size` is stated rather than left to the default on purpose: the default is
- * derived from how many documents remain, and this fixture is deliberately far
- * too small to earn a worker. A suite that let the default decide would silently
- * stop creating a pool at all, and every assertion below would pass by
- * describing the un-pooled path.
+ * `size` is stated rather than left to the default on purpose: the default width
+ * is derived from how many documents remain, and this fixture is deliberately
+ * far too small to earn a second worker. A suite that let the default decide
+ * would run one job at a time, and every order assertion below would pass
+ * trivially.
  *
- * @param pool - The pool to force on, or `undefined` for the unpooled path
+ * @param pool - The fake pool to force on, or `undefined` for the real pool
  * @returns The projection and the stage's counters
  */
 async function derive(
@@ -189,15 +200,14 @@ async function derive(
   const builder = await baseBuilderForRoot(suite.tempDir);
   const counts = await populateBlobs(builder, {
     parseCache: NO_CACHE,
-    // `enabled` is stated on BOTH arms, never inherited. The pool ships OFF by
-    // default (while its shape is reworked — the "6.5x regression" that first
-    // set that default was an instrument artifact, see `ParsePoolPolicy`), so a
-    // pooled test that omitted it would silently become an unpooled test and
-    // keep passing — asserting nothing about the pool while looking like it did.
+    // The fake arm states its width: the default stays at one thread for a
+    // corpus this small, so a test that inherited it would never exercise the
+    // concurrent half. The other arm is the shipped route — the real bounded
+    // pool — because there is no unpooled route left to compare against.
     parsePool:
       pool === undefined
-        ? { enabled: false }
-        : { enabled: true, missThreshold: 1, size: pool.size, createPool: (): ParsePool => pool },
+        ? {}
+        : { missThreshold: 1, size: pool.size, createPool: (): ParsePool => pool },
   });
   return { projection: builder.build(), counts };
 }
@@ -229,12 +239,12 @@ describe('the blob stage under a parse pool', () => {
     expect(second.counts).toStrictEqual(first.counts);
   });
 
-  it('derives exactly what the unpooled path derives', async () => {
-    const unpooled = await derive();
+  it('derives exactly what the shipped bounded pool derives', async () => {
+    const shipped = await derive();
     const pooled = await derive(fakePool(3).pool);
 
-    expect(blobTablesOf(pooled.projection)).toStrictEqual(blobTablesOf(unpooled.projection));
-    expect(pooled.counts).toStrictEqual(unpooled.counts);
+    expect(blobTablesOf(pooled.projection)).toStrictEqual(blobTablesOf(shipped.projection));
+    expect(pooled.counts).toStrictEqual(shipped.counts);
   });
 
   it('never fans out wider than the pool', async () => {
@@ -261,9 +271,8 @@ describe('the blob stage under a parse pool', () => {
     // either.
     expect(counts.blobsWithoutParser).toBe(1);
     expect(counts.blobsNotText).toBe(1);
-    // Ten parsable blobs (nine markdown, one HTML); exactly one of them is
-    // parsed in-process to trip the miss threshold, and the rest are dispatched.
-    expect(record.calls).toBe(DOC_COUNT);
+    // Every parsable blob is dispatched — there is no in-process route.
+    expect(record.calls).toBe(DOC_COUNT + 1);
   });
 
   it('shuts the pool down on the success path', async () => {
@@ -301,8 +310,17 @@ describe('parse-pool activation', () => {
     // OUTSIDE the corpus root: a cache written beneath `tempDir` would be
     // enumerated as corpus on the second run and change what is being derived.
     const cache = new ParseCache({ cacheDir: safePath.join(suite.suiteDir, 'parse-cache') });
-    const before = workerThreadCount();
-    const observed = { peak: before, pools: 0 };
+    // Threads STARTED, never threads alive at some moment: a live count also counts a thread an
+    // earlier test's pool parked, and that one closes on its own idle timer whenever the run is
+    // slow enough — so a cold run's thread and a parked thread's exit cancel out in the count.
+    const observed = { spawns: 0, pools: 0 };
+    const onSpawn = (): void => {
+      observed.spawns += 1;
+    };
+    diagnosticsChannel.subscribe('worker_threads', onSpawn);
+    onTestFinished(() => {
+      diagnosticsChannel.unsubscribe('worker_threads', onSpawn);
+    });
 
     const createPool = (options?: { size?: number }): ParsePool => {
       observed.pools += 1;
@@ -315,131 +333,192 @@ describe('parse-pool activation', () => {
         // on the wrapper instead of on the thing under test.
         parseIntoCache: async (kind, content, byteLength, cacheKey) =>
           real.parseIntoCache(kind, content, byteLength, cacheKey),
-        shutdown: async (): Promise<void> => {
-          // Sampled BEFORE the close: this is the only moment at which a thread
-          // the run started is guaranteed still to be in the thread table.
-          observed.peak = Math.max(observed.peak, workerThreadCount());
-          await real.shutdown();
-        },
+        harnessFacts: async (harness, content, byteLength) => real.harnessFacts(harness, content, byteLength),
+        shutdown: async (): Promise<void> => real.shutdown(),
       };
     };
-    const options = { parseCache: cache, parsePool: { enabled: true, missThreshold: 1, size: 1, createPool } };
+    const options = { parseCache: cache, parsePool: { missThreshold: 1, size: 1, createPool } };
 
     await populateBlobs(await baseBuilderForRoot(suite.tempDir), options);
 
     expect(observed.pools).toBe(1);
-    expect(observed.peak).toBeGreaterThan(before);
+    expect(observed.spawns).toBeGreaterThanOrEqual(1);
 
     const cold = { ...observed };
     observed.pools = 0;
-    observed.peak = workerThreadCount();
+    observed.spawns = 0;
 
     await populateBlobs(await baseBuilderForRoot(suite.tempDir), options);
 
     // Every document is now a cache hit, so the run has no parse to hand
     // anywhere — and must therefore create no pool and spawn no thread, exactly
-    // as `parseKeyed` loads no parser.
+    // as a warm dispatcher builds no pool.
     expect(cold.pools).toBe(1);
     expect(observed.pools).toBe(0);
-    expect(observed.peak).toBe(workerThreadCount());
+    expect(observed.spawns).toBe(0);
   });
 
-  it('leaves no worker thread behind after a real pooled run', async () => {
+  it('leaves no worker thread behind after a real pooled run but the ones it parked', async () => {
+    await __closeParkedParseWorkersForTest();
+    // Whether a thread parks is the machine's too (memory, the heap ceiling a thread reads): held.
+    stubParkingMachine();
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
     const before = workerThreadCount();
 
     await populateBlobs(await baseBuilderForRoot(suite.tempDir), {
       parseCache: NO_CACHE,
-      parsePool: { enabled: true, missThreshold: 1, size: 2 },
+      parsePool: { missThreshold: 1, size: 2 },
     });
 
+    // Every thread still running is one shutdown parked for the next pool; closing them is the rest.
+    const parked = __parkedParseWorkerCountForTest();
+    expect(parked).toBeGreaterThan(0);
+    expect(workerThreadCount()).toBe(before + parked);
+    await __closeParkedParseWorkersForTest();
     expect(workerThreadCount()).toBe(before);
   });
 
-  it('sizes the pool from the work that is left, once there is enough of it', async () => {
-    // The other half of the differential. Without it, "starts no pool" below
+  it('widens the pool from the work that is left, once there is enough of it', async () => {
+    // The other half of the differential. Without it, "does not widen" below
     // would be satisfied by a stage that never starts a pool under any corpus —
     // and the whole wiring would be dead code again, silently, with a green
     // suite.
     const tailDir = await writeTail(LONG_TAIL_DOCS, TAIL_DOCUMENT_BYTES);
-    const requested: (number | undefined)[] = [];
-    // `emptyFacts`, because the only assertion here is the WIDTH the stage asked
-    // for. This fake parses in-process, and the corpus is megabytes by
+    // `emptyFacts`, because the only assertion here is the WIDTH the stage
+    // reached. This fake parses in-process, and the corpus is megabytes by
     // construction — running remark over all of it would cost seconds to derive
     // rows nothing below reads.
-    const { pool } = fakePool(2, { emptyFacts: true });
+    const { pool, record } = fakePool(2, { emptyFacts: true });
 
     await populateBlobs(await baseBuilderForRoot(tailDir), {
       parseCache: NO_CACHE,
-      parsePool: {
-        enabled: true,
-        missThreshold: 1,
-        createPool: (options): ParsePool => {
-          requested.push(options?.size);
-          return pool;
-        },
-      },
+      parsePool: { missThreshold: 1, createPool: (): ParsePool => pool },
     });
 
     if (defaultParsePoolSize() < 2) {
-      // A box with fewer than three cores cannot afford a useful pool however
-      // long the tail is, and must then start none. Asserted rather than
+      // A box with fewer than three cores cannot afford a second thread however
+      // long the tail is, and must then stay at one. Asserted rather than
       // skipped: a skip on a small CI runner is a hole, and this is the same
       // claim taken from the other side.
-      expect(requested).toHaveLength(0);
+      expect(record.maxInFlight).toBe(1);
       return;
     }
-    expect(requested).toHaveLength(1);
-    expect(requested[0]).toBeGreaterThanOrEqual(2);
+    expect(record.maxInFlight).toBe(2);
   });
 
-  it('starts none for the same document COUNT in stub documents', async () => {
+  it('does not widen for the same document COUNT in stub documents', async () => {
     // 🔑 The unit is BYTES, and this is the lane-level proof of it. Same tail,
     // same count, same kinds — 60-byte documents instead of 32 KB ones. A stage
-    // that had regressed to counting documents would open a pool here and could
+    // that had regressed to counting documents would widen the pool here and could
     // not be told apart from a correct one by the case above.
     const tailDir = await writeTail(LONG_TAIL_DOCS, 60);
-    let created = 0;
-    const { pool } = fakePool(2);
+    const { pool, record } = fakePool(2);
 
     await populateBlobs(await baseBuilderForRoot(tailDir), {
       parseCache: NO_CACHE,
-      parsePool: {
-        enabled: true,
-        missThreshold: 1,
-        createPool: (): ParsePool => {
-          created += 1;
-          return pool;
-        },
-      },
+      parsePool: { missThreshold: 1, createPool: (): ParsePool => pool },
     });
 
     // 200 documents at 60 bytes is 12 KB of markdown — four thousandths of a
-    // second of parsing, against ~723 ms of module load per pool.
-    expect(created).toBe(0);
+    // second of parsing, against ~723 ms of module load per extra thread.
+    expect(record.maxInFlight).toBe(1);
   });
 
-  it('starts no pool at all for a tail too short to pay for one worker', async () => {
+  it('does not widen for a tail too short to pay for a second worker', async () => {
     // The measured regression this rule exists for: sized at the machine's
     // default, activation started workers for a 177-document tail and made
     // `vat claude context` on this repository SLOWER. A threshold cannot bound
     // that, because the cost scales with the WIDTH and the threshold says
     // nothing about width.
-    let created = 0;
-    const { pool } = fakePool(4);
+    const { pool, record } = fakePool(4);
 
     await populateBlobs(await baseBuilderForRoot(suite.tempDir), {
       parseCache: NO_CACHE,
-      parsePool: {
-        enabled: true,
-        missThreshold: 1,
-        createPool: (): ParsePool => {
-          created += 1;
-          return pool;
-        },
-      },
+      parsePool: { missThreshold: 1, createPool: (): ParsePool => pool },
     });
 
-    // Ten short documents against a ~2,000 ms two-worker break-even: not one.
-    expect(created).toBe(0);
+    // Ten short documents against a ~2,000 ms two-worker break-even: no second thread.
+    expect(record.maxInFlight).toBe(1);
+  });
+});
+
+/**
+ * A REAL pool whose thread dies of an uncaught, coded error, and the route from that rejection to
+ * the user: a per-run `BLOB_PARSE_WORKER_DIED` row naming the cause — never `BLOB_PARSE_FAILED`,
+ * which would claim the BYTES failed — and the population warning naming it. Nothing a document
+ * contains kills a thread, so the thread is pointed at an entry that throws, exactly as
+ * `parse-pool.test.ts` does.
+ */
+const CODE = 'ERR_TEST_PARSE_WORKER_DIED';
+
+/**
+ * @param dies - JavaScript condition on `request`, the job a message carries, under which the thread dies
+ * @returns A worker entry that answers like the built worker and dies of a coded error when `dies` holds
+ */
+async function dyingEntry(dies: string): Promise<string> {
+  const entryDir = safePath.join(suite.suiteDir, 'dying-worker');
+  await mkdir(entryDir, { recursive: true });
+  const entry = safePath.join(entryDir, `dying-worker-${String(Date.now())}.mjs`);
+  const realWorker = pathToFileURL(safePath.resolve(import.meta.dirname, '..', 'dist', 'parse-worker.js')).href;
+  await writeFile(
+    entry,
+    [
+      "import { parentPort } from 'node:worker_threads';",
+      `await import(${JSON.stringify(realWorker)});`,
+      // The parser has loaded for the job (said so, as the real worker does before it parses) when the
+      // thread dies: the document's death. One that dies before saying so never is.
+      `parentPort.on('message', (request) => { if (request?.type === 'parse' && (${dies})) { parentPort.postMessage({ id: request.id, parserLoaded: request.kind }); throw Object.assign(new Error('died'), { code: '${CODE}' }); } });`,
+    ].join('\n'),
+    'utf-8',
+  );
+  return entry;
+}
+
+/** @returns What populating the loop corpus through a one-thread pool did: the projection, or what it threw */
+async function populateOnOneThread(): Promise<unknown> {
+  const builder = await baseBuilderForRoot(suite.tempDir);
+  return populateBlobs(builder, {
+    parseCache: NO_CACHE,
+    parsePool: { missThreshold: 1, size: 1, createPool: (): ParsePool => createParsePool({ size: 1 }) },
+  }).then(() => builder.build(), (error: unknown) => error);
+}
+
+describe('a real parse-pool rejection', () => {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(suite.beforeEach);
+  beforeEach(writeLoopCorpus);
+
+  it('is a per-run worker death carrying its cause, and is named by the population warning', async () => {
+    await writeFile(safePath.join(suite.tempDir, 'dies.md'), '# DIE\n', 'utf-8');
+    __setParseWorkerEntryForTest(await dyingEntry("request.content.startsWith('# DIE')"));
+    let projection: Projection;
+    try {
+      projection = (await populateOnOneThread()) as Projection;
+    } finally {
+      __setParseWorkerEntryForTest(null);
+    }
+
+    expect(conditionsWithCode(projection, BLOB_PARSE_FAILED)).toHaveLength(0);
+    const died = conditionsWithCode(projection, BLOB_PARSE_WORKER_DIED);
+    expect(died).toHaveLength(1);
+    // The absence-cause member this test seeds (the CLI's absence-seeds.ts names it).
+    expect(expectAbsenceCause(projection, { code: BLOB_PARSE_WORKER_DIED })).toHaveLength(1);
+    expect(died[0]?.message).toContain(CODE);
+    expect(describeBlobRefusals(projection)).toContain('parse worker died');
+  });
+
+  it('is a broken install, thrown and never a row, when every thread dies on every document', async () => {
+    __setParseWorkerEntryForTest(await dyingEntry('true'));
+    try {
+      const outcome = await populateOnOneThread();
+
+      expect(isParserUnavailable(outcome)).toBe(true);
+      expect(String((outcome as Error).message)).toContain(CODE);
+    } finally {
+      __setParseWorkerEntryForTest(null);
+    }
   });
 });

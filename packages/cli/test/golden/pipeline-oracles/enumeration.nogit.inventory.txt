@@ -62,7 +62,7 @@ buildError: -
 8	docs/frontmatter-shapes.md
 9	docs/guide.md
 10	docs/sibling.md
-11	dup/hyphen-note.md
+11	dup-hyphen/note.md
 12	empty.md
 13	ignored/secret.md
 14	links/every-type.md
@@ -90,7 +90,7 @@ buildError: -
 36	twins/left/same.md
 37	twins/right/same.md
 
-## collisions (first-added-wins drops, in arrival order)
-dup-hyphen-note-md	won=dup/hyphen-note.md	dropped=dup-hyphen/note.md
+## collisions (first-added-wins drops, in admission order)
+dup-hyphen-note-md	won=dup-hyphen/note.md	dropped=dup/hyphen-note.md
 
 ## restatementDrift

@@ -16,10 +16,11 @@
  */
 
 import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
-import { countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { countBySeverity, resultStatus, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
 import { formatAuditFindingsLines } from '../../src/commands/audit.js';
+import { renderedLabels } from '../helpers/rendered-labels.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -35,28 +36,25 @@ function issue(
   return { severity, code, message: `${code} fired`, ...extra };
 }
 
-function statusFor(counts: { errors: number; warnings: number }): ValidationResult['status'] {
-  if (counts.errors > 0) return 'error';
-  return counts.warnings > 0 ? 'warning' : 'success';
-}
 
-function skillResult(name: string, issues: ValidationIssue[]): ValidationResult {
-  const counts = countBySeverity(issues);
-  const status = statusFor(counts);
+/** `status`, `description`, `issues` and `summary`, derived from the issues as every producer does. */
+function derivedFields(issues: ValidationIssue[]): Pick<ValidationResult, 'status' | 'description' | 'issues' | 'summary'> {
+  const summary = countBySeverity(issues);
   return {
-    path: `${ROOT}/skills/${name}/SKILL.md`,
-    type: 'agent-skill',
-    status,
-    summary: `${counts.errors} errors, ${counts.warnings} warnings, ${counts.info} info`,
+    status: resultStatus(issues),
+    description: `${summary.errors} errors, ${summary.warnings} warnings, ${summary.info} info`,
     issues,
-    issueCounts: counts,
-    metadata: { name },
+    summary,
   };
 }
 
-/** Every severity label the report rendered, in order — the shape of the set. */
-function renderedLabels(lines: string[]): string[] {
-  return lines.flatMap((line) => /^\s*\[(ERROR|WARNING|INFO|IGNORED)]/.exec(line)?.slice(1, 2) ?? []);
+function skillResult(name: string, issues: ValidationIssue[]): ValidationResult {
+  return {
+    path: `${ROOT}/skills/${name}/SKILL.md`,
+    type: 'agent-skill',
+    ...derivedFields(issues),
+    metadata: { name },
+  };
 }
 
 /**
@@ -82,14 +80,10 @@ function rootResult(
   metadata: ValidationResult['metadata'],
   issues: ValidationIssue[],
 ): ValidationResult {
-  const counts = countBySeverity(issues);
   return {
     path: ROOT,
     type: 'claude-plugin',
-    status: statusFor(counts),
-    summary: `${counts.errors} errors, ${counts.warnings} warnings, ${counts.info} info`,
-    issues,
-    issueCounts: counts,
+    ...derivedFields(issues),
     ...(metadata === undefined ? {} : { metadata }),
   };
 }
@@ -136,20 +130,15 @@ describe('vat audit — formatAuditFindingsLines', () => {
     const text = formatAuditFindingsLines(mixedFixture(), ROOT, false).join('\n');
     expect(text).toContain('4 warning/info');
     expect(text).toContain('--verbose');
-    expect(text).toContain('YAML');
+    expect(text).toContain('the report on stdout');
   });
 
-  it("scopes the collapsed-findings pointer to THIS report, not to 'the YAML report' in general", () => {
-    // The pointer used to promise that "the YAML report on stdout … always
-    // lists every finding". True of `vat audit` and `vat skills validate`; FALSE
-    // of the whole `vat build` family, whose stdout YAML publishes issueCounts
-    // only (an adopter run reported 67 warnings with zero `issues:` arrays and
-    // zero `code:` fields, in default AND --verbose mode). Scope the claim to
-    // the report the operator is actually holding so it cannot be read as a
-    // property of VAT's YAML output generally.
+  it('points at the report on stdout without naming a format it may not be in', () => {
+    // The pointer once said "this audit's YAML report" — false under `--format json`.
+    // Every verb that prints it now publishes every finding in its document.
     const text = formatAuditFindingsLines(mixedFixture(), ROOT, false).join('\n');
-    expect(text).toContain("this audit's YAML report on stdout");
-    expect(text).not.toContain('the YAML report on stdout, which always lists every finding');
+    expect(text).toContain('read the report on stdout, which lists every finding');
+    expect(text).not.toContain('YAML');
   });
 
   it('never heads a block with an EMPTY subject, even when the finding IS the scan root', () => {
@@ -244,7 +233,7 @@ describe('vat audit — formatAuditFindingsLines', () => {
       'LINK_DROPPED_BY_DEPTH',
       'NON_PORTABLE_ASSET_REFERENCE',
     ]);
-    expect(results[0]?.issueCounts).toEqual({ errors: 1, warnings: 3, info: 1 });
+    expect(results[0]?.summary).toEqual({ errors: 1, warnings: 3, info: 1 });
   });
 
   it('renders one block per result, so a multi-file report stays attributable', () => {

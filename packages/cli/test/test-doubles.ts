@@ -48,8 +48,10 @@ export function recordingLogger(): { logger: Logger; lines: string[] } {
 export interface CapturedExit {
   /** Everything written to `process.stderr` during the run. */
   stderr: string;
-  /** The code passed to `process.exit`, or `undefined` if it was never called. */
+  /** The code passed to the FIRST `process.exit`, or `undefined` if it was never called. */
   exited: number | undefined;
+  /** How many times `process.exit` was called: more than one is a `catch` that saw the stub's throw. */
+  exitCalls: number;
 }
 
 /** Sentinel thrown by the `process.exit` stub — the real one never returns. */
@@ -62,15 +64,21 @@ const EXIT_SENTINEL = 'process.exit';
  * returns: a stub that returns lets execution fall through into code the
  * production path can never reach after an exit, and the test then asserts
  * against a control flow that does not exist — in the CLI's case, spawning real
- * subprocesses from an action that should already have terminated.
+ * subprocesses from an action that should already have terminated. A command
+ * whose own `catch` sees that throw and exits again is still reported at its
+ * FIRST exit, the one the real process would have ended on; `exitCalls` says it
+ * happened, and `onFirstExit` runs at that moment (what happens after it, the real
+ * process never does).
  *
  * The spies are always restored, including when `fn` throws something else.
  */
 export async function captureProcessExit(
   fn: () => void | Promise<void>,
+  onFirstExit?: () => void,
 ): Promise<CapturedExit> {
   let stderr = '';
   let exited: number | undefined;
+  let exitCalls = 0;
 
   const writeSpy = vi
     .spyOn(process.stderr, 'write')
@@ -79,7 +87,12 @@ export async function captureProcessExit(
       return true;
     });
   const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
-    exited = code;
+    // The first exit is where the real process ended: a later one is a catch that saw the sentinel.
+    if (exitCalls === 0) {
+      exited = code;
+      onFirstExit?.();
+    }
+    exitCalls += 1;
     throw new Error(EXIT_SENTINEL);
   }) as never);
 
@@ -92,5 +105,5 @@ export async function captureProcessExit(
     exitSpy.mockRestore();
   }
 
-  return { stderr, exited };
+  return { stderr, exited, exitCalls };
 }

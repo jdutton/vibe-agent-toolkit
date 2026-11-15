@@ -1,20 +1,28 @@
 import fs from 'node:fs';
 
+import type { ParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { describe, expect, it } from 'vitest';
 
 import { analyzeCompatibility } from '../src/compatibility-analyzer.js';
+
+import { useSuiteParseDispatcher } from './test-helpers.js';
+
+/** One dispatcher for the whole file, as `vat audit` holds one for a run. */
+const parseDispatcher = useSuiteParseDispatcher();
 
 const fixtureDir = (name: string) => safePath.resolve(import.meta.dirname, 'fixtures', name);
 
 /**
  * `analyzeCompatibility` takes a REQUIRED anchor root — the base every emitted
- * evidence `location.file` is relative to. These single-plugin cases anchor at
- * the plugin itself; `vat audit` passes its invocation scan root instead.
+ * evidence `location.file` is relative to — and the run's dispatcher. These
+ * single-plugin cases anchor at the plugin itself; `vat audit` passes its
+ * invocation scan root instead.
  */
-const atFixture = (name: string): [string, string] => {
+const atFixture = (name: string): [string, string, ParseDispatcher] => {
   const dir = fixtureDir(name);
-  return [dir, dir];
+  return [dir, dir, parseDispatcher()];
 };
 const PYTHON_SCRIPT_PLUGIN = 'python-script-plugin';
 const DESKTOP_INCOMPATIBLE_PLUGIN = 'desktop-incompatible-plugin';
@@ -65,16 +73,16 @@ describe('analyzeCompatibility', () => {
     expect(result.evidence.some(e => e.patternId === 'SCRIPT_FILE_NODE')).toBe(true);
   });
 
-  it('includes summary counts', async () => {
+  it('includes the per-kind file counts', async () => {
     const result = await analyzeCompatibility(...atFixture(PYTHON_SCRIPT_PLUGIN));
-    expect(result.summary.totalFiles).toBeGreaterThan(0);
-    expect(result.summary.scriptFiles).toBeGreaterThan(0);
-    expect(result.summary.skillFiles).toBeGreaterThan(0);
+    expect(result.fileCounts.totalFiles).toBeGreaterThan(0);
+    expect(result.fileCounts.scriptFiles).toBeGreaterThan(0);
+    expect(result.fileCounts.skillFiles).toBeGreaterThan(0);
   });
 
   it('throws for directory without plugin.json', async () => {
     const nonexistent = safePath.resolve(import.meta.dirname, 'fixtures', 'nonexistent');
-    await expect(analyzeCompatibility(nonexistent, nonexistent))
+    await expect(analyzeCompatibility(nonexistent, nonexistent, parseDispatcher()))
       .rejects.toThrow();
   });
 
@@ -109,15 +117,15 @@ describe('analyzeCompatibility', () => {
       const tmpBase = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'compat-plugin-wins-'));
       const pluginDir = safePath.join(tmpBase, 'plugin');
       const claudeDir = safePath.join(pluginDir, '.claude-plugin');
-      fs.mkdirSync(claudeDir, { recursive: true });
+      mkdirSyncReal(claudeDir, { recursive: true });
       fs.writeFileSync(
         safePath.join(claudeDir, 'plugin.json'),
         JSON.stringify({ name: 'plugin-wins', version: '1.0.0', targets: [TARGET_CLAUDE_CODE] }),
       );
 
       try {
-        const withConfig = await analyzeCompatibility(pluginDir, pluginDir, { configTargets: [TARGET_CLAUDE_CHAT] });
-        const withoutConfig = await analyzeCompatibility(pluginDir, pluginDir);
+        const withConfig = await analyzeCompatibility(pluginDir, pluginDir, parseDispatcher(), { configTargets: [TARGET_CLAUDE_CHAT] });
+        const withoutConfig = await analyzeCompatibility(pluginDir, pluginDir, parseDispatcher());
         // plugin.json targets win; configTargets is ignored.
         expect(withConfig.declaredTargets).toEqual(['claude-code']);
         expect(withConfig.declaredTargets).toEqual(withoutConfig.declaredTargets);

@@ -8,9 +8,10 @@
 import { execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 
+import { toForwardSlash } from '@vibe-agent-toolkit/utils/path';
 import { vi, expect } from 'vitest';
 
-import type { DoctorCheckResult, DoctorOutcome } from '../../src/commands/doctor.js';
+import type { DoctorCheckResult, DoctorOutcome } from '../../src/commands/doctor-schema.js';
 
 // ============================================================================
 // Type Definitions
@@ -20,7 +21,7 @@ import type { DoctorCheckResult, DoctorOutcome } from '../../src/commands/doctor
  * Environment mock configuration
  */
 export interface DoctorEnvironmentConfig {
-  /** Node.js version string (default: 'v22.13.0', the declared floor) */
+  /** Node.js version string (default: 'v22.16.0', the declared floor) */
   nodeVersion?: string | null;
   /** Git version string (default: 'git version 2.43.0') */
   gitVersion?: string | null;
@@ -64,7 +65,7 @@ export interface DoctorConfigMockConfig {
 /**
  * Doctor result with checks array
  *
- * `DoctorCheckResult` / `DoctorOutcome` are imported from the command itself —
+ * `DoctorCheckResult` / `DoctorOutcome` are imported from the published schema —
  * a second copy here would let the two drift, which is how an outcome the
  * command can emit ends up with no assertion helper that can see it.
  */
@@ -110,13 +111,14 @@ export async function mockDoctorEnvironment(
   config?: DoctorEnvironmentConfig,
 ): Promise<() => void> {
   const opts = {
-    nodeVersion: 'v22.13.0',
+    nodeVersion: 'v22.16.0',
     gitVersion: 'git version 2.43.0',
     vatVersion: '0.1.0',
     ...config,
   };
 
   // Cast to vi.Mock type (mocked modules return Mock types)
+  // eslint-disable-next-line local/no-child-process-execSync -- mocks execSync to fake each command; it never spawns
   vi.mocked(execSync).mockImplementation((cmd: string): Buffer => {
     const cmdStr = cmd.toString();
 
@@ -187,24 +189,24 @@ export function restoreProcessVersion(): void {
  * @example
  * ```typescript
  * // Healthy file system
- * await mockDoctorFileSystem();
+ * mockDoctorFileSystem();
  *
  * // Missing config
- * await mockDoctorFileSystem({ configExists: false });
+ * mockDoctorFileSystem({ configExists: false });
  *
  * // In VAT source tree
- * await mockDoctorFileSystem({ isVatSourceTree: true });
+ * mockDoctorFileSystem({ isVatSourceTree: true });
  * ```
  */
-export async function mockDoctorFileSystem(
+export function mockDoctorFileSystem(
   config?: DoctorFileSystemConfig,
-): Promise<() => void> {
+): () => void {
   const opts = {
     packageVersion: '0.1.0',
     configExists: true,
     configContent: 'version: "1.0"\nagents: {}\n',
     isVatSourceTree: false,
-    nodeEngines: '>=22.13.0' as string | null,
+    nodeEngines: '>=22.16.0' as string | null,
     ...config,
   };
 
@@ -212,7 +214,7 @@ export async function mockDoctorFileSystem(
 
   vi.mocked(readFileSync).mockImplementation((path): string => {
     // Normalize path separators for cross-platform compatibility (Windows uses backslashes)
-    const pathStr = path.toString().replaceAll('\\', '/');
+    const pathStr = toForwardSlash(path.toString());
 
     // package.json
     if (pathStr.includes('package.json')) {
@@ -245,7 +247,7 @@ export async function mockDoctorFileSystem(
 
   vi.mocked(existsSync).mockImplementation((path): boolean => {
     // Normalize path separators for cross-platform compatibility (Windows uses backslashes)
-    const pathStr = path.toString().replaceAll('\\', '/');
+    const pathStr = toForwardSlash(path.toString());
 
     if (pathStr.includes(CONFIG_FILENAME)) {
       return opts.configExists;

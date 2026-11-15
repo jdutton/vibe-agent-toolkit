@@ -70,8 +70,9 @@ function rowOf(overrides: Partial<AccountedRow> = {}): AccountedRow {
     tokens: 1200,
     bytes: 4800,
     loadClass: 'always',
-    admissions: [{ kind: 'ancestry', dir: '' }],
-    charge: 'charged',
+    admissions: [{ kind: 'ancestry', dir: '', local: false }],
+    sizeCliff: 'loaded',
+    headerTokens: 0,
     ...overrides,
   };
 }
@@ -152,6 +153,7 @@ function mapOf(overrides: Partial<ContextCostMap> = {}): ContextCostMap {
     queriedDirectories: 2,
     evaluatedDirectories: 2,
     skippedUnknownLocations: 0,
+    refused: [],
     ...overrides,
   };
 }
@@ -219,7 +221,7 @@ describe('vat claude context --all — the text cost map', () => {
     const text = renderCostMapText(mapOf({
       regions: [regionOf({
         unknownTokenRows: 1,
-        alwaysRows: [rowOf({ tokens: null, bytes: null, charge: 'unknown-size' })],
+        alwaysRows: [rowOf({ tokens: null, bytes: null, sizeCliff: 'unmeasured' })],
       })],
     }));
 
@@ -393,7 +395,7 @@ describe('vat claude context --all — the machine-readable envelope', () => {
 
     expect(envelope.kind).toBe('context-cost-map');
     expect(envelope.boundsStatement).toBe(CLAUDE_CONTEXT_BOUNDS_STATEMENT);
-    expect(envelope.limits.find((limit) => limit.id === 'cliff-scope')?.direction).toBe('scope');
+    expect(envelope.limits.find((limit) => limit.id === 'main-conversation-only')?.direction).toBe('scope');
     expect(envelope.modelledBehaviours.length).toBeGreaterThan(0);
   });
 

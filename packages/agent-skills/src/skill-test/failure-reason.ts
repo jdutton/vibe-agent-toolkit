@@ -1,10 +1,15 @@
-import { isVatError, VatError } from '@vibe-agent-toolkit/utils';
+import type { RefusalCode } from '@vibe-agent-toolkit/schema';
+import { isFsFaultError, isVatError, VatError } from '@vibe-agent-toolkit/utils';
+
+import { FETCH_CACHE_NOT_OWNED_CODE } from '../skill-source/fetch-cache.js';
+import { GIT_CLONE_FAILED_CODE } from '../skill-source/git-clone.js';
+import { SKILL_SOURCE_DIGEST_REQUIRED_CODE, SKILL_SOURCE_FETCH_FAILED_CODE, SKILL_STAGING_NOT_OWNED_CODE } from '../skill-source/source-errors.js';
+import { SKILL_SOURCE_UNREADABLE_CODE } from '../skill-source/stage.js';
 
 /**
  * WHY a `vat skill test run` ended on `ExitCode.ERROR`.
  *
- * This used to be three exit codes — 1 internal, 2 preflight, 3 bootstrap —
- * beside 4 for "an eval failed". Under the one exit-code contract every verb
+ * Under the one exit-code contract every verb
  * shares (`ExitCode` in `@vibe-agent-toolkit/schema`) a failed eval is
  * `FINDINGS` (1) like every other gate that ran and did not pass, and every way
  * the harness could NOT run is `ERROR` (2). The distinction a CI author still
@@ -47,6 +52,9 @@ const FAILURE_REASONS: ReadonlySet<string> = new Set<SkillTestFailureReason>([
  */
 export function skillTestFailureReason(err: unknown): SkillTestFailureReason {
   if (!isVatError(err)) return 'internal';
+  // A classified filesystem refusal is the operator's environment — a full disk, an
+  // unreadable `--with` source, an unwritable harness root — never the harness breaking.
+  if (isFsFaultError(err)) return 'preflight';
   let declared: unknown;
   try {
     declared = (err as { reason?: unknown }).reason;
@@ -60,6 +68,62 @@ export function skillTestFailureReason(err: unknown): SkillTestFailureReason {
 }
 
 /**
+ * WHICH refusal each error this feature throws for an operator-fixable reason
+ * is, keyed by its code — the published `error.code` of a `vat skill test run`
+ * that could not run. Decided here, beside the classes, and read by the CLI's
+ * one refusal lookup (`refusalCodeOf`), so a throw is classified by its code and
+ * never by its message.
+ *
+ * - `INPUT_UNREADABLE` — an input the run must read is absent or unusable: no
+ *   `evals.json` (bootstrap), a suite / declared input file that is not, a
+ *   staged skill source (a `--with` companion) the OS will not read, or a `url`
+ *   source that could not be obtained — a clone that did not happen
+ *   (`GIT_CLONE_FAILED`), an archive that could not be fetched or does not match
+ *   its pinned digest (`SKILL_SOURCE_FETCH_FAILED`).
+ * - `USAGE_INVALID` — everything else the operator fixes: a flag, a declared
+ *   `env` token, a `url` source naming a `.zip` with no `sha256`
+ *   (`SKILL_SOURCE_DIGEST_REQUIRED`), the `test.build` hook, a skill reference the config does not
+ *   declare (or `--no-build` with no dist), an unsafe `--workdir`, a held harness
+ *   lock, the missing security ack. A `SkillBuildError` carrying a `cause` is
+ *   classified by that cause, not by this row (see {@link SkillBuildError}).
+ * - `CONFIG_INVALID` — a `test.evals` npm specifier that names nothing installed.
+ * - `RUN_INCOMPLETE` — the fetch cache a `url` skill source is cached in, or the
+ *   staging a source is copied into, is another user's (`FETCH_CACHE_NOT_OWNED`,
+ *   `SKILL_STAGING_NOT_OWNED`): VAT's own scratch, which it will not use.
+ *
+ * A filesystem refusal is none of these: it is a classified `FsFaultError`, whose
+ * refusal the schema table decides by side and class — an unreadable source
+ * `INPUT_UNREADABLE`, a harness root or results file the OS would not let the run
+ * write `RUN_INCOMPLETE`.
+ *
+ * An absent runtime (`claude` not on PATH, or too old for a flag the spawn
+ * needs) is `BACKEND_UNAVAILABLE`, and is decided by the preflight check that
+ * saw it (see `preflightRefusal`), not by a throw. A code missing from this map
+ * is `INTERNAL_ERROR` — right for the `internal` classes, a defect for any other.
+ */
+export const SKILL_TEST_REFUSAL_BY_ERROR_CODE = {
+  SKILL_TEST_BOOTSTRAP_NEEDED: 'INPUT_UNREADABLE',
+  EVAL_INPUT: 'INPUT_UNREADABLE',
+  [SKILL_SOURCE_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
+  [GIT_CLONE_FAILED_CODE]: 'INPUT_UNREADABLE',
+  [SKILL_SOURCE_FETCH_FAILED_CODE]: 'INPUT_UNREADABLE',
+  [SKILL_SOURCE_DIGEST_REQUIRED_CODE]: 'USAGE_INVALID',
+  [FETCH_CACHE_NOT_OWNED_CODE]: 'RUN_INCOMPLETE',
+  [SKILL_STAGING_NOT_OWNED_CODE]: 'RUN_INCOMPLETE',
+  AUTH_PREFLIGHT: 'USAGE_INVALID',
+  BUILD_HOOK: 'USAGE_INVALID',
+  HARNESS_LOCATION: 'USAGE_INVALID',
+  HARNESS_LOCK_BUSY: 'USAGE_INVALID',
+  PROMPT_INVARIANT: 'USAGE_INVALID',
+  SKILL_TEST_BUILD_FAILED: 'USAGE_INVALID',
+  SKILL_TEST_DUPLICATE_STAGED_SKILL: 'USAGE_INVALID',
+  SKILL_TEST_EVALS_UNRESOLVED: 'CONFIG_INVALID',
+  SKILL_TEST_SECURITY_ACK_MISSING: 'USAGE_INVALID',
+  UNKNOWN_ENV_TOKEN: 'USAGE_INVALID',
+  UNRESOLVABLE_ENV_TOKEN: 'USAGE_INVALID',
+} as const satisfies Readonly<Record<string, RefusalCode>>;
+
+/**
  * A required input is absent in a way vat can scaffold (missing evals.json).
  * Reason `bootstrap`, NOT a failure. `expectedPath` is the persistent location
  * of the annotated starter template.
@@ -69,20 +133,15 @@ export function skillTestFailureReason(err: unknown): SkillTestFailureReason {
  * describes what a real run *would* scaffold and where, while surfacing the same
  * "bootstrap needed" signal.
  *
- * That scope is exact, and it used to read "a dry run must never touch the
- * filesystem", which is not true of this command. A dry run is not a read-only
- * mode: it takes the harness lock, creates the harness root, stages BOTH arms'
+ * A dry run is not a read-only mode: it takes the harness lock, creates the harness root, stages BOTH arms'
  * per-eval workspaces, and — once `--i-understand-this-runs-skill-code` is passed —
  * runs the repo's `test.build` hook and builds the subject. What it never does is
  * SPAWN: no executor session, no grader session, no tokens.
  *
  * It also never touches `results/`: it neither creates the directory, nor writes
- * `provenance.json`, nor wipes the previous run's artifacts. That last one is the
- * reason the ordering matters — the wipe used to sit AHEAD of the dry-run
- * short-circuit, so a free `--dry-run` (or any failure after it) destroyed the
- * `grading.json` / `baseline.json` / `friction.json` / `tool-eval.json` of the
- * expensive real run an operator was about to read. The summary now names the
- * provenance path it WOULD write rather than writing it.
+ * `provenance.json`, nor wipes the previous run's artifacts — the wipe sits
+ * AFTER the dry-run short-circuit, so a free `--dry-run` never destroys the
+ * expensive real run an operator is about to read.
  *
  * The scaffold is the other filesystem effect a dry run deliberately withholds,
  * and for a different reason: that write lands in the AUTHOR's source
@@ -100,11 +159,25 @@ export class BootstrapNeededError extends VatError {
   }
 }
 
-/** Thrown when building a declared skill (pool packageSkill or plugin build) fails. Reason `preflight`. */
+/**
+ * Thrown when a declared skill cannot be built or staged (pool packageSkill or
+ * plugin build, a name the config does not declare, `--no-build` with no dist).
+ * Reason `preflight`.
+ *
+ * A build that THREW is wrapped with the throw as `cause` and the skill's
+ * `sourcePath`, and the wrap does not decide the refusal: the CLI publishes the
+ * cause's own coded refusal (an unlistable directory is `INPUT_UNREADABLE`, a
+ * broken config `CONFIG_INVALID`), a packager refusal of the skill's content as a
+ * finding at `sourcePath`, and an uncoded cause — a defect — as `INTERNAL_ERROR`.
+ * Only a SkillBuildError with no cause is `USAGE_INVALID` by its own code.
+ */
 export class SkillBuildError extends VatError {
   readonly reason = 'preflight' as const;
-  constructor(message: string) {
-    super('SKILL_TEST_BUILD_FAILED', message);
+  /** The declared skill's `SKILL.md`, when the failure is a build of that skill. */
+  readonly sourcePath: string | undefined;
+  constructor(message: string, options?: { cause: unknown; sourcePath: string }) {
+    super('SKILL_TEST_BUILD_FAILED', message, options === undefined ? undefined : { cause: options.cause });
+    this.sourcePath = options?.sourcePath;
   }
 }
 
@@ -143,6 +216,19 @@ export class DuplicateStagedSkillError extends VatError {
       `Skill name "${skillName}" is staged more than once (subject / --with / --with-optional). ` +
         `Each staged skill must have a unique name.`,
     );
+  }
+}
+
+/**
+ * The eval suite reference from the config (`test.evals`) is an npm specifier
+ * that names nothing installed. Reason `preflight`: the config's to correct.
+ * `--evals` never reaches here — the CLI resolves the flag itself and refuses
+ * it as the invocation's.
+ */
+export class EvalsReferenceUnresolvedError extends VatError {
+  readonly reason = 'preflight' as const;
+  constructor(message: string, options?: ErrorOptions) {
+    super('SKILL_TEST_EVALS_UNRESOLVED', message, options);
   }
 }
 

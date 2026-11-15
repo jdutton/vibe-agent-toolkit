@@ -1,12 +1,6 @@
 import type { ZodTypeAny } from 'zod';
 
-import { AgentManifestSchema } from './agent-manifest.js';
-import { AgentInterfaceSchema } from './interface.js';
-import { LLMConfigSchema } from './llm.js';
-import { AgentMetadataSchema } from './metadata.js';
 import { VatPackageMetadataSchema } from './package-metadata.js';
-import { ResourceRegistrySchema } from './resource-registry.js';
-import { ToolSchema } from './tool.js';
 import { ValidationConfigSchema } from './validation-config.js';
 
 /** One Zod schema and the `schemas/<name>.json` artifact generated from it. */
@@ -28,12 +22,6 @@ export interface JsonSchemaTarget {
  * `severity` key space that stopped being constrained shipped unnoticed.
  */
 export const JSON_SCHEMA_TARGETS: readonly JsonSchemaTarget[] = [
-  { name: 'agent-manifest', schema: AgentManifestSchema },
-  { name: 'agent-metadata', schema: AgentMetadataSchema },
-  { name: 'llm-config', schema: LLMConfigSchema },
-  { name: 'agent-interface', schema: AgentInterfaceSchema },
-  { name: 'tool', schema: ToolSchema },
-  { name: 'resource-registry', schema: ResourceRegistrySchema },
   { name: 'vat-package-metadata', schema: VatPackageMetadataSchema },
   { name: 'validation-config', schema: ValidationConfigSchema },
 ];

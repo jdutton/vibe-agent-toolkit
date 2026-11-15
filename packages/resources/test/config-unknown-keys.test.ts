@@ -19,6 +19,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { parseConfigAllowingUnknownKeys } from '../src/config-issues.js';
+import { ProjectConfigSchema } from '../src/schemas/project-config.js';
 
 /**
  * A nested strict schema, the shape the real project config has.
@@ -178,5 +179,18 @@ describe('parseConfigAllowingUnknownKeys', () => {
 
     // The stripped copy is VAT's business; the caller's object is not.
     expect(raw.resources).toEqual({ metadata: true });
+  });
+
+  it('warns on version: 1 as an unrecognized root key, naming the key and the file, and drops it', () => {
+    const s = sink();
+    const configPath = '/work/vibe-agent-toolkit.config.yaml';
+
+    expect(ProjectConfigSchema.safeParse({ version: 1 }).success).toBe(false);
+    const config = parseConfigAllowingUnknownKeys(ProjectConfigSchema, { version: 1 }, s.warn, { configPath });
+
+    expect(config).toEqual({});
+    expect(s.messages).toHaveLength(1);
+    expect(s.messages[0]).toContain('unrecognized key "version"');
+    expect(s.messages[0]).toContain(configPath);
   });
 });

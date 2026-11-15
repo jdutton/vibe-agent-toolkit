@@ -117,8 +117,9 @@ export type LexicalReference = z.infer<typeof LexicalReferenceSchema>;
  * i.e. everything a cache entry is entitled to persist.
  *
  * Note what is missing: `content`, `sizeBytes` and `frontmatter`. The first two
- * are re-attached from the caller's own fresh read and the third is re-derived
- * from {@link frontmatterSource}; see the table in `parse-cache.ts`.
+ * are re-attached from the caller's own fresh read and the third is rebuilt
+ * from `frontmatterValue`, the worker's encoding of its own decode; see the
+ * table in `parse-cache.ts`.
  *
  * `.strict()` is load-bearing — see this module's docstring.
  */
@@ -141,12 +142,16 @@ export const ParseFactsSchema = z.object({
   /** Raw YAML of the frontmatter block, without the `---` delimiters. */
   frontmatterSource: z.string().optional(),
   /**
-   * Carried for producers that report a frontmatter error without a source.
-   * When `frontmatterSource` IS present, `rehydrate` prefers the value
-   * re-derived from it — the two agree by construction, since deriving is what
-   * produced this field in the first place.
+   * The decoded frontmatter mapping, as the worker encoded it
+   * (`frontmatter-codec.ts`). `rehydrate` rebuilds `frontmatter` from this and
+   * never decodes `frontmatterSource`: YAML is decoded only in the parse
+   * worker, under its limits. Absent when the block decoded to no mapping.
    */
+  frontmatterValue: z.string().optional(),
+  /** The block's YAML is not valid: a function of the bytes, so stored. */
   frontmatterError: z.string().optional(),
+  /** See `ParseResult.frontmatterNotAMapping`. */
+  frontmatterNotAMapping: z.literal(true).optional(),
 }).strict().describe('The parse facts one cache entry may hold');
 
 export type ParseFacts = z.infer<typeof ParseFactsSchema>;

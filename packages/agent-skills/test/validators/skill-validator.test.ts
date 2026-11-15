@@ -9,6 +9,7 @@ import { writeFileSync } from 'node:fs';
 
 import type { ValidationConfig } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { installFaultFs } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import { validateSkill } from '../../src/validators/skill-validator.js';
@@ -108,7 +109,28 @@ describe('transitive link traversal — broken links', () => {
     expect(issues).toHaveLength(1);
     expect(issues[0]?.message).toContain('nonexistent.md');
     expect(issues[0]?.fix).toBeDefined();
-    expect(result.status).toBe('error');
+    expect(result.summary.errors).toBeGreaterThan(0);
+  });
+
+  // The target's link chain is read (`lstat`) before the kernel follows it: a probe the OS refused is
+  // that one target's finding — "could not be examined" — never "not found", and never the end of the walk.
+  it('reports a link target the OS would not examine as unreadable, not as missing', async () => {
+    const tempDir = getTempDir();
+    const { skillPath } = createTransitiveSkillStructure(tempDir, { 'refs/a.md': '# A' }, skillWithLink('./refs/a.md', 'a'));
+    const target = safePath.join(tempDir, 'refs', 'a.md');
+
+    const session = installFaultFs({ within: tempDir, faults: [{ op: 'lstat', path: (path) => path === target, errno: 'EACCES' }] });
+    let result: ValidationResult;
+    try {
+      result = await validateSkill({ dispatcher: undefined, resourcesValidation: {}, side: 'source', skillPath, rootDir: tempDir, validation: {} });
+    } finally {
+      session.restore();
+    }
+
+    expect(findIssues(result, 'LINK_INTEGRITY_BROKEN')).toHaveLength(0);
+    const unreadable = findIssues(result, 'LINK_TARGET_UNREADABLE');
+    expect(unreadable).toHaveLength(1);
+    expect(unreadable[0]?.message).toContain('EACCES');
   });
 });
 
@@ -126,7 +148,7 @@ async function validateSkillLinkingOutsideItsDir(tempDir: string, validation: Va
   writeFileSync(safePath.join(tempDir, 'sibling.md'), '# Sibling\n');
   const skillPath = safePath.join(skillDir, 'SKILL.md');
   writeFileSync(skillPath, skillWithLink('../sibling.md', 'sibling'));
-  return validateSkill({ skillPath, rootDir: skillDir, validation });
+  return validateSkill({ dispatcher: undefined, resourcesValidation: {}, side: 'source', skillPath, rootDir: skillDir, validation });
 }
 
 describe('transitive link traversal — boundary escape', () => {
@@ -137,7 +159,7 @@ describe('transitive link traversal — boundary escape', () => {
 
     expect(findIssues(result, 'LINK_OUTSIDE_SKILL_DIR')).toHaveLength(0);
     expect(findIssues(result, 'LINK_INTEGRITY_BROKEN')).toHaveLength(0);
-    expect(result.status).toBe('success');
+    expect(result.summary).toMatchObject({ errors: 0, warnings: 0 });
   });
 
   it('validation.severity.LINK_OUTSIDE_SKILL_DIR: warning reports the boundary escape', async () => {
@@ -149,9 +171,20 @@ describe('transitive link traversal — boundary escape', () => {
     expect(issues[0]?.message).toContain('../sibling.md');
     expect(issues[0]?.link).toBe('../sibling.md');
     expect(issues[0]?.reference).toBe('#link_outside_skill_dir');
-    expect(result.status).toBe('warning');
+    expect(result.summary).toMatchObject({ errors: 0 });
+    expect(result.summary.warnings).toBeGreaterThan(0);
     // One code per boundary: the project-root escape never fires for a target inside the project.
     expect(findIssues(result, 'LINK_OUTSIDE_PROJECT')).toHaveLength(0);
+  });
+
+  it('reports findings with summary counts for a warning-only skill', async () => {
+    const result = await validateSkillLinkingOutsideItsDir(getTempDir(), { severity: { LINK_OUTSIDE_SKILL_DIR: 'warning' } });
+
+    expect(result.status).toBe('findings');
+    expect(result.summary).toEqual({ errors: 0, warnings: 1, info: 0 });
+    // The human sentence is `description`, so `summary` has exactly one meaning.
+    expect(result.description).toBe('0 errors, 1 warnings, 0 info');
+    expect(result).not.toHaveProperty('issueCounts');
   });
 
   it('validation.severity.LINK_OUTSIDE_SKILL_DIR: error makes the boundary escape fail the validation', async () => {
@@ -160,15 +193,15 @@ describe('transitive link traversal — boundary escape', () => {
     const issues = findIssues(result, 'LINK_OUTSIDE_SKILL_DIR');
     expect(issues).toHaveLength(1);
     expect(issues[0]?.severity).toBe('error');
-    expect(result.status).toBe('error');
-    expect(result.issueCounts.errors).toBe(1);
+    expect(result.summary.errors).toBeGreaterThan(0);
+    expect(result.summary.errors).toBe(1);
   });
 
   it('validation.severity.LINK_OUTSIDE_PROJECT does not reach the skill-directory boundary', async () => {
     const result = await validateSkillLinkingOutsideItsDir(getTempDir(), { severity: { LINK_OUTSIDE_PROJECT: 'error' } });
 
     expect(findIssues(result, 'LINK_OUTSIDE_SKILL_DIR')).toHaveLength(0);
-    expect(result.status).toBe('success');
+    expect(result.summary).toMatchObject({ errors: 0, warnings: 0 });
   });
 
   it('validation.allow suppresses a raised boundary escape for a matching path and records nothing unused', async () => {
@@ -179,7 +212,7 @@ describe('transitive link traversal — boundary escape', () => {
 
     expect(findIssues(result, 'LINK_OUTSIDE_SKILL_DIR')).toHaveLength(0);
     expect(findIssues(result, 'ALLOW_UNUSED')).toHaveLength(0);
-    expect(result.status).toBe('success');
+    expect(result.summary).toMatchObject({ errors: 0, warnings: 0 });
   });
 
   it('should report LINK_INTEGRITY_BROKEN (error), not a silent boundary warning, when a link escapes the skill directory AND its target does not exist', async () => {
@@ -192,7 +225,7 @@ describe('transitive link traversal — boundary escape', () => {
     expect(issues).toHaveLength(1);
     expect(issues[0]?.severity).toBe('error');
     expect(issues[0]?.message).toContain('../missing-outside.md');
-    expect(result.status).toBe('error');
+    expect(result.summary.errors).toBeGreaterThan(0);
   });
 });
 
@@ -440,7 +473,7 @@ describe('transitive link traversal — rootDir default', () => {
       getTempDir(), { 'doc.md': '# Doc\n\nContent.' }, skillWithLink('./doc.md', 'doc'),
     );
 
-    const result = await validateSkill({ skillPath, validation: {} });
+    const result = await validateSkill({ dispatcher: undefined, resourcesValidation: {}, side: 'source', skillPath, validation: {} });
 
     expect(result.linkedFiles).toHaveLength(1);
     expect(findIssues(result, 'LINK_INTEGRITY_BROKEN')).toHaveLength(0);
@@ -460,7 +493,7 @@ describe('transitive link traversal — directory links', () => {
     const issues = findIssues(result, 'LINK_INTEGRITY_BROKEN');
     expect(issues).toHaveLength(1);
     expect(issues[0]?.message).toContain('missing-dir/');
-    expect(result.status).toBe('error');
+    expect(result.summary.errors).toBeGreaterThan(0);
   });
 
   it('should NOT report LINK_INTEGRITY_BROKEN for a link to an EXISTING directory', async () => {
@@ -473,7 +506,7 @@ describe('transitive link traversal — directory links', () => {
     // does not try to write a file into it
     mkdirSyncReal(safePath.join(tempDir, 'existing-dir'), { recursive: true });
 
-    const result = await validateSkill({ skillPath, validation: {} });
+    const result = await validateSkill({ dispatcher: undefined, resourcesValidation: {}, side: 'source', skillPath, validation: {} });
     expect(findIssues(result, 'LINK_INTEGRITY_BROKEN')).toHaveLength(0);
   });
 });
@@ -498,7 +531,7 @@ describe('kebab-case detection — skill', () => {
         'Body.',
       ].join('\n'),
     );
-    const result = await validateSkill({ skillPath, validation: {} });
+    const result = await validateSkill({ dispatcher: undefined, resourcesValidation: {}, side: 'source', skillPath, validation: {} });
     const codes = result.issues.map((i) => i.code);
     expect(codes).toContain('SKILL_NAME_NOT_KEBAB_CASE');
     const kebabIssue = result.issues.find((i) => i.code === 'SKILL_NAME_NOT_KEBAB_CASE');

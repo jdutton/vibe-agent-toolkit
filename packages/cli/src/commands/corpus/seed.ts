@@ -5,10 +5,11 @@
  * schema (severity overrides + allow entries).
  */
 
-import { existsSync, readFileSync } from 'node:fs';
-
 import * as yaml from 'yaml';
 import { z } from 'zod';
+
+import { CommandRefusalError, errorMessageOf } from '../../utils/command-refusal.js';
+import { readInputFile } from '../../utils/project-root-policy.js';
 
 const ValidationAllowEntrySchema = z.object({
   code: z.string().min(1),
@@ -49,28 +50,44 @@ export type ValidationBlock = z.infer<typeof ValidationBlockSchema>;
 export type PluginEntry = z.infer<typeof PluginEntrySchema>;
 export type Seed = z.infer<typeof SeedSchema>;
 
+/** The seed's own mistake: it is the operator's config for the scan. */
+function seedInvalid(path: string, why: string, cause?: unknown): CommandRefusalError {
+  return new CommandRefusalError('CONFIG_INVALID', `Seed file ${path} is invalid: ${why}`, cause === undefined ? undefined : { cause });
+}
+
+/** Parse the seed's text as YAML and against {@link SeedSchema}, refusing either as the seed's mistake. */
+function parseSeed(path: string, raw: string): Seed {
+  let parsed: unknown;
+  try {
+    parsed = yaml.parse(raw);
+  } catch (error) {
+    throw seedInvalid(path, errorMessageOf(error), error);
+  }
+  const result = SeedSchema.safeParse(parsed);
+  if (!result.success) throw seedInvalid(path, result.error.message, result.error);
+  return result.data;
+}
+
 /**
  * Load and validate `corpus/seed.yaml` (or another seed-shaped YAML file).
- * Throws on missing file, malformed YAML, schema violations, duplicate
- * `source` keys, or duplicate `name` labels.
+ *
+ * @throws {CommandRefusalError} `USAGE_INVALID` when the file is not there (the
+ *   argument names nothing); `INPUT_UNREADABLE` when the OS refuses it;
+ *   `CONFIG_INVALID` for malformed YAML, a schema violation, or a duplicate
+ *   `source` or `name`
  */
 export function loadSeedFile(path: string): Seed {
-  if (!existsSync(path)) {
-    throw new Error(`Seed file not found: ${path}`);
-  }
-
-  const raw = readFileSync(path, 'utf-8');
-  const parsed = yaml.parse(raw);
-  const seed = SeedSchema.parse(parsed);
+  const raw = readInputFile(path, { origin: 'argument', message: `Seed file not found: ${path}` });
+  const seed = parseSeed(path, raw);
 
   const sources = new Set<string>();
   const names = new Set<string>();
   for (const entry of seed.plugins) {
     if (sources.has(entry.source)) {
-      throw new Error(`Seed has duplicate source: ${entry.source}`);
+      throw seedInvalid(path, `duplicate source: ${entry.source}`);
     }
     if (names.has(entry.name)) {
-      throw new Error(`Seed has duplicate name: ${entry.name}`);
+      throw seedInvalid(path, `duplicate name: ${entry.name}`);
     }
     sources.add(entry.source);
     names.add(entry.name);

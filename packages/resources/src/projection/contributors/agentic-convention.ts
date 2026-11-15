@@ -218,6 +218,10 @@ export class AgenticConventionContributor implements ExtentContributor {
       memberships,
       tags,
       conditions: [],
+      // A path classifier cannot read a `paths:` list — it runs in `base`, where
+      // `blobs` does not exist yet. `ClaudeRulesScopeContributor` is the one
+      // producer of this table; see this module's header on the same split.
+      claudeRulePatterns: [],
     });
   }
 }

@@ -1,8 +1,8 @@
 /**
- * A query the provider cannot honour is refused, not silently widened.
+ * A query the schema does not declare is refused, not silently widened.
  *
  * The unit suite (`test/unsupported-filters.test.ts`) pins the mechanism —
- * `buildWhereClause` throws instead of producing no condition. This suite pins the
+ * the strict `RAGQuerySchema` refuses unknown keys instead of deleting them. This suite pins the
  * CONSEQUENCE against a real provider over a real index, because that is where the
  * defect was visible and where a schema-only test is structurally blind: nothing that
  * merely calls `safeParse` can see that a filtered query returned the whole corpus.
@@ -16,6 +16,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
+import { caughtFrom, expectUnrecognizedKeys } from '../refusal-assertions.js';
 import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite } from '../test-helpers.js';
 
 const PUBLIC_DOC = 'public-doc';
@@ -96,68 +97,51 @@ describe('unsupported queries are refused rather than widened', () => {
   it('refuses a query filtered only by dateRange instead of returning both documents', async () => {
     suite.provider = await indexTwoDocuments();
 
-    await expect(
-      suite.provider.query({
+    const error = await caughtFrom(() =>
+      suite.provider?.query({
         text: QUERY_TEXT,
         limit: 10,
-        filters: { dateRange: { start: new Date(0), end: new Date(1) } },
+        filters: asUntypedFilters({ dateRange: { start: new Date(0), end: new Date(1) } }),
       }),
-    ).rejects.toThrow(/dateRange/);
+    );
+    expectUnrecognizedKeys(error, ['dateRange'], ['filters']);
   });
 
-  it('refuses hybridSearch rather than silently running a pure vector search', async () => {
-    suite.provider = await indexTwoDocuments();
-
-    await expect(
-      suite.provider.query({
-        text: QUERY_TEXT,
-        limit: 10,
-        hybridSearch: { enabled: true },
-      }),
-    ).rejects.toThrow(/hybrid search/i);
-  });
-
-  it('refuses hybridSearch before touching the database, so an unindexed provider fails the same way', async () => {
-    // No indexResources() call: the guard must not depend on a connection or an
-    // embedding, or a caller would get "no data indexed yet" and never learn that
-    // hybrid search is unimplemented.
+  it('refuses hybridSearch, even disabled, before touching the database', async () => {
+    // No indexResources() call: the schema check must not depend on a connection or an
+    // embedding, or a caller would get "no data indexed yet" and never learn the field
+    // was removed.
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath });
 
-    await expect(
-      suite.provider.query({ text: QUERY_TEXT, hybridSearch: { enabled: true } }),
-    ).rejects.toThrow(/hybrid search/i);
+    const error = await caughtFrom(() =>
+      suite.provider?.query({ text: QUERY_TEXT, hybridSearch: { enabled: false } } as never),
+    );
+    expectUnrecognizedKeys(error, ['hybridSearch'], []);
   });
 
-  it('refuses an unsupported FILTER before touching the database too', async () => {
-    // The same property for the other half of the guard. The README claims the refusal
-    // needs neither a connection nor an embedding; without this case only the
-    // hybridSearch half was pinned, and the filter half was reaching `buildWhereClause`
-    // by a route this suite never proved ran first. With nothing indexed, an unguarded
-    // query fails with "No data indexed yet" — a message this assertion cannot match —
-    // so the test distinguishes the guard from the absence of one.
+  it('refuses an unknown FILTER before touching the database too', async () => {
+    // With nothing indexed, an unguarded query fails with "No data indexed yet" — a message
+    // this assertion cannot match — so the test distinguishes the guard from its absence.
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath });
 
-    await expect(
-      suite.provider.query({ text: QUERY_TEXT, filters: asUntypedFilters({ tags: ['auth'] }) }),
-    ).rejects.toThrow(/`filters\.tags`: move it to `filters\.metadata\.tags`/);
+    const error = await caughtFrom(() =>
+      suite.provider?.query({ text: QUERY_TEXT, filters: asUntypedFilters({ tags: ['auth'] }) }),
+    );
+    expectUnrecognizedKeys(error, ['tags'], ['filters']);
   });
 
-  it('reports every unsupported key present in one error', async () => {
+  it('reports every unknown key present in one error', async () => {
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath });
 
-    let message = '';
-    try {
-      await suite.provider.query({
+    const error = await caughtFrom(() =>
+      suite.provider?.query({
         text: QUERY_TEXT,
         filters: asUntypedFilters({ tags: ['auth'], type: 'guide' }),
-      });
-    } catch (error) {
-      message = (error as Error).message;
-    }
+      }),
+    );
 
-    // One error naming both, so a query carrying two does not have to be fixed twice.
-    expect(message).toMatch(/filters\.tags/);
-    expect(message).toMatch(/filters\.type/);
+    // Exact issue list, not `/type/`: an `invalid_type` refusal mentions the same word.
+    expectUnrecognizedKeys(error, ['tags', 'type'], ['filters']);
   });
 
   it('returns NOTHING for an empty tag list, rather than the whole index', async () => {
@@ -199,17 +183,5 @@ describe('unsupported queries are refused rather than widened', () => {
     });
 
     expect(result.chunks).toHaveLength(0);
-  });
-
-  it('allows hybridSearch when it is explicitly disabled', async () => {
-    suite.provider = await indexTwoDocuments();
-
-    const result = await suite.provider.query({
-      text: QUERY_TEXT,
-      limit: 10,
-      hybridSearch: { enabled: false },
-    });
-
-    expect(result.chunks.length).toBeGreaterThan(0);
   });
 });

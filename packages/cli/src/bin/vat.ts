@@ -3,10 +3,21 @@
 /**
  * Smart vat wrapper with context-aware execution
  *
- * Automatically detects execution context and delegates to appropriate binary:
- * - Developer mode: Inside vibe-agent-toolkit repo → packages/cli/dist/bin.js (unpackaged dev build)
- * - Local install: Project has vibe-agent-toolkit → node_modules version (packaged)
- * - Global install: Fallback → globally installed version (packaged)
+ * Resolution precedence:
+ * 1. `VAT_BIN` — an explicit `dist/bin.js` path, highest precedence. A path
+ *    that does not exist, or that names this wrapper itself (`dist/bin/vat.js`,
+ *    which would re-resolve and spawn itself forever), is a hard error
+ *    (exit 2) — never a silent fall-through to a lower priority.
+ * 2. `VAT_ROOT_DIR` — a monorepo checkout root; `<root>/packages/cli/dist/bin.js`
+ *    must already be built, or this is a hard error (exit 2).
+ * 3. Dev mode: Inside vibe-agent-toolkit repo → packages/cli/dist/bin.js (unpackaged dev build)
+ * 4. Local install: Project has vibe-agent-toolkit → node_modules version (packaged)
+ * 5. Global install: Fallback → globally installed version (packaged)
+ *
+ * `VAT_TEST_ROOT` is separate from the above: it only changes the directory
+ * project-root detection (priorities 3–5) starts from — it never names a
+ * binary. For every `VAT_*` variable above, an empty string is treated as
+ * unset (`if (process.env[...])`), matching the historical behaviour.
  *
  * Features:
  * - Version detection and comparison
@@ -16,22 +27,23 @@
  * Works in both git and non-git directories.
  */
 
-import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import {  dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { ExitCode, installLastResortExit } from '@vibe-agent-toolkit/schema';
 import {
   findNodeWorkspaceRoot,
+  followedKindSync,
+  installWorkCounterDump,
   isPathAbsentError,
   safePath,
 } from '@vibe-agent-toolkit/utils';
-import {
-  describeStdioBlocking,
-  makeStdioBlocking,
-} from '@vibe-agent-toolkit/utils/process';
+import { describeStdioBlocking, makeStdioBlocking } from '@vibe-agent-toolkit/utils/process';
+
+import { superviseCli } from './supervise-cli.js';
 
 // Before ANY output. This file — not bin.ts — is what package.json maps `vat` to,
 // so it is the CLI entry point in every installed copy, and `makeStdioBlocking`
@@ -58,11 +70,27 @@ function reportStdioBlocking(debug: boolean): void {
 // A throw nothing below caught ends on ExitCode.ERROR, never Node's default 1.
 installLastResortExit();
 
+// This process only resolves and spawns the CLI, which files its own dump; the
+// wrapper's says what the wrapper itself did, so a reader can sum both.
+installWorkCounterDump('wrapper');
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 type Context = 'dev' | 'local' | 'global';
 
-function spawnCli(binPath: string, context: Context, contextPath?: string): never {
+/**
+ * Run the CLI as a child of this process, and end the way it ended.
+ *
+ * Asynchronous, never `spawnSync`: this wrapper is the `vat` an operator and a CI runner start, so
+ * `kill <pid>` lands here, and a synchronous spawn died of it at once while the CLI — with any
+ * `resources check` child it supervises — ran on, reparented. How a signal is handled meanwhile
+ * (forwarded on POSIX, never on Windows) and how this process then ends: {@link superviseCli}.
+ *
+ * @param binPath - The CLI entry (`dist/bin.js`) to run
+ * @param context - How it was found, for `VAT_CONTEXT`
+ * @param contextPath - Where it was found, for `VAT_CONTEXT_PATH`
+ */
+function spawnCli(binPath: string, context: Context, contextPath?: string): void {
   const env = {
     ...process.env,
     VAT_CONTEXT: context,
@@ -71,13 +99,44 @@ function spawnCli(binPath: string, context: Context, contextPath?: string): neve
 
   // The node running this wrapper, never a PATH lookup: the child must be the
   // same binary, and `node` by name is whatever PATH says first.
-  const result = spawnSync(process.execPath, [binPath, ...process.argv.slice(2)], {
+  superviseCli(spawn(process.execPath, [binPath, ...process.argv.slice(2)], {
     stdio: 'inherit',
     env,
-  });
+  }));
+}
 
-  // A child that died of a signal has no status; that is not a finding.
-  process.exit(result.status ?? ExitCode.ERROR);
+/**
+ * The explicit overrides, in precedence order. A named target that cannot be
+ * run is an error, never a fall-through — see the header docstring.
+ */
+function explicitOverride(
+  env: NodeJS.ProcessEnv,
+): { binPath: string; contextPath: string; variable: 'VAT_BIN' | 'VAT_ROOT_DIR' } | null {
+  const vatBin = env['VAT_BIN'];
+  if (vatBin) {
+    const binPath = safePath.resolve(vatBin);
+    if (basename(binPath) === 'vat.js' && basename(dirname(binPath)) === 'bin') {
+      refuseOverride('VAT_BIN', binPath, 'names the context-detecting wrapper, which would re-resolve and run itself; point it at dist/bin.js');
+    }
+    // The operator's own variable: its own `within`.
+    if (followedKindSync(binPath, binPath) === 'absent') refuseOverride('VAT_BIN', binPath, 'does not exist');
+    // <root>/packages/cli/dist/bin.js: dist → cli → packages → <root> is FOUR hops.
+    return { binPath, contextPath: dirname(dirname(dirname(dirname(binPath)))), variable: 'VAT_BIN' };
+  }
+  const rootDir = env['VAT_ROOT_DIR'];
+  if (rootDir) {
+    const binPath = safePath.join(rootDir, 'packages/cli/dist/bin.js');
+    // Beneath the directory the operator named: its links are read before followed.
+    if (followedKindSync(binPath, rootDir) === 'absent') refuseOverride('VAT_ROOT_DIR', binPath, 'has no built CLI (run `bun run build` there)');
+    return { binPath, contextPath: rootDir, variable: 'VAT_ROOT_DIR' };
+  }
+  return null;
+}
+
+/** Print why the named override was refused and exit with {@link ExitCode.ERROR}. */
+function refuseOverride(variable: string, path: string, why: string): never {
+  process.stderr.write(`vat: ${variable} ${why}: ${path}\nUnset ${variable} to use normal resolution.\n`);
+  process.exit(ExitCode.ERROR);
 }
 
 /**
@@ -90,14 +149,16 @@ function spawnCli(binPath: string, context: Context, contextPath?: string): neve
 function getDevModeBinary(projectRoot: string): string | null {
   const wrapperPath = safePath.join(projectRoot, 'packages/cli/dist/bin/vat.js');
   const binPath = safePath.join(projectRoot, 'packages/cli/dist/bin.js');
+  // Beneath the project root found from the operator's cwd: its links are read before followed.
+  const present = (path: string): boolean => followedKindSync(path, projectRoot) !== 'absent';
 
   if (process.env['VAT_DEBUG'] === '1') {
-    console.error(`[vat debug] Dev check - wrapper: ${wrapperPath} (${existsSync(wrapperPath)})`);
-    console.error(`[vat debug] Dev check - bin: ${binPath} (${existsSync(binPath)})`);
+    console.error(`[vat debug] Dev check - wrapper: ${wrapperPath} (${present(wrapperPath)})`);
+    console.error(`[vat debug] Dev check - bin: ${binPath} (${present(binPath)})`);
   }
 
   // Both files must exist to confirm we're in vibe-agent-toolkit repo
-  if (existsSync(wrapperPath) && existsSync(binPath)) {
+  if (present(wrapperPath) && present(binPath)) {
     return binPath;
   }
 
@@ -113,8 +174,8 @@ function getDevModeBinary(projectRoot: string): string | null {
  * layout and **does not exist under pnpm**. An adopter depending on
  * the umbrella `vibe-agent-toolkit` package gets no top-level
  * `node_modules/@vibe-agent-toolkit/` directory at all; the real CLI lives under
- * `node_modules/.pnpm/@vibe-agent-toolkit+cli@<ver>_<hash>/…`. So priority 3 never
- * fired for them, resolution fell through to priority 4, and whichever copy of
+ * `node_modules/.pnpm/@vibe-agent-toolkit+cli@<ver>_<hash>/…`. So priority 4 never
+ * fired for them, resolution fell through to priority 5, and whichever copy of
  * `vat.js` happened to be invoked won — silently ignoring the version they pinned.
  * That is the exact failure `findLocalInstall` exists to prevent, and it was
  * invisible on npm/bun, where the flat layout makes the probe succeed.
@@ -157,7 +218,8 @@ function findLocalInstall(projectRoot: string): string | null {
     // Still existence-checked: a dependency can be installed without having been
     // built (a fresh workspace checkout, a partial install), and spawning a
     // missing file would fail far from its cause.
-    if (existsSync(localBin)) return localBin;
+    // Beneath the package directory Node's resolver found: its links are read before followed.
+    if (followedKindSync(localBin, dirname(manifestPath)) !== 'absent') return localBin;
   }
   return null;
 }
@@ -165,7 +227,7 @@ function findLocalInstall(projectRoot: string): string | null {
 /**
  * `require.resolve` reduced to "found it, or didn't".
  *
- * A NOT-FOUND is priority 3's ordinary "not applicable" answer — no local
+ * A NOT-FOUND is priority 4's ordinary "not applicable" answer — no local
  * install on this base — so it falls through to the next base and ultimately to
  * the global install rather than failing the run. Two codes spell it: the
  * package is not installed (`MODULE_NOT_FOUND`), or it is installed but too old
@@ -195,17 +257,13 @@ function isResolutionNotFound(error: unknown): boolean {
  */
 function readVersion(packageJsonPath: string): string | null {
   try {
-    if (!existsSync(packageJsonPath)) {
-      return null;
-    }
     const content = readFileSync(packageJsonPath, 'utf-8');
     const pkg = JSON.parse(content) as { version?: string };
     return pkg.version ?? null;
   } catch (error) {
-    // The existence check above is not atomic with the read: a manifest removed
-    // between the two is "not found". A manifest the OS refuses, or one that is
-    // not JSON, is not — this wrapper is about to dispatch to that very install,
-    // and a broken manifest is the first fact worth seeing.
+    // No existence probe: the read's own absence is "not found". A manifest the
+    // OS refuses, or one that is not JSON, is not — this wrapper is about to
+    // dispatch to that very install, and a broken manifest is the first fact worth seeing.
     if (isPathAbsentError(error)) return null;
     throw error;
   }
@@ -224,19 +282,20 @@ function main(): void {
   const debug = process.env['VAT_DEBUG'] === '1';
 
   // Reported here rather than in the block further down because every dispatch
-  // path below ends in `spawnCli`, which never returns.
+  // path below ends in `spawnCli`.
   reportStdioBlocking(debug);
 
-  // Priority 1: Explicit override via VAT_ROOT_DIR
-  if (process.env['VAT_ROOT_DIR']) {
-    const binPath = safePath.join(process.env['VAT_ROOT_DIR'], 'packages/cli/dist/bin.js');
-    if (existsSync(binPath)) {
-      if (debug) {
-        console.error('[vat debug] Using VAT_ROOT_DIR override');
-        console.error(`[vat debug] Binary: ${binPath}`);
-      }
-      spawnCli(binPath, 'dev', process.env['VAT_ROOT_DIR']);
+  // Priority 1 & 2: Explicit override via VAT_BIN or VAT_ROOT_DIR. A named
+  // target that cannot be run exits here (ExitCode.ERROR) — it never falls
+  // through to dev/local/global resolution below.
+  const override = explicitOverride(process.env);
+  if (override) {
+    if (debug) {
+      console.error(`[vat debug] Using ${override.variable} override`);
+      console.error(`[vat debug] Binary: ${override.binPath}`);
     }
+    spawnCli(override.binPath, 'dev', override.contextPath);
+    return;
   }
 
   // Find the Node monorepo workspace root from the current working directory.
@@ -248,14 +307,14 @@ function main(): void {
   let context: Context;
   let binDir: string;
 
-  // Priority 2: Check for developer mode (inside vibe-agent-toolkit repo)
+  // Priority 3: Check for developer mode (inside vibe-agent-toolkit repo)
   const devBin = getDevModeBinary(projectRoot);
   if (devBin) {
     binPath = devBin;
     context = 'dev';
     binDir = dirname(dirname(devBin)); // packages/cli/dist -> packages/cli
   }
-  // Priority 3: Check for local install (node_modules)
+  // Priority 4: Check for local install (node_modules)
   else {
     const localBin = findLocalInstall(projectRoot);
     if (localBin) {
@@ -263,7 +322,7 @@ function main(): void {
       context = 'local';
       binDir = dirname(dirname(localBin)); // node_modules/@vibe-agent-toolkit/cli/dist -> node_modules/@vibe-agent-toolkit/cli
     }
-    // Priority 4: Use global install (this script's location)
+    // Priority 5: Use global install (this script's location)
     else {
       binPath = safePath.resolve(__dirname, '../bin.js');
       context = 'global';

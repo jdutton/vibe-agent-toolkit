@@ -2,7 +2,7 @@
  * The builder's de-duplication keys are the registry's primary keys.
  *
  * `PROJECTION_TABLES` declares each table's primary key as data;
- * `ProjectionBuilder` states the same twelve keys again as `ProjectionTable`
+ * `ProjectionBuilder` states the same keys again as `ProjectionTable`
  * closures, and nothing in the production code makes the two agree. A
  * divergence there is not an ordering wobble — it changes which rows are
  * **de-duplicated**, so the projection would carry a different row set.
@@ -28,7 +28,7 @@
  * from each of the twelve closures in turn reddens that table and only that
  * table (12/12), and widening each key with one non-key column reddens its table
  * too (10/10; `resource_extents` and `resource_tags` have no non-key column to
- * add).
+ * add). `claude_rule_patterns` arrived after that sweep and was not part of it.
  *
  * ## Order is deliberately not pinned here, because it is not observable here
  *
@@ -49,12 +49,15 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { RunContentCache } from '../src/projection/content-cache.js';
+import type { HarnessId } from '../src/projection/harness/profile.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
 import {
   PROJECTION_TABLES,
   type ProjectionRow,
   type ProjectionTableName,
 } from '../src/projection/table-registry.js';
+import { HarnessIdSchema } from '../src/schemas/projection-harness.js';
 
 /** A corpus root. Nothing here touches disk; the builder only needs a string. */
 const ROOT = '/vat-corpus/dedup';
@@ -83,13 +86,26 @@ interface TableFixture {
    * @returns How many rows of this table survived
    */
   readonly rowsAfterPair: (overrides: RowRecord) => number;
+  /**
+   * Columns whose {@link alt} value is a PROBE outside the schema's vocabulary,
+   * because that vocabulary has exactly one member and no schema-valid second
+   * row can differ there. Empty for every table but the two harness tables.
+   */
+  readonly probeColumns: readonly string[];
 }
+
+/**
+ * A harness id no profile declares — the only way to vary `harness` while
+ * {@link HarnessIdSchema} has a single member. The builder keys on the string,
+ * so the probe still proves the column is in its key.
+ */
+const PROBE_HARNESS = 'probe-harness' as HarnessId;
 
 /**
  * Read a row as an untyped record.
  *
  * The one cast in this file, and it widens rather than narrows: the assertions
- * below are generic over twelve unrelated row types and address columns by name.
+ * below are generic over thirteen unrelated row types and address columns by name.
  *
  * @param row - Any projection row
  * @returns The same object, typed column-wise
@@ -117,8 +133,9 @@ function fixture<Name extends ProjectionTableName>(
     name,
     base: asRecord(base),
     alt: asRecord(alt),
+    probeColumns: [],
     rowsAfterPair(overrides: RowRecord): number {
-      const builder = new ProjectionBuilder({ root: ROOT });
+      const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() });
       add(builder, base);
       add(builder, { ...base, ...overrides } as ProjectionRow<Name>);
       return builder.build()[name].length;
@@ -127,7 +144,34 @@ function fixture<Name extends ProjectionTableName>(
 }
 
 /**
- * The twelve fixtures, in the registry's own declaration order.
+ * Mark a harness table's fixture: its `alt.harness` is {@link PROBE_HARNESS}.
+ *
+ * Both ways: this reds the moment {@link HarnessIdSchema} gains a second
+ * member, at which point the probe must give way to that real, schema-valid id.
+ *
+ * @param entry - A harness table's fixture
+ * @returns The same fixture, with `harness` declared a probe column
+ */
+function harnessFixture(entry: TableFixture): TableFixture {
+  if (HarnessIdSchema.options.length !== 1) {
+    throw new Error('HarnessIdSchema has a second member: use it as the alt harness instead of PROBE_HARNESS.');
+  }
+  return { ...entry, probeColumns: ['harness'] };
+}
+
+/**
+ * A subset of a row's columns.
+ *
+ * @param row - The row to take values from
+ * @param columns - The columns to take
+ * @returns A record covering exactly those columns
+ */
+function pick(row: RowRecord, columns: readonly string[]): RowRecord {
+  return Object.fromEntries(columns.map((column) => [column, row[column]]));
+}
+
+/**
+ * The thirteen fixtures, in the registry's own declaration order.
  *
  * Every `alt` differs from its `base` in **every** column — asserted below
  * rather than assumed, because a fixture whose columns move together is exactly
@@ -222,6 +266,7 @@ const FIXTURES: readonly TableFixture[] = [
       targetExists: false,
       matchedPattern: 'lib/**',
       matchedPayload: null,
+      targetFaultClass: null,
     },
     {
       extentId: 'ctx-alt',
@@ -236,6 +281,30 @@ const FIXTURES: readonly TableFixture[] = [
       targetExists: null,
       matchedPattern: null,
       matchedPayload: { rule: 1 },
+      targetFaultClass: 'refused',
+    },
+  ),
+  fixture(
+    'claudeRulePatterns',
+    (builder, row) => builder.addClaudeRulePattern(row),
+    {
+      resourceId: 'res-base',
+      ordinal: 0,
+      pattern: 'lib/**/*.md',
+      literalPrefix: 'lib',
+      witnessPath: PATH_BASE,
+      status: 'matched',
+    },
+    {
+      resourceId: 'res-alt',
+      ordinal: 3,
+      pattern: 'src/**/*.txt',
+      literalPrefix: 'src',
+      // `witnessPath`/`status` move together: a null witness under `matched`
+      // would be a row no producer can emit, and the fixture-power guard above
+      // needs both columns to vary anyway.
+      witnessPath: null,
+      status: 'unevaluated',
     },
   ),
   fixture(
@@ -360,6 +429,18 @@ const FIXTURES: readonly TableFixture[] = [
     { blob: BLOB_BASE, code: 'PARSE_ODDITY', severity: 'info', message: 'base oddity', line: 4 },
     { blob: BLOB_ALT, code: 'FRONTMATTER_UNPARSED', severity: 'error', message: 'alt oddity', line: null },
   ),
+  harnessFixture(fixture(
+    'harnessBlobFacts',
+    (builder, row) => builder.addHarnessBlobFacts(row),
+    { blob: BLOB_BASE, harness: 'claude-code', injectedBytes: 120, injectedTokens: 30, paths: null },
+    { blob: BLOB_ALT, harness: PROBE_HARNESS, injectedBytes: 240, injectedTokens: 60, paths: ['alt/**'] },
+  )),
+  harnessFixture(fixture(
+    'harnessBlobImports',
+    (builder, row) => builder.addHarnessBlobImport(row),
+    { blob: BLOB_BASE, harness: 'claude-code', ordinal: 0, rawRef: '@base.md', target: 'base.md', line: 2 },
+    { blob: BLOB_ALT, harness: PROBE_HARNESS, ordinal: 7, rawRef: String.raw`@alt\ doc.md#top`, target: 'alt doc.md', line: 12 },
+  )),
 ];
 
 /**
@@ -382,12 +463,12 @@ function nonKeyColumns(name: ProjectionTableName): readonly string[] {
  * @returns An override record covering exactly those columns
  */
 function altValues(entry: TableFixture, columns: readonly string[]): RowRecord {
-  return Object.fromEntries(columns.map((column) => [column, entry.alt[column]]));
+  return pick(entry.alt, columns);
 }
 
 describe('ProjectionBuilder de-duplication keys', () => {
   it('are exercised for every table the registry declares', () => {
-    // A thirteenth table would otherwise be silently unguarded: it would compile,
+    // A new table would otherwise be silently unguarded: it would compile,
     // and no assertion below would ever mention it.
     expect(FIXTURES.map((entry) => entry.name)).toStrictEqual(Object.keys(PROJECTION_TABLES));
   });
@@ -398,9 +479,10 @@ describe.each(FIXTURES)('$name de-duplication', (entry) => {
 
   it('is fixtured with two rows its own schema accepts', () => {
     // `.strict()` on every row schema makes this pin the column set too: a fixture
-    // that missed a new column, or invented one, cannot parse.
+    // that missed a new column, or invented one, cannot parse. A probe column
+    // takes the base's (valid) value for this check only.
     expect(() => spec.schema.parse(entry.base)).not.toThrow();
-    expect(() => spec.schema.parse(entry.alt)).not.toThrow();
+    expect(() => spec.schema.parse({ ...entry.alt, ...pick(entry.base, entry.probeColumns) })).not.toThrow();
   });
 
   it.each([...spec.columns])('varies %s independently between the two rows', (column) => {

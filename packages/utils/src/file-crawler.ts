@@ -2,23 +2,31 @@ import fs from 'node:fs';
 
 import picomatch from 'picomatch';
 
+import { requireConfirmedAbsent } from './errors/confirmed-absent.js';
+import { fsFaultOf } from './errors/errno-table.js';
+import { classifyFsFault, type FsFaultContext } from './errors/fs-fault.js';
 import {
   type DirectoryRefusal,
   directoryRefusalFor,
   listingFailure,
 } from './fs-utils.js';
 import { gitFindRoot, gitLsFiles } from './git-utils.js';
-import { requireUnreadablePolicy, settleRefusal, type UnreadablePolicy } from './listing-refusal.js';
+import { promised } from './in-order.js';
+import { edgeStatSync, followedStatSync, realpathNativeSync } from './link-following.js';
+import { crawlSideOf, requireUnreadablePolicy, settleCrawlRefusal, type UnreadablePolicy } from './listing-refusal.js';
 import { toForwardSlash, safePath } from './path-utils.js';
+import { TREE_CHANGE_RESIDUE_GLOBS } from './tree-change/staging-names.js';
 
-export type { DirectoryRefusal } from './fs-utils.js';
+export { rootListingRefusal, type DirectoryRefusal } from './fs-utils.js';
 // The refusal vocabulary lives in `listing-refusal.ts` so `git-utils.ts` can
 // share it without importing this module (which imports that one). Re-exported
 // here because `./crawl` is where every caller of the walk already looks.
 export {
   DirectoryListingRefusedError,
+  onCrawlOutput,
   type RefuseListingContext,
   refusedListingMessage,
+  settleCrawlRefusal,
   settleRefusal,
   type UnreadablePolicy,
 } from './listing-refusal.js';
@@ -35,6 +43,31 @@ export interface CrawlOptions {
   exclude?: string[];
   /** Follow symbolic links (default: false) */
   followSymlinks?: boolean;
+  /**
+   * Observer for every symbolic link the WALK met and did not follow — called
+   * once per link that the include/exclude patterns admit, with the path in the
+   * same form a result would carry ({@link CrawlOptions.absolute}).
+   *
+   * An observer rather than a policy, and optional for that reason: declining a
+   * link is already decided by `followSymlinks: false`, and a caller that does not
+   * ask is told nothing it relied on. It exists for the caller that must not let
+   * a declined link vanish without a record — the projection's filesystem extent,
+   * which turns each one into a condition row.
+   *
+   * Walk route only, and ENFORCED: passing it without `respectGitignore: false`
+   * throws. The `git ls-files` route never declines a link (see the KNOWN
+   * DIVERGENCE block below), so it would have none to report.
+   */
+  onSymlinkNotFollowed?: (path: string) => void;
+  /**
+   * The trees the calling verb WRITES — its output and the staging it builds it in — or `[]`
+   * for a verb that only reads: the one declaration of which side a fault is on. A fault at
+   * (or a refused listing of) a directory that is, lies in, or holds one of them — the base of
+   * a project a build writes into included — is the destination's; anything else is on the
+   * `unreadable` policy's side (`source` when the policy degrades). Required: only the caller
+   * knows.
+   */
+  outputs: readonly string[];
   /** Return absolute paths in results (default: true) */
   absolute?: boolean;
   /** Only return files (not directories) - default: true */
@@ -98,6 +131,35 @@ export interface CrawlOptions {
 const PICOMATCH_OPTIONS = { dot: true } as const;
 
 /**
+ * The globs that can NEVER be authored content, at any depth: dependencies, git
+ * internals, worktree copies of the repository, and a build's staging residue.
+ *
+ * A lane that crawls for authored content (`ResourceRegistry.crawl`'s default)
+ * excludes only this list plus {@link BUILD_OUTPUT_GLOBS}; on the git route an
+ * ignored tool-output directory is gone already, and a tracked one is content
+ * the author committed.
+ */
+export const NEVER_CONTENT_GLOBS = Object.freeze([
+  '**/node_modules/**',      // Dependencies (40K+ files), never user content
+  '**/.git/**',              // Git objects, never user content
+  '**/.worktrees/**',        // Git worktrees are full repo copies — never traverse
+  '**/.claude/worktrees/**', // Claude Code worktrees, same reason
+  ...TREE_CHANGE_RESIDUE_GLOBS, // A build's staged/parked output beside its destination — a transient copy
+] as const);
+
+/**
+ * Directories named by the tool that USUALLY writes them. No lane wants the tool's
+ * output, but an author can name a directory the same —
+ * `references/coverage/workers-comp.md` is markdown someone wrote — so they are in
+ * {@link NEVER_CRAWL_GLOBS} and not in {@link NEVER_CONTENT_GLOBS}.
+ */
+const TOOL_OUTPUT_NAME_GLOBS = [
+  '**/coverage/**',          // Test coverage reports
+  '**/.test-output/**',      // Test artifacts
+  '**/.turbo/**',            // turborepo task logs + cache — see NEVER_CRAWL_GLOBS
+] as const;
+
+/**
  * Directories no VAT crawl should ever walk into. THE canonical list — any lane
  * that needs its own additions should spread this rather than restate it.
  *
@@ -115,7 +177,7 @@ const PICOMATCH_OPTIONS = { dot: true } as const;
  * at it*. Something does walk `dist/`; nothing walks `.turbo`, which holds
  * `turbo-<task>.log` telemetry plus, when `cacheDir` points inside it,
  * hash-keyed cache entries that are COPIES of package build output. That is the
- * `.worktrees` failure two lines up, not the `dist` one: a crawl that descends
+ * `.worktrees` failure, not the `dist` one: a crawl that descends
  * into it reports the same file twice under two paths. Filing it as build
  * output would have it exactly backwards, since a lane spreading only this list
  * is by definition a lane that wants to see built output — and so is precisely
@@ -129,28 +191,20 @@ const PICOMATCH_OPTIONS = { dot: true } as const;
  * turborepo setup — which is the same position `coverage/` and `.test-output/`
  * are in.
  */
-export const NEVER_CRAWL_GLOBS = [
-  '**/node_modules/**',      // Dependencies (40K+ files), never user content
-  '**/.git/**',              // Git objects, never user content
-  '**/coverage/**',          // Test coverage reports
-  '**/.test-output/**',      // Test artifacts
-  '**/.worktrees/**',        // Git worktrees are full repo copies — never traverse
-  '**/.claude/worktrees/**', // Claude Code worktrees, same reason
-  '**/.turbo/**',            // turborepo task logs + cache — see below
-] as const;
+export const NEVER_CRAWL_GLOBS = Object.freeze([...NEVER_CONTENT_GLOBS, ...TOOL_OUTPUT_NAME_GLOBS] as const);
 
 /**
  * Build output — excluded by DEFAULT, but deliberately NOT part of
  * {@link NEVER_CRAWL_GLOBS}.
  *
- * The distinction is real, and collapsing it is a bug: everything in
- * `NEVER_CRAWL_GLOBS` is "never user content, no lane wants it", while `dist/` is
- * content VAT itself produced and some lanes exist precisely to look at. Skill
- * discovery CLASSIFIES what it finds as source or build output, so it must walk
- * `dist/`; a crawl for authored markdown must not. Two different questions, so
- * two lists — a lane spreads whichever ones apply.
+ * The distinction is real, and collapsing it is a bug: no lane wants what
+ * `NEVER_CRAWL_GLOBS` names (though an author may reuse a tool-output name — see
+ * {@link NEVER_CONTENT_GLOBS}), while `dist/` is content VAT itself produced and
+ * some lanes exist precisely to look at. Skill discovery CLASSIFIES what it finds
+ * as source or build output, so it must walk `dist/`; a crawl for authored markdown
+ * must not. Two different questions, so two lists — a lane spreads whichever ones apply.
  */
-export const BUILD_OUTPUT_GLOBS = ['**/dist/**'] as const;
+export const BUILD_OUTPUT_GLOBS = Object.freeze(['**/dist/**'] as const);
 
 const DEFAULT_EXCLUDE: string[] = [...NEVER_CRAWL_GLOBS, ...BUILD_OUTPUT_GLOBS];
 
@@ -202,10 +256,30 @@ export function crawlPathFilter(
  *   baseDir: '/project',
  *   include: ['**\/*.md'],
  *   exclude: ['**\/node_modules/**'],
+ *   unreadable: { refuse: { root: '/project', remedy: 'Fix the permissions.', side: 'source' } },
+ *   outputs: [],
  * });
  */
-export async function crawlDirectory(options: CrawlOptions): Promise<string[]> {
-  return crawlDirectorySync(options);
+export function crawlDirectory(options: CrawlOptions): Promise<string[]> {
+  // Not `async`: there is nothing to await. A refusal still arrives as a
+  // rejection, never as a synchronous throw.
+  return promised(() => crawlDirectorySync(options));
+}
+
+/**
+ * Refuse a symlink observer on the `git ls-files` route.
+ *
+ * That route admits links as members and declines none, so the observer would
+ * compile, be accepted, and never be called. Refused up front rather than only
+ * when a git root happens to be found, so the contract is static.
+ *
+ * @param observer - The caller's `onSymlinkNotFollowed`
+ * @param respectGitignore - Whether the git route may be taken
+ */
+function requireWalkForSymlinkObserver(observer: unknown, respectGitignore: boolean): void {
+  if (observer !== undefined && respectGitignore) {
+    throw new TypeError('crawlDirectory: onSymlinkNotFollowed requires respectGitignore: false — the git ls-files route declines no link');
+  }
 }
 
 /**
@@ -222,8 +296,64 @@ export async function crawlDirectory(options: CrawlOptions): Promise<string[]> {
  *   baseDir: '/project',
  *   include: ['**\/*.md'],
  *   exclude: ['**\/node_modules/**'],
+ *   unreadable: { refuse: { root: '/project', remedy: 'Fix the permissions.', side: 'source' } },
+ *   outputs: [],
  * });
  */
+/**
+ * Refuse omitted `outputs` by name: the runtime half of a required field, for the callers the
+ * type cannot reach (test files are not typechecked; a JavaScript adopter has no compiler).
+ * Without it a fault on what the verb writes would be classified as its input.
+ */
+function requireOutputs(outputs: readonly string[] | undefined): asserts outputs is readonly string[] {
+  if (outputs === undefined) {
+    throw new TypeError('crawlDirectory: `outputs` is required — the trees the calling verb writes, [] for none.');
+  }
+}
+
+/**
+ * `stat` the crawl's base; every fault — an absent base too, as the walk's own listing of it answers — is
+ * classified on the context decided only then (see `crawlDirectorySync`).
+ */
+function statCrawlBase(base: string, context: () => FsFaultContext): fs.Stats {
+  try {
+    // The base is the operator's own input: its own link is the edge the kernel answers.
+    return edgeStatSync(base);
+  } catch (error: unknown) {
+    throw classifyFsFault(error, context());
+  }
+}
+
+/**
+ * Whether a member `git ls-files` listed may be handed on. A committed symbolic link (mode 120000)
+ * is read by its chain beneath the crawl's base first, as the walk's `processSymlink` reads one: a
+ * chain VAT will not follow, or a probe the OS refuses, is a gap settled by `settle` and the member
+ * is dropped, so no caller's `readFile` makes the kernel resolve it. A link that resolves to nothing
+ * stays a member (its read reports it); a non-link costs one `lstat`.
+ *
+ * @param fullPath - The member, absolute
+ * @param base - The crawl's base, the tree its links are read within
+ * @param settle - The walk's `settleLinkFault`: settles a fault on `fullPath` under the caller's policy
+ */
+function gitMemberHandedOn(fullPath: string, base: string, settle: (error: unknown, link: string) => void): boolean {
+  try {
+    if (!fs.lstatSync(fullPath).isSymbolicLink()) return true;
+  } catch (error: unknown) {
+    if (fsFaultOf(error) === undefined) throw error;
+    // Absent (a tracked file deleted from the working tree), or a member whose own `lstat` is refused —
+    // under a directory git already reported as unlistable: no kernel can follow what it cannot reach,
+    // so it stays a member, as it always was, and its read reports it.
+    return true;
+  }
+  try {
+    followedStatSync(fullPath, base);
+    return true;
+  } catch (error: unknown) {
+    settle(error, fullPath);
+    return false;
+  }
+}
+
 export function crawlDirectorySync(options: CrawlOptions): string[] {
   const {
     baseDir,
@@ -235,8 +365,12 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     respectGitignore = true,
     includeUntracked = false,
     unreadable,
+    onSymlinkNotFollowed,
+    outputs,
   } = options;
   requireUnreadablePolicy(unreadable, 'crawlDirectory');
+  requireOutputs(outputs);
+  requireWalkForSymlinkObserver(onSymlinkNotFollowed, respectGitignore);
 
   const picoOptions = PICOMATCH_OPTIONS;
 
@@ -262,16 +396,16 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
    * over. Never a silent skip, on either route.
    */
   function raiseRefusal(refusal: DirectoryRefusal): void {
-    settleRefusal(unreadable, refusal);
+    settleCrawlRefusal(unreadable, refusal, outputs);
   }
 
-  // Ensure base directory exists
-  if (!fs.existsSync(resolvedBaseDir)) {
-    throw new Error(`Base directory does not exist: ${resolvedBaseDir}`);
-  }
+  // A refusal at the base is the destination's when the base is on what the verb writes, else
+  // the input's — the tree this crawl reads, whose content decides what is in it.
+  // Decided only once a fault needs it: deciding resolves paths, which a crawl that meets no fault never pays for.
+  const crawlBase = (): FsFaultContext => ({ side: crawlSideOf(resolvedBaseDir, outputs, unreadable), origin: 'content', action: `crawl ${resolvedBaseDir}`, path: resolvedBaseDir });
 
-  // Ensure base directory is actually a directory
-  const baseStat = fs.statSync(resolvedBaseDir);
+  // Ensure base directory exists and is actually a directory
+  const baseStat = statCrawlBase(resolvedBaseDir, crawlBase);
   if (!baseStat.isDirectory()) {
     throw new Error(`Base path is not a directory: ${resolvedBaseDir}`);
   }
@@ -331,6 +465,7 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
 
         return gitFiles
           .filter((relativePath) => isMember(relativePath))
+          .filter((relativePath) => gitMemberHandedOn(safePath.resolve(resolvedBaseDir, relativePath), resolvedBaseDir, settleLinkFault))
           .map((relativePath) => {
             // git ls-files returns paths relative to cwd
             return absolute ? safePath.resolve(resolvedBaseDir, relativePath) : relativePath;
@@ -376,11 +511,15 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
   /**
    * What a failed `readdirSync` / `statSync` means for the walk.
    *
-   * Absence (`ENOENT` / `ENOTDIR`) is an entry that vanished between being
-   * enumerated by its parent and being asked about itself — not in the
-   * population, nothing to report. Anything else is a refusal, and a refusal
-   * is a GAP: handed to the caller if it asked, thrown otherwise. Never a
-   * silent `return` — that is the shorter list this walk used to hand back.
+   * Absence (`ENOENT` / `ENOTDIR`) is believed only when the parent's listing
+   * agrees ({@link vanished}): an entry that vanished between being enumerated by
+   * its parent and being asked about itself is not in the population, nothing to
+   * report; one the parent still names was refused, and is a GAP like any other.
+   * The BASE has no parent listing: it was just found to exist, so its absence is
+   * a classified source fault, never an empty population. Anything else is a
+   * refusal, and a refusal is a GAP: handed to the caller if it asked, thrown
+   * otherwise. Never a silent `return` — that is the shorter list this walk used
+   * to hand back.
    *
    * @param error - What the filesystem threw
    * @param target - The directory (or link) it was asked about
@@ -388,9 +527,45 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
    */
   function reportOrSkip(error: unknown, target: string): boolean {
     const listing = listingFailure(error);
-    if (listing.outcome === 'absent') return true;
+    if (listing.outcome === 'absent' && target === resolvedBaseDir) throw classifyFsFault(error, crawlBase());
+    if (listing.outcome === 'absent') return vanished(error, target);
     if (listing.outcome === 'unreadable') raiseRefusal(directoryRefusalFor(listing, target));
     return false;
+  }
+
+  /**
+   * Settle a symbolic link whose chain could not be followed — a probe the OS refused, or a chain VAT
+   * will not hand the kernel — on either route. A link is not a directory, so under `refuse` it is the
+   * classified fault on the link itself (its side from the crawl's one rule), never a "listing
+   * refused" for a path that was never listed; under `degrade` it is the gap the caller records.
+   *
+   * @param error - What following the link threw
+   * @param link - The link, absolute
+   */
+  function settleLinkFault(error: unknown, link: string): void {
+    if ('refuse' in unreadable) {
+      throw classifyFsFault(error, { side: crawlSideOf(link, outputs, unreadable), origin: 'content', action: 'follow the symbolic link', path: link });
+    }
+    reportOrSkip(error, link);
+  }
+
+  /**
+   * Whether `target`, whose probe answered absent, really is gone: the parent's
+   * listing is the second witness (`requireConfirmedAbsent`). A link the parent
+   * names is gone when its target is (the probe followed it). An entry the parent
+   * still names — or a parent that will not list — is a refused listing,
+   * raised under the caller's policy like any other gap.
+   */
+  function vanished(error: unknown, target: string): boolean {
+    try {
+      requireConfirmedAbsent(target, error, { origin: 'content', action: `crawl ${target}` }, { follows: true, sideOf: (refused) => crawlSideOf(refused, outputs, unreadable) });
+      return true;
+    } catch (error_: unknown) {
+      const facts = fsFaultOf(error_);
+      if (facts === undefined) throw error_;
+      raiseRefusal(directoryRefusalFor({ outcome: 'unreadable', code: facts.errno }, facts.path ?? target));
+      return false;
+    }
   }
 
   /**
@@ -411,7 +586,9 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
   function alreadyWalked(dir: string): boolean {
     let realPath: string;
     try {
-      realPath = fs.realpathSync.native(dir);
+      // The one native fallback rule (`realpathNativeSync`): a volume that cannot answer a
+      // final-path query is asked of the JS walk rather than reported as a refused directory.
+      realPath = realpathNativeSync(dir, resolvedBaseDir);
     } catch (error) {
       reportOrSkip(error, dir);
       return true;
@@ -429,19 +606,24 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
    */
   function processSymlink(fullPath: string, normalizedPath: string, relativePath: string): void {
     if (!followSymlinks) {
+      if (onSymlinkNotFollowed !== undefined && isIncluded(normalizedPath)) {
+        onSymlinkNotFollowed(absolute ? fullPath : relativePath);
+      }
       return;
     }
 
-    // Resolve symlink and check if it's a directory or file
-    let targetStat: fs.Stats;
+    // Resolve symlink and check if it's a directory or file: its chain is read beneath the base
+    // first, so the kernel never follows a text VAT has not read.
+    let targetStat: fs.Stats | undefined;
     try {
-      targetStat = fs.statSync(fullPath);
+      targetStat = followedStatSync(fullPath, resolvedBaseDir);
     } catch (error) {
-      // A broken symlink is absence and is skipped; a target the OS refused to
-      // stat is a gap, and goes the same way a refused listing does.
-      reportOrSkip(error, fullPath);
+      // A target the OS refused to stat, or a chain VAT will not follow: the link's own fault.
+      settleLinkFault(error, fullPath);
       return;
     }
+    // A broken symlink (or a cycle) is absence and is skipped.
+    if (targetStat === undefined) return;
 
     if (targetStat.isDirectory()) {
       walkDirectory(fullPath);

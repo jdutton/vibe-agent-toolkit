@@ -2,11 +2,11 @@ import { readFile, stat } from 'node:fs/promises';
 
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { parseHtml, parseHtmlContent } from '../src/html-link-parser.js';
+import { parseHtmlContent } from '../src/html-link-parser.js';
 import { blobReferencesFor } from '../src/projection/blob-references.js';
 import type { ResourceLink } from '../src/types.js';
 
-import { scratchFixtureWriter } from './test-helpers.js';
+import { parseHtmlFile, scratchFixtureWriter } from './test-helpers.js';
 
 const fixtures = scratchFixtureWriter('vat-html-');
 
@@ -128,22 +128,22 @@ const RECONSTRUCTED_ANCHOR_HTML =
  * @returns The two parse results and the decoded source they came from
  */
 async function parseBothWays(file: string): Promise<{
-  fromFile: Awaited<ReturnType<typeof parseHtml>>;
+  fromFile: ReturnType<typeof parseHtmlContent>;
   fromContent: ReturnType<typeof parseHtmlContent>;
   content: string;
 }> {
-  const fromFile = await parseHtml(file);
+  const fromFile = await parseHtmlFile(file);
   const [content, stats] = await Promise.all([readFile(file, 'utf-8'), stat(file)]);
   return { fromFile, fromContent: parseHtmlContent(content, stats.size), content };
 }
 
-describe('parseHtml', () => {
+describe('parseHtmlContent over a file', () => {
   it('extracts <a href> and <img src> links', async () => {
     const file = await fixtures.write(
       'page.html',
       '<html><body><a href="./other.html">x</a><img src="img/logo.png"></body></html>',
     );
-    const result = await parseHtml(file);
+    const result = await parseHtmlFile(file);
     const hrefs = result.links.map((l) => l.href).sort((a, b) => a.localeCompare(b));
     expect(hrefs).toEqual(['./other.html', 'img/logo.png']);
     expect(result.links.find((l) => l.href === './other.html')?.type).toBe('local_file');
@@ -154,28 +154,28 @@ describe('parseHtml', () => {
       'anchors.html',
       '<html><body><h2 id="intro">Intro</h2><a name="legacy"></a></body></html>',
     );
-    const result = await parseHtml(file);
+    const result = await parseHtmlFile(file);
     expect(new Set(result.anchors)).toEqual(new Set(['intro', 'legacy']));
     expect(result.headings).toEqual([]);
   });
 
   it('reports malformed markup via parseErrors', async () => {
     const file = await fixtures.write('bad.html', '<html><body><p>unclosed</body></html>');
-    const result = await parseHtml(file);
+    const result = await parseHtmlFile(file);
     expect(result.parseErrors).toBeDefined();
     expect((result.parseErrors ?? []).length).toBeGreaterThan(0);
   });
 
   it('omits anchors/parseErrors when there are none', async () => {
     const file = await fixtures.write('clean.html', '<!doctype html><title>t</title><p>hi</p>');
-    const result = await parseHtml(file);
+    const result = await parseHtmlFile(file);
     expect(result.anchors).toBeUndefined();
     expect(result.parseErrors).toBeUndefined();
   });
 });
 
 describe('parseHtmlContent', () => {
-  it('is equivalent to parseHtml for the same file', async () => {
+  it('keeps the HTML shape: no unresolvedReferences, parse errors reported', async () => {
     const file = await fixtures.write(
       'equivalence.html',
       [
@@ -191,13 +191,11 @@ describe('parseHtmlContent', () => {
       ].join('\n'),
     );
 
-    const { fromFile, fromContent } = await parseBothWays(file);
+    const { fromContent } = await parseBothWays(file);
 
-    expect(fromContent).toEqual(fromFile);
     // Shape guards: HTML omits unresolvedReferences entirely and does populate
-    // parseErrors — the inverse of the markdown parser. Both halves must agree.
+    // parseErrors — the inverse of the markdown parser.
     expect('unresolvedReferences' in fromContent).toBe(false);
-    expect('unresolvedReferences' in fromFile).toBe(false);
     expect(fromContent.parseErrors).toBeDefined();
   });
 
@@ -220,11 +218,8 @@ describe('parseHtmlContent', () => {
     // 19 — the only condition under which `stat().size`,
     // `Buffer.byteLength(content)` and `content.length` disagree.
     //
-    // This fixture exists because the suite could not otherwise tell them apart:
-    // with ASCII-only fixtures, swapping `stat().size` for
-    // `Buffer.byteLength(content)` in `parseHtml` leaves every test green. That
-    // swap is a real defect — `sizeBytes` reaches packaged output bytes via
-    // content-transform.ts — so it must be falsifiable here.
+    // `sizeBytes` reaches packaged output bytes via content-transform.ts, so the
+    // parser must report what it is handed, never a length it derives.
     const file = await fixtures.write(
       'malformed.html',
       Uint8Array.from([...Buffer.from('<p id="bad">'), 0xff, ...Buffer.from('</p>')]),
@@ -238,11 +233,7 @@ describe('parseHtmlContent', () => {
     expect(Buffer.byteLength(content)).toBe(19);
     expect(content).toHaveLength(17);
 
-    const fromFile = await parseHtml(file);
-    expect(fromFile.sizeBytes).toBe(stats.size);
-    expect(fromFile.sizeBytes).not.toBe(Buffer.byteLength(content));
-
-    // And the content-only half reports exactly what it was handed.
+    // The parser reports exactly what it was handed.
     expect(parseHtmlContent(content, stats.size).sizeBytes).toBe(17);
     expect(parseHtmlContent(content, Buffer.byteLength(content)).sizeBytes).toBe(19);
   });

@@ -23,6 +23,16 @@ print `❌ Validation failed` and still **exit 0**. `bun run validate` is exempt
 **Remedy:** `bun run validate` (never bare `vv validate` for a verdict); run the failing file alone
 to get its real cost before touching any timeout.
 
+### A red parallel phase names the wrong step
+
+When a step in a `parallel: true` phase fails, vibe-validate 0.20 kills its siblings and reports the
+first rejected step **in config order** — and a killed step counts as rejected. A duplication red
+can be summarised as "Dependency check failed". The phase-level `failFast` field is accepted and
+ignored.
+**Tell:** the named step's output shows it was killed (no error of its own, cut off mid-run).
+**Remedy:** read every step's printed capture (CI's failed-step output prints them all); keep
+long-running or blame-sensitive steps (ESLint) in a serial phase.
+
 ### `--force` busts vibe-validate's cache, not turbo's
 
 Every test step is `turbo run test:*`, and turbo caches independently. `vv validate --force` can
@@ -36,7 +46,9 @@ unit run is minutes, not seconds.
 Turbo's `dependsOn: ["^build"]` means dependencies' builds only, never the package's own. Without
 the package's own `build` in the list, `cli#test:system` runs against yesterday's `dist/` while the
 gate reports every task executed fresh. The cross-package case — `resources`' system tests spawning
-the `cli` binary — turbo cannot express at all.
+the `cli` binary, where a workspace dependency would make a cycle — needs a
+`<pkg>#test:<tier>` entry naming the producer in `turbo.json`; `checkBuiltOutputEdges` fails the
+gate until it is there ([writing-tests](../writing-tests.md#reading-a-packages-built-output)).
 **Tell:** dozens of system-test failures whose messages describe code that was deleted hours ago.
 **Remedy:** grep the log for the build's line number versus the test's before believing a
 system-test verdict; `bun run build` before a standalone system run.
@@ -209,7 +221,12 @@ second shape is a 0-byte emit of a file that still exists.
 but turbo's task graph only sees `package.json` dependency edges, so `utils#build` is not guaranteed
 to finish first.
 **Tell:** an intermittent `does not provide an export named …` for a symbol that exists, in one
-workflow and not another on the same commit.
+workflow and not another on the same commit — naming a different package and a different symbol
+each run, which is the signature of a schedule, not of a broken export. The same message comes from
+a reader that imports a `dist/` file while `tsc` is rewriting it in place: `tsc` truncates, then
+writes, so the file is zero bytes for an instant (a sampler caught a zero-byte `dist/index.js` in 9
+of 24 rebuilds of a 12-module fixture). That is why `clean-build.ts` emits into a staging directory
+and renames each file into place.
 **Remedy:** the dependency the script needs must be a manifest edge; treat a build race between two
 workflows on one commit as scheduling, not language.
 
@@ -264,10 +281,11 @@ never `process.env`; confirm a control's positive twin is non-zero before trusti
 
 ### The projection store needs two switches, and file size is not a tell
 
-`VAT_PROJECTION_STORE=sqlite` turns the store on; `VAT_RESOURCES_CRAWL=projection` selects the lane
-that produces a projection. One without the other brackets a crawl with nothing to store: zero
-rows, exit 0, a schema-only `projection.db` that looks like a working cache, and pure overhead. The
-store lives at `<normalizedTmpdir()>/.vat-cache/<namespace>/`, not under the project.
+Both the store and the projection lane are defaults now, so this trap has become its own mirror
+image: `VAT_PROJECTION_STORE=off` turns the store off and `VAT_RESOURCES_CRAWL=walk` leaves the lane,
+and turning off ONE of them brackets a crawl with nothing to store — zero rows, exit 0, a
+schema-only `projection.db` that looks like a working cache, and pure overhead. The store lives at
+`<normalizedTmpdir()>/.vat-cache/<namespace>/`, not under the project.
 **Tell:** a `.db` file of exactly schema size; a "cache" that never changes a timing.
 **Remedy:** before believing a null result from a feature, enumerate every input the feature is
 AND-ed behind; proving one switch took effect proves nothing about the ones you did not set.
@@ -276,12 +294,24 @@ AND-ed behind; proving one switch took effect proves nothing about the ones you 
 
 `VAT_CACHE=0` / `--no-cache` once bypassed the parse cache and still wrote the projection store; and
 the store, keyed on the whole-repository tree hash, grew by a full extent per edit with nothing
-reclaiming it. `projectionStoreSelected()` now vetoes on `VAT_CACHE === '0'` (compared exactly, never
-truthily), and `writeExtent` prunes to the three most recent trees per root inside its own
-transaction — a TTL would have reclaimed nothing, since every extent is minutes old.
-**Tell:** a cache directory growing on every edit; a `.db` written under `--no-cache`.
-**Remedy:** a new cache joins the existing veto and the existing eviction; `auto_vacuum` is set
-before the schema is created or it never applies.
+reclaiming it. `projectionStoreSelected()` now vetoes on any off spelling of `VAT_CACHE`
+(`parseEnvBoolean`, never a truthiness test or a literal `'0'`), and `writeExtent` prunes to the
+three most recent trees per root inside its own transaction — a TTL would have reclaimed nothing,
+since every extent is minutes old.
+
+The blob tier took the same lesson a release later, and the tell was subtler: it is **79% of the
+store's rows** (153,245 of 193,605 on a 12,602-file adopter tree) and extent eviction could not
+attribute a single one of them, because a blob fact belongs to bytes rather than to a tree. Its
+"bound" was the release namespace rotating, which is not a bound — and the day the store became the
+default was the day that stopped being survivable. `writeBlobFacts` now keeps the 50,000 most
+recently written content keys, sized from a measured ~5.3 KB per key on two corpora, with a manifest
+table of its own and a one-time adoption pass for the rows a pre-manifest store already holds.
+**Tell:** a cache directory growing on every edit; a `.db` written under `--no-cache`; a tier whose
+eviction policy is a sentence about something else rotating.
+**Remedy:** a new cache joins the existing veto and the existing eviction; a tier that cannot be
+attributed to the existing key gets its own manifest rather than an exemption; `auto_vacuum` is set
+before the schema is created or it never applies; and a bound that would hold only for artifacts
+created after it shipped adopts the existing ones instead of claiming a ceiling it does not have.
 
 ## Tests that prove nothing
 
@@ -360,6 +390,19 @@ out but report them, and raise `Error.stackTraceLimit` (the default misfiles mos
 loader).
 **Tell:** a precise attribution that does not move when the suspected code is removed.
 **Remedy:** `--cpu-prof` for attribution; the lab's `io` facet for fs counting.
+
+### Node's promise `rm` captures its `fs` functions on its first call in a process
+
+The recursive `fs.promises.rm` walks the tree with `fs` functions it binds the FIRST time it runs
+in a process. The fault harness (`installFaultFs`) patches those functions, so a per-entry `unlink`
+or `rmdir` inside a removal is injectable only when no `rm` ran before the harness was installed.
+After one earlier `rm` — another test in the file, a `beforeEach` that cleans up — the walk keeps
+the unpatched functions: the injection never fires, the removal succeeds, and a test of a
+partly-refused removal passes or fails for a reason that has nothing to do with the code under it.
+**Tell:** `session.fired` is empty although `session.calls` shows the removal's own `rm`; the test
+changes verdict when it is run alone or moved within its file.
+**Remedy:** give a direct partial-removal test its own file, make it that file's only test, and
+assert `session.fired` so a silent miss is red. Clean the scratch tree with a sync `rmSync`.
 
 ### A `toContain` prefix assertion narrows when a column is appended
 
@@ -488,9 +531,9 @@ production code and watch the test go red.
 ### A notice on stderr is not a finding
 
 A build that dropped two files from a bundle wrote `warning:` to stderr and reported
-`status: success, warnings: 0` in the YAML — the machine-readable contract said clean. Deleting the
+`status: ok` with `summary.warnings: 0` in the YAML — the machine-readable contract said clean. Deleting the
 stderr line left every test green.
-**Tell:** a human-visible line with no counterpart in `issueCounts`.
+**Tell:** a human-visible line with no counterpart in `summary`.
 **Remedy:** anything worth telling a human is a `ValidationIssue` through the findings channel;
 raw stderr is for progress chatter only.
 
@@ -538,6 +581,95 @@ unused import; `--fix` never applies suggestions, so a converged `--fix` leaves 
 **Tell:** errors surviving a `--fix` that "should" have cleaned them.
 **Remedy:** a rule that created an orphan removes it itself; do not build a general
 side-effect-aware unused-import rule (`sideEffects` is absent by default and ignores `node:`).
+
+### ESLint's `--cache` replays a clean verdict a type-aware rule would now red
+
+ESLint keys each file on its own metadata and the config, so changing a function in one file to
+`async` leaves an unchanged caller's cached clean result in place: no `no-floating-promises`.
+**Tell:** a lint red that appears only in CI, or only after deleting the cache file.
+**Remedy:** never pass `--cache`; cache at turbo's task hash, whose inputs (the package, every
+package's emitted `dist/**/*.d.ts`, the files it reaches by relative import, the config, the rule
+sources, the installed linters) cover everything the lint reads.
+
+### `dependsOn: ["^build"]` re-runs a dependent on an edit its types never saw
+
+A task's hash folds in the hash of every task it depends on, and a build's hash changes with any
+source edit, so a lint behind `^build` re-lints every dependent after a comment in a dependency.
+**Tell:** `turbo run <task> --dry=json` shows a dependent's hash changing while its own `inputs` did not.
+**Remedy:** when a task reads only another package's declarations, key it on them
+(`$TURBO_ROOT$/packages/*/dist/**/*.d.ts` as an input), order the build outside the task graph, and
+refuse to run unbuilt rather than type against `any`.
+
+### A lint against a stale `dist/` caches a stale verdict
+
+The lint hash keys on the declarations present in `dist/`, not on the source that should produce
+them. A package lint run without the root script's build first reads whatever `dist/` holds and
+turbo caches that verdict under those declarations.
+**Tell:** a lint result that changes after `bun run build` with no source edit.
+**Remedy:** run lint only through `bun run lint`/`lint:fix`, which build first and set
+`VAT_LINT_BUILT=1`; a package `lint` without it is refused. Never set `VAT_LINT_BUILT` by hand.
+
+### A personal ignore hides a lintable file from turbo
+
+Turbo hashes what git does not ignore, `.git/info/exclude` and the global excludes file included,
+while the lint check mirrors only the repository's own `.gitignore` files (a finding must not demand
+a commit for a personal ignore).
+**Tell:** a lint verdict that survives an edit to a file only your personal excludes ignore.
+**Remedy:** do not personally exclude a file ESLint lints; `--force` the lint after editing one.
+
+### A package's external-dependency hash misses what its program reads from another package
+
+Turbo hashes a package's own external dependencies from the lockfile. A lint program that reaches
+another package's source through a relative import also reads that package's external types, and
+those are not in the hash.
+**Tell:** `turbo run lint --dry=json` after a lockfile change to the other package's dependency
+shows the importer's `hashOfExternalDependencies` unchanged.
+**Remedy:** the lint task hashes `bun.lock` itself.
+
+### A glob with no literal prefix walks the whole tree
+
+Turbo expands an input glob by walking from its literal prefix. `[!p]*/**/*.ts` has none, so every
+run walks `node_modules`, `.git` and every other session's worktree, and a `!**/node_modules/**/*.ts`
+exclusion filters matches without pruning the walk.
+**Tell:** a no-change replay that takes seconds, or a task that misses when another worktree changes.
+**Remedy:** name each directory (`docs/**/*.ts`), and derive and check the list.
+
+### Turbo's hash does not include the Node version
+
+A lint or test cached under one Node version replays under another: turbo hashes no runtime version.
+**Tell:** a cached pass locally that reds in CI on a different Node.
+**Remedy:** `TURBO_FORCE=true` (or `--force`) when switching Node versions.
+
+### A workspace package in the root manifest is in every task's hash
+
+A root `package.json` dependency on a `workspace:*` package puts that package's files into turbo's
+global `hashOfInternalDependencies`, so any edit to it misses every task in the repo, including
+packages that do not depend on it.
+**Tell:** the `--dry=json` diff after an edit shows `GLOBAL input differs: hashOfInternalDependencies`.
+**Remedy:** the root never depends on a workspace package; import its file by relative path instead
+(`eslint.config.js` loads `./packages/utils/eslint/index.cjs`).
+
+### `TIMING=all` blames the type checker on the first typed rule
+
+Type-aware rules share one lazily built program and checker; whichever typed rule asks first is
+charged for building it (`sonarjs/deprecation` leads this repo's table for that reason).
+**Tell:** a typed rule at the top of the table whose own logic is trivial.
+**Remedy:** read a typed rule's share as an upper bound; disable it and re-time before believing it.
+
+### A local cache with no eviction grows without bound
+
+Turbo's local cache, shared by every worktree of the checkout, kept every entry ever written.
+**Tell:** a cache directory measured in gigabytes, mostly entries older than a month.
+**Remedy:** every local cache carries an age limit and a size cap sized above the window's real
+volume (`cacheMaxAge`, `cacheMaxSize` in `turbo.json`).
+
+### A rule for a library you do not use still runs on every file
+
+A rule aimed at AWS CDK, React or DOMPurify cannot fire here but still visits every node, and a
+type-aware one forces the checker on files nothing else needed.
+**Tell:** a library-named rule with nonzero time under `TIMING=all`.
+**Remedy:** derive the off-list from the plugin's own rule names and descriptions, checked against
+the manifests' real dependencies (`unusedLibraryRulesOff()` in `eslint.config.js`); never a hand-kept list of rule names.
 
 ### A scripted edit can print `ok` and write nothing
 
@@ -600,6 +732,43 @@ linter: `sonarjs/no-duplicate-string` (a warning, promoted to a block by `--max-
 autofix that made a JSON round-trip test unable to fail.
 **Tell:** every implementer reporting the same gate failure.
 **Remedy:** put known plan defects in every subsequent brief verbatim; lint before claiming.
+
+### A test that stubs `HOME` still writes the real Claude config
+
+`vat` resolves the Claude directory from `CLAUDE_CONFIG_DIR` first and from `$HOME/.claude` only when
+that is blank. A developer's shell that exports `CLAUDE_CONFIG_DIR` therefore aims every install,
+uninstall and clear at their live configuration, whatever `HOME` a reproduction or a test stubbed —
+and unsetting the variable is no escape, because the fallback is the real home. A second way in: the
+fault-matrix driver's `runVerb` undoes the case root's env stubs when it returns, so a second verb in
+the same test runs against the ambient environment. Each has installed a fixture plugin into a live
+Claude config, exit 0, with nothing in the test output to say so.
+**Tell:** a directory or registry key named after a test fixture under the real
+`~/.claude/plugins/`; an install test that passes without ever creating its fake home.
+**Remedy:** three guards now stand, and each fails closed. The shared `vitest.setup.js` replaces
+`CLAUDE_CONFIG_DIR` with a scratch path under the temp directory for every worker and sets
+`VAT_TEST_USER_STATE_UNDER`; every resolver of user state under the home directory passes its root
+through `requireTestScratch` (utils) and throws when that variable is set and the root is outside
+the temp tree — `getClaudeUserPaths`, the user scope of `resolveSkillTarget` for every target, and
+`FileSessionStore`'s default directory (a path-only suite lifts it explicitly, and says why); and
+`runVerb` throws when the case root's stubs are gone — call `makeCaseRoot(root)` again before a
+second verb. For a hand reproduction none of these apply: export `CLAUDE_CONFIG_DIR`, `HOME`,
+`TMPDIR`, `TEMP` and `TMP` to scratch, and `--dry-run` once to read the printed destinations.
+`packages/claude-marketplace/test/test-env-guarantee.ts` asks the guarantee in the unit, integration
+and system lanes. A new resolver of a `homedir()`-derived root that VAT WRITES under goes through
+`requireTestScratch` too; a download cache nothing destructive touches (the ONNX model cache) does not.
+
+### `vi.stubEnv('HOME', …)` does not move `os.homedir()` in a unit test
+
+On POSIX the unit tier runs in the threads pool, and a worker thread's `process.env` is a copy:
+assigning `HOME` there changes what JavaScript reads from `process.env` and nothing `os.homedir()`
+reads, which is the process's own environment. A unit test that "points HOME at a temp directory"
+and then calls code using `homedir()` is still on the developer's real home. (The integration and
+system tiers fork, where the assignment reaches the process; Windows forks every tier.)
+**Tell:** a path assertion built from `homedir()` on both sides passes with or without the stub; a
+`requireTestScratch` refusal naming the real home from a test that stubbed `HOME`.
+**Remedy:** mock the module — `vi.mock('node:os', …)` returning a stubbed `homedir`, as
+`packages/utils/test/skill-targets.test.ts` does — or pass the directory in (`baseDir`, `cwd`).
+
 
 ## Git and worktrees
 

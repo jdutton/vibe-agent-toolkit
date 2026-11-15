@@ -27,15 +27,9 @@
  * level, not. `vibe-validate` accepts this cost on every commit it gates; a VAT
  * lane that adopts it inherits the same trade rather than a different one.
  *
- * ## ⚠️ A symlink's OID names its TARGET STRING, not a file's bytes
- *
- * Git stores a symlink as a blob whose content is the link target, under mode
- * `120000`. Two links with the same relative target but different resolutions
- * therefore share an OID while a consumer that follows them reads two different
- * documents. {@link GitSnapshotEntry.isSymlink} is computed here precisely so
- * that a consumer keying work off `oid` can exclude them — see
- * `packages/resources/src/content-key.ts`, whose standing rule is that a git SHA
- * may be a *lookup hint whose miss is free* and must never be the key itself.
+ * No blob OID is carried: one OID can name two different working-tree byte
+ * strings (clean/smudge, `working-tree-encoding`, `eol`), so nothing may stand
+ * an OID in for a read — see `packages/resources/src/content-key.ts`.
  *
  * ## ⚠️ Two consumers want the SAME snapshot — see {@link withGitSnapshotCache}
  *
@@ -47,26 +41,28 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
+import { closeSync, lstatSync, openSync, rmSync } from 'node:fs';
 
 import { getGitTreeSnapshot, GIT_MODE_GITLINK, GIT_MODE_SYMLINK } from '@vibe-validate/git';
 
-import { gitFindRoot } from './git-utils.js';
-import { safePath } from './path-utils.js';
+import { fsFaultOf, isPathAbsentError } from './errors/errno-table.js';
+import { type GitRunResult, runGit } from './git-run.js';
+import { gitFindRoot, gitLsFiles } from './git-utils.js';
+import { toForwardSlash } from './path-core.js';
+import { normalizedTmpdir, safePath } from './path-utils.js';
+import { countWork } from './work-counters.js';
+
+/** How many unreadable paths a refusal names before it summarizes the rest. */
+const NAMED_UNREADABLE_PATHS = 5;
 
 /** One path in a {@link GitTreeSnapshot}, located absolutely. */
 export interface GitSnapshotEntry {
   /** Absolute, forward-slashed path, resolved against the repository root. */
   absolutePath: string;
-  /**
-   * Blob OID for this path's **on-disk** bytes.
-   *
-   * Equal OIDs mean equal bytes, which is what makes this usable as a lookup
-   * hint. It is NOT usable as a content key — see the module docstring.
-   */
-  oid: string;
   /** Git's six-digit mode, verbatim: `100644`, `100755`, `120000`, `160000`. */
   mode: string;
-  /** Mode `120000`. Its {@link GitSnapshotEntry.oid} is the target string. */
+  /** Mode `120000`. */
   isSymlink: boolean;
   /**
    * Mode `160000` — a submodule.
@@ -80,6 +76,7 @@ export interface GitSnapshotEntry {
 
 /** One repository's snapshot. */
 export interface GitTreeSnapshot {
+  readonly ok: true;
   /**
    * `git write-tree` over the snapshot — a deterministic key for the whole set.
    *
@@ -93,6 +90,29 @@ export interface GitTreeSnapshot {
   /** Every path git can see, in git's own order. */
   entries: GitSnapshotEntry[];
 }
+
+/**
+ * A snapshot git would not take, and git's own account of why: what one REAL `git add --all` into
+ * another throwaway index did (an index that does not exist yet, so the real one is neither read
+ * nor locked; real, not `--dry-run`, which writes no object and runs no clean filter, so it cannot
+ * meet the faults those raise). `getGitTreeSnapshot` keeps git's error to itself, so this second
+ * attempt, made on the failure path only, is how the error reaches a caller.
+ *
+ * Classify it with `gitSnapshotFailureOf` (`git-no-answer.ts`), the one classifier — never by
+ * reading `attempt` at the call site.
+ */
+export interface GitSnapshotFailure {
+  readonly ok: false;
+  /** The directory the snapshot was asked from, as given. */
+  readonly cwd: string;
+  /** The repository root git resolved, or `null` when it resolved none. */
+  readonly repositoryRoot: string | null;
+  /** What the diagnostic `git add --all` did, in the C locale. */
+  readonly attempt: GitRunResult;
+}
+
+/** A snapshot, or why there is none. */
+export type GitSnapshotOutcome = GitTreeSnapshot | GitSnapshotFailure;
 
 /**
  * The snapshots taken inside the bracket now open, keyed by repository root.
@@ -109,11 +129,12 @@ export interface GitTreeSnapshot {
  * command's `await`s, and two commands may be open at once in one process —
  * `crawl-timing.ts` reaches for the same primitive for the same reason.
  *
- * `null` is a stored value, not an absence: "git could not answer" costs a full
- * `add`/`write-tree` attempt to discover, so repeating it is pure cost. Absence
- * is `undefined`, which `Map.get` returns and this module never stores.
+ * A failure is a stored value, not an absence: "git could not answer" costs a full
+ * `add`/`write-tree` attempt (and a second `add` to ask why) to discover, so
+ * repeating it is pure cost. Absence is `undefined`, which `Map.get` returns and
+ * this module never stores.
  */
-const snapshotsInBracket = new AsyncLocalStorage<Map<string, GitTreeSnapshot | null>>();
+const snapshotsInBracket = new AsyncLocalStorage<Map<string, GitSnapshotOutcome>>();
 
 /**
  * Run work that may snapshot the same repository more than once, and pay for
@@ -164,14 +185,14 @@ const snapshotsInBracket = new AsyncLocalStorage<Map<string, GitTreeSnapshot | n
  * ```
  */
 export function withGitSnapshotCache<T>(run: () => T): T {
-  return snapshotsInBracket.run(new Map<string, GitTreeSnapshot | null>(), run);
+  return snapshotsInBracket.run(new Map<string, GitSnapshotOutcome>(), run);
 }
 
 /**
  * Snapshot everything git can see under a directory.
  *
  * Inside a {@link withGitSnapshotCache} bracket the answer for a given
- * repository is taken once and reused — including a `null`. Outside one, every
+ * repository is taken once and reused — including a failure. Outside one, every
  * call spawns git, which is what it has always done.
  *
  * @param options - Where to look
@@ -179,12 +200,12 @@ export function withGitSnapshotCache<T>(run: () => T): T {
  *   resolves upward to the worktree root, and the snapshot covers that whole
  *   root — NOT only the subtree named here. Narrowing is the caller's job, and
  *   is why {@link GitSnapshotEntry.absolutePath} is absolute
- * @returns The snapshot, or `null` when git could not answer — no `git` on
- *   `PATH`, not a repository, a bare or unreadable one. An empty `entries` is a
- *   real answer (an initialized repository with no files) and stays
- *   distinguishable from it
+ * @returns The snapshot, or the {@link GitSnapshotFailure} carrying git's own
+ *   account when git could not answer — no `git` on `PATH`, not a repository, a
+ *   bare or unreadable one. An empty `entries` is a real answer (an initialized
+ *   repository with no files) and stays distinguishable from it
  */
-export function gitTreeSnapshot(options: { cwd: string }): GitTreeSnapshot | null {
+export function gitTreeSnapshot(options: { cwd: string }): GitSnapshotOutcome {
   // Resolved from the filesystem BEFORE spawning anything, and deliberately not
   // from a `rev-parse` of our own: `getGitTreeSnapshot` has already paid for that
   // question internally, and asking it twice invites the two answers to disagree
@@ -192,10 +213,10 @@ export function gitTreeSnapshot(options: { cwd: string }): GitTreeSnapshot | nul
   // places. `gitFindRoot` is memoized, so this is free after the first call.
   const repositoryRoot = gitFindRoot(options.cwd);
   if (repositoryRoot === null) {
-    // Not memoized, and it does not need to be: this branch spawns nothing, and
-    // `gitFindRoot` has its own memo. There is also no key to file it under —
-    // the memo is keyed by repository root, and this is the case with none.
-    return null;
+    // Not memoized: there is no key to file it under — the memo is keyed by
+    // repository root, and this is the case with none. The one diagnostic spawn
+    // tells a git missing from PATH from a directory in no repository.
+    return snapshotFailure(options.cwd, null);
   }
 
   // Keyed by the RESOLVED root rather than by `options.cwd`, because a snapshot
@@ -211,6 +232,25 @@ export function gitTreeSnapshot(options: { cwd: string }): GitTreeSnapshot | nul
   const snapshot = takeSnapshot(options.cwd, repositoryRoot);
   memo?.set(repositoryRoot, snapshot);
   return snapshot;
+}
+
+/**
+ * A snapshot taken NOW, whatever bracket is open — never read from or written to
+ * its memo.
+ *
+ * ⛔ The bracket makes two consumers agree with EACH OTHER; it cannot make them
+ * agree with files read later. A population keyed inside a bracket reads the
+ * working tree afterwards, so an edit landing in between is read and then filed
+ * under the pre-edit key. This is how a caller checks, before filing, that the
+ * bracket's answer still describes the tree. It costs a full snapshot, so it
+ * belongs on the write path, never on a hit.
+ *
+ * @param options - Where to look
+ * @param options.cwd - Any directory inside the repository of interest
+ * @returns The snapshot, or why there is none
+ */
+export function freshGitTreeSnapshot(options: { cwd: string }): GitSnapshotOutcome {
+  return snapshotsInBracket.exit(() => gitTreeSnapshot(options));
 }
 
 /**
@@ -234,7 +274,7 @@ export function gitTreeSnapshot(options: { cwd: string }): GitTreeSnapshot | nul
  * @param cwd - Any directory inside the repository of interest
  * @returns The memoized snapshot, or `undefined` when this bracket has none —
  *   which includes there being no bracket open at all, and includes a memoized
- *   `null` (git could not answer). Callers treat all three the same way: ask
+ *   failure (git could not answer). Callers treat all three the same way: ask
  *   your own question instead
  */
 export function peekGitTreeSnapshot(cwd: string): GitTreeSnapshot | undefined {
@@ -248,7 +288,8 @@ export function peekGitTreeSnapshot(cwd: string): GitTreeSnapshot | undefined {
   const repositoryRoot = gitFindRoot(cwd);
   if (repositoryRoot === null) return undefined;
 
-  return memo.get(repositoryRoot) ?? undefined;
+  const memoized = memo.get(repositoryRoot);
+  return memoized?.ok === true ? memoized : undefined;
 }
 
 /**
@@ -260,23 +301,83 @@ export function peekGitTreeSnapshot(cwd: string): GitTreeSnapshot | undefined {
  *
  * @param cwd - The directory to ask git from
  * @param repositoryRoot - The already-resolved root every entry is rebased onto
- * @returns The snapshot, or `null` when git could not answer
+ * @returns The snapshot, or why there is none
  */
-function takeSnapshot(cwd: string, repositoryRoot: string): GitTreeSnapshot | null {
+function takeSnapshot(cwd: string, repositoryRoot: string): GitSnapshotOutcome {
+  // One call, however many git processes the snapshot starts inside it: that
+  // number is `@vibe-validate/git`'s and is not knowable here.
+  countWork('git.calls', 1);
   const snapshot = getGitTreeSnapshot({ cwd });
-  if (snapshot === null) {
-    return null;
-  }
+  if (snapshot === null) return snapshotFailure(cwd, repositoryRoot);
 
   return {
+    ok: true,
     hash: snapshot.hash,
     repositoryRoot,
     entries: snapshot.entries.map((entry) => ({
       absolutePath: safePath.resolve(repositoryRoot, entry.path),
-      oid: entry.oid,
       mode: entry.mode,
       isSymlink: entry.mode === GIT_MODE_SYMLINK,
       isSubmodule: entry.mode === GIT_MODE_GITLINK,
     })),
   };
+}
+
+/**
+ * Ask git ONCE why the snapshot failed — see {@link GitSnapshotFailure}.
+ *
+ * @param cwd - The directory the snapshot was asked from
+ * @param repositoryRoot - The root git resolved, or `null`
+ * @returns The failure, carrying what the second attempt did
+ */
+function snapshotFailure(cwd: string, repositoryRoot: string | null): GitSnapshotFailure {
+  const index = safePath.join(normalizedTmpdir(), `vat-snapshot-probe-${randomUUID()}.index`);
+  try {
+    // `LC_ALL=C`: what this is read for (`fatal:`, the sparse-definition sentence) is git's C-locale wording.
+    const attempt = runGit(['add', '--all'], { cwd, env: { GIT_INDEX_FILE: index, LC_ALL: 'C' } });
+    return { ok: false, cwd, repositoryRoot, attempt };
+  } finally {
+    rmSync(index, { force: true });
+  }
+}
+
+/**
+ * Why git could not snapshot the repository at `root`, when the cause is a file
+ * in it the OS will not read; `undefined` when it is not.
+ *
+ * A snapshot runs `git add --all`, which hashes every un-ignored file — so one
+ * unreadable file anywhere, referenced by nothing, refuses the whole snapshot.
+ * This lists what `git add --all` would read and opens each — on the failure
+ * path only, for the one classifier (`gitSnapshotFailureOf`).
+ *
+ * @param root - The repository root whose snapshot was refused
+ * @returns The reason naming the unreadable paths, repository-relative, and the fix
+ */
+export function unreadableSnapshotReason(root: string): string | undefined {
+  // A directory git could not list is a warning to `git add`, not a refusal of
+  // the snapshot, so it is not this function's cause to report.
+  const listed = gitLsFiles({ cwd: root, includeUntracked: true, unreadable: { degrade: () => undefined } });
+  if (listed === null) return undefined;
+  const unreadable = listed.filter((relative) => !gitCanRead(safePath.join(root, relative)));
+  if (unreadable.length === 0) return undefined;
+  const named = unreadable.slice(0, NAMED_UNREADABLE_PATHS).map((relative) => toForwardSlash(relative)).join(', ');
+  const more = unreadable.length > NAMED_UNREADABLE_PATHS ? ` and ${unreadable.length - NAMED_UNREADABLE_PATHS} more` : '';
+  return `git could not snapshot the repository at ${toForwardSlash(root)}: the OS will not let it read ${named}${more}. `
+    + 'A snapshot reads every file git does not ignore, so fix the permissions, or add the path to .gitignore.';
+}
+
+/**
+ * Whether `git add` can read `path`: a regular file it can open, or anything it
+ * does not read as bytes (a symlink, a gone tracked file, a submodule).
+ */
+function gitCanRead(path: string): boolean {
+  try {
+    if (!lstatSync(path).isFile()) return true;
+    closeSync(openSync(path, 'r'));
+    return true;
+  } catch (error) {
+    if (isPathAbsentError(error)) return true;
+    if (fsFaultOf(error) !== undefined) return false;
+    throw error;
+  }
 }

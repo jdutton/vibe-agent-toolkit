@@ -74,8 +74,7 @@ function writePluginWithSkillGuidance(): { root: string; plugin: string } {
 }
 
 /** A config whose `include` enumerates the `.claude/skills/` pool and nothing else. */
-const CONFIG = `version: 1
-skills:
+const CONFIG = `skills:
   include:
     - ".claude/skills/**/SKILL.md"
 `;
@@ -88,7 +87,7 @@ function writeVatConfig(root: string): void {
 function writeVatConfigForPool(root: string): void {
   writeFileSync(
     safePath.join(root, 'vibe-agent-toolkit.config.yaml'),
-    `version: 1\nskills:\n  include:\n    - "${SKILLS_DIR}/**/SKILL.md"\n`,
+    `skills:\n  include:\n    - "${SKILLS_DIR}/**/SKILL.md"\n`,
     'utf-8',
   );
 }

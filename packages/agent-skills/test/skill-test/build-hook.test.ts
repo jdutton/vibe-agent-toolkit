@@ -49,11 +49,12 @@ describe('runPreStageBuild', () => {
       spawnFn,
     }));
     expect(spawnFn).toHaveBeenCalledOnce();
-    const [cmd, opts] = spawnFn.mock.calls[0] as [string, { shell: boolean; cwd: string; stdio: string }];
+    const [cmd, opts] = spawnFn.mock.calls[0] as [string, { shell: boolean; cwd: string; stdio: unknown }];
     expect(cmd).toBe(TEST_BUILD_CMD);
     expect(opts.cwd).toBe('/repo/root');
     expect(opts.shell).toBe(true);
-    expect(opts.stdio).toBe('inherit');
+    // The hook's stdout goes to THIS process's stderr (fd 2): stdout carries the YAML report alone.
+    expect(opts.stdio).toEqual(['inherit', 2, 'inherit']);
   });
 
   it('throws BuildHookError with command name and exit code on non-zero exit', () => {

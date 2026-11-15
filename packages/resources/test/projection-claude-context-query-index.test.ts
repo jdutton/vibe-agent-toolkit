@@ -382,11 +382,10 @@ describe('the per-projection context-query index', () => {
       // does not leak, and this proves the answer it serves is still the right
       // one. Every field here is one the hoist moved through a precomputed map.
       expect(rowAt('shared.md')?.admissions).toHaveLength(1);
-      // TWO import admissions, in the order the closures were charged: the root
-      // `CLAUDE.md`'s chain at depth 2, and the path-scoped rule's own closure
-      // at depth 1 — the rule's glob matches this query's file exactly.
+      // ONE import admission: the launch walk reaches it through the root
+      // `CLAUDE.md`'s chain first, and the path-scoped rule's own import of it —
+      // walked later in the same launch — finds it already processed.
       expect(rowAt(DEEP_NOTE)?.admissions).toEqual([
-        { kind: 'import', rootPath: SCOPED_RULE, viaPath: SCOPED_RULE, depth: 1 },
         { kind: 'import', rootPath: 'CLAUDE.md', viaPath: 'docs/handbook.md', depth: 2 },
       ]);
       expect(rowAt('.claude/rules/always.md')?.loadClass).toBe('always');
@@ -394,9 +393,12 @@ describe('the per-projection context-query index', () => {
       expect(rowAt(SCOPED_RULE)?.admissions).toEqual([
         { kind: 'glob-rule', pattern: SCOPED_RULE_PATTERN },
       ]);
+      // `info`, not `warning`: an import's shape is the harness's own rule
+      // (`CLAUDE_CODE.importShape` — a directory component makes it a path), so
+      // a bare `@missing.md` is bare whatever its extension.
       expect(
-        answer.conditions.filter((row) => row.sourceRef === '@missing.md').map((row) => row.severity),
-      ).toEqual(['warning']);
+        answer.conditions.filter((row) => row.ref === '@missing.md').map((row) => row.severity),
+      ).toEqual(['info']);
     });
   });
 });

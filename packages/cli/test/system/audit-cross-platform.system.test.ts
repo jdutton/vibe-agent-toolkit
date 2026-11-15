@@ -5,10 +5,11 @@
  * Verifies ~ expansion, Windows paths, and user plugins directory detection.
  */
 
-import * as fs from 'node:fs';
+
 import * as os from 'node:os';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -28,7 +29,7 @@ describe('Audit Cross-Platform (system test)', () => {
     binPath = getBinPath(import.meta.url);
     tempDir = createTestTempDir('vat-audit-platform-');
     testResourcesDir = safePath.join(tempDir, 'resources');
-    fs.mkdirSync(testResourcesDir, { recursive: true });
+    mkdirSyncReal(testResourcesDir, { recursive: true });
 
     // Create a valid skill for testing (note: must be named SKILL.md)
     writeTestFile(
@@ -52,7 +53,7 @@ Test content.
   it('should expand ~ to home directory on current platform', async () => {
     // Create a skill in a subdirectory of temp
     const skillDir = safePath.join(tempDir, 'home-test');
-    fs.mkdirSync(skillDir, { recursive: true });
+    mkdirSyncReal(skillDir, { recursive: true });
     writeTestFile(
       safePath.join(skillDir, 'SKILL.md'),
       `---

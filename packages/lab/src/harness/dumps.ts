@@ -31,9 +31,9 @@
  * how to phrase the consequence of an empty directory in its own terms.
  */
 
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, withTempDir } from '@vibe-agent-toolkit/utils';
 import type { z } from 'zod';
 
 /** Extension a dump is written with. Anything else in the directory is ignored. */
@@ -79,6 +79,25 @@ export function describeIssues(error: z.ZodError): string {
   return error.issues
     .map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
     .join('; ');
+}
+
+/**
+ * The one refusal for a stored lab report (an envelope, a facet body, an arms
+ * report) whose shape this lab does not read.
+ *
+ * Pre-1.0 there is no compat reader: the cause, almost always, is a report an
+ * older lab captured, and the only remedy is to capture it again — so the
+ * refusal says both before it lists what moved.
+ *
+ * @param what - The report, as the reader names it (`'<file>'`, `the baseline 'perf' report`)
+ * @param error - The schema's rejection
+ * @returns `REFUSED: <what> was captured by … — re-capture it. What differs: …`
+ */
+export function recaptureRefusal(what: string, error: z.ZodError): string {
+  return (
+    `REFUSED: ${what} was captured by a lab whose report shape differs from this one (usually an older lab) — ` +
+    `re-capture it. What differs: ${describeIssues(error)}`
+  );
 }
 
 /**
@@ -239,21 +258,28 @@ export async function readDumpFiles<TDump>(
  * @param body - What to do with the directories, given in repeat order
  * @returns Whatever `body` returned
  */
-export async function withDumpDirs<T>(
+export function withDumpDirs<T>(
   runs: number,
   prefix: string,
   body: (directories: readonly string[]) => Promise<T>,
 ): Promise<T> {
-  const template = safePath.join(normalizedTmpdir(), prefix);
-  const directories = await Promise.all(
-    Array.from({ length: Math.max(0, runs) }, () => mkdtemp(template)),
-  );
-  try {
-    return await body(directories);
-  } finally {
-    // Every path here was created by `mkdtemp` above, so none of it is caller-supplied.
-    await Promise.all(
-      directories.map((directory) => rm(directory, { recursive: true, force: true })),
-    );
-  }
+  return withNestedTempDirs(Math.max(0, runs), prefix, body, []);
+}
+
+/**
+ * One `withTempDir` per directory still to make, nested, so each is disposed of
+ * however the body ends — and the body's error, not a disposal's, is the answer; a
+ * directory left behind once the body succeeded is thrown.
+ */
+async function withNestedTempDirs<T>(
+  count: number,
+  prefix: string,
+  body: (directories: readonly string[]) => Promise<T>,
+  made: readonly string[],
+): Promise<T> {
+  if (made.length >= count) return body(made);
+  const { value, leftover } = await withTempDir(prefix, (directory) => withNestedTempDirs(count, prefix, body, [...made, directory]));
+  // A dump directory the OS will not remove is a measurement left lying in the temp dir: the capture stops on it.
+  if (leftover !== undefined) throw leftover;
+  return value;
 }

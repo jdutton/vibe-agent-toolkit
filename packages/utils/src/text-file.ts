@@ -14,23 +14,26 @@
  * it worse rather than more consistent.
  *
  * A caller that needs the RAW bytes as well as the text — to hash them, key
- * them, or report `stat().size` — must not use these: read the bytes once itself
- * and call `decodeTextContent` on them, so the digest and the characters come
- * from the same read. `readContentWithKey` in `@vibe-agent-toolkit/resources` is
- * that caller and is shaped exactly that way.
+ * them, or report `stat().size` — must not use these: read the bytes once with
+ * {@link readDecodableBytes} and call `decodeTextContent` on them, so the digest
+ * and the characters come from the same read. `readContentWithKey` in
+ * `@vibe-agent-toolkit/resources` is that caller and is shaped exactly that way.
  */
 
-import { readFileSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { constants } from 'node:buffer';
+import { closeSync, constants as fsConstants, fstatSync, openSync, readFileSync } from 'node:fs';
+import { open, type FileHandle } from 'node:fs/promises';
 
-import { decodeTextContent, type DecodedText } from './text-content.js';
+import { refuseSpecialFile } from './special-file.js';
+import { decodeTextContent, TextTooLargeError, type DecodedText } from './text-content.js';
 
 /**
  * Read a file and decode it through {@link decodeTextContent}.
  *
  * @param filePath - Path to read
  * @returns The decoded text, the encoding used, whether that was a fact, and the replacement-character count
- * @throws Whatever `readFile` throws — callers decide whether that is fatal
+ * @throws Whatever `readFile` throws — callers decide whether that is fatal — and
+ *   {@link TextTooLargeError} for a file too large to decode, before reading it
  *
  * @example
  * ```typescript
@@ -39,7 +42,12 @@ import { decodeTextContent, type DecodedText } from './text-content.js';
  * ```
  */
 export async function readTextContent(filePath: string): Promise<DecodedText> {
-  return decodeTextContent(await readFile(filePath));
+  return decodeTextContent(await readDecodableBytes(filePath, admitAnyDecodableSize));
+}
+
+/** The size refusal of a caller with no bound of its own: only the decodable bound applies. */
+function admitAnyDecodableSize(): void {
+  // Nothing to refuse beyond what `readDecodableBytes` refuses itself.
 }
 
 /**
@@ -47,8 +55,116 @@ export async function readTextContent(filePath: string): Promise<DecodedText> {
  *
  * @param filePath - Path to read
  * @returns The decoded text, the encoding used, whether that was a fact, and the replacement-character count
- * @throws Whatever `readFileSync` throws
+ * @throws Whatever `readFileSync` throws, and {@link TextTooLargeError} as {@link readDecodableBytes} does
  */
 export function readTextContentSync(filePath: string): DecodedText {
-  return decodeTextContent(readFileSync(filePath));
+  const handle = openSync(filePath, readWithoutBlocking());
+  try {
+    const stats = fstatSync(handle);
+    refuseSpecialFile(stats, filePath);
+    refuseUndecodableSize(stats.size);
+    return decodeTextContent(readFileSync(handle));
+  } finally {
+    closeSync(handle);
+  }
+}
+
+/**
+ * The most bytes that can be decoded into one JS string: the engine's own
+ * string-length limit, read from `node:buffer` rather than written down.
+ *
+ * A bound on BYTES stated in UTF-16 code units, which is exact-or-safe for UTF-8
+ * (a UTF-8 byte never yields more than one code unit) and conservative for
+ * UTF-16/UTF-32, whose bytes yield half or a quarter as many.
+ */
+export const MAX_DECODABLE_BYTES: number = constants.MAX_STRING_LENGTH;
+
+/**
+ * Whether content of this many bytes is past what can be decoded to a string.
+ *
+ * @param byteLength - The content's size in bytes, as `stat` reports it
+ * @returns True when decoding it would exceed {@link MAX_DECODABLE_BYTES}
+ */
+export function exceedsDecodableLength(byteLength: number): boolean {
+  return byteLength > MAX_DECODABLE_BYTES;
+}
+
+/**
+ * The flags to open for reading without waiting on a writer. Opening a named
+ * pipe blocks until one appears — a FIFO reached by a parse lane hung the whole
+ * run — and `O_NONBLOCK` returns at once so the handle's `fstat` can refuse it.
+ * It changes nothing for a regular file. Windows defines no `O_NONBLOCK` (and no
+ * FIFOs). Read at the call, not at import, so a test's partial `node:fs` mock
+ * that never reads a file does not have to supply `constants`.
+ */
+function readWithoutBlocking(): number {
+  const nonBlocking: number | undefined = fsConstants.O_NONBLOCK;
+  return fsConstants.O_RDONLY | (nonBlocking ?? 0);
+}
+
+/** Throw {@link TextTooLargeError} for a size no decode can hold. */
+function refuseUndecodableSize(byteLength: number): void {
+  if (exceedsDecodableLength(byteLength)) throw new TextTooLargeError(byteLength);
+}
+
+/**
+ * Open `filePath` for reading without ever blocking on it: a named pipe, socket
+ * or device is refused (`EFTYPE`) and its handle closed, so only a regular file
+ * (or a directory, which the read refuses itself) comes back. The open a caller
+ * uses to PROVE a source readable before copying it — a bare `open(path, 'r')`
+ * of a pipe waits for a writer forever.
+ *
+ * @param filePath - Path to open
+ * @returns The open handle; the caller closes it
+ * @throws an `EFTYPE` errno for a special file, and whatever `open` throws otherwise
+ */
+export async function openForReading(filePath: string): Promise<FileHandle> {
+  const handle = await open(filePath, readWithoutBlocking());
+  try {
+    refuseSpecialFile(await handle.stat(), filePath);
+    return handle;
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
+
+/**
+ * Read a file's raw bytes for decoding — refusing, by `stat` and before reading
+ * a byte, one past the caller's own bound (`refuseBySize`) and one too large to
+ * decode at all.
+ *
+ * The one read path for "bytes that are about to go through
+ * {@link decodeTextContent}": {@link readTextContent} uses it, and so does
+ * `readContentWithKey` in `@vibe-agent-toolkit/resources`, which needs the raw
+ * bytes as well to key them. Without the stat, a 966 MB file is read whole and
+ * only then refused by the decoder, and past 2 GiB `readFile` fails first with
+ * its own `ERR_FS_FILE_TOO_LARGE` — two different errors for one fact.
+ *
+ * The size comes from `fstat` on the handle that is then read, not from a
+ * separate `stat` of the path, so a rename between the two cannot substitute
+ * another file. A file that GROWS past the limit after the `fstat` still reaches
+ * the decoder, which raises the same {@link TextTooLargeError}.
+ *
+ * `refuseBySize` is required, so a caller with a bound — the parse input cap — states it here and
+ * is held to it on this one read, never on a copy of it.
+ *
+ * @param filePath - Path to read
+ * @param refuseBySize - Called with the handle's `fstat` size before a byte is read; throws to
+ *   refuse the file, and returns for one the caller admits. Runs before the decodable bound.
+ * @returns The file's bytes
+ * @throws what `refuseBySize` throws, {@link TextTooLargeError} when the file is past
+ *   {@link MAX_DECODABLE_BYTES}, an `EFTYPE` errno when it is not a regular file, and whatever
+ *   `open`/`readFile` throw otherwise
+ */
+export async function readDecodableBytes(filePath: string, refuseBySize: (byteLength: number) => void): Promise<Buffer> {
+  const handle = await openForReading(filePath);
+  try {
+    const { size } = await handle.stat();
+    refuseBySize(size);
+    refuseUndecodableSize(size);
+    return await handle.readFile();
+  } finally {
+    await handle.close();
+  }
 }

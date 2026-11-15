@@ -78,7 +78,7 @@ export interface InvariantReport {
 /**
  * Assert every pipeline invariant the manifest carries enough evidence to test.
  *
- * @param manifest - A captured manifest; commands and artifacts are not read
+ * @param manifest - A captured manifest; artifacts are not read
  * @returns The violations, what could not be checked, and the collision notes
  */
 export function checkInvariants(manifest: SnapshotManifest): InvariantReport {

@@ -133,6 +133,24 @@ export {
   type IoSite,
 } from './facets/io/types.js';
 
+export { captureMemory, type CaptureMemoryOptions } from './facets/memory/capture.js';
+export {
+  compareMemory,
+  type CompareMemoryOptions,
+  type MemoryCommandVerdict,
+  type MemoryComparison,
+  type MemoryComparisonResult,
+} from './facets/memory/compare.js';
+export { formatKb, renderMemoryComparison, renderMemoryReport } from './facets/memory/render.js';
+export {
+  MEMORY_FACET,
+  type MemoryBody,
+  MemoryBodySchema,
+  type MemoryCommandStats,
+  type RssDump,
+  RssDumpSchema,
+} from './facets/memory/types.js';
+
 export { captureParse, type CaptureParseOptions } from './facets/parse/capture.js';
 export {
   compareParse,
@@ -177,6 +195,19 @@ export {
   type ParsePassStats,
 } from './facets/parse/types.js';
 
+export {
+  type ArmRepetition,
+  type ArmReport,
+  type ArmSelection,
+  type ArmsBuild,
+  type ArmsReport,
+  type ArmStepRecord,
+  captureArms,
+  type CaptureArmsRequest,
+  renderArmsReport,
+  sequenceSteps,
+} from './facets/perf/arms.js';
+export { type BarJudgement, type BarRelation, type BarSide, judgeBar } from './facets/perf/bars.js';
 export { capturePerf, type CapturePerfOptions } from './facets/perf/capture.js';
 export {
   comparePerf,
@@ -235,6 +266,136 @@ export {
 } from './facets/population/types.js';
 
 export {
+  captureVerdict,
+  type VerdictCaptureRequest,
+  type VerdictCaptureResult,
+} from './facets/verdict/capture.js';
+export {
+  compareVerdict,
+  diffExcerpt,
+  readVerdictDirectory,
+  type VerdictCompareOptions,
+  type VerdictComparison,
+  type VerdictComparisonResult,
+  type VerdictExcludedRow,
+  type VerdictRowComparison,
+} from './facets/verdict/compare.js';
+export {
+  bulletAnchors,
+  changelogRefusals,
+  type DeclaredDelta,
+  type DeclaredFinding,
+  type DeltaChange,
+  type FindingDigestKey,
+  loadVerdictDeltas,
+  type ObservedDelta,
+  parseVerdictDeltas,
+  readChangelogSources,
+  type Reconciliation,
+  reconcileDeltas,
+  type ReconcileRun,
+  type VerdictDeltas,
+  type VerdictDeltasResult,
+  VerdictDeltasSchema,
+} from './facets/verdict/deltas.js';
+export {
+  extractVerdict,
+  FINDING_SEVERITIES,
+  findingIdentity,
+  type FindingKey,
+  FindingKeySchema,
+  locationDigest,
+  phaseSeverityCounts,
+  type PublishedTallies,
+  publishedTallies,
+  refusalCodes,
+  rowVerdict,
+  type SeverityCounts,
+  type Verdict,
+} from './facets/verdict/extract.js';
+export {
+  buildPathSubstitutions,
+  normalizeCommandOutput,
+  type NormalizeContext,
+  type PathSubstitution,
+} from './facets/verdict/normalize.js';
+export { planApfsClone } from './facets/verdict/clone.js';
+export {
+  type CloneDir,
+  type CloneSource,
+  type ClonePlan,
+  type CloneStep,
+  type CopyMode,
+  executeClonePlan,
+  type GitKind,
+  planTreeClone,
+  readCloneSource,
+} from './harness/tree-clone.js';
+export { multisetDifference } from './facets/verdict/multiset.js';
+export { renderVerdictComparison, renderVerdictReport } from './facets/verdict/render.js';
+export {
+  loadVerdictSubjects,
+  type LoadedVerdictSubjects,
+  parseVerdictSubjects,
+  type VerdictSubject,
+  type VerdictSubjects,
+  VerdictSubjectsSchema,
+  type VerdictSubjectsResult,
+} from './facets/verdict/subjects.js';
+export { judgeUnion, type UnionKey, unionFindings } from './facets/verdict/union.js';
+export {
+  VERDICT_FACET,
+  type VerdictBody,
+  VerdictBodySchema,
+  type VerdictExclusion,
+  type VerdictRow,
+} from './facets/verdict/types.js';
+export {
+  type BuildVerbPlan,
+  planBuildVerbs,
+  VERDICT_BUILD_VERB_NAMES,
+  VERDICT_VERB_NAMES,
+  type VerbInvocation,
+  type VerbQuery,
+  type VerbSubject,
+  type VerdictBuildVerbName,
+  verdictVerb,
+  type VerdictVerbName,
+  type VerdictVerbSpec,
+} from './facets/verdict/verbs.js';
+export { captureWork, type CaptureWorkOptions, workRowFromRepeats } from './facets/work/capture.js';
+export {
+  type CompareWorkOptions,
+  compareWork,
+  type WorkCommandVerdict,
+  type WorkComparison,
+  type WorkComparisonResult,
+  type WorkCounterMovement,
+  type WorkMovement,
+} from './facets/work/compare.js';
+export {
+  countOf,
+  type MergedWorkDumps,
+  mergeWorkDumps,
+  readWorkDumps,
+  variedCounters,
+  type WorkDump,
+  type WorkDumpsRead,
+  WorkDumpSchema,
+} from './facets/work/dump.js';
+export { renderWorkComparison, renderWorkReport } from './facets/work/render.js';
+export {
+  comparedExactly,
+  WORK_FACET,
+  WORK_MIN_RUNS,
+  type WorkBody,
+  WorkBodySchema,
+  type WorkCommandStats,
+  WorkCounterNameSchema,
+  type WorkCounterReading,
+} from './facets/work/types.js';
+
+export {
   type AbArmSummary,
   type AbCommandResult,
   abExitCondition,
@@ -251,8 +412,18 @@ export {
   UNMEASURABLE_VERDICT,
 } from './harness/ab.js';
 export {
-  completedExitCodesOf,
-  DEFAULT_COMPLETED_EXIT_CODES,
+  ARM_OWNED_ENV_KEYS,
+  type ArmEnvironment,
+  armEnvironmentClash,
+  buildArmEnv,
+  CLEARED_ENV_NAMES,
+  clearedEnvironment,
+  EMPTY_ARM_ENVIRONMENT,
+  mergeArmEnvironments,
+  sameArmEnvironment,
+} from './harness/arm-env.js';
+export { type ArmIdentity, closureDigest, indistinguishableArms } from './harness/closure.js';
+export {
   DEFAULT_MEASURED_COMMANDS,
   MEASURABLE_COMMAND_NAMES,
   MEASURABLE_COMMANDS,
@@ -268,7 +439,8 @@ export {
   type DeltaThresholds,
   type LabelledRow,
   labelledMovements,
-  type MsDelta,
+  type MagnitudeDelta,
+  magnitudeDelta,
   msDelta,
   type RowMovement,
   type RowMovementKind,
@@ -291,9 +463,10 @@ export {
   failureCaveat,
   type OneSidedVerdict,
   openComparison,
+  stabilityCaveat,
   unmeasurableReasonFor,
 } from './harness/facet-compare.js';
-export { type Estimate, estimate, quantile } from './harness/estimator.js';
+export { type Estimate, estimate, type EstimatorKind, quantile } from './harness/estimator.js';
 export {
   describeIssues,
   type DumpFilesAccepted,
@@ -312,7 +485,6 @@ export {
   runGit,
   trackedPaths,
 } from './harness/git-state.js';
-export { resolveInstrument } from './harness/instrument.js';
 export {
   armLabel,
   armOf,
@@ -330,16 +502,33 @@ export {
   readLoad,
 } from './harness/load-guard.js';
 export {
-  classifyRunFailure,
+  type ArmRun,
+  armRunFailure,
+  commandStep,
   materializeArgs,
   measureSpec,
+  type RepeatEnvFor,
   type RepeatSpec,
+  runInterleaved,
   runRepeats,
-  runRepeatsFor,
   type SpecMeasurement,
   SUBJECT_TOKEN,
   summarizeRepeatFailures,
 } from './harness/repeat.js';
+export {
+  type ArmDescriptor,
+  type ArmDirectories,
+  armDirectories,
+  buildAlias,
+} from './harness/arm-dirs.js';
+export {
+  type SequenceResult,
+  type SequenceStep,
+  type StepCommand,
+  type StepResult,
+} from './harness/sequence.js';
+export { type ClonePreparation, type PreparedClone, prepareClone } from './harness/clone.js';
+export { type ProvenanceReader, provenanceViolation, readProvenance, type StepProvenance } from './harness/provenance.js';
 export {
   type ComparisonFrame,
   comparisonHeading,

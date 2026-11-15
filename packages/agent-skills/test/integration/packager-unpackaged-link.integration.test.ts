@@ -24,10 +24,12 @@
  * what `PACKAGED_TEST_INPUT` has always claimed ("the link is removed from the
  * packaged output") while being true for only one spelling out of three.
  */
+import { writeFileSync } from 'node:fs';
+
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { createTempDir, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { cleanupTestTempDir, createTestTempDir, writeTestFile } from '../../../cli/test/system/test-common.js';
 import { packageSkill } from '../../src/skill-packager.js';
 
 const SKILL_MD = `---
@@ -56,13 +58,13 @@ async function packageFixture(tempDir: string): Promise<{ body: string; hasError
   const skillDir = safePath.join(tempDir, 'skills', 'demo');
   mkdirSyncReal(safePath.join(skillDir, 'evals', 'sub'), { recursive: true });
   mkdirSyncReal(safePath.join(skillDir, 'refs'), { recursive: true });
-  writeTestFile(safePath.join(skillDir, 'SKILL.md'), SKILL_MD);
-  writeTestFile(safePath.join(skillDir, 'evals', 'evals.json'), '{"expected_output":"KEY"}');
-  writeTestFile(safePath.join(skillDir, 'evals', 'sub', 'note.md'), '# note\n');
+  writeFileSync(safePath.join(skillDir, 'SKILL.md'), SKILL_MD);
+  writeFileSync(safePath.join(skillDir, 'evals', 'evals.json'), '{"expected_output":"KEY"}');
+  writeFileSync(safePath.join(skillDir, 'evals', 'sub', 'note.md'), '# note\n');
   // A DISTINCT target, so the stray-bracket line exercises over-matching alone and
   // not the duplicate-href case `dup-href` covers.
-  writeTestFile(safePath.join(skillDir, 'evals', 'sub', 'other.md'), '# other\n');
-  writeTestFile(safePath.join(skillDir, 'refs', 'guide.md'), '# guide\n');
+  writeFileSync(safePath.join(skillDir, 'evals', 'sub', 'other.md'), '# other\n');
+  writeFileSync(safePath.join(skillDir, 'refs', 'guide.md'), '# guide\n');
 
   const outputPath = safePath.join(tempDir, 'dist', 'demo');
   const result = await packageSkill(safePath.join(skillDir, 'SKILL.md'), {
@@ -82,11 +84,11 @@ describe('packaging a link whose target does not ship (integration)', () => {
   let tempDir: string;
 
   afterEach(() => {
-    cleanupTestTempDir(tempDir);
+    removeTempDir(tempDir);
   });
 
   it('strips every unpackageable link to plain text and rewrites the one that ships', async () => {
-    tempDir = createTestTempDir('vat-packager-unpackaged-link-');
+    tempDir = createTempDir('vat-packager-unpackaged-link-');
     const { body, hasErrors } = await packageFixture(tempDir);
 
     // The only link with a packaged counterpart keeps its link syntax, repointed at

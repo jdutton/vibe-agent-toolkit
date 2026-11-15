@@ -162,6 +162,9 @@ describe('every subpath entry reaches exactly the third-party packages the READM
     // lost its purpose rather than merely gained a dependency.
     { entry: 'project.ts', thirdParty: [] },
     { entry: 'yaml.ts', thirdParty: ['yaml'] },
+    // The two archive libraries, and the ONLY entry that reaches either: every tarball and ZIP
+    // VAT reads goes through this subpath (`no-restricted-imports` bans both everywhere else).
+    { entry: 'archive.ts', thirdParty: ['adm-zip', 'tar'] },
     // `@vibe-validate/git` arrived on these four with `runGit`, which is now a
     // wrapper over that package's `executeGitCommand`. Note `which` LEAVING
     // `git.ts` and `crawl.ts` in the same change: those entries used to resolve

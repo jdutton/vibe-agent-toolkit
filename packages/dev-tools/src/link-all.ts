@@ -34,25 +34,10 @@
  * Affected packages typically include:
  * - vibe-agent-toolkit (umbrella package with bin conflict - skipped by default)
  * - @vibe-agent-toolkit/cli (provides vat command)
- * - @vibe-agent-toolkit/agent-config (has complex workspace deps)
- * - @vibe-agent-toolkit/vat-example-cat-agents (has postinstall script)
  *
- * Known npm workspace bug (as of npm v11.5.1):
- * Some packages may fail to link with "Cannot read properties of null" even
- * with no global installations. This appears to be an npm arborist bug when:
- * - Package has multiple workspace:* dependencies
- * - npm tries to resolve the dependency tree during link
- * - Arborist loses track of package references
- *
- * This is OK! Most packages (16-17/19) link successfully, which is sufficient
- * for development. The CLI package usually works after retrying once.
- *
- * Debugging tips:
- * - Check `npm list -g --depth=0` for VAT packages
- * - Look for "Cannot read properties of null" in npm logs
- * - Try `npm uninstall -g <package>` before linking (fixes ~90% of cases)
- * - Check /Users/$USER/.npm/_logs for detailed npm errors
- * - If 2-3 packages persistently fail, that's expected npm workspace behavior
+ * A package with several `workspace:*` dependencies can still fail to link with
+ * "Cannot read properties of null" under no global install (an npm arborist bug);
+ * a retry usually links it, and `~/.npm/_logs` holds the detail.
  */
 
 import { CommandExecutionError } from '@vibe-agent-toolkit/utils/process';

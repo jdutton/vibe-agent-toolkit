@@ -32,9 +32,9 @@
 import { existsSync, statSync } from 'node:fs';
 
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { createTempDir, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { cleanupTestTempDir, createTestTempDir } from '../../../cli/test/system/test-common.js';
 import { runSkillTestHarness, type RunHarnessOptions } from '../../src/skill-test/run-harness.js';
 import {
   harnessOptsFor,
@@ -43,7 +43,11 @@ import {
   writeSuiteFixture,
 } from '../skill-test/eval-fixture.js';
 import { makeHarnessFakeSpawn } from '../skill-test/spawn-stub.js';
-import { soleArmWorkspace } from '../test-helpers.js';
+import { soleArmWorkspace, useScratchTmpdir } from '../test-helpers.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test (and every child
+// a test spawns), so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-13-');
 
 // Preflight shells out to a real `claude` and probes its flags, so without this
 // the whole file would be gated on the developer's PATH rather than the code.
@@ -62,11 +66,11 @@ const EVALS_JSON = 'evals.json';
 let tempDir: string;
 
 beforeEach(() => {
-  tempDir = createTestTempDir('vat-eval-suite-location-');
+  tempDir = createTempDir('vat-eval-suite-location-');
 });
 
 afterEach(() => {
-  cleanupTestTempDir(tempDir);
+  removeTempDir(tempDir);
 });
 
 /** The subject skill's own tree. Written the same way in both layouts. */
@@ -154,7 +158,7 @@ describe('${fixturesDir} wiring (integration)', () => {
 
     // Carry the harness's own summary into the failure message: exit 2 is preflight,
     // which has ~8 distinct causes, and a bare "expected 2 to be 0" names none of them.
-    expect(result.exitCode, `harness exit ${result.exitCode}: ${result.summary ?? '(no summary)'}`).toBe(0);
+    expect(result.exitCode, `harness exit ${result.exitCode}: ${result.description ?? '(no description)'}`).toBe(0);
     expect(injected, 'the declared env var never reached the executor').toBeDefined();
 
     // The assertion that matters: the interpolated path RESOLVES. Asserting the
@@ -187,7 +191,7 @@ describe('external eval suite (integration)', () => {
     // Exit 3 is bootstrap — "no suite found, here is a template". Before the fix
     // that is exactly what an absolute path produced: it was folded under the
     // skill dir, did not exist, and a starter template was written there.
-    expect(result.exitCode, `harness exit ${result.exitCode}: ${result.summary ?? '(no summary)'}`).toBe(0);
+    expect(result.exitCode, `harness exit ${result.exitCode}: ${result.description ?? '(no description)'}`).toBe(0);
 
     // The suite really drove a run; a pass with zero spawns would mean the
     // harness found nothing to grade and said so quietly.
@@ -225,7 +229,7 @@ describe('external eval suite (integration)', () => {
       optsFor(layout.subjectDir, fake.spawn, { evalsSubpath: layout.evalsPath }),
     );
 
-    expect(result.exitCode, result.summary).toBe(0);
+    expect(result.exitCode, result.description).toBe(0);
     expect(result.workspacesPath, 'a non-keep run named a workspaces dir it did not retain').toBeUndefined();
     const workspacesRoot = /^(.*\/vat-skill-test-ws-[^/]+)\//.exec(toForwardSlash(executorCwd))?.[1];
     expect(workspacesRoot, `no workspaces root in the executor cwd: ${executorCwd}`).toBeDefined();

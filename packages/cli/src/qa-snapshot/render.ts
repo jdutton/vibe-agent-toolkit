@@ -223,7 +223,7 @@ function wrapNotes(notes: readonly string[], width: number): string[] {
 export function renderDetailHeader(delta: ArtifactDelta): string {
   const lines = [
     `${TITLE} — detail: ${delta.name}`,
-    `artifact: ${delta.artifact}   kind: ${delta.kind}`,
+    `artifact: ${delta.artifact}`,
     `status: ${delta.status}   +${String(delta.addedLines)}/-${String(delta.removedLines)}`,
   ];
 

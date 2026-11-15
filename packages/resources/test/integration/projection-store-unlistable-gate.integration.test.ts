@@ -1,0 +1,123 @@
+/**
+ * The driver's store-freshness gate for `EXTENT_DIRECTORY_UNLISTABLE` rows,
+ * without a permission bit. Integration tier: it populates a real temp tree.
+ *
+ * The real-`chmod` suite (`projection-store-unlistable-freshness`)
+ * pins the end-to-end hazard against a locked directory. What it leaves to this
+ * file is the gate's MISS arm on its own: a stored extent carrying an
+ * unlistable row for a directory that is gone — or that lists perfectly — must
+ * not be served, so the contributor runs again. No permission bit is needed for
+ * either, so the arm is covered on every platform and under uid 0.
+ *
+ * The row is injected through a store that serves what it was given plus one
+ * condition row, because a tree-less unit fixture cannot make the contributor
+ * write that row itself.
+ */
+import { mkdir, writeFile } from 'node:fs/promises';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
+import { ContributorRegistry } from '../../src/projection/contributor.js';
+import {
+  EXTENT_DIRECTORY_UNLISTABLE,
+  DEFAULT_CONTENT_DEMAND,
+  FilesystemExtentContributor,
+} from '../../src/projection/contributors/filesystem-extent.js';
+import { crawlSourceFor } from '../../src/projection/crawl-source.js';
+import { populate } from '../../src/projection/merge.js';
+import type { ExtentKey, ExtentScopedRows } from '../../src/projection/store.js';
+import { CONDITION_WITHOUT_REFERENCE } from '../../src/schemas/projection-resources.js';
+import { FakeFactStore } from '../fake-fact-store.js';
+import { setupSubdirTestSuite } from '../test-helpers.js';
+
+const suite = setupSubdirTestSuite('projection-store-unlistable-gate-');
+
+/** Opaque to the store, and constant across runs — the gate is what has to tell. */
+const TREE_HASH = 'tree-0000000000000000000000000000000000000000';
+
+/** A directory the injected row claims could not be listed. */
+const ROW_DIR = 'build/locked';
+
+/**
+ * A {@link FakeFactStore} whose reads carry one extra
+ * `EXTENT_DIRECTORY_UNLISTABLE` row for {@link ROW_DIR} when `inject` is set —
+ * the stored shape a run over a locked, gitignored directory leaves behind.
+ */
+class UnlistableRowStore extends FakeFactStore {
+  inject = false;
+
+  override async readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
+    const stored = await super.readExtent(key);
+    if (stored === undefined || !this.inject) return stored;
+    const anchor = stored.resourceRealizations[0];
+    if (anchor === undefined) throw new Error('fixture produced no realization to anchor the injected row on');
+    return {
+      ...stored,
+      realizationConditions: [
+        ...stored.realizationConditions,
+        {
+          extentId: anchor.extentId,
+          path: ROW_DIR,
+          code: EXTENT_DIRECTORY_UNLISTABLE,
+          severity: 'warning',
+          message: `The gitignored directory '${ROW_DIR}' could not be listed (EACCES).`,
+          resourceId: anchor.resourceId,
+          ...CONDITION_WITHOUT_REFERENCE,
+        },
+      ],
+    };
+  }
+}
+
+/**
+ * One tracker-less filesystem-extent population through `store`.
+ *
+ * @returns Whether the run derived rather than being served — `populate()`'s own outcome
+ */
+async function derivedThrough(store: FakeFactStore): Promise<boolean> {
+  const registry = new ContributorRegistry();
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
+  const { outcome } = await populate({
+    root: suite.tempDir,
+    registry,
+    cache: { store, treeUnchanged: () => true, treeHash: TREE_HASH },
+  });
+  return outcome.stored !== 'hit';
+}
+
+describe('a stored EXTENT_DIRECTORY_UNLISTABLE row that no longer holds turns a hit into a miss', () => {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(async () => {
+    await suite.beforeEach();
+    await writeFile(safePath.join(suite.tempDir, 'ok.md'), '# ok\n');
+  });
+
+  it('serves the stored extent when no unlistable row is stored (control)', async () => {
+    const store = new UnlistableRowStore();
+    expect(await derivedThrough(store)).toBe(true);
+
+    expect(await derivedThrough(store)).toBe(false);
+    expect(store.writeExtentCalls).toBe(1);
+  });
+
+  it('re-enumerates when the row names a directory that is gone', async () => {
+    const store = new UnlistableRowStore();
+    await derivedThrough(store);
+    store.inject = true;
+
+    expect(await derivedThrough(store)).toBe(true);
+    expect(store.writeExtentCalls).toBe(2);
+  });
+
+  it('re-enumerates when the row names a directory that now lists', async () => {
+    const store = new UnlistableRowStore();
+    await derivedThrough(store);
+    await mkdir(safePath.join(suite.tempDir, ROW_DIR), { recursive: true });
+    store.inject = true;
+
+    expect(await derivedThrough(store)).toBe(true);
+    expect(store.writeExtentCalls).toBe(2);
+  });
+});

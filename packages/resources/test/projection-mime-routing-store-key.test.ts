@@ -27,16 +27,17 @@ import { describe, expect, it } from 'vitest';
 
 import { NO_DECLARED_MIME_TYPES } from '../src/index.js';
 import { buildClaudeContextPopulation } from '../src/projection/claude-context-population.js';
+import { POPULATION_PARSE_LIMITS } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
-import { CONTENT_PARSING_SKIP, DISCARD_BLOB_POPULATION, populate } from '../src/projection/merge.js';
+import { CONTENT_PARSING_SKIP, populate } from '../src/projection/merge.js';
 import { createCollectionMimeResolver } from '../src/projection/realizations.js';
 import type {
   BlobScopedRows,
   ExtentKey,
   ExtentScopedRows,
-  ProjectionStore,
+  FactStore,
 } from '../src/projection/store.js';
 import type { CollectionConfig } from '../src/schemas/project-config.js';
 
@@ -85,7 +86,7 @@ const fixture = setupTempCorpus('vat-mime-store-key-', CORPUS);
  * Answering no read keeps each arm a full population, so what is compared is the
  * question each run posed rather than which of them happened to be served.
  */
-class KeyRecordingStore implements ProjectionStore {
+class KeyRecordingStore implements FactStore {
   /** Every key handed to `readExtent`, in call order. */
   readonly readKeys: ExtentKey[] = [];
 
@@ -116,7 +117,7 @@ class KeyRecordingStore implements ProjectionStore {
     if (!this.servesBlobTier) {
       throw new Error('this arm declines the blob tier and must never read it');
     }
-    return { blobs: [], blobReferences: [], blobSections: [], blobConditions: [] };
+    return { blobs: [], blobReferences: [], blobSections: [], blobConditions: [], harnessBlobFacts: [], harnessBlobImports: [] };
   }
 
   async close(): Promise<void> {
@@ -136,14 +137,13 @@ async function storeKeyFor(
 ): Promise<string> {
   const store = new KeyRecordingStore();
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor(() => crawlSourceFor(fixture.root()), 'deferred'));
+  registry.register(new FilesystemExtentContributor(() => crawlSourceFor(fixture.root(), []), 'deferred'));
 
   await populate({
     root: fixture.root(),
     registry,
     contentParsing: CONTENT_PARSING_SKIP,
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
-    cache: { store, treeHash: FIXTURE_TREE_HASH },
+    cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH },
     ...(collections !== undefined && { collections }),
   });
 
@@ -194,6 +194,27 @@ describe('the projection store key and collection-declared parse routing', () =>
     };
 
     expect(await storeKeyFor(undeclared)).toBe(await storeKeyFor(undefined));
+  });
+});
+
+describe('the projection store key and the input cap', () => {
+  it('DIFFERS between two runs under different input caps', async () => {
+    // A realization past the cap is stored `oversize`, so rows derived under one cap answer no run
+    // under another. The cap is held for the run by the population's own limits, set here and put
+    // back, so the two arms differ in the cap alone.
+    const limits = POPULATION_PARSE_LIMITS as { inputBytes: number };
+    const configured = limits.inputBytes;
+    const underCap = async (inputBytes: number): Promise<string> => {
+      limits.inputBytes = inputBytes;
+      try {
+        return await storeKeyFor(undefined);
+      } finally {
+        limits.inputBytes = configured;
+      }
+    };
+
+    expect(await underCap(configured)).toBe(await underCap(configured));
+    expect(await underCap(configured)).not.toBe(await underCap(configured + 1));
   });
 });
 
@@ -252,8 +273,7 @@ async function ambientKeysAcrossBothPasses(
 
   await buildClaudeContextPopulation({
     root: twoPass.root(),
-    cache: { store, treeHash: FIXTURE_TREE_HASH },
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
+    cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH },
     ...(collections !== undefined && { collections }),
   });
 
@@ -263,16 +283,11 @@ async function ambientKeysAcrossBothPasses(
 /**
  * ⚠️ **Read this before trusting the two arms below as live guards.**
  *
- * The lane's `discoverImportRoots` docstring used to claim that a discovery pass
- * which did not receive `collections` would key differently from the real pass
- * and the two would evict each other from the store, run after run. That is
- * FALSE, and it was checked the only way worth checking: the `collections`
- * forwarding was deleted from the discovery pass and the whole `resources` suite
- * — 2,469 tests — stayed green. The mechanism is that the discovery pass is
- * never handed a `cache` at all, so it asks the store nothing and has no key to
- * collide with; and a declared type cannot change what it ANSWERS either,
- * because `claudeImportRootsFrom` reads `path` / `basenameLower` / `isDirectory`
- * and never `mime`.
+ * The lane's discovery pass (`discoverImportRoots`) takes no `collections` and
+ * no `cache`: it asks the store nothing and has no key to collide with, and a
+ * declared type cannot change what it ANSWERS either, because
+ * `claudeImportRootsFrom` reads `path` / `basenameLower` / `isDirectory` and
+ * never `mime`.
  *
  * So the `toHaveLength(1)` arms are TRIPWIRES for a hazard that is currently
  * unreachable, not proofs that two live passes agree. They are kept — and said

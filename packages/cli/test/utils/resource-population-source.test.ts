@@ -17,7 +17,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   RESOURCES_CRAWL_ENV,
@@ -77,7 +77,7 @@ describe('withResourcePopulationSource', () => {
       // guard compares exactly this, so a seam that handed back the wrong one
       // would silently put every crawl back on the walk.
       expect(source?.root).toBe(safePath.resolve(root));
-      return [...((await source?.enumerate(root))?.paths ?? [])];
+      return [...((await source?.enumerate(root, []))?.paths ?? [])];
     });
 
     // The source enumerates; it does NOT narrow. Narrowing to the caller's own
@@ -88,16 +88,42 @@ describe('withResourcePopulationSource', () => {
     ).toEqual([ASSET_REL, GUIDE_REL]);
   });
 
-  it('reports the enumerator that actually ran', async () => {
+  it('carries the enumeration\'s own outcome and enumerator out with its paths', async () => {
     writeFileSync(safePath.join(root, GUIDE_REL), '# guide\n', 'utf-8');
-    process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_PROJECTION;
 
-    const seen: string[] = [];
-    await withResourcePopulationSource(
-      { root, observeExtentSource: (kind) => seen.push(kind) },
-      async (source) => source?.enumerate(root),
+    const enumeration = await withResourcePopulationSource({ root }, async (source) => source?.enumerate(root, []));
+
+    // A temp tree outside any repository has no store, so the run derived, on
+    // the filesystem enumerator — told by the enumeration, not by a side channel.
+    expect(enumeration?.outcome).toEqual({ population: 'derived', stored: 'no-store' });
+    expect(enumeration?.extentSource).toBe('filesystem');
+  });
+
+  it('says nothing about a binary it declined: membership verbs stay quiet', async () => {
+    writeFileSync(safePath.join(root, GUIDE_REL), '# guide\n', 'utf-8');
+    writeFileSync(
+      safePath.join(root, 'docs', 'logo.png'),
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]),
     );
+    // Every byte this process writes to stderr or stdout, so a report routed
+    // through any logger — or none — is seen.
+    const written: string[] = [];
+    const capture = (chunk: unknown): boolean => {
+      written.push(String(chunk));
+      return true;
+    };
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(capture);
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(capture);
 
-    expect(seen).toEqual(['filesystem']);
+    try {
+      const paths = await withResourcePopulationSource({ root }, async (source) => (await source?.enumerate(root, []))?.paths ?? []);
+      // The premise: the binary really was in the population.
+      expect(paths.map((p) => safePath.relative(root, p))).toContain('docs/logo.png');
+    } finally {
+      stderr.mockRestore();
+      stdout.mockRestore();
+    }
+
+    expect(written.join('')).not.toContain('blob derivation');
   });
 });

@@ -11,53 +11,23 @@ import {
   isAbsoluteAnyPlatform,
   isAbsolutePath,
   isSingleFsSegment,
-  normalizePath,
   relativeEscapesRoot,
   resolveFromImportMeta,
   safePath,
   toAbsolutePath,
   toForwardSlash,
+  toForwardSlashAnyPlatform,
 } from '../src/path-utils.js';
+
+/**
+ * `\\` is a separator only where the host says so. On POSIX it is an ordinary
+ * filename character, so the native-path converter must leave it alone there.
+ */
+const BACKSLASH_IS_SEPARATOR = path.sep === '\\';
 
 describe('path-utils', () => {
   const TEST_PROJECT_PATH = '/project';
   const TEST_DOCS_README = './docs/README.md';
-  const TEST_DOCS_PATH = './docs';
-
-  describe('normalizePath', () => {
-    it('should normalize a simple relative path', () => {
-      const result = normalizePath(TEST_DOCS_README);
-      expect(result).toBe(path.normalize(TEST_DOCS_README));
-    });
-
-    it('should resolve relative path with baseDir', () => {
-      const result = normalizePath(TEST_DOCS_README, TEST_PROJECT_PATH);
-      expect(result).toBe(path.resolve(TEST_PROJECT_PATH, TEST_DOCS_README));
-    });
-
-    it('should resolve parent directory references', () => {
-      const result = normalizePath('./docs/../README.md', TEST_PROJECT_PATH);
-      expect(result).toBe(path.resolve(TEST_PROJECT_PATH, 'README.md'));
-    });
-
-    it('should remove trailing slashes', () => {
-      const result = normalizePath(`${TEST_PROJECT_PATH}/docs/`, '/base');
-      expect(result).not.toMatch(/[/\\]$/);
-    });
-
-    it('should handle absolute paths without baseDir', () => {
-      const absolutePath = path.resolve(`${TEST_PROJECT_PATH}/docs/README.md`);
-      const result = normalizePath(absolutePath);
-      expect(result).toBe(absolutePath);
-    });
-
-    it('should normalize mixed separators on Windows', () => {
-      // This test behavior depends on platform but should always return consistent separators
-      const result = normalizePath(String.raw`${TEST_DOCS_PATH}\README.md`);
-      expect(result).toBeTruthy();
-      expect(typeof result).toBe('string');
-    });
-  });
 
   describe('isAbsolutePath', () => {
     it('should return true for Unix absolute paths', () => {
@@ -162,7 +132,7 @@ describe('path-utils', () => {
     it('takes the forward-slashed spelling safePath.relative produces, not a raw backslash one', () => {
       // A `..\x` is not a `../x` to this function; callers normalize first,
       // which is what `safePath.relative` already does.
-      expect(relativeEscapesRoot(toForwardSlash(String.raw`..\x`))).toBe(true);
+      expect(relativeEscapesRoot(toForwardSlashAnyPlatform(String.raw`..\x`))).toBe(true);
     });
   });
 
@@ -275,41 +245,43 @@ describe('path-utils', () => {
     });
   });
 
-  describe('toForwardSlash', () => {
-    it('should convert Windows backslashes to forward slashes', () => {
-      const result = toForwardSlash(String.raw`C:\Users\docs\README.md`);
-      expect(result).toBe('C:/Users/docs/README.md');
+  describe('toForwardSlashAnyPlatform', () => {
+    it('converts backslashes on every host (author-written text)', () => {
+      expect(toForwardSlashAnyPlatform(String.raw`C:\Users\docs\README.md`)).toBe('C:/Users/docs/README.md');
+      expect(toForwardSlashAnyPlatform(String.raw`C:\Users/docs\README.md`)).toBe('C:/Users/docs/README.md');
+      expect(toForwardSlashAnyPlatform(String.raw`C:\\Users`)).toBe('C://Users');
+      expect(toForwardSlashAnyPlatform(String.raw`\\server\share\file.md`)).toBe('//server/share/file.md');
+      expect(toForwardSlashAnyPlatform('/project/docs/README.md')).toBe('/project/docs/README.md');
+      expect(toForwardSlashAnyPlatform('')).toBe('');
     });
+  });
 
+  describe('toForwardSlash (native paths)', () => {
     it('should leave forward slashes unchanged', () => {
-      const result = toForwardSlash('/project/docs/README.md');
-      expect(result).toBe('/project/docs/README.md');
-    });
-
-    it('should handle mixed separators', () => {
-      const result = toForwardSlash(String.raw`C:\Users/docs\README.md`);
-      expect(result).toBe('C:/Users/docs/README.md');
-    });
-
-    it('should handle paths with multiple consecutive backslashes', () => {
-      const result = toForwardSlash(String.raw`C:\\Users\\docs\\README.md`);
-      expect(result).toBe('C://Users//docs//README.md');
+      expect(toForwardSlash('/project/docs/README.md')).toBe('/project/docs/README.md');
     });
 
     it('should handle empty string', () => {
-      const result = toForwardSlash('');
-      expect(result).toBe('');
+      expect(toForwardSlash('')).toBe('');
     });
 
-    it('should handle UNC paths on Windows', () => {
-      const result = toForwardSlash(String.raw`\\server\share\file.md`);
-      expect(result).toBe('//server/share/file.md');
+    // Gated: on POSIX a backslash is a filename character, not a separator, so these win32 spellings are not native paths there.
+    it.skipIf(!BACKSLASH_IS_SEPARATOR)('converts win32 separators, mixed, doubled and UNC', () => {
+      expect(toForwardSlash(String.raw`C:\Users\docs\README.md`)).toBe('C:/Users/docs/README.md');
+      expect(toForwardSlash(String.raw`C:\Users/docs\README.md`)).toBe('C:/Users/docs/README.md');
+      expect(toForwardSlash(String.raw`C:\\Users`)).toBe('C://Users');
+      expect(toForwardSlash(String.raw`\\server\share\file.md`)).toBe('//server/share/file.md');
+    });
+
+    // Gated: on win32 a backslash IS the separator; the identity contract holds only where it is a filename character.
+    it.skipIf(BACKSLASH_IS_SEPARATOR)('keeps a backslash that is part of a POSIX filename', () => {
+      expect(toForwardSlash(String.raw`docs/x\y.md`)).toBe(String.raw`docs/x\y.md`);
     });
   });
 
   describe('cross-platform behavior', () => {
     it('should handle paths consistently across platforms', () => {
-      const normalized = normalizePath('./docs/README.md', '/base');
+      const normalized = toAbsolutePath(TEST_DOCS_README, TEST_PROJECT_PATH);
       expect(path.isAbsolute(normalized)).toBe(true);
 
       const absolute = toAbsolutePath('./file.md', normalized);
@@ -328,7 +300,8 @@ describe('path-utils', () => {
 
   describe('safePath', () => {
     describe('safePath.join', () => {
-      it('should return forward slashes on all platforms', () => {
+      // Gated: `C:\Users` is a native path only on win32; on POSIX its backslash is a filename character.
+      it.skipIf(!BACKSLASH_IS_SEPARATOR)('should return forward slashes for win32 native paths', () => {
         const result = safePath.join(String.raw`C:\Users`, 'docs', 'file.md');
         expect(result).not.toContain('\\');
         expect(result).toBe('C:/Users/docs/file.md');
@@ -349,6 +322,13 @@ describe('path-utils', () => {
       it('should return forward slashes on all platforms', () => {
         const result = safePath.resolve('/project', 'docs', 'file.md');
         expect(result).not.toContain('\\');
+      });
+
+      // Gated: on win32 the backslash is a separator, so the name is not preserved there by design.
+      it.skipIf(BACKSLASH_IS_SEPARATOR)('keeps a backslash inside a POSIX filename', () => {
+        expect(safePath.resolve('/r', String.raw`a\b.md`)).toBe(String.raw`/r/a\b.md`);
+        expect(safePath.join('docs', String.raw`x\y.md`)).toBe(String.raw`docs/x\y.md`);
+        expect(safePath.relative('/r', String.raw`/r/a\b.md`)).toBe(String.raw`a\b.md`);
       });
 
       it('should produce absolute paths', () => {
@@ -408,6 +388,18 @@ describe('path-utils', () => {
       it('throws on a Windows drive-letter segment', () => {
         // C:\... or C:/... style segments should be caught
         expect(() => safePath.joinUnderRoot(TEST_ROOT, String.raw`C:\Users\evil`)).toThrow();
+      });
+
+      it('never lets a backslash-spelled .. climb out of root', () => {
+        // On win32 the backslashes are separators and the climb escapes, so it throws;
+        // on POSIX `x\..\..\s` is ONE filename under root. Either way it must not escape.
+        const segment = String.raw`x\..\..\SECRET.txt`;
+        if (BACKSLASH_IS_SEPARATOR) {
+          expect(() => safePath.joinUnderRoot(TEST_ROOT, segment)).toThrow();
+        } else {
+          const result = safePath.joinUnderRoot(TEST_ROOT, segment);
+          expect(result).toBe(`${TEST_ROOT}/${segment}`);
+        }
       });
 
       it('returns forward-slash path', () => {

@@ -1,9 +1,11 @@
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { describe, expect, it } from 'vitest';
 
 import { validateMarketplace } from '../../src/validators/marketplace-validator.js';
 import {
   assertSingleError,
+  assertSingleUnreadable,
   assertValidationSuccess,
   createTestMarketplace,
   setupTempDir,
@@ -58,6 +60,34 @@ describe('validateMarketplace', () => {
     assertSingleError(result, 'MARKETPLACE_INVALID_JSON');
   });
 
+  it('reports a marketplace.json the OS will not read as unreadable, not as invalid JSON', async () => {
+    const marketplacePath = createTestMarketplace(getTempDir(), validMarketplaceData);
+    const manifest = safePath.join(marketplacePath, '.claude-plugin', 'marketplace.json');
+    const fs = await import('node:fs');
+    fs.rmSync(manifest);
+    mkdirSyncReal(manifest);
+
+    const result = await validateMarketplace(marketplacePath);
+
+    assertSingleUnreadable(result, '.claude-plugin/marketplace.json', 'EISDIR');
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'reports a permission-denied marketplace.json as unreadable, not as invalid JSON',
+    async () => {
+      const marketplacePath = createTestMarketplace(getTempDir(), validMarketplaceData);
+      const manifest = safePath.join(marketplacePath, '.claude-plugin', 'marketplace.json');
+      const fs = await import('node:fs');
+      fs.chmodSync(manifest, 0o000);
+      try {
+        const result = await validateMarketplace(marketplacePath);
+        assertSingleUnreadable(result, '.claude-plugin/marketplace.json', 'EACCES');
+      } finally {
+        fs.chmodSync(manifest, 0o644);
+      }
+    },
+  );
+
   it('should return error when marketplace.json fails schema validation', async () => {
     const tempDir = getTempDir();
     const marketplacePath = createTestMarketplace(tempDir, {
@@ -67,7 +97,7 @@ describe('validateMarketplace', () => {
 
     const result = await validateMarketplace(marketplacePath);
 
-    expect(result.status).toBe('error');
+    expect(result.summary.errors).toBeGreaterThan(0);
     expect(result.issues.length).toBeGreaterThan(0);
     expect(
       result.issues.every((issue) => issue.code === 'MARKETPLACE_INVALID_SCHEMA'),

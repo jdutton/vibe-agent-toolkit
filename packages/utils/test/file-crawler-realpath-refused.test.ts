@@ -10,7 +10,8 @@
  * rather than by `chmod`, for the reason `file-crawler-refused-listing.test.ts`
  * gives: `chmod` reaches one errno, only where POSIX modes bind, and not as root.
  * The absence errnos are the negative control: a directory that vanished
- * between being listed and being canonicalised is not in the population.
+ * between being listed and being canonicalised is not in the population, and
+ * one the native call merely CALLS absent is asked again of the JS walk.
  */
 import fs from 'node:fs';
 
@@ -25,7 +26,7 @@ import {
 import { toForwardSlash } from '../src/path-utils.js';
 import { setupSyncTempDirSuite } from '../src/testing/temp-dir.js';
 
-import { plantOpenAndLockedTree } from './test-helpers.js';
+import { plantOpenAndLockedTree, refuseOnSource } from './test-helpers.js';
 
 const REFUSAL_ERRNOS = ['EACCES', 'ELOOP', 'ENAMETOOLONG'] as const;
 const ABSENCE_ERRNOS = ['ENOENT', 'ENOTDIR'] as const;
@@ -34,11 +35,14 @@ const LOCKED_FILE = 'docs/locked/t.md';
 const REMEDY = 'Fix the permissions on that directory, or add it to the plugin `exclude:` list.';
 
 /** Make `realpathSync.native` refuse ONE directory with `code`; every other path passes through. */
-function refuseRealpathOf(directory: string, code: string): () => void {
+function refuseRealpathOf(directory: string, code: string, before: () => void = () => {}): () => void {
   const refused = toForwardSlash(directory);
+  // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
   const original = fs.realpathSync.native;
+  // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
   const spy = vi.spyOn(fs.realpathSync, 'native').mockImplementation(((target: fs.PathLike, options?: unknown) => {
     if (toForwardSlash(String(target)) === refused) {
+      before();
       throw Object.assign(new Error(`${code}: refused, realpath '${String(target)}'`), { code });
     }
     return (original as (...args: unknown[]) => string)(target, options);
@@ -47,8 +51,9 @@ function refuseRealpathOf(directory: string, code: string): () => void {
 }
 
 /** The symlink-following walk lane: the only route that canonicalises each directory. */
-function crawlFollowing(root: string, unreadable: UnreadablePolicy = { refuse: { root, remedy: REMEDY } }): string[] {
+function crawlFollowing(root: string, unreadable: UnreadablePolicy = refuseOnSource(root, REMEDY)): string[] {
   return crawlDirectorySync({
+    outputs: [],
     baseDir: root,
     include: ['**/*.md'],
     absolute: false,
@@ -104,11 +109,21 @@ describe('crawlDirectorySync (followSymlinks): a refused realpath never becomes 
     ]);
   });
 
-  it.each(ABSENCE_ERRNOS)('skips a directory that vanished before it could be canonicalised (%s) without a refusal', (code) => {
-    restore = refuseRealpathOf(locked, code);
+  it.each(ABSENCE_ERRNOS)('skips a directory that really vanished before it could be canonicalised (%s): the parent agrees it is gone', (code) => {
+    restore = refuseRealpathOf(locked, code, () => fs.rmSync(locked, { recursive: true }));
     const refusals: DirectoryRefusal[] = [];
     expect(crawlFollowing(root, { degrade: (refusal) => refusals.push(refusal) })).toEqual([OPEN_FILE]);
     expect(refusals).toEqual([]);
-    expect(crawlFollowing(root)).toEqual([OPEN_FILE]);
+  });
+
+  // The one native fallback rule (`realpathNativeSync`): a native "absent" is asked again of the JS
+  // walk, which finds the directory still there and canonicalises it — absence is confirmed, never
+  // assumed, and a native answer the JS walk contradicts loses no files.
+  it.each(ABSENCE_ERRNOS)('walks a directory the native realpath calls %s while it is still there: the JS walk answers', (code) => {
+    restore = refuseRealpathOf(locked, code);
+    const refusals: DirectoryRefusal[] = [];
+    const files = crawlFollowing(root, { degrade: (refusal) => refusals.push(refusal) });
+    expect(files.toSorted((a, b) => a.localeCompare(b))).toEqual([LOCKED_FILE, OPEN_FILE]);
+    expect(refusals).toEqual([]);
   });
 });

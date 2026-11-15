@@ -4,9 +4,10 @@
  * Every case here is a way a row could name an arm the run never proved. The
  * reader must take the lane from the subject's output and nowhere else: an env
  * var says what was asked for, only the output says what happened. Output that
- * is not a JSON object at all comes back as `null` on both fields. Inside a
- * JSON object the two fields are read INDEPENDENTLY: a field that is absent or
- * malformed reads as `null` while its well-formed sibling is kept, so a
+ * parses as neither JSON nor YAML, or whose root is not an object, comes back
+ * as `null` on both fields. Inside an object the two fields are read
+ * INDEPENDENTLY: a field that is absent or malformed reads as `null` while its
+ * well-formed sibling is kept, so a
  * document with no readable `lane` but a good `extentSource` reads
  * `{ lane: null, extentSource: 'git' }`, never as two nulls. That lenience is
  * `io`'s contract alone — there the arm qualifies counts that are real either
@@ -66,15 +67,18 @@ describe('readLaneFromOutput', () => {
     expect(readLaneFromOutput(JSON.stringify(raw))).toEqual({ lane: null, extentSource: null });
   });
 
-  it('reports non-JSON output — the default YAML scan — as null on both fields', () => {
-    // The io/perf default spec prints YAML. That output carries a `lane:` line a
-    // human can read, and this reader must NOT read it: a YAML parser is a
-    // dependency this package deliberately does not carry, and a regex over
-    // the text would be a second parser that drifts from the first.
+  it('reads the lane out of the default YAML scan, now that YAML is parsed', () => {
+    // The io/perf default spec prints YAML, and every reader in this package
+    // goes through one shared parser (`document-shape.ts`) that reads both
+    // JSON and YAML — so this output is no longer unreadable here.
     expect(readLaneFromOutput('status: success\nlane: projection\nfilesScanned: 2\n')).toEqual({
-      lane: null,
+      lane: 'projection',
       extentSource: null,
     });
+  });
+
+  it('reports YAML that is not an object at the root as null on both fields', () => {
+    expect(readLaneFromOutput('- 1\n- 2\n')).toEqual({ lane: null, extentSource: null });
   });
 
   it('reports empty output as null on both fields', () => {

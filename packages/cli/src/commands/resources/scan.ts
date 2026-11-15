@@ -2,16 +2,23 @@
  * Resources scan command - discover markdown resources
  */
 
-import type { CrawlSourceKind } from '@vibe-agent-toolkit/resources';
-import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { type CrawlSourceKind, notAdmittedCount, notAdmittedFindings, notAdmittedInScope } from '@vibe-agent-toolkit/resources';
+import { buildReport, toFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
-import { handleCommandError } from '../../utils/command-error.js';
-import { formatDurationSecs } from '../../utils/duration.js';
+import { refusalCodeOf } from '../../utils/command-refusal.js';
+import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
+import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger } from '../../utils/logger.js';
-import { writeStructuredOutput } from '../../utils/output.js';
 import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
 import { relativizePathEntries } from '../../utils/relativize-paths.js';
-import { loadResourcesWithConfig, type ResourceCrawlLane } from '../../utils/resource-loader.js';
+import {
+  assertDeclaredCollection,
+  extentSourceOf,
+  loadResourcesWithConfig,
+  type ResourceCrawlLane,
+} from '../../utils/resource-loader.js';
+
+import type { ResourcesScanData, ResourcesScanReport } from './scan-schema.js';
 
 interface ScanOptions {
   debug?: boolean;
@@ -63,7 +70,15 @@ export interface ScanPayloadInput {
    */
   extentSource: CrawlSourceKind | null;
   durationMs: number;
-  collections: Record<string, { resourceCount: number }> | undefined;
+  /**
+   * Every file the crawl enumerated and did not admit — unreadable, or its parse
+   * refused — in scope: how many (counted in `examined` whatever their findings
+   * resolve to), and their findings at their configured severity. Required: a
+   * scan that omits them reports the survivors as the whole population.
+   */
+  notAdmitted: { readonly count: number; readonly findings: readonly ValidationIssue[] };
+  /** Resources per collection; `{}` when the project configures none. */
+  collections: Record<string, { resourceCount: number }>;
   verbose: boolean;
 }
 
@@ -79,26 +94,24 @@ function countHeadings(headings: readonly HeadingWithChildren[]): number {
 }
 
 /**
- * Build the scan payload.
+ * Build the scan report.
  *
  * Pure: no file system, no clock, no `process.exit`. The registry keeps
  * absolute `filePath`s because that is the identity it keys on; re-basing onto
  * the stated root happens exactly once, here, at the document boundary — the
  * same contract `vat audit` follows. A payload of `$HOME`-absolute paths names
  * the machine it ran on and cannot be diffed across two checkouts.
+ *
+ * `examined` is the number of files scanned — the denominator the lab's
+ * population facet reads, beside `data.files`: the admitted files plus every
+ * one the crawl enumerated and did not admit. Those are the scan's only
+ * findings, one each at its configured severity (an error by default, so exit
+ * 1); a scan of nothing gets the writer's run-integrity refusal.
  */
-export function buildScanOutputData(input: ScanPayloadInput): Record<string, unknown> {
-  const { resources, root, lane, extentSource, durationMs, collections, verbose } = input;
+export function buildScanReport(input: ScanPayloadInput): ResourcesScanReport {
+  const { resources, root, lane, extentSource, durationMs, collections, verbose, notAdmitted } = input;
 
-  const files = resources.map((resource) => ({
-    path: resource.filePath,
-    links: resource.links.length,
-    anchors: countHeadings(resource.headings),
-    checksum: resource.checksum,
-  }));
-
-  return {
-    status: 'success',
+  const data: ResourcesScanData = {
     // Stated once, and the only absolute path in the document.
     root,
     lane,
@@ -106,14 +119,48 @@ export function buildScanOutputData(input: ScanPayloadInput): Record<string, unk
     // indistinguishable from a build too old to report it, which is the same
     // absence-vs-old-build ambiguity the two lane markers exist to avoid.
     extentSource,
-    filesScanned: resources.length,
-    linksFound: resources.reduce((sum, r) => sum + r.links.length, 0),
-    anchorsFound: files.reduce((sum, f) => sum + f.anchors, 0),
-    durationSecs: formatDurationSecs(durationMs),
-    ...(collections ? { collections } : {}),
-    ...(verbose ? { files: relativizePathEntries(files, root) } : {}),
+    collections,
   };
+  if (verbose) {
+    data.files = relativizePathEntries(
+      resources.map((resource) => ({
+        path: resource.filePath,
+        links: resource.links.length,
+        anchors: countHeadings(resource.headings),
+        checksum: resource.checksum,
+      })),
+      root,
+    );
+  }
+
+  // `vat resources scan` offers no `--strict`; its only findings are the files it could not admit.
+  return buildReport({
+    examined: resources.length + notAdmitted.count,
+    findings: toFindings([...notAdmitted.findings]),
+    data,
+    gate: { strict: false },
+    durationMs,
+  });
 }
+
+/**
+ * Resources per collection, narrowed to the `--collection` one when filtering —
+ * the same rule `resources validate` follows: the registry's stats list only
+ * collections with members, so a declared collection that matched nothing is
+ * absent rather than listed at 0.
+ */
+function collectionCounts(
+  collectionStats: { collections: Record<string, { resourceCount: number }> } | undefined,
+  collection: string | undefined,
+): Record<string, { resourceCount: number }> {
+  const counts = Object.entries(collectionStats?.collections ?? {})
+    .filter(([id]) => collection === undefined || id === collection)
+    .map(([id, stat]) => [id, { resourceCount: stat.resourceCount }] as const);
+  return Object.fromEntries(counts);
+}
+
+/** Test seam: the per-collection counts `--collection` narrows. */
+export const __internal = { collectionCounts };
 
 export async function scanCommand(
   pathArg: string | undefined,
@@ -121,54 +168,50 @@ export async function scanCommand(
 ): Promise<void> {
   const logger = createLogger({ debug: options.debug ?? false });
   const startTime = Date.now();
+  // The two formats this verb offers (Commander refuses any other).
+  const format = options.format === 'json' ? 'json' : 'yaml';
 
   try {
     // Resolve projectRoot at the CLI boundary (spec §5/§7 — loud-cwd policy).
     const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
 
     // Load resources with config support
-    const { registry, lane, extentSource } = await loadResourcesWithConfig(pathArg, projectRoot, logger);
+    const { registry, config, population } = await loadResourcesWithConfig(pathArg, projectRoot, logger);
+    assertDeclaredCollection(config, options.collection);
 
     // Get all resources (filtered by collection if specified)
-    let allResources = registry.getAllResources();
-    if (options.collection) {
-      const { collection } = options;
-      allResources = allResources.filter(r => {
-        return collection ? r.collections?.includes(collection) ?? false : false;
-      });
-    }
+    const { collection } = options;
+    const resources = collection === undefined
+      ? registry.getAllResources()
+      : registry.getAllResources().filter((r) => r.collections?.includes(collection) ?? false);
+    // Scoped to `--collection` by the collection's own patterns, as `resources
+    // validate` scopes them, and resolved through `resources.validation`.
+    const notAdmittedLog = notAdmittedInScope(
+      registry.getNotAdmitted(),
+      collection === undefined ? undefined : config?.resources?.collections?.[collection],
+    );
+    const notAdmitted = {
+      count: notAdmittedCount(notAdmittedLog),
+      findings: notAdmittedFindings(
+        notAdmittedLog,
+        { locationRoot: projectRoot, consequence: 'it is in no collection count in this report' },
+        config?.resources?.validation ?? {},
+      ),
+    };
+    reportFindings(notAdmitted.findings, { verbose: true, write: logger.warn });
 
-    // Build collection stats (filtered or all)
-    let collectionsOutput: Record<string, { resourceCount: number }> | undefined;
-    if (options.collection) {
-      // When filtering by collection, only show that collection
-      collectionsOutput = { [options.collection]: { resourceCount: allResources.length } };
-    } else {
-      // Show all collections
-      const collectionStats = registry.getCollectionStats();
-      collectionsOutput = collectionStats
-        ? Object.fromEntries(
-            Object.entries(collectionStats.collections).map(([id, stat]) => [
-              id,
-              { resourceCount: stat.resourceCount },
-            ])
-          )
-        : undefined;
-    }
-
-    const payload = buildScanOutputData({
-      resources: allResources,
+    const report = buildScanReport({
+      notAdmitted,
+      resources,
       root: projectRoot,
-      lane,
-      extentSource,
+      lane: population.lane,
+      extentSource: extentSourceOf(population),
       durationMs: Date.now() - startTime,
-      collections: collectionsOutput,
+      collections: collectionCounts(registry.getCollectionStats(), collection),
       verbose: options.verbose ?? false,
     });
-    writeStructuredOutput(payload, options.format);
-
-    process.exit(ExitCode.OK);
+    endWithReport('resources scan', report, format);
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'Scan', options.format);
+    endWithRefusal('resources scan', refusalCodeOf(error), error, format, { strict: false }, NOTHING_FINISHED);
   }
 }

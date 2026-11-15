@@ -1,14 +1,12 @@
 /**
- * `parseFileCached` — the cached replacement for `parseMarkdown` / `parseHtml`.
+ * `parseFileCached` — the one file lane: it reads once, keys the bytes, consults
+ * the cache, and parses a miss in the bounded worker.
  *
- * Those two read the file themselves and hand the bytes straight to a parser, so
- * they bypass the cache entirely. `parseFileCached` reads once, keys the bytes,
- * and consults the cache in between — and eight shipped call sites across
- * agent-skills, cli and rag-lancedb now go through it. The oracle for "did that
- * change anything?" is therefore the uncached function itself: every equivalence
- * test below compares against a real `parseMarkdown`/`parseHtml` call rather than
- * against another `parseFileCached` run, so a bug shared by both cache paths
- * cannot hide behind its own reflection.
+ * The oracle for "does the route change the facts?" is the parser composer run
+ * in-process over the same file (`parseMarkdownFile` / `parseHtmlFile`, test
+ * helpers): every equivalence test below compares against that rather than
+ * against another `parseFileCached` run, so a bug shared by both cache paths, or
+ * by the worker's wire, cannot hide behind its own reflection.
  *
  * **Every cold/warm comparison also pins `cache.stats`.** The cache is
  * content-addressed and fail-soft, which makes it invisible: one that never hits
@@ -22,13 +20,14 @@
 
 import { promises as fs } from 'node:fs';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { FS_FAULT_CODE, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { ParserKind } from '../../src/content-key.js';
-import { parseHtml } from '../../src/html-link-parser.js';
-import { type ParseResult, parseMarkdown } from '../../src/link-parser.js';
-import { ParseCache, type ParseCacheStats, parseFileCached } from '../../src/parse-cache.js';
+import type { ParseResult } from '../../src/link-parser.js';
+import { ParseCache, type ParseCacheStats } from '../../src/parse-cache.js';
+import { parseFileCached } from '../../src/parse-dispatcher.js';
+import { parseHtmlFile, parseMarkdownFile } from '../test-helpers.js';
 
 // ---------------------------------------------------------------------------
 // Corpus
@@ -153,16 +152,16 @@ async function coldThenWarm(
   cacheDir: string,
 ): Promise<ColdWarm> {
   const coldCache = new ParseCache({ cacheDir });
-  const cold = await parseFileCached(filePath, parserKind, coldCache);
+  const cold = await parseFileCached(filePath, parserKind, { dispatcher: undefined, cache: coldCache });
   const warmCache = new ParseCache({ cacheDir });
-  const warm = await parseFileCached(filePath, parserKind, warmCache);
+  const warm = await parseFileCached(filePath, parserKind, { dispatcher: undefined, cache: warmCache });
   return { cold, warm, coldStats: coldCache.stats, warmStats: warmCache.stats };
 }
 
 /** Parse one file as BOTH kinds against one cache, markdown first. */
 async function bothKinds(filePath: string, cache: ParseCache): Promise<[ParseResult, ParseResult]> {
-  const asMarkdown = await parseFileCached(filePath, 'markdown', cache);
-  const asHtml = await parseFileCached(filePath, 'html', cache);
+  const asMarkdown = await parseFileCached(filePath, 'markdown', { dispatcher: undefined, cache });
+  const asHtml = await parseFileCached(filePath, 'html', { dispatcher: undefined, cache });
   return [asMarkdown, asHtml];
 }
 
@@ -220,7 +219,7 @@ describe('parseFileCached — equivalence with the uncached parsers', () => {
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
 
-  it('agrees with parseMarkdown cold and on a hit', async () => {
+  it('agrees with the in-process markdown composer cold and on a hit', async () => {
     const filePath = suite.file('guide.md');
     const pair = await coldThenWarm(filePath, 'markdown', await suite.freshCacheDir());
     const { cold, warm } = pair;
@@ -229,19 +228,19 @@ describe('parseFileCached — equivalence with the uncached parsers', () => {
     // happily over a cache that never hit anything at all.
     expectOneMissThenOneHit(pair);
 
-    const uncached = await parseMarkdown(filePath);
+    const uncached = await parseMarkdownFile(filePath);
     expect(cold).toStrictEqual(uncached);
     expect(warm).toStrictEqual(uncached);
   });
 
-  it('agrees with parseHtml cold and on a hit', async () => {
+  it('agrees with the in-process HTML parser cold and on a hit', async () => {
     const filePath = suite.file('page.html');
     const pair = await coldThenWarm(filePath, 'html', await suite.freshCacheDir());
     const { cold, warm } = pair;
 
     expectOneMissThenOneHit(pair);
 
-    const uncached = await parseHtml(filePath);
+    const uncached = await parseHtmlFile(filePath);
     expect(cold).toStrictEqual(uncached);
     expect(warm).toStrictEqual(uncached);
   });
@@ -256,7 +255,7 @@ describe('parseFileCached — equivalence with the uncached parsers', () => {
     // one of only two that survived that mutant before the gate was added.
     expectOneMissThenOneHit(pair);
 
-    // `parseMarkdown` publishes `stat().size`; `parseFileCached` publishes the
+    // the in-process oracle publishes the file's byte count; `parseFileCached` publishes the
     // byte length of what it read. For a regular file those are the same number,
     // and the whole-result comparisons above already depend on it — this pins
     // the claim directly so a divergence names itself instead of surfacing as an
@@ -302,8 +301,8 @@ describe('parseFileCached — cross-kind key separation', () => {
 
     // The extension says html; the caller said markdown. The caller wins — this
     // is the shape `lancedb-rag-provider.ts` relies on.
-    expect(asMarkdown).toStrictEqual(await parseMarkdown(filePath));
-    expect(asHtml).toStrictEqual(await parseHtml(filePath));
+    expect(asMarkdown).toStrictEqual(await parseMarkdownFile(filePath));
+    expect(asHtml).toStrictEqual(await parseHtmlFile(filePath));
 
     // Non-vacuous: the two answers genuinely differ, so being served the wrong
     // one would be visible.
@@ -327,10 +326,10 @@ describe('parseFileCached — fail-soft and failure propagation', () => {
     const page = suite.file('page.html');
 
     const disabled = new ParseCache({ cacheDir, enabled: false });
-    expect(await parseFileCached(guide, 'markdown', disabled)).toStrictEqual(
-      await parseMarkdown(guide),
+    expect(await parseFileCached(guide, 'markdown', { dispatcher: undefined, cache: disabled })).toStrictEqual(
+      await parseMarkdownFile(guide),
     );
-    expect(await parseFileCached(page, 'html', disabled)).toStrictEqual(await parseHtml(page));
+    expect(await parseFileCached(page, 'html', { dispatcher: undefined, cache: disabled })).toStrictEqual(await parseHtmlFile(page));
 
     // Every lookup is a miss, including the ones that short-circuit…
     expect(disabled.stats).toStrictEqual({ hits: 0, misses: 2, writeFailures: 0 });
@@ -343,20 +342,37 @@ describe('parseFileCached — fail-soft and failure propagation', () => {
     expect(await entryCount(cacheDir)).toBe(2);
   });
 
-  it('rejects when the file cannot be read', async () => {
+  it('rejects a file it cannot read with a classified source fault, naming the file', async () => {
     const cache = new ParseCache({ cacheDir: await suite.freshCacheDir() });
     const missing = suite.file('no-such-file.md');
 
-    await expect(parseFileCached(missing, 'markdown', cache)).rejects.toThrow(/ENOENT/);
+    await expect(parseFileCached(missing, 'markdown', { dispatcher: undefined, cache })).rejects.toMatchObject({
+      code: FS_FAULT_CODE,
+      side: 'source',
+      origin: 'content',
+      faultClass: 'absent',
+      errno: 'ENOENT',
+      message: expect.stringContaining(missing) as unknown,
+    });
 
-    // A read failure is the caller's, exactly as it was with `parseMarkdown`:
+    // A read failure is the caller's, as a read failure always is:
     // the cache is never consulted, so it cannot silently answer for a file it
     // has no bytes for.
     expect(cache.stats).toStrictEqual({ hits: 0, misses: 0, writeFailures: 0 });
 
     // The positive twin: the same cache on a real path resolves, so the
     // rejection above is about the missing file and not about the setup.
-    await expect(parseFileCached(suite.file('guide.md'), 'markdown', cache)).resolves.toBeDefined();
+    await expect(parseFileCached(suite.file('guide.md'), 'markdown', { dispatcher: undefined, cache })).resolves.toBeDefined();
+  });
+
+  it('classifies the read on the side the caller names: re-reading VAT\'s own output is a destination fault', async () => {
+    const missing = suite.file('built-output.md');
+
+    await expect(parseFileCached(missing, 'markdown', { dispatcher: undefined, side: 'destination' })).rejects.toMatchObject({
+      code: FS_FAULT_CODE,
+      side: 'destination',
+      faultClass: 'absent',
+    });
   });
 });
 
@@ -371,11 +387,11 @@ describe('parseFileCached — no aliasing across hits', () => {
 
     // Populate, then take two independent hits over the same entry.
     const cold = new ParseCache({ cacheDir });
-    await parseFileCached(filePath, 'markdown', cold);
+    await parseFileCached(filePath, 'markdown', { dispatcher: undefined, cache: cold });
     expect(cold.stats).toStrictEqual({ hits: 0, misses: 1, writeFailures: 0 });
 
     const warm = new ParseCache({ cacheDir });
-    const first = await parseFileCached(filePath, 'markdown', warm);
+    const first = await parseFileCached(filePath, 'markdown', { dispatcher: undefined, cache: warm });
     const firstHitStats = warm.stats;
 
     // `skill-packager.ts` assigns `link.resolvedId` in place while bundling. If
@@ -383,7 +399,7 @@ describe('parseFileCached — no aliasing across hits', () => {
     // change which branch another skill's link walker takes.
     firstLink(first).resolvedId = 'first-only';
 
-    const second = await parseFileCached(filePath, 'markdown', warm);
+    const second = await parseFileCached(filePath, 'markdown', { dispatcher: undefined, cache: warm });
 
     // Both reads were hits — a miss would re-parse and produce a fresh graph for
     // reasons that have nothing to do with the cache's aliasing behaviour, which

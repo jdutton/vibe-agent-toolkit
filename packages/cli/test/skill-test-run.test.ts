@@ -9,12 +9,13 @@
  *   - exit 1  when an internal/parse-failure error is thrown (InternalHarnessError)
  */
 
-import { chmodSync, existsSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import * as harness from '@vibe-agent-toolkit/agent-skills';
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { classifyFsFault, findProjectRoot, mkdirSyncReal, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as yaml from 'yaml';
@@ -264,17 +265,45 @@ function cleanupHarnessTempDirs(): void {
   }
 }
 
+/** An eval suite inside the project the unit tests run in, and the location a finding publishes for it. */
+const SUITE_LOCATION = 'skills/x/evals/evals.json';
+const SUITE_IN_PROJECT = safePath.join(findProjectRoot(process.cwd()) ?? process.cwd(), SUITE_LOCATION);
+
+/**
+ * A harness result with the fields its branch requires filled in: a refused run
+ * names its refusal, a completed one its evals — the one-eval default passing
+ * exactly when the harness said OK.
+ */
+function completedDefaults<T extends { exitCode: number }>(result: T): T & Record<string, unknown> {
+  if (result.exitCode === ExitCode.ERROR) return { reason: 'preflight', refusal: 'USAGE_INVALID', leftovers: [], ...result };
+  return {
+    leftovers: [],
+    examined: 1,
+    evals: [{ id: 'e1', passed: result.exitCode === ExitCode.OK }],
+    frictionReportPath: null,
+    evalsPath: SUITE_IN_PROJECT,
+    ...result,
+  };
+}
+
 // Mocks runSkillTestHarness with the given result, captures stdout/stderr writes
 // while runSkillTestRun executes, and returns the captured write payloads.
 async function runAndCaptureStreams(result: {
   harnessPath: string;
   exitCode: number;
-  summary: string;
+  description: string;
   resultsPath?: string;
   workspacesPath?: string;
+  reason?: string;
+  refusal?: string;
+  examined?: number;
+  evals?: ReadonlyArray<{ id: string; passed: boolean }>;
+  frictionReportPath?: string | null;
+  evalsPath?: string;
+  leftovers?: readonly unknown[];
 }): Promise<{ stdoutCalls: string[]; stderrCalls: string[] }> {
-  vi.spyOn(harness, 'runSkillTestHarness').mockResolvedValue(result);
-  vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+  vi.spyOn(harness, 'runSkillTestHarness').mockResolvedValue(completedDefaults(result) as never);
+  if (!vi.isMockFunction(process.exit)) vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
   const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);
   const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
 
@@ -286,15 +315,186 @@ async function runAndCaptureStreams(result: {
   };
 }
 
+/** The one document the run published on stdout, parsed. */
+function publishedDocument(stdoutCalls: readonly string[]): Record<string, unknown> {
+  return yaml.parse(stdoutCalls.join('')) as Record<string, unknown>;
+}
+
+// The run publishes the Report envelope: a failed eval is a FINDING (exit 1 derived
+// from the document), and a harness that could not run is a coded REFUSAL (exit 2).
+describe('vat skill test run (the published report)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('a failed eval is a findings report, exit 1', async () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const { stdoutCalls } = await runAndCaptureStreams({
+      harnessPath: '/h',
+      resultsPath: '/h/results',
+      exitCode: ExitCode.FINDINGS,
+      description: 'FAIL 1/2',
+      examined: 2,
+      evals: [{ id: 'passes', passed: true }, { id: 'fails', passed: false }],
+      frictionReportPath: '/h/results/friction.json',
+    });
+    const document = publishedDocument(stdoutCalls);
+
+    expect(document['status']).toBe('findings');
+    expect(document['examined']).toBe(2);
+    // `location` is the file to open — the suite — and `field` the eval inside it.
+    expect(document['findings']).toEqual([
+      expect.objectContaining({ code: 'SKILL_TEST_EVAL_FAILED', severity: 'error', location: SUITE_LOCATION, field: 'fails' }),
+    ]);
+    expect(document['data']).toMatchObject({
+      description: 'FAIL 1/2',
+      evals: [{ id: 'passes', passed: true }, { id: 'fails', passed: false }],
+      artifacts: { frictionReport: '/h/results/friction.json', outputDir: '/h' },
+    });
+    expect(exit).toHaveBeenLastCalledWith(ExitCode.FINDINGS);
+  });
+
+  // The run is DONE when a temp directory it made refuses to go: the leftover is a warning beside
+  // the verdict — never a refusal hiding it, never only a stderr line.
+  it('publishes a temp directory the harness could not remove as a TREE_CLEANUP_INCOMPLETE warning beside the run', async () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const leftover = classifyFsFault(
+      Object.assign(new Error('EBUSY: resource busy'), { code: 'EBUSY', path: '/tmp/vat-skill-test-ws-abc' }),
+      { side: 'environment', action: 'remove the temporary directory /tmp/vat-skill-test-ws-abc' },
+    );
+    const { stdoutCalls } = await runAndCaptureStreams({ harnessPath: '/h', exitCode: ExitCode.OK, description: 'PASS 1/1', leftovers: [leftover] });
+    const document = publishedDocument(stdoutCalls);
+
+    expect(document['findings']).toEqual([
+      expect.objectContaining({ code: 'TREE_CLEANUP_INCOMPLETE', severity: 'warning', link: '/tmp/vat-skill-test-ws-abc' }),
+    ]);
+    expect(document['data']).toMatchObject({ evals: [{ id: 'e1', passed: true }] });
+    expect(exit).toHaveBeenLastCalledWith(ExitCode.OK);
+  });
+
+  it('omits the location of a failed eval whose suite lies outside the project, keeping its field', async () => {
+    vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const { stdoutCalls } = await runAndCaptureStreams({
+      harnessPath: '/h',
+      exitCode: ExitCode.FINDINGS,
+      description: 'FAIL 0/1',
+      evals: [{ id: 'fails', passed: false }],
+      evalsPath: safePath.join(normalizedTmpdir(), 'vat-held-suite', 'evals.json'),
+    });
+    const [finding] = publishedDocument(stdoutCalls)['findings'] as Array<Record<string, unknown>>;
+
+    expect(finding).toMatchObject({ code: 'SKILL_TEST_EVAL_FAILED', field: 'fails' });
+    expect(finding).not.toHaveProperty('location');
+  });
+
+  // A build of the subject that fails keeps the refusal its CAUSE was coded with; an
+  // uncoded defect is VAT's, never the operator's; a packager refusal of the skill's
+  // own content is the T19/T20 finding, on a run that stopped before any eval.
+  it.each([
+    ['a coded cause (a link out of the tree being copied)', () => new VatError('COPY_LINK_ESCAPES_SOURCE', 'skills/x links outside'), 'INPUT_UNREADABLE', []],
+    ['an uncoded defect (a TypeError)', () => new TypeError("Cannot read properties of undefined (reading 'x')"), 'INTERNAL_ERROR', []],
+    [
+      'a packager refusal of the skill content',
+      () => new VatError(harness.SKILL_PACKAGING_INPUT_INVALID_CODE, 'files: source scripts/tool.py does not exist'),
+      'RUN_INCOMPLETE',
+      ['SKILL_PACKAGING_FAILED'],
+    ],
+  ] as const)('a subject build failing on %s publishes the refusal its cause names', async (_label, cause, code, findingCodes) => {
+    const { pkg } = setupDeclaredPoolFixtureWithPkgSpy();
+    pkg.mockRejectedValue(cause());
+    const harnessSpy = vi.spyOn(harness, 'runSkillTestHarness');
+    vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);
+    vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
+
+    await runSkillTestRun(DECLARED_POOL, { iUnderstandThisRunsSkillCode: true });
+    const document = publishedDocument(stdout.mock.calls.map((c) => String(c[0])));
+
+    expect(harnessSpy).not.toHaveBeenCalled();
+    expect(document['error']).toMatchObject({ code });
+    expect((document['findings'] as Array<{ code: string }>).map((f) => f.code)).toEqual(findingCodes);
+  });
+
+  it('--allow-eval-failure publishes the failed eval at warning, exit 0', async () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    vi.spyOn(harness, 'runSkillTestHarness').mockResolvedValue({
+      leftovers: [],
+      harnessPath: '/h', exitCode: ExitCode.OK, description: 'FAIL 0/1', examined: 1,
+      evals: [{ id: 'fails', passed: false }], frictionReportPath: null, evalsPath: SUITE_IN_PROJECT,
+    } as never);
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);
+    vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
+
+    await runSkillTestRun(PATH_SUBJECT, { allowEvalFailure: true });
+    const document = publishedDocument(stdout.mock.calls.map((c) => String(c[0])));
+
+    expect(document['findings']).toEqual([expect.objectContaining({ code: 'SKILL_TEST_EVAL_FAILED', severity: 'warning' })]);
+    expect(exit).toHaveBeenLastCalledWith(ExitCode.OK);
+  });
+
+  it('a preflight failure refuses with its code, exit 2', async () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const { stdoutCalls, stderrCalls } = await runAndCaptureStreams({
+      harnessPath: '/h',
+      exitCode: ExitCode.ERROR,
+      reason: 'preflight',
+      refusal: 'BACKEND_UNAVAILABLE',
+      description: 'Preflight failed:\n  ✗ claude binary: not reachable',
+    });
+    const document = publishedDocument(stdoutCalls);
+
+    expect(document['status']).toBe('error');
+    expect(document['error']).toMatchObject({ code: 'BACKEND_UNAVAILABLE' });
+    expect(stderrCalls).toContain('Reason: preflight\n');
+    expect(exit).toHaveBeenLastCalledWith(ExitCode.ERROR);
+  });
+
+  it.each([
+    ['a missing evals.json (bootstrap)', 'BootstrapNeededError', ['/h/evals/evals.json'], 'INPUT_UNREADABLE', 'bootstrap'],
+    ['a --no-build with no dist (SkillBuildError)', 'SkillBuildError', ['no built dist'], 'USAGE_INVALID', 'preflight'],
+    ['a held harness lock', 'HarnessLockBusyError', ['/h/.lock'], 'USAGE_INVALID', 'preflight'],
+    ['an internal harness error', 'InternalHarnessError', ['grading.json missing'], 'INTERNAL_ERROR', 'internal'],
+  ] as const)('a thrown error for %s refuses with its code', async (_label, className, args, code, reason) => {
+    const classes = await import('@vibe-agent-toolkit/agent-skills');
+    const Ctor = classes[className] as new (...a: string[]) => Error;
+    vi.spyOn(harness, 'runSkillTestHarness').mockRejectedValue(new Ctor(...args));
+    vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
+
+    await runSkillTestRun(PATH_SUBJECT, {});
+
+    expect(publishedDocument(stdout.mock.calls.map((c) => String(c[0])))['error']).toMatchObject({ code });
+    expect(stderr.mock.calls.map((c) => String(c[0]))).toContain(`Reason: ${reason}\n`);
+  });
+
+  // A `workspace:` companion is packaged INSIDE the harness, so its packager refusal reaches the
+  // command unwrapped (no SkillBuildError). It is still the author's broken skill, never a defect.
+  it.each([
+    ['a files: source that does not exist', harness.SKILL_PACKAGING_INPUT_INVALID_CODE],
+    ['a package its post-build checks failed', harness.SKILL_PACKAGE_CHECKS_FAILED_CODE],
+  ] as const)('a packager refusal thrown out of the harness (%s) is the packaging finding, never INTERNAL_ERROR', async (_label, code) => {
+    vi.spyOn(harness, 'runSkillTestHarness').mockRejectedValue(new VatError(code, "skill 'dep': guide.md links to missing.md, which does not exist"));
+    vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
+
+    await runSkillTestRun(PATH_SUBJECT, {});
+    const document = publishedDocument(stdout.mock.calls.map((c) => String(c[0])));
+
+    expect(document['error']).toMatchObject({ code: 'RUN_INCOMPLETE' });
+    expect(document['findings']).toEqual([expect.objectContaining({ code: 'SKILL_PACKAGING_FAILED', message: expect.stringContaining('missing.md') })]);
+    expect(stderr.mock.calls.map((c) => String(c[0]))).toContain('Reason: preflight\n');
+  });
+});
+
 describe('vat skill test run (orchestration)', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('exits 0 and prints the harness path on success', async () => {
-    vi.spyOn(harness, 'runSkillTestHarness').mockResolvedValue({
+    vi.spyOn(harness, 'runSkillTestHarness').mockResolvedValue(completedDefaults({
       harnessPath: '/h',
       exitCode: 0,
-      summary: 'PASS 3/3',
-    });
+      description: 'PASS 3/3',
+    }) as never);
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     await runSkillTestRun(PATH_SUBJECT, {});
     expect(exit).toHaveBeenCalledWith(0);
@@ -318,12 +518,12 @@ describe('vat skill test run (orchestration)', () => {
     expect(stderr.mock.calls.map((c) => String(c[0]))).toContain(`Reason: ${reason}\n`);
   });
 
-  it('surfaces the harness FINDINGS exit code unchanged — not remapped or swallowed', async () => {
-    vi.spyOn(harness, 'runSkillTestHarness').mockResolvedValue({
+  it('derives FINDINGS from a failed eval in the document — never an OK', async () => {
+    vi.spyOn(harness, 'runSkillTestHarness').mockResolvedValue(completedDefaults({
       harnessPath: '/h',
       exitCode: ExitCode.FINDINGS,
-      summary: 'FAIL 1/2',
-    });
+      description: 'FAIL 1/2',
+    }) as never);
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     await runSkillTestRun(PATH_SUBJECT, {});
     expect(exit).toHaveBeenCalledWith(ExitCode.FINDINGS);
@@ -451,7 +651,7 @@ async function expectPreflightExit2(
 function installRunSpies() {
   const harnessSpy = vi
     .spyOn(harness, 'runSkillTestHarness')
-    .mockResolvedValue({ harnessPath: '/h', exitCode: 0, summary: 'PASS 1/1' });
+    .mockResolvedValue(completedDefaults({ harnessPath: '/h', exitCode: 0, description: 'PASS 1/1' }) as never);
   vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
   vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);
   return { harnessSpy, stderrSpy: spyStderr() };
@@ -487,7 +687,7 @@ const FLAG_GRADER_MODEL = 'flag-grader';
 function stubGlobalTestConfig(testNode: Record<string, unknown>): void {
   const dir = createTestTempDir('vat-global-test-config-');
   const configPath = safePath.join(dir, CONFIG_FILENAME);
-  writeFileSync(configPath, yaml.stringify({ version: 1, test: testNode }));
+  writeFileSync(configPath, yaml.stringify({ test: testNode }));
   process.env['VAT_TEST_CONFIG'] = configPath;
 }
 
@@ -526,19 +726,13 @@ describe('vat skill test run (env plumbing)', () => {
     expect(opts.passEnv).toBeUndefined();
   });
 
-  it('threads --allow-eval-failure through to the harness opts as tolerateEvalFailure', async () => {
+  // The CLI decides a failed eval's severity; the harness reports verdicts, never a tolerance.
+  it('never hands --allow-eval-failure to the harness', async () => {
     const opts = await runAndCaptureOpts(ENV_TEST_SKILL, {
       allowEvalFailure: true,
       iUnderstandThisRunsSkillCode: true,
     });
-    expect(opts.tolerateEvalFailure).toBe(true);
-  });
-
-  it('leaves tolerateEvalFailure undefined by default (fail-closed on eval failure)', async () => {
-    const opts = await runAndCaptureOpts(ENV_TEST_SKILL, {
-      iUnderstandThisRunsSkillCode: true,
-    });
-    expect(opts.tolerateEvalFailure).toBeUndefined();
+    expect(opts).not.toHaveProperty('tolerateEvalFailure');
   });
 });
 
@@ -577,6 +771,23 @@ describe('vat skill test run (--evals resolves against the cwd)', () => {
     });
     expect(opts.evalsSubpath).toBeUndefined();
   });
+
+  // A reference on the command line that names nothing is the invocation's mistake,
+  // refused before the harness runs — never an INTERNAL_ERROR out of staging.
+  it.each([
+    ['--evals', { evals: '@vat-absent-fixture/pkg/evals.json' }],
+    ['a --with npm source', { with: ['dep=npm:@vat-absent-fixture/pkg@1.0.0/skill'] }],
+    ['a --with npm source with no version pin', { with: ['dep=npm:@vat-absent-fixture/pkg'] }],
+  ])('refuses %s that names nothing as USAGE_INVALID, never reaching the harness', async (_label, flags) => {
+    const { harnessSpy } = installRunSpies();
+    const stdout = vi.spyOn(process.stdout, 'write');
+    await runSkillTestRun(ENV_TEST_SKILL, { ...flags, iUnderstandThisRunsSkillCode: true });
+    expect(harnessSpy).not.toHaveBeenCalled();
+    expect(publishedDocument(stdout.mock.calls.map((c) => String(c[0])))['error']).toMatchObject({
+      code: 'USAGE_INVALID',
+      message: expect.stringContaining('@vat-absent-fixture/pkg') as unknown,
+    });
+  });
 });
 
 describe('vat skill test run (output routing)', () => {
@@ -585,16 +796,17 @@ describe('vat skill test run (output routing)', () => {
     cleanupHarnessTempDirs();
   });
 
-  it('writes Summary: to stdout and Harness: to stderr', async () => {
+  it('publishes the report on stdout, and the human Summary: and Harness: lines on stderr', async () => {
     const { stdoutCalls, stderrCalls } = await runAndCaptureStreams({
       harnessPath: liveHarnessDir(),
       exitCode: 0,
-      summary: 'PASS 2/2',
+      description: 'PASS 2/2',
     });
 
-    expect(stdoutCalls.some((s) => s.includes('Summary:'))).toBe(true); // Summary → stdout
+    expect(publishedDocument(stdoutCalls)['status']).toBe('ok'); // the document → stdout, and nothing else
+    expect(stdoutCalls.some((s) => s.includes('Summary:'))).toBe(false);
     expect(stderrCalls.some((s) => s.includes('Harness:'))).toBe(true); // Harness debug → stderr
-    expect(stderrCalls.some((s) => s.includes('Summary:'))).toBe(false); // Summary not on stderr
+    expect(stderrCalls).toContain('Summary: PASS 2/2\n'); // the human line → stderr
   });
 
   // The `Workspaces:` line above is guarded by a presence check because "a populated
@@ -607,7 +819,7 @@ describe('vat skill test run (output routing)', () => {
     const { stderrCalls } = await runAndCaptureStreams({
       harnessPath: reapedHarnessDir(),
       exitCode: 2,
-      summary: 'Security acknowledgment required.',
+      description: 'Security acknowledgment required.',
     });
 
     expect(stderrCalls.some((s) => s.includes('Harness:'))).toBe(false);
@@ -623,7 +835,7 @@ describe('vat skill test run (output routing)', () => {
       harnessPath: dir,
       resultsPath: safePath.join(dir, 'results'),
       exitCode: 0,
-      summary: 'PASS 2/2',
+      description: 'PASS 2/2',
     });
 
     expect(stderrCalls.some((s) => s.includes(`Harness: ${dir}`))).toBe(true);
@@ -638,7 +850,7 @@ describe('vat skill test run (output routing)', () => {
       harnessPath: '/tmp/h',
       resultsPath: '/tmp/h/results',
       exitCode: 0,
-      summary: 'PASS 2/2',
+      description: 'PASS 2/2',
     });
 
     expect(stderrCalls.some((s) => s.includes('Results: /tmp/h/results'))).toBe(true);
@@ -651,7 +863,7 @@ describe('vat skill test run (output routing)', () => {
     const { stderrCalls } = await runAndCaptureStreams({
       harnessPath: '/tmp/h',
       exitCode: 2,
-      summary: 'Security acknowledgment required.',
+      description: 'Security acknowledgment required.',
     });
 
     expect(stderrCalls.some((s) => s.includes('Results:'))).toBe(false);
@@ -665,7 +877,7 @@ describe('vat skill test run (output routing)', () => {
       harnessPath: '/tmp/h',
       workspacesPath: '/tmp/vat-skill-test-ws-abc',
       exitCode: 0,
-      summary: 'PASS 2/2',
+      description: 'PASS 2/2',
     });
 
     expect(stderrCalls.some((s) => s.includes('Workspaces: /tmp/vat-skill-test-ws-abc'))).toBe(true);
@@ -680,21 +892,22 @@ describe('vat skill test run (output routing)', () => {
       harnessPath: '/tmp/h',
       resultsPath: '/tmp/h/results',
       exitCode: 0,
-      summary: 'PASS 2/2',
+      description: 'PASS 2/2',
     });
 
     expect(stderrCalls.some((s) => s.includes('Workspaces:'))).toBe(false);
   });
 
-  it('does not write Summary: to stderr on non-zero exit', async () => {
+  it('keeps the human Summary: line off stdout on a failed eval too', async () => {
     const { stdoutCalls, stderrCalls } = await runAndCaptureStreams({
       harnessPath: '/tmp/h',
       exitCode: 1,
-      summary: 'FAIL 1/3',
+      description: 'FAIL 1/3',
     });
 
-    expect(stdoutCalls.some((s) => s.includes('Summary:'))).toBe(true);
-    expect(stderrCalls.some((s) => s.includes('Summary:'))).toBe(false);
+    expect(publishedDocument(stdoutCalls)['status']).toBe('findings');
+    expect(stdoutCalls.some((s) => s.includes('Summary:'))).toBe(false);
+    expect(stderrCalls).toContain('Summary: FAIL 1/3\n');
   });
 });
 
@@ -787,7 +1000,7 @@ describe('vat skill test run (path-target config-blind warning — #7)', () => {
     const { stderrCalls } = await runAndCaptureStreams({
       harnessPath: '/tmp/h',
       exitCode: 0,
-      summary: 'PASS 1/1',
+      description: 'PASS 1/1',
     });
     expect(stderrCalls.some((s) => s.includes('maps to no declared skill'))).toBe(true);
     expect(stderrCalls.some((s) => s.includes('Pass the skill NAME'))).toBe(true);
@@ -864,7 +1077,7 @@ describe('resolveSubjectForTest (run.ts subject resolution)', () => {
     const fx = setupReferenceFixture({ pool: ['declared'] });
     resetSkillDiscoveryCache();
     await expect(
-      resolveSubjectForTest('undeclared', fx.root, { noBuild: false, dryRun: false, acknowledged: false }, newBuildMemo(), undefined),
+      resolveSubjectForTest('undeclared', fx.root, { noBuild: false, dryRun: false, acknowledged: false, explicitAck: false }, newBuildMemo(), undefined),
     ).rejects.toThrow(/no skill named 'undeclared'/);
   });
 
@@ -872,7 +1085,7 @@ describe('resolveSubjectForTest (run.ts subject resolution)', () => {
     const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
     resetSkillDiscoveryCache();
     await expect(
-      resolveSubjectForTest(DECLARED_POOL, fx.root, { noBuild: true, dryRun: false, acknowledged: false }, newBuildMemo(), undefined),
+      resolveSubjectForTest(DECLARED_POOL, fx.root, { noBuild: true, dryRun: false, acknowledged: false, explicitAck: false }, newBuildMemo(), undefined),
     ).rejects.toThrow(/no built dist/);
   });
 
@@ -881,6 +1094,7 @@ describe('resolveSubjectForTest (run.ts subject resolution)', () => {
       noBuild: false,
       dryRun: false,
       acknowledged: false,
+      explicitAck: false,
     }, newBuildMemo(), undefined);
     expect(out.subjectSource).toEqual({ path: './some/dist' });
     expect(out.rebuilt).toBe(false);
@@ -893,6 +1107,7 @@ describe('resolveSubjectForTest (run.ts subject resolution)', () => {
       noBuild: false,
       dryRun: false,
       acknowledged: false,
+      explicitAck: false,
     }, newBuildMemo(), undefined);
     expect(out.wouldBuild).toBe(false); // staged as-is, never rebuilt
     expect(out.linkedToDeclaredSkill).toBe(true);
@@ -998,7 +1213,7 @@ describe('resolveSubjectForTest (an in-place subject — publish: false — is s
 
 // Stage a declared-pool fixture, spy packageSkill, and resolve the buildable
 // subject for the given gate inputs — shared by the ack-present / dry-run cases.
-async function resolveBuildableWithPkgSpy(opts: { dryRun: boolean; acknowledged: boolean }) {
+async function resolveBuildableWithPkgSpy(opts: { dryRun: boolean; acknowledged: boolean; explicitAck: boolean }) {
   const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
   resetSkillDiscoveryCache();
   const pkg = spyPackageSkillCreatingDist();
@@ -1006,6 +1221,7 @@ async function resolveBuildableWithPkgSpy(opts: { dryRun: boolean; acknowledged:
     noBuild: false,
     dryRun: opts.dryRun,
     acknowledged: opts.acknowledged,
+    explicitAck: opts.explicitAck,
   }, newBuildMemo(), undefined);
   return { out, pkg };
 }
@@ -1023,7 +1239,7 @@ describe('resolveSubjectForTest (security ack gates the build — M2)', () => {
       resolveSubjectForTest(
         DECLARED_POOL,
         fx.root,
-        { noBuild: false, dryRun: false, acknowledged: false },
+        { noBuild: false, dryRun: false, acknowledged: false, explicitAck: false },
         newBuildMemo(),
         // An ARBITRARY committed shell command — must NOT run without the ack.
         'echo pwned > /tmp/pwned',
@@ -1041,7 +1257,7 @@ describe('resolveSubjectForTest (security ack gates the build — M2)', () => {
   });
 
   it('--dry-run with ack ABSENT does NOT trigger SecurityAckError (no build runs)', async () => {
-    const { out, pkg } = await resolveBuildableWithPkgSpy({ dryRun: true, acknowledged: false });
+    const { out, pkg } = await resolveBuildableWithPkgSpy({ dryRun: true, acknowledged: false, explicitAck: false });
     expect(pkg).not.toHaveBeenCalled();
     expect(out.wouldBuild).toBe(true);
   });
@@ -1054,7 +1270,7 @@ describe('runSkillTestRun (security ack gates the build end-to-end — M2)', () 
     const { pkg } = setupDeclaredPoolFixtureWithPkgSpy();
     const harnessSpy = vi
       .spyOn(harness, 'runSkillTestHarness')
-      .mockResolvedValue({ harnessPath: '/h', exitCode: 0, summary: '' });
+      .mockResolvedValue(completedDefaults({ harnessPath: '/h', exitCode: 0, description: '' }) as never);
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);
     vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
@@ -1104,7 +1320,7 @@ describe('resolveCompanionSpec (companion build resolution — issue #158)', () 
         'companion',
         { path: dirname(fx.poolSkillMd(DECLARED_POOL)) },
         fx.root,
-        { noBuild: false, dryRun: false, acknowledged: false },
+        { noBuild: false, dryRun: false, acknowledged: false, explicitAck: false },
         false,
         newBuildMemo(),
       ),
@@ -1152,7 +1368,7 @@ describe('resolveCompanionSpec (companion build resolution — issue #158)', () 
         'companion',
         { path: dirname(fx.poolSkillMd(DECLARED_POOL)) },
         fx.root,
-        { noBuild: true, dryRun: false, acknowledged: false },
+        { noBuild: true, dryRun: false, acknowledged: false, explicitAck: false },
         false,
         newBuildMemo(),
       ),
@@ -1169,7 +1385,7 @@ describe('resolveCompanionSpec (companion build resolution — issue #158)', () 
       COMPANION_ALIAS,
       { path: sourceDir },
       fx.root,
-      { noBuild: true, dryRun: false, acknowledged: false },
+      { noBuild: true, dryRun: false, acknowledged: false, explicitAck: false },
       true,
       newBuildMemo(),
     );
@@ -1300,7 +1516,7 @@ describe('resolveCompanionSpec (the OPTIONAL catch is narrow, and failures name 
         COMPANION_ALIAS,
         { path: dirname(fx.poolSkillMd(DECLARED_POOL)) },
         fx.root,
-        { noBuild: false, dryRun: false, acknowledged: false },
+        { noBuild: false, dryRun: false, acknowledged: false, explicitAck: false },
         true,
         newBuildMemo(),
       ),
@@ -1346,7 +1562,7 @@ describe('resolveCompanionSpec (the OPTIONAL catch is narrow, and failures name 
       COMPANION_ALIAS,
       { path: sourceDir },
       fx.root,
-      { noBuild: true, dryRun: false, acknowledged: false },
+      { noBuild: true, dryRun: false, acknowledged: false, explicitAck: false },
       true,
       newBuildMemo(),
     );
@@ -1490,6 +1706,27 @@ describe('buildDeclaredSkill memoization + dist verification', () => {
     });
   });
 
+  // The real packager, a previous dist on disk, and a skill whose package now fails its own
+  // post-build checks: the build must FAIL naming the findings — never test the previous bytes
+  // while reporting them rebuilt, and never "produced no output" over the real reason.
+  it('a package that fails its own checks fails the build naming the findings, the previous dist untouched and never reported rebuilt', async () => {
+    const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
+    resetSkillDiscoveryCache();
+    const previous = safePath.join(fx.poolDistDir(DECLARED_POOL), 'SKILL.md');
+    mkdirSyncReal(fx.poolDistDir(DECLARED_POOL), { recursive: true });
+    writeFileSync(previous, 'PREVIOUS BUILD\n');
+    writeFileSync(fx.poolSkillMd(DECLARED_POOL), `${readFileSync(fx.poolSkillMd(DECLARED_POOL), 'utf-8')}\nSee [the guide](./missing-guide.md).\n`);
+    const { SkillBuildError, SkillPackageChecksFailedError } = await import('@vibe-agent-toolkit/agent-skills');
+
+    const error = await companionBuildError(dirname(fx.poolSkillMd(DECLARED_POOL)), fx.root, false);
+
+    expect(error).toBeInstanceOf(SkillBuildError);
+    expect((error as Error).cause).toBeInstanceOf(SkillPackageChecksFailedError);
+    expect(errorMessage(error)).toContain('missing-guide.md');
+    expect(errorMessage(error)).not.toContain('reported success');
+    expect(readFileSync(previous, 'utf-8')).toBe('PREVIOUS BUILD\n');
+  });
+
   it('a build that reports success but writes nothing → SkillBuildError naming the skill and the missing dist', async () => {
     const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
     resetSkillDiscoveryCache();
@@ -1561,7 +1798,7 @@ describe('buildDeclaredSkill security-ack ordering (memo lookup must never prece
         'companion',
         { path: sourceDir },
         fx.root,
-        { noBuild: false, dryRun: false, acknowledged: false },
+        { noBuild: false, dryRun: false, acknowledged: false, explicitAck: false },
         false,
         memo,
       ),
@@ -1703,7 +1940,6 @@ function setupNameBasenameMismatchFixture(buildHook: string): { root: string; sk
     `---\nname: ${MISMATCH_SKILL_NAME}\ndescription: Synthetic skill whose declared name differs from its directory basename.\n---\n\n# ${MISMATCH_SKILL_NAME}\n\nBody.\n`,
   );
   const config = {
-    version: 1,
     skills: {
       include: ['skills/*/SKILL.md'],
       config: { [MISMATCH_SKILL_NAME]: { test: { build: buildHook } } },
@@ -1746,7 +1982,7 @@ describe('runSkillTestRun (a broken COMPANION config exits 2, not 1)', () => {
     resetSkillDiscoveryCache();
     const nested = nestedOf(fx);
     // Break ONLY the nested config (unparseable YAML: an unterminated flow sequence).
-    writeFileSync(safePath.join(nested.root, CONFIG_FILENAME), 'version: 1\nskills: [unclosed\n');
+    writeFileSync(safePath.join(nested.root, CONFIG_FILENAME), 'skills: [unclosed\n');
     vi.spyOn(process, 'cwd').mockReturnValue(fx.root);
     const harnessSpy = vi.spyOn(harness, 'runSkillTestHarness');
     vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);

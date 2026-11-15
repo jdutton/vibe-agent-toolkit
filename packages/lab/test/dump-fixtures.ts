@@ -9,7 +9,7 @@
 
 import { mkdir, writeFile } from 'node:fs/promises';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, safePath } from '@vibe-agent-toolkit/utils';
 
 
 /**
@@ -31,8 +31,8 @@ export async function writeDumpDir(
 ): Promise<string> {
   const directory = safePath.join(root, name);
   await mkdir(directory, { recursive: true });
-  for (const [file, content] of Object.entries(files)) {
-    await writeFile(safePath.join(directory, file), content, 'utf-8');
-  }
+  await forEachInOrder(Object.entries(files), ([file, content]) =>
+    writeFile(safePath.join(directory, file), content, 'utf-8'),
+  );
   return directory;
 }

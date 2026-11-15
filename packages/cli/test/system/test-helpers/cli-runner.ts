@@ -13,6 +13,8 @@ import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { expect } from 'vitest';
 import * as yaml from 'yaml';
 
+import { RESOURCES_VALIDATE_REPORT_SCHEMA } from '../../../src/commands/resources/validate-schema.js';
+
 import { setupTestProject } from './project-setup.js';
 
 /**
@@ -147,30 +149,27 @@ export function executeValidateAndParse(
 /**
  * Assert validation failure and check that the expected error string(s) appear
  * in the command's output (combined stdout + stderr). Runs the CLI once — the
- * YAML output carries the error details (file paths, field names, AJV messages)
- * that earlier versions of this helper re-checked via a second `--format text`
- * invocation.
+ * report carries the error details (file paths, field names, AJV messages) in
+ * each finding's `location` and `message`.
  *
- * Runs with `--verbose`: the default document publishes per-file COUNTS plus a
- * `codes` tally, and this helper's whole contract is that a finding's MESSAGE
- * text (AJV wording, offending field name) appears in the output — which only
- * the verbose form carries. `status`, `errorsFound` and the exit code asserted
- * below are run-level totals and are identical in both modes.
+ * The report is parsed with `RESOURCES_VALIDATE_REPORT_SCHEMA`, so a document
+ * the published schema would refuse fails here too.
  *
  * @param expectedInOutput  Single string or array of strings that must all
  *                          appear somewhere in the combined stdout/stderr.
- * @returns { result, parsed } for additional assertions (e.g. errorsFound).
+ * @returns { result, parsed } for additional assertions (e.g. `summary.errors`).
  */
 export function assertValidationFailureWithError(
   binPath: string,
   projectDir: string,
   expectedInOutput: string | string[]
 ): { result: CliResult; parsed: Record<string, unknown> } {
-  const { result, parsed } = executeValidateAndParse(binPath, projectDir, ['--verbose']);
+  const { result, parsed } = executeValidateAndParse(binPath, projectDir);
 
   expect(result.status).toBe(1);
-  expect(parsed.status).toBe('error');
-  expect(parsed.errorsFound).toBeGreaterThan(0);
+  const report = RESOURCES_VALIDATE_REPORT_SCHEMA.parse(parsed);
+  expect(report.status).toBe('findings');
+  expect(report.summary.errors).toBeGreaterThan(0);
 
   const combined = result.stdout + result.stderr;
   const expectedList = Array.isArray(expectedInOutput) ? expectedInOutput : [expectedInOutput];
@@ -203,30 +202,6 @@ export function testConfigError(
     encoding: 'utf-8',
     cwd: projectDir,
   });
-}
-
-/**
- * Assert that `vat inventory <path>` exits 0, emits kind: plugin, and
- * surfaces at least one parse error in the `parseErrors[]` field.
- *
- * Used by inventory tests that exercise error-recovery paths (broken
- * plugin.json, non-existent directory, etc.). Extracted here to remove
- * the repeated assertion block across multiple `describe` groups.
- */
-export function assertInventoryHasParseErrors(
-  binPath: string,
-  targetPath: string,
-): void {
-  const result = executeCli(binPath, ['inventory', targetPath]);
-
-  expect(result.status).toBe(0);
-
-  const parsed = parseYamlOutput(result.stdout);
-  expect(parsed['kind']).toBe('plugin');
-
-  const parseErrors = parsed['parseErrors'] as unknown[];
-  expect(Array.isArray(parseErrors)).toBe(true);
-  expect(parseErrors.length).toBeGreaterThan(0);
 }
 
 /**

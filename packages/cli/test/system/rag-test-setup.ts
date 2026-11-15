@@ -15,4 +15,4 @@
 export {getTestOutputDir} from '@vibe-agent-toolkit/utils/testing';
 export {afterAll, beforeAll, it} from 'vitest';
 export {describe, executeCliAndParseYaml, expect, fs, getBinPath} from './test-common.js';
-export {executeRagCommandInEmptyProject, executeRagQueryAndExpectSuccess, setupIndexedRagTest, setupRagTestSuite} from './test-helpers/index.js';
+export {executeRagCommandInEmptyProject, executeRagQueryAndExpectSuccess, FINDER_DS_STORE, setupIndexedRagTest, setupRagTestSuite} from './test-helpers/index.js';

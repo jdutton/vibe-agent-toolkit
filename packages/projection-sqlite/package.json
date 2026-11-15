@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/projection-sqlite",
-  "version": "0.2.0-rc.8",
+  "version": "0.2.0-rc.15",
   "description": "SQLite-backed projection store for VAT, on Node's built-in node:sqlite",
   "type": "module",
   "main": "./dist/index.js",
@@ -21,7 +21,8 @@
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "VAT_LINT_TASK=1 eslint . --max-warnings=0"
   },
   "keywords": [
     "sqlite",
@@ -33,7 +34,7 @@
   "author": "Jeff Dutton",
   "license": "MIT",
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.16.0"
   },
   "dependencies": {
     "@vibe-agent-toolkit/resources": "workspace:*",

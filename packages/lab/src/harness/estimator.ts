@@ -40,28 +40,31 @@ export function quantile(sorted: readonly number[], p: number): number {
 }
 
 /**
- * The two order statistics an A/B reports for one arm.
+ * Which order statistic a facet's A/B takes across pairs.
  *
- * **`min` is the estimator, and `p25` is what qualifies it — never a median and
- * never a mean.** On a loaded machine every sample is the true cost plus a
- * non-negative contamination, so the *smallest* sample is the closest thing to
- * an uncontaminated observation the run produced; a median hands the machine a
- * vote proportional to how busy it was. The failure is worse than general
- * noisiness in this harness specifically: each instrument gets its own
- * parse-cache namespace, so an arm's first invocation is systematically cold, and
- * with a handful of samples one cold repeat is enough to drag a median while
- * leaving the min untouched.
+ * **`min` for a cost the machine only ever adds to, `median` for one it moves both ways.** A time
+ * is the true cost plus a non-negative contamination, so the smallest sample is the cleanest one
+ * and a median hands a busy machine a vote (and each instrument's first, cold invocation drags it).
+ * A peak RSS is not: a garbage collection landing early or late moves it down as well as up, so
+ * its min is the luckiest collection, not the cleanest run.
+ */
+export type EstimatorKind = 'min' | 'median';
+
+/**
+ * The order statistics an A/B reports for one arm. Never a mean.
  *
- * `p25` travels with it because a min alone cannot be interrogated. Two arms
+ * `p25` travels with the min because a min alone cannot be interrogated. Two arms
  * whose mins differ by less than the gap between each arm's own min and p25 have
  * not shown anything, and a reader needs both numbers to see that.
  */
 export interface Estimate {
-  /** The estimator: the smallest sample. */
+  /** The smallest sample. */
   readonly min: number;
+  /** The middle sample. */
+  readonly median: number;
   /** The first quartile, as the spread that qualifies {@link Estimate.min}. */
   readonly p25: number;
-  /** Every sample, in the order it was taken, so a reader can check the two above. */
+  /** Every sample, in the order it was taken, so a reader can check the statistics above. */
   readonly samples: readonly number[];
 }
 
@@ -73,7 +76,7 @@ export interface Estimate {
  * inventing one turns "we never ran it" into a spectacular improvement.
  *
  * @param samples - The samples, in any order
- * @returns The min, the first quartile, and the samples as given
+ * @returns The min, the first quartile, the median, and the samples as given
  * @throws {Error} When `samples` is empty
  */
 export function estimate(samples: readonly number[]): Estimate {
@@ -85,5 +88,5 @@ export function estimate(samples: readonly number[]): Estimate {
     );
   }
   const sorted = [...samples].sort((a, b) => a - b);
-  return { min: quantile(sorted, 0), p25: quantile(sorted, 0.25), samples: [...samples] };
+  return { min: quantile(sorted, 0), p25: quantile(sorted, 0.25), median: quantile(sorted, 0.5), samples: [...samples] };
 }

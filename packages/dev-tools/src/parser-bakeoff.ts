@@ -90,10 +90,9 @@
 
 import { readFile } from 'node:fs/promises';
 
-// The subpath, not the barrel: the barrel is loaded by commands that must never
-// pay for the parser, so it deliberately does not re-export this.
-import { parseMarkdownContent } from '@vibe-agent-toolkit/resources/link-parser';
-import { createMarkdownProcessor } from '@vibe-agent-toolkit/resources/markdown-processor';
+// The conformance harness subpath, not the barrel: it is the one sanctioned
+// in-process route to the parser, for private tooling that times it on purpose.
+import { createMarkdownProcessor, parseMarkdownContent } from '@vibe-agent-toolkit/resources/parse-conformance';
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { safeExecResult } from '@vibe-agent-toolkit/utils/process';
@@ -201,7 +200,7 @@ interface ScanReport {
  * @param corpus - The project to scan
  * @returns Every markdown document, content already read
  */
-async function readCorpus(corpus: string): Promise<Document[]> {
+function readCorpus(corpus: string): Promise<Document[]> {
   const scan = safeExecResult('node', [
     VAT_BIN,
     'resources',
@@ -469,7 +468,7 @@ async function main(): Promise<void> {
 // vitest's own argv as a corpus path.
 //
 // ⛔ NOT `import.meta.main` — undefined before Node 24.2 / 22.18, and this
-// repo's floor is 22.13.0, so that form is silently always-false there.
+// repo's floor is 22.16.0, so that form is silently always-false there.
 if (isEntrypoint(import.meta.url)) {
   try {
     await main();

@@ -14,7 +14,7 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import AdmZip from 'adm-zip';
+import { ARCHIVE_LIMITS, extractArchive } from '@vibe-agent-toolkit/utils/archive';
 
 // Vitest shims `__dirname` even in ESM, so this module worked under the test
 // runner while failing under plain `tsx` with ERR_AMBIGUOUS_MODULE_SYNTAX —
@@ -44,10 +44,8 @@ export async function getTestFixturesPath(): Promise<string> {
   // Path to ZIP file (trusted, committed to repository)
   const zipPath = safePath.join(moduleDir, '../fixtures/claude-plugins-snapshot.zip');
 
-  // Extract ZIP (fast on Windows, cross-platform using adm-zip)
-  const zip = new AdmZip(zipPath);
-   
-  zip.extractAllTo(tempBase, true);
+  // Extract ZIP through the one archive primitive, as an install does (fast on Windows, cross-platform)
+  await extractArchive({ file: zipPath, side: 'source' }, tempBase, { format: 'zip', limits: ARCHIVE_LIMITS });
 
   // Path to extracted fixtures
   extractedFixturesPath = safePath.join(tempBase, 'claude-plugins-snapshot');

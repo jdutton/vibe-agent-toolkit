@@ -8,6 +8,7 @@
 
 import type { InstrumentVersion, SubjectRef, SubjectVersion } from '../envelope/coordinate.js';
 
+import type { ArmEnvironment } from './arm-env.js';
 import type { MeasuredCommandSpec } from './commands.js';
 
 /**
@@ -30,7 +31,7 @@ export type InstrumentSource =
       readonly path: string;
     }
   | {
-      /** A published version, run via `npx <spec>`. */
+      /** A published version: installed under the arms root, its cli entry run with node (`npx-install.ts`). */
       readonly kind: 'npx';
       readonly spec: string;
     };
@@ -39,7 +40,7 @@ export type InstrumentSource =
 export interface ResolvedInstrument {
   /** Executable to spawn. */
   readonly command: string;
-  /** Arguments that precede the vat subcommand (a script path, or npx's spec). */
+  /** Arguments that precede the vat subcommand (the entry script). */
   readonly leadingArgs: readonly string[];
   /** Axis C, as it will appear in every report this instrument produces. */
   readonly version: InstrumentVersion;
@@ -51,7 +52,7 @@ export interface ResolvedInstrument {
    * that makes a report from one machine incomparable to every other.
    *
    * **`undefined` for an `npx` instrument, and that is not a gap.** A published
-   * package is unpacked somewhere inside a cache directory whose path is
+   * package is installed somewhere under the arms root, a path that is
    * arbitrary, and every file in it sits under `node_modules`, which the site
    * normalizer already keys on. Inventing a root here would name a temp
    * directory that means nothing to a later reader.
@@ -78,13 +79,12 @@ export interface ResolvedSubject {
 }
 
 /**
- * Whether vat's caches were left in place or cleared before each repeat.
+ * An arm's cache state: `cold` deletes the arm's own store and empties its
+ * `tmp/` before every repeat; `warm` primes it once and deletes nothing.
  *
- * A harness concern rather than a facet one: clearing the cache is done by
- * running `vat cache clear`, which is an instrument invocation like any other.
- * It lives here so that every measurement facet shares one spelling — a `perf`
- * report and an `io` report captured `cold` must mean the same thing by
- * construction, and a facet that owned its own copy could drift.
+ * A harness concern rather than a facet one, so every measurement facet shares
+ * one spelling — a `perf` report and an `io` report captured `cold` must mean
+ * the same thing by construction. See `repeat.ts`.
  */
 export type CacheMode = 'warm' | 'cold';
 
@@ -153,10 +153,30 @@ export interface CaptureRequest {
   readonly runs: number;
   readonly cache: CacheMode;
   readonly timeoutMs?: number;
-  /** Extra environment for every child, the cache clear included. */
-  readonly env?: Readonly<Record<string, string>>;
+  /**
+   * The caller's own environment for every VAT child, layered over the arm's
+   * cleared one (see `repeat.ts`).
+   *
+   * Required: see {@link RunOptions.env}. `EMPTY_ARM_ENVIRONMENT` when
+   * the arm sets nothing.
+   */
+  readonly env: ArmEnvironment;
+  /**
+   * Where this capture's arms live: `<arms root>/<build>-<command>-<cache>/`
+   * (see `arm-dirs.ts`), never under `--out`. Required: a capture with no arm directories would run
+   * in the developer's own store, temp directory and home.
+   */
+  readonly arms: CaptureArms;
   /** Wall-clock stamp for the report, supplied so the caller owns the clock. */
   readonly capturedAt: string;
+}
+
+/** The part of an arm a capture names; the command and the cache mode name the rest. */
+export interface CaptureArms {
+  /** The invocation's arms root, from `openArmsRoot` — outside every subject. */
+  readonly root: string;
+  /** The build's alias. */
+  readonly build: string;
 }
 
 /** One invocation of a vat command. */
@@ -171,6 +191,13 @@ export interface RunResult {
    * check this before letting a sample into a statistic.
    */
   readonly exitCode: number | null;
+  /**
+   * Whether the process started. `false` when the spawn itself failed (ENOENT,
+   * E2BIG, a command that could not be resolved): nothing ran, so `exitCode` is
+   * `null`. A started process with a `null` exit code was killed (a timeout, a
+   * signal, a full output buffer). `runExit` reads the two together.
+   */
+  readonly started: boolean;
   readonly stdout: string;
   readonly stderr: string;
   /** Set when the spawn itself failed (ENOENT, timeout kill, E2BIG). */
@@ -182,14 +209,20 @@ export interface RunOptions {
   /** Working directory for the child. */
   readonly cwd: string;
   /**
-   * Extra environment for the child, merged over `process.env`.
+   * The arm's environment: `process.env` minus the arm-owned keys minus
+   * `unset`, plus `set` — see `arm-env.ts`.
    *
    * **Merged, never replaced.** The I/O facet works by `NODE_OPTIONS=--require`
    * and vat's own launcher spawns a second node process for the real binary; a
    * harness that replaced `env` wholesale would strip the preload and silently
    * measure the launcher alone.
+   *
+   * **Required, not optional.** The arm-owned keys (`VAT_BIN`, `VAT_ROOT_DIR`, …)
+   * are stripped from every child whether or not the caller thought about them;
+   * an optional field would be a seam whose omission compiles, and the omission
+   * is the leak.
    */
-  readonly env?: Readonly<Record<string, string>>;
+  readonly env: ArmEnvironment;
   /** Milliseconds before the child is killed. */
   readonly timeoutMs?: number;
 }

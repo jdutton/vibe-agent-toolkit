@@ -1,11 +1,12 @@
 /**
  * `vat claude org invites` — manage organization invites via Admin API.
  */
-import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { Command } from 'commander';
 
+import { endWithRefusal, NOTHING_FINISHED } from '../../../utils/document-writer.js';
+
 import { addPaginationOptions, buildPaginationParams, executeOrgCommand } from './helpers.js';
-import { writeNotYetImplementedStub } from './stubs.js';
+import { NOT_IMPLEMENTED_MESSAGE } from './stubs.js';
 
 interface OrgInvite {
   id: string;
@@ -35,7 +36,7 @@ export function createOrgInvitesCommand(): Command {
   const listCmd = new Command('list');
   addPaginationOptions(listCmd.description('List organization invites'))
     .action(async (options: { limit?: string; afterId?: string; debug?: boolean }) => {
-      await executeOrgCommand('OrgInvitesList', options.debug, async ({ client }) => {
+      await executeOrgCommand('claude org invites list', options.debug, async ({ client }) => {
         const params = buildPaginationParams(options);
         const resp = await client.get<InvitesListResponse>('/v1/organizations/invites', params);
         return {
@@ -62,8 +63,7 @@ Example:
     .requiredOption('--email <email>', 'Email address to invite')
     .requiredOption('--role <role>', 'Role for the invitee (user, developer, admin)')
     .action(() => {
-      writeNotYetImplementedStub('org invites create');
-      process.exit(ExitCode.ERROR);
+      endWithRefusal('claude org invites create', 'NOT_IMPLEMENTED', NOT_IMPLEMENTED_MESSAGE, 'yaml', { strict: false }, NOTHING_FINISHED);
     });
 
   // delete (stub)
@@ -72,8 +72,7 @@ Example:
     .description('Delete an invite (not yet implemented)')
     .argument('<invite-id>', 'Invite ID')
     .action(() => {
-      writeNotYetImplementedStub('org invites delete');
-      process.exit(ExitCode.ERROR);
+      endWithRefusal('claude org invites delete', 'NOT_IMPLEMENTED', NOT_IMPLEMENTED_MESSAGE, 'yaml', { strict: false }, NOTHING_FINISHED);
     });
 
   command.addCommand(listCmd);

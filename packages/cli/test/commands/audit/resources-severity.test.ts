@@ -88,7 +88,7 @@ describe('vat audit applies resources.validation.severity', () => {
 
   it('suppresses a code the adopter set to ignore', async () => {
     const root = writeProject(
-      `version: 1\nresources:\n  validation:\n    severity:\n      ${MISSING_TARGET}: ignore\n${SKILLS_SECTION}`,
+      `resources:\n  validation:\n    severity:\n      ${MISSING_TARGET}: ignore\n${SKILLS_SECTION}`,
     );
 
     const issues = await auditIssues(root);
@@ -101,7 +101,7 @@ describe('vat audit applies resources.validation.severity', () => {
 
   it('promotes a code the adopter set to error', async () => {
     const root = writeProject(
-      `version: 1\nresources:\n  validation:\n    severity:\n      ${NAVIGATION_FILE}: error\n${SKILLS_SECTION}`,
+      `resources:\n  validation:\n    severity:\n      ${NAVIGATION_FILE}: error\n${SKILLS_SECTION}`,
     );
 
     const issues = await auditIssues(root);
@@ -116,7 +116,7 @@ describe('vat audit applies resources.validation.severity', () => {
    */
   it('lets the skills dial override it for the same code', async () => {
     const root = writeProject(
-      `version: 1\nresources:\n  validation:\n    severity:\n      ${NAVIGATION_FILE}: error\n`
+      `resources:\n  validation:\n    severity:\n      ${NAVIGATION_FILE}: error\n`
         + `skills:\n  include:\n    - "skills/*/SKILL.md"\n  defaults:\n    validation:\n      severity:\n        ${NAVIGATION_FILE}: info\n`,
     );
 
@@ -141,7 +141,7 @@ describe('vat audit applies resources.validation.severity', () => {
     writeFileSync(safePath.join(root, 'plug', '.claude-plugin', 'plugin.json'), '{ "name": "bare-plugin" }\n');
     writeFileSync(
       safePath.join(root, 'vibe-agent-toolkit.config.yaml'),
-      `version: 1\nresources:\n  validation:\n    severity:\n      ${PLUGIN_NO_DESCRIPTION}: error\n`,
+      `resources:\n  validation:\n    severity:\n      ${PLUGIN_NO_DESCRIPTION}: error\n`,
     );
 
     const issues = await auditIssues(root);

@@ -10,7 +10,7 @@
  * cannot tree-shake a dependency (a CJS package, or one reached through
  * `new URL(..., import.meta.url)`) inlines it into every consumer that touched
  * a path helper. The domains that carry weight each have their own entry:
- * `./crawl`, `./git`, `./process`, `./skill-test`, `./template`, `./yaml`.
+ * `./crawl`, `./git`, `./process`, `./skill-test`, `./yaml`.
  * `./skill-test` is there for a *transitive* reason rather than a direct one —
  * it declares no dependency itself, but spawning a headless agent goes through
  * `./process`, which reaches `which` and (because `safeExecSync` refuses `git`
@@ -26,6 +26,11 @@
 // The base of every error VAT throws on purpose; `code` is what a catch
 // block dispatches on, never `message`.
 export * from './errors/vat-error.js';
+export { RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE } from './errors/rag-index-empty.js';
+// The code and the one-entry predicate alone: the archive readers are on `./archive` (they load
+// `tar` and `adm-zip`), and a refusal map, or a lane that skips one member, needs only these.
+export { ARCHIVE_ENTRY_UNREADABLE_CODE, ARCHIVE_REFUSED_CODE, isArchiveEntryReadRefusal, placeOf as archiveEntryPlace } from './archive/entries.js';
+// The code alone: its error class is on `./crawl`, and the CLI's refusal map needs only the code.
 
 // Cross-platform path utilities
 export * from './path-utils.js';
@@ -43,6 +48,8 @@ export * from './dirent-kind.js';
 // of the repo is a migration ledger in `eslint.config.js`, not a covered claim.
 export * from './text-content.js';
 export * from './text-file.js';
+// THE one way a message shows text it did not write: `shownName` (quoted) and `visibleText`.
+export * from './shown-text.js';
 
 // Asset reference resolution (paths + npm bare specifiers)
 export * from './asset-reference.js';
@@ -66,7 +73,7 @@ export * from './asset-reference.js';
 //     published too, for the lazy caller that cannot enumerate its targets up
 //     front.
 //   - realpaths — `fillRealpaths` (every canonicalization, once, up front) plus
-//     `realpathFrom`.
+//     `realpathRowFrom`.
 //
 // In both, the row lookup IS the judge: the row is the answer, so there is
 // nothing left to keep internal.
@@ -86,13 +93,68 @@ export * from './asset-reference.js';
 // symptom is a type that cannot be imported, which surfaces the first time
 // someone tries — not a silent break in existing code.
 // The lookups themselves, plus the memo every fill shares.
-export { isFilesystemAccessError, isPathAbsentError } from './errors/errno.js';
 export {
-  copyDirectory,
-  CopyLinkEscapesSourceError,
-  FsLookupCache,
-  transientRefusalClause,
-} from './fs-utils.js';
+  FS_FAULT_ERRNOS_BY_CLASS,
+  fsFaultOf,
+  isAlreadyExistsError,
+  isBrokenPipeError,
+  isFileInTheWayError,
+  isFinalPathUnanswerableError,
+  isInvalidArgumentError,
+  isNoSuchEntryError,
+  isNotARegularFileError,
+  isPathAbsentError,
+  isProcessGoneError,
+  isRenameContentionError,
+  isSymlinkUnsupportedError,
+  isTimedOutError,
+  isUnresolvableLinkError,
+  isWouldBlockError,
+  LINK_CHAIN_REFUSED_CODE,
+} from './errors/errno-table.js';
+export type { FsFaultClass, FsFaultFacts } from './errors/errno-table.js';
+export {
+  assertUnresolvableLink,
+  classifyFsFault,
+  everywhere,
+  FS_FAULT_CODE,
+  FS_SIDES,
+  FsFaultError,
+  isCapacityFault,
+  isFsFaultError,
+  isLayoutFault,
+  linkResolutionFault,
+  refusedPathOf,
+  sideWithin,
+  SOURCE_ORIGINS,
+  withFsFault,
+  withFsFaultSync,
+} from './errors/fs-fault.js';
+export type { FsFaultContext, FsSide, SideOfPath, SourceOrigin } from './errors/fs-fault.js';
+export { fsBoundary } from './errors/fs-boundary.js';
+export { requireConfirmedAbsent, type ConfirmationContext, type ConfirmationProbe } from './errors/confirmed-absent.js';
+export { pathPresent, type PresenceMode } from './errors/path-present.js';
+// The one module that asks the kernel to follow a link, each call once the chain beneath `within` is read.
+export {
+  assertLocalChain,
+  type FollowedPathKind,
+  followedKind,
+  followedKindSync,
+  followedRealpath,
+  followedRealpathSync,
+  followedStat,
+  followedStatSync,
+  realpathNative,
+  realpathNativeSync,
+  requireFollowedStat,
+  requireFollowedStatSync,
+} from './link-following.js';
+// The one fold for "are these two names one entry on some volume".
+export { foldedSegment } from './name-fold.js';
+// Faults raised while a failure was being handled, recorded beside it (never on its cause chain).
+export { recordSuppressedFault, suppressedFaultsOf } from './errors/suppressed-faults.js';
+export type { FsBoundary, FsRoots } from './errors/fs-boundary.js';
+export { FsLookupCache, transientRefusalClause } from './fs-utils.js';
 // The two fill+judge pairs, in the order the note above lists them, plus the
 // lazy index a caller that cannot enumerate its targets up front reaches for.
 export {
@@ -100,7 +162,7 @@ export {
   fillPathSpellings,
   fillRealpaths,
   pathSpellingFrom,
-  realpathFrom,
+  realpathRowFrom,
   spellingWalkRoot,
 } from './fs-utils.js';
 export type {
@@ -112,6 +174,8 @@ export type {
   PathSpelling,
   PathSpellingRequest,
   PathSpellingTable,
+  RealpathFault,
+  RealpathRow,
   RealpathTable,
   VerifiedPrefix,
 } from './fs-utils.js';
@@ -143,11 +207,90 @@ export * from './zod-introspection.js';
 // Skill target resolution (cross-platform flat skill install paths)
 export * from './skill-targets.js';
 
+// The fail-closed guard for user state in a test process
+export { requireTestScratch, TEST_USER_STATE_UNDER } from './test-scratch-guard.js';
+
 // Glob pattern helpers (isGlob, staticGlobBase, globMagicRemainder)
 export * from './glob/glob-pattern.js';
 
 // Filesystem hashing (sha256 of raw file bytes)
 export * from './fs/file-hash.js';
+
+// Tree-change primitive: entry identity (`sameEntry`) for the planner and uninstall; the
+// readable-tree proof and the copy, with the two refusals a following walk raises.
+// The planner and applier every destructive verb goes through, and the file helpers beside them.
+export {
+  applyTreePlan,
+  applyTreePlanOrLeftover,
+  COPY_LINK_ESCAPES_SOURCE_CODE,
+  copyRegularFile,
+  copyTree,
+  CopyLinkEscapesSourceError,
+  DIRECTORY_WALK_REVISITED_CODE,
+  DirectoryWalkRevisitedError,
+  disposeTempDir,
+  disposeTempDirAfterFailure,
+  disposeTempDirSync,
+  entryIdentities,
+  FollowedWalk,
+  isLinkChainRefusedError,
+  HOST_PATH_FLAVOR,
+  isInsideByIdentity,
+  isParkedTreeEntry,
+  isTreeChangeResidue,
+  planTreeChanges,
+  proveTreeReadable,
+  readRegularFile,
+  makeDirectoryUnder,
+  refuseEscapingLinks,
+  renameFileAtomic,
+  replaceFile,
+  writeFileUnder,
+  sameEntry,
+  TEMP_DIR_OUTSIDE_TMPDIR_CODE,
+  TREE_CLEANUP_INCOMPLETE_CODE,
+  TREE_DEST_HOLDS_SOURCE_CODE,
+  TREE_DEST_NOT_OWNED_CODE,
+  TREE_DEST_OCCUPIED_CODE,
+  TREE_DESTS_OVERLAP_CODE,
+  TREE_ROLLBACK_INCOMPLETE_CODE,
+  TREE_SOURCE_HOLDS_DEST_CODE,
+  treeChain,
+  treeContainment,
+  TreeRollbackIncompleteError,
+  untrustedTextRefusal,
+  untrustedLinkRefusal,
+  isWithinUnder,
+  win32FoldedName,
+  withTempDir,
+} from './tree-change/index.js';
+export type {
+  ApplyOptions,
+  ApplyOutcome,
+  ApplyResult,
+  CopyOnto,
+  CopyRegularFileOptions,
+  CopyTreeOptions,
+  EntryContainment,
+  EntryKind,
+  EntrySameness,
+  FileContents,
+  Identity,
+  LinkContainmentCheck,
+  LinkPolicy,
+  Ownership,
+  OwnershipVerdict,
+  PlannedAction,
+  PlannedChange,
+  ProveTreeReadableOptions,
+  TempDirOutcome,
+  TreeChange,
+  TreeChangeWarning,
+  TreeFill,
+  TreePlan,
+  TreeRollbackStranded,
+  TreeWalkOptions,
+} from './tree-change/index.js';
 
 export { parseWholeNumberAtLeast } from './numeric-args.js';
 
@@ -155,6 +298,20 @@ export { parseWholeNumberAtLeast } from './numeric-args.js';
 // because three switches each had their own `!== '0'` comparison and none of
 // them turned off for `=false`.
 export { parseEnvBoolean } from './env-flag.js';
+
+// Ordered (`forEachInOrder`, `mapInOrder`, `everyInOrder`) and bounded-parallel
+// (`mapWithConcurrency`, `mapConcurrentFailingInOrder`) async iteration — what
+// replaces `await` in a loop, which `no-await-in-loop` refuses repo-wide — and
+// `promised`, a synchronous body behind a Promise-shaped API.
+export {
+  everyInOrder,
+  forEachInOrder,
+  FS_CONCURRENCY,
+  mapConcurrentFailingInOrder,
+  mapInOrder,
+  mapWithConcurrency,
+  promised,
+} from './in-order.js';
 
 // Machine-independent string ordering for hashed/serialized output — never `localeCompare`.
 export { compareCodeUnits } from './compare-code-units.js';
@@ -202,6 +359,26 @@ export {
   type CrawlTimingProcess,
 } from './crawl-timing.js';
 // The three `__*ForTest` seams of the same module are on `./testing`, not here.
+
+// Deterministic work counters (ADR I10): counted at the code sites that do the
+// work, always on, dumped per process when `VAT_WORK_COUNTERS` names a
+// directory. Here, at the bottom of the graph, because `git-run.ts` and
+// `git-snapshot.ts` count, and every package above counts through the same
+// slots. The three `__*ForTest` seams are on `./testing`.
+export {
+  countWork,
+  forbiddenWorkCountPolicy,
+  forbidWorkCounting,
+  installWorkCounterDump,
+  readWorkCounters,
+  WORK_COUNTER_NAMES,
+  WORK_COUNTER_ROLES,
+  WORK_COUNTERS_ENV,
+  type ForbiddenWorkCountPolicy,
+  type WorkCounter,
+  type WorkCounterDump,
+  type WorkCounterRole,
+} from './work-counters.js';
 
 // The on-disk plumbing both timing seams share. Exported because
 // `resources`' `parse-timing.ts` is the other consumer and now sits a package

@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { parse as parseYaml } from 'yaml';
 
 import { runAuditCli } from '../test-helpers.js';
@@ -25,11 +26,14 @@ export interface CompatibilityBlock {
 export interface ReportFile {
   path: string;
   type: string;
-  issues?: Array<{ code: string }>;
   compatibility?: CompatibilityBlock;
   settings?: SettingsBlock;
 }
-export interface Report { files: ReportFile[] }
+/** The slice of the audit report envelope these suites read. */
+export interface Report {
+  findings: Array<{ code: string; location?: string }>;
+  data: { files: ReportFile[] };
+}
 
 /** Frontmatter declaring `Bash`, the tool every fixture settings file denies. */
 export function bashSkill(name: string): string {
@@ -39,15 +43,15 @@ export function bashSkill(name: string): string {
 /** A plugin under `tempDir` with `skills/<name>/SKILL.md` for each entry (and an empty `skills/` otherwise). */
 export function writeSettingsPlugin(tempDir: string, name: string, skills: Record<string, string>): string {
   const pluginDir = safePath.join(tempDir, name);
-  fs.mkdirSync(safePath.join(pluginDir, '.claude-plugin'), { recursive: true });
-  fs.mkdirSync(safePath.join(pluginDir, 'skills'), { recursive: true });
+  mkdirSyncReal(safePath.join(pluginDir, '.claude-plugin'), { recursive: true });
+  mkdirSyncReal(safePath.join(pluginDir, 'skills'), { recursive: true });
   fs.writeFileSync(
     safePath.join(pluginDir, '.claude-plugin', 'plugin.json'),
     JSON.stringify({ name, description: 'A plugin with a skill the settings check must account for.', version: '0.0.1' }),
   );
   for (const [skill, content] of Object.entries(skills)) {
     const dir = safePath.join(pluginDir, 'skills', skill);
-    fs.mkdirSync(dir, { recursive: true });
+    mkdirSyncReal(dir, { recursive: true });
     fs.writeFileSync(safePath.join(dir, 'SKILL.md'), content);
   }
   return pluginDir;
@@ -68,7 +72,7 @@ export function auditWithSettings(
 ): { exit: number | null; stderr: string; plugin: ReportFile | undefined; report: Report } {
   const result = runAuditCli(pluginDir, ['--compat', '--settings', settingsFile, ...extraArgs]);
   const report = parseYaml(result.stdout) as Report;
-  return { exit: result.status, stderr: result.stderr, report, plugin: report.files.find((f) => f.type === 'claude-plugin') };
+  return { exit: result.status, stderr: result.stderr, report, plugin: report.data.files.find((f) => f.type === 'claude-plugin') };
 }
 
 /** The skill files the settings block reports a Bash conflict on. */

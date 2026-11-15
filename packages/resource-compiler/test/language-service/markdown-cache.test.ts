@@ -4,7 +4,7 @@
 
 
 import { chmodSync, rmSync, writeFileSync, utimesSync } from 'node:fs';
-
+import { dirname } from 'node:path';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
@@ -90,8 +90,8 @@ function setupTwoFilesInCache(
   const loader = createTestLoader(TEST_MD_CONTENT);
 
   // Load both resources into cache
-  getMarkdownResource(file1, loader);
-  getMarkdownResource(file2, loader);
+  getMarkdownResource(file1, dirname(file1), loader);
+  getMarkdownResource(file2, dirname(file2), loader);
 
   return { file1, file2, cleanup };
 }
@@ -99,6 +99,8 @@ function setupTwoFilesInCache(
 describe('markdown-cache', () => {
   let testDir: string;
   let testFile: string;
+  /** The test file's resource, its own directory the tree it is read in. */
+  const resourceOfTestFile = (loader: Parameters<typeof getMarkdownResource>[2]): ReturnType<typeof getMarkdownResource> => getMarkdownResource(testFile, dirname(testFile), loader);
 
   beforeEach(() => {
     // Create temp directory for test files
@@ -126,7 +128,7 @@ describe('markdown-cache', () => {
         return loader();
       };
 
-      const resource = getMarkdownResource(testFile, wrappedLoader);
+      const resource = resourceOfTestFile(wrappedLoader);
 
       expect(loaderCalls).toBe(1);
       expect(resource.fragments).toHaveLength(1);
@@ -139,15 +141,15 @@ describe('markdown-cache', () => {
       const { loader, getCallCount } = createCountingLoader(createTestLoader(TEST_MD_CONTENT));
 
       // First call
-      getMarkdownResource(testFile, loader);
+      resourceOfTestFile(loader);
       expect(getCallCount()).toBe(1);
 
       // Second call - should use cache
-      getMarkdownResource(testFile, loader);
+      resourceOfTestFile(loader);
       expect(getCallCount()).toBe(1);
 
       // Third call - should still use cache
-      getMarkdownResource(testFile, loader);
+      resourceOfTestFile(loader);
       expect(getCallCount()).toBe(1);
     });
 
@@ -157,7 +159,7 @@ describe('markdown-cache', () => {
       const { loader, getCallCount } = createCountingLoader(createTestLoader(TEST_MD_CONTENT));
 
       // First call
-      getMarkdownResource(testFile, loader);
+      resourceOfTestFile(loader);
       expect(getCallCount()).toBe(1);
 
       // Wait a bit and modify file
@@ -168,7 +170,7 @@ describe('markdown-cache', () => {
       utimesSync(testFile, newTime, newTime);
 
       // Second call - should reload due to mtime change
-      getMarkdownResource(testFile, loader);
+      resourceOfTestFile(loader);
       expect(getCallCount()).toBe(2);
     });
 
@@ -188,12 +190,12 @@ describe('markdown-cache', () => {
       };
 
       // First call - file doesn't exist
-      getMarkdownResource(nonExistentFile, wrappedLoader);
+      getMarkdownResource(nonExistentFile, dirname(nonExistentFile), wrappedLoader);
       expect(loaderCalls).toBe(1);
 
       // Second call - should use cached version (mtime is consistently 0 for non-existent files)
       // This is correct behavior - the cache key is still valid
-      getMarkdownResource(nonExistentFile, wrappedLoader);
+      getMarkdownResource(nonExistentFile, dirname(nonExistentFile), wrappedLoader);
       expect(loaderCalls).toBe(1);
     });
 
@@ -205,7 +207,7 @@ describe('markdown-cache', () => {
       const { loader, getCallCount } = createCountingLoader(createTestLoader(TEST_MD_CONTENT));
       chmodSync(testDir, 0o000);
       try {
-        expect(() => getMarkdownResource(testFile, loader)).toThrow(/EACCES/);
+        expect(() => resourceOfTestFile(loader)).toThrow(/EACCES/);
       } finally {
         chmodSync(testDir, 0o700);
       }
@@ -220,7 +222,7 @@ describe('markdown-cache', () => {
       const loader = createTestLoader(TEST_MD_CONTENT);
 
       // Load a resource
-      getMarkdownResource(testFile, loader);
+      resourceOfTestFile(loader);
 
       // Cache should have one entry
       let stats = getCacheStats();

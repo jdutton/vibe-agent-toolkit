@@ -18,7 +18,7 @@
 
 import { chmodSync, rmSync, writeFileSync } from 'node:fs';
 
-import { isFilesystemAccessError } from '../errors/errno.js';
+import { fsFaultOf, isNameTooLongError } from '../errors/errno-table.js';
 import { mkdirSyncReal, safePath } from '../path-utils.js';
 import { createSymlink, symlinkCapability, type SymlinkCapability } from '../test-helpers.js';
 
@@ -84,9 +84,7 @@ function tryMkdir(dir: string): string | null {
   } catch (error) {
     // Only a name the OS will not take is "cannot build" — `ENAMETOOLONG` on
     // a host with a shorter limit. Anything else is a broken fixture.
-    if (error instanceof Error && 'code' in error && error.code === 'ENAMETOOLONG') {
-      return null;
-    }
+    if (isNameTooLongError(error)) return null;
     throw error;
   }
 }
@@ -152,7 +150,7 @@ export function buildHostileTree(base: string): HostileTree {
         } catch (error) {
           // Already removed by the subject under test, which a delete sink is
           // entitled to do; a refusal to restore anything else stays loud.
-          if (!isFilesystemAccessError(error)) throw error;
+          if (fsFaultOf(error) === undefined) throw error;
         }
       }
       for (const dir of [root, outside, rootAlias]) {

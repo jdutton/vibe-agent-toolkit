@@ -4,7 +4,7 @@
  *
  * ## Why the CLI owns this and `resources` does not
  *
- * `@vibe-agent-toolkit/resources` states the {@link ProjectionStore} contract
+ * `@vibe-agent-toolkit/resources` states the {@link FactStore} contract
  * and never picks a backend, for the same reason it states the parse contract
  * and never picks a parser: it is the toolkit's most widely installed package,
  * and a storage engine is a *choice*. The choice is made here, at the edge that
@@ -13,7 +13,8 @@
  *
  * So `populate()` takes a {@link PopulationCache} it is handed, and this module
  * is the only place in the toolkit that knows `@vibe-agent-toolkit/projection-
- * sqlite` exists.
+ * sqlite` exists (`local/projection-sqlite-import-boundary`). It also opens the
+ * run database a query runs on, which that package declares and no port does.
  *
  * ## The key, and why it is a whole-repository tree hash
  *
@@ -45,16 +46,27 @@
  * rather than silently declining.
  */
 
-import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
-import type { PopulationCache, ProjectionStore } from '@vibe-agent-toolkit/resources';
-import { parseEnvBoolean } from '@vibe-agent-toolkit/utils';
-import { gitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
-import { isModuleMissing, reportMissingBackend, type OptionalBackend } from './optional-backend.js';
+import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
+import type { FactStore, PopulationCache, Projection } from '@vibe-agent-toolkit/resources';
+import { parseEnvBoolean } from '@vibe-agent-toolkit/utils';
+import { freshGitTreeSnapshot, gitSnapshotFailureOf, gitTreeSnapshot, type GitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
+
+import { noticeToOperator, withNoticeLedger } from './operator-notices.js';
+import { isModuleMissing, missingBackendError, type OptionalBackend } from './optional-backend.js';
 import { installSqliteWarningFilter } from './sqlite-experimental-warning.js';
 
 /**
- * The env var that selects a projection store for this process.
+ * The env var that selects — or now, DESELECTS — a projection store for this
+ * process.
+ *
+ * 🔑 **The store is on by default, so this is the escape hatch rather than the
+ * selector.** Same shape and same reason as `VAT_RESOURCES_CRAWL`: any value the
+ * off-parser does not read as false leaves the store selected, including the
+ * historical `sqlite`, so every script and lab arm that names it explicitly
+ * keeps working and keeps MEANING the same thing. See
+ * {@link PROJECTION_STORE_OFF} for the one way out.
  *
  * An environment switch rather than a config field, for the same reason
  * `VAT_INVENTORY_CRAWL` and `VAT_RESOURCES_CRAWL` are: it selects which
@@ -64,41 +76,30 @@ import { installSqliteWarningFilter } from './sqlite-experimental-warning.js';
  * edits the thing it measures.
  *
  * 🔑 It is read from the environment, and **every phase now runs in the process
- * that read it** — phases used to be child processes inheriting it across a
- * `spawnSync`, which reached the same place by a longer route. `vat validate`'s
- * phases see the same selection their orchestrator did, and can no longer fail
- * to.
- *
- * 🔑 **That sharing has a within-verb instance.** `vat build`'s two
- * phases — `skills build` and `claude plugin build` — both reach the lane
- * through `withResourcePopulationSource` (see `resource-loader.ts`), and both
- * root their population at the same directory, so phase 2 reads the extent
- * phase 1 wrote. Measured on `packages/vat-development-agents` with
- * `VAT_CRAWL_TIMING`: with a cold store phase 1 files `builtin:filesystem`
- * 39.2 ms and `projection-store:write` 10.1 ms, phase 2 files neither and its
- * `resource-registry:enumerate` reads 3.6 ms against phase 1's 66.6 ms.
- *
- * It did NOT need the closure to emit reasons, which is what an earlier reading
- * of this expected: the packaging lanes consume `resource_realizations` and let
- * `walkLinkGraph` keep running on top of the registry, so the base extent alone
- * answers them — the same shape `buildResourcePopulation` already had.
- *
- * The cross-INVOCATION win is unchanged and independent: `vat validate` and
- * `vat verify` spawn a byte-identical `resources validate` child, so the second
- * hits the store.
- *
- * ⚠️ One packaging enumeration is still on the walk: `vat claude plugin build`'s
- * per-skill post-build validation, which reaches `crawlAndResolveRegistry` in
- * `packaging-validator.ts` without a source — its `withResourcePopulationSource`
- * bracket closes around `createProjectRegistry` and does not span the
- * marketplace loop. `vat skills build` no longer does: it holds one bracket over
- * the whole run, and the registry memo is keyed on the population source, so
- * both of its registries source from the projection.
+ * that read it**, so `vat validate`'s phases cannot fail to see the selection
+ * their orchestrator did. Which lanes share a store within one verb and across
+ * invocations, with the measurements, and the ⚠️ one packaging enumeration still
+ * on the walk: `docs/architecture/resource-scanning-and-caching.md` §3.7.
  */
 export const PROJECTION_STORE_ENV = 'VAT_PROJECTION_STORE';
 
-/** {@link PROJECTION_STORE_ENV}'s value that selects the SQLite backend. */
+/**
+ * {@link PROJECTION_STORE_ENV}'s value that names the SQLite backend. Redundant
+ * with the default now, and kept — see
+ * `docs/architecture/resource-scanning-and-caching.md` §3.7.
+ */
 export const PROJECTION_STORE_SQLITE = 'sqlite';
+
+/**
+ * The value that turns the store OFF while leaving VAT's other caches on.
+ *
+ * Read through the same {@link parseEnvBoolean} as every other VAT switch, so
+ * `0`, `false`, `no` and `n` work too. The empty string joins them: unlike
+ * {@link PROJECTION_STORE_DIR_ENV}, where empty falls back to a default
+ * directory that means something, there is nothing else for a cleared selector
+ * to mean.
+ */
+export const PROJECTION_STORE_OFF = 'off';
 
 /**
  * Where the projection store's database lives, overriding the default.
@@ -160,11 +161,7 @@ const PROJECTION_STORE_BACKEND: OptionalBackend = {
 /**
  * Whether this process should read and write a projection store.
  *
- * **Off unless asked for**, which is the opposite of `vat inventory`'s crawl
- * selector and matches `vat resources scan`'s. A cache changes no answer, so
- * the reason to hold it back is not correctness but evidence: the win is a
- * claim about cost, and a default flipped before the cost is measured on real
- * corpora is a claim nobody checked.
+ * **On unless turned off** (rationale: `docs/architecture/resource-scanning-and-caching.md` §3.7).
  *
  * Read from the environment at each call rather than memoized at module load:
  * `vitest.setup.js` deletes every `VAT_*` variable before any test module
@@ -173,7 +170,7 @@ const PROJECTION_STORE_BACKEND: OptionalBackend = {
  *
  * ## The two switches are AND-ed, and the second one is a veto
  *
- * {@link PROJECTION_STORE_ENV} says *which* backend; {@link CACHE_ENV} says
+ * {@link PROJECTION_STORE_ENV} turns off THIS cache; {@link CACHE_ENV} says
  * whether this run caches at all. A store selected while `VAT_CACHE=0` was
  * measured writing a 9.8 MB, 18,079-row store on this repository and hitting it
  * on the next run — a user who asked for no cache silently got one, and
@@ -182,20 +179,26 @@ const PROJECTION_STORE_BACKEND: OptionalBackend = {
  *
  * 🪤 Read through `parseEnvBoolean`, never for truthiness — `VAT_CACHE=1` is
  * the value an operator writes to turn caching ON, and a truthiness test would
- * read it as a reason to decline. It was previously a comparison against the
- * literal `'0'`, which is the same shape `ParseCache` carried and the same
- * defect: `VAT_CACHE=false` disabled nothing. The two now share one parser
- * (`@vibe-agent-toolkit/utils`) so the variable cannot be read two ways again.
+ * read it as a reason to decline. It shares one parser with `ParseCache`
+ * (`@vibe-agent-toolkit/utils`) so the variable cannot be read two ways.
  *
  * Only an explicit `false` vetoes. `parseEnvBoolean` returns `undefined` for a
  * value it cannot read, and an unreadable value is not something the operator
- * said — the veto has to be a statement, not a shrug.
+ * said — the veto has to be a statement, not a shrug. That reading is why both
+ * variables can be read through ONE parser even though they now sit on
+ * opposite default sides: each asks only whether the operator SAID no.
  *
  * @returns `true` when a store is selected
  */
 export function projectionStoreSelected(): boolean {
   if (parseEnvBoolean(process.env[CACHE_ENV]) === false) return false;
-  return process.env[PROJECTION_STORE_ENV] === PROJECTION_STORE_SQLITE;
+  const selector = process.env[PROJECTION_STORE_ENV];
+  // Unset is the default and the default is on.
+  if (selector === undefined) return true;
+  // `VAT_PROJECTION_STORE=` — see PROJECTION_STORE_OFF on why empty is off here
+  // and unset-equivalent in the directory variable.
+  if (selector.trim() === '') return false;
+  return parseEnvBoolean(selector) !== false;
 }
 
 /**
@@ -204,12 +207,10 @@ export function projectionStoreSelected(): boolean {
  * ⚠️ **Deliberately NOT typed for SQL, and do not re-widen it.** This handle
  * reaches the database at {@link PROJECTION_STORE_DIR_ENV}'s directory, which
  * defaults to one file per VAT release shared by every root on the machine —
- * holding other repositories' link text, heading text and frontmatter. A field
- * typed `SqlQueryableStore` used to live here "for a caller that needs to ASK
- * the store something", and that caller was removed precisely because arbitrary
- * SQL over this store answers from trees the asker never named. `populate()`
- * needs the engine-free {@link PopulationCache} and nothing more; a query lane
- * builds its own store (see `projection-query.ts`).
+ * holding other repositories' link text, heading text and frontmatter, so
+ * arbitrary SQL over it would answer from trees the asker never named.
+ * `populate()` needs the engine-free {@link PopulationCache} and nothing more; a
+ * query lane builds its own store (see `projection-query.ts`).
  */
 export interface OpenedPopulationCache {
   /** Hand this to `populate()`. */
@@ -225,13 +226,44 @@ export interface OpenedPopulationCache {
 }
 
 /**
+ * The snapshot that keys `root`'s store entry, or `null` — after telling the operator, once per
+ * root per command run (the notice scope {@link withPopulationCache} enters), that the run
+ * populates without a cache.
+ *
+ * `gitTreeSnapshot` returns a failure for every "git could not answer" case — no `git` on PATH, not
+ * a repository, a bare or unreadable one — and an empty snapshot of an initialized repository stays
+ * distinguishable from it. The notice names the cause the one classifier (`gitSnapshotFailureOf`) decides.
+ *
+ * 🪤 Once per root: `vat validate`'s orchestrator scope and each lane's own scope inside it both ask
+ * when the outer one could not key ({@link joinableCache} "asks again" for a root it cannot vouch
+ * for), and the answer — and the notice — is the same every time.
+ *
+ * @param root - The absolute corpus root
+ * @returns The snapshot, or `null` when the tree cannot be keyed
+ */
+function storeKeyOrNotice(root: string): GitTreeSnapshot | null {
+  const snapshot = gitTreeSnapshot({ cwd: root });
+  if (snapshot.ok) return snapshot;
+  // Not "the selector is set": the store is on by default, so most users who
+  // see this never wrote the variable.
+  noticeToOperator(
+    'store',
+    'The projection store is on, but git cannot key this tree, so there is no deterministic key to store a'
+    + ` projection under: ${gitSnapshotFailureOf(snapshot).reason}`
+    + ` Populating without a cache. Set ${PROJECTION_STORE_ENV}=${PROJECTION_STORE_OFF} to silence this.`,
+    root,
+  );
+  return null;
+}
+
+/**
  * Open the projection store this process selected, keyed to one tree.
  *
  * Returns `undefined` when no store is selected, and when the tree cannot be
  * keyed — the two "carry on without a cache" answers. It does **not** return
- * `undefined` for an uninstalled backend: a user who set the selector asked for
- * a store, and answering that request by silently not having one is how an
- * opted-in cache becomes an unmeasured one.
+ * `undefined` for an uninstalled backend: the store is on unless a user turned it
+ * off, and answering that by silently not having one is how a default-on cache
+ * becomes an unmeasured one.
  *
  * @param options - Where the corpus is
  * @param options.root - The absolute corpus root. Used to find the repository;
@@ -244,28 +276,27 @@ export async function openPopulationCache(options: {
   if (!projectionStoreSelected()) return undefined;
 
   // Before the import, so a corpus outside a repository costs nothing and says
-  // why. `gitTreeSnapshot` returns null for every "git could not answer" case —
-  // no `git` on PATH, not a repository, a bare or unreadable one — and an empty
-  // snapshot of an initialized repository stays distinguishable from it.
-  const snapshot = gitTreeSnapshot({ cwd: options.root });
-  if (snapshot === null) {
-    process.stderr.write(
-      `${PROJECTION_STORE_ENV} is set, but ${options.root} is not inside a readable git`
-      + ' repository, so there is no deterministic key to store a projection under.'
-      + ' Populating without a cache.\n',
-    );
-    return undefined;
-  }
+  // why.
+  const snapshot = storeKeyOrNotice(options.root);
+  if (snapshot === null) return undefined;
 
   const store = await loadStore();
+  const cwd = options.root;
   return {
-    cache: { store, treeHash: snapshot.hash },
+    cache: {
+      store,
+      treeHash: snapshot.hash,
+      treeUnchanged: () => {
+        const fresh = freshGitTreeSnapshot({ cwd });
+        return fresh.ok && fresh.hash === snapshot.hash;
+      },
+    },
     close: () => store.close(),
   };
 }
 
 /**
- * Load the selected backend, or report it as uninstalled and exit.
+ * Load the selected backend, or throw its `BACKEND_UNAVAILABLE` refusal when it is uninstalled.
  *
  * 🪤 Only `ERR_MODULE_NOT_FOUND` means "not installed". A Node older than
  * 22.13.0 has no `node:sqlite` at all and fails with a *different* code, which
@@ -273,43 +304,55 @@ export async function openPopulationCache(options: {
  * for "upgrade Node", and diagnosing a version floor as a missing dependency
  * sends a user round a loop that cannot terminate.
  *
- * @returns The opened store, typed as the engine-free contract — the SQLite
- *   backend really does return a `SqlQueryableStore`, and this narrows it away
- *   on purpose so the population path cannot grow a query
+ * @returns The opened store: the engine-free port, which is all the backend's
+ *   factory returns, so the population path has no query to grow
  */
-async function loadStore(): Promise<ProjectionStore> {
+async function loadStore(): Promise<FactStore> {
   const directory = process.env[PROJECTION_STORE_DIR_ENV];
   // Spread rather than passed, because the backend defaults the field when it is
   // ABSENT and an explicit `undefined` is a different argument under
   // `exactOptionalPropertyTypes`. Empty string is treated as unset: an unset
   // variable and one exported as `''` are the same intent, and `''` would
   // otherwise resolve to the process cwd.
-  return (await loadBackend()).openSqliteProjectionStore(
+  return (await loadBackend()).openSqliteFactStore(
     directory === undefined || directory === '' ? {} : { directory },
   );
 }
 
 /**
- * Open a store that lives only in this process's memory.
+ * Open the run database over one run's projection: the one handle SQL runs on.
  *
  * 🔑 **This is what keeps the query surface an ANSWER rather than a privilege.**
  * A caller with no store selected — CI's first run, or a developer who never set
- * the selector — still gets the same SQL over the same schema; the on-disk store
+ * the selector — still gets the same SQL over the same schema; the fact store
  * only makes the second run cheap. Without it, "what does this tree contain"
  * would be answerable only where a cache happened to exist, and two callers
  * would hold differently-shaped views of one tree.
  *
- * It is a cache that cannot hit: nothing survives the close, so a caller must
- * write the projection into it before asking anything.
+ * Nothing survives the close, and nothing but this run's projection is in it.
  *
- * @returns An open, empty store; close it when done
+ * @param projection - One run's populated projection
+ * @returns The open run database, holding that projection; close it when done
  */
-export async function openEphemeralQueryStore(): Promise<ProjectionSqlite.SqlQueryableStore> {
-  return (await loadBackend()).openEphemeralProjectionStore();
+export async function openRunDatabase(projection: Projection): Promise<ProjectionSqlite.RunDatabase> {
+  return (await loadBackend()).openRunDatabase(projection);
 }
 
 /**
- * Load the selected backend module, or report it as uninstalled and exit.
+ * Open a compile-only probe over the full queryable schema, derived relations
+ * included — for checking statements BEFORE any population or lens has run.
+ *
+ * ⚠️ Not {@link openRunDatabase}: that database has no table for a derived
+ * relation until a lens fills it, which is how an unevaluated one is refused.
+ *
+ * @returns An open probe; close it when done
+ */
+export async function openCompileProbe(): Promise<ProjectionSqlite.ProjectionCompileProbe> {
+  return (await loadBackend()).openProjectionCompileProbe();
+}
+
+/**
+ * Load the selected backend module, or throw its `BACKEND_UNAVAILABLE` refusal when it is uninstalled.
  *
  * @returns The backend's module namespace
  */
@@ -330,7 +373,8 @@ async function loadBackend(): Promise<typeof ProjectionSqlite> {
     const floor = nodeSqliteFloorFailure(error);
     if (floor !== undefined) throw floor;
     if (!isModuleMissing(error)) throw error;
-    reportMissingBackend(PROJECTION_STORE_BACKEND);
+    // Thrown into the verb's own catch, which publishes BACKEND_UNAVAILABLE in its shape.
+    throw missingBackendError(PROJECTION_STORE_BACKEND);
   } finally {
     restoreWarnings();
   }
@@ -355,31 +399,16 @@ async function loadBackend(): Promise<typeof ProjectionSqlite> {
  * names neither the version floor nor the fix.
  *
  * ⚠️ It is reachable on an ordinary run and is not a corner: the query lane has
- * always fallen back to {@link openEphemeralQueryStore} when no store is
- * selected, which is the default, so `node:sqlite` is required on a default
- * `vat resources query` whichever way the lane resolves its store.
+ * always run its SQL on {@link openRunDatabase}, store selected or not, so
+ * `node:sqlite` is required on a default `vat resources query` whichever way
+ * the lane resolves its store.
  *
- * 🪤 This used to say "EVERY `vat resources query`/`check` run", and that was
- * too strong for `check`. Measured against the built CLI on Node v24.13.1 by
- * counting the `ExperimentalWarning` `node:sqlite` emits at load — the only
- * externally visible tell that the module was reached at all:
+ * 🪤 `check` reaches a store only when the project declares checks for it to
+ * evaluate, so a repo with none never loads the backend; `query` alone
+ * establishes the floor.
  *
- * | Command | Warnings | Backend loaded? |
- * |---|---|---|
- * | `vat resources query "SELECT …"` | 1 | yes |
- * | `vat resources check`, no checks declared | 0 | **no** |
- *
- * `check` reaches a store only when the project declares checks for it to
- * evaluate, so a repo with none never loads the backend and never needed the
- * floor for that command. The floor argument is unaffected — `query` alone
- * establishes it — but "every default run of those two commands" was a claim
- * nothing had counted.
- *
- * ✅ **VAT's declared floor is now `>=22.13.0`, so this no longer fires on a
- * SUPPORTED Node.** It used to: the manifests said `>=22.0.0` while these two
- * commands could not run below 22.13.0, which meant thirteen Node patch
- * releases were advertised as supported and hard-failed here. The floor was
- * raised to stop advertising what VAT cannot do. The branch stays load-bearing
+ * ✅ **VAT's declared floor is `>=22.16.0` (raised past 22.13.0 for
+ * `StatementSync.columns()`), so this does not fire on a SUPPORTED Node.** The branch stays load-bearing
  * for the Node that is merely *installed* rather than supported — `engines` is
  * a warning in npm and nothing at all under most runners, so a user on 22.4
  * still reaches this and still deserves to be told which number is wrong.
@@ -408,9 +437,87 @@ export function nodeSqliteFloorFailure(error: unknown): Error | undefined {
     // the next time the floor moves.
     + ` \`node:sqlite\` loads unflagged from Node 22.13.0 (added in 22.5.0 behind`
     + ` \`--experimental-sqlite\`) — you are on ${process.version}.`
-    + ' Upgrade Node to 22.13.0 or newer. Installing a package will not help:'
+    + ' Upgrade Node to the floor `vat doctor` reports. Installing a package will not help:'
     + ' the module is built into Node, not published to npm.',
   );
+}
+
+/**
+ * The population scope this async context is already inside, if any.
+ *
+ * `AsyncLocalStorage` and not a module-level variable, for the reason
+ * `withGitSnapshotCache` uses one: a scope has to end when its own frame ends
+ * and not when some other frame happens to finish, and a plain binding would
+ * leak the outer scope into anything that ran after it in the same tick.
+ */
+const populationScope = new AsyncLocalStorage<ActivePopulationScope>();
+
+/**
+ * What an open scope publishes to the scopes nested inside it.
+ *
+ * 🪤 A WRAPPER around the opened cache rather than the cache itself: a scope
+ * that opened nothing is still a scope, and storing its `undefined` bare would
+ * make `getStore()` answer `undefined` for both "no scope above me" and "a scope
+ * above me with no store" — two states that take opposite actions.
+ */
+interface ActivePopulationScope {
+  /** What the enclosing scope opened, or `undefined` if it opened nothing. */
+  readonly opened: OpenedPopulationCache | undefined;
+}
+
+/**
+ * The already-open cache this scope may join, or `undefined` to open its own.
+ *
+ * Wrapped in a one-field object rather than returned bare, because `undefined`
+ * is a legitimate thing to JOIN — a run with the store off — and a bare return
+ * could not tell that from "open your own".
+ *
+ * @param active - The scope already open in this async context
+ * @param root - The corpus root the nested caller named
+ * @returns The cache to reuse (possibly `undefined`), or `undefined` to open
+ */
+function joinableCache(
+  active: OpenedPopulationCache | undefined,
+  root: string,
+): { readonly cache: PopulationCache | undefined } | undefined {
+  // No store in this process, so there is nothing to key and every scope's
+  // answer is the same `undefined`. Also keeps uncached nesting free: no
+  // snapshot, no `gitFindRoot`.
+  if (!projectionStoreSelected()) return { cache: undefined };
+  // Selected, but the enclosing scope could not key its own root — outside a
+  // readable repository. That says nothing about THIS root, so ask again.
+  if (active === undefined) return undefined;
+  // Memoized by the enclosing `withGitSnapshotCache` bracket, so a map lookup
+  // for a repository it has visited and a real snapshot only for one it has not.
+  const snapshot = gitTreeSnapshot({ cwd: root });
+  // 🔑 The tree hash, never "a scope is open". An extent is filed under
+  // `(rootId, treeHash)`, so a lane in another repository handed this one's hash
+  // would file its extent under a key that does not describe it — silently. Two
+  // roots inside ONE repository do share a hash: the key covers the repository.
+  return snapshot.ok && snapshot.hash === active.cache.treeHash ? { cache: active.cache } : undefined;
+}
+
+/**
+ * Open a store for this scope, run the work inside it, and close it.
+ *
+ * @param options - Where the corpus is
+ * @param options.root - The absolute corpus root
+ * @param work - Given the cache, or `undefined` when there is none to give
+ * @returns Whatever `work` returned
+ */
+async function runOwnedScope<T>(
+  options: { root: string },
+  work: (cache: PopulationCache | undefined) => Promise<T>,
+): Promise<T> {
+  const opened = await openPopulationCache(options);
+  try {
+    // Registered even when nothing was opened, so a nested scope can tell "no
+    // store in this process" from "no scope above me" — and so the nested scope
+    // stays inside THIS scope's git-snapshot memo either way.
+    return await populationScope.run({ opened }, () => work(opened?.cache));
+  } finally {
+    await opened?.close();
+  }
 }
 
 /**
@@ -437,38 +544,60 @@ export function nodeSqliteFloorFailure(error: unknown): Error | undefined {
  * separate "opened handle" bracket for a caller wanting more than the cache,
  * because there is nothing legitimate for such a caller to want.
  *
+ * ## 🔑 It NESTS, and the outermost scope wins
+ *
+ * A scope opened inside another over the same repository **joins** it: same
+ * cache by identity, no second database, no second `git write-tree`, and the
+ * inner scope does not close what it did not open. That lets an orchestrator
+ * hold one bracket over a whole run (`vat validate` does) while each lane
+ * underneath keeps its own and stays correct run alone. Reuse is gated on the
+ * TREE HASH, never on "a scope is open" — see {@link joinableCache}.
+ *
+ * ⚠️ The whole nest shares ONE snapshot, so work that must see its own edits as
+ * they land must not run inside a single scope. That is why a hoist is a
+ * decision rather than a refactor.
+ *
  * @param options - Where the corpus is
  * @param options.root - The absolute corpus root
  * @param work - Given the cache, or `undefined` when there is none to give
  * @returns Whatever `work` returned
  */
-export async function withPopulationCache<T>(
+export function withPopulationCache<T>(
   options: { root: string },
   work: (cache: PopulationCache | undefined) => Promise<T>,
 ): Promise<T> {
-  // ONE git snapshot for the whole scope, and this is the level that gets it:
-  // `openPopulationCache` below takes one to derive the store key, and the crawl
-  // that runs inside `work` takes another to enumerate the extent — same
-  // repository, sequentially, ~195 ms and ~159 ms measured on a large monorepo.
-  //
-  // The correctness half matters more than the saving. Taken separately, a
-  // working-tree edit landing between them makes the two snapshots DIFFERENT
-  // answers, and the extent from the second is then filed under the key from the
-  // first: a cache entry whose key does not describe its contents, written
-  // silently. The bracket closes that race rather than merely deduplicating.
-  //
-  // Opened here rather than around either consumer because it must enclose BOTH
-  // — a bracket opened deeper than one of them dedupes nothing while looking
-  // exactly like a bracket that works. Every CLI entry into the projection lane
-  // (`inventory`, `resource-loader`'s two) reaches the store through this scope,
-  // so this one placement covers all of them.
-  return withGitSnapshotCache(async () => {
-    const opened = await openPopulationCache(options);
-    if (opened === undefined) return work(undefined);
-    try {
-      return await work(opened.cache);
-    } finally {
-      await opened.close();
+  try {
+    const active = populationScope.getStore();
+    if (active !== undefined) {
+      const joinable = joinableCache(active.opened, options.root);
+      // 🪤 No new git bracket on either path: an inner scope stays inside the
+      // outer one's memo, which is where the deduplication lives. A fresh bracket
+      // here would start an empty memo and re-snapshot the same repository — a
+      // dedupe that does nothing while looking exactly like one that works.
+      return joinable === undefined ? runOwnedScope(options, work) : work(joinable.cache);
     }
-  });
+    // ONE git snapshot for the whole scope, and this is the level that gets it:
+    // `openPopulationCache` below takes one to derive the store key, and the crawl
+    // that runs inside `work` takes another to enumerate the extent — same
+    // repository, sequentially, ~195 ms and ~159 ms measured on a large monorepo.
+    //
+    // The correctness half matters more than the saving. Taken separately, a
+    // working-tree edit landing between them makes the two snapshots DIFFERENT
+    // answers, and the extent from the second is then filed under the key from the
+    // first: a cache entry whose key does not describe its contents, written
+    // silently. The bracket closes that race rather than merely deduplicating.
+    //
+    // Opened here rather than around either consumer because it must enclose BOTH
+    // — a bracket opened deeper than one of them dedupes nothing while looking
+    // exactly like a bracket that works. Every CLI entry into the projection lane
+    // (`inventory`, `resource-loader`'s two) reaches the store through this scope,
+    // and `vat validate`'s orchestrator holds one OUTSIDE all of them, which the
+    // nesting above is what makes safe.
+    //
+    // And the notice scope: the "cannot key this root" notice is printed once per root per
+    // command run — this outermost scope's ledger, which every nested scope joins.
+    return withNoticeLedger(() => withGitSnapshotCache(() => runOwnedScope(options, work)));
+  } catch (error) {
+    return Promise.reject(error as Error);
+  }
 }

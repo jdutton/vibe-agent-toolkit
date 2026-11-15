@@ -39,9 +39,8 @@ packages/cli/
 │   │   └── vat.ts              # Smart wrapper (context detection)
 │   ├── commands/
 │   │   ├── resources/          # Resources command group
-│   │   ├── rag/                # Future: RAG commands
-│   │   ├── skills/             # Future: Skills commands
-│   │   └── agents/             # Future: Agent commands
+│   │   ├── rag/                # RAG commands
+│   │   └── skills/             # Skills commands
 │   ├── utils/
 │   │   ├── logger.ts           # stderr logging
 │   │   ├── project-root.ts     # Root detection
@@ -79,50 +78,15 @@ is the rationale and worked example behind it.
 
 | Logic Type | Wrong Place | Right Place | Why |
 |------------|-------------|-------------|-----|
-| Find agent's package root | CLI | agent-skills or utils | Other runtimes (langchain, etc.) will need this |
-| Determine default output path | CLI | agent-skills | Each runtime knows where its bundles should go |
-| Validate agent manifest | CLI | agent-config | Validation used by all consumers |
-| Parse YAML | CLI | utils or agent-config | Common across many packages |
+| Find a skill's package root | CLI | agent-skills or utils | Every caller of the packager needs it, not only the CLI |
+| Determine default output path | CLI | agent-skills | The packager knows where its bundles go |
+| Validate skill frontmatter | CLI | agent-skills | Validation used by all consumers |
+| Parse YAML | CLI | utils | Common across many packages |
 | Format user messages | CLI | ✅ CLI is fine | This is CLI-specific UX |
-
-### Example: Agent Build Command
-
-**Before (WRONG)** - Logic in CLI:
-```typescript
-// packages/cli/src/commands/agent/build.ts
-function findAgentPackageRoot(agentPath: string): string {
-  // 50 lines of path-walking logic...
-  // ❌ This belongs elsewhere!
-}
-
-function determineOutputPath(target: string, agentPath: string): string {
-  const packageRoot = findAgentPackageRoot(agentPath);
-  return path.join(packageRoot, 'dist', 'vat-bundles', target);
-}
-```
-
-**After (CORRECT)** - Logic in runtime package:
-```typescript
-// packages/cli/src/commands/agent/build.ts
-const buildOptions = options.output
-  ? { agentPath, target, outputPath: options.output }
-  : { agentPath, target };
-// ✅ CLI just passes options, runtime figures out the rest
-result = await buildAgentSkill(buildOptions);
-```
-
-```typescript
-// packages/agent-skills/src/builder.ts
-function getDefaultOutputPath(manifestPath: string, target: string): string {
-  const agentPackageRoot = findAgentPackageRoot(manifestPath);
-  return path.join(agentPackageRoot, 'dist', 'vat-bundles', target);
-}
-// ✅ Logic lives where it can be reused by other runtimes
-```
 
 ### Self-Hosting Consideration
 
-Remember: **Other agent repos won't have packages/cli/**. If an agent package needs to build itself, it can depend on `@vibe-agent-toolkit/agent-skills` directly. The CLI is just one convenient way to invoke the build - not the only way.
+Remember: **Other repos won't have packages/cli/**. A package that needs to build its skills itself can depend on `@vibe-agent-toolkit/agent-skills` directly. The CLI is just one convenient way to invoke the build - not the only way.
 
 ## Context Detection
 
@@ -131,10 +95,20 @@ Remember: **Other agent repos won't have packages/cli/**. If an agent package ne
 Provides explicit control when needed, automatic detection otherwise.
 
 **Priority order:**
-1. **Explicit override:** `VAT_ROOT_DIR` environment variable
-2. **Dev mode:** Detect if running inside vibe-agent-toolkit repo
-3. **Local install:** Walk up from project root to find `node_modules/@vibe-agent-toolkit/cli`
-4. **Global install:** Use globally installed version
+1. **`VAT_BIN`:** an explicit path to a built `dist/bin.js`, highest precedence. A path that
+   does not exist, or that names the wrapper itself (`dist/bin/vat.js`, which would re-resolve
+   and spawn itself forever), is a hard error (exit 2) — never a silent fall-through to a lower
+   priority.
+2. **`VAT_ROOT_DIR`:** a monorepo checkout root. `<root>/packages/cli/dist/bin.js` must already
+   be built, or this is a hard error (exit 2) — it no longer falls through to dev/local/global
+   resolution the way an unbuilt `VAT_ROOT_DIR` used to.
+3. **Dev mode:** Detect if running inside vibe-agent-toolkit repo
+4. **Local install:** Walk up from project root to find `node_modules/@vibe-agent-toolkit/cli`
+5. **Global install:** Use globally installed version
+
+`VAT_TEST_ROOT` is orthogonal to this list: it only changes the directory priorities 3–4 start
+their detection from — it never names a binary, and it has no effect once `VAT_BIN` or
+`VAT_ROOT_DIR` is set. For every `VAT_*` variable above, an empty string is treated as unset.
 
 ### Implementation
 
@@ -144,8 +118,8 @@ Context detection in `packages/cli/src/bin/vat.ts` spawns the actual CLI with `V
 
 ```bash
 # Dev mode
-vat --version → 0.1.0-dev (/Users/jeff/Workspaces/vibe-agent-toolkit)
-                 binary: /Users/jeff/Workspaces/vibe-agent-toolkit/packages/cli/dist/bin.js
+vat --version → 0.1.0-dev (/work/vibe-agent-toolkit)
+                 binary: /work/vibe-agent-toolkit/packages/cli/dist/bin.js
 
 # Local install
 vat --version → 0.1.0 (local: /path/to/project)
@@ -170,10 +144,9 @@ Commands are scoped by package name for scalability:
 ```bash
 vat resources scan [path]       # Resource discovery
 vat resources validate [path]   # Resource validation
-vat rag ...                     # Future: RAG commands
-vat skills ...                  # Future: Skill commands
-vat agents ...                  # Future: Agent commands
-vat validate                    # Run all configured source validators (resources + skills)
+vat rag ...                     # RAG commands
+vat skills ...                  # Skill commands
+vat validate                    # Run all configured source validators (resources, their checks, skills)
 ```
 
 ### Command Groups
@@ -182,7 +155,6 @@ Each package gets its own command group:
 - `resources` - Markdown/HTML parsing and validation
 - `rag` - Document chunking, embedding, retrieval
 - `skills` - Claude skill packaging and testing
-- `agents` - Agent validation and management
 
 ### Project Root Detection
 
@@ -196,50 +168,41 @@ Either indicates project root.
 
 ```typescript
 // commands/mycommand.ts
-import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { buildReport, toFindings } from '@vibe-agent-toolkit/schema';
 
-export interface MyCommandOptions {
-  debug?: boolean;
-  // ... other options
-}
+import { endWithRefusal, endWithReport, NOTHING_FINISHED, refusalCodeOf } from '../utils/document-writer.js';
 
-export async function myCommand(
-  pathArg: string | undefined,
-  options: MyCommandOptions
-): Promise<void> {
-  const logger = createLogger(options.debug ? { debug: true } : {});
-  const startTime = Date.now();
-
+export async function myCommand(pathArg: string | undefined, options: MyCommandOptions): Promise<void> {
+  const format = options.format ?? 'yaml';
+  const gate = { strict: options.strict === true };
   try {
-    // 1. Validate inputs
+    // 1. Validate inputs — a mistake is `throw new CommandRefusalError('USAGE_INVALID', …)`
     // 2. Process
-    // 3. Output results (YAML to stdout)
-    // 4. Exit with appropriate code — a member of `ExitCode`, never a literal
-    //    (`local/no-literal-process-exit`)
-
-    process.exit(ExitCode.OK);
+    const report = buildReport({ examined, findings: toFindings(issues), data, gate });
+    // 3. The writer validates, renders and exits on the code the document derives
+    endWithReport('my command', report, format);
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'MyCommand');
+    endWithRefusal('my command', refusalCodeOf(error), error, format, gate, NOTHING_FINISHED);
   }
 }
 ```
 
+The verb must be registered in `PUBLISHED_SHAPES` (`src/report-schemas.ts`) — see "The report
+contract" below.
+
 ## Configuration
 
-### Two-Level Hierarchy
-
-#### Project-Level Config
+### Project-Level Config
 
 **File:** `vibe-agent-toolkit.config.yaml` (at project root)
 
-**Purpose:** Defaults for entire project (collection of agents)
+**Purpose:** Defaults for the entire project (its skills, resources and RAG stores)
 
 **Example:**
 ```yaml
 resources:
   include:
     - "docs/**/*.md"
-    - "agents/**/README.md"
   exclude:
     - "node_modules/**"
     - "**/test/fixtures/**"
@@ -250,43 +213,77 @@ resources:
       FRONTMATTER_SCHEMA_ERROR: error
 ```
 
-#### Agent-Level Config
-
-**File:** TBD (likely `agent.yaml`)
-
-**Purpose:** Override project defaults for specific agent
-
-**Pattern:** Agent config inherits from project config, overriding specific values (DRY)
-
 ## Output Strategy
 
 ### YAML by Default
 
-All commands output YAML on stdout (readable by humans and agents):
+Commands output YAML on stdout (readable by humans and agents); `--format json` renders the same
+document. A report verb's document is the envelope described under
+[The report contract](#the-report-contract):
 
 ```yaml
 ---
-status: success
-filesScanned: 12
-durationSecs: 0.234
----
+status: ok
+examined: 12
+findings: []
+summary: { errors: 0, warnings: 0, info: 0 }
+gate: { strict: false }
+durationMs: 234
+data: { ... }
 ```
 
-Future: `--format json` flag for JSON output
+### Dual Output for Findings
 
-### Dual Output for Errors
+A verb that finds something publishes it twice: in full in the stdout document, and for a reader on
+stderr. Both spell a finding with the one formatter, `formatFindingLine` in
+`packages/cli/src/utils/issue-rendering.ts`; a flat-findings lane prints them through
+`reportFindings`, which puts every error first and adds warnings and info only under `--verbose`
+(`vat resources validate`, `vat resources check -v`, the orchestrators' delegated phases, and
+`vat verify`'s built-in phases). A lane with no `--verbose` passes `verbose: true` and always prints
+every finding: `vat ard emit`, `vat rag index`, `vat okf validate`,
+`vat audit settings`, `vat claude plugin uninstall` and `vat skills build --skill`'s refusal.
 
-Commands that find errors produce both formats:
+A leftover (`TREE_CLEANUP_INCOMPLETE`: something a run made and could not remove) is said by the
+one path that publishes it, never by a verb: `writeDocument`, `endWithForwardedDocument`,
+`writeLegacyDocument` (for any legacy document that carries a `findings` list) and
+`writeExternalDocument` (for the leftovers in an org payload's top-level `warnings`) each print every
+leftover the document carries, once, at every verbosity, on every verb — `FINDINGS_NOT_ON_STDERR`
+verbs included. `reportFindings` skips them, so a
+verb that prints its findings cannot print a leftover twice, and verbs only build them
+(`leftoverIssue`, `leftoverIssueOf`, `leftoverIssuesOf`, `leftoverIssuesOfWarnings`). The lanes
+`findingsGoToStderr` excludes are excluded for leftovers too: the generic `--format text` document,
+which already lists them, and a supervised child, whose supervisor publishes and says them. A
+leftover that IS the refusal (`endWithLeftoverRefusal`) is said once, as the refusal's message —
+never also as a finding line. A refusal prints its message first, then the finished work's findings,
+then its leftovers. Its message is said exactly once, whichever writer publishes the error report
+(`announceErrorOf`) — a report a verb built itself included — except by a supervised child, whose
+supervisor says it when it forwards the document. A run-integrity refusal the document writer adds, the writer prints itself, once.
+Verbs whose stderr does not yet say their other findings this way are listed in
+`FINDINGS_NOT_ON_STDERR` (`packages/cli/test/system/test-helpers/exit-code-matrix.ts`), which the
+exit-code matrix asserts both ways. Each entry states the one output mode it speaks for and where its
+`findings` scenario runs (some only where a directory listing can be denied); `vat skill review` is
+exempt under `--yaml` only — its default mode says every finding as the shared line.
+A verb whose `--format text` document is the generic rendering, one line per finding
+(`vat resources validate`), carries none on stderr under that format, because stdout already is
+these lines. A verb with its own text rendering (`vat ard emit`, whose text document is one summary
+line) prints its findings on stderr under every format. `findingsGoToStderr` in
+`packages/cli/src/utils/document-writer.ts` is that one rule. See
+[The report contract](#the-report-contract).
 
-#### Test Format (stderr)
+#### Finding lines (stderr)
 
 ```
-docs/README.md:15:25: error: Link target not found: ./missing.md
-docs/guide.md:42:10: error: Broken anchor: #non-existent-section
-fragment.component.html:1:1: info: Malformed HTML: missing-doctype
+  docs/README.md:15:25: error: Link target not found: ./missing.md [LINK_BROKEN_FILE]
+    Fix: Point the link at an existing file.
+  SKILL.md (frontmatter.name): warning: Name is not kebab-case [SKILL_NAME_NOT_KEBAB_CASE]
+
+1 warning/info finding(s) not shown — re-run with --verbose, or read the report on stdout, which lists every finding.
 ```
 
-**Format:** `file:line:column: severity: message`
+**Format:** `location:line:column (field): severity: message [CODE]`, each part of the anchor present
+only when the finding carries it; a fix on the next line, two spaces deeper. A flat list
+(`reportFindings`) indents each finding two spaces; a grouped report indents it beneath its heading,
+and the fix stays two spaces deeper than its finding.
 
 Only `error` findings fail the run, so the severity is what tells a reader
 which lines they have to act on.
@@ -300,25 +297,19 @@ which lines they have to act on.
 
 ```yaml
 ---
-# status is the worst ACTIONABLE severity: success | warning | error.
-# Info-only findings report `success` — read issueCounts for what was seen.
-status: error
-errorsFound: 2
-issueCounts: { errors: 2, warnings: 0, info: 0 }
-issues:
-  - file: docs/README.md
-    issues:
-      - line: 15
-        column: 25
-        code: LINK_BROKEN_FILE
-        severity: error
-        message: Link target not found: ./missing.md
-  - file: docs/guide.md
-    line: 42
-    column: 10
-    type: broken-anchor
-    message: Broken anchor: #non-existent-section
----
+# status: ok (nothing found) | findings (anything found, at any severity) |
+# error (the run could not finish). summary counts findings by severity.
+status: findings
+examined: 12
+findings:
+  - code: LINK_BROKEN_FILE
+    severity: error
+    message: "File not found: docs/missing.md"
+    location: docs/README.md
+    line: 15
+summary: { errors: 1, warnings: 0, info: 0 }
+gate: { strict: false }
+data: { root: /abs/path/to/project, collections: {} }
 ```
 
 **Purpose:**
@@ -423,27 +414,32 @@ Each command group exports its verbose help function.
 
 **Behavior:**
 - Scans directory for markdown files (vat-aware discovery)
-- Shows what files would be validated
-- Displays stats: file count, link count, etc.
-- Helps decide inclusions/exclusions before validation
-- Always exits 0 (informational only)
+- Shows what files would be validated, and helps decide inclusions/exclusions before validation
+- Publishes the report envelope: `examined` is the number of files scanned; a scan has no finding
+  of its own, so a scan of NOTHING is the writer's `RESOURCE_CHECK_BROKEN` at exit 1 — it is not a
+  population. Exits 0 when it scanned at least one file, 2 when it could not run
 - Defaults to project root if no path provided
+- The lab's population facet reads it: the count from `examined`, the population from `data.files`
 
-**Example output:**
+**Example output (`--verbose`):**
 ```yaml
 ---
-status: success
-root: /abs/path/to/project
-filesScanned: 12
-linksFound: 47
-anchorsFound: 23
-files:
-  - path: docs/README.md
-    links: 5
-    anchors: 3
-    checksum: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-durationSecs: 0.234
----
+status: ok
+examined: 12
+findings: []
+summary: { errors: 0, warnings: 0, info: 0 }
+gate: { strict: false }
+durationMs: 234
+data:
+  root: /abs/path/to/project
+  lane: projection
+  extentSource: git
+  collections: {}
+  files:
+    - path: docs/README.md
+      links: 5
+      anchors: 3
+      checksum: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 ```
 
 ### `vat resources validate [path]`
@@ -452,48 +448,262 @@ durationSecs: 0.234
 
 **Behavior:**
 - Validates discovered resources (link integrity, anchors, structure)
-- Exits 0 if valid, non-zero if errors found
+- Publishes every finding flat, `location` relative to `data.root`; `examined` is the number of
+  resources validated
+- Exits on the code the document derives: 0 with no error-severity finding, 1 with one (or when
+  nothing was validated), 2 when the run could not finish
+- `--collection` scopes the whole report — findings, `examined`, exit code — to that collection
 - Defaults to project root if no path provided
-- Dual output: test format (stderr) + YAML (stdout)
-- CI/CD gate
-
-**Success output:**
-```yaml
----
-status: success
-filesScanned: 12
-linksChecked: 47
-anchorsChecked: 23
-duration: 456ms
----
-```
+- CI/CD gate; also a phase of `vat validate` and `vat verify`, which fold its report into their
+  own (see "The orchestrators" below)
 
 **Error output:**
-
-*stderr:*
-```
-docs/README.md:15:25: error: Link target not found: ./missing.md
-```
-
-*stdout:*
 ```yaml
 ---
-status: error
-filesScanned: 12
-errorsFound: 1
-filesWithErrors: 1
-issueCounts: { errors: 1, warnings: 0, info: 0 }
-issueSummary: { LINK_BROKEN_FILE: 1 }
-issues:
-  - file: docs/README.md
-    issues:
-      - line: 15
-        column: 25
-        code: LINK_BROKEN_FILE
-        severity: error
-        message: Link target not found: ./missing.md
----
+status: findings
+examined: 12
+findings:
+  - code: LINK_BROKEN_FILE
+    severity: error
+    message: "File not found: docs/missing.md"
+    location: docs/README.md
+    link: ./missing.md
+    line: 15
+summary: { errors: 1, warnings: 0, info: 0 }
+gate: { strict: false }
+durationMs: 456
+data:
+  root: /abs/path/to/project
+  collections: {}
 ```
+
+### `vat resources query <sql> [path]`
+
+**Purpose:** Ask the resource projection one read-only SQL question
+
+**Behavior:**
+- `examined` is the POPULATION the statement ran over, never the rows it selected: zero rows over a
+  populated tree is `ok` (an empty answer is an answer); a population of nothing is refused
+- `data.columns` names the result columns even when no row was selected; `data.rows` holds the rows
+  exactly as SQLite holds them; `data.population` / `populationSecs` are the cache tell, `data.lensPopulation` the lenses' one
+- A statement the store refuses (not a query, a second statement, an unbound `?`, a name the schema
+  lacks) is `USAGE_INVALID` by its code, `PROJECTION_STATEMENT_REFUSED`, never by its message
+- `--budget <seconds>` is opt-in, with no default: without it (or with `--budget 0`) the statement
+  runs in the operator's process exactly as before, with no second process and
+  `query-supervision.ts` never loaded. With it, the run goes to `vat resources check`'s supervisor
+  (`superviseRun`, keyed by verb): a child running the same verb under `--supervised-by`, killed
+  after that long without progress. A run killed or dead before it finished has no answer, so it is
+  refused as `RUN_INCOMPLETE`, exit 2, never published as a partial result. The child writes
+  `started`, the population line and `statements-complete`, so the refusal says where it stopped;
+  one statement is one unit, so a healthy statement slower than the budget is killed too
+
+### `vat resources check [path]`
+
+**Purpose:** Run the project's own assertions over its resource projection, as a gate.
+
+A query answers a question once. A question worth asking twice is a rule, and a rule that lives in
+someone's shell history is not enforced — it decays into a comment. This verb runs the statements a
+project wrote into `resources.checks` plus VAT's own built-in set, turns each violating row into an
+ordinary validation finding, and exits non-zero when any of them is an error. That is the whole
+difference between `vat resources query` and this, and it is the difference between a tool and a gate.
+
+The invariants below are load-bearing; `packages/cli/src/commands/resources/check.ts` implements
+them and points here.
+
+#### 🔑 Four ways to check nothing, all of them refusals
+
+VAT ships no schema version, so a renamed column simply breaks a check's SQL. The tempting handling
+— log it and carry on — is the one thing this must never do: a check that stopped running looks
+exactly like a check that passed, and the project keeps reporting green over an assertion nobody is
+making any more. Four situations collapse to that same shape, and all four are reported at **error**
+severity under one non-overridable code, `RESOURCE_CHECK_BROKEN`:
+
+| Situation | Mechanism |
+|---|---|
+| A statement will not run | reported with the columns the projection actually has, from the `catch` in `runUnits` |
+| The corpus enumerated empty | `checksRun` counts RULES, so nothing counted the ROWS; `membersEnumerated` is published and a run over zero members refuses (`emptyCorpusFinding`) |
+| `--check <name>` matched nothing | `requireKnownCheck` refuses before the crawl, naming the declared set |
+| Not one check executed at all | `noCheckRanFinding`, derived in `buildCheckOutputData` |
+
+The empty-corpus case is the one that shipped: a broad `.gitignore`, a shallow or sparse CI
+checkout, or a root that resolved somewhere else ran every declared check over nothing and reported
+a passing status (`status: success` in the build that shipped it; `ok` today) on exit 0 with empty stderr. Population declines ignored members rather than
+flagging them, so the tables held no trace of it either.
+
+The fourth case changed meaning once a DEFAULT SET existed. `checksRun` counts the built-in set plus
+whatever the project declared, so an absent `checks:` block no longer produces a zero — and it must
+not, because a project with no config has to run the defaults and be able to pass. The refusal now
+means what it always literally said: **not one check executed, the defaults included**, which is a
+defect in VAT or an emptied default list rather than anything an adopter wrote. Deriving it in
+`buildCheckOutputData` is what stops a future edit that empties `BUILTIN_CHECKS` from publishing a
+clean document.
+
+⚠️ **What is NOT claimed:** that the step can now always fail. No built-in ships at `error` (one at
+`info`, one at `warning`), so a project declaring no checks of its own has a `vat resources check`
+step that exits 0 whatever it finds. That is a property of the code's SEVERITY — movable with `resources.validation.severity` —
+and not of the denominator, and inventing a second refusal for it would refuse the no-config run the
+default set exists to serve. The stderr warning says which situation the operator is in; the
+document names every rule that ran in `checks[]`, with `builtin: true` on the ones VAT supplied, so
+a deleted `checks:` block is visible in the machine channel rather than only in a warning nothing
+parses.
+
+#### 🔑 No built-in check may be SQL
+
+Every SQL statement this verb runs is adopter-declared: `checkCommand` reads
+`config?.resources?.checks` and nothing else for statements. The one way to end that quietly is to
+author a built-in as SQL — a default-on rule written as a statement makes the engine, the projection
+and the population mandatory for everyone who inherits it, without anybody deciding that. So
+**built-ins are TypeScript predicates over the projection's row model.** SQL stays the two places a
+user asked for it: this verb's declared checks, and `vat resources query`.
+
+✅ The first built-in is `claude-rule-glob-inert`, in `@vibe-agent-toolkit/resources`'
+`builtin-checks.ts`: a for-loop over `claudeRulePatterns`, which the population already holds in
+memory. It ships its SQL twin as `sqlTwin` — DOCUMENTATION an adopter copies into their own
+`resources.checks` to narrow or re-severity, printed by `--help`, never executed. That is the point
+of materialising these facts as tables: the built-in is the default REPORT, and the same question
+stays askable by anyone who wants a different answer.
+
+✅ The second is `claude-rule-frontmatter-invalid` (`CLAUDE_RULE_FRONTMATTER_INVALID`), and it
+exists because of the first one's blind spot: a rules file whose YAML frontmatter VAT cannot read
+produces no `claude_rule_patterns` rows, so the inert check had nothing to read and passed. It reads
+`blobs.frontmatterError` for identities tagged `rules-file` instead — one finding per file. Two
+reasons fill that column: YAML that does not parse, and a block that parses to a **sequence or a
+scalar**, which has no `paths:` key to read and used to be indistinguishable from a file with no
+frontmatter at all.
+
+✅ The third is `claude-rule-link-unchecked` (`CLAUDE_RULE_LINK_UNCHECKED`), and it exists because of
+BOTH of their blind spots. VAT realizes no symbolic link's own path, so a `.claude/rules/x.md` that
+is a link — or a linked rules directory — has no realization row, no blob and no pattern row, and
+both checks above pass on it — while Claude Code loads it when the link's target stays inside the
+root, skips it when the target resolves outside, and loads nothing when the link resolves to nothing
+([evidence](../external/claude-code-rules-paths-behaviour.md)). It reads the `realization_conditions`
+rows the extents record under any declined-link code (`EXTENT_SYMLINK_NOT_REALIZED`,
+`EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT`, `EXTENT_SYMLINK_TARGET_UNRESOLVED` or `EXTENT_SYMLINK_TARGET_UNREADABLE`, all `info`, read together through `DECLINED_SYMLINK_CODES`)
+and reports the ones at or under a rules directory, or at a
+`.claude` directory itself — which carries a rules directory with it while its own path stops short
+of the `rules` segment — which is why `BuiltinCheckInput` carries that table, REQUIRED like every
+other member.
+
+**A built-in's findings carry an ORDINARY registry code.** A built-in is not a custom check: its
+findings carry a `CODE_REGISTRY` code with the registry's own default severity, so
+`resources.validation.severity.<CODE>` moves it exactly like every other code VAT emits, through the
+identical `resolveFindings` call. The `CUSTOM:<name>` space that `sql-checks.ts` mints is for
+ADOPTER-declared statements, whose severity is declared beside them because the registry holds no
+entry for a name a user invented; reusing it for a built-in would put a shipped rule in a key space
+the schema validates by shape instead of by identity, and a misspelled override would silently reach
+nothing.
+
+⚠️ The engine today is `node:sqlite`, built into Node, so what is at stake is not an install — it is
+the POPULATION. On an ~11,700-member adopter tree, building the projection is **>99.9%** of a check
+run (16.5 s cold, ~1.3 s from the store) against **0.0008–0.004 s** for the statements themselves.
+That is exactly the cost "What this does not do" below refuses to put on every adopter's pre-commit
+path, and a default-on SQL check would put it there without the decision. The INSTALL cost is
+deferred rather than gone: the open question about a columnar engine is a 108 MB platform binding on
+a published toolkit, and this invariant is what keeps that question answerable either way.
+
+#### 🔑 The default check set belongs to the pipeline, not to the config file
+
+A directory with no `vibe-agent-toolkit.config.yaml` must run exactly the same default-on checks as
+one with a config; config only ADDS to that set or OVERRIDES a severity in it. *"'Default-on error'
+is meaningless as a category if being default-on requires a config file to say so."*
+
+That is a constraint on WHERE the defaults live in code, not only on what they are. They cannot be
+defaulted into the parsed config object, because an absent config is `undefined` and every default
+would vanish with it — for the project that never wrote one, which is the population the category
+exists for. The rest of VAT already behaves this way: `vat audit` completes its entire scan first
+and reads config only to apply severity overrides, warning and CONTINUING when the file cannot be
+read; `loadResourcesWithConfig` hands `vat resources validate` a registry whose built-in validators
+run whether `loadConfig` returned a config or nothing.
+
+✅ **Honoured by construction.** `BUILTIN_CHECKS` is a module constant in
+`@vibe-agent-toolkit/resources`; `runOutcome` binds it to the projection and hands it to
+`runProjectChecks` as `builtins`, a REQUIRED argument beside `checks` rather than a default folded
+into either. Nothing on that path reads `config`.
+
+#### Keeping a TypeScript check and its SQL twin: two good reasons, one trap
+
+The proposal was "write the predicate twice, in TypeScript and in SQL, and run whichever is faster".
+Two thirds of it are worth having.
+
+✅ **As documentation.** An SQL twin is executable documentation of the row model, and strictly
+better than prose about it: prose can describe a column that no longer exists and never say so,
+while a statement stops compiling — which this verb reports as `RESOURCE_CHECK_BROKEN` rather than
+as a skip.
+
+✅ **As a differential oracle.** Run both over the frozen corpus and assert IDENTICAL findings. That
+is the only thing which makes a dual implementation better than a single one rather than worse: two
+implementations with no mandatory differential test are simply two places for one rule to be wrong.
+Apply it selectively, to genuinely relational checks — done by default, every new rule costs three
+artifacts instead of one.
+
+⛔ **As a runtime optimizer — rejected, on two INDEPENDENT grounds.** It would essentially never
+choose SQL: `buildResourceProjection` hands the rows back in memory before the run database
+exists at all, so the TypeScript arm is a for-loop over data already in hand, and the SQL arm's whole
+measured share of a run is the 0.0008–0.004 s above. A scheduler would be choosing between two arms
+of the 0.1%. And it reintroduces the dependency through the back door: an optimizer that MAY choose
+SQL means SQL MAY be needed at check time, which for anyone shipping the thing is the same as
+needed. **Optionality is not a property you can keep while also letting a scheduler reach for the
+optional thing.**
+
+#### 🔑 Adopter SQL runs unsandboxed on purpose — and contributed SQL is not adopter SQL
+
+What a statement may BE is gated hard, and documented where it is enforced: `assertIsQuery` and
+`detachForeignSchemas` in `packages/projection-sqlite/src/sql-gate.ts` refuse `ATTACH` and `PRAGMA`,
+with the measured cross-repository leak that motivated both, and `CHANGELOG.md`'s `--budget` entry
+carries why nothing inside this process can interrupt a runaway statement.
+
+Everything PAST those gates is unsandboxed deliberately. A `.sql` file the adopter points their own
+config at is adopter code, at the same trust boundary as their eslint config: they wrote it or they
+chose to inherit it, and VAT is not the thing standing between a project and its own repository.
+
+🚨 That reasoning covers exactly ONE trust domain, and the rule scoping it is the other half:
+**contributed SQL is a reviewed EXAMPLE, never an auto-executed check.** A contribution channel is
+third-party text, and a statement arriving through one has none of the "they chose it" the paragraph
+above rests on. Ship it as documentation an adopter copies into their own `resources.checks`
+deliberately. One paragraph must not be stretched to cover both domains.
+
+#### 🚨 The population is charged to NOBODY, and the clock proves it
+
+A check's published `durationSecs` is the STATEMENT alone. The git tracker, the projection build and
+the load into the run database happen ONCE and serve every check in the run, so folding that
+shared setup into each rule would make N cheap rules look expensive and make the per-rule numbers sum
+to N times a cost paid once. It is published separately instead — `populationSecs` beside
+`population` — so a reader reconciles the parts against `durationSecs` rather than inferring the
+remainder and attributing it to whichever rule they happen to be reading.
+
+🪤 This repo has already shipped the opposite mistake once, in another instrument: `parse ab`
+reported a pooled arm BACKWARDS because its estimate was thread-summed, and the report surfaced no
+caveat that would have told the reader. A shared cost silently attributed to one participant is the
+same defect wearing different clothes. If you ever want the population inside these numbers, divide
+it out explicitly and say so in the field name.
+
+The span is enforced structurally: it is the thunk handed to `timed`, which exists for that reason.
+⚠️ `performance.now()`, never `Date.now()` — a rule over a small projection is routinely
+sub-millisecond, and a millisecond-granularity clock reports every one as `0`, which reads as "not
+measured". 🪤 Exactly one cost record per executed check, on both paths, because `checksRun` is that
+list's length; the record is filed before the rows become findings, so nothing between the two can
+leave a check unpriced.
+
+#### 🚨 Why the loop announces a check before it can be stopped
+
+The progress sink is told a check is about to run, and told again when it is priced. That ordering is
+not decoration: this verb runs adopter-authored SQL unattended, an accidental cross join or an
+unterminated `WITH RECURSIVE` runs forever, and NOTHING in-process can interrupt it — the query is
+synchronous, it holds the event loop, and `node:sqlite` exposes no interrupt. The supervisor's only
+lever is an external `SIGKILL`, which publishes nothing of the killed process's memory. So the name
+of the rule that hangs has to be on disk BEFORE it is entered, or it is not recoverable at all.
+
+`vat resources query` spawns only under `--budget`, and `check` always does, because their
+operators differ: a check runs unattended in CI, where nobody is there to press Ctrl-C, so its bound
+is on by default; a query is typed at a keyboard, where Ctrl-C works (no process running the SQL
+installs a signal handler), so its bound is the operator's to ask for.
+
+#### What this does not do
+
+It does not fold into `vat resources validate`. That command is on every adopter's pre-commit path,
+and adding a store-backed population to it is a cost and a risk that deserves its own decision with
+its own evidence. Wiring this into CI is one line in a workflow; making it unavoidable is not this
+change's call to make.
 
 ## Build Process
 
@@ -558,22 +768,90 @@ issues:
   severity; `FINDINGS` (1) the run completed and what it examined failed its gate; `ERROR` (2) the
   command could not do its job (usage, environment, internal). A literal `process.exit(n)` is a
   lint error (`local/no-literal-process-exit`).
+- 🔑 A verb that publishes a document exits with `exitCodeForReport(document)` — the code is
+  DERIVED from the document's `status` and `summary`, never chosen beside it. Choosing it by hand
+  is how one outcome shipped with different codes in different verbs. Under `packages/cli/src/`
+  the rule's `derived` option refuses naming `ExitCode.FINDINGS` at all and any exit that is not
+  `OK`, `ERROR` or a derivation; a child's code is forwarded through `exitCodeOfChild`. No file is
+  exempt, and the exit-code matrix proves the derivation by running every envelope verb and
+  asserting every external adapter outcome. The matrix is one scenario table
+  (`test/system/test-helpers/exit-code-matrix.ts`) run by several spec files —
+  `test/system/exit-code-matrix-shard-<name>.system.test.ts`, one per key of `MATRIX_SHARDS`, and
+  `exit-code-matrix-path-*.system.test.ts` for the path outcomes — because one file spawning every
+  scenario runs past the per-file duration budget. `test/system/exit-code-matrix.system.test.ts`
+  asserts what holds them together: the table covers exactly the registered verbs, the shards
+  partition the table, and the shard and path files on disk are exactly the declared ones. A new
+  report verb needs its scenarios in the table AND a shard.
 - Always flush stdout before writing to stderr
 - Test format errors must include file:line:column
 
-Use the `handleCommandError` helper for consistent error handling:
+Every verb ends its failures through the writer (`endWithRefusal`, next section). Build-time scripts that are not `vat`
+verbs (`validate-help-files.ts`) throw, and the build runner exits on the uncaught throw.
 
-```typescript
-try {
-  // Command implementation
-} catch (error) {
-  handleCommandError(error, logger, startTime, 'CommandName');
-  // handleCommandError calls process.exit() internally
-}
-```
+## The report contract
 
-This ensures a consistent error format, duration logging, and the exit codes above (`FINDINGS`
-for a gate the tree failed, `ERROR` for a command that could not do its job).
+- **One writer.** Under `packages/cli/src/commands/`, stdout is written by
+  `utils/document-writer.ts` and nothing else — `local/no-stdout-outside-writer` refuses
+  `process.stdout.write`, the stdout `console` methods and the stdout helpers (called or handed on),
+  in every command file — the rule takes no exemption list. A
+  supervised child's document is read with `readForwardedDocument` (parsed and validated; one that
+  is not the verb's document is the child's death, not a forward) and ends through
+  `endWithForwardedDocument`, on the code that document derives.
+- **One registry.** `src/report-schemas.ts` `PUBLISHED_SHAPES` lists every published shape — report
+  documents, external payloads, stdout and file artifacts, exported library result types, and the
+  JSON Schemas describing adopter input — and `test/published-shapes.test.ts` asserts each claim
+  both ways against the tree (writer calls, Commander leaves, schema files, barrel exports). A verb's
+  `<VERB>_REPORT_SCHEMA` lives in a sibling `*-schema.ts`, because the registry imports it and the
+  verb imports the writer that imports the registry.
+- **The union envelope.** A report is `Report<T>` from `@vibe-agent-toolkit/schema`: `status`
+  (`ok` | `findings` | `error`), a REQUIRED `examined`, `findings`, `summary`, `gate`, `data`, and on
+  `error` an `error: { code, message }` whose `code` is a registered refusal. The writer validates the
+  document against the entry's schema before a byte leaves, and adds the one `RESOURCE_CHECK_BROKEN`
+  refusal when `examined` is zero, named with the entry's declared unit.
+- **`gate` is in the document.** `gate.strict` records whether warnings fail the run, so the exit
+  code is derived from the published document alone.
+- **The exit table.** `exitCodeForReport(document)`: `2` when `status` is `error`; `1` for an
+  error-severity finding, or a warning under `gate.strict`; `0` otherwise. `endWithReport(verb,
+  report, format)` writes and exits on that; `endWithRefusal(verb, code, error, format, gate,
+  finished)` publishes the error branch with whatever finished (`NOTHING_FINISHED` spelled out) and
+  exits 2. `refusalCodeOf(error)` picks the code: a `CommandRefusalError`'s own (`USAGE_INVALID` for the
+  invocation's mistake), a library error's by its `code`, and `INTERNAL_ERROR` only for what nothing
+  anticipated.
+- **The orchestrators.** `vat build`, `vat validate` and `vat verify` publish ONE report
+  (`orchestrator` in the registry, `schemas/orchestrator.json`). Each phase function
+  (`run…Phase`) returns `{ report }` — its own command's report BEFORE the writer's run-integrity
+  pass, or `refusalReport(code, error, gate, finished)` on a refusal — and the command lane is
+  `endWithReport(verb, (await run()).report, format)`. `orchestratorReport` (`commands/phase-utils.ts`)
+  folds the phases: findings flat with `location` unchanged, `examined` the sum, and
+  `data.phases[]` one `{ name, status, examined, summary, error?, data }` per phase. The
+  orchestrator's schema holds a phase's `data` as `unknown`; what keeps it honest is that every
+  `Phase` names the schema its report is held to (`schema`, required) and `runPhase` parses the
+  report with it before the fold — a delegated phase names its verb's registered
+  `<VERB>_REPORT_SCHEMA`, an in-process one `DATALESS_PHASE_REPORT_SCHEMA` or
+  `PACKAGED_CONTENT_REPORT_SCHEMA`, and a report its schema rejects is that phase's
+  `INTERNAL_ERROR`. Run integrity
+  is applied PER PHASE (`phaseVerdict`), with the very declaration the phase's verb gives its
+  writer when it runs alone (`Phase.examined`, required): a configured phase that examined nothing
+  is that phase's `RESOURCE_CHECK_BROKEN`, so an orchestrated phase and its verb cannot disagree —
+  judged on the sum alone, a `skills.include` matching nothing beside a healthy `resources:`
+  surface was `status: ok`, exit 0. A project lacking a phase's config does not select that phase
+  at all; a phase for which zero IS an answer declares `{ zeroIsAnAnswer: <reason> }` in place of
+  the declaration. One such answer is decided from the project: a `skills` phase whose pool is
+  empty in a project that ships plugin-local skills (`skillsPhaseExamined` — the `skills:` block is
+  required for their config, so its include legitimately matches nothing). The writer still judges the sum, for a run in which no phase ran. A phase that
+  did not finish makes the run `error` /
+  `RUN_INCOMPLETE` with the finished phases still in `data.phases`; a refusal of the run itself (a
+  path argument, the retired `--only`, no project root) is the error branch with every phase that
+  already finished. There is no second status vocabulary.
+- **Formats.** `yaml` and `json` render the document; `text` renders one
+  `location:line:column: severity: message [code]` line per finding and a status line with the
+  counts and the denominator — or the entry's own `renderText` when its human rendering is a
+  published contract of its own.
+- **Documented examples are held to the schema.** A fenced block tagged `yaml vat-report=<verb>`
+  (or `json`; `<verb>` as typed after `vat`) in any tracked `.md` outside `CHANGELOG.md` and
+  `.changes/` must validate against that verb's registered schema, and every `report` entry needs
+  at least one (`tagged-report-examples.integration.test.ts`). Produce an example by running the
+  built CLI and trimming it; never write one by hand.
 
 ## Testing Patterns
 
@@ -597,7 +875,7 @@ describe('MyCommand (system test)', () => {
     const { result, parsed } = executeCommandAndParse(binPath, projectDir);
 
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
+    expect(parsed.status).toBe('ok');
   });
 
   it('should handle errors correctly', () => {

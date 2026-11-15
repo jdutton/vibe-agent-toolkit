@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/resource-compiler",
-  "version": "0.2.0-rc.8",
+  "version": "0.2.0-rc.15",
   "description": "Compile markdown resources to TypeScript with full IDE support",
   "type": "module",
   "main": "./dist/index.js",
@@ -36,6 +36,7 @@
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
+    "lint": "VAT_LINT_TASK=1 eslint . --max-warnings=0",
     "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging"
   },
   "dependencies": {
@@ -45,7 +46,7 @@
     "chokidar": "^3.6.0",
     "commander": "^12.1.0",
     "github-slugger": "^2.0.0",
-    "glob": "^10.3.10"
+    "glob": "^14.0.3"
   },
   "files": [
     "dist",
@@ -65,7 +66,7 @@
   "author": "Jeff Dutton",
   "license": "MIT",
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.16.0"
   },
   "repository": {
     "type": "git",

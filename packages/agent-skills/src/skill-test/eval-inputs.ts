@@ -1,6 +1,17 @@
-import { cpSync, existsSync } from 'node:fs';
-
-import { mkdirSyncReal, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import {
+  classifyFsFault,
+  copyRegularFile,
+  copyTree,
+  type FollowedPathKind,
+  followedKindSync,
+  forEachInOrder,
+  FsFaultError,
+  isFsFaultError,
+  mkdirSyncReal,
+  safePath,
+  VatError,
+  withFsFaultSync,
+} from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 import { sanitizeGraderText, sanitizeTextPreservingLines } from './grader-text.js';
@@ -26,9 +37,9 @@ export class EvalInputError extends VatError {
 
 /**
  * Neutralize a SUITE-AUTHORED string before it is quoted into an
- * {@link EvalInputError}, whose message reaches `process.stdout` on the
- * `Summary:` line — the one channel deliberately kept machine-readable — and
- * renders twice on the way there.
+ * {@link EvalInputError}, whose message reaches `process.stdout` as the
+ * published report's `error.message` — the one channel deliberately kept
+ * machine-readable — and stderr beside it, rendering twice on the way there.
  *
  * The suite is nominally adopter-authored, but `resolveEvalSuitePath` will
  * harvest one out of a FETCHED npm/url artifact, i.e. out of the skill under
@@ -275,9 +286,7 @@ export type EvalArm = 'with' | 'without';
 /**
  * The opaque directory segment each arm's workspaces live under, minted fresh per
  * run. `with` is required and `without` present only under `--baseline`, so the
- * set of arms is the keys — a shape that cannot express "stage nothing", unlike
- * the `readonly EvalArm[]` this replaced (an empty array was a legal input that
- * silently left every executor with a non-existent cwd).
+ * set of arms is the keys — a shape that cannot express "stage nothing".
  *
  * ⚠️ The VALUES must not be the literal arm names, and must not be derivable from
  * each other. See {@link stageEvalWorkspaces}.
@@ -331,79 +340,123 @@ export interface StageEvalWorkspacesInput {
  * without it). Returns `workspacesRoot`.
  *
  * EVERY eval gets a directory, including one that declares no `files` — it is
- * simply left empty. An eval without a workspace used to leave the executor with
- * no cwd of its own, so it ran inside the staged subject dir instead; for the
- * skill-absent arm of a `--baseline` run that placed the control's cwd inside the
- * very skill the arm exists to withhold. An empty dir costs nothing and keeps cwd
+ * simply left empty, so the control arm's cwd is never the staged skill. An
+ * empty dir costs nothing and keeps cwd
  * shaped identically across both arms, which is what makes the A/B a comparison.
  *
  * WHY THE `<arm>` SEGMENT. The two arms of one eval are dispatched ADJACENTLY into
- * a bounded-parallel pool, so they run at the same time. When they shared one
- * directory, the control arm could simply `ls` and read whatever the treatment arm
- * had just written — recovering the treatment's answer without ever touching the
- * skill, and without producing a single detectable harness path. That is a channel
- * BETWEEN the arms rather than into one of them, which is why auditing the four
- * channels into a process (prompt, argv, cwd, env) did not surface it: each arm's
- * own cwd was correct in isolation, and wrong as a pair. The arms must be
- * byte-identical at start and unable to observe each other after it.
+ * a bounded-parallel pool, so they run at the same time; a shared directory is a
+ * channel BETWEEN the arms. The arms must be byte-identical at start and unable
+ * to observe each other after it.
  *
- * WHY THE SEGMENT IS AN OPAQUE TOKEN and not the arm's name. It used to be the
- * literal `with`/`without`, which made the executor's own working directory the
- * loudest possible unblinding: the prompt tells each arm `Your working directory
- * is …/vat-skill-test-ws-<token>/without/e1`, so the skill-absent arm was told, in
- * the one string it cannot avoid reading, which side of the experiment it was on —
- * while `buildExecutorPrompt`'s docblock promises it "must NEVER be told (directly
- * or by implication) that it is being tested, evaluated, or graded". It also named
- * the sibling: `../with/<id>/` was a guessable path to the treatment arm's live
- * output. Independent random tokens fix both, and cost nothing.
+ * WHY THE SEGMENT IS AN OPAQUE TOKEN and not the arm's name: the prompt quotes the
+ * working directory verbatim, so `…/without/e1` would unblind the arm and
+ * `../with/<id>/` would name the treatment arm's live output.
  */
-export function stageEvalWorkspaces(input: StageEvalWorkspacesInput): string {
-  for (const arm of armsOf(input.armDirs)) {
-    stageEvalWorkspacesForArm(input, arm);
-  }
+export async function stageEvalWorkspaces(input: StageEvalWorkspacesInput): Promise<string> {
+  // In order: an input error names the first offending arm and eval, as it always has.
+  await forEachInOrder(armsOf(input.armDirs), (arm) => stageEvalWorkspacesForArm(input, arm));
   return input.workspacesRoot;
 }
 
-function stageEvalWorkspacesForArm(input: StageEvalWorkspacesInput, arm: EvalArm): void {
+/**
+ * Copy one declared input — a file, or a directory with everything under it — to `dest`, under the
+ * eval's workspace. A
+ * link is followed (the workspace gets what it points at), and inside a directory only to
+ * what lies under that directory.
+ */
+async function copyEvalInput(src: string, kind: FollowedPathKind, evalWorkspace: string, dest: string): Promise<void> {
+  const relative = safePath.relative(evalWorkspace, dest);
+  if (kind === 'directory') {
+    await copyTree(src, evalWorkspace, relative, { links: 'follow-contained', side: 'source', onto: 'fresh' });
+    return;
+  }
+  await copyRegularFile(src, evalWorkspace, relative, { side: 'source', reading: `eval input ${src}`, existing: 'replace', writing: `eval input ${src} into its workspace` });
+}
+
+/**
+ * Make a directory of the workspaces tree, 0700. The tree is VAT's own scratch: a directory the OS
+ * will not make there (a full or read-only temp directory) is the ENVIRONMENT's fault, never the
+ * eval suite's and never an uncoded errno.
+ */
+export function makeWorkspaceDir(dir: string): void {
+  withFsFaultSync({ side: 'environment', action: 'create an eval workspace directory', path: dir }, () => mkdirSyncReal(dir, { recursive: true, mode: 0o700 }));
+}
+
+async function stageEvalWorkspacesForArm(input: StageEvalWorkspacesInput, arm: EvalArm): Promise<void> {
   const armRoot = safePath.joinUnderRoot(input.workspacesRoot, armDirSegment(input.armDirs, arm));
-  mkdirSyncReal(armRoot, { recursive: true, mode: 0o700 });
-  for (const entry of input.suite.evals) {
+  makeWorkspaceDir(armRoot);
+  // In order: the first input error names the first offending eval, as it always has.
+  await forEachInOrder(input.suite.evals, async (entry) => {
     const evalWorkspace = safePath.joinUnderRoot(armRoot, String(entry.id));
     // 0700 like the root above it — created for every eval, populated only by
     // those declaring `files`.
-    mkdirSyncReal(evalWorkspace, { recursive: true, mode: 0o700 });
-    for (const rel of entry.files ?? []) {
-      // Containment first: a `rel` that escapes evalsDir or the workspace is a
-      // genuine "escapes the eval directory" problem and is reported as such.
-      let src: string;
-      let dest: string;
-      try {
-        src = safePath.joinUnderRoot(input.evalsDir, rel);
-        dest = safePath.joinUnderRoot(evalWorkspace, rel);
-      } catch (err) {
-        throw new EvalInputError(
-          `eval ${entry.id} declares input file "${quoteSuiteText(rel)}" that escapes the eval directory: ` +
-            quoteSuiteText((err as Error).message),
-        );
-      }
-      if (!existsSync(src)) {
-        throw new EvalInputError(
-          `eval ${entry.id} declares input file "${quoteSuiteText(rel)}" but it is absent at ${quoteSuiteText(src)}`,
-        );
-      }
-      // Copy failures (permissions, illegal filename on the host, disk) are
-      // reported accurately rather than mislabeled as a containment escape.
-      try {
-        // 0700 like the workspaces root above it: with an out-of-tree suite these
-        // hold data that may never have been in the repo.
-        mkdirSyncReal(safePath.join(dest, '..'), { recursive: true, mode: 0o700 });
-        cpSync(src, dest, { recursive: true });
-      } catch (err) {
-        throw new EvalInputError(
-          `eval ${entry.id} failed to stage input file "${quoteSuiteText(rel)}" into the workspace: ` +
-            quoteSuiteText((err as Error).message),
-        );
-      }
-    }
+    makeWorkspaceDir(evalWorkspace);
+    await forEachInOrder(entry.files ?? [], (rel) => stageEvalInput(input.evalsDir, evalWorkspace, String(entry.id), rel));
+  });
+}
+
+/**
+ * A failure staging an input, as the ENVIRONMENT's fault when it is one: an uncoded errno (the copy
+ * classifies its own reads on `source`, so what is left is a write into the workspace) or a workspace
+ * directory that would not be made. `undefined` for anything else — the suite's input. The path and
+ * the input name are suite-authored text and reach the terminal, so both are quoted as suite text.
+ */
+function workspaceWriteFault(error: unknown, id: string, rel: string, dest: string): FsFaultError | undefined {
+  const fault = classifyFsFault(error, { side: 'environment', action: 'stage an eval input', path: dest });
+  if (!isFsFaultError(fault) || fault.side !== 'environment') return undefined;
+  return new FsFaultError({
+    side: 'environment',
+    faultClass: fault.faultClass,
+    errno: fault.errno,
+    path: quoteSuiteText(fault.path ?? dest),
+    origin: fault.origin,
+    action: `stage eval ${id}'s input "${quoteSuiteText(rel)}" into its workspace`,
+    cause: error,
+  });
+}
+
+/** Copy one eval's declared input `rel` from the evals dir into its workspace. */
+async function stageEvalInput(evalsDir: string, evalWorkspace: string, id: string, rel: string): Promise<void> {
+  // Containment first: a `rel` that escapes evalsDir or the workspace is a
+  // genuine "escapes the eval directory" problem and is reported as such.
+  let src: string;
+  let dest: string;
+  try {
+    src = safePath.joinUnderRoot(evalsDir, rel);
+    dest = safePath.joinUnderRoot(evalWorkspace, rel);
+  } catch (err) {
+    throw new EvalInputError(
+      `eval ${id} declares input file "${quoteSuiteText(rel)}" that escapes the eval directory: ` +
+        quoteSuiteText((err as Error).message),
+    );
+  }
+  // The suite's directory is the tree: the input's link chain is read by text before the kernel follows
+  // it, and a refused probe is the suite's fault (`source`) — never "absent".
+  const srcKind = withFsFaultSync(
+    { side: 'source', origin: 'content', action: `examine eval input ${src}`, path: src },
+    () => followedKindSync(src, evalsDir),
+  );
+  if (srcKind === 'absent') {
+    throw new EvalInputError(
+      `eval ${id} declares input file "${quoteSuiteText(rel)}" but it is absent at ${quoteSuiteText(src)}`,
+    );
+  }
+  // Copy failures are reported accurately rather than mislabeled as a containment escape — and by
+  // side: what the copy READS is the suite's input (already classified `source` by the copy), what
+  // it WRITES is the workspace, VAT's own scratch. A fault writing it (a full disk, a read-only temp
+  // directory) is the environment's and is thrown as it is, never as the author's eval input error.
+  try {
+    // 0700 like the workspaces root above it: with an out-of-tree suite these
+    // hold data that may never have been in the repo.
+    makeWorkspaceDir(safePath.join(dest, '..'));
+    await copyEvalInput(src, srcKind, evalWorkspace, dest);
+  } catch (err) {
+    const fault = workspaceWriteFault(err, id, rel, dest);
+    if (fault !== undefined) throw fault;
+    throw new EvalInputError(
+      `eval ${id} failed to stage input file "${quoteSuiteText(rel)}" into the workspace: ` +
+        quoteSuiteText((err as Error).message),
+    );
   }
 }

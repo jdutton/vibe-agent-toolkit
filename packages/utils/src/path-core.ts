@@ -78,8 +78,9 @@ export function isAbsoluteAnyPlatform(p: string): boolean {
 /**
  * True if `p` contains a `..` parent-directory traversal segment.
  *
- * Forward-slash-normalized, then inspects each `/`-delimited segment — so a
- * `..` is caught regardless of the original OS separator. A containment guard
+ * Backslashes are read as separators on every host (the input is author-written
+ * config), then each `/`-delimited segment is inspected — so a `..` is caught
+ * regardless of the separator the author typed. A containment guard
  * for config-supplied relative paths (skill `files:` dest values, glob magic
  * remainders) that must never climb above their anchor directory.
  *
@@ -91,7 +92,7 @@ export function isAbsoluteAnyPlatform(p: string): boolean {
  */
 export function hasParentTraversalSegment(p: string): boolean {
   // eslint-disable-next-line local/no-dotdot-containment -- this IS the one lexical `..`-segment test the rule points to; it classifies a config-supplied RELATIVE spelling before any root exists to ask the filesystem about. Sinks use isUnderRoot().
-  return toForwardSlash(p).split('/').includes('..');
+  return toForwardSlashAnyPlatform(p).split('/').includes('..');
 }
 
 /**
@@ -239,25 +240,51 @@ export function getRelativePath(from: string, to: string): string {
   return toForwardSlash(path.relative(fromDir, to));
 }
 
+/** True on hosts (win32) where a backslash is a path separator; everywhere else it is a filename character. */
+const BACKSLASH_IS_NATIVE_SEPARATOR = path.sep === '\\';
+
 /**
- * Convert a path to forward slashes
+ * Convert a NATIVE path — one the filesystem, `path.*`, `readdir` or git
+ * handed you — to forward slashes.
  *
- * Windows accepts both forward slashes and backslashes as path separators.
- * This function normalizes all paths to use forward slashes for consistency.
- * Useful for glob pattern matching, cross-platform comparisons, and string operations.
+ * Converts only where a backslash is a separator (win32). On POSIX a backslash is a
+ * legal filename character, so `docs/x\y.md` is one file and is returned
+ * unchanged: converting it would invent a phantom `docs/x/` directory and, in
+ * {@link safePath.joinUnderRoot}, turn an `x\..\..` NAME into a climb.
  *
- * @param p - Path to convert
- * @returns Path with forward slashes
+ * For AUTHOR-WRITTEN text — an href, a glob, a config value, a CLI argument,
+ * an archive entry name — whose backslashes must read as separators on every
+ * host, use {@link toForwardSlashAnyPlatform}.
+ *
+ * @param p - A native path
+ * @returns The path with forward slashes (identity on POSIX)
  *
  * @example
- * toForwardSlash('C:\\Users\\docs\\README.md')
- * // Returns: 'C:/Users/docs/README.md'
- *
- * toForwardSlash('/project/docs/README.md')
- * // Returns: '/project/docs/README.md' (unchanged)
+ * toForwardSlash('C:\\Users\\docs\\README.md') // win32: 'C:/Users/docs/README.md'
+ * toForwardSlash('docs/x\\y.md')                // POSIX: 'docs/x\\y.md' (unchanged)
  */
 export function toForwardSlash(p: string): string {
-  return p.replaceAll('\\', '/');
+  return BACKSLASH_IS_NATIVE_SEPARATOR ? toForwardSlashAnyPlatform(p) : p;
+}
+
+/**
+ * Convert every backslash to a forward slash, on every host.
+ *
+ * For AUTHOR-WRITTEN text that may carry Windows spellings regardless of where
+ * VAT runs — markdown hrefs, globs, config values, CLI arguments, zip entry
+ * names — and for containment guards that must refuse `..\x` everywhere.
+ * Never use it on a path read from the filesystem or git: on POSIX that
+ * backslash is part of a filename. Use {@link toForwardSlash} for those.
+ *
+ * @param text - Author-written path text
+ * @returns The text with every backslash replaced by `/`
+ *
+ * @example
+ * toForwardSlashAnyPlatform('..\\evil')   // '../evil' on every host
+ */
+export function toForwardSlashAnyPlatform(text: string): string {
+  // eslint-disable-next-line local/no-manual-path-normalize -- this IS the converter the rule's autofix writes; it cannot call itself.
+  return text.replaceAll('\\', '/');
 }
 
 /**
@@ -297,7 +324,8 @@ export function toNfc(value: string): string {
  * Cross-platform safe path operations.
  *
  * Wraps Node's `path.join()`, `path.resolve()`, and `path.relative()` to always
- * return forward-slash paths. On Windows, the native `path.*` functions return
+ * return forward-slash paths (converted through {@link toForwardSlash}, so a
+ * backslash inside a POSIX filename survives). On Windows, the native `path.*` functions return
  * backslashes, which causes bugs when paths are used as Map keys, compared as
  * strings, or matched with glob patterns.
  *

@@ -5,7 +5,7 @@
  * The detector is irreducibly heuristic (see the module doc comment), so each
  * heuristic is a named predicate with its own test here — the corpus patterns
  * that motivated each one are named in the test titles. End-to-end behavior
- * (masking + definition matching through `parseMarkdown`) is covered in
+ * (masking + definition matching through `parseMarkdownContent`) is covered in
  * `link-parser.test.ts`.
  */
 

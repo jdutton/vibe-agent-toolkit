@@ -28,6 +28,23 @@ export {
 
 export { spawnHardened } from './spawn-hardened.js';
 
+export {
+  type KillableChild,
+  type KillProcessTreeOptions,
+  killProcessTree,
+} from './kill-process-tree.js';
+
+export {
+  type TerminatingSignal,
+  TERMINATING_SIGNALS,
+  isTerminatingSignal,
+  REPEAT_SIGNAL_WINDOW_MS,
+  reRaiseSignal,
+  type TerminatingSignalCleanup,
+  type TerminatingSignalGuard,
+  handleTerminatingSignals,
+} from './terminating-signals.js';
+
 /**
  * On `./process` because "is this process running me as its entry script?" is a
  * question about the process, and because every package that has a bin or a

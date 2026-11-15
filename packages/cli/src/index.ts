@@ -2,7 +2,7 @@
  * @vibe-agent-toolkit/cli
  *
  * Command-line interface for vibe-agent-toolkit.
- * Provides resource scanning, validation, and future agent commands.
+ * Provides resource scanning, validation, skill and plugin build, audit and RAG commands.
  */
 
 // Public API exports (for programmatic use)
@@ -17,7 +17,6 @@ export { createLogger, type Logger, type LoggerOptions } from './utils/logger.js
 // the top of the dependency chain and VAT's second published bin could not reach
 // it here.
 export {
-  writeYamlOutput,
   writeTestFormatError,
   writeStdoutSync,
 } from './utils/output.js';

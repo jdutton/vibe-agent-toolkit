@@ -37,12 +37,30 @@ export {
   __setCrawlTimingForTest,
   __writeCrawlTimingDumpForTest,
 } from './crawl-timing.js';
+// The work counters' test seams: zero every counter (and lift a forbid), read
+// the dump body the exit write would file, and make a forbidden count throw.
+export {
+  __readWorkCounterDumpForTest,
+  __resetWorkCountersForTest,
+  __throwOnForbiddenWorkCountForTest,
+} from './work-counters.js';
 // The three fixture modules the sinks' suites share: the ONE temp-dir family,
 // the host gates, and the hostile tree every sink is tested against.
+// The absence-cause signature, shared by the CLI's I0 census and every test that plants a cause.
+export * from './testing/absence-cause.js';
+export * from './testing/archive-fixtures.js';
 export * from './testing/executables.js';
+export * from './testing/fault-fs.js';
+// By name: the harness's vocabulary, not its op table (`OPS`, `OpSpec`, `PathShape` are `fault-fs.ts`'s
+// own wiring, and an `export *` here made them this subpath's API). Pinned by `module-subpaths.test.ts`.
+export { faultFsSpecOf, faultRuleOf, INJECTED_ERRNOS, injectedErrnoError } from './testing/fault-spec.js';
+export type { FaultFsSpec, FaultRule, FaultSpec, FsApi, FsOpFamily, InjectedErrno } from './testing/fault-spec.js';
 export * from './testing/hostile-tree.js';
+export * from './testing/parse-limit-fixtures.js';
 export * from './testing/platform-gates.js';
 export * from './testing/temp-dir.js';
+export * from './testing/tier-timeout.js';
+export * from './testing/tree-snapshot.js';
 
 /** A planted fixture tree and the means to remove it. */
 export interface TempCorpus {
@@ -156,5 +174,5 @@ export function replantableCorpus(
  * @returns A `refuse` policy for `crawlDirectory` and the git listings
  */
 export function refuseUnreadableFixture(root: string): UnreadablePolicy {
-  return { refuse: { root, remedy: 'A test fixture must be listable in full; fix the fixture, not the walk.' } };
+  return { refuse: { root, remedy: 'A test fixture must be listable in full; fix the fixture, not the walk.', side: 'source' } };
 }

@@ -1,8 +1,8 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { CODE_REGISTRY, calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { issueLocation } from '@vibe-agent-toolkit/utils';
+import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { issueLocation, promised } from '@vibe-agent-toolkit/utils';
 import type { z } from 'zod';
 
 import {
@@ -16,6 +16,8 @@ import {
 } from '../schemas/known-marketplaces-registry.js';
 
 import { type AnchorRootOptions, resolveAnchorRoot } from './anchor-root.js';
+import { describeIssues } from './describe-issues.js';
+import { manifestReadFailure } from './marketplace-validator.js';
 import type { ValidationResult } from './types.js';
 import { generateFixSuggestion } from './validation-utils.js';
 
@@ -28,7 +30,6 @@ const REGISTRY_FILE_NOT_FOUND_MESSAGE = 'Registry file not found';
 function validateRegistryFile(
 	filePath: string,
 	schema: z.ZodType,
-	successMessage: string,
 	locationRoot: string | undefined,
 	/**
 	 * Reports what the schema's `.passthrough()` absorbed. Registries VAT does not
@@ -43,30 +44,27 @@ function validateRegistryFile(
 	// enclosing project is discovered the same way the skills lane discovers it.
 	const location = issueLocation(filePath, resolveAnchorRoot(locationRoot, dirname(filePath)));
 
-	// Check file exists
-	if (!existsSync(filePath)) {
-		issues.push({
-			severity: 'error',
+	// One read decides missing / unreadable / unparseable — see manifestReadFailure.
+	let content: string;
+	try {
+		content = readFileSync(filePath, 'utf-8');
+	} catch (error) {
+		const halted = manifestReadFailure(error, location, {
 			code: 'REGISTRY_MISSING_FILE',
 			message: REGISTRY_FILE_NOT_FOUND_MESSAGE,
-			location,
 			fix: 'Create the registry file at the specified path',
 		});
-
+		issues.push(halted);
 		return {
 			path: filePath,
 			type: REGISTRY_TYPE,
-			status: 'error',
-			summary: REGISTRY_FILE_NOT_FOUND_MESSAGE,
+			...describeIssues(issues, REGISTRY_TYPE, halted.code === 'REGISTRY_MISSING_FILE' ? REGISTRY_FILE_NOT_FOUND_MESSAGE : 'Registry file unreadable'),
 			issues,
-			issueCounts: countBySeverity(issues),
 		};
 	}
 
-	// Parse JSON
 	let data: unknown;
 	try {
-		const content = readFileSync(filePath, 'utf-8');
 		data = JSON.parse(content);
 	} catch (error) {
 		issues.push({
@@ -80,10 +78,8 @@ function validateRegistryFile(
 		return {
 			path: filePath,
 			type: REGISTRY_TYPE,
-			status: 'error',
-			summary: 'Registry file is invalid JSON',
+			...describeIssues(issues, REGISTRY_TYPE, 'Registry file is invalid JSON'),
 			issues,
-			issueCounts: countBySeverity(issues),
 		};
 	}
 
@@ -116,16 +112,11 @@ function validateRegistryFile(
 		}
 	}
 
-	const status = calculateValidationStatus(issues);
-
 	return {
 		path: filePath,
 		type: REGISTRY_TYPE,
-		status,
-		summary:
-			status === 'success' ? successMessage : `Found ${issues.length} issue(s)`,
+		...describeIssues(issues, REGISTRY_TYPE),
 		issues,
-		issueCounts: countBySeverity(issues),
 	};
 }
 
@@ -136,17 +127,16 @@ function validateRegistryFile(
  * @param options - Anchor base for emitted locations (see {@link AnchorRootOptions})
  * @returns Validation result with issues
  */
-export async function validateInstalledPluginsRegistry(
+export function validateInstalledPluginsRegistry(
 	filePath: string,
 	options?: AnchorRootOptions,
 ): Promise<ValidationResult> {
-	return validateRegistryFile(
+	return promised(() => validateRegistryFile(
 		filePath,
 		InstalledPluginsRegistrySchema,
-		'Valid installed plugins registry',
 		options?.locationRoot,
 		detectInstalledPluginsRegistryDrift,
-	);
+	));
 }
 
 /**
@@ -156,15 +146,14 @@ export async function validateInstalledPluginsRegistry(
  * @param options - Anchor base for emitted locations (see {@link AnchorRootOptions})
  * @returns Validation result with issues
  */
-export async function validateKnownMarketplacesRegistry(
+export function validateKnownMarketplacesRegistry(
 	filePath: string,
 	options?: AnchorRootOptions,
 ): Promise<ValidationResult> {
-	return validateRegistryFile(
+	return promised(() => validateRegistryFile(
 		filePath,
 		KnownMarketplacesRegistrySchema,
-		'Valid known marketplaces registry',
 		options?.locationRoot,
 		detectKnownMarketplacesRegistryDrift,
-	);
+	));
 }

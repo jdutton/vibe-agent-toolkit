@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveDbPath, formatDuration } from '../../../src/commands/rag/command-helpers.js';
+import { resolveDbPath } from '../../../src/commands/rag/command-helpers.js';
+import { refusalCodeOf } from '../../../src/utils/command-refusal.js';
 
 describe('RAG command helpers', () => {
   describe('resolveDbPath', () => {
@@ -19,19 +20,16 @@ describe('RAG command helpers', () => {
         'No database path specified and no project root found'
       );
     });
-  });
 
-  describe('formatDuration', () => {
-    it('should format milliseconds < 1000', () => {
-      expect(formatDuration(500)).toBe('500ms');
-    });
-
-    it('should format seconds >= 1000ms', () => {
-      expect(formatDuration(1500)).toBe('1.5s');
-    });
-
-    it('should format minutes >= 60s', () => {
-      expect(formatDuration(90000)).toBe('1.5m');
+    it('refuses the missing --db as the invocation\'s mistake (USAGE_INVALID), not a VAT defect', () => {
+      let thrown: unknown;
+      try {
+        resolveDbPath(undefined, undefined);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(refusalCodeOf(thrown)).toBe('USAGE_INVALID');
     });
   });
+
 });

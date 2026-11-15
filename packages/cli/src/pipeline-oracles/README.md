@@ -20,7 +20,7 @@ projection and judgement at once. Two consequences:
   from "a check now fires more often."
 - **Blind to population.** The safety story for any pipeline restructure is
   "each lane's population is unchanged" — and population is not directly
-  observable in command output. `filesScanned` catches gross changes; a file
+  observable in command output. `examined` catches gross changes; a file
   whose *classification* moves while its findings stay identical is invisible.
 
 ## What is here
@@ -34,11 +34,15 @@ projection and judgement at once. Two consequences:
 
 ### ⛔ The enumeration snapshot is never sorted
 
-`ResourceRegistry.addResources` is explicitly first-added-wins on
-`DuplicateResourceIdError`. Arrival order therefore decides which of two
-colliding files gets validated, bundled and rewritten. A sorted snapshot would
-hide exactly the defect this instrument exists to catch, so
-`renderEnumerationSnapshot` reproduces capture order verbatim.
+`ResourceRegistry.addResources` is first-added-wins on a duplicate id, and the
+registry orders every batch itself — `admissionOrder()`, the code-unit order of
+the resolved path — so the enumerator's order never decides which of two
+colliding files gets validated, bundled and rewritten. The snapshot keeps
+capture order anyway, to show what the enumerator handed over: `enumerated` is
+the crawl's own order, `admitted` is the registry's, and `restatementDrift`
+reports an `admitted` that is not `admissionOrder()` of what survived. A sorted
+snapshot would hide both, so `renderEnumerationSnapshot` reproduces capture
+order verbatim.
 
 There is one exception, and it is about hosts rather than about ordering being
 unimportant. `crawlDirectory` has two mutually exclusive routes: `git ls-files`
@@ -274,19 +278,16 @@ bunx vitest run --config vitest.integration.config.ts \
 
 `src/qa-snapshot/` is the layer above the oracles. It packages a capture as a
 directory on disk, so two captures taken at different commits can be compared
-rather than only asserted against a golden, and it pairs the oracles with the
-other half of VAT's correctness evidence — whole-command stdout. The two halves
-answer different questions and neither is worth much alone. The oracles are
-narrow: they name a lane and a row. The whole-command captures are broad: they
-catch anything and localize nothing. *"Something changed"* plus *"here is where"*
-is the pair.
+rather than only asserted against a golden.
 
-⚠️ **The whole-command half has no caller today.** `captureSnapshot` still
-implements it behind `includeCommands`, but the only test that calls
-`captureSnapshot` passes `false` on purpose — spawning the built binary from a
-vitest run tests the build, not the instrument — and the caller that passed
-`true` was `vat pipeline snapshot`. Read the paragraph above as the design, not
-as a description of anything that runs.
+The other half of VAT's correctness evidence — whole-command output — is not
+here. The oracles are narrow: they name a lane and a row. Whole-command output is
+broad: it catches anything and localizes nothing. *"Something changed"* plus
+*"here is where"* is the pair, and the broad half is the lab's `verdict` facet
+(`vat-lab verdict run|compare`, `packages/lab/docs/facets.md`), which compares
+what two vat builds decide over a subject set and owns the one output
+normalizer. The snapshot's own whole-command capture had no caller once
+`vat pipeline snapshot` was deleted, and was removed when the facet absorbed it.
 
 ### Asking whether a capture is trustworthy at all
 

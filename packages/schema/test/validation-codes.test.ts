@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import { CODE_REGISTRY, CONSISTENCY_CODES, IssueCodeSchema, type ConsistencyCode, type IssueCode } from '../src/validation-codes.js';
+import {
+  CODE_REGISTRY,
+  CONSISTENCY_CODES,
+  FindingCodeSchema,
+  IssueCodeSchema,
+  REFUSAL_CODES,
+  RefusalCodeSchema,
+  type ConsistencyCode,
+  type IssueCode,
+} from '../src/validation-codes.js';
+import { ValidationConfigSchema } from '../src/validation-config.js';
 
 describe('CODE_REGISTRY', () => {
   it('contains every overridable code with a default severity', () => {
@@ -194,6 +204,61 @@ describe('CODE_REGISTRY — installed-plugins registry drift', () => {
   });
 });
 
+describe('CODE_REGISTRY — inert Claude rule globs', () => {
+  // `info`, and the severity is the whole decision: the detector's arithmetic
+  // ("no realized path matches this pattern") is not in doubt, but the corpus
+  // that would justify blocking does not exist — the one adopter measured so far
+  // (245 rules, 673 globs) has zero inert globs, so there is no observed
+  // population to calibrate a louder default against. docs/validation-rule-design.md
+  // forbids shipping `error` without that evidence, and a rule that nobody has
+  // ever seen fire is the last one entitled to fail a build.
+  it('registers CLAUDE_RULE_GLOB_INERT as an info-severity overridable code', () => {
+    expect(CODE_REGISTRY.CLAUDE_RULE_GLOB_INERT).toBeDefined();
+    expect(CODE_REGISTRY.CLAUDE_RULE_GLOB_INERT.defaultSeverity).toBe('info');
+    expect(CODE_REGISTRY.CLAUDE_RULE_GLOB_INERT.description.length).toBeGreaterThan(10);
+    expect(CODE_REGISTRY.CLAUDE_RULE_GLOB_INERT.reference).toBe('#claude_rule_glob_inert');
+  });
+
+  it('offers both real remedies and promises no auto-fix', () => {
+    // The two things an author can actually do are delete the dead glob or
+    // correct it. A remedy that only says "fix the glob" leaves the reader to
+    // guess whether VAT will do it for them, and VAT will not.
+    const { fix } = CODE_REGISTRY.CLAUDE_RULE_GLOB_INERT;
+    expect(fix).toMatch(/delete/i);
+    expect(fix).toMatch(/correct/i);
+    expect(fix).not.toMatch(/--fix|automatically|auto-fix/i);
+  });
+
+  // The frontmatter check exists because the inert one is blind to a rule whose
+  // YAML did not parse: no pattern rows, nothing to report. `warning`, since
+  // unparseable YAML has no deliberate arm the way a glob-ahead-of-its-files does.
+  it('registers CLAUDE_RULE_FRONTMATTER_INVALID as a warning naming the YAML alias trap', () => {
+    const entry = CODE_REGISTRY.CLAUDE_RULE_FRONTMATTER_INVALID;
+    expect(entry.defaultSeverity).toBe('warning');
+    expect(entry.reference).toBe('#claude_rule_frontmatter_invalid');
+    expect(entry.description).toContain('claude_rule_patterns');
+    expect(entry.fix).toMatch(/quote/i);
+  });
+
+  it('registers EXTENT_SYMLINK_NOT_REALIZED as an info code', () => {
+    const entry = CODE_REGISTRY.EXTENT_SYMLINK_NOT_REALIZED;
+    expect(entry.defaultSeverity).toBe('info');
+    expect(entry.reference).toBe('#extent_symlink_not_realized');
+  });
+
+  // The built-in splits its message on three condition codes, so the registry
+  // text an adopter reads must name all three arms — a dangling rules link is
+  // the arm the two-arm text described as neither "in force" nor "skipped".
+  it('describes all three CLAUDE_RULE_LINK_UNCHECKED arms, with a remedy for the unresolved one', () => {
+    const entry = CODE_REGISTRY.CLAUDE_RULE_LINK_UNCHECKED;
+    expect(entry.defaultSeverity).toBe('warning');
+    expect(entry.description).toMatch(/inside/);
+    expect(entry.description).toMatch(/outside/);
+    expect(entry.description).toContain('loads nothing through a link that resolves to nothing');
+    expect(entry.fix).toContain('point it at a file that exists or delete it');
+  });
+});
+
 describe('IssueCodeSchema', () => {
   it('IssueCodeSchema enumerates exactly the registry keys', () => {
     expect(new Set(IssueCodeSchema.options)).toEqual(new Set(Object.keys(CODE_REGISTRY)));
@@ -219,5 +284,106 @@ describe('CONSISTENCY_CODES', () => {
     for (const code of CONSISTENCY_CODES) {
       expect(code in CODE_REGISTRY, `${code} must not be overridable`).toBe(false);
     }
+  });
+});
+
+describe('findings no validation config is applied to', () => {
+  // `vat claude plugin install|uninstall` and `vat audit settings` examine Claude user
+  // state and a settings file, and neither loads a project `validation:` block. `vat audit --compat` does load one — and applies it to the
+  // scan's findings BEFORE its two lanes file theirs (`SETTINGS_POLICY_CONFLICT`,
+  // `COMPAT_NOT_CHECKED`), so the block never reaches those either. For every code here a
+  // registry entry would let the config accept a key nothing applies.
+  const LANE_OWNED = [
+    'PLUGIN_UNINSTALL_INCOMPLETE',
+    'PLUGIN_NOT_INSTALLED_BY_VAT',
+    'PLUGIN_KEPT_SIBLING_UNEXAMINED',
+    'SETTINGS_FILE_INVALID',
+    'SETTINGS_TYPE_AMBIGUOUS',
+    'SETTINGS_PATH_DEPRECATED',
+    'SETTINGS_RULE_SHADOWED',
+    'SETTINGS_MARKETPLACE_TOKEN_MISSING',
+    'SETTINGS_POLICY_CONFLICT',
+    'COMPAT_NOT_CHECKED',
+  ];
+  const ALLOW_ENTRY = [{ reason: 'expected here' }];
+
+  it('accepts a real finding code under both maps, so the refusals below are about the code', () => {
+    expect(ValidationConfigSchema.safeParse({ severity: { LINK_OUTSIDE_PROJECT: 'ignore' } }).success).toBe(true);
+    expect(ValidationConfigSchema.safeParse({ allow: { LINK_OUTSIDE_PROJECT: ALLOW_ENTRY } }).success).toBe(true);
+  });
+
+  it.each(LANE_OWNED)('%s is neither a registry entry nor a validation.severity / validation.allow key', (code) => {
+    expect(code in CODE_REGISTRY).toBe(false);
+    expect(ValidationConfigSchema.safeParse({ severity: { [code]: 'ignore' } }).success).toBe(false);
+    expect(ValidationConfigSchema.safeParse({ allow: { [code]: ALLOW_ENTRY } }).success).toBe(false);
+  });
+
+  it('never tells a reader to set a severity override on a code that is not a key', () => {
+    const inert = Object.entries(CODE_REGISTRY).flatMap(([code, entry]) => {
+      const named = /severity\.([A-Z][A-Z0-9_]*)/.exec(entry.fix)?.[1];
+      return named !== undefined && !FindingCodeSchema.safeParse(named).success ? [`${code} -> ${named}`] : [];
+    });
+    expect(inert).toEqual([]);
+  });
+});
+
+describe('CODE_REGISTRY — every code has a kind', () => {
+  const EXPECTED_REFUSALS = [
+    'USAGE_INVALID',
+    'CONFIG_INVALID',
+    'INPUT_UNREADABLE',
+    'BACKEND_UNAVAILABLE',
+    'EXTERNAL_API_FAILED',
+    'NOT_IMPLEMENTED',
+    'RUN_INCOMPLETE',
+    'INTERNAL_ERROR',
+    'RESOURCE_CHECK_BROKEN',
+    'RESOURCE_CHECK_EXAMINED_NOTHING',
+    'ARD_NOT_CONFIGURED',
+    'ARD_DERIVATION_FAILED',
+  ];
+
+  it('gives every registry entry a kind', () => {
+    for (const [code, entry] of Object.entries(CODE_REGISTRY)) {
+      expect(['finding', 'refusal'], `${code} has no kind`).toContain((entry as { kind?: unknown }).kind);
+    }
+  });
+
+  it.each(['RESOURCE_CHECK_BROKEN', 'RESOURCE_CHECK_EXAMINED_NOTHING'] as const)('registers %s as a refusal at error', (code) => {
+    expect(CODE_REGISTRY[code].kind).toBe('refusal');
+    expect(CODE_REGISTRY[code].defaultSeverity).toBe('error');
+  });
+
+  it('registers exactly the refusal vocabulary, and derives it from the registry by kind', () => {
+    expect(new Set(REFUSAL_CODES)).toEqual(new Set(EXPECTED_REFUSALS));
+    const byKind = Object.entries(CODE_REGISTRY).filter(([, entry]) => entry.kind === 'refusal').map(([code]) => code);
+    expect(new Set(byKind)).toEqual(new Set(REFUSAL_CODES));
+  });
+
+  it('gives every refusal the error default — a refusal is never quiet', () => {
+    for (const code of REFUSAL_CODES) expect(CODE_REGISTRY[code].defaultSeverity).toBe('error');
+  });
+
+  it('partitions the registry: a code is a refusal or a finding, never both, never neither', () => {
+    for (const code of IssueCodeSchema.options) {
+      const asRefusal = RefusalCodeSchema.safeParse(code).success;
+      const asFinding = FindingCodeSchema.safeParse(code).success;
+      expect(asRefusal !== asFinding, `${code} is in ${asRefusal ? 'both' : 'neither'}`).toBe(true);
+    }
+    expect(RefusalCodeSchema.safeParse('LINK_MISSING_TARGET').success).toBe(false);
+    expect(FindingCodeSchema.safeParse('INTERNAL_ERROR').success).toBe(false);
+  });
+});
+
+describe('SCAN_PATH_UNREADABLE remedy', () => {
+  // Emitted by audit and skills list — and only
+  // audit takes --exclude, while the listings load no config. The registry text
+  // must not hand every other verb a flag or an override it does not have.
+  it('names --exclude and the severity override only as the levers of the verbs that have them', () => {
+    const { fix, description } = CODE_REGISTRY.SCAN_PATH_UNREADABLE;
+    expect(fix).not.toMatch(/re-run the audit/);
+    expect(fix).toMatch(/vat audit takes --exclude/);
+    expect(fix).toMatch(/other verbs have no lever/);
+    expect(description).not.toMatch(/audited tree/);
   });
 });

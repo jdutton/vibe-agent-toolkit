@@ -39,6 +39,7 @@ await registry.addResource('./README.md');
 
 // Crawl directory for all markdown files
 await registry.crawl({
+  outputs: [],
   baseDir: './docs',
   unreadable: 'refuse',              // required: stop on a directory the crawl cannot list, or { degrade: (refusal) => … }
   include: ['**/*.md'],
@@ -88,9 +89,16 @@ console.log(`Added ${resource.id} with ${resource.links.length} links`);
 
 **Throws:** Error if file cannot be read or parsed
 
-##### addResources(filePaths: string[]): Promise<ResourceMetadata[]>
+##### addResources(filePaths: readonly string[]): Promise<ResourceMetadata[]>
 
-Add multiple markdown files in parallel.
+Add multiple markdown files, parsed in parallel and admitted in **admission order**: sorted by
+resolved path in UTF-16 code-unit order, whatever order (or spelling) you passed them in. The
+result comes back in that order, so do not pair it with your input by index.
+
+Admission order decides a duplicate id: of the files in **one call** that produce the same id,
+the one whose resolved path sorts first is kept and the rest are recorded as collisions
+(`getDuplicateIdCollisions()`). A file already in the registry from an earlier call keeps its id
+against a later one.
 
 ```typescript
 const resources = await registry.addResources([
@@ -100,25 +108,31 @@ const resources = await registry.addResources([
 ]);
 ```
 
-##### crawl(options: CrawlOptions): Promise<ResourceMetadata[]>
+##### crawl(options: CrawlOptions): Promise<RegistryCrawl>
 
-Crawl a directory and add all matching markdown files.
+Crawl a directory and add all matching markdown files, as one `addResources` batch. Returns the
+admitted resources and where their file list came from: `population` is `{ lane: 'walk' }` when
+the directory was walked, or `{ lane: 'projection', outcome, extentSource }` when a
+`populationSource` enumerated it.
 
 ```typescript
-const resources = await registry.crawl({
+const { resources, population } = await registry.crawl({
+  outputs: [],
   baseDir: './docs',
   unreadable: 'refuse',              // REQUIRED, no default: 'refuse' throws DirectoryListingRefusedError on a directory it cannot list;
                                      // { degrade: (refusal) => … } keeps going and hands you the gap to report
-  include: ['**/*.md'],              // Glob patterns (default: ['**/*.md'])
-  exclude: ['**/node_modules/**'],   // Exclude patterns (default: node_modules, .git, dist)
+  include: ['**/*.md'],              // Glob patterns (default: DEFAULT_RESOURCE_INCLUDE — md and html)
+  exclude: ['**/node_modules/**'],   // Exclude patterns, REPLACING the default (DEFAULT_RESOURCE_EXCLUDE)
   followSymlinks: false              // Follow symbolic links (default: false)
 });
 ```
 
 **Options:**
 - `baseDir` (required) - Base directory to crawl
-- `include` - Include glob patterns (default: `['**/*.md']`)
-- `exclude` - Exclude glob patterns (default: `['**/node_modules/**', '**/.git/**', '**/dist/**']`)
+- `include` - Include glob patterns (default: `DEFAULT_RESOURCE_INCLUDE` — `**/*.md`, `**/*.html`, `**/*.htm`)
+- `exclude` - Exclude glob patterns (default: `DEFAULT_RESOURCE_EXCLUDE` — `node_modules/`, `.git/`,
+  `.worktrees/`, `.claude/worktrees/`, a build's staging residue `.<name>.vat-staged-*`, and `dist/`).
+  A value you pass replaces the default; spread `DEFAULT_RESOURCE_EXCLUDE` to keep it
 - `followSymlinks` - Follow symbolic links (default: `false`)
 
 ##### validate(): Promise<ValidationResult>
@@ -955,6 +969,7 @@ async function validateDocs() {
 
   // Crawl all markdown in project
   await registry.crawl({
+    outputs: [],
     baseDir: process.cwd(),
     unreadable: 'refuse',
     exclude: ['**/node_modules/**', '**/dist/**', '**/.git/**']
@@ -990,7 +1005,7 @@ import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
 
 async function buildGraph() {
   const registry = new ResourceRegistry();
-  await registry.crawl({ baseDir: './docs', unreadable: 'refuse' });
+  await registry.crawl({ outputs: [], baseDir: './docs', unreadable: 'refuse' });
 
   // Resolve all cross-references
   registry.resolveLinks();
@@ -1026,7 +1041,7 @@ buildGraph();
 ```typescript
 async function linkReport() {
   const registry = new ResourceRegistry();
-  await registry.crawl({ baseDir: './docs', unreadable: 'refuse' });
+  await registry.crawl({ outputs: [], baseDir: './docs', unreadable: 'refuse' });
 
   const result = await registry.validate();
 

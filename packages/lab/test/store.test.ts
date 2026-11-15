@@ -6,6 +6,7 @@
  * The distinctness tests below are the real content here.
  */
 
+import { statSync } from 'node:fs';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
@@ -44,8 +45,18 @@ describe('reportFileName', () => {
     // The case the whole scheme exists for: every dev build carries the semver
     // of the release it branched from. If the name keyed on version alone, a
     // dev-vs-release comparison would write both sides to one file.
-    const dev = reportAt({ instrument: { version: '0.1.42', commit: '2'.repeat(40), dirty: false } });
+    const dev = reportAt({ instrument: { version: '0.1.42', commit: '2'.repeat(40), dirty: false, closure: 'c'.repeat(64) } });
     expect(reportFileName(report())).not.toBe(reportFileName(dev));
+  });
+
+  it('separates two dist builds of one version by their closure digest', () => {
+    // No commit on either side, one version: keyed on those alone, the second
+    // `run` into one --out would overwrite the first build's report.
+    const distOf = (closure: string): ReturnType<typeof reportAt> =>
+      reportAt({ instrument: { version: '0.2.0', commit: null, dirty: null, closure } });
+    expect(reportFileName(distOf('a'.repeat(64)))).not.toBe(reportFileName(distOf('b'.repeat(64))));
+    // Positive control: one closure names one file.
+    expect(reportFileName(distOf('a'.repeat(64)))).toBe(reportFileName(distOf('a'.repeat(64))));
   });
 
   it('separates a dirty instrument from the clean commit it was built on', () => {
@@ -53,7 +64,7 @@ describe('reportFileName', () => {
     // branched from are different binaries, so sharing a filename would let one
     // overwrite the other's measurement.
     const dirty = reportAt({
-      instrument: { version: '0.1.42', commit: '1'.repeat(40), dirty: true },
+      instrument: { version: '0.1.42', commit: '1'.repeat(40), dirty: true, closure: 'c'.repeat(64) },
     });
     expect(reportFileName(report())).not.toBe(reportFileName(dirty));
   });
@@ -63,7 +74,7 @@ describe('reportFileName', () => {
     // is the built output, not the checkout. So a dirty instrument is pinned by
     // observation time — weaker than an identity, and deliberately so, but it
     // does guarantee the second run never silently overwrites the first.
-    const instrument = { version: '0.1.42', commit: '1'.repeat(40), dirty: true };
+    const instrument = { version: '0.1.42', commit: '1'.repeat(40), dirty: true, closure: 'c'.repeat(64) };
     const first = { ...reportAt({ instrument }), capturedAt: '2026-08-14T10:00:00.000Z' };
     const second = { ...reportAt({ instrument }), capturedAt: '2026-08-14T11:30:00.000Z' };
 
@@ -153,6 +164,15 @@ describe('writeReport and readReport', () => {
     expect(written).toContain('nested');
   });
 
+  it.skipIf(process.platform === 'win32')('creates every directory it makes owner-only (0700), as --out itself is', async () => {
+    const base = safePath.join(tempDir, 'private');
+    const nested = safePath.join(base, 'pair-1', 'a');
+
+    await writeReport(nested, report());
+
+    expect([base, safePath.join(base, 'pair-1'), nested].map((dir) => statSync(dir).mode & 0o777)).toStrictEqual([0o700, 0o700, 0o700]);
+  });
+
   it('refuses to write a report it could not read back', async () => {
     // This used to compare a `formatVersion` integer, which could only catch a
     // header somebody had LABELLED wrong. Running the reader's own schema
@@ -162,7 +182,7 @@ describe('writeReport and readReport', () => {
     const impossible = report({
       coordinate: {
         ...COORDINATE,
-        instrument: { version: '0.1.42', commit: null, dirty: false },
+        instrument: { version: '0.1.42', commit: null, dirty: false, closure: 'c'.repeat(64) },
       },
     });
     await expect(writeReport(tempDir, impossible)).rejects.toThrow(/could not read back/);

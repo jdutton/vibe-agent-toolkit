@@ -250,7 +250,7 @@ function summaryLine(row: IoCommandStats): string {
  *
  * **That premise died when the instrument was fixed.** `tree:` and `dist:` now
  * resolve `packages/cli/dist/bin.js` — the real binary — and naming the
- * context-detecting wrapper is an explicit refusal (`resolveBinPath`). A vat the
+ * context-detecting wrapper is an explicit refusal (`resolveInstrument`). A vat the
  * lab launches therefore does its work in ONE process, and the bare count fired
  * on every run of every arm. Measured on an 8,548-file adopter tree:
  * `resources-scan` reported
@@ -268,8 +268,8 @@ function summaryLine(row: IoCommandStats): string {
  * touches the filesystem; a process that touched it is the process doing the
  * work, however many of them there were.
  *
- * ⚠️ Still reachable, and deliberately kept: `npx:` runs the published package's
- * `bin`, which IS the wrapper, and cannot be fixed the way `tree:` was.
+ * Kept as the tell of any launcher a later route reintroduces: every kind,
+ * `npx:` included, now resolves to the cli's own `dist/bin.js`.
  *
  * @param row - The command's statistics
  * @returns True when the counted process did no filesystem work

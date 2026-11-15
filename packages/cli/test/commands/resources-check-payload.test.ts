@@ -24,21 +24,27 @@
  * into a rule's" is a red rather than a shrug.
  */
 
+import {
+  bindBuiltinChecks,
+  BUILTIN_CHECK_NAMES,
+  type BoundBuiltinCheck,
+} from '@vibe-agent-toolkit/resources';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ProgressEntry } from '../../src/commands/resources/check-progress.js';
+import { CHECK_REPORT_SCHEMA, type CheckReport } from '../../src/commands/resources/check-schema.js';
 import {
   buildCheckOutputData,
-  CHECK_REPORT_SCHEMA,
-  type CheckReport,
-  requireDeclaredCheck,
-  runDeclaredChecks,
+  requireKnownCheck,
+  runProjectChecks,
   warnUndeclaredOverrides,
   type CheckCost,
   type CheckPayloadInput,
+  type PopulatedRun,
 } from '../../src/commands/resources/check.js';
 import { createLogger, type Logger } from '../../src/utils/logger.js';
 import type { AskProjection } from '../../src/utils/projection-query.js';
+import { NO_COLUMNS } from '../helpers/no-columns.js';
 
 /**
  * A logger that captures what reached stderr, and nothing else.
@@ -55,6 +61,68 @@ function spyLogger(): { logger: Logger; warnings: string[] } {
     warn: (message: string) => warnings.push(message),
   } as unknown as Logger;
   return { logger, warnings };
+}
+
+/**
+ * No default set, stated explicitly.
+ *
+ * 🔑 Every case about the DECLARED loop passes this rather than omitting the
+ * argument, and `runProjectChecks` has no default for it. "The defaults belong
+ * to the pipeline" is only a property of the code if the pipeline is the thing
+ * that supplies them — a function that filled them in when the caller said
+ * nothing would make the invariant a matter of who remembered.
+ */
+const NO_BUILTINS: readonly BoundBuiltinCheck[] = [];
+
+/** A default-set name the `--check` guard cases use, chosen to collide with nothing shipped. */
+const FAKE_BUILTIN_NAME = 'a-default-rule';
+const FAKE_BUILTIN_NAMES: readonly string[] = [FAKE_BUILTIN_NAME];
+
+/** The SHIPPED built-in these cases bind, named once so a rename is one edit. */
+const INERT_CHECK_NAME = 'claude-rule-glob-inert';
+/** The second built-in; over {@link INERT_PROJECTION} it runs and finds nothing. */
+const FRONTMATTER_CHECK_NAME = 'claude-rule-frontmatter-invalid';
+/** The third; over {@link INERT_PROJECTION} it runs and finds nothing either. */
+const LINK_CHECK_NAME = 'claude-rule-link-unchecked';
+/** The rules file the inert pattern below is declared in. */
+const RULES_FILE = '.claude/rules/demo.md';
+
+/**
+ * A projection carrying exactly ONE dead `paths:` glob.
+ *
+ * 🔑 Rows, not a tree. The producer for `claude_rule_patterns` lands separately,
+ * so a fixture repository would give this suite an empty table — and an empty
+ * table passes on a predicate that does nothing, which is the whole
+ * indistinguishable-fixture class. The row model is the contract both halves are
+ * written against, and it is what a case can state.
+ */
+const INERT_PROJECTION = {
+  claudeRulePatterns: [{
+    resourceId: 'res-rules',
+    ordinal: 0,
+    pattern: 'gone/**',
+    literalPrefix: 'gone',
+    witnessPath: null,
+    status: 'inert' as const,
+  }],
+  resourceRealizations: [{ resourceId: 'res-rules', path: RULES_FILE, contentKey: null }],
+  resourceTags: [],
+  blobs: [],
+  // The third built-in reads this table; empty is the healthy tree, and the
+  // case above is about the inert glob rather than about links.
+  realizationConditions: [],
+};
+
+/**
+ * A built-in predicate with a bug in it.
+ *
+ * Module scope because a test-scoped function is a lint error here
+ * (`local/no-test-scoped-functions`, SonarQube S1515).
+ *
+ * @throws Always
+ */
+function EXPLODING_PREDICATE(): never {
+  throw new Error('predicate bug');
 }
 
 /** The two check keys the loop cases use, and the codes their findings carry. */
@@ -219,11 +287,20 @@ function costsOf(count: number): CheckCost[] {
 }
 
 /** Findings, minus the provenance the payload builder also wants. */
-function payloadInput(overrides: Partial<CheckPayloadInput> = {}): CheckPayloadInput {
+function payloadInput(
+  overrides: Partial<Omit<CheckPayloadInput, 'populated'> & PopulatedRun> = {},
+): CheckPayloadInput {
+  // 🪤 Flat overrides, nested output: the cases below vary one population field
+  // at a time, and the builder takes the population as ONE all-or-nothing value.
+  const { issues = [], costs = [], root = '/corpus', durationMs = 5, ...population } = overrides;
+  return { issues, costs, root, durationMs, populated: { ...populatedDefaults(), ...population } };
+}
+
+/** A completed population, for every case that is not about the population. */
+function populatedDefaults(): PopulatedRun {
   return {
-    issues: [],
-    costs: [],
     population: 'derived',
+    lensPopulation: 'none',
     // Non-zero, for the same reason `membersEnumerated` is: a case that sets it
     // to something else is visibly asserting about the population's cost rather
     // than inheriting a placeholder.
@@ -231,13 +308,14 @@ function payloadInput(overrides: Partial<CheckPayloadInput> = {}): CheckPayloadI
     // Required by `ProjectionProvenance`; omitted, `lensSecs` published as NaN
     // — which the schema assertion below is what caught.
     lensMs: 3,
+    // NON-EMPTY on purpose, and paired with the non-zero `lensMs` above: an
+    // empty list means "no declared statement named a derived relation", which
+    // is a real state a case should have to ASK for rather than inherit.
+    lensesEvaluated: ['authored-link'],
     // A NON-ZERO default on purpose: every case that does not care about the
     // corpus is a case that ran over one, so a case that sets this to 0 is
     // visibly asserting something about emptiness rather than inheriting it.
     membersEnumerated: 12,
-    root: '/corpus',
-    durationMs: 5,
-    ...overrides,
   };
 }
 
@@ -256,12 +334,17 @@ function payloadInput(overrides: Partial<CheckPayloadInput> = {}): CheckPayloadI
  * @returns Whatever the loop returned
  */
 function runWithClock(options: {
-  checks: Parameters<typeof runDeclaredChecks>[0]['checks'];
+  checks: Parameters<typeof runProjectChecks>[0]['checks'];
   ask: AskProjection;
   only?: string;
   stepMs?: number;
-}): ReturnType<typeof runDeclaredChecks> {
-  return runDeclaredChecks({
+  /** The default set, when a case is about one. Omitted means `[]`, never "the shipped ones". */
+  builtins?: readonly BoundBuiltinCheck[];
+}): ReturnType<typeof runProjectChecks> {
+  return runProjectChecks({
+    warn: () => undefined,
+    columnsOf: NO_COLUMNS,
+    builtins: options.builtins ?? NO_BUILTINS,
     checks: options.checks,
     only: options.only,
     ask: options.ask,
@@ -272,7 +355,13 @@ function runWithClock(options: {
 }
 
 /** One entry of the document's `checks` list, as a reader sees it. */
-type PublishedCheck = { name: string; durationSecs: number; rows?: number; broken?: true };
+type PublishedCheck = {
+  name: string;
+  durationSecs: number;
+  rows?: number;
+  broken?: true;
+  builtin?: true;
+};
 
 /** One entry of the document's `findings` list, as a reader sees it. */
 type PublishedIssue = { code: string; severity: string; message: string; location?: string };
@@ -310,19 +399,27 @@ describe('buildCheckOutputData — the published schema', () => {
   it('builds a document its own published schema accepts', () => {
     // The Zod object matches what the command WRITES — the drift test only
     // proves the JSON file matches the Zod object.
-    const { payload } = documentFor({ checks: [] });
+    // 🪤 `{}`, not `[]`. It was `[]` — an empty ARRAY where the loop wants a
+    // map of declared checks — and nothing caught it: `packages/cli/tsconfig.json`
+    // includes `src/**/*` only, so no test file in this package is ever
+    // typechecked, and vitest transpiles without checking. The case still ran
+    // (an empty array has no entries either), which is what kept it quiet.
+    const { payload } = documentFor({ checks: {}, ask: ASK_NO_ROWS });
     const parsed = CHECK_REPORT_SCHEMA.safeParse(payload);
     expect(parsed.success ? [] : parsed.error.issues).toEqual([]);
   });
 });
 
-describe('runDeclaredChecks — the loop', () => {
+describe('runProjectChecks — the loop', () => {
   it('runs EVERY declared check, not just the first', () => {
     // 🔑 The `break` mutation guard. Insert `break` at the end of the loop in
     // `runChecks` and this is the test that reds: one cost record survives and
     // `no-orphans` vanishes. Nothing in the spawned system suite could tell,
     // because no spawned case ever ran two checks.
-    const { issues, costs } = runDeclaredChecks({
+    const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: NO_BUILTINS,
       checks: TWO_VIOLATED,
       only: undefined,
       ask: ASK_ONE_ROW,
@@ -339,7 +436,10 @@ describe('runDeclaredChecks — the loop', () => {
     // statement twice would be a lie the count could not expose.
     const ask = vi.fn<AskProjection>(() => []);
 
-    const { costs } = runDeclaredChecks({
+    const { costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: NO_BUILTINS,
       checks: TWO_VIOLATED, only: undefined, ask, validation: undefined,
       membersEnumerated: POPULATED,
     });
@@ -349,7 +449,10 @@ describe('runDeclaredChecks — the loop', () => {
   });
 
   it('runs only the named check under `only`, and counts only that one', () => {
-    const { issues, costs } = runDeclaredChecks({
+    const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: NO_BUILTINS,
       checks: TWO_VIOLATED, only: SECOND, ask: ASK_ONE_ROW, validation: undefined,
       membersEnumerated: POPULATED,
     });
@@ -359,7 +462,10 @@ describe('runDeclaredChecks — the loop', () => {
   });
 
   it('reports a broken check as a finding, never as a skip', () => {
-    const { issues, costs } = runDeclaredChecks({
+    const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: NO_BUILTINS,
       checks: BROKEN_CHECK,
       only: undefined,
       ask: ASK_BROKEN,
@@ -384,7 +490,10 @@ describe('runDeclaredChecks — the loop', () => {
       return [{ path: 'docs/b.md', sql }];
     };
 
-    const { issues, costs } = runDeclaredChecks({
+    const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: NO_BUILTINS,
       checks: TWO_VIOLATED, only: undefined, ask, validation: undefined,
       membersEnumerated: POPULATED,
     });
@@ -402,7 +511,7 @@ describe('runDeclaredChecks — the loop', () => {
  * how long the WHOLE run took. "Which rule is expensive" was unanswerable
  * without editing the config and re-running, one check at a time.
  */
-describe('runDeclaredChecks — what each rule cost', () => {
+describe('runProjectChecks — what each rule cost', () => {
   it('measures each statement on the injected clock, exactly', () => {
     // 🔑 Exact, not a range. Swap `performance.now()` for a constant, drop the
     // second reading, or measure the wrong span and this reds — where
@@ -453,7 +562,10 @@ describe('runDeclaredChecks — what each rule cost', () => {
     expect(costs).toStrictEqual([{ name: 'broken', durationMs: 1, rows: rowCount }]);
     expect(issues).toHaveLength(rowCount);
     expect(issues.filter((issue) => issue.code === 'RESOURCE_CHECK_BROKEN')).toStrictEqual([]);
-  });
+    // Its subject is a result set too wide to spread, so its cost is that many findings built and
+    // resolved: ~3-8 s typical on CI's runners, past the 15 s default once on a loaded one. The budget is
+    // the case's size, not a margin over a slow path; a regression shows as the file's duration.
+  }, 60_000);
 
   it('marks a check that threw as broken, with NO row count at all', () => {
     // 🪤 `rows: 0` on a statement that never returned would read as a clean
@@ -484,9 +596,12 @@ describe('runDeclaredChecks — what each rule cost', () => {
 describe('a check severity override does not silence a BROKEN check', () => {
   it('still reports the breakage at error when the check is set to ignore', () => {
     // 🔑 Revert the separate code (put `customCheckCode(name)` back on the
-    // broken finding) and this reds: `resolveIssueSeverity` drops it and the
+    // broken finding) and this reds: `resolveFindings` drops it and the
     // command exits 0 over a check that asserted nothing.
-    const { issues, costs } = runDeclaredChecks({
+    const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: NO_BUILTINS,
       checks: BROKEN_CHECK,
       only: undefined,
       ask: ASK_BROKEN,
@@ -505,7 +620,10 @@ describe('a check severity override does not silence a BROKEN check', () => {
     // The quieter half of the same defect. `warning` does not drop the finding,
     // it drops it below the exit threshold — so the gate returns 0 and the
     // document says `status: warning` over a check that ran nothing.
-    const { issues, costs } = runDeclaredChecks({
+    const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: NO_BUILTINS,
       checks: BROKEN_CHECK,
       only: undefined,
       ask: ASK_BROKEN,
@@ -520,7 +638,10 @@ describe('a check severity override does not silence a BROKEN check', () => {
   it('still applies the override to the check\'s own VIOLATIONS', () => {
     // The other direction, or the guard above would be satisfied by a fix that
     // simply stopped honouring overrides — which is a documented feature.
-    const { issues } = runDeclaredChecks({
+    const { issues } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: NO_BUILTINS,
       checks: { soft: { description: 'prefer no markdown', sql: 'SELECT path FROM a' } },
       only: undefined,
       ask: ASK_ONE_ROW,
@@ -532,13 +653,13 @@ describe('a check severity override does not silence a BROKEN check', () => {
   });
 });
 
-describe('requireDeclaredCheck — an unknown --check name', () => {
+describe('requireKnownCheck — an unknown --check name', () => {
   it('throws, rather than filtering everything out and reporting success', () => {
-    // 🔑 `vat resources check --check orphan-skills` is the example in our own
-    // help text. Rename or delete that check and the old code filtered every
+    // 🔑 `--check orphan-skills` WAS the example in our own help text, naming a
+    // check no shipped project declares. Rename or delete a check and the old code filtered every
     // declared check away, ran nothing, and exited 0 with `issues: []` — a CI
     // step that passes forever while asserting nothing.
-    expect(() => requireDeclaredCheck(TWO_VIOLATED, 'orphan-skills')).toThrow(/orphan-skills/);
+    expect(() => requireKnownCheck(FAKE_BUILTIN_NAMES, TWO_VIOLATED, 'orphan-skills')).toThrow(/orphan-skills/);
   });
 
   it('names the checks that ARE declared, so the operator sees the typo', () => {
@@ -546,7 +667,7 @@ describe('requireDeclaredCheck — an unknown --check name', () => {
     // config to find out what they meant to type.
     let message = '';
     try {
-      requireDeclaredCheck(TWO_VIOLATED, 'no-markdow');
+      requireKnownCheck(FAKE_BUILTIN_NAMES, TWO_VIOLATED, 'no-markdow');
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }
@@ -559,26 +680,53 @@ describe('requireDeclaredCheck — an unknown --check name', () => {
   it('says the project declares none, when it declares none', () => {
     // Otherwise the refusal reads "did you mean: (nothing)" and the operator
     // hunts a typo that is not there.
-    expect(() => requireDeclaredCheck({}, 'anything')).toThrow(/resources\.checks/);
+    expect(() => requireKnownCheck(FAKE_BUILTIN_NAMES, {}, 'anything')).toThrow(/resources\.checks/);
   });
 
   it('permits a declared name, and permits no --check at all', () => {
-    expect(() => requireDeclaredCheck(TWO_VIOLATED, SECOND)).not.toThrow();
-    expect(() => requireDeclaredCheck(TWO_VIOLATED, undefined)).not.toThrow();
+    expect(() => requireKnownCheck(FAKE_BUILTIN_NAMES, TWO_VIOLATED, SECOND)).not.toThrow();
+    expect(() => requireKnownCheck(FAKE_BUILTIN_NAMES, TWO_VIOLATED, undefined)).not.toThrow();
+  });
+
+  it('permits a BUILT-IN name, which no config declares', () => {
+    // 🔑 `--check` takes a RULE, and which set VAT got it from is not something
+    // the operator should have to know. A guard that only consulted the config
+    // would refuse the very checks that run when there is no config at all.
+    expect(() => requireKnownCheck(FAKE_BUILTIN_NAMES, {}, FAKE_BUILTIN_NAME)).not.toThrow();
+    // And the refusal for a near-miss names the built-in set, or the operator
+    // goes hunting a declaration that was never going to be there.
+    let message = '';
+    try {
+      requireKnownCheck(FAKE_BUILTIN_NAMES, TWO_VIOLATED, `${FAKE_BUILTIN_NAME}s`);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain(FAKE_BUILTIN_NAME);
+    expect(message).toContain(FIRST);
+  });
+
+  it('names the SHIPPED built-ins, so the guard and the runner agree', () => {
+    // ⭐ The control on the fake above: the production call site passes
+    // `BUILTIN_CHECK_NAMES`, and a guard proven only against a fixture would
+    // pass while `--check claude-rule-glob-inert` exited 2.
+    for (const name of BUILTIN_CHECK_NAMES) {
+      expect(() => requireKnownCheck(BUILTIN_CHECK_NAMES, {}, name)).not.toThrow();
+    }
+    expect(BUILTIN_CHECK_NAMES.length).toBeGreaterThan(0);
   });
 
   it('does not treat an inherited Object property as a declared check', () => {
     // 🪤 `only in checks` would accept `--check toString` and run nothing, which
     // is exactly the silent green this guard exists to close.
-    expect(() => requireDeclaredCheck(TWO_VIOLATED, 'toString')).toThrow(/toString/);
-    expect(() => requireDeclaredCheck(TWO_VIOLATED, '__proto__')).toThrow();
+    expect(() => requireKnownCheck(FAKE_BUILTIN_NAMES, TWO_VIOLATED, 'toString')).toThrow(/toString/);
+    expect(() => requireKnownCheck(FAKE_BUILTIN_NAMES, TWO_VIOLATED, '__proto__')).toThrow();
   });
 });
 
 /**
  * The MIRROR of the block above, on the config surface instead of the flag.
  *
- * `--check nope` was a silent green until `requireDeclaredCheck` closed it. A
+ * `--check nope` was a silent green until `requireKnownCheck` closed it. A
  * `validation.severity` entry keyed `CUSTOM:<name>` for an undeclared check is
  * the same shape one surface over: the schema validates the key's SHAPE and
  * cannot see `resources.checks`, so it parses, overrides nothing, and says
@@ -646,6 +794,33 @@ describe('warnUndeclaredOverrides — a severity override that overrides nothing
     expect(warnings[0]).toContain('CUSTOM:gone-b');
   });
 
+  it('permits a BUILT-IN name, which no config declares', () => {
+    // 🔑 `--check` takes a RULE, and which set VAT got it from is not something
+    // the operator should have to know. A guard that only consulted the config
+    // would refuse the very checks that run when there is no config at all.
+    expect(() => requireKnownCheck(FAKE_BUILTIN_NAMES, {}, FAKE_BUILTIN_NAME)).not.toThrow();
+    // And the refusal for a near-miss names the built-in set, or the operator
+    // goes hunting a declaration that was never going to be there.
+    let message = '';
+    try {
+      requireKnownCheck(FAKE_BUILTIN_NAMES, TWO_VIOLATED, `${FAKE_BUILTIN_NAME}s`);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain(FAKE_BUILTIN_NAME);
+    expect(message).toContain(FIRST);
+  });
+
+  it('names the SHIPPED built-ins, so the guard and the runner agree', () => {
+    // ⭐ The control on the fake above: the production call site passes
+    // `BUILTIN_CHECK_NAMES`, and a guard proven only against a fixture would
+    // pass while `--check claude-rule-glob-inert` exited 2.
+    for (const name of BUILTIN_CHECK_NAMES) {
+      expect(() => requireKnownCheck(BUILTIN_CHECK_NAMES, {}, name)).not.toThrow();
+    }
+    expect(BUILTIN_CHECK_NAMES.length).toBeGreaterThan(0);
+  });
+
   it('does not treat an inherited Object property as a declared check', () => {
     // 🪤 Same trap as the flag guard: `in` walks the prototype chain, so
     // `CUSTOM:toString` would look declared and stay silent.
@@ -679,6 +854,15 @@ describe('the check payload', () => {
     // Two documents that differ ONLY in the denominator. Drop the field and
     // these become equal, which is the ambiguity it exists to remove.
     expect(ran).not.toStrictEqual(none);
+  });
+
+  it('reports where the lens population came from, separately from the resources population', () => {
+    const lens = (lensPopulation: PopulatedRun['lensPopulation']): unknown =>
+      buildCheckOutputData(payloadInput({ population: 'store', lensPopulation })).data.lensPopulation;
+
+    expect(lens('store')).toBe('store');
+    expect(lens('derived')).toBe('derived');
+    expect(lens('none')).toBe('none');
   });
 
   it('reports where the population came from, which is the only cache tell', () => {
@@ -843,16 +1027,19 @@ describe('the check payload publishes what each rule cost', () => {
  * `.gitignore`, a shallow or sparse CI checkout, a root that resolved somewhere
  * else, an extent source that enumerated nothing.
  *
- * The precedent is one layer up: `population-wiring.ts` makes `onBlobPopulation`
- * mandatory because "a tree whose every document was declined as binary
- * otherwise populates as empty and reports success". That guard covers blob
- * refusals only, and never an empty EXTENT.
+ * The precedent is one layer up: `populateAndReport` in `population-wiring.ts`
+ * names a tree whose every document was declined as binary rather than letting
+ * it populate as empty and report success. That report covers blob refusals
+ * only, and never an empty EXTENT.
  */
 describe('a corpus of zero members is a failure, not a pass', () => {
   it('fails the run when checks ran over an empty population', () => {
     // 🔑 The reproduced case. Delete the guard and this reds: `issues` is empty,
     // `status` is `success`, and the command exits 0 having asserted nothing.
-    const { issues, costs } = runDeclaredChecks({
+    const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: NO_BUILTINS,
       checks: TWO_VIOLATED,
       only: undefined,
       ask: ASK_NO_ROWS,
@@ -874,7 +1061,10 @@ describe('a corpus of zero members is a failure, not a pass', () => {
     // would let `severity: { 'CUSTOM:foo': 'ignore' }` silence "the gate ran
     // over nothing", and `RESOURCE_CHECK_BROKEN` is refused as a severity key by
     // `ValidationConfigSchema` precisely so no config line can reach it.
-    const { issues } = runDeclaredChecks({
+    const { issues } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: NO_BUILTINS,
       checks: TWO_VIOLATED,
       only: undefined,
       ask: ASK_NO_ROWS,
@@ -890,7 +1080,10 @@ describe('a corpus of zero members is a failure, not a pass', () => {
   it('tells the operator WHAT happened and WHERE to look', () => {
     // "empty population" is not actionable. The count, the consequence, and the
     // three things that actually empty an enumeration are.
-    const { issues } = runDeclaredChecks({
+    const { issues } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: NO_BUILTINS,
       checks: TWO_VIOLATED, only: undefined, ask: ASK_NO_ROWS, validation: undefined,
       membersEnumerated: 0,
     });
@@ -907,7 +1100,10 @@ describe('a corpus of zero members is a failure, not a pass', () => {
     // 🔑 The over-correction guard. Make the condition fire on a non-empty
     // corpus — drop the `> 0` test, compare the wrong number — and this reds:
     // an ordinary clean run starts reporting an error.
-    const { issues, costs } = runDeclaredChecks({
+    const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: NO_BUILTINS,
       checks: TWO_VIOLATED, only: undefined, ask: ASK_NO_ROWS, validation: undefined,
       membersEnumerated: 1,
     });
@@ -924,7 +1120,10 @@ describe('a corpus of zero members is a failure, not a pass', () => {
     // A run with neither checks nor corpus must not also emit this one, or the
     // operator gets two reports about one situation and the less specific of the
     // two sends them to inspect a `.gitignore` that is not the problem.
-    const { issues, costs } = runDeclaredChecks({
+    const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: NO_BUILTINS,
       checks: {}, only: undefined, ask: ASK_NO_ROWS, validation: undefined,
       membersEnumerated: 0,
     });
@@ -938,7 +1137,10 @@ describe('a corpus of zero members is a failure, not a pass', () => {
     // (`SELECT COUNT(*) … HAVING …`) selects a row whatever the corpus is, which
     // is exactly what the reproduced repository declared. The run-integrity
     // report is the headline; the derived findings are noise until it is fixed.
-    const { issues } = runDeclaredChecks({
+    const { issues } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: NO_BUILTINS,
       checks: TWO_VIOLATED, only: undefined, ask: ASK_ONE_ROW, validation: undefined,
       membersEnumerated: 0,
     });
@@ -986,7 +1188,7 @@ describe('a run that ran no checks at all is a failure, not a pass', () => {
 
   it('fails end to end, from a loop that was handed no declared checks', () => {
     // The whole pipeline rather than the builder alone: a config with no
-    // `checks:` block reaches `runDeclaredChecks` as an empty map, which runs
+    // `checks:` block reaches `runProjectChecks` as an empty map, which runs
     // nothing and returns no findings of its own to carry the news.
     const { payload, checks } = documentFor({ checks: {}, ask: ASK_NO_ROWS });
 
@@ -1019,7 +1221,7 @@ describe('a run that ran no checks at all is a failure, not a pass', () => {
   it('refuses whatever emptied the run, not only an absent config block', () => {
     // 🔑 The builder cannot see WHY nothing ran, and deliberately does not ask.
     // An absent `checks:` block, a filter that matched nothing (which
-    // `requireDeclaredCheck` refuses earlier, and which must stay refused even
+    // `requireKnownCheck` refuses earlier, and which must stay refused even
     // if that guard is one day widened), a future `continue` that skips every
     // rule — all reach here as the same document, and every one of them is a
     // gate that asserted nothing over a perfectly healthy corpus.
@@ -1081,11 +1283,15 @@ type Timeline = (ProgressEntry | { kind: 'asked'; sql: string })[];
  * @returns Everything that happened, in the order it happened
  */
 function progressOf(options: {
-  checks: Parameters<typeof runDeclaredChecks>[0]['checks'];
+  checks: Parameters<typeof runProjectChecks>[0]['checks'];
   ask: AskProjection;
+  builtins?: readonly BoundBuiltinCheck[];
 }): Timeline {
   const seen: Timeline = [];
-  runDeclaredChecks({
+  runProjectChecks({
+    warn: () => undefined,
+    columnsOf: NO_COLUMNS,
+    builtins: options.builtins ?? NO_BUILTINS,
     checks: options.checks,
     only: undefined,
     ask: (sql, ...parameters) => {
@@ -1118,7 +1324,7 @@ function progressOf(options: {
  * `start` filed after the statement returned would be filed by every check
  * except the one that matters.
  */
-describe('runDeclaredChecks — progress emitted for an outside observer', () => {
+describe('runProjectChecks — progress emitted for an outside observer', () => {
   it('announces each check BEFORE its statement runs, and prices it after', () => {
     // 🔑 The ordering is the whole guard. Move the `start` emit below the
     // statement and the log of a killed run names every check except the one
@@ -1128,16 +1334,20 @@ describe('runDeclaredChecks — progress emitted for an outside observer', () =>
     expect(entries).toStrictEqual([
       { kind: 'start', name: FIRST },
       { kind: 'asked', sql: FIRST_SQL },
+      // 🔑 After the statement and BEFORE its cost: the rows are being turned into findings, and
+      // a kill here must read as that, not as a statement that would not return.
+      { kind: 'converting', name: FIRST, durationMs: 1, rows: 3 },
       { kind: 'check', name: FIRST, durationMs: 1, rows: 3 },
       { kind: 'start', name: SECOND },
       { kind: 'asked', sql: SECOND_SQL },
+      { kind: 'converting', name: SECOND, durationMs: 1, rows: 7 },
       { kind: 'check', name: SECOND, durationMs: 1, rows: 7 },
       // 🔑 Emitted HERE — by the loop's own caller, before severities are
       // resolved — and not by `runOutcome` after this function has returned.
       // The window it buys was documented as covering "resolving severities and
       // serialising"; emitted a level up it covered only the serialising, and
       // severity resolution stayed charged to the LAST CHECK's window.
-      { kind: 'checks-complete' },
+      { kind: 'statements-complete' },
     ]);
   });
 
@@ -1150,10 +1360,11 @@ describe('runDeclaredChecks — progress emitted for an outside observer', () =>
     expect(entries).toStrictEqual([
       { kind: 'start', name: 'broken' },
       { kind: 'asked', sql: 'SELECT contentHash FROM blobs' },
-      { kind: 'check', name: 'broken', durationMs: 1, broken: true },
+      // 🔑 With its refusal as published, so a run killed later rebuilds it word for word.
+      { kind: 'check', name: 'broken', durationMs: 1, broken: true, refusal: { message: expect.stringContaining('"broken" could not run') } },
       // Filed even when every rule broke: "no statement is running any more" is
       // true however the statements ended, and the phase after it still costs.
-      { kind: 'checks-complete' },
+      { kind: 'statements-complete' },
     ]);
   });
 
@@ -1162,7 +1373,10 @@ describe('runDeclaredChecks — progress emitted for an outside observer', () =>
     // built from the returned `costs`. Two shapes would be two payload builders
     // waiting to disagree.
     const seen: ProgressEntry[] = [];
-    const { costs } = runDeclaredChecks({
+    const { costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: NO_BUILTINS,
       checks: TWO_VIOLATED,
       only: undefined,
       ask: ASK_DISTINCT_ROWS,
@@ -1181,11 +1395,363 @@ describe('runDeclaredChecks — progress emitted for an outside observer', () =>
   it('runs unchanged when nobody is listening', () => {
     // `--budget 0` and the in-process lane pass no sink. A loop that required
     // one would turn the documented escape hatch into a crash.
-    const { costs } = runDeclaredChecks({
+    const { costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: NO_BUILTINS,
       checks: TWO_VIOLATED, only: undefined, ask: ASK_DISTINCT_ROWS, validation: undefined,
       membersEnumerated: POPULATED,
     });
 
     expect(costs).toHaveLength(2);
+  });
+});
+
+/**
+ * The DEFAULT check set — the half of this verb that no config declares.
+ *
+ * 🔑 **The invariant under test is a placement, not a value.** *"A directory
+ * with no `vibe-agent-toolkit.config.yaml` must run exactly the same default-on
+ * checks as one with a config; config only ADDS to that set or OVERRIDES a
+ * severity in it."* These cases drive `checks: {}` — what an absent config
+ * reaches the loop as — and assert the built-ins still ran, were priced, were
+ * filterable and were overridable. The system suite proves the other end: that
+ * `checkCommand` supplies them from a module constant rather than from a parsed
+ * config object.
+ *
+ * The rows are supplied directly. `claude_rule_patterns` has no producer in this
+ * build, so a case that populated a tree would assert about an empty table and
+ * pass on a predicate that does nothing.
+ */
+describe('the built-in check set runs without any config', () => {
+  it('runs a built-in when the project declares NO checks at all', () => {
+    // 🔑 `checks: {}` IS the no-config case: `checkCommand` passes
+    // `config?.resources?.checks ?? {}`, so an absent file and an empty block
+    // are the same input here. Move the default set into the config object and
+    // this reds — the whole point of the invariant.
+    const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: bindBuiltinChecks(INERT_PROJECTION),
+      checks: {},
+      only: undefined,
+      ask: ASK_NO_ROWS,
+      validation: undefined,
+      membersEnumerated: POPULATED,
+    });
+
+    expect(costs.map((cost) => cost.name))
+      .toStrictEqual([INERT_CHECK_NAME, FRONTMATTER_CHECK_NAME, LINK_CHECK_NAME]);
+    expect(issues.map((issue) => [issue.code, issue.severity]))
+      .toStrictEqual([['CLAUDE_RULE_GLOB_INERT', 'info']]);
+    // Quotes the dead glob, and anchors to the file that declares it.
+    expect(issues[0]?.message).toContain('"gone/**"');
+    expect(issues[0]?.location).toBe(RULES_FILE);
+  });
+
+  it('runs the built-ins BEFORE the declared checks, and prices both', () => {
+    const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: bindBuiltinChecks(INERT_PROJECTION),
+      checks: TWO_VIOLATED,
+      only: undefined,
+      ask: ASK_ONE_ROW,
+      validation: undefined,
+      membersEnumerated: POPULATED,
+      now: fakeClock(2),
+    });
+
+    expect(costs.map((cost) => cost.name))
+      .toStrictEqual([INERT_CHECK_NAME, FRONTMATTER_CHECK_NAME, LINK_CHECK_NAME, FIRST, SECOND]);
+    // 🔑 One cost record per check that ran, whichever set it came from — the
+    // denominator `checksRun` is derived from. A built-in that skipped the
+    // pricing would be a rule running outside the accounting.
+    expect(costs.map((cost) => cost.durationMs)).toStrictEqual([2, 2, 2, 2, 2]);
+    expect(issues.map((issue) => issue.code))
+      .toStrictEqual(['CLAUDE_RULE_GLOB_INERT', FIRST_CODE, SECOND_CODE]);
+  });
+
+  it('selects a built-in by name under `only`, exactly like a declared check', () => {
+    const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: bindBuiltinChecks(INERT_PROJECTION),
+      checks: TWO_VIOLATED,
+      only: INERT_CHECK_NAME,
+      ask: ASK_ONE_ROW,
+      validation: undefined,
+      membersEnumerated: POPULATED,
+    });
+
+    expect(costs.map((cost) => cost.name)).toStrictEqual([INERT_CHECK_NAME]);
+    expect(issues.map((issue) => issue.code)).toStrictEqual(['CLAUDE_RULE_GLOB_INERT']);
+  });
+
+  it('honours a severity override on the built-in\'s REGISTRY code', () => {
+    // 🔑 An ordinary registry code, not `CUSTOM:<name>`. The documented line is
+    // `severity: { CLAUDE_RULE_GLOB_INERT: ignore }`, which is the same spelling
+    // every other code VAT emits accepts — and it is what the code's own entry
+    // in docs/validation-codes.md tells an adopter to write.
+    const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: bindBuiltinChecks(INERT_PROJECTION),
+      checks: {},
+      only: undefined,
+      ask: ASK_NO_ROWS,
+      validation: { severity: { CLAUDE_RULE_GLOB_INERT: 'ignore' } },
+      membersEnumerated: POPULATED,
+    });
+
+    expect(issues).toStrictEqual([]);
+    // Ignored means EXECUTED and then dropped. `checksRun` is what keeps that
+    // distinguishable from "never ran", and it must not move.
+    expect(costs.map((cost) => cost.name))
+      .toStrictEqual([INERT_CHECK_NAME, FRONTMATTER_CHECK_NAME, LINK_CHECK_NAME]);
+  });
+
+  it('PROMOTES the built-in when the adopter asks it to fail the build', () => {
+    // ⭐ The other direction, and the half that gets forgotten. A resolver that
+    // only knows how to delete answers "can I silence this?" and silently
+    // ignores "can I enforce this?" — which is the shipped defect
+    // `resolveFindings` exists to prevent, here on a new lane.
+    const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: bindBuiltinChecks(INERT_PROJECTION),
+      checks: {},
+      only: undefined,
+      ask: ASK_NO_ROWS,
+      validation: { severity: { CLAUDE_RULE_GLOB_INERT: 'error' } },
+      membersEnumerated: POPULATED,
+    });
+
+    expect(issues[0]?.severity).toBe('error');
+    expect(buildCheckOutputData(payloadInput({ issues, costs })).summary.errors).toBe(1);
+  });
+
+  it('reports a built-in that THREW as broken, never as a silent pass', () => {
+    // 🪤 A defect in VAT's own predicate must fail the gate on the same terms a
+    // broken statement does. The arm is shared, which is the point of one loop.
+    const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: [{ name: 'exploding', run: EXPLODING_PREDICATE }],
+      checks: {},
+      only: undefined,
+      ask: ASK_NO_ROWS,
+      validation: undefined,
+      membersEnumerated: POPULATED,
+      now: fakeClock(1),
+    });
+
+    expect(costs)
+      .toStrictEqual([{ name: 'exploding', durationMs: 1, broken: true, builtin: true }]);
+    expect(issues.map((issue) => issue.code)).toStrictEqual(['RESOURCE_CHECK_BROKEN']);
+    expect(issues[0]?.severity).toBe('error');
+  });
+
+  it('marks the built-ins in the published cost list, and only them', () => {
+    // 🔑 Without `builtin` the list is ambiguous exactly where it matters: a
+    // reader whose config declares nothing finds a rule they never wrote and
+    // cannot tell a shipped default from a stale declaration.
+    const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: bindBuiltinChecks(INERT_PROJECTION),
+      checks: TWO_VIOLATED,
+      only: undefined,
+      ask: ASK_NO_ROWS,
+      validation: undefined,
+      membersEnumerated: POPULATED,
+      now: fakeClock(1),
+    });
+    const payload = buildCheckOutputData(payloadInput({ issues, costs }));
+
+    expect(payload.data.checksRun).toBe(5);
+    expect(payload.data.checks as PublishedCheck[]).toStrictEqual([
+      { name: INERT_CHECK_NAME, durationSecs: 0.001, rows: 1, builtin: true },
+      { name: FRONTMATTER_CHECK_NAME, durationSecs: 0.001, rows: 0, builtin: true },
+      { name: LINK_CHECK_NAME, durationSecs: 0.001, rows: 0, builtin: true },
+      // 🪤 ABSENT on a declared rule, never `false` — the key's presence is the
+      // whole claim.
+      { name: FIRST, durationSecs: 0.001, rows: 0 },
+      { name: SECOND, durationSecs: 0.001, rows: 0 },
+    ]);
+    // And the widened field still satisfies the schema the command publishes.
+    const parsed = CHECK_REPORT_SCHEMA.safeParse(payload);
+    expect(parsed.success ? [] : parsed.error.issues).toEqual([]);
+  });
+
+  it('announces a built-in to the progress log like any other unit', () => {
+    // A run killed inside a built-in must still name it. The loop is shared, so
+    // this is a guard on the sharing rather than on a second emitter.
+    const seen: ProgressEntry[] = [];
+    runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: bindBuiltinChecks(INERT_PROJECTION),
+      checks: {},
+      only: undefined,
+      ask: ASK_NO_ROWS,
+      validation: undefined,
+      membersEnumerated: POPULATED,
+      now: fakeClock(1),
+      onProgress: (entry) => seen.push(entry),
+    });
+
+    expect(seen).toStrictEqual([
+      { kind: 'start', name: INERT_CHECK_NAME },
+      { kind: 'check', name: INERT_CHECK_NAME, durationMs: 1, rows: 1, builtin: true },
+      { kind: 'start', name: FRONTMATTER_CHECK_NAME },
+      { kind: 'check', name: FRONTMATTER_CHECK_NAME, durationMs: 1, rows: 0, builtin: true },
+      { kind: 'start', name: LINK_CHECK_NAME },
+      { kind: 'check', name: LINK_CHECK_NAME, durationMs: 1, rows: 0, builtin: true },
+      { kind: 'statements-complete' },
+    ]);
+  });
+});
+
+/** A check whose rows carry the reserved `severity` column. */
+const GRADED = 'graded';
+const GRADED_SQL = 'SELECT path, severity FROM graded';
+const GRADED_CHECKS = {
+  [GRADED]: { description: 'graded rows', sql: GRADED_SQL },
+  [SECOND]: { description: 'No orphan skills', sql: SECOND_SQL },
+} as const;
+
+/**
+ * An `ask` that answers each statement with the rows a case names, and refuses any other.
+ *
+ * @param bySql - The rows each statement selects
+ * @returns The fake
+ */
+function askRows(bySql: Readonly<Record<string, readonly Record<string, unknown>[]>>): AskProjection {
+  return (sql) => {
+    const rows = bySql[sql];
+    if (rows === undefined) throw new Error(`This fake declares no rows for: ${sql}`);
+    return rows;
+  };
+}
+
+/** `graded` selects three rows, the third with an unknown severity; `no-orphans` selects one. */
+const ASK_BAD_SEVERITY = askRows({
+  [GRADED_SQL]: [{ path: 'a.md' }, { path: 'b.md' }, { path: 'c.md', finding_severity: 'high' }],
+  [SECOND_SQL]: [{ path: 'd.md' }],
+});
+
+/**
+ * Run {@link GRADED_CHECKS} with one row graded `rowSeverity` and an override on the check's code.
+ *
+ * @param rowSeverity - The `finding_severity` column of the one row
+ * @param override - The adopter's override for `CUSTOM:graded`
+ * @returns The resolved issues
+ */
+function gradedWithOverride(rowSeverity: string, override: 'error' | 'warning' | 'info' | 'ignore'): ReturnType<typeof runProjectChecks>['issues'] {
+  return runProjectChecks({
+    warn: () => undefined,
+    columnsOf: NO_COLUMNS,
+    builtins: NO_BUILTINS,
+    checks: { [GRADED]: GRADED_CHECKS[GRADED] },
+    only: undefined,
+    ask: askRows({ [GRADED_SQL]: [{ path: 'a.md', finding_severity: rowSeverity }] }),
+    validation: { severity: { [`CUSTOM:${GRADED}`]: override } },
+    membersEnumerated: POPULATED,
+  }).issues;
+}
+
+describe('runProjectChecks — a row the check cannot interpret', () => {
+  it('reports the check BROKEN with the rows it selected, and still runs the next one', () => {
+    const { issues, costs } = runWithClock({ checks: GRADED_CHECKS, ask: ASK_BAD_SEVERITY });
+
+    // 🔑 `rows` PRESENT beside `broken`: the statement completed, the rows could not be read.
+    expect(costs).toStrictEqual([
+      { name: GRADED, durationMs: 1, rows: 3, broken: true },
+      { name: SECOND, durationMs: 1, rows: 1 },
+    ]);
+    expect(issues.map((issue) => issue.code)).toStrictEqual(['RESOURCE_CHECK_BROKEN', SECOND_CODE]);
+    expect(issues[0]?.severity).toBe('error');
+    expect(issues[0]?.message).toContain(
+      'The check "graded" ran and selected 3 rows, but row 3\'s finding_severity = "high" is not one of error | warning | info, so none of its rows were reported.',
+    );
+  });
+
+  it('is not silenced by an override on the check, as no RESOURCE_CHECK_BROKEN is', () => {
+    const { issues } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: NO_BUILTINS,
+      checks: GRADED_CHECKS,
+      only: undefined,
+      ask: ASK_BAD_SEVERITY,
+      validation: { severity: { [`CUSTOM:${GRADED}`]: 'ignore' } },
+      membersEnumerated: POPULATED,
+    });
+
+    expect(issues[0]).toMatchObject({ code: 'RESOURCE_CHECK_BROKEN', severity: 'error' });
+  });
+
+  it('publishes a schema-valid document with the broken check counted', () => {
+    const { payload, checks } = documentFor({ checks: GRADED_CHECKS, ask: ASK_BAD_SEVERITY });
+
+    expect(CHECK_REPORT_SCHEMA.safeParse(payload).success).toBe(true);
+    expect(checks[0]).toStrictEqual({ name: GRADED, durationSecs: expect.any(Number), rows: 3, broken: true });
+  });
+});
+
+describe('runProjectChecks — a row severity, and the adopter override over it', () => {
+  it('reports each row at its own severity', () => {
+    const { issues } = runWithClock({
+      checks: { [GRADED]: GRADED_CHECKS[GRADED] },
+      ask: askRows({ [GRADED_SQL]: [{ path: 'a.md', finding_severity: 'warning' }, { path: 'b.md', finding_severity: null }] }),
+    });
+
+    expect(issues.map((issue) => issue.severity)).toStrictEqual(['warning', 'error']);
+  });
+
+  it.each([
+    ['raises a row graded warning', 'warning', 'error', ['error']],
+    ['lowers a row graded error', 'error', 'warning', ['warning']],
+    ['drops a row under ignore', 'error', 'ignore', []],
+  ] as const)('the override WINS: it %s', (_label, rowSeverity, override, expected) => {
+    expect(gradedWithOverride(rowSeverity, override).map((issue) => issue.severity)).toStrictEqual(expected);
+  });
+});
+
+describe('runProjectChecks — a near miss of a reserved column name', () => {
+  it('warns ONCE per check, naming the column and the reserved name it nearly is', () => {
+    const warnings: string[] = [];
+    runProjectChecks({
+      columnsOf: () => ['path', 'Finding_Severity'],
+      builtins: NO_BUILTINS,
+      checks: { [GRADED]: GRADED_CHECKS[GRADED] },
+      only: undefined,
+      ask: askRows({ [GRADED_SQL]: [{ path: 'a.md', Finding_Severity: 'warning' }, { path: 'b.md', Finding_Severity: 'info' }] }),
+      validation: undefined,
+      membersEnumerated: POPULATED,
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('"graded"');
+    expect(warnings[0]).toContain('"Finding_Severity"');
+    expect(warnings[0]).toContain('"finding_severity"');
+  });
+
+  it('says nothing when the reserved names are spelled exactly', () => {
+    const warnings: string[] = [];
+    runProjectChecks({
+      columnsOf: NO_COLUMNS,
+      builtins: NO_BUILTINS,
+      checks: { [GRADED]: GRADED_CHECKS[GRADED] },
+      only: undefined,
+      ask: askRows({ [GRADED_SQL]: [{ path: 'a.md', finding_severity: 'warning', finding_line: 2, severity: 'x', line: 0 }] }),
+      validation: undefined,
+      membersEnumerated: POPULATED,
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings).toStrictEqual([]);
   });
 });

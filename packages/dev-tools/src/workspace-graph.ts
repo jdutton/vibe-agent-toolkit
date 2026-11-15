@@ -2,14 +2,8 @@
  * The workspace dependency graph, read from the one place it is declared:
  * every `packages/*\/package.json` and its `workspace:` specifiers.
  *
- * 🔑 **`package.json` is the only owner of "what depends on what".** This graph
- * used to be declared three more times by hand — per-package `tsconfig.json`
- * `references`, the `PUBLISHED_PACKAGES` publish order, and the postinstall
- * symlink list — and two of the three had drifted (12 of 25 reference lists
- * disagreed with the manifests; the publish order put two packages before a
- * dependency, so for the window between the two `npm publish` calls the
- * earlier one was uninstallable). Everything that needs the graph now derives
- * it from here: `generate-tsconfig-refs.ts` writes the references,
+ * 🔑 **`package.json` is the only owner of "what depends on what".** Everything
+ * that needs the graph derives it from here: `generate-tsconfig-refs.ts` writes the references,
  * {@link publishedPackagesInDependencyOrder} replaces the hand list, and
  * `validate-repo-structure.ts` fails when a derived artifact is stale.
  *
@@ -140,7 +134,7 @@ export function readWorkspaceGraph(repoRoot: string): WorkspaceGraph {
   const packagesDir = safePath.join(repoRoot, 'packages');
   const dirs = readdirSync(packagesDir, { withFileTypes: true })
     // Followed: a workspace package reached through a link is still a package.
-    .filter((entry) => direntKindFollowingSync(packagesDir, entry) === 'directory')
+    .filter((entry) => direntKindFollowingSync(packagesDir, entry, packagesDir) === 'directory')
     .map((entry) => entry.name)
     .sort((a, b) => a.localeCompare(b));
 

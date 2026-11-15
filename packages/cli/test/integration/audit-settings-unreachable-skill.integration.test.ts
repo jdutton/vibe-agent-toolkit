@@ -25,8 +25,10 @@
 
 import fs from 'node:fs';
 
+
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { createSymlink, normalizedTmpdir, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -78,7 +80,7 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit --compat --settings over a plugin 
     expect(exit).toBe(ExitCode.OK);
     // Once across the whole document — on the skill's own row for a locked
     // SKILL.md, on the plugin's row for a locked skill directory.
-    const codes = report.files.flatMap((f) => f.issues ?? []).map((i) => i.code);
+    const codes = report.findings.map((i) => i.code);
     expect(codes.filter((c) => c === 'SCAN_PATH_UNREADABLE')).toHaveLength(1);
     expect(codes).not.toContain('PLUGIN_INVALID_JSON');
     // The analyzer analyzed everything it could read: the readable sibling's
@@ -114,19 +116,19 @@ describe('vat audit --compat --settings over a plugin whose skills are symlinks'
   it.skipIf(cap === null)('checks a symlinked skill directory and a symlinked SKILL.md, agreeing with the validator lane', () => {
     if (cap === null) return;
     const shared = safePath.join(tempDir, 'shared');
-    fs.mkdirSync(safePath.join(shared, LINKED_DIR), { recursive: true });
+    mkdirSyncReal(safePath.join(shared, LINKED_DIR), { recursive: true });
     fs.writeFileSync(safePath.join(shared, LINKED_DIR, 'SKILL.md'), bashSkill(LINKED_DIR));
     fs.writeFileSync(safePath.join(shared, 'linked-file.md'), bashSkill(LINKED_FILE));
     const pluginDir = writeSettingsPlugin(tempDir, 'sym-plugin', {});
     createSymlink(cap, safePath.join(shared, LINKED_DIR), safePath.join(pluginDir, 'skills', LINKED_DIR), 'dir');
-    fs.mkdirSync(safePath.join(pluginDir, 'skills', LINKED_FILE), { recursive: true });
+    mkdirSyncReal(safePath.join(pluginDir, 'skills', LINKED_FILE), { recursive: true });
     createSymlink(cap, safePath.join(shared, 'linked-file.md'), safePath.join(pluginDir, 'skills', LINKED_FILE, 'SKILL.md'), 'file');
 
     const { exit, plugin, report } = auditWithSettings(pluginDir, settingsFile);
 
     expect(exit).toBe(0);
     // The control: the validator lane sees both skills in the same document.
-    const validated = report.files.filter((f) => f.type === 'agent-skill').map((f) => f.path).sort((a, b) => a.localeCompare(b));
+    const validated = report.data.files.filter((f) => f.type === 'agent-skill').map((f) => f.path).sort((a, b) => a.localeCompare(b));
     expect(validated).toEqual([`skills/${LINKED_DIR}/SKILL.md`, `skills/${LINKED_FILE}/SKILL.md`]);
     // So the settings lane must reach them the same way.
     expect(bashConflictFiles(plugin).sort((a, b) => a.localeCompare(b))).toEqual(validated);

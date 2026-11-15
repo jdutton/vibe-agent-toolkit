@@ -86,6 +86,7 @@ describe('file-crawler: symlink-vs-real-directory dedup ordering', () => {
     setForcedOrderDir(testDir);
 
     const files = crawlDirectorySync({
+      outputs: [],
       baseDir: testDir,
       unreadable: refuseUnreadableFixture(testDir),
       include: ['**/*.md'],

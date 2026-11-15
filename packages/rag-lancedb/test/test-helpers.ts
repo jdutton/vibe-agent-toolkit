@@ -5,13 +5,15 @@
  * and resource metadata to avoid duplication across test files.
  */
 
+import { existsSync } from 'node:fs';
 import { rm, writeFile } from 'node:fs/promises';
 
 
 import type { EmbeddingProvider } from '@vibe-agent-toolkit/rag';
 import type { ContentTransformOptions, LinkType, ResourceMetadata } from '@vibe-agent-toolkit/resources';
-import { parseMarkdown } from '@vibe-agent-toolkit/resources';
+import { calculateChecksumFromContent, parseFileCached } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { readTextContentSync } from '@vibe-agent-toolkit/utils/fs';
 import { createTempDirAsync } from '@vibe-agent-toolkit/utils/testing';
 
 import { LanceDBRAGProvider } from '../src/lancedb-rag-provider.js';
@@ -25,7 +27,7 @@ import { LanceDBRAGProvider } from '../src/lancedb-rag-provider.js';
  * const tempDir = await createTempDir();
  * const dbPath = safePath.join(tempDir, 'db');
  */
-export async function createTempDir(): Promise<string> {
+export function createTempDir(): Promise<string> {
   return createTempDirAsync('rag-lancedb-test-');
 }
 
@@ -46,7 +48,7 @@ export async function createTestResource(
   filePath: string,
   resourceId = 'test-1'
 ): Promise<ResourceMetadata> {
-  const parseResult = await parseMarkdown(filePath);
+  const parseResult = await parseFileCached(filePath, 'markdown', { dispatcher: undefined });
   return {
     id: resourceId,
     filePath,
@@ -56,7 +58,9 @@ export async function createTestResource(
     sizeBytes: parseResult.sizeBytes,
     estimatedTokenCount: parseResult.estimatedTokenCount,
     modifiedAt: new Date(),
-    checksum: 'test-checksum-sha256', // Placeholder checksum for tests
+    // The registry's checksum of the bytes the parse read, as admission records it:
+    // the indexer refuses a resource whose bytes no longer hash to it.
+    checksum: calculateChecksumFromContent(parseResult.content),
   };
 }
 
@@ -186,16 +190,18 @@ export async function queryAllContent(
  * local all-MiniLM-L6-v2 limit; any positive number would do, since no suite
  * using this asserts chunk boundaries against a real model.
  *
+ * @param dimensions - The vector length it declares and makes (another model's, to a suite that needs one)
  * @returns A deterministic, runtime-free embedding provider
  */
-export function createStubEmbeddingProvider(): EmbeddingProvider {
+export function createStubEmbeddingProvider(dimensions = 4): EmbeddingProvider {
+  const vector = Array.from({ length: dimensions }, (_, index) => (index === dimensions - 1 ? 1 : 0));
   return {
     name: 'stub',
-    model: 'stub-model',
-    dimensions: 4,
+    model: `stub-model-${dimensions}`,
+    dimensions,
     maxInputTokens: 256,
-    embed: async () => [0, 0, 0, 1],
-    embedBatch: async (texts: string[]) => texts.map(() => [0, 0, 0, 1]),
+    embed: () => Promise.resolve([...vector]),
+    embedBatch: (texts: string[]) => Promise.resolve(texts.map(() => [...vector])),
   };
 }
 
@@ -220,8 +226,23 @@ export function createBareResource(id: string, filePath: string): ResourceMetada
     sizeBytes: 0,
     estimatedTokenCount: 0,
     modifiedAt: new Date(0),
-    checksum: `${id}-checksum`,
+    // The registry's checksum of the bytes as they are now, as admission would
+    // record it: the indexer refuses a resource whose bytes no longer hash to it.
+    // A file that does not exist gets a placeholder its failed read never reaches.
+    checksum: existsSync(filePath) ? fileChecksum(filePath) : `${id}-checksum`,
   };
+}
+
+/**
+ * The checksum a registry records for `filePath` as it is on disk now — what a
+ * hand-built resource must carry, because the indexer refuses one whose bytes
+ * no longer hash to it.
+ *
+ * @param filePath - An existing file
+ * @returns The registry's checksum of its decoded text
+ */
+export function fileChecksum(filePath: string): ResourceMetadata['checksum'] {
+  return calculateChecksumFromContent(readTextContentSync(filePath).text);
 }
 
 export function setupLanceDBTestSuite(autoCreateProvider = false): {

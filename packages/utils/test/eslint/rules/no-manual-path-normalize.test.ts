@@ -1,32 +1,126 @@
 /**
  * `no-manual-path-normalize` has its own fixer (not a factory's), so it gets
- * its own `safeModule` leg — once per code path that WRITES an import.
+ * its own `safeModule` leg — once per code path that WRITES an import, and once
+ * per converter: `split(path.sep)` is a NATIVE conversion (`toForwardSlash`),
+ * while a literal-backslash split or replace converts on every host and must
+ * map to `toForwardSlashAnyPlatform` — autofixing it to `toForwardSlash` would
+ * silently stop converting on POSIX.
  */
 
 import { describe, it } from 'vitest';
 
-import { safeModuleCases } from '../factory-cases.js';
-import { LINTED_FILE, RULE, SEAM } from '../fixtures.js';
+import { rewriteTargetCases, safeModuleCases } from '../factory-cases.js';
+import { LINTED_FILE, PATH_IMPORT, PATH_NAMESPACE_IMPORT, RULE, SAFE_PATH_MODULE, SEAM } from '../fixtures.js';
 import { expectRulePasses, RULE_TESTER_CASES, type RuleCases } from '../rule-tester.js';
 
-const seam = safeModuleCases(
-  "const n = p.split(path.sep).join('/');",
+const NATIVE_ERR = [{ messageId: 'useToForwardSlash' }];
+const ANY_ERR = [{ messageId: 'useToForwardSlashAnyPlatform' }];
+const REPLACE_ALL_Q = String.raw`const b = q.replaceAll('\\', '/');`;
+const ANY_FIXED = `import { toForwardSlashAnyPlatform } from '${SEAM}';\nconst n = toForwardSlashAnyPlatform(p);`;
+
+// One pass rewrites the call and adds the import after the `node:path` one, which is then dead —
+// so the settled shape (valid) differs from the one-pass output.
+const nativeSeam = safeModuleCases(
+  `${PATH_IMPORT}const n = p.split(path.sep).join('/');`,
+  `${PATH_NAMESPACE_IMPORT}\nimport { toForwardSlash } from '${SEAM}';\nconst n = toForwardSlash(p);`,
+  NATIVE_ERR,
   `import { toForwardSlash } from '${SEAM}';\nconst n = toForwardSlash(p);`,
-  [{ messageId: 'useToForwardSlash' }],
 );
+const splitSeam = safeModuleCases(String.raw`const n = p.split('\\').join('/');`, ANY_FIXED, ANY_ERR);
+const replaceAllSeam = safeModuleCases(String.raw`const n = p.replaceAll('\\', '/');`, ANY_FIXED, ANY_ERR);
+const regexSeam = safeModuleCases(String.raw`const n = p.replace(/\\/g, '/');`, ANY_FIXED, ANY_ERR);
 
 const CASES: RuleCases = {
-  ...seam,
   valid: [
-    ...seam.valid,
+    ...nativeSeam.valid,
+    ...splitSeam.valid,
     // Splitting on a TWO-backslash SEQUENCE — source literal
     // String.raw`'\\\\'`, decoded value: two backslash characters —
     // is a different, rarer operation (e.g. collapsing a UNC path's
-    // leading double-backslash server prefix) than splitting on
-    // path.sep. toForwardSlash() is not equivalent to it, so this must
-    // NOT be treated as the path.sep-style split the rule autofixes —
-    // it stays valid (unflagged).
+    // leading double-backslash server prefix) than either converter.
+    // It stays valid (unflagged).
     { code: String.raw`const n = p.split('\\\\').join('/');`, filename: LINTED_FILE },
+    { code: String.raw`const n = p.replaceAll('\\\\', '/');`, filename: LINTED_FILE },
+    // A NON-global regex replaces only the first backslash: not a converter.
+    { code: String.raw`const n = p.replace(/\\/, '/');`, filename: LINTED_FILE },
+    // `replace` with a string pattern replaces only the first occurrence.
+    { code: String.raw`const n = p.replace('\\', '/');`, filename: LINTED_FILE },
+    // Replacing with something other than '/'.
+    { code: String.raw`const n = p.replaceAll('\\', '|');`, filename: LINTED_FILE },
+    // `sep` resolved through scope, never by spelling: `posix.sep` is always '/', and a
+    // parameter or an unbound `path` is not the `node:path` module. Rewriting either to
+    // `toForwardSlash` would convert backslashes on Windows where the original did not.
+    { code: "import { posix as path } from 'node:path';\nexport const n = (s: string) => s.split(path.sep).join('/');", filename: LINTED_FILE },
+    { code: "export const n = (path: { sep: string }, s: string) => s.split(path.sep).join('/');", filename: LINTED_FILE },
+    { code: "export const n = (s: string) => s.split(path.sep).join('/');", filename: LINTED_FILE },
+  ],
+  invalid: [
+    ...nativeSeam.invalid,
+    ...splitSeam.invalid,
+    ...replaceAllSeam.invalid,
+    ...regexSeam.invalid,
+    // The ONE "may this call be rewritten to the converter?" table every fixer in the pack
+    // shares — a shadowing parameter or local, or a top-level binding that is not the
+    // converter — for each converter: reported, never fixed.
+    ...rewriteTargetCases({
+      preamble: PATH_NAMESPACE_IMPORT, unsafeCall: "a.split(path.sep).join('/')", safeName: 'toForwardSlash', safeModule: SAFE_PATH_MODULE, errors: NATIVE_ERR,
+    }),
+    // A comma-expression receiver becomes TWO arguments as the converter's argument list
+    // (`toForwardSlashAnyPlatform(a, b)`): reported, never fixed.
+    { code: String.raw`export const n = (a: string, b: string) => (a, b).replaceAll('\\', '/');`, filename: LINTED_FILE, errors: ANY_ERR },
+    // Every whole-module binding of `node:path` is the module: `require()` too.
+    {
+      code: "const path = require('node:path');\nexport const n = (p: string) => p.split(path.sep).join('/');",
+      filename: LINTED_FILE,
+      output: `import { toForwardSlash } from '${SAFE_PATH_MODULE}';\nconst path = require('node:path');\nexport const n = (p: string) => toForwardSlash(p);`,
+      errors: NATIVE_ERR,
+    },
+    ...rewriteTargetCases({
+      preamble: '', unsafeCall: String.raw`a.split('\\').join('/')`, safeName: 'toForwardSlashAnyPlatform', safeModule: SAFE_PATH_MODULE, errors: ANY_ERR,
+    }),
+    ...rewriteTargetCases({
+      preamble: '', unsafeCall: String.raw`a.replaceAll('\\', '/')`, safeName: 'toForwardSlashAnyPlatform', safeModule: SAFE_PATH_MODULE, errors: ANY_ERR,
+    }),
+    // An optional-chained receiver: `toForwardSlashAnyPlatform(a)` would drop the `?.`, and
+    // throw or convert where the original yielded `undefined`. Reported, never fixed.
+    { code: String.raw`export const n = (a?: string) => a?.replaceAll('\\', '/');`, filename: LINTED_FILE, errors: ANY_ERR },
+    { code: String.raw`export const n = (a?: string) => a?.split('\\').join('/');`, filename: LINTED_FILE, errors: ANY_ERR },
+    { code: String.raw`export const n = (a: { p?: string }) => a.p?.replace(/\\/g, '/');`, filename: LINTED_FILE, errors: ANY_ERR },
+    // A hashbang stays the first line: the import lands below it.
+    {
+      code: "#!/usr/bin/env node\nconst n = p.replaceAll('\\\\', '/');",
+      filename: LINTED_FILE,
+      output: "#!/usr/bin/env node\nimport { toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils/path';\nconst n = toForwardSlashAnyPlatform(p);",
+      errors: ANY_ERR,
+    },
+    // `replaceAll` with a global regex is the same conversion.
+    {
+      code: String.raw`const n = p.replaceAll(/\\/g, '/');`,
+      filename: LINTED_FILE,
+      options: [{ safeModule: SEAM }],
+      output: ANY_FIXED,
+      errors: ANY_ERR,
+    },
+    // A file already binding the name gains no second import.
+    {
+      code: `import { toForwardSlashAnyPlatform } from '${SEAM}';\n` + String.raw`const n = p.replaceAll('\\', '/');`,
+      filename: LINTED_FILE,
+      options: [{ safeModule: SEAM }],
+      output: ANY_FIXED,
+      errors: ANY_ERR,
+    },
+    // Both converters in one file. Their import inserts share one anchor, so ONE
+    // `--fix` pass applies the first and drops the overlapping second; the next
+    // pass finishes it (the autofix-fixpoint suite owns multi-pass convergence).
+    {
+      code: `import { safePath } from '${SEAM}';\n${PATH_IMPORT}const a = p.split(path.sep).join('/');\n` + REPLACE_ALL_Q,
+      filename: LINTED_FILE,
+      options: [{ safeModule: SEAM }],
+      output:
+        `import { safePath, toForwardSlash } from '${SEAM}';\n${PATH_IMPORT}` +
+        'const a = toForwardSlash(p);\n' + REPLACE_ALL_Q,
+      errors: [...NATIVE_ERR, ...ANY_ERR],
+    },
   ],
 };
 

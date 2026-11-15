@@ -2,11 +2,29 @@
  * `vat claude context [path]` — what loads into an agent's context here, and
  * what it costs.
  *
- * The first ANALYSIS verb under `vat claude`, which until now held only
- * management verbs (plugins, marketplaces, org administration). It answers a
- * question, changes nothing, and never gates: there is no threshold anywhere in
- * this file, and the only non-zero exit is {@link handleCommandError}'s 2 for a
- * system failure. A number that fails a build teaches people to stop reading it.
+ * An ANALYSIS verb: it answers a question, changes nothing, and never gates —
+ * there is no threshold anywhere in this file.
+ *
+ * ⛔ **The one other non-zero exit is not a threshold: it is an ANSWER VAT could
+ * not give.** A file the walk reached whose facts this run refused (a parse
+ * stopped at a limit, or lost with its worker) is named in the document
+ * (`refused: <code>`) and reported on stderr through the not-admitted contract
+ * — the project's `resources.validation` resolves its severity — and an
+ * error-severity one ends the run on 1. A refused rule's `paths:` were never
+ * read, so whether it loads is unknown and every total here is short by it;
+ * exiting 0 would publish that as a complete answer. A refusal's 2 is unchanged.
+ *
+ * ## The one legacy document — interim, until wave C replaces the verb
+ *
+ * Its answer is not the `Report<T>` envelope; it is the registry's one
+ * remaining `legacy` entry, published through the writer's
+ * `writeLegacyDocument` (the only serializer a legacy verb may use) and ended on
+ * the exit its refused-file findings derive (`exitCodeForReport`). A refusal IS
+ * the envelope's error branch — `refusalReport`,
+ * with the code {@link refusalCodeOf} reads off the throw (a path outside the
+ * corpus is `USAGE_INVALID`, a missing projection backend `BACKEND_UNAVAILABLE`,
+ * VAT's own defect `INTERNAL_ERROR`) — written the same way and ended on the
+ * code it derives. Wave C replaces the verb, and this path with it.
  *
  * ## Everything below is orchestration and formatting — deliberately
  *
@@ -32,22 +50,15 @@
  *
  * ⛔ They belong to the ENVELOPE, never to an answer or a region, and every
  * rendering obeys that identically — see {@link ContextEnvelope} for why.
- * Attaching them per answer was not a formatting preference: on the whole-tree
- * sweep `--all` used to be (6,224 answers on this repository) `--format json`
- * measured 76,877,016 bytes and measures 6,581,468 with the block hoisted — 70.3
- * MB of ONE byte-identical paragraph, repeated. That is the JSON spelling of the
- * very burial {@link renderEnvelopeText} refuses to do in text, and it is why
- * {@link ContextCostMapEnvelope} hoists the same block rather than growing one
- * per region.
+ * Attached per answer they would repeat one byte-identical paragraph per
+ * path — the JSON spelling of the burial {@link renderEnvelopeText} refuses in
+ * text — which is why {@link ContextCostMapEnvelope} hoists the same block.
  *
  * ## `--all` is a MAP, not a sweep
  *
- * ⛔ `--all` emits no per-path documents in any format. It used to answer for
- * every realized path — 10,438 documents and 205,918 lines on a large adopter
- * monorepo, ~491 s — which is not a report anyone reads. It now emits the
- * whole-tree cost map {@link buildContextCostMap} builds, which answers the
- * question the flag exists for: where in this tree is it expensive to work.
- * Naming paths is the drill-down, and is the only way to get a per-path answer.
+ * ⛔ `--all` emits no per-path documents in any format: it emits the whole-tree
+ * cost map {@link buildContextCostMap} builds, answering where in this tree it
+ * is expensive to work. Naming paths is the per-path drill-down.
  *
  * ⛔ Nothing here may read as "complete". Many of the stated limits are signed
  * `over-report`/`under-report` and apply whether or not `unknownTokenRows`,
@@ -67,7 +78,6 @@ import {
   CLAUDE_CONTEXT_BOUNDS_STATEMENT,
   CLAUDE_CONTEXT_LIMITS,
   CLAUDE_CONTEXT_MODELLED_BEHAVIOURS,
-  CLAUDE_MD_TAG,
   discoverableFrom,
   whatLoadsAt,
   type AccountedRow,
@@ -81,26 +91,37 @@ import {
   type LoadedContextAnswer,
   type ModelledBehaviour,
   type Projection,
+  notAdmittedFindings,
+  type RefusedContextFile,
   type RegionCost,
   type StatedLimit,
 } from '@vibe-agent-toolkit/resources';
-import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot } from '@vibe-agent-toolkit/utils';
+import {
+  exitCodeForReport,
+  summarizeIssues,
+  type ExitDeterminingDocument,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/schema';
+import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
 import { Command, Option } from 'commander';
 
-import { handleCommandError } from '../../utils/command-error.js';
+import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
+import { loadConfigCached } from '../../utils/config-loader.js';
 import { targetPathWithin } from '../../utils/corpus-target.js';
+import { NOTHING_FINISHED, refusalReport, writeLegacyDocument } from '../../utils/document-writer.js';
+import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
-import { writeJsonOutput, writeStdoutSync, writeYamlOutput } from '../../utils/output.js';
-import { populationWiring } from '../../utils/population-wiring.js';
+import { populateAndReport } from '../../utils/population-wiring.js';
 import { withPopulationCache } from '../../utils/projection-store.js';
-import { gitTrackerForProjectRoot } from '../audit/distributed-tree.js';
 
 /** Soft wrap width for the printed limit statements. */
 const WRAP_COLUMNS = 96;
 
 /** How this command names itself in a refusal. */
 const COMMAND_NAME = 'vat claude context';
+
+/** `vat claude context` never gates: there is no `--strict`, and no threshold to apply one to. */
+const CLAUDE_CONTEXT_GATE = { strict: false } as const;
 
 /**
  * How many rows each RANKED section of the `--all` cost map prints.
@@ -201,16 +222,10 @@ export interface ContextEnvelope {
  * The envelope `--all` emits: the whole-tree cost map, not a pile of answers.
  *
  * ⛔ **A DIFFERENT document from {@link ContextEnvelope}, deliberately, and
- * `kind` is what tells them apart.** `--all` used to answer for every realized
- * path — 10,438 documents on a large adopter monorepo — which answered the
- * question "what loads at each of ten thousand paths" nobody asked, in place of
- * "where is it expensive to work here", which is what the flag is for. Naming
- * paths explicitly is still the per-path answer, and is now the only way to get
- * one.
+ * `kind` is what tells them apart.**
  *
  * ⛔ The three limit fields ride HERE, exactly as they ride on
- * {@link ContextEnvelope}, and for the same measured reason: attached per row
- * they were 70.3 MB of one byte-identical paragraph on a single sweep. They bound
+ * {@link ContextEnvelope}, and for the same reason. They bound
  * the MEASUREMENT METHOD, so a region carrying its own copy would also read as
  * though that region had caveats of its own.
  *
@@ -255,6 +270,12 @@ export interface ContextAnswerDocument {
   readonly conditions: readonly GradedCondition[];
   readonly overBudgetRules: readonly string[];
   readonly unattributedImports: readonly string[];
+  /**
+   * Every file this answer reached and could not measure, because this run
+   * refused its facts — each under its not-admitted code. ⛔ No row and no total
+   * includes them, so a non-empty list means the answer is incomplete.
+   */
+  readonly refused: readonly RefusedContextFile[];
   /**
    * What the loaded set POINTS AT in one hop and the harness does not load, or
    * null when `--discoverable` was not asked for.
@@ -338,8 +359,8 @@ Description:
   the TOTAL of that launch floor and what fires on demand there (a path-scoped
   rule fires for some directories and not others, so the on-demand half is
   never borrowed from a region-mate). Directories are ranked by that total. It
-  emits no per-path documents; name paths for those. --discoverable applies to
-  named paths only.
+  emits no per-path documents; name paths for those. --all with a path or
+  with --discoverable (which applies to named paths only) is refused.
 
 Output:
   - kind:    context-answers for named paths, context-cost-map for --all —
@@ -365,10 +386,26 @@ Output:
   A path the projection never realized answers kind: unknown — never zero.
   Diagnostics and blob-stage refusals go to stderr; stdout is the document.
 
+  A refusal publishes the report envelope's error branch (status: error,
+  error: { code, message }, gate) in the requested format (text renders it
+  as YAML), with the message on stderr.
+
 Exit Codes:
   0 - An answer was produced (there is no threshold and no gate)
-  1 - Invalid usage (unknown option, or an unsupported --format value)
-  2 - System error (a path outside the corpus root, unreadable tree)
+  1 - An answer was produced but is incomplete: a file it reached had its
+      facts refused this run (a parse stopped at a limit, or its worker
+      died). It is listed as "refused: <code>" and reported on stderr under
+      that code; resources.validation can lower its severity
+  2 - Invalid usage rejected before the verb runs (an unknown option, or an
+      unsupported --format value: Commander's message on stderr, no document),
+      or refused: error.code USAGE_INVALID (a path outside the corpus root,
+      or --all with a path or --discoverable),
+      BACKEND_UNAVAILABLE (the projection store's optional backend is not
+      installed), INPUT_UNREADABLE (a tree the OS will not read, including
+      one file in a git repository the OS will not let git read — the
+      message names it), or
+      INTERNAL_ERROR (a VAT bug, e.g. a memory file reached with no derived
+      harness facts — its stack goes to stderr)
 
 Example:
   $ vat claude context src/index.ts docs/ README.md   # one scan, three answers
@@ -379,11 +416,8 @@ Example:
 /**
  * Action handler for `vat claude context [path]`.
  *
- * ⛔ The two branches produce DIFFERENT documents and there is no third mode: a
- * `--per-path` escape hatch back to the old sweep is exactly the backward
- * compatibility shim this project forbids pre-1.0, and naming paths explicitly
- * already gives the per-path answer — now from a population the caller pays for
- * once instead of ten thousand times.
+ * ⛔ The two branches produce DIFFERENT documents and there is no third mode:
+ * naming paths explicitly already gives the per-path answer.
  *
  * @param pathArgs - The paths to answer for; empty means the current directory
  * @param options - The command's flags
@@ -393,39 +427,121 @@ export async function claudeContextCommand(
   options: ClaudeContextOptions,
 ): Promise<void> {
   const logger = createLogger(options.debug === true ? { debug: true } : {});
-  const startTime = Date.now();
   const sweep = options.all === true;
+  const format = options.format ?? 'text';
   try {
     const root = findProjectRoot(process.cwd()) ?? process.cwd();
     // 🔑 Every argument is resolved BEFORE the population, not inside the map.
     // A path outside the corpus is a usage error, and finding it afterwards
     // would charge the caller a full population — minutes on a cold cache — to
-    // be told they mistyped. `--all` has no arguments to check.
-    const requested = sweep ? [] : targetsWithin(root, pathArgs);
+    // be told they mistyped.
+    const requested = requestedTargets(root, pathArgs, options);
     const projection = await populateContext(root, logger);
-    const format = options.format ?? 'text';
-    if (sweep) {
-      // Every number in the map is decided in `@vibe-agent-toolkit/resources`.
-      // This branch calls one function and formats what it returns.
-      const map = buildContextCostMap(projection);
-      emit(costMapEnvelope(root, map), renderCostMapText(map), format);
-    } else {
-      // ONE population, N queries. `whatLoadsAt` is a pure read of materialised
-      // tables, so the marginal cost of another path is a map lookup — which is
-      // the whole reason this command takes a list rather than being run twice.
-      const answers = requested.map(
-        (target) => documentFor(target, projection, root, options.discoverable === true),
-      );
-      emit(contextEnvelope(root, answers), renderEnvelopeText(answers), format);
-    }
-    // ⛔ Always 0. There is no threshold in this command and there is not going
-    // to be one — a number that fails a build is a number people learn to stop
-    // reading. The explicit exit matches every other leaf here and guarantees the
-    // process ends rather than waiting on whatever the population left behind.
-    process.exit(ExitCode.OK);
+    const answer = sweep
+      ? sweepAnswer(root, projection)
+      : pathsAnswer(root, projection, requested, options.discoverable === true);
+    // Resolved BEFORE anything is written: a config that will not load here is
+    // a refusal with stdout still empty, never a second document after the answer.
+    const findings = refusedFindings(root, answer.refused);
+    emit(answer.document, answer.text, format);
+    // ⛔ No threshold, and there is not going to be one — a number that fails a
+    // build is a number people learn to stop reading. The one non-OK exit is an
+    // answer VAT could not give (see the header). The explicit exit guarantees
+    // the process ends rather than waiting on whatever the population left behind.
+    reportFindings(findings, { verbose: true, write: logger.warn });
+    process.exit(exitCodeForReport(refusedVerdict(findings)));
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'claude context', options.format);
+    // Coded at the cause, read here — never relabelled by where it was thrown.
+    const report = refusalReport(refusalCodeOf(error), error, CLAUDE_CONTEXT_GATE, NOTHING_FINISHED);
+    writeLegacyDocument('claude context', report, format, undefined);
+    process.exit(exitCodeForReport(report));
   }
+}
+
+/** One run's answer, built and not yet written: the document, its text rendering, and the refused files it reached. */
+interface ContextAnswer {
+  readonly document: unknown;
+  readonly text: string;
+  readonly refused: readonly RefusedContextFile[];
+}
+
+/** `--all`: every number in the map is decided in `@vibe-agent-toolkit/resources`; this formats what it returns. */
+function sweepAnswer(root: string, projection: Projection): ContextAnswer {
+  const map = buildContextCostMap(projection);
+  return { document: costMapEnvelope(root, map), text: renderCostMapText(map), refused: map.refused };
+}
+
+/**
+ * ONE population, N queries. `whatLoadsAt` is a pure read of materialised
+ * tables, so the marginal cost of another path is a map lookup — which is the
+ * whole reason this command takes a list rather than being run twice.
+ */
+function pathsAnswer(root: string, projection: Projection, requested: readonly string[], discoverable: boolean): ContextAnswer {
+  const answers = requested.map((target) => documentFor(target, projection, root, discoverable));
+  return {
+    document: contextEnvelope(root, answers),
+    text: renderEnvelopeText(answers),
+    refused: answers.flatMap((answer) => (answer.kind === 'answer' ? answer.refused : [])),
+  };
+}
+
+/**
+ * Every reached file whose facts were refused, as the not-admitted contract
+ * reports it, resolved through the project's `resources.validation`.
+ *
+ * The config is asked only when something was refused, through the same
+ * cached load the population made — one answer per root, no second read.
+ *
+ * @param root - The corpus root
+ * @param refused - The refused files the run's answers reached, possibly repeated
+ * @returns One finding per refused file, or none (dropped when allowed or ignored)
+ */
+function refusedFindings(root: string, refused: readonly RefusedContextFile[]): ValidationIssue[] {
+  if (refused.length === 0) return [];
+  const byPath = new Map(refused.map((file) => [file.path, file]));
+  return notAdmittedFindings(
+    {
+      unreadable: [],
+      parseRefused: [...byPath.values()].map(({ path, code, reason }) => ({ filePath: safePath.resolve(root, path), code, reason })),
+    },
+    { locationRoot: root, consequence: 'whether and how much it loads into context was not measured' },
+    loadConfigCached(root, 'source')?.resources?.validation ?? {},
+  );
+}
+
+/**
+ * What the run's exit is derived from: the refused-file findings, under this
+ * command's gate. With none, it is `ok` and the run ends 0, as it always did.
+ *
+ * @param findings - {@link refusedFindings}
+ * @returns The exit-determining document
+ */
+function refusedVerdict(findings: readonly ValidationIssue[]): ExitDeterminingDocument {
+  return { ...summarizeIssues(findings), gate: CLAUDE_CONTEXT_GATE };
+}
+
+/**
+ * The paths a run answers for, checked before anything is populated.
+ *
+ * `--all` answers the whole tree and emits no per-path document, so a path or
+ * `--discoverable` beside it would be silently dropped: refused instead.
+ *
+ * @param root - The corpus root
+ * @param pathArgs - The path arguments, possibly empty
+ * @param options - The command's flags
+ * @returns The root-relative targets; empty under `--all`
+ */
+function requestedTargets(root: string, pathArgs: readonly string[], options: ClaudeContextOptions): string[] {
+  if (options.all !== true) return targetsWithin(root, pathArgs);
+  const ignored = [...pathArgs, ...(options.discoverable === true ? ['--discoverable'] : [])];
+  if (ignored.length > 0) {
+    throw new CommandRefusalError(
+      'USAGE_INVALID',
+      `--all reports the whole tree and answers no named path, so it cannot take ${ignored.join(', ')}.`
+      + ' Drop --all to answer for named paths (with --discoverable if wanted), or drop the rest for the cost map.',
+    );
+  }
+  return [];
 }
 
 /**
@@ -453,14 +569,9 @@ export function answerDocument(
   projection: Projection,
   discoverable: boolean,
 ): ContextAnswerDocument {
-  // The cliff and root discovery read ONE vocabulary: these are the ids the
-  // shipped `classifyPath` tagged, not a second basename rule invented here.
-  const claudeMdIds = new Set(
-    projection.resourceTags
-      .filter((tag) => tag.tag === CLAUDE_MD_TAG)
-      .map((tag) => tag.resourceId),
-  );
-  const accounted = account(answer, claudeMdIds);
+  // The cliff applies to every memory file the harness reads, so the
+  // accounting needs no tag vocabulary from here.
+  const accounted = account(answer);
   // 🔑 `conditions`, `overBudgetRules` and `unattributedImports` live on the
   // ORIGINAL answer — `AccountedContext` is `{rows, totals}` and nothing else.
   // Reading them off the accounting result silently drops every warning.
@@ -474,6 +585,7 @@ export function answerDocument(
     conditions: answer.conditions,
     overBudgetRules: answer.overBudgetRules,
     unattributedImports: answer.unattributedImports,
+    refused: answer.refused,
     // The ANSWER is passed, not recomputed: it is the authority for what is
     // already loaded, and the two lenses partitioning depends on both reading
     // one loaded set.
@@ -591,7 +703,7 @@ function documentFor(
  * @param documents - The answers, in requested order
  * @returns The text rendering, newline-terminated
  */
-function renderEnvelopeText(
+export function renderEnvelopeText(
   documents: readonly (ContextAnswerDocument | ContextUnknownDocument)[],
 ): string {
   const bodies = documents.map((document) =>
@@ -633,6 +745,7 @@ export function renderCostMapText(map: ContextCostMap): string {
     ...map.regions.slice(0, COST_MAP_ROW_LIMIT).flatMap(regionDetail),
     ...directoryTable(map.directories),
     ...coverageLines(map),
+    ...refusedSection(map.refused),
   ];
   return `${lines.join('\n')}\n${limitSection().join('\n')}\n`;
 }
@@ -692,9 +805,6 @@ function regionDetail(region: RegionCost): string[] {
  * ⛔ Deliberately NOT applied to {@link estimateLines}. A single-path answer has
  * no roll-up to fall back on, so its counters are the only statement that the
  * rows were counted at all and must keep printing whatever their values.
- *
- * The measured motivation: nine regions on this repository printed 27 lines of
- * pure zeros, burying the launch bills the section exists to show.
  *
  * @param region - The region whose counters to print
  * @returns The three lines, or none when all three are zero
@@ -912,35 +1022,32 @@ function groupDigits(value: number): string {
  * Populate the Claude-context lane for one tree.
  *
  * @param root - The absolute corpus root
- * @param logger - Where blob-stage refusals go. **stderr**, never stdout: this
- *   command's stdout is the document a caller parses, and a diagnostic in the
- *   middle of it breaks every consumer
+ * @param logger - Where the population's refused content is reported. **stderr**,
+ *   never stdout: this command's stdout is the document a caller parses
  * @returns The populated projection
  */
-async function populateContext(root: string, logger: Logger): Promise<Projection> {
+function populateContext(root: string, logger: Logger): Promise<Projection> {
   return withPopulationCache({ root }, async (cache) => {
-    const gitTracker = await gitTrackerForProjectRoot(root);
-    return buildClaudeContextPopulation({ root, ...populationWiring(logger, gitTracker, cache, root) });
+    const { projection } = await populateAndReport(
+      { root, cache, logger, population: 'claude-context' },
+      (wiring) => buildClaudeContextPopulation({ root, ...wiring }),
+      (result) => result.projection,
+      (result) => result.storeMiss,
+    );
+    return projection;
   });
 }
 
 /**
- * Write the document in the requested format.
+ * Publish the answer through the writer's one legacy serializer: the text
+ * rendering under `--format text`, the document itself otherwise.
  *
  * @param document - The yaml/json payload
  * @param text - The text rendering of the same answer
  * @param format - The selected format
  */
 function emit(document: unknown, text: string, format: ContextOutputFormat): void {
-  if (format === 'json') {
-    writeJsonOutput(document);
-    return;
-  }
-  if (format === 'yaml') {
-    writeYamlOutput(document);
-    return;
-  }
-  writeStdoutSync(text);
+  writeLegacyDocument('claude context', document, format, text);
 }
 
 /**
@@ -985,6 +1092,9 @@ function renderUnknownText(document: ContextUnknownDocument): string {
   ].join('\n');
 }
 
+/** Test seam: the non-answer's document and its text rendering. */
+export const __internal = { renderUnknownText, requestedTargets, unknownDocumentFor };
+
 /**
  * Render the answer for a person.
  *
@@ -998,8 +1108,9 @@ function renderAnswerText(document: ContextAnswerDocument): string {
     ...rowSection('Loaded at launch (always)', document.rows, 'always'),
     ...rowSection('Loaded on demand', document.rows, 'on-demand'),
     ...listSection('Conditions', document.conditions.map(conditionLine)),
-    ...listSection('Rules whose paths: list exceeded the vendor pattern budget', document.overBudgetRules),
+    ...listSection('Rules with a paths: pattern the vendor expansion budget refused (their other patterns still apply)', document.overBudgetRules),
     ...listSection('Imported files no importer could be attributed to', document.unattributedImports),
+    ...refusedSection(document.refused),
     ...discoverySection(document.discoverable),
   ];
   return `${lines.join('\n')}\n`;
@@ -1085,6 +1196,11 @@ function estimateLines(totals: ContextTotals): string[] {
     'Token estimate',
     `  always-loaded         ${groupDigits(totals.alwaysTokens)} tokens`,
     `  on-demand             ${groupDigits(totals.onDemandTokens)} tokens`,
+    // Already folded into the two lines above — every row's own header, and the
+    // once-per-launch preamble on top of them — printed separately so a reader
+    // sees how much of the total is RENDERING rather than content.
+    `  of which: headers     ${groupDigits(totals.headerTokens)} tokens`
+    + ` · preamble ${groupDigits(totals.preambleTokens)} tokens (both already counted above)`,
     // ⛔ UNCONDITIONAL here, unlike a region's — see {@link quietCounterLines}.
     // A single-path answer has no tree-level roll-up to fall back on, so these
     // three lines are its only statement that the rows were counted at all.
@@ -1123,8 +1239,8 @@ function rowSection(
  * What one row costs, or why it costs nothing.
  *
  * ⛔ A null token count renders as "size unknown", never as `0`. The `charged`
- * branch cannot be reached with a null — `chargeOf` classifies those
- * `unknown-size` first — but the check is written as a value test rather than a
+ * branch cannot be reached with a null — `sizeCliffOf` classifies those
+ * `unmeasured` first — but the check is written as a value test rather than a
  * `?? 0`, so if that ever changed the output would say what it knows instead of
  * asserting a measurement it does not have.
  *
@@ -1140,10 +1256,10 @@ function rowSection(
  * @returns The cost phrase
  */
 export function chargeText(row: AccountedRow): string {
-  if (row.charge === 'oversize-skipped') {
+  if (row.sizeCliff === 'oversize-skipped') {
     return 'skipped: past the 4 MiB CLAUDE.md cliff, so none of it loads';
   }
-  if (row.charge === 'pruned-by-oversize') {
+  if (row.sizeCliff === 'pruned-by-oversize') {
     return 'not reached: every import route into it passes through a skipped file';
   }
   if (row.tokens === null) return 'size unknown: no measured blob, so it is counted, not summed';
@@ -1204,27 +1320,45 @@ function describeImport(admission: Extract<Admission, { kind: 'import' }>): stri
 }
 
 /**
- * One condition, in the compact `severity code at location: message` shape.
+ * One condition — the compact `severity code at location: message` line, an
+ * indented `subject:` naming the refused or escaping TARGET when one differs
+ * from `location` (never for `CLOSURE_REFERENCE_UNRESOLVED`, which has none),
+ * an indented `why:` explaining which harness loader rule makes it so, and,
+ * when {@link GradedCondition.affects} names one, a `reached from:` line
+ * tracing the import chain that reaches it.
+ *
+ * Exported for `context-condition-line.test.ts`, the same reason
+ * {@link chargeText} is: the only code that renders these lines, so it is what
+ * a unit test pins rather than a system assertion over a real tree's own
+ * conditions (which may carry none of the shapes this needs to distinguish).
  *
  * @param condition - The graded condition
- * @returns The line
+ * @returns The lines, newline-joined — one {@link listSection} entry
  */
-function conditionLine(condition: GradedCondition): string {
-  const reference = condition.sourceRef === null ? '' : ` [${condition.sourceRef}]`;
-  return `  ${condition.severity.padEnd(7)} ${condition.code}`
-    + ` at ${conditionLocation(condition)}${reference}: ${condition.message}`;
+export function conditionLine(condition: GradedCondition): string {
+  const reference = condition.ref === null ? '' : ` [${condition.ref}]`;
+  const lines = [
+    `  ${condition.severity.padEnd(7)} ${condition.code}`
+    + ` at ${conditionLocation(condition)}${reference}: ${condition.message}`,
+  ];
+  if (condition.subject !== null) {
+    lines.push(`      subject: ${condition.subject}`);
+  }
+  lines.push(`      why: ${condition.why}`);
+  if (condition.affects !== null) {
+    lines.push(`      reached from: ${condition.affects.chain.join(' → ')} (hop ${condition.affects.hop})`);
+  }
+  return lines.join('\n');
 }
 
 /**
- * Where a condition points, using the most specific provenance it carries.
+ * Where a condition points.
  *
  * @param condition - The graded condition
  * @returns A path, or a `path:line`
  */
 function conditionLocation(condition: GradedCondition): string {
-  if (condition.sourcePath === null) return condition.path;
-  if (condition.sourceLine === null) return condition.sourcePath;
-  return `${condition.sourcePath}:${condition.sourceLine}`;
+  return condition.line === null ? condition.path : `${condition.path}:${condition.line}`;
 }
 
 /**
@@ -1237,6 +1371,19 @@ function conditionLocation(condition: GradedCondition): string {
 function listSection(title: string, entries: readonly string[]): string[] {
   if (entries.length === 0) return [];
   return [title, ...entries.map((entry) => (entry.startsWith('  ') ? entry : `  ${entry}`)), ''];
+}
+
+/**
+ * The files a query reached and could not measure, each with its refusal code.
+ *
+ * @param refused - The refused files, path-ordered
+ * @returns The section's lines, or none when nothing was refused
+ */
+function refusedSection(refused: readonly RefusedContextFile[]): string[] {
+  return listSection(
+    'Reached and NOT counted — this run refused their facts, so no figure above includes them',
+    refused.map((file) => `${displayPath(file.path)}  refused: ${file.code}`),
+  );
 }
 
 /**

@@ -1,6 +1,7 @@
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
+import { RunContentCache } from '../src/projection/content-cache.js';
 import {
   ROOT_PATH_PLACEHOLDER,
   UnregisteredProjectionColumnError,
@@ -42,7 +43,7 @@ const HIGH_ORDINAL = 10;
 const LOW_ORDINAL = 2;
 
 /**
- * The twelve tables, taken from {@link Projection} itself so the compiler
+ * The tables, taken from {@link Projection} itself so the compiler
  * rejects this list the moment a table is added or renamed.
  */
 const EXPECTED_TABLES = [
@@ -52,12 +53,15 @@ const EXPECTED_TABLES = [
   'resourceExtents',
   'resourceTags',
   'realizationConditions',
+  'claudeRulePatterns',
   'resolutionContexts',
   'zoneProvenance',
   'blobs',
   'blobReferences',
   'blobSections',
   'blobConditions',
+  'harnessBlobFacts',
+  'harnessBlobImports',
 ] as const satisfies readonly (keyof Projection)[];
 
 /** One side of the fixture — every table gets a row keyed on this side's ids. */
@@ -126,7 +130,7 @@ function referenceRow(blob: string): BlobReferenceRow {
   return { ...row, ordinal: 0 };
 }
 
-/** Contribute one side's rows to every one of the twelve tables. */
+/** Contribute one side's rows to every table. */
 function contribute(builder: ProjectionBuilder, side: Side): void {
   builder.addRoot({ id: side.rootId, path: side.rootPath });
   builder.addResource({
@@ -168,6 +172,14 @@ function contribute(builder: ProjectionBuilder, side: Side): void {
     // Spread exactly as every unprovoked producer spreads it, so the fixture
     // row carries the six provenance columns in the shape real rows have.
     ...CONDITION_WITHOUT_REFERENCE,
+  });
+  builder.addClaudeRulePattern({
+    resourceId: side.resourceId,
+    ordinal: 0,
+    pattern: `${side.path.slice(0, side.path.lastIndexOf('/'))}/**`,
+    literalPrefix: side.path.slice(0, side.path.lastIndexOf('/')),
+    witnessPath: side.path,
+    status: 'matched',
   });
   builder.addContext({
     contextId: side.extentId,
@@ -222,6 +234,8 @@ function contribute(builder: ProjectionBuilder, side: Side): void {
     message: 'fixture oddity',
     line: null,
   });
+  builder.addHarnessBlobFacts({ blob: side.blob, harness: 'claude-code', injectedBytes: 12, injectedTokens: 3, paths: null });
+  builder.addHarnessBlobImport({ blob: side.blob, harness: 'claude-code', ordinal: 0, rawRef: '@other.md', target: 'other.md', line: 1 });
 }
 
 /**
@@ -233,7 +247,7 @@ function contribute(builder: ProjectionBuilder, side: Side): void {
  * host-dependent.
  */
 function buildFixture(order: 'forward' | 'reverse'): Projection {
-  const builder = new ProjectionBuilder({ root: TMP_ROOT_A });
+  const builder = new ProjectionBuilder({ root: TMP_ROOT_A, contentCache: new RunContentCache() });
   const sides = order === 'forward' ? [SIDE_A, SIDE_B] : [SIDE_B, SIDE_A];
   for (const side of sides) {
     contribute(builder, side);
@@ -245,14 +259,14 @@ describe('exportProjection', () => {
   it('emits the tables and no metadata beside them', () => {
     // The document used to carry a `schemaVersion` no reader branched on. A
     // consumer enumerating the document must find tables only, so a future
-    // metadata key cannot be mistaken for a thirteenth table.
+    // metadata key cannot be mistaken for a new table.
     expect(Object.keys(exportProjection(buildFixture('forward')))).toStrictEqual(['tables']);
   });
 
-  it('carries all twelve tables as keys even when every one is empty', () => {
+  it('carries every table as keys even when every one is empty', () => {
     // A missing key and an empty array are different claims. A consumer must not
     // have to guess which one an absent table meant.
-    const tables = exportProjection(new ProjectionBuilder({ root: TMP_ROOT_A }).build()).tables;
+    const tables = exportProjection(new ProjectionBuilder({ root: TMP_ROOT_A, contentCache: new RunContentCache() }).build()).tables;
 
     expect(Object.keys(tables)).toHaveLength(EXPECTED_TABLES.length);
     for (const name of EXPECTED_TABLES) {
@@ -332,9 +346,9 @@ describe('the key order of an exported row', () => {
     }
   });
 
-  it('is the registry column order for every row of all twelve tables', () => {
+  it('is the registry column order for every row of every table', () => {
     // Uniform across the registry rather than patched at the one producer known
-    // to be wrong: any of the twelve can grow a producer that builds a row by
+    // to be wrong: any of the fifteen can grow a producer that builds a row by
     // spreading, and none of them should have to know that it must not.
     const tables = exportProjection(buildFixture('reverse')).tables;
 
@@ -363,7 +377,7 @@ describe('the key order of an exported row', () => {
     // survived as a `Date` serializes to ISO-8601; one turned into a plain
     // object by a "canonicalizing" deep copy would serialize to `{}`.
     const mtime = new Date('2024-03-04T05:06:07.000Z');
-    const builder = new ProjectionBuilder({ root: TMP_ROOT_A });
+    const builder = new ProjectionBuilder({ root: TMP_ROOT_A, contentCache: new RunContentCache() });
     contribute(builder, SIDE_A);
     builder.addRealization({
       resourceId: RES_B,
@@ -393,7 +407,7 @@ describe('the key order of an exported row', () => {
     // producer added and the registry has not been taught about, and report the
     // export clean. Silent data loss is the one failure mode an export cannot
     // have, so an undeclared column is loud.
-    const builder = new ProjectionBuilder({ root: TMP_ROOT_A });
+    const builder = new ProjectionBuilder({ root: TMP_ROOT_A, contentCache: new RunContentCache() });
     builder.addRoot({ id: ROOT_ID_A, path: TMP_ROOT_A, surplus: 'undeclared' } as RootRow);
 
     expect(() => exportProjection(builder.build())).toThrow(UnregisteredProjectionColumnError);

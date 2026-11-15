@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
+import { dirname } from 'node:path';
 
-import { mkdirSyncReal, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { everywhere, mkdirSyncReal, pathPresent, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import {
   parseStreamJsonTranscript,
   spawnHeadlessClaude,
@@ -343,7 +344,9 @@ function readAndConsumeFragmentFile(
   status: number,
   onWarn: (message: string) => void,
 ): string {
-  if (!existsSync(fragmentOut)) {
+  // The fragment dir is VAT's own scratch: the entry the grader wrote is read by its text before the
+  // kernel follows it, and a refused probe is the environment's fault, never "wrote nothing".
+  if (!pathPresent(fragmentOut, { follow: dirname(fragmentOut) }, everywhere('environment'), 'probe')) {
     throw new InternalHarnessError(
       `Grader exited (status ${status}) without writing a fragment at ${fragmentOut} for eval "${evalId}".`,
     );

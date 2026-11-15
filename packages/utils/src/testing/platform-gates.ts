@@ -8,6 +8,12 @@
  * a property nobody exercised.
  */
 
+import { existsSync } from 'node:fs';
+
+import { mkdirSyncReal, safePath } from '../path-utils.js';
+
+import { createTempDir, removeTempDir } from './temp-dir.js';
+
 /**
  * Whether a `chmod 000` on this host denies anything.
  *
@@ -31,3 +37,25 @@ export const CANNOT_DENY_READS: boolean =
  * where modes bind". Same fact, no second evaluation.
  */
 export const PERMISSIONS_ENFORCED: boolean = !CANNOT_DENY_READS;
+
+let tmpdirFoldsCaseAnswer: boolean | undefined;
+
+/**
+ * Whether the OS temp directory's filesystem folds letter case — macOS APFS and
+ * Windows NTFS by default, Linux ext4 not. Probed once (a directory `Probe`,
+ * looked up as `probe`), never inferred from `process.platform`: a case-sensitive
+ * APFS volume exists. Only a folding filesystem can make two names one entry, so
+ * a fixture for that alias has nothing to build anywhere else.
+ */
+export function tmpdirFoldsCase(): boolean {
+  if (tmpdirFoldsCaseAnswer === undefined) {
+    const dir = createTempDir('vat-case-probe-');
+    try {
+      mkdirSyncReal(safePath.join(dir, 'Probe'));
+      tmpdirFoldsCaseAnswer = existsSync(safePath.join(dir, 'probe'));
+    } finally {
+      removeTempDir(dir);
+    }
+  }
+  return tmpdirFoldsCaseAnswer;
+}

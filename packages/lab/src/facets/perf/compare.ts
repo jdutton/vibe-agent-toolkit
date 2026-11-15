@@ -21,6 +21,7 @@ import {
   type DecideComparisonOptions,
 } from '../../envelope/coordinate.js';
 import { refuseDifferentFacets, type ReportEnvelope } from '../../envelope/envelope.js';
+import { recaptureRefusal } from '../../harness/dumps.js';
 
 import { isSignificant, type SignificanceOptions, type SignificanceResult } from './stats.js';
 import { PERF_FACET, type PerfBody, PerfBodySchema, type PerfCommandStats } from './types.js';
@@ -112,15 +113,7 @@ function readPerfBody(
   side: string,
 ): { body: PerfBody } | { refusal: string } {
   const parsed = PerfBodySchema.safeParse(envelope.body);
-  if (!parsed.success) {
-    return {
-      refusal:
-        `REFUSED: the ${side} report's header says facet '${PERF_FACET}' but its body does not ` +
-        `match that facet's schema — ${parsed.error.issues
-          .map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
-          .join('; ')}`,
-    };
-  }
+  if (!parsed.success) return { refusal: recaptureRefusal(`the ${side} '${PERF_FACET}' report`, parsed.error) };
   return { body: parsed.data as PerfBody };
 }
 

@@ -14,8 +14,8 @@ including link integrity checking and anchor validation.
 **What it does:**
 1. Recursively scans for markdown files
 2. Parses each file to extract links and headings
-3. Shows statistics about discovered resources
-4. Exits 0 always (informational only)
+3. Publishes what it found as the shared report envelope
+4. Exits 0 when it scanned at least one file, 1 when it scanned none
 
 **Path Argument:**
 - `[path]` restricts the scan to that subtree of the project
@@ -29,24 +29,44 @@ including link integrity checking and anchor validation.
 **Options:**
 - `[path]` - Base directory to crawl (defaults to current directory)
 - `--debug` - Enable debug logging
-- `--verbose` - Add a `files:` list with per-file link/anchor counts and checksums
-- `--collection <id>` - Only report files in the named collection (config mode — no path argument)
+- `--verbose` - Add `data.files`: per-file link/anchor counts and checksums
+- `--collection <id>` - Only report files in the named collection (config mode — no path argument).
+  A name `resources.collections` does not declare is refused (`USAGE_INVALID`, exit 2)
 - `--format <format>` - `yaml` (default) or `json`. The same document either way
 
-**Exit Codes:**
-- `0` - Always (scan is informational)
-- `2` - System error (file access, parsing error)
+**Exit Codes:** derived from the published document, never chosen beside it.
+- `0` - Scanned at least one file, and admitted every file it enumerated
+- `1` - A file enumerated but not admitted: one error finding each —
+  `RESOURCE_UNREADABLE` (the read failed), `RESOURCE_PARSE_LIMIT_EXCEEDED` or
+  `RESOURCE_PARSE_WORKER_DIED` (its parse was refused); or scanned nothing: one
+  non-overridable `RESOURCE_CHECK_BROKEN` finding (the path or config
+  enumerates no markdown, or `--collection` names a collection no file
+  matched) — a scan of nothing is not a population
+- `2` - The scan could not run: `[path]` names no directory (`USAGE_INVALID`), a
+  directory the OS will not list (`INPUT_UNREADABLE`), an unusable config
+  (`CONFIG_INVALID`)
 
-**Output:** YAML on stdout (JSON with `--format json`), logs on stderr
+**Output:** the shared report envelope on stdout — YAML, or JSON with
+`--format json` (schema: `packages/cli/schemas/resources-scan.json`); logs on
+stderr.
 
-`root` is stated once and is the only absolute path in the document; every
-`path` beneath it is relative to it.
+- `examined` — files enumerated, admitted or not. The scan's only findings are
+  the files it could not admit.
+- `durationMs` — wall time of the run.
+- `data.root` is stated once and is the only absolute path in the document;
+  every `data.files[].path` is relative to it.
+- `data.collections` — resources per configured collection (`{}` when none).
 
-`lane` names which enumerator produced the population — `walk` (the default
-crawl) or `projection` (`VAT_RESOURCES_CRAWL=projection`). Two scans of one tree
+`data.lane` names which enumerator produced the population — `projection` (the
+default) or `walk` (`VAT_RESOURCES_CRAWL=walk`). Two scans of one tree
 that report different populations are only interpretable if each says which lane
 produced it, so the field is derived from the load that ran rather than read back
-from the environment.
+from the environment. `data.extentSource` names the projection lane's own
+enumerator (`git` or `filesystem`), or is `null` for the walk.
+
+The lab's population facet (`packages/lab`) reads this document: the file count
+from `examined`, the population from `data.files` (so it runs the scan with
+`--verbose`).
 
 **Example:**
 ```bash
@@ -56,18 +76,22 @@ vat resources scan docs/ --verbose
 
 # Output:
 # ---
-# status: success
-# root: /home/you/my-project
-# filesScanned: 12
-# linksFound: 47
-# anchorsFound: 23
-# durationSecs: 0.234
-# files:
-#   - path: docs/README.md
-#     links: 5
-#     anchors: 3
-#     checksum: 47dd7b50af765df240fe2514f029fc697c907fc37a3267e22060f2f9f611975c
-# ---
+# status: ok
+# examined: 12
+# findings: []
+# summary: { errors: 0, warnings: 0, info: 0 }
+# gate: { strict: false }
+# durationMs: 234
+# data:
+#   root: /home/you/my-project
+#   lane: projection
+#   extentSource: git
+#   collections: {}
+#   files:
+#     - path: docs/README.md
+#       links: 5
+#       anchors: 3
+#       checksum: 47dd7b50af765df240fe2514f029fc697c907fc37a3267e22060f2f9f611975c
 ```
 
 **Requirements:**
@@ -91,8 +115,8 @@ for the loud-cwd fallback policy and the projectRoot discovery ladder.
 **What it does:**
 1. Recursively scans for markdown resources
 2. Validates all links (internal, anchors, external if configured)
-3. Reports errors in dual format (YAML + test format)
-4. Exits 0 if valid, 1 if errors found
+3. Publishes every finding flat in the shared report envelope
+4. Exits 0 with no error-severity finding, 1 with one, 2 when it could not run
 
 **Path Argument:**
 - `[path]` restricts the scan to that subtree of the project
@@ -106,24 +130,50 @@ for the loud-cwd fallback policy and the projectRoot discovery ladder.
 **Options:**
 - `[path]` - Base directory to crawl (defaults to current directory)
 - `--debug` - Enable debug logging
-- `-v, --verbose` - Show all scanned resources, including those without issues. By
-  default `issues` carries one counts-only row per file with findings
-  (`{file, errors?, warnings?, info?, codes}`); `--verbose` replaces each row with
-  its per-issue detail. Every other output field is identical in both modes.
+- `-v, --verbose` - Print warning and info findings on stderr too (errors are
+  always printed there), and add `data.files`, one `{path, status, summary}` row
+  per resource validated. Every other envelope field is identical in both modes.
+- `--collection <id>` - Scope the whole report — findings, `examined` and so the
+  exit code — to one collection's files. A finding at a path that never became a
+  resource (a file the collection matched and could not read) stays in it. A name
+  `resources.collections` does not declare is refused (`USAGE_INVALID`, exit 2)
+- `--format <format>` - `yaml` (default), `json` (the same document), or `text`
+  (one `location:line: severity: message [code]` line per finding, every severity,
+  then a status line, on stdout). Under `yaml` and `json` the finding lines go to
+  stderr instead — the errors only, with warnings and info collapsed into one
+  count line, unless `-v` prints those too.
+  Any other value is a usage error (exit 2) naming the three
+  accepted values; so is a `--validation-mode` other than `strict` or `permissive`
 - `--no-check-frontmatter-links` - Skip frontmatter URI-reference link validation across all collections (default: enabled)
 
-**Exit Codes:**
-- `0` - Validation passed
-- `1` - Validation errors found — including a run that scanned no file at all
-  (`filesScanned: 0`), which is reported as one non-overridable
-  `RESOURCE_CHECK_BROKEN` error rather than as a pass: a `--collection` that
+**Exit Codes:** derived from the published document, never chosen beside it.
+- `0` - No error-severity finding (warnings and info never fail it)
+- `1` - At least one error-severity finding — including a run that validated no
+  resource at all (`examined: 0`), which carries one non-overridable
+  `RESOURCE_CHECK_BROKEN` finding rather than passing: a declared `--collection` that
   matched nothing or a path with no markdown is not a verdict about anything.
-  The reason and the remedy are also printed on stderr as a warning
-- `2` - System error
+  It is also printed on stderr as its finding line, `error: Nothing was examined: … [RESOURCE_CHECK_BROKEN]`
+  (under `--format text` that line is in the stdout document instead)
+- `2` - The run could not finish (`status: error`, `error.code` says which):
+  `[path]` or `--frontmatter-schema` names nothing (`USAGE_INVALID`), an input
+  the OS will not read (`INPUT_UNREADABLE`), an unusable config (`CONFIG_INVALID`)
 
-**Output:**
-- YAML on stdout (structured results)
-- Test-format errors on stderr (file:line:column: message)
+**Output:** the shared report envelope on stdout (schema:
+`packages/cli/schemas/resources-validate.json`):
+- `examined` — resources validated
+- `findings` — every finding, flat: `{code, severity, message, location, line?,
+  link?, fix?, reference?}`, `location` relative to `data.root`
+- `summary` — `{errors, warnings, info}` over `findings`
+- `data.root` — the project root, the one base every `location` and `path` is
+  relative to
+- `data.collections` — per configured collection: `resourceCount`, `hasSchema`,
+  `validationMode?`, `filesWithErrors`, and `summary` over its files' findings
+- `data.population` — where the file list came from: `store` (the projection
+  store answered), `derived` (the projection was built this run, including with
+  `VAT_PROJECTION_STORE=0`, which skips only the store), or `null` when the walk
+  answered: the walk lane was selected (`VAT_RESOURCES_CRAWL=walk`), or the crawl
+  declined a projection bound to another root and walked
+- `data.files` — under `--verbose` only
 
 **Example (success):**
 ```bash
@@ -133,39 +183,46 @@ vat resources validate docs/
 
 # Output:
 # ---
-# status: success
-# filesScanned: 12
-# linksChecked: 47
-# durationSecs: 0.456
-# ---
+# status: ok
+# examined: 12
+# findings: []
+# summary: { errors: 0, warnings: 0, info: 0 }
+# gate: { strict: false }
+# durationMs: 456
+# data:
+#   root: /home/you/my-project
+#   collections: {}
 ```
 
 **Example (errors):**
 ```bash
 vat resources validate docs/
 
-# stderr:  (file:line:column: severity: message — only `error` fails the run)
-# docs/README.md:15:25: error: Link target not found: ./missing.md
-# docs/guide.md:42:10: error: Broken anchor: #non-existent-section
-
 # stdout:
 # ---
-# status: error
-# errorsFound: 2
-# filesWithErrors: 2
-# issueCounts: { errors: 2, warnings: 0, info: 0 }
-# issueSummary: { LINK_BROKEN_FILE: 1, LINK_BROKEN_ANCHOR: 1 }
-# issues:
-#   - file: docs/README.md
-#     issues:
-#       - line: 15
-#         column: 25
-#         code: LINK_BROKEN_FILE
-#         severity: error
-#         message: Link target not found: ./missing.md
-# durationSecs: 0.456
-# ---
+# status: findings
+# examined: 12
+# findings:
+#   - code: LINK_BROKEN_FILE
+#     severity: error
+#     message: "File not found: docs/missing.md"
+#     location: docs/README.md
+#     link: ./missing.md
+#     line: 15
+#   - code: LINK_BROKEN_ANCHOR
+#     severity: error
+#     message: "Anchor not found: #non-existent-section"
+#     location: docs/guide.md
+#     line: 42
+# summary: { errors: 2, warnings: 0, info: 0 }
+# gate: { strict: false }
+# durationMs: 456
+# data:
+#   root: /home/you/my-project
+#   collections: {}
 ```
+
+Findings in a `jq` pipeline: `vat resources validate --format json | jq '.findings[] | "\(.location):\(.line) \(.code)"'`.
 
 **Requirements:**
 
@@ -191,6 +248,234 @@ See [Roots and Config — Canonical Concepts](../../../docs/concepts/roots-and-c
 for the projectRoot ladder, the loud-cwd fallback policy, and the rationale
 behind RFC-3986-compliant leading-`/` resolution.
 
+### vat resources query &lt;sql&gt; [path]
+
+**Purpose:** Ask this tree's resource projection one read-only SQL question.
+
+**Options:**
+- `--param <value>` - A value bound to the next `?` placeholder (repeatable, in order)
+- `--base <ref>` - The commit `changed_files` compares this tree with (below)
+- `--format <format>` - `yaml` (default) or `json`
+- `--debug` - Enable debug logging
+
+**Derived relations** — computed for the run, and only when the statement names one:
+
+| Relation | Columns | Needs |
+|---|---|---|
+| `edges`, `edge_resolutions`, `lens_contexts` | the resolved link graph | — |
+| `claude_context_chains`, `claude_context_loads` | what Claude Code loads at each working location | — |
+| `changed_files` | `path`, `status` (`added` \| `modified` \| `deleted` \| `renamed` \| `type-changed`), `oldPath`, `similarity` | `--base <ref>` |
+
+`changed_files` lists what THIS CHANGE touched: the working tree (staged or not) plus untracked,
+non-ignored files, snapshotted as one git tree (the snapshot the projection itself takes) and
+diffed once against the merge base of `--base` and `HEAD` (`git merge-base --all <ref> HEAD`) —
+GitHub's "files changed", so a branch behind its base never lists what the base moved since. Paths
+are kept under the project root, relative to it. Because both sides of every move are in the
+snapshot, a move is `renamed` whether or not it was `git add`ed; a copy is `added`; a file removed
+from the index but unchanged on disk (`git rm --cached`) is no row. A rename across the root's
+boundary is seen from inside: renamed in is `added`, renamed out is `deleted`. A submodule, or a
+nested repository with a commit, is one row naming its directory, listed when the commit it records
+moved; its files are its own. A conflicted file mid-merge is listed as it stands on disk, conflict
+markers and all — the snapshot is the working tree. A file on disk marked assume-unchanged or
+skip-worktree refuses the relation, naming it and the flag to clear (`git update-index
+--no-assume-unchanged` / `--no-skip-worktree`): git would hide an edit to it. A statement reading it is refused with the fix —
+never answered with an empty relation — and the refusal code says whose fault it is:
+
+| Cause | Fault (`kind`) | Code |
+|---|---|---|
+| no `--base` | `base` | `USAGE_INVALID` |
+| a ref that names no commit | `base` | `USAGE_INVALID` |
+| a ref that shares no history with `HEAD` in a full history (no merge base) | `base` | `USAGE_INVALID` |
+| a ref with more than one merge base with `HEAD` (a criss-cross history: pass one of them) | `base` | `USAGE_INVALID` |
+| git not found on `PATH` | `git-failed` | `BACKEND_UNAVAILABLE` |
+| git out of time, or more output than VAT reads (compare against a nearer base) | `git-failed` | `BACKEND_UNAVAILABLE` |
+| a snapshot that fails for a cause git does not state, or whose second attempt times out | `git-failed` | `BACKEND_UNAVAILABLE` |
+| not inside a git working tree (a bare repository and a directory inside `.git` included) | `repository` | `INPUT_UNREADABLE` |
+| no commits yet, or a git that cannot resolve `HEAD` | `repository` | `INPUT_UNREADABLE` |
+| a shallow clone cut off before the base and `HEAD` meet (no merge base, shallow) | `repository` | `INPUT_UNREADABLE` |
+| a shallow clone whose history may hide a nearer merge base (`fetch-depth: 0`, or `git fetch --deepen=<n>`) | `repository` | `INPUT_UNREADABLE` |
+| a partial clone missing blobs the diff needs (`git fetch --refetch`) | `repository` | `INPUT_UNREADABLE` |
+| a snapshot git refuses, its `fatal:`/`error:` quoted (a nested repository with no commit, an object it cannot write, a clean filter that fails) | `repository` | `INPUT_UNREADABLE` |
+| an untracked file outside a sparse checkout's definition (add it to the definition, remove it, or ignore it) | `repository` | `INPUT_UNREADABLE` |
+| a directory under the root git cannot list (fix its permissions, or ignore it) | `repository` | `INPUT_UNREADABLE` |
+| a file under the root git cannot read | `repository` | `INPUT_UNREADABLE` |
+| a file on disk marked assume-unchanged or skip-worktree (`git update-index --no-assume-unchanged` / `--no-skip-worktree`) | `repository` | `INPUT_UNREADABLE` |
+| a filesystem that folds case whose `core.ignorecase` is not true (`git config core.ignorecase true`) | `repository` | `INPUT_UNREADABLE` |
+| on such a filesystem, a changed path, or a rename's old side wherever its new side lands, spelling the root in another case or Unicode normalisation | `repository` | `INPUT_UNREADABLE` |
+| a path under the root that is not UTF-8 | `repository` | `INPUT_UNREADABLE` |
+| a listing git returned that VAT cannot read | `repository` | `INPUT_UNREADABLE` |
+
+A statement defining a CTE named `changed_files` is refused as `USAGE_INVALID` too, with or without
+`--base`. So is one that uses `changed_files` as a bare alias with no `AS` (`FROM resources
+changed_files`) and is run without `--base`: a known over-match — the relation is detected by name,
+so spell the alias with `AS`, or name it something else. The exit code does not tell these apart — the code does: `vat
+resources query` exits 2 with it as `error.code`; `vat resources check` and `vat validate` report
+`RESOURCE_CHECK_BROKEN` (exit 1) on the checks that read it, with it as the finding's
+`reason.refusal`. `--base` is read only when a statement names `changed_files`; otherwise it is
+accepted and unused.
+
+**Output:** the shared report envelope on stdout — YAML, or JSON with
+`--format json` (schema: `packages/cli/schemas/resources-query.json`):
+- `examined` — resources in the population the statement ran over (the tracked
+  tree), never the rows it selected
+- `data.columns` — the result columns, in order, even when no row was selected
+- `data.rows` — the selected rows, exactly as SQLite holds them
+- `data.population` (`derived` | `store`), `data.populationSecs`,
+  `data.lensSecs`, `data.lensesEvaluated` — where the population came from and
+  what it cost; `data.boundsStatement` / `data.limits` when a bounded lens ran
+- `data.lensPopulation` (`none` | `store` | `derived`) — the same tell for the
+  lenses the statement named: `none` when it named no lensed relation, otherwise
+  whether every lens population was a store hit
+
+**Exit Codes:** derived from the published document.
+- `0` - The statement ran over a populated tree — zero rows is an answer, `ok`
+- `1` - The population was empty (`RESOURCE_CHECK_BROKEN`)
+- `2` - The statement was refused (`USAGE_INVALID`: not a query, a second
+  statement, an unbound `?`, a name the projection lacks), a derived relation it reads could not
+  be evaluated (under that relation's own refusal code, above), `[path]` names no directory, or
+  the crawl failed
+
+**Example:**
+```bash
+vat resources query 'SELECT path FROM resource_realizations LIMIT 5' --format json | jq '.data.rows[].path'
+```
+
+### vat resources check [path]
+
+**Purpose:** Run VAT's built-in checks and every SQL assertion declared under
+`resources.checks` against this tree's resource projection.
+
+**Options:**
+- `[path]` - Project root to check (defaults to the current directory)
+- `--check <name>` - Run only this check, by its built-in name or its key in `resources.checks`.
+  A lens is evaluated only when the selected statements name one of its relations, so this also
+  skips the cost of lenses only other checks read
+- `--base <ref>` - The ref whose merge base with HEAD `changed_files` compares this tree with. A check reading
+  `changed_files` without it fails as `RESOURCE_CHECK_BROKEN` naming the fix; other checks are
+  unaffected. `vat validate --base <ref>` forwards it to its checks phase
+- `-v, --verbose` - Print warning and info findings on stderr too; errors are always printed there
+- `--budget <seconds>` - Kill the run if it goes this long without completing a unit of work
+  (default 300; `0` removes the bound)
+- `--format <format>` - `yaml` (default) or `json`
+- `--debug` - Enable debug logging
+
+**Output:** the shared report envelope on stdout (schema: `packages/cli/schemas/resources-check.json`);
+each finding also as a `location:line: severity: message [code]` line on stderr.
+- Every finding one check produced — its violations, and `RESOURCE_CHECK_BROKEN` or
+  `RESOURCE_CHECK_EXAMINED_NOTHING` about it — carries `check: <name>`. A finding about the whole
+  run (an empty corpus, no check ran, an interrupted run) carries none.
+- A declared check's violation carries `evidence`: the row's columns other than the reserved ones,
+  in the order SQLite returned them, values as SQLite returned them (a BLOB, or a non-finite number
+  such as `Infinity`, as the text the message shows — so JSON and YAML agree). `path` is evidence
+  only when its text is no location (below); then the finding has no `location`.
+- A check whose rows could not be read carries `reason` on its `RESOURCE_CHECK_BROKEN` finding:
+  `{column, value, row, allowed}` — the reserved column, its value as `evidence` renders it, the
+  first bad row (1-based), and what the column may hold. One whose `examined` statement returned no
+  count carries `{statement: "examined", rows, columns?, value?, allowed}` (below). A statement that
+  failed carries none — unless it read a derived relation that refused (`changed_files` without
+  `--base`, say): then `{refusal: <code>}`, the code `vat resources query` exits with for it.
+- Two cross-field rules hold for every finding: `evidence` only on one that names its `check`, and
+  `reason` only on `RESOURCE_CHECK_BROKEN`. The document is re-parsed against its schema before it
+  is published, and the committed JSON Schemas (`resources-check.json`, `orchestrator.json`) carry
+  both rules — and every finding's own, a `column` only beside its `line` — as
+  `anyOf: [{not: {required: [key]}}, <rule>]` (`presenceImplies`), never as `if`/`then`, so a
+  consumer validating against them refuses what the run refuses.
+- `data.checks[]` — one entry per check that ran: `name`, `durationSecs`, `rows`, and `broken`,
+  `builtin`, `examined`, `allowEmpty`, `examinedNothing: true` and `nearMisses` when they apply
+  (below).
+
+**Exit Codes:** `0` no error-severity check violated, `1` one was (or nothing was checked:
+`RESOURCE_CHECK_BROKEN`), `2` the run could not do its job.
+
+**Reserved row columns.** A check's statement selects its violations, one finding per row. Four
+column names are reserved and matched exactly (case-sensitive); every other column is evidence, in
+the message and in the finding's `evidence`:
+
+- `path` — text, the finding's `location` when it is one: a non-empty relative path with `/`
+  separators inside the root (not the root itself, no leading `/` or `\`, no drive, no UNC path,
+  no `..` that climbs out, and no other `\` on Windows, where it is the separator), published in
+  its normalised form (`docs/../a.md` is the location `a.md`). Text that is no location — absolute, climbing, empty — gives
+  a finding with no location and keeps the value as `evidence.path`: the projection's own relations
+  hold such values (`roots.path` is absolute; `realization_conditions.path` is `../`-prefixed for an
+  outside-root closure reference), and a check over them reports at its declared severity. A value
+  that is not text (a number, a BLOB) fails the check as `RESOURCE_CHECK_BROKEN`. NULL or absent:
+  no location and no evidence entry.
+- `finding_severity` — that row's severity, exactly `error`, `warning` or `info`; NULL or absent
+  means the check's declared severity. A `resources.validation.severity` override on
+  `CUSTOM:<name>` replaces the severity of EVERY row of that check — raising a row's `info` as
+  well as lowering its `error`.
+- `finding_line` — the finding's 1-based line; NULL or absent omits it.
+- `finding_column` — the finding's 1-based column within `finding_line`; it requires a line.
+
+Any other value in a reserved column fails the check as `RESOURCE_CHECK_BROKEN` — "ran and selected
+N rows, but row R's finding_severity = "high" is not one of error | warning | info" — and its entry in
+`data.checks` carries `broken: true` with `rows`. A column that nearly names a reserved one — the
+same once case and every `_` are removed (`Finding_Line`, `findingSeverity`), or the bare
+`severity`, `line` or `column` — gets one stderr warning per check, stays evidence, and is listed
+as the statement spelled it in that check's `data.checks` entry as `nearMisses: ["Finding_Line"]`
+(absent when there is none). It is read from the statement's columns before the statement runs, so
+it is listed however many rows the check selected — none included — whether or not they could be
+read, and on a check that threw as it ran.
+
+No projection relation has a column named `finding_severity`, `finding_line` or `finding_column`,
+so `SELECT *` or a join never sets one: a table's own `severity`, `line` or `column` is evidence
+(and, as a near miss, warned about).
+Place a finding by aliasing deliberately — `SELECT r.path, b.line AS finding_line FROM …`.
+`path` is different: many relations carry one, and a `SELECT *` over a join of two of them returns
+two `path` columns, of which a row keeps only one — the rightmost. Name the `path` you mean
+(`SELECT r.path, …`), or the finding is placed at whichever relation the join listed last.
+
+A finding with a `line` but no usable `path` prints its coordinates after the message, never as a
+prefix: `error: <message> [<code>] (line 3, column 5)`.
+
+**What a check examined.** Zero rows is a check's pass, so zero violations over a thousand files and
+zero violations over nothing read the same — and the run's `examined` counts the whole population,
+which one check whose `WHERE` matches nothing hides behind. A check states its own denominator with
+`examined`, a second statement returning ONE count of what the check ranged over — exactly one row
+with one column holding a non-negative integer, as `SELECT COUNT(*)` returns:
+
+```yaml
+resources:
+  checks:
+    skills-have-owners:
+      description: Every skill names an owner
+      sql: SELECT path FROM resource_realizations WHERE path LIKE 'skills/%' AND path NOT IN (…)
+      examined: SELECT COUNT(*) FROM resource_realizations WHERE path LIKE 'skills/%'
+      # allowEmpty: true   # only if zero skills is a legitimate answer
+```
+
+- Any other result — no row, several rows or columns, NULL, text, a negative or a fraction — fails
+  the check as `RESOURCE_CHECK_BROKEN` with `reason: {statement: "examined", rows, columns?,
+  value?, allowed}`: how many rows came back, how many columns when one did, and the value when
+  exactly one cell did. Its entry carries `broken: true` with `rows` and no `examined`.
+
+- Its count is published on the check's `data.checks` entry as `examined`. The key is present
+  exactly when the check declares `examined` and that statement completed — absent on a check that
+  declares none (and on every built-in), absent rather than `0` when it did not finish.
+- `examined: 0` fails the run as `RESOURCE_CHECK_EXAMINED_NOTHING` (error, exit 1, not overridable),
+  naming the check in its `check`; the check's own violations are still reported beside it. The
+  check's entry then carries `examinedNothing: true` — present exactly when that finding is, so
+  `jq '.data.checks[] | select(.examinedNothing)'` lists the same checks the findings name.
+- `allowEmpty: true` declares that zero is legitimate: no finding, and every entry of that check
+  publishes `allowEmpty: true` whatever it counted, so the exemption is visible in every report.
+  `allowEmpty` without `examined` is refused when the config loads.
+- The examined statement follows every rule `sql` does, names derived relations the same way, is
+  timed into the check's `durationSecs`, and is bounded by `--budget` like any statement. If it
+  fails, the check is `RESOURCE_CHECK_BROKEN`, its entry carries `broken: true` with `rows` and no
+  `examined`, and none of its rows are reported.
+- A run killed by `--budget` (or dying) after a check completed broken still publishes that check's
+  `RESOURCE_CHECK_BROKEN` as a completed run does — message, `check` and `reason`. One killed
+  during its examined statement is `broken` with `rows`, but its `durationSecs` covers only the
+  violations statement (the unfinished one cannot be charged) and its message says the run stopped.
+- A check that did not run at all is absent from `data.checks` (or `broken` without `rows`), so
+  "examined 0" and "not run" never look alike.
+- ⚠️ `examined` is optional, so a check that declares none can pass over an empty population and
+  nothing refuses it. Declare it on every check; a consumer that needs the guarantee can require an
+  `examined` key on each `data.checks` entry that is neither `builtin` nor `broken`.
+
+The same applies when the checks run as the `checks` phase of `vat validate`: its findings are
+these findings, `check` and `evidence` included, and the phase's `data.checks` is this list.
+
 ## Configuration
 
 Place `vibe-agent-toolkit.config.yaml` at project root:
@@ -199,7 +484,7 @@ Place `vibe-agent-toolkit.config.yaml` at project root:
 resources:
   include:
     - "docs/**/*.md"
-    - "agents/**/README.md"
+    - "skills/**/README.md"
   exclude:
     - "node_modules/**"
     - "**/test/fixtures/**"
@@ -226,18 +511,126 @@ resources:
 
 ## Integration with vibe-validate
 
-The test-format error output (stderr) integrates seamlessly with vibe-validate:
+The exit code is the gate — 1 exactly when an error-severity finding (or the
+nothing-validated refusal) is in the document — so a vibe-validate step needs
+nothing more than the command:
 
 ```yaml
 # vibe-validate.config.yaml
 validators:
   markdown:
     run: vat resources validate docs/
-    extract:
-      - type: test-format
 ```
+
+`--format text` prints one `location:line: severity: message [code]` line per
+finding on stdout, for an extractor that reads compiler-style lines.
 
 ## More Information
 
 - GitHub: https://github.com/jdutton/vibe-agent-toolkit
 - Issues: https://github.com/jdutton/vibe-agent-toolkit/issues
+
+## Example reports
+
+Each block below is a real document from the built CLI, trimmed where noted; `packages/cli/test/integration/tagged-report-examples.integration.test.ts` validates every `vat-report=<verb>` block against that verb's registered schema.
+
+### `resources scan`
+
+A scan of a project that declares no collections. Produced by `vat resources scan .`.
+
+```yaml vat-report=resources scan
+status: ok
+examined: 2
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 184
+data:
+  root: /work/project
+  lane: projection
+  extentSource: git
+  collections: {}
+```
+
+### `resources validate`
+
+The same project validated. Produced by `vat resources validate`.
+
+```yaml vat-report=resources validate
+status: ok
+examined: 2
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 82
+data:
+  root: /work/project
+  population: derived
+  collections: {}
+```
+
+### `resources query`
+
+One read-only SQL statement; the answer is under `data.rows`. Produced by `vat resources query "SELECT count(*) AS n FROM resources"`.
+
+```yaml vat-report=resources query
+status: ok
+examined: 16
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 225
+data:
+  root: /work/project
+  columns:
+    - n
+  rows:
+    - n: 16
+  population: derived
+  populationSecs: 0.221
+  lensSecs: 0
+  lensesEvaluated: []
+  lensPopulation: none
+```
+
+### `resources check`
+
+The built-in checks, cut to the first. Produced by `vat resources check`.
+
+```yaml vat-report=resources check
+status: ok
+examined: 16
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 86
+data:
+  root: /work/project
+  population: store
+  populationSecs: 0.0819
+  lensSecs: 0
+  lensesEvaluated: []
+  lensPopulation: none
+  checksRun: 3
+  checks:
+    - name: claude-rule-glob-inert
+      durationSecs: 0.0000399
+      rows: 0
+      builtin: true
+```

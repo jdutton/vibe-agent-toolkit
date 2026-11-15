@@ -15,12 +15,24 @@ import { describe, expect, it } from 'vitest';
 import {
   ExitCode,
   errorDiagnostics,
-  exitCodeForSeverityCounts,
+  exitCodeForReport,
+  exitCodeOfChild,
   isExitCode,
+  type ExitDeterminingDocument,
+  type Gate,
   type SeverityCounts,
 } from '../src/index.js';
 
 const counts = (errors: number, warnings: number, info = 0): SeverityCounts => ({ errors, warnings, info });
+
+const LENIENT: Gate = { strict: false };
+const STRICT: Gate = { strict: true };
+
+/** A completed document with these counts — the status derived as `buildReport` derives it. */
+function completed(summary: SeverityCounts, gate: Gate = LENIENT): ExitDeterminingDocument {
+  const total = summary.errors + summary.warnings + summary.info;
+  return { status: total === 0 ? 'ok' : 'findings', summary, gate };
+}
 
 describe('ExitCode', () => {
   it('is exactly the three-way contract: 0 ok, 1 findings, 2 error', () => {
@@ -42,25 +54,72 @@ describe('isExitCode', () => {
   });
 });
 
-describe('exitCodeForSeverityCounts', () => {
+describe('exitCodeForReport — a COMPLETED document', () => {
   it('is OK when nothing is at error severity', () => {
-    expect(exitCodeForSeverityCounts(counts(0, 0))).toBe(ExitCode.OK);
-    expect(exitCodeForSeverityCounts(counts(0, 3, 9))).toBe(ExitCode.OK);
+    expect(exitCodeForReport(completed(counts(0, 0)))).toBe(ExitCode.OK);
+    expect(exitCodeForReport(completed(counts(0, 3, 9)))).toBe(ExitCode.OK);
   });
 
   it('is FINDINGS when at least one error-severity finding exists', () => {
-    expect(exitCodeForSeverityCounts(counts(1, 0))).toBe(ExitCode.FINDINGS);
+    expect(exitCodeForReport(completed(counts(1, 0)))).toBe(ExitCode.FINDINGS);
   });
 
-  it('under strict, a warning is enough to fail — and info still is not', () => {
-    expect(exitCodeForSeverityCounts(counts(0, 1), { strict: true })).toBe(ExitCode.FINDINGS);
-    expect(exitCodeForSeverityCounts(counts(0, 0, 5), { strict: true })).toBe(ExitCode.OK);
+  it('under a strict gate, a warning is enough to fail — and info still is not', () => {
+    expect(exitCodeForReport(completed(counts(0, 1), STRICT))).toBe(ExitCode.FINDINGS);
+    expect(exitCodeForReport(completed(counts(0, 0, 5), STRICT))).toBe(ExitCode.OK);
   });
 
   it('never answers ERROR — a completed run with findings is not a broken run', () => {
     for (const c of [counts(0, 0), counts(9, 9, 9), counts(0, 9)]) {
-      expect(exitCodeForSeverityCounts(c, { strict: true })).not.toBe(ExitCode.ERROR);
+      expect(exitCodeForReport(completed(c, STRICT))).not.toBe(ExitCode.ERROR);
     }
+  });
+});
+
+describe('exitCodeForReport — the document decides, not the call site', () => {
+  it('is ERROR for a document whose status is `error`, whatever its counts say', () => {
+    // 🔑 `error` means the command could not do its job. A verb that published
+    // that and exited 1 told a CI wrapper "the tree failed its gate" about a
+    // run that never examined the tree.
+    expect(exitCodeForReport({ status: 'error', summary: counts(0, 0), gate: LENIENT })).toBe(ExitCode.ERROR);
+    expect(exitCodeForReport({ status: 'error', summary: counts(3, 0), gate: LENIENT })).toBe(ExitCode.ERROR);
+  });
+
+  it('fails warnings only when the DOCUMENT says strict', () => {
+    // 🪤 `findings` means the list is non-empty, not that the gate failed. A
+    // straight `findings → 1` table would fail every run with one warning —
+    // and the gate that decides it is READ FROM THE DOCUMENT, so a reader of
+    // the published report derives the same code the process ended on.
+    const warningsOnly = counts(0, 1);
+    expect(exitCodeForReport({ status: 'findings', summary: warningsOnly, gate: STRICT })).toBe(ExitCode.FINDINGS);
+    expect(exitCodeForReport({ status: 'findings', summary: warningsOnly, gate: LENIENT })).toBe(ExitCode.OK);
+    expect(exitCodeForReport({ status: 'error', summary: warningsOnly, gate: STRICT })).toBe(ExitCode.ERROR);
+    expect(exitCodeForReport({ status: 'error', summary: warningsOnly, gate: LENIENT })).toBe(ExitCode.ERROR);
+  });
+
+  it('takes no options — the gate has exactly one source', () => {
+    expect(exitCodeForReport).toHaveLength(1);
+  });
+
+  it('answers each of the three values for exactly one kind of document', () => {
+    const answers = [
+      exitCodeForReport({ status: 'ok', summary: counts(0, 0), gate: LENIENT }),
+      exitCodeForReport({ status: 'findings', summary: counts(1, 0), gate: LENIENT }),
+      exitCodeForReport({ status: 'error', summary: counts(0, 0), gate: LENIENT }),
+    ];
+    expect(answers).toStrictEqual([ExitCode.OK, ExitCode.FINDINGS, ExitCode.ERROR]);
+  });
+});
+
+describe('exitCodeOfChild', () => {
+  it('forwards a child that ended on the contract', () => {
+    expect([0, 1, 2].map((code) => exitCodeOfChild(code))).toStrictEqual([0, 1, 2]);
+  });
+
+  it('reads anything else — a signal death, an abort code — as ERROR, never forwarded verbatim', () => {
+    // 🚨 134 is Node's own fatal abort. Forwarded verbatim it is a fourth exit
+    // code, and `null` (a signal) coerced to 0 is a crash that reads as a pass.
+    for (const code of [null, 134, 3, -1]) expect(exitCodeOfChild(code)).toBe(ExitCode.ERROR);
   });
 });
 

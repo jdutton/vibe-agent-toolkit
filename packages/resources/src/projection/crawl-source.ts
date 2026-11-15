@@ -15,7 +15,6 @@
  * |---|---|---|
  * | non-ignored members | `write-tree` snapshot, ~10 ms for 8,496 paths | `readdir` walk |
  * | ignored members | prune list, then walk only that territory | same walk, undifferentiated |
- * | content hint | blob OID, already computed | none — bytes get read and hashed |
  * | directories | derived from paths + collapsed-directory entries | walked directly |
  * | path shape | index mode bits, so the realization never `lstat`s | none — every path is stat'ed |
  *
@@ -66,10 +65,13 @@
  * empty.
  */
 
-import { existsSync, lstatSync, statSync } from 'node:fs';
+import { lstatSync } from 'node:fs';
 
 import {
-  isFilesystemAccessError,
+  followedKindSync,
+  forEachInOrder,
+  fsFaultOf,
+  isLinkChainRefusedError,
   readTextContentSync,
   safePath,
   toForwardSlash,
@@ -78,13 +80,15 @@ import {
   crawlDirectory,
   crawlPathFilter,
   type DirectoryRefusal,
+  NEVER_CONTENT_GLOBS,
   NEVER_CRAWL_GLOBS,
-  settleRefusal,
+  settleCrawlRefusal,
   type UnreadablePolicy,
 } from '@vibe-agent-toolkit/utils/crawl';
 import {
   gitFindRoot,
   gitLsOthers,
+  gitSnapshotError,
   gitTreeSnapshot,
   isGitIgnored,
 } from '@vibe-agent-toolkit/utils/git';
@@ -175,11 +179,21 @@ class ListingRefusals {
   readonly #root: string;
   readonly #recorded: DirectoryRefusal[] = [];
   readonly #seen = new Set<string>();
-  readonly #inPopulation: UnreadablePolicy;
+  readonly #remedy: string;
+  /** The trees the calling verb writes: the crawl's one declaration of which side a refusal is on. */
+  readonly outputs: readonly string[];
 
-  constructor(root: string) {
+  /**
+   * @param root - The corpus root a refused directory is expressed against
+   * @param outputs - The trees the calling verb WRITES (its output, its staging), `[]` for none:
+   *   a refused directory that is one of them, lies inside one or holds one — the root of a
+   *   project a build writes into included — is the verb's destination; any other is the
+   *   corpus's content, which the verb reads (`source`)
+   */
+  constructor(root: string, outputs: readonly string[]) {
     this.#root = root;
-    this.#inPopulation = { refuse: { root, remedy: listingRefusalRemedy(root) } };
+    this.#remedy = listingRefusalRemedy(root);
+    this.outputs = outputs;
   }
 
   /** Every refusal met inside ignored territory, in the order met, once each. */
@@ -187,9 +201,9 @@ class ListingRefusals {
     return this.#recorded;
   }
 
-  /** The policy for a walk whose every directory is known to be in the population: refuse. */
+  /** The policy for a walk whose every directory is known to be in the population: refuse, on the side of the directory refused. */
   get inPopulation(): UnreadablePolicy {
-    return this.#inPopulation;
+    return { degrade: (refusal) => this.settleInPopulation(refusal) };
   }
 
   /** The policy for a walk known to be inside gitignored territory: record, continue. */
@@ -211,9 +225,20 @@ class ListingRefusals {
           this.#record(refusal);
           return;
         }
-        settleRefusal(this.#inPopulation, refusal);
+        this.settleInPopulation(refusal);
       },
     };
+  }
+
+  /** Refuse a directory in the population: on what the verb writes, the destination's; anything else, the corpus's content. */
+  settleInPopulation(refusal: DirectoryRefusal): void {
+    settleCrawlRefusal({ refuse: { root: this.#root, remedy: this.#remedy, side: 'source' } }, refusal, this.outputs);
+  }
+
+  /** Forget every refusal — called as an enumeration starts, so the list is ITS list. */
+  clear(): void {
+    this.#recorded.length = 0;
+    this.#seen.clear();
   }
 
   #record(refusal: DirectoryRefusal): void {
@@ -230,37 +255,15 @@ export interface EnumeratedPath {
   /** Absolute, forward-slashed. */
   absolutePath: string;
   /**
-   * A byte-identity hint for this path, or `null` when the source has none.
-   *
-   * Present only where it is **sound**: a git blob OID for a regular file, whose
-   * equality implies byte equality. Null for a directory, and for every path the
-   * filesystem walk found — the walk knows nothing about a path until it reads
-   * it, and inventing a hint from `mtime` would be a guess wearing a fact's
-   * clothes.
-   *
-   * The two OIDs that would NOT imply byte equality never reach this field at
-   * all, because the paths carrying them are not members: a symlink (whose OID
-   * is the link target string) is excluded outright, and a submodule (whose OID
-   * is a commit) is expanded into the files beneath it. Excluding them at
-   * enumeration rather than nulling the hint means a later consumer cannot
-   * reintroduce the defect by reading `mode` and deciding for itself.
-   *
-   * ⚠️ **A hint, never a key.** `content-key.ts` states the rule: a git SHA may
-   * be used as a lookup whose miss is free, and must never be the identity a
-   * parse is filed under.
-   */
-  contentHint: string | null;
-  /**
    * What this source already knows the path IS, or `null` when it must be
    * stat'ed.
    *
-   * Unlike {@link EnumeratedPath.contentHint} this is **authoritative**: a
-   * realization built from it never calls `lstat`, so a wrong answer here is a
+   * **Authoritative**: a realization built from it never calls `lstat`, so a wrong answer here is a
    * wrong row rather than a slow one. Supply it only where {@link PathShape}'s
    * bar is met — present, not a symlink, and known to be a file or a directory.
    *
-   * Required rather than optional, and `null` rather than absent, for the reason
-   * `contentHint` is: a new source must *state* that it knows nothing, because
+   * Required rather than optional, and `null` rather than absent: a new source
+   * must *state* that it knows nothing, because
    * the failure mode of forgetting is a population that silently stops being
    * described.
    */
@@ -289,10 +292,60 @@ export interface CrawlSource {
    * row.
    */
   readonly unlistable: readonly DirectoryRefusal[];
+  /**
+   * Every symbolic link the last {@link CrawlSource.enumerate} met and did NOT
+   * offer as a member — absolute, forward-slashed, deduplicated, sorted. Empty
+   * until `enumerate` has run, and replayed with it, exactly as
+   * {@link CrawlSource.unlistable} is.
+   *
+   * ⚠️ Required, because the failure it closes is silence: a symlink is never a
+   * member (*"A SYMLINK IS NOT A MEMBER"* below), so without this list a
+   * `link/CLAUDE.md` Claude Code reads through the link is absent from every row
+   * with nothing saying so. `FilesystemExtentContributor` carries each as an
+   * declined-link condition row — `EXTENT_SYMLINK_NOT_REALIZED`, or
+   * `EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT` when the target resolves outside the root, or
+   * `EXTENT_SYMLINK_TARGET_UNRESOLVED` when it resolves to nothing, or
+   * `EXTENT_SYMLINK_TARGET_UNREADABLE` when the OS would not resolve it. Both
+   * sources report the same set for the same tree, as they do for members.
+   */
+  readonly symlinks: readonly string[];
+}
+
+/**
+ * Collects the links a source declined, once each, in a stable order.
+ *
+ * One small class so both sources — and the walks inside the git source — feed
+ * one list the same way; a second copy of "dedupe and sort" is where the two
+ * sources would start disagreeing about order.
+ */
+class DeclinedSymlinks {
+  readonly #seen = new Set<string>();
+
+  /** The observer to hand a walk. */
+  readonly add = (absolutePath: string): void => {
+    this.#seen.add(toForwardSlash(absolutePath));
+  };
+
+  /** Forget every link — called as an enumeration starts, so the list is ITS list. */
+  clear(): void {
+    this.#seen.clear();
+  }
+
+  /** @returns Every link recorded, sorted */
+  get recorded(): readonly string[] {
+    // Code-unit order, not `localeCompare`: the host's locale must not decide it.
+    return [...this.#seen].sort((left, right) => (left < right ? -1 : Number(left > right)));
+  }
 }
 
 /** Which of the two implementations answered. */
 export type CrawlSourceKind = 'git' | 'filesystem';
+
+/** Each {@link CrawlSourceKind}, keyed so the compiler checks the list against the union both ways. */
+const CRAWL_SOURCE_KIND_SET: Readonly<Record<CrawlSourceKind, true>> = { git: true, filesystem: true };
+
+/** Every {@link CrawlSourceKind}, as a runtime list — for a schema enum that must not be a hand-typed copy. */
+export const CRAWL_SOURCE_KINDS = Object.keys(CRAWL_SOURCE_KIND_SET) as [CrawlSourceKind, ...CrawlSourceKind[]];
 
 /**
  * The walk. Enumerates the working tree directly and knows nothing else.
@@ -306,27 +359,36 @@ export class FilesystemCrawlSource implements CrawlSource {
 
   readonly #root: string;
   readonly #refusals: ListingRefusals;
+  readonly #symlinks = new DeclinedSymlinks();
 
   /**
    * @param root - Absolute corpus root to enumerate
+   * @param outputs - The trees the verb writes (see {@link crawlSourceFor})
    */
-  constructor(root: string) {
+  constructor(root: string, outputs: readonly string[]) {
     this.#root = root;
-    this.#refusals = new ListingRefusals(root);
+    this.#refusals = new ListingRefusals(root, outputs);
   }
 
   get unlistable(): readonly DirectoryRefusal[] {
     return this.#refusals.recorded;
   }
 
+  get symlinks(): readonly string[] {
+    return this.#symlinks.recorded;
+  }
+
   /**
    * Walk the root.
    *
-   * @returns Every admitted path, with no content hints and no shapes
+   * @returns Every admitted path, with no shapes
    */
   async enumerate(): Promise<readonly EnumeratedPath[]> {
+    this.#refusals.clear();
+    this.#symlinks.clear();
     const absolutePaths = await crawlDirectory({
       baseDir: this.#root,
+      outputs: this.#refusals.outputs,
       exclude: [...NEVER_CRAWL_GLOBS],
       // `followSymlinks` is three decisions — re-entry, membership and reach —
       // and all three come out the same way: following links would enumerate one
@@ -339,6 +401,8 @@ export class FilesystemCrawlSource implements CrawlSource {
       // as extra realizations of one identity, which makes the case for
       // declining stronger rather than weaker.
       followSymlinks: false,
+      // Declined, never dropped: see `CrawlSource.symlinks`.
+      onSymlinkNotFollowed: this.#symlinks.add,
       // Directories are resources, not merely containers of them.
       filesOnly: false,
       // The whole point of the extent this feeds: build output git cannot see.
@@ -356,7 +420,6 @@ export class FilesystemCrawlSource implements CrawlSource {
     // attributable. It remains available if it is ever wanted for its own sake.
     return absolutePaths.map((absolutePath) => ({
       absolutePath,
-      contentHint: null,
       shape: null,
     }));
   }
@@ -377,19 +440,14 @@ export class FilesystemCrawlSource implements CrawlSource {
  * 🪤 Two copies of one rule is how this diverged the first time: the
  * mode-`120000` drop lived in the snapshot half alone, so a committed symlink
  * was excluded and an UNTRACKED one walked in through the prune list — under
- * four docstrings and one published `vat claude budget` limit all saying that no
+ * four docstrings and one published `vat claude context` limit all saying that no
  * lane emits a symlink's own path. The link and its target then realized the
- * same `contentKey` under two identities, which is a budget charging one set of
- * bytes twice.
+ * same `contentKey` under two identities, which is a launch total charging one set
+ * of bytes twice.
  */
 interface CrawlCandidate {
   /** Absolute, forward-slashed. */
   absolutePath: string;
-  /**
-   * As {@link EnumeratedPath.contentHint}, and always `null` for a symlink: its
-   * OID is the TARGET STRING, which does not imply byte equality.
-   */
-  contentHint: string | null;
   /**
    * As {@link EnumeratedPath.shape}, plus `'symlink'` — the one value that ends
    * membership rather than describing it.
@@ -410,7 +468,7 @@ interface CrawlCandidate {
  * @returns A candidate carrying no claims
  */
 function walkedCandidate(absolutePath: string): CrawlCandidate {
-  return { absolutePath, contentHint: null, shape: null };
+  return { absolutePath, shape: null };
 }
 
 /**
@@ -442,7 +500,7 @@ function symlinkShape(absolutePath: string): 'symlink' | null {
   } catch (error) {
     // The filesystem would not answer: the entry stays a member and
     // `statObservation` reports what it can (see above). A bug is not that.
-    if (!isFilesystemAccessError(error)) throw error;
+    if (fsFaultOf(error) === undefined) throw error;
     return null;
   }
 }
@@ -455,24 +513,30 @@ export class GitCrawlSource implements CrawlSource {
 
   readonly #root: string;
   readonly #refusals: ListingRefusals;
+  readonly #symlinks = new DeclinedSymlinks();
 
   /**
    * @param root - Absolute corpus root, inside a git working tree
+   * @param outputs - The trees the verb writes (see {@link crawlSourceFor})
    */
-  constructor(root: string) {
+  constructor(root: string, outputs: readonly string[]) {
     this.#root = root;
-    this.#refusals = new ListingRefusals(root);
+    this.#refusals = new ListingRefusals(root, outputs);
   }
 
   get unlistable(): readonly DirectoryRefusal[] {
     return this.#refusals.recorded;
   }
 
+  get symlinks(): readonly string[] {
+    return this.#symlinks.recorded;
+  }
+
   /**
    * Ask git what it can see, then walk only what it cannot.
    *
-   * @returns Every admitted path, with content hints on the regular files git
-   *   already hashed and shapes on everything git described rather than walked
+   * @returns Every admitted path, with shapes on everything git described
+   *   rather than walked
    * @throws When git does not answer. An empty population would be
    *   indistinguishable from a repository with no files, which is the same
    *   confusion `GitExtentContributor` refuses to ship
@@ -480,9 +544,19 @@ export class GitCrawlSource implements CrawlSource {
    *   in its own territory — read off its stderr, the only place git says so
    */
   async enumerate(): Promise<readonly EnumeratedPath[]> {
+    this.#refusals.clear();
+    this.#symlinks.clear();
     const isMember = crawlPathFilter(['**/*'], [...NEVER_CRAWL_GLOBS]);
     const admits = (absolutePath: string): boolean =>
       isMember(relativeToRoot(absolutePath, this.#root));
+    // Git's OWN territory — tracked, or untracked and not ignored — drops only
+    // what can never be content. A `coverage/` or `.turbo/` git holds is one the
+    // author committed (`references/coverage/workers-comp.md`); the tool-output
+    // names in NEVER_CRAWL_GLOBS exist to prune IGNORED territory, which `admits`
+    // still does.
+    const isContent = crawlPathFilter(['**/*'], [...NEVER_CONTENT_GLOBS]);
+    const admitsContent = (absolutePath: string): boolean =>
+      isContent(relativeToRoot(absolutePath, this.#root));
 
     const found = new Map<string, EnumeratedPath>();
     /**
@@ -513,29 +587,31 @@ export class GitCrawlSource implements CrawlSource {
      * symlink was a member for as long as the two rules lived apart.
      */
     const record = (candidate: CrawlCandidate): void => {
-      if (candidate.shape === 'symlink') return;
+      // Declined as a member, RECORDED as a link — see `CrawlSource.symlinks`.
+      if (candidate.shape === 'symlink') {
+        this.#symlinks.add(candidate.absolutePath);
+        return;
+      }
       if (found.has(candidate.absolutePath)) return;
       found.set(candidate.absolutePath, {
         absolutePath: candidate.absolutePath,
-        contentHint: candidate.contentHint,
         shape: candidate.shape,
       });
     };
 
     // Snapshot first, because `record` is first-wins and git's entries carry a
-    // content hint and a shape the walked ones cannot.
-    const { members, submodules } = this.#snapshotMembers(admits);
+    // shape the walked ones cannot.
+    const { members, submodules } = this.#snapshotMembers(admitsContent);
     for (const candidate of members) record(candidate);
-    for (const candidate of await this.#untrackedTerritory(admits, submodules)) record(candidate);
+    for (const candidate of await this.#untrackedTerritory(admits, admitsContent, submodules)) record(candidate);
     // Last, so an ancestor already recorded by the snapshot as a FILE is not
-    // relabelled. `contentHint` is unconditionally null — a directory has no
-    // bytes — and `shape` is unconditionally `'directory'`, which is sound
+    // relabelled. `shape` is unconditionally `'directory'`, which is sound
     // because these paths were DERIVED from the names of paths git or the walk
     // found beneath them: a path exists only if its ancestors do, and neither
     // git nor a `followSymlinks: false` walk reports anything beneath a symlink,
     // so no ancestor reached here can be one.
     for (const absolutePath of ancestorDirectories([...found.keys()], this.#root)) {
-      record({ absolutePath, contentHint: null, shape: 'directory' });
+      record({ absolutePath, shape: 'directory' });
     }
 
     return [...found.values()];
@@ -547,17 +623,21 @@ export class GitCrawlSource implements CrawlSource {
    * @param admits - The shipped include/exclude decision
    * @returns The admitted entries, and separately the submodule directories
    *   whose contents git declined to describe
-   * @throws When git could not answer at all
+   * @throws When git could not answer at all, coded by cause as the one
+   *   classifier decides (see `gitSnapshotFailureOf`)
    */
   #snapshotMembers(admits: (absolutePath: string) => boolean): {
     members: CrawlCandidate[];
     submodules: string[];
   } {
     const snapshot = gitTreeSnapshot({ cwd: this.#root });
-    if (snapshot === null) {
-      throw new Error(
-        `git did not answer for "${this.#root}" — it is not a git repository, or git could not read it.`
-        + ' Returning an empty population would be indistinguishable from an empty repository, so this is an error.',
+    if (!snapshot.ok) {
+      // Classified by the one classifier `changed_files` uses too, so each cause
+      // — a missing binary, an unreadable file, a stray sparse path — carries
+      // one code in both lanes, never "not a repository" by default.
+      throw gitSnapshotError(
+        snapshot,
+        'Returning an empty population would be indistinguishable from an empty repository, so this is an error.',
       );
     }
 
@@ -574,12 +654,8 @@ export class GitCrawlSource implements CrawlSource {
       // that reads git's mode bits, so the observation has to be made here — but
       // the DECISION is `enumerate`'s `record`, once, for both halves. See
       // {@link CrawlCandidate} for why those are deliberately separate.
-      //
-      // `contentHint: null` keeps {@link EnumeratedPath.contentHint}'s invariant
-      // literally true even for a candidate that never becomes one: a symlink's
-      // OID is its TARGET STRING and does not imply byte equality.
       if (entry.isSymlink) {
-        members.push({ absolutePath: entry.absolutePath, contentHint: null, shape: 'symlink' });
+        members.push({ absolutePath: entry.absolutePath, shape: 'symlink' });
         continue;
       }
 
@@ -599,7 +675,7 @@ export class GitCrawlSource implements CrawlSource {
       // stale; it is NOT A DIRECTORY because a tree object records blobs and
       // git lists no directories at all; and it is NOT A SYMLINK because every
       // mode-`120000` entry took the branch above and never reaches here.
-      members.push({ absolutePath: entry.absolutePath, contentHint: entry.oid, shape: 'file' });
+      members.push({ absolutePath: entry.absolutePath, shape: 'file' });
     }
 
     return { members, submodules };
@@ -609,13 +685,15 @@ export class GitCrawlSource implements CrawlSource {
    * Everything git deliberately does not hold: the ignored half, plus the
    * directories that exist without containing anything.
    *
-   * @param admits - The shipped include/exclude decision
+   * @param admits - The shipped include/exclude decision, for ignored territory
+   * @param admitsContent - The decision for git's own territory: only what can never be content is dropped
    * @param submodules - Directories the snapshot named but did not describe
    * @returns Candidates, files and directories alike, each carrying the prune
    *   list's `lstat` observation so `enumerate` can apply the one membership rule
    */
   async #untrackedTerritory(
     admits: (absolutePath: string) => boolean,
+    admitsContent: (absolutePath: string) => boolean,
     submodules: readonly string[],
   ): Promise<CrawlCandidate[]> {
     const candidates: CrawlCandidate[] = [];
@@ -623,12 +701,15 @@ export class GitCrawlSource implements CrawlSource {
     // A submodule's own files belong to its own repository, so the outer
     // snapshot cannot see them while the outer WALK reads them like any other
     // directory. Descending is what keeps the two sources equal.
-    for (const submodule of submodules) {
+    //
+    // In order, here and below: the refusal collectors and symlink set are shared,
+    // candidate order must be deterministic, and one listing at a time bounds fds.
+    await forEachInOrder(submodules, async (submodule) => {
       candidates.push(
         walkedCandidate(submodule),
-        ...(await expandDirectory(submodule, admits, this.#refusals.inPopulation)).map(walkedCandidate),
+        ...(await expandDirectory(submodule, admits, this.#refusals, 'inPopulation', this.#symlinks.add)).map(walkedCandidate),
       );
-    }
+    });
 
     // Ignored territory: descend, because the extent this feeds must still
     // report `gitignored: true` rows. `NEVER_CRAWL_GLOBS` is applied to the
@@ -638,11 +719,10 @@ export class GitCrawlSource implements CrawlSource {
     // ⚠️ This is the ONLY lane that can offer a symlink `git add --all` never
     // staged: an ignored path is in no tree snapshot, so nothing upstream has
     // seen its mode. `collapsed.shape` is where that gap is closed.
-    for (const collapsed of this.#prune({ ignored: true })) {
-      if (!admits(collapsed.absolutePath)) continue;
+    await forEachInOrder(this.#prune({ ignored: true }), async (collapsed) => {
+      if (!admits(collapsed.absolutePath)) return;
       candidates.push({
         absolutePath: collapsed.absolutePath,
-        contentHint: null,
         shape: collapsed.shape,
       });
       // A DIFFERENT question from membership — whether to descend — and it is
@@ -655,10 +735,10 @@ export class GitCrawlSource implements CrawlSource {
       // recorded, never fatal. See {@link ListingRefusals}.
       if (collapsed.isDirectory && collapsed.shape !== 'symlink') {
         candidates.push(
-          ...(await expandDirectory(collapsed.absolutePath, admits, this.#refusals.inIgnoredTerritory)).map(walkedCandidate),
+          ...(await expandDirectory(collapsed.absolutePath, admits, this.#refusals, 'inIgnoredTerritory', this.#symlinks.add)).map(walkedCandidate),
         );
       }
-    }
+    });
 
     // Untracked-but-not-ignored territory: the entries themselves only, never a
     // descent. Every FILE beneath such a directory is already in the snapshot
@@ -672,10 +752,9 @@ export class GitCrawlSource implements CrawlSource {
     // symlink is precisely the path it drops. Re-offering one bare is how an
     // untracked link became a member while the committed ones were excluded.
     for (const collapsed of this.#prune({ ignored: false })) {
-      if (!admits(collapsed.absolutePath)) continue;
+      if (!admitsContent(collapsed.absolutePath)) continue;
       candidates.push({
         absolutePath: collapsed.absolutePath,
-        contentHint: null,
         shape: collapsed.shape,
       });
     }
@@ -714,7 +793,7 @@ export class GitCrawlSource implements CrawlSource {
       unreadable: {
         degrade: (refusal) => {
           if (isPathUnderRoot(refusal.directory, this.#root) && admitsUnderRoot(refusal.directory, this.#root)) {
-            settleRefusal(this.#refusals.inPopulation, refusal);
+            this.#refusals.settleInPopulation(refusal);
           }
         },
       },
@@ -754,9 +833,13 @@ export class GitCrawlSource implements CrawlSource {
 async function expandDirectory(
   directory: string,
   admits: (absolutePath: string) => boolean,
-  unreadable: UnreadablePolicy,
+  refusals: ListingRefusals,
+  territory: 'inPopulation' | 'inIgnoredTerritory',
+  onSymlink: (absolutePath: string) => void,
 ): Promise<string[]> {
+  const unreadable: UnreadablePolicy = refusals[territory];
   const found = await crawlDirectory({
+    outputs: refusals.outputs,
     baseDir: directory,
     // Passed so the walk PRUNES rather than enumerating and discarding. Safe to
     // re-base only because every glob in this list is `**/`-prefixed and so is
@@ -768,6 +851,11 @@ async function expandDirectory(
     // and then filtered — the cost this whole lane exists to avoid.
     exclude: [...NEVER_CRAWL_GLOBS],
     followSymlinks: false,
+    // A link met down here is declined exactly as the snapshot's are, and
+    // recorded the same way — under the same `admits` decision as a member.
+    onSymlinkNotFollowed: (absolutePath) => {
+      if (admits(absolutePath)) onSymlink(absolutePath);
+    },
     filesOnly: false,
     // Already inside ignored territory by construction, so consulting git again
     // would return nothing and cost a spawn.
@@ -936,17 +1024,23 @@ export function crawlSourceSelector(): string | undefined {
  * sets it.
  *
  * @param root - Absolute corpus root
+ * @param outputs - The trees the verb WRITES — its output and the staging it builds that output
+ *   in — or `[]` for a verb that only reads: the one declaration of which side a fault is on.
+ *   Required: only the caller knows. A directory the walk could not list that is one of them,
+ *   lies inside one or holds one (the root of a project a build writes into included) is the
+ *   verb's destination; any other is the corpus's content, a source. The git arm's base is
+ *   answered by git's own snapshot, classified there
  * @returns The selected source — {@link GitCrawlSource} inside a repository,
  *   {@link FilesystemCrawlSource} outside one or when
  *   {@link EXTENT_SOURCE_FILESYSTEM} is asked for. The fallback is not a
  *   preference: a root outside git has no git answer, and failing there would
  *   make the default unusable across a mixed corpus
  */
-export function crawlSourceFor(root: string): CrawlSource {
+export function crawlSourceFor(root: string, outputs: readonly string[]): CrawlSource {
   if (gitExtentSelected(root)) {
-    return new GitCrawlSource(root);
+    return new GitCrawlSource(root, outputs);
   }
-  return new FilesystemCrawlSource(root);
+  return new FilesystemCrawlSource(root, outputs);
 }
 
 /**
@@ -994,10 +1088,13 @@ export function crawlSourceFor(root: string): CrawlSource {
  */
 function gitMarkerIsReadable(gitRoot: string): boolean {
   const marker = safePath.join(gitRoot, '.git');
+  // Every probe reads its link chain beneath the repository root first (`link-following.ts`).
+  const present = (path: string): boolean => followedKindSync(path, gitRoot) !== 'absent';
   try {
-    const stat = statSync(marker);
-    if (stat.isDirectory()) {
-      return existsSync(safePath.join(marker, 'HEAD'));
+    const kind = followedKindSync(marker, gitRoot);
+    if (kind === 'absent') return false;
+    if (kind === 'directory') {
+      return present(safePath.join(marker, 'HEAD'));
     }
 
     // A `.git` FILE is a pointer — a linked worktree or a submodule. It is only
@@ -1009,12 +1106,15 @@ function gitMarkerIsReadable(gitRoot: string): boolean {
       .find((line) => line.startsWith(GITDIR_PREFIX));
     if (pointer === undefined) return false;
     const target = safePath.resolve(gitRoot, pointer.slice(GITDIR_PREFIX.length).trim());
-    return existsSync(safePath.join(target, 'HEAD'));
+    return present(safePath.join(target, 'HEAD'));
   } catch (error) {
     // The filesystem refusing the marker is the same answer as absent: do not
     // select an enumerator that will throw on it. The command then reports
     // `extentSource: filesystem`, which is where the refusal becomes visible.
-    if (!isFilesystemAccessError(error)) throw error;
+    // A marker whose chain VAT will not hand the kernel (a `.git` or `HEAD`
+    // linked to a network path) is never handed to git either — git would
+    // follow it — so it is not selected, on the same terms.
+    if (!isLinkChainRefusedError(error) && fsFaultOf(error) === undefined) throw error;
     return false;
   }
 }

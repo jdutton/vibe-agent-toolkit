@@ -70,10 +70,14 @@ field for — which files carry which headings, what links at what, which paths 
 and why — `vat resources query` runs ONE read-only SQL statement against the same population:
 
 ```bash
-vat resources query 'SELECT path FROM resource_realizations WHERE ext = ".md" LIMIT 5'
+vat resources query "SELECT path FROM resource_realizations WHERE ext = '.md' LIMIT 5"
 vat resources query 'SELECT * FROM blob_conditions'        # what was refused, and why
 vat resources query 'SELECT rawRef FROM blob_references WHERE syntacticForm = ?' --param markdown-link
 ```
+
+The answer is the shared report envelope: the rows are `data.rows` (`data.columns` names them, even
+for an empty answer), and `examined` is the population the statement ran over — so zero rows over a
+populated tree is `status: ok`, exit 0. A refused statement is `status: error`, `USAGE_INVALID`, exit 2.
 
 A statement naming a table or column that does not exist gets the real columns of the tables it
 named — VAT ships no schema version, so that listing is how you find what a name became. The
@@ -102,13 +106,29 @@ SELECT path FROM resource_realizations
  WHERE path NOT LIKE 'docs/architecture/adrs/archive/%'
 ```
 
+⚠️ **A symbolic link is never realized** — no row sits at a link's own path, so a
+`link/CLAUDE.md` Claude Code reads through the link counts in no size, chain or rules-pattern
+query. It is not silently absent: each link is a `realization_conditions` row —
+`EXTENT_SYMLINK_NOT_REALIZED` when the target is in-root, naming it and whether it is realized, or
+`EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT` when the target resolves outside the root (never named), or
+`EXTENT_SYMLINK_TARGET_UNRESOLVED` when it resolves to nothing, or `EXTENT_SYMLINK_TARGET_UNREADABLE`
+when the OS refused or failed the lookup (the class is in `targetFaultClass`). Ask for all four codes
+or links are missing from the answer:
+`SELECT path, message FROM realization_conditions
+  WHERE code IN ('EXTENT_SYMLINK_NOT_REALIZED', 'EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT', 'EXTENT_SYMLINK_TARGET_UNRESOLVED', 'EXTENT_SYMLINK_TARGET_UNREADABLE')`
+lists them.
+
 **Read `population` in the output before you trust a timing.** It is `derived` or `store` — whether
 the rows were built by this run or read from the projection store — and it is reported rather than
 inferred, because a correct store hit and a correct re-derivation produce identical rows.
-`populationMs` sits beside it and says what that origin was WORTH, so the tell is not a bare label
+`populationSecs` sits beside it and says what that origin was WORTH, so the tell is not a bare label
 you have to take on faith. `vat resources check --help` carries the current reference timings
 (VAT's own repo and a ~10k-file adopter tree, warm and cold) — read them there rather than from a
-number pasted here.
+number pasted here. `lensPopulation` (`none`, `store`, `derived`) is the same tell for the lens
+relations the statement named, and `vat resources validate` publishes `data.population` too — `null`
+there means the walk answered: the walk lane was selected (`VAT_RESOURCES_CRAWL=walk`), or the crawl
+declined a projection bound to another root and walked. `VAT_PROJECTION_STORE=0` is not one of them:
+it skips only the store, so the run reports `derived`.
 
 ⛔ There is **no `engine` field**. An earlier RC published one (`sqlite | ephemeral`) to say which
 database answered the SQL; it is gone, because the answer is now always the same. The statement
@@ -119,11 +139,212 @@ a script that branches on `engine`, it predates this and is wrong.
 ⚠️ Values come back exactly as SQLite holds them — a boolean as `0`/`1`, a date and a JSON column
 as text. They are **not** decoded, because decoding needs a table spec and arbitrary SQL has none.
 
+**The projection store is ON by default.** VAT writes a SQLite cache of each scanned tree under
+`<tmpdir>/.vat-cache/` — roughly 71 MB for a 12,600-file repository, bounded at three trees per
+repository, eight repositories and 50,000 content keys, and `vat cache clear` reclaims it.
+`VAT_PROJECTION_STORE=off` opts out of the store alone; `VAT_CACHE=0` vetoes every VAT cache. The store makes the POPULATION
+cheap and is never itself queried.
+
+### `claude_rule_patterns` — what each `.claude/rules` glob scopes
+
+One row per `paths:` glob of one rules file: `pattern`, `literalPrefix` (its glob-free leading
+segments), `witnessPath` (the first file it matched, or null) and `status`. ⚠️ `literalPrefix` is
+NOT a match bound: Claude Code matches with gitignore rules after stripping a trailing `/**`, so a
+pattern with no `/` before its last character (`src/**`, `src/`) matches at any depth
+(`packages/cli/src/x.ts`). Use it for prefix containment only when the stripped pattern still has a
+`/` before its last character.
+
+⚠️ **Four statuses, and the last two are traps.** `matched` and `inert` are the plain cases.
+`unevaluated` means VAT never ran the matcher for that ONE pattern, because it is the entry that
+exhausted Claude Code's 1,000-pattern / 4 MiB budget, which is spent per pattern as the list is
+walked — so a live glob beside a refused one is evaluated and reported normally. A brace-free
+pattern costs nothing, and there is no `{1..n}` range expansion. `gitignored` means the glob
+matched nothing VAT can see and covers gitignored territory (`dist/**`). VAT never reads those files, but Claude
+Code does, so the rule may still load. **Filter `status = 'inert'`, never
+`status != 'matched'`** — the latter reports a VAT blind spot as the author's dead glob, and
+deleting that glob could break a rule that still loads.
+
+🪤 **"Which rule FILES fire on nothing?" is not an anti-join.** The intuitive query — rules files
+with no row in `claude_context_loads` — is `status != 'matched'` wearing a `LEFT JOIN`: that table
+holds one row per glob that CAN fire, so a pattern refused by the expansion budget has no row there
+either, and a rule whose globs were all refused reads as dead while firing perfectly well. Ask the
+pattern table instead: a file is dead only when every one of its globs is `inert`. Take the size
+from `blobs` — `resource_realizations` carries no size column, and `claude_context_loads` carries
+`bytes` but cannot see the file you are looking for:
+
+```sql
+SELECT r.path, b.bytes, COUNT(DISTINCT p.ordinal) AS globs
+  FROM claude_rule_patterns p
+  JOIN resource_realizations r ON r.resourceId = p.resourceId
+  JOIN blobs b ON b.contentKey = r.contentKey
+ GROUP BY r.path, b.bytes
+HAVING SUM(p.status != 'inert') = 0
+```
+
+One statement answers both halves of a rules-hygiene gate — which rule files are dead, and how big
+each rule file is — and it names no lens relation, so it costs nothing beyond the population.
+
+### `harness_blob_facts` / `harness_blob_imports` — what a file `@`-imports, as the harness reads it
+
+Facts exist only for blobs the harness reaches (its entry points and their imports, its
+declared-dialect extents), never for every blob VAT parses — join `harness = 'claude-code'` and read
+an absent row as "not reached", never as zero:
+
+```sql
+SELECT b.contentKey, f.injectedBytes, f.injectedTokens, f.paths
+  FROM blobs b
+  JOIN harness_blob_facts f ON f.blob = b.contentKey AND f.harness = 'claude-code'
+```
+
+`harness_blob_imports` is one row per `@` import the harness's own extractor reads out of a blob,
+keyed `(blob, harness, ordinal)`: `rawRef` as authored, `target` (what it resolves — `@` dropped,
+`#fragment` cut, `\ ` read as a space) and `line`.
+🪤 **Never answer "what does this CLAUDE.md import" from `blob_references`.** Its `at-prefixed`
+rows are VAT's candidates, not the harness's imports: `(@a.md)` is a candidate and loads nothing,
+`@a.md.` imports a file named `a.md.`, and a `@` in a `.ts` import's code span is code. The size
+Claude Code CHARGES for a memory file is `harness_blob_facts.injectedTokens` (frontmatter and HTML
+comment blocks removed, trimmed), not `blobs.tokenEstimate`; `injectedBytes = 0` means the file is
+dropped and its imports never followed. Which files it scopes by `paths:` is
+`harness_blob_facts.paths` (null = unscoped), read the harness's way for any extension — never
+`blobs.frontmatter`.
+
+### Relations that are COMPUTED, not stored — and are skipped unless you name them
+
+Beside the materialised tables, `query` and `check` expose relations a lens computes for the run:
+`lens_contexts`, `edges` and `edge_resolutions` (the resolved link graph), and
+`claude_context_chains` / `claude_context_loads` (what loads into an agent's context at each working
+location, each load carrying a `launchCharge` — the rows `vat claude context` reports over).
+
+**A lens runs only when a statement you declared names one of its relations**, so a statement naming
+none pays nothing for them. A statement reaching for a relation nothing evaluated is **refused**,
+never answered from the empty table — an empty table and a healthy tree are the same answer.
+
+`changed_files` (`path`, `status`, `oldPath`, `similarity`) is what THIS CHANGE touched under the
+root: pass `--base <ref>` to `vat resources query`, `vat resources check` or `vat validate`. It
+compares the working tree (staged or not) plus untracked, non-ignored files with the **merge base**
+of `<ref>` and `HEAD` — GitHub's "files changed", so a branch behind `main` never lists what `main`
+moved since. `status` is `added`, `modified`, `deleted`, `renamed` or `type-changed`; `oldPath` /
+`similarity` are set for a rename — a move is `renamed` whether or not you `git add`-ed it, a copy
+is `added`, and `git rm --cached` on an unchanged file is no row. A rename across the project root's
+boundary is seen from inside it (in = `added`, out = `deleted`); a nested repository or submodule is
+one row naming its directory. A conflicted file mid-merge is listed as it stands on disk, markers
+and all; a file on disk marked assume-unchanged or skip-worktree refuses (git would hide an edit
+to it — clear the flag with `git update-index --no-assume-unchanged` / `--no-skip-worktree`). A statement reading it is **refused** naming the fix, with a code naming the fault:
+
+| Cause | Fault (`kind`) | Code |
+|---|---|---|
+| no `--base` | `base` | `USAGE_INVALID` |
+| a ref that names no commit | `base` | `USAGE_INVALID` |
+| a ref that shares no history with `HEAD` in a full history (no merge base) | `base` | `USAGE_INVALID` |
+| a ref with more than one merge base with `HEAD` (a criss-cross history: pass one of them) | `base` | `USAGE_INVALID` |
+| git not found on `PATH` | `git-failed` | `BACKEND_UNAVAILABLE` |
+| git out of time, or more output than VAT reads (compare against a nearer base) | `git-failed` | `BACKEND_UNAVAILABLE` |
+| a snapshot that fails for a cause git does not state, or whose second attempt times out | `git-failed` | `BACKEND_UNAVAILABLE` |
+| not inside a git working tree (a bare repository and a directory inside `.git` included) | `repository` | `INPUT_UNREADABLE` |
+| no commits yet, or a git that cannot resolve `HEAD` | `repository` | `INPUT_UNREADABLE` |
+| a shallow clone cut off before the base and `HEAD` meet (no merge base, shallow) | `repository` | `INPUT_UNREADABLE` |
+| a shallow clone whose history may hide a nearer merge base (`fetch-depth: 0`, or `git fetch --deepen=<n>`) | `repository` | `INPUT_UNREADABLE` |
+| a partial clone missing blobs the diff needs (`git fetch --refetch`) | `repository` | `INPUT_UNREADABLE` |
+| a snapshot git refuses, its `fatal:`/`error:` quoted (a nested repository with no commit, an object it cannot write, a clean filter that fails) | `repository` | `INPUT_UNREADABLE` |
+| an untracked file outside a sparse checkout's definition (add it to the definition, remove it, or ignore it) | `repository` | `INPUT_UNREADABLE` |
+| a directory under the root git cannot list (fix its permissions, or ignore it) | `repository` | `INPUT_UNREADABLE` |
+| a file under the root git cannot read | `repository` | `INPUT_UNREADABLE` |
+| a file on disk marked assume-unchanged or skip-worktree (`git update-index --no-assume-unchanged` / `--no-skip-worktree`) | `repository` | `INPUT_UNREADABLE` |
+| a filesystem that folds case whose `core.ignorecase` is not true (`git config core.ignorecase true`) | `repository` | `INPUT_UNREADABLE` |
+| on such a filesystem, a changed path, or a rename's old side wherever its new side lands, spelling the root in another case or Unicode normalisation | `repository` | `INPUT_UNREADABLE` |
+| a path under the root that is not UTF-8 | `repository` | `INPUT_UNREADABLE` |
+| a listing git returned that VAT cannot read | `repository` | `INPUT_UNREADABLE` |
+
+A CTE named `changed_files` is refused as `USAGE_INVALID` too; so is a bare alias `changed_files`
+with no `AS` run without `--base` (a known over-match: spell the alias with `AS`). The exit code does not tell these apart — the code does:
+`vat resources query` publishes it as `error.code`; for a check it is `RESOURCE_CHECK_BROKEN` on
+that check only, carrying `reason: { refusal: <code> }`. `--base` is read only when a statement
+names `changed_files`. Scope a check to what a change touched:
+
+```sql
+SELECT c.path FROM changed_files c
+ WHERE c.path LIKE 'docs/specs/%' AND c.status != 'deleted'
+```
+
+🪤 `claude_context_chains` holds ONE ROW PER WORKING LOCATION, so the obvious
+`JOIN claude_context_chains ON chainId` multiplies every load row by the locations sharing that
+chain. Select from `claude_context_loads` alone and reach the chain relation by correlated subquery.
+
+🚨 **A launch-cost sum MUST filter `launchCharge = 'charged'`.** VAT ships no context budget: what a
+launch chain may cost is your call, written as your own check over these rows. `claude_context_loads`
+also holds every path-scoped rule and every file that is not paid at launch; on one adopter the
+unfiltered sum was wrong by **725,714 bytes** against a worst real chain of 86,720. `sizeCliff` is
+not the filter — it is the 4 MiB `CLAUDE.md` cliff's verdict, and `'loaded'` covers rows no launch
+charges. `SUM()` also skips NULL, and an `'unknown-size'` row has no `bytes`, so count those beside
+the sum — and a chain with no charged row sums to NULL, not 0, so wrap the sum in `COALESCE(…, 0)`.
+
+🚨 **A TOKEN sum also needs `headerTokens` and the chain's own `preambleTokens`.** Claude Code
+renders a one-line header (`Contents of <absolute path>(<kind>):`) before every charged file's
+content, and a once-per-launch preamble before the first one — both real, both never in `bytes` or
+`tokens` alone. `headerTokens` is a `claude_context_loads` column (per row); `preambleTokens` is a
+`claude_context_chains` column (per CHAIN — it is charged once however many rows the chain loads, so
+it is not repeated onto every load row). Reach it by correlated subquery, the same rule
+`claude_context_chains`' one-row-per-location shape already forces:
+
+```sql
+SELECT l.chainId,
+       COALESCE(SUM(CASE WHEN l.launchCharge = 'charged' THEN l.bytes END), 0) AS bytes,
+       COALESCE(SUM(CASE WHEN l.launchCharge = 'charged' THEN l.tokens + l.headerTokens END), 0)
+         + (SELECT c.preambleTokens FROM claude_context_chains c
+             WHERE c.chainId = l.chainId LIMIT 1) AS tokens,
+       SUM(l.launchCharge = 'unknown-size') AS unsized
+  FROM claude_context_loads l
+ GROUP BY l.chainId
+```
+
 ## Standing Assertions That Gate CI (`vat resources check`)
 
 A query answers a question once. `vat resources check` runs the questions a project decided were
 worth asking **every time**, against the same projection, and fails the run when any error-severity
 check is violated.
+
+**`vat validate` runs these checks too**, as its `checks` phase, whenever `resources:` is
+configured — every check, under the default bound below. So a declared check that errors, or whose
+SQL no longer runs (`RESOURCE_CHECK_BROKEN`), fails `vat validate` as well.
+
+### VAT's built-in checks run first, with or without a config file
+
+A project that declares nothing still gets the **default set** — today three checks over
+`.claude/rules/`, each covering the one before it:
+
+- `claude-rule-glob-inert`, emitting `CLAUDE_RULE_GLOB_INERT`
+  at `info` for every `paths:` glob that matches no file in the tree.
+- `claude-rule-frontmatter-invalid`, emitting `CLAUDE_RULE_FRONTMATTER_INVALID`
+  at `warning` for every rules file whose YAML frontmatter VAT could not read — it does not parse
+  (an unquoted `- **/x/*.ts` is a YAML alias, the usual cause), or it parses to a sequence or a
+  scalar rather than a mapping. Either way its globs never reach `claude_rule_patterns`, so the
+  first check cannot see them.
+- `claude-rule-link-unchecked`, emitting `CLAUDE_RULE_LINK_UNCHECKED`
+  at `warning` for a rules file or rules directory that is a **symlink**. VAT realizes no link
+  path, so such a rule has no pattern rows and no blob at all and the two checks above pass on it.
+  Claude Code loads it when the link's target stays inside the root, skips it when the target
+  resolves outside, and loads nothing when the link resolves to nothing; the finding says which.
+
+Config only **adds** to that set or moves a severity in it; a directory with no
+`vibe-agent-toolkit.config.yaml` runs exactly the same built-ins, which is what makes "default-on"
+mean anything.
+
+⛔ **A built-in is never SQL.** It is a TypeScript predicate over the projection's rows
+(`BUILTIN_CHECKS` in `@vibe-agent-toolkit/resources`), so a default-on rule never makes a query
+engine part of somebody's gate. Its SQL twin ships as documentation in `--help` and in the code's
+entry in `validation-codes.md`, for you to copy into your own `resources.checks` and narrow —
+under a name of its own: a declared check named like a built-in is refused at config load.
+
+Three consequences worth knowing:
+
+- Severity moves through the **code**, not through `CUSTOM:<name>`:
+  `resources.validation.severity.CLAUDE_RULE_GLOB_INERT: ignore` (or `warning` / `error`).
+- `--check <name>` takes a built-in name exactly as it takes a config key.
+- `data.checksRun` counts built-ins too, and each built-in's entry in `data.checks` carries
+  `builtin: true`. A run that declares no checks of its own is **not** a refusal any more — you get
+  a stderr warning, and `checksRun: 0` now means not even a built-in ran.
+
+### Your own checks
 
 Declare them under `resources.checks` in `vibe-agent-toolkit.config.yaml` — each is a description
 plus one SQL statement selecting the rows that **VIOLATE** it:
@@ -144,8 +365,9 @@ resources:
 ```
 
 ```bash
-vat resources check                    # every declared check
-vat resources check --check orphan-skills   # just one, by its config key
+vat resources check                    # the built-ins plus every declared check
+vat resources check --check orphan-skills        # just one, by its config key
+vat resources check --check claude-rule-glob-inert   # just one, by its built-in name
 vat resources check --format json      # honoured on the error path too
 ```
 
@@ -153,10 +375,98 @@ vat resources check --format json      # honoured on the error path too
 usual "assert true" reflex and it is the single most common authoring mistake — write the query
 that finds what is wrong, not the one that confirms what is right.
 
+**Four column names are reserved**, matched exactly and case-sensitively; every other column is
+evidence — rendered into the message and published as the finding's `evidence` object:
+
+| Column | Becomes | NULL or absent |
+|---|---|---|
+| `path` | text: the finding's `location` when it is one — a non-empty relative path with `/` separators inside the root (no leading `/`, no drive, no `..` out of the root, no `\` on Windows). Text that is no location (absolute, climbing, empty — `roots.path`, say) gives a finding with no location and stays as `evidence.path`; a value that is not text (a number, a BLOB) breaks the check | no location, no evidence entry |
+| `finding_severity` | that row's severity: `error`, `warning` or `info` | the check's declared severity |
+| `finding_line` | the finding's 1-based `line` | no line |
+| `finding_column` | the finding's 1-based `column` — requires `finding_line` | no column |
+
+A value a reserved column cannot mean — `finding_severity` `'high'`, `'Error'` or `'ignore'`, a
+`finding_line` of `0` or `'3'`, a `finding_column` with no `finding_line` — fails the whole check as
+`RESOURCE_CHECK_BROKEN`, naming the row and the value; its cost record carries `broken: true`
+**with** `rows` (the statement ran, its rows could not be read). A column that nearly names a
+reserved one — equal once case and `_` are removed (`Finding_Line`, `findingSeverity`), or the bare
+`severity`, `line` or `column` — earns one stderr warning per check, stays evidence, and is listed
+on that check's `data.checks` entry as `nearMisses: ['Finding_Line']` — read from the statement's
+columns before it runs, so even a check that selected no rows, or threw, lists it.
+
+No projection table has a `finding_*` column, so `SELECT *` or a join never sets one — a table's own
+`severity`, `line` or `column` is plain evidence. Place a finding on purpose:
+`SELECT r.path, b.line AS finding_line FROM …`.
+
+**Reading the document.** Every finding one check produced — its violations and any
+`RESOURCE_CHECK_BROKEN` / `RESOURCE_CHECK_EXAMINED_NOTHING` about it — carries `check: <name>`; a
+finding about the whole run carries none. A declared check's violation also carries `evidence`
+(the row minus the reserved columns, values as SQLite returned them; a BLOB or a non-finite number
+such as `Infinity` as the message shows it). `vat validate`'s `checks` phase publishes the same findings unchanged.
+
+An adopter's `resources.validation.severity` override on `CUSTOM:<name>` replaces the severity of
+EVERY row of that check — it raises a row's `info` as well as lowering its `error`.
+
 `severity` on a check is `error` | `warning` | `info` — there is no `ignore` here; to silence a
 check an adopter overrides its `CUSTOM:<name>` code through `resources.validation.severity`
 (which does accept `ignore`). `RESOURCE_CHECK_BROKEN` is **not overridable** at all: a run that did
 not complete cannot be downgraded to a warning, because the green would mean nothing.
+
+### Declare what a check examined — an empty scan never passes
+
+Zero rows is a check's pass, so zero violations over a thousand files and zero over nothing look
+identical, and the run's `examined` (the whole population) cannot see one check whose `WHERE`
+matches nothing. Give a check its own denominator with `examined:` — a second statement returning
+ONE COUNT of what the check ranged over:
+
+```yaml
+skills-have-owners:
+  description: Every skill names an owner
+  sql: SELECT path FROM resource_realizations WHERE path LIKE 'skills/%' AND …
+  examined: SELECT COUNT(*) FROM resource_realizations WHERE path LIKE 'skills/%'
+  # allowEmpty: true   # only when zero skills is a legitimate answer
+```
+
+- The count lands on the check's `data.checks` entry as `examined` — present exactly when declared
+  and the statement completed, never `0` as a placeholder.
+- `examined: 0` fails the run as `RESOURCE_CHECK_EXAMINED_NOTHING` (error, **not overridable**),
+  naming the check; its violations are still reported. The entry then carries
+  `examinedNothing: true` — present exactly when that finding is.
+- `allowEmpty: true` makes zero legitimate and is published on every entry of that check. Without
+  `examined` it is refused at config load.
+- The examined statement obeys every rule `sql` does, is charged to the check's `durationSecs` and
+  bounded by `--budget`; if it fails, the check is `RESOURCE_CHECK_BROKEN` and none of its rows are
+  reported. Same behaviour in `vat validate`'s `checks` phase.
+- Anything but exactly one row with one column holding a non-negative integer, as `SELECT COUNT(*)`
+  returns, is
+  `RESOURCE_CHECK_BROKEN` too; the finding's `reason` is
+  `{ statement: 'examined', rows, columns?, value?, allowed }`.
+- ⚠️ `examined` is OPTIONAL, so a check that declares none **can pass over an empty population** —
+  nothing refuses it. Declare it on every check; a consumer that needs the guarantee can require
+  an `examined` key on each `data.checks` entry that is neither `builtin` nor `broken`.
+
+### A size ratchet is a check with its baseline inline
+
+"No file may grow past its recorded size" needs no new mechanism: carry the baseline as a
+`VALUES` CTE and select what grew. Shrinking a file never fails; lowering a ceiling is an edit to
+the config.
+
+```yaml
+resources:
+  checks:
+    claude-md-ratchet:
+      description: No CLAUDE.md grows past its recorded size
+      sql: |
+        WITH baseline(path, ceiling) AS (VALUES ('CLAUDE.md', 6200), ('packages/cli/CLAUDE.md', 3900))
+        SELECT r.path, b.bytes, baseline.ceiling
+          FROM baseline
+          JOIN resource_realizations r ON r.path = baseline.path
+          JOIN blobs b ON b.contentKey = r.contentKey
+         WHERE b.bytes > baseline.ceiling
+```
+
+⚠️ There is no `--seed` yet: the baseline is written and lowered by hand. A path the tree no
+longer holds simply drops out of the join, so delete its baseline row with the file.
 
 ### The `--budget` bound, and why it exists
 
@@ -176,9 +486,23 @@ budget IS effectively a total-runtime bound. Size it against your population, no
 on a large adopter tree the population is essentially the whole check run while the SQL itself is
 milliseconds; `vat resources check --help` states the reference timings.
 
+`vat validate`'s `checks` phase always runs under the default, and has no way to raise it: a larger
+`--budget` lets the checks pass under `vat resources check`, not under `vat validate`.
+
 A killed or crashed run is still evidence: checks that completed keep their per-rule row counts, and
 the report names the rule that was in flight. It **never exits 0** — not on a watchdog kill, not on
 a child that died of its own memory.
+
+`vat resources query` takes the same flag, opt-in: it has **no** default bound, because a query
+is typed at a keyboard where Ctrl-C works. Ask for one when the statement might run away:
+
+```bash
+vat resources query --budget 30 'SELECT ...'   # child process, killed after 30s without progress
+```
+
+A query killed or dead before it finished has no answer, so it is refused as `RUN_INCOMPLETE`
+(exit 2), never published as a partial result. One statement is one unit: a healthy statement
+slower than the budget is killed too. Without `--budget`, nothing changes: one process, as before.
 
 ⛔ `check` deliberately does **not** preflight-compile its SQL the way `query` does. A check that
 cannot run must surface as a `RESOURCE_CHECK_BROKEN` finding inside a document that also reports the
@@ -296,25 +620,29 @@ For tools that **modify** frontmatter (not just validate it), see
 
 ## Validation Output
 
+`vat resources validate` publishes the shared report envelope:
+
 ```yaml
-status: success
-filesScanned: 47
-linksChecked: 212
-durationSecs: 0.23
-validationMode: strict
-collections:
-  systems:
-    resourceCount: 7
-    hasSchema: true
-    validationMode: permissive
-  adrs:
-    resourceCount: 12
-    hasSchema: true
-    validationMode: permissive
+status: ok
+examined: 47
+findings: []
+summary: { errors: 0, warnings: 0, info: 0 }
+gate: { strict: false }
+durationMs: 230
+data:
+  root: /abs/path/to/project
+  collections:
+    systems:
+      resourceCount: 7
+      hasSchema: true
+      validationMode: permissive
+      filesWithErrors: 0
+      summary: { errors: 0, warnings: 0, info: 0 }
 ```
 
-On issues the shape changes: `status` becomes the worst actionable severity (`warning` | `error`),
-with `errorsFound`, `filesWithErrors` and `issueCounts: {errors, warnings, info}` — the field
-list is in `vat resources validate --help`.
-
-Errors appear in stderr with `file:line: message` format for editor navigation.
+On issues `status` is `findings` and every finding is listed flat in `findings`
+(`{code, severity, message, location, line?}`, `location` relative to `data.root`);
+`summary` counts them by severity, and the run exits 1 only for an error-severity one.
+`examined: 0` is refused (`RESOURCE_CHECK_BROKEN`). The field list is in
+`vat resources validate --help`; `--format text` prints one
+`location:line: severity: message [code]` line per finding for editor navigation.

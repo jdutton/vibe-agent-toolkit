@@ -1,6 +1,10 @@
 # vibe-agent-toolkit
 
-> Modular toolkit for building, testing, and deploying portable AI agents
+> Toolkit for skills, plugins, marketplaces and knowledge resources
+
+VAT audits Claude skills, plugins, marketplaces and settings; builds, verifies and publishes skills
+and plugins; validates markdown knowledge resources against schemas and link integrity; and
+indexes and queries them for RAG and through the resource projection. It is not an agent runtime.
 
 ## Installation
 
@@ -24,8 +28,10 @@ vat resources validate docs/
 
 ## Features
 
-- **Resource Management**: Intelligent markdown scanning and validation
-- **Link Integrity**: Verify internal links, anchors, and external URLs
+- **Audit**: `vat audit` on plugins, marketplaces, skills and settings, including Claude-surface compatibility
+- **Skills and plugins**: validate, build, verify, test and publish skills, plugins and marketplaces
+- **Knowledge resources**: markdown collections with frontmatter schemas and link integrity
+- **RAG and projection**: index and query markdown (`vat rag`), and ask SQL questions of the resource projection (`vat resources query`)
 - **CLI-First**: Human-readable YAML output, machine-parseable structure
 - **Configurable**: Project-level configuration via YAML
 - **Cross-Platform**: Works on Windows, macOS, Linux

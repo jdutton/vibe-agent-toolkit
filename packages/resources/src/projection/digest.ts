@@ -42,6 +42,7 @@ import type { ExtentContribution } from './contributor.js';
  * the compiler when a table is added.
  */
 const DIGESTED_TABLES = [
+  'claudeRulePatterns',
   'conditions',
   'contexts',
   'memberships',

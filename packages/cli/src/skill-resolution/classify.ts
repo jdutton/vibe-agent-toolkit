@@ -6,7 +6,7 @@
 import { isAbsolute } from 'node:path';
 
 import type { SkillSource } from '@vibe-agent-toolkit/agent-skills';
-import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 const SOURCE_KINDS = new Set(['workspace', 'npm', 'url', 'path']);
 
@@ -65,7 +65,7 @@ function isSourceSpec(ref: string): boolean {
  */
 export function classifyToken(ref: string): TokenShape {
   if (isSourceSpec(ref)) return { shape: 'source-spec', source: parseSourceSpec(ref) };
-  const fwd = toForwardSlash(ref);
+  const fwd = toForwardSlashAnyPlatform(ref);
   if (isAbsolute(ref) || fwd.includes('/') || fwd.startsWith('.')) {
     return { shape: 'definite-path' };
   }

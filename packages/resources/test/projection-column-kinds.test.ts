@@ -75,7 +75,7 @@ describe('projectionColumnType', () => {
 
 describe('projectionRowShape', () => {
   it('unwraps a row schema wrapped in superRefine', () => {
-    // Two of the twelve are; a caller reading `.shape` directly sees nothing.
+    // Two of the thirteen are; a caller reading `.shape` directly sees nothing.
     expect(Object.keys(projectionRowShape(PROJECTION_TABLES.resourceRealizations.schema)))
       .toContain('symlinkResolves');
     expect(Object.keys(projectionRowShape(PROJECTION_TABLES.resolutionContexts.schema)))

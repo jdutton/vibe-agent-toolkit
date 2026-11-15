@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { RunContentCache } from '../src/projection/content-cache.js';
 import type { ExtentContribution } from '../src/projection/contributor.js';
 import {
   CLOSURE_DEPTH_EXCEEDED,
@@ -15,7 +16,7 @@ import { ExtentDeclarationSchema, ProjectConfigSchema } from '../src/schemas/pro
 import { CONDITION_WITHOUT_REFERENCE } from '../src/schemas/projection-resources.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
-import { addFile, MARKDOWN_LINK, type FixtureFile } from './helpers/claude-context-fixture.js';
+import { addFileWithFacts, MARKDOWN_LINK, type FixtureFile } from './helpers/claude-context-fixture.js';
 import { expectContributionRowsValid } from './test-helpers.js';
 
 /**
@@ -51,6 +52,21 @@ const DOC_HUB = 'skills/foo/Readme.md';
 
 /** Reachable ONLY through {@link DOC_HUB} — the subtree a refusal must prune. */
 const DOC_BEHIND = 'skills/foo/behind.md';
+
+/** A LEAF target: nothing routes a PNG to a parser, so no walk goes through one. */
+const ASSET_PNG = 'skills/foo/diagram.png';
+
+/** Reachable only from {@link ASSET_PNG} — the subtree a leaf must NOT open. */
+const DOC_PAST_ASSET = 'skills/foo/past-asset.md';
+
+/** Text a markdown parser would accept, which no `**\/*.md` registry includes. */
+const NOTES_TXT = 'skills/foo/notes.txt';
+
+/** Reachable only from {@link NOTES_TXT}. */
+const DOC_PAST_TXT = 'skills/foo/past-txt.md';
+
+/** The glob both build registries include — the packager's door rule. */
+const MARKDOWN_MEMBERS = '**/*.md';
 
 /** A DIRECTORY entity, whose path is shaped exactly like a file's. */
 const DOC_DIR = 'skills/foo/nested';
@@ -97,14 +113,14 @@ function refusalRule(label: string, matchers: Record<string, JsonValue>): Record
  * `.test.ts` runs it. Shared fixtures go in `test/helpers/`.
  *
  * This suite still owns everything downstream: the fixture graphs below, and
- * `buildBase`, which calls the imported `addFile`.
+ * `buildBase`, which calls the imported `addFileWithFacts`.
  */
 
 /** A base projection holding exactly these files and their reference candidates. */
 function buildBase(files: readonly FixtureFile[]): ProjectionBase {
-  const builder = new ProjectionBuilder({ root: ROOT });
+  const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() });
   for (const file of files) {
-    addFile(builder, file, ROOT);
+    addFileWithFacts(builder, file, ROOT);
   }
   return builder.base();
 }
@@ -125,6 +141,39 @@ const CHAIN: readonly FixtureFile[] = [
  * `DOC_B` is the control: it must survive every refusal below, or "the matcher
  * refused something" would also be satisfied by a walk that refused everything.
  */
+/**
+ * `SKILL.md → b.md → {c.md, diagram.png}`, and the PNG links onward.
+ *
+ * The two depth-2 targets are the whole point: one routes to a parser and one
+ * does not, so a single `maxDepth: 1` walk answers both halves of the leaf rule
+ * at once — `c.md` is held back by the budget, `diagram.png` is not subject to
+ * it. `DOC_PAST_ASSET` sits behind the PNG on a markdown-form reference, which
+ * is what makes "admitted but never traversed" falsifiable: a primitive that
+ * enqueued the leaf would admit it and the fixture would say so.
+ */
+const CHAIN_WITH_ASSET: readonly FixtureFile[] = [
+  { path: ROOT_DOC, refs: [{ rawRef: 'b.md' }] },
+  { path: DOC_B, refs: [{ rawRef: 'c.md' }, { rawRef: 'diagram.png' }] },
+  { path: DOC_C, refs: [] },
+  { path: ASSET_PNG, refs: [{ rawRef: 'past-asset.md' }] },
+  { path: DOC_PAST_ASSET, refs: [] },
+];
+
+/**
+ * `SKILL.md → b.md → notes.txt → past-txt.md`.
+ *
+ * `notes.txt` PARSES as markdown — `parserKindForPath` says so — but the build's
+ * registry includes `**\/*.md` and nothing else, so the packager bundles it as
+ * cargo and never opens it. A traversal rule keyed on parser kind walked through
+ * it and admitted a document the build does not ship.
+ */
+const CHAIN_WITH_TXT: readonly FixtureFile[] = [
+  { path: ROOT_DOC, refs: [{ rawRef: 'b.md' }] },
+  { path: DOC_B, refs: [{ rawRef: 'notes.txt' }] },
+  { path: NOTES_TXT, refs: [{ rawRef: 'past-txt.md' }] },
+  { path: DOC_PAST_TXT, refs: [] },
+];
+
 const HUB_CHAIN: readonly FixtureFile[] = [
   { path: ROOT_DOC, refs: [{ rawRef: README_REF }, { rawRef: 'b.md' }] },
   { path: DOC_HUB, refs: [{ rawRef: 'behind.md' }] },
@@ -317,7 +366,6 @@ describe('ExtentDeclarationSchema', () => {
 
   it('is reachable from ProjectConfigSchema as an extents record keyed by name', () => {
     const config = ProjectConfigSchema.parse({
-      version: 1,
       extents: {
         [EXTENT_NAME]: {
           kind: SKILL_KIND,
@@ -365,6 +413,78 @@ describe('ClosureExtentContributor', () => {
     expect(memberPaths(contribution)).toEqual([ROOT_DOC]);
   });
 
+  it('does not charge a LEAF against maxDepth, and does not walk through it', async () => {
+    // `walk-link-graph.ts` tests `isRoutable` BEFORE its depth check and reaches
+    // its plain-asset branch without a depth test at all: "bundling it enqueues
+    // nothing, so there is no hop for a limit to bound". Charging it anyway is
+    // what made a bounded closure under-report against the packager — measured
+    // on the real corpus, where a skill at `linkFollowDepth: 2` bundled two
+    // files the closure called `depth-exceeded`.
+    const contribution = await contributeOver(
+      CHAIN_WITH_ASSET,
+      declarationOf({ maxDepth: 1, traverseGlobs: [MARKDOWN_MEMBERS] }),
+    );
+
+    // `DOC_C` and `ASSET_PNG` are both two hops out of the root, and only one of
+    // them is a door. A fixture carrying just one of the pair could be satisfied
+    // by a primitive that had simply stopped bounding anything.
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B, ASSET_PNG]);
+    expect(conditionCodeFor(contribution, DOC_C)).toBe(CLOSURE_DEPTH_EXCEEDED);
+
+    // Admitted is not traversed: the PNG's own markdown-form reference is not
+    // this extent's edge, so nothing behind it arrives and nothing is REPORTED
+    // about it either — the walker never parses an asset, so it has no verdict
+    // to mirror.
+    expect(memberPaths(contribution)).not.toContain(DOC_PAST_ASSET);
+    expect(conditionCodeFor(contribution, DOC_PAST_ASSET)).toBeUndefined();
+    expectContributionRowsValid(contribution);
+  });
+
+  it('charges every target when the declaration names no traverseGlobs', async () => {
+    // The default is null, and null means "every target is a door" — the
+    // behaviour of every declaration written before the field existed. Without
+    // this case the field would be an optional seam whose omission is the
+    // failure: the leaf test above would pass for a primitive that had made the
+    // exemption unconditional, and every caller that never declares it would
+    // silently get the new behaviour.
+    const contribution = await contributeOver(CHAIN_WITH_ASSET, declarationOf({ maxDepth: 1 }));
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B]);
+    expect(conditionCodeFor(contribution, ASSET_PNG)).toBe(CLOSURE_DEPTH_EXCEEDED);
+  });
+
+  it('treats a file that merely PARSES as markdown as a leaf when the door glob excludes it', async () => {
+    // ⛔ The over-report the parser-kind rule traded the under-report for. The
+    // packager's door is registry membership, and the registry is a glob.
+    const contribution = await contributeOver(
+      CHAIN_WITH_TXT,
+      declarationOf({ maxDepth: 'full', traverseGlobs: [MARKDOWN_MEMBERS] }),
+    );
+
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B, NOTES_TXT]);
+    expect(memberPaths(contribution)).not.toContain(DOC_PAST_TXT);
+  });
+
+  it('refuses an EMPTY traverseGlobs, which would silently walk through nothing', () => {
+    // `[]` reads as "no restriction" to an author who just learned null is the
+    // permissive default, and meant the opposite: the root and its direct
+    // references, with no row saying anything was held back.
+    expect(ExtentDeclarationSchema.safeParse(declarationOf({ traverseGlobs: [] })).success).toBe(false);
+    expect(ExtentDeclarationSchema.safeParse(declarationOf({ traverseGlobs: null })).success).toBe(true);
+  });
+
+  it('leaves a leaf subject to the refusal cascade, which outranks the exemption', async () => {
+    // Order is the behaviour on both arms: the walker's `checkExclusions` runs
+    // before it ever asks whether the target is routable, so "assets bypass the
+    // depth limit" has never meant "assets bypass an exclude rule".
+    const contribution = await contributeOver(CHAIN_WITH_ASSET, declarationOf({
+      maxDepth: 1,
+      traverseGlobs: [MARKDOWN_MEMBERS],
+      refusals: [refusalRule(LABEL_GLOB, { patterns: ['**/*.png'] })],
+    }));
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B]);
+    expect(conditionCodeFor(contribution, ASSET_PNG)).toBe(LABEL_GLOB);
+  });
+
   it('REPORTS what the hop budget held back, instead of falling silent at the boundary', async () => {
     // The boundary used to be the primitive's one silent verdict: `canDescend`
     // stopped the ENUMERATION at a member sitting on `maxDepth`, so a reference
@@ -395,6 +515,7 @@ describe('ClosureExtentContributor', () => {
       // attaches `matchedRule` only for `pattern-matched`).
       matchedPattern: null,
       matchedPayload: null,
+      targetFaultClass: null,
     });
     expectContributionRowsValid(contribution);
   });
@@ -542,12 +663,12 @@ describe('ClosureExtentContributor', () => {
   it('emits ONE refusal row per refused reference, each naming ITS OWN referrer', async () => {
     // Two documents link the same hub, so the refusal is reached twice and both
     // rows are emitted, matching `walkLinkGraph`'s per-reference
-    // `excludedReferences`. The rows agree on the VERDICT — same path, same code,
-    // same identity, which is `ProjectionBuilder`'s
-    // `(extentId, path, code, resourceId)` key — and differ on the PROVENANCE,
-    // because they were reached through different references. So a population
-    // collapses them to one row and that row names the FIRST referrer; the
-    // witness is a witness, not the list.
+    // `excludedReferences`. The rows agree on the VERDICT — same path, same
+    // code, same identity — and, by construction here, on POSITION too: each
+    // is the referring file's FIRST reference, so both sit at line 1 with the
+    // identical `Readme.md` spelling. `ProjectionBuilder`'s condition table
+    // keys on `(extentId, path, code, resourceId, sourcePath, sourceLine,
+    // sourceRef)`, so `sourcePath` alone keeps the pair apart once built.
     const twoReferrers: readonly FixtureFile[] = [
       { path: ROOT_DOC, refs: [{ rawRef: README_REF }, { rawRef: 'b.md' }] },
       { path: DOC_B, refs: [{ rawRef: README_REF }] },
@@ -743,24 +864,54 @@ describe('ClosureExtentContributor', () => {
     expect(memberPaths(contribution)).toEqual([ROOT_DOC]);
   });
 
-  it('resolves a REAL lexer-produced @ token to the file it names', async () => {
-    // The regression this whole increment exists for. `@b.md` is authored the
-    // way a CLAUDE.md authors an import, parsed by the shipped lexer, and
-    // carried through `blobReferencesFor` — so `rawRef` keeps its `@` exactly as
-    // `blob-references.ts` stores it, and `leadingAt` is true because the `@` is
-    // genuinely still there.
-    //
-    // Under the `href` dialect this resolves `skills/foo/@b.md`, finds nothing,
-    // and reports CLOSURE_REFERENCE_UNRESOLVED. Under `claude-import` it must
-    // resolve `skills/foo/b.md` and admit it.
+  it('resolves a REAL harness-extracted @ import to the file it names', async () => {
+    // `@b.md` is authored the way a CLAUDE.md authors an import and extracted
+    // by the shipped `claudeMemoryFactsOf` into `harness_blob_imports`. Under
+    // `claude-import` the closure walks THAT table, and admits `skills/foo/b.md`.
     const contribution = await contributeOver(AT_TOKEN_IMPORT, declarationOf({
-      follow: ['at-prefixed'],
+      follow: [],
       referenceDialect: 'claude-import',
     }));
 
     expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B]);
     expect(contribution.conditions).toEqual([]);
     expectContributionRowsValid(contribution);
+  });
+
+  it('follows no import out of a blob with no harness facts yet — frontier inside the fixpoint, never a throw', async () => {
+    // The import rows are there; the facts row is not. Inside the fixpoint that
+    // is "not derived yet": the contributor must neither throw nor read the
+    // blob's imports as settled — a later pass derives the facts. Its strict
+    // twin, outside the fixpoint, is in `projection-closure-provenance.test.ts`.
+    const base = buildBase(AT_TOKEN_IMPORT);
+    const contributor = new ClosureExtentContributor(EXTENT_NAME, SKILL_KIND);
+    const contribution = await contributor.contribute(
+      { ...base, harnessBlobFacts: [] },
+      declarationOf({ follow: [], referenceDialect: 'claude-import' }),
+    );
+
+    expect(base.harnessBlobImports.length).toBeGreaterThan(0);
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC]);
+  });
+
+  it('walks harness_blob_imports under claude-import, never the lexer\'s candidates', async () => {
+    // `(@b.md)` is an at-prefixed candidate to VAT's lexer and no import to the
+    // harness (`Ayn` needs whitespace or a line start before the `@`). Reading
+    // `blob_references` here would admit `b.md`.
+    const contribution = await contributeOver(
+      [{ path: ROOT_DOC, refs: [], markdown: 'See (@b.md) for the rest.\n' }, { path: DOC_B, refs: [] }],
+      declarationOf({ follow: [], referenceDialect: 'claude-import' }),
+    );
+
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC]);
+    expect(contribution.conditions).toEqual([]);
+  });
+
+  it('refuses a follow list beside claude-import, which no syntactic form could apply to', async () => {
+    await expect(contributeOver(AT_TOKEN_IMPORT, declarationOf({
+      follow: ['at-prefixed'],
+      referenceDialect: 'claude-import',
+    }))).rejects.toThrow(/follow must be \[\] under referenceDialect/);
   });
 
   it('leaves an @ token unresolved under the default href dialect', async () => {

@@ -24,11 +24,10 @@ const UMBRELLA_PACKAGE_NAME = 'vibe-agent-toolkit';
  * The packages to publish, dependencies first.
  *
  * Derived from `package.json` — every non-private workspace package, ordered
- * by its runtime `workspace:` edges — rather than read from a hand list. The
- * hand list this replaced put `runtime-claude-agent-sdk` before
- * `claude-marketplace` and `cli` before `gateway-mcp`; with every internal
- * dependency pinned to an exact version by `resolve-workspace-deps`, each of
- * those was uninstallable for the window between the two publishes.
+ * by its runtime `workspace:` edges — rather than read from a hand list: with
+ * every internal dependency pinned to an exact version by
+ * `resolve-workspace-deps`, a dependent published first is uninstallable for
+ * the window between the two publishes.
  *
  * A manifest that cannot be read, or a dependency cycle, throws here and
  * stops the publish before a single package has gone out.

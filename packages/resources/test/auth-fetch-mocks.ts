@@ -20,6 +20,8 @@
  * `test/...test.ts` include pattern skips this file.
  */
 
+import { promised } from '@vibe-agent-toolkit/utils';
+
 export type ResponseSpec = {
   readonly status: number;
   readonly headers?: Record<string, string>;
@@ -33,7 +35,7 @@ export type ResponseSpec = {
  */
 export function sequenceFetch(responses: readonly ResponseSpec[]): typeof fetch {
   let i = 0;
-  return (async (input: string | URL, init?: RequestInit): Promise<Response> => {
+  const respond = (input: string | URL, init?: RequestInit): Response => {
     const spec = responses[i];
     if (spec === undefined) {
       throw new Error(`sequenceFetch: ran out of responses after ${i} call(s)`);
@@ -47,7 +49,10 @@ export function sequenceFetch(responses: readonly ResponseSpec[]): typeof fetch 
       status: spec.status,
       headers: spec.headers ?? {},
     });
-  }) as typeof fetch;
+  };
+  // A throw (an exhausted list, a failed assertion) rejects, as a real fetch would.
+  return ((input: string | URL, init?: RequestInit): Promise<Response> =>
+    promised(() => respond(input, init))) as typeof fetch;
 }
 
 /**
@@ -56,9 +61,9 @@ export function sequenceFetch(responses: readonly ResponseSpec[]): typeof fetch 
  */
 export function countingFetch(): { fetchImpl: typeof fetch; calls: () => number } {
   let count = 0;
-  const fetchImpl = (async () => {
+  const fetchImpl = (() => {
     count++;
-    return new Response();
+    return Promise.resolve(new Response());
   }) as typeof fetch;
   return { fetchImpl, calls: () => count };
 }

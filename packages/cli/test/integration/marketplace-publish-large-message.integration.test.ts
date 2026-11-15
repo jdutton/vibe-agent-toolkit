@@ -23,7 +23,13 @@ import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { publishToGitBranch } from '../../src/commands/claude/marketplace/git-publish.js';
+import { bareRemoteAndPublishDir } from '../helpers/marketplace-publish-remote.js';
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 import { createTempDirTracker, fs } from '../system/test-common.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-3-');
 
 const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-mp-big-msg-');
 
@@ -43,13 +49,7 @@ describe('marketplace publish with an oversized commit message', () => {
   });
 
   it('commits and pushes a message larger than MAX_ARG_STRLEN', async () => {
-    const root = createTempDir();
-    const bareRemote = safePath.join(root, 'remote.git');
-    const publishDir = safePath.join(root, 'publish');
-
-    fs.mkdirSync(bareRemote, { recursive: true });
-    fs.mkdirSync(publishDir, { recursive: true });
-    runGitOrThrow(['init', '--bare', '--initial-branch=main', bareRemote], { cwd: root });
+    const { bareRemote, publishDir } = bareRemoteAndPublishDir(createTempDir());
 
     fs.writeFileSync(
       safePath.join(publishDir, 'marketplace.json'),
@@ -74,6 +74,7 @@ describe('marketplace publish with an oversized commit message', () => {
       publishDir,
       branch: 'claude-marketplace',
       remote: bareRemote,
+      remoteFromConfig: true,
       commitMessage,
       force: false,
       dryRun: false,

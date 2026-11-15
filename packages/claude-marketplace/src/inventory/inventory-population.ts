@@ -51,14 +51,20 @@
 
 import {
   ContributorRegistry,
+  crawlSourceFor,
+  DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
+  notAdmittedRealizations,
   populate,
   populationOracles,
-  type BlobPopulationReport,
+  storeMissOf,
+  type BlobRefusalRows,
+  type ParseRefusedResource,
   type CollectionConfig,
   type JsonValue,
   type PopulationCache,
   type Projection,
+  type StoreMiss,
 } from '@vibe-agent-toolkit/resources';
 import { compareCodeUnits, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
@@ -169,6 +175,25 @@ export interface InventoryPopulation {
    * @returns Absolute paths of the skill's linked files, or `undefined`
    */
   membersOf(skillMdPath: string): readonly string[] | undefined;
+  /**
+   * The files among `paths` whose parse this run refused (over a limit, or its
+   * worker died), under the code the walk's registry reports them with. Their
+   * rows are members all the same — they were enumerated and linked — so a lane
+   * answering from {@link membersOf} alone listed a never-parsed file as an
+   * ordinary linked asset and said nothing.
+   *
+   * @param paths - Absolute paths: a skill's SKILL.md and its members
+   * @returns One entry per refused file, absolute, in the order of `paths`
+   */
+  parseRefusedAmong(paths: readonly string[]): ReadonlyArray<ParseRefusedResource>;
+  /**
+   * The stored rows that say what this population declined to derive or
+   * mis-decoded, for a caller to hand `describeBlobRefusals` — the same rows on
+   * a store hit as the derive that wrote them.
+   */
+  readonly refusalRows: BlobRefusalRows;
+  /** The store miss a refusal caused this run, for `describeStoreMiss` — see `StoreMiss`. */
+  readonly storeMiss: StoreMiss | undefined;
 }
 
 /**
@@ -224,15 +249,8 @@ function relativeToRoot(root: string, absolute: string): string {
  *   rather than a hard-coded walk is load-bearing here: two runs over one tree
  *   under different declarations are two questions, and the store refuses to
  *   answer one with the other
- * @param options.onBlobPopulation - Receives what the blob stage derived and what
- *   it REFUSED to derive. **Required, and passed through unchanged**: this is the
- *   only production lane that runs the stage, and while `populate()`'s observer
- *   was optional this function passed none — so every `blobsNotText`,
- *   `blobsUnreadable` and `referencesSkippedForMissingLine` the stage computed
- *   was discarded here, and a plugin whose every document was declined as binary
- *   inventoried as empty with exit 0. A caller with nothing to do with the counts
- *   names `DISCARD_BLOB_POPULATION`; it does not leave the argument off
- * @returns The indexed population
+ * @returns The indexed population, carrying its refusal rows (see
+ *   {@link InventoryPopulation.refusalRows}) for the caller to report
  */
 export async function buildInventoryPopulation(options: {
   root: string;
@@ -240,13 +258,13 @@ export async function buildInventoryPopulation(options: {
   gitTracker?: GitTracker | undefined;
   cache?: PopulationCache | undefined;
   collections?: Readonly<Record<string, CollectionConfig>> | undefined;
-  onBlobPopulation: (report: BlobPopulationReport) => void;
 }): Promise<InventoryPopulation> {
   const root = safePath.resolve(options.root);
   const hasGitTracker = options.gitTracker !== undefined;
 
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor());
+  // The resources lanes' demand: this lane runs the blob stage over what it keys.
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
 
   const parameters: Record<string, JsonValue> = {};
   // The skill's own root-relative path is the discriminator. It is unique within
@@ -263,15 +281,14 @@ export async function buildInventoryPopulation(options: {
     ) as unknown as JsonValue;
   }
 
-  const projection = await populate({
+  const { projection, outcome } = await populate({
     root,
     registry,
     parameters,
-    onBlobPopulation: options.onBlobPopulation,
     ...populationOracles(options),
   });
 
-  return indexPopulation(root, options.skillMdPaths, projection);
+  return indexPopulation(root, options.skillMdPaths, projection, storeMissOf(outcome));
 }
 
 /**
@@ -280,12 +297,14 @@ export async function buildInventoryPopulation(options: {
  * @param root - The absolute projection root
  * @param skillMdPaths - The same skill list the population was built from
  * @param projection - The populated projection
+ * @param storeMiss - The store miss a refusal caused the run, if one did
  * @returns The population's read surface
  */
 function indexPopulation(
   root: string,
   skillMdPaths: readonly string[],
   projection: Projection,
+  storeMiss: StoreMiss | undefined,
 ): InventoryPopulation {
   const extentIdByRelative = new Map<string, string>();
   for (const row of projection.zoneProvenance) {
@@ -319,9 +338,19 @@ function indexPopulation(
     );
   }
 
+  const refusedByAbsolute = new Map<string, ParseRefusedResource>();
+  // Parse refusals only, as the registry lane reports (`getParseRefusedResources()`).
+  for (const refusal of notAdmittedRealizations(projection, root).parseRefused) {
+    refusedByAbsolute.set(refusal.filePath, refusal);
+  }
+
   return {
     root,
     membersOf: (skillMdPath: string) => byAbsoluteSkill.get(safePath.resolve(skillMdPath)),
+    parseRefusedAmong: (paths: readonly string[]) =>
+      paths.flatMap((path) => refusedByAbsolute.get(safePath.resolve(path)) ?? []),
+    refusalRows: projection,
+    storeMiss,
   };
 }
 

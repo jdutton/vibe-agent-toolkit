@@ -13,8 +13,10 @@ import type { ParseResult } from '../link-parser.js';
 import type { OffsetRange } from '../reference-lexer.js';
 import type { ContentMeasures } from '../schemas/parse-facts.js';
 import type { BlobConditionRow, BlobRow } from '../schemas/projection-blobs.js';
+import type { HarnessBlobFactsRow, HarnessBlobImportRow } from '../schemas/projection-harness.js';
 
 import { flattenHeadings } from './blob-sections.js';
+import type { HarnessContentFacts, HarnessId } from './harness/profile.js';
 
 // `ContentMeasures` is defined by `ContentMeasuresSchema`
 // (`schemas/parse-facts.ts`), not here: the parse cache persists these three
@@ -160,7 +162,7 @@ export function blobRowFor(
     // schema is the enforcement point for that, not this assembler: narrowing
     // here would have to either drop or invent values.
     frontmatter: (parsed.frontmatter ?? null) as BlobRow['frontmatter'],
-    frontmatterError: parsed.frontmatterError ?? null,
+    frontmatterError: frontmatterErrorFor(parsed),
     wordCount: measures?.wordCount ?? 0,
     proseCodeUnits: measures?.proseCodeUnits ?? 0,
     codeBlockCodeUnits: measures?.codeBlockCodeUnits ?? 0,
@@ -171,47 +173,128 @@ export function blobRowFor(
 }
 
 /**
- * Build the `blob_conditions` rows for one parse.
+ * What `blobs.frontmatterError` says about one parse — *why the frontmatter did
+ * not parse to an object*, which is two questions and not one.
+ *
+ * The YAML parser's own failure is the first and is passed through verbatim.
+ * The second is the silent one: a block that is valid YAML and decodes to a
+ * **sequence, a scalar or a typed value** such as `!!set` (`---\n- a\n- b\n---`). `parseFrontmatterSource`
+ * reports no `frontmatter` and no `frontmatterError` for such a value by design
+ * (its acceptance rules are behaviour-preserving for every lane that reads
+ * `frontmatter`), only `frontmatterNotAMapping`; before that flag the row that came out was byte-identical to one for a
+ * file with no frontmatter at all. A `.claude/rules/` file in that state reads
+ * as declaring no `paths:`, so it is counted as an unconditional rule and no
+ * check can tell it from one.
+ *
+ * ⚠️ Decided from `frontmatterNotAMapping`, set by the one decode in the parse
+ * worker and stored with the facts, so a cache HIT carries it and warm and
+ * cold cannot disagree here. Nothing on this thread decodes YAML.
+ *
+ * 🪤 **A block that decodes to YAML `null` declares nothing — it is not a
+ * non-mapping value.** A comment-only block, `~` and `null` all decode to `null`,
+ * so "no object and no error" cannot tell a placeholder from a `- a` list. Only
+ * the decoded value can, and only the decode sets the flag; the OKF judges read
+ * the same one. The KIND of a real non-mapping value is still not named: the
+ * author is sent to the block either way.
+ *
+ * @param parsed - The parse this row describes
+ * @returns The reason, or null when the frontmatter parsed (including "no block")
+ */
+function frontmatterErrorFor(parsed: ParseResult): string | null {
+  if (parsed.frontmatterError !== undefined) return parsed.frontmatterError;
+  if (parsed.frontmatter !== undefined) return null;
+  // Absent, blank, or declaring nothing (`~`, comment-only): not a value that
+  // was ignored, and not a defect.
+  return parsed.frontmatterNotAMapping === true ? NOT_A_MAPPING : null;
+}
+
+/**
+ * What a frontmatter block that is valid YAML but not a mapping says.
+ *
+ * Content, never a path: it is stored on a content-addressed row and repeated by
+ * every finding that reads the column.
+ */
+const NOT_A_MAPPING =
+  'the frontmatter block is valid YAML but not a YAML mapping — it decodes to a sequence, a'
+  + ' scalar or a typed value (!!set, !!omap, !!timestamp, !!binary), so it declares no keys at all';
+
+/** One finding a parse carries, before it is keyed to a blob. */
+interface ConditionFinding {
+  readonly message: string;
+  readonly line: number | null;
+}
+
+/**
+ * The `blob_conditions` codes of the FINDING kind, each with the diagnostics of
+ * a parse it reads: something said about a blob that WAS derived. The other
+ * kind, a blob declined, is `BLOB_REFUSAL_CONDITION_CODES`; together they are
+ * every code a row carries. {@link blobConditionsFor} emits only through this
+ * table, so its keys are the complete list by construction.
  *
  * Both sources are optional on `ParseResult` — HTML leaves
  * `unresolvedReferences` undefined, markdown leaves `parseErrors` undefined —
- * and absent collapses to empty here deliberately: at the condition layer
- * "nothing to say" and "nothing found" are the same row set.
+ * and absent collapses to empty deliberately: at the condition layer "nothing
+ * to say" and "nothing found" are the same row set.
+ */
+const FINDING_CONDITIONS: Readonly<Record<string, (parsed: ParseResult) => readonly ConditionFinding[]>> = {
+  // A parser's own diagnostic over HTML it read: already a parse5 error code, e.g.
+  // `missing-end-tag`, not prose. `HtmlParseError.line` is optional; the column is `number | null`.
+  HTML_PARSE_ERROR: (parsed) => (parsed.parseErrors ?? []).map((error) => ({ message: error.message, line: error.line ?? null })),
+  // A reference-style link whose label no definition in the document resolves: the label as authored.
+  UNRESOLVED_REFERENCE: (parsed) => (parsed.unresolvedReferences ?? []).map((reference) => ({ message: reference.label, line: reference.line })),
+};
+
+/** The `blob_conditions` codes of the FINDING kind: the keys of the one table {@link blobConditionsFor} emits through. */
+export const BLOB_FINDING_CONDITION_CODES: readonly string[] = Object.keys(FINDING_CONDITIONS);
+
+/**
+ * Build the `blob_conditions` rows for one parse.
  *
  * `code` is an open vocabulary (resource-projection.md §2), so classifying a
- * new diagnostic adds rows, never columns.
+ * new diagnostic adds a row to the table above, never a column.
  *
  * @param contentKey - The blob's key, written into every row's `blob` column
  * @param parsed - The parse whose diagnostics become rows
  * @returns Zero or more condition rows, HTML parse errors first
  */
 export function blobConditionsFor(contentKey: string, parsed: ParseResult): BlobConditionRow[] {
-  const rows: BlobConditionRow[] = [];
+  return Object.entries(FINDING_CONDITIONS).flatMap(([code, findingsOf]) =>
+    findingsOf(parsed).map(({ message, line }) => ({ blob: contentKey, code, severity: 'warning' as const, message, line })),
+  );
+}
 
-  for (const error of parsed.parseErrors ?? []) {
-    rows.push({
+/**
+ * Build one blob's rows in the two harness tables — what `harness` injects for
+ * it and the imports it follows out of it, in the order it follows them.
+ *
+ * @param contentKey - The blob's key, written into every row's `blob` column
+ * @param harness - The harness these facts are the reading of
+ * @param facts - That harness's `factsOf` over the blob's decoded text
+ * @returns The `harness_blob_facts` row and one `harness_blob_imports` row per
+ *   distinct import target
+ */
+export function harnessRowsFor(
+  contentKey: string,
+  harness: HarnessId,
+  facts: HarnessContentFacts,
+): { facts: HarnessBlobFactsRow; imports: HarnessBlobImportRow[] } {
+  return {
+    facts: {
       blob: contentKey,
-      code: 'HTML_PARSE_ERROR',
-      severity: 'warning',
-      // Already a parse5 error code, e.g. "missing-end-tag" — not prose.
-      message: error.message,
-      // `HtmlParseError.line` is optional; the row's column is `number | null`.
-      line: error.line ?? null,
-    });
-  }
-
-  for (const reference of parsed.unresolvedReferences ?? []) {
-    rows.push({
+      harness,
+      injectedBytes: facts.injectedBytes,
+      injectedTokens: facts.injectedTokens,
+      paths: facts.paths === null ? null : [...facts.paths],
+    },
+    imports: facts.imports.map((entry, ordinal) => ({
       blob: contentKey,
-      code: 'UNRESOLVED_REFERENCE',
-      severity: 'warning',
-      // The label as authored — the code already carries the meaning.
-      message: reference.label,
-      line: reference.line,
-    });
-  }
-
-  return rows;
+      harness,
+      ordinal,
+      rawRef: entry.rawRef,
+      target: entry.target,
+      line: entry.line,
+    })),
+  };
 }
 
 /**

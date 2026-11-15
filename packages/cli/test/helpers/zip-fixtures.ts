@@ -1,5 +1,6 @@
 /**
- * REAL ZIP archives for tests, written with the same library the code reads.
+ * REAL ZIP archives for the CLI's tests, written through the one fixture writer
+ * (`zipFixture` in `@vibe-agent-toolkit/utils/testing`).
  *
  * 🚨 Shared because the alternative was two copies, and the two copies were the
  * defect: every ZIP fixture in `org-skill-upload-payload.test.ts` used to be a
@@ -12,8 +13,10 @@
  * line here and it should stay one line, in one place.
  */
 
+import { writeFileSync } from 'node:fs';
+
 import { safePath } from '@vibe-agent-toolkit/utils';
-import AdmZip from 'adm-zip';
+import { zipFixture } from '@vibe-agent-toolkit/utils/testing';
 
 /** One archive member: its entry name (ZIP fixes `/` as the separator) and its bytes. */
 export type ZipFixtureEntry = readonly [entryName: string, content: Buffer];
@@ -32,9 +35,7 @@ export function writeZipFixture(
   entries: readonly ZipFixtureEntry[],
 ): string {
   const zipPath = safePath.join(dir, fileName);
-  const zip = new AdmZip();
-  for (const [entryName, content] of entries) zip.addFile(entryName, content);
-  zip.writeZip(zipPath);
+  writeFileSync(zipPath, zipFixture(entries.map(([name, data]) => ({ name, data }))));
   return zipPath;
 }
 

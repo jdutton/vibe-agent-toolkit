@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import { isPathAbsentError, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { computeContentKey, type KeyedContent, type ParserKind } from '../src/content-key.js';
 import { parseHtmlContent } from '../src/html-link-parser.js';
@@ -15,12 +15,12 @@ import {
   defaultParseCache,
   dehydrate,
   parseCacheDirectory,
-  parseKeyed,
   rehydrate,
   vatCacheNamespace,
   vatCacheNamespaceRoot,
   vatCacheRoot,
 } from '../src/parse-cache.js';
+import { parseContentCached } from '../src/parse-dispatcher.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures — external constants, never derived from the code under test.
@@ -57,25 +57,27 @@ See [the other doc](./other.md), [ref][label] and [dangling][nope].
 [label]: ./target.md
 `;
 
+/** Frontmatter that refers back into itself: unbounded depth, so never filed. */
+const CYCLIC_FRONTMATTER_DOC = '---\ncyc: &anchor\n  self: *anchor\n---\n\n# Cyclic\n';
+
 /**
  * Frontmatter JSON **cannot** carry. Every value here survives `yaml.parse`
  * but is destroyed (or fatal) under `JSON.stringify`:
  *
  * - `.inf` / `.nan` → `Infinity` / `NaN`, both of which JSON writes as `null`
  * - `!!binary`      → a `Buffer`, which JSON writes as `{type,data}`
- * - a cyclic anchor → `JSON.stringify` **throws**
  *
- * The last one is the sharp edge: a cache that stored the parsed object would
- * not merely corrupt this document, it would silently never cache it. The
- * "fixture can distinguish" test below pins that this is really true of this
- * exact string rather than merely believed.
+ * A cache that stored the parsed object as JSON would hand a warm run different
+ * values from a cold one. The "fixture can distinguish" test below pins that
+ * this is really true of this exact string rather than merely believed. (A
+ * cyclic anchor, which `JSON.stringify` cannot write at all, is no longer here:
+ * it nests without end, so `outputDepth` refuses it and nothing is ever filed —
+ * {@link CYCLIC_FRONTMATTER_DOC}.)
  */
 const EXOTIC_FRONTMATTER_DOC = `---
 inf: .inf
 nan: .nan
 bin: !!binary "R0lGODlh"
-cyc: &anchor
-  self: *anchor
 ---
 
 # Exotic
@@ -115,7 +117,7 @@ const LOSSY_BYTES = new Uint8Array([0x23, 0x20, 0x54, 0xc3, 0xa9, 0x0a, 0xff, 0x
 /**
  * One document the two parsers read differently.
  *
- * `parseKeyed` picks its parser off `keyed.parserKind`, and a dispatch test is
+ * The dispatcher picks its parser off `keyed.parserKind`, and a dispatch test is
  * worthless unless the two branches can produce different answers on the same
  * bytes. The markdown parser reads `[text](href)` and treats the raw `<a>` as
  * opaque HTML; parse5 reads the `<a href>` and treats the bracket syntax as
@@ -190,7 +192,7 @@ function extractFrontmatter(doc: string): string {
 }
 
 interface ParseCacheTestSuite {
-  /** The per-test temp directory (a fresh `mkdtemp` for every test). */
+  /** The temp directory: a fresh `mkdtemp` for every test, or one per describe emptied before each test. */
   readonly dir: () => string;
   /** A cache rooted at the temp dir, with an EMPTY env (so no ambient toggle). */
   readonly makeCache: (options?: ParseCacheOptions) => ParseCache;
@@ -200,19 +202,35 @@ interface ParseCacheTestSuite {
   readonly roundTrip: (keyed: KeyedContent) => Promise<ParseResult | null>;
 }
 
-function setupParseCacheTestSuite(): ParseCacheTestSuite {
+/**
+ * @param scope - `test`: a fresh directory per test. `describe`: one directory for the
+ *   describe, emptied before each test — so every test's one-shot pool has the same
+ *   `cacheDir`, and adopts the thread the last one parked instead of starting its own
+ *   (a parse thread serves only the cache directory it was started for).
+ */
+function setupParseCacheTestSuite(scope: 'test' | 'describe' = 'test'): ParseCacheTestSuite {
   let tempDir = '';
-
-  beforeEach(async () => {
+  const makeDir = async (): Promise<void> => {
     tempDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'vat-parse-cache-'));
-  });
-
-  afterEach(async () => {
+  };
+  const removeDir = async (): Promise<void> => {
     // Restore write permission first: a test that dropped it would otherwise
     // leave a directory `rm` cannot descend into.
     await fs.chmod(tempDir, MODE_RW_OWNER).catch(() => undefined);
     await removeScratchDir(tempDir);
-  });
+  };
+
+  if (scope === 'test') {
+    beforeEach(makeDir);
+    afterEach(removeDir);
+  } else {
+    beforeAll(makeDir);
+    beforeEach(async () => {
+      const entries = await fs.readdir(tempDir);
+      await Promise.all(entries.map((entry) => fs.rm(safePath.join(tempDir, entry), { recursive: true, force: true })));
+    });
+    afterAll(removeDir);
+  }
 
   const makeCache = (options: ParseCacheOptions = {}): ParseCache =>
     new ParseCache({ cacheDir: tempDir, env: {}, ...options });
@@ -385,9 +403,13 @@ describe('fixture distinguishability', () => {
     expect(frontmatter['inf']).toBe(Number.POSITIVE_INFINITY);
     expect(Number.isNaN(frontmatter['nan'])).toBe(true);
     expect(Buffer.isBuffer(frontmatter['bin'])).toBe(true);
-    // The whole object is unserializable — which makes "cache the source, not
-    // the object" a correctness requirement rather than a preference.
-    expect(() => JSON.stringify(frontmatter)).toThrow();
+    // A JSON round trip of the object loses every one of them — which makes
+    // "cache the source, not the object" a correctness requirement rather than
+    // a preference.
+    const written = JSON.stringify(frontmatter);
+    expect(written).toContain('"inf":null');
+    expect(written).toContain('"nan":null');
+    expect(written).toContain('"bin":{"type":"Buffer"');
   });
 
   it('DUAL_PARSER_DOC really makes the two parsers disagree', () => {
@@ -774,6 +796,90 @@ describe('ParseCache fail-soft writes', () => {
       expect(await cache.get(keyed)).toBeNull();
     },
   );
+
+  it.skipIf(isWindows)(
+    'asks the shard-safety question ONCE per directory, not once per entry',
+    async () => {
+      // The observable face of the memo in `prepareShard`: the safety `stat`
+      // and the `mkdir` are per-DIRECTORY questions that a cold run was asking
+      // per-ENTRY — measured at 1,640 ms of `cache-write` for 2,157 entries on
+      // a 12.6k-file adopter, two of its four syscalls apiece.
+      //
+      // One entry written twice, so the two writes share a shard by
+      // construction: the shard is the key's last two characters and the key is
+      // a hash of the content, so two DIFFERENT documents would collide only by
+      // luck and the case would silently stop testing anything.
+      const cacheDir = safePath.join(suite.dir(), 'cache');
+      const cache = suite.makeCache({ cacheDir });
+      const keyed = keyedFromText(SIMPLE_DOC);
+      const shardDir = safePath.join(cacheDir, keyed.key.slice(-SHARD_LENGTH));
+
+      expect(await cache.set(keyed, freshParse(keyed))).toBe(true);
+
+      // Another local user opens the shard wide AFTER this run prepared it. The
+      // documented trade: the answer is the run's, so the second write is not
+      // re-asked and succeeds. Re-`stat`ing per entry is what this refuses.
+      await fs.chmod(shardDir, MODE_WORLD_WRITABLE);
+
+      expect(await cache.set(keyed, freshParse(keyed))).toBe(true);
+      expect(cache.stats.writeFailures).toBe(0);
+
+      // The positive control on the paragraph above: a cache that has NOT
+      // prepared this shard still refuses it, so the pass is the memo rather
+      // than the safety check having stopped working.
+      const fresh = suite.makeCache({ cacheDir });
+      expect(await fresh.set(keyed, freshParse(keyed))).toBe(false);
+      expect(fresh.stats.writeFailures).toBe(1);
+    },
+  );
+
+  it.skipIf(isWindows)('memoizes an ownership-unsafe shard as refused for the run', async () => {
+    // The other half of the memo's contract: an unsafe shard is unsafe for the
+    // run, so making it safe mid-run is not re-asked. Pins that the eviction
+    // below is scoped to an errno, not to every `false`.
+    const cacheDir = safePath.join(suite.dir(), 'cache');
+    const cache = suite.makeCache({ cacheDir });
+    const keyed = keyedFromText(SIMPLE_DOC);
+    const shardDir = safePath.join(cacheDir, keyed.key.slice(-SHARD_LENGTH));
+    await fs.mkdir(shardDir, { recursive: true, mode: MODE_WORLD_WRITABLE });
+    await fs.chmod(shardDir, MODE_WORLD_WRITABLE);
+
+    expect(await cache.set(keyed, freshParse(keyed))).toBe(false);
+
+    await fs.chmod(shardDir, MODE_RW_OWNER);
+
+    expect(await cache.set(keyed, freshParse(keyed))).toBe(false);
+    expect(cache.stats.writeFailures).toBe(2);
+
+    // Positive control: the shard IS safe now, to a cache that never judged it.
+    expect(await suite.makeCache({ cacheDir }).set(keyed, freshParse(keyed))).toBe(true);
+  });
+
+  it.each([
+    { syscall: 'mkdir', code: 'EMFILE' },
+    { syscall: 'mkdir', code: 'EAGAIN' },
+    { syscall: 'lstat', code: 'EBUSY' },
+  ] as const)(
+    'retries a shard whose $syscall failed with a transient $code, instead of refusing it for the run',
+    async ({ syscall, code }) => {
+      // 🪤 A descriptor shortage mid-run is not a verdict about the directory.
+      // Memoizing it as `false` turned one EMFILE into every later entry in that
+      // shard going uncached for the whole run. (`lstat` runs only on POSIX.)
+      if (syscall === 'lstat' && isWindows) return;
+      const cache = suite.makeCache({ cacheDir: safePath.join(suite.dir(), 'cache') });
+      const keyed = keyedFromText(SIMPLE_DOC);
+      const refusal = Object.assign(new Error(`${code}: transient`), { code });
+      const spy = vi.spyOn(fs, syscall).mockRejectedValueOnce(refusal);
+      try {
+        expect(await cache.set(keyed, freshParse(keyed))).toBe(false);
+        expect(await cache.set(keyed, freshParse(keyed))).toBe(true);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(cache.stats.writeFailures).toBe(1);
+      expect(await cache.get(keyed)).not.toBeNull();
+    },
+  );
 });
 
 describe('ParseCache enable toggle', () => {
@@ -867,10 +973,11 @@ describe('ParseCache maintenance', () => {
     // An operator who asked for the space back is told why they did not get
     // it. Injected rather than chmod'ed: a refusal on `rm -r` needs a mode on
     // the PARENT, which is the shared tmpdir.
+    // Refused twice: the removal retries once the owner's modes are granted.
     const refusal = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
-    const rm = vi.spyOn(fs, 'rm').mockRejectedValueOnce(refusal);
+    const rm = vi.spyOn(fs, 'rm').mockRejectedValueOnce(refusal).mockRejectedValueOnce(refusal);
     try {
-      await expect(suite.makeCache().clear()).rejects.toBe(refusal);
+      await expect(suite.makeCache().clear()).rejects.toMatchObject({ code: 'FS_FAULT', side: 'destination', errno: 'EACCES' });
     } finally {
       rm.mockRestore();
     }
@@ -967,14 +1074,30 @@ describe('ParseCache stats', () => {
   });
 });
 
-describe('parseKeyed', () => {
-  const suite = setupParseCacheTestSuite();
+/** One bounded parse of `keyed` through `cache` — the dispatcher's cache front. */
+function parseKeyedThrough(keyed: KeyedContent, cache: ParseCache): Promise<ParseResult> {
+  if (keyed.parserKind === 'none') throw new Error('test fixture: no parser routes a `none` document');
+  return parseContentCached(keyed.content, keyed.parserKind, { dispatcher: undefined, cache });
+}
+
+describe('the dispatcher\'s cache front (parseContentCached)', () => {
+  const suite = setupParseCacheTestSuite('describe');
+  // These tests are about the wire transport, the shipped default: pinned so a
+  // developer's `VAT_PARSE_TRANSPORT=cache` cannot move them onto the other
+  // path. Pinned once for the describe, not per test, so every one-shot pool
+  // keys on the same environment and adopts the thread the last one parked.
+  beforeAll(() => {
+    vi.stubEnv('VAT_PARSE_TRANSPORT', 'wire');
+  });
+  afterAll(() => {
+    vi.unstubAllEnvs();
+  });
 
   it('parses on a cold cache and records the miss', async () => {
     const keyed = keyedFromText(SIMPLE_DOC);
     const cache = suite.makeCache();
 
-    const result = await parseKeyed(keyed, cache);
+    const result = await parseKeyedThrough(keyed, cache);
 
     expect(result).toStrictEqual(freshParse(keyed));
     expect(cache.stats).toStrictEqual({ hits: 0, misses: 1, writeFailures: 0 });
@@ -984,8 +1107,8 @@ describe('parseKeyed', () => {
     const keyed = keyedFromText(SIMPLE_DOC);
     const cache = suite.makeCache();
 
-    const cold = await parseKeyed(keyed, cache);
-    const warm = await parseKeyed(keyed, cache);
+    const cold = await parseKeyedThrough(keyed, cache);
+    const warm = await parseKeyedThrough(keyed, cache);
 
     expect(warm).toStrictEqual(cold);
     // Without this line the assertion above holds under an always-miss cache.
@@ -996,8 +1119,8 @@ describe('parseKeyed', () => {
     const keyed = keyedFromText(EXOTIC_FRONTMATTER_DOC);
     const cache = suite.makeCache();
 
-    const cold = await parseKeyed(keyed, cache);
-    const warm = await parseKeyed(keyed, cache);
+    const cold = await parseKeyedThrough(keyed, cache);
+    const warm = await parseKeyedThrough(keyed, cache);
 
     expect(cache.stats).toStrictEqual({ hits: 1, misses: 1, writeFailures: 0 });
     expect(warm.frontmatter?.['inf']).toBe(Number.POSITIVE_INFINITY);
@@ -1006,13 +1129,25 @@ describe('parseKeyed', () => {
     expect(warm.links).toStrictEqual(cold.links);
   });
 
+  it('never files frontmatter that refers back into itself: it nests without end', async () => {
+    const keyed = keyedFromText(CYCLIC_FRONTMATTER_DOC);
+    const cache = suite.makeCache();
+
+    // The worker refuses it for this run (ADR I6: a per-run outcome is never
+    // stored), so the second call misses and is refused again.
+    await expect(parseKeyedThrough(keyed, cache)).rejects.toMatchObject({ code: 'PARSE_LIMIT_EXCEEDED' });
+    await expect(parseKeyedThrough(keyed, cache)).rejects.toMatchObject({ code: 'PARSE_LIMIT_EXCEEDED' });
+
+    expect(cache.stats).toStrictEqual({ hits: 0, misses: 2, writeFailures: 0 });
+  });
+
   it('chooses the parser from keyed.parserKind, on identical bytes', async () => {
     const asMarkdown = keyedFromText(DUAL_PARSER_DOC, 'markdown');
     const asHtml = keyedFromText(DUAL_PARSER_DOC, 'html');
     const cache = suite.makeCache();
 
-    const markdownResult = await parseKeyed(asMarkdown, cache);
-    const htmlResult = await parseKeyed(asHtml, cache);
+    const markdownResult = await parseKeyedThrough(asMarkdown, cache);
+    const htmlResult = await parseKeyedThrough(asHtml, cache);
 
     expect(markdownResult).toStrictEqual(
       parseMarkdownContent(asMarkdown.content, asMarkdown.byteLength),
@@ -1027,11 +1162,11 @@ describe('parseKeyed', () => {
     const asMarkdown = keyedFromText(DUAL_PARSER_DOC, 'markdown');
     const asHtml = keyedFromText(DUAL_PARSER_DOC, 'html');
     const cache = suite.makeCache();
-    await parseKeyed(asMarkdown, cache);
-    await parseKeyed(asHtml, cache);
+    await parseKeyedThrough(asMarkdown, cache);
+    await parseKeyedThrough(asHtml, cache);
 
-    const warmMarkdown = await parseKeyed(asMarkdown, cache);
-    const warmHtml = await parseKeyed(asHtml, cache);
+    const warmMarkdown = await parseKeyedThrough(asMarkdown, cache);
+    const warmHtml = await parseKeyedThrough(asHtml, cache);
 
     expect(cache.stats).toStrictEqual({ hits: 2, misses: 2, writeFailures: 0 });
     expect(hrefsOf(warmMarkdown)).toContain(MARKDOWN_ONLY_HREF);
@@ -1042,15 +1177,15 @@ describe('parseKeyed', () => {
   it('never lets one hit alias the next (skill-packager mutates links in place)', async () => {
     const keyed = keyedFromText(SIMPLE_DOC);
     const cache = suite.makeCache();
-    await parseKeyed(keyed, cache);
+    await parseKeyedThrough(keyed, cache);
 
-    const firstHit = await parseKeyed(keyed, cache);
+    const firstHit = await parseKeyedThrough(keyed, cache);
     const [firstLink] = firstHit.links;
     // Throw rather than skip: a fixture with no links would make this test pass
     // vacuously, which is the failure mode it exists to rule out.
     if (firstLink === undefined) throw new Error('SIMPLE_DOC produced no links to mutate');
     firstLink.resolvedId = 'mutated-downstream';
-    const secondHit = await parseKeyed(keyed, cache);
+    const secondHit = await parseKeyedThrough(keyed, cache);
 
     // Both reads really were hits — a miss would re-parse and hide the aliasing.
     expect(cache.stats).toStrictEqual({ hits: 2, misses: 1, writeFailures: 0 });
@@ -1063,8 +1198,8 @@ describe('parseKeyed', () => {
     const keyed = keyedFromText(SIMPLE_DOC);
     const cache = suite.makeCache({ enabled: false });
 
-    const first = await parseKeyed(keyed, cache);
-    const second = await parseKeyed(keyed, cache);
+    const first = await parseKeyedThrough(keyed, cache);
+    const second = await parseKeyedThrough(keyed, cache);
 
     expect(second).toStrictEqual(first);
     expect(second).not.toBe(first);

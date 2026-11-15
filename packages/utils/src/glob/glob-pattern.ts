@@ -12,7 +12,7 @@
  * magic detection if `escaped` is true.
  */
 
-import { toForwardSlash } from '../path-core.js';
+import { toForwardSlashAnyPlatform } from '../path-core.js';
 
 /** The glob metacharacters recognised by this module. */
 const MAGIC_CHARS = new Set(['*', '?', '[']);
@@ -74,9 +74,9 @@ export function isGlob(source: string): boolean {
  * staticGlobBase('foo/bar.txt')            // 'foo/bar.txt'
  */
 export function staticGlobBase(pattern: string): string {
-  // Glob patterns are always forward-slash; toForwardSlash() satisfies the
-  // no-hardcoded-path-split lint rule while being a no-op in practice.
-  const normalized = toForwardSlash(pattern);
+  // A glob is author-written text: a Windows-spelled separator reads as `/` on
+  // every host, whatever platform VAT runs on.
+  const normalized = toForwardSlashAnyPlatform(pattern);
   const segments = normalized.split('/');
   const staticSegments: string[] = [];
 
@@ -121,7 +121,7 @@ export function staticGlobBase(pattern: string): string {
  * globMagicRemainder('../mycli/dist/*.mjs')   // '*.mjs'
  */
 export function globMagicRemainder(pattern: string): string {
-  const forward = toForwardSlash(pattern);
+  const forward = toForwardSlashAnyPlatform(pattern);
   const base = staticGlobBase(pattern);
   if (base === DOT) {
     // First segment was magic — the remainder is the full (forward-slash) pattern.

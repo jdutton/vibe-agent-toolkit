@@ -218,7 +218,7 @@ describe('blob-fact statements', () => {
 });
 
 describe('the registry drives everything', () => {
-  // The SETS, not their sizes: a count still reads twelve when one table is
+  // The SETS, not their sizes: a count still reads thirteen when one table is
   // dropped and another added, which is the change this exists to notice.
   const EXTENT_SCOPED = [
     'roots',
@@ -227,10 +227,11 @@ describe('the registry drives everything', () => {
     'resourceExtents',
     'resourceTags',
     'realizationConditions',
+    'claudeRulePatterns',
     'resolutionContexts',
     'zoneProvenance',
   ];
-  const BLOB_SCOPED = ['blobs', 'blobReferences', 'blobSections', 'blobConditions'];
+  const BLOB_SCOPED = ['blobs', 'blobReferences', 'blobSections', 'blobConditions', 'harnessBlobFacts', 'harnessBlobImports'];
 
   it('covers every projection table, in registry order', () => {
     expect(allSpecs().map((spec) => spec.key)).toEqual([...EXTENT_SCOPED, ...BLOB_SCOPED]);

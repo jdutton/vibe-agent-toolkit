@@ -12,7 +12,7 @@
 import {
 	AGENT_INSTRUCTION_FILE_PATTERNS,
 	NAVIGATION_FILE_PATTERNS,
-} from '@vibe-agent-toolkit/agent-skills';
+ LINK_GRAPH_MEMBER_GLOBS } from '@vibe-agent-toolkit/agent-skills';
 import type { ExtentRefusalRule } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
@@ -62,6 +62,12 @@ describe('inventoryExtentDeclaration', () => {
 			closureFrom: SKILL_REL,
 			// `maxDepth: Infinity` at the call site — the declaration's spelling of it.
 			maxDepth: INVENTORY_MAX_DEPTH,
+			// `walkLinkGraph`'s `isRoutable`, which is not a walk OPTION but is part
+			// of the walk this declaration must reproduce. Inert-looking at 'full' —
+			// the depth half of the leaf rule cannot fire there — but the traversal
+			// half does: without it the closure would walk through an HTML page the
+			// walker treats as cargo.
+			traverseGlobs: [...LINK_GRAPH_MEMBER_GLOBS],
 			follow: ['markdown-link', 'markdown-link-reference', 'markdown-definition'],
 			// The schema default, materialized by `parse`. This lane reads hrefs the
 			// way the walker does — RFC 3986 — and must NOT pick up Claude Code's

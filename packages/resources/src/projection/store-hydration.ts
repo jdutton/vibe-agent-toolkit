@@ -1,5 +1,5 @@
 /**
- * Turning what a {@link ProjectionStore} holds back into a {@link Projection} —
+ * Turning what a {@link FactStore} holds back into a {@link Projection} —
  * and, first, deciding whether it holds enough.
  *
  * `store.ts` states the storage contract; this module states the **reuse rule**,
@@ -31,7 +31,7 @@
  *
  * A hit does **not** hand back everything stored under the key. Another command
  * may have written its own closure extents there — that is the entire point of
- * {@link ProjectionStore.writeExtent} being additive — and a caller that
+ * {@link FactStore.writeExtent} being additive — and a caller that
  * enumerated them would see paths no contributor of its own realized.
  * `buildResourcePopulation` is precisely such a caller: it walks
  * `resourceRealizations` with no extent filter at all, so a superset hydration
@@ -39,7 +39,7 @@
  * same files.
  *
  * So {@link selectRequestedContexts} keeps only rows belonging to the contexts
- * the run's own contributors declared. The three tables with no
+ * the run's own contributors declared. The tables with no
  * {@link ProjectionTableSpec.contextColumn} cannot be partitioned that way and
  * are not stored per-context either, so they are recovered by **reachability**:
  *
@@ -48,6 +48,11 @@
  * | `roots` | it is this run's root, or a kept context names it |
  * | `resources` | a kept realization or membership names the identity |
  * | `resourceTags` | a kept realization or membership names the identity |
+ * | `claudeRulePatterns` | a kept realization or membership names the identity |
+ *
+ * The identity rows are reached through the registry rather than named here —
+ * see {@link identityTableKeys} — so a later context-less identity table is
+ * recovered rather than silently absent from every hydrated projection.
  *
  * That reconstruction is a claim, and the claim is falsifiable rather than
  * argued: `exportProjection` emits a byte-identical document from a projection,
@@ -68,7 +73,7 @@
  * reports success — the exact silent-emptiness failure `blob-population.ts`
  * exists to prevent, arriving through the cache instead.
  *
- * {@link blobFactsCover} is the guard, and it needs no new metadata: the
+ * {@link uncoveredContentKeys} is the guard, and it needs no new metadata: the
  * derivation stage accounts for **every** keyed content key, with a `blobs` row
  * when it parsed and a `blobConditions` row when it declined to (unreadable,
  * changed underneath, or binary). A key with neither is a key the store never
@@ -96,6 +101,9 @@ export interface RequestedContributor {
 /** A table bundle seen structurally, which is how every table is walked here. */
 type RowBundle = Record<string, readonly Record<string, unknown>[]>;
 
+/** The column an identity-keyed table names its identity in. */
+const IDENTITY_COLUMN = 'resourceId';
+
 /**
  * The contexts a stored extent already holds for this exact request, or
  * `undefined` when it does not hold all of them.
@@ -104,7 +112,7 @@ type RowBundle = Record<string, readonly Record<string, unknown>[]>;
  * answer: a run that registers no contributors at all asks for no contexts, and
  * a stored extent trivially satisfies it.
  *
- * @param extent - What {@link ProjectionStore.readExtent} returned
+ * @param extent - What {@link FactStore.readExtent} returned
  * @param requested - Every contributor this run registered, with its parameters
  * @returns The context ids the run's own contributors declared, or `undefined`
  *   when some registered contributor has no matching provenance row
@@ -139,7 +147,7 @@ export function selectRequestedContexts(
 /**
  * Narrow a stored extent to the contexts one run is owed.
  *
- * @param extent - What {@link ProjectionStore.readExtent} returned
+ * @param extent - What {@link FactStore.readExtent} returned
  * @param options - Which contexts, and whose root
  * @param options.contexts - Context ids from {@link selectRequestedContexts}
  * @param options.rootId - This run's corpus root id, which `populate()` records
@@ -161,10 +169,15 @@ export function selectRequestedRows(
     kept[spec.key] = (source[spec.key] ?? []).filter((row) => contexts.has(String(row[column])));
   }
 
-  // The three context-less tables, by reachability from what was kept above.
+  // The context-less IDENTITY tables, by reachability from what was kept above.
+  // Read off the registry rather than named one by one: a context-less table
+  // that nobody remembered to list here would hydrate as `undefined` — not as an
+  // empty table, which is a cache miss a reader can diagnose, but as a missing
+  // field that is a TypeError at whichever consumer touches it first.
   const identities = referencedIdentities(kept);
-  kept[PROJECTION_TABLES.resources.key] = rowsNaming(source, PROJECTION_TABLES.resources.key, 'resourceId', identities);
-  kept[PROJECTION_TABLES.resourceTags.key] = rowsNaming(source, PROJECTION_TABLES.resourceTags.key, 'resourceId', identities);
+  for (const key of identityTableKeys()) {
+    kept[key] = rowsNaming(source, key, IDENTITY_COLUMN, identities);
+  }
 
   const roots = new Set<string>([options.rootId]);
   for (const row of kept[PROJECTION_TABLES.resolutionContexts.key] ?? []) {
@@ -176,24 +189,26 @@ export function selectRequestedRows(
 }
 
 /**
- * Whether the stored blob tier accounts for every content key these
- * realizations name.
+ * The content keys these realizations name that the stored blob tier does not
+ * account for — none, when it covers them all.
  *
  * See this module's header: accounted for means a `blobs` row **or** a
  * `blobConditions` row, because the derivation stage records the latter instead
  * of the former whenever it declined to parse — and a binary file makes that the
  * common case rather than an exotic one.
  *
- * @param blobs - What {@link ProjectionStore.readBlobFacts} returned for
+ * @param blobs - What {@link FactStore.readBlobFacts} returned for
  *   {@link keyedContentKeys} of the same realizations
  * @param contentKeys - The keys those realizations name
- * @returns True when every key is accounted for
+ * @returns The keys accounted for by neither table, in `contentKeys` order —
+ *   empty when every key is covered. Returned rather than a yes/no so a miss
+ *   can be counted and named (ADR I10).
  */
-export function blobFactsCover(blobs: BlobScopedRows, contentKeys: readonly string[]): boolean {
+export function uncoveredContentKeys(blobs: BlobScopedRows, contentKeys: readonly string[]): string[] {
   const held = new Set<string>();
   for (const row of blobs.blobs) held.add(row.contentKey);
   for (const row of blobs.blobConditions) held.add(row.blob);
-  return contentKeys.every((key) => held.has(key));
+  return contentKeys.filter((key) => !held.has(key));
 }
 
 /**
@@ -216,11 +231,11 @@ export function keyedContentKeys(extent: ExtentScopedRows): readonly string[] {
 }
 
 /**
- * Assemble the twelve tables into a projection.
+ * Assemble every table of {@link PROJECTION_TABLES} into a projection.
  *
  * The two halves are disjoint and exhaustive over {@link Projection} by
  * construction — that is what {@link ProjectionTableScope} partitions — so this
- * is a spread rather than a merge, and a thirteenth table joins whichever half
+ * is a spread rather than a merge, and a new table joins whichever half
  * its scope declares without touching this line.
  *
  * Frozen for the same reason {@link ProjectionBuilder.build} freezes: a
@@ -241,9 +256,9 @@ export function assembleProjection(extent: ExtentScopedRows, blobs: BlobScopedRo
  * derive blobs hydrates with.
  *
  * Built from the registry rather than written out, so it cannot fall behind a
- * thirteenth blob-scoped table.
+ * further blob-scoped table.
  *
- * @returns Four empty tables
+ * @returns Every blob-scoped table, empty
  */
 export function emptyBlobRows(): BlobScopedRows {
   const empty: RowBundle = {};
@@ -262,6 +277,26 @@ export function emptyBlobRows(): BlobScopedRows {
  */
 function questionKey(contributorId: string, parameterSet: unknown): string {
   return `${canonicalJson(contributorId)}\0${canonicalJson(parameterSet)}`;
+}
+
+/**
+ * Every extent-scoped table that is keyed on an identity rather than partitioned
+ * by context — `resources`, `resource_tags` and `claude_rule_patterns` today.
+ *
+ * Derived, not listed: a context-less table is recovered by reachability, and
+ * the only thing that decides whether this reconstruction can reach it is
+ * whether it names an identity at all. `roots` is the one context-less table
+ * this does not cover, because it is keyed on a ROOT rather than an identity and
+ * is reconstructed from the run's own root plus the kept contexts.
+ *
+ * @returns The registry keys of the identity-keyed context-less tables
+ */
+function identityTableKeys(): readonly string[] {
+  return Object.values(PROJECTION_TABLES)
+    .filter((spec) => spec.scope === 'extent'
+      && spec.contextColumn === undefined
+      && (spec.columns as readonly string[]).includes(IDENTITY_COLUMN))
+    .map((spec) => spec.key);
 }
 
 /**

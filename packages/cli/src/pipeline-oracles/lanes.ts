@@ -24,7 +24,7 @@
 
 import { crawlAndResolveRegistry, createProjectRegistry } from '@vibe-agent-toolkit/agent-skills';
 import { crawlSkillLinkRegistry } from '@vibe-agent-toolkit/claude-marketplace';
-import { DEFAULT_RESOURCE_INCLUDE, type ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import { DEFAULT_RESOURCE_EXCLUDE, DEFAULT_RESOURCE_INCLUDE, type ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import type { CrawlOptions, UnreadablePolicy } from '@vibe-agent-toolkit/utils/crawl';
 
 import { buildSkillsValidateRegistry } from '../commands/skills/validate.js';
@@ -39,17 +39,6 @@ const MARKDOWN_ONLY: readonly string[] = ['**/*.md'];
 
 /** Markdown + HTML, the set the two config-agnostic wide lanes use. */
 const MARKDOWN_AND_HTML: readonly string[] = ['**/*.md', '**/*.html', '**/*.htm'];
-
-/**
- * `ResourceRegistry.crawl`'s own exclude default, restated.
- *
- * Note it is NOT `crawlDirectory`'s default (`NEVER_CRAWL_GLOBS` +
- * `BUILD_OUTPUT_GLOBS`): the registry passes its own narrower list, which omits
- * the worktree globs. That difference is real and is one of the things a
- * snapshot exists to hold still, so it is restated here rather than imported
- * from the wider constant.
- */
-const REGISTRY_DEFAULT_EXCLUDE: readonly string[] = ['**/node_modules/**', '**/.git/**', '**/dist/**'];
 
 /** One enumerating lane: how it crawls, and who really does it. */
 export interface LaneDefinition {
@@ -84,6 +73,7 @@ export function oracleRefuses(corpusRoot: string): UnreadablePolicy {
     refuse: {
       root: corpusRoot,
       remedy: 'Fix the permissions on that directory, or exclude it from the corpus: an oracle cannot measure a population it could not enumerate.',
+      side: 'source',
     },
   };
 }
@@ -98,12 +88,15 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
     id: 'resources',
     description: '`vat resources scan` / `validate` — config-aware, md+html+htm',
     crawlOptions: (projectRoot) => {
-      const config = loadConfig(projectRoot);
+      const config = loadConfig(projectRoot, 'source');
       return {
         baseDir: projectRoot,
+        // Every oracle lane only reads the corpus.
+        outputs: [],
         include: config?.resources?.include ?? [...DEFAULT_RESOURCE_INCLUDE],
         // ResourceRegistry.crawl's own default when config supplies none.
-        exclude: config?.resources?.exclude ?? [...REGISTRY_DEFAULT_EXCLUDE],
+        // The registry's own default, imported: a hand copy here once kept the pre-worktree list.
+        exclude: config?.resources?.exclude ?? [...DEFAULT_RESOURCE_EXCLUDE],
         absolute: true,
         filesOnly: true,
       };
@@ -118,45 +111,49 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
     description: '`vat audit` and post-build validation — config-aware per root, memoized per root',
     crawlOptions: (projectRoot) => ({
       baseDir: projectRoot,
+      outputs: [],
       include: [...MARKDOWN_AND_HTML],
-      exclude: [...REGISTRY_DEFAULT_EXCLUDE],
+      exclude: [...DEFAULT_RESOURCE_EXCLUDE],
       absolute: true,
       filesOnly: true,
     }),
     // An oracle arm is a complete population or nothing: refuse, like the verbs it mirrors.
-    build: async (projectRoot) => crawlAndResolveRegistry(projectRoot, { unreadable: 'refuse' }),
+    build: (projectRoot) => crawlAndResolveRegistry(projectRoot, { outputs: [], unreadable: 'refuse' }),
   },
   {
     id: 'skills-build',
     description: '`vat skills build` via createProjectRegistry — config-aware but markdown-only',
     crawlOptions: (projectRoot) => ({
       baseDir: projectRoot,
+      outputs: [],
       include: [...MARKDOWN_ONLY],
-      exclude: [...REGISTRY_DEFAULT_EXCLUDE],
+      exclude: [...DEFAULT_RESOURCE_EXCLUDE],
       absolute: true,
       filesOnly: true,
     }),
-    build: async (projectRoot) => createProjectRegistry(projectRoot),
+    build: (projectRoot) => createProjectRegistry(projectRoot, { outputs: [] }),
   },
   {
     id: 'inventory',
     description: '`vat inventory` — markdown-only, the only lane that includes untracked files',
     crawlOptions: (projectRoot) => ({
       baseDir: projectRoot,
+      outputs: [],
       include: [...MARKDOWN_ONLY],
       absolute: true,
       filesOnly: true,
       includeUntracked: true,
     }),
-    build: async (projectRoot) => crawlSkillLinkRegistry(projectRoot),
+    build: (projectRoot) => crawlSkillLinkRegistry(projectRoot),
   },
   {
     id: 'skills-validate',
     description: '`vat skills validate` — batch-scoped shared registry, markdown-only, config-aware',
     crawlOptions: (projectRoot) => ({
       baseDir: projectRoot,
+      outputs: [],
       include: [...MARKDOWN_ONLY],
-      exclude: [...REGISTRY_DEFAULT_EXCLUDE],
+      exclude: [...DEFAULT_RESOURCE_EXCLUDE],
       absolute: true,
       filesOnly: true,
     }),
@@ -167,8 +164,8 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
     // learned to route parsing through the project's declared collection
     // `mimeType`s and this copy did not, so the oracle described a lane nobody
     // runs. Naming the builder is what makes that class of drift impossible.
-    build: async (projectRoot) => buildSkillsValidateRegistry(projectRoot, {
-      config: loadConfig(projectRoot),
+    build: (projectRoot) => buildSkillsValidateRegistry(projectRoot, {
+      config: loadConfig(projectRoot, 'source'),
     }),
   },
 ]);

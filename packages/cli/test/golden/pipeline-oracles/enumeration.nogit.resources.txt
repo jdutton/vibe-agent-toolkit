@@ -69,7 +69,7 @@ buildError: -
 11	docs/page.htm
 12	docs/page.html
 13	docs/sibling.md
-14	dup/hyphen-note.md
+14	dup-hyphen/note.md
 15	empty.html
 16	empty.md
 17	ignored/secret.md
@@ -98,7 +98,7 @@ buildError: -
 40	twins/left/same.md
 41	twins/right/same.md
 
-## collisions (first-added-wins drops, in arrival order)
-dup-hyphen-note-md	won=dup/hyphen-note.md	dropped=dup-hyphen/note.md
+## collisions (first-added-wins drops, in admission order)
+dup-hyphen-note-md	won=dup-hyphen/note.md	dropped=dup/hyphen-note.md
 
 ## restatementDrift

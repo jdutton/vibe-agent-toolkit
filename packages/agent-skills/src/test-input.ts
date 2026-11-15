@@ -26,12 +26,11 @@
  * every packaging lane, so no lane can answer the question differently.
  */
 
-import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import type { SkillPackagingConfig } from '@vibe-agent-toolkit/resources';
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { isGlob, issueLocation, relativeEscapesRoot, safePath, staticGlobBase, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { everywhere, isGlob, issueLocation, pathPresent, relativeEscapesRoot, safePath, staticGlobBase, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 import { type SkillFileEntry } from './files-config.js';
 import { DEFAULT_EVALS_SUBPATH } from './skill-test/eval-suite-isolation.js';
@@ -55,20 +54,12 @@ export type ConventionalSuiteProbe = (skillDir: string) => boolean;
  *
  * Deduplicated because {@link resolveTestInputDirs} asks the question once for the
  * subject and once per entry in `projectSkills` — and a package that keeps its
- * skills in ONE directory (VAT's own `vat-development-agents` keeps thirteen there)
- * makes every one of those the same question about the same path.
+ * skills in ONE directory makes every one of those the same question.
  *
  * SCOPE: one RUN, not one call. Every lane here loops over the project's skills and
  * hands each of them the same project-wide `projectSkills`, so a probe scoped to the
  * CALL re-asks S questions per skill and S² per run about the same S paths — and the
- * memo hides that inside one call while doing nothing across the loop. Measured with
- * the lab on a 103-skill adopter, `vat resources validate`: 10,815 probes over 103
- * distinct paths, ~105 repeats each, and exactly 50% of that command's 21,648 user
- * filesystem calls. Run-scoped it is ~103, and the command's total ~10,900.
- *
- * It survived because VAT's own tree cannot show it: measured on `vat audit .`, 14
- * probes over 2 DISTINCT paths — 2² = 4 is invisible next to the constant factor, and
- * "14 probes" reads like a rounding error rather than a complexity class. Only a tree
+ * memo hides that inside one call while doing nothing across the loop. Only a tree
  * with a large S separates O(S) from O(S²) here.
  *
  * The memo is created per run and dies with it. It deliberately is NOT module-level,
@@ -85,7 +76,9 @@ export function conventionalSuiteProbe(): ConventionalSuiteProbe {
     const suitePath = safePath.resolve(skillDir, DEFAULT_EVALS_SUBPATH);
     const cached = answers.get(suitePath);
     if (cached !== undefined) return cached;
-    const found = existsSync(suitePath);
+    // The skill directory is the tree: the suite's link chain beneath it is read first, and a refused
+    // probe is the skill's fault — never "no conventional suite" (which would ship the suite).
+    const found = pathPresent(suitePath, { follow: skillDir }, everywhere('source'), 'probe');
     answers.set(suitePath, found);
     return found;
   };
@@ -109,10 +102,8 @@ function isInside(candidate: string, dir: string): boolean {
  *
  * With no `test:` block, the CONVENTION applies: the harness has always defaulted to
  * `<skill-root>/evals/evals.json`, reading, stripping and grading that suite whether
- * or not a `test:` block exists. This lane used to return `[]` there, so the two
- * disagreed about the same skill — and in the dangerous direction: the harness
- * protected the signal while the packager PUBLISHED the answer key. The default is
- * now a declaration in both lanes.
+ * or not a `test:` block exists, so the packager must agree or it PUBLISHES the
+ * answer key.
  *
  * The inference stays deliberately narrow. It is keyed on the suite FILE existing,
  * never on a directory's name, and it names exactly `<skill-root>/evals` — a
@@ -315,9 +306,9 @@ export function packagedFileEntries(
 export function testInputFileEntryIssues(dropped: readonly SkillFileEntry[]): ValidationIssue[] {
   return dropped.map((entry) =>
     materializeIssue('PACKAGED_TEST_INPUT', {
-      location: toForwardSlash(entry.dest),
+      location: toForwardSlashAnyPlatform(entry.dest),
       message:
-        `files: entry "${toForwardSlash(entry.source)} -> ${toForwardSlash(entry.dest)}" points into ` +
+        `files: entry "${toForwardSlashAnyPlatform(entry.source)} -> ${toForwardSlashAnyPlatform(entry.dest)}" points into ` +
         `declared test input (some skill's test.evals) and was NOT packaged — test input, ` +
         `including the expected_output answer key, never ships to consumers.`,
     }),

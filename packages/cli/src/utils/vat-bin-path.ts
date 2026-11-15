@@ -28,11 +28,10 @@
  * to paste.
  */
 
-import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { followedKindSync, safePath } from '@vibe-agent-toolkit/utils';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -44,7 +43,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 export function resolveVatBinPath(): string {
   // Compiled tree: packages/cli/dist/utils/vat-bin-path.js → packages/cli/dist/bin.js
   const compiled = safePath.resolve(HERE, '../bin.js');
-  if (existsSync(compiled)) return compiled;
+  // VAT's own build output, beneath its own `dist`.
+  if (followedKindSync(compiled, safePath.resolve(HERE, '..')) !== 'absent') return compiled;
   // Source tree (vitest): packages/cli/src/utils/vat-bin-path.ts → packages/cli/dist/bin.js
   return safePath.resolve(HERE, '../../dist/bin.js');
 }

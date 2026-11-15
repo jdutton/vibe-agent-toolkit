@@ -14,6 +14,17 @@ with a regression test.
 
 #### CLI
 
+- **`vat claude context` exits `1` when an answer reached a file whose facts this run refused**
+  (a parse stopped at a limit, or its worker died). The file is listed as `refused: <code>` in the
+  answer (`refused` in json/yaml, also on the `--all` map) and reported on stderr under its
+  `RESOURCE_PARSE_*` code; `resources.validation` can lower it or allow it. Before, a refused
+  path-scoped rule was read as paths-less, charged to every launch, and the run exited `0`.
+
+- **`vat okf validate` reports a refused parse under the not-admitted contract**
+  (`RESOURCE_PARSE_LIMIT_EXCEEDED` / `RESOURCE_PARSE_WORKER_DIED`, resolved through
+  `resources.validation`) instead of an `OKF_DOCUMENT_UNREADABLE` finding at error severity no
+  allow list could reach. `OkfBundleReport` gains `parseRefused`.
+
 - **One exit-code contract for every `vat` verb, `vat-lab` and every dev-tools script: `0` nothing
   at error severity, `1` the run completed and what it examined failed its gate, `2` the command
   could not do its job** (usage, environment, internal). `ExitCode` in `@vibe-agent-toolkit/schema` is the only vocabulary.
@@ -48,7 +59,7 @@ with a regression test.
 - **`vat-lab` exits `2` (was `3`)** when a comparison completed but a command could not be
   measured; `EXIT_REFUSED` / `EXIT_CHANGED` / `EXIT_UNMEASURABLE` are gone.
 
-- **`vat okf validate`, `vat claude budget`, `vat resources check`, `vat ard emit` (`--format json`)
+- **`vat okf validate`, `vat resources check`, `vat ard emit` (`--format json`)
   and `vat skill review --yaml` publish ONE report envelope**: `status` (`ok | findings | error`), a
   required `examined` count, `findings[]`, `summary` (`{errors, warnings, info}`), `durationMs`, `data`.
   A run that could not finish publishes the SAME envelope (`status: error`, `examined: 0`, `error`,
@@ -232,12 +243,22 @@ with a regression test.
 
 #### Library
 
+- **Store-coverage helpers report WHICH keys are missing**: `blobFactsCover` is replaced by
+  `uncoveredContentKeys` (returns the keys), and the harness pass's `harnessSettled` by
+  `harnessUnsettledKeys`. `populateAndReport`'s CLI wiring takes a required `storeMissOf`.
+  `describeStoreMiss` / `storeMissOf` / `StoreMiss` are new.
+
+- **`LoadedContextAnswer` gains `refused: RefusedContextFile[]` and `ContextCostMap` gains
+  `refused`**: the files a query reached whose facts this run refused. A refused rules file now
+  carries no `rule-scope` tag and no `claude_rule_patterns` rows, and is in no launch or on-demand
+  tally.
+
 - **`validateSkill()` now requires `validation: ValidationConfig`** (`{}` when no config applies)
   and applies its `severity` and `allow` to every issue it emits.
 
-- **`copyDirectory` refuses a symlink whose target is outside the source tree
+- **A skill or agent tree copy refuses a symlink whose target is outside the source tree
   (`CopyLinkEscapesSourceError`) and a link that leads back into it (`DirectoryWalkRevisitedError`)**;
-  it used to copy `/etc` into `dist/` through `scripts/etc -> /etc`, and recurse `scripts/loop -> .`
+  `copyDirectory` (now removed) used to copy `/etc` into `dist/` through `scripts/etc -> /etc`, and recurse `scripts/loop -> .`
   until the path length ran out. `vat agent build` and `vat agent install` reach it. The skill
   content hash, the bundled-resource detector and the post-build checks refuse the loop the same way.
 
@@ -427,9 +448,13 @@ with a regression test.
 
 - **The resource projection** — a queryable model of the tree's documents, blobs, links and
   membership, which the resource commands now run on; `vat resources scan` gains `--format json`
-  plus `lane` and `extentSource`. Optional SQLite persistence: install
-  `@vibe-agent-toolkit/projection-sqlite`, set `VAT_PROJECTION_STORE=sqlite`, and set
-  `VAT_PROJECTION_STORE_DIR` per CI job or concurrent jobs write into one file.
+  plus `lane` and `extentSource`.
+
+- **VAT now caches that projection to disk, without being asked.** A SQLite file per scanned tree
+  under `<tmpdir>/.vat-cache/<version>/projection-<shape>/projection.db` — expect ~71 MB for a
+  12,600-file repository, bounded at 3 trees per repository, 8 repositories and 50,000 content
+  keys (~265 MB), and reclaimed by `vat cache clear`. Turn it off with `VAT_PROJECTION_STORE=off`, or `VAT_CACHE=0` for
+  every VAT cache. Set `VAT_PROJECTION_STORE_DIR` per CI job, or concurrent jobs write into one file.
 
 - **`vat resources query <sql> [path]`** — runs one read-only SQL statement (`SELECT`, `WITH` or
   `VALUES`; writes and multi-statement text are refused, exit 2) against the tree's projection.
@@ -438,16 +463,21 @@ with a regression test.
   reach those on every Node this package supports (Node 22.13–22.14 refuse `?NNN` outright).
   `[path]` locates the project and never narrows the corpus — a `WHERE` clause is the only scope.
 
-- **`vat resources check [path]`** — runs the SQL assertions declared under `resources.checks`
-  (each a `description` plus one `sql` selecting the rows that VIOLATE it) and exits 1 when any
-  returns rows; findings carry `CUSTOM:<name>`, which `resources.validation.severity` can
-  downgrade. A check that could not run, or a run with no `checks:` block, is
+- **`vat resources check [path]`** — runs VAT's built-in checks plus the SQL assertions declared
+  under `resources.checks` (each a `description` plus one `sql` selecting the rows that VIOLATE it)
+  and exits 1 when any returns rows; declared findings carry `CUSTOM:<name>`, which
+  `resources.validation.severity` can downgrade. A check that could not run is
   `RESOURCE_CHECK_BROKEN`, which nothing can silence. ⚠️ **Checks run over the TRACKED TREE, not
   your configured resource set** — `resources.include`/`exclude` do not scope the projection;
-  narrow with the check's own `WHERE`.
+  narrow with the check's own `WHERE`. Stopping it (or `vat validate`) also stops the child process
+  that runs the checks; what each signal does on each platform is in `vat resources check --help`.
 
 - **The link graph is queryable** — `lens_contexts`, `edges` and `edge_resolutions` join
-  `vat resources query` and `check`; each resolution is classed by `dstKind` (`resource` |
+  `vat resources query` and `check`, alongside `claude_context_chains` and `claude_context_loads`
+  (what loads into an agent's context at each working location, with a `launchCharge`).
+  A relation is computed only when your statement names it, and a statement naming a relation
+  nothing computed is refused rather than answered from an empty table.
+  Each resolution is classed by `dstKind` (`resource` |
   `external` | `out-of-corpus`) and keyed by `dstKey`. ⚠️ **Group by the `(dstKind, dstKey)` pair,
   never `dstKey` alone**, and split on `dstKind` before counting dangling links — `dstResource IS
   NULL` folds external URLs and out-of-corpus targets together, and `out-of-corpus` is a class,
@@ -462,11 +492,6 @@ with a regression test.
   `@`-imported files load into an agent's context at a path, why each is there, and its estimated
   token cost. `--discoverable` adds one-hop links the harness does not load; `--all` emits a cost
   map. `--format json`/`yaml` documents carry `kind` as their discriminator.
-
-- **`vat claude budget [paths...]`** — reports `ALWAYS_LOADED_CONTEXT_BUDGET` (info) for any
-  instruction chain over `resources.validation.thresholds.alwaysLoadedContextTokens` (default
-  12,000); set the code to `error` to fail the run or `ignore` to silence it. The estimate is
-  neither a floor nor a ceiling — a global `~/.claude/CLAUDE.md` is real cost it cannot see.
 
 - **`vat okf validate`** — conformance checking for Open Knowledge Format bundles declared under
   `okf.bundles.<name>.root`: parseable frontmatter with a non-empty `type` on every non-reserved
@@ -513,10 +538,6 @@ with a regression test.
   `vat cache clear` removes VAT's on-disk caches; `--no-cache` on the root command, or
   `VAT_CACHE=0` (`false`, `no`, `off`), disables them for one run.
 
-- **Markdown parsing can optionally run on worker threads during projection population.** Off by
-  default; set `VAT_PARSE_POOL=1` to opt in. Output is byte-identical either way.
-  `VAT_PARSE_POOL_SIZE`, `VAT_PARSE_POOL_MIN_MISSES` and `VAT_PARSE_LOOK_AHEAD` tune it.
-
 - **A collection can declare the MIME type of the files it matches.**
   `resources.collections.<name>.mimeType` overrides the built-in extension tables. Two collections
   declaring different types for one file fails `vat resources validate` with `COLLECTION_MIME_CONFLICT`
@@ -528,9 +549,9 @@ with a regression test.
   `run` overrides a committed `test.baseline: true` (which doubles spend — `--max-budget-usd` is
   per spawn); `results/` is kept after a default run as `resultsPath`.
 
-- **Four new `@vibe-agent-toolkit/resources` subpaths: `./parse-conformance`, `./link-parser`,
-  `./remark-parser` and `./markdown-processor`.** All four reach the markdown parser, so they are
-  deliberately absent from the `.` barrel — import them directly.
+- **A new `@vibe-agent-toolkit/resources` subpath, `./parse-conformance`**, for testing a parser
+  implementation. It reaches the markdown parser, so it is deliberately absent from the `.` barrel
+  — import it directly.
 
 - **`externalSource` on a marketplace plugin entry** — reference a plugin published elsewhere
   rather than vendoring it.
@@ -543,8 +564,7 @@ with a regression test.
   throws, so a permission refusal or a bug cannot be absorbed into the same `return null` as a
   missing file. In `configs.recommended` at `warn` (no autofix; expect a long first list on an
   existing tree). Pair it with the new `isPathAbsentError(e)` (`ENOENT`/`ENOTDIR` only) from
-  `@vibe-agent-toolkit/utils` — `isFilesystemAccessError` groups `EACCES` with `ENOENT` and is the
-  wrong narrowing for "is it there?".
+  `@vibe-agent-toolkit/utils`, which answers "is it there?" without absorbing an `EACCES`.
 
 - **New concept guide: [Knowledge interop formats](docs/concepts/knowledge-interop-formats.md)** —
   what the Open Knowledge Format and Agentic Resource Discovery each are, how they differ, and
@@ -552,7 +572,7 @@ with a regression test.
 
 - **(library) New exports.** `@vibe-agent-toolkit/utils`: `decodeTextContent()` on the new
   `./text` subpath, `runGit()` / `runGitOrThrow()` on `./git`, `isEntrypoint()` on `./process`,
-  and `isFilesystemAccessError()`, `removeScratchDir()` and the path-spelling surface
+  and `removeScratchDir()` and the path-spelling surface
   (`DirectorySpellingIndex`, `spellingWalkRoot`, `fillPathSpellings`, `pathSpellingFrom`,
   `PathSpelling`, `ComponentMatch` — whose `because.kind` distinguishes `no_such_entry` from
   `directory_unreadable`) on the barrel. `resources`: `vatCacheNamespace()`,
@@ -561,9 +581,7 @@ with a regression test.
   `API_SKILL_MAX_UPLOAD_BYTES` (31,457,280), `describeOversizeBundle()`, `formatBytes()`,
   `SizedFile`, `declaredSkillNameIn()` and the three portability collectors, so your own uploader
   can apply VAT's checks. `claude-marketplace`: `matchesAllowRule`, `matchesDenyRule`,
-  `PermissionLane`. `rag`: `assertFiltersProducedConditions`, and `assertQuerySupported(query,
-  support)` / `QuerySupport`, which a custom provider should call to get the filter refusals
-  above. `rag-lancedb`: `LANCEDB_QUERY_SUPPORT`.
+  `PermissionLane`. `rag`: `assertFiltersProducedConditions`.
 
 - **(library) Claude `@`-import closures are now projected.** `ClaudeImportExtentContributor`
   registers one closure extent per `CLAUDE.md` / `CLAUDE.local.md` / `.claude/rules` file to the
@@ -572,7 +590,7 @@ with a regression test.
 
 - **(library) `resource_tags` is now populated** — each resource is tagged with the harness
   convention its path carries (`claude-md`, `skill-md`, `subagent`, …) plus a `loading` row valued
-  `always` or `selected`; `vat claude budget` reads the same rows.
+  `always` or `selected`; the `claude_context_*` relations read the same rows.
 
 - **(library) HTML files now contribute `blob_references` rows** — `<a href>` and `<img src>`
   under an `html-link` syntactic form, which is in no closure's `follow` default, so HTML
@@ -582,10 +600,6 @@ with a regression test.
   `filters.metadata` was stripped — the one filter path that works could not be expressed.
 
 ### Changed
-
-- **The `version:` key in `vibe-agent-toolkit.config.yaml` is accepted and ignored** — any value,
-  or none. The npm package version is the only version VAT has; an existing config carrying
-  `version: 1` loads unchanged, and a new config need not carry the key.
 
 - **`vat audit --include-artifacts` help text says what the flag lifts and what no flag lifts.**
 
@@ -775,6 +789,23 @@ with a regression test.
 
 ### Fixed
 
+- **A VAT install with no parse worker (or one that will not spawn) fails the run as
+  parser-unavailable** instead of filing every document as `BLOB_PARSE_FAILED`. Only an error the
+  parser raised from a document's own bytes is stored against it; anything else fails the run loud.
+- **A NUL byte in a SKILL.md's frontmatter no longer crashes `vat audit` / `vat skills list`**
+  with `INTERNAL_ERROR`; the identity check now compares against the source as the parser
+  normalises it.
+- **The parse pool's total worker heap is bounded by the machine's memory** (the width first, then
+  the heap, floored at 96 MiB; 1 GiB reserved for the main thread), including a pinned
+  `VAT_PARSE_POOL_SIZE`.
+- **An idle parse worker's death no longer counts toward the broken-install breaker**, so three
+  idle deaths can no longer fail the next real document as parser-unavailable.
+- **A store miss caused by a parse refusal is named**: `store miss: N refused pair(s)` on stderr.
+  While a refusal persists, the whole population re-derives every run.
+
+- **A file no parser reads that is too large to decode as text (over ~512 MiB) no longer crashes a
+  whole run.** It is refused by size without being read and reported as `RESOURCE_UNREADABLE
+  (TEXT_TOO_LARGE)`. No action needed.
 - **`vat verify` now reads a plugin-local skill's `skills.config` entry exactly as the plugin build
   does** (declared name, then directory path, then its last segment) when checking its plugin-tree
   copy — including a skill no `skills.include` glob reaches. A skill whose directory is not named
@@ -1148,10 +1179,6 @@ with a regression test.
   compiled to one `tags LIKE '%a,b%'`, so a document tagged `b,a` did not match. Each element now
   gets its own condition, ANDed. **A query relying on the old adjacency behaviour will return more
   rows than before.**
-
-- **`filters.dateRange` could not be expressed on the wire.** The published `RAGQueryJsonSchema`
-  declared `start`/`end` as `date-time` strings while the Zod half accepted only a `Date`. The Zod
-  half now accepts what the JSON half always advertised; the emitted JSON Schema is byte-identical.
 
 - **The chunker rejected a whole document rather than splitting its longest line**, so one wide
   table row or unwrapped bullet produced zero chunks for the entire file. It now never throws and
@@ -3439,6 +3466,6 @@ Pre-1.0 breaking. Callers must:
 - New package: `@vibe-agent-toolkit/runtime-claude-skills` - Claude Skills builder, installer, validator, and import/export
 - New package: `@vibe-agent-toolkit/discovery` - format detection and file scanning utilities
 - New documentation: [Agent Skills Best Practices Guide](./docs/guides/agent-skills-best-practices.md)
-- New documentation: [Audit Command Reference](./docs/cli/audit.md)
-- New documentation: [Import Command Reference](./docs/cli/import.md)
+- New documentation: [Audit Command Reference](https://github.com/jdutton/vibe-agent-toolkit/blob/v0.1.42/docs/cli/audit.md)
+- New documentation: [Import Command Reference](https://github.com/jdutton/vibe-agent-toolkit/blob/v0.1.42/docs/cli/import.md)
 - **Resources System**: Markdown resource scanning and validation of link integrity

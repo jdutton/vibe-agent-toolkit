@@ -239,7 +239,7 @@ describe('readContentWithKey', () => {
   it('keys the bytes it returns', async () => {
     const file = safePath.join(dir, 'doc.md');
     writeFileSync(file, '# heading\n', 'utf-8');
-    const keyed = await readContentWithKey(file, parserKindForPath(file));
+    const keyed = await readContentWithKey(file, parserKindForPath(file), null);
     expect(keyed.content).toBe('# heading\n');
     expect(keyed.parserKind).toBe('markdown');
     expect(keyed.key).toBe(computeContentKey(bytes('# heading\n'), 'markdown'));
@@ -252,7 +252,7 @@ describe('readContentWithKey', () => {
     // `tokenEstimate` depend on them; only the document parser is skipped.
     const file = safePath.join(dir, 'module.ts');
     writeFileSync(file, 'export const x = 1;\n', 'utf-8');
-    const keyed = await readContentWithKey(file, parserKindForPath(file));
+    const keyed = await readContentWithKey(file, parserKindForPath(file), null);
     expect(keyed.parserKind).toBe('none');
     expect(keyed.key.startsWith('none.')).toBe(true);
     expect(keyed.content).toBe('export const x = 1;\n');
@@ -267,7 +267,7 @@ describe('readContentWithKey', () => {
     // `ParseResult.sizeBytes` is this number, and a cache must store it.
     const file = safePath.join(dir, 'malformed.md');
     writeFileSync(file, Uint8Array.from([0xe2, 0x82]));
-    const keyed = await readContentWithKey(file, parserKindForPath(file));
+    const keyed = await readContentWithKey(file, parserKindForPath(file), null);
     expect(keyed.byteLength).toBe(2);
     expect(Buffer.byteLength(keyed.content, 'utf-8')).not.toBe(keyed.byteLength);
   });
@@ -278,8 +278,8 @@ describe('readContentWithKey', () => {
     writeFileSync(a, Uint8Array.from([0xc2]));
     writeFileSync(b, Uint8Array.from([0xff]));
     const [keyedA, keyedB] = await Promise.all([
-      readContentWithKey(a, parserKindForPath(a)),
-      readContentWithKey(b, parserKindForPath(b)),
+      readContentWithKey(a, parserKindForPath(a), null),
+      readContentWithKey(b, parserKindForPath(b), null),
     ]);
     expect(keyedA.content).toBe(keyedB.content);
     expect(keyedA.key).not.toBe(keyedB.key);
@@ -288,9 +288,9 @@ describe('readContentWithKey', () => {
   it('re-keys after the file changes — no enumerate→read window', async () => {
     const file = safePath.join(dir, 'mutating.md');
     writeFileSync(file, 'before\n', 'utf-8');
-    const first = await readContentWithKey(file, parserKindForPath(file));
+    const first = await readContentWithKey(file, parserKindForPath(file), null);
     writeFileSync(file, 'after\n', 'utf-8');
-    const second = await readContentWithKey(file, parserKindForPath(file));
+    const second = await readContentWithKey(file, parserKindForPath(file), null);
     expect(second.key).not.toBe(first.key);
     expect(second.content).toBe('after\n');
   });
@@ -301,8 +301,8 @@ describe('readContentWithKey', () => {
     writeFileSync(md, '', 'utf-8');
     writeFileSync(html, '', 'utf-8');
     const [a, b] = await Promise.all([
-      readContentWithKey(md, parserKindForPath(md)),
-      readContentWithKey(html, parserKindForPath(html)),
+      readContentWithKey(md, parserKindForPath(md), null),
+      readContentWithKey(html, parserKindForPath(html), null),
     ]);
     expect(a.key).not.toBe(b.key);
   });
@@ -318,8 +318,8 @@ describe('readContentWithKey', () => {
     writeFileSync(page, '<p>hi</p>\n', 'utf-8');
 
     const [asMarkdown, asHtml] = await Promise.all([
-      readContentWithKey(page, 'markdown'),
-      readContentWithKey(page, 'html'),
+      readContentWithKey(page, 'markdown', null),
+      readContentWithKey(page, 'html', null),
     ]);
 
     expect(asMarkdown.content).toBe(asHtml.content);
@@ -358,8 +358,8 @@ describe('readContentWithKey', () => {
     createSymlink(cap, 'target.md', safePath.join(subB, 'link.md'));
 
     const [a, b] = await Promise.all([
-      readContentWithKey(safePath.join(subA, 'link.md'), 'markdown'),
-      readContentWithKey(safePath.join(subB, 'link.md'), 'markdown'),
+      readContentWithKey(safePath.join(subA, 'link.md'), 'markdown', null),
+      readContentWithKey(safePath.join(subB, 'link.md'), 'markdown', null),
     ]);
     expect(a.content).toBe('AAA\n');
     expect(b.content).toBe('BBB\n');

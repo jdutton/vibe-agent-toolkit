@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/dev-tools",
-  "version": "0.2.0-rc.8",
+  "version": "0.2.0-rc.15",
   "private": true,
   "type": "module",
   "description": "Development tools for the monorepo",
@@ -15,14 +15,15 @@
   "scripts": {
     "build": "tsx src/tsc-clean-build.ts",
     "typecheck": "tsc --noEmit",
+    "lint": "VAT_LINT_TASK=1 eslint . --max-warnings=0",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging",
     "prepare-bin": "tsx src/prepare-bin.ts",
     "generate:tsconfig-refs": "tsx src/generate-tsconfig-refs.ts",
+    "generate:lint-config": "tsx src/generate-lint-config.ts",
     "generate:claude-md": "tsx src/generate-claude-md.ts",
     "generate:workflow": "tsx src/generate-workflow.ts",
-    "process-images": "tsx src/process-test-images.ts",
     "compat-empirical": "tsx src/compat-empirical/index.ts",
     "test:watch": "vitest"
   },
@@ -33,9 +34,11 @@
     "@vibe-agent-toolkit/schema": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
     "commander": "^12.1.0",
-    "markdown-it": "^14.1.0",
+    "markdown-it": "^14.3.3",
     "markdown-it-front-matter": "^0.2.4",
+    "picomatch": "^4.0.3",
     "semver": "^7.8.5",
+    "typescript": "^5.9.3",
     "which": "^5.0.0",
     "yaml": "^2.9.0",
     "zod": "^3.25.0",
@@ -44,7 +47,7 @@
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",
     "@types/which": "^3.0.4",
-    "sharp": "^0.35.4"
+    "eslint": "^9.39.5"
   },
   "repository": {
     "type": "git",

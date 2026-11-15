@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { gitFindRoot, gitLsFiles, isGitIgnored } from '../../src/git-utils.js';
@@ -64,7 +65,7 @@ describe('gitFindRoot', () => {
 
     // Create subdirectory
     const subDir = safePath.join(tempDir, 'src', 'components');
-    fs.mkdirSync(subDir, { recursive: true });
+    mkdirSyncReal(subDir, { recursive: true });
 
     const result = gitFindRoot(subDir);
 
@@ -112,7 +113,7 @@ describe('gitLsFiles', () => {
     const file2 = safePath.join(tempDir, 'src', 'index.ts');
 
     fs.writeFileSync(file1, '# Test');
-    fs.mkdirSync(safePath.join(tempDir, 'src'));
+    mkdirSyncReal(safePath.join(tempDir, 'src'));
     fs.writeFileSync(file2, 'export {}');
 
     // Add files to git
@@ -204,7 +205,7 @@ describe('isGitIgnored', () => {
   it('should return true for gitignored file', () => {
     // Create .gitignore
     fs.writeFileSync(safePath.join(tempDir, GITIGNORE_FILENAME), 'node_modules/\n');
-    fs.mkdirSync(safePath.join(tempDir, 'node_modules'));
+    mkdirSyncReal(safePath.join(tempDir, 'node_modules'));
 
     const result = isGitIgnored(safePath.join(tempDir, 'node_modules', 'test.js'), tempDir);
 
@@ -237,8 +238,8 @@ describe('isGitIgnored', () => {
     const externalDir = safePath.join(tempDir, 'external-content');
     const linkedDir = safePath.join(dataDir, 'linked-content');
 
-    fs.mkdirSync(dataDir);
-    fs.mkdirSync(externalDir);
+    mkdirSyncReal(dataDir);
+    mkdirSyncReal(externalDir);
     fs.writeFileSync(safePath.join(externalDir, 'doc.md'), '# Test');
     createSymlink(cap, externalDir, linkedDir);
     fs.writeFileSync(safePath.join(tempDir, GITIGNORE_FILENAME), 'data/\n');

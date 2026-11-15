@@ -90,7 +90,8 @@ export const AgentSkillFrontmatterJsonSchema = zodToJsonSchema(
 /**
  * VAT Agent Skill Frontmatter Schema
  *
- * Extends the base schema with stricter requirements for VAT-packaged skills:
+ * A stricter, opt-in variant of the base schema for callers that want it; no
+ * VAT command applies it (`vat skills validate`/`build` use the base schema):
  * - `name` and `description` are required (not optional)
  * - `metadata.version` is required
  *
@@ -98,13 +99,13 @@ export const AgentSkillFrontmatterJsonSchema = zodToJsonSchema(
  */
 export const VATAgentSkillFrontmatterSchema = AgentSkillFrontmatterSchema.extend({
   name: z.string()
-    .min(1, 'Name is required for VAT skills')
+    .min(1, 'Name is required')
     .max(64, 'Name must be 64 characters or less')
     .regex(SKILL_NAME_REGEX, SKILL_NAME_REGEX_MESSAGE)
-    .describe('Skill identifier (required for VAT skills). Supports plugin:skill format.'),
+    .describe('Skill identifier (required by this schema). Supports plugin:skill format.'),
 
   description: z.string()
-    .min(1, 'Description is required for VAT skills')
+    .min(1, 'Description is required')
     .max(1024, 'Description must be 1024 characters or less')
     .describe('What the skill does and when to use it'),
 

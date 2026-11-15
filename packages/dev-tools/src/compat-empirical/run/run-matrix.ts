@@ -18,7 +18,7 @@
 
 import { writeFileSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, mapInOrder, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { Color } from '../../common.js';
 import type { StagedSkill } from '../corpus/fetch-sources.js';
@@ -34,7 +34,7 @@ import {
 
 import { evaluateExtensionDecision } from './extension.js';
 
-type StageFn = (entry: CorpusEntry) => StagedSkill;
+type StageFn = (entry: CorpusEntry) => Promise<StagedSkill>;
 type LogFn = (msg: string, color?: Color) => void;
 
 export interface RunMatrixOptions {
@@ -159,19 +159,22 @@ async function runAttempt(
   return { observation: parsed, nextInstallFailedNotes: undefined };
 }
 
-async function runCell(ctx: CellContext): Promise<RuntimeObservation[]> {
-  const results: RuntimeObservation[] = [];
+function runCell(ctx: CellContext): Promise<RuntimeObservation[]> {
   let installFailedNotes: string | undefined;
-  for (let attemptIdx = 0; attemptIdx < ctx.n; attemptIdx++) {
+  // In order: each attempt reads the previous attempt's install-failure notes.
+  return mapInOrder(attemptRange(0, ctx.n), async (attemptIdx) => {
     ctx.log(
       `[run] ${ctx.entry.id}/${ctx.trigger.id} -> ${ctx.target} (attempt ${attemptIdx + 1}/${ctx.n})`,
       'cyan',
     );
     const outcome = await runAttempt(ctx, attemptIdx, installFailedNotes);
-    results.push(outcome.observation);
     installFailedNotes = outcome.nextInstallFailedNotes;
-  }
-  return results;
+    return outcome.observation;
+  });
+}
+
+function attemptRange(from: number, to: number): number[] {
+  return Array.from({ length: Math.max(0, to - from) }, (_, i) => from + i);
 }
 
 /**
@@ -184,47 +187,46 @@ async function runCell(ctx: CellContext): Promise<RuntimeObservation[]> {
  * after the additional attempts. Cells still ambiguous at N=5 get
  * highVariance:true via the join phase.
  */
-async function maybeExtendCell(
+function maybeExtendCell(
   ctx: CellContext,
   cellResults: readonly RuntimeObservation[],
   repeatN: number,
 ): Promise<RuntimeObservation[]> {
-  if (repeatN !== 3 || ctx.driver.driverMode !== 'scripted') return [];
-  if (cellResults.length !== 3) return [];
+  if (repeatN !== 3 || ctx.driver.driverMode !== 'scripted') return Promise.resolve([]);
+  if (cellResults.length !== 3) return Promise.resolve([]);
 
   const decision = evaluateExtensionDecision(cellResults, repeatN);
-  if (!decision.extend) return [];
+  if (!decision.extend) return Promise.resolve([]);
 
   ctx.log(
     `[run]   extending ${ctx.entry.id}/${ctx.trigger.id}/${ctx.target}: ambiguous at N=3 (${decision.reason}); running attempts 3 and 4`,
     'yellow',
   );
 
-  const extra: RuntimeObservation[] = [];
-  for (let attemptIdx = 3; attemptIdx < 5; attemptIdx++) {
+  return mapInOrder(attemptRange(3, 5), async (attemptIdx) => {
     ctx.log(
       `[run] ${ctx.entry.id}/${ctx.trigger.id} -> ${ctx.target} (attempt ${attemptIdx + 1}/5)`,
       'cyan',
     );
     const outcome = await runAttempt(ctx, attemptIdx, undefined);
-    extra.push(outcome.observation);
-  }
-  return extra;
+    return outcome.observation;
+  });
 }
 
 export async function runMatrix(opts: RunMatrixOptions): Promise<RuntimeObservation[]> {
   const log = opts.log ?? ((): void => undefined);
   const observations: RuntimeObservation[] = [];
 
-  for (const entry of opts.entries) {
-    const staged = opts.stageFn(entry);
-    for (const promptRef of entry.triggerPromptRefs) {
+  // In order: cells drive real runtimes one at a time, and the log and observations follow the matrix.
+  await forEachInOrder(opts.entries, async (entry) => {
+    const staged = await opts.stageFn(entry);
+    await forEachInOrder(entry.triggerPromptRefs, async (promptRef) => {
       const trigger = opts.promptById.get(promptRef);
       if (!trigger) {
         log(`[run] ${entry.id}: missing trigger prompt ${promptRef}; skipping`, 'yellow');
-        continue;
+        return;
       }
-      for (const [target, driver] of opts.drivers) {
+      await forEachInOrder(opts.drivers, async ([target, driver]) => {
         const n = effectiveN(driver, opts.repeatN);
         if (n !== opts.repeatN) {
           // Disclose the clamp once per cell so the run log makes the
@@ -249,9 +251,9 @@ export async function runMatrix(opts: RunMatrixOptions): Promise<RuntimeObservat
         observations.push(...cellResults);
         const extra = await maybeExtendCell(cellCtx, cellResults, opts.repeatN);
         observations.push(...extra);
-      }
-    }
-  }
+      });
+    });
+  });
 
   return observations;
 }

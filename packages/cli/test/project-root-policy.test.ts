@@ -62,7 +62,7 @@ describe('requireProjectRoot', () => {
 
   it('includes the command name in the error message', () => {
     vi.mocked(findProjectRoot).mockReturnValue(null);
-    expect(() => requireProjectRoot(FAKE_NOWHERE_DIR, 'vat agent build')).toThrow(/vat agent build/);
+    expect(() => requireProjectRoot(FAKE_NOWHERE_DIR, 'vat claude plugin build')).toThrow(/vat claude plugin build/);
   });
 });
 

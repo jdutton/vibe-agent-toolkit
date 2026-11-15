@@ -13,11 +13,13 @@
  * introduce a second coordinate system.
  */
 
-import * as fs from 'node:fs';
+
 
 import { isAbsoluteAnyPlatform, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { AUDIT_REPORT_SCHEMA } from '../../src/commands/audit-schema.js';
 import { anchorContractViolations, anchorsBelowRoot, pluginManifestLocations } from '../anchor-contract-helpers.js';
 
 import {
@@ -35,10 +37,10 @@ function seedProject(scanRoot: string, project: string): void {
   const projectDir = safePath.join(scanRoot, project);
   const pluginDir = safePath.join(projectDir, 'plugins', 'plugin-x');
   const skillDir = safePath.join(pluginDir, 'skills', 'example');
-  fs.mkdirSync(safePath.join(pluginDir, '.claude-plugin'), { recursive: true });
-  fs.mkdirSync(skillDir, { recursive: true });
+  mkdirSyncReal(safePath.join(pluginDir, '.claude-plugin'), { recursive: true });
+  mkdirSyncReal(skillDir, { recursive: true });
 
-  writeTestFile(safePath.join(projectDir, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+  writeTestFile(safePath.join(projectDir, 'vibe-agent-toolkit.config.yaml'), '{}\n');
   // No `version` field, so the manifest itself carries findings.
   writeTestFile(
     safePath.join(pluginDir, '.claude-plugin', 'plugin.json'),
@@ -71,16 +73,16 @@ describe('vat audit — YAML states one root and re-bases every path onto it (sy
     const run = await executeCliAndParseYaml(getBinPath(import.meta.url), ['audit', scanRoot]);
     parsed = run.parsed;
     exitStatus = run.result.status;
-  }, 60_000);
+  });
 
   afterAll(() => {
     cleanupTestTempDir(scanRoot);
   });
 
   it('exits 1 (the tree has findings) and states the scan root as the only absolute path in the document', () => {
-    // Exit 1: the exit code follows `status`, and this tree has an error-severity finding.
+    // Exit 1: this tree has an error-severity finding.
     expect(exitStatus).toBe(1);
-    expect(parsed['root']).toBe(toForwardSlash(scanRoot));
+    expect(AUDIT_REPORT_SCHEMA.parse(parsed).data.root).toBe(toForwardSlash(scanRoot));
 
     const anchors = anchorsBelowRoot(parsed);
     expect(anchors.length).toBeGreaterThan(0);
@@ -88,7 +90,7 @@ describe('vat audit — YAML states one root and re-bases every path onto it (sy
   });
 
   it('makes every path and location joinable against that one root', () => {
-    expect(anchorContractViolations(anchorsBelowRoot(parsed), parsed['root'] as string)).toEqual([]);
+    expect(anchorContractViolations(anchorsBelowRoot(parsed), AUDIT_REPORT_SCHEMA.parse(parsed).data.root ?? '')).toEqual([]);
   });
 
   it('keeps the two same-named plugins distinguishable — one location per manifest', () => {

@@ -10,7 +10,7 @@ import { writeFileSync } from 'node:fs';
 
 import { createSymlink, DirectoryWalkRevisitedError, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
-import { type HostileTree, hostileTreePerTest } from '@vibe-agent-toolkit/utils/testing';
+import { type HostileTree, hostileTreePerTest, installFaultFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { checkUnreferencedFiles } from '../../src/post-build-checks.js';
@@ -53,7 +53,7 @@ describe('following walkers on a tree with a link back into itself', () => {
     const skillDir = plantLoopedSkill(tree());
     if (skillDir === '') skip('host cannot create symlinks');
 
-    expect(() => detectBundledResourceWithoutLinks('', skillDir, [], skillDir)).toThrow(DirectoryWalkRevisitedError);
+    expect(() => detectBundledResourceWithoutLinks('', skillDir, [], skillDir, 'source')).toThrow(DirectoryWalkRevisitedError);
   });
 
   it('checkUnreferencedFiles refuses the loop in a packaged output tree', async ({ skip }) => {
@@ -63,11 +63,24 @@ describe('following walkers on a tree with a link back into itself', () => {
     await expect(checkUnreferencedFiles(skillDir)).rejects.toThrow(DirectoryWalkRevisitedError);
   });
 
+  // The validator walks whatever tree its caller hands it — an author's skill, or a ZIP extracted
+  // into $TMPDIR — so a directory it cannot resolve is a fault on the side the CALLER names.
+  it.each(['source', 'environment'] as const)('detectBundledResourceWithoutLinks raises a refused realpath on the side its caller names (%s)', (side) => {
+    const { skillDir, scripts } = plantSkill(tree(), 'refused');
+    const session = installFaultFs({ within: tree().root, faults: [{ family: 'meta', op: 'realpath', path: (p) => p === scripts, errno: 'EACCES' }] });
+    try {
+      expect(() => detectBundledResourceWithoutLinks('', skillDir, [], skillDir, side))
+        .toThrow(expect.objectContaining({ code: 'FS_FAULT', side, faultClass: 'refused', path: scripts }));
+    } finally {
+      session.restore();
+    }
+  });
+
   it('control: the same subtree without the loop walks cleanly in all three', async () => {
     const { skillDir } = plantSkill(tree(), 'plain');
 
     expect(await hashDirectory(skillDir)).toMatch(/^[0-9a-f]{64}$/);
-    expect(detectBundledResourceWithoutLinks('scripts/a.sh', skillDir, [], skillDir)).toEqual([]);
+    expect(detectBundledResourceWithoutLinks('scripts/a.sh', skillDir, [], skillDir, 'source')).toEqual([]);
     expect(Array.isArray(await checkUnreferencedFiles(skillDir))).toBe(true);
   });
 });

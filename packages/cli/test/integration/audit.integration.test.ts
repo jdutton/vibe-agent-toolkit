@@ -1,8 +1,9 @@
 import fs from 'node:fs';
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
 
 import { countBySeverity } from '@vibe-agent-toolkit/schema';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { AuditCommandOptions } from '../../src/commands/audit.js';
@@ -35,6 +36,14 @@ const silentLogger = {
 
 // Helper to run audit validation directly (no CLI subprocess)
 // options.recursive defaults to true (recursive by default), set to false to disable
+/** Write a registry file, audit it, and expect one result with nothing actionable. */
+async function expectCleanRegistryAudit(registryFile: string, content: unknown): Promise<void> {
+  fs.writeFileSync(registryFile, JSON.stringify(content));
+  const results = await runAudit(registryFile);
+  expect(results).toHaveLength(1);
+  expect(results[0]?.summary).toMatchObject({ errors: 0, warnings: 0 });
+}
+
 async function runAudit(targetPath: string, options: AuditCommandOptions = {}) {
   resetAuditCaches();
   return getValidationResults(
@@ -50,7 +59,7 @@ async function runAudit(targetPath: string, options: AuditCommandOptions = {}) {
 function writePluginManifest(parentDir: string, dirName: string, manifest: object): string {
   const pluginDir = safePath.join(parentDir, dirName);
   const claudePluginDir = safePath.join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
-  fs.mkdirSync(claudePluginDir, { recursive: true });
+  mkdirSyncReal(claudePluginDir, { recursive: true });
   fs.writeFileSync(
     safePath.join(claudePluginDir, PLUGIN_JSON_FILENAME),
     JSON.stringify(manifest)
@@ -83,7 +92,7 @@ function writeInventoryFindingsPlugin(parentDir: string, dirName: string): strin
     validPluginManifest({ skills: ['skills/declared-but-absent'] }),
   );
   const onDisk = safePath.join(pluginDir, 'skills', 'present-but-undeclared');
-  fs.mkdirSync(onDisk, { recursive: true });
+  mkdirSyncReal(onDisk, { recursive: true });
   fs.writeFileSync(
     safePath.join(onDisk, 'SKILL.md'),
     '---\nname: present-but-undeclared\ndescription: A bundled test skill, long enough to clear any minimum-description thresholds the validator may enforce.\n---\n\n# present-but-undeclared\n\nBody.\n',
@@ -95,7 +104,7 @@ function writeInventoryFindingsPlugin(parentDir: string, dirName: string): strin
 function writeMarketplace(parentDir: string, dirName: string): string {
   const marketplaceDir = safePath.join(parentDir, dirName);
   const claudePluginDir = safePath.join(marketplaceDir, CLAUDE_PLUGIN_DIRNAME);
-  fs.mkdirSync(claudePluginDir, { recursive: true });
+  mkdirSyncReal(claudePluginDir, { recursive: true });
   fs.writeFileSync(
     safePath.join(claudePluginDir, MARKETPLACE_JSON_FILENAME),
     JSON.stringify({
@@ -111,7 +120,7 @@ describe('audit command (integration)', () => {
   let tempDir: string;
 
   beforeAll(() => {
-    tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-agent-audit-'));
+    tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-audit-'));
   });
 
   afterAll(() => {
@@ -131,7 +140,7 @@ describe('audit command (integration)', () => {
       const results = await runAudit(pluginDir);
 
       expect(results).toHaveLength(1);
-      expect(results[0].status).toBe('success');
+      expect(results[0].summary).toMatchObject({ errors: 0, warnings: 0 });
       expect(results[0].metadata?.name).toBe(TEST_PLUGIN_NAME);
     });
 
@@ -144,7 +153,7 @@ describe('audit command (integration)', () => {
       const results = await runAudit(pluginDir);
 
       expect(results).toHaveLength(1);
-      expect(results[0].status).toBe('error');
+      expect(results[0].summary.errors).toBeGreaterThan(0);
     });
 
     it('should warn when plugin.json is missing version field', async () => {
@@ -157,7 +166,8 @@ describe('audit command (integration)', () => {
       const results = await runAudit(pluginDir);
 
       expect(results).toHaveLength(1);
-      expect(results[0].status).toBe('warning');
+      expect(results[0].summary).toMatchObject({ errors: 0 });
+      expect(results[0].summary.warnings).toBeGreaterThan(0);
       const codes = results[0].issues.map((i) => i.code);
       expect(codes).toContain('PLUGIN_MISSING_VERSION');
       // Plugin-recommended-fields detector also fires (info severity) for
@@ -178,8 +188,8 @@ describe('audit command (integration)', () => {
       });
       const skillAlpha = safePath.join(pluginDir, 'skills', 'alpha');
       const skillBeta = safePath.join(pluginDir, 'skills', 'beta');
-      fs.mkdirSync(skillAlpha, { recursive: true });
-      fs.mkdirSync(skillBeta, { recursive: true });
+      mkdirSyncReal(skillAlpha, { recursive: true });
+      mkdirSyncReal(skillBeta, { recursive: true });
       const skillBody = (name: string) =>
         `---\nname: ${name}\ndescription: A bundled test skill, long enough to clear any minimum-description thresholds the validator may enforce.\n---\n\n# ${name}\n\nBody.\n`;
       fs.writeFileSync(safePath.join(skillAlpha, 'SKILL.md'), skillBody('alpha'));
@@ -212,31 +222,33 @@ describe('audit command (integration)', () => {
       // The findings are there, so the verdict beside them must follow them.
       // Pushing into `issues` without recomputing left `status: success` and an
       // all-zero `issueCounts` sitting next to a warning in the same document.
-      expect(plugin?.status).toBe('warning');
-      expect(plugin?.issueCounts).toEqual(countBySeverity(plugin?.issues ?? []));
-      expect(plugin?.issueCounts?.warnings).toBeGreaterThanOrEqual(1);
-      expect(plugin?.issueCounts?.info).toBeGreaterThanOrEqual(1);
+      expect(plugin?.status).toBe('findings');
+      expect(plugin?.summary.errors).toBe(0);
+      expect(plugin?.summary).toEqual(countBySeverity(plugin?.issues ?? []));
+      expect(plugin?.summary.warnings).toBeGreaterThanOrEqual(1);
+      expect(plugin?.summary.info).toBeGreaterThanOrEqual(1);
       // "Valid plugin" is not a summary of a document that carries a warning.
-      expect(plugin?.summary).not.toBe('Valid plugin');
+      expect(plugin?.description).not.toBe('Valid plugin');
     });
 
     it('names file counts and finding counts differently in the report document', async () => {
       const pluginDir = writeInventoryFindingsPlugin(tempDir, 'summary-denominator-plugin');
 
-      const { document } = await buildAuditReport(pluginDir, {}, Date.now(), silentLogger);
+      const { report } = await buildAuditReport(pluginDir, {}, Date.now(), silentLogger);
 
-      // Files, by their own status.
-      expect(document.summary.filesScanned).toBeGreaterThanOrEqual(1);
-      expect(document.summary.filesWithWarnings).toBe(1);
+      // Files: how many were read, and by their own status.
+      expect(report.examined).toBeGreaterThanOrEqual(1);
+      expect(report.data.counts.filesWithWarnings).toBe(1);
       // Findings, by their own severity — a different denominator, so a
       // different name. `summary.warnings: 0` beside `issues.warnings: 1` was
-      // the same word measuring two things in adjacent keys.
-      expect(document.issueCounts.warnings).toBe(1);
-      expect(document.issueCounts.info).toBeGreaterThanOrEqual(1);
-      expect(document.summary).not.toHaveProperty('warnings');
-      expect(document.summary).not.toHaveProperty('errors');
-      expect(document.summary).not.toHaveProperty('success');
-      expect(document).not.toHaveProperty('issues');
+      // the same word measuring two things in adjacent keys; now `summary`
+      // has ONE meaning (findings) and the file counts live in `data.counts`.
+      expect(report.summary.warnings).toBe(1);
+      expect(report.summary.info).toBeGreaterThanOrEqual(1);
+      expect(report.data.counts).not.toHaveProperty('warnings');
+      expect(report.data.counts).not.toHaveProperty('errors');
+      expect(report).not.toHaveProperty('issueCounts');
+      expect(report).not.toHaveProperty('issues');
     });
   });
 
@@ -252,7 +264,7 @@ describe('audit command (integration)', () => {
       const results = await runAudit(marketplaceDir);
 
       const marketplaceResult = results.find((r) => r.type === 'marketplace');
-      expect(marketplaceResult?.status).toBe('success');
+      expect(marketplaceResult?.summary).toMatchObject({ errors: 0, warnings: 0 });
       expect(marketplaceResult?.issues).toHaveLength(0);
       expect(marketplaceResult?.metadata?.name).toBe(TEST_MARKETPLACE_NAME);
     });
@@ -267,67 +279,48 @@ describe('audit command (integration)', () => {
       expect(codes).toContain('MARKETPLACE_PLUGIN_SOURCE_MISSING');
       // The verdict follows the findings: an error-severity finding cannot sit
       // under `status: success` with an all-zero counts block beside it.
-      expect(results[0].status).toBe('error');
-      expect(results[0].issueCounts).toEqual(countBySeverity(results[0].issues));
-      expect(results[0].issueCounts?.errors).toBeGreaterThanOrEqual(1);
+      expect(results[0].summary).toEqual(countBySeverity(results[0].issues));
+      expect(results[0].summary.errors).toBeGreaterThanOrEqual(1);
     });
   });
 
   describe('registry validation', () => {
     it('should validate installed_plugins.json registry', async () => {
-      const registryFile = safePath.join(tempDir, INSTALLED_PLUGINS_FILENAME);
-      fs.writeFileSync(
-        registryFile,
-        JSON.stringify({
-          version: 2,
-          plugins: {
-            'test-plugin@test-marketplace': [
-              {
-                scope: 'user',
-                installPath: '/path/to/plugin',
-                version: '1.0.0',
-                installedAt: new Date().toISOString(),
-                lastUpdated: new Date().toISOString(),
-                isLocal: false,
-              },
-            ],
-          },
-        })
-      );
-
-      const results = await runAudit(registryFile);
-
-      expect(results).toHaveLength(1);
-      expect(results[0].status).toBe('success');
+      await expectCleanRegistryAudit(safePath.join(tempDir, INSTALLED_PLUGINS_FILENAME), {
+        version: 2,
+        plugins: {
+          'test-plugin@test-marketplace': [
+            {
+              scope: 'user',
+              installPath: '/path/to/plugin',
+              version: '1.0.0',
+              installedAt: new Date().toISOString(),
+              lastUpdated: new Date().toISOString(),
+              isLocal: false,
+            },
+          ],
+        },
+      });
     });
 
     it('should validate known_marketplaces.json registry', async () => {
-      const registryFile = safePath.join(tempDir, KNOWN_MARKETPLACES_FILENAME);
-      fs.writeFileSync(
-        registryFile,
-        JSON.stringify({
-          [TEST_MARKETPLACE_NAME]: {
-            source: {
-              source: 'github',
-              repo: 'test/marketplace',
-            },
-            installLocation: '/path/to/marketplace',
-            lastUpdated: new Date().toISOString(),
+      await expectCleanRegistryAudit(safePath.join(tempDir, KNOWN_MARKETPLACES_FILENAME), {
+        [TEST_MARKETPLACE_NAME]: {
+          source: {
+            source: 'github',
+            repo: 'test/marketplace',
           },
-        })
-      );
-
-      const results = await runAudit(registryFile);
-
-      expect(results).toHaveLength(1);
-      expect(results[0].status).toBe('success');
+          installLocation: '/path/to/marketplace',
+          lastUpdated: new Date().toISOString(),
+        },
+      });
     });
   });
 
   describe('Agent Skill validation', () => {
     it('should validate a single SKILL.md file', async () => {
       const skillFile = safePath.join(tempDir, 'test-skill', 'SKILL.md');
-      fs.mkdirSync(dirname(skillFile), { recursive: true });
+      mkdirSyncReal(dirname(skillFile), { recursive: true });
       fs.writeFileSync(
         skillFile,
         `---
@@ -344,44 +337,38 @@ This is a test skill.
       const results = await runAudit(skillFile);
 
       expect(results).toHaveLength(1);
-      expect(results[0].status).toBe('success');
+      expect(results[0].summary).toMatchObject({ errors: 0, warnings: 0 });
     });
 
-    it('should validate VAT agent SKILL.md', async () => {
-      const agentDir = safePath.join(tempDir, 'vat-agent');
-      fs.mkdirSync(agentDir, { recursive: true });
+    it('audits a tree holding an agent.yaml cleanly: the file is not classified, and adds no finding', async () => {
+      const skillMd = '---\nname: reviewer\ndescription: A test skill\n---\n\n# Reviewer\n\nThis is a test skill.\n';
+      /** A tree holding one skill, and (`withAgentYaml`) an agent.yaml beside it and one at the tree root. */
+      const writeTree = (name: string, withAgentYaml: boolean): string => {
+        const treeDir = safePath.join(tempDir, name);
+        const skillDir = safePath.join(treeDir, 'skills', 'reviewer');
+        mkdirSyncReal(skillDir, { recursive: true });
+        fs.writeFileSync(safePath.join(skillDir, 'SKILL.md'), skillMd);
+        if (withAgentYaml) {
+          const manifest = 'metadata:\n  name: reviewer\n  version: 0.1.0\nspec:\n  llm:\n    provider: anthropic\n    model: claude-sonnet-5\n';
+          fs.writeFileSync(safePath.join(skillDir, 'agent.yaml'), manifest);
+          fs.writeFileSync(safePath.join(treeDir, 'agent.yaml'), manifest);
+        }
+        return treeDir;
+      };
+      /** What an audit of the tree says, path-free so two trees compare. */
+      const audited = async (treeDir: string) =>
+        (await runAudit(treeDir, { recursive: true })).map((r) => ({
+          type: r.type,
+          file: basename(r.path),
+          summary: r.summary,
+          codes: r.issues.map((issue) => issue.code),
+        }));
 
-      // Create agent.yaml
-      fs.writeFileSync(
-        safePath.join(agentDir, 'agent.yaml'),
-        `metadata:
-  name: test-agent
-  version: 0.1.0
-spec:
-  llm:
-    provider: anthropic
-    model: claude-sonnet-5
-`
-      );
+      const withAgentYaml = await audited(writeTree('skill-beside-agent-yaml', true));
+      const without = await audited(writeTree('skill-alone', false));
 
-      // Create SKILL.md
-      fs.writeFileSync(
-        safePath.join(agentDir, 'SKILL.md'),
-        `---
-name: test-agent
-description: A test agent skill
----
-
-# Test Agent
-
-This is a test agent.
-`
-      );
-
-      const results = await runAudit(agentDir);
-
-      expect(results).toHaveLength(1);
-      expect(results[0].status).toBe('success');
+      expect(withAgentYaml).toEqual(without);
+      expect(withAgentYaml).toMatchObject([{ type: 'agent-skill', file: 'SKILL.md', summary: { errors: 0, warnings: 0 } }]);
     });
   });
 
@@ -393,7 +380,7 @@ This is a test agent.
       const results = await runAudit(unknownFile);
 
       expect(results).toHaveLength(1);
-      expect(results[0].status).toBe('error');
+      expect(results[0].summary.errors).toBeGreaterThan(0);
       expect(results[0].issues.some(i => i.code === 'UNKNOWN_FORMAT')).toBe(true);
     });
   });
@@ -410,7 +397,7 @@ This is a test agent.
       // Create plugin
       const pluginDir = safePath.join(projectDir, 'plugins', 'my-plugin');
       const pluginClaudeDir = safePath.join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
-      fs.mkdirSync(pluginClaudeDir, { recursive: true });
+      mkdirSyncReal(pluginClaudeDir, { recursive: true });
       fs.writeFileSync(
         safePath.join(pluginClaudeDir, PLUGIN_JSON_FILENAME),
         JSON.stringify({
@@ -423,7 +410,7 @@ This is a test agent.
       // Create marketplace
       const marketplaceDir = safePath.join(projectDir, 'marketplaces', MY_MARKETPLACE_NAME);
       const marketplaceClaudeDir = safePath.join(marketplaceDir, CLAUDE_PLUGIN_DIRNAME);
-      fs.mkdirSync(marketplaceClaudeDir, { recursive: true });
+      mkdirSyncReal(marketplaceClaudeDir, { recursive: true });
       fs.writeFileSync(
         safePath.join(marketplaceClaudeDir, MARKETPLACE_JSON_FILENAME),
         JSON.stringify({
@@ -435,7 +422,7 @@ This is a test agent.
 
       // Create registry
       const registriesDir = safePath.join(projectDir, 'registries');
-      fs.mkdirSync(registriesDir, { recursive: true });
+      mkdirSyncReal(registriesDir, { recursive: true });
       fs.writeFileSync(
         safePath.join(registriesDir, INSTALLED_PLUGINS_FILENAME),
         JSON.stringify({
@@ -446,7 +433,7 @@ This is a test agent.
 
       // Create SKILL.md
       const skillDir = safePath.join(projectDir, 'skills', 'my-skill');
-      fs.mkdirSync(skillDir, { recursive: true });
+      mkdirSyncReal(skillDir, { recursive: true });
       fs.writeFileSync(
         safePath.join(skillDir, 'SKILL.md'),
         `---
@@ -474,7 +461,7 @@ description: My skill
       const mockUserPluginsDir = safePath.join(tempDir, 'mock-user-plugins');
       const marketplaceDir = safePath.join(mockUserPluginsDir, 'marketplaces', 'test-marketplace', 'test-plugin');
       const skillsDir = safePath.join(marketplaceDir, 'skills', 'test-skill');
-      fs.mkdirSync(skillsDir, { recursive: true });
+      mkdirSyncReal(skillsDir, { recursive: true });
 
       // Create a SKILL.md with an error (name has spaces)
       fs.writeFileSync(

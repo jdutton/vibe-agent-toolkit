@@ -54,33 +54,30 @@ describe('resolveDialectRef — href dialect', () => {
 });
 
 describe('resolveDialectRef — claude-import dialect', () => {
-  it('strips one leading @ and resolves relative to the IMPORTING file', () => {
-    expect(resolveDialectRef(CLAUDE_IMPORT, '@b.md', SOURCE, ROOT)).toEqual({
+  // The token is a `harness_blob_imports.target`: the harness's extractor has
+  // already dropped the `@`, cut the fragment and unescaped `\ `. What is left
+  // is the binary's `et`.
+
+  it('resolves a relative target against the IMPORTING file, literally', () => {
+    expect(resolveDialectRef(CLAUDE_IMPORT, 'b.md', SOURCE, ROOT)).toEqual({
       kind: 'resolved',
       resolvedPath: `${ROOT}/docs/b.md`,
       anchor: undefined,
     });
+    // `et` percent-decodes nothing: `%20` is three characters of a file name.
+    // The control is `href`, which decodes it.
+    expect(resolvedPathOf(resolveDialectRef(CLAUDE_IMPORT, 'my%20file.md', SOURCE, ROOT)))
+      .toBe(`${ROOT}/docs/my%20file.md`);
+    expect(resolvedPathOf(resolveDialectRef('href', 'my%20file.md', SOURCE, ROOT)))
+      .toBe(`${ROOT}/docs/my file.md`);
   });
 
-  it('resolves a token with no @ exactly as href would', () => {
-    // The dialect strips an `@` when there is one; it does not require one. A
-    // rules file whose import is authored bare must still resolve, and it must
-    // resolve identically — the dialect changes three rules, not all of them.
-    expect(resolveDialectRef(CLAUDE_IMPORT, './b.md', SOURCE, ROOT))
-      .toEqual(resolveDialectRef('href', './b.md', SOURCE, ROOT));
-  });
-
-  it('expands @~/ to the home directory, landing OUTSIDE the corpus', () => {
+  it('expands ~/ to the home directory, landing OUTSIDE the corpus', () => {
     // The vendor's own recommended cross-worktree spelling. Resolving it INSIDE
     // the root is what made the one import that is working correctly read as a
     // broken one — and any severity rule escalating a path-shaped unresolved ref
     // would then warn on exactly it.
-    const result = resolveDialectRef(
-      CLAUDE_IMPORT,
-      '@~/.claude/my-project-instructions.md',
-      SOURCE,
-      ROOT,
-    );
+    const result = resolveDialectRef(CLAUDE_IMPORT, '~/.claude/my-project-instructions.md', SOURCE, ROOT);
 
     expect(result).toEqual({
       kind: 'resolved',
@@ -93,40 +90,26 @@ describe('resolveDialectRef — claude-import dialect', () => {
     expect(resolvedPathOf(result)?.startsWith(`${ROOT}/`)).toBe(false);
   });
 
+  it('reads a bare ~ as the home directory itself', () => {
+    expect(resolvedPathOf(resolveDialectRef(CLAUDE_IMPORT, '~', SOURCE, ROOT))).toBe(safePath.resolve(homedir()));
+  });
+
   it('reads a leading slash as FILESYSTEM-absolute, not root-relative', () => {
     // The vendor's meaning, and the opposite of `resolveLocalHref`'s. The second
     // assertion is the control: the SAME token under `href` lands inside the
     // corpus, which is what makes this a real divergence rather than a
     // restatement.
-    expect(resolvedPathOf(resolveDialectRef(CLAUDE_IMPORT, '@/etc/shared/policy.md', SOURCE, ROOT)))
+    expect(resolvedPathOf(resolveDialectRef(CLAUDE_IMPORT, '/etc/shared/policy.md', SOURCE, ROOT)))
       .toBe(safePath.resolve('/etc/shared/policy.md'));
     expect(resolvedPathOf(resolveDialectRef('href', '/etc/shared/policy.md', SOURCE, ROOT)))
       .toBe(safePath.resolve(ROOT, 'etc/shared/policy.md'));
   });
 
-  it('treats a bare @ as anchor-only rather than resolving the source directory', () => {
-    // Stripping the `@` leaves the empty string, and an empty href resolves to
-    // the containing DIRECTORY. Admitting that would make a stray `@` in prose
-    // pull a directory into the extent.
-    expect(resolveDialectRef(CLAUDE_IMPORT, '@', SOURCE, ROOT)).toEqual({ kind: 'anchor_only' });
-  });
-
-  it('strips only ONE @, so @@b.md names a file that starts with @', () => {
-    // A greedy strip would make a file genuinely named `@b.md` unreachable.
-    expect(resolvedPathOf(resolveDialectRef(CLAUDE_IMPORT, '@@b.md', SOURCE, ROOT)))
-      .toBe(`${ROOT}/docs/@b.md`);
-  });
-
-  it('carries an anchor through every branch', () => {
-    // `splitHrefAnchor` runs on all three routes, not only the delegated one —
-    // an anchor left glued to a `~/` or `/` path would make it name no file.
-    expect(resolveDialectRef(CLAUDE_IMPORT, '@b.md#section', SOURCE, ROOT).kind)
-      .toBe('resolved');
-    expect(resolveDialectRef(CLAUDE_IMPORT, '@b.md#section', SOURCE, ROOT))
-      .toEqual({ kind: 'resolved', resolvedPath: `${ROOT}/docs/b.md`, anchor: 'section' });
-    expect(resolveDialectRef(CLAUDE_IMPORT, '@~/notes.md#top', SOURCE, ROOT))
-      .toEqual({ kind: 'resolved', resolvedPath: safePath.join(homedir(), 'notes.md'), anchor: 'top' });
-    expect(resolveDialectRef(CLAUDE_IMPORT, '@/abs/notes.md#top', SOURCE, ROOT))
-      .toEqual({ kind: 'resolved', resolvedPath: safePath.resolve('/abs/notes.md'), anchor: 'top' });
+  it('trims the target, as `et` does, and names no file when nothing is left', () => {
+    // `@a.md\ ` extracts as `a.md ` — the escaped space survives the scanner
+    // and `et` trims it. A target of only spaces would resolve to the importing
+    // DIRECTORY; answering anchor-only keeps a directory out of the extent.
+    expect(resolvedPathOf(resolveDialectRef(CLAUDE_IMPORT, 'a.md ', SOURCE, ROOT))).toBe(`${ROOT}/docs/a.md`);
+    expect(resolveDialectRef(CLAUDE_IMPORT, '  ', SOURCE, ROOT)).toEqual({ kind: 'anchor_only' });
   });
 });

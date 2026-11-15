@@ -8,6 +8,7 @@
 import { basename } from 'node:path';
 
 import type { ScanResult } from '@vibe-agent-toolkit/discovery';
+import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
 /**
@@ -67,7 +68,7 @@ export function validateSkillFilename(skillPath: string): {
   message?: string;
 } {
   // Normalize path separators for cross-platform support
-  const normalizedPath = skillPath.replaceAll('\\', '/');
+  const normalizedPath = toForwardSlash(skillPath);
   const filename = basename(normalizedPath);
 
   if (filename === 'SKILL.md') {

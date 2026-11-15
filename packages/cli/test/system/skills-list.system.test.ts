@@ -10,25 +10,26 @@
 
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
 import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { beforeAll, describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
-import { getBinPath, getMonorepoRoot } from './test-common.js';
+import { SKILLS_LIST_REPORT_SCHEMA, type SkillsListData } from '../../src/commands/skills/list-schema.js';
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
-interface SkillEntry {
-  name: string;
-  path: string;
-  valid: boolean;
-  warning?: string;
-}
+import { getBinPath, getFixturePath } from './test-common.js';
 
-interface SkillsListOutput {
-  status: string;
-  context: string;
-  skillsFound: number;
-  skills: SkillEntry[];
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-14-');
+
+/** The listing's `data`, from an `ok` report the registry schema accepts. */
+function listingOf(stdout: string): SkillsListData {
+  const report = SKILLS_LIST_REPORT_SCHEMA.parse(yaml.parse(stdout));
+  // A directory this repo's scan could not list would make the count a floor, not the answer.
+  expect(report.status, stdout).toBe('ok');
+  if (report.data === null) throw new Error(`skills list published no data: ${stdout}`);
+  return report.data;
 }
 
 describe('skills list command (system test)', () => {
@@ -36,7 +37,7 @@ describe('skills list command (system test)', () => {
 
   // Shared results from beforeAll — avoids 4 redundant full-project scans
   let defaultResult: SpawnSyncReturns<string>;
-  let defaultParsed: SkillsListOutput;
+  let defaultParsed: SkillsListData;
   let verboseResult: SpawnSyncReturns<string>;
 
   beforeAll(() => {
@@ -45,14 +46,14 @@ describe('skills list command (system test)', () => {
       encoding: 'utf-8',
       cwd: process.cwd(),
     });
-    defaultParsed = yaml.parse(defaultResult.stdout) as SkillsListOutput;
+    defaultParsed = listingOf(defaultResult.stdout);
 
     // Run the verbose scan once
     verboseResult = spawnSync(NODE_EXECUTABLE, [binPath, 'skills', 'list', '--verbose'], {
       encoding: 'utf-8',
       cwd: process.cwd(),
     });
-  }, 60_000); // Two full-project scans (~15-20s each)
+  });
 
   it('should show help text', () => {
     const result = spawnSync(NODE_EXECUTABLE, [binPath, 'skills', 'list', '--help'], {
@@ -70,14 +71,11 @@ describe('skills list command (system test)', () => {
 
   it('should list project skills by default', () => {
     expect(defaultResult.status).toBe(0);
-    expect(defaultParsed).toHaveProperty('status', 'success');
     expect(defaultParsed).toHaveProperty('context', 'project');
-    expect(defaultParsed).toHaveProperty('skillsFound');
-    expect(defaultParsed).toHaveProperty('skills');
     expect(Array.isArray(defaultParsed.skills)).toBe(true);
 
-    // Should find at least the cat-agents skill
-    expect(defaultParsed.skillsFound).toBeGreaterThan(0);
+    // Should find at least one of this repo's skills
+    expect(defaultParsed.skills.length).toBeGreaterThan(0);
 
     // Verify result structure
     if (defaultParsed.skills.length > 0) {
@@ -91,7 +89,6 @@ describe('skills list command (system test)', () => {
 
   it('should output YAML format', () => {
     expect(defaultResult.status).toBe(0);
-    expect(defaultParsed.status).toBe('success');
     expect(['project', 'user']).toContain(defaultParsed.context);
   });
 
@@ -115,37 +112,27 @@ describe('skills list command (system test)', () => {
   it('should list skills at specific path', () => {
     // Resolved relative to this test file (not process.cwd()) so it works whether
     // vitest is invoked from the monorepo root or from packages/cli directly.
-    const catAgentsPath = safePath.join(getMonorepoRoot(import.meta.url), 'packages/vat-example-cat-agents');
-    const result = spawnSync(NODE_EXECUTABLE, [binPath, 'skills', 'list', catAgentsPath], {
+    const fixturePath = getFixturePath(import.meta.url, 'skills-minimal');
+    const result = spawnSync(NODE_EXECUTABLE, [binPath, 'skills', 'list', fixturePath], {
       encoding: 'utf-8',
       cwd: process.cwd(),
     });
 
-    const parsed = yaml.parse(result.stdout) as SkillsListOutput;
-
-    // Debug output if test fails
-    if (result.status !== 0) {
-      console.log('stdout:', result.stdout);
-      console.log('stderr:', result.stderr);
-    }
-
-    expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
+    expect(result.status, result.stderr).toBe(0);
+    const parsed = listingOf(result.stdout);
     expect(parsed.context).toBe('project');
 
     // Should find the skills
-    expect(parsed.skillsFound).toBeGreaterThan(0);
+    expect(parsed.skills.length).toBeGreaterThan(0);
     // The skill is authored at `resources/skills/SKILL.md` — a directory leaf of
-    // "skills" — but declares itself `vat-example-cat-agents`, which is also the
-    // output directory `vat skills build` gives it. List reports the declared
+    // "skills" — but declares itself `test-skill-1`. List reports the declared
     // name so it agrees with the build and with what install would install.
-    expect(parsed.skills.some(s => s.name === 'vat-example-cat-agents')).toBe(true);
+    expect(parsed.skills.some(s => s.name === 'test-skill-1')).toBe(true);
     expect(parsed.skills.some(s => s.name === 'skills')).toBe(false);
   });
 
   it('should exit with code 0 even with warnings', () => {
     // List command should always succeed (warnings don't fail)
     expect(defaultResult.status).toBe(0);
-    expect(defaultParsed.status).toBe('success');
   });
 });

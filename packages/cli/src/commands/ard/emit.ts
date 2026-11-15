@@ -7,8 +7,6 @@
  * this rule avoids.
  */
 
-import { existsSync } from 'node:fs';
-
 import {
   ArdDerivationError,
   buildArdEntries,
@@ -17,17 +15,25 @@ import {
   writeArdManifest,
   type ShadowedArdOverrideKey,
 } from '@vibe-agent-toolkit/resources';
-import { buildReport, ExitCode, reportSchema, type Finding, type Report } from '@vibe-agent-toolkit/schema';
-import { safePath, VatError } from '@vibe-agent-toolkit/utils';
-import { z } from 'zod';
+import {
+  buildReport,
+  exitCodeForReport,
+  type Finding,
+  type FindingsReport,
+  type Gate,
+  type OkReport,
+  type RefusalCode,
+} from '@vibe-agent-toolkit/schema';
+import { everywhere, pathPresent, safePath, VatError, withFsFault } from '@vibe-agent-toolkit/utils';
 
-import { handleReportCommandError, handleReportExpectedFailure } from '../../utils/command-error.js';
+import { refusalCodeOf } from '../../utils/command-refusal.js';
 import { loadConfig } from '../../utils/config-loader.js';
-import { createLogger } from '../../utils/logger.js';
-import { writeJsonOutput } from '../../utils/output.js';
+import { endWithRefusal, findingsGoToStderr, NOTHING_FINISHED, writeDocument } from '../../utils/document-writer.js';
+import { reportFindings } from '../../utils/issue-rendering.js';
 import { readPackageJsonOrAbsent } from '../../utils/package-json.js';
-import { discoverSkillsFromConfig } from '../skills/skill-discovery.js';
+import { discoverSkillsFromConfig, namedSkillsOrRefuse } from '../skills/skill-discovery.js';
 
+import type { ArdEmitData } from './emit-schema.js';
 import { collectArdSurfaces, type SkippedArdSurface } from './surfaces.js';
 
 /** Default destination, relative to the project root — the path ARD publishes at. */
@@ -135,13 +141,17 @@ function readProjectVersion(projectRoot: string): string | undefined {
  * @throws {ArdDerivationError} when a surface cannot be turned into a
  *   conformant entry — a missing `ard.baseUrl`, an unusable URN segment, or a
  *   trust identity that does not align with the publisher.
+ * @throws {FsFaultError} a `destination` fault (`RUN_INCOMPLETE`) when the OS refuses the manifest write.
  */
 export async function runArdEmit(options: ArdEmitOptions): Promise<ArdEmitResult> {
   const projectRoot = options.projectRoot ?? process.cwd();
-  if (!existsSync(projectRoot)) {
+  // Absent is the invocation naming nothing; a stat the OS refuses is the
+  // input's refusal (INPUT_UNREADABLE), never read as absent.
+  // The project root is the operator's own (`--project-root` or cwd): its own `within`.
+  if (!pathPresent(projectRoot, { follow: projectRoot }, everywhere('source'), 'probe')) {
     throw new ArdConfigMissingError(projectRoot, 'no-project-root');
   }
-  const config = loadConfig(projectRoot);
+  const config = loadConfig(projectRoot, 'source');
   if (config === undefined) {
     throw new ArdConfigMissingError(projectRoot, 'no-config-file');
   }
@@ -160,17 +170,21 @@ export async function runArdEmit(options: ArdEmitOptions): Promise<ArdEmitResult
       ? {}
       : {
           // `'refuse'`: a manifest cross-checked against a partial skill list
-          // would advertise or omit entries on a population it never saw. The
+          // would advertise or omit entries on a population it never saw — an
+          // unlistable directory or a SKILL.md whose parse was refused alike. The
           // throw is an invocation failure → exit 2 (see the catch in
           // `ardEmitCommand`).
-          discoveredSkills: (await discoverSkillsFromConfig(config.skills, projectRoot, 'refuse')).map(
-            (skill) => skill.name
-          ),
+          discoveredSkills: namedSkillsOrRefuse(
+            await discoverSkillsFromConfig(config.skills, projectRoot, 'refuse'),
+            projectRoot,
+          ).map((skill) => skill.name),
         }),
   });
   const manifest = buildArdManifest(buildArdEntries(surfaces, ard));
   const outputPath = safePath.resolve(projectRoot, options.output ?? DEFAULT_ARD_OUTPUT);
-  await writeArdManifest(manifest, outputPath);
+  // The OS refusing `--output` (read-only, full disk, a file where a directory
+  // must be) stopped the run: a fault on the output, not a VAT defect.
+  await withFsFault({ side: 'destination', action: `write ${outputPath}`, path: outputPath }, () => writeArdManifest(manifest, outputPath));
   return {
     outputPath,
     entryCount: manifest.entries.length,
@@ -180,10 +194,13 @@ export async function runArdEmit(options: ArdEmitOptions): Promise<ArdEmitResult
 }
 
 /**
- * The codes this run's findings carry. Not registry codes: nothing here is a
- * validation an adopter tunes through `validation.severity` — a skipped
- * surface is a fact about what the manifest could not advertise, and its
- * severity is the run's to decide.
+ * The codes this run's findings carry. The two refusals — no `ard:` block, a
+ * surface that would not derive — are REGISTRY refusal codes (`satisfies
+ * RefusalCode` below), so this command has no private vocabulary for "could
+ * not produce a manifest". The other three are not registry codes: nothing
+ * about them is a validation an adopter tunes through `validation.severity` — a
+ * skipped surface is a fact about what the manifest could not advertise, and
+ * its severity is the run's to decide.
  */
 export const ARD_EMIT_CODES = {
   /** A configured surface that became no entry, and why — the thing `--strict` gates. */
@@ -194,38 +211,25 @@ export const ARD_EMIT_CODES = {
    * losing block is dead config, and an author cannot see that from the file.
    */
   OVERRIDE_KEY_SHADOWED: 'ARD_OVERRIDE_KEY_SHADOWED',
+  /**
+   * The project was read and declares no `ard:` block, so no manifest was
+   * built. A finding at `error` — exit 1 — because the PROJECT is the subject,
+   * not the invocation: it is fixed by editing config.
+   */
+  NOT_CONFIGURED: 'ARD_NOT_CONFIGURED' satisfies RefusalCode,
+  /** A declared surface could not be derived into a conformant entry, so no manifest was written. */
+  DERIVATION_FAILED: 'ARD_DERIVATION_FAILED' satisfies RefusalCode,
+  /** `--strict` refused a manifest that leaves a declared surface (or everything) unadvertised. */
+  STRICT_REFUSED: 'ARD_STRICT_REFUSED',
 } as const;
 
+
 /**
- * What the run reports beyond its findings.
- *
- * 🪤 `entryCount: 0` is the empty manifest. A run that wrote `{"entries":[]}`
- * and one that wrote a full catalogue both used to end at exit 0 with a
- * cheerful line on stdout, and nothing a machine could read told them apart —
- * so a CI step that emits and publishes was green over a discovery document
- * advertising nothing. The envelope's `examined` is every configured surface
- * the run considered, so "nothing declared" (`examined: 0`) and "everything
- * declared was skipped" (`examined: N`, `entryCount: 0`) read differently too.
+ * The report this command's own builders produce — always a COMPLETED run
+ * (`ok` or `findings`). A run that could not finish ends through the shared
+ * failure path instead, so its `data` is never `null` here.
  */
-export const ArdEmitDataSchema = z.object({
-  outputPath: z.string(),
-  entryCount: z.number().int().nonnegative(),
-  /**
-   * Counts BESIDE the findings. The count is what a CI step gates on without
-   * a JSON path into an array; the finding is what the human it pages then
-   * acts on. Publishing only one of them answers "how many" or "which", never
-   * both.
-   */
-  skippedCount: z.number().int().nonnegative(),
-  shadowedCount: z.number().int().nonnegative(),
-}).strict();
-
-export type ArdEmitData = z.infer<typeof ArdEmitDataSchema>;
-
-/** The document `--format json` publishes. */
-export const ARD_EMIT_REPORT_SCHEMA = reportSchema(ArdEmitDataSchema);
-
-export type ArdEmitReport = Report<ArdEmitData>;
+export type ArdEmitReport = OkReport<ArdEmitData> | FindingsReport<ArdEmitData>;
 
 /** The finding one skipped surface becomes. Its text is the stderr line, so the two channels agree. */
 function skippedFinding(item: SkippedArdSurface): Finding {
@@ -249,9 +253,16 @@ function shadowedFinding(item: ShadowedArdOverrideKey): Finding {
   };
 }
 
-/** Pure: the report a result becomes, so the status rule is unit-testable. */
-export function buildArdEmitReport(result: ArdEmitResult): ArdEmitReport {
+/**
+ * Pure: the report a result becomes, so the status rule is unit-testable.
+ *
+ * @param result - What the run built
+ * @param gate - The gate the run is judged by (`--strict`)
+ * @returns The report
+ */
+export function buildArdEmitReport(result: ArdEmitResult, gate: Gate): ArdEmitReport {
   return buildReport<ArdEmitData>({
+    gate,
     // Every configured surface the run considered: the ones that became
     // entries and the ones it had to skip.
     examined: result.entryCount + result.skipped.length,
@@ -290,33 +301,97 @@ function strictFailure(report: ArdEmitReport): string | undefined {
   return undefined;
 }
 
-/** The human rendering: findings on stderr, the one summary line on stdout. */
-function writeArdEmitText(report: ArdEmitReport): void {
-  for (const finding of report.findings) {
-    process.stderr.write(`${finding.message}\n`);
+/**
+ * The report for a project VAT read and could build no manifest for.
+ *
+ * 🚨 These endings used to publish the envelope's ERROR branch (`status:
+ * error`) and exit 1 — a document saying "could not do its job" beside a code
+ * saying "the project failed its gate". They are findings about the project,
+ * so they are published as findings and the code is derived from them.
+ *
+ * @param code - Which refusal
+ * @param message - What the operator must change
+ * @param gate - The gate the run is judged by (`--strict`)
+ * @returns The report, at `error` severity, with nothing written
+ */
+function buildArdRefusalReport(
+  code: typeof ARD_EMIT_CODES.NOT_CONFIGURED | typeof ARD_EMIT_CODES.DERIVATION_FAILED,
+  message: string,
+  gate: Gate,
+): ArdEmitReport {
+  return buildReport<ArdEmitData>({
+    gate,
+    examined: 0,
+    findings: [{ code, severity: 'error', message }],
+    data: { outputPath: null, entryCount: 0, skippedCount: 0, shadowedCount: 0 },
+  });
+}
+
+/**
+ * The report `--strict` publishes: the same one, with the refusal as a finding.
+ *
+ * It used to be a stderr line beside a document that still said `status: ok`,
+ * and an exit 1 the document did not explain.
+ *
+ * @param report - What the run built
+ * @returns The report, with a `STRICT_REFUSED` error when `--strict` refuses it
+ */
+function withStrictVerdict(report: ArdEmitReport): ArdEmitReport {
+  const failure = strictFailure(report);
+  if (failure === undefined) return report;
+  return {
+    ...buildReport<ArdEmitData>({
+      gate: report.gate,
+      examined: report.examined,
+      findings: [...report.findings, { code: ARD_EMIT_CODES.STRICT_REFUSED, severity: 'error', message: failure }],
+      data: report.data,
+    }),
+    ...(report.durationMs === undefined ? {} : { durationMs: report.durationMs }),
+  };
+}
+
+/**
+ * The refusal an absence is: no project root is the invocation naming nothing
+ * (`USAGE_INVALID`); no config file is a project with nothing to derive from
+ * (`CONFIG_INVALID`). A project without an `ard:` block is a FINDING, not a
+ * refusal — `null` here, and published as `ARD_NOT_CONFIGURED` above.
+ */
+const ABSENCE_REFUSALS: Readonly<Record<ArdConfigAbsence, RefusalCode | null>> = {
+  'no-project-root': 'USAGE_INVALID',
+  'no-config-file': 'CONFIG_INVALID',
+  'no-ard-block': null,
+};
+
+/** Which refusal a failure that is not a finding about the project is. */
+function ardRefusalCode(error: unknown): RefusalCode {
+  const absence = error instanceof ArdConfigMissingError ? ABSENCE_REFUSALS[error.absence] : null;
+  return absence ?? refusalCodeOf(error);
+}
+
+/**
+ * Publish a report in the operator's format and end on the code the WRITTEN
+ * document derives. Its findings go to stderr under every format (the text
+ * document is one summary line); a refusal the writer adds is the writer's to say.
+ *
+ * @param report - The document
+ * @param format - `json`, or the human rendering
+ */
+function publishArdReport(report: ArdEmitReport, format: 'text' | 'json'): never {
+  const written = writeDocument('ard emit', report, format);
+  if (findingsGoToStderr('ard emit', format)) {
+    reportFindings(report.findings, { verbose: true, write: (line) => process.stderr.write(`${line}\n`) });
   }
-  const { entryCount, outputPath } = report.data;
-  process.stdout.write(`Wrote ${entryCount} ARD entr${entryCount === 1 ? 'y' : 'ies'} to ${outputPath}\n`);
+  process.exit(exitCodeForReport(written));
 }
 
 /** Action handler for `vat ard emit`. */
 export async function ardEmitCommand(options: ArdEmitOptions): Promise<void> {
-  const logger = createLogger(options.debug === true ? { debug: true } : {});
   const startTime = Date.now();
+  const gate: Gate = { strict: options.strict === true };
+  const format = options.format ?? 'text';
   try {
-    const report = { ...buildArdEmitReport(await runArdEmit(options)), durationMs: Date.now() - startTime };
-    if (options.format === 'json') {
-      // The report carries every skipped and shadowed surface in full, so the
-      // stderr lines would be the same facts twice on two channels.
-      writeJsonOutput(report);
-    } else {
-      writeArdEmitText(report);
-    }
-    const failure = options.strict === true ? strictFailure(report) : undefined;
-    if (failure !== undefined) {
-      process.stderr.write(`${failure}\n`);
-      process.exit(ExitCode.FINDINGS);
-    }
+    const built = { ...buildArdEmitReport(await runArdEmit(options), gate), durationMs: Date.now() - startTime };
+    publishArdReport(options.strict === true ? withStrictVerdict(built) : built, format);
   } catch (error) {
     // 🔑 THE RULE, in one sentence: **exit 1 means VAT read this project and
     // produced no manifest by its own rules — it declares no `ard:` block, or a
@@ -332,13 +407,13 @@ export async function ardEmitCommand(options: ArdEmitOptions): Promise<void> {
     // repositories which have not opted into ARD keys on exactly that split.
     //
     // Exit 2 is also what `vat okf validate` documents for the same conditions,
-    // and what an invalid config already did here through `handleReportCommandError`.
+    // and what an invalid config already did here (`CONFIG_INVALID`).
     // The old split had a missing config file exiting 1 and an invalid one
     // exiting 2 while the help called 2 "Unexpected internal failure" — so a CI
     // job reading 2 as a crash was paged for a typo.
     //
-    // ⚠️ Both endings publish their document through `handleReportExpectedFailure`,
-    // in the format the operator asked for. Written inline they published
+    // ⚠️ Both endings publish their document through the writer, in the
+    // format the operator asked for. Written inline they published
     // NOTHING — a `--format json` run of the commonest case of all, a
     // repository that never opted into ARD, wrote zero bytes to stdout and left
     // a CI wrapper parsing stderr for a fact the report is supposed to carry.
@@ -347,17 +422,18 @@ export async function ardEmitCommand(options: ArdEmitOptions): Promise<void> {
     // is a spy that RETURNS, so a bare call falls through to the handler below
     // and the run records a second exit — the same reason the inline endings
     // this replaced each carried a `return`.
-    if (error instanceof ArdConfigMissingError) {
-      return handleReportExpectedFailure(
-        error.message,
-        error.absence === 'no-ard-block' ? ExitCode.FINDINGS : ExitCode.ERROR,
-        startTime,
-        options.format
+    if (error instanceof ArdConfigMissingError && error.absence === 'no-ard-block') {
+      return publishArdReport(
+        { ...buildArdRefusalReport(ARD_EMIT_CODES.NOT_CONFIGURED, error.message, gate), durationMs: Date.now() - startTime },
+        format,
       );
     }
     if (error instanceof ArdDerivationError) {
-      return handleReportExpectedFailure(error.message, ExitCode.FINDINGS, startTime, options.format);
+      return publishArdReport(
+        { ...buildArdRefusalReport(ARD_EMIT_CODES.DERIVATION_FAILED, error.message, gate), durationMs: Date.now() - startTime },
+        format,
+      );
     }
-    handleReportCommandError(error, logger, startTime, 'ARD emit', options.format);
+    return endWithRefusal('ard emit', ardRefusalCode(error), error, format, gate, NOTHING_FINISHED);
   }
 }

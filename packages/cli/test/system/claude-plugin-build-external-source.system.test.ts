@@ -3,6 +3,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { PLUGIN_BUILD_REPORT_SCHEMA } from '../../src/commands/claude/plugin/build-schema.js';
+
 import {
   buildSkillsThenPlugin,
   createSkillMarkdown,
@@ -30,8 +32,7 @@ function buildFixture(tempDir: string): void {
   );
   writeTestFile(
     safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
-    `version: 1
-skills:
+    `skills:
   include: ["skills/**/SKILL.md"]
 claude:
   marketplaces:
@@ -94,11 +95,11 @@ describe('vat claude plugin build (externalSource)', () => {
     expect(upstream?.['author']).toBeUndefined();
 
     // The YAML report distinguishes "built" from "referenced".
-    expect(pb.parsed['pluginsBuilt']).toBe(1);
-    expect(pb.parsed['pluginsReferenced']).toBe(1);
-    const mps = pb.parsed['marketplaces'] as Array<Record<string, unknown>>;
-    const externalPlugins = mps[0]?.['externalPlugins'] as Array<Record<string, unknown>>;
-    expect(externalPlugins).toEqual([
+    const report = PLUGIN_BUILD_REPORT_SCHEMA.parse(pb.parsed);
+    if (report.status === 'error') throw new Error(report.error.message);
+    expect(report.data.pluginsBuilt).toBe(1);
+    expect(report.data.pluginsReferenced).toBe(1);
+    expect(report.data.marketplaces[0]?.externalPlugins).toEqual([
       {
         name: 'upstream-plugin',
         source: { source: 'github', repo: 'example-org/upstream-repo', ref: 'claude-marketplace' },
@@ -114,8 +115,7 @@ describe('vat claude plugin build (externalSource)', () => {
     );
     writeTestFile(
       safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
-      `version: 1
-claude:
+      `claude:
   marketplaces:
     mp1:
       owner:

@@ -15,31 +15,21 @@
  * elsewhere in the package or to lower nothing and add code.
  */
 export const COMMENT_DENSITY_CEILINGS: Readonly<Record<string, number>> = {
-  'agent-config': 25,
-  'agent-runtime': 43.8,
   'agent-skills': 50.7,
   'claude-marketplace': 42.6,
   'cli': 43.2,
   // 29.7 → 31.7 when the 565-row unused-exports allowlist moved out of src
   // into a data file: those rows counted as CODE, so the seed was inflated by
-  // ~1,000 lines of data and the ratio rose with no prose added.
-  'dev-tools': 31.7,
+  // ~1,000 lines of data and the ratio rose with no prose added. Banked to
+  // 30.6 when the built-output path evaluator landed.
+  'dev-tools': 30.6,
   'discovery': 42.1,
-  'gateway-mcp': 27.7,
-  'lab': 55.9,
-  'projection-sqlite': 63.6,
-  'rag': 50.5,
-  'rag-lancedb': 48.8,
+  'lab': 51.1,
+  'projection-sqlite': 62.6,
+  'rag': 48.9,
+  'rag-lancedb': 47.3,
   'resource-compiler': 38.6,
-  'resources': 62.8,
-  'runtime-claude-agent-sdk': 42.3,
-  'runtime-langchain': 50.8,
-  'runtime-openai': 51.6,
-  'runtime-vercel-ai-sdk': 57.6,
-  'schema': 44.4,
-  'test-agents': 34.9,
-  'transports': 34.9,
-  'utils': 62.8,
-  'vat-development-agents': 14.8,
-  'vat-example-cat-agents': 20.2,
+  'resources': 61.8,
+  'schema': 42,
+  'utils': 54.3,
 };

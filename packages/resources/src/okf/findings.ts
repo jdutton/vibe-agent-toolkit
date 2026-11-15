@@ -8,8 +8,6 @@
  * *conformance* unit-testable without a tree.
  */
 
-import * as yaml from 'yaml';
-
 import { OkfConceptFrontmatterSchema } from '../schemas/okf-concept.js';
 
 import type { OkfFinding } from './types.js';
@@ -43,6 +41,7 @@ const OKF_VERSION_GRAMMAR = /^\d+\.\d+$/;
 interface ParsedFrontmatter {
   frontmatter?: Record<string, unknown>;
   frontmatterError?: string;
+  frontmatterNotAMapping?: true;
   frontmatterSource?: string;
 }
 
@@ -50,17 +49,16 @@ interface ParsedFrontmatter {
  * The one finding for a frontmatter block VAT read and could not use.
  *
  * 🚨 The shape this detects is invisible by construction. `parseFrontmatterSource`
- * accepts only a non-null, non-array object as frontmatter and returns a bare
- * `{}` for everything else — a sequence, a bare scalar, `null` — with no error
- * beside it. So a block whose YAML is perfectly valid but is a *list* reaches
- * these judges carrying `frontmatterSource` and nothing else, which is
- * byte-for-byte how a document with an empty block arrives.
+ * accepts only a non-null, non-array object as frontmatter and returns no
+ * `frontmatter` and no error for everything else — a sequence, a bare scalar,
+ * `null`. So a block whose YAML is perfectly valid but is a *list* reaches
+ * these judges with no keys and no error, exactly as a document with an empty
+ * block does.
  *
- * The distinguishing evidence is therefore the SOURCE re-read for its VALUE:
- * a block that yielded no mapping and no error, and whose YAML value is not
- * null, can only have parsed to a sequence or a scalar. That is why
- * {@link ParsedFrontmatter} carries `frontmatterSource` on both lanes, and why
- * {@link isNotAMapping} parses it again rather than testing it for blankness.
+ * The distinguishing evidence is therefore the decoded VALUE, which only the
+ * parse's own decode sees: it sets `frontmatterNotAMapping` for a block whose
+ * YAML is a sequence, a scalar or a typed value (!!set, !!omap, !!timestamp, !!binary), and {@link ParsedFrontmatter} carries it on
+ * both lanes. Nothing here decodes YAML: that runs once, in the parse worker.
  *
  * ⚠️ A block whose value is NULL is excluded deliberately, and is not the same
  * case. `---\n---` parses to `{}` by rule and "carries no keys" is a true
@@ -86,27 +84,15 @@ function notAMappingDraft(document: string): OkfFindingDraft {
 }
 
 /**
- * True when the block yielded no mapping and no error, and its YAML value is
- * something other than null — a sequence or a scalar.
- *
- * The VALUE, not the source: `parseFrontmatterSource` folds null, sequence and
- * scalar into one `{}`, and only re-reading the block tells them apart. The
- * re-parse cannot throw for a block that produced no `frontmatterError`, and
- * a block that somehow does is not claimed as a non-mapping either.
+ * True when the block's YAML value is a sequence, a scalar or a typed value (!!set, !!omap, !!timestamp, !!binary) — the parse's
+ * `frontmatterNotAMapping`, the same flag the projection's `blob_conditions`
+ * reads.
  *
  * @param parsed - What the markdown parser made of the file
- * @returns Whether the YAML parsed to a sequence or a scalar
+ * @returns Whether the YAML parsed to a sequence, a scalar or a typed value
  */
 function isNotAMapping(parsed: ParsedFrontmatter): boolean {
-  if (parsed.frontmatter !== undefined || parsed.frontmatterError !== undefined) return false;
-  if (parsed.frontmatterSource === undefined) return false;
-  try {
-    return yaml.parse(parsed.frontmatterSource) !== null;
-  } catch (error) {
-    // Only the YAML parser's own refusal is "not claimed as a non-mapping".
-    if (!(error instanceof yaml.YAMLError)) throw error;
-    return false;
-  }
+  return parsed.frontmatterNotAMapping === true;
 }
 
 /** What inspecting a reserved `index.md` produced. */

@@ -88,7 +88,7 @@ describe('renderIoReport — the header', () => {
     const text = render();
 
     expect(text).toContain(`Subject:    ${COORDINATE.subject.id} @ aaaaaaaa`);
-    expect(text).toContain('Instrument: vat 0.1.42 (11111111)');
+    expect(text).toContain('Instrument: vat 0.1.42 (11111111, closure cccccccccccc)');
   });
 
   it('marks a dirty working tree, because the bytes measured are not that commit', () => {

@@ -4,8 +4,8 @@
  *
  * `vat resources query` runs one statement a person typed; `vat resources check`
  * runs the statements a project wrote down. They differ in what they do with
- * rows and in nothing else: same population, same store selection, same
- * ephemeral fallback, same cache tell. This module is that "and in nothing
+ * rows and in nothing else: same population, same store selection, same run
+ * database, same cache tell. This module is that "and in nothing
  * else", stated once so the two cannot drift into answering about different
  * corpora.
  *
@@ -16,7 +16,7 @@
  * release, shared by every root on the machine** (`defaultStoreDirectory()` is
  * `tmpdir/.vat-cache/<version>/projection-<shapeDigest>`), it retains three tree
  * hashes per root, and its blob tier is never evicted and carries no tree key at
- * all. `ProjectionStore.readExtent` narrows by `(rootId, treeHash)`; **arbitrary
+ * all. `FactStore.readExtent` narrows by `(rootId, treeHash)`; **arbitrary
  * SQL does not**, and cannot be made to — a `WHERE` clause the caller wrote is
  * not a key predicate.
  *
@@ -29,9 +29,10 @@
  * `store.ts` cites as the reason it chmods the cache `0o700`.
  *
  * ⇒ The store's job is to make the POPULATION cheap, and that is all. Whatever
- * `populate()` returns — served from the store or derived — is written into a
- * fresh in-memory database that holds this tree and nothing else, and the SQL
- * runs there. The saving is untouched (it was always in the population: on this
+ * `populate()` returns — served from the store or derived — opens a fresh
+ * in-memory run database that holds this tree and nothing else, and the SQL
+ * runs there. The fact store's factory returns a port with no SQL surface, so
+ * this is a property of the types as well as of this module. The saving is untouched (it was always in the population: on this
  * repository {@link ProjectionProvenance.populationMs} reads 1.16-1.18 s derived
  * against 0.29-0.31 s served), and "one tree, one answer" stops being a claim
  * about how callers behave and becomes a property of the shape.
@@ -52,32 +53,32 @@ import {
   allDerivedSpecs,
   buildResourceProjection,
   PROJECTION_TABLES,
-  splitProjectionByScope,
+  storeMissOf,
+  type LensRefusalCode,
+  type PopulationOutcome,
+  type Projection,
 } from '@vibe-agent-toolkit/resources';
+import { forEachInOrder, isVatError, VatError } from '@vibe-agent-toolkit/utils';
 
-import { gitTrackerForProjectRoot } from '../commands/audit/distributed-tree.js';
-
-import { evaluateAuthoredLenses } from './edge-lens-evaluation.js';
+import { CommandRefusalError } from './command-refusal.js';
+import type { LensPopulation } from './lens-population.js';
 import type { Logger } from './logger.js';
-import { populationWiring } from './population-wiring.js';
-import { openEphemeralQueryStore, withPopulationCache } from './projection-store.js';
+import { populateAndReport } from './population-wiring.js';
+import {
+  CHANGED_FILES_LENS,
+  definesCteNamed,
+  evaluateLens,
+  lensesNamedBy,
+  lensRelationNames,
+  lensPopulationOf,
+  relationsNamedBy,
+  type LensEvaluation,
+  type LensRefusal,
+} from './projection-lenses.js';
+import { openCompileProbe, openRunDatabase, withPopulationCache } from './projection-store.js';
 
-/**
- * The tree hash an in-memory store's one population is filed under.
- *
- * ⚠️ Deliberately NOT a tree hash. Nothing else ever opens this database, no
- * read-back compares the key against another run's, and the store is gone at the
- * end of the call — so the key only has to be internally consistent. A real
- * `git write-tree` here would cost a spawn to produce a value nobody reads, and
- * would invite the reader to believe the ephemeral store is shareable.
- */
-const EPHEMERAL_TREE_HASH = 'ephemeral';
-
-/** What SQLite says when a statement names something the schema does not have. */
+/** What SQLite says when a statement names something the schema does not have: wording only, never a code. */
 const NAME_NOT_FOUND: readonly string[] = ['no such table:', 'no such column:'];
-
-/** Where the POPULATION a statement ran against came from. */
-export type PopulationOrigin = 'derived' | 'store';
 
 /**
  * What a run's rows are, and where they came from.
@@ -92,12 +93,18 @@ export interface ProjectionProvenance {
   /**
    * 🔑 The cache tell. Reported rather than inferred, because it CANNOT be
    * inferred: a correct store hit and a correct re-derivation produce identical
-   * rows. A hit short-circuits `populate()` before the builder exists, so no
-   * contributor timing is filed — an empty record list IS the hit.
+   * rows. It is `populate()`'s own outcome, never a count of what ran.
    *
    * It describes the POPULATION, which is the only thing the store now affects.
    */
-  readonly population: PopulationOrigin;
+  readonly population: PopulationOutcome['population'];
+
+  /**
+   * The same tell for the lenses' OWN populations — the claude-context lens
+   * populates a lane of its own. `'none'` when no evaluated lens populated
+   * anything; see {@link lensPopulationOf}.
+   */
+  readonly lensPopulation: LensPopulation;
 
   /**
    * 🔑 What that origin was WORTH. {@link population} says whether the
@@ -114,9 +121,8 @@ export interface ProjectionProvenance {
    * {@link withQueriedProjection} does before it hands control to the caller's
    * work — opening the population cache (which, when a store is selected, is a
    * `git write-tree` spawn plus the backend's dynamic import and
-   * `openSqliteProjectionStore()`), the git tracker, `buildResourceProjection`,
-   * opening the ephemeral database, and writing the blob tier and the extent
-   * into it.
+   * `openSqliteFactStore()`), the git tracker, `buildResourceProjection`, and
+   * opening the run database over the projection.
    *
    * ⚠️ The population cache's CLOSE is outside it, necessarily: that runs in
    * `withPopulationCache`'s `finally`, after the caller's work returns, and a
@@ -161,15 +167,34 @@ export interface ProjectionProvenance {
   readonly populationMs: number;
 
   /**
-   * What EVALUATING THE LENS cost, separately from populating the tree.
+   * The lenses this run evaluated, by name, in evaluation order.
+   *
+   * 🔑 **Published because "which lenses ran" became a DECISION, and an
+   * unpublished decision is one nobody can check.** Without it an empty derived
+   * relation is ambiguous — no rows, or no evaluation? This is the tell, in the
+   * same family as {@link population}, and what makes a `lensSecs` of `0`
+   * legible rather than alarming.
+   *
+   * ⚠️ Not the only guard: a relation no evaluated lens produced does not
+   * EXIST in the run's database, so a statement naming it is refused by SQLite
+   * (see {@link withQueriedProjection}). This field explains a cheap run rather
+   * than excusing a blind one.
+   */
+  readonly lensesEvaluated: readonly string[];
+
+  /**
+   * What EVALUATING THE LENSES cost, separately from populating the tree.
    *
    * Separate because the two answer different questions and a reader must be
    * able to tell them apart. Population is work every verb pays and the store
-   * can make cheap; this is work the *edge relations* cost, it is paid on every
-   * run whether or not the caller's statement mentions them, and a store hit
-   * does NOT make it cheaper — the lens is evaluated over the served rows just
-   * as over derived ones. Folded into `populationMs` it would look like the
-   * store getting worse.
+   * can make cheap; this is work the *derived relations* cost, and a store hit
+   * does NOT make an authored-link evaluation cheaper — it is a pass over the
+   * served rows just as over derived ones. Folded into `populationMs` it would
+   * look like the store getting worse.
+   *
+   * ⚠️ **Not an unconditional cost.** A run whose statements name no derived
+   * relation evaluates nothing and reports `0`; {@link lensesEvaluated} says
+   * which lenses the number covers.
    *
    * ⚠️ **DISJOINT from `populationMs`, and that is enforced by where the
    * population clock stops, not by convention.** It shipped overlapping: the
@@ -179,9 +204,9 @@ export interface ProjectionProvenance {
    * a reader comparing a served run against a derived one is the whole reason
    * they are two fields.
    *
-   * ⚠️ Published rather than merely measured, because an unconditional cost
-   * that is invisible is the one nobody can argue with. If this ever grows
-   * large enough to be worth a flag, this field is the evidence that says so.
+   * ⚠️ Published rather than merely measured, because a cost that is invisible
+   * is the one nobody can argue with. It is the evidence the selection above
+   * rests on, and the evidence any future flag would rest on.
    */
   readonly lensMs: number;
 }
@@ -216,9 +241,9 @@ export interface PopulationExtent {
    *
    * 🪤 Realizations rather than any other count, because every alternative
    * fails to reach zero on the case that matters: `roots` always holds exactly
-   * one row (the invariant thrown for below), so a total over all twelve tables
+   * one row (the invariant thrown for below), so a total over every table
    * is never 0; `blobs` is content-keyed and deduped, so it counts parse REACH
-   * and already has its own guard in `onBlobPopulation`; and `resources` counts
+   * and already has its own report in `populateAndReport`; and `resources` counts
    * identities, which a corpus can legitimately have none of while enumerating
    * plenty. One row per enumerated path is non-zero exactly when something was
    * enumerated.
@@ -238,6 +263,72 @@ export type AskProjection = (
   sql: string,
   ...parameters: readonly string[]
 ) => readonly Record<string, unknown>[];
+
+/** The result columns one statement would produce, in order, without running it. */
+export type ColumnsOfStatement = (sql: string, ...parameters: readonly string[]) => readonly string[];
+
+/**
+ * A statement's failure, reworded by {@link describeQueryFailure} — keeping
+ * the thrown value's `code`.
+ *
+ * 🔑 The code is what tells the caller WHICH failure this is: the store's
+ * `PROJECTION_STATEMENT_REFUSED_CODE` means the statement is wrong (the
+ * author's to fix, a `USAGE_INVALID` refusal for `vat resources query`);
+ * anything uncoded is a defect. A bare `Error` would drop the code.
+ *
+ * A relation a lens REFUSED never reaches here: {@link refusedStatement} refuses its statement
+ * before it runs, so no code is ever read out of the engine's text.
+ *
+ * @param sql - The statement that was submitted
+ * @param error - What running or compiling it threw
+ * @param absent - The derived relations the database does not hold (none for the compile probe)
+ * @returns The error to throw in its place
+ */
+export function describedFailure(sql: string, error: unknown, absent: ReadonlySet<string>): Error {
+  const message = describeQueryFailure(sql, error instanceof Error ? error.message : String(error), absent);
+  return isVatError(error) ? new VatError(error.code, message, { cause: error }) : new Error(message, { cause: error });
+}
+
+/** The relations a lens can REFUSE to produce: a CTE may not take one of their names. */
+const REFUSABLE_RELATIONS: readonly string[] = lensRelationNames(CHANGED_FILES_LENS);
+
+/**
+ * A statement refused because it names a derived relation its lens could not evaluate. Its
+ * `refusal` is narrowed to {@link LensRefusalCode}, so the check lane can publish it as a broken
+ * check's `reason.refusal` and the type proves the value is one that field admits.
+ */
+export class RelationRefusedError extends CommandRefusalError {
+  declare readonly refusal: LensRefusalCode;
+
+  constructor(refusal: LensRefusalCode, message: string) {
+    super(refusal, message);
+  }
+}
+
+/**
+ * The refusal for a statement that names a relation its lens REFUSED to produce — decided from
+ * the relations the statement names, before it runs, so the lens's code and fix reach the
+ * operator whatever else in the statement SQLite would have stopped at first.
+ *
+ * @param sql - The statement about to run
+ * @param refusals - Each refused lens's refusal, by the SQL name of a relation it owns
+ * @returns The refusal, or undefined when the statement names no refused relation
+ */
+export function refusedStatement(sql: string, refusals: ReadonlyMap<string, LensRefusal>): RelationRefusedError | undefined {
+  // A CTE in a refusable relation's name either shadows the relation or trips its refusal, whose
+  // remedy (`--base`) would be wrong: the fix is the statement's, so it is refused first, either way.
+  const reserved = REFUSABLE_RELATIONS.find((name) => definesCteNamed(sql, name));
+  if (reserved !== undefined) {
+    return new RelationRefusedError('USAGE_INVALID', `\`${reserved}\` is a reserved relation name; rename the CTE.`);
+  }
+  const [relation] = relationsNamedBy(sql, refusals.keys());
+  const refused = relation === undefined ? undefined : refusals.get(relation);
+  if (relation === undefined || refused === undefined) return undefined;
+  return new RelationRefusedError(
+    refused.refusal,
+    `This statement reads ${relation}, a derived relation that could not be evaluated for this run: ${refused.refused}`,
+  );
+}
 
 /**
  * Compile every statement a run intends to ask, against the schema and NO rows,
@@ -282,15 +373,17 @@ export type AskProjection = (
  */
 export async function assertQueriesCompile(statements: readonly PreflightStatement[]): Promise<void> {
   if (statements.length === 0) return;
-  const probe = await openEphemeralQueryStore();
+  // 🔑 A compile PROBE, not the run database: this runs before any lens is
+  // evaluated, and the run database has no table for an unevaluated relation.
+  // The probe carries every derived relation and cannot answer a query, so its
+  // empty tables can never be read as a result.
+  const probe = await openCompileProbe();
   try {
     for (const { sql, parameters } of statements) {
       try {
         probe.assertCompiles(sql, parameters);
       } catch (error) {
-        throw new Error(
-          describeQueryFailure(sql, error instanceof Error ? error.message : String(error)),
-        );
+        throw describedFailure(sql, error, new Set());
       }
     }
   } finally {
@@ -304,22 +397,44 @@ export async function assertQueriesCompile(statements: readonly PreflightStateme
  *
  * @param options - The run
  * @param options.root - Absolute corpus root
- * @param options.logger - Where blob-stage refusals are reported (stderr, so a
- *   parseable document on stdout stays parseable)
+ * @param options.logger - Where the population's refused content is reported
+ *   (stderr, so a parseable document on stdout stays parseable)
  * @param options.preflight - Every statement this run intends to ask, compiled
  *   against the empty schema BEFORE the population starts. See
  *   {@link assertQueriesCompile}
- * @param work - Given the asker, where its rows came from, and how much of the
- *   tree they cover. The store is open for exactly this call and closed however
- *   it ends
+ * @param options.statements - Every statement this run may ask, for LENS
+ *   SELECTION only — never compiled, never bound, and deliberately separate from
+ *   `preflight`. ⛔ Omitting it evaluates EVERY lens, which is the correct answer
+ *   and the expensive one
+ * @param options.base - The `--base` ref for the changed-files lens, or undefined when the run was
+ *   given none. REQUIRED, so no caller can drop the person's `--base` and still compile
+ * @param work - Given the asker, where its rows came from, how much of the tree
+ *   they cover, and the ROWS THEMSELVES. The run database is open for exactly this call
+ *   and closed however it ends
  * @returns Whatever `work` returned
  */
 export async function withQueriedProjection<T>(
-  options: { root: string; logger: Logger; preflight?: readonly PreflightStatement[] },
+  options: {
+    root: string;
+    logger: Logger;
+    preflight?: readonly PreflightStatement[];
+    statements?: readonly string[];
+    base: string | undefined;
+  },
   work: (
     ask: AskProjection,
     provenance: ProjectionProvenance,
     extent: PopulationExtent,
+    // 🔑 The in-memory rows, beside `ask` rather than instead of it: a built-in
+    // check is a TypeScript predicate over the row model (no built-in may be
+    // SQL) and needs the rows, not a database. Free to hand over — the
+    // run database was loaded FROM them.
+    //
+    // ⚠️ Not a second way to ask the same question. Nothing here re-derives,
+    // re-filters or re-scopes; a caller wanting a relational answer uses `ask`.
+    projection: Projection,
+    // The shape of an answer, which its rows cannot carry when there are none.
+    columnsOf: ColumnsOfStatement,
   ) => Promise<T> | T,
 ): Promise<T> {
   const { root, logger } = options;
@@ -334,7 +449,7 @@ export async function withQueriedProjection<T>(
 
   // 🚨 OUTSIDE `withPopulationCache`, and it must stay outside. That helper
   // awaits `openPopulationCache` — a `git write-tree` spawn plus the backend's
-  // dynamic import and `openSqliteProjectionStore()` — BEFORE it invokes the
+  // dynamic import and `openSqliteFactStore()` — BEFORE it invokes the
   // callback below, and it pays that cost ONLY when a store is selected. A clock
   // started inside the callback therefore drops the store's own setup out of the
   // measurement on precisely the arm the number is used to praise. See
@@ -346,91 +461,103 @@ export async function withQueriedProjection<T>(
   // fold the caller's statements into a number whose entire purpose is to be
   // read against them. The close is a handle release on an already-open
   // database, not population.
-  let contributorRecords = 0;
   const populationStart = performance.now();
 
   // The file-backed store, when one is selected, and ONLY as a population cache.
   // Its rows are never queried — see the header.
   return withPopulationCache({ root }, async (cache) => {
-    // The cache tell. `populate()` short-circuits a hit before any contributor
-    // is constructed, so this staying at zero is the ONLY observable difference
-    // between a served population and a re-derived one. Declared with the clock
-    // above rather than here so the two cannot drift apart when one moves.
-    const gitTracker = await gitTrackerForProjectRoot(root);
-    const projection = await buildResourceProjection({
-      root,
-      ...populationWiring(logger, gitTracker, cache, root),
-      onContributorTiming: () => {
-        contributorRecords += 1;
-      },
-    });
+    // The cache tell is `populate()`'s own outcome — see `ProjectionProvenance.population`.
+    const { projection, outcome } = await populateAndReport(
+      { root, cache, logger, population: 'resources' },
+      (wiring) => buildResourceProjection({ root, ...wiring }),
+      (result) => result.projection,
+      (result) => storeMissOf(result.outcome),
+    );
 
     // ONE tree, in a database nothing else can reach, built fresh for this call.
-    const store = await openEphemeralQueryStore();
+    const runDatabase = await openRunDatabase(projection);
     try {
-      // The key is read OFF the projection rather than re-derived from the root.
-      // The driver mints `roots.id` with `rootIdFor` and every
-      // `resolution_contexts.rootId` is a foreign key into it, so taking it from
-      // the rows means the key provably describes them — a second derivation
-      // could drift from the first and file rows under an id they do not carry.
-      const rootId = projection.roots[0]?.id;
-      if (rootId === undefined) {
-        throw new Error(
-          'The population produced no root row, so there is no id to file its extent under.'
-          + ' This is a driver invariant rather than a user error — `populate()` adds exactly'
-          + ' one, and a projection without it cannot be stored or queried.',
-        );
-      }
-      const { blobs, extent } = splitProjectionByScope(projection);
-      await store.writeBlobFacts(blobs);
-      await store.writeExtent({ rootId, treeHash: EPHEMERAL_TREE_HASH }, extent);
-      // 🚨 The population clock STOPS HERE, before the lens runs. It used to
-      // stop after, which made `populationSecs` silently CONTAIN `lensSecs`
-      // while this comment and both payloads said it did not. The two numbers
-      // are published side by side precisely so a reader can compare a served
-      // population against a derived one — and folding the lens into the
-      // population put its cost on the arm the store's value is argued from,
-      // which is the "store got worse" reading the separation exists to
-      // prevent. Overlapping spans also made `populationSecs + lensSecs`
-      // over-count wall time for anyone who added them.
+      // 🚨 The population clock STOPS HERE, before the lens runs, so
+      // `populationSecs` never contains `lensSecs`: the two are published side by
+      // side to compare a served population against a derived one, and must not
+      // overlap.
       const populationMs = performance.now() - populationStart;
 
-      // The lens's output, alongside the tree's facts. Unconditional rather
-      // than behind a flag: the relations are the answer to questions the
-      // projection was built to support, and a surface that exists only when
-      // someone remembered a flag is one nobody writes a check against. What it
-      // costs is published as `lensSecs` rather than folded into the population
-      // — a caller who finds it too expensive can see the number they are
-      // paying, which a hidden cost never permits.
+      // 🔑 The lenses this run's statements NAME, and no others — zones.md §2
+      // carries why. The relations are still not behind a flag: a surface that
+      // exists only when somebody remembered a flag is one nobody writes a check
+      // against. What decides is the statement, which cannot be forgotten.
+      //
+      // ⛔ The narrowing is safe ONLY because an unevaluated relation does not
+      // EXIST in `runDatabase`: the backend creates a derived table on the write that
+      // fills it, so a statement naming one no lens filled fails `no such table`
+      // in SQLite itself — whatever spelling slipped past the selector's scan.
+      // Create the relations up front and this becomes a silent wrong answer: an
+      // empty table selecting zero rows.
+      const lenses = lensesNamedBy(options.statements);
       const lensStart = performance.now();
-      await store.writeDerived(evaluateAuthoredLenses(projection));
-      const lensMs = performance.now() - lensStart;
+      // Sequential, not `Promise.all`: a lens may populate, and two
+      // populations racing for one projection is the concurrency this
+      // lane has no reason to invite.
+      const lensPopulations: LensEvaluation['population'][] = [];
+      const evaluated: string[] = [];
+      // 🚨 A REFUSED lens writes nothing; a statement naming its relation is refused before it runs.
+      const refusals = new Map<string, LensRefusal>();
+      const absent = new Set(allDerivedSpecs().map((spec) => spec.name));
+      await forEachInOrder(lenses, async (lens) => {
+        const evaluation = await evaluateLens(lens, { projection, root, base: options.base, cache, logger });
+        if ('refused' in evaluation) {
+          for (const relation of lensRelationNames(lens)) refusals.set(relation, evaluation);
+          return;
+        }
+        evaluated.push(lens.name);
+        lensPopulations.push(evaluation.population);
+        for (const relation of lensRelationNames(lens)) absent.delete(relation);
+        await runDatabase.writeDerived(evaluation.rows);
+      });
+      // Exactly 0 when no lens was named, as `ProjectionProvenance.lensMs`
+      // promises. Timing the empty loop instead published whatever a GC pause or
+      // a descheduled thread put inside the span (2.97 ms on a loaded runner) as
+      // lens cost.
+      const lensMs = lenses.length === 0 ? 0 : performance.now() - lensStart;
       // The shared setup is done. Everything after this line is the caller's.
 
-      const ask: AskProjection = (sql, ...parameters) => {
+      /** Run one statement against the run database, unless it names a relation a lens refused. */
+      const guarded = <R>(sql: string, run: () => R): R => {
+        const refused = refusedStatement(sql, refusals);
+        if (refused !== undefined) throw refused;
         try {
-          return store.query(sql, ...parameters);
+          return run();
         } catch (error) {
-          throw new Error(
-            describeQueryFailure(sql, error instanceof Error ? error.message : String(error)),
-          );
+          throw describedFailure(sql, error, absent);
         }
       };
+      const ask: AskProjection = (sql, ...parameters) => guarded(sql, () => runDatabase.query(sql, ...parameters));
+      const columnsOf: ColumnsOfStatement = (sql, ...parameters) => guarded(sql, () => runDatabase.columns(sql, ...parameters));
 
       return await work(
         ask,
-        { population: contributorRecords === 0 ? 'store' : 'derived', populationMs, lensMs },
-        // Read off the PROJECTION rather than counted back out of the store with
+        {
+          population: outcome.population,
+          lensPopulation: lensPopulationOf(lensPopulations),
+          populationMs,
+          lensMs,
+          // Only the lenses that ANSWERED: a refused one produced no relation.
+          lensesEvaluated: evaluated,
+        },
+        // Read off the PROJECTION rather than counted back out of the run database with
         // a `SELECT COUNT(*)`: a count that travelled through the same `ask` the
         // caller's statements do would be broken by the very schema drift it
         // exists to survive, and it is the population's size either way.
         { membersEnumerated: projection.resourceRealizations.length },
+        projection,
+        columnsOf,
       );
     } finally {
       // Closed however the work ends. An in-memory database is reclaimed with the
       // process either way, but a command that runs several of these in one
       // process would otherwise hold every one of them open.
-      await store.close();
+      await runDatabase.close();
     }
   });
 }
@@ -466,11 +593,28 @@ export async function withQueriedProjection<T>(
  *
  * @param sql - The statement that was submitted
  * @param message - What the engine said
+ * @param absent - The derived relations the database does not hold, by SQL name
  * @returns The message to surface, with the queryable surface appended when the
  *   failure was a name this projection does not have
  */
-export function describeQueryFailure(sql: string, message: string): string {
+export function describeQueryFailure(sql: string, message: string, absent: ReadonlySet<string>): string {
   if (!NAME_NOT_FOUND.some((prefix) => message.includes(prefix))) return message;
+
+  // 🚨 A MISSING DERIVED RELATION IS NOT A TYPO — it is the refusal that makes
+  // lazy lens evaluation an optimisation. The run's database creates a derived
+  // relation only when a lens fills it, so one no lens was evaluated for is
+  // absent, and SQLite refuses it rather than answering `0` from an empty table
+  // (indistinguishable from a tree with no links, and for `vat resources check`
+  // a rule that could no longer fail). Which relation is read off the statement,
+  // never out of the engine's text. The compile probe holds them all.
+  const [unevaluated] = relationsNamedBy(sql, absent);
+  if (unevaluated !== undefined) {
+    return `${message}\n\n`
+      + `This statement reads ${unevaluated}, a derived relation that was not evaluated for this run:`
+      + ' no statement the run DECLARED names it, so no lens producing it ran and there is no answer'
+      + ' to give. Declare this statement (`vat resources query` passes the one it was given;'
+      + ' `vat resources check` passes every statement in `resources.checks`).';
+  }
 
   // 🪤 The derived relations belong in this listing even though they are not
   // projection tables. A user who mistypes `edge_resolution` gets "no such

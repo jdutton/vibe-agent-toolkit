@@ -7,16 +7,22 @@
  * (`okf.bundle:`, `okf.Bundles:`) therefore read as a clean bill of health,
  * which is the *green-without-running* shape this repo keeps finding.
  *
- * The report envelope's REQUIRED `examined` is what closes it now: a run that
- * checked nothing says `examined: 0`, and the notice says why. Exit code stays
- * 0 on purpose: nothing failed.
+ * A run that examined nothing is refused by the writer: one non-overridable
+ * `RESOURCE_CHECK_BROKEN` at `error` (the run-integrity mechanism every other
+ * gate uses), so `status: findings` and exit 1, with the notice saying why.
+ * Each case therefore reads the PUBLISHED report.
+ * `examined: 0` beside `status: ok` read as a pass to every consumer that
+ * gates on the status or the exit code rather than on the denominator.
  */
 import type { OkfFinding } from '@vibe-agent-toolkit/resources';
+import { exitCodeForReport } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { createOkfCommand } from '../src/commands/okf/index.js';
-import { OKF_VALIDATE_REPORT_SCHEMA, summarizeOkfBundles, type CheckedOkfBundle } from '../src/commands/okf/validate.js';
+import { OKF_VALIDATE_REPORT_SCHEMA } from '../src/commands/okf/validate-schema.js';
+import { summarizeOkfBundles, unreadableRootRefusal, type CheckedOkfBundle } from '../src/commands/okf/validate.js';
+import { publishedReport, refusalReport } from '../src/utils/document-writer.js';
 
 // Built from the cwd rather than a `/`-rooted literal, so the root has a drive
 // letter on Windows and `issueLocation` relativizes it the same way everywhere.
@@ -41,9 +47,20 @@ function report(bundle: string, findings: OkfFinding[] = []): CheckedOkfBundle {
       conceptDocuments: ['concepts/a.md'],
       reservedDocuments: [],
       findings,
+      parseRefused: [],
       hasErrors: findings.some((f) => f.severity === 'error'),
     },
     root: safePath.join(PROJECT_ROOT, 'bundles', bundle),
+  };
+}
+
+/** The finding the resources lane reports for a bundle root the OS would not list. */
+function rootUnreadable(bundle: string): OkfFinding {
+  return {
+    code: 'OKF_BUNDLE_ROOT_UNREADABLE',
+    severity: 'error',
+    message: `okf.bundles.${bundle}.root is not a readable directory (EACCES)`,
+    document: '.',
   };
 }
 
@@ -56,6 +73,7 @@ function emptyReport(bundle: string): CheckedOkfBundle {
       conceptDocuments: [],
       reservedDocuments: [],
       findings: [],
+      parseRefused: [],
       hasErrors: false,
     },
     root: safePath.join(PROJECT_ROOT, 'bundles', bundle),
@@ -63,7 +81,7 @@ function emptyReport(bundle: string): CheckedOkfBundle {
 }
 
 function summarize(checked: readonly CheckedOkfBundle[]) {
-  return summarizeOkfBundles(checked, PROJECT_ROOT);
+  return publishedReport('okf validate', summarizeOkfBundles(checked, PROJECT_ROOT, {}));
 }
 
 /** The `validate` subcommand, with Commander's process.exit disabled. */
@@ -76,14 +94,57 @@ function validateSubcommand() {
   return { okf, validate };
 }
 
+/** A bundle one of whose documents had its parse refused for this run. */
+function refusedReport(): CheckedOkfBundle {
+  const checked = report('knowledge');
+  const filePath = safePath.join(checked.root, 'concepts', 'huge.md');
+  return {
+    ...checked,
+    report: {
+      ...checked.report,
+      parseRefused: [{ filePath, code: 'RESOURCE_PARSE_LIMIT_EXCEEDED', reason: 'its parse was stopped at its outputRows limit (16384)' }],
+      hasErrors: true,
+    },
+  };
+}
+
+describe('a refused parse in a bundle', () => {
+  // One contract (ADR I11): the same code, sentence, allow list and severity as
+  // every other lane — never a lane-local finding no config reaches.
+  it('is reported as the not-admitted contract reports it', () => {
+    const summary = summarizeOkfBundles([refusedReport()], PROJECT_ROOT, {});
+
+    expect(summary.findings).toHaveLength(1);
+    expect(summary.findings).toMatchObject([
+      {
+        code: 'RESOURCE_PARSE_LIMIT_EXCEEDED',
+        severity: 'error',
+        location: 'bundles/knowledge/concepts/huge.md',
+        message: "'bundles/knowledge/concepts/huge.md' was enumerated but its parse was stopped at its outputRows limit (16384), so its OKF conformance was not assessed. Nothing was stored for it: the next run parses it again.",
+      },
+    ]);
+  });
+
+  it('honours the project\'s allow list and severity', () => {
+    const allowed = summarizeOkfBundles([refusedReport()], PROJECT_ROOT, {
+      allow: { RESOURCE_PARSE_LIMIT_EXCEEDED: [{ paths: ['bundles/knowledge/**'], reason: 'generated' }] },
+    });
+    const lowered = summarizeOkfBundles([refusedReport()], PROJECT_ROOT, { severity: { RESOURCE_PARSE_LIMIT_EXCEEDED: 'warning' } });
+
+    expect(allowed.findings).toEqual([]);
+    expect(lowered.findings.map((found) => found.severity)).toEqual(['warning']);
+  });
+});
+
 describe('summarizeOkfBundles', () => {
-  it('examined zero, not passed, when nothing was declared', () => {
+  it('refuses the run as RESOURCE_CHECK_BROKEN, exit 1, when nothing was declared', () => {
     const summary = summarize([]);
 
-    expect(summary.status).toBe('ok');
+    expect(summary.status).toBe('findings');
     expect(summary.examined).toBe(0);
-    expect(summary.findings).toEqual([]);
-    expect(summary.summary).toEqual({ errors: 0, warnings: 0, info: 0 });
+    expect(summary.findings.map((f) => [f.code, f.severity])).toEqual([['RESOURCE_CHECK_BROKEN', 'error']]);
+    expect(summary.summary).toEqual({ errors: 1, warnings: 0, info: 0 });
+    expect(exitCodeForReport(summary)).toBe(1);
     expect(summary.data.bundles).toEqual([]);
   });
 
@@ -122,6 +183,19 @@ describe('summarizeOkfBundles', () => {
     // an adopter's validator.
     expect(OKF_VALIDATE_REPORT_SCHEMA.safeParse(summarize([])).success).toBe(true);
     expect(OKF_VALIDATE_REPORT_SCHEMA.safeParse(summarize([report('knowledge', [finding('error')])])).success).toBe(true);
+  });
+
+  // A bundle declared at `../shared-docs` lies outside the project: its documents have no location
+  // the published schema accepts, so the finding names its path instead of killing the report.
+  it('publishes a finding in a bundle outside the project with no location, its path in the message', () => {
+    const outside: CheckedOkfBundle = { ...report('shared', [finding('error')]), root: safePath.resolve(PROJECT_ROOT, '../shared-docs') };
+    const summary = summarize([outside]);
+
+    expect(OKF_VALIDATE_REPORT_SCHEMA.safeParse(summary).success).toBe(true);
+    expect(exitCodeForReport(summary)).toBe(1);
+    expect(summary.findings).toHaveLength(1);
+    expect(summary.findings[0]).not.toHaveProperty('location');
+    expect(summary.findings[0]?.message).toContain('shared-docs/concepts/a.md');
   });
 
   it('names the bundle root itself for the root-unreadable finding', () => {
@@ -176,7 +250,7 @@ describe('summarizeOkfBundles', () => {
     // checked result. Both examine zero; the rows and the notice tell them apart.
     const summary = summarize([emptyReport('empty-but-declared')]);
 
-    expect(summary.status).toBe('ok');
+    expect(summary.status).toBe('findings');
     expect(summary.examined).toBe(0);
     expect(summary.data.bundles).toHaveLength(1);
   });
@@ -187,15 +261,47 @@ describe('summarizeOkfBundles', () => {
     // that nothing was read. That is the same green-without-running shape the
     // `no-bundles` notice was added for, one level down: a `root:` typo landing
     // on a real-but-wrong directory, or a root one level too deep, reads as a
-    // clean bill of health. The status word and the exit code do not move —
-    // nothing failed — but the report now says so out loud.
+    // clean bill of health. A run whose EVERY bundle is empty examined nothing
+    // and is refused like the empty declaration; the notice names the bundles.
 
     it('says so in the notice, naming the bundle', () => {
       const summary = summarize([emptyReport('empty')]);
 
       expect(summary.data.notice).toBeDefined();
       expect(summary.data.notice).toContain("'empty'");
+      expect(summary.status).toBe('findings');
+      expect(summary.findings.map((f) => f.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
+      expect(exitCodeForReport(summary)).toBe(1);
+    });
+
+    it('does not refuse a run where another bundle WAS read — the notice alone names the empty one', () => {
+      const summary = summarize([emptyReport('empty'), report('knowledge')]);
+
       expect(summary.status).toBe('ok');
+      expect(summary.data.notice).toContain("'empty'");
+      expect(exitCodeForReport(summary)).toBe(0);
+    });
+
+    it('refuses an unreadable root as INPUT_UNREADABLE, publishing every other bundle\'s work', () => {
+      // A directory the OS will not list ends on 2 in every verb. The writer's
+      // "declare a bundle" remedy would be wrong here: the bundle IS declared.
+      const gone = emptyReport('gone');
+      const unreadable = { ...gone, report: { ...gone.report, findings: [rootUnreadable('gone')], hasErrors: true } };
+      const summary = summarizeOkfBundles([unreadable, report('knowledge', [finding('error')])], PROJECT_ROOT, {});
+      const refusal = unreadableRootRefusal(summary);
+
+      expect(refusal?.message).toContain('okf.bundles.gone.root');
+      expect(refusal?.finished.examined).toBe(1);
+      expect(refusal?.finished.findings.map((f) => f.code)).toEqual(['OKF_FRONTMATTER_MISSING']);
+      // The error branch that carries it is one the published schema accepts, and ends on 2.
+      if (refusal === undefined) throw new Error('no refusal');
+      const published = refusalReport('INPUT_UNREADABLE', refusal.message, { strict: false }, refusal.finished);
+      expect(OKF_VALIDATE_REPORT_SCHEMA.safeParse(published).success).toBe(true);
+      expect(exitCodeForReport(published)).toBe(2);
+    });
+
+    it('does not refuse a run whose every root was read', () => {
+      expect(unreadableRootRefusal(summarizeOkfBundles([report('knowledge', [finding('error')])], PROJECT_ROOT, {}))).toBeUndefined();
     });
 
     it('names every empty bundle, not just the first', () => {

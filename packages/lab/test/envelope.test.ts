@@ -11,9 +11,12 @@
  * `envelope/envelope.ts`'s header.
  */
 
+import { availableParallelism, totalmem } from 'node:os';
+
 import { describe, expect, it } from 'vitest';
 
 import {
+  currentHost,
   readEnvelope,
   refuseDifferentFacets,
   type ReportEnvelope,
@@ -83,11 +86,45 @@ describe('readEnvelope', () => {
     expect(result.refusal).toContain('dirty');
   });
 
-  it('refuses a value that is not an envelope at all', () => {
+  it('refuses a stored report whose instrument carries no closure digest, saying it may have measured another version', () => {
+    // An `npx:` report from before the lab installed the pin: it ran through npx's wrapper,
+    // which could run the subject's own vat, so its pinned name proves nothing.
+    const result = readEnvelope(
+      stored({ coordinate: { ...COORDINATE, instrument: { version: '0.2.0', commit: null, dirty: null, closure: null } } }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.refusal).toContain('re-capture it');
+    expect(result.refusal).toContain('no closure digest: it may have measured another version than it names');
+  });
+
+  it('refuses a value that is not an envelope at all — and does not blame an older lab for it', () => {
     const result = readEnvelope({ hello: 'world' });
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
-    expect(result.refusal).toMatch(/^REFUSED:/);
+    expect(result.refusal).toMatch(/^REFUSED: not a report envelope/u);
+    expect(result.refusal).not.toContain('re-capture');
+  });
+
+  it('refuses a report an older lab captured (no removedEnv) by naming the cause and the remedy, then the field', () => {
+    const older = Object.fromEntries(Object.entries(stored()).filter(([key]) => key !== 'removedEnv'));
+    const result = readEnvelope(older);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.refusal).toMatch(
+      /^REFUSED: this perf report was captured by a lab whose report shape differs from this one \(usually an older lab\) — re-capture it\./u,
+    );
+    expect(result.refusal).toContain('removedEnv');
+  });
+
+  it('refuses a report of the previous exit shape (`observed`, no npmNetworkEnv) with the re-capture remedy, naming both fields', () => {
+    const older = Object.fromEntries(Object.entries(stored()).filter(([key]) => key !== 'npmNetworkEnv'));
+    const result = readEnvelope({ ...older, exits: [{ step: 'audit', commitment: { kind: 'exact', code: 0 }, observed: 0 }] });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.refusal).toMatch(/^REFUSED: this perf report was captured by a lab whose report shape differs from this one .* — re-capture it\./u);
+    expect(result.refusal).toContain('npmNetworkEnv');
+    expect(result.refusal).toContain('exits');
   });
 
   it('refuses an envelope carrying an unknown header field', () => {
@@ -134,4 +171,28 @@ describe('refuseDifferentFacets', () => {
   // agrees with itself perfectly. `harness/facet-compare.ts`'s `readBody`
   // validates each side against this build's strict schema instead, and every
   // facet's comparator suite exercises exactly that matched-pair case.
+});
+
+describe('currentHost', () => {
+  it('records the architecture and the NODE_OPTIONS the arm hands every measured child', () => {
+    const host = currentHost({ set: { NODE_OPTIONS: ' --max-old-space-size=123 ' }, unset: [] });
+
+    expect(host).toEqual({
+      platform: process.platform,
+      arch: process.arch,
+      node: process.version,
+      nodeOptions: '--max-old-space-size=123',
+      heapSizeLimit: expect.any(Number),
+      totalMem: totalmem(),
+      availableParallelism: availableParallelism(),
+    });
+    expect(currentHost({ set: {}, unset: ['NODE_OPTIONS'] }).nodeOptions).toBe('');
+  });
+
+  it("records the heap limit a measured child's Node gets under the arm's NODE_OPTIONS", () => {
+    const small = currentHost({ set: { NODE_OPTIONS: '--max-old-space-size=123' }, unset: [] }).heapSizeLimit;
+    const large = currentHost({ set: { NODE_OPTIONS: '--max-old-space-size=1234' }, unset: [] }).heapSizeLimit;
+
+    expect(large - small).toBeGreaterThanOrEqual((1234 - 123) * 1024 * 1024);
+  });
 });

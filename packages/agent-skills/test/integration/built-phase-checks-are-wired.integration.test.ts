@@ -43,7 +43,7 @@ afterEach(() => {
 function writeProject(body: string): { skillPath: string; outputPath: string; skillDir: string } {
   const skillDir = safePath.join(projectRoot, 'skills', 'demo');
   mkdirSyncReal(skillDir, { recursive: true });
-  writeFileSync(safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n', 'utf8');
+  writeFileSync(safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'), '{}\n', 'utf8');
   writeFileSync(
     safePath.join(skillDir, 'SKILL.md'),
     `---\nname: demo\ndescription: A fixture skill for the built-phase wiring test.\n---\n\n${body}\n`,

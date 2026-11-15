@@ -45,12 +45,12 @@
  * the failure the field exists to catch.
  */
 
-import { spawnSync } from 'node:child_process';
-
 import { direntKindFollowingSync } from '@vibe-agent-toolkit/utils';
-import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
+import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
+
+import { RESOURCES_QUERY_REPORT_SCHEMA } from '../../src/commands/resources/query-schema.js';
 
 import {
   cleanupTestTempDir,
@@ -63,7 +63,7 @@ import {
 // the same name that returns a promise, and awaiting nothing yields a result
 // whose `stdout` is undefined — which surfaces as a YAML parse error, not as a
 // missing await.
-import { executeCli } from './test-helpers/index.js';
+import { executeCli, expectSecsWithinRun } from './test-helpers/index.js';
 
 const binPath = getBinPath(import.meta.url);
 
@@ -82,7 +82,7 @@ const FOREIGN_PREFIX = 'pkgs';
 const FOREIGN_PATH = `${FOREIGN_PREFIX}/zzz.md`;
 
 /**
- * What `openSqliteProjectionStore` names its database.
+ * What `openSqliteFactStore` names its database.
  *
  * Spelled here rather than imported: it is a private constant of
  * `@vibe-agent-toolkit/projection-sqlite`, and this suite drives the built CLI
@@ -106,6 +106,9 @@ const HONEST_SPAN_FRACTION = 0.45;
  * does — the cache-tell arms, which are about where a population came from.
  */
 const COUNT_BLOBS = 'SELECT COUNT(*) AS n FROM blobs';
+
+/** A statement naming a claude-context relation, so the lens that populates its own lane runs. */
+const COUNT_CONTEXT_LOADS = 'SELECT COUNT(*) AS n FROM claude_context_loads';
 
 /**
  * The UNFILTERED aggregate the regression test rests on.
@@ -146,6 +149,18 @@ function sharedStoreDir(): string {
 /** A store is selected, but nothing says where it goes. */
 function storeSelectedEnv(): NodeJS.ProcessEnv {
   return { ...process.env, VAT_PROJECTION_STORE: 'sqlite' };
+}
+
+/**
+ * No store at all, said out loud.
+ *
+ * The store is ON by default, so an arm that wants the uncached path has to ask
+ * for it. Silence used to mean "no store" and now means "the shared default
+ * database", which is a different corpus, a different warmth, and not something
+ * an assertion should depend on.
+ */
+function storeOffEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, VAT_PROJECTION_STORE: 'off' };
 }
 
 /** The shared store this suite writes, kept beneath the fixture so cleanup takes it. */
@@ -258,7 +273,7 @@ function createCommittedCorpus(options: {
     fs.writeFileSync(safePath.join(root, options.directory, name), content, 'utf-8');
   }
   const git = (args: string[]): void => {
-    spawnSync(gitExecutable(), args, { cwd: root });
+    runGitOrThrow(args, { cwd: root });
   };
   git(['init', '--quiet']);
   git(['add', '-A']);
@@ -267,18 +282,30 @@ function createCommittedCorpus(options: {
   return root;
 }
 
-/** Run the verb and parse its document, failing loudly if it did not produce one. */
+/**
+ * Run the verb and parse its report with the published schema — the envelope
+ * (`doc`) and the query's own `data` beside it (`{}` for a refusal, whose
+ * `data` is null).
+ */
 function query(sql: string, options?: { env?: NodeJS.ProcessEnv; cwd?: string; args?: readonly string[] }): {
   status: number | null;
   doc: Record<string, unknown>;
+  data: Record<string, unknown>;
   stderr: string;
 } {
   const result = executeCli(binPath, ['resources', 'query', sql, ...(options?.args ?? [])], {
     cwd: options?.cwd ?? projectDir,
     ...(options?.env === undefined ? {} : { env: options.env }),
   });
-  const doc = (yaml.parse(result.stdout) ?? {}) as Record<string, unknown>;
-  return { status: result.status, doc, stderr: result.stderr };
+  const parsed: unknown = yaml.parse(result.stdout);
+  const doc = (parsed === null || parsed === undefined ? {} : RESOURCES_QUERY_REPORT_SCHEMA.parse(parsed)) as Record<string, unknown>;
+  const data = (doc['data'] ?? {}) as Record<string, unknown>;
+  return { status: result.status, doc, data, stderr: result.stderr };
+}
+
+/** The run's wall time in seconds, from the envelope's `durationMs`. */
+function durationSecsOf(doc: Record<string, unknown>): number {
+  return (doc['durationMs'] as number) / 1000;
 }
 
 describe('vat resources query', () => {
@@ -321,12 +348,13 @@ describe('vat resources query', () => {
     // discriminator: they come from the blob stage, which the OTHER resources
     // lanes skip outright — so a non-zero count here proves this lane really
     // does derive content where its siblings deliberately do not.
-    const { status, doc } = query('SELECT COUNT(*) AS n FROM blob_sections');
+    const { status, doc, data } = query('SELECT COUNT(*) AS n FROM blob_sections');
 
     expect(status).toBe(0);
-    expect(doc['status']).toBe('success');
-    expect(doc['rowCount']).toBe(1);
-    const rows = doc['rows'] as { n: number }[];
+    expect(doc['status']).toBe('ok');
+    expect(data['columns']).toEqual(['n']);
+    const rows = data['rows'] as { n: number }[];
+    expect(rows).toHaveLength(1);
     expect(rows[0]?.n).toBeGreaterThan(0);
   });
 
@@ -355,8 +383,8 @@ describe('vat resources query', () => {
     // This corpus is `docs/`, `docs/a.md`, `docs/b.md`. Stated absolutely as
     // well as compared, so two arms broken the same way cannot agree their way
     // to green.
-    expect(withoutStore.doc['rows']).toStrictEqual([{ n: 3 }]);
-    expect(withStore.doc['rows']).toStrictEqual(withoutStore.doc['rows']);
+    expect(withoutStore.data['rows']).toStrictEqual([{ n: 3 }]);
+    expect(withStore.data['rows']).toStrictEqual(withoutStore.data['rows']);
   });
 
   it('answers about THIS tree only, never about the other tree in the same store', () => {
@@ -369,7 +397,7 @@ describe('vat resources query', () => {
     // 🪤 No `isDirectory` filter. The predicate is prefix-only so the foreign
     // DIRECTORY row (`pkgs`) is caught too — an earlier version filtered
     // directories out and would have missed half the leak.
-    const { status, doc, stderr } = query(
+    const { status, data, stderr } = query(
       `SELECT path FROM resource_realizations WHERE path NOT LIKE '${OWN_PREFIX}%' ORDER BY path`,
       { env: storeEnv() },
     );
@@ -380,7 +408,9 @@ describe('vat resources query', () => {
     // that could have been present is shown to exist.
     expect(readSharedStoreFile().includes(FOREIGN_PATH)).toBe(true);
     // Against the pre-fix build this is `[{ path: 'pkgs' }, { path: 'pkgs/zzz.md' }]`.
-    expect(doc['rows']).toStrictEqual([]);
+    // Zero rows over a populated tree is an answer: `ok`, the columns still named.
+    expect(data['rows']).toStrictEqual([]);
+    expect(data['columns']).toStrictEqual(['path']);
   });
 
   it('flips the cache tell from derived to store, in the directory it NAMED', () => {
@@ -407,11 +437,11 @@ describe('vat resources query', () => {
 
     expect(first.status, first.stderr).toBe(0);
     expect(second.status, second.stderr).toBe(0);
-    expect(first.doc['population']).toBe('derived');
-    expect(second.doc['population']).toBe('store');
+    expect(first.data['population']).toBe('derived');
+    expect(second.data['population']).toBe('store');
     // And the answer did not move, which is what makes the flip a saving rather
     // than a difference.
-    expect(second.doc['rows']).toStrictEqual(first.doc['rows']);
+    expect(second.data['rows']).toStrictEqual(first.data['rows']);
     // Where the store actually went. The positive half first, so the empty
     // second is an answer rather than a detector that never ran.
     expect(databasesUnder(flipDir)).toStrictEqual([PROJECTION_DATABASE]);
@@ -433,12 +463,41 @@ describe('vat resources query', () => {
     // reports a warm population on a two-file corpus as 0, and `> 0` is exactly
     // the assertion a `Date.now()` regression fails. The upper bound catches the
     // other direction — a field wired to the wrong term cannot be a subset of
-    // the run that contains it.
+    // the run that contains it. `expectSecsWithinRun` carries why that bound is
+    // rounded the way the field is: a population inside its run cannot exceed
+    // the run's rounded total, up to `Date.now()`'s 1 ms quantization.
     for (const run of [first, second]) {
-      expect(typeof run.doc['populationSecs']).toBe('number');
-      expect(run.doc['populationSecs']).toBeGreaterThan(0);
-      expect(run.doc['populationSecs']).toBeLessThanOrEqual(run.doc['durationSecs'] as number);
+      expect(run.data['populationSecs']).toBeGreaterThan(0);
+      expectSecsWithinRun(run.data['populationSecs'], run.doc['durationMs']);
     }
+  });
+
+  it('flips the LENS tell from derived to store for a relation whose lens populates its own lane', () => {
+    // `lensPopulation` is the same claim one level down: `claude_context_*`
+    // populates the claude-context lane, and only a store hit on THAT lane may
+    // say `store`. Asserted as a flip, in a store of its own, for the reason the
+    // test above gives.
+    //
+    // 🪤 The corpus needs an `@`-import. Without one the claude-context lane
+    // registers exactly the resources lane's contributors, so its population is
+    // a hit on the extent the SAME run wrote a moment earlier and even the cold
+    // run says `store` — truthfully, and with no flip left to observe.
+    const cwd = createCommittedCorpus({
+      prefix: 'vat-resources-query-lens-',
+      directory: OWN_PREFIX,
+      files: { 'CLAUDE.md': '# Rules\n\n@guide.md\n', 'guide.md': '# Guide\n' },
+    });
+    const env = { ...storeEnv(), VAT_PROJECTION_STORE_DIR: safePath.join(storeDir, 'lens-flip') };
+    const first = query(COUNT_CONTEXT_LOADS, { env, cwd });
+    const second = query(COUNT_CONTEXT_LOADS, { env, cwd });
+    cleanupTestTempDir(cwd);
+
+    expect(first.status, first.stderr).toBe(0);
+    expect(second.status, second.stderr).toBe(0);
+    expect(first.data['lensesEvaluated']).toStrictEqual(['claude-context']);
+    expect(first.data['lensPopulation']).toBe('derived');
+    expect(second.data['lensPopulation']).toBe('store');
+    expect(second.data['rows']).toStrictEqual(first.data['rows']);
   });
 
   it('measures the population from BEFORE the store is opened, not from inside it', () => {
@@ -446,7 +505,7 @@ describe('vat resources query', () => {
     // started on the first line INSIDE `withPopulationCache`'s callback — but
     // that helper awaits `openPopulationCache` BEFORE calling the callback, and
     // that open is a `git write-tree` spawn plus the backend's dynamic import
-    // and `openSqliteProjectionStore()`. All of it happens ONLY when a store is
+    // and `openSqliteFactStore()`. All of it happens ONLY when a store is
     // selected, so the published number silently shed it on exactly the arm the
     // number is used to praise.
     //
@@ -490,22 +549,27 @@ describe('vat resources query', () => {
     const withStore = query(COUNT_BLOBS, {
       env: { ...storeEnv(), VAT_PROJECTION_STORE_DIR: coldDir },
     });
-    const withoutStore = query(COUNT_BLOBS);
+    // 🪤 Turned off EXPLICITLY. The store is the default now, so an arm that got
+    // the no-store path by saying nothing would quietly have become a second
+    // store arm — pointed at the developer's own default database, where the
+    // `derived` assertion below would go red or green depending on whether
+    // something else had already warmed it.
+    const withoutStore = query(COUNT_BLOBS, { env: storeOffEnv() });
 
     expect(withStore.status, withStore.stderr).toBe(0);
     expect(withoutStore.status, withoutStore.stderr).toBe(0);
     // A cold directory, so both arms really did populate. Without this the
     // fraction could be high because the run was a warm no-op on both terms.
-    expect(withStore.doc['population']).toBe('derived');
-    expect(withoutStore.doc['population']).toBe('derived');
+    expect(withStore.data['population']).toBe('derived');
+    expect(withoutStore.data['population']).toBe('derived');
     // The store arm was really keyed and opened — otherwise this asserts the
     // no-store path twice under a store-shaped name.
     expect(databasesUnder(coldDir)).toStrictEqual([PROJECTION_DATABASE]);
 
     for (const run of [withStore, withoutStore]) {
-      const durationSecs = run.doc['durationSecs'] as number;
+      const durationSecs = durationSecsOf(run.doc);
       expect(durationSecs).toBeGreaterThan(0);
-      expect((run.doc['populationSecs'] as number) / durationSecs)
+      expect((run.data['populationSecs'] as number) / durationSecs)
         .toBeGreaterThan(HONEST_SPAN_FRACTION);
     }
   });
@@ -544,9 +608,9 @@ describe('vat resources query', () => {
     const located = query(COUNT_REALIZATIONS, { args: [OWN_PREFIX] });
 
     expect(located.status, located.stderr).toBe(0);
-    expect(located.doc['root']).toBe(whole.doc['root']);
-    expect((located.doc['rows'] as { n: number }[])[0]?.n)
-      .toBe((whole.doc['rows'] as { n: number }[])[0]?.n);
+    expect(located.data['root']).toBe(whole.data['root']);
+    expect((located.data['rows'] as { n: number }[])[0]?.n)
+      .toBe((whole.data['rows'] as { n: number }[])[0]?.n);
   });
 
   it('refuses a [path] that does not exist instead of answering about the tree it walked up to', () => {
@@ -559,7 +623,8 @@ describe('vat resources query', () => {
     expect(status).toBe(2);
     expect(stderr).toContain('Path does not exist');
     expect(stderr).toContain('nope');
-    expect(doc['rows']).toBeUndefined();
+    expect(doc['error']).toMatchObject({ code: 'USAGE_INVALID' });
+    expect(doc['data']).toBeNull();
   });
 
   it('refuses a [path] that is a file, which cannot locate anything', () => {
@@ -578,10 +643,12 @@ describe('vat resources query', () => {
     const under = query('SELECT ? AS x, ? AS y', { args: ['--param', 'a'] });
     expect(under.status).toBe(2);
     expect(under.stderr).toContain('2 placeholders and 1 value was bound');
+    // The operator's statement, refused by code — never INTERNAL_ERROR.
+    expect(under.doc['error']).toMatchObject({ code: 'USAGE_INVALID' });
 
     const bound = query('SELECT ? AS x, ? AS y', { args: ['--param', 'a', '--param', 'b'] });
     expect(bound.status, bound.stderr).toBe(0);
-    expect(bound.doc['rows']).toEqual([{ x: 'a', y: 'b' }]);
+    expect(bound.data['rows']).toEqual([{ x: 'a', y: 'b' }]);
   });
 
   it('refuses a write at the engine and names the surface for a bad column', () => {
@@ -590,8 +657,10 @@ describe('vat resources query', () => {
     // SQLite, which would leave this case asserting the gate's message and no
     // longer proving `PRAGMA query_only` is armed. This spelling is real SQLite
     // grammar, passes the kind gate on its first token, and is refused by the
-    // ENGINE — which is the property under test.
-    const write = query('WITH c(a) AS (VALUES (1)) DELETE FROM blobs');
+    // ENGINE — which is the property under test. `RETURNING` gives it a result
+    // column, so the store's result-shape check (a write with no result column
+    // is not a read) passes it too; without it that check answers first.
+    const write = query('WITH c(a) AS (VALUES (1)) DELETE FROM blobs RETURNING contentKey');
     expect(write.status).toBe(2);
     expect(write.stderr).toContain('readonly database');
 
@@ -632,9 +701,10 @@ describe('vat resources query', () => {
     // The other direction of the same bug, and the control that stops the fix
     // being "refuse anything with a bracket in it". A `;` inside a quoted
     // identifier is not a separator.
-    const { status, doc } = query('SELECT 1 AS [a;b]');
+    const { status, data } = query('SELECT 1 AS [a;b]');
 
     expect(status).toBe(0);
-    expect(doc['rowCount']).toBe(1);
+    expect(data['rows']).toHaveLength(1);
+    expect(data['columns']).toEqual(['a;b']);
   });
 });

@@ -18,12 +18,12 @@
 import { writeFile } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { expect } from 'vitest';
 
-import type { RunContentCache } from '../src/projection/content-cache.js';
+import { RunContentCache } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
-import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
-import { populate, type BlobPopulationReport } from '../src/projection/merge.js';
+import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
+import { crawlSourceFor } from '../src/projection/crawl-source.js';
+import { populate } from '../src/projection/merge.js';
 import { ProjectionBuilder, type Projection } from '../src/projection/projection.js';
 import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
 
@@ -50,7 +50,9 @@ export const IN_CRAWL_ORDER: RealizationOrder = (rows) => rows;
  *
  * @param rootDir - The corpus root to enumerate
  * @param order - How to reorder the realizations before recording them
- * @param contentCache - The run cache to share with the derivation stage, if any
+ * @param contentCache - The run cache the enumeration shares with the derivation stage. Omitted,
+ *   each stage gets a fresh cache of its own, so the derivation-time read is a genuine second read
+ *   — the lane of a key the run recorded without reading the bytes
  * @returns A builder carrying the base stratum and nothing else
  */
 export async function baseBuilderForRoot(
@@ -58,8 +60,10 @@ export async function baseBuilderForRoot(
   order: RealizationOrder = IN_CRAWL_ORDER,
   contentCache?: RunContentCache,
 ): Promise<ProjectionBuilder> {
-  const builder = new ProjectionBuilder({ root: rootDir, contentCache });
-  const contribution = await new FilesystemExtentContributor().contribute(builder.base(), null);
+  const freshBuilder = (): ProjectionBuilder => new ProjectionBuilder({ root: rootDir, contentCache: new RunContentCache() });
+  const enumerator = contentCache === undefined ? freshBuilder() : new ProjectionBuilder({ root: rootDir, contentCache });
+  const builder = contentCache === undefined ? freshBuilder() : enumerator;
+  const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(enumerator.base(), null);
   for (const row of contribution.contexts) builder.addContext(row);
   for (const row of contribution.resources) builder.addResource(row);
   for (const row of order(contribution.realizations)) builder.addRealization(row);
@@ -82,39 +86,21 @@ export async function writeBinaryFixture(
   await writeFile(safePath.join(rootDir, relativePath), bytes);
 }
 
-/** Only reachable if the assertion inside {@link populateFixtureRoot} stopped asserting. */
-function unreachableReport(): BlobPopulationReport {
-  throw new Error('populate() did not report blob-population counts');
-}
-
 /**
  * Run the filesystem-only projection driver over a fixture root.
  *
- * The report is taken through `onBlobPopulation` — the same observer a CLI lane
- * passes — rather than recomputed, so what these suites assert is exactly what a
- * user's run would be told.
+ * These suites assert on the projection's rows — what a user is told is read
+ * from them, on a store hit as on a derive.
  *
  * @param rootDir - The suite's temp root, treated as the corpus root
- * @returns The blob-population report and the whole projection
+ * @returns The whole projection
  */
-export async function populateFixtureRoot(rootDir: string): Promise<{
-  report: BlobPopulationReport;
-  projection: Projection;
-}> {
-  let report: BlobPopulationReport | undefined;
+export async function populateFixtureRoot(rootDir: string): Promise<{ projection: Projection }> {
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor());
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
 
-  const projection = await populate({
-    root: rootDir,
-    registry,
-    onBlobPopulation: (result) => {
-      report = result;
-    },
-  });
-
-  expect(report).toBeDefined();
-  return { report: report ?? unreachableReport(), projection };
+  const { projection } = await populate({ root: rootDir, registry });
+  return { projection };
 }
 
 /**

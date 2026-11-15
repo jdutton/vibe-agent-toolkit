@@ -7,11 +7,13 @@
  * vat config at all.
  */
 
+
 import { ExitCode, installLastResortExit } from '@vibe-agent-toolkit/schema';
-import { parseWholeNumberAtLeast, safePath } from '@vibe-agent-toolkit/utils';
+import { isAbsolutePath, isVatError, parseWholeNumberAtLeast, safePath } from '@vibe-agent-toolkit/utils';
 import { isEntrypoint } from '@vibe-agent-toolkit/utils/process';
 import { Command, InvalidArgumentError } from 'commander';
 
+import { sameInstrument } from '../envelope/coordinate.js';
 import type { ReportEnvelope } from '../envelope/envelope.js';
 import { captureCrawl } from '../facets/crawl/capture.js';
 import { compareCrawl } from '../facets/crawl/compare.js';
@@ -19,9 +21,24 @@ import { renderCrawlComparison, renderCrawlReport } from '../facets/crawl/render
 import { captureIo } from '../facets/io/capture.js';
 import { compareIo } from '../facets/io/compare.js';
 import { renderIoComparison, renderIoReport } from '../facets/io/render.js';
+import type { IoCommandStats } from '../facets/io/types.js';
+import { captureMemory } from '../facets/memory/capture.js';
+import { compareMemory } from '../facets/memory/compare.js';
+import { renderMemoryComparison, renderMemoryReport } from '../facets/memory/render.js';
 import { captureParse } from '../facets/parse/capture.js';
 import { compareParse } from '../facets/parse/compare.js';
 import { renderParseComparison, renderParseReport } from '../facets/parse/render.js';
+import {
+  type ArmName,
+  armName,
+  type ArmsInputs,
+  type ArmsReportFile,
+  findArm,
+  parseArmName,
+  readArmsReportFile,
+} from '../facets/perf/arms-report-file.js';
+import { captureArms, type ExpectedExit, expectedExitRefusal, renderArmsReport, sequenceSteps } from '../facets/perf/arms.js';
+import { type Bar, judgeBars, parseBar, renderBars } from '../facets/perf/bars.js';
 import { capturePerf } from '../facets/perf/capture.js';
 import { comparePerf } from '../facets/perf/compare.js';
 import { renderPerfComparison, renderPerfReport } from '../facets/perf/render.js';
@@ -31,6 +48,32 @@ import {
   renderPopulationComparison,
   renderPopulationReport,
 } from '../facets/population/render.js';
+import { captureVerdict } from '../facets/verdict/capture.js';
+import { compareVerdict, readVerdictDirectory } from '../facets/verdict/compare.js';
+import {
+  CHANGELOG_REFERENCE_ROOT,
+  changelogRefusals,
+  COMMITTED_VERDICT_DELTAS,
+  type DeclaredUnionFinding,
+  loadVerdictDeltas,
+  readChangelogSources,
+} from '../facets/verdict/deltas.js';
+import { renderVerdictComparison, renderVerdictReport } from '../facets/verdict/render.js';
+import { loadVerdictSubjects } from '../facets/verdict/subjects.js';
+import type { VerdictBody } from '../facets/verdict/types.js';
+import {
+  judgeUnion,
+  type UnionArmEvidence,
+  type UnionJudgement,
+  type UnionKey,
+  type UnionRequest,
+} from '../facets/verdict/union.js';
+import type { Validated } from '../facets/verdict/yaml-file.js';
+import { captureWork } from '../facets/work/capture.js';
+import { compareWork, workStabilityCaveat } from '../facets/work/compare.js';
+import { countOf } from '../facets/work/dump.js';
+import { renderWorkComparison, renderWorkReport } from '../facets/work/render.js';
+import { WORK_MIN_RUNS, type WorkCommandStats } from '../facets/work/types.js';
 import {
   abExitCondition,
   CHANGED_VERDICT,
@@ -42,14 +85,34 @@ import {
   UNMEASURABLE_VERDICT,
 } from '../harness/ab.js';
 import {
+  ARM_REFUSED_CODE,
+  armRefusal,
+  buildAlias,
+  type ArmsRootHandle,
+  underArmsRoot,
+  openOutDirectory,
+  writePrivateFile,
+} from '../harness/arm-dirs.js';
+import { type ArmEnvironment, armEnvironmentClash, sameArmEnvironment } from '../harness/arm-env.js';
+import { PREPARED_CLONE_NAME, prepareClone } from '../harness/clone.js';
+import { indistinguishableArms } from '../harness/closure.js';
+import {
   DEFAULT_MEASURED_COMMANDS,
+  exactExit,
+  MAX_EXIT_CODE,
   MEASURABLE_COMMAND_NAMES,
+  MEASURABLE_SEQUENCES,
   measurableCommand,
+  measurableSequence,
   type MeasuredCommandSpec,
+  type MeasuredSequenceSpec,
   POPULATION_MEASURED_COMMANDS,
 } from '../harness/commands.js';
-import { resolveInstrument } from '../harness/instrument.js';
-import { instrumentTrustNotes } from '../harness/render.js';
+import { stabilityCaveat } from '../harness/facet-compare.js';
+import { pinOf, type PreparedInstrument, prepareInstrument, resolveInstrument } from '../harness/instrument.js';
+import { npmInstall, type NpxInstallSite, npxInstallSite } from '../harness/npx-install.js';
+import { instrumentLabel, instrumentTrustNotes } from '../harness/render.js';
+import type { SequenceStep } from '../harness/sequence.js';
 import { resolveSubject } from '../harness/subject.js';
 import type { CacheMode, InstrumentSource, ResolvedInstrument } from '../harness/types.js';
 import { readReport, writeReport } from '../store.js';
@@ -65,6 +128,107 @@ import { readReport, writeReport } from '../store.js';
  * fold keeps is the property that mattered: neither case exits 0, so a CI job
  * cannot read "nothing could be measured" as "nothing changed".
  */
+
+/** The `--out` flag's spelling, shared by every facet's `run` and `ab`. */
+const OUT_OPTION = '--out <dir>';
+/** Where reports land when `--out` is not given; resolved like any given value. */
+const DEFAULT_OUT = '.vat-lab';
+
+/**
+ * The one parser every `--out` goes through: resolved ONCE, here, against the
+ * lab's cwd. A relative value handed on would be resolved again by each child
+ * from ITS cwd — the subject — and land the arm inside the measured tree.
+ *
+ * @param value - The raw value
+ * @returns It, absolute
+ */
+export function resolvedOut(value: string): string {
+  return safePath.resolve(value);
+}
+
+/** The `--arms-dir` flag every capturing verb declares, and its help. */
+const ARMS_DIR_OPTION = '--arms-dir <dir>';
+const ARMS_DIR_HELP =
+  "Absolute directory every arm's private store, temp directory and home live under; outside every subject " +
+  '(default: a fresh run directory under <os tmpdir>/vat-lab-arms-<user>/)';
+
+/**
+ * The one parser every `--arms-dir` goes through. Absolute only: unlike
+ * `--out`, which holds reports, this names what the lab will chmod and delete
+ * in, so a value that means one thing in the lab's cwd and another in a
+ * child's is refused rather than resolved.
+ *
+ * @param value - The raw value
+ * @returns It, unchanged
+ * @throws {InvalidArgumentError} when it is not absolute
+ */
+export function absoluteArmsDir(value: string): string {
+  if (!isAbsolutePath(value)) throw new InvalidArgumentError(`--arms-dir must be absolute; got '${value}'.`);
+  return value;
+}
+
+/** @returns The current time, ISO-8601 — `ab`'s clock */
+function isoNow(): string {
+  return new Date().toISOString();
+}
+
+/** `--keep-arms`, declared alike on every verb that opens an arms root. */
+const KEEP_ARMS_OPTION = '--keep-arms';
+const KEEP_ARMS_HELP = 'Keep the default run directory of arms (stores, caches, clone) when the capture ends';
+
+/** The arms-root options every capturing verb declares. */
+interface ArmsRootOptions {
+  /** Absent for the default arms root. */
+  readonly armsDir?: string;
+  readonly keepArms?: boolean;
+}
+
+/**
+ * Run a capture and its publication under the invocation's arms root
+ * ({@link underArmsRoot}): a default run directory is removed unless
+ * `--keep-arms`, and stderr says where the arms were and what became of them.
+ * The body writes and prints its own result, so a cleanup failure never costs
+ * a finished measurement.
+ *
+ * @param options - `--arms-dir` and `--keep-arms`
+ * @param subjects - Every tree the invocation measures
+ * @param body - The capture and its publication, handed the root
+ */
+async function withArmsRoot(
+  options: ArmsRootOptions,
+  subjects: readonly string[],
+  body: (root: ArmsRootHandle) => Promise<void>,
+): Promise<void> {
+  await underArmsRoot(
+    { override: options.armsDir ?? null, subjects },
+    options.keepArms === true,
+    (line) => process.stderr.write(`${line}\n`),
+    body,
+  );
+}
+
+/**
+ * Run an action, turning an arm refusal (`ARM_REFUSED_CODE`) into the CLI's
+ * clean REFUSED; anything else is still thrown.
+ *
+ * @param body - The action
+ */
+async function refusingArmErrors(body: () => Promise<void>): Promise<void> {
+  try {
+    await body();
+  } catch (error: unknown) {
+    if (!isVatError(error, ARM_REFUSED_CODE)) throw error;
+    refuse(`REFUSED: ${error.message}`);
+  }
+}
+/** The arm-environment options every capturing verb declares, and how a refusal names them. */
+const ENV_OPTION = '--env <KEY=VALUE>';
+const UNSET_OPTION = '--unset <KEY>';
+const ENV_OPTIONS_LABEL = '--env and --unset';
+/** `<facet> run|ab --expect-exit`, declared once for both verbs. */
+const COMMAND_EXPECT_EXIT_OPTION = '--expect-exit <command=code>';
+const COMMAND_EXPECT_EXIT_HELP =
+  'Commit a command to exactly this exit (repeatable), e.g. validate=1; by default a command may exit any code its verb completes with (0, or 0 or 1 for a gate), alike on every repeat; never 2';
 
 /**
  * Parse an instrument specifier into a source.
@@ -92,6 +256,12 @@ export function parseInstrument(value: string): InstrumentSource {
       return { kind: 'dist', path: rest };
     }
     case 'npx': {
+      // Checked here, not first at resolution: a bad spec is refused before any setup.
+      try {
+        pinOf(rest);
+      } catch (error) {
+        throw new InvalidArgumentError(error instanceof Error ? error.message : String(error));
+      }
       return { kind: 'npx', spec: rest };
     }
     default: {
@@ -207,7 +377,7 @@ export function collectMeasuredCommand(
 }
 
 /**
- * A Commander parser for `--env-a` / `--env-b`, accumulating `KEY=VALUE` pairs.
+ * A Commander parser for `--env`, `--env-a` and `--env-b`, accumulating `KEY=VALUE` pairs.
  *
  * Splits on the FIRST `=` only, so a value may contain one. An empty value is
  * accepted — `KEY=` is a real thing to want, since a seam that tests
@@ -231,15 +401,70 @@ export function collectEnv(
   };
 }
 
+/**
+ * A Commander parser for `--unset`, `--unset-a` and `--unset-b`, accumulating
+ * variable names to remove from the inherited environment.
+ *
+ * A name containing `=` is refused: it is almost certainly a `--env` value
+ * given to the wrong flag, and unsetting a variable literally named `X=1`
+ * would silently do nothing.
+ *
+ * @param flag - Flag spelling, so the error names what the user typed
+ * @returns A parser Commander calls with the raw string and the names so far
+ */
+export function collectUnset(
+  flag: string,
+): (value: string, previous: readonly string[] | undefined) => string[] {
+  return (value, previous) => {
+    if (value === '' || value.includes('=')) {
+      throw new InvalidArgumentError(`${flag} expects a variable NAME; got '${value}'.`);
+    }
+    return [...(previous ?? []), value];
+  };
+}
+
+/**
+ * Assemble one arm's environment from its `--env*` and `--unset*` flags, or
+ * refuse when one key is on both.
+ *
+ * Refused here, before anything runs, rather than left to `buildArmEnv` to
+ * throw at the first spawn — where it would surface as a stack trace mid-run.
+ *
+ * @param set - Collected `KEY=VALUE` pairs, if the flag was given
+ * @param unset - Collected names, if the flag was given
+ * @param flags - The two flag spellings, for the refusal
+ * @returns The arm's environment, or `null` when the run was refused
+ */
+function armEnvironment(
+  set: ArmEnvironment['set'] | undefined,
+  unset: readonly string[] | undefined,
+  flags: string,
+): ArmEnvironment | null {
+  const env: ArmEnvironment = { set: set ?? {}, unset: unset ?? [] };
+  const clash = armEnvironmentClash(env);
+  if (clash === undefined) return env;
+  refuse(`REFUSED: ${flags} both name '${clash}' — an arm cannot set and unset one variable.`);
+  return null;
+}
+
 /** Options Commander collects for a facet's `run`. */
 interface RunOptions {
   readonly instrument: InstrumentSource;
   readonly runs: number;
   readonly cache: CacheMode;
   readonly out: string;
+  /** Absent for the default arms root. */
+  readonly armsDir?: string;
+  readonly keepArms?: boolean;
   readonly id?: string;
   /** Absent unless `--command` was given at least once. */
   readonly command?: readonly MeasuredCommandSpec[];
+  /** Absent unless `--expect-exit` was given at least once. */
+  readonly expectExit?: readonly CommandExpectedExit[];
+  /** Variables set for every child; absent unless `--env` was given. */
+  readonly env?: ArmEnvironment['set'];
+  /** Variables removed from every child; absent unless `--unset` was given. */
+  readonly unset?: readonly string[];
 }
 
 /**
@@ -266,6 +491,13 @@ interface FacetWiring<TBody, TComparison extends ComparisonLike>
    * wants enough samples for a spread to mean something.
    */
   readonly defaultRuns: number;
+  /**
+   * The fewest repeats `--runs` accepts, refused at the flag before anything runs.
+   *
+   * Required, so a facet that needs a floor cannot be registered without saying
+   * so: `work` discards a warm-up and needs two compared repeats after it.
+   */
+  readonly minRuns: number;
   /**
    * Cache mode a bare `run` uses.
    *
@@ -302,14 +534,30 @@ interface AbOptions {
   readonly runs: number;
   readonly cache: CacheMode;
   readonly out: string;
+  /** Absent for the default arms root. */
+  readonly armsDir?: string;
+  readonly keepArms?: boolean;
   readonly id?: string;
   readonly command?: readonly MeasuredCommandSpec[];
+  readonly expectExit?: readonly CommandExpectedExit[];
   readonly control: boolean;
   readonly noiseFloor?: number;
-  /** Extra environment for arm A's children only. */
-  readonly envA?: Readonly<Record<string, string>>;
-  /** Extra environment for arm B's children only. */
-  readonly envB?: Readonly<Record<string, string>>;
+  /** Variables set for arm A's children only. */
+  readonly envA?: ArmEnvironment['set'];
+  /** Variables set for arm B's children only. */
+  readonly envB?: ArmEnvironment['set'];
+  /** Variables removed from arm A's children only. */
+  readonly unsetA?: readonly string[];
+  /** Variables removed from arm B's children only. */
+  readonly unsetB?: readonly string[];
+}
+
+/** Two resolved arms, each with the environment it runs under. */
+interface AbArms {
+  readonly a: ResolvedInstrument;
+  readonly b: ResolvedInstrument;
+  readonly envA: ArmEnvironment;
+  readonly envB: ArmEnvironment;
 }
 
 /**
@@ -363,10 +611,10 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
       nonNegativeNumber('--noise-floor'),
     )
     .option('--pairs <n>', 'A-then-B cycles to run', wholeNumberAtLeast('--pairs', 1), 6)
-    .option('--runs <n>', 'Repeats per capture', wholeNumberAtLeast('--runs', 1), wiring.defaultRuns)
+    .option('--runs <n>', 'Repeats per capture', wholeNumberAtLeast('--runs', wiring.minRuns), wiring.defaultRuns)
     .option(
       '--cache <mode>',
-      "'warm' or 'cold' (cold clears vat's caches before every repeat)",
+      "'warm' or 'cold' (cold deletes the arm's own store and temp directory before every repeat; warm primes them once)",
       parseCacheMode,
       wiring.defaultCache,
     )
@@ -375,6 +623,7 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
       `Measure this command instead of the default set (repeatable). One of: ${MEASURABLE_COMMAND_NAMES.join(', ')}`,
       collectMeasuredCommand,
     )
+    .option(COMMAND_EXPECT_EXIT_OPTION, COMMAND_EXPECT_EXIT_HELP, collectCommandExpectedExit)
     .option(
       '--env-a <KEY=VALUE>',
       'Extra environment for arm A only (repeatable). Pass the same instrument to both arms ' +
@@ -386,78 +635,156 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
       'Extra environment for arm B only (repeatable)',
       collectEnv('--env-b'),
     )
-    .option('--out <dir>', 'Directory to write the reports into', '.vat-lab')
+    .option(
+      '--unset-a <KEY>',
+      'Remove an inherited variable from arm A only (repeatable)',
+      collectUnset('--unset-a'),
+    )
+    .option(
+      '--unset-b <KEY>',
+      'Remove an inherited variable from arm B only (repeatable)',
+      collectUnset('--unset-b'),
+    )
+    .option(OUT_OPTION, 'Directory to write the reports into', resolvedOut, resolvedOut(DEFAULT_OUT))
+    .option(ARMS_DIR_OPTION, ARMS_DIR_HELP, absoluteArmsDir)
+    .option(KEEP_ARMS_OPTION, KEEP_ARMS_HELP, false)
     .option(
       '--id <name>',
       'Subject id recorded in the reports (default: the <subject> argument exactly as given)',
     )
     .description(
-      `Interleave two vat builds over the ${wiring.name} facet: A B A B …, min estimator, per-pair verdicts`,
+      `Interleave two vat builds over the ${wiring.name} facet: A B A B …, ${wiring.estimator} estimator, per-pair verdicts`,
     )
-    .action(async (subjectPath: string, options: AbOptions) => {
-      const arms = await resolveAbArms(options);
-      if (arms === null) return;
+    .action((subjectPath: string, options: AbOptions) =>
+      refusingArmErrors(async () => {
+        // Every flag refusal, every tree:/dist: build, and two names for one build — but for a
+        // pair that is told apart only once installed (an npx: arm against another kind) —
+        // before the subject, --out, the arms root or an install.
+        const flags = await abArmFlags(options);
+        if (flags === null) return;
+        const startedAt = new Date().toISOString();
+        const subject = await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath });
+        const out = openOutDirectory(options.out, [subject.path]);
+        await withArmsRoot(options, [subject.path], async ({ path: armsRoot }) => {
+          const arms = await resolveAbArms(flags, npxInstallSite(armsRoot, npmInstall));
+          if (arms === null) return;
+          const result = await runAb({
+            subject,
+            armA: arms.a,
+            armB: arms.b,
+            commands: committedCommands(
+              options.command ?? wiring.defaultCommands ?? DEFAULT_MEASURED_COMMANDS,
+              options.expectExit ?? [],
+            ),
+            pairs: options.pairs,
+            runs: options.runs,
+            cache: options.cache,
+            control: options.control,
+            noiseFloor: options.noiseFloor ?? null,
+            envA: arms.envA,
+            envB: arms.envB,
+            outDir: abRunDirectory(out, startedAt),
+            armsRoot,
+            now: isoNow,
+            capture: wiring.capture,
+            compare: wiring.compare,
+            estimate: wiring.estimate,
+            estimator: wiring.estimator,
+          });
+          process.stdout.write(`${renderAb(result)}\n`);
+          applyAbExitCode(result);
+        });
+      }),
+    );
+}
 
-      const startedAt = new Date().toISOString();
-      const result = await runAb({
-        subject: await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath }),
-        armA: arms.a,
-        armB: arms.b,
-        commands: options.command ?? wiring.defaultCommands ?? DEFAULT_MEASURED_COMMANDS,
-        pairs: options.pairs,
-        runs: options.runs,
-        cache: options.cache,
-        control: options.control,
-        noiseFloor: options.noiseFloor ?? null,
-        ...(options.envA === undefined ? {} : { envA: options.envA }),
-        ...(options.envB === undefined ? {} : { envB: options.envB }),
-        outDir: abRunDirectory(options.out, startedAt),
-        now: () => new Date().toISOString(),
-        capture: wiring.capture,
-        compare: wiring.compare,
-        estimate: wiring.estimate,
-      });
-
-      process.stdout.write(`${renderAb(result)}\n`);
-      applyAbExitCode(result);
-    });
+/** `ab`'s arm flags, checked and prepared by {@link abArmFlags}: nothing set up or installed yet. */
+export interface AbArmFlags {
+  readonly instrumentA: PreparedInstrument;
+  /** `null` for a `--control` run, where arm A is entered twice. */
+  readonly instrumentB: PreparedInstrument | null;
+  readonly envA: ArmEnvironment;
+  readonly envB: ArmEnvironment;
 }
 
 /**
- * Do two arms carry the same extra environment?
- *
- * Absent and empty are the same configuration, so `undefined` reads as `{}` —
- * otherwise `--control` with no env at all would refuse itself.
- *
- * @param a - Arm A's extra environment, if any
- * @param b - Arm B's extra environment, if any
- * @returns True when both arms would run under identical settings
+ * @param source - An instrument as named
+ * @returns What it names, comparable: a path resolved, a spec trimmed
  */
-function sameEnvironment(
-  a: Readonly<Record<string, string>> | undefined,
-  b: Readonly<Record<string, string>> | undefined,
-): boolean {
-  const left = Object.entries(a ?? {}).sort(([one], [other]) => one.localeCompare(other));
-  const right = Object.entries(b ?? {}).sort(([one], [other]) => one.localeCompare(other));
-  return (
-    left.length === right.length &&
-    left.every(([key, value], index) => right[index]?.[0] === key && right[index]?.[1] === value)
+function namedInstrument(source: InstrumentSource): string {
+  return `${source.kind}:${source.kind === 'npx' ? source.spec.trim() : safePath.resolve(source.path)}`;
+}
+
+/**
+ * Refuse two arms that differ in nothing.
+ *
+ * @param instrument - The instrument both name
+ */
+function refuseIndistinguishableArms(instrument: string): void {
+  refuse(
+    `REFUSED: the two arms are indistinguishable — same instrument (${instrument}) and same ` +
+      'environment. Pass --control to measure the noise floor, or change one arm.',
   );
 }
 
 /**
- * Resolve the two arms, or refuse when the flags do not describe an A/B.
- *
- * A control run uses the *same resolved object* for both arms rather than
- * resolving one spec twice: that is what makes the two stamps identical by
- * construction, so a control can never be mistaken for a two-build comparison.
+ * Check `ab`'s arm flags and prepare their instruments ({@link prepareInstrument}) —
+ * before anything is opened or installed — or refuse when they do not describe an
+ * A/B. Two arms naming one instrument in one environment are refused before either
+ * is prepared; two names for one build, once prepared ({@link oneBuildBeforeSetup}):
+ * still before any setup. Only a pair told apart once installed — an `npx:` arm
+ * against a `tree:` or `dist:` one — waits for {@link resolveAbArms}.
  *
  * @param options - What the caller passed
- * @returns The two arms, or `null` when the run was refused
+ * @returns The checked, prepared flags, or `null` when the run was refused
+ * @throws {Error} when an arm's build cannot be resolved
  */
-async function resolveAbArms(
-  options: AbOptions,
-): Promise<{ a: ResolvedInstrument; b: ResolvedInstrument } | null> {
+export async function abArmFlags(options: AbOptions): Promise<AbArmFlags | null> {
+  const checked = checkedAbArmFlags(options);
+  if (checked === null) return null;
+  const instrumentA = await prepareInstrument(checked.instrumentA);
+  const instrumentB = checked.instrumentB === null ? null : await prepareInstrument(checked.instrumentB);
+  const one = instrumentB === null ? null : oneBuildBeforeSetup(instrumentA, instrumentB);
+  if (one !== null && sameArmEnvironment(checked.envA, checked.envB)) {
+    refuseIndistinguishableArms(one);
+    return null;
+  }
+  return { ...checked, instrumentA, instrumentB };
+}
+
+/**
+ * Do two prepared arms name one build? A `tree:` or `dist:` pair is fully resolved, so
+ * their instruments are compared as {@link resolveAbArms} compares them. An `npx:` pair
+ * pins two VAT packages, and the umbrella installs the cli of its own version: one
+ * version is one instrument, whichever package names it.
+ *
+ * @param a - Arm A, prepared
+ * @param b - Arm B, prepared
+ * @returns The one build's label, or `null` when they differ or are told apart only once installed
+ */
+function oneBuildBeforeSetup(a: PreparedInstrument, b: PreparedInstrument): string | null {
+  if (a.kind === 'built' && b.kind === 'built') {
+    return sameInstrument(a.instrument.version, b.instrument.version) ? instrumentLabel(a.instrument.version) : null;
+  }
+  if (a.kind === 'npx' && b.kind === 'npx') return a.pin.version === b.pin.version ? `npx: ${a.pin.version}` : null;
+  return null;
+}
+
+/**
+ * {@link abArmFlags}' checks, of the flags as named.
+ *
+ * @param options - What the caller passed
+ * @returns The checked flags, or `null` when the run was refused
+ */
+function checkedAbArmFlags(options: AbOptions): (Omit<AbArmFlags, 'instrumentA' | 'instrumentB'> & {
+  readonly instrumentA: InstrumentSource;
+  readonly instrumentB: InstrumentSource | null;
+}) | null {
+  const envA = armEnvironment(options.envA, options.unsetA, '--env-a and --unset-a');
+  if (envA === null) return null;
+  const envB = armEnvironment(options.envB, options.unsetB, '--env-b and --unset-b');
+  if (envB === null) return null;
+
   if (options.control) {
     if (options.instrumentB !== undefined) {
       refuse(
@@ -466,18 +793,18 @@ async function resolveAbArms(
       );
       return null;
     }
-    if (!sameEnvironment(options.envA, options.envB)) {
+    if (!sameArmEnvironment(envA, envB)) {
       refuse(
         'REFUSED: --control measures what this machine returns for a difference that does ' +
-          'not exist, so both arms must be configured identically. --env-a and --env-b ' +
+          'not exist, so both arms must be configured identically. --env-a/--unset-a and ' +
+          '--env-b/--unset-b ' +
           'differ, which is a real difference — it would be published as the noise floor and ' +
           'then used to judge every later run. Make them match, or drop --control and run it ' +
           'as the A/B it is.',
       );
       return null;
     }
-    const only = await resolveInstrument(options.instrumentA);
-    return { a: only, b: only };
+    return { instrumentA: options.instrumentA, instrumentB: null, envA, envB };
   }
 
   if (options.instrumentB === undefined) {
@@ -487,11 +814,39 @@ async function resolveAbArms(
     );
     return null;
   }
+  const named = namedInstrument(options.instrumentA);
+  if (named === namedInstrument(options.instrumentB) && sameArmEnvironment(envA, envB)) {
+    refuseIndistinguishableArms(named);
+    return null;
+  }
+  return { instrumentA: options.instrumentA, instrumentB: options.instrumentB, envA, envB };
+}
 
-  return {
-    a: await resolveInstrument(options.instrumentA),
-    b: await resolveInstrument(options.instrumentB),
-  };
+/**
+ * Resolve the two arms of checked flags, or refuse two that resolve to one build in
+ * one environment.
+ *
+ * A control run uses the *same resolved object* for both arms rather than
+ * resolving one spec twice: that is what makes the two stamps identical by
+ * construction, so a control can never be mistaken for a two-build comparison.
+ *
+ * @param flags - The checked, prepared flags ({@link abArmFlags})
+ * @param npx - Where an `npx:` arm is installed
+ * @returns The two arms, or `null` when the run was refused
+ */
+export async function resolveAbArms(flags: AbArmFlags, npx: NpxInstallSite): Promise<AbArms | null> {
+  const { envA, envB } = flags;
+  if (flags.instrumentB === null) {
+    const only = await resolveInstrument(flags.instrumentA, npx);
+    return { a: only, b: only, envA, envB };
+  }
+  const a = await resolveInstrument(flags.instrumentA, npx);
+  const b = await resolveInstrument(flags.instrumentB, npx);
+  if (indistinguishableArms({ instrument: a.version, env: envA }, { instrument: b.version, env: envB })) {
+    refuseIndistinguishableArms(instrumentLabel(a.version));
+    return null;
+  }
+  return { a, b, envA, envB };
 }
 
 /**
@@ -521,6 +876,21 @@ function applyAbExitCode(result: Parameters<typeof abExitCondition>[0]): void {
 }
 
 /**
+ * Refuse a facet whose default repeat count is below its own floor: a bare
+ * `run` would be refused at its own flag.
+ *
+ * @param wiring - The facet's name and repeat counts
+ * @throws {RangeError} when `defaultRuns` is below `minRuns`
+ */
+export function assertRunsFloor(wiring: Pick<FacetWiring<unknown, ComparisonLike>, 'name' | 'defaultRuns' | 'minRuns'>): void {
+  if (wiring.defaultRuns < wiring.minRuns) {
+    throw new RangeError(
+      `facet ${wiring.name}: defaultRuns ${String(wiring.defaultRuns)} is below its minRuns ${String(wiring.minRuns)}`,
+    );
+  }
+}
+
+/**
  * Build one facet's `run`, `compare` and `ab` subcommands.
  *
  * @param wiring - See {@link FacetWiring}
@@ -529,6 +899,7 @@ function applyAbExitCode(result: Parameters<typeof abExitCondition>[0]): void {
 function createFacetCommand<TBody, TComparison extends ComparisonLike>(
   wiring: FacetWiring<TBody, TComparison>,
 ): Command {
+  assertRunsFloor(wiring);
   const group = new Command(wiring.name).description(wiring.summary);
 
   group
@@ -542,12 +913,12 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
     .option(
       '--runs <n>',
       'Repeats per command',
-      wholeNumberAtLeast('--runs', 1),
+      wholeNumberAtLeast('--runs', wiring.minRuns),
       wiring.defaultRuns,
     )
     .option(
       '--cache <mode>',
-      "'warm' or 'cold' (cold clears vat's caches before every repeat)",
+      "'warm' or 'cold' (cold deletes the arm's own store and temp directory before every repeat; warm primes them once)",
       parseCacheMode,
       wiring.defaultCache,
     )
@@ -556,28 +927,57 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
       `Measure this command instead of the default set (repeatable). One of: ${MEASURABLE_COMMAND_NAMES.join(', ')}`,
       collectMeasuredCommand,
     )
-    .option('--out <dir>', 'Directory to write the report into', '.vat-lab')
+    .option(COMMAND_EXPECT_EXIT_OPTION, COMMAND_EXPECT_EXIT_HELP, collectCommandExpectedExit)
+    .option(
+      ENV_OPTION,
+      'Set a variable for every child (repeatable). VAT_BIN, VAT_ROOT_DIR and the other ' +
+        'variables that select which vat runs are never inherited — set them here',
+      collectEnv('--env'),
+    )
+    .option(
+      UNSET_OPTION,
+      'Remove an inherited variable from every child (repeatable)',
+      collectUnset('--unset'),
+    )
+    .option(OUT_OPTION, 'Directory to write the report into', resolvedOut, resolvedOut(DEFAULT_OUT))
+    .option(ARMS_DIR_OPTION, ARMS_DIR_HELP, absoluteArmsDir)
+    .option(KEEP_ARMS_OPTION, KEEP_ARMS_HELP, false)
     .option(
       '--id <name>',
       'Subject id recorded in the report (default: the <subject> argument exactly as given)',
     )
     .description(wiring.runSummary)
-    .action(async (subjectPath: string, options: RunOptions) => {
-      const instrument = await resolveInstrument(options.instrument);
-      const subject = await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath });
-      const report = await wiring.capture({
-        instrument,
-        subject,
-        // No `--command` means the facet's default set, unchanged — the flag
-        // widens what can be asked for and never quietly narrows a bare run.
-        commands: options.command ?? wiring.defaultCommands ?? DEFAULT_MEASURED_COMMANDS,
-        runs: options.runs,
-        cache: options.cache,
-        capturedAt: new Date().toISOString(),
-      });
-      const written = await writeReport(options.out, report);
-      process.stdout.write(`${wiring.renderReport(report)}\nWrote ${written}\n`);
-    });
+    .action((subjectPath: string, options: RunOptions) =>
+      refusingArmErrors(async () => {
+        const env = armEnvironment(options.env, options.unset, ENV_OPTIONS_LABEL);
+        if (env === null) return;
+        // A tree:/dist: build resolves before --out or the arms root exists; only an npx: install waits for the root.
+        const prepared = await prepareInstrument(options.instrument);
+        const subject = await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath });
+        const out = openOutDirectory(options.out, [subject.path]);
+        await withArmsRoot(options, [subject.path], async ({ path: root }) => {
+          const instrument = await resolveInstrument(prepared, npxInstallSite(root, npmInstall));
+          const report = await wiring.capture({
+            instrument,
+            subject,
+            // No `--command` means the facet's default set, unchanged — the flag
+            // widens what can be asked for and never quietly narrows a bare run.
+            commands: committedCommands(
+              options.command ?? wiring.defaultCommands ?? DEFAULT_MEASURED_COMMANDS,
+              options.expectExit ?? [],
+            ),
+            runs: options.runs,
+            cache: options.cache,
+            env,
+            arms: { root, build: buildAlias(instrument.version) },
+            capturedAt: new Date().toISOString(),
+          });
+          // Written before the arms root ends: a cleanup failure must not cost the measurement.
+          const written = await writeReport(out, report);
+          process.stdout.write(`${wiring.renderReport(report)}\nWrote ${written}\n`);
+        });
+      }),
+    );
 
   group
     .command('compare')
@@ -633,33 +1033,100 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
 /**
  * Turn a facet's command rows into the estimates `ab` aggregates.
  *
- * Shared by all three wirings because the *rule* is shared and is the part worth
- * getting right: a failed row publishes no estimate at all. Letting one through
- * would feed `ab` the zero a failed row carries, and a zero is the best number
- * this tool can print — one failure would read as the fastest arm ever measured.
- * Three hand-written copies would be three chances to forget that filter.
+ * Shared by every wiring because the *rule* is shared and is the part worth
+ * getting right: a row with no usable measurement is LOST — kept, valueless,
+ * with its reason — never a value and never dropped. A value would feed `ab`
+ * the zero a failed row carries, the best number this tool can print; a
+ * dropped row would leave the arm a statistic of the pairs that happened to
+ * succeed, which understates the regression that failed the others.
  *
- * @param rows - The facet's command rows, which all share `name` and `failed`
+ * A row has no usable measurement when it failed, or when it ran and the facet
+ * finds no warrant for its value: an exact-count facet whose repeats disagreed
+ * or were never tested says so through `unwarrantedOf`, with the reason its
+ * `compare` gives.
+ *
+ * @param rows - The facet's command rows, which all share `name`, `failed` and `failure`
  * @param unit - What the extracted value is, for rendering only
  * @param valueOf - Which of the row's numbers to publish
- * @returns One estimate per row that produced a usable measurement
+ * @param lostReasonOf - How a failed row's loss is named ({@link FAILURE_IS_THE_REASON} unless the facet has a better name)
+ * @param unwarrantedOf - Why a row that ran has no usable value, or `null` when
+ *   it has one ({@link NO_WARRANT_NEEDED} for a facet whose every run counts)
+ * @returns One estimate per row: a value, or the reason there is none
  */
-function rowEstimates<TRow extends { readonly name: string; readonly failed: boolean }>(
+export function rowEstimates<TRow extends FailableRow>(
   rows: readonly TRow[],
   unit: string,
   valueOf: (row: TRow) => number,
+  lostReasonOf: (row: TRow) => string,
+  unwarrantedOf: (row: TRow) => string | null,
 ): readonly FacetEstimate[] {
-  return rows
-    .filter((row) => !row.failed)
-    .map((row) => ({ name: row.name, value: valueOf(row), unit }));
+  return rows.map((row): FacetEstimate => {
+    const lost = row.failed ? lostReasonOf(row) : unwarrantedOf(row);
+    return lost === null ? { name: row.name, value: valueOf(row), unit, lost: null } : { name: row.name, value: 0, unit, lost };
+  });
+}
+
+/** What every facet's command row carries for {@link rowEstimates}. */
+interface FailableRow {
+  readonly name: string;
+  readonly failed: boolean;
+  readonly failure: string | null;
+}
+
+/** A failed row's loss, named by its own `failure`. */
+export const FAILURE_IS_THE_REASON = (row: FailableRow): string => row.failure ?? 'failed, with no reason recorded';
+
+/**
+ * Every row that ran has a usable value: the timing and population facets,
+ * whose `ab` takes a statistic across pairs rather than reading one exact count.
+ *
+ * @returns `null`
+ */
+export const NO_WARRANT_NEEDED = (): null => null;
+
+/**
+ * The counter `work ab` compares: rows decoded from the persistent fact store, which is
+ * what I10 counts. Not the `hydration.*` counters, which count loading a run database.
+ */
+const WORK_AB_COUNTER = 'store.rows.decoded.persistent';
+
+/**
+ * What `io ab` compares: each row's user calls, lost when the row's own repeats
+ * disagreed or were never tested — the same warrant `io compare` asks of it.
+ *
+ * @param rows - An `io` report's rows
+ * @returns One estimate per row
+ */
+export function ioEstimates(rows: readonly IoCommandStats[]): readonly FacetEstimate[] {
+  return rowEstimates(rows, 'calls', (row) => row.userCalls, FAILURE_IS_THE_REASON, (row) => stabilityCaveat(row, 'measured'));
+}
+
+/**
+ * What `work ab` compares: each row's persistent-store rows decoded, lost when
+ * the row's repeats give no warrant (the reason `work compare` gives) or when
+ * the measured vat does not emit the counter — never read as zero.
+ *
+ * @param rows - A `work` report's rows
+ * @returns One estimate per row
+ */
+export function workEstimates(rows: readonly WorkCommandStats[]): readonly FacetEstimate[] {
+  return rowEstimates(
+    rows,
+    'persistent-store rows decoded',
+    (row) => countOf(row, WORK_AB_COUNTER) ?? 0,
+    FAILURE_IS_THE_REASON,
+    (row) =>
+      workStabilityCaveat(row, 'measured') ??
+      (countOf(row, WORK_AB_COUNTER) === undefined ? `the measured vat does not emit ${WORK_AB_COUNTER}` : null),
+  );
 }
 
 /**
  * The fastest repeat a row measured — the reduction `FacetEstimate` requires.
  *
  * `FacetFunctions.estimate` demands "a per-capture reduction that is already
- * robust to a slow repeat", because `ab` then takes a minimum across captures
- * and **a min over medians is not a min**: a median carries whichever repeat
+ * robust to a slow repeat", because `ab` then takes the facet's estimator across
+ * captures — the min, for every facet this serves — and **a min over medians is not a min**: a median carries whichever repeat
  * happened to land in the middle, so a single slow repeat inside an arm survives
  * into the number `ab` compares and reads as a real effect.
  *
@@ -703,6 +1170,709 @@ function refuse(refusal: string): void {
   process.exitCode = ExitCode.ERROR;
 }
 
+/** A plain directory-name segment, as an arm directory's build alias must be. */
+const ALIAS = /^[\w-][\w.-]*$/u;
+
+/** One `perf arms --build`: an alias and where its vat comes from. */
+export interface ArmsBuildOption {
+  readonly alias: string;
+  readonly source: InstrumentSource;
+}
+
+/** One `perf arms --arm`: which build runs which CI sequence, cold or warm. */
+export interface ArmsSelectionOption {
+  readonly build: string;
+  readonly sequence: MeasuredSequenceSpec;
+  readonly state: CacheMode;
+}
+
+/**
+ * A Commander parser for `perf arms --build alias=<instrument>`, accumulating.
+ *
+ * @param value - Raw value Commander parsed
+ * @param previous - Builds collected so far
+ * @returns The accumulated builds
+ * @throws {InvalidArgumentError} when the alias is not a plain segment or the instrument does not parse
+ */
+export function collectArmsBuild(value: string, previous: readonly ArmsBuildOption[] | undefined): ArmsBuildOption[] {
+  const at = value.indexOf('=');
+  const alias = at === -1 ? '' : value.slice(0, at);
+  if (!ALIAS.test(alias)) {
+    throw new InvalidArgumentError(`--build expects alias=<instrument> with a plain directory-name alias; got '${value}'.`);
+  }
+  // Folded: an alias names an arm directory, and 'old' and 'OLD' are one directory on a case-insensitive disk.
+  if ((previous ?? []).some((build) => build.alias.toLowerCase() === alias.toLowerCase())) {
+    throw new InvalidArgumentError(`--build names alias '${alias}' more than once (ignoring case); each build has its own arm directories.`);
+  }
+  return [...(previous ?? []), { alias, source: parseInstrument(value.slice(at + 1)) }];
+}
+
+/**
+ * A Commander parser for `perf arms --arm build:sequence:state`, accumulating.
+ *
+ * @param value - Raw value Commander parsed
+ * @param previous - Arms collected so far
+ * @returns The accumulated arms
+ * @throws {InvalidArgumentError} when the sequence is not registered or the state is not warm/cold
+ */
+export function collectArmsSelection(
+  value: string,
+  previous: readonly ArmsSelectionOption[] | undefined,
+): ArmsSelectionOption[] {
+  const [build = '', name = '', state = '', ...extra] = value.split(':');
+  const sequence = measurableSequence(name);
+  if (build === '' || extra.length > 0 || sequence === undefined) {
+    throw new InvalidArgumentError(
+      `--arm expects <build>:<sequence>:<warm|cold> with a sequence among ${Object.keys(MEASURABLE_SEQUENCES).join(', ')}; got '${value}'.`,
+    );
+  }
+  if (state !== 'warm' && state !== 'cold') {
+    throw new InvalidArgumentError(`--arm expects a state of 'warm' or 'cold'; got '${value}'.`);
+  }
+  return [...(previous ?? []), { build, sequence, state }];
+}
+
+/**
+ * A Commander parser for `perf arms --prerequisite '<command> <args…>'`: one
+ * untimed tool step committed to exit 0, split on whitespace (no shell).
+ *
+ * @param value - Raw value Commander parsed
+ * @param previous - Prerequisites collected so far
+ * @returns The accumulated steps, in the order given
+ * @throws {InvalidArgumentError} when the value names no command
+ */
+export function collectPrerequisite(value: string, previous: readonly SequenceStep[] | undefined): SequenceStep[] {
+  const [command, ...args] = value.trim().split(/\s+/u);
+  if (command === undefined || command === '') {
+    throw new InvalidArgumentError(`--prerequisite expects a command; got '${value}'.`);
+  }
+  const step: SequenceStep = {
+    name: value.trim(),
+    command: { kind: 'tool', command, args },
+    timed: false,
+    exit: exactExit(ExitCode.OK),
+    provenance: 'none',
+    populates: false,
+    writes: [],
+  };
+  return [...(previous ?? []), step];
+}
+
+/**
+ * The code half of any `--expect-exit`: one whole number that is not vat's
+ * system-error exit.
+ *
+ * @param value - The whole raw value, for the message
+ * @param code - Its code half; empty when the value did not parse
+ * @param shape - The flag's expected spelling, for the message
+ * @returns The committed exit
+ * @throws {InvalidArgumentError} when the code is missing, a list, 2, or above 255
+ */
+function committedExitCode(value: string, code: string, shape: string): number {
+  if (code === '' || code.split(',').includes('')) {
+    throw new InvalidArgumentError(`--expect-exit expects ${shape}; got '${value}'.`);
+  }
+  if (code.includes(',')) {
+    throw new InvalidArgumentError(`--expect-exit '${value}' names a list — a step commits to one exit code.`);
+  }
+  const exit = Number(code);
+  if (exit === ExitCode.ERROR) {
+    throw new InvalidArgumentError(`--expect-exit '${value}' commits to exit 2 — a system error is never an expected exit.`);
+  }
+  if (exit > MAX_EXIT_CODE) {
+    throw new InvalidArgumentError(`--expect-exit '${value}' commits to exit ${code} — an exit code is a whole number from 0 to ${String(MAX_EXIT_CODE)}.`);
+  }
+  return exit;
+}
+
+/** `--expect-exit`'s shape on a single-command facet: `<command>=<code>`. */
+const COMMAND_EXPECTED_EXIT = /^([\w-]+)=([\d,]*)$/u;
+
+/** One caller commitment: this command, in this run, exits this. */
+export interface CommandExpectedExit {
+  readonly command: string;
+  readonly exit: number;
+}
+
+/**
+ * A Commander parser for `<facet> run|ab --expect-exit <command>=<code>`,
+ * accumulating: the ONE exit a command commits to on this subject (`exact`), in
+ * place of its `observed` default — any completed exit its verb declares, the
+ * same on every repetition.
+ *
+ * @param value - Raw value Commander parsed
+ * @param previous - Expectations collected so far
+ * @returns The accumulated expectations
+ * @throws {InvalidArgumentError} when the value is malformed, names an unknown
+ *   command or a list, commits to exit 2, or repeats a command
+ */
+export function collectCommandExpectedExit(
+  value: string,
+  previous: readonly CommandExpectedExit[] | undefined,
+): CommandExpectedExit[] {
+  const match = COMMAND_EXPECTED_EXIT.exec(value);
+  const [, command = '', code = ''] = match ?? [];
+  const exit = committedExitCode(value, code, '<command>=<code>');
+  if (measurableCommand(command) === undefined) {
+    throw new InvalidArgumentError(`--expect-exit expects one of: ${MEASURABLE_COMMAND_NAMES.join(', ')}; got '${command}'.`);
+  }
+  if ((previous ?? []).some((set) => set.command === command)) {
+    throw new InvalidArgumentError(`--expect-exit names ${command} more than once.`);
+  }
+  return [...(previous ?? []), { command, exit }];
+}
+
+/**
+ * The measured commands with every caller commitment applied — the one place an
+ * expectation replaces a spec's registered exit.
+ *
+ * @param specs - The commands this run measures
+ * @param expected - The caller's `--expect-exit` commitments
+ * @returns The specs, an expected one committed `exact`ly, the rest as registered
+ * @throws {VatError} when an expectation names a command the run does not
+ *   measure — it would leave the registered exit silently in force
+ */
+export function committedCommands(
+  specs: readonly MeasuredCommandSpec[],
+  expected: readonly CommandExpectedExit[],
+): MeasuredCommandSpec[] {
+  const stray = expected.find((set) => !specs.some((spec) => spec.name === set.command));
+  if (stray !== undefined) {
+    throw armRefusal(`--expect-exit names ${stray.command}, which this run does not measure`);
+  }
+  return specs.map((spec) => {
+    const set = expected.find((candidate) => candidate.command === spec.name);
+    return set === undefined ? spec : { ...spec, exit: exactExit(set.exit) };
+  });
+}
+
+/** `--expect-exit`'s shape: `<build>:<sequence>:<step>=<code>`; the code part is checked on its own. */
+const EXPECTED_EXIT = /^([\w.-]+):([\w-]+):([\w-]+)=([\d,]+)$/u;
+
+/**
+ * A Commander parser for `perf arms --expect-exit <build>:<sequence>:<step>=<code>`,
+ * accumulating: the ONE exit one step of one arm commits to, in place of 0.
+ *
+ * @param value - Raw value Commander parsed
+ * @param previous - Expectations collected so far
+ * @returns The accumulated expectations
+ * @throws {InvalidArgumentError} when the value is malformed, names a list,
+ *   commits to exit 2, or repeats a (build, sequence, step) already given
+ */
+export function collectExpectedExit(value: string, previous: readonly ExpectedExit[] | undefined): ExpectedExit[] {
+  const match = EXPECTED_EXIT.exec(value);
+  const [, build = '', sequence = '', step = '', code = ''] = match ?? [];
+  const exit = committedExitCode(value, match === null ? '' : code, '<build>:<sequence>:<step>=<code>');
+  const earlier = (previous ?? []).find((set) => set.build === build && set.sequence === sequence && set.step === step);
+  if (earlier !== undefined) {
+    throw new InvalidArgumentError(`--expect-exit names ${build}:${sequence}:${step} more than once (${String(earlier.exit)}, then ${code}).`);
+  }
+  return [...(previous ?? []), { build, sequence, step, exit }];
+}
+
+/** Options Commander collects for `perf arms`. */
+interface PerfArmsOptions {
+  readonly build?: readonly ArmsBuildOption[];
+  readonly arm?: readonly ArmsSelectionOption[];
+  readonly prerequisite?: readonly SequenceStep[];
+  readonly expectExit?: readonly ExpectedExit[];
+  readonly commit: string;
+  readonly rounds: number;
+  readonly out: string;
+  /** Absent for the default arms root. */
+  readonly armsDir?: string;
+  readonly keepArms?: boolean;
+  readonly timeoutMs?: number;
+  readonly env?: ArmEnvironment['set'];
+  readonly unset?: readonly string[];
+}
+
+/**
+ * Prepare the clone, time every arm interleaved by round, and write the report.
+ *
+ * @param subjectPath - The subject repository
+ * @param options - See {@link PerfArmsOptions}
+ */
+async function runPerfArms(subjectPath: string, options: PerfArmsOptions): Promise<void> {
+  const env = armEnvironment(options.env, options.unset, ENV_OPTIONS_LABEL);
+  if (env === null) return;
+  const arms = options.arm ?? [];
+  const expected = options.expectExit ?? [];
+  const [first] = arms;
+  const declaredBuilds = options.build;
+  if (declaredBuilds === undefined || first === undefined) {
+    return refuse('REFUSED: perf arms needs at least one --build and one --arm.');
+  }
+  // Every --arm and --expect-exit is checked before any build resolves or any clone is prepared.
+  const declared = new Set(declaredBuilds.map((build) => build.alias));
+  const undeclared = arms.find((arm) => !declared.has(arm.build));
+  if (undeclared !== undefined) {
+    return refuse(`REFUSED: --arm names build '${undeclared.build}', which no --build declares.`);
+  }
+  const unmatched = expectedExitRefusal(arms, expected);
+  if (unmatched !== null) return refuse(`REFUSED: ${unmatched}.`);
+
+  const [warmupStep] = sequenceSteps(first.sequence, first.build, expected);
+  /* c8 ignore next 3 -- every sequence has a step */
+  if (warmupStep === undefined) {
+    return refuse(`REFUSED: --arm '${first.sequence.name}' runs no step.`);
+  }
+  // Every tree:/dist: build resolves before --out or the arms root exists; only an npx: install waits for the root.
+  const prepared = await Promise.all(declaredBuilds.map(async (build) => ({ build, instrument: await prepareInstrument(build.source) })));
+  const source = safePath.resolve(subjectPath);
+  const out = openOutDirectory(options.out, [source]);
+  await withArmsRoot(options, [source], async (root) => {
+    const npx = npxInstallSite(root.path, npmInstall);
+    const builds = await Promise.all(
+      prepared.map(async ({ build, instrument }) => ({ ...build, instrument: await resolveInstrument(instrument, npx) })),
+    );
+    await captureArmsInto(out, root, { source, options, builds, arms, expected, env, warmup: { build: first.build, step: warmupStep } });
+  });
+}
+
+/** Everything {@link captureArmsInto} needs, checked by {@link runPerfArms}. */
+interface ArmsCaptureInputs {
+  readonly source: string;
+  readonly options: PerfArmsOptions;
+  readonly builds: readonly (ArmsBuildOption & { readonly instrument: ResolvedInstrument })[];
+  readonly arms: readonly ArmsSelectionOption[];
+  readonly expected: readonly ExpectedExit[];
+  readonly env: ArmEnvironment;
+  /** The first arm's build alias and first step: the clone's warm-up. */
+  readonly warmup: { readonly build: string; readonly step: SequenceStep };
+}
+
+/**
+ * Prepare the clone under the arms root, time every arm, and write the report
+ * owner-only into `out`.
+ *
+ * @param out - The opened `--out` ({@link openOutDirectory})
+ * @param root - The invocation's arms root; the clone outlives it only once the report naming it is written
+ * @param inputs - See {@link ArmsCaptureInputs}
+ */
+async function captureArmsInto(out: string, root: ArmsRootHandle, inputs: ArmsCaptureInputs): Promise<void> {
+  const armsRoot = root.path;
+  const { options, expected } = inputs;
+  const timeout = options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs };
+  const warmupBuild = inputs.builds.find((build) => build.alias === inputs.warmup.build);
+  /* c8 ignore next 3 -- every --arm's build was checked by runPerfArms */
+  if (warmupBuild === undefined) {
+    return refuse(`REFUSED: --arm names build '${inputs.warmup.build}', which no --build declares.`);
+  }
+  const prepared = await prepareClone({
+    source: inputs.source,
+    commit: options.commit,
+    armsRoot,
+    prerequisites: options.prerequisite ?? [],
+    warmup: { instrument: warmupBuild.instrument, step: inputs.warmup.step },
+    ...timeout,
+  });
+  if (!prepared.ok) return refuse(`REFUSED: ${prepared.refusal}`);
+
+  const report = await captureArms({
+    armsRoot,
+    cwd: prepared.path,
+    builds: inputs.builds,
+    arms: inputs.arms.map((arm) => ({
+      build: arm.build,
+      arm: arm.sequence.name,
+      state: arm.state,
+      steps: sequenceSteps(arm.sequence, arm.build, expected),
+    })),
+    rounds: options.rounds,
+    env: inputs.env,
+    ...timeout,
+  });
+  const recorded: ArmsInputs = {
+    env: { set: { ...inputs.env.set }, unset: [...inputs.env.unset] },
+    expectedExits: expected.map((exit) => ({ ...exit })),
+    prerequisites: (options.prerequisite ?? []).map((step) => step.name),
+    timeoutMs: options.timeoutMs ?? null,
+  };
+  const written = safePath.join(out, 'arms-report.json');
+  await root.keepChild(PREPARED_CLONE_NAME, (kept) => {
+    writePrivateFile(written, `${JSON.stringify({ prepared: { ...prepared, path: kept }, inputs: recorded, ...report }, null, 2)}\n`);
+  });
+  process.stdout.write(`${renderArmsReport(report)}\nWrote ${written}\n`);
+  if (report.arms.some((arm) => arm.failure !== null)) process.exitCode = ExitCode.ERROR;
+}
+
+/**
+ * Build `perf arms`: time whole CI sequences over a prepared clone.
+ *
+ * @returns The configured command
+ */
+function createPerfArmsCommand(): Command {
+  return new Command('arms')
+    .argument('<subject>', 'The subject repository; the arms run in a `git clone --local` of it under the arms root')
+    .option('--build <alias=instrument>', "A build to measure, e.g. 'rc11=dist:/path/to/cli/dist' or 'rc11=npx:vibe-agent-toolkit@0.2.0-rc.11' (repeatable)", collectArmsBuild)
+    .option(
+      '--arm <build:sequence:state>',
+      `An arm to time (repeatable), e.g. 'rc11:ci-b:cold'. Sequences: ${Object.keys(MEASURABLE_SEQUENCES).join(', ')}`,
+      collectArmsSelection,
+    )
+    .option(
+      '--prerequisite <command>',
+      "A command run once in the clone before round 1, untimed and exit-checked (repeatable, in order; split on whitespace)",
+      collectPrerequisite,
+    )
+    .option(
+      '--expect-exit <build:sequence:step=code>',
+      "The ONE exit one step of one arm commits to, in place of 0, e.g. 'cand:ci-c:validate-ci=1' (repeatable, once per step; never 2)",
+      collectExpectedExit,
+    )
+    .option('--commit <committish>', 'The commit to clone', 'HEAD')
+    .option('--rounds <n>', 'Measured rounds per arm, interleaved; at least 5', wholeNumberAtLeast('--rounds', 5), 5)
+    .requiredOption(OUT_OPTION, 'Directory for the report (owner-only)', resolvedOut)
+    .option(ARMS_DIR_OPTION, `${ARMS_DIR_HELP}; the clone is <arms-dir>/clone`, absoluteArmsDir)
+    .option(KEEP_ARMS_OPTION, KEEP_ARMS_HELP, false)
+    .option('--timeout-ms <n>', 'Kill any one step after this long', wholeNumberAtLeast('--timeout-ms', 1))
+    .option(ENV_OPTION, 'Set a variable for every VAT step of every arm (repeatable)', collectEnv('--env'))
+    .option(UNSET_OPTION, 'Remove an inherited variable from every VAT step (repeatable)', collectUnset('--unset'))
+    .description('Time CI command sequences per (build, arm, cache state), interleaved by round, in a prepared clone')
+    .action((subjectPath: string, options: PerfArmsOptions) => refusingArmErrors(() => runPerfArms(subjectPath, options)));
+}
+
+/**
+ * A Commander parser for `perf bars --bar`, accumulating.
+ *
+ * @param value - Raw value Commander parsed, e.g. `cand:ci-c:cold<=1.15*rc11:ci-a:cold`
+ * @param previous - Bars collected so far
+ * @returns The accumulated bars
+ * @throws {InvalidArgumentError} when the bar does not parse or names no factor
+ */
+export function collectBar(value: string, previous: readonly Bar[] | undefined): Bar[] {
+  const bar = parseBar(value);
+  if (typeof bar === 'string') throw new InvalidArgumentError(`${bar}.`);
+  return [...(previous ?? []), bar];
+}
+
+/**
+ * Judge every bar over a `perf arms` report: exit 0 only when every bar
+ * passes; a failed or INCONCLUSIVE bar exits 1, and a report or bar that
+ * cannot be judged is REFUSED.
+ *
+ * @param reportPath - `<out>/arms-report.json`
+ * @param options - The bars
+ */
+function runPerfBars(reportPath: string, options: { readonly bar: readonly Bar[] }): void {
+  const read = readArmsReportFile(safePath.resolve(reportPath));
+  if (!read.ok) return refuse(read.refusal);
+  const judged = judgeBars(read.report, options.bar);
+  if (!judged.ok) return refuse(`REFUSED: ${judged.refusal}.`);
+  process.stdout.write(`${renderBars(read.report, judged.results)}\n`);
+  if (judged.results.some((result) => result.verdict !== 'pass')) process.exitCode = ExitCode.FINDINGS;
+}
+
+/**
+ * Build `perf bars`: judge pass bars over a `perf arms` report.
+ *
+ * @returns The configured command
+ */
+function createPerfBarsCommand(): Command {
+  return new Command('bars')
+    .argument('<report>', "A perf arms report (<out>/arms-report.json)")
+    .requiredOption(
+      '--bar <bar>',
+      "A bar, e.g. 'cand:ci-c:cold<=1.15*rc11:ci-a:cold' — held on median AND min; the factor is required (repeatable)",
+      collectBar,
+    )
+    .description('Judge pass bars over a perf arms report: pass only when median and min both hold')
+    .action((reportPath: string, options: { readonly bar: readonly Bar[] }) => {
+      runPerfBars(reportPath, options);
+    });
+}
+
+/** Options Commander collects for `verdict run`. */
+interface VerdictRunOptions {
+  readonly subjects: string;
+  readonly instrument: InstrumentSource;
+  readonly out: string;
+  /** Absent for the default arms root. */
+  readonly armsDir?: string;
+  readonly keepArms?: boolean;
+  readonly timeoutMs?: number;
+  readonly env?: ArmEnvironment['set'];
+  readonly unset?: readonly string[];
+  /** Subjects whose path is replaced by a prepared clone (`perf arms`' report's `prepared.path`). */
+  readonly prepared?: Readonly<Record<string, string>>;
+}
+
+/**
+ * A Commander parser for `verdict run --prepared alias=<path>`, accumulating.
+ *
+ * @param value - Raw value Commander parsed
+ * @param previous - Pairs collected so far
+ * @returns The accumulated alias → resolved path map
+ * @throws {InvalidArgumentError} when either side is empty
+ */
+export function collectPreparedSubject(
+  value: string,
+  previous: Readonly<Record<string, string>> | undefined,
+): Record<string, string> {
+  const at = value.indexOf('=');
+  const path = at === -1 ? '' : value.slice(at + 1);
+  if (at <= 0 || path === '') {
+    throw new InvalidArgumentError(`--prepared expects alias=<path>; got '${value}'.`);
+  }
+  return { ...previous, [value.slice(0, at)]: safePath.resolve(path) };
+}
+
+
+/** Options Commander collects for `verdict compare`. */
+interface VerdictCompareCliOptions {
+  readonly deltas: string;
+  readonly control: boolean;
+}
+
+/**
+ * Build the `verdict` facet's `run` and `compare`.
+ *
+ * Not built by {@link createFacetCommand}: that factory's shape is one subject,
+ * repeats, a cache mode, one report per run and an `ab` over a per-command
+ * estimate — none of which a verdict has. A verdict runs a SUBJECT SET once per
+ * arm, writes one report per alias, and compares two capture directories
+ * against a committed deltas file.
+ *
+ * @returns The configured command group
+ */
+function createVerdictCommand(): Command {
+  const group = new Command('verdict').description(
+    'Compare what two vat builds DECIDE — exit codes, findings, full documents — across a subject set',
+  );
+
+  group
+    .command('run')
+    .requiredOption('--subjects <file>', 'The local subjects file (alias → path, verbs, SQL files); never committed')
+    .requiredOption(
+      '--instrument <spec>',
+      "Which vat to run: 'tree:<path>', 'dist:<path>' or 'npx:<pkg@version>'",
+      parseInstrument,
+    )
+    .requiredOption(OUT_OPTION, 'Directory to write one report per alias into; outside every subject', resolvedOut)
+    .option(ARMS_DIR_OPTION, `${ARMS_DIR_HELP}; each alias's arm is <arms-dir>/<alias>`, absoluteArmsDir)
+    .option(KEEP_ARMS_OPTION, KEEP_ARMS_HELP, false)
+    .option('--timeout-ms <n>', 'Kill any one verb after this long', wholeNumberAtLeast('--timeout-ms', 1))
+    .option(ENV_OPTION, 'Set a variable for every child of this arm (repeatable)', collectEnv('--env'))
+    .option(UNSET_OPTION, 'Remove an inherited variable from every child of this arm (repeatable)', collectUnset('--unset'))
+    .option(
+      '--prepared <alias=path>',
+      "Run a subject in its prepared clone (the prepared.path of perf arms' report) instead of its subjects-file path (repeatable)",
+      collectPreparedSubject,
+    )
+    .description('Capture one arm: every verb of every subject, one report per alias')
+    .action((options: VerdictRunOptions) =>
+      refusingArmErrors(async () => {
+        const env = armEnvironment(options.env, options.unset, ENV_OPTIONS_LABEL);
+        if (env === null) return;
+        const loaded = loadVerdictSubjects(options.subjects);
+        if (!loaded.ok) return refuse(loaded.refusal);
+        const prepared = options.prepared ?? {};
+        const { subjects } = loaded.subjects;
+        const measured = subjects.map((subject) => prepared[subject.alias] ?? subject.path);
+        // A tree:/dist: build resolves before --out or the arms root exists; only an npx: install waits for the root.
+        const build = await prepareInstrument(options.instrument);
+        await withArmsRoot(options, measured, async ({ path: armsRoot }) => {
+          const instrument = await resolveInstrument(build, npxInstallSite(armsRoot, npmInstall));
+          const result = await captureVerdict({
+            instrument,
+            subjects,
+            subjectsDir: loaded.baseDir,
+            env,
+            prepared,
+            outDir: openOutDirectory(options.out, measured),
+            armsRoot,
+            capturedAt: new Date().toISOString(),
+            ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+          });
+          if (!result.ok) return refuse(result.refusal);
+          for (const envelope of result.envelopes) process.stdout.write(`${renderVerdictReport(envelope)}\n`);
+          process.stdout.write(`Wrote ${result.written.join(', ')}\n`);
+        });
+      }),
+    );
+
+  group
+    .command('compare')
+    .argument('<baselineDir>', "The baseline arm's `verdict run --out` directory")
+    .argument('<candidateDir>', "The candidate arm's `verdict run --out` directory")
+    .option('--deltas <file>', 'The committed expected-deltas file', COMMITTED_VERDICT_DELTAS)
+    .option('--control', 'Both directories are the SAME instrument, on purpose', false)
+    .description('Diff two arms and check the result both ways against the committed deltas')
+    .action(async (baselineDir: string, candidateDir: string, options: VerdictCompareCliOptions) => {
+      const deltas = loadVerdictDeltas(options.deltas);
+      if (!deltas.ok) return refuse(deltas.refusal);
+      const baseline = await readVerdictDirectory(baselineDir);
+      if (!baseline.ok) return refuse(baseline.refusal);
+      const candidate = await readVerdictDirectory(candidateDir);
+      if (!candidate.ok) return refuse(candidate.refusal);
+      const comparison = compareVerdict(baseline.value, candidate.value, {
+        control: options.control,
+        deltas: deltas.deltas,
+        changelog: readChangelogSources(deltas.deltas, CHANGELOG_REFERENCE_ROOT),
+      });
+      if (!comparison.ok) return refuse(comparison.refusal);
+      process.stdout.write(`${renderVerdictComparison(comparison)}\n`);
+      if (comparison.exitCode !== ExitCode.OK) process.exitCode = comparison.exitCode;
+    });
+
+  group
+    .command('union')
+    .argument('<leftDir>', 'The capture whose sequence must be covered (`verdict run --out`)')
+    .argument('<rightDir>', 'The capture whose sequence must cover it')
+    .requiredOption('--alias <alias>', 'The subject alias to compare')
+    .requiredOption('--left <rows>', 'The left sequence, as comma-separated row names', splitRowNames)
+    .requiredOption('--right <rows>', 'The right sequence, as comma-separated row names', splitRowNames)
+    .requiredOption('--arms <report>', "The perf arms report (<out>/arms-report.json) of the prepared clone both captures ran in")
+    .requiredOption('--left-arm <build:sequence:state>', "The left sequence's timed arm in that report, e.g. 'rc11:ci-b:cold'", armNameOption)
+    .requiredOption('--right-arm <build:sequence:state>', "The right sequence's timed arm, e.g. 'cand:ci-c:cold'", armNameOption)
+    .option('--deltas <file>', "The committed expected-deltas file, whose 'unions' declare the right's extra findings", COMMITTED_VERDICT_DELTAS)
+    .description(
+      "Bar 3: the left sequence's findings are all the right's, the right's extras are the declared ones, and on every round the right exits as the left first failed",
+    )
+    .action(async (leftDir: string, rightDir: string, options: VerdictUnionOptions) => {
+      const inputs = await unionInputs(leftDir, rightDir, options);
+      if (!inputs.ok) return refuse(inputs.refusal);
+      const judged = judgeUnion(inputs.value);
+      if (!judged.ok) return refuse(`REFUSED: ${judged.refusal}`);
+      process.stdout.write(`${renderUnion(judged)}\n`);
+      if (!judged.passed) process.exitCode = ExitCode.FINDINGS;
+    });
+
+  return group;
+}
+
+/** Options Commander collects for `verdict union`. */
+interface VerdictUnionOptions {
+  readonly alias: string;
+  readonly left: readonly string[];
+  readonly right: readonly string[];
+  readonly arms: string;
+  readonly leftArm: ArmName;
+  readonly rightArm: ArmName;
+  readonly deltas: string;
+}
+
+/**
+ * A Commander parser for `verdict union --left-arm/--right-arm`.
+ *
+ * @param value - An arm in `--arm` spelling
+ * @returns The arm
+ * @throws {InvalidArgumentError} when it is not `<build>:<sequence>:<warm|cold>`
+ */
+export function armNameOption(value: string): ArmName {
+  const arm = parseArmName(value);
+  if (arm === null) throw new InvalidArgumentError(`expected <build>:<sequence>:<warm|cold>; got '${value}'.`);
+  return arm;
+}
+
+/**
+ * Read everything bar 3 is judged over, refusing what cannot be read.
+ *
+ * @param leftDir - The left sequence's capture
+ * @param rightDir - The right sequence's capture
+ * @param options - See {@link VerdictUnionOptions}
+ * @returns The request, or the refusal
+ */
+async function unionInputs(leftDir: string, rightDir: string, options: VerdictUnionOptions): Promise<Validated<UnionRequest>> {
+  const left = await verdictEnvelopeFor(leftDir, options.alias);
+  if (!left.ok) return left;
+  const right = await verdictEnvelopeFor(rightDir, options.alias);
+  if (!right.ok) return right;
+  const report = readArmsReportFile(safePath.resolve(options.arms));
+  if (!report.ok) return report;
+  const leftArm = unionArmEvidence(report.report, options.leftArm, '--left-arm');
+  if (!leftArm.ok) return leftArm;
+  const rightArm = unionArmEvidence(report.report, options.rightArm, '--right-arm');
+  if (!rightArm.ok) return rightArm;
+  const deltas = loadVerdictDeltas(options.deltas);
+  if (!deltas.ok) return deltas;
+  const changelog = changelogRefusals(deltas.deltas, readChangelogSources(deltas.deltas, CHANGELOG_REFERENCE_ROOT));
+  if (changelog.length > 0) return { ok: false, refusal: changelog.join('\n') };
+  return {
+    ok: true,
+    value: {
+      left: { envelope: left.value, rows: options.left },
+      right: { envelope: right.value, rows: options.right },
+      arms: {
+        prepared: report.report.prepared,
+        left: leftArm.value,
+        right: rightArm.value,
+      },
+      declared: deltas.deltas.unions,
+    },
+  };
+}
+
+/**
+ * One named arm of an arms report, with what its build resolved to.
+ *
+ * @param report - The arms report
+ * @param wanted - The arm `--left-arm`/`--right-arm` names
+ * @param flag - Which of the two, for the message
+ * @returns The arm's evidence, or why the report does not hold it
+ */
+function unionArmEvidence(report: ArmsReportFile, wanted: ArmName, flag: string): Validated<UnionArmEvidence> {
+  const arm = findArm(report.arms, wanted);
+  if (typeof arm === 'string') return { ok: false, refusal: `REFUSED: ${flag} ${arm}.` };
+  const build = report.builds.find((candidate) => candidate.alias === arm.build);
+  if (build === undefined) return { ok: false, refusal: `REFUSED: ${flag} names build '${arm.build}', which the report's builds do not hold.` };
+  return { ok: true, value: { name: armName(arm), instrument: build.instrument, failure: arm.failure, repetitions: arm.repetitions } };
+}
+
+/**
+ * @param judged - Bar 3's judgement
+ * @returns Its verdict, then every reason it failed
+ */
+function renderUnion(judged: Extract<UnionJudgement, { ok: true }>): string {
+  const key = (finding: UnionKey): string => `  ${finding.severity} ${finding.code} ${finding.location ?? '-'}:${String(finding.line ?? '-')}`;
+  const declared = (finding: DeclaredUnionFinding): string =>
+    `  ${finding.severity} ${finding.code} ${'locationDigest' in finding ? finding.locationDigest : (finding.location ?? '-')}:${String(finding.line ?? '-')}`;
+  return [
+    judged.passed ? 'BAR 3 HOLDS' : 'BAR 3 FAILS',
+    ...section('Left findings the right lacks', judged.missing.map(key)),
+    ...section('Right findings beyond the left that no unions entry declares', judged.undeclared.map(key)),
+    ...section('Declared extras the right did not report', judged.unused.map(declared)),
+    ...section('Rounds whose right exit breaks the exit rule', judged.exitViolations.map((line) => `  ${line}`)),
+  ].join('\n');
+}
+
+/**
+ * @param heading - What the lines are
+ * @param lines - The lines, already indented
+ * @returns The heading and lines, or nothing when there are none
+ */
+function section(heading: string, lines: readonly string[]): readonly string[] {
+  return lines.length === 0 ? [] : [`${heading}:`, ...lines];
+}
+
+/**
+ * @param value - Comma-separated row names
+ * @returns The names, in order
+ * @throws {InvalidArgumentError} when no name is given
+ */
+export function splitRowNames(value: string): string[] {
+  const names = value.split(',').map((name) => name.trim()).filter((name) => name !== '');
+  if (names.length === 0) throw new InvalidArgumentError(`expected comma-separated row names; got '${value}'.`);
+  return names;
+}
+
+/**
+ * One subject's verdict report from a capture directory.
+ *
+ * @param dir - A `verdict run --out` directory
+ * @param alias - The subject alias
+ * @returns Its envelope, or a refusal
+ */
+async function verdictEnvelopeFor(dir: string, alias: string): Promise<Validated<ReportEnvelope<VerdictBody>>> {
+  const read = await readVerdictDirectory(dir);
+  if (!read.ok) return read;
+  const envelope = read.value.find((candidate) => candidate.coordinate.subject.id === alias);
+  return envelope === undefined
+    ? { ok: false, refusal: `REFUSED: '${dir}' holds no verdict report for subject '${alias}'.` }
+    : { ok: true, value: envelope };
+}
+
 /**
  * Build the whole `vat-lab` program.
  *
@@ -720,16 +1890,20 @@ export function createProgram(): Command {
         runSummary: 'Capture a perf report for one project against one vat build',
         compareSummary: 'Diff two perf reports along a single axis',
         defaultRuns: 5,
+        minRuns: 1,
         defaultCache: 'warm',
-        capture: (request) => Promise.resolve(capturePerf(request)),
+        capture: capturePerf,
         compare: comparePerf,
         renderReport: renderPerfReport,
         renderComparison: renderPerfComparison,
         // `minMs`, not `medianMs`. The row already carries the fastest repeat,
         // and it is the right number to hand `ab` for the same reason `ab` then
         // takes a minimum of it — see `harness/estimator.ts`.
-        estimate: (report) => rowEstimates(report.body.commands, 'ms', (row) => row.minMs),
-      }),
+        estimator: 'min',
+        estimate: (report) => rowEstimates(report.body.commands, 'ms', (row) => row.minMs, FAILURE_IS_THE_REASON, NO_WARRANT_NEEDED),
+      })
+        .addCommand(createPerfArmsCommand())
+        .addCommand(createPerfBarsCommand()),
     )
     .addCommand(
       createFacetCommand({
@@ -741,16 +1915,18 @@ export function createProgram(): Command {
         // test determinism at all, and io counts are deterministic enough that
         // more repeats buy confidence rather than resolution.
         defaultRuns: 3,
+        minRuns: 1,
         defaultCache: 'warm',
         capture: captureIo,
         compare: compareIo,
         renderReport: renderIoReport,
         renderComparison: renderIoComparison,
         // Call counts do not move with machine load, so a min across pairs is
-        // normally every pair's value. That is a feature: an arm whose min and
-        // p25 differ is an arm whose counts were NOT deterministic, and the A/B
-        // shows it without needing its own stability rule.
-        estimate: (report) => rowEstimates(report.body.commands, 'calls', (row) => row.userCalls),
+        // normally every pair's value. A row whose own repeats disagreed or were
+        // never tested is lost rather than published: an exact count with no
+        // warrant is the number `io compare` refuses to read.
+        estimator: 'min',
+        estimate: (report) => ioEstimates(report.body.commands),
       }),
     )
     .addCommand(
@@ -762,6 +1938,7 @@ export function createProgram(): Command {
         // Three repeats, so the middle one can be reported and the other two can
         // disagree with it. No warm-up is discarded — see `parse/capture.ts`.
         defaultRuns: 3,
+        minRuns: 1,
         // The one facet that must not default to warm — see `FacetWiring.defaultCache`.
         defaultCache: 'cold',
         capture: captureParse,
@@ -790,8 +1967,9 @@ export function createProgram(): Command {
         // change at all. The sum is the only single number that moves whenever
         // any parse work does. A reader who needs to know WHICH kind moved reads
         // the compare output, where the passes are qualified by kind.
+        estimator: 'min',
         estimate: (report) =>
-          rowEstimates(report.body.commands, 'ms parse (all kinds)', fastestRepeat),
+          rowEstimates(report.body.commands, 'ms parse (all kinds)', fastestRepeat, FAILURE_IS_THE_REASON, NO_WARRANT_NEEDED),
       }),
     )
     .addCommand(
@@ -804,6 +1982,7 @@ export function createProgram(): Command {
         // Three repeats, so the middle one can be reported and the other two can
         // disagree with it. No warm-up is discarded — see `crawl/capture.ts`.
         defaultRuns: 3,
+        minRuns: 1,
         // Warm, unlike `parse`. There is no cache in front of a crawl, so the
         // work happens on every repeat and the steady state is the honest one.
         defaultCache: 'warm',
@@ -815,8 +1994,32 @@ export function createProgram(): Command {
         // `parse` wiring uses, which is the point: these two facets report a
         // median row and must reduce it identically for `ab`, and stating the
         // rule twice is how they drifted apart the first time.
+        estimator: 'min',
         estimate: (report) =>
-          rowEstimates(report.body.commands, 'ms crawl (all strata)', fastestRepeat),
+          rowEstimates(report.body.commands, 'ms crawl (all strata)', fastestRepeat, FAILURE_IS_THE_REASON, NO_WARRANT_NEEDED),
+      }),
+    )
+    .addCommand(
+      createFacetCommand({
+        name: 'work',
+        summary: "Count the work vat's own counters record: store rows decoded, extents derived, parses dispatched",
+        runSummary: 'Capture a work-counter report for one project against one vat build',
+        compareSummary: 'Diff two work-counter reports along a single axis',
+        // One warm-up plus two compared repeats, refused below that: the
+        // smallest run that can test determinism at all — see `work/capture.ts`.
+        defaultRuns: WORK_MIN_RUNS,
+        minRuns: WORK_MIN_RUNS,
+        defaultCache: 'warm',
+        capture: captureWork,
+        compare: compareWork,
+        renderReport: renderWorkReport,
+        renderComparison: renderWorkComparison,
+        // Rows decoded from the persistent fact store, what I10 counts (not the
+        // `hydration.*` counters, which count loading a run database).
+        // Counts are deterministic, so the min across pairs is every pair's
+        // value; an arm whose min and p25 differ did not count deterministically.
+        estimator: 'min',
+        estimate: (report) => workEstimates(report.body.commands),
       }),
     )
     .addCommand(
@@ -830,11 +2033,12 @@ export function createProgram(): Command {
         // confidence in that rather than resolution in a statistic — and each
         // repeat is a whole corpus enumeration, which is not cheap.
         defaultRuns: 2,
+        minRuns: 1,
         // Warm. There is no cache in front of the enumeration, and a set does
         // not move with one.
         defaultCache: 'warm',
         defaultCommands: POPULATION_MEASURED_COMMANDS,
-        capture: (request) => Promise.resolve(capturePopulation(request)),
+        capture: capturePopulation,
         compare: comparePopulation,
         renderReport: renderPopulationReport,
         renderComparison: renderPopulationComparison,
@@ -845,9 +2049,32 @@ export function createProgram(): Command {
         // requires an estimate, and it is honest about what it can see: two
         // populations of equal size and different membership read as unchanged
         // through `ab` and as CHANGED through `compare`. Use `compare`.
-        estimate: (report) => rowEstimates(report.body.commands, 'files', (row) => row.count),
+        estimator: 'min',
+        estimate: (report) => rowEstimates(report.body.commands, 'files', (row) => row.count, FAILURE_IS_THE_REASON, NO_WARRANT_NEEDED),
       }),
-    );
+    )
+    .addCommand(
+      createFacetCommand({
+        name: 'memory',
+        summary: 'Measure the peak resident memory (RSS) of vat commands, worker threads included',
+        runSummary: 'Capture a peak-RSS report for one project against one vat build',
+        compareSummary: 'Diff two peak-RSS reports along a single axis',
+        // Three, not perf's five: a peak barely moves between repeats, and a
+        // memory-heavy command is usually a slow one.
+        defaultRuns: 3,
+        minRuns: 1,
+        defaultCache: 'warm',
+        capture: captureMemory,
+        compare: compareMemory,
+        renderReport: renderMemoryReport,
+        renderComparison: renderMemoryComparison,
+        // A peak moves both ways with when a collection lands, so the median repeat, and its median
+        // across captures: a min would pick the luckiest collection (see `EstimatorKind`).
+        estimator: 'median',
+        estimate: (report) => rowEstimates(report.body.commands, 'KiB peak RSS', (row) => row.medianKb, (row) => (row.outOfHeap ? 'ran out of heap' : FAILURE_IS_THE_REASON(row)), NO_WARRANT_NEEDED),
+      }),
+    )
+    .addCommand(createVerdictCommand());
 }
 
 // Run only when this is the invoked script, not merely imported. Without the

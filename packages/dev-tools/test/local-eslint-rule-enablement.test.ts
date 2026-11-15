@@ -58,6 +58,7 @@ import localRules from '@vibe-agent-toolkit/utils/eslint';
 import { ESLint } from 'eslint';
 import { describe, expect, it } from 'vitest';
 
+
 /** The repo root, where `eslint.config.js` lives. */
 const REPO_ROOT = resolveFromImportMeta(import.meta.url, '..', '..', '..');
 
@@ -102,11 +103,31 @@ const PROBE_FILES: Readonly<Record<string, string>> = {
   'no-dotdot-containment': REPO_WIDE_PROBE,
   'dirent-type-needs-symlink-check': REPO_WIDE_PROBE,
   'no-version-literal': REPO_WIDE_PROBE,
-  // The exit-code contract, declared repo-wide with no ratchet of product code
-  // (its `allow` names three example scripts that are not vat verbs).
+  // The two fault-protocol rules, declared repo-wide; each names only STRUCTURAL
+  // exemptions (the classifier, the tree-change primitive, test support), never a ratchet.
+  'no-adhoc-errno': REPO_WIDE_PROBE,
+  'no-destructive-fs': REPO_WIDE_PROBE,
+  // Scoped to `packages/*/src/**` with a shrink-only `allowFiles` ratchet; the probe
+  // asks `pathPresent`, so it is NOT on the list.
+  'no-existssync': 'packages/claude-marketplace/src/inventory/extract-plugin.ts',
+  'no-link-following-fs': 'packages/agent-skills/src/walk-link-graph.ts',
+  // The exit-code contract, declared repo-wide with no exemption list.
   'no-literal-process-exit': REPO_WIDE_PROBE,
   // Scoped to `packages/*/src/**`: tests build schemas as fixtures.
   'explicit-zod-strictness': REPO_WIDE_PROBE,
+  // Scoped by its own `paths` option to the CLI's command modules; the probe
+  // publishes through the document writer.
+  'no-stdout-outside-writer': 'packages/cli/src/commands/okf/validate.ts',
+  // Scoped to product `src/`; the probe installs its handler through the helper, so
+  // it is NOT the rule's one `allow` entry.
+  'no-raw-signal-listener': 'packages/cli/src/commands/audit/git-url-clone.ts',
+  // Scoped to the integration and system tiers, whose timeouts the platform scales.
+  'no-literal-test-timeout': 'packages/cli/test/system/test-common.ts',
+  // Enabled everywhere `PROJECTION_SQLITE_IMPORTERS` does not match; the port's own package is
+  // the file it most governs.
+  'projection-sqlite-import-boundary': 'packages/resources/src/projection/merge.ts',
+  // Scoped to product `src/`; the probe reads the object store through `runGitBytes`.
+  'no-text-git-object-read': 'packages/agent-skills/src/skill-source/git-clone.ts',
 };
 
 /** `error` as ESLint normalizes it out of `calculateConfigForFile`. */
@@ -155,5 +176,20 @@ describe('local ESLint rules excluded from `recommended` are enabled in this rep
         + 'eslint.config.js turns it on — `configs.recommended` excludes it — so if '
         + 'that line is gone, the rule is dead everywhere and nothing else notices.',
     ).toBe(ERROR);
+  });
+});
+
+describe('sonarjs `aws-*` rules stay off', () => {
+  // eslint.config.js turns them off: they inspect AWS CDK constructs, which this repo has none
+  // of, and one of them was 9% of lint time. A later block that re-applies sonarjs's
+  // `recommended` would turn all of them back on with lint still green.
+  it('resolves every one to off for a product source file', async () => {
+    const config = await new ESLint({ cwd: REPO_ROOT }).calculateConfigForFile(
+      `${REPO_ROOT}/packages/cli/src/bin.ts`,
+    );
+    const aws = Object.entries(config.rules ?? {}).filter(([rule]) => rule.startsWith('sonarjs/aws-'));
+
+    expect(aws.length).toBeGreaterThan(0);
+    expect(aws.filter(([, value]) => (Array.isArray(value) ? value[0] : value) !== 0)).toEqual([]);
   });
 });

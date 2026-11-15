@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
-import { createIntegrationTestConfig } from '../../vitest.shared.js';
+import { cliIntegrationTestWorkers, createIntegrationTestConfig } from '../../vitest.shared.js';
 
 export default defineConfig({
-  test: createIntegrationTestConfig(),
+  test: createIntegrationTestConfig({ maxWorkers: cliIntegrationTestWorkers }),
 });

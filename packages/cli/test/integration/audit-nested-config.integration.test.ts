@@ -24,6 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { gitAddAll, initTestGitRepo, runAudit } from '../test-helpers.js';
@@ -36,7 +37,7 @@ import { gitAddAll, initTestGitRepo, runAudit } from '../test-helpers.js';
  * outside the SKILL DIRECTORY (`LINK_OUTSIDE_SKILL_DIR`, silent by default).
  */
 function writeSkillWithExternalLink(skillPath: string, skillName: string): void {
-  fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+  mkdirSyncReal(path.dirname(skillPath), { recursive: true });
   fs.writeFileSync(
     skillPath,
     `---
@@ -53,7 +54,7 @@ See [the guide](../../../external-docs/guide.md) for details.
 
 /** Write the external doc the SKILLs point at (so links are not broken). */
 function writeExternalDoc(docPath: string): void {
-  fs.mkdirSync(path.dirname(docPath), { recursive: true });
+  mkdirSyncReal(path.dirname(docPath), { recursive: true });
   fs.writeFileSync(docPath, `# Guide\n\nExternal guidance content.\n`);
 }
 
@@ -64,8 +65,7 @@ function writeExternalDoc(docPath: string): void {
 function writeRootConfig(rootDir: string): void {
   fs.writeFileSync(
     safePath.join(rootDir, 'vibe-agent-toolkit.config.yaml'),
-    `version: 1
-
+    `
 resources:
   exclude:
     - "node_modules/**"
@@ -108,8 +108,7 @@ const BOUNDARY_CODES = new Set(['LINK_OUTSIDE_PROJECT', 'LINK_OUTSIDE_SKILL_DIR'
 function writePkgAConfig(pkgDir: string): void {
   fs.writeFileSync(
     safePath.join(pkgDir, 'vibe-agent-toolkit.config.yaml'),
-    `version: 1
-
+    `
 skills:
   include:
     - "resources/skills/SKILL.md"

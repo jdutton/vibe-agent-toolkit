@@ -6,7 +6,7 @@
  * else, so a refusal (`EACCES`) or a bug (`TypeError`) is rethrown instead of
  * becoming a null.
  *
- * The property that matters is the asymmetry with `isFilesystemAccessError`:
+ * The property that matters is the asymmetry with `fsFaultOf`:
  * that predicate deliberately groups `ENOENT` with `EACCES` ("the environment,
  * not our code"), and reusing it to mean "absent" is exactly the conflation
  * that turned an unreadable directory into an empty one.
@@ -14,7 +14,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { isFilesystemAccessError, isPathAbsentError } from '../src/errors/errno.js';
+import { fsFaultOf, isPathAbsentError } from '../src/errors/errno-table.js';
 
 /** Shape of a real `node:fs` rejection: an Error carrying an errno `code`. */
 function errno(code: string): Error & { code: string } {
@@ -28,10 +28,10 @@ describe('isPathAbsentError', () => {
   });
 
   it('is NOT the environmental predicate: a refusal is not an absence', () => {
-    // Every one of these is `isFilesystemAccessError === true`, and every one
+    // `fsFaultOf` classifies every one of these, and every one
     // is a path that EXISTS. Reporting it as absent is the defect.
     for (const code of ['EACCES', 'EPERM', 'ELOOP', 'ENAMETOOLONG', 'EISDIR', 'EMFILE', 'EIO']) {
-      expect(isFilesystemAccessError(errno(code))).toBe(true);
+      expect(fsFaultOf(errno(code))).toBeDefined();
       expect(isPathAbsentError(errno(code))).toBe(false);
     }
   });

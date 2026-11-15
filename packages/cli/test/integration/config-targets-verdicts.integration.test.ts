@@ -50,7 +50,7 @@ describe('config-level targets → compat verdicts (integration)', () => {
     const packagingConfig: SkillPackagingConfig = {
       targets: ['claude-code'],
     };
-    const result = await validateSkillForPackaging(skillPath, packagingConfig);
+    const result = await validateSkillForPackaging(skillPath, {}, packagingConfig);
     applyConfigVerdicts(result, packagingConfig.targets, skillPath, tempDir);
 
     const capabilityCodes = result.allErrors
@@ -66,7 +66,7 @@ describe('config-level targets → compat verdicts (integration)', () => {
 
   it('emits COMPAT_TARGET_UNDECLARED (info) when no targets are declared', async () => {
     const packagingConfig: SkillPackagingConfig = {};
-    const result = await validateSkillForPackaging(skillPath, packagingConfig);
+    const result = await validateSkillForPackaging(skillPath, {}, packagingConfig);
     applyConfigVerdicts(result, packagingConfig.targets, skillPath, tempDir);
 
     const undeclared = result.allErrors.filter(i => i.code === 'COMPAT_TARGET_UNDECLARED');
@@ -81,7 +81,7 @@ describe('config-level targets → compat verdicts (integration)', () => {
     const packagingConfig: SkillPackagingConfig = {
       targets: ['claude-chat'],
     };
-    const result = await validateSkillForPackaging(skillPath, packagingConfig);
+    const result = await validateSkillForPackaging(skillPath, {}, packagingConfig);
     applyConfigVerdicts(result, packagingConfig.targets, skillPath, tempDir);
 
     const incompatible = result.allErrors.filter(i => i.code === 'COMPAT_TARGET_INCOMPATIBLE');

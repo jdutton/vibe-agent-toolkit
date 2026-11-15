@@ -5,9 +5,9 @@
  *
  * Chunks were written to the vector table INSIDE the per-resource loop. The
  * matching `rag_documents` rows were not: they accumulated in a field and were
- * flushed once, AFTER the loop. So any throw out of the loop — the
- * `ParserUnavailableError` rethrow that `index-resources-parser-load.test.ts`
- * owns, a caller's progress reporter raising, a `SIGINT` on a long index —
+ * flushed once, AFTER the loop. So any throw out of the loop — the store
+ * refusal that `index-resources-failure-blame.test.ts` owns, a caller's
+ * progress reporter raising, a `SIGINT` on a long index —
  * discarded every pending document record while leaving every chunk already
  * added.
  *
@@ -197,7 +197,7 @@ vi.mock('@lancedb/lancedb', () => {
     // build writes, and compares the stored table against that answer.
     makeArrowTable: (rows: Record<string, unknown>[]) => ({ schema: { fields: fieldsOf(rows[0] ?? {}) } }),
     connect: async () => ({
-      tableNames: async () => [...store.tables.keys()],
+      listTables: async () => ({ tables: [...store.tables.keys()] }),
       createTable: async (
         name: string,
         rows: Record<string, unknown>[],

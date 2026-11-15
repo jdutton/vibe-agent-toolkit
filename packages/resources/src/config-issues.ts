@@ -57,6 +57,7 @@
  * guessed at.
  */
 
+import { VatError } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 /** How many issues are rendered before the tail is summarised. */
@@ -254,6 +255,12 @@ function withoutUnrecognizedKeys(raw: unknown, issues: readonly z.ZodIssue[]): u
 }
 
 /**
+ * The code every config refusal carries — a config that exists and does not
+ * parse or validate — so a caller dispatches on it rather than on the message.
+ */
+export const CONFIG_LOAD_CODE = 'CONFIG_LOAD';
+
+/**
  * Parse a config, treating an UNKNOWN KEY as a warning and anything else as a
  * refusal.
  *
@@ -286,7 +293,7 @@ function withoutUnrecognizedKeys(raw: unknown, issues: readonly z.ZodIssue[]): u
  * @param options - Rendering context for any message produced
  * @param options.configPath - Absolute path, named in every message
  * @returns The validated config, with unrecognized keys removed
- * @throws Error when the config fails for any reason other than unknown keys
+ * @throws VatError `CONFIG_LOAD` when the config fails for any reason other than unknown keys
  */
 export function parseConfigAllowingUnknownKeys<S extends z.ZodTypeAny>(
   schema: S,
@@ -304,7 +311,8 @@ export function parseConfigAllowingUnknownKeys<S extends z.ZodTypeAny>(
   if (!onlyUnknownKeys) {
     // Rendered from a REORDERED issue list, so the issue that made the config
     // fatal survives the cap — see {@link fatalIssuesFirst}.
-    throw new Error(
+    throw new VatError(
+      CONFIG_LOAD_CODE,
       formatConfigValidationError(new z.ZodError(fatalIssuesFirst(strict.error.issues)), {
         ...options,
         schema,
@@ -326,7 +334,8 @@ export function parseConfigAllowingUnknownKeys<S extends z.ZodTypeAny>(
   // adopter a fix that provably does not work, with nothing to say the tool
   // knows that.
   if (!relaxed.success) {
-    throw new Error(
+    throw new VatError(
+      CONFIG_LOAD_CODE,
       `${formatted}\n  Dropping those keys did not make the config valid; the diagnosis above is`
       + ' incomplete.',
     );

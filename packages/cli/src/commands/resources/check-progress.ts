@@ -1,6 +1,7 @@
 /**
- * The progress log a supervised `vat resources check` writes, and the reader
- * that turns whatever survived into a report.
+ * The progress log a supervised run writes — `vat resources check`'s child, or
+ * `vat resources query --budget`'s — and the reader that turns whatever survived
+ * into a report.
  *
  * ## 🚨 Why progress goes to a FILE, and never to stdout or IPC
  *
@@ -40,20 +41,50 @@
 
 import { appendFileSync } from 'node:fs';
 
+import { CHECK_REFUSAL_REASON_SCHEMA, POPULATION_ORIGINS } from '@vibe-agent-toolkit/resources';
+import { ExitCode, type ValidationIssue, ValidationIssueSchema } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
+
+import { LENS_POPULATIONS } from '../../utils/lens-population.js';
+import type { PopulationExtent, ProjectionProvenance } from '../../utils/projection-query.js';
+
+import { SUPERVISED_RUN_NOUN, type SupervisedChild, type SupervisedVerb } from './check-supervisor.js';
+
+/**
+ * The child has booted — Node is up, the CLI is loaded, and no work has begun.
+ *
+ * 🚨 **The defect this closes: the population was charged the child's boot.**
+ * The watchdog's clock starts at the spawn, and the population line used to be
+ * the child's FIRST line — so Node's startup and the CLI's module graph were
+ * silently billed to the one unit the budget is already a total bound for. On a
+ * loaded runner the boot alone grows by seconds, and a run whose tree was fine
+ * was killed "during population" for its neighbours' load. This line closes the
+ * boot's window and opens the population's own, so the budget measures work.
+ *
+ * It carries no fields: the fact that it was written is the whole message. Its
+ * ABSENCE is what {@link unitInFlight} reads as `startup` — a run killed before
+ * it could say anything at all.
+ */
+const StartedEntrySchema = z.object({
+  kind: z.literal('started'),
+}).strict();
 
 /**
  * The population finished — how it was obtained, what it cost, and how much of
- * the tree it covered.
+ * the tree it covered. Written by both verbs.
  *
  * Written the instant the projection is ready, because a kill BEFORE this line
- * means there is no projection at all and therefore no honest document to
- * publish. The parent distinguishes those two endings by this line's presence
- * and nothing else, so it must never be written early or optimistically.
+ * means there is no projection at all: the document the parent publishes then
+ * carries its population fields as `null`, not as a value nobody measured. The
+ * parent distinguishes those two endings by this line's presence and nothing
+ * else, so it must never be written early or optimistically.
  */
 const PopulationEntrySchema = z.object({
   kind: z.literal('population'),
-  population: z.union([z.literal('derived'), z.literal('store')]),
+  population: z.enum(POPULATION_ORIGINS),
+  // Carried across for the reason `lensMs` is: an interrupted run's document is
+  // rebuilt from these lines alone.
+  lensPopulation: z.enum(LENS_POPULATIONS),
   populationMs: z.number(),
   // Carried across the process boundary rather than recomputed, for the same
   // reason every other field here is: a killed run's document is rebuilt from
@@ -61,7 +92,26 @@ const PopulationEntrySchema = z.object({
   // to invent or omit. Omitting it would make an interrupted run's report claim
   // the lens was free.
   lensMs: z.number(),
+  // What that cost COVERS: `lensMs: 0` is ambiguous on its own — nothing asked,
+  // or a lens that stopped running. Carried rather than recomputed because an
+  // interrupted run's document is rebuilt from these lines alone.
+  lensesEvaluated: z.array(z.string()),
   membersEnumerated: z.number(),
+}).strict();
+
+/**
+ * The files the population enumerated and did not admit, as findings already resolved through
+ * `resources.validation` — computed before any check runs, so a run killed mid-check still fails on
+ * them (`notAdmittedFindings`). `check`'s alone: a query reports no finding of its own.
+ *
+ * Written immediately BEFORE the population line, never after it: the population line is what says
+ * a kill has a projection to report on, so whatever rides with it must already be on disk.
+ */
+const NotAdmittedEntrySchema = z.object({
+  kind: z.literal('not-admitted'),
+  // Validated by the issue schema, typed as the issue the child built: zod's own
+  // inference widens every optional field to `| undefined`, which no issue carries.
+  findings: z.array(z.custom<ValidationIssue>((value) => ValidationIssueSchema.safeParse(value).success)),
 }).strict();
 
 /**
@@ -93,10 +143,43 @@ const CheckEntrySchema = z.object({
   durationMs: z.number(),
   rows: z.number().optional(),
   broken: z.literal(true).optional(),
+  // Which SET the name came from. Carried, not recomputed: a parent that looked
+  // the name up in `BUILTIN_CHECK_NAMES` would be a second authority that
+  // disagrees the day a project declares a check of the same name.
+  builtin: z.literal(true).optional(),
+  // 🪤 Must be declared: the strict schema DROPS an unknown line, and the check vanishes.
+  examined: z.number().int().nonnegative().optional(),
+  allowEmpty: z.literal(true).optional(),
+  nearMisses: z.array(z.string()).min(1).optional(),
+  // 🔑 A broken check's RESOURCE_CHECK_BROKEN as published, so a killed run rebuilds it word for word.
+  refusal: z.object({ message: z.string(), reason: CHECK_REFUSAL_REASON_SCHEMA.optional() }).strict().optional(),
+}).strict();
+
+/** 🚨 `examined` is about to run; without this line a kill here reads as the violations statement hanging. */
+const ExaminingEntrySchema = z.object({
+  kind: z.literal('examining'),
+  name: z.string(),
+  durationMs: z.number(),
+  rows: z.number(),
+  // 🔑 Every field the cost record carries, so a kill rebuilds the entry a completed run publishes.
+  allowEmpty: z.literal(true).optional(),
+  nearMisses: z.array(z.string()).min(1).optional(),
+}).strict();
+
+/** 🚨 A declared statement's rows are about to convert; without this a kill reads as a hung statement. */
+const ConvertingEntrySchema = z.object({
+  kind: z.literal('converting'),
+  name: z.string(),
+  durationMs: z.number(),
+  rows: z.number(),
+  examined: z.number().int().nonnegative().optional(),
+  allowEmpty: z.literal(true).optional(),
+  nearMisses: z.array(z.string()).min(1).optional(),
 }).strict();
 
 /**
- * Every check has filed its cost; the document is about to be built.
+ * Every statement has returned — every check has filed its cost, or a query's
+ * one statement has its rows; the document is about to be built.
  *
  * 🚨 **The defect this closes is a run killed AFTER it had its answer.** When
  * the last check files its cost the child is not finished: it still resolves
@@ -109,22 +192,26 @@ const CheckEntrySchema = z.object({
  * window. It carries no fields: the fact that it was written is the whole
  * message.
  *
- * 🪤 **Emitted by `runDeclaredChecks`, before it resolves severities.** It first
+ * 🪤 **Emitted by `runProjectChecks`, before it resolves severities.** It first
  * shipped a level up, from `runOutcome` after that function had already
- * returned, which left `resolveIssueSeverity` charged to the last check's window
+ * returned, which left `resolveFindings` charged to the last check's window
  * while this comment claimed otherwise. What it still does NOT cover is the last
- * check's row-to-issue conversion — `runChecks` files that check's cost before
- * converting its rows — which is why the report's `idle` sentence hedges.
+ * check's row-to-issue conversion — that window has its own state,
+ * {@link ConvertingEntrySchema}, and the check's cost is filed after it.
  */
-const ChecksCompleteEntrySchema = z.object({
-  kind: z.literal('checks-complete'),
+const StatementsCompleteEntrySchema = z.object({
+  kind: z.literal('statements-complete'),
 }).strict();
 
 const ProgressEntrySchema = z.discriminatedUnion('kind', [
+  StartedEntrySchema,
+  NotAdmittedEntrySchema,
   PopulationEntrySchema,
   StartEntrySchema,
+  ExaminingEntrySchema,
+  ConvertingEntrySchema,
   CheckEntrySchema,
-  ChecksCompleteEntrySchema,
+  StatementsCompleteEntrySchema,
 ]);
 
 /** One line of the progress log. */
@@ -135,17 +222,40 @@ export type ProgressEntry = z.infer<typeof ProgressEntrySchema>;
  *
  * `idle` and `reporting` are both real answers and neither is a fallback.
  * `idle` is the gap between the population and the first statement — nothing had
- * started. `reporting` is the opposite end: every check finished and the child
+ * started. (A query writes no `start` line: its one statement runs in `idle`.)
+ * `reporting` is the opposite end: every statement returned and the child
  * was assembling and serialising its document. Naming a rule in either would
  * blame one that did not hang, and collapsing the two would tell an operator
  * "between the population and the first statement" about a run that completed
  * forty rules.
  */
 export type UnitInFlight =
+  | { readonly kind: 'startup' }
   | { readonly kind: 'population' }
   | { readonly kind: 'check'; readonly name: string }
+  | { readonly kind: 'examining'; readonly name: string; readonly rows: number }
+  | { readonly kind: 'converting'; readonly name: string; readonly rows: number }
   | { readonly kind: 'reporting' }
   | { readonly kind: 'idle' };
+
+/**
+ * The population line for a run whose projection is ready — the one construction both verbs write.
+ *
+ * @param provenance - How the projection was obtained, and what it cost
+ * @param extent - How much of the tree it covered
+ * @returns The entry
+ */
+export function populationEntry(provenance: ProjectionProvenance, extent: PopulationExtent): ProgressEntry {
+  return {
+    kind: 'population',
+    population: provenance.population,
+    lensPopulation: provenance.lensPopulation,
+    populationMs: provenance.populationMs,
+    lensMs: provenance.lensMs,
+    lensesEvaluated: [...provenance.lensesEvaluated],
+    membersEnumerated: extent.membersEnumerated,
+  };
+}
 
 /**
  * Read whatever of the log survived.
@@ -194,14 +304,23 @@ function readLine(line: string): ProgressEntry | undefined {
  *
  * 🔑 The population sentinel is keyed on the population line's ABSENCE rather
  * than on there being no `start` lines. Those are different states: a run killed
- * during population has no projection and no honest document, while a run killed
- * between the population and the first statement has both.
+ * during population has no projection, while a run killed between the population
+ * and the first statement has one.
+ *
+ * 🔑 The startup sentinel is keyed the same way, on the `started` line's
+ * absence — never on an empty log. Before that line the child was still loading
+ * Node and the CLI, nothing had touched the tree, and advice about sizing the
+ * budget against a population would be advice about a unit that never began.
  *
  * @param entries - What {@link parseProgressLog} recovered
  * @returns The unit in flight
  */
 export function unitInFlight(entries: readonly ProgressEntry[]): UnitInFlight {
-  if (!entries.some((entry) => entry.kind === 'population')) return { kind: 'population' };
+  if (!entries.some((entry) => entry.kind === 'population')) {
+    return entries.some((entry) => entry.kind === 'started')
+      ? { kind: 'population' }
+      : { kind: 'startup' };
+  }
 
   const completed = new Set(
     entries.filter((entry) => entry.kind === 'check').map((entry) => entry.name),
@@ -217,12 +336,26 @@ export function unitInFlight(entries: readonly ProgressEntry[]): UnitInFlight {
     (entry): entry is Extract<ProgressEntry, { kind: 'start' }> =>
       entry.kind === 'start' && !completed.has(entry.name),
   );
-  if (started !== undefined) return { kind: 'check', name: started.name };
+  if (started !== undefined) return startedUnit(entries, started);
   // 🔑 Checked AFTER the in-flight statement, never before. The line means "no
   // check is running any more"; a `start` without a cost means one still is, and
   // a log holding both is damaged in a way that must still name the rule.
-  if (entries.some((entry) => entry.kind === 'checks-complete')) return { kind: 'reporting' };
+  if (entries.some((entry) => entry.kind === 'statements-complete')) return { kind: 'reporting' };
   return { kind: 'idle' };
+}
+
+/** What a started check was doing. 🔑 Only lines AFTER this `start` count (names can repeat). */
+function startedUnit(
+  entries: readonly ProgressEntry[],
+  started: Extract<ProgressEntry, { kind: 'start' }>,
+): UnitInFlight {
+  const latest = entries.slice(entries.indexOf(started)).findLast(
+    (entry): entry is Extract<ProgressEntry, { kind: 'examining' | 'converting' }> =>
+      (entry.kind === 'examining' || entry.kind === 'converting') && entry.name === started.name,
+  );
+  return latest === undefined
+    ? { kind: 'check', name: started.name }
+    : { kind: latest.kind, name: started.name, rows: latest.rows };
 }
 
 /**
@@ -233,11 +366,88 @@ export function unitInFlight(entries: readonly ProgressEntry[]): UnitInFlight {
  * queued behind work the event loop never gets back to, so the line naming the
  * rule that hangs would exist only in memory — where `SIGKILL` destroys it.
  *
- * @param path - Where the supervisor is watching
+ * @param child - Where the supervisor is watching
  * @returns A writer that appends one entry and returns once it is on disk
  */
-export function createProgressWriter(path: string): (entry: ProgressEntry) => void {
+export function createProgressWriter(
+  child: Pick<SupervisedChild, 'progressLog'>,
+): (entry: ProgressEntry) => void {
   return (entry) => {
-    appendFileSync(path, `${JSON.stringify(entry)}\n`, 'utf-8');
+    appendFileSync(child.progressLog, `${JSON.stringify(entry)}\n`, 'utf-8');
   };
+}
+
+/**
+ * End this supervised child the moment its supervisor is gone, however the supervisor ended.
+ *
+ * ## 🚨 Why: the bound lives in the supervisor
+ *
+ * A supervisor that dies where none of its own code runs — SIGKILL, an OOM killer — cannot take the
+ * child down, and the child would run on with nothing bounding it and nobody reading what it
+ * publishes. This is the POSIX path: on Windows an outside kill of the supervisor
+ * (`TerminateProcess`) ends this process too, before any of its code runs, because libuv spawns it
+ * in a kill-on-close job object whose only handle the supervisor holds. The pipe below is there on
+ * Windows as well, and harmless.
+ *
+ * ## 🔑 How: the supervisor holds this process's stdin open and never writes to it
+ *
+ * The supervisor spawns the child with stdin as a pipe whose write end only it holds, and it never
+ * writes or ends it. However the supervisor ends, the OS closes that end, and this process reads
+ * end-of-file — with no pid to compare and no liveness probe to misread (a pid
+ * reused, or a probe refused `EPERM` in a sandbox, both used to read wrongly). On EOF, a read error
+ * or a close, the child ends at once: exit 2 and ONE stderr line, no document — nobody is left to
+ * read one. It ends by `process.exit`, never by a signal handler: the child must never install one
+ * (see `check-supervisor.ts`). Nothing else in the child reads stdin.
+ *
+ * The stream is UNREFERENCED, so a child that finishes is never held open by it.
+ *
+ * ⚠️ **It fires when this process's event loop next turns, and only then.** The population is
+ * asynchronous I/O, so an orphan there ends at once. The checks run one after another
+ * synchronously, and a statement blocked inside SQLite reaches nothing until it returns — so an
+ * orphan in the middle of them runs on until the LAST check returns. It then ends before it
+ * publishes anything, because the child turns its loop first ({@link letSupervisorLossSurface}).
+ *
+ * @param verb - The supervised verb, which names the run in the stderr line
+ * @param supervisorPid - The supervisor's pid, named in the stderr line
+ * @param stdin - This process's stdin: the caller passes `process.stdin`; a test hands it a stream
+ *   it owns
+ */
+export function endWhenSupervisorGone(
+  verb: SupervisedVerb,
+  supervisorPid: number,
+  stdin: NodeJS.ReadableStream & { unref?: () => void },
+): void {
+  let ended = false;
+  const end = (): void => {
+    if (ended) return;
+    ended = true;
+    process.stderr.write(
+      `vat ${verb}: the process supervising this ${SUPERVISED_RUN_NOUN[verb]} run (pid ${String(supervisorPid)})`
+      + ' is gone, so nothing bounds the run or reads its report. Ending it unfinished.\n',
+    );
+    process.exit(ExitCode.ERROR);
+  };
+  stdin.once('end', end);
+  stdin.once('close', end);
+  stdin.once('error', end);
+  // Flowing, so end-of-file is read at all; the supervisor never writes, so nothing arrives.
+  stdin.resume();
+  stdin.unref?.();
+}
+
+/**
+ * Let a supervisor's loss END this child before it publishes: turn the event loop twice, so an
+ * end-of-file that has waited on stdin since the supervisor died — while the synchronous check loop
+ * held the thread — is read, and {@link endWhenSupervisorGone} exits before any document is written.
+ *
+ * Twice, because the first turn may begin after this iteration's poll phase: the second always
+ * crosses one. Without it, a child orphaned inside a check wrote its document to a pipe nobody
+ * reads and exited 0.
+ *
+ * @returns A promise that resolves after two turns — when the child is still supervised
+ */
+export async function letSupervisorLossSurface(): Promise<void> {
+  const turn = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+  await turn();
+  await turn();
 }

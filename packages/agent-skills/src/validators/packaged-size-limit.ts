@@ -38,7 +38,7 @@
  * here is a silent zero everywhere.
  */
 
-import { readdirSync, statSync, type Dirent } from 'node:fs';
+import { lstatSync, readdirSync, type Dirent } from 'node:fs';
 
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
@@ -184,15 +184,12 @@ export interface UnweighedEntry {
    * Remedy for THIS entry, when the registry's generic one does not apply.
    *
    * 🚨 `SCAN_PATH_UNREADABLE`'s registry `fix` says "Make the path readable —
-   * check its permissions and ownership — then re-run the audit, or pass
-   * `--exclude` to drop it from the scan deliberately". That is right for a
-   * readdir/stat FAILURE and wrong for every entry this walk skips by POLICY:
-   * a symlink is refused because the uploader refuses it, not because its
-   * permissions are wrong, and there is nothing to make readable. Worse, both
-   * halves name the wrong command — this producer runs inside `packageSkill`
-   * (`vat build`, `vat skills package`), and `--exclude` is an `audit` flag that
-   * neither of those accepts, so an author following the advice gets a usage
-   * error on a healthy file.
+   * check its permissions and ownership — then re-run", naming `--exclude` as
+   * `vat audit`'s lever. That is right for a readdir/stat FAILURE and wrong for
+   * every entry this walk skips by POLICY: a symlink is refused because the
+   * uploader refuses it, not because its permissions are wrong, and there is
+   * nothing to make readable. This producer runs inside `packageSkill`
+   * (`vat build`, `vat skills package`), which take no `--exclude` either.
    *
    * Omitted for the genuine unreadable cases, which fall back to the registry
    * entry — that text is accurate for them, and duplicating it here would be a
@@ -366,7 +363,7 @@ function readDirOrRecord(dir: string, root: string, acc: WalkAccumulator): Diren
 function weighEntry(full: string, rel: string, acc: WalkAccumulator): void {
   let stats;
   try {
-    stats = statSync(full);
+    stats = lstatSync(full);
   } catch (error) {
     acc.unweighed.push({ path: rel, reason: `VAT could not stat it (${causeOf(error)})` });
     return;

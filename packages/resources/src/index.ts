@@ -16,7 +16,7 @@
  *
  * // Add resources
  * await registry.addResource('./README.md');
- * await registry.crawl({ baseDir: './docs', unreadable: 'refuse' });
+ * await registry.crawl({ outputs: [], baseDir: './docs', unreadable: 'refuse' });
  *
  * // Validate all links
  * const result = await registry.validate();
@@ -26,26 +26,19 @@
  * ```
  */
 
-// Type-only, so it is erased and does NOT pull the parser into this barrel's
-// module graph — which is the whole point of the lazy `parseMarkdown` /
-// `parseHtml` wrappers below.
-import type { ParseResult } from './link-parser.js';
-// A value import, and NOT part of the public surface: the two lazy parse wrappers
-// below import a parser module by a route `loadParser` does not cover, and must
-// produce the same `ParserUnavailableError` when it cannot be loaded. `parse-cache`
-// is already in this barrel's graph (it is value-re-exported below) and pulls in no
-// parser of its own, so this costs nothing at load time.
-import { importParserModule } from './parse-cache.js';
-
 // Export main ResourceRegistry class and ID generation utility
 export {
   ResourceRegistry,
+  DEFAULT_RESOURCE_EXCLUDE,
   DEFAULT_RESOURCE_INCLUDE,
   // Exported so a caller can catch it BY TYPE. `addResource` (singular) signals
   // a first-added-wins collision only by throwing, and the one consumer that
   // handles it was sniffing `error.message.startsWith('Duplicate resource ID')`
   // — a check that silently stops matching the day the message is reworded.
   DuplicateResourceIdError,
+  // The registry's one admission order, for a caller that admits a batch one
+  // file at a time (the packager's bundled assets) and must not invent its own.
+  admissionOrder,
   generateIdFromPath,
   // What a resource is when `parserKindForPath` answers `none`. Exported for
   // the CLI's parse-fact snapshot, which routes by the same discriminator and
@@ -56,11 +49,35 @@ export {
   type RegistryUnreadablePolicy,
   type DuplicateIdCollision,
   type UnreadableResource,
+  type ParseRefusedResource,
+  type RegistryCrawl,
   type ResourceRegistryOptions,
   type RegistryStats,
   type CollectionStats,
   type CollectionStat,
 } from './resource-registry.js';
+
+// The one contract for a file a crawl enumerated and did not admit: its log
+// entry, its findings, and its place in `examined` — see `not-admitted.ts`.
+export {
+  notAdmittedCount,
+  notAdmittedFindings,
+  notAdmittedInScope,
+  parseRefusal,
+  parseRefusedEntryFor,
+  notAdmittedIssues,
+  parseRefusedEntry,
+  parseRefusedMessage,
+  partitionNotAdmitted,
+  resolveNotAdmittedAmong,
+  type NotAdmittedLog,
+  type NotAdmittedRoots,
+  type NotAdmittedWording,
+} from './not-admitted.js';
+
+// The checksum the registry records for a resource's decoded text, so a consumer
+// re-hashing that text at use (ADR I2a) runs the one implementation.
+export { calculateChecksumFromContent } from './checksum.js';
 
 // Export ResourceQuery for lazy evaluation and filtering
 export { ResourceQuery } from './resource-query.js';
@@ -138,6 +155,40 @@ export {
   type ReferenceSyntacticForm,
   type VariableExpansionSyntax,
 } from './schemas/projection-blobs.js';
+
+export type { HarnessBlobFactsRow, HarnessBlobImportRow } from './schemas/projection-harness.js';
+
+// A reached blob with no harness facts — a producer bug. Exported so a command
+// can name it by code (never by message) on its "could not do its job" exit.
+export { HarnessFactsAbsentError } from './projection/harness/facts-index.js';
+
+export {
+  ClaudeRulePatternRowSchema,
+  ClaudeRulePatternStatusSchema,
+  type ClaudeRulePatternRow,
+} from './schemas/projection-claude-rules.js';
+
+// The two DERIVED relations that put the always-loaded chain in SQL's reach.
+// Exported as row shapes for the same reason the edge row schemas are: a caller
+// evaluating the lens hands `writeDerived` rows a backend validates against
+// these, so the shapes are part of the published surface even though nothing
+// materialises them.
+export {
+  ClaudeContextChainRowSchema,
+  ClaudeContextFindingSchema,
+  ClaudeContextLaunchChargeSchema,
+  ClaudeContextLoadRowSchema,
+  type ClaudeContextChainRow,
+  type ClaudeContextFinding,
+  type ClaudeContextLoadRow,
+} from './schemas/projection-claude-context.js';
+
+// The derived relation of what changed since a run's `--base`, exported as a row
+// shape for the reason the two above are.
+export {
+  ChangedFileRowSchema,
+  type ChangedFileRow,
+} from './schemas/projection-changed-files.js';
 
 export {
   LensEntryPointRowSchema,
@@ -227,7 +278,7 @@ export {
   collectionMimeConflictCondition,
   collectRealization,
   createCollectionMimeResolver,
-  realPathOrNull,
+  resolveRealPath,
   relativize,
   COLLECTION_MIME_CONFLICT,
   NO_DECLARED_MIME_TYPES,
@@ -236,6 +287,7 @@ export {
   type ContentDemand,
   type PathShape,
   type RealizationContext,
+  type RealPathResolution,
 } from './projection/realizations.js';
 
 // The per-run content cache: one `readFile` + one SHA-256 per file per
@@ -253,7 +305,7 @@ export {
 // parse-fact oracle — exported so exactly one walk defines document order.
 export { blobSectionsFor, flattenHeadings } from './projection/blob-sections.js';
 
-// The projection container: twelve row tables, the builder that accumulates
+// The projection container: thirteen row tables, the builder that accumulates
 // them, and the read-only base view a contributor is handed. The builder's
 // `ensureContentKey` is the demand half of demand-driven keying — the only way
 // a `deferred` realization's null `contentKey` ever becomes a real one.
@@ -312,7 +364,7 @@ export {
   type ExtentKey,
   type ExtentScopedRows,
   type ExtentScopedTableName,
-  type ProjectionStore,
+  type FactStore,
   type ProjectionTableNamesOfScope,
   projectionShapeDigest,
   splitProjectionByScope,
@@ -324,12 +376,12 @@ export {
 // reinterpret — a store holds rows, this decides what they are worth.
 export {
   assembleProjection,
-  blobFactsCover,
   emptyBlobRows,
   keyedContentKeys,
   selectRequestedContexts,
   selectRequestedRows,
   type RequestedContributor,
+  uncoveredContentKeys,
 } from './projection/store-hydration.js';
 
 // How the registry's names are spelled inside SQL — one rule, beside the
@@ -366,57 +418,9 @@ export type { ContentMeasures, LexicalReference } from './schemas/parse-facts.js
 // Export parser interface for advanced use cases
 export type { ParseResult } from './link-parser.js';
 export { classifyLink, isLocalFileLink } from './link-classify.js';
-// ⛔ `createMarkdownProcessor` is deliberately NOT re-exported here. It reaches
-// remark statically, and this barrel is loaded by commands that must never pay
-// for the parser — `module-load-budget.integration.test.ts` fails the moment it
-// does. Consumers that genuinely want the processor import the
-// `./markdown-processor` subpath, which is exported for exactly that reason.
-
-/**
- * Parse a markdown file from disk.
- *
- * ## Why this is a wrapper and not `export { parseMarkdown } from ...`
- *
- * A value re-export makes the parser part of this barrel's module graph, so
- * importing ANY symbol from `@vibe-agent-toolkit/resources` evaluated the whole
- * remark stack — ~730ms on Windows — before a single line of caller code ran.
- * Every consumer reaches this package through the barrel (the package publishes
- * only `"."` and `"./schemas/*"`), so that cost was unavoidable and it silently
- * cancelled the parser deferral in `parse-cache.ts`: a fully warm scan, which
- * parses nothing, still paid for the parser.
- *
- * Deferring it here instead of dropping the export keeps the public signature
- * byte-identical — this function was already `async`, so a caller cannot tell
- * the difference — and needs no `exports` subpath.
- *
- * ⚠️ Keep this a wrapper. Restoring the plain re-export re-loads remark for
- * every consumer of every symbol in this package and is invisible in review;
- * `packages/cli/test/integration/module-load-budget.integration.test.ts` is
- * what fails if you do.
- *
- * ## Why the import goes through `importParserModule`
- *
- * This route bypasses `loadParser` entirely — it reads the file itself, so it
- * needs `parseMarkdown` rather than `parseMarkdownContent` — and it therefore
- * has its own `import()` that can fail its own way. Unwrapped, a broken install
- * reached this package's consumers as a bare `EACCES`, which every per-document
- * catch and every errno allow-list in the toolkit swallows. `importParserModule`
- * makes it the same `ParserUnavailableError` the cached route produces, so one
- * `isParserUnavailable` guard at a call site covers both. The parse call itself
- * is deliberately OUTSIDE that boundary: a document that will not parse is not a
- * broken install.
- *
- * @param filePath - Path to the markdown file
- * @returns Links, headings, frontmatter and measures for the document
- * @throws {ParserUnavailableError} If the parser module cannot be loaded
- */
-export async function parseMarkdown(filePath: string): Promise<ParseResult> {
-  const parse = await importParserModule(
-    'markdown',
-    async () => (await import('./link-parser.js')).parseMarkdown,
-  );
-  return parse(filePath);
-}
+// ⛔ No parser module is reachable from this barrel or any published subpath
+// but `./parse-conformance` (private dev tooling's in-process harness). Every
+// parse runs in the worker; `parser-import-boundary.test.ts` (dev-tools) holds it.
 
 // The content-decoding seam is NOT re-exported here. It is a `utils` primitive
 // (`@vibe-agent-toolkit/utils/text` for `decodeTextContent`,
@@ -431,15 +435,17 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
 // `ParserKind` has three members: `markdown`, `html`, and `none` for "no
 // document parser runs on this". `DocumentParserKind` (from mime-type.ts) is the
 // first two — the kinds a parser actually exists for — and it is what
-// `parseFileCached`, `loadParser` and `parseKeyed` accept. `isParsableContent`
+// `parseFileCached` and a `ParseDispatcher` accept. `isParsableContent`
 // is the narrowing between them, and is exported because there is no other way
 // for a caller holding a path-routed blob to reach the parse path.
 export {
   computeContentKey,
+  inMemoryContent,
   isParsableContent,
   parserKindForPath,
   readContentWithKey,
   type KeyedContent,
+  type MeasuredContent,
   type ParsableContent,
   type ParserKind,
 } from './content-key.js';
@@ -458,64 +464,65 @@ export type { DocumentParserKind } from './mime-type.js';
 // read an entry payload — a well-formed entry filed under the wrong key is the
 // one failure mode fail-soft IO handling cannot catch.
 //
-// `parseFileCached` IS exported, and is the one every caller outside
-// `ResourceRegistry` should reach for: `parseMarkdown`/`parseHtml` read the file
-// and hand the bytes straight to a parser, so they bypass the cache entirely.
+// The parse route — the ONE way any caller outside a crawl parses a document
+// (ADR I11). `parseFileCached` (a file) and `parseContentCached` (a string) serve
+// a cache hit on this thread and parse a miss in the bounded worker pool, under
+// its limits (ADR I8); nothing parses on the calling thread. A caller that parses
+// many documents holds one dispatcher for the run (`withParseDispatcher`) and
+// passes it as `{ dispatcher }`, so the run pays one worker start, not one per
+// file; a call without one builds a one-thread pool on a miss and shuts it down.
+// A pool's shutdown parks its healthy idle threads (unref'd) for the next pool of
+// the same shape, so a process pays one worker start per concurrent thread, not
+// one per pool; a parked thread closes itself after a few idle seconds.
 //
-// `isParserUnavailable` and `ParserUnavailableError` are exported for one narrow
-// purpose: a caller that wraps a parse in a per-document `try` must rethrow this
-// one type, or its catch silently reports a broken INSTALL as a broken DOCUMENT —
-// once per document. The parser is loaded lazily, past the parse cache's hit-path
+// A caller that wraps a parse in a per-document `try` classifies what it caught
+// with `classifyParseFailure` — an ALLOWLIST (a per-run refusal, the parser's own
+// throw over the bytes, a read the OS refused) that rethrows everything else
+// untouched, so a broken INSTALL or any other VAT defect is never reported as a
+// broken DOCUMENT. The parser is loaded lazily, past the parse cache's hit-path
 // return (a fully warm run must load no parser at all), so the load happens INSIDE
-// those trys by design and position cannot be the guard.
-//
-// The type also carries a `code` no errno allow-list holds, which is what gets a
-// broken install past the boundaries one layer further out — `vat audit`'s scan
-// catch, `ResourceRegistry`'s read-failure demotion — that would otherwise degrade
-// it to a warning and exit 0. Those two need no predicate call for that reason;
-// only a catch that swallows EVERYTHING does.
-//
-// `loadParser` is exported for tests and embedders that want to force or observe
-// the load. ⛔ It is NOT an optimisation hook: awaiting it before a loop, to "warm"
-// the parser, is exactly the regression above.
+// those trys by design and position cannot be the guard. `isParserUnavailable`
+// names one of those defects for a test or a report; it is never a catch's guard.
+export {
+  ParseDispatcher,
+  parseContentCached,
+  parseFileCached,
+  parseInputRefusal,
+  readContentForParse,
+  withParseDispatcher,
+  type ParsePoolPolicy,
+  type ParseRoute,
+} from './parse-dispatcher.js';
 export {
   ParseCache,
   ParserUnavailableError,
   defaultParseCache,
   isParserUnavailable,
-  loadParser,
   parseCacheDirectory,
-  parseFileCached,
-  parseKeyed,
   vatCacheNamespace,
   vatCacheNamespaceRoot,
   vatCacheRoot,
-  type LoadedParser,
   type ParseCacheOptions,
   type ParseCacheStats,
 } from './parse-cache.js';
 
-/**
- * Parse an HTML file from disk.
- *
- * Lazy for the same reason as {@link parseMarkdown} above — a value re-export
- * put parse5 in this barrel's module graph for every consumer of every symbol.
- * The signature is unchanged; it was already `async`. The load goes through
- * `importParserModule` for the same reason too: an `.html`-only corpus must
- * report a broken install as a broken install, and this is the only route by
- * which it ever loads a parser.
- *
- * @param filePath - Path to the HTML file
- * @returns Links, headings and measures for the document
- * @throws {ParserUnavailableError} If the parser module cannot be loaded
- */
-export async function parseHtml(filePath: string): Promise<ParseResult> {
-  const parse = await importParserModule(
-    'html',
-    async () => (await import('./html-link-parser.js')).parseHtml,
-  );
-  return parse(filePath);
-}
+// Parse limits: what `ResourceRegistry.addResource` throws when one document's
+// parse is refused for this run — a `ParseLimitError` at a limit, a
+// `ParseWorkerDiedError` when the worker holding it died — and the shape a
+// caller names tighter limits in (`ParsePoolPolicy.limits`). The batch path
+// (`addResources`) records both as findings instead; a caller of the
+// single-file path classifies them with the predicates, which read `code`.
+export { classifyParseFailure, type ParseFailureKind } from './parse-failure.js';
+export {
+  ParseLimitError,
+  ParseWorkerDiedError,
+  isParseLimitError,
+  isParseWorkerDiedError,
+  isPerRunParseRefusal,
+  type PerRunParseRefusal,
+  type ParseLimitName,
+  type ParseLimits,
+} from './parse-limits.js';
 
 // HtmlParseError is Zod-sourced (single source of truth) — see schemas/resource-metadata.ts.
 export type { HtmlParseError } from './schemas/resource-metadata.js';
@@ -551,6 +558,11 @@ export {
 // Export href resolution utility (shared by audit and validate code paths)
 export { resolveLocalHref, type ResolveLocalHrefResult } from './utils.js';
 
+// The one statement of what a frontmatter ROOT may be — a plain mapping. The
+// skill lane's `parseFrontmatter` reads it, so a `!!set` / `!!omap` /
+// `!!timestamp` / `!!binary` root is "not a mapping" on every lane.
+export { isPlainMapping } from './frontmatter-codec.js';
+
 // Export frontmatter editor primitive (comment-preserving round-trip)
 export {
   openFrontmatter,
@@ -570,14 +582,19 @@ export {
 export {
   parseConfigFile,
   loadConfig,
+  readConfigText,
+  readConfigTextSync,
 } from './config-parser.js';
 
 export {
+  CONFIG_LOAD_CODE,
   formatConfigValidationError,
   parseConfigAllowingUnknownKeys,
 } from './config-issues.js';
 
 export {
+  EXAMINED_ALLOWED,
+  ExternalPluginSourceSchema,
   ProjectConfigSchema,
   SkillExecutableEntrySchema,
   SkillFileEntrySchema,
@@ -618,7 +635,8 @@ export {
 export { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
 // The refusal `buildLinkAuthEngineConfig` throws for a provider that cannot
 // compile — named, so a caller can tell a config error from an engine bug.
-export { LinkAuthConfigError } from './link-auth/compile-check.js';
+export { LINK_AUTH_CONFIG_CODE, LinkAuthConfigError } from './link-auth/compile-check.js';
+export { matchesCollection } from './collection-matcher.js';
 
 // linkAuth pure engine — public API only.
 // Internal helpers (rewrite, build-headers, etc.) stay module-private.
@@ -667,7 +685,19 @@ export {
 // The filesystem extent (zones §2): everything on disk under the root, files
 // AND directories, excluding NEVER_CRAWL_GLOBS but deliberately NOT build
 // output — this is the extent that sees what the git extent cannot.
-export { FilesystemExtentContributor } from './projection/contributors/filesystem-extent.js';
+// Its demand is a required constructor argument; every resources lane passes
+// DEFAULT_CONTENT_DEMAND so they share one store key. Its five condition codes
+// are exported so a census of absence causes reads the extent where new causes
+// are likeliest to appear.
+export {
+  DEFAULT_CONTENT_DEMAND,
+  EXTENT_DIRECTORY_UNLISTABLE,
+  EXTENT_SYMLINK_NOT_REALIZED,
+  EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT,
+  EXTENT_SYMLINK_TARGET_UNREADABLE,
+  EXTENT_SYMLINK_TARGET_UNRESOLVED,
+  FilesystemExtentContributor,
+} from './projection/contributors/filesystem-extent.js';
 
 // The agentic-convention classifier and its producer — the first contributor
 // that answers "what IS this file" rather than "does it exist".
@@ -684,10 +714,11 @@ export {
   classifyPath,
   LOADING_TAG,
   pluginRootsFrom,
+  RULE_SCOPE_TAG,
   RULES_FILE_TAG,
   strongestLoading,
 } from './projection/agentic-tags.js';
-export type { AgenticTag, PluginRoots, TagLoading } from './projection/agentic-tags.js';
+export type { AgenticTag, PluginRoots, RuleScope, TagLoading } from './projection/agentic-tags.js';
 
 // The Claude `@`-import closure: one extent per `CLAUDE.md` / `.claude/rules`
 // root, the roots discovered through `classifyPath` rather than a second glob.
@@ -705,15 +736,15 @@ export {
 export {
   CLAUDE_RULES_SCOPE_KIND,
   ClaudeRulesScopeContributor,
-  RULE_SCOPE_TAG,
   ruleScopeFor,
 } from './projection/contributors/claude-rules-scope.js';
-export type { RuleScope } from './projection/contributors/claude-rules-scope.js';
 
-// The lane that assembles the three above. Its own lane, not a flag on the fast
-// repo-wide one: that one declares CONTENT_PARSING_SKIP and both classifiers
-// here read blob-keyed tables.
-export { buildClaudeContextPopulation } from './projection/claude-context-population.js';
+// The lane that assembles the three above, plus one `@`-import extent per root.
+// It asks the resources lanes' question, so it shares their store key.
+export {
+  buildClaudeContextPopulation,
+  type ClaudeContextPopulation,
+} from './projection/claude-context-population.js';
 
 // The §6 query over that lane's projection — "what loads at this path, and why".
 // `claudeAncestry` and `selectRules` are deliberately NOT exported: they are this
@@ -727,57 +758,45 @@ export {
   type LoadedContext,
   type LoadedContextAnswer,
   type LoadedRow,
+  type RefusedContextFile,
 } from './projection/claude-context-query.js';
 
 // What the harness actually CHARGES for what the query says is loaded — the
 // 4 MiB `CLAUDE.md` cliff, the subtree it prunes behind it, and the counters that
 // stop a sum being read as the whole story.
-// `OVERSIZE_BYTES` is deliberately NOT among them: the cliff is `account`'s to
-// apply, no consumer re-derives it, and the one test that needs the boundary
-// imports it from the module directly. Pre-1.0, an unexported symbol costs
-// nothing while a published one is a contract.
+// `CLAUDE_OVERSIZE_BYTES` is deliberately NOT among them: it is the harness
+// profile's own quantity (`harness/claude-code.ts`), `account` is merely a
+// consumer of it, and the one test that needs the boundary imports it from
+// there directly. Pre-1.0, an unexported symbol costs nothing while a
+// published one is a contract.
 export {
   account,
   type AccountedContext,
   type AccountedRow,
-  type ChargeState,
+  type SizeCliffState,
   type ContextTotals,
 } from './projection/claude-context-accounting.js';
 
-// The always-loaded budget over those charges — VAT's flagship projection check,
-// as a pure predicate. The threshold constant IS exported (unlike `OVERSIZE_BYTES`
-// above) because the CLI's config default reads it: a number the command
-// re-spelled would be a second copy of a measured quantity.
+// The instruction chain as RELATIONS, flattened for SQL. A lens evaluator
+// (`packages/cli/src/utils/claude-context-lens.ts`) is the only caller. There is
+// no threshold or verdict over these rows anywhere in VAT: an adopter who wants
+// one writes it in `resources.checks`.
 export {
-  DEFAULT_ALWAYS_LOADED_CONTEXT_TOKENS,
-  alwaysLoadedBudget,
-  type AlwaysLoadedBudget,
-  type BudgetContributor,
-} from './projection/claude-context-budget.js';
+  claudeContextRelations,
+  contextChainId,
+  type ClaudeContextRelations,
+} from './projection/claude-context-relations.js';
 
-// That budget over the WHOLE tree, from one query per distinct instruction chain
-// rather than one per directory — 9 queries instead of 589 on VAT's own corpus.
-// The internals (`representativeFor`, `workingLocations`) stay unexported for the
-// reason `selectRules` does: pre-1.0, a published symbol is a contract, and the
-// collapse's soundness is guarded by the suite's differential oracle rather than
-// by anyone calling its pieces.
-export {
-  sweepAlwaysLoadedBudgets,
-  type BudgetSweep,
-  type LocationBudget,
-} from './projection/claude-context-budget-sweep.js';
-
-// The same collapse WITHOUT a threshold: what it costs to work in each part of a
+// The same collapse as a REPORT: what it costs to work in each part of a
 // tree. `vat claude context --all` used to answer every realized path — 10,438
 // answers and 205,918 lines on one adopter tree, which is a report nobody can
 // read and an agent cannot afford. This reports the always-loaded floor once per
 // distinct instruction chain, and the on-demand burden per DIRECTORY, because
 // only the first of those two collapses.
 //
-// ⛔ `contextRegions` is exported and `sweepAlwaysLoadedBudgets`' internals still
-// are not, and the asymmetry is deliberate: the region model now has TWO callers
-// inside this package, so it is a real seam rather than one lane's private
-// helper. Its soundness is still guarded by the suite's differential oracle.
+// `contextRegions` is exported because the region model has TWO callers inside
+// this package (the cost map and the relations), so it is a real seam rather than
+// one lane's private helper. Its soundness is guarded by the chains oracle suite.
 export {
   buildContextCostMap,
   type ContextCostMap,
@@ -811,23 +830,21 @@ export {
 // to go and find is a limit that never reaches the person acting on the number.
 // The bounds statement ships WITH the list, so a consumer that renders the limits
 // cannot reach them without also reaching the sentence that frames them.
+//
+// `CLAUDE_CONTEXT_RELATION_LIMITS` is the same discipline on the SQL route: the
+// subset (composed by id) plus the two limits that exist only because the answer
+// is flattened into per-chain rows. `vat resources query` and `vat resources
+// check` publish it whenever the claude-context lens was evaluated.
 export {
   CLAUDE_CONTEXT_BOUNDS_STATEMENT,
   CLAUDE_CONTEXT_LIMITS,
   CLAUDE_CONTEXT_MODELLED_BEHAVIOURS,
+  CLAUDE_CONTEXT_RELATION_LIMITS,
+  LIMIT_DIRECTIONS,
   type ModelledBehaviour,
   type StatedLimit,
 } from './projection/claude-context-limits.js';
 
-// The same discipline for the half of the lane that GATES. `vat claude budget`
-// applies a threshold to the measurement `vat claude context` reports, so it owes
-// a reader the same signed bounds — COMPOSED from the list above by id rather
-// than copied, plus the four that only a thresholded reading needs.
-export {
-  ALWAYS_LOADED_BUDGET_LIMITS,
-  BUDGET_LIMIT_IDS_FROM_CONTEXT,
-  limitsById,
-} from './projection/claude-context-budget-limits.js';
 
 // One crawl API, two implementations (scanning-and-caching §3.3): the walk, and
 // git plus a bounded walk of only what git cannot see. Same population, two cost
@@ -841,6 +858,7 @@ export {
   gitExtentSelected,
   GitCrawlSource,
   listingRefusalRemedy,
+  CRAWL_SOURCE_KINDS,
   type CrawlSource,
   type CrawlSourceKind,
   type EnumeratedPath,
@@ -852,12 +870,50 @@ export {
 // A project's own SQL assertions over its projection: what a returned row MEANS.
 // The statement itself is the CLI's business — only it knows a storage backend
 // exists — so the rule engine here never opens a database.
-export { issuesFromCheckRows } from './projection/sql-checks.js';
+export {
+  CHECK_EVIDENCE_VALUE_SCHEMA,
+  CHECK_FINDING_COLUMNS,
+  CHECK_REFUSAL_REASON_SCHEMA,
+  checkStatements,
+  describeUninterpretableExamined,
+  describeUninterpretableRows,
+  examinedCount,
+  issuesFromCheckRows,
+  LENS_REFUSAL_CODES,
+  nearMissesOf,
+  PROJECTION_STATEMENT_REFUSED_CODE,
+  uninterpretableRowsReason,
+} from './projection/sql-checks.js';
+export type {
+  CheckIssue,
+  CheckRowConversion,
+  ExaminedShapeReason,
+  LensRefusalCode,
+  NearMiss,
+} from './projection/sql-checks.js';
+
+// VAT's OWN default assertions over the same projection — TypeScript predicates,
+// never SQL, because a default-on rule written as a statement would make the
+// engine mandatory for everyone who inherits it. The CLI binds them to the
+// projection it just built and runs them beside the project's declared checks.
+export {
+  bindBuiltinChecks,
+  BUILTIN_CHECKS,
+  CLAUDE_RULE_FRONTMATTER_INVALID_CHECK,
+  CLAUDE_RULE_GLOB_INERT_CHECK,
+  CLAUDE_RULE_LINK_UNCHECKED_CHECK,
+  type BoundBuiltinCheck,
+  type BuiltinCheck,
+  type BuiltinCheckInput,
+} from './projection/builtin-checks.js';
+export { BUILTIN_CHECK_NAMES } from './projection/builtin-check-names.js';
 
 export {
   buildResourcePopulation,
   buildResourceProjection,
-  type ResourcePopulation,
+  CRAWL_LANES,
+  type ResourceEnumeration,
+  type CrawlPopulation,
   type ResourcePopulationSource,
 } from './projection/resource-population.js';
 
@@ -896,31 +952,42 @@ export {
 // truncated extent it had reached.
 //
 // It also owns the post-fixpoint re-run of the blob stage: demand-driven keying
-// means a `deferred` realization can become `keyed` during the closure stratum,
-// and `BlobPopulationReport` reports that second run as its own measurement
-// rather than summing counters that have no honest combination rule.
+// means a `deferred` realization can become `keyed` during the closure stratum.
 export {
   CONTENT_PARSING_DERIVE,
   CONTENT_PARSING_SKIP,
   ClosureNonConvergenceError,
-  DISCARD_BLOB_POPULATION,
+  describeStoreMiss,
+  POPULATION_ORIGINS,
   populate,
   populationOracles,
-  type BlobPopulationReport,
+  readStoredMembership,
+  storeMissOf,
   type ContentParsing,
   type ContributorTiming,
   type PopulateOptions,
+  type PopulateResult,
   type PopulationCache,
+  type PopulationOutcome,
+  type StoredMembership,
+  type StoreMiss,
+  type TreePopulationOptions,
 } from './projection/merge.js';
 
-// The one line a user sees when the blob stage declined to derive something.
-// `populate()` computes the refusal counts on every run; until this shipped,
-// every production caller threw them away, so a corpus in which every document
-// was declined as binary produced an empty `blobs` table and exit 0. The counts
-// are the half that `blob_conditions` cannot carry — nobody queries a projection
-// they were never told to look at, and a skipped heading or reference is an
-// absent row.
-export { describeBlobRefusals } from './projection/blob-refusals.js';
+// The one line a user sees when a population holds content it declined to
+// derive or mis-decoded. A function of the projection's stored rows, so a store
+// hit reports exactly what the derive that wrote it would have — nobody queries
+// a projection they were never told to look at.
+export {
+  BLOB_REFUSAL_CONDITION_CODES,
+  describeBlobRefusals,
+  notAdmittedRealizations,
+  type BlobRefusalRows,
+} from './projection/blob-refusals.js';
+// The other kind of `blob_conditions` code: a finding about a blob that was
+// derived. With `BLOB_REFUSAL_CONDITION_CODES` it is every code a row carries,
+// so a census of refusals classifies each row from these two lists alone.
+export { BLOB_FINDING_CONDITION_CODES } from './projection/blob-facts.js';
 
 // The declarative closure primitive (zones §7.3): a closure-defined extent is a
 // GENERIC contributor handed an `ExtentDeclaration`, never new privileged code —
@@ -965,6 +1032,8 @@ export {
   BLOB_CONTENT_CHANGED,
   BLOB_NOT_TEXT,
   BLOB_PARSE_FAILED,
+  BLOB_PARSE_LIMIT_EXCEEDED,
+  BLOB_PARSE_WORKER_DIED,
   BLOB_UNREADABLE,
   populateBlobs,
   type BlobPopulationOptions,
@@ -1058,6 +1127,7 @@ export {
 // See docs/concepts/knowledge-interop-formats.md.
 export {
   OKF_FINDING_CODES,
+  OKF_UNKNOWN_BUNDLE_CODE,
   discoverOkfBundle,
   okfBundleRuns,
   validateOkfBundle,

@@ -9,7 +9,7 @@
  * `--only` exited 1) and nothing asserted the contract as a whole.
  */
 
-import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { ExitCode, exitCodeForReport, type ExitDeterminingDocument } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
@@ -109,6 +109,18 @@ describe('the exit-code contract, across verbs (system test)', () => {
     if (outcome === 'error') expect(result.stderr.trim()).not.toBe('');
   });
 
+  // Commander's default discarded an operand a verb never declared: this audited
+  // the first path, never mentioned the second, and exited 0. Every verb's
+  // refusal is pinned in-process (excess-arguments.integration.test.ts); this
+  // proves the shipped binary carries it to the exit-code contract.
+  it('an excess positional argument is a usage error, not silently dropped (audit)', async () => {
+    const tempDir = ctx.createTempDir();
+    const dir = skillDir(tempDir, 'audit-excess', cleanSkill('audit-excess'));
+    const result = await executeCli(ctx.binPath, ['audit', dir, 'does-not-exist'], { cwd: tempDir });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(ExitCode.ERROR);
+    expect(result.stderr).toContain('too many arguments');
+  });
+
   it('a warning alone is OK; --strict promotes it (skill review)', async () => {
     const tempDir = ctx.createTempDir();
     const dir = skillDir(tempDir, 'warned', warnedSkill('warned'));
@@ -116,8 +128,19 @@ describe('the exit-code contract, across verbs (system test)', () => {
     expect((await executeCli(ctx.binPath, ['skill', 'review', dir, '--strict'])).status).toBe(ExitCode.FINDINGS);
   });
 
-  it('every verb in the table uses only the three contract values', () => {
-    const codes = new Set(SCENARIOS.map((s) => s.expected));
-    expect([...codes].sort((a, b) => a - b)).toEqual([ExitCode.OK, ExitCode.FINDINGS, ExitCode.ERROR]);
+  it('every expected code in the table is the one the shared derivation gives its outcome', () => {
+    // 🪤 This used to assert that the table's expected codes were the three
+    // contract values — the table's own literals checked against themselves,
+    // which cannot fail. The expectation that CAN fail is that each row's code
+    // is what `exitCodeForReport` derives for that outcome: a row written as
+    // `audit → error: 1` is exactly the hand-mapped divergence this pins against.
+    const gate = { strict: false };
+    const documentFor = (outcome: Scenario['outcome']): ExitDeterminingDocument => {
+      if (outcome === 'ok') return { status: 'ok', summary: { errors: 0, warnings: 0, info: 0 }, gate };
+      if (outcome === 'findings') return { status: 'findings', summary: { errors: 1, warnings: 0, info: 0 }, gate };
+      return { status: 'error', summary: { errors: 0, warnings: 0, info: 0 }, gate };
+    };
+    const mismatched = SCENARIOS.filter((s) => s.expected !== exitCodeForReport(documentFor(s.outcome)));
+    expect(mismatched).toEqual([]);
   });
 });

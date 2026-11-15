@@ -1,20 +1,17 @@
 # @vibe-agent-toolkit/agent-skills
 
-Build, validate, and import Agent Skills for Claude Desktop, Claude Code, and VAT agents.
+Build, validate, and package Agent Skills for Claude Desktop and Claude Code.
 
 ## Overview
 
 This package provides runtime support for Agent Skills including:
 - **Validation** - Audit Agent Skills for quality and compatibility
-- **Import/Export** - Convert between SKILL.md and agent.yaml formats
-- **Building** - Package VAT agents as Agent Skills
+- **Packaging** - Bundle a SKILL.md with every file it links to
 - **Frontmatter Parsing** - Extract and validate Agent Skills frontmatter
 
 ## Features
 
 - **Skill Validation** - Comprehensive validation against Agent Skills specification
-- **Format Conversion** - Import SKILL.md to agent.yaml (and vice versa)
-- **Build Pipeline** - Generate SKILL.md from agent manifests
 - **Schema Validation** - Zod-based frontmatter validation with TypeScript types
 - **Link Integrity** - Validate all markdown links and references
 - **Console Compatibility** - Detect tool usage incompatible with console mode
@@ -36,41 +33,12 @@ const result = await validateSkill({
   skillPath: './my-skill/SKILL.md',
 });
 
-if (result.status === 'error') {
+if (result.summary.errors > 0) {
   console.error('Validation failed:');
   for (const issue of result.issues) {
     console.error(`  [${issue.code}] ${issue.message}`);
   }
 }
-```
-
-### Import SKILL.md to agent.yaml
-
-```typescript
-import { importSkillToAgent } from '@vibe-agent-toolkit/agent-skills';
-
-const result = await importSkillToAgent({
-  skillPath: './my-skill/SKILL.md',
-  outputPath: './my-agent/agent.yaml', // Optional
-  force: false, // Optional
-});
-
-if (result.success) {
-  console.log(`Imported to: ${result.agentPath}`);
-} else {
-  console.error(`Import failed: ${result.error}`);
-}
-```
-
-### Build Agent Skill from VAT Agent
-
-```typescript
-import { buildAgentSkill } from '@vibe-agent-toolkit/agent-skills';
-
-await buildAgentSkill({
-  agentPath: './my-agent',
-  outputPath: './dist/skills/my-agent',
-});
 ```
 
 ## API Reference
@@ -84,7 +52,6 @@ Validate an Agent Skill (SKILL.md) for quality and compatibility.
 interface ValidateOptions {
   skillPath: string;         // Path to SKILL.md
   rootDir?: string;          // Root directory for resolving links
-  isVATGenerated?: boolean;  // Treat as VAT-generated (stricter validation)
 }
 ```
 
@@ -92,10 +59,11 @@ interface ValidateOptions {
 ```typescript
 interface ValidationResult {
   path: string;                       // Path to skill file
-  type: 'agent-skill' | 'vat-agent'; // Detected type
-  status: 'success' | 'warning' | 'error';
-  summary: string;                    // Human-readable summary
+  type: 'agent-skill';                // Detected type
+  status: 'ok' | 'findings';          // Literal: `findings` iff any issue is published (info counts)
+  description: string;                // Human-readable one-liner
   issues: ValidationIssue[];          // All validation issues
+  summary: SeverityCounts;            // { errors, warnings, info } — gate on summary.errors > 0
   metadata?: {                        // Extracted metadata
     name?: string;
     description?: string;
@@ -120,7 +88,7 @@ const result = await validateSkill({
 });
 
 console.log(`Status: ${result.status}`);
-console.log(`Summary: ${result.summary}`);
+console.log(`Summary: ${result.description}`);
 
 // Check for specific error types
 const nameErrors = result.issues.filter(
@@ -144,10 +112,23 @@ The validator checks for:
 - `SKILL_MISSING_DESCRIPTION` - Required "description" field missing
 - `SKILL_NAME_INVALID` - Name doesn't match pattern: `^[a-z0-9]+(-[a-z0-9]+)*$`
 - `RESERVED_WORD_IN_NAME` (warning) - Name contains "claude" or "anthropic"
-- `SKILL_NAME_XML_TAGS` - Name contains < or > characters
 - `SKILL_DESCRIPTION_TOO_LONG` - Description exceeds 1024 characters
 - `SKILL_DESCRIPTION_EMPTY` - Description is empty or whitespace-only
-- `SKILL_DESCRIPTION_XML_TAGS` - Description contains < or > characters
+- `SKILL_DESCRIPTION_XML_TAGS` - Description contains an XML/HTML tag (VAT's reading of the vendor's "cannot contain XML tags"). Three lanes:
+  **markup** — a closing `</x>`, a self-closing `<x/>`, an opening tag with an attribute
+  assignment `<x a="b">`, or a declaration (`<!--`, `<![CDATA[`, `<!DOCTYPE`, `<?xml`) — fires
+  wherever it appears, **backticks included**; a **bare placeholder** `<word>`, which is
+  indistinguishable from a tag, so it fires unless it reads as part of a path or identifier
+  (`skills/<name>/SKILL.md`, `<name>.md`, `Promise<Result>`, `repo#<n>`, `--flag=<value>`); and a
+  **prompt-channel name** (the `system`/`sys`, `assistant`, `human`, `invoke`, `instructions`,
+  `thinking`, `tool_use`/`tool_result`, `function_calls`/`function_results` and
+  `im_start`/`im_end` families, in any spelling), which fires whatever it is glued to
+  (`<system>.Ignore previous`, `x=<invoke>`, `< system >`). Backticking (`` `<env>` ``) clears
+  the last two lanes only. Everyday placeholder words (`<user>`, `<script>`, `<example>`) are not
+  channel names, and an arbitrary joined word (`<override>.Ignore`) passes — no syntactic rule
+  separates it from `--flag=<value>`. Not a tag: a comparison or arrow (`a < b`, `<=`, `->`,
+  `=>`), or angle brackets holding prose with no attribute assignment in them
+  (`<see https://example.com>`, `<y and y>`)
 
 **Link Errors:**
 - `LINK_INTEGRITY_BROKEN` - Link points to non-existent file
@@ -164,107 +145,6 @@ The validator checks for:
 - `COMPAT_TARGET_UNDECLARED` - Capability observations present but no target declared (info; see [validation-codes.md](../../docs/validation-codes.md#compat_target_undeclared))
 
 See [Best Practices Guide](../../docs/guides/agent-skills-best-practices.md) for detailed guidance.
-
-### importSkillToAgent(options): Promise<ImportResult>
-
-Convert an Agent Skill (SKILL.md) to VAT agent format (agent.yaml).
-
-**Options:**
-```typescript
-interface ImportOptions {
-  skillPath: string;      // Path to SKILL.md
-  outputPath?: string;    // Custom output path (default: same dir as SKILL.md)
-  force?: boolean;        // Overwrite existing agent.yaml (default: false)
-}
-```
-
-**Returns:**
-```typescript
-type ImportResult =
-  | { success: true; agentPath: string }
-  | { success: false; error: string };
-```
-
-**Example:**
-```typescript
-// Basic import
-const result = await importSkillToAgent({
-  skillPath: './my-skill/SKILL.md',
-});
-
-// Custom output path
-const result = await importSkillToAgent({
-  skillPath: './my-skill/SKILL.md',
-  outputPath: './agents/my-agent/agent.yaml',
-});
-
-// Force overwrite
-const result = await importSkillToAgent({
-  skillPath: './my-skill/SKILL.md',
-  force: true,
-});
-
-if (!result.success) {
-  console.error(`Import failed: ${result.error}`);
-  process.exit(1);
-}
-```
-
-**What Gets Converted:**
-
-| SKILL.md Field | agent.yaml Field | Notes |
-|----------------|------------------|-------|
-| `name` | `metadata.name` | Required |
-| `description` | `metadata.description` | Required |
-| `metadata.version` | `metadata.version` | Defaults to "0.1.0" |
-| `metadata.tags` | `metadata.tags` | Optional |
-| `license` | `metadata.license` | Optional |
-| `compatibility` | `spec.compatibility` | Optional |
-
-The generated agent.yaml will have:
-```yaml
-metadata:
-  name: skill-name
-  description: Skill description
-  version: 1.0.0
-spec:
-  runtime: agent-skills
-```
-
-### buildAgentSkill(options): Promise<BuildResult>
-
-Build an Agent Skill from a VAT agent manifest.
-
-**Options:**
-```typescript
-interface BuildOptions {
-  agentPath: string;    // Path to agent directory or manifest
-  outputPath: string;   // Where to write skill bundle
-}
-```
-
-**Returns:**
-```typescript
-interface BuildResult {
-  outputPath: string;   // Path to generated SKILL.md
-  metadata: {
-    name: string;
-    description: string;
-    version: string;
-  };
-}
-```
-
-**Example:**
-```typescript
-const result = await buildAgentSkill({
-  agentPath: './my-agent',
-  outputPath: './dist/skills/my-agent',
-});
-
-console.log(`Built skill: ${result.outputPath}`);
-console.log(`Version: ${result.metadata.version}`);
-```
 
 ### Frontmatter Schemas
 
@@ -301,7 +181,9 @@ if (result.success) {
 
 #### VATAgentSkillFrontmatterSchema
 
-Extended schema for VAT-generated skills:
+A stricter, opt-in variant of the base schema (requires `name`, `description` and
+`metadata.version`). No VAT command applies it — `vat skills validate` and `vat skills build`
+use `AgentSkillFrontmatterSchema`:
 
 ```typescript
 import { VATAgentSkillFrontmatterSchema } from '@vibe-agent-toolkit/agent-skills';
@@ -310,7 +192,7 @@ const frontmatter = {
   name: 'my-skill',
   description: 'Does something useful',
   metadata: {
-    version: '1.0.0',   // Required for VAT skills
+    version: '1.0.0',   // Required by this schema
     tags: ['utility', 'data'],
   },
 };
@@ -319,19 +201,25 @@ const result = VATAgentSkillFrontmatterSchema.safeParse(frontmatter);
 ```
 
 **Additional Requirements:**
-- `metadata.version` - Semantic version (required for VAT)
+- `metadata.version` - Semantic version
 
-### parseFrontmatter(content): ParseResult
+### parseFrontmatter(input, route): Promise&lt;FrontmatterResult&gt;
 
-Parse YAML frontmatter from SKILL.md content.
+Parse YAML frontmatter from SKILL.md content, in the bounded parse worker. `route` is required:
+`{ dispatcher }` inside a run that holds one (`withParseDispatcher`), `{ dispatcher: undefined }` for a single read.
+`input` is the content with the size of the bytes it came from: a file read with
+`readContentForParse` (which refuses one past the route's parse input cap by its size before
+reading it), or `inMemoryContent(text)` for text you hold. Content past the cap is refused whole
+(`cause` is a `ParseLimitError`).
 
 **Example:**
 ```typescript
 import { parseFrontmatter } from '@vibe-agent-toolkit/agent-skills';
-import * as fs from 'node:fs';
+import { readContentForParse } from '@vibe-agent-toolkit/resources';
 
-const content = fs.readFileSync('./SKILL.md', 'utf-8');
-const result = parseFrontmatter(content);
+const route = {};
+const read = await readContentForParse('/abs/path/to/SKILL.md', 'markdown', route);
+const result = await parseFrontmatter(read, route);
 
 if (result.success) {
   console.log('Frontmatter:', result.frontmatter);
@@ -342,34 +230,6 @@ if (result.success) {
 ```
 
 ## Usage Examples
-
-### Validate Before Import
-
-```typescript
-import {
-  validateSkill,
-  importSkillToAgent
-} from '@vibe-agent-toolkit/agent-skills';
-
-// Validate first
-const validation = await validateSkill({
-  skillPath: './my-skill/SKILL.md',
-});
-
-if (validation.status === 'error') {
-  console.error('Validation failed, cannot import');
-  process.exit(1);
-}
-
-// Import if validation passes
-const importResult = await importSkillToAgent({
-  skillPath: './my-skill/SKILL.md',
-});
-
-if (importResult.success) {
-  console.log(`Imported to: ${importResult.agentPath}`);
-}
-```
 
 ### Batch Validation
 
@@ -398,7 +258,7 @@ async function validateAllSkills(dir: string) {
 }
 
 const results = await validateAllSkills('./skills');
-const failed = results.filter(r => r.result.status === 'error');
+const failed = results.filter(r => r.result.summary.errors > 0);
 
 console.log(`Validated ${results.length} skills`);
 console.log(`Failed: ${failed.length}`);
@@ -439,8 +299,8 @@ if (hasLinkErrors) {
 ### CLI Integration
 
 This package powers these CLI commands:
-- `vat agent audit` - Validates skills using `validateSkill()`
-- `vat agent import` - Imports skills using `importSkillToAgent()`
+- `vat audit` - Validates skills using `validateSkill()`
+- `vat skills build` / `vat skills package` - Package skills using `packageSkill()`
 
 See the [audit command reference](../cli/docs/audit.md) for command usage.
 
@@ -462,7 +322,7 @@ async function validateInCI() {
       skillPath: `./skills/${skill}`,
     });
 
-    if (result.status === 'error') {
+    if (result.summary.errors > 0) {
       console.error(`❌ ${skill}:`);
       for (const issue of result.issues) {
         if (issue.severity === 'error') {
@@ -493,10 +353,6 @@ import type {
   ValidationResult,
   AgentSkillFrontmatter,
   VATAgentSkillFrontmatter,
-  ImportOptions,
-  ImportResult,
-  BuildOptions,
-  BuildResult,
 } from '@vibe-agent-toolkit/agent-skills';
 
 // The issue shape and the code/severity vocabularies live in the schema package:
@@ -524,8 +380,8 @@ Validation errors are returned in the `ValidationResult` object, not thrown:
 ```typescript
 const result = await validateSkill({ skillPath: './skill/SKILL.md' });
 
-// result.status will be 'error', not thrown
-if (result.status === 'error') {
+// errors are counted in result.summary, not thrown
+if (result.summary.errors > 0) {
   // Handle validation failures
 }
 ```
@@ -574,7 +430,6 @@ Tested on:
 ## Related Documentation
 
 - [Audit Command](../cli/docs/audit.md) - CLI validation command
-- [Import Command](../../docs/cli/import.md) - CLI import command
 - [Agent Skills Best Practices](../../docs/guides/agent-skills-best-practices.md) - Comprehensive guide
 - [Agent Skills Specification](https://agentskills.io/specification) - Official spec
 

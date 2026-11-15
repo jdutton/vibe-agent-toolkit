@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { validateShippedPluginSkillLinks } from '../../src/commands/build.js';
+import { __internal, checkShippedPluginSkillLinks } from '../../src/commands/build.js';
 import { createTempDirTracker } from '../system/test-common.js';
 
 function skillDirPath(cwd: string, marketplace: string, plugin: string, skill: string): string {
@@ -12,7 +12,7 @@ function skillDirPath(cwd: string, marketplace: string, plugin: string, skill: s
   );
 }
 
-describe('validateShippedPluginSkillLinks', () => {
+describe('checkShippedPluginSkillLinks', () => {
   const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-build-shipped-links-');
 
   afterEach(() => cleanupTempDirs());
@@ -26,7 +26,7 @@ describe('validateShippedPluginSkillLinks', () => {
       '---\nname: skill-a\ndescription: test\n---\n\nSee [missing](./missing.md).\n',
     );
 
-    const issues = await validateShippedPluginSkillLinks(cwd);
+    const { findings: issues } = await checkShippedPluginSkillLinks(cwd);
 
     expect(issues).toHaveLength(1);
     expect(issues[0]?.code).toBe('PACKAGED_BROKEN_LINK');
@@ -44,17 +44,17 @@ describe('validateShippedPluginSkillLinks', () => {
       '---\nname: skill-a\ndescription: test\n---\n\nSee [guide](./docs/guide.md).\n',
     );
 
-    const issues = await validateShippedPluginSkillLinks(cwd);
+    const { findings: issues } = await checkShippedPluginSkillLinks(cwd);
 
     expect(issues).toHaveLength(0);
   });
 
-  it('returns no issues when no plugin tree has been built', async () => {
+  it('examines nothing, and finds nothing, when no plugin tree has been built', async () => {
     const cwd = createTempDir();
 
-    const issues = await validateShippedPluginSkillLinks(cwd);
+    const report = await checkShippedPluginSkillLinks(cwd);
 
-    expect(issues).toHaveLength(0);
+    expect([report.examined, report.findings]).toEqual([0, []]);
   });
 
   // Self-containment (docs/skill-quality-and-compatibility.md): a skill is a
@@ -75,9 +75,22 @@ describe('validateShippedPluginSkillLinks', () => {
       '---\nname: skill-a\ndescription: test\n---\n\nSee [guide](../skill-b/refs/guide.md).\n',
     );
 
-    const issues = await validateShippedPluginSkillLinks(cwd);
+    const { findings: issues } = await checkShippedPluginSkillLinks(cwd);
 
     expect(issues).toHaveLength(1);
     expect(issues[0]?.code).toBe('PACKAGED_BROKEN_LINK');
+  });
+});
+
+describe('vat build — the line a completed run closes with', () => {
+  const phase = (examined: number) => ({ report: { examined } });
+
+  it('prints the success line when the phases examined something', () => {
+    expect(__internal.buildCompleteLine([phase(0), phase(4)])).toBe('\n✅ Build complete');
+  });
+
+  it('prints no success line over phases that examined nothing, however many ran', () => {
+    // The phase COUNT is two here; a banner keyed on it would print the check mark.
+    expect(__internal.buildCompleteLine([phase(0), phase(0)])).toBe('\n⚠️ Not a verdict: nothing was examined');
   });
 });

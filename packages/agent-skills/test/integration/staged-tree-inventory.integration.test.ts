@@ -28,6 +28,11 @@ import {
   stagedDirName,
   type StageItem,
 } from '../../src/skill-test/staging.js';
+import { useScratchTmpdir } from '../test-helpers.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test (and every child
+// a test spawns), so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-11-');
 
 const EVALS_SUBPATH = 'evals/evals.json';
 
@@ -66,7 +71,7 @@ function makeSuiteCarryingResolver(srcRoot: string) {
     writeUnder(dir, 'resources/reference.md', '# Reference\n');
     writeUnder(dir, EVALS_SUBPATH, '{"evals":[{"expected_output":"THE ANSWER"}]}');
     writeUnder(dir, 'evals/fixtures/input.txt', 'fixture bytes');
-    return { stagedDir: dir, identity: `id-${id}` };
+    return { stagedDir: dir, identity: `id-${id}`, leftovers: [] };
   };
 }
 

@@ -8,27 +8,35 @@
  * - Copying declared build artifacts into a skill output dir (every build path)
  */
 
-import { statSync } from 'node:fs';
-import { copyFile, lstat, mkdir, stat } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { lstat } from 'node:fs/promises';
 
 import type { SkillFileEntry } from '@vibe-agent-toolkit/resources';
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
+  classifyFsFault,
   fileContentHash,
+  followedKind,
+  followedStatSync,
+  fsFaultOf,
   globMagicRemainder,
   hasParentTraversalSegment,
-  isFilesystemAccessError,
   isGlob,
+  isLinkChainRefusedError,
+  forEachInOrder,
   issueLocation,
+  mapWithConcurrency,
   safePath,
   staticGlobBase,
   toForwardSlash,
+  toForwardSlashAnyPlatform,
+  withFsFault,
+  withFsFaultSync,
 } from '@vibe-agent-toolkit/utils';
 import { glob } from 'glob';
 import picomatch from 'picomatch';
 
-import { withFsAttribution } from './fs-attribution.js';
+import { copyIntoBundle } from './bundle-copy.js';
+import { packagingInputError } from './packaging-errors.js';
 import { materializeIssue } from './validators/rule-engine/index.js';
 import { isNeverPackagedBasename } from './validators/validation-rules.js';
 
@@ -88,8 +96,7 @@ async function partitionRegularFiles(
   absoluteBase: string,
 ): Promise<{ regular: string[]; nonRegular: string[] }> {
   // Bounded concurrency, not a serial loop and not an unbounded `Promise.all`.
-  // This adds one or two stats per match where the build previously did none, on
-  // the critical path of a command that already stats every match once inside
+  // This adds one or two stats per match, on the critical path of a command that already stats every match once inside
   // `glob` — serially that is a latency floor proportional to the match count, and
   // a monorepo glob can match thousands. Unbounded would trade it for EMFILE.
   //
@@ -97,10 +104,10 @@ async function partitionRegularFiles(
   // caller's sorted order regardless of completion order — `droppedRel` and
   // `nonRegularRel` are rendered into error messages an adopter reads, and a set
   // that reshuffles between runs is a diff for no reason.
-  const copyable = await mapWithConcurrency(matches, STAT_CONCURRENCY, (rel) =>
+  const copyable = await mapWithConcurrency(matches, (rel) =>
     // joinUnderRoot asserts the match stays under absoluteBase, the same guard the
     // copy loop applies before reading it.
-    isCopyableFile(safePath.joinUnderRoot(absoluteBase, rel)));
+    isCopyableFile(safePath.joinUnderRoot(absoluteBase, rel), absoluteBase));
 
   const regular: string[] = [];
   const nonRegular: string[] = [];
@@ -108,31 +115,6 @@ async function partitionRegularFiles(
     (copyable[i] === true ? regular : nonRegular).push(rel);
   }
   return { regular, nonRegular };
-}
-
-/**
- * Enough parallelism to hide per-call latency, low enough to stay far from the
- * default file-descriptor ceiling even with several skills building at once.
- */
-const STAT_CONCURRENCY = 16;
-
-/** `Promise.all`-shaped, but with at most `limit` calls in flight. Order preserved. */
-async function mapWithConcurrency<T, R>(
-  items: readonly T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results = Array.from({ length: items.length }) as R[];
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    while (next < items.length) {
-      const i = next++;
-      // Non-null: `i` is always a valid index, guarded by the loop condition.
-      results[i] = await fn(items[i] as T);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
 }
 
 /**
@@ -144,14 +126,22 @@ async function mapWithConcurrency<T, R>(
  * would move. A dangling link, or one resolving to a directory, throws from `stat`
  * and is reported as not copyable rather than escaping as the build's whole
  * explanation.
+ *
+ * The link is followed only once its chain is read beneath `within` (the glob's
+ * base, in the operator's project): a chain VAT will not hand the kernel — a link
+ * to a network or device path — is a refusal on the source side, thrown, never a
+ * quiet "not copyable".
  */
-async function isCopyableFile(absPath: string): Promise<boolean> {
+async function isCopyableFile(absPath: string, within: string): Promise<boolean> {
   try {
     const linkStat = await lstat(absPath);
     if (linkStat.isFile()) return true;
     if (!linkStat.isSymbolicLink()) return false;
-    return (await stat(absPath)).isFile();
+    return (await followedKind(absPath, within)) === 'file';
   } catch (error) {
+    if (isLinkChainRefusedError(error)) {
+      throw classifyFsFault(error, { side: 'source', origin: 'content', action: `examine ${absPath}` });
+    }
     // Unreadable or dangling. Not copyable is the honest answer, and the caller
     // reports it as a named finding — which is strictly more than the raw errno
     // this replaces ever gave.
@@ -159,8 +149,13 @@ async function isCopyableFile(absPath: string): Promise<boolean> {
     // Narrowed to filesystem errors on purpose: a bare `catch {}` here would
     // answer "not a regular file" to a bug in our own code, silently converting a
     // defect into a routine skip. Same predicate the audit walk uses, from one
-    // shared source so the two cannot drift.
-    if (!isFilesystemAccessError(error)) throw error;
+    // shared source so the two cannot drift. A machine that ran out (`exhausted`,
+    // `busy`) says nothing about the match: thrown, classified, never a skip.
+    const faultClass = fsFaultOf(error)?.faultClass;
+    if (faultClass === undefined) throw error;
+    if (faultClass === 'exhausted' || faultClass === 'busy') {
+      throw classifyFsFault(error, { side: 'source', origin: 'content', action: `examine ${absPath}` });
+    }
     return false;
   }
 }
@@ -182,18 +177,23 @@ async function isCopyableFile(absPath: string): Promise<boolean> {
  * text is kept verbatim inside it, because it is what distinguishes a permission
  * problem from a full disk from a vanished mount.
  */
-async function attributed<T>(
+function attributed<T>(
   entry: SkillFileEntry,
   absPath: string,
   projectRoot: string,
-  work: () => Promise<T>,
-  action?: string,
+  work: () => T | Promise<T>,
 ): Promise<T> {
-  return withFsAttribution(
-    `files: source '${entry.source}' resolved to ${anchoredPath(absPath, projectRoot)}`,
-    work,
-    action,
-  );
+  return withFsFault({ side: 'source', origin: 'content', action: `read ${entrySubject(entry, absPath, projectRoot)}` }, () => Promise.resolve(work()));
+}
+
+/** How a failure names a `files:` entry: the `source:` the author wrote, and where it resolved. */
+function entrySubject(entry: SkillFileEntry, absPath: string, projectRoot: string): string {
+  return `files: source '${entry.source}' resolved to ${anchoredPath(absPath, projectRoot)}`;
+}
+
+/** Copy one file a `files:` entry names into the bundle, each side's refusal coded as that side's. */
+function copyEntryFile(entry: SkillFileEntry, absSource: string, bundle: { root: string; dest: string }, projectRoot: string): Promise<void> {
+  return copyIntoBundle(entrySubject(entry, absSource, projectRoot), absSource, bundle.root, bundle.dest);
 }
 
 /** One file a GLOB `files:` entry matched and the never-package list refused. */
@@ -240,7 +240,7 @@ export interface AppliedFilesConfig {
    *
    * Returned rather than written to a `warn` sink because a file vanishing from
    * a bundle is a build FINDING, not a log line: it has to reach the structured
-   * report (`issueCounts`), or a CI consumer reads `warnings: 0` for a build
+   * report's counts (`summary`), or a CI consumer reads `warnings: 0` for a build
    * that silently shipped less than the config asked for.
    */
   dropped: DroppedGlobMatch[];
@@ -263,13 +263,9 @@ export interface AppliedFilesConfig {
  * the drop and the issue describing it must not be able to disagree.
  *
  * Anchored at the SOURCE file, in ONE coordinate system for both the location
- * and the message. The finding used to name the would-be `dest` in both, which
- * meant the only path it gave you was an output path nothing was ever written to
- * — so the issue list mixed output coordinates (this code) with source
- * coordinates (every other pre-build code) and an adopter could not open the
- * thing that went missing. The glob pattern stays in the message because it
- * answers the second question ("which entry caught this?"), but it is no longer
- * the only identifiable thing in the finding.
+ * and the message, like every other pre-build code. The glob pattern stays in
+ * the message because it answers "which entry caught this?", but it is not the
+ * only identifiable thing in the finding.
  *
  * @param locationRoot The ONE base this run anchors locations at. Required, not
  *   defaulted to the project root: a defaulted anchor is how a multi-project run
@@ -328,7 +324,7 @@ function globMatchesToIssues(
  *
  * Load-bearing for every THROWN message in this module, not only for issue
  * locations: `applyFilesConfig`'s throws reach `vat skills build`'s stdout
- * verbatim as `failedSkills[].message`, so an absolute path there publishes the
+ * verbatim as a `SKILL_PACKAGING_FAILED` finding's `message`, so an absolute path there publishes the
  * developer's home directory into whatever issue or CI log the report is pasted
  * into. Build-report messages are project-relative, never absolute.
  */
@@ -348,7 +344,7 @@ function anchoredPath(absolute: string, root: string): string {
 const BUILD_SEGMENTS = new Set(['dist', 'build', 'out']);
 
 export function buildArtifactHint(source: string): string {
-  const normalized = toForwardSlash(source);
+  const normalized = toForwardSlashAnyPlatform(source);
   const segments = normalized.split('/');
   const hasArtifactSegment = segments.some((seg) => BUILD_SEGMENTS.has(seg));
   const hasArtifactExtension =
@@ -371,7 +367,7 @@ export function buildArtifactHint(source: string): string {
  * `files:` config" about a copy VAT performed itself.
  */
 export function normalizeRelPath(p: string): string {
-  let normalized = toForwardSlash(p);
+  let normalized = toForwardSlashAnyPlatform(p);
   if (normalized.startsWith('./')) {
     normalized = normalized.slice(2);
   }
@@ -436,7 +432,7 @@ export function mergeFilesConfig(
     for (const entry of perSkill) {
       const normalized = normalizeRelPath(entry.dest);
       if (destSet.has(normalized)) {
-        throw new Error(
+        throw packagingInputError(
           `Duplicate dest in per-skill files config: '${entry.dest}'. ` +
           `Each dest must be unique within a skill's files configuration.`
         );
@@ -522,33 +518,45 @@ export interface ApplyFilesConfigOptions {
  * missing dest. Intended to be called after a copy operation to assert the
  * copy was faithful. Exported so it can be tested directly without running a
  * full applyFilesConfig round-trip.
+ *
+ * The check reads BOTH trees, so each read is guarded as the side it touches: a
+ * source the OS will not read is the skill's refusal, a dest it will not stat or
+ * read is the output's. One guard over the whole pair coded a dest-side errno as
+ * the skill's, with a remedy pointing at the source.
+ *
+ * @param subject - The `files:` entry, phrased for the refusal's message
  */
 export function verifyFilesIntegrity(
+  subject: string,
   pairs: { absSource: string; absDest: string }[],
 ): void {
   for (const { absSource, absDest } of pairs) {
-    // `statSync` in a guard rather than `existsSync`, because `existsSync`
-    // answers FALSE for a file that is present but unreadable — so a permissions
-    // problem on the dest was reported as "dest file missing", sending the author
-    // to look for a file that is sitting right there. Only a real ENOENT is
-    // missing; anything else is the filesystem refusing the path, and is rethrown
-    // for the caller to attribute to the `files:` entry.
-    try {
-      statSync(absDest);
-    } catch (error) {
-      if ((error as { code?: string }).code !== 'ENOENT') throw error;
-      throw new Error(
-        `files: integrity check failed — dest file missing: ${toForwardSlash(absDest)}`,
-      );
-    }
-    const srcHash = fileContentHash(absSource);
-    const dstHash = fileContentHash(absDest);
+    const srcHash = withFsFaultSync({ side: 'source', origin: 'content', action: `read ${subject} for verification` }, () => fileContentHash(absSource));
+    const dstHash = withFsFaultSync({ side: 'destination', shapeFromSource: true, action: `verify ${subject} in the bundle` }, () => destContentHash(absDest));
     if (srcHash !== dstHash) {
       throw new Error(
         `files: integrity check failed — content mismatch at dest: ${toForwardSlash(absDest)}`,
       );
     }
   }
+}
+
+/**
+ * The dest's content hash. A followed `stat` in a guard rather than `existsSync`,
+ * because `existsSync` answers FALSE for a file that is present but unreadable —
+ * so a permissions problem on the dest was reported as "dest file missing",
+ * sending the author to look for a file that is sitting right there. Only
+ * resolving to nothing is missing; anything else is the filesystem refusing the
+ * path, and is rethrown for the caller's guard to code.
+ */
+function destContentHash(absDest: string): string {
+  // The dest is the file this build just wrote — VAT's own path, so it is its own tree.
+  if (followedStatSync(absDest, absDest) === undefined) {
+    throw new Error(
+      `files: integrity check failed — dest file missing: ${toForwardSlash(absDest)}`,
+    );
+  }
+  return fileContentHash(absDest);
 }
 
 /**
@@ -623,33 +631,40 @@ async function copyNonGlobEntry(
   projectRoot: string,
   skillOutputDir: string,
 ): Promise<{ relDest: string; absSource: string; absDest: string }> {
-  // `statSync` in a guard, not `existsSync`: `existsSync` swallows EACCES and
+  // A followed `stat` in a guard, not `existsSync`: `existsSync` swallows EACCES and
   // answers FALSE, so a source the process merely cannot REACH — one under a
   // directory it lacks permission to traverse — was reported as "does not exist".
   // For a `dist/` source that also appended `buildArtifactHint`, telling the
   // author to run a build that would not have helped: a confidently wrong
-  // diagnosis plus a confidently wrong remedy. Only ENOENT is absence; anything
-  // else is the filesystem refusing the path, and `attributed` at the call site
-  // names the entry.
-  let sourceStat;
-  try {
-    sourceStat = statSync(absoluteSource);
-  } catch (error) {
-    if ((error as { code?: string }).code !== 'ENOENT') throw error;
-    throw new Error(
-      `files: source '${entry.source}' does not exist (resolved to ${anchoredPath(absoluteSource, projectRoot)}).${buildArtifactHint(entry.source)}`,
-    );
-  }
-  if (sourceStat.isDirectory()) {
-    throw new Error(
-      `files: source '${entry.source}' is a directory; use a glob like '${entry.source}/**/*' to copy its contents.`,
-    );
-  }
+  // diagnosis plus a confidently wrong remedy. Only resolving to nothing is absence; anything
+  // else is the filesystem refusing the path, and `attributed` names the entry.
+  //
+  // The source's `stat` is guarded as well as its copy. Guarding the copy alone
+  // left a source under a directory the process cannot traverse escaping as a bare
+  // errno — and an EXPLICIT entry is the spelling that unambiguously says "ship
+  // this file", so the build owes its author an error that names it back. (The two
+  // deliberate errors below carry no errno, so `attributed` passes them through.)
+  //
+  // The source is crawled beneath the project root: its link chain is read by its
+  // text before the kernel follows it, and a chain VAT will not hand the kernel is
+  // a refusal `attributed` names, never "does not exist".
+  await attributed(entry, absoluteSource, projectRoot, () => {
+    const sourceStat = followedStatSync(absoluteSource, projectRoot);
+    if (sourceStat === undefined) {
+      throw packagingInputError(
+        `files: source '${entry.source}' does not exist (resolved to ${anchoredPath(absoluteSource, projectRoot)}).${buildArtifactHint(entry.source)}`,
+      );
+    }
+    if (sourceStat.isDirectory()) {
+      throw packagingInputError(
+        `files: source '${entry.source}' is a directory; use a glob like '${entry.source}/**/*' to copy its contents.`,
+      );
+    }
+  });
   // joinUnderRoot rejects a dest that escapes the skill output dir (absolute /
   // drive-letter / '..'), defense-in-depth beyond the schema refine.
   const absoluteDest = safePath.joinUnderRoot(skillOutputDir, entry.dest);
-  await mkdir(dirname(absoluteDest), { recursive: true });
-  await copyFile(absoluteSource, absoluteDest);
+  await copyEntryFile(entry, absoluteSource, { root: skillOutputDir, dest: absoluteDest }, projectRoot);
   return { relDest: normalizeRelPath(entry.dest), absSource: absoluteSource, absDest: absoluteDest };
 }
 
@@ -714,7 +729,7 @@ async function expandGlobEntry(
 ): Promise<GlobExpansion> {
   const remainder = globMagicRemainder(entry.source);
   if (hasParentTraversalSegment(remainder)) {
-    throw new Error(
+    throw packagingInputError(
       `files: source '${entry.source}' (glob) has a '..' segment in its glob portion ('${remainder}'); ` +
       `parent-directory traversal is not allowed after the static base.`,
     );
@@ -787,11 +802,11 @@ async function copyGlobEntry(
   } = await expandGlobEntry(entry, projectRoot);
 
   // Project-relative in both throws below: these messages are published verbatim
-  // as `failedSkills[].message` (see {@link anchoredPath}).
+  // as a `SKILL_PACKAGING_FAILED` finding's `message` (see {@link anchoredPath}).
   const reportedBase = anchoredPath(absoluteBase, projectRoot);
 
   if (allMatches.length === 0) {
-    throw new Error(
+    throw packagingInputError(
       `files: source '${entry.source}' (glob) matched no files under ${reportedBase} — has your build run?`,
     );
   }
@@ -801,7 +816,7 @@ async function copyGlobEntry(
   // a file, "all of them are never packaged" names the wrong cause and its
   // remediation ("declare an explicit source: entry") would not work if followed.
   if (matches.length === 0 && droppedRel.length === 0) {
-    throw new Error(
+    throw packagingInputError(
       `files: source '${entry.source}' (glob) matched ${allMatches.length} path(s) under ${reportedBase}, ` +
       `but none of them is a regular file (a symlink to a directory, a FIFO, a socket or a device node ` +
       `cannot be packaged): ${nonRegularRel.join(', ')}. ` +
@@ -822,7 +837,7 @@ async function copyGlobEntry(
       ? ''
       : ` A further ${nonRegularRel.length.toString()} match(es) are not regular files and could not ` +
         `be packaged either: ${nonRegularRel.join(', ')}.`;
-    throw new Error(
+    throw packagingInputError(
       `files: source '${entry.source}' (glob) matched ${allMatches.length} file(s) under ${reportedBase}, ` +
       `but all of them are never packaged into a skill bundle: ${droppedRel.join(', ')}. ` +
       // NOT "widen the glob": the filter is on basename and applies at any width, so a
@@ -841,7 +856,8 @@ async function copyGlobEntry(
   // verifyDestSet diffs the on-disk subtree against.
   const rels: string[] = [];
 
-  for (const rel of matches) {
+  // In order: bundle writes, where the first failure names the first match.
+  await forEachInOrder(matches, async (rel) => {
     // joinUnderRoot asserts each matched file stays under absoluteBase (read) and
     // that the rebased dest stays under the skill output dir (write) — H1/H2
     // defense-in-depth against a traversal that slipped past earlier guards.
@@ -860,15 +876,12 @@ async function copyGlobEntry(
     // the author DECLARED and expects in the bundle, so shipping silently without
     // it would change the artifact behind their back. A non-regular match can
     // never be packaged at all, which is why that one degrades instead.
-    await attributed(entry, absSource, projectRoot, async () => {
-      await mkdir(dirname(absDest), { recursive: true });
-      await copyFile(absSource, absDest);
-    });
+    await copyEntryFile(entry, absSource, { root: skillOutputDir, dest: absDest }, projectRoot);
 
     copied.push(relDest);
     pairs.push({ absSource, absDest });
     rels.push(toForwardSlash(rel));
-  }
+  });
 
   return { copied, pairs, rels, dropped, skipped: nonRegular };
 }
@@ -988,8 +1001,9 @@ export async function collectPreBuildGlobFindings(
   const allRefused: AllRefusedGlobEntry[] = [];
   const unmatched: UnmatchedGlobEntry[] = [];
   const skipped: DroppedGlobMatch[] = [];
-  for (const entry of filesConfig) {
-    if (!isGlob(entry.source)) continue;
+  // In order: `expandGlobEntry`'s throws must fire in `copyGlobEntry`'s order.
+  await forEachInOrder(filesConfig, async (entry) => {
+    if (!isGlob(entry.source)) return;
     // A '..' segment in the magic remainder is a malformed pattern that
     // `expandGlobEntry` refuses to expand. It is the BUILD's error to raise (and
     // `copyGlobEntry` does); a pre-build gate asking "what would this do?" must not
@@ -1003,7 +1017,7 @@ export async function collectPreBuildGlobFindings(
     // honest fix is a distinct code for a wrong-shaped pattern, or rejecting the
     // pattern in `SkillFileEntrySchema.source` the way `dest` already is — at which
     // point this line becomes defense-in-depth against a config that cannot load.
-    if (hasParentTraversalSegment(globMagicRemainder(entry.source))) continue;
+    if (hasParentTraversalSegment(globMagicRemainder(entry.source))) return;
     const expansion = await expandGlobEntry(entry, projectRoot);
     const absBase = toForwardSlash(expansion.absoluteBase);
     // The two predicates below are `copyGlobEntry`'s two throws, in its order and
@@ -1014,7 +1028,7 @@ export async function collectPreBuildGlobFindings(
     // exactly the misdirection the second error was written to avoid.
     if (expansion.allMatches.length === 0) {
       unmatched.push({ source: entry.source, absBase });
-      continue;
+      return;
     }
     // Reported for EVERY entry that has them, including ones that go on to be
     // `allRefused` below — unlike the per-file drops, which that verdict
@@ -1026,7 +1040,7 @@ export async function collectPreBuildGlobFindings(
       // Matched only non-files. `allRefused` would name the never-package list as
       // the cause, which is not what happened, and its remediation would not work.
       // The `skipped` findings just pushed carry this entry on their own.
-      continue;
+      return;
     }
     if (expansion.kept.length === 0) {
       // Supersedes this entry's per-file drops rather than adding to them: the
@@ -1038,10 +1052,10 @@ export async function collectPreBuildGlobFindings(
         absBase,
         absRefused: expansion.dropped.map((d) => d.absFile),
       });
-      continue;
+      return;
     }
     dropped.push(...expansion.dropped.filter((d) => !shippedDests.has(normalizeRelPath(d.dest))));
-  }
+  });
   return { dropped, allRefused, unmatched, skipped };
 }
 
@@ -1209,7 +1223,7 @@ function assertFileShapedDest(entry: SkillFileEntry): void {
   let base = normalized;
   while (base.endsWith('/')) base = base.slice(0, -1);
   const suggested = `${base}/${entry.source.slice(entry.source.lastIndexOf('/') + 1)}`;
-  throw new Error(
+  throw packagingInputError(
     `files: dest '${entry.dest}' names a directory, but a non-glob entry copies ONE file to ONE path. ` +
     `Name the output file itself (e.g. dest: '${normalizeRelPath(suggested)}'), ` +
     `or use a glob source to copy a whole subtree.`,
@@ -1251,18 +1265,7 @@ async function applyNonGlobFileEntry(
     };
   }
 
-  // The WHOLE entry's filesystem work is guarded, not just its copy. Guarding the
-  // copy alone left the source `statSync` outside — so a source under a directory
-  // the process cannot traverse still escaped as a bare errno, which is the same
-  // defect one call earlier. An EXPLICIT entry is the spelling that unambiguously
-  // says "ship this file", so a bare errno here is if anything worse than on a
-  // glob: the author named the path, and the build owes them an error that names
-  // it back. (`copyNonGlobEntry`'s own deliberate errors — "does not exist", "is a
-  // directory" — carry no errno, so `attributed` passes them through untouched.)
-  const { relDest, absSource, absDest } = await attributed(
-    fileEntry, absoluteSource, opts.projectRoot,
-    () => copyNonGlobEntry(fileEntry, absoluteSource, opts.projectRoot, opts.skillOutputDir),
-  );
+  const { relDest, absSource, absDest } = await copyNonGlobEntry(fileEntry, absoluteSource, opts.projectRoot, opts.skillOutputDir);
   return {
     dests: [relDest],
     dropped: [],
@@ -1298,17 +1301,15 @@ async function runDeferredIntegrity(
   skillOutputDir: string,
   projectRoot: string,
 ): Promise<void> {
-  for (const { entry, pairs, rels } of pending) {
-    // Through the same attribution point as the copy. `verifyFilesIntegrity`
-    // hashes both sides, so an unreadable source or dest surfaces here as a raw
-    // errno carrying an absolute path and no entry name — the same defect the
-    // copy loop had, in the one lane that had not been routed through the guard.
+  // In order: the first refusal is named in config order.
+  await forEachInOrder(pending, async ({ entry, pairs, rels }) => {
     // Anchored at the ENTRY, not at `pairs[0]`: any of the entry's files can be
     // the one that failed, and naming the first while the errno names another is
-    // worse than naming none. The errno itself carries the offending path.
-    await attributed(entry, safePath.resolve(safePath.join(projectRoot, entry.source)), projectRoot,
-      async () => { verifyFilesIntegrity(pairs); }, 'verified');
-    if (rels === undefined) continue;
+    // worse than naming none. The errno itself carries the offending path, and
+    // each read is coded by the tree it touched (see `verifyFilesIntegrity`).
+    const subject = entrySubject(entry, safePath.resolve(safePath.join(projectRoot, entry.source)), projectRoot);
+    verifyFilesIntegrity(subject, pairs);
+    if (rels === undefined) return;
 
     const destRoot = normalizeRelPath(entry.dest);
     const expected = new Set(rels);
@@ -1316,12 +1317,13 @@ async function runDeferredIntegrity(
       const rel = relUnderDest(destRoot, dest);
       if (rel !== null && rel !== '') expected.add(rel);
     }
-    await verifyDestSet(
-      safePath.joinUnderRoot(skillOutputDir, entry.dest),
-      [...expected],
-      entry.source,
+    const destDir = safePath.joinUnderRoot(skillOutputDir, entry.dest);
+    // Lists the bundle the build just wrote: a refusal is the output's.
+    await withFsFault(
+      { side: 'destination', shapeFromSource: true, action: `verify ${subject} in the bundle` },
+      () => verifyDestSet(destDir, [...expected], entry.source),
     );
-  }
+  });
 }
 
 export async function applyFilesConfig(opts: ApplyFilesConfigOptions): Promise<AppliedFilesConfig> {
@@ -1331,7 +1333,8 @@ export async function applyFilesConfig(opts: ApplyFilesConfigOptions): Promise<A
   const skipped: DroppedGlobMatch[] = [];
   const pending: PendingIntegrity[] = [];
 
-  for (const fileEntry of opts.filesConfig) {
+  // In order: ordered writes — a later entry may overwrite an earlier dest, and the last one wins.
+  await forEachInOrder(opts.filesConfig, async (fileEntry) => {
     const outcome = isGlob(fileEntry.source)
       ? await applyGlobFileEntry(fileEntry, opts)
       : await applyNonGlobFileEntry(fileEntry, opts, bundledFileSet);
@@ -1339,7 +1342,7 @@ export async function applyFilesConfig(opts: ApplyFilesConfigOptions): Promise<A
     dropped.push(...outcome.dropped);
     skipped.push(...outcome.skipped);
     if (outcome.pending) pending.push(outcome.pending);
-  }
+  });
 
   await runDeferredIntegrity(pending, dests, opts.skillOutputDir, opts.projectRoot);
 

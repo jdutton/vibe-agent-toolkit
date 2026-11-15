@@ -5,11 +5,12 @@
  * all-MiniLM-L6-v2 model. First run downloads model files (~23MB, int8-quantized).
  */
 
-import { describe, expect, it } from 'vitest';
+import { atLeastTierTimeout } from '@vibe-agent-toolkit/utils/testing';
+import { describe, expect, inject, it } from 'vitest';
 
 import { OnnxEmbeddingProvider } from '../../src/embedding-providers/onnx-embedding-provider.js';
 
-import { assertBatchEmbedding } from './embedding-test-helpers.js';
+import { assertBatchEmbedding, assertUnitMagnitude } from './embedding-test-helpers.js';
 
 /**
  * Cosine similarity between two normalized vectors.
@@ -32,7 +33,7 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
       expect(embedding).toHaveLength(384);
       expect(embedding.every((n) => typeof n === 'number')).toBe(true);
     },
-    120_000,
+    atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 
   it(
@@ -40,7 +41,7 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
     async () => {
       await assertBatchEmbedding(provider, 384);
     },
-    120_000,
+    atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 
   it(
@@ -48,13 +49,9 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
     async () => {
       const embedding = await provider.embed('Test embedding normalization');
 
-      const magnitude = Math.sqrt(
-        embedding.reduce((sum, val) => sum + val * val, 0),
-      );
-
-      expect(magnitude).toBeCloseTo(1, 2);
+      assertUnitMagnitude(embedding);
     },
-    120_000,
+    atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 
   it(
@@ -65,7 +62,7 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
 
       expect(embedding1).not.toEqual(embedding2);
     },
-    120_000,
+    atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 
   it(
@@ -82,7 +79,7 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
       expect(similarityCatKitten).toBeGreaterThan(similarityCatSpaceship);
       expect(similarityCatKitten).toBeGreaterThan(0.5);
     },
-    120_000,
+    atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 
   it(
@@ -94,7 +91,7 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
 
       expect(embedding1).toEqual(embedding2);
     },
-    120_000,
+    atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 
   it(
@@ -104,7 +101,7 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
 
       expect(embeddings).toEqual([]);
     },
-    120_000,
+    atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 
   it(
@@ -118,6 +115,6 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
       expect(embedding).toHaveLength(384);
       expect(embedding.every((n) => typeof n === 'number')).toBe(true);
     },
-    120_000,
+    atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 });

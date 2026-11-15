@@ -271,7 +271,7 @@ Content one
 Content two`,
       );
 
-      const resource = loadMarkdownResource(testFile);
+      const resource = loadMarkdownResource(testFile, testDir);
 
       expect(resource.frontmatter).toEqual({ title: 'Test' });
       expect(resource.fragments).toHaveLength(2);
@@ -286,10 +286,10 @@ Content two`,
       writeFileSync(testFile, '## Fragment\nContent');
 
       // First load
-      const resource1 = loadMarkdownResource(testFile);
+      const resource1 = loadMarkdownResource(testFile, testDir);
 
       // Second load - should return cached version
-      const resource2 = loadMarkdownResource(testFile);
+      const resource2 = loadMarkdownResource(testFile, testDir);
 
       expect(resource1).toBe(resource2); // Same object reference
 

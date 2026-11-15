@@ -14,7 +14,7 @@ Create type-safe, version-controlled prompt libraries for AI agents using compil
 
 ## What This Guide Covers
 
-- Building conversational agents from fragments
+- Building conversational prompts from fragments
 - Multi-agent systems with dynamic routing
 - Dynamic prompt composition
 - Runtime fragment selection

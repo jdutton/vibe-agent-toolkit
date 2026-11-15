@@ -15,10 +15,8 @@
  * the walker.
  */
 
-import { existsSync } from 'node:fs';
-
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { issueLocation, safePath, transientRefusalClause } from '@vibe-agent-toolkit/utils';
+import { everywhere, issueLocation, pathPresent, safePath, transientRefusalClause } from '@vibe-agent-toolkit/utils';
 import { crawlDirectorySync, type DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 
 import { normalizeRelPath } from '../files-config.js';
@@ -53,13 +51,18 @@ const INCLUDE_GLOBS = toAnyDepthGlobs(AGENT_INSTRUCTION_FILE_PATTERNS);
  *   silently inherits `[]` re-opens the contradiction for the population it
  *   governs. Matching is EXACT membership, never a prefix test — a directory-ish
  *   dest must not launder its whole subtree (see {@link explicitFilesConfigDests}).
+ * @param outputs What the calling verb writes, the crawl's one declaration of which side a
+ *   fault is on: `[rootDir]` when the caller scans the output it just wrote (the packager),
+ *   `[]` for a tree it only examines. Required: only the caller knows.
  */
 export function detectPackagedAgentInstructionFiles(
   rootDir: string,
   locationRoot: string,
   declaredDests: readonly string[],
+  outputs: readonly string[],
 ): ValidationIssue[] {
-  if (!existsSync(rootDir)) return [];
+  // `rootDir` is the caller's own tree (the output it wrote, or the one it examines): its own `within`.
+  if (!pathPresent(rootDir, { follow: rootDir }, everywhere(outputs.includes(rootDir) ? 'destination' : 'source'), 'probe')) return [];
 
   const declared = new Set(declaredDests.map((d) => normalizeRelPath(d)));
 
@@ -84,6 +87,7 @@ export function detectPackagedAgentInstructionFiles(
     filesOnly: true,
     respectGitignore: false,
     unreadable: { degrade: (refusal) => refusals.push(refusal) },
+    outputs,
   });
 
   const issues: ValidationIssue[] = [];

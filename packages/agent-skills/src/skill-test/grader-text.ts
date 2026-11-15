@@ -24,7 +24,7 @@
  * - **Bidi controls and invisible non-spelling characters become a space too.**
  *   Stopping at U+009F left them alive, and they are not decoration: one U+202E
  *   (RIGHT-TO-LEFT OVERRIDE) in a friction `message` renders the REST of vat's own
- *   `[low] path-assumption: …` stderr line right-to-left, so the grader repaints
+ *   `[info] path-assumption: …` stderr line right-to-left, so the grader repaints
  *   text it did not write. `JSON.stringify` only escapes below U+0020, so the same
  *   code point also survives verbatim into `baseline.json` and `friction.json`. The
  *   invisible members (U+200B, U+2060…) are the quieter half: they let a grader
@@ -145,7 +145,7 @@ const LINE_FEED = 0x0a;
  * (a) **It is a bidi or shaping control** — it changes how the text AROUND it is
  *     ordered or directed, which is the forgery this module exists to stop. U+202E
  *     is the verified case: it renders the REST of vat's own
- *     `[low] path-assumption: …` stderr line right-to-left.
+ *     `[info] path-assumption: …` stderr line right-to-left.
  * (b) **It is invisible AND spells nothing** — no word in any script is written with
  *     it, so removing it cannot change what a quotation says, while keeping it lets
  *     a grader hide a difference from a reader and from every downstream string

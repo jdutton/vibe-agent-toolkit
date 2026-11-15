@@ -30,9 +30,9 @@
  */
 
 import type { Dirent } from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 
-import { compareCodeUnits, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, forEachInOrder, fsFaultOf, isPathAbsentError, requireFollowedStat, safePath } from '@vibe-agent-toolkit/utils';
 
 import { isWithinProject } from '../utils.js';
 
@@ -53,10 +53,15 @@ const RESERVED_FILENAMES: ReadonlySet<string> = new Set(['index.md', 'log.md']);
  * what went wrong — absent, not a directory, not permitted — and the
  * bundle-relative path says where.
  *
+ * The errno is read down the `cause` chain (`fsFaultOf`), so a VAT wrapper
+ * (`FsFaultError`, code `FS_FAULT`) still names the errno beneath it.
+ *
  * @param error - Whatever the filesystem threw
  * @returns The errno string, or a neutral word when there is none
  */
 export function fsErrorCode(error: unknown): string {
+  const errno = fsFaultOf(error)?.errno;
+  if (errno !== undefined) return errno;
   if (error instanceof Error && 'code' in error && typeof error.code === 'string') {
     return error.code;
   }
@@ -161,11 +166,14 @@ type SymlinkVerdict = 'member' | 'outside' | 'dangling' | 'not-a-file' | { unrea
  */
 async function classifySymlink(root: string, candidate: string): Promise<SymlinkVerdict> {
   try {
-    if (!(await stat(candidate)).isFile()) return 'not-a-file';
+    // The link's chain is read beneath the bundle root before the kernel follows it
+    // (`link-following.ts`).
+    if (!(await requireFollowedStat(candidate, root)).isFile()) return 'not-a-file';
   } catch (error) {
     // No target at all: nothing to pack, and nothing to parse either.
     if (isPathAbsentError(error)) return 'dangling';
-    // The OS would not say what the link points at (ELOOP, EACCES, EIO…).
+    // The OS would not say what the link points at (ELOOP, EACCES, EIO…), or VAT would
+    // not hand the kernel a chain through a network path (`LINK_CHAIN_REFUSED`).
     // That is not "nothing there", and the caller records it as not assessed.
     return { unreadable: fsErrorCode(error) };
   }
@@ -263,7 +271,8 @@ async function walkInto(root: string, dir: string, found: OkfBundleFiles): Promi
     return;
   }
 
-  for (const entry of entries) {
+  // In order: every entry pushes into the shared `found` accumulators.
+  await forEachInOrder(entries, async (entry) => {
     const absolute = safePath.join(dir, entry.name);
 
     // The link decision, on this binding, before the type test: a linked
@@ -271,14 +280,14 @@ async function walkInto(root: string, dir: string, found: OkfBundleFiles): Promi
     // {@link recordMarkdownEntry}, which classifies its target.
     if (entry.isSymbolicLink()) {
       if (isMarkdownFilename(entry.name)) await recordMarkdownEntry(root, absolute, entry, found);
-      continue;
+      return;
     }
     if (entry.isDirectory()) {
       await walkInto(root, absolute, found);
     } else if (isMarkdownFilename(entry.name)) {
       await recordMarkdownEntry(root, absolute, entry, found);
     }
-  }
+  });
 }
 
 /**

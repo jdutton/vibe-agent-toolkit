@@ -12,7 +12,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { createSymlink, normalizedTmpdir, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { createSymlink, normalizedTmpdir, normalizePath, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { fragmentIndex, validateLink } from '../../src/link-validator.js';
@@ -40,8 +41,8 @@ async function setupGitProject(tempDir: string): Promise<{
   );
 
   // Create directory structure
-  fs.mkdirSync(safePath.join(projectRoot, 'docs'));
-  fs.mkdirSync(safePath.join(projectRoot, 'ignored'));
+  mkdirSyncReal(safePath.join(projectRoot, 'docs'));
+  mkdirSyncReal(safePath.join(projectRoot, 'ignored'));
 
   // Create files
   const sourceFile = safePath.join(projectRoot, 'docs', 'guide.md');
@@ -127,7 +128,7 @@ describe('isWithinProject', () => {
     // mount), isWithinProject must canonicalize BOTH sides. Otherwise a file
     // legitimately inside the project gets false-flagged as outside, surfacing
     // in resolveLocalHref as a bogus absolute_escapes_root for leading-/ links.
-    const realRoot = fs.realpathSync(suite.tempDir);
+    const realRoot = normalizePath(suite.tempDir, { within: suite.tempDir });
     const symlinkRoot = realRoot + '-symlink';
     createSymlink(cap, realRoot, symlinkRoot);
     try {

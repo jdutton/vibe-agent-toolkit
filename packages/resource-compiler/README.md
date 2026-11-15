@@ -133,12 +133,16 @@ Create a post-build script using the provided cross-platform utility:
 // scripts/post-build.ts
 import { createPostBuildScript } from '@vibe-agent-toolkit/resource-compiler/utils';
 
-createPostBuildScript({
+await createPostBuildScript({
   generatedDir: 'generated',
   distDir: 'dist',
   verbose: true,
 });
 ```
+
+The copy goes into the target (`dist/generated`) and never removes anything there: a file the
+source holds is written over, anything else is left alone. A directory the source also holds —
+the target itself included — takes the source directory's permission bits, made owner-writable.
 
 Update `package.json`:
 
@@ -159,7 +163,7 @@ For more control, use the `copyResources` utility directly:
 // scripts/post-build.ts
 import { copyResources } from '@vibe-agent-toolkit/resource-compiler/utils';
 
-copyResources({
+await copyResources({
   sourceDir: 'generated',
   targetDir: 'dist/generated',
   verbose: true,
@@ -181,8 +185,8 @@ export default {
   plugins: [
     {
       name: 'copy-resources',
-      closeBundle() {
-        copyResources({
+      async closeBundle() {
+        await copyResources({
           sourceDir: 'generated',
           targetDir: 'dist/generated',
         });
@@ -417,15 +421,15 @@ const result = program.emit(
 ```typescript
 import { copyResources, createPostBuildScript } from '@vibe-agent-toolkit/resource-compiler/utils';
 
-// Copy resources with options
-copyResources({
+// Copy resources with options (copied in; nothing in the target is removed)
+await copyResources({
   sourceDir: 'generated',
   targetDir: 'dist/generated',
   verbose: true,
 });
 
 // Create a complete post-build script
-createPostBuildScript({
+await createPostBuildScript({
   generatedDir: 'generated',
   distDir: 'dist',
   verbose: true,
@@ -437,7 +441,7 @@ createPostBuildScript({
 ```typescript
 interface CopyResourcesOptions {
   sourceDir: string;   // Source directory with generated files
-  targetDir: string;   // Target directory in dist
+  targetDir: string;   // Target directory in dist (copied into; nothing there is removed)
   verbose?: boolean;   // Enable logging (default: false)
 }
 ```

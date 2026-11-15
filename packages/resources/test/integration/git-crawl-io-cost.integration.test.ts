@@ -81,7 +81,16 @@ import {
 import {
   runGitOrThrow,
 } from '@vibe-agent-toolkit/utils/git';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { atLeastTierTimeout } from '@vibe-agent-toolkit/utils/testing';
+import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
+
+/**
+ * Every way a file's bytes are read. A read that goes through a handle
+ * (`readDecodableBytes` opens, `fstat`s and reads the handle) shows up only as
+ * its `open` — the counter does not see `FileHandle` methods — so an `open` is a
+ * read here, or a per-path read would vanish from both cases that count them.
+ */
+const READ_METHODS = ['fs.readFileSync', 'fs.promises.readFile', 'fs.openSync', 'fs.promises.open'] as const;
 
 /**
  * Files the fixture starts with.
@@ -233,7 +242,7 @@ function driverSource(mode: DriverMode): string {
   const resources = pathToFileURL(RESOURCES_DIST).href;
   const utils = pathToFileURL(UTILS_GIT_DIST).href;
   return [
-    `import { GitCrawlSource, FilesystemExtentContributor, ProjectionBuilder, RunContentCache } from ${JSON.stringify(resources)};`,
+    `import { GitCrawlSource, DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor, ProjectionBuilder, RunContentCache } from ${JSON.stringify(resources)};`,
     `import { GitTracker } from ${JSON.stringify(utils)};`,
     `const root = ${JSON.stringify(toForwardSlash(fixtureRoot))};`,
     `const mode = ${JSON.stringify(mode)};`,
@@ -241,12 +250,12 @@ function driverSource(mode: DriverMode): string {
     // The import-only arm still loads the whole graph above — ESM imports are
     // not elided for being unused — which is exactly what makes it a baseline.
     "if (mode === 'enumerate') {",
-    '  paths = (await new GitCrawlSource(root).enumerate()).length;',
+    "  paths = (await new GitCrawlSource(root, []).enumerate()).length;",
     "} else if (mode === 'extent') {",
     '  const tracker = new GitTracker(root);',
     '  await tracker.initialize({ includeUntracked: true });',
     '  const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache() });',
-    '  const contributor = new FilesystemExtentContributor((r) => new GitCrawlSource(r));',
+    "  const contributor = new FilesystemExtentContributor((r) => new GitCrawlSource(r, []), DEFAULT_CONTENT_DEMAND);",
     '  paths = (await contributor.contribute(builder.base(), null)).realizations.length;',
     '}',
     'process.stdout.write(`PATHS=${paths}\\n`);',
@@ -424,7 +433,7 @@ beforeAll(() => {
 
   grownCrawl = netOfImports(measure('enumerate'), importOnly);
   grownExtent = netOfImports(measure('extent'), importOnly);
-}, 300_000);
+}, atLeastTierTimeout(inject('tierHookTimeout'), 300_000));
 
 afterAll(() => {
   if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true });
@@ -480,7 +489,7 @@ describe('GitCrawlSource.enumerate costs a constant, not a per-file toll', () =>
   it('never stats or reads a file per path', () => {
     // Named explicitly, because "the total did not move" would also hold for an
     // implementation that traded 900 stats for 900 reads.
-    for (const method of [LSTAT, 'fs.statSync', 'fs.readFileSync', 'fs.promises.readFile']) {
+    for (const method of [LSTAT, 'fs.statSync', ...READ_METHODS]) {
       expect(grownCrawl.perMethod.get(method) ?? 0, `${method}: ${describeMeasurement(grownCrawl)}`)
         .toBeLessThan(BASE_FILE_COUNT / 4);
     }
@@ -552,8 +561,7 @@ describe('the extent built on the git source has not inherited its cost model', 
     // The negative control for the two cases above: they must not be passing
     // because the extent silently stopped doing per-path work altogether.
     const reads = (measurement: Measurement): number =>
-      (measurement.perMethod.get('fs.promises.readFile') ?? 0)
-      + (measurement.perMethod.get('fs.readFileSync') ?? 0);
+      READ_METHODS.reduce((sum, method) => sum + (measurement.perMethod.get(method) ?? 0), 0);
 
     expect(reads(grownExtent) - reads(smallExtent), describeMeasurement(grownExtent))
       .toBeGreaterThanOrEqual(GROWTH_FILE_COUNT);

@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { packageSkill } from '../../src/skill-packager.js';
+import { packageInPlace } from '../test-helpers.js';
 
 import { buildExampleSkill } from './packager-test-helpers.js';
 
@@ -37,7 +37,6 @@ describe('packager rewrites frontmatter URI-refs with body parity (Gap 3)', () =
     writeFileSync(
       safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'),
       [
-        'version: 1',
         'resources:',
         '  collections:',
         '    specs:',
@@ -116,7 +115,6 @@ function writeProjectWithSchema(schemaFileContent: string | undefined): string {
   writeFileSync(
     safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'),
     [
-      'version: 1',
       'resources:',
       '  collections:',
       '    specs:',
@@ -143,7 +141,8 @@ describe('packager reports a collection schema it could not load', () => {
   ])('carries a FRONTMATTER_SCHEMA_ERROR issue naming the schema when it %s', async (_case, content) => {
     const projectRoot = writeProjectWithSchema(content);
     const skillPath = safePath.join(projectRoot, 'skills', 'example', 'SKILL.md');
-    const result = await packageSkill(skillPath, {
+    // In place: the finding is the subject; `packageSkill` lands only a package that passed its checks.
+    const result = await packageInPlace(skillPath, {
       outputPath: safePath.join(projectRoot, 'dist', 'example'),
       formats: ['directory'],
     });

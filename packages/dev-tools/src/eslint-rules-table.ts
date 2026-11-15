@@ -19,6 +19,12 @@ export interface RuleDocs {
   readonly subpath?: string;
   readonly recommended: boolean;
   readonly recommendedSeverity?: 'error' | 'warn';
+  /**
+   * How far a fixable rule's autofix reaches, when not every call: `'statement'` autofixes a
+   * call only where its result is discarded, `'suggest'` autofixes no call (only its own dead
+   * import). Set by `eslint-rule-factory`; absent means every report is autofixed.
+   */
+  readonly fix?: 'statement' | 'suggest';
 }
 
 export interface RuleLike {
@@ -56,10 +62,22 @@ function compareCategories(a: string, b: string): number {
   return rankA - rankB || nameA.localeCompare(nameB);
 }
 
+const FIX_CELL = {
+  always: '✓',
+  statement: '✓ result unused, else suggestion',
+  suggest: 'suggestion',
+  none: '',
+} as const;
+
+/** Does the rule autofix calls — not merely its own dead import? */
+function autofixesCalls(rule: RuleLike): boolean {
+  return Boolean(rule.meta.fixable) && rule.meta.docs.fix !== 'suggest';
+}
+
 function row(name: string, rule: RuleLike): string {
   const { docs } = rule.meta;
   const subpath = docs.subpath ? `\`${docs.subpath}\`` : '—';
-  const fix = rule.meta.fixable ? '✓' : '';
+  const fix = FIX_CELL[docs.fix ?? (rule.meta.fixable ? 'always' : 'none')];
   const recommended = docs.recommended && docs.recommendedSeverity ? `\`${docs.recommendedSeverity}\`` : '—';
   return `| \`${name}\` | ${docs.bans ?? docs.description} | ${docs.useInstead ?? '—'} | ${subpath} | ${fix} | ${recommended} |`;
 }
@@ -78,7 +96,7 @@ export function renderEslintRulesTable(plugin: PluginLike): string[] {
   const recommended = entries.filter(([, rule]) => rule.meta.docs.recommended);
   const errors = recommended.filter(([, rule]) => rule.meta.docs.recommendedSeverity === 'error').length;
   const warns = recommended.length - errors;
-  const fixable = entries.filter(([, rule]) => rule.meta.fixable).length;
+  const fixable = entries.filter(([, rule]) => autofixesCalls(rule)).length;
 
   const lines = [
     `${entries.length} rules; ${fixable} auto-fix. \`configs.recommended\` enables ${recommended.length} of them ` +

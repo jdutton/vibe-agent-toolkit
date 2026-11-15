@@ -9,7 +9,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
@@ -19,6 +19,7 @@ import {
   readEnvelope,
   type ReportEnvelope,
 } from './envelope/envelope.js';
+import { PRIVATE_DIRECTORY_MODE, writePrivateFile } from './harness/arm-dirs.js';
 
 /** How many characters of a commit or fingerprint appear in a filename. */
 const SHORT_ID_LENGTH = 8;
@@ -51,7 +52,7 @@ function slug(value: string): string {
  * @param value - Raw value
  * @returns A readable, collision-free rendering
  */
-function distinctSlug(value: string): string {
+export function distinctSlug(value: string): string {
   const digest = createHash('sha256').update(value, 'utf8').digest('hex').slice(0, SHORT_ID_LENGTH);
   return `${slug(value)}-${digest}`;
 }
@@ -81,24 +82,38 @@ function subjectVersionTag(coordinate: Coordinate): string {
 /**
  * The short identifier for axis C.
  *
+ * A build with no commit (`dist:`) is named by its closure digest (see
+ * `InstrumentVersion.closure`): two `dist:` builds of one version are two
+ * instruments, and a name keyed on the version alone would let the second
+ * report silently overwrite the first. An `npx:` build's closure is its
+ * install's, so it is named the same way.
+ *
  * A dirty build's identity is NOT its commit — the bytes measured were not the
- * bytes at that commit — and unlike a dirty *subject* there is no fingerprint to
- * fall back on, because what ran is the built output rather than the checkout
- * (see `InstrumentVersion.dirty`). So a dirty instrument is pinned by *when it
- * was observed* instead. That is weaker than an identity and it is meant to be:
- * it cannot say two dirty runs measured the same build, but it does guarantee
- * that a second dirty run never silently overwrites the first, which is the
- * failure this whole naming scheme exists to prevent.
+ * bytes at that commit. A dirty instrument is pinned by *when it was observed*,
+ * which is weaker than an identity and meant to be: it cannot say two dirty runs
+ * measured the same build, but it does guarantee that a second dirty run never
+ * silently overwrites the first, which is the failure this whole naming scheme
+ * exists to prevent.
  *
  * @param envelope - The report being named
  * @returns A short, stable string naming the instrument build
  */
 function instrumentTag(envelope: ReportEnvelope<unknown>): string {
   const instrument = envelope.coordinate.instrument;
-  const build =
-    instrument.commit === null ? 'release' : instrument.commit.slice(0, SHORT_ID_LENGTH);
+  const build = buildTag(instrument.commit, instrument.closure);
   const base = `vat-${slug(instrument.version)}-${build}`;
   return instrument.dirty === true ? `${base}-dirty-${slug(envelope.capturedAt)}` : base;
+}
+
+/**
+ * The part of an instrument's name that says which build it was.
+ *
+ * @param commit - The build's commit, if it came from a checkout
+ * @param closure - The build's closure digest
+ * @returns A short commit, else a short closure
+ */
+function buildTag(commit: string | null, closure: string): string {
+  return commit === null ? `closure-${closure.slice(0, SHORT_ID_LENGTH)}` : commit.slice(0, SHORT_ID_LENGTH);
 }
 
 /**
@@ -155,7 +170,7 @@ export function reportFileName(envelope: ReportEnvelope<unknown>): string {
 }
 
 /**
- * Write a report into a directory, creating it if needed.
+ * Write a report into a directory, creating it owner-only if needed.
  *
  * @param directory - Where reports live
  * @param envelope - The report to store
@@ -176,9 +191,11 @@ export async function writeReport(
       `Refusing to write a report this build could not read back — ${readable.refusal}`,
     );
   }
-  await mkdir(directory, { recursive: true });
+  // Every directory made here (an ab run's `pair-N/<arm>`) is owner-only, as the `--out` above it is.
+  await mkdir(directory, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
   const target = safePath.join(directory, reportFileName(envelope));
-  await writeFile(target, `${JSON.stringify(envelope, null, 2)}\n`, 'utf-8');
+  // Owner-only and never through a link: a report names the developer's paths.
+  writePrivateFile(target, `${JSON.stringify(envelope, null, 2)}\n`);
   return target;
 }
 

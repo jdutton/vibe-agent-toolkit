@@ -1,14 +1,15 @@
 import { promises as fs } from 'node:fs';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
+import { countWork, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { __resetWorkCountersForTest, removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { computeContentKey, type ParsableContent } from '../src/content-key.js';
 import { parseHtmlContent } from '../src/html-link-parser.js';
 import { parseMarkdownContent } from '../src/link-parser.js';
 import type { DocumentParserKind } from '../src/mime-type.js';
-import { ParseCache, parseKeyed } from '../src/parse-cache.js';
+import { ParseCache } from '../src/parse-cache.js';
+import { parseContentCached } from '../src/parse-dispatcher.js';
 import {
   __readParseTimingSnapshot,
   __setParseTimingForTest,
@@ -20,6 +21,7 @@ import {
   type ParseThreadTiming,
   type ParseTimingDump,
   type ParseTimingKind,
+  recordReuseCheck,
   recordTierPass,
   TIER_PASS_NAMES,
   TierPass,
@@ -115,12 +117,11 @@ function parseHtmlSample(times: number): void {
 }
 
 /**
- * Key a string for {@link parseKeyed}, exactly as `readContentWithKey` would.
+ * Key a string exactly as `readContentWithKey` would.
  *
- * Returns the NARROWED `ParsableContent` rather than a bare `KeyedContent`:
- * `parseKeyed` refuses a `none` blob at the type level, and the wide type made
- * every call site here an error nothing surfaced (test files are not
- * typechecked — `tsconfig.test.json` is broken).
+ * Returns the NARROWED `ParsableContent` rather than a bare `KeyedContent`: no
+ * parser routes a `none` blob, and the wide type made every call site here an
+ * error nothing surfaced (test files are not typechecked).
  */
 function keyFor(content: string, parserKind: DocumentParserKind = 'markdown'): ParsableContent {
   const bytes = Buffer.from(content, 'utf-8');
@@ -146,6 +147,14 @@ function groupOf(thread: ParseThreadTiming, kind: string): ParseTimingKind {
   const group = thread.kinds.find((one) => one.kind === kind);
   if (group === undefined) throw new Error(`dump carries no '${kind}' group`);
   return group;
+}
+
+/**
+ * One bounded parse of `keyed` through `cache` — the dispatcher's cache front,
+ * which counts the hit or miss on THIS thread; the parse itself runs in a worker.
+ */
+function parseKeyed(keyed: ParsableContent, cache: ParseCache): Promise<unknown> {
+  return parseContentCached(keyed.content, keyed.parserKind, { dispatcher: undefined, cache });
 }
 
 /** Every pass row's `calls` for one kind, in dump order. Excludes the total. */
@@ -191,8 +200,8 @@ function markdownCalls(count: number): number[] {
 /**
  * Parse one document twice through `cache`, and snapshot only the SECOND parse.
  *
- * The accumulators are zeroed between the two calls, so what comes back
- * describes a warm hit and nothing else. Without that reset the cold parse's
+ * The accumulators and the work counters are zeroed between the two calls, so
+ * what comes back describes a warm hit and nothing else. Without that reset the cold parse's
  * passes and its cache write are still in the counters, and a test asserting
  * "a hit charges no parse" would be asserting against the cold run's numbers.
  *
@@ -207,6 +216,7 @@ async function snapshotOfWarmParse(
   const keyed = keyFor(SAMPLE_DOC);
   await parseKeyed(keyed, cache);
   __setParseTimingForTest(directory);
+  __resetWorkCountersForTest();
   await parseKeyed(keyed, cache);
   return __readParseTimingSnapshot();
 }
@@ -242,6 +252,8 @@ describe('parse timing seam', () => {
   let tempDir: string;
 
   beforeEach(async () => {
+    // The cache block reads the work counters, so each test starts them at zero.
+    __resetWorkCountersForTest();
     tempDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'vat-parse-timing-'));
   });
 
@@ -396,6 +408,21 @@ describe('parse timing seam', () => {
     });
   });
 
+  it('reads the cache block from zero again after the work counters are reset', () => {
+    countWork('parse.cache.hit', 5);
+    countWork('parse.dispatched', 3);
+    __setParseTimingForTest(tempDir);
+    __resetWorkCountersForTest();
+    expect(__readParseTimingSnapshot().cache).toEqual({ hits: 0, misses: 0 });
+  });
+
+  it('reads the cache block from the work counters as they stand, with no baseline of its own', () => {
+    countWork('parse.cache.hit', 5);
+    countWork('parse.dispatched', 3);
+    __setParseTimingForTest(tempDir);
+    expect(__readParseTimingSnapshot().cache).toEqual({ hits: 5, misses: 3 });
+  });
+
   describe('cache attribution', () => {
     let cache: ParseCache;
 
@@ -404,27 +431,23 @@ describe('parse timing seam', () => {
       cache = new ParseCache({ cacheDir: safePath.join(tempDir, 'cache'), enabled: true });
     });
 
-    it('counts a miss and the parse work it caused', async () => {
+    it('counts a miss here and charges no parse to this thread: the worker parsed it', async () => {
       await parseKeyed(keyFor(SAMPLE_DOC), cache);
 
       const snapshot = __readParseTimingSnapshot();
       expect(snapshot.cache).toEqual({ hits: 0, misses: 1 });
-      expect(callsOf(snapshot, 'markdown')).toEqual(markdownCalls(1));
-      expect(groupOf(snapshot, 'markdown').documents.count).toBe(1);
+      expect(callsOf(snapshot, 'markdown')).toEqual(repeated(MARKDOWN_PASS_ORDER.length, 0));
+      expect(groupOf(snapshot, 'markdown').documents.count).toBe(0);
     });
 
-    it('routes an HTML miss to the HTML group, not to markdown', async () => {
-      // The cache counts every parser kind. Before HTML was instrumented this
-      // miss produced a document count of zero and no passes anywhere, which
-      // read as "the cache missed and parsing was free".
+    it('counts an HTML miss too, and parses it off this thread', async () => {
+      // The cache counts every parser kind.
       await parseKeyed(keyFor(SAMPLE_HTML, 'html'), cache);
 
       const snapshot = __readParseTimingSnapshot();
       expect(snapshot.cache).toEqual({ hits: 0, misses: 1 });
-      expect(groupOf(snapshot, 'html').documents.count).toBe(1);
-      expect(groupOf(snapshot, 'markdown').documents.count).toBe(0);
-      expect(callsOf(snapshot, 'html')).toEqual(repeated(HTML_PASS_ORDER.length, 1));
-      expect(callsOf(snapshot, 'markdown')).toEqual(repeated(MARKDOWN_PASS_ORDER.length, 0));
+      expect(groupOf(snapshot, 'html').documents.count).toBe(0);
+      expect(callsOf(snapshot, 'html')).toEqual(repeated(HTML_PASS_ORDER.length, 0));
     });
 
     it('counts a hit without charging any pass', async () => {
@@ -450,6 +473,19 @@ describe('parse timing seam', () => {
       expect(tierRowOf(snapshot, CACHE_READ_IO).calls).toBe(2);
       expect(tierRowOf(snapshot, 'wire-dispatch').calls).toBe(1);
       expect(tierRowOf(snapshot, CACHE_READ_DECODE).calls).toBe(0);
+    });
+
+    it('records every reused-thread check: the check, its collection and its retirement as tier rows, and the heap it settled to', () => {
+      const MIB = 1_048_576;
+      recordReuseCheck({ usedBytes: 20 * MIB, collectMs: null, checkMs: 0.5, retire: false });
+      recordReuseCheck({ usedBytes: 30 * MIB, collectMs: 4, checkMs: 4.5, retire: false });
+      recordReuseCheck({ usedBytes: 40 * MIB, collectMs: 6, checkMs: 6.5, retire: true });
+
+      const snapshot = __readParseTimingSnapshot();
+      expect(tierRowOf(snapshot, 'reuse-check')).toStrictEqual({ pass: 'reuse-check', calls: 3, elapsedMs: 11.5 });
+      expect(tierRowOf(snapshot, 'reuse-collect')).toStrictEqual({ pass: 'reuse-collect', calls: 2, elapsedMs: 10 });
+      expect(tierRowOf(snapshot, 'reuse-retire')).toStrictEqual({ pass: 'reuse-retire', calls: 1, elapsedMs: 6.5 });
+      expect(snapshot.reuseHeap).toStrictEqual({ settledMibTotal: 90, settledMibMax: 40 });
     });
 
     it('keeps tier work OUT of every parser kind group', () => {
