@@ -1,0 +1,8 @@
+{
+  "extends": ["//"],
+  "tasks": {
+    "lint": {
+      "inputs": ["$TURBO_EXTENDS$", "$TURBO_ROOT$/packages/agent-skills/src/skill-source/fetch-cache.ts", "$TURBO_ROOT$/packages/agent-skills/src/skill-source/git-clone.ts", "$TURBO_ROOT$/packages/agent-skills/src/skill-source/source-errors.ts", "$TURBO_ROOT$/packages/agent-skills/src/skill-source/stage.ts", "$TURBO_ROOT$/packages/agent-skills/src/skill-source/types.ts", "$TURBO_ROOT$/packages/agent-skills/src/skill-test/failure-reason.ts", "$TURBO_ROOT$/packages/agent-skills/src/skill-test/grading-schema.ts", "$TURBO_ROOT$/packages/agent-skills/src/skill-test/lock.ts", "$TURBO_ROOT$/packages/dev-tools/src/pin-barrel-exports.ts", "$TURBO_ROOT$/packages/dev-tools/src/pin-emitted-schemas.ts"]
+    }
+  }
+}

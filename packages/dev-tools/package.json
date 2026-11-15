@@ -15,12 +15,13 @@
   "scripts": {
     "build": "tsx src/tsc-clean-build.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint . --max-warnings=0",
+    "lint": "VAT_LINT_TASK=1 eslint . --max-warnings=0",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging",
     "prepare-bin": "tsx src/prepare-bin.ts",
     "generate:tsconfig-refs": "tsx src/generate-tsconfig-refs.ts",
+    "generate:lint-config": "tsx src/generate-lint-config.ts",
     "generate:claude-md": "tsx src/generate-claude-md.ts",
     "generate:workflow": "tsx src/generate-workflow.ts",
     "compat-empirical": "tsx src/compat-empirical/index.ts",
@@ -45,7 +46,8 @@
   },
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",
-    "@types/which": "^3.0.4"
+    "@types/which": "^3.0.4",
+    "eslint": "^9.39.5"
   },
   "repository": {
     "type": "git",

@@ -397,24 +397,6 @@ function workspacePackages() {
 }
 
 /**
- * One `local/no-self-package-import` block per workspace package, each naming
- * that package and scoped to the sources it compiles.
- *
- * The rule does not read `package.json` itself on purpose. Every RULE module on
- * the `./eslint` subpath requires nothing at all — not `eslint`, not a
- * third-party package, not even a Node builtin — which is what keeps `eslint` an
- * optional peer dependency and the pack shippable as a subpath of a runtime
- * package (`packages/utils/test/eslint/subpath-purity.test.ts` asserts the empty
- * set for the rules, and exactly `node:fs` + `node:path` for the entry point
- * that lists them).
- * This file is not on that subpath: it already runs in full Node, so reading the
- * manifests here costs the invariant nothing.
- *
- * `src/**` is exactly what every package's tsconfig `include`s. Test and example
- * trees are excluded from every package build and import their own package by
- * name deliberately, to exercise the public entry point the way a consumer does.
- */
-/**
  * The libraries a plugin rule can be aimed at, each with how the plugin's own metadata names it:
  * the rule's name, or its `meta.docs.description`. A rule matching a marker whose `packages` no
  * manifest here depends on inspects calls into code this repo never runs — it can never fire, and
@@ -451,30 +433,57 @@ function unusedLibraryRulesOff() {
   );
 }
 
+/** Every `types` value in a manifest: the top-level field and each one under `exports`, at any depth. */
+function declaredTypesFiles(manifest) {
+  const found = typeof manifest.types === 'string' ? [manifest.types] : [];
+  const visit = (node) => {
+    if (node === null || typeof node !== 'object') return;
+    for (const [key, value] of Object.entries(node)) {
+      if (key === 'types' && typeof value === 'string') found.push(value);
+      else visit(value);
+    }
+  };
+  visit(manifest.exports);
+  return [...new Set(found)];
+}
+
 /**
- * Under turbo, refuse to lint before every workspace package's declared types exist.
+ * A package's `lint` script (`VAT_LINT_TASK=1 eslint .`) refuses to run unless the root `lint`
+ * script built first, and unless every workspace package's declared types exist.
  *
- * Turbo keys a package's `lint` on the `dist/**\/*.d.ts` of every package instead of on the upstream
- * `build` task's hash, so `lint` declares no `dependsOn` and the root `lint` script runs `turbo run
- * build` first. A `turbo run lint` with no build would type-check against missing declarations,
- * where an unresolved import is `any` and a type-aware rule passes, and turbo would cache that pass.
- * Its key differs from a built tree's, so it could only replay on a tree with no `dist/`, but the
- * verdict is still wrong, so it is refused instead. `TURBO_HASH` is set only inside a turbo task, so
- * an editor's or a direct `eslint` run is not affected.
+ * Turbo keys a package's `lint` on every package's emitted `dist/**\/*.d.ts` instead of on the
+ * upstream `build` task's hash, so `lint` has no `dependsOn`. Nothing inside turbo orders it after a
+ * build. Two wrong verdicts follow from a lint that did not build first: a missing declaration types
+ * an import as `any`, so a type-aware rule passes, and a stale declaration judges callers against
+ * the old signature. Turbo would cache either pass. So the root script runs `turbo run build` and only
+ * then sets `VAT_LINT_BUILT=1` for `turbo run lint` (a `passThroughEnv` of the task, unhashed), and a
+ * lint task without it is refused. The missing-types check catches a `dist/` deleted after that build.
+ * Both signals are set explicitly by the lint scripts. A test that loads this config, an editor, or a
+ * direct `eslint` sets neither, and is not affected.
  */
-function assertWorkspaceTypesBuilt() {
-  if (!process.env.TURBO_HASH) return;
+function assertBuiltBeforeLintTask() {
+  if (process.env.VAT_LINT_TASK !== '1') return;
+  if (process.env.VAT_LINT_BUILT !== '1') {
+    throw new Error('A package lint reads workspace types from dist/ and is cached on them, so it runs only after a build: run `bun run lint` (or `bun run lint:fix`) from the repo root, which builds first.');
+  }
   const missing = workspacePackages().flatMap(({ dir }) => {
-    const { types } = JSON.parse(readFileSync(new URL(`packages/${dir}/package.json`, import.meta.url), 'utf8'));
-    return typeof types === 'string' && !existsSync(new URL(`packages/${dir}/${types}`, import.meta.url)) ? [`packages/${dir}/${types.replace(/^\.\//, '')}`] : [];
+    const manifest = JSON.parse(readFileSync(new URL(`packages/${dir}/package.json`, import.meta.url), 'utf8'));
+    return declaredTypesFiles(manifest)
+      .filter((types) => !existsSync(new URL(`packages/${dir}/${types}`, import.meta.url)))
+      .map((types) => `packages/${dir}/${types.replace(/^\.\//, '')}`);
   });
   if (missing.length > 0) {
-    throw new Error(`Lint reads workspace types from dist/, and these are not built: ${missing.join(', ')}. Run \`bun run lint\`, which builds first, or \`turbo run build\` before \`turbo run lint\`.`);
+    throw new Error(`Lint reads workspace types from dist/, and these are not built: ${missing.join(', ')}. Run \`bun run lint\` from the repo root, which builds first.`);
   }
 }
 
+/**
+ * One block per workspace package giving its TypeScript files their own type-checked program,
+ * from the package's generated `tsconfig.eslint.json`. A package's `lint` runs in its own process
+ * and builds only its own program: one program of the whole monorepo peaked at about 3 GB.
+ */
 function typedProgramConfigs() {
-  assertWorkspaceTypesBuilt();
+  assertBuiltBeforeLintTask();
   return workspacePackages().map(({ dir }) => ({
     files: [`packages/${dir}/**/*.ts`, `packages/${dir}/**/*.cts`],
     languageOptions: {
@@ -486,12 +495,57 @@ function typedProgramConfigs() {
   }));
 }
 
+/**
+ * One `local/no-self-package-import` block per workspace package, each naming
+ * that package and scoped to the sources it compiles.
+ *
+ * The rule does not read `package.json` itself on purpose. Every RULE module on
+ * the `./eslint` subpath requires nothing at all — not `eslint`, not a
+ * third-party package, not even a Node builtin — which is what keeps `eslint` an
+ * optional peer dependency and the pack shippable as a subpath of a runtime
+ * package (`packages/utils/test/eslint/subpath-purity.test.ts` asserts the empty
+ * set for the rules, and exactly `node:fs` + `node:path` for the entry point
+ * that lists them).
+ * This file is not on that subpath: it already runs in full Node, so reading the
+ * manifests here costs the invariant nothing.
+ *
+ * `src/**` is exactly what every package's tsconfig `include`s. Test and example
+ * trees are excluded from every package build and import their own package by
+ * name deliberately, to exercise the public entry point the way a consumer does.
+ */
 function selfImportConfigs() {
   return workspacePackages().map(({ dir, name }) => ({
     files: [`packages/${dir}/src/**/*.ts`, `packages/${dir}/src/**/*.cts`],
     plugins: { local: localRules },
     rules: { 'local/no-self-package-import': ['error', { packageName: name }] },
   }));
+}
+
+/**
+ * Every tracked `.gitignore`'s patterns as flat-config ignores, so ESLint never lints a file turbo
+ * does not hash. Turbo's inputs are the files git does not ignore, and a gitignored file ESLint did
+ * lint could change a verdict that turbo then replays. The translation follows gitignore's own
+ * anchoring: a pattern with a slash before its end is relative to its `.gitignore`'s directory, one
+ * without matches at any depth, and a trailing slash means the directory's contents.
+ */
+function gitignoredPatterns() {
+  const sources = ['.gitignore', 'packages/dev-tools/corpus/compat-empirical/run/.gitignore'];
+  return sources.filter((file) => existsSync(new URL(file, import.meta.url))).flatMap((file) => {
+    const base = file.includes('/') ? file.slice(0, file.lastIndexOf('/') + 1) : '';
+    return readFileSync(new URL(file, import.meta.url), 'utf8').split(/\r?\n/).flatMap((raw) => {
+      // A `#` starts a comment only at the start of a line in an ignore file.
+      const line = raw.trim();
+      if (line === '' || line.startsWith('#')) return [];
+      const negated = line.startsWith('!');
+      let pattern = negated ? line.slice(1) : line;
+      const dirOnly = pattern.endsWith('/');
+      if (dirOnly) pattern = pattern.slice(0, -1);
+      const anchored = pattern.includes('/');
+      pattern = anchored ? `${base}${pattern.replace(/^\//, '')}` : `${base}**/${pattern}`;
+      const globs = dirOnly ? [`${pattern}/**`] : [pattern, `${pattern}/**`];
+      return globs.map((glob) => (negated ? `!${glob}` : glob));
+    });
+  });
 }
 
 // Local rules — agentic code safety. Apply to both TS and JS source.
@@ -885,6 +939,8 @@ export default [
   // Global ignores
   {
     ignores: [
+      // Everything git ignores, at the depth git ignores it — see `gitignoredPatterns()`.
+      ...gitignoredPatterns(),
       'dist/',
       // Every package's build output too, wherever eslint is pointed: `eslint packages` must
       // judge sources, never their compiled copies (an exempt source's `dist` twin is not exempt).

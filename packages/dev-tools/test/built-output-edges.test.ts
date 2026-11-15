@@ -15,7 +15,7 @@ import { isTurboDryRun, parseTurboConfig, parseTurboDryRun, readTurboTaskGraph, 
 import { cleanupTestTempDir, createTestTempDir } from './test-helpers.js';
 
 /**
- * One node as turbo 2.10.12 prints it: `outputs` holds the inclusions and
+ * One node as turbo 2.11.10 prints it: `outputs` holds the inclusions and
  * `excludedOutputs` the `!` globs without their `!`, while the resolved
  * definition keeps the `!` among its outputs, prints an omitted `inputs` as
  * `[]` and has lost `$TURBO_DEFAULT$` — which is why parity reads turbo.json.

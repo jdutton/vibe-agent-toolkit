@@ -48,7 +48,7 @@
     "postinstall": "vat claude plugin install --npm-postinstall || exit 0",
     "test:system": "vitest run --config vitest.system.config.ts",
     "clean": "rimraf --glob dist",
-    "lint": "eslint . --max-warnings=0"
+    "lint": "VAT_LINT_TASK=1 eslint . --max-warnings=0"
   },
   "dependencies": {
     "@vibe-agent-toolkit/cli": "workspace:*"

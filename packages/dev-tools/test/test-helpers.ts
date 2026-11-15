@@ -2,7 +2,7 @@
 /* eslint-disable security/detect-unsafe-regex -- the fixtures here deliberately carry the regexes the rule flags */
 // Simple semver validation regex for test purposes only
 
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
@@ -18,6 +18,17 @@ export function createTestTempDir(options: TestTempDirOptions = {}): string {
 
 export function cleanupTestTempDir(dir: string): void {
   removeTempDir(dir);
+}
+
+/** Write `files` (repo-relative path to text) under `root`, creating directories; returns their paths. */
+export function writeFiles(root: string, files: Record<string, string>): string[] {
+  for (const [rel, text] of Object.entries(files)) {
+    const file = safePath.join(root, rel);
+    // eslint-disable-next-line local/no-fs-mkdirSync -- fixture path is a temp dir; realpath is not read back
+    mkdirSync(safePath.join(file, '..'), { recursive: true });
+    writeFileSync(file, text);
+  }
+  return Object.keys(files);
 }
 
 export interface MockPackageOptions {

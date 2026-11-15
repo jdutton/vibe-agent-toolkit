@@ -1,0 +1,8 @@
+{
+  "extends": ["//"],
+  "tasks": {
+    "lint": {
+      "inputs": ["$TURBO_EXTENDS$", "$TURBO_ROOT$/packages/dev-tools/src/pin-barrel-exports.ts"]
+    }
+  }
+}

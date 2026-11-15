@@ -588,16 +588,32 @@ ESLint keys each file on its own metadata and the config, so changing a function
 `async` leaves an unchanged caller's cached clean result in place: no `no-floating-promises`.
 **Tell:** a lint red that appears only in CI, or only after deleting the cache file.
 **Remedy:** never pass `--cache`; cache at turbo's task hash, whose inputs (the package, every
-package's emitted `dist/**/*.d.ts`, the config, the rule sources) cover everything the lint reads.
+package's emitted `dist/**/*.d.ts`, the files it reaches by relative import, the config, the rule
+sources, the installed linters) cover everything the lint reads.
 
 ### `dependsOn: ["^build"]` re-runs a dependent on an edit its types never saw
 
 A task's hash folds in the hash of every task it depends on, and a build's hash changes with any
-source edit. A lint behind `^build` therefore re-linted all 14 packages after a comment in `utils`.
+source edit, so a lint behind `^build` re-lints every dependent after a comment in a dependency.
 **Tell:** `turbo run <task> --dry=json` shows a dependent's hash changing while its own `inputs` did not.
 **Remedy:** when a task reads only another package's declarations, key it on them
 (`$TURBO_ROOT$/packages/*/dist/**/*.d.ts` as an input), order the build outside the task graph, and
 refuse to run unbuilt rather than type against `any`.
+
+### A lint against a stale `dist/` caches a stale verdict
+
+The lint hash keys on the declarations present in `dist/`, not on the source that should produce
+them. A package lint run without the root script's build first reads whatever `dist/` holds and
+turbo caches that verdict under those declarations.
+**Tell:** a lint result that changes after `bun run build` with no source edit.
+**Remedy:** run lint only through `bun run lint`/`lint:fix`, which build first and set
+`VAT_LINT_BUILT=1`; a package `lint` without it is refused. Never set `VAT_LINT_BUILT` by hand.
+
+### Turbo's hash does not include the Node version
+
+A lint or test cached under one Node version replays under another: turbo hashes no runtime version.
+**Tell:** a cached pass locally that reds in CI on a different Node.
+**Remedy:** `TURBO_FORCE=true` (or `--force`) when switching Node versions.
 
 ### A workspace package in the root manifest is in every task's hash
 

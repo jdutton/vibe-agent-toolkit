@@ -12,7 +12,6 @@
  *   | `vibe-validate.config.yaml` `ci:`        | `.github/workflows/validate.yml`          |
  *   | `package.json` workspaces                | `bun.lock` `@vibe-agent-toolkit/*` entries|
  *   | a package's test directories             | its `test:*` scripts                      |
- *   | a package's lintable files               | its `lint` script                         |
  *   | `.gitignore`                             | the tracked file list (nothing ignored)   |
  *   | scripts/tests running a sibling's `dist/`| turbo's task graph (`turbo.json` edges)   |
  *
@@ -198,49 +197,6 @@ const DEV_TOOLS_COMPILE = 'tsx src/tsc-clean-build.ts';
 /** Scripts the root owns; a per-package copy is dead code the root never calls. */
 const ROOT_OWNED_SCRIPTS = ['duplication-check', 'validate-structure', 'pre-publish', 'test:coverage'] as const;
 
-/**
- * The one per-package lint invocation. The root `lint` runs it in every package through turbo, one
- * ESLint process (and one type-checked program, `tsconfig.eslint.json`) per package, so a package
- * without it is a package nobody lints.
- */
-export const LINT_SCRIPT = 'eslint . --max-warnings=0';
-/** What ESLint lints in this repo, by extension. */
-const LINTABLE_FILE = /\.(?:[cm]?ts|tsx|[cm]?js)$/;
-/** Directories that hold no source: build output, installs, coverage, generated and staging trees. */
-const NON_SOURCE_DIRS = new Set(['node_modules', 'dist', 'coverage', 'generated', '.tsc-staging']);
-
-/** Does the directory hold a lintable file outside {@link NON_SOURCE_DIRS}? Declarations are not lintable. */
-function holdsLintableFile(dir: string): boolean {
-  return readdirSync(dir, { withFileTypes: true }).some((entry) => {
-    // A link is decided first and counts as nothing: whatever it points at is linted (or not)
-    // by the package that holds it, and following one could leave the package or loop.
-    if (entry.isSymbolicLink()) return false;
-    if (entry.isDirectory()) return !NON_SOURCE_DIRS.has(entry.name) && holdsLintableFile(safePath.join(dir, entry.name));
-    return entry.isFile() && LINTABLE_FILE.test(entry.name) && !/\.d\.[cm]?ts$/.test(entry.name);
-  });
-}
-
-/**
- * Rule: every package holding a lintable file declares `lint` exactly as {@link LINT_SCRIPT}, and a
- * package with nothing to lint declares none. Every package, not only TypeScript projects: a
- * package of test files alone is linted too.
- */
-export function checkPackageLintScripts(repoRoot: string): ValidationError[] {
-  return readWorkspaceGraph(repoRoot).packages.flatMap((pkg) => {
-    const lint = ((pkg.manifest['scripts'] ?? {}) as Record<string, string>)['lint'];
-    const lintable = holdsLintableFile(safePath.join(repoRoot, 'packages', pkg.dir));
-    let message: string | undefined;
-    if (lintable && lint !== LINT_SCRIPT) {
-      message = `\`lint\` must be exactly ${JSON.stringify(LINT_SCRIPT)}; found ${JSON.stringify(lint)}. Without it the root \`lint\` (turbo) skips this package.`;
-    } else if (!lintable && lint !== undefined) {
-      message = '`lint` is declared but the package holds no lintable file; ESLint refuses a run where every file is ignored.';
-    }
-    return message === undefined
-      ? []
-      : [{ type: ERROR_TYPES.STRUCTURAL_VIOLATION, path: `packages/${pkg.dir}/package.json`, message, severity: 'error' as const }];
-  });
-}
-
 /** Does the package hold unit tests (a `*.test.ts` outside `integration/` and `system/`)? */
 function hasUnitTests(repoRoot: string, pkg: WorkspacePackage): boolean {
   const testDir = safePath.join(repoRoot, 'packages', pkg.dir, 'test');
@@ -385,7 +341,6 @@ export function collectDerivedArtifactFindings(repoRoot: string): ValidationErro
     checkValidateWorkflowGenerated,
     checkLockfileWorkspaceResolutions,
     checkPackageScripts,
-    checkPackageLintScripts,
     checkNoTrackedIgnoredFiles,
     checkBuiltOutputEdges,
     checkChangelogFragments,

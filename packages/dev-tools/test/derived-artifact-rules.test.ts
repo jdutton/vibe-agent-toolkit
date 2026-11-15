@@ -19,11 +19,9 @@ import {
   checkClaudeMdByteBudget,
   checkLockfileWorkspaceResolutions,
   checkNoStrayGeneratedMarkers,
-  checkPackageLintScripts,
   checkPackageScripts,
   checkValidateWorkflowGenerated,
   CLAUDE_MD_BYTE_BUDGET,
-  LINT_SCRIPT,
   STANDARD_COMPILE,
   STANDARD_SCRIPTS,
 } from '../src/derived-artifact-rules.js';
@@ -162,31 +160,6 @@ describe('derived-artifact rules on fixture trees', () => {
       writeWorkspace(root, { dir: 'umbrella', scripts: {} });
 
       expect(checkPackageScripts(root)).toEqual([]);
-    });
-  });
-
-  describe('checkPackageLintScripts', () => {
-    it('accepts the one lint script on a package with source, and none on a package without', () => {
-      writeWorkspace(root, { dir: 'lib', scripts: { lint: LINT_SCRIPT } }, { 'packages/lib/src/a.ts': '' });
-      writeWorkspace(root, { dir: 'umbrella', scripts: {} }, { 'packages/umbrella/README.md': '', 'packages/umbrella/dist/x.js': '' });
-
-      expect(checkPackageLintScripts(root)).toEqual([]);
-    });
-
-    it('flags a package of test files alone with no lint script, and a variant spelling', () => {
-      writeWorkspace(root, { dir: 'tests-only', scripts: {} }, { 'packages/tests-only/test/system/a.system.test.ts': '' });
-      writeWorkspace(root, { dir: 'cached', scripts: { lint: 'eslint . --cache' } }, { 'packages/cached/eslint/rule.cjs': '' });
-
-      expect(checkPackageLintScripts(root).map((f) => `${f.path}: ${f.message}`)).toEqual([
-        expect.stringMatching(/^packages\/cached\/package\.json: `lint` must be exactly/),
-        expect.stringMatching(/^packages\/tests-only\/package\.json: `lint` must be exactly .*found undefined/),
-      ]);
-    });
-
-    it('flags a lint script on a package whose only scripts are declarations or build output', () => {
-      writeWorkspace(root, { dir: 'umbrella', scripts: { lint: LINT_SCRIPT } }, { 'packages/umbrella/index.d.ts': '', 'packages/umbrella/dist/x.js': '' });
-
-      expect(checkPackageLintScripts(root).map((f) => f.message)).toEqual([expect.stringContaining('holds no lintable file')]);
     });
   });
 
