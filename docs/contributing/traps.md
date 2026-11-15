@@ -582,6 +582,95 @@ unused import; `--fix` never applies suggestions, so a converged `--fix` leaves 
 **Remedy:** a rule that created an orphan removes it itself; do not build a general
 side-effect-aware unused-import rule (`sideEffects` is absent by default and ignores `node:`).
 
+### ESLint's `--cache` replays a clean verdict a type-aware rule would now red
+
+ESLint keys each file on its own metadata and the config, so changing a function in one file to
+`async` leaves an unchanged caller's cached clean result in place: no `no-floating-promises`.
+**Tell:** a lint red that appears only in CI, or only after deleting the cache file.
+**Remedy:** never pass `--cache`; cache at turbo's task hash, whose inputs (the package, every
+package's emitted `dist/**/*.d.ts`, the files it reaches by relative import, the config, the rule
+sources, the installed linters) cover everything the lint reads.
+
+### `dependsOn: ["^build"]` re-runs a dependent on an edit its types never saw
+
+A task's hash folds in the hash of every task it depends on, and a build's hash changes with any
+source edit, so a lint behind `^build` re-lints every dependent after a comment in a dependency.
+**Tell:** `turbo run <task> --dry=json` shows a dependent's hash changing while its own `inputs` did not.
+**Remedy:** when a task reads only another package's declarations, key it on them
+(`$TURBO_ROOT$/packages/*/dist/**/*.d.ts` as an input), order the build outside the task graph, and
+refuse to run unbuilt rather than type against `any`.
+
+### A lint against a stale `dist/` caches a stale verdict
+
+The lint hash keys on the declarations present in `dist/`, not on the source that should produce
+them. A package lint run without the root script's build first reads whatever `dist/` holds and
+turbo caches that verdict under those declarations.
+**Tell:** a lint result that changes after `bun run build` with no source edit.
+**Remedy:** run lint only through `bun run lint`/`lint:fix`, which build first and set
+`VAT_LINT_BUILT=1`; a package `lint` without it is refused. Never set `VAT_LINT_BUILT` by hand.
+
+### A personal ignore hides a lintable file from turbo
+
+Turbo hashes what git does not ignore, `.git/info/exclude` and the global excludes file included,
+while the lint check mirrors only the repository's own `.gitignore` files (a finding must not demand
+a commit for a personal ignore).
+**Tell:** a lint verdict that survives an edit to a file only your personal excludes ignore.
+**Remedy:** do not personally exclude a file ESLint lints; `--force` the lint after editing one.
+
+### A package's external-dependency hash misses what its program reads from another package
+
+Turbo hashes a package's own external dependencies from the lockfile. A lint program that reaches
+another package's source through a relative import also reads that package's external types, and
+those are not in the hash.
+**Tell:** `turbo run lint --dry=json` after a lockfile change to the other package's dependency
+shows the importer's `hashOfExternalDependencies` unchanged.
+**Remedy:** the lint task hashes `bun.lock` itself.
+
+### A glob with no literal prefix walks the whole tree
+
+Turbo expands an input glob by walking from its literal prefix. `[!p]*/**/*.ts` has none, so every
+run walks `node_modules`, `.git` and every other session's worktree, and a `!**/node_modules/**/*.ts`
+exclusion filters matches without pruning the walk.
+**Tell:** a no-change replay that takes seconds, or a task that misses when another worktree changes.
+**Remedy:** name each directory (`docs/**/*.ts`), and derive and check the list.
+
+### Turbo's hash does not include the Node version
+
+A lint or test cached under one Node version replays under another: turbo hashes no runtime version.
+**Tell:** a cached pass locally that reds in CI on a different Node.
+**Remedy:** `TURBO_FORCE=true` (or `--force`) when switching Node versions.
+
+### A workspace package in the root manifest is in every task's hash
+
+A root `package.json` dependency on a `workspace:*` package puts that package's files into turbo's
+global `hashOfInternalDependencies`, so any edit to it misses every task in the repo, including
+packages that do not depend on it.
+**Tell:** the `--dry=json` diff after an edit shows `GLOBAL input differs: hashOfInternalDependencies`.
+**Remedy:** the root never depends on a workspace package; import its file by relative path instead
+(`eslint.config.js` loads `./packages/utils/eslint/index.cjs`).
+
+### `TIMING=all` blames the type checker on the first typed rule
+
+Type-aware rules share one lazily built program and checker; whichever typed rule asks first is
+charged for building it (`sonarjs/deprecation` leads this repo's table for that reason).
+**Tell:** a typed rule at the top of the table whose own logic is trivial.
+**Remedy:** read a typed rule's share as an upper bound; disable it and re-time before believing it.
+
+### A local cache with no eviction grows without bound
+
+Turbo's local cache, shared by every worktree of the checkout, kept every entry ever written.
+**Tell:** a cache directory measured in gigabytes, mostly entries older than a month.
+**Remedy:** every local cache carries an age limit and a size cap sized above the window's real
+volume (`cacheMaxAge`, `cacheMaxSize` in `turbo.json`).
+
+### A rule for a library you do not use still runs on every file
+
+A rule aimed at AWS CDK, React or DOMPurify cannot fire here but still visits every node, and a
+type-aware one forces the checker on files nothing else needed.
+**Tell:** a library-named rule with nonzero time under `TIMING=all`.
+**Remedy:** derive the off-list from the plugin's own rule names and descriptions, checked against
+the manifests' real dependencies (`unusedLibraryRulesOff()` in `eslint.config.js`); never a hand-kept list of rule names.
+
 ### A scripted edit can print `ok` and write nothing
 
 A heredoc that appended tests printed its own `ok`, left the file untouched, and the suite reported

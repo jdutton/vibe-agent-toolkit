@@ -106,6 +106,57 @@ When creating a new package:
 2. Add `references` for packages it depends on
 3. Add the package to root tsconfig.json `references` array
 4. Run `bun install` to update workspace links
+5. Run `bun run generate:lint-config`: it writes the package's `tsconfig.eslint.json` and, when the
+   package reaches into another by a relative import, its `turbo.json` lint inputs. Give it the
+   `lint` script `VAT_LINT_TASK=1 eslint . --max-warnings=0` if ESLint lints any of its files, and
+   none if it lints none. `validate-structure` fails on a stale generated file or a wrong script.
+
+## Lint
+
+`bun run lint` is `turbo run build` followed by `turbo run lint lint:root`: one ESLint process per
+package, each with its own type-checked program from that package's `tsconfig.eslint.json`, plus
+`lint:root` for the root's own scripts. Types of another workspace package come
+from its `dist/` (as for `tsc`), and so do a package's own types for a test that imports it by name.
+`--concurrency=2` bounds one lint run to two programs at a time.
+
+Turbo is the only lint cache. A package's lint hash covers:
+
+- its own files (`$TURBO_DEFAULT$`);
+- every package's emitted declarations (`dist/**/*.d.ts`, `*.d.cts`) and every `package.json`;
+- the files outside the package that its program contains (a shared test helper or script
+  generator reached by a relative import, and whatever those reach), as TypeScript itself builds the
+  program from `tsconfig.eslint.json`, listed in the generated `packages/<pkg>/turbo.json`;
+- `bun.lock`: a program that reaches another package's source reads that package's external types,
+  which the package's own external-dependency hash does not cover;
+- `eslint.config.js` and `tsconfig.*.json` (from `globalDependencies`), and, as lint inputs, what
+  the config reads for every package: `eslint-config-support.js`, the ignore files, the rule sources
+  under `packages/utils/eslint/`, and the installed manifest of every linter package it imports plus
+  `eslint` and `typescript`.
+
+Keying on declarations rather than on `dependsOn: ["^build"]` keeps an edit cheap: a build's hash
+changes with every source edit, while a body, comment or private-helper edit leaves every
+declaration byte-identical and re-lints only its own package. An edit that changes a declaration
+re-lints every package, because the glob is not narrowed to each package's dependencies.
+
+Nothing inside turbo orders `lint` after `build`, so the order is enforced by signals. A package's
+`lint` script sets `VAT_LINT_TASK=1`; `eslint.config.js` then refuses to load unless the root script
+set `VAT_LINT_BUILT=1` after its build (a pass-through env, not hashed) and every declared `types`
+file of every package exists. Without that refusal an unresolved import types as `any` and turbo
+caches the pass. Run lint only through `bun run lint` or `bun run lint:fix`. `lint:fix` bypasses
+the cache (`--cache=local:,remote:`): a cached verdict would skip the fix. It keeps
+`--max-warnings=0`, so it exits non-zero on what `--fix` could not fix.
+
+`lint:root`'s code-file inputs are one glob per place holding a file it lints, each with a literal
+prefix (today only `*.{js,...}` at the root): a glob without one makes turbo walk `node_modules`,
+`.git` and other sessions' worktrees on every run.
+
+`validate-structure` checks the lint wiring against `generate-lint-config.ts`: the generated
+files, every `lint` script, that ESLint ignores what the repository's ignore files ignore (so no
+lintable file sits outside the hashed inputs), that `IGNORE_FILES` is exactly the tracked
+`.gitignore` files and both lint tasks hash them, that both tasks hash every file
+`eslint.config.js` imports by relative path, that the linter-manifest inputs name exactly what it
+imports, and that `lint:root`'s places match what it lints. Each check runs both ways. ESLint's own `--cache` is never used (see
+[traps](contributing/traps.md#eslints---cache-replays-a-clean-verdict-a-type-aware-rule-would-now-red)).
 
 ## Troubleshooting
 

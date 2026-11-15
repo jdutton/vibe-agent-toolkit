@@ -57,6 +57,7 @@ import {
   TOKENS_ENV,
 } from './contraband-scan.js';
 import { collectDerivedArtifactFindings } from './derived-artifact-rules.js';
+import { collectLintConfigFindings } from './generate-lint-config.js';
 import { ERROR_TYPES, type ValidationError } from './structure-finding.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -400,12 +401,14 @@ function validateSourceFileLocations(): void {
   const skipDirs = SKIP_DIRS_WITH_HUSKY;
 
   // Root config files. `eslint.config.js` is JavaScript and never reaches this
-  // rule; a `.ts` root file not named here is a finding.
+  // rule; a `.ts` root file not named here is a finding. The `.d.ts` types the
+  // config's helper module beside it for the dev-tools tests that import it.
   const ALLOWED_ROOT_TS_FILES = new Set([
     'vitest.config.ts',
     'vitest.integration.config.ts',
     'vitest.system.config.ts',
     'vitest.shared.ts',
+    'eslint-config-support.d.ts',
   ]);
 
   walkDirectory(REPO_ROOT, '.', {
@@ -1799,7 +1802,10 @@ async function validate(): Promise<void> {
   // workspace resolutions, package script sets, changelog fragments) is checked
   // against its source here, so a stale copy fails the gate instead of being
   // read as the truth.
-  errors.push(...collectDerivedArtifactFindings(REPO_ROOT));
+  // Lint configuration: the generated per-package lint files, each package's `lint` script, ESLint
+  // ignoring what git ignores, and the installed-linter inputs (generate-lint-config.ts).
+  const lintConfigFindings = await collectLintConfigFindings(REPO_ROOT);
+  errors.push(...collectDerivedArtifactFindings(REPO_ROOT), ...lintConfigFindings);
 
   printResults();
 

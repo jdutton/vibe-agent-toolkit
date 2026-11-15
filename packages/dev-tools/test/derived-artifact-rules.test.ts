@@ -142,7 +142,7 @@ describe('derived-artifact rules on fixture trees', () => {
     it('flags a missing tier script, an orphan tier script, a variant spelling, and a root-owned script', () => {
       writeWorkspace(root, {
         dir: 'lib',
-        scripts: { ...GOOD_SCRIPTS, typecheck: 'tsc --build --dry', 'test:system': STANDARD_SCRIPTS['test:system'], lint: 'eslint .' },
+        scripts: { ...GOOD_SCRIPTS, typecheck: 'tsc --build --dry', 'test:system': STANDARD_SCRIPTS['test:system'], 'duplication-check': 'jscpd' },
         tests: ['a.test.ts'],
       });
 
@@ -152,7 +152,7 @@ describe('derived-artifact rules on fixture trees', () => {
         expect.stringContaining('`test:unit` must be exactly'),
         expect.stringContaining('`test:watch` must be exactly'),
         expect.stringContaining('`test:system` is declared but the package has no matching test tier'),
-        expect.stringContaining('`lint` is owned by the root'),
+        expect.stringContaining('`duplication-check` is owned by the root'),
       ]);
     });
 

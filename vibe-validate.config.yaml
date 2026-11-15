@@ -7,7 +7,8 @@
 #
 #   pre-commit  build · typecheck · lint
 #               What `.husky/pre-commit` (`vibe-validate pre-commit`) runs on
-#               every commit: seconds when turbo's and ESLint's caches are warm.
+#               every commit: seconds when turbo's cache is warm (lint included:
+#               turbo re-lints only the packages a change reaches).
 #               It catches what breaks the tree for everyone (a red build, a type
 #               error, a lint error); which tests to run when is the committer's
 #               call (`bun run test:unit`), and CI runs every tier.

@@ -7,15 +7,12 @@
  * (`built-output-scan.integration.test.ts`).
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
-
-import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { judgeScriptWord, scanTestTree } from '../src/built-output-scan.js';
 import type { WorkspaceGraph, WorkspacePackage } from '../src/workspace-graph.js';
 
-import { cleanupTestTempDir, createTestTempDir } from './test-helpers.js';
+import { cleanupTestTempDir, createTestTempDir, writeFiles } from './test-helpers.js';
 
 /** A workspace graph of `dirs`, as far as the scan reads one. */
 function graphOf(...dirs: string[]): WorkspaceGraph {
@@ -27,17 +24,6 @@ function graphOf(...dirs: string[]): WorkspaceGraph {
     workspaceDeps: { runtime: [], dev: [] },
   }));
   return { packages, byName: new Map(packages.map((pkg) => [pkg.name, pkg] as const)) };
-}
-
-/** Write `files` (repo-relative → text) under `root`; returns their paths. */
-function writeFiles(root: string, files: Record<string, string>): string[] {
-  for (const [rel, text] of Object.entries(files)) {
-    const file = safePath.join(root, rel);
-    // eslint-disable-next-line local/no-fs-mkdirSync -- fixture path is a temp dir; realpath is not read back
-    mkdirSync(safePath.join(file, '..'), { recursive: true });
-    writeFileSync(file, text);
-  }
-  return Object.keys(files);
 }
 
 // `alpha` and `beta` are not packages of this repository.

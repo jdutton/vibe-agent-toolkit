@@ -1,5 +1,13 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  // The local cache (`.turbo/cache` of the main checkout, shared by every linked
+  // worktree) had no eviction and reached 9.7 GB. Entries go after 30 days; the
+  // size cap sits above what 30 days of entries measured (2.8 GB on 2026-11-14),
+  // so it only bites if the rate of new entries roughly doubles — a cap below
+  // that would silently shorten the 30-day window. No `cacheDir`: the default is
+  // what shares the cache across worktrees.
+  "cacheMaxAge": "30d",
+  "cacheMaxSize": "5GB",
   "tasks": {
     // `*.tsbuildinfo` is a build output and must be cached with `dist/**`, not left
     // behind. Restoring `dist/` without it puts the package in a state TypeScript
@@ -37,8 +45,91 @@
       "outputs": [],
       "cache": true
     },
+    // One ESLint process per package, each type-checking only its own program
+    // (`tsconfig.eslint.json`): a whole-monorepo program peaked at about 3 GB.
+    // TURBO is the lint cache, never ESLint's `--cache`: ESLint keys a file on
+    // its own mtime and size, so an unchanged caller replays a clean verdict
+    // after a type-aware change elsewhere. A lint's inputs are everything its
+    // program and its rules read:
+    // - its own files (`$TURBO_DEFAULT$`); any change re-lints the whole package;
+    // - every package's emitted declarations, `dist/**/*.d.ts` and `*.d.cts`,
+    //   which is all a package sees of another through a package import (and of
+    //   itself, for a test importing it by name). `.d.ts.map` is not an input:
+    //   its line positions move with any edit. An edit that leaves every
+    //   declaration byte-identical re-lints only its own package; one that
+    //   changes a declaration re-lints every package;
+    // - every `package.json` (exports, types, and the library-rule off-list);
+    // - the files a package reaches by a RELATIVE import into another package
+    //   (a shared test helper, a dev-tools generator), and what those import in
+    //   turn: listed per package in a generated `packages/<pkg>/turbo.json`
+    //   (`bun run generate:lint-config`; `validate-structure` checks it);
+    // - the rule sources, `eslint-config-support.js` and the ignore files
+    //   (`eslint.config.js` reads all of them for every package);
+    // - `bun.lock`: a program reaching another package's source reads that
+    //   package's external types, which this package's own external-dependency
+    //   hash does not cover; and the installed linter and TypeScript manifests,
+    //   because a worktree sharing this cache may have pulled a lockfile change
+    //   without installing it.
+    // No `dependsOn`: `^build` would fold the upstream build's hash in, and that
+    // changes with every source edit. The root `lint` script runs `turbo run
+    // build` first and then sets `VAT_LINT_BUILT` (passed through, unhashed); a
+    // package's `lint` without it is refused by `eslint.config.js`.
     "lint": {
       "dependsOn": [],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/utils/eslint/**",
+        "$TURBO_ROOT$/packages/*/dist/**/*.d.ts",
+        "$TURBO_ROOT$/packages/*/dist/**/*.d.cts",
+        "$TURBO_ROOT$/packages/*/package.json",
+        "$TURBO_ROOT$/bun.lock",
+        "$TURBO_ROOT$/eslint-config-support.js",
+        "$TURBO_ROOT$/.gitignore",
+        "$TURBO_ROOT$/packages/dev-tools/corpus/compat-empirical/run/.gitignore",
+        "$TURBO_ROOT$/node_modules/typescript/package.json",
+        "$TURBO_ROOT$/node_modules/eslint/package.json",
+        "$TURBO_ROOT$/node_modules/@eslint/js/package.json",
+        "$TURBO_ROOT$/node_modules/@eslint-community/eslint-plugin-eslint-comments/package.json",
+        "$TURBO_ROOT$/node_modules/@typescript-eslint/eslint-plugin/package.json",
+        "$TURBO_ROOT$/node_modules/@typescript-eslint/parser/package.json",
+        "$TURBO_ROOT$/node_modules/eslint-plugin-import/package.json",
+        "$TURBO_ROOT$/node_modules/eslint-plugin-n/package.json",
+        "$TURBO_ROOT$/node_modules/eslint-plugin-security/package.json",
+        "$TURBO_ROOT$/node_modules/eslint-plugin-sonarjs/package.json",
+        "$TURBO_ROOT$/node_modules/eslint-plugin-unicorn/package.json",
+        "$TURBO_ROOT$/node_modules/.bun/@typescript-eslint+*/node_modules/@typescript-eslint/*/package.json"
+      ],
+      "passThroughEnv": ["VAT_LINT_BUILT"],
+      "outputs": [],
+      "cache": true
+    },
+    // The root's own scripts (`eslint.config.js`, the vitest setup files): no
+    // package lints them. Not `//#lint`, which would run the root `lint` script —
+    // `turbo run lint` itself. Its inputs are what `eslint . --ignore-pattern
+    // 'packages/**'` lints: one glob per place holding such a file, each with a
+    // literal prefix so turbo never walks node_modules, .git or another session's
+    // worktree (`generate-lint-config.ts --check` derives the places from ESLint
+    // and checks them both ways). Plus what `eslint.config.js` reads (every
+    // manifest, for the library-rule off-list; the ignore files), the rules and
+    // the installed linter.
+    "//#lint:root": {
+      "inputs": [
+        "*.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
+        "package.json", "packages/*/package.json", ".gitignore", "packages/dev-tools/corpus/compat-empirical/run/.gitignore",
+        "packages/utils/eslint/**",
+        "node_modules/typescript/package.json",
+        "node_modules/eslint/package.json",
+        "node_modules/@eslint/js/package.json",
+        "node_modules/@eslint-community/eslint-plugin-eslint-comments/package.json",
+        "node_modules/@typescript-eslint/eslint-plugin/package.json",
+        "node_modules/@typescript-eslint/parser/package.json",
+        "node_modules/eslint-plugin-import/package.json",
+        "node_modules/eslint-plugin-n/package.json",
+        "node_modules/eslint-plugin-security/package.json",
+        "node_modules/eslint-plugin-sonarjs/package.json",
+        "node_modules/eslint-plugin-unicorn/package.json",
+        "$TURBO_ROOT$/node_modules/.bun/@typescript-eslint+*/node_modules/@typescript-eslint/*/package.json"
+      ],
       "outputs": [],
       "cache": true
     },
@@ -56,9 +147,13 @@
       "dependsOn": ["^build", "build"],
       "outputs": [],
       "cache": true,
-      // `CI` is hashed HERE and nowhere else: two network-dependent integration
-      // suites gate on `process.env.CI`, so a CI run and a local run of this
-      // task execute different populations and must not share a cache entry.
+      // `CI` is hashed HERE and nowhere else, because a CI run and a local run of
+      // this task test different things and must not share a cache entry. utils'
+      // `realpath-native-folder-mount.integration.test.ts` fails under CI, and
+      // skips locally, when the host cannot mount a VHD. dev-tools'
+      // `pre-publish-known-defects.integration.test.ts` spawns `pre-publish-check`,
+      // which skips its git checks when `CI` is set. The network suites are not
+      // the reason: they are system tests gated on `NET_AVAILABLE` (`globalEnv`).
       // Every other task sees `CI` through `globalPassThroughEnv` without it
       // entering the hash — see that key below.
       "env": ["CI"]
@@ -274,7 +369,10 @@
     "packages/dev-tools/src/test-tier-budget-allowlist.ts"
   ],
   // `CI` reaches every task (turbo's strict env mode would otherwise strip it)
-  // but is hashed only where it changes what runs: `test:integration` above.
+  // but is hashed only in `test:integration` above. One unit suite also reads
+  // it: cli's `absence-causes.test.ts` adds a stricter assertion on Linux under
+  // `CI`. CI restores no turbo cache, so that branch always runs there; only a
+  // local Linux run can replay one mode's pass for the other.
   // Hashing it globally split every cache entry in two between the pre-commit
   // hook (CI unset) and `bun run validate` (CI=1), so each re-ran the other's
   // build, typecheck and unit tests.

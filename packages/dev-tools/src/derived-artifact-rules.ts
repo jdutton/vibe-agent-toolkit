@@ -195,7 +195,7 @@ export const STANDARD_COMPILE = 'tsx ../dev-tools/src/tsc-clean-build.ts';
 /** The same script, from inside dev-tools itself. */
 const DEV_TOOLS_COMPILE = 'tsx src/tsc-clean-build.ts';
 /** Scripts the root owns; a per-package copy is dead code the root never calls. */
-const ROOT_OWNED_SCRIPTS = ['lint', 'duplication-check', 'validate-structure', 'pre-publish', 'test:coverage'] as const;
+const ROOT_OWNED_SCRIPTS = ['duplication-check', 'validate-structure', 'pre-publish', 'test:coverage'] as const;
 
 /** Does the package hold unit tests (a `*.test.ts` outside `integration/` and `system/`)? */
 function hasUnitTests(repoRoot: string, pkg: WorkspacePackage): boolean {

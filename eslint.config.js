@@ -4,12 +4,14 @@ import eslint from '@eslint/js';
 import eslintComments from '@eslint-community/eslint-plugin-eslint-comments';
 import tseslint from '@typescript-eslint/eslint-plugin';
 import tsparser from '@typescript-eslint/parser';
-import localRules from '@vibe-agent-toolkit/utils/eslint';
 import importPlugin from 'eslint-plugin-import';
 import pluginNode from 'eslint-plugin-n';
 import security from 'eslint-plugin-security';
 import sonarjs from 'eslint-plugin-sonarjs';
 import unicorn from 'eslint-plugin-unicorn';
+
+import { declaredTypesFiles, gitignorePatterns, IGNORE_FILES, lintTaskRefusal } from './eslint-config-support.js';
+import localRules from './packages/utils/eslint/index.cjs';
 
 /**
  * Simple, strict ESLint configuration
@@ -396,6 +398,78 @@ function workspacePackages() {
 }
 
 /**
+ * The libraries a plugin rule can be aimed at, each with how the plugin's own metadata names it:
+ * the rule's name, or its `meta.docs.description`. A rule matching a marker whose `packages` no
+ * manifest here depends on inspects calls into code this repo never runs — it can never fire, and
+ * it still costs time on every file (sonarjs's `aws-*` were 9% of lint time; `dompurify-unsafe-config`
+ * is type-aware). Adopting one of these libraries turns its rules back on with no edit here.
+ */
+const LIBRARY_RULE_MARKERS = [
+  { packages: ['aws-cdk-lib'], name: /^aws-/ },
+  { packages: ['dompurify', 'isomorphic-dompurify'], name: /dompurify/i, description: /\bDOMPurify\b/ },
+  { packages: ['react'], name: /^(?:jsx-|.*react)/i, description: /\b(?:React|JSX)\b/ },
+  { packages: ['@angular/core'], name: /angular/i, description: /\bAngular\b/ },
+  { packages: ['mocha'], description: /\bMocha\b/ },
+  { packages: ['express'], description: /\bExpress\b/ },
+];
+
+/** Every package named in any dependency field of the root or a workspace manifest. */
+function declaredDependencies() {
+  const manifests = [new URL('package.json', import.meta.url), ...workspacePackages().map(({ dir }) => new URL(`packages/${dir}/package.json`, import.meta.url))];
+  return new Set(manifests.flatMap((manifest) => {
+    const json = JSON.parse(readFileSync(manifest, 'utf8'));
+    return ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'].flatMap((field) => Object.keys(json[field] ?? {}));
+  }));
+}
+
+/** `off` for every sonarjs and security rule a {@link LIBRARY_RULE_MARKERS} entry claims for an absent library. */
+function unusedLibraryRulesOff() {
+  const declared = declaredDependencies();
+  const absent = LIBRARY_RULE_MARKERS.filter((marker) => !marker.packages.some((pkg) => declared.has(pkg)));
+  const aimedAtAbsent = (name, rule) => absent.some((marker) =>
+    marker.name?.test(name) || marker.description?.test(rule.meta?.docs?.description ?? ''));
+  return Object.fromEntries(
+    [['sonarjs', sonarjs], ['security', security]].flatMap(([prefix, plugin]) =>
+      Object.entries(plugin.rules).filter(([name, rule]) => aimedAtAbsent(name, rule)).map(([name]) => [`${prefix}/${name}`, 'off'])),
+  );
+}
+
+/**
+ * A package's `lint` script (`VAT_LINT_TASK=1 eslint .`) refuses to run unless the root `lint`
+ * script built first and every workspace package's declared types exist (`lintTaskRefusal()` in
+ * `eslint-config-support.js` holds the contract). Turbo keys a lint on the emitted declarations and
+ * has no `dependsOn`, so nothing inside turbo orders it after a build.
+ */
+function assertBuiltBeforeLintTask() {
+  const refusal = lintTaskRefusal(process.env, () => workspacePackages().flatMap(({ dir }) => {
+    const where = `packages/${dir}/package.json`;
+    const manifest = JSON.parse(readFileSync(new URL(where, import.meta.url), 'utf8'));
+    return declaredTypesFiles(manifest, where)
+      .filter((types) => !existsSync(new URL(`packages/${dir}/${types}`, import.meta.url)))
+      .map((types) => `packages/${dir}/${types.replace(/^\.\//, '')}`);
+  }));
+  if (refusal !== undefined) throw new Error(refusal);
+}
+
+/**
+ * One block per workspace package giving its TypeScript files their own type-checked program,
+ * from the package's generated `tsconfig.eslint.json`. A package's `lint` runs in its own process
+ * and builds only its own program: one program of the whole monorepo peaked at about 3 GB.
+ */
+function typedProgramConfigs() {
+  assertBuiltBeforeLintTask();
+  return workspacePackages().map(({ dir }) => ({
+    files: [`packages/${dir}/**/*.ts`, `packages/${dir}/**/*.cts`],
+    languageOptions: {
+      parserOptions: {
+        project: `./packages/${dir}/tsconfig.eslint.json`,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+  }));
+}
+
+/**
  * One `local/no-self-package-import` block per workspace package, each naming
  * that package and scoped to the sources it compiles.
  *
@@ -419,6 +493,14 @@ function selfImportConfigs() {
     plugins: { local: localRules },
     rules: { 'local/no-self-package-import': ['error', { packageName: name }] },
   }));
+}
+
+/**
+ * Every ignore file's patterns as flat-config ignores (`gitignorePatterns()` in
+ * `eslint-config-support.js`), so ESLint never lints a file turbo does not hash.
+ */
+function gitignoredPatterns() {
+  return IGNORE_FILES.flatMap((file) => gitignorePatterns(readFileSync(new URL(file, import.meta.url), 'utf8'), file));
 }
 
 // Local rules — agentic code safety. Apply to both TS and JS source.
@@ -720,43 +802,10 @@ const restrictedSpecifierSyntax = (pattern, message) => {
 };
 const ARCHIVE_LIBRARY_RESTRICTED_SYNTAX = restrictedSpecifierSyntax(ARCHIVE_LIBRARY_SPECIFIER, ARCHIVE_LIBRARY_MESSAGE);
 
-// A programmatic ESLint with caching off DELETES the file at its cache location
-// on `lintFiles` — by default `<cwd>/.eslintcache`, which is `bun run lint`'s cache
-// when `cwd` is a real tree. Tests construct one only through `repoEslint`, which
-// points the location at a temp path. Type imports stay allowed, and so do `Linter` and
-// `RuleTester`, statically. A dynamic load of `eslint` — `import()`, a require-shaped call (the
-// shapes and the limits are listed above `ARCHIVE_LIBRARY_SPECIFIER`), or Vitest's
-// `vi.importActual` / `vi.mock(…, importOriginal)` — is banned whatever member it is used for: it
-// yields the whole module, `ESLint` included, and a lint rule cannot tell which member is used.
-// `eslint/use-at-your-own-risk` is banned whole: it exports `LegacyESLint` and `FlatESLint`.
-export const ESLINT_INSTANCE_FILES = [
-  'packages/dev-tools/test/eslint-clean-files.ts',
-  // Lints throwaway `mkdtemp` projects: its `cwd` holds no cache to delete.
-  'packages/utils/test/integration/eslint-recommended-config.integration.test.ts',
-];
-const ESLINT_INSTANCE_MESSAGE = 'Construct an ESLint only through repoEslint (packages/dev-tools/test/eslint-clean-files.ts): with caching off, lintFiles deletes <cwd>/.eslintcache.';
-const ESLINT_INSTANCE_BAN = [
-  // `default` is the CommonJS module object, so `import E from 'eslint'; new E.ESLint()`.
-  { name: 'eslint', importNames: ['ESLint', 'loadESLint', 'default'], allowTypeImports: true, message: ESLINT_INSTANCE_MESSAGE },
-  { name: 'eslint/use-at-your-own-risk', allowTypeImports: true, message: ESLINT_INSTANCE_MESSAGE },
-];
-// The same ban for `import()` and require-shaped calls, which `no-restricted-imports` cannot see.
-// TypeScript's `import eslint = require('eslint')` names no member, so `importNames` cannot see it.
-const ESLINT_INSTANCE_SPECIFIER = String.raw`/^eslint(\u002fuse-at-your-own-risk)?$/`;
-const ESLINT_INSTANCE_RESTRICTED_SYNTAX = [
-  ...restrictedSpecifierSyntax(ESLINT_INSTANCE_SPECIFIER, ESLINT_INSTANCE_MESSAGE),
-  // Vitest's loaders hand back the real module: `vi.importActual('eslint')`, and the
-  // `importOriginal` of `vi.mock('eslint', …)` / `vi.doMock`.
-  ...specifierAt('arguments.0', ESLINT_INSTANCE_SPECIFIER).map((specifier) => ({
-    selector: `CallExpression[callee.object.name='vi'][callee.property.name=/^(mock|doMock|importActual)$/]${specifier}`,
-    message: ESLINT_INSTANCE_MESSAGE,
-  })),
-  { selector: `TSImportEqualsDeclaration[moduleReference.expression.value=${ESLINT_INSTANCE_SPECIFIER}]`, message: ESLINT_INSTANCE_MESSAGE },
-];
-// Every file carries both dynamic halves; only the archive module and ESLINT_INSTANCE_FILES drop one.
-const RESTRICTED_SPECIFIER_SYNTAX = [...ARCHIVE_LIBRARY_RESTRICTED_SYNTAX, ...ESLINT_INSTANCE_RESTRICTED_SYNTAX];
+// Every file carries the dynamic half; only the archive module drops it.
+const RESTRICTED_SPECIFIER_SYNTAX = ARCHIVE_LIBRARY_RESTRICTED_SYNTAX;
 
-const noRestrictedImportsConfig = ['error', { paths: [...YAML_LIBRARY_BAN, ...ARCHIVE_LIBRARY_BAN, ...ESLINT_INSTANCE_BAN], patterns: ARCHIVE_LIBRARY_SUBPATH_BAN }];
+const noRestrictedImportsConfig = ['error', { paths: [...YAML_LIBRARY_BAN, ...ARCHIVE_LIBRARY_BAN], patterns: ARCHIVE_LIBRARY_SUBPATH_BAN }];
 
 // No dispatch on error PROSE, and no bare `Error` subclass: the `src`-only
 // restrictions, named so the archive module's block below can keep them while
@@ -845,6 +894,8 @@ export default [
   // Global ignores
   {
     ignores: [
+      // Everything git ignores, at the depth git ignores it — see `gitignoredPatterns()`.
+      ...gitignoredPatterns(),
       'dist/',
       // Every package's build output too, wherever eslint is pointed: `eslint packages` must
       // judge sources, never their compiled copies (an exempt source's `dist` twin is not exempt).
@@ -860,8 +911,9 @@ export default [
       '**/generated/',
       '**/*.d.ts',
       '**/*.d.cts',  // same intent as *.d.ts — a `.cts` declaration file is still a declaration file
-      'vitest.config.ts',
-      'vitest.*.config.ts',
+      // Every `*.config.ts` (vitest's, knip's), wherever eslint is started — a package's
+      // `lint` runs from that package, so a root-relative `vitest.config.ts` would miss its own.
+      '**/*.config.ts',
       'vitest.shared.ts',
       'vitest.setup.js',
       '.claude/worktrees/',  // Claude Code worktrees
@@ -876,15 +928,9 @@ export default [
   // Base recommended configs
   eslint.configs.recommended,
   sonarjs.configs.recommended,
-  // sonarjs's `aws-*` rules inspect AWS CDK constructs, and this repo has none — yet
-  // one of them alone was 9% of lint time. Derived from the plugin so a new aws rule
-  // is off too; remove this block if the repo ever adopts `aws-cdk-lib`.
-  {
-    rules: Object.fromEntries(
-      Object.keys(sonarjs.rules).filter((name) => name.startsWith('aws-')).map((name) => [`sonarjs/${name}`, 'off']),
-    ),
-  },
   security.configs.recommended,
+  // Rules aimed at a library no package here depends on — see `unusedLibraryRulesOff()`.
+  { rules: unusedLibraryRulesOff() },
 
   // Main configuration - applies to ALL TypeScript files
   {
@@ -900,7 +946,8 @@ export default [
       parserOptions: {
         ecmaVersion: 2024,
         sourceType: 'module',
-        project: './tsconfig.eslint.json',
+        // No `project` here: each package's files get their OWN program — see
+        // `typedProgramConfigs()`.
       },
       globals: {
         NodeJS: 'readonly',
@@ -925,7 +972,7 @@ export default [
       ...generalRulesConfig,
 
       'no-restricted-imports': noRestrictedImportsConfig,
-      // The `import()` / `require` half of the archive-library and ESLint-instance bans, for every
+      // The `import()` / `require` half of the archive-library ban, for every
       // TS file. The `src`-only block below restates it beside the error-contract selectors.
       'no-restricted-syntax': ['error', ...RESTRICTED_SPECIFIER_SYNTAX],
 
@@ -1031,17 +1078,8 @@ export default [
   {
     files: [ARCHIVE_MODULE_FILES],
     rules: {
-      'no-restricted-imports': ['error', { paths: [...YAML_LIBRARY_BAN, ...ESLINT_INSTANCE_BAN] }],
-      'no-restricted-syntax': ['error', ...ERROR_CONTRACT_RESTRICTED_SYNTAX, ...GIT_NO_ANSWER_RESTRICTED_SYNTAX, ...ESLINT_INSTANCE_RESTRICTED_SYNTAX],
-    },
-  },
-  // The files that may construct an ESLint (see ESLINT_INSTANCE_BAN). They keep every
-  // other restriction their neighbours carry.
-  {
-    files: ESLINT_INSTANCE_FILES,
-    rules: {
-      'no-restricted-imports': ['error', { paths: [...YAML_LIBRARY_BAN, ...ARCHIVE_LIBRARY_BAN], patterns: ARCHIVE_LIBRARY_SUBPATH_BAN }],
-      'no-restricted-syntax': ['error', ...ARCHIVE_LIBRARY_RESTRICTED_SYNTAX],
+      'no-restricted-imports': ['error', { paths: YAML_LIBRARY_BAN }],
+      'no-restricted-syntax': ['error', ...ERROR_CONTRACT_RESTRICTED_SYNTAX, ...GIT_NO_ANSWER_RESTRICTED_SYNTAX],
     },
   },
   // `existsSync` folds "could not look" into "absent", over product `src/` (the rule
@@ -1308,6 +1346,7 @@ export default [
   // it can bite. Test and example trees are excluded from every package build and
   // import their own package by name deliberately — see the rule's header and the
   // `recommended: false` note in `packages/utils/eslint/rules/no-self-package-import.cjs`.
+  ...typedProgramConfigs(),
   ...selfImportConfigs(),
 
   // Scoped: enforce safePath.joinUnderRoot() for security-root path joins
