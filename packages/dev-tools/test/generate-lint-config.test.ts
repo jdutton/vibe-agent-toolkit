@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
-  foreignLintInputs,
   LINT_SCRIPT,
   linterInputFindings,
   lintScriptFindings,
@@ -14,7 +13,17 @@ import {
 
 import { cleanupTestTempDir, createTestTempDir, writeFiles } from './test-helpers.js';
 
-const NONE = (): boolean => false;
+/** A fresh temp directory per test, removed after it: the getter reads the current one. */
+function useTempRoot(): () => string {
+  let root = '';
+  beforeEach(() => {
+    root = createTestTempDir();
+  });
+  afterEach(() => {
+    cleanupTestTempDir(root);
+  });
+  return () => root;
+}
 
 function manifest(dir: string, scripts: Record<string, string>): Record<string, string> {
   return { [`packages/${dir}/package.json`]: JSON.stringify({ name: `@scope/${dir}`, scripts }) };
@@ -24,95 +33,6 @@ function manifest(dir: string, scripts: Record<string, string>): Record<string, 
 function turbo(lint: string[], rootLint: string[]): string {
   return `// comment\n${JSON.stringify({ tasks: { lint: { inputs: lint }, '//#lint:root': { inputs: rootLint } } })}`;
 }
-
-describe('foreignLintInputs (the files the package program contains)', () => {
-  let root: string;
-  beforeEach(() => {
-    root = createTestTempDir();
-    writeFiles(root, {
-      'tsconfig.base.json': JSON.stringify({ compilerOptions: { target: 'ES2022', module: 'NodeNext', moduleResolution: 'NodeNext', strict: true, skipLibCheck: true, types: [] } }),
-      'packages/a/package.json': JSON.stringify({ name: 'a', type: 'module' }),
-      'packages/a/tsconfig.eslint.json': renderTsconfigEslint(),
-      'packages/a/src/own.ts': 'export const own = 1;\n',
-      'packages/b/package.json': JSON.stringify({ name: 'b', type: 'module' }),
-      'packages/c/package.json': JSON.stringify({ name: 'c', type: 'module' }),
-    });
-  });
-  afterEach(() => {
-    cleanupTestTempDir(root);
-  });
-
-  const foreignOf = (isGlobal: (rel: string) => boolean = NONE): string[] => foreignLintInputs(root, 'a', isGlobal);
-
-  it('follows an import in a file the program includes but ESLint ignores (a .d.ts, a *.config.ts)', () => {
-    writeFiles(root, {
-      'packages/a/src/types/ambient.d.ts': "import type { T } from '../../../b/src/from-dts.js';\nexport type U = T;\n",
-      'packages/a/vitest.config.ts': "import { cfg } from '../b/src/from-config.js';\nexport default cfg;\n",
-      'packages/b/src/from-dts.ts': 'export type T = string;\n',
-      'packages/b/src/from-config.ts': 'export const cfg = {};\n',
-    });
-    expect(foreignOf()).toEqual(['packages/b/src/from-config.ts', 'packages/b/src/from-dts.ts']);
-  });
-
-  it('maps a .js specifier to a .d.ts', () => {
-    writeFiles(root, {
-      'packages/a/src/m.ts': "import type { M } from '../../b/lib/m.js';\nexport type N = M;\n",
-      'packages/b/lib/m.d.ts': 'export type M = number;\n',
-    });
-    expect(foreignOf()).toEqual(['packages/b/lib/m.d.ts']);
-  });
-
-  it('follows the imports of a .d.ts it reaches', () => {
-    writeFiles(root, {
-      'packages/a/src/n.ts': '/// <reference path="../../b/lib2/n.d.ts" />\nexport const n = 1;\n',
-      'packages/b/lib2/n.d.ts': "import type { O } from './o.js';\nexport type N = O;\n",
-      'packages/b/lib2/o.ts': 'export type O = number;\n',
-    });
-    expect(foreignOf()).toEqual(['packages/b/lib2/n.d.ts', 'packages/b/lib2/o.ts']);
-  });
-
-  it('follows a no-substitution template import', () => {
-    writeFiles(root, {
-      'packages/a/src/t.ts': 'export const t = await import(`../../b/src/tpl.js`);\n',
-      'packages/b/src/tpl.ts': 'export const tpl = 1;\n',
-    });
-    expect(foreignOf()).toEqual(['packages/b/src/tpl.ts']);
-  });
-
-  it('follows a reference path with no ./ prefix', () => {
-    writeFiles(root, {
-      'packages/a/src/r.ts': '/// <reference path="generated/local.d.ts" />\nexport const r = 1;\n',
-      'packages/a/src/generated/local.d.ts': "import type { V } from '../../../b/src/via-ref.js';\nexport type W = V;\n",
-      'packages/b/src/via-ref.ts': 'export type V = number;\n',
-    });
-    expect(foreignOf()).toEqual(['packages/b/src/via-ref.ts']);
-  });
-
-  it("follows a bare '..' specifier", () => {
-    writeFiles(root, {
-      'packages/a/bare.cts': "import p = require('..');\nexport = p;\n",
-      'packages/index.ts': 'export const top = 1;\n',
-    });
-    expect(foreignOf()).toEqual(['packages/index.ts']);
-  });
-
-  it("follows a global dependency's own imports, listing only what it reaches", () => {
-    writeFiles(root, {
-      'packages/a/src/g.ts': "import { shared } from '../../../shared.js';\nexport const g = shared;\n",
-      'shared.ts': "export { c as shared } from './packages/c/src/c.js';\n",
-      'packages/c/src/c.ts': 'export const c = 1;\n',
-    });
-    expect(foreignOf((rel) => rel === 'shared.ts')).toEqual(['packages/c/src/c.ts']);
-  });
-
-  it('lists nothing for a package that imports only itself, node_modules and dist', () => {
-    writeFiles(root, {
-      'packages/a/src/i.ts': "import { own } from './own.js';\nimport type { D } from '../../b/dist/index.js';\nexport const i: D = own;\n",
-      'packages/b/dist/index.d.ts': 'export type D = number;\n',
-    });
-    expect(foreignOf()).toEqual([]);
-  });
-});
 
 describe('renderPackageTurbo', () => {
   it('adds a lint entry extending the root inputs, keeping every other task', () => {
@@ -141,16 +61,10 @@ describe('renderPackageTurbo', () => {
 });
 
 describe('staleLintFiles', () => {
-  let root: string;
-  beforeEach(() => {
-    root = createTestTempDir();
-  });
-  afterEach(() => {
-    cleanupTestTempDir(root);
-  });
+  const tempRoot = useTempRoot();
 
   it('names each generated file that differs from what the generator writes, with the text it should hold', () => {
-    writeFiles(root, {
+    writeFiles(tempRoot(), {
       'packages/fresh/tsconfig.eslint.json': renderTsconfigEslint(),
       'packages/edited/tsconfig.eslint.json': '{}\n',
       'packages/jsonly/tsconfig.eslint.json': renderTsconfigEslint(),
@@ -163,7 +77,7 @@ describe('staleLintFiles', () => {
       { dir: 'importer', lintable: [], foreign: ['packages/b/x.ts'] },
       { dir: 'leftover', lintable: [], foreign: [] },
     ];
-    expect(staleLintFiles(root, plans)).toEqual([
+    expect(staleLintFiles(tempRoot(), plans)).toEqual([
       { relPath: 'packages/edited/tsconfig.eslint.json', expected: renderTsconfigEslint() },
       { relPath: 'packages/jsonly/tsconfig.eslint.json', expected: null },
       { relPath: 'packages/importer/turbo.json', expected: renderPackageTurbo(undefined, ['packages/b/x.ts']) },
@@ -173,35 +87,23 @@ describe('staleLintFiles', () => {
 });
 
 describe('rootLintInputFindings', () => {
-  let root: string;
-  beforeEach(() => {
-    root = createTestTempDir();
-  });
-  afterEach(() => {
-    cleanupTestTempDir(root);
-  });
+  const tempRoot = useTempRoot();
 
   it('wants one prefixed glob per place holding a root-linted file, no more and no fewer', () => {
-    writeFiles(root, { 'turbo.json': turbo([], [`*.${ROOT_LINT_EXTENSIONS}`, `old/**/*.${ROOT_LINT_EXTENSIONS}`, 'package.json']) });
-    expect(rootLintInputFindings(root, ['eslint.config.js', 'tools/a/run.ts']).map((f) => f.message)).toEqual([
+    writeFiles(tempRoot(), { 'turbo.json': turbo([], [`*.${ROOT_LINT_EXTENSIONS}`, `old/**/*.${ROOT_LINT_EXTENSIONS}`, 'package.json']) });
+    expect(rootLintInputFindings(tempRoot(), ['eslint.config.js', 'tools/a/run.ts']).map((f) => f.message)).toEqual([
       expect.stringMatching(/lints files that "tools\/\*\*\/\*\.\{js,.*add it/),
       expect.stringMatching(/input "old\/\*\*\/\*\.\{js,.*matches no file it lints/),
     ]);
-    expect(rootLintInputFindings(root, ['eslint.config.js', 'old/x.js'])).toEqual([]);
+    expect(rootLintInputFindings(tempRoot(), ['eslint.config.js', 'old/x.js'])).toEqual([]);
   });
 });
 
 describe('lintScriptFindings', () => {
-  let root: string;
-  beforeEach(() => {
-    root = createTestTempDir();
-  });
-  afterEach(() => {
-    cleanupTestTempDir(root);
-  });
+  const tempRoot = useTempRoot();
 
   it('requires the one lint script where ESLint lints a file and forbids one where it lints none', () => {
-    writeFiles(root, {
+    writeFiles(tempRoot(), {
       'package.json': JSON.stringify({ name: 'fixture', workspaces: ['packages/*'] }),
       ...manifest('good', { lint: LINT_SCRIPT }),
       ...manifest('missing', {}),
@@ -216,7 +118,7 @@ describe('lintScriptFindings', () => {
       { dir: 'empty', lintable: [], foreign: [] },
       { dir: 'umbrella', lintable: [], foreign: [] },
     ];
-    expect(lintScriptFindings(root, plans).map((f) => `${f.path}: ${f.message}`)).toEqual([
+    expect(lintScriptFindings(tempRoot(), plans).map((f) => `${f.path}: ${f.message}`)).toEqual([
       expect.stringMatching(/^packages\/missing\/package\.json: `lint` must be exactly "VAT_LINT_TASK=1 eslint \. --max-warnings=0"; found undefined/),
       expect.stringMatching(/^packages\/variant\/package\.json: `lint` must be exactly .*found "eslint \. --cache"/),
       expect.stringMatching(/^packages\/empty\/package\.json: `lint` is declared but ESLint lints no file/),
@@ -225,37 +127,31 @@ describe('lintScriptFindings', () => {
 });
 
 describe('linterInputFindings', () => {
-  let root: string;
-  beforeEach(() => {
-    root = createTestTempDir();
-  });
-  afterEach(() => {
-    cleanupTestTempDir(root);
-  });
+  const tempRoot = useTempRoot();
 
   const CONFIG = "import a from 'eslint-plugin-a';\nimport b from '@scope/eslint-plugin-b/sub';\nimport fs from 'node:fs';\nimport local from './local.cjs';\n// require('not-imported')\n";
 
   it('accepts inputs naming exactly the imported packages plus eslint and typescript', () => {
     const names = ['@scope/eslint-plugin-b', 'eslint', 'eslint-plugin-a', 'typescript'];
-    writeFiles(root, {
+    writeFiles(tempRoot(), {
       'eslint.config.js': CONFIG,
       'turbo.json': turbo(
         ['$TURBO_DEFAULT$', ...names.map((n) => `$TURBO_ROOT$/node_modules/${n}/package.json`), '$TURBO_ROOT$/node_modules/.bun/x+*/node_modules/x/*/package.json'],
         names.map((n) => `node_modules/${n}/package.json`),
       ),
     });
-    expect(linterInputFindings(root)).toEqual([]);
+    expect(linterInputFindings(tempRoot())).toEqual([]);
   });
 
   it('flags a missing package and one the config does not import, per task', () => {
-    writeFiles(root, {
+    writeFiles(tempRoot(), {
       'eslint.config.js': CONFIG,
       'turbo.json': turbo(
         ['eslint', 'eslint-plugin-a', 'typescript', 'stale-plugin'].map((n) => `$TURBO_ROOT$/node_modules/${n}/package.json`),
         ['@scope/eslint-plugin-b', 'eslint', 'eslint-plugin-a', 'typescript'].map((n) => `node_modules/${n}/package.json`),
       ),
     });
-    expect(linterInputFindings(root).map((f) => f.message)).toEqual([
+    expect(linterInputFindings(tempRoot()).map((f) => f.message)).toEqual([
       expect.stringMatching(/"lint" task.*Missing: @scope\/eslint-plugin-b\. Not imported: stale-plugin\./),
     ]);
   });

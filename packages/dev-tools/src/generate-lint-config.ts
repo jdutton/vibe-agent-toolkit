@@ -142,7 +142,7 @@ function programFiles(repoRoot: string, dir: string, cache: SourceFileCache): st
  * `node_modules` (keyed through the lockfile), any package's `dist/` (keyed by the root task), and
  * the files `globalDependencies` hash for every task.
  */
-export function foreignLintInputs(repoRoot: string, dir: string, isGlobalDependency: (rel: string) => boolean, cache: SourceFileCache = new Map()): string[] {
+export function foreignLintInputs(repoRoot: string, dir: string, isGlobalDependency: (rel: string) => boolean, cache: SourceFileCache): string[] {
   const realpath = ts.sys.realpath ?? ((path: string): string => path);
   const root = realpath(repoRoot);
   const packageRoot = `packages/${dir}/`;

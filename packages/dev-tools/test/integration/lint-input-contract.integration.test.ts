@@ -96,7 +96,7 @@ describe('the lint task input contract (turbo dry run)', () => {
     });
     // The generated package turbo.json, from the generator itself.
     writeFiles(root, { 'tsconfig.base.json': JSON.stringify({ compilerOptions: { module: 'NodeNext', moduleResolution: 'NodeNext', types: [] } }), 'packages/app/tsconfig.eslint.json': renderTsconfigEslint() });
-    const foreign = foreignLintInputs(root, 'app', () => false);
+    const foreign = foreignLintInputs(root, 'app', () => false, new Map());
     expect(foreign).toEqual(['packages/dep/test/helpers.ts']);
     writeFiles(root, { 'packages/app/turbo.json': renderPackageTurbo(undefined, foreign) ?? '' });
     // A real repository, so turbo hashes what git tracks and skips what it ignores.
