@@ -1005,7 +1005,7 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   18 of VAT's 25 workspaces declare `zod ^3.25`, and so do `@vibe-validate/*`, so the lockfile
   holds `zod@3.25.76`. The nested zod 4 copies already resolve to a fixed 4.6.x. Exposure: VAT
   validates the operator's own config and files with zod; no schema parses remote input. The
-  advisory is in `osv-scanner.toml`'s register, scoped by its reason to `zod@3.25.76`.
+  advisory is in `osv-scanner.toml`'s register, held to `zod@3.25.76` by `check:osv-ignores`.
 - **Reproduce:** `osv-scanner scan --lockfile=bun.lock` with the register entry removed
 - **Where:** every `packages/*/package.json` that declares `zod`
 - **Fix:** migrate those workspaces to zod ≥ 4.6.6 (a Breaking change to every exported schema),

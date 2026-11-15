@@ -47,5 +47,18 @@ jobs:
           install -m 0755 osv-scanner /usr/local/bin/osv-scanner
           osv-scanner --version
 
+      # osv-scanner exits 0 when an ignore matches nothing (its advisory was fixed, withdrawn or
+      # its package left the lockfile) and only prints "has unused ignores" — so the step fails on
+      # that line itself. The offline half (scope, both-way pairing) is `bun run check:osv-ignores`.
       - name: Scan lockfile against accepted-risk register
-        run: osv-scanner scan source --lockfile=bun.lock --config=osv-scanner.toml
+        run: |
+          set +e
+          osv-scanner scan source --lockfile=bun.lock --config=osv-scanner.toml > osv-scan.log 2>&1
+          status=$?
+          set -e
+          cat osv-scan.log
+          if [ "$status" -ne 0 ]; then exit "$status"; fi
+          if grep -F "has unused ignores" osv-scan.log > /dev/null; then
+            echo "::error file=osv-scanner.toml::An ignore matches no advisory in bun.lock any more: delete the entry and its ACCEPTED_ADVISORIES row."
+            exit 1
+          fi

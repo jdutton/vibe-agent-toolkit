@@ -12,9 +12,15 @@
 #      an IgnoredVulns entry when a fix is genuinely unavailable or unsafe.
 #   2. Every entry MUST have a `reason` explaining WHY it is safe to defer.
 #   3. Re-evaluate on each Dependabot bump; delete entries once a fix lands.
-#      `osv-scanner` prints an "unused ignores" list for entries whose advisory
-#      no longer matches anything in the lockfile — that list is the delete
-#      queue for rule 3, and it does not fail the build, so it must be read.
+#      Both halves are enforced. The dependency-audit job fails when
+#      `osv-scanner` reports an "unused ignore" (an entry whose advisory no
+#      longer matches anything in the lockfile). `bun run check:osv-ignores`
+#      (packages/dev-tools/src/osv-ignore-register.ts, full tier) holds every
+#      entry to an ACCEPTED_ADVISORIES row naming the package and the exact
+#      versions it accepts: red on another affected version the entry would
+#      hide, on an accepted version or package gone from bun.lock, on an entry
+#      with no row, `reason` or `ignoreUntil`, and on a row with no entry.
+#      Adding an entry means adding its row.
 #   4. A `reason` that names a BLOCKER ("waiting on X to widen its range") is a
 #      claim with an expiry date. Re-check the blocker itself, not just whether
 #      the advisory still fires — nothing in the tooling tells you a reason has
@@ -107,6 +113,11 @@
 # Reconciled 2026-11-12 (2 new advisories, each with a patched version): fixed
 # under rule 1, none listed — the `overrides` pin moved basic-ftp 6.2.1 -> 6.2.4
 # (GHSA-r4jh-29pc-gfqr, GHSA-5pm8-86m8-9m6r).
+#
+# Reconciled 2026-11-15: an empty-config scan of bun.lock finds one advisory, the
+# zod entry below; nothing to fix under rule 1. The zod-only scope check became
+# the register-wide `check:osv-ignores` (rule 3), and the audit job now fails
+# on an unused ignore instead of printing it.
 # ---------------------------------------------------------------------------
 
 # --- zod 3 (GHSA-mrhx-c7xc-m3w5) ---------------------------------------------
@@ -114,15 +125,16 @@
 # patched 4.x under rule 1 — their declared ranges admit it. OSV-Scanner cannot
 # scope an IgnoredVulns entry to one package version (a PackageOverrides entry
 # would ignore EVERY advisory against 3.25.76, which is wider), so the scope is
-# ENFORCED by `bun run check:zod-advisory-scope` (packages/dev-tools/src/
-# zod-advisory-scope.ts, full tier): red when any other zod < 4.6.6 resolves, and
-# red once 3.25.76 is gone (delete this entry) or this entry is (delete the check).
+# ENFORCED by this entry's ACCEPTED_ADVISORIES row (`bun run check:osv-ignores`):
+# red when any other zod < 4.6.6 resolves, and red once 3.25.76 is gone.
 # Why it cannot be fixed now: VAT's workspaces declare zod `^3.25` and the
 # only fixed version is zod 4.6.6, a Breaking migration of every schema VAT
 # publishes — scheduled as its own PR after the next feature PR.
 # Exposure: VAT is a CLI that validates the operator's OWN config and files with
 # zod; no schema parses input from a remote party.
 # BLOCKER TO RE-CHECK (rule 4): the zod 4 migration PR. Delete this entry with it.
+# Last re-checked 2026-11-15: zod's newest 3.x is still 3.25.76 and the advisory
+# still names 4.6.6 as its only fix. `ignoreUntil` is the next re-check date.
 [[IgnoredVulns]]
 id = "GHSA-mrhx-c7xc-m3w5"
 ignoreUntil = 2026-12-31
