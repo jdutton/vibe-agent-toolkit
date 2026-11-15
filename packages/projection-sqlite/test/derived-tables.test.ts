@@ -14,13 +14,12 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { DERIVED_TABLES, PROJECTION_TABLES, allDerivedSpecs } from '@vibe-agent-toolkit/resources';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { openRunDatabase } from '../src/run-database.js';
 import { EXTENT_KEY_COLUMNS, createDerivedTableSql, insertDerivedSql } from '../src/schema-sql.js';
 import { openSqliteFactStore } from '../src/store.js';
 
-import { sampleProjection } from './fixtures.js';
+import { hydrateEveryTable, sampleProjection } from './fixtures.js';
 
 /** A minimal lens row, since every field but `contextId` is fixed for these. */
 function lensRow(contextId: string): Record<string, unknown> {
@@ -80,7 +79,7 @@ describe('derived relations are shaped like tables without being tables', () => 
 
 describe('writeDerived fills the relations the run database creates', () => {
   it('round-trips rows through SQL', async () => {
-    const store = openRunDatabase(sampleProjection());
+    const store = hydrateEveryTable(sampleProjection());
     try {
       await store.writeDerived({
         lensContexts: [lensRow('lens-a')],
@@ -97,7 +96,7 @@ describe('writeDerived fills the relations the run database creates', () => {
     // The failure this guards: two evaluations in one process are two answers to
     // two questions. Appending would leave both in the table and silently double
     // every count a caller groups.
-    const store = openRunDatabase(sampleProjection());
+    const store = hydrateEveryTable(sampleProjection());
     try {
       await store.writeDerived({ edges: [edgeRow('res-1', 0, 'lens-a')] });
       await store.writeDerived({ edges: [edgeRow('res-9', 0, 'lens-b')] });
@@ -108,7 +107,7 @@ describe('writeDerived fills the relations the run database creates', () => {
   });
 
   it('leaves a relation the caller OMITTED alone, which is not the same as empty', async () => {
-    const store = openRunDatabase(sampleProjection());
+    const store = hydrateEveryTable(sampleProjection());
     try {
       await store.writeDerived({ lensContexts: [lensRow('lens-a')], edges: [edgeRow('res-1', 0, 'lens-a')] });
       // Names `edges` only: `lensContexts` is absent, so it must survive.
@@ -123,7 +122,7 @@ describe('writeDerived fills the relations the run database creates', () => {
   });
 
   it('accepts a null in a nullable key column, since an edge may carry no ordinal', async () => {
-    const store = openRunDatabase(sampleProjection());
+    const store = hydrateEveryTable(sampleProjection());
     try {
       await store.writeDerived({ edges: [edgeRow('res-1', 0, 'lens-a')] });
       await expect(
@@ -144,7 +143,7 @@ describe('an UNEVALUATED derived relation does not exist, so SQLite refuses it',
   // 0. With no table, the engine itself says `no such table`, whatever spelling
   // reached it.
   it('throws `no such table` for a relation nothing wrote', async () => {
-    const store = openRunDatabase(sampleProjection());
+    const store = hydrateEveryTable(sampleProjection());
     try {
       expect(() => store.query('SELECT * FROM edges')).toThrow(/no such table: edges/u);
     } finally {
@@ -153,7 +152,7 @@ describe('an UNEVALUATED derived relation does not exist, so SQLite refuses it',
   });
 
   it('creates the relation on an EMPTY write — "evaluated, no rows" is a real answer', async () => {
-    const store = openRunDatabase(sampleProjection());
+    const store = hydrateEveryTable(sampleProjection());
     try {
       await store.writeDerived({ edges: [] });
       expect(store.query('SELECT * FROM edges')).toEqual([]);
@@ -163,7 +162,7 @@ describe('an UNEVALUATED derived relation does not exist, so SQLite refuses it',
   });
 
   it('creates ONLY the relations the write names', async () => {
-    const store = openRunDatabase(sampleProjection());
+    const store = hydrateEveryTable(sampleProjection());
     try {
       await store.writeDerived({ edges: [edgeRow('res-1', 0, 'lens-a')] });
       expect(store.query('SELECT COUNT(*) AS n FROM edges')).toEqual([{ n: 1 }]);
@@ -174,7 +173,7 @@ describe('an UNEVALUATED derived relation does not exist, so SQLite refuses it',
   });
 
   it('rolls a failed first write back to ABSENT, and a later write still creates the relation', async () => {
-    const store = openRunDatabase(sampleProjection());
+    const store = hydrateEveryTable(sampleProjection());
     try {
       await expect(store.writeDerived({ edges: [{ ...edgeRow('res-1', 0, 'lens-a'), refOrdinal: 'x' }] }))
         .rejects.toThrow(/numeric column/u);
@@ -185,7 +184,25 @@ describe('an UNEVALUATED derived relation does not exist, so SQLite refuses it',
       await store.close();
     }
   });
+
+  it('reports the failed write, not a failure re-reading the schema after it', async () => {
+    const store = hydrateEveryTable(sampleProjection());
+    const prepare = vi.spyOn(DatabaseSync.prototype, 'prepare').mockImplementation(function (this: DatabaseSync, sql: string) {
+      if (sql.includes('sqlite_schema')) throw new Error('the schema re-read failed');
+      return PREPARE.call(this, sql);
+    });
+    try {
+      await expect(store.writeDerived({ edges: [{ ...edgeRow('res-1', 0, 'lens-a'), refOrdinal: 'x' }] }))
+        .rejects.toThrow(/numeric column/u);
+    } finally {
+      prepare.mockRestore();
+      await store.close();
+    }
+  });
 });
+
+/** The driver's own `prepare`, for a spy to fall through to. */
+const PREPARE = DatabaseSync.prototype.prepare;
 
 describe('the shared on-disk fact store cannot take a lens evaluation', () => {
   // 🚨 The whole safety property. That database is ONE per VAT release, shared

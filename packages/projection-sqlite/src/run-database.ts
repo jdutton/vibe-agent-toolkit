@@ -4,9 +4,9 @@
  * A run's statements never reach the fact store. That store is **one database
  * per VAT release, shared by every root on the machine**, and arbitrary SQL
  * carries no key predicate, so a statement run there answers from every
- * projection on the machine. The run database is filled from one run's
- * {@link Projection} when it is opened, holds that tree and nothing else, and
- * is gone when it closes.
+ * projection on the machine. The run database is opened only by hydration
+ * ({@link hydrateRunDatabase}): it holds exactly the relations the run's
+ * statements name, filled with the run's own rows, and is gone when it closes.
  *
  * ## Why it cannot become a second storage contract
  *
@@ -16,44 +16,49 @@
  * the other. And only the CLI's one store module may import this package
  * (`local/projection-sqlite-import-boundary`).
  *
- * ⚠️ Transitional: it is opened from a whole populated projection, every relation
- * copied. Hydrating only the relations a run's statements need replaces
- * {@link openRunDatabase}, and the run database stays as hydration's result.
+ * ## A relation the run did not hydrate does not exist here
+ *
+ * Hydration creates only the relations it is handed, so a statement naming any
+ * other fails `no such table` in SQLite itself — refused, never answered from an
+ * empty table — and the SQL gate's introspection check stops a statement from
+ * learning which relations exist by asking the schema instead.
  */
 
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 
 import {
+  compareRows,
   type DerivedTableName,
   type DerivedTableSpec,
   type ProjectionColumnType,
-  type Projection,
+  type RowComparator,
   allDerivedSpecs,
   projectionColumnTypes,
   quoteIdentifier,
-  splitProjectionByScope,
 } from '@vibe-agent-toolkit/resources';
-import { promised } from '@vibe-agent-toolkit/utils';
+import { countWork, promised } from '@vibe-agent-toolkit/utils';
 
-import { createDerivedTableSql, insertDerivedSql } from './schema-sql.js';
-import { runGated } from './sql-gate.js';
-import {
-  createSchema,
-  DEFAULT_RETENTION,
-  inTransaction,
-  prepareStoreTables,
-  type WriteCounters,
-  writeBlobRows,
-  writeExtentRows,
-} from './store.js';
+import { createDerivedTableSql, insertDerivedSql, type QueryableRelation, queryableSpecs } from './schema-sql.js';
+import { type GateConnection, openGate, refreshRelationPagesAfter, runGated } from './sql-gate.js';
+import { inTransaction } from './store.js';
 import { encodeValue, type SqliteValue } from './values.js';
 
-/**
- * Loading a run database is hydration, which ADR I10 does not bound: one write
- * for the extent, one for the blob facts when the projection names a content
- * key, and every row each inserted.
- */
-const HYDRATION_WRITES: WriteCounters = { writes: 'hydration.writes', rowsWritten: 'hydration.rows.written' };
+/** One relation's rows, as a projection or a lens holds them. */
+type RelationRows = readonly Readonly<Record<string, unknown>>[];
+
+/** What {@link hydrateRunDatabase} fills a run database with. */
+export interface RunDatabaseHydration {
+  /**
+   * The id every extent-scoped row is filed under, read off the run's root row by the caller —
+   * the driver mints it, and the rows carry it as their foreign key.
+   */
+  readonly rootId: string;
+  /**
+   * Exactly the relations to create and fill, by SQL name, each with the run's own rows. A `Map`,
+   * so a whole `Projection` is not assignable: hydration takes the needed set and nothing else.
+   */
+  readonly relations: ReadonlyMap<string, RelationRows>;
+}
 
 /**
  * The tree hash a run database's one extent is filed under.
@@ -66,7 +71,7 @@ const HYDRATION_WRITES: WriteCounters = { writes: 'hydration.writes', rowsWritte
 const RUN_TREE_HASH = 'ephemeral';
 
 /**
- * The one handle SQL runs on: one run's projection, in memory, plus the derived
+ * The one handle SQL runs on: the relations one run's statements name, in memory, plus the derived
  * relations the run's lenses write.
  *
  * SQL is declared here and not on the `FactStore` port because it is a
@@ -252,19 +257,30 @@ interface DerivedPlan {
   readonly spec: DerivedTableSpec;
   /** Each declared column paired with what it holds, in registry order. */
   readonly columns: readonly (readonly [column: string, type: ProjectionColumnType])[];
+  /** The canonical row order its rows are inserted in. */
+  readonly compare: RowComparator;
   readonly insert: StatementSync;
   /** Empty the relation, so one evaluation replaces another rather than joining it. */
   readonly clear: StatementSync;
 }
 
 /**
- * Open the run database over one run's projection.
+ * Open the run database: create exactly the relations handed in, and fill each with its rows.
  *
  * The point is not speed — it is that **the same SQL gets the same answer
  * whether or not a fact store exists**. Whatever `populate()` returns, served
- * from the store or derived, is loaded here, and the SQL runs here.
+ * from the store or derived, is what the caller hands in, and the SQL runs here.
  *
- * Takes the whole projection, every relation copied, and nothing else.
+ * - **Exactly the mapped relations**, in today's table shape (an extent-scoped
+ *   table leads with `storeRootId` and `storeTreeHash`), from the one
+ *   {@link queryableSpecs} the compile probe also creates from. No `extents`,
+ *   no `blob_keys`.
+ * - **Canonical order**: each relation's rows are inserted sorted by
+ *   `compareRows`, so a statement without `ORDER BY` answers alike whichever
+ *   order the population produced them in.
+ * - **One transaction of plain `INSERT`s**: nothing to clear, evict or vacuum,
+ *   since the database is new. Counted as one `hydration.writes` when it wrote a
+ *   relation, and every row as `hydration.rows.written`.
  *
  * 🪤 **This deliberately does not configure the connection the way the
  * file-backed store does, and that is not a tidiness choice.** Every pragma that
@@ -281,43 +297,65 @@ interface DerivedPlan {
  * - `auto_vacuum` and `synchronous` describe how pages reach a file there is
  *   none of.
  *
- * @param projection - One run's populated projection
- * @returns The open run database, holding that projection; close it when done
- * @throws Error When the projection has no root row: a driver invariant, since
- *   `populate()` adds exactly one, and without it there is no id to file the
- *   extent under
+ * @param hydration - The run's root id and the relations to hydrate
+ * @returns The open run database, holding those relations; close it when done
+ * @throws Error When a mapped name is not a queryable relation: a driver
+ *   invariant, since the caller plans from the same registries
  */
-export function openRunDatabase(projection: Projection): RunDatabase {
-  // The key is read OFF the projection rather than re-derived from the root.
-  // The driver mints `roots.id` with `rootIdFor` and every
-  // `resolution_contexts.rootId` is a foreign key into it, so taking it from
-  // the rows means the key provably describes them.
-  const rootId = projection.roots[0]?.id;
-  if (rootId === undefined) {
-    throw new Error(
-      'The population produced no root row, so there is no id to file its extent under.'
-      + ' This is a driver invariant rather than a user error — `populate()` adds exactly'
-      + ' one, and a projection without it cannot be stored or queried.',
-    );
-  }
+export function hydrateRunDatabase(hydration: RunDatabaseHydration): RunDatabase {
+  const byName = new Map(queryableSpecs().map((relation) => [relation.spec.name, relation]));
+  const planned = [...hydration.relations].map(([name, rows]) => {
+    const relation = byName.get(name);
+    if (relation === undefined) {
+      throw new Error(`"${name}" is not a queryable relation, so a run database cannot hold it.`);
+    }
+    return { relation, rows };
+  });
   const database = new DatabaseSync(':memory:');
   try {
-    createSchema(database);
-    // 🚨 NO derived relation is created here. Each is created by the first
-    // `writeDerived` that names it, so a relation no lens evaluated is ABSENT
-    // and a statement naming it fails `no such table` — see `writeDerived`.
-    // Creating them all up front would turn that refusal back into an empty
-    // table that answers `0`. And never in `createSchema`: it is shared with
-    // the file-backed store, which a lens's rows must never enter.
-    const tables = prepareStoreTables(database, DEFAULT_RETENTION);
-    const { blobs, extent } = splitProjectionByScope(projection);
-    writeBlobRows(tables, blobs, HYDRATION_WRITES);
-    writeExtentRows(tables, { rootId, treeHash: RUN_TREE_HASH }, extent, HYDRATION_WRITES);
+    // 🚨 Only what was planned. A relation absent from the map is ABSENT from
+    // the database, so a statement naming it fails `no such table` rather than
+    // reading an empty table that answers `0`.
+    if (planned.length > 0) {
+      const leading = [hydration.rootId, RUN_TREE_HASH];
+      let written = 0;
+      inTransaction(database, () => {
+        for (const { relation, rows } of planned) {
+          written += insertRelation(database, relation, relation.extentKeyed ? leading : [], rows);
+        }
+      });
+      countWork('hydration.writes', 1);
+      countWork('hydration.rows.written', written);
+    }
+    return new SqliteRunDatabase(database);
   } catch (error) {
     database.close();
     throw error;
   }
-  return new SqliteRunDatabase(database);
+}
+
+/**
+ * Create one relation and insert its rows in canonical order.
+ *
+ * @param database - The run database, inside the hydration transaction
+ * @param relation - The relation's DDL and `INSERT`
+ * @param leading - Values bound ahead of each row's own columns: the extent key, or nothing
+ * @param rows - The run's rows of it
+ * @returns How many rows it inserted
+ */
+function insertRelation(
+  database: DatabaseSync,
+  relation: QueryableRelation,
+  leading: readonly string[],
+  rows: RelationRows,
+): number {
+  database.exec(relation.createSql);
+  const insert = database.prepare(relation.insertSql);
+  const columns = projectionColumnTypes(relation.spec);
+  for (const row of [...rows].sort(compareRows(relation.spec))) {
+    insert.run(...leading, ...columns.map(([column, { kind }]) => encodeValue(kind, row[column])));
+  }
+  return rows.length;
 }
 
 /**
@@ -326,27 +364,32 @@ export function openRunDatabase(projection: Projection): RunDatabase {
  *
  * Every derived relation is created up front HERE, which is exactly what the
  * run database must not do — and safe here only because nothing can read this
- * database's empty tables as an answer.
+ * database's empty tables as an answer. Created from {@link queryableSpecs},
+ * the source hydration creates from, so the probe holds exactly what hydration
+ * can create: `SELECT * FROM extents` refuses at preflight.
  *
  * @returns An open probe; close it when done
  */
 export function openProjectionCompileProbe(): ProjectionCompileProbe {
   const database = new DatabaseSync(':memory:');
-  createSchema(database);
-  for (const spec of allDerivedSpecs()) {
-    database.exec(createDerivedTableSql(spec));
+  try {
+    for (const { createSql } of queryableSpecs()) database.exec(createSql);
+    return new SqliteCompileProbe(database);
+  } catch (error) {
+    database.close();
+    throw error;
   }
-  return new SqliteCompileProbe(database);
 }
 
 /** The {@link ProjectionCompileProbe} contract over one in-memory connection. */
 class SqliteCompileProbe implements ProjectionCompileProbe {
-  readonly #database: DatabaseSync;
+  /** This handle's gate state, the reference pointers read off its own connection. */
+  readonly #gate: GateConnection;
   #closed = false;
 
   /** @param database - An open connection holding the full queryable schema */
   constructor(database: DatabaseSync) {
-    this.#database = database;
+    this.#gate = openGate(database);
   }
 
   /** @inheritdoc */
@@ -355,7 +398,7 @@ class SqliteCompileProbe implements ProjectionCompileProbe {
     // Compiled and discarded: the step callback does nothing. `.all()` is
     // deliberately NOT called — stepping is the unbounded half, and the whole
     // value of this method is being the half that is not.
-    runGated(this.#database, sql, parameters, () => undefined);
+    runGated(this.#gate, sql, parameters, () => undefined);
   }
 
   /** @inheritdoc */
@@ -365,7 +408,7 @@ class SqliteCompileProbe implements ProjectionCompileProbe {
       // transaction or statement cache to settle first.
       if (!this.#closed) {
         this.#closed = true;
-        this.#database.close();
+        this.#gate.database.close();
       }
     });
   }
@@ -374,6 +417,8 @@ class SqliteCompileProbe implements ProjectionCompileProbe {
 /** The {@link RunDatabase} contract over one in-memory connection. */
 class SqliteRunDatabase implements RunDatabase {
   readonly #database: DatabaseSync;
+  /** This handle's gate state, the reference pointers read off its own connection. */
+  readonly #gate: GateConnection;
   /**
    * Derived-relation statements by registry key, each prepared by the write that
    * CREATED its table — so a key's presence here means the relation exists. See
@@ -382,24 +427,24 @@ class SqliteRunDatabase implements RunDatabase {
   readonly #derivedPlans = new Map<string, DerivedPlan>();
   #closed = false;
 
-  /** @param database - An open in-memory connection, already loaded */
+  /** @param database - An open in-memory connection, already hydrated */
   constructor(database: DatabaseSync) {
     this.#database = database;
+    this.#gate = openGate(database);
   }
 
   /** @inheritdoc */
   query(sql: string, ...parameters: readonly SqliteValue[]): readonly Record<string, unknown>[] {
     this.#assertOpen();
 
-    // 🪤 Read-only-ness is `PRAGMA query_only` and NOT an inspection of the
-    // statement, because there is nothing useful to inspect: `StatementSync`
-    // exposes no read-only flag (verified on Node 24.13.1 — `readOnly` is simply
-    // absent), so the alternative would be pattern-matching the caller's SQL,
-    // which is a denylist and loses to the first `WITH c AS (…) DELETE FROM …`
-    // nobody thought of — real SQLite grammar, and measured reaching the engine.
-    // The pragma is the engine refusing, which no phrasing talks out of it.
-    // The kind gate in `sql-gate.ts` reads one token; it composes with this
-    // rather than replacing it.
+    // 🪤 A write is refused by the gate before it runs, from the compiled
+    // program and never from the text: `StatementSync` exposes no read-only flag
+    // (verified on Node 24.13.1 — `readOnly` is simply absent), and
+    // pattern-matching the caller's SQL is a denylist that loses to the first
+    // `WITH c AS (…) DELETE FROM …` nobody thought of. The gate's `EXPLAIN`
+    // shows the write transaction such a program opens, whatever its spelling.
+    // `PRAGMA query_only` stays armed while the statement steps, as a second
+    // guard: the engine refusing, which no phrasing talks out of it.
     //
     // ⚠️ **The blast radius, as shipped.** Two axes, and the pragma only covers
     // the first.
@@ -430,10 +475,10 @@ class SqliteRunDatabase implements RunDatabase {
     // uses too: leaving it read-only would turn the next lens write into
     // "attempt to write a readonly database" somewhere with no query in sight.
     //
-    // Counts nothing: the load that filled this database was counted as
-    // hydration when it happened.
+    // Counts one `statement.explained` (the gate's `EXPLAIN`); the load that filled
+    // this database was counted as hydration when it happened.
     return runGated(
-      this.#database,
+      this.#gate,
       sql,
       parameters,
       (statement) => statement.all(...parameters) as readonly Record<string, unknown>[],
@@ -447,7 +492,7 @@ class SqliteRunDatabase implements RunDatabase {
     // `StatementSync.columns()` is why the engines floor is 22.16.0, not 22.13.0:
     // Node added it in 22.16.0 (see the package header for the rejected
     // alternative).
-    return runGated(this.#database, sql, parameters, (statement) => statement.columns().map((column) => column.name));
+    return runGated(this.#gate, sql, parameters, (statement) => statement.columns().map((column) => column.name));
   }
 
   /**
@@ -465,15 +510,21 @@ class SqliteRunDatabase implements RunDatabase {
       this.#assertOpen();
       const bundle = rows as Record<string, readonly Record<string, unknown>[] | undefined>;
       const knownBefore = new Set(this.#derivedPlans.keys());
+      let failed = false;
       try {
         this.#writeDerivedRows(bundle);
       } catch (error) {
+        failed = true;
         // The rollback removed every table this write created; forget their plans
         // too, or the next write would skip the `CREATE` and fail `no such table`.
         for (const key of this.#derivedPlans.keys()) {
           if (!knownBefore.has(key)) this.#derivedPlans.delete(key);
         }
         throw error;
+      } finally {
+        // A created relation has root pages the gate must map, or a statement naming it
+        // reads a page no relation holds. After a failed write the original failure wins.
+        refreshRelationPagesAfter(this.#gate, failed);
       }
     });
   }
@@ -495,7 +546,9 @@ class SqliteRunDatabase implements RunDatabase {
         if (supplied === undefined) continue;
         const plan = this.#derivedPlanFor(spec);
         plan.clear.run();
-        for (const row of supplied) {
+        // In canonical order, as hydration inserts: a statement without
+        // `ORDER BY` then answers alike whatever order the lens produced.
+        for (const row of [...supplied].sort(plan.compare)) {
           plan.insert.run(...plan.columns.map(([column, { kind }]) => encodeValue(kind, row[column])));
         }
       }
@@ -520,6 +573,7 @@ class SqliteRunDatabase implements RunDatabase {
     const plan: DerivedPlan = {
       spec,
       columns: projectionColumnTypes(spec),
+      compare: compareRows(spec),
       insert: this.#database.prepare(insertDerivedSql(spec)),
       clear: this.#database.prepare(`DELETE FROM ${quoteIdentifier(spec.name)}`),
     };

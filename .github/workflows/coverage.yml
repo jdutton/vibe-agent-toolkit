@@ -18,11 +18,11 @@ jobs:
           fetch-depth: 0
 
       # No `node-version`, so the setup action installs the exact Node floor it
-      # derives from root package.json `engines.node`. This is the ONE job whose
-      # unit-suite VERDICT is taken on the floor (validate.yml's matrix runs Node
-      # 24; node-floor.yml only smoke-tests; test-heap-guard.yml runs two
-      # packages' integration/system tiers on the floor but reads only heap
-      # lines), so a floor-only unit red shows up here and nowhere else.
+      # derives from root package.json `engines.node`. Coverage is read on the
+      # floor (validate.yml's matrix runs Node 24; node-floor.yml runs the full
+      # `bun run validate` gate at the floor, so a floor-only unit red shows up
+      # there too; test-heap-guard.yml runs two packages' integration/system
+      # tiers on the floor but reads only heap lines).
       - name: Setup toolchain
         uses: ./.github/actions/setup
 

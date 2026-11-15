@@ -631,6 +631,13 @@ the corpus:
 ⚠️ Flipping this makes the store every adopter's problem, so the bound came first: `projection-sqlite`
 bounds the blob tier as well as the extent tier — see `DEFAULT_RETAINED_BLOB_KEYS` there.
 
+🚨 **The store makes the POPULATION cheap and is never what SQL reads.** It is one database shared by
+every root on the machine, so a statement run against it answered from other repositories. Each run
+hydrates a fresh in-memory run database from its own populated rows instead — only the projection
+tables its statements name, in canonical row order, so a warm run and a cold one answer alike — and
+`projection-containment.integration.test.ts` holds it: two repositories in one store, every
+relation the second hydrates equal to its no-store run.
+
 **One scope for a whole multi-surface run.** Every lane opens its own
 `withPopulationCache` bracket, because each has to be correct when its command runs alone — so a
 multi-lane run opened a database and took a `git write-tree` per lane. `vat validate` therefore

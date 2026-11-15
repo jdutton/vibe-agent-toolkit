@@ -29,9 +29,12 @@
  * `store.ts` cites as the reason it chmods the cache `0o700`.
  *
  * ⇒ The store's job is to make the POPULATION cheap, and that is all. Whatever
- * `populate()` returns — served from the store or derived — opens a fresh
- * in-memory run database that holds this tree and nothing else, and the SQL
- * runs there. The fact store's factory returns a port with no SQL surface, so
+ * `populate()` returns — served from the store or derived — hydrates a fresh
+ * in-memory run database with the relations the run's statements name, holding
+ * this tree's rows and nothing else, and the SQL runs there. A test holds it:
+ * `projection-containment.integration.test.ts` populates two repositories into
+ * one store and asserts every relation the second run hydrates equals its
+ * no-store run. The fact store's factory returns a port with no SQL surface, so
  * this is a property of the types as well as of this module. The saving is untouched (it was always in the population: on this
  * repository {@link ProjectionProvenance.populationMs} reads 1.16-1.18 s derived
  * against 0.29-0.31 s served), and "one tree, one answer" stops being a claim
@@ -50,11 +53,15 @@
 import { performance } from 'node:perf_hooks';
 
 import {
-  allDerivedSpecs,
   buildResourceProjection,
-  PROJECTION_TABLES,
+  definesCteNamed,
+  identifierSpellings,
+  queryableRelationNames,
+  queryableRelationSpecs,
+  relationsNamedBy,
   storeMissOf,
   type LensRefusalCode,
+  type PopulationCache,
   type PopulationOutcome,
   type Projection,
 } from '@vibe-agent-toolkit/resources';
@@ -66,19 +73,20 @@ import type { Logger } from './logger.js';
 import { populateAndReport } from './population-wiring.js';
 import {
   CHANGED_FILES_LENS,
-  definesCteNamed,
   evaluateLens,
-  lensesNamedBy,
   lensRelationNames,
   lensPopulationOf,
-  relationsNamedBy,
+  planHydration,
   type LensEvaluation,
   type LensRefusal,
 } from './projection-lenses.js';
-import { openCompileProbe, openRunDatabase, withPopulationCache } from './projection-store.js';
+import { hydrateRunDatabase, openCompileProbe, withPopulationCache } from './projection-store.js';
+
+/** What SQLite says when a statement names a table the schema does not have, before the name. */
+const NO_SUCH_TABLE = 'no such table: ';
 
 /** What SQLite says when a statement names something the schema does not have: wording only, never a code. */
-const NAME_NOT_FOUND: readonly string[] = ['no such table:', 'no such column:'];
+const NAME_NOT_FOUND: readonly string[] = [NO_SUCH_TABLE, 'no such column:'];
 
 /**
  * What a run's rows are, and where they came from.
@@ -281,13 +289,26 @@ export type ColumnsOfStatement = (sql: string, ...parameters: readonly string[])
  *
  * @param sql - The statement that was submitted
  * @param error - What running or compiling it threw
- * @param absent - The derived relations the database does not hold (none for the compile probe)
+ * @param unhydrated - The queryable relations the database does not hold (none for the compile probe)
  * @returns The error to throw in its place
  */
-export function describedFailure(sql: string, error: unknown, absent: ReadonlySet<string>): Error {
-  const message = describeQueryFailure(sql, error instanceof Error ? error.message : String(error), absent);
+export function describedFailure(sql: string, error: unknown, unhydrated: UnhydratedRelations): Error {
+  const message = describeQueryFailure(sql, error instanceof Error ? error.message : String(error), unhydrated);
   return isVatError(error) ? new VatError(error.code, message, { cause: error }) : new Error(message, { cause: error });
 }
+
+/**
+ * The queryable relations a run database does not hold, by SQL name, and of those, the ones the
+ * plan WITHHELD, each with why. A relation absent and not withheld was not named as an
+ * identifier the planner reads.
+ */
+export interface UnhydratedRelations {
+  readonly absent: ReadonlySet<string>;
+  readonly withheld: ReadonlyMap<string, string>;
+}
+
+/** What the compile probe lacks: nothing, since it holds every queryable relation. */
+export const NOTHING_UNHYDRATED: UnhydratedRelations = { absent: new Set(), withheld: new Map() };
 
 /** The relations a lens can REFUSE to produce: a CTE may not take one of their names. */
 const REFUSABLE_RELATIONS: readonly string[] = lensRelationNames(CHANGED_FILES_LENS);
@@ -383,7 +404,7 @@ export async function assertQueriesCompile(statements: readonly PreflightStateme
       try {
         probe.assertCompiles(sql, parameters);
       } catch (error) {
-        throw describedFailure(sql, error, new Set());
+        throw describedFailure(sql, error, NOTHING_UNHYDRATED);
       }
     }
   } finally {
@@ -402,10 +423,9 @@ export async function assertQueriesCompile(statements: readonly PreflightStateme
  * @param options.preflight - Every statement this run intends to ask, compiled
  *   against the empty schema BEFORE the population starts. See
  *   {@link assertQueriesCompile}
- * @param options.statements - Every statement this run may ask, for LENS
- *   SELECTION only — never compiled, never bound, and deliberately separate from
- *   `preflight`. ⛔ Omitting it evaluates EVERY lens, which is the correct answer
- *   and the expensive one
+ * @param options.statements - Every statement this run may ask, for HYDRATION
+ *   and LENS SELECTION only — never compiled, never bound, and deliberately
+ *   separate from `preflight`. Required: a relation no statement names is absent
  * @param options.base - The `--base` ref for the changed-files lens, or undefined when the run was
  *   given none. REQUIRED, so no caller can drop the person's `--base` and still compile
  * @param work - Given the asker, where its rows came from, how much of the tree
@@ -418,26 +438,13 @@ export async function withQueriedProjection<T>(
     root: string;
     logger: Logger;
     preflight?: readonly PreflightStatement[];
-    statements?: readonly string[];
+    statements: readonly string[];
     base: string | undefined;
   },
-  work: (
-    ask: AskProjection,
-    provenance: ProjectionProvenance,
-    extent: PopulationExtent,
-    // 🔑 The in-memory rows, beside `ask` rather than instead of it: a built-in
-    // check is a TypeScript predicate over the row model (no built-in may be
-    // SQL) and needs the rows, not a database. Free to hand over — the
-    // run database was loaded FROM them.
-    //
-    // ⚠️ Not a second way to ask the same question. Nothing here re-derives,
-    // re-filters or re-scopes; a caller wanting a relational answer uses `ask`.
-    projection: Projection,
-    // The shape of an answer, which its rows cannot carry when there are none.
-    columnsOf: ColumnsOfStatement,
-  ) => Promise<T> | T,
+  work: QueriedProjectionWork<T>,
 ): Promise<T> {
   const { root, logger } = options;
+
 
   // 🔑 BEFORE the clock and before the population, because being before the
   // population is the entire point — see {@link assertQueriesCompile}. It is an
@@ -474,92 +481,154 @@ export async function withQueriedProjection<T>(
       (result) => storeMissOf(result.outcome),
     );
 
-    // ONE tree, in a database nothing else can reach, built fresh for this call.
-    const runDatabase = await openRunDatabase(projection);
-    try {
-      // 🚨 The population clock STOPS HERE, before the lens runs, so
-      // `populationSecs` never contains `lensSecs`: the two are published side by
-      // side to compare a served population against a derived one, and must not
-      // overlap.
-      const populationMs = performance.now() - populationStart;
-
-      // 🔑 The lenses this run's statements NAME, and no others — zones.md §2
-      // carries why. The relations are still not behind a flag: a surface that
-      // exists only when somebody remembered a flag is one nobody writes a check
-      // against. What decides is the statement, which cannot be forgotten.
-      //
-      // ⛔ The narrowing is safe ONLY because an unevaluated relation does not
-      // EXIST in `runDatabase`: the backend creates a derived table on the write that
-      // fills it, so a statement naming one no lens filled fails `no such table`
-      // in SQLite itself — whatever spelling slipped past the selector's scan.
-      // Create the relations up front and this becomes a silent wrong answer: an
-      // empty table selecting zero rows.
-      const lenses = lensesNamedBy(options.statements);
-      const lensStart = performance.now();
-      // Sequential, not `Promise.all`: a lens may populate, and two
-      // populations racing for one projection is the concurrency this
-      // lane has no reason to invite.
-      const lensPopulations: LensEvaluation['population'][] = [];
-      const evaluated: string[] = [];
-      // 🚨 A REFUSED lens writes nothing; a statement naming its relation is refused before it runs.
-      const refusals = new Map<string, LensRefusal>();
-      const absent = new Set(allDerivedSpecs().map((spec) => spec.name));
-      await forEachInOrder(lenses, async (lens) => {
-        const evaluation = await evaluateLens(lens, { projection, root, base: options.base, cache, logger });
-        if ('refused' in evaluation) {
-          for (const relation of lensRelationNames(lens)) refusals.set(relation, evaluation);
-          return;
-        }
-        evaluated.push(lens.name);
-        lensPopulations.push(evaluation.population);
-        for (const relation of lensRelationNames(lens)) absent.delete(relation);
-        await runDatabase.writeDerived(evaluation.rows);
-      });
-      // Exactly 0 when no lens was named, as `ProjectionProvenance.lensMs`
-      // promises. Timing the empty loop instead published whatever a GC pause or
-      // a descheduled thread put inside the span (2.97 ms on a loaded runner) as
-      // lens cost.
-      const lensMs = lenses.length === 0 ? 0 : performance.now() - lensStart;
-      // The shared setup is done. Everything after this line is the caller's.
-
-      /** Run one statement against the run database, unless it names a relation a lens refused. */
-      const guarded = <R>(sql: string, run: () => R): R => {
-        const refused = refusedStatement(sql, refusals);
-        if (refused !== undefined) throw refused;
-        try {
-          return run();
-        } catch (error) {
-          throw describedFailure(sql, error, absent);
-        }
-      };
-      const ask: AskProjection = (sql, ...parameters) => guarded(sql, () => runDatabase.query(sql, ...parameters));
-      const columnsOf: ColumnsOfStatement = (sql, ...parameters) => guarded(sql, () => runDatabase.columns(sql, ...parameters));
-
-      return await work(
-        ask,
-        {
-          population: outcome.population,
-          lensPopulation: lensPopulationOf(lensPopulations),
-          populationMs,
-          lensMs,
-          // Only the lenses that ANSWERED: a refused one produced no relation.
-          lensesEvaluated: evaluated,
-        },
-        // Read off the PROJECTION rather than counted back out of the run database with
-        // a `SELECT COUNT(*)`: a count that travelled through the same `ask` the
-        // caller's statements do would be broken by the very schema drift it
-        // exists to survive, and it is the population's size either way.
-        { membersEnumerated: projection.resourceRealizations.length },
-        projection,
-        columnsOf,
-      );
-    } finally {
-      // Closed however the work ends. An in-memory database is reclaimed with the
-      // process either way, but a command that runs several of these in one
-      // process would otherwise hold every one of them open.
-      await runDatabase.close();
-    }
+    return askPopulatedProjection(
+      { projection, outcome, root, logger, statements: options.statements, base: options.base, cache, populationStart },
+      work,
+    );
   });
+}
+
+/**
+ * The caller's work, given the asker, where its rows came from, how much of the tree they cover,
+ * and the ROWS THEMSELVES.
+ */
+type QueriedProjectionWork<T> = (
+  ask: AskProjection,
+  provenance: ProjectionProvenance,
+  extent: PopulationExtent,
+  // 🔑 The in-memory rows, beside `ask` rather than instead of it: a built-in
+  // check is a TypeScript predicate over the row model (no built-in may be
+  // SQL) and needs the rows, not a database. Free to hand over — the
+  // run database was loaded FROM them.
+  //
+  // ⚠️ Not a second way to ask the same question. Nothing here re-derives,
+  // re-filters or re-scopes; a caller wanting a relational answer uses `ask`.
+  projection: Projection,
+  // The shape of an answer, which its rows cannot carry when there are none.
+  columnsOf: ColumnsOfStatement,
+) => Promise<T> | T;
+
+/**
+ * The half of {@link withQueriedProjection} after population, over a projection already in hand:
+ * plan the run from its statements, hydrate the run database with the planned relations' rows,
+ * evaluate the planned lenses, and hand the caller a way to ask. In-process and store-free, so a
+ * test can hold what a run database contains without a population.
+ *
+ * @param run - The populated run
+ * @param run.projection - The run's own populated projection: the only source hydration copies from
+ * @param run.outcome - The population's outcome, for the cache tell
+ * @param run.root - Absolute corpus root, for a lens that populates a lane of its own
+ * @param run.logger - Where a lens's own population reports refused content
+ * @param run.statements - Every statement this run may ask; what is hydrated and evaluated
+ * @param run.base - The `--base` ref for the changed-files lens, or undefined
+ * @param run.cache - The run's projection store, so a lens's own population can hit it
+ * @param run.populationStart - When the population clock started (`performance.now()`)
+ * @param work - The caller's work; the run database is open for exactly this call
+ * @returns Whatever `work` returned
+ */
+export async function askPopulatedProjection<T>(
+  run: {
+    readonly projection: Projection;
+    readonly outcome: Pick<PopulationOutcome, 'population'>;
+    readonly root: string;
+    readonly logger: Logger;
+    readonly statements: readonly string[];
+    readonly base: string | undefined;
+    readonly cache: PopulationCache | undefined;
+    readonly populationStart: number;
+  },
+  work: QueriedProjectionWork<T>,
+): Promise<T> {
+  const { projection, outcome, root, logger, cache } = run;
+  // 🔑 What the statements NAME, and nothing else — the projection tables to
+  // hydrate, the lenses to evaluate, and what this run withholds. zones.md §2
+  // carries why the lens half is narrowed.
+  const plan = planHydration({ statements: run.statements, roots: projection.roots });
+  // ONE tree, in a database nothing else can reach, built fresh for this call
+  // from this run's own rows and only the relations the plan names.
+  const runDatabase = await hydrateRunDatabase(projection, plan);
+  try {
+    // 🚨 The population clock STOPS HERE, before the lens runs, so
+    // `populationSecs` never contains `lensSecs`: the two are published side by
+    // side to compare a served population against a derived one, and must not
+    // overlap.
+    const populationMs = performance.now() - run.populationStart;
+
+    // The relations are still not behind a flag: a surface that exists only
+    // when somebody remembered a flag is one nobody writes a check against.
+    // What decides is the statement, which cannot be forgotten.
+    //
+    // ⛔ The narrowing is safe ONLY because an unplanned relation does not
+    // EXIST in `runDatabase`: hydration creates only the planned tables and the
+    // backend creates a derived table on the write that fills it, so a
+    // statement reaching one fails `no such table` in SQLite itself — whatever
+    // spelling slipped past the planner's scan. Create the relations up front
+    // and this becomes a silent wrong answer: an empty table selecting zero rows.
+    const { lenses } = plan;
+    const lensStart = performance.now();
+    // Sequential, not `Promise.all`: a lens may populate, and two
+    // populations racing for one projection is the concurrency this
+    // lane has no reason to invite.
+    const lensPopulations: LensEvaluation['population'][] = [];
+    const evaluated: string[] = [];
+    // 🚨 A REFUSED lens writes nothing; a statement naming its relation is refused before it runs.
+    const refusals = new Map<string, LensRefusal>();
+    const absent = new Set(queryableRelationNames().filter((name) => !plan.relations.includes(name)));
+    await forEachInOrder(lenses, async (lens) => {
+      const evaluation = await evaluateLens(lens, { projection, root, base: run.base, cache, logger });
+      if ('refused' in evaluation) {
+        for (const relation of lensRelationNames(lens)) refusals.set(relation, evaluation);
+        return;
+      }
+      evaluated.push(lens.name);
+      lensPopulations.push(evaluation.population);
+      for (const relation of lensRelationNames(lens)) absent.delete(relation);
+      await runDatabase.writeDerived(evaluation.rows);
+    });
+    // Exactly 0 when no lens was named, as `ProjectionProvenance.lensMs`
+    // promises. Timing the empty loop instead published whatever a GC pause or
+    // a descheduled thread put inside the span (2.97 ms on a loaded runner) as
+    // lens cost.
+    const lensMs = lenses.length === 0 ? 0 : performance.now() - lensStart;
+    // The shared setup is done. Everything after this line is the caller's.
+
+    /** Run one statement against the run database, unless it names a relation a lens refused. */
+    const guarded = <R>(sql: string, execute: () => R): R => {
+      const refused = refusedStatement(sql, refusals);
+      if (refused !== undefined) throw refused;
+      try {
+        return execute();
+      } catch (error) {
+        throw describedFailure(sql, error, { absent, withheld: plan.withheld });
+      }
+    };
+    const ask: AskProjection = (sql, ...parameters) => guarded(sql, () => runDatabase.query(sql, ...parameters));
+    const columnsOf: ColumnsOfStatement = (sql, ...parameters) => guarded(sql, () => runDatabase.columns(sql, ...parameters));
+
+    return await work(
+      ask,
+      {
+        population: outcome.population,
+        lensPopulation: lensPopulationOf(lensPopulations),
+        populationMs,
+        lensMs,
+        // Only the lenses that ANSWERED: a refused one produced no relation.
+        lensesEvaluated: evaluated,
+      },
+      // Read off the PROJECTION rather than counted back out of the run database with
+      // a `SELECT COUNT(*)`: a count that travelled through the same `ask` the
+      // caller's statements do would be broken by the very schema drift it
+      // exists to survive, and it is the population's size either way.
+      { membersEnumerated: projection.resourceRealizations.length },
+      projection,
+      columnsOf,
+    );
+  } finally {
+    // Closed however the work ends. An in-memory database is reclaimed with the
+    // process either way, but a command that runs several of these in one
+    // process would otherwise hold every one of them open.
+    await runDatabase.close();
+  }
 }
 
 /**
@@ -593,28 +662,24 @@ export async function withQueriedProjection<T>(
  *
  * @param sql - The statement that was submitted
  * @param message - What the engine said
- * @param absent - The derived relations the database does not hold, by SQL name
+ * @param unhydrated - The queryable relations the database does not hold, by SQL name
  * @returns The message to surface, with the queryable surface appended when the
  *   failure was a name this projection does not have
  */
-export function describeQueryFailure(sql: string, message: string, absent: ReadonlySet<string>): string {
+export function describeQueryFailure(sql: string, message: string, unhydrated: UnhydratedRelations): string {
   if (!NAME_NOT_FOUND.some((prefix) => message.includes(prefix))) return message;
 
-  // 🚨 A MISSING DERIVED RELATION IS NOT A TYPO — it is the refusal that makes
-  // lazy lens evaluation an optimisation. The run's database creates a derived
-  // relation only when a lens fills it, so one no lens was evaluated for is
-  // absent, and SQLite refuses it rather than answering `0` from an empty table
-  // (indistinguishable from a tree with no links, and for `vat resources check`
-  // a rule that could no longer fail). Which relation is read off the statement,
-  // never out of the engine's text. The compile probe holds them all.
-  const [unevaluated] = relationsNamedBy(sql, absent);
-  if (unevaluated !== undefined) {
-    return `${message}\n\n`
-      + `This statement reads ${unevaluated}, a derived relation that was not evaluated for this run:`
-      + ' no statement the run DECLARED names it, so no lens producing it ran and there is no answer'
-      + ' to give. Declare this statement (`vat resources query` passes the one it was given;'
-      + ' `vat resources check` passes every statement in `resources.checks`).';
-  }
+  // 🚨 AN UNHYDRATED RELATION IS NOT A TYPO — it is the refusal that makes
+  // hydrating only the named relations safe. The run database holds a relation
+  // only when the plan hydrated it or a lens filled it, so any other is absent,
+  // and SQLite refuses it rather than answering `0` from an empty table
+  // (indistinguishable from an empty tree, and for `vat resources check` a rule
+  // that could no longer fail). Every unhydrated relation is treated alike, and
+  // none of its columns is listed. Which relation is the one the ENGINE named
+  // in `no such table` — never a word found elsewhere in the statement, which
+  // may sit in a literal or a comment. The compile probe holds them all.
+  const unheld = unhydratedRelationOf(message, unhydrated);
+  if (unheld !== undefined) return `${message}\n\n${unheld}`;
 
   // 🪤 The derived relations belong in this listing even though they are not
   // projection tables. A user who mistypes `edge_resolution` gets "no such
@@ -622,9 +687,13 @@ export function describeQueryFailure(sql: string, message: string, absent: Reado
   // omitted the very relation they were reaching for would read as proof it
   // does not exist. What the listing answers is "what can I name here", which
   // is the queryable surface, not the registry.
-  const askable = [...Object.values(PROJECTION_TABLES), ...allDerivedSpecs()];
-  const lowered = sql.toLowerCase();
-  const named = askable.filter((spec) => lowered.includes(spec.name.toLowerCase()));
+  //
+  // Which relations the statement names is read by the scan the planner and the gate share, so a
+  // relation spelled only inside a literal or a comment is not listed as one the statement reads.
+  const askable = queryableRelationSpecs();
+  const held = askable.filter((spec) => !unhydrated.absent.has(spec.name));
+  const namedNames = new Set(relationsNamedBy(sql, held.map((spec) => spec.name)));
+  const named = held.filter((spec) => namedNames.has(spec.name));
   const surface = named.length > 0
     ? named.map((spec) => `  ${spec.name}(${spec.columns.join(', ')})`).join('\n')
     : askable.map((spec) => `  ${spec.name}`).join('\n');
@@ -633,4 +702,42 @@ export function describeQueryFailure(sql: string, message: string, absent: Reado
     : 'This tree is queryable through these relations:';
 
   return `${message}\n\n${heading}\n${surface}`;
+}
+
+/** The first whitespace-free run of a message: the name SQLite put after `no such table: `. */
+const LEADING_TOKEN = /^\S+/u;
+
+/**
+ * The queryable relation SQLite named in a `no such table` message, by SQL name, or undefined.
+ * Schema-qualified (`main.edges`) and any case are read as the relation they spell.
+ *
+ * @param message - What the engine said
+ * @returns The relation
+ */
+function missingRelationOf(message: string): string | undefined {
+  const at = message.indexOf(NO_SUCH_TABLE);
+  if (at < 0) return undefined;
+  const spelled = LEADING_TOKEN.exec(message.slice(at + NO_SUCH_TABLE.length))?.[0] ?? '';
+  const bare = spelled.slice(spelled.lastIndexOf('.') + 1).toLowerCase();
+  return queryableRelationNames().find((name) => name.toLowerCase() === bare);
+}
+
+/**
+ * Why the engine found no table for a relation this run database does not hold, or undefined when
+ * the table it named is no queryable relation. Read ONLY from the engine's `no such table`: a
+ * withheld relation names its reason; any other names the spellings a statement reads it by.
+ *
+ * @param message - What the engine said
+ * @param unhydrated - What the run database does not hold
+ * @returns The explanation, or undefined
+ */
+function unhydratedRelationOf(message: string, unhydrated: UnhydratedRelations): string | undefined {
+  const missing = missingRelationOf(message);
+  if (missing === undefined) return undefined;
+  const reason = unhydrated.withheld.get(missing);
+  if (reason !== undefined) return `This statement reads ${missing}, which this run withheld: ${reason}.`;
+  if (!unhydrated.absent.has(missing)) return undefined;
+  return `This statement reads ${missing}, which this run did not hydrate: a statement reads a relation only when`
+    + ` it names it itself as an identifier — ${identifierSpellings(missing).join(', ')}.`
+    + ` A single-quoted '${missing}' is a string, not a name. Name it as an identifier in this statement.`;
 }

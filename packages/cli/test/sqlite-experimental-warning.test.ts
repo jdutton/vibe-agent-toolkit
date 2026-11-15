@@ -48,7 +48,7 @@ vi.mock('@vibe-agent-toolkit/projection-sqlite', () => {
   process.emitWarning(control);
 
   return {
-    openRunDatabase: (): unknown => ({ close: (): void => undefined }),
+    hydrateRunDatabase: (): unknown => ({ close: (): void => undefined }),
   };
 });
 
@@ -306,9 +306,9 @@ describe('the query lane installs the filter where the backend loads', () => {
       }) as typeof process.emitWarning);
 
     try {
-      const { openRunDatabase } = await import('../src/utils/projection-store.js');
+      const { hydrateRunDatabase } = await import('../src/utils/projection-store.js');
       // The mocked backend ignores the projection; only the load matters here.
-      await openRunDatabase({} as Projection);
+      await hydrateRunDatabase({ roots: [{ id: 'root' }] } as unknown as Projection, { relations: [] });
 
       // Not vacuous: the control warning proves the spy was reachable and the
       // module really evaluated. An empty `emitted` would pass a "nothing was

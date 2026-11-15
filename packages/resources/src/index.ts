@@ -338,9 +338,29 @@ export {
 export {
   allDerivedSpecs,
   DERIVED_TABLES,
+  isProjectionTable,
+  queryableRelationNames,
+  queryableRelationSpecs,
+  rootlessPathRelations,
   type DerivedTableName,
   type DerivedTableSpec,
+  type QueryableRelationSpec,
 } from './projection/derived-table-registry.js';
+
+// Which relations a statement names: the one scan the hydration planner and the SQL gate share.
+export { definesCteNamed, identifierSpellings, relationsNamedBy } from './projection/statement-relations.js';
+// Where a statement's comments, literals and quoted identifiers are, as SQLite's tokenizer reads them.
+export {
+  SQL_IDENTIFIER_CHAR,
+  SQL_WHITESPACE,
+  SQL_WORD_START_CHAR,
+  type SqlSpan,
+  sqlSpanAt,
+  type SqlSpanKind,
+  type SqlToken,
+  type SqlTokenKind,
+  sqlTokens,
+} from './projection/sql-lexer.js';
 
 // What each column holds, read out of the row schema. Every storage backend
 // needs it — Arrow needs a type per vector, SQL needs one per column — so the
@@ -350,6 +370,8 @@ export {
   type ProjectionColumnSource,
   type ProjectionColumnType,
   type ProjectionColumnTypeSource,
+  type ColumnRole,
+  type ColumnRoles,
   projectionColumnType,
   projectionColumnTypes,
   projectionRowShape,
@@ -1053,9 +1075,12 @@ export {
 export {
   ROOT_PATH_PLACEHOLDER,
   UnregisteredProjectionColumnError,
+  compareRows,
   exportProjection,
   serializeProjection,
   type ProjectionDocument,
+  type RowComparator,
+  type RowOrderSource,
 } from './projection/export.js';
 
 

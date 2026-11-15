@@ -652,6 +652,14 @@ What a statement may BE is gated hard, and documented where it is enforced: `ass
 with the measured cross-repository leak that motivated both, and `CHANGELOG.md`'s `--budget` entry
 carries why nothing inside this process can interrupt a runaway statement.
 
+The same module gates what a statement may OBSERVE, read off its compiled program rather than its
+text: `assertNoIntrospection` prepares `EXPLAIN` and refuses the schema table, every virtual table
+but the four JSON walkers (`dbstat`, every `pragma_*` function), and the connection-state functions
+`changes()`, `total_changes()` and `last_insert_rowid()`, because a run database holds only the
+relations its run named and "which relations exist" would say what the run asked. The parameter
+guard refuses every named placeholder, `#` included, and nothing may be attached while a statement
+compiles.
+
 Everything PAST those gates is unsandboxed deliberately. A `.sql` file the adopter points their own
 config at is adopter code, at the same trust boundary as their eslint config: they wrote it or they
 chose to inherit it, and VAT is not the thing standing between a project and its own repository.

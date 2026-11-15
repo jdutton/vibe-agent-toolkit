@@ -24,7 +24,7 @@ import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { __resetWorkCountersForTest } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { openRunDatabase } from '../src/run-database.js';
+import { hydrateRunDatabase } from '../src/run-database.js';
 import { EXTENTS_TABLE } from '../src/schema-sql.js';
 import { openSqliteFactStore } from '../src/store.js';
 
@@ -33,6 +33,7 @@ import {
   SECOND_BLOB,
   contentKey,
   declinedBlobRows,
+  hydrateEveryTable,
   realizationRow,
   sampleBlobRows,
   sampleExtentRows,
@@ -579,13 +580,34 @@ describe('decoded rows are counted against the store they came from', () => {
     const projection = sampleProjection();
     const projectionRowCount = Object.values(projection as unknown as Record<string, readonly unknown[]>)
       .reduce((total, rows) => total + rows.length, 0);
-    const database = openRunDatabase(projection);
+    const database = hydrateEveryTable(projection);
     try {
-      // One write for the blob facts and one for the extent, every row of both.
-      expect(readWorkCounters()['hydration.writes']).toBe(2);
+      // One write for the one hydration transaction, every row of every relation in it.
+      expect(readWorkCounters()['hydration.writes']).toBe(1);
       expect(readWorkCounters()['hydration.rows.written']).toBe(projectionRowCount);
       expect(readWorkCounters()['store.writes.persistent']).toBe(0);
       expect(readWorkCounters()['store.rows.written.persistent']).toBe(0);
+    } finally {
+      await database.close();
+    }
+  });
+
+  it('a hydration naming no relation writes nothing and counts no write', async () => {
+    const database = hydrateRunDatabase({ rootId: 'root-1', relations: new Map() });
+    try {
+      expect(readWorkCounters()['hydration.writes']).toBe(0);
+      expect(readWorkCounters()['hydration.rows.written']).toBe(0);
+    } finally {
+      await database.close();
+    }
+  });
+
+  it('a hydration counts only the planned relations\' rows', async () => {
+    const projection = sampleProjection();
+    const database = hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['blobs', projection.blobs]]) });
+    try {
+      expect(readWorkCounters()['hydration.writes']).toBe(1);
+      expect(readWorkCounters()['hydration.rows.written']).toBe(projection.blobs.length);
     } finally {
       await database.close();
     }
@@ -1131,7 +1153,7 @@ describe('a lens write is not hydration', () => {
   });
 
   it('writeDerived moves neither hydration counter', async () => {
-    const database = openRunDatabase(sampleProjection());
+    const database = hydrateEveryTable(sampleProjection());
     try {
       __resetWorkCountersForTest();
       await database.writeDerived({
@@ -1157,7 +1179,7 @@ describe('an open that fails after the connection opened releases it', () => {
     // A string in an integer column: the load throws after the database opened.
     const unloadable = { ...sampleProjection(), blobs: [{ ...blob, bytes: 'not a number' }] } as unknown as Projection;
 
-    expect(() => openRunDatabase(unloadable)).toThrow();
+    expect(() => hydrateEveryTable(unloadable)).toThrow();
     expect(closes).toHaveBeenCalledTimes(1);
   });
 

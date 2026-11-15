@@ -10,16 +10,18 @@
  * enforcer below keeps it so as the schema grows.
  */
 
+import { DatabaseSync } from 'node:sqlite';
+
 import {
-  allDerivedSpecs,
   CHECK_FINDING_COLUMNS,
   issuesFromCheckRows,
 } from '@vibe-agent-toolkit/resources';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { openRunDatabase, type RunDatabase } from '../src/run-database.js';
+import type { RunDatabase } from '../src/run-database.js';
+import { queryableSpecs } from '../src/schema-sql.js';
 
-import { sampleProjection } from './fixtures.js';
+import { hydrateEveryTable, sampleProjection } from './fixtures.js';
 
 /** Declared `error`, so a finding at any other severity took it from the row. */
 const CHECK = { description: 'pin', sql: 'unused', severity: 'error' } as const;
@@ -27,7 +29,7 @@ const CHECK = { description: 'pin', sql: 'unused', severity: 'error' } as const;
 let store: RunDatabase;
 
 beforeEach(() => {
-  store = openRunDatabase(sampleProjection());
+  store = hydrateEveryTable(sampleProjection());
 });
 
 afterEach(async () => {
@@ -45,19 +47,25 @@ function findingsOf(sql: string): ReturnType<typeof issuesFromCheckRows> {
 }
 
 /**
- * Every relation a check can read, with its columns: every table and view the store creates, read
- * back from SQLite itself, and every derived relation, from the registry its DDL is built from.
+ * Every relation a check can read, with its columns: every relation a run database can create —
+ * `queryableSpecs()`, the one source hydration and the compile probe create from — created in a
+ * bare connection and read back from SQLite itself. A bare connection, because the run database's
+ * gate refuses schema introspection.
  *
  * @returns Relation name → its column names
  */
 function everyRelationsColumns(): Map<string, readonly string[]> {
   const relations = new Map<string, readonly string[]>();
-  const named = store.query("SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%'");
-  for (const { name } of named) {
-    const columns = store.query('SELECT name FROM pragma_table_info(?)', String(name)).map((row) => String(row['name']));
-    relations.set(String(name), columns);
+  const database = new DatabaseSync(':memory:');
+  try {
+    for (const { spec, createSql } of queryableSpecs()) {
+      database.exec(createSql);
+      const columns = database.prepare('SELECT name FROM pragma_table_info(?)').all(spec.name).map((row) => String(row['name']));
+      relations.set(spec.name, columns);
+    }
+  } finally {
+    database.close();
   }
-  for (const spec of allDerivedSpecs()) relations.set(spec.name, spec.columns);
   return relations;
 }
 

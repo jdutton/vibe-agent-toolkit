@@ -7,7 +7,14 @@
  * would pass against a broken codec.
  */
 
-import type { BlobScopedRows, ExtentScopedRows, Projection } from '@vibe-agent-toolkit/resources';
+import { PROJECTION_TABLES, type BlobScopedRows, type ExtentScopedRows, type Projection } from '@vibe-agent-toolkit/resources';
+
+import {
+  hydrateRunDatabase,
+  openProjectionCompileProbe,
+  type ProjectionCompileProbe,
+  type RunDatabase,
+} from '../src/run-database.js';
 
 /** A content key of the shape `ContentKeySchema` requires: `<parserKind>.<sha256>`. */
 export function contentKey(seed: string): string {
@@ -258,4 +265,52 @@ export function sampleProjection(blobKeys: readonly string[] = [FIRST_BLOB]): Pr
     tables.map((table) => [table, bundles.flatMap((bundle) => bundle[table] as readonly unknown[])]),
   ) as unknown as BlobScopedRows;
   return { ...blobs, ...sampleExtentRows() };
+}
+
+/**
+ * A run database hydrated with EVERY projection table of `projection` — a test's
+ * shorthand for "a run whose statements name every table". The CLI never asks
+ * for this: it hydrates only what a run's statements name.
+ *
+ * @param projection - The rows to hydrate
+ * @returns The open run database; close it when done
+ */
+export function hydrateEveryTable(projection: Projection): RunDatabase {
+  return hydrateTables(projection, Object.keys(PROJECTION_TABLES) as (keyof typeof PROJECTION_TABLES)[]);
+}
+
+/**
+ * A run database hydrated with the named projection tables of {@link sampleProjection}, and a
+ * compile probe beside it: the two gated handles a gate test asks.
+ *
+ * @param tables - The projection tables to hydrate, by registry key
+ * @returns Both handles, open; close them with {@link closeGatedHandles}
+ */
+export function openGatedHandles(tables: readonly (keyof typeof PROJECTION_TABLES)[]): { readonly database: RunDatabase; readonly probe: ProjectionCompileProbe } {
+  return { database: hydrateTables(sampleProjection(), tables), probe: openProjectionCompileProbe() };
+}
+
+/**
+ * Close both gated handles.
+ *
+ * @param handles - What {@link openGatedHandles} opened
+ * @param handles.database - The run database
+ * @param handles.probe - The compile probe
+ */
+export async function closeGatedHandles(handles: { readonly database: RunDatabase; readonly probe: ProjectionCompileProbe }): Promise<void> {
+  await handles.database.close();
+  await handles.probe.close();
+}
+
+/**
+ * A run database hydrated with the named projection tables of `projection`.
+ *
+ * @param projection - The rows
+ * @param tables - The tables, by registry key
+ * @returns The open run database
+ */
+function hydrateTables(projection: Projection, tables: readonly (keyof typeof PROJECTION_TABLES)[]): RunDatabase {
+  const rootId = projection.roots[0]?.id ?? 'root-1';
+  const relations = new Map(tables.map((key) => [PROJECTION_TABLES[key].name, projection[key]] as const));
+  return hydrateRunDatabase({ rootId, relations });
 }

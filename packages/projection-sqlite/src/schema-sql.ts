@@ -41,7 +41,9 @@
  */
 
 import {
+  isProjectionTable,
   PROJECTION_TABLES,
+  queryableRelationSpecs,
   type DerivedTableSpec,
   type ProjectionColumnKind,
   type ProjectionColumnTypeSource,
@@ -549,4 +551,37 @@ function blobKeyPredicate(spec: StoredTableSpec, keyCount: number): string {
 /** Every projection table, in registry order, as this module sees them. */
 export function allSpecs(): readonly StoredTableSpec[] {
   return Object.values(PROJECTION_TABLES);
+}
+
+/**
+ * One relation a statement can name, as the run database and the compile probe create it: its
+ * spec, its DDL, its `INSERT`, and whether its rows lead with the extent key.
+ */
+export interface QueryableRelation {
+  /** The table's or derived relation's registry entry. */
+  readonly spec: StoredTableSpec | DerivedTableSpec;
+  /** `CREATE TABLE IF NOT EXISTS`, in today's shape. */
+  readonly createSql: string;
+  /** One placeholder per stored column, the extent key first when {@link extentKeyed}. */
+  readonly insertSql: string;
+  /** Whether each row binds `storeRootId` and `storeTreeHash` ahead of its own columns. */
+  readonly extentKeyed: boolean;
+}
+
+/**
+ * Every relation a statement can name — every projection table, then every derived relation — and
+ * nothing else: no `extents` and no `blob_keys`, which are the fact store's bookkeeping.
+ *
+ * 🔑 Read off `queryableRelationSpecs()` — the one list the planner and the SQL gate read too —
+ * and the ONE source the compile probe and hydration create tables from, so the probe holds exactly
+ * what hydration can create, and a statement naming anything else (`SELECT * FROM extents`)
+ * refuses at preflight rather than after a population. `isProjectionTable` is the one test of
+ * which relations are tables, as the planner reads it too.
+ *
+ * @returns The relations, tables first, each registry in declaration order
+ */
+export function queryableSpecs(): readonly QueryableRelation[] {
+  return queryableRelationSpecs().map((spec) => (isProjectionTable(spec)
+    ? { spec, createSql: createTableSql(spec), insertSql: insertSql(spec), extentKeyed: spec.scope === 'extent' }
+    : { spec, createSql: createDerivedTableSql(spec), insertSql: insertDerivedSql(spec), extentKeyed: false }));
 }

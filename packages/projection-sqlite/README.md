@@ -60,15 +60,30 @@ await store.close();
 
 SQL never runs on the fact store: it is one database shared by every root on
 the machine, and a statement carries no key predicate. It runs on a run
-database, opened over one run's projection and gone when closed:
+database, hydrated with exactly the relations a run names — each with the run's
+own rows, inserted in canonical order (`compareRows`) — and gone when closed:
 
 ```typescript
-import { openRunDatabase } from '@vibe-agent-toolkit/projection-sqlite';
+import { hydrateRunDatabase } from '@vibe-agent-toolkit/projection-sqlite';
 
-const database = openRunDatabase(projection);
+const [root] = projection.roots;
+if (root === undefined) throw new Error('A projection with no root row has no id to file rows under.');
+const database = hydrateRunDatabase({
+  rootId: root.id,
+  relations: new Map([['blobs', projection.blobs]]),
+});
 const rows = database.query('SELECT COUNT(*) AS n FROM blobs');
 await database.close();
 ```
+
+The relations are a `Map`, so a whole `Projection` is not assignable: a relation
+absent from it is absent from the database, and a statement reaching one is
+refused. The database holds no `extents` or `blob_keys`. Every statement passes
+the gate in `sql-gate.ts` first: one statement, a query, every placeholder
+bound, nothing attached, and — read off its `EXPLAIN` program — no schema
+table, no virtual table but the four JSON walkers, and no connection-state
+function. Each `EXPLAIN` is counted as `statement.explained`: four when a handle
+opens (the JSON walkers' pointers on that connection), one per gated call.
 
 ## What it stores, and where
 

@@ -14,12 +14,17 @@
  * A lens selected when it was not needed costs time. A lens *skipped* when it
  * WAS needed leaves its relation absent, and a statement that had an answer is
  * refused. So the selector is written to over- not under-select (a name inside a
- * CTE or an alias still selects), and a run that declares no statements at all
- * evaluates everything. The refusal itself is SQLite's (`no such table`) and
- * does not depend on this scan — see `projection-lens-laziness`.
+ * CTE or an alias still selects). The refusal itself is SQLite's (`no such
+ * table`) and does not depend on this scan — see `projection-lens-laziness`.
  */
 
-import { checkStatements, DERIVED_TABLES, type Projection } from '@vibe-agent-toolkit/resources';
+import {
+  checkStatements,
+  DERIVED_TABLES,
+  isProjectionTable,
+  type Projection,
+  queryableRelationSpecs,
+} from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
 import { createLogger } from '../../src/utils/logger.js';
@@ -31,7 +36,7 @@ import {
   evaluateLens,
   lensPopulationOf,
   lensRelationNames,
-  lensesNamedBy,
+  planHydration,
   type LensEvaluation,
   type LensRows,
   type ProjectionLens,
@@ -42,13 +47,32 @@ function namesOf(lenses: readonly { readonly name: string }[]): string[] {
   return lenses.map((lens) => lens.name).toSorted((left, right) => left.localeCompare(right));
 }
 
-describe('lensesNamedBy', () => {
+/** One root row: a run without the multi-root withholding. */
+const ONE_ROOT: readonly unknown[] = [{ id: 'root-1', path: '/root' }];
+
+/** Two root rows: a run that withholds a relation whose rows cannot say which root they are under. */
+const TWO_ROOTS: readonly unknown[] = [...ONE_ROOT, { id: 'root-2', path: '/b' }];
+
+const NAMES_BLOBS = 'SELECT COUNT(*) AS n FROM blobs';
+const NAMES_REALIZATIONS = 'SELECT path FROM resource_realizations';
+
+/**
+ * The lenses one run's plan evaluates.
+ *
+ * @param statements - The statements the run declared
+ * @returns The planned lenses
+ */
+function plannedLenses(statements: readonly string[]): readonly ProjectionLens[] {
+  return planHydration({ statements, roots: ONE_ROOT }).lenses;
+}
+
+describe('planHydration: the lenses', () => {
   it('selects NOTHING for a statement that names no relation', () => {
-    expect(lensesNamedBy(['SELECT 1 AS x'])).toStrictEqual([]);
+    expect(plannedLenses(['SELECT 1 AS x'])).toStrictEqual([]);
   });
 
   it('selects the authored-link lens for a statement naming `edges`', () => {
-    expect(namesOf(lensesNamedBy(['SELECT COUNT(*) FROM edges']))).toStrictEqual([
+    expect(namesOf(plannedLenses(['SELECT COUNT(*) FROM edges']))).toStrictEqual([
       AUTHORED_LINK_LENS.name,
     ]);
   });
@@ -57,20 +81,20 @@ describe('lensesNamedBy', () => {
     // The positive control on the negative above: the lens owns three relations
     // and naming the least obvious of them must select it too.
     for (const relation of lensRelationNames(AUTHORED_LINK_LENS)) {
-      expect(namesOf(lensesNamedBy([`SELECT * FROM ${relation}`]))).toStrictEqual([
+      expect(namesOf(plannedLenses([`SELECT * FROM ${relation}`]))).toStrictEqual([
         AUTHORED_LINK_LENS.name,
       ]);
     }
   });
 
   it('selects the claude-context lens, and ONLY it, for a chain statement', () => {
-    expect(namesOf(lensesNamedBy(['SELECT chainId FROM claude_context_loads']))).toStrictEqual([
+    expect(namesOf(plannedLenses(['SELECT chainId FROM claude_context_loads']))).toStrictEqual([
       CLAUDE_CONTEXT_LENS.name,
     ]);
   });
 
   it('selects the changed-files lens, and ONLY it, for a statement naming changed_files', () => {
-    expect(namesOf(lensesNamedBy(["SELECT path FROM changed_files WHERE status = 'added'"]))).toStrictEqual([
+    expect(namesOf(plannedLenses(["SELECT path FROM changed_files WHERE status = 'added'"]))).toStrictEqual([
       CHANGED_FILES_LENS.name,
     ]);
   });
@@ -85,38 +109,30 @@ describe('lensesNamedBy', () => {
       examined: 'SELECT path FROM changed_files',
     });
 
-    expect(namesOf(lensesNamedBy(statements))).toStrictEqual([CHANGED_FILES_LENS.name]);
+    expect(namesOf(plannedLenses(statements))).toStrictEqual([CHANGED_FILES_LENS.name]);
   });
 
   it('selects both when one run declares statements naming both', () => {
-    expect(namesOf(lensesNamedBy([
+    expect(namesOf(plannedLenses([
       'SELECT COUNT(*) FROM edges',
       'SELECT COUNT(*) FROM claude_context_chains',
     ]))).toStrictEqual([AUTHORED_LINK_LENS.name, CLAUDE_CONTEXT_LENS.name]);
   });
 
-  it('selects EVERY lens when the caller declared no statements at all', () => {
-    // ⛔ The fail-safe direction, and it is not a convenience. A caller that
-    // cannot enumerate what it will ask must get correct rows, not cheap ones —
-    // the alternative is an empty relation answering a question nobody knows was
-    // asked.
-    expect(namesOf(lensesNamedBy(undefined))).toStrictEqual(namesOf(PROJECTION_LENSES));
-  });
-
   it('does not select on a name that only appears in a comment or a string literal', () => {
-    expect(lensesNamedBy(['SELECT 1 -- edges'])).toStrictEqual([]);
-    expect(lensesNamedBy(['SELECT 1 /* edges */'])).toStrictEqual([]);
-    expect(lensesNamedBy(["SELECT 'edges' AS label"])).toStrictEqual([]);
+    expect(plannedLenses(['SELECT 1 -- edges'])).toStrictEqual([]);
+    expect(plannedLenses(['SELECT 1 /* edges */'])).toStrictEqual([]);
+    expect(plannedLenses(["SELECT 'edges' AS label"])).toStrictEqual([]);
   });
 
   it('does not select on a name that is only a SUBSTRING of an identifier', () => {
     // `my_edges` is somebody's own CTE. Matching it would evaluate a lens for a
     // statement that cannot read it.
-    expect(lensesNamedBy(['WITH my_edges AS (SELECT 1) SELECT * FROM my_edges'])).toStrictEqual([]);
+    expect(plannedLenses(['WITH my_edges AS (SELECT 1) SELECT * FROM my_edges'])).toStrictEqual([]);
   });
 
   it('selects on a quoted identifier, which is the same table spelled differently', () => {
-    expect(namesOf(lensesNamedBy(['SELECT * FROM "edges"']))).toStrictEqual([
+    expect(namesOf(plannedLenses(['SELECT * FROM "edges"']))).toStrictEqual([
       AUTHORED_LINK_LENS.name,
     ]);
   });
@@ -137,7 +153,7 @@ describe('lensesNamedBy', () => {
     // the relation name with it. The lens is then skipped, its relation is
     // absent, and a declared check that had an answer is refused instead.
     // Over-selecting only costs time; this costs the answer.
-    expect(namesOf(lensesNamedBy([sql]))).toStrictEqual([AUTHORED_LINK_LENS.name]);
+    expect(namesOf(plannedLenses([sql]))).toStrictEqual([AUTHORED_LINK_LENS.name]);
   });
 });
 
@@ -227,5 +243,61 @@ describe('lensPopulationOf', () => {
   it('is derived when any lens that populated derived', () => {
     expect(lensPopulationOf(['store', 'derived'])).toBe('derived');
     expect(lensPopulationOf(['derived', null])).toBe('derived');
+  });
+});
+
+describe('planHydration: the relations', () => {
+  it('plans exactly the projection tables a statement names', () => {
+    const plan = planHydration({ statements: [NAMES_BLOBS], roots: ONE_ROOT });
+    expect(plan.relations).toStrictEqual(['blobs']);
+    expect(plan.lenses).toStrictEqual([]);
+    expect([...plan.withheld]).toStrictEqual([]);
+  });
+
+  it('adds no table for a lens relation: no lens reads the run database', () => {
+    const plan = planHydration({ statements: ['SELECT COUNT(*) FROM edges'], roots: ONE_ROOT });
+    expect(plan.relations).toStrictEqual([]);
+    expect(plan.lenses).toStrictEqual([AUTHORED_LINK_LENS]);
+  });
+
+  it('plans both halves of a statement joining a lens relation to a table', () => {
+    const plan = planHydration({
+      statements: ['SELECT r.path FROM edges e JOIN resource_realizations r ON r.path = e.src'],
+      roots: ONE_ROOT,
+    });
+    expect(plan.relations).toStrictEqual(['resource_realizations']);
+    expect(plan.lenses).toStrictEqual([AUTHORED_LINK_LENS]);
+  });
+
+  it('plans nothing for a statement naming no relation', () => {
+    expect(planHydration({ statements: ['SELECT 1 AS x'], roots: ONE_ROOT }).relations).toStrictEqual([]);
+  });
+
+  it('can plan every projection table, each from the statement naming it, in registry order', () => {
+    const tables = queryableRelationSpecs().filter((spec) => isProjectionTable(spec)).map((spec) => spec.name);
+    const statements = tables.toReversed().map((name) => `SELECT COUNT(*) AS n FROM "${name}"`);
+    expect(planHydration({ statements, roots: ONE_ROOT }).relations).toStrictEqual(tables);
+  });
+});
+
+describe('planHydration: a run holding more than one root', () => {
+  it('withholds a relation with a root-relative path column and no root column, with why', () => {
+    const plan = planHydration({ statements: [NAMES_REALIZATIONS, NAMES_BLOBS], roots: TWO_ROOTS });
+    expect(plan.relations).toStrictEqual(['blobs']);
+    expect(plan.withheld.get('resource_realizations')).toMatch(/root-relative path column and no `root` column/u);
+  });
+
+  it('does not evaluate a lens that owns a withheld relation, and withholds every relation of it named', () => {
+    // `edges` has no path column; its lens also produces `edge_resolutions`, whose `dstKey` is one.
+    const plan = planHydration({ statements: ['SELECT COUNT(*) FROM edges', 'SELECT chainId FROM claude_context_loads'], roots: TWO_ROOTS });
+    expect(plan.lenses).toStrictEqual([]);
+    expect(plan.withheld.get('edges')).toMatch(/its lens is not evaluated, because it also produces edge_resolutions/u);
+    expect(plan.withheld.get('claude_context_loads')).toMatch(/root-relative path column/u);
+  });
+
+  it('withholds nothing in a run holding one root', () => {
+    const plan = planHydration({ statements: [NAMES_REALIZATIONS], roots: ONE_ROOT });
+    expect(plan.relations).toStrictEqual(['resource_realizations']);
+    expect([...plan.withheld]).toStrictEqual([]);
   });
 });
