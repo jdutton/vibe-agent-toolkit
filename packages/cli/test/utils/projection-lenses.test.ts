@@ -18,7 +18,13 @@
  * table`) and does not depend on this scan — see `projection-lens-laziness`.
  */
 
-import { checkStatements, DERIVED_TABLES, type Projection } from '@vibe-agent-toolkit/resources';
+import {
+  checkStatements,
+  DERIVED_TABLES,
+  isProjectionTable,
+  type Projection,
+  queryableRelationSpecs,
+} from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
 import { createLogger } from '../../src/utils/logger.js';
@@ -265,6 +271,12 @@ describe('planHydration: the relations', () => {
 
   it('plans nothing for a statement naming no relation', () => {
     expect(planHydration({ statements: ['SELECT 1 AS x'], roots: ONE_ROOT }).relations).toStrictEqual([]);
+  });
+
+  it('can plan every projection table, each from the statement naming it, in registry order', () => {
+    const tables = queryableRelationSpecs().filter((spec) => isProjectionTable(spec)).map((spec) => spec.name);
+    const statements = tables.toReversed().map((name) => `SELECT COUNT(*) AS n FROM "${name}"`);
+    expect(planHydration({ statements, roots: ONE_ROOT }).relations).toStrictEqual(tables);
   });
 });
 

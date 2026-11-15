@@ -95,6 +95,13 @@ describe('compareRows is total over values a column kind does not expect', () =>
     expect(compare(row({ at: 'not a date' }), row({ at: new Date(5) }))).toBeGreaterThan(0);
   });
 
+  it('compares a timestamp by the instant it names, whether a Date or ISO text at any offset', () => {
+    // A projection holds a Date; a store holds its ISO text. One instant is one value.
+    expect(compare(row({ at: new Date('2024-01-01T06:00:00Z') }), row({ at: '2024-01-01T06:00:00.000Z' }))).toBe(0);
+    // 10:00 at +05:00 is 05:00Z, an hour before 06:00Z, though its text sorts after.
+    expect(compare(row({ at: '2024-01-01T10:00:00+05:00' }), row({ at: '2024-01-01T06:00:00Z' }))).toBeLessThan(0);
+  });
+
   it('compares integers above 2^53 exactly when they arrive as integer strings', () => {
     // 2^53 + 1 and 2^53 are one double; as text they are two values.
     expect(compare(row({ count: '9007199254740993' }), row({ count: '9007199254740992' }))).toBeGreaterThan(0);

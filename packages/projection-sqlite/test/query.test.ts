@@ -379,6 +379,7 @@ describe('query requires a statement that is a query', () => {
   it.each([
     ['ATTACH', "ATTACH DATABASE ':memory:' AS x"],
     ['PRAGMA', 'PRAGMA query_only = 0'],
+    ['a PRAGMA that returns rows', 'PRAGMA table_info("blobs")'],
     ['EXPLAIN', 'EXPLAIN SELECT 1'],
     ['EXPLAIN QUERY PLAN', 'EXPLAIN QUERY PLAN SELECT 1'],
     ['a bare table name', '"blobs"'],

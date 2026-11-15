@@ -15,7 +15,7 @@ import { PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources
 import { isVatError } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { isStatementRefusal, openGate, runGated } from '../src/sql-gate.js';
+import { isStatementRefusal, openGate, refreshRelationPagesAfter, runGated } from '../src/sql-gate.js';
 
 /** A `node:sqlite`-shaped error carrying one extended result code. */
 function sqliteError(errcode: number): Error {
@@ -116,19 +116,21 @@ function noSuchTable(name: string): Error {
 }
 
 /**
- * A connection whose SQLite has no `jsonb_each` or `jsonb_tree`, as on the declared Node floor: every
- * `prepare` naming one fails as that build's does.
+ * A connection on which every `prepare` whose text matches `pattern` fails with `fault(matched)`, and
+ * every other `prepare` reaches the real connection.
  *
  * @param database - The real connection
+ * @param pattern - Which statements fail
+ * @param fault - The error a matching statement throws, from the matched text
  * @returns The connection, as the gate sees it
  */
-function withoutJsonb(database: DatabaseSync): DatabaseSync {
+function withPrepareFault(database: DatabaseSync, pattern: RegExp, fault: (matched: string) => Error): DatabaseSync {
   return new Proxy(database, {
     get(target, key) {
       if (key === 'prepare') {
         return (sql: string) => {
-          const absent = /jsonb_(?:each|tree)/u.exec(sql)?.[0];
-          if (absent !== undefined) throw noSuchTable(absent);
+          const matched = pattern.exec(sql)?.[0];
+          if (matched !== undefined) throw fault(matched);
           return target.prepare(sql);
         };
       }
@@ -136,6 +138,17 @@ function withoutJsonb(database: DatabaseSync): DatabaseSync {
       return typeof value === 'function' ? value.bind(target) : value;
     },
   });
+}
+
+/**
+ * A connection whose SQLite has no `jsonb_each` or `jsonb_tree`, as on the declared Node floor: every
+ * `prepare` naming one fails as that build's does.
+ *
+ * @param database - The real connection
+ * @returns The connection, as the gate sees it
+ */
+function withoutJsonb(database: DatabaseSync): DatabaseSync {
+  return withPrepareFault(database, /jsonb_(?:each|tree)/u, noSuchTable);
 }
 
 describe('openGate — the reference functions this runtime has', () => {
@@ -153,20 +166,28 @@ describe('openGate — the reference functions this runtime has', () => {
     }
   });
 
-  it('propagates a probe failure that is not an absent function', () => {
+  // Only the reference probe fails, so the schema read after it cannot be what throws.
+  it.each([
+    [11, 'SQLITE_CORRUPT, the store failing'],
+    [18, 'SQLITE_TOOBIG, a statement refusal that is not an absent name'],
+  ])('propagates a probe failure that is not an absent function: errcode %i, %s', (errcode) => {
     const database = new DatabaseSync(':memory:');
     try {
-      const failing = new Proxy(database, {
-        get(target, key) {
-          if (key === 'prepare') return () => { throw Object.assign(new Error('database disk image is malformed'), { code: 'ERR_SQLITE_ERROR', errcode: 11 }); };
-          const value: unknown = Reflect.get(target, key);
-          return typeof value === 'function' ? value.bind(target) : value;
-        },
-      });
-      expect(() => openGate(failing)).toThrow(/malformed/u);
+      const fault = sqliteError(errcode);
+      expect(thrownBy(() => openGate(withPrepareFault(database, /\bjson_each\b/u, () => fault)))).toBe(fault);
     } finally {
       database.close();
     }
+  });
+});
+
+describe('refreshRelationPagesAfter — the write\'s failure wins, and only a write\'s', () => {
+  it('propagates a refresh failure after a write that succeeded, and drops it after one that failed', () => {
+    const database = new DatabaseSync(':memory:');
+    const gate = openGate(database);
+    database.close();
+    expect(() => refreshRelationPagesAfter(gate, false)).toThrow(/not open/u);
+    expect(() => refreshRelationPagesAfter(gate, true)).not.toThrow();
   });
 });
 

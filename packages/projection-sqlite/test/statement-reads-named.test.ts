@@ -36,8 +36,7 @@ const UNNAMED_READS: readonly (readonly [string, string])[] = [
   ['a single-quoted table name', "SELECT COUNT(*) AS n FROM 'blobs'"],
   ['a single-quoted table beside a named one', `SELECT s."title" FROM "blob_sections" s JOIN 'blobs' b ON b."contentKey" = s."blob"`],
   ['a single-quoted table in a subquery', `SELECT "title" FROM "blob_sections" WHERE "blob" IN (SELECT "contentKey" FROM 'blobs')`],
-  ['a single-quoted table the statement also names as a qualifier', "SELECT blobs.\"contentKey\" AS k FROM 'blobs'"],
-  ['a single-quoted table followed by an unclosed comment naming it', "SELECT COUNT(*) AS n FROM 'blobs' /* blobs"],
+  ['a single-quoted table the statement also names as a qualifier', "SELECT blobs.\"contentKey\" AS k FROM 'blobs'"],  ['a single-quoted table followed by an unclosed comment naming it', "SELECT COUNT(*) AS n FROM 'blobs' /* blobs"],
   ['a single-quoted table beside an alias spelled as it, with no space after AS', `SELECT COUNT(*) AS n FROM "blob_sections" AS"blobs" JOIN 'blobs' ON 1`],
 ];
 
@@ -75,6 +74,15 @@ describe('a relation the statement opens but does not name is refused, though th
 
   it.each(UNNAMED_READS)('compile probe, whose schema holds every relation: %s', (_label, sql) => {
     expect(isVatError(thrownBy(() => probe.assertCompiles(sql, [])), PROJECTION_STATEMENT_REFUSED_CODE)).toBe(true);
+  });
+
+  it('refuses a single-quoted name in another case, which SQLite matches to the table, beside a qualifier naming it', () => {
+    // The qualifier names `blobs`, so only the quoted-name check stands between this and an answer.
+    const sql = "SELECT blobs.\"contentKey\" AS k FROM 'BLOBS'";
+    for (const refusal of [thrownBy(() => database.query(sql)), thrownBy(() => database.columns(sql)), thrownBy(() => probe.assertCompiles(sql, []))]) {
+      expect(isVatError(refusal, PROJECTION_STATEMENT_REFUSED_CODE), String(refusal)).toBe(true);
+      expect(String(refusal)).toContain("single-quoted name 'BLOBS'");
+    }
   });
 });
 
