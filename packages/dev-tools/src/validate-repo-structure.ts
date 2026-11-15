@@ -401,12 +401,14 @@ function validateSourceFileLocations(): void {
   const skipDirs = SKIP_DIRS_WITH_HUSKY;
 
   // Root config files. `eslint.config.js` is JavaScript and never reaches this
-  // rule; a `.ts` root file not named here is a finding.
+  // rule; a `.ts` root file not named here is a finding. The `.d.ts` types the
+  // config's helper module beside it for the dev-tools tests that import it.
   const ALLOWED_ROOT_TS_FILES = new Set([
     'vitest.config.ts',
     'vitest.integration.config.ts',
     'vitest.system.config.ts',
     'vitest.shared.ts',
+    'eslint-config-support.d.ts',
   ]);
 
   walkDirectory(REPO_ROOT, '.', {

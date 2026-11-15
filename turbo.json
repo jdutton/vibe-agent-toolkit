@@ -63,9 +63,13 @@
     //   (a shared test helper, a dev-tools generator), and what those import in
     //   turn: listed per package in a generated `packages/<pkg>/turbo.json`
     //   (`bun run generate:lint-config`; `validate-structure` checks it);
-    // - the rule sources, and the installed linter and TypeScript (their
-    //   manifests in node_modules, not bun.lock: a worktree sharing this cache
-    //   may have pulled a lockfile change without installing it).
+    // - the rule sources, `eslint-config-support.js` and the ignore files
+    //   (`eslint.config.js` reads all of them for every package);
+    // - `bun.lock`: a program reaching another package's source reads that
+    //   package's external types, which this package's own external-dependency
+    //   hash does not cover; and the installed linter and TypeScript manifests,
+    //   because a worktree sharing this cache may have pulled a lockfile change
+    //   without installing it.
     // No `dependsOn`: `^build` would fold the upstream build's hash in, and that
     // changes with every source edit. The root `lint` script runs `turbo run
     // build` first and then sets `VAT_LINT_BUILT` (passed through, unhashed); a
@@ -78,6 +82,10 @@
         "$TURBO_ROOT$/packages/*/dist/**/*.d.ts",
         "$TURBO_ROOT$/packages/*/dist/**/*.d.cts",
         "$TURBO_ROOT$/packages/*/package.json",
+        "$TURBO_ROOT$/bun.lock",
+        "$TURBO_ROOT$/eslint-config-support.js",
+        "$TURBO_ROOT$/.gitignore",
+        "$TURBO_ROOT$/packages/dev-tools/corpus/compat-empirical/run/.gitignore",
         "$TURBO_ROOT$/node_modules/typescript/package.json",
         "$TURBO_ROOT$/node_modules/eslint/package.json",
         "$TURBO_ROOT$/node_modules/@eslint/js/package.json",
@@ -98,14 +106,15 @@
     // The root's own scripts (`eslint.config.js`, the vitest setup files): no
     // package lints them. Not `//#lint`, which would run the root `lint` script —
     // `turbo run lint` itself. Its inputs are what `eslint . --ignore-pattern
-    // 'packages/**'` lints, at any depth, plus what `eslint.config.js` reads (every
-    // manifest, for the library-rule off-list; the `.gitignore` files, for its
-    // ignores), the rules and the installed linter. Matched on disk, so trees
-    // that are not source are excluded; erring wide costs only a spare re-lint.
+    // 'packages/**'` lints: one glob per place holding such a file, each with a
+    // literal prefix so turbo never walks node_modules, .git or another session's
+    // worktree (`generate-lint-config.ts --check` derives the places from ESLint
+    // and checks them both ways). Plus what `eslint.config.js` reads (every
+    // manifest, for the library-rule off-list; the ignore files), the rules and
+    // the installed linter.
     "//#lint:root": {
       "inputs": [
-        "*.{js,cjs,mjs,jsx,ts,cts,mts,tsx}", "[!p]*/**/*.{js,cjs,mjs,jsx,ts,cts,mts,tsx}", "p[!a]*/**/*.{js,cjs,mjs,jsx,ts,cts,mts,tsx}", "pa[!c]*/**/*.{js,cjs,mjs,jsx,ts,cts,mts,tsx}", "pac[!k]*/**/*.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
-        "!**/node_modules/**/*.{js,cjs,mjs,jsx,ts,cts,mts,tsx}", "!**/dist/**", "!.claude/**", "!.superpowers/**", "!.turbo/**", "!coverage/**", "!**/*.d.ts", "!**/*.d.cts",
+        "*.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
         "package.json", "packages/*/package.json", ".gitignore", "packages/dev-tools/corpus/compat-empirical/run/.gitignore",
         "packages/utils/eslint/**",
         "node_modules/typescript/package.json",

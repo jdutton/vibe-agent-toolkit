@@ -609,6 +609,31 @@ turbo caches that verdict under those declarations.
 **Remedy:** run lint only through `bun run lint`/`lint:fix`, which build first and set
 `VAT_LINT_BUILT=1`; a package `lint` without it is refused. Never set `VAT_LINT_BUILT` by hand.
 
+### A personal ignore hides a lintable file from turbo
+
+Turbo hashes what git does not ignore, `.git/info/exclude` and the global excludes file included,
+while the lint check mirrors only the repository's own `.gitignore` files (a finding must not demand
+a commit for a personal ignore).
+**Tell:** a lint verdict that survives an edit to a file only your personal excludes ignore.
+**Remedy:** do not personally exclude a file ESLint lints; `--force` the lint after editing one.
+
+### A package's external-dependency hash misses what its program reads from another package
+
+Turbo hashes a package's own external dependencies from the lockfile. A lint program that reaches
+another package's source through a relative import also reads that package's external types, and
+those are not in the hash.
+**Tell:** `turbo run lint --dry=json` after a lockfile change to the other package's dependency
+shows the importer's `hashOfExternalDependencies` unchanged.
+**Remedy:** the lint task hashes `bun.lock` itself.
+
+### A glob with no literal prefix walks the whole tree
+
+Turbo expands an input glob by walking from its literal prefix. `[!p]*/**/*.ts` has none, so every
+run walks `node_modules`, `.git` and every other session's worktree, and a `!**/node_modules/**/*.ts`
+exclusion filters matches without pruning the walk.
+**Tell:** a no-change replay that takes seconds, or a task that misses when another worktree changes.
+**Remedy:** name each directory (`docs/**/*.ts`), and derive and check the list.
+
 ### Turbo's hash does not include the Node version
 
 A lint or test cached under one Node version replays under another: turbo hashes no runtime version.

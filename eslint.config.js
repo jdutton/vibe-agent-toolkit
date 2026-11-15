@@ -10,6 +10,7 @@ import security from 'eslint-plugin-security';
 import sonarjs from 'eslint-plugin-sonarjs';
 import unicorn from 'eslint-plugin-unicorn';
 
+import { declaredTypesFiles, gitignorePatterns, IGNORE_FILES, lintTaskRefusal } from './eslint-config-support.js';
 import localRules from './packages/utils/eslint/index.cjs';
 
 /**
@@ -433,48 +434,21 @@ function unusedLibraryRulesOff() {
   );
 }
 
-/** Every `types` value in a manifest: the top-level field and each one under `exports`, at any depth. */
-function declaredTypesFiles(manifest) {
-  const found = typeof manifest.types === 'string' ? [manifest.types] : [];
-  const visit = (node) => {
-    if (node === null || typeof node !== 'object') return;
-    for (const [key, value] of Object.entries(node)) {
-      if (key === 'types' && typeof value === 'string') found.push(value);
-      else visit(value);
-    }
-  };
-  visit(manifest.exports);
-  return [...new Set(found)];
-}
-
 /**
  * A package's `lint` script (`VAT_LINT_TASK=1 eslint .`) refuses to run unless the root `lint`
- * script built first, and unless every workspace package's declared types exist.
- *
- * Turbo keys a package's `lint` on every package's emitted `dist/**\/*.d.ts` instead of on the
- * upstream `build` task's hash, so `lint` has no `dependsOn`. Nothing inside turbo orders it after a
- * build. Two wrong verdicts follow from a lint that did not build first: a missing declaration types
- * an import as `any`, so a type-aware rule passes, and a stale declaration judges callers against
- * the old signature. Turbo would cache either pass. So the root script runs `turbo run build` and only
- * then sets `VAT_LINT_BUILT=1` for `turbo run lint` (a `passThroughEnv` of the task, unhashed), and a
- * lint task without it is refused. The missing-types check catches a `dist/` deleted after that build.
- * Both signals are set explicitly by the lint scripts. A test that loads this config, an editor, or a
- * direct `eslint` sets neither, and is not affected.
+ * script built first and every workspace package's declared types exist (`lintTaskRefusal()` in
+ * `eslint-config-support.js` holds the contract). Turbo keys a lint on the emitted declarations and
+ * has no `dependsOn`, so nothing inside turbo orders it after a build.
  */
 function assertBuiltBeforeLintTask() {
-  if (process.env.VAT_LINT_TASK !== '1') return;
-  if (process.env.VAT_LINT_BUILT !== '1') {
-    throw new Error('A package lint reads workspace types from dist/ and is cached on them, so it runs only after a build: run `bun run lint` (or `bun run lint:fix`) from the repo root, which builds first.');
-  }
-  const missing = workspacePackages().flatMap(({ dir }) => {
-    const manifest = JSON.parse(readFileSync(new URL(`packages/${dir}/package.json`, import.meta.url), 'utf8'));
-    return declaredTypesFiles(manifest)
+  const refusal = lintTaskRefusal(process.env, () => workspacePackages().flatMap(({ dir }) => {
+    const where = `packages/${dir}/package.json`;
+    const manifest = JSON.parse(readFileSync(new URL(where, import.meta.url), 'utf8'));
+    return declaredTypesFiles(manifest, where)
       .filter((types) => !existsSync(new URL(`packages/${dir}/${types}`, import.meta.url)))
       .map((types) => `packages/${dir}/${types.replace(/^\.\//, '')}`);
-  });
-  if (missing.length > 0) {
-    throw new Error(`Lint reads workspace types from dist/, and these are not built: ${missing.join(', ')}. Run \`bun run lint\` from the repo root, which builds first.`);
-  }
+  }));
+  if (refusal !== undefined) throw new Error(refusal);
 }
 
 /**
@@ -522,30 +496,11 @@ function selfImportConfigs() {
 }
 
 /**
- * Every tracked `.gitignore`'s patterns as flat-config ignores, so ESLint never lints a file turbo
- * does not hash. Turbo's inputs are the files git does not ignore, and a gitignored file ESLint did
- * lint could change a verdict that turbo then replays. The translation follows gitignore's own
- * anchoring: a pattern with a slash before its end is relative to its `.gitignore`'s directory, one
- * without matches at any depth, and a trailing slash means the directory's contents.
+ * Every ignore file's patterns as flat-config ignores (`gitignorePatterns()` in
+ * `eslint-config-support.js`), so ESLint never lints a file turbo does not hash.
  */
 function gitignoredPatterns() {
-  const sources = ['.gitignore', 'packages/dev-tools/corpus/compat-empirical/run/.gitignore'];
-  return sources.filter((file) => existsSync(new URL(file, import.meta.url))).flatMap((file) => {
-    const base = file.includes('/') ? file.slice(0, file.lastIndexOf('/') + 1) : '';
-    return readFileSync(new URL(file, import.meta.url), 'utf8').split(/\r?\n/).flatMap((raw) => {
-      // A `#` starts a comment only at the start of a line in an ignore file.
-      const line = raw.trim();
-      if (line === '' || line.startsWith('#')) return [];
-      const negated = line.startsWith('!');
-      let pattern = negated ? line.slice(1) : line;
-      const dirOnly = pattern.endsWith('/');
-      if (dirOnly) pattern = pattern.slice(0, -1);
-      const anchored = pattern.includes('/');
-      pattern = anchored ? `${base}${pattern.replace(/^\//, '')}` : `${base}**/${pattern}`;
-      const globs = dirOnly ? [`${pattern}/**`] : [pattern, `${pattern}/**`];
-      return globs.map((glob) => (negated ? `!${glob}` : glob));
-    });
-  });
+  return IGNORE_FILES.flatMap((file) => gitignorePatterns(readFileSync(new URL(file, import.meta.url), 'utf8'), file));
 }
 
 // Local rules — agentic code safety. Apply to both TS and JS source.

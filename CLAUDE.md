@@ -160,9 +160,10 @@ the coverage job in CI — never in a turbo lane; not on Windows).
   `bun run generate:lint-config`. The root never depends on a workspace package: that puts the
   package in every task's hash. How it is keyed: [`docs/build-system.md`](docs/build-system.md#lint).
   (enforced by: `validate-structure` (every `lint` script exactly, generated `tsconfig.eslint.json`
-  and `packages/*/turbo.json` lint inputs, ESLint ignoring what git ignores, linter-manifest inputs
-  both ways) and `eslint.config.js` (refuses an unbuilt package lint); the root dependency is not
-  enforced)
+  and `packages/*/turbo.json` lint inputs from each TypeScript program, ESLint ignoring what the
+  tracked ignore files ignore, the ignore-file list, the config's relative imports, the
+  linter-manifest inputs and the `lint:root` places, each both ways) and `eslint.config.js` (refuses
+  an unbuilt package lint); the root dependency is not enforced)
 - **A green commit is NOT a green PR.** Run `bun run validate` before pushing; CI runs the full
   tier on ubuntu and Windows.
 
