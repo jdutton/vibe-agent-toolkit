@@ -1802,10 +1802,10 @@ async function validate(): Promise<void> {
   // workspace resolutions, package script sets, changelog fragments) is checked
   // against its source here, so a stale copy fails the gate instead of being
   // read as the truth.
-  errors.push(...collectDerivedArtifactFindings(REPO_ROOT));
   // Lint configuration: the generated per-package lint files, each package's `lint` script, ESLint
   // ignoring what git ignores, and the installed-linter inputs (generate-lint-config.ts).
-  errors.push(...(await collectLintConfigFindings(REPO_ROOT)));
+  const lintConfigFindings = await collectLintConfigFindings(REPO_ROOT);
+  errors.push(...collectDerivedArtifactFindings(REPO_ROOT), ...lintConfigFindings);
 
   printResults();
 
