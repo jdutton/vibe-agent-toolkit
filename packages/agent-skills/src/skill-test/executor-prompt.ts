@@ -33,12 +33,12 @@ export interface BuildExecutorPromptOptions {
  * used to read "The relevant files are located at ...", which is the sentence an
  * executor looking for the data it was asked about will act on first. An eval's
  * declared input `files` are staged ONLY under `workspaceDir`, and
- * `eval-suite-isolation` strips `evals/` and `fixtures/` out of the staged
- * subject on purpose, so that clause named the one directory guaranteed NOT to
- * hold them. Measured on a 21-eval suite: executors listed the subject dir,
- * reported that the path held tooling and not a data file, and asked the user for
- * a path rather than performing the task -- which grades as a skill failure and
- * is not one. The subject clause now describes TOOLING; the workspace clause owns
+ * `isolateEvalSuite` removes the suite's directory (by default `evals/`, which
+ * also holds its `fixtures/`) from the staged subject on purpose, so that clause
+ * named the one directory guaranteed NOT to hold them. Measured on a 21-eval
+ * suite: executors listed the subject dir, reported that the path held tooling
+ * and not a data file, and asked the user for a path rather than performing the
+ * task -- which grades as a skill failure and is not one. The subject clause now describes TOOLING; the workspace clause owns
  * the files.
  *
  * Pure function: same inputs always produce the same prompt.

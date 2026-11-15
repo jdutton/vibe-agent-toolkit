@@ -2,6 +2,7 @@ import type { SpawnResult } from '@vibe-agent-toolkit/utils/skill-test';
 import { describe, expect, it } from 'vitest';
 
 import { runExecutorForEval, type RunExecutorInput } from '../../src/skill-test/eval-executor.js';
+import { buildExecutorPrompt } from '../../src/skill-test/executor-prompt.js';
 import { RateLimitSignal } from '../../src/skill-test/pipeline.js';
 
 import {
@@ -128,8 +129,9 @@ describe('runExecutorForEval', () => {
     delete (input as { subjectStagedDir?: string }).subjectStagedDir;
     await runExecutorForEval(input);
 
-    expect(calls[0]?.prompt).not.toContain(SUBJECT_ONLY_DIR);
-    expect(calls[0]?.prompt).not.toContain('The relevant files are located at');
+    // Exactly the builder's no-subject prompt: a phrase-based negative would go
+    // vacuous the moment the subject clause is reworded.
+    expect(calls[0]?.prompt).toBe(buildExecutorPrompt({ task: input.task, workspaceDir: WORKSPACE_DIR }));
     expect(calls[0]?.prompt).toContain(WORKSPACE_DIR);
   });
 

@@ -53,6 +53,35 @@ describe('buildExecutorPrompt', () => {
     expect(() => assertExecutorPromptInvariants(prompt, baseOpts.task)).not.toThrow();
   });
 
+  // An eval's input files are staged ONLY in the workspace; the staged subject has
+  // its eval suite stripped. So the clause naming the subject must not claim to
+  // hold any files, and the workspace clause must. Windows paths are quoted
+  // verbatim, separators and drive letter included.
+  it.each([
+    ['POSIX', '/h/subject', '/w/eval-1'],
+    ['Windows', String.raw`C:\Users\a\AppData\Local\Temp\vat-skill-test\staged\s`, String.raw`C:\Users\a\AppData\Local\Temp\vat-skill-test-ws-x\t\e1`],
+  ])('only the workspace clause claims the files (%s paths)', (_label, subjectPath, workspaceDir) => {
+    const lines = buildExecutorPrompt({ task: baseOpts.task, subjectPath, workspaceDir }).split('\n');
+    const subjectLines = lines.filter((line) => line.includes(subjectPath));
+    const workspaceLines = lines.filter((line) => line.includes(workspaceDir));
+
+    expect(subjectLines).toHaveLength(1);
+    expect(subjectLines[0]).not.toMatch(/\bfiles?\b|\bdata\b|\binputs?\b/i);
+    expect(workspaceLines).toHaveLength(1);
+    expect(workspaceLines[0]).toMatch(/\bfiles\b/i);
+  });
+
+  it('builds exactly the task, then the subject clause, then the workspace clause', () => {
+    expect(buildExecutorPrompt({ ...baseOpts, workspaceDir: '/w/eval-1' })).toBe(
+      [
+        baseOpts.task,
+        '',
+        `Supporting tools and reference material are installed at ${SUBJECT_PATH}.`,
+        'Your working directory is /w/eval-1 — the project to operate on. Any files you have been given are there.',
+      ].join('\n'),
+    );
+  });
+
   it('never mentions testing, evaluation, or grading', () => {
     const prompt = buildExecutorPrompt({ ...baseOpts, workspaceDir: '/w/eval-1' });
     expect(() => assertExecutorPromptInvariants(prompt, baseOpts.task)).not.toThrow();
