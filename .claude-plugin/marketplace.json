@@ -7,9 +7,9 @@
   "plugins": [
     {
       "name": "vibe-agent-toolkit",
-      "description": "Development agents and skills for building with vibe-agent-toolkit",
+      "description": "Skills for building with vibe-agent-toolkit",
       "source": "./plugins/vibe-agent-toolkit",
-      "version": "0.2.0-rc.15",
+      "version": "0.2.0-rc.16",
       "author": {
         "name": "vibe-agent-toolkit contributors"
       }

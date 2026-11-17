@@ -39,10 +39,6 @@ my-skills-project/
 │   │   ├── SKILL.md                    # router skill (optional, for multi-skill bundles)
 │   │   └── my-skill.md
 │   └── content/                        # non-skill markdown (RAG, collections)
-├── agents/                             # TypeScript portable agents (optional)
-│   └── my-agent/
-│       ├── agent.yaml
-│       └── src/
 ├── schemas/                            # JSON Schemas for resource collections
 ├── docs/                               # project documentation
 └── dist/                               # generated (gitignored): vat build output
@@ -123,8 +119,6 @@ In practice, prefer one `vibe-agent-toolkit.config.yaml` per git repository. Mul
 - Genuinely unrelated projects that happen to share a monorepo and each ship their own skills.
 
 If you are tempted to use nested configs to "share" or "override" settings across related skills, fold everything into one project-level config instead — that's what `skills.defaults` and `skills.config.<name>` are for.
-
-(Note: `agent.yaml`, the manifest for TypeScript portable agents, is a separate surface with its own rules and is out of scope for this guidance — see `vibe-agent-toolkit:vat-agent-authoring`.)
 
 ## `package.json` Wiring
 
@@ -209,7 +203,6 @@ per repository and 50,000 content keys. `vat cache clear` reclaims it.
 ## References
 
 - `vibe-agent-toolkit:vat-skill-authoring` — SKILL.md frontmatter, body structure, references, packagingOptions
-- `vibe-agent-toolkit:vat-agent-authoring` — TypeScript agent archetypes and runtime adapters
 - `vibe-agent-toolkit:vat-skill-distribution` — `vat build` / `vat verify` / marketplace / npm publish
 - `vibe-agent-toolkit:vat-knowledge-resources` — `resources:` collections, frontmatter schemas, and `vat resources check` (standing SQL assertions)
 - `vibe-agent-toolkit:vat-rag` — `rag:` stores, embedding providers, `vat rag index/query`

@@ -82,9 +82,14 @@ populated tree is `status: ok`, exit 0. A refused statement is `status: error`, 
 A statement naming a table or column that does not exist gets the real columns of the tables it
 named — VAT ships no schema version, so that listing is how you find what a name became. The
 statement is also **compiled before the projection is populated**, so a typo costs milliseconds
-instead of a full crawl (measured on an adopter: 8.3 s → 0.5 s). Writes are refused by the engine
-(`PRAGMA query_only`), `ATTACH` is refused, and a statement carrying a second statement is refused
-outright, because SQLite compiles only the first and **discards the rest without error**.
+instead of a full crawl (measured on an adopter: 8.3 s → 0.5 s). Writes are refused (read off the
+compiled statement, and by `PRAGMA query_only`), `ATTACH` is refused, and a statement carrying a
+second statement is refused outright, because SQLite compiles only the first and **discards the
+rest without error**. A run holds only the tables its statements name as an identifier, and a
+statement reads only a table it names itself (`FROM 'blobs'`, single-quoted, names none and is
+refused), so asking which tables exist is refused too: `sqlite_schema`, `pragma_*`, `dbstat`,
+`changes()`; placeholders are `?` only. Without `ORDER BY`, rows come in the same order warm or cold: primary-key order for a plain
+scan of one table; a join, `GROUP BY` or `DISTINCT` follows the plan.
 
 ### 🚨 The corpus is the TRACKED TREE, not your configured resource set
 
@@ -492,6 +497,17 @@ milliseconds; `vat resources check --help` states the reference timings.
 A killed or crashed run is still evidence: checks that completed keep their per-rule row counts, and
 the report names the rule that was in flight. It **never exits 0** — not on a watchdog kill, not on
 a child that died of its own memory.
+
+`vat resources query` takes the same flag, opt-in: it has **no** default bound, because a query
+is typed at a keyboard where Ctrl-C works. Ask for one when the statement might run away:
+
+```bash
+vat resources query --budget 30 'SELECT ...'   # child process, killed after 30s without progress
+```
+
+A query killed or dead before it finished has no answer, so it is refused as `RUN_INCOMPLETE`
+(exit 2), never published as a partial result. One statement is one unit: a healthy statement
+slower than the budget is killed too. Without `--budget`, nothing changes: one process, as before.
 
 ⛔ `check` deliberately does **not** preflight-compile its SQL the way `query` does. A check that
 cannot run must surface as a `RESOURCE_CHECK_BROKEN` finding inside a document that also reports the

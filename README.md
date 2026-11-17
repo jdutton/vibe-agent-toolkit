@@ -1,8 +1,8 @@
 # vibe-agent-toolkit Skills Marketplace
 
-Development agents and skills for building, testing, and distributing AI agent skills with [vibe-agent-toolkit](https://github.com/jdutton/vibe-agent-toolkit) (VAT).
+Skills for building, testing, and distributing AI agent skills with [vibe-agent-toolkit](https://github.com/jdutton/vibe-agent-toolkit) (VAT).
 
-**What you get:** 8 skills that teach Claude Code how to build portable agent skills, package them into Claude plugins, publish marketplaces, validate resources, and debug issues — all from within your editor.
+**What you get:** skills that teach Claude Code how to author, audit, test and package agent skills, publish Claude plugins and marketplaces, and validate, index and query knowledge resources — all from within your editor.
 
 ## Install
 
@@ -46,16 +46,10 @@ claude plugin marketplace add jdutton/vibe-agent-toolkit#claude-marketplace-next
 
 ## Skills
 
-| Skill | When to use |
-|-------|-------------|
-| **vibe-agent-toolkit** | Router — agent creation, CLI commands, skill packaging, getting started |
-| **distribution** | Build pipeline, npm publishing, marketplace publishing, plugin install |
-| **resources** | Resource collections, frontmatter validation, link checking |
-| **audit** | Plugin and skill validation with `vat audit` |
-| **authoring** | SKILL.md structure, agent architecture, orchestration patterns |
-| **debugging** | Reproduce bugs, test local fixes, validate with full build pipeline |
-| **install** | Install/uninstall architecture reference for all deployment surfaces |
-| **org-admin** | Anthropic org administration (Enterprise/Team admins, requires admin API key) |
+Start with the **vibe-agent-toolkit** skill: it is the router, and its table names the sub-skill
+for each kind of task — adoption and configuration, skill authoring, audit, knowledge resources,
+distribution, RAG, skill review, skill testing, enterprise org admin, markdown rewriting and
+coherence audits.
 
 ## How it works
 

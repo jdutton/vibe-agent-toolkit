@@ -39,7 +39,6 @@ Running `vat audit <path>` recursively walks the directory and auto-detects:
 | `.claude-plugin/plugin.json` in a dir | Claude Plugin |
 | `.claude-plugin/marketplace.json` in a dir | Claude Marketplace |
 | `SKILL.md` file | Agent Skill |
-| `agent.yaml` + `SKILL.md` | VAT Agent |
 | `installed_plugins.json` | Registry file |
 
 Recursion is the default — you do not need `--recursive`.
@@ -212,4 +211,4 @@ skills:
           LINK_TO_NAVIGATION_FILE: ignore   # hidden from audit output
 ```
 
-**Per-instance allow entries.** For per-path suppression with an audit trail, use `validation.allow` and run `vat skills validate` or `vat skills build` — those commands apply `allow` and gate the build. See `docs/validation-codes.md` for the full code reference and the VAT agent-authoring skill for configuration patterns.
+**Per-instance allow entries.** For per-path suppression with an audit trail, use `validation.allow` and run `vat skills validate` or `vat skills build` — those commands apply `allow` and gate the build. See `docs/validation-codes.md` for the full code reference and `vibe-agent-toolkit:vat-skill-authoring` for configuration patterns.
