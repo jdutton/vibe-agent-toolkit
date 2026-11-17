@@ -41,8 +41,8 @@ const SHAPES: ReadonlyArray<readonly [shape: string, code: string]> = [
   ['an import type', `import type { RunDatabase } from '${BACKEND}';\nexport type Handle = RunDatabase;\n`],
   ['an import()', `export const load = (): Promise<unknown> => import('${BACKEND}');\n`],
   ['a type-position import', `export type Handle = import('${BACKEND}').RunDatabase;\n`],
-  ['an export-from', `export { openRunDatabase } from '${BACKEND}';\n`],
-  ['a relative import of its source', "import { openRunDatabase } from '../../../projection-sqlite/src/run-database.js';\nexport const open = openRunDatabase;\n"],
+  ['an export-from', `export { hydrateRunDatabase } from '${BACKEND}';\n`],
+  ['a relative import of its source', "import { hydrateRunDatabase } from '../../../projection-sqlite/src/run-database.js';\nexport const open = hydrateRunDatabase;\n"],
   ['a relative import type of its barrel', "import type { RunDatabase } from '../../../projection-sqlite/src/index.js';\nexport type Handle = RunDatabase;\n"],
 ];
 

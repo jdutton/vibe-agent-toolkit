@@ -21,12 +21,18 @@ import {
   type ProjectionQueryPayloadInput,
 } from '../../src/commands/resources/query.js';
 import { refusalCodeOf } from '../../src/utils/command-refusal.js';
-import { describedFailure, describeQueryFailure, refusedStatement } from '../../src/utils/projection-query.js';
+import {
+  describedFailure,
+  describeQueryFailure,
+  NOTHING_UNHYDRATED,
+  refusedStatement,
+  type UnhydratedRelations,
+} from '../../src/utils/projection-query.js';
 
 /** Every derived relation absent, as in a run whose statements named none of them. */
-const NONE_EVALUATED: ReadonlySet<string> = new Set(allDerivedSpecs().map((spec) => spec.name));
+const NONE_EVALUATED: UnhydratedRelations = { absent: new Set(allDerivedSpecs().map((spec) => spec.name)), withheld: new Map() };
 /** Nothing absent: the compile probe, which carries every relation. */
-const ALL_PRESENT: ReadonlySet<string> = new Set();
+const ALL_PRESENT: UnhydratedRelations = NOTHING_UNHYDRATED;
 
 /** A stand-in for whatever a statement selected. Two rows, so a count of 1 cannot pass. */
 const ROWS: readonly Record<string, unknown>[] = [
@@ -199,6 +205,30 @@ describe('the failure message', () => {
     expect(message).not.toContain(PROJECTION_TABLES.blobSections.name);
   });
 
+  it('diagnoses a missing column from the relations the statement names, never from words in a literal', () => {
+    // The run holds resource_realizations and not resources; 'packages/resources/%' is a string.
+    const held: UnhydratedRelations = {
+      absent: new Set(['resources', ...allDerivedSpecs().map((spec) => spec.name)]),
+      withheld: new Map(),
+    };
+    const message = describeQueryFailure(
+      "SELECT pth FROM resource_realizations WHERE path LIKE 'packages/resources/%'",
+      'no such column: pth',
+      held,
+    );
+
+    expect(message).toContain('no such column: pth');
+    expect(message).toContain(`resource_realizations(${PROJECTION_TABLES.resourceRealizations.columns.join(', ')})`);
+    expect(message).not.toContain('did not hydrate');
+  });
+
+  it('names no relation from a comment either', () => {
+    const message = describeQueryFailure('SELECT pth FROM blobs -- see edges', 'no such column: pth', NONE_EVALUATED);
+
+    expect(message).not.toContain('did not hydrate');
+    expect(message).toContain('blobs(');
+  });
+
   it('lists every table when the statement named none of them', () => {
     const message = describeQueryFailure('SELECT * FROM nope', 'no such table: nope', NONE_EVALUATED);
 
@@ -212,23 +242,51 @@ describe('the failure message', () => {
     ['edges', 'SELECT COUNT(*) FROM edges', 'no such table: edges'],
     ['a schema-qualified spelling', 'SELECT COUNT(*) FROM main.edges', 'no such table: main.edges'],
     ['another case', 'SELECT COUNT(*) FROM EDGES', 'no such table: EDGES'],
-  ])('explains a DERIVED relation missing as "not evaluated for this run": %s', (_what, sql, engine) => {
-    // 🚨 The run database has no table for a relation no lens filled, so this
-    // engine message is the refusal of an unevaluated relation — not a typo. A
+  ])('explains an absent relation as one this run did not hydrate: %s', (_what, sql, engine) => {
+    // 🚨 The run database has no table for a relation the run did not hydrate
+    // or no lens filled, so this engine message is that refusal — not a typo. A
     // listing of "what you could have named" would include the very relation
     // SQLite just said is missing, and read as a contradiction.
     const message = describeQueryFailure(sql, engine, NONE_EVALUATED);
 
     expect(message).toContain(engine);
-    expect(message).toMatch(/edges.*not evaluated for this run/s);
-    expect(message).toContain('Declare this statement');
+    expect(message).toMatch(/edges, which this run did not hydrate/su);
+    expect(message).toContain('Name it as an identifier in this statement');
   });
 
   it('names EVERY derived relation from the registry, not a hand-kept list', () => {
     for (const spec of allDerivedSpecs()) {
       expect(describeQueryFailure(`SELECT * FROM ${spec.name}`, `no such table: ${spec.name}`, NONE_EVALUATED))
-        .toContain('not evaluated for this run');
+        .toContain('which this run did not hydrate');
     }
+  });
+
+  it('treats an absent projection table exactly as an absent derived one, and lists none of its columns', () => {
+    const absent: UnhydratedRelations = { absent: new Set(['blobs']), withheld: new Map() };
+    const message = describeQueryFailure('SELECT contentKey FROM blobs', 'no such table: blobs', absent);
+
+    expect(message).toContain('blobs, which this run did not hydrate');
+    expect(message).not.toContain('contentKey,');
+  });
+
+  it('names the spellings the planner reads, when a relation was reached only as a single-quoted string', () => {
+    // SQLite takes `FROM 'blobs'` as the table; the planner reads a single-quoted name as a string.
+    const absent: UnhydratedRelations = { absent: new Set(['blobs']), withheld: new Map() };
+    const message = describeQueryFailure("SELECT COUNT(*) FROM 'blobs'", 'no such table: blobs', absent);
+
+    expect(message).toContain('blobs, "blobs", [blobs], `blobs`');
+    expect(message).toContain("A single-quoted 'blobs' is a string, not a name");
+  });
+
+  it('names why a WITHHELD relation is absent, and lists none of its columns', () => {
+    const withheld: UnhydratedRelations = {
+      absent: new Set(['resource_realizations']),
+      withheld: new Map([['resource_realizations', 'it has a root-relative path column and no `root` column']]),
+    };
+    const message = describeQueryFailure('SELECT path FROM resource_realizations', 'no such table: resource_realizations', withheld);
+
+    expect(message).toContain('resource_realizations, which this run withheld: it has a root-relative path column');
+    expect(message).not.toContain('pathLower');
   });
 
   it('refuses a statement naming a REFUSED relation before it runs, with that lens\'s code and fix', () => {
@@ -241,7 +299,7 @@ describe('the failure message', () => {
 
     expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
     expect(error?.message).toContain('could not be evaluated for this run: Pass --base <ref>.');
-    expect(error?.message).not.toContain('Declare this statement');
+    expect(error?.message).not.toContain('Name it as an identifier');
   });
 
   it('refuses nothing a statement does not name: a comment or a literal mentioning the relation is not a read', () => {
@@ -294,9 +352,9 @@ describe('the failure message', () => {
     expect(refusalCodeOf(describedFailure('SELECT path FROM changed_files', engine, ALL_PRESENT))).toBe('USAGE_INVALID');
   });
 
-  it('does not call a missing PROJECTION table unevaluated', () => {
+  it('does not call a name that is no relation unhydrated', () => {
     expect(describeQueryFailure('SELECT * FROM edgesx', 'no such table: edgesx', NONE_EVALUATED))
-      .not.toContain('not evaluated');
+      .not.toContain('did not hydrate');
   });
 
   it('leaves a refusal that is not about a name exactly as the engine phrased it', () => {

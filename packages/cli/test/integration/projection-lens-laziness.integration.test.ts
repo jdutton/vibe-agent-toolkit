@@ -171,20 +171,6 @@ describe('lens evaluation is driven by what the run declares', () => {
     await expect(
       withQueriedProjection({ root, logger, statements: [NAMES_NOTHING], base: undefined }, (ask) =>
         ask(COUNT_EDGES)),
-    ).rejects.toThrow(/no such table: edges.*not evaluated for this run/s);
-  });
-
-  it('evaluates every lens for a caller that declares no statements at all', async () => {
-    // ⛔ The fail-safe direction. `vat resources check` used to reach the lane
-    // this way, and a caller that cannot enumerate its statements must get
-    // correct rows rather than cheap ones.
-    const outcome = await withQueriedProjection({ root, logger, base: undefined }, (ask, provenance) => ({
-      rows: ask(COUNT_EDGES),
-      lensesEvaluated: provenance.lensesEvaluated,
-      lensMs: provenance.lensMs,
-    }));
-
-    expect(outcome.lensesEvaluated).toStrictEqual(['authored-link', 'claude-context']);
-    expect(countOf(outcome)).toBeGreaterThan(0);
+    ).rejects.toThrow(/no such table: edges.*which this run did not hydrate/s);
   });
 });

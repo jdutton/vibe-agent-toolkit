@@ -37,10 +37,10 @@ import { isVatError, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { openRunDatabase, type RunDatabase } from '../src/run-database.js';
+import { hydrateRunDatabase, type RunDatabase } from '../src/run-database.js';
 import { openSqliteFactStore } from '../src/store.js';
 
-import { FIRST_BLOB, SECOND_BLOB, sampleProjection } from './fixtures.js';
+import { FIRST_BLOB, hydrateEveryTable, sampleProjection, SECOND_BLOB } from './fixtures.js';
 
 /** Asked after every refusal, to prove the refusal was real and not just a message. */
 const COUNT_BLOBS = 'SELECT COUNT(*) AS n FROM "blobs"';
@@ -79,7 +79,7 @@ function rowsOf(
 let store: RunDatabase;
 
 beforeEach(() => {
-  store = openRunDatabase(sampleProjection([FIRST_BLOB, SECOND_BLOB]));
+  store = hydrateEveryTable(sampleProjection([FIRST_BLOB, SECOND_BLOB]));
 });
 
 afterEach(async () => {
@@ -97,10 +97,10 @@ afterEach(async () => {
  * not only reading back: routing the run database through the file-backed
  * `configure()` is the regression.
  */
-describe('openRunDatabase', () => {
+describe('hydrateRunDatabase', () => {
   it('opens without throwing, and without the file-backed WAL stall', async () => {
     const before = performance.now();
-    const opened = openRunDatabase(sampleProjection());
+    const opened = hydrateEveryTable(sampleProjection());
     const elapsed = performance.now() - before;
     await opened.close();
 
@@ -122,12 +122,26 @@ describe('openRunDatabase', () => {
     }
   });
 
-  it('refuses a projection with no root row, since there is no id to file it under', () => {
-    expect(() => openRunDatabase({ ...sampleProjection(), roots: [] })).toThrow(/no root row/u);
+  it('holds exactly the mapped relations: no other table, no extents, no blob_keys', async () => {
+    const projection = sampleProjection();
+    const only = hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['blobs', projection.blobs]]) });
+    try {
+      expect(only.query(COUNT_BLOBS)[0]?.['n']).toBe(projection.blobs.length);
+      for (const name of ['resource_realizations', 'extents', 'blob_keys', 'edges']) {
+        expect(() => only.query(`SELECT 1 FROM ${quoteIdentifier(name)}`), name).toThrow(/no such table/u);
+      }
+    } finally {
+      await only.close();
+    }
+  });
+
+  it('refuses a name that is not a queryable relation, rather than creating it', () => {
+    expect(() => hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['extents', []]]) }))
+      .toThrow(/not a queryable relation/u);
   });
 
   it('holds nothing across instances — each is its own projection', async () => {
-    const other = openRunDatabase(sampleProjection([]));
+    const other = hydrateEveryTable(sampleProjection([]));
     try {
       expect(other.query(COUNT_BLOBS)[0]?.['n']).toBe(0);
       expect(store.query(COUNT_BLOBS)[0]?.['n']).toBe(2);
@@ -275,7 +289,7 @@ describe('query', () => {
   });
 
   it('rejects a closed store rather than answering from a dead connection', async () => {
-    const doomed = openRunDatabase(sampleProjection());
+    const doomed = hydrateEveryTable(sampleProjection());
     await doomed.close();
 
     expect(() => doomed.query('SELECT 1 AS n')).toThrow();
@@ -355,10 +369,9 @@ describe('query cannot reach a database it was not opened on', () => {
     attachIfTheGateLetsIt(secretPath);
 
     expect(() => store.query('SELECT "v" FROM "smuggled"."secrets"')).toThrow(/no such table/i);
-    expect(
-      store.query('SELECT "name" FROM pragma_database_list').map((row) => row['name']),
-      'a foreign schema survived the call that attached it',
-    ).toEqual(['main']);
+    // The gate refuses to prepare while any schema but main and temp is attached, so a call
+    // that answers proves none survived.
+    expect(store.query('SELECT 1 AS n')[0]?.['n'], 'a foreign schema survived the call that attached it').toBe(1);
   });
 });
 
@@ -366,6 +379,7 @@ describe('query requires a statement that is a query', () => {
   it.each([
     ['ATTACH', "ATTACH DATABASE ':memory:' AS x"],
     ['PRAGMA', 'PRAGMA query_only = 0'],
+    ['a PRAGMA that returns rows', 'PRAGMA table_info("blobs")'],
     ['EXPLAIN', 'EXPLAIN SELECT 1'],
     ['EXPLAIN QUERY PLAN', 'EXPLAIN QUERY PLAN SELECT 1'],
     ['a bare table name', '"blobs"'],
@@ -388,15 +402,16 @@ describe('query requires a statement that is a query', () => {
     expect(store.query(sql)[0]?.[column]).toBe(1);
   });
 
-  it('leaves query_only carrying the writes a leading token cannot see', () => {
+  it('refuses, from the compiled program, the writes a leading token cannot see', () => {
     // `WITH … DELETE` is real SQLite grammar and its first token is `WITH`, so
-    // the kind gate passes it and the ENGINE is what refuses (measured on Node
-    // 24.13.1). This is the case that makes the two guards layered rather than
-    // one of them decoration — do not delete it to "cover" the token gate.
-    // `RETURNING` gives the write a result column, so the result-shape check
-    // passes it too and only `query_only` is left to refuse it — and the
-    // assertion names the ENGINE's words, which no gate of ours emits.
-    expect(() => store.query('WITH c(a) AS (VALUES (1)) DELETE FROM "blobs" RETURNING "contentKey"')).toThrow(/readonly database/);
+    // the kind gate passes it, and `RETURNING` gives it a result column, so the
+    // result-shape check passes it too. Its program opens a WRITE transaction,
+    // and that is what refuses it — on `columns` and the compile probe, which
+    // never step, as much as here. `query_only` still stands behind a step:
+    // `statement-refusal.test.ts` proves it armed with no program gate in front.
+    const write = 'WITH c(a) AS (VALUES (1)) DELETE FROM "blobs" RETURNING "contentKey"';
+    expect(() => store.query(write)).toThrow(/This statement writes/);
+    expect(() => store.columns(write)).toThrow(/This statement writes/);
     expect(store.query(COUNT_BLOBS)[0]?.['n']).toBe(2);
   });
 });

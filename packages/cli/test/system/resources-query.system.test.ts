@@ -651,18 +651,16 @@ describe('vat resources query', () => {
     expect(bound.data['rows']).toEqual([{ x: 'a', y: 'b' }]);
   });
 
-  it('refuses a write at the engine and names the surface for a bad column', () => {
+  it('refuses a write from its compiled program and names the surface for a bad column', () => {
     // 🔑 The `WITH` prefix is deliberate — do NOT "simplify" it back to a bare
-    // `DELETE`. That form is refused by the statement-KIND gate before it reaches
-    // SQLite, which would leave this case asserting the gate's message and no
-    // longer proving `PRAGMA query_only` is armed. This spelling is real SQLite
-    // grammar, passes the kind gate on its first token, and is refused by the
-    // ENGINE — which is the property under test. `RETURNING` gives it a result
-    // column, so the store's result-shape check (a write with no result column
-    // is not a read) passes it too; without it that check answers first.
+    // `DELETE`. That form is refused by the statement-KIND gate on its first
+    // token. This spelling is real SQLite grammar, passes the kind gate, and
+    // `RETURNING` gives it a result column, so the result-shape check passes it
+    // too: only its compiled program, which opens a write transaction, refuses
+    // it — and the preflight refuses it before any population.
     const write = query('WITH c(a) AS (VALUES (1)) DELETE FROM blobs RETURNING contentKey');
     expect(write.status).toBe(2);
-    expect(write.stderr).toContain('readonly database');
+    expect(write.stderr).toContain('This statement writes');
 
     const badColumn = query('SELECT contentHash FROM blobs');
     expect(badColumn.status).toBe(2);

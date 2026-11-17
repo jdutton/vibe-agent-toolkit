@@ -113,7 +113,7 @@ import {
   quoteIdentifier,
   vatCacheNamespaceRoot,
 } from '@vibe-agent-toolkit/resources';
-import { countWork, promised, safePath, type WorkCounter } from '@vibe-agent-toolkit/utils';
+import { countWork, promised, safePath } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 
 import {
@@ -493,25 +493,13 @@ function sleepBriefly(milliseconds: number): void {
  *
  * @param database - An open, configured connection
  */
-export function createSchema(database: DatabaseSync): void {
+function createSchema(database: DatabaseSync): void {
   database.exec(CREATE_EXTENTS_TABLE_SQL);
   database.exec(CREATE_BLOB_KEYS_TABLE_SQL);
   for (const spec of allSpecs()) {
     database.exec(createTableSql(spec));
   }
 }
-
-/** The counters one committed write is counted against: one write, and the rows it inserted. */
-export interface WriteCounters {
-  readonly writes: WorkCounter;
-  readonly rowsWritten: WorkCounter;
-}
-
-/** The fact store's writes — the file-backed store a warm run reads, which ADR I10 bounds. */
-const FACT_STORE_WRITES: WriteCounters = {
-  writes: 'store.writes.persistent',
-  rowsWritten: 'store.rows.written.persistent',
-};
 
 /** How many of each tier a write keeps: see {@link SqliteStoreOptions}. Each already clamped to at least one. */
 interface Retention {
@@ -520,21 +508,11 @@ interface Retention {
   readonly blobKeys: number;
 }
 
-/** The retention a store gets when its opener names none. */
-export const DEFAULT_RETENTION: Retention = {
-  extentsPerRoot: DEFAULT_RETAINED_EXTENTS_PER_ROOT,
-  roots: DEFAULT_RETAINED_ROOTS,
-  blobKeys: DEFAULT_RETAINED_BLOB_KEYS,
-};
-
 /**
  * One connection's prepared storage statements and the retention its writes
- * apply — what the shared row writers ({@link writeBlobRows},
- * {@link writeExtentRows}) and the fact store's reads run against.
- *
- * Shared, rather than owned by one class, because two handles write rows: the
- * fact store, and the run database's load. Each passes its own counters to the
- * writer, so the two never count against each other's.
+ * apply — what the row writers ({@link writeBlobRows}, {@link writeExtentRows})
+ * and the fact store's reads run against. The fact store's alone: the run
+ * database is filled by hydration, which neither clears, evicts nor vacuums.
  */
 interface StoreTables {
   readonly database: DatabaseSync;
@@ -562,7 +540,7 @@ interface StoreTables {
  * @param retention - How many of each tier a write keeps
  * @returns The prepared statements
  */
-export function prepareStoreTables(database: DatabaseSync, retention: Retention): StoreTables {
+function prepareStoreTables(database: DatabaseSync, retention: Retention): StoreTables {
   return {
     database,
     retention,
@@ -628,8 +606,7 @@ export function prepareStoreTables(database: DatabaseSync, retention: Retention)
 }
 
 /**
- * Write blob facts: the shared row writer behind `FactStore.writeBlobFacts` and
- * the run database's load.
+ * Write blob facts: the row writer behind `FactStore.writeBlobFacts`.
  *
  * The range this write clears is the union of the content keys **all four**
  * tables name, not the keys `blobs` alone names — see
@@ -645,10 +622,8 @@ export function prepareStoreTables(database: DatabaseSync, retention: Retention)
  *
  * @param tables - The connection's statements
  * @param rows - The blob-scoped tables; any of them may be empty
- * @param counters - What the committed write is counted against. Required, so
- *   no writer can count against the wrong handle by omission
  */
-export function writeBlobRows(tables: StoreTables, rows: BlobScopedRows, counters: WriteCounters): void {
+function writeBlobRows(tables: StoreTables, rows: BlobScopedRows): void {
   const bundle = rows as unknown as Record<string, readonly Record<string, unknown>[]>;
   const contentKeys = uniqueContentKeys(bundle);
   if (contentKeys.length === 0) return;
@@ -666,24 +641,21 @@ export function writeBlobRows(tables: StoreTables, rows: BlobScopedRows, counter
     for (const key of contentKeys) tables.recordBlobKey.run(key, writtenAt);
     evicted = evictBlobKeysPastRetention(tables, contentKeys.length);
   });
-  countWrite(counters, written);
+  countWrite(written);
   // Outside the transaction, because SQLite refuses `incremental_vacuum`
   // inside one — the same arrangement, and the same reason, as `writeExtentRows`.
   if (evicted > 0) tables.database.exec('PRAGMA incremental_vacuum');
 }
 
 /**
- * Write the extent of one tree: the shared row writer behind
- * `FactStore.writeExtent` and the run database's load. Additive at context
- * granularity — see the port.
+ * Write the extent of one tree: the row writer behind `FactStore.writeExtent`.
+ * Additive at context granularity — see the port.
  *
  * @param tables - The connection's statements
  * @param key - Which root, which tree
  * @param rows - The extent-scoped tables; any of them may be empty
- * @param counters - What the committed write is counted against. Required, as
- *   for {@link writeBlobRows}
  */
-export function writeExtentRows(tables: StoreTables, key: ExtentKey, rows: ExtentScopedRows, counters: WriteCounters): void {
+function writeExtentRows(tables: StoreTables, key: ExtentKey, rows: ExtentScopedRows): void {
   const bundle = rows as unknown as Record<string, readonly Record<string, unknown>[]>;
   const keyValues = [key.rootId, key.treeHash];
   const contexts = contextsNamedBy(bundle, plansOfScope(tables, 'extent'));
@@ -703,7 +675,7 @@ export function writeExtentRows(tables: StoreTables, key: ExtentKey, rows: Exten
     // would evict the newest tree the store had — the one it is replacing.
     evicted = evictPastRetention(tables, key.rootId) + evictRootsPastRetention(tables);
   });
-  countWrite(counters, written);
+  countWrite(written);
   // Outside the transaction, because SQLite refuses `incremental_vacuum`
   // inside one, and only when something was actually freed — an ordinary
   // steady-state write evicts nothing and must pay nothing.
@@ -711,17 +683,17 @@ export function writeExtentRows(tables: StoreTables, key: ExtentKey, rows: Exten
 }
 
 /**
- * Count one committed write and the rows it inserted.
+ * Count one committed fact-store write and the rows it inserted — the store's
+ * writes, which ADR I10 bounds.
  *
  * After the transaction, so a write that rolled back is not counted as work
  * the store holds.
  *
- * @param counters - Which counters
  * @param rows - How many rows the write inserted
  */
-function countWrite(counters: WriteCounters, rows: number): void {
-  countWork(counters.writes, 1);
-  countWork(counters.rowsWritten, rows);
+function countWrite(rows: number): void {
+  countWork('store.writes.persistent', 1);
+  countWork('store.rows.written.persistent', rows);
 }
 
 /**
@@ -1111,7 +1083,7 @@ class SqliteFactStore implements FactStore {
   writeBlobFacts(rows: BlobScopedRows): Promise<void> {
     return promised(() => {
       this.#assertOpen();
-      writeBlobRows(this.#tables, rows, FACT_STORE_WRITES);
+      writeBlobRows(this.#tables, rows);
     });
   }
 
@@ -1131,7 +1103,7 @@ class SqliteFactStore implements FactStore {
   writeExtent(key: ExtentKey, rows: ExtentScopedRows): Promise<void> {
     return promised(() => {
       this.#assertOpen();
-      writeExtentRows(this.#tables, key, rows, FACT_STORE_WRITES);
+      writeExtentRows(this.#tables, key, rows);
     });
   }
 
