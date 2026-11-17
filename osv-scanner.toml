@@ -1,10 +1,10 @@
 # OSV-Scanner accepted-risk register
 # ---------------------------------------------------------------------------
 # Every advisory listed here is a KNOWN, TRIAGED, and ACCEPTED risk. The
-# dependency-audit CI job (.github/workflows/dependency-audit.yml) runs
-# `osv-scanner scan source --lockfile=bun.lock` and FAILS on any advisory that
-# is NOT in this register. So: a green audit means "zero un-triaged vulns",
-# not "zero vulns".
+# dependency-audit CI job (.github/workflows/dependency-audit.yml) scans
+# bun.lock with an EMPTY config and judges the report against this register
+# (`bun run check:osv-scan`): it FAILS on any advisory that is NOT in this
+# register. So: a green audit means "zero un-triaged vulns", not "zero vulns".
 #
 # Rules for adding an entry (keep this register honest):
 #   1. Prefer a real fix first — bump the declared dependency, or pin a patched
@@ -12,15 +12,17 @@
 #      an IgnoredVulns entry when a fix is genuinely unavailable or unsafe.
 #   2. Every entry MUST have a `reason` explaining WHY it is safe to defer.
 #   3. Re-evaluate on each Dependabot bump; delete entries once a fix lands.
-#      Both halves are enforced. The dependency-audit job fails when
-#      `osv-scanner` reports an "unused ignore" (an entry whose advisory no
-#      longer matches anything in the lockfile). `bun run check:osv-ignores`
-#      (packages/dev-tools/src/osv-ignore-register.ts, full tier) holds every
-#      entry to an ACCEPTED_ADVISORIES row naming the package and the exact
-#      versions it accepts: red on another affected version the entry would
-#      hide, on an accepted version or package gone from bun.lock, on an entry
-#      with no row, `reason` or `ignoreUntil`, and on a row with no entry.
-#      Adding an entry means adding its row.
+#      Every entry has an ACCEPTED_ADVISORIES row (packages/dev-tools/src/
+#      osv-ignore-register.ts) naming the package and the exact versions it
+#      accepts; adding an entry means adding its row. Two checks hold them:
+#      - `bun run check:osv-ignores` (full tier, offline): red on an entry with
+#        no row or a row with no entry, on an entry without a string `id`, a
+#        `reason` or an `ignoreUntil` date, and on an accepted version or
+#        package gone from bun.lock.
+#      - `bun run check:osv-scan` (dependency-audit job, against OSV's own
+#        report): red on an ignored advisory OSV reports against a package or
+#        version its row does not accept, on an entry the scan never reports
+#        (unused), and on an entry past its `ignoreUntil`.
 #   4. A `reason` that names a BLOCKER ("waiting on X to widen its range") is a
 #      claim with an expiry date. Re-check the blocker itself, not just whether
 #      the advisory still fires — nothing in the tooling tells you a reason has
@@ -116,8 +118,11 @@
 #
 # Reconciled 2026-11-15: an empty-config scan of bun.lock finds one advisory, the
 # zod entry below; nothing to fix under rule 1. The zod-only scope check became
-# the register-wide `check:osv-ignores` (rule 3), and the audit job now fails
-# on an unused ignore instead of printing it.
+# the register-wide `check:osv-ignores` (rule 3), and the audit job now judges
+# an empty-config scan itself (`check:osv-scan`), so an unused ignore fails it.
+#
+# Reconciled 2026-11-17: picomatch GHSA-fc5q-39xc-vjpf, reviewed upstream today,
+# affects every release through 4.0.7, the latest; no fix exists. Listed below.
 # ---------------------------------------------------------------------------
 
 # --- zod 3 (GHSA-mrhx-c7xc-m3w5) ---------------------------------------------
@@ -125,8 +130,8 @@
 # patched 4.x under rule 1 — their declared ranges admit it. OSV-Scanner cannot
 # scope an IgnoredVulns entry to one package version (a PackageOverrides entry
 # would ignore EVERY advisory against 3.25.76, which is wider), so the scope is
-# ENFORCED by this entry's ACCEPTED_ADVISORIES row (`bun run check:osv-ignores`):
-# red when any other zod < 4.6.6 resolves, and red once 3.25.76 is gone.
+# ENFORCED by this entry's ACCEPTED_ADVISORIES row (rule 3): red when OSV reports
+# the advisory against any other zod, and red once 3.25.76 is gone.
 # Why it cannot be fixed now: VAT's workspaces declare zod `^3.25` and the
 # only fixed version is zod 4.6.6, a Breaking migration of every schema VAT
 # publishes — scheduled as its own PR after the next feature PR.
@@ -139,3 +144,23 @@
 id = "GHSA-mrhx-c7xc-m3w5"
 ignoreUntil = 2026-12-31
 reason = "Only zod@3.25.76 remains affected (nested zod 4 copies resolve to a patched 4.x). VAT's workspaces declare zod ^3.25; the only fix is zod 4.6.6, a Breaking migration scheduled as its own PR after the next feature PR. Exposure: a CLI validating the operator's own config and files, no remote input."
+
+# --- picomatch (GHSA-fc5q-39xc-vjpf / CVE-2026-112366) -------------------------
+# Scope: picomatch@2.3.2 (via micromatch, anymatch and readdirp: build and test
+# tooling) and picomatch@4.0.5 (declared `^4.0.3` by VAT's own workspaces, and by
+# vite, vitest, tinyglobby and knip). ENFORCED by its ACCEPTED_ADVISORIES row.
+# Why it cannot be fixed now: the advisory covers every release through 4.0.7,
+# the latest on npm (`last_affected`, no `fixed` event). Nothing to bump to.
+# Exposure: a ReDoS when picomatch COMPILES a single-branch repeated extglob
+# such as `+(*a)`, so the risk is whoever writes a glob VAT compiles. Most come
+# from the operator: CLI flags and vibe-agent-toolkit.config.yaml. Some come
+# from the skill or plugin under validation (its validation allow paths and
+# packaging excludes), so validating or auditing an UNTRUSTED plugin can hang
+# that run. A local CPU hang, no data exposure.
+# BLOCKER TO RE-CHECK (rule 4): a picomatch release the advisory marks `fixed`.
+# Then pin it in `overrides` (the 2.x copy needs one too, unless its parents
+# moved) and delete this entry.
+[[IgnoredVulns]]
+id = "GHSA-fc5q-39xc-vjpf"
+ignoreUntil = 2026-12-15
+reason = "No fixed picomatch exists: the advisory covers every release through 4.0.7, the latest. Exposure is a ReDoS when compiling a crafted extglob; globs come from the operator's own config and flags, and from a skill or plugin under validation, so auditing an untrusted plugin can hang that local run. No data exposure."

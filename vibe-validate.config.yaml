@@ -102,7 +102,12 @@ validation:
 
         - name: 'OSV ignore register'
           command: 'bun run check:osv-ignores'
-          description: 'Holds every osv-scanner.toml ignore to the package versions it accepts, both ways: red on another affected version, an accepted version or package gone from bun.lock, an entry without a scope row, reason or ignoreUntil, or a row without an entry. Full tier only.'
+          description: 'Offline half of the OSV ignore register (the audit job judges the live scan): red on an entry without a scope row, string id, reason or ignoreUntil date, a row without an entry, or an accepted version or package gone from bun.lock. Full tier only.'
+          runScope: ci
+
+        - name: 'Root overrides register'
+          command: 'bun run check:overrides'
+          description: 'Holds every root package.json overrides pin to a row stating whether a published workspace reaches it (from bun.lock), both ways, and why adopters are safe when one does. Full tier only.'
           runScope: ci
 
         - name: 'Repository structure validation'

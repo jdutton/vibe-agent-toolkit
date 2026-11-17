@@ -1011,6 +1011,22 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Fix:** migrate those workspaces to zod ≥ 4.6.6 (a Breaking change to every exported schema),
   as its own PR, and delete the register entry with it.
 
+### An adopter installing rag-lancedb resolves sharp 0.33.5
+
+- **Severity:** Minor · **Effort:** S once upstream moves · **User-visible:** in an adopter's own audit
+- **Mechanism:** GHSA-f88m-g3jw-g9cj, GHSA-rgj7-g3m4-5g8c and GHSA-wq5f-xc86-pv6w (libvips) are
+  fixed in sharp 0.35.0 to 0.35.5. `@lancedb/lancedb` (0.39.0 through the latest, 0.41.0) pins the
+  optional dependency `@huggingface/transformers` 3.0.2, which declares `sharp ^0.33.5`, so an
+  adopter's install resolves 0.33.5. VAT's root `overrides` pin sharp 0.35.5 for its own tree only.
+  Exposure: VAT never imports `@huggingface/transformers` or sharp; lancedb loads transformers only
+  for its own embedding functions, which VAT does not use (it supplies its own embedding provider).
+- **Reproduce:** resolve the published packages' declared dependencies with no root `overrides`
+  (`npm install --package-lock-only` in a workspace mirroring their manifests) and scan the lockfile
+  with osv-scanner and an empty config.
+- **Where:** `packages/rag-lancedb/package.json` (`@lancedb/lancedb`)
+- **Fix:** move to a `@lancedb/lancedb` whose `@huggingface/transformers` admits sharp ≥ 0.35.5, then
+  re-register the sharp override in `OVERRIDE_REGISTER` as safe for adopters.
+
 ## Docs
 
 ### The changelog needs consolidating before 0.2.0 stable
