@@ -155,8 +155,10 @@ const config: KnipConfig = {
     // `proxy-agent` is never imported: it is a floor for adopters. Root `overrides`
     // do not reach an adopter's install, and markdown-link-check declares
     // `proxy-agent ^8.0.2`, whose 8.0.2 chain resolves get-uri 8.0.1 and a
-    // vulnerable basic-ftp 5.x. Declaring `^8.0.3` here makes every install dedupe
-    // markdown-link-check onto the 8.0.3 chain (get-uri 8.0.2, basic-ftp ^6.2.4).
+    // vulnerable basic-ftp 5.x. Declaring `^8.0.3` here makes a fresh install, and npm
+    // over an existing lockfile, resolve the 8.0.3 chain (get-uri 8.0.2, basic-ftp ^6.2.4).
+    // An existing bun.lock can keep the old chain nested under markdown-link-check until
+    // those entries are deleted and re-resolved (this repo's own lock needed that).
     // Drop it once markdown-link-check itself declares `proxy-agent >= 8.0.3`.
     'packages/resources': {
       entry: [...sourceEntriesFromExports('resources'), 'src/parse-worker.ts'],

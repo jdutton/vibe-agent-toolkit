@@ -14,7 +14,8 @@
  *   - an entry past its `ignoreUntil` is red (re-check its reason);
  *   - plus every register and pairing finding the offline half (`osv-ignore-register.ts`) reports.
  * Run: `bun run check:osv-scan <report.json>` (dependency-audit job). Exit 0 = clean, 1 = a finding,
- * 2 = no readable report.
+ * 2 = it could not do its job: no report path, or a file that is missing, not JSON, or not in the
+ * osv-scanner `--format json` shape (`readScanReport`).
  */
 import { readFileSync } from 'node:fs';
 
@@ -52,6 +53,25 @@ const ScanReportSchema = z
   })
   .strip();
 
+/** An osv-scanner `--format json` report, as far as this check reads it. */
+export type ScanReport = z.infer<typeof ScanReportSchema>;
+
+/** A report read from its text, or why it could not be: the check cannot judge a report it cannot read. */
+export type ScanRead = { readonly ok: true; readonly report: ScanReport } | { readonly ok: false; readonly error: string };
+
+/** Parses an osv-scanner `--format json` report. */
+export function readScanReport(text: string): ScanRead {
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch (error) {
+    return { ok: false, error: `the scan report is not JSON: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  const parsed = ScanReportSchema.safeParse(json);
+  if (!parsed.success) return { ok: false, error: `the scan report is not an osv-scanner --format json report: ${parsed.error.issues[0]?.message ?? 'unreadable'}` };
+  return { ok: true, report: parsed.data };
+}
+
 /** One advisory reported against one resolved package: every id OSV knows it by. */
 interface Hit {
   readonly name: string;
@@ -60,7 +80,7 @@ interface Hit {
   readonly ids: readonly string[];
 }
 
-function hitsOf(report: z.infer<typeof ScanReportSchema>): Hit[] {
+function hitsOf(report: ScanReport): Hit[] {
   return report.results.flatMap((result) =>
     result.packages.flatMap(({ package: pkg, vulnerabilities }) =>
       vulnerabilities.map((vuln) => ({ name: pkg.name, version: pkg.version, ecosystem: pkg.ecosystem, ids: [vuln.id, ...vuln.aliases] })),
@@ -86,13 +106,11 @@ function expiryFindings(entry: IgnoreEntry, now: Date): string[] {
 }
 
 /** Why an empty-config osv-scanner report and the register disagree; empty when they agree. */
-export function osvScanFindings(report: unknown, registerText: string, accepted: Readonly<Record<string, AcceptedAdvisory>>, now: Date): string[] {
-  const parsed = ScanReportSchema.safeParse(report);
-  if (!parsed.success) return [`the scan report is not an osv-scanner --format json report: ${parsed.error.issues[0]?.message ?? 'unreadable'}`];
+export function osvScanFindings(report: ScanReport, registerText: string, accepted: Readonly<Record<string, AcceptedAdvisory>>, now: Date): string[] {
   const { ids, entries, findings } = readRegister(registerText);
   const all = [...findings, ...pairingFindings(ids, accepted)];
   const matched = new Set<string>();
-  for (const hit of hitsOf(parsed.data)) {
+  for (const hit of hitsOf(report)) {
     for (const id of hit.ids) if (ids.has(id)) matched.add(id);
     const finding = hitFinding(hit, ids, accepted);
     if (finding !== undefined) all.push(finding);
@@ -111,8 +129,21 @@ function main(): void {
     process.exitCode = ExitCode.ERROR;
     return;
   }
-  const report: unknown = JSON.parse(readFileSync(safePath.resolve(reportPath), 'utf8'));
-  const findings = osvScanFindings(report, readFileSync(safePath.join(PROJECT_ROOT, 'osv-scanner.toml'), 'utf8'), ACCEPTED_ADVISORIES, new Date());
+  let text: string;
+  try {
+    text = readFileSync(safePath.resolve(reportPath), 'utf8');
+  } catch (error) {
+    log(`cannot read the scan report ${reportPath}: ${error instanceof Error ? error.message : String(error)}`, 'red');
+    process.exitCode = ExitCode.ERROR;
+    return;
+  }
+  const read = readScanReport(text);
+  if (!read.ok) {
+    log(read.error, 'red');
+    process.exitCode = ExitCode.ERROR;
+    return;
+  }
+  const findings = osvScanFindings(read.report, readFileSync(safePath.join(PROJECT_ROOT, 'osv-scanner.toml'), 'utf8'), ACCEPTED_ADVISORIES, new Date());
   reportFindings(findings, 'every advisory OSV reports against bun.lock is ignored within its accepted versions, and every ignore is in use and in date.');
 }
 

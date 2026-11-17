@@ -7,9 +7,15 @@
 # register. So: a green audit means "zero un-triaged vulns", not "zero vulns".
 #
 # Rules for adding an entry (keep this register honest):
-#   1. Prefer a real fix first — bump the declared dependency, or pin a patched
-#      version in the root `overrides` block of package.json. Only fall back to
-#      an IgnoredVulns entry when a fix is genuinely unavailable or unsafe.
+#   1. Prefer a real fix first: bump the declared dependency, or raise the range
+#      a published package declares so it admits only patched versions. A pin in
+#      the root `overrides` block fixes THIS repo's tree only; an adopter
+#      installing a published package resolves its declared ranges and never sees
+#      the pin. Every override needs an OVERRIDE_REGISTER row (packages/dev-tools/
+#      src/override-register.ts), and `bun run check:overrides` fails a pin that a
+#      range a published package reaches does not admit, unless the row names that
+#      range with why adopters are still safe. Only fall back to an IgnoredVulns
+#      entry when a fix is genuinely unavailable or unsafe.
 #   2. Every entry MUST have a `reason` explaining WHY it is safe to defer.
 #   3. Re-evaluate on each Dependabot bump; delete entries once a fix lands.
 #      Every entry has an ACCEPTED_ADVISORIES row (packages/dev-tools/src/

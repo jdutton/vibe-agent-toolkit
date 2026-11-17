@@ -107,7 +107,7 @@ validation:
 
         - name: 'Root overrides register'
           command: 'bun run check:overrides'
-          description: 'Holds every root package.json overrides pin to a row stating whether a published workspace reaches it (from bun.lock), both ways, and why adopters are safe when one does. Full tier only.'
+          description: 'Holds every root package.json overrides pin to a row stating whether a published workspace reaches it (from bun.lock), both ways; when one does, every range it declares for the pin must admit the pinned version or be named in the row with why adopters are safe. Full tier only.'
           runScope: ci
 
         - name: 'Repository structure validation'

@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { type AcceptedAdvisory } from '../src/osv-ignore-register.js';
-import { osvScanFindings } from '../src/osv-ignore-scan.js';
+import { type ScanReport, osvScanFindings, readScanReport } from '../src/osv-ignore-scan.js';
 
 const ID = 'GHSA-mrhx-c7xc-m3w5';
 const CVE = 'CVE-2023-54404';
@@ -22,8 +22,8 @@ interface Advisory {
 }
 
 /** An osv-scanner `--format json` report in the shape 2.4.0 writes, one package per advisory. */
-function reportOf(...advisories: readonly Advisory[]): unknown {
-  return {
+function reportOf(...advisories: readonly Advisory[]): ScanReport {
+  return parsed({
     results: [
       {
         source: { path: '/repo/bun.lock', type: 'lockfile' },
@@ -35,7 +35,14 @@ function reportOf(...advisories: readonly Advisory[]): unknown {
       },
     ],
     experimental_config: { licenses: { summary: false, allowlist: null } },
-  };
+  });
+}
+
+/** Reads a report through the same parser `main` uses. */
+function parsed(report: unknown): ScanReport {
+  const read = readScanReport(JSON.stringify(report));
+  if (!read.ok) throw new Error(read.error);
+  return read.report;
 }
 
 const TODAY = reportOf({ name: 'zod', version: '3.25.76', ids: [ID, CVE] });
@@ -46,7 +53,7 @@ describe('osvScanFindings', () => {
   });
 
   it('passes a clean report against an empty register', () => {
-    expect(osvScanFindings({ results: [] }, '', {}, BEFORE_EXPIRY)).toEqual([]);
+    expect(osvScanFindings(parsed({ results: [] }), '', {}, BEFORE_EXPIRY)).toEqual([]);
   });
 
   it('matches an entry written under an alias of the reported id', () => {
@@ -72,7 +79,7 @@ describe('osvScanFindings', () => {
   });
 
   it('refuses an entry the scan never reports: unused, delete it', () => {
-    expect(osvScanFindings({ results: [] }, REGISTER, SCOPES, BEFORE_EXPIRY)).toEqual([expect.stringContaining(`ignores ${ID}, which the scan no longer reports`)]);
+    expect(osvScanFindings(parsed({ results: [] }), REGISTER, SCOPES, BEFORE_EXPIRY)).toEqual([expect.stringContaining(`ignores ${ID}, which the scan no longer reports`)]);
   });
 
   it('refuses a fake ignore, which pairs with no row and matches no advisory', () => {
@@ -91,11 +98,22 @@ describe('osvScanFindings', () => {
     expect(osvScanFindings(TODAY, REGISTER, SCOPES, now)).toEqual([expect.stringContaining(`entry ${ID} expired on 2026-12-31`)]);
   });
 
+});
+
+describe('readScanReport', () => {
+  it('reads a report osv-scanner wrote', () => {
+    expect(readScanReport(JSON.stringify({ results: [] }))).toEqual({ ok: true, report: { results: [] } });
+  });
+
+  it('refuses text that is not JSON rather than reading it as clean', () => {
+    expect(readScanReport('{"results": [')).toEqual({ ok: false, error: expect.stringContaining('the scan report is not JSON') });
+  });
+
   it.each([
     ['not an object', 'nope'],
     ['missing results', { experimental_config: {} }],
     ['a package without a version', { results: [{ packages: [{ package: { name: 'zod', ecosystem: 'npm' }, vulnerabilities: [] }] }] }],
   ])('refuses a report that is %s rather than reading it as clean', (_shape, report) => {
-    expect(osvScanFindings(report, REGISTER, SCOPES, BEFORE_EXPIRY)).toEqual([expect.stringContaining('not an osv-scanner --format json report')]);
+    expect(readScanReport(JSON.stringify(report))).toEqual({ ok: false, error: expect.stringContaining('not an osv-scanner --format json report') });
   });
 });
