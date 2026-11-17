@@ -127,3 +127,20 @@
 id = "GHSA-mrhx-c7xc-m3w5"
 ignoreUntil = 2026-12-31
 reason = "Only zod@3.25.76 remains affected (nested zod 4 copies resolve to a patched 4.x). VAT's workspaces declare zod ^3.25; the only fix is zod 4.6.6, a Breaking migration scheduled as its own PR after the next feature PR. Exposure: a CLI validating the operator's own config and files, no remote input."
+
+# --- picomatch (GHSA-fc5q-39xc-vjpf) -----------------------------------------
+# Added 2026-11-17: OSV re-scoped the advisory that day to `last_affected 4.0.7`
+# with NO fixed version, so every picomatch in bun.lock (4.0.5, and 2.3.2 under
+# anymatch / micromatch / readdirp) is affected and rule 1 has nothing to move to.
+# The flaw: a single-branch repeated extglob PATTERN such as `+(*)` backtracks
+# exponentially. The attacker must control the glob, not the path.
+# Exposure: VAT compiles globs from the operator's own config, and `vat audit`
+# compiles a skill's `files` globs (agent-skills files-config.ts) from the plugin
+# being audited, so auditing a hostile third-party plugin can hang that one CLI
+# run. A local, self-limiting denial of service; nothing is disclosed or written.
+# BLOCKER TO RE-CHECK (rule 4): the first picomatch release past 4.0.7. Bump to it
+# (and its 2.x consumers' ranges) and delete this entry.
+[[IgnoredVulns]]
+id = "GHSA-fc5q-39xc-vjpf"
+ignoreUntil = 2026-12-31
+reason = "No fixed picomatch exists (OSV: last_affected 4.0.7, re-scoped 2026-11-17). The ReDoS needs an attacker-controlled glob; VAT compiles globs from the operator's config and from audited plugins' files globs, so the worst case is one hung vat audit run on a hostile plugin. Re-check on the first picomatch release past 4.0.7."
