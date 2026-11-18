@@ -1,29 +1,19 @@
 /**
- * Unit tests for the severity-counts ratchet's source recognisers.
+ * Unit tests for the pure parts of `validate-repo-structure.ts`: the
+ * severity-counts ratchet's source recognisers and the contraband listing merge.
  *
  * The whole-repo run in `validate-repo-structure.ts` can only report the lanes it
  * SAW. A lane it never saw produces no output at all, so a green run is not
  * evidence that the population is right. These tests pin the recognisers directly.
+ *
+ * What needs real git or a real refused read lives in
+ * `integration/validate-repo-structure.integration.test.ts`.
  */
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
-
-import {
-  mkdirSyncReal,
-  normalizedTmpdir,
-  safePath,
-  toForwardSlash,
-} from '@vibe-agent-toolkit/utils';
-import {
-  runGitOrThrow,
-} from '@vibe-agent-toolkit/utils/git';
-import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
   classifySeverityCountsLane,
-  contrabandPopulation,
-  readTrackedFile,
-  walkDirectory,
+  mergeContrabandListings,
 } from '../src/validate-repo-structure.js';
 
 /** A lane whose status is a string literal from the vocabulary, with findings beside it. */
@@ -263,139 +253,29 @@ describe('classifySeverityCountsLane — named status types', () => {
   });
 });
 
-/** Encoding for every fixture file this suite writes. */
-const UTF8 = 'utf8';
-
-/** Committed before the gate runs — the population `git ls-files` already saw. */
-const TRACKED_FILE = 'tracked.ts';
-/** Written but never committable: the shape the token list itself has. */
-const IGNORED_FILE = 'ignored.ts';
-/** Written, not staged — the state every new file is in when the gate runs. */
-const NEW_FILE = 'nested/brand-new.ts';
-
 /**
- * A throwaway repo holding one file in each staging state that matters.
- *
- * @returns The repo root
+ * The pure half of `contrabandPopulation`: git hands it NUL-delimited `ls-files -z`
+ * listings (tracked, then untracked-not-ignored) and it must keep every publishable
+ * text path exactly once, byte for byte.
  */
-function repoWithStagingStates(): string {
-  const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'contraband-pop-'));
-  const git = (...args: string[]): void => {
-    runGitOrThrow(args, { cwd: root });
-  };
-  const write = (relPath: string, body: string): void => {
-    writeFileSync(safePath.join(root, relPath), body, UTF8);
-  };
-
-  git('init', '-q');
-  git('config', 'user.email', 'test@example.invalid');
-  git('config', 'user.name', 'Test');
-
-  write('.gitignore', `${IGNORED_FILE}\n`);
-  write(TRACKED_FILE, '// tracked\n');
-  git('add', '.gitignore', TRACKED_FILE);
-  git('commit', '-qm', 'initial');
-
-  // The state the gate was blind to: a NEW file, written but not yet staged.
-  // This repo validates ONCE and commits at the end, so every new file is in
-  // exactly this state at the moment the gate runs.
-  mkdirSyncReal(safePath.join(root, 'nested'), { recursive: true });
-  write(NEW_FILE, '// new\n');
-  write(IGNORED_FILE, '// ignored\n');
-  return root;
-}
-
-describe('contrabandPopulation — what the confidentiality gate is allowed to miss', () => {
-  // One fixture repo for the block: every case reads the same population, and a
-  // repo per case (five git spawns, a commit among them) timed out under gate load.
-  let population: readonly string[] = [];
-  beforeAll(() => {
-    population = contrabandPopulation(repoWithStagingStates()).map((p) => toForwardSlash(p));
-  });
-
-  it('includes a brand-new untracked file, because that is what the commit will publish', () => {
-    expect(population).toContain(NEW_FILE);
-  });
-
-  it('still includes tracked files', () => {
-    expect(population).toContain(TRACKED_FILE);
-  });
-
-  it('excludes ignored files, which no commit will publish', () => {
-    // Not pedantry: the token list itself may be a gitignored file in the repo
-    // root, so a population that swept ignored files would report the list of
-    // secrets as a leak of them.
-    expect(population).not.toContain(IGNORED_FILE);
-  });
-
+describe('mergeContrabandListings — the population the confidentiality gate scans', () => {
   it('lists each path once, however many git listings named it', () => {
-    expect(new Set(population).size).toBe(population.length);
-  });
-});
-
-/** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
-
-/**
- * The content rules read every tracked file. A file that is absent from the
- * working tree (a sparse checkout, a delete not yet committed) has no content
- * to check and is skipped. A file the OS REFUSES to read is different: the
- * rules over its content did not run, and a gate that says nothing about that
- * reads as a clean bill of health for a file it never saw.
- */
-describe('readTrackedFile — what an unreadable tracked file does to the gate', () => {
-  it('returns null and records nothing for a file that is not there', async () => {
-    const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'read-tracked-'));
-    const recorded: string[] = [];
-
-    const bytes = await readTrackedFile(safePath.join(root, 'gone.ts'), (reason) => recorded.push(reason));
-
-    expect(bytes).toBeNull();
-    expect(recorded).toEqual([]);
+    expect(mergeContrabandListings(['a.ts\0b.ts\0', 'b.ts\0c.ts\0'])).toEqual(['a.ts', 'b.ts', 'c.ts']);
   });
 
-  it.skipIf(CANNOT_DENY_READS)('returns null and records the refusal, naming the errno, for a file it may not read', async () => {
-    const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'read-tracked-'));
-    const locked = safePath.join(root, 'locked.ts');
-    writeFileSync(locked, '// locked\n', UTF8);
-    chmodSync(locked, 0o000);
-    const recorded: string[] = [];
-
-    try {
-      const bytes = await readTrackedFile(locked, (reason) => recorded.push(reason));
-      expect(bytes).toBeNull();
-    } finally {
-      chmodSync(locked, 0o600);
-    }
-    expect(recorded).toHaveLength(1);
-    expect(recorded[0]).toContain('EACCES');
-  });
-});
-
-describe('walkDirectory — a directory the walk could not list', () => {
-  it('is a no-op over a directory that does not exist', () => {
-    const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'walk-dir-'));
-    const seen: string[] = [];
-
-    walkDirectory(safePath.join(root, 'absent'), 'absent', {
-      onFile: ({ relPath }) => {
-        seen.push(relPath);
-      },
-    });
-
-    expect(seen).toEqual([]);
+  it('keeps a path that only the untracked listing names', () => {
+    expect(mergeContrabandListings(['tracked.ts\0', 'nested/brand-new.ts\0'])).toContain('nested/brand-new.ts');
   });
 
-  it.skipIf(CANNOT_DENY_READS)('throws rather than reporting the directory as empty when the listing is refused', () => {
-    const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'walk-dir-'));
-    const locked = safePath.join(root, 'locked');
-    mkdirSyncReal(locked, { recursive: true });
-    writeFileSync(safePath.join(locked, 'inside.ts'), '// inside\n', UTF8);
-    chmodSync(locked, 0o000);
+  it('drops the empty entry the trailing NUL leaves, and an empty listing', () => {
+    expect(mergeContrabandListings(['a.ts\0', ''])).toEqual(['a.ts']);
+  });
 
-    try {
-      expect(() => walkDirectory(locked, 'locked', {})).toThrow(expect.objectContaining({ code: 'EACCES' }));
-    } finally {
-      chmodSync(locked, 0o700);
-    }
+  it('drops binaries, whose bytes the token scan cannot read as text', () => {
+    expect(mergeContrabandListings(['logo.PNG\0fixture.zip\0bun.lock\0doc.md\0', ''])).toEqual(['doc.md']);
+  });
+
+  it('keeps a leading space, because it is part of the file name', () => {
+    expect(mergeContrabandListings([' leading.ts\0', ''])).toEqual([' leading.ts']);
   });
 });

@@ -130,7 +130,6 @@ const UNIT_TIER_IO_RATCHET = { allowFiles: [
   'packages/dev-tools/test/compat-empirical/run-loop.test.ts',
   'packages/dev-tools/test/contraband-scan.test.ts',
   'packages/dev-tools/test/engine-floor-agreement.test.ts',
-  'packages/dev-tools/test/validate-repo-structure.test.ts',
   'packages/discovery/test/local-scanner.test.ts',
   'packages/lab/test/ab.test.ts',
   'packages/lab/test/crawl-dump.test.ts',
