@@ -3,9 +3,10 @@
 - **`vat resources query`, `check` and `validate` run SQL over this run's own rows only**, never
   another repository's. A statement reads only the relations it names as identifiers.
 - **Statements these commands refuse** (`query` exits 2; `check` and `validate` report
-  `RESOURCE_CHECK_BROKEN`). Name tables as identifiers and bind with `?`.
+  `RESOURCE_CHECK_BROKEN`). Name tables as identifiers and bind with `?`. A refusal over a table
+  names it as the run holds it.
   - schema introspection: `sqlite_schema`, `sqlite_master`, `sqlite_temp_schema`, `pragma_*`
-    functions and `dbstat`;
+    functions, `PRAGMA` statements and `dbstat`;
   - the fact store's bookkeeping, `extents` and `blob_keys`;
   - connection state: `changes()`, `total_changes()` and `last_insert_rowid()`;
   - `#` parameters, and a named parameter whose name starts with `$` (`$$`, `#$`, `@$`, `:$`);

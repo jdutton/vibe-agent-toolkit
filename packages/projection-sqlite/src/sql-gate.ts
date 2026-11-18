@@ -20,6 +20,7 @@ import {
   identifierSpellings,
   PROJECTION_STATEMENT_REFUSED_CODE,
   queryableRelationNames,
+  quoteIdentifier,
   relationsNamedBy,
   SQL_IDENTIFIER_CHAR,
   SQL_WHITESPACE,
@@ -377,10 +378,14 @@ function assertSingleStatement(sql: string): void {
  * another database on disk: `ATTACH` is not a query, so it never reaches the
  * engine that would have accepted it.
  *
+ * The program gate holds a second, independent layer of this refusal
+ * ({@link assertCompilesAsSubquery}), so a keyword list loosened here does not admit a `PRAGMA`.
+ * Exported for its unit test only; not on the package barrel.
+ *
  * @param sql - The caller's statement text
  * @throws If the first significant token is not a query keyword
  */
-function assertIsQuery(sql: string): void {
+export function assertIsQuery(sql: string): void {
   const start = indexPastSpaceAndComments(sql, 0);
   const keyword = (LEADING_KEYWORD.exec(sql.slice(start))?.[0] ?? '').toUpperCase();
   if (QUERY_STATEMENT_KEYWORDS.includes(keyword)) return;
@@ -618,7 +623,12 @@ function explain(database: DatabaseSync, sql: string): readonly ExplainedOp[] {
  * - a write transaction (`Transaction` with a non-zero `p2`) — `WITH … DELETE … RETURNING` passes
  *   the kind gate and compiles; this refuses it before it runs, on `query`, `columns` and the
  *   compile probe alike. `PRAGMA query_only` stays armed as a second guard for any write a step
- *   reaches.
+ *   reaches;
+ * - a statement SQLite will not compile as a subquery ({@link assertCompilesAsSubquery}) — a
+ *   `PRAGMA` by any spelling. This is the kind gate's second layer: {@link assertIsQuery} reads the
+ *   leading keyword, this asks the engine's grammar, and each refuses a `PRAGMA` alone.
+ *
+ * Exported for its unit test only; not on the package barrel.
  *
  * An `EXPLAIN` that fails — a relation the run did not hydrate — throws SQLite's own error, inside
  * the caller's coded-refusal span.
@@ -628,13 +638,60 @@ function explain(database: DatabaseSync, sql: string): readonly ExplainedOp[] {
  * @throws VatError `PROJECTION_STATEMENT_REFUSED` naming what the statement would observe or read
  * @throws Error When an `OpenRead` names a root page no relation holds — a driver invariant
  */
-function assertProgramAdmitted(gate: GateConnection, sql: string): void {
+export function assertProgramAdmitted(gate: GateConnection, sql: string): void {
   const program = explain(gate.database, sql);
   assertNoQuotedRelation(gate, sql);
   const named = new Set(relationsNamedBy(sql, queryableRelationNames()).map((name) => name.toLowerCase()));
   for (const op of program) {
-    assertOpAdmitted(gate, op, named);
+    assertOpAdmitted(gate, sql, op, named);
   }
+  // Last, so a statement both rules refuse — a write behind a `WITH` — gets the specific one.
+  assertCompilesAsSubquery(gate.database, sql);
+}
+
+/**
+ * Refuse a statement SQLite will not take as a subquery: the second layer of the kind gate, and
+ * the one that does not read the leading keyword.
+ *
+ * SQLite's grammar admits only a `SELECT`, a `WITH … SELECT` or a `VALUES` inside `EXISTS (…)`, so
+ * compiling the statement there asks the engine what kind of statement it is. A `PRAGMA` — which
+ * returns rows, so the result-column check would not stop it, and whose program opens nothing the
+ * opcode checks refuse — fails to compile there however it is spelled. So does a write behind a
+ * `WITH`. The statement itself has already compiled, so a failure here is the wrapper's alone.
+ *
+ * The statement goes in up to its terminating `;` and with a newline before the closing `)`, so a
+ * trailing `-- note` cannot swallow it; an unclosed trailing `/*` ends the text at its last token.
+ * Compiled, never stepped, and not an `EXPLAIN`: `statement.explained` does not move.
+ *
+ * @param database - The connection, read-only for the caller's statements
+ * @param sql - The caller's statement, which compiles as written
+ * @throws VatError `PROJECTION_STATEMENT_REFUSED` when SQLite will not compile it as a subquery
+ */
+function assertCompilesAsSubquery(database: DatabaseSync, sql: string): void {
+  try {
+    database.prepare(`SELECT EXISTS (\n${statementBody(sql)}\n)`);
+  } catch (error) {
+    if (!isStatementRefusal(error)) throw error;
+    throw new VatError(
+      PROJECTION_STATEMENT_REFUSED_CODE,
+      'This statement is not a query: SQLite does not accept it as a subquery, which only a SELECT, a'
+      + ' WITH … SELECT or a VALUES is. A projection query only reads.',
+      { cause: error },
+    );
+  }
+}
+
+/**
+ * The statement's text from its start to the end of its last token, before any terminating `;`.
+ *
+ * @param sql - A statement the single-statement gate admitted
+ * @returns The text a subquery can hold
+ */
+function statementBody(sql: string): string {
+  const tokens = sqlTokens(sql);
+  const terminator = tokens.findIndex((token) => token.kind === 'punctuation' && token.value === ';');
+  const last = terminator === -1 ? tokens.at(-1) : tokens[terminator - 1];
+  return sql.slice(0, last?.end ?? 0);
 }
 
 /**
@@ -651,25 +708,45 @@ function assertProgramAdmitted(gate: GateConnection, sql: string): void {
  * 'blobs'`): what is refused is the single-quoted name, so the rule reads the same whatever else the
  * statement says.
  *
+ * The refusal names the relation as the run holds it, beside the literal as the caller typed it
+ * (`'BLOBS'` reads the table `blobs`), and it names the literal SQLite read as a table: each
+ * candidate is emptied alone, and the one whose emptying fails is it. That costs one `EXPLAIN` per
+ * candidate, on the refusal path only.
+ *
  * @param gate - The handle's gate state
  * @param sql - The caller's statement, which compiles as written
- * @throws VatError `PROJECTION_STATEMENT_REFUSED` naming the literal and the identifier spellings
+ * @throws VatError `PROJECTION_STATEMENT_REFUSED` naming the relation, the literal and the identifier spellings
  */
 function assertNoQuotedRelation(gate: GateConnection, sql: string): void {
-  const held = new Set([...gate.relationOfRootPage.values()].map((relation) => relation.toLowerCase()));
+  const held = new Map([...gate.relationOfRootPage.values()].map((relation) => [relation.toLowerCase(), relation]));
   const spelled = sqlTokens(sql).filter((token) => token.kind === 'string' && held.has(token.value.toLowerCase()));
-  if (spelled.length === 0) return;
+  if (spelled.length === 0 || compilesWith(gate, withEmptyStrings(sql, spelled))) return;
+  const literal = spelled.find((candidate) => !compilesWith(gate, withEmptyStrings(sql, [candidate]))) ?? spelled[0];
+  const typed = literal?.value ?? '';
+  const relation = held.get(typed.toLowerCase()) ?? typed;
+  throw new VatError(
+    PROJECTION_STATEMENT_REFUSED_CODE,
+    `This statement reads the table ${relation} through the single-quoted name '${typed}'. A single-quoted`
+    + ` '${typed}' is a string, which SQLite reads as a table only when one by that name exists. Name it as`
+    + ` an identifier: ${identifierSpellings(relation).join(', ')}.`,
+  );
+}
+
+/**
+ * Whether a statement compiles on the handle's connection, through a counted `EXPLAIN`.
+ *
+ * @param gate - The handle's gate state
+ * @param sql - The statement
+ * @returns False when SQLite refuses the statement
+ * @throws Any failure that is not a statement refusal, as thrown
+ */
+function compilesWith(gate: GateConnection, sql: string): boolean {
   try {
-    explain(gate.database, withEmptyStrings(sql, spelled));
+    explain(gate.database, sql);
+    return true;
   } catch (error) {
     if (!isStatementRefusal(error)) throw error;
-    const relation = spelled[0]?.value ?? '';
-    throw new VatError(
-      PROJECTION_STATEMENT_REFUSED_CODE,
-      `This statement reads the table ${relation} through the single-quoted name '${relation}'. A single-quoted`
-      + ` '${relation}' is a string, which SQLite reads as a table only when one by that name exists. Name it as`
-      + ` an identifier: ${identifierSpellings(relation).join(', ')}.`,
-    );
+    return false;
   }
 }
 
@@ -694,16 +771,22 @@ function withEmptyStrings(sql: string, literals: readonly SqlToken[]): string {
  * Refuse one opcode of a caller's program; see {@link assertProgramAdmitted}.
  *
  * @param gate - The handle's gate state
+ * @param sql - The caller's statement, to name a refused virtual table from
  * @param op - The opcode
  * @param named - The relations the statement names, lower-cased
  */
-function assertOpAdmitted(gate: GateConnection, { opcode, p2, p3, p4 }: ExplainedOp, named: ReadonlySet<string>): void {
+function assertOpAdmitted(gate: GateConnection, sql: string, { opcode, p2, p3, p4 }: ExplainedOp, named: ReadonlySet<string>): void {
   if (typeof opcode === 'string' && READ_OPEN_OPCODES.has(opcode)) {
     if (p2 === 1) throw introspectionRefusal('reads the schema table, which lists the relations this run holds');
     assertReadsNamed(gate, p2, p3, named);
   }
   if (opcode === 'VOpen' && !(typeof p4 === 'string' && gate.referenceVirtualTables.has(p4))) {
-    throw introspectionRefusal(`opens a virtual table other than ${REFERENCE_VIRTUAL_TABLES.join(', ')}, which describes the database rather than its rows`);
+    const table = virtualTableNamed(gate, sql, p4);
+    const opened = table === undefined ? 'a virtual table' : `the virtual table ${table}`;
+    throw introspectionRefusal(
+      `opens ${opened}, which describes the database rather than its rows; the only virtual tables`
+      + ` admitted are ${REFERENCE_VIRTUAL_TABLES.join(', ')}`,
+    );
   }
   if ((opcode === 'Function' || opcode === 'PureFunc') && CONNECTION_STATE_FUNCTIONS.has(functionNameOf(p4))) {
     throw introspectionRefusal(`calls ${functionNameOf(p4)}(), which answers about the connection rather than the rows`);
@@ -714,6 +797,41 @@ function assertOpAdmitted(gate: GateConnection, { opcode, p2, p3, p4 }: Explaine
       'This statement writes: its compiled program opens a write transaction. A projection query only reads.',
     );
   }
+}
+
+/**
+ * The name of the virtual table a refused `VOpen` opens, or undefined when no name the statement
+ * spells opens it.
+ *
+ * `EXPLAIN` prints a virtual table as a pointer, never a name, and an alias (`dbstat AS json_each`)
+ * hides it from the text. So each name the statement spells, bare or quoted, is opened alone on the
+ * same connection, and the one whose `VOpen` carries the same pointer is the table: an eponymous
+ * virtual table has one instance per connection. Run on the refusal path only, one counted
+ * `EXPLAIN` per distinct name; a name that does not compile alone is skipped.
+ *
+ * @param gate - The handle's gate state
+ * @param sql - The caller's statement
+ * @param pointer - The refused `VOpen`'s `p4`
+ * @returns The table's name as the statement spells it, or undefined
+ * @throws Any failure that is not a statement refusal, as thrown
+ */
+function virtualTableNamed(gate: GateConnection, sql: string, pointer: unknown): string | undefined {
+  if (typeof pointer !== 'string') return undefined;
+  const spelled = new Set(sqlTokens(sql)
+    .filter((token) => token.kind === 'word' || token.kind === 'quotedIdentifier')
+    .map((token) => token.value.toLowerCase()));
+  for (const name of spelled) {
+    if (REFERENCE_VIRTUAL_TABLES.includes(name)) continue;
+    let program: readonly ExplainedOp[];
+    try {
+      program = explain(gate.database, `SELECT * FROM ${quoteIdentifier(name)}`);
+    } catch (error) {
+      if (!isStatementRefusal(error)) throw error;
+      continue;
+    }
+    if (program.some((op) => op.opcode === 'VOpen' && op.p4 === pointer)) return name;
+  }
+  return undefined;
 }
 
 /**
