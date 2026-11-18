@@ -94,7 +94,7 @@ describe.skipIf(process.platform === 'win32')('a group Ctrl-C, twice, under the 
       entry: getWrapperPath(import.meta.url),
       nodeOptions: [preload('audit-stall-after-clone.mjs')],
       env: { VAT_BIN: BIN_PATH, TEST_READY_FILE: ready, TEST_STALL_AT: stallAt, TEST_RM_DELAY_MS: String(RM_DELAY_MS) },
-      ownGroup: true,
+      ownGroup: 'session',
     });
     const leader = running.process.pid ?? 0;
     expect(await within(20_000, () => fs.existsSync(ready)), running.stderr()).toBe(true);

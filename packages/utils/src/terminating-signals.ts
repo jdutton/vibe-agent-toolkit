@@ -9,6 +9,10 @@
  * which a terminal Ctrl-C under the `vat` wrapper delivers (the terminal signals the whole
  * foreground group, and the wrapper forwards) — met the default disposition and killed the process
  * half-way through that cleanup, leaking the clone or the lock it was removing.
+ *
+ * SIGCONT is not a terminating signal, but a listener for it is a signal listener all the same,
+ * so its one installation lives here too: {@link observeContinueSignal}. SIGTSTP has none: its
+ * default stop is never replaced.
  */
 
 /**
@@ -271,5 +275,30 @@ export function handleTerminatingSignals(options: {
   return {
     release,
     releaseOrAwaitEnding: () => (release() ? Promise.resolve() : new Promise<void>(() => {})),
+  };
+}
+
+/**
+ * Observe this process being continued (SIGCONT) after a stop, until the returned call.
+ *
+ * A SIGCONT listener does not change what SIGCONT does: the process is continued by the kernel
+ * either way. SIGTSTP is deliberately not observed: a listener for it replaces the default stop,
+ * and a handler that then stops the process itself can stay stopped for ever (a SIGCONT consumed
+ * before it ran) or never stop (PID 1, an orphaned group). A SIGCONT is the evidence of a stop
+ * that ended; the listener runs from the event loop, never at the instant of the signal.
+ *
+ * Windows has no job-control stop; nothing is installed there.
+ *
+ * @param listener - Called once per SIGCONT
+ * @returns The call that removes the listener
+ */
+export function observeContinueSignal(listener: () => void): () => void {
+  if (process.platform === 'win32') return () => undefined;
+  const onContinue = (): void => {
+    listener();
+  };
+  process.on('SIGCONT', onContinue);
+  return () => {
+    process.off('SIGCONT', onContinue);
   };
 }

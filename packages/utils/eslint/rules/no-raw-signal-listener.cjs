@@ -27,6 +27,11 @@
  * arrives with the first signal, composes with every other live guard, and dies of the signal. A
  * removal by hand can strip that guard's listener out from under it.
  *
+ * Two job-control signals get their own message. SIGCONT goes through `observeContinueSignal`. A
+ * SIGTSTP listener is refused outright: it replaces the default stop, and a handler that stops the
+ * process itself stays stopped for ever when the SIGCONT arrived before it ran, and never stops
+ * at all as PID 1 or in an orphaned group.
+ *
  * An event name that is not a literal is flagged because a signal list spread into a loop is how
  * the second-commonest hand-written handler looks, and nothing at the call site says whether the
  * variable holds a signal. Name the event literally when it is not one.
@@ -55,6 +60,8 @@ const REMOVE_METHODS = new Set(['off', 'removeListener', 'removeAllListeners']);
 /** `node:events`' static forms that take the emitter as their first argument. */
 const EVENTS_STATIC_METHODS = new Set(['on', 'once']);
 const PROCESS_MODULES = new Set(['process', 'node:process']);
+/** The job-control signals with a message of their own. */
+const JOB_CONTROL_MESSAGES = new Map([['SIGCONT', 'continueListener'], ['SIGTSTP', 'stopListener']]);
 const GLOBAL_OBJECTS = new Set(['globalThis', 'global']);
 /** How many aliases deep a process reference is followed — `const a = process; const b = a;`. */
 const MAX_ALIAS_DEPTH = 8;
@@ -158,10 +165,11 @@ module.exports = {
     docs: {
       description:
         'Disallow adding or removing a process listener for a signal (or for any event not named ' +
-        'literally) by hand — install a terminating-signal handler through handleTerminatingSignals',
+        'literally) by hand — install a terminating-signal handler through handleTerminatingSignals, ' +
+        'a SIGCONT listener through observeContinueSignal, and never a SIGTSTP listener',
       category: 'Filesystem and process',
       bans: '`process.on(<signal>, …)`, `process.off(<signal>, …)`, `once(process, <signal>)` and `process.on(<non-literal>, …)`',
-      useInstead: '`handleTerminatingSignals()`',
+      useInstead: '`handleTerminatingSignals()`; for SIGCONT, `observeContinueSignal()`',
       subpath: '/process',
       // Not recommended: it names a helper an adopter may not use, and the one file allowed to
       // listen directly is a fact about each repo's layout (the `allow` option).
@@ -183,6 +191,14 @@ module.exports = {
         'handleTerminatingSignals from @vibe-agent-toolkit/utils/process: it swallows the ' +
         'duplicate that arrives with the first signal, composes with every other guard, and dies ' +
         'of the signal.',
+      continueListener:
+        'process.{{method}}(\'SIGCONT\') installs a SIGCONT listener by hand. Use ' +
+        'observeContinueSignal from @vibe-agent-toolkit/utils/process.',
+      stopListener:
+        'process.{{method}}(\'SIGTSTP\') replaces the default job-control stop. Leave SIGTSTP alone: a ' +
+        'handler that stops the process itself stays stopped for ever when the SIGCONT came first, ' +
+        'and never stops as PID 1 or in an orphaned group. Observe the end of a stop with ' +
+        'observeContinueSignal from @vibe-agent-toolkit/utils/process.',
       computedEvent:
         'process.{{method}}(<non-literal>) may be a signal handler installed by hand. Name the ' +
         'event literally, or — for a signal — use handleTerminatingSignals from ' +
@@ -216,7 +232,7 @@ module.exports = {
         } else if (event === null) {
           context.report({ node, messageId: 'computedEvent', data: { method } });
         } else {
-          context.report({ node, messageId: 'signalListener', data: { method, event } });
+          context.report({ node, messageId: JOB_CONTROL_MESSAGES.get(event) ?? 'signalListener', data: { method, event } });
         }
       },
     };

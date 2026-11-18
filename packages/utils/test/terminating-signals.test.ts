@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   handleTerminatingSignals,
   isTerminatingSignal,
+  observeContinueSignal,
   REPEAT_SIGNAL_WINDOW_MS,
   reRaiseSignal,
   TERMINATING_SIGNALS,
@@ -332,5 +333,29 @@ describe('handleTerminatingSignals — a repeat', () => {
     const hold = setIntervalSpy.mock.results[0]?.value as NodeJS.Timeout | undefined;
     expect(hold?.hasRef()).toBe(true);
     forceTheEnding();
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('observeContinueSignal', () => {
+  it('calls the listener once per SIGCONT, and installs nothing for SIGTSTP', () => {
+    const tstpBefore = process.listenerCount('SIGTSTP');
+    let continues = 0;
+    const stop = observeContinueSignal(() => {
+      continues += 1;
+    });
+    try {
+      expect(process.listenerCount('SIGTSTP')).toBe(tstpBefore);
+      process.emit('SIGCONT', 'SIGCONT');
+      process.emit('SIGCONT', 'SIGCONT');
+    } finally {
+      stop();
+    }
+    expect(continues).toBe(2);
+  });
+
+  it('removes its listener when stopped', () => {
+    const before = process.listenerCount('SIGCONT');
+    observeContinueSignal(() => undefined)();
+    expect(process.listenerCount('SIGCONT')).toBe(before);
   });
 });

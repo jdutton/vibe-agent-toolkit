@@ -63,10 +63,30 @@
  * bounded by the budget, and closed by the `started` line the child writes
  * before it touches the tree. Without that line the boot was charged to the
  * population, and a loaded runner's slower boot killed a population that was
- * fine. {@link WatchdogState}'s `quietSince` is therefore `startedAt`, and must
+ * fine. {@link freshWatchdog} therefore starts counting at `startedAt`, and must
  * stay so: starting the clock at the first line instead would leave a child
  * that hangs while booting with no bound at all.
  *
+ * 🔑 **Time a Ctrl-Z holds the run stopped is not silence.** Ctrl-Z sends SIGTSTP to the
+ * supervisor and its child together (they share the terminal's group), and `fg` sends SIGCONT
+ * to both. SIGTSTP keeps its default disposition: this process never intercepts it and never
+ * stops itself, so the kernel's job-control rules (an orphaned group, PID 1) apply unchanged. It
+ * listens only for SIGCONT, which is the evidence that it was stopped: a poll whose gap since the
+ * previous one is late defers its judgment one event-loop turn (`setImmediate`), by which the
+ * pending SIGCONT has been delivered, and a gap with a SIGCONT in it is excluded from the silence.
+ * A late gap with no SIGCONT (a loaded machine) counts in full, so the kill lands at the budget,
+ * at most one turn late. Measured: on macOS (Node 22.16, 26.7) the SIGCONT listener had not run
+ * when the first late timer fired, and had run by its `setImmediate`, in every trial;
+ * `resources-budget-stopped.system.test.ts` pins the same ordering on Linux and macOS.
+ *
+ * ⚠️ **Known, bounded limits.** A SIGCONT sent to a process that was not stopped excludes the
+ * poll gap it lands in: at most one late gap, never more. A stop shorter than about two poll
+ * intervals is not late, so its first poll is judged at once, before the SIGCONT is handled, and
+ * counts that much of the stop as silence: at most two intervals. A stop that ends without a SIGCONT this
+ * process sees cannot happen (only SIGCONT continues a stopped process). A plain `kill -STOP`
+ * followed by `kill -CONT` is excluded exactly as Ctrl-Z and `fg` are. Windows has no stop
+ * signal: the budget there is plain elapsed time.
+
  * Wherever a kill lands — startup, population, a check, the document — the
  * parent publishes the same kind of document and exits 1. A kill is one outcome
  * and gets one exit code; see `buildInterruptedCheckInput`.
@@ -129,7 +149,12 @@ import {
   type TempDirOutcome,
   withTempDir,
 } from '@vibe-agent-toolkit/utils';
-import { handleTerminatingSignals, killProcessTree, type KillProcessTreeOptions } from '@vibe-agent-toolkit/utils/process';
+import {
+  handleTerminatingSignals,
+  killProcessTree,
+  type KillProcessTreeOptions,
+  observeContinueSignal,
+} from '@vibe-agent-toolkit/utils/process';
 
 import { CommandRefusalError, errorMessageOf } from '../../utils/command-refusal.js';
 import {
@@ -176,7 +201,7 @@ export const DEFAULT_BUDGET_SECONDS = 300;
  * by `checks-supervisor-orphan.system.test.ts` (population) and
  * `checks-supervisor-orphan-loop.system.test.ts` (the check loop) — on Windows the same two cases
  * pin the job object ending the child with its supervisor — the Windows wrapper by
- * `supervise-cli.test.ts`.
+ * `supervise-cli.test.ts`, and Ctrl-Z then fg by `resources-budget-stopped.system.test.ts`.
  */
 export const SUPERVISION_SIGNAL_CONTRACT = `Interrupting a supervised run (vat resources check, vat validate's checks
 phase, vat resources query --budget):
@@ -196,6 +221,13 @@ phase, vat resources query --budget):
   process (whose stdin is the terminal's, so it reads no end-of-file) and
   its child run on to completion, or until --budget seconds pass with no
   progress.
+  POSIX, Ctrl-Z (SIGTSTP) stops this process and the child together, and
+  fg (SIGCONT) continues both; SIGTSTP keeps its default action. The time
+  stopped does not count against --budget: a check of the bound that falls
+  after a SIGCONT leaves out the time since the check before it. A SIGCONT
+  sent to a run that was not stopped leaves out at most one poll gap. A
+  stop shorter than about two poll intervals may be partly counted as
+  silence: a check that runs before the SIGCONT is handled counts it.
   Windows: a console Ctrl-C, Ctrl-Break or window close reaches every process
   on the console; this one kills the child and exits 2, no document. An
   outside kill (TerminateProcess, taskkill /F) of the 'vat' wrapper or of
@@ -239,12 +271,44 @@ const KILL_ATTEMPTS_BEFORE_REPORTING = 5;
  */
 const KILL_POLLS_BEFORE_REPORTING_UNREAPED = 20;
 
+/**
+ * A poll whose gap since the previous one exceeds this many poll intervals is late: this process
+ * may have been stopped, so the judgment waits one event-loop turn for the SIGCONT that says so.
+ */
+const LATE_POLL_INTERVALS = 2;
+
 /** What the watchdog remembers between polls. */
 export interface WatchdogState {
   /** How large the progress log was when it last changed. */
   readonly bytesSeen: number;
-  /** When that was — the instant the budget is counted from. */
+  /** The monotonic clock when the log last changed — the spawn, before the first change. */
   readonly quietSince: number;
+  /** When the previous poll was judged — the spawn, before the first. */
+  readonly polledAt: number;
+  /** The poll gaps excluded since `quietSince`, because a SIGCONT arrived in them. */
+  readonly stoppedMs: number;
+}
+
+/**
+ * The state a watchdog starts from: nothing seen, the clock at the spawn, nothing excluded.
+ *
+ * @param spawnedAt - The monotonic clock when the child was spawned
+ * @returns The first state
+ */
+export function freshWatchdog(spawnedAt: number): WatchdogState {
+  return { bytesSeen: 0, quietSince: spawnedAt, polledAt: spawnedAt, stoppedMs: 0 };
+}
+
+/**
+ * Whether a poll is late: judge it only once any pending SIGCONT has been delivered.
+ *
+ * @param state - What the previous poll saw
+ * @param now - The monotonic clock at this poll
+ * @param budgetMs - The budget, which sets the poll interval
+ * @returns True when the gap since the previous poll exceeds {@link LATE_POLL_INTERVALS} intervals
+ */
+export function pollIsLate(state: WatchdogState, now: number, budgetMs: number): boolean {
+  return now - state.polledAt > LATE_POLL_INTERVALS * pollIntervalMs(budgetMs);
 }
 
 /**
@@ -260,21 +324,30 @@ export interface WatchdogState {
  * the child is demonstrably alive and writing. Counting lines instead would mean
  * a very slow write could look like silence.
  *
+ * 🔑 **Silence is elapsed time less the gaps a SIGCONT landed in.** Elapsed time since the log
+ * last changed, on the monotonic clock, minus every poll gap in which this process saw a SIGCONT
+ * (it was stopped for at most that gap). A gap with no SIGCONT counts in full: a late poll is
+ * late, not lenient, and the breach is judged on the clock, never on how many polls ran.
+ *
  * @param state - What the previous poll saw
  * @param observation - The run
  * @param observation.bytes - The progress log's current size
- * @param observation.now - The clock, in milliseconds
+ * @param observation.now - The monotonic clock, in milliseconds
+ * @param observation.continuedSincePoll - Whether a SIGCONT arrived since the previous poll
  * @param observation.budgetMs - How long silence is allowed to last
  * @returns The state to carry forward, and whether the budget was blown
  */
 export function pollWatchdog(
   state: WatchdogState,
-  observation: { bytes: number; now: number; budgetMs: number },
+  observation: { bytes: number; now: number; continuedSincePoll: boolean; budgetMs: number },
 ): { state: WatchdogState; breach: boolean } {
-  if (observation.bytes !== state.bytesSeen) {
-    return { state: { bytesSeen: observation.bytes, quietSince: observation.now }, breach: false };
+  const { bytes, now } = observation;
+  if (bytes !== state.bytesSeen) {
+    return { state: { bytesSeen: bytes, quietSince: now, polledAt: now, stoppedMs: 0 }, breach: false };
   }
-  return { state, breach: observation.now - state.quietSince >= observation.budgetMs };
+  const stoppedMs = state.stoppedMs + (observation.continuedSincePoll ? Math.max(0, now - state.polledAt) : 0);
+  const silentMs = now - state.quietSince - stoppedMs;
+  return { state: { ...state, polledAt: now, stoppedMs }, breach: silentMs >= observation.budgetMs };
 }
 
 /**
@@ -748,8 +821,8 @@ export type SupervisedRun =
  * - **After it fired**, an `error` means the KILL failed and the child is,
  *   as far as this process can tell, still running. Do NOT resolve. Resolving
  *   is what clears the timer, and clearing the timer is what makes the failure
- *   permanent. The poll keeps breaching (the log is not growing and
- *   `quietSince` is not reset), so it keeps re-sending SIGKILL, and a transient
+ *   permanent. The poll keeps breaching (the log is not growing and the
+ *   counted silence is not reset), so it keeps re-sending SIGKILL, and a transient
  *   refusal still lands. Only after {@link KILL_ATTEMPTS_BEFORE_REPORTING}
  *   refusals does it give up — and it gives up by REPORTING, naming the pid,
  *   never by claiming the child never started.
@@ -760,7 +833,9 @@ export type SupervisedRun =
  * composition are pure functions and are pinned as such.
  *
  * ⏱️ Every interval is read off `performance.now()`, the monotonic clock: a
- * wall clock stepped by NTP or an operator would grow or shrink the budget.
+ * wall clock stepped by NTP or an operator would grow or shrink the budget. The
+ * monotonic clock still runs while the process is stopped, which is why the
+ * watchdog excludes a poll gap a SIGCONT landed in ({@link pollWatchdog}).
  *
  * 🚨 **`spawn` can THROW, not only emit `error`.** An argument list longer than
  * the platform allows (a query's statement travels on the command line) throws
@@ -814,14 +889,21 @@ export async function superviseRun(options: {
   let killAttempts = 0;
   let killFailure: KillFailure | undefined;
   let spawnError: { binary: string; detail: string } | undefined;
-  let state: WatchdogState = { bytesSeen: 0, quietSince: startedAt };
+  let state: WatchdogState = freshWatchdog(startedAt);
+  // SIGCONTs seen, and how many of them the last judged poll had seen.
+  let continues = 0;
+  let continuesJudged = 0;
+  const stopObservingContinues = observeContinueSignal(() => {
+    continues += 1;
+  });
+  let deferred: NodeJS.Immediate | undefined;
   // 🪤 Declared out here and started INSIDE the promise, so the watchdog can
   // settle the run itself when it runs out of kills. Starting it outside would
   // put the escalation out of the timer's reach and force the `error` handler
   // back into resolving on a child that is still alive.
   let timer: NodeJS.Timeout | undefined;
 
-  const resolution = await new Promise<RunResolution>((resolve, reject) => {
+  const settled = new Promise<RunResolution>((resolve, reject) => {
     // 🪤 `error` does not always end the process, and it is not always followed
     // by `exit` — so a SPAWN failure is remembered and resolved on immediately.
     // A promise settles once, so whichever event arrives first wins and the
@@ -849,11 +931,31 @@ export async function superviseRun(options: {
       });
     });
 
-    const poll = (): void => {
+    // 🚨 A step that THROWS — a progress log this process can no longer stat — has no reading,
+    // and the timer is outside every caller's `try`: uncaught, it reached the CLI's last-resort
+    // handler, which exits 2 with NO document, and `vat validate` lost the phases that had
+    // finished. So the throw ends the supervision here, the one place that can: kill the child
+    // (nothing bounds it once the timer stops), stop the timer, and REJECT, so the caller
+    // publishes it — `vat validate` as RUN_INCOMPLETE, `vat resources check` as its refusal.
+    // The `exit` guard stays behind this as the second line.
+    const guarded = (step: () => void) => (): void => {
+      try {
+        step();
+      } catch (error) {
+        clearInterval(timer);
+        killProcessTree(child, CHECKS_CHILD_TREE);
+        reject(error as Error);
+      }
+    };
+    const judge = (): void => {
+      deferred = undefined;
       if (exited) return;
+      const continuedSincePoll = continues !== continuesJudged;
+      continuesJudged = continues;
       const reading = pollWatchdog(state, {
         bytes: logSize(logPath),
         now: performance.now(),
+        continuedSincePoll,
         budgetMs: options.budgetMs,
       });
       state = reading.state;
@@ -867,24 +969,23 @@ export async function superviseRun(options: {
       const unended = unendedKill(killAttempts, killFailure, child.pid);
       if (unended !== undefined) resolve(resolveChildEnding({ code: null, signal: null, killed, killFailure: unended }));
     };
-    // 🚨 A poll that THROWS — a progress log this process can no longer stat — has no reading,
-    // and the timer is outside every caller's `try`: uncaught, it reached the CLI's last-resort
-    // handler, which exits 2 with NO document, and `vat validate` lost the phases that had
-    // finished. So the throw ends the supervision here, the one place that can: kill the child
-    // (nothing bounds it once the timer stops), stop the timer, and REJECT, so the caller
-    // publishes it — `vat validate` as RUN_INCOMPLETE, `vat resources check` as its refusal.
-    // The `exit` guard stays behind this as the second line.
-    timer = setInterval(() => {
-      try {
-        poll();
-      } catch (error) {
-        clearInterval(timer);
-        killProcessTree(child, CHECKS_CHILD_TREE);
-        reject(error as Error);
-      }
-    }, pollIntervalMs(options.budgetMs));
+    // 🔑 A late poll — this process may have been stopped — is judged one event-loop turn later:
+    // libuv delivers a pending SIGCONT in the poll phase, before `setImmediate`'s check phase.
+    const poll = (): void => {
+      if (exited || deferred !== undefined) return;
+      if (pollIsLate(state, performance.now(), options.budgetMs)) deferred = setImmediate(guarded(judge));
+      else judge();
+    };
+    timer = setInterval(guarded(poll), pollIntervalMs(options.budgetMs));
   });
-  clearInterval(timer);
+  let resolution: RunResolution;
+  try {
+    resolution = await settled;
+  } finally {
+    clearInterval(timer);
+    clearImmediate(deferred);
+    stopObservingContinues();
+  }
 
   const stdout = Buffer.concat(chunks).toString('utf-8');
   // 🚨 AFTER the ending is resolved, never inside it. A child that exited with a

@@ -82,6 +82,18 @@ describe('a relation the statement opens but does not name is refused, though th
     for (const refusal of [thrownBy(() => database.query(sql)), thrownBy(() => database.columns(sql)), thrownBy(() => probe.assertCompiles(sql, []))]) {
       expect(isVatError(refusal, PROJECTION_STATEMENT_REFUSED_CODE), String(refusal)).toBe(true);
       expect(String(refusal)).toContain("single-quoted name 'BLOBS'");
+      // The relation itself, as the run holds it, and how to name it: not the caller's spelling.
+      expect(String(refusal)).toContain('reads the table blobs through');
+      expect(String(refusal)).toContain('"blobs"');
+      expect(String(refusal)).not.toContain('"BLOBS"');
+    }
+  });
+
+  it('names the literal SQLite read as a table, not an earlier one it read as a string', () => {
+    const sql = "SELECT 'blobs' AS s FROM 'blob_sections'";
+    for (const refusal of [thrownBy(() => database.query(sql)), thrownBy(() => database.columns(sql)), thrownBy(() => probe.assertCompiles(sql, []))]) {
+      expect(isVatError(refusal, PROJECTION_STATEMENT_REFUSED_CODE), String(refusal)).toBe(true);
+      expect(String(refusal)).toContain("reads the table blob_sections through the single-quoted name 'blob_sections'");
     }
   });
 });

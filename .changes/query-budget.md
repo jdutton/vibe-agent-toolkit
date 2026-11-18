@@ -6,7 +6,12 @@
   `RUN_INCOMPLETE` (exit 2), never published as a partial answer. The bound is opt-in: without
   `--budget`, or with `--budget 0`, `query` runs in one process exactly as before. A value
   `vat resources check` refuses (blank, negative, not a number, a zero not written `0`) is refused
-  here too.
+  here too. For both verbs on POSIX, time the run spends stopped (Ctrl-Z or any stop signal,
+  then `fg` or any SIGCONT) does not count against the bound: a check of the bound that falls
+  after a SIGCONT leaves out the time since the check before it. A SIGCONT sent to a run that was
+  not stopped leaves out at most one poll gap; a stop shorter than about two poll intervals may be
+  partly counted. Ctrl-Z keeps its default action. On Windows the
+  bound is plain elapsed time.
 
 ### Fixed
 
