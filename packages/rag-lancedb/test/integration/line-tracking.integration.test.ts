@@ -4,11 +4,13 @@
  * Tests that chunks preserve precise line number ranges from source documents.
  */
 
+import { ONNX_MODEL_UNREACHABLE } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite } from '../test-helpers.js';
 
-describe('Line Number Tracking', () => {
+// The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.
+describe.skipIf(ONNX_MODEL_UNREACHABLE)('Line Number Tracking', () => {
   const suite = setupLanceDBTestSuite(true);
 
   beforeEach(suite.beforeEach);

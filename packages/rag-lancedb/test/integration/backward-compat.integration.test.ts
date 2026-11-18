@@ -6,12 +6,14 @@
  * compatibility with existing code that doesn't use custom metadata schemas.
  */
 
+import { ONNX_MODEL_UNREACHABLE } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
 import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite } from '../test-helpers.js';
 
-describe('Backward compatibility', () => {
+// The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.
+describe.skipIf(ONNX_MODEL_UNREACHABLE)('Backward compatibility', () => {
   const TEST_SEARCH_TERM = 'documentation';
   const SECURITY_DOC_ID = 'security-doc';
 

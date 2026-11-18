@@ -4,11 +4,13 @@
  * Tests that vector search results include distance metrics for ranking and filtering.
  */
 
+import { ONNX_MODEL_UNREACHABLE } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite } from '../test-helpers.js';
 
-describe('Similarity Scoring', () => {
+// The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.
+describe.skipIf(ONNX_MODEL_UNREACHABLE)('Similarity Scoring', () => {
   const suite = setupLanceDBTestSuite(true);
 
   beforeEach(suite.beforeEach);

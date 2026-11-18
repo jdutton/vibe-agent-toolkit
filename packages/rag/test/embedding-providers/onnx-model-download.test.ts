@@ -16,12 +16,12 @@
  */
 
 import type * as FsPromises from 'node:fs/promises';
-import { mkdir, mkdtemp, readdir, readFile, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 import type * as Utils from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { installFaultFs, removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
+import { installFaultFs, ONNX_MODEL_FILES, removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ensureModelFiles } from '../../src/embedding-providers/onnx-utils.js';
@@ -170,6 +170,22 @@ describe('ensureModelFiles publication', () => {
       stdout.mockRestore();
       stderr.mockRestore();
     }
+  });
+
+  it('reads the files the shared ONNX test gate checks without a fetch, so a gated suite never reaches the network', async () => {
+    // `ONNX_MODEL_UNREACHABLE` (utils/testing) lets a suite that embeds run offline when it
+    // sees these files cached. If this lookup and that list ever disagree, a "cached" run
+    // downloads after all; this pins them together.
+    const fetchSpy = stubFetch();
+    for (const file of ONNX_MODEL_FILES) {
+      await mkdir(dirname(safePath.join(cacheDir, file)), { recursive: true });
+      await writeFile(safePath.join(cacheDir, file), 'planted');
+    }
+
+    const { modelPath, vocabPath } = await ensureModelFiles(MODEL_ID, cacheDir, true);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect([modelPath, vocabPath]).toEqual(ONNX_MODEL_FILES.map((file) => safePath.join(cacheDir, file)));
   });
 
   it('leaves no temp files behind after a successful download', async () => {

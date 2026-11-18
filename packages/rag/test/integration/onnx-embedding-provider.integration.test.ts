@@ -5,7 +5,7 @@
  * all-MiniLM-L6-v2 model. First run downloads model files (~23MB, int8-quantized).
  */
 
-import { atLeastTierTimeout } from '@vibe-agent-toolkit/utils/testing';
+import { atLeastTierTimeout, ONNX_MODEL_UNREACHABLE } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, inject, it } from 'vitest';
 
 import { OnnxEmbeddingProvider } from '../../src/embedding-providers/onnx-embedding-provider.js';
@@ -24,7 +24,7 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
   // Model download can take a while on first run
   const provider = new OnnxEmbeddingProvider();
 
-  it(
+  it.skipIf(ONNX_MODEL_UNREACHABLE)(
     'should embed a single text',
     async () => {
       const embedding = await provider.embed('Hello world');
@@ -36,7 +36,7 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
     atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 
-  it(
+  it.skipIf(ONNX_MODEL_UNREACHABLE)(
     'should embed batch of texts',
     async () => {
       await assertBatchEmbedding(provider, 384);
@@ -44,7 +44,7 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
     atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 
-  it(
+  it.skipIf(ONNX_MODEL_UNREACHABLE)(
     'should produce normalized embeddings (magnitude close to 1)',
     async () => {
       const embedding = await provider.embed('Test embedding normalization');
@@ -54,7 +54,7 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
     atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 
-  it(
+  it.skipIf(ONNX_MODEL_UNREACHABLE)(
     'should produce different embeddings for different texts',
     async () => {
       const embedding1 = await provider.embed('cat');
@@ -65,7 +65,7 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
     atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 
-  it(
+  it.skipIf(ONNX_MODEL_UNREACHABLE)(
     'should produce similar embeddings for similar texts',
     async () => {
       const embeddingCat = await provider.embed('cat');
@@ -82,7 +82,7 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
     atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 
-  it(
+  it.skipIf(ONNX_MODEL_UNREACHABLE)(
     'should be deterministic (same text produces same embedding)',
     async () => {
       const text = 'Deterministic test for ONNX embeddings';
@@ -104,7 +104,7 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
     atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 
-  it(
+  it.skipIf(ONNX_MODEL_UNREACHABLE)(
     'should handle long text (500+ characters)',
     async () => {
       const longText = 'This is a test sentence for embedding generation. '.repeat(15);

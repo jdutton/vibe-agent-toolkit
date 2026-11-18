@@ -56,6 +56,7 @@ export * from './testing/fault-fs.js';
 export { faultFsSpecOf, faultRuleOf, INJECTED_ERRNOS, injectedErrnoError } from './testing/fault-spec.js';
 export type { FaultFsSpec, FaultRule, FaultSpec, FsApi, FsOpFamily, InjectedErrno } from './testing/fault-spec.js';
 export * from './testing/hostile-tree.js';
+export * from './testing/onnx-model-gate.js';
 export * from './testing/parse-limit-fixtures.js';
 export * from './testing/platform-gates.js';
 export * from './testing/temp-dir.js';

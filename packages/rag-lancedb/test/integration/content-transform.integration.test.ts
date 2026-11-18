@@ -10,6 +10,7 @@
 
 import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { ONNX_MODEL_UNREACHABLE } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
@@ -36,7 +37,8 @@ async function indexAndQuery(
   return queryAllContent(provider, queryText);
 }
 
-describe('LanceDB Content Transform Integration', () => {
+// The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.
+describe.skipIf(ONNX_MODEL_UNREACHABLE)('LanceDB Content Transform Integration', () => {
   const suite = setupLanceDBTestSuite();
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);

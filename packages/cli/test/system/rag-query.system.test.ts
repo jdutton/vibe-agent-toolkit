@@ -5,6 +5,8 @@
  * for relevant content chunks based on semantic similarity.
  */
 
+import { ONNX_MODEL_UNREACHABLE } from '@vibe-agent-toolkit/utils/testing';
+
 import {
   describe,
   executeRagCommandInEmptyProject,
@@ -19,7 +21,8 @@ import {
 const binPath = getBinPath(import.meta.url);
 const suite = setupRagTestSuite('query', binPath, getTestOutputDir);
 
-describe('RAG query command (system test)', () => {
+// The suite indexes with the local ONNX model, fetched from huggingface.co on a cache miss.
+describe.skipIf(ONNX_MODEL_UNREACHABLE)('RAG query command (system test)', () => {
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
 

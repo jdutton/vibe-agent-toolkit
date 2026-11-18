@@ -13,13 +13,15 @@ import { rm } from 'node:fs/promises';
 import { OnnxEmbeddingProvider } from '@vibe-agent-toolkit/rag';
 import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { ONNX_MODEL_UNREACHABLE } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
 import { createTempDir, createTestMarkdownFile, fileChecksum } from '../test-helpers.js';
 
-describe('Custom metadata system tests', () => {
+// The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.
+describe.skipIf(ONNX_MODEL_UNREACHABLE)('Custom metadata system tests', () => {
   let tempDir: string;
   let dbPath: string;
   const embeddingProvider = new OnnxEmbeddingProvider();

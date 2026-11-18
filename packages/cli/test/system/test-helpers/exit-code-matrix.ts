@@ -22,8 +22,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { chmodSync } from 'node:fs';
 import { basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -36,7 +35,7 @@ import {
 } from '@vibe-agent-toolkit/schema';
 import { createSymlink, isPathAbsentError, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { buildWindowsShellLine, shouldUseShell } from '@vibe-agent-toolkit/utils/process';
-import { CANNOT_DENY_READS, findExecutable, gitExecutable } from '@vibe-agent-toolkit/utils/testing';
+import { CANNOT_DENY_READS, findExecutable, gitExecutable, ONNX_MODEL_CACHE_DIR, ONNX_MODEL_CACHED } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, expect, type TestContext } from 'vitest';
 import yaml from 'yaml';
 
@@ -268,8 +267,6 @@ function npmReachable(): boolean {
  * embeds links it into its fake HOME; without it the provider would download
  * the model, which this suite never does — so such a scenario is skipped.
  */
-const ONNX_MODEL_CACHE = safePath.join(homedir(), '.cache', 'vat-onnx-models');
-const ONNX_MODEL_CACHED = ['model_quantized.onnx', 'vocab.txt'].every((file) => existsSync(safePath.join(ONNX_MODEL_CACHE, 'Xenova_all-MiniLM-L6-v2', file)));
 const SYMLINKS = symlinkCapability();
 function noOnnxModelReason(): string | undefined {
   if (!ONNX_MODEL_CACHED) return 'no ONNX model is cached under ~/.cache/vat-onnx-models, and this suite never downloads one';
@@ -280,7 +277,7 @@ function noOnnxModelReason(): string | undefined {
 function linkOnnxModelCache(home: string): void {
   if (SYMLINKS === null) throw new Error('linkOnnxModelCache needs symlinks; the scenario should have been skipped');
   mkdirSyncReal(safePath.join(home, '.cache'), { recursive: true });
-  createSymlink(SYMLINKS, ONNX_MODEL_CACHE, safePath.join(home, '.cache', 'vat-onnx-models'), 'junction');
+  createSymlink(SYMLINKS, ONNX_MODEL_CACHE_DIR, safePath.join(home, '.cache', 'vat-onnx-models'), 'junction');
 }
 
 /** A RAG database path of the scenario's own, not yet created. */
