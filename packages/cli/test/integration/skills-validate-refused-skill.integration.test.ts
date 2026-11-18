@@ -3,7 +3,12 @@
  * not check — never "matched no SKILL.md" — and its finding is resolved by the
  * project's `resources.validation` alone, as `vat resources validate` resolves it.
  *
- * 50,000 levels of frontmatter nesting: past the parse's stack in any thread.
+ * 1,001 nested lists under the frontmatter mapping: past the default `outputDepth` limit
+ * (1,000; at 999 lists the document is admitted), so every lane refuses it under one code
+ * and the refusal is key-determined. What this file proves is how each verb treats a
+ * refused SKILL.md, whichever limit refused it. A stack overflow (50,000 levels) is
+ * per-run and never stored, so every verb here re-parsed 100 KB to the overflow; that
+ * path has suites of its own (`skill-name-overflow`, `in-process-parse-overflow`).
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -22,7 +27,7 @@ import { build } from '../helpers/skills-build-fixture.js';
 import { silentLogger } from '../test-helpers.js';
 
 
-const DEPTH = 50_000;
+const DEPTH = 1_001;
 const REFUSED_SKILL_MD = `---\nname: deep\nnested: ${'['.repeat(DEPTH)}${']'.repeat(DEPTH)}\n---\n# Deep\n`;
 const LIMIT = 'RESOURCE_PARSE_LIMIT_EXCEEDED';
 const RUN_INTEGRITY_CODE = 'RESOURCE_CHECK_BROKEN';
