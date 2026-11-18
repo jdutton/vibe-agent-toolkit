@@ -651,16 +651,16 @@ describe('vat resources query', () => {
     expect(bound.data['rows']).toEqual([{ x: 'a', y: 'b' }]);
   });
 
-  it('refuses a write from its compiled program and names the surface for a bad column', () => {
+  it('refuses a write from the engine\'s grammar and names the surface for a bad column', () => {
     // 🔑 The `WITH` prefix is deliberate — do NOT "simplify" it back to a bare
     // `DELETE`. That form is refused by the statement-KIND gate on its first
     // token. This spelling is real SQLite grammar, passes the kind gate, and
     // `RETURNING` gives it a result column, so the result-shape check passes it
-    // too: only its compiled program, which opens a write transaction, refuses
-    // it — and the preflight refuses it before any population.
+    // too: SQLite's refusal to compile it as a subquery refuses it — and the
+    // preflight refuses it before any population.
     const write = query('WITH c(a) AS (VALUES (1)) DELETE FROM blobs RETURNING contentKey');
     expect(write.status).toBe(2);
-    expect(write.stderr).toContain('This statement writes');
+    expect(write.stderr).toContain('SQLite does not accept this statement as a subquery');
 
     const badColumn = query('SELECT contentHash FROM blobs');
     expect(badColumn.status).toBe(2);

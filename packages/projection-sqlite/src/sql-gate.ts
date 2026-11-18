@@ -620,21 +620,21 @@ function explain(database: DatabaseSync, sql: string): readonly ExplainedOp[] {
  *   declared statement names, so such a statement answered only while another named its relation;
  * - an `OpenRead` of a relation the statement does not NAME ({@link relationsNamedBy}), by any
  *   other route;
- * - a write transaction (`Transaction` with a non-zero `p2`) — `WITH … DELETE … RETURNING` passes
- *   the kind gate and compiles; this refuses it before it runs, on `query`, `columns` and the
- *   compile probe alike. `PRAGMA query_only` stays armed as a second guard for any write a step
- *   reaches;
- * - a statement SQLite will not compile as a subquery ({@link refusalAsSubquery}) — a
- *   `PRAGMA` by any spelling. This is the kind gate's second layer: {@link assertIsQuery} reads the
- *   leading keyword, this asks the engine's grammar, and each refuses a `PRAGMA` alone. It runs
- *   before the statement is compiled as written, since compiling a setting `PRAGMA` applies it;
- *   a query SQLite compiles alone but not as a subquery (one at its nesting limits) is refused
- *   with SQLite's own reason.
+ * - a write transaction (`Transaction` with a non-zero `p2`) — refused before it runs, on
+ *   `query`, `columns` and the compile probe alike, for any write that compiles as a subquery.
+ *   `PRAGMA query_only` stays armed as a further guard for any write a step reaches;
+ * - a statement SQLite will not compile as a subquery ({@link refusalAsSubquery}) — a `PRAGMA`
+ *   by any spelling, and a write behind a `WITH` (`WITH … DELETE … RETURNING` passes the kind
+ *   gate). This is the kind gate's second layer: {@link assertIsQuery} reads the leading keyword,
+ *   this asks the engine's grammar and reads no token itself, and each refuses a `PRAGMA` alone.
+ *   It runs before the statement is compiled as written, since compiling a setting `PRAGMA`
+ *   applies it, and its refusal carries SQLite's own error: a query at SQLite's nesting limits,
+ *   which compiles alone but not one level deeper, is refused this way too.
  *
  * Exported for its unit test only; not on the package barrel.
  *
- * An `EXPLAIN` that fails — a relation the run did not hydrate — throws SQLite's own error, inside
- * the caller's coded-refusal span.
+ * A relation the run did not hydrate fails the subquery compile first, and is refused carrying
+ * SQLite's own error.
  *
  * @param gate - The handle's gate state
  * @param sql - The caller's statement
@@ -646,19 +646,13 @@ export function assertProgramAdmitted(gate: GateConnection, sql: string): void {
   // it compiles one (`EXPLAIN PRAGMA recursive_triggers = 1` flips the setting), so a refusal that
   // came after the statement compiled would leave its effect on the run's connection.
   const subqueryRefusal = refusalAsSubquery(gate.database, sql);
-  if (subqueryRefusal !== undefined && !opensAsQuery(sql)) throw notAQuery(subqueryRefusal);
-  // The statement compiled as a subquery, or it opens with a query keyword, which no statement
-  // with a compile-time effect does: compiling it as written is safe either way.
+  if (subqueryRefusal !== undefined) throw notASubquery(subqueryRefusal);
   const program = explain(gate.database, sql);
   assertNoQuotedRelation(gate, sql);
   const named = new Set(relationsNamedBy(sql, queryableRelationNames()).map((name) => name.toLowerCase()));
   for (const op of program) {
     assertOpAdmitted(gate, sql, op, named);
   }
-  // A query whose program passed every rule above but that SQLite would not take as a subquery:
-  // a write behind a `WITH` was refused by name above, so what is left is a statement at SQLite's
-  // nesting limits, refused with SQLite's own reason.
-  if (subqueryRefusal !== undefined) throw nestedTooDeep(subqueryRefusal);
 }
 
 /**
@@ -691,51 +685,21 @@ function refusalAsSubquery(database: DatabaseSync, sql: string): Error | undefin
 }
 
 /**
- * The words a statement SQLite runs as a query opens with.
+ * The refusal of a statement SQLite will not compile as a subquery, carrying SQLite's own error.
  *
- * 🔑 Deliberately not {@link QUERY_STATEMENT_KEYWORDS}: this decides only whether a statement the
- * subquery layer already refused may be compiled as written to say WHY, and it must not loosen when
- * the kind layer's list does — a `PRAGMA` compiled here would apply its setting.
- */
-const QUERY_OPENING_WORDS: ReadonlySet<string> = new Set(['SELECT', 'WITH', 'VALUES']);
-
-/**
- * Whether the statement's first token, as the shared lexer reads it, opens a query.
- *
- * @param sql - The caller's statement
- * @returns True for a `SELECT`, `WITH` or `VALUES`
- */
-function opensAsQuery(sql: string): boolean {
-  const first = sqlTokens(sql)[0];
-  return first?.kind === 'word' && QUERY_OPENING_WORDS.has(first.value.toUpperCase());
-}
-
-/**
- * The refusal of a statement that is not a query.
+ * 🔑 It claims nothing SQLite did not say: a `PRAGMA`, an unheld relation and a query at a depth
+ * limit all fail here, and only SQLite's error tells them apart. That error comes LAST and
+ * untouched: the CLI reads a `no such table: <name>` there (`describeQueryFailure`).
  *
  * @param cause - SQLite's refusal of it as a subquery
  * @returns The coded error
  */
-function notAQuery(cause: Error): VatError {
+function notASubquery(cause: Error): VatError {
   return new VatError(
     PROJECTION_STATEMENT_REFUSED_CODE,
-    'This statement is not a query: SQLite does not accept it as a subquery, which only a SELECT, a'
-    + ' WITH … SELECT or a VALUES is. A projection query only reads.',
-    { cause },
-  );
-}
-
-/**
- * The refusal of a query SQLite compiles alone but not one level deeper, as a subquery.
- *
- * @param cause - SQLite's refusal of it as a subquery
- * @returns The coded error, carrying SQLite's own reason
- */
-function nestedTooDeep(cause: Error): VatError {
-  return new VatError(
-    PROJECTION_STATEMENT_REFUSED_CODE,
-    `SQLite compiles this statement alone but not as a subquery, which is how it is confirmed to be a`
-    + ` query: ${cause.message}. It sits at SQLite's nesting limits; nest it less deeply.`,
+    'SQLite does not accept this statement as a subquery, where only a SELECT, a WITH … SELECT or a'
+    + ' VALUES compiles; that is how a projection statement is confirmed to be a query that only reads.'
+    + ` SQLite's error: ${cause.message}`,
     { cause },
   );
 }
@@ -898,10 +862,8 @@ function virtualTableNamed(gate: GateConnection, sql: string, pointer: unknown):
 
 /**
  * Every refused virtual table this connection can open by name, lower-cased: each registered
- * module (`dbstat`, `fts5`, …) and the `pragma_<name>` function of each pragma. The reference
- * tables are left out; they are never refused.
- *
- * Read by the gate itself, never by a caller statement, on the refusal path only.
+ * module (`dbstat`, `fts5`, …) and the `pragma_<name>` function of each pragma, less the
+ * reference tables. Read on the refusal path only.
  *
  * @param database - The connection
  * @returns The names

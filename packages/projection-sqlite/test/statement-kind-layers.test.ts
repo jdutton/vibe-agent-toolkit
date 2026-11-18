@@ -93,7 +93,7 @@ describe('the program layer alone refuses a PRAGMA statement', () => {
   it.each(PRAGMA_STATEMENTS)('%s', (sql) => {
     const refusal = thrownBy(() => assertProgramAdmitted(gate, sql));
     expect(isVatError(refusal, PROJECTION_STATEMENT_REFUSED_CODE), String(refusal)).toBe(true);
-    expect(String(refusal)).toContain('SQLite does not accept it as a subquery');
+    expect(String(refusal)).toContain('SQLite does not accept this statement as a subquery');
   });
 });
 
@@ -128,7 +128,7 @@ describe('the program layer refuses a setting PRAGMA without applying it', () =>
   });
 });
 
-describe('a query SQLite compiles alone but not as a subquery', () => {
+describe('a query SQLite compiles alone but not as a subquery: SQLite\'s own error', () => {
   // 999 nested additions: SQLite's expression-depth limit is 1000, and the subquery is one deeper.
   const sql = `SELECT 1${' + 1'.repeat(999)} AS x`;
 
@@ -136,9 +136,23 @@ describe('a query SQLite compiles alone but not as a subquery', () => {
     expect(() => database.prepare(sql)).not.toThrow();
   });
 
-  it('is refused with SQLite\'s own reason, never as "not a query"', () => {
+  it('is refused with SQLite\'s own reason', () => {
     const refusal = String(thrownBy(() => assertProgramAdmitted(gate, sql)));
-    expect(refusal).toContain('Expression tree is too large');
+    expect(refusal).toContain("SQLite's error: Expression tree is too large");
+  });
+});
+
+describe('a write behind a WITH: refused by the subquery layer with SQLite\'s own error', () => {
+  it('names SQLite\'s syntax error, and claims no nesting limit', () => {
+    const refusal = thrownBy(() => assertProgramAdmitted(gate, 'WITH c AS (VALUES (1)) DELETE FROM blobs RETURNING k'));
+    expect(isVatError(refusal, PROJECTION_STATEMENT_REFUSED_CODE), String(refusal)).toBe(true);
+    expect(String(refusal)).toContain('SQLite\'s error: near "DELETE": syntax error');
+    expect(String(refusal)).not.toContain('nest');
+  });
+
+  it('a relation the run does not hold: SQLite\'s own "no such table", and no claim it is not a query', () => {
+    const refusal = String(thrownBy(() => assertProgramAdmitted(gate, 'SELECT * FROM nowhere')));
+    expect(refusal).toContain('SQLite\'s error: no such table: nowhere');
     expect(refusal).not.toContain('not a query');
   });
 });

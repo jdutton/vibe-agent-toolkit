@@ -402,16 +402,16 @@ describe('query requires a statement that is a query', () => {
     expect(store.query(sql)[0]?.[column]).toBe(1);
   });
 
-  it('refuses, from the compiled program, the writes a leading token cannot see', () => {
+  it('refuses, from the engine\'s grammar, the writes a leading token cannot see', () => {
     // `WITH … DELETE` is real SQLite grammar and its first token is `WITH`, so
     // the kind gate passes it, and `RETURNING` gives it a result column, so the
-    // result-shape check passes it too. Its program opens a WRITE transaction,
-    // and that is what refuses it — on `columns` and the compile probe, which
-    // never step, as much as here. `query_only` still stands behind a step:
-    // `statement-refusal.test.ts` proves it armed with no program gate in front.
+    // result-shape check passes it too. SQLite will not compile it as a
+    // subquery, and that is what refuses it — on `columns` and the compile
+    // probe, which never step, as much as here. `query_only` still stands behind
+    // a step: `statement-refusal.test.ts` proves it armed with no program gate in front.
     const write = 'WITH c(a) AS (VALUES (1)) DELETE FROM "blobs" RETURNING "contentKey"';
-    expect(() => store.query(write)).toThrow(/This statement writes/);
-    expect(() => store.columns(write)).toThrow(/This statement writes/);
+    expect(() => store.query(write)).toThrow(/does not accept this statement as a subquery/);
+    expect(() => store.columns(write)).toThrow(/does not accept this statement as a subquery/);
     expect(store.query(COUNT_BLOBS)[0]?.['n']).toBe(2);
   });
 });
