@@ -6,7 +6,8 @@
   `RUN_INCOMPLETE` (exit 2), never published as a partial answer. The bound is opt-in: without
   `--budget`, or with `--budget 0`, `query` runs in one process exactly as before. A value
   `vat resources check` refuses (blank, negative, not a number, a zero not written `0`) is refused
-  here too.
+  here too. For both verbs, time a run spends stopped (Ctrl-Z, then `fg`) does not count against
+  the bound.
 
 ### Fixed
 

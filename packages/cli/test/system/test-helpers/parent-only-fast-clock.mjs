@@ -10,6 +10,11 @@
  * watchdog does not read it.) The test derives `scale` from `measureBudget()`, exactly as a standalone kill case
  * derives its `--budget`. The child's own clock is untouched.
  *
+ * Interval timers set after the spawn run `scale` times faster too, so the clock and the watchdog's
+ * poll timer agree: the watchdog counts at most a couple of poll intervals per gap between polls (a
+ * longer gap is a process that was stopped), so a scaled clock read by an unscaled poll would look
+ * like a process stopped between every poll, and the bound would never elapse.
+ *
  * Acts only in a process whose argv does NOT carry `--supervised-by` (a supervisor, never the child it
  * spawns). VAT's source gains no knob for this.
  */
@@ -22,6 +27,9 @@ if (!process.argv.includes('--supervised-by') && Number.isFinite(scale) && scale
   const realNow = performance.now.bind(performance);
   let since;
   performance.now = () => (since === undefined ? realNow() : since + (realNow() - since) * scale);
+  const realSetInterval = globalThis.setInterval;
+  globalThis.setInterval = (callback, delay, ...rest) =>
+    realSetInterval(callback, since === undefined ? delay : Number(delay) / scale, ...rest);
 
   const spawn = childProcess.spawn;
   childProcess.spawn = (command, args, ...rest) => {

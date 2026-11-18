@@ -41,6 +41,7 @@ import { CHECK_REPORT_SCHEMA } from '../../src/commands/resources/check-schema.j
 import {
   type AbnormalDeath,
   type CheckInvocation,
+  freshWatchdog,
   NODE_FATAL_ABORT_EXIT_CODE,
   parseBudgetSeconds,
   pollWatchdog,
@@ -97,7 +98,7 @@ const STARTED: ProgressEntry = { kind: 'started' };
 const CHECKS_DONE: ProgressEntry = { kind: 'statements-complete' };
 
 /** A watchdog that has seen nothing yet, at time zero. */
-const FRESH: WatchdogState = { bytesSeen: 0, quietSince: 0 };
+const FRESH: WatchdogState = freshWatchdog(0);
 
 /** What a supervising parent — THIS process, as the child's parent — hands its child as `--supervised-by`. */
 const supervisedBy = (invoker: CheckInvocation, pid = process.ppid): string => `${invoker}:${String(pid)}:progress.jsonl`;
@@ -193,19 +194,33 @@ describe('pollWatchdog', () => {
     const { state, breach } = pollWatchdog(FRESH, { bytes: 120, now: 5000, budgetMs: 2000 });
 
     expect(breach).toBe(false);
-    expect(state).toStrictEqual({ bytesSeen: 120, quietSince: 5000 });
+    expect(state).toStrictEqual({ bytesSeen: 120, quietMs: 0, polledAt: 5000 });
   });
 
   it('does not breach while the budget still has room', () => {
-    const { breach } = pollWatchdog(FRESH, { bytes: 0, now: 1999, budgetMs: 2000 });
-
-    expect(breach).toBe(false);
+    expect(silentPolls(FRESH, { until: 1999 }).breach).toBe(false);
   });
 
   it('breaches once the budget has passed with no new line', () => {
-    const { breach } = pollWatchdog(FRESH, { bytes: 0, now: 2000, budgetMs: 2000 });
+    expect(silentPolls(FRESH, { until: 2000 }).breach).toBe(true);
+  });
 
-    expect(breach).toBe(true);
+  it('does not count the time it was stopped: Ctrl-Z, then fg, past the budget', () => {
+    // Half a budget of silence, then a stop lasting ten budgets: the next poll is the first after `fg`.
+    const beforeStop = silentPolls(FRESH, { until: 1000 });
+    const afterFg = pollWatchdog(beforeStop.state, { bytes: 0, now: 21_000, budgetMs: 2000 });
+
+    expect(afterFg.breach).toBe(false);
+    // The run then goes on: a new line resets it as ever.
+    expect(pollWatchdog(afterFg.state, { bytes: 60, now: 21_200, budgetMs: 2000 }).breach).toBe(false);
+  });
+
+  it('still breaches after a stop when the silence goes on, once a budget of watched time has passed', () => {
+    const beforeStop = silentPolls(FRESH, { until: 1000 });
+    const afterFg = pollWatchdog(beforeStop.state, { bytes: 0, now: 21_000, budgetMs: 2000 });
+    // At most two poll intervals (2 x 200 ms) of the stop were counted: 1400 ms, so 600 ms are left.
+    expect(silentPolls(afterFg.state, { until: 21_400 }).breach).toBe(false);
+    expect(silentPolls(afterFg.state, { until: 21_600 }).breach).toBe(true);
   });
 
   it('NEVER breaches while units keep COMPLETING, however long the run takes', () => {
@@ -235,14 +250,30 @@ describe('pollWatchdog', () => {
   it('breaches after the last line, not after the run started', () => {
     // The same run as above, then silence. The budget is counted from the last
     // line — a bound measured from the spawn would have fired long before.
-    const after = pollWatchdog(
-      { bytesSeen: 1200, quietSince: 40_000 },
-      { bytes: 1200, now: 42_000, budgetMs: 2000 },
-    );
+    const after = silentPolls({ bytesSeen: 1200, quietMs: 0, polledAt: 40_000 }, { until: 42_000 });
 
     expect(after.breach).toBe(true);
   });
 });
+
+/**
+ * Poll a silent log every 200 ms — the supervisor's interval for a 2 s budget — up to `until`.
+ *
+ * @param from - The state to poll from
+ * @param options - Where to stop
+ * @param options.until - The clock at the last poll
+ * @returns The last poll's reading
+ */
+function silentPolls(from: WatchdogState, options: { until: number }): { state: WatchdogState; breach: boolean } {
+  let reading = { state: from, breach: false };
+  for (let now = from.polledAt + 200; now <= options.until; now += 200) {
+    reading = pollWatchdog(reading.state, { bytes: from.bytesSeen, now, budgetMs: 2000 });
+  }
+  if (reading.state.polledAt !== options.until) {
+    reading = pollWatchdog(reading.state, { bytes: from.bytesSeen, now: options.until, budgetMs: 2000 });
+  }
+  return reading;
+}
 
 /**
  * The recovered payload for a run killed while `runaway` was in flight.
