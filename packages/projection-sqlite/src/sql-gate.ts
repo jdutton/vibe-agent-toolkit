@@ -701,7 +701,8 @@ function refusalAsSubquery(database: DatabaseSync, sql: string): Error | undefin
  * The refusal of a statement SQLite will not compile as a subquery, carrying SQLite's own error.
  *
  * 🔑 A `PRAGMA`, a typo and a depth limit all fail here, and only SQLite's error tells them
- * apart, so it comes FIRST, untouched, on its own line: a typo reads as a typo.
+ * apart, so it comes FIRST and untouched: a typo reads as a typo. The CLI's `describeQueryFailure`
+ * reads `no such table: <name>` from it.
  *
  * @param cause - SQLite's refusal of it as a subquery
  * @returns The coded error
@@ -710,9 +711,10 @@ function notASubquery(cause: Error): VatError {
   return new VatError(
     PROJECTION_STATEMENT_REFUSED_CODE,
     `${cause.message}\n`
-    + 'SQLite gave that error compiling the statement as a subquery, and only a SELECT, a WITH ... SELECT'
-    + ' or a VALUES compiles as a subquery: that compile is how a projection statement is confirmed to be'
-    + ' a query that only reads, and how a PRAGMA or a write behind a WITH is refused.',
+    + 'SQLite gave that error compiling the statement as a subquery, wrapped as SELECT EXISTS (<statement>),'
+    + ' so a ")" or a token it names may come from the wrapper. Only a SELECT, a WITH ... SELECT or a VALUES'
+    + ' compiles as a subquery: that compile is how a projection statement is confirmed to be a query that'
+    + ' only reads, and how a PRAGMA or a write behind a WITH is refused.',
     { cause },
   );
 }

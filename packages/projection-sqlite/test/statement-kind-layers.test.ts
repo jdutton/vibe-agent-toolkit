@@ -34,7 +34,7 @@ function messageOf(refusal: unknown): string {
 }
 
 /** The context a subquery refusal carries after SQLite's own error: how a non-query is refused. */
-const SUBQUERY_CONTEXT = 'only a SELECT, a WITH ... SELECT or a VALUES compiles as a subquery';
+const SUBQUERY_CONTEXT = 'Only a SELECT, a WITH ... SELECT or a VALUES compiles as a subquery';
 /** PRAGMA statements, row-returning and not, in the spellings a keyword scan could miss. */
 const PRAGMA_STATEMENTS: readonly string[] = [
   'PRAGMA table_info(blobs)',
@@ -101,8 +101,8 @@ describe('the program layer alone refuses a PRAGMA statement', () => {
     const refusal = thrownBy(() => assertProgramAdmitted(gate, sql));
     expect(isVatError(refusal, PROJECTION_STATEMENT_REFUSED_CODE), String(refusal)).toBe(true);
     // SQLite's own error leads; the read-only context follows it, so a PRAGMA still says why.
+    expect(messageOf(refusal)).toMatch(/^near "pragma": syntax error\n/iu);
     expect(messageOf(refusal)).toContain(SUBQUERY_CONTEXT);
-    expect(messageOf(refusal)).toContain('a PRAGMA');
   });
 });
 
@@ -173,7 +173,18 @@ describe('a write behind a WITH: refused by the subquery layer with SQLite\'s ow
     expect(messageOf(refusal).startsWith('no such column: nope\n'), messageOf(refusal)).toBe(true);
   });
 
-  it('carries SQLite\'s error, untouched, as its cause', () => {
+  it.each([
+    ['an unfinished WHERE', 'SELECT k FROM blobs WHERE'],
+    ['an unclosed string', "SELECT 'a"],
+  ])('%s: SQLite\'s error leads, and the context names the wrapper it may point into', (_label, sql) => {
+    // SQLite parses `SELECT EXISTS (\n<statement>\n)`, so its error can name a `)` the author never
+    // typed or span the wrapper's newline: the context must say what SQLite was given.
+    const refusal = messageOf(thrownBy(() => assertProgramAdmitted(gate, sql)));
+    expect(refusal).toMatch(/^(near|unrecognized token)/u);
+    expect(refusal).toContain('wrapped as SELECT EXISTS (<statement>)');
+  });
+
+  it('carries SQLite\'s error, untouched, as its cause (a pin: the cause was carried before too)', () => {
     const refusal = thrownBy(() => assertProgramAdmitted(gate, 'SELECT * FROM nowhere'));
     const cause = refusal instanceof Error ? refusal.cause : undefined;
     expect(cause instanceof Error ? cause.message : cause).toBe('no such table: nowhere');
