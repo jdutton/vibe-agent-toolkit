@@ -25,10 +25,10 @@
 import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 
-import { onnxModelUnreachable } from '@vibe-agent-toolkit/rag/testing';
 import { RAG_DATABASE_UNREADABLE_CODE, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { resolveChunkingConfig } from '../../src/chunking-config.js';
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
 import { createTempDir, createTestMarkdownFile, createTestResource } from '../test-helpers.js';

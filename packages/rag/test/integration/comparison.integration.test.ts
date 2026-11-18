@@ -7,7 +7,7 @@
 import { atLeastTierTimeout } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, inject, it } from 'vitest';
 
-import { onnxModelUnreachable } from '../../src/testing.js';
+import { onnxModelUnreachable } from '../onnx-model-gate.js';
 
 import { assertUnitMagnitude } from './embedding-test-helpers.js';
 

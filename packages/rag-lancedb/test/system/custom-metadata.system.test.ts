@@ -11,12 +11,12 @@ import { rm } from 'node:fs/promises';
 
 
 import { OnnxEmbeddingProvider } from '@vibe-agent-toolkit/rag';
-import { onnxModelUnreachable } from '@vibe-agent-toolkit/rag/testing';
 import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 
+import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
 import { createTempDir, createTestMarkdownFile, fileChecksum } from '../test-helpers.js';
 

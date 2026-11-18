@@ -5,7 +5,7 @@
  * for relevant content chunks based on semantic similarity.
  */
 
-import { onnxModelUnreachable } from '@vibe-agent-toolkit/rag/testing';
+import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 
 import {
   describe,

@@ -1,6 +1,7 @@
 /**
  * The test gate for suites that embed with the default ONNX model, which downloads on a cold
  * cache (docs/writing-tests.md). The cache layout is the provider's own, re-exported here.
+ * Test scaffolding, not published: other packages' suites import it by relative path.
  *
  * ⛔ Nothing here touches the filesystem at import; the probe runs when a gated suite asks.
  */
@@ -12,9 +13,9 @@ import {
   DEFAULT_ONNX_QUANTIZED,
   defaultOnnxCacheDir,
   onnxModelFiles,
-} from './embedding-providers/onnx-utils.js';
+} from '../src/embedding-providers/onnx-utils.js';
 
-export { DEFAULT_ONNX_MODEL, DEFAULT_ONNX_QUANTIZED, defaultOnnxCacheDir, onnxModelFiles } from './embedding-providers/onnx-utils.js';
+export { DEFAULT_ONNX_MODEL, DEFAULT_ONNX_QUANTIZED, defaultOnnxCacheDir, onnxModelFiles } from '../src/embedding-providers/onnx-utils.js';
 
 /**
  * Whether the default model is already in the default cache, so embedding fetches nothing.

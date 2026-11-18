@@ -23,11 +23,11 @@
  * root, where `chmod 000` denies nothing.
  */
 
-import { onnxModelUnreachable } from '@vibe-agent-toolkit/rag/testing';
 import { CANNOT_DENY_READS, getTestOutputDir, overOutputRowsMarkdown } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, it } from 'vitest';
 import yaml from 'yaml';
 
+import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { RAG_INDEX_REPORT_SCHEMA } from '../../src/commands/rag/index-schema.js';
 
 import {

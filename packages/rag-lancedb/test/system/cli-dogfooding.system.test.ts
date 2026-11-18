@@ -18,11 +18,12 @@ import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 
 
-import { onnxModelUnreachable } from '@vibe-agent-toolkit/rag/testing';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { getTestOutputDir, NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { parse } from 'yaml';
+
+import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 
 /**
  * Parse the CLI's YAML output.

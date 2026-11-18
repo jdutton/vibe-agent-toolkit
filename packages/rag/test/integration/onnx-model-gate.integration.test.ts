@@ -17,7 +17,7 @@ import {
   onnxModelCached,
   onnxModelFiles,
   onnxModelUnreachable,
-} from '../../src/testing.js';
+} from '../onnx-model-gate.js';
 
 /** Point the current user's home, and the network declaration, at the test's own. */
 function stubHome(home: string, netAvailable: string): void {

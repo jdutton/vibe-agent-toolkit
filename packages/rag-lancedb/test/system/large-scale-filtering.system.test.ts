@@ -14,10 +14,10 @@
  * any scale, while nested struct access fails at scale.
  */
 
-import { onnxModelUnreachable } from '@vibe-agent-toolkit/rag/testing';
 import { atLeastTierTimeout } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, inject, it } from 'vitest';
 
+import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
 import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite } from '../test-helpers.js';
 

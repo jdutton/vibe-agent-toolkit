@@ -9,7 +9,7 @@ import { atLeastTierTimeout } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, inject, it } from 'vitest';
 
 import { OnnxEmbeddingProvider } from '../../src/embedding-providers/onnx-embedding-provider.js';
-import { onnxModelUnreachable } from '../../src/testing.js';
+import { onnxModelUnreachable } from '../onnx-model-gate.js';
 
 import { assertBatchEmbedding, assertUnitMagnitude } from './embedding-test-helpers.js';
 

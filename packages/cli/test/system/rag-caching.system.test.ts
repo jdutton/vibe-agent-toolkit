@@ -4,8 +4,7 @@
  * Tests that RAG correctly detects unchanged files and skips re-indexing.
  */
 
-import { onnxModelUnreachable } from '@vibe-agent-toolkit/rag/testing';
-
+import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { RAG_INDEX_REPORT_SCHEMA, type RagIndexData } from '../../src/commands/rag/index-schema.js';
 
 import {

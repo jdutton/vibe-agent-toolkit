@@ -26,7 +26,6 @@ import { chmodSync } from 'node:fs';
 import { basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { defaultOnnxCacheDir, onnxModelCached } from '@vibe-agent-toolkit/rag/testing';
 import {
   exitCodeForReport,
   type ExitDeterminingDocument,
@@ -40,6 +39,7 @@ import { CANNOT_DENY_READS, findExecutable, gitExecutable } from '@vibe-agent-to
 import { afterAll, beforeAll, expect, type TestContext } from 'vitest';
 import yaml from 'yaml';
 
+import { defaultOnnxCacheDir, onnxModelCached } from '../../../../rag/test/onnx-model-gate.js';
 import { PUBLISHED_SHAPES } from '../../../src/report-schemas.js';
 import { cleanupTestTempDir, createTestTempDir, fakeHomeEnv, getBinPath, writeFileTree } from '../test-common.js';
 

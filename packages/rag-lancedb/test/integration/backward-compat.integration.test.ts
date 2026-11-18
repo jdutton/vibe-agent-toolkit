@@ -6,9 +6,9 @@
  * compatibility with existing code that doesn't use custom metadata schemas.
  */
 
-import { onnxModelUnreachable } from '@vibe-agent-toolkit/rag/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
 import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite } from '../test-helpers.js';
 

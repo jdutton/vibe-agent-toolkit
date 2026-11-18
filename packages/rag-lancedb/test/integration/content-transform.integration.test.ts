@@ -8,11 +8,11 @@
  */
 
 
-import { onnxModelUnreachable } from '@vibe-agent-toolkit/rag/testing';
 import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
 import {
   createLinkRewriteTransform,

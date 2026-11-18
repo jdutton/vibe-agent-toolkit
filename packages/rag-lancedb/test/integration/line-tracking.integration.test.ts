@@ -4,9 +4,9 @@
  * Tests that chunks preserve precise line number ranges from source documents.
  */
 
-import { onnxModelUnreachable } from '@vibe-agent-toolkit/rag/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite } from '../test-helpers.js';
 
 // The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.

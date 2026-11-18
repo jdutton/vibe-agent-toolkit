@@ -7,10 +7,10 @@
 
 import { chmodSync } from 'node:fs';
 
-import { onnxModelUnreachable } from '@vibe-agent-toolkit/rag/testing';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 
+import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { RAG_STATS_REPORT_SCHEMA } from '../../src/commands/rag/admin-schema.js';
 
 import {
