@@ -256,6 +256,8 @@ describe('vat resources check', () => {
 
     expect(issue.message).toContain('broken');
     expect(issue.message).toContain('could not run');
+    // SQLite's own error leads the cause, so a renamed column reads as one, not as a write.
+    expect(issue.message).toContain('asserting nothing: no such column: contentHash\n');
     // And it says what the projection actually has, which is the only way to
     // find out what the column became.
     expect(issue.message).toContain('contentKey');

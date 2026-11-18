@@ -410,8 +410,8 @@ describe('query requires a statement that is a query', () => {
     // probe, which never step, as much as here. `query_only` still stands behind
     // a step: `statement-refusal.test.ts` proves it armed with no program gate in front.
     const write = 'WITH c(a) AS (VALUES (1)) DELETE FROM "blobs" RETURNING "contentKey"';
-    expect(() => store.query(write)).toThrow(/does not accept this statement as a subquery/);
-    expect(() => store.columns(write)).toThrow(/does not accept this statement as a subquery/);
+    expect(() => store.query(write)).toThrow(/^near "DELETE": syntax error\n.*how a PRAGMA or a write behind a WITH is refused/s);
+    expect(() => store.columns(write)).toThrow(/^near "DELETE": syntax error\n.*how a PRAGMA or a write behind a WITH is refused/s);
     expect(store.query(COUNT_BLOBS)[0]?.['n']).toBe(2);
   });
 });

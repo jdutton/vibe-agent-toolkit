@@ -37,8 +37,6 @@ export interface AcceptedAdvisory {
 export const ACCEPTED_ADVISORIES: Readonly<Record<string, AcceptedAdvisory>> = {
   // zod 3 has no fixed release; the fix is the zod 4 migration. See the entry's comment.
   'GHSA-mrhx-c7xc-m3w5': { package: 'zod', accepted: ['3.25.76'] },
-  // No picomatch release is fixed (the advisory runs through the latest). See the entry's comment.
-  'GHSA-fc5q-39xc-vjpf': { package: 'picomatch', accepted: ['2.3.2', '4.0.5'] },
 };
 
 /** One well-formed `[[IgnoredVulns]]` entry. */
