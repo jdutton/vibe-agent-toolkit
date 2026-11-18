@@ -23,7 +23,8 @@
  * root, where `chmod 000` denies nothing.
  */
 
-import { CANNOT_DENY_READS, getTestOutputDir, ONNX_MODEL_UNREACHABLE, overOutputRowsMarkdown } from '@vibe-agent-toolkit/utils/testing';
+import { onnxModelUnreachable } from '@vibe-agent-toolkit/rag/testing';
+import { CANNOT_DENY_READS, getTestOutputDir, overOutputRowsMarkdown } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, it } from 'vitest';
 import yaml from 'yaml';
 
@@ -69,7 +70,7 @@ describe('RAG index command (system test)', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it.skipIf(ONNX_MODEL_UNREACHABLE)('should index markdown files into RAG database', async () => {
+  it.skipIf(onnxModelUnreachable())('should index markdown files into RAG database', async () => {
     const { result, parsed } = await executeCliAndParseYaml(
       binPath,
       ['rag', 'index', projectDir, '--db', dbPath],
@@ -91,7 +92,7 @@ describe('RAG index command (system test)', () => {
     expect(fs.existsSync(dbPath)).toBe(true);
   });
 
-  it.skipIf(ONNX_MODEL_UNREACHABLE)('should index successfully on re-run', async () => {
+  it.skipIf(onnxModelUnreachable())('should index successfully on re-run', async () => {
     // Create a new project for this test with isolated database
     const reindexProjectDir = setupTestProject(tempDir, {
       name: 'reindex-test-project',
@@ -135,7 +136,7 @@ describe('RAG index command (system test)', () => {
     });
   });
 
-  it.skipIf(CANNOT_DENY_READS || ONNX_MODEL_UNREACHABLE)(
+  it.skipIf(CANNOT_DENY_READS || onnxModelUnreachable())(
     'reports a RESOURCE_UNREADABLE finding and exits 1 when a declared resource cannot be read, naming it',
     async () => {
       const unreadableProjectDir = setupTestProject(tempDir, {
@@ -171,7 +172,7 @@ describe('RAG index command (system test)', () => {
   // pool's DEFAULT `outputRows` (16,384 — 20,000 links is real and cheap) is refused
   // by the crawl, so it never reaches the provider and sits in no list but the
   // registry's refusal log. Unread, the run indexed the rest and said `ok`.
-  it.skipIf(ONNX_MODEL_UNREACHABLE)('reports a document whose parse was refused as an error finding and exits 1, naming it', async () => {
+  it.skipIf(onnxModelUnreachable())('reports a document whose parse was refused as an error finding and exits 1, naming it', async () => {
     const refusedProjectDir = setupTestProject(tempDir, { name: 'refused-test-project', withDocs: true });
     const refusedDbPath = getTestOutputDir('cli', 'system', 'rag-index-refused-db');
     const docsDir = safePath.join(refusedProjectDir, 'docs');
@@ -249,7 +250,7 @@ describe('RAG index command (system test)', () => {
   });
 
   // Operating-system litter says nothing about whose directory it is, as stats and clear already hold.
-  it.skipIf(ONNX_MODEL_UNREACHABLE)('a --db directory holding only OS litter is indexed into', async () => {
+  it.skipIf(onnxModelUnreachable())('a --db directory holding only OS litter is indexed into', async () => {
     const littered = safePath.join(tempDir, 'index-into-littered');
     fs.mkdirSync(littered);
     fs.writeFileSync(safePath.join(littered, '.DS_Store'), FINDER_DS_STORE);

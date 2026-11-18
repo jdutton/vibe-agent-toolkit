@@ -14,14 +14,15 @@
  * any scale, while nested struct access fails at scale.
  */
 
-import { atLeastTierTimeout, ONNX_MODEL_UNREACHABLE } from '@vibe-agent-toolkit/utils/testing';
+import { onnxModelUnreachable } from '@vibe-agent-toolkit/rag/testing';
+import { atLeastTierTimeout } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, inject, it } from 'vitest';
 
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
 import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite } from '../test-helpers.js';
 
 // The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.
-describe.skipIf(ONNX_MODEL_UNREACHABLE)('Metadata Filtering with Flattened Schema', () => {
+describe.skipIf(onnxModelUnreachable())('Metadata Filtering with Flattened Schema', () => {
   const suite = setupLanceDBTestSuite();
 
   beforeEach(suite.beforeEach);

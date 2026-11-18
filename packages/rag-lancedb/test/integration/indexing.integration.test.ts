@@ -25,8 +25,8 @@
 import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 
+import { onnxModelUnreachable } from '@vibe-agent-toolkit/rag/testing';
 import { RAG_DATABASE_UNREADABLE_CODE, safePath } from '@vibe-agent-toolkit/utils';
-import { ONNX_MODEL_UNREACHABLE } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { resolveChunkingConfig } from '../../src/chunking-config.js';
@@ -125,7 +125,7 @@ More content in section 2.`
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  it.skipIf(ONNX_MODEL_UNREACHABLE)('should index a simple resource', async () => {
+  it.skipIf(onnxModelUnreachable())('should index a simple resource', async () => {
     provider = await LanceDBRAGProvider.create({ dbPath });
 
     // Create test resource
@@ -143,7 +143,7 @@ More content in section 2.`
     expect(result.chunksCreated).toBeGreaterThan(0);
   });
 
-  it.skipIf(ONNX_MODEL_UNREACHABLE)('should query indexed resources', async () => {
+  it.skipIf(onnxModelUnreachable())('should query indexed resources', async () => {
     provider = await LanceDBRAGProvider.create({ dbPath });
 
     // Create and index test resource
@@ -162,7 +162,7 @@ More content in section 2.`
   });
 
 
-  it.skipIf(ONNX_MODEL_UNREACHABLE)('should get database statistics', async () => {
+  it.skipIf(onnxModelUnreachable())('should get database statistics', async () => {
     provider = await LanceDBRAGProvider.create({ dbPath });
 
     // Create and index test resource
@@ -176,7 +176,7 @@ More content in section 2.`
     expect(stats.embeddingModel).toBeTruthy();
   });
 
-  it.skipIf(ONNX_MODEL_UNREACHABLE)('should calculate database size in bytes', async () => {
+  it.skipIf(onnxModelUnreachable())('should calculate database size in bytes', async () => {
     provider = await LanceDBRAGProvider.create({ dbPath });
 
     // Empty database should have 0 size (no files created yet)
@@ -203,7 +203,7 @@ More content in section 2.`
     await expect(provider.query({ text: 'test' })).rejects.toMatchObject({ code: 'RAG_INDEX_EMPTY' });
   });
 
-  it.skipIf(ONNX_MODEL_UNREACHABLE)('should enforce readonly mode', async () => {
+  it.skipIf(onnxModelUnreachable())('should enforce readonly mode', async () => {
     provider = await LanceDBRAGProvider.create({ dbPath });
 
     // Create and index test resource
@@ -229,7 +229,7 @@ More content in section 2.`
   });
 
 
-  it.skipIf(ONNX_MODEL_UNREACHABLE)('should clear database', async () => {
+  it.skipIf(onnxModelUnreachable())('should clear database', async () => {
     provider = await LanceDBRAGProvider.create({ dbPath });
 
     // Index a resource
@@ -255,7 +255,7 @@ More content in section 2.`
 
   // `clear()` removes recursively: a dbPath that holds anything a database does not
   // (a project, a home directory) must be refused with everything left in place.
-  it.skipIf(ONNX_MODEL_UNREACHABLE)('refuses to clear a directory holding anything but its tables, and removes nothing', async () => {
+  it.skipIf(onnxModelUnreachable())('refuses to clear a directory holding anything but its tables, and removes nothing', async () => {
     provider = await LanceDBRAGProvider.create({ dbPath });
     await provider.indexResources([await createTestResource(testFilePath)]);
     await writeFile(safePath.join(dbPath, 'keep.txt'), 'precious');
@@ -269,7 +269,7 @@ More content in section 2.`
   // Damaged data files behind an intact manifest fail on the first READ of the chunk table.
   // In `indexResources` that read is change detection, inside the per-resource catch: the
   // store's failure was reported as one content failure per resource, never as the store's.
-  it.skipIf(ONNX_MODEL_UNREACHABLE)('refuses an index into a database whose data files are damaged, as the store\'s failure', async () => {
+  it.skipIf(onnxModelUnreachable())('refuses an index into a database whose data files are damaged, as the store\'s failure', async () => {
     provider = await LanceDBRAGProvider.create({ dbPath });
     const resource = await createTestResource(testFilePath);
     await provider.indexResources([resource]);
@@ -281,7 +281,7 @@ More content in section 2.`
     await expect(provider.indexResources([resource])).rejects.toMatchObject({ code: RAG_DATABASE_UNREADABLE_CODE });
   });
 
-  it.skipIf(ONNX_MODEL_UNREACHABLE)('should respect limit parameter in queries', async () => {
+  it.skipIf(onnxModelUnreachable())('should respect limit parameter in queries', async () => {
     provider = await LanceDBRAGProvider.create({ dbPath });
 
     // Create a document with multiple chunks
@@ -311,7 +311,7 @@ Content for section 4 with even more text.`
     expect(result.chunks.length).toBeLessThanOrEqual(2);
   });
 
-  it.skipIf(ONNX_MODEL_UNREACHABLE)('should filter queries by single resourceId', async () => {
+  it.skipIf(onnxModelUnreachable())('should filter queries by single resourceId', async () => {
     provider = await LanceDBRAGProvider.create({ dbPath });
 
     const resource = await createTestResource(testFilePath, SPECIFIC_RESOURCE_ID);
@@ -327,7 +327,7 @@ Content for section 4 with even more text.`
   });
 
   // @ts-expect-error - Bun global is available at runtime
-  it.skipIf(typeof Bun !== 'undefined' || ONNX_MODEL_UNREACHABLE)(
+  it.skipIf(typeof Bun !== 'undefined' || onnxModelUnreachable())(
     'should handle empty resourceId filter array',
     async () => {
       provider = await LanceDBRAGProvider.create({ dbPath });
@@ -350,7 +350,7 @@ Content for section 4 with even more text.`
   );
 
   // @ts-expect-error - Bun global is available at runtime
-  it.skipIf(typeof Bun !== 'undefined' || ONNX_MODEL_UNREACHABLE)('should delete specific resource', async () => {
+  it.skipIf(typeof Bun !== 'undefined' || onnxModelUnreachable())('should delete specific resource', async () => {
     provider = await LanceDBRAGProvider.create({ dbPath });
 
     const resource = await createTestResource(testFilePath, 'resource-to-delete');
@@ -376,7 +376,7 @@ Content for section 4 with even more text.`
     expect(stats.totalChunks).toBe(0);
   });
 
-  it.skipIf(ONNX_MODEL_UNREACHABLE)('should skip indexing unchanged resources', async () => {
+  it.skipIf(onnxModelUnreachable())('should skip indexing unchanged resources', async () => {
     provider = await LanceDBRAGProvider.create({ dbPath });
 
     const resource = await createTestResource(testFilePath);
@@ -392,7 +392,7 @@ Content for section 4 with even more text.`
     expect(result2.resourcesSkipped).toBe(1);
   });
 
-  it.skipIf(ONNX_MODEL_UNREACHABLE)('should update changed resources', async () => {
+  it.skipIf(onnxModelUnreachable())('should update changed resources', async () => {
     provider = await LanceDBRAGProvider.create({ dbPath });
 
     const resource = await createTestResource(testFilePath);
@@ -451,7 +451,7 @@ Content for section 4 with even more text.`
   });
 
   describe('Custom Metadata Filtering', () => {
-    it.skipIf(ONNX_MODEL_UNREACHABLE)('should filter by string metadata field', async () => {
+    it.skipIf(onnxModelUnreachable())('should filter by string metadata field', async () => {
       const { z } = await import('zod');
 
       // Define custom metadata schema
@@ -578,7 +578,7 @@ Content for section 4 with even more text.`
       await customProvider.close();
     });
 
-    it.skipIf(ONNX_MODEL_UNREACHABLE)('should filter by number metadata field', async () => {
+    it.skipIf(onnxModelUnreachable())('should filter by number metadata field', async () => {
       const { z } = await import('zod');
 
       type CustomMetadata = { priority: number };
@@ -606,7 +606,7 @@ Content for section 4 with even more text.`
       await customProvider.close();
     });
 
-    it.skipIf(ONNX_MODEL_UNREACHABLE)('should filter by boolean metadata field', async () => {
+    it.skipIf(onnxModelUnreachable())('should filter by boolean metadata field', async () => {
       const { z } = await import('zod');
 
       type CustomMetadata = { active: boolean };
@@ -634,7 +634,7 @@ Content for section 4 with even more text.`
       await customProvider.close();
     });
 
-    it.skipIf(ONNX_MODEL_UNREACHABLE)('should filter by array metadata field with LIKE query', async () => {
+    it.skipIf(onnxModelUnreachable())('should filter by array metadata field with LIKE query', async () => {
       const { z } = await import('zod');
 
       type CustomMetadata = { tags: string[] };
@@ -663,7 +663,7 @@ Content for section 4 with even more text.`
       await customProvider.close();
     });
 
-    it.skipIf(ONNX_MODEL_UNREACHABLE)('should combine multiple metadata filters', async () => {
+    it.skipIf(onnxModelUnreachable())('should combine multiple metadata filters', async () => {
       const { z } = await import('zod');
 
       type CustomMetadata = { domain: string; priority: number };
@@ -702,7 +702,7 @@ Content for section 4 with even more text.`
   });
 
   describe('SQL Injection Prevention', () => {
-    it.skipIf(ONNX_MODEL_UNREACHABLE)('should safely handle resourceId with SQL injection attempt', async () => {
+    it.skipIf(onnxModelUnreachable())('should safely handle resourceId with SQL injection attempt', async () => {
       provider = await LanceDBRAGProvider.create({ dbPath });
 
       // Create resource with malicious ID containing SQL injection
@@ -743,7 +743,7 @@ Content for section 4 with even more text.`
       expect(maliciousDeleted.chunks).toHaveLength(0);
     });
 
-    it.skipIf(ONNX_MODEL_UNREACHABLE)('should handle resource IDs with multiple single quotes', async () => {
+    it.skipIf(onnxModelUnreachable())('should handle resource IDs with multiple single quotes', async () => {
       provider = await LanceDBRAGProvider.create({ dbPath });
 
       const complexId = "it's a 'test' doc";
@@ -772,7 +772,7 @@ Content for section 4 with even more text.`
   });
 
   describe('Frontmatter Indexing', () => {
-    it.skipIf(ONNX_MODEL_UNREACHABLE)('should preserve default metadata fields from frontmatter', async () => {
+    it.skipIf(onnxModelUnreachable())('should preserve default metadata fields from frontmatter', async () => {
       // RED: This is the ACTUAL bug!
       // enrichChunks() receives frontmatter: {} instead of parseResult.frontmatter
       // So default fields (tags, type, title) are LOST even though they're in the file
@@ -823,7 +823,7 @@ Important security information.`
       expect(chunk?.title).toBe('Security Best Practices');
     });
 
-    it.skipIf(ONNX_MODEL_UNREACHABLE)('refuses a table an index with another metadata schema wrote, before writing to it', async () => {
+    it.skipIf(onnxModelUnreachable())('refuses a table an index with another metadata schema wrote, before writing to it', async () => {
       // An adopter had an existing LanceDB table and indexed with custom metadata into it. The table
       // has no custom columns, so the batch is refused up front naming them — never one per-resource
       // "Found field not in schema" error after an update had already deleted the resource's chunks.
@@ -881,7 +881,7 @@ Content.`
       await customProvider.close();
     });
 
-    it.skipIf(ONNX_MODEL_UNREACHABLE)('should handle missing frontmatter on first resource then present on second', async () => {
+    it.skipIf(onnxModelUnreachable())('should handle missing frontmatter on first resource then present on second', async () => {
       // RED: This test exposes the REAL bug
       // If the first resource has no frontmatter, LanceDB infers schema without custom fields
       // Then second resource with frontmatter fails: "Found field not in schema"
@@ -940,7 +940,7 @@ Authentication and authorization.`
       expect(result2.errors?.length ?? 0).toBe(0); // Should have no errors
     });
 
-    it.skipIf(ONNX_MODEL_UNREACHABLE)('should index custom metadata from resource frontmatter', async () => {
+    it.skipIf(onnxModelUnreachable())('should index custom metadata from resource frontmatter', async () => {
       // RED: Write failing test first
       // This test demonstrates the bug: frontmatter is being overwritten with {}
       // in indexResource() method, so custom metadata never gets indexed

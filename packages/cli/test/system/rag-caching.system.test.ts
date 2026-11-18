@@ -4,7 +4,7 @@
  * Tests that RAG correctly detects unchanged files and skips re-indexing.
  */
 
-import { ONNX_MODEL_UNREACHABLE } from '@vibe-agent-toolkit/utils/testing';
+import { onnxModelUnreachable } from '@vibe-agent-toolkit/rag/testing';
 
 import { RAG_INDEX_REPORT_SCHEMA, type RagIndexData } from '../../src/commands/rag/index-schema.js';
 
@@ -30,7 +30,7 @@ function dataOf(parsed: Record<string, unknown>): RagIndexData {
 const suite = setupRagTestSuite('caching', binPath, getTestOutputDir);
 
 // The suite indexes with the local ONNX model, fetched from huggingface.co on a cache miss.
-describe.skipIf(ONNX_MODEL_UNREACHABLE)('RAG caching and incremental updates (system test)', () => {
+describe.skipIf(onnxModelUnreachable())('RAG caching and incremental updates (system test)', () => {
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
 

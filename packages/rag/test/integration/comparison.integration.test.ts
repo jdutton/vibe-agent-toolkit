@@ -4,8 +4,10 @@
  * Compare different embedding providers.
  */
 
-import { atLeastTierTimeout, ONNX_MODEL_UNREACHABLE } from '@vibe-agent-toolkit/utils/testing';
+import { atLeastTierTimeout } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, inject, it } from 'vitest';
+
+import { onnxModelUnreachable } from '../../src/testing.js';
 
 import { assertUnitMagnitude } from './embedding-test-helpers.js';
 
@@ -14,7 +16,7 @@ import { assertUnitMagnitude } from './embedding-test-helpers.js';
 // ---------------------------------------------------------------------------
 
 // The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.
-describe.skipIf(ONNX_MODEL_UNREACHABLE)('ONNX Provider Comparison', () => {
+describe.skipIf(onnxModelUnreachable())('ONNX Provider Comparison', () => {
   const getProvider = async () => {
     const mod = await import('../../src/embedding-providers/onnx-embedding-provider.js');
     return new mod.OnnxEmbeddingProvider();

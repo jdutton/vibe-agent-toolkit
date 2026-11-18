@@ -84,8 +84,6 @@ describe('contrabandPopulation — what the confidentiality gate is allowed to m
   });
 });
 
-/** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
-
 /**
  * The content rules read every tracked file. A file that is absent from the
  * working tree (a sparse checkout, a delete not yet committed) has no content
@@ -103,6 +101,7 @@ describe('readTrackedFile — what an unreadable tracked file does to the gate',
     expect(recorded).toEqual([]);
   });
 
+  // `chmod 000` denies nothing to uid 0 and binds nothing on Windows.
   it.skipIf(CANNOT_DENY_READS)('returns null and records the refusal, naming the errno, for a file it may not read', async () => {
     const locked = safePath.join(root, 'locked.ts');
     writeFileSync(locked, '// locked\n', UTF8);
@@ -133,6 +132,7 @@ describe('walkDirectory — a directory the walk could not list', () => {
     expect(seen).toEqual([]);
   });
 
+  // `chmod 000` denies nothing to uid 0 and binds nothing on Windows.
   it.skipIf(CANNOT_DENY_READS)('throws rather than reporting the directory as empty when the listing is refused', () => {
     const locked = safePath.join(root, 'locked-dir');
     mkdirSyncReal(locked, { recursive: true });

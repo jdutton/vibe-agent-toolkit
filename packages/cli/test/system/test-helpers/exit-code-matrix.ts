@@ -26,6 +26,7 @@ import { chmodSync } from 'node:fs';
 import { basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { defaultOnnxCacheDir, onnxModelCached } from '@vibe-agent-toolkit/rag/testing';
 import {
   exitCodeForReport,
   type ExitDeterminingDocument,
@@ -35,7 +36,7 @@ import {
 } from '@vibe-agent-toolkit/schema';
 import { createSymlink, isPathAbsentError, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { buildWindowsShellLine, shouldUseShell } from '@vibe-agent-toolkit/utils/process';
-import { CANNOT_DENY_READS, findExecutable, gitExecutable, ONNX_MODEL_CACHE_DIR, ONNX_MODEL_CACHED } from '@vibe-agent-toolkit/utils/testing';
+import { CANNOT_DENY_READS, findExecutable, gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, expect, type TestContext } from 'vitest';
 import yaml from 'yaml';
 
@@ -269,15 +270,16 @@ function npmReachable(): boolean {
  */
 const SYMLINKS = symlinkCapability();
 function noOnnxModelReason(): string | undefined {
-  if (!ONNX_MODEL_CACHED) return 'no ONNX model is cached under ~/.cache/vat-onnx-models, and this suite never downloads one';
+  if (!onnxModelCached()) return `no ONNX model is cached under ${defaultOnnxCacheDir()}, and this suite never downloads one`;
   return SYMLINKS === null ? 'this host cannot link the model cache into a fake HOME' : undefined;
 }
 
 /** Point `home`'s model cache at the real one (a junction, so Windows needs no privilege). */
 function linkOnnxModelCache(home: string): void {
   if (SYMLINKS === null) throw new Error('linkOnnxModelCache needs symlinks; the scenario should have been skipped');
-  mkdirSyncReal(safePath.join(home, '.cache'), { recursive: true });
-  createSymlink(SYMLINKS, ONNX_MODEL_CACHE_DIR, safePath.join(home, '.cache', 'vat-onnx-models'), 'junction');
+  const linked = defaultOnnxCacheDir(home);
+  mkdirSyncReal(safePath.join(linked, '..'), { recursive: true });
+  createSymlink(SYMLINKS, defaultOnnxCacheDir(), linked, 'junction');
 }
 
 /** A RAG database path of the scenario's own, not yet created. */

@@ -4,11 +4,12 @@
  * project's `resources.validation` alone, as `vat resources validate` resolves it.
  *
  * 1,001 nested lists under the frontmatter mapping: past the default `outputDepth` limit
- * (1,000; at 999 lists the document is admitted), so every lane refuses it under one code
- * and the refusal is key-determined. What this file proves is how each verb treats a
- * refused SKILL.md, whichever limit refused it. A stack overflow (50,000 levels) is
- * per-run and never stored, so every verb here re-parsed 100 KB to the overflow; that
- * path has suites of its own (`skill-name-overflow`, `in-process-parse-overflow`).
+ * (1,000; at 999 lists the document is admitted), so every lane refuses it under one code.
+ * What this file proves is how each verb treats a refused SKILL.md, whichever limit refused
+ * it. Every parse-limit breach is per-run and stored nowhere, so each verb here re-parses
+ * the document; the output cap stops a few KB in, where a stack overflow (50,000 levels)
+ * re-parsed 100 KB to the overflow every time. That path has suites of its own
+ * (`skill-name-overflow`, `in-process-parse-overflow`).
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';

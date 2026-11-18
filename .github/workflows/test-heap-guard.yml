@@ -20,5 +20,12 @@ jobs:
       - name: Setup toolchain
         uses: ./.github/actions/setup
 
+      # NET_AVAILABLE as in validate.yml: the guard re-runs the CLI's integration
+      # and system tiers, and the rag suites there embed with the ONNX model,
+      # which a fresh runner must download. Without it they skip and their heap
+      # goes unmeasured.
       - name: Run heap-budget guard
         run: bun run guard:test-heap
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NET_AVAILABLE: "1"

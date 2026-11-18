@@ -21,10 +21,10 @@ import { basename, dirname } from 'node:path';
 
 import type * as Utils from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { installFaultFs, ONNX_MODEL_FILES, removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
+import { installFaultFs, removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ensureModelFiles } from '../../src/embedding-providers/onnx-utils.js';
+import { ensureModelFiles, onnxModelFiles } from '../../src/embedding-providers/onnx-utils.js';
 
 const fsCalls = vi.hoisted(() => ({
   writeFilePaths: [] as string[],
@@ -172,20 +172,22 @@ describe('ensureModelFiles publication', () => {
     }
   });
 
-  it('reads the files the shared ONNX test gate checks without a fetch, so a gated suite never reaches the network', async () => {
-    // `ONNX_MODEL_UNREACHABLE` (utils/testing) lets a suite that embeds run offline when it
-    // sees these files cached. If this lookup and that list ever disagree, a "cached" run
-    // downloads after all; this pins them together.
+  it('fetches nothing when the files onnxModelFiles names are cached, so a gated suite never reaches the network', async () => {
+    // `onnxModelUnreachable` (rag/testing) lets a suite that embeds run offline when it
+    // sees the files `onnxModelFiles` names. If the download looked anywhere else, a
+    // "cached" run would download after all.
     const fetchSpy = stubFetch();
-    for (const file of ONNX_MODEL_FILES) {
-      await mkdir(dirname(safePath.join(cacheDir, file)), { recursive: true });
-      await writeFile(safePath.join(cacheDir, file), 'planted');
+    const files = onnxModelFiles(MODEL_ID, cacheDir, true);
+    for (const file of [files.modelPath, files.vocabPath]) {
+      await mkdir(dirname(file), { recursive: true });
+      await writeFile(file, 'planted');
     }
 
     const { modelPath, vocabPath } = await ensureModelFiles(MODEL_ID, cacheDir, true);
 
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect([modelPath, vocabPath]).toEqual(ONNX_MODEL_FILES.map((file) => safePath.join(cacheDir, file)));
+    expect({ modelPath, vocabPath }).toEqual(files);
+    expect(modelPath).toBe(safePath.join(cacheDir, 'Xenova_all-MiniLM-L6-v2', MODEL_FILE));
   });
 
   it('leaves no temp files behind after a successful download', async () => {

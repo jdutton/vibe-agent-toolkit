@@ -6,11 +6,16 @@
  * error/dispose paths without a real model download or WASM inference.
  */
 
-import { ONNX_MODEL_CACHE_DIR } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import { OnnxEmbeddingProvider } from '../../src/embedding-providers/onnx-embedding-provider.js';
-import { BertTokenizer, ensureModelFiles } from '../../src/embedding-providers/onnx-utils.js';
+import {
+  BertTokenizer,
+  DEFAULT_ONNX_MODEL,
+  DEFAULT_ONNX_QUANTIZED,
+  defaultOnnxCacheDir,
+  ensureModelFiles,
+} from '../../src/embedding-providers/onnx-utils.js';
 import type * as OnnxUtils from '../../src/embedding-providers/onnx-utils.js';
 
 const mockRelease = vi.fn();
@@ -105,15 +110,15 @@ describe('OnnxEmbeddingProvider - session lifecycle', () => {
     installProviderMocks(NO_TRUNCATION);
   });
 
-  it('looks for the default model in the cache the shared ONNX test gate checks', async () => {
-    // `ONNX_MODEL_UNREACHABLE` (utils/testing) decides whether a suite that embeds runs
-    // offline by looking in ONNX_MODEL_CACHE_DIR; a provider looking elsewhere would make
-    // every "cached" run download after all.
+  it('looks for the default model in the default cache the ONNX test gate probes', async () => {
+    // `onnxModelUnreachable` (rag/testing) decides whether a suite that embeds runs offline
+    // by probing these same defaults; a provider looking elsewhere would make every
+    // "cached" run download after all.
     const provider = new OnnxEmbeddingProvider();
 
     await provider.embed('hello');
 
-    expect(mockEnsureModelFiles).toHaveBeenCalledWith('Xenova/all-MiniLM-L6-v2', ONNX_MODEL_CACHE_DIR, true);
+    expect(mockEnsureModelFiles).toHaveBeenCalledWith(DEFAULT_ONNX_MODEL, defaultOnnxCacheDir(), DEFAULT_ONNX_QUANTIZED);
   });
 
   it('dispose() before any embed call is a no-op', async () => {

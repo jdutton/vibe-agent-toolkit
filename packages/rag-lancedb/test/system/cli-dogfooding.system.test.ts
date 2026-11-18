@@ -18,8 +18,9 @@ import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 
 
+import { onnxModelUnreachable } from '@vibe-agent-toolkit/rag/testing';
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { getTestOutputDir, NODE_EXECUTABLE, ONNX_MODEL_UNREACHABLE } from '@vibe-agent-toolkit/utils/testing';
+import { getTestOutputDir, NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { parse } from 'yaml';
 
@@ -167,7 +168,7 @@ function queryTopResourceId(cli: CliTarget, query: string): string {
 // no skip guard here to remove; the fix is that the abort no longer happens.)
 // One workflow whose first step indexes with the local ONNX model, fetched from huggingface.co on a
 // cache miss; every later step reads that index, so the gate is on the whole describe.
-describe.skipIf(ONNX_MODEL_UNREACHABLE)('RAG CLI (Node.js dogfooding)', () => {
+describe.skipIf(onnxModelUnreachable())('RAG CLI (Node.js dogfooding)', () => {
   const projectRoot = safePath.resolve(__dirname, '../../../..');
   const binPath = safePath.join(projectRoot, 'packages/cli/dist/bin.js');
   // Use isolated test output directory to avoid conflicts in parallel test execution

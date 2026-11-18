@@ -7,8 +7,9 @@
 
 import { chmodSync } from 'node:fs';
 
+import { onnxModelUnreachable } from '@vibe-agent-toolkit/rag/testing';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
-import { CANNOT_DENY_READS, ONNX_MODEL_UNREACHABLE } from '@vibe-agent-toolkit/utils/testing';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 
 import { RAG_STATS_REPORT_SCHEMA } from '../../src/commands/rag/admin-schema.js';
 
@@ -34,7 +35,7 @@ async function refusalOf(args: string[], dbPath: string): Promise<{ exit: number
 }
 
 // The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.
-describe.skipIf(ONNX_MODEL_UNREACHABLE)('RAG stats command (system test)', () => {
+describe.skipIf(onnxModelUnreachable())('RAG stats command (system test)', () => {
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
 
