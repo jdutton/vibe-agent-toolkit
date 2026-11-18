@@ -18,18 +18,18 @@
  * first use and cached under `~/.cache/vat-onnx-models`.
  */
 
-import { homedir } from 'node:os';
-
-import { safePath } from '@vibe-agent-toolkit/utils';
-
 import type { EmbeddingProvider } from '../interfaces/embedding.js';
 
 import {
   BertTokenizer,
+  DEFAULT_ONNX_MODEL,
+  DEFAULT_ONNX_QUANTIZED,
+  defaultOnnxCacheDir,
   IncompatibleVocabError,
   ensureModelFiles,
   l2Normalize,
   meanPooling,
+  onnxModelFilesIn,
 } from './onnx-utils.js';
 
 /**
@@ -254,11 +254,11 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
    * @param config - Optional configuration
    */
   constructor(config: OnnxEmbeddingConfig = {}) {
-    this.model = config.model ?? 'Xenova/all-MiniLM-L6-v2';
+    this.model = config.model ?? DEFAULT_ONNX_MODEL;
     this.dimensions = config.dimensions ?? 384;
     this.configModelPath = config.modelPath;
-    this.cacheDir = config.cacheDir ?? safePath.join(homedir(), '.cache', 'vat-onnx-models');
-    this.quantized = config.quantized ?? true;
+    this.cacheDir = config.cacheDir ?? defaultOnnxCacheDir();
+    this.quantized = config.quantized ?? DEFAULT_ONNX_QUANTIZED;
     this.maxInputTokens = config.maxSequenceLength ?? 256;
     this.numThreads = config.numThreads ?? 1;
     this.onTruncation = config.onTruncation;
@@ -297,14 +297,11 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
     // Single-threaded WASM: no worker threads spawned, deterministic, clean teardown.
     ort.env.wasm.numThreads = this.numThreads;
 
-    const onnxFileName = this.quantized ? 'model_quantized.onnx' : 'model.onnx';
-
     let modelPath: string;
     let vocabPath: string;
 
     if (this.configModelPath) {
-      modelPath = safePath.join(this.configModelPath, onnxFileName);
-      vocabPath = safePath.join(this.configModelPath, 'vocab.txt');
+      ({ modelPath, vocabPath } = onnxModelFilesIn(this.configModelPath, this.quantized));
     } else {
       try {
         const files = await ensureModelFiles(this.model, this.cacheDir, this.quantized);

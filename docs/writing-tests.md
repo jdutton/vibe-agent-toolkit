@@ -78,10 +78,9 @@ bounds nothing an unlisted file is not already bound to; the allowlist test refu
 and the seed script prints `DELIST` for one that has become so.
 
 **When the reporter fails your new or changed file:** first ask whether the file is in the right
-tier (a unit file that builds a real temp tree belongs in integration; one that spawns a process —
-`git init` included — belongs in system, per the classification table below). The same question is asked at the desk by `local/no-io-in-unit-tier`, which flags
+tier, per the [classification table](#test-classification-rules) below. The same question is asked at the desk by `local/no-io-in-unit-tier`, which flags
 `mkdtemp*`, `spawn*`, `exec*` and `child_process` imports in a unit-tier file; its `allowFiles`
-ratchet in `eslint.config.js` names today's 116 offenders and may only shrink. The two ratchets
+ratchet in `eslint.config.js` names today's offenders and may only shrink. The two ratchets
 overlap by only a third — I/O is not the only thing that makes a file slow — so a file leaving one
 list should be checked against the other. If the work is legitimate for its tier, add an entry with the mechanism as its
 reason. To re-seed a tier: save the serial root run's output — the coverage job's log
@@ -196,7 +195,8 @@ Misclassified tests are the #1 cause of flaky CI and slow unit test suites. If y
 |----------------|-----------------|-----|
 | Makes real HTTP requests | **Integration** | Network flakiness breaks CI; 2-15s per request |
 | Loads ML models (ONNX) | **Integration** | Model loading + first-run download costs 2-5s |
-| Spawns child processes (`spawnSync`, `exec`) | **System** | Node startup overhead ~1-2s per spawn |
+| Spawns a helper process (`git`, a fixture script) | **Integration** | A real process and real files; tens of ms per spawn |
+| Drives the built `vat` CLI end to end | **System** | Node startup overhead ~1-2s per spawn |
 | Connects to a real database | **Integration** | Requires external service |
 | Reads/writes real files (not mocked) | **Integration** | I/O-dependent, slower |
 
@@ -212,6 +212,12 @@ must fail DNS, use the reserved `.invalid` TLD (RFC 2606), which no resolver ans
 Only a suite whose subject IS a public service (cloning a GitHub repository) reaches the network,
 and it is gated on `NET_AVAILABLE=1`, which CI sets: `describe.skipIf(process.env.NET_AVAILABLE !== '1')`.
 Never gate on `CI`: `bun run validate` sets `CI=1` locally, so such a suite runs nowhere.
+
+A test that embeds with the local ONNX model reaches huggingface.co whenever the model cache is
+cold. Gate it on `onnxModelUnreachable()` from `packages/rag/test/onnx-model-gate.ts`
+(`describe.skipIf(onnxModelUnreachable())` or `it.skipIf(...)`): it runs when the model is already
+cached, touching no network, or when `NET_AVAILABLE=1`, and skips otherwise. Gate only the tests
+that embed; a refusal that never reaches the model runs everywhere.
 
 **Platform skips need a reason at the site.** Every `it.skipIf(process.platform === 'win32')` /
 `describe.skipIf(...)` carries a one-line comment naming the mechanism that cannot run there (a

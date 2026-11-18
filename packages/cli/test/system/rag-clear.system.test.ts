@@ -11,6 +11,7 @@ import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe
 import { CANNOT_DENY_READS, type FaultFsSpec } from '@vibe-agent-toolkit/utils/testing';
 import YAML from 'yaml';
 
+import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { RAG_CLEAR_REPORT_SCHEMA } from '../../src/commands/rag/admin-schema.js';
 
 import { describe, executeCliAndParseYaml, expect, FINDER_DS_STORE, fs, getBinPath, getTestOutputDir, it, setupRagTestSuite } from './rag-test-setup.js';
@@ -56,7 +57,8 @@ function copyOfDatabase(name: string): string {
   return copy;
 }
 
-describe('RAG clear command (system test)', () => {
+// The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.
+describe.skipIf(onnxModelUnreachable())('RAG clear command (system test)', () => {
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
 

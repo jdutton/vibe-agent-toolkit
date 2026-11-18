@@ -4,6 +4,7 @@
  * Tests that RAG correctly detects unchanged files and skips re-indexing.
  */
 
+import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { RAG_INDEX_REPORT_SCHEMA, type RagIndexData } from '../../src/commands/rag/index-schema.js';
 
 import {
@@ -27,7 +28,8 @@ function dataOf(parsed: Record<string, unknown>): RagIndexData {
 }
 const suite = setupRagTestSuite('caching', binPath, getTestOutputDir);
 
-describe('RAG caching and incremental updates (system test)', () => {
+// The suite indexes with the local ONNX model, fetched from huggingface.co on a cache miss.
+describe.skipIf(onnxModelUnreachable())('RAG caching and incremental updates (system test)', () => {
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
 

@@ -16,10 +16,12 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 
+import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
 import { createTempDir, createTestMarkdownFile, fileChecksum } from '../test-helpers.js';
 
-describe('Custom metadata system tests', () => {
+// The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.
+describe.skipIf(onnxModelUnreachable())('Custom metadata system tests', () => {
   let tempDir: string;
   let dbPath: string;
   const embeddingProvider = new OnnxEmbeddingProvider();

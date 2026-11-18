@@ -904,17 +904,16 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 ### Tests in the wrong tier
 
 - **Severity:** Minor · **Effort:** M · **User-visible:** no
-- **Mechanism:** the tier table puts "spawns child processes" in System. 19 of the 60
-  `packages/cli/test/integration` files spawn a process directly, counted by grepping for
-  `child_process`, `executeCli`, `bin.js`, `spawnSync` and `execSync`; three more run git through
-  a helper. Outside the CLI, nine of the 18 `utils` integration files spawn too: seven directly
-  (`eslint-recommended-config`, `file-crawler`, `git-ignore-oracle-parity`, `git-utils`,
-  `safe-exec`, `spawn-hardened`, `spawn-claude-watchdog`) and two through the git helpers
-  (`git-hook-env`, `git-snapshot-unreadable`).
+- **Mechanism:** the [tier table](../writing-tests.md#test-classification-rules) puts a test that
+  drives the built `vat` CLI end to end in System; spawning a helper such as `git` is Integration.
+  Some integration files still drive the built CLI. Grepping integration files for `bin.js`,
+  `executeCli`, `runCli`, `getBinPath` and `dist/bin` finds candidates, most under
+  `packages/cli/test/integration` and `packages/lab/test/integration`; each needs reading, since a
+  match can name a binary without running it.
 - **Where:** [`packages/cli/test/integration/`](../../packages/cli/test/integration/),
-  [`packages/utils/test/integration/`](../../packages/utils/test/integration/)
-- **Fix:** move each spawning file to `*.system.test.ts` by rename. Never raise a budget or add
-  an allowlist entry for one.
+  [`packages/lab/test/integration/`](../../packages/lab/test/integration/)
+- **Fix:** move each file that runs the built CLI end to end to `*.system.test.ts` by rename. Never
+  raise a budget or add an allowlist entry for one.
 
 ### Exit-code matrix scenarios that never run on CI
 

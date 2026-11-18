@@ -17,10 +17,12 @@
 import { atLeastTierTimeout } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, inject, it } from 'vitest';
 
+import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
 import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite } from '../test-helpers.js';
 
-describe('Metadata Filtering with Flattened Schema', () => {
+// The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.
+describe.skipIf(onnxModelUnreachable())('Metadata Filtering with Flattened Schema', () => {
   const suite = setupLanceDBTestSuite();
 
   beforeEach(suite.beforeEach);

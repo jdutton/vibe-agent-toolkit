@@ -10,6 +10,7 @@ import { chmodSync } from 'node:fs';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 
+import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { RAG_STATS_REPORT_SCHEMA } from '../../src/commands/rag/admin-schema.js';
 
 import {
@@ -33,7 +34,8 @@ async function refusalOf(args: string[], dbPath: string): Promise<{ exit: number
   return { exit: result.status, code: (parsed['error'] as { code?: unknown } | undefined)?.code };
 }
 
-describe('RAG stats command (system test)', () => {
+// The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.
+describe.skipIf(onnxModelUnreachable())('RAG stats command (system test)', () => {
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
 

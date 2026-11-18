@@ -23,10 +23,11 @@
  * root, where `chmod 000` denies nothing.
  */
 
-import { getTestOutputDir , CANNOT_DENY_READS, overOutputRowsMarkdown } from '@vibe-agent-toolkit/utils/testing';
+import { CANNOT_DENY_READS, getTestOutputDir, overOutputRowsMarkdown } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, it } from 'vitest';
 import yaml from 'yaml';
 
+import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { RAG_INDEX_REPORT_SCHEMA } from '../../src/commands/rag/index-schema.js';
 
 import {
@@ -69,7 +70,7 @@ describe('RAG index command (system test)', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('should index markdown files into RAG database', async () => {
+  it.skipIf(onnxModelUnreachable())('should index markdown files into RAG database', async () => {
     const { result, parsed } = await executeCliAndParseYaml(
       binPath,
       ['rag', 'index', projectDir, '--db', dbPath],
@@ -91,7 +92,7 @@ describe('RAG index command (system test)', () => {
     expect(fs.existsSync(dbPath)).toBe(true);
   });
 
-  it('should index successfully on re-run', async () => {
+  it.skipIf(onnxModelUnreachable())('should index successfully on re-run', async () => {
     // Create a new project for this test with isolated database
     const reindexProjectDir = setupTestProject(tempDir, {
       name: 'reindex-test-project',
@@ -135,7 +136,7 @@ describe('RAG index command (system test)', () => {
     });
   });
 
-  it.skipIf(CANNOT_DENY_READS)(
+  it.skipIf(CANNOT_DENY_READS || onnxModelUnreachable())(
     'reports a RESOURCE_UNREADABLE finding and exits 1 when a declared resource cannot be read, naming it',
     async () => {
       const unreadableProjectDir = setupTestProject(tempDir, {
@@ -171,7 +172,7 @@ describe('RAG index command (system test)', () => {
   // pool's DEFAULT `outputRows` (16,384 — 20,000 links is real and cheap) is refused
   // by the crawl, so it never reaches the provider and sits in no list but the
   // registry's refusal log. Unread, the run indexed the rest and said `ok`.
-  it('reports a document whose parse was refused as an error finding and exits 1, naming it', async () => {
+  it.skipIf(onnxModelUnreachable())('reports a document whose parse was refused as an error finding and exits 1, naming it', async () => {
     const refusedProjectDir = setupTestProject(tempDir, { name: 'refused-test-project', withDocs: true });
     const refusedDbPath = getTestOutputDir('cli', 'system', 'rag-index-refused-db');
     const docsDir = safePath.join(refusedProjectDir, 'docs');
@@ -249,7 +250,7 @@ describe('RAG index command (system test)', () => {
   });
 
   // Operating-system litter says nothing about whose directory it is, as stats and clear already hold.
-  it('a --db directory holding only OS litter is indexed into', async () => {
+  it.skipIf(onnxModelUnreachable())('a --db directory holding only OS litter is indexed into', async () => {
     const littered = safePath.join(tempDir, 'index-into-littered');
     fs.mkdirSync(littered);
     fs.writeFileSync(safePath.join(littered, '.DS_Store'), FINDER_DS_STORE);

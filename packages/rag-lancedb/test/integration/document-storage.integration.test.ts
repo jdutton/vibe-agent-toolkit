@@ -13,6 +13,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
 import {
   createLinkRewriteTransform,
@@ -45,7 +46,7 @@ describe('LanceDB Document Storage Integration', () => {
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
 
-  it('should store and retrieve a document by resourceId', async () => {
+  it.skipIf(onnxModelUnreachable())('should store and retrieve a document by resourceId', async () => {
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath, ...STORE_DOCS_CONFIG });
 
     const filePath = await createTestMarkdownFile(
@@ -80,7 +81,7 @@ Content in section 1 about testing.`
     expect(doc?.indexedAt.getTime()).toBeGreaterThan(0);
   });
 
-  it('should store transformed content when contentTransform is configured', async () => {
+  it.skipIf(onnxModelUnreachable())('should store transformed content when contentTransform is configured', async () => {
     const contentTransform = createLinkRewriteTransform('{{link.text}} (see: {{link.href}})');
 
     suite.provider = await LanceDBRAGProvider.create({
@@ -113,7 +114,7 @@ This references [another file](./other.md) for details.`
     expect(doc?.content).not.toContain('[another file](./other.md)');
   });
 
-  it('should store metadata from frontmatter on document records', async () => {
+  it.skipIf(onnxModelUnreachable())('should store metadata from frontmatter on document records', async () => {
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath, ...STORE_DOCS_CONFIG });
 
     const filePath = await createTestMarkdownFile(
@@ -145,7 +146,7 @@ Important security information about authentication.`
     expect(doc?.metadata['type']).toBe('guide');
   });
 
-  it('should return null when storeDocuments is not enabled', async () => {
+  it.skipIf(onnxModelUnreachable())('should return null when storeDocuments is not enabled', async () => {
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath });
 
     const filePath = await createTestMarkdownFile(
@@ -161,7 +162,7 @@ Important security information about authentication.`
     expect(doc).toBeNull();
   });
 
-  it('should return null for nonexistent resourceId', async () => {
+  it.skipIf(onnxModelUnreachable())('should return null for nonexistent resourceId', async () => {
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath, ...STORE_DOCS_CONFIG });
 
     const filePath = await createTestMarkdownFile(
@@ -179,7 +180,7 @@ Important security information about authentication.`
     expect(doc).toBeNull();
   });
 
-  it('should update document when resource content changes', async () => {
+  it.skipIf(onnxModelUnreachable())('should update document when resource content changes', async () => {
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath, ...STORE_DOCS_CONFIG });
 
     const originalPath = await createTestMarkdownFile(
@@ -209,7 +210,7 @@ Important security information about authentication.`
   });
 
   // @ts-expect-error - Bun global is available at runtime
-  it.skipIf(typeof Bun !== 'undefined')(
+  it.skipIf(typeof Bun !== 'undefined' || onnxModelUnreachable())(
     'should remove document when resource is deleted',
     async () => {
       suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath, ...STORE_DOCS_CONFIG });
@@ -236,7 +237,7 @@ Important security information about authentication.`
     }
   );
 
-  it('should default storeDocuments to false (no documents table created)', async () => {
+  it.skipIf(onnxModelUnreachable())('should default storeDocuments to false (no documents table created)', async () => {
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath });
 
     const filePath = await createTestMarkdownFile(
@@ -254,7 +255,7 @@ Important security information about authentication.`
     expect(doc).toBeNull();
   });
 
-  it('should store multiple documents and retrieve each independently', async () => {
+  it.skipIf(onnxModelUnreachable())('should store multiple documents and retrieve each independently', async () => {
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath, ...STORE_DOCS_CONFIG });
 
     const file1 = await createTestMarkdownFile(
@@ -285,7 +286,7 @@ Important security information about authentication.`
     expect(doc2?.content).toContain('Second document content');
   });
 
-  it('should preserve existing documents when indexing new resources', async () => {
+  it.skipIf(onnxModelUnreachable())('should preserve existing documents when indexing new resources', async () => {
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath, ...STORE_DOCS_CONFIG });
 
     const file1 = await createTestMarkdownFile(
@@ -315,7 +316,7 @@ Important security information about authentication.`
     expect(doc2?.content).toContain('Second batch content');
   });
 
-  it('should track totalChunks accurately on document record', async () => {
+  it.skipIf(onnxModelUnreachable())('should track totalChunks accurately on document record', async () => {
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath, ...STORE_DOCS_CONFIG });
 
     const filePath = await createTestMarkdownFile(
@@ -341,7 +342,7 @@ Important security information about authentication.`
    * schema"). Chunk rows never had this problem: they write every metadata
    * column on every row, sentinel or not, and document rows now do the same.
    */
-  it('stores a later document whose frontmatter carries a field the first document did not', async () => {
+  it.skipIf(onnxModelUnreachable())('stores a later document whose frontmatter carries a field the first document did not', async () => {
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath, ...STORE_DOCS_CONFIG });
 
     const bare = await createTestResource(

@@ -20,5 +20,14 @@ jobs:
       - name: Setup toolchain
         uses: ./.github/actions/setup
 
+      # NET_AVAILABLE as in validate.yml: the guard re-runs the CLI's integration
+      # and system tiers, and the rag suites there embed with the ONNX model,
+      # which a fresh runner must download from huggingface.co. Without it they
+      # skip and their heap goes unmeasured. It also turns on the CLI's GitHub
+      # clone suites (audit-git-url, corpus-scan), so this guard depends on
+      # huggingface.co and github.com. No GH_TOKEN: those clones are of public
+      # repositories and nothing in these tiers reads one.
       - name: Run heap-budget guard
         run: bun run guard:test-heap
+        env:
+          NET_AVAILABLE: "1"

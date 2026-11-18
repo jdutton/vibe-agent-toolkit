@@ -9,7 +9,13 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import { OnnxEmbeddingProvider } from '../../src/embedding-providers/onnx-embedding-provider.js';
-import { BertTokenizer, ensureModelFiles } from '../../src/embedding-providers/onnx-utils.js';
+import {
+  BertTokenizer,
+  DEFAULT_ONNX_MODEL,
+  DEFAULT_ONNX_QUANTIZED,
+  defaultOnnxCacheDir,
+  ensureModelFiles,
+} from '../../src/embedding-providers/onnx-utils.js';
 import type * as OnnxUtils from '../../src/embedding-providers/onnx-utils.js';
 
 const mockRelease = vi.fn();
@@ -102,6 +108,17 @@ const NO_TRUNCATION = batchLosing(0, 0);
 describe('OnnxEmbeddingProvider - session lifecycle', () => {
   beforeEach(() => {
     installProviderMocks(NO_TRUNCATION);
+  });
+
+  it('looks for the default model in the default cache the ONNX test gate probes', async () => {
+    // `onnxModelUnreachable` (test/onnx-model-gate.ts) decides whether a suite that embeds runs offline
+    // by probing these same defaults; a provider looking elsewhere would make every
+    // "cached" run download after all.
+    const provider = new OnnxEmbeddingProvider();
+
+    await provider.embed('hello');
+
+    expect(mockEnsureModelFiles).toHaveBeenCalledWith(DEFAULT_ONNX_MODEL, defaultOnnxCacheDir(), DEFAULT_ONNX_QUANTIZED);
   });
 
   it('dispose() before any embed call is a no-op', async () => {

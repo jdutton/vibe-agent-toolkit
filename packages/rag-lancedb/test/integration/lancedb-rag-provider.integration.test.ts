@@ -6,6 +6,7 @@
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
 import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite } from '../test-helpers.js';
 
@@ -24,7 +25,7 @@ describe('LanceDBRAGProvider - Database Size Calculation', () => {
     expect(stats.totalResources).toBe(0);
   });
 
-  it('should calculate non-zero database size after indexing', async () => {
+  it.skipIf(onnxModelUnreachable())('should calculate non-zero database size after indexing', async () => {
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath });
 
     // Create test markdown file

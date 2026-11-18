@@ -15,6 +15,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
 import { caughtFrom, expectUnrecognizedKeys } from '../refusal-assertions.js';
 import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite } from '../test-helpers.js';
@@ -70,7 +71,7 @@ describe('unsupported queries are refused rather than widened', () => {
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
 
-  it('returns the whole index when no filter is supplied (the control)', async () => {
+  it.skipIf(onnxModelUnreachable())('returns the whole index when no filter is supplied (the control)', async () => {
     suite.provider = await indexTwoDocuments();
 
     const result = await suite.provider.query({ text: QUERY_TEXT, limit: 10 });
@@ -80,7 +81,7 @@ describe('unsupported queries are refused rather than widened', () => {
     expect(ids).toContain(RESTRICTED_DOC);
   });
 
-  it('honours a resourceId filter, so refusal is not the only outcome', async () => {
+  it.skipIf(onnxModelUnreachable())('honours a resourceId filter, so refusal is not the only outcome', async () => {
     suite.provider = await indexTwoDocuments();
 
     const result = await suite.provider.query({
@@ -94,7 +95,7 @@ describe('unsupported queries are refused rather than widened', () => {
     expect(ids).not.toContain(RESTRICTED_DOC);
   });
 
-  it('refuses a query filtered only by dateRange instead of returning both documents', async () => {
+  it.skipIf(onnxModelUnreachable())('refuses a query filtered only by dateRange instead of returning both documents', async () => {
     suite.provider = await indexTwoDocuments();
 
     const error = await caughtFrom(() =>
@@ -144,7 +145,7 @@ describe('unsupported queries are refused rather than widened', () => {
     expectUnrecognizedKeys(error, ['tags', 'type'], ['filters']);
   });
 
-  it('returns NOTHING for an empty tag list, rather than the whole index', async () => {
+  it.skipIf(onnxModelUnreachable())('returns NOTHING for an empty tag list, rather than the whole index', async () => {
     // 🚨 The consequence a unit test states and only a real query can demonstrate. An
     // empty array stringifies to the empty string, so `metadata: { tags: [] }` produced
     // `tags LIKE '%%'` — a condition matching every row. It satisfied the "did any
@@ -162,7 +163,7 @@ describe('unsupported queries are refused rather than widened', () => {
     expect(result.chunks).toHaveLength(0);
   });
 
-  it.each([
+  it.skipIf(onnxModelUnreachable()).each([
     { label: 'a list holding one empty tag', value: [''] },
     { label: 'a bare empty string', value: '' },
     { label: 'a list holding an empty list', value: [[]] },

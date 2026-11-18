@@ -557,10 +557,22 @@ function validateTestFileNaming(): void {
 export function contrabandPopulation(repoRoot: string): readonly string[] {
   // `trim: false` — NUL-delimited, and a path beginning with a space sorts
   // first, so a trim would rename it out of a confidentiality population.
-  const listing = (...args: string[]): string[] =>
-    String(runGitOrThrow(['ls-files', '-z', ...args], { cwd: repoRoot, trim: false })).split('\0');
+  const listing = (...args: string[]): string =>
+    String(runGitOrThrow(['ls-files', '-z', ...args], { cwd: repoRoot, trim: false }));
 
-  return [...new Set([...listing(), ...listing('--others', '--exclude-standard')])]
+  return mergeContrabandListings([listing(), listing('--others', '--exclude-standard')]);
+}
+
+/**
+ * The pure half of {@link contrabandPopulation}: merge NUL-delimited `git ls-files -z`
+ * listings into one population — each path once, empty entries and binaries dropped,
+ * every other byte of a path kept (a leading space is part of the name).
+ *
+ * @param listings - Raw `ls-files -z` outputs, in the order git produced them
+ * @returns Repo-relative paths, deduplicated, binaries removed
+ */
+export function mergeContrabandListings(listings: readonly string[]): readonly string[] {
+  return [...new Set(listings.flatMap((listing) => listing.split('\0')))]
     .filter((p) => p.length > 0)
     .filter((p) => !BINARY_EXTENSION.test(p));
 }

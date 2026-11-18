@@ -9,7 +9,8 @@
 
 import { randomUUID } from 'node:crypto';
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, dirname } from 'node:path';
 
 import { isPathAbsentError, renameFileAtomic, requireFollowedStat, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
@@ -725,6 +726,36 @@ function progress(line: string): void {
   process.stderr.write(`[vat-onnx] ${line}\n`);
 }
 
+/** The model `OnnxEmbeddingProvider` embeds with when its config names none. */
+export const DEFAULT_ONNX_MODEL = 'Xenova/all-MiniLM-L6-v2';
+
+/** Whether the provider fetches the int8-quantized weights when its config does not say. */
+export const DEFAULT_ONNX_QUANTIZED = true;
+
+/** The provider's model cache when its config names none, under `home` (the user's by default). */
+export function defaultOnnxCacheDir(home: string = homedir()): string {
+  return safePath.join(home, '.cache', 'vat-onnx-models');
+}
+
+/** The weights and the vocabulary of one model, as absolute paths. */
+interface OnnxModelFiles {
+  modelPath: string;
+  vocabPath: string;
+}
+
+/** The files a model directory holds: the weights (quantized or fp32) and `vocab.txt`. */
+export function onnxModelFilesIn(modelDir: string, quantized: boolean): OnnxModelFiles {
+  return {
+    modelPath: safePath.join(modelDir, quantized ? 'model_quantized.onnx' : 'model.onnx'),
+    vocabPath: safePath.join(modelDir, 'vocab.txt'),
+  };
+}
+
+/** Where a model's files live in a cache: the one statement of the cache layout. */
+export function onnxModelFiles(modelId: string, cacheDir: string, quantized: boolean): OnnxModelFiles {
+  return onnxModelFilesIn(safePath.join(cacheDir, modelId.replaceAll('/', '_')), quantized);
+}
+
 /**
  * Ensure that the ONNX weights and vocab.txt files are available locally.
  *
@@ -742,12 +773,10 @@ function progress(line: string): void {
 export async function ensureModelFiles(
   modelId: string,
   cacheDir: string,
-  quantized = true,
-): Promise<{ modelPath: string; vocabPath: string }> {
-  const onnxFileName = quantized ? 'model_quantized.onnx' : 'model.onnx';
-  const modelDir = safePath.join(cacheDir, modelId.replaceAll('/', '_'));
-  const modelPath = safePath.join(modelDir, onnxFileName);
-  const vocabPath = safePath.join(modelDir, 'vocab.txt');
+  quantized = DEFAULT_ONNX_QUANTIZED,
+): Promise<OnnxModelFiles> {
+  const { modelPath, vocabPath } = onnxModelFiles(modelId, cacheDir, quantized);
+  const onnxFileName = basename(modelPath);
 
   const baseUrl = `https://huggingface.co/${modelId}/resolve/main`;
 

@@ -8,10 +8,12 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
 import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite } from '../test-helpers.js';
 
-describe('Backward compatibility', () => {
+// The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.
+describe.skipIf(onnxModelUnreachable())('Backward compatibility', () => {
   const TEST_SEARCH_TERM = 'documentation';
   const SECURITY_DOC_ID = 'security-doc';
 

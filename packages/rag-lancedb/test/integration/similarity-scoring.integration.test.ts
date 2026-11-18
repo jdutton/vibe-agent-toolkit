@@ -6,9 +6,11 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite } from '../test-helpers.js';
 
-describe('Similarity Scoring', () => {
+// The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.
+describe.skipIf(onnxModelUnreachable())('Similarity Scoring', () => {
   const suite = setupLanceDBTestSuite(true);
 
   beforeEach(suite.beforeEach);

@@ -22,8 +22,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { chmodSync } from 'node:fs';
 import { basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -40,6 +39,7 @@ import { CANNOT_DENY_READS, findExecutable, gitExecutable } from '@vibe-agent-to
 import { afterAll, beforeAll, expect, type TestContext } from 'vitest';
 import yaml from 'yaml';
 
+import { defaultOnnxCacheDir, onnxModelCached } from '../../../../rag/test/onnx-model-gate.js';
 import { PUBLISHED_SHAPES } from '../../../src/report-schemas.js';
 import { cleanupTestTempDir, createTestTempDir, fakeHomeEnv, getBinPath, writeFileTree } from '../test-common.js';
 
@@ -268,19 +268,18 @@ function npmReachable(): boolean {
  * embeds links it into its fake HOME; without it the provider would download
  * the model, which this suite never does — so such a scenario is skipped.
  */
-const ONNX_MODEL_CACHE = safePath.join(homedir(), '.cache', 'vat-onnx-models');
-const ONNX_MODEL_CACHED = ['model_quantized.onnx', 'vocab.txt'].every((file) => existsSync(safePath.join(ONNX_MODEL_CACHE, 'Xenova_all-MiniLM-L6-v2', file)));
 const SYMLINKS = symlinkCapability();
 function noOnnxModelReason(): string | undefined {
-  if (!ONNX_MODEL_CACHED) return 'no ONNX model is cached under ~/.cache/vat-onnx-models, and this suite never downloads one';
+  if (!onnxModelCached()) return `no ONNX model is cached under ${defaultOnnxCacheDir()}, and this suite never downloads one`;
   return SYMLINKS === null ? 'this host cannot link the model cache into a fake HOME' : undefined;
 }
 
 /** Point `home`'s model cache at the real one (a junction, so Windows needs no privilege). */
 function linkOnnxModelCache(home: string): void {
   if (SYMLINKS === null) throw new Error('linkOnnxModelCache needs symlinks; the scenario should have been skipped');
-  mkdirSyncReal(safePath.join(home, '.cache'), { recursive: true });
-  createSymlink(SYMLINKS, ONNX_MODEL_CACHE, safePath.join(home, '.cache', 'vat-onnx-models'), 'junction');
+  const linked = defaultOnnxCacheDir(home);
+  mkdirSyncReal(safePath.join(linked, '..'), { recursive: true });
+  createSymlink(SYMLINKS, defaultOnnxCacheDir(), linked, 'junction');
 }
 
 /** A RAG database path of the scenario's own, not yet created. */
