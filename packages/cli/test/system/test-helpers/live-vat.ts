@@ -233,21 +233,29 @@ export interface LiveVat {
  * @param options.entry - The script `node` runs: the CLI (`dist/bin.js`, the default) or the `vat`
  *   wrapper the package's `bin` names (`dist/bin/vat.js`)
  * @param options.ownGroup - POSIX: start it as a process-group leader, so a case can signal the
- *   whole GROUP (`process.kill(-pid, …)`) the way a terminal's Ctrl-C does
+ *   whole GROUP (`process.kill(-pid, …)`) the way a terminal's Ctrl-C does. `'session'` leads a
+ *   new session too (Node's `detached`), which orphans the group: the kernel then discards a
+ *   SIGTSTP sent to it. `'job'` leads a new group in this session, as a shell's job does, so
+ *   SIGTSTP stops it the way Ctrl-Z does; `perl` makes the group and then execs `node` in place,
+ *   so the pid is the CLI's.
  * @returns The running process
  */
 export function startVat(
   cwd: string,
   args: readonly string[],
-  options: { nodeOptions: readonly string[]; env: NodeJS.ProcessEnv; entry?: string; ownGroup?: boolean },
+  options: { nodeOptions: readonly string[]; env: NodeJS.ProcessEnv; entry?: string; ownGroup?: 'session' | 'job' },
 ): LiveVat {
   const nodeOptions = [process.env['NODE_OPTIONS'], ...options.nodeOptions]
     .filter((part) => part !== undefined && part !== '').join(' ');
-  const child = spawn(NODE_EXECUTABLE, [options.entry ?? BIN_PATH, ...args], {
+  const command = [NODE_EXECUTABLE, options.entry ?? BIN_PATH, ...args];
+  const [file = NODE_EXECUTABLE, ...argv] = options.ownGroup === 'job'
+    ? ['perl', '-e', 'setpgrp(0, 0); exec @ARGV or die "exec: $!"', ...command]
+    : command;
+  const child = spawn(file, argv, {
     cwd,
     env: { ...process.env, ...options.env, NODE_OPTIONS: nodeOptions },
     stdio: ['ignore', 'pipe', 'pipe'],
-    detached: options.ownGroup === true,
+    detached: options.ownGroup === 'session',
   });
   const chunks: Buffer[] = [];
   const errChunks: Buffer[] = [];

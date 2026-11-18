@@ -9,6 +9,10 @@
  * which a terminal Ctrl-C under the `vat` wrapper delivers (the terminal signals the whole
  * foreground group, and the wrapper forwards) — met the default disposition and killed the process
  * half-way through that cleanup, leaking the clone or the lock it was removing.
+ *
+ * The job-control stop, Ctrl-Z's SIGTSTP, is not a terminating signal, but a handler for it is a
+ * signal listener all the same, so its one installation lives here too:
+ * {@link handleJobControlStops}.
  */
 
 /**
@@ -271,5 +275,44 @@ export function handleTerminatingSignals(options: {
   return {
     release,
     releaseOrAwaitEnding: () => (release() ? Promise.resolve() : new Promise<void>(() => {})),
+  };
+}
+
+/** What {@link handleJobControlStops} calls. */
+export interface JobControlStopHandlers {
+  /** A SIGTSTP arrived; called just before this process stops itself. */
+  stopped(): void;
+  /** A SIGCONT arrived: this process runs again. Also called for a SIGCONT with no stop before it. */
+  continued(): void;
+}
+
+/**
+ * Observe this process being stopped by job control (Ctrl-Z, `kill -TSTP`) and continued (`fg`,
+ * `bg`, `kill -CONT`), while keeping what job control does.
+ *
+ * A listener for SIGTSTP replaces its default disposition, which is to stop the process. So the
+ * listener calls `stopped` and then stops this process with SIGSTOP, which nothing can catch: the
+ * shell sees the job stop exactly as before. SIGCONT continues it, and its listener calls
+ * `continued`. A plain SIGSTOP from outside runs neither: it cannot be caught.
+ *
+ * Windows has no job-control stop; nothing is installed there.
+ *
+ * @param handlers - What to call on a stop and on a continue
+ * @returns The call that removes both listeners
+ */
+export function handleJobControlStops(handlers: JobControlStopHandlers): () => void {
+  if (process.platform === 'win32') return () => undefined;
+  const onStop = (): void => {
+    handlers.stopped();
+    process.kill(process.pid, 'SIGSTOP');
+  };
+  const onContinue = (): void => {
+    handlers.continued();
+  };
+  process.on('SIGTSTP', onStop);
+  process.on('SIGCONT', onContinue);
+  return () => {
+    process.off('SIGTSTP', onStop);
+    process.off('SIGCONT', onContinue);
   };
 }

@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  handleJobControlStops,
   handleTerminatingSignals,
   isTerminatingSignal,
   REPEAT_SIGNAL_WINDOW_MS,
@@ -332,5 +333,32 @@ describe('handleTerminatingSignals — a repeat', () => {
     const hold = setIntervalSpy.mock.results[0]?.value as NodeJS.Timeout | undefined;
     expect(hold?.hasRef()).toBe(true);
     forceTheEnding();
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('handleJobControlStops', () => {
+  it('on SIGTSTP calls stopped, then stops this process with SIGSTOP; on SIGCONT calls continued', () => {
+    const calls: string[] = [];
+    const kill = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      calls.push(`kill ${String(pid === process.pid ? 'self' : pid)} ${String(signal)}`);
+      return true;
+    });
+    const release = handleJobControlStops({ stopped: () => calls.push('stopped'), continued: () => calls.push('continued') });
+    try {
+      process.emit('SIGTSTP', 'SIGTSTP');
+      process.emit('SIGCONT', 'SIGCONT');
+    } finally {
+      release();
+      kill.mockRestore();
+    }
+
+    expect(calls).toStrictEqual(['stopped', 'kill self SIGSTOP', 'continued']);
+  });
+
+  it('removes both listeners on release', () => {
+    const before = [process.listenerCount('SIGTSTP'), process.listenerCount('SIGCONT')];
+    handleJobControlStops({ stopped: () => undefined, continued: () => undefined })();
+
+    expect([process.listenerCount('SIGTSTP'), process.listenerCount('SIGCONT')]).toStrictEqual(before);
   });
 });

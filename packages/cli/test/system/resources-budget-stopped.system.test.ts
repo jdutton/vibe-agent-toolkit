@@ -3,14 +3,15 @@
  * it spent stopped.
  *
  * The supervisor and its child share the terminal's process group (the child is never `detached`),
- * so Ctrl-Z stops both and `fg` continues both. The watchdog counts silence only while the supervisor
- * is running to watch it: before, it read the whole stopped interval as silence, and its first poll
- * after `fg` killed a healthy run as a runaway. `check` and `query` share the one supervisor; this
- * drives `query`, the cheaper of the two.
+ * so Ctrl-Z's SIGTSTP reaches both and `fg`'s SIGCONT continues both. The supervisor catches
+ * SIGTSTP, records the stop and stops itself; the time to the SIGCONT is subtracted from the
+ * silence. Before, the whole stopped interval read as silence, and the first poll after `fg`
+ * killed a healthy run as a runaway. `check` and `query` share the one supervisor; this drives
+ * `query`, the cheaper of the two.
  *
- * The case stops the whole group with SIGSTOP, which is what Ctrl-Z's SIGTSTP does by default. It
- * cannot send SIGTSTP itself: the group it starts leads its own session, which makes it an orphaned
- * process group, and the kernel discards SIGTSTP sent to one.
+ * The case sends SIGTSTP to the group, as Ctrl-Z does. The group is a job in this session
+ * (`ownGroup: 'job'`), never a new session: a new session's group is orphaned, and the kernel
+ * discards SIGTSTP sent to one.
  *
  * ⚠️ Not on Windows: there is no stop signal there, and so no stopped time to count.
  */
@@ -83,12 +84,12 @@ describe.skipIf(process.platform === 'win32')('a supervised run stopped and cont
       nodeOptions: [preload('child-only-pause-at-startup.mjs')],
       // Half a budget: the child is certainly alive when the group is stopped, and done well inside one.
       env: { TEST_STARTUP_MARKER: marker, TEST_CHILD_PAUSE_MS: String(budgetSeconds * 500) },
-      ownGroup: true,
+      ownGroup: 'job',
     });
     const supervisorPid = running.process.pid ?? Number.NaN;
     childPid = await pidWrittenTo(marker);
 
-    process.kill(-supervisorPid, 'SIGSTOP');
+    process.kill(-supervisorPid, 'SIGTSTP');
     // Positive control: the supervisor and its child are both stopped, as Ctrl-Z leaves them.
     expect(await within(5000, () => isStopped(supervisorPid) && isStopped(childPid ?? Number.NaN))).toBe(true);
     await sleep(budgetSeconds * 1000 * BUDGETS_STOPPED);

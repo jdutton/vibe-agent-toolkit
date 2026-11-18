@@ -43,6 +43,8 @@ export {
   type TerminatingSignalCleanup,
   type TerminatingSignalGuard,
   handleTerminatingSignals,
+  type JobControlStopHandlers,
+  handleJobControlStops,
 } from './terminating-signals.js';
 
 /**

@@ -107,14 +107,14 @@ let child: number | undefined;
  */
 async function superviseChild(
   args: readonly string[],
-  options: { preloads?: readonly string[]; env?: NodeJS.ProcessEnv; entry?: string; ownGroup?: boolean } = {},
+  options: { preloads?: readonly string[]; env?: NodeJS.ProcessEnv; entry?: string; ownGroup?: 'session' } = {},
 ): Promise<{ running: LiveVat; childPid: number }> {
   const pidFile = safePath.join(scratch(), 'child.pid');
   const running = startVat(dir, args, {
     nodeOptions: options.preloads ?? [preload('child-only-stall-in-population.mjs')],
     env: { ...options.env, TEST_CHILD_PID_FILE: pidFile, TEST_CHILD_MAX_STALL_MS: String(STALL_CEILING_MS) },
     ...(options.entry === undefined ? {} : { entry: options.entry }),
-    ...(options.ownGroup === true ? { ownGroup: true } : {}),
+    ...(options.ownGroup === undefined ? {} : { ownGroup: options.ownGroup }),
   });
   supervisor = running;
   child = await pidWrittenTo(pidFile);
@@ -198,7 +198,7 @@ describe('the checks supervisor ends — its child ends with it', () => {
     const { running, childPid } = await superviseChild(['resources', 'check', '--budget', '600'], {
       entry: getWrapperPath(import.meta.url),
       env: { VAT_BIN: BIN_PATH },
-      ownGroup: true,
+      ownGroup: 'session',
     });
     await expectSignalTakesChildDown(running, childPid, 'SIGINT', () => process.kill(-(running.process.pid ?? 0), 'SIGINT'));
   });
