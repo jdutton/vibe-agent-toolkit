@@ -83,16 +83,23 @@ jobs:
       - name: vat resources query runs at the floor
         run: node packages/cli/dist/bin.js resources query "SELECT count(*) AS n FROM resources"
 
-      # The full gate, at the floor, exactly as publish.yml runs it: `pre-publish`
-      # there runs `bun run validate` on this same Node, with no NET_AVAILABLE and
-      # no contraband list. Without this step the tag push was the first place the
-      # floor met the integration and system tiers. rc.15's publish failed on two
-      # tests that hard-coded Node 24 behaviour (a worker's young generation, and
-      # terminating a worker mid top-level await), both green on every PR.
+      # The full gate, at the floor, as publish.yml runs it: `pre-publish` there
+      # runs `bun run validate` on this same Node, with no contraband list. Without
+      # this step the tag push was the first place the floor met the integration
+      # and system tiers. rc.15's publish failed on two tests that hard-coded
+      # Node 24 behaviour (a worker's young generation, and terminating a worker
+      # mid top-level await), both green on every PR.
       # Ubuntu only: it runs beside the Windows leg, which is the longer one, so a
       # PR's wall clock does not move.
+      # NET_AVAILABLE as in validate.yml, unlike publish: this is the only run of
+      # the suites that embed with the ONNX model (`ONNX_MODEL_UNREACHABLE`) and
+      # of the network suites on the declared floor. A cold runner skips them
+      # without it, and a regression there on the floor would go unseen.
       - name: The full gate at the floor, as publish runs it
         run: bun run validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NET_AVAILABLE: "1"
 
       - name: Print failed step output
         if: failure()
