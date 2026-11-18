@@ -7,9 +7,9 @@
   `link-check/proxy-agent` in an existing `bun.lock`; pnpm was not tested. Check with your package
   manager's `why basic-ftp` (`npm explain`, `bun why`, `pnpm why`), and if 5.x remains, delete those
   lockfile entries and install again.
-- **picomatch [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf) (ReDoS on a
-  crafted extglob such as `+(*a)`) has no fixed release, so VAT still resolves picomatch 4.0.x.**
-  A glob VAT compiles from a skill or plugin it validates or audits may hang that run. Audit
-  untrusted plugins with a timeout until a fixed picomatch ships.
+- **GitHub withdrew picomatch [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)
+  (ReDoS on a crafted extglob such as `+(*a)`) on 2026-11-18, so VAT no longer carries an ignore
+  for it.** No fixed picomatch has shipped and VAT still resolves 4.0.x, so a hostile glob in a
+  plugin `vat audit` reads may still hang that run. Audit untrusted plugins with a timeout.
 - **`@vibe-agent-toolkit/rag-lancedb` still installs sharp 0.33.5** (three libvips advisories) via
   `@lancedb/lancedb`'s optional `@huggingface/transformers`. VAT never loads it; no action needed.
