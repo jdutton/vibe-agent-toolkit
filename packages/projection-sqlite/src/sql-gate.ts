@@ -379,7 +379,7 @@ function assertSingleStatement(sql: string): void {
  * engine that would have accepted it.
  *
  * The program gate holds a second, independent layer of this refusal
- * ({@link assertCompilesAsSubquery}), so a keyword list loosened here does not admit a `PRAGMA`.
+ * ({@link refusalAsSubquery}), so a keyword list loosened here does not admit a `PRAGMA`.
  * Exported for its unit test only; not on the package barrel.
  *
  * @param sql - The caller's statement text
@@ -624,9 +624,12 @@ function explain(database: DatabaseSync, sql: string): readonly ExplainedOp[] {
  *   the kind gate and compiles; this refuses it before it runs, on `query`, `columns` and the
  *   compile probe alike. `PRAGMA query_only` stays armed as a second guard for any write a step
  *   reaches;
- * - a statement SQLite will not compile as a subquery ({@link assertCompilesAsSubquery}) — a
+ * - a statement SQLite will not compile as a subquery ({@link refusalAsSubquery}) — a
  *   `PRAGMA` by any spelling. This is the kind gate's second layer: {@link assertIsQuery} reads the
- *   leading keyword, this asks the engine's grammar, and each refuses a `PRAGMA` alone.
+ *   leading keyword, this asks the engine's grammar, and each refuses a `PRAGMA` alone. It runs
+ *   before the statement is compiled as written, since compiling a setting `PRAGMA` applies it;
+ *   a query SQLite compiles alone but not as a subquery (one at its nesting limits) is refused
+ *   with SQLite's own reason.
  *
  * Exported for its unit test only; not on the package barrel.
  *
@@ -639,46 +642,102 @@ function explain(database: DatabaseSync, sql: string): readonly ExplainedOp[] {
  * @throws Error When an `OpenRead` names a root page no relation holds — a driver invariant
  */
 export function assertProgramAdmitted(gate: GateConnection, sql: string): void {
+  // FIRST, before anything compiles the statement as written: SQLite applies a setting PRAGMA when
+  // it compiles one (`EXPLAIN PRAGMA recursive_triggers = 1` flips the setting), so a refusal that
+  // came after the statement compiled would leave its effect on the run's connection.
+  const subqueryRefusal = refusalAsSubquery(gate.database, sql);
+  if (subqueryRefusal !== undefined && !opensAsQuery(sql)) throw notAQuery(subqueryRefusal);
+  // The statement compiled as a subquery, or it opens with a query keyword, which no statement
+  // with a compile-time effect does: compiling it as written is safe either way.
   const program = explain(gate.database, sql);
   assertNoQuotedRelation(gate, sql);
   const named = new Set(relationsNamedBy(sql, queryableRelationNames()).map((name) => name.toLowerCase()));
   for (const op of program) {
     assertOpAdmitted(gate, sql, op, named);
   }
-  // Last, so a statement both rules refuse — a write behind a `WITH` — gets the specific one.
-  assertCompilesAsSubquery(gate.database, sql);
+  // A query whose program passed every rule above but that SQLite would not take as a subquery:
+  // a write behind a `WITH` was refused by name above, so what is left is a statement at SQLite's
+  // nesting limits, refused with SQLite's own reason.
+  if (subqueryRefusal !== undefined) throw nestedTooDeep(subqueryRefusal);
 }
 
 /**
- * Refuse a statement SQLite will not take as a subquery: the second layer of the kind gate, and
- * the one that does not read the leading keyword.
+ * Why SQLite will not compile the statement as a subquery, or undefined when it will: the second
+ * layer of the kind gate, and the one that does not read the leading keyword.
  *
  * SQLite's grammar admits only a `SELECT`, a `WITH … SELECT` or a `VALUES` inside `EXISTS (…)`, so
  * compiling the statement there asks the engine what kind of statement it is. A `PRAGMA` — which
  * returns rows, so the result-column check would not stop it, and whose program opens nothing the
- * opcode checks refuse — fails to compile there however it is spelled. So does a write behind a
- * `WITH`. The statement itself has already compiled, so a failure here is the wrapper's alone.
+ * opcode checks refuse — fails to compile there however it is spelled, and the wrapper itself is a
+ * `SELECT`, so compiling it applies nothing. So does a write behind a `WITH`.
  *
  * The statement goes in up to its terminating `;` and with a newline before the closing `)`, so a
  * trailing `-- note` cannot swallow it; an unclosed trailing `/*` ends the text at its last token.
  * Compiled, never stepped, and not an `EXPLAIN`: `statement.explained` does not move.
  *
  * @param database - The connection, read-only for the caller's statements
- * @param sql - The caller's statement, which compiles as written
- * @throws VatError `PROJECTION_STATEMENT_REFUSED` when SQLite will not compile it as a subquery
+ * @param sql - The caller's statement
+ * @returns SQLite's refusal of the wrapped statement, or undefined when it compiled
+ * @throws Any failure that is not a statement refusal, as thrown
  */
-function assertCompilesAsSubquery(database: DatabaseSync, sql: string): void {
+function refusalAsSubquery(database: DatabaseSync, sql: string): Error | undefined {
   try {
     database.prepare(`SELECT EXISTS (\n${statementBody(sql)}\n)`);
+    return undefined;
   } catch (error) {
     if (!isStatementRefusal(error)) throw error;
-    throw new VatError(
-      PROJECTION_STATEMENT_REFUSED_CODE,
-      'This statement is not a query: SQLite does not accept it as a subquery, which only a SELECT, a'
-      + ' WITH … SELECT or a VALUES is. A projection query only reads.',
-      { cause: error },
-    );
+    return error;
   }
+}
+
+/**
+ * The words a statement SQLite runs as a query opens with.
+ *
+ * 🔑 Deliberately not {@link QUERY_STATEMENT_KEYWORDS}: this decides only whether a statement the
+ * subquery layer already refused may be compiled as written to say WHY, and it must not loosen when
+ * the kind layer's list does — a `PRAGMA` compiled here would apply its setting.
+ */
+const QUERY_OPENING_WORDS: ReadonlySet<string> = new Set(['SELECT', 'WITH', 'VALUES']);
+
+/**
+ * Whether the statement's first token, as the shared lexer reads it, opens a query.
+ *
+ * @param sql - The caller's statement
+ * @returns True for a `SELECT`, `WITH` or `VALUES`
+ */
+function opensAsQuery(sql: string): boolean {
+  const first = sqlTokens(sql)[0];
+  return first?.kind === 'word' && QUERY_OPENING_WORDS.has(first.value.toUpperCase());
+}
+
+/**
+ * The refusal of a statement that is not a query.
+ *
+ * @param cause - SQLite's refusal of it as a subquery
+ * @returns The coded error
+ */
+function notAQuery(cause: Error): VatError {
+  return new VatError(
+    PROJECTION_STATEMENT_REFUSED_CODE,
+    'This statement is not a query: SQLite does not accept it as a subquery, which only a SELECT, a'
+    + ' WITH … SELECT or a VALUES is. A projection query only reads.',
+    { cause },
+  );
+}
+
+/**
+ * The refusal of a query SQLite compiles alone but not one level deeper, as a subquery.
+ *
+ * @param cause - SQLite's refusal of it as a subquery
+ * @returns The coded error, carrying SQLite's own reason
+ */
+function nestedTooDeep(cause: Error): VatError {
+  return new VatError(
+    PROJECTION_STATEMENT_REFUSED_CODE,
+    `SQLite compiles this statement alone but not as a subquery, which is how it is confirmed to be a`
+    + ` query: ${cause.message}. It sits at SQLite's nesting limits; nest it less deeply.`,
+    { cause },
+  );
 }
 
 /**
@@ -804,10 +863,12 @@ function assertOpAdmitted(gate: GateConnection, sql: string, { opcode, p2, p3, p
  * spells opens it.
  *
  * `EXPLAIN` prints a virtual table as a pointer, never a name, and an alias (`dbstat AS json_each`)
- * hides it from the text. So each name the statement spells, bare or quoted, is opened alone on the
- * same connection, and the one whose `VOpen` carries the same pointer is the table: an eponymous
- * virtual table has one instance per connection. Run on the refusal path only, one counted
- * `EXPLAIN` per distinct name; a name that does not compile alone is skipped.
+ * hides it from the text. So each name the statement spells, bare or quoted, that this connection
+ * knows as a virtual table is opened alone on the same connection, and the one whose `VOpen`
+ * carries the same pointer is the table: an eponymous virtual table has one instance per
+ * connection. Run on the refusal path only: two reads of what the connection knows, then one
+ * counted `EXPLAIN` per distinct virtual-table name the statement spells — never one per word, so a
+ * long `IN (…)` list costs nothing.
  *
  * @param gate - The handle's gate state
  * @param sql - The caller's statement
@@ -817,11 +878,12 @@ function assertOpAdmitted(gate: GateConnection, sql: string, { opcode, p2, p3, p
  */
 function virtualTableNamed(gate: GateConnection, sql: string, pointer: unknown): string | undefined {
   if (typeof pointer !== 'string') return undefined;
+  const known = knownVirtualTables(gate.database);
   const spelled = new Set(sqlTokens(sql)
     .filter((token) => token.kind === 'word' || token.kind === 'quotedIdentifier')
-    .map((token) => token.value.toLowerCase()));
+    .map((token) => token.value.toLowerCase())
+    .filter((name) => known.has(name)));
   for (const name of spelled) {
-    if (REFERENCE_VIRTUAL_TABLES.includes(name)) continue;
     let program: readonly ExplainedOp[];
     try {
       program = explain(gate.database, `SELECT * FROM ${quoteIdentifier(name)}`);
@@ -832,6 +894,24 @@ function virtualTableNamed(gate: GateConnection, sql: string, pointer: unknown):
     if (program.some((op) => op.opcode === 'VOpen' && op.p4 === pointer)) return name;
   }
   return undefined;
+}
+
+/**
+ * Every refused virtual table this connection can open by name, lower-cased: each registered
+ * module (`dbstat`, `fts5`, …) and the `pragma_<name>` function of each pragma. The reference
+ * tables are left out; they are never refused.
+ *
+ * Read by the gate itself, never by a caller statement, on the refusal path only.
+ *
+ * @param database - The connection
+ * @returns The names
+ */
+function knownVirtualTables(database: DatabaseSync): ReadonlySet<string> {
+  const names = (pragma: string): string[] =>
+    (database.prepare(`PRAGMA ${pragma}`).all() as readonly { name?: unknown }[])
+      .flatMap(({ name }) => (typeof name === 'string' ? [name.toLowerCase()] : []));
+  return new Set([...names('module_list'), ...names('pragma_list').map((name) => `pragma_${name}`)]
+    .filter((name) => !REFERENCE_VIRTUAL_TABLES.includes(name)));
 }
 
 /**

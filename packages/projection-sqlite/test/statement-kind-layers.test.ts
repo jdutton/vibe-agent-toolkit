@@ -12,7 +12,8 @@
 import { DatabaseSync } from 'node:sqlite';
 
 import { PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources';
-import { isVatError } from '@vibe-agent-toolkit/utils';
+import { isVatError, readWorkCounters } from '@vibe-agent-toolkit/utils';
+import { __resetWorkCountersForTest } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { assertIsQuery, assertProgramAdmitted, type GateConnection, openGate } from '../src/sql-gate.js';
@@ -102,6 +103,53 @@ describe('the program layer refuses a table-valued pragma function inside a quer
     const refusal = thrownBy(() => assertProgramAdmitted(gate, sql));
     expect(isVatError(refusal, PROJECTION_STATEMENT_REFUSED_CODE), String(refusal)).toBe(true);
     expect(String(refusal)).toMatch(/opens the virtual table pragma_\w+/);
+  });
+});
+
+describe('the program layer refuses a setting PRAGMA without applying it', () => {
+  // SQLite applies a setting PRAGMA when it COMPILES one: `EXPLAIN PRAGMA recursive_triggers = 1`
+  // flips the setting. So the program layer must refuse before it compiles the statement at all.
+  const SETTINGS: readonly (readonly [string, number])[] = [
+    ['recursive_triggers', 1],
+    ['foreign_keys', 0],
+    ['reverse_unordered_selects', 1],
+    ['cache_size', 7],
+  ];
+
+  it.each(SETTINGS)('PRAGMA %s = %s', (name, value) => {
+    const read = (): unknown => Object.values(database.prepare(`PRAGMA ${name}`).get() ?? {})[0];
+    const before = read();
+    expect(before, 'the precondition: the value differs from the one the statement sets').not.toBe(value);
+
+    const refusal = thrownBy(() => assertProgramAdmitted(gate, `PRAGMA ${name} = ${String(value)}`));
+
+    expect(isVatError(refusal, PROJECTION_STATEMENT_REFUSED_CODE), String(refusal)).toBe(true);
+    expect(read()).toBe(before);
+  });
+});
+
+describe('a query SQLite compiles alone but not as a subquery', () => {
+  // 999 nested additions: SQLite's expression-depth limit is 1000, and the subquery is one deeper.
+  const sql = `SELECT 1${' + 1'.repeat(999)} AS x`;
+
+  it('compiles alone, so the refusal below is the wrapper', () => {
+    expect(() => database.prepare(sql)).not.toThrow();
+  });
+
+  it('is refused with SQLite\'s own reason, never as "not a query"', () => {
+    const refusal = String(thrownBy(() => assertProgramAdmitted(gate, sql)));
+    expect(refusal).toContain('Expression tree is too large');
+    expect(refusal).not.toContain('not a query');
+  });
+});
+
+describe('naming a refused virtual table costs a handful of EXPLAINs, not one per word', () => {
+  it('a refused statement with a 500-value IN list', () => {
+    const values = Array.from({ length: 500 }, (_, index) => String(index)).join(', ');
+    const sql = `SELECT x.pageno IN (${values}) AS hit FROM dbstat AS x`;
+    __resetWorkCountersForTest();
+    expect(String(thrownBy(() => assertProgramAdmitted(gate, sql)))).toContain('opens the virtual table dbstat,');
+    expect(readWorkCounters()['statement.explained']).toBeLessThanOrEqual(3);
   });
 });
 
