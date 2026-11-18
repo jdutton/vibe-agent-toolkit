@@ -16,7 +16,7 @@ import { isVatError, readWorkCounters } from '@vibe-agent-toolkit/utils';
 import { __resetWorkCountersForTest } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { assertIsQuery, assertProgramAdmitted, type GateConnection, openGate } from '../src/sql-gate.js';
+import { assertIsQuery, assertOpcodesAdmitted, assertProgramAdmitted, type GateConnection, openGate } from '../src/sql-gate.js';
 
 /** What one call threw, or undefined. */
 function thrownBy(run: () => unknown): unknown {
@@ -164,6 +164,18 @@ describe('naming a refused virtual table costs a handful of EXPLAINs, not one pe
     __resetWorkCountersForTest();
     expect(String(thrownBy(() => assertProgramAdmitted(gate, sql)))).toContain('opens the virtual table dbstat,');
     expect(readWorkCounters()['statement.explained']).toBeLessThanOrEqual(3);
+  });
+});
+
+describe('the opcode layer alone refuses a write, the backstop behind the subquery check', () => {
+  it.each([
+    'WITH c AS (VALUES (1)) DELETE FROM blobs RETURNING k',
+    "WITH c AS (VALUES (1)) INSERT INTO blobs (k) VALUES ('x') RETURNING k",
+  ])('%s', (sql) => {
+    const refusal = thrownBy(() => assertOpcodesAdmitted(gate, sql));
+    expect(isVatError(refusal, PROJECTION_STATEMENT_REFUSED_CODE), String(refusal)).toBe(true);
+    expect(String(refusal)).toContain('This statement writes');
+    expect(database.prepare('SELECT COUNT(*) AS n FROM blobs').get()?.['n']).toBe(0);
   });
 });
 

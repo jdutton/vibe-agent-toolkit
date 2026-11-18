@@ -80,7 +80,9 @@
  * `resources-budget-stopped.system.test.ts` pins the same ordering on Linux and macOS.
  *
  * ⚠️ **Known, bounded limits.** A SIGCONT sent to a process that was not stopped excludes the
- * poll gap it lands in: at most one late gap, never more. A stop that ends without a SIGCONT this
+ * poll gap it lands in: at most one late gap, never more. A stop shorter than about two poll
+ * intervals is not late, so its first poll is judged at once, before the SIGCONT is handled, and
+ * counts that much of the stop as silence: at most two intervals. A stop that ends without a SIGCONT this
  * process sees cannot happen (only SIGCONT continues a stopped process). A plain `kill -STOP`
  * followed by `kill -CONT` is excluded exactly as Ctrl-Z and `fg` are. Windows has no stop
  * signal: the budget there is plain elapsed time.
@@ -223,7 +225,9 @@ phase, vat resources query --budget):
   fg (SIGCONT) continues both; SIGTSTP keeps its default action. The time
   stopped does not count against --budget: a check of the bound that falls
   after a SIGCONT leaves out the time since the check before it. A SIGCONT
-  sent to a run that was not stopped leaves out at most that one interval.
+  sent to a run that was not stopped leaves out at most one poll gap. A
+  stop shorter than about two poll intervals may be partly counted as
+  silence: a check that runs before the SIGCONT is handled counts it.
   Windows: a console Ctrl-C, Ctrl-Break or window close reaches every process
   on the console; this one kills the child and exits 2, no document. An
   outside kill (TerminateProcess, taskkill /F) of the 'vat' wrapper or of

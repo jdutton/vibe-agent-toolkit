@@ -647,6 +647,19 @@ export function assertProgramAdmitted(gate: GateConnection, sql: string): void {
   // came after the statement compiled would leave its effect on the run's connection.
   const subqueryRefusal = refusalAsSubquery(gate.database, sql);
   if (subqueryRefusal !== undefined) throw notASubquery(subqueryRefusal);
+  assertOpcodesAdmitted(gate, sql);
+}
+
+/**
+ * {@link assertProgramAdmitted} less its subquery check: the opcode rules, each a backstop that
+ * refuses alone (the write rule is otherwise unreached). Exported for its unit test only; never
+ * call it on a statement the subquery check has not admitted.
+ *
+ * @param gate - The handle's gate state
+ * @param sql - The caller's statement
+ * @throws VatError `PROJECTION_STATEMENT_REFUSED` naming what the statement would observe or read
+ */
+export function assertOpcodesAdmitted(gate: GateConnection, sql: string): void {
   const program = explain(gate.database, sql);
   assertNoQuotedRelation(gate, sql);
   const named = new Set(relationsNamedBy(sql, queryableRelationNames()).map((name) => name.toLowerCase()));
