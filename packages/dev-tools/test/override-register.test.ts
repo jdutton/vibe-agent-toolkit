@@ -3,9 +3,12 @@
  * reaches the package it pins, and for one that does, every range an adopter resolves must admit the
  * pin or be named as an exception. The check holds both to `bun.lock`, both ways.
  */
-import { describe, expect, it } from 'vitest';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { afterEach, describe, expect, it } from 'vitest';
 
-import { type OverrideRow, overrideFindings, publishedReach } from '../src/override-register.js';
+import { runRegisterCheck } from '../src/osv-ignore-register.js';
+import { type OverrideRow, checkOverrides, overrideFindings, publishedReach } from '../src/override-register.js';
 
 /**
  * A bun.lock: a private root, a published `packages/lib` depending on `chain-a`, which declares
@@ -139,5 +142,39 @@ describe('overrideFindings', () => {
 
   it('refuses a published pin that is not a version', () => {
     expect(overrideFindings({ ...overrides, leaf: 'workspace:*' }, reach, register)).toEqual([expect.stringContaining('pins workspace:*, which is not a version')]);
+  });
+});
+
+const MISSING_ROOT = safePath.join(normalizedTmpdir(), 'override-register-no-such-root');
+
+describe('check:overrides exit codes', () => {
+  afterEach(() => {
+    process.exitCode = undefined;
+  });
+
+  it('exits 2 (could not do its job), not 1 (a finding), when bun.lock cannot be read', () => {
+    runRegisterCheck(() => checkOverrides(MISSING_ROOT), 'clean');
+
+    expect(process.exitCode).toBe(ExitCode.ERROR);
+  });
+
+  it('exits 2 when an input does not parse', () => {
+    runRegisterCheck(() => {
+      throw new SyntaxError('Unexpected end of JSON input');
+    }, 'clean');
+
+    expect(process.exitCode).toBe(ExitCode.ERROR);
+  });
+
+  it('exits 1 on a finding', () => {
+    runRegisterCheck(() => ['a finding'], 'clean');
+
+    expect(process.exitCode).toBe(ExitCode.FINDINGS);
+  });
+
+  it('leaves the exit code alone when clean', () => {
+    runRegisterCheck(() => [], 'clean');
+
+    expect(process.exitCode).toBeUndefined();
   });
 });

@@ -14,7 +14,8 @@
  *     makes the entry, or that version, stale), and so is a package that no longer resolves at all.
  * What OSV says the advisory affects is the other half, `osv-ignore-scan.ts`, run by the
  * dependency-audit job against a live empty-config scan.
- * Run: `bun run check:osv-ignores` (full tier). Exit 0 = in scope, 1 = a finding.
+ * Run: `bun run check:osv-ignores` (full tier). Exit 0 = in scope, 1 = a finding, 2 = it could not
+ * read or parse its inputs (`runRegisterCheck`).
  */
 import { readFileSync } from 'node:fs';
 
@@ -155,14 +156,33 @@ export function reportFindings(findings: readonly string[], success: string): vo
   log(`✅ ${success}`, 'green');
 }
 
+/**
+ * Runs a register check: its findings exit 1, and a failure to read or parse its inputs exits 2
+ * (could not do its job), never 1, so a crash is not mistaken for a finding.
+ */
+export function runRegisterCheck(check: () => readonly string[], success: string): void {
+  let findings: readonly string[];
+  try {
+    findings = check();
+  } catch (error) {
+    log(`❌ could not run the check: ${error instanceof Error ? error.message : String(error)}`, 'red');
+    process.exitCode = ExitCode.ERROR;
+    return;
+  }
+  reportFindings(findings, success);
+}
+
 function main(): void {
-  const findings = osvIgnoreFindings(
-    readFileSync(safePath.join(PROJECT_ROOT, 'bun.lock'), 'utf8'),
-    readFileSync(safePath.join(PROJECT_ROOT, 'osv-scanner.toml'), 'utf8'),
-    ACCEPTED_ADVISORIES,
-  );
   const count = Object.keys(ACCEPTED_ADVISORIES).length;
-  reportFindings(findings, `osv-scanner.toml: ${count} ignore(s), each paired with its scope row, each accepted version still in bun.lock.`);
+  runRegisterCheck(
+    () =>
+      osvIgnoreFindings(
+        readFileSync(safePath.join(PROJECT_ROOT, 'bun.lock'), 'utf8'),
+        readFileSync(safePath.join(PROJECT_ROOT, 'osv-scanner.toml'), 'utf8'),
+        ACCEPTED_ADVISORIES,
+      ),
+    `osv-scanner.toml: ${count} ignore(s), each paired with its scope row, each accepted version still in bun.lock.`,
+  );
 }
 
 if (isEntrypoint(import.meta.url)) main();

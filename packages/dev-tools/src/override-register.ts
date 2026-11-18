@@ -15,7 +15,8 @@
  * Red, both ways: a pin with no row, a row with no pin, a `dev-only` row on a package a published
  * workspace reaches, a `published` row on one none reaches, a declared range outside the pin with no
  * `outsideRanges` entry, an `outsideRanges` entry no declared range needs, and a blank reason.
- * Run: `bun run check:overrides` (full tier). Exit 0 = every pin's reach stated truly, 1 = a finding.
+ * Run: `bun run check:overrides` (full tier). Exit 0 = every pin's reach stated truly, 1 = a finding,
+ * 2 = it could not read or parse `bun.lock` or a `package.json` (`runRegisterCheck`).
  */
 import { readFileSync } from 'node:fs';
 
@@ -23,7 +24,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import semver from 'semver';
 
 import { PROJECT_ROOT, isEntrypoint } from './common.js';
-import { reportFindings } from './osv-ignore-register.js';
+import { runRegisterCheck } from './osv-ignore-register.js';
 
 /** Why one override exists, and what an adopter resolves for the package it pins. */
 export type OverrideRow =
@@ -208,14 +209,18 @@ function readJson(path: string): Record<string, unknown> {
   return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
 }
 
-function main(): void {
-  const lockText = readFileSync(safePath.join(PROJECT_ROOT, 'bun.lock'), 'utf8');
+/** Reads `bun.lock` and the manifests under `root` and judges its overrides; throws when it cannot read them. */
+export function checkOverrides(root: string): string[] {
+  const lockText = readFileSync(safePath.join(root, 'bun.lock'), 'utf8');
   const published = new Set(
-    Object.keys(parseBunLock(lockText).workspaces).filter((path) => path !== '' && readJson(safePath.join(PROJECT_ROOT, path, 'package.json'))['private'] !== true),
+    Object.keys(parseBunLock(lockText).workspaces).filter((path) => path !== '' && readJson(safePath.join(root, path, 'package.json'))['private'] !== true),
   );
-  const overrides = readJson(safePath.join(PROJECT_ROOT, 'package.json'))['overrides'];
-  const findings = overrideFindings(typeof overrides === 'object' && overrides !== null ? (overrides as Record<string, unknown>) : {}, publishedReach(lockText, published), OVERRIDE_REGISTER);
-  reportFindings(findings, `package.json overrides: ${Object.keys(OVERRIDE_REGISTER).length} pins, each with its reach stated truly and every published range admitting its pin or named as an exception.`);
+  const overrides = readJson(safePath.join(root, 'package.json'))['overrides'];
+  return overrideFindings(typeof overrides === 'object' && overrides !== null ? (overrides as Record<string, unknown>) : {}, publishedReach(lockText, published), OVERRIDE_REGISTER);
+}
+
+function main(): void {
+  runRegisterCheck(() => checkOverrides(PROJECT_ROOT), `package.json overrides: ${Object.keys(OVERRIDE_REGISTER).length} pins, each with its reach stated truly and every published range admitting its pin or named as an exception.`);
 }
 
 if (isEntrypoint(import.meta.url)) main();
