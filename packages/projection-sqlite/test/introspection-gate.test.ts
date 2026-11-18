@@ -162,7 +162,7 @@ describe('a write is refused by the gate itself, before it runs, on every gated 
   // write once `query` steps it. Only the gate says this.
   it.each(WRITE_STATEMENTS)('%s', (_label, sql) => {
     for (const surface of [() => database.query(sql), () => database.columns(sql), () => probe.assertCompiles(sql, [])]) {
-      expect(String(thrownBy(surface))).toContain('SQLite does not accept this statement as a subquery');
+      expect(String(thrownBy(surface))).toContain('SQLite gave that error compiling the statement as a subquery');
     }
   });
 });

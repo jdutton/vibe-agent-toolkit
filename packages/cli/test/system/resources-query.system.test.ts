@@ -660,12 +660,20 @@ describe('vat resources query', () => {
     // preflight refuses it before any population.
     const write = query('WITH c(a) AS (VALUES (1)) DELETE FROM blobs RETURNING contentKey');
     expect(write.status).toBe(2);
-    expect(write.stderr).toContain('SQLite does not accept this statement as a subquery');
+    expect(write.stderr).toContain('SQLite gave that error compiling the statement as a subquery');
 
     const badColumn = query('SELECT contentHash FROM blobs');
     expect(badColumn.status).toBe(2);
     // The listing, which is what a user gets instead of a bare SQLite error.
     expect(badColumn.stderr).toContain('contentKey');
+  });
+
+  it('leads a missing table\'s refusal with SQLite\'s own error, so a typo reads as a typo', () => {
+    const typo = query('SELECT * FROM no_such_table');
+    expect(typo.status).toBe(2);
+    expect(typo.doc['error']).toMatchObject({ code: 'USAGE_INVALID' });
+    const message = String((typo.doc['error'] as { message?: unknown } | undefined)?.message);
+    expect(message.startsWith('no such table: no_such_table\n'), message).toBe(true);
   });
 
   it('refuses a statement carrying a second statement', () => {
