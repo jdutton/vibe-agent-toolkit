@@ -173,7 +173,7 @@ describe('ensureModelFiles publication', () => {
   });
 
   it('fetches nothing when the files onnxModelFiles names are cached, so a gated suite never reaches the network', async () => {
-    // `onnxModelUnreachable` (rag/testing) lets a suite that embeds run offline when it
+    // `onnxModelUnreachable` (test/onnx-model-gate.ts) lets a suite that embeds run offline when it
     // sees the files `onnxModelFiles` names. If the download looked anywhere else, a
     // "cached" run would download after all.
     const fetchSpy = stubFetch();

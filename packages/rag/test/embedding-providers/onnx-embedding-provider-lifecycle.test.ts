@@ -111,7 +111,7 @@ describe('OnnxEmbeddingProvider - session lifecycle', () => {
   });
 
   it('looks for the default model in the default cache the ONNX test gate probes', async () => {
-    // `onnxModelUnreachable` (rag/testing) decides whether a suite that embeds runs offline
+    // `onnxModelUnreachable` (test/onnx-model-gate.ts) decides whether a suite that embeds runs offline
     // by probing these same defaults; a provider looking elsewhere would make every
     // "cached" run download after all.
     const provider = new OnnxEmbeddingProvider();

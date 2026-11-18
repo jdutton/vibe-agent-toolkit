@@ -22,14 +22,12 @@ jobs:
 
       # NET_AVAILABLE as in validate.yml: the guard re-runs the CLI's integration
       # and system tiers, and the rag suites there embed with the ONNX model,
-      # which a fresh runner must download. Without it they skip and their heap
-      # goes unmeasured. It also turns on every other network-gated suite in
-      # those tiers (the npm registry, GitHub clones, external link checks), so
-      # this guard depends on those hosts as validate.yml does. GH_TOKEN (the
-      # job's read-only token) mirrors validate.yml's step, so the network
-      # suites run under the same environment in both places.
+      # which a fresh runner must download from huggingface.co. Without it they
+      # skip and their heap goes unmeasured. It also turns on the CLI's GitHub
+      # clone suites (audit-git-url, corpus-scan), so this guard depends on
+      # huggingface.co and github.com. No GH_TOKEN: those clones are of public
+      # repositories and nothing in these tiers reads one.
       - name: Run heap-budget guard
         run: bun run guard:test-heap
         env:
-          GH_TOKEN: ${{ github.token }}
           NET_AVAILABLE: "1"
