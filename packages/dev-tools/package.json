@@ -38,6 +38,7 @@
     "markdown-it-front-matter": "^0.2.4",
     "picomatch": "^4.0.3",
     "semver": "^7.8.5",
+    "smol-toml": "^1.9.0",
     "typescript": "^5.9.3",
     "which": "^5.0.0",
     "yaml": "^2.9.0",

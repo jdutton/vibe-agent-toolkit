@@ -2,9 +2,14 @@
 #
 # Complements the main Validation Pipeline (validate.yml). This job scans the
 # committed bun.lock with OSV-Scanner and enforces the accepted-risk register at
-# ./osv-scanner.toml: a green run means "zero un-triaged vulnerabilities". To
-# accept a new advisory, add a documented `[[IgnoredVulns]]` entry to that file;
-# to fix one, bump the dependency or pin it in the root package.json `overrides`.
+# ./osv-scanner.toml: a green run means "zero un-triaged vulnerabilities", and
+# every ignore is in use, in date, and covers only the versions it accepts. To
+# accept a new advisory, add a documented `[[IgnoredVulns]]` entry to that file
+# and its row in ACCEPTED_ADVISORIES (packages/dev-tools/src/osv-ignore-register.ts);
+# to fix one, bump the dependency or raise the range the published package
+# declares. A root package.json `overrides` pin fixes only this repo's tree for
+# anything a published package reaches, so each pin needs its OVERRIDE_REGISTER
+# row (packages/dev-tools/src/override-register.ts), held by `check:overrides`.
 #
 # osv-scanner is the pinned release binary, verified against the checksum the
 # release publishes, rather than a marketplace action (action-ref drift) or
@@ -47,5 +52,26 @@ jobs:
           install -m 0755 osv-scanner /usr/local/bin/osv-scanner
           osv-scanner --version
 
-      - name: Scan lockfile against accepted-risk register
-        run: osv-scanner scan source --lockfile=bun.lock --config=osv-scanner.toml
+      # The register check reads the scan through VAT's dev-tools, so it needs the toolchain.
+      - name: Setup toolchain
+        uses: ./.github/actions/setup
+
+      # ONE scan, with an EMPTY config, so nothing is filtered: osv-scanner.toml is not read here
+      # but judged below, against OSV's own report. An ignore suppresses every package and range
+      # OSV lists under its id, so the scope check has to see the unfiltered data. Exit 1 means
+      # "advisories found", which is expected; anything above it is the scanner failing.
+      - name: Scan lockfile with an empty config
+        run: |
+          : > "$RUNNER_TEMP/osv-empty.toml"
+          set +e
+          osv-scanner scan source --lockfile=bun.lock --config="$RUNNER_TEMP/osv-empty.toml" --format json > "$RUNNER_TEMP/osv-report.json"
+          status=$?
+          set -e
+          if [ "$status" -gt 1 ]; then exit "$status"; fi
+
+      # Red on: an advisory no entry ignores; an ignored advisory against a package or version its
+      # ACCEPTED_ADVISORIES row does not accept; an entry the scan never reports (unused); an entry
+      # past its ignoreUntil. The offline half (pairing, accepted versions still in bun.lock) runs
+      # in the full gate as `bun run check:osv-ignores`.
+      - name: Hold every advisory to the accepted-risk register
+        run: bun run check:osv-scan "$RUNNER_TEMP/osv-report.json"

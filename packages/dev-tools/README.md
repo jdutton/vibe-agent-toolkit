@@ -18,13 +18,13 @@ Every top-level script under `src/`, by basename (generated from the directory; 
 `extract-changelog`, `fix-workspace-deps`, `generate-claude-md`, `generate-lint-config`,
 `generate-python-stdlib`, `generate-resources-json-schemas`, `generate-tsconfig-refs`,
 `generate-workflow`, `import-marketplace`, `index`, `jscpd-check-new`, `jscpd-update-baseline`,
-`known-defects-gate`, `link-all`, `link-workspace-packages`, `markdown-it-parser`, `parser-bakeoff`,
+`known-defects-gate`, `link-all`, `link-workspace-packages`, `markdown-it-parser`,
+`osv-ignore-register`, `osv-ignore-scan`, `override-register`, `parser-bakeoff`,
 `pin-barrel-exports`, `pin-emitted-schemas`, `pre-publish-check`, `prepare-bin`,
 `print-failed-step-output`, `publish-with-rollback`, `resolve-workspace-deps`, `structure-finding`,
 `test-tier-budget-allowlist`, `test-tier-budget-reporter`, `test-tier-budget-seed`,
 `tsc-clean-build`, `unlink-all`, `unused-exports-allowlist`, `unused-exports`,
-`validate-repo-structure`, `validate-version`, `work-counter-register`, `workspace-graph`,
-`zod-advisory-scope`
+`validate-repo-structure`, `validate-version`, `work-counter-register`, `workspace-graph`
 <!-- /gen:dev-tools-scripts -->
 
 ## Where the rules they enforce are stated

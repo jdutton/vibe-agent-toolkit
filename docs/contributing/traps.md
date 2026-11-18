@@ -822,9 +822,11 @@ stops shrinking; a stable count over minutes is the real failure. `npm view` add
 and VAT's own `overrides` block was pinning the one vulnerable version the register blamed on an
 upstream range.
 **Tell:** the dependency-audit job green because every advisory is listed.
-**Remedy:** re-scan with an empty config (`osv-scanner -L bun.lock --config=<empty>.toml`), diff
-against the register, delete every entry with no surviving match; check the patch line, not only
-the latest major.
+**Remedy:** now enforced. Every entry needs an `ACCEPTED_ADVISORIES` row naming its package and
+exact versions; `check:osv-ignores` (full tier) holds entries, rows and `bun.lock` together, and
+the dependency-audit job's `check:osv-scan` judges an empty-config scan, so an unused, expired or
+out-of-scope ignore fails it. Still manual: re-checking each `reason` and its blocker by its
+`ignoreUntil` date, and checking the patch line, not only the latest major, before accepting.
 
 ### Deleting a workspace skill through the API means versions first
 

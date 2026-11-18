@@ -100,9 +100,14 @@ validation:
           description: 'knip unused-export ratchet: a new unused export or a stale allowlist entry fails. Full tier only.'
           runScope: ci
 
-        - name: 'Dependency advisory scope: zod'
-          command: 'bun run check:zod-advisory-scope'
-          description: 'Holds the osv-scanner.toml zod entry to zod@3.25.76: red on another affected zod, and red once 3.25.76 or the entry is gone. Full tier only.'
+        - name: 'OSV ignore register'
+          command: 'bun run check:osv-ignores'
+          description: 'Offline half of the OSV ignore register (the audit job judges the live scan): red on an entry without a scope row, string id, reason or ignoreUntil date, a row without an entry, or an accepted version or package gone from bun.lock. Full tier only.'
+          runScope: ci
+
+        - name: 'Root overrides register'
+          command: 'bun run check:overrides'
+          description: 'Holds every root package.json overrides pin to a row stating whether a published workspace reaches it (from bun.lock), both ways; when one does, every range it declares for the pin must admit the pinned version or be named in the row with why adopters are safe. Full tier only.'
           runScope: ci
 
         - name: 'Repository structure validation'
