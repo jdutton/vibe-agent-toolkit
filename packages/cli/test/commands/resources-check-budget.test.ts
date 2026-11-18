@@ -44,14 +44,13 @@ import {
   freshWatchdog,
   NODE_FATAL_ABORT_EXIT_CODE,
   parseBudgetSeconds,
+  pollIsLate,
   pollWatchdog,
   readCompletedDocument,
   requireSupervisableFlags,
   resolveChildEnding,
   resolveSilentCompletion,
   runsInThisProcess,
-  type StopClock,
-  stopClock,
   type WatchdogState,
 } from '../../src/commands/resources/check-supervisor.js';
 import {
@@ -193,24 +192,30 @@ describe('runsInThisProcess — the fork', () => {
 
 describe('pollWatchdog', () => {
   it('resets the clock when the log has grown', () => {
-    const { state, breach } = pollWatchdog(FRESH, { bytes: 120, now: 5000, pausedMs: 0, budgetMs: 2000 });
+    const { state, breach } = pollWatchdog(FRESH, { bytes: 120, now: 5000, continuedSincePoll: false, budgetMs: 2000 });
 
     expect(breach).toBe(false);
-    expect(state).toStrictEqual({ bytesSeen: 120, quietSince: 5000, pausedAtReset: 0 });
+    expect(state).toStrictEqual({ bytesSeen: 120, quietSince: 5000, polledAt: 5000, stoppedMs: 0 });
   });
 
   it('does not breach while the budget still has room', () => {
-    expect(silentAt(FRESH, 1999).breach).toBe(false);
+    expect(silentPolls(FRESH, 1999).breach).toBe(false);
   });
 
   it('breaches once the budget has passed with no new line', () => {
-    expect(silentAt(FRESH, 2000).breach).toBe(true);
+    expect(silentPolls(FRESH, 2000).breach).toBe(true);
   });
 
-  it('judges on the clock, not on how many polls ran: one late poll still breaches', () => {
-    // A loaded machine runs the first poll ten budgets late. The silence is twenty seconds, and
-    // the kill lands now, not a further budget's worth of polls later.
-    expect(silentAt(FRESH, 20_000).breach).toBe(true);
+  it('judges on the clock, not on how many polls ran: one late poll with no SIGCONT still breaches', () => {
+    // A loaded machine runs the first poll ten budgets late, and no SIGCONT arrived: the silence
+    // is twenty seconds, and the kill lands now, not a further budget's worth of polls later.
+    expect(silentAt(FRESH, 20_000, { continued: false }).breach).toBe(true);
+  });
+
+  it('a long SIGCONT-less gap under load counts in full, after any number of on-time polls', () => {
+    const onTime = silentPolls(FRESH, 1000);
+    expect(onTime.breach).toBe(false);
+    expect(silentAt(onTime.state, 1000 + 1500, { continued: false }).breach).toBe(true);
   });
 
   it('NEVER breaches while units keep COMPLETING, however long the run takes', () => {
@@ -227,7 +232,7 @@ describe('pollWatchdog', () => {
     // saying so: ~88% of a cold one is a single blob stage that emits nothing.
     let state = FRESH;
     for (let poll = 1; poll <= 20; poll += 1) {
-      const result = pollWatchdog(state, { bytes: poll * 60, now: poll * 2000, pausedMs: 0, budgetMs: 2000 });
+      const result = pollWatchdog(state, { bytes: poll * 60, now: poll * 2000, continuedSincePoll: false, budgetMs: 2000 });
       expect(result.breach).toBe(false);
       state = result.state;
     }
@@ -236,82 +241,49 @@ describe('pollWatchdog', () => {
   it('breaches after the last line, not after the run started', () => {
     // The same run as above, then silence. The budget is counted from the last
     // line — a bound measured from the spawn would have fired long before.
-    expect(silentAt({ bytesSeen: 1200, quietSince: 40_000, pausedAtReset: 0 }, 42_000).breach).toBe(true);
+    const after = silentPolls({ bytesSeen: 1200, quietSince: 40_000, polledAt: 40_000, stoppedMs: 0 }, 42_000);
+    expect(after.breach).toBe(true);
   });
 });
 
-describe('pollWatchdog with a stop clock — Ctrl-Z, then fg', () => {
-  it('does not count a closed stop: half a budget, a stop of ten budgets, then half a budget less a tick', () => {
-    const clock = stopClock();
-    clock.start(1000);
-    clock.end(21_000);
+describe('pollWatchdog — a gap a SIGCONT landed in (Ctrl-Z, then fg)', () => {
+  it('excludes the gap: half a budget, a stop of ten budgets, then the run goes on', () => {
+    const beforeStop = silentPolls(FRESH, 1000);
+    const afterFg = silentAt(beforeStop.state, 21_000, { continued: true });
 
-    expect(silentAt(FRESH, 21_000, clock).breach).toBe(false);
-    expect(silentAt(FRESH, 21_999, clock).breach).toBe(false);
-    expect(silentAt(FRESH, 22_000, clock).breach).toBe(true);
+    expect(afterFg.breach).toBe(false);
+    // The silence after the stop is counted again, from the 1000 ms already watched.
+    expect(silentPolls(afterFg.state, 21_999).breach).toBe(false);
+    expect(silentPolls(afterFg.state, 22_000).breach).toBe(true);
   });
 
-  it('counts a stop still open as paused up to now: the timer that fires before SIGCONT is handled', () => {
-    // `fg` continues the process; a poll timer fires on that turn, before the SIGCONT handler
-    // closes the stop. Without the open stop counted, this poll charged the whole stop.
-    const clock = stopClock();
-    clock.start(1000);
+  it('the same gap with no SIGCONT is counted and kills', () => {
+    const beforeStop = silentPolls(FRESH, 1000);
+    expect(silentAt(beforeStop.state, 21_000, { continued: false }).breach).toBe(true);
+  });
 
-    expect(silentAt(FRESH, 21_000, clock).breach).toBe(false);
-    // The SIGCONT handler runs fifty milliseconds later and closes the stop there.
-    clock.end(21_050);
-    expect(silentAt(FRESH, 22_049, clock).breach).toBe(false);
-    expect(silentAt(FRESH, 22_050, clock).breach).toBe(true);
+  it('a SIGCONT to a run that was not stopped excludes one on-time gap, never more', () => {
+    const before = silentPolls(FRESH, 1000);
+    const stray = silentAt(before.state, 1200, { continued: true });
+
+    expect(stray.state.stoppedMs).toBe(200);
+    expect(silentPolls(stray.state, 2199).breach).toBe(false);
+    expect(silentPolls(stray.state, 2200).breach).toBe(true);
   });
 
   it('a stop before the last line does not lengthen the silence after it', () => {
-    const clock = stopClock();
-    clock.start(1000);
-    clock.end(21_000);
-    const reset = pollWatchdog(FRESH, { bytes: 60, now: 21_200, pausedMs: clock.pausedAt(21_200), budgetMs: 2000 });
+    const afterFg = silentAt(silentPolls(FRESH, 1000).state, 21_000, { continued: true });
+    const reset = pollWatchdog(afterFg.state, { bytes: 60, now: 21_200, continuedSincePoll: false, budgetMs: 2000 });
 
-    expect(silentAt(reset.state, 23_199, clock).breach).toBe(false);
-    expect(silentAt(reset.state, 23_200, clock).breach).toBe(true);
-  });
-
-  it('two stops add up', () => {
-    const clock = stopClock();
-    clock.start(500);
-    clock.end(10_500);
-    clock.start(11_000);
-    clock.end(31_000);
-
-    // 2000 ms of silence in all: 500 + 500 + 999 watched, the two stops excluded.
-    expect(silentAt(FRESH, 31_999, clock).breach).toBe(false);
-    expect(silentAt(FRESH, 32_000, clock).breach).toBe(true);
+    expect(silentPolls(reset.state, 23_199).breach).toBe(false);
+    expect(silentPolls(reset.state, 23_200).breach).toBe(true);
   });
 });
 
-describe('stopClock', () => {
-  it('counts nothing with no stop', () => {
-    expect(stopClock().pausedAt(5000)).toBe(0);
-  });
-
-  it('ignores a SIGCONT with no stop open', () => {
-    const clock = stopClock();
-    clock.end(5000);
-    expect(clock.pausedAt(9000)).toBe(0);
-  });
-
-  it('ignores a second SIGTSTP while a stop is open: the stop began at the first', () => {
-    const clock = stopClock();
-    clock.start(1000);
-    clock.start(3000);
-    clock.end(6000);
-    expect(clock.pausedAt(9000)).toBe(5000);
-  });
-
-  it('counts an open stop up to the moment asked, and no further once closed', () => {
-    const clock = stopClock();
-    clock.start(1000);
-    expect(clock.pausedAt(4000)).toBe(3000);
-    clock.end(5000);
-    expect(clock.pausedAt(9000)).toBe(4000);
+describe('pollIsLate — when a poll waits one turn for a pending SIGCONT', () => {
+  it('is late past two poll intervals (200 ms each at a 2 s budget), and on time within them', () => {
+    expect(pollIsLate(FRESH, 400, 2000)).toBe(false);
+    expect(pollIsLate(FRESH, 401, 2000)).toBe(true);
   });
 });
 
@@ -320,11 +292,28 @@ describe('stopClock', () => {
  *
  * @param from - The state to poll from
  * @param now - The clock at the poll
- * @param clock - The stop clock, if the run was stopped
+ * @param options - The gap
+ * @param options.continued - Whether a SIGCONT arrived since the previous poll
  * @returns The poll's reading
  */
-function silentAt(from: WatchdogState, now: number, clock: StopClock = stopClock()): { state: WatchdogState; breach: boolean } {
-  return pollWatchdog(from, { bytes: from.bytesSeen, now, pausedMs: clock.pausedAt(now), budgetMs: 2000 });
+function silentAt(from: WatchdogState, now: number, options: { continued: boolean }): { state: WatchdogState; breach: boolean } {
+  return pollWatchdog(from, { bytes: from.bytesSeen, now, continuedSincePoll: options.continued, budgetMs: 2000 });
+}
+
+/**
+ * Poll a silent log every 200 ms — the supervisor's interval for a 2 s budget — up to `until`, with
+ * no SIGCONT.
+ *
+ * @param from - The state to poll from
+ * @param until - The clock at the last poll
+ * @returns The last poll's reading
+ */
+function silentPolls(from: WatchdogState, until: number): { state: WatchdogState; breach: boolean } {
+  let reading = { state: from, breach: false };
+  for (let now = from.polledAt + 200; now < until; now += 200) {
+    reading = silentAt(reading.state, now, { continued: false });
+  }
+  return silentAt(reading.state, until, { continued: false });
 }
 
 /**

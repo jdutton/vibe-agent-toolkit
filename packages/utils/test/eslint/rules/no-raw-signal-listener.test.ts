@@ -45,6 +45,8 @@ const CASES: RuleCases = {
   invalid: [
     { code: "process.on('SIGINT', () => process.exit(ExitCode.OK));", filename: LINTED, errors: [{ messageId: 'signalListener', data: { method: 'on', event: 'SIGINT' } }] },
     { code: "process.once('SIGTERM', handler);", filename: LINTED, errors: [{ messageId: 'signalListener' }] },
+    { code: "process.on('SIGCONT', onContinue);", filename: LINTED, errors: [{ messageId: 'continueListener', data: { method: 'on', event: 'SIGCONT' } }] },
+    { code: "process.on('SIGTSTP', onStop);", filename: LINTED, errors: [{ messageId: 'stopListener', data: { method: 'on', event: 'SIGTSTP' } }] },
     { code: "process.addListener('SIGHUP', handler);", filename: LINTED, errors: [{ messageId: 'signalListener' }] },
     { code: "process.prependListener('SIGBREAK', handler);", filename: LINTED, errors: [{ messageId: 'signalListener' }] },
     { code: "process.prependOnceListener('SIGQUIT', handler);", filename: LINTED, errors: [{ messageId: 'signalListener' }] },

@@ -6,10 +6,11 @@
   `RUN_INCOMPLETE` (exit 2), never published as a partial answer. The bound is opt-in: without
   `--budget`, or with `--budget 0`, `query` runs in one process exactly as before. A value
   `vat resources check` refuses (blank, negative, not a number, a zero not written `0`) is refused
-  here too. For both verbs on POSIX, the time from a SIGTSTP (Ctrl-Z, `kill -TSTP`) to the
-  SIGCONT that continues the run (`fg`) does not count against the bound; a plain `SIGSTOP` sent
-  from outside cannot be caught, so its stopped time still counts. On Windows the bound is plain
-  elapsed time.
+  here too. For both verbs on POSIX, time the run spends stopped (Ctrl-Z or any stop signal,
+  then `fg` or any SIGCONT) does not count against the bound: a check of the bound that falls
+  after a SIGCONT leaves out the time since the check before it. A SIGCONT sent to a run that was
+  not stopped leaves out at most that one interval. Ctrl-Z keeps its default action. On Windows the
+  bound is plain elapsed time.
 
 ### Fixed
 

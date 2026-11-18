@@ -8,9 +8,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  handleJobControlStops,
   handleTerminatingSignals,
   isTerminatingSignal,
+  observeContinueSignal,
   REPEAT_SIGNAL_WINDOW_MS,
   reRaiseSignal,
   TERMINATING_SIGNALS,
@@ -336,29 +336,26 @@ describe('handleTerminatingSignals — a repeat', () => {
   });
 });
 
-describe.skipIf(process.platform === 'win32')('handleJobControlStops', () => {
-  it('on SIGTSTP calls stopped, then stops this process with SIGSTOP; on SIGCONT calls continued', () => {
-    const calls: string[] = [];
-    const kill = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
-      calls.push(`kill ${String(pid === process.pid ? 'self' : pid)} ${String(signal)}`);
-      return true;
+describe.skipIf(process.platform === 'win32')('observeContinueSignal', () => {
+  it('calls the listener once per SIGCONT, and installs nothing for SIGTSTP', () => {
+    const tstpBefore = process.listenerCount('SIGTSTP');
+    let continues = 0;
+    const stop = observeContinueSignal(() => {
+      continues += 1;
     });
-    const release = handleJobControlStops({ stopped: () => calls.push('stopped'), continued: () => calls.push('continued') });
     try {
-      process.emit('SIGTSTP', 'SIGTSTP');
+      expect(process.listenerCount('SIGTSTP')).toBe(tstpBefore);
+      process.emit('SIGCONT', 'SIGCONT');
       process.emit('SIGCONT', 'SIGCONT');
     } finally {
-      release();
-      kill.mockRestore();
+      stop();
     }
-
-    expect(calls).toStrictEqual(['stopped', 'kill self SIGSTOP', 'continued']);
+    expect(continues).toBe(2);
   });
 
-  it('removes both listeners on release', () => {
-    const before = [process.listenerCount('SIGTSTP'), process.listenerCount('SIGCONT')];
-    handleJobControlStops({ stopped: () => undefined, continued: () => undefined })();
-
-    expect([process.listenerCount('SIGTSTP'), process.listenerCount('SIGCONT')]).toStrictEqual(before);
+  it('removes its listener when stopped', () => {
+    const before = process.listenerCount('SIGCONT');
+    observeContinueSignal(() => undefined)();
+    expect(process.listenerCount('SIGCONT')).toBe(before);
   });
 });
