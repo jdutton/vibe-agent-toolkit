@@ -7,11 +7,13 @@ import { z } from 'zod';
 
 import {
   devNamespaceDigest,
+  isVatCacheRootEntryName,
   parseCacheDirectory,
   vatCacheNamespace,
   vatCacheNamespaceRoot,
 } from '../src/cache-namespace.js';
 import { vatCacheRoot } from '../src/cache-root.js';
+import { isProjectionStoreDirectoryName, projectionShapeDigest, projectionStoreDirectoryName } from '../src/projection/store.js';
 import { ParseFactsSchema, parseFactsShapeSource, schemaShapeSource } from '../src/schemas/parse-facts.js';
 
 /**
@@ -214,5 +216,26 @@ describe('cache layout', () => {
     // `cache clear` root derivation (which walks up two levels) stays correct
     // when it lands, rather than being rediscovered then.
     expect(safePath.relative(vatCacheNamespaceRoot(), parseCacheDirectory())).toBe('parse');
+  });
+});
+
+describe('the names prune may remove', () => {
+  it('recognises namespaces of any VAT build and the legacy root link-cache names', () => {
+    for (const name of [vatCacheNamespace(), '0.1.42', '0.2.0-rc.17', '0.2.0-rc.17-dev-9f2c1a', 'external-links.json', 'auth-jeff', 'parse']) {
+      expect(isVatCacheRootEntryName(name), name).toBe(true);
+    }
+  });
+
+  it('recognises nothing else, so a foreign entry is never a candidate', () => {
+    for (const name of ['CACHEDIR.TAG', 'notes.txt', 'node_modules', '.git', 'src', '1.2', 'v0.1.42', 'parse-old', 'auth-', 'projection-abc']) {
+      expect(isVatCacheRootEntryName(name), name).toBe(false);
+    }
+  });
+
+  it('names this build\'s store from the shape digest, and recognises every shape\'s store', () => {
+    expect(projectionStoreDirectoryName()).toBe(`projection-${projectionShapeDigest()}`);
+    expect(isProjectionStoreDirectoryName(projectionStoreDirectoryName())).toBe(true);
+    expect(isProjectionStoreDirectoryName('projection-000000000000')).toBe(true);
+    expect(isProjectionStoreDirectoryName('parse')).toBe(false);
   });
 });

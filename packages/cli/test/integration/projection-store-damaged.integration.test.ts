@@ -112,3 +112,24 @@ describe('a damaged projection.db under VAT_CACHE_DIR', () => {
     expectHealthyDatabase();
   });
 });
+
+describe('a VAT_CACHE_DIR inside the scanned tree', () => {
+  it('is named on stderr, and the run carries on with its store', async () => {
+    const inside = safePath.join(repoRoot, '.vat-ci-cache');
+    vi.stubEnv(VAT_CACHE_DIR_ENV, inside);
+
+    const { opened, stderr } = await openCapturing();
+    try {
+      expect(opened).toBeDefined();
+      expect(stderr).toContain(`${VAT_CACHE_DIR_ENV} (${inside}) is inside the scanned tree`);
+    } finally {
+      await opened?.close();
+    }
+  });
+
+  it('is not mentioned when the cache root is outside the tree', async () => {
+    const { opened, stderr } = await openCapturing();
+    await opened?.close();
+    expect(stderr).not.toContain('is inside the scanned tree');
+  });
+});

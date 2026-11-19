@@ -388,7 +388,9 @@ export {
   type ExtentScopedTableName,
   type FactStore,
   type ProjectionTableNamesOfScope,
+  isProjectionStoreDirectoryName,
   projectionShapeDigest,
+  projectionStoreDirectoryName,
   splitProjectionByScope,
 } from './projection/store.js';
 
@@ -520,6 +522,7 @@ export {
   ParserUnavailableError,
   defaultParseCache,
   isParserUnavailable,
+  isVatCacheRootEntryName,
   parseCacheDirectory,
   vatCacheNamespace,
   vatCacheNamespaceRoot,

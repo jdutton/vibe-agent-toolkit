@@ -25,6 +25,7 @@
  *   step is a violation: the rule it exists to check was never checked.
  */
 
+import { isProjectionStoreDirectoryName } from '@vibe-agent-toolkit/resources';
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
@@ -313,7 +314,7 @@ function namespaceOf(parseDirectory: string): string {
  */
 function holdsAProjectionStore(namespace: string): boolean {
   return entriesOf(namespace).some(
-    (entry) => entry.isDirectory() && entry.name.startsWith('projection-') && holdsAFile(safePath.join(namespace, entry.name)),
+    (entry) => entry.isDirectory() && isProjectionStoreDirectoryName(entry.name) && holdsAFile(safePath.join(namespace, entry.name)),
   );
 }
 

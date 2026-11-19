@@ -248,3 +248,36 @@ export function vatCacheNamespaceRoot(): string {
 export function parseCacheDirectory(): string {
   return safePath.join(vatCacheNamespaceRoot(), 'parse');
 }
+
+/** A namespace's release part: `major.minor.patch`. */
+const NAMESPACE_RELEASE = /^\d+\.\d+\.\d+$/u;
+
+/** A namespace's optional suffix after the first `-`: a prerelease, `dev-<hex>`, or both. */
+const NAMESPACE_SUFFIX = /^[0-9A-Za-z.-]+$/u;
+
+/**
+ * Whether `name` is shaped like a namespace: a semver version, optionally
+ * followed by `-` and a prerelease or `dev-<hex>` suffix. Split at the first
+ * `-` rather than one pattern, so neither half needs a nested quantifier.
+ */
+function isNamespaceName(name: string): boolean {
+  const dash = name.indexOf('-');
+  if (dash === -1) return NAMESPACE_RELEASE.test(name);
+  return NAMESPACE_RELEASE.test(name.slice(0, dash)) && NAMESPACE_SUFFIX.test(name.slice(dash + 1));
+}
+
+/** Link-cache names older VAT releases wrote directly under the cache root, before `vatLinkCacheDirectory()`. */
+const LEGACY_ROOT_ENTRY = /^(?:external-links\.json.*|auth-.+|parse)$/u;
+
+/**
+ * Whether `name`, an entry directly under a cache root, is one VAT writes
+ * there: a namespace (any VAT build's), or a name an older release kept at the
+ * root. `vat cache prune` removes only these — never an entry it does not
+ * recognise, whatever else it finds in the directory.
+ *
+ * @param name - A single path segment
+ * @returns True for VAT's own root entries
+ */
+export function isVatCacheRootEntryName(name: string): boolean {
+  return isNamespaceName(name) || LEGACY_ROOT_ENTRY.test(name);
+}

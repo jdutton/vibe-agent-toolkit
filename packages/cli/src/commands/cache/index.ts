@@ -22,10 +22,11 @@ import { cachePruneCommand, type CachePruneOptions } from './prune.js';
 /** Why a clear or prune may refuse the cache root: said once, in both commands' help. */
 const GUARD_HELP = `  Both commands refuse (USAGE_INVALID, nothing deleted) a cache root they
   cannot prove is VAT's: it must carry the CACHEDIR.TAG file VAT writes into a
-  root it created or found empty, or be the default <tmpdir>/.vat-cache. The
-  filesystem root, your home directory, the temp directory itself and any
-  directory holding the current directory are always refused. Point
-  VAT_CACHE_DIR at a new or empty directory and VAT tags it on first use.`;
+  root it created or found empty, or be the default <tmpdir>/.vat-cache (a
+  real directory you own, never a symbolic link). The filesystem root, your
+  home directory, the temp directory itself and any directory holding the
+  current directory are always refused. Point VAT_CACHE_DIR at a directory
+  used only by VAT: VAT tags it on first use if it is new or empty.`;
 
 export function createCacheCommand(): Command {
   const cache = new Command('cache');
@@ -45,9 +46,14 @@ Description:
   keyed by file content) and the projection store, a SQLite database holding
   one whole scanned tree per entry, on by default and by far the larger of
   the two. This is the directory to save and restore between CI runs: key
-  the CI cache on the runner's OS and the VAT version or lockfile hash. A
-  restored cache from another machine kind simply misses; a damaged
-  projection store is discarded with a warning and rebuilt.
+  the CI cache on the runner's OS, architecture, Node version and lockfile
+  hash, outside the checkout (in GitHub Actions, \${{ runner.temp }}).
+  Another VAT build never reads it. Within a build, the parse cache and the
+  store's shared blob tier are keyed by file content, so they hit on any
+  machine with the same bytes; a stored tree is keyed by the repository's
+  identity and path, so it misses when the checkout moves or line endings
+  differ (a cold scan, never a wrong answer). A projection store SQLite finds
+  corrupt or not a database at open is discarded with a warning and rebuilt.
 
   The link cache — <tmpdir>/.vat-link-cache — holds external-URL validation
   results and per-OS-user authenticated-link content. It is never under
@@ -60,9 +66,10 @@ Description:
 
   Only the projection store evicts anything on its own: it keeps the three
   most recently written trees per root and the 50,000 most recently written
-  content keys. Older release namespaces and stores of an older projection
-  shape are never read again: vat cache prune removes them, and vat cache
-  clear removes everything.
+  content keys. vat cache prune removes every namespace but this build's
+  (older and newer releases, and under the shared default root other
+  worktrees' and other VATs' too) and every other projection shape's store;
+  vat cache clear removes everything.
 
   To run WITHOUT the caches rather than remove them, use --no-cache on any
   command (or VAT_CACHE=0), which also applies to spawned phases and to the
@@ -133,7 +140,7 @@ Example:
 
   cache
     .command('prune')
-    .description('Delete cache entries this VAT release will never read again')
+    .description('Delete every cache entry this VAT build does not use')
     .option('--dry-run', 'Report what would be removed without deleting anything', false)
     .action(async function (this: Command) {
       await cachePruneCommand(this.optsWithGlobals() as CachePruneOptions);
@@ -142,12 +149,15 @@ Example:
       'after',
       `
 Description:
-  Keeps the warm cache and drops the dead weight. Under the cache root
-  (VAT_CACHE_DIR, else <tmpdir>/.vat-cache) it removes every release
-  namespace except this VAT's, and inside this VAT's namespace every
-  projection-<shape> store except the current shape's. Anything else at the
-  root (such as link-cache files older releases kept there) goes too; the
-  root's CACHEDIR.TAG stays. The link cache is not touched.
+  Keeps this build's warm cache and drops everything else VAT wrote. Under
+  the cache root (VAT_CACHE_DIR, else <tmpdir>/.vat-cache) it removes every
+  namespace except this build's (older AND newer releases; under the shared
+  default root, other worktrees' and other installed VATs' namespaces too, so
+  they run cold next time), the link-cache files older releases kept at the
+  root, and inside this build's namespace every projection-<shape> store
+  except the current shape's. Only names VAT recognises as its own are
+  removed: anything else in the directory, and the root's CACHEDIR.TAG, stay.
+  The link cache is not touched.
 
   Run it after restoring a CI cache and before saving it, so the saved cache
   stops growing with every release.

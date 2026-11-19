@@ -72,6 +72,20 @@ describe('pruneCacheRoot', () => {
     expect((await fs.readdir(safePath.join(root, CURRENT))).sort(byName)).toEqual(['parse', KEPT_STORE]);
   });
 
+  it('leaves every entry it does not recognise as VAT\'s, at the root and inside the namespace', async () => {
+    const root = await populatedRoot(scratch());
+    // A VAT_CACHE_DIR that someone else also writes into: none of this is VAT's to delete.
+    const foreign = ['notes.txt', 'my-project/src/index.ts', 'node_modules/x/package.json', '.git/HEAD', `${CURRENT}/scratch-notes.md`];
+    await Promise.all(foreign.map(async (relative) => put(root, relative, 'theirs')));
+
+    const { data } = await pruneCacheRoot({ root, namespace: CURRENT, keptStore: KEPT_STORE, dryRun: false });
+
+    expect(data.removed).toEqual(['0.1.9', `${CURRENT}/${OLD_STORE}`, 'external-links.json']);
+    for (const relative of foreign) {
+      expect(existsSync(safePath.join(root, relative)), relative).toBe(true);
+    }
+  });
+
   it('under --dry-run reports the same removal and deletes nothing', async () => {
     const root = await populatedRoot(scratch());
 

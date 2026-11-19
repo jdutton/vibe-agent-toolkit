@@ -12,7 +12,7 @@
 
 import { chmodSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 
-import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
+import { projectionStoreDirectoryName, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { CANNOT_DENY_READS, type FaultFsSpec } from '@vibe-agent-toolkit/utils/testing';
@@ -20,6 +20,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
 
 import { CACHE_CLEAR_REPORT_SCHEMA, CACHE_PRUNE_REPORT_SCHEMA, type CacheClearReport } from '../../src/commands/cache/clear-schema.js';
+import { commitTestFixture } from '../test-helpers.js';
 
 import { cleanupTestTempDir, createTestTempDir, executeCli, faultPreloadArgs, getBinPath, writeFileTree } from './test-common.js';
 
@@ -192,6 +193,32 @@ describe('vat cache prune (system test)', () => {
     expect(CACHE_PRUNE_REPORT_SCHEMA.parse(yaml.parse(real.stdout)).data).toMatchObject({ dryRun: false, removed: ['0.0.1-old'] });
     expect(existsSync(safePath.join(ciCache, '0.0.1-old'))).toBe(false);
     expect(readdirSync(ciCache)).toContain('CACHEDIR.TAG');
+  });
+
+  it('keeps the live projection store a real git-keyed run wrote, and removes only another shape\'s', async () => {
+    const { root } = tempRoot('git-store');
+    const ciCache = safePath.join(root, 'ci-cache');
+    const repo = safePath.join(tempDir, 'git-repo');
+    writeFileTree(repo, { 'docs/README.md': '# Hello\n\nA document to parse.\n' });
+    commitTestFixture(repo);
+
+    // A git-keyed run writes this build's store under this build's namespace.
+    const validate = await executeCli(binPath, ['resources', 'validate', '.'], { cwd: repo, env: { TMPDIR: root, TEMP: root, TMP: root, [VAT_CACHE_DIR_ENV]: ciCache } });
+    const namespaces = readdirSync(ciCache).filter((name) => name !== 'CACHEDIR.TAG');
+    expect(namespaces, validate.stderr).toHaveLength(1);
+    const namespace = namespaces[0] ?? '';
+    const liveStore = safePath.join(ciCache, namespace, projectionStoreDirectoryName());
+    expect(readdirSync(liveStore), validate.stderr).toContain('projection.db');
+    writeFileTree(safePath.join(ciCache, namespace), { 'projection-000000000000/projection.db': 'old shape' });
+
+    const pruned = await cacheUnder(root, ['prune'], { [VAT_CACHE_DIR_ENV]: ciCache });
+
+    expect(pruned.status, pruned.stderr).toBe(ExitCode.OK);
+    expect(CACHE_PRUNE_REPORT_SCHEMA.parse(yaml.parse(pruned.stdout)).data).toMatchObject({
+      removed: [`${namespace}/projection-000000000000`],
+      keptStore: `${namespace}/${projectionStoreDirectoryName()}`,
+    });
+    expect(readdirSync(liveStore)).toContain('projection.db');
   });
 
   it('refuses an untagged VAT_CACHE_DIR, USAGE_INVALID, exit 2, and deletes nothing', async () => {

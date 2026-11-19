@@ -786,13 +786,25 @@ export function armStepEnvironment(dirs: ArmDirectories, own: ArmEnvironment): C
 }
 
 /**
+ * The store-location variable VAT builds before `VAT_CACHE_DIR` read. This VAT
+ * ignores it, but a baseline arm running such a build would put its store
+ * wherever it named — outside the arm the lab measures and clears.
+ */
+const RETIRED_STORE_DIR_ENV = 'VAT_PROJECTION_STORE_DIR';
+
+/**
  * @param env - A caller's arm environment
  * @returns The refusal naming the first variable {@link armDirectoryEnvironment} owns that it sets or unsets, or `null`
  */
 export function armOwnedEnvRefusal(env: ArmEnvironment, platform: NodeJS.Platform = process.platform): string | null {
   const spell = envNameSpelling(platform);
   const ownedKeys = new Set(armDirectoryEnvKeys().map(spell));
-  const owned = [...Object.keys(env.set), ...env.unset].find((name) => ownedKeys.has(spell(name)));
+  const named = [...Object.keys(env.set), ...env.unset];
+  const retired = named.find((name) => spell(name) === spell(RETIRED_STORE_DIR_ENV));
+  if (retired !== undefined) {
+    return `${retired} relocates the projection store in older VAT builds (a baseline arm still honours it), which would move the store out of the arm; the lab sets VAT_CACHE_DIR instead`;
+  }
+  const owned = named.find((name) => ownedKeys.has(spell(name)));
   return owned === undefined
     ? null
     : `${owned} is set by the lab itself on every arm (a private VAT cache, temp directory, home and npm cache under its arms root); an arm cannot choose it`;

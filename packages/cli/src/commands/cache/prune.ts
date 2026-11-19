@@ -4,19 +4,22 @@
  * A cache root that CI saves and restores (`VAT_CACHE_DIR`) only grows: every
  * VAT release writes a new namespace beside the old ones, and every change to
  * the projection's shape writes a new `projection-<digest>` store beside the
- * old one. Nothing reads them again. `clear` would reclaim them, but it also
- * throws away the warm cache the restore was for. Prune keeps exactly:
+ * old one. `clear` would reclaim them, but it also throws away the warm cache
+ * the restore was for. Prune removes only entries VAT recognises as its own
+ * (`isVatCacheRootEntryName`, `isProjectionStoreDirectoryName`):
  *
- * - the root's `CACHEDIR.TAG` (the guard's marker — see {@link recognisedCacheRoot});
- * - the current namespace (`vatCacheNamespace()`), and inside it everything
- *   except `projection-*` directories other than the current shape's store.
+ * - at the root, every namespace but this build's — older AND newer releases,
+ *   and, under the shared default root, other worktrees' and other VATs'
+ *   namespaces too — and the link-cache files older releases kept there before
+ *   they moved to `<tmpdir>/.vat-link-cache`;
+ * - inside this build's namespace, every projection store but this shape's.
  *
- * Everything else at the root goes — older namespaces, and the link-cache files
- * older releases kept there before they moved to `<tmpdir>/.vat-link-cache`.
- * The link cache itself is never touched: it is not under the root.
+ * An entry it does not recognise is never touched, wherever it is: a
+ * `VAT_CACHE_DIR` someone else also writes into keeps their files. The link
+ * cache itself is never touched either: it is not under the root.
  */
 
-import { projectionShapeDigest, VAT_CACHE_TAG_FILE, vatCacheNamespace } from '@vibe-agent-toolkit/resources';
+import { isProjectionStoreDirectoryName, isVatCacheRootEntryName, projectionStoreDirectoryName, vatCacheNamespace } from '@vibe-agent-toolkit/resources';
 import { buildReport, type Gate } from '@vibe-agent-toolkit/schema';
 import { applyTreePlanOrLeftover, direntKind, planTreeChanges, safePath } from '@vibe-agent-toolkit/utils';
 
@@ -32,8 +35,6 @@ const VERB = 'cache prune';
 const CACHE_PRUNE_GATE: Gate = { strict: false };
 /** One location is considered on every run: the cache root. */
 const CACHE_ROOTS_CONSIDERED = 1;
-/** The prefix every projection store directory carries. */
-const STORE_PREFIX = 'projection-';
 
 export interface CachePruneOptions {
   debug?: boolean;
@@ -59,19 +60,18 @@ interface CachePruneOutcome {
 }
 
 /**
- * The entries a prune of `target` removes, relative to the root: every
- * top-level entry but the tag and the namespace, and every other-shape store
- * inside the namespace.
+ * The entries a prune of `target` removes, relative to the root: every VAT
+ * root entry but the kept namespace, and every other-shape store inside it.
+ * Only names VAT recognises as its own are ever candidates.
  */
 async function pruneCandidates(target: PruneTarget): Promise<string[]> {
   const top = await listedOrVanished(target.root);
   if (top === null) return [];
-  const keptAtRoot = new Set([VAT_CACHE_TAG_FILE, target.namespace]);
-  const candidates = top.filter((entry) => !keptAtRoot.has(entry.name)).map((entry) => entry.name);
+  const candidates = top.filter((entry) => entry.name !== target.namespace && isVatCacheRootEntryName(entry.name)).map((entry) => entry.name);
   const namespaceEntry = top.find((entry) => entry.name === target.namespace);
   if (namespaceEntry === undefined || direntKind(namespaceEntry) !== 'directory') return candidates;
   const inside = (await listedOrVanished(safePath.join(target.root, target.namespace))) ?? [];
-  const staleStores = inside.filter((entry) => entry.name.startsWith(STORE_PREFIX) && entry.name !== target.keptStore);
+  const staleStores = inside.filter((entry) => isProjectionStoreDirectoryName(entry.name) && entry.name !== target.keptStore);
   return [...candidates, ...staleStores.map((entry) => `${target.namespace}/${entry.name}`)];
 }
 
@@ -131,7 +131,7 @@ export async function cachePruneCommand(options: CachePruneOptions = {}): Promis
   let outcome: CachePruneOutcome;
   try {
     const root = recognisedCacheRoot();
-    outcome = await pruneCacheRoot({ root, namespace: vatCacheNamespace(), keptStore: `${STORE_PREFIX}${projectionShapeDigest()}`, dryRun: options.dryRun === true });
+    outcome = await pruneCacheRoot({ root, namespace: vatCacheNamespace(), keptStore: projectionStoreDirectoryName(), dryRun: options.dryRun === true });
   } catch (error) {
     return endWithRefusal(VERB, refusalCodeOf(error), error, 'yaml', CACHE_PRUNE_GATE, NOTHING_FINISHED);
   }

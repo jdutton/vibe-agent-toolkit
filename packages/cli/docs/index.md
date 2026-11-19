@@ -413,16 +413,21 @@ Caching is a pure optimisation: a run with it off produces identical results, on
 ### VAT_CACHE_DIR
 The cache root: the directory holding the parse cache and the projection store, one subdirectory
 per VAT release. Defaults to `<tmpdir>/.vat-cache`. A relative path resolves against the current
-directory; an empty value means unset. This is the directory to save and restore between CI runs
-(key the CI cache on the runner's OS and the VAT version or lockfile hash); the external-URL caches
-never live under it. VAT writes a `CACHEDIR.TAG` into a root it creates or finds empty, and
-`vat cache clear` and `vat cache prune` refuse a root without one (other than the default), so
-point it at a new or empty directory. A projection store a restore left damaged is discarded with
-a warning and rebuilt.
+directory; an empty value means unset. This is the directory to save and restore between CI runs;
+the external-URL caches never live under it. Put it outside the checkout (in GitHub Actions,
+`${{ runner.temp }}/vat-cache`): VAT warns when it is inside the scanned tree. Key the CI cache on
+the runner's OS, architecture, Node version, lockfile hash and commit, and restore only from keys
+that share all but the commit; never fall back across lockfile hashes. VAT writes a `CACHEDIR.TAG`
+into a root it creates or finds empty, and `vat cache clear` and `vat cache prune` refuse a root
+without one (other than the default), so point it at a directory used only by VAT. Another VAT
+build never reads the cache; within a build the parse cache and the store's blob tier are keyed by
+file content and hit on any machine with the same bytes, while a stored tree is keyed by the
+repository's identity and path and misses when the checkout moves. A projection store SQLite finds
+corrupt or not a database at open is discarded with a warning and rebuilt.
 
 ```bash
-VAT_CACHE_DIR=.vat-ci-cache vat validate
-VAT_CACHE_DIR=.vat-ci-cache vat cache prune   # before saving: drop older releases' entries
+VAT_CACHE_DIR="$RUNNER_TEMP/vat-cache" vat validate
+VAT_CACHE_DIR="$RUNNER_TEMP/vat-cache" vat cache prune   # before saving: drop what this build does not use
 ```
 
 ### VAT_DEBUG
@@ -701,7 +706,7 @@ data:
 ### `cache prune`
 
 An older release namespace and an older-shape projection store pruned from a CI cache root.
-Produced by `VAT_CACHE_DIR=.ci-cache vat cache prune`.
+Produced by `VAT_CACHE_DIR="$RUNNER_TEMP/vat-cache" vat cache prune`.
 
 ```yaml vat-report=cache prune
 status: ok
@@ -714,13 +719,13 @@ summary:
 gate:
   strict: false
 data:
-  cacheDir: /work/repo/.ci-cache
-  namespace: x.y.z
-  keptStore: x.y.z/projection-0123456789abcdef
+  cacheDir: /home/runner/work/_temp/vat-cache
+  namespace: 0.2.1
+  keptStore: 0.2.1/projection-0123456789ab
   dryRun: false
   removed:
-    - w.y.z
-    - x.y.z/projection-fedcba9876543210
+    - 0.2.0
+    - 0.2.1/projection-ba9876543210
   entriesRemoved: 4
   bytesRemoved: 1048576
 ```

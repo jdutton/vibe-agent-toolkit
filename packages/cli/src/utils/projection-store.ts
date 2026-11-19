@@ -49,8 +49,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
-import { PROJECTION_TABLES, type FactStore, type PopulationCache, type Projection, type ProjectionTableName } from '@vibe-agent-toolkit/resources';
-import { parseEnvBoolean } from '@vibe-agent-toolkit/utils';
+import { PROJECTION_TABLES, VAT_CACHE_DIR_ENV, type FactStore, type PopulationCache, type Projection, type ProjectionTableName, vatCacheRoot } from '@vibe-agent-toolkit/resources';
+import { parseEnvBoolean, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { freshGitTreeSnapshot, gitSnapshotFailureOf, gitTreeSnapshot, type GitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 
 import { noticeToOperator, withNoticeLedger } from './operator-notices.js';
@@ -257,6 +257,7 @@ export async function openPopulationCache(options: {
   const snapshot = storeKeyOrNotice(options.root);
   if (snapshot === null) return undefined;
 
+  noticeCacheRootInsideTree(options.root);
   const store = await loadStore();
   if (store === undefined) return undefined;
   const cwd = options.root;
@@ -271,6 +272,27 @@ export async function openPopulationCache(options: {
     },
     close: () => store.close(),
   };
+}
+
+/**
+ * Tell the operator, once, when the cache root sits inside the tree being
+ * scanned — a relative `VAT_CACHE_DIR` in a CI workspace, typically. The cache
+ * then lives among the files VAT scans and a CI cache save carries it beside
+ * the checkout; `${{ runner.temp }}/vat-cache` is the place for it. A notice,
+ * not a refusal: the run is still correct.
+ *
+ * @param root - The absolute corpus root
+ */
+function noticeCacheRootInsideTree(root: string): void {
+  const cacheRoot = vatCacheRoot();
+  const tree = `${toForwardSlash(safePath.resolve(root)).replace(/\/$/u, '')}/`;
+  if (!`${toForwardSlash(cacheRoot)}/`.startsWith(tree)) return;
+  noticeToOperator(
+    'store',
+    `${VAT_CACHE_DIR_ENV} (${cacheRoot}) is inside the scanned tree ${root}. Put it outside the checkout`
+    + ' (in GitHub Actions, ${{ runner.temp }}/vat-cache) so the cache is neither scanned nor saved with the tree.',
+    cacheRoot,
+  );
 }
 
 /**
@@ -292,7 +314,7 @@ export async function openPopulationCache(options: {
  * fresh store opened in its place; if that fails too, the run carries on with no
  * store, saying so.
  *
- * 🪤 Only the open is forgiven. Any other open failure (a lock, a permission,
+ * 🪤 Only the open is forgiven. Any other open failure (a lock, a permission, a path SQLite cannot open,
  * a full disk) still throws, and a store that fails MID-RUN on a read or write
  * still surfaces through `populate()` — a cache that silently stops working is
  * how a week of full-price runs goes unnoticed.

@@ -11,7 +11,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'n
 import { DatabaseSync } from 'node:sqlite';
 
 import type { ExtentKey } from '@vibe-agent-toolkit/resources';
-import { isVatError, safePath } from '@vibe-agent-toolkit/utils';
+import { isVatError, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -75,6 +75,16 @@ describe('a damaged store file is reported as unopenable', () => {
     const error = await openFailure();
     expect(isStoreUnopenableError(error)).toBe(true);
     expect(String((error as Error).message)).toMatch(/malformed|not a database/u);
+  });
+
+  it('never calls a store it could not open at all (SQLITE_CANTOPEN) damaged: that is the machine, not the file', async () => {
+    // A directory where the database file should be: SQLite cannot open it, and deleting files
+    // will not fix it. Reporting it as unopenable would invite the caller to discard a cache
+    // that is not broken (a permission or path fault is the machine's state).
+    mkdirSyncReal(databaseFile());
+    const error = await openFailure();
+    expect(error).toBeInstanceOf(Error);
+    expect(isStoreUnopenableError(error)).toBe(false);
   });
 
   it('is discarded whole, and a fresh store opens in its place', async () => {

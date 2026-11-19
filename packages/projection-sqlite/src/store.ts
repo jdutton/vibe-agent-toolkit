@@ -110,7 +110,7 @@ import {
   type FactStore,
   type ProjectionColumnType,
   projectionColumnTypes,
-  projectionShapeDigest,
+  projectionStoreDirectoryName,
   quoteIdentifier,
   markVatCacheRoot,
   vatCacheNamespaceRoot,
@@ -275,12 +275,12 @@ export interface SqliteStoreOptions {
  * from another's — and then under the projection's own **shape digest**, so a
  * change to the row schemas lands in a different file rather than being read
  * back as rows this build would misinterpret. No version, no migration: the old
- * directory simply goes cold and the tmpdir purge reclaims it.
+ * directory simply goes cold, and `vat cache prune` (or the tmpdir purge) reclaims it.
  *
  * @returns Absolute path, forward-slashed
  */
 export function defaultStoreDirectory(): string {
-  return safePath.join(vatCacheNamespaceRoot(), `projection-${projectionShapeDigest()}`);
+  return safePath.join(vatCacheNamespaceRoot(), projectionStoreDirectoryName());
 }
 
 /**
@@ -406,15 +406,32 @@ function openStoreAt(databasePath: string, options: SqliteStoreOptions): FactSto
 export const PROJECTION_STORE_UNOPENABLE_CODE = 'PROJECTION_STORE_UNOPENABLE';
 
 /**
- * SQLite's primary result codes that say the FILE is the problem, not the
- * moment: `SQLITE_CORRUPT` (11), `SQLITE_CANTOPEN` (14), `SQLITE_NOTADB` (26).
+ * SQLite's primary result codes that say the FILE's bytes are the problem,
+ * not the moment: `SQLITE_CORRUPT` (11) and `SQLITE_NOTADB` (26).
  *
  * 🪤 Deliberately not `SQLITE_BUSY`/`SQLITE_LOCKED`: a store another process
  * holds is healthy, and discarding it would destroy a working cache under a
- * concurrent run. Nor `SQLITE_IOERR`/`SQLITE_FULL`/`SQLITE_READONLY`: those
- * are the machine's state, and a fresh file would fail the same way.
+ * concurrent run. Nor `SQLITE_CANTOPEN`/`SQLITE_IOERR`/`SQLITE_FULL`/
+ * `SQLITE_READONLY`: those are the machine's state (a permission, a path, a
+ * full disk), and a fresh file would fail the same way.
  */
-const DAMAGED_DATABASE_RESULT_CODES: ReadonlySet<number> = new Set([11, 14, 26]);
+const DAMAGED_DATABASE_RESULT_CODES: ReadonlySet<number> = new Set([11, 26]);
+
+/**
+ * SQLite's primary result codes that say another connection holds the
+ * database: `SQLITE_BUSY` (5) and `SQLITE_LOCKED` (6). The moment, not the file.
+ */
+const CONTENDED_RESULT_CODES: ReadonlySet<number> = new Set([5, 6]);
+
+/**
+ * @param error - Anything thrown
+ * @returns SQLite's primary result code when `error` itself is a SQLite error, else `undefined`
+ */
+function sqlitePrimaryResultCode(error: unknown): number | undefined {
+  if (!(error instanceof Error)) return undefined;
+  const { code, errcode } = error as Error & { code?: unknown; errcode?: unknown };
+  return code === 'ERR_SQLITE_ERROR' && typeof errcode === 'number' ? errcode & 0xff : undefined;
+}
 
 /**
  * Whether `error`, or any error in its `cause` chain, is a SQLite failure whose
@@ -425,16 +442,17 @@ const DAMAGED_DATABASE_RESULT_CODES: ReadonlySet<number> = new Set([11, 14, 26])
  */
 function isDamagedDatabaseFault(error: unknown): boolean {
   for (let current = error; current instanceof Error; current = current.cause) {
-    const { code, errcode } = current as Error & { code?: unknown; errcode?: unknown };
-     
-    if (code === 'ERR_SQLITE_ERROR' && typeof errcode === 'number' && DAMAGED_DATABASE_RESULT_CODES.has(errcode & 0xff)) return true;
+    const primary = sqlitePrimaryResultCode(current);
+    if (primary !== undefined && DAMAGED_DATABASE_RESULT_CODES.has(primary)) return true;
   }
   return false;
 }
 
 /**
  * An existing store file SQLite could not open as a database: corrupt,
- * truncated, not a database at all, or not openable.
+ * truncated, or not a database at all. A file SQLite cannot open for a
+ * machine reason (a permission, a directory in its place, a full disk) is not
+ * this error: it surfaces as itself, because discarding would not fix it.
  *
  * Thrown only at open, and only for a file that was there before the open —
  * never for a store that fails mid-run, which surfaces as itself. The caller
@@ -526,7 +544,10 @@ function adoptLegacyBlobKeys(database: DatabaseSync): void {
  * snapshot) stays in the WAL, where every connection still reads it, and the
  * last close folds it in. The busy timeout is dropped to zero first, so a
  * contended checkpoint returns at once instead of holding the close for the
- * full timeout; a `busy` result and a thrown `SQLITE_BUSY` are both that case.
+ * full timeout; a `busy` result and a thrown `SQLITE_BUSY`/`SQLITE_LOCKED` are
+ * both that case. Any other failure (`SQLITE_IOERR`, `SQLITE_FULL`,
+ * `SQLITE_CORRUPT`) is the store or the machine failing, and surfaces — after
+ * the connection is closed, see {@link SqliteFactStore.close}.
  * Pinned by `store-damage.integration.test.ts` (a reader mid-snapshot during close).
  *
  * @param database - The connection about to close
@@ -536,9 +557,9 @@ function checkpointBestEffort(database: DatabaseSync): void {
     database.exec('PRAGMA busy_timeout = 0');
     database.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
   } catch (error) {
-    // A contended checkpoint is SQLite's own refusal: see above — the WAL keeps what it could not
-    // copy. Anything that is not SQLite speaking is a defect, and surfaces.
-    if ((error as { code?: unknown } | null)?.code !== 'ERR_SQLITE_ERROR') throw error;
+    // Only contention is benign: see above — the WAL keeps what it could not copy.
+    const primary = sqlitePrimaryResultCode(error);
+    if (primary === undefined || !CONTENDED_RESULT_CODES.has(primary)) throw error;
   }
 }
 
@@ -1267,8 +1288,11 @@ class SqliteFactStore implements FactStore {
     return promised(() => {
       if (this.#closed) return;
       this.#closed = true;
-      checkpointBestEffort(this.#tables.database);
-      this.#tables.database.close();
+      try {
+        checkpointBestEffort(this.#tables.database);
+      } finally {
+        this.#tables.database.close();
+      }
     });
   }
 

@@ -5,7 +5,6 @@
  */
 
 import { promises as fs } from 'node:fs';
-import { homedir } from 'node:os';
 
 import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
@@ -143,22 +142,94 @@ describe('recogniseVatCacheRoot', () => {
     expect(recognition.kind === 'refused' ? recognition.reason : '').toMatch(/current directory/u);
   });
 
-  it('refuses the home directory, the temp directory and the filesystem root', () => {
-    for (const protectedDir of [homedir(), normalizedTmpdir(), safePath.resolve('/')]) {
-      expect(recogniseVatCacheRoot(protectedDir).kind, protectedDir).toBe('refused');
-    }
+  it.each([
+    ['the home directory', /home directory/u, (dir: string): void => { vi.stubEnv('HOME', dir); vi.stubEnv('USERPROFILE', dir); }],
+    ['the temp directory itself', /temp directory itself/u, stubTmpdir],
+  ] as const)('refuses a tagged root that is %s — the protected rule alone decides it', async (_name, reason, makeProtected) => {
+    // Tagged by VAT, so nothing but the protected-location rule can refuse it.
+    const root = await taggedRoot('protected');
+    makeProtected(root);
+    const recognition = recogniseVatCacheRoot(root);
+    expect(recognition.kind).toBe('refused');
+    expect(recognition.kind === 'refused' ? recognition.reason : '').toMatch(reason);
   });
 
-  it('recognises the default location without a tag (a tree an older VAT wrote)', () => {
-    vi.stubEnv(VAT_CACHE_DIR_ENV, undefined);
+  it('refuses the filesystem root', () => {
+    expect(recogniseVatCacheRoot(safePath.resolve('/')).kind).toBe('refused');
+  });
+
+  it('recognises the default location without a tag (a tree an older VAT wrote)', async () => {
+    const root = await defaultRootUnder(safePath.join(scratch, 'tmp'));
+    await fs.mkdir(root, { recursive: true });
+    await fs.writeFile(safePath.join(root, 'external-links.json'), '{}');
+    expect(recogniseVatCacheRoot(root)).toEqual({ kind: 'recognised', by: 'default-location' });
+  });
+
+  it.skipIf(process.platform === 'win32')('refuses a default location that is a symbolic link, tagged target or not', async () => {
+    // A link at <tmpdir>/.vat-cache — planted by another user on a shared /tmp, or an old link to a
+    // shared disk — must never lend its target the default location's untagged recognition.
+    const target = safePath.join(scratch, 'someone-elses');
+    await fs.mkdir(target);
+    await fs.writeFile(safePath.join(target, 'work.txt'), 'keep');
+    const root = await defaultRootUnder(safePath.join(scratch, 'tmp'));
+    await fs.symlink(target, root);
+    expect(recogniseVatCacheRoot(root).kind).toBe('refused');
+
+    markVatCacheRoot();
+    await expect(fs.readFile(safePath.join(target, VAT_CACHE_TAG_FILE), 'utf-8')).rejects.toThrow();
+  });
+
+  it.skipIf(process.getuid === undefined)('refuses a default location another user owns', async () => {
+    const root = await defaultRootUnder(safePath.join(scratch, 'tmp'));
+    await fs.mkdir(root, { recursive: true });
+    const realUid = process.getuid?.() ?? 0;
+    vi.spyOn(process, 'getuid').mockReturnValue(realUid + 1);
+    expect(recogniseVatCacheRoot(root).kind).toBe('refused');
+  });
+
+  it('grants the default location only on an exact spelling: a case variant is just an untagged directory', async () => {
     const fakeTmp = safePath.join(scratch, 'tmp');
-    vi.stubEnv('TMPDIR', fakeTmp);
-    vi.stubEnv('TEMP', fakeTmp);
-    vi.stubEnv('TMP', fakeTmp);
-    const root = vatCacheRoot();
-    return fs.mkdir(root, { recursive: true }).then(async () => {
-      await fs.writeFile(safePath.join(root, 'external-links.json'), '{}');
-      expect(recogniseVatCacheRoot(root)).toEqual({ kind: 'recognised', by: 'default-location' });
-    });
+    await defaultRootUnder(fakeTmp);
+    const variant = safePath.join(fakeTmp, '.VAT-Cache');
+    await fs.mkdir(variant, { recursive: true });
+    await fs.writeFile(safePath.join(variant, 'work.txt'), 'keep');
+    expect(recogniseVatCacheRoot(variant).kind).toBe('refused');
   });
 });
+
+describe('markVatCacheRoot at a protected location', () => {
+  it('does not tag an empty directory that is the home directory', async () => {
+    const root = safePath.join(scratch, 'home');
+    await fs.mkdir(root);
+    vi.stubEnv('HOME', root);
+    vi.stubEnv('USERPROFILE', root);
+    vi.stubEnv(VAT_CACHE_DIR_ENV, root);
+    markVatCacheRoot();
+    await expect(fs.readFile(safePath.join(root, VAT_CACHE_TAG_FILE), 'utf-8')).rejects.toThrow();
+  });
+});
+
+/** Point the temp directory (every platform's variable) at `dir`. */
+function stubTmpdir(dir: string): void {
+  vi.stubEnv('TMPDIR', dir);
+  vi.stubEnv('TEMP', dir);
+  vi.stubEnv('TMP', dir);
+}
+
+/** Make `fakeTmp` the temp directory, unset VAT_CACHE_DIR, and return the default root under it. */
+async function defaultRootUnder(fakeTmp: string): Promise<string> {
+  await fs.mkdir(fakeTmp, { recursive: true });
+  vi.stubEnv(VAT_CACHE_DIR_ENV, undefined);
+  stubTmpdir(fakeTmp);
+  return vatCacheRoot();
+}
+
+/** A fresh directory VAT has tagged as its cache root. */
+async function taggedRoot(name: string): Promise<string> {
+  const root = safePath.join(scratch, name);
+  await fs.mkdir(root);
+  vi.stubEnv(VAT_CACHE_DIR_ENV, root);
+  markVatCacheRoot();
+  expect(recogniseVatCacheRoot(root)).toEqual({ kind: 'recognised', by: 'tag' });
+  return root;
+}

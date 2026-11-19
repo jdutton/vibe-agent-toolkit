@@ -244,7 +244,7 @@ export interface ParseCacheOptions {
   env?: NodeJS.ProcessEnv;
 }
 
-export { parseCacheDirectory, vatCacheNamespace, vatCacheNamespaceRoot } from './cache-namespace.js';
+export { isVatCacheRootEntryName, parseCacheDirectory, vatCacheNamespace, vatCacheNamespaceRoot } from './cache-namespace.js';
 
 
 /**

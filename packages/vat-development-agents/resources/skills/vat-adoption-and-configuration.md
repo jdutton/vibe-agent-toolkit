@@ -173,15 +173,27 @@ phases:
 Every resource-scanning verb populates a projection and, by default, keeps it in a SQLite file
 under the cache root — `VAT_CACHE_DIR`, else `<tmpdir>/.vat-cache/` — beside the parse cache:
 about 71 MB for a 12,600-file repository, bounded at three trees per repository and 50,000
-content keys. `vat cache clear` reclaims everything; `vat cache prune` drops only what this VAT
-release will never read again.
+content keys. `vat cache clear` reclaims everything; `vat cache prune` drops every entry VAT wrote
+that this build does not use.
 
-- **Persist `VAT_CACHE_DIR` between CI runs** to start warm. Point it at a new or empty directory
-  (VAT tags it with `CACHEDIR.TAG`; `clear` and `prune` refuse an untagged one), gitignore it if
-  it sits in the checkout, and key the CI cache on the runner's OS plus the VAT version or
-  lockfile hash. A cache restored onto another machine kind simply misses; a damaged store is
-  discarded with a warning and rebuilt. Run `vat cache prune` before the save so the cache stops
-  growing with every release. A relative path resolves against the current directory.
+- **Persist `VAT_CACHE_DIR` between CI runs** to start warm. Point it at a directory used only by
+  VAT, outside the checkout (`${{ runner.temp }}/vat-cache`; VAT warns when it is inside the
+  scanned tree). VAT tags a new or empty directory with `CACHEDIR.TAG` on first use; `clear` and
+  `prune` refuse an untagged one. A relative path resolves against the current directory.
+- **Key the CI cache per run, restore from the same toolchain.** Key on OS, architecture, Node
+  version, lockfile hash and commit, and restore only from keys sharing everything but the commit.
+  The commit in the key lets each run save a fresh cache (an exact hit never saves, so a key
+  without it freezes the cache at its first save). Never fall back across lockfile hashes: VAT's
+  parser dependencies are semver ranges, so a different lockfile can resolve a different parser
+  under the same VAT namespace.
+- **What hits where.** Another VAT build never reads the cache. Within a build, the parse cache and
+  the store's blob tier are keyed by file content and hit on any machine with the same bytes; a
+  stored tree is keyed by the repository's identity and path, so it misses when the checkout moves
+  or line endings differ: a cold scan, never a wrong answer. A store SQLite finds corrupt or not a
+  database at open is discarded with a warning and rebuilt.
+- **Run `vat cache prune` before the save** so the cache stops growing with every release. It
+  removes every namespace but this build's and every other projection shape's store, and nothing
+  it does not recognise as VAT's.
 - **Give concurrent jobs on one runner separate `VAT_CACHE_DIR`s.** Otherwise they share one file.
 - **`VAT_PROJECTION_STORE=off`** opts out of the store alone; **`VAT_CACHE=0`** vetoes every VAT
   cache. Either costs a full re-derivation on every run.
@@ -189,17 +201,22 @@ release will never read again.
 ```yaml
 # GitHub Actions
 env:
-  VAT_CACHE_DIR: ${{ github.workspace }}/.vat-cache-ci
+  VAT_CACHE_DIR: ${{ runner.temp }}/vat-cache   # outside the checkout
 steps:
   - uses: actions/checkout@v4
+  - uses: actions/setup-node@v4
+    id: node
+    with:
+      node-version: 24
   - uses: actions/cache@v4
     with:
       path: ${{ env.VAT_CACHE_DIR }}
-      key: vat-${{ runner.os }}-${{ hashFiles('**/package-lock.json', '**/bun.lock') }}
-      restore-keys: vat-${{ runner.os }}-
+      key: vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('**/package-lock.json', '**/bun.lock') }}-${{ github.sha }}
+      restore-keys: |
+        vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('**/package-lock.json', '**/bun.lock') }}-
   - run: npm ci
   - run: npx vat validate
-  - run: npx vat cache prune   # drop older releases' entries before the cache is saved
+  - run: npx vat cache prune   # drop what this build does not use before the cache is saved
 ```
 
 ## First-Time Setup Checklist
