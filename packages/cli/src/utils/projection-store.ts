@@ -582,7 +582,7 @@ function joinableCache(
 }
 
 /** The scope's store, opened on first ask: the cache, or `undefined` when there is none to give. */
-export type PopulationCacheOf = () => Promise<PopulationCache | undefined>;
+type PopulationCacheOf = () => Promise<PopulationCache | undefined>;
 
 /**
  * Run the work inside a scope whose store is opened on its first ask, and closed
