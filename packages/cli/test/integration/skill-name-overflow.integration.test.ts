@@ -48,7 +48,7 @@ describe('a SKILL.md the parse worker refuses', () => {
   });
 
   it('is carried by config discovery as refused, not as a skill under any name', async () => {
-    const discovery = await discoverSkillsFromConfig({ include: ['**/SKILL.md'] }, skillDir, 'refuse');
+    const discovery = await discoverSkillsFromConfig({ include: ['**/SKILL.md'] }, skillDir, 'refuse', undefined);
     expect(discovery.skills).toEqual([]);
     expect(discovery.parseRefused).toMatchObject([
       { filePath: safePath.join(skillDir, 'SKILL.md'), code: 'RESOURCE_PARSE_LIMIT_EXCEEDED' },

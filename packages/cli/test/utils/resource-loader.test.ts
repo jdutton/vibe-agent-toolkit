@@ -38,7 +38,6 @@ const loadConfigMock = vi.fn();
 const gitTrackerInitializeMock = vi.fn();
 const gitTrackerGetStatsMock = vi.fn();
 const registryCrawlMock = vi.fn();
-const buildResourcePopulationMock = vi.fn();
 /** Absolute paths the fake fs reports as existing directories. */
 const existingDirectories = new Set<string>();
 let lastRegistryOptions: Record<string, unknown> | undefined;
@@ -62,7 +61,10 @@ function crawlPatterns(): Record<string, unknown> | undefined {
   return rest;
 }
 
-vi.mock('node:fs', () => {
+vi.mock('node:fs', async (importOriginal) => {
+  // Everything not faked below is the real module: the run opens a parse cache,
+  // which resolves its scratch root and reads VAT's own version off disk.
+  const actual = await importOriginal<OriginalModule>();
   const directory = { isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false };
   const fake = {
     existsSync: (p: string): boolean => existingDirectories.has(p),
@@ -76,15 +78,20 @@ vi.mock('node:fs', () => {
     },
   };
   // utils' link-following reaches the kernel through the DEFAULT object, so it is faked too.
-  return { ...fake, default: fake };
+  return { ...actual, ...fake, default: { ...actual, ...fake } };
 });
 
 vi.mock('@vibe-agent-toolkit/resources', async (importOriginal) => ({
   ...(await importOriginal<OriginalModule>()),
-  buildResourcePopulation: (options: unknown): unknown => buildResourcePopulationMock(options),
-  ResourceRegistry: class {
-    constructor(options: Record<string, unknown>) {
+  ResourceRegistry: class FakeRegistry {
+    // The run's registry: the loader never crawls it, only a view of it.
+    static forRun(): FakeRegistry {
+      return new FakeRegistry();
+    }
+    // The loader's view: its options are what the loader handed the registry.
+    view(options: Record<string, unknown>): FakeRegistry {
       lastRegistryOptions = options;
+      return new FakeRegistry();
     }
     // Returns what the real crawl returns: the mock's answer when a test gave
     // one, otherwise a crawl that used whichever lane it was handed.
@@ -132,7 +139,10 @@ import {
   RESOURCES_CRAWL_ENV,
   RESOURCES_CRAWL_PROJECTION,
   RESOURCES_CRAWL_WALK,
+  withRunContext,
 } from '../../src/utils/resource-loader.js';
+// eslint-disable-next-line import/first -- must come after vi.mock calls
+import { loadResourcesInRun as load } from '../helpers/in-run.js';
 
 const HIT = { population: 'store', stored: 'hit' } as const;
 const WRITTEN = { population: 'derived', stored: 'written' } as const;
@@ -179,7 +189,7 @@ function createTestLogger(): { logger: Logger; debugCalls: string[]; warnCalls: 
 async function loadedPopulation(): Promise<CrawlPopulation> {
   loadConfigMock.mockReturnValue(undefined);
   const { logger } = createTestLogger();
-  return (await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger)).population;
+  return (await load(undefined, PROJECT_ROOT, logger)).population;
 }
 
 describe('loadResourcesWithConfig', () => {
@@ -213,7 +223,7 @@ describe('loadResourcesWithConfig', () => {
     });
     const { logger } = createTestLogger();
 
-    const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
+    const result = await load(undefined, PROJECT_ROOT, logger);
 
     expect(crawlPatterns()).toEqual({
       baseDir: PROJECT_ROOT,
@@ -235,7 +245,7 @@ describe('loadResourcesWithConfig', () => {
     });
     const { logger } = createTestLogger();
 
-    const result = await loadResourcesWithConfig(SUBTREE_PATH, PROJECT_ROOT, logger);
+    const result = await load(SUBTREE_PATH, PROJECT_ROOT, logger);
 
     // baseDir stays at projectRoot so the config's root-relative globs evaluate
     // on the basis they were declared against; the path arg becomes an include
@@ -255,7 +265,7 @@ describe('loadResourcesWithConfig', () => {
     loadConfigMock.mockReturnValue({ resources: { exclude: EXCLUDE_PATTERNS } });
     const { logger } = createTestLogger();
 
-    await loadResourcesWithConfig(PROJECT_ROOT, PROJECT_ROOT, logger);
+    await load(PROJECT_ROOT, PROJECT_ROOT, logger);
 
     expect(crawlPatterns()).toEqual({
       baseDir: PROJECT_ROOT,
@@ -271,7 +281,7 @@ describe('loadResourcesWithConfig', () => {
     loadConfigMock.mockReturnValue({ resources: { exclude: EXCLUDE_PATTERNS } });
     const { logger } = createTestLogger();
 
-    await loadResourcesWithConfig('docs', safePath.resolve('.'), logger);
+    await load('docs', safePath.resolve('.'), logger);
 
     expect(crawlPatterns()).toEqual({
       baseDir: safePath.resolve('.'),
@@ -289,7 +299,7 @@ describe('loadResourcesWithConfig', () => {
     });
     const { logger, warnCalls } = createTestLogger();
 
-    const result = await loadResourcesWithConfig(EXPLICIT_PATH, PROJECT_ROOT, logger);
+    const result = await load(EXPLICIT_PATH, PROJECT_ROOT, logger);
 
     expect(crawlPatterns()).toEqual({ baseDir: EXPLICIT_PATH, unreadable: 'refuse', outputs: [] });
     expect(warnCalls.join('\n')).toContain(EXPLICIT_PATH);
@@ -301,7 +311,7 @@ describe('loadResourcesWithConfig', () => {
     const { logger } = createTestLogger();
 
     await expect(
-      loadResourcesWithConfig(MISSING_PATH, PROJECT_ROOT, logger),
+      load(MISSING_PATH, PROJECT_ROOT, logger),
     ).rejects.toThrow(MISSING_PATH);
     expect(lastCrawlOptions).toBeUndefined();
   });
@@ -317,7 +327,7 @@ describe('loadResourcesWithConfig', () => {
     loadConfigMock.mockReturnValue(config);
     const { logger } = createTestLogger();
 
-    await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
+    await load(undefined, PROJECT_ROOT, logger);
 
     expect(lastRegistryOptions?.config).toBe(config);
     expect(lastRegistryOptions?.baseDir).toBe(PROJECT_ROOT);
@@ -346,7 +356,7 @@ describe('loadResourcesWithConfig', () => {
     loadConfigMock.mockReturnValue(config);
     const { logger } = createTestLogger();
 
-    await expect(loadResourcesWithConfig(undefined, PROJECT_ROOT, logger)).rejects.toThrow(
+    await expect(load(undefined, PROJECT_ROOT, logger)).rejects.toThrow(
       /resources\.linkAuth providers\[0\] \(host "github\.example"\): rewrite\[0\]\.when/,
     );
     expect(lastRegistryOptions).toBeUndefined();
@@ -357,7 +367,7 @@ describe('loadResourcesWithConfig', () => {
     loadConfigMock.mockReturnValue(undefined);
     const { logger } = createTestLogger();
 
-    await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
+    await load(undefined, PROJECT_ROOT, logger);
 
     expect(lastRegistryOptions).not.toHaveProperty('config');
   });
@@ -373,7 +383,7 @@ describe('loadResourcesWithConfig', () => {
     loadConfigMock.mockReturnValue(config);
     const { logger } = createTestLogger();
 
-    await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
+    await load(undefined, PROJECT_ROOT, logger);
 
     expect(lastRegistryOptions?.config).toBe(config);
   });
@@ -382,7 +392,7 @@ describe('loadResourcesWithConfig', () => {
     loadConfigMock.mockReturnValue(undefined);
     const { logger } = createTestLogger();
 
-    const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
+    const result = await load(undefined, PROJECT_ROOT, logger);
 
     expect(crawlPatterns()).toEqual({ baseDir: PROJECT_ROOT, unreadable: 'refuse', outputs: [] });
     expect(result.config).toBeUndefined();
@@ -392,7 +402,7 @@ describe('loadResourcesWithConfig', () => {
     loadConfigMock.mockReturnValue(undefined);
     const { logger } = createTestLogger();
 
-    const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
+    const result = await load(undefined, PROJECT_ROOT, logger);
 
     expect(result.population.lane).toBe('projection');
     // The lane is a claim about what ran, so it has to agree with whether a
@@ -409,7 +419,7 @@ describe('loadResourcesWithConfig', () => {
     process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_WALK;
 
     try {
-      const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
+      const result = await load(undefined, PROJECT_ROOT, logger);
 
       expect(result.population.lane).toBe('walk');
       expect(lastCrawlOptions?.populationSource).toBeUndefined();
@@ -427,7 +437,7 @@ describe('loadResourcesWithConfig', () => {
     process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_PROJECTION;
 
     try {
-      const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
+      const result = await load(undefined, PROJECT_ROOT, logger);
 
       expect(result.population.lane).toBe('projection');
     } finally {
@@ -440,17 +450,13 @@ describe('loadResourcesWithConfig', () => {
     gitTrackerGetStatsMock.mockReturnValue({ cacheSize: 42 });
     const { logger, debugCalls } = createTestLogger();
 
-    await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
+    await load(undefined, PROJECT_ROOT, logger);
 
     expect(debugCalls).toContain(`Loaded config from ${PROJECT_ROOT}`);
     expect(debugCalls).toContain('GitTracker initialized with 42 tracked files');
   });
 
   describe('carries the population the crawl returned on the load result', () => {
-    beforeEach(() => {
-      buildResourcePopulationMock.mockReset();
-    });
-
     it('says the walk answered when the projection lane is not selected', async () => {
       process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_WALK;
       try {
@@ -478,18 +484,16 @@ describe('loadResourcesWithConfig', () => {
       expect(extentSourceOf(population)).toBe('git');
     });
 
-    it('hands the registry the WHOLE enumeration, outcome and enumerator included', async () => {
-      const enumeration = { paths: [], conditions: [], outcome: HIT, extentSource: 'filesystem' };
-      buildResourcePopulationMock.mockResolvedValue(enumeration);
-      let handed: unknown;
-      registryCrawlMock.mockImplementation(async (options: { populationSource?: InstalledSource }) => {
-        handed = await options.populationSource?.enumerate(PROJECT_ROOT, []);
+    it('hands the crawl the run\'s own source, the one route the outcome takes out', async () => {
+      loadConfigMock.mockReturnValue(undefined);
+      const { logger } = createTestLogger();
+
+      await withRunContext({ root: PROJECT_ROOT }, async (run) => {
+        await loadResourcesWithConfig(undefined, run, logger);
+        // No second source beside the run's: the run enumerates its home root
+        // once, and that enumeration's outcome is what the crawl returns.
+        expect(lastCrawlOptions?.['populationSource']).toBe(run.population.source);
       });
-
-      await loadedPopulation();
-
-      // The one route the outcome takes out: through `enumerate`, to the crawl.
-      expect(handed).toEqual(enumeration);
     });
   });
 });

@@ -23,6 +23,7 @@ import {
   partitionNotAdmitted,
   type ParseDispatcher,
   parseFileCached,
+  isParseLimitError,
   type ParseRefusedResource,
   type RegistryUnreadablePolicy,
   ResourceRegistry,
@@ -87,6 +88,7 @@ import { detectUndeclaredCrossSkillAuth } from './cross-skill-dependency-detecti
 import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
 import { collectUnqualifiedMcpToolIssues } from './mcp-tool-qualification.js';
 import { materializeIssue } from './rule-engine/index.js';
+import type { RunSkillRegistries } from './run-skill-registries.js';
 import { SOURCE_ONLY_CODES } from './source-only-codes.js';
 import {
   VALIDATION_RULES,
@@ -310,9 +312,14 @@ function unreadableRemedy(error: unknown): string {
  * unread (`EFTYPE`) — a bare `readFile` blocked on one until a writer appeared,
  * hanging the build.
  */
-async function readBundledMarkdown(file: string, location: string, side: FsSide): Promise<BundledMarkdownRead> {
+async function readBundledMarkdown(
+  file: string,
+  location: string,
+  side: FsSide,
+  dispatcher: ParseDispatcher,
+): Promise<BundledMarkdownRead> {
   try {
-    return { text: (await readTextContent(file)).text };
+    return { text: await bundledText(file, dispatcher) };
   } catch (error) {
     // Carried, not thrown: reads run in parallel, and the failure the caller
     // raises must be the first in bundle order, not the first to finish.
@@ -325,6 +332,23 @@ async function readBundledMarkdown(file: string, location: string, side: FsSide)
         location,
       ),
     };
+  }
+}
+
+/**
+ * A bundled file's text: the run's read of it when the dispatcher serves a run
+ * (one read per file per run, content-keying-and-git.md rule 4), else a read of
+ * its own. A file past the run's parse input cap is still read whole here, as it
+ * always was: this lane scans text, it does not parse it.
+ */
+async function bundledText(file: string, dispatcher: ParseDispatcher): Promise<string> {
+  const content = dispatcher.content;
+  if (content === undefined) return (await readTextContent(file)).text;
+  try {
+    return (await content.read(file, 'markdown')).content;
+  } catch (error) {
+    if (isParseLimitError(error)) return (await readTextContent(file)).text;
+    throw error;
   }
 }
 
@@ -791,6 +815,10 @@ async function baseRegistryForSkill(
   if (shared?.registry !== undefined && registryCoversSkill(shared.registry, skillPath)) {
     return shared.registry;
   }
+  // A run's views refuse a directory they cannot list (see `RunSkillRegistries`).
+  if (shared?.registries !== undefined && ruling.unreadable === 'refuse') {
+    return shared.registries.forRoot(projectRoot, ruling.outputs);
+  }
   const crawlOptions: CrawlRegistryOptions = {
     ...ruling,
     ...(shared?.populationSource !== undefined && { populationSource: shared.populationSource }),
@@ -910,6 +938,13 @@ export interface SkillValidationSharedContext {
   unreadable: RegistryUnreadablePolicy;
   /** Pre-built registry that covers the skill's project root. */
   registry?: ResourceRegistry;
+  /**
+   * The run's skill registries: when present, the validator's registry for a
+   * skill's project root is the run's view of that root, crawled once per run
+   * through the run's admissions, rather than a crawl of its own. Used under
+   * `'refuse'` only. Ignored when `registry` above already covers the skill.
+   */
+  registries?: RunSkillRegistries;
   /**
    * Where the file list for the validator's OWN registry comes from, when it has
    * to build one (no `registry` above, or one that does not cover this skill).
@@ -1287,7 +1322,7 @@ async function validateSkillForPackagingOn(
   const bundledLocations = bundledMarkdown.map((file) => issueLocation(file, locationRoot));
   // Independent reads, folded below in bundle order.
   const bundledReads = await mapWithConcurrency(bundledMarkdown, (file, index) =>
-    readBundledMarkdown(file, bundledLocations[index] ?? '', side));
+    readBundledMarkdown(file, bundledLocations[index] ?? '', side, dispatcher));
   for (const [index, read] of bundledReads.entries()) {
     const bundledLocation = bundledLocations[index] ?? '';
     if ('failure' in read) throw read.failure;

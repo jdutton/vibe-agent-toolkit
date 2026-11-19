@@ -44,7 +44,7 @@ import { silentLogger } from '../test-doubles.js';
 
 async function discoveredIn(cwd: string): Promise<Awaited<ReturnType<typeof discoverSkillsFromConfig>>['skills']> {
   const config = loadConfig(cwd, 'source');
-  return config?.skills ? (await discoverSkillsFromConfig(config.skills, cwd, 'refuse')).skills : [];
+  return config?.skills ? (await discoverSkillsFromConfig(config.skills, cwd, 'refuse', undefined)).skills : [];
 }
 
 /** The plugin-local index `vat verify` builds for `cwd`, and the declared names it reads for it. */

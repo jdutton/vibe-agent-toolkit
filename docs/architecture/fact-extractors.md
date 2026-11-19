@@ -159,7 +159,7 @@ This ADR changes as follows; each old choice becomes a rejected alternative.
 - **I2a, content key.** Was: the content key hashes the working-tree bytes alone, never a git OID or
   cleaned blob, and every consumed byte is re-hashed at use. Now: content identity is per source. A
   file git holds (tracked, unmodified since the index) is identified by its git blob object id; any
-  other file by VAT's checksum. Within one run each file is read and hashed at most once and every
+  other file by VAT's content key. Within one run each file is read and hashed at most once and every
   lane shares that read and key; "re-hashed at use" means the producer consumes the one read that
   produced the key, never a second read to re-prove it. Rejected: a working-tree-bytes key for
   git-held files, because line endings, `eol`/`text` attributes, `core.autocrlf` and clean/smudge
@@ -168,8 +168,11 @@ This ADR changes as follows; each old choice becomes a rejected alternative.
   Now: outside what VAT supports; VAT does not defend against normalization differences. Rejected:
   closing the hole for files whose meaning depends on normalization.
 - **Warm path.** A warm store hit proves the tree unchanged; no lane re-admits or re-hashes files to
-  prove it again, and a mid-run re-check uses git's tree comparison. Enforced by a test asserting
-  `content.hashed` equals the distinct files hashed in a `vat validate` run.
+  prove it again, and a mid-run re-check uses git's tree comparison. "One run" is one VAT process;
+  the supervised checks child of `vat validate` is a separate process. Enforced by
+  `packages/cli/test/system/work-counters-validate.system.test.ts` (`content.read`,
+  `content.hashed`, the parse lookups, `registry.admitted`, `registry.built`). The store is on by
+  default; a store-off run is held to correctness only.
 - **Non-goals.** Was: cross-host or container-shared stores. Now: sharing across machine kinds;
   same-kind restore (CI save and restore keyed per runner OS) is in scope. Content-keyed entries hit
   across machine kinds, and by the first change above that hit is correct; machine kinds are
@@ -177,7 +180,8 @@ This ADR changes as follows; each old choice becomes a rejected alternative.
   input that can change facts for the same bytes. Rejected: a host-bound store, which forbids CI
   cache restore for no soundness gain.
 
-Built: the one-read rule, in the change that carries this amendment. Not built: the git-OID path
+Built: the one-read rule, as one admission per VAT process run (`RunContext`, `RunPopulation`, and
+registry views per phase; see [content keying](./content-keying-and-git.md)). Not built: the git-OID path
 (planned with incremental repopulation) and I2's runtime tuple in the parse-cache and blob keys (the
 namespace carries the VAT version only).
 

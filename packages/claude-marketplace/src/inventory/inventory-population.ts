@@ -63,6 +63,7 @@ import {
   type CollectionConfig,
   type JsonValue,
   type PopulationCache,
+  type PopulationRun,
   type Projection,
   type StoreMiss,
 } from '@vibe-agent-toolkit/resources';
@@ -238,6 +239,8 @@ function relativeToRoot(root: string, absolute: string): string {
  * @param options - The root, its skills, and the run's git oracle
  * @param options.root - Absolute projection root
  * @param options.skillMdPaths - Absolute SKILL.md paths under that root
+ * @param options.run - The population run it reads and parses through: one per
+ *   inventory run, opened by the caller (`withPopulationRun`), never per skill
  * @param options.gitTracker - The oracle, or omitted for the tracker-less
  *   population. Not cosmetic: `resource_realizations.gitignored` is filled only
  *   when a tracker was supplied, so its absence changes which refusal rules the
@@ -255,6 +258,7 @@ function relativeToRoot(root: string, absolute: string): string {
 export async function buildInventoryPopulation(options: {
   root: string;
   skillMdPaths: readonly string[];
+  run: PopulationRun;
   gitTracker?: GitTracker | undefined;
   cache?: PopulationCache | undefined;
   collections?: Readonly<Record<string, CollectionConfig>> | undefined;

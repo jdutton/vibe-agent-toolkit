@@ -21,8 +21,12 @@ import { BUILD_FAMILY_SHARDS } from '../fault-matrix/cases/build-family.js';
 import { runOnce } from '../fault-matrix/matrix.js';
 import { cleanupTestTempDir, createTestTempDir } from '../system/test-common.js';
 
-/** The most parse pools one `vat build` of this fixture holds open at the same time. */
-const MOST_POOLS_OPEN_AT_ONCE = 2;
+/**
+ * The most parse pools one `vat build` of this fixture holds open at the same time: skill
+ * discovery's, the run's (held for the whole run, so every lane of the run parses on it), and the
+ * one a registry still on the walk lane builds beside it. Two once no registry walks.
+ */
+const MOST_POOLS_OPEN_AT_ONCE = 3;
 
 describe('a cold vat build', () => {
   let base: string | undefined;
@@ -47,9 +51,9 @@ describe('a cold vat build', () => {
       diagnosticsChannel.unsubscribe('worker_threads', onWorker);
     }
 
-    // A parked thread serves the NEXT pool, never one open beside its own: the run holds two pools
-    // open at once at most (skill discovery's, and the projection's inside it), so two threads is
-    // the floor, against eleven when every pool started its own. Never zero: that would be a run
+    // A parked thread serves the NEXT pool, never one open beside its own: the run holds
+    // MOST_POOLS_OPEN_AT_ONCE pools open at once at most, so that many threads is the floor,
+    // against eleven when every pool started its own. Never zero: that would be a run
     // that parsed nothing, and proved nothing. No thread an earlier file parked can serve this
     // run — the case root stubs HOME and TMPDIR to a fresh directory, and a parked thread serves
     // only a pool started under its own environment.

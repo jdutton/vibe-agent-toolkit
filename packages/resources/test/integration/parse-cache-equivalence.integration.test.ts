@@ -305,17 +305,19 @@ describe('parse cache — resources sharing one content key', () => {
     const cold = await build(suite.twin(), new ParseCache({ cacheDir }));
 
     // Proves the fixture really can exercise the shared-entry path: two
-    // resources, one entry on disk. The second file hits within the SAME run,
-    // because `set` is awaited before the next file is read.
+    // resources, one entry on disk. The second file is never looked up on disk:
+    // the run's dispatcher answers each content key once, so it is served the
+    // first file's parse from memory.
     expect(cold.resources).toHaveLength(2);
     expect(await entryFiles(cacheDir)).toHaveLength(1);
-    expect(cold.stats).toStrictEqual({ hits: 1, misses: 1, writeFailures: 0 });
+    expect(cold.stats).toStrictEqual({ hits: 0, misses: 1, writeFailures: 0 });
   });
 
   it('never hands two resources the same links array', async () => {
     const { warm } = await suite.coldThenWarm(suite.twin());
 
-    expect(warm.stats).toStrictEqual({ hits: 2, misses: 0, writeFailures: 0 });
+    // One lookup for the shared key; the second file is answered from the run's memory.
+    expect(warm.stats).toStrictEqual({ hits: 1, misses: 0, writeFailures: 0 });
 
     const [left, right] = warm.resources;
     expect(left).toBeDefined();

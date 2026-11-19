@@ -27,10 +27,10 @@ import { crawlSkillLinkRegistry } from '@vibe-agent-toolkit/claude-marketplace';
 import { DEFAULT_RESOURCE_EXCLUDE, DEFAULT_RESOURCE_INCLUDE, type ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import type { CrawlOptions, UnreadablePolicy } from '@vibe-agent-toolkit/utils/crawl';
 
-import { buildSkillsValidateRegistry } from '../commands/skills/validate.js';
+import { skillsValidateRegistries } from '../commands/skills/validate.js';
 import { loadConfig } from '../utils/config-loader.js';
 import { createLogger } from '../utils/logger.js';
-import { loadResourcesWithConfig } from '../utils/resource-loader.js';
+import { loadResourcesWithConfig, withRunContext } from '../utils/resource-loader.js';
 
 import type { LaneId } from './types.js';
 
@@ -102,7 +102,7 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
       };
     },
     build: async (projectRoot) => {
-      const loaded = await loadResourcesWithConfig(undefined, projectRoot, createLogger());
+      const loaded = await withRunContext({ root: projectRoot }, (run) => loadResourcesWithConfig(undefined, run, createLogger()));
       return loaded.registry;
     },
   },
@@ -164,9 +164,9 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
     // learned to route parsing through the project's declared collection
     // `mimeType`s and this copy did not, so the oracle described a lane nobody
     // runs. Naming the builder is what makes that class of drift impossible.
-    build: (projectRoot) => buildSkillsValidateRegistry(projectRoot, {
-      config: loadConfig(projectRoot, 'source'),
-    }),
+    build: (projectRoot) => withRunContext({ root: projectRoot }, (run) =>
+      skillsValidateRegistries(run, projectRoot, loadConfig(projectRoot, 'source')).forRoot(projectRoot, []),
+    ),
   },
 ]);
 

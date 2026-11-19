@@ -330,12 +330,15 @@ export const SKILLS_INCLUDE_REMEDY =
  * @param projectRoot - Absolute path to project root (where config yaml lives)
  * @param unreadable - What to do with a directory the crawl cannot list —
  *   see {@link DiscoveryUnreadablePolicy}; required, no default
+ * @param dispatcher - The run's dispatcher, so each SKILL.md is read and parsed
+ *   once per run, or `undefined` for a caller with no run (a dispatcher of its own)
  * @returns The skills it named, with their source paths, and the SKILL.md files the parse worker refused
  */
 export async function discoverSkillsFromConfig(
   skillsConfig: SkillsConfig,
   projectRoot: string,
   unreadable: DiscoveryUnreadablePolicy,
+  dispatcher: ParseDispatcher | undefined,
 ): Promise<SkillDiscovery> {
   const { include, exclude } = skillsConfig;
 
@@ -360,9 +363,9 @@ export async function discoverSkillsFromConfig(
 
   // Independent reads, kept in discovery order.
   const skillPaths = [...foundAbsPaths];
-  const names = await withParseDispatcher((dispatcher) =>
-    mapConcurrentFailingInOrder(skillPaths, (skillPath) => readSkillName(skillPath, dispatcher)),
-  );
+  const names = await withParseDispatcher((route) =>
+    mapConcurrentFailingInOrder(skillPaths, (skillPath) => readSkillName(skillPath, route)),
+  { dispatcher });
   const skills: DiscoveredSkill[] = [];
   const parseRefused: ParseRefusedResource[] = [];
   for (const [index, sourcePath] of skillPaths.entries()) {

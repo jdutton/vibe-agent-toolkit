@@ -185,11 +185,15 @@ describe('the incumbent crawl lane under a parse pool', () => {
     const shared = '# Same\n\nIdentical bytes.\n';
     const alpha = await plant('alpha.md', shared);
     const beta = await plant('beta.md', shared);
+    // Identical bytes are parsed ONCE per run, so alpha and beta are one
+    // dispatch; a distinct third document keeps two jobs in flight.
+    const gamma = await plant('gamma.md', '# Gamma\n\nDistinct bytes.\n');
 
     const { pool, record } = fakePool(4, { reverseCompletion: true });
     const registry = registryWith(pool);
-    const added = await registry.addResources([lead, alpha, beta]);
+    const added = await registry.addResources([lead, alpha, beta, gamma]);
 
+    expect(record.calls).toBe(3);
     expect(record.maxInFlight).toBe(2);
     const checksum = added[1]?.checksum ?? '';
     expect(registry.getResourcesByChecksum(checksum).map((r) => r.filePath)).toStrictEqual([

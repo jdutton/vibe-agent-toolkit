@@ -95,6 +95,7 @@ import {
   type RefusedContextFile,
   type RegionCost,
   type StatedLimit,
+  withPopulationRun,
 } from '@vibe-agent-toolkit/resources';
 import {
   exitCodeForReport,
@@ -1027,15 +1028,16 @@ function groupDigits(value: number): string {
  * @returns The populated projection
  */
 function populateContext(root: string, logger: Logger): Promise<Projection> {
-  return withPopulationCache({ root }, async (cache) => {
+  // The population is this verb's only lane, so it is the run's.
+  return withPopulationCache({ root }, (cache) => withPopulationRun(async (run) => {
     const { projection } = await populateAndReport(
-      { root, cache, logger, population: 'claude-context' },
+      { root, run, cache, logger, population: 'claude-context' },
       (wiring) => buildClaudeContextPopulation({ root, ...wiring }),
       (result) => result.projection,
       (result) => result.storeMiss,
     );
     return projection;
-  });
+  }));
 }
 
 /**

@@ -27,6 +27,7 @@ import {
   type BlobRefusalRows,
   type CollectionConfig,
   type PopulationCache,
+  type PopulationRun,
   type StoreMiss,
 } from '@vibe-agent-toolkit/resources';
 import type { GitTracker } from '@vibe-agent-toolkit/utils/git';
@@ -44,6 +45,8 @@ import type { Logger } from './logger.js';
  * they are absent, never present-and-undefined.
  */
 export interface PopulationWiring {
+  /** The run the population reads and parses through: the caller's, handed on unchanged. */
+  run: PopulationRun;
   gitTracker?: GitTracker | undefined;
   cache?: PopulationCache | undefined;
   collections?: Readonly<Record<string, CollectionConfig>> | undefined;
@@ -55,7 +58,9 @@ export interface PopulationWiring {
  * `population` because one command can build two — the resources lane and the
  * claude-context lens.
  *
- * @param options - The run: `root`, `cache`, `logger`, and the `population` name
+ * @param options - The run: `root`, `run` (the population run every lane of the
+ *   verb reads through, so one verb's populations read each file once), `cache`,
+ *   `logger`, and the `population` name
  * @param build - Builds the population from the wiring this entry supplies
  * @param refusalRowsOf - The rows the report reads, from a derive or a hit alike
  * @param storeMissOf - The store miss a refusal caused the run, if one did —
@@ -64,14 +69,14 @@ export interface PopulationWiring {
  * @returns Whatever `build` returned
  */
 export async function populateAndReport<R>(
-  options: { root: string; cache: PopulationCache | undefined; logger: Logger; population: string },
+  options: { root: string; run: PopulationRun; cache: PopulationCache | undefined; logger: Logger; population: string },
   build: (wiring: PopulationWiring) => Promise<R>,
   refusalRowsOf: (result: R) => BlobRefusalRows,
   storeMissOf: (result: R) => StoreMiss | undefined,
 ): Promise<R> {
-  const { root, cache, logger, population } = options;
+  const { root, run, cache, logger, population } = options;
   const gitTracker = await gitTrackerForProjectRoot(root);
-  const result = await build(populationWiring(gitTracker, cache, root));
+  const result = await build(populationWiring(run, gitTracker, cache, root));
   const refusals = describeBlobRefusals(refusalRowsOf(result));
   if (refusals !== undefined) logger.warn(`${population} population: ${refusals}`);
   const storeMiss = describeStoreMiss(storeMissOf(result));
@@ -80,8 +85,9 @@ export async function populateAndReport<R>(
 }
 
 /**
- * Wire one population's ignore oracle, store and declared collections.
+ * Wire one population's run, ignore oracle, store and declared collections.
  *
+ * @param run - The population run it reads and parses through
  * @param gitTracker - The ignore oracle, or undefined when there is none. Not
  *   cosmetic: `resource_realizations.gitignored` is filled only when a tracker
  *   was supplied, so its absence decides whether a consumer can TELL which
@@ -92,11 +98,13 @@ export async function populateAndReport<R>(
  * @returns The options to spread into the population builder's argument
  */
 function populationWiring(
+  run: PopulationRun,
   gitTracker: GitTracker | undefined,
   cache: PopulationCache | undefined,
   root: string,
 ): PopulationWiring {
   return {
+    run,
     ...(gitTracker !== undefined && { gitTracker }),
     ...(cache !== undefined && { cache }),
     ...collectionsOption(root),

@@ -14,7 +14,7 @@ import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger } from '../../utils/logger.js';
 import { assertReadableDirectoryArgument, projectRootOrNull } from '../../utils/project-root-policy.js';
 import { requireWritableDatabase } from '../../utils/rag-database.js';
-import { loadResourcesWithConfig } from '../../utils/resource-loader.js';
+import { loadResourcesWithConfig, withRunContext } from '../../utils/resource-loader.js';
 
 import { RAG_GATE, resolveDbPath } from './command-helpers.js';
 import type { RagIndexReport } from './index-schema.js';
@@ -143,7 +143,8 @@ export async function indexCommand(
     // when projectRoot is null we fall back to cwd for the crawl baseDir.
     // Indexing doesn't surface URI-reference resolution, so cwd is fine here.
     const crawlRoot = projectRoot ?? process.cwd();
-    const { registry, config } = await loadResourcesWithConfig(pathArg, crawlRoot, logger);
+    // One run around the load; the registry is read as plain data after it closes.
+    const { registry, config } = await withRunContext({ root: crawlRoot }, (run) => loadResourcesWithConfig(pathArg, run, logger));
 
     const allResources = registry.getAllResources();
     // The declared population is the admitted one PLUS every file the crawl

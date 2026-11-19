@@ -417,6 +417,7 @@ export async function readContentWithKey<K extends ParserKind>(
       throw breach;
     }
   });
+  countWork('content.read', 1);
   // `decodeTextContent` is the ONE decoder — see `utils`' text-content.ts. The
   // bytes handed to `computeContentKey` are the same ones, undecoded, on purpose:
   // this function COMPOSES a decode with a raw-bytes key.

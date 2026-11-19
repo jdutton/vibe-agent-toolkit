@@ -14,7 +14,7 @@ conflicting conclusion is marked superseded in place and its measurements are ke
 2. **There is no single universal content hash. Content identity is per source.** When git holds a
    file (tracked and unmodified since the index), its git blob object id is its content identity.
    When git does not hold it (untracked, ignored, build output, outside any repository, or a tracked
-   file modified since the index), VAT's own checksum is. The two need not name the same object: an
+   file modified since the index), VAT's content key is. The two need not name the same object: an
    identical file inside and outside git keying differently is accepted. The worst case hashes each
    file once each way, which is O(2n) = O(n). On one system, git-held and non-git files are a closed
    set: every file is exactly one of the two.
@@ -27,20 +27,37 @@ conflicting conclusion is marked superseded in place and its measurements are ke
    lockfile) and the extent key's root id, which is derived from the checkout path. The runtime
    tuple (the Node runtime and its Unicode version) is the one input that can change parse facts
    for the same bytes, so it belongs in the content-derived keys; it is not keyed yet.
-4. **One read and one key per file per run.** Within one VAT run each file is read and
+4. **One read and one key per file per run.** Within one VAT process run each file is read and
    content-hashed at most once, and every lane (projection population, the resource registry, skills
-   validation, `check`, link resolution) shares that one read and key. A warm projection-store hit
+   validation, `check`, link resolution) shares that one read and key. The supervised checks child of
+   `vat validate` is a separate process and holds the rule within itself. A warm projection-store hit
    proves the tree unchanged; no lane re-admits or re-hashes files to prove it again. Re-checking
-   whether the tree changed mid-run uses git's tree comparison, not file re-hashing. Enforced by a
-   test asserting that the `content.hashed` counter equals the number of distinct files hashed in a
-   `vat validate` run.
+   whether the tree changed mid-run uses git's tree comparison, not file re-hashing. Enforced by
+   `packages/cli/test/system/work-counters-validate.system.test.ts`, which asserts on the counters
+   `content.read`, `content.hashed`, the parse lookups, `registry.admitted` and `registry.built`.
+
+**Ruling: the store is on by default, and store-off runs are held to correctness only.** Waste in a
+run without the store (`VAT_PROJECTION_STORE=off`, a tree git cannot key, a damaged store that
+cannot be replaced) is not a concern; such a run must answer correctly, and rule 4's cost bound is
+not asserted for it.
 
 What is built:
 
 - Rule 1 needs no code; it removes obligations.
-- Rule 4 is being implemented now, with its enforcing test, in the change that adopts this decision.
+- Rule 4 is built. The verb opens the run: `RunContext { population, registry, dispatcher }`
+  (`withRunContext()` in `packages/cli/src/utils/resource-loader.ts`), built by `vat validate`,
+  `vat verify`, `vat resources validate`, `vat skills validate` and every other verb that crawls
+  resources; phase runners require it, and there is no ambient context. `RunPopulation`
+  (`packages/resources/src/projection/run-population.ts`) holds one content cache, one
+  `ParseDispatcher` that parses each content key once per run, the per-file admission facts (parse
+  result, size, mtime, checksum) shared across views, and each root's enumeration, done once.
+  `ResourceRegistry.forRun(population)` is the run's registry, built once; each phase crawls a
+  `registry.view(...)` with its own base directory, config and include set, and computes its own
+  ids, duplicates, links, population conditions and parse refusals with the same code. Views never
+  share link objects. Skills take one view per project root per run from `RunSkillRegistries`
+  (`packages/agent-skills/src/validators/run-skill-registries.ts`).
 - Rule 2's git-OID path is planned, together with incremental repopulation, and is not built. Until
-  it lands every path is keyed by VAT's checksum, which rule 2 permits for any file.
+  it lands every path is keyed by VAT's content key, which rule 2 permits for any file.
 - Rule 3 is partial: the cache namespace carries the VAT version; the runtime tuple (Node and its
   Unicode version) is not yet in the parse-cache or blob keys.
 

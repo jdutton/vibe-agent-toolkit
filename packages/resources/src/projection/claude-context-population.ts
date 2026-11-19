@@ -149,6 +149,7 @@ import {
   type TreePopulationOptions,
 } from './merge.js';
 import { resourceContributors } from './resource-population.js';
+import type { PopulationRun } from './run-population.js';
 
 /**
  * The claude-context population, and ONE provenance for it.
@@ -237,6 +238,7 @@ async function sharedEnumeration(root: string): Promise<CrawlSource> {
  *   here: with no tracker nothing is ignored, so {@link DECLINE_IGNORED}
  *   declines nothing and this pass discovers roots the real pass will too
  * @param source - The run's single enumeration, from {@link sharedEnumeration}
+ * @param run - The run it reads through (it reads nothing, but a population takes its run)
  *
  * Takes no `collections`: this pass is never handed a `cache`, so it has no
  * store key a declaration could move, and `claudeImportRootsFrom` reads `path`,
@@ -247,6 +249,7 @@ async function discoverImportRoots(
   root: string,
   gitTracker: GitTracker | undefined,
   source: CrawlSource,
+  run: PopulationRun | undefined,
 ): Promise<string[]> {
   const registry = new ContributorRegistry();
   // `'deferred'` — enumerated, deliberately not read. `claudeImportRootsFrom`
@@ -257,6 +260,7 @@ async function discoverImportRoots(
 
   const discovery = await populate({
     root,
+    ...(run !== undefined && { run }),
     registry,
     // The SAME parameter set the real pass below passes: a root discovered here
     // that the real pass declined would register a contributor whose extent is
@@ -394,7 +398,7 @@ async function importRoots(
   const root = populateOptions.root;
   const source = await sharedEnumeration(root);
   return {
-    roots: await discoverImportRoots(root, populateOptions.gitTracker, source),
+    roots: await discoverImportRoots(root, populateOptions.gitTracker, source, populateOptions.run),
     population: 'derived',
     source,
   };

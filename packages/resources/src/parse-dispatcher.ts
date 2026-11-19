@@ -125,6 +125,17 @@ export interface ParsePoolPolicy {
    */
   limits?: Partial<ParseLimits>;
   /**
+   * The run's content reads, which every file this dispatcher is asked to parse
+   * is read through, or omitted for a dispatcher that serves no run (each parse
+   * then reads the file itself). A run's dispatcher carries them so a file one
+   * lane already read (the population, a registry view) is not read and keyed a
+   * second time when another lane parses it by path (a SKILL.md's name, the
+   * packaging validator's parse): content-keying-and-git.md, "Decision: content
+   * identity is per source", rule 4. The source holds files to the same input
+   * cap as {@link limits}.
+   */
+  content?: ParseContentSource;
+  /**
    * How parse facts get back from a worker. Defaults to `VAT_PARSE_TRANSPORT`,
    * and to `'wire'` when that names nothing.
    *
@@ -388,9 +399,20 @@ function resolveKnob(fromPolicy: number | undefined, envName: string, fallback: 
  * byte-identical to the sequential loop each lane replaced: one target prepared,
  * one target emitted, in the lane's own output order.
  */
+/** A run's content reads: a file's content and key, read once per run and served after. */
+export interface ParseContentSource {
+  /**
+   * @param absolutePath - The file
+   * @param parserKind - The parser its content will be handed to
+   * @returns The content, its key and the parser it routes to
+   */
+  read(absolutePath: string, parserKind: ParserKind): Promise<KeyedContent>;
+}
+
 export class ParseDispatcher {
   readonly #cache: ParseCache;
   readonly #limits: Partial<ParseLimits> | undefined;
+  readonly #content: ParseContentSource | undefined;
   /** The input cap, resolved from {@link #limits} once, at construction: see {@link inputBytes}. */
   readonly #inputBytes: number;
   /** Every limit, resolved once: a cache hit is held to the output caps the worker would apply. */
@@ -421,6 +443,20 @@ export class ParseDispatcher {
     html: { documents: 0, bytes: 0 },
   };
 
+  /**
+   * Every parse this dispatcher has answered, by content key: a run parses (or
+   * looks up) each content once, whichever lane asks, so the population's blob
+   * stage and the registry's admission of the same file share one answer
+   * (content-keying-and-git.md, "Decision: content identity is per source",
+   * rule 4). A key names the bytes and the parser, and the limits are this
+   * dispatcher's own, so one key has one answer for the dispatcher's life. A
+   * refusal is an answer too and is held the same way.
+   *
+   * ⚠️ The answer is SHARED: a caller that mutates what it is handed (the
+   * registry resolves links in place) copies it first.
+   */
+  readonly #parsed = new Map<string, Promise<ParseResult>>();
+
   #pool: ParsePool | null = null;
   #width = 1;
   #closed = false;
@@ -430,6 +466,7 @@ export class ParseDispatcher {
   constructor(cache: ParseCache, policy: ParsePoolPolicy) {
     this.#cache = cache;
     this.#limits = policy.limits;
+    this.#content = policy.content;
     this.#resolvedLimits = resolveParseLimits(policy.limits);
     this.#inputBytes = this.#resolvedLimits.inputBytes;
     // Read per construction, not at module load. `'cache'` exactly,
@@ -509,8 +546,14 @@ export class ParseDispatcher {
     return this.#inputBytes;
   }
 
+  /** The run's content reads this dispatcher parses through, or `undefined` (see {@link ParsePoolPolicy.content}). */
+  get content(): ParseContentSource | undefined {
+    return this.#content;
+  }
+
   /**
-   * Parse one document, off-thread once a pool is active.
+   * Parse one document, off-thread once a pool is active: once per content key
+   * for this dispatcher's life (see {@link #parsed}).
    *
    * Every document that passes through here is also the sizing's SAMPLE — see
    * {@link considerActivation}. Recorded for hits as well as misses, because
@@ -526,6 +569,15 @@ export class ParseDispatcher {
    * @throws A `ParseLimitError` (`inputBytes`) for content past the cap
    */
   parse(keyed: ParsableContent): Promise<ParseResult> {
+    const held = this.#parsed.get(keyed.key);
+    if (held !== undefined) return held;
+    const parsed = this.#parseOnce(keyed);
+    this.#parsed.set(keyed.key, parsed);
+    return parsed;
+  }
+
+  /** {@link parse}, for a key this dispatcher has not answered yet. */
+  #parseOnce(keyed: ParsableContent): Promise<ParseResult> {
     const breach: Error | undefined = inputBytesBreach(keyed.byteLength, this.#inputBytes);
     if (breach !== undefined) {
       countWork('parse.refused.inputCap.dispatch', 1);
@@ -831,6 +883,10 @@ export function readContentForParse<K extends DocumentParserKind>(
   parserKind: K,
   route: ParseRoute,
 ): Promise<KeyedContent<K>> {
+  const content = route.dispatcher?.content;
+  // The run's read of this file, when the route serves a run: `read` hands back
+  // the kind it was asked for, as `readContentWithKey` does.
+  if (content !== undefined) return content.read(filePath, parserKind) as Promise<KeyedContent<K>>;
   return readContentWithKey(filePath, parserKind, parseInputBytesOf(route));
 }
 

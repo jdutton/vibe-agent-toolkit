@@ -39,6 +39,8 @@ export const WorkDumpSchema = z
     pid: z.number().int().nonnegative(),
     role: z.enum(WORK_COUNTER_ROLES),
     counters: z.record(WorkCounterNameSchema, z.number().int().nonnegative()),
+    // Absent from a build that predates phase attribution: such a dump is still read.
+    phases: z.record(z.string(), z.record(WorkCounterNameSchema, z.number().int().nonnegative())).optional(),
   })
   .strict();
 

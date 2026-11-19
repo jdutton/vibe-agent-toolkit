@@ -374,6 +374,7 @@ export {
   WORK_COUNTER_NAMES,
   WORK_COUNTER_ROLES,
   WORK_COUNTERS_ENV,
+  withWorkPhase,
   type ForbiddenWorkCountPolicy,
   type WorkCounter,
   type WorkCounterDump,

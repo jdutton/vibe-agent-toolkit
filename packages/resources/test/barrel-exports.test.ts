@@ -175,6 +175,7 @@ const BARREL_EXPORTS = [
   'ResourceTagSourceSchema',
   'RootRowSchema',
   'RunContentCache',
+  'RunPopulation',
   'SQL_IDENTIFIER_CHAR',
   'SQL_WHITESPACE',
   'SQL_WORD_START_CHAR',
@@ -352,6 +353,8 @@ const BARREL_EXPORTS = [
   'vatCacheRoot',
   'whatLoadsAt',
   'withParseDispatcher',
+  'withPopulationRun',
+  'withRunPopulation',
   'wrapLinkAuthDepsWithMemo',
   'writeArdManifest',
 ];

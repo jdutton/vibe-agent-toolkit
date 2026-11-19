@@ -16,6 +16,7 @@ import {
   extentSourceOf,
   loadResourcesWithConfig,
   type ResourceCrawlLane,
+  withRunContext,
 } from '../../utils/resource-loader.js';
 
 import type { ResourcesScanData, ResourcesScanReport } from './scan-schema.js';
@@ -176,7 +177,9 @@ export async function scanCommand(
     const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
 
     // Load resources with config support
-    const { registry, config, population } = await loadResourcesWithConfig(pathArg, projectRoot, logger);
+    // One run around the load; the registry is read as plain data after it closes.
+    const { registry, config, population } = await withRunContext({ root: projectRoot }, (run) =>
+      loadResourcesWithConfig(pathArg, run, logger));
     assertDeclaredCollection(config, options.collection);
 
     // Get all resources (filtered by collection if specified)

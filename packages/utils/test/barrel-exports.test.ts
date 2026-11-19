@@ -231,6 +231,7 @@ const BARREL_EXPORTS = [
   'withFsFaultSync',
   'withOuterBracket',
   'withTempDir',
+  'withWorkPhase',
   'writeFileUnder',
   'writeTimingDump',
 ];

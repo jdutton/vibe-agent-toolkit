@@ -53,6 +53,7 @@ const BARREL_EXPORTS = [
   'PATTERN_REGISTRY',
   'PromptInvariantError',
   'RateLimitSignal',
+  'RunSkillRegistries',
   'SKILL_EXTENT_CONTRIBUTOR_ID_PREFIX',
   'SKILL_EXTENT_KIND',
   'SKILL_PACKAGE_CHECKS_FAILED_CODE',

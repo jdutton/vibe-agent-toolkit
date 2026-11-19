@@ -65,7 +65,7 @@ vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
 });
 
 const { buildAuditReport, resetAuditCaches } = await import('../../src/commands/audit.js');
-const { runSkillsValidatePhase } = await import('../../src/commands/skills/validate.js');
+const { skillsValidateInRun } = await import('../helpers/in-run.js');
 const { resetSkillDiscoveryCache } = await import('../../src/skill-resolution/packaging-config.js');
 const { silentLogger } = await import('../test-helpers.js');
 
@@ -131,7 +131,7 @@ describe('the run-scoped conventional-suite probe reaches the production lanes',
   it('vat skills validate probes each skill root once for the whole run', async () => {
     const root = writeSkillProject();
 
-    await runSkillsValidatePhase(root, {});
+    await skillsValidateInRun(root);
 
     expect(probeCounts).toEqual(oneProbePerSkillRoot(root));
   });

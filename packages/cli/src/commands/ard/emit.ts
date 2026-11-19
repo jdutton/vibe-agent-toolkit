@@ -175,7 +175,7 @@ export async function runArdEmit(options: ArdEmitOptions): Promise<ArdEmitResult
           // throw is an invocation failure → exit 2 (see the catch in
           // `ardEmitCommand`).
           discoveredSkills: namedSkillsOrRefuse(
-            await discoverSkillsFromConfig(config.skills, projectRoot, 'refuse'),
+            await discoverSkillsFromConfig(config.skills, projectRoot, 'refuse', undefined),
             projectRoot,
           ).map((skill) => skill.name),
         }),

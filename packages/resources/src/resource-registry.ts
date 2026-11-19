@@ -20,6 +20,7 @@ import {
   classifyFsFault,
   compareCodeUnits,
   CRAWL_REGISTRY_RESOLVE_LINKS_ID,
+  countWork,
   crawlTimingStart,
   forEachInOrder,
   FsLookupCache,
@@ -68,6 +69,7 @@ import { ParseCache, type ParseCacheStats, vatCacheRoot } from './parse-cache.js
 import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } from './parse-dispatcher.js';
 import { isReadFailure, readFailureCode } from './parse-failure.js';
 import { isPerRunParseRefusal, type PerRunParseRefusal } from './parse-limits.js';
+import { POPULATION_PARSE_LIMITS } from './projection/content-cache.js';
 // A value import, and acyclic: `crawl-source.ts` reaches only `utils` and a
 // type from `realizations.ts`, never back into the registry. The remedy is
 // shared so the walk lane refuses with the projection's exact sentence.
@@ -83,6 +85,7 @@ import {
 // builder is a CALLER of the registry's world, not a dependency of it, so the
 // import is erased before any module graph exists at runtime.
 import type { CrawlPopulation, ResourceEnumeration, ResourcePopulationSource } from './projection/resource-population.js';
+import type { AdmittedFacts, AdmittedStat, RunPopulation } from './projection/run-population.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { SHA256 } from './schemas/checksum.js';
 import type { ProjectConfig, ValidationMode } from './schemas/project-config.js';
@@ -414,8 +417,101 @@ export interface ResourceRegistryOptions {
    * exactly one `addResources` call, so a crawling command builds exactly one
    * pool — the same lifetime `populateBlobs` has.
    */
-  parsePool?: ParsePoolPolicy;
+  parsePool?: RegistryParsePoolPolicy;
 }
+
+/**
+ * A registry's parse-pool policy: everything but the input cap. The input cap is
+ * the population's ({@link POPULATION_PARSE_LIMITS} `inputBytes`): a registry that
+ * read under its own cap would refuse a file at one size on this lane and at
+ * another on the projection lane, inside one run. Its output limits stay its own.
+ */
+export type RegistryParsePoolPolicy = Omit<ParsePoolPolicy, 'limits'> & {
+  limits?: Omit<NonNullable<ParsePoolPolicy['limits']>, 'inputBytes'>;
+};
+
+/**
+ * How a registry admits a file: reads, keys, parses and stats it.
+ *
+ * Two routes, one per lifetime, and no third:
+ *
+ * - A registry of its own (`new ResourceRegistry`) admits directly: every call
+ *   reads the file afresh, and each admission batch parses on a dispatcher it
+ *   builds and shuts down. Re-adding a path is a refresh.
+ * - A registry of a run (`ResourceRegistry.forRun`, and every `view` of it)
+ *   admits through the run's population: one read, key, parse and stat per file
+ *   for the whole run, on the run's dispatcher, which the run's owner shuts down.
+ */
+interface AdmissionRoute {
+  /**
+   * One file's admission facts.
+   *
+   * @param absolutePath - The file, resolved
+   * @param parserKind - The parser its content routes to
+   * @param compute - Computes the facts from a read
+   */
+  admit(absolutePath: string, parserKind: ParserKind, compute: () => Promise<AdmittedFacts>): Promise<AdmittedFacts>;
+  /**
+   * One file's stat, its link chain read beneath `statRoot`.
+   *
+   * @param absolutePath - The file, resolved
+   * @param statRoot - The root its link chain is read beneath
+   * @param compute - Stats the file
+   */
+  stat(absolutePath: string, statRoot: string, compute: () => Promise<AdmittedStat>): Promise<AdmittedStat>;
+  /** Read and key one file under the population's input cap. */
+  read<K extends ParserKind>(absolutePath: string, parserKind: K): Promise<KeyedContent<K>>;
+  /** Run one admission batch on a dispatcher. */
+  withDispatcher<T>(work: (dispatcher: ParseDispatcher) => Promise<T>): Promise<T>;
+}
+
+/** The route of a registry of its own — see {@link AdmissionRoute}. */
+function directAdmission(dispatcherFor: () => ParseDispatcher): AdmissionRoute {
+  return {
+    admit: (_absolutePath, _parserKind, compute) => compute(),
+    stat: (_absolutePath, _statRoot, compute) => compute(),
+    read: (absolutePath, parserKind) => readContentWithKey(absolutePath, parserKind, POPULATION_PARSE_LIMITS.inputBytes),
+    async withDispatcher(work) {
+      const dispatcher = dispatcherFor();
+      try {
+        return await work(dispatcher);
+      } finally {
+        // ⚠️ In a `finally`, and it must stay there. `pool.shutdown()` is what
+        // closes each worker's port gracefully so its `exit` listeners run and its
+        // parse-timing dump reaches disk; a run that threw past this would leave
+        // live threads, and a process that exits with live threads runs none of
+        // their exit listeners. See `parse-pool.ts` — `terminate()` is not
+        // shutdown.
+        await dispatcher.shutdown();
+      }
+    },
+  };
+}
+
+/** The route of a run's registry — see {@link AdmissionRoute}. */
+function runAdmission(population: RunPopulation): AdmissionRoute {
+  return {
+    admit: (absolutePath, parserKind, compute) => population.admit(absolutePath, parserKind, compute),
+    stat: (absolutePath, statRoot, compute) => population.stat(absolutePath, statRoot, compute),
+    read: async (absolutePath, parserKind) => {
+      const keyed = await population.content.read(absolutePath, parserKind);
+      // The cache files an entry under its `(path, parserKind)` pair, so an entry
+      // found under this kind was read for this kind.
+      return keyed as KeyedContent<typeof parserKind>;
+    },
+    withDispatcher: (work) => work(population.dispatcher),
+  };
+}
+
+/**
+ * The key under which a view is built: a module-private constructor option, so a
+ * view shares its run's admissions and is not counted as a registry built, and
+ * no caller outside this module can make a registry that does either.
+ */
+const VIEW_OF: unique symbol = Symbol('view-of');
+
+/** The constructor's options, with the module-private route a view and a run registry carry. */
+type ConstructionOptions = ResourceRegistryOptions & { readonly [VIEW_OF]?: { readonly route: AdmissionRoute; readonly counted: boolean } };
 
 /**
  * Options for validate method.
@@ -690,7 +786,10 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * per-call parameter would make the policy a property of the deepest caller
    * instead of a property of the registry.
    */
-  private readonly parsePoolPolicy: ParsePoolPolicy = {};
+  private readonly parsePoolPolicy: RegistryParsePoolPolicy = {};
+
+  /** How this registry admits a file — see {@link AdmissionRoute}. */
+  readonly #admission: AdmissionRoute;
 
   /**
    * Resources indexed by file path — **keyed in Unicode NFC (`toNfc`), not by
@@ -836,6 +935,14 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   constructor(options?: ResourceRegistryOptions) {
+    const shared = (options as ConstructionOptions | undefined)?.[VIEW_OF];
+    // A view reads its run's admissions: it is not a registry built.
+    if (shared === undefined || shared.counted) countWork('registry.built', 1);
+    this.#admission = shared?.route
+      ?? directAdmission(() => new ParseDispatcher(this.parseCache(), {
+        ...this.parsePoolPolicy,
+        limits: { ...this.parsePoolPolicy.limits, inputBytes: POPULATION_PARSE_LIMITS.inputBytes },
+      }));
     if (options?.baseDir !== undefined) {
       this.baseDir = options.baseDir;
     }
@@ -870,6 +977,43 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   getParseCacheStats(): ParseCacheStats {
     return this.parseCacheInstance?.stats ?? { hits: 0, misses: 0, writeFailures: 0 };
+  }
+
+  /**
+   * The registry of a run: it admits through the run's population (one read, key,
+   * parse and stat per file for the whole run, on the run's dispatcher), and each
+   * phase of the run reads a {@link view} of it. Counted once as a registry built.
+   *
+   * @param population - The run's population
+   * @param options - The registry's options; its parse cache and pool are the run's
+   * @returns The run's registry
+   */
+  static forRun(population: RunPopulation, options: Omit<ResourceRegistryOptions, 'parseCache' | 'parsePool'>): ResourceRegistry {
+    const construction: ConstructionOptions = { ...options, [VIEW_OF]: { route: runAdmission(population), counted: true } };
+    return new ResourceRegistry(construction);
+  }
+
+  /**
+   * A view of this registry's run: a registry with its own base directory,
+   * config and finding lists that admits through the same admissions.
+   *
+   * Everything that depends on the view is computed by the view, by the same
+   * code as any registry: the id (against the view's base directory), first-wins
+   * duplicate detection in the view's admission order, link resolution,
+   * population conditions and parse refusals. What it shares is per-file only —
+   * the read, the key, the parse, the size and the stat — and the links it is
+   * handed are copied, so no two views share a link object.
+   *
+   * Not counted as a registry built (`registry.built`): it reads its run's
+   * admissions. A view of a registry of its own admits directly, as that
+   * registry does.
+   *
+   * @param options - The view's options; the parse cache and pool are its run's
+   * @returns The view
+   */
+  view(options: Omit<ResourceRegistryOptions, 'parseCache' | 'parsePool'>): ResourceRegistry {
+    const construction: ConstructionOptions = { ...options, [VIEW_OF]: { route: this.#admission, counted: false } };
+    return new ResourceRegistry(construction);
   }
 
   /**
@@ -1010,12 +1154,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   async addResource(filePath: string): Promise<ResourceMetadata> {
     const startedAt = crawlTimingStart();
-    // Its own dispatcher, so this route and `addResources` reach the parser
-    // through exactly one code path: a miss parses in a bounded one-shot worker
-    // (I8), and `shutdown()` closes it. A hit spawns nothing.
-    const dispatcher = new ParseDispatcher(this.parseCache(), this.parsePoolPolicy);
+    // Through the admission route's dispatcher, so this route and `addResources`
+    // reach the parser through exactly one code path: a miss parses in a bounded
+    // worker (I8). A hit spawns nothing.
     try {
-      const prepared = await this.prepareAdmission(filePath, dispatcher);
+      const prepared = await this.#admission.withDispatcher((dispatcher) => this.prepareAdmission(filePath, dispatcher));
       // ⛔ Deliberately NOT routed through `emitPreparedResource`. This entry
       // point has no finding list to route into — it throws, as it always has —
       // and sending a read failure through emission would additionally record a
@@ -1025,7 +1168,6 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       if (prepared.outcome !== 'admitted') throw prepared.error;
       return this.indexAdmitted(prepared.resource);
     } finally {
-      await dispatcher.shutdown();
       recordRegistryPass(CRAWL_REGISTRY_ADMIT_ID, startedAt);
     }
   }
@@ -1148,52 +1290,30 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   ): Promise<ResourceMetadata> {
     // Normalize path to absolute
     const absolutePath = safePath.resolve(filePath);
+    const parserKind = this.parserKindFor(absolutePath);
+    const statRoot = locationRoot(this.baseDir);
+    // The per-file facts: this run's, when it has already admitted the file in
+    // another view, or computed here. See {@link AdmissionRoute}.
+    const facts = await this.#admission.admit(absolutePath, parserKind, () =>
+      this.admitFacts(absolutePath, parserKind, dispatcher),
+    );
+    // This resource's OWN copy: the parse is shared, one answer per content key,
+    // with every other view of the run, every identically-contented file and the
+    // population that keyed it, and a resource's arrays are written in place
+    // (`resolveLinks` sets each link's `resolvedId` against this view's ids; the
+    // packager rewrites links while bundling).
+    const parseResult = structuredClone(facts.parse);
 
-    // THE read. Everything below is a function of these bytes plus one stat —
-    // this used to be two whole-file reads (parse, then checksum) and two stats.
-    // The discriminator runs exactly ONCE here and its answer rides on `keyed`
-    // into both the content key and the parser selection in the dispatcher:
-    // parser selection is part of a document's parse identity (content-key.ts),
-    // and running the discriminator twice is how the parse route and the key's
-    // parse-route component drift apart.
-    //
-    // See {@link parserKindFor} for why the routing goes through the run's
-    // resolver rather than `parserKindForPath`.
-    // Held to the run's parse input cap by its size, before it is read (a kind
-    // nothing parses is never capped: see `readContentWithKey`).
-    const keyed = await readContentWithKey(absolutePath, this.parserKindFor(absolutePath), dispatcher.inputBytes);
-
-    // Parse from the bytes already in hand — or from a cache entry filed under
-    // the key those bytes just produced. See `ParseDispatcher.parse`.
-    //
-    // …unless nothing parses this at all. `parserKindForPath` answers `none` for
-    // every type that is neither prose nor markup, and the dispatcher refuses that
-    // kind by TYPE rather than by throwing, so the branch cannot be forgotten.
-    // See {@link unparsedResourceFacts} for what a resource is without a parse.
-    const parseResult = isParsableContent(keyed)
-      ? await dispatcher.parse(keyed)
-      : unparsedResourceFacts(keyed);
+    // THE stat — one call serving both `modifiedAt` and `sizeBytes`, its link
+    // chain read beneath the crawl base first (`link-following.ts`). After the
+    // read and parse, so a file that cannot be read costs no stat.
+    const stats = await this.#admission.stat(absolutePath, statRoot, () => {
+      countWork('fs.stat', 1);
+      return requireFollowedStat(absolutePath, statRoot);
+    });
 
     // Generate ID using priority chain: frontmatter field → relative path → filename stem
     const id = this.generateId(absolutePath, parseResult.frontmatter);
-
-    // ⚠️ The duplicate-id check USED TO BE HERE, ahead of the stat, so a file
-    // that lost a collision cost no syscall beyond the read. It cannot stay:
-    // preparation runs concurrently, so `resourcesById` is not yet filled in
-    // with the files ahead of this one and the answer would depend on which read
-    // finished first. It moved to `emitPreparedResource`, and the price is ONE
-    // extra `stat` on a path that has already paid a whole read and a parse.
-    //
-    // THE stat — one call serving both `modifiedAt` and `sizeBytes`.
-    // Its link chain read beneath the crawl base first (`link-following.ts`).
-    const stats = await requireFollowedStat(absolutePath, locationRoot(this.baseDir));
-
-    // Checksum from the bytes already decoded, not a second read of the file.
-    // It hashes the DECODED STRING, which is a different keyspace from
-    // `keyed.key` — that one hashes the raw bytes on purpose (content-key.ts).
-    // Both must survive: this value is user-facing (`vat resources scan
-    // --verbose`, `audit/cache-detector.ts`, `getResourcesByChecksum`).
-    const checksum = calculateChecksumFromContent(keyed.content);
 
     // Determine collections if config is present
     const collections = this.config?.resources?.collections
@@ -1221,11 +1341,63 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       sizeBytes: stats.size,
       estimatedTokenCount: parseResult.estimatedTokenCount,
       modifiedAt: stats.mtime,
-      checksum,
+      checksum: facts.checksum,
       ...(collections !== undefined && collections.length > 0 && { collections }),
     };
 
     return resource;
+  }
+
+  /**
+   * Read, key and parse one file: its admission facts, and nothing that depends
+   * on the registry admitting it. Counted once per file admitted
+   * (`registry.admitted`): a view that is handed the facts again admits nothing.
+   *
+   * @param absolutePath - The resolved path
+   * @param parserKind - The parser its content routes to
+   * @param dispatcher - Decides whether the parse runs here or on a worker
+   * @returns The file's admission facts
+   * @throws Whatever the read or the parse threw
+   */
+  private async admitFacts(
+    absolutePath: string,
+    parserKind: ParserKind,
+    dispatcher: ParseDispatcher,
+  ): Promise<AdmittedFacts> {
+    // THE read. Everything below is a function of these bytes — this used to be
+    // two whole-file reads (parse, then checksum).
+    // The discriminator runs exactly ONCE here and its answer rides on `keyed`
+    // into both the content key and the parser selection in the dispatcher:
+    // parser selection is part of a document's parse identity (content-key.ts),
+    // and running the discriminator twice is how the parse route and the key's
+    // parse-route component drift apart.
+    //
+    // See {@link parserKindFor} for why the routing goes through the run's
+    // resolver rather than `parserKindForPath`.
+    // Held to the run's parse input cap by its size, before it is read (a kind
+    // nothing parses is never capped: see `readContentWithKey`).
+    const keyed = await this.#admission.read(absolutePath, parserKind);
+
+    // Parse from the bytes already in hand — or from a cache entry filed under
+    // the key those bytes just produced. See `ParseDispatcher.parse`.
+    //
+    // …unless nothing parses this at all. `parserKindForPath` answers `none` for
+    // every type that is neither prose nor markup, and the dispatcher refuses that
+    // kind by TYPE rather than by throwing, so the branch cannot be forgotten.
+    // See {@link unparsedResourceFacts} for what a resource is without a parse.
+    const parseResult = isParsableContent(keyed)
+      ? await dispatcher.parse(keyed)
+      : unparsedResourceFacts(keyed);
+
+    // Checksum from the bytes already decoded, not a second read of the file.
+    // It hashes the DECODED STRING, which is a different keyspace from
+    // `keyed.key` — that one hashes the raw bytes on purpose (content-key.ts).
+    // Both must survive: this value is user-facing (`vat resources scan
+    // --verbose`, `audit/cache-detector.ts`, `getResourcesByChecksum`).
+    const checksum = calculateChecksumFromContent(keyed.content);
+
+    countWork('registry.admitted', 1);
+    return { parse: parseResult, checksum };
   }
 
   /**
@@ -1341,9 +1513,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // carried back as `failed` and re-thrown.
     const startedAt = crawlTimingStart();
     const results: ResourceMetadata[] = [];
-    const dispatcher = new ParseDispatcher(this.parseCache(), this.parsePoolPolicy);
     try {
-      await driveInOrder(
+      await this.#admission.withDispatcher((dispatcher) => driveInOrder(
         ordered,
         dispatcher,
         (filePath) => this.prepareAdmission(filePath, dispatcher),
@@ -1368,15 +1539,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
           tallyParsable(ordered, from, (filePath) =>
             this.parserKindFor(safePath.resolve(filePath)),
           ),
-      );
+      ));
     } finally {
-      // ⚠️ In a `finally`, and it must stay there. `pool.shutdown()` is what
-      // closes each worker's port gracefully so its `exit` listeners run and its
-      // parse-timing dump reaches disk; a run that threw past this would leave
-      // live threads, and a process that exits with live threads runs none of
-      // their exit listeners. See `parse-pool.ts` — `terminate()` is not
-      // shutdown.
-      await dispatcher.shutdown();
       recordRegistryPass(CRAWL_REGISTRY_ADMIT_ID, startedAt);
     }
     return results;

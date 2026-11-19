@@ -377,7 +377,7 @@ async function buildClaudePluginMarketplaces(
   // fault (a `source` listing), which the command publishes as the table says.
   const projectSkills = skillsConfig === undefined
     ? []
-    : collectDeclaredEvalSuites(skillsConfig, namedSkillsOrRefuse(await discoverSkillsFromConfig(skillsConfig, configDir, 'refuse'), configDir));
+    : collectDeclaredEvalSuites(skillsConfig, namedSkillsOrRefuse(await discoverSkillsFromConfig(skillsConfig, configDir, 'refuse', undefined), configDir));
   logger.debug(`Project declared eval suites: ${projectSkills.length}`);
 
   // Once per run for the same reason, and it is the costlier half: resolving a skill's
