@@ -185,7 +185,8 @@ that this build does not use.
   The commit in the key lets each run save a fresh cache (an exact hit never saves, so a key
   without it freezes the cache at its first save). Never fall back across lockfile hashes: VAT's
   parser dependencies are semver ranges, so a different lockfile can resolve a different parser
-  under the same VAT namespace.
+  under the same VAT namespace. A project that runs VAT from source rather than an installed
+  release must also key on VAT's source, since its lockfile pins none of VAT's code.
 - **What hits where.** Another VAT build never reads the cache. Within a build, the parse cache and
   the store's blob tier are keyed by file content and hit on any machine with the same bytes; a
   stored tree is keyed by the repository's identity and path, so it misses when the checkout moves
@@ -217,9 +218,9 @@ steps:
       restore-keys: |
         vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('**/package-lock.json', '**/bun.lock') }}-
   - run: npm ci
-  - run: npx vat validate
+  - run: npx --no-install vat validate
   - if: always()               # actions/cache saves in its post step, after this one
-    run: npx vat cache prune     # drop what this build does not use before the cache is saved
+    run: npx --no-install vat cache prune   # drop what this build does not use before the cache is saved
 ```
 
 ## First-Time Setup Checklist
