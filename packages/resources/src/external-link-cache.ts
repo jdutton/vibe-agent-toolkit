@@ -12,7 +12,7 @@ import { isInvalidUrlError } from './url-errors.js';
 /**
  * Owner-only mode for the cache directory.
  *
- * `<tmpdir>/.vat-cache/` is a world-readable location shared by every user on the
+ * `<tmpdir>/.vat-link-cache/` is a world-readable location shared by every user on the
  * host, and this cache holds the set of external URLs a project links to —
  * including private hostnames — while the per-user `auth-<user>/` sibling is
  * scoped by directory NAME alone, with no permission backing it. Creating the

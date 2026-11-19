@@ -19,7 +19,7 @@
 import { writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-import { PROJECTION_TABLES } from '@vibe-agent-toolkit/resources';
+import { PROJECTION_TABLES, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { createTempDir, removeTempDir, scratchTmpdirEnv } from '@vibe-agent-toolkit/utils/testing';
@@ -28,11 +28,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createLogger } from '../../src/utils/logger.js';
 import { withQueriedProjection } from '../../src/utils/projection-query.js';
 import {
-  PROJECTION_STORE_DIR_ENV,
   PROJECTION_STORE_ENV,
   PROJECTION_STORE_OFF,
   PROJECTION_STORE_SQLITE,
 } from '../../src/utils/projection-store.js';
+import { storeFilesUnder } from '../helpers/projection-store-probe.js';
 import { commitTestFixture } from '../test-helpers.js';
 
 /** A file name only repository B holds: its appearance in an A answer is the leak. */
@@ -76,7 +76,7 @@ function repository(name: string, files: Readonly<Record<string, string>>): stri
  */
 async function askEveryTable(root: string, store: boolean): Promise<RunAnswer> {
   vi.stubEnv(PROJECTION_STORE_ENV, store ? PROJECTION_STORE_SQLITE : PROJECTION_STORE_OFF);
-  vi.stubEnv(PROJECTION_STORE_DIR_ENV, storeDir);
+  vi.stubEnv(VAT_CACHE_DIR_ENV, storeDir);
   try {
     return await withQueriedProjection(
       { root, logger: createLogger(), statements: Object.values(STATEMENTS), base: undefined },
@@ -128,7 +128,9 @@ describe('a run database holds the run\'s own rows, however its population was s
   });
 
   it('illustration: the shared store file itself holds B\'s rows, which no A answer above contained', () => {
-    const store = new DatabaseSync(safePath.join(storeDir, 'projection.db'), { readOnly: true });
+    const [file] = storeFilesUnder(storeDir);
+    expect(storeFilesUnder(storeDir), 'one store under the cache root').toHaveLength(1);
+    const store = new DatabaseSync(file ?? '', { readOnly: true });
     try {
       const paths = store.prepare('SELECT path FROM resource_realizations').all().map((row) => String(row['path']));
       expect(paths.some((path) => path.includes(B_ONLY))).toBe(true);

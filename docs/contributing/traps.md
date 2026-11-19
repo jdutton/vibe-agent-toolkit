@@ -285,7 +285,7 @@ Both the store and the projection lane are defaults now, so this trap has become
 image: `VAT_PROJECTION_STORE=off` turns the store off and `VAT_RESOURCES_CRAWL=walk` leaves the lane,
 and turning off ONE of them brackets a crawl with nothing to store — zero rows, exit 0, a
 schema-only `projection.db` that looks like a working cache, and pure overhead. The store lives at
-`<normalizedTmpdir()>/.vat-cache/<namespace>/`, not under the project.
+`<cache root>/<namespace>/` (`VAT_CACHE_DIR`, else `<normalizedTmpdir()>/.vat-cache`), not under the project unless that variable puts it there.
 **Tell:** a `.db` file of exactly schema size; a "cache" that never changes a timing.
 **Remedy:** before believing a null result from a feature, enumerate every input the feature is
 AND-ed behind; proving one switch took effect proves nothing about the ones you did not set.

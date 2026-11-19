@@ -27,7 +27,7 @@ import { PROBE_ECHO_ENV, PROBE_NO_LOG_ENV, PROBE_STAT_ENV, setupProbe } from '..
 
 import { cleanupVerdictFixtures, FIXTURE_ALIAS, fixtureSubject, tempDir } from './verdict-fixtures.js';
 
-const STORE_ENV = 'VAT_PROJECTION_STORE_DIR';
+const STORE_ENV = 'VAT_CACHE_DIR';
 const CLAUDE_ENV = 'CLAUDE_CONFIG_DIR';
 const CALLER_ENV = 'LAB_VERDICT_CALLER';
 const PLANTED_ENV = 'VAT_LAB_VERDICT_PLANTED';
@@ -155,7 +155,7 @@ describe('verdict capture — refusals', () => {
     if (process.platform !== 'win32') expect(statSync(subjectPath).mode & 0o777).not.toBe(0o700);
   });
 
-  it('refuses a caller that names VAT_PROJECTION_STORE_DIR', async () => {
+  it('refuses a caller that names VAT_CACHE_DIR', async () => {
     const result = await capture(
       { set: { [STORE_ENV]: tempDir('lab-verdict-store-') }, unset: [] },
       fixtureSubject(),

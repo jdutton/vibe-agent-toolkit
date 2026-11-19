@@ -6,7 +6,7 @@
  * - **The store is the default.** No selector is set below — deliberately. An
  *   arm that named `VAT_PROJECTION_STORE=sqlite` would pass identically against
  *   a build where the default was still off, and the flip is precisely what this
- *   run is supposed to be exercising. Only `VAT_PROJECTION_STORE_DIR` is set,
+ *   run is supposed to be exercising. Only `VAT_CACHE_DIR` is set,
  *   which says WHERE and never WHETHER.
  * - **The population scope is hoisted.** `vat validate`'s orchestrator holds one
  *   `withPopulationCache` bracket around every phase, and each lane's own
@@ -41,10 +41,10 @@
  * for this test to go green while proving nothing.
  */
 
+import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { PROJECTION_STORE_DIR_ENV } from '../../src/utils/projection-store.js';
 import { chargedCalls, storeFilesUnder } from '../helpers/projection-store-probe.js';
 import {
   createSkillMarkdown,
@@ -104,7 +104,7 @@ describe('vat validate and the population its surfaces share', () => {
       // location is named, and it is named so this run cannot read or write the
       // developer's shared cache — `defaultStoreDirectory()` is one database per
       // VAT release for every root on the machine.
-      env: { VAT_CRAWL_TIMING: timing, [PROJECTION_STORE_DIR_ENV]: storeDir },
+      env: { VAT_CRAWL_TIMING: timing, [VAT_CACHE_DIR_ENV]: storeDir },
     });
 
     expect(result.status, result.stderr).toBe(0);

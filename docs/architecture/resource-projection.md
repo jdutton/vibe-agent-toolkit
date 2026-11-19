@@ -395,7 +395,7 @@ move or restore clears leases.
   CI runners and on most adopter servers nothing evicts anything and the cache grows without bound.
   See *Eviction and cache lifecycle* below for the 🔷 proposed design and the five defects a review
   found in the obvious version of it.
-- **Location:** `normalizedTmpdir()/.vat-cache/<namespace>/parse/`. Uses `normalizedTmpdir()` from
+- **Location:** `<cache root>/<namespace>/parse/`, the cache root being `VAT_CACHE_DIR` or `normalizedTmpdir()/.vat-cache` (`vatCacheRoot()`). Uses `normalizedTmpdir()` from
   `packages/utils/src/path-utils.ts`, never raw `tmpdir()` — on Windows CI the latter returns 8.3
   short names. `$XDG_CACHE_HOME` is deliberately not used: `~/.cache` on Linux is not OS-purged
   either, so moving there would surrender the one platform that purges for free without gaining
@@ -497,7 +497,7 @@ of them will be re-hit by whoever builds this, and four of the five are silent w
    namespace directory on age has only one signal available — mtime — and a namespace serving 100%
    warm hits writes nothing. It therefore looks stalest exactly when it is most valuable.
 5. **No name grammar and no lock.** "Delete what is not in the live set" would eat `auth-<user>/`
-   and `external-links.json` — tenants that deliberately live outside the namespace (see the
+   and `external-links.json` — tenants that deliberately live outside the namespace, and now outside the cache root, in `<tmpdir>/.vat-link-cache` (see the
    namespacing bullet above) and whose contents are **not** freely re-derivable, since link auth
    needs credentials. That is data loss, not a cache miss, so the sweep needs a name grammar stating
    what it is permitted to consider in the first place. And the `last-swept` marker has to be

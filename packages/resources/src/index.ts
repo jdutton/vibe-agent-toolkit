@@ -388,7 +388,9 @@ export {
   type ExtentScopedTableName,
   type FactStore,
   type ProjectionTableNamesOfScope,
+  isProjectionStoreDirectoryName,
   projectionShapeDigest,
+  projectionStoreDirectoryName,
   splitProjectionByScope,
 } from './projection/store.js';
 
@@ -520,13 +522,22 @@ export {
   ParserUnavailableError,
   defaultParseCache,
   isParserUnavailable,
+  isVatCacheRootEntryName,
   parseCacheDirectory,
   vatCacheNamespace,
   vatCacheNamespaceRoot,
-  vatCacheRoot,
   type ParseCacheOptions,
   type ParseCacheStats,
 } from './parse-cache.js';
+export {
+  VAT_CACHE_DIR_ENV,
+  VAT_CACHE_TAG_FILE,
+  markVatCacheRoot,
+  recogniseVatCacheRoot,
+  vatCacheRoot,
+  vatLinkCacheDirectory,
+  type CacheRootRecognition,
+} from './cache-root.js';
 
 // Parse limits: what `ResourceRegistry.addResource` throws when one document's
 // parse is refused for this run — a `ParseLimitError` at a limit, a

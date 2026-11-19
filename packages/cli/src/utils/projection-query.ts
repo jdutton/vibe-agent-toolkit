@@ -13,8 +13,9 @@
  *
  * This is a correctness property, not an optimisation choice, and it was learned
  * the expensive way. The on-disk projection store is **one database per VAT
- * release, shared by every root on the machine** (`defaultStoreDirectory()` is
- * `tmpdir/.vat-cache/<version>/projection-<shapeDigest>`), it retains three tree
+ * build, shared by every root on the machine** (`defaultStoreDirectory()` is
+ * `<vatCacheRoot()>/<namespace>/projection-<shapeDigest>`, the root being
+ * `VAT_CACHE_DIR` or `<tmpdir>/.vat-cache`), it retains three tree
  * hashes per root, and its blob tier is never evicted and carries no tree key at
  * all. `FactStore.readExtent` narrows by `(rootId, treeHash)`; **arbitrary
  * SQL does not**, and cannot be made to — a `WHERE` clause the caller wrote is

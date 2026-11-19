@@ -101,11 +101,33 @@ function uncleared(cwd: string, args: readonly string[], env: NodeJS.ProcessEnv 
 }
 
 /**
- * @param dir - A projection store directory
- * @returns What it holds; `[]` when it was never made
+ * @param dir - A directory
+ * @returns The names of the directories it holds; `[]` when it was never made
  */
-function storeEntries(dir: string): string[] {
-  return existsSync(dir) ? readdirSync(dir) : [];
+function subdirectories(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => {
+      // VAT writes no link into its cache; one here would hide a store from this walk.
+      if (entry.isSymbolicLink()) throw new Error(`unexpected link in a VAT cache: ${safePath.join(dir, entry.name)}`);
+      return entry.isDirectory();
+    })
+    .map((entry) => entry.name);
+}
+
+/**
+ * The cache root also holds the parse cache, which a store-off run still
+ * writes, so only a non-empty `<namespace>/projection-*` is a written store.
+ *
+ * @param cacheRoot - A `VAT_CACHE_DIR`
+ * @returns Each written projection store under it, as `<namespace>/projection-*`
+ */
+function writtenStores(cacheRoot: string): string[] {
+  return subdirectories(cacheRoot).flatMap((namespace) =>
+    subdirectories(safePath.join(cacheRoot, namespace))
+      .filter((name) => name.startsWith('projection-') && readdirSync(safePath.join(cacheRoot, namespace, name)).length > 0)
+      .map((name) => `${namespace}/${name}`),
+  );
 }
 
 describe('an arm never sees the developer’s VAT, git or Claude state', () => {
@@ -126,14 +148,14 @@ describe('an arm never sees the developer’s VAT, git or Claude state', () => {
     const off = safePath.join(tempDir('lab-arm-isolation-store-'), 'store');
     const on = safePath.join(tempDir('lab-arm-isolation-store-'), 'store');
 
-    uncleared(root, ['resources', 'validate'], { ...process.env, VAT_PROJECTION_STORE_DIR: off });
+    uncleared(root, ['resources', 'validate'], { ...process.env, VAT_CACHE_DIR: off });
     const unplanted = { ...process.env };
     delete unplanted['VAT_PROJECTION_STORE'];
-    uncleared(root, ['resources', 'validate'], { ...unplanted, VAT_PROJECTION_STORE_DIR: on });
+    uncleared(root, ['resources', 'validate'], { ...unplanted, VAT_CACHE_DIR: on });
 
-    // The twin without the plant writes one, so an empty `off` is the plant's doing.
-    expect(storeEntries(off)).toEqual([]);
-    expect(storeEntries(on)).not.toEqual([]);
+    // The twin without the plant writes one, so no store under `off` is the plant's doing.
+    expect(writtenStores(off)).toEqual([]);
+    expect(writtenStores(on)).not.toEqual([]);
   });
 
   it('populates its own store despite VAT_PROJECTION_STORE=off, and still admits the globally excluded file', async () => {

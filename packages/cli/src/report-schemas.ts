@@ -63,7 +63,7 @@ import type { ZodTypeAny } from 'zod';
 import { ARD_EMIT_REPORT_SCHEMA } from './commands/ard/emit-schema.js';
 import { AUDIT_EXAMINED, AUDIT_REPORT_SCHEMA } from './commands/audit-schema.js';
 import { AUDIT_SETTINGS_EXAMINED, AUDIT_SETTINGS_REPORT_SCHEMA } from './commands/audit-settings-schema.js';
-import { CACHE_CLEAR_EXAMINED, CACHE_CLEAR_REPORT_SCHEMA } from './commands/cache/clear-schema.js';
+import { CACHE_CLEAR_EXAMINED, CACHE_CLEAR_REPORT_SCHEMA, CACHE_PRUNE_EXAMINED, CACHE_PRUNE_REPORT_SCHEMA } from './commands/cache/clear-schema.js';
 import { MARKETPLACE_PUBLISH_EXAMINED, MARKETPLACE_PUBLISH_REPORT_SCHEMA } from './commands/claude/marketplace/publish-schema.js';
 import { MARKETPLACE_VALIDATE_EXAMINED, MARKETPLACE_VALIDATE_REPORT_SCHEMA } from './commands/claude/marketplace/validate-schema.js';
 import { ORG_NOT_IMPLEMENTED_EXAMINED, ORG_NOT_IMPLEMENTED_REPORT_SCHEMA } from './commands/claude/org/stubs-schema.js';
@@ -355,6 +355,14 @@ const REPORTS = [
     name: 'cache-clear',
     schema: CACHE_CLEAR_REPORT_SCHEMA,
     examined: CACHE_CLEAR_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['cache prune'],
+    name: 'cache-prune',
+    schema: CACHE_PRUNE_REPORT_SCHEMA,
+    examined: CACHE_PRUNE_EXAMINED,
   },
   {
     kind: 'report',

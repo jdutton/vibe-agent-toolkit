@@ -215,7 +215,7 @@ const NO_RAW_SIGNAL_LISTENER = ['error', { allow: ['packages/utils/src/terminati
 const COMMANDS_IMPORT_BOUNDARY_RATCHET = { allowFiles: [
   'packages/cli/src/commands/audit.ts',                               // existsSync/stat probes only — the walker is gone (audit/scan-population.ts)
   'packages/cli/src/commands/build.ts',                               // ENUM: readdir for phase output; existsSync probes
-  'packages/cli/src/commands/cache/clear.ts',                         // ENUM: readdir/lstat measuring the cache before its remove plan
+  'packages/cli/src/commands/cache/cache-measure.ts',                 // ENUM: readdir/lstat measuring a cache tree before its remove plan (clear, prune)
   'packages/cli/src/commands/claude/marketplace/git-publish.ts',      // ENUM: readdirSync of the publish tree
   'packages/cli/src/commands/claude/marketplace/validate.ts',         // ENUM: readdirSync over plugins/ and skills/ (lane table: raw-readdir)
   'packages/cli/src/commands/claude/org/skills.ts',                   // ENUM: readdirSync collectFiles + node_modules listing (lane table: raw-readdir)

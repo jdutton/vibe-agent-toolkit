@@ -5,6 +5,7 @@ import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { VAT_CACHE_DIR_ENV, recogniseVatCacheRoot, vatCacheRoot } from '../src/cache-root.js';
 import { computeContentKey, type KeyedContent, type ParserKind } from '../src/content-key.js';
 import { parseHtmlContent } from '../src/html-link-parser.js';
 import { type ParseResult, parseMarkdownContent } from '../src/link-parser.js';
@@ -18,7 +19,6 @@ import {
   rehydrate,
   vatCacheNamespace,
   vatCacheNamespaceRoot,
-  vatCacheRoot,
 } from '../src/parse-cache.js';
 import { parseContentCached } from '../src/parse-dispatcher.js';
 
@@ -1210,5 +1210,35 @@ describe('the dispatcher\'s cache front (parseContentCached)', () => {
 describe('defaultParseCache', () => {
   it('hands back one shared instance, created lazily', () => {
     expect(defaultParseCache()).toBe(defaultParseCache());
+  });
+});
+
+describe('ParseCache tags the cache root it writes under', () => {
+  let scratch: string;
+
+  beforeEach(async () => {
+    scratch = await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'vat-parse-cache-tag-'));
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await removeScratchDir(scratch);
+  });
+
+  it('writes CACHEDIR.TAG into a fresh VAT_CACHE_DIR on its first write', async () => {
+    const root = safePath.join(scratch, 'ci-cache');
+    vi.stubEnv(VAT_CACHE_DIR_ENV, root);
+    const keyed = keyedFromText(SIMPLE_DOC);
+    expect(await new ParseCache({ env: {} }).set(keyed, freshParse(keyed))).toBe(true);
+    expect(recogniseVatCacheRoot(root)).toEqual({ kind: 'recognised', by: 'tag' });
+  });
+
+  it('does not tag anything when given an explicit directory', async () => {
+    const root = safePath.join(scratch, 'ci-cache');
+    vi.stubEnv(VAT_CACHE_DIR_ENV, root);
+    const keyed = keyedFromText(SIMPLE_DOC);
+    const explicit = new ParseCache({ env: {}, cacheDir: safePath.join(scratch, 'explicit') });
+    expect(await explicit.set(keyed, freshParse(keyed))).toBe(true);
+    expect(recogniseVatCacheRoot(root)).toEqual({ kind: 'absent' });
   });
 });

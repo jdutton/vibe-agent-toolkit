@@ -685,6 +685,73 @@ shim for a renamed thing — it is the one backend's own name. An unrecognised v
 leaves the store selected rather than refusing: there is one backend, so a refusal has no
 alternative to offer. The day a second exists is the day that variable becomes an enumeration.
 
+### 3.7a ✅ Where the caches live, and persisting them between CI runs
+
+One resolver, `vatCacheRoot()` in `packages/resources/src/cache-root.ts`, names the **persistable
+cache root**: `VAT_CACHE_DIR` when set and non-empty (a relative value resolves against the current
+directory), else `<normalizedTmpdir()>/.vat-cache`. It holds exactly the parse cache and the
+projection store, both under the release namespace:
+
+```text
+<root>/CACHEDIR.TAG
+<root>/<namespace>/parse/<shard>/<key>.json
+<root>/<namespace>/projection-<shapeDigest>/projection.db
+```
+
+The external-link result caches (`external-links.json`, `auth-<osUser>/external-links.json`) live
+at `vatLinkCacheDirectory()`, `<tmpdir>/.vat-link-cache`, and never under the root: they are
+verdicts about the network at a moment and one OS user's credentialed content, so a CI cache that
+carried them would replay stale or another user's answers. `vat cache clear` removes both
+locations.
+
+**A foreign cache must miss, never fail.** Every tier sits under the build namespace, so another
+VAT build never reads it. Within a build, each tier has its own key: the parse cache and the
+store's blob tier are keyed by file content and hit on any machine holding the same bytes; the
+store's extent is keyed by the scanned root's identity and path, so it misses when the checkout
+moves or line endings change the bytes. That is by design (line endings are not semantic), and a
+miss is a cold scan, never a wrong answer. A `projection.db` that SQLite reports at open as corrupt
+(`SQLITE_CORRUPT`) or not a database (`SQLITE_NOTADB`) is discarded — the database and its
+`-wal`/`-shm` sidecars — with one stderr notice naming the path and SQLite's error, and the run
+continues on a fresh store, or with none if that also fails (`replaceUnopenableStore` in
+`packages/cli/src/utils/projection-store.ts`). Only a file that existed before the open is
+discarded. `SQLITE_CANTOPEN`, `SQLITE_IOERR`, `SQLITE_FULL` and `SQLITE_READONLY` are the machine's
+state, not the file's, and surface as themselves: discarding would not fix them. A store that
+throws mid-run still surfaces.
+
+**Close checkpoints the WAL.** `FactStore.close()` runs `PRAGMA wal_checkpoint(TRUNCATE)` with
+`busy_timeout = 0` before closing, so a cache saved right after a run is one self-contained
+`projection.db` rather than a database plus a WAL a reader must replay. Best-effort: a checkpoint
+another connection blocks is skipped (SQLite checkpoints again when the last connection closes),
+and `store-damage.integration.test.ts` holds that a reader mid-snapshot leaves the database passing
+`integrity_check`. Only contention (`SQLITE_BUSY`, `SQLITE_LOCKED`) is skipped; any other
+checkpoint failure surfaces after the connection is closed.
+
+**The guard on every cache delete.** With an operator-chosen root, the old "the directory is named
+`.vat-cache`" check could no longer stand between `rm -rf` and a user's directory. VAT writes a
+[`CACHEDIR.TAG`](https://bford.info/cachedir/) — the standard signature plus a VAT line — into a
+root it creates or finds empty, and only then, so `VAT_CACHE_DIR` must name a directory used only
+by VAT. `recogniseVatCacheRoot()` accepts a root carrying VAT's tag, or the default location (older
+releases left it untagged) when that is a real directory, not a symbolic link, owned on POSIX by
+the current user, and spelled exactly: on a shared `/tmp` anyone can create `.vat-cache`, and a
+link planted there must not lend its target the default location's standing. It always refuses the
+filesystem root, the home directory, the temp directory itself and any directory containing the
+current directory (those comparisons fold case, which only ever refuses more). `vat cache clear` and `vat cache prune` both stand behind it
+(`recognisedCacheRoot()` in `packages/cli/src/commands/cache/cache-measure.ts`) and refuse
+`USAGE_INVALID` with nothing deleted.
+
+**`vat cache prune`** removes only entries VAT recognises as its own: at the root, every namespace
+but this build's (`isVatCacheRootEntryName` — older and newer releases alike, and under the shared
+default root other worktrees' and other VATs' namespaces too) and what older releases kept there
+(the link-cache files and the root-level `parse/` directory); inside this build's namespace, every
+projection store but this shape's (`projectionStoreDirectoryName()`, the one owner of that name,
+which the store also uses). The lab does not import it: it judges another build's namespace, so it
+reads the `projection-` layout itself, as it asks the build only for its parse directory. An entry
+it does not recognise is never touched, and an entry holding a store a running VAT has open
+(`isStoreInUse`, which asks SQLite for an exclusive lock with a zero busy timeout) is left and
+listed under `inUse`; the answer is point-in-time, so a store opened during the delete itself is not
+caught. `--dry-run` reports the same removal without deleting. Run it before a CI cache is saved, so
+the saved cache does not grow with every release.
+
 ### 3.8 ✅ Every parse is bounded — one route, in a worker, under limits
 
 Both crawl lanes reach the parser through one `ParseDispatcher`, and every cache miss is parsed in a

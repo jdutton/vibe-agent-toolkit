@@ -11,10 +11,10 @@
 
 import { readdirSync, readFileSync } from 'node:fs';
 
+import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
 import { WORK_COUNTERS_ENV, type WorkCounterDump } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { PROJECTION_STORE_DIR_ENV } from '../../src/utils/projection-store.js';
 import { createSuiteContext, executeCli, join, writeTestFile } from '../system/test-common.js';
 import { commitTestFixture } from '../test-helpers.js';
 
@@ -34,7 +34,7 @@ async function queryCounts(): Promise<WorkCounterDump['counters']> {
   const result = await executeCli(context.binPath, ['resources', 'query', 'SELECT 1 AS x', '--format', 'json'], {
     cwd: repo,
     env: {
-      [PROJECTION_STORE_DIR_ENV]: storeDir,
+      [VAT_CACHE_DIR_ENV]: storeDir,
       [WORK_COUNTERS_ENV]: dumpDir,
       TMPDIR: tmpDir,
       TEMP: tmpDir,

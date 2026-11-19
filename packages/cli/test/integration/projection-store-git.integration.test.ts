@@ -17,11 +17,12 @@
 
 import { rmSync, writeFileSync } from 'node:fs';
 
+import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { gitTreeSnapshot } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { backend, isolateProjectionStoreTests, lastStore } from '../projection-store-test-doubles.js';
+import { backend, captureStderr, FakeUnopenableError, isolateProjectionStoreTests, lastStore } from '../projection-store-test-doubles.js';
 import { createTempDirTracker } from '../system/test-common.js';
 import { gitAddAll, initTestGitRepo } from '../test-helpers.js';
 
@@ -41,7 +42,6 @@ function hashOf(outcome: ReturnType<typeof gitTreeSnapshot>): string | undefined
 const {
   CACHE_ENV,
   openPopulationCache,
-  PROJECTION_STORE_DIR_ENV,
   PROJECTION_STORE_ENV,
   PROJECTION_STORE_SQLITE,
   withPopulationCache,
@@ -90,7 +90,7 @@ afterAll(() => {
 });
 
 isolateProjectionStoreTests({
-  envNames: [PROJECTION_STORE_ENV, CACHE_ENV, PROJECTION_STORE_DIR_ENV],
+  envNames: [PROJECTION_STORE_ENV, CACHE_ENV, VAT_CACHE_DIR_ENV],
   resetUnscopedNoticeLedger,
 });
 
@@ -143,55 +143,63 @@ describe('openPopulationCache', () => {
   });
 });
 
-/**
- * Open one store and hand back the OPTIONS the backend was constructed with.
- *
- * @param value - What `VAT_PROJECTION_STORE_DIR` holds; `undefined` unsets it
- * @returns The single argument `openSqliteFactStore` received
- */
-async function openedWithStoreDir(value: string | undefined): Promise<unknown> {
+describe('the directory the backend is opened with', () => {
+  it('passes nothing, so the backend opens its default under the cache root', async () => {
+    // Where the store lives is the cache root's question (`VAT_CACHE_DIR`), not
+    // this module's: an argument here would be a second resolver for one path.
+    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
+    const opened = await openPopulationCache({ root: repoRoot });
+    await opened?.close();
+
+    expect(backend.openCalls.count).toBe(1);
+    expect(backend.openCalls.options).toStrictEqual([undefined]);
+  });
+});
+
+/** Open the population cache with the store selected and `failures` queued, capturing stderr. */
+async function openAfterFailures(...failures: Error[]): Promise<{ opened: Awaited<ReturnType<typeof openPopulationCache>>; written: string[] }> {
   process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
-  if (value === undefined) delete process.env[PROJECTION_STORE_DIR_ENV];
-  else process.env[PROJECTION_STORE_DIR_ENV] = value;
-
-  const opened = await openPopulationCache({ root: repoRoot });
-  await opened?.close();
-
-  // Asserted before the caller inspects the argument: a run that opened no
-  // store at all would otherwise hand back `undefined` and compare it happily
-  // against nothing.
-  expect(backend.openCalls.count).toBe(1);
-  return backend.openCalls.options[0];
+  backend.openFailures.push(...failures);
+  const stderr = captureStderr();
+  try {
+    return { opened: await openPopulationCache({ root: repoRoot }), written: stderr.written };
+  } finally {
+    stderr.restore();
+  }
 }
 
-describe('the directory the backend is opened with', () => {
-  it('passes the directory VAT_PROJECTION_STORE_DIR names', async () => {
-    // 🪤 The ONLY assertion in either projection-store suite that can see the
-    // variable being read. Every other test counts opens and inspects stores,
-    // and a build that dropped the `directory` argument entirely would pass all
-    // of them — while writing the shared default database, which on this
-    // machine holds other repositories' link text, heading text and
-    // frontmatter. That is the failure the variable exists to prevent, so it is
-    // asserted rather than assumed.
-    const directory = safePath.join(createTempDir(), 'named-store');
+describe('a store file the backend cannot open', () => {
+  const damagedPath = '/cache/0.0.0/projection-abc/projection.db';
 
-    expect(await openedWithStoreDir(directory)).toStrictEqual({ directory });
+  it('is discarded and replaced by a fresh store, and the operator is told once', async () => {
+    const { opened, written } = await openAfterFailures(new FakeUnopenableError(damagedPath));
+
+    expect(opened).toBeDefined();
+    expect(backend.discarded).toEqual([damagedPath]);
+    expect(backend.openCalls.count).toBe(2);
+    expect(written).toHaveLength(1);
+    expect(written[0]).toContain(damagedPath);
+    expect(written[0]).toContain('file is not a database');
+    expect(written[0]).toContain('Discarded it');
+    await opened?.close();
   });
 
-  it.each([
-    ['unset', undefined],
-    ['exported as the empty string', ''],
-  ])('lets the backend default the directory when the variable is %s', async (_description, value) => {
-    // `toStrictEqual`, not `toEqual`: an explicitly-passed
-    // `{ directory: undefined }` is a DIFFERENT argument from `{}` under
-    // `exactOptionalPropertyTypes`, and only the second lets the backend apply
-    // `defaultStoreDirectory()`. `toEqual` treats the two as equal and would
-    // make the module's spread-rather-than-pass note untested.
-    //
-    // The empty-string arm is not a curiosity: `''` would resolve to the process
-    // cwd, so treating it as "unset" is a decision, and an unexported variable
-    // and one exported as `''` are the same intent.
-    expect(await openedWithStoreDir(value)).toStrictEqual({});
+  it('leaves the run without a store when the replacement fails too', async () => {
+    const { opened, written } = await openAfterFailures(new FakeUnopenableError(damagedPath), new Error('disk I/O error'));
+
+    expect(opened).toBeUndefined();
+    expect(written.join('')).toMatch(/Could not replace it \(disk I\/O error\); this run populates without a projection store/u);
+  });
+
+  it('still surfaces any other open failure', async () => {
+    // Only a damaged FILE is a miss. A lock or a permission is the machine's
+    // state, and swallowing it would be a cache that silently stopped working.
+    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
+    const locked = new Error('database is locked');
+    backend.openFailures.push(locked);
+
+    await expect(openPopulationCache({ root: repoRoot })).rejects.toBe(locked);
+    expect(backend.discarded).toEqual([]);
   });
 });
 
@@ -232,6 +240,33 @@ describe('withPopulationCache', () => {
     // replaced it would take that away.
     expect(lastStore().isOpen()).toBe(false);
     expect(lastStore().closeCount()).toBe(1);
+  });
+
+  it('rethrows the work\'s own error when the close fails too, and names the close failure on stderr', async () => {
+    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
+    const failure = new Error('the work blew up');
+    backend.closeFailures.push(Object.assign(new Error('disk I/O error'), { code: 'ERR_SQLITE_ERROR', errcode: 10 }));
+
+    const capture = captureStderr();
+    try {
+      await expect(withPopulationCache({ root: repoRoot }, () => Promise.reject(failure))).rejects.toBe(failure);
+      expect(capture.written.join('')).toMatch(/did not close cleanly.*disk I\/O error/u);
+    } finally {
+      capture.restore();
+    }
+  });
+
+  it('keeps a finished run\'s result when only the cache close fails, and warns', async () => {
+    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
+    backend.closeFailures.push(Object.assign(new Error('database or disk is full'), { code: 'ERR_SQLITE_ERROR', errcode: 13 }));
+
+    const capture = captureStderr();
+    try {
+      await expect(withPopulationCache({ root: repoRoot }, () => Promise.resolve(42))).resolves.toBe(42);
+      expect(capture.written.join('')).toMatch(/did not close cleanly.*database or disk is full/u);
+    } finally {
+      capture.restore();
+    }
   });
 
   it('keeps the store open for a population source built in an earlier frame', async () => {

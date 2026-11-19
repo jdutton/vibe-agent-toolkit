@@ -14,16 +14,18 @@
  * ## Layout
  *
  * ```
- * <normalizedTmpdir()>/.vat-cache/<namespace>/parse/<shard>/<key>.json
- *                                 <namespace>/projection-<shapeDigest>/...  (reserved)
+ * <vatCacheRoot()>/CACHEDIR.TAG
+ *                  <namespace>/parse/<shard>/<key>.json
+ *                  <namespace>/projection-<shapeDigest>/projection.db
  * ```
  *
- * Every cache tenant whose contents depend on VAT's own code lives under the
- * namespace, so one directory rename invalidates all of them together. Tenants
- * that do NOT depend on VAT's code stay at the `.vat-cache` root and keep their
- * own policy — external link reachability and authenticated link content are
- * facts about the world, not about this build, and re-fetching them on every
- * VAT upgrade would be pure waste.
+ * `vatCacheRoot()` is `VAT_CACHE_DIR`, or `<normalizedTmpdir()>/.vat-cache` by
+ * default — see `cache-root.ts`. Every cache tenant whose contents depend on
+ * VAT's own code lives under the namespace, so one directory rename invalidates
+ * all of them together, and `vat cache prune` removes every namespace but this
+ * build's. The external-link verdict caches are facts about the world, not
+ * about this build, and they are not persistable either: they live outside this
+ * root, in `vatLinkCacheDirectory()`.
  *
  * ## What the namespace is
  *
@@ -121,12 +123,12 @@ import { readFileSync } from 'node:fs';
 
 import {
   isPathAbsentError,
-  normalizedTmpdir,
   resolveFromImportMeta,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 
+import { vatCacheRoot } from './cache-root.js';
 import { parseFactsShapeSource } from './schemas/parse-facts.js';
 
 /** Hex digits of the dev discriminator. Short on purpose — it is a cache path, not a security boundary. */
@@ -230,18 +232,6 @@ export function vatCacheNamespace(): string {
 }
 
 /**
- * Root of every VAT cache tenant, shared across builds.
- *
- * Tenants that do NOT depend on VAT's own code live directly here; anything
- * whose contents this build determines belongs under {@link vatCacheNamespaceRoot}.
- *
- * @returns Absolute path, forward-slashed
- */
-export function vatCacheRoot(): string {
-  return safePath.join(normalizedTmpdir(), '.vat-cache');
-}
-
-/**
  * Root for the tenants this build of VAT owns.
  *
  * @returns Absolute path, forward-slashed
@@ -257,4 +247,41 @@ export function vatCacheNamespaceRoot(): string {
  */
 export function parseCacheDirectory(): string {
   return safePath.join(vatCacheNamespaceRoot(), 'parse');
+}
+
+/** A namespace's release part: `major.minor.patch`. */
+const NAMESPACE_RELEASE = /^\d+\.\d+\.\d+$/u;
+
+/** A namespace's optional suffix after the first `-`: a prerelease, `dev-<hex>`, or both. */
+const NAMESPACE_SUFFIX = /^[0-9A-Za-z.-]+$/u;
+
+/**
+ * Whether `name` is shaped like a namespace: a semver version, optionally
+ * followed by `-` and a prerelease or `dev-<hex>` suffix. Split at the first
+ * `-` rather than one pattern, so neither half needs a nested quantifier.
+ */
+function isNamespaceName(name: string): boolean {
+  const dash = name.indexOf('-');
+  if (dash === -1) return NAMESPACE_RELEASE.test(name);
+  return NAMESPACE_RELEASE.test(name.slice(0, dash)) && NAMESPACE_SUFFIX.test(name.slice(dash + 1));
+}
+
+/**
+ * Names older VAT releases wrote directly under the cache root: the link caches
+ * (before `vatLinkCacheDirectory()`) and the root-level `parse/` directory
+ * (before the parse cache moved under the namespace).
+ */
+const LEGACY_ROOT_ENTRY = /^(?:external-links\.json.*|auth-.+|parse)$/u;
+
+/**
+ * Whether `name`, an entry directly under a cache root, is one VAT writes
+ * there: a namespace (any VAT build's), or a name an older release kept at the
+ * root. `vat cache prune` removes only these — never an entry it does not
+ * recognise, whatever else it finds in the directory.
+ *
+ * @param name - A single path segment
+ * @returns True for VAT's own root entries
+ */
+export function isVatCacheRootEntryName(name: string): boolean {
+  return isNamespaceName(name) || LEGACY_ROOT_ENTRY.test(name);
 }

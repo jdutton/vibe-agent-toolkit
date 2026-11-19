@@ -85,9 +85,7 @@ describe('runRepeats — failures and environments', () => {
 
   it('refuses a caller environment that names a variable the arm owns', async () => {
     const probe = setupProbe(PREFIX);
-    await expect(runRepeats(probeSpec(probe, { env: { VAT_PROJECTION_STORE_DIR: probe.cwd } }))).rejects.toThrow(
-      /VAT_PROJECTION_STORE_DIR/,
-    );
+    await expect(runRepeats(probeSpec(probe, { env: { VAT_CACHE_DIR: probe.cwd } }))).rejects.toThrow(/VAT_CACHE_DIR/);
   });
 
   it('captures every repetition\'s stderr per step', async () => {
