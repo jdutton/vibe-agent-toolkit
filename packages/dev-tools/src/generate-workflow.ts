@@ -94,9 +94,32 @@ jobs:
       # The matrix Node version, not the floor: this job is the broad validation
       # run, and node-floor.yml is the one that executes the declared floor.
       - name: Setup toolchain
+        id: setup
         uses: ./.github/actions/setup
         with:
           node-version: \${{ matrix.node }}
+      # VAT's own cache, persisted between runs so the \`vat\` dogfood steps start warm:
+      # the same recipe the vat-adoption-and-configuration skill gives adopters.
+      # Outside the checkout, set from a step (the runner context is not available in a
+      # job-level env:), and in bash: on Windows the default shell is pwsh, where
+      # $RUNNER_TEMP is an unset PowerShell variable. GITHUB_ENV carries it into every
+      # \`bun run vat\` step vibe-validate spawns. Turbo's strict env mode keeps it out of
+      # the test tasks, so the suites never read or write this cache.
+      - name: Point VAT_CACHE_DIR outside the checkout
+        shell: bash
+        run: echo "VAT_CACHE_DIR=$RUNNER_TEMP/vat-cache" >> "$GITHUB_ENV"
+      # Per runner kind: OS, arch, the installed Node, the lockfile, then the commit, so
+      # every run saves a fresh cache (an exact hit never saves). Restore only from a key
+      # that shares everything but the commit: never across lockfile hashes, because a
+      # different lockfile can resolve a different parser under the same VAT namespace.
+      # "Cache restored from key: ..." in this step's log is a warm start.
+      - name: Restore VAT cache
+        uses: actions/cache@v6
+        with:
+          path: \${{ env.VAT_CACHE_DIR }}
+          key: vat-\${{ runner.os }}-\${{ runner.arch }}-\${{ steps.setup.outputs.node-version-installed }}-\${{ hashFiles('bun.lock') }}-\${{ github.sha }}
+          restore-keys: |
+            vat-\${{ runner.os }}-\${{ runner.arch }}-\${{ steps.setup.outputs.node-version-installed }}-\${{ hashFiles('bun.lock') }}-
       # The adopter-name gate reads its token list from outside the repo, because a
       # contraband list committed to a public repo is itself the leak. Materialize it
       # from a repo secret into the gitignored default path the gate already looks for.
@@ -126,6 +149,11 @@ jobs:
         env:
           GH_TOKEN: \${{ github.token }}
           NET_AVAILABLE: "1"
+      # actions/cache saves in its post step, after every step here: prune first so the
+      # saved cache holds only what this build uses and stops growing with each release.
+      - name: Prune the VAT cache before it is saved
+        if: always()
+        run: bun run vat cache prune
       # vibe-validate captures a failed step's stdout and stderr to files and summarises
       # them through an extractor that keeps only lines carrying an error keyword, so a
       # verdict without one (\`NEW unused export: …\`) never reaches this log. Print the

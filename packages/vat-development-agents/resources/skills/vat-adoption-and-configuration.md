@@ -201,14 +201,16 @@ that this build does not use.
 ```yaml
 # GitHub Actions (job steps)
 steps:
-  - uses: actions/checkout@v4
+  - uses: actions/checkout@v7
   # The runner context is not available in a job-level env:, so set the variable from a step.
-  - run: echo "VAT_CACHE_DIR=$RUNNER_TEMP/vat-cache" >> "$GITHUB_ENV"   # outside the checkout
-  - uses: actions/setup-node@v4
+  # bash on every OS: under Windows' default pwsh, $RUNNER_TEMP is an unset variable.
+  - shell: bash
+    run: echo "VAT_CACHE_DIR=$RUNNER_TEMP/vat-cache" >> "$GITHUB_ENV"   # outside the checkout
+  - uses: actions/setup-node@v7
     id: node
     with:
       node-version: 24
-  - uses: actions/cache@v4
+  - uses: actions/cache@v6
     with:
       path: ${{ env.VAT_CACHE_DIR }}
       key: vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('**/package-lock.json', '**/bun.lock') }}-${{ github.sha }}
@@ -216,7 +218,8 @@ steps:
         vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('**/package-lock.json', '**/bun.lock') }}-
   - run: npm ci
   - run: npx vat validate
-  - run: npx vat cache prune   # drop what this build does not use before the cache is saved
+  - if: always()               # actions/cache saves in its post step, after this one
+    run: npx vat cache prune     # drop what this build does not use before the cache is saved
 ```
 
 ## First-Time Setup Checklist
