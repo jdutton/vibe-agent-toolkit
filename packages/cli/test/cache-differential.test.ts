@@ -164,7 +164,7 @@ describe('a documented hole', () => {
     needs: null,
     arms: ['storeOff', 'warmSameHistory'],
     verbs: ['query'],
-    expect: { documentsHole: { arm: 'warmSameHistory', closedBy: 'the stat memo' } },
+    expect: { documentsHole: { arm: 'warmSameHistory', because: 'normalization is outside what VAT supports' } },
     consumed: { runs: [], check: () => undefined },
   };
 

@@ -171,13 +171,15 @@ This ADR changes as follows; each old choice becomes a rejected alternative.
   prove it again, and a mid-run re-check uses git's tree comparison. Enforced by a test asserting
   `content.hashed` equals the distinct files hashed in a `vat validate` run.
 - **Non-goals.** Was: cross-host or container-shared stores. Now: sharing across machine kinds;
-  same-kind restore (CI save and restore keyed per runner OS) is in scope. I2 already requires the
-  runtime tuple in every key, which makes a foreign cache a miss. Rejected: a host-bound store, which
-  forbids CI cache restore for no soundness gain.
+  same-kind restore (CI save and restore keyed per runner OS) is in scope. Content-keyed entries hit
+  across machine kinds, and by the first change above that hit is correct; machine kinds are
+  separated by the CI cache's own key and the extent key's root id. I2's runtime tuple is the one
+  input that can change facts for the same bytes. Rejected: a host-bound store, which forbids CI
+  cache restore for no soundness gain.
 
 Built: the one-read rule, in the change that carries this amendment. Not built: the git-OID path
-(planned with incremental repopulation) and the runtime tuple in the cache key (the namespace
-carries the VAT version only).
+(planned with incremental repopulation) and I2's runtime tuple in the parse-cache and blob keys (the
+namespace carries the VAT version only).
 
 ## How this ADR changes
 

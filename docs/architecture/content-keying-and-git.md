@@ -20,9 +20,13 @@ conflicting conclusion is marked superseded in place and its measurements are ke
    set: every file is exactly one of the two.
 3. **Caches are per machine kind.** Sharing one cache across machine kinds (for example a Windows
    runner and an Ubuntu runner) is a non-goal. Restoring a cache onto another machine of the same
-   kind (CI save and restore keyed per runner OS) is in scope. Cache keys carry what distinguishes a
-   machine kind (OS, the Node runtime including its Unicode version, the VAT version and lockfile),
-   so a foreign cache is a miss, never a wrong hit.
+   kind (CI save and restore keyed per runner OS) is in scope. VAT's parse cache and blob tier are
+   keyed by content alone, so the same bytes hit on any machine, and by rule 1 that hit is correct:
+   the same bytes give the same facts. What separates machine kinds lies outside those keys: the CI
+   cache's own key (for example `actions/cache` keyed on runner OS, architecture, Node version and
+   lockfile) and the extent key's root id, which is derived from the checkout path. The runtime
+   tuple (the Node runtime and its Unicode version) is the one input that can change parse facts
+   for the same bytes, so it belongs in the content-derived keys; it is not keyed yet.
 4. **One read and one key per file per run.** Within one VAT run each file is read and
    content-hashed at most once, and every lane (projection population, the resource registry, skills
    validation, `check`, link resolution) shares that one read and key. A warm projection-store hit
@@ -37,8 +41,8 @@ What is built:
 - Rule 4 is being implemented now, with its enforcing test, in the change that adopts this decision.
 - Rule 2's git-OID path is planned, together with incremental repopulation, and is not built. Until
   it lands every path is keyed by VAT's checksum, which rule 2 permits for any file.
-- Rule 3's keys are partial: the cache namespace carries the VAT version; the runtime tuple (OS,
-  Node, Unicode) is not yet in the key.
+- Rule 3 is partial: the cache namespace carries the VAT version; the runtime tuple (Node and its
+  Unicode version) is not yet in the parse-cache or blob keys.
 
 ## 1. Overview
 
