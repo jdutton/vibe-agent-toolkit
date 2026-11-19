@@ -223,6 +223,7 @@ steps:
   - run: npm ci
   - run: npx --no-install vat validate
   - if: always()               # actions/cache saves in its post step, after this one
+    continue-on-error: true    # a prune failure must not redden a green job
     run: npx --no-install vat cache prune   # drop what this build does not use before the cache is saved
 ```
 
