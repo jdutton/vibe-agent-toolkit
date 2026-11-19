@@ -417,18 +417,8 @@ export interface ResourceRegistryOptions {
    * exactly one `addResources` call, so a crawling command builds exactly one
    * pool — the same lifetime `populateBlobs` has.
    */
-  parsePool?: RegistryParsePoolPolicy;
+  parsePool?: ParsePoolPolicy;
 }
-
-/**
- * A registry's parse-pool policy: everything but the input cap. The input cap is
- * the population's ({@link POPULATION_PARSE_LIMITS} `inputBytes`): a registry that
- * read under its own cap would refuse a file at one size on this lane and at
- * another on the projection lane, inside one run. Its output limits stay its own.
- */
-export type RegistryParsePoolPolicy = Omit<ParsePoolPolicy, 'limits'> & {
-  limits?: Omit<NonNullable<ParsePoolPolicy['limits']>, 'inputBytes'>;
-};
 
 /**
  * How a registry admits a file: reads, keys, parses and stats it.
@@ -786,7 +776,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * per-call parameter would make the policy a property of the deepest caller
    * instead of a property of the registry.
    */
-  private readonly parsePoolPolicy: RegistryParsePoolPolicy = {};
+  private readonly parsePoolPolicy: ParsePoolPolicy = {};
 
   /** How this registry admits a file — see {@link AdmissionRoute}. */
   readonly #admission: AdmissionRoute;
@@ -939,10 +929,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // A view reads its run's admissions: it is not a registry built.
     if (shared === undefined || shared.counted) countWork('registry.built', 1);
     this.#admission = shared?.route
-      ?? directAdmission(() => new ParseDispatcher(this.parseCache(), {
-        ...this.parsePoolPolicy,
-        limits: { ...this.parsePoolPolicy.limits, inputBytes: POPULATION_PARSE_LIMITS.inputBytes },
-      }));
+      ?? directAdmission(() => new ParseDispatcher(this.parseCache(), this.parsePoolPolicy));
     if (options?.baseDir !== undefined) {
       this.baseDir = options.baseDir;
     }
@@ -1297,12 +1284,15 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     const facts = await this.#admission.admit(absolutePath, parserKind, () =>
       this.admitFacts(absolutePath, parserKind, dispatcher),
     );
-    // This resource's OWN copy: the parse is shared, one answer per content key,
-    // with every other view of the run, every identically-contented file and the
-    // population that keyed it, and a resource's arrays are written in place
-    // (`resolveLinks` sets each link's `resolvedId` against this view's ids; the
-    // packager rewrites links while bundling).
-    const parseResult = structuredClone(facts.parse);
+    // The parse is shared, one frozen answer per content key, with every other
+    // view of the run, every identically-contented file and the population that
+    // keyed it. A view writes two things in place, so it takes its OWN copy of
+    // exactly those: the links (`resolveLinks` sets each link's `resolvedId`
+    // against this view's ids; the packager rewrites links while bundling) and
+    // the headings. The rest, the content string included, stays shared.
+    const parseResult = facts.parse;
+    const links = parseResult.links.map((link) => ({ ...link }));
+    const headings = structuredClone(parseResult.headings);
 
     // THE stat — one call serving both `modifiedAt` and `sizeBytes`, its link
     // chain read beneath the crawl base first (`link-following.ts`). After the
@@ -1324,8 +1314,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     const resource: ResourceMetadata = {
       id,
       filePath: absolutePath,
-      links: parseResult.links,
-      headings: parseResult.headings,
+      links,
+      headings,
       ...(parseResult.anchors !== undefined && { anchors: parseResult.anchors }),
       ...(parseResult.parseErrors !== undefined && { parseErrors: parseResult.parseErrors }),
       ...(parseResult.unresolvedReferences !== undefined && {

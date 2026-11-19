@@ -19,6 +19,7 @@ import {
   type CollectionConfig,
   type CollectionStats,
   type DeferredSkillFiles,
+  type ParseDispatcher,
   type ProjectConfig,
 } from '@vibe-agent-toolkit/resources';
 import {
@@ -273,10 +274,16 @@ function applyNoCheckFrontmatterLinksFlag(config: ProjectConfig | undefined): vo
  * empty model. The `files:` short-circuit also keeps skill discovery (a read and
  * a frontmatter parse per declared skill) off `vat resources validate` for the
  * majority of projects, which declare no `files:` at all.
+ *
+ * @param config - The project config
+ * @param projectRoot - The project root the skills config is relative to
+ * @param dispatcher - The run's dispatcher, so each SKILL.md the resources phase
+ *   already read is not read, keyed and parsed again for discovery
  */
 export async function computeDeferredArtifacts(
   config: ProjectConfig | undefined,
   projectRoot: string,
+  dispatcher: ParseDispatcher,
 ): Promise<DeferredArtifacts | undefined> {
   if (!config?.skills) {
     return undefined;
@@ -291,7 +298,7 @@ export async function computeDeferredArtifacts(
   // `'refuse'`: the `files:` dest check below is only as complete as this
   // list — a SKILL.md whose parse was refused included, since its `files:` are keyed
   // by a name it has none of. The throw lands in the command's catch → a refusal by its code, exit 2.
-  const discovered = namedSkillsOrRefuse(await discoverSkillsFromConfig(config.skills, projectRoot, 'refuse', undefined), projectRoot);
+  const discovered = namedSkillsOrRefuse(await discoverSkillsFromConfig(config.skills, projectRoot, 'refuse', dispatcher), projectRoot);
   const { defaults, config: perSkillConfig } = config.skills;
 
   // Assembled ONCE for the whole run, then handed to every skill below. Rebuilding
@@ -362,7 +369,7 @@ async function runValidation(
   // config-merge `vat skills validate` uses, so a `files:`-declared link that
   // lane reports as LINK_DEFERRED_ARTIFACT (info) is never independently
   // reported here as LINK_BROKEN_FILE (error) — the headline bug this closes.
-  const deferredArtifacts = await computeDeferredArtifacts(config, projectRoot);
+  const deferredArtifacts = await computeDeferredArtifacts(config, projectRoot, run.dispatcher);
 
   const validationResult = await registry.validate({
     ...(frontmatterSchemaObj ? { frontmatterSchema: frontmatterSchemaObj } : {}),

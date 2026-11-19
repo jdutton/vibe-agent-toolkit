@@ -641,16 +641,17 @@ relation the second hydrates equal to its no-store run.
 **One scope for a whole multi-surface run.** Every lane opens its own
 `withPopulationCache` bracket, because each has to be correct when its command runs alone — so a
 multi-lane run opened a database and took a `git write-tree` per lane. `vat validate` therefore
-holds one bracket over all its surfaces (`runPhasesUnderOnePopulation`), and a nested scope over the
+holds one bracket over all its surfaces (`withRunContext`, around `runPhasesInOrder`), and a nested scope over the
 same repository joins the open one. Interleaved A/B on the 12,602-file adopter tree, four runs per
 arm: cold 6,140 / 4,961 ms → 5,228 / 4,281 ms, warm 3,509–3,812 ms → 3,354–3,496 ms, with
 `git-tracker:initialize` falling from 132–159 ms to 57–64 ms as the second surface reads the first's
 snapshot instead of taking its own.
 
-⚠️ **That hoist is admissible for `vat validate` specifically, and is not a free refactor**: one
-scope is one git snapshot for every in-process phase. `vat validate` writes nothing into the tree,
-so no phase can miss another's output. A verb whose phases produce files for the next to read
-(`vat build`) must not be hoisted this way, and is not. Its `checks` phase is a supervised child
+⚠️ **That hoist is admissible only for a verb whose phases write nothing into the tree, and is not a
+free refactor**: one scope is one git snapshot for every in-process phase. `vat validate` and
+`vat verify` write nothing into the tree, so no phase can miss another's output. A verb whose phases
+produce files for the next to read (`vat build`) must not be hoisted this way, and is not: it opens
+no run. `vat validate`'s `checks` phase is a supervised child
 process OUTSIDE that scope: it takes its own git snapshot, and opens — and on a miss writes — the
 projection store while the parent holds it open. `validate-checks-phase.system.test.ts` smoke-tests
 that pair on a fixture: the first run's checks phase reports `population: derived` with a store left

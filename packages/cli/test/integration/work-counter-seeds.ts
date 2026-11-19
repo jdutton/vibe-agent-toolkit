@@ -284,7 +284,11 @@ function keyed(content: string): Partial<Record<WorkCounter, number>> {
 
 /** A parse on a pool whose limits the content breaches, or that runs it: one dispatch. */
 function parseSeed(label: string, policy: ParsePoolPolicy, moves: Partial<Record<WorkCounter, number>>): Seed {
-  const content = uniqueDocument(label);
+  return contentSeed(uniqueDocument(label), policy, moves);
+}
+
+/** A seed that parses `content` once on a dispatcher of `policy`, moving what keying it moves plus `moves`. */
+function contentSeed(content: string, policy: ParsePoolPolicy, moves: Partial<Record<WorkCounter, number>>): Seed {
   return {
     prepare: (scope) => {
       const dispatcher = dispatcherOf(scope, policy);
@@ -292,6 +296,15 @@ function parseSeed(label: string, policy: ParsePoolPolicy, moves: Partial<Record
     },
     delta: { ...keyed(content), ...moves },
   };
+}
+
+/** Every dispatcher's input cap, which is the population's: there is no smaller cap to name. */
+const INPUT_CAP = new ParseDispatcher(new ParseCache({ enabled: false }), {}).inputBytes;
+
+/** A document one byte past {@link INPUT_CAP}. */
+function overCapDocument(label: string): string {
+  const head = uniqueDocument(label);
+  return head + 'x'.repeat(INPUT_CAP + 1 - Buffer.byteLength(head, 'utf8'));
 }
 
 /** A document with three links: three output rows past a one-row cap. */
@@ -353,7 +366,7 @@ export const PARSE_SEEDS: Readonly<Record<ParseCounter, Seed>> = {
     },
     delta: { 'parse.refused.inputCap.read': 1 },
   },
-  'parse.refused.inputCap.dispatch': parseSeed('input cap', { limits: { inputBytes: 4 } }, {
+  'parse.refused.inputCap.dispatch': contentSeed(overCapDocument('input cap'), {}, {
     'parse.refused.inputCap.dispatch': 1,
   }),
   'parse.refused.load': {
@@ -374,7 +387,7 @@ export const PARSE_SEEDS: Readonly<Record<ParseCounter, Seed>> = {
     },
     delta: { 'content.hashed': 1, 'content.hashedBytes': HASHED.byteLength },
   },
-  'content.hashedBytes': parseSeed('hashed bytes', { limits: { inputBytes: 4 } }, {
+  'content.hashedBytes': contentSeed(overCapDocument('hashed bytes'), {}, {
     'parse.refused.inputCap.dispatch': 1,
   }),
   'content.read': (() => {

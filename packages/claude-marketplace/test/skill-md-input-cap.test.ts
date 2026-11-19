@@ -1,8 +1,8 @@
 /**
  * A SKILL.md past the parse input cap is refused by its size, before it is read, on each
  * marketplace lane that reads one for its frontmatter — the compatibility analyzer, the settings
- * checker and the skill inventory — and the cap is the one the run's dispatcher holds, not the
- * default. A lane that read the file and parsed only the block at its top would see a valid skill
+ * checker and the skill inventory — under the one cap every dispatcher holds (the population's).
+ * A lane that read the file and parsed only the block at its top would see a valid skill
  * declaring `allowed-tools: Bash` and report it as checked. Each lane names the refusal in the one
  * sentence every lane gives (`parseRefusal`), and the inventory under its code.
  *
@@ -22,8 +22,8 @@ import { checkSettingsCompatibility } from '../src/settings/settings-compat-chec
 
 import { BASH_SKILL, DENY_BASH, SKILLS, setupRefusedSkillFixture, writeSkill } from './refused-skill-fixture.js';
 
-/** The run's cap — far under the default, so only a lane reading under the dispatcher's cap refuses. */
-const CAP = 4096;
+/** Every dispatcher's input cap: the population's, which no lane names a different one of. */
+const CAP = new ParseDispatcher(new ParseCache({ enabled: false }), {}).inputBytes;
 const REASON = parseRefusal(new ParseLimitError('inputBytes', CAP)).reason;
 const OVERSIZE = 'skills/oversize/SKILL.md';
 const WIDE = 'skills/wide/SKILL.md';
@@ -33,7 +33,7 @@ const WIDE = 'skills/wide/SKILL.md';
  * text is past it as UTF-8: each CJK character is two bytes here and three in UTF-8.
  */
 function wideSkill(): Buffer {
-  const text = `${BASH_SKILL('wide')}${'字'.repeat(1900)}\n`;
+  const text = `${BASH_SKILL('wide')}${'字'.repeat(Math.floor(CAP * 0.4))}\n`;
   const bytes = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]);
   if (bytes.length > CAP || Buffer.byteLength(text, 'utf8') <= CAP) throw new Error('the wide fixture no longer straddles the cap');
   return bytes;
@@ -42,7 +42,7 @@ function wideSkill(): Buffer {
 let dispatcher: ParseDispatcher;
 
 beforeAll(() => {
-  dispatcher = new ParseDispatcher(new ParseCache({ enabled: false }), { limits: { inputBytes: CAP } });
+  dispatcher = new ParseDispatcher(new ParseCache({ enabled: false }), {});
 });
 
 afterAll(async () => {

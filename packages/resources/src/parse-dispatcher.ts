@@ -21,7 +21,7 @@
  * mean it lands twice — or, far more likely, on one lane only.
  */
 
-import { countWork, type FsSide, withFsFault } from '@vibe-agent-toolkit/utils';
+import { countWork, deepFreeze, type FsSide, withFsFault } from '@vibe-agent-toolkit/utils';
 
 import {
   DOCUMENT_PARSER_KINDS,
@@ -122,8 +122,13 @@ export interface ParsePoolPolicy {
    * parse on the run's own thread cannot be stopped at a limit (ADR I8). The
    * old `VAT_PARSE_POOL=0` opt-out and the below-threshold in-process route are
    * gone; a small corpus pays one worker, never an unbounded parse.
+   *
+   * ⛔ **There is no `inputBytes`.** Every dispatcher's input cap is the
+   * population's (`POPULATION_PARSE_LIMITS`): one cap, which the run's content
+   * reads, the population's blob stage and every parse apply alike, so no lane
+   * admits a file another lane refuses by its size.
    */
-  limits?: Partial<ParseLimits>;
+  limits?: Partial<Omit<ParseLimits, 'inputBytes'>>;
   /**
    * The run's content reads, which every file this dispatcher is asked to parse
    * is read through, or omitted for a dispatcher that serves no run (each parse
@@ -131,8 +136,8 @@ export interface ParsePoolPolicy {
    * lane already read (the population, a registry view) is not read and keyed a
    * second time when another lane parses it by path (a SKILL.md's name, the
    * packaging validator's parse): content-keying-and-git.md, "Decision: content
-   * identity is per source", rule 4. The source holds files to the same input
-   * cap as {@link limits}.
+   * identity is per source", rule 4. The source holds files to the population's
+   * input cap, which is every dispatcher's (see {@link limits}).
    */
   content?: ParseContentSource;
   /**
@@ -444,18 +449,24 @@ export class ParseDispatcher {
   };
 
   /**
-   * Every parse this dispatcher has answered, by content key: a run parses (or
-   * looks up) each content once, whichever lane asks, so the population's blob
-   * stage and the registry's admission of the same file share one answer
-   * (content-keying-and-git.md, "Decision: content identity is per source",
-   * rule 4). A key names the bytes and the parser, and the limits are this
-   * dispatcher's own, so one key has one answer for the dispatcher's life. A
-   * refusal is an answer too and is held the same way.
+   * A run's dispatcher only (one carrying the run's {@link ParsePoolPolicy.content},
+   * so it lives exactly as long as the run): every parse it has answered, by
+   * content key. A run parses (or looks up) each content once, whichever lane
+   * asks, so the population's blob stage and the registry's admission of the same
+   * file share one answer (content-keying-and-git.md, "Decision: content identity
+   * is per source", rule 4). A key names the bytes and the parser, and the limits
+   * are this dispatcher's own, so one key has one answer for the dispatcher's
+   * life. A refusal is an answer too and is held the same way.
    *
-   * ⚠️ The answer is SHARED: a caller that mutates what it is handed (the
-   * registry resolves links in place) copies it first.
+   * `undefined` for a dispatcher that serves no run: it holds nothing it has
+   * answered, so a long-lived one never grows.
+   *
+   * ⚠️ The answer is SHARED, so it is deep-frozen: a caller that writes to what
+   * it is handed (the registry resolves links in place) copies what it writes,
+   * and a caller that forgets fails loudly rather than changing every other
+   * holder's answer.
    */
-  readonly #parsed = new Map<string, Promise<ParseResult>>();
+  readonly #parsed: Map<string, Promise<ParseResult>> | undefined;
 
   #pool: ParsePool | null = null;
   #width = 1;
@@ -467,6 +478,7 @@ export class ParseDispatcher {
     this.#cache = cache;
     this.#limits = policy.limits;
     this.#content = policy.content;
+    this.#parsed = policy.content === undefined ? undefined : new Map();
     this.#resolvedLimits = resolveParseLimits(policy.limits);
     this.#inputBytes = this.#resolvedLimits.inputBytes;
     // Read per construction, not at module load. `'cache'` exactly,
@@ -552,8 +564,8 @@ export class ParseDispatcher {
   }
 
   /**
-   * Parse one document, off-thread once a pool is active: once per content key
-   * for this dispatcher's life (see {@link #parsed}).
+   * Parse one document, off-thread once a pool is active: on a run's dispatcher,
+   * once per content key for the run, and frozen (see {@link #parsed}).
    *
    * Every document that passes through here is also the sizing's SAMPLE — see
    * {@link considerActivation}. Recorded for hits as well as misses, because
@@ -569,9 +581,10 @@ export class ParseDispatcher {
    * @throws A `ParseLimitError` (`inputBytes`) for content past the cap
    */
   parse(keyed: ParsableContent): Promise<ParseResult> {
+    if (this.#parsed === undefined) return this.#parseOnce(keyed);
     const held = this.#parsed.get(keyed.key);
     if (held !== undefined) return held;
-    const parsed = this.#parseOnce(keyed);
+    const parsed = this.#parseOnce(keyed).then(deepFreeze);
     this.#parsed.set(keyed.key, parsed);
     return parsed;
   }

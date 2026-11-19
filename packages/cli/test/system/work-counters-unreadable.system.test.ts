@@ -11,6 +11,9 @@
  *   `RESOURCE_UNREADABLE` (exit 1).
  * - an unreadable DIRECTORY: its listing refused, the run refused with
  *   `INPUT_UNREADABLE` (exit 2) before any phase admits anything.
+ * - an unreadable FILE in a corpus with a skill that links it: the resources
+ *   phase reports it, and the skills phase reports the link to it as
+ *   `LINK_TARGET_UNREADABLE` (exit 1), as v0.2.0-rc.17 does.
  *
  * The expected sentences are the ones v0.2.0-rc.17 prints for these fixtures.
  * `chmod 000` is the whole fixture, so the suite is POSIX-only and refuses to
@@ -27,7 +30,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PROJECTION_STORE_DIR_ENV } from '../../src/utils/projection-store.js';
 import { commitTestFixture } from '../test-helpers.js';
 
-import { createSuiteContext, executeCli, fs, join, writeTestFile } from './test-common.js';
+import { createSkillMarkdown, createSuiteContext, executeCli, fs, join, writeTestFile } from './test-common.js';
 
 const context = createSuiteContext('vat-work-unreadable-', import.meta.url);
 
@@ -42,6 +45,13 @@ const FILES: Readonly<Record<string, string>> = {
   'docs/locked/inner.md': '# Inner\n',
 };
 
+/** The same corpus with a skill linking the file the fixture locks. */
+const FILES_WITH_SKILL: Readonly<Record<string, string>> = {
+  ...FILES,
+  'vibe-agent-toolkit.config.yaml': 'resources:\n  include:\n    - "**/*.md"\nskills:\n  include:\n    - "skills/**/SKILL.md"\n',
+  'skills/one/SKILL.md': `${createSkillMarkdown('one')}\nSee [the guide](../../docs/guide.md) and [the secret](../../docs/secret.md).\n`,
+};
+
 const LOCKED_FILE = 'docs/secret.md';
 const LOCKED_DIR = 'docs/locked';
 
@@ -50,6 +60,9 @@ const FILE_RESOURCES_SENTENCE =
   "docs/secret.md: error: 'docs/secret.md' was enumerated but could not be read (EACCES), so it was skipped: nothing in it was checked. [RESOURCE_UNREADABLE]";
 const FILE_CHECKS_SENTENCE =
   "docs/secret.md: error: 'docs/secret.md' was enumerated but could not be read, so no check saw its rows and this run's verdict does not cover it. [RESOURCE_UNREADABLE]";
+
+/** rc.17's skills-phase sentence for a bundled link to the unreadable file (its absolute path follows). */
+const FILE_SKILLS_SENTENCE = 'docs/secret.md: error: Linked file docs/secret.md is bundled, but it could not be read: EACCES';
 
 /** rc.17's refusal for the unreadable directory. */
 const DIR_SENTENCE =
@@ -60,10 +73,10 @@ const DIR_RUN_SENTENCE =
 /** An mtime well before any index this suite's commits write (seconds since the epoch). */
 const BACKDATED = Date.now() / 1000 - 3600;
 
-/** A committed copy of the fixture with `locked` made unreadable after the commit. */
-function lockedFixture(locked: string): { root: string; path: string } {
+/** A committed copy of `files` with `locked` made unreadable after the commit. */
+function lockedFixture(locked: string, files: Readonly<Record<string, string>> = FILES): { root: string; path: string } {
   const root = join(context.createTempDir(), 'corpus');
-  for (const [path, content] of Object.entries(FILES)) {
+  for (const [path, content] of Object.entries(files)) {
     const absolute = join(root, path);
     mkdirSyncReal(join(absolute, '..'), { recursive: true });
     writeTestFile(absolute, content);
@@ -116,11 +129,27 @@ afterAll(() => {
 describe.skipIf(CANNOT_DENY_READS)('an unreadable input under the run population', () => {
   let file: { root: string; path: string };
   let dir: { root: string; path: string };
+  let skilled: { root: string; path: string };
 
   beforeAll(() => {
     file = lockedFixture(LOCKED_FILE);
     dir = lockedFixture(LOCKED_DIR);
-    lockedPaths.push(file.path, dir.path);
+    skilled = lockedFixture(LOCKED_FILE, FILES_WITH_SKILL);
+    lockedPaths.push(file.path, dir.path, skilled.path);
+  });
+
+  it('vat validate: an unreadable file a skill links is reported by the resources and skills phases as in rc.17, exit 1', async () => {
+    const result = await run(skilled.root, ['validate']);
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(FILE_RESOURCES_SENTENCE);
+    expect(result.stderr).toContain(FILE_SKILLS_SENTENCE);
+    expect(result.stdout).toContain('name: skills');
+  });
+
+  it('vat skills validate: an unreadable file the skill links is reported as in rc.17, exit 1', async () => {
+    const result = await run(skilled.root, ['skills', 'validate']);
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(FILE_SKILLS_SENTENCE);
   });
 
   it('vat validate: an unreadable file is reported by each phase as in rc.17, exit 1', async () => {

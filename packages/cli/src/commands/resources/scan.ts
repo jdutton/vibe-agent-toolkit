@@ -176,42 +176,43 @@ export async function scanCommand(
     // Resolve projectRoot at the CLI boundary (spec §5/§7 — loud-cwd policy).
     const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
 
-    // Load resources with config support
-    // One run around the load; the registry is read as plain data after it closes.
-    const { registry, config, population } = await withRunContext({ root: projectRoot }, (run) =>
-      loadResourcesWithConfig(pathArg, run, logger));
-    assertDeclaredCollection(config, options.collection);
+    // One run around the whole scan: the registry is the run's view, so nothing
+    // of it is read after the run closes and releases its contents and parses.
+    const report = await withRunContext({ root: projectRoot }, async (run) => {
+      const { registry, config, population } = await loadResourcesWithConfig(pathArg, run, logger);
+      assertDeclaredCollection(config, options.collection);
 
-    // Get all resources (filtered by collection if specified)
-    const { collection } = options;
-    const resources = collection === undefined
-      ? registry.getAllResources()
-      : registry.getAllResources().filter((r) => r.collections?.includes(collection) ?? false);
-    // Scoped to `--collection` by the collection's own patterns, as `resources
-    // validate` scopes them, and resolved through `resources.validation`.
-    const notAdmittedLog = notAdmittedInScope(
-      registry.getNotAdmitted(),
-      collection === undefined ? undefined : config?.resources?.collections?.[collection],
-    );
-    const notAdmitted = {
-      count: notAdmittedCount(notAdmittedLog),
-      findings: notAdmittedFindings(
-        notAdmittedLog,
-        { locationRoot: projectRoot, consequence: 'it is in no collection count in this report' },
-        config?.resources?.validation ?? {},
-      ),
-    };
-    reportFindings(notAdmitted.findings, { verbose: true, write: logger.warn });
+      // Get all resources (filtered by collection if specified)
+      const { collection } = options;
+      const resources = collection === undefined
+        ? registry.getAllResources()
+        : registry.getAllResources().filter((r) => r.collections?.includes(collection) ?? false);
+      // Scoped to `--collection` by the collection's own patterns, as `resources
+      // validate` scopes them, and resolved through `resources.validation`.
+      const notAdmittedLog = notAdmittedInScope(
+        registry.getNotAdmitted(),
+        collection === undefined ? undefined : config?.resources?.collections?.[collection],
+      );
+      const notAdmitted = {
+        count: notAdmittedCount(notAdmittedLog),
+        findings: notAdmittedFindings(
+          notAdmittedLog,
+          { locationRoot: projectRoot, consequence: 'it is in no collection count in this report' },
+          config?.resources?.validation ?? {},
+        ),
+      };
+      reportFindings(notAdmitted.findings, { verbose: true, write: logger.warn });
 
-    const report = buildScanReport({
-      notAdmitted,
-      resources,
-      root: projectRoot,
-      lane: population.lane,
-      extentSource: extentSourceOf(population),
-      durationMs: Date.now() - startTime,
-      collections: collectionCounts(registry.getCollectionStats(), collection),
-      verbose: options.verbose ?? false,
+      return buildScanReport({
+        notAdmitted,
+        resources,
+        root: projectRoot,
+        lane: population.lane,
+        extentSource: extentSourceOf(population),
+        durationMs: Date.now() - startTime,
+        collections: collectionCounts(registry.getCollectionStats(), collection),
+        verbose: options.verbose ?? false,
+      });
     });
     endWithReport('resources scan', report, format);
   } catch (error) {

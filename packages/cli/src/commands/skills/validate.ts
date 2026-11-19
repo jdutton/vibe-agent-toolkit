@@ -444,6 +444,10 @@ const OTHER_ROOT_INCLUDE: readonly string[] = ['**/*.md', '**/*.html', '**/*.htm
  * crawls markdown and HTML under its own config (or none, when it will not
  * parse: the per-skill validation reports that).
  *
+ * Only the shared root's view enumerates through the run's population source: a
+ * batch that spans several roots walks every view, its home root's too, which is
+ * what each skill's own registry did before the run held them.
+ *
  * @param run - The run
  * @param sharedRoot - The one project root the batch shares, or `undefined`
  * @param config - The command's own config
@@ -457,7 +461,9 @@ export function skillsValidateRegistries(
   const shared = sharedRoot === undefined ? undefined : toForwardSlash(safePath.resolve(sharedRoot));
   return new RunSkillRegistries({
     registry: run.registry,
-    source: resourcesProjectionCrawlSelected() ? run.population.source : undefined,
+    // The run's source for the shared root only: a batch spanning several roots
+    // walks every root, its home root included, as each skill's own registry did.
+    source: shared !== undefined && resourcesProjectionCrawlSelected() ? run.population.source : undefined,
     includeFor: (root) => (root === shared ? SHARED_ROOT_INCLUDE : OTHER_ROOT_INCLUDE),
     configFor: (root) => (root === shared ? Promise.resolve(config) : loadRootConfig(root).catch(() => undefined)),
   });

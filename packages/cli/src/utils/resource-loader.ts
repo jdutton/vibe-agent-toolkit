@@ -16,7 +16,6 @@ import {
   type ParseDispatcher,
   type PopulationCache,
   type PopulationOutcome,
-  type PopulationRun,
   type ProjectConfig,
   type ResourcePopulationSource,
   type RunPopulation,
@@ -29,7 +28,7 @@ import { loadConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
 import { collectionsOption } from './population-wiring.js';
 import { assertDirectoryArgument } from './project-root-policy.js';
-import { withPopulationCache } from './projection-store.js';
+import { withLazyPopulationCache, withPopulationCache } from './projection-store.js';
 
 /**
  * One VAT process run's shared population, registry and parse dispatcher: what
@@ -55,14 +54,16 @@ export interface RunContext {
 }
 
 /**
- * Run one verb's work with its {@link RunContext}, the projection store that
- * answers it open for the whole call.
+ * Run one verb's work with its {@link RunContext}, inside the projection-store
+ * scope that answers it.
  *
- * Cheap and failure-free by construction: nothing here reads the tree. The home
- * root's ignore oracle is initialized by the first enumeration of that root
- * (inside whichever phase asks first), so a refusal such as an unreadable file
- * under git is still the refusing phase's, as it was when each phase built its
- * own population.
+ * Opening the run reads no file, opens no store and takes no snapshot. The first
+ * enumeration of the home root (inside whichever phase asks first) opens the
+ * store, takes the snapshot that keys it and initializes the root's ignore
+ * oracle; so a phase that refuses at its own guards, or finds nothing to check,
+ * refuses or reports exactly as it would alone, and a store or git refusal is
+ * the refusal of the phase that enumerated, not of phases that never needed it.
+ * What can still fail here is the parse dispatcher's shutdown when the run ends.
  *
  * @param options - The run's home root, and an ignore oracle to reuse
  * @param work - The verb's work
@@ -74,9 +75,9 @@ export function withRunContext<T>(
 ): Promise<T> {
   const root = safePath.resolve(options.root);
   const gitTracker = options.gitTracker ?? new GitTracker(root);
-  return withPopulationCache({ root }, (cache) =>
+  return withLazyPopulationCache({ root }, (cacheOf) =>
     withRunPopulation(
-      { root, gitTracker, cache, collectionsFor: (enumerated) => Promise.resolve(collectionsOption(enumerated).collections) },
+      { root, gitTracker, cacheOf, collectionsFor: (enumerated) => Promise.resolve(collectionsOption(enumerated).collections) },
       (population) => work({
         population,
         registry: ResourceRegistry.forRun(population, { baseDir: root, gitTracker }),
@@ -397,14 +398,12 @@ export function resourcesProjectionCrawlSelected(): boolean {
  *   time. A SEPARATE selector from {@link RESOURCES_CRAWL_ENV}: which lane
  *   enumerates and whether its answer is cached are independent choices, and a
  *   cache folded into the lane switch could never be measured against it
- * @param run - The content cache and dispatcher every enumeration reads and parses through
  * @returns A population source, or `undefined` to use the walk
  */
 function populationSourceFor(
   root: string,
   gitTracker: GitTracker,
   cache: PopulationCache | undefined,
-  run: PopulationRun,
 ): ResourcePopulationSource | undefined {
   if (!resourcesProjectionCrawlSelected()) {
     return undefined;
@@ -412,7 +411,11 @@ function populationSourceFor(
   return {
     root: safePath.resolve(root),
     // `outputs` come from the crawl that asks (the registry's one declaration of what its verb writes).
-    enumerate: (enumeratedRoot: string, outputs: readonly string[]) =>
+    // Each enumeration reads and parses through a run of its own, held only while
+    // it enumerates: these verbs (`vat build`'s phases) are not one-admission runs
+    // yet, and a run held across the whole build is a parse pool held beside every
+    // registry's own.
+    enumerate: (enumeratedRoot: string, outputs: readonly string[]) => withPopulationRun((run) =>
       buildResourcePopulation({
         root: enumeratedRoot,
         outputs,
@@ -427,7 +430,7 @@ function populationSourceFor(
         gitTracker,
         ...(cache !== undefined && { cache }),
         ...collectionsOption(enumeratedRoot),
-      }),
+      })),
   };
 }
 
@@ -437,8 +440,7 @@ function populationSourceFor(
  *
  * The lane-selection seam for every command that builds its OWN registry rather
  * than going through {@link loadResourcesWithConfig} — `vat skills build` and
- * `vat claude plugin build` (via `createProjectRegistry`) and
- * `vat skills validate` (via its shared-context registry). Those three are what
+ * `vat claude plugin build` (via `createProjectRegistry`). Those two are what
  * put `vat build` on the projection lane at all: before this, that verb reached
  * a projection store on NO phase.
  *
@@ -490,7 +492,7 @@ export function withResourcePopulationSource<T>(
         await gitTracker.initialize();
       }
 
-      return withPopulationRun((run) => work(populationSourceFor(options.root, gitTracker, cache, run)));
+      return work(populationSourceFor(options.root, gitTracker, cache));
     });
   } catch (error) {
     return Promise.reject(error as Error);

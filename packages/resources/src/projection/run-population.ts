@@ -113,8 +113,11 @@ export interface RunPopulationOptions {
    * then reads that snapshot rather than asking git again.
    */
   readonly gitTracker: GitTracker;
-  /** The run's projection store, or `undefined` when the store is off. */
-  readonly cache: PopulationCache | undefined;
+  /**
+   * The run's projection store, or `undefined` when the store is off: asked for
+   * at the first enumeration, so a run that enumerates nothing never opens it.
+   */
+  readonly cacheOf: () => Promise<PopulationCache | undefined>;
   /**
    * The `resources.collections` governing the root, so a declared `mimeType`
    * routes the file it matches to a parser: read off the root being enumerated,
@@ -194,8 +197,11 @@ export class RunPopulation implements PopulationRun {
   }
 
   async #build(outputs: readonly string[]): Promise<ResourceEnumeration> {
-    const { gitTracker, cache, collectionsFor } = this.#options;
+    const { gitTracker, cacheOf, collectionsFor } = this.#options;
     const collections = await collectionsFor(this.root);
+    // The store first: opening it takes the snapshot that keys it, which the
+    // tracker then reads rather than asking git again.
+    const cache = await cacheOf();
     await gitTracker.initialize();
     return buildResourcePopulation({
       root: this.root,

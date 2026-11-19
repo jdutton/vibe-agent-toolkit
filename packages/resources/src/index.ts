@@ -52,7 +52,6 @@ export {
   type ParseRefusedResource,
   type RegistryCrawl,
   type ResourceRegistryOptions,
-  type RegistryParsePoolPolicy,
   type RegistryStats,
   type CollectionStats,
   type CollectionStat,

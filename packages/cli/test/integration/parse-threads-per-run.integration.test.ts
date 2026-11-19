@@ -21,12 +21,8 @@ import { BUILD_FAMILY_SHARDS } from '../fault-matrix/cases/build-family.js';
 import { runOnce } from '../fault-matrix/matrix.js';
 import { cleanupTestTempDir, createTestTempDir } from '../system/test-common.js';
 
-/**
- * The most parse pools one `vat build` of this fixture holds open at the same time: skill
- * discovery's, the run's (held for the whole run, so every lane of the run parses on it), and the
- * one a registry still on the walk lane builds beside it. Two once no registry walks.
- */
-const MOST_POOLS_OPEN_AT_ONCE = 3;
+/** The most parse pools one `vat build` of this fixture holds open at the same time. */
+const MOST_POOLS_OPEN_AT_ONCE = 2;
 
 describe('a cold vat build', () => {
   let base: string | undefined;

@@ -44,10 +44,14 @@ not asserted for it.
 What is built:
 
 - Rule 1 needs no code; it removes obligations.
-- Rule 4 is built. The verb opens the run: `RunContext { population, registry, dispatcher }`
-  (`withRunContext()` in `packages/cli/src/utils/resource-loader.ts`), built by `vat validate`,
-  `vat verify`, `vat resources validate`, `vat skills validate` and every other verb that crawls
-  resources; phase runners require it, and there is no ambient context. `RunPopulation`
+- Rule 4 is built for `vat validate`, `vat verify`, `vat resources validate`, `vat skills validate`,
+  `vat resources scan` and `vat rag index`. Each opens the run: `RunContext { population, registry,
+  dispatcher }` (`withRunContext()` in `packages/cli/src/utils/resource-loader.ts`); phase runners
+  require it, and there is no ambient context. Not covered yet: `vat audit`, `vat skills build`,
+  `vat claude plugin build` (so `vat build`) and `vat ard emit`, which still read a file once per
+  lane that asks. The run opens its projection store on its first enumeration, so a phase that
+  refuses at its own guards opens nothing. A warm store hit still reads and hashes each file a view
+  admits; serving those facts from the store instead is the store-hydration change, not built. `RunPopulation`
   (`packages/resources/src/projection/run-population.ts`) holds one content cache, one
   `ParseDispatcher` that parses each content key once per run, the per-file admission facts (parse
   result, size, mtime, checksum) shared across views, and each root's enumeration, done once.

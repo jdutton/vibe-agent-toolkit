@@ -24,7 +24,7 @@ import {
   type PluginLocalSkillIndex,
   type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
-import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
+import type { ParseDispatcher, ProjectConfig } from '@vibe-agent-toolkit/resources';
 import {
   buildReport,
   toFindings,
@@ -933,6 +933,8 @@ async function runInProcessPhases(run: {
   /** `--verbose`: whether each phase's warning and info findings reach stderr. */
   verbose: boolean;
   results: PhaseResult[];
+  /** The run's dispatcher, so discovery reads no SKILL.md the source phases already read. */
+  dispatcher: ParseDispatcher;
 }): Promise<void> {
   const { phases, config, projectRoot, logger, verbose, results } = run;
   // ONE discovery for the whole in-process half of the run: every phase below
@@ -941,7 +943,7 @@ async function runInProcessPhases(run: {
   // command exists to refuse (a SKILL.md whose parse was refused has no name to
   // check by, so it refuses too) — the throw is the run's refusal, published
   // with the phases that already finished.
-  const discoveredSkills = namedSkillsOrRefuse(await discoverSkillsFromConfig(run.skills, projectRoot, 'refuse', undefined), projectRoot);
+  const discoveredSkills = namedSkillsOrRefuse(await discoverSkillsFromConfig(run.skills, projectRoot, 'refuse', run.dispatcher), projectRoot);
   // ONE plugin-local index likewise, and the declared name of each plugin-local
   // skill, which keys its config exactly as the plugin build keyed it.
   const pluginLocal = indexPluginLocalSkills(config, projectRoot);
@@ -981,7 +983,7 @@ async function verifyTopLevelCommand(
     // Spec §7: `vat verify` requires a projectRoot.
     const projectRoot = requireProjectRoot(process.cwd(), COMMAND_NAME);
     const { config, error: configError } = loadConfigTolerant(projectRoot);
-    // One run for the in-process phases: each file read, keyed, parsed and admitted once.
+    // One run for every phase: each file read, keyed, parsed and admitted once.
     await withRunContext({ root: projectRoot }, async (context) => {
       const phases = applyPhaseSelection(selectVerifyPhases(config, context, configError, options.verbose), logger);
 
@@ -996,12 +998,21 @@ async function verifyTopLevelCommand(
         logger.info(`\n▶ Phase: ${phase.name}`);
         results.push(await runPhase(phase));
       });
-    });
-    const inProcessPhases = selectInProcessVerifyPhases(config);
 
-    if (inProcessPhases.length > 0 && config?.skills) {
-      await runInProcessPhases({ phases: inProcessPhases, config, skills: config.skills, projectRoot, logger, verbose: options.verbose === true, results });
-    }
+      const inProcessPhases = selectInProcessVerifyPhases(config);
+      if (inProcessPhases.length > 0 && config?.skills) {
+        await runInProcessPhases({
+          phases: inProcessPhases,
+          config,
+          skills: config.skills,
+          projectRoot,
+          logger,
+          verbose: options.verbose === true,
+          results,
+          dispatcher: context.dispatcher,
+        });
+      }
+    });
   });
   endWithReport('verify', report, ORCHESTRATOR_FORMAT);
 }
