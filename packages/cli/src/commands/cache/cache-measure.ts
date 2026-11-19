@@ -143,7 +143,7 @@ async function measureEntries(dir: string, entries: Dirent[]): Promise<TreeUsage
       return direntKind(entry) === 'directory' ? measureTree(child) : { entries: 1, bytes: await sizeOf(child) };
     })
   );
-  return usages.reduce(addUsage, EMPTY_USAGE);
+  return usages.reduce((total, usage) => addUsage(total, usage), EMPTY_USAGE);
 }
 
 /** Recursive measure. A directory that really vanished mid-walk contributes nothing. */

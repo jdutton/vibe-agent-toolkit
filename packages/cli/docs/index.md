@@ -411,19 +411,20 @@ Caching is a pure optimisation: a run with it off produces identical results, on
 `vat cache clear` to discard what is already stored.
 
 ### VAT_CACHE_DIR
-The cache root: the directory holding the parse cache and the projection store, one subdirectory
-per VAT release. Defaults to `<tmpdir>/.vat-cache`. A relative path resolves against the current
+The cache root: the directory holding the parse cache and the projection store, one subdirectory per
+VAT release. Defaults to `<tmpdir>/.vat-cache`. A relative path resolves against the current
 directory; an empty value means unset. This is the directory to save and restore between CI runs;
 the external-URL caches never live under it. Put it outside the checkout (in GitHub Actions,
-`$RUNNER_TEMP/vat-cache`, set from a step through `$GITHUB_ENV`): VAT warns when it is inside the scanned tree. Key the CI cache on
-the runner's OS, architecture, Node version, lockfile hash and commit, and restore only from keys
-that share all but the commit; never fall back across lockfile hashes. VAT writes a `CACHEDIR.TAG`
-into a root it creates or finds empty, and `vat cache clear` and `vat cache prune` refuse a root
-without one (other than the default), so point it at a directory used only by VAT. Another VAT
-build never reads the cache; within a build the parse cache and the store's blob tier are keyed by
-file content and hit on any machine with the same bytes, while a stored tree is keyed by the
-repository's identity and path and misses when the checkout moves. A projection store SQLite finds
-corrupt or not a database at open is discarded with a warning and rebuilt.
+`$RUNNER_TEMP/vat-cache`, set from a step through `$GITHUB_ENV`): VAT warns when it is inside the
+scanned tree. Key the CI cache on the runner's OS, architecture, Node version, lockfile hash and
+commit, and restore only from keys that share all but the commit; never fall back across lockfile
+hashes. VAT writes a `CACHEDIR.TAG` into a root it creates or finds empty, and `vat cache clear` and
+`vat cache prune` refuse a root without one (other than the default), so point it at a directory
+used only by VAT. Another VAT build never reads the cache; within a build the parse cache and the
+store's blob tier are keyed by file content and hit on any machine with the same bytes, while a
+stored tree is keyed by the repository's identity and path and misses when the checkout moves. A
+projection store SQLite finds corrupt or not a database at open is discarded with a warning and
+rebuilt.
 
 ```bash
 VAT_CACHE_DIR="$RUNNER_TEMP/vat-cache" vat validate

@@ -30,21 +30,22 @@
 
 - **`vat cache prune` removes every cache entry VAT wrote that this build does not use**: every
   namespace but this build's (older and newer releases, and under the shared default root other
-  worktrees' and other VATs' namespaces), what older releases kept at the root (the link-cache
-  files and the root-level `parse/` directory), and projection stores of another shape. It removes
-  only names VAT recognises as its own, never anything else in the directory, and leaves (listed
-  under `inUse`) any entry holding a projection store a running VAT has open. It reports what it removed (entries, bytes), supports
-  `--dry-run`, and stands behind the same guard as `vat cache clear`. Run it before saving a CI
-  cache so the cache stops growing with every release.
+  worktrees' and other VATs' namespaces), what older releases kept at the root (the link-cache files
+  and the root-level `parse/` directory), and projection stores of another shape. It removes only
+  names VAT recognises as its own, never anything else in the directory, and leaves (listed under
+  `inUse`) any entry holding a projection store a running VAT has open. It reports what it removed
+  (entries, bytes), supports `--dry-run`, and stands behind the same guard as `vat cache clear`. Run
+  it before saving a CI cache so the cache stops growing with every release.
 - **CI can persist VAT's caches.** Save and restore `VAT_CACHE_DIR` outside the checkout (in
   GitHub Actions, `$RUNNER_TEMP/vat-cache`, set from a step through `$GITHUB_ENV`), keyed on OS,
   architecture, Node version, lockfile hash and commit, and restore only from the same toolchain
   and lockfile. The CLI docs and the `vat-adoption-and-configuration` skill carry a GitHub Actions
   example. A run warns when the cache root is inside the scanned tree.
 - **Library exports.** `@vibe-agent-toolkit/projection-sqlite`: `discardStoreDatabase`,
-  `isStoreInUse`, `isStoreUnopenableError` and the `StoreUnopenableError` type. `@vibe-agent-toolkit/resources`:
-  `vatLinkCacheDirectory`, `recogniseVatCacheRoot`, `markVatCacheRoot`, `isVatCacheRootEntryName`,
-  `projectionStoreDirectoryName`, `isProjectionStoreDirectoryName`.
+  `isStoreInUse`, `isStoreUnopenableError` and the `StoreUnopenableError` type.
+  `@vibe-agent-toolkit/resources`: `vatLinkCacheDirectory`, `recogniseVatCacheRoot`,
+  `markVatCacheRoot`, `isVatCacheRootEntryName`, `projectionStoreDirectoryName`,
+  `isProjectionStoreDirectoryName`.
 
 ### Fixed
 

@@ -10,8 +10,9 @@
  *
  * - at the root, every namespace but this build's — older AND newer releases,
  *   and, under the shared default root, other worktrees' and other VATs'
- *   namespaces too — and the link-cache files older releases kept there before
- *   they moved to `<tmpdir>/.vat-link-cache`;
+ *   namespaces too — and what older releases kept there: the link-cache files
+ *   (before they moved to `<tmpdir>/.vat-link-cache`) and the root-level
+ *   `parse/` directory (before the parse cache moved under the namespace);
  * - inside this build's namespace, every projection store but this shape's.
  *
  * An entry it does not recognise is never touched, wherever it is: a
@@ -152,7 +153,7 @@ export async function pruneCacheRoot(target: PruneTarget): Promise<CachePruneOut
   );
   const present = measurements.filter((measured) => measured !== undefined);
   const removed = present.map((measured) => measured.relative);
-  const usage: TreeUsage = present.map((measured) => measured.usage).reduce(addUsage, { entries: 0, bytes: 0 });
+  const usage: TreeUsage = present.map((measured) => measured.usage).reduce((total, next) => addUsage(total, next), { entries: 0, bytes: 0 });
 
   const data: CachePruneData = {
     cacheDir: target.root,

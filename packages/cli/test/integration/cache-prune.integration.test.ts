@@ -37,8 +37,8 @@ async function put(root: string, relative: string, body: string): Promise<void> 
 
 /**
  * A cache root holding the current namespace (its parse cache, its current
- * store and an old-shape store), an older namespace, and the link-cache files
- * older releases kept at the root.
+ * store and an old-shape store), an older namespace, and what older releases
+ * kept at the root: a link-cache file and the root-level `parse/` directory.
  */
 async function populatedRoot(parent: string): Promise<string> {
   const root = safePath.join(parent, 'cache');
@@ -49,6 +49,7 @@ async function populatedRoot(parent: string): Promise<string> {
   await put(root, '0.1.9/parse/cd/facts.json', '{"b":22}');
   await put(root, '0.1.9/projection-x/projection.db', 'xx');
   await put(root, 'external-links.json', '{}');
+  await put(root, 'parse/ef/facts.json', '{"c":3}');
   return root;
 }
 
@@ -66,10 +67,10 @@ describe('pruneCacheRoot', () => {
       namespace: CURRENT,
       keptStore: `${CURRENT}/${KEPT_STORE}`,
       dryRun: false,
-      removed: ['0.1.9', `${CURRENT}/${OLD_STORE}`, 'external-links.json'],
+      removed: ['0.1.9', `${CURRENT}/${OLD_STORE}`, 'external-links.json', 'parse'],
       inUse: [],
-      entriesRemoved: 4,
-      bytesRemoved: 'old-db'.length + '{"b":22}'.length + 'xx'.length + '{}'.length,
+      entriesRemoved: 5,
+      bytesRemoved: 'old-db'.length + '{"b":22}'.length + 'xx'.length + '{}'.length + '{"c":3}'.length,
     });
     expect((await fs.readdir(root)).sort(byName)).toEqual([CURRENT, VAT_CACHE_TAG_FILE].sort(byName));
     expect((await fs.readdir(safePath.join(root, CURRENT))).sort(byName)).toEqual(['parse', KEPT_STORE]);
@@ -83,7 +84,7 @@ describe('pruneCacheRoot', () => {
 
     const { data } = await pruneCacheRoot({ root, namespace: CURRENT, keptStore: KEPT_STORE, dryRun: false, storeInUse });
 
-    expect(data.removed).toEqual(['0.1.9', `${CURRENT}/${OLD_STORE}`, 'external-links.json']);
+    expect(data.removed).toEqual(['0.1.9', `${CURRENT}/${OLD_STORE}`, 'external-links.json', 'parse']);
     for (const relative of foreign) {
       expect(existsSync(safePath.join(root, relative)), relative).toBe(true);
     }
@@ -99,7 +100,7 @@ describe('pruneCacheRoot', () => {
     try {
       const { data } = await pruneCacheRoot({ root, namespace: CURRENT, keptStore: KEPT_STORE, dryRun: false, storeInUse });
 
-      expect(data.removed).toEqual(['external-links.json']);
+      expect(data.removed).toEqual(['external-links.json', 'parse']);
       expect(data.inUse).toEqual(['0.1.9', `${CURRENT}/${OLD_STORE}`]);
       expect(existsSync(safePath.join(root, '0.1.9', 'parse'))).toBe(true);
       expect(existsSync(safePath.join(root, CURRENT, OLD_STORE))).toBe(true);
@@ -118,7 +119,7 @@ describe('pruneCacheRoot', () => {
 
     const { data } = await pruneCacheRoot({ root, namespace: CURRENT, keptStore: KEPT_STORE, dryRun: true, storeInUse });
 
-    expect(data).toMatchObject({ dryRun: true, removed: ['0.1.9', `${CURRENT}/${OLD_STORE}`, 'external-links.json'], entriesRemoved: 4 });
+    expect(data).toMatchObject({ dryRun: true, removed: ['0.1.9', `${CURRENT}/${OLD_STORE}`, 'external-links.json', 'parse'], entriesRemoved: 5 });
     expect(existsSync(safePath.join(root, '0.1.9'))).toBe(true);
     expect(existsSync(safePath.join(root, CURRENT, OLD_STORE))).toBe(true);
   });

@@ -742,14 +742,15 @@ current directory (those comparisons fold case, which only ever refuses more). `
 **`vat cache prune`** removes only entries VAT recognises as its own: at the root, every namespace
 but this build's (`isVatCacheRootEntryName` — older and newer releases alike, and under the shared
 default root other worktrees' and other VATs' namespaces too) and what older releases kept there
-(the link-cache files and the root-level `parse/` directory); inside this build's namespace, every projection store but this shape's
-(`projectionStoreDirectoryName()`, the one owner of that name, which the store also uses). The lab
-does not import it: it judges another build's namespace, so it reads the `projection-` layout
-itself, as it asks the build only for its parse directory. An entry it does not recognise is never touched, and an entry holding a store a running VAT has
-open (`isStoreInUse`, which asks SQLite for an exclusive lock with a zero busy timeout) is left and
-listed under `inUse`; the answer is point-in-time, so a store opened during the delete itself is
-not caught. `--dry-run` reports the same removal without
-deleting. Run it before a CI cache is saved, so the saved cache does not grow with every release.
+(the link-cache files and the root-level `parse/` directory); inside this build's namespace, every
+projection store but this shape's (`projectionStoreDirectoryName()`, the one owner of that name,
+which the store also uses). The lab does not import it: it judges another build's namespace, so it
+reads the `projection-` layout itself, as it asks the build only for its parse directory. An entry
+it does not recognise is never touched, and an entry holding a store a running VAT has open
+(`isStoreInUse`, which asks SQLite for an exclusive lock with a zero busy timeout) is left and
+listed under `inUse`; the answer is point-in-time, so a store opened during the delete itself is not
+caught. `--dry-run` reports the same removal without deleting. Run it before a CI cache is saved, so
+the saved cache does not grow with every release.
 
 ### 3.8 ✅ Every parse is bounded — one route, in a worker, under limits
 
