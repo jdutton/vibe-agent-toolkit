@@ -188,7 +188,8 @@ that this build does not use.
   The commit in the key lets each run save a fresh cache (an exact hit never saves, so a key
   without it freezes the cache at its first save). Never fall back across lockfile hashes: VAT's
   parser dependencies are semver ranges, so a different lockfile can resolve a different parser
-  under the same VAT namespace.
+  under the same VAT namespace. A project that runs VAT from source rather than an installed
+  release must also key on VAT's source, since its lockfile pins none of VAT's code.
 - **What hits where.** Another VAT build never reads the cache. Within a build, the parse cache and
   the store's blob tier are keyed by file content and hit on any machine with the same bytes; a
   stored tree is keyed by the repository's identity and path, so it misses when the checkout moves
@@ -204,22 +205,26 @@ that this build does not use.
 ```yaml
 # GitHub Actions (job steps)
 steps:
-  - uses: actions/checkout@v4
+  - uses: actions/checkout@v7
   # The runner context is not available in a job-level env:, so set the variable from a step.
-  - run: echo "VAT_CACHE_DIR=$RUNNER_TEMP/vat-cache" >> "$GITHUB_ENV"   # outside the checkout
-  - uses: actions/setup-node@v4
+  # bash on every OS: under Windows' default pwsh, $RUNNER_TEMP is an unset variable.
+  - shell: bash
+    run: echo "VAT_CACHE_DIR=$RUNNER_TEMP/vat-cache" >> "$GITHUB_ENV"   # outside the checkout
+  - uses: actions/setup-node@v7
     id: node
     with:
       node-version: 24
-  - uses: actions/cache@v4
+  - uses: actions/cache@v6
     with:
       path: ${{ env.VAT_CACHE_DIR }}
       key: vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('**/package-lock.json', '**/bun.lock') }}-${{ github.sha }}
       restore-keys: |
         vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('**/package-lock.json', '**/bun.lock') }}-
   - run: npm ci
-  - run: npx vat validate
-  - run: npx vat cache prune   # drop what this build does not use before the cache is saved
+  - run: npx --no-install vat validate
+  - if: always()               # actions/cache saves in its post step, after this one
+    continue-on-error: true    # a prune failure must not redden a green job
+    run: npx --no-install vat cache prune   # drop what this build does not use before the cache is saved
 ```
 
 ## First-Time Setup Checklist

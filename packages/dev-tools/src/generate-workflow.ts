@@ -59,6 +59,23 @@ const yamlList = (items: readonly string[], indent: string): string =>
   items.map((item) => `${indent}- ${JSON.stringify(item)}`).join('\n');
 
 /**
+ * The packages whose source decides the facts VAT caches: everything the CLI runs.
+ * VAT's own CI runs VAT from source, so the lockfile pins none of this code and the
+ * cache key carries a hash of it (see the "Restore VAT cache" step's comment).
+ */
+const VAT_SOURCE_PACKAGES = ['utils', 'schema', 'resources', 'projection-sqlite', 'discovery', 'agent-skills', 'claude-marketplace', 'cli'];
+const VAT_SOURCE_GLOBS = VAT_SOURCE_PACKAGES.map((pkg) => `'packages/${pkg}/src/**'`).join(', ');
+
+/**
+ * Everything in the VAT cache key but the commit, spelled once: the key appends the
+ * commit and the restore prefix is this alone, so the two cannot disagree.
+ */
+const VAT_CACHE_KEY_PREFIX =
+  'vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup.outputs.node-version-installed }}' +
+  "-${{ hashFiles('bun.lock') }}" +
+  `-\${{ hashFiles(${VAT_SOURCE_GLOBS}) }}-`;
+
+/**
  * The workflow text for a matrix.
  *
  * Every step is spelled here, comments included, so the generated file reads
@@ -94,9 +111,40 @@ jobs:
       # The matrix Node version, not the floor: this job is the broad validation
       # run, and node-floor.yml is the one that executes the declared floor.
       - name: Setup toolchain
+        id: setup
         uses: ./.github/actions/setup
         with:
           node-version: \${{ matrix.node }}
+      # VAT's own cache, persisted between runs so the \`vat\` dogfood steps start warm:
+      # the same recipe the vat-adoption-and-configuration skill gives adopters.
+      # Outside the checkout, set from a step (the runner context is not available in a
+      # job-level env:), and in bash: on Windows the default shell is pwsh, where
+      # $RUNNER_TEMP is an unset PowerShell variable. GITHUB_ENV carries it into every
+      # \`bun run vat\` step vibe-validate spawns. Turbo's strict env mode keeps it out of
+      # the test tasks, so the suites never read or write this cache.
+      - name: Point VAT_CACHE_DIR outside the checkout
+        shell: bash
+        run: echo "VAT_CACHE_DIR=$RUNNER_TEMP/vat-cache" >> "$GITHUB_ENV"
+      # Per runner kind: OS, arch, the installed Node, the lockfile, VAT's own source, then
+      # the commit, so every run saves a fresh cache (an exact hit never saves). Restore
+      # only from a key that shares everything but the commit: never across lockfile
+      # hashes, because a different lockfile can resolve a different parser.
+      # VAT's own CI differs from an adopter's here. An adopter runs an installed VAT, so
+      # its lockfile pins VAT's code and the cache namespace names that release. This
+      # checkout runs VAT from source: the lockfile pins none of it, and the dev namespace
+      # does not change when parsing or extraction does. Without the source digest a PR
+      # that changes extraction restores main's cache, and its dogfood steps check main's
+      # parser output. The digest covers the packages the CLI runs (utils, schema,
+      # resources, projection-sqlite, discovery, agent-skills, claude-marketplace, cli),
+      # erring wide: a spare miss costs a cold run, a narrow one a wrong answer.
+      # "Cache restored from key: ..." in this step's log is a warm start.
+      - name: Restore VAT cache
+        uses: actions/cache@v6
+        with:
+          path: \${{ env.VAT_CACHE_DIR }}
+          key: ${VAT_CACHE_KEY_PREFIX}\${{ github.sha }}
+          restore-keys: |
+            ${VAT_CACHE_KEY_PREFIX}
       # The adopter-name gate reads its token list from outside the repo, because a
       # contraband list committed to a public repo is itself the leak. Materialize it
       # from a repo secret into the gitignored default path the gate already looks for.
@@ -126,6 +174,14 @@ jobs:
         env:
           GH_TOKEN: \${{ github.token }}
           NET_AVAILABLE: "1"
+      # actions/cache saves in its post step, after every step here: prune first so the
+      # saved cache holds only what this build uses and stops growing with each release.
+      - name: Prune the VAT cache before it is saved
+        # A prune failure (a Windows file handle still open, a refused root) must not
+        # turn a green job red: the cost is only a larger saved cache.
+        if: always()
+        continue-on-error: true
+        run: bun run vat cache prune
       # vibe-validate captures a failed step's stdout and stderr to files and summarises
       # them through an extractor that keeps only lines carrying an error keyword, so a
       # verdict without one (\`NEW unused export: …\`) never reaches this log. Print the
