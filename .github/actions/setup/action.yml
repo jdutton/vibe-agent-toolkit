@@ -44,6 +44,12 @@ outputs:
   node-version:
     description: The Node version this action asked setup-node for.
     value: ${{ steps.node.outputs.version }}
+  node-version-installed:
+    description: >-
+      The exact Node version setup-node installed (its own `node-version`
+      output, e.g. v24.11.1). A cache key reads this one: the requested `24`
+      names a different runtime every time Node 24 ships a release.
+    value: ${{ steps.setup-node.outputs.node-version }}
 
 runs:
   using: composite
@@ -110,6 +116,7 @@ runs:
         fi
 
     - name: Setup Node.js
+      id: setup-node
       uses: actions/setup-node@v7
       with:
         node-version: ${{ steps.node.outputs.version }}
