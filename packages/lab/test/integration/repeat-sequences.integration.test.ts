@@ -49,7 +49,7 @@ describe('runRepeats — sequences', () => {
     vi.stubEnv('XDG_CONFIG_HOME', developerConfig);
     vi.stubEnv('CLAUDE_CONFIG_DIR', safePath.join(probe.cwd, 'developer-claude'));
     vi.stubEnv('GIT_CONFIG_GLOBAL', safePath.join(probe.cwd, 'developer-gitconfig'));
-    const echoed = ['VAT_PROJECTION_STORE', 'XDG_CONFIG_HOME', 'GIT_CONFIG_GLOBAL', 'CLAUDE_CONFIG_DIR', 'HOME', 'TMPDIR', 'VAT_PROJECTION_STORE_DIR', 'PATH'];
+    const echoed = ['VAT_PROJECTION_STORE', 'XDG_CONFIG_HOME', 'GIT_CONFIG_GLOBAL', 'CLAUDE_CONFIG_DIR', 'HOME', 'TMPDIR', 'VAT_CACHE_DIR', 'PATH'];
 
     const spec = probeSpec(probe, { runs: 1, cache: 'cold', env: { [PROBE_ECHO_ENV]: echoed.join(',') } });
     const run = await runRepeats(spec);
@@ -63,7 +63,7 @@ describe('runRepeats — sequences', () => {
       CLAUDE_CONFIG_DIR: dirs.home,
       HOME: dirs.home,
       TMPDIR: dirs.tmp,
-      VAT_PROJECTION_STORE_DIR: dirs.store,
+      VAT_CACHE_DIR: dirs.store,
     });
     expect(seen['PATH']).toBe(process.env['PATH']); // positive control
     expect(run.removed).toEqual(expect.arrayContaining(['VAT_PROJECTION_STORE', 'XDG_CONFIG_HOME', 'GIT_CONFIG_GLOBAL']));
@@ -157,7 +157,7 @@ describe('runRepeats — a warm sequence that stops early', () => {
 
     const run = await runRepeats(probeSpec(probe, { runs: 1, cache: 'warm', steps, env: { [PROBE_EXIT_CODE_ENV]: '1' } }));
 
-    expect(run.priming?.violation).toMatch(/^priming run: warm rule: after priming the store '.*' is empty/u);
+    expect(run.priming?.violation).toMatch(/^priming run: warm rule: after priming the build's namespace '.*' holds no projection store$/u);
     expect(run.results).toStrictEqual([]);
   });
 });

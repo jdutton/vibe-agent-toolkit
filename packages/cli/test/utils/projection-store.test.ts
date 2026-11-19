@@ -35,7 +35,7 @@
  *    backend constructed — asserted through the counter below.
  */
 
-import type { PopulationCache } from '@vibe-agent-toolkit/resources';
+import { type PopulationCache, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 // Type-only, purely so the mock factory can spread the real module without an
 // inline `typeof import()` annotation, which this repo's lint forbids.
@@ -82,7 +82,6 @@ const {
   CACHE_ENV,
   nodeSqliteFloorFailure,
   openPopulationCache,
-  PROJECTION_STORE_DIR_ENV,
   PROJECTION_STORE_ENV,
   PROJECTION_STORE_OFF,
   PROJECTION_STORE_SQLITE,
@@ -131,7 +130,7 @@ afterAll(() => {
 });
 
 isolateProjectionStoreTests({
-  envNames: [PROJECTION_STORE_ENV, CACHE_ENV, PROJECTION_STORE_DIR_ENV],
+  envNames: [PROJECTION_STORE_ENV, CACHE_ENV, VAT_CACHE_DIR_ENV],
   resetUnscopedNoticeLedger,
 });
 
@@ -181,7 +180,7 @@ describe('projectionStoreSelected', () => {
     // every other VAT switch is read through — so there is one off-vocabulary
     // in the toolkit rather than a private one here. The empty string is the
     // one addition: an operator who cleared the variable said something, and
-    // unlike VAT_PROJECTION_STORE_DIR there is no default value for an empty
+    // unlike VAT_CACHE_DIR there is no default value for an empty
     // selector to fall back to.
     process.env[PROJECTION_STORE_ENV] = value;
 

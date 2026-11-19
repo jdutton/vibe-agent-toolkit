@@ -174,13 +174,36 @@ phases:
 ## VAT writes a cache to disk, and CI should know where
 
 Every resource-scanning verb populates a projection and, by default, keeps it in a SQLite file
-under `<tmpdir>/.vat-cache/` — about 71 MB for a 12,600-file repository, bounded at three trees
-per repository and 50,000 content keys. `vat cache clear` reclaims it.
+under the cache root — `VAT_CACHE_DIR`, else `<tmpdir>/.vat-cache/` — beside the parse cache:
+about 71 MB for a 12,600-file repository, bounded at three trees per repository and 50,000
+content keys. `vat cache clear` reclaims everything; `vat cache prune` drops only what this VAT
+release will never read again.
 
-- **Set `VAT_PROJECTION_STORE_DIR` per CI job.** Concurrent jobs on one runner otherwise write
-  into the same file.
+- **Persist `VAT_CACHE_DIR` between CI runs** to start warm. Point it at a new or empty directory
+  (VAT tags it with `CACHEDIR.TAG`; `clear` and `prune` refuse an untagged one), gitignore it if
+  it sits in the checkout, and key the CI cache on the runner's OS plus the VAT version or
+  lockfile hash. A cache restored onto another machine kind simply misses; a damaged store is
+  discarded with a warning and rebuilt. Run `vat cache prune` before the save so the cache stops
+  growing with every release. A relative path resolves against the current directory.
+- **Give concurrent jobs on one runner separate `VAT_CACHE_DIR`s.** Otherwise they share one file.
 - **`VAT_PROJECTION_STORE=off`** opts out of the store alone; **`VAT_CACHE=0`** vetoes every VAT
   cache. Either costs a full re-derivation on every run.
+
+```yaml
+# GitHub Actions
+env:
+  VAT_CACHE_DIR: ${{ github.workspace }}/.vat-cache-ci
+steps:
+  - uses: actions/checkout@v4
+  - uses: actions/cache@v4
+    with:
+      path: ${{ env.VAT_CACHE_DIR }}
+      key: vat-${{ runner.os }}-${{ hashFiles('**/package-lock.json', '**/bun.lock') }}
+      restore-keys: vat-${{ runner.os }}-
+  - run: npm ci
+  - run: npx vat validate
+  - run: npx vat cache prune   # drop older releases' entries before the cache is saved
+```
 
 ## First-Time Setup Checklist
 

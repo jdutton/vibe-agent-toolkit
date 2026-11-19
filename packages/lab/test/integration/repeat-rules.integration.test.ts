@@ -53,13 +53,13 @@ describe('runRepeats — the cold rule after the first step', () => {
   it('fails a populating step that leaves the store and parse directory empty', async () => {
     const probe = setupProbe(PREFIX);
     const run = await runRepeats(probeSpec(probe, { runs: 1, cache: 'cold', steps: [populating] }));
-    expect(run.results[0]?.violation).toMatch(/^cold rule: after step 'audit' the store .* is empty/);
+    expect(run.results[0]?.violation).toMatch(/^cold rule: after step 'audit' the build's namespace '.*' holds no projection store$/u);
   });
 
   it.for([
     ['writes the store and no parse directory at all', PROBE_POPULATE_STORE_ONLY],
     ['writes the store and a parse directory holding only an empty subdirectory', PROBE_POPULATE_EMPTY_SHARD_DIR],
-  ])('fails a populating step that %s', async ([, populate]) => {
+  ] as const)('fails a populating step that %s', async ([, populate]) => {
     const probe = setupProbe(PREFIX);
     const env = { [PROBE_POPULATE_ENV]: populate };
     const run = await runRepeats(probeSpec(probe, { runs: 1, cache: 'cold', steps: [populating], env }));
@@ -81,7 +81,7 @@ describe('runRepeats — the cold rule after the first step', () => {
   it('fails a warm priming run that leaves the caches empty', async () => {
     const probe = setupProbe(PREFIX);
     const run = await runRepeats(probeSpec(probe, { runs: 1, steps: [populating] }));
-    expect(run.priming?.violation).toMatch(/^priming run: warm rule: after priming the store .* is empty/);
+    expect(run.priming?.violation).toMatch(/^priming run: warm rule: after priming the build's namespace '.*' holds no projection store$/u);
   });
 });
 
@@ -91,24 +91,35 @@ describe('runRepeats — the population expected is the ARM environment\'s, so a
   const CACHES_OFF = { VAT_CACHE: '0' };
 
   // The store-on rows are the CONTROL: the same A/B's other arm passes the same way.
+  // A current build keeps its parse cache in the arm's cache directory beside the store, so a
+  // store-off arm's cache directory is NOT empty; an older build keeps both under the arm's tmp.
   it.for([
-    ['cold', 'store-off, writing a parse shard and no store', STORE_OFF],
-    ['warm', 'store-off, writing a parse shard and no store', STORE_OFF],
-    ['cold', 'store-on (CONTROL)', {}],
-    ['warm', 'store-on (CONTROL)', {}],
-  ] as const)('passes a %s %s arm', async ([cache, , arm]) => {
-    const probe = setupProbe(PREFIX);
+    ['cold', 'store-off, writing a parse shard and no store', 'current', STORE_OFF],
+    ['warm', 'store-off, writing a parse shard and no store', 'current', STORE_OFF],
+    ['cold', 'store-on (CONTROL)', 'current', {}],
+    ['warm', 'store-on (CONTROL)', 'current', {}],
+    ['cold', 'store-off, writing a parse shard and no store', 'pre-cache-dir', STORE_OFF],
+    ['warm', 'store-off, writing a parse shard and no store', 'pre-cache-dir', STORE_OFF],
+    ['cold', 'store-on (CONTROL)', 'pre-cache-dir', {}],
+    ['warm', 'store-on (CONTROL)', 'pre-cache-dir', {}],
+  ] as const)('passes a %s %s arm of a %s build', async ([cache, , build, arm]) => {
+    const probe = setupProbe(PREFIX, build);
     const run = await runRepeats(probeSpec(probe, { runs: 2, cache, steps: [populating], env: { [PROBE_POPULATE_ENV]: '1', ...arm } }));
     expect(run.priming?.violation ?? null).toBeNull();
     expect(run.results.map((sequenceRun) => sequenceRun.violation)).toEqual([null, null]);
   });
 
-  it('fails a store-off arm whose build wrote a store anyway — the switch was ignored', async () => {
-    const probe = setupProbe(PREFIX);
-    const env = { [PROBE_POPULATE_ENV]: PROBE_POPULATE_IGNORING_SWITCHES, ...STORE_OFF };
-    const run = await runRepeats(probeSpec(probe, { runs: 1, cache: 'cold', steps: [populating], env }));
-    expect(run.results[0]?.violation).toMatch(/^cold rule: after step 'audit' the store '.*' was written though the arm turned the store off$/u);
-  });
+  it.for(['current', 'pre-cache-dir'] as const)(
+    'fails a store-off arm whose %s build wrote a store anyway — the switch was ignored',
+    async (build) => {
+      const probe = setupProbe(PREFIX, build);
+      const env = { [PROBE_POPULATE_ENV]: PROBE_POPULATE_IGNORING_SWITCHES, ...STORE_OFF };
+      const run = await runRepeats(probeSpec(probe, { runs: 1, cache: 'cold', steps: [populating], env }));
+      expect(run.results[0]?.violation).toMatch(
+        /^cold rule: after step 'audit' the build's namespace '.*' holds a projection store though the arm turned the store off$/u,
+      );
+    },
+  );
 
   it('passes a caches-off arm that writes neither, and never asks the build for its parse directory', async () => {
     const probe = setupProbe(PREFIX);
@@ -123,7 +134,7 @@ describe('runRepeats — the population expected is the ARM environment\'s, so a
     const probe = setupProbe(PREFIX);
     const env = { [PROBE_POPULATE_ENV]: PROBE_POPULATE_IGNORING_SWITCHES, ...CACHES_OFF };
     const run = await runRepeats(probeSpec(probe, { runs: 1, cache: 'cold', steps: [populating], env }));
-    expect(run.results[0]?.violation).toMatch(/was written though the arm turned the (store|parse cache) off$/u);
+    expect(run.results[0]?.violation).toMatch(/though the arm turned the (store|parse cache) off$/u);
   });
 
   it('fails a warm store-off reader that reports the store population — it cannot have been served from one', async () => {

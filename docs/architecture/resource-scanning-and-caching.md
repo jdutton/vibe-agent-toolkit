@@ -685,6 +685,57 @@ shim for a renamed thing — it is the one backend's own name. An unrecognised v
 leaves the store selected rather than refusing: there is one backend, so a refusal has no
 alternative to offer. The day a second exists is the day that variable becomes an enumeration.
 
+### 3.7a ✅ Where the caches live, and persisting them between CI runs
+
+One resolver, `vatCacheRoot()` in `packages/resources/src/cache-root.ts`, names the **persistable
+cache root**: `VAT_CACHE_DIR` when set and non-empty (a relative value resolves against the current
+directory), else `<normalizedTmpdir()>/.vat-cache`. It holds exactly the parse cache and the
+projection store, both under the release namespace:
+
+```text
+<root>/CACHEDIR.TAG
+<root>/<namespace>/parse/<shard>/<key>.json
+<root>/<namespace>/projection-<shapeDigest>/projection.db
+```
+
+The external-link result caches (`external-links.json`, `auth-<osUser>/external-links.json`) live
+at `vatLinkCacheDirectory()`, `<tmpdir>/.vat-link-cache`, and never under the root: they are
+verdicts about the network at a moment and one OS user's credentialed content, so a CI cache that
+carried them would replay stale or another user's answers. `vat cache clear` removes both
+locations.
+
+**A foreign cache must miss, never fail.** Sharing a cache across machine kinds is a non-goal; CI
+keys it per runner OS. A cache restored from elsewhere is still survivable: the namespace and the
+shape digest decide what is read, so another release's or shape's entries are invisible, and a
+`projection.db` that SQLite reports as corrupt (`SQLITE_CORRUPT`), not a database (`SQLITE_NOTADB`)
+or unopenable (`SQLITE_CANTOPEN`) at open is discarded — the database and its `-wal`/`-shm`
+sidecars — with one stderr notice naming the path and SQLite's error, and the run continues on a
+fresh store, or with none if that also fails (`replaceUnopenableStore` in
+`packages/cli/src/utils/projection-store.ts`). Only a file that existed before the open is
+discarded. A store that throws mid-run still surfaces.
+
+**Close checkpoints the WAL.** `FactStore.close()` runs `PRAGMA wal_checkpoint(TRUNCATE)` with
+`busy_timeout = 0` before closing, so a cache saved right after a run is one self-contained
+`projection.db` rather than a database plus a WAL a reader must replay. Best-effort: a checkpoint
+another connection blocks is skipped (SQLite checkpoints again when the last connection closes),
+and `store-damage.integration.test.ts` holds that a reader mid-snapshot leaves the database passing
+`integrity_check`.
+
+**The guard on every cache delete.** With an operator-chosen root, the old "the directory is named
+`.vat-cache`" check could no longer stand between `rm -rf` and a user's directory. VAT writes a
+[`CACHEDIR.TAG`](https://bford.info/cachedir/) — the standard signature plus a VAT line — into a
+root it creates or finds empty, and only then. `recogniseVatCacheRoot()` accepts a root carrying
+VAT's tag, or the default location (older releases left it untagged); it always refuses the
+filesystem root, the home directory, the temp directory itself and any directory containing the
+current directory. `vat cache clear` and `vat cache prune` both stand behind it
+(`recognisedCacheRoot()` in `packages/cli/src/commands/cache/cache-measure.ts`) and refuse
+`USAGE_INVALID` with nothing deleted.
+
+**`vat cache prune`** keeps the tag, the current namespace, and inside it everything but
+`projection-*` stores of another shape; everything else at the root goes (older namespaces, and the
+link-cache files older releases kept there). `--dry-run` reports the same removal without deleting.
+Run it before a CI cache is saved, so the saved cache does not grow with every release.
+
 ### 3.8 ✅ Every parse is bounded — one route, in a worker, under limits
 
 Both crawl lanes reach the parser through one `ParseDispatcher`, and every cache miss is parsed in a

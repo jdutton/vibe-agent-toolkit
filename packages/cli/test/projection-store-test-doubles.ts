@@ -72,23 +72,46 @@ function makeStore(): unknown {
   };
 }
 
-// `options` records the ARGUMENT, not just the count. Without it every
-// assertion passes for a build that dropped the `directory` argument entirely —
-// and such a build silently writes the developer's own live cache, which is
-// exactly what `VAT_PROJECTION_STORE_DIR` exists to prevent. The count alone
-// cannot see that.
+// `options` records the ARGUMENT, not just the count: the subject must open the
+// backend's DEFAULT directory (which `VAT_CACHE_DIR` decides), so a build that
+// started passing a directory of its own is visible here.
 const openCalls = { count: 0, options: [] as unknown[] };
+
+/** The fake's stand-in for the backend's `StoreUnopenableError`. */
+export class FakeUnopenableError extends Error {
+  constructor(readonly databasePath: string) {
+    super(`The projection store at ${databasePath} could not be opened: file is not a database`);
+  }
+}
+
+/**
+ * What each next open throws instead of opening, consumed in order; empty
+ * means open normally. Lets a test script "the file is damaged" and "the
+ * replacement failed too" without a real database.
+ */
+const openFailures: unknown[] = [];
+
+/** Every database path the subject asked the backend to discard. */
+const discarded: string[] = [];
 
 /** The mock backend, and the state the tests inspect it through. */
 export const backend = {
   stores,
   openCalls,
+  openFailures,
+  discarded,
   /** The module namespace a `vi.mock('@vibe-agent-toolkit/projection-sqlite', …)` factory returns. */
   moduleExports: (): Record<string, unknown> => ({
-    openSqliteFactStore: (options: unknown) => {
+    openSqliteFactStore: (...args: unknown[]) => {
       openCalls.count += 1;
-      openCalls.options.push(options);
+      openCalls.options.push(args[0]);
+      const failure = openFailures.shift();
+      if (failure !== undefined) throw failure;
       return makeStore();
+    },
+    isStoreUnopenableError: (error: unknown) => error instanceof FakeUnopenableError,
+    discardStoreDatabase: (databasePath: string) => {
+      discarded.push(databasePath);
     },
   }),
 };
@@ -143,6 +166,8 @@ export function isolateProjectionStoreTests(options: {
     stores.length = 0;
     openCalls.count = 0;
     openCalls.options.length = 0;
+    openFailures.length = 0;
+    discarded.length = 0;
     // The process's own "once" ledger: a notice printed outside every scope by an earlier test
     // would otherwise silence the same notice in every later scope of this worker.
     options.resetUnscopedNoticeLedger();
@@ -153,7 +178,7 @@ export function isolateProjectionStoreTests(options: {
     // test that leaks one turns every later test in the same worker into a
     // different test. "Passes in isolation, fails in the suite" is the
     // signature. The sharpest: a leaked `VAT_CACHE=0` silently disables the
-    // parse cache, and a leaked `VAT_PROJECTION_STORE_DIR` pointing at a
+    // parse cache, and a leaked `VAT_CACHE_DIR` pointing at a
     // deleted temp directory makes every later store open somewhere no
     // assertion looks.
     for (const name of options.envNames) {

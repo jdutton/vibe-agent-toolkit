@@ -96,40 +96,14 @@ export const PROJECTION_STORE_SQLITE = 'sqlite';
  *
  * Read through the same {@link parseEnvBoolean} as every other VAT switch, so
  * `0`, `false`, `no` and `n` work too. The empty string joins them: unlike
- * {@link PROJECTION_STORE_DIR_ENV}, where empty falls back to a default
- * directory that means something, there is nothing else for a cleared selector
- * to mean.
+ * `VAT_CACHE_DIR`, where empty falls back to a default directory that means
+ * something, there is nothing else for a cleared selector to mean.
+ *
+ * Where the store lives is not this module's question: it is
+ * `<vatCacheRoot()>/<namespace>/projection-<shapeDigest>/`, and `VAT_CACHE_DIR`
+ * moves the whole cache root — see `cache-root.ts` in `@vibe-agent-toolkit/resources`.
  */
 export const PROJECTION_STORE_OFF = 'off';
-
-/**
- * Where the projection store's database lives, overriding the default.
- *
- * The default is `tmpdir/.vat-cache/<version>/projection-<shapeDigest>` — one
- * database per VAT release, shared by every root on the machine. This names a
- * different one **explicitly**, which is what an adopter with a per-job cache
- * directory, a shared build agent running two jobs at once, or a test arm that
- * must not touch the developer's live cache actually needs.
- *
- * 🪤 **What it replaces is redirecting `TMPDIR`, which works and is the wrong
- * instrument.** `defaultStoreDirectory()` resolves through
- * `vatCacheNamespaceRoot()` → `normalizedTmpdir()`, so pointing the OS temp
- * directory elsewhere does move the store — along with every other temp
- * consumer in the process, on a variable whose name is not the same on both
- * platforms (`TMPDIR` on POSIX; `TEMP`, then `TMP`, on Windows, so setting one
- * is silently inert on the other). It relocates the store as a side effect of
- * relocating something larger. This variable says the one thing meant.
- *
- * ⚠️ It does **not** consult `XDG_CACHE_HOME` or `HOME`. A caller that set
- * those believed it had its own database and was writing into the shared one;
- * the fix is to name the directory here, not to add more implicit roots.
- *
- * An environment variable rather than a config field, for the same reason
- * {@link PROJECTION_STORE_ENV} is one: it says where an INSTRUMENT keeps its
- * scratch space, not what the project means, and it has to be reachable from a
- * harness that spawns the binary.
- */
-export const PROJECTION_STORE_DIR_ENV = 'VAT_PROJECTION_STORE_DIR';
 
 /**
  * The env var that turns VAT's disk caches off for a run.
@@ -197,7 +171,7 @@ export function projectionStoreSelected(): boolean {
   // Unset is the default and the default is on.
   if (selector === undefined) return true;
   // `VAT_PROJECTION_STORE=` — see PROJECTION_STORE_OFF on why empty is off here
-  // and unset-equivalent in the directory variable.
+  // and unset-equivalent in `VAT_CACHE_DIR`.
   if (selector.trim() === '') return false;
   return parseEnvBoolean(selector) !== false;
 }
@@ -206,8 +180,8 @@ export function projectionStoreSelected(): boolean {
  * An open store, the key half it is used with, and the way to let it go.
  *
  * ⚠️ **Deliberately NOT typed for SQL, and do not re-widen it.** This handle
- * reaches the database at {@link PROJECTION_STORE_DIR_ENV}'s directory, which
- * defaults to one file per VAT release shared by every root on the machine —
+ * reaches the database under the cache root (`VAT_CACHE_DIR`), which is one
+ * file per VAT release shared by every root that uses that cache root —
  * holding other repositories' link text, heading text and frontmatter, so
  * arbitrary SQL over it would answer from trees the asker never named.
  * `populate()` needs the engine-free {@link PopulationCache} and nothing more; a
@@ -260,8 +234,10 @@ function storeKeyOrNotice(root: string): GitTreeSnapshot | null {
 /**
  * Open the projection store this process selected, keyed to one tree.
  *
- * Returns `undefined` when no store is selected, and when the tree cannot be
- * keyed — the two "carry on without a cache" answers. It does **not** return
+ * Returns `undefined` when no store is selected, when the tree cannot be
+ * keyed, and when a damaged store file could not be replaced (see
+ * {@link loadStore}) — the "carry on without a cache" answers, each but the
+ * first told to the operator. It does **not** return
  * `undefined` for an uninstalled backend: the store is on unless a user turned it
  * off, and answering that by silently not having one is how a default-on cache
  * becomes an unmeasured one.
@@ -282,6 +258,7 @@ export async function openPopulationCache(options: {
   if (snapshot === null) return undefined;
 
   const store = await loadStore();
+  if (store === undefined) return undefined;
   const cwd = options.root;
   return {
     cache: {
@@ -305,19 +282,53 @@ export async function openPopulationCache(options: {
  * for "upgrade Node", and diagnosing a version floor as a missing dependency
  * sends a user round a loop that cannot terminate.
  *
- * @returns The opened store: the engine-free port, which is all the backend's
- *   factory returns, so the population path has no query to grow
+ * ## A damaged store file is a miss, not a failed run
+ *
+ * The store is a cache, and with `VAT_CACHE_DIR` it is one CI saves and
+ * restores — so a truncated, corrupt or not-a-database `projection.db` is a
+ * real input, not a defect. When the backend reports an EXISTING file it
+ * could not open as a database (`isStoreUnopenableError`), the operator is told
+ * once on stderr (the path and SQLite's own error), the file is discarded and a
+ * fresh store opened in its place; if that fails too, the run carries on with no
+ * store, saying so.
+ *
+ * 🪤 Only the open is forgiven. Any other open failure (a lock, a permission,
+ * a full disk) still throws, and a store that fails MID-RUN on a read or write
+ * still surfaces through `populate()` — a cache that silently stops working is
+ * how a week of full-price runs goes unnoticed.
+ *
+ * @returns The opened store — the engine-free port, which is all the backend's
+ *   factory returns, so the population path has no query to grow — or
+ *   `undefined` when a damaged store could not be replaced
  */
-async function loadStore(): Promise<FactStore> {
-  const directory = process.env[PROJECTION_STORE_DIR_ENV];
-  // Spread rather than passed, because the backend defaults the field when it is
-  // ABSENT and an explicit `undefined` is a different argument under
-  // `exactOptionalPropertyTypes`. Empty string is treated as unset: an unset
-  // variable and one exported as `''` are the same intent, and `''` would
-  // otherwise resolve to the process cwd.
-  return (await loadBackend()).openSqliteFactStore(
-    directory === undefined || directory === '' ? {} : { directory },
-  );
+async function loadStore(): Promise<FactStore | undefined> {
+  const backend = await loadBackend();
+  try {
+    return backend.openSqliteFactStore();
+  } catch (error) {
+    if (!backend.isStoreUnopenableError(error)) throw error;
+    return replaceUnopenableStore(backend, error);
+  }
+}
+
+/**
+ * Discard the store file `error` names and open a fresh one, telling the operator.
+ *
+ * @param backend - The loaded backend
+ * @param error - Its refusal to open the existing file
+ * @returns The fresh store, or `undefined` when it could not be replaced
+ */
+function replaceUnopenableStore(backend: typeof ProjectionSqlite, error: ProjectionSqlite.StoreUnopenableError): FactStore | undefined {
+  try {
+    backend.discardStoreDatabase(error.databasePath);
+    const store = backend.openSqliteFactStore();
+    noticeToOperator('store', `${error.message}. Discarded it and started an empty projection store; this run populates without a warm cache.`, error.databasePath);
+    return store;
+  } catch (retryError) {
+    const reason = retryError instanceof Error ? retryError.message : String(retryError);
+    noticeToOperator('store', `${error.message}. Could not replace it (${reason}); this run populates without a projection store.`, error.databasePath);
+    return undefined;
+  }
 }
 
 /**

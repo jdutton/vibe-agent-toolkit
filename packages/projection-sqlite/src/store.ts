@@ -100,6 +100,7 @@
  * than a partial projection.
  */
 
+import { unlinkSync } from 'node:fs';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 
 import {
@@ -111,9 +112,10 @@ import {
   projectionColumnTypes,
   projectionShapeDigest,
   quoteIdentifier,
+  markVatCacheRoot,
   vatCacheNamespaceRoot,
 } from '@vibe-agent-toolkit/resources';
-import { countWork, promised, safePath } from '@vibe-agent-toolkit/utils';
+import { VatError, classifyFsFault, countWork, everywhere, isPathAbsentError, isVatError, pathPresent, promised, safePath } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 
 import {
@@ -350,13 +352,36 @@ interface TablePlan {
  * await store.close();
  */
 export function openSqliteFactStore(options: SqliteStoreOptions = {}): FactStore {
+  // The default directory is under the persistable cache root: tag that root
+  // (once per process) so `vat cache clear`/`prune` can recognise it as VAT's.
+  if (options.directory === undefined) markVatCacheRoot();
   const directory = options.directory ?? defaultStoreDirectory();
   // 0o700: this cache holds link text, heading text and frontmatter source from
   // a corpus that may be private. The mode is a POSIX mechanism — on Windows it
   // only toggles the read-only bit — so it narrows exposure rather than
   // eliminating it.
   mkdirSyncReal(directory, { recursive: true, mode: 0o700 });
-  const database = new DatabaseSync(safePath.join(directory, DATABASE_FILENAME));
+  const databasePath = safePath.join(directory, DATABASE_FILENAME);
+  // Asked before the open, which creates the file: only a file that was already
+  // there can be damaged, and only one that was there may ever be discarded.
+  const existed = pathPresent(databasePath, 'entry', everywhere('destination'), 'probe');
+  try {
+    return openStoreAt(databasePath, options);
+  } catch (error) {
+    if (existed && isDamagedDatabaseFault(error)) throw new StoreUnopenableError(databasePath, error);
+    throw error;
+  }
+}
+
+/**
+ * Open, configure and prepare the store's database file.
+ *
+ * @param databasePath - The database file
+ * @param options - The caller's retention and patience settings
+ * @returns The open store
+ */
+function openStoreAt(databasePath: string, options: SqliteStoreOptions): FactStore {
+  const database = new DatabaseSync(databasePath);
   // A file that is not a database opens without complaint and fails at the
   // first statement, so everything after the open releases the connection on
   // the way out; an unclosed handle keeps the file locked on Windows.
@@ -374,6 +399,95 @@ export function openSqliteFactStore(options: SqliteStoreOptions = {}): FactStore
   } catch (error) {
     database.close();
     throw error;
+  }
+}
+
+/** The code {@link StoreUnopenableError} carries. */
+export const PROJECTION_STORE_UNOPENABLE_CODE = 'PROJECTION_STORE_UNOPENABLE';
+
+/**
+ * SQLite's primary result codes that say the FILE is the problem, not the
+ * moment: `SQLITE_CORRUPT` (11), `SQLITE_CANTOPEN` (14), `SQLITE_NOTADB` (26).
+ *
+ * 🪤 Deliberately not `SQLITE_BUSY`/`SQLITE_LOCKED`: a store another process
+ * holds is healthy, and discarding it would destroy a working cache under a
+ * concurrent run. Nor `SQLITE_IOERR`/`SQLITE_FULL`/`SQLITE_READONLY`: those
+ * are the machine's state, and a fresh file would fail the same way.
+ */
+const DAMAGED_DATABASE_RESULT_CODES: ReadonlySet<number> = new Set([11, 14, 26]);
+
+/**
+ * Whether `error`, or any error in its `cause` chain, is a SQLite failure whose
+ * primary result code says the database file is damaged or unopenable.
+ *
+ * @param error - What the open threw
+ * @returns True for a damaged-file fault
+ */
+function isDamagedDatabaseFault(error: unknown): boolean {
+  for (let current = error; current instanceof Error; current = current.cause) {
+    const { code, errcode } = current as Error & { code?: unknown; errcode?: unknown };
+     
+    if (code === 'ERR_SQLITE_ERROR' && typeof errcode === 'number' && DAMAGED_DATABASE_RESULT_CODES.has(errcode & 0xff)) return true;
+  }
+  return false;
+}
+
+/**
+ * An existing store file SQLite could not open as a database: corrupt,
+ * truncated, not a database at all, or not openable.
+ *
+ * Thrown only at open, and only for a file that was there before the open —
+ * never for a store that fails mid-run, which surfaces as itself. The caller
+ * decides whether a damaged cache is a miss ({@link discardStoreDatabase},
+ * then open again); this package never deletes on its own.
+ */
+export class StoreUnopenableError extends VatError {
+  /** The database file that could not be opened. */
+  readonly databasePath: string;
+
+  /**
+   * @param databasePath - The database file
+   * @param cause - SQLite's error
+   */
+  constructor(databasePath: string, cause: unknown) {
+    super(
+      PROJECTION_STORE_UNOPENABLE_CODE,
+      `The projection store at ${databasePath} could not be opened: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause },
+    );
+    this.databasePath = databasePath;
+  }
+}
+
+/**
+ * Whether `error` is a {@link StoreUnopenableError}.
+ *
+ * @param error - Anything thrown
+ * @returns True when it is one
+ */
+export function isStoreUnopenableError(error: unknown): error is StoreUnopenableError {
+  return isVatError(error, PROJECTION_STORE_UNOPENABLE_CODE) && error instanceof StoreUnopenableError;
+}
+
+/**
+ * Delete a store's database file and its `-wal`/`-shm` companions.
+ *
+ * For the database a {@link StoreUnopenableError} names: the store is a cache,
+ * so a file SQLite cannot open is worth nothing and is rebuilt by the next
+ * write. The companions go too — a `-wal` left beside a fresh database would
+ * be replayed into it.
+ *
+ * @param databasePath - The database file to delete
+ * @throws {FsFaultError} When the OS refuses to delete one of the files
+ */
+export function discardStoreDatabase(databasePath: string): void {
+  for (const file of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]) {
+    try {
+      unlinkSync(file);
+    } catch (error) {
+      if (isPathAbsentError(error)) continue;
+      throw classifyFsFault(error, { side: 'destination', action: 'discard the unopenable projection store', path: file });
+    }
   }
 }
 
@@ -395,6 +509,36 @@ function adoptLegacyBlobKeys(database: DatabaseSync): void {
   if (alreadyTracked !== undefined) return;
   for (const spec of allSpecs()) {
     if (spec.scope === 'blob') database.exec(adoptBlobKeysSql(spec));
+  }
+}
+
+/**
+ * Fold the WAL back into the database file before a close, so the store
+ * directory holds one complete `projection.db` — what a CI cache save of
+ * `VAT_CACHE_DIR` needs, since it may not carry `-wal` beside it.
+ *
+ * SQLite does this itself when the LAST connection closes; this covers a close
+ * while another process still has the store open. `TRUNCATE` also empties the
+ * `-wal` file.
+ *
+ * Best-effort, and that is safe rather than hopeful: a checkpoint never loses a
+ * committed transaction — what it cannot copy (a reader pinned to an older
+ * snapshot) stays in the WAL, where every connection still reads it, and the
+ * last close folds it in. The busy timeout is dropped to zero first, so a
+ * contended checkpoint returns at once instead of holding the close for the
+ * full timeout; a `busy` result and a thrown `SQLITE_BUSY` are both that case.
+ * Pinned by `store-damage.integration.test.ts` (a reader mid-snapshot during close).
+ *
+ * @param database - The connection about to close
+ */
+function checkpointBestEffort(database: DatabaseSync): void {
+  try {
+    database.exec('PRAGMA busy_timeout = 0');
+    database.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+  } catch (error) {
+    // A contended checkpoint is SQLite's own refusal: see above — the WAL keeps what it could not
+    // copy. Anything that is not SQLite speaking is a defect, and surfaces.
+    if ((error as { code?: unknown } | null)?.code !== 'ERR_SQLITE_ERROR') throw error;
   }
 }
 
@@ -456,7 +600,7 @@ function enableWal(database: DatabaseSync): void {
       database.exec('PRAGMA journal_mode = WAL');
     } catch (error) {
       if (attempt === WAL_SWITCH_ATTEMPTS) {
-        throw new Error(`Could not put the projection store into WAL mode: ${String(error)}`);
+        throw new Error(`Could not put the projection store into WAL mode: ${String(error)}`, { cause: error });
       }
     }
     sleepBriefly(WAL_SWITCH_BACKOFF_MS);
@@ -1123,6 +1267,7 @@ class SqliteFactStore implements FactStore {
     return promised(() => {
       if (this.#closed) return;
       this.#closed = true;
+      checkpointBestEffort(this.#tables.database);
       this.#tables.database.close();
     });
   }

@@ -813,8 +813,9 @@ External URL Validation:
   Cache is shared across all projects (URLs are universal).
 
 Caching:
-  Two disk caches sit under <tmpdir>/.vat-cache: parse results (keyed by file
-  content, so a changed file is never served stale) and external-URL checks.
+  Two disk caches: parse results (keyed by file content, so a changed file is
+  never served stale) under the cache root (VAT_CACHE_DIR, else
+  <tmpdir>/.vat-cache), and external-URL checks under <tmpdir>/.vat-link-cache.
   --no-cache turns BOTH off for this run — it is not external-URL-specific.
   'vat cache clear' deletes them.
 

@@ -18,13 +18,16 @@
  *
  * ## How an arm's store is isolated
  *
- * `VAT_PROJECTION_STORE_DIR` names the directory outright, and it is the only
- * mechanism either suite uses. `defaultStoreDirectory()` is one database per VAT
- * release, shared by every root on the machine, so an arm that does not redirect
- * it is reading and writing the developer's live cache.
+ * `VAT_CACHE_DIR` names the arm's cache root, and it is the only mechanism
+ * either suite uses: the store lands under it, at
+ * `<root>/<namespace>/projection-<shape>/projection.db` (and so does the parse
+ * cache). The default root is one database per VAT release, shared by every
+ * root on the machine, so an arm that does not redirect it is reading and
+ * writing the developer's live cache.
  *
- * 🪤 Both suites import the variable's NAME from the module under test rather
- * than spelling it here, and that is not tidiness. A store nothing redirected
+ * 🪤 Both suites import the variable's NAME (`VAT_CACHE_DIR_ENV`) from
+ * `@vibe-agent-toolkit/resources` rather than spelling it here, and that is not
+ * tidiness. A store nothing redirected
  * lands in the shared default, so every probe below then reads a directory no
  * run ever touched — and each one answers `[]` or `0`, which is exactly what a
  * clean "nothing was written" arm looks like. The isolation and the assertions

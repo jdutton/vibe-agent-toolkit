@@ -122,6 +122,7 @@ function namedOnDisk(pattern: RegExp): string[] {
  */
 const SKIPPABLE_SCENARIOS: Readonly<Record<string, 'platform' | 'network' | 'never-on-ci'>> = {
   'cache clear → error': 'platform',
+  'cache prune → error': 'platform',
   'claude plugin install → findings': 'platform',
   'doctor → ok': 'network',
   'inventory → findings': 'platform',

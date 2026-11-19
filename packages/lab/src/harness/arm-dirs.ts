@@ -4,10 +4,13 @@
  * Every (build, arm, cache state) gets `<arms root>/<build>-<arm>-<state>/`
  * with four children:
  *
- * - `store/` — `VAT_PROJECTION_STORE_DIR`. Left for VAT to create, so "the
- *   first step wrote a store" can be observed.
- * - `tmp/` — `TMPDIR`, `TEMP` and `TMP`, so each build's parse cache is private
- *   to the arm too.
+ * - `store/` — `VAT_CACHE_DIR`, the root of VAT's persistable cache. Left for
+ *   VAT to create. A current build keeps both its projection store and its
+ *   parse cache here, under its own namespace; a build that predates the
+ *   variable ignores it and keeps both under `tmp/` instead.
+ * - `tmp/` — `TMPDIR`, `TEMP` and `TMP`, so whatever a build keeps in its temp
+ *   directory (an older build's whole cache, any build's link caches) is
+ *   private to the arm too.
  * - `home/` — `HOME` and `CLAUDE_CONFIG_DIR` (and `USERPROFILE` on Windows).
  *   Pointed, not stripped: with `CLAUDE_CONFIG_DIR` unset VAT falls back to
  *   `HOME`, and `~/` imports resolve through `homedir()`, so a stripped variable
@@ -717,7 +720,7 @@ export async function clearArmSubjectOutputs(dirs: ArmDirectories, relatives: re
 }
 
 /**
- * Make a cold arm cold: delete its store, empty its `tmp/`, and assert both.
+ * Make a cold arm cold: delete its cache directory (`store/`), empty its `tmp/`, and assert both.
  *
  * @param dirs - The arm's directories, prepared by {@link prepareArmDirectories}
  * @returns `null`, or the violation that fails the measurement
@@ -732,7 +735,7 @@ export async function resetColdArm(dirs: ArmDirectories): Promise<string | null>
 }
 
 /**
- * What a VAT step of this arm sets: its store, its temp directory, its home and npm's cache.
+ * What a VAT step of this arm sets: its cache directory, its temp directory, its home and npm's cache.
  *
  * @param dirs - The arm's directories
  * @param platform - Whose home variable to set as well (`USERPROFILE` on Windows)
@@ -741,7 +744,7 @@ export async function resetColdArm(dirs: ArmDirectories): Promise<string | null>
 export function armDirectoryEnvironment(dirs: ArmDirectories, platform: NodeJS.Platform): ArmEnvironment {
   return {
     set: {
-      VAT_PROJECTION_STORE_DIR: dirs.store,
+      VAT_CACHE_DIR: dirs.store,
       TMPDIR: dirs.tmp,
       TEMP: dirs.tmp,
       TMP: dirs.tmp,
@@ -792,7 +795,7 @@ export function armOwnedEnvRefusal(env: ArmEnvironment, platform: NodeJS.Platfor
   const owned = [...Object.keys(env.set), ...env.unset].find((name) => ownedKeys.has(spell(name)));
   return owned === undefined
     ? null
-    : `${owned} is set by the lab itself on every arm (a private projection store, temp directory, home and npm cache under its arms root); an arm cannot choose it`;
+    : `${owned} is set by the lab itself on every arm (a private VAT cache, temp directory, home and npm cache under its arms root); an arm cannot choose it`;
 }
 
 /**

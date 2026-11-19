@@ -1,7 +1,7 @@
 /**
  * Asking a build where its parse cache lives — under the SAME environment its
  * arm's VAT steps run in, and accepted only when the answer lies under the
- * arm's own `tmp/`. A build whose parse root follows an inherited variable
+ * arm's own cache directory (`store/`, its `VAT_CACHE_DIR`) or `tmp/`. A build whose parse root follows an inherited variable
  * would otherwise answer with the developer's directory, and the cold rule
  * would look for shards somewhere the arm never wrote.
  *
@@ -28,6 +28,8 @@ import { PROBE_VERSION } from '../command-probe.js';
 const FAKE_ROOT_ENV = 'VAT_LAB_FAKE_PARSE_ROOT';
 /** A non-VAT variable that survives the clearing: the stand-in answers this fixed path when it is set. */
 const FAKE_FIXED_ENV = 'LAB_FAKE_PARSE_FIXED';
+/** A non-VAT variable that makes the stand-in a CURRENT build, whose cache root follows `VAT_CACHE_DIR`. */
+const FAKE_CURRENT_ENV = 'LAB_FAKE_READS_CACHE_DIR';
 
 let scratch: string;
 
@@ -65,6 +67,7 @@ function writeStandInResources(base: string): void {
       "import { join } from 'node:path';",
       'export function parseCacheDirectory() {',
       `  if (process.env.${FAKE_FIXED_ENV}) return process.env.${FAKE_FIXED_ENV};`,
+      `  if (process.env.${FAKE_CURRENT_ENV} && process.env.VAT_CACHE_DIR) return join(process.env.VAT_CACHE_DIR, 'ns', 'parse');`,
       `  return join(process.env.${FAKE_ROOT_ENV} ?? tmpdir(), '.vat-cache', 'ns', 'parse');`,
       '}',
       '',
@@ -90,14 +93,24 @@ describe('resolveParseCacheDirectory', () => {
     });
   });
 
-  it('refuses an answer outside the arm’s tmp — the cold rule would look where the arm never wrote', () => {
+  it('accepts a current build’s answer under the arm’s cache directory, which the arm sets as VAT_CACHE_DIR', () => {
+    vi.stubEnv(FAKE_CURRENT_ENV, '1');
+    const dirs = arm();
+
+    expect(resolveParseCacheDirectory(standInBuild(), dirs)).toStrictEqual({
+      ok: true,
+      dir: safePath.join(dirs.store, 'ns', 'parse'),
+    });
+  });
+
+  it('refuses an answer outside the arm’s cache directory and tmp — the cold rule would look where the arm never wrote', () => {
     const elsewhere = safePath.join(scratch, 'elsewhere', 'parse');
     vi.stubEnv(FAKE_FIXED_ENV, elsewhere);
 
     const resolved = resolveParseCacheDirectory(standInBuild(), arm());
 
     expect(resolved.ok).toBe(false);
-    expect(resolved.ok ? '' : resolved.reason).toMatch(/not under the arm's tmp/u);
+    expect(resolved.ok ? '' : resolved.reason).toMatch(/under neither the arm's cache directory '.*' nor its tmp/u);
   });
 
   // win32 only: there a child prints backslashes; on POSIX a backslash is part of a file name, never a separator.

@@ -11,11 +11,11 @@
  * Every other equivalence suite runs one corpus, so none of them could see it.
  */
 
+import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
-  PROJECTION_STORE_DIR_ENV,
   PROJECTION_STORE_ENV,
   PROJECTION_STORE_OFF,
   PROJECTION_STORE_SQLITE,
@@ -61,7 +61,7 @@ function repositoryWith(name: string, dir: string): string {
  * Ask one repository the question.
  *
  * @param cwd - The repository
- * @param storeDir - The store directory, shared across calls that share it
+ * @param storeDir - The cache root (`VAT_CACHE_DIR`), shared across calls that share it
  * @param store - Whether the store is selected
  * @returns The rows and the population origin the run reported
  */
@@ -74,7 +74,7 @@ async function ask(
     cwd,
     env: {
       [PROJECTION_STORE_ENV]: store ? PROJECTION_STORE_SQLITE : PROJECTION_STORE_OFF,
-      [PROJECTION_STORE_DIR_ENV]: storeDir,
+      [VAT_CACHE_DIR_ENV]: storeDir,
     },
   });
   expect(result.status, result.stderr).toBe(0);

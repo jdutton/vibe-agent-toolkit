@@ -182,7 +182,7 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
   (`--out .` from its root) is refused. `--out` holds reports only, so the default `.vat-lab/`
   inside a checkout is safe.
 - **The arm owns its directories' variables.** `--env`/`--unset` naming `TMPDIR`, `TEMP`, `TMP`,
-  `HOME`, `CLAUDE_CONFIG_DIR`, `VAT_PROJECTION_STORE_DIR`, `GIT_CONFIG_NOSYSTEM`, `GIT_ATTR_NOSYSTEM` or npm's three
+  `HOME`, `CLAUDE_CONFIG_DIR`, `VAT_CACHE_DIR`, `GIT_CONFIG_NOSYSTEM`, `GIT_ATTR_NOSYSTEM` or npm's three
   `npm_config_*` settings below is refused
   (`<NAME> is set by the lab itself on every arm`) — an arm cannot choose them.
 - **npm's cache is the arm's own and never reset.** `npm_config_cache` is `<arm>/npm-cache`, with
@@ -234,8 +234,11 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
   differ: a command may exit any code its verb completes with — 0, or 0 or 1 for a gate — alike on
   every repeat; `--expect-exit <command>=<code>` makes it exact. See `docs/run-harness.md`.)
   A committed non-zero exit ends the repetition as CI's `&&` does: completed, nothing after it run.
-- **Cold** clears the arm's store and parse cache before each repetition; when step 1 `populates`,
-  it must leave the store non-empty and at least one parse shard (a file, not an empty directory).
+- **Cold** clears the arm's VAT cache (`VAT_CACHE_DIR`, its `store/`) and `tmp/` before each
+  repetition; when step 1 `populates`, it must leave a projection store (a non-empty
+  `projection-*` directory) and at least one parse shard (a file, not an empty directory) in the
+  build's own cache namespace, the parent of the parse directory the build names. A current build
+  keeps that namespace under `store/`; a build that predates `VAT_CACHE_DIR` keeps it under `tmp/`.
 - **Warm** primes the arm once before round 1 with an unmeasured run, which must leave the same
   store and shard when any step `populates` (a priming failure fails the arm). In each measured
   round, a step whose command reads provenance must publish `population: store`. Two readers do:

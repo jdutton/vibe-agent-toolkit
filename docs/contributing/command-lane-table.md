@@ -142,13 +142,13 @@ reach and the projection is the extra one.
 
 ## Commands that do not enumerate
 
-The 38 remaining. The bulk are Admin-API calls over HTTPS — `claude org *` is 27 commands, of which
+The 39 remaining. The bulk are Admin-API calls over HTTPS — `claude org *` is 27 commands, of which
 25 appear here once `skills install` and `skills versions add` above are excluded — plus
 process-level commands that read JSON layers or a manifest rather than crawling.
 
 `ard emit` ·
 `audit settings` ·
-`cache clear` ·
+`cache`: `clear`, `prune` ·
 `claude marketplace publish` ·
 `claude org`: `api-keys list`, `api-keys update`, `code-analytics`, `cost`, `info`,
 `invites create`, `invites delete`, `invites list`, `skills delete`, `skills list`,
@@ -164,8 +164,8 @@ process-level commands that read JSON layers or a manifest rather than crawling.
 Three of these are on the list on a technicality worth stating — "does not enumerate" here means
 "reaches no lane named above", which is narrower than "builds no population":
 
-- `vat cache clear` builds a raw `fs.readdir` population of `<tmpdir>/.vat-cache` at
-  `packages/cli/src/commands/cache/clear.ts › listedOrVanished()`, driven from `› clearCacheDirectory()`
+- `vat cache clear` and `vat cache prune` build a raw `fs.readdir` population of the cache root at
+  `packages/cli/src/commands/cache/cache-measure.ts › listedOrVanished()`, driven from `clear.ts › clearCacheDirectory()` and `prune.ts › pruneCacheRoot()`
   (it measures the tree its remove plan then takes).
 - `vat claude plugin install` `readdirSync`s the source tree it copies (four sites in
   `claude/plugin/install.ts`).

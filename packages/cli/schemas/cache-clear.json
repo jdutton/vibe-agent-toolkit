@@ -130,31 +130,50 @@
             "data": {
               "type": "object",
               "properties": {
-                "cacheDir": {
-                  "type": "string"
-                },
-                "existed": {
-                  "type": "boolean"
-                },
-                "removed": {
+                "locations": {
                   "type": "array",
                   "items": {
-                    "type": "string"
+                    "type": "object",
+                    "properties": {
+                      "cacheDir": {
+                        "type": "string"
+                      },
+                      "existed": {
+                        "type": "boolean"
+                      },
+                      "removed": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "entriesRemoved": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "bytesRemoved": {
+                        "$ref": "#/definitions/cache-clear/anyOf/0/properties/data/properties/locations/items/properties/entriesRemoved"
+                      }
+                    },
+                    "required": [
+                      "cacheDir",
+                      "existed",
+                      "removed",
+                      "entriesRemoved",
+                      "bytesRemoved"
+                    ],
+                    "additionalProperties": false
                   }
                 },
                 "entriesRemoved": {
-                  "type": "integer",
-                  "minimum": 0
+                  "$ref": "#/definitions/cache-clear/anyOf/0/properties/data/properties/locations/items/properties/entriesRemoved"
                 },
                 "bytesRemoved": {
-                  "type": "integer",
-                  "minimum": 0
+                  "$ref": "#/definitions/cache-clear/anyOf/0/properties/data/properties/locations/items/properties/entriesRemoved"
                 }
               },
               "required": [
-                "cacheDir",
-                "existed",
-                "removed",
+                "locations",
                 "entriesRemoved",
                 "bytesRemoved"
               ],

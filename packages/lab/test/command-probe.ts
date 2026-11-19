@@ -125,9 +125,12 @@ export const PROBE_NO_LOG_ENV = 'LAB_PROBE_NO_LOG';
 export const PROBE_STAT_ENV = 'LAB_PROBE_STAT_ENV';
 
 /**
- * Set (to anything) to make the probe write what a populating VAT run writes: a
- * file in `VAT_PROJECTION_STORE_DIR`, and one parse shard under the parse
- * directory the fake resources package of {@link setupProbe} resolves.
+ * Set (to anything) to make the probe write what a populating VAT run writes,
+ * both under its cache namespace (`<cache root>/probe-ns/`): a projection store
+ * (`projection-probe/projection.db`), and one parse shard under `parse/` — the
+ * directory the fake resources package of {@link setupProbe} resolves. The cache
+ * root is the {@link ProbeBuild}'s: `VAT_CACHE_DIR` for a current build, the
+ * temp directory's `.vat-cache` for one that predates it.
  */
 export const PROBE_POPULATE_ENV = 'LAB_PROBE_POPULATE';
 
@@ -160,6 +163,25 @@ export const PROBE_WRITES_ENV = 'LAB_PROBE_WRITES';
 /** The cache namespace the probe's fake resources package names. */
 const PROBE_NAMESPACE = 'probe-ns';
 
+/**
+ * Which VAT the probe stands in for, as far as where its cache lives:
+ * `current` reads `VAT_CACHE_DIR` (unset or empty: `<tmpdir>/.vat-cache`);
+ * `pre-cache-dir` is an older published build that never reads it and keeps its
+ * whole cache under `<tmpdir>/.vat-cache` whatever the arm sets.
+ */
+type ProbeBuild = 'current' | 'pre-cache-dir';
+
+/**
+ * @param build - Which VAT the probe stands in for
+ * @returns A JS expression for that build's cache namespace (needs `join` and `tmpdir` in scope)
+ */
+function namespaceExpression(build: ProbeBuild): string {
+  const fallback = "join(tmpdir(), '.vat-cache')";
+  const root =
+    build === 'current' ? `(process.env.VAT_CACHE_DIR ? process.env.VAT_CACHE_DIR : ${fallback})` : fallback;
+  return `join(${root}, ${JSON.stringify(PROBE_NAMESPACE)})`;
+}
+
 /** An argument that makes every invocation of that command fail. */
 export const PROBE_FAIL_TOKEN = 'boom';
 
@@ -182,15 +204,20 @@ const PROBE_LOG = 'probe.log';
  * `--version` alone is the lab's untimed start of a build: the probe answers it
  * and exits 0 with no side effect and no log line, so a start is never a child
  * the fail switches or the per-run assertions count.
+ *
+ * @param build - Which VAT it stands in for: where its cache root is
+ * @returns The probe's CommonJS source
  */
-const PROBE_SOURCE = [
+function probeSource(build: ProbeBuild): string {
+  return [
   "if (process.argv[2] === '--version' && process.argv.length === 3) { process.stdout.write('probe'); process.exit(0); }",
   "const { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } = require('node:fs');",
   "const { tmpdir } = require('node:os');",
   "const { dirname, join, resolve } = require('node:path');",
   // The lab hands paths in forward slashes; `join` spells them natively. `resolve` makes one spelling of both.
   'const samePath = (a, b) => a !== undefined && b !== undefined && resolve(a) === resolve(b);',
-  'const store = process.env.VAT_PROJECTION_STORE_DIR;',
+  // The ARM's cache directory (its `store/`), whichever build reads it: it anchors the arm's siblings.
+  'const store = process.env.VAT_CACHE_DIR;',
   'const home = process.env.HOME;',
   'const storeExisted = store === undefined ? null : existsSync(store);',
   'const modeOf = (path) => (path !== undefined && existsSync(path) ? statSync(path).mode & 0o777 : null);',
@@ -212,8 +239,10 @@ const PROBE_SOURCE = [
   "const selector = process.env.VAT_PROJECTION_STORE;",
   "const storeOn = ignoring || (cacheOn && (selector === undefined || (selector.trim() !== '' && !falseish(selector))));",
   `if (process.env.${PROBE_POPULATE_ENV} !== undefined) {`,
-  "  if (store !== undefined && storeOn) { mkdirSync(store, { recursive: true }); writeFileSync(join(store, 'projection.db'), 'probe'); }",
-  `  const parse = join(tmpdir(), '.vat-cache', ${JSON.stringify(PROBE_NAMESPACE)}, 'parse', 'ab');`,
+  `  const namespace = ${namespaceExpression(build)};`,
+  // Only in an arm, so a stray populate never writes the developer's real temp cache.
+  "  if (store !== undefined && storeOn) { const db = join(namespace, 'projection-probe'); mkdirSync(db, { recursive: true }); writeFileSync(join(db, 'projection.db'), 'probe'); }",
+  "  const parse = join(namespace, 'parse', 'ab');",
   `  if (cacheOn && process.env.${PROBE_POPULATE_ENV} !== ${JSON.stringify(PROBE_POPULATE_STORE_ONLY)}) mkdirSync(parse, { recursive: true });`,
   `  if (cacheOn && (process.env.${PROBE_POPULATE_ENV} === '1' || ignoring)) writeFileSync(join(parse, 'key.json'), '{}');`,
   '}',
@@ -255,14 +284,15 @@ const PROBE_SOURCE = [
   `const failExit = Number(process.env.${PROBE_EXIT_CODE_ENV} ?? ${String(PROBE_FAIL_EXIT)});`,
   'process.exit(failed ? failExit : 0);',
   '',
-].join('\n');
+  ].join('\n');
+}
 
 /** One child process, as the probe recorded it. */
 export interface ProbeEntry {
   readonly args: string[];
   readonly base: string | null;
   readonly perRepeat: string | null;
-  /** Whether `VAT_PROJECTION_STORE_DIR` existed when the child started; `null` when unset. */
+  /** Whether the arm's `VAT_CACHE_DIR` existed when the child started; `null` when unset. */
   readonly storeExisted: boolean | null;
   /** How many entries `HOME` held when the child started; `null` when unset or missing. */
   readonly homeEntries: number | null;
@@ -289,9 +319,10 @@ export interface Probe {
  * Create a fresh probe: its own temp directory, so its log starts empty.
  *
  * @param prefix - Temp-directory prefix, so a stray directory names its suite
+ * @param build - Which VAT it stands in for: a current one unless a suite measures an older build
  * @returns The working directory, the instrument, and a log reader
  */
-export function setupProbe(prefix = 'lab-probe-'): Probe {
+export function setupProbe(prefix = 'lab-probe-', build: ProbeBuild = 'current'): Probe {
   const root = mkdtempSync(safePath.join(normalizedTmpdir(), prefix));
   createdProbeDirs.push(root);
   const cwd = mkdirSyncReal(safePath.join(root, 'subject'));
@@ -301,8 +332,8 @@ export function setupProbe(prefix = 'lab-probe-'): Probe {
   const cliPackage = mkdirSyncReal(safePath.join(cwd, 'vat-cli'));
   writeFileSync(safePath.join(cliPackage, 'package.json'), JSON.stringify({ name: '@vibe-agent-toolkit/cli' }));
   const script = safePath.join(cliPackage, 'probe.cjs');
-  writeFileSync(script, PROBE_SOURCE, 'utf-8');
-  writeFakeResourcesPackage(cwd);
+  writeFileSync(script, probeSource(build), 'utf-8');
+  writeFakeResourcesPackage(cwd, build);
 
   return {
     cwd,
@@ -315,12 +346,13 @@ export function setupProbe(prefix = 'lab-probe-'): Probe {
 /**
  * A stand-in `@vibe-agent-toolkit/resources` beside the probe, so the harness
  * resolves the probe build's parse directory the way it resolves a real build's
- * (from the instrument's own module resolution) — under whatever `TMPDIR` the
- * arm hands it.
+ * (from the instrument's own module resolution) — under whatever `VAT_CACHE_DIR`
+ * or `TMPDIR` the arm hands it, as the build reads them.
  *
  * @param base - The directory whose `node_modules` gets it: the probe directory
+ * @param build - Which VAT the probe stands in for
  */
-function writeFakeResourcesPackage(base: string): void {
+function writeFakeResourcesPackage(base: string, build: ProbeBuild): void {
   const dir = safePath.join(base, 'node_modules', '@vibe-agent-toolkit', 'resources');
   mkdirSyncReal(dir, { recursive: true });
   writeFileSync(
@@ -332,7 +364,7 @@ function writeFakeResourcesPackage(base: string): void {
     [
       "import { tmpdir } from 'node:os';",
       "import { join } from 'node:path';",
-      `export function parseCacheDirectory() { return join(tmpdir(), '.vat-cache', ${JSON.stringify(PROBE_NAMESPACE)}, 'parse'); }`,
+      `export function parseCacheDirectory() { return join(${namespaceExpression(build)}, 'parse'); }`,
       '',
     ].join('\n'),
   );

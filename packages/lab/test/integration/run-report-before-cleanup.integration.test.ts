@@ -24,7 +24,7 @@ const STAND_IN = [
   "const { existsSync, rmSync } = require('node:fs');",
   "const { join } = require('node:path');",
   "if (process.argv[2] === '--version') { process.stdout.write('9.9.9'); process.exit(0); }",
-  'const store = process.env.VAT_PROJECTION_STORE_DIR;',
+  'const store = process.env.VAT_CACHE_DIR;',
   // `<root>/<arm>/store`: the marker is two levels up, and only ever in a lab arms root.
   "const marker = store === undefined ? undefined : join(store, '..', '..', '.vat-lab-root');",
   'if (marker !== undefined && existsSync(marker)) rmSync(marker);',

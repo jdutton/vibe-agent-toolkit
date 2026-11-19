@@ -46,7 +46,7 @@ Other useful env vars:
 - `VAT_TEST_CONFIG=/path/to/config.yaml` — Override the config file path
 - `VAT_CACHE=0` — Disable VAT's on-disk caches, including in spawned child phases (the root
   `--no-cache` flag sets this). **Set this before you trust any reproduction.** Parsing is served
-  from a cross-process cache under `<tmpdir>/.vat-cache/`, so a second run of "the same" command
+  from a cross-process cache under the cache root (`VAT_CACHE_DIR`, else `<tmpdir>/.vat-cache/`), so a second run of "the same" command
   can take a different code path from the first. If a bug appears only on the first run, or only
   on a colleague's machine, suspect the cache before you suspect the input. `vat cache clear`
   discards what is already stored.
@@ -213,7 +213,7 @@ aliases only (`crucible-1`, `crucible-2`, …) — no adopter names. `--subjects
 
 **Isolation** — the facet runs each arm and subject from a cleared environment in lab-owned
 directories under the arms root (`--arms-dir`, else a fresh run directory under the OS temp
-directory): its own projection store (`VAT_PROJECTION_STORE_DIR`), temp directory, and an empty
+directory): its own cache root (`VAT_CACHE_DIR`), temp directory, and an empty
 home that `HOME` and `CLAUDE_CONFIG_DIR` both point at. An arm's own `--env`/`--unset` may not
 name any of them — the facet refuses that as a clash with what it already owns.
 

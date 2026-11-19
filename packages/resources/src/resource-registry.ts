@@ -45,6 +45,7 @@ import {
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 
+import { vatLinkCacheDirectory } from './cache-root.js';
 import { calculateChecksumFromContent } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
 import { isParsableContent, type KeyedContent, NO_PARSER_KIND, type ParserKind, readContentWithKey } from './content-key.js';
@@ -64,7 +65,7 @@ import type { ParseResult } from './link-parser.js';
 import { fillLinkFacts, fragmentIndex, judgeLink, resolveLinkEntries, unreadableTargetsFrom, type FragmentIndex, type JudgeLinkOptions, type LinkEntry, type ValidateLinkOptions } from './link-validator.js';
 import { parserKindForMimeType } from './mime-type.js';
 import { type NotAdmittedLog, notAdmittedIssues, parseRefusedEntry } from './not-admitted.js';
-import { ParseCache, type ParseCacheStats, vatCacheRoot } from './parse-cache.js';
+import { ParseCache, type ParseCacheStats } from './parse-cache.js';
 import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } from './parse-dispatcher.js';
 import { isReadFailure, readFailureCode } from './parse-failure.js';
 import { isPerRunParseRefusal, type PerRunParseRefusal } from './parse-limits.js';
@@ -2245,12 +2246,14 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * - OS handles cleanup automatically
    * - Cache shared across all projects (more efficient)
    *
+   * Never under `VAT_CACHE_DIR`: that directory is persistable, and a link
+   * verdict must not ride a CI cache restore into the next run (see
+   * `cache-root.ts`).
+   *
    * @private
    */
   private getCacheDirectory(): string {
-    // `vatCacheRoot()` rather than a second `normalizedTmpdir()` + literal join:
-    // one authority for where the shared cache tree lives (see parse-cache.ts).
-    return vatCacheRoot();
+    return vatLinkCacheDirectory();
   }
 
   /**

@@ -14,16 +14,18 @@
  * ## Layout
  *
  * ```
- * <normalizedTmpdir()>/.vat-cache/<namespace>/parse/<shard>/<key>.json
- *                                 <namespace>/projection-<shapeDigest>/...  (reserved)
+ * <vatCacheRoot()>/CACHEDIR.TAG
+ *                  <namespace>/parse/<shard>/<key>.json
+ *                  <namespace>/projection-<shapeDigest>/projection.db
  * ```
  *
- * Every cache tenant whose contents depend on VAT's own code lives under the
- * namespace, so one directory rename invalidates all of them together. Tenants
- * that do NOT depend on VAT's code stay at the `.vat-cache` root and keep their
- * own policy — external link reachability and authenticated link content are
- * facts about the world, not about this build, and re-fetching them on every
- * VAT upgrade would be pure waste.
+ * `vatCacheRoot()` is `VAT_CACHE_DIR`, or `<normalizedTmpdir()>/.vat-cache` by
+ * default — see `cache-root.ts`. Every cache tenant whose contents depend on
+ * VAT's own code lives under the namespace, so one directory rename invalidates
+ * all of them together, and `vat cache prune` removes every namespace but this
+ * build's. The external-link verdict caches are facts about the world, not
+ * about this build, and they are not persistable either: they live outside this
+ * root, in `vatLinkCacheDirectory()`.
  *
  * ## What the namespace is
  *
@@ -121,12 +123,12 @@ import { readFileSync } from 'node:fs';
 
 import {
   isPathAbsentError,
-  normalizedTmpdir,
   resolveFromImportMeta,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 
+import { vatCacheRoot } from './cache-root.js';
 import { parseFactsShapeSource } from './schemas/parse-facts.js';
 
 /** Hex digits of the dev discriminator. Short on purpose — it is a cache path, not a security boundary. */
@@ -227,18 +229,6 @@ export function vatCacheNamespace(): string {
 
   cached = `${version}-dev-${devNamespaceDigest(moduleDir, parseFactsShapeSource())}`;
   return cached;
-}
-
-/**
- * Root of every VAT cache tenant, shared across builds.
- *
- * Tenants that do NOT depend on VAT's own code live directly here; anything
- * whose contents this build determines belongs under {@link vatCacheNamespaceRoot}.
- *
- * @returns Absolute path, forward-slashed
- */
-export function vatCacheRoot(): string {
-  return safePath.join(normalizedTmpdir(), '.vat-cache');
 }
 
 /**

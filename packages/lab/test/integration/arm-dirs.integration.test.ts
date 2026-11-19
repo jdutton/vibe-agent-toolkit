@@ -160,11 +160,13 @@ describe('resetArmHome', () => {
 });
 
 describe('resetColdArm', () => {
-  it('deletes the store and empties tmp, and reports no violation', async () => {
+  it('deletes the cache directory (a current build’s store and parse cache) and empties tmp (an older build’s), and reports no violation', async () => {
     const dirs = armDirectories({ root: safePath.join(out, 'arms'), build: 'cand', arm: 'C', state: 'cold' });
     prepareArmDirectories(dirs);
-    mkdirSyncReal(dirs.store);
-    writeFileSync(safePath.join(dirs.store, 'projection.db'), 'warm');
+    mkdirSyncReal(safePath.join(dirs.store, 'ns', 'projection-x'), { recursive: true });
+    writeFileSync(safePath.join(dirs.store, 'ns', 'projection-x', 'projection.db'), 'warm');
+    mkdirSyncReal(safePath.join(dirs.store, 'ns', 'parse'), { recursive: true });
+    writeFileSync(safePath.join(dirs.store, 'ns', 'parse', 'shard.json'), '{}');
     mkdirSyncReal(safePath.join(dirs.tmp, '.vat-cache', 'ns', 'parse'), { recursive: true });
     writeFileSync(safePath.join(dirs.tmp, '.vat-cache', 'ns', 'parse', 'shard.json'), '{}');
 

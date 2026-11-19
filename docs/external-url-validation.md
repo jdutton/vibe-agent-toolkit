@@ -64,7 +64,7 @@ resources:
 
 External URL validation uses a filesystem-based cache to minimize network requests:
 
-**Cache Location:** System temp directory (`<tmpdir>/.vat-cache/external-links.json`)
+**Cache Location:** System temp directory (`<tmpdir>/.vat-link-cache/external-links.json`), never under `VAT_CACHE_DIR`
 - No `.gitignore` entry needed (not in project directory)
 - Automatically cleaned by OS periodically
 - Shared across all projects (URLs are universal)

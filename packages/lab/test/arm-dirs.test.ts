@@ -65,7 +65,7 @@ describe('armDirectoryEnvironment', () => {
     const dirs = armDirectories({ root: out, build: 'cand', arm: 'C', state: 'cold' });
     expect(armDirectoryEnvironment(dirs, 'darwin')).toStrictEqual({
       set: {
-        VAT_PROJECTION_STORE_DIR: dirs.store,
+        VAT_CACHE_DIR: dirs.store,
         TMPDIR: dirs.tmp,
         TEMP: dirs.tmp,
         TMP: dirs.tmp,

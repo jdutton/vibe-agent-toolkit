@@ -1,5 +1,5 @@
 /**
- * The exit-code matrix, shard `machine`: `vat doctor` and `cache clear`.
+ * The exit-code matrix, shard `machine`: `vat doctor`, `cache clear` and `cache prune`.
  *
  * The scenarios are not here. This file runs the slice of the ONE table that
  * `MATRIX_SHARDS` assigns to the shard it is NAMED after — see

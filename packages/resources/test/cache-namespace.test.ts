@@ -10,8 +10,8 @@ import {
   parseCacheDirectory,
   vatCacheNamespace,
   vatCacheNamespaceRoot,
-  vatCacheRoot,
 } from '../src/cache-namespace.js';
+import { vatCacheRoot } from '../src/cache-root.js';
 import { ParseFactsSchema, parseFactsShapeSource, schemaShapeSource } from '../src/schemas/parse-facts.js';
 
 /**
