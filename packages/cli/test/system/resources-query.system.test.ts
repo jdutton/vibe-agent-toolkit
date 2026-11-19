@@ -93,6 +93,13 @@ const FOREIGN_PATH = `${FOREIGN_PREFIX}/zzz.md`;
 const PROJECTION_DATABASE = 'projection.db';
 
 /**
+ * Where the store lands under a `VAT_CACHE_DIR`, relative to it:
+ * `<namespace>/projection-<shapeDigest>/projection.db`. Matched by shape — the
+ * namespace and digest are not this suite's to pin.
+ */
+const STORE_UNDER_CACHE_ROOT = expect.stringMatching(/^[^/]+\/projection-[^/]+\/projection\.db$/u);
+
+/**
  * The least of a run's wall time `populationSecs` may honestly account for.
  *
  * Anchored to the DEFECT side rather than to a machine: see the case that reads
@@ -167,15 +174,16 @@ function storeOffEnv(): NodeJS.ProcessEnv {
 function storeEnv(): NodeJS.ProcessEnv {
   return {
     ...storeSelectedEnv(),
-    // 🪤 `VAT_PROJECTION_STORE_DIR` names ONLY the store, which is why this suite
-    // uses it. Redirecting `TMPDIR` relocates the store too — the default-location
-    // control below depends on exactly that — but it is blunt: it moves every other
-    // temp consumer with it, and the variable name differs by platform. An earlier
+    // 🪤 `VAT_CACHE_DIR` names only VAT's persistable cache (this store and the
+    // parse cache), which is why this suite uses it. Redirecting `TMPDIR` relocates
+    // the store too — the default-location control below depends on exactly that —
+    // but it is blunt: it moves every other temp consumer with it, and the variable
+    // name differs by platform. An earlier
     // version read `XDG_CACHE_HOME` + `HOME` and its comment claimed isolation it
     // did not have: `defaultStoreDirectory()` is under `tmpdir()` and consults
     // neither, so every run in this suite was writing into the developer's own
     // store.
-    VAT_PROJECTION_STORE_DIR: sharedStoreDir(),
+    VAT_CACHE_DIR: sharedStoreDir(),
   };
 }
 
@@ -189,15 +197,14 @@ function storeEnv(): NodeJS.ProcessEnv {
  * platform.
  *
  * ⚠️ **Not an isolation mechanism, and not a second one.**
- * `PROJECTION_STORE_DIR_ENV`'s docstring is right that redirecting the OS temp
- * directory is the wrong instrument for putting a store somewhere — it moves
- * every other temp consumer in order to move one. This is the opposite use: it is how a test
- * OBSERVES the default location. `VAT_PROJECTION_STORE_DIR` says where the store
- * should go; nothing says where it should NOT go, so the only way to assert the
- * default was left alone is to make the default a directory this test owns and
- * can then find empty. Verified in both directions, which is what the
- * default-location control below exists to keep true: without
- * `VAT_PROJECTION_STORE_DIR` the database lands here, with it this stays empty.
+ * Redirecting the OS temp directory is the wrong instrument for putting a store
+ * somewhere — it moves every other temp consumer in order to move one. This is
+ * the opposite use: it is how a test OBSERVES the default location.
+ * `VAT_CACHE_DIR` says where the store should go; nothing says where it should
+ * NOT go, so the only way to assert the default was left alone is to make the
+ * default a directory this test owns and can then find empty. Verified in both
+ * directions, which is what the default-location control below exists to keep
+ * true: without `VAT_CACHE_DIR` the database lands here, with it this stays empty.
  *
  * @param directory - Scratch directory to become the child's temp root
  * @returns The three variables to merge into a child environment
@@ -248,7 +255,8 @@ function databasesUnder(directory: string): string[] {
  * @returns The database's bytes
  */
 function readSharedStoreFile(): Buffer {
-  const database = safePath.join(sharedStoreDir(), PROJECTION_DATABASE);
+  const [relative] = databasesUnder(sharedStoreDir());
+  const database = safePath.join(sharedStoreDir(), relative ?? PROJECTION_DATABASE);
   expect(fs.existsSync(database), `no store at ${database}`).toBe(true);
   return fs.readFileSync(database);
 }
@@ -419,7 +427,7 @@ describe('vat resources query', () => {
     // difference between a served population and a re-derived one.
     //
     // 🪤 The flip ALONE was vacuous. This fixture's tree hash is unique, so a
-    // build that ignored `VAT_PROJECTION_STORE_DIR` entirely would still report
+    // build that ignored `VAT_CACHE_DIR` entirely would still report
     // `derived` then `store` — from the developer's own live store, which it
     // would also be polluting. The store-location arms below are what make the
     // flip a statement about the directory this test named.
@@ -429,7 +437,7 @@ describe('vat resources query', () => {
       ...storeEnv(),
       // Its OWN store directory, so the flip does not depend on which tests ran
       // first — the shared store above is already warm.
-      VAT_PROJECTION_STORE_DIR: flipDir,
+      VAT_CACHE_DIR: flipDir,
       ...tmpdirRedirect(decoyTmp),
     };
     const first = query(COUNT_BLOBS, { env });
@@ -444,7 +452,7 @@ describe('vat resources query', () => {
     expect(second.data['rows']).toStrictEqual(first.data['rows']);
     // Where the store actually went. The positive half first, so the empty
     // second is an answer rather than a detector that never ran.
-    expect(databasesUnder(flipDir)).toStrictEqual([PROJECTION_DATABASE]);
+    expect(databasesUnder(flipDir)).toStrictEqual([STORE_UNDER_CACHE_ROOT]);
     expect(databasesUnder(decoyTmp)).toStrictEqual([]);
 
     // 🔑 And what the flip was WORTH — the only arm that runs against a real
@@ -487,7 +495,7 @@ describe('vat resources query', () => {
       directory: OWN_PREFIX,
       files: { 'CLAUDE.md': '# Rules\n\n@guide.md\n', 'guide.md': '# Guide\n' },
     });
-    const env = { ...storeEnv(), VAT_PROJECTION_STORE_DIR: safePath.join(storeDir, 'lens-flip') };
+    const env = { ...storeEnv(), VAT_CACHE_DIR: safePath.join(storeDir, 'lens-flip') };
     const first = query(COUNT_CONTEXT_LOADS, { env, cwd });
     const second = query(COUNT_CONTEXT_LOADS, { env, cwd });
     cleanupTestTempDir(cwd);
@@ -547,7 +555,7 @@ describe('vat resources query', () => {
     // measurable instead, so the fraction stops competing with it.
     const coldDir = safePath.join(storeDir, 'span');
     const withStore = query(COUNT_BLOBS, {
-      env: { ...storeEnv(), VAT_PROJECTION_STORE_DIR: coldDir },
+      env: { ...storeEnv(), VAT_CACHE_DIR: coldDir },
     });
     // 🪤 Turned off EXPLICITLY. The store is the default now, so an arm that got
     // the no-store path by saying nothing would quietly have become a second
@@ -564,7 +572,7 @@ describe('vat resources query', () => {
     expect(withoutStore.data['population']).toBe('derived');
     // The store arm was really keyed and opened — otherwise this asserts the
     // no-store path twice under a store-shaped name.
-    expect(databasesUnder(coldDir)).toStrictEqual([PROJECTION_DATABASE]);
+    expect(databasesUnder(coldDir)).toStrictEqual([STORE_UNDER_CACHE_ROOT]);
 
     for (const run of [withStore, withoutStore]) {
       const durationSecs = durationSecsOf(run.doc);
@@ -576,7 +584,7 @@ describe('vat resources query', () => {
 
   it('writes to the DEFAULT location when nothing names one, which is why the arm above means something', () => {
     // The positive control for `databasesUnder(decoyTmp)` being empty. Same
-    // redirected temp root, same store selection, `VAT_PROJECTION_STORE_DIR`
+    // redirected temp root, same store selection, `VAT_CACHE_DIR`
     // withheld — and the database appears under it. Without this, "nothing was
     // written to the default location" is indistinguishable from "this suite
     // cannot see the default location at all".

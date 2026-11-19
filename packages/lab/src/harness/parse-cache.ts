@@ -11,7 +11,10 @@
  * (an `npx:` build's is its install's — `npx-install.ts`), and calls its `parseCacheDirectory()` under the arm's own VAT-step
  * environment (`armStepEnvironment`) — the one its steps run in, so no
  * inherited variable can steer the answer — and accepts the answer only when it
- * lies under the arm's `tmp/`, the one place a cold reset empties. The cache root
+ * lies under the arm's `store/` (`VAT_CACHE_DIR`, which a current build reads)
+ * or its `tmp/` (where an older build keeps its cache), the two places a cold
+ * reset empties. The parent of the answer is the build's namespace, where the
+ * sequence rule also looks for the build's projection store. The cache root
  * alone is never asserted: it also holds the namespace directories VAT creates
  * up front and other tenants, so it is non-empty even when no parse fact was
  * written.
@@ -47,7 +50,7 @@ export type ParseDirectoryResolution =
  *
  * @param instrument - The build: `node <entry>`
  * @param dirs - The arm, whose VAT-step environment the build is asked under
- * @returns The directory under `dirs.tmp`, or why it could not be resolved — never a guess
+ * @returns The directory under `dirs.store` or `dirs.tmp`, or why it could not be resolved — never a guess
  */
 export function resolveParseCacheDirectory(instrument: ResolvedInstrument, dirs: ArmDirectories): ParseDirectoryResolution {
   const base = entryBase(instrument.command === process.execPath ? instrument.leadingArgs[0] : undefined);
@@ -71,11 +74,13 @@ export function resolveParseCacheDirectory(instrument: ResolvedInstrument, dirs:
   }
   // The child prints a NATIVE path (backslashes on Windows); the lab's paths are forward-slash.
   const dir = toForwardSlash(result.stdout);
-  // 'absent' is under tmp too: nothing is written there until the first step runs.
-  if (isUnderRoot(dirs.tmp, dir) === 'outside') {
+  // 'absent' is under too: nothing is written there until the first step runs.
+  if (isUnderRoot(dirs.store, dir) === 'outside' && isUnderRoot(dirs.tmp, dir) === 'outside') {
     return {
       ok: false,
-      reason: `the build names '${dir}' as its parse directory, not under the arm's tmp '${dirs.tmp}' — a cold reset would not empty it`,
+      reason:
+        `the build names '${dir}' as its parse directory, under neither the arm's cache directory '${dirs.store}' ` +
+        `nor its tmp '${dirs.tmp}' — a cold reset would not empty it`,
     };
   }
   return { ok: true, dir };

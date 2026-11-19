@@ -2,7 +2,7 @@
  * `vat cache clear` reclaims the projection store — by SCOPE, which is the part
  * that needs a test.
  *
- * The command deletes `<tmpdir>/.vat-cache` in its entirety and names no tenant.
+ * The command deletes the cache root (`VAT_CACHE_DIR`, else `<tmpdir>/.vat-cache`) in its entirety and names no tenant.
  * That is the right design (a clear that enumerated tenants would go stale the
  * moment a fifth arrived) and it is also why nothing in `clear.ts` mentions the
  * store: the store is covered because `defaultStoreDirectory()` happens to
@@ -28,11 +28,11 @@
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import { vatCacheNamespace } from '@vibe-agent-toolkit/resources';
+import { vatCacheNamespace, vatCacheRoot } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { clearCacheDirectory, vatCacheRoot } from '../../src/commands/cache/clear.js';
+import { clearCacheDirectory } from '../../src/commands/cache/clear.js';
 
 /**
  * Stand-in bytes for a database file.

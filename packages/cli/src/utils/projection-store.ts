@@ -49,8 +49,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
-import { PROJECTION_TABLES, type FactStore, type PopulationCache, type Projection, type ProjectionTableName } from '@vibe-agent-toolkit/resources';
-import { parseEnvBoolean } from '@vibe-agent-toolkit/utils';
+import { PROJECTION_TABLES, VAT_CACHE_DIR_ENV, type FactStore, type PopulationCache, type Projection, type ProjectionTableName, vatCacheRoot } from '@vibe-agent-toolkit/resources';
+import { parseEnvBoolean, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { freshGitTreeSnapshot, gitSnapshotFailureOf, gitTreeSnapshot, type GitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 
 import { noticeToOperator, withNoticeLedger } from './operator-notices.js';
@@ -96,40 +96,14 @@ export const PROJECTION_STORE_SQLITE = 'sqlite';
  *
  * Read through the same {@link parseEnvBoolean} as every other VAT switch, so
  * `0`, `false`, `no` and `n` work too. The empty string joins them: unlike
- * {@link PROJECTION_STORE_DIR_ENV}, where empty falls back to a default
- * directory that means something, there is nothing else for a cleared selector
- * to mean.
+ * `VAT_CACHE_DIR`, where empty falls back to a default directory that means
+ * something, there is nothing else for a cleared selector to mean.
+ *
+ * Where the store lives is not this module's question: it is
+ * `<vatCacheRoot()>/<namespace>/projection-<shapeDigest>/`, and `VAT_CACHE_DIR`
+ * moves the whole cache root — see `cache-root.ts` in `@vibe-agent-toolkit/resources`.
  */
 export const PROJECTION_STORE_OFF = 'off';
-
-/**
- * Where the projection store's database lives, overriding the default.
- *
- * The default is `tmpdir/.vat-cache/<version>/projection-<shapeDigest>` — one
- * database per VAT release, shared by every root on the machine. This names a
- * different one **explicitly**, which is what an adopter with a per-job cache
- * directory, a shared build agent running two jobs at once, or a test arm that
- * must not touch the developer's live cache actually needs.
- *
- * 🪤 **What it replaces is redirecting `TMPDIR`, which works and is the wrong
- * instrument.** `defaultStoreDirectory()` resolves through
- * `vatCacheNamespaceRoot()` → `normalizedTmpdir()`, so pointing the OS temp
- * directory elsewhere does move the store — along with every other temp
- * consumer in the process, on a variable whose name is not the same on both
- * platforms (`TMPDIR` on POSIX; `TEMP`, then `TMP`, on Windows, so setting one
- * is silently inert on the other). It relocates the store as a side effect of
- * relocating something larger. This variable says the one thing meant.
- *
- * ⚠️ It does **not** consult `XDG_CACHE_HOME` or `HOME`. A caller that set
- * those believed it had its own database and was writing into the shared one;
- * the fix is to name the directory here, not to add more implicit roots.
- *
- * An environment variable rather than a config field, for the same reason
- * {@link PROJECTION_STORE_ENV} is one: it says where an INSTRUMENT keeps its
- * scratch space, not what the project means, and it has to be reachable from a
- * harness that spawns the binary.
- */
-export const PROJECTION_STORE_DIR_ENV = 'VAT_PROJECTION_STORE_DIR';
 
 /**
  * The env var that turns VAT's disk caches off for a run.
@@ -197,7 +171,7 @@ export function projectionStoreSelected(): boolean {
   // Unset is the default and the default is on.
   if (selector === undefined) return true;
   // `VAT_PROJECTION_STORE=` — see PROJECTION_STORE_OFF on why empty is off here
-  // and unset-equivalent in the directory variable.
+  // and unset-equivalent in `VAT_CACHE_DIR`.
   if (selector.trim() === '') return false;
   return parseEnvBoolean(selector) !== false;
 }
@@ -206,8 +180,8 @@ export function projectionStoreSelected(): boolean {
  * An open store, the key half it is used with, and the way to let it go.
  *
  * ⚠️ **Deliberately NOT typed for SQL, and do not re-widen it.** This handle
- * reaches the database at {@link PROJECTION_STORE_DIR_ENV}'s directory, which
- * defaults to one file per VAT release shared by every root on the machine —
+ * reaches the database under the cache root (`VAT_CACHE_DIR`), which is one
+ * file per VAT release shared by every root that uses that cache root —
  * holding other repositories' link text, heading text and frontmatter, so
  * arbitrary SQL over it would answer from trees the asker never named.
  * `populate()` needs the engine-free {@link PopulationCache} and nothing more; a
@@ -260,8 +234,10 @@ function storeKeyOrNotice(root: string): GitTreeSnapshot | null {
 /**
  * Open the projection store this process selected, keyed to one tree.
  *
- * Returns `undefined` when no store is selected, and when the tree cannot be
- * keyed — the two "carry on without a cache" answers. It does **not** return
+ * Returns `undefined` when no store is selected, when the tree cannot be
+ * keyed, and when a damaged store file could not be replaced (see
+ * {@link loadStore}) — the "carry on without a cache" answers, each but the
+ * first told to the operator. It does **not** return
  * `undefined` for an uninstalled backend: the store is on unless a user turned it
  * off, and answering that by silently not having one is how a default-on cache
  * becomes an unmeasured one.
@@ -281,7 +257,9 @@ export async function openPopulationCache(options: {
   const snapshot = storeKeyOrNotice(options.root);
   if (snapshot === null) return undefined;
 
+  noticeCacheRootInsideTree(options.root);
   const store = await loadStore();
+  if (store === undefined) return undefined;
   const cwd = options.root;
   return {
     cache: {
@@ -297,6 +275,32 @@ export async function openPopulationCache(options: {
 }
 
 /**
+ * Tell the operator, once, when the cache root sits inside the tree being
+ * scanned — a relative `VAT_CACHE_DIR` in a CI workspace, typically, or the
+ * default `<tmpdir>/.vat-cache` when the scanned tree contains the temp
+ * directory. The message names whichever chose the root. The cache
+ * then lives among the files VAT scans and a CI cache save carries it beside
+ * the checkout; `$RUNNER_TEMP/vat-cache` is the place for it in GitHub Actions. A notice,
+ * not a refusal: the run is still correct.
+ *
+ * @param root - The absolute corpus root
+ */
+function noticeCacheRootInsideTree(root: string): void {
+  const cacheRoot = vatCacheRoot();
+  const tree = `${toForwardSlash(safePath.resolve(root)).replace(/\/$/u, '')}/`;
+  if (!`${toForwardSlash(cacheRoot)}/`.startsWith(tree)) return;
+  const configured = process.env[VAT_CACHE_DIR_ENV];
+  const chosenBy = configured === undefined || configured === ''
+    ? `The default cache root (${cacheRoot}, under the temp directory) is inside the scanned tree ${root}. Set ${VAT_CACHE_DIR_ENV} to a directory`
+    : `${VAT_CACHE_DIR_ENV} (${cacheRoot}) is inside the scanned tree ${root}. Point it at a directory`;
+  noticeToOperator(
+    'store',
+    `${chosenBy} outside the checkout (in GitHub Actions, $RUNNER_TEMP/vat-cache) so the cache is neither scanned nor saved with the tree.`,
+    cacheRoot,
+  );
+}
+
+/**
  * Load the selected backend, or throw its `BACKEND_UNAVAILABLE` refusal when it is uninstalled.
  *
  * 🪤 Only `ERR_MODULE_NOT_FOUND` means "not installed". A Node older than
@@ -305,19 +309,53 @@ export async function openPopulationCache(options: {
  * for "upgrade Node", and diagnosing a version floor as a missing dependency
  * sends a user round a loop that cannot terminate.
  *
- * @returns The opened store: the engine-free port, which is all the backend's
- *   factory returns, so the population path has no query to grow
+ * ## A damaged store file is a miss, not a failed run
+ *
+ * The store is a cache, and with `VAT_CACHE_DIR` it is one CI saves and
+ * restores — so a truncated, corrupt or not-a-database `projection.db` is a
+ * real input, not a defect. When the backend reports an EXISTING file it
+ * could not open as a database (`isStoreUnopenableError`), the operator is told
+ * once on stderr (the path and SQLite's own error), the file is discarded and a
+ * fresh store opened in its place; if that fails too, the run carries on with no
+ * store, saying so.
+ *
+ * 🪤 Only the open is forgiven. Any other open failure (a lock, a permission, a path SQLite cannot open,
+ * a full disk) still throws, and a store that fails MID-RUN on a read or write
+ * still surfaces through `populate()` — a cache that silently stops working is
+ * how a week of full-price runs goes unnoticed.
+ *
+ * @returns The opened store — the engine-free port, which is all the backend's
+ *   factory returns, so the population path has no query to grow — or
+ *   `undefined` when a damaged store could not be replaced
  */
-async function loadStore(): Promise<FactStore> {
-  const directory = process.env[PROJECTION_STORE_DIR_ENV];
-  // Spread rather than passed, because the backend defaults the field when it is
-  // ABSENT and an explicit `undefined` is a different argument under
-  // `exactOptionalPropertyTypes`. Empty string is treated as unset: an unset
-  // variable and one exported as `''` are the same intent, and `''` would
-  // otherwise resolve to the process cwd.
-  return (await loadBackend()).openSqliteFactStore(
-    directory === undefined || directory === '' ? {} : { directory },
-  );
+async function loadStore(): Promise<FactStore | undefined> {
+  const backend = await loadBackend();
+  try {
+    return backend.openSqliteFactStore();
+  } catch (error) {
+    if (!backend.isStoreUnopenableError(error)) throw error;
+    return replaceUnopenableStore(backend, error);
+  }
+}
+
+/**
+ * Discard the store file `error` names and open a fresh one, telling the operator.
+ *
+ * @param backend - The loaded backend
+ * @param error - Its refusal to open the existing file
+ * @returns The fresh store, or `undefined` when it could not be replaced
+ */
+function replaceUnopenableStore(backend: typeof ProjectionSqlite, error: ProjectionSqlite.StoreUnopenableError): FactStore | undefined {
+  try {
+    backend.discardStoreDatabase(error.databasePath);
+    const store = backend.openSqliteFactStore();
+    noticeToOperator('store', `${error.message}. Discarded it and started an empty projection store; this run populates without a warm cache.`, error.databasePath);
+    return store;
+  } catch (retryError) {
+    const reason = retryError instanceof Error ? retryError.message : String(retryError);
+    noticeToOperator('store', `${error.message}. Could not replace it (${reason}); this run populates without a projection store.`, error.databasePath);
+    return undefined;
+  }
 }
 
 /**
@@ -380,6 +418,17 @@ export async function hydrateRunDatabase(
  */
 export async function openCompileProbe(): Promise<ProjectionSqlite.ProjectionCompileProbe> {
   return (await loadBackend()).openProjectionCompileProbe();
+}
+
+/**
+ * Whether a running VAT has the projection store in `directory` open — asked of
+ * the backend, which owns the database file's name and its locking.
+ *
+ * @param directory - A store directory
+ * @returns True when another connection holds its database open
+ */
+export async function storeInUse(directory: string): Promise<boolean> {
+  return (await loadBackend()).isStoreInUse(directory);
 }
 
 /**
@@ -539,6 +588,14 @@ export type PopulationCacheOf = () => Promise<PopulationCache | undefined>;
  * Run the work inside a scope whose store is opened on its first ask, and closed
  * when the scope ends if it was opened.
  *
+ * A close that fails never decides the outcome. When the work threw, its error
+ * is the one rethrown and the close failure is told to the operator — a
+ * `finally` that let the close throw would replace the real error. When the
+ * work finished, the store is a cache: its result stands, and a close the
+ * store or the OS refused (a checkpoint hitting a full disk, say) is a warning,
+ * not a failed verb. A close that throws something no OS or SQLite raised is
+ * a defect and still surfaces after a successful run.
+ *
  * @param options - Where the corpus is
  * @param options.root - The absolute corpus root
  * @param work - Given the scope's store, opened on first ask
@@ -550,15 +607,52 @@ async function runOwnedScope<T>(
 ): Promise<T> {
   let opening: Promise<OpenedPopulationCache | undefined> | undefined;
   const opened = (): Promise<OpenedPopulationCache | undefined> => (opening ??= openPopulationCache(options));
+  let result: T;
   try {
     // Registered even when nothing is opened, so a nested scope can tell "no
     // store in this process" from "no scope above me" — and so the nested scope
     // stays inside THIS scope's git-snapshot memo either way.
-    return await populationScope.run({ opened }, () => work(async () => (await opened())?.cache));
-  } finally {
-    // A store that refused to open has nothing to close: its refusal was its asker's.
-    const [settled] = opening === undefined ? [] : await Promise.allSettled([opening]);
-    if (settled?.status === 'fulfilled') await settled.value?.close();
+    result = await populationScope.run({ opened }, () => work(async () => (await opened())?.cache));
+  } catch (error) {
+    await closeTellingOperator(await openedOrNone(opening), { workFailed: true });
+    throw error;
+  }
+  await closeTellingOperator(await openedOrNone(opening), { workFailed: false });
+  return result;
+}
+
+/**
+ * The store a scope opened, if its first ask opened one. A store that refused to
+ * open has nothing to close: its refusal was its asker's.
+ *
+ * @param opening - The scope's open, or `undefined` when nothing asked
+ * @returns The opened store, or `undefined`
+ */
+async function openedOrNone(opening: Promise<OpenedPopulationCache | undefined> | undefined): Promise<OpenedPopulationCache | undefined> {
+  if (opening === undefined) return undefined;
+  const [settled] = await Promise.allSettled([opening]);
+  return settled?.status === 'fulfilled' ? settled.value : undefined;
+}
+
+/**
+ * Close a scope's store; a failure is told on stderr instead of thrown — see
+ * {@link runOwnedScope} for when, and for the one case that still throws.
+ *
+ * @param opened - The scope's store, if it opened one
+ * @param outcome - Whether the scope's work had already failed
+ */
+async function closeTellingOperator(opened: OpenedPopulationCache | undefined, outcome: { readonly workFailed: boolean }): Promise<void> {
+  try {
+    await opened?.close();
+  } catch (error) {
+    const raisedBySystem = error instanceof Error && typeof (error as { code?: unknown }).code === 'string';
+    if (!raisedBySystem && !outcome.workFailed) throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    noticeToOperator(
+      'store',
+      `The projection store did not close cleanly (${reason}). `
+      + (outcome.workFailed ? 'Reporting the run\'s own failure instead.' : 'The run\'s result stands; the next run reads the cache as it was left.'),
+    );
   }
 }
 

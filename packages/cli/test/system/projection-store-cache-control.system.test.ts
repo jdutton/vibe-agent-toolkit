@@ -18,14 +18,14 @@
  * was written". Every assertion below counts ROWS, out of the file, with the
  * store's own connection closed.
  *
- * ## Isolation is `VAT_PROJECTION_STORE_DIR`
+ * ## Isolation is `VAT_CACHE_DIR`
  *
- * Each arm names its own store directory. That keeps this suite off the
+ * Each arm names its own cache root, which holds its store. That keeps this suite off the
  * developer's live cache — `defaultStoreDirectory()` is one database per VAT
  * release, shared by every root on the machine, and a test that populated or
  * cleared it would be a bug whether or not it passed.
  *
- * 🪤 The variable is imported from the module under test rather than spelled as
+ * 🪤 The variable is imported from `@vibe-agent-toolkit/resources` rather than spelled as
  * a literal here, so a rename cannot leave this suite quietly pointing at the
  * shared default. The positive control below is the backstop: if the child
  * ignored the variable altogether, the arm that asserts rows WERE written finds
@@ -44,10 +44,10 @@
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
+import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { PROJECTION_STORE_DIR_ENV } from '../../src/utils/projection-store.js';
 import {
   contributorsCharged,
   rowsStoredUnder,
@@ -89,7 +89,7 @@ function isolatedStoreDir(label: string): string {
 /**
  * Run `vat resources validate` over the fixture corpus.
  *
- * @param storeDir - The arm's private `VAT_PROJECTION_STORE_DIR`
+ * @param storeDir - The arm's private `VAT_CACHE_DIR`
  * @param extra - Flags before the subcommand, and any further environment
  * @returns Nothing; the arm is judged by what landed on disk, not by stdout
  */
@@ -101,7 +101,7 @@ async function runValidate(
     cwd: corpus,
     // The store directory is applied LAST so no caller can accidentally point an
     // arm at another arm's store through `extra.env`.
-    env: { ...STORE_ON, ...extra.env, [PROJECTION_STORE_DIR_ENV]: storeDir },
+    env: { ...STORE_ON, ...extra.env, [VAT_CACHE_DIR_ENV]: storeDir },
   });
   // A run that crashed writes no store either, and would make every "nothing
   // was written" assertion below pass for the wrong reason.

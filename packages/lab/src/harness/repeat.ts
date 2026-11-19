@@ -8,14 +8,14 @@
  * 1. **Every arm runs in its own directories, from a cleared environment.**
  *    A REQUIRED {@link ArmDescriptor} names `<arms root>/<build>-<arm>-<state>/`,
  *    whose `store/`, `tmp/`, `home/` and `npm-cache/` are the child's
- *    `VAT_PROJECTION_STORE_DIR`, `TMPDIR`/`TEMP`/`TMP`,
+ *    `VAT_CACHE_DIR`, `TMPDIR`/`TEMP`/`TMP`,
  *    `HOME`/`CLAUDE_CONFIG_DIR` and `npm_config_cache` (see `arm-dirs.ts`), and every VAT step starts
  *    from the developer's environment minus every `VAT_*` name and the git and
  *    claude state in `CLEARED_ENV_NAMES` (see `arm-env.ts`). A developer's
  *    leftover `VAT_PROJECTION_STORE=off` would otherwise silently change a
  *    baseline arm's lane. The lab never runs `vat cache clear` and never touches
  *    the developer's default store.
- * 2. **Cold means cold on EVERY repeat**: the arm's store is deleted and its
+ * 2. **Cold means cold on EVERY repeat**: the arm's cache directory is deleted and its
  *    `tmp/` emptied inside the loop, not once before it. **Warm means one
  *    exit-checked priming run**, then measured repeats with nothing deleted.
  *    Each state's rule is checked, and a violation fails the measurement.
@@ -412,7 +412,7 @@ async function clearWrittenOutputs(arm: PreparedArm): Promise<void> {
 /**
  * Refuse an arm whose populating step's rule needs the build's parse directory
  * when the build cannot say where it is (no `node <entry>`, or a directory
- * outside the arm's `tmp/`). Runs after the untimed start.
+ * outside the arm's `store/` and `tmp/`). Runs after the untimed start.
  *
  * @param arm - A prepared arm, its directories made
  * @param name - The arm's name, for the refusal

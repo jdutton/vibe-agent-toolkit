@@ -80,7 +80,11 @@ export {
 // with the pragmas in the one order that survives contention — see `store.ts`.
 export {
   type SqliteStoreOptions,
+  type StoreUnopenableError,
   defaultStoreDirectory,
+  discardStoreDatabase,
+  isStoreInUse,
+  isStoreUnopenableError,
   openSqliteFactStore,
 } from './store.js';
 

@@ -9,6 +9,7 @@
  * a parseable document beside it — the same document, whatever stderr says.
  */
 
+import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
@@ -16,7 +17,6 @@ import yaml from 'yaml';
 import { ORCHESTRATOR_REPORT_SCHEMA } from '../../src/commands/orchestrator-schema.js';
 import { CHECK_REPORT_SCHEMA } from '../../src/commands/resources/check-schema.js';
 import { RESOURCES_VALIDATE_REPORT_SCHEMA } from '../../src/commands/resources/validate-schema.js';
-import { PROJECTION_STORE_DIR_ENV } from '../../src/utils/projection-store.js';
 import { commitTestFixture } from '../test-helpers.js';
 
 import { createSuiteContext, executeCli, join, writeTestFile } from './test-common.js';
@@ -80,7 +80,7 @@ afterAll(context.cleanup);
 function run(args: string[]): ReturnType<typeof executeCli> {
   return executeCli(context.binPath, args, {
     cwd: corpus,
-    env: { [PROJECTION_STORE_DIR_ENV]: context.createTempDir() },
+    env: { [VAT_CACHE_DIR_ENV]: context.createTempDir() },
   });
 }
 

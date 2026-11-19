@@ -40,11 +40,11 @@
 
 import { chmodSync, rmSync, writeFileSync } from 'node:fs';
 
+import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
 import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { PROJECTION_STORE_DIR_ENV } from '../../src/utils/projection-store.js';
 import { commitTestFixture } from '../test-helpers.js';
 
 import { createIsolatedScratch, executeCli, getBinPath, isolatedScratchEnv } from './test-common.js';
@@ -136,7 +136,7 @@ function storeEnv(storeDir: string, lane: 'projection' | 'walk' = 'projection'):
     ...isolatedScratchEnv(scratch),
     VAT_RESOURCES_CRAWL: lane,
     VAT_PROJECTION_STORE: 'sqlite',
-    [PROJECTION_STORE_DIR_ENV]: storeDir,
+    [VAT_CACHE_DIR_ENV]: storeDir,
   };
 }
 

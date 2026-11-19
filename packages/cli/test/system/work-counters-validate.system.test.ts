@@ -28,6 +28,7 @@
 
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 
+import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
 import {
   mkdirSyncReal,
   toForwardSlash,
@@ -38,7 +39,7 @@ import {
 import { createSymlink, symlinkCapability } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { PROJECTION_STORE_DIR_ENV, PROJECTION_STORE_ENV, PROJECTION_STORE_OFF } from '../../src/utils/projection-store.js';
+import { PROJECTION_STORE_ENV, PROJECTION_STORE_OFF } from '../../src/utils/projection-store.js';
 import { probedReads, readProbeEnv } from '../helpers/fs-read-probe.js';
 import { commitTestFixture } from '../test-helpers.js';
 
@@ -333,7 +334,7 @@ async function validateCounts(cwd: string, arm: Arm): Promise<RunCounts> {
   const result = await executeCli(context.binPath, ['validate'], {
     cwd,
     env: {
-      [PROJECTION_STORE_DIR_ENV]: arm.storeDir,
+      [VAT_CACHE_DIR_ENV]: arm.storeDir,
       ...(arm.storeOff && { [PROJECTION_STORE_ENV]: PROJECTION_STORE_OFF }),
       [WORK_COUNTERS_ENV]: workDir,
       TMPDIR: arm.tmpDir,

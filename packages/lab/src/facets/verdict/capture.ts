@@ -10,11 +10,12 @@
  * directory under the OS temp directory; never `--out`), created at 0700 BEFORE
  * any verb runs (VAT refuses a store whose parent is missing):
  *
- * - `VAT_PROJECTION_STORE_DIR=<arms root>/<alias>/store` — a private projection store
- *   per arm and subject, left for VAT to create. Two arms sharing one store would
- *   let the second read what the first wrote, and a verdict would then measure
- *   the store rather than the build.
- * - `TMPDIR`/`TEMP`/`TMP=<arms root>/<alias>/tmp` — the parse cache is private too.
+ * - `VAT_CACHE_DIR=<arms root>/<alias>/store` — a private VAT cache (projection
+ *   store and parse cache) per arm and subject, left for VAT to create. Two arms
+ *   sharing one store would let the second read what the first wrote, and a
+ *   verdict would then measure the store rather than the build.
+ * - `TMPDIR`/`TEMP`/`TMP=<arms root>/<alias>/tmp` — private too, so a build that
+ *   predates `VAT_CACHE_DIR` and keeps its cache in the temp directory is isolated as well.
  * - `HOME` and `CLAUDE_CONFIG_DIR=<arms root>/<alias>/home`, empty — the operator's own
  *   Claude config must not decide what `claude context` reports for an adopter's
  *   tree, and an UNSET `CLAUDE_CONFIG_DIR` would fall back to `HOME`.

@@ -201,7 +201,7 @@ for a pinned baseline whose nested calls are pinned too, use a
 ([recipe](../../../docs/contributing/vat-debugging.md#crucible-runs)).
 
 Every timed arm — the `verdict` facet's included — also gets lab-owned directories on top of its
-own settings: a private projection store, temp directory, empty home (`HOME` and
+own settings: a private VAT cache (`VAT_CACHE_DIR`), temp directory, empty home (`HOME` and
 `CLAUDE_CONFIG_DIR`) and npm cache under the invocation's **arms root** (`--arms-dir`, else a fresh
 `run-*` directory under `<os tmpdir>/vat-lab-arms-<user>/`), never under `--out` and never inside a
 subject. The default `run-*` directory is removed when the capture ends, passed or failed, unless
@@ -329,8 +329,8 @@ Four properties, each of which the hand-rolled version had no way to enforce:
 **Whole arms alternate — A B A B …, never all of A then all of B.** A machine drifts over minutes, and
 a block design charges every bit of that drift to whichever arm ran during it. Alternation turns a
 systematic bias into a per-pair one, which shows up as pairs disagreeing — a signal you can read.
-The second reason is specific to this harness: each arm has its own `tmp/`, so its parse cache is
-its own, and a warm arm is primed by one unmeasured run before its first measured repeat — no arm's
+The second reason is specific to this harness: each arm has its own VAT cache and `tmp/`, so its
+parse cache is its own, and a warm arm is primed by one unmeasured run before its first measured repeat — no arm's
 first measured invocation inherits the other's cache. Alternation keeps whatever cold start remains
 (the OS page cache, the build's first start) symmetric instead of hiding inside one arm's aggregate.
 

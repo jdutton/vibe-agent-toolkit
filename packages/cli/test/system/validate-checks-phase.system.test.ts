@@ -8,9 +8,9 @@
  * kill rows are `validate-checks-phase-kill.system.test.ts`.
  */
 
+import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { PROJECTION_STORE_DIR_ENV } from '../../src/utils/projection-store.js';
 import { storeFilesUnder } from '../helpers/projection-store-probe.js';
 import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
@@ -123,7 +123,7 @@ describe('vat validate — the checks phase', () => {
     writeConfig(projectDir, [['quick', TXT_ROWS]]);
     const storeDir = safePath.join(scratch(), 'fresh-store');
     fs.mkdirSync(storeDir, { mode: 0o700 });
-    const env = { [PROJECTION_STORE_DIR_ENV]: storeDir };
+    const env = { [VAT_CACHE_DIR_ENV]: storeDir };
 
     const cold = vat(projectDir, ['validate'], env);
 

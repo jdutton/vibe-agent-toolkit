@@ -38,7 +38,7 @@ import { createRequire } from 'node:module';
 import { devNull } from 'node:os';
 import { pathToFileURL } from 'node:url';
 
-import { allDerivedSpecs, BLOB_NOT_TEXT, PROJECTION_TABLES, quoteIdentifier } from '@vibe-agent-toolkit/resources';
+import { allDerivedSpecs, BLOB_NOT_TEXT, PROJECTION_TABLES, quoteIdentifier, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
 import { FindingSchema, reportSchema } from '@vibe-agent-toolkit/schema';
 import {
   CRAWL_STORE_READ_ID,
@@ -56,7 +56,7 @@ import { z } from 'zod';
 
 import { StatedLimitSchema } from '../../src/commands/resources/check-schema.js';
 import { reportShapeFor } from '../../src/report-schemas.js';
-import { PROJECTION_STORE_DIR_ENV, PROJECTION_STORE_ENV, PROJECTION_STORE_OFF, PROJECTION_STORE_SQLITE } from '../../src/utils/projection-store.js';
+import { PROJECTION_STORE_ENV, PROJECTION_STORE_OFF, PROJECTION_STORE_SQLITE } from '../../src/utils/projection-store.js';
 import { RESOURCES_CRAWL_ENV, RESOURCES_CRAWL_PROJECTION } from '../../src/utils/resource-loader.js';
 import { createIsolatedScratch, createSuiteContext, executeCli, isolatedScratchEnv, writeFileTree } from '../system/test-common.js';
 
@@ -403,7 +403,7 @@ export interface ArmDirs {
   readonly home: string;
   readonly store: string;
   readonly timing: string;
-  /** Where this build keeps its parse cache under `tmp`, asked of the build. */
+  /** Where this build keeps its parse cache under `store` (the cell's `VAT_CACHE_DIR`), asked of the build. */
   readonly parse: string;
 }
 
@@ -527,7 +527,7 @@ function baseEnv(dirs: ArmDirs): Record<string, string> {
     ...isolatedGitEnv(dirs.root),
     NODE_OPTIONS: '',
     [RESOURCES_CRAWL_ENV]: RESOURCES_CRAWL_PROJECTION,
-    [PROJECTION_STORE_DIR_ENV]: dirs.store,
+    [VAT_CACHE_DIR_ENV]: dirs.store,
   };
 }
 
@@ -664,36 +664,36 @@ function buildResourcesEntry(binPath: string): string {
 /** Imports the build's resources entry (argv[1]) and prints its parse directory. */
 const PRINT_PARSE_DIRECTORY = 'const m = await import(process.argv[1]); process.stdout.write(m.parseCacheDirectory());';
 
-/** Each build's parse directory, relative to the tmp it was asked under: asked once per build. */
-const parseDirectoryUnderTmp = new Map<string, string>();
+/** Each build's parse directory, relative to the cache root it was asked under: asked once per build. */
+const parseDirectoryUnderRoot = new Map<string, string>();
 
 /**
  * Where the build at `binPath` keeps its parse cache in a cell: its own
  * `parseCacheDirectory()`, asked under the first cell's environment and accepted
- * only under that cell's tmp. The build roots it at the tmp directory under a
- * name of its own, so a later cell's is that name under its own tmp, with no
- * spawn per cell.
+ * only under that cell's cache root (`VAT_CACHE_DIR`). The build roots it there
+ * under a name of its own, so a later cell's is that name under its own root,
+ * with no spawn per cell.
  *
  * @param binPath - The CLI build
  * @param env - The cell's environment
- * @param tmp - The cell's tmp
+ * @param cacheRoot - The cell's cache root
  * @returns The directory
  */
-async function parseDirectoryOf(binPath: string, env: Record<string, string>, tmp: string): Promise<string> {
-  let relative = parseDirectoryUnderTmp.get(binPath);
+async function parseDirectoryOf(binPath: string, env: Record<string, string>, cacheRoot: string): Promise<string> {
+  let relative = parseDirectoryUnderRoot.get(binPath);
   if (relative === undefined) {
     // `node --input-type=module -e <script> <entry>`: the entry is the script's argv[1].
     const entry = pathToFileURL(buildResourcesEntry(binPath)).href;
-    const result = await executeCli(entry, [], { cwd: tmp, env, nodeArgs: ['--input-type=module', '-e', PRINT_PARSE_DIRECTORY] });
+    const result = await executeCli(entry, [], { cwd: cacheRoot, env, nodeArgs: ['--input-type=module', '-e', PRINT_PARSE_DIRECTORY] });
     expect(result.status, result.stderr).toBe(0);
     const dir = toForwardSlash(result.stdout);
-    expect(isUnderRoot(tmp, dir), `the build's parse directory ${dir} is not under the cell's tmp ${tmp}`).not.toBe('outside');
-    relative = safePath.relative(tmp, dir);
-    // Lexically too, since later cells join this to their own tmp.
-    expect(relativeEscapesRoot(relative), `the build's parse directory ${dir} is not spelled under the cell's tmp ${tmp}`).toBe(false);
-    parseDirectoryUnderTmp.set(binPath, relative);
+    expect(isUnderRoot(cacheRoot, dir), `the build's parse directory ${dir} is not under the cell's cache root ${cacheRoot}`).not.toBe('outside');
+    relative = safePath.relative(cacheRoot, dir);
+    // Lexically too, since later cells join this to their own root.
+    expect(relativeEscapesRoot(relative), `the build's parse directory ${dir} is not spelled under the cell's cache root ${cacheRoot}`).toBe(false);
+    parseDirectoryUnderRoot.set(binPath, relative);
   }
-  return safePath.join(tmp, relative);
+  return safePath.join(cacheRoot, relative);
 }
 
 /** Every cell directory made since the last {@link removeCells}. */
@@ -722,7 +722,7 @@ async function freshCell(binPath: string): Promise<ArmDirs> {
   };
   mkdirSyncReal(dirs.store, { recursive: true });
   mkdirSyncReal(dirs.timing, { recursive: true });
-  const parse = await parseDirectoryOf(binPath, baseEnv({ ...dirs, parse: '' }), dirs.tmp);
+  const parse = await parseDirectoryOf(binPath, baseEnv({ ...dirs, parse: '' }), dirs.store);
   return { ...dirs, parse };
 }
 

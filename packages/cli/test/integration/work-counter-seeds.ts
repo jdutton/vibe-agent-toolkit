@@ -30,6 +30,7 @@ import {
   type Projection,
   readContentWithKey,
   ResourceRegistry,
+  VAT_CACHE_DIR_ENV,
 } from '@vibe-agent-toolkit/resources';
 import { readWorkCounters, safePath, WORK_COUNTER_NAMES, type WorkCounter } from '@vibe-agent-toolkit/utils';
 import { createTempDir, removeTempDir, scratchTmpdirEnv } from '@vibe-agent-toolkit/utils/testing';
@@ -38,7 +39,6 @@ import { afterEach, expect, vi } from 'vitest';
 import { checkGitInstalled } from '../../src/commands/doctor.js';
 import type { Logger } from '../../src/utils/logger.js';
 import { withQueriedProjection } from '../../src/utils/projection-query.js';
-import { PROJECTION_STORE_DIR_ENV } from '../../src/utils/projection-store.js';
 import { commitTestFixture } from '../test-helpers.js';
 
 /** The fact store's counters. */
@@ -435,7 +435,7 @@ function queriedTree(scope: SeedScope, files: Readonly<Record<string, string>>):
   const root = scope.dir();
   for (const [name, content] of Object.entries(files)) writeFileSync(safePath.join(root, name), content, 'utf8');
   commitTestFixture(root);
-  vi.stubEnv(PROJECTION_STORE_DIR_ENV, scope.dir());
+  vi.stubEnv(VAT_CACHE_DIR_ENV, scope.dir());
   return async () => {
     const lines: string[] = [];
     await withQueriedProjection(

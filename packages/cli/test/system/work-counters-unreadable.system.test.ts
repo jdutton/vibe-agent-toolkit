@@ -23,11 +23,11 @@
 import { spawnSync } from 'node:child_process';
 import { chmodSync, utimesSync } from 'node:fs';
 
+import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, WORK_COUNTERS_ENV, type WorkCounterDump } from '@vibe-agent-toolkit/utils';
 import { CANNOT_DENY_READS, gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { PROJECTION_STORE_DIR_ENV } from '../../src/utils/projection-store.js';
 import { commitTestFixture } from '../test-helpers.js';
 
 import { createSkillMarkdown, createSuiteContext, executeCli, fs, join, writeTestFile } from './test-common.js';
@@ -106,7 +106,7 @@ async function run(root: string, args: string[]) {
   const result = await executeCli(context.binPath, args, {
     cwd: root,
     env: {
-      [PROJECTION_STORE_DIR_ENV]: context.createTempDir(),
+      [VAT_CACHE_DIR_ENV]: context.createTempDir(),
       [WORK_COUNTERS_ENV]: workDir,
     },
   });

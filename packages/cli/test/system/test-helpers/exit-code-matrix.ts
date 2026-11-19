@@ -22,10 +22,11 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { chmodSync } from 'node:fs';
+import { chmodSync, rmSync } from 'node:fs';
 import { basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
 import {
   exitCodeForReport,
   type ExitDeterminingDocument,
@@ -245,12 +246,21 @@ const EMPTY_PLUGIN_CONFIG = `${SKILLS_CONFIG}claude:\n  marketplaces:\n    matri
  * three variables, because each platform reads a different one.
  */
 function scenarioEnv(home: string): Record<string, string> {
-  return { ...fakeHomeEnv(home), TMPDIR: tempDir, TEMP: tempDir, TMP: tempDir };
+  return { ...fakeHomeEnv(home), TMPDIR: tempDir, TEMP: tempDir, TMP: tempDir, [VAT_CACHE_DIR_ENV]: '' };
 }
 
-/** The `.vat-cache` a scenario's child clears — seeded by the `cache clear` scenarios. */
+/** The `.vat-cache` a scenario's child clears — seeded by the `cache clear` and `cache prune` scenarios. */
 function scenarioCacheDir(): string {
   return safePath.join(tempDir, '.vat-cache');
+}
+
+/**
+ * Empty the scenario cache, unlocking what an earlier scenario locked inside it: the cache is
+ * shared by the suite, and a prune that meets another scenario's unreadable entry refuses.
+ */
+function freshScenarioCache(): void {
+  for (const locked of lockedByScenarios) if (locked.startsWith(`${scenarioCacheDir()}/`)) unlock(locked);
+  rmSync(scenarioCacheDir(), { recursive: true, force: true });
 }
 
 /**
@@ -768,6 +778,29 @@ export const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> =
       },
     },
   ],
+  'cache prune': [
+    {
+      status: 'ok',
+      run: (): ScenarioRun => {
+        freshScenarioCache();
+        writeFileTree(scenarioCacheDir(), { '0.0.1-old/parse/ab/facts.json': '{}' });
+        return { args: ['cache', 'prune'], cwd: tempDir };
+      },
+    },
+    // A stale entry the measurement cannot list: the prune refuses before anything is moved (`data: null`).
+    {
+      status: 'error',
+      code: 'RUN_INCOMPLETE',
+      skipReason: () => (CANNOT_DENY_READS ? 'this platform or user cannot deny a directory its reads' : undefined),
+      run: (): ScenarioRun => {
+        writeFileTree(scenarioCacheDir(), { '0.0.1-stuck/inner.json': '{}' });
+        const stuck = safePath.join(scenarioCacheDir(), '0.0.1-stuck');
+        chmodSync(stuck, UNREADABLE);
+        lockedByScenarios.push(stuck);
+        return { args: ['cache', 'prune'], cwd: tempDir };
+      },
+    },
+  ],
   'rag index': [
     // A frontmatter-only document indexes as empty — clean, and no embedding model is loaded.
     { status: 'ok', run: () => ({ args: ['rag', 'index', '.', '--db', ragDb('index-ok')], cwd: project('rag-index-ok', '{}\n', { 'docs/a.md': '---\ntitle: A\n---\n' }) }) },
@@ -852,6 +885,9 @@ export const UNREACHABLE_STATUSES: Readonly<Record<string, Partial<Record<Report
   'cache clear': {
     findings: 'A clear reports no finding: it removed everything (ok), stopped part-way (RUN_INCOMPLETE), or could not read the cache (INPUT_UNREADABLE).',
   },
+  'cache prune': {
+    findings: 'A prune reports no finding: it removed every stale entry (ok), refused a cache root it cannot prove is VAT\'s (USAGE_INVALID), or could not list, measure or move an entry (RUN_INCOMPLETE).',
+  },
   'rag query': {
     findings: 'A query reports no finding: it searched the index (ok, a query matching nothing included) or could not (error).',
   },
@@ -909,7 +945,7 @@ export const MATRIX_SHARDS: Readonly<Record<string, readonly string[]>> = {
     'claude plugin list',
     'claude plugin uninstall',
   ],
-  machine: ['doctor', 'cache clear'],
+  machine: ['doctor', 'cache clear', 'cache prune'],
   orchestrators: ['validate', 'verify', 'build'],
   rag: ['rag index', 'rag query', 'rag stats', 'rag clear'],
   resources: ['resources check', 'resources query', 'resources scan', 'resources validate'],

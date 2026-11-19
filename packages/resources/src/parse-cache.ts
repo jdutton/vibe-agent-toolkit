@@ -85,21 +85,21 @@
  *
  * ## Layout
  *
- * `<normalizedTmpdir()>/.vat-cache/<namespace>/parse/<shard>/<key>.json`, where
+ * `<cache root>/<namespace>/parse/<shard>/<key>.json` (the root is `vatCacheRoot()`), where
  * `<namespace>` identifies the build of VAT (see `cache-namespace.ts`) and
  * `<shard>` is the last two characters of the key. Those are hex, so this is a clean
  * 256-way fan-out that needs no parsing of the key's internal structure. The
  * `parse/` level exists so a future `vat cache clear` — and the OS's own temp
  * purge — have a coarse handle on this tenant alone.
  *
- * `<tmpdir>/.vat-cache/` is **shared**: the external-link validation cache
- * lives at `<tmpdir>/.vat-cache/external-links.json`, and linkAuth's content
- * cache at `<tmpdir>/.vat-cache/auth-<user>/`. Those two stay OUTSIDE the
- * namespace deliberately — URL reachability and fetched link content are facts
- * about the world, not about this build, so re-fetching them on every VAT
- * upgrade would be waste. Only tenants whose contents VAT's own code determines
- * (this one, and a `projection-<shapeDigest>/` store when it lands) sit under
- * the namespace.
+ * The external-link validation cache (`external-links.json`) and linkAuth's
+ * content cache (`auth-<user>/`) stay OUTSIDE the namespace deliberately — URL
+ * reachability and fetched link content are facts about the world, not about
+ * this build, so re-fetching them on every VAT upgrade would be waste — and
+ * outside the cache root too, in `<tmpdir>/.vat-link-cache`, because the root is
+ * what CI persists and those facts belong to one machine and one user. Only
+ * tenants whose contents VAT's own code determines (this one, and the
+ * `projection-<shapeDigest>/` store) sit under the namespace.
  *
  * ## Failure model
  *
@@ -134,6 +134,7 @@ import {
 } from '@vibe-agent-toolkit/utils';
 
 import { parseCacheDirectory } from './cache-namespace.js';
+import { markVatCacheRoot } from './cache-root.js';
 import { CONTENT_KEY_PATTERN, type KeyedContent } from './content-key.js';
 import { decodeFrontmatterValue, encodeFrontmatterValue, FRONTMATTER_VALUE_MALFORMED } from './frontmatter-codec.js';
 import type { ParseResult } from './link-parser.js';
@@ -243,7 +244,7 @@ export interface ParseCacheOptions {
   env?: NodeJS.ProcessEnv;
 }
 
-export { parseCacheDirectory, vatCacheNamespace, vatCacheNamespaceRoot, vatCacheRoot } from './cache-namespace.js';
+export { isVatCacheRootEntryName, parseCacheDirectory, vatCacheNamespace, vatCacheNamespaceRoot } from './cache-namespace.js';
 
 
 /**
@@ -408,7 +409,18 @@ export class ParseCache {
     // gates a capability; the parser deliberately picks neither for you.
     this.enabled = options.enabled ?? parseEnvBoolean(env['VAT_CACHE']) ?? true;
     this.directory = options.cacheDir ?? parseCacheDirectory();
+    // Compared rather than "was cacheDir omitted": a parse worker is handed the
+    // parent's default directory explicitly, and its writes must tag the root
+    // just as the parent's would.
+    this.tagsCacheRoot = this.directory === parseCacheDirectory();
   }
+
+  /**
+   * Whether this cache writes under the persistable cache root, and so tags it
+   * (`markVatCacheRoot`) before its first write — what lets `vat cache clear`
+   * and `prune` recognise a `VAT_CACHE_DIR` of any name as VAT's.
+   */
+  private readonly tagsCacheRoot: boolean;
 
   /**
    * Hit/miss counts for this instance.
@@ -569,6 +581,8 @@ export class ParseCache {
    */
   private async write(key: string, result: ParseResult): Promise<boolean> {
     const shardDir = this.shardDir(key);
+    // Once per root per process (memoized there); best-effort by design.
+    if (this.tagsCacheRoot) markVatCacheRoot();
 
     if (!(await this.prepareShard(shardDir))) {
       this.writeFailureCount += 1;

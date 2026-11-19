@@ -22,7 +22,7 @@ import { Command } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { applyCacheControl, registerCacheControl } from '../../src/commands/cache/cache-control.js';
-import { clearCacheDirectory, vatCacheRoot } from '../../src/commands/cache/clear.js';
+import { clearCacheDirectory } from '../../src/commands/cache/clear.js';
 import { createCacheCommand } from '../../src/commands/cache/index.js';
 import { createResourcesCommand } from '../../src/commands/resources/index.js';
 import { renderCommandHelp } from '../help-text-helpers.js';
@@ -330,14 +330,6 @@ describe('clearCacheDirectory', () => {
     expect(data.existed).toBe(true);
     expect(data.entriesRemoved).toBe(0);
     expect(data.removed).toEqual([]);
-  });
-});
-
-describe('vatCacheRoot', () => {
-  it('is the .vat-cache directory that holds the parse tenant', () => {
-    // Asserted structurally rather than against a literal: the real value is
-    // realpath-normalized, and nothing here is allowed to delete it.
-    expect(vatCacheRoot().endsWith(`/${CACHE_DIR_NAME}`)).toBe(true);
   });
 });
 

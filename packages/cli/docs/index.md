@@ -394,8 +394,9 @@ vat rag search "agent deployment" --limit 5
 ## Environment Variables
 
 ### VAT_CACHE
-Set to `0` to disable VAT's on-disk caches for the run — the parse cache and the external-URL
-validation caches, which share `<tmpdir>/.vat-cache/`:
+Set to `0` to disable VAT's on-disk caches for the run — the parse cache and projection store
+(under the cache root, [`VAT_CACHE_DIR`](#vat_cache_dir)) and the external-URL validation caches
+(under `<tmpdir>/.vat-link-cache/`):
 
 ```bash
 VAT_CACHE=0 vat validate
@@ -408,6 +409,27 @@ in the parent would never reach the child.
 
 Caching is a pure optimisation: a run with it off produces identical results, only slower. Use
 `vat cache clear` to discard what is already stored.
+
+### VAT_CACHE_DIR
+The cache root: the directory holding the parse cache and the projection store, one subdirectory per
+VAT release. Defaults to `<tmpdir>/.vat-cache`. A relative path resolves against the current
+directory; an empty value means unset. This is the directory to save and restore between CI runs;
+the external-URL caches never live under it. Put it outside the checkout (in GitHub Actions,
+`$RUNNER_TEMP/vat-cache`, set from a step through `$GITHUB_ENV`): VAT warns when it is inside the
+scanned tree. Key the CI cache on the runner's OS, architecture, Node version, lockfile hash and
+commit, and restore only from keys that share all but the commit; never fall back across lockfile
+hashes. VAT writes a `CACHEDIR.TAG` into a root it creates or finds empty, and `vat cache clear` and
+`vat cache prune` refuse a root without one (other than the default), so point it at a directory
+used only by VAT. Another VAT build never reads the cache; within a build the parse cache and the
+store's blob tier are keyed by file content and hit on any machine with the same bytes, while a
+stored tree is keyed by the repository's identity and path and misses when the checkout moves. A
+projection store SQLite finds corrupt or not a database at open is discarded with a warning and
+rebuilt.
+
+```bash
+VAT_CACHE_DIR="$RUNNER_TEMP/vat-cache" vat validate
+VAT_CACHE_DIR="$RUNNER_TEMP/vat-cache" vat cache prune   # before saving: drop what this build does not use
+```
 
 ### VAT_DEBUG
 Enable detailed wrapper diagnostics showing context detection and resolution:
@@ -653,9 +675,41 @@ durationMs: 77
 
 ### `cache clear`
 
-The cache directory emptied. Produced by `vat cache clear`.
+The cache root and the link cache emptied. Produced by `vat cache clear`.
 
 ```yaml vat-report=cache clear
+status: ok
+examined: 2
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+data:
+  locations:
+    - cacheDir: /tmp/.vat-cache
+      existed: true
+      removed:
+        - x.y.z
+      entriesRemoved: 3
+      bytesRemoved: 262998
+    - cacheDir: /tmp/.vat-link-cache
+      existed: false
+      removed: []
+      entriesRemoved: 0
+      bytesRemoved: 0
+  entriesRemoved: 3
+  bytesRemoved: 262998
+```
+
+### `cache prune`
+
+An older release namespace and an older-shape projection store pruned from a CI cache root.
+Produced by `VAT_CACHE_DIR="$RUNNER_TEMP/vat-cache" vat cache prune`.
+
+```yaml vat-report=cache prune
 status: ok
 examined: 1
 findings: []
@@ -666,12 +720,16 @@ summary:
 gate:
   strict: false
 data:
-  cacheDir: /tmp/.vat-cache
-  existed: true
+  cacheDir: /home/runner/work/_temp/vat-cache
+  namespace: 0.2.1
+  keptStore: 0.2.1/projection-0123456789ab
+  dryRun: false
   removed:
-    - x.y.z
-  entriesRemoved: 3
-  bytesRemoved: 262998
+    - 0.2.0
+    - 0.2.1/projection-ba9876543210
+  inUse: []
+  entriesRemoved: 4
+  bytesRemoved: 1048576
 ```
 
 ### `corpus scan`

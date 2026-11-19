@@ -301,7 +301,7 @@ export interface FactStore {
  * @returns Twelve lowercase hex digits, stable across processes and rebuilds
  *
  * @example
- * safePath.join(vatCacheNamespaceRoot(), `projection-${projectionShapeDigest()}`)
+ * safePath.join(vatCacheNamespaceRoot(), projectionStoreDirectoryName())
  */
 export function projectionShapeDigest(): string {
   if (memoizedShapeDigest !== undefined) return memoizedShapeDigest;
@@ -318,6 +318,31 @@ export function projectionShapeDigest(): string {
   }
   memoizedShapeDigest = hash.digest('hex').slice(0, SHAPE_DIGEST_LENGTH);
   return memoizedShapeDigest;
+}
+
+/** The prefix every projection store directory's name carries, whatever its shape. */
+const PROJECTION_STORE_DIRECTORY_PREFIX = 'projection-';
+
+/**
+ * The directory name, inside a cache namespace, of THIS build's projection
+ * store: `projection-<shape digest>`. The one owner of the name: the store
+ * opens it, `vat cache prune` keeps it, and every other shape's goes.
+ *
+ * @returns A single path segment
+ */
+export function projectionStoreDirectoryName(): string {
+  return `${PROJECTION_STORE_DIRECTORY_PREFIX}${projectionShapeDigest()}`;
+}
+
+/**
+ * Whether `name`, an entry inside a cache namespace, is a projection store of
+ * any shape (this build's or another's).
+ *
+ * @param name - A single path segment
+ * @returns True for a projection store directory name
+ */
+export function isProjectionStoreDirectoryName(name: string): boolean {
+  return name.startsWith(PROJECTION_STORE_DIRECTORY_PREFIX);
 }
 
 /**

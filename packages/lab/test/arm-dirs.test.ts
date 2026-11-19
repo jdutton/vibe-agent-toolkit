@@ -65,7 +65,7 @@ describe('armDirectoryEnvironment', () => {
     const dirs = armDirectories({ root: out, build: 'cand', arm: 'C', state: 'cold' });
     expect(armDirectoryEnvironment(dirs, 'darwin')).toStrictEqual({
       set: {
-        VAT_PROJECTION_STORE_DIR: dirs.store,
+        VAT_CACHE_DIR: dirs.store,
         TMPDIR: dirs.tmp,
         TEMP: dirs.tmp,
         TMP: dirs.tmp,
@@ -110,6 +110,11 @@ describe('armOwnedEnvRefusal', () => {
       expect(armOwnedEnvRefusal({ set: {}, unset: [name] }), name).not.toBeNull();
     }
     expect(armOwnedEnvRefusal({ set: { LAB_UNOWNED: 'x' }, unset: ['XDG_CONFIG_HOME'] })).toBeNull();
+  });
+
+  it('refuses setting or unsetting VAT_PROJECTION_STORE_DIR, which a baseline VAT build still honours: where the store goes is the lab\'s', () => {
+    expect(armOwnedEnvRefusal({ set: { VAT_PROJECTION_STORE_DIR: '/elsewhere' }, unset: [] })).toMatch(/^VAT_PROJECTION_STORE_DIR .*older VAT.*neither set nor unset/u);
+    expect(armOwnedEnvRefusal({ set: {}, unset: ['VAT_PROJECTION_STORE_DIR'] })).toMatch(/^VAT_PROJECTION_STORE_DIR .*neither set nor unset/u);
   });
 
   it('refuses an owned name in any case on Windows, and only its exact spelling elsewhere', () => {

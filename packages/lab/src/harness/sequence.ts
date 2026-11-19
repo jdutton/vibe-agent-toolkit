@@ -15,9 +15,10 @@
  *   sequence, and that exit is the sequence's own. When it is the step's
  *   committed exit the sequence completed — CI runs nothing after it either —
  *   so the steps after it never run, and the report says so by their absence.
- * - **One rule per cache state.** Cold: the store is deleted and `tmp/` emptied
- *   before the sequence (asserted), and a populating first step must leave the
- *   store non-empty and at least one shard in the build's parse directory.
+ * - **One rule per cache state.** Cold: the arm's cache directory (`store/`) is
+ *   deleted and `tmp/` emptied before the sequence (asserted), and a populating
+ *   first step must leave a projection store in the build's cache namespace and
+ *   at least one shard in the build's parse directory.
  *   Warm: one priming run leaves both non-empty — checked however the priming
  *   sequence ended — and every step that reads a population must report
  *   `store` (see `provenance.ts`). A warm sequence that stops before such a
@@ -100,7 +101,7 @@ export interface SequenceContext {
   /** The environment for tool steps. */
   readonly toolEnv: ArmEnvironment;
   readonly timeoutMs: number;
-  /** The build's parse directory under the arm's `tmp`, resolved lazily and once. */
+  /** The build's parse directory under the arm's `store/` or `tmp/`, resolved lazily and once. */
   readonly parseDirectory: () => ParseDirectoryResolution;
   /** What a populating run of THIS arm writes, from its VAT environment. */
   readonly population: PopulationExpectation;
@@ -247,9 +248,14 @@ function exitFailure(ran: RunResult, commitment: ExitCommitment): string | null 
 }
 
 /**
- * Whether the arm's store and the build's parse directory hold what this arm's
- * environment says a populating run writes — and nothing where it says the
- * cache is off.
+ * Whether the build's cache namespace holds what this arm's environment says a
+ * populating run writes — and nothing where it says the cache is off.
+ *
+ * The store is judged in the BUILD's namespace (the parent of its parse
+ * directory), never by the arm's cache directory being non-empty: a current
+ * build keeps its parse cache in that directory too (`VAT_CACHE_DIR`), so a
+ * store-off arm leaves it non-empty, while a build that predates the variable
+ * keeps its whole namespace under the arm's `tmp/` and leaves it empty.
  *
  * @param context - The arm
  * @param when - What the message says this was checked after
@@ -258,26 +264,68 @@ function exitFailure(ran: RunResult, commitment: ExitCommitment): string | null 
 function populationViolation(context: SequenceContext, when: string): string | null {
   if (!context.steps.some((step) => step.populates)) return null;
   const { store, parseShard } = context.population;
-  const stored = entriesOf(context.dirs.store).length > 0;
-  if (store && !stored) return `${when} the store '${context.dirs.store}' is empty`;
-  if (!store && stored) return `${when} the store '${context.dirs.store}' was written though the arm turned the store off`;
-  if (!parseShard) return parseShardWrittenWhenOff(context, when);
+  if (!parseShard) return writtenWhenCachesOff(context, when);
   const parse = context.parseDirectory();
   if (!parse.ok) return `${when}: ${parse.reason}`;
+  const namespace = namespaceOf(parse.dir);
+  const stored = holdsAProjectionStore(namespace);
+  if (store && !stored) return `${when} the build's namespace '${namespace}' holds no projection store`;
+  if (!store && stored) return storeWrittenWhenOff(namespace, when);
   if (!holdsAFile(parse.dir)) return `${when} the build's parse directory '${parse.dir}' holds no shard`;
   return null;
 }
 
 /**
- * @param context - An arm whose environment turned the parse cache off
+ * @param context - An arm whose environment turned every cache off
  * @param when - What the message says this was checked after
- * @returns The violation when the build's parse directory holds a shard anyway;
- *   `null` when it holds none or the build cannot say where it is (nothing is claimed)
+ * @returns The violation when the build wrote a store or a parse shard anyway;
+ *   `null` when it wrote neither or the build cannot say where its cache is (nothing is claimed)
  */
-function parseShardWrittenWhenOff(context: SequenceContext, when: string): string | null {
+function writtenWhenCachesOff(context: SequenceContext, when: string): string | null {
   const parse = context.parseDirectory();
-  if (!parse.ok || !holdsAFile(parse.dir)) return null;
+  if (!parse.ok) return null;
+  const namespace = namespaceOf(parse.dir);
+  if (holdsAProjectionStore(namespace)) return storeWrittenWhenOff(namespace, when);
+  if (!holdsAFile(parse.dir)) return null;
   return `${when} the build's parse directory '${parse.dir}' was written though the arm turned the parse cache off`;
+}
+
+/**
+ * @param namespace - The build's cache namespace
+ * @param when - What the message says this was checked after
+ * @returns The violation for a store written though the arm turned it off
+ */
+function storeWrittenWhenOff(namespace: string, when: string): string {
+  return `${when} the build's namespace '${namespace}' holds a projection store though the arm turned the store off`;
+}
+
+/**
+ * @param parseDirectory - The build's parse directory, `<cache root>/<namespace>/parse`
+ * @returns Its namespace, where the build also keeps its `projection-<shape>/` store
+ */
+function namespaceOf(parseDirectory: string): string {
+  return safePath.join(parseDirectory, '..');
+}
+
+/**
+ * The prefix every build's projection store directory carries
+ * (`projection-<shape>`). The lab's own reading of the on-disk layout, never
+ * an import of the lab's `@vibe-agent-toolkit/resources`: the namespace judged
+ * here is ANOTHER build's, and the lab asks a build only what it can answer
+ * (its parse directory — see `parse-cache.ts`). Every build that has a store
+ * names it this way, older ones included, and none exports a name builder the
+ * lab could ask for.
+ */
+const STORE_DIRECTORY_PREFIX = 'projection-';
+
+/**
+ * @param namespace - A build's cache namespace
+ * @returns True when a `projection-*` directory in it holds a file
+ */
+function holdsAProjectionStore(namespace: string): boolean {
+  return entriesOf(namespace).some(
+    (entry) => entry.isDirectory() && entry.name.startsWith(STORE_DIRECTORY_PREFIX) && holdsAFile(safePath.join(namespace, entry.name)),
+  );
 }
 
 /**

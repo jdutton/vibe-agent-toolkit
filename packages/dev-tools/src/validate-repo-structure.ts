@@ -1145,6 +1145,7 @@ const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   'packages/cli/src/commands/resources/query.ts',
   // Report-envelope verbs: `summary` is derived from their findings by `buildReport`.
   'packages/cli/src/commands/cache/clear.ts',
+  'packages/cli/src/commands/cache/prune.ts',
   'packages/cli/src/commands/corpus/scan.ts',
   'packages/cli/src/commands/doctor.ts',
   'packages/cli/src/commands/inventory.ts',

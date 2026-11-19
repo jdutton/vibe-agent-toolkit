@@ -312,8 +312,9 @@ future per-arm divergence is one function, not a second matrix.
 **Per-arm environment.** Each arm runs under a cleared environment (no inherited `VAT_*`, temp, XDG,
 Claude or global git config) plus the caller's `--env`/`--unset`, and gets lab-owned directories
 under `<arms root>/<alias>/` — the invocation's `--arms-dir`, else a fresh run directory under the OS
-temp directory: `VAT_PROJECTION_STORE_DIR=<arms root>/<alias>/store` (a private projection store, so
-the second arm never reads what the first wrote), `TMPDIR`/`TEMP`/`TMP` at its `tmp/`, and `HOME`
+temp directory: `VAT_CACHE_DIR=<arms root>/<alias>/store` (a private VAT cache, projection store and
+parse cache, so the second arm never reads what the first wrote), `TMPDIR`/`TEMP`/`TMP` at its `tmp/`
+(where a build that predates `VAT_CACHE_DIR` keeps its cache), and `HOME`
 and `CLAUDE_CONFIG_DIR` at its empty `home/`. An arm naming any of them is refused. Only the
 caller's part is recorded in the body (`arm`), because those paths differ between any two captures
 and would make every pair of arms distinguishable. **Nothing the lab writes lands inside a
