@@ -59,6 +59,23 @@ const yamlList = (items: readonly string[], indent: string): string =>
   items.map((item) => `${indent}- ${JSON.stringify(item)}`).join('\n');
 
 /**
+ * The packages whose source decides the facts VAT caches: everything the CLI runs.
+ * VAT's own CI runs VAT from source, so the lockfile pins none of this code and the
+ * cache key carries a hash of it (see the "Restore VAT cache" step's comment).
+ */
+const VAT_SOURCE_PACKAGES = ['utils', 'schema', 'resources', 'projection-sqlite', 'discovery', 'agent-skills', 'claude-marketplace', 'cli'];
+const VAT_SOURCE_GLOBS = VAT_SOURCE_PACKAGES.map((pkg) => `'packages/${pkg}/src/**'`).join(', ');
+
+/**
+ * Everything in the VAT cache key but the commit, spelled once: the key appends the
+ * commit and the restore prefix is this alone, so the two cannot disagree.
+ */
+const VAT_CACHE_KEY_PREFIX =
+  'vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup.outputs.node-version-installed }}' +
+  "-${{ hashFiles('bun.lock') }}" +
+  `-\${{ hashFiles(${VAT_SOURCE_GLOBS}) }}-`;
+
+/**
  * The workflow text for a matrix.
  *
  * Every step is spelled here, comments included, so the generated file reads
@@ -125,9 +142,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: \${{ env.VAT_CACHE_DIR }}
-          key: vat-\${{ runner.os }}-\${{ runner.arch }}-\${{ steps.setup.outputs.node-version-installed }}-\${{ hashFiles('bun.lock') }}-\${{ hashFiles('packages/utils/src/**', 'packages/schema/src/**', 'packages/resources/src/**', 'packages/projection-sqlite/src/**', 'packages/discovery/src/**', 'packages/agent-skills/src/**', 'packages/claude-marketplace/src/**', 'packages/cli/src/**') }}-\${{ github.sha }}
+          key: ${VAT_CACHE_KEY_PREFIX}\${{ github.sha }}
           restore-keys: |
-            vat-\${{ runner.os }}-\${{ runner.arch }}-\${{ steps.setup.outputs.node-version-installed }}-\${{ hashFiles('bun.lock') }}-\${{ hashFiles('packages/utils/src/**', 'packages/schema/src/**', 'packages/resources/src/**', 'packages/projection-sqlite/src/**', 'packages/discovery/src/**', 'packages/agent-skills/src/**', 'packages/claude-marketplace/src/**', 'packages/cli/src/**') }}-
+            ${VAT_CACHE_KEY_PREFIX}
       # The adopter-name gate reads its token list from outside the repo, because a
       # contraband list committed to a public repo is itself the leak. Materialize it
       # from a repo secret into the gitignored default path the gate already looks for.
