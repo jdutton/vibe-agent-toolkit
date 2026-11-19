@@ -39,6 +39,12 @@ interface StoreRecord {
 const stores: StoreRecord[] = [];
 
 /**
+ * What each next `close()` rejects with after closing, consumed in order; empty
+ * means close cleanly. Scripts a checkpoint the real backend could not finish.
+ */
+const closeFailures: unknown[] = [];
+
+/**
  * 🪤 A closed fake REJECTS every later call rather than quietly succeeding.
  * That mirrors the real contract ("a store that has been closed rejects further
  * calls rather than silently reopening — a reopen would hide a lifetime bug in
@@ -67,7 +73,8 @@ function makeStore(): unknown {
     close: () => {
       record.closeCount += 1;
       record.closed = true;
-      return Promise.resolve();
+      const failure = closeFailures.shift();
+      return failure === undefined ? Promise.resolve() : Promise.reject(failure as Error);
     },
   };
 }
@@ -99,6 +106,7 @@ export const backend = {
   stores,
   openCalls,
   openFailures,
+  closeFailures,
   discarded,
   /** The module namespace a `vi.mock('@vibe-agent-toolkit/projection-sqlite', …)` factory returns. */
   moduleExports: (): Record<string, unknown> => ({
@@ -167,6 +175,7 @@ export function isolateProjectionStoreTests(options: {
     openCalls.count = 0;
     openCalls.options.length = 0;
     openFailures.length = 0;
+    closeFailures.length = 0;
     discarded.length = 0;
     // The process's own "once" ledger: a notice printed outside every scope by an earlier test
     // would otherwise silence the same notice in every later scope of this worker.

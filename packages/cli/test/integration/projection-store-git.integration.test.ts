@@ -242,6 +242,33 @@ describe('withPopulationCache', () => {
     expect(lastStore().closeCount()).toBe(1);
   });
 
+  it('rethrows the work\'s own error when the close fails too, and names the close failure on stderr', async () => {
+    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
+    const failure = new Error('the work blew up');
+    backend.closeFailures.push(Object.assign(new Error('disk I/O error'), { code: 'ERR_SQLITE_ERROR', errcode: 10 }));
+
+    const capture = captureStderr();
+    try {
+      await expect(withPopulationCache({ root: repoRoot }, () => Promise.reject(failure))).rejects.toBe(failure);
+      expect(capture.written.join('')).toMatch(/did not close cleanly.*disk I\/O error/u);
+    } finally {
+      capture.restore();
+    }
+  });
+
+  it('keeps a finished run\'s result when only the cache close fails, and warns', async () => {
+    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
+    backend.closeFailures.push(Object.assign(new Error('database or disk is full'), { code: 'ERR_SQLITE_ERROR', errcode: 13 }));
+
+    const capture = captureStderr();
+    try {
+      await expect(withPopulationCache({ root: repoRoot }, () => Promise.resolve(42))).resolves.toBe(42);
+      expect(capture.written.join('')).toMatch(/did not close cleanly.*database or disk is full/u);
+    } finally {
+      capture.restore();
+    }
+  });
+
   it('keeps the store open for a population source built in an earlier frame', async () => {
     // The inventory extractor MEMOIZES its population provider: the frame that
     // builds the source returns long before anything reads through it. A scope

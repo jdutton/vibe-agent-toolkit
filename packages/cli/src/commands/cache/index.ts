@@ -47,7 +47,7 @@ Description:
   one whole scanned tree per entry, on by default and by far the larger of
   the two. This is the directory to save and restore between CI runs: key
   the CI cache on the runner's OS, architecture, Node version and lockfile
-  hash, outside the checkout (in GitHub Actions, \${{ runner.temp }}).
+  hash, outside the checkout (in GitHub Actions, $RUNNER_TEMP/vat-cache).
   Another VAT build never reads it. Within a build, the parse cache and the
   store's shared blob tier are keyed by file content, so they hit on any
   machine with the same bytes; a stored tree is keyed by the repository's
@@ -153,11 +153,14 @@ Description:
   the cache root (VAT_CACHE_DIR, else <tmpdir>/.vat-cache) it removes every
   namespace except this build's (older AND newer releases; under the shared
   default root, other worktrees' and other installed VATs' namespaces too, so
-  they run cold next time), the link-cache files older releases kept at the
-  root, and inside this build's namespace every projection-<shape> store
-  except the current shape's. Only names VAT recognises as its own are
-  removed: anything else in the directory, and the root's CACHEDIR.TAG, stay.
-  The link cache is not touched.
+  they run cold next time), what older releases kept at the root (the
+  link-cache files and the root-level parse/ directory), and inside this
+  build's namespace every projection-<shape> store except the current
+  shape's. Only names VAT recognises as its own are removed: anything else in
+  the directory, and the root's CACHEDIR.TAG, stay. An entry holding a
+  projection store a running VAT has open (another worktree's or release's)
+  is left and listed under inUse; a later prune removes it. The link cache is
+  not touched.
 
   Run it after restoring a CI cache and before saving it, so the saved cache
   stops growing with every release.
@@ -170,6 +173,7 @@ Output:
   - namespace / keptStore: what was kept
   - dryRun: true when nothing was deleted
   - removed: entries removed (or that would be), relative to the root
+  - inUse: entries left because a running VAT has a store in them open
   - entriesRemoved / bytesRemoved: file count and total size
 
 Exit Codes:

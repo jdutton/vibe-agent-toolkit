@@ -9,12 +9,14 @@
 import { existsSync, promises as fs } from 'node:fs';
 import { dirname } from 'node:path';
 
+import { openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import { markVatCacheRoot, VAT_CACHE_DIR_ENV, VAT_CACHE_TAG_FILE, vatCacheRoot } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { recognisedCacheRoot } from '../../src/commands/cache/cache-measure.js';
 import { pruneCacheRoot } from '../../src/commands/cache/prune.js';
+import { storeInUse } from '../../src/utils/projection-store.js';
 import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
 /** The namespace and store directory a prune keeps, named once. */
@@ -56,7 +58,7 @@ describe('pruneCacheRoot', () => {
   it('removes other namespaces, other-shape stores and stray root entries, and keeps the rest', async () => {
     const root = await populatedRoot(scratch());
 
-    const { data, leftover } = await pruneCacheRoot({ root, namespace: CURRENT, keptStore: KEPT_STORE, dryRun: false });
+    const { data, leftover } = await pruneCacheRoot({ root, namespace: CURRENT, keptStore: KEPT_STORE, dryRun: false, storeInUse });
 
     expect(leftover).toBeUndefined();
     expect(data).toEqual({
@@ -65,6 +67,7 @@ describe('pruneCacheRoot', () => {
       keptStore: `${CURRENT}/${KEPT_STORE}`,
       dryRun: false,
       removed: ['0.1.9', `${CURRENT}/${OLD_STORE}`, 'external-links.json'],
+      inUse: [],
       entriesRemoved: 4,
       bytesRemoved: 'old-db'.length + '{"b":22}'.length + 'xx'.length + '{}'.length,
     });
@@ -78,7 +81,7 @@ describe('pruneCacheRoot', () => {
     const foreign = ['notes.txt', 'my-project/src/index.ts', 'node_modules/x/package.json', '.git/HEAD', `${CURRENT}/scratch-notes.md`];
     await Promise.all(foreign.map(async (relative) => put(root, relative, 'theirs')));
 
-    const { data } = await pruneCacheRoot({ root, namespace: CURRENT, keptStore: KEPT_STORE, dryRun: false });
+    const { data } = await pruneCacheRoot({ root, namespace: CURRENT, keptStore: KEPT_STORE, dryRun: false, storeInUse });
 
     expect(data.removed).toEqual(['0.1.9', `${CURRENT}/${OLD_STORE}`, 'external-links.json']);
     for (const relative of foreign) {
@@ -86,10 +89,34 @@ describe('pruneCacheRoot', () => {
     }
   });
 
+  it('leaves a store a running VAT holds open, and the namespace around it, and says so', async () => {
+    const root = await populatedRoot(scratch());
+    // Real stores, held open as another worktree's or release's VAT would hold them mid-run.
+    await fs.rm(safePath.join(root, '0.1.9', 'projection-x', 'projection.db'));
+    await fs.rm(safePath.join(root, CURRENT, OLD_STORE, 'projection.db'));
+    const heldOld = openSqliteFactStore({ directory: safePath.join(root, '0.1.9', 'projection-x') });
+    const heldShape = openSqliteFactStore({ directory: safePath.join(root, CURRENT, OLD_STORE) });
+    try {
+      const { data } = await pruneCacheRoot({ root, namespace: CURRENT, keptStore: KEPT_STORE, dryRun: false, storeInUse });
+
+      expect(data.removed).toEqual(['external-links.json']);
+      expect(data.inUse).toEqual(['0.1.9', `${CURRENT}/${OLD_STORE}`]);
+      expect(existsSync(safePath.join(root, '0.1.9', 'parse'))).toBe(true);
+      expect(existsSync(safePath.join(root, CURRENT, OLD_STORE))).toBe(true);
+    } finally {
+      await heldOld.close();
+      await heldShape.close();
+    }
+
+    // Closed, they go on the next prune.
+    const { data } = await pruneCacheRoot({ root, namespace: CURRENT, keptStore: KEPT_STORE, dryRun: false, storeInUse });
+    expect(data).toMatchObject({ removed: ['0.1.9', `${CURRENT}/${OLD_STORE}`], inUse: [] });
+  });
+
   it('under --dry-run reports the same removal and deletes nothing', async () => {
     const root = await populatedRoot(scratch());
 
-    const { data } = await pruneCacheRoot({ root, namespace: CURRENT, keptStore: KEPT_STORE, dryRun: true });
+    const { data } = await pruneCacheRoot({ root, namespace: CURRENT, keptStore: KEPT_STORE, dryRun: true, storeInUse });
 
     expect(data).toMatchObject({ dryRun: true, removed: ['0.1.9', `${CURRENT}/${OLD_STORE}`, 'external-links.json'], entriesRemoved: 4 });
     expect(existsSync(safePath.join(root, '0.1.9'))).toBe(true);
@@ -98,11 +125,11 @@ describe('pruneCacheRoot', () => {
 
   it('is a prune of nothing when the root is absent, or holds only what is current', async () => {
     const missing = safePath.join(scratch(), 'never-created');
-    expect((await pruneCacheRoot({ root: missing, namespace: CURRENT, keptStore: KEPT_STORE, dryRun: false })).data).toMatchObject({ removed: [], entriesRemoved: 0, bytesRemoved: 0 });
+    expect((await pruneCacheRoot({ root: missing, namespace: CURRENT, keptStore: KEPT_STORE, dryRun: false, storeInUse })).data).toMatchObject({ removed: [], entriesRemoved: 0, bytesRemoved: 0 });
 
     const current = safePath.join(scratch(), 'current-only');
     await put(current, `${CURRENT}/${KEPT_STORE}/projection.db`, 'kept');
-    expect((await pruneCacheRoot({ root: current, namespace: CURRENT, keptStore: KEPT_STORE, dryRun: false })).data.removed).toEqual([]);
+    expect((await pruneCacheRoot({ root: current, namespace: CURRENT, keptStore: KEPT_STORE, dryRun: false, storeInUse })).data.removed).toEqual([]);
   });
 });
 

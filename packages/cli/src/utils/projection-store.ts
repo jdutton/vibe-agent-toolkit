@@ -276,9 +276,11 @@ export async function openPopulationCache(options: {
 
 /**
  * Tell the operator, once, when the cache root sits inside the tree being
- * scanned — a relative `VAT_CACHE_DIR` in a CI workspace, typically. The cache
+ * scanned — a relative `VAT_CACHE_DIR` in a CI workspace, typically, or the
+ * default `<tmpdir>/.vat-cache` when the scanned tree contains the temp
+ * directory. The message names whichever chose the root. The cache
  * then lives among the files VAT scans and a CI cache save carries it beside
- * the checkout; `${{ runner.temp }}/vat-cache` is the place for it. A notice,
+ * the checkout; `$RUNNER_TEMP/vat-cache` is the place for it in GitHub Actions. A notice,
  * not a refusal: the run is still correct.
  *
  * @param root - The absolute corpus root
@@ -287,10 +289,13 @@ function noticeCacheRootInsideTree(root: string): void {
   const cacheRoot = vatCacheRoot();
   const tree = `${toForwardSlash(safePath.resolve(root)).replace(/\/$/u, '')}/`;
   if (!`${toForwardSlash(cacheRoot)}/`.startsWith(tree)) return;
+  const configured = process.env[VAT_CACHE_DIR_ENV];
+  const chosenBy = configured === undefined || configured === ''
+    ? `The default cache root (${cacheRoot}, under the temp directory) is inside the scanned tree ${root}. Set ${VAT_CACHE_DIR_ENV} to a directory`
+    : `${VAT_CACHE_DIR_ENV} (${cacheRoot}) is inside the scanned tree ${root}. Point it at a directory`;
   noticeToOperator(
     'store',
-    `${VAT_CACHE_DIR_ENV} (${cacheRoot}) is inside the scanned tree ${root}. Put it outside the checkout`
-    + ' (in GitHub Actions, ${{ runner.temp }}/vat-cache) so the cache is neither scanned nor saved with the tree.',
+    `${chosenBy} outside the checkout (in GitHub Actions, $RUNNER_TEMP/vat-cache) so the cache is neither scanned nor saved with the tree.`,
     cacheRoot,
   );
 }
@@ -413,6 +418,17 @@ export async function hydrateRunDatabase(
  */
 export async function openCompileProbe(): Promise<ProjectionSqlite.ProjectionCompileProbe> {
   return (await loadBackend()).openProjectionCompileProbe();
+}
+
+/**
+ * Whether a running VAT has the projection store in `directory` open — asked of
+ * the backend, which owns the database file's name and its locking.
+ *
+ * @param directory - A store directory
+ * @returns True when another connection holds its database open
+ */
+export async function storeInUse(directory: string): Promise<boolean> {
+  return (await loadBackend()).isStoreInUse(directory);
 }
 
 /**
@@ -564,6 +580,14 @@ function joinableCache(
 /**
  * Open a store for this scope, run the work inside it, and close it.
  *
+ * A close that fails never decides the outcome. When the work threw, its error
+ * is the one rethrown and the close failure is told to the operator — a
+ * `finally` that let the close throw would replace the real error. When the
+ * work finished, the store is a cache: its result stands, and a close the
+ * store or the OS refused (a checkpoint hitting a full disk, say) is a warning,
+ * not a failed verb. A close that throws something no OS or SQLite raised is
+ * a defect and still surfaces after a successful run.
+ *
  * @param options - Where the corpus is
  * @param options.root - The absolute corpus root
  * @param work - Given the cache, or `undefined` when there is none to give
@@ -574,13 +598,39 @@ async function runOwnedScope<T>(
   work: (cache: PopulationCache | undefined) => Promise<T>,
 ): Promise<T> {
   const opened = await openPopulationCache(options);
+  let result: T;
   try {
     // Registered even when nothing was opened, so a nested scope can tell "no
     // store in this process" from "no scope above me" — and so the nested scope
     // stays inside THIS scope's git-snapshot memo either way.
-    return await populationScope.run({ opened }, () => work(opened?.cache));
-  } finally {
+    result = await populationScope.run({ opened }, () => work(opened?.cache));
+  } catch (error) {
+    await closeTellingOperator(opened, { workFailed: true });
+    throw error;
+  }
+  await closeTellingOperator(opened, { workFailed: false });
+  return result;
+}
+
+/**
+ * Close a scope's store; a failure is told on stderr instead of thrown — see
+ * {@link runOwnedScope} for when, and for the one case that still throws.
+ *
+ * @param opened - The scope's store, if it opened one
+ * @param outcome - Whether the scope's work had already failed
+ */
+async function closeTellingOperator(opened: OpenedPopulationCache | undefined, outcome: { readonly workFailed: boolean }): Promise<void> {
+  try {
     await opened?.close();
+  } catch (error) {
+    const raisedBySystem = error instanceof Error && typeof (error as { code?: unknown }).code === 'string';
+    if (!raisedBySystem && !outcome.workFailed) throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    noticeToOperator(
+      'store',
+      `The projection store did not close cleanly (${reason}). `
+      + (outcome.workFailed ? 'Reporting the run\'s own failure instead.' : 'The run\'s result stands; the next run reads the cache as it was left.'),
+    );
   }
 }
 

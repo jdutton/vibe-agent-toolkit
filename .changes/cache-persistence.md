@@ -23,32 +23,35 @@
 - **Library: `openSqliteFactStore()` (`@vibe-agent-toolkit/projection-sqlite`) throws
   `StoreUnopenableError` (code `PROJECTION_STORE_UNOPENABLE`) for an existing store file SQLite
   reports at open as corrupt or not a database**, instead of SQLite's raw error. `close()` now
-  surfaces a checkpoint failure other than contention.
+  surfaces a checkpoint failure other than contention. The CLI warns on such a failure and keeps
+  the run's result.
 
 ### Added
 
 - **`vat cache prune` removes every cache entry VAT wrote that this build does not use**: every
   namespace but this build's (older and newer releases, and under the shared default root other
-  worktrees' and other VATs' namespaces), the link-cache files older releases kept at the root, and
-  projection stores of another shape. It removes only names VAT recognises as its own, never
-  anything else in the directory. It reports what it removed (entries, bytes), supports
+  worktrees' and other VATs' namespaces), what older releases kept at the root (the link-cache
+  files and the root-level `parse/` directory), and projection stores of another shape. It removes
+  only names VAT recognises as its own, never anything else in the directory, and leaves (listed
+  under `inUse`) any entry holding a projection store a running VAT has open. It reports what it removed (entries, bytes), supports
   `--dry-run`, and stands behind the same guard as `vat cache clear`. Run it before saving a CI
   cache so the cache stops growing with every release.
-- **CI can persist VAT's caches.** Save and restore `VAT_CACHE_DIR` (outside the checkout, e.g.
-  `${{ runner.temp }}/vat-cache`) keyed on OS, architecture, Node version, lockfile hash and
-  commit, restoring only from the same toolchain and lockfile. The CLI docs and the
-  `vat-adoption-and-configuration` skill carry a GitHub Actions example. A run warns when
-  `VAT_CACHE_DIR` is inside the scanned tree.
+- **CI can persist VAT's caches.** Save and restore `VAT_CACHE_DIR` outside the checkout (in
+  GitHub Actions, `$RUNNER_TEMP/vat-cache`, set from a step through `$GITHUB_ENV`), keyed on OS,
+  architecture, Node version, lockfile hash and commit, and restore only from the same toolchain
+  and lockfile. The CLI docs and the `vat-adoption-and-configuration` skill carry a GitHub Actions
+  example. A run warns when the cache root is inside the scanned tree.
 - **Library exports.** `@vibe-agent-toolkit/projection-sqlite`: `discardStoreDatabase`,
-  `isStoreUnopenableError` and the `StoreUnopenableError` type. `@vibe-agent-toolkit/resources`:
+  `isStoreInUse`, `isStoreUnopenableError` and the `StoreUnopenableError` type. `@vibe-agent-toolkit/resources`:
   `vatLinkCacheDirectory`, `recogniseVatCacheRoot`, `markVatCacheRoot`, `isVatCacheRootEntryName`,
   `projectionStoreDirectoryName`, `isProjectionStoreDirectoryName`.
 
 ### Fixed
 
-- **A projection store SQLite cannot open at open because the file is corrupt, truncated or not a
-  database no longer fails the run.** VAT warns once on stderr, naming the file and SQLite's error, discards it, and continues on a fresh store,
-  or with none if that also fails. A store that fails mid-run, or one SQLite cannot open for a
-  machine reason (a permission, a path, a full disk), still fails the run.
+- **A corrupt, truncated or not-a-database projection store no longer fails the run.** When SQLite
+  rejects the file at open, VAT warns once on stderr, naming the file and SQLite's error, discards
+  it, and continues on a fresh store, or with none if that also fails. A store that fails mid-run,
+  or one SQLite cannot open for a machine reason (a permission, a path, a full disk), still fails
+  the run.
 - **Closing the projection store checkpoints its write-ahead log**, so a cache saved right after a
   run is a self-contained `projection.db`.

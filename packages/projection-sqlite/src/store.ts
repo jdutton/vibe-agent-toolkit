@@ -510,6 +510,47 @@ export function discardStoreDatabase(databasePath: string): void {
 }
 
 /**
+ * Whether another connection — in this process or any other — has the store
+ * in `directory` open, so deleting it would pull it from under a
+ * running VAT (another worktree's, or another release's, under a shared cache
+ * root).
+ *
+ * Asks SQLite rather than guessing from `-wal`/`-shm` files, which outlive a
+ * crashed process: a connection in exclusive locking mode cannot begin an
+ * exclusive transaction while any other connection, reader or writer, holds
+ * the WAL database open. The busy timeout is zero, so a held store answers at
+ * once. Only contention (`SQLITE_BUSY`/`SQLITE_LOCKED`) means in use; a file
+ * SQLite cannot read as a database is held by nothing. An absent file is never
+ * created by asking.
+ *
+ * 🪤 A point-in-time answer: a process can open the store right after it says
+ * "free". A caller that deletes on that answer narrows the window to the
+ * delete itself; it cannot close it.
+ *
+ * @param directory - The store's directory, as {@link defaultStoreDirectory} names one
+ * @returns True when another connection holds its database open
+ */
+export function isStoreInUse(directory: string): boolean {
+  const databasePath = safePath.join(directory, DATABASE_FILENAME);
+  if (!pathPresent(databasePath, 'entry', everywhere('destination'), 'probe')) return false;
+  let probe: DatabaseSync | undefined;
+  try {
+    probe = new DatabaseSync(databasePath);
+    probe.exec('PRAGMA busy_timeout = 0');
+    probe.exec('PRAGMA locking_mode = EXCLUSIVE');
+    probe.exec('BEGIN EXCLUSIVE');
+    probe.exec('ROLLBACK');
+    return false;
+  } catch (error) {
+    const primary = sqlitePrimaryResultCode(error);
+    if (primary === undefined) throw error;
+    return CONTENDED_RESULT_CODES.has(primary);
+  } finally {
+    probe?.close();
+  }
+}
+
+/**
  * File every content key a pre-manifest store already holds, as the oldest
  * there is.
  *

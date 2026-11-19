@@ -28,6 +28,7 @@ const BARREL_EXPORTS = [
   'encodeValue',
   'hydrateRunDatabase',
   'insertSql',
+  'isStoreInUse',
   'isStoreUnopenableError',
   'openProjectionCompileProbe',
   'openSqliteFactStore',

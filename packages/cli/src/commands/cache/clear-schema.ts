@@ -80,6 +80,12 @@ const CachePruneDataSchema = z.object({
   dryRun: z.boolean(),
   /** Entries removed (or that would be), relative to the root with forward slashes, sorted. */
   removed: z.array(z.string()),
+  /**
+   * Entries prune would have removed but left, because a running VAT has a
+   * projection store in them open (another worktree's or release's, under a
+   * shared root). Relative to the root, sorted. A later prune removes them.
+   */
+  inUse: z.array(z.string()),
   /** Files (and other non-directory entries) removed. */
   entriesRemoved: byteCount,
   /** Bytes removed. */

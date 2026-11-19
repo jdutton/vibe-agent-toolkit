@@ -26,6 +26,7 @@ import { applyTreePlanOrLeftover, direntKind, planTreeChanges, safePath } from '
 import { refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithLeftoverRefusal, endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { createLogger } from '../../utils/logger.js';
+import { storeInUse } from '../../utils/projection-store.js';
 
 import { addUsage, listedOrVanished, measureRoot, recognisedCacheRoot, sorted, type TreeUsage } from './cache-measure.js';
 import type { CachePruneData } from './clear-schema.js';
@@ -51,6 +52,8 @@ interface PruneTarget {
   readonly keptStore: string;
   /** Measure and report, delete nothing. */
   readonly dryRun: boolean;
+  /** Whether a running VAT has the projection store in this directory open; an entry holding one is left. */
+  readonly storeInUse: (storeDirectory: string) => Promise<boolean>;
 }
 
 /** What a prune finished, and — when the OS would not delete what it moved aside — that failure. */
@@ -59,20 +62,65 @@ interface CachePruneOutcome {
   readonly leftover?: unknown;
 }
 
+/** One entry a prune would remove, and the projection stores removing it would take with it. */
+interface PruneCandidate {
+  /** Relative to the root, forward-slashed. */
+  readonly relative: string;
+  /** Absolute store directories inside (or at) the entry. */
+  readonly stores: readonly string[];
+}
+
 /**
  * The entries a prune of `target` removes, relative to the root: every VAT
  * root entry but the kept namespace, and every other-shape store inside it.
  * Only names VAT recognises as its own are ever candidates.
  */
-async function pruneCandidates(target: PruneTarget): Promise<string[]> {
+async function pruneCandidates(target: PruneTarget): Promise<PruneCandidate[]> {
   const top = await listedOrVanished(target.root);
   if (top === null) return [];
-  const candidates = top.filter((entry) => entry.name !== target.namespace && isVatCacheRootEntryName(entry.name)).map((entry) => entry.name);
+  const atRoot = await Promise.all(
+    top
+      .filter((entry) => entry.name !== target.namespace && isVatCacheRootEntryName(entry.name))
+      .map(async (entry) => ({
+        relative: entry.name,
+        stores: direntKind(entry) === 'directory' ? await storesInside(safePath.join(target.root, entry.name)) : [],
+      })),
+  );
   const namespaceEntry = top.find((entry) => entry.name === target.namespace);
-  if (namespaceEntry === undefined || direntKind(namespaceEntry) !== 'directory') return candidates;
+  if (namespaceEntry === undefined || direntKind(namespaceEntry) !== 'directory') return atRoot;
   const inside = (await listedOrVanished(safePath.join(target.root, target.namespace))) ?? [];
   const staleStores = inside.filter((entry) => isProjectionStoreDirectoryName(entry.name) && entry.name !== target.keptStore);
-  return [...candidates, ...staleStores.map((entry) => `${target.namespace}/${entry.name}`)];
+  return [
+    ...atRoot,
+    ...staleStores.map((entry) => ({ relative: `${target.namespace}/${entry.name}`, stores: [safePath.join(target.root, target.namespace, entry.name)] })),
+  ];
+}
+
+/**
+ * @param namespace - A namespace directory under the root
+ * @returns The projection store directories directly inside it
+ */
+async function storesInside(namespace: string): Promise<string[]> {
+  const entries = (await listedOrVanished(namespace)) ?? [];
+  return entries.filter((entry) => direntKind(entry) === 'directory' && isProjectionStoreDirectoryName(entry.name)).map((entry) => safePath.join(namespace, entry.name));
+}
+
+/**
+ * Split candidates into those prune may remove and those holding a store a
+ * running VAT has open. Asked just before the plan, so the window in which a
+ * process can open a store after the answer is the delete itself.
+ */
+async function withoutStoresInUse(target: PruneTarget, candidates: readonly PruneCandidate[]): Promise<{ removable: string[]; inUse: string[] }> {
+  const verdicts = await Promise.all(
+    candidates.map(async (candidate) => ({
+      relative: candidate.relative,
+      held: (await Promise.all(candidate.stores.map((store) => target.storeInUse(store)))).includes(true),
+    })),
+  );
+  return {
+    removable: verdicts.filter((verdict) => !verdict.held).map((verdict) => verdict.relative),
+    inUse: verdicts.filter((verdict) => verdict.held).map((verdict) => verdict.relative),
+  };
 }
 
 /**
@@ -88,7 +136,7 @@ async function pruneCandidates(target: PruneTarget): Promise<string[]> {
  * @throws {FsFaultError} when the OS refuses to list, measure or move an entry — nothing is removed then
  */
 export async function pruneCacheRoot(target: PruneTarget): Promise<CachePruneOutcome> {
-  const candidates = await pruneCandidates(target);
+  const { removable: candidates, inUse } = await withoutStoresInUse(target, await pruneCandidates(target));
   const plan = await planTreeChanges(
     candidates.map((relative) => ({ op: 'remove' as const, dest: safePath.join(target.root, relative), ownership: { kind: 'vat-state' as const }, label: `the stale cache entry ${relative}` }))
   );
@@ -112,6 +160,7 @@ export async function pruneCacheRoot(target: PruneTarget): Promise<CachePruneOut
     keptStore: `${target.namespace}/${target.keptStore}`,
     dryRun: target.dryRun,
     removed: sorted(removed),
+    inUse: sorted(inUse),
     entriesRemoved: usage.entries,
     bytesRemoved: usage.bytes,
   };
@@ -131,7 +180,7 @@ export async function cachePruneCommand(options: CachePruneOptions = {}): Promis
   let outcome: CachePruneOutcome;
   try {
     const root = recognisedCacheRoot();
-    outcome = await pruneCacheRoot({ root, namespace: vatCacheNamespace(), keptStore: projectionStoreDirectoryName(), dryRun: options.dryRun === true });
+    outcome = await pruneCacheRoot({ root, namespace: vatCacheNamespace(), keptStore: projectionStoreDirectoryName(), dryRun: options.dryRun === true, storeInUse });
   } catch (error) {
     return endWithRefusal(VERB, refusalCodeOf(error), error, 'yaml', CACHE_PRUNE_GATE, NOTHING_FINISHED);
   }

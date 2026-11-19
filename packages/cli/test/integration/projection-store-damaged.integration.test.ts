@@ -127,6 +127,20 @@ describe('a VAT_CACHE_DIR inside the scanned tree', () => {
     }
   });
 
+  it('names the default root, not VAT_CACHE_DIR, when the variable is unset and the temp directory is inside the tree', async () => {
+    const insideTmp = safePath.join(repoRoot, 'tmp');
+    mkdirSyncReal(insideTmp, { recursive: true });
+    vi.stubEnv(VAT_CACHE_DIR_ENV, '');
+    vi.stubEnv('TMPDIR', insideTmp);
+    vi.stubEnv('TEMP', insideTmp);
+    vi.stubEnv('TMP', insideTmp);
+
+    const { opened, stderr } = await openCapturing();
+    await opened?.close();
+    expect(stderr).toContain(`The default cache root (${safePath.join(insideTmp, '.vat-cache')}, under the temp directory) is inside the scanned tree`);
+    expect(stderr).toContain(`Set ${VAT_CACHE_DIR_ENV} to a directory outside the checkout`);
+  });
+
   it('is not mentioned when the cache root is outside the tree', async () => {
     const { opened, stderr } = await openCapturing();
     await opened?.close();

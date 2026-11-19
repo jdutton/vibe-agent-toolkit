@@ -112,9 +112,9 @@ describe('armOwnedEnvRefusal', () => {
     expect(armOwnedEnvRefusal({ set: { LAB_UNOWNED: 'x' }, unset: ['XDG_CONFIG_HOME'] })).toBeNull();
   });
 
-  it('refuses VAT_PROJECTION_STORE_DIR, which a baseline VAT build still honours, so no arm moves its store out of the arm', () => {
-    expect(armOwnedEnvRefusal({ set: { VAT_PROJECTION_STORE_DIR: '/elsewhere' }, unset: [] })).toMatch(/^VAT_PROJECTION_STORE_DIR .*older VAT/u);
-    expect(armOwnedEnvRefusal({ set: {}, unset: ['VAT_PROJECTION_STORE_DIR'] })).not.toBeNull();
+  it('refuses setting or unsetting VAT_PROJECTION_STORE_DIR, which a baseline VAT build still honours: where the store goes is the lab\'s', () => {
+    expect(armOwnedEnvRefusal({ set: { VAT_PROJECTION_STORE_DIR: '/elsewhere' }, unset: [] })).toMatch(/^VAT_PROJECTION_STORE_DIR .*older VAT.*neither set nor unset/u);
+    expect(armOwnedEnvRefusal({ set: {}, unset: ['VAT_PROJECTION_STORE_DIR'] })).toMatch(/^VAT_PROJECTION_STORE_DIR .*neither set nor unset/u);
   });
 
   it('refuses an owned name in any case on Windows, and only its exact spelling elsewhere', () => {

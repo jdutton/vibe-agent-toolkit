@@ -415,7 +415,7 @@ The cache root: the directory holding the parse cache and the projection store, 
 per VAT release. Defaults to `<tmpdir>/.vat-cache`. A relative path resolves against the current
 directory; an empty value means unset. This is the directory to save and restore between CI runs;
 the external-URL caches never live under it. Put it outside the checkout (in GitHub Actions,
-`${{ runner.temp }}/vat-cache`): VAT warns when it is inside the scanned tree. Key the CI cache on
+`$RUNNER_TEMP/vat-cache`, set from a step through `$GITHUB_ENV`): VAT warns when it is inside the scanned tree. Key the CI cache on
 the runner's OS, architecture, Node version, lockfile hash and commit, and restore only from keys
 that share all but the commit; never fall back across lockfile hashes. VAT writes a `CACHEDIR.TAG`
 into a root it creates or finds empty, and `vat cache clear` and `vat cache prune` refuse a root
@@ -726,6 +726,7 @@ data:
   removed:
     - 0.2.0
     - 0.2.1/projection-ba9876543210
+  inUse: []
   entriesRemoved: 4
   bytesRemoved: 1048576
 ```

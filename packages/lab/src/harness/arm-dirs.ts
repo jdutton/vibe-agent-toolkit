@@ -802,7 +802,7 @@ export function armOwnedEnvRefusal(env: ArmEnvironment, platform: NodeJS.Platfor
   const named = [...Object.keys(env.set), ...env.unset];
   const retired = named.find((name) => spell(name) === spell(RETIRED_STORE_DIR_ENV));
   if (retired !== undefined) {
-    return `${retired} relocates the projection store in older VAT builds (a baseline arm still honours it), which would move the store out of the arm; the lab sets VAT_CACHE_DIR instead`;
+    return `${retired} relocates the projection store in older VAT builds (a baseline arm still honours it); the lab owns where an arm's store goes, through VAT_CACHE_DIR, so an arm can neither set nor unset it`;
   }
   const owned = named.find((name) => ownedKeys.has(spell(name)));
   return owned === undefined

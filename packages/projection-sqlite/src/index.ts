@@ -83,6 +83,7 @@ export {
   type StoreUnopenableError,
   defaultStoreDirectory,
   discardStoreDatabase,
+  isStoreInUse,
   isStoreUnopenableError,
   openSqliteFactStore,
 } from './store.js';

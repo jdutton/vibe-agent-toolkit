@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   PROJECTION_STORE_UNOPENABLE_CODE,
   discardStoreDatabase,
+  isStoreInUse,
   isStoreUnopenableError,
   openSqliteFactStore,
 } from '../../src/store.js';
@@ -167,5 +168,36 @@ describe('close leaves one complete database file', () => {
     } finally {
       await reopened.close();
     }
+  });
+});
+
+describe('whether another connection has a store open', () => {
+  it('says so while an open store holds it, and not once it is closed', async () => {
+    const store = openSqliteFactStore({ directory });
+    await store.writeExtent(KEY, sampleExtentRows(KEY.rootId));
+    expect(isStoreInUse(directory)).toBe(true);
+    await store.close();
+    expect(isStoreInUse(directory)).toBe(false);
+  });
+
+  it('counts an idle reader connection as in use', async () => {
+    await writeRealStore();
+    const reader = new DatabaseSync(databaseFile());
+    try {
+      reader.prepare('SELECT 1').get();
+      expect(isStoreInUse(directory)).toBe(true);
+    } finally {
+      reader.close();
+    }
+  });
+
+  it('is not in use when absent, and asking never creates the file', () => {
+    expect(isStoreInUse(directory)).toBe(false);
+    expect(readdirSync(directory)).toEqual([]);
+  });
+
+  it('is not in use when the file is not a database: nothing could hold it', () => {
+    writeFileSync(databaseFile(), Buffer.alloc(4096, 0x5a));
+    expect(isStoreInUse(directory)).toBe(false);
   });
 });

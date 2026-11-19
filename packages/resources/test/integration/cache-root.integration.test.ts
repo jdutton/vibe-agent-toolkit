@@ -154,8 +154,17 @@ describe('recogniseVatCacheRoot', () => {
     expect(recognition.kind === 'refused' ? recognition.reason : '').toMatch(reason);
   });
 
-  it('refuses the filesystem root', () => {
-    expect(recogniseVatCacheRoot(safePath.resolve('/')).kind).toBe('refused');
+  it('refuses a tagged root that is the filesystem root — the protected rule alone decides it', async () => {
+    // The real `/` is untagged, so it would be refused as untagged even without the rule. A tagged
+    // directory whose parent resolves to itself is a filesystem root as the rule sees one.
+    const root = await taggedRoot('fs-root');
+    const resolve = safePath.resolve.bind(safePath);
+    vi.spyOn(safePath, 'resolve').mockImplementation((...paths: string[]) =>
+      paths.length === 2 && paths[0] === root && paths[1] === '..' ? root : resolve(...paths),
+    );
+    const recognition = recogniseVatCacheRoot(root);
+    expect(recognition.kind).toBe('refused');
+    expect(recognition.kind === 'refused' ? recognition.reason : '').toMatch(/filesystem root/u);
   });
 
   it('recognises the default location without a tag (a tree an older VAT wrote)', async () => {

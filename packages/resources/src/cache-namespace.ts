@@ -266,7 +266,11 @@ function isNamespaceName(name: string): boolean {
   return NAMESPACE_RELEASE.test(name.slice(0, dash)) && NAMESPACE_SUFFIX.test(name.slice(dash + 1));
 }
 
-/** Link-cache names older VAT releases wrote directly under the cache root, before `vatLinkCacheDirectory()`. */
+/**
+ * Names older VAT releases wrote directly under the cache root: the link caches
+ * (before `vatLinkCacheDirectory()`) and the root-level `parse/` directory
+ * (before the parse cache moved under the namespace).
+ */
 const LEGACY_ROOT_ENTRY = /^(?:external-links\.json.*|auth-.+|parse)$/u;
 
 /**

@@ -180,7 +180,7 @@ content keys. `vat cache clear` reclaims everything; `vat cache prune` drops eve
 that this build does not use.
 
 - **Persist `VAT_CACHE_DIR` between CI runs** to start warm. Point it at a directory used only by
-  VAT, outside the checkout (`${{ runner.temp }}/vat-cache`; VAT warns when it is inside the
+  VAT, outside the checkout (`$RUNNER_TEMP/vat-cache` in GitHub Actions; VAT warns when it is inside the
   scanned tree). VAT tags a new or empty directory with `CACHEDIR.TAG` on first use; `clear` and
   `prune` refuse an untagged one. A relative path resolves against the current directory.
 - **Key the CI cache per run, restore from the same toolchain.** Key on OS, architecture, Node
@@ -195,18 +195,18 @@ that this build does not use.
   or line endings differ: a cold scan, never a wrong answer. A store SQLite finds corrupt or not a
   database at open is discarded with a warning and rebuilt.
 - **Run `vat cache prune` before the save** so the cache stops growing with every release. It
-  removes every namespace but this build's and every other projection shape's store, and nothing
-  it does not recognise as VAT's.
+  removes every namespace but this build's and every other projection shape's store, nothing it
+  does not recognise as VAT's, and no store a running VAT has open.
 - **Give concurrent jobs on one runner separate `VAT_CACHE_DIR`s.** Otherwise they share one file.
 - **`VAT_PROJECTION_STORE=off`** opts out of the store alone; **`VAT_CACHE=0`** vetoes every VAT
   cache. Either costs a full re-derivation on every run.
 
 ```yaml
-# GitHub Actions
-env:
-  VAT_CACHE_DIR: ${{ runner.temp }}/vat-cache   # outside the checkout
+# GitHub Actions (job steps)
 steps:
   - uses: actions/checkout@v4
+  # The runner context is not available in a job-level env:, so set the variable from a step.
+  - run: echo "VAT_CACHE_DIR=$RUNNER_TEMP/vat-cache" >> "$GITHUB_ENV"   # outside the checkout
   - uses: actions/setup-node@v4
     id: node
     with:

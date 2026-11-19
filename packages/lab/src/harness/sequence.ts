@@ -25,7 +25,6 @@
  *   step is a violation: the rule it exists to check was never checked.
  */
 
-import { isProjectionStoreDirectoryName } from '@vibe-agent-toolkit/resources';
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
@@ -309,12 +308,23 @@ function namespaceOf(parseDirectory: string): string {
 }
 
 /**
+ * The prefix every build's projection store directory carries
+ * (`projection-<shape>`). The lab's own reading of the on-disk layout, never
+ * an import of the lab's `@vibe-agent-toolkit/resources`: the namespace judged
+ * here is ANOTHER build's, and the lab asks a build only what it can answer
+ * (its parse directory — see `parse-cache.ts`). Every build that has a store
+ * names it this way, older ones included, and none exports a name builder the
+ * lab could ask for.
+ */
+const STORE_DIRECTORY_PREFIX = 'projection-';
+
+/**
  * @param namespace - A build's cache namespace
  * @returns True when a `projection-*` directory in it holds a file
  */
 function holdsAProjectionStore(namespace: string): boolean {
   return entriesOf(namespace).some(
-    (entry) => entry.isDirectory() && isProjectionStoreDirectoryName(entry.name) && holdsAFile(safePath.join(namespace, entry.name)),
+    (entry) => entry.isDirectory() && entry.name.startsWith(STORE_DIRECTORY_PREFIX) && holdsAFile(safePath.join(namespace, entry.name)),
   );
 }
 
