@@ -777,6 +777,12 @@ lane-specific shortcut into a lane-agnostic cache. The cache itself doesn't chan
 it. See [Resource Projection §4](./resource-projection.md) for the corresponding split on the output
 side (tree-shape caching vs. the blob-keyed tables).
 
+**Amended by [Content Keying and Git: Decision](./content-keying-and-git.md#decision-content-identity-is-per-source).**
+The cache stays lane-agnostic in shape, but its key is per source: a file git holds (tracked,
+unmodified since the index) is keyed by its git blob object id, any other file by VAT's checksum, and
+the two need not agree for identical bytes. Each file is read and keyed at most once per run, shared
+by every lane. Caches are per machine kind. The git-OID key is planned, not built.
+
 ## 6. Follow-up work this document surfaces
 
 - **Benchmark the git-lane batch-read advantage on Windows.** The packfile/small-file reasoning in
@@ -784,6 +790,15 @@ side (tree-shape caching vs. the blob-keyed tables).
 - **Build the blob-SHA memo and manifest-diff logic**, VAT-side, using `@vibe-validate/git`'s
   `getGitTreeHash()` as the underlying primitive. **Half-built** — read this bullet's ⚠️ correction
   below before extending it, then note precisely where the line now falls:
+
+  **Superseded in part by
+  [Content Keying and Git: Decision](./content-keying-and-git.md#decision-content-identity-is-per-source).**
+  The objections below that rest on normalization (clean/smudge filters, `working-tree-encoding`,
+  `eol`) no longer bind: those cases are outside what VAT supports, and a git-held file's blob OID
+  is its content identity. The git-OID path is planned with incremental repopulation. Objections
+  that do not rest on normalization still apply to it: a tracked file modified since the index is
+  keyed by VAT's checksum, mode `120000` entries are not keyed by their target-string OID, and a key
+  is never bound to bytes read at a different moment. The measurements are kept.
 
   ⛔ The *within-run* half was built and removed. A cross-path `(blob OID, parserKind)` hint let a
   second path holding the same OID skip its read, but an OID names *cleaned* content, so under a

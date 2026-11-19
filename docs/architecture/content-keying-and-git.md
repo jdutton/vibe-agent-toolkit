@@ -2,6 +2,44 @@
 
 **Status markers used throughout:** ✅ shipped — 🔷 proposed, not yet built.
 
+## Decision: content identity is per source
+
+Adopted 2026-11-19. Where an earlier section below conflicts with this one, this one governs; each
+conflicting conclusion is marked superseded in place and its measurements are kept.
+
+1. **Normalization is not semantic.** Line endings, `.gitattributes` `eol`/`text` settings,
+   `core.autocrlf` and clean/smudge filters do not change what a file means to VAT. A file whose
+   meaning depends on them is outside what VAT supports. VAT does not defend against normalization
+   differences.
+2. **There is no single universal content hash. Content identity is per source.** When git holds a
+   file (tracked and unmodified since the index), its git blob object id is its content identity.
+   When git does not hold it (untracked, ignored, build output, outside any repository, or a tracked
+   file modified since the index), VAT's own checksum is. The two need not name the same object: an
+   identical file inside and outside git keying differently is accepted. The worst case hashes each
+   file once each way, which is O(2n) = O(n). On one system, git-held and non-git files are a closed
+   set: every file is exactly one of the two.
+3. **Caches are per machine kind.** Sharing one cache across machine kinds (for example a Windows
+   runner and an Ubuntu runner) is a non-goal. Restoring a cache onto another machine of the same
+   kind (CI save and restore keyed per runner OS) is in scope. Cache keys carry what distinguishes a
+   machine kind (OS, the Node runtime including its Unicode version, the VAT version and lockfile),
+   so a foreign cache is a miss, never a wrong hit.
+4. **One read and one key per file per run.** Within one VAT run each file is read and
+   content-hashed at most once, and every lane (projection population, the resource registry, skills
+   validation, `check`, link resolution) shares that one read and key. A warm projection-store hit
+   proves the tree unchanged; no lane re-admits or re-hashes files to prove it again. Re-checking
+   whether the tree changed mid-run uses git's tree comparison, not file re-hashing. Enforced by a
+   test asserting that the `content.hashed` counter equals the number of distinct files hashed in a
+   `vat validate` run.
+
+What is built:
+
+- Rule 1 needs no code; it removes obligations.
+- Rule 4 is being implemented now, with its enforcing test, in the change that adopts this decision.
+- Rule 2's git-OID path is planned, together with incremental repopulation, and is not built. Until
+  it lands every path is keyed by VAT's checksum, which rule 2 permits for any file.
+- Rule 3's keys are partial: the cache namespace carries the VAT version; the runtime tuple (OS,
+  Node, Unicode) is not yet in the key.
+
 ## 1. Overview
 
 VAT and git both answer the question *"are these the same content?"* with a hash, and they hash
@@ -13,7 +51,8 @@ re-derived wrongly — **the git one is the portable one.**
 This document exists because that reasoning is easy to state backwards. It records which key is sound
 for what, the measured behaviour of the git plumbing that would supply either, and the consequences
 that follow for the git crawl lane, together with the one optimization that was proposed on top of
-that lane and refuted (§10) and the three shapes nobody should rebuild (§12). It is a reference, not
+that lane and refuted (§10) and the shapes recorded as refuted (section 12, two of them now superseded by
+the decision above). It is a reference, not
 a plan: everything measured here is either reproducible from §9 or carries its date and its corpus,
 and everything asserted about VAT's own code carries a `file:line`.
 
@@ -65,6 +104,10 @@ byte-identical-on-disk key.* The distinction is the whole subject.
 `packages/resources/src/content-key.ts` encodes the operative rule that follows: a git blob OID may
 never *become* the key, and may not stand in for a read either.
 
+**Superseded** by [the decision](#decision-content-identity-is-per-source), rules 1 and 2: for a file
+git holds, the OID is its content identity. The byte-identity gap above is real and is outside what
+VAT supports. The code comment still states the old rule until the git-OID path lands.
+
 ## 3. The portability inversion
 
 This is the counter-intuitive half, and the reason the trade-off keeps being stated backwards.
@@ -85,6 +128,10 @@ narrower *across* one — named as a cost at `content-cache.ts:218-224`.
 
 So "content keys are platform-variant" is an argument **for** the OID, not against it. Anyone who
 finds themselves writing it as an argument against has the inversion.
+
+The inversion is still true, but cross-machine-kind sharing is no longer a goal: caches are per
+machine kind ([the decision](#decision-content-identity-is-per-source), rule 3). The OID is chosen
+for git-held files because git already computed it, not for portability.
 
 ## 4. What each key is sound for
 
@@ -145,6 +192,8 @@ the character `startOffset`/`endOffset`, `estimatedTokenCount`, and a blob secti
 ⇒ A CRLF/LF pair costs **fidelity of measurement**, never a wrong answer about what the document
 says. The mechanisms that genuinely change the text are divergent `filter.*` and
 `working-tree-encoding` configuration — which is why no OID may stand in for a read (§6.3).
+Under [the decision](#decision-content-identity-is-per-source), rule 1, a file whose meaning a
+filter changes is outside what VAT supports, so that reason no longer binds.
 
 ## 5. 🪤 `git cat-file --filters` and `--batch` — the trap
 
@@ -289,6 +338,11 @@ OID. Pinned by the clean/smudge cases in `git-hostile-config.system.test.ts`.
 Anyone reintroducing an OID-keyed shortcut — one that *eliminates reads* — owns §10 as well. That was proposed, measured and refuted,
 and the entire prize it reached for is 45 reads.
 
+**Superseded** in its rationale by [the decision](#decision-content-identity-is-per-source): the
+clean/smudge and `working-tree-encoding` cases are outside what VAT supports (rule 1), and the OID is
+the content identity of a git-held file (rule 2). The removal stands in code until the planned
+git-OID path replaces it.
+
 ## 7. Git LFS: a documented limitation, not a feature to build
 
 Git LFS is the one divergence that is a genuine *indirection* rather than an encoding difference. Under
@@ -399,6 +453,13 @@ already known skips its read entirely. Every number came back against it.
 They are recorded here because a conclusion without its numbers cannot be defended the next time
 someone re-derives the idea — and this one is easy to re-derive, because it sounds obviously right.
 
+**The measurements stand; the conclusion is superseded** by
+[the decision](#decision-content-identity-is-per-source). This section judged the OID only as a
+read-elimination device across paths, and its numbers settle that question. The decision adopts the
+OID for a different reason: it is the content identity of a git-held file (rule 2), and git's
+normalization is not semantic (rule 1). The cost that matters is the repeated reads and hashes within
+one run (section 11), which rule 4 removes.
+
 ### 10.1 The three decisive numbers
 
 **1. ~2% of reads are eliminable, and VAT already eliminates them.** One blob is read per *distinct*
@@ -478,7 +539,9 @@ bytes, the arithmetic changes and the rejection does not survive it.
 **The corpus bytes are read and hashed three times per run.** `collectRealization` reads and hashes
 once per `(extent, path)` — so once for each extent a path belongs to — and blob population then
 reads again on top. That multiplier, not a single read, is what §6.2's *read nothing* ruling attacks
-at the source, and it is what any read-elimination proposal would actually have to beat.
+at the source, and it is what any read-elimination proposal would actually have to beat. Rule 4 of
+[the decision](#decision-content-identity-is-per-source) removes the multiplier on every lane: one
+read and one key per file per run.
 
 **Scale is not this repository, and it is not off by the file count.** Measured 2026-08: a large
 adopter monorepo at **20,671 paths / 1,188.8 MB** against this repository's **5,684 paths /
@@ -496,15 +559,20 @@ population; carrying one across to the other's ratio silently changes what is be
 Three shapes were proposed, measured and refuted in the work above. They are transcribed verbatim so
 that the next person to think of one finds it named before spiking it:
 
-1. The persisted `(blobSha, parserKind) → contentKey` memo.
-2. "git OID as content identity to eliminate reads."
+1. ~~The persisted `(blobSha, parserKind) → contentKey` memo.~~ **Superseded.**
+2. ~~"git OID as content identity to eliminate reads."~~ **Superseded.**
 3. Any gate phrased "text/eol attribute active ⇒ ineligible".
 
-None of the three is refuted by taste, and none is re-opened by an argument. (1) and (2) are bounded
-above by the 45 eliminable reads of §10.1, and (3) is empty by construction on every tree carrying
-`* text=auto eol=lf`. Reopening any of them means producing a measurement that moves those numbers,
-on a tree that is named. What survives and should be reused is §10.2's size-equality gate, which is
-sound whether or not anything is ever built on top of it.
+(1) and (2) are superseded by [the decision](#decision-content-identity-is-per-source). They were
+refuted as read-elimination devices, bounded above by the 45 eliminable reads of section 10.1, and those
+numbers remain true. They are no longer forbidden because the decision does not rest on read
+elimination: the OID is a git-held file's content identity (rule 2) because line endings and filters
+are not semantic (rule 1), so a memo from blob OID to the facts extracted from it is a permitted
+shape. (3) still stands: it is empty by construction on every tree carrying `* text=auto eol=lf`.
+
+Section 10.2's size-equality gate (absent a `filter`, blob size equal to working-tree size proves the bytes
+identical) survives as an optional cheap check. It is not a requirement: rule 1 means VAT need not
+prove a git-held file's working-tree bytes equal its blob.
 
 ## Related
 
