@@ -88,7 +88,8 @@ function walkInto(dir: string, root: string, guard: FollowedWalk): string[] {
     // link back into the tree is refused by the walk guard, not recursed.
     if (withFsFaultSync(outputProbe(fullPath), () => direntKindFollowingSync(dir, entry, root)) === 'directory') {
       guard.enter(fullPath);
-      files.push(...walkInto(fullPath, root, guard));
+      // One at a time, never a spread: `push(...walked)` is an argument list, which throws `Maximum call stack size exceeded` past roughly 125,000 entries, and a walk is unbounded.
+      for (const file of walkInto(fullPath, root, guard)) files.push(file);
     } else {
       files.push(fullPath);
     }

@@ -100,7 +100,7 @@ async function crawlMarkdown(
 ): Promise<{ members: string[]; reads: number }> {
   const before = readWorkCounters()['content.read'];
   const registry = ResourceRegistry.forRun(population, { baseDir }).view({ baseDir });
-  await registry.crawl({ baseDir, include: [...include], outputs: [], unreadable: 'refuse', populationSource: population.source });
+  await registry.crawl({ ignoredRefusals: 'record', baseDir, include: [...include], outputs: [], unreadable: 'refuse', populationSource: population.source });
   const members = registry.getAllResources().map((resource) => safePath.relative(baseDir, resource.filePath)).toSorted((left, right) => left.localeCompare(right));
   return { members, reads: readWorkCounters()['content.read'] - before };
 }

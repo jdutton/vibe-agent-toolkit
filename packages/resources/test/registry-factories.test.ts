@@ -101,6 +101,7 @@ describe('ResourceRegistry factory methods', () => {
       await fs.writeFile(safePath.join(tempDir, 'doc2.md'), '# Doc 2', 'utf-8');
 
       const { registry } = await fromCrawlInRun({
+        ignoredRefusals: 'record',
         outputs: [],
         unreadable: 'refuse',
         baseDir: tempDir,
@@ -114,7 +115,7 @@ describe('ResourceRegistry factory methods', () => {
     it('returns the crawl it built from — resources and population — beside the registry', async () => {
       await fs.writeFile(safePath.join(tempDir, 'doc1.md'), '# Doc 1', 'utf-8');
 
-      const built = await fromCrawlInRun({ outputs: [], unreadable: 'refuse', baseDir: tempDir, include: ['*.md'] });
+      const built = await fromCrawlInRun({ ignoredRefusals: 'record', outputs: [], unreadable: 'refuse', baseDir: tempDir, include: ['*.md'] });
 
       expect(built.population).toEqual({ outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem' });
       expect(built.resources.map((resource) => resource.filePath)).toEqual(built.registry.getAllResources().map((resource) => resource.filePath));
@@ -127,6 +128,7 @@ describe('ResourceRegistry factory methods', () => {
       await fs.writeFile(safePath.join(tempDir, 'private/doc.md'), '# Private', 'utf-8');
 
       const { registry } = await fromCrawlInRun({
+        ignoredRefusals: 'record',
         outputs: [],
         unreadable: 'refuse',
         baseDir: tempDir,
@@ -144,6 +146,7 @@ describe('ResourceRegistry factory methods', () => {
       await fs.writeFile(safePath.join(tempDir, 'docs/api/guide.md'), '# Guide', 'utf-8');
 
       const { registry } = await fromCrawlInRun({
+        ignoredRefusals: 'record',
         outputs: [],
         unreadable: 'refuse',
         baseDir: tempDir,
@@ -155,6 +158,7 @@ describe('ResourceRegistry factory methods', () => {
 
     it('should handle empty directory', async () => {
       const { registry } = await fromCrawlInRun({
+        ignoredRefusals: 'record',
         outputs: [],
         unreadable: 'refuse',
         baseDir: tempDir,
@@ -170,6 +174,7 @@ describe('ResourceRegistry factory methods', () => {
       await fs.writeFile(safePath.join(tempDir, 'doc2.md'), '# Same Content', 'utf-8');
 
       const { registry } = await fromCrawlInRun({
+        ignoredRefusals: 'record',
         outputs: [],
         unreadable: 'refuse',
         baseDir: tempDir,

@@ -205,7 +205,7 @@ class RegistryBuildingContributor implements ExtentContributor {
    * @returns An empty contribution — the rows are irrelevant; the registry build is the point
    */
   async contribute(): Promise<ExtentContribution> {
-    const { registry } = await fromCrawlInRun({ outputs: [], unreadable: 'refuse', baseDir: suite.tempDir });
+    const { registry } = await fromCrawlInRun({ ignoredRefusals: 'record', outputs: [], unreadable: 'refuse', baseDir: suite.tempDir });
     registry.resolveLinks();
     return {
       contexts: [], resources: [], realizations: [], memberships: [], tags: [], conditions: [],
@@ -268,6 +268,7 @@ describe('crawl timing seam', () => {
       // an even split between two crawlers.
       const registry = new ResourceRegistry();
       await registry.crawl({
+        ignoredRefusals: 'record',
         unreadable: 'refuse',
         outputs: [],
         baseDir: suite.tempDir,
@@ -337,7 +338,7 @@ describe('crawl timing seam', () => {
     // -----------------------------------------------------------------------
 
     it('charges the registry for admitting and resolving its crawl, not only for enumerating it', async () => {
-      const { registry } = await fromCrawlInRun({ outputs: [], unreadable: 'refuse', baseDir: suite.tempDir });
+      const { registry } = await fromCrawlInRun({ ignoredRefusals: 'record', outputs: [], unreadable: 'refuse', baseDir: suite.tempDir });
       registry.resolveLinks();
       const snapshot = __readCrawlTimingSnapshot();
 

@@ -55,6 +55,32 @@ const TREE = {
 /** chmod cannot lock a file on Windows, nor against root. */
 const canLockFiles = process.platform !== 'win32' && process.getuid?.() !== 0;
 
+/**
+ * Run `vat <args>` in `root` under a `git` that logs each argv to a file in `tempDir`, then runs
+ * the real one.
+ */
+async function withGitArgvLog(
+  run: { binPath: string; tempDir: string; root: string },
+  args: string[],
+  env: Record<string, string>,
+): Promise<{ parsed: Record<string, unknown>; spawned: string[] }> {
+  const shim = safePath.join(run.tempDir, 'shim');
+  const log = safePath.join(run.tempDir, 'git-argv.log');
+  mkdirSyncReal(shim, { recursive: true });
+  writeFileSync(safePath.join(shim, 'git'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nexec '${gitExecutable()}' "$@"\n`, { mode: 0o755 });
+  writeFileSync(log, '');
+  const { parsed } = await executeCliAndParseYaml(run.binPath, args, {
+    cwd: run.root,
+    env: { ...env, PATH: `${shim}:${process.env['PATH'] ?? ''}` },
+  });
+  return { parsed, spawned: readFileSync(log, 'utf8').split('\n').filter((line) => line.length > 0) };
+}
+
+/** The argv lines that staged the tree into an index. */
+function staged(spawned: readonly string[]): string[] {
+  return spawned.filter((argv) => argv.startsWith('add ') || argv.includes(' add '));
+}
+
 describe('audit and skills validate enumerate one tree the same way (system test)', () => {
   const binPath = getBinPath(import.meta.url);
   let tempDir: string;
@@ -112,23 +138,18 @@ describe('audit and skills validate enumerate one tree the same way (system test
   });
 
   it.runIf(process.platform !== 'win32')('lists the repository by name: audit never stages it into an index', async () => {
-    // A `git` on PATH that logs each argv, then runs the real one.
-    const shim = safePath.join(tempDir, 'shim');
-    const log = safePath.join(tempDir, 'git-argv.log');
-    mkdirSyncReal(shim, { recursive: true });
-    writeFileSync(safePath.join(shim, 'git'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nexec '${gitExecutable()}' "$@"\n`, { mode: 0o755 });
-    writeFileSync(log, '');
-
-    const audit = await executeCliAndParseYaml(binPath, ['audit', root], {
-      cwd: root,
-      env: { PATH: `${shim}:${process.env['PATH'] ?? ''}` },
-    });
-    expect(findingCodes(audit.parsed)).toContain('LINK_MISSING_TARGET');
-
-    const spawned = readFileSync(log, 'utf8').split('\n').filter((line) => line.length > 0);
+    const { parsed, spawned } = await withGitArgvLog({ binPath, tempDir, root }, ['audit', root], {});
+    expect(findingCodes(parsed)).toContain('LINK_MISSING_TARGET');
     // The premise: the shim saw audit's git calls, its listing among them.
     expect(spawned.some((argv) => argv.startsWith('ls-files')), spawned.join('\n')).toBe(true);
     // The claim: nothing staged, so no file was read or hashed by git.
-    expect(spawned.filter((argv) => argv.startsWith('add ') || argv.includes(' add ')), spawned.join('\n')).toEqual([]);
+    expect(staged(spawned), spawned.join('\n')).toEqual([]);
+  });
+
+  it.runIf(process.platform !== 'win32')('resources validate with the store off takes no tree snapshot', async () => {
+    // With no store nothing keys the tree, so a snapshot would read and hash every untracked file for nothing.
+    const { spawned } = await withGitArgvLog({ binPath, tempDir, root }, ['resources', 'validate', root], { VAT_PROJECTION_STORE: 'off' });
+    expect(spawned.some((argv) => argv.startsWith('ls-files')), spawned.join('\n')).toBe(true);
+    expect(staged(spawned), spawned.join('\n')).toEqual([]);
   });
 });

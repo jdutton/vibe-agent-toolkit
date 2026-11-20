@@ -82,7 +82,7 @@ async function crawlRefusal(
   const registry = new ResourceRegistry({ baseDir: tempDir });
   const thrown = await withReaddirSyncRefused(locked, code, async () => {
     try {
-      await crawlInRun(registry, { unreadable: policy as PopulationUnreadablePolicy, outputs: [], baseDir: tempDir, include: ['**/*.md'] });
+      await crawlInRun(registry, { ignoredRefusals: 'record', unreadable: policy as PopulationUnreadablePolicy, outputs: [], baseDir: tempDir, include: ['**/*.md'] });
       return undefined;
     } catch (error) {
       return error;
@@ -165,7 +165,7 @@ describe("ResourceRegistry refuses the crawl for a directory it could not list u
   it('crawls the whole tree when nothing refuses (control)', async () => {
     const tempDir = tree.tempDir();
     const registry = new ResourceRegistry({ baseDir: tempDir });
-    await crawlInRun(registry, { unreadable: 'refuse', outputs: [], baseDir: tempDir, include: ['**/*.md'] });
+    await crawlInRun(registry, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: tempDir, include: ['**/*.md'] });
     const admitted = registry.getAllResources().map((r) => toForwardSlash(safePath.relative(tempDir, r.filePath)));
     expect(admitted.toSorted((a, b) => a.localeCompare(b))).toEqual(['docs/locked/t.md', OPEN_FILE]);
   });
@@ -247,7 +247,7 @@ describe.skipIf(CANNOT_DENY_READS)('ResourceRegistry LINK_TARGET_UNREADABLE for 
     chmodSync(target, 0o000);
     try {
       const registry = new ResourceRegistry({ baseDir: tempDir });
-      await crawlInRun(registry, { unreadable: 'refuse', outputs: [], baseDir: tempDir, include: ['**/*.md'] });
+      await crawlInRun(registry, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: tempDir, include: ['**/*.md'] });
       return (await registry.validate({ skipGitIgnoreCheck: true })).issues;
     } finally {
       chmodSync(target, 0o644);
@@ -273,7 +273,7 @@ describe.skipIf(CANNOT_DENY_READS)('ResourceRegistry LINK_TARGET_UNREADABLE for 
 
   it('reports LINK_BROKEN_ANCHOR for #nope and nothing for #real once the file is readable (control)', async () => {
     const registry = new ResourceRegistry({ baseDir: tempDir });
-    await crawlInRun(registry, { unreadable: 'refuse', outputs: [], baseDir: tempDir, include: ['**/*.md'] });
+    await crawlInRun(registry, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: tempDir, include: ['**/*.md'] });
     const { issues } = await registry.validate({ skipGitIgnoreCheck: true });
 
     expect(issues.filter((i) => i.code === 'LINK_TARGET_UNREADABLE')).toEqual([]);

@@ -317,13 +317,18 @@ refusals as a stored population walks it. The listing's refusals never come from
 which asks git nothing when it opened a snapshot: the listing runs its own
 `ls-files --others --ignored --directory`, whose stderr names every directory git could not open
 (refused), and walks each ignored directory it collapses, pruned by `NEVER_CRAWL_GLOBS`, for its
-unlistable directories (recorded; a link beneath an ignored directory or a nested repository is
-ignored, and every lane a listing serves declines it without a row, so neither walk collects one;
-a lane that reports ignored links, such as the marketplace inventory, never enumerates through a
-listing). A tracked link a `core.symlinks=false` checkout wrote as a plain file is declined, as the
-snapshot keeps it, by one index read per repository that happens only when `core.symlinks` is
-`false`. So a listed root reports the same conditions with the
-store off or on. Paths from `ls-files` are relative to the root git ran in, never to the
+unlistable directories (recorded). That walk happens once per listing, on the first crawl whose
+`ignoredRefusals` is `record` (the resources verbs), and never for a crawl that drops those rows
+(`skip`: every skills lane, `vat audit`'s included): it exists for those rows alone, and a
+gitignored `.venv` makes it the largest cost a listing has. Neither walk collects a name or a link
+(a link beneath an ignored directory or a nested repository is ignored, and every lane a listing
+serves declines it without a row; a lane that reports ignored links, such as the marketplace
+inventory, never enumerates through a listing). A tracked link a `core.symlinks=false` checkout wrote as a plain file is declined, as the
+snapshot keeps it, by one index read under the listed root (never the whole repository) that
+happens only when `core.symlinks` is false; unset reads as git's default for the platform, `true`
+except on Windows, where Git for Windows starts with symlinks off. A conflicted path's mode is read
+at the stage git prefers (2, then 1, then 3). So a listed root reports the same conditions with the
+store off or on, for every crawl that records ignored-territory refusals. Paths from `ls-files` are relative to the root git ran in, never to the
 repository's top level. Which declined links apply is one predicate, `declinedLinkApplies`, shared
 with a stored population. Outside a repository the names are one walk that prunes
 `NEVER_CRAWL_GLOBS`, as every enumerator outside a repository does (a known defect: authored

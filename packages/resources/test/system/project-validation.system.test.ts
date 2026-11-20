@@ -23,6 +23,7 @@ describe('System Test: Project Link Validation (Dogfooding)', () => {
     // and all links remain valid.
     // Crawl the entire project for markdown files
     await crawlInRun(registry, {
+      ignoredRefusals: 'record',
       unreadable: 'refuse',
       outputs: [],
       baseDir: projectRoot,

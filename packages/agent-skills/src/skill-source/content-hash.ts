@@ -62,7 +62,8 @@ async function collectFiles(
     switch (kind) {
       case 'directory':
         walk.enter(abs);
-        out.push(...(await collectFiles(root, abs, walk)));
+        // One at a time, never a spread: `push(...walked)` is an argument list, which throws `Maximum call stack size exceeded` past roughly 125,000 entries, and a walk is unbounded.
+        for (const file of await collectFiles(root, abs, walk)) out.push(file);
         break;
       case 'file':
         out.push({ rel: toForwardSlash(safePath.relative(root, abs)), abs });

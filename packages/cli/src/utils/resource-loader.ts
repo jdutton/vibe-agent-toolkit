@@ -23,7 +23,7 @@ import { loadConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
 import { collectionsOption } from './population-wiring.js';
 import { assertDirectoryArgument } from './project-root-policy.js';
-import { withLazyPopulationCache } from './projection-store.js';
+import { projectionStoreSelected, withLazyPopulationCache } from './projection-store.js';
 
 /**
  * One VAT process run's shared population, registry and parse dispatcher: what
@@ -264,7 +264,7 @@ function crawlOptionsForPath(
       `${resolved} is outside projectRoot ${projectRoot}; ` +
         `resources include/exclude patterns from the config do not apply to it`,
     );
-    return { baseDir: resolved, unreadable: RESOURCES_UNREADABLE, outputs: [], populationSource };
+    return { baseDir: resolved, unreadable: RESOURCES_UNREADABLE, ignoredRefusals: RESOURCES_IGNORED_REFUSALS, outputs: [], populationSource };
   }
 
   // The crawler used to perform this check itself, because it received the path
@@ -276,6 +276,7 @@ function crawlOptionsForPath(
   return {
     baseDir: projectRoot,
     unreadable: RESOURCES_UNREADABLE,
+    ignoredRefusals: RESOURCES_IGNORED_REFUSALS,
     // Every resources verb only reads the tree it crawls.
     outputs: [],
     populationSource,
@@ -291,6 +292,13 @@ function crawlOptionsForPath(
  * See `PopulationUnreadablePolicy` on the registry.
  */
 const RESOURCES_UNREADABLE = 'refuse' as const;
+
+/**
+ * The resources verbs report a directory they could not list inside ignored
+ * territory: `vat resources validate` lists it as an `EXTENT_DIRECTORY_UNLISTABLE`
+ * warning, with the store on or off. See `PopulationMembers.ignoredRefusals`.
+ */
+const RESOURCES_IGNORED_REFUSALS = 'record' as const;
 
 
 /**
@@ -364,6 +372,7 @@ export async function loadResourcesWithConfig(
     crawlOptions = {
       baseDir: projectRoot,
       unreadable: RESOURCES_UNREADABLE,
+      ignoredRefusals: RESOURCES_IGNORED_REFUSALS,
       outputs: [],
       populationSource: run.population.source,
       // Apply include patterns from config (if specified)
@@ -373,13 +382,15 @@ export async function loadResourcesWithConfig(
     };
   }
 
-  // The git enumerator takes a `gitTreeSnapshot` during the crawl below no matter
-  // what. Taking it HERE instead is the same snapshot moved a few lines earlier —
-  // the open store bracket memoizes it, so the enumerator's own call becomes a
-  // lookup — and it puts the answer in hand before the tracker asks its question
-  // (the run initializes the home tracker on the first enumeration of the root).
-  // Gated on `gitExtentSelected`: on the filesystem enumerator nothing consumes it.
-  if (gitExtentSelected(projectRoot)) {
+  // With a store, the crawl below opens it, and opening it takes the snapshot that
+  // keys it. Taking that snapshot HERE is the same one moved a few lines earlier
+  // (the open store bracket memoizes it, so the store's own call is a lookup), and
+  // it puts the answer in hand before the tracker asks its question (the run
+  // initializes the home tracker on the first enumeration of the root). With no
+  // store, nothing takes a snapshot: the population is a listing, which reads no
+  // file, and a snapshot here would read and hash every untracked one for nothing.
+  // Gated on `gitExtentSelected` too: on the filesystem enumerator nothing consumes it.
+  if (projectionStoreSelected() && gitExtentSelected(projectRoot)) {
     gitTreeSnapshot({ cwd: projectRoot });
   }
 

@@ -945,6 +945,7 @@ export {
   buildResourceProjection,
   type ResourceEnumeration,
   type CrawlPopulation,
+  type IgnoredRefusals,
   type PopulationMembers,
   type ResourcePopulationSource,
 } from './projection/resource-population.js';

@@ -133,8 +133,8 @@ describe('ResourceRegistry admission order', () => {
     const populated = new ResourceRegistry({ baseDir: root });
     const sourced = new ResourceRegistry({ baseDir: root });
 
-    const population = await crawlInRun(populated, { baseDir: root, outputs: [], unreadable: 'refuse' });
-    const offeredCrawl = await sourced.crawl({ baseDir: root, outputs: [], unreadable: 'refuse', populationSource: source });
+    const population = await crawlInRun(populated, { ignoredRefusals: 'record', baseDir: root, outputs: [], unreadable: 'refuse' });
+    const offeredCrawl = await sourced.crawl({ ignoredRefusals: 'record', baseDir: root, outputs: [], unreadable: 'refuse', populationSource: source });
 
     expect(offeredCrawl.resources.map((resource) => resource.filePath)).toEqual(population.resources.map((resource) => resource.filePath));
     expect(collisionsOf(sourced, root)).toEqual(collisionsOf(populated, root));

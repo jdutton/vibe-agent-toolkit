@@ -749,6 +749,26 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Fix:** give the classifier an output-side cause (`ENOSPC`/`EROFS` in git's account) coded
   `RUN_INCOMPLETE`, so every lane that snapshots inherits it.
 
+### A git listing that ran out of time or output is reported as "not a git repository"
+
+- **Severity:** Minor · **Effort:** M (one result type, every caller migrated) · **User-visible:** yes
+- **Mechanism:** `gitLsFiles` and `gitLsOthers` return `null` for every git that did not answer,
+  whether the tree is not a repository, the binary is missing, or git ran past its timeout or
+  past the output VAT reads. The callers that classify `null` (`gitNoAnswerError`, the crawl
+  sources, the rules scope) then call a timeout `GIT_NO_ANSWER` "not a git repository, or git
+  could not read it". Throwing `GIT_FAILED` from the listing instead breaks the callers that
+  promise to report or fall back on `null`: `gitChangedFiles` ("never throws"),
+  `unreadableSnapshotReason` and so the store's "populate without a cache" path, the file
+  crawler's fallback to a manual walk, `GitTracker`'s `null`, and audit's distributed tree. On a
+  huge repository those degrade today and would abort.
+- **Reproduce:** traced in code: a listing whose `runGit` result is `ETIMEDOUT` returns `null`
+  ([`git-utils.ts`](../../packages/utils/src/git-utils.ts) `runListing`).
+- **Where:** [`git-utils.ts`](../../packages/utils/src/git-utils.ts) (`runListing`),
+  [`git-no-answer.ts`](../../packages/utils/src/git-no-answer.ts) (`gitNoAnswerFor`)
+- **Fix:** one classified result type (`{ ok: true, paths } | { ok: false, cause }`, the cause
+  from `gitRunFailureOf`) returned by both listings, with every caller migrated to it in the same
+  change: each decides from the cause whether to refuse, report or fall back.
+
 ### The same tree flips between exit 1 and exit 2 across runs
 
 - **Severity:** Minor · **Effort:** L (root cause unknown) · **User-visible:** yes

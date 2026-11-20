@@ -212,7 +212,7 @@ describe('ResourceRegistry - Integration Tests', () => {
 
   describe('crawl()', () => {
     it('should crawl directory and find all markdown files', async () => {
-      const { resources } = await crawlInRun(registry, { unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
+      const { resources } = await crawlInRun(registry, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
 
       // Should find all .md files in test-fixtures
       expect(resources.length).toBeGreaterThanOrEqual(6);
@@ -225,6 +225,7 @@ describe('ResourceRegistry - Integration Tests', () => {
 
     it('should respect include patterns', async () => {
       const { resources } = await crawlInRun(registry, {
+        ignoredRefusals: 'record',
         unreadable: 'refuse',
         outputs: [],
         baseDir: fixturesDir,
@@ -237,6 +238,7 @@ describe('ResourceRegistry - Integration Tests', () => {
 
     it('should respect exclude patterns', async () => {
       const { resources } = await crawlInRun(registry, {
+        ignoredRefusals: 'record',
         unreadable: 'refuse',
         outputs: [],
         baseDir: fixturesDir,
@@ -249,14 +251,14 @@ describe('ResourceRegistry - Integration Tests', () => {
     });
 
     it('should find nested files by default', async () => {
-      const { resources } = await crawlInRun(registry, { unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
+      const { resources } = await crawlInRun(registry, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
 
       const ids = resources.map((r) => r.id);
       expect(ids).toContain(NESTED_FILE_ID);
     });
 
     it('should use default include/exclude patterns', async () => {
-      const { resources } = await crawlInRun(registry, { unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
+      const { resources } = await crawlInRun(registry, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
 
       // Should find .md files
       expect(resources.length).toBeGreaterThan(0);
@@ -269,7 +271,7 @@ describe('ResourceRegistry - Integration Tests', () => {
 
   describe('validate()', () => {
     it('should validate all resources and return results', async () => {
-      await crawlInRun(registry, { unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
+      await crawlInRun(registry, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
 
       const result = await registry.validate();
 
@@ -339,7 +341,7 @@ describe('ResourceRegistry - Integration Tests', () => {
     });
 
     it('should provide statistics', async () => {
-      await crawlInRun(registry, { unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
+      await crawlInRun(registry, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
 
       const result = await registry.validate();
 
@@ -442,7 +444,7 @@ describe('ResourceRegistry - Integration Tests', () => {
 
   describe('Query Methods', () => {
     beforeEach(async () => {
-      await crawlInRun(registry, { unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
+      await crawlInRun(registry, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
     });
 
     describe('getResource()', () => {
@@ -556,7 +558,7 @@ describe('ResourceRegistry - Integration Tests', () => {
     });
 
     it('should count links by type correctly', async () => {
-      await crawlInRun(registry, { unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
+      await crawlInRun(registry, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
 
       const stats = registry.getStats();
 
@@ -576,7 +578,7 @@ describe('ResourceRegistry - Integration Tests', () => {
 
   describe('clear()', () => {
     it('should clear all resources', async () => {
-      await crawlInRun(registry, { unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
+      await crawlInRun(registry, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
 
       expect(registry.getAllResources().length).toBeGreaterThan(0);
 
@@ -678,6 +680,7 @@ tags: test
     it('should handle empty directories gracefully', async () => {
       // Create a temporary empty directory scenario by using non-matching pattern
       const { resources } = await crawlInRun(registry, {
+        ignoredRefusals: 'record',
         unreadable: 'refuse',
         outputs: [],
         baseDir: fixturesDir,
@@ -764,7 +767,7 @@ tags: test
         const reg = new ResourceRegistry();
         expect(reg.baseDir).toBeUndefined();
 
-        await crawlInRun(reg, { unreadable: 'refuse', outputs: [], baseDir: tempDir, include: ['**/*.md'] });
+        await crawlInRun(reg, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: tempDir, include: ['**/*.md'] });
 
         // crawl should have propagated baseDir
         expect(reg.baseDir).toBe(tempDir);
@@ -950,7 +953,7 @@ tags: test
         'utf-8',
       );
       const reg = new ResourceRegistry({ baseDir: htmlTempDir });
-      await crawlInRun(reg, { unreadable: 'refuse', outputs: [], baseDir: htmlTempDir });
+      await crawlInRun(reg, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: htmlTempDir });
       const html = reg.getAllResources().find((r) => r.filePath.endsWith('page.html'));
       expect(html).toBeDefined();
       expect(html?.links.map((l) => l.href)).toContain('./next.html');
@@ -964,7 +967,7 @@ tags: test
 
       const reg = new ResourceRegistry({ baseDir: htmlTempDir });
       // Must not throw
-      await crawlInRun(reg, { unreadable: 'refuse', outputs: [], baseDir: htmlTempDir });
+      await crawlInRun(reg, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: htmlTempDir });
 
       const resources = reg.getAllResources();
       const ids = resources.map((r) => r.id);
@@ -982,7 +985,7 @@ tags: test
         'utf-8',
       );
       const reg = new ResourceRegistry({ baseDir: htmlTempDir });
-      await crawlInRun(reg, { unreadable: 'refuse', outputs: [], baseDir: htmlTempDir });
+      await crawlInRun(reg, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: htmlTempDir });
       const result = await reg.validate({ skipGitIgnoreCheck: true });
 
       const malformedIssues = result.issues.filter((i) => i.code === 'MALFORMED_HTML');
@@ -1011,7 +1014,7 @@ tags: test
       const reg = new ResourceRegistry({ baseDir: dupTempDir });
 
       // crawl() must not throw
-      await expect(crawlInRun(reg, { unreadable: 'refuse', outputs: [], baseDir: dupTempDir })).resolves.not.toThrow();
+      await expect(crawlInRun(reg, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: dupTempDir })).resolves.not.toThrow();
 
       const issue = await expectSingleDuplicateIdError(reg);
       // Message must name both colliding paths and the shared id

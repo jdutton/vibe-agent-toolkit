@@ -185,7 +185,10 @@ export class RunSkillRegistries {
       ? 'refuse'
       : { degrade: (refusal) => { refusals.push(refusal); unreadable.degrade(refusal); } };
     const registry = this.registry.view({ baseDir: root, ...(config === undefined ? {} : { config }) });
-    await registry.crawl({ baseDir: root, include: [...include], unreadable: recorded, outputs, populationSource: this.source });
+    // `skip`: no skills lane reports a directory it could not list inside ignored
+    // territory (it validates skills, never the view's population conditions), so
+    // a listing never walks ignored territory for them.
+    await registry.crawl({ baseDir: root, include: [...include], unreadable: recorded, ignoredRefusals: 'skip', outputs, populationSource: this.source });
     registry.resolveLinks();
     return { registry, refusals };
   }

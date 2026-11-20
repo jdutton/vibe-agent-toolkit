@@ -150,6 +150,7 @@ describe('buildResourcePopulation', () => {
     };
     const crawlOnce = (): Promise<RegistryCrawl> =>
       new ResourceRegistry({ baseDir: suite.tempDir }).crawl({
+        ignoredRefusals: 'record',
         baseDir: suite.tempDir, outputs: [], unreadable: 'refuse', populationSource: source,
       });
 

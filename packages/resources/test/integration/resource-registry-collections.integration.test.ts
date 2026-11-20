@@ -173,6 +173,7 @@ describe('ResourceRegistry with collections', () => {
 
     const registry = new ResourceRegistry({ config });
     await crawlInRun(registry, {
+      ignoredRefusals: 'record',
       unreadable: 'refuse',
       outputs: [],
       baseDir: suite.tempDir,

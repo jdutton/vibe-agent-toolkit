@@ -28,10 +28,11 @@ const FIXTURE_ENV: Record<string, string> = Object.fromEntries([
 /**
  * Run git in `cwd` with a committer identity, no signing, and local-file submodules allowed.
  *
+ * @returns What git printed, trimmed
  * @throws When git fails, naming the subcommand, so a fixture git never built is never mistaken for one it did
  */
-export function git(cwd: string, ...args: string[]): void {
-  runGitOrThrow(args, { cwd, env: FIXTURE_ENV });
+export function git(cwd: string, ...args: string[]): string {
+  return runGitOrThrow(args, { cwd, env: FIXTURE_ENV });
 }
 
 /**

@@ -155,13 +155,25 @@ export interface ResourcePopulationSource {
   ): Promise<ResourceEnumeration>;
 }
 
+/** Whether a crawl reports the directories it could not list inside ignored territory. */
+export type IgnoredRefusals = 'record' | 'skip';
+
 /**
- * The files one crawl admits: its include and exclude globs, relative to the
- * root it enumerates (`ResourceRegistry.crawl`'s own `include`/`exclude`).
+ * What one crawl asks of a population: its include and exclude globs, relative
+ * to the root it enumerates (`ResourceRegistry.crawl`'s own `include`/`exclude`),
+ * and whether it reports refusals met in ignored territory.
  */
 export interface PopulationMembers {
   readonly include: readonly string[];
   readonly exclude: readonly string[];
+  /**
+   * `record` for a crawl whose caller reports `EXTENT_DIRECTORY_UNLISTABLE` rows
+   * for ignored territory; `skip` for one that drops them. A listing walks
+   * ignored territory only for `record`: that walk exists for those rows alone,
+   * and a gitignored `.venv` or `node_modules` makes it the largest cost a listing
+   * has. A stored population walks it either way, because it is stored complete.
+   */
+  readonly ignoredRefusals: IgnoredRefusals;
 }
 
 /**

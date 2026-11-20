@@ -179,7 +179,7 @@ describe('the projection lane and ResourceRegistry agree about a declared mimeTy
   /** The corpus's markdown, crawled in a run of its own under `options`. */
   const markdownRegistry = (options: { config?: ProjectConfig }): Promise<ResourceRegistry> =>
     withRunContext({ root: corpus.root() }, async (run) => (await ResourceRegistry.fromCrawl(
-      { outputs: [], unreadable: 'refuse', baseDir: corpus.root(), include: ['**/*.md'], populationSource: run.population.source },
+      { ignoredRefusals: 'record', outputs: [], unreadable: 'refuse', baseDir: corpus.root(), include: ['**/*.md'], populationSource: run.population.source },
       options,
     )).registry);
 

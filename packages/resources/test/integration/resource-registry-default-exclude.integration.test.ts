@@ -52,7 +52,7 @@ function fixture(git: boolean): string {
 
 async function crawled(root: string, unreadable: PopulationUnreadablePolicy = 'refuse'): Promise<ResourceRegistry> {
   const registry = new ResourceRegistry({ baseDir: root });
-  await crawlInRun(registry, { baseDir: root, outputs: [], unreadable });
+  await crawlInRun(registry, { ignoredRefusals: 'record', baseDir: root, outputs: [], unreadable });
   registry.resolveLinks();
   return registry;
 }

@@ -25,8 +25,8 @@ describe('ResourceRegistry.crawl - what a population source is told the verb wri
       },
     };
 
-    await new ResourceRegistry().crawl({ baseDir: ROOT, unreadable: 'refuse', populationSource, outputs: [OUTPUT] });
-    await new ResourceRegistry().crawl({ baseDir: ROOT, unreadable: 'refuse', populationSource, outputs: [] });
+    await new ResourceRegistry().crawl({ ignoredRefusals: 'record', baseDir: ROOT, unreadable: 'refuse', populationSource, outputs: [OUTPUT] });
+    await new ResourceRegistry().crawl({ ignoredRefusals: 'record', baseDir: ROOT, unreadable: 'refuse', populationSource, outputs: [] });
 
     expect(asked).toEqual([[ROOT, [OUTPUT]], [ROOT, []]]);
   });

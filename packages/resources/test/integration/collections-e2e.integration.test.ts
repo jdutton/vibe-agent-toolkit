@@ -42,6 +42,7 @@ describe('Resource Collection System - End to End', () => {
 
   it('should crawl directory and build complete registry', async () => {
     await crawlInRun(registry, {
+      ignoredRefusals: 'record',
       unreadable: 'refuse',
       outputs: [],
       baseDir: tempDir,
@@ -54,6 +55,7 @@ describe('Resource Collection System - End to End', () => {
 
   it('should query resources with glob patterns', async () => {
     await crawlInRun(registry, {
+      ignoredRefusals: 'record',
       unreadable: 'refuse',
       outputs: [],
       baseDir: tempDir,
@@ -70,6 +72,7 @@ describe('Resource Collection System - End to End', () => {
 
   it('should filter resources with multiple criteria', async () => {
     await crawlInRun(registry, {
+      ignoredRefusals: 'record',
       unreadable: 'refuse',
       outputs: [],
       baseDir: tempDir,
@@ -87,6 +90,7 @@ describe('Resource Collection System - End to End', () => {
 
   it('should detect content-based duplicates', async () => {
     await crawlInRun(registry, {
+      ignoredRefusals: 'record',
       unreadable: 'refuse',
       outputs: [],
       baseDir: tempDir,
@@ -102,6 +106,7 @@ describe('Resource Collection System - End to End', () => {
 
   it('should get unique resources by checksum', async () => {
     await crawlInRun(registry, {
+      ignoredRefusals: 'record',
       unreadable: 'refuse',
       outputs: [],
       baseDir: tempDir,
@@ -115,6 +120,7 @@ describe('Resource Collection System - End to End', () => {
 
   it('should combine query with collection operations', async () => {
     await crawlInRun(registry, {
+      ignoredRefusals: 'record',
       unreadable: 'refuse',
       outputs: [],
       baseDir: tempDir,
@@ -135,6 +141,7 @@ describe('Resource Collection System - End to End', () => {
 
   it('should support name-based lookups', async () => {
     await crawlInRun(registry, {
+      ignoredRefusals: 'record',
       unreadable: 'refuse',
       outputs: [],
       baseDir: tempDir,
@@ -149,6 +156,7 @@ describe('Resource Collection System - End to End', () => {
 
   it('should support checksum-based lookups', async () => {
     await crawlInRun(registry, {
+      ignoredRefusals: 'record',
       unreadable: 'refuse',
       outputs: [],
       baseDir: tempDir,
@@ -169,6 +177,7 @@ describe('Resource Collection System - End to End', () => {
 
   it('should exclude directories with patterns', async () => {
     await crawlInRun(registry, {
+      ignoredRefusals: 'record',
       unreadable: 'refuse',
       outputs: [],
       baseDir: tempDir,
@@ -183,6 +192,7 @@ describe('Resource Collection System - End to End', () => {
 
   it('should transform query results before collecting', async () => {
     await crawlInRun(registry, {
+      ignoredRefusals: 'record',
       unreadable: 'refuse',
       outputs: [],
       baseDir: tempDir,
@@ -201,6 +211,7 @@ describe('Resource Collection System - End to End', () => {
 
   it('should support complex workflow: filter, dedupe, collect', async () => {
     await crawlInRun(registry, {
+      ignoredRefusals: 'record',
       unreadable: 'refuse',
       outputs: [],
       baseDir: tempDir,

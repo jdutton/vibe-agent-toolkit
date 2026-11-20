@@ -4,6 +4,9 @@
   only lane; unset the variable. Lab arms no longer set it.
 - **`ResourceRegistry.crawl` no longer falls back to `crawlDirectory`**: `CrawlOptions.populationSource`
   is required, and `CrawlOptions.followSymlinks` is removed (the population never follows a symlink).
+- **`CrawlOptions.ignoredRefusals` (`'record' | 'skip'`) is required**, and so is
+  `PopulationMembers.ignoredRefusals`: whether the crawl reports a directory it could not list inside
+  ignored territory. A root with no store walks ignored territory only for `record`.
 - **The registry's guard refusing `{ degrade }` beside a population source is gone**: the population
   takes `{ degrade }` itself. Degrade decides only what an unreadable directory does; it never picks
   the enumerator.
@@ -40,11 +43,13 @@
 
 ### Added
 
-- `@vibe-agent-toolkit/resources`: the `PopulationMembers` and `PopulationUnreadablePolicy` types.
+- `@vibe-agent-toolkit/resources`: the `PopulationMembers`, `PopulationUnreadablePolicy` and
+  `IgnoredRefusals` types.
 - `@vibe-agent-toolkit/utils`: `GitTracker.listing()`: the names the tracker's `ls-files` listed
   (or its open snapshot held).
 - `@vibe-agent-toolkit/utils`: `gitLinksCheckedOutAsFiles`: the tracked links a `core.symlinks=false`
-  checkout wrote as plain files, read from the index only when `core.symlinks` is `false`.
+  checkout wrote as plain files, read from the index under one root only when `core.symlinks` is
+  false (unset is false on Windows, as Git for Windows reads it).
 - `@vibe-agent-toolkit/agent-skills`: `projectConfigOrNone`, `REGISTRY_INCLUDE`, `withSkillRegistries`
   and the `SkillRegistryRuling` type.
 
@@ -69,15 +74,22 @@
   not-ignored, as a listing does, instead of reading the silence as "nothing there". So does the
   Claude rules scope's ignored listing, which read it as "nothing ignored" and called every glob
   over ignored territory `inert`. The refusal is coded by cause: `GIT_NOT_FOUND` for a git missing
-  from PATH, `GIT_FAILED` for one that ran out of time or output, and `GIT_NO_ANSWER` otherwise.
+  from PATH, and `GIT_NO_ANSWER` otherwise.
 - **A tracked link a `core.symlinks=false` checkout wrote as a plain file is a declined link with
   the store off**, as git's index and the stored population keep it, not a member.
+- **A walk of more than about 125,000 paths no longer dies with `Maximum call stack size exceeded`.**
+  The stored population appended a gitignored directory's walk (a 200,000-file `.venv`) as one
+  spread argument list; so did three agent-skills walks. Each now appends one path at a time.
+- **`vat resources validate` and `vat resources scan` with an unreadable untracked non-markdown file
+  exit 0 instead of 2**, store on and off: the listing never stages the tree, so git never reads the
+  file, and the stored population's notice names it without refusing the run.
+- **`vat resources validate` and `scan` with the store off take no tree snapshot**, which read and
+  hashed every untracked file for nothing and printed `getGitTreeSnapshot failed unexpectedly` on
+  an unreadable one.
+- **The skills lanes (`vat skills validate`, `vat skills build`, `vat audit`) no longer walk ignored
+  territory** on a root with no store: they report no row from it.
 
 ### Changed
-
-- **`gitLsFiles` and `gitLsOthers` throw `GIT_FAILED` when git did not run to completion** (out of
-  time, more output than VAT reads) instead of returning `null`, which every caller reported as
-  "not a git repository". A missing git binary, or a tree git declines, is still `null`.
 
 - **Outside a repository, `vat audit` no longer reports links inside a tool-output-named directory**
   (`docs/coverage/`, `.turbo/`): it enumerates with the same source as every other verb, which

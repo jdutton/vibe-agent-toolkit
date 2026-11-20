@@ -72,7 +72,6 @@ import {
   forEachInOrder,
   fsFaultOf,
   isLinkChainRefusedError,
-  promised,
   readTextContentSync,
   safePath,
   toForwardSlash,
@@ -491,6 +490,13 @@ function walkedCandidate(absolutePath: string): CrawlCandidate {
 }
 
 /**
+ * Append a walk's paths as candidates. One at a time, never a spread: `push(...walked)` is an argument list, which throws `Maximum call stack size exceeded` past roughly 125,000 entries, and a walk is unbounded. A gitignored `.venv` holds 200,000.
+ */
+function appendWalked(candidates: CrawlCandidate[], walked: readonly string[]): void {
+  for (const absolutePath of walked) candidates.push(walkedCandidate(absolutePath));
+}
+
+/**
  * Whether one collapsed `ls-files --others --directory` entry is a symlink.
  *
  * **The one filesystem call git's own answer does not cover.** Git marks a
@@ -725,10 +731,8 @@ export class GitCrawlSource implements CrawlSource {
     // In order, here and below: the refusal collectors and symlink set are shared,
     // candidate order must be deterministic, and one listing at a time bounds fds.
     await forEachInOrder(submodules, async (submodule) => {
-      candidates.push(
-        walkedCandidate(submodule),
-        ...(await expandDirectory(submodule, admits, this.#refusals, 'inPopulation', this.#symlinks.add)).map(walkedCandidate),
-      );
+      candidates.push(walkedCandidate(submodule));
+      appendWalked(candidates, await expandDirectory(submodule, admits, this.#refusals, 'inPopulation', this.#symlinks.add));
     });
 
     // Ignored territory: descend, because the extent this feeds must still
@@ -754,9 +758,7 @@ export class GitCrawlSource implements CrawlSource {
       // A refusal met down here is inside IGNORED territory by construction —
       // recorded, never fatal. See {@link ListingRefusals}.
       if (collapsed.isDirectory && collapsed.shape !== 'symlink') {
-        candidates.push(
-          ...(await expandDirectory(collapsed.absolutePath, admits, this.#refusals, 'inIgnoredTerritory', this.#symlinks.add)).map(walkedCandidate),
-        );
+        appendWalked(candidates, await expandDirectory(collapsed.absolutePath, admits, this.#refusals, 'inIgnoredTerritory', this.#symlinks.add));
       }
     });
 
@@ -1111,10 +1113,15 @@ interface Listed {
   readonly names: readonly ListedName[];
   readonly links: readonly ListedName[];
   readonly refusals: readonly ListedRefusal[];
+  /**
+   * The ignored directories git collapsed, NOT yet walked: walked for their
+   * refusals only when a crawl reports them (`PopulationMembers.ignoredRefusals`).
+   */
+  readonly ignoredDirectories: readonly string[];
 }
 
 /** What a {@link RootListing} asks git, each answered once per run by its caller. */
-export interface RootListingGit {
+interface RootListingGit {
   /** The root's names, its `GitTracker` listing, or `null` when git did not answer. */
   readonly names: () => Promise<readonly string[] | null>;
   /** The tracked links its checkout wrote as plain files (`gitLinksCheckedOutAsFiles`), read once per repository. */
@@ -1165,7 +1172,11 @@ export function declinedLinkApplies(exclude: readonly string[]): (relativePath: 
  * from an open snapshot asked git nothing), opens every directory git does not
  * ignore, so its stderr names each one it could not list; and each ignored
  * directory it collapses, outside {@link NEVER_CRAWL_GLOBS}, is walked for its
- * refusals, as a stored population walks it. Those two walks collect no links:
+ * refusals, as a stored population walks it, the first time a crawl that
+ * reports them asks (`PopulationMembers.ignoredRefusals`) and never for a crawl
+ * that drops them: that walk exists for those rows alone, and a gitignored
+ * `.venv` makes it the largest cost a listing has. Those two walks collect no
+ * names and no links:
  * everything beneath an ignored directory or a nested repository is ignored,
  * and every lane a listing serves (the resources registry, with no store)
  * declines an ignored link without a row (`DECLINE_IGNORED`). A lane that
@@ -1192,6 +1203,8 @@ export class RootListing {
   readonly #root: string;
   readonly #outputs: readonly string[];
   readonly #listed: Listed;
+  /** The ignored directories' refusals, walked once, on the first crawl that reports them. */
+  #ignoredRefusals: Promise<readonly ListedRefusal[]> | undefined;
 
   private constructor(kind: CrawlSourceKind, root: string, outputs: readonly string[], listed: Listed) {
     this.kind = kind;
@@ -1225,13 +1238,25 @@ export class RootListing {
       refusals.push({ refusal, territory: 'undetermined' });
     });
     for (const absolutePath of found) named.add(absolutePath, null);
-    return new RootListing('filesystem', root, outputs, { names: named.names, links: links.names, refusals });
+    return new RootListing('filesystem', root, outputs, { names: named.names, links: links.names, refusals, ignoredDirectories: [] });
+  }
+
+  /** The refusals inside the ignored directories git collapsed, walked once per listing. */
+  #walkIgnored(): Promise<readonly ListedRefusal[]> {
+    this.#ignoredRefusals ??= (async () => {
+      const refusals: ListedRefusal[] = [];
+      await forEachInOrder(this.#listed.ignoredDirectories, async (directory) => {
+        await walkRefusals(directory, this.#outputs, (refusal) => refusals.push({ refusal, territory: 'ignored' }));
+      });
+      return refusals;
+    })();
+    return this.#ignoredRefusals;
   }
 
   /**
    * One crawl's view of the names.
    *
-   * @param members - The crawl's globs, relative to the root
+   * @param members - The crawl's globs, relative to the root, and whether it reports ignored-territory refusals
    * @param unreadable - What a directory the listing could not list does for this crawl
    * @returns A source over the crawl's members alone
    */
@@ -1241,18 +1266,20 @@ export class RootListing {
     const refusals = new ListingRefusals(this.#root, this.#outputs, unreadable === 'refuse' ? null : unreadable.degrade);
     const symlinks = new DeclinedSymlinks();
     const { names, links, refusals: listed } = this.#listed;
+    const ignored = members.ignoredRefusals === 'record' ? (): Promise<readonly ListedRefusal[]> => this.#walkIgnored() : null;
     return {
       kind: this.kind,
-      // Promise-shaped, synchronous underneath: a refusal is a rejection, never a throw.
-      enumerate: () => promised(() => {
+      // Async, so a refusal is a rejection, never a throw.
+      enumerate: async () => {
         refusals.clear();
         symlinks.clear();
         for (const { refusal, territory } of listed) settleListed(refusals, refusal, territory);
+        for (const { refusal, territory } of ignored === null ? [] : await ignored()) settleListed(refusals, refusal, territory);
         for (const link of links) {
           if (linkApplies(link.relativePath)) symlinks.add(link.absolutePath);
         }
         return admittedMembers(names, admits);
-      }),
+      },
       get unlistable() {
         return refusals.recorded;
       },
@@ -1271,16 +1298,16 @@ function settleListed(refusals: ListingRefusals, refusal: DirectoryRefusal, terr
 }
 
 /**
- * What git's names under `root` hold, `lstat`ed once each, with what git hides
- * walked as a stored population walks it: each nested repository (in
- * population), and each collapsed ignored directory (in ignored territory),
- * for refusals alone.
+ * What git's names under `root` hold, `lstat`ed once each, with each nested
+ * repository walked for its refusals (in population) as a stored population
+ * walks it, and each collapsed ignored directory named for
+ * {@link RootListing}'s walk on demand.
  *
  * @param root - The listed root, inside a repository
  * @param outputs - The trees the calling verb writes
  * @param gitNames - The tracker's names, absolute
  * @param linksAsFiles - Tracked links the checkout wrote as plain files
- * @returns The names, links and refusals
+ * @returns The names, links, refusals and ignored directories
  * @throws When git does not answer the ignored listing
  */
 async function gitListed(
@@ -1334,16 +1361,10 @@ async function gitListed(
     .map((relativePath) => safePath.resolve(root, relativePath.slice(0, -1)))
     .filter((directory) => isPathUnderRoot(directory, root) && isCrawled(relativeToRoot(directory, root)) && lstatShape(directory) === 'directory');
 
-  // A link beneath either is ignored, declined without a row on every lane a
-  // listing serves, so neither walk collects one.
-  const ignoreLink = (): void => undefined;
-  await forEachInOrder([
-    ...repositories.map((directory) => ({ directory, territory: 'population' as const })),
-    ...ignored.map((directory) => ({ directory, territory: 'ignored' as const })),
-  ], async ({ directory, territory }) => {
-    await walkNames(directory, outputs, ignoreLink, (refusal) => refusals.push({ refusal, territory }));
+  await forEachInOrder(repositories, async (directory) => {
+    await walkRefusals(directory, outputs, (refusal) => refusals.push({ refusal, territory: 'population' }));
   });
-  return { names: named.names, links: links.names, refusals };
+  return { names: named.names, links: links.names, refusals, ignoredDirectories: ignored };
 }
 
 /** The names a crawl admits, as members: an absent name dropped. */
@@ -1422,6 +1443,31 @@ function walkNames(
     filesOnly: false,
     respectGitignore: false,
     // Recorded and settled per crawl: crawls sharing one listing may differ in policy.
+    unreadable: { degrade: onRefusal },
+  });
+}
+
+/**
+ * A walk of `directory` for the directories it cannot list, and nothing else:
+ * pruning {@link NEVER_CRAWL_GLOBS}, collecting no name and no link. An empty
+ * include admits nothing, and the walk still descends, so a 200,000-entry
+ * `.venv` costs its `readdir`s and never an array of its paths. A link beneath
+ * a nested repository or an ignored directory is ignored, declined without a
+ * row on every lane a listing serves, so none is collected.
+ *
+ * @param directory - The directory to walk
+ * @param outputs - The trees the calling verb writes
+ * @param onRefusal - Receives each directory the walk could not list
+ */
+async function walkRefusals(directory: string, outputs: readonly string[], onRefusal: (refusal: DirectoryRefusal) => void): Promise<void> {
+  await crawlDirectory({
+    baseDir: directory,
+    outputs,
+    include: [],
+    exclude: [...NEVER_CRAWL_GLOBS],
+    followSymlinks: false,
+    filesOnly: false,
+    respectGitignore: false,
     unreadable: { degrade: onRefusal },
   });
 }

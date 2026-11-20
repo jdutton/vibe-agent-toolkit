@@ -23,6 +23,7 @@ import {
 import { isDeclinedSymlinkCode } from '../../src/projection/contributors/filesystem-extent.js';
 import { GitCrawlSource, type PopulationUnreadablePolicy } from '../../src/projection/crawl-source.js';
 import type { PopulationCache } from '../../src/projection/merge.js';
+import type { IgnoredRefusals } from '../../src/projection/resource-population.js';
 import { withRunPopulation } from '../../src/projection/run-population.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import { git, nestedRepository } from '../helpers/git-fixture.js';
@@ -87,6 +88,8 @@ function crawl(options: {
   store: boolean;
   include?: readonly string[];
   degrade?: boolean;
+  /** `record` unless said: the lanes that report ignored-territory refusals are the ones parity binds. */
+  ignoredRefusals?: IgnoredRefusals;
 }): Promise<Crawled> {
   const { home, baseDir, store } = options;
   const degraded: string[] = [];
@@ -106,7 +109,14 @@ function crawl(options: {
       if (store) await cacheOf();
       const registry = ResourceRegistry.forRun(population, { baseDir }).view({ baseDir });
       try {
-        await registry.crawl({ baseDir, include: [...(options.include ?? ['**/*.md'])], outputs: [], unreadable, populationSource: population.source });
+        await registry.crawl({
+          baseDir,
+          include: [...(options.include ?? ['**/*.md'])],
+          outputs: [],
+          unreadable,
+          ignoredRefusals: options.ignoredRefusals ?? 'record',
+          populationSource: population.source,
+        });
       } catch (error) {
         return { members: [], declinedLinks: [], unlistable: [], degraded, refused: error instanceof Error ? error.message : String(error) };
       }
@@ -156,6 +166,17 @@ describe.skipIf(CANNOT_DENY_READS)('an unlistable directory is the same gap with
     expect(off.unlistable).toEqual(on.unlistable);
   });
 
+  it('a listing never walks ignored territory for a crawl that drops its refusals', async () => {
+    const home = repository({ 'doc.md': '# Doc\n', '.gitignore': 'build/\n' });
+    mkdirSyncReal(safePath.join(home, 'build'), { recursive: true });
+    lockedDirectory(home, 'build/cache');
+    const recorded = await crawl({ home, baseDir: home, store: false });
+    const skipped = await crawl({ home, baseDir: home, store: false, ignoredRefusals: 'skip' });
+    expect(recorded.unlistable, 'positive control: a crawl that reports them walks to it').toEqual(['build/cache']);
+    expect(skipped.unlistable).toEqual([]);
+    expect(skipped.members).toEqual(recorded.members);
+  });
+
   it('a nested repository refuses an unlistable directory inside it either way', async () => {
     const home = repository({ 'a.md': '# A\n' });
     nestedRepository(home, 'vendor/sub', true);
@@ -190,8 +211,8 @@ describe.skipIf(symlinkCapability() === null)('a declined link is the same condi
   // The stored population's snapshot restages the working tree, so a link that
   // replaced a tracked file is a link to it, whatever the index held: a listing
   // that read the index mode would answer the commit while the store answers
-  // the tree. The one exception, git's own, is the `core.symlinks=false` case
-  // below.
+  // the tree. The one exception, git's own, is `core.symlinks=false` (see
+  // `linkIndexedAsPlainFile`).
   it('a tracked non-markdown file replaced by a directory link, under a markdown include', async () => {
     const symlinks = symlinkCapability();
     if (symlinks === null) return;
@@ -200,41 +221,6 @@ describe.skipIf(symlinkCapability() === null)('a declined link is the same condi
     createSymlink(symlinks, '../../shared', safePath.join(home, '.claude', 'rules', 'shared'), 'dir');
     const { off, on } = await bothArms({ home, baseDir: home, include: ['**/*.md'] });
     expect(on.declinedLinks, 'positive control: the stored population reports it').toEqual(['.claude/rules/shared']);
-    expect(off.declinedLinks).toEqual(on.declinedLinks);
-    expect(off.members).toEqual(on.members);
-  });
-
-  it('a committed link replaced by a regular file is a member either way', async () => {
-    const symlinks = symlinkCapability();
-    if (symlinks === null) return;
-    const home = repository({ 'README.md': '# Home\n' });
-    // Pinned: a system-wide `core.symlinks=false` (Git for Windows) is the next case.
-    git(home, 'config', 'core.symlinks', 'true');
-    createSymlink(symlinks, 'README.md', safePath.join(home, 'alias.md'), 'file');
-    git(home, 'add', '-A');
-    git(home, 'commit', '-q', '-m', 'link');
-    rmSync(safePath.join(home, 'alias.md'));
-    writeFileSync(safePath.join(home, 'alias.md'), '# Alias, now a file\n');
-    const { off, on } = await bothArms({ home, baseDir: home });
-    expect(on.members, 'positive control: the stored population admits it').toContain('alias.md');
-    expect(off.members).toEqual(on.members);
-    expect(off.declinedLinks).toEqual(on.declinedLinks);
-  });
-
-  // What a Windows checkout without Developer Mode leaves: git keeps the index
-  // mode 120000 for a plain file holding the target text, and restages it so.
-  it('a committed link a core.symlinks=false checkout wrote as a plain file is declined either way', async () => {
-    const symlinks = symlinkCapability();
-    if (symlinks === null) return;
-    const home = repository({ 'README.md': '# Home\n' });
-    createSymlink(symlinks, 'README.md', safePath.join(home, 'alias.md'), 'file');
-    git(home, 'add', '-A');
-    git(home, 'commit', '-q', '-m', 'link');
-    git(home, 'config', 'core.symlinks', 'false');
-    rmSync(safePath.join(home, 'alias.md'));
-    writeFileSync(safePath.join(home, 'alias.md'), 'README.md');
-    const { off, on } = await bothArms({ home, baseDir: home });
-    expect(on.declinedLinks, 'positive control: the stored population declines it').toEqual(['alias.md']);
     expect(off.declinedLinks).toEqual(on.declinedLinks);
     expect(off.members).toEqual(on.members);
   });
@@ -257,6 +243,44 @@ describe.skipIf(symlinkCapability() === null)('a declined link is the same condi
     const sub = nestedRepository(home, 'vendor/sub', true);
     createSymlink(symlinks, 'README.md', safePath.join(sub, 'alias.md'), 'file');
     await expectSameLinksAndMembers(home);
+  });
+});
+
+/**
+ * A repository whose index holds `alias.md` at mode 120000 while the working
+ * tree holds a plain file of the link's target text, which is what a checkout
+ * with `core.symlinks=false` leaves. Staged with `update-index --cacheinfo`,
+ * so no symlink support is needed and the cases run on Windows too.
+ */
+function linkIndexedAsPlainFile(symlinks: 'true' | 'false'): string {
+  const home = repository({ 'README.md': '# Home\n' });
+  writeFileSync(safePath.join(home, 'alias.md'), 'README.md');
+  const oid = git(home, 'hash-object', '-w', 'alias.md').trim();
+  git(home, 'update-index', '--add', '--cacheinfo', `120000,${oid},alias.md`);
+  git(home, 'commit', '-q', '-m', 'link');
+  git(home, 'config', 'core.symlinks', symlinks);
+  return home;
+}
+
+describe('an index link whose working-tree path is a plain file', () => {
+  // With core.symlinks=true git restages the plain file as a file, so the
+  // stored population admits it, and a listing must not read the index mode.
+  it('is a member either way with core.symlinks=true', async () => {
+    const home = linkIndexedAsPlainFile('true');
+    const { off, on } = await bothArms({ home, baseDir: home });
+    expect(on.members, 'positive control: the stored population admits it').toContain('alias.md');
+    expect(off.members).toEqual(on.members);
+    expect(off.declinedLinks).toEqual(on.declinedLinks);
+  });
+
+  // What a Windows checkout without Developer Mode leaves: git keeps the index
+  // mode 120000 for the plain file, and restages it so.
+  it('is declined either way with core.symlinks=false', async () => {
+    const home = linkIndexedAsPlainFile('false');
+    const { off, on } = await bothArms({ home, baseDir: home });
+    expect(on.declinedLinks, 'positive control: the stored population declines it').toEqual(['alias.md']);
+    expect(off.declinedLinks).toEqual(on.declinedLinks);
+    expect(off.members).toEqual(on.members);
   });
 });
 

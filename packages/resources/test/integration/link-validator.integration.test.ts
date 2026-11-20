@@ -93,7 +93,7 @@ async function crawlAndValidate(
   validateOptions?: { checkHtmlAnchors?: boolean },
 ): Promise<Awaited<ReturnType<ResourceRegistry['validate']>>> {
   const reg = new ResourceRegistry({ baseDir: dir });
-  await crawlInRun(reg, { unreadable: 'refuse', outputs: [], baseDir: dir });
+  await crawlInRun(reg, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: dir });
   return reg.validate({ skipGitIgnoreCheck: true, ...validateOptions });
 }
 

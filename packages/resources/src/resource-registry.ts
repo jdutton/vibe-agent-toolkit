@@ -79,7 +79,13 @@ import {
 // Type-only, and that is what keeps it acyclic: the projection's population
 // builder is a CALLER of the registry's world, not a dependency of it, so the
 // import is erased before any module graph exists at runtime.
-import type { CrawlPopulation, ResourceEnumeration, ResourcePopulationSource } from './projection/resource-population.js';
+import type {
+  CrawlPopulation,
+  IgnoredRefusals,
+  PopulationMembers,
+  ResourceEnumeration,
+  ResourcePopulationSource,
+} from './projection/resource-population.js';
 import type { AdmittedFacts, AdmittedStat, RunPopulation } from './projection/run-population.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { SHA256 } from './schemas/checksum.js';
@@ -231,7 +237,8 @@ export interface CrawlOptions {
    * see {@link PopulationUnreadablePolicy}. Required, no default. Handed to the
    * population source: `'refuse'` stops the run by name, `{ degrade }` keeps the
    * readable remainder and hands each refusal over. A directory inside ignored
-   * territory is recorded as a population condition either way.
+   * territory is recorded as a population condition under either policy, when
+   * {@link CrawlOptions.ignoredRefusals} is `record`.
    */
   unreadable: PopulationUnreadablePolicy;
   /** Include patterns (default: {@link DEFAULT_RESOURCE_INCLUDE}) */
@@ -258,6 +265,13 @@ export interface CrawlOptions {
    * is enumerated for that root: nothing declines and nothing walks.
    */
   populationSource: ResourcePopulationSource;
+  /**
+   * Whether this crawl's caller reports the directories it could not list inside
+   * ignored territory (see `PopulationMembers.ignoredRefusals`). Required: a
+   * caller that reports them and omitted it would lose them with the store off,
+   * and one that drops them would pay for a walk of every ignored directory.
+   */
+  ignoredRefusals: IgnoredRefusals;
 }
 
 /**
@@ -1478,6 +1492,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       unreadable,
       populationSource,
       outputs,
+      ignoredRefusals,
     } = options;
     requirePopulationUnreadablePolicy(unreadable);
 
@@ -1498,7 +1513,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // them out of the total. See `crawl-timing.ts` on stratum inheritance.
     const enumerationStartedAt = crawlTimingStart();
     const { admitted, enumeration } = await withOuterBracket(() =>
-      this.populationFrom(populationSource, baseDir, include, exclude, outputs, unreadable),
+      this.populationFrom(populationSource, baseDir, { include, exclude, ignoredRefusals }, outputs, unreadable),
     );
     recordRegistryPass(CRAWL_REGISTRY_ENUMERATE_ID, enumerationStartedAt);
 
@@ -1515,8 +1530,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    *
    * @param source - The run's population source
    * @param baseDir - The basis the caller's globs are written against, and the root enumerated
-   * @param include - Include globs
-   * @param exclude - Exclude globs
+   * @param members - The crawl's globs and whether it reports ignored-territory refusals
    * @param outputs - The trees the calling verb writes
    * @param unreadable - What a refused listing inside the population does
    * @returns Absolute paths of the admitted files with the enumeration they came from
@@ -1524,14 +1538,14 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private async populationFrom(
     source: ResourcePopulationSource,
     baseDir: string,
-    include: string[],
-    exclude: string[],
+    members: PopulationMembers,
     outputs: readonly string[],
     unreadable: PopulationUnreadablePolicy,
   ): Promise<{ admitted: string[]; enumeration: ResourceEnumeration }> {
     const base = safePath.resolve(baseDir);
-    const isMember = crawlPathFilter(include, exclude);
-    const enumeration = await source.enumerate(base, outputs, unreadable, { include, exclude });
+    const { include, exclude } = members;
+    const isMember = crawlPathFilter([...include], [...exclude]);
+    const enumeration = await source.enumerate(base, outputs, unreadable, members);
     const { paths, conditions } = enumeration;
     // Kept whole, not narrowed by `include`/`exclude`: a condition is about the
     // enumeration, and a gap the enumerator met outside this crawl's globs is

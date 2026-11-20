@@ -25,7 +25,7 @@ const GUIDE_REL = 'docs/guide.md';
 const ASSET_REL = 'docs/asset.txt';
 
 /** A crawl that admits every file: the source answers with exactly the members asked for. */
-const ALL_FILES = { include: ['**/*'], exclude: [] } as const;
+const ALL_FILES = { include: ['**/*'], exclude: [], ignoredRefusals: 'record' } as const;
 
 let root: string;
 

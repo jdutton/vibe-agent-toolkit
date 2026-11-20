@@ -23,7 +23,7 @@ async function createSkillFile(tempDir: string, content: string): Promise<string
 
 /** Crawl every markdown file under `dir` (a tree the test only reads) and validate it against `schema`. */
 async function crawlAndValidate(registry: ResourceRegistry, dir: string, schema: object): Promise<Awaited<ReturnType<ResourceRegistry['validate']>>> {
-  await crawlInRun(registry, { unreadable: 'refuse', outputs: [], baseDir: dir, include: ['**/*.md'] });
+  await crawlInRun(registry, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: dir, include: ['**/*.md'] });
   return registry.validate({ frontmatterSchema: schema });
 }
 
@@ -60,6 +60,7 @@ See [documentation](../../docs/README.md) for details.
 
       // Crawl and validate
       await crawlInRun(suite.registry, {
+        ignoredRefusals: 'record',
         unreadable: 'refuse',
         outputs: [],
         baseDir: suite.tempDir,
@@ -96,6 +97,7 @@ See [missing file](../../docs/MISSING.md) for more.
 
       // Crawl and validate
       await crawlInRun(suite.registry, {
+        ignoredRefusals: 'record',
         unreadable: 'refuse',
         outputs: [],
         baseDir: suite.tempDir,
@@ -243,6 +245,7 @@ See [missing file](../../docs/MISSING.md) for more.
 
       // Crawl all markdown files
       await crawlInRun(suite.registry, {
+        ignoredRefusals: 'record',
         unreadable: 'refuse',
         outputs: [],
         baseDir: suite.tempDir,

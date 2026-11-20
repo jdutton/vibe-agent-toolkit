@@ -62,6 +62,21 @@ function memberPaths(root: string, resources: readonly { filePath: string }[]): 
   return resources.map((r) => safePath.relative(root, r.filePath)).sort(compareCodeUnits);
 }
 
+/** Crawl `baseDir`'s markdown from `populationSource`, with `exclude` when given. */
+async function crawlMarkdown(baseDir: string, populationSource: ResourcePopulationSource, exclude?: string[]): Promise<{ filePath: string }[]> {
+  const registry = new ResourceRegistry({ baseDir });
+  const { resources } = await registry.crawl({
+    ignoredRefusals: 'record',
+    unreadable: 'refuse',
+    outputs: [],
+    baseDir,
+    include: ['**/*.md'],
+    ...(exclude === undefined ? {} : { exclude }),
+    populationSource,
+  });
+  return resources;
+}
+
 describe('ResourceRegistry.crawl with a populationSource', () => {
   const suite = setupAsyncTempDirSuite('registry-population-source');
   let tempDir: string;
@@ -76,31 +91,15 @@ describe('ResourceRegistry.crawl with a populationSource', () => {
   });
 
   it('takes its paths from the source, not from the tree', async () => {
-    const registry = new ResourceRegistry({ baseDir: tempDir });
-
-    const { resources } = await registry.crawl({
-      unreadable: 'refuse',
-      outputs: [],
-      baseDir: tempDir,
-      include: ['**/*.md'],
-      // A path the source never offers, proving nothing else enumerated: `b.md` is
-      // on disk and a real crawl would find it.
-      populationSource: stubSource(['a.md']).source,
-    });
+    // A path the source never offers, proving nothing else enumerated: `b.md` is
+    // on disk and a real crawl would find it.
+    const resources = await crawlMarkdown(tempDir, stubSource(['a.md']).source);
 
     expect(resources.map((r) => safePath.relative(tempDir, r.filePath))).toEqual(['a.md']);
   });
 
   it('still applies include patterns to what the source offered', async () => {
-    const registry = new ResourceRegistry({ baseDir: tempDir });
-
-    const { resources } = await registry.crawl({
-      unreadable: 'refuse',
-      outputs: [],
-      baseDir: tempDir,
-      include: ['**/*.md'],
-      populationSource: stubSource().source,
-    });
+    const resources = await crawlMarkdown(tempDir, stubSource().source);
 
     // `notes.txt` was offered and refused HERE. A source that pre-filtered would
     // make this assertion pass without the registry doing anything.
@@ -108,16 +107,7 @@ describe('ResourceRegistry.crawl with a populationSource', () => {
   });
 
   it('still applies exclude patterns to what the source offered', async () => {
-    const registry = new ResourceRegistry({ baseDir: tempDir });
-
-    const { resources } = await registry.crawl({
-      unreadable: 'refuse',
-      outputs: [],
-      baseDir: tempDir,
-      include: ['**/*.md'],
-      exclude: ['**/b.md'],
-      populationSource: stubSource().source,
-    });
+    const resources = await crawlMarkdown(tempDir, stubSource().source, ['**/b.md']);
 
     expect(resources.map((r) => safePath.relative(tempDir, r.filePath))).toEqual(['a.md']);
   });
@@ -126,7 +116,7 @@ describe('ResourceRegistry.crawl with a populationSource', () => {
     const registry = new ResourceRegistry({ baseDir: tempDir });
     const { source, offeredRoots } = stubSource(['a.md']);
 
-    const { resources, population } = await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: tempDir, include: ['**/*.md'], populationSource: source });
+    const { resources, population } = await registry.crawl({ ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: tempDir, include: ['**/*.md'], populationSource: source });
 
     expect(offeredRoots).toEqual([safePath.resolve(tempDir)]);
     expect(population).toEqual(STUB_PROVENANCE);
