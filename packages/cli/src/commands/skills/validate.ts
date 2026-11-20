@@ -15,6 +15,8 @@ import { basename, dirname } from 'node:path';
 
 import {
   conventionalSuiteProbe,
+  projectConfigOrNone,
+  REGISTRY_INCLUDE,
   RunSkillRegistries,
   validateSkillForPackaging,
   type DeclaredEvalSuite,
@@ -24,7 +26,6 @@ import {
 } from '@vibe-agent-toolkit/agent-skills';
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
 import {
-  loadConfig as loadRootConfig,
   notAdmittedFindings,
   type ParseRefusedResource,
   type ProjectConfig,
@@ -41,7 +42,7 @@ import {
   type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, mapInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, mapInOrder, safePath, toForwardSlash, appendAll } from '@vibe-agent-toolkit/utils';
 import { gitFindRoot, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { DocumentFormat } from '../../report-schemas.js';
@@ -56,7 +57,7 @@ import {
 } from '../../utils/issue-rendering.js';
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
-import { resourcesProjectionCrawlSelected, type RunContext } from '../../utils/resource-loader.js';
+import type { RunContext } from '../../utils/resource-loader.js';
 import { verdictBanner } from '../../utils/run-integrity.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../../utils/skill-quality-footer.js';
@@ -269,11 +270,11 @@ function skillReportLines(result: PackagingValidationResult, verbose: boolean): 
 
   const rendered = issuesToRenderAtVerbosity(result.allErrors, verbose);
   for (const issue of rendered) {
-    lines.push(...formatIssueLines(issue, '    '));
+    appendAll(lines, formatIssueLines(issue, '    '));
   }
 
   const detail = verbose ? verboseDetailLines(result) : [];
-  lines.push(...detail);
+  appendAll(lines, detail);
 
   // A trailing blank line only when something was rendered beneath the row —
   // otherwise consecutive one-line rows would be double-spaced.
@@ -354,11 +355,11 @@ export function formatValidationReportLines(
 
   for (const result of results) {
     if (!hasFindings(result)) continue;
-    lines.push(...skillReportLines(result, verbose));
+    appendAll(lines, skillReportLines(result, verbose));
   }
   const runLines = formatRunIssueLines(runFindings);
   if (runLines.length > 0) {
-    lines.push(...runLines, '');
+    appendAll(lines, [...runLines, '']);
   }
   return lines;
 }
@@ -428,9 +429,6 @@ function logSkillProgress(
 /** What `vat skills validate` crawls for the one project root its batch shares: markdown only. */
 const SHARED_ROOT_INCLUDE: readonly string[] = ['**/*.md'];
 
-/** What it crawls for any other root: markdown and HTML, as the packaging validator's own crawl does. */
-const OTHER_ROOT_INCLUDE: readonly string[] = ['**/*.md', '**/*.html', '**/*.htm'];
-
 /**
  * The run's skill registries for a `vat skills validate` batch: one view of the
  * run's registry per project root a skill resolves to.
@@ -441,12 +439,7 @@ const OTHER_ROOT_INCLUDE: readonly string[] = ['**/*.md', '**/*.html', '**/*.htm
  * a config at `cwd`, every skill is discovered relative to `cwd`, and
  * `findProjectRoot` stops at the nearest config). Any other root — a batch that
  * spans several, a skill with no project root, which gets its own directory —
- * crawls markdown and HTML under its own config (or none, when it will not
- * parse: the per-skill validation reports that).
- *
- * Only the shared root's view enumerates through the run's population source: a
- * batch that spans several roots walks every view, its home root's too, which is
- * what each skill's own registry did before the run held them.
+ * crawls markdown and HTML (`REGISTRY_INCLUDE`) under its own config.
  *
  * @param run - The run
  * @param sharedRoot - The one project root the batch shares, or `undefined`
@@ -461,11 +454,10 @@ export function skillsValidateRegistries(
   const shared = sharedRoot === undefined ? undefined : toForwardSlash(safePath.resolve(sharedRoot));
   return new RunSkillRegistries({
     registry: run.registry,
-    // The run's source for the shared root only: a batch spanning several roots
-    // walks every root, its home root included, as each skill's own registry did.
-    source: shared !== undefined && resourcesProjectionCrawlSelected() ? run.population.source : undefined,
-    includeFor: (root) => (root === shared ? SHARED_ROOT_INCLUDE : OTHER_ROOT_INCLUDE),
-    configFor: (root) => (root === shared ? Promise.resolve(config) : loadRootConfig(root).catch(() => undefined)),
+    source: run.population.source,
+    dispatcher: run.dispatcher,
+    includeFor: (root) => (root === shared ? SHARED_ROOT_INCLUDE : REGISTRY_INCLUDE),
+    configFor: (root) => (root === shared ? Promise.resolve(config) : projectConfigOrNone(root)),
   });
 }
 
@@ -518,7 +510,7 @@ export async function buildSharedValidationContext(
   // lane must model a bundle that excludes EVERY declared suite, not just the
   // subject's. Present even for an empty batch, so no early return can drop it.
   if (skills.length === 0) {
-    return { allowLedger, projectSkills, suiteProbe, registries: skillsValidateRegistries(run, undefined, config), unreadable: 'refuse', outputs: [], dispatcher: run.dispatcher };
+    return { allowLedger, projectSkills, suiteProbe, registries: skillsValidateRegistries(run, undefined, config), unreadable: 'refuse', outputs: [] };
   }
 
   const projectRoots = new Set<string>();
@@ -549,7 +541,6 @@ export async function buildSharedValidationContext(
     registries: skillsValidateRegistries(run, sharedRoot, config),
     unreadable: 'refuse',
     outputs: [],
-    dispatcher: run.dispatcher,
   };
 
   // One tracker per repo; when the batch spans repos, skip rather than spawn

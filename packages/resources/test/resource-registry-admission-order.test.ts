@@ -2,8 +2,8 @@
  * The ONE order the registry admits files in, whoever enumerated them.
  *
  * First-added-wins on a duplicate id is decided by admission order, so an order
- * owned by one enumerator makes the lanes disagree about which file survives:
- * the walk listed `dup/` before `dup-hyphen/` while the projection listed them
+ * owned by one enumerator makes two enumerations disagree about which file
+ * survives: one listed `dup/` before `dup-hyphen/` while another listed them
  * the other way round, and two commands over one tree kept different files.
  * The order is the registry's, so it is pinned here, against every route in.
  *
@@ -19,6 +19,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 
 import type { ResourcePopulationSource } from '../src/projection/resource-population.js';
 import { admissionOrder, ResourceRegistry } from '../src/resource-registry.js';
+
+import { crawlInRun } from './helpers/population-run.js';
 
 /** Two spellings of one id: `-` (0x2d) sorts before `/` (0x2f), so this one is first. */
 const HYPHEN_DIR = 'dup-hyphen/note.md';
@@ -118,10 +120,9 @@ describe('ResourceRegistry admission order', () => {
     expect(admissionOrder([forwardSlash, backslashHyphen])).toEqual([backslashHyphen, forwardSlash]);
   });
 
-  it('admits the walk and a population source in one order, so both keep the same file', async () => {
+  it('admits a real population and a source listing out of order in one order, so both keep the same file', async () => {
     const offered = [SLASH_DIR, 'z.md', HYPHEN_DIR];
     const source: ResourcePopulationSource = {
-      root,
       enumerate: (enumeratedRoot: string) => Promise.resolve({
         paths: offered.map((relative) => safePath.join(enumeratedRoot, relative)),
         conditions: [],
@@ -129,14 +130,14 @@ describe('ResourceRegistry admission order', () => {
         extentSource: 'filesystem',
       }),
     };
-    const walked = new ResourceRegistry({ baseDir: root });
+    const populated = new ResourceRegistry({ baseDir: root });
     const sourced = new ResourceRegistry({ baseDir: root });
 
-    const walk = await walked.crawl({ baseDir: root, outputs: [], unreadable: 'refuse' });
-    const projection = await sourced.crawl({ baseDir: root, outputs: [], unreadable: 'refuse', populationSource: source });
+    const population = await crawlInRun(populated, { ignoredRefusals: 'record', baseDir: root, outputs: [], unreadable: 'refuse' });
+    const offeredCrawl = await sourced.crawl({ ignoredRefusals: 'record', baseDir: root, outputs: [], unreadable: 'refuse', populationSource: source });
 
-    expect(projection.resources.map((resource) => resource.filePath)).toEqual(walk.resources.map((resource) => resource.filePath));
-    expect(collisionsOf(sourced, root)).toEqual(collisionsOf(walked, root));
-    expect(collisionsOf(walked, root)).toEqual([['dup-hyphen-note-md', HYPHEN_DIR, SLASH_DIR]]);
+    expect(offeredCrawl.resources.map((resource) => resource.filePath)).toEqual(population.resources.map((resource) => resource.filePath));
+    expect(collisionsOf(sourced, root)).toEqual(collisionsOf(populated, root));
+    expect(collisionsOf(populated, root)).toEqual([['dup-hyphen-note-md', HYPHEN_DIR, SLASH_DIR]]);
   });
 });

@@ -43,7 +43,6 @@ import { classifyInputFault, projectRootOrLoudCwd } from '../../utils/project-ro
 import {
   assertDeclaredCollection,
   loadResourcesWithConfig,
-  publishedPopulation,
   type RunContext,
 } from '../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
@@ -138,7 +137,7 @@ export interface ResourcesValidateInput {
   /** `--verbose`: publish one `data.files` row per resource validated. */
   readonly verbose: boolean;
   readonly durationMs: number;
-  /** Where the membership came from — {@link publishedPopulation} of the population the load returned. */
+  /** Where the membership came from: the outcome of the population the load returned. */
   readonly population: ResourcesValidateData['population'];
 }
 
@@ -408,7 +407,7 @@ async function runValidation(
     collectionStats: narrowCollectionStats(registry.getCollectionStats(), options.collection),
     verbose: options.verbose === true,
     durationMs: Date.now() - startTime,
-    population: publishedPopulation(population),
+    population: population.outcome.population,
   });
 }
 

@@ -57,7 +57,6 @@ import { z } from 'zod';
 import { StatedLimitSchema } from '../../src/commands/resources/check-schema.js';
 import { reportShapeFor } from '../../src/report-schemas.js';
 import { PROJECTION_STORE_ENV, PROJECTION_STORE_OFF, PROJECTION_STORE_SQLITE } from '../../src/utils/projection-store.js';
-import { RESOURCES_CRAWL_ENV, RESOURCES_CRAWL_PROJECTION } from '../../src/utils/resource-loader.js';
 import { createIsolatedScratch, createSuiteContext, executeCli, isolatedScratchEnv, writeFileTree } from '../system/test-common.js';
 
 import {
@@ -526,7 +525,6 @@ function baseEnv(dirs: ArmDirs): Record<string, string> {
   return {
     ...isolatedGitEnv(dirs.root),
     NODE_OPTIONS: '',
-    [RESOURCES_CRAWL_ENV]: RESOURCES_CRAWL_PROJECTION,
     [VAT_CACHE_DIR_ENV]: dirs.store,
   };
 }

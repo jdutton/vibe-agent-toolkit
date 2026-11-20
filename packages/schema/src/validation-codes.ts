@@ -387,7 +387,7 @@ export const CODE_REGISTRY = {
   ),
   // The two population-time conditions `vat resources validate` surfaces off
   // the projection's `realization_conditions` table (and, for the MIME
-  // conflict, off the registry's own resolver on the walk lane). Default
+  // conflict, off the registry's own resolver). Default
   // severities MATCH the row severities the projection writes, so the two
   // channels never disagree about how loud one fact is.
   COLLECTION_MIME_CONFLICT: entry(

@@ -114,7 +114,7 @@ describe('clearedEnvironment', () => {
     PATH: '/bin',
     HOME: '/home/dev',
     VAT_PROJECTION_STORE: 'off',
-    VAT_RESOURCES_CRAWL: 'walk',
+    VAT_EXTENT_SOURCE: 'filesystem',
     CLAUDE_CONFIG_DIR: '/home/dev/.claude',
     TMPDIR: '/var/dev-tmp',
     TEMP: '/var/dev-tmp',
@@ -128,13 +128,13 @@ describe('clearedEnvironment', () => {
   it('removes every VAT_* name and every cleared name from a VAT step, and records them', () => {
     const cleared = clearedEnvironment(DEVELOPER, 'vat', { set: { HOME: '/arm/home' }, unset: [] }, 'linux');
     const env = buildArmEnv(DEVELOPER, cleared.env);
-    for (const name of [...CLEARED_ENV_NAMES, 'VAT_PROJECTION_STORE', 'VAT_RESOURCES_CRAWL']) {
+    for (const name of [...CLEARED_ENV_NAMES, 'VAT_PROJECTION_STORE', 'VAT_EXTENT_SOURCE']) {
       expect(env[name], name).toBeUndefined();
     }
     expect(env['HOME']).toBe('/arm/home'); // the arm's own wins
     expect(env['PATH']).toBe('/bin'); // positive control: ordinary inheritance survives
     expect(cleared.removed).toStrictEqual(
-      [...CLEARED_ENV_NAMES.filter((name) => Object.hasOwn(DEVELOPER, name)), 'VAT_PROJECTION_STORE', 'VAT_RESOURCES_CRAWL'].toSorted(byName),
+      [...CLEARED_ENV_NAMES.filter((name) => Object.hasOwn(DEVELOPER, name)), 'VAT_PROJECTION_STORE', 'VAT_EXTENT_SOURCE'].toSorted(byName),
     );
   });
 
@@ -152,7 +152,7 @@ describe('clearedEnvironment', () => {
     expect(env['VAT_PROJECTION_STORE']).toBeUndefined();
     expect(env['XDG_CONFIG_HOME']).toBe('/home/dev/.config');
     expect(env['TMPDIR']).toBe('/var/dev-tmp');
-    expect(cleared.removed).toStrictEqual(['VAT_PROJECTION_STORE', 'VAT_RESOURCES_CRAWL']);
+    expect(cleared.removed).toStrictEqual(['VAT_EXTENT_SOURCE', 'VAT_PROJECTION_STORE']);
   });
 
   /**

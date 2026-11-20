@@ -32,7 +32,7 @@
 import { readdirSync } from 'node:fs';
 
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, FollowedWalk, type FsSide, isPathAbsentError, issueLocation, safePath, withFsFaultSync } from '@vibe-agent-toolkit/utils';
+import { appendAll, direntKindFollowingSync, FollowedWalk, type FsSide, isPathAbsentError, issueLocation, safePath, withFsFaultSync } from '@vibe-agent-toolkit/utils';
 
 import { CLAUDE_WEB_REFERENCES_SUBDIR, TARGET_SUBDIR_CATEGORIES } from '../content-type-routing.js';
 
@@ -88,7 +88,7 @@ function listFilesUnder(dir: string, baseDir: string, side: FsSide, walk: Follow
       found.push(safePath.relative(baseDir, child));
     } else if (kind === 'directory') {
       guard.enter(child);
-      found.push(...listFilesUnder(child, baseDir, side, guard));
+      appendAll(found, listFilesUnder(child, baseDir, side, guard));
     }
   }
   return found;

@@ -170,6 +170,30 @@ describe('vat audit with an unloadable governing config', () => {
     expect(result.stdout).toContain(CONFIG_FILENAME);
   });
 
+  it('opens its run at a home root whose config will not parse, and audits a nested project through that run', () => {
+    // `vat audit` opens its run as every verb does (`withRunContext`), whose population
+    // reads each enumerated root's declared collections from the CLI config loader, which
+    // throws on a config that will not parse. Audit's crawls run only for a skill whose
+    // governing config loaded, so the home's broken config is reported at audit's own layer
+    // (the warning and finding above) and never aborts the run: here the run's home is
+    // the unparseable tree, and a nested project with a loadable config is crawled through it.
+    const dir = buildFixture('vat-unparseable-home-', UNPARSEABLE_CONFIG, false);
+    try {
+      const nested = safePath.join(dir, 'nested');
+      writeSkill(safePath.join(nested, 'skills', 'inner'), 'inner');
+      fs.writeFileSync(safePath.join(nested, CONFIG_FILENAME), 'skills:\n  include: ["skills/**/SKILL.md"]\n');
+      const result = runAuditCli(dir, ['--verbose']);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(ignoreWarnings(result.stderr)).toHaveLength(1);
+      expect(result.stdout).toContain('SCAN_PATH_UNREADABLE');
+      expect(result.stdout).toContain('path: nested/skills/inner/SKILL.md');
+      expect(result.stdout).toContain('path: skills/demo/SKILL.md');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('agrees with the single-target lane on the same skill', () => {
     const scan = runAuditCli(tempDir);
     const single = runAuditCli(skillPath);

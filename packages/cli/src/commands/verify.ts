@@ -33,7 +33,7 @@ import {
   resolveFindings,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { everywhere, followedKindSync, forEachInOrder, isPathAbsentError, pathPresent, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { everywhere, followedKindSync, forEachInOrder, isPathAbsentError, pathPresent, safePath, toForwardSlash, appendAll } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { marksOperandRefusalByHand } from '../command-tree.js';
@@ -512,7 +512,7 @@ export function checkPackagedAgentInstructionFiles(
       // `vat verify` examines what an earlier build wrote; it writes nothing.
       [],
     );
-    issues.push(...resolveFindings(raw, check.packaging.validation ?? {}));
+    appendAll(issues, resolveFindings(raw, check.packaging.validation ?? {}));
   }
   return {
     bundlesInspected: outputs.built.length,

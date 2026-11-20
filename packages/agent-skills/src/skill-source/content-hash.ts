@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 
-import { direntKindFollowing, FollowedWalk, forEachInOrder, safePath, toForwardSlash, withFsFault } from '@vibe-agent-toolkit/utils';
+import { appendAll, direntKindFollowing, FollowedWalk, forEachInOrder, safePath, toForwardSlash, withFsFault } from '@vibe-agent-toolkit/utils';
 
 /** A refusal while hashing is a fault of the skill source's content, naming the path read. */
 const SKILL_SOURCE = { side: 'source', origin: 'content' } as const;
@@ -62,7 +62,7 @@ async function collectFiles(
     switch (kind) {
       case 'directory':
         walk.enter(abs);
-        out.push(...(await collectFiles(root, abs, walk)));
+        appendAll(out, await collectFiles(root, abs, walk));
         break;
       case 'file':
         out.push({ rel: toForwardSlash(safePath.relative(root, abs)), abs });

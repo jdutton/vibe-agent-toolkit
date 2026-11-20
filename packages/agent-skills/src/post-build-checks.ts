@@ -12,6 +12,7 @@ import { dirname } from 'node:path';
 import { parseFileCached, type ParseRoute, withParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
+  appendAll,
   direntKindFollowingSync,
   FollowedWalk,
   followedKindSync,
@@ -88,7 +89,7 @@ function walkInto(dir: string, root: string, guard: FollowedWalk): string[] {
     // link back into the tree is refused by the walk guard, not recursed.
     if (withFsFaultSync(outputProbe(fullPath), () => direntKindFollowingSync(dir, entry, root)) === 'directory') {
       guard.enter(fullPath);
-      files.push(...walkInto(fullPath, root, guard));
+      appendAll(files, walkInto(fullPath, root, guard));
     } else {
       files.push(fullPath);
     }
@@ -379,16 +380,18 @@ async function addMentionReferences(
  * @param filesConfigDests Skill-output-relative dests declared in `files:`, as
  *   returned by `applyFilesConfig`. Normalized here so a hand-built list spelled
  *   `./x` or with backslashes still matches.
+ * @param route The run's parse dispatcher (`{ dispatcher: undefined }` for a one-off check)
  */
 export async function checkUnreferencedFiles(
   outputDir: string,
-  filesConfigDests: readonly string[] = [],
+  filesConfigDests: readonly string[],
+  route: ParseRoute,
 ): Promise<ValidationIssue[]> {
   const declaredDests = new Set(filesConfigDests.map(d => normalizeRelPath(d)));
   const allFiles = walkDir(outputDir);
   const allFileSet = new Set(allFiles.map(f => toForwardSlash(f)));
   const referenced = await withParseDispatcher((dispatcher) =>
-    collectReferencedPaths(outputDir, allFileSet, { route: { dispatcher }, outputDir }));
+    collectReferencedPaths(outputDir, allFileSet, { route: { dispatcher }, outputDir }), { dispatcher: route.dispatcher });
 
   // Second pass: treat any path mention in packaged content files as documentation.
   const candidates = allFiles.filter(f => !referenced.has(toForwardSlash(f)));
@@ -459,13 +462,15 @@ export async function checkUnreferencedFiles(
  *
  * @param outputDir Absolute path to the packaged skill output.
  * @param target The packaging target the output was produced for.
+ * @param route The run's parse dispatcher
  */
 export function checkMissingReferencedPaths(
   outputDir: string,
   target: PackagingTarget,
+  route: ParseRoute,
 ): Promise<ValidationIssue[]> {
   const docFiles = walkDir(outputDir).filter(f => f.endsWith('.md'));
-  return detectMissingReferencedPaths(docFiles, outputDir, target);
+  return detectMissingReferencedPaths(docFiles, outputDir, target, route);
 }
 
 /**
@@ -480,12 +485,14 @@ export function checkMissingReferencedPaths(
  *   Defaults to none for callers that never ran a files config (e.g.
  *   `checkShippedPluginSkillLinks`, which inspects an already-built plugin
  *   tree): they cannot know a drop happened, so they correctly claim no cause.
+ * @param route The run's parse dispatcher (`{ dispatcher: undefined }` for a one-off check)
  * @returns The broken links, and a not-admitted finding at any other content file
  *   the parse worker refused for this run (located against `outputDir`)
  */
 export async function checkBrokenPackagedLinks(
   outputDir: string,
-  droppedDests: readonly string[] = [],
+  droppedDests: readonly string[],
+  route: ParseRoute,
 ): Promise<ValidationIssue[]> {
   const droppedDestSet = new Set(droppedDests.map(d => normalizeRelPath(d)));
   const allFiles = walkDir(outputDir);
@@ -497,7 +504,7 @@ export async function checkBrokenPackagedLinks(
   // Independent reads; a failure is the first by file order, and the issues are
   // folded afterwards in that order.
   const reads = await withParseDispatcher((dispatcher) =>
-    mapConcurrentFailingInOrder(linkableFiles, (sourceFile) => extractLocalHrefs(sourceFile, { outputDir, route: { dispatcher } })));
+    mapConcurrentFailingInOrder(linkableFiles, (sourceFile) => extractLocalHrefs(sourceFile, { outputDir, route: { dispatcher } })), { dispatcher: route.dispatcher });
   return linkableFiles.flatMap((sourceFile, index) => {
     const read = reads[index];
     if (read?.refused !== undefined) return [read.refused];

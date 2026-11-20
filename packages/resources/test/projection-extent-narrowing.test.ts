@@ -74,6 +74,7 @@ import type { Projection } from '../src/projection/projection.js';
 import { ExtentDeclarationSchema } from '../src/schemas/project-config.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
+import { inOwnRun } from './helpers/population-run.js';
 import { setupSubdirTestSuite, writeFileIn } from './test-helpers.js';
 
 const suite = setupSubdirTestSuite('extent-narrowing-');
@@ -126,7 +127,7 @@ async function populateCorpus(narrowed: boolean): Promise<Projection> {
     closureFrom: ROOT_DOC,
     ...(narrowed ? { refusals: [{ label: NARROWED, patterns: ['**/*.mjs'] }] } : {}),
   };
-  const { projection } = await populate({
+  const { projection } = await inOwnRun(populate, {
     root: suite.tempDir,
     registry,
     parameters: { [`closure:${EXTENT_NAME}`]: declaration as unknown as JsonValue },

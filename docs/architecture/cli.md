@@ -432,7 +432,6 @@ gate: { strict: false }
 durationMs: 234
 data:
   root: /abs/path/to/project
-  lane: projection
   extentSource: git
   collections: {}
   files:

@@ -139,9 +139,10 @@ export async function indexCommand(
     const dbPath = resolveDbPath(options.db, projectRoot ?? undefined);
     logger.debug(`Database path: ${dbPath}`);
 
-    // Load resources. `loadResourcesWithConfig` requires a non-null root, so
-    // when projectRoot is null we fall back to cwd for the crawl baseDir.
-    // Indexing doesn't surface URI-reference resolution, so cwd is fine here.
+    // Load resources. The run needs a non-null root, so when projectRoot is
+    // null we fall back to cwd for the crawl baseDir. Indexing doesn't surface
+    // URI-reference resolution, so cwd is fine here. The crawl is the run's only
+    // lane: the registry it admits is data once the run closes.
     const crawlRoot = projectRoot ?? process.cwd();
     // One run around the load. Only plain data leaves it: the registry is the
     // run's view, and holding it through the index would keep every content and

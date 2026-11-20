@@ -2,6 +2,8 @@
  * TypeScript declaration (.d.ts) generator for markdown resources
  */
 
+import { appendAll } from '@vibe-agent-toolkit/utils';
+
 import type { MarkdownResource } from './types.js';
 
 /**
@@ -120,16 +122,16 @@ export function generateTypeScriptDeclarations(resource: MarkdownResource): stri
     '}',
     '',
   ];
-  lines.push(...fragmentInterface);
+  appendAll(lines, fragmentInterface);
 
   // Meta type (from frontmatter)
   const metaType = generateMetaType(resource.frontmatter);
   const metaDeclaration = [`export const meta: ${metaType};`, ''];
-  lines.push(...metaDeclaration);
+  appendAll(lines, metaDeclaration);
 
   // Text export
   const textDeclaration = ['export const text: string;', ''];
-  lines.push(...textDeclaration);
+  appendAll(lines, textDeclaration);
 
   // Fragments type (specific to this resource)
   if (resource.fragments.length === 0) {

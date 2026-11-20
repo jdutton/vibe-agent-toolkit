@@ -13,7 +13,7 @@ import {
 	type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { issueLocation, promised, safePath } from '@vibe-agent-toolkit/utils';
+import { issueLocation, promised, safePath, appendAll } from '@vibe-agent-toolkit/utils';
 
 import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
 
@@ -64,7 +64,7 @@ function applyPostSchemaChecks(args: {
 	// Recommended-metadata observations from plugin-dev cross-walk.
 	// These ship at info severity — schema parse already errored on
 	// anything structurally required.
-	issues.push(...detectMissingRecommendedFields(data, pluginJsonLocation));
+	appendAll(issues, detectMissingRecommendedFields(data, pluginJsonLocation));
 
 	// Re-derive every summary field: this function has just pushed issues that
 	// the caller's initial derivation could not have seen.
@@ -118,7 +118,7 @@ function validatePluginNow(
 	// `files:` block of its own — the per-skill `files:` config that could sanction
 	// a dest lives in the project config the SKILL lanes read. `[]` is the honest
 	// answer here, not a defaulted one.
-	issues.push(...detectPackagedAgentInstructionFiles(pluginPath, anchorRoot, [], []));
+	appendAll(issues, detectPackagedAgentInstructionFiles(pluginPath, anchorRoot, [], []));
 
 	// One read decides missing / unreadable / unparseable: `existsSync` would read
 	// a refused parent as absent, and one `try` around read + parse would report a
@@ -194,7 +194,7 @@ function validatePluginNow(
 	// or not the schema parsed. Deliberately NOT escalated by `strict`: the
 	// hosted-sync behaviour it reports is observed, not documented by Anthropic,
 	// and `bin/` remains a supported CLI feature — see plugin-hosted-shape.ts.
-	issues.push(...detectHostedIncompatibleShape(pluginPath, anchorRoot));
+	appendAll(issues, detectHostedIncompatibleShape(pluginPath, anchorRoot));
 
 	const validationResult: ValidationResult = {
 		path: pluginPath,

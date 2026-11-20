@@ -269,6 +269,26 @@ export class GitTracker {
   }
 
   /**
+   * The names {@link initialize} listed: every tracked and untracked-not-ignored
+   * path under the root, absolute and forward-slashed. Names only — git listed
+   * them without reading or hashing a file, and nothing here stats one. A tracked
+   * file deleted from the working tree is still named; a submodule or nested
+   * repository is one name, and the files inside it are not in the set (so the
+   * set calls them ignored).
+   *
+   * ⚠️ Not a witness to the directories git could not open: initialized from an
+   * open snapshot, the tracker asked git nothing, so a caller that must refuse
+   * an unlistable directory asks git itself.
+   *
+   * @returns The names, or `null` when there are none to give: git did not
+   *   answer, or the tracker was initialized without untracked files
+   */
+  listing(): readonly string[] | null {
+    if (!this.activeSetPopulated) return null;
+    return [...this.activeSet];
+  }
+
+  /**
    * Walk up from each active-set file's directory and record every ancestor up to projectRoot.
    *
    * `activeSet` keys are forward-slash (via `safePath.resolve`) but `node:path.dirname`

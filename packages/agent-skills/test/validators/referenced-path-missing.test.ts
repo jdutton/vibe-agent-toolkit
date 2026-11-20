@@ -5,12 +5,16 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { getResourceSubdirForFile } from '../../src/content-type-routing.js';
+import { getResourceSubdirForFile, type PackagingTarget } from '../../src/content-type-routing.js';
 import {
   bundledPathCandidates,
   detectMissingReferencedPaths,
   isBundledSubdirPath,
 } from '../../src/validators/referenced-path-missing.js';
+
+/** The detector as a one-off check, outside any run. */
+const missingIn = (docs: readonly string[], dir: string, target: PackagingTarget) =>
+  detectMissingReferencedPaths(docs, dir, target, { dispatcher: undefined });
 
 let root: string;
 
@@ -63,7 +67,7 @@ const AUTHORED_SETUP_SH = 'resources/setup.sh';
  */
 async function expectNoCandidateAndNoFinding(dir: string): Promise<void> {
   await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'))).resolves.toEqual([]);
-  await expect(detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE)).resolves.toEqual([]);
+  await expect(missingIn(skillMdOf(dir), dir, CLAUDE_CODE)).resolves.toEqual([]);
 }
 
 /**
@@ -178,7 +182,7 @@ describe('detectMissingReferencedPaths', () => {
       '```',
     ].join('\n'));
 
-    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE);
+    const issues = await missingIn(skillMdOf(dir), dir, CLAUDE_CODE);
 
     expect(issues).toHaveLength(1);
     expect(issues[0]?.code).toBe('PACKAGED_REFERENCED_PATH_MISSING');
@@ -206,7 +210,7 @@ describe('detectMissingReferencedPaths', () => {
   it('does NOT see a path glued to an identifier — documented lexer recall limit', async () => {
     const dir = writeSkill("```js\nconst b = TemplateBuilder('templates/brand/constants.json');\n```");
 
-    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE)).resolves.toEqual([]);
+    await expect(missingIn(skillMdOf(dir), dir, CLAUDE_CODE)).resolves.toEqual([]);
   });
 
   // The BUILD DROP — the class no human review of the source can catch, and the
@@ -214,7 +218,7 @@ describe('detectMissingReferencedPaths', () => {
   it('flags an inline code-span reference whose target did not survive the build', async () => {
     const dir = writeSkill('Install steps are in `references/whisper-setup.md`.');
 
-    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE);
+    const issues = await missingIn(skillMdOf(dir), dir, CLAUDE_CODE);
 
     expect(issues).toHaveLength(1);
     expect(issues[0]?.message).toContain('references/whisper-setup.md');
@@ -229,7 +233,7 @@ describe('detectMissingReferencedPaths', () => {
     // leave this green while silently killing the detector.
     await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md')))
       .resolves.toEqual(['scripts/run.mjs']);
-    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE)).resolves.toEqual([]);
+    await expect(missingIn(skillMdOf(dir), dir, CLAUDE_CODE)).resolves.toEqual([]);
   });
 
   // The ./-prefixed spelling, end to end: it must fire, and it must anchor on
@@ -237,7 +241,7 @@ describe('detectMissingReferencedPaths', () => {
   it('flags a build drop referenced as ./scripts/setup.mjs', async () => {
     const dir = writeSkill('Run `./scripts/setup.mjs` first.');
 
-    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE);
+    const issues = await missingIn(skillMdOf(dir), dir, CLAUDE_CODE);
 
     expect(issues).toHaveLength(1);
     expect(issues[0]?.link).toBe('scripts/setup.mjs');
@@ -259,7 +263,7 @@ describe('detectMissingReferencedPaths', () => {
   it('stays silent on a ./-prefixed reference whose target IS shipped', async () => {
     const dir = writeSkill('Run `./scripts/run.mjs`.', { 'scripts/run.mjs': '// ok\n' });
 
-    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE)).resolves.toEqual([]);
+    await expect(missingIn(skillMdOf(dir), dir, CLAUDE_CODE)).resolves.toEqual([]);
   });
 
   // A `..` token is verbatim markdown content on its way to `existsSync`. It is
@@ -278,7 +282,7 @@ describe('detectMissingReferencedPaths', () => {
       'references/scripts/setup.mjs': '// a doc copy, not the referenced path\n',
     });
 
-    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE);
+    const issues = await missingIn(skillMdOf(dir), dir, CLAUDE_CODE);
 
     expect(issues).toHaveLength(1);
     expect(issues[0]?.link).toBe('scripts/setup.mjs');
@@ -310,7 +314,7 @@ describe('detectMissingReferencedPaths', () => {
     );
 
     await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'))).resolves.toEqual([authored]);
-    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE)).resolves.toEqual([]);
+    await expect(missingIn(skillMdOf(dir), dir, CLAUDE_CODE)).resolves.toEqual([]);
   });
 
   // 🚩 THE SAME MISFIRE, one target over. The suppression above asked
@@ -339,7 +343,7 @@ describe('detectMissingReferencedPaths', () => {
     });
 
     await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'))).resolves.toEqual([authored]);
-    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir, target)).resolves.toEqual([]);
+    await expect(missingIn(skillMdOf(dir), dir, target)).resolves.toEqual([]);
   });
 
   // 🚩 …and the control that keeps the row above from being an amnesty for every
@@ -355,7 +359,7 @@ describe('detectMissingReferencedPaths', () => {
       [shipped]: 'shipped\n',
     });
 
-    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir, target))
+    await expect(missingIn(skillMdOf(dir), dir, target))
       .resolves.toMatchObject([{ link: authored }]);
   });
 
@@ -366,7 +370,7 @@ describe('detectMissingReferencedPaths', () => {
     const dir = writeSkill(`\`\`\`bash\nbash ${authored}\n\`\`\``);
 
     await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'))).resolves.toEqual([authored]);
-    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE))
+    await expect(missingIn(skillMdOf(dir), dir, CLAUDE_CODE))
       .resolves.toMatchObject([{ link: authored }]);
   });
 
@@ -378,7 +382,7 @@ describe('detectMissingReferencedPaths', () => {
   it('still fires when only a SIBLING skill under the plugin root ships the file', async () => {
     const { dir } = writeSkillPointingAtSibling();
 
-    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE);
+    const issues = await missingIn(skillMdOf(dir), dir, CLAUDE_CODE);
 
     expect(issues).toHaveLength(1);
     expect(issues[0]?.link).toBe('resources/handling-review-comments.md');
@@ -389,7 +393,7 @@ describe('detectMissingReferencedPaths', () => {
   it('states absence plainly, with no incomplete-search caveat', async () => {
     const { dir } = writeSkillPointingAtSibling();
 
-    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE);
+    const issues = await missingIn(skillMdOf(dir), dir, CLAUDE_CODE);
 
     expect(issues[0]?.message).toBe(
       'References "resources/handling-review-comments.md", which is not in the packaged output',
@@ -420,7 +424,7 @@ describe('detectMissingReferencedPaths', () => {
   it('flags the same path when it is named outside link syntax', async () => {
     const dir = writeSkill('Open `resources/guide.md` for details.');
 
-    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE);
+    const issues = await missingIn(skillMdOf(dir), dir, CLAUDE_CODE);
 
     expect(issues).toHaveLength(1);
     expect(issues[0]?.link).toBe('resources/guide.md');
@@ -444,7 +448,7 @@ describe('detectMissingReferencedPaths', () => {
   it('reports one issue per missing path, each anchored on its own link', async () => {
     const dir = writeSkill(['`references/a.md`', '`references/b.md`', '`references/c.md`'].join('\n\n'));
 
-    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE);
+    const issues = await missingIn(skillMdOf(dir), dir, CLAUDE_CODE);
 
     expect(issues).toHaveLength(3);
     expect(issues.map(i => i.link)).toEqual(['references/a.md', 'references/b.md', 'references/c.md']);
@@ -456,7 +460,7 @@ describe('detectMissingReferencedPaths', () => {
   // and the real finding beside it survives.
   it('lets an allow entry waive ONE path while a real finding in the same file still fires', async () => {
     const dir = writeSkill('Teaching example `resources/gates.md`, and a real one `references/setup.md`.');
-    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE);
+    const issues = await missingIn(skillMdOf(dir), dir, CLAUDE_CODE);
     expect(issues).toHaveLength(2);
 
     const { emitted } = applyAllowFilter(issues, {
@@ -474,7 +478,7 @@ describe('detectMissingReferencedPaths', () => {
   // …and the coarse form still works, for a file that is entirely illustrative.
   it('still supports waiving a whole document by location', async () => {
     const dir = writeSkill('`resources/gates.md` and `references/setup.md`.');
-    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE);
+    const issues = await missingIn(skillMdOf(dir), dir, CLAUDE_CODE);
 
     const { emitted } = applyAllowFilter(issues, {
       allow: {

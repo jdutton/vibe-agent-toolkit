@@ -113,8 +113,7 @@ import { isParsableContent, type KeyedContent, type ParsableContent, type Parser
 import { estimateTokens } from '../link-classify.js';
 import type { ParseResult } from '../link-parser.js';
 import { parseRefusal } from '../not-admitted.js';
-import { type ParseCache, defaultParseCache } from '../parse-cache.js';
-import { type ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable, withParseDispatcher } from '../parse-dispatcher.js';
+import { type ParseDispatcher, driveInOrder, tallyParsable } from '../parse-dispatcher.js';
 import { isParseLimitError, isParserThrewError, isPerRunParseRefusal, type PerRunParseRefusal } from '../parse-limits.js';
 import { type CodeContextRanges, findLexicalReferences } from '../reference-lexer.js';
 import type { BlobConditionRow } from '../schemas/projection-blobs.js';
@@ -515,7 +514,9 @@ type MutableCounts = { -readonly [K in keyof BlobPopulationResult]: BlobPopulati
 /** Options for {@link populateBlobs}. */
 export interface BlobPopulationOptions {
   /**
-   * The content-addressed parse cache to consult.
+   * The run's dispatcher: every blob parses on it, and its owner shuts it down.
+   * Required, so no population opens a pool beside its run's. The parse cache
+   * and the pool policy are the dispatcher's own.
    *
    * This stage deliberately adds **no** caching layer of its own: `ParseCache`
    * is already keyed on exactly the pair a parse is a function of (the bytes and
@@ -524,22 +525,8 @@ export interface BlobPopulationOptions {
    * `vat verify` and `vat build` each spawn the binary once per phase. A second
    * in-process memo stacked on top would also hide the lower layer's hit rate,
    * making the cache's own correctness unobservable.
-   *
-   * Defaults to the process-wide instance.
    */
-  parseCache?: ParseCache | undefined;
-  /**
-   * How, and whether, to move parsing off this thread.
-   *
-   * Defaults are what a command gets; see {@link ParsePoolPolicy}.
-   */
-  parsePool?: ParsePoolPolicy | undefined;
-  /**
-   * The run's dispatcher, when the caller holds one for the whole population
-   * — its owner shuts it down, and `parseCache` / `parsePool` are its own.
-   * Omitted, the call builds one from those two and shuts it down itself.
-   */
-  dispatcher?: ParseDispatcher | undefined;
+  dispatcher: ParseDispatcher;
 }
 
 
@@ -583,15 +570,15 @@ interface BlobTarget {
  * that genuinely has nothing to say.
  *
  * @param builder - The builder to read realizations from and add blob rows to
- * @param options - The parse cache to consult; defaults to the shared instance
+ * @param options - The run's dispatcher, every blob's parse runs on
  * @returns What was derived and what was skipped, with a reason per bucket
  */
 export async function populateBlobs(
   builder: ProjectionBuilder,
-  options: BlobPopulationOptions = {},
+  options: BlobPopulationOptions,
 ): Promise<BlobPopulationResult> {
   const base = builder.base();
-  const cache = options.parseCache ?? defaultParseCache();
+  const { dispatcher } = options;
   const counts = emptyCounts();
 
   for (const row of base.resourceRealizations) {
@@ -599,22 +586,16 @@ export async function populateBlobs(
   }
 
   const pending = pendingTargets(base, counts);
-  // The run's dispatcher when the caller holds one (a population's, shut down
-  // by it); otherwise one of this call's own, shut down however the call ends —
-  // `withParseDispatcher` keeps the shutdown in a `finally`, which is what
-  // closes each worker's port gracefully so its parse-timing dump reaches disk.
-  await withParseDispatcher(
-    (dispatcher) => driveInOrder(
-      pending,
-      dispatcher,
-      (target) => prepareBlob(target, base, dispatcher),
-      (prepared) => emitPreparedBlob(builder, prepared, counts),
-      // The key's own prefix is the routing record — see `parserKindOf`, which
-      // is the single authority so this cannot drift from what `prepareBlob`
-      // decides, and which answers without touching the file.
-      (from) => tallyParsable(pending, from, (target) => parserKindOf(target.contentKey)),
-    ),
-    { dispatcher: options.dispatcher, cache, policy: options.parsePool ?? {} },
+  // The run's dispatcher (a population's, shut down by it).
+  await driveInOrder(
+    pending,
+    dispatcher,
+    (target) => prepareBlob(target, base, dispatcher),
+    (prepared) => emitPreparedBlob(builder, prepared, counts),
+    // The key's own prefix is the routing record — see `parserKindOf`, which
+    // is the single authority so this cannot drift from what `prepareBlob`
+    // decides, and which answers without touching the file.
+    (from) => tallyParsable(pending, from, (target) => parserKindOf(target.contentKey)),
   );
 
   return counts;
@@ -964,7 +945,7 @@ const NO_CODE_CONTEXT: CodeContextRanges = { fences: [], codeSpans: [], excluded
  * `parseErrors`, `unresolvedReferences` and the frontmatter trio are omitted
  * exactly as `parseHtmlContent` omits the ones it cannot produce.
  *
- * ⚠️ Deliberately NOT routed through {@link ParseCache}. An entry buys the cost
+ * ⚠️ Deliberately NOT routed through `ParseCache`. An entry buys the cost
  * of the computation it replaces, and this one is `estimateTokens`, one lexer
  * scan and one offset walk — over a cold population of 8,713 documents the whole
  * `estimateTokens` pass measured 0.0006 s against `remark-parse`'s 66.0 s. Filing

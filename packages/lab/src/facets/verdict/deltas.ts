@@ -64,7 +64,7 @@
 import { readFileSync } from 'node:fs';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath, appendAll } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 import { FINDING_SEVERITIES, type FindingKey, findingIdentity, FindingKeySchema, locationDigest } from './extract.js';
@@ -324,7 +324,7 @@ export function reconcileDeltas(
         're-baseline the file (and re-review every entry) or compare against the build it names.',
     );
   }
-  refusals.push(...declared.deltas.flatMap((entry, index) => entryRefusals(entry, index, declared.deltas, run)));
+  appendAll(refusals, declared.deltas.flatMap((entry, index) => entryRefusals(entry, index, declared.deltas, run)));
 
   const matched = multisetDifference(declared.deltas.flatMap(expandEntry), observed, deltaKey);
   return { undeclared: matched.onlyRight, unused: matched.onlyLeft, refusals };

@@ -7,6 +7,7 @@
  */
 
 import type { Observation } from '@vibe-agent-toolkit/agent-skills';
+import { appendAll } from '@vibe-agent-toolkit/utils';
 
 import { RUNTIME_PROFILES } from './runtime-profiles.js';
 import type { Target } from './types.js';
@@ -112,7 +113,7 @@ export function computeVerdicts(input: VerdictInput): Verdict[] {
   const verdicts: Verdict[] = [];
   for (const obs of input.observations) {
     for (const target of input.targets) {
-      verdicts.push(...verdictForObservationAndTarget(obs, target));
+      appendAll(verdicts, verdictForObservationAndTarget(obs, target));
     }
   }
   return verdicts;

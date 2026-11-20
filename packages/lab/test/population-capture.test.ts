@@ -61,12 +61,12 @@ afterAll(async () => {
 function document(
   root: string,
   files: readonly { path: string; checksum: string }[],
-  lane: string | null = 'walk',
+  extentSource: string | null = 'filesystem',
 ): string {
   return JSON.stringify({
     status: 'success',
     root,
-    ...(lane === null ? {} : { lane }),
+    ...(extentSource === null ? {} : { extentSource }),
     filesScanned: files.length,
     files,
   });
@@ -114,7 +114,7 @@ async function captureRow(
 }
 
 describe('capturePopulation', () => {
-  it('reports the enumerated set, sorted, with the lane the run declared', async () => {
+  it('reports the enumerated set, sorted, with the arm the run declared', async () => {
     const probe = setupProbe(PROBE_PREFIX);
     const output = document(probe.cwd, [
       { path: 'b.md', checksum: SUM_B },
@@ -124,7 +124,7 @@ describe('capturePopulation', () => {
     const row = await captureRow(probe, [output]);
 
     expect(row.attribution).toBe('measured');
-    expect(row.lane).toBe('walk');
+    expect(row.extentSource).toBe('filesystem');
     expect(row.count).toBe(2);
     expect(row.files.map((entry) => entry.path)).toEqual(['a.md', 'b.md']);
     expect(row.failed).toBe(false);
@@ -187,11 +187,11 @@ describe('capturePopulation', () => {
     expect(row.failure).toMatch(/^priming failed — priming run: step 'population' exited /u);
   });
 
-  it('reports a null lane when the build did not say which enumerator ran', async () => {
+  it('reports a null arm when the build did not say which enumerator ran', async () => {
     const probe = setupProbe(PROBE_PREFIX);
     const output = document(probe.cwd, [{ path: 'a.md', checksum: SUM_A }], null);
 
-    expect((await captureRow(probe, [output])).lane).toBeNull();
+    expect((await captureRow(probe, [output])).extentSource).toBeNull();
   });
 
   it('takes the git reference at the DOCUMENT root, not at the subject directory', async () => {

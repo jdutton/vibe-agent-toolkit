@@ -15,6 +15,7 @@ import {
   PROJECTION_STATEMENT_REFUSED_CODE,
   type Projection,
   queryableRelationNames,
+  withPopulationRun,
 } from '@vibe-agent-toolkit/resources';
 import { isVatError, safePath } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
@@ -37,7 +38,7 @@ beforeAll(async () => {
   mkdirSyncReal(safePath.join(root, 'docs'));
   writeFileSync(safePath.join(root, 'docs', 'a.md'), '# A\n\nSee [b](./b.md).\n');
   writeFileSync(safePath.join(root, 'docs', 'b.md'), '# B\n');
-  ({ projection } = await buildResourceProjection({ root }));
+  ({ projection } = await withPopulationRun((run) => buildResourceProjection({ root, run })));
 });
 
 afterAll(() => {

@@ -36,8 +36,8 @@
  * `src/`. It is kept out of the published npm package by the `!dist/qa-snapshot`
  * negation in this package's `files` array.
  *
- * ⛔ The lanes bind to internal builders (`createProjectRegistry`,
- * `crawlAndResolveRegistry`, …). Those move whenever the pipeline moves, which
+ * ⛔ The lanes bind to internal builders (`RunSkillRegistries.packagingRegistry`,
+ * `RunSkillRegistries.forRoot`, …). Those move whenever the pipeline moves, which
  * is the entire point of the instrument, so nothing outside this repository may
  * bind to these shapes or to the on-disk snapshot layout. Both change without a
  * deprecation cycle and without a CHANGELOG entry.

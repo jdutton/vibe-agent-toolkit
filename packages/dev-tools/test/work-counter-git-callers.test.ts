@@ -38,7 +38,10 @@ const WHOLE_MODULE = '*';
 const GIT_SPAWN_SITES = ['packages/utils/src/git-run.ts', 'packages/utils/src/git-snapshot.ts'];
 
 /** Modules that import the package without starting git, with exactly the names they import. */
-const NON_SPAWNING_IMPORTERS: Readonly<Record<string, readonly string[]>> = {};
+const NON_SPAWNING_IMPORTERS: Readonly<Record<string, readonly string[]>> = {
+  // git's index mode for a link, read off `ls-files -s`, which `runGit` spawns.
+  'packages/utils/src/git-index-links.ts': ['GIT_MODE_SYMLINK'],
+};
 
 /** The count each spawn site must make. */
 const GIT_COUNT = "countWork('git.calls', 1)";

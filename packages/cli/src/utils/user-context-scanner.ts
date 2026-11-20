@@ -6,7 +6,7 @@
 
 import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { scan, type ScanResult } from '@vibe-agent-toolkit/discovery';
-import { requireFollowedStatSync } from '@vibe-agent-toolkit/utils';
+import { requireFollowedStatSync, appendAll } from '@vibe-agent-toolkit/utils';
 import { rootListingRefusal, type DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 
 /**
@@ -71,7 +71,7 @@ export async function scanUserContext(): Promise<{
       include: ['**/SKILL.md', '**/.claude-plugin/**'],
     });
     plugins = pluginsScan.results;
-    unreadable.push(...pluginsScan.unreadable);
+    appendAll(unreadable, pluginsScan.unreadable);
   }
 
   // Scan skills directory (SKILL.md files)
@@ -83,7 +83,7 @@ export async function scanUserContext(): Promise<{
       include: ['**/SKILL.md'],
     });
     skills = skillsScan.results;
-    unreadable.push(...skillsScan.unreadable);
+    appendAll(unreadable, skillsScan.unreadable);
   }
 
   // Marketplaces reserved for future use

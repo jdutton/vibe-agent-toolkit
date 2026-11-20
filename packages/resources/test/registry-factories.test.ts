@@ -7,6 +7,8 @@ import { beforeEach, describe, expect, it, beforeAll, afterAll } from 'vitest';
 
 import { ResourceRegistry } from '../src/resource-registry.js';
 
+import { fromCrawlInRun } from './helpers/population-run.js';
+
 describe('ResourceRegistry factory methods', () => {
   const suite = setupAsyncTempDirSuite('registry-factories');
   let tempDir: string;
@@ -98,7 +100,8 @@ describe('ResourceRegistry factory methods', () => {
       await fs.writeFile(safePath.join(tempDir, 'doc1.md'), '# Doc 1', 'utf-8');
       await fs.writeFile(safePath.join(tempDir, 'doc2.md'), '# Doc 2', 'utf-8');
 
-      const { registry } = await ResourceRegistry.fromCrawl({
+      const { registry } = await fromCrawlInRun({
+        ignoredRefusals: 'record',
         outputs: [],
         unreadable: 'refuse',
         baseDir: tempDir,
@@ -112,9 +115,9 @@ describe('ResourceRegistry factory methods', () => {
     it('returns the crawl it built from — resources and population — beside the registry', async () => {
       await fs.writeFile(safePath.join(tempDir, 'doc1.md'), '# Doc 1', 'utf-8');
 
-      const built = await ResourceRegistry.fromCrawl({ outputs: [], unreadable: 'refuse', baseDir: tempDir, include: ['*.md'] });
+      const built = await fromCrawlInRun({ ignoredRefusals: 'record', outputs: [], unreadable: 'refuse', baseDir: tempDir, include: ['*.md'] });
 
-      expect(built.population).toEqual({ lane: 'walk' });
+      expect(built.population).toEqual({ outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem' });
       expect(built.resources.map((resource) => resource.filePath)).toEqual(built.registry.getAllResources().map((resource) => resource.filePath));
     });
 
@@ -124,7 +127,8 @@ describe('ResourceRegistry factory methods', () => {
       await fs.writeFile(safePath.join(tempDir, 'public/doc.md'), '# Public', 'utf-8');
       await fs.writeFile(safePath.join(tempDir, 'private/doc.md'), '# Private', 'utf-8');
 
-      const { registry } = await ResourceRegistry.fromCrawl({
+      const { registry } = await fromCrawlInRun({
+        ignoredRefusals: 'record',
         outputs: [],
         unreadable: 'refuse',
         baseDir: tempDir,
@@ -141,7 +145,8 @@ describe('ResourceRegistry factory methods', () => {
       await fs.mkdir(safePath.join(tempDir, 'docs/api'), { recursive: true });
       await fs.writeFile(safePath.join(tempDir, 'docs/api/guide.md'), '# Guide', 'utf-8');
 
-      const { registry } = await ResourceRegistry.fromCrawl({
+      const { registry } = await fromCrawlInRun({
+        ignoredRefusals: 'record',
         outputs: [],
         unreadable: 'refuse',
         baseDir: tempDir,
@@ -152,7 +157,8 @@ describe('ResourceRegistry factory methods', () => {
     });
 
     it('should handle empty directory', async () => {
-      const { registry } = await ResourceRegistry.fromCrawl({
+      const { registry } = await fromCrawlInRun({
+        ignoredRefusals: 'record',
         outputs: [],
         unreadable: 'refuse',
         baseDir: tempDir,
@@ -167,7 +173,8 @@ describe('ResourceRegistry factory methods', () => {
       await fs.writeFile(safePath.join(tempDir, 'doc1.md'), '# Same Content', 'utf-8');
       await fs.writeFile(safePath.join(tempDir, 'doc2.md'), '# Same Content', 'utf-8');
 
-      const { registry } = await ResourceRegistry.fromCrawl({
+      const { registry } = await fromCrawlInRun({
+        ignoredRefusals: 'record',
         outputs: [],
         unreadable: 'refuse',
         baseDir: tempDir,

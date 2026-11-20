@@ -2,6 +2,8 @@
  * JavaScript code generator for markdown resources
  */
 
+import { appendAll } from '@vibe-agent-toolkit/utils';
+
 import type { MarkdownResource } from './types.js';
 
 /**
@@ -108,11 +110,11 @@ export function generateJavaScript(resource: MarkdownResource): string {
 
   // Export meta (frontmatter)
   const metaExport = ['export const meta = ' + serializeValue(resource.frontmatter, 0) + ';', ''];
-  lines.push(...metaExport);
+  appendAll(lines, metaExport);
 
   // Export full text
   const textExport = ['export const text = ' + serializeValue(resource.content, 0) + ';', ''];
-  lines.push(...textExport);
+  appendAll(lines, textExport);
 
   // Export fragments
   const fragmentsObj: Record<string, unknown> = {};

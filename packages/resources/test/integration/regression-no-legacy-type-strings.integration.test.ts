@@ -23,6 +23,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { ProjectConfig } from '../../src/schemas/project-config.js';
+import { crawlInRun } from '../helpers/population-run.js';
 import { setupResourceTestSuite } from '../test-helpers.js';
 
 /**
@@ -103,7 +104,7 @@ describe('Regression guard: no legacy lowercase type strings emitted as codes', 
     const config = await writeFixtureProject(suite.tempDir);
 
     const registry = new ResourceRegistry({ config, baseDir: suite.tempDir });
-    await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: suite.tempDir });
+    await crawlInRun(registry, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: suite.tempDir });
     const result = await registry.validate();
 
     // The fixture must actually produce issues, otherwise the guard is vacuous.

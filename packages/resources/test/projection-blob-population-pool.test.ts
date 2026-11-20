@@ -44,11 +44,11 @@ import {
   defaultParsePoolSize,
   type ParsePool,
 } from '../src/parse-pool.js';
-import { BLOB_PARSE_FAILED, BLOB_PARSE_WORKER_DIED, populateBlobs, type BlobPopulationResult } from '../src/projection/blob-population.js';
+import { BLOB_PARSE_FAILED, BLOB_PARSE_WORKER_DIED, type BlobPopulationResult } from '../src/projection/blob-population.js';
 import { describeBlobRefusals } from '../src/projection/blob-refusals.js';
 import type { Projection } from '../src/projection/projection.js';
 
-import { baseBuilderForRoot, conditionsWithCode } from './blob-fixture-population.js';
+import { baseBuilderForRoot, conditionsWithCode, populateBlobsOnOwnDispatcher } from './blob-fixture-population.js';
 import { fakePool } from './parse-pool-fixture.js';
 import { setupSubdirTestSuite, stubParkingMachine, workerThreadCount } from './test-helpers.js';
 
@@ -198,13 +198,13 @@ async function derive(
   pool?: ParsePool,
 ): Promise<{ projection: Projection; counts: BlobPopulationResult }> {
   const builder = await baseBuilderForRoot(suite.tempDir);
-  const counts = await populateBlobs(builder, {
-    parseCache: NO_CACHE,
+  const counts = await populateBlobsOnOwnDispatcher(builder, {
+    cache: NO_CACHE,
     // The fake arm states its width: the default stays at one thread for a
     // corpus this small, so a test that inherited it would never exercise the
     // concurrent half. The other arm is the shipped route — the real bounded
     // pool — because there is no unpooled route left to compare against.
-    parsePool:
+    policy:
       pool === undefined
         ? {}
         : { missThreshold: 1, size: pool.size, createPool: (): ParsePool => pool },
@@ -337,9 +337,13 @@ describe('parse-pool activation', () => {
         shutdown: async (): Promise<void> => real.shutdown(),
       };
     };
-    const options = { parseCache: cache, parsePool: { missThreshold: 1, size: 1, createPool } };
+    const options = { cache, policy: { missThreshold: 1, size: 1, createPool } };
+    const populate = async (): Promise<void> => {
+      const builder = await baseBuilderForRoot(suite.tempDir);
+      await populateBlobsOnOwnDispatcher(builder, options);
+    };
 
-    await populateBlobs(await baseBuilderForRoot(suite.tempDir), options);
+    await populate();
 
     expect(observed.pools).toBe(1);
     expect(observed.spawns).toBeGreaterThanOrEqual(1);
@@ -348,7 +352,7 @@ describe('parse-pool activation', () => {
     observed.pools = 0;
     observed.spawns = 0;
 
-    await populateBlobs(await baseBuilderForRoot(suite.tempDir), options);
+    await populate();
 
     // Every document is now a cache hit, so the run has no parse to hand
     // anywhere — and must therefore create no pool and spawn no thread, exactly
@@ -367,9 +371,9 @@ describe('parse-pool activation', () => {
     });
     const before = workerThreadCount();
 
-    await populateBlobs(await baseBuilderForRoot(suite.tempDir), {
-      parseCache: NO_CACHE,
-      parsePool: { missThreshold: 1, size: 2 },
+    await populateBlobsOnOwnDispatcher(await baseBuilderForRoot(suite.tempDir), {
+      cache: NO_CACHE,
+      policy: { missThreshold: 1, size: 2 },
     });
 
     // Every thread still running is one shutdown parked for the next pool; closing them is the rest.
@@ -392,9 +396,9 @@ describe('parse-pool activation', () => {
     // rows nothing below reads.
     const { pool, record } = fakePool(2, { emptyFacts: true });
 
-    await populateBlobs(await baseBuilderForRoot(tailDir), {
-      parseCache: NO_CACHE,
-      parsePool: { missThreshold: 1, createPool: (): ParsePool => pool },
+    await populateBlobsOnOwnDispatcher(await baseBuilderForRoot(tailDir), {
+      cache: NO_CACHE,
+      policy: { missThreshold: 1, createPool: (): ParsePool => pool },
     });
 
     if (defaultParsePoolSize() < 2) {
@@ -416,9 +420,9 @@ describe('parse-pool activation', () => {
     const tailDir = await writeTail(LONG_TAIL_DOCS, 60);
     const { pool, record } = fakePool(2);
 
-    await populateBlobs(await baseBuilderForRoot(tailDir), {
-      parseCache: NO_CACHE,
-      parsePool: { missThreshold: 1, createPool: (): ParsePool => pool },
+    await populateBlobsOnOwnDispatcher(await baseBuilderForRoot(tailDir), {
+      cache: NO_CACHE,
+      policy: { missThreshold: 1, createPool: (): ParsePool => pool },
     });
 
     // 200 documents at 60 bytes is 12 KB of markdown — four thousandths of a
@@ -434,9 +438,9 @@ describe('parse-pool activation', () => {
     // nothing about width.
     const { pool, record } = fakePool(4);
 
-    await populateBlobs(await baseBuilderForRoot(suite.tempDir), {
-      parseCache: NO_CACHE,
-      parsePool: { missThreshold: 1, createPool: (): ParsePool => pool },
+    await populateBlobsOnOwnDispatcher(await baseBuilderForRoot(suite.tempDir), {
+      cache: NO_CACHE,
+      policy: { missThreshold: 1, createPool: (): ParsePool => pool },
     });
 
     // Ten short documents against a ~2,000 ms two-worker break-even: no second thread.
@@ -479,9 +483,9 @@ async function dyingEntry(dies: string): Promise<string> {
 /** @returns What populating the loop corpus through a one-thread pool did: the projection, or what it threw */
 async function populateOnOneThread(): Promise<unknown> {
   const builder = await baseBuilderForRoot(suite.tempDir);
-  return populateBlobs(builder, {
-    parseCache: NO_CACHE,
-    parsePool: { missThreshold: 1, size: 1, createPool: (): ParsePool => createParsePool({ size: 1 }) },
+  return populateBlobsOnOwnDispatcher(builder, {
+    cache: NO_CACHE,
+    policy: { missThreshold: 1, size: 1, createPool: (): ParsePool => createParsePool({ size: 1 }) },
   }).then(() => builder.build(), (error: unknown) => error);
 }
 

@@ -27,8 +27,8 @@ import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
 import type { PackagingValidationResult } from '../../src/validators/packaging-validator.js';
-import { activeErrorsOf, validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
-import { createTransitiveSkillStructure, setupTempDir } from '../test-helpers.js';
+import { activeErrorsOf } from '../../src/validators/packaging-validator.js';
+import { createTransitiveSkillStructure, setupTempDir , validateForPackagingInRun } from '../test-helpers.js';
 
 const { getTempDir } = setupTempDir('packaging-validator-missing-frontmatter-');
 
@@ -50,15 +50,15 @@ const FRONTMATTER_WITHOUT_NAME =
  */
 const CONFIG_TRYING_TO_IGNORE = (code: string) => ({
   validation: { severity: { [code]: 'ignore' } },
-}) as unknown as Parameters<typeof validateSkillForPackaging>[2];
+}) as unknown as Parameters<typeof validateForPackagingInRun>[2];
 
 /** Write `body` as SKILL.md in a fresh temp dir and validate it with `config`. */
 async function validateBody(
   body: string,
-  config?: Parameters<typeof validateSkillForPackaging>[2],
+  config?: Parameters<typeof validateForPackagingInRun>[2],
 ): Promise<PackagingValidationResult> {
   const { skillPath } = createTransitiveSkillStructure(getTempDir(), {}, body);
-  return validateSkillForPackaging(skillPath, {}, config);
+  return validateForPackagingInRun(skillPath, {}, config);
 }
 
 /** The one error of `code`, asserted present, at `error`, anchored to SKILL.md. */

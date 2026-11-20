@@ -72,10 +72,10 @@ import { ParseCache, ParserUnavailableError } from '../src/parse-cache.js';
 import type { ParsePoolPolicy } from '../src/parse-dispatcher.js';
 import { reviveParserThrow } from '../src/parse-limits.js';
 import { createParsePool, type ParsePool, type ParsePoolOptions } from '../src/parse-pool.js';
-import { BLOB_PARSE_FAILED, populateBlobs } from '../src/projection/blob-population.js';
+import { BLOB_PARSE_FAILED } from '../src/projection/blob-population.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 
-import { baseBuilderForRoot, conditionsWithCode } from './blob-fixture-population.js';
+import { baseBuilderForRoot, conditionsWithCode, populateBlobsOnOwnDispatcher } from './blob-fixture-population.js';
 import { setupSubdirTestSuite, useCorpusSuite, type CorpusFile } from './test-helpers.js';
 
 /**
@@ -203,7 +203,7 @@ describe('a parser-load failure during blob derivation', () => {
 
     // Identity, not `toThrow(message)`: what must survive is the loader's own
     // error object, because the caller's top-level handler prints its code.
-    await expect(populateBlobs(builder, { parseCache: NO_CACHE, parsePool: failingPolicy() })).rejects.toBe(thrown);
+    await expect(populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE, policy: failingPolicy() })).rejects.toBe(thrown);
 
     const projection = builder.build();
     expect(conditionsWithCode(projection, BLOB_PARSE_FAILED)).toEqual([]);
@@ -242,7 +242,7 @@ describe('an ordinary parser failure during blob derivation', () => {
     failures.parse = error;
     const builder = await baseBuilderForRoot(suite.tempDir);
 
-    const counts = await populateBlobs(builder, { parseCache: NO_CACHE, parsePool: failingPolicy() });
+    const counts = await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE, policy: failingPolicy() });
 
     expect(counts.blobsParseFailed).toBe(CORPUS.length);
     const projection = builder.build();
@@ -271,7 +271,7 @@ describe('a failure no parser produced from the bytes', () => {
     failures.parse = error;
     const builder = await baseBuilderForRoot(suite.tempDir);
 
-    await expect(populateBlobs(builder, { parseCache: NO_CACHE, parsePool: failingPolicy() })).rejects.toBe(error);
+    await expect(populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE, policy: failingPolicy() })).rejects.toBe(error);
     expect(conditionsWithCode(builder.build(), BLOB_PARSE_FAILED)).toEqual([]);
   });
 });

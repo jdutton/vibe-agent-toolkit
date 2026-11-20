@@ -299,6 +299,10 @@ export { parseWholeNumberAtLeast } from './numeric-args.js';
 // them turned off for `=false`.
 export { parseEnvBoolean } from './env-flag.js';
 
+// THE way to append an array to another: `push(...items)` overflows the call
+// stack past ~125,000 items (`local/no-spread-push`).
+export { appendAll } from './append-all.js';
+
 // Ordered (`forEachInOrder`, `mapInOrder`, `everyInOrder`) and bounded-parallel
 // (`mapWithConcurrency`, `mapConcurrentFailingInOrder`) async iteration — what
 // replaces `await` in a loop, which `no-await-in-loop` refuses repo-wide — and

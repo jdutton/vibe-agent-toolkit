@@ -1,5 +1,5 @@
 /**
- * Wiring the parse pool into the INCUMBENT crawl lane — the ordering properties
+ * Wiring the parse pool into the REGISTRY's admission — the ordering properties
  * that decide whether the wiring is safe, not whether it is fast.
  *
  * `vat resources validate` is the parse-heaviest command VAT ships, and until
@@ -129,7 +129,7 @@ const registryWith = (pool?: ParsePool, idField?: string): ResourceRegistry =>
         : { missThreshold: 1, size: pool.size, createPool: (): ParsePool => pool },
   });
 
-describe('the incumbent crawl lane under a parse pool', () => {
+describe('registry admission under a parse pool', () => {
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
   beforeEach(suite.beforeEach);

@@ -32,7 +32,7 @@ const CLAUDE_ENV = 'CLAUDE_CONFIG_DIR';
 const CALLER_ENV = 'LAB_VERDICT_CALLER';
 const PLANTED_ENV = 'VAT_LAB_VERDICT_PLANTED';
 /** A real VAT_* name the caller sets explicitly: only the INHERITED VAT_* is cleared. */
-const CALLER_VAT_ENV = 'VAT_RESOURCES_CRAWL';
+const CALLER_VAT_ENV = 'VAT_EXTENT_SOURCE';
 const ECHOED = [STORE_ENV, CLAUDE_ENV, CALLER_ENV, CALLER_VAT_ENV, PLANTED_ENV, 'TMPDIR', 'TEMP', 'TMP', 'HOME'];
 
 afterEach(() => {
@@ -93,7 +93,7 @@ describe('verdict capture — the per-arm overlay', () => {
     const where = scratch();
 
     vi.stubEnv(CALLER_VAT_ENV, 'inherited');
-    const result = await capture({ set: { [CALLER_ENV]: 'kept', [CALLER_VAT_ENV]: 'walk' }, unset: [] }, fixtureSubject(), where);
+    const result = await capture({ set: { [CALLER_ENV]: 'kept', [CALLER_VAT_ENV]: 'git' }, unset: [] }, fixtureSubject(), where);
     const seen = echoed(result);
 
     // The tail, not the whole path: the normalizer may rewrite an absolute
@@ -105,7 +105,7 @@ describe('verdict capture — the per-arm overlay', () => {
     for (const name of [CLAUDE_ENV, 'HOME']) expect(seen[name], name).toBe('<HOME>');
     expect(seen[PLANTED_ENV]).toBeNull();
     expect(seen[CALLER_ENV]).toBe('kept');
-    expect(seen[CALLER_VAT_ENV]).toBe('walk');
+    expect(seen[CALLER_VAT_ENV]).toBe('git');
     // …and the envelope says which inherited names the verbs went without.
     expect(result.ok && result.envelopes[0]?.removedEnv).toContain(PLANTED_ENV);
     // --out holds the reports and nothing else.

@@ -5,6 +5,7 @@
  */
 
 import type { HeadingNode, ResourceMetadata } from '@vibe-agent-toolkit/resources';
+import { appendAll } from '@vibe-agent-toolkit/utils';
 
 import type { TokenCounter } from '../interfaces/token-counter.js';
 import type { RAGChunk } from '../schemas/chunk.js';
@@ -180,12 +181,12 @@ export function chunkResource(
 
   if (flatHeadings.length === 0) {
     // No headings: the whole document is one unheaded region.
-    rawChunks.push(...chunkUnheadedRegion(lines, lines.length, config));
+    appendAll(rawChunks, chunkUnheadedRegion(lines, lines.length, config));
   } else {
     // Everything above the first heading, then the sections themselves. The
     // heading's own line belongs to its section, so the region ends one line
     // short of it — and `line` is 1-based, which makes that index `line - 1`.
-    rawChunks.push(...chunkUnheadedRegion(lines, (flatHeadings[0]?.line ?? 1) - 1, config));
+    appendAll(rawChunks, chunkUnheadedRegion(lines, (flatHeadings[0]?.line ?? 1) - 1, config));
 
     for (let i = 0; i < flatHeadings.length; i++) {
       const heading = flatHeadings[i];
@@ -224,7 +225,7 @@ export function chunkResource(
       };
 
       const sectionChunks = chunkByTokens(sectionContent, config, metadata);
-      rawChunks.push(...sectionChunks);
+      appendAll(rawChunks, sectionChunks);
     }
   }
 

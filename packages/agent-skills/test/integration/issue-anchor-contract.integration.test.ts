@@ -24,8 +24,8 @@ import {
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
 import { validateSkill } from '../../src/validators/skill-validator.js';
+import { validateForPackagingInRun } from '../test-helpers.js';
 
 /**
  * A skill that trips as many distinct producers as one file can: a
@@ -99,7 +99,7 @@ beforeAll(async () => {
   await gitTracker.initialize();
 
   const validated = await validateSkill({ dispatcher: undefined, resourcesValidation: {}, side: 'source', skillPath, checkUnreferencedFiles: true, validation: {} });
-  const packaged = await validateSkillForPackaging(skillPath, {}, undefined, 'source', {
+  const packaged = await validateForPackagingInRun(skillPath, {}, undefined, 'source', {
     dispatcher: undefined,
     unreadable: 'refuse',
     outputs: [],

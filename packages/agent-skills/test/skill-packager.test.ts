@@ -1,7 +1,6 @@
 import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 
-
 import { allowUnusedIssues, createAllowUsageLedger, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { FS_FAULT_CODE, toForwardSlash, safePath, TREE_DEST_HOLDS_SOURCE_CODE, TREE_DEST_NOT_OWNED_CODE } from '@vibe-agent-toolkit/utils';
 import { buildHostileTree, CANNOT_DENY_READS, diffSnapshots, HOSTILE_NAMES, installFaultFs, snapshotTree, underTemp } from '@vibe-agent-toolkit/utils/testing';
@@ -9,19 +8,11 @@ import { describe, expect, it } from 'vitest';
 
 import { getResourceSubdirForFile } from '../src/content-type-routing.js';
 import { isSkillPackagingInputError, SkillPackageChecksFailedError } from '../src/packaging-errors.js';
-import {
-  extractH1Title,
-  findCommonAncestor,
-  generateTargetPath,
-  packageSkill,
-  packageSkillInto,
-  packageSkills,
-  synthesizeAssetId,
-  type PackageSkillOptions,
-  type SkillBuildSpec,
-} from '../src/skill-packager.js';
+import { extractH1Title, findCommonAncestor, generateTargetPath, packageSkills, type SkillPackageOutcome, synthesizeAssetId, type SkillBuildSpec } from '../src/skill-packager.js';
+import { withSkillRegistries } from '../src/validators/run-skill-registries.js';
 
-import { createFrontmatter, packageInPlace, setupTempDir } from './test-helpers.js';
+import { createFrontmatter, packageInPlace, setupTempDir, type TestPackageSkillOptions } from './test-helpers.js';
+import { packageSkillInRun } from './test-helpers.js';
 
 // ============================================================================
 // Setup
@@ -65,7 +56,7 @@ async function writeSkillMd(
  */
 async function packWithOutput(
   skillPath: string,
-  overrides: Omit<PackageSkillOptions, 'replaceExistingOutput' | 'dryRun'> = {},
+  overrides: Omit<TestPackageSkillOptions, 'replaceExistingOutput' | 'dryRun'> = {},
 ) {
   const dir = safePath.join(skillPath, '..');
   return packageInPlace(skillPath, {
@@ -299,7 +290,7 @@ describe('packageSkill - filename collision detection', () => {
     expect(result.hasErrors).toBe(true);
     // And `packageSkill` — which lands a package — refuses it, coded, writing nothing.
     const out = safePath.join(sp, '..', 'landed');
-    await expect(packageSkill(sp, { outputPath: out })).rejects.toBeInstanceOf(SkillPackageChecksFailedError);
+    await expect(packageSkillInRun(sp, { outputPath: out })).rejects.toBeInstanceOf(SkillPackageChecksFailedError);
     expect(existsSync(out)).toBe(false);
   });
 
@@ -382,7 +373,7 @@ describe('packageSkill - artifact generation', () => {
     const outDir = safePath.join(tmp, 'zip-out');
     const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, '# Zip Test Content');
 
-    const result = await packageSkill(sp, {
+    const result = await packageSkillInRun(sp, {
       outputPath: outDir,
       formats: [DIRECTORY_FORMAT, 'zip'],
     });
@@ -399,7 +390,7 @@ describe('packageSkill - artifact generation', () => {
     const outDir = safePath.join(tmp, 'npm-out');
     const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, '# npm Test Content');
 
-    const result = await packageSkill(sp, {
+    const result = await packageSkillInRun(sp, {
       outputPath: outDir,
       formats: [DIRECTORY_FORMAT, 'npm'],
     });
@@ -427,7 +418,7 @@ describe('packageSkill - artifact generation', () => {
       author: 'Unit Tester',
     })}\n\n# Metadata Test`);
 
-    await packageSkill(sp, {
+    await packageSkillInRun(sp, {
       outputPath: outDir,
       formats: [DIRECTORY_FORMAT, 'npm'],
     });
@@ -444,7 +435,7 @@ describe('packageSkill - artifact generation', () => {
     const outDir = safePath.join(tmp, 'mkt-out');
     const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, '# Marketplace Test');
 
-    const result = await packageSkill(sp, {
+    const result = await packageSkillInRun(sp, {
       outputPath: outDir,
       formats: [DIRECTORY_FORMAT, 'marketplace'],
     });
@@ -465,7 +456,7 @@ describe('packageSkill - artifact generation', () => {
     const outDir = safePath.join(tmp, 'all-out');
     const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, '# All Formats');
 
-    const result = await packageSkill(sp, {
+    const result = await packageSkillInRun(sp, {
       outputPath: outDir,
       formats: [DIRECTORY_FORMAT, 'zip', 'npm', 'marketplace'],
     });
@@ -607,7 +598,7 @@ describe('packageSkill - output directory structure', () => {
     const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, 'See [page](./page.md).');
 
     // First build
-    await packageSkill(sp, { outputPath: outDir });
+    await packageSkillInRun(sp, { outputPath: outDir });
 
     // Plant stale files
     await writeFile(safePath.join(outDir, 'stale.md'), '# Should be removed');
@@ -615,7 +606,7 @@ describe('packageSkill - output directory structure', () => {
     await writeFile(safePath.join(outDir, 'old-dir', 'leftover.md'), '# Also gone');
 
     // Rebuild into a location the caller owns — should clean stale files
-    await packageSkill(sp, { outputPath: outDir, replaceExistingOutput: true });
+    await packageSkillInRun(sp, { outputPath: outDir, replaceExistingOutput: true });
 
     const rootEntries = await readdir(outDir);
     expect(rootEntries).not.toContain('stale.md');
@@ -648,7 +639,7 @@ describe('packageSkill - an explicit output path it does not own', () => {
     const sp = await skillBeside(tmp);
     const before = snapshotTree(tmp);
 
-    await expect(packageSkill(sp, { outputPath: outDir, formats: [DIRECTORY_FORMAT, 'zip', 'marketplace'] })).rejects.toMatchObject({
+    await expect(packageSkillInRun(sp, { outputPath: outDir, formats: [DIRECTORY_FORMAT, 'zip', 'marketplace'] })).rejects.toMatchObject({
       code: TREE_DEST_NOT_OWNED_CODE,
       message: expect.stringMatching(/keep.*--force/s) as unknown,
     });
@@ -661,7 +652,7 @@ describe('packageSkill - an explicit output path it does not own', () => {
     await writeFile(outFile, 'precious');
     const sp = await skillBeside(tmp);
 
-    await expect(packageSkill(sp, { outputPath: outFile })).rejects.toMatchObject({ code: TREE_DEST_NOT_OWNED_CODE });
+    await expect(packageSkillInRun(sp, { outputPath: outFile })).rejects.toMatchObject({ code: TREE_DEST_NOT_OWNED_CODE });
     expect(readFileSync(outFile, 'utf-8')).toBe('precious');
   });
 
@@ -671,7 +662,7 @@ describe('packageSkill - an explicit output path it does not own', () => {
     await mkdir(outDir, { recursive: true });
     const sp = await skillBeside(tmp);
 
-    const result = await packageSkill(sp, { outputPath: outDir });
+    const result = await packageSkillInRun(sp, { outputPath: outDir });
 
     expect(existsSync(safePath.join(result.outputPath, 'SKILL.md'))).toBe(true);
   });
@@ -682,7 +673,7 @@ describe('packageSkill - an explicit output path it does not own', () => {
     await writeFile(`${outDir}.zip`, 'not ours');
     const sp = await skillBeside(tmp);
 
-    await expect(packageSkill(sp, { outputPath: outDir, formats: [DIRECTORY_FORMAT, 'zip'] }))
+    await expect(packageSkillInRun(sp, { outputPath: outDir, formats: [DIRECTORY_FORMAT, 'zip'] }))
       .rejects.toMatchObject({ code: TREE_DEST_NOT_OWNED_CODE });
     expect(readFileSync(`${outDir}.zip`, 'utf-8')).toBe('not ours');
     expect(existsSync(outDir)).toBe(false);
@@ -695,11 +686,11 @@ describe('packageSkill - one plan: the output lands whole or not at all', () => 
     const outDir = safePath.join(tmp, 'out');
     const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, 'See [page](./page.md).');
     await writeFile(safePath.join(tmp, 'page.md'), '# Page');
-    await packageSkill(sp, { outputPath: outDir, formats: [DIRECTORY_FORMAT, 'zip'] });
+    await packageSkillInRun(sp, { outputPath: outDir, formats: [DIRECTORY_FORMAT, 'zip'] });
     const before = snapshotTree(tmp);
 
     // A `files:` source that is not there refuses the package after the bundle is partly written.
-    await expect(packageSkill(sp, {
+    await expect(packageSkillInRun(sp, {
       outputPath: outDir,
       formats: [DIRECTORY_FORMAT, 'zip'],
       replaceExistingOutput: true,
@@ -713,7 +704,7 @@ describe('packageSkill - one plan: the output lands whole or not at all', () => 
     const tmp = getTempDir();
     const outDir = safePath.join(tmp, 'out');
     const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, '# Clean');
-    await packageSkill(sp, { outputPath: outDir });
+    await packageSkillInRun(sp, { outputPath: outDir });
     // Now it links another skill's SKILL.md, which a package refuses to bundle: an error finding.
     await mkdir(safePath.join(tmp, 'other-skill'), { recursive: true });
     await writeFile(safePath.join(tmp, 'other-skill', 'SKILL.md'), `${createFrontmatter({ name: 'other-skill' })}\n\n# Other`);
@@ -721,7 +712,7 @@ describe('packageSkill - one plan: the output lands whole or not at all', () => 
     const before = snapshotTree(tmp);
 
     // Never a resolved result a caller could read as a build: a coded throw carrying the findings.
-    const error: unknown = await packageSkill(sp, { outputPath: outDir, replaceExistingOutput: true }).then(() => undefined, (caught: unknown) => caught);
+    const error: unknown = await packageSkillInRun(sp, { outputPath: outDir, replaceExistingOutput: true }).then(() => undefined, (caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(SkillPackageChecksFailedError);
     const { result } = error as SkillPackageChecksFailedError;
@@ -739,7 +730,7 @@ describe('packageSkill - one plan: the output lands whole or not at all', () => 
     // The registry's read of the SKILL.md (its admission stat) is refused; the parse before it is not.
     const session = installFaultFs({ within: tmp, faults: [{ op: 'stat', path: (path) => path === sp, errno: 'EACCES' }] });
     try {
-      await expect(packageSkill(sp, { outputPath: safePath.join(tmp, 'out') }))
+      await expect(packageSkillInRun(sp, { outputPath: safePath.join(tmp, 'out') }))
         .rejects.toMatchObject({ code: FS_FAULT_CODE, side: 'source', path: sp });
     } finally {
       session.restore();
@@ -753,7 +744,7 @@ describe('packageSkill - one plan: the output lands whole or not at all', () => 
     const sp = await skillBeside(tmp);
     const before = snapshotTree(tmp);
 
-    const plan = await packageSkill(sp, { outputPath: outDir, formats: [DIRECTORY_FORMAT, 'zip'], dryRun: true });
+    const plan = await packageSkillInRun(sp, { outputPath: outDir, formats: [DIRECTORY_FORMAT, 'zip'], dryRun: true });
 
     expect(plan.plannedChanges).toEqual([
       `create skill '${UNIT_SKILL_NAME}' output ${outDir}`,
@@ -771,7 +762,7 @@ describe('packageSkill - one plan: the output lands whole or not at all', () => 
     chmodSync(outDir, 0o555);
     const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, '# Stale Locked');
 
-    const result = await packageSkill(sp, { outputPath: outDir, replaceExistingOutput: true });
+    const result = await packageSkillInRun(sp, { outputPath: outDir, replaceExistingOutput: true });
 
     expect(await readdir(outDir)).toEqual(['SKILL.md']);
     expect(result.residue).toEqual([]);
@@ -797,7 +788,7 @@ describe('packageSkill - an output that holds the source it reads', () => {
     const { sp, skills, operatorFile } = await nestedSkill(tmp);
     const before = snapshotTree(tmp);
 
-    await expect(packageSkill(sp, { outputPath: skills, ...(force && { replaceExistingOutput: true }) }))
+    await expect(packageSkillInRun(sp, { outputPath: skills, ...(force && { replaceExistingOutput: true }) }))
       .rejects.toMatchObject({ code });
     expect(readFileSync(operatorFile, 'utf-8')).toBe('PRECIOUS router skill');
     expect(diffSnapshots(before, snapshotTree(tmp))).toEqual([]);
@@ -808,9 +799,9 @@ describe('packageSkill - an output that holds the source it reads', () => {
     const { sp } = await nestedSkill(tmp);
     const sourceBefore = readFileSync(sp, 'utf-8');
 
-    await expect(packageSkill(sp, { outputPath: safePath.join(tmp, 'skills', 'demo') }))
+    await expect(packageSkillInRun(sp, { outputPath: safePath.join(tmp, 'skills', 'demo') }))
       .rejects.toMatchObject({ code: TREE_DEST_NOT_OWNED_CODE });
-    await expect(packageSkill(sp, { outputPath: safePath.join(tmp, 'skills', 'demo'), replaceExistingOutput: true }))
+    await expect(packageSkillInRun(sp, { outputPath: safePath.join(tmp, 'skills', 'demo'), replaceExistingOutput: true }))
       .rejects.toMatchObject({ code: TREE_DEST_HOLDS_SOURCE_CODE });
     expect(readFileSync(sp, 'utf-8')).toBe(sourceBefore);
   });
@@ -825,7 +816,7 @@ describe('packageSkill - an output the OS will not let it write', () => {
     await writeFile(safePath.join(tmp, 'blocker'), 'x');
     const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, '# Blocked');
 
-    await expect(packageSkill(sp, { outputPath: safePath.join(tmp, 'blocker', 'out') }))
+    await expect(packageSkillInRun(sp, { outputPath: safePath.join(tmp, 'blocker', 'out') }))
       .rejects.toMatchObject(OUTPUT_FAULT);
   });
 });
@@ -841,7 +832,7 @@ describe('packageSkill - findPackageRoot error path', () => {
     const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, '# Standalone Skill');
 
     // packageSkill without outputPath triggers getDefaultSkillOutputPath -> findPackageRoot
-    await expect(packageSkill(sp)).rejects.toThrow(/package\.json/i);
+    await expect(packageSkillInRun(sp, {})).rejects.toThrow(/package\.json/i);
   });
 });
 
@@ -936,7 +927,7 @@ describe('packageSkill - unreadable/unwritable linked file attribution', () => {
 
       try {
         // A refused write says nothing about the bundle's layout: the output's, never the skill's.
-        await expect(packageSkillInto(sp, outputPath, {}, [])).rejects.toMatchObject({
+        await expect(packageInPlace(sp, { outputPath })).rejects.toMatchObject({
           ...OUTPUT_FAULT,
           faultClass: 'refused',
           message: expect.stringMatching(/write linked file[\s\S]*guide\.md into the bundle/) as unknown,
@@ -957,7 +948,7 @@ describe('packageSkill - unreadable/unwritable linked file attribution', () => {
       faults: [{ family: 'write', path: (path) => path.includes('/.out.vat-staged-') && path.endsWith('/SKILL.md'), errno: 'EACCES' }],
     });
     try {
-      const error: unknown = await packageSkill(sp, { outputPath }).then(() => undefined, (caught: unknown) => caught);
+      const error: unknown = await packageSkillInRun(sp, { outputPath }).then(() => undefined, (caught: unknown) => caught);
       expect(error).toMatchObject({
         ...OUTPUT_FAULT,
         faultClass: 'refused',
@@ -1121,7 +1112,7 @@ describe('packageSkill - source-in-output check', () => {
 
     // SKILL.md is outside the output dir
     const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, '# Normal Skill');
-    await packageSkill(sp, { outputPath: outDir, replaceExistingOutput: true });
+    await packageSkillInRun(sp, { outputPath: outDir, replaceExistingOutput: true });
 
     // Stale file should be gone
     expect(existsSync(safePath.join(outDir, 'stale.md'))).toBe(false);
@@ -1152,7 +1143,7 @@ describe('packageSkill - source-in-output check', () => {
           await mkdir(reached, { recursive: true });
           await writeFile(safePath.join(reached, 'secret.txt'), 'TOKEN=abc\n');
         }
-        await expect(packageSkill(sp)).rejects.toMatchObject({ code: 'SKILL_NAME_NOT_A_SEGMENT' });
+        await expect(packageSkillInRun(sp, {})).rejects.toMatchObject({ code: 'SKILL_NAME_NOT_A_SEGMENT' });
         if (plantable) expect(existsSync(safePath.join(reached, 'secret.txt'))).toBe(true);
       } finally {
         tree.cleanup();
@@ -1552,7 +1543,7 @@ async function batchSpec(root: string, name: string, body: string): Promise<Skil
     skillPath,
     options: {
       outputPath: safePath.join(root, 'out', name),
-      validation: structuredClone(BATCH_VALIDATION) as PackageSkillOptions['validation'],
+      validation: structuredClone(BATCH_VALIDATION) as TestPackageSkillOptions['validation'],
     },
   };
 }
@@ -1575,7 +1566,7 @@ async function allowUnusedAcrossBatch() {
   ];
 
   const ledger = createAllowUsageLedger();
-  const outcomes = await packageSkills(specs, root, ledger, { outputs: batchOutputs(specs) });
+  const outcomes = await packageSkillsInRun(specs, root, ledger);
   // Every skill here is expected to build; a `failed` outcome would silently
   // shrink the population these assertions read, so assert the population first.
   expect(outcomes.map(o => o.status)).toEqual(['built', 'built']);
@@ -1631,7 +1622,7 @@ async function batchWithOneThrowingSkill() {
     },
     await batchSpec(root, 'three', '# Three\n\nNothing to see.'),
   ];
-  return packageSkills(specs, root, createAllowUsageLedger(), { outputs: batchOutputs(specs) });
+  return packageSkillsInRun(specs, root, createAllowUsageLedger());
 }
 
 describe('packageSkills - a skill that throws does not discard the batch', () => {
@@ -1824,4 +1815,9 @@ describe('packageSkill - LINK_OUTSIDE_SKILL_DIR receipt', () => {
 /** What a batch writes: each spec's declared output, the run's one declaration of it. */
 function batchOutputs(specs: readonly SkillBuildSpec[]): string[] {
   return specs.map(({ options }) => options.outputPath);
+}
+
+/** `packageSkills` over `specs` in a run of its own, writing each spec's output. */
+function packageSkillsInRun(specs: SkillBuildSpec[], root: string, ledger: ReturnType<typeof createAllowUsageLedger>): Promise<SkillPackageOutcome[]> {
+  return withSkillRegistries(root, (registries) => packageSkills(specs, root, ledger, { registries, outputs: batchOutputs(specs) }));
 }

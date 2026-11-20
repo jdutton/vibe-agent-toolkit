@@ -5,6 +5,8 @@ import type { ExtentContribution, ExtentContributor } from '../src/projection/co
 import { extentDigest } from '../src/projection/digest.js';
 import { ClosureNonConvergenceError, populate } from '../src/projection/merge.js';
 
+import { inOwnRun } from './helpers/population-run.js';
+
 /**
  * A root that is never touched on disk.
  *
@@ -105,14 +107,14 @@ describe('populate', () => {
   it('runs a base contributor exactly once', async () => {
     const contributor = countingContributor(BASE_ID, BASE);
 
-    await populate({ root: ROOT, registry: registryWith(contributor) });
+    await inOwnRun(populate, { root: ROOT, registry: registryWith(contributor) });
     expect(contributor.calls).toBe(1);
   });
 
   it('runs a closure contributor until its digest stops moving, then once more to prove it', async () => {
     const contributor = growingContributor();
 
-    await populate({ root: ROOT, registry: registryWith(contributor) });
+    await inOwnRun(populate, { root: ROOT, registry: registryWith(contributor) });
     expect(contributor.calls).toBe(3);
   });
 
@@ -120,7 +122,7 @@ describe('populate', () => {
     // Three passes over a contributor emitting two memberships must leave two
     // rows, not six. Without the builder's de-duplication the digest would still
     // settle but the tables would not.
-    const { projection } = await populate({ root: ROOT, registry: registryWith(growingContributor()) });
+    const { projection } = await inOwnRun(populate, { root: ROOT, registry: registryWith(growingContributor()) });
     expect(projection.resourceExtents).toHaveLength(2);
     expect(projection.resolutionContexts).toHaveLength(1);
   });
@@ -128,7 +130,7 @@ describe('populate', () => {
   it('writes one provenance row per contributor, carrying the required digest', async () => {
     const registry = registryWith(countingContributor(BASE_ID, BASE));
 
-    const { projection } = await populate({ root: ROOT, registry });
+    const { projection } = await inOwnRun(populate, { root: ROOT, registry });
     expect(projection.zoneProvenance).toHaveLength(1);
     expect(projection.zoneProvenance[0]?.contributorId).toBe(BASE_ID);
     expect(projection.zoneProvenance[0]?.extentDigest).toMatch(/^[\da-f]{16,}$/u);
@@ -137,7 +139,7 @@ describe('populate', () => {
   it('records the FINAL digest of a closure contributor, never iteration one', async () => {
     // The provenance table replaces on conflict for exactly this reason: a
     // kept-first digest would describe the extent the contributor started from.
-    const { projection } = await populate({ root: ROOT, registry: registryWith(growingContributor()) });
+    const { projection } = await inOwnRun(populate, { root: ROOT, registry: registryWith(growingContributor()) });
     expect(projection.zoneProvenance).toHaveLength(1);
     expect(projection.zoneProvenance[0]?.extentDigest).toBe(extentDigest(contribution(SETTLED)));
     expect(projection.zoneProvenance[0]?.extentDigest)
@@ -161,7 +163,7 @@ describe('populate', () => {
       },
     });
 
-    const { projection } = await populate({
+    const { projection } = await inOwnRun(populate, {
       root: ROOT,
       registry,
       parameters: { [BASE_ID]: declaration },
@@ -174,28 +176,28 @@ describe('populate', () => {
   it('records null for a contributor given no parameters', async () => {
     const registry = registryWith(countingContributor(BASE_ID, BASE));
 
-    const { projection } = await populate({ root: ROOT, registry });
+    const { projection } = await inOwnRun(populate, { root: ROOT, registry });
     expect(projection.zoneProvenance[0]?.parameterSet).toBeNull();
   });
 
   it('THROWS on non-convergence rather than returning a partial extent', async () => {
     const registry = registryWith(oscillator());
 
-    await expect(populate({ root: ROOT, registry, maxIterations: 4 }))
+    await expect(inOwnRun(populate, { root: ROOT, registry, maxIterations: 4 }))
       .rejects.toThrow(ClosureNonConvergenceError);
   });
 
   it('names the contributors still moving, so the failure is diagnosable', async () => {
     const registry = registryWith(oscillator());
 
-    await expect(populate({ root: ROOT, registry, maxIterations: 4 }))
+    await expect(inOwnRun(populate, { root: ROOT, registry, maxIterations: 4 }))
       .rejects.toThrow(new RegExp(OSCILLATOR, 'u'));
   });
 
   it('carries the pass count and the moving ids as fields, not only in the message', async () => {
     const registry = registryWith(oscillator());
 
-    const error = await populate({ root: ROOT, registry, maxIterations: 4 }).catch((cause: unknown) => cause);
+    const error = await inOwnRun(populate, { root: ROOT, registry, maxIterations: 4 }).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(ClosureNonConvergenceError);
     expect((error as ClosureNonConvergenceError).iterations).toBe(4);
     expect((error as ClosureNonConvergenceError).contributorIds).toEqual([OSCILLATOR]);
@@ -226,7 +228,7 @@ describe('populate', () => {
       },
     );
 
-    await populate({ root: ROOT, registry });
+    await inOwnRun(populate, { root: ROOT, registry });
     expect(order[0]).toBe(BASE);
   });
 
@@ -248,14 +250,14 @@ describe('populate', () => {
       },
     );
 
-    await populate({ root: ROOT, registry });
+    await inOwnRun(populate, { root: ROOT, registry });
     expect(observedMembers).toBe(1);
   });
 
   it('is ordinary and fast with no closure contributors at all', async () => {
     const registry = registryWith(countingContributor(BASE_ID, BASE));
 
-    await expect(populate({
+    await expect(inOwnRun(populate, {
       root: ROOT,
       registry,
       maxIterations: 1,
@@ -275,13 +277,13 @@ describe('populate', () => {
       },
     });
 
-    await expect(populate({ root: ROOT, registry })).rejects.toThrow(/git did not answer/u);
+    await expect(inOwnRun(populate, { root: ROOT, registry })).rejects.toThrow(/git did not answer/u);
   });
 
   it('records the corpus root no contribution can carry', async () => {
     const registry = registryWith(countingContributor(BASE_ID, BASE));
 
-    const { projection } = await populate({ root: ROOT, registry });
+    const { projection } = await inOwnRun(populate, { root: ROOT, registry });
     expect(projection.roots).toHaveLength(1);
     // Matched rather than compared: `safePath.resolve` drives it off the cwd, so
     // a bare POSIX literal gains a drive letter on Windows.

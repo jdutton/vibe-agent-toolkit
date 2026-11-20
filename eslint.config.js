@@ -91,8 +91,6 @@ const UNIT_TIER_IO_RATCHET = { allowFiles: [
   'packages/agent-skills/test/validators/packaged-size-limit.test.ts',
   'packages/agent-skills/test/validators/plugin-hosted-shape.test.ts',
   'packages/agent-skills/test/validators/referenced-path-missing.test.ts',
-  'packages/agent-skills/test/validators/registry-memo-refusal-replay.test.ts',
-  'packages/agent-skills/test/validators/registry-memoization.test.ts',
   'packages/agent-skills/test/zip-size-validation.test.ts',
   'packages/claude-marketplace/test/compatibility-analyzer.test.ts',
   'packages/claude-marketplace/test/inventory/extract-install.test.ts',
@@ -1098,6 +1096,10 @@ export default [
       // `diff-tree`, `rev-list`, `show`) goes
       // through `runGitBytes`, never a runner that decodes stdout as UTF-8. No backlog, no allowlist.
       'local/no-text-git-object-read': 'error',
+      // An array spread into `push` is an argument list, which overflows the call stack past
+      // ~125,000 items; a 200,000-file `.venv` walk did. `appendAll` appends one at a time.
+      // No backlog, no allowlist: every site was migrated the day this was enabled.
+      'local/no-spread-push': 'error',
     },
   },
   // The base class itself is the one legitimate `extends Error` in `src`: the error-contract

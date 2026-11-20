@@ -9,10 +9,10 @@
 
 import { mkdir, readdir } from 'node:fs/promises';
 
-import { conventionalSuiteProbe, createProjectRegistry, getMarketplaceOutputDir, getPluginSourceDir, isSkillPackagingInputError, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkillInto, packagingConfigToPackageOptions, pluginDirInMarketplace, skillNameToFsPath, stagedPathMapper, type ConventionalSuiteProbe, type DeclaredEvalSuite, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
-import { type ClaudeMarketplaceConfig, type ClaudeMarketplacePluginEntry, type ExternalPluginSource, type ProjectConfig, type ResourceRegistry, type SkillsConfig, withParseDispatcher } from '@vibe-agent-toolkit/resources';
+import { conventionalSuiteProbe, getMarketplaceOutputDir, getPluginSourceDir, isSkillPackagingInputError, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkillInto, packagingConfigToPackageOptions, pluginDirInMarketplace, skillNameToFsPath, stagedPathMapper, type ConventionalSuiteProbe, type DeclaredEvalSuite, type PackageSkillResult, type RunSkillRegistries } from '@vibe-agent-toolkit/agent-skills';
+import { type ClaudeMarketplaceConfig, type ClaudeMarketplacePluginEntry, type ExternalPluginSource, type ParseDispatcher, type ProjectConfig, type SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Finding, type Gate, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { applyTreePlan, compareCodeUnits, direntKindFollowing, everyInOrder, foldedSegment, forEachInOrder, type FsSide, isSingleFsSegment, issueLocation, isTreeChangeResidue, mapInOrder, pathPresent, planTreeChanges, safePath, type SideOfPath, sideWithin, toForwardSlash, VatError, withFsFault, writeFileUnder } from '@vibe-agent-toolkit/utils';
+import { applyTreePlan, compareCodeUnits, direntKindFollowing, everyInOrder, foldedSegment, forEachInOrder, type FsSide, isSingleFsSegment, issueLocation, isTreeChangeResidue, mapInOrder, pathPresent, planTreeChanges, safePath, type SideOfPath, sideWithin, toForwardSlash, VatError, withFsFault, writeFileUnder, appendAll } from '@vibe-agent-toolkit/utils';
 import { onCrawlOutput } from '@vibe-agent-toolkit/utils/crawl';
 import { Command } from 'commander';
 
@@ -30,7 +30,7 @@ import { createLogger } from '../../../utils/logger.js';
 import { copyFileIntoMarketplace, copyTreeIntoMarketplace, writingMarketplace } from '../../../utils/marketplace-io.js';
 import { readPackageJsonOrAbsent } from '../../../utils/package-json.js';
 import { requireInputPath } from '../../../utils/project-root-policy.js';
-import { withResourcePopulationSource } from '../../../utils/resource-loader.js';
+import { runSkillRegistries, withRunContext } from '../../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig, pluginLocalSkillConfigEntry } from '../../../utils/skill-packaging-config.js';
 import type { PhaseOutcome } from '../../phase-utils.js';
 import { packagingFailedIssue } from '../../skills/build.js';
@@ -311,7 +311,7 @@ async function buildClaudePluginMarketplaces(
   },
   built: MarketplaceBuildResult[],
 ): Promise<void> {
-  const { logger, verbose } = options;
+  const { logger } = options;
   // The run's ONE declaration of what it writes: the marketplaces this build replaces, and what the
   // run wrote before it. A fault on, in or above any of them is the destination's.
   const outputs = [pluginBuildOutput(configDir), ...options.runOutputs];
@@ -344,26 +344,44 @@ async function buildClaudePluginMarketplaces(
   logger.info(`   Config: ${safePath.join(configDir, 'vibe-agent-toolkit.config.yaml')}`);
   logger.info(`   Skills available: ${availableSkills.length}`);
 
-  // THE registry for this build: one crawl+parse of the project's markdown,
-  // shared by every plugin-local skill in every marketplace. `packageSkill`
-  // builds this itself when it is not given one, so omitting it does not fail —
-  // it just re-reads the whole project once per skill, which is how a 46-skill
-  // build came to take longer than a 30-minute CI budget.
-  //
-  // On the projection lane when this process selected it — the same selector,
-  // store and ignore oracle `vat resources validate` uses. `createProjectRegistry`
-  // re-applies its own markdown-only `include` to whatever the source offers, so
-  // this is a change of COST, not of what the build sees.
-  const sharedRegistry = await withResourcePopulationSource(
-    { root: configDir },
-    (populationSource) =>
-      createProjectRegistry(configDir, {
-        // What this run writes (see `outputs` above). A fault on, in or above it (the project
-        // root included) is the destination's.
-        outputs,
-        ...(populationSource !== undefined && { populationSource }),
-      }),
+  // ONE run for the build: its population, store and ignore oracle are the ones
+  // `vat resources validate` uses, and every plugin-local skill in every
+  // marketplace is packaged against the run's one packaging registry.
+  await withRunContext({ root: configDir }, (run) =>
+    buildMarketplacesInRun(configDir, runSkillRegistries(run), { marketplaces, availableSkills, skillsConfig, rootVersion, outputs, options }, built),
   );
+}
+
+/**
+ * The half of {@link buildClaudePluginMarketplaces} inside the build's run: crawl
+ * the packaging registry once, then build each marketplace against it.
+ *
+ * @param configDir - The project root
+ * @param registries - The run's skill registries
+ * @param input - What the caller resolved before the run opened
+ * @param built - Where each marketplace is pushed as it finishes
+ */
+async function buildMarketplacesInRun(
+  configDir: string,
+  registries: RunSkillRegistries,
+  input: {
+    marketplaces: Record<string, ClaudeMarketplaceConfig>;
+    availableSkills: string[];
+    skillsConfig: SkillsConfig | undefined;
+    rootVersion: string | undefined;
+    outputs: readonly string[];
+    options: { marketplace?: string | undefined; logger: ReturnType<typeof createLogger>; verbose: boolean };
+  },
+  built: MarketplaceBuildResult[],
+): Promise<void> {
+  const { marketplaces, availableSkills, skillsConfig, rootVersion, outputs, options } = input;
+  const { logger, verbose } = options;
+  // THE registry for this build: one crawl+parse of the project's markdown,
+  // shared by every plugin-local skill in every marketplace — crawled here, once,
+  // so its refusal is the run's before any marketplace is touched, and served
+  // from `registries` to every skill after. What this run writes (`outputs`) is
+  // the crawl's one declaration of which side a fault is on.
+  const sharedRegistry = await registries.packagingRegistry(configDir, outputs);
   logger.debug(`Project registry: ${sharedRegistry.getAllResources().length} markdown resources (built once)`);
 
   // THE project's declared eval suites for this build, assembled ONCE and threaded
@@ -415,7 +433,7 @@ async function buildClaudePluginMarketplaces(
       configDir,
       skillsConfig,
       rootVersion,
-      registry: sharedRegistry,
+      registries,
       projectSkills,
       suiteProbe,
       outputs,
@@ -623,8 +641,8 @@ interface BuildMarketplaceInput {
   configDir: string;
   skillsConfig: SkillsConfig | undefined;
   rootVersion: string | undefined;
-  /** THE project registry, built once per run (see runClaudePluginBuild). */
-  registry: ResourceRegistry;
+  /** The run's skill registries: every skill packages against its one packaging registry (see runClaudePluginBuild). */
+  registries: RunSkillRegistries;
   /** THE project's declared eval suites, assembled once per run (same reason). */
   projectSkills: readonly DeclaredEvalSuite[];
   /** The run's conventional-suite probe, created once beside `projectSkills`. */
@@ -705,7 +723,7 @@ function landedMarketplace(built: MarketplaceBuildResult, landedPath: (value: st
 
 /** The whole marketplace build, into `marketplaceDir`: its plan's staged tree. */
 async function buildMarketplaceInto(input: BuildMarketplaceInput, marketplaceDir: string): Promise<MarketplaceBuildResult> {
-  const { name, config, availableSkills, configDir, skillsConfig, rootVersion, registry, projectSkills, suiteProbe, outputs, logger, verbose } = input;
+  const { name, config, availableSkills, configDir, skillsConfig, rootVersion, registries, projectSkills, suiteProbe, outputs, logger, verbose } = input;
   const plugins: PluginBuildResult[] = [];
   const externalPlugins: ExternalPluginBuildResult[] = [];
 
@@ -741,7 +759,7 @@ async function buildMarketplaceInto(input: BuildMarketplaceInput, marketplaceDir
       skillsConfig,
       owner: config.owner,
       rootVersion,
-      registry,
+      registries,
       projectSkills,
       suiteProbe,
       outputs,
@@ -998,6 +1016,7 @@ interface PluginLocalSkill {
  */
 function discoverPluginLocalSkills(
   pluginSourceDir: string,
+  dispatcher: ParseDispatcher,
   logger: ReturnType<typeof createLogger>,
 ): Promise<PluginLocalSkill[]> {
   // Git visibility is the right filter, but a SILENT drop is not: a skill the author
@@ -1012,19 +1031,17 @@ function discoverPluginLocalSkills(
     );
   }
   // In order: a SKILL.md that will not read must be the first one named, deterministically.
-  // One parse dispatcher for the plugin's SKILL.md reads.
-  return withParseDispatcher((dispatcher) =>
-    mapInOrder(listPluginSourceSkillDirs(pluginSourceDir), async (skillDirPath) => {
-      const skillSourceDir = safePath.join(pluginSourceDir, 'skills', skillDirPath);
-      // Resolved through the SAME reader `vat skills build` and `vat verify` use — per-skill
-      // config is keyed by name, so two answers would mean two effective configs.
-      // A SKILL.md the parse worker refused has no name to package or key config by: refused.
-      const read = await readPluginLocalSkillName(skillSourceDir, dispatcher);
-      if (read.kind === 'refused') throw skillParseRefusal(read.refused, pluginSourceDir);
-      const skillName = read.name;
-      return { skillDirPath, skillPath: safePath.join(skillSourceDir, 'SKILL.md'), skillName };
-    }),
-  );
+  // The run's dispatcher parses the plugin's SKILL.md reads: no pool beside the run's.
+  return mapInOrder(listPluginSourceSkillDirs(pluginSourceDir), async (skillDirPath) => {
+    const skillSourceDir = safePath.join(pluginSourceDir, 'skills', skillDirPath);
+    // Resolved through the SAME reader `vat skills build` and `vat verify` use — per-skill
+    // config is keyed by name, so two answers would mean two effective configs.
+    // A SKILL.md the parse worker refused has no name to package or key config by: refused.
+    const read = await readPluginLocalSkillName(skillSourceDir, dispatcher);
+    if (read.kind === 'refused') throw skillParseRefusal(read.refused, pluginSourceDir);
+    const skillName = read.name;
+    return { skillDirPath, skillPath: safePath.join(skillSourceDir, 'SKILL.md'), skillName };
+  });
 }
 
 /**
@@ -1052,18 +1069,15 @@ export async function packagePluginLocalSkills(input: {
   pluginDir: string;
   skillsConfig: SkillsConfig | undefined;
   /**
-   * THE project registry for this build, built once by {@link runClaudePluginBuild}.
-   *
-   * Not optional, and not defaulted: `packageSkill` silently falls back to
-   * crawling and parsing every markdown file in the project when it gets no
-   * registry, so an omission here costs one whole-project scan PER SKILL rather
-   * than failing.
+   * The run's skill registries, opened once by {@link runClaudePluginBuild}: every
+   * skill packages against their one packaging registry, so the whole-project
+   * crawl is paid once per run, never per skill.
    */
-  registry: ResourceRegistry;
+  registries: RunSkillRegistries;
   /**
    * THE project's declared eval suites, assembled once by {@link runClaudePluginBuild}.
    *
-   * Not optional, and not defaulted, for the same reason as `registry` above: an
+   * Not optional, and not defaulted: an
    * omission would not fail, it would silently package one skill's bundle carrying
    * ANOTHER skill's eval answer key — the failure mode a default value hid the first
    * time this rule shipped.
@@ -1150,7 +1164,7 @@ export async function packagePluginLocalSkills(input: {
         input.projectSkills,
         input.suiteProbe,
       ),
-      registry: input.registry,
+      registries: input.registries,
     }, input.outputs).catch((error: unknown) => {
       throw isSkillPackagingInputError(error) ? new SkillPackagingStop(error, skillPath) : error;
     });
@@ -1189,11 +1203,11 @@ export function summarizePackagedSkillIssues(
 
   for (const { skillDirPath, result } of packaged) {
     const issues = collectPostBuildIssues(result);
-    all.push(...issues);
+    appendAll(all, issues);
     if (issues.length > 0) {
       lines.push(`         ${skillDirPath}: ${formatIssueSetHeading(issues, 'post-build')}`);
       for (const issue of issuesToRenderAtVerbosity(issues, verbose)) {
-        lines.push(...formatIssueLines(issue, '         '));
+        appendAll(lines, formatIssueLines(issue, '         '));
       }
     }
     if (result.hasErrors) withErrors.push(skillDirPath);
@@ -1334,8 +1348,8 @@ interface BuildPluginInput {
   skillsConfig: SkillsConfig | undefined;
   owner: ClaudeMarketplaceConfig['owner'];
   rootVersion: string | undefined;
-  /** THE project registry, built once per run (see runClaudePluginBuild). */
-  registry: ResourceRegistry;
+  /** The run's skill registries: every skill packages against its one packaging registry (see runClaudePluginBuild). */
+  registries: RunSkillRegistries;
   /** THE project's declared eval suites, assembled once per run (same reason). */
   projectSkills: readonly DeclaredEvalSuite[];
   /** The run's conventional-suite probe, created once beside `projectSkills`. */
@@ -1353,7 +1367,7 @@ type PluginBuildOutcome =
   | { kind: 'gated'; failure: PluginGateFailure };
 
 async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildOutcome> {
-  const { marketplaceDir, pluginDef, marketplaceAvailable, configDir, skillsConfig, owner, rootVersion, registry, projectSkills, suiteProbe, outputs, logger, verbose } =
+  const { marketplaceDir, pluginDef, marketplaceAvailable, configDir, skillsConfig, owner, rootVersion, registries, projectSkills, suiteProbe, outputs, logger, verbose } =
     input;
   const pluginDir = pluginDirInMarketplace(marketplaceDir, pluginDef.name);
   const pluginSourceDir = getPluginSourceDir(configDir, pluginDef);
@@ -1389,7 +1403,7 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildOutcome>
   // Phase 1.4: discover the plugin's own skills ONCE (recursive; git-visible only),
   // resolving each declared name. Every phase below reads this list.
   const localSkills = pluginSourceExists
-    ? await discoverPluginLocalSkills(pluginSourceDir, logger)
+    ? await discoverPluginLocalSkills(pluginSourceDir, registries.dispatcher, logger)
     : [];
 
   // Phase 1.5: collision referee. Resolve the plugin's pool selector BEFORE the
@@ -1439,7 +1453,7 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildOutcome>
     skills: packageable,
     pluginDir,
     skillsConfig,
-    registry,
+    registries,
     projectSkills,
     suiteProbe,
     outputs,

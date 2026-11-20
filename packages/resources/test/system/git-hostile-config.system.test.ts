@@ -90,7 +90,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { computeContentKey, readContentWithKey } from '../../src/content-key.js';
 import { ParseCache } from '../../src/parse-cache.js';
-import { populateBlobs } from '../../src/projection/blob-population.js';
 import { RunContentCache, type ContentCacheStats } from '../../src/projection/content-cache.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
 import { GitExtentContributor } from '../../src/projection/contributors/git-extent.js';
@@ -104,7 +103,9 @@ import {
 import { ProjectionBuilder, type Projection } from '../../src/projection/projection.js';
 import { buildResourcePopulation, buildResourceProjection } from '../../src/projection/resource-population.js';
 import type { ResourceRealizationRow } from '../../src/schemas/projection-resources.js';
+import { populateBlobsOnOwnDispatcher } from '../blob-fixture-population.js';
 import { FakeFactStore } from '../fake-fact-store.js';
+import { inOwnRun } from '../helpers/population-run.js';
 
 /**
  * A content-addressed parse cache would serve a previous run's facts from a
@@ -408,7 +409,7 @@ async function runArm(root: string, useGitSource: boolean): Promise<Arm> {
   for (const row of contribution.contexts) builder.addContext(row);
   for (const row of contribution.resources) builder.addResource(row);
   for (const row of contribution.realizations) builder.addRealization(row);
-  await populateBlobs(builder, { parseCache: NO_CACHE });
+  await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
 
   return {
     projection: builder.build(),
@@ -954,8 +955,8 @@ describe.skipIf(!HOST_GATES.filter.met)(gatedTitle('a clean/smudge filter on one
 
     // Membership miss writes; the query lane is served what it wrote.
     const viaMembership = optionsOver(new FakeFactStore());
-    const members = await buildResourcePopulation({ ...viaMembership, outputs: [] });
-    const served = await buildResourceProjection(viaMembership);
+    const members = await inOwnRun(buildResourcePopulation, { ...viaMembership, outputs: [], unreadable: 'refuse' });
+    const served = await inOwnRun(buildResourceProjection, viaMembership);
     expect(members.outcome).toEqual({ population: 'derived', stored: 'written' });
     // The premise: the git enumerator, the one the OID-sharing defect lived on.
     expect(members.extentSource).toBe('git');
@@ -963,7 +964,7 @@ describe.skipIf(!HOST_GATES.filter.met)(gatedTitle('a clean/smudge filter on one
     expect(keyOf(served.projection, PATH_B)).toBe(ownKeyB);
 
     // Query miss derives and writes on its own.
-    const derived = await buildResourceProjection(optionsOver(new FakeFactStore()));
+    const derived = await inOwnRun(buildResourceProjection, optionsOver(new FakeFactStore()));
     expect(derived.outcome).toEqual({ population: 'derived', stored: 'written' });
     expect(keyOf(derived.projection, PATH_B)).toBe(ownKeyB);
   });

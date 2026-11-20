@@ -18,7 +18,7 @@
  * through".
  *
  * A registry's include globs are NOT the routability policy: the production
- * registries differ (`crawlAndResolveRegistry` includes HTML, the packager's is
+ * registries differ (`RunSkillRegistries.forRoot` includes HTML, the packager's is
  * markdown-only), and both must give one answer to "is HTML a door".
  *
  * Links out of a non-routable member are not silently dropped: each one whose

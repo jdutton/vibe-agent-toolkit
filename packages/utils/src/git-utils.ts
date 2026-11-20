@@ -5,6 +5,7 @@
 
 import { dirname, parse } from 'node:path';
 
+import { appendAll } from './append-all.js';
 import { errnoForGitReason } from './errors/git-errno.js';
 import { entryPresentIn } from './errors/path-present.js';
 import { directoryRefusalFor, listingFailure } from './fs-utils.js';
@@ -171,7 +172,7 @@ export function gitFindRoot(startDir: string): string | null {
  * @param options.includeUntracked - Include untracked files that aren't gitignored (default: false)
  * @param options.unreadable - See {@link GitListingOptions}. Only the untracked
  *   listing walks the working tree, so only it can have skipped a directory
- * @returns Array of file paths relative to the git root, or null if not in a git repo
+ * @returns Array of file paths relative to `cwd` (git prints them so), or null if not in a git repo
  *
  * @example
  * ```typescript
@@ -200,7 +201,7 @@ export function gitLsFiles(options: GitListingOptions & {
 
   // Add patterns if provided
   if (options.patterns && options.patterns.length > 0) {
-    args.push('--', ...options.patterns);
+    appendAll(args, ['--', ...options.patterns]);
   }
 
   // `trim: false` (inside `runListing`) because the output is NUL-delimited:
@@ -240,7 +241,7 @@ export function gitLsFiles(options: GitListingOptions & {
  *   siblings) and warns when it cannot; the `ignored` listing opens every
  *   non-ignored directory and so meets every refusal the first one does and
  *   more (measured on git 2.50)
- * @returns Paths relative to the git root, or null if git did not answer
+ * @returns Paths relative to `cwd`, as git prints them (not to the repository root), or null if git did not answer
  *
  * @example
  * ```typescript

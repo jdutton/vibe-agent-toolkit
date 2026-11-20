@@ -23,13 +23,13 @@ import {
   BLOB_PARSE_FAILED,
   BLOB_PARSE_LIMIT_EXCEEDED,
   BLOB_PARSE_WORKER_DIED,
-  populateBlobs,
   storableBlobFacts,
+  type BlobPopulationResult,
 } from '../../src/projection/blob-population.js';
 import { describeBlobRefusals } from '../../src/projection/blob-refusals.js';
 import { splitProjectionByScope } from '../../src/projection/store.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
-import { baseBuilderForRoot, conditionsWithCode } from '../blob-fixture-population.js';
+import { baseBuilderForRoot, conditionsWithCode, populateBlobsOnOwnDispatcher } from '../blob-fixture-population.js';
 import { deeplyNestedQuote } from '../parse-limit-fixtures.js';
 import { countFilesUnder, setupSubdirTestSuite } from '../test-helpers.js';
 
@@ -46,9 +46,9 @@ const LIMITS: NonNullable<ParsePoolOptions['limits']> = { stackMb: 1, heapMb: 51
  * @param cache - The cache the first run used
  * @returns What its pool was handed, and what it counted
  */
-async function populateAgain(cache: ParseCache): Promise<{ second: Dispatched; again: Awaited<ReturnType<typeof populateBlobs>> }> {
+async function populateAgain(cache: ParseCache): Promise<{ second: Dispatched; again: BlobPopulationResult }> {
   const second: Dispatched = { firstLines: [] };
-  const again = await populateBlobs(await baseBuilderForRoot(suite.tempDir), { parseCache: cache, parsePool: recordingPolicy(second, LIMITS) });
+  const again = await populateBlobsOnOwnDispatcher(await baseBuilderForRoot(suite.tempDir), { cache, policy: recordingPolicy(second, LIMITS) });
   return { second, again };
 }
 
@@ -97,7 +97,7 @@ describe('a parse stopped at a limit, on the projection lane', () => {
     const first: Dispatched = { firstLines: [] };
 
     const builder = await baseBuilderForRoot(suite.tempDir);
-    const counts = await populateBlobs(builder, { parseCache: cache, parsePool: recordingPolicy(first, LIMITS) });
+    const counts = await populateBlobsOnOwnDispatcher(builder, { cache, policy: recordingPolicy(first, LIMITS) });
     const projection = builder.build();
 
     // Refused, naming the file and the limit.
@@ -187,7 +187,7 @@ describe('a parse worker that dies holding a job', () => {
     const cache = new ParseCache({ cacheDir, enabled: true });
 
     const builder = await baseBuilderForRoot(suite.tempDir);
-    const counts = await populateBlobs(builder, { parseCache: cache, parsePool: recordingPolicy({ firstLines: [] }, LIMITS) });
+    const counts = await populateBlobsOnOwnDispatcher(builder, { cache, policy: recordingPolicy({ firstLines: [] }, LIMITS) });
     const projection = builder.build();
 
     const died = conditionsWithCode(projection, BLOB_PARSE_WORKER_DIED);

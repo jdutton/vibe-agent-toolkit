@@ -43,6 +43,8 @@
  * every spawn site — the most convincing wrong finding this renderer has produced.
  */
 
+import { appendAll } from '@vibe-agent-toolkit/utils';
+
 import type { ReportEnvelope } from '../../envelope/envelope.js';
 import { armLabel, laneNote } from '../../harness/lane.js';
 import {
@@ -224,7 +226,7 @@ function stabilityLine(row: IoCommandStats): string {
  * because it qualifies the numbers the same way they do: 436 user calls is a
  * measurement of *some* enumerator, and a reader who cannot see which one from
  * the line will infer it from a call-site signature — which is what the
- * first git-vs-filesystem A/B had to do. A row whose output named no lane
+ * first git-vs-filesystem A/B had to do. A row whose output named no enumerator
  * says so in words rather than leaving a gap, since a gap reads as ordinary.
  *
  * @param row - The command's statistics
@@ -290,7 +292,7 @@ function commandLines(row: IoCommandStats, maxSites: number): readonly string[] 
 
   const lines = [summaryLine(row), stabilityLine(row)];
   if (measuredLauncherOnly(row)) lines.push(PROPAGATION_WARNING);
-  lines.push(...row.sites.slice(0, maxSites).map((site) => siteLine(site)));
+  appendAll(lines, row.sites.slice(0, maxSites).map((site) => siteLine(site)));
 
   const withheld = row.sites.length - Math.min(row.sites.length, maxSites);
   if (withheld > 0) {

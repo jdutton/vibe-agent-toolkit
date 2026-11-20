@@ -8,7 +8,7 @@
  *   git exports into a hook ({@link INHERITED_GIT_ENV}, owned by utils), and —
  *   for a VAT step — the temp, XDG, Claude and git-config state in
  *   {@link CLEARED_ENV_NAMES}. What the arm itself sets (a caller's `--env
- *   VAT_RESOURCES_CRAWL=walk` included) wins over the clearing: only the
+ *   VAT_EXTENT_SOURCE=git` included) wins over the clearing: only the
  *   inherited value is dropped.
  * - {@link buildArmEnv} — the last step before a spawn: the arm's `set` and
  *   `unset` over `process.env`, which never re-admits a variable that decides

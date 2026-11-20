@@ -155,8 +155,8 @@
  *
  * ## Both arms are driven the way production drives them
  *
- * - **Walker arm.** One `createProjectRegistry(root, { outputs: [] })` per corpus — the registry
- *   `packageSkills` builds once and reuses — then one `walkLinkGraph` per skill
+ * - **Walker arm.** One `RunSkillRegistries.packagingRegistry(root, [])` per corpus — the registry
+ *   `packageSkills` crawls once per run and reuses — then one `walkLinkGraph` per skill
  *   with the options `skill-packager.ts:600` assembles.
  * - **Closure arm.** One `populate()` per corpus, with the filesystem extent and
  *   one `SkillExtentContributor` per skill, exactly as
@@ -216,10 +216,10 @@ import {
   SKILL_REFUSED_PATTERN_MATCHED,
   SKILL_REFUSED_SKILL_DEFINITION,
   SkillExtentContributor,
-  createProjectRegistry,
   skillExtentContributorId,
   skillExtentDeclaration,
   walkLinkGraph,
+  withSkillRegistries,
   type LinkResolution,
   type SkillPackagingConfig,
   type WalkLinkGraphOptions,
@@ -236,6 +236,7 @@ import {
   FilesystemExtentContributor,
   ProjectionBuilder,
   populate,
+  withPopulationRun,
   type JsonValue,
   type Projection,
   type ProjectionBase,
@@ -845,12 +846,13 @@ async function populateCorpus(
     parameters[skillExtentContributorId(skill.name)] = declarationFor(skill, skill.config);
   }
 
-  const { projection } = await populate({
+  const { projection } = await withPopulationRun((run) => populate({
     root,
     registry,
     parameters,
     gitTracker,
-  });
+    run,
+  }));
 
   // From provenance rather than by re-deriving `extentContextId`: the row names
   // the contributor that produced the extent, so a change to how an extent id is
@@ -933,7 +935,7 @@ async function corpusOf(spec: CorpusSpec): Promise<Corpus> {
   // already did it — before either arm runs, so both see one tree.
   await gitTracker.initialize();
   const registryStartedAt = performance.now();
-  const registry = await createProjectRegistry(root, { outputs: [] });
+  const registry = await withSkillRegistries(root, (registries) => registries.packagingRegistry(root, []));
   const registryMs = performance.now() - registryStartedAt;
 
   const populateStartedAt = performance.now();
@@ -1571,7 +1573,7 @@ beforeAll(async () => {
     skills: corpus.skills.length,
     realizations: corpus.projection.resourceRealizations.length,
     'reference candidates': corpus.projection.blobReferences.length,
-    'createProjectRegistry ms': Number(corpus.preparationMs.registry.toFixed(0)),
+    'packagingRegistry ms': Number(corpus.preparationMs.registry.toFixed(0)),
     'populate ms': Number(corpus.preparationMs.populate.toFixed(0)),
   })));
 }, atLeastTierTimeout(inject('tierHookTimeout'), 3_600_000));
@@ -2078,7 +2080,7 @@ describe('head-to-head cost of the two implementations', () => {
     }
 
     console.log('[timing] warm, min of 9; per-skill compute only, shared preparation'
-      + ' (createProjectRegistry / populate) excluded and reported by beforeAll.'
+      + ' (packagingRegistry / populate) excluded and reported by beforeAll.'
       + ' The depth-1 rows are the ones that price the frontier enumeration —'
       + ' at "full" the closure never reaches its own depth boundary.');
     console.table(rows);

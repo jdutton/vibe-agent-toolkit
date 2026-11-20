@@ -41,6 +41,7 @@ import {
   safePath,
   toForwardSlashAnyPlatform,
   withFsFaultSync,
+  appendAll,
 } from '@vibe-agent-toolkit/utils';
 import {
   getToolVersion,
@@ -1309,7 +1310,7 @@ export function buildDryRunSummary(input: DryRunSummaryInput): string {
         : '[dry-run] Staged the declared skill WITHOUT building; a real run would build + stage it, then spawn claude.',
     );
     if (input.dryRunStagedExistingDist === true) {
-      lines.push(...buildStaleDistWarningLines());
+      appendAll(lines, buildStaleDistWarningLines());
     } else if (input.dryRunStagedExistingDist === false) {
       lines.push(
         '[dry-run] No built dist exists yet; this preview fell back to the source dir.',
@@ -1330,13 +1331,13 @@ export function buildDryRunSummary(input: DryRunSummaryInput): string {
   // it is labelled rather than left to be taken at face value.
   const stagedFromUnbuiltTree = input.wouldBuild && input.dryRunStagedExistingDist !== undefined;
   const provisional = stagedFromUnbuiltTree ? ' (PROVISIONAL — not rebuilt)' : '';
-  lines.push(
+  appendAll(lines, [
     ...buildSpawnPlanLines(input),
     `[dry-run] Executor ${input.modelFlag}; grader model ${input.graderModel} (prompt via stdin).`,
     `[dry-run] Staged manifest: ${count} entr${count === 1 ? 'y' : 'ies'} | ` +
       `fingerprint: ${input.provenanceFingerprint}${provisional}`,
     `[dry-run] Provenance would be written to: ${input.provenancePath}`,
-  );
+  ]);
 
   return lines.join('\n');
 }
@@ -2349,8 +2350,8 @@ async function runEvalsTiered(input: RunEvalsTieredInput): Promise<TieredEvalRun
   await everyInOrder(groups.entries(), async ([index, group]) => {
     const outcomes = await input.runTier(buildEvalWorkItems(group.evals, input.baseline));
     const tierFragments = outcomes.flatMap((o) => (o.fragment === undefined ? [] : [o.fragment]));
-    controlFailures.push(...outcomes.flatMap((o) => (o.controlFailure === undefined ? [] : [o.controlFailure])));
-    fragments.push(...tierFragments);
+    appendAll(controlFailures, outcomes.flatMap((o) => (o.controlFailure === undefined ? [] : [o.controlFailure])));
+    appendAll(fragments, tierFragments);
     // A control-arm failure deliberately does NOT gate. The gate asks whether the
     // SKILL failed a cheap expectation before spending on expensive ones, and the
     // control arm is not the skill — treating its executor timeout as a gating
@@ -3089,17 +3090,17 @@ async function runHarnessCollecting(opts: RunHarnessOptions, leftovers: unknown[
     // for why a call-site guard is the weaker of the two forms.
     swallowCleanupFailure(killAllActiveClaudeChildren);
     lock.release();
-    leftovers.push(
+    appendAll(leftovers, [
       ...await cleanupHarness(harnessRoot, { keep: opts.keep === true, created: harnessCreated }),
       ...await removeVatOnlyDir(graderOutDir),
       // The held eval suite is the answer key: reap it on EVERY exit path (including
       // --keep, which retains the harness dir for inspection but has no business
       // retaining the key), and never conditionally.
       ...await removeVatOnlyDir(evalSuiteHoldDir),
-    );
+    ]);
     // Per-eval workspaces are the executor's cwd; `retainWorkspaces` (minted with
     // the root above) is the single author of whether they survive.
-    if (!retainWorkspaces) leftovers.push(...await removeVatOnlyDir(workspacesRoot));
+    if (!retainWorkspaces) appendAll(leftovers, await removeVatOnlyDir(workspacesRoot));
   };
   // ONE cleanup, whoever starts it — the run's own `finally` or a signal — so a signal during the
   // `finally`'s cleanup awaits that same work instead of starting a second removal beside it.
@@ -3168,7 +3169,7 @@ async function runHarnessCollecting(opts: RunHarnessOptions, leftovers: unknown[
     });
 
     const { pluginDirs, subjectStagedDir, subjectPluginRoot, skippedOptional } = stageResult;
-    leftovers.push(...stageResult.leftovers);
+    appendAll(leftovers, stageResult.leftovers);
     emitSkippedOptionalWarning(skippedOptional);
 
     if (subjectStagedDir === null) {

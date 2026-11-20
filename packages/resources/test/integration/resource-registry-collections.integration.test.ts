@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { ProjectConfig } from '../../src/schemas/project-config.js';
+import { crawlInRun } from '../helpers/population-run.js';
 import { setupTempDirTestSuite } from '../test-helpers.js';
 
 // Helper for comparing collections arrays (order doesn't matter)
@@ -171,7 +172,8 @@ describe('ResourceRegistry with collections', () => {
     };
 
     const registry = new ResourceRegistry({ config });
-    await registry.crawl({
+    await crawlInRun(registry, {
+      ignoredRefusals: 'record',
       unreadable: 'refuse',
       outputs: [],
       baseDir: suite.tempDir,

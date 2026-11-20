@@ -21,7 +21,7 @@
 
 import { readdirSync, readFileSync, rmSync } from 'node:fs';
 
-import { direntKindFollowingSync, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, isPathAbsentError, safePath, appendAll } from '@vibe-agent-toolkit/utils';
 
 /** Where fragments live, relative to the repo root. */
 export const CHANGES_DIR = '.changes';
@@ -187,7 +187,7 @@ export function mergeFragmentsIntoBody(body: string, fragments: readonly Changel
   for (const fragment of fragments) {
     for (const [section, lines] of fragment.sections) {
       const bucket = byName.get(section) ?? [];
-      bucket.push(...lines);
+      appendAll(bucket, lines);
       byName.set(section, bucket);
     }
   }
@@ -222,7 +222,7 @@ export function mergeFragmentsIntoBody(body: string, fragments: readonly Changel
 
   const missing = FRAGMENT_SECTIONS.filter((section) => byName.has(section) && !headingAt.has(section));
   for (const section of missing) {
-    lines.push('', `### ${section}`, '', ...(byName.get(section) ?? []));
+    appendAll(lines, ['', `### ${section}`, '', ...(byName.get(section) ?? [])]);
   }
 
   return `${lines.join('\n')}\n`;

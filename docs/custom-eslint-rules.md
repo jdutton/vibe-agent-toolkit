@@ -77,6 +77,16 @@ regenerate — never the table.
 The table lives in one place — [`packages/utils/eslint/README.md`](../packages/utils/eslint/README.md#rules),
 the file that ships with the pack.
 
+## Rules this repo turns on beyond `recommended`
+
+Most are listed with their exempt files in `eslint.config.js`. One has no exemption and no backlog:
+
+- **`no-spread-push`**, over product source: `target.push(...items)` is an argument list, which
+  overflows the call stack past roughly 125,000 items. A gitignored 200,000-file `.venv` walk did
+  exactly that in the projection crawl, and three agent-skills walks had the same shape. Every
+  append goes through `appendAll(target, items)` from `@vibe-agent-toolkit/utils`; a spread into an
+  array literal (`appendAll(lines, ['header', ...rows])`) is not an argument list and is allowed.
+
 ## Creating New Rules
 
 When you identify a dangerous pattern (security, platform-specific, error-prone):

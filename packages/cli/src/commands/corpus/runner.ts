@@ -18,7 +18,7 @@ import { dirname } from 'node:path';
 import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
 import { scan } from '@vibe-agent-toolkit/discovery';
 import { ExitCode, exitCodeOfChild } from '@vibe-agent-toolkit/schema';
-import { everywhere, fsFaultOf, pathPresent, safePath, suppressedFaultsOf, toForwardSlash, transientRefusalClause } from '@vibe-agent-toolkit/utils';
+import { everywhere, fsFaultOf, pathPresent, safePath, suppressedFaultsOf, toForwardSlash, transientRefusalClause, appendAll } from '@vibe-agent-toolkit/utils';
 import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 import { isGitUrl, parseGitUrl } from '@vibe-agent-toolkit/utils/git';
 import * as yaml from 'yaml';
@@ -184,7 +184,7 @@ async function runUrlEntry(entry: PluginEntry, opts: RunnerOptions): Promise<Plu
   } catch (err) {
     if (!isEntryRefusal(err)) throw err;
     // The refusal becomes a row, so a clone recorded beside it would vanish with it: the scan reports it.
-    opts.leftovers.push(...suppressedFaultsOf(err));
+    appendAll(opts.leftovers, suppressedFaultsOf(err));
     return unloadableRow(entry, errorMessageOf(err), 0);
   }
 }

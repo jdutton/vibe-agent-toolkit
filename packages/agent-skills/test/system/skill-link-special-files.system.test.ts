@@ -14,8 +14,8 @@ import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { gitExecutable, resolveExecutable, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
 import { validateSkill } from '../../src/validators/skill-validator.js';
+import { validateForPackagingInRun } from '../test-helpers.js';
 
 /** How long a validation may take before the test calls it hung on the pipe. */
 const HANG_MS = 5000;
@@ -76,7 +76,7 @@ describe.skipIf(process.platform === 'win32')('skill validation - a link to a na
 
   it('validateSkillForPackaging refuses a pipe .md as LINK_TARGET_UNREADABLE', async () => {
     await plantSkillLinkingPipe('ref/notes.md');
-    const result = await withinBound(() => validateSkillForPackaging(skillPath, {}));
+    const result = await withinBound(() => validateForPackagingInRun(skillPath, {}));
     expect(result).not.toBe('hung on the pipe');
     expect(result === 'hung on the pipe' ? [] : result.allErrors).toContainEqual(expect.objectContaining({
       code: 'LINK_TARGET_UNREADABLE',

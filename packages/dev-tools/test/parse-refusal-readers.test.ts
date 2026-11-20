@@ -128,9 +128,6 @@ const POPULATION_BUILDERS: Readonly<Record<string, readonly string[]>> = {
  * refusals still reach the user, or why there is no user to reach.
  */
 const POPULATION_NOT_READ_HERE: Readonly<Record<string, string>> = {
-  'packages/cli/src/utils/resource-loader.ts':
-    'the population only ENUMERATES (`ResourcePopulationSource` hands the registry paths): the registry parses each on its own '
-    + 'bounded route and logs every refusal, which `loadResourcesWithConfig`\'s callers read (`getNotAdmitted()`).',
   'packages/resources/src/projection/run-population.ts':
     'the run\'s population only ENUMERATES for the run\'s registry views (`RunPopulation.source`): each view parses on the '
     + 'run\'s route and logs every refusal, which the view\'s caller reads (`getNotAdmitted()`, `registryForSkill`).',

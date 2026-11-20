@@ -34,14 +34,12 @@ import {
   toNfc,
   VatError,
   withOuterBracket,
+  appendAll,
 } from '@vibe-agent-toolkit/utils';
 import {
   BUILD_OUTPUT_GLOBS,
-  crawlDirectory,
-  type CrawlOptions as UtilsCrawlOptions,
   crawlPathFilter,
   NEVER_CONTENT_GLOBS,
-  type UnreadablePolicy,
 } from '@vibe-agent-toolkit/utils/crawl';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
@@ -71,11 +69,8 @@ import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } fr
 import { isReadFailure, readFailureCode } from './parse-failure.js';
 import { isPerRunParseRefusal, type PerRunParseRefusal } from './parse-limits.js';
 import { POPULATION_PARSE_LIMITS } from './projection/content-cache.js';
-// A value import, and acyclic: `crawl-source.ts` reaches only `utils` and a
-// type from `realizations.ts`, never back into the registry. The remedy is
-// shared so the walk lane refuses with the projection's exact sentence.
 import { isDeclinedSymlinkCode } from './projection/contributors/filesystem-extent.js';
-import { listingRefusalRemedy } from './projection/crawl-source.js';
+import { declinedLinkApplies, type PopulationUnreadablePolicy } from './projection/crawl-source.js';
 import {
   collectionMimeConflictFinding,
   createCollectionMimeResolver,
@@ -85,7 +80,13 @@ import {
 // Type-only, and that is what keeps it acyclic: the projection's population
 // builder is a CALLER of the registry's world, not a dependency of it, so the
 // import is erased before any module graph exists at runtime.
-import type { CrawlPopulation, ResourceEnumeration, ResourcePopulationSource } from './projection/resource-population.js';
+import type {
+  CrawlPopulation,
+  IgnoredRefusals,
+  PopulationMembers,
+  ResourceEnumeration,
+  ResourcePopulationSource,
+} from './projection/resource-population.js';
 import type { AdmittedFacts, AdmittedStat, RunPopulation } from './projection/run-population.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { SHA256 } from './schemas/checksum.js';
@@ -93,7 +94,7 @@ import type { ProjectConfig, ValidationMode } from './schemas/project-config.js'
 import type { RealizationConditionRow } from './schemas/projection-resources.js';
 import type { HeadingNode, ResourceMetadata } from './schemas/resource-metadata.js';
 import type { ValidationResult } from './schemas/validation-result.js';
-import { locationRoot, matchesGlobPattern, resolveLocalHref, sameDirectory } from './utils.js';
+import { locationRoot, matchesGlobPattern, resolveLocalHref } from './utils.js';
 
 /**
  * Typed error thrown when two resources produce the same ID.
@@ -205,74 +206,6 @@ export const DEFAULT_RESOURCE_INCLUDE: readonly string[] = ['**/*.md', '**/*.htm
 export const DEFAULT_RESOURCE_EXCLUDE: readonly string[] = Object.freeze([...NEVER_CONTENT_GLOBS, ...BUILD_OUTPUT_GLOBS]);
 
 /**
- * The (bound, offered) root pairs already announced, so a run that crawls the
- * same mismatched pair per skill says it once instead of once per skill.
- *
- * Keyed on the PAIR and not on a single boolean: two different mismatches are two
- * different facts, and a process-wide "already warned" flag would hide the second
- * one behind the first.
- */
-const announcedRootMismatches = new Set<string>();
-
-/**
- * Say, on stderr, that a population source was declined for naming a different
- * root — and what the two roots were.
- *
- * The repo's standard, stated in `cli/src/utils/projection-store.ts`'s header: an
- * opted-in cache that quietly does nothing is worse than no cache. A silent
- * decline turns a wired lane into an invisible walk, so a measurement arm that
- * believes it is testing a projection tests an ordinary cold run — the failure
- * that has already cost this project one whole A/B.
- *
- * A warning rather than a throw or a `ValidationIssue`: the decline is not the
- * project's fault and produces the correct answer by a slower route, so it must
- * neither abort a build nor be reported at an adopter as a finding about their
- * corpus. Same posture, and the same channel, as `extract-plugin.ts` takes when
- * its own cache lane fails.
- *
- * @param boundRoot - The root the source declared it can answer for
- * @param offeredRoot - The resolved root this crawl asked it about
- */
-function warnPopulationRootMismatch(boundRoot: string, offeredRoot: string): void {
-  const resolvedBound = safePath.resolve(boundRoot);
-  const pair = `${resolvedBound}\u0000${offeredRoot}`;
-  if (announcedRootMismatches.has(pair)) return;
-  announcedRootMismatches.add(pair);
-  console.warn(
-    '[vat] The resource population source is bound to '
-    + `${resolvedBound} but this crawl asked it about ${offeredRoot}. `
-    + 'Declining it and walking the tree instead, so this enumeration is on the '
-    + 'incumbent crawler rather than the projection lane.',
-  );
-}
-
-/**
- * What the crawl does with a directory it cannot list — the CALLER's decision,
- * required, with no default, because the two standing rulings are per-verb and
- * both stand:
- *
- * - `'refuse'` — STOP, by name, with the projection's sentence
- *   ({@link listingRefusalRemedy}): the ruling for every verb whose output is
- *   acted on as a complete population — `vat resources validate`/`scan`/`check`,
- *   `vat skills validate`/`build`, `vat build`, `vat claude context`, the
- *   pipeline oracles. A literal rather than the crawler's `{ refuse: { root,
- *   remedy } }` so every such lane refuses with ONE sentence and switching
- *   `VAT_RESOURCES_CRAWL` cannot turn an exit 2 into a warning.
- * - `{ degrade }` — KEEP GOING and hand the refusal over: the ruling for
- *   `vat audit`, where status describes what was found and exit describes
- *   whether the run completed. The caller is promising to REPORT the gap
- *   (audit files `SCAN_PATH_UNREADABLE` on the directory) — not to drop it.
- *
- * 🪤 The policy used to live INSIDE this class, and whichever ruling it
- * encoded was wrong for the other verb: first "record and warn" (so the walk
- * lane exited 0 on a tree the projection lane exited 2 on), then "refuse" (so
- * `vat audit` exited 2 with zero findings over one `chmod 000` sibling —
- * the unreadable-directory defect's exact shape). It is the caller's knowledge, so it is the
- * caller's field.
- */
-export type RegistryUnreadablePolicy = 'refuse' | Extract<UnreadablePolicy, { degrade: unknown }>;
-
-/**
  * Refuse an omitted `unreadable` up front, by name, before any directory is listed.
  *
  * The type makes the field required and that enumerates the TypeScript callers;
@@ -283,9 +216,9 @@ export type RegistryUnreadablePolicy = 'refuse' | Extract<UnreadablePolicy, { de
  *
  * @param policy - What the caller passed as `unreadable`
  */
-function requireRegistryUnreadablePolicy(
-  policy: RegistryUnreadablePolicy | undefined,
-): asserts policy is RegistryUnreadablePolicy {
+function requirePopulationUnreadablePolicy(
+  policy: PopulationUnreadablePolicy | undefined,
+): asserts policy is PopulationUnreadablePolicy {
   if (policy === undefined) {
     throw new TypeError(
       "ResourceRegistry.crawl: `unreadable` is required — pass 'refuse' to stop on a directory the crawl cannot list, "
@@ -301,21 +234,18 @@ export interface CrawlOptions {
   /** Base directory to crawl */
   baseDir: string;
   /**
-   * What to do with a directory the crawl cannot list — see
-   * {@link RegistryUnreadablePolicy}. Required, no default.
-   *
-   * Governs the WALK. A `populationSource` decides its own refusals (the
-   * projection refuses inside the population and records inside ignored
-   * territory — see `projection/crawl-source.ts`), so `{ degrade }` beside a
-   * source is refused by name rather than silently ignored.
+   * What to do with a directory inside the population the crawl cannot list —
+   * see {@link PopulationUnreadablePolicy}. Required, no default. Handed to the
+   * population source: `'refuse'` stops the run by name, `{ degrade }` keeps the
+   * readable remainder and hands each refusal over. A directory inside ignored
+   * territory is recorded as a population condition under either policy, when
+   * {@link CrawlOptions.ignoredRefusals} is `record`.
    */
-  unreadable: RegistryUnreadablePolicy;
+  unreadable: PopulationUnreadablePolicy;
   /** Include patterns (default: {@link DEFAULT_RESOURCE_INCLUDE}) */
   include?: string[];
   /** Exclude patterns, replacing the default (default: {@link DEFAULT_RESOURCE_EXCLUDE}) */
   exclude?: string[];
-  /** Follow symbolic links (default: false) */
-  followSymlinks?: boolean;
   /**
    * The trees the calling verb WRITES — its output and the staging it builds it in — or `[]`
    * for a verb that only reads: the one declaration of which side a fault is on. A fault at
@@ -326,26 +256,23 @@ export interface CrawlOptions {
    */
   outputs: readonly string[];
   /**
-   * Where the file list comes from — omit for the incumbent `crawlDirectory`
-   * walk, supply one to source it from a projection instead.
+   * Where the file list comes from: the run's population. Required — there is
+   * no other lane.
    *
-   * The source answers ENUMERATION only. `include`/`exclude` are still applied
-   * here, with {@link crawlPathFilter} — the same compiled matcher
-   * `crawlDirectory` itself uses on its `git ls-files` branch — so the two lanes
-   * cannot disagree about what the project's globs mean, only about which paths
-   * were offered to them. That distinction is what makes an A/B between them
-   * legible: a difference in the result is a difference in the population.
-   *
-   * Selecting the lane is the CLI's job, not this class's: an env read here
-   * would put the switch below the boundary where the project root is resolved,
-   * and a registry built by a library caller would silently change population
-   * with the environment.
-   *
-   * A source that is bound to a different root than `baseDir` is DECLINED here
-   * and this crawl walks instead — see {@link ResourceRegistry.populationFrom}
-   * for the guard and why it declines rather than throwing.
+   * The source answers ENUMERATION only. `include`/`exclude` are applied here,
+   * with {@link crawlPathFilter}, to whatever the source offers. A run's source
+   * answers any root it is asked about under that root's own oracles (see
+   * `ResourcePopulationSource`), so a crawl of a root other than the run's home
+   * is enumerated for that root: nothing declines and nothing walks.
    */
-  populationSource?: ResourcePopulationSource;
+  populationSource: ResourcePopulationSource;
+  /**
+   * Whether this crawl's caller reports the directories it could not list inside
+   * ignored territory (see `PopulationMembers.ignoredRefusals`). Required: a
+   * caller that reports them and omitted it would lose them with the store off,
+   * and one that drops them would pay for a walk of every ignored directory.
+   */
+  ignoredRefusals: IgnoredRefusals;
 }
 
 /**
@@ -354,7 +281,7 @@ export interface CrawlOptions {
 export interface RegistryCrawl {
   /** The admitted resources, in admission order — see {@link admissionOrder}. */
   readonly resources: ResourceMetadata[];
-  /** Which lane answered, and for the projection lane the enumeration's own outcome and enumerator. */
+  /** The enumeration's own outcome and enumerator. */
   readonly population: CrawlPopulation;
 }
 
@@ -694,7 +621,13 @@ async function readAndCompileSchema(
  *
  * // Add resources
  * await registry.addResource('/project/README.md');
- * await registry.crawl({ baseDir: '/project/docs', unreadable: 'refuse', outputs: [] });
+ * await registry.crawl({
+ *   baseDir: '/project/docs',
+ *   unreadable: 'refuse',
+ *   outputs: [],
+ *   populationSource: run.population.source, // the run's population (ResourcePopulationSource)
+ *   ignoredRefusals: 'record',
+ * });
  *
  * // Validate all links
  * const result = await registry.validate();
@@ -858,8 +791,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
 
   /**
    * Population-time conditions the population source handed over with the
-   * paths — the projection's `realization_conditions` for the extents the lane
-   * registered. Empty on the walk lane, which has no projection. Cleared by
+   * paths — the projection's `realization_conditions` for the extents the
+   * population registered. Cleared by
    * clear(). Surfaced by validate(), one finding per `(code, path)`, with the
    * row's own severity — see {@link collectPopulationConditionIssues}.
    */
@@ -1089,11 +1022,13 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * const { registry, population } = await ResourceRegistry.fromCrawl({
    *   baseDir: '/project/docs',
    *   outputs: [],
-   *   unreadable: 'refuse', // or { degrade } — see RegistryUnreadablePolicy
+   *   unreadable: 'refuse', // or { degrade } — see PopulationUnreadablePolicy
+   *   populationSource: run.population.source, // the run's population (ResourcePopulationSource)
+   *   ignoredRefusals: 'record', // or 'skip' — see PopulationMembers.ignoredRefusals
    *   include: ['**.md'],
    *   exclude: ['node_modules'],
    * });
-   * console.log(`Crawled ${registry.size()} resources on the ${population.lane} lane`);
+   * console.log(`Crawled ${registry.size()} resources (population: ${population.outcome.population})`);
    * ```
    */
   static async fromCrawl(
@@ -1543,10 +1478,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * admission order, however the files were enumerated.
    *
    * @param options - Crawl options (baseDir, the required `unreadable` policy, include, exclude patterns)
-   * @returns The admitted resources, in admission order, and where their file
-   *   list came from: `{ lane: 'walk' }` when the directory was walked (no source,
-   *   or a source this crawl declined), otherwise the outcome and enumerator the
-   *   source's enumeration carried
+   * @returns The admitted resources, in admission order, and the outcome and
+   *   enumerator the population's enumeration carried
    *
    * @example
    * ```typescript
@@ -1555,6 +1488,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    *   baseDir: './docs',
    *   outputs: [],
    *   unreadable: 'refuse',
+   *   populationSource: run.population.source, // the run's population (ResourcePopulationSource)
+   *   ignoredRefusals: 'record',
    *   include: ['**\/*.md'],
    *   exclude: ['**\/node_modules/**']
    * });
@@ -1565,178 +1500,73 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       baseDir,
       include = [...DEFAULT_RESOURCE_INCLUDE],
       exclude = [...DEFAULT_RESOURCE_EXCLUDE],
-      followSymlinks = false,
       unreadable,
       populationSource,
       outputs,
+      ignoredRefusals,
     } = options;
-    requireRegistryUnreadablePolicy(unreadable);
-    if (populationSource !== undefined && unreadable !== 'refuse') {
-      throw new TypeError(
-        'ResourceRegistry.crawl: `{ degrade }` cannot be honoured beside a `populationSource` — the source decides its own '
-        + "refusals (it refuses inside the population). Pass 'refuse', or drop the source to crawl with the walk.",
-      );
-    }
+    requirePopulationUnreadablePolicy(unreadable);
 
     // Propagate baseDir to registry if not already set (enables path-relative IDs)
     if (baseDir && !this.baseDir) {
       this.baseDir = baseDir;
     }
 
-    // Use utils file crawler
-    const crawlOptions: UtilsCrawlOptions = {
-      baseDir,
-      include,
-      exclude,
-      followSymlinks,
-      absolute: true,
-      filesOnly: true,
-      outputs,
-      // The validation universe is `tracked ∪ (untracked ∧ ¬ignored)` — what a
-      // commit made right now WOULD contain. Without this, `crawlDirectory`'s
-      // `git ls-files` fast path answers tracked-only, so a brand-new,
-      // uncommitted, un-ignored markdown file is not merely missed, it is
-      // invisible: the command exits green about the half it could see. That is
-      // a defect, not a scoping choice — see
-      // `docs/architecture/resource-scanning-and-caching.md` §2.1, which declares
-      // the obligation, and the per-command scoring in
-      // `docs/architecture/command-population-matrix.md`.
-      //
-      // `includeUntracked` rather than `respectGitignore: false`: it keeps the
-      // fast path and it keeps ignored files out, which is the half of the
-      // universe that must NOT widen (see {@link CrawlOptions.includeUntracked}).
-      includeUntracked: true,
-      // 🚨 The CALLER's policy — see {@link RegistryUnreadablePolicy}. Under
-      // `'refuse'` this lane refuses by name with the projection's sentence,
-      // so a locked NON-ignored directory reaches the same exit on both lanes
-      // (this lane used to record it as a `SCAN_PATH_UNREADABLE` warning while
-      // the projection lane aborted the identical tree — and the warning
-      // prescribed `resources.exclude`, a knob the default lane does not read).
-      // A locked GITIGNORED directory never reaches here on the git route (git
-      // prunes it by name) and is a warning row on the projection, never an
-      // abort. Under `{ degrade }` the refusal is the caller's to report.
-      unreadable: unreadable === 'refuse'
-        ? { refuse: { root: baseDir, remedy: listingRefusalRemedy(baseDir), side: 'source' } }
-        : unreadable,
-    };
-
     // The enumeration ALONE is charged here, not the whole method: `addResources`
     // below charges itself per file (see {@link addResource}), and a bracket
-    // around both would produce a row that contains the other one. The two are
-    // additive as written, which is what lets the incumbent arm be totalled.
+    // around both would produce a row that contains the other one.
     //
-    // BOTH lanes are charged to this one id, deliberately. They answer the same
-    // question and the point of the seam is to compare them, so a projection arm
-    // that filed its cost under a different row would be incomparable with the
-    // walker arm by construction. Which lane RAN is still readable, and from the
-    // instrument rather than from the caller's intent: the projection reaches
-    // `populate`, which files `builtin:filesystem` and `blob-population:derive`
-    // in the `base` stratum — rows the walker arm cannot produce.
-    //
-    // ⚠️ Those `base` rows are NESTED INSIDE this one, not additive to it. On the
-    // probe repository the projection arm read `enumerate` 27.0 ms against `base`
-    // rows totalling 26.0 ms — so summing the two per-arm totals inflates the
-    // projection arm and leaves the walker arm untouched, which corrupts the
-    // RATIO and not merely the total. Compare `enumerate` to `enumerate`.
-    // See `crawl-timing.ts` on stratum inheritance.
-    //
-    // `withOuterBracket` is what makes that warning true of the DUMP and not
-    // only of this comment: the driver-placed rows inside now arrive at
-    // `CRAWL_PASS_INSIDE`, where the existing classification already calls them
-    // nested and the renderer already keeps them out of the total. It stayed a
-    // comment for as long as it did because the seam's placement rule assumed
-    // nothing could contain a driver-placed row, and this is the one call site
-    // where something does.
-    //
-    // `populationFrom` may DECLINE — see its root guard — and a decline falls
-    // back to the walk rather than to an empty list. `undefined` is the refusal;
-    // an empty `admitted` is a legitimate population (a tree with no admitted
-    // members) and must not re-trigger the walk.
+    // ⚠️ The population's `base` rows (`builtin:filesystem`,
+    // `blob-population:derive`) are NESTED INSIDE this one, not additive to it.
+    // `withOuterBracket` is what makes that true of the DUMP and not only of
+    // this comment: the driver-placed rows inside arrive at `CRAWL_PASS_INSIDE`,
+    // where the classification already calls them nested and the renderer keeps
+    // them out of the total. See `crawl-timing.ts` on stratum inheritance.
     const enumerationStartedAt = crawlTimingStart();
-    const sourced = populationSource
-      ? await withOuterBracket(() => this.populationFrom(populationSource, baseDir, include, exclude, outputs))
-      : undefined;
-    const files = sourced?.admitted ?? await crawlDirectory(crawlOptions);
+    const { admitted, enumeration } = await withOuterBracket(() =>
+      this.populationFrom(populationSource, baseDir, { include, exclude, ignoredRefusals }, outputs, unreadable),
+    );
     recordRegistryPass(CRAWL_REGISTRY_ENUMERATE_ID, enumerationStartedAt);
 
-    // The walk answered whenever no enumeration did, declined or never offered —
-    // said HERE, beside the files, so it cannot be told apart from them.
-    const population: CrawlPopulation = sourced === undefined
-      ? { lane: 'walk' }
-      : { lane: 'projection', outcome: sourced.enumeration.outcome, extentSource: sourced.enumeration.extentSource };
-    return { resources: await this.addResources(files), population };
+    const population: CrawlPopulation = { outcome: enumeration.outcome, extentSource: enumeration.extentSource };
+    return { resources: await this.addResources(admitted), population };
   }
 
   /**
-   * Narrow a projection-supplied population to what this crawl's globs admit —
-   * **or decline the source outright, when it is not bound to this root.**
+   * Narrow the population of this crawl's base directory to what its globs admit.
    *
    * The source enumerates a ROOT; `include`/`exclude` are declared relative to
-   * the crawl's `baseDir`. Re-basing here rather than assuming they coincide
-   * keeps the coordinate system explicit: a path outside `baseDir` relativizes to
-   * a `../`-prefixed spelling, which no root-relative glob matches, so it is
-   * declined rather than silently admitted under a nonsense name.
+   * the crawl's `baseDir`, and the source is asked about `baseDir` itself, so the
+   * two coincide by construction.
    *
-   * ## The root guard, and why this is the only place it belongs
-   *
-   * This is the single place in the toolkit where a {@link ResourcePopulationSource}
-   * meets a root, so a check here makes every present and future forwarding site
-   * safe by construction. A source bound to tree A, asked about tree B, would
-   * build B's population with A's ignore oracle and — with a projection store
-   * open — file it under **A's extent key**; the next run would read that back
-   * and believe it. That is worse than a wrong answer in one run, and it is not
-   * expressible as an error unless the source carries its own root, which is why
-   * it does.
-   *
-   * ⛔ **A mismatch declines to the WALK, never to an empty population.** An
-   * empty file list means "no files", so a validation lane would report a
-   * confident green over a corpus it never looked at — silently deleting
-   * findings, which is the exact outcome the guard exists to prevent.
-   *
-   * ⛔ **And it declines rather than throwing.** A mismatch is not always a
-   * programming error: `packaging-validator.ts`'s
-   * `findProjectRoot(...) ?? dirname(skillPath)` legitimately resolves to a build
-   * output directory in an adopter layout with no config and no `.git` above it,
-   * and throwing there would break real builds over a lane the adopter opted into
-   * for speed.
-   *
-   * The decline is announced, once per (bound, offered) pair — see
-   * {@link warnPopulationRootMismatch}.
-   *
-   * @param source - The enumeration lane, carrying the one root it can answer for
-   * @param baseDir - The basis the caller's globs are written against
-   * @param include - Include globs
-   * @param exclude - Exclude globs
-   * @returns Absolute paths of the admitted files with the enumeration they came
-   *   from, or `undefined` when the source is bound to a different root and the
-   *   caller should walk instead
+   * @param source - The run's population source
+   * @param baseDir - The basis the caller's globs are written against, and the root enumerated
+   * @param members - The crawl's globs and whether it reports ignored-territory refusals
+   * @param outputs - The trees the calling verb writes
+   * @param unreadable - What a refused listing inside the population does
+   * @returns Absolute paths of the admitted files with the enumeration they came from
    */
   private async populationFrom(
     source: ResourcePopulationSource,
     baseDir: string,
-    include: string[],
-    exclude: string[],
+    members: PopulationMembers,
     outputs: readonly string[],
-  ): Promise<{ admitted: string[]; enumeration: ResourceEnumeration } | undefined> {
+    unreadable: PopulationUnreadablePolicy,
+  ): Promise<{ admitted: string[]; enumeration: ResourceEnumeration }> {
     const base = safePath.resolve(baseDir);
-    if (!sameDirectory(source.root, base)) {
-      warnPopulationRootMismatch(source.root, base);
-      return undefined;
-    }
-    const isMember = crawlPathFilter(include, exclude);
-    const enumeration = await source.enumerate(base, outputs);
+    const { include, exclude } = members;
+    const isMember = crawlPathFilter([...include], [...exclude]);
+    const enumeration = await source.enumerate(base, outputs, unreadable, members);
     const { paths, conditions } = enumeration;
     // Kept whole, not narrowed by `include`/`exclude`: a condition is about the
     // enumeration, and a gap the enumerator met outside this crawl's globs is
     // still a gap in the population the projection will answer queries from.
-    // ONE exception: a declined link under an EXCLUDED path is dropped — an
-    // excluded `vendor/CLAUDE.md` link is no more this crawl's business than an
-    // excluded file. Only the exclude half applies: a DIRECTORY link matches no
-    // `**/*.md` include by its own name, yet may hold members
-    // (`.claude/rules/shared -> ~/shared-rules`).
-    const notExcluded = crawlPathFilter(['**/*'], exclude);
+    // ONE exception: a declined link the crawl's globs make none of its
+    // business is dropped — the one rule, `declinedLinkApplies`, a listing
+    // applies to its own view too.
+    const linkApplies = declinedLinkApplies(exclude);
     this.populationConditions = conditions.filter(
-      (row) => !isDeclinedSymlinkCode(row.code) || notExcluded(row.path),
+      (row) => !isDeclinedSymlinkCode(row.code) || linkApplies(row.path),
     );
     const admitted: string[] = [];
     for (const absolutePath of paths) {
@@ -1845,10 +1675,10 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * no command read, and this lane's docstring said it "stays silent about it":
    * two collections typing one file differently made every `vat resources` verb
    * exit 0 on both lanes. The registry resolves the type for every admitted file
-   * itself (see {@link ResourceRegistry.mimeResolverInstance}), on the walk lane
-   * and the projection lane alike, so its accumulator is the witness that does
-   * not depend on which lane ran. The projection lane's row for the same file
-   * is folded onto it by the `(code, path)` key below.
+   * itself (see {@link ResourceRegistry.mimeResolverInstance}), so its
+   * accumulator is the witness that does not depend on whether the store
+   * answered. The projection's row for the same file is folded onto it by the
+   * `(code, path)` key below.
    *
    * ## What a row becomes
    *
@@ -1992,7 +1822,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         undefined,
         this.baseDir,
       );
-      issues.push(...frontmatterIssues);
+      appendAll(issues, frontmatterIssues);
     }
     return issues;
   }
@@ -2026,7 +1856,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         fragmentsByFile,
         skipGitIgnoreCheck,
       );
-      issues.push(...collectionIssues);
+      appendAll(issues, collectionIssues);
     });
 
     return issues;
@@ -2065,7 +1895,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         fragmentsByFile,
         skipGitIgnoreCheck,
       );
-      issues.push(...collectionIssues);
+      appendAll(issues, collectionIssues);
     });
 
     return issues;
@@ -2192,7 +2022,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         fragmentsByFile,
         linkOptions,
       );
-      issues.push(...linkIssues);
+      appendAll(issues, linkIssues);
 
       if (externalUrls.length > 0) {
         const prior = this.frontmatterExternalUrlsByResource.get(resource.filePath) ?? [];
@@ -2278,14 +2108,14 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Surface parse-time diagnostics: YAML frontmatter errors first, then HTML
     // well-formedness, then dangling reference-style links, then duplicate-id
     // collisions. Combined into one push() call (SonarCloud S7778).
-    issues.push(
+    appendAll(issues, [
       ...this.collectYamlErrors(),
       ...this.collectHtmlParseErrors(),
       ...this.collectUnresolvedReferenceIssues(),
       ...this.collectDuplicateIdErrors(),
       ...this.collectNotAdmittedErrors(),
       ...this.collectPopulationConditionIssues(),
-    );
+    ]);
 
     // Validate each link in each resource
     const linkIssues = await this.validateAllLinks(
@@ -2294,25 +2124,25 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       options?.checkHtmlAnchors ?? false,
       options?.deferredArtifacts,
     );
-    issues.push(...linkIssues);
+    appendAll(issues, linkIssues);
 
     // Per-collection frontmatter validation
     const collectionFrontmatterIssues = await this.validateCollectionFrontmatter(
       fragmentsByFile,
       options?.skipGitIgnoreCheck ?? false,
     );
-    issues.push(...collectionFrontmatterIssues);
+    appendAll(issues, collectionFrontmatterIssues);
 
     // Global frontmatter validation (if schema provided)
     if (options?.frontmatterSchema) {
       const mode = options.validationMode ?? 'strict';
-      issues.push(...this.validateAllFrontmatter(options.frontmatterSchema, mode));
+      appendAll(issues, this.validateAllFrontmatter(options.frontmatterSchema, mode));
     }
 
     // External URL validation (if enabled)
     if (options?.checkExternalUrls) {
       const externalUrlIssues = await this.validateExternalUrls(options.noCache ?? false);
-      issues.push(...externalUrlIssues);
+      appendAll(issues, externalUrlIssues);
     }
 
     // Resolve severity + apply allow-filter INSIDE the library (not the CLI).

@@ -18,7 +18,7 @@
  * this from a terminal is deleted; there is no shipped command behind any of it.
  *
  * ⛔ **Not public API.** The lanes bind to internal builders
- * (`createProjectRegistry`, `crawlAndResolveRegistry`, …). Those move whenever
+ * (`RunSkillRegistries.packagingRegistry`, `RunSkillRegistries.forRoot`, …). Those move whenever
  * the pipeline moves, which is the entire point of the instrument, so nothing
  * outside this repository may bind to these shapes or to the on-disk layout.
  *

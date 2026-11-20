@@ -283,10 +283,10 @@ function isPathUnderRoot(normalizedFile: string, normalizedRoot: string): boolea
  *
  * The identity question, not the containment question — {@link isPathUnderRoot}
  * answers the latter and is deliberately a different function. This one exists
- * for {@link ResourcePopulationSource}'s root guard, where the two sides arrive
- * from different producers (one from a CLI boundary that resolved a project
- * root, one from a crawl's `baseDir`) and any of four legitimate spelling
- * differences must NOT read as two roots:
+ * for `RunPopulation`'s home-root question, where the two sides arrive from
+ * different producers (one from the CLI boundary that resolved the run's home,
+ * one from a crawl's `baseDir`) and any of four legitimate spelling differences
+ * must NOT read as two roots:
  *
  * - a trailing separator (`/project/` against `/project`);
  * - a non-normalised traversal (`/project/out/..`);
@@ -294,9 +294,9 @@ function isPathUnderRoot(normalizedFile: string, normalizedRoot: string): boolea
  * - differing case, **where the filesystem folds case** and only there.
  *
  * ⚠️ The asymmetry between over- and under-strictness is what shapes this. An
- * over-strict answer declines a source that was perfectly entitled to answer,
- * and its symptom is not an error but a lane that quietly stopped helping —
- * unfalsifiable from the outside. So the comparison is made twice: once on the
+ * over-strict answer treats the home root as a stranger: it is enumerated with
+ * no store, and its symptom is not an error but a cache that quietly stopped
+ * answering — unfalsifiable from the outside. So the comparison is made twice: once on the
  * resolved strings, which is pure and settles the first two cases, and once on
  * what the filesystem reports on disk, which settles the last two.
  *
@@ -336,8 +336,8 @@ export function sameDirectory(left: string, right: string): boolean {
  * What the filesystem calls this path — symlinks resolved, and the casing it
  * actually stores rather than the casing the caller typed.
  *
- * Both callers' sides are the operator's OWN roots (a crawl base and the root a
- * population source was bound to), so each is its own `within`: the kernel
+ * Both sides are the operator's OWN roots (a crawl base and the run's home
+ * root), so each is its own `within`: the kernel
  * answers the operator's input directly, as `link-following.ts` rules for an edge.
  *
  * @param resolvedPath - An already-resolved absolute path the operator named

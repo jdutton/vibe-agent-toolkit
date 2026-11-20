@@ -33,7 +33,7 @@ import { readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { ExitCode, type ExitCodeValue } from '@vibe-agent-toolkit/schema';
-import { followedKindSync, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { followedKindSync, relativeEscapesRoot, safePath, toForwardSlash, appendAll } from '@vibe-agent-toolkit/utils';
 import { ESLint } from 'eslint';
 import picomatch from 'picomatch';
 import ts from 'typescript';
@@ -335,10 +335,10 @@ export function ignoreFileFindings(repoRoot: string, declared: readonly string[]
   ];
   for (const [task, prefix] of LINT_TASKS) {
     const inputs = lintTaskInputs(repoRoot, task, prefix).filter((input) => input.endsWith('.gitignore'));
-    findings.push(
+    appendAll(findings, [
       ...declared.filter((rel) => !inputs.includes(rel)).map((rel) => finding(TURBO_JSON, `The "${task}" task does not hash ${prefix}${rel}, which eslint.config.js reads for every lint.`)),
       ...inputs.filter((rel) => !declared.includes(rel)).map((rel) => finding(TURBO_JSON, `The "${task}" task hashes ${prefix}${rel}, which IGNORE_FILES does not list.`)),
-    );
+    ]);
   }
   return findings;
 }

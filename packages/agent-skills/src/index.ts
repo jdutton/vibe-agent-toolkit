@@ -4,7 +4,6 @@
  */
 
 export {
-  createProjectRegistry,
   extractH1Title,
   packageSkill,
   packageSkillInto,
@@ -15,7 +14,6 @@ export {
   ZipSizeLimitError,
   type PackageSkillOptions,
   type PackageSkillResult,
-  type ProjectRegistryOptions,
   type SkillBuildSpec,
   type SkillMetadata,
   type SkillPackageOutcome,
@@ -133,14 +131,18 @@ export { manifestReadFailure, type MissingManifestFinding, validateMarketplace }
 export { validateSkill } from './validators/skill-validator.js';
 export { validate, type UnifiedValidateOptions } from './validators/unified-validator.js';
 export { detectResourceFormat, enumerateSurfaces } from './validators/format-detection.js';
-export { RunSkillRegistries, type RunSkillRegistriesOptions } from './validators/run-skill-registries.js';
+export {
+  projectConfigOrNone,
+  REGISTRY_INCLUDE,
+  RunSkillRegistries,
+  withSkillRegistries,
+  type RunSkillRegistriesOptions,
+  type SkillRegistryRuling,
+} from './validators/run-skill-registries.js';
 export {
   activeErrorsOf,
   activeWarningsOf,
-  crawlAndResolveRegistry,
-  resetPackagingRegistryCache,
   validateSkillForPackaging,
-  type CrawlRegistryOptions,
   type ExcludedReferenceDetail,
   type PackagingValidationResult,
   type SkillPackagingConfig,

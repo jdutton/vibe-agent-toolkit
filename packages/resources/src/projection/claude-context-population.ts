@@ -249,7 +249,7 @@ async function discoverImportRoots(
   root: string,
   gitTracker: GitTracker | undefined,
   source: CrawlSource,
-  run: PopulationRun | undefined,
+  run: PopulationRun,
 ): Promise<string[]> {
   const registry = new ContributorRegistry();
   // `'deferred'` — enumerated, deliberately not read. `claudeImportRootsFrom`
@@ -260,7 +260,7 @@ async function discoverImportRoots(
 
   const discovery = await populate({
     root,
-    ...(run !== undefined && { run }),
+    run,
     registry,
     // The SAME parameter set the real pass below passes: a root discovered here
     // that the real pass declined would register a contributor whose extent is

@@ -37,6 +37,8 @@ import type {
 } from '../src/projection/store.js';
 import { PROJECTION_TABLES } from '../src/projection/table-registry.js';
 
+import { inOwnRun } from './helpers/population-run.js';
+
 
 /** A table bundle seen structurally, which is how the double walks every table. */
 type RowBundle = Record<string, readonly Record<string, unknown>[]>;
@@ -299,7 +301,7 @@ export async function populateExtentThrough(
   await tracker.initialize();
   const registry = new ContributorRegistry();
   registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
-  const { projection, outcome } = await populate({
+  const { projection, outcome } = await inOwnRun(populate, {
     root,
     registry,
     gitTracker: tracker,

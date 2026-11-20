@@ -27,10 +27,10 @@ import { parseMarkdownContent } from '../src/link-parser.js';
 import { ParseCache } from '../src/parse-cache.js';
 import { classifyParseFailure } from '../src/parse-failure.js';
 import { ParseDecodeDefectError } from '../src/parse-limits.js';
-import { BLOB_PARSE_FAILED, populateBlobs } from '../src/projection/blob-population.js';
+import { BLOB_PARSE_FAILED } from '../src/projection/blob-population.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 
-import { baseBuilderForRoot, conditionsWithCode } from './blob-fixture-population.js';
+import { baseBuilderForRoot, conditionsWithCode, populateBlobsOnOwnDispatcher } from './blob-fixture-population.js';
 import { setupSubdirTestSuite } from './test-helpers.js';
 
 const seam = vi.hoisted(() => ({ decodeFails: false }));
@@ -65,7 +65,7 @@ describe('a frontmatter decode that throws on the parent thread', () => {
     seam.decodeFails = true;
     const builder = await baseBuilderForRoot(suite.tempDir);
 
-    await expectLoudDefect(populateBlobs(builder, { parseCache: new ParseCache({ enabled: false }) }));
+    await expectLoudDefect(populateBlobsOnOwnDispatcher(builder, { cache: new ParseCache({ enabled: false }) }));
     expect(conditionsWithCode(builder.build(), BLOB_PARSE_FAILED)).toHaveLength(0);
   });
 

@@ -8,7 +8,7 @@
 
 import type { ClaudeMarketplaceConfig } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Finding, type Gate } from '@vibe-agent-toolkit/schema';
-import { forEachInOrder, withTempDir } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, withTempDir, appendAll } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { refusalCodeOf } from '../../../utils/command-refusal.js';
@@ -289,7 +289,7 @@ async function marketplacePublishCommand(_options: MarketplacePublishOptions, co
 
       const done = await publishOneMarketplace({ mpName, mpConfig, publishConfig: mpConfig.publish, configDir, options, logger });
       published.push(done.result);
-      leftovers.push(...done.leftovers);
+      appendAll(leftovers, done.leftovers);
     });
   } catch (error) {
     const finished = published.length === 0

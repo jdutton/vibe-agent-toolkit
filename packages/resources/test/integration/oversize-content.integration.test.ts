@@ -34,6 +34,7 @@ import { ProjectionBuilder, REALIZATION_PROMOTION_UNREADABLE } from '../../src/p
 import { collectRealization } from '../../src/projection/realizations.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import { ResourceRealizationRowSchema } from '../../src/schemas/projection-resources.js';
+import { inOwnRun } from '../helpers/population-run.js';
 
 /** Past `readFile`'s own 2 GiB ceiling — see the module docstring. */
 const PAST_READFILE_LIMIT = 2 ** 31 + 1;
@@ -202,14 +203,19 @@ describe('demand promotion of a deferred undecodable file', () => {
   });
 });
 
+/** `populate` over `root` with the filesystem extent alone, in a run of its own. */
+async function populateFilesystemExtent(): ReturnType<typeof populate> {
+  const registry = new ContributorRegistry();
+  registry.register(new FilesystemExtentContributor(() => crawlSourceFor(root, []), DEFAULT_CONTENT_DEMAND));
+  return inOwnRun(populate, { root, registry });
+}
+
 describe('populate over a tree holding one undecodable file', () => {
   it('completes, marks that file oversize, keys its neighbour, and says so in the refusal line', async () => {
     await writeFile(safePath.join(root, NOTES), '# Notes\n\nmarker: oversize suite\n');
     await sparse(HUGE, MAX_DECODABLE_BYTES + 1);
 
-    const registry = new ContributorRegistry();
-    registry.register(new FilesystemExtentContributor(() => crawlSourceFor(root, []), DEFAULT_CONTENT_DEMAND));
-    const { projection } = await populate({ root, registry });
+    const { projection } = await populateFilesystemExtent();
 
     const rowAt = (name: string) =>
       projection.resourceRealizations.find((row) => toForwardSlash(row.path) === name);
@@ -232,9 +238,7 @@ describe('populate over a tree holding a document past the parse input cap', () 
     await sparse('big.md', pastCap);
     await sparse('big.csv', pastCap);
 
-    const registry = new ContributorRegistry();
-    registry.register(new FilesystemExtentContributor(() => crawlSourceFor(root, []), DEFAULT_CONTENT_DEMAND));
-    const { projection } = await populate({ root, registry });
+    const { projection } = await populateFilesystemExtent();
 
     const stateAt = (name: string) =>
       projection.resourceRealizations.find((row) => toForwardSlash(row.path) === name)?.contentState;

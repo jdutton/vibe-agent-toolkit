@@ -101,7 +101,7 @@ import {
   DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
 } from './contributors/filesystem-extent.js';
-import { crawlSourceFor, type CrawlSource, type CrawlSourceKind } from './crawl-source.js';
+import { crawlSourceFor, type CrawlSource, type CrawlSourceKind, type PopulationUnreadablePolicy, type RootListing } from './crawl-source.js';
 import {
   populate,
   populationOracles,
@@ -115,56 +115,65 @@ import {
 import type { Projection } from './projection.js';
 
 /**
- * A way to obtain the enumerated file population for a root, together with the
- * ONE root it is entitled to answer for.
+ * Where a registry crawl's file population comes from: a run's enumeration of
+ * the root the crawl asks about.
  *
- * Lazy rather than a materialized list, so the CLI can decide the lane at its
- * boundary (where root discovery belongs) while the crawl stays lazy — a
- * registry that is never crawled must not pay for a projection.
+ * Lazy rather than a materialized list, so a registry that is never crawled
+ * pays for no population.
  *
- * ## Why the root travels WITH the enumerator
- *
- * A bare `(root: string) => Promise<readonly string[]>` cannot express the one
- * invariant this seam has: a source built against tree A, handed tree B, would
- * build B's population using A's ignore oracle and — with a store open — write
- * it under **A's extent key**. Poisoning the key is worse than a wrong answer in
- * one run, because the next run reads it back and believes it.
- *
- * With the root here, "the wrong tree" is a comparison rather than a convention,
- * and `ResourceRegistry.populationFrom` makes it at the single place a source
- * ever meets a root — so every present and future forwarding site is safe by
- * construction instead of by a comment. The rejected alternative was a parallel
- * `populationSourceRoot` argument beside the function, which is a second thing to
- * keep in step and therefore the same bug one level out.
- *
- * ⚠️ **Compare RESOLVED, never as raw strings.** A trailing separator, a
- * `a/../a` spelling, a symlinked temp root and (where the filesystem folds case)
- * a differently-cased spelling all name the same directory. An over-strict
- * comparison declines every one of them, and its symptom is not an error but a
- * lane that quietly stopped helping. `sameDirectory` in `../utils.ts` is that
- * comparison.
+ * It answers for ANY root it is asked about, under that root's own oracles: a
+ * source built for tree A and asked about tree B lists B with B's ignore oracle
+ * and never files it under A's extent key (the store holds the run's home tree
+ * only). A crawl of a root other than the run's home — a path argument outside
+ * the project, a skill directory with no project root, a nested project — is
+ * therefore answered, never declined. `RunPopulation.source` is the
+ * implementation: the home root with a store is the full population (it pays off
+ * because the store keeps it); every root with no store is a listing of the
+ * crawl's members alone ({@link buildResourceListing}), which reads no file.
  */
 export interface ResourcePopulationSource {
   /**
-   * The absolute root this source can answer for, and no other.
+   * Enumerate a root's population.
    *
-   * Need not be normalised — the guard resolves both sides — but must name the
-   * tree the enumeration was actually built against, not the tree a caller
-   * happens to be crawling.
-   */
-  readonly root: string;
-  /**
-   * Enumerate the population.
-   *
-   * @param root - Absolute root to enumerate, which the guard has already
-   *   established names the same directory as {@link ResourcePopulationSource.root}
+   * @param root - Absolute root to enumerate
    * @param outputs - The trees the calling verb writes (the registry's `CrawlOptions.outputs`),
    *   `[]` for none: a fault on one of them, inside one or on a directory holding one is the
    *   destination's, any other the input's
+   * @param unreadable - What a directory inside the population that cannot be
+   *   listed does — see {@link PopulationUnreadablePolicy}
+   * @param members - The files the calling crawl admits. A source may answer
+   *   with more (a stored population is the whole tree); the crawl narrows to
+   *   these either way, so a root with no store enumerates only these
    * @returns Every file the population admits, and the population-time
    *   conditions the enumeration recorded — see {@link ResourceEnumeration}
    */
-  enumerate(root: string, outputs: readonly string[]): Promise<ResourceEnumeration>;
+  enumerate(
+    root: string,
+    outputs: readonly string[],
+    unreadable: PopulationUnreadablePolicy,
+    members: PopulationMembers,
+  ): Promise<ResourceEnumeration>;
+}
+
+/** Whether a crawl reports the directories it could not list inside ignored territory. */
+export type IgnoredRefusals = 'record' | 'skip';
+
+/**
+ * What one crawl asks of a population: its include and exclude globs, relative
+ * to the root it enumerates (`ResourceRegistry.crawl`'s own `include`/`exclude`),
+ * and whether it reports refusals met in ignored territory.
+ */
+export interface PopulationMembers {
+  readonly include: readonly string[];
+  readonly exclude: readonly string[];
+  /**
+   * `record` for a crawl whose caller reports `EXTENT_DIRECTORY_UNLISTABLE` rows
+   * for ignored territory; `skip` for one that drops them. A listing walks
+   * ignored territory only for `record`: that walk exists for those rows alone,
+   * and a gitignored `.venv` or `node_modules` makes it the largest cost a listing
+   * has. A stored population walks it either way, because it is stored complete.
+   */
+  readonly ignoredRefusals: IgnoredRefusals;
 }
 
 /**
@@ -178,8 +187,7 @@ export interface ResourcePopulationSource {
  * than being fetched afterwards because there is no afterwards: the projection
  * is built and discarded inside `enumerate`, and a fact not carried out of it
  * is gone. The registry surfaces each row as a finding with the row's own code
- * and severity; a source with nothing to say hands over an empty list, which is
- * what the walk lane always does.
+ * and severity; a source with nothing to say hands over an empty list.
  *
  * `outcome` and `extentSource` ride the same way, and are REQUIRED for the
  * same reason: the registry hands them back from `crawl` beside the resources,
@@ -204,21 +212,14 @@ export interface ResourceEnumeration {
 }
 
 /**
- * Where one crawl's population came from, as `ResourceRegistry.crawl` reports it.
- *
- * `walk` when no source was offered AND when the offered source was declined:
- * the walk answered either way, and a caller told otherwise would publish the
- * projection lane for a crawl the projection never saw.
+ * Where one crawl's population came from, as `ResourceRegistry.crawl` reports it:
+ * the enumeration's own outcome and enumerator. Every crawl is enumerated by a
+ * population; there is no other lane.
  */
-export type CrawlPopulation =
-  | { readonly lane: 'walk' }
-  | { readonly lane: 'projection'; readonly outcome: PopulationOutcome; readonly extentSource: CrawlSourceKind };
-
-/** Each {@link CrawlPopulation} lane, keyed so the compiler checks the list against the union both ways. */
-const CRAWL_LANE_SET: Readonly<Record<CrawlPopulation['lane'], true>> = { walk: true, projection: true };
-
-/** Every {@link CrawlPopulation} lane, as a runtime list — for a schema enum that must not be a hand-typed copy. */
-export const CRAWL_LANES = Object.keys(CRAWL_LANE_SET) as [CrawlPopulation['lane'], ...Array<CrawlPopulation['lane']>];
+export interface CrawlPopulation {
+  readonly outcome: PopulationOutcome;
+  readonly extentSource: CrawlSourceKind;
+}
 
 /** A registry and the parameter sets it runs under — what {@link populate} is handed. */
 interface ResourceContributors {
@@ -408,6 +409,62 @@ async function membershipThrough(
   if (stored !== undefined) return membershipOf(root, stored, source.kind, stored.outcome);
 
   const { projection, outcome } = await populate(populateOptions);
+  return membershipOf(root, projection, source.kind, outcome);
+}
+
+/**
+ * List a root's members with no store: the files `members` admits, and the
+ * conditions the enumeration recorded, with no file read, hashed or parsed.
+ *
+ * ## Why a root with no store is listed rather than populated
+ *
+ * The full population ({@link buildResourcePopulation}) reads and keys every
+ * file under the root so that one stored extent answers every resources lane
+ * next time. With no store there is no next time: the reads buy nothing, and on
+ * a tree of generated sources they are nearly the whole cost of the verb (a
+ * nested project of 20,000 non-markdown files made `vat skills validate` read
+ * 20,005 files to validate one skill). So a root with no store (any root but
+ * the run's home, the home with the store off or outside a repository, and every
+ * degrading enumeration) is listed: the root's names, once per run
+ * ({@link RootListing}: git's `ls-files` in a repository, one walk outside one,
+ * never a snapshot), narrowed to the members BEFORE a row is built, under the
+ * filesystem extent alone with a `'deferred'` demand (no read, no key). The crawl
+ * then reads exactly the files it admits, once, through the run.
+ *
+ * The conditions are the listing's, narrowed with the members: a declined
+ * symlink the crawl's filter admits, and each directory the listing could not
+ * list, settled under the crawl's `unreadable`.
+ *
+ * Never stored: it is a narrowed population, and a stored narrowed population
+ * would answer another crawl as if complete.
+ *
+ * @param options - The root, its listing, the run's oracles and the crawl's members
+ * @param options.root - Absolute root to list
+ * @param options.listing - The root's names, listed once per run
+ * @param options.unreadable - What a directory inside the root that cannot be
+ *   listed does for this crawl (see {@link PopulationUnreadablePolicy})
+ * @param options.members - The crawl's include and exclude globs
+ * @returns The listed members, the enumerator that found them and a `derived`,
+ *   unstored outcome
+ */
+export async function buildResourceListing(
+  options: Omit<TreePopulationOptions, 'cache'> & {
+    readonly listing: RootListing;
+    readonly unreadable: PopulationUnreadablePolicy;
+    readonly members: PopulationMembers;
+  },
+): Promise<ResourceEnumeration> {
+  const root = safePath.resolve(options.root);
+  const source = options.listing.narrowed(options.members, options.unreadable);
+  const registry = new ContributorRegistry();
+  const filesystem = new FilesystemExtentContributor(() => source, 'deferred');
+  registry.register(filesystem);
+  const { projection, outcome } = await populate({
+    root,
+    registry,
+    parameters: { [filesystem.id]: DECLINE_IGNORED },
+    ...populationOracles({ ...options, cache: undefined }),
+  });
   return membershipOf(root, projection, source.kind, outcome);
 }
 

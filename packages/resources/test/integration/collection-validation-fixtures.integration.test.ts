@@ -26,6 +26,7 @@ import { parse as parseYaml } from 'yaml';
 
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { ProjectConfig } from '../../src/schemas/project-config.js';
+import { crawlInRun } from '../helpers/population-run.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const fixturesDir = safePath.join(__dirname, '../../test-fixtures/collections');
@@ -46,7 +47,7 @@ async function setupAndValidate() {
     baseDir: fixturesDir,
   });
 
-  await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
+  await crawlInRun(registry, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
   const result = await registry.validate();
 
   return { config, registry, result };

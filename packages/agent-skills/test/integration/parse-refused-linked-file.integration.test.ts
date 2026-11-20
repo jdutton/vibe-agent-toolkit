@@ -22,9 +22,9 @@ import { createTempDir, overOutputRowsMarkdown, removeTempDir } from '@vibe-agen
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { SKILL_PACKAGING_INPUT_INVALID_CODE } from '../../src/packaging-errors.js';
-import { packageSkill } from '../../src/skill-packager.js';
-import { activeErrorsOf, validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
+import { activeErrorsOf } from '../../src/validators/packaging-validator.js';
 import { validateSkill } from '../../src/validators/skill-validator.js';
+import { packageSkillInRun, validateForPackagingInRun } from '../test-helpers.js';
 
 const SKILL_MD = `---
 name: linker
@@ -47,7 +47,7 @@ const OVER_OUTPUT_ROWS = overOutputRowsMarkdown('SKILL.md');
 /** Package the skill; return the rejection's message, asserting it is a packaging input error over the limit. */
 async function limitRejectionMessage(tempDir: string, skillPath: string): Promise<string> {
   const outputPath = safePath.join(tempDir, 'out', 'linker');
-  const rejection: unknown = await packageSkill(skillPath, { outputPath, formats: ['directory'] }).catch((error: unknown) => error);
+  const rejection: unknown = await packageSkillInRun(skillPath, { outputPath, formats: ['directory'] }).catch((error: unknown) => error);
   expect(isVatError(rejection, SKILL_PACKAGING_INPUT_INVALID_CODE)).toBe(true);
   const message = (rejection as Error).message;
   expect(message).toContain('RESOURCE_PARSE_LIMIT_EXCEEDED');
@@ -74,7 +74,7 @@ describe('a linked document whose parse the crawl refused (integration)', () => 
   });
 
   it('validateSkillForPackaging reports it as RESOURCE_PARSE_LIMIT_EXCEEDED at that document', async () => {
-    const result = await validateSkillForPackaging(skillPath, {});
+    const result = await validateForPackagingInRun(skillPath, {});
 
     const found = activeErrorsOf(result).filter((issue) => issue.code === 'RESOURCE_PARSE_LIMIT_EXCEEDED');
     expect(found).toHaveLength(1);
@@ -146,15 +146,15 @@ describe('a refused linked document is reported under resources.validation, and 
     issues.filter((issue) => issue.code === 'RESOURCE_PARSE_LIMIT_EXCEEDED');
   /** Where `vat skills build` writes: outside the built lane's crawl, as in every real project. */
   const buildInto = (): Promise<unknown> =>
-    packageSkill(skillPath, { outputPath: safePath.join(tempDir, 'dist', 'skills', 'linker'), formats: ['directory'] });
+    packageSkillInRun(skillPath, { outputPath: safePath.join(tempDir, 'dist', 'skills', 'linker'), formats: ['directory'] });
 
   it('validateSkillForPackaging drops it when resources.validation allows it', async () => {
-    const result = await validateSkillForPackaging(skillPath, RESOURCES_ALLOW_REFERENCE);
+    const result = await validateForPackagingInRun(skillPath, RESOURCES_ALLOW_REFERENCE);
     expect(limitFindings(result.allErrors)).toEqual([]);
   });
 
   it('validateSkillForPackaging keeps it at error when only the skill validation ignores it', async () => {
-    const result = await validateSkillForPackaging(skillPath, {}, { validation: SKILL_IGNORES_LIMIT });
+    const result = await validateForPackagingInRun(skillPath, {}, { validation: SKILL_IGNORES_LIMIT });
     expect(limitFindings(activeErrorsOf(result))).toHaveLength(1);
   });
 

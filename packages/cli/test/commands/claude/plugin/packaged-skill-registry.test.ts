@@ -3,21 +3,17 @@ import { VatError } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
 
 /**
- * The plugin build must package every plugin-local skill against ONE shared
- * `ResourceRegistry`.
+ * The plugin build must package every plugin-local skill against the run's ONE
+ * set of skill registries (`RunSkillRegistries`).
  *
- * `packageSkill` falls back to `createProjectRegistry(projectRoot)` when the
- * caller passes no registry, and that crawls and parses EVERY markdown file in
- * the project. This lane used to call `packageSkill` in a loop with no registry,
+ * A fresh set of registries crawls and parses EVERY markdown file in the
+ * project. This lane used to call `packageSkill` in a loop with no registry,
  * so an N-skill plugin paid N full-project scans — a fixed per-skill cost that
  * does not vary with the skill's own size. Measured on a real monorepo (1039
  * markdown files, ~12s to scan): ~25s per skill, flat, whether the skill
  * packaged 1 file or 17, which put a 46-skill build past a 30-minute CI cap.
  *
- * `vat skills build` never had this: it goes through `packageSkills`, whose own
- * doc comment says "one registry for the entire project (crawling all .md files
- * once)". Two producers of a plugin's skills, two answers about how many times
- * the project gets read.
+ * The registries are the run's, so identity across skills is the contract.
  */
 const stubResult = { files: { dependencies: [] } } as unknown as PackageSkillResult;
 // The lane packages each skill in place, into the marketplace's staged tree (`packageSkillInto`).
@@ -41,10 +37,10 @@ const silentLogger = {
 } as unknown as Parameters<typeof packagePluginLocalSkills>[0]['logger'];
 
 /**
- * @param registry - The registry the run shares
+ * @param registries - The skill registries the run shares
  * @returns The run's input: two plugin-local skills, no skills config
  */
-function twoSkills(registry: never): Parameters<typeof packagePluginLocalSkills>[0] {
+function twoSkills(registries: never): Parameters<typeof packagePluginLocalSkills>[0] {
   return {
       skills: [
         { skillDirPath: 'alpha', skillPath: '/project/plugins/p/skills/alpha/SKILL.md', skillName: 'alpha' },
@@ -52,7 +48,7 @@ function twoSkills(registry: never): Parameters<typeof packagePluginLocalSkills>
       ],
       pluginDir: '/project/dist/plugin',
       skillsConfig: undefined,
-      registry,
+      registries,
       // No skills config above, so the project declares no eval suites at all.
       projectSkills: [],
       // The run's conventional-suite probe. Required rather than defaulted, so it
@@ -67,19 +63,18 @@ function twoSkills(registry: never): Parameters<typeof packagePluginLocalSkills>
   };
 }
 
-describe('packagePluginLocalSkills — shared registry', () => {
-  it('passes the SAME registry to every skill it packages', async () => {
+describe('packagePluginLocalSkills — shared registries', () => {
+  it('passes the SAME registries to every skill it packages', async () => {
     packageSkillSpy.mockClear();
-    // A sentinel stands in for the real registry: this lane only forwards it, so
-    // identity is the whole contract, and a sentinel makes a fallback visible
-    // (an undefined registry is what the N+1 looked like).
-    const registry = { sentinel: 'shared-registry' } as never;
+    // A sentinel stands in for the run's registries: this lane only forwards them,
+    // so identity is the whole contract, and a sentinel makes a fresh set visible.
+    const registries = { sentinel: 'shared-registries' } as never;
 
-    await packagePluginLocalSkills(twoSkills(registry));
+    await packagePluginLocalSkills(twoSkills(registries));
 
     expect(packageSkillSpy).toHaveBeenCalledTimes(2);
     for (const call of packageSkillSpy.mock.calls) {
-      expect((call as any)[2]?.registry).toBe(registry);
+      expect((call as any)[2]?.registries).toBe(registries);
     }
   });
 });

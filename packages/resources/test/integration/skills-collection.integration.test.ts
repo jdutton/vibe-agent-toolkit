@@ -4,6 +4,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import type { ResourceRegistry } from '../../src/resource-registry.js';
+import { crawlInRun } from '../helpers/population-run.js';
 import { setupResourceTestSuite } from '../test-helpers.js';
 
 /**
@@ -22,7 +23,7 @@ async function createSkillFile(tempDir: string, content: string): Promise<string
 
 /** Crawl every markdown file under `dir` (a tree the test only reads) and validate it against `schema`. */
 async function crawlAndValidate(registry: ResourceRegistry, dir: string, schema: object): Promise<Awaited<ReturnType<ResourceRegistry['validate']>>> {
-  await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: dir, include: ['**/*.md'] });
+  await crawlInRun(registry, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: dir, include: ['**/*.md'] });
   return registry.validate({ frontmatterSchema: schema });
 }
 
@@ -58,7 +59,8 @@ See [documentation](../../docs/README.md) for details.
       await fs.writeFile(safePath.join(docsDir, 'README.md'), '# Documentation\n\nMain docs.', 'utf-8');
 
       // Crawl and validate
-      await suite.registry.crawl({
+      await crawlInRun(suite.registry, {
+        ignoredRefusals: 'record',
         unreadable: 'refuse',
         outputs: [],
         baseDir: suite.tempDir,
@@ -94,7 +96,8 @@ See [missing file](../../docs/MISSING.md) for more.
       );
 
       // Crawl and validate
-      await suite.registry.crawl({
+      await crawlInRun(suite.registry, {
+        ignoredRefusals: 'record',
         unreadable: 'refuse',
         outputs: [],
         baseDir: suite.tempDir,
@@ -241,7 +244,8 @@ See [missing file](../../docs/MISSING.md) for more.
       );
 
       // Crawl all markdown files
-      await suite.registry.crawl({
+      await crawlInRun(suite.registry, {
+        ignoredRefusals: 'record',
         unreadable: 'refuse',
         outputs: [],
         baseDir: suite.tempDir,

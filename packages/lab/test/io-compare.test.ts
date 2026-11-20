@@ -365,18 +365,18 @@ describe('compareIo — a body this build does not read', () => {
   });
 
   it('refuses a report captured before rows carried the arm they ran', () => {
-    // The row grew `lane`/`extentSource` so an A/B stops inferring which arm ran
+    // The row grew `extentSource` so an A/B stops inferring which arm ran
     // from call-site signatures. A report without them is a row whose arm is
     // not merely unproven but unrepresentable, and the strict schema is what
     // refuses it — not a version integer somebody would have had to move.
     const older = (): ReportEnvelope<unknown> =>
-      reportMissingCommandField(ioReport([ioCommand()]), 'lane');
+      reportMissingCommandField(ioReport([ioCommand()]), 'extentSource');
 
     const result = compareIo(older(), older());
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
-    expect(result.refusal).toContain('lane');
+    expect(result.refusal).toContain('extentSource');
   });
 });
 

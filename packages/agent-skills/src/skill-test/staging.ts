@@ -17,6 +17,7 @@ import {
   toForwardSlashAnyPlatform,
   withFsFault,
   withFsFaultSync,
+  appendAll,
 } from '@vibe-agent-toolkit/utils';
 import { ZodError } from 'zod';
 
@@ -359,7 +360,7 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
     if (item.optional === true) {
       try {
         const resolved = await opts.resolve(item.source, opts.ctx);
-        leftovers.push(...resolved.leftovers);
+        appendAll(leftovers, resolved.leftovers);
         await stripEvalSuite(resolved.stagedDir, item.role);
         // An optional item is never the subject, so only `pluginDir` (pushed to
         // --plugin-dir) is needed here — skillDir/pluginRoot only matter for the
@@ -371,13 +372,13 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
       } catch (error) {
         skippedOptional.push({ name: item.name, reason: error instanceof Error ? error.message : String(error) });
         // What the failed item could not clean up is still on disk: the skip keeps it for the run to report.
-        leftovers.push(...suppressedFaultsOf(error));
+        appendAll(leftovers, suppressedFaultsOf(error));
       }
       return;
     }
 
     const resolved = await opts.resolve(item.source, opts.ctx);
-    leftovers.push(...resolved.leftovers);
+    appendAll(leftovers, resolved.leftovers);
     if (await stripEvalSuite(resolved.stagedDir, item.role)) subjectEvalSuiteHeld = true;
     // Stage flat (standalone) or under the real plugin-root layout (plugin skill).
     const { pluginDir, skillDir, pluginRoot } = await stageOneItem(opts.harnessRoot, item, resolved.stagedDir, preparedPluginRoots);

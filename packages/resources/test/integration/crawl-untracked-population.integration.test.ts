@@ -5,13 +5,14 @@
  * `docs/architecture/resource-scanning-and-caching.md` §2.1 declares it: a command
  * that cannot see a brand-new, uncommitted, un-ignored file has a defect, not a
  * scoping choice. Every `BUG:` cell that document carried traced to one line —
- * the crawl options this registry hands the file crawler, which omitted
- * `includeUntracked` and so inherited the `git ls-files` tracked-only default.
+ * crawl options that omitted `includeUntracked` and so inherited the
+ * `git ls-files` tracked-only default. The crawl is now enumerated by the run's
+ * population, and this file holds that population to the same ruling.
  *
  * ## Why this file needs a real repository
  *
  * The rest of the crawl tests build their fixtures under `mkdtemp`, outside any
- * working tree, so `crawlDirectorySync` takes the manual-walk fallback where
+ * working tree, where the population falls back to a filesystem walk and
  * tracked/untracked does not exist as a concept. They cannot observe this
  * behaviour at all — which is exactly why the defect survived. The git arm below
  * is a real `git init` + commit; the non-git arm is its control, pinning that the
@@ -43,6 +44,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { ResourceRegistry } from '../../src/resource-registry.js';
+import { crawlInRun } from '../helpers/population-run.js';
 import { writeFileIn as plant } from '../test-helpers.js';
 
 /** Committed before the crawl — the tracked baseline. */
@@ -80,16 +82,14 @@ let plainMembers: string[] = [];
 /**
  * Crawl one root with this repo's default resource globs.
  *
- * Deliberately the plain `crawl` entry point with no `populationSource`: the
- * defect lives in the options that entry point builds, so a test that supplied a
- * source would route around the thing under test.
+ * Through a run population homed at the root, as every verb's crawl is.
  *
  * @param rootDir - Directory to crawl
  * @returns Root-relative, forward-slashed member paths, sorted
  */
 async function crawlMembers(rootDir: string): Promise<string[]> {
   const registry = new ResourceRegistry({ baseDir: rootDir });
-  const { resources } = await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: rootDir, include: ['**/*.md'] });
+  const { resources } = await crawlInRun(registry, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: rootDir, include: ['**/*.md'] });
   return resources
     .map((resource) => toForwardSlash(safePath.relative(rootDir, resource.filePath)))
     .sort(compareCodeUnits);

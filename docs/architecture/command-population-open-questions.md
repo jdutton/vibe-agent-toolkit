@@ -73,13 +73,12 @@ the sentence describes only the first while the paragraph describes both. See
 ### The resources selector is described as covering every route that loads resources
 
 **Claim:** the selector "covers `vat resources scan`/`validate`, `vat rag index` and the pipeline
-oracles in one place — they all load through `loadResourcesWithConfig`".
-**Where:** `docs/architecture/resource-scanning-and-caching.md` §3.4, and
-`packages/cli/src/utils/resource-loader.ts › RESOURCES_CRAWL_ENV`.
-**Status: open** — true of those four, but `vat audit` builds its registry through
-`crawlAndResolveRegistry` (called from `packages/cli/src/commands/audit.ts › validateSingleSkill()`)
-with no `populationSource`, and is therefore reachable by no selector. The sentence is accurate about
-what it lists and reads as a claim of completeness.
+oracles in one place".
+**Where:** `docs/architecture/resource-scanning-and-caching.md` §3.4.
+**Status: resolved.** The selector and the walk lane it chose are deleted, and `populationSource` is
+required. `vat audit` builds its link registries as views of the run's registry
+(`RunSkillRegistries`), enumerated by the run population, so no route that loads resources is left
+on the walk.
 
 ### Cache recovery is documented for a corruption nothing detects
 

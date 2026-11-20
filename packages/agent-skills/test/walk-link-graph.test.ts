@@ -1419,9 +1419,9 @@ describe('walkLinkGraph', () => {
    * rewriter can reach it) without being ROUTABLE (a door the walker walks
    * through to enqueue its targets as bundle members). Before this, membership
    * implied traversability: any link target found by `getResourceById` was
-   * queued and its own links walked. That made `createProjectRegistry`'s
+   * queued and its own links walked. That made the packaging registry's
    * include set the de-facto routability policy, and the two production
-   * registries disagreed — `crawlAndResolveRegistry` includes HTML and so
+   * registries disagreed — the validation view (`REGISTRY_INCLUDE`) includes HTML and so
    * routed through it, while the packager's markdown-only registry did not.
    */
   describe('non-routable members', () => {

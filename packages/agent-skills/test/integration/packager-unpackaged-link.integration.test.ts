@@ -30,7 +30,7 @@ import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { createTempDir, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { packageSkill } from '../../src/skill-packager.js';
+import { packageSkillInRun } from '../test-helpers.js';
 
 const SKILL_MD = `---
 name: demo
@@ -67,7 +67,7 @@ async function packageFixture(tempDir: string): Promise<{ body: string; hasError
   writeFileSync(safePath.join(skillDir, 'refs', 'guide.md'), '# guide\n');
 
   const outputPath = safePath.join(tempDir, 'dist', 'demo');
-  const result = await packageSkill(safePath.join(skillDir, 'SKILL.md'), {
+  const result = await packageSkillInRun(safePath.join(skillDir, 'SKILL.md'), {
     outputPath,
     formats: ['directory'],
     testInputDirs: [safePath.join(skillDir, 'evals')],

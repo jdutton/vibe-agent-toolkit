@@ -43,12 +43,14 @@ const existingDirectories = new Set<string>();
 let lastRegistryOptions: Record<string, unknown> | undefined;
 let lastCrawlOptions: Record<string, unknown> | undefined;
 
+/** What every crawl the loader asks for carries beside its patterns. */
+const CRAWL_DEFAULTS = { unreadable: 'refuse', ignoredRefusals: 'record', outputs: [] } as const;
+
 /**
  * The crawl options minus the population source.
  *
  * The tests below are about which include/exclude patterns a path argument
- * produces, and the projection lane — now the DEFAULT — installs a
- * `populationSource` alongside them. Stripping exactly that one key keeps these
+ * produces, and the run installs its one `populationSource` alongside them. Stripping exactly that one key keeps these
  * assertions on their own subject while preserving `toEqual`'s guarantee that no
  * OTHER stray key crept in, which `objectContaining` would quietly give up.
  *
@@ -94,15 +96,13 @@ vi.mock('@vibe-agent-toolkit/resources', async (importOriginal) => ({
       return new FakeRegistry();
     }
     // Returns what the real crawl returns: the mock's answer when a test gave
-    // one, otherwise a crawl that used whichever lane it was handed.
+    // one, otherwise a derived population on the filesystem enumerator.
     async crawl(options: Record<string, unknown>): Promise<unknown> {
       lastCrawlOptions = options;
       const returned: unknown = await registryCrawlMock(options);
       return returned ?? {
         resources: [],
-        population: options['populationSource'] === undefined
-          ? { lane: 'walk' }
-          : { lane: 'projection', outcome: { population: 'derived', stored: 'written' }, extentSource: 'filesystem' },
+        population: { outcome: { population: 'derived', stored: 'written' }, extentSource: 'filesystem' },
       };
     }
   },
@@ -131,21 +131,11 @@ import type { Logger } from '../../src/utils/logger.js';
 // eslint-disable-next-line import/first -- must come after vi.mock calls
 import { PROJECTION_STORE_ENV, PROJECTION_STORE_OFF } from '../../src/utils/projection-store.js';
 // eslint-disable-next-line import/first -- must come after vi.mock calls
-import {
-  crawlLaneDebugLine,
-  extentSourceOf,
-  loadResourcesWithConfig,
-  publishedPopulation,
-  RESOURCES_CRAWL_ENV,
-  RESOURCES_CRAWL_PROJECTION,
-  RESOURCES_CRAWL_WALK,
-  withRunContext,
-} from '../../src/utils/resource-loader.js';
+import { loadResourcesWithConfig, withRunContext } from '../../src/utils/resource-loader.js';
 // eslint-disable-next-line import/first -- must come after vi.mock calls
 import { loadResourcesInRun as load } from '../helpers/in-run.js';
 
 const HIT = { population: 'store', stored: 'hit' } as const;
-const WRITTEN = { population: 'derived', stored: 'written' } as const;
 
 /** The source the loader installed on the crawl, refused when it installed none. */
 interface InstalledSource {
@@ -227,8 +217,7 @@ describe('loadResourcesWithConfig', () => {
 
     expect(crawlPatterns()).toEqual({
       baseDir: PROJECT_ROOT,
-      unreadable: 'refuse',
-      outputs: [],
+      ...CRAWL_DEFAULTS,
       include: INCLUDE_PATTERNS,
       exclude: EXCLUDE_PATTERNS,
     });
@@ -252,8 +241,7 @@ describe('loadResourcesWithConfig', () => {
     // prefix instead of a new base.
     expect(crawlPatterns()).toEqual({
       baseDir: PROJECT_ROOT,
-      unreadable: 'refuse',
-      outputs: [],
+      ...CRAWL_DEFAULTS,
       include: SUBTREE_INCLUDE,
       exclude: EXCLUDE_PATTERNS,
     });
@@ -269,8 +257,7 @@ describe('loadResourcesWithConfig', () => {
 
     expect(crawlPatterns()).toEqual({
       baseDir: PROJECT_ROOT,
-      unreadable: 'refuse',
-      outputs: [],
+      ...CRAWL_DEFAULTS,
       include: ['**/*.md', '**/*.html', '**/*.htm'],
       exclude: EXCLUDE_PATTERNS,
     });
@@ -285,8 +272,7 @@ describe('loadResourcesWithConfig', () => {
 
     expect(crawlPatterns()).toEqual({
       baseDir: safePath.resolve('.'),
-      unreadable: 'refuse',
-      outputs: [],
+      ...CRAWL_DEFAULTS,
       include: ['docs/**/*.md', 'docs/**/*.html', 'docs/**/*.htm'],
       exclude: EXCLUDE_PATTERNS,
     });
@@ -301,7 +287,7 @@ describe('loadResourcesWithConfig', () => {
 
     const result = await load(EXPLICIT_PATH, PROJECT_ROOT, logger);
 
-    expect(crawlPatterns()).toEqual({ baseDir: EXPLICIT_PATH, unreadable: 'refuse', outputs: [] });
+    expect(crawlPatterns()).toEqual({ baseDir: EXPLICIT_PATH, ...CRAWL_DEFAULTS });
     expect(warnCalls.join('\n')).toContain(EXPLICIT_PATH);
     expect(result.scanPath).toBe(EXPLICIT_PATH);
   });
@@ -394,55 +380,8 @@ describe('loadResourcesWithConfig', () => {
 
     const result = await load(undefined, PROJECT_ROOT, logger);
 
-    expect(crawlPatterns()).toEqual({ baseDir: PROJECT_ROOT, unreadable: 'refuse', outputs: [] });
+    expect(crawlPatterns()).toEqual({ baseDir: PROJECT_ROOT, ...CRAWL_DEFAULTS });
     expect(result.config).toBeUndefined();
-  });
-
-  it('reports the lane it actually took, and takes the PROJECTION by default', async () => {
-    loadConfigMock.mockReturnValue(undefined);
-    const { logger } = createTestLogger();
-
-    const result = await load(undefined, PROJECT_ROOT, logger);
-
-    expect(result.population.lane).toBe('projection');
-    // The lane is a claim about what ran, so it has to agree with whether a
-    // population source was actually installed on the crawl.
-    expect(lastCrawlOptions?.populationSource).toBeDefined();
-  });
-
-  it('takes the walk when opted out, and says so', async () => {
-    // A lane that came back `projection` here — or `walk` in the case above —
-    // would make every arm-identity claim built on this field worthless, which
-    // is precisely what it exists to prevent.
-    loadConfigMock.mockReturnValue(undefined);
-    const { logger } = createTestLogger();
-    process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_WALK;
-
-    try {
-      const result = await load(undefined, PROJECT_ROOT, logger);
-
-      expect(result.population.lane).toBe('walk');
-      expect(lastCrawlOptions?.populationSource).toBeUndefined();
-    } finally {
-      delete process.env[RESOURCES_CRAWL_ENV];
-    }
-  });
-
-  it('keeps honouring the historical explicit `projection` value', async () => {
-    // The opt-in spelling predates the flip and is all over scripts and lab
-    // arms. It must still select the projection lane rather than becoming an
-    // unrecognised value that silently means something else.
-    loadConfigMock.mockReturnValue(undefined);
-    const { logger } = createTestLogger();
-    process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_PROJECTION;
-
-    try {
-      const result = await load(undefined, PROJECT_ROOT, logger);
-
-      expect(result.population.lane).toBe('projection');
-    } finally {
-      delete process.env[RESOURCES_CRAWL_ENV];
-    }
   });
 
   it('logs debug messages for config load and gitTracker init', async () => {
@@ -457,31 +396,10 @@ describe('loadResourcesWithConfig', () => {
   });
 
   describe('carries the population the crawl returned on the load result', () => {
-    it('says the walk answered when the projection lane is not selected', async () => {
-      process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_WALK;
-      try {
-        expect(await loadedPopulation()).toEqual({ lane: 'walk' });
-      } finally {
-        delete process.env[RESOURCES_CRAWL_ENV];
-      }
-    });
-
-    it('says the walk answered when the crawl declined the source, with NO enumerator', async () => {
-      crawlReturns({ lane: 'walk' });
-
-      const population = await loadedPopulation();
-
-      expect(population).toEqual({ lane: 'walk' });
-      expect(extentSourceOf(population)).toBeNull();
-    });
-
     it('publishes the outcome and enumerator the crawl RETURNED', async () => {
-      crawlReturns({ lane: 'projection', outcome: HIT, extentSource: 'git' });
+      crawlReturns({ outcome: HIT, extentSource: 'git' });
 
-      const population = await loadedPopulation();
-
-      expect(population).toEqual({ lane: 'projection', outcome: HIT, extentSource: 'git' });
-      expect(extentSourceOf(population)).toBe('git');
+      expect(await loadedPopulation()).toEqual({ outcome: HIT, extentSource: 'git' });
     });
 
     it('hands the crawl the run\'s own source, the one route the outcome takes out', async () => {
@@ -495,30 +413,5 @@ describe('loadResourcesWithConfig', () => {
         expect(lastCrawlOptions?.['populationSource']).toBe(run.population.source);
       });
     });
-  });
-});
-
-describe('crawlLaneDebugLine', () => {
-  it('names the value that selected the walk — the only way no source is offered', () => {
-    expect(crawlLaneDebugLine(undefined)).toBe(`Enumerating via the incumbent walk (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_WALK})`);
-  });
-
-  it('names the projection lane when a source is offered', () => {
-    const source = { root: safePath.resolve('/project'), enumerate: async () => { throw new Error('not called'); } };
-    expect(crawlLaneDebugLine(source)).toBe(`Enumerating via the projection lane (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_PROJECTION})`);
-  });
-});
-
-describe('publishedPopulation — what validate publishes for one observation', () => {
-  it.each([
-    { name: 'the walk', observation: { lane: 'walk' }, expected: null },
-    { name: 'a hit', observation: { lane: 'projection', outcome: HIT, extentSource: 'git' }, expected: 'store' },
-    {
-      name: 'a derivation',
-      observation: { lane: 'projection', outcome: WRITTEN, extentSource: 'git' },
-      expected: 'derived',
-    },
-  ] as const)('publishes $expected for $name', ({ observation, expected }) => {
-    expect(publishedPopulation(observation)).toBe(expected);
   });
 });

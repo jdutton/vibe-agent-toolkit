@@ -38,6 +38,7 @@ import {
   type Projection,
   type ResolutionContextRow,
 } from '@vibe-agent-toolkit/resources';
+import { appendAll } from '@vibe-agent-toolkit/utils';
 
 /**
  * The lens kind these evaluations declare.
@@ -120,8 +121,8 @@ export function evaluateAuthoredLenses(projection: Projection): EvaluatedLenses 
       // the `@`-import forms, which the authored-only policy does not admit.
       dialect: 'href',
     }, { referencesByBlob });
-    edges.push(...relation.edges);
-    edgeResolutions.push(...relation.edgeResolutions);
+    appendAll(edges, relation.edges);
+    appendAll(edgeResolutions, relation.edgeResolutions);
   }
 
   return { lensContexts, edges, edgeResolutions };

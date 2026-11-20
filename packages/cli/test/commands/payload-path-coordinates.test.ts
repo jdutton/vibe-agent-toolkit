@@ -73,13 +73,11 @@ const SCAN_RESOURCE = {
 };
 
 /** The scan report's `data` for one README, with and without `--verbose` — parsed with the published schema. */
-function scanPayload(verbose: boolean, lane: 'walk' | 'projection' = 'walk') {
+function scanPayload(verbose: boolean, extentSource: 'git' | 'filesystem' = 'filesystem') {
   const report = buildScanReport({
     resources: [SCAN_RESOURCE],
     root: ROOT,
-    lane,
-    // The walk sources no extent; these cases are about path coordinates.
-    extentSource: null,
+    extentSource,
     durationMs: 234,
     collections: {},
     verbose,
@@ -103,10 +101,10 @@ describe('resources scan payload', () => {
   it('states which enumerator produced the population, in every verbosity', () => {
     // Provenance, and it belongs beside `root` because it qualifies the file
     // list the same way: two scans of one tree that report different
-    // populations are only interpretable if each names its own lane.
-    expect(scanPayload(true).lane).toBe('walk');
-    expect(scanPayload(false).lane).toBe('walk');
-    expect(scanPayload(true, 'projection').lane).toBe('projection');
+    // populations are only interpretable if each names its own enumerator.
+    expect(scanPayload(true).extentSource).toBe('filesystem');
+    expect(scanPayload(false).extentSource).toBe('filesystem');
+    expect(scanPayload(true, 'git').extentSource).toBe('git');
   });
 
   it('counts the files scanned as the envelope\'s examined, and keeps the duration on the envelope', () => {
@@ -115,8 +113,7 @@ describe('resources scan payload', () => {
     const report = buildScanReport({
       resources: [SCAN_RESOURCE, { ...SCAN_RESOURCE, filePath: SKILL }],
       root: ROOT,
-      lane: 'walk',
-      extentSource: null,
+      extentSource: 'filesystem',
       durationMs: 234,
       collections: {},
       verbose: false,

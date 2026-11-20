@@ -24,7 +24,7 @@ import {
   type Verdict,
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { CODE_REGISTRY, summarizeIssues, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { issueLocation } from '@vibe-agent-toolkit/utils';
+import { issueLocation, appendAll } from '@vibe-agent-toolkit/utils';
 
 /**
  * Convert a verdict into a ValidationIssue using CODE_REGISTRY for severity,
@@ -107,7 +107,7 @@ export function applyConfigVerdicts(
   if (verdictIssues.length === 0) {
     return;
   }
-  result.allErrors.push(...verdictIssues);
+  appendAll(result.allErrors, verdictIssues);
   // Re-derive both from the grown list in the same step, so neither can go
   // stale behind the issues it describes.
   Object.assign(result, summarizeIssues(result.allErrors));

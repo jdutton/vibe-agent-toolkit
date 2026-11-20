@@ -64,7 +64,7 @@ describe('packaged-output scans raise the first failure by position', () => {
     const first = safePath.join(root, 'a.md');
     const docs = [first, safePath.join(root, 'b.md')];
 
-    await expect(detectMissingReferencedPaths(docs, root, 'claude-code')).rejects.toThrow(`unreadable ${first}`);
+    await expect(detectMissingReferencedPaths(docs, root, 'claude-code', { dispatcher: undefined })).rejects.toThrow(`unreadable ${first}`);
     expect(started).toEqual(docs);
   });
 
@@ -73,7 +73,7 @@ describe('packaged-output scans raise the first failure by position', () => {
     fs.writeFileSync(safePath.join(root, 'b.md'), '# b\n');
     const started = failFirstStartedLast(mocks.readFile);
 
-    const run = checkBrokenPackagedLinks(root);
+    const run = checkBrokenPackagedLinks(root, [], { dispatcher: undefined });
     await expect(run).rejects.toThrow(/unreadable /);
     await run.catch((error: unknown) => {
       expect(started).toHaveLength(2);

@@ -27,6 +27,7 @@ import { populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import type { CollectionConfig } from '../src/schemas/project-config.js';
 
+import { inOwnRun } from './helpers/population-run.js';
 import { setupTempCorpus } from './helpers/temp-corpus.js';
 
 /**
@@ -74,7 +75,7 @@ async function populateWith(
   const registry = new ContributorRegistry();
   registry.register(new FilesystemExtentContributor(() => crawlSourceFor(fixture.root(), []), DEFAULT_CONTENT_DEMAND));
 
-  const { projection } = await populate({
+  const { projection } = await inOwnRun(populate, {
     root: fixture.root(),
     registry,
     ...(collections !== undefined && { collections }),

@@ -80,7 +80,7 @@
  */
 
 import { relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { gitFindRoot, gitLsOthers } from '@vibe-agent-toolkit/utils/git';
+import { gitLsOthers, gitNoAnswerError } from '@vibe-agent-toolkit/utils/git';
 
 import type { ClaudeRulePatternRow } from '../../schemas/projection-claude-rules.js';
 import type { HarnessBlobFactsRow } from '../../schemas/projection-harness.js';
@@ -415,30 +415,34 @@ function treeIgnores(base: ProjectionBase): TreeIgnores {
 }
 
 /**
- * git's collapsed ignored listing, re-rooted at the corpus root.
+ * git's collapsed ignored listing under the corpus root, corpus-relative.
  *
- * `ls-files` spells paths relative to the REPOSITORY root, which is above the
- * corpus root whenever the corpus is a subdirectory, so each entry is resolved
- * there and made corpus-relative; an entry outside the corpus is dropped. A
- * directory keeps its trailing `/`, the one signal that it stands for its
- * whole subtree.
+ * git runs in the corpus root and `ls-files` spells every path relative to its
+ * `cwd`, never to the repository root, so a corpus that is a subdirectory of
+ * its repository reads each entry against itself. An entry that would escape
+ * the corpus is dropped. A directory keeps its trailing `/`, the one signal
+ * that it stands for its whole subtree.
  *
  * ⚠️ A directory git could not open is `degrade`d here without a record: the
  * crawl source runs this same listing for the same tree during population and
  * is where such a refusal is reported. A listing git did not answer at all is
- * empty, which leaves a would-be `inert` glob `inert` — the non-git answer.
+ * refused, coded by cause: reading it as empty would call every ignored glob
+ * `inert`, the non-git answer, inside a repository whose oracle did answer.
  *
  * @param root - Absolute corpus root
  * @returns Root-relative entries, directories spelled with a trailing `/`
+ * @throws When git did not answer, coded by cause
  */
 function ignoredListing(root: string): string[] {
   const listing = gitLsOthers({ cwd: root, ignored: true, directory: true, unreadable: { degrade: () => undefined } });
-  if (listing === null) return [];
-  const repositoryRoot = gitFindRoot(root) ?? root;
+  if (listing === null) {
+    throw gitNoAnswerError(root, 'An empty ignored listing would call every glob over ignored territory inert.');
+  }
   const entries: string[] = [];
   for (const entry of listing) {
     const isDirectory = entry.endsWith('/');
-    const relative = toForwardSlash(safePath.relative(root, safePath.resolve(repositoryRoot, entry)));
+    // Relative to `cwd` (`root`), as git prints it: never to the repository root.
+    const relative = toForwardSlash(safePath.relative(root, safePath.resolve(root, entry)));
     if (relative === '' || relativeEscapesRoot(relative)) continue;
     entries.push(isDirectory ? `${relative}/` : relative);
   }

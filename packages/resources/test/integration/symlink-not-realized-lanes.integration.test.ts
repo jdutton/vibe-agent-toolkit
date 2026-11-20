@@ -22,7 +22,9 @@ import {
   EXTENT_SYMLINK_TARGET_UNRESOLVED,
   isDeclinedSymlinkCode,
 } from '../../src/projection/contributors/filesystem-extent.js';
+import type { Projection } from '../../src/projection/projection.js';
 import { buildResourceProjection } from '../../src/projection/resource-population.js';
+import { withPopulationRun } from '../../src/projection/run-population.js';
 import { plantSymlinkFixture, removeSymlinkFixture } from '../helpers/symlink-fixture.js';
 
 const CLAUDE_TARGET = 'other/CLAUDE.md';
@@ -64,9 +66,10 @@ describe.skipIf(!symlinkCapability())('declined symlinks reach the projection on
     ['the Claude-context lane', buildClaudeContextPopulation],
   ] as const)('%s', async (_label, build) => {
     if (root === undefined) throw new Error('fixture not planted');
-    const gitTracker = new GitTracker(root);
+    const planted = root;
+    const gitTracker = new GitTracker(planted);
     await gitTracker.initialize({ includeUntracked: true });
-    const { projection } = await build({ root, gitTracker });
+    const { projection } = await withPopulationRun<{ projection: Projection }>(async (run) => build({ root: planted, gitTracker, run }));
 
     const declined = projection.realizationConditions.filter((row) => isDeclinedSymlinkCode(row.code));
     const paths = declined.map((row) => row.path);

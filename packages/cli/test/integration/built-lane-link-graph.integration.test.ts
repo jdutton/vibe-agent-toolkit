@@ -31,19 +31,17 @@
  *
  * ⚠️ **This test pins what VAT does TODAY.** The middle row is a defect. The
  * fix is not "crawl `dist/` everywhere" — `BUILD_OUTPUT_GLOBS` is deliberately
- * kept out of `NEVER_CRAWL_GLOBS` so a lane can opt in, and
- * `crawlAndResolveRegistry`'s process-lifetime memo documents that same
- * exclusion as its own correctness proof. When it is fixed, the middle row's
+ * kept out of `NEVER_CRAWL_GLOBS` so a lane can opt in. When it is fixed, the middle row's
  * assertions flip in the change that fixes them.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import { packageSkill, validateSkillForPackaging } from '@vibe-agent-toolkit/agent-skills';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { BUNDLING_SKILL_FILES } from '../../src/pipeline-oracles/index.js';
+import { packageSkillInRun, validateForPackagingInRun } from '../helpers/skill-run.js';
 
 /** The one skill in {@link BUNDLING_SKILL_FILES}. */
 const SKILL_NAME = 'bundling-skill';
@@ -79,7 +77,7 @@ afterEach(() => {
 describe('bundling skill fixture — the built lane cannot see what it bundled', () => {
   it('sees the bundled reference at SOURCE', async () => {
     const { skillPath } = makeProject('source');
-    const result = await validateSkillForPackaging(skillPath, {}, undefined, 'source');
+    const result = await validateForPackagingInRun(skillPath, {}, undefined, 'source');
     expect(result.metadata.fileCount).toBe(2);
     expect(result.metadata.directFileCount).toBe(1);
     expect(result.metadata.maxLinkDepth).toBe(1);
@@ -87,7 +85,7 @@ describe('bundling skill fixture — the built lane cannot see what it bundled',
 
   it('does NOT see it when the output lands inside the project (the defect)', async () => {
     const { root, skillPath } = makeProject('inside');
-    const packaged = await packageSkill(skillPath, {
+    const packaged = await packageSkillInRun(skillPath, {
       outputPath: safePath.join(root, 'dist', 'skills', SKILL_NAME),
     });
 
@@ -108,7 +106,7 @@ describe('bundling skill fixture — the built lane cannot see what it bundled',
     const elsewhere = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-bundling-out-'));
     roots.push(elsewhere);
 
-    const packaged = await packageSkill(skillPath, {
+    const packaged = await packageSkillInRun(skillPath, {
       outputPath: safePath.join(elsewhere, SKILL_NAME),
     });
 
@@ -126,10 +124,10 @@ describe('bundling skill fixture — the built lane cannot see what it bundled',
     // never read — which is why the per-bundled-file content scans are dead in
     // the built lane, not merely under-counting.
     const { root, skillPath } = makeProject('lines');
-    const inside = await packageSkill(skillPath, {
+    const inside = await packageSkillInRun(skillPath, {
       outputPath: safePath.join(root, 'dist', 'skills', SKILL_NAME),
     });
-    const source = await validateSkillForPackaging(skillPath, {}, undefined, 'source');
+    const source = await validateForPackagingInRun(skillPath, {}, undefined, 'source');
 
     expect(inside.postBuildValidation?.metadata.totalLines).toBeLessThan(source.metadata.totalLines);
   });

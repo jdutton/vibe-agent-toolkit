@@ -22,7 +22,7 @@
 
 import { readFileSync } from 'node:fs';
 
-import { safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlashAnyPlatform, appendAll } from '@vibe-agent-toolkit/utils';
 import ts from 'typescript';
 
 /** Where an evaluated path starts. */
@@ -1172,7 +1172,7 @@ export class PathEvaluator {
       const handed = handedTo(node);
       const calls = handed === undefined ? undefined : this.memberCalls(handed.literal, handed.name);
       if (handed !== undefined && calls === undefined) return undefined;
-      if (calls !== undefined) sites.push(...calls);
+      if (calls !== undefined) appendAll(sites, calls);
       else if (ts.isCallExpression(node.parent) && node.parent.expression === node) sites.push({ module: at, call: node.parent });
       else return undefined;
     }
@@ -1243,7 +1243,7 @@ export class PathEvaluator {
       if (param === undefined || !ts.isIdentifier(param.name)) return undefined;
       const references = this.localReferences(at, param.name);
       if (references.some(({ node }) => !ts.isCallExpression(node.parent) || node.parent.expression !== node)) return undefined;
-      sites.push(...references.map(({ node }) => ({ module: at, call: node.parent as ts.CallExpression })));
+      appendAll(sites, references.map(({ node }) => ({ module: at, call: node.parent as ts.CallExpression })));
     }
     return sites;
   }

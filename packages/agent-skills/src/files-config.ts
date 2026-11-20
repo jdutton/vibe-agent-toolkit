@@ -31,6 +31,7 @@ import {
   toForwardSlashAnyPlatform,
   withFsFault,
   withFsFaultSync,
+  appendAll,
 } from '@vibe-agent-toolkit/utils';
 import { glob } from 'glob';
 import picomatch from 'picomatch';
@@ -467,7 +468,7 @@ export function mergeFilesConfig(
   }
 
   // Add all per-skill entries
-  merged.push(...perSkill);
+  appendAll(merged, perSkill);
 
   return merged;
 }
@@ -1035,7 +1036,7 @@ export async function collectPreBuildGlobFindings(
     // supersedes. A non-file is not the cause `allRefused` names, so its finding
     // is not a second granularity of the same defect; suppressing it here would
     // put the author back where the raw errno left them.
-    skipped.push(...expansion.nonRegular);
+    appendAll(skipped, expansion.nonRegular);
     if (expansion.kept.length === 0 && expansion.dropped.length === 0) {
       // Matched only non-files. `allRefused` would name the never-package list as
       // the cause, which is not what happened, and its remediation would not work.
@@ -1054,7 +1055,7 @@ export async function collectPreBuildGlobFindings(
       });
       return;
     }
-    dropped.push(...expansion.dropped.filter((d) => !shippedDests.has(normalizeRelPath(d.dest))));
+    appendAll(dropped, expansion.dropped.filter((d) => !shippedDests.has(normalizeRelPath(d.dest))));
   });
   return { dropped, allRefused, unmatched, skipped };
 }
@@ -1338,9 +1339,9 @@ export async function applyFilesConfig(opts: ApplyFilesConfigOptions): Promise<A
     const outcome = isGlob(fileEntry.source)
       ? await applyGlobFileEntry(fileEntry, opts)
       : await applyNonGlobFileEntry(fileEntry, opts, bundledFileSet);
-    dests.push(...outcome.dests);
-    dropped.push(...outcome.dropped);
-    skipped.push(...outcome.skipped);
+    appendAll(dests, outcome.dests);
+    appendAll(dropped, outcome.dropped);
+    appendAll(skipped, outcome.skipped);
     if (outcome.pending) pending.push(outcome.pending);
   });
 

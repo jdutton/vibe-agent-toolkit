@@ -63,6 +63,7 @@ import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../../uti
 import { loadConfig, loadConfigCached } from '../../../utils/config-loader.js';
 import { endWithRefusal, endWithReport, leftoverIssueOf, NOTHING_FINISHED } from '../../../utils/document-writer.js';
 import { collectRepeated } from '../../../utils/repeatable-option.js';
+import { runSkillRegistries, withRunContext } from '../../../utils/resource-loader.js';
 import { isSkillPublished } from '../../../utils/skill-packaging-config.js';
 import { runClaudePluginBuild } from '../../claude/plugin/build.js';
 import { packagingFailedIssue } from '../../skills/build.js';
@@ -987,25 +988,26 @@ async function runDeclaredSkillBuild(ref: BuildableReference): Promise<void> {
     // under test another skill's answer key — the exact signal the harness exists to
     // protect. Memoized per config root, so a multi-skill run discovers once.
     // A source fault inside the packager is the SKILL_PACKAGING_FAILED finding (buildFailureOf).
-    await packageSkill(
-      ref.sourcePath,
-      packagingConfigToPackageOptions(
-        ref.packagingConfig,
-        { skillPath: ref.sourcePath, outputPath: ref.expectedDistDir },
-        // `'refuse'`: staging a dist around a directory discovery could not
-        // list may hand the executor another skill's answer key. The throw is
-        // wrapped as `SkillBuildError` by the caller, message intact.
-        await resolveProjectDeclaredEvalSuites(ref.sourcePath, 'refuse'),
-        // Per CALL, deliberately, and this is parity rather than a regression: the
-        // probe was built inside `resolveTestInputDirs` on every path before it was
-        // threaded, so this lane pays exactly what it paid before. It is also the
-        // wrong lane to optimize — `runDeclaredSkillBuild` runs per buildable ref for
-        // a test run's handful of skills, not over a whole project, and there is no
-        // run-scoped seam threaded this far down to hang one on. The lane that made
-        // the O(S²) matter (`vat resources validate`, measured at 10,815 probes over
-        // 103 paths) hoists its probe; see the comment there.
-        conventionalSuiteProbe(),
-      ),
+    const options = packagingConfigToPackageOptions(
+      ref.packagingConfig,
+      { skillPath: ref.sourcePath, outputPath: ref.expectedDistDir },
+      // `'refuse'`: staging a dist around a directory discovery could not
+      // list may hand the executor another skill's answer key. The throw is
+      // wrapped as `SkillBuildError` by the caller, message intact.
+      await resolveProjectDeclaredEvalSuites(ref.sourcePath, 'refuse'),
+      // Per CALL, deliberately, and this is parity rather than a regression: the
+      // probe was built inside `resolveTestInputDirs` on every path before it was
+      // threaded, so this lane pays exactly what it paid before. It is also the
+      // wrong lane to optimize — `runDeclaredSkillBuild` runs per buildable ref for
+      // a test run's handful of skills, not over a whole project, and there is no
+      // run-scoped seam threaded this far down to hang one on. The lane that made
+      // the O(S²) matter (`vat resources validate`, measured at 10,815 probes over
+      // 103 paths) hoists its probe; see the comment there.
+      conventionalSuiteProbe(),
+    );
+    // One run per build, rooted at the skill's declaring project, as `vat skills build` is.
+    await withRunContext({ root: ref.configRoot }, (run) =>
+      packageSkill(ref.sourcePath, { ...options, registries: runSkillRegistries(run) }),
     ).catch((error: unknown) => {
       throw asPackagerRefusal(error);
     });

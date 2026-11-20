@@ -157,10 +157,8 @@ Output Fields (the shared report envelope):
   examined:   Files enumerated, admitted or not
   durationMs: Wall time of the run
   data.root:  The one absolute path every data.files[].path is relative to
-  data.lane:  Which enumerator produced the population — 'walk' or 'projection'
   data.extentSource:
-              The projection lane's enumerator ('git' or 'filesystem'), or
-              null for the walk
+              Which enumerator produced the population ('git' or 'filesystem')
   data.collections:
               Per-collection resource counts ({resourceCount}); {} when none
   data.files: (only with --verbose) {path, links, anchors, checksum} per file
@@ -779,10 +777,7 @@ Output Fields (the shared report envelope):
   data.population:
               'store' or 'derived' -- whether the membership was served from
               the projection store or derived this run (derived too under
-              VAT_PROJECTION_STORE=0, which skips only the store). null only
-              when no projection enumerated it: the walk lane ran
-              (VAT_RESOURCES_CRAWL=walk), or the crawl declined a projection
-              bound to another root and walked
+              VAT_PROJECTION_STORE=0, which skips only the store)
 
   examined: 0 is never a pass. A run that validated no resource (a
   declared --collection that matched no file, a path with no markdown, an enumeration

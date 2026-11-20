@@ -67,7 +67,7 @@ const CEILINGS: Readonly<Record<string, number>> = {
   // `path-core.ts`: `toForwardSlashAnyPlatform` is the converter the rule's
   // autofix writes, so its own body is the one hand-rolled replace.
   'local/no-manual-path-normalize': 1,
-  'local/no-path-startswith': 11,
+  'local/no-path-startswith': 10,
   'local/no-raw-node-path': 2,
   'local/no-raw-text-decode': 6,
   'local/no-unsafe-root-join': 2,

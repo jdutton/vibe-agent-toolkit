@@ -123,6 +123,8 @@ import {
   type JsonValue,
   type Projection,
   RunContentCache,
+  withParseDispatcher,
+  withPopulationRun,
 } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { NEVER_CRAWL_GLOBS, crawlDirectory } from '@vibe-agent-toolkit/utils/crawl';
@@ -186,7 +188,7 @@ async function rederiveBlobs(projection: Projection): Promise<RederivedBlobs> {
   for (const row of projection.resolutionContexts) builder.addContext(row);
   for (const row of projection.resources) builder.addResource(row);
   for (const row of projection.resourceRealizations) builder.addRealization(row);
-  const counts = await populateBlobs(builder);
+  const counts = await withParseDispatcher((dispatcher) => populateBlobs(builder, { dispatcher }));
   return { counts, blobKeys: contentKeysOf(builder.build()) };
 }
 
@@ -312,9 +314,9 @@ async function probeConvergence(
   // guaranteed throw that measures nothing and costs a whole population.
   for (let cap = 2; cap <= PROBE_CEILING; cap++) {
     try {
-      const { projection } = await populate({
-        root: ROOT, registry, parameters, gitTracker, maxIterations: cap,
-      });
+      const { projection } = await withPopulationRun((run) => populate({
+        root: ROOT, registry, parameters, gitTracker, run, maxIterations: cap,
+      }));
       return { projection, passes: cap, movingByPass };
     } catch (error) {
       if (!(error instanceof ClosureNonConvergenceError)) throw error;

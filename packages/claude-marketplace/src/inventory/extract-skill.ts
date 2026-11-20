@@ -280,7 +280,7 @@ async function parseFrontmatterFields(
  * routinely spans many — the same reason `GitTrackerSource` above is a function
  * of the root rather than a value. There is no caller-held config that governs
  * them all, so the declarations are read where the root is known, exactly as
- * `crawlAndResolveRegistry` and `createProjectRegistry` do.
+ * `RunSkillRegistries` does (`projectConfigOrNone`, and `loadConfig` for packaging).
  *
  * A config that exists and will not parse falls back to no declarations rather
  * than failing the crawl. `vat inventory`'s subject is frequently a THIRD

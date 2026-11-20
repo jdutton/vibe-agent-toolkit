@@ -1,4 +1,5 @@
 import type { Connection } from '@lancedb/lancedb';
+import { appendAll } from '@vibe-agent-toolkit/utils';
 
 /**
  * Every table name in a LanceDB database, walking `listTables` to the end.
@@ -16,7 +17,7 @@ export async function listAllTableNames(connection: Connection): Promise<string[
   // Each page's request carries the previous page's token, so the walk recurses.
   const readFrom = async (pageToken: string | undefined): Promise<void> => {
     const page = await connection.listTables(pageToken === undefined ? {} : { pageToken });
-    names.push(...page.tables);
+    appendAll(names, page.tables);
     if (page.pageToken !== undefined && page.pageToken !== '') await readFrom(page.pageToken);
   };
   await readFrom(undefined);

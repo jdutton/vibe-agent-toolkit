@@ -26,6 +26,7 @@ import { CONTENT_PARSING_SKIP, populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
+import { inOwnRun } from './helpers/population-run.js';
 import { setupSubdirTestSuite } from './test-helpers.js';
 
 const suite = setupSubdirTestSuite('blob-derivation-');
@@ -98,7 +99,7 @@ async function populateFixture(
   registry: ContributorRegistry,
   contentParsing?: typeof CONTENT_PARSING_SKIP,
 ): Promise<Projection> {
-  const { projection } = await populate({
+  const { projection } = await inOwnRun(populate, {
     root: suite.tempDir,
     registry,
     parameters: CLOSURE_DECLARATION,

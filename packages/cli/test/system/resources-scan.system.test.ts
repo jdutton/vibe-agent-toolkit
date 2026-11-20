@@ -64,9 +64,7 @@ describe('vat resources scan (system test)', () => {
     // stray `---` opener or a trailing second document fails exactly here.
     const report = RESOURCES_SCAN_REPORT_SCHEMA.parse(JSON.parse(result.stdout));
     expect(report.status).toBe('ok');
-    // The projection lane is the default; this fixture has no `.git`, so it is
-    // the filesystem enumerator that runs under it.
-    expect(report.data.lane).toBe('projection');
+    // This fixture has no `.git`, so it is the filesystem enumerator that runs.
     expect(report.data.extentSource).toBe('filesystem');
     expect(report.data.files).toHaveLength(1);
   });
@@ -91,31 +89,24 @@ describe('vat resources scan (system test)', () => {
     expect(report.findings.map((finding) => finding.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
   });
 
-  // A document over the parse pool's DEFAULT `outputRows` (16,384): 20,000 links is
+  // A document over the population's DEFAULT `outputRows` (16,384): 20,000 links is
   // real and cheap. Its parse is refused, so it is in no list the registry hands
   // the scan — and the scan used to report the survivors as the whole population,
-  // `status: ok`, exit 0. Both lanes, because each crawls through its own route.
-  it.each(['projection', 'walk'])(
-    'reports a file whose parse was refused as an error finding and counts it examined (%s lane)',
-    async (lane) => {
-      writeTestFile(safePath.join(tempDir, 'good.md'), '# Good\n');
-      writeTestFile(safePath.join(tempDir, 'huge.md'), overOutputRowsMarkdown('good.md'));
+  // `status: ok`, exit 0.
+  it('reports a file whose parse was refused as an error finding and counts it examined', async () => {
+    writeTestFile(safePath.join(tempDir, 'good.md'), '# Good\n');
+    writeTestFile(safePath.join(tempDir, 'huge.md'), overOutputRowsMarkdown('good.md'));
 
-      const { result, parsed } = await executeCliAndParseYaml(
-        binPath,
-        ['resources', 'scan', tempDir],
-        { env: { VAT_RESOURCES_CRAWL: lane } },
-      );
+    const { result, parsed } = await executeCliAndParseYaml(binPath, ['resources', 'scan', tempDir]);
 
-      expect(result.status).toBe(1);
-      const report = RESOURCES_SCAN_REPORT_SCHEMA.parse(parsed);
-      expect(report.status).toBe('findings');
-      expect(report.examined).toBe(2);
-      expect(report.findings).toHaveLength(1);
-      expect(report.findings[0]).toMatchObject({ code: 'RESOURCE_PARSE_LIMIT_EXCEEDED', severity: 'error', location: 'huge.md' });
-      expect(report.findings[0]?.message).toContain('outputRows');
-    },
-  );
+    expect(result.status).toBe(1);
+    const report = RESOURCES_SCAN_REPORT_SCHEMA.parse(parsed);
+    expect(report.status).toBe('findings');
+    expect(report.examined).toBe(2);
+    expect(report.findings).toHaveLength(1);
+    expect(report.findings[0]).toMatchObject({ code: 'RESOURCE_PARSE_LIMIT_EXCEEDED', severity: 'error', location: 'huge.md' });
+    expect(report.findings[0]?.message).toContain('outputRows');
+  });
 
   // The same hole, by the read rather than the parse: `chmod 000` denies nothing to
   // uid 0 and does not exist on Windows.

@@ -25,6 +25,7 @@
 
 import { createHash } from 'node:crypto';
 
+import { appendAll } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 import { parseDocument, type ParsedDocument } from '../../harness/document-shape.js';
@@ -226,7 +227,7 @@ function collectPhases(node: unknown, out: Array<Record<string, unknown>> = []):
   if (!isPlainObject(node)) return out;
   for (const [key, value] of Object.entries(node)) {
     if (key === 'phases' && Array.isArray(value)) {
-      out.push(...value.filter(isPlainObject).filter((phase) => typeof phase['name'] === 'string'));
+      appendAll(out, value.filter(isPlainObject).filter((phase) => typeof phase['name'] === 'string'));
     }
     collectPhases(value, out);
   }

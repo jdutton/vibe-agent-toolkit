@@ -19,8 +19,11 @@ import { type DirectoryRefusal, DirectoryListingRefusedError } from '@vibe-agent
 import { setupAsyncTempDirSuite, withReaddirSyncRefused , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { type RegistryUnreadablePolicy, ResourceRegistry } from '../src/resource-registry.js';
+import type { PopulationUnreadablePolicy } from '../src/projection/crawl-source.js';
+import { ResourceRegistry } from '../src/resource-registry.js';
 import type { ValidationIssue } from '../src/schemas/validation-result.js';
+
+import { crawlInRun } from './helpers/population-run.js';
 
 const MISSING_FILE_NAME = 'missing.md';
 const OPEN_FILE = 'docs/open/ok.md';
@@ -74,12 +77,12 @@ async function crawlRefusal(
   tempDir: string,
   locked: string,
   code: string,
-  policy: RegistryUnreadablePolicy | undefined,
+  policy: PopulationUnreadablePolicy | undefined,
 ): Promise<{ registry: ResourceRegistry; thrown: unknown }> {
   const registry = new ResourceRegistry({ baseDir: tempDir });
   const thrown = await withReaddirSyncRefused(locked, code, async () => {
     try {
-      await registry.crawl({ unreadable: policy as RegistryUnreadablePolicy, outputs: [], baseDir: tempDir, include: ['**/*.md'] });
+      await crawlInRun(registry, { ignoredRefusals: 'record', unreadable: policy as PopulationUnreadablePolicy, outputs: [], baseDir: tempDir, include: ['**/*.md'] });
       return undefined;
     } catch (error) {
       return error;
@@ -116,9 +119,7 @@ function useLockedDocsTree(name: string): { tempDir: () => string; locked: () =>
 
 /**
  * The crawl that defines the population REFUSES a directory it could not
- * enter — the same answer the projection lane gives, by the same class and
- * the same sentence, so `VAT_RESOURCES_CRAWL=walk` cannot exit 0 or 1 over a
- * tree the default lane exits 2 on.
+ * enter, by the population's own class and sentence.
  *
  * 🪤 Two earlier shapes were both wrong. `crawlDirectory` used to swallow the
  * refusal and hand back a shorter list, so `docs/locked/t.md` — in the
@@ -128,7 +129,7 @@ function useLockedDocsTree(name: string): { tempDir: () => string; locked: () =>
  * lanes documented as cost models rather than behaviours reached opposite exit
  * codes, and the warning prescribed `resources.exclude` — a knob the default
  * lane does not read. The standing ruling: a locked non-ignored directory
- * refuses by name on both lanes with one sentence.
+ * refuses by name with one sentence, and the population is now the only lane.
  *
  * This temp tree has no `.git` above it, so the remedy is the no-repository
  * one: there is no ignore rule to send the adopter to.
@@ -164,7 +165,7 @@ describe("ResourceRegistry refuses the crawl for a directory it could not list u
   it('crawls the whole tree when nothing refuses (control)', async () => {
     const tempDir = tree.tempDir();
     const registry = new ResourceRegistry({ baseDir: tempDir });
-    await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: tempDir, include: ['**/*.md'] });
+    await crawlInRun(registry, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: tempDir, include: ['**/*.md'] });
     const admitted = registry.getAllResources().map((r) => toForwardSlash(safePath.relative(tempDir, r.filePath)));
     expect(admitted.toSorted((a, b) => a.localeCompare(b))).toEqual(['docs/locked/t.md', OPEN_FILE]);
   });
@@ -208,23 +209,6 @@ describe('ResourceRegistry.crawl takes its unreadable policy from the caller', (
     expect((thrown as Error).message).toContain('`unreadable` is required');
     expect(registry.getAllResources()).toEqual([]);
   });
-
-  it('a population source decides its own refusals, so { degrade } beside one is refused by name', async () => {
-    const tempDir = tree.tempDir();
-    const registry = new ResourceRegistry({ baseDir: tempDir });
-    await expect(
-      registry.crawl({
-        outputs: [],
-        baseDir: tempDir,
-        include: ['**/*.md'],
-        unreadable: { degrade: () => {} },
-        populationSource: {
-          root: tempDir,
-          enumerate: async () => ({ paths: [], conditions: [], outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem' }),
-        },
-      }),
-    ).rejects.toThrow(/populationSource.*degrade|degrade.*populationSource/);
-  });
 });
 
 /**
@@ -263,7 +247,7 @@ describe.skipIf(CANNOT_DENY_READS)('ResourceRegistry LINK_TARGET_UNREADABLE for 
     chmodSync(target, 0o000);
     try {
       const registry = new ResourceRegistry({ baseDir: tempDir });
-      await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: tempDir, include: ['**/*.md'] });
+      await crawlInRun(registry, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: tempDir, include: ['**/*.md'] });
       return (await registry.validate({ skipGitIgnoreCheck: true })).issues;
     } finally {
       chmodSync(target, 0o644);
@@ -289,7 +273,7 @@ describe.skipIf(CANNOT_DENY_READS)('ResourceRegistry LINK_TARGET_UNREADABLE for 
 
   it('reports LINK_BROKEN_ANCHOR for #nope and nothing for #real once the file is readable (control)', async () => {
     const registry = new ResourceRegistry({ baseDir: tempDir });
-    await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: tempDir, include: ['**/*.md'] });
+    await crawlInRun(registry, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: tempDir, include: ['**/*.md'] });
     const { issues } = await registry.validate({ skipGitIgnoreCheck: true });
 
     expect(issues.filter((i) => i.code === 'LINK_TARGET_UNREADABLE')).toEqual([]);

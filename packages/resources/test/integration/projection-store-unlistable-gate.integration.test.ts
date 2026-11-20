@@ -29,6 +29,7 @@ import { populate } from '../../src/projection/merge.js';
 import type { ExtentKey, ExtentScopedRows } from '../../src/projection/store.js';
 import { CONDITION_WITHOUT_REFERENCE } from '../../src/schemas/projection-resources.js';
 import { FakeFactStore } from '../fake-fact-store.js';
+import { inOwnRun } from '../helpers/population-run.js';
 import { setupSubdirTestSuite } from '../test-helpers.js';
 
 const suite = setupSubdirTestSuite('projection-store-unlistable-gate-');
@@ -78,7 +79,7 @@ class UnlistableRowStore extends FakeFactStore {
 async function derivedThrough(store: FakeFactStore): Promise<boolean> {
   const registry = new ContributorRegistry();
   registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
-  const { outcome } = await populate({
+  const { outcome } = await inOwnRun(populate, {
     root: suite.tempDir,
     registry,
     cache: { store, treeUnchanged: () => true, treeHash: TREE_HASH },

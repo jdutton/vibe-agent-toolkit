@@ -259,16 +259,37 @@ describe('a lane never deletes or re-modes what the operator owns (system test)'
   );
 
   // One file the OS will not read, ANYWHERE in the repository: git refuses the whole
-  // snapshot. That is the input's refusal, naming the file — not "not a git repository".
-  it.skipIf(CANNOT_DENY_READS)('vat skills build names an unreadable file that refused the git snapshot', () => {
+  // snapshot, so the store cannot key the tree and says so, naming the file. The build
+  // lists the repository by name and never reads a file no skill references, so it builds.
+  it.skipIf(CANNOT_DENY_READS)('vat skills build names an unreadable file that refused the store key, and builds', () => {
     const cwd = skillsProject('build-unreadable');
     writeFileSync(safePath.join(cwd, 'private.txt'), 'secret');
     lock(safePath.join(cwd, 'private.txt'), 0o000);
 
     const { status, document, output } = run(cwd, ['skills', 'build']);
 
-    expect(refusalOf(document), output).toStrictEqual({ status: 'error', code: 'INPUT_UNREADABLE' });
-    expect(JSON.stringify(document['error'])).toContain('private.txt');
-    expect(status).toBe(2);
+    expect(document['status'], output).toBe('ok');
+    expect(output).toContain('git cannot key this tree');
+    expect(output).toContain('private.txt');
+    expect(status).toBe(0);
+  });
+
+  // The member case: a file the skill links to, untracked and unreadable. The listing names it,
+  // the link check reads it, and the OS refuses the read: an error finding on the file, exit 1,
+  // as outside a repository. Never a whole-run refusal: the repository is listed, not snapshotted.
+  it.skipIf(CANNOT_DENY_READS)('vat skills build files an unreadable untracked file its skill links to', () => {
+    const linking = CLEAN_SKILL.replace('Does one thing well.\n', 'Does one thing well. See [the notes](./notes.md).\n');
+    const cwd = project('build-unreadable-member', SKILLS_CONFIG, { [SKILL_MD]: linking, 'package.json': JSON.stringify({ name: 'm' }) });
+    const notes = safePath.join(cwd, 'skills', 'clean', 'notes.md');
+    writeFileSync(notes, '# Notes\n');
+    lock(notes, 0o000);
+
+    const { status, document, output } = run(cwd, ['skills', 'build']);
+
+    expect(document['status'], output).toBe('findings');
+    expect(document['findings'], output).toContainEqual(
+      expect.objectContaining({ severity: 'error', code: 'LINK_TARGET_UNREADABLE', location: 'skills/clean/notes.md' }),
+    );
+    expect(status).toBe(1);
   });
 });

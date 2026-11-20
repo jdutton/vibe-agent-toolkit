@@ -20,7 +20,7 @@
 import { readFileSync } from 'node:fs';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, safePath, appendAll } from '@vibe-agent-toolkit/utils';
 import { parse as parseToml, TomlDate } from 'smol-toml';
 
 import { PROJECT_ROOT, isEntrypoint, log } from './common.js';
@@ -89,7 +89,7 @@ export function readRegister(registerText: string): Register {
     const id = table['id'];
     if (typeof id === 'string' && id.trim() !== '') ids.add(id);
     const read = readEntry(table, index);
-    findings.push(...read.findings);
+    appendAll(findings, read.findings);
     if (read.entry !== undefined) entries.push(read.entry);
   }
   return { ids, entries, findings };
@@ -139,7 +139,7 @@ export function osvIgnoreFindings(lockText: string, registerText: string, accept
   const all = [...findings, ...pairingFindings(ids, accepted)];
   for (const id of ids) {
     const scope = accepted[id];
-    if (scope !== undefined) all.push(...lockFindings(id, scope, lockText));
+    if (scope !== undefined) appendAll(all, lockFindings(id, scope, lockText));
   }
   return all;
 }

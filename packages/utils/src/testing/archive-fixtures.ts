@@ -11,6 +11,7 @@
 import { readdirSync, readFileSync, readlinkSync, statSync } from 'node:fs';
 import { crc32, deflateRawSync, gzipSync } from 'node:zlib';
 
+import { appendAll } from '../append-all.js';
 import { safePath } from '../path-core.js';
 
 /** One entry of a fixture archive, exactly as the archive will spell it. */
@@ -231,7 +232,7 @@ export function archiveEntriesOfDirectory(dir: string, prefix = ''): ArchiveFixt
     if (entry.isSymbolicLink()) {
       entries.push({ name, kind: 'link', target: readlinkSync(path) });
     } else if (entry.isDirectory()) {
-      entries.push({ name: `${name}/`, kind: 'directory' }, ...archiveEntriesOfDirectory(path, `${name}/`));
+      appendAll(entries, [{ name: `${name}/`, kind: 'directory' }, ...archiveEntriesOfDirectory(path, `${name}/`)]);
     } else {
       entries.push({ name, data: readFileSync(path), mode: statSync(path).mode & 0o777 });
     }

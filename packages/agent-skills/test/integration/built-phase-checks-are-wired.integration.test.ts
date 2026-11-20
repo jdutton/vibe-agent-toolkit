@@ -27,8 +27,8 @@ import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { packageSkill } from '../../src/skill-packager.js';
 import { API_SKILL_MAX_UPLOAD_BYTES } from '../../src/validators/packaged-size-limit.js';
+import { packageSkillInRun } from '../test-helpers.js';
 
 let projectRoot: string;
 
@@ -58,7 +58,7 @@ function writeProject(body: string): { skillPath: string; outputPath: string; sk
 
 /** Build the project and return the issues the packager published. */
 async function buildAndCollect(skillPath: string, outputPath: string): Promise<ValidationIssue[]> {
-  const result = await packageSkill(skillPath, { outputPath, formats: ['directory'] });
+  const result = await packageSkillInRun(skillPath, { outputPath, formats: ['directory'] });
   return result.postBuildIssues ?? [];
 }
 

@@ -1,7 +1,7 @@
 import { dirname } from 'node:path';
 
 import type { RefusalCode } from '@vibe-agent-toolkit/schema';
-import { followedKindSync, linkResolutionFault } from '@vibe-agent-toolkit/utils';
+import { followedKindSync, linkResolutionFault, appendAll } from '@vibe-agent-toolkit/utils';
 import {
   AuthPreflightError,
   resolveAuth,
@@ -142,7 +142,7 @@ export function runPreflight(input: PreflightInput): PreflightResult {
   const checks: PreflightCheck[] = [];
 
   const version = input.claudeVersionProbe();
-  checks.push(
+  appendAll(checks, [
     version
       ? { name: 'claude binary', passed: true, message: version }
       : { name: 'claude binary', passed: false, message: 'not reachable', suggestion: 'Install Claude Code CLI.', refusal: 'BACKEND_UNAVAILABLE' },
@@ -152,7 +152,7 @@ export function runPreflight(input: PreflightInput): PreflightResult {
       : { name: 'vendored skill-creator integrity', passed: false, message: 'hash manifest mismatch', suggestion: 'Re-sync the vendored copy.', refusal: 'INPUT_UNREADABLE' },
     checkExists('eval input files', input.evalInputPaths),
     checkExists('declared dependencies', input.declaredDepDirs),
-  );
+  ]);
 
   let resolvedAuth: ResolvedAuth | null = null;
   try {

@@ -18,18 +18,15 @@ import { basename, dirname } from 'node:path';
 import {
   DeferredArtifacts,
   listingRefusalRemedy,
-  loadConfig,
   type NotAdmittedRoots,
   partitionNotAdmitted,
   type ParseDispatcher,
   parseFileCached,
   isParseLimitError,
   type ParseRefusedResource,
-  type RegistryUnreadablePolicy,
+  type PopulationUnreadablePolicy,
   ResourceRegistry,
-  type ResourcePopulationSource,
   type SkillExecutableEntry,
-  withParseDispatcher,
 } from '@vibe-agent-toolkit/resources';
 import {
   CODE_REGISTRY,
@@ -56,14 +53,12 @@ import {
   toForwardSlashAnyPlatform,
   safePath,
   withFsFaultSync,
+  appendAll,
 } from '@vibe-agent-toolkit/utils';
 import {
   BUILD_OUTPUT_GLOBS,
   crawlDirectory,
   crawlPathFilter,
-  type DirectoryRefusal,
-  settleCrawlRefusal,
-  type UnreadablePolicy,
 } from '@vibe-agent-toolkit/utils/crawl';
 import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
@@ -88,7 +83,7 @@ import { detectUndeclaredCrossSkillAuth } from './cross-skill-dependency-detecti
 import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
 import { collectUnqualifiedMcpToolIssues } from './mcp-tool-qualification.js';
 import { materializeIssue } from './rule-engine/index.js';
-import type { RunSkillRegistries } from './run-skill-registries.js';
+import { REGISTRY_INCLUDE, type RunSkillRegistries } from './run-skill-registries.js';
 import { SOURCE_ONLY_CODES } from './source-only-codes.js';
 import {
   VALIDATION_RULES,
@@ -377,421 +372,28 @@ function registryIssueAt(
 }
 
 /**
- * Options for {@link crawlAndResolveRegistry}.
- */
-export interface CrawlRegistryOptions {
-  /**
-   * What the crawl does with a directory it cannot list — the caller's ruling,
-   * required, no default: `'refuse'` for every verb that acts on the registry as
-   * a complete population, `{ degrade }` for `vat audit`. See
-   * {@link RegistryUnreadablePolicy} on the registry for the two rulings.
-   *
-   * NOT part of the memo key: the memo replays the refusals the ONE crawl met
-   * into every later caller's policy, so a `'refuse'` caller served a registry
-   * that was built under `{ degrade }` still gets its throw — see
-   * {@link MemoizedRegistry}.
-   */
-  unreadable: RegistryUnreadablePolicy;
-  /**
-   * Where the file list comes from — omit for the incumbent walk, supply one to
-   * source it from a projection instead.
-   *
-   * Also part of the memo key, by identity: see {@link sourcedRegistryCache}.
-   *
-   * Selecting the lane stays the CLI's job. This signature takes a source, never
-   * an environment, so a library caller that passes nothing keeps the walk.
-   */
-  populationSource?: ResourcePopulationSource | undefined;
-  /**
-   * What the calling verb writes — its outputs and their staging — or `[]` for a verb that
-   * only reads the project: the crawl's one declaration of which side a fault is on (on, in
-   * or holding an output: the destination's; anything else the project's content). Required:
-   * only the caller knows. NOT part of the memo key: it decides which side a fault is on, never
-   * which files the crawl finds, so a crawl that settled serves every caller — and a rejected
-   * one serves none, see {@link MemoEntry}.
-   */
-  outputs: readonly string[];
-}
-
-/**
- * One memoized crawl: the registry AND every directory the crawl was refused.
- *
- * The memo is keyed on the root, and two callers of one root may hold
- * different `unreadable` rulings — `vat audit` degrades, everything else
- * refuses. A registry built under `{ degrade }` is a population WITH A GAP,
- * and serving it to a `'refuse'` caller as-is would be the exact silent
- * shorter-list the refuse ruling exists to prevent; serving it to a second
- * `{ degrade }` caller would leave that caller's handler never told. So the
- * refusals ride beside the registry and are settled again under each caller's
- * policy on every hit of a SETTLED crawl: a `'refuse'` caller throws the same
- * {@link DirectoryListingRefusedError} the crawl would have thrown for it, and
- * a `{ degrade }` caller's handler is called for each. A registry built under
- * `'refuse'` carries none by construction (the crawl threw instead), so any
- * later policy is served it unchanged. A REJECTED crawl is not settled per
- * caller: its waiters share one retry and its outcome (see {@link joinOrStartCrawl}).
- */
-interface MemoizedRegistry {
-  readonly registry: ResourceRegistry;
-  readonly refusals: readonly DirectoryRefusal[];
-}
-
-/**
- * One memo slot: the crawl of a root, as the PROMISE, so overlapping callers share it.
- *
- * Keyed on the root alone. `outputs` shapes no population — the crawl's include/exclude and
- * gitignore decide membership, and `outputs` is read only to put a fault on the destination's
- * side — so a SETTLED crawl serves every caller of its root, whatever each one writes. The
- * packager's post-build lane declares a different output per skill; keyed on `outputs`, every
- * skill paid a fresh whole-project crawl and the memo held one registry per skill.
- *
- * A REJECTED crawl is never served: its fault was classified against the outputs and `unreadable`
- * ruling of the caller that started it, and either may differ for the next one. The slot is
- * emptied when it rejects; the first caller that was waiting on it crawls afresh under its own
- * policy, and the other waiters join that crawl rather than starting their own — and take its
- * rejection if it rejects too (see {@link joinOrStartCrawl}).
- */
-type MemoEntry = Promise<MemoizedRegistry>;
-
-/**
- * Settle the memoized refusals under THIS caller's policy — see {@link MemoizedRegistry}.
- *
- * @param refusals - What the one crawl of `projectRoot` was refused
- * @param unreadable - This caller's ruling
- * @param projectRoot - The crawl's root, for the refuse sentence
- * @param outputs - What the crawl's caller writes: a refusal on or under one is the destination's, anything else the project's content (`source`)
- */
-function replayRefusals(
-  refusals: readonly DirectoryRefusal[],
-  unreadable: RegistryUnreadablePolicy,
-  projectRoot: string,
-  outputs: readonly string[],
-): void {
-  for (const refusal of refusals) {
-    // The crawl's own policy, replayed: on what the verb writes the destination's, anything else the project's content.
-    const policy: UnreadablePolicy = unreadable === 'refuse'
-      ? { refuse: { root: projectRoot, remedy: listingRefusalRemedy(projectRoot), side: 'source' } }
-      : unreadable;
-    settleCrawlRefusal(policy, refusal, outputs);
-  }
-}
-
-/**
- * Join the crawl a slot holds, or start one — `joined` says which.
- *
- * A rejected crawl is never served (see {@link MemoEntry}), but its waiters do not each
- * re-crawl: after a rejection the slot is read AGAIN, so the first waiter's re-crawl is the one
- * every other waiter joins — N waiters cost one re-crawl, not N. That holds only because the
- * re-read and `start` (which fills the slot synchronously) run in ONE tick: an `await` between
- * them lets every waiter find the slot empty. `rejected` stops a slot that still holds the
- * rejected promise (its eviction not yet run) from being joined twice.
- *
- * A waiter retries ONCE: when the re-crawl it joined rejects too, it rejects with that error,
- * classified under the policy of the waiter that started the re-crawl. Retrying again would cost
- * N waiters N whole-project crawls of a tree that has now failed twice.
- */
-function joinOrStartCrawl(
-  cache: Map<string, MemoEntry>,
-  key: string,
-  rejected: MemoEntry | undefined,
-  start: () => MemoEntry,
-): Promise<{ memo: MemoizedRegistry; joined: boolean }> {
-  const cached = cache.get(key);
-  if (cached === undefined || cached === rejected) {
-    return start().then((memo) => ({ memo, joined: false }));
-  }
-  return cached.then(
-    (memo) => ({ memo, joined: true }),
-    (error: unknown) => {
-      if (rejected !== undefined) throw error;
-      return joinOrStartCrawl(cache, key, cached, start);
-    },
-  );
-}
-
-/**
- * Build a fresh ResourceRegistry for a single skill's projectRoot and resolve
- * internal links. Extracted so the skill validator can fall back to a private
- * registry when the caller does not supply a shared one.
- *
- * Crawls markdown AND HTML (`.html`/`.htm`) so the live audit/validate path
- * sees the same link graph the built path does. The registry
- * parses HTML via parse5 and surfaces its `local_file` links, so the walker
- * traverses HTML references and catches HTML broken links at source time — not
- * just at build time. (Previously the crawl was markdown-only, so source HTML
- * was invisible to audit/validate.)
- *
- * Exported so external callers (e.g. the inventory layer) can build a registry
- * once and pass it down rather than re-crawling per skill.
- *
- * ## Why the config is READ here rather than threaded in
- *
- * A collection may declare a `mimeType` that overrides `mime-type.ts`'s
- * extension tables and so decides which parser runs; `ResourceRegistry` honours
- * those declarations only when it was handed a config, and the projection lane
- * behind `populationSource` reads them off the root. A config-less registry
- * therefore disagrees with the population that enumerated it about whether a
- * file is prose, inside a single command.
- *
- * Threading was considered and does not fit this function. Its callers discover
- * `projectRoot` **per skill** (`findProjectRoot` from each SKILL.md's directory,
- * and one `vat audit --user` run reached at least 72 distinct roots), so no
- * caller holds one config that governs them all. Worse, the memo below is keyed
- * on the root ALONE: an optional config argument would let two callers of one
- * root disagree and silently share whichever registry was built first.
- *
- * Reading it here is what `createProjectRegistry` in `skill-packager.ts` already
- * does, with the same `loadConfig`, for the same stated reason — "a registry
- * built without config silently belongs to no collection, so a lane that built
- * its own config-less registry rewrote frontmatter differently from the lane
- * that used this one". One read per root per process, behind the memo, against a
- * crawl that parses every document under it.
- *
- * ## A broken config falls back here, and is reported by the caller
- *
- * Unlike `createProjectRegistry`, this must NOT throw on a config that exists
- * and will not parse. Its principal caller is `vat audit`, whose pinned
- * behaviour is "tolerates, falls back to config-free validation" — a bulk linter
- * over trees VAT does not own must not be aborted by someone else's YAML
- * (`cli/test/integration/config-broken-behavior.integration.test.ts` is the map).
- *
- * The fallback is not the silent conflation that rule normally forbids, because
- * nothing is being hidden: `vat audit` reads the same config at its own layer,
- * catches `ConfigLoadError` there, and reports it. What this does is decline to
- * abort a scan from four frames down. A config that will not parse also gives
- * the projection lane no declarations, so the two lanes still AGREE — which is
- * the property this function exists to hold.
- *
- * ## Memoized on the root, so a write inside it is not seen
- *
- * The crawl is memoized on `projectRoot` (and the population source) alone, never on `outputs`:
- * every caller of one root in a process is served the FIRST crawl's registry. Anything written
- * inside the root after that crawl is absent from what later callers are served — except to the
- * packager's post-build check of its own bundle, which layers the bundle over the memo
- * (`withOwnBundle`, reading only the bundle). Any other caller that must see a write calls
- * {@link resetPackagingRegistryCache} after it.
- */
-export async function crawlAndResolveRegistry(
-  projectRoot: string,
-  options: CrawlRegistryOptions,
-): Promise<ResourceRegistry> {
-  const { populationSource, unreadable, outputs } = options;
-  const cache = registryCacheFor(populationSource);
-  // LEXICAL on purpose, never the real path: a registry answers `getResource` for the spelling it
-  // was crawled under, so a symlinked spelling served the real root's registry would miss every
-  // lookup and walk an empty graph. Two spellings of one root cost two crawls.
-  const key = toForwardSlash(safePath.resolve(projectRoot));
-  // The PROMISE is cached, not the resolved value, so callers that overlap a crawl
-  // share it rather than starting their own — unless it rejects (see joinOrStartCrawl).
-  const start = (): MemoEntry => {
-    const crawl = crawlRegistry(projectRoot, options);
-    cache.set(key, crawl);
-    // Empty the slot only if it still holds THIS crawl: a retry may already have replaced it.
-    crawl.catch(() => {
-      if (cache.get(key) === crawl) {
-        cache.delete(key);
-      }
-    });
-    return crawl;
-  };
-  const { memo, joined } = await joinOrStartCrawl(cache, key, undefined, start);
-  // A joined crawl's refusals were classified under its starter's policy: replay them under ours.
-  if (joined) replayRefusals(memo.refusals, unreadable, projectRoot, outputs);
-  return memo.registry;
-}
-
-/** What {@link crawlAndResolveRegistry} crawls — markdown and HTML — and what the built lane reads of its own bundle. */
-const REGISTRY_INCLUDE = ['**/*.md', '**/*.html', '**/*.htm'];
-
-/** The one crawl {@link crawlAndResolveRegistry} memoizes. */
-async function crawlRegistry(projectRoot: string, options: CrawlRegistryOptions): Promise<MemoizedRegistry> {
-  const { populationSource, unreadable, outputs } = options;
-  const config = await loadConfig(projectRoot).catch(() => undefined);
-  // Every refusal the crawl hands over is kept for the memo's later callers —
-  // see {@link MemoizedRegistry}. Under `'refuse'` the crawl throws instead and
-  // this stays empty.
-  const refusals: DirectoryRefusal[] = [];
-  const recorded: RegistryUnreadablePolicy = unreadable === 'refuse'
-    ? 'refuse'
-    : { degrade: (refusal) => { refusals.push(refusal); unreadable.degrade(refusal); } };
-  const { registry } = await ResourceRegistry.fromCrawl(
-    {
-      baseDir: projectRoot,
-      include: REGISTRY_INCLUDE,
-      unreadable: recorded,
-      outputs,
-      // Enumeration only. `ResourceRegistry.crawl` re-applies the include set
-      // above — and the crawl's default exclude — to whatever the source
-      // offers, through the same compiled matcher the walk itself uses. That
-      // narrows, never widens: what the source never enumerated stays out. So a
-      // projection can change the scope — on a git-less tree the walk admits
-      // `coverage/x.md`, which the `filesystem` source prunes (`NEVER_CRAWL_GLOBS`).
-      ...(populationSource !== undefined && { populationSource }),
-    },
-    config === undefined ? undefined : { config },
-  );
-  registry.resolveLinks();
-  return { registry, refusals };
-}
-
-/**
- * Cache of (resolved project root → registry) for the INCUMBENT WALK, so the
- * crawl above is paid ONCE per root per process rather than once per skill.
- * Source-backed callers get {@link sourcedRegistryCache} instead, and the two
- * never meet — see there for why that separation is the whole point.
- *
- * It lives beside the crawl because every caller wants the same thing and the
- * cost is a property of the crawl, not of any one lane. `vat audit` had already
- * built this cache privately — and its own comment flagged the trap: the key
- * "must be the SAME value `validateSkillForPackaging` derives", or a mismatch
- * "silently degrades back to a per-skill crawl". Keying on the resolved path in
- * one place removes the duplicate and the trap. The lane that never had a cache —
- * the packager's post-build validation, called once per skill from both build
- * phases — gets the sharing without threading a registry through.
- *
- * Safe to hold for a process lifetime: every VAT entry point is a short-lived
- * CLI invocation. It is UNBOUNDED, though — `vat audit --user` holds one registry
- * per distinct root it audits, every one until exit. A bound or eviction is an
- * open follow-up, not done here. Note the crawl excludes build output (`BUILD_OUTPUT_GLOBS` in
- * the registry's default) and every build's staging residue (`.<name>.vat-staged-*`,
- * in `NEVER_CONTENT_GLOBS`), so the build output and staging a mid-run package writes are not
- * part of the population to begin with — nothing the memo should hold goes missing. Any OTHER
- * write inside the root after the first crawl is simply not seen (see
- * {@link crawlAndResolveRegistry}): the memo is not invalidated by it, it is stale about it.
- * `outputs` never shapes the population (see {@link MemoEntry}); the packager's
- * post-build check sees its own bundle by layering it over the memo
- * ({@link withOwnBundle}), never by re-crawling the root, and no caller is served
- * another's half-written staging copy.
- *
- * 🚨 That exclusion is ALSO the cause of a live defect, and this paragraph is the
- * reason the defect must not be fixed by widening the crawl. The packager's
- * post-build lane sees an EMPTY link graph because the built tree it validates
- * falls under `**\/dist\/**` — measured, and now pinned by a committed test; the
- * numbers, the control that proves the cause, and the fixture all live in the
- * `runPostBuildValidation` docstring in `../skill-packager.ts`, and are not
- * restated here.
- *
- * ⛔ The exclusion is the stated safety argument DIRECTLY ABOVE, for a memo shared
- * by the audit lane, the validate lane AND the built lane. Widening the crawl so
- * one lane can see its own output retracts that argument for every lane sharing
- * this memo — it is not a one-lane fix, and it lands here, not there.
- */
-const walkRegistryCache = new Map<string, MemoEntry>();
-
-/**
- * The same memo for the SOURCE-BACKED lanes, keyed first by the population
- * source's IDENTITY and only then by root.
- *
- * ## Why the source is part of the key
- *
- * This crawl is memoized for a process and SHARED across commands that do not
- * know about each other: `vat skills build` reaches it per skill through
- * {@link validateSkillForPackaging}, `vat audit` reaches it directly, and the
- * pipeline oracles reach it as a lane. Keyed on the root ALONE, the FIRST
- * caller's population binds for the whole process, and a later caller asking a
- * different question transparently receives the earlier caller's answer — with
- * nothing in any output saying so. The projection lane does not merely enumerate
- * the same set faster: it sees uncommitted markdown, so it genuinely answers a
- * different membership question and ADDS `LINK_BROKEN_FILE` findings. Serving
- * one caller's answer to the other is a silent wrong answer in both directions.
- *
- * ## Why IDENTITY, and not a lane descriptor
- *
- * A `'walk' | 'projection'` tag would key two projection sources the same, and
- * two projection sources can differ in their ignore oracle (a run with no
- * `GitTracker` admits the ignored half of a tree), in which store answers them,
- * and in whether that store is still OPEN — `withResourcePopulationSource`
- * closes it when its bracket ends. A key that cannot see those differences is
- * the same bug one level down. The closure itself can never be wrong about
- * which of them it is.
- *
- * The win survives: one run holds ONE source closure for its whole bracket and
- * hands the same one to every skill, so a `vat skills build` still pays a single
- * crawl for the run rather than one per skill. Two independent callers cannot
- * hold the same closure by accident, so they cannot collide.
- *
- * A `WeakMap` rather than a `Map` because the entry's useful life is the
- * bracket's: once the source is unreachable its store is closed and its
- * registries can never be served again, so holding them would be a leak with no
- * upside. (`registryCacheFor` is what reads it; `resetPackagingRegistryCache`
- * replaces it wholesale, since a `WeakMap` cannot be cleared in place.)
- */
-let sourcedRegistryCache = new WeakMap<
-  ResourcePopulationSource,
-  Map<string, MemoEntry>
->();
-
-/**
- * The (root → registry) memo this call belongs in: the walk's, or the one
- * private to this population source.
- *
- * Separate maps rather than a composite key, because the two are keyed on
- * different KINDS — a path string and an object identity — and a composite key
- * would have to stringify the source, which is exactly the information loss
- * {@link sourcedRegistryCache} exists to avoid.
- */
-function registryCacheFor(
-  populationSource: ResourcePopulationSource | undefined,
-): Map<string, MemoEntry> {
-  if (populationSource === undefined) {
-    return walkRegistryCache;
-  }
-  const existing = sourcedRegistryCache.get(populationSource);
-  if (existing !== undefined) {
-    return existing;
-  }
-  const created = new Map<string, MemoEntry>();
-  sourcedRegistryCache.set(populationSource, created);
-  return created;
-}
-
-/**
- * Drop every memoized registry.
- *
- * Required by any in-process caller that starts an INDEPENDENT run against a
- * tree it may have changed since the last one — the CLI entrypoint, and
- * integration tests sharing a vitest worker. Without it a second run reuses the
- * first run's parse of files that have since moved, and reports a stale answer
- * as a fresh one. `resetAuditCaches` calls this alongside its own caches.
- */
-export function resetPackagingRegistryCache(): void {
-  walkRegistryCache.clear();
-  // Both lanes, or the reset is a half-truth: a caller that reset the cache and
-  // then re-supplied the SAME source closure would be served the pre-reset parse
-  // of a tree it may have changed. A `WeakMap` has no `clear`, so it is replaced.
-  sourcedRegistryCache = new WeakMap();
-}
-
-/**
- * The registry a skill is validated against: the caller's, when it covers the
- * skill; otherwise one crawled here under the caller's `unreadable` ruling.
- *
- * No shared context is a single-skill lane whose result is acted on whole (the
- * packager's post-build check passes one; a library caller that passes nothing
- * is the same shape): it refuses. A caller with a context has ruled on
- * `shared.unreadable` — see that field.
+ * The registry a skill is validated against: the run's view of the skill's
+ * project root (or, for a skill with no project root, of its own directory),
+ * crawled once per run under the caller's ruling.
  *
  * @param skillPath - Path to SKILL.md
- * @param projectRoot - The root the fallback crawl covers
- * @param inProject - False when `projectRoot` is only the skill's own directory: that crawl is not
- *   memoized, since a packaged skill's directory is a staging name no later caller asks for again
- * @param shared - The batching caller's context, if any
- * @param context - `built` for output this run wrote, which the crawl never holds — see {@link withOwnBundle}
+ * @param projectRoot - The root the view covers
+ * @param shared - The run's context
+ * @param context - `built` for output this run wrote, which the view never holds — see {@link withOwnBundle}
  * @returns A registry whose links are resolved and that covers `skillPath`, and
- *   every parse refusal behind it — the base crawl's and, when a built bundle is
+ *   every parse refusal behind it — the view's and, when a built bundle is
  *   layered over it, the bundle's (the layered copy carries only its own log)
  */
 async function registryForSkill(
   skillPath: string,
   projectRoot: string,
-  inProject: boolean,
-  shared: SkillValidationSharedContext | undefined,
+  shared: SkillValidationSharedContext,
   context: 'source' | 'built',
 ): Promise<{ registry: ResourceRegistry; parseRefused: ParseRefusedResource[] }> {
-  const outputs = crawlOutputs(context, skillPath, shared);
-  const unreadable = shared === undefined ? 'refuse' : shared.unreadable;
-  const base = await baseRegistryForSkill(skillPath, projectRoot, inProject, shared, { outputs, unreadable });
-  // The caller's registry "covers" the skill by directory alone — one crawled before a build wrote
-  // the bundle covers it and holds none of it — so it takes the same layering as the crawl.
+  const { unreadable, outputs } = shared;
+  const base = await shared.registries.forRoot(projectRoot, { unreadable, outputs });
+  // The view "covers" the skill by directory alone — one crawled before a build wrote
+  // the bundle covers it and holds none of it — so it takes the layering.
   const registry = context === 'built' && base.getResource(safePath.resolve(skillPath)) === undefined
     ? await withOwnBundle(base, dirname(skillPath), unreadable, outputs)
     : base;
@@ -801,51 +403,23 @@ async function registryForSkill(
   return { registry, parseRefused };
 }
 
-/**
- * The registry {@link registryForSkill} layers a built bundle over: the caller's when it covers the
- * skill, else a crawl — memoized and resolved in a project, plain for a lone skill directory.
- */
-async function baseRegistryForSkill(
-  skillPath: string,
-  projectRoot: string,
-  inProject: boolean,
-  shared: SkillValidationSharedContext | undefined,
-  ruling: Pick<CrawlRegistryOptions, 'outputs' | 'unreadable'>,
-): Promise<ResourceRegistry> {
-  if (shared?.registry !== undefined && registryCoversSkill(shared.registry, skillPath)) {
-    return shared.registry;
-  }
-  // A run's views refuse a directory they cannot list (see `RunSkillRegistries`).
-  if (shared?.registries !== undefined && ruling.unreadable === 'refuse') {
-    return shared.registries.forRoot(projectRoot, ruling.outputs);
-  }
-  const crawlOptions: CrawlRegistryOptions = {
-    ...ruling,
-    ...(shared?.populationSource !== undefined && { populationSource: shared.populationSource }),
-  };
-  return inProject
-    ? crawlAndResolveRegistry(projectRoot, crawlOptions)
-    : (await crawlRegistry(projectRoot, crawlOptions)).registry;
-}
-
 /** Whether a root-relative path lies OUTSIDE build output (`dist/`), which a crawl of the root never admits. */
 const outsideBuildOutput = crawlPathFilter(['**/*'], BUILD_OUTPUT_GLOBS);
 
 /**
- * The memoized project registry with a bundle it does not hold layered over it:
+ * The project's view with a bundle it does not hold layered over it:
  * the project's resources, plus the bundle's own files read now: none under
  * `dist/` (the defect `runPostBuildValidation` documents, unchanged here), and
  * every other one, ignored or not — it is this run's own output, so no ignore
  * rule decides what the check sees.
  *
- * The memo — keyed on the root, crawled once — never holds the bundle: it is
- * written after the crawl, at a staging name (`.<name>.vat-staged-*`) the crawl
- * excludes as residue. Without this the walk started from nothing and every
- * link-derived check passed silently. Only the bundle is read; the root is not
- * crawled again. The project's resources are COPIED, links and all, before links
- * are resolved, so the memo never learns of the bundle.
+ * The view — crawled once per run — never holds the bundle: it is written after
+ * the crawl, at a staging name (`.<name>.vat-staged-*`) the crawl excludes as
+ * residue. Only the bundle is read; the root is not crawled again. The project's
+ * resources are COPIED, links and all, before links are resolved, so the view
+ * never learns of the bundle.
  *
- * @param registry - The memoized registry of the project root
+ * @param registry - The project root's view
  * @param bundleDir - The directory holding the built SKILL.md
  * @param unreadable - The caller's ruling, for a bundle directory that cannot be listed
  * @param outputs - What the run writes: the bundle's side of any fault
@@ -854,14 +428,14 @@ const outsideBuildOutput = crawlPathFilter(['**/*'], BUILD_OUTPUT_GLOBS);
 async function withOwnBundle(
   registry: ResourceRegistry,
   bundleDir: string,
-  unreadable: RegistryUnreadablePolicy,
+  unreadable: PopulationUnreadablePolicy,
   outputs: readonly string[],
 ): Promise<ResourceRegistry> {
   const root = registry.baseDir ?? bundleDir;
   if (!outsideBuildOutput(toForwardSlash(safePath.relative(root, safePath.join(bundleDir, 'SKILL.md'))))) return registry;
   const bundle = await crawlDirectory({
     baseDir: bundleDir,
-    include: REGISTRY_INCLUDE,
+    include: [...REGISTRY_INCLUDE],
     exclude: [],
     respectGitignore: false,
     unreadable: unreadable === 'refuse'
@@ -874,33 +448,6 @@ async function withOwnBundle(
   await layered.addResources(bundle);
   layered.resolveLinks();
   return layered;
-}
-
-/**
- * What the calling verb writes, for the validator's own crawl: the shared context's
- * declaration, or — for a single-skill lane with no context — the context's: a `built`
- * skill is this run's output (its directory), a `source` skill's project is only read.
- */
-function crawlOutputs(context: 'source' | 'built', skillPath: string, shared: SkillValidationSharedContext | undefined): readonly string[] {
-  if (shared !== undefined) return shared.outputs;
-  return context === 'built' ? [dirname(skillPath)] : [];
-}
-
-/**
- * True iff the shared registry's baseDir is an ancestor of (or equals) the
- * skill's directory. Prevents the batched caller from reusing a registry that
- * was crawled for a different project root — the `getResource()` /
- * `getResourceById()` lookups would silently miss, and the walker would walk
- * an empty graph.
- */
-function registryCoversSkill(registry: ResourceRegistry, skillPath: string): boolean {
-  const baseDir = registry.baseDir;
-  if (baseDir === undefined) return false;
-  const normalizedBase = toForwardSlash(safePath.resolve(baseDir));
-  const skillDir = toForwardSlash(safePath.resolve(dirname(skillPath)));
-  if (skillDir === normalizedBase) return true;
-  // eslint-disable-next-line local/no-path-startswith -- both sides normalized via toForwardSlash above
-  return skillDir.startsWith(`${normalizedBase}/`);
 }
 
 /**
@@ -920,67 +467,27 @@ function registryCoversSkill(registry: ResourceRegistry, skillPath: string): boo
  */
 export interface SkillValidationSharedContext {
   /**
-   * What the validator's OWN registry crawl does with a directory it cannot
-   * list, when it has to build one (no `registry` below, or one that does not
-   * cover this skill) — the caller's ruling, and the ONE required field here:
-   * `'refuse'` for `vat skills validate`/`build`, `vat skill review` and the
-   * packager's post-build check, `{ degrade }` for `vat audit`, whose directory
-   * lane supplies no registry and reaches {@link crawlAndResolveRegistry} through
-   * exactly this seam. See {@link RegistryUnreadablePolicy}.
-   *
-   * Ignored when `registry` below already covers the skill, for the same reason
-   * `populationSource` is: the caller that built it has already ruled.
-   *
-   * A caller that passes NO shared context at all is a single-skill lane whose
-   * result is acted on whole, and is ruled `'refuse'` by
-   * {@link validateSkillForPackaging} — said there, once, not defaulted here.
+   * What the crawl of a skill's project root does with a directory it cannot
+   * list — the caller's ruling: `'refuse'` for `vat skills validate`/`build`,
+   * `vat skill review` and the packager's post-build check, `{ degrade }` for
+   * `vat audit`. See {@link PopulationUnreadablePolicy}.
    */
-  unreadable: RegistryUnreadablePolicy;
-  /** Pre-built registry that covers the skill's project root. */
-  registry?: ResourceRegistry;
+  unreadable: PopulationUnreadablePolicy;
   /**
-   * The run's skill registries: when present, the validator's registry for a
-   * skill's project root is the run's view of that root, crawled once per run
-   * through the run's admissions, rather than a crawl of its own. Used under
-   * `'refuse'` only. Ignored when `registry` above already covers the skill.
+   * The run's skill registries: each skill is validated against the run's view of
+   * its project root, crawled once per run. Required: there is no registry a
+   * validation builds beside its run's.
    */
-  registries?: RunSkillRegistries;
+  registries: RunSkillRegistries;
   /**
-   * Where the file list for the validator's OWN registry comes from, when it has
-   * to build one (no `registry` above, or one that does not cover this skill).
-   *
-   * The lane seam for `vat skills build`, which — unlike `vat skills validate` —
-   * supplies no shared registry and so reaches {@link crawlAndResolveRegistry}
-   * per skill. Without this, a projection-lane build still enumerated that one
-   * registry with the walk, which was the last packaging enumeration on it.
-   *
-   * Ignored when `registry` above already covers the skill: a caller that built
-   * the registry itself has already chosen its lane, and re-deciding it here
-   * would let one call carry two answers.
-   *
-   * Supply the SAME closure for every skill in a run (that is what
-   * `withResourcePopulationSource` hands out), or the memo keys each call
-   * separately and the run pays a crawl per skill.
-   */
-  populationSource?: ResourcePopulationSource;
-  /**
-   * What the CALLING VERB writes, for the validator's own crawl: `vat skills build` its
+   * What the CALLING VERB writes, for the crawl of a skill's root: `vat skills build` its
    * `dist/skills` and staging, the packager's post-build check the bundle it wrote, so a
    * fault on them is the run's (`RUN_INCOMPLETE`); `[]` for a verb that only reads
-   * (`vat skills validate`, `vat audit`). Required: only the calling verb knows. (A caller
-   * with NO shared context is a single-skill lane, and the context decides: `built` → the
-   * skill's own directory.)
+   * (`vat skills validate`, `vat audit`). Required: only the calling verb knows.
    */
   outputs: readonly string[];
   /** Pre-populated tracker for the repo that contains the skill. */
   gitTracker?: GitTracker;
-  /**
-   * The run's parse dispatcher, for the parse this validator makes itself (the
-   * SKILL.md, whose frontmatter the detectors then read), so a batch pays one worker
-   * start. `undefined` when the caller holds none: each skill's validation holds its own and
-   * shuts it down.
-   */
-  dispatcher: ParseDispatcher | undefined;
   /**
    * Root every emitted `ValidationIssue.location` is expressed relative to.
    *
@@ -1101,51 +608,32 @@ function missingFrontmatterIssue(frontmatterError: string | undefined, location:
  *   one config that settles a file not admitted — never `packagingConfig.validation`. Required:
  *   only the verb knows which config governs the run; `{}` when none does, or when the caller
  *   resolves those codes itself (`vat audit`)
- * @param packagingConfig - Optional packaging configuration (depth, excludes, validation)
+ * @param packagingConfig - The skill's packaging configuration (depth, excludes, validation), if any
  * @param context - Whether the skill is being validated from source or built output
- * @param shared - Optional shared context (registry + gitTracker) for batched runs
+ * @param shared - The run's context: its skill registries, ruling and run-wide memos. Every
+ *   parse this validator makes runs on the run's one dispatcher (`shared.registries.dispatcher`)
  * @returns Validation result with active errors, warnings, and allowed issues
  */
-export function validateSkillForPackaging(
+export async function validateSkillForPackaging(
   skillPath: string,
   resourcesValidation: ValidationConfig,
-  packagingConfig?: SkillPackagingConfig,
-  context: 'source' | 'built' = 'source',
-  shared?: SkillValidationSharedContext,
+  packagingConfig: SkillPackagingConfig | undefined,
+  context: 'source' | 'built',
+  shared: SkillValidationSharedContext,
 ): Promise<PackagingValidationResult> {
-  return withParseDispatcher(
-    (dispatcher) => validateSkillForPackagingOn(skillPath, { resourcesValidation, packagingConfig, context, shared }, dispatcher),
-    { dispatcher: shared?.dispatcher },
-  );
-}
-
-/**
- * {@link validateSkillForPackaging}, on a parse dispatcher.
- *
- * @param skillPath - Path to SKILL.md
- * @param call - The caller's arguments, as {@link validateSkillForPackaging} took them
- * @param dispatcher - Where this validator's own parses run
- * @returns Validation result
- */
-async function validateSkillForPackagingOn(
-  skillPath: string,
-  call: PackagingValidationCall,
-  dispatcher: ParseDispatcher,
-): Promise<PackagingValidationResult> {
-  const { resourcesValidation, packagingConfig, context, shared } = call;
+  const { dispatcher } = shared.registries;
   const rawIssues: ValidationIssue[] = [];
 
   // Validation-POLICY boundary (config root -> git root -> skill dir): what is
   // "outside the project", where `files:` sources resolve from, what the
   // registry crawls. Library fallback to skill dir keeps callers null-safe; CLI
   // command boundary owns any user-facing warning.
-  const foundRoot = findProjectRoot(dirname(skillPath));
-  const projectRoot = foundRoot ?? dirname(skillPath);
+  const projectRoot = findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
   // ANCHOR base — deliberately a separate variable from projectRoot above.
   // Every emitted location is relative to this ONE root, computed once before
   // the first producer runs so no collector can pick a different base. A
   // batching caller supplies it; alone in a project the two coincide.
-  const locationRoot = shared?.locationRoot ?? projectRoot;
+  const locationRoot = shared.locationRoot ?? projectRoot;
   const skillLocation = issueLocation(skillPath, locationRoot);
 
   // A `built` skill is VAT's own output re-read: every read of its tree the OS refuses is the
@@ -1163,10 +651,10 @@ async function validateSkillForPackagingOn(
 
   // Validate frontmatter schema (name format, required fields, etc.)
   if (parseResult.frontmatter) {
-    rawIssues.push(
+    appendAll(rawIssues, [
       ...validateFrontmatterSchema(parseResult.frontmatter, skillLocation),
       ...validateFrontmatterRules(parseResult.frontmatter, skillLocation),
-    );
+    ]);
   } else {
     rawIssues.push(missingFrontmatterIssue(parseResult.frontmatterError, skillLocation));
   }
@@ -1188,7 +676,7 @@ async function validateSkillForPackagingOn(
 
   // Validate files config (requires projectRoot to resolve source paths for
   // directory-source detection — must run after projectRoot is computed).
-  rawIssues.push(...validateFilesConfig(packagingConfig?.files, projectRoot, locationRoot));
+  appendAll(rawIssues, validateFilesConfig(packagingConfig?.files, projectRoot, locationRoot));
 
   // Build resource registry and walk the link graph.
   // Prefer the caller-supplied shared registry (when `vat skills validate` or
@@ -1197,7 +685,7 @@ async function validateSkillForPackagingOn(
   // reuse when the shared registry covers this skill's projectRoot; otherwise
   // fall back to a fresh crawl to avoid leaking resources across roots.
   // A `built` skill sits in output this run wrote inside the project: the project root is then a destination.
-  const { registry, parseRefused } = await registryForSkill(skillPath, projectRoot, foundRoot !== null, shared, context);
+  const { registry, parseRefused } = await registryForSkill(skillPath, projectRoot, shared, context);
 
   const skillResource = registry.getResource(safePath.resolve(skillPath));
   // Only the entries the PACKAGER will actually copy defer a link: an entry pointing
@@ -1210,7 +698,7 @@ async function validateSkillForPackagingOn(
   // calling lane (see SkillValidationSharedContext.projectSkills). Empty when the
   // caller has no project to enumerate — a single-skill audit of a tree with no
   // config — which narrows this lane to the subject's own suite and nothing else.
-  const projectSkills = shared?.projectSkills ?? [];
+  const projectSkills = shared.projectSkills ?? [];
   // ONE resolution per skill, shared by both consumers below (the `files:` filter and
   // the walker's exclude rules), and ONE conventional-suite probe per RUN behind it.
   //
@@ -1228,7 +716,7 @@ async function validateSkillForPackagingOn(
   // A caller that omits `suiteProbe` is claiming this call IS the run (see the field's
   // docstring); the narrowing is written here, at the call site, so it cannot happen by
   // omission inside `resolveTestInputDirs`.
-  const suiteProbe = shared?.suiteProbe ?? conventionalSuiteProbe();
+  const suiteProbe = shared.suiteProbe ?? conventionalSuiteProbe();
   const testInputDirs = resolveTestInputDirs(
     packagingConfig ?? {}, dirname(skillPath), projectSkills, suiteProbe,
   );
@@ -1253,8 +741,8 @@ async function validateSkillForPackagingOn(
   //     gate is what adopters run before that build. Reporting the harmless drop
   //     while staying silent about the fatal zero-match was the asymmetry that
   //     let `vat skills validate` return success on a config that cannot build.
-  rawIssues.push(
-    ...preBuildGlobFindingsToIssues(
+  appendAll(rawIssues, 
+    preBuildGlobFindingsToIssues(
       await collectPreBuildGlobFindings(packagedFiles, projectRoot),
       locationRoot,
     ),
@@ -1277,7 +765,7 @@ async function validateSkillForPackagingOn(
     // A built skill is this run's output: an ignore rule over it (a gitignored `out/`) hides nothing.
     ownOutputDir: context === 'built' ? dirname(skillPath) : undefined,
   };
-  if (shared?.gitTracker !== undefined) {
+  if (shared.gitTracker !== undefined) {
     walkOptions.gitTracker = shared.gitTracker;
   }
   const { bundledResources, bundledAssets, excludedReferences, outsideSkillDirLinks, maxBundledDepth, deferredAssets } = walkLinkGraph(
@@ -1302,13 +790,13 @@ async function validateSkillForPackagingOn(
   //  5. every file the skill reaches whose parse the crawl refused: absent from the
   //     registry, the walk found it on disk and bundled it as an opaque asset, its
   //     links unwalked and nothing in it checked
-  rawIssues.push(
+  appendAll(rawIssues, [
     ...parseRefusedIssues(parseRefused, [skillPath, ...bundledAssets], locationRoot),
     ...walkerExclusionsToIssues(excludedReferences, locationRoot),
     ...testInputLinkIssues(excludedReferences, testInputDirs, projectRoot, locationRoot),
     ...deferredAssetsToIssues(deferredAssets, locationRoot),
     ...outsideSkillDirLinksToIssues(outsideSkillDirLinks, locationRoot),
-  );
+  ]);
 
   const fileCount = bundledFiles.length + 1; // +1 for SKILL.md itself
   const maxLinkDepth = maxBundledDepth;
@@ -1369,7 +857,7 @@ async function validateSkillForPackagingOn(
   // which is what this detector wants, since the declaration it looks for can be
   // written either side of the fence.
   if (parseResult.frontmatter) {
-    rawIssues.push(...detectUndeclaredCrossSkillAuth(parseResult.frontmatter, parseResult.content, skillLocation));
+    appendAll(rawIssues, detectUndeclaredCrossSkillAuth(parseResult.frontmatter, parseResult.content, skillLocation));
   }
 
   // Filter out source-only codes when validating built output
@@ -1407,14 +895,6 @@ async function validateSkillForPackagingOn(
   };
 }
 
-/** {@link validateSkillForPackaging}'s arguments after the SKILL.md. */
-interface PackagingValidationCall {
-  readonly resourcesValidation: ValidationConfig;
-  readonly packagingConfig: SkillPackagingConfig | undefined;
-  readonly context: 'source' | 'built';
-  readonly shared: SkillValidationSharedContext | undefined;
-}
-
 /** How a file not admitted is resolved: by the project's `resources.validation`, matched at its project-relative path. */
 interface NotAdmittedPolicy {
   readonly resourcesValidation: ValidationConfig;
@@ -1430,12 +910,12 @@ interface NotAdmittedPolicy {
 function runFrameworkFor(
   issues: ValidationIssue[],
   packagingConfig: SkillPackagingConfig | undefined,
-  shared: SkillValidationSharedContext | undefined,
+  shared: SkillValidationSharedContext,
   policy: NotAdmittedPolicy,
 ): ReturnType<typeof runSingleUnitValidation> {
   const { rest, notAdmitted } = partitionNotAdmitted(issues, policy.resourcesValidation, policy.roots);
   const validationConfig = packagingConfig?.validation ?? {};
-  const framework = shared?.allowLedger === undefined
+  const framework = shared.allowLedger === undefined
     ? runSingleUnitValidation(rest, validationConfig)
     : runValidationFramework(rest, validationConfig, shared.allowLedger);
   const emitted = [...framework.emitted, ...notAdmitted];
@@ -1484,7 +964,7 @@ function parseLimitResult(
   skillPath: string,
   limit: ValidationIssue,
   packagingConfig: SkillPackagingConfig | undefined,
-  shared: SkillValidationSharedContext | undefined,
+  shared: SkillValidationSharedContext,
   policy: NotAdmittedPolicy,
 ): PackagingValidationResult {
   const framework = runFrameworkFor([limit], packagingConfig, shared, policy);

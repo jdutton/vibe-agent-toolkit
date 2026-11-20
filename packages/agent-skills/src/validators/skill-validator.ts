@@ -34,6 +34,7 @@ import {
   pathPresent,
   relativeEscapesRoot,
   safePath,
+  appendAll,
 } from '@vibe-agent-toolkit/utils';
 
 
@@ -158,12 +159,12 @@ async function validateSkillOn(options: ValidateOptions, dispatcher: ParseDispat
   // smell that looks at body prose requiring tokens the description omits,
   // and the gray-zone second-person-opener heuristic from the plugin-dev
   // cross-walk (info severity).
-  issues.push(
+  appendAll(issues, [
     ...validateFrontmatterSchema(frontmatter, skillLocation),
     ...validateFrontmatterRules(frontmatter, skillLocation),
     ...detectUndeclaredCrossSkillAuth(frontmatter, parseResult.body, skillLocation),
     ...detectNonImperativeBody(parseResult.body, skillLocation),
-  );
+  ]);
 
   // Validate warning-level rules (skill-specific)
   validateWarningRules(content, lineCount, skillLocation, issues);
@@ -172,7 +173,7 @@ async function validateSkillOn(options: ValidateOptions, dispatcher: ParseDispat
   // surface each observation as an issue (severity comes from CODE_REGISTRY).
   const { evidence: rootEvidence, observations: rootObservations } =
     runCompatDetectors(content, skillPath, locationRoot, frontmatter);
-  allEvidence.push(...rootEvidence);
+  appendAll(allEvidence, rootEvidence);
   for (const obs of rootObservations) {
     issues.push(observationToIssue(obs, skillLocation));
   }
@@ -204,7 +205,7 @@ async function validateSkillOn(options: ValidateOptions, dispatcher: ParseDispat
     locationRoot,
     options.side,
   );
-  issues.push(...bundledResourceIssues);
+  appendAll(issues, bundledResourceIssues);
 
   // Unreferenced file detection
   if (options.checkUnreferencedFiles) {
@@ -447,7 +448,7 @@ async function traverseLinks(
     }
 
     const processed = processFileLinks(parseResult, currentPath, skillDir, locationRoot, issues, visited);
-    queue.push(...processed.newPaths);
+    appendAll(queue, processed.newPaths);
 
     // Compat capability detection for linked files (root SKILL.md handled by
     // the top-level invocation). Re-read raw file content so fenced code
@@ -456,8 +457,8 @@ async function traverseLinks(
       const linkedContent = fs.readFileSync(currentPath, 'utf-8');
       const { evidence: linkedEvidence, observations: linkedObservations } =
         runCompatDetectors(linkedContent, currentPath, locationRoot, parseResult.frontmatter);
-      allEvidence.push(...linkedEvidence);
-      issues.push(...linkedObservations.map(obs => observationToIssue(obs, issueLocation(currentPath, locationRoot))));
+      appendAll(allEvidence, linkedEvidence);
+      appendAll(issues, linkedObservations.map(obs => observationToIssue(obs, issueLocation(currentPath, locationRoot))));
       // Same detector on each linked file, mirroring the per-bundled-file call
       // in packaging-validator.ts. Without it the two lanes disagree about what
       // they scan: a skill naming its tools bare in a referenced resource file

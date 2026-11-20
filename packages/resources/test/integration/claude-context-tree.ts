@@ -27,6 +27,7 @@ import { afterAll, beforeAll } from 'vitest';
 
 import { buildClaudeContextPopulation } from '../../src/projection/claude-context-population.js';
 import type { Projection } from '../../src/projection/projection.js';
+import { inOwnRun } from '../helpers/population-run.js';
 import { plantTree, razeTree } from '../helpers/temp-corpus.js';
 
 /** A populated tree, and the temp directory it lives in. */
@@ -69,7 +70,7 @@ export async function buildClaudeContextTree(
     await gitTracker.initialize();
   }
 
-  const { projection } = await buildClaudeContextPopulation({
+  const { projection } = await inOwnRun(buildClaudeContextPopulation, {
     root: dir,
     ...(gitTracker !== undefined && { gitTracker }),
   });

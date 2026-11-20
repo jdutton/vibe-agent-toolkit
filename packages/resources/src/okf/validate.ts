@@ -22,7 +22,7 @@
  */
 
 import type { Severity } from '@vibe-agent-toolkit/schema';
-import { forEachInOrder, FsLookupCache, safePath } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, FsLookupCache, safePath, appendAll } from '@vibe-agent-toolkit/utils';
 
 import type { ParseResult } from '../link-parser.js';
 import { parseRefusedEntry } from '../not-admitted.js';
@@ -206,7 +206,7 @@ async function inspectDocument(
   const drafts = await linkFindings(document, absolutePath, parsed.links, root, index);
 
   if (!reserved) {
-    drafts.push(...conceptFindings(document, parsed));
+    appendAll(drafts, conceptFindings(document, parsed));
     return { drafts, hardFindings: [] };
   }
 
@@ -214,14 +214,14 @@ async function inspectDocument(
   // is the bare string. Any other index.md carries at least one separator.
   if (document === 'index.md') {
     const inspection = indexFindings(document, parsed, true, specVersion);
-    drafts.push(...inspection.drafts);
+    appendAll(drafts, inspection.drafts);
     return inspection.declaredOkfVersion === undefined
       ? { drafts, hardFindings: [] }
       : { drafts, hardFindings: [], declaredOkfVersion: inspection.declaredOkfVersion };
   }
 
   if (document.endsWith('/index.md')) {
-    drafts.push(...indexFindings(document, parsed, false, specVersion).drafts);
+    appendAll(drafts, indexFindings(document, parsed, false, specVersion).drafts);
   }
 
   return { drafts, hardFindings: [] };
@@ -393,8 +393,8 @@ export async function validateOkfBundle(
   await withParseDispatcher((dispatcher) =>
     forEachInOrder(documents, async ([document, reserved]) => {
       const inspection = await inspectDocument(root, document, reserved, options.specVersion, index, dispatcher);
-      drafts.push(...inspection.drafts);
-      hardFindings.push(...inspection.hardFindings);
+      appendAll(drafts, inspection.drafts);
+      appendAll(hardFindings, inspection.hardFindings);
       if (inspection.parseRefused !== undefined) parseRefused.push(inspection.parseRefused);
       declaredOkfVersion ??= inspection.declaredOkfVersion;
     }),

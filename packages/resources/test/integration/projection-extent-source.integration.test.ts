@@ -10,6 +10,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import { EXTENT_SOURCE_ENV, EXTENT_SOURCE_GIT, type CrawlSourceKind } from '../../src/projection/crawl-source.js';
 import { buildResourcePopulation } from '../../src/projection/resource-population.js';
+import { inOwnRun } from '../helpers/population-run.js';
 import { setupSubdirTestSuite } from '../test-helpers.js';
 
 const suite = setupSubdirTestSuite('resource-extent-source-');
@@ -18,7 +19,7 @@ const suite = setupSubdirTestSuite('resource-extent-source-');
 async function extentSourceOver(tree: { repository: boolean }): Promise<CrawlSourceKind> {
   await writeFile(safePath.join(suite.tempDir, 'a.md'), '# A\n', 'utf-8');
   if (tree.repository) runGitOrThrow(['init', '--quiet'], { cwd: suite.tempDir });
-  const { extentSource } = await buildResourcePopulation({ outputs: [], root: suite.tempDir });
+  const { extentSource } = await inOwnRun(buildResourcePopulation, { outputs: [], unreadable: 'refuse', root: suite.tempDir });
   return extentSource;
 }
 

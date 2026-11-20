@@ -180,6 +180,11 @@ function pluginBuildCase(): VerbCase {
     },
     units: [marketplaceDir],
     sources: (r) => [...projectSources(r), ...projectSources(r, DISTRIBUTION_FILES), safePath.join(r.project, 'dist', 'skills')],
+    // The build first checks the pool skill IS built: "not there" is INPUT_UNREADABLE about the
+    // skill, whichever component of its path made it absent (`dist` is also the marketplace's parent,
+    // so the table alone calls an absent `dist` the destination's).
+    // Compared as text with the path the refusal names; never read.
+    presencePreflight: (r) => ({ path: `${r.project}/dist/skills/${SKILL}`, refusal: 'INPUT_UNREADABLE' }),
   });
 }
 

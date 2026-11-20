@@ -133,25 +133,11 @@
                 "root": {
                   "type": "string"
                 },
-                "lane": {
+                "extentSource": {
                   "type": "string",
                   "enum": [
-                    "walk",
-                    "projection"
-                  ]
-                },
-                "extentSource": {
-                  "anyOf": [
-                    {
-                      "type": "string",
-                      "enum": [
-                        "git",
-                        "filesystem"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
+                    "git",
+                    "filesystem"
                   ]
                 },
                 "collections": {
@@ -202,7 +188,6 @@
               },
               "required": [
                 "root",
-                "lane",
                 "extentSource",
                 "collections"
               ],

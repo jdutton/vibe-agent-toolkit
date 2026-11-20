@@ -16,7 +16,13 @@
  *
  * // Add resources
  * await registry.addResource('./README.md');
- * await registry.crawl({ outputs: [], baseDir: './docs', unreadable: 'refuse' });
+ * await registry.crawl({
+ *   outputs: [],
+ *   baseDir: './docs',
+ *   unreadable: 'refuse',
+ *   populationSource: run.population.source, // the run's population (ResourcePopulationSource)
+ *   ignoredRefusals: 'record',
+ * });
  *
  * // Validate all links
  * const result = await registry.validate();
@@ -46,7 +52,6 @@ export {
   // this is the one export and not an invitation.
   unparsedResourceFacts,
   type CrawlOptions,
-  type RegistryUnreadablePolicy,
   type DuplicateIdCollision,
   type UnreadableResource,
   type ParseRefusedResource,
@@ -944,9 +949,10 @@ export { BUILTIN_CHECK_NAMES } from './projection/builtin-check-names.js';
 export {
   buildResourcePopulation,
   buildResourceProjection,
-  CRAWL_LANES,
   type ResourceEnumeration,
   type CrawlPopulation,
+  type IgnoredRefusals,
+  type PopulationMembers,
   type ResourcePopulationSource,
 } from './projection/resource-population.js';
 
@@ -959,6 +965,7 @@ export {
   type PopulationRun,
   type RunPopulationOptions,
 } from './projection/run-population.js';
+export type { PopulationUnreadablePolicy } from './projection/crawl-source.js';
 
 // The git extent (zones §2): tracked ∪ (untracked ∧ ¬ignored) — what a clone
 // sees. Its disagreement with the filesystem extent over a gitignored path is

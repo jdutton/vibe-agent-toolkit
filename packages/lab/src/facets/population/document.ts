@@ -30,7 +30,7 @@ import type { PopulationEntry } from './types.js';
  * are this facet's business. Modelling them would make an unrelated addition to
  * the subject's output a refusal here.
  *
- * `lane` and `extentSource` EXTEND the shared `harness/lane.ts` schema, so this
+ * `extentSource` EXTENDS the shared `harness/lane.ts` schema, so this
  * facet and `io` share one definition of an arm — and a malformed arm is a
  * refusal here (a population is nothing but the subject's claim), where `io`
  * reads it as `null`.
@@ -143,7 +143,6 @@ export function readPopulationDocument(stdout: string): PopulationDocumentResult
     ok: true,
     document: {
       root: document.root,
-      lane: arm.lane,
       extentSource: arm.extentSource,
       files: sortByPath(document.files),
     },

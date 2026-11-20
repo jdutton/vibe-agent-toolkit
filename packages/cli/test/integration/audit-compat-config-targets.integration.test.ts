@@ -17,6 +17,7 @@ import fs from 'node:fs';
 
 import type { SkillPackagingConfig, ValidationResult } from '@vibe-agent-toolkit/agent-skills';
 import type { CompatibilityResult } from '@vibe-agent-toolkit/claude-marketplace';
+import { withParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -97,13 +98,14 @@ async function runAndGetVerdicts(
   const vatContext: VATProjectContext = {
     skillConfigs: new Map(skillConfigs.map(([p, c]) => [safePath.resolve(p), c])),
   };
-  const compatMap = await runCompatAnalysis(
+  const compatMap = await withParseDispatcher((dispatcher) => runCompatAnalysis(
     [makePluginResult(pluginDir)],
     silentLogger,
     pluginDir,
+    dispatcher,
     undefined,
     vatContext,
-  );
+  ));
   const block = compatMap.get(pluginDir)?.compat;
   // The analyzer's result, or `undefined` when the entry says it could not run.
   const compat = block !== undefined && 'verdicts' in block ? block : undefined;

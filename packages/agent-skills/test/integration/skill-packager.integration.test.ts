@@ -5,8 +5,7 @@ import { dirname } from 'node:path';
 import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { packageSkill, type PackageSkillOptions } from '../../src/skill-packager.js';
-import { createFrontmatter, packageInPlace, setupTempDir } from '../test-helpers.js';
+import { createFrontmatter, packageInPlace, packageSkillInRun, setupTempDir, type TestPackageSkillOptions } from '../test-helpers.js';
 
 const { getTempDir } = setupTempDir('skill-packager-');
 
@@ -29,11 +28,11 @@ const PACKAGE_JSON = 'package.json';
  */
 async function packageSkillForTest(
   skillPath: string,
-  options: Omit<PackageSkillOptions, 'outputPath'> & { outputPath?: string } = {}
+  options: Omit<TestPackageSkillOptions, 'outputPath'> & { outputPath?: string } = {}
 ) {
   const tempDir = dirname(skillPath);
   const defaultOutputPath = safePath.join(tempDir, 'output');
-  return packageSkill(skillPath, {
+  return packageSkillInRun(skillPath, {
     ...options,
     outputPath: options.outputPath ?? defaultOutputPath,
   });
@@ -122,7 +121,7 @@ async function createSkillWithLink(
 async function createAndPackageSkill(
   tempDir: string,
   skillContent: string,
-  options: Omit<PackageSkillOptions, 'outputPath'> = {}
+  options: Omit<TestPackageSkillOptions, 'outputPath'> = {}
 ) {
   const skillPath = safePath.join(tempDir, 'SKILL.md');
   await writeFile(skillPath, skillContent);
@@ -207,7 +206,7 @@ describe('skill-packager: extractSkillMetadata', () => {
       `${createFrontmatter({ description: 'No name' })}\n\n# Test Skill`
     );
 
-    const result = await packageSkill(skillPath, { formats: [], outputPath });
+    const result = await packageSkillInRun(skillPath, { formats: [], outputPath });
     expect(result.skill.name).toBe('Test Skill');
   });
 
@@ -221,7 +220,7 @@ describe('skill-packager: extractSkillMetadata', () => {
       `${createFrontmatter({ description: 'No name or H1' })}\n\nSome content without H1`
     );
 
-    const result = await packageSkill(skillPath, { formats: [], outputPath });
+    const result = await packageSkillInRun(skillPath, { formats: [], outputPath });
     expect(result.skill.name).toBe('my-custom-skill');
   });
 
@@ -674,7 +673,7 @@ describe('skill-packager: output path determination', () => {
     );
 
     // Use packageSkill directly (not helper) to test default path detection
-    const result = await packageSkill(skillPath, { formats: [] });
+    const result = await packageSkillInRun(skillPath, { formats: [] });
 
     // Should be <package-root>/dist/skills/<skill-name>
     expect(result.outputPath).toContain('dist');
@@ -1033,7 +1032,7 @@ async function setupUnreferencedFixture(
 async function packageOrphanFixture(
   skillPath: string,
   outputPath: string,
-  validation?: PackageSkillOptions['validation'],
+  validation?: TestPackageSkillOptions['validation'],
 ) {
   return packageInPlace(skillPath, {
     outputPath,
@@ -1123,7 +1122,7 @@ describe('skill-packager: post-build integrity', () => {
       'This skill has no links: the payload is resolved by code at runtime.',
     ].join('\n'));
 
-    const result = await packageSkill(skillPath, {
+    const result = await packageSkillInRun(skillPath, {
       outputPath: safePath.join(rootDir, 'out', 'files-payload-test'),
       formats: ['directory'],
       rewriteLinks: true,
@@ -1150,7 +1149,7 @@ describe('skill-packager: post-build integrity', () => {
     const outputPathStrict = safePath.join(tempDir, 'output-depth-error');
 
     // Default: LINK_DROPPED_BY_DEPTH is a warning, non-blocking
-    const warn = await packageSkill(skillPath, {
+    const warn = await packageSkillInRun(skillPath, {
       outputPath,
       linkFollowDepth: 0,
       formats: ['directory'],

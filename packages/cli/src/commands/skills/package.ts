@@ -14,12 +14,13 @@ import {
   ZipSizeLimitError,
   type PackageSkillOptions,
   type PackagingTarget,
+  type RunSkillRegistries,
   type SkillPackageChecksFailedError,
   type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { ParseResult } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Gate, type Report, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, followedStatSync, issueLocation, isVatError, requireFollowedStatSync, safePath, toForwardSlash, withFsFault } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, followedStatSync, issueLocation, isVatError, requireFollowedStatSync, safePath, toForwardSlash, withFsFault, appendAll } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
@@ -27,6 +28,7 @@ import { endWithRefusal, endWithReport, leftoverIssuesOf, leftoverIssuesOfWarnin
 import { collectPostBuildIssues, formatIssueLines, formatIssueSetHeading } from '../../utils/issue-rendering.js';
 import { createLogger } from '../../utils/logger.js';
 import { readInputFile, requireProjectRoot } from '../../utils/project-root-policy.js';
+import { runSkillRegistries, withRunContext } from '../../utils/resource-loader.js';
 import { resolveSkillPath } from '../skill/review.js';
 
 import { packagingFailedIssue } from './build.js';
@@ -307,7 +309,7 @@ export function formatSkillValidationLines(validationResult: ValidationResult): 
 
   const lines = [headline, `   Summary: ${validationResult.description}\n`];
   for (const issue of issues) {
-    lines.push(...formatIssueLines(issue, '  '));
+    appendAll(lines, formatIssueLines(issue, '  '));
   }
   lines.push('');
   return lines;
@@ -461,17 +463,17 @@ function resolveTarget(rawTarget: string): PackagingTarget {
 async function packageAndReport(
   skillPath: string,
   options: SkillsPackageCommandOptions,
-  target: PackagingTarget,
-  formats: readonly PackageFormat[],
+  packaging: { readonly target: PackagingTarget; readonly formats: readonly PackageFormat[]; readonly registries: RunSkillRegistries },
   validation: ValidationResult,
   locationRoot: string,
   logger: ReturnType<typeof createLogger>
 ): Promise<Report<SkillsPackageData>> {
   const packageOptions: PackageSkillOptions = {
-    formats: [...formats],
+    formats: [...packaging.formats],
     rewriteLinks: resolveRewriteLinks(options),
     outputPath: options.output,
-    target,
+    target: packaging.target,
+    registries: packaging.registries,
     ...(options.force === true && { replaceExistingOutput: true }),
   };
   // Only set when explicitly supplied — packageSkill() owns the fallback for
@@ -564,7 +566,7 @@ async function runPackage(
   const skillPath = resolvePackageSource(skillPathArg);
   // Spec §7: `vat skills package` requires a projectRoot — fails fast at
   // the CLI boundary if no config or git ancestor exists.
-  requireProjectRoot(process.cwd(), 'vat skills package');
+  const projectRoot = requireProjectRoot(process.cwd(), 'vat skills package');
 
   logger.info(`📦 Packaging skill: ${skillPathArg}`);
   const target = resolveTarget(options.target ?? DEFAULT_TARGET);
@@ -581,7 +583,10 @@ async function runPackage(
     const skill = validation.metadata?.name ?? basename(skillDir);
     return buildSkillsPackageReport({ validation, data: { skill, version: null, outputPath: null, dryRun: options.dryRun === true }, runFindings: [] });
   }
-  return packageAndReport(skillPath, options, target, formats, validation, locationRoot, logger);
+  // One run for the package, rooted at the project root this command required.
+  return withRunContext({ root: projectRoot }, (run) =>
+    packageAndReport(skillPath, options, { target, formats, registries: runSkillRegistries(run) }, validation, locationRoot, logger),
+  );
 }
 
 async function packageCommand(

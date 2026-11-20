@@ -41,6 +41,7 @@ import type {
 } from '../src/projection/store.js';
 import type { CollectionConfig } from '../src/schemas/project-config.js';
 
+import { inOwnRun } from './helpers/population-run.js';
 import { setupTempCorpus } from './helpers/temp-corpus.js';
 
 /** A fixed hash, so the tree half of the key is constant across every arm. */
@@ -139,7 +140,7 @@ async function storeKeyFor(
   const registry = new ContributorRegistry();
   registry.register(new FilesystemExtentContributor(() => crawlSourceFor(fixture.root(), []), 'deferred'));
 
-  await populate({
+  await inOwnRun(populate, {
     root: fixture.root(),
     registry,
     contentParsing: CONTENT_PARSING_SKIP,
@@ -271,7 +272,7 @@ async function ambientKeysAcrossBothPasses(
 ): Promise<string[]> {
   const store = new KeyRecordingStore(true);
 
-  await buildClaudeContextPopulation({
+  await inOwnRun(buildClaudeContextPopulation, {
     root: twoPass.root(),
     cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH },
     ...(collections !== undefined && { collections }),

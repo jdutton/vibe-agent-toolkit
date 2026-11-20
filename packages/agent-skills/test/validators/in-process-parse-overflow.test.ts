@@ -23,14 +23,14 @@ import { writeFileSync } from 'node:fs';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { activeErrorsOf, validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
+import { activeErrorsOf } from '../../src/validators/packaging-validator.js';
 import { detectMissingReferencedPaths } from '../../src/validators/referenced-path-missing.js';
 import {
   createSkillContent,
   createTransitiveSkillStructure,
   setupTempDir,
   validateSkillWithTransitiveChecking,
-} from '../test-helpers.js';
+ validateForPackagingInRun } from '../test-helpers.js';
 
 const { getTempDir } = setupTempDir('in-process-parse-overflow-');
 
@@ -81,7 +81,7 @@ describe('validateSkillForPackaging (the build / skills-validate lane)', () => {
   it('reports a SKILL.md that overflows the parse as an error finding instead of throwing', async () => {
     const { skillPath } = createTransitiveSkillStructure(getTempDir(), {}, DEEP_FRONTMATTER);
 
-    const result = await validateSkillForPackaging(skillPath, {});
+    const result = await validateForPackagingInRun(skillPath, {});
 
     const found = activeErrorsOf(result).filter((issue) => issue.code === LIMIT);
     expect(found).toHaveLength(1);
@@ -97,7 +97,7 @@ describe('detectMissingReferencedPaths (the packaged referenced-path check)', ()
     writeFileSync(deepPath, DEEP_FRONTMATTER);
     writeFileSync(plainPath, '# Plain\n\nRun `scripts/setup.sh` first.\n');
 
-    const issues = await detectMissingReferencedPaths([deepPath, plainPath], skillDir, 'claude-code');
+    const issues = await detectMissingReferencedPaths([deepPath, plainPath], skillDir, 'claude-code', { dispatcher: undefined });
 
     expect(issues.map((issue) => [issue.code, issue.severity, issue.location])).toEqual([
       [LIMIT, 'error', 'deep.md'],

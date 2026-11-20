@@ -10,6 +10,7 @@
 
 
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { appendAll } from '@vibe-agent-toolkit/utils';
 
 import { AgentSkillFrontmatterSchema } from '../schemas/agent-skill-frontmatter.js';
 
@@ -114,16 +115,16 @@ export function validateFrontmatterRules(
 
 	// Validate name field
 	if (frontmatter['name'] && typeof frontmatter['name'] === 'string') {
-		issues.push(...validateNameRules(frontmatter['name']));
+		appendAll(issues, validateNameRules(frontmatter['name']));
 	}
 
 	// Validate description field
 	if (frontmatter['description'] && typeof frontmatter['description'] === 'string') {
-		issues.push(...validateDescriptionRules(frontmatter['description']));
+		appendAll(issues, validateDescriptionRules(frontmatter['description']));
 	}
 
 	// Detect non-standard frontmatter keys (agentskills.io + Claude Code allowed set)
-	issues.push(...detectExtraFrontmatterFields(frontmatter));
+	appendAll(issues, detectExtraFrontmatterFields(frontmatter));
 
 	return anchoredTo(location, issues);
 }

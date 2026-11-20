@@ -45,6 +45,7 @@ import {
   type SkillTarget,
   toForwardSlash,
   type TreePlan,
+  appendAll,
 } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
@@ -249,7 +250,7 @@ async function withResolvedSource<T>(source: string, run: InstallRun, work: (res
 /** Run `work` on a source resolved into temp directories, disposing of them after: one that stays is a warning in the run's leftovers. */
 async function inResolvedTempDirs<T>(resolved: ResolvedSource, run: InstallRun, work: (resolved: ResolvedSource) => Promise<T>): Promise<T> {
   const { value, leftovers } = await withResolvedTempDirs(resolved.tempDirs, () => work(resolved));
-  run.leftovers.push(...leftovers);
+  appendAll(run.leftovers, leftovers);
   return value;
 }
 
@@ -357,7 +358,7 @@ async function installBatch(skills: readonly PlannedSkill[], side: FsSide, optio
   for (const line of plan.describe()) run.logger.info(`   ${prefix}${line}`);
   if (options.dryRun !== true) {
     const { warnings } = await applyTreePlan(plan);
-    run.leftovers.push(...warnings.map(({ message, path }) => leftoverIssue(message, path)));
+    appendAll(run.leftovers, warnings.map(({ message, path }) => leftoverIssue(message, path)));
   }
   return plan.changes.map((change) => change.existing !== 'absent');
 }

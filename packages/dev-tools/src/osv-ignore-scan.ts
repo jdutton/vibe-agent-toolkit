@@ -20,7 +20,7 @@
 import { readFileSync } from 'node:fs';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, appendAll } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 import { PROJECT_ROOT, isEntrypoint, log } from './common.js';
@@ -118,7 +118,7 @@ export function osvScanFindings(report: ScanReport, registerText: string, accept
   for (const id of ids) {
     if (!matched.has(id)) all.push(`osv-scanner.toml ignores ${id}, which the scan no longer reports against bun.lock: delete the entry and its ACCEPTED_ADVISORIES row`);
   }
-  for (const entry of entries) all.push(...expiryFindings(entry, now));
+  for (const entry of entries) appendAll(all, expiryFindings(entry, now));
   return all;
 }
 

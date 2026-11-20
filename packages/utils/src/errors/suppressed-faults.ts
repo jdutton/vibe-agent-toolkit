@@ -18,6 +18,8 @@
  * module share one record (the reason `VatError` brands with `Symbol.for`).
  */
 
+import { appendAll } from '../append-all.js';
+
 const REGISTRY_KEY = Symbol.for('vat.suppressed-faults');
 
 /** Bound on the cause walk: a malformed chain must not hang an error path. */
@@ -62,7 +64,7 @@ export function suppressedFaultsOf(error: unknown): readonly unknown[] {
   let link: unknown = error;
   for (let depth = 0; depth < MAX_CAUSE_DEPTH && typeof link === 'object' && link !== null && !seen.has(link); depth++) {
     seen.add(link);
-    faults.push(...(registry().get(link) ?? []));
+    appendAll(faults, (registry().get(link) ?? []));
     link = (link as { cause?: unknown }).cause;
   }
   return faults;

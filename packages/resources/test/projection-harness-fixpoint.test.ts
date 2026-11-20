@@ -28,6 +28,7 @@ import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { ClosureNonConvergenceError, populate } from '../src/projection/merge.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
+import { inOwnRun } from './helpers/population-run.js';
 import { setupSubdirTestSuite } from './test-helpers.js';
 
 const suite = setupSubdirTestSuite('harness-fixpoint-');
@@ -47,7 +48,7 @@ function populateChain(maxIterations?: number) {
   const registry = new ContributorRegistry();
   registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
   registry.register(new ClaudeImportExtentContributor(START));
-  return populate({
+  return inOwnRun(populate, {
     root: suite.tempDir,
     registry,
     parameters: { [claudeImportContributorId(START)]: claudeImportExtentDeclaration(START) as unknown as JsonValue },

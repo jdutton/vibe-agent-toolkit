@@ -74,13 +74,13 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
-import { type ParseDispatcher, withParseDispatcher } from '../parse-dispatcher.js';
+import type { ParseDispatcher } from '../parse-dispatcher.js';
 import type { CollectionConfig } from '../schemas/project-config.js';
 import type { RealizationConditionRow, ResourceRealizationRow } from '../schemas/projection-resources.js';
 import type { JsonValue } from '../schemas/projection-shared.js';
 
 import { PARSE_REFUSAL_BLOB_CODES, populateBlobs, storableBlobFacts } from './blob-population.js';
-import { POPULATION_PARSE_LIMITS, RunContentCache } from './content-cache.js';
+import { POPULATION_PARSE_LIMITS } from './content-cache.js';
 import type { ContributorRegistry, ExtentContribution, ExtentContributor } from './contributor.js';
 import {
   declinedSymlinkRowsStillHold,
@@ -181,13 +181,12 @@ export interface PopulateOptions {
   root: string;
   /**
    * The run this population reads and parses through: its content cache and its
-   * dispatcher. A verb's population passes its run's, because a population that
-   * read through its own would read, key and parse every file a second time
-   * beside the run's other lanes (content-keying-and-git.md, "Decision: content
-   * identity is per source", rule 4). Omitted, the population reads through a
-   * run of its own, for a caller with no other lane.
+   * dispatcher. Required, because a population that read through its own would
+   * read, key and parse every file a second time beside the run's other lanes
+   * (content-keying-and-git.md, "Decision: content identity is per source",
+   * rule 4). A caller with no other lane opens one with `withPopulationRun`.
    */
-  run?: PopulationRun | undefined;
+  run: PopulationRun;
   /** The contributors to run, already partitioned by stratum. */
   registry: ContributorRegistry;
   /**
@@ -330,13 +329,13 @@ export interface PopulateOptions {
  * @returns A spreadable object carrying only the oracles that are actually present
  */
 export function populationOracles(options: {
-  run?: PopulationRun | undefined;
+  run: PopulationRun;
   gitTracker?: GitTracker | undefined;
   cache?: PopulationCache | undefined;
   collections?: Readonly<Record<string, CollectionConfig>> | undefined;
 }): Pick<PopulateOptions, 'run' | 'gitTracker' | 'cache' | 'collections'> {
   return {
-    ...(options.run !== undefined && { run: options.run }),
+    run: options.run,
     ...(options.gitTracker !== undefined && { gitTracker: options.gitTracker }),
     ...(options.cache !== undefined && { cache: options.cache }),
     ...(options.collections !== undefined && { collections: options.collections }),
@@ -518,7 +517,7 @@ export interface PopulateResult {
 export interface TreePopulationOptions {
   root: string;
   /** The run this population reads and parses through — see {@link PopulateOptions.run}. */
-  run?: PopulationRun | undefined;
+  run: PopulationRun;
   gitTracker?: GitTracker | undefined;
   cache?: PopulationCache | undefined;
   collections?: Readonly<Record<string, CollectionConfig>> | undefined;
@@ -652,12 +651,7 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
   // re-run's, every harness pass's memory-file reads, and every other lane of the
   // run share its one pool, which the run's owner shuts down. Built lazily: a
   // run that parses nothing starts no worker.
-  const run = options.run;
-  const projection = run === undefined
-    ? await withParseDispatcher(
-      (dispatcher) => deriveProjection(options, { parseContent, routing, dispatcher }, new RunContentCache()),
-    )
-    : await deriveProjection(options, { parseContent, routing, dispatcher: run.dispatcher }, run.content);
+  const projection = await deriveProjection(options, { parseContent, routing, dispatcher: options.run.dispatcher });
   const stored = await writeCachedProjection(options, rootId, parseContent, projection, routing);
   return { projection, outcome: populationOutcome(stored, storeMissFor(cached.missed, projection)) };
 }
@@ -689,7 +683,7 @@ interface DerivationRun {
  * @param run - The run's parse decision, routing and dispatcher
  * @returns The frozen projection
  */
-async function deriveProjection(options: PopulateOptions, run: DerivationRun, contentCache: RunContentCache): Promise<Projection> {
+async function deriveProjection(options: PopulateOptions, run: DerivationRun): Promise<Projection> {
   // Full derivation, every time it runs, until the incremental extent lands (ADR
   // register: full extent derivation is a counted cost).
   countWork('extent.derived', 1);
@@ -705,7 +699,7 @@ async function deriveProjection(options: PopulateOptions, run: DerivationRun, co
     gitTracker: options.gitTracker,
     // Held to POPULATION_PARSE_LIMITS, the cap the dispatcher runs under, so a file a parser would
     // refuse by size is refused before it is read.
-    contentCache,
+    contentCache: options.run.content,
     mimeResolver: routing,
   });
 

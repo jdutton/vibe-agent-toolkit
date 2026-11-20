@@ -10,7 +10,6 @@ import { normalizedTmpdir, normalizePath, safePath } from '@vibe-agent-toolkit/u
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createLogger } from '../../src/utils/logger.js';
-import { publishedPopulation } from '../../src/utils/resource-loader.js';
 import { loadResourcesInRun } from '../helpers/in-run.js';
 
 const CONFIG_FILE = 'vibe-agent-toolkit.config.yaml';
@@ -148,11 +147,11 @@ describe('loadResourcesWithConfig (integration test)', () => {
   });
 
   describe('with a pathArg outside the project root', () => {
-    it('walks it, and its population says the walk answered: the source declined a foreign base', async () => {
-      // The projection source is bound to the project root; a crawl based
-      // anywhere else is declined by the registry's root guard and walked. This
-      // is the declined route `vat resources validate` publishes as `null`; the
-      // CLI cannot reach it, because it discovers the root FROM the path.
+    it('enumerates it for that root, and its population says the run derived it', async () => {
+      // The run's population source is homed on the project root; a crawl based
+      // anywhere else is enumerated for that root, never declined and never
+      // walked, so its population is a real outcome. The CLI cannot reach this
+      // route, because it discovers the root FROM the path.
       const outside = safePath.join(testDir, 'outside');
       await mkdir(outside, { recursive: true });
       await writeFile(safePath.join(outside, 'elsewhere.md'), '# Elsewhere\n');
@@ -160,8 +159,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
       const result = await loadResourcesInRun(outside, projectDir, logger);
 
       expectSingleResource(result.registry.getAllResources(), 'Elsewhere');
-      expect(result.population).toEqual({ lane: 'walk' });
-      expect(publishedPopulation(result.population)).toBeNull();
+      expect(result.population).toMatchObject({ outcome: { population: 'derived' }, extentSource: 'filesystem' });
     });
   });
 

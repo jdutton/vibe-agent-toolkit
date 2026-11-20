@@ -17,7 +17,7 @@ import {
   type Report,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowing, everyInOrder, everywhere, findConfigFile, mapConcurrentFailingInOrder, mapInOrder, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, everyInOrder, everywhere, findConfigFile, mapConcurrentFailingInOrder, mapInOrder, pathPresent, safePath, appendAll } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { marksOperandRefusalByHand } from '../command-tree.js';
@@ -178,7 +178,7 @@ async function collectShippedSkillDirs(marketplacesDir: string): Promise<string[
     if (!shippedPresent(pluginsDir, marketplacesDir)) return [];
     return collectPluginSkillDirs(pluginsDir, marketplacesDir);
   });
-  skillDirs.push(...perMarketplace.flat());
+  appendAll(skillDirs, perMarketplace.flat());
 
   return skillDirs;
 }
@@ -235,7 +235,7 @@ export async function checkShippedPluginSkillLinks(cwd: string): Promise<Report<
 
   // One skill at a time: each check already reads its files with bounded
   // concurrency, and an outer fan-out would multiply that bound.
-  const perSkill = await mapInOrder(skillDirs, (skillDir) => checkBrokenPackagedLinks(skillDir));
+  const perSkill = await mapInOrder(skillDirs, (skillDir) => checkBrokenPackagedLinks(skillDir, [], { dispatcher: undefined }));
   const issues: ValidationIssue[] = perSkill.flat();
   return buildReport({ examined: skillDirs.length, findings: toFindings(issues), data: null, gate: ORCHESTRATOR_GATE });
 }

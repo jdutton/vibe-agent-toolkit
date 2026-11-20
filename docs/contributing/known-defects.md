@@ -584,6 +584,29 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 
 ## Git and crawl
 
+### Outside a repository, authored markdown under a tool-output-named directory is not enumerated
+
+- **Severity:** Important · **Effort:** M (admit a tool-output-named path by link-following, not by
+  name) · **User-visible:** yes (files silently missing, exit 0)
+- **Mechanism:** outside a repository there is no ignore oracle, so the listing walk
+  (`RootListing`) and the filesystem enumerator (`FilesystemCrawlSource.enumerate`) prune every
+  name in `NEVER_CRAWL_GLOBS`, tool-output names (`coverage/`, `.test-output/`, `.turbo/`)
+  included. Inside a repository the git enumerator drops only never-content paths and lets ignore
+  rules decide the rest. So `docs/coverage/x.md` is a resource inside a repository and absent
+  outside one, and every link in it goes unchecked. Admitting tool-output names outright is not
+  the fix: with no ignore rules, a non-repository tree's real coverage reports (`lcov-report`
+  HTML) flood the population, `.turbo` cache copies report duplicates, and an unreadable directory
+  under `coverage/` refuses the run. The fix is link-following admission: a tool-output-named path
+  becomes a member when an authored document links to it.
+- **Scope:** every verb outside a repository — `vat resources validate`/`scan`,
+  `vat skills validate`/`build`, `vat skill review`, `vat claude plugin build` and `vat audit`,
+  alike, so they agree with one another. Inside a repository every one of them enumerates through
+  git and sees the file.
+- **Reproduced** by `resource-registry-default-exclude.integration.test.ts` (the two filesystem
+  cases are `it.fails`; promote them to `it` with the fix).
+- **Where:** [`crawl-source.ts`](../../packages/resources/src/projection/crawl-source.ts)
+  (`walkNames` and `FilesystemCrawlSource.enumerate`, `exclude: [...NEVER_CRAWL_GLOBS]`).
+
 ### An index listing (`ls-files -z`) is read as UTF-8 text, so a path that is not UTF-8 is re-spelled
 
 - **Severity:** Minor · **Effort:** M · **User-visible:** yes (a wrong path, no refusal)
@@ -725,6 +748,27 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Where:** [`git-no-answer.ts`](../../packages/utils/src/git-no-answer.ts) (`gitSnapshotFailureOf`)
 - **Fix:** give the classifier an output-side cause (`ENOSPC`/`EROFS` in git's account) coded
   `RUN_INCOMPLETE`, so every lane that snapshots inherits it.
+
+### A git listing that ran out of time or output is reported as "not a git repository"
+
+- **Severity:** Minor · **Effort:** M (one result type, every caller migrated) · **User-visible:** yes
+- **Mechanism:** `gitLsFiles`, `gitLsOthers` and `gitLinksCheckedOutAsFiles` return `null` for
+  every git that did not answer, whether the tree is not a repository, the binary is missing, or
+  git ran past its timeout or past the output VAT reads. The callers that classify `null` (`gitNoAnswerError`, the crawl
+  sources, the rules scope) then call a timeout `GIT_NO_ANSWER` "not a git repository, or git
+  could not read it". Throwing `GIT_FAILED` from the listing instead breaks the callers that
+  promise to report or fall back on `null`: `gitChangedFiles` ("never throws"),
+  `unreadableSnapshotReason` and so the store's "populate without a cache" path, the file
+  crawler's fallback to a manual walk, `GitTracker`'s `null`, and audit's distributed tree. On a
+  huge repository those degrade today and would abort.
+- **Reproduce:** traced in code: a listing whose `runGit` result is `ETIMEDOUT` returns `null`
+  ([`git-utils.ts`](../../packages/utils/src/git-utils.ts) `runListing`).
+- **Where:** [`git-utils.ts`](../../packages/utils/src/git-utils.ts) (`runListing`),
+  [`git-index-links.ts`](../../packages/utils/src/git-index-links.ts) (`gitLinksCheckedOutAsFiles`),
+  [`git-no-answer.ts`](../../packages/utils/src/git-no-answer.ts) (`gitNoAnswerFor`)
+- **Fix:** one classified result type (`{ ok: true, paths } | { ok: false, cause }`, the cause
+  from `gitRunFailureOf`) returned by all three, with every caller migrated to it in the same
+  change: each decides from the cause whether to refuse, report or fall back.
 
 ### The same tree flips between exit 1 and exit 2 across runs
 

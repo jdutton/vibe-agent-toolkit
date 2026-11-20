@@ -20,7 +20,7 @@
  */
 import { readFileSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, appendAll } from '@vibe-agent-toolkit/utils';
 import semver from 'semver';
 
 import { PROJECT_ROOT, isEntrypoint } from './common.js';
@@ -197,7 +197,7 @@ export function overrideFindings(overrides: Readonly<Record<string, unknown>>, r
       findings.push(`package.json overrides ${name} with no OVERRIDE_REGISTER row (packages/dev-tools/src/override-register.ts): state its reason and whether adopters reach it`);
       continue;
     }
-    findings.push(...rowFindings(name, row, pin, reach.get(name)));
+    appendAll(findings, rowFindings(name, row, pin, reach.get(name)));
   }
   for (const name of Object.keys(register)) {
     if (!(name in overrides)) findings.push(`OVERRIDE_REGISTER has a row for ${name}, which package.json no longer overrides: delete the row`);

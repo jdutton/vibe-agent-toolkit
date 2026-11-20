@@ -34,7 +34,7 @@ import {
   resolveFindings,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, everywhere, findProjectRoot, followedKindSync, forEachInOrder, fsFaultOf, isLinkChainRefusedError, isPathAbsentError, issueLocation, isVatError, mapInOrder, normalizePath, PathEscapesRootError, pathPresent, relativeEscapesRoot, safePath, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, everywhere, findProjectRoot, followedKindSync, forEachInOrder, fsFaultOf, isLinkChainRefusedError, isPathAbsentError, issueLocation, isVatError, mapInOrder, normalizePath, PathEscapesRootError, pathPresent, relativeEscapesRoot, safePath, toForwardSlash, toForwardSlashAnyPlatform, appendAll } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { refusalCodeOf } from '../../../utils/command-refusal.js';
@@ -415,9 +415,9 @@ async function validateDeclaredPlugins(
     const contained = await validateContainedPlugin(dir.lexical, marketplacePath, boundary, validation);
     validatedByDir.set(dir.real, contained);
     pluginResults.push({ ...entry, ...contained });
-    issues.push(...contained.result.issues);
+    appendAll(issues, contained.result.issues);
 
-    issues.push(...await validatePluginSkills(dir.lexical, marketplacePath, boundary, validation));
+    appendAll(issues, await validatePluginSkills(dir.lexical, marketplacePath, boundary, validation));
   });
 
   return {

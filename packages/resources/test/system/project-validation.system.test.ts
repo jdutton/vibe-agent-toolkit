@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 
 import { ResourceRegistry } from '../../src/resource-registry.js';
+import { crawlInRun } from '../helpers/population-run.js';
 import { findMonorepoRoot } from '../test-helpers.js';
 
 describe('System Test: Project Link Validation (Dogfooding)', () => {
@@ -21,7 +22,8 @@ describe('System Test: Project Link Validation (Dogfooding)', () => {
     // in the vibe-agent-toolkit project. It ensures our documentation stays accurate
     // and all links remain valid.
     // Crawl the entire project for markdown files
-    await registry.crawl({
+    await crawlInRun(registry, {
+      ignoredRefusals: 'record',
       unreadable: 'refuse',
       outputs: [],
       baseDir: projectRoot,

@@ -24,7 +24,9 @@
  *   view: the id, duplicate detection, link resolution, population conditions and
  *   parse refusals are computed per registry view by the same code as ever. Views
  *   never share link objects: a registry copies the links it is handed.
- * - The home root's enumeration, once per outputs set ({@link RunPopulation.source}).
+ * - Each root's enumeration, once ({@link RunPopulation.source}): the home's
+ *   full population under a store, or each root's names ({@link RootListing}),
+ *   listed once and narrowed per crawl.
  *
  * ## Lifetime
  *
@@ -36,17 +38,25 @@
  */
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import type { GitTracker } from '@vibe-agent-toolkit/utils/git';
+import { gitFindRoot, gitLinksCheckedOutAsFiles, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { ParseResult } from '../link-parser.js';
 import { defaultParseCache } from '../parse-cache.js';
 import { ParseDispatcher } from '../parse-dispatcher.js';
 import type { SHA256 } from '../schemas/checksum.js';
 import type { CollectionConfig } from '../schemas/project-config.js';
+import { sameDirectory } from '../utils.js';
 
 import { RunContentCache } from './content-cache.js';
+import { RootListing, type PopulationUnreadablePolicy } from './crawl-source.js';
 import type { PopulationCache } from './merge.js';
-import { buildResourcePopulation, type ResourceEnumeration, type ResourcePopulationSource } from './resource-population.js';
+import {
+  buildResourceListing,
+  buildResourcePopulation,
+  type PopulationMembers,
+  type ResourceEnumeration,
+  type ResourcePopulationSource,
+} from './resource-population.js';
 
 /**
  * One file's admission facts: what a registry admitting it reads, keys and
@@ -119,7 +129,7 @@ export interface RunPopulationOptions {
    */
   readonly cacheOf: () => Promise<PopulationCache | undefined>;
   /**
-   * The `resources.collections` governing the root, so a declared `mimeType`
+   * The `resources.collections` governing a root, so a declared `mimeType`
    * routes the file it matches to a parser: read off the root being enumerated,
    * so the declaration and the enumeration are always of one tree.
    */
@@ -139,6 +149,10 @@ export class RunPopulation implements PopulationRun {
   readonly #admissions = new Map<string, Promise<AdmittedFacts>>();
   readonly #stats = new Map<string, Promise<AdmittedStat>>();
   readonly #enumerations = new Map<string, Promise<ResourceEnumeration>>();
+  readonly #listings = new Map<string, Promise<RootListing>>();
+  readonly #trackers = new Map<string, Promise<GitTracker | undefined>>();
+  /** Each listed root's tracked links checked out as plain files, by root. */
+  readonly #linksAsFiles = new Map<string, ReadonlySet<string> | null>();
   readonly #options: RunPopulationOptions;
 
   /**
@@ -151,9 +165,9 @@ export class RunPopulation implements PopulationRun {
     this.gitTracker = options.gitTracker;
     this.content = run.content;
     this.dispatcher = run.dispatcher;
-    // Bound to the home root: `ResourceRegistry.populationFrom` declines a crawl
-    // of any other root to the walk, so `enumerate` is only ever asked about it.
-    this.source = { root: this.root, enumerate: (_root, outputs) => this.#enumerate(outputs) };
+    this.source = {
+      enumerate: (root, outputs, unreadable, members) => this.#enumerate(root, outputs, unreadable, members),
+    };
   }
 
   /**
@@ -186,32 +200,158 @@ export class RunPopulation implements PopulationRun {
   }
 
   /**
-   * Enumerate the home root once per run per outputs set, under the run's
-   * oracles and store.
+   * Enumerate a root once per run.
    *
+   * The home root, asked by a refusing crawl, is the full population when the
+   * run has a store: read and keyed once, so the store answers every later run
+   * and every resources lane of this one ({@link buildResourcePopulation}). Every
+   * other enumeration has no store to pay off — another root (a path argument
+   * outside the project, a skill directory with no project root, a nested
+   * project), the home with the store off or outside a repository, and every
+   * degrading crawl, whose narrowed population the store's key could not
+   * describe — so it is a listing of the crawl's members alone, which reads no
+   * file ({@link buildResourceListing}). The root's names are listed once per
+   * run per `outputs` ({@link RootListing}) and narrowed per member set, so a
+   * second crawl of the root with other globs lists nothing again. Another root
+   * is listed under its own ignore oracle and the collections its own config
+   * declares, and never under the home's extent key.
+   *
+   * Which root is the home is the filesystem's answer ({@link sameDirectory}):
+   * `/tmp/x` and `/private/tmp/x` are one root, so the second spelling is served
+   * by the home's store and its paths come back in the spelling asked.
+   *
+   * A degrading enumeration (`{ degrade }`) is not memoized: its refusals are
+   * handed to the caller that asked, and another caller must be handed them too.
+   * A refusing one is, rejection included: one enumeration per root per run.
+   *
+   * @param root - Absolute root to enumerate
    * @param outputs - The trees the calling verb writes
-   * @returns The home root's population
+   * @param unreadable - What a refused listing inside the population does
+   * @param members - The calling crawl's include and exclude globs
+   * @returns The root's population
    */
-  #enumerate(outputs: readonly string[]): Promise<ResourceEnumeration> {
-    return memoized(this.#enumerations, JSON.stringify(outputs), () => this.#build(outputs));
+  #enumerate(
+    root: string,
+    outputs: readonly string[],
+    unreadable: PopulationUnreadablePolicy,
+    members: PopulationMembers,
+  ): Promise<ResourceEnumeration> {
+    const resolved = safePath.resolve(root);
+    const home = sameDirectory(this.root, resolved);
+    if (unreadable !== 'refuse') return this.#list(resolved, home, outputs, unreadable, members);
+    // The home's full population is one per run whatever the crawl's members;
+    // a listing is of the members asked for.
+    const key = `${JSON.stringify(outputs)} ${resolved} ${JSON.stringify(members)}`;
+    return memoized(this.#enumerations, key, async () => {
+      const homeKey = `${JSON.stringify(outputs)} home`;
+      const cache = home ? await this.#options.cacheOf() : undefined;
+      if (cache === undefined) return this.#list(resolved, home, outputs, unreadable, members);
+      const population = await memoized(this.#enumerations, homeKey, () => this.#populate(outputs, cache));
+      return respelled(population, this.root, resolved);
+    });
   }
 
-  async #build(outputs: readonly string[]): Promise<ResourceEnumeration> {
-    const { gitTracker, cacheOf, collectionsFor } = this.#options;
+  /** The home root's full population, under the run's store. */
+  async #populate(outputs: readonly string[], cache: PopulationCache): Promise<ResourceEnumeration> {
+    const { gitTracker, collectionsFor } = this.#options;
     const collections = await collectionsFor(this.root);
-    // The store first: opening it takes the snapshot that keys it, which the
-    // tracker then reads rather than asking git again.
-    const cache = await cacheOf();
+    // The store is open: opening it took the snapshot that keys it, which the
+    // tracker now reads rather than asking git again.
     await gitTracker.initialize();
     return buildResourcePopulation({
       root: this.root,
       outputs,
       run: this,
       gitTracker,
-      ...(cache !== undefined && { cache }),
+      cache,
       ...(collections !== undefined && { collections }),
     });
   }
+
+  /**
+   * A root's members, listed with no store (see {@link buildResourceListing}).
+   * The home is listed under the run's spelling of it, which its tracker's
+   * names are spelled under, and handed back in the spelling asked.
+   */
+  async #list(
+    root: string,
+    home: boolean,
+    outputs: readonly string[],
+    unreadable: PopulationUnreadablePolicy,
+    members: PopulationMembers,
+  ): Promise<ResourceEnumeration> {
+    const listed = home ? this.root : root;
+    const collections = await this.#options.collectionsFor(listed);
+    const gitTracker = await this.#trackerOf(listed, home);
+    const listing = await memoized(this.#listings, `${JSON.stringify(outputs)} ${listed}`, () =>
+      RootListing.of(listed, outputs, {
+        names: () => this.#gitListing(listed, home),
+        linksCheckedOutAsFiles: () => this.#linksAsFilesOf(listed),
+      }));
+    const population = await buildResourceListing({
+      root: listed,
+      listing,
+      unreadable,
+      members,
+      run: this,
+      ...(gitTracker !== undefined && { gitTracker }),
+      ...(collections !== undefined && { collections }),
+    });
+    return respelled(population, listed, root);
+  }
+
+  /**
+   * A root's ignore oracle, initialized once per run: the run's own for the
+   * home, none outside a repository (there is nothing to ask, and asking costs
+   * a spawn).
+   */
+  #trackerOf(root: string, home: boolean): Promise<GitTracker | undefined> {
+    return memoized(this.#trackers, root, async () => {
+      if (gitFindRoot(root) === null) return undefined;
+      const tracker = home ? this.gitTracker : new GitTracker(root);
+      await tracker.initialize();
+      return tracker;
+    });
+  }
+
+  /**
+   * The tracked links under a root its checkout wrote as plain files, read once per
+   * root per run: one `git config` read, and the index under it only when
+   * `core.symlinks` is `false`. `null` when git did not answer.
+   */
+  #linksAsFilesOf(root: string): ReadonlySet<string> | null {
+    // Read under the root, never the whole repository: `ls-files -s` of a large
+    // monorepo is twice its names and could pass the output cap for a small root.
+    if (!this.#linksAsFiles.has(root)) this.#linksAsFiles.set(root, gitLinksCheckedOutAsFiles(root));
+    return this.#linksAsFiles.get(root) ?? null;
+  }
+
+  /**
+   * A root's names as git lists them: its tracker's listing, or a tracker of
+   * the root's own when the run's was initialized without untracked files.
+   */
+  async #gitListing(root: string, home: boolean): Promise<readonly string[] | null> {
+    const listing = (await this.#trackerOf(root, home))?.listing() ?? null;
+    if (listing !== null || !home) return listing;
+    const own = new GitTracker(root);
+    await own.initialize();
+    return own.listing();
+  }
+}
+
+/**
+ * A population of `from`, with its paths spelled under `to` — the same directory
+ * by another spelling ({@link sameDirectory}), so the crawl that asked by `to`
+ * gets paths under its own base.
+ *
+ * @param population - The population, its paths under `from`
+ * @param from - The spelling it was enumerated under
+ * @param to - The spelling the crawl asked by
+ * @returns The population with its paths under `to`
+ */
+function respelled(population: ResourceEnumeration, from: string, to: string): ResourceEnumeration {
+  if (from === to) return population;
+  return { ...population, paths: population.paths.map((path) => safePath.join(to, safePath.relative(from, path))) };
 }
 
 /**

@@ -59,9 +59,8 @@ import { executeCli, getBinPath } from './test-common.js';
 
 const binPath = getBinPath(import.meta.url);
 
-/** The lane and backend selectors, which every arm needs and neither arm varies. */
+/** The backend selector, which every arm needs and neither arm varies. */
 const STORE_ON = {
-  VAT_RESOURCES_CRAWL: 'projection',
   VAT_PROJECTION_STORE: 'sqlite',
 } as const;
 

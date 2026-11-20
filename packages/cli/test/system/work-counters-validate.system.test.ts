@@ -16,8 +16,8 @@
  *
  * Three corpora, one per shape of the skills phase:
  *
- * - a nested project, so the skills batch spans two roots and every skills view
- *   walks (as each skill's own registry did in v0.2.0-rc.17);
+ * - a nested project, so the skills batch spans two roots, each enumerated
+ *   through the run's population source;
  * - one root, so the skills view is the shared markdown-only view of the run's
  *   home root, enumerated through the run's population;
  * - a skill outside the project, with no project root of its own.
@@ -108,7 +108,7 @@ interface Corpus {
   readonly files: Readonly<Record<string, string>>;
   /** The project root, repository-relative ('' for the repository root). */
   readonly project: string;
-  /** Whether the skills batch spans several roots, so every skills view walks. */
+  /** Whether the skills batch spans several roots. */
   readonly multiRoot: boolean;
 }
 
@@ -149,7 +149,7 @@ const NO_ROOT: Corpus = {
 /** Past the input cap: refused before a byte is read, never keyed. Project-relative. */
 const OVER_CAP = 'docs/huge.md';
 
-/** A symlinked alias of `docs/guide.md`, project-relative: declined by the population, admitted by a walk. */
+/** A symlinked alias of `docs/guide.md`, project-relative: declined by the population, so no view admits it. */
 const ALIAS = 'docs/alias.md';
 
 const symlinks = symlinkCapability();
@@ -217,13 +217,12 @@ function resourcesViewDocuments(corpus: Corpus): string[] {
 
 /**
  * Documents only the skills phase admits: the project's documents the resources
- * view excluded, every document of a skill outside the project, and, when the
- * skills views walk, the symlinked alias (a walk admits a link as its own path).
+ * view excluded, and every document of a skill outside the project.
  */
 function skillsOnlyDocuments(corpus: Corpus): string[] {
   const resources = new Set(resourcesViewDocuments(corpus));
   const inside = keyedPaths(corpus).filter((path) => isDocument(path) && !resources.has(path));
-  return [...inside, ...outsideDocuments(corpus), ...(walkedAlias(corpus) ? [ALIAS] : [])];
+  return [...inside, ...outsideDocuments(corpus)];
 }
 
 /** The SKILL.md files outside the project root. */
@@ -234,11 +233,6 @@ function outsideSkills(corpus: Corpus): string[] {
 /** Documents outside the project root (a skill with no project root): no population keys them. */
 function outsideDocuments(corpus: Corpus): string[] {
   return Object.keys(corpus.files).filter((path) => inProject(corpus, path) === undefined && isDocument(path));
-}
-
-/** Whether a skills view walks over the alias: a multi-root batch walks, and the alias exists. */
-function walkedAlias(corpus: Corpus): boolean {
-  return corpus.multiRoot && symlinks !== null;
 }
 
 /** Every document the run admits, in one view or another. */
@@ -418,16 +412,15 @@ describe.each([
   it('cold: one read, one key and one admission per file, one registry', async () => {
     storeOnCold = await validateCounts(cwd, freshArm(false));
     const { parent, children, parentReads, childReads } = storeOnCold;
-    const walked = walkedAlias(corpus) ? 1 : 0;
     const outside = outsideDocuments(corpus).length;
 
     // Positive control: the probe sees a file every phase reads, exactly once.
     expect(parentReads.get(probed(cwd, 'README.md')), 'README.md read exactly once').toBe(1);
     expect(readTwice(parentReads), 'no path read twice at the fs boundary').toEqual([]);
-    // The population keys every file under the project root; a walking skills
-    // view reads the alias, and a skill outside the project its own documents.
+    // The population keys every file under the project root, and a skill
+    // outside the project is enumerated for its own root, which reads its documents.
     expect(parent['content.read'], 'content.read = keyed paths, plus what only a skills view reaches').toBe(
-      keyedPaths(corpus).length + walked + outside,
+      keyedPaths(corpus).length + outside,
     );
     expect(parent['content.hashed'], 'content.hashed = content.read').toBe(parent['content.read']);
     expect(parent['registry.admitted'], 'registry.admitted = admitted subset').toBe(admittedPaths(corpus).length);
@@ -436,7 +429,7 @@ describe.each([
     // size before its read, and never reaches a dispatcher under another limit.
     expect(parent['parse.refused.inputCap.read'], 'over-cap file refused once, at its read').toBe(1);
     expect(parent['parse.refused.inputCap.dispatch'], 'no second cap at dispatch').toBe(0);
-    if (symlinks !== null && !corpus.multiRoot) {
+    if (symlinks !== null) {
       expect(parentReads.get(probed(cwd, ALIAS)) ?? 0, 'the alias is never read').toBe(0);
       expect(storeOnCold.stdout, 'the alias is declined, not silent').toContain(ALIAS);
     }
@@ -472,7 +465,8 @@ describe.each([
     // On a warm run the population is the store's, so a file is read only when a
     // view admits it or discovery reads it: the skills phase reads exactly the
     // documents only it admits, less each outside SKILL.md the resources phase's
-    // discovery already read.
+    // discovery already read. Another root has no store, so it is listed, and a
+    // listing reads nothing.
     expect(skills?.['content.read'], 'skills phase reads exactly what only it admits, once').toBe(
       skillsOnlyDocuments(corpus).length - outsideSkills(corpus).length,
     );

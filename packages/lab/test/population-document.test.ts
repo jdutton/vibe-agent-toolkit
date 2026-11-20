@@ -20,7 +20,7 @@ function scanDocument(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
     status: 'success',
     root: '/fixture/project',
-    lane: 'walk',
+    extentSource: 'filesystem',
     filesScanned: 2,
     linksFound: 3,
     anchorsFound: 4,
@@ -42,7 +42,7 @@ function reportScanDocument(dataOverrides: Record<string, unknown> = {}): string
     summary: { errors: 0, warnings: 0, info: 0 },
     data: {
       root: '/fixture/project',
-      lane: 'walk',
+      extentSource: 'filesystem',
       files: [
         { path: 'b.md', checksum: 'bbb' },
         { path: 'a.md', checksum: 'aaa' },
@@ -55,7 +55,7 @@ function reportScanDocument(dataOverrides: Record<string, unknown> = {}): string
 /**
  * `vat resources scan --verbose --format json` as the Report envelope prints it
  * (wave 3): the count is `examined`, the population is `data.files`, the arm is
- * `data.lane` / `data.extentSource`. Byte-for-byte the shape
+ * `data.extentSource`. Byte-for-byte the shape
  * `RESOURCES_SCAN_REPORT_SCHEMA` accepts.
  */
 const REPORT_SHAPED_SCAN = JSON.stringify({
@@ -67,7 +67,6 @@ const REPORT_SHAPED_SCAN = JSON.stringify({
   durationMs: 41,
   data: {
     root: '/fixture/project',
-    lane: 'projection',
     extentSource: 'git',
     collections: {},
     files: [
@@ -85,7 +84,6 @@ describe('readPopulationDocument', () => {
     if (!result.ok) return;
     expect(result.document).toEqual({
       root: '/fixture/project',
-      lane: 'projection',
       extentSource: 'git',
       files: [
         { path: 'docs/a.md', checksum: 'aaa' },
@@ -112,7 +110,7 @@ describe('readPopulationDocument', () => {
       examined: 5,
       findings: [],
       summary: { errors: 0, warnings: 0, info: 0 },
-      data: { root: '/fixture/project', lane: 'walk' },
+      data: { root: '/fixture/project', extentSource: 'filesystem' },
     }));
 
     expect(result.ok).toBe(false);
@@ -120,13 +118,13 @@ describe('readPopulationDocument', () => {
     expect(result.refusal).toContain('5 files scanned but listed none');
   });
 
-  it('reads the root, the lane and the files', () => {
+  it('reads the root, the arm and the files', () => {
     const result = readPopulationDocument(scanDocument());
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.document.root).toBe('/fixture/project');
-    expect(result.document.lane).toBe('walk');
+    expect(result.document.extentSource).toBe('filesystem');
     expect(result.document.files).toEqual([
       { path: 'a.md', checksum: 'aaa' },
       { path: 'b.md', checksum: 'bbb' },
@@ -143,17 +141,17 @@ describe('readPopulationDocument', () => {
     expect(result.document.files.map((entry) => entry.path)).toEqual(['a.md', 'b.md']);
   });
 
-  it('keeps an unknown lane name verbatim rather than folding it into a known one', () => {
-    const result = readPopulationDocument(scanDocument({ lane: 'some-future-lane' }));
+  it('keeps an unknown enumerator name verbatim rather than folding it into a known one', () => {
+    const result = readPopulationDocument(scanDocument({ extentSource: 'some-future-source' }));
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.document.lane).toBe('some-future-lane');
+    expect(result.document.extentSource).toBe('some-future-source');
   });
 
-  it('reports a missing lane as null, which is not any real lane', () => {
+  it('reports a missing extentSource as null, which is not any real arm', () => {
     const document = JSON.parse(scanDocument()) as Record<string, unknown>;
-    delete document.lane;
+    delete document['extentSource'];
 
     const result = readPopulationDocument(JSON.stringify(document));
 
@@ -161,78 +159,47 @@ describe('readPopulationDocument', () => {
     if (!result.ok) return;
     // `null` means the measured build does not say which enumerator ran, so a
     // row built from it cannot prove it is the arm the caller intended.
-    expect(result.document.lane).toBeNull();
-  });
-
-  it('keeps the lane when the extent source is an explicit null, which is the walk', () => {
-    const result = readPopulationDocument(scanDocument({ lane: 'walk', extentSource: null }));
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.document.lane).toBe('walk');
     expect(result.document.extentSource).toBeNull();
   });
 
-  it('reports an omitted extentSource key as null, keeping the lane', () => {
-    // The fixture omits the key, as a build too old to report one does.
-    const result = readPopulationDocument(scanDocument({ lane: 'projection' }));
+  it('reports an explicit null extentSource as null', () => {
+    const result = readPopulationDocument(scanDocument({ extentSource: null }));
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.document.lane).toBe('projection');
     expect(result.document.extentSource).toBeNull();
   });
 
   // A malformed arm is a REFUSAL here, never `null`. `null` is the label an
   // old-but-honest build gets ("the output did not say"), and a subject that
-  // printed a corrupt lane must not be rendered indistinguishably from one that
+  // printed a corrupt arm must not be rendered indistinguishably from one that
   // printed none. Each case names the field and what was received, so the
   // refusal reads as a schema verdict and not as a missing key.
-  it('REFUSES a lane that is a number rather than reading it as unreported', () => {
-    const result = readPopulationDocument(scanDocument({ lane: 42 }));
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.refusal).toContain(NOT_A_SCAN_DOCUMENT);
-    expect(result.refusal).toContain('lane: Expected string, received number');
-  });
-
-  it('REFUSES an empty-string lane, which names no enumerator', () => {
-    const result = readPopulationDocument(scanDocument({ lane: '' }));
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.refusal).toContain(NOT_A_SCAN_DOCUMENT);
-    expect(result.refusal).toContain('lane: String must contain at least 1 character(s)');
-  });
-
-  it('REFUSES a null lane — vat prints null for an extent source, never for a lane', () => {
-    const result = readPopulationDocument(scanDocument({ lane: null }));
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.refusal).toContain(NOT_A_SCAN_DOCUMENT);
-    expect(result.refusal).toContain('lane: Expected string, received null');
-  });
-
-  it('REFUSES a lane that is an object', () => {
-    const result = readPopulationDocument(scanDocument({ lane: {} }));
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.refusal).toContain(NOT_A_SCAN_DOCUMENT);
-    expect(result.refusal).toContain('lane: Expected string, received object');
-  });
-
-  it('REFUSES an extentSource that is a number, without touching the lane verdict', () => {
-    const result = readPopulationDocument(scanDocument({ lane: 'projection', extentSource: 42 }));
+  it('REFUSES an extentSource that is a number rather than reading it as unreported', () => {
+    const result = readPopulationDocument(scanDocument({ extentSource: 42 }));
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.refusal).toContain(NOT_A_SCAN_DOCUMENT);
     expect(result.refusal).toContain('extentSource: Expected string, received number');
-    // The lane was fine, and the refusal must not blame it.
-    expect(result.refusal).not.toContain('lane:');
+  });
+
+  it('REFUSES an empty-string extentSource, which names no enumerator', () => {
+    const result = readPopulationDocument(scanDocument({ extentSource: '' }));
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.refusal).toContain(NOT_A_SCAN_DOCUMENT);
+    expect(result.refusal).toContain('extentSource: String must contain at least 1 character(s)');
+  });
+
+  it('REFUSES an extentSource that is an object', () => {
+    const result = readPopulationDocument(scanDocument({ extentSource: {} }));
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.refusal).toContain(NOT_A_SCAN_DOCUMENT);
+    expect(result.refusal).toContain('extentSource: Expected string, received object');
   });
 
   it('REFUSES a document that reported a count but listed no files', () => {

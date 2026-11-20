@@ -74,7 +74,8 @@ export interface VerbCase {
    */
   packagingFinding?: true;
   /**
-   * The verb's presence preflight: it probes `path` for its precondition (a config it edits) and
+   * The verb's presence preflight: it probes `path` for a precondition (a config it edits, or
+   * `vat claude plugin build`'s check that a pool skill was built under the project's `dist`) and
    * refuses `refusal` when nothing is there. I8 accepts that refusal for an `absent` fault the verb
    * classified at exactly that path, and nothing else. Declared, never inferred.
    */
