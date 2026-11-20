@@ -22,8 +22,6 @@ const EXPLICIT_PATH = safePath.resolve('/explicit/path');
 const MISSING_PATH = safePath.resolve('/project/docs/missing');
 const INCLUDE_PATTERNS = ['docs/**/*.md'];
 const EXCLUDE_PATTERNS = ['**/draft.md'];
-/** The crawl policy every load passes, whatever its scope. */
-const CRAWL_POLICY = { unreadable: 'refuse', ignoredRefusals: 'record', outputs: [] } as const;
 
 /**
  * The subtree-scoped form of {@link DEFAULT_RESOURCE_INCLUDE} for SUBTREE_PATH.
@@ -44,6 +42,9 @@ const registryCrawlMock = vi.fn();
 const existingDirectories = new Set<string>();
 let lastRegistryOptions: Record<string, unknown> | undefined;
 let lastCrawlOptions: Record<string, unknown> | undefined;
+
+/** What every crawl the loader asks for carries beside its patterns. */
+const CRAWL_DEFAULTS = { unreadable: 'refuse', ignoredRefusals: 'record', outputs: [] } as const;
 
 /**
  * The crawl options minus the population source.
@@ -216,7 +217,7 @@ describe('loadResourcesWithConfig', () => {
 
     expect(crawlPatterns()).toEqual({
       baseDir: PROJECT_ROOT,
-      ...CRAWL_POLICY,
+      ...CRAWL_DEFAULTS,
       include: INCLUDE_PATTERNS,
       exclude: EXCLUDE_PATTERNS,
     });
@@ -240,7 +241,7 @@ describe('loadResourcesWithConfig', () => {
     // prefix instead of a new base.
     expect(crawlPatterns()).toEqual({
       baseDir: PROJECT_ROOT,
-      ...CRAWL_POLICY,
+      ...CRAWL_DEFAULTS,
       include: SUBTREE_INCLUDE,
       exclude: EXCLUDE_PATTERNS,
     });
@@ -256,7 +257,7 @@ describe('loadResourcesWithConfig', () => {
 
     expect(crawlPatterns()).toEqual({
       baseDir: PROJECT_ROOT,
-      ...CRAWL_POLICY,
+      ...CRAWL_DEFAULTS,
       include: ['**/*.md', '**/*.html', '**/*.htm'],
       exclude: EXCLUDE_PATTERNS,
     });
@@ -271,7 +272,7 @@ describe('loadResourcesWithConfig', () => {
 
     expect(crawlPatterns()).toEqual({
       baseDir: safePath.resolve('.'),
-      ...CRAWL_POLICY,
+      ...CRAWL_DEFAULTS,
       include: ['docs/**/*.md', 'docs/**/*.html', 'docs/**/*.htm'],
       exclude: EXCLUDE_PATTERNS,
     });
@@ -286,7 +287,7 @@ describe('loadResourcesWithConfig', () => {
 
     const result = await load(EXPLICIT_PATH, PROJECT_ROOT, logger);
 
-    expect(crawlPatterns()).toEqual({ baseDir: EXPLICIT_PATH, ...CRAWL_POLICY });
+    expect(crawlPatterns()).toEqual({ baseDir: EXPLICIT_PATH, ...CRAWL_DEFAULTS });
     expect(warnCalls.join('\n')).toContain(EXPLICIT_PATH);
     expect(result.scanPath).toBe(EXPLICIT_PATH);
   });
@@ -379,7 +380,7 @@ describe('loadResourcesWithConfig', () => {
 
     const result = await load(undefined, PROJECT_ROOT, logger);
 
-    expect(crawlPatterns()).toEqual({ baseDir: PROJECT_ROOT, ...CRAWL_POLICY });
+    expect(crawlPatterns()).toEqual({ baseDir: PROJECT_ROOT, ...CRAWL_DEFAULTS });
     expect(result.config).toBeUndefined();
   });
 
