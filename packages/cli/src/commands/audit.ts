@@ -1757,17 +1757,9 @@ function appendInventoryParseErrors(
 }
 
 /**
- * @internal Exported for integration testing only — not part of the public CLI API.
- *
- * @param locationRoot - The invocation scan root: the ONE base every emitted
- *   `ValidationIssue.location` in this run is expressed relative to. It is an
- *   ANCHOR, not a validation-policy boundary — per-skill governing-config
- *   discovery still decides packaging rules, but it must never decide how a
- *   location reads, or a run spanning several configs emits one document in
- *   several coordinate systems. Recursion passes it through unchanged.
- */
-/**
  * Validate ONE audit subject in a run of its own (see {@link auditSubject}).
+ *
+ * @internal Exported for integration testing only — not part of the public CLI API.
  */
 export function getValidationResults(
 	scanPath: string,
@@ -1821,6 +1813,13 @@ function inAuditRun(options: AuditCommandOptions, run: RunContext): AuditRunOpti
  * The walk keeps its own per-entry guard: this one would answer at whole-subject
  * granularity, discarding findings already collected from readable siblings, and
  * degrading as narrowly as possible is the entire point.
+ *
+ * @param locationRoot - The invocation scan root: the ONE base every emitted
+ *   `ValidationIssue.location` in this run is expressed relative to. It is an
+ *   ANCHOR, not a validation-policy boundary — per-skill governing-config
+ *   discovery still decides packaging rules, but it must never decide how a
+ *   location reads, or a run spanning several configs emits one document in
+ *   several coordinate systems. Recursion passes it through unchanged.
  */
 async function auditSubject(
 	scanPath: string,
