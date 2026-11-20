@@ -75,6 +75,7 @@ const BARREL_EXPORTS = [
   'WORK_COUNTER_NAMES',
   'WORK_COUNTER_ROLES',
   'ZodTypeNames',
+  'appendAll',
   'applyTreePlan',
   'applyTreePlanOrLeftover',
   'archiveEntryPlace',

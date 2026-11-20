@@ -65,7 +65,7 @@
  * empty.
  */
 
-import { type Dirent, lstatSync, readdirSync } from 'node:fs';
+import { lstatSync } from 'node:fs';
 
 import {
   followedKindSync,
@@ -1084,9 +1084,6 @@ export function crawlSourceFor(root: string, outputs: readonly string[]): CrawlS
  */
 export type PopulationUnreadablePolicy = 'refuse' | Extract<UnreadablePolicy, { degrade: unknown }>;
 
-/** What one `lstat` says a name is: `absent` when it is gone, `null` when the filesystem would not say. */
-type ObservedShape = PathShape | 'symlink' | 'absent' | null;
-
 /** One name a {@link RootListing} holds: its two spellings, and its shape once observed. */
 interface ListedName {
   /** Absolute, forward-slashed. */
@@ -1097,7 +1094,7 @@ interface ListedName {
    * What the path is: `undefined` until a crawl admits it and it is `lstat`ed
    * ({@link observedShape}), `null` where the realization must stat it.
    */
-  shape: ObservedShape | undefined;
+  shape: PathShape | 'symlink' | 'absent' | null | undefined;
 }
 
 /** A directory a {@link RootListing} could not list, and whose territory it is in. */
@@ -1129,6 +1126,38 @@ interface RootListingGit {
   readonly names: () => Promise<readonly string[] | null>;
   /** The tracked links its checkout wrote as plain files (`gitLinksCheckedOutAsFiles`), read once per listed root, or `null` when git did not answer. */
   readonly linksCheckedOutAsFiles: () => ReadonlySet<string> | null;
+  /** Git's ignored territory at or above the root ({@link listIgnored}), or `null` when git did not answer. */
+  readonly ignored: () => IgnoredListing | null;
+}
+
+/** What one `ls-files --others --ignored --directory` saw, absolute. */
+export interface IgnoredListing {
+  /** The ignored directories git collapsed to one entry each. */
+  readonly directories: readonly string[];
+  /** The directories git could not open, each named on its stderr. */
+  readonly refusals: readonly DirectoryRefusal[];
+}
+
+/**
+ * Git's ignored territory under `cwd`: `ls-files --others --ignored --directory`,
+ * which opens every directory git does not ignore, so its stderr is the one
+ * witness to each it could not open, however a tracker was initialized (a
+ * tracker filled from an open snapshot asked git nothing). Asked of a directory
+ * above a root, it answers for the root too: git's ignore rules are the
+ * repository's, whatever the cwd.
+ *
+ * @param cwd - The directory to list under
+ * @returns The collapsed directories and the refusals, or `null` when git did not answer
+ */
+export function listIgnored(cwd: string): IgnoredListing | null {
+  const refusals: DirectoryRefusal[] = [];
+  const collapsed = gitLsOthers({ cwd, ignored: true, directory: true, unreadable: { degrade: (refusal) => refusals.push(refusal) } });
+  if (collapsed === null) return null;
+  const directories = collapsed
+    .filter((relativePath) => relativePath.endsWith('/'))
+    // Relative to `cwd`, as git prints it: never to the repository root.
+    .map((relativePath) => safePath.resolve(cwd, relativePath.slice(0, -1)));
+  return { directories, refusals };
 }
 
 /** The sentence a listing with no git answer refuses with. */
@@ -1170,12 +1199,11 @@ export function declinedLinkApplies(exclude: readonly string[]): (relativePath: 
  *
  * ## The same conditions as a stored population
  *
- * Each git name's shape is read once, off one `readdir` of its directory: a
- * tracked file deleted from the working tree
+ * Each git name is `lstat`ed once: a tracked file deleted from the working tree
  * is dropped, a link is declined, and a directory (git names one only for a
  * nested repository or submodule) is walked for its refusals, as a stored
- * population walks it. Git's `ls-files --others --ignored --directory`, asked
- * by the listing itself and never read off the tracker (a tracker initialized
+ * population walks it. Git's `ls-files --others --ignored --directory`
+ * ({@link listIgnored}), never read off the tracker (a tracker initialized
  * from an open snapshot asked git nothing), opens every directory git does not
  * ignore, so its stderr names each one it could not list; and each ignored
  * directory it collapses, outside {@link NEVER_CRAWL_GLOBS}, is walked for its
@@ -1237,7 +1265,9 @@ export class RootListing {
     if (names === null) throw gitNoAnswerError(root, NO_GIT_LISTING_CONSEQUENCE);
     const linksAsFiles = git.linksCheckedOutAsFiles();
     if (linksAsFiles === null) throw gitNoAnswerError(root, NO_LINKS_AS_FILES_CONSEQUENCE);
-    return new RootListing('git', root, outputs, await gitListed(root, outputs, names, linksAsFiles));
+    const ignored = git.ignored();
+    if (ignored === null) throw gitNoAnswerError(root, NO_GIT_LISTING_CONSEQUENCE);
+    return new RootListing('git', root, outputs, await gitListed(root, outputs, { names, linksAsFiles, ignored }));
   }
 
   /** One walk of `root`, pruning what a crawl never enters. */
@@ -1309,7 +1339,7 @@ function settleListed(refusals: ListingRefusals, refusal: DirectoryRefusal, terr
 }
 
 /**
- * What git's names under `root` hold, each shape read once ({@link DirectoryShapes}), with each nested
+ * What git's names under `root` hold, `lstat`ed once each, with each nested
  * repository walked for its refusals (in population) as a stored population
  * walks it, and each collapsed ignored directory named for
  * {@link RootListing}'s walk on demand.
@@ -1324,57 +1354,35 @@ function settleListed(refusals: ListingRefusals, refusal: DirectoryRefusal, terr
 async function gitListed(
   root: string,
   outputs: readonly string[],
-  gitNames: readonly string[],
-  linksAsFiles: ReadonlySet<string>,
+  git: { readonly names: readonly string[]; readonly linksAsFiles: ReadonlySet<string>; readonly ignored: IgnoredListing },
 ): Promise<Listed> {
+  const { names: gitNames, linksAsFiles } = git;
   const isContent = crawlPathFilter(['**/*'], [...NEVER_CONTENT_GLOBS]);
   const isCrawled = crawlPathFilter(['**/*'], [...NEVER_CRAWL_GLOBS]);
   const named = new NameSet(root);
   const links = new NameSet(root);
   const repositories: string[] = [];
-  const shapes = new DirectoryShapes();
-  // Every name is checked against this one prefix: a `resolve` and a `relative`
-  // per name were most of the cost of listing 40,000 names.
-  const normalizedRoot = `${toForwardSlash(safePath.resolve(root))}/`;
-  for (const name of gitNames) {
-    const normalized = toForwardSlash(name);
-    if (!normalized.startsWith(normalizedRoot) || !isContent(normalized.slice(normalizedRoot.length))) continue;
-    const observed = shapes.of(normalized);
+  for (const absolutePath of gitNames) {
+    if (!isPathUnderRoot(absolutePath, root) || !isContent(relativeToRoot(absolutePath, root))) continue;
+    const observed = lstatShape(absolutePath);
     if (observed === 'absent') continue;
     // git's own rule, which the stored population's snapshot applies: with
     // `core.symlinks=false` a tracked link is a plain file on disk and still a
     // link in the index, so it is declined, not a member.
-    const shape = observed === 'file' && linksAsFiles.has(normalized) ? 'symlink' : observed;
+    const shape = observed === 'file' && linksAsFiles.has(absolutePath) ? 'symlink' : observed;
     if (shape === 'symlink') {
-      links.add(normalized, shape);
+      links.add(absolutePath, shape);
       continue;
     }
-    if (shape === 'directory') repositories.push(normalized);
-    named.add(normalized, shape);
+    if (shape === 'directory') repositories.push(absolutePath);
+    named.add(absolutePath, shape);
   }
   named.addAncestors();
 
-  const refusals: ListedRefusal[] = [];
-  // Every directory git does not ignore is opened for this listing, so its
-  // stderr is the one witness to each it could not open, however the tracker
-  // was initialized.
-  const collapsed = gitLsOthers({
-    cwd: root,
-    ignored: true,
-    directory: true,
-    unreadable: {
-      degrade: (refusal) => {
-        if (isPathUnderRoot(refusal.directory, root) && admitsUnderRoot(refusal.directory, root)) {
-          refusals.push({ refusal, territory: 'population' });
-        }
-      },
-    },
-  });
-  if (collapsed === null) throw gitNoAnswerError(root, NO_GIT_LISTING_CONSEQUENCE);
-  const ignored = collapsed
-    .filter((relativePath) => relativePath.endsWith('/'))
-    // Relative to `cwd`, this root, as git prints it: never to the repository root.
-    .map((relativePath) => safePath.resolve(root, relativePath.slice(0, -1)))
+  const refusals: ListedRefusal[] = git.ignored.refusals
+    .filter((refusal) => isPathUnderRoot(refusal.directory, root) && admitsUnderRoot(refusal.directory, root))
+    .map((refusal) => ({ refusal, territory: 'population' as const }));
+  const ignored = git.ignored.directories
     .filter((directory) => isPathUnderRoot(directory, root) && isCrawled(relativeToRoot(directory, root)) && lstatShape(directory) === 'directory');
 
   await forEachInOrder(repositories, async (directory) => {
@@ -1497,56 +1505,14 @@ async function walkRefusals(directory: string, outputs: readonly string[], onRef
  * @param name - The name
  * @returns Its shape
  */
-function observedShape(name: ListedName): ObservedShape {
+function observedShape(name: ListedName): PathShape | 'symlink' | 'absent' | null {
   // `null` is an answer (stat it later), so only `undefined` is asked.
   if (name.shape === undefined) name.shape = lstatShape(name.absolutePath);
   return name.shape;
 }
 
-/** A directory's entries by name, or `null` where it would not list. */
-type DirectoryEntries = ReadonlyMap<string, Dirent> | null;
-
-/**
- * Names' shapes read off their directories: one `readdir` with file types per
- * directory, not one `lstat` per name. The entry type is the `lstat` answer (a
- * link is a link, never followed). A name its directory does not hold under that
- * spelling (a case-folded spelling, a tracked file deleted from the working tree)
- * and every name in a directory that would not list fall back to one `lstat`,
- * so the answer is always the `lstat` answer.
- */
-class DirectoryShapes {
-  readonly #entries = new Map<string, DirectoryEntries>();
-
-  of(absolutePath: string): ObservedShape {
-    const entry = this.#entriesOf(parentOf(absolutePath))?.get(absolutePath.slice(absolutePath.lastIndexOf('/') + 1));
-    if (entry === undefined) return lstatShape(absolutePath);
-    if (entry.isSymbolicLink()) return 'symlink';
-    if (entry.isDirectory()) return 'directory';
-    return entry.isFile() ? 'file' : null;
-  }
-
-  #entriesOf(directory: string): DirectoryEntries {
-    let entries = this.#entries.get(directory);
-    if (entries === undefined) {
-      entries = readEntries(directory);
-      this.#entries.set(directory, entries);
-    }
-    return entries;
-  }
-}
-
-/** A directory's entries by name, or `null` where it would not list (each name then `lstat`ed). */
-function readEntries(directory: string): DirectoryEntries {
-  try {
-    return new Map(readdirSync(directory, { withFileTypes: true }).map((entry) => [entry.name, entry]));
-  } catch (error) {
-    if (fsFaultOf(error) === undefined) throw error;
-    return null;
-  }
-}
-
 /** One `lstat`, as a {@link ListedName} shape. */
-function lstatShape(absolutePath: string): ObservedShape {
+function lstatShape(absolutePath: string): PathShape | 'symlink' | 'absent' | null {
   try {
     const stats = lstatSync(absolutePath);
     if (stats.isSymbolicLink()) return 'symlink';

@@ -93,6 +93,9 @@
   an unreadable one.
 - **The skills lanes (`vat skills validate`, `vat skills build`, `vat audit`) no longer walk ignored
   territory** on a root with no store: they report no row from it.
+- **A second root of a run, under the home in the home's repository, asks git nothing more**: it is
+  listed off the home's tracker, ignored listing and index read. A root in a nested repository, or
+  one git ignores, asks its own.
 
 ### Changed
 
