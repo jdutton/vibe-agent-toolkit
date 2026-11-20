@@ -46,7 +46,7 @@
 
 import { readFileSync } from 'node:fs';
 
-import { compareCodeUnits, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, safePath, toForwardSlashAnyPlatform, appendAll } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 import ts from 'typescript';
 
@@ -154,7 +154,7 @@ function closureOf(entry: string, imports: TestTreeScan['imports']): Set<string>
   for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
     if (seen.has(file)) continue;
     seen.add(file);
-    pending.push(...(imports.get(file) ?? []));
+    appendAll(pending, (imports.get(file) ?? []));
   }
   return seen;
 }
@@ -261,8 +261,8 @@ function attributeScriptReaches(graph: WorkspaceGraph, tasks: TurboTaskGraph['ta
     for (const [script, text] of Object.entries(scripts)) {
       const runners = own.filter(([, task]) => task.task === script || scriptsRunBy(task.command, scripts).has(script)).map(([id]) => id);
       const judged = judgeScript({ pkg, text, site: `packages/${pkg.dir}/package.json (script "${script}")`, runners }, graph, nameOf);
-      reaches.push(...judged.reaches);
-      problems.push(...judged.problems);
+      appendAll(reaches, judged.reaches);
+      appendAll(problems, judged.problems);
     }
   }
   return { reaches, problems };
@@ -311,7 +311,7 @@ function orders(tasks: TurboTaskGraph['tasks'], from: string, target: string): b
     if (task === target) return true;
     if (seen.has(task)) continue;
     seen.add(task);
-    pending.push(...(tasks.get(task)?.dependencies ?? []));
+    appendAll(pending, (tasks.get(task)?.dependencies ?? []));
   }
   return false;
 }

@@ -32,7 +32,7 @@ import type {
 import { parseInputRefusal, withParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { createAllowUsageLedger, runValidationFramework } from '@vibe-agent-toolkit/schema';
 import type { RefusalCode, ValidationConfig, ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { ARCHIVE_REFUSED_CODE, archiveEntryPlace, decodeTextContent, direntKindFollowingSync, everywhere, forEachInOrder, isAbsoluteAnyPlatform, isArchiveEntryReadRefusal, isVatError, pathPresent, requireFollowedStatSync, safePath, toForwardSlash, toForwardSlashAnyPlatform, withTempDir } from '@vibe-agent-toolkit/utils';
+import { ARCHIVE_REFUSED_CODE, archiveEntryPlace, decodeTextContent, direntKindFollowingSync, everywhere, forEachInOrder, isAbsoluteAnyPlatform, isArchiveEntryReadRefusal, isVatError, pathPresent, requireFollowedStatSync, safePath, toForwardSlash, toForwardSlashAnyPlatform, withTempDir, appendAll } from '@vibe-agent-toolkit/utils';
 // Type-only: the runtime import stays lazy inside `inspectZipArchive`, so the
 // archive readers are loaded on the one path that parses an archive.
 import type { ArchiveEntry, ArchiveRefusedError, OpenedArchive } from '@vibe-agent-toolkit/utils/archive';
@@ -1815,7 +1815,7 @@ Examples:
 					logger.info(`Found ${String(versionData.length)} version(s) of ${skillId} to delete first`);
 					// ATTEMPTS every version, whatever any one of them answers (`deleteEveryVersion`).
 					const sweep = await deleteEveryVersion(client, skillId, versionData.map(v => v.version), logger);
-					deletedVersions.push(...sweep.deleted);
+					appendAll(deletedVersions, sweep.deleted);
 					if (sweep.failures.length > 0) {
 						const detail = describeVersionSweepFailures(sweep.failures);
 						// Nothing was destroyed, so the refusal (EXTERNAL_API_FAILED, exit 2) is the

@@ -5,6 +5,7 @@
 
 import { dirname, parse } from 'node:path';
 
+import { appendAll } from './append-all.js';
 import { errnoForGitReason } from './errors/git-errno.js';
 import { entryPresentIn } from './errors/path-present.js';
 import { directoryRefusalFor, listingFailure } from './fs-utils.js';
@@ -200,7 +201,7 @@ export function gitLsFiles(options: GitListingOptions & {
 
   // Add patterns if provided
   if (options.patterns && options.patterns.length > 0) {
-    args.push('--', ...options.patterns);
+    appendAll(args, ['--', ...options.patterns]);
   }
 
   // `trim: false` (inside `runListing`) because the output is NUL-delimited:

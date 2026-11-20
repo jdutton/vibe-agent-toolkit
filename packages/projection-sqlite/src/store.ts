@@ -115,7 +115,7 @@ import {
   markVatCacheRoot,
   vatCacheNamespaceRoot,
 } from '@vibe-agent-toolkit/resources';
-import { VatError, classifyFsFault, countWork, everywhere, isPathAbsentError, isVatError, pathPresent, promised, safePath } from '@vibe-agent-toolkit/utils';
+import { VatError, classifyFsFault, countWork, everywhere, isPathAbsentError, isVatError, pathPresent, promised, safePath, appendAll } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 
 import {
@@ -1232,7 +1232,8 @@ function readBlobRows(tables: StoreTables, contentKeys: readonly string[]): { ro
       for (const plan of plansOfScope(tables, 'blob')) {
         const raw = blobStatement(tables, 'select', plan.spec, batch.length).all(...batch);
         decoded += raw.length;
-        result[plan.spec.key]?.push(...decodeRows(plan, raw));
+        const into = result[plan.spec.key];
+        if (into !== undefined) appendAll(into, decodeRows(plan, raw));
       }
     }
     return result as unknown as BlobScopedRows;

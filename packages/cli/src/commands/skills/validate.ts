@@ -42,7 +42,7 @@ import {
   type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, mapInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, mapInOrder, safePath, toForwardSlash, appendAll } from '@vibe-agent-toolkit/utils';
 import { gitFindRoot, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { DocumentFormat } from '../../report-schemas.js';
@@ -270,11 +270,11 @@ function skillReportLines(result: PackagingValidationResult, verbose: boolean): 
 
   const rendered = issuesToRenderAtVerbosity(result.allErrors, verbose);
   for (const issue of rendered) {
-    lines.push(...formatIssueLines(issue, '    '));
+    appendAll(lines, formatIssueLines(issue, '    '));
   }
 
   const detail = verbose ? verboseDetailLines(result) : [];
-  lines.push(...detail);
+  appendAll(lines, detail);
 
   // A trailing blank line only when something was rendered beneath the row —
   // otherwise consecutive one-line rows would be double-spaced.
@@ -355,11 +355,11 @@ export function formatValidationReportLines(
 
   for (const result of results) {
     if (!hasFindings(result)) continue;
-    lines.push(...skillReportLines(result, verbose));
+    appendAll(lines, skillReportLines(result, verbose));
   }
   const runLines = formatRunIssueLines(runFindings);
   if (runLines.length > 0) {
-    lines.push(...runLines, '');
+    appendAll(lines, [...runLines, '']);
   }
   return lines;
 }

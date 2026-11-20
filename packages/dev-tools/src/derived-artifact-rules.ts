@@ -26,7 +26,7 @@
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash, appendAll } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 
 import {
@@ -95,7 +95,7 @@ export function checkGeneratedBlocks(repoRoot: string): ValidationError[] {
       findings.push(stale(document.path, `No \`<!-- gen:${name} -->\` block: the "${name}" list has nowhere to be regenerated into.`));
     }
   }
-  findings.push(...checkNoStrayGeneratedMarkers(repoRoot));
+  appendAll(findings, checkNoStrayGeneratedMarkers(repoRoot));
   return findings;
 }
 
@@ -349,7 +349,7 @@ export function collectDerivedArtifactFindings(repoRoot: string): ValidationErro
   const findings: ValidationError[] = [];
   for (const rule of rules) {
     try {
-      findings.push(...rule(repoRoot));
+      appendAll(findings, rule(repoRoot));
     } catch (error) {
       // A rule that cannot run is a finding, not a pass: the artifact it
       // guards was not checked.

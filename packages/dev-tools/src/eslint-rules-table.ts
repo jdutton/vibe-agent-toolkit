@@ -9,7 +9,7 @@
 
 import { createRequire } from 'node:module';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, appendAll } from '@vibe-agent-toolkit/utils';
 
 export interface RuleDocs {
   readonly description: string;
@@ -105,7 +105,7 @@ export function renderEslintRulesTable(plugin: PluginLike): string[] {
   ];
   for (const category of [...byCategory.keys()].sort(compareCategories)) {
     const rules = byCategory.get(category) ?? [];
-    lines.push(`#### ${category}`, '', ...TABLE_HEADER);
+    appendAll(lines, [`#### ${category}`, '', ...TABLE_HEADER]);
     for (const [name, rule] of rules.toSorted(([a], [b]) => a.localeCompare(b))) {
       lines.push(row(name, rule));
     }

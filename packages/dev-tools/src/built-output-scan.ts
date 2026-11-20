@@ -41,7 +41,7 @@
  * and strings that reach no sink (plain test data), never count.
  */
 
-import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, safePath, appendAll } from '@vibe-agent-toolkit/utils';
 import ts from 'typescript';
 
 import { calleeName, literalPieces, locate, Module, nameOnlyProgram, PathEvaluator, type Piece, type Pieces, type Values } from './built-output-paths.js';
@@ -415,8 +415,8 @@ export function scanTestTree(repoRoot: string, graph: WorkspaceGraph, files: rea
   const imports = new Map<string, readonly string[]>();
   for (const module of modules.values()) {
     const result = scanModule(module, evaluator, workspace);
-    reaches.push(...result.reaches);
-    findings.push(...result.findings);
+    appendAll(reaches, result.reaches);
+    appendAll(findings, result.findings);
     imports.set(module.rel, result.loads.filter((loaded) => modules.has(loaded)));
   }
   return {

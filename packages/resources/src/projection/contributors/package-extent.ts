@@ -48,6 +48,7 @@ import {
   resolveAssetReference,
   safePath,
   toForwardSlash,
+  appendAll,
 } from '@vibe-agent-toolkit/utils';
 import { readTextContentSync } from '@vibe-agent-toolkit/utils/fs';
 import { z } from 'zod';
@@ -406,7 +407,7 @@ function declaredDependencies(manifest: Manifest, fields: readonly string[]): st
   for (const field of fields) {
     const value = manifest[field];
     if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-      names.push(...Object.keys(value));
+      appendAll(names, Object.keys(value));
     }
   }
   return names;
@@ -424,7 +425,7 @@ function workspaceDirectories(root: string, manifest: Manifest): string[] {
   const directories: string[] = [];
   for (const pattern of workspacePatterns(manifest['workspaces'])) {
     if (typeof pattern === 'string') {
-      directories.push(...expandWorkspacePattern(root, pattern));
+      appendAll(directories, expandWorkspacePattern(root, pattern));
     }
   }
   return directories;

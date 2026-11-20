@@ -8,6 +8,8 @@
  * *conformance* unit-testable without a tree.
  */
 
+import { appendAll } from '@vibe-agent-toolkit/utils';
+
 import { OkfConceptFrontmatterSchema } from '../schemas/okf-concept.js';
 
 import type { OkfFinding } from './types.js';
@@ -262,7 +264,7 @@ export function indexFindings(
   }
 
   const version = versionDrafts(document, frontmatter['okf_version'], specVersion);
-  drafts.push(...version.drafts);
+  appendAll(drafts, version.drafts);
   return version.declaredOkfVersion === undefined
     ? { drafts }
     : { drafts, declaredOkfVersion: version.declaredOkfVersion };

@@ -75,7 +75,7 @@ import {
   type RealizationConditionRow,
   type ResourceRealizationRow,
 } from '@vibe-agent-toolkit/resources';
-import { compareCodeUnits, promised, safePath } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, promised, safePath, appendAll } from '@vibe-agent-toolkit/utils';
 
 import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
 
@@ -642,7 +642,7 @@ function componentPathsOf(manifest: Record<string, unknown>): string[] {
     if (typeof value === 'string') {
       paths.push(value);
     } else if (Array.isArray(value)) {
-      paths.push(...value.filter((item): item is string => typeof item === 'string'));
+      appendAll(paths, value.filter((item): item is string => typeof item === 'string'));
     }
   }
   return paths;

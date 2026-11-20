@@ -33,7 +33,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 
-import { everyInOrder, safePath, withTempDir } from '@vibe-agent-toolkit/utils';
+import { everyInOrder, safePath, withTempDir, appendAll } from '@vibe-agent-toolkit/utils';
 
 import { currentHost, type ReportEnvelope } from '../../envelope/envelope.js';
 import {
@@ -210,7 +210,7 @@ async function captureSubject(
       run(planBuildVerbs(subject, { ...verbSubject, path: clonePath }, request.instrument.version).invocations, clonePath),
     );
     if (!built.ok) return built;
-    rows.push(...built.rows);
+    appendAll(rows, built.rows);
   }
 
   return {

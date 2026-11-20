@@ -32,7 +32,7 @@
 import { readdirSync } from 'node:fs';
 
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, FollowedWalk, type FsSide, isPathAbsentError, issueLocation, safePath, withFsFaultSync } from '@vibe-agent-toolkit/utils';
+import { appendAll, direntKindFollowingSync, FollowedWalk, type FsSide, isPathAbsentError, issueLocation, safePath, withFsFaultSync } from '@vibe-agent-toolkit/utils';
 
 import { CLAUDE_WEB_REFERENCES_SUBDIR, TARGET_SUBDIR_CATEGORIES } from '../content-type-routing.js';
 
@@ -88,8 +88,7 @@ function listFilesUnder(dir: string, baseDir: string, side: FsSide, walk: Follow
       found.push(safePath.relative(baseDir, child));
     } else if (kind === 'directory') {
       guard.enter(child);
-      // One at a time, never a spread: `push(...walked)` is an argument list, which throws `Maximum call stack size exceeded` past roughly 125,000 entries, and a walk is unbounded.
-      for (const file of listFilesUnder(child, baseDir, side, guard)) found.push(file);
+      appendAll(found, listFilesUnder(child, baseDir, side, guard));
     }
   }
   return found;

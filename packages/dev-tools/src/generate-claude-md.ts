@@ -25,7 +25,7 @@
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 import { ExitCode, type ExitCodeValue } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, isPathAbsentError, safePath, toForwardSlash, appendAll } from '@vibe-agent-toolkit/utils';
 
 import { isEntrypoint, log, PROJECT_ROOT } from './common.js';
 import { eslintRulesTable } from './eslint-rules-table.js';
@@ -286,7 +286,7 @@ export function regenerateBlocks(text: string, repoRoot: string, docPath: string
     const generated = generator(repoRoot).map((generatedLine) => `${indent}${generatedLine}`);
     if (previous.join('\n') !== generated.join('\n')) changed.push(name);
 
-    out.push(line, ...generated, lines[closeIndex] ?? '');
+    appendAll(out, [line, ...generated, lines[closeIndex] ?? '']);
     index = closeIndex + 1;
   }
 

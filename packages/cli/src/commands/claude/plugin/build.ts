@@ -12,7 +12,7 @@ import { mkdir, readdir } from 'node:fs/promises';
 import { conventionalSuiteProbe, getMarketplaceOutputDir, getPluginSourceDir, isSkillPackagingInputError, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkillInto, packagingConfigToPackageOptions, pluginDirInMarketplace, skillNameToFsPath, stagedPathMapper, type ConventionalSuiteProbe, type DeclaredEvalSuite, type PackageSkillResult, type RunSkillRegistries } from '@vibe-agent-toolkit/agent-skills';
 import { type ClaudeMarketplaceConfig, type ClaudeMarketplacePluginEntry, type ExternalPluginSource, type ParseDispatcher, type ProjectConfig, type SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Finding, type Gate, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { applyTreePlan, compareCodeUnits, direntKindFollowing, everyInOrder, foldedSegment, forEachInOrder, type FsSide, isSingleFsSegment, issueLocation, isTreeChangeResidue, mapInOrder, pathPresent, planTreeChanges, safePath, type SideOfPath, sideWithin, toForwardSlash, VatError, withFsFault, writeFileUnder } from '@vibe-agent-toolkit/utils';
+import { applyTreePlan, compareCodeUnits, direntKindFollowing, everyInOrder, foldedSegment, forEachInOrder, type FsSide, isSingleFsSegment, issueLocation, isTreeChangeResidue, mapInOrder, pathPresent, planTreeChanges, safePath, type SideOfPath, sideWithin, toForwardSlash, VatError, withFsFault, writeFileUnder, appendAll } from '@vibe-agent-toolkit/utils';
 import { onCrawlOutput } from '@vibe-agent-toolkit/utils/crawl';
 import { Command } from 'commander';
 
@@ -1203,11 +1203,11 @@ export function summarizePackagedSkillIssues(
 
   for (const { skillDirPath, result } of packaged) {
     const issues = collectPostBuildIssues(result);
-    all.push(...issues);
+    appendAll(all, issues);
     if (issues.length > 0) {
       lines.push(`         ${skillDirPath}: ${formatIssueSetHeading(issues, 'post-build')}`);
       for (const issue of issuesToRenderAtVerbosity(issues, verbose)) {
-        lines.push(...formatIssueLines(issue, '         '));
+        appendAll(lines, formatIssueLines(issue, '         '));
       }
     }
     if (result.hasErrors) withErrors.push(skillDirPath);

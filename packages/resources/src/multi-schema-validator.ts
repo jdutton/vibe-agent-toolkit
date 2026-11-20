@@ -12,7 +12,7 @@
 import path from 'node:path';
 
 import { createRegistryIssue } from '@vibe-agent-toolkit/schema';
-import { issueLocation, mapInOrder, safePath } from '@vibe-agent-toolkit/utils';
+import { issueLocation, mapInOrder, safePath, appendAll } from '@vibe-agent-toolkit/utils';
 import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 
 import { validateFrontmatter } from './frontmatter-validator.js';
@@ -124,7 +124,7 @@ export function getAllSchemaErrors(schemas: SchemaReference[]): ValidationIssue[
   const allErrors: ValidationIssue[] = [];
   for (const ref of schemas) {
     if (ref.errors) {
-      allErrors.push(...ref.errors);
+      appendAll(allErrors, ref.errors);
     }
   }
   return allErrors;

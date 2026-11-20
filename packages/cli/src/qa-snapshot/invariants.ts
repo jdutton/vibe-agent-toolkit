@@ -51,6 +51,8 @@
  * green wearing the same clothes as a real one.
  */
 
+import { appendAll } from '@vibe-agent-toolkit/utils';
+
 import type { LaneId } from '../pipeline-oracles/types.js';
 
 import type { InvariantViolation, LaneManifestEntry, SnapshotManifest } from './types.js';
@@ -84,7 +86,7 @@ export interface InvariantReport {
 export function checkInvariants(manifest: SnapshotManifest): InvariantReport {
   const violations: InvariantViolation[] = [];
   for (const lane of manifest.lanes) {
-    violations.push(...laneViolations(lane));
+    appendAll(violations, laneViolations(lane));
   }
 
   const unchecked: InvariantViolation['code'][] = [];

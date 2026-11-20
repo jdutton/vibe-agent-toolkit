@@ -1096,6 +1096,10 @@ export default [
       // `diff-tree`, `rev-list`, `show`) goes
       // through `runGitBytes`, never a runner that decodes stdout as UTF-8. No backlog, no allowlist.
       'local/no-text-git-object-read': 'error',
+      // An array spread into `push` is an argument list, which overflows the call stack past
+      // ~125,000 items; a 200,000-file `.venv` walk did. `appendAll` appends one at a time.
+      // No backlog, no allowlist: every site was migrated the day this was enabled.
+      'local/no-spread-push': 'error',
     },
   },
   // The base class itself is the one legitimate `extends Error` in `src`: the error-contract

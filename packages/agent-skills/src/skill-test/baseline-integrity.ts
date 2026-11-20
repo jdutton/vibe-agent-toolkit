@@ -1,3 +1,4 @@
+import { appendAll } from '@vibe-agent-toolkit/utils';
 import { toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils/path';
 import {
   isProtectedName,
@@ -1730,11 +1731,11 @@ function walkToolReaches(
     const context = use.parentToolUseId;
     const cwd = cwds.has(context) ? cwds.get(context) : startCwd;
     if (use.command === undefined) {
-      reaches.push(...structuredToolReaches(use.name, use.input, cwd));
+      appendAll(reaches, structuredToolReaches(use.name, use.input, cwd));
       continue;
     }
     const walked = walkBashCommand(use.command, cwd, ctx);
-    reaches.push(...walked.reaches);
+    appendAll(reaches, walked.reaches);
     cwds.set(context, walked.cwd);
     // ⛔ THE WIDEST HOLE, ACROSS CALLS TOO — not the first one the transcript
     // happened to contain. See {@link CwdHoles}.
@@ -2638,8 +2639,8 @@ function walkBashCommand(
     // `undefined`, and `segmentHead` returns `headToken` as the latter — so spread it
     // conditionally rather than widening the callee to accept `| undefined`, which
     // would let a genuinely missing head token look like a supplied one.
-    reaches.push(
-      ...segmentReaches(
+    appendAll(reaches, 
+      segmentReaches(
         { head, args, words, ...(headToken === undefined ? {} : { headToken }) },
         intent,
         segmentCwd,
@@ -3180,7 +3181,7 @@ function flatPathHits(
     dirHits.push(hit);
     // The needle as MATCHED, not as reported: `hit.match` has been redacted and is
     // no longer a substring of anything (see {@link pathNeedle}).
-    dirNeedles.push(...group.map((n) => n.needle));
+    appendAll(dirNeedles, group.map((n) => n.needle));
   }
 
   const armDir = normalizeForMatch(input.armWorkspaceDir ?? '');

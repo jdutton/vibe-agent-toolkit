@@ -28,7 +28,7 @@
  * Exit 0 = clean, 1 = over budget or a measurement failure.
  */
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, appendAll } from '@vibe-agent-toolkit/utils';
 
 import { PROJECT_ROOT, isEntrypoint, log, safeExecResult } from './common.js';
 
@@ -368,7 +368,7 @@ function main(): void {
       }
       const entries = parsed.map((e) => ({ ...e, file: `${target.dir}/${e.file}` }));
       measuredFiles += entries.length;
-      allViolations.push(...findHeapBudgetViolations(entries, budgetMB));
+      appendAll(allViolations, findHeapBudgetViolations(entries, budgetMB));
     }
   }
 

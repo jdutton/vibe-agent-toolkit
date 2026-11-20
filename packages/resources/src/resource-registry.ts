@@ -34,6 +34,7 @@ import {
   toNfc,
   VatError,
   withOuterBracket,
+  appendAll,
 } from '@vibe-agent-toolkit/utils';
 import {
   BUILD_OUTPUT_GLOBS,
@@ -575,7 +576,13 @@ async function readAndCompileSchema(
  *
  * // Add resources
  * await registry.addResource('/project/README.md');
- * await registry.crawl({ baseDir: '/project/docs', unreadable: 'refuse', outputs: [] });
+ * await registry.crawl({
+ *   baseDir: '/project/docs',
+ *   unreadable: 'refuse',
+ *   outputs: [],
+ *   populationSource: run.population.source, // the run's population (ResourcePopulationSource)
+ *   ignoredRefusals: 'record',
+ * });
  *
  * // Validate all links
  * const result = await registry.validate();
@@ -971,6 +978,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    *   baseDir: '/project/docs',
    *   outputs: [],
    *   unreadable: 'refuse', // or { degrade } — see PopulationUnreadablePolicy
+   *   populationSource: run.population.source, // the run's population (ResourcePopulationSource)
+   *   ignoredRefusals: 'record', // or 'skip' — see PopulationMembers.ignoredRefusals
    *   include: ['**.md'],
    *   exclude: ['node_modules'],
    * });
@@ -1440,6 +1449,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    *   baseDir: './docs',
    *   outputs: [],
    *   unreadable: 'refuse',
+   *   populationSource: run.population.source, // the run's population (ResourcePopulationSource)
+   *   ignoredRefusals: 'record',
    *   include: ['**\/*.md'],
    *   exclude: ['**\/node_modules/**']
    * });
@@ -1772,7 +1783,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         undefined,
         this.baseDir,
       );
-      issues.push(...frontmatterIssues);
+      appendAll(issues, frontmatterIssues);
     }
     return issues;
   }
@@ -1806,7 +1817,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         fragmentsByFile,
         skipGitIgnoreCheck,
       );
-      issues.push(...collectionIssues);
+      appendAll(issues, collectionIssues);
     });
 
     return issues;
@@ -1845,7 +1856,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         fragmentsByFile,
         skipGitIgnoreCheck,
       );
-      issues.push(...collectionIssues);
+      appendAll(issues, collectionIssues);
     });
 
     return issues;
@@ -1972,7 +1983,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         fragmentsByFile,
         linkOptions,
       );
-      issues.push(...linkIssues);
+      appendAll(issues, linkIssues);
 
       if (externalUrls.length > 0) {
         const prior = this.frontmatterExternalUrlsByResource.get(resource.filePath) ?? [];
@@ -2058,14 +2069,14 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Surface parse-time diagnostics: YAML frontmatter errors first, then HTML
     // well-formedness, then dangling reference-style links, then duplicate-id
     // collisions. Combined into one push() call (SonarCloud S7778).
-    issues.push(
+    appendAll(issues, [
       ...this.collectYamlErrors(),
       ...this.collectHtmlParseErrors(),
       ...this.collectUnresolvedReferenceIssues(),
       ...this.collectDuplicateIdErrors(),
       ...this.collectNotAdmittedErrors(),
       ...this.collectPopulationConditionIssues(),
-    );
+    ]);
 
     // Validate each link in each resource
     const linkIssues = await this.validateAllLinks(
@@ -2074,25 +2085,25 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       options?.checkHtmlAnchors ?? false,
       options?.deferredArtifacts,
     );
-    issues.push(...linkIssues);
+    appendAll(issues, linkIssues);
 
     // Per-collection frontmatter validation
     const collectionFrontmatterIssues = await this.validateCollectionFrontmatter(
       fragmentsByFile,
       options?.skipGitIgnoreCheck ?? false,
     );
-    issues.push(...collectionFrontmatterIssues);
+    appendAll(issues, collectionFrontmatterIssues);
 
     // Global frontmatter validation (if schema provided)
     if (options?.frontmatterSchema) {
       const mode = options.validationMode ?? 'strict';
-      issues.push(...this.validateAllFrontmatter(options.frontmatterSchema, mode));
+      appendAll(issues, this.validateAllFrontmatter(options.frontmatterSchema, mode));
     }
 
     // External URL validation (if enabled)
     if (options?.checkExternalUrls) {
       const externalUrlIssues = await this.validateExternalUrls(options.noCache ?? false);
-      issues.push(...externalUrlIssues);
+      appendAll(issues, externalUrlIssues);
     }
 
     // Resolve severity + apply allow-filter INSIDE the library (not the CLI).

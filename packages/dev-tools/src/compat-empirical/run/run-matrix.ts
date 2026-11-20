@@ -18,7 +18,7 @@
 
 import { writeFileSync } from 'node:fs';
 
-import { forEachInOrder, mapInOrder, safePath } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, mapInOrder, safePath, appendAll } from '@vibe-agent-toolkit/utils';
 
 import type { Color } from '../../common.js';
 import type { StagedSkill } from '../corpus/fetch-sources.js';
@@ -248,9 +248,9 @@ export async function runMatrix(opts: RunMatrixOptions): Promise<RuntimeObservat
           log,
         };
         const cellResults = await runCell(cellCtx);
-        observations.push(...cellResults);
+        appendAll(observations, cellResults);
         const extra = await maybeExtendCell(cellCtx, cellResults, opts.repeatN);
-        observations.push(...extra);
+        appendAll(observations, extra);
       });
     });
   });

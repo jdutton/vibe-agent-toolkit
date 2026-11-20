@@ -10,6 +10,8 @@
  * as the cell's primary deterministic/judge label.
  */
 
+import { appendAll } from '@vibe-agent-toolkit/utils';
+
 import { classifyDeterministic } from '../judge/deterministic.js';
 import type {
   Agreement,
@@ -106,10 +108,10 @@ function classifyAgreement(
 
 function collectEvidenceRefs(prediction: StaticPrediction, target: Target): string[] {
   const refs: string[] = [];
-  refs.push(...prediction.observations.map((o) => `obs:${o.code}`));
+  appendAll(refs, prediction.observations.map((o) => `obs:${o.code}`));
   const perTarget = prediction.verdictByTarget.find((v) => v.target === target);
   if (perTarget) {
-    refs.push(...perTarget.verdicts.map((v) => `verdict:${v.code}:${v.observationCode}`));
+    appendAll(refs, perTarget.verdicts.map((v) => `verdict:${v.code}:${v.observationCode}`));
   }
   return refs;
 }

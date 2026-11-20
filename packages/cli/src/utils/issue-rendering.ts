@@ -23,7 +23,7 @@ import {
   type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { TREE_CLEANUP_INCOMPLETE_CODE } from '@vibe-agent-toolkit/utils';
+import { TREE_CLEANUP_INCOMPLETE_CODE, appendAll } from '@vibe-agent-toolkit/utils';
 
 import { formatIssueAnchor, formatIssuePosition } from './issue-anchor.js';
 
@@ -157,7 +157,7 @@ export function formatRunIssueLines(runIssues: readonly ValidationIssue[]): stri
     `  ${formatIssueSetHeading(runIssues)}:`,
   ];
   for (const issue of runIssues) {
-    lines.push(...formatIssueLines(issue, '    '));
+    appendAll(lines, formatIssueLines(issue, '    '));
   }
   return lines;
 }

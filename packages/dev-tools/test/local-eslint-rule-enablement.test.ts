@@ -128,6 +128,8 @@ const PROBE_FILES: Readonly<Record<string, string>> = {
   'projection-sqlite-import-boundary': 'packages/resources/src/projection/merge.ts',
   // Scoped to product `src/`; the probe reads the object store through `runGitBytes`.
   'no-text-git-object-read': 'packages/agent-skills/src/skill-source/git-clone.ts',
+  // Scoped to product `src/`; the probe appends a walk through `appendAll`.
+  'no-spread-push': 'packages/agent-skills/src/post-build-checks.ts',
 };
 
 /** `error` as ESLint normalizes it out of `calculateConfigForFile`. */

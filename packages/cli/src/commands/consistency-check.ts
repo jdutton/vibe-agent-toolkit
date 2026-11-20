@@ -11,7 +11,7 @@ import { basename, dirname } from 'node:path';
 import type { PluginLocalSkillIndex, PluginSkillExclusion, SkillPackagingConfig } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
 import type { Severity } from '@vibe-agent-toolkit/schema';
-import { everywhere, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
+import { everywhere, pathPresent, safePath, appendAll } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 
 import { readPackageJsonOrAbsent } from '../utils/package-json.js';
@@ -438,7 +438,7 @@ function checkPluginReferencesUnknownSkill(
       if (plugin.skills === '*') {
         continue;
       }
-      issues.push(...checkPluginSelectors(plugin.skills, plugin.name, marketplaceName, names));
+      appendAll(issues, checkPluginSelectors(plugin.skills, plugin.name, marketplaceName, names));
     }
   }
 

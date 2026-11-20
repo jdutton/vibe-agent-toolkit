@@ -37,7 +37,7 @@
  * reads its own output through a population of that output's directory.
  */
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { relativeEscapesRoot, safePath } from '@vibe-agent-toolkit/utils';
 import { gitFindRoot, gitLinksCheckedOutAsFiles, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { ParseResult } from '../link-parser.js';
@@ -48,7 +48,7 @@ import type { CollectionConfig } from '../schemas/project-config.js';
 import { sameDirectory } from '../utils.js';
 
 import { RunContentCache } from './content-cache.js';
-import { RootListing, type PopulationUnreadablePolicy } from './crawl-source.js';
+import { type IgnoredListing, listIgnored, RootListing, type PopulationUnreadablePolicy } from './crawl-source.js';
 import type { PopulationCache } from './merge.js';
 import {
   buildResourceListing,
@@ -152,7 +152,9 @@ export class RunPopulation implements PopulationRun {
   readonly #listings = new Map<string, Promise<RootListing>>();
   readonly #trackers = new Map<string, Promise<GitTracker | undefined>>();
   /** Each listed root's tracked links checked out as plain files, by root. */
-  readonly #linksAsFiles = new Map<string, ReadonlySet<string>>();
+  readonly #linksAsFiles = new Map<string, ReadonlySet<string> | null>();
+  /** Each listed root's ignored territory ({@link listIgnored}), by the directory it was asked under. */
+  readonly #ignored = new Map<string, IgnoredListing | null>();
   readonly #options: RunPopulationOptions;
 
   /**
@@ -287,6 +289,7 @@ export class RunPopulation implements PopulationRun {
       RootListing.of(listed, outputs, {
         names: () => this.#gitListing(listed, home),
         linksCheckedOutAsFiles: () => this.#linksAsFilesOf(listed),
+        ignored: () => this.#ignoredOf(listed),
       }));
     const population = await buildResourceListing({
       root: listed,
@@ -302,32 +305,61 @@ export class RunPopulation implements PopulationRun {
 
   /**
    * A root's ignore oracle, initialized once per run: the run's own for the
-   * home, none outside a repository (there is nothing to ask, and asking costs
-   * a spawn).
+   * home and for a root under it in the home's repository (its names and
+   * verdicts are the home's, spelled the same way), none outside a repository
+   * (there is nothing to ask, and asking costs a spawn), else the root's own.
    */
   #trackerOf(root: string, home: boolean): Promise<GitTracker | undefined> {
     return memoized(this.#trackers, root, async () => {
       if (gitFindRoot(root) === null) return undefined;
-      const tracker = home ? this.gitTracker : new GitTracker(root);
+      const tracker = home || this.#inHomeRepository(root) ? this.gitTracker : new GitTracker(root);
       await tracker.initialize();
       return tracker;
     });
   }
 
   /**
+   * Whether `root` is under the home, spelled under it, in the home's own
+   * repository: not in a nested repository or submodule, whose files the home's
+   * listing names as one directory.
+   */
+  #inHomeRepository(root: string): boolean {
+    const relative = safePath.relative(this.root, root);
+    return relative !== '' && !relativeEscapesRoot(relative) && gitFindRoot(root) === gitFindRoot(this.root);
+  }
+
+  /**
    * The tracked links under a root its checkout wrote as plain files, read once per
    * root per run: one `git config` read, and the index under it only when
-   * `core.symlinks` is `false`.
+   * `core.symlinks` is `false`; the home's set for a root in the home's
+   * repository. `null` when git did not answer.
    */
-  #linksAsFilesOf(root: string): ReadonlySet<string> {
+  #linksAsFilesOf(root: string): ReadonlySet<string> | null {
     // Read under the root, never the whole repository: `ls-files -s` of a large
     // monorepo is twice its names and could pass the output cap for a small root.
-    let links = this.#linksAsFiles.get(root);
-    if (links === undefined) {
-      links = gitLinksCheckedOutAsFiles(root);
-      this.#linksAsFiles.set(root, links);
+    const read = this.#inHomeRepository(root) ? this.root : root;
+    if (!this.#linksAsFiles.has(read)) this.#linksAsFiles.set(read, gitLinksCheckedOutAsFiles(read));
+    return this.#linksAsFiles.get(read) ?? null;
+  }
+
+  /**
+   * A root's ignored territory, asked once per run: the home's answer for a
+   * root in the home's repository, unless the home's answer collapsed the root
+   * itself (an ignored root, whose own answer lists inside it).
+   */
+  #ignoredOf(root: string): IgnoredListing | null {
+    if (this.#inHomeRepository(root)) {
+      const home = this.#ignoredAsked(this.root);
+      const collapsesRoot = home?.directories.some((directory) => !relativeEscapesRoot(safePath.relative(directory, root))) === true;
+      if (!collapsesRoot) return home;
     }
-    return links;
+    return this.#ignoredAsked(root);
+  }
+
+  /** {@link listIgnored} under `cwd`, once per run. */
+  #ignoredAsked(cwd: string): IgnoredListing | null {
+    if (!this.#ignored.has(cwd)) this.#ignored.set(cwd, listIgnored(cwd));
+    return this.#ignored.get(cwd) ?? null;
   }
 
   /**
@@ -335,8 +367,9 @@ export class RunPopulation implements PopulationRun {
    * the root's own when the run's was initialized without untracked files.
    */
   async #gitListing(root: string, home: boolean): Promise<readonly string[] | null> {
-    const listing = (await this.#trackerOf(root, home))?.listing() ?? null;
-    if (listing !== null || !home) return listing;
+    const tracker = await this.#trackerOf(root, home);
+    const listing = tracker?.listing() ?? null;
+    if (listing !== null || (!home && tracker !== this.gitTracker)) return listing;
     const own = new GitTracker(root);
     await own.initialize();
     return own.listing();

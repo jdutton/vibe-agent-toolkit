@@ -50,6 +50,7 @@ import {
   toForwardSlash,
   TreeRollbackIncompleteError,
   VatError,
+  appendAll,
 } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
@@ -241,7 +242,7 @@ export function formatPreBuildIssueReport(
   if (validationResult.allErrors.length > 0) {
     lines.push(`\n   ${formatIssueSetHeading(validationResult.allErrors)}:`);
     for (const issue of issuesToRenderAtVerbosity(validationResult.allErrors, verbose)) {
-      lines.push(...formatIssueLines(issue, '     '));
+      appendAll(lines, formatIssueLines(issue, '     '));
     }
   }
   return lines;
@@ -289,7 +290,7 @@ export function formatPostBuildIssueReport(
   const heading = `   ${skillName}: ${formatIssueSetHeading(issues, 'post-build')}`;
   const lines = [rendered.length === 0 ? heading : `${heading}:`];
   for (const issue of rendered) {
-    lines.push(...formatIssueLines(issue, '     '));
+    appendAll(lines, formatIssueLines(issue, '     '));
   }
   return lines;
 }

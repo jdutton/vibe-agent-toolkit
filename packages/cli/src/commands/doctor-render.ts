@@ -9,6 +9,7 @@
  */
 
 import type { Report } from '@vibe-agent-toolkit/schema';
+import { appendAll } from '@vibe-agent-toolkit/utils';
 
 import type { DoctorCheckResult, DoctorData, DoctorOutcome } from './doctor-schema.js';
 
@@ -121,7 +122,7 @@ export function renderDoctorBlock(data: DoctorData, verbose: boolean): string {
 
   // The summary states the distribution AND how many checks it did not print,
   // so the count can never contradict the list above it.
-  lines.push(...formatDoctorSummary(countByOutcome(data.checks), displayed.length));
+  appendAll(lines, formatDoctorSummary(countByOutcome(data.checks), displayed.length));
   return `${lines.join('\n')}\n`;
 }
 

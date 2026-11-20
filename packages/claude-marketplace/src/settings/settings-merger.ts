@@ -8,6 +8,8 @@
  * Deny always blocks. Ask always prompts. Allow only fires if no deny/ask matched.
  */
 
+import { appendAll } from '@vibe-agent-toolkit/utils';
+
 import type { ManagedSettings, MarketplaceSource, ProjectSettings, UserSettings } from '../schemas/settings.js';
 import type { SettingsLevel } from '../types.js';
 
@@ -145,9 +147,9 @@ function mergePermissionFields(
   permissions: NonNullable<UserSettings['permissions']>,
   provenance: SettingProvenance
 ): void {
-  effective.allow.push(...collectRules(permissions.allow, provenance));
-  effective.deny.push(...collectRules(permissions.deny, provenance));
-  effective.ask.push(...collectRules(permissions.ask, provenance));
+  appendAll(effective.allow, collectRules(permissions.allow, provenance));
+  appendAll(effective.deny, collectRules(permissions.deny, provenance));
+  appendAll(effective.ask, collectRules(permissions.ask, provenance));
 
   if (permissions.defaultMode !== undefined && effective.defaultMode === undefined) {
     effective.defaultMode = { value: permissions.defaultMode, provenance };

@@ -49,7 +49,11 @@
   (or its open snapshot held).
 - `@vibe-agent-toolkit/utils`: `gitLinksCheckedOutAsFiles`: the tracked links a `core.symlinks=false`
   checkout wrote as plain files, read from the index under one root only when `core.symlinks` is
-  false (unset is false on Windows, as Git for Windows reads it).
+  false (unset is false on Windows, as Git for Windows reads it), or `null` when git did not answer,
+  as `gitLsFiles` and `gitLsOthers` return it.
+- `@vibe-agent-toolkit/utils`: `appendAll(target, items)`, which appends one item at a time, and
+  the `no-spread-push` ESLint rule (`@vibe-agent-toolkit/utils/eslint`, not in `recommended`),
+  which refuses spreading an array into `push()` or `unshift()`.
 - `@vibe-agent-toolkit/agent-skills`: `projectConfigOrNone`, `REGISTRY_INCLUDE`, `withSkillRegistries`
   and the `SkillRegistryRuling` type.
 
@@ -79,7 +83,8 @@
   the store off**, as git's index and the stored population keep it, not a member.
 - **A walk of more than about 125,000 paths no longer dies with `Maximum call stack size exceeded`.**
   The stored population appended a gitignored directory's walk (a 200,000-file `.venv`) as one
-  spread argument list; so did three agent-skills walks. Each now appends one path at a time.
+  spread argument list; so did three agent-skills walks. Every array append in product source now
+  goes through `appendAll`, and `local/no-spread-push` refuses the spread.
 - **`vat resources validate` and `vat resources scan` with an unreadable untracked non-markdown file
   exit 0 instead of 2**, store on and off: the listing never stages the tree, so git never reads the
   file, and the stored population's notice names it without refusing the run.
@@ -88,6 +93,9 @@
   an unreadable one.
 - **The skills lanes (`vat skills validate`, `vat skills build`, `vat audit`) no longer walk ignored
   territory** on a root with no store: they report no row from it.
+- **A second root of a run, under the home in the home's repository, asks git nothing more**: it is
+  listed off the home's tracker, ignored listing and index read. A root in a nested repository, or
+  one git ignores, asks its own.
 
 ### Changed
 

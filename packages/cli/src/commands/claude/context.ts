@@ -103,7 +103,7 @@ import {
   type ExitDeterminingDocument,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, safePath, appendAll } from '@vibe-agent-toolkit/utils';
 import { Command, Option } from 'commander';
 
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
@@ -766,7 +766,7 @@ function regionTable(regions: readonly RegionCost[]): string[] {
       + `   ${displayPath(region.representative)}`,
     );
   }
-  lines.push(...omittedNotice(shown.length, regions.length, 'region', 'regions'), '');
+  appendAll(lines, [...omittedNotice(shown.length, regions.length, 'region', 'regions'), '']);
   return lines;
 }
 
@@ -874,7 +874,7 @@ function directoryTable(directories: readonly DirectoryCost[]): string[] {
       + unknownRowSuffix(directory.unknownTokenRows),
     );
   }
-  lines.push(...omittedNotice(shown.length, directories.length, 'directory', 'directories'), '');
+  appendAll(lines, [...omittedNotice(shown.length, directories.length, 'directory', 'directories'), '']);
   return lines;
 }
 
@@ -1411,7 +1411,7 @@ function limitSection(): string[] {
   ];
   for (const limit of CLAUDE_CONTEXT_LIMITS) {
     lines.push(`  ${limit.direction}: ${limit.id}`);
-    lines.push(...wrapStatement(limit.statement, '    '));
+    appendAll(lines, wrapStatement(limit.statement, '    '));
   }
   lines.push('', 'Modelled Claude Code behaviours (vendor versions, each cited)');
   for (const behaviour of CLAUDE_CONTEXT_MODELLED_BEHAVIOURS) {

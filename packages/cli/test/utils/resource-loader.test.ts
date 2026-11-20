@@ -214,7 +214,7 @@ describe('loadResourcesWithConfig', () => {
 
     expect(crawlPatterns()).toEqual({
       baseDir: PROJECT_ROOT,
-      unreadable: 'refuse',
+      unreadable: 'refuse', ignoredRefusals: 'record',
       outputs: [],
       include: INCLUDE_PATTERNS,
       exclude: EXCLUDE_PATTERNS,
@@ -239,7 +239,7 @@ describe('loadResourcesWithConfig', () => {
     // prefix instead of a new base.
     expect(crawlPatterns()).toEqual({
       baseDir: PROJECT_ROOT,
-      unreadable: 'refuse',
+      unreadable: 'refuse', ignoredRefusals: 'record',
       outputs: [],
       include: SUBTREE_INCLUDE,
       exclude: EXCLUDE_PATTERNS,
@@ -256,7 +256,7 @@ describe('loadResourcesWithConfig', () => {
 
     expect(crawlPatterns()).toEqual({
       baseDir: PROJECT_ROOT,
-      unreadable: 'refuse',
+      unreadable: 'refuse', ignoredRefusals: 'record',
       outputs: [],
       include: ['**/*.md', '**/*.html', '**/*.htm'],
       exclude: EXCLUDE_PATTERNS,
@@ -272,7 +272,7 @@ describe('loadResourcesWithConfig', () => {
 
     expect(crawlPatterns()).toEqual({
       baseDir: safePath.resolve('.'),
-      unreadable: 'refuse',
+      unreadable: 'refuse', ignoredRefusals: 'record',
       outputs: [],
       include: ['docs/**/*.md', 'docs/**/*.html', 'docs/**/*.htm'],
       exclude: EXCLUDE_PATTERNS,
@@ -288,7 +288,7 @@ describe('loadResourcesWithConfig', () => {
 
     const result = await load(EXPLICIT_PATH, PROJECT_ROOT, logger);
 
-    expect(crawlPatterns()).toEqual({ baseDir: EXPLICIT_PATH, unreadable: 'refuse', outputs: [] });
+    expect(crawlPatterns()).toEqual({ baseDir: EXPLICIT_PATH, unreadable: 'refuse', ignoredRefusals: 'record', outputs: [] });
     expect(warnCalls.join('\n')).toContain(EXPLICIT_PATH);
     expect(result.scanPath).toBe(EXPLICIT_PATH);
   });
@@ -381,7 +381,7 @@ describe('loadResourcesWithConfig', () => {
 
     const result = await load(undefined, PROJECT_ROOT, logger);
 
-    expect(crawlPatterns()).toEqual({ baseDir: PROJECT_ROOT, unreadable: 'refuse', outputs: [] });
+    expect(crawlPatterns()).toEqual({ baseDir: PROJECT_ROOT, unreadable: 'refuse', ignoredRefusals: 'record', outputs: [] });
     expect(result.config).toBeUndefined();
   });
 

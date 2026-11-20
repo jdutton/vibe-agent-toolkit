@@ -324,12 +324,16 @@ gitignored `.venv` makes it the largest cost a listing has. Neither walk collect
 (a link beneath an ignored directory or a nested repository is ignored, and every lane a listing
 serves declines it without a row; a lane that reports ignored links, such as the marketplace
 inventory, never enumerates through a listing). A tracked link a `core.symlinks=false` checkout wrote as a plain file is declined, as the
-snapshot keeps it, by one index read under the listed root (never the whole repository) that
-happens only when `core.symlinks` is false; unset reads as git's default for the platform, `true`
+snapshot keeps it, by one index read under the listed root (never the whole repository above the
+run's home) that happens only when `core.symlinks` is false; unset reads as git's default for the platform, `true`
 except on Windows, where Git for Windows starts with symlinks off. A conflicted path's mode is read
 at the stage git prefers (2, then 1, then 3). So a listed root reports the same conditions with the
 store off or on, for every crawl that records ignored-territory refusals. Paths from `ls-files` are relative to the root git ran in, never to the
-repository's top level. Which declined links apply is one predicate, `declinedLinkApplies`, shared
+repository's top level. A root under the run's home, in the home's own repository, is listed off
+the home's answers (its tracker, its ignored listing and its index read, each filtered to the root),
+so a second root of the run asks git nothing more; a root in a nested repository asks its own, and
+so does a root git ignores, whose ignored territory the home's listing collapsed to one entry.
+Which declined links apply is one predicate, `declinedLinkApplies`, shared
 with a stored population. Outside a repository the names are one walk that prunes
 `NEVER_CRAWL_GLOBS`, as every enumerator outside a repository does (a known defect: authored
 markdown under a tool-output-named directory is not enumerated). A listing touches no store key. Degrade is a refusal policy only and never picks the enumerator. It does not throw: `packaging-validator.ts`'s

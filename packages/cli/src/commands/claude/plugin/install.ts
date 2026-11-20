@@ -59,6 +59,7 @@ import {
   type TreePlan,
   withFsFault,
   withFsFaultSync,
+  appendAll,
 } from '@vibe-agent-toolkit/utils';
 import { ARCHIVE_LIMITS, extractArchive } from '@vibe-agent-toolkit/utils/archive';
 import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
@@ -824,8 +825,8 @@ function replacedOutcome(run: InstallRun, planned: PlannedInstall, plan: TreePla
 
 /** Record what the run did: called once the transaction committed, or once a dry run is planned. */
 function record(run: InstallRun, planned: PlannedInstall, findings: readonly ValidationIssue[]): void {
-  run.skills.push(...planned.skills);
-  run.issues.push(...planned.issues, ...findings);
+  appendAll(run.skills, planned.skills);
+  appendAll(run.issues, [...planned.issues, ...findings]);
 }
 
 /**

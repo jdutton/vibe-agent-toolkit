@@ -3,7 +3,7 @@ import { extname } from 'node:path';
 
 import { detectorFrontmatter, type EvidenceRecord, type Observation } from '@vibe-agent-toolkit/agent-skills';
 import { classifyParseFailure, type ParseDispatcher, type ParseFailureKind, readContentForParse } from '@vibe-agent-toolkit/resources';
-import { issueLocation, mapWithConcurrency, safePath } from '@vibe-agent-toolkit/utils';
+import { issueLocation, mapWithConcurrency, safePath, appendAll } from '@vibe-agent-toolkit/utils';
 
 import { readMarketplaceDefaultTargets, resolveEffectiveTargets } from './marketplace-defaults.js';
 import {
@@ -172,7 +172,7 @@ async function scanScriptFile(
 
   if (extname(fullPath).toLowerCase() === '.py') {
     const content = await readFile(fullPath, 'utf8');
-    evidence.push(...scanPythonImports(content, fullPath, locationRoot));
+    appendAll(evidence, scanPythonImports(content, fullPath, locationRoot));
   }
 
   return evidence;
@@ -299,7 +299,7 @@ export async function analyzeCompatibility(
       unchecked.push(outcome.failed);
     } else if (outcome.scanned !== undefined) {
       counts[outcome.scanned.counter]++;
-      allEvidence.push(...outcome.scanned.evidence);
+      appendAll(allEvidence, outcome.scanned.evidence);
     }
   }
 

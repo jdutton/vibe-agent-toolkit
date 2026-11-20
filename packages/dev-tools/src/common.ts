@@ -11,7 +11,7 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, isPathAbsentError, isSingleFsSegment, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, isPathAbsentError, isSingleFsSegment, safePath, appendAll } from '@vibe-agent-toolkit/utils';
 import { CommandExecutionError, safeExecResult, safeExecSync } from '@vibe-agent-toolkit/utils/process';
 
 export { safeExecSync, safeExecResult } from '@vibe-agent-toolkit/utils/process';
@@ -406,7 +406,7 @@ export function processPackages(options: {
     const retry = runPackageBatch(first.failed, packageHandler, settleDelayMs);
     processed += retry.processed;
     first.failed.length = 0;
-    first.failed.push(...retry.failed);
+    appendAll(first.failed, retry.failed);
   }
 
   const failed = first.failed.length;
