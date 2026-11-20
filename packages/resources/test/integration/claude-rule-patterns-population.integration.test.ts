@@ -166,24 +166,41 @@ const NESTED_DIST_TREE: Record<string, string> = {
 };
 
 /**
+ * A package below the repository's top level, populated as its own corpus root:
+ * its `.gitignore` ignores `build/` only below it (`/lib/*\/build/`), so no
+ * probe at the corpus root sees it and only git's ignored listing does. git
+ * runs in the package and prints `lib/x/build/` relative to it, never to the
+ * repository root; an entry read against the repository root lands outside the
+ * corpus, is dropped, and the glob reads `inert`.
+ */
+const SUBDIRECTORY_ROOT_TREE: Record<string, string> = {
+  'packages/a/.gitignore': '/lib/*/build/\n',
+  [`packages/a/${SCOPED_RULE}`]: '---\npaths: ["build/**"]\n---\n\nBuild-output rules.\n',
+  'packages/a/src/index.ts': 'export {};\n',
+};
+
+/**
  * Plant a tree as a committed repository, then write its ignored build output,
  * and populate it with a real ignore oracle.
  *
  * @param tree - The committed files
  * @param built - Ignored files written after the commit; none leaves `dist/` unbuilt
+ * @param corpus - The corpus root, relative to the repository root (`''` for the root itself)
  * @returns `[pattern, status]` per pattern row, in table order
  */
 async function populateIgnoredTree(
   tree: Record<string, string>,
   built: readonly string[],
+  corpus: string,
 ): Promise<Array<[string, string]>> {
-  const dir = await plantTree('vat-rule-patterns-ignored-', tree);
+  const repo = await plantTree('vat-rule-patterns-ignored-', tree);
+  const dir = safePath.join(repo, corpus);
   try {
-    runGitOrThrow(['init'], { cwd: dir });
-    runGitOrThrow(['add', '--all'], { cwd: dir });
-    runGitOrThrow([...COMMIT_IDENTITY, 'commit', '-m', 'fixture'], { cwd: dir });
+    runGitOrThrow(['init'], { cwd: repo });
+    runGitOrThrow(['add', '--all'], { cwd: repo });
+    runGitOrThrow([...COMMIT_IDENTITY, 'commit', '-m', 'fixture'], { cwd: repo });
     for (const file of built) {
-      const absolute = safePath.join(dir, file);
+      const absolute = safePath.join(repo, file);
       await mkdir(safePath.resolve(absolute, '..'), { recursive: true });
       await writeFile(absolute, 'export {};\n');
     }
@@ -198,11 +215,12 @@ async function populateIgnoredTree(
     const { projection } = await inOwnRun(buildResourceProjection, {
       root: dir, gitTracker, });
     // The premise: the ignored file is never realized, so no witness can exist.
-    expect(projection.resourceRealizations.filter((row) => built.includes(toForwardSlash(row.path)))).toEqual([]);
+    const realized = new Set(projection.resourceRealizations.map((row) => toForwardSlash(safePath.join(corpus, row.path))));
+    expect(built.filter((file) => realized.has(file))).toEqual([]);
     expect(projection.resourceRealizations.some((row) => row.path === SCOPED_RULE)).toBe(true);
     return projection.claudeRulePatterns.map((row): [string, string] => [row.pattern, row.status]);
   } finally {
-    await razeTree(dir);
+    await razeTree(repo);
   }
 }
 
@@ -219,8 +237,8 @@ describe('claude_rule_patterns over gitignored territory', () => {
     // ⛔ `dist/` in `.gitignore` matches only a DIRECTORY, and a `dist` that
     // does not exist is not known to be one — the unbuilt arm is the one a
     // naive "is the bare prefix ignored?" answers wrongly.
-    ['an unbuilt root dist/', IGNORED_TREE, [], IGNORED_TREE_ROWS],
-    ['a built root dist/', IGNORED_TREE, ['dist/app.js'], IGNORED_TREE_ROWS],
+    ['an unbuilt root dist/', IGNORED_TREE, [], IGNORED_TREE_ROWS, ''],
+    ['a built root dist/', IGNORED_TREE, ['dist/app.js'], IGNORED_TREE_ROWS, ''],
     // ⛔ The unanchored glob's territory is ignored only below the root, so the
     // answer comes from git's ignored LISTING through the real contributor.
     ['a built packages/a/dist/ ignored below the root', NESTED_DIST_TREE, ['packages/a/dist/index.js'], [
@@ -230,8 +248,11 @@ describe('claude_rule_patterns over gitignored territory', () => {
       // root, so it can never reach `packages/a/dist/` and stays inert.
       ['dist/**/*.js', 'inert'],
       ['gone/**/*.md', 'inert'],
-    ]],
-  ] as const)('reports each glob over %s', async (_what, tree, built, rows) => {
-    expect(await populateIgnoredTree(tree, built)).toEqual(rows);
+    ], ''],
+    ['a built lib/x/build/ under a corpus root below the repository root', SUBDIRECTORY_ROOT_TREE, ['packages/a/lib/x/build/out.js'], [
+      ['build/**', 'gitignored'],
+    ], 'packages/a'],
+  ] as const)('reports each glob over %s', async (_what, tree, built, rows, corpus) => {
+    expect(await populateIgnoredTree(tree, built, corpus)).toEqual(rows);
   });
 });

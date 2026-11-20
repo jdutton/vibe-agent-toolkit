@@ -93,6 +93,7 @@ import {
   gitSnapshotError,
   gitTreeSnapshot,
   isGitIgnored,
+  runGit,
 } from '@vibe-agent-toolkit/utils/git';
 
 import type { PathShape } from './realizations.js';
@@ -818,7 +819,10 @@ export class GitCrawlSource implements CrawlSource {
         },
       },
     });
-    if (listing === null) return [];
+    // Refused, never read as "nothing there": a listing git did not answer is
+    // indistinguishable from a tree with nothing untracked, and the listing
+    // lane refuses the same silence (see `gitListed`).
+    if (listing === null) throw gitNoAnswerError(this.#root, NO_GIT_LISTING_CONSEQUENCE);
 
     // Relative to `cwd`, this root, as git prints every `ls-files` path: never
     // to the repository root, which a subdirectory root is not.
@@ -1086,8 +1090,9 @@ interface ListedName {
   /** Relative to the listing's root, forward-slashed: what a member filter is asked. */
   readonly relativePath: string;
   /**
-   * What the path is: `undefined` until a crawl admits it and it is `lstat`ed
-   * ({@link observedShape}), `null` where the realization must stat it.
+   * What the path is: `undefined` for a tracked file or an implied directory
+   * until a crawl admits it and it is `lstat`ed ({@link observedShape}), `null`
+   * where the realization must stat it.
    */
   shape: PathShape | 'symlink' | 'absent' | null | undefined;
 }
@@ -1146,17 +1151,23 @@ export function declinedLinkApplies(exclude: readonly string[]): (relativePath: 
  *
  * ## The same conditions as a stored population
  *
- * Each git name is `lstat`ed once: a tracked file deleted from the working tree
- * is dropped, a link is declined, and a directory (git names one only for a
- * nested repository or submodule) is walked for what it hides, as a stored
- * population walks it. Git's `ls-files --others --ignored --directory`, asked
- * by the listing itself and never read off the tracker (a tracker initialized
- * from an open snapshot asked git nothing), opens every directory git does not
- * ignore, so its stderr names each one it could not list; and each ignored
- * directory it collapses, outside {@link NEVER_CRAWL_GLOBS}, is walked for its
- * links and refusals, as a stored population walks it. A listing therefore
- * refuses, records and declines what the stored population of the same tree
- * does, with the store on or off.
+ * A tracked name's shape is git's own index mode (`ls-files -s`, which reads
+ * the index and walks no tree): `120000` is a declined link, `160000` a
+ * submodule, and any other a file, `lstat`ed only when a crawl admits it (a
+ * tracked file deleted from the working tree is dropped then). An untracked
+ * name, and a submodule, is `lstat`ed when listed: a link is declined, and a
+ * directory (git names one only for a nested repository or submodule) is walked
+ * for its refusals, as a stored population walks it. Git's `ls-files --others
+ * --ignored --directory`, asked by the listing itself and never read off the
+ * tracker (a tracker initialized from an open snapshot asked git nothing),
+ * opens every directory git does not ignore, so its stderr names each one it
+ * could not list; and each ignored directory it collapses, outside
+ * {@link NEVER_CRAWL_GLOBS}, is walked for its refusals, as a stored population
+ * walks it. Those two walks collect no links: everything beneath an ignored
+ * directory or a nested repository is ignored, and an ignored link is declined
+ * without a row on every lane (`DECLINE_IGNORED`). A listing therefore refuses,
+ * records and declines what the stored population of the same tree does, with
+ * the store on or off.
  *
  * {@link RootListing.narrowed} is one crawl's view: its member filter applied to
  * the names, its refusals settled under that crawl's
@@ -1225,6 +1236,9 @@ export class RootListing {
     const refusals = new ListingRefusals(this.#root, this.#outputs, unreadable === 'refuse' ? null : unreadable.degrade);
     const symlinks = new DeclinedSymlinks();
     const { names, links, refusals: listed } = this.#listed;
+    const decline = (link: ListedName): void => {
+      if (linkApplies(link.relativePath)) symlinks.add(link.absolutePath);
+    };
     return {
       kind: this.kind,
       // Promise-shaped, synchronous underneath: a refusal is a rejection, never a throw.
@@ -1232,10 +1246,8 @@ export class RootListing {
         refusals.clear();
         symlinks.clear();
         for (const { refusal, territory } of listed) settleListed(refusals, refusal, territory);
-        for (const link of links) {
-          if (linkApplies(link.relativePath)) symlinks.add(link.absolutePath);
-        }
-        return admittedMembers(names, admits);
+        for (const link of links) decline(link);
+        return admittedMembers(names, admits, decline);
       }),
       get unlistable() {
         return refusals.recorded;
@@ -1254,26 +1266,64 @@ function settleListed(refusals: ListingRefusals, refusal: DirectoryRefusal, terr
   else refusals.settleUndetermined(refusal);
 }
 
+/** Git's index mode for a symbolic link. */
+const GIT_MODE_SYMLINK = '120000';
+/** Git's index mode for a submodule (a gitlink). */
+const GIT_MODE_GITLINK = '160000';
+
 /**
- * What git's names under `root` hold, `lstat`ed once each, with what git hides
- * walked as a stored population walks it: each nested repository (in
- * population), and each collapsed ignored directory (in ignored territory).
+ * The index mode of every tracked path under `root`: one `ls-files -s`, which
+ * reads the index and walks no tree.
+ *
+ * @param root - The listed root, inside a repository
+ * @returns Mode by absolute path, forward-slashed
+ * @throws When git does not answer
+ */
+function trackedModes(root: string): Map<string, string> {
+  const result = runGit(['ls-files', '-s', '-z'], { cwd: root, trim: false, env: { LC_ALL: 'C' } });
+  if (!result.ok) throw gitNoAnswerError(root, NO_GIT_LISTING_CONSEQUENCE);
+  const modes = new Map<string, string>();
+  // `<mode> <oid> <stage>\t<path>`, NUL-separated, the path relative to `cwd`.
+  for (const record of result.stdout.split('\0')) {
+    const tab = record.indexOf('\t');
+    if (tab === -1) continue;
+    modes.set(safePath.resolve(root, record.slice(tab + 1)), record.slice(0, record.indexOf(' ')));
+  }
+  return modes;
+}
+
+/**
+ * A listed name's shape when listed: a tracked one's from its index mode,
+ * `undefined` (asked when a crawl admits it) for a tracked file; an untracked
+ * one's, and a submodule's, from one `lstat`.
+ */
+function listedShape(absolutePath: string, mode: string | undefined): ListedName['shape'] {
+  if (mode === GIT_MODE_SYMLINK) return 'symlink';
+  if (mode === undefined || mode === GIT_MODE_GITLINK) return lstatShape(absolutePath);
+  return undefined;
+}
+
+/**
+ * What git's names under `root` hold, with what git hides walked as a stored
+ * population walks it: each nested repository (in population), and each
+ * collapsed ignored directory (in ignored territory), for refusals alone.
  *
  * @param root - The listed root, inside a repository
  * @param outputs - The trees the calling verb writes
  * @param gitNames - The tracker's names, absolute
  * @returns The names, links and refusals
- * @throws When git does not answer the ignored listing
+ * @throws When git does not answer the index or the ignored listing
  */
 async function gitListed(root: string, outputs: readonly string[], gitNames: readonly string[]): Promise<Listed> {
   const isContent = crawlPathFilter(['**/*'], [...NEVER_CONTENT_GLOBS]);
   const isCrawled = crawlPathFilter(['**/*'], [...NEVER_CRAWL_GLOBS]);
+  const modes = trackedModes(root);
   const named = new NameSet(root);
   const links = new NameSet(root);
   const repositories: string[] = [];
   for (const absolutePath of gitNames) {
     if (!isPathUnderRoot(absolutePath, root) || !isContent(relativeToRoot(absolutePath, root))) continue;
-    const shape = lstatShape(absolutePath);
+    const shape = listedShape(absolutePath, modes.get(absolutePath));
     if (shape === 'absent') continue;
     if (shape === 'symlink') {
       links.add(absolutePath, shape);
@@ -1307,26 +1357,43 @@ async function gitListed(root: string, outputs: readonly string[], gitNames: rea
     .map((relativePath) => safePath.resolve(root, relativePath.slice(0, -1)))
     .filter((directory) => isPathUnderRoot(directory, root) && isCrawled(relativeToRoot(directory, root)) && lstatShape(directory) === 'directory');
 
-  const onLink = (link: string): void => {
-    if (isCrawled(relativeToRoot(link, root))) links.add(link, 'symlink');
-  };
+  // A link beneath either is ignored, declined without a row on every lane, so
+  // neither walk collects one.
+  const ignoreLink = (): void => undefined;
   await forEachInOrder([
     ...repositories.map((directory) => ({ directory, territory: 'population' as const })),
     ...ignored.map((directory) => ({ directory, territory: 'ignored' as const })),
   ], async ({ directory, territory }) => {
-    await walkNames(directory, outputs, onLink, (refusal) => refusals.push({ refusal, territory }));
+    await walkNames(directory, outputs, ignoreLink, (refusal) => refusals.push({ refusal, territory }));
   });
   return { names: named.names, links: links.names, refusals };
 }
 
-/** The names a crawl admits, as members: an absent name dropped. */
-function admittedMembers(names: readonly ListedName[], admits: (relativePath: string) => boolean): EnumeratedPath[] {
+/**
+ * The names a crawl admits, as members: an absent name dropped, a link declined.
+ *
+ * @param names - The listing's names
+ * @param admits - The crawl's member filter
+ * @param onLink - Receives a name git tracks as a file that is a link in the
+ *   working tree, met only here, when its shape is first observed
+ * @returns The members
+ */
+function admittedMembers(
+  names: readonly ListedName[],
+  admits: (relativePath: string) => boolean,
+  onLink: (name: ListedName) => void,
+): EnumeratedPath[] {
   const members: EnumeratedPath[] = [];
   for (const name of names) {
     if (!admits(name.relativePath)) continue;
     const shape = observedShape(name);
-    // A link is never a member; every name that is one was declined when listed.
-    if (shape === 'absent' || shape === 'symlink') continue;
+    if (shape === 'absent') continue;
+    // A link is never a member. One git listed as a link is declined already
+    // and never named; a tracked file replaced by one is declined here.
+    if (shape === 'symlink') {
+      onLink(name);
+      continue;
+    }
     members.push({ absolutePath: name.absolutePath, shape });
   }
   return members;
@@ -1400,10 +1467,13 @@ function walkNames(
 }
 
 /**
- * A name's shape, `lstat`ed the first time a crawl admits it and remembered for
- * the rest of the run. Absent is a tracked file deleted from the working tree;
- * anything else the filesystem would not answer stays a member with no shape,
- * for the realization to report (as {@link symlinkShape} decides).
+ * A name's shape: the one it was listed with, or, for a tracked file (listed
+ * from its index mode, so never `lstat`ed) and an implied directory, one
+ * `lstat` the first time a crawl admits it, remembered for the rest of the run.
+ * Absent is a tracked file deleted from the working tree; a link is a tracked
+ * file replaced by one; anything else the filesystem would not answer stays a
+ * member with no shape, for the realization to report (as {@link symlinkShape}
+ * decides).
  *
  * @param name - The name
  * @returns Its shape

@@ -6,11 +6,11 @@
  * snapshot instead of spawning `ls-files`.
  */
 
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
-import { GitTracker, gitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
+import { GIT_NO_ANSWER_CODE, GitTracker, gitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 import { CANNOT_DENY_READS, createSymlink, symlinkCapability } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -21,7 +21,7 @@ import {
   type FactStore,
 } from '../../src/index.js';
 import { isDeclinedSymlinkCode } from '../../src/projection/contributors/filesystem-extent.js';
-import type { PopulationUnreadablePolicy } from '../../src/projection/crawl-source.js';
+import { GitCrawlSource, type PopulationUnreadablePolicy } from '../../src/projection/crawl-source.js';
 import type { PopulationCache } from '../../src/projection/merge.js';
 import { withRunPopulation } from '../../src/projection/run-population.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
@@ -178,5 +178,38 @@ describe.skipIf(symlinkCapability() === null)('a declined link is the same condi
     const { off, on } = await bothArms({ home, baseDir: home });
     expect(on.declinedLinks, 'positive control: the stored population reports it').toEqual(['.claude/rules/shared']);
     expect(off.declinedLinks).toEqual(on.declinedLinks);
+  });
+
+  // The listing reads a tracked name's shape from the index, where this one is
+  // still a file: only the `lstat` a crawl's admission asks can see the link.
+  it('a tracked file replaced by a link in the working tree', async () => {
+    const symlinks = symlinkCapability();
+    if (symlinks === null) return;
+    const home = repository({ 'guide.md': '# Guide\n', 'README.md': '# Home\n' });
+    rmSync(safePath.join(home, 'guide.md'));
+    createSymlink(symlinks, 'README.md', safePath.join(home, 'guide.md'), 'file');
+    const { off, on } = await bothArms({ home, baseDir: home });
+    expect(on.declinedLinks, 'positive control: the stored population reports it').toEqual(['guide.md']);
+    expect(off.declinedLinks).toEqual(on.declinedLinks);
+    expect(off.members).toEqual(on.members);
+  });
+});
+
+describe('a listing git did not answer', () => {
+  // The stored lane reads its snapshot from the run's bracket, so moving `.git`
+  // away after the snapshot leaves only the ignored listing to fail.
+  it('refuses the stored population rather than reading it as nothing ignored', async () => {
+    const home = repository({ 'a.md': '# A\n' });
+    const thrown = await withGitSnapshotCache(async () => {
+      expect(gitTreeSnapshot({ cwd: home }).ok, 'premise: the snapshot is in the bracket').toBe(true);
+      renameSync(safePath.join(home, '.git'), safePath.join(home, '.git-away'));
+      try {
+        await new GitCrawlSource(home, []).enumerate();
+        return undefined;
+      } catch (error) {
+        return error;
+      }
+    });
+    expect(thrown).toMatchObject({ code: GIT_NO_ANSWER_CODE });
   });
 });

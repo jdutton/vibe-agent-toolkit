@@ -63,6 +63,8 @@
 - **A root below a repository's top level reads git's `ls-files --others` paths relative to itself**,
   as git prints them, in the stored population, the listing and the Claude rules scope: an
   ignored directory under such a root was looked for in the wrong place.
+- **A stored population refuses an ignored listing git did not answer** (`GIT_NO_ANSWER`), as a
+  listing does, instead of reading the silence as "nothing ignored".
 
 ### Changed
 

@@ -415,13 +415,13 @@ function treeIgnores(base: ProjectionBase): TreeIgnores {
 }
 
 /**
- * git's collapsed ignored listing, re-rooted at the corpus root.
+ * git's collapsed ignored listing under the corpus root, corpus-relative.
  *
- * `ls-files` spells paths relative to the REPOSITORY root, which is above the
- * corpus root whenever the corpus is a subdirectory, so each entry is resolved
- * there and made corpus-relative; an entry outside the corpus is dropped. A
- * directory keeps its trailing `/`, the one signal that it stands for its
- * whole subtree.
+ * git runs in the corpus root and `ls-files` spells every path relative to its
+ * `cwd`, never to the repository root, so a corpus that is a subdirectory of
+ * its repository reads each entry against itself. An entry that would escape
+ * the corpus is dropped. A directory keeps its trailing `/`, the one signal
+ * that it stands for its whole subtree.
  *
  * ⚠️ A directory git could not open is `degrade`d here without a record: the
  * crawl source runs this same listing for the same tree during population and

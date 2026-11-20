@@ -3,15 +3,18 @@
  * under a parent tree, which git names as one entry and whose files the parent's oracle calls
  * ignored.
  */
-import { spawnSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
-import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
+import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 
-/** Run git in `cwd`, quietly, with a committer identity and local-file submodules allowed. */
+/**
+ * Run git in `cwd` with a committer identity and local-file submodules allowed.
+ *
+ * @throws When git fails, so a fixture git never built is never mistaken for one it did
+ */
 export function git(cwd: string, ...args: string[]): void {
-  spawnSync(gitExecutable(), ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'protocol.file.allow=always', ...args], { cwd, stdio: 'ignore' });
+  runGitOrThrow(['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', '-c', 'protocol.file.allow=always', ...args], { cwd });
 }
 
 /**
