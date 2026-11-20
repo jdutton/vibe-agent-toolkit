@@ -89,7 +89,6 @@
  */
 
 import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
-import { crawlPathFilter } from '@vibe-agent-toolkit/utils/crawl';
 
 import { RealizationConditionRowSchema, type RealizationConditionRow } from '../schemas/projection-resources.js';
 import type { JsonValue } from '../schemas/projection-shared.js';
@@ -444,8 +443,7 @@ export async function buildResourceListing(
   },
 ): Promise<ResourceEnumeration> {
   const root = safePath.resolve(options.root);
-  const isMember = crawlPathFilter([...options.members.include], [...options.members.exclude]);
-  const source = options.listing.narrowed(isMember, options.unreadable);
+  const source = options.listing.narrowed(options.members, options.unreadable);
   const registry = new ContributorRegistry();
   const filesystem = new FilesystemExtentContributor(() => source, 'deferred');
   registry.register(filesystem);

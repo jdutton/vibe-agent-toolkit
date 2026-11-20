@@ -584,6 +584,29 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 
 ## Git and crawl
 
+### Outside a repository, authored markdown under a tool-output-named directory is not enumerated
+
+- **Severity:** Important · **Effort:** M (admit a tool-output-named path by link-following, not by
+  name) · **User-visible:** yes (files silently missing, exit 0)
+- **Mechanism:** outside a repository there is no ignore oracle, so the listing walk
+  (`RootListing`) and the filesystem enumerator (`FilesystemCrawlSource.enumerate`) prune every
+  name in `NEVER_CRAWL_GLOBS`, tool-output names (`coverage/`, `.test-output/`, `.turbo/`)
+  included. Inside a repository the git enumerator drops only never-content paths and lets ignore
+  rules decide the rest. So `docs/coverage/x.md` is a resource inside a repository and absent
+  outside one, and every link in it goes unchecked. Admitting tool-output names outright is not
+  the fix: with no ignore rules, a non-repository tree's real coverage reports (`lcov-report`
+  HTML) flood the population, `.turbo` cache copies report duplicates, and an unreadable directory
+  under `coverage/` refuses the run. The fix is link-following admission: a tool-output-named path
+  becomes a member when an authored document links to it.
+- **Scope:** every verb outside a repository — `vat resources validate`/`scan`,
+  `vat skills validate`/`build`, `vat skill review`, `vat claude plugin build` and `vat audit`,
+  alike, so they agree with one another. Inside a repository every one of them enumerates through
+  git and sees the file.
+- **Reproduced** by `resource-registry-default-exclude.integration.test.ts` (the two filesystem
+  cases are `it.fails`; promote them to `it` with the fix).
+- **Where:** [`crawl-source.ts`](../../packages/resources/src/projection/crawl-source.ts)
+  (`walkNames` and `FilesystemCrawlSource.enumerate`, `exclude: [...NEVER_CRAWL_GLOBS]`).
+
 ### An index listing (`ls-files -z`) is read as UTF-8 text, so a path that is not UTF-8 is re-spelled
 
 - **Severity:** Minor · **Effort:** M · **User-visible:** yes (a wrong path, no refusal)

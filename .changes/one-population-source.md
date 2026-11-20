@@ -41,8 +41,8 @@
 ### Added
 
 - `@vibe-agent-toolkit/resources`: the `PopulationMembers` and `PopulationUnreadablePolicy` types.
-- `@vibe-agent-toolkit/utils`: `GitTracker.listing()` and the `GitTrackerListing` type: the names
-  the tracker's `ls-files` listed, and the directories git could not open.
+- `@vibe-agent-toolkit/utils`: `GitTracker.listing()`: the names the tracker's `ls-files` listed
+  (or its open snapshot held).
 - `@vibe-agent-toolkit/agent-skills`: `projectConfigOrNone`, `REGISTRY_INCLUDE`, `withSkillRegistries`
   and the `SkillRegistryRuling` type.
 
@@ -55,7 +55,19 @@
 - **A listing never stages the tree into an index.** In a repository a root with no store is listed
   by `git ls-files`, so `vat audit` with an untracked file git cannot read reports its findings
   (exit 1) instead of refusing the run, and untracked files are not read or hashed by git.
-- **Outside a repository, authored markdown under a tool-output-named directory (`docs/coverage/`)
-  is a member** for `vat audit`, `vat skills validate` and every other verb with no store: with no
-  ignore rules the listing prunes only what can never be content, and the crawl's own exclude
-  decides.
+- **A root listed with no store reports the same conditions as a stored population of the same
+  tree**: an unlistable directory (refused in git's territory or inside a nested repository,
+  recorded in ignored territory), and a declined link the crawl's exclude does not cover, a
+  directory link no include names included. Before, a second root in a store-on run silently
+  dropped an unlistable directory that the store-off run refused.
+- **A root below a repository's top level reads git's `ls-files --others` paths relative to itself**,
+  as git prints them, in the stored population, the listing and the Claude rules scope: an
+  ignored directory under such a root was looked for in the wrong place.
+
+### Changed
+
+- **Outside a repository, `vat audit` no longer reports links inside a tool-output-named directory**
+  (`docs/coverage/`, `.turbo/`): it enumerates with the same source as every other verb, which
+  prunes those names where no ignore rule can say whether they are authored. The known defect
+  "Outside a repository, authored markdown under a tool-output-named directory is not enumerated"
+  records the fix (link-following admission).

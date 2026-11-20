@@ -38,7 +38,7 @@
  */
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { gitFindRoot, GitTracker, type GitTrackerListing } from '@vibe-agent-toolkit/utils/git';
+import { gitFindRoot, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { ParseResult } from '../link-parser.js';
 import { defaultParseCache } from '../parse-cache.js';
@@ -313,7 +313,7 @@ export class RunPopulation implements PopulationRun {
    * A root's names as git lists them: its tracker's listing, or a tracker of
    * the root's own when the run's was initialized without untracked files.
    */
-  async #gitListing(root: string, home: boolean): Promise<GitTrackerListing | null> {
+  async #gitListing(root: string, home: boolean): Promise<readonly string[] | null> {
     const listing = (await this.#trackerOf(root, home))?.listing() ?? null;
     if (listing !== null || !home) return listing;
     const own = new GitTracker(root);

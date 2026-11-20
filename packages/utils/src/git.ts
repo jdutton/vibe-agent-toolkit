@@ -71,7 +71,7 @@ export {
   type GitTreeSnapshot,
 } from './git-snapshot.js';
 export { loadGitignoreRules } from './gitignore-checker.js';
-export { GitTracker, type GitTrackerInitOptions, type GitTrackerListing } from './git-tracker.js';
+export { GitTracker, type GitTrackerInitOptions } from './git-tracker.js';
 export {
   isGitUrl,
   nonInteractiveGitOverrides,

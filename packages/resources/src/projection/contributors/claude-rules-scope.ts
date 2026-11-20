@@ -80,7 +80,7 @@
  */
 
 import { relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { gitFindRoot, gitLsOthers } from '@vibe-agent-toolkit/utils/git';
+import { gitLsOthers } from '@vibe-agent-toolkit/utils/git';
 
 import type { ClaudeRulePatternRow } from '../../schemas/projection-claude-rules.js';
 import type { HarnessBlobFactsRow } from '../../schemas/projection-harness.js';
@@ -434,11 +434,11 @@ function treeIgnores(base: ProjectionBase): TreeIgnores {
 function ignoredListing(root: string): string[] {
   const listing = gitLsOthers({ cwd: root, ignored: true, directory: true, unreadable: { degrade: () => undefined } });
   if (listing === null) return [];
-  const repositoryRoot = gitFindRoot(root) ?? root;
   const entries: string[] = [];
   for (const entry of listing) {
     const isDirectory = entry.endsWith('/');
-    const relative = toForwardSlash(safePath.relative(root, safePath.resolve(repositoryRoot, entry)));
+    // Relative to `cwd` (`root`), as git prints it: never to the repository root.
+    const relative = toForwardSlash(safePath.relative(root, safePath.resolve(root, entry)));
     if (relative === '' || relativeEscapesRoot(relative)) continue;
     entries.push(isDirectory ? `${relative}/` : relative);
   }

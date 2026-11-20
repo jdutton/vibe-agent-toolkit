@@ -69,7 +69,7 @@ import { isReadFailure, readFailureCode } from './parse-failure.js';
 import { isPerRunParseRefusal, type PerRunParseRefusal } from './parse-limits.js';
 import { POPULATION_PARSE_LIMITS } from './projection/content-cache.js';
 import { isDeclinedSymlinkCode } from './projection/contributors/filesystem-extent.js';
-import type { PopulationUnreadablePolicy } from './projection/crawl-source.js';
+import { declinedLinkApplies, type PopulationUnreadablePolicy } from './projection/crawl-source.js';
 import {
   collectionMimeConflictFinding,
   createCollectionMimeResolver,
@@ -1536,14 +1536,12 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Kept whole, not narrowed by `include`/`exclude`: a condition is about the
     // enumeration, and a gap the enumerator met outside this crawl's globs is
     // still a gap in the population the projection will answer queries from.
-    // ONE exception: a declined link under an EXCLUDED path is dropped — an
-    // excluded `vendor/CLAUDE.md` link is no more this crawl's business than an
-    // excluded file. Only the exclude half applies: a DIRECTORY link matches no
-    // `**/*.md` include by its own name, yet may hold members
-    // (`.claude/rules/shared -> ~/shared-rules`).
-    const notExcluded = crawlPathFilter(['**/*'], exclude);
+    // ONE exception: a declined link the crawl's globs make none of its
+    // business is dropped — the one rule, `declinedLinkApplies`, a listing
+    // applies to its own view too.
+    const linkApplies = declinedLinkApplies(exclude);
     this.populationConditions = conditions.filter(
-      (row) => !isDeclinedSymlinkCode(row.code) || notExcluded(row.path),
+      (row) => !isDeclinedSymlinkCode(row.code) || linkApplies(row.path),
     );
     const admitted: string[] = [];
     for (const absolutePath of paths) {

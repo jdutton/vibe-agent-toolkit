@@ -310,16 +310,19 @@ the home, the home with no store, and any run that degrades — is a **listing**
 when a view admits them and never hashed otherwise. In a repository the names are the root's
 `GitTracker` listing (`git ls-files --cached --others --exclude-standard`), never a tree snapshot:
 a snapshot is `git add --all` into a throwaway index, which reads and hashes every untracked file
-and fails on one file the OS will not let git read. Each admitted name is `lstat`ed once (a tracked
-file deleted from the working tree is dropped, a symlink declined); a submodule or nested
-repository is the one name git gives it, and its files are ignored by the oracle, as in a stored
-population. Ignored territory is walked for its refusals alone, as a stored population walks it
-(each directory `ls-files --others --ignored --directory` collapses, pruned by
-`NEVER_CRAWL_GLOBS`), so an unlistable ignored directory is reported the same with the store off
-or on. Outside a repository the names are one walk that
-prunes only `NEVER_CONTENT_GLOBS`: with no ignore oracle a tool-output-named directory
-(`docs/coverage/`) may be authored, and the crawl's own exclude decides. A listing touches no store
-key. Degrade is a refusal policy only and never picks the enumerator. It does not throw: `packaging-validator.ts`'s
+and fails on one file the OS will not let git read. Each name `NEVER_CONTENT_GLOBS` admits is
+`lstat`ed once: a tracked file deleted from the working tree is dropped, a symlink is a declined
+link, and a directory (a submodule or nested repository, one name to git) is walked for its links
+and refusals as a stored population walks it. The listing's refusals never come from the tracker,
+which asks git nothing when it opened a snapshot: the listing runs its own
+`ls-files --others --ignored --directory`, whose stderr names every directory git could not open
+(refused), and walks each ignored directory it collapses, pruned by `NEVER_CRAWL_GLOBS`, for its
+links and unlistable directories (recorded). So a listed root reports the same conditions with the
+store off or on. Paths from `ls-files` are relative to the root git ran in, never to the
+repository's top level. Which declined links apply is one predicate, `declinedLinkApplies`, shared
+with a stored population. Outside a repository the names are one walk that prunes
+`NEVER_CRAWL_GLOBS`, as every enumerator outside a repository does (a known defect: authored
+markdown under a tool-output-named directory is not enumerated). A listing touches no store key. Degrade is a refusal policy only and never picks the enumerator. It does not throw: `packaging-validator.ts`'s
 `findProjectRoot(...) ?? dirname(skillPath)` legitimately lands on a build output directory in an
 adopter layout with no config and no `.git` above it. And it never yields an *empty* population,
 which would report a confident green over a corpus nothing looked at.

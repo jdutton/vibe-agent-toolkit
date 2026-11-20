@@ -7,8 +7,9 @@
  * named like tool output (`docs/coverage/`) is a member for both, and a dead
  * link in it is a finding for both. An audit that walked the filesystem with
  * the never-crawl list instead would drop the document and exit clean. Outside
- * git both verbs list one walk that prunes only what can never be content, so
- * the document is a member there too.
+ * git both verbs list one walk that prunes tool-output names, so neither sees
+ * the document (the known defect "Outside a repository, authored markdown under
+ * a tool-output-named directory is not enumerated"): they agree.
  *
  * Audit's listing is names only: git's `ls-files`, never a `git add --all`
  * snapshot, which hashes every untracked file and fails on one git cannot read.
@@ -87,13 +88,14 @@ describe('audit and skills validate enumerate one tree the same way (system test
     expect(audit.result.status, audit.result.stderr).toBe(1);
   });
 
-  it('reports the dead link under docs/coverage from both verbs outside git', async () => {
+  it('agrees outside git: neither verb enumerates the docs/coverage document', async () => {
     const audit = await executeCliAndParseYaml(binPath, ['audit', plain], { cwd: plain });
     const validate = await executeCliAndParseYaml(binPath, ['skills', 'validate', plain], { cwd: plain });
 
-    expect(findingCodes(validate.parsed)).toContain('LINK_MISSING_TARGET');
-    expect(findingCodes(audit.parsed)).toContain('LINK_MISSING_TARGET');
-    expect(audit.result.status, audit.result.stderr).toBe(1);
+    expect(findingCodes(validate.parsed)).not.toContain('LINK_MISSING_TARGET');
+    expect(findingCodes(audit.parsed)).not.toContain('LINK_MISSING_TARGET');
+    expect(audit.result.status, audit.result.stderr).toBe(0);
+    expect(validate.result.status, validate.result.stderr).toBe(0);
   });
 
   it.runIf(canLockFiles)('still reports the findings with an untracked file git cannot read', async () => {

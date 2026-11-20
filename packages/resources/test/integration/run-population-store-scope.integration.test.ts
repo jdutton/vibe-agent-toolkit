@@ -9,12 +9,11 @@
  * store, while another root never touches the store at all.
  */
 
-import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, readWorkCounters, safePath } from '@vibe-agent-toolkit/utils';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
-import { createSymlink, gitExecutable, symlinkCapability } from '@vibe-agent-toolkit/utils/testing';
+import { createSymlink, symlinkCapability } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import {
@@ -27,6 +26,7 @@ import {
 import type { PopulationCache } from '../../src/projection/merge.js';
 import { type RunPopulation, withRunPopulation } from '../../src/projection/run-population.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
+import { git, nestedRepository } from '../helpers/git-fixture.js';
 
 const roots: string[] = [];
 afterAll(() => {
@@ -160,11 +160,6 @@ describe('only the home root reaches the store, by the filesystem\'s answer to w
   });
 });
 
-/** Run git in `cwd`, quietly. */
-function git(cwd: string, ...args: string[]): void {
-  spawnSync(gitExecutable(), args, { cwd, stdio: 'ignore' });
-}
-
 /**
  * A repository with a tracked document deleted from the working tree, an ignored one, and an
  * untracked nested repository git names as one entry.
@@ -177,10 +172,7 @@ function repository(): string {
   git(home, 'init', '-q');
   git(home, 'add', 'gone.md');
   unlinkSync(safePath.join(home, 'gone.md'));
-  const sub = safePath.join(home, 'vendor', 'sub');
-  mkdirSyncReal(sub, { recursive: true });
-  writeFileSync(safePath.join(sub, 'README.md'), '# Sub\n');
-  git(sub, 'init', '-q');
+  nestedRepository(home, 'vendor/sub', false);
   return home;
 }
 

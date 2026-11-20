@@ -13,7 +13,6 @@ import {
   recordSharedPass,
 } from './crawl-timing.js';
 import { linkResolutionFault } from './errors/fs-fault.js';
-import type { DirectoryRefusal } from './fs-utils.js';
 import { peekGitTreeSnapshot } from './git-snapshot.js';
 import { gitLsFiles, isGitIgnored } from './git-utils.js';
 import { promised } from './in-order.js';
@@ -37,14 +36,6 @@ export interface GitTrackerInitOptions {
    * non-ignored files are rare.
    */
   includeUntracked?: boolean;
-}
-
-/** What {@link GitTracker.listing} hands back: names, never contents. */
-export interface GitTrackerListing {
-  /** Every tracked and untracked-not-ignored path under the root, absolute and forward-slashed. */
-  readonly paths: readonly string[];
-  /** Each directory git could not open while listing, in the order met. */
-  readonly refusals: readonly DirectoryRefusal[];
 }
 
 /**
@@ -108,8 +99,6 @@ export class GitTracker {
    * listing could not see into.
    */
   private readonly unlistableDirectories: string[] = [];
-  /** The refusals behind {@link unlistableDirectories}, whole, in the order git met them. */
-  private readonly listingRefusals: DirectoryRefusal[] = [];
   private initialized = false;
   private activeSetPopulated = false;
   /** Whether `git ls-files` actually answered during {@link initialize}. */
@@ -175,7 +164,6 @@ export class GitTracker {
       unreadable: {
         degrade: (refusal) => {
           this.unlistableDirectories.push(refusal.directory);
-          this.listingRefusals.push(refusal);
         },
       },
     });
@@ -282,19 +270,22 @@ export class GitTracker {
 
   /**
    * The names {@link initialize} listed: every tracked and untracked-not-ignored
-   * path under the root, absolute and forward-slashed, and each directory git
-   * could not open while listing. Names only — git listed them without reading
-   * or hashing a file, and nothing here stats one. A tracked file deleted from
-   * the working tree is still named; a submodule or nested repository is one
-   * name, and the files inside it are not in the set (so the set calls them
-   * ignored).
+   * path under the root, absolute and forward-slashed. Names only — git listed
+   * them without reading or hashing a file, and nothing here stats one. A tracked
+   * file deleted from the working tree is still named; a submodule or nested
+   * repository is one name, and the files inside it are not in the set (so the
+   * set calls them ignored).
    *
-   * @returns The listing, or `null` when there is none: git did not answer, or
-   *   the tracker was initialized without untracked files
+   * ⚠️ Not a witness to the directories git could not open: initialized from an
+   * open snapshot, the tracker asked git nothing, so a caller that must refuse
+   * an unlistable directory asks git itself.
+   *
+   * @returns The names, or `null` when there are none to give: git did not
+   *   answer, or the tracker was initialized without untracked files
    */
-  listing(): GitTrackerListing | null {
+  listing(): readonly string[] | null {
     if (!this.activeSetPopulated) return null;
-    return { paths: [...this.activeSet], refusals: this.listingRefusals };
+    return [...this.activeSet];
   }
 
   /**
@@ -582,7 +573,6 @@ export class GitTracker {
     this.activeAncestors.clear();
     this.indexPaths.clear();
     this.unlistableDirectories.length = 0;
-    this.listingRefusals.length = 0;
     this.initialized = false;
     this.activeSetPopulated = false;
     this.gitAnswered = false;
