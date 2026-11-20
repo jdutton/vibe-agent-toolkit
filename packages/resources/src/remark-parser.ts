@@ -256,10 +256,10 @@ function collectNode(state: AstWalkState, node: CollectedNode): void {
  * fresh `ParseResult` equal to its own JSON round trip, which is what a
  * JSON-backed parse cache needs.
  *
- * ⚠️ The position-less case is REACHABLE, it FIRES, and it is measured firing:
- * `blob-population.ts`'s `referencesSkippedForMissingLine` records **77
- * position-less reference candidates over this repository's 4,425 blobs**, with
- * the cause and a minimal repro.
+ * ⚠️ The position-less case is REACHABLE, it FIRES, and it was measured firing:
+ * **77 position-less reference candidates over this repository's 4,425 blobs**,
+ * when the projection still skipped them (it now stores them with a null line
+ * and null offsets).
  *
  * The producer is `mdast-util-gfm-autolink-literal`. A GFM autolink literal the
  * tokenizer does not see is reconstructed afterwards by its `findAndReplace`

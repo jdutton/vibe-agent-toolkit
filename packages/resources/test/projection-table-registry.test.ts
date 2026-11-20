@@ -49,6 +49,10 @@ const EXPECTED_TABLES = [
  * `warning` could hide behind an `info` the walk visited first. Widening the
  * key — and therefore `exportProjection`'s sort tuple, which this pin also
  * governs — is the fix, not a drift the pin failed to catch.
+ *
+ * `blobConditions` grew `ordinal` (per code, in emission order) for the same
+ * reason: two identical findings on one line collapsed to one stored row, and
+ * the parser's order was lost to the key's.
  */
 const EXPECTED_PRIMARY_KEYS: Record<ProjectionTableName, readonly string[]> = {
   roots: ['id'],
@@ -63,7 +67,7 @@ const EXPECTED_PRIMARY_KEYS: Record<ProjectionTableName, readonly string[]> = {
   blobs: ['contentKey'],
   blobReferences: ['blob', 'ordinal'],
   blobSections: ['blob', 'ordinal'],
-  blobConditions: ['blob', 'code', 'line', 'message'],
+  blobConditions: ['blob', 'code', 'ordinal', 'line', 'message'],
   harnessBlobFacts: ['blob', 'harness'],
   harnessBlobImports: ['blob', 'harness', 'ordinal'],
 };
@@ -134,6 +138,7 @@ const EXPECTED_COLUMNS = {
     'column',
     'startOffset',
     'endOffset',
+    'astIndex',
     'syntacticForm',
     'hasExtension',
     'leadingAt',

@@ -43,7 +43,12 @@ export function sampleBlobRows(key: string = FIRST_BLOB): BlobScopedRows {
       replacementCharacters: 4,
       tokenEstimate: 12,
       frontmatter: { title: 'x', tags: ['a', 'b'], nested: { deep: null } },
+      // The frontmatter codec's encoding of the mapping above, as text: a JSON
+      // string column, never re-parsed by the store.
+      frontmatterValue: '[["o","title","x","tags",[1],"nested",[2]],["a","a","b"],["o","deep",null]]',
       frontmatterError: null,
+      frontmatterNotAMapping: false,
+      anchors: ['intro', 'usage'],
       wordCount: 3,
       proseCodeUnits: 2,
       codeBlockCodeUnits: 0,
@@ -60,6 +65,7 @@ export function sampleBlobRows(key: string = FIRST_BLOB): BlobScopedRows {
       column: null,
       startOffset: 0,
       endOffset: 11,
+      astIndex: 0,
       syntacticForm: 'markdown-link',
       hasExtension: true,
       leadingAt: false,
@@ -87,6 +93,7 @@ export function sampleBlobRows(key: string = FIRST_BLOB): BlobScopedRows {
     blobConditions: [{
       blob: key,
       code: 'PARSE_ODDITY',
+      ordinal: 0,
       severity: 'info',
       message: '',
       line: null,
@@ -242,10 +249,13 @@ export function declinedBlobRows(key: string = FIRST_BLOB): BlobScopedRows {
     blobConditions: [{
       blob: key,
       code: 'BLOB_NOT_TEXT',
+      ordinal: 0,
       severity: 'warning',
       message: 'contains a NUL byte, so no parser was run over it',
       line: null,
     }],
+    harnessBlobFacts: [],
+    harnessBlobImports: [],
   };
 }
 

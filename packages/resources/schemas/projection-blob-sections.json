@@ -45,21 +45,52 @@
           "description": "ordinal of the enclosing heading, or null at the top of the tree"
         },
         "lineStart": {
-          "type": "integer",
-          "exclusiveMinimum": 0
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "1-based first line. Null only for a heading whose node carries no position: it is kept, so the heading list is whole, and spans nothing"
         },
         "lineEnd": {
-          "type": "integer",
-          "exclusiveMinimum": 0
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "1-based last line. Null exactly when lineStart is"
         },
         "bytes": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "UTF-8 bytes spanned by this section, including nested subsections"
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "UTF-8 bytes spanned by this section, including nested subsections. Null exactly when lineStart is"
         },
         "tokens": {
-          "type": "integer",
-          "minimum": 0
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Estimated tokens over the same span. Null exactly when lineStart is"
         }
       },
       "required": [

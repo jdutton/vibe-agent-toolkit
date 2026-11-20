@@ -38,6 +38,7 @@ it red on a seeded violation.
 | A plugin loaded through an import wrapper | enforced | I11's lint and allowlist. |
 | A plugin hangs at module evaluation | enforced | Kill at limit (I8). |
 | Mixed VAT builds on one store | enforced | The namespace (settled); I7's test. |
+| Version skew: a store written by one VAT build and read by another serves facts whose extraction code changed while the stored row shape did not | accepted | Bound: the store directory is keyed by the row shape (`projectionShapeDigest`, the `projection-<shape>` path segment), never by the extraction code, so an extraction change that leaves every row schema as it was files under the same store. The cache namespace above it (`cache-namespace.ts`) separates builds: a published build by its package version, a dev checkout by a digest of its package root path and the parse-facts schema shape; two dev builds of one checkout whose extraction code differs share a namespace and a store. Backstop: I0's warm/cold differential over `vat validate`, run in CI, reds when a warm answer differs from a cold one over its fixture. Closed by I2b, code identity in the stored key. |
 | Concurrent writer | enforced | Whole row sets (I6); I7's test. |
 | Eviction or retirement mid-run | enforced | Leases (settled); I7's test. |
 | Crash mid-write | enforced | I6's kill mid-write. |

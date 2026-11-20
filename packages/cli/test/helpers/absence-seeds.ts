@@ -79,6 +79,7 @@ const limitBreach: I0Seed = {
   name: 'limitBreach',
   needs: null,
   arms: ['storeOff', 'cold'],
+  verbs: ['validate', 'check', 'query', 'context'],
   stateA: (corpus, git) => {
     writeFileTree(corpus, { [HUGE_PATH]: HUGE_TEXT, 'CLAUDE.md': `${GATE_FIXTURE['CLAUDE.md'] ?? ''}\n@${HUGE_PATH}\n` });
     git(['add', '--', HUGE_PATH, 'CLAUDE.md']);

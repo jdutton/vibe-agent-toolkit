@@ -387,7 +387,7 @@ export class ProjectionBuilder {
     (row) => compositeKey(row.blob, row.ordinal),
   );
   readonly #blobConditions = new ProjectionTable<BlobConditionRow>(
-    (row) => compositeKey(row.blob, row.code, row.line, row.message),
+    (row) => compositeKey(row.blob, row.code, row.ordinal, row.line, row.message),
   );
   readonly #harnessBlobFacts = new ProjectionTable<HarnessBlobFactsRow>(
     (row) => compositeKey(row.blob, row.harness),

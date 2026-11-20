@@ -109,10 +109,10 @@ boundaries) that does not exist anywhere in the codebase yet — a separate, lar
 
 | table (🔷 proposed) | contents |
 |---|---|
-| `blobs` | content key, bytes, decode provenance (`encoding`, `encodingSource`, `replacementCharacters`), token estimate, frontmatter (JSON), `frontmatter_error`, word count, prose vs. code-block size counts (UTF-16 code units), link/heading/section counts |
-| `blob_references` | ordinal, raw ref, text, line, column, `startOffset`/`endOffset` (UTF-16 code units), syntactic form, lexical features (extension, leading `@`, slash count, variable-expansion syntax, in-code-span, in-fence) |
-| `blob_sections` | ordinal, depth, title, slug, slug occurrence, parent, line span, bytes (UTF-8), tokens |
-| `blob_conditions` | `(blob, code, severity, message, line)` — parse-time oddities |
+| `blobs` | content key, bytes, decode provenance (`encoding`, `encodingSource`, `replacementCharacters`), token estimate, frontmatter (JSON, the SQL surface), `frontmatterValue` (the exact frontmatter-codec encoding the fact reader decodes), `frontmatterError` (YAML that does not parse), `frontmatterNotAMapping`, `anchors` (JSON), word count, prose vs. code-block size counts (UTF-16 code units), link/heading/section counts |
+| `blob_references` | ordinal, raw ref, text, line, column, `startOffset`/`endOffset` (UTF-16 code units; line and each offset null where the parser supplied none, never a dropped row), `astIndex` (the link's index in the parser's own order; null for a lexer row), syntactic form, lexical features (extension, leading `@`, slash count, variable-expansion syntax, in-code-span, in-fence) |
+| `blob_sections` | ordinal, depth, title, slug, slug occurrence, parent, line span, bytes (UTF-8), tokens (span, bytes and tokens null for a heading with no line, never a dropped row) |
+| `blob_conditions` | `(blob, code, ordinal, severity, message, line)` — parse-time oddities; `ordinal` numbers each code's rows in the order the parse reported them, so two identical findings on one line are two rows |
 | `harness_blob_facts` | `(blob, harness)`, the bytes and tokens the harness INJECTS for it as a memory file (`injectedBytes`, `injectedTokens`), the `paths:` globs it scopes the file by (`paths`, JSON, read the harness's way) — derived lazily, only for blobs the harness reaches ([zones.md](zones.md#harness_blob_facts-and-harness_blob_imports--a-harnesss-content-rules-derived-on-reach)) |
 | `harness_blob_imports` | `(blob, harness, ordinal)`, raw ref, target, line — the `@` imports the named harness's own extractor reads ([zones.md](zones.md#harness_blob_facts-and-harness_blob_imports--a-harnesss-content-rules-derived-on-reach)) |
 

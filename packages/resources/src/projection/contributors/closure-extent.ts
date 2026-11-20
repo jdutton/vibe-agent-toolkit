@@ -1310,6 +1310,17 @@ function memberResource(resourceId: string, walk: WalkContext): ResourceRow {
 }
 
 /**
+ * Where a reference sits, for a condition message: a link the parser rebuilt
+ * with no position (a GFM autolink literal glued to text) has no line to name.
+ *
+ * @param reference - The reference
+ * @returns `at line N ` or nothing
+ */
+function atLine(reference: ClosureEdge): string {
+  return reference.line === null ? '' : `at line ${reference.line} `;
+}
+
+/**
  * The reference that provoked a condition, in the columns
  * `realization_conditions` carries it in.
  *
@@ -1361,7 +1372,7 @@ function unresolvedCondition(
     path: fromPath,
     code: CLOSURE_REFERENCE_UNRESOLVED,
     severity: 'info',
-    message: `Reference "${reference.rawRef}" at line ${reference.line} resolves to no realization in this projection,`
+    message: `Reference "${reference.rawRef}" ${atLine(reference)}resolves to no realization in this projection,`
       + ' so the closure could not admit it as a member',
     resourceId,
     ...referenceProvenance(fromPath, reference),
@@ -1405,7 +1416,7 @@ function outsideRootCondition(
     path: targetPath,
     code: CLOSURE_REFERENCE_OUTSIDE_ROOT,
     severity: 'info',
-    message: `Reference "${reference.rawRef}" at line ${reference.line} resolves outside this projection's root,`
+    message: `Reference "${reference.rawRef}" ${atLine(reference)}resolves outside this projection's root,`
       + ' so no contributor could ever realize it and the closure cannot admit it as a member',
     resourceId: null,
     ...referenceProvenance(fromPath, reference),

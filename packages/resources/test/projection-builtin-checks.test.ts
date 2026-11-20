@@ -243,7 +243,7 @@ function brokenRuleInput(overrides: Partial<BuiltinCheckInput> = {}): BuiltinChe
       { resourceId: 'res-doc', path: 'docs/readme.md', contentKey: BROKEN_KEY },
     ],
     resourceTags: [{ resourceId: RULES_ID, tag: 'rules-file' }],
-    blobs: [{ contentKey: BROKEN_KEY, frontmatterError: YAML_ERROR }],
+    blobs: [{ contentKey: BROKEN_KEY, frontmatterError: YAML_ERROR, frontmatterNotAMapping: false }],
     realizationConditions: [],
     ...overrides,
   };
@@ -269,7 +269,7 @@ describe('CLAUDE_RULE_FRONTMATTER_INVALID — a rules file whose frontmatter doe
     // The control: the same tree with the error cleared reports nothing, so the
     // finding above is about the error column and not about the tag alone.
     expect(CLAUDE_RULE_FRONTMATTER_INVALID_CHECK.run(brokenRuleInput({
-      blobs: [{ contentKey: BROKEN_KEY, frontmatterError: null }],
+      blobs: [{ contentKey: BROKEN_KEY, frontmatterError: null, frontmatterNotAMapping: false }],
     }))).toStrictEqual([]);
   });
 
@@ -299,7 +299,7 @@ describe('CLAUDE_RULE_FRONTMATTER_INVALID — a rules file whose frontmatter doe
 
   it('keeps only the first line of a multi-line parser message', () => {
     const [issue] = CLAUDE_RULE_FRONTMATTER_INVALID_CHECK.run(brokenRuleInput({
-      blobs: [{ contentKey: BROKEN_KEY, frontmatterError: `${YAML_ERROR}\n\n  1 | paths:\n    ^` }],
+      blobs: [{ contentKey: BROKEN_KEY, frontmatterError: `${YAML_ERROR}\n\n  1 | paths:\n    ^`, frontmatterNotAMapping: false }],
     }));
 
     expect(issue?.message).toContain(YAML_ERROR);
@@ -309,13 +309,13 @@ describe('CLAUDE_RULE_FRONTMATTER_INVALID — a rules file whose frontmatter doe
   it('⭐ reports frontmatter that PARSED but is not a mapping, in the same lane', () => {
     // `---\n- a\n- b\n---` is valid YAML and decodes to a sequence, so `paths:`
     // cannot be read from it and the rule looks unconditional. `blob-facts.ts`
-    // gives the blob that verdict; this check is where it reaches the operator.
-    const notMapping = 'the frontmatter block is valid YAML but not a YAML mapping — it decodes'
-      + ' to a sequence, a scalar or a typed value (!!set, !!omap, !!timestamp, !!binary), so it declares no keys at all';
-    const [issue] = CLAUDE_RULE_FRONTMATTER_INVALID_CHECK.run(brokenRuleInput({
-      blobs: [{ contentKey: BROKEN_KEY, frontmatterError: notMapping }],
+    // gives the blob that verdict as its own column (`frontmatterNotAMapping`,
+    // with no parser error beside it); this check is where it reaches the operator.
+    const [issue, ...rest] = CLAUDE_RULE_FRONTMATTER_INVALID_CHECK.run(brokenRuleInput({
+      blobs: [{ contentKey: BROKEN_KEY, frontmatterError: null, frontmatterNotAMapping: true }],
     }));
 
+    expect(rest).toStrictEqual([]);
     expect(issue?.code).toBe('CLAUDE_RULE_FRONTMATTER_INVALID');
     expect(issue?.message).toContain('not a YAML mapping');
     // The sentence has to survive a reason that is not a parser error: "does

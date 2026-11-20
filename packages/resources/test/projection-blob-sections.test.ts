@@ -106,9 +106,18 @@ describe('blobSectionsFor', () => {
     expect(blobSectionsFor(CONTENT_KEY, 'just prose\n', [])).toEqual([]);
   });
 
-  it('skips a heading with no line rather than defaulting it to the top of the document', () => {
-    const orphan: HeadingNode = { level: 1, text: 'No position', slug: 'no-position' };
-    expect(blobSectionsFor(CONTENT_KEY, DOC, [orphan])).toEqual([]);
+  it('keeps a heading with no line, with no span rather than the top of the document', () => {
+    // A heading is a resource fact whether or not the parser placed it, so dropping it would
+    // make the stored tree disagree with the parse; its span is unknown, never line 1.
+    const placed = headingsOf(DOC);
+    const orphan: HeadingNode = { level: 2, text: 'No position', slug: 'no-position' };
+    const top = placed[0];
+    if (top === undefined) throw new Error('fixture has a top heading');
+    const rows = blobSectionsFor(CONTENT_KEY, DOC, [{ ...top, children: [...(top.children ?? []), orphan] }]);
+    expect(rows.map((row) => row.title)).toEqual(['Top', USAGE, 'Deep', USAGE, 'No position']);
+    expect(rows[4]).toMatchObject({ ordinal: 4, parentOrdinal: 0, lineStart: null, lineEnd: null, bytes: null, tokens: null });
+    // The positioned sections keep their spans.
+    expect(rows[3]?.lineStart).toBe(7);
   });
 
   it('produces rows the shipped schema accepts', () => {

@@ -251,7 +251,7 @@ function elementText(element: P5Element): string {
  * the shape where the element has a full location and the attribute span lookup
  * misses, and the result was measured, not reasoned: `{ line: 1 }` with **no
  * offsets** — half a position, invented by the very fallback the sentence said
- * could not fire. `blob-references.ts › hasReferenceSpan` then rejected the row.
+ * could not fire. The projection then dropped the row (it now keeps it, with null offsets).
  *
  * The fix is {@link sourceSpelling}, not parse5: nothing about the parser
  * guarantees the two absences coincide, and a future lookup keyed on anything
@@ -388,7 +388,7 @@ interface LinkCollector {
  * is a defect and not a cosmetic duplicate:
  *
  * - `blob_references` got two rows for one authored reference;
- * - `hasReferenceSpan` could not filter the clone out — the clone HAS a span;
+ * - no span check could filter the clone out — the clone HAS a span;
  * - every ordering column was equal, so `edges.refOrdinal` was ambiguous
  *   between the two.
  *

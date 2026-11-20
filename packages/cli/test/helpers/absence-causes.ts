@@ -308,7 +308,7 @@ export function surfacedCodesOf(member: AbsenceMember): readonly string[] {
     }));
   } else if (BLOB_REFUSAL_CONDITION_CODES.includes(signature.code)) {
     codes = findingCodesOf({
-      blobConditions: [{ blob: PROBE_CONTENT_KEY, code: signature.code, severity: 'error', message: 'probe', line: null }],
+      blobConditions: [{ blob: PROBE_CONTENT_KEY, code: signature.code, ordinal: 0, severity: 'error', message: 'probe', line: null }],
       resourceRealizations: [probeRealization({ contentKey: PROBE_CONTENT_KEY, contentState: 'keyed', mime: null })],
     });
   } else {

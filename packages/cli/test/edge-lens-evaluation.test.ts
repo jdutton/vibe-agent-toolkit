@@ -84,6 +84,7 @@ function projectionWith(contexts: Projection['resolutionContexts']): Projection 
       column: 1,
       startOffset: 0,
       endOffset: 1,
+      astIndex: 0,
       syntacticForm: 'markdown-link',
       hasExtension: false,
       leadingAt: false,

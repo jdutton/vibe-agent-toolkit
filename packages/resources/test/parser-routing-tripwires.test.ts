@@ -278,7 +278,8 @@ describe('MIME parser routing', () => {
     const content = CORPUS.find((file) => file.path === LEXER_FORMS_TS)?.content ?? '';
     const { references } = blobAt(LEXER_FORMS_TS);
 
-    expect(references.map((row) => content.slice(row.startOffset, row.endOffset)))
+    expect(references.every((row) => row.startOffset !== null && row.endOffset !== null)).toBe(true);
+    expect(references.map((row) => content.slice(row.startOffset ?? 0, row.endOffset ?? 0)))
       .toEqual(references.map((row) => row.rawRef));
     expect(references.map((row) => row.startOffset))
       .toEqual([AT_TOKEN, BARE_TOKEN_TEXT, ENV_TOKEN].map((token) => content.indexOf(token)));

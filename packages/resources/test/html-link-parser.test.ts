@@ -105,13 +105,11 @@ function parseLinkPositions(source: string): LinkPosition[] {
  * `walkElements` never descends into its separate `content` fragment, and an
  * unterminated quote does not, because the element is dropped at EOF instead.
  *
- * ⚠️ Twinned, deliberately, in `projection-blob-references.test.ts`, which
- * still asserts THREE parsed links here (`[1, undefined, 1]` lines and
- * `[3, undefined, 25]` offsets) to prove the row builder drops a location-less
- * link. That twin is now stale and is that file's owner to update: the parser
- * emits two links for this page, and neither lacks a position. Its other two
- * tests are unaffected — `halfPositionedLink` subtracts a half-position from
- * the FIRST link, which still carries one.
+ * Twinned, deliberately, in `projection-blob-references.test.ts`, which
+ * asserts the same two links reach two rows. Its half-positioned cases build
+ * their input with `halfPositionedLink`, which subtracts half a position from
+ * the FIRST link here, and prove such a link is kept as a row with the missing
+ * columns null.
  */
 const RECONSTRUCTED_ANCHOR_HTML =
   '<a href="./x.md"><div><a href="./y.md"><div>d</div></a></div>';
@@ -567,7 +565,7 @@ describe('A4 — protocol-relative and query-string/fragment hrefs', () => {
  * span, which is not a cosmetic duplicate:
  *
  * - `blob_references` gets two rows for one authored reference;
- * - `hasReferenceSpan` cannot filter the clone out — the clone HAS a span;
+ * - no position check can filter the clone out — the clone HAS a span;
  * - every ordering column is equal, so `edges.refOrdinal` is ambiguous between
  *   them.
  *

@@ -126,6 +126,7 @@ function referenceRow(blob: string): BlobReferenceRow {
     variableExpansion: null,
     inCodeSpan: false,
     inFence: false,
+    astIndex: 0,
   } as const satisfies Omit<BlobReferenceRow, 'ordinal'>;
   return { ...row, ordinal: 0 };
 }
@@ -203,7 +204,10 @@ function contribute(builder: ProjectionBuilder, side: Side): void {
     replacementCharacters: 0,
     tokenEstimate: 3,
     frontmatter: null,
+    frontmatterValue: null,
     frontmatterError: null,
+    frontmatterNotAMapping: false,
+    anchors: [],
     wordCount: 2,
     proseCodeUnits: 10,
     codeBlockCodeUnits: 0,
@@ -230,6 +234,7 @@ function contribute(builder: ProjectionBuilder, side: Side): void {
   builder.addBlobCondition({
     blob: side.blob,
     code: CONDITION_CODE,
+    ordinal: 0,
     severity: 'info',
     message: 'fixture oddity',
     line: null,

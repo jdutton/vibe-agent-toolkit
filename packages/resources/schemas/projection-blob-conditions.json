@@ -14,6 +14,11 @@
           "minLength": 1,
           "description": "An enum member, or \"PARSE_ODDITY\" for an unclassified oddity"
         },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based position among this blob's rows of this code, in the order the parse reported them: two identical findings are two rows, and the order is the parser's, not the key's"
+        },
         "severity": {
           "type": "string",
           "enum": [
@@ -34,12 +39,14 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "1-based line, or null when the finding names none"
         }
       },
       "required": [
         "blob",
         "code",
+        "ordinal",
         "severity",
         "message",
         "line"

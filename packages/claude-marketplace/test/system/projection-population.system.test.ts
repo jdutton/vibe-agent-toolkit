@@ -36,68 +36,36 @@
  * a working tree. The pass count does not move, which is why it is the only
  * figure this file pins.
  *
- * ## The two skip counters are not equally clean, and the test says so
+ * ## Every heading and every parser link is a row
  *
- * `blobSectionsFor` and `blobReferencesFor` both **skip** an input that carries
- * no position rather than defaulting it to line 1. Headings need a line;
- * references need a line **and both offsets** (`hasReferenceSpan`), which is
- * not the same test — see that predicate's docstring. Headings: measured **0**,
- * a real invariant, asserted as one.
+ * `blobSectionsFor` and `blobReferencesFor` keep an input that carries no
+ * position, with null position columns, rather than skipping it or defaulting
+ * it to line 1. Remark does hand `toResourceLink` a `link` node with
+ * `position === undefined` for a GFM autolink literal in certain quoted or
+ * parenthesised contexts; that link is still a row. So each blob's rows number
+ * exactly its own counts: one `blob_sections` row per heading
+ * (`blobs.headingCount`), and one AST-derived `blob_references` row per link the
+ * parser found (`blobs.linkCount`), whose `astIndex` values are exactly
+ * 0 to linkCount - 1, the parser's own order.
  *
- * References: **not** 0 — 80 on 2026-08-13, 97 on 2026-08-23, 102 on
- * 2026-08-24. Remark hands `toResourceLink` a `link` node with
- * `position === undefined` for a GFM autolink literal in certain quoted /
- * parenthesised contexts.
+ * A test here once proved that none of the references the stage used to drop
+ * for want of a position could have been a closure edge. Nothing is dropped any
+ * more, so that question no longer arises: a positionless link is a row like
+ * any other.
  *
- * ## ⚰️ What this file used to prove about those drops, and no longer can
+ * ## Why the agreement is not vacuous
  *
- * A test lived here called **`drops no reference that could have been a closure
- * edge`**. It re-read every blob that had dropped a reference, re-resolved each
- * dropped href through `resolveLocalHref` — the same resolver
- * `ClosureExtentContributor` walks with, rather than approximating "external"
- * with a scheme regex — and asserted that **none of them resolved, from its own
- * referring file, to a path any realization occupies**. The substrate is allowed
- * to lose a reference it cannot position; it is not allowed to lose one that
- * would have been a closure edge, because that is a skill member that silently
- * stops existing.
+ * `blobs.linkCount` and the AST-derived rows are two independent measurements
+ * of one quantity. The check is armed by every AST link in the corpus, not by
+ * the positionless ones, and {@link MIN_AST_REFERENCE_ROWS} keeps that honest.
+ * Two markers say which rows are AST-derived: `astIndex !== null`, set by the
+ * producer per row, and `AST_SYNTACTIC_FORMS`, the producer's own partition of
+ * the forms. The check requires the two to agree on every row, so a partition
+ * re-derived by hand (a hand-listed form triple once reported every HTML
+ * reference as dropped) is caught rather than trusted.
  *
- * That proof is gone because its **subject** is gone, not because the property
- * stopped mattering. Measured over this corpus on 2026-08-24, all 102 dropped
- * references were in `.ts` (84), `.json` (10), `.js` (7) and `.yaml` (1) files —
- * **zero** in markdown or HTML. They existed only because `parserKindForPath`
- * routed every non-`.html` path to the markdown parser, so remark ran over
- * TypeScript sources full of `"WebFetch(domain:www.anthropic.com)"`. Once only
- * markdown and HTML documents are parsed, the dropped-reference population over
- * this corpus is 0 and the assertion degrades to `expect([]).toEqual([])` —
- * green forever, unable to redden, and indistinguishable from a test that
- * proves something. An honest deletion beats that.
- *
- * Nor could it be kept alive on a fixture: the mechanism is **not**
- * format-specific (`projection-blob-population.test.ts`'s
- * `'counts a positionless reference as skipped rather than defaulting it to
- * line 1'` already pins the upstream remark behaviour, and its fixture is an
- * `a.md`), so a hand-written markdown corpus here would be that unit test with
- * a slower runner. The value of the deleted test was that its population was
- * *found*, not authored. If a markdown document in this corpus ever acquires a
- * glued `www.` autolink the population returns and the closure-edge question
- * becomes answerable again — nothing here will notice, and the assertion to
- * restore is in this file's history.
- *
- * ## What survives, and why it is not vacuous
- *
- * The other half of that test does survive, and it is armed by a different
- * population: `blobs.linkCount` and the parser-derived `blob_references` rows
- * are two independent measurements of one quantity, and their difference must
- * equal the stage's own `referencesSkippedForMissingLine`. That check is armed
- * by every AST link in the corpus (2,432 rows on 2026-08-24, of which 926 are
- * from `.md`/`.html` blobs), not by the drops — a drop count of 0 leaves it
- * fully live, which is exactly how it caught the `AST_SYNTACTIC_FORMS` staleness
- * described on {@link droppedReferencesByBlob}. It is what {@link
- * MIN_AST_REFERENCE_ROWS} exists to keep honest.
- *
- * `populate()` reports no counters — what a run is told is read from its rows —
- * so the stage's own counter comes from a second run of the public
- * `populateBlobs` over the converged run's realizations ({@link rederiveBlobs}).
+ * How many rows carry no position is printed, never asserted: it is a property
+ * of the corpus and of remark, not an invariant.
  */
 
 import {
@@ -115,15 +83,10 @@ import {
   GitExtentContributor,
   PackageExtentContributor,
   populate,
-  populateBlobs,
-  ProjectionBuilder,
   relativize,
-  type BlobPopulationResult,
   type ExtentContributor,
   type JsonValue,
   type Projection,
-  RunContentCache,
-  withParseDispatcher,
   withPopulationRun,
 } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
@@ -150,7 +113,7 @@ const ROOT = safePath.resolve(__dirname, '..', '..', '..', '..');
 const PROBE_CEILING = 6;
 
 /**
- * Floor on the AST-derived `blob_references` rows the drop measurement runs over.
+ * Floor on the AST-derived `blob_references` rows the link-count agreement runs over.
  *
  * **This is not the row-count assertion this file refuses to make** (see the
  * header). A count assertion pins the corpus and fails on the next commit; this
@@ -158,44 +121,15 @@ const PROBE_CEILING = 6;
  * subject at all. It can only fail one way — by the population *collapsing* —
  * and a collapse is a finding, not a rebase.
  *
- * It exists because `expect(total).toBe(referencesSkippedForMissingLine)` is
- * `0 === 0` over an empty input, and this file has already lost one assertion
- * (the closure-edge test, see header) to exactly that. Measured 2026-08-24:
+ * It exists because a per-blob agreement over no AST rows is vacuously true,
+ * and this file has already lost one assertion (the closure-edge test, see
+ * header) to exactly that. Measured 2026-08-24:
  * 2,432 AST rows over the whole corpus, of which **926** come from `.md`/`.html`
  * blobs — the subset that survives if parsing is ever narrowed to markdown and
  * HTML. 500 sits below both, so it clears today and clears that narrowing, but
  * catches a parser that silently stops running.
  */
 const MIN_AST_REFERENCE_ROWS = 500;
-
-/** A second run of the blob stage over the converged realizations. */
-interface RederivedBlobs {
-  /** The stage's own counters, which `populate()` does not report. */
-  counts: BlobPopulationResult;
-  /** The blobs it derived, in code-unit order, to prove it saw the same set. */
-  blobKeys: string[];
-}
-
-/**
- * Run the public blob stage again over exactly the converged run's identities,
- * contexts and realizations, for its counters.
- *
- * @param projection - The converged projection
- * @returns The stage's counters and the content keys it derived
- */
-async function rederiveBlobs(projection: Projection): Promise<RederivedBlobs> {
-  const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() });
-  for (const row of projection.resolutionContexts) builder.addContext(row);
-  for (const row of projection.resources) builder.addResource(row);
-  for (const row of projection.resourceRealizations) builder.addRealization(row);
-  const counts = await withParseDispatcher((dispatcher) => populateBlobs(builder, { dispatcher }));
-  return { counts, blobKeys: contentKeysOf(builder.build()) };
-}
-
-/** A projection's blob content keys, in code-unit order. */
-function contentKeysOf(projection: Projection): string[] {
-  return projection.blobs.map((row) => row.contentKey).sort((a, b) => (a < b ? -1 : Number(a > b)));
-}
 
 /** What the escalating-cap probe learned about the closure stratum. */
 interface ConvergenceProbe {
@@ -213,7 +147,6 @@ interface ConvergenceProbe {
 }
 
 let probe: ConvergenceProbe;
-let rederived: RederivedBlobs;
 let registeredIds: readonly string[];
 
 /**
@@ -331,61 +264,51 @@ async function probeConvergence(
 }
 
 /**
- * References the blob stage dropped, per blob, derived from the rows alone.
+ * Where each blob's AST-derived `blob_references` rows disagree with its parse.
  *
- * `blobs.linkCount` is `parsed.links.length` — every link the blob's parser
- * found — so the difference between it and the blob's *parser-derived* rows is
- * exactly the links that could not be positioned. The lexer's rows cannot
- * contribute to either side: `LexicalReference.line`, `startOffset` and
- * `endOffset` are all required, so a lexical candidate is never dropped, and
- * `AST_SYNTACTIC_FORMS` is the producer's own statement of which forms are not
- * the lexer's.
+ * `blobs.linkCount` is `parsed.links.length`, every link the blob's parser
+ * found, and every one of them is a row whose `astIndex` is its place in that
+ * list. So a blob's `astIndex` values, sorted, must be exactly 0 to
+ * linkCount - 1: a missing index is a link that never became a row, a repeated
+ * or out-of-range one is a row no parser produced.
  *
- * ⛔ This used to hold its own hand-listed `MARKDOWN_FORMS` triple and call it
- * "the three values only the markdown AST produces". That was true only while
- * mdast was the sole producer whose links survived to a row. The moment HTML
- * references got a span and their own `html-link` form, every one of them fell
- * outside the triple and this function reported them as dropped — 102 against
- * the stage's own 98, a disagreement of exactly the corpus's four HTML
- * references, none of which was dropped at all. The number was never the
- * problem: a consumer that re-derives a producer's partition by hand goes stale
- * the next time a parser is added, silently and in the direction of a false
- * alarm. Reading `AST_SYNTACTIC_FORMS` keeps the two measurements independent
- * (the counter is still `candidates - rows`, computed inside the stage) while
- * making them agree by construction rather than by coincidence.
- *
- * `astRowTotal` is returned alongside because it is the population that *arms*
- * the comparison: the difference is meaningful only while there are AST rows to
- * take the difference of, and a caller cannot re-derive it without repeating
- * the `AST_SYNTACTIC_FORMS` filter — which is the exact hand-re-derivation this
- * docstring exists to warn about.
+ * `astIndex !== null` and `AST_SYNTACTIC_FORMS` are two statements of which rows
+ * are AST-derived, and every row must get the same answer from both.
  *
  * @param projection - The populated projection
- * @returns Per-blob dropped counts, the blobs carrying more AST rows than links,
- *   and the AST rows the difference is taken against
+ * @returns The blobs whose rows disagree with `linkCount`, the rows whose two
+ *   markers disagree, the AST rows the agreement is taken over, and the AST rows
+ *   per blob that carry no position
  */
-function droppedReferencesByBlob(projection: Projection): {
-  dropped: Map<string, number>;
-  surplus: string[];
+function astReferenceAgreement(projection: Projection): {
+  disagreements: string[];
+  markerMismatches: string[];
   astRowTotal: number;
+  positionless: Map<string, number>;
 } {
-  const astRows = new Map<string, number>();
+  const astIndexes = new Map<string, number[]>();
+  const markerMismatches: string[] = [];
+  const positionless = new Map<string, number>();
   let astRowTotal = 0;
   for (const row of projection.blobReferences) {
-    if (!AST_SYNTACTIC_FORMS.has(row.syntacticForm)) continue;
-    astRows.set(row.blob, (astRows.get(row.blob) ?? 0) + 1);
+    if ((row.astIndex !== null) !== AST_SYNTACTIC_FORMS.has(row.syntacticForm)) {
+      markerMismatches.push(`${row.blob}#${row.ordinal}: ${row.syntacticForm} with astIndex ${String(row.astIndex)}`);
+    }
+    if (row.astIndex === null) continue;
     astRowTotal++;
+    const indexes = astIndexes.get(row.blob);
+    if (indexes === undefined) astIndexes.set(row.blob, [row.astIndex]);
+    else indexes.push(row.astIndex);
+    if (row.line === null) positionless.set(row.blob, (positionless.get(row.blob) ?? 0) + 1);
   }
 
-  const dropped = new Map<string, number>();
-  const surplus: string[] = [];
+  const disagreements: string[] = [];
   for (const blob of projection.blobs) {
-    const rows = astRows.get(blob.contentKey) ?? 0;
-    const missing = blob.linkCount - rows;
-    if (missing > 0) dropped.set(blob.contentKey, missing);
-    if (missing < 0) surplus.push(`${blob.contentKey}: ${rows} rows vs ${blob.linkCount} links`);
+    const indexes = (astIndexes.get(blob.contentKey) ?? []).sort((a, b) => a - b);
+    const whole = indexes.length === blob.linkCount && indexes.every((value, position) => value === position);
+    if (!whole) disagreements.push(`${blob.contentKey}: astIndex [${indexes.join(',')}] vs ${blob.linkCount} links`);
   }
-  return { dropped, surplus, astRowTotal };
+  return { disagreements, markerMismatches, astRowTotal, positionless };
 }
 
 /**
@@ -473,9 +396,6 @@ beforeAll(async () => {
   }
   reportCardinalities(probe.projection);
 
-  const startedAt = performance.now();
-  rederived = await rederiveBlobs(probe.projection);
-  console.log(`[blob stage, re-derived] ${Math.round(performance.now() - startedAt)} ms`, JSON.stringify(rederived.counts));
 }, atLeastTierTimeout(inject('tierHookTimeout'), 3_600_000));
 
 describe('whole-corpus population', () => {
@@ -533,8 +453,17 @@ describe('whole-corpus population', () => {
   });
 
   it('leaves no heading without a section row', () => {
-    expect(rederived.blobKeys).toEqual(contentKeysOf(probe.projection));
-    expect(rederived.counts.headingsSkippedForMissingLine).toBe(0);
+    // One `blob_sections` row per heading, a heading with no position included
+    // (kept with null span columns, never skipped).
+    const sections = new Map<string, number>();
+    for (const row of probe.projection.blobSections) {
+      sections.set(row.blob, (sections.get(row.blob) ?? 0) + 1);
+    }
+    expect(probe.projection.blobs.some((row) => row.headingCount > 0)).toBe(true);
+    const disagreements = probe.projection.blobs
+      .filter((row) => row.headingCount !== (sections.get(row.contentKey) ?? 0))
+      .map((row) => `${row.contentKey}: ${row.headingCount} headings vs ${sections.get(row.contentKey) ?? 0} rows`);
+    expect(disagreements).toEqual([]);
   });
 
   it('agrees between blobs.sectionCount and the blob_sections rows', () => {
@@ -549,37 +478,28 @@ describe('whole-corpus population', () => {
   });
 
   it('agrees between blobs.linkCount and the parser-derived blob_references rows', () => {
-    const { dropped, surplus, astRowTotal } = droppedReferencesByBlob(probe.projection);
+    const { disagreements, markerMismatches, astRowTotal, positionless } = astReferenceAgreement(probe.projection);
 
-    // ── Arm the assertion before making it. ───────────────────────────────────
-    // `expect(total).toBe(referencesSkippedForMissingLine)` is `0 === 0` over an
-    // empty projection, so the subject is asserted first and the property
-    // second. See {@link MIN_AST_REFERENCE_ROWS} for why a floor is not the
-    // row-count assertion this file refuses to make.
+    // Arm the assertion before making it: an agreement over no AST rows is
+    // vacuously true. See {@link MIN_AST_REFERENCE_ROWS} for why a floor is not
+    // the row-count assertion this file refuses to make.
     expect(astRowTotal).toBeGreaterThan(MIN_AST_REFERENCE_ROWS);
     expect(probe.projection.blobs.length).toBeGreaterThan(0);
 
-    // No blob may carry more AST-form rows than its parser found links: a surplus
-    // is a row no parser produced.
-    expect(surplus).toEqual([]);
-    const total = [...dropped.values()].reduce((sum, count) => sum + count, 0);
-    // The rows and the counter are two independent measurements of one quantity:
-    // `blobs.linkCount` is what the parser handed the stage, the AST-form rows
-    // are what survived `hasReferenceSpan`, and the stage counted the difference
-    // itself. A parser whose links stop reaching rows moves one side only. The
-    // counter is the re-derivation's, over the same blobs (asserted first).
-    expect(rederived.blobKeys).toEqual(contentKeysOf(probe.projection));
-    expect(total).toBe(rederived.counts.referencesSkippedForMissingLine);
+    // Every row is AST-derived by both markers or by neither.
+    expect(markerMismatches).toEqual([]);
+    // Every link the parser found is exactly one row, positioned or not, and no
+    // row is one the parser did not produce.
+    expect(disagreements).toEqual([]);
 
-    // Printed, never asserted — the header explains why the drop *count* is not
-    // an invariant. The extension breakdown is the fact that retired the
-    // closure-edge assertion: on 2026-08-24 every one of the 102 drops was in a
-    // `.ts`/`.json`/`.js`/`.yaml` file and none in markdown or HTML.
+    // Printed, never asserted: how many links arrived with no position is a
+    // property of the corpus and of remark, not an invariant.
+    const total = [...positionless.values()].reduce((sum, count) => sum + count, 0);
     const pathByKey = realizedPathByContentKey(probe.projection);
-    console.log(`[skips] ${total} reference(s) dropped for want of a source span,`
-      + ` across ${dropped.size} blob(s), against ${astRowTotal} AST reference row(s)`);
-    console.log(`  dropped-blob extensions: ${JSON.stringify(tally(
-      [...dropped.keys()].map((contentKey) => extensionOf(pathByKey.get(contentKey) ?? '')),
+    console.log(`[positionless] ${total} AST reference row(s) with no source position,`
+      + ` across ${positionless.size} blob(s), against ${astRowTotal} AST reference row(s)`);
+    console.log(`  positionless-blob extensions: ${JSON.stringify(tally(
+      [...positionless.keys()].map((contentKey) => extensionOf(pathByKey.get(contentKey) ?? '')),
     ))}`);
   });
 });

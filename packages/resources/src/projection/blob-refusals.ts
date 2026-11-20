@@ -77,7 +77,7 @@ import {
   BLOB_UNREADABLE,
 } from './blob-population.js';
 import { POPULATION_PARSE_LIMITS } from './content-cache.js';
-import { formatParseFailures, parseFailureOf } from './parse-failure.js';
+import { formatParseFailures, parseFailedEntry, parseFailureOf } from './parse-failure.js';
 import type { Projection } from './projection.js';
 
 /** The three tables the line is a function of — every one of them stored. */
@@ -317,7 +317,7 @@ export function parseRefusalOf(row: Projection['blobConditions'][number]): Omit<
 const UNADMITTED_BLOB_CODES: ReadonlySet<string> = new Set([BLOB_UNREADABLE, BLOB_CONTENT_CHANGED, BLOB_PARSE_FAILED]);
 
 /** Which of the two logs one realization goes in, and its entry less the path. */
-type NotAdmittedEntry =
+export type NotAdmittedEntry =
   | { readonly log: 'unreadable'; readonly entry: Omit<UnreadableResource, 'filePath'> }
   | { readonly log: 'parseRefused'; readonly entry: Omit<ParseRefusedResource, 'filePath'> };
 
@@ -328,18 +328,17 @@ type NotAdmittedEntry =
  * A `BLOB_PARSE_FAILED` row — a stored fact of the bytes — is logged
  * `unreadable` under the code its parser threw (`parseFailureOf`, the one reader
  * of that message), so the file fails `RESOURCE_UNREADABLE` like any other file
- * the run holds no rows for. The registry lane never gets that far: a parse that
- * throws anything but a read failure ends its run.
+ * the run holds no rows for. The registry lane builds the same entry from the
+ * throw (`parseFailedEntry`, one rule for both).
  *
  * @param row - A blob condition row
  * @returns Its entry, or `undefined`
  */
-function blobConditionEntry(row: Projection['blobConditions'][number]): NotAdmittedEntry | undefined {
+export function blobConditionEntry(row: Projection['blobConditions'][number]): NotAdmittedEntry | undefined {
   const refusal = parseRefusalOf(row);
   if (refusal !== undefined) return { log: 'parseRefused', entry: refusal };
   if (!UNADMITTED_BLOB_CODES.has(row.code)) return undefined;
-  const failure = row.code === BLOB_PARSE_FAILED ? parseFailureOf(row.message) : undefined;
-  return { log: 'unreadable', entry: { reason: row.message, ...(failure?.kind === 'code' && { code: failure.text }) } };
+  return { log: 'unreadable', entry: row.code === BLOB_PARSE_FAILED ? parseFailedEntry(row.message) : { reason: row.message } };
 }
 
 /**

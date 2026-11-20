@@ -276,12 +276,13 @@ function requireStructure(parser: MarkdownParser, session: { structure?: () => S
  * for them would be asking it to reproduce something it has no reason to know.
  *
  * ⚠️ The slugger is stateful and MUST see headings in document order — that is
- * how it reproduces GitHub's duplicate suffixing.
+ * how it reproduces GitHub's duplicate suffixing. The blob fact reader replays it
+ * over stored titles in ordinal order, so a stored slug is never trusted alone.
  *
  * @param flatHeadings - Headings in document order, from the structure capability
  * @returns Top-level headings with children nested beneath them
  */
-function toHeadingTree(flatHeadings: FlatHeading[]): HeadingNode[] {
+export function toHeadingTree(flatHeadings: FlatHeading[]): HeadingNode[] {
   const slugger = new GithubSlugger();
   return buildHeadingTree(
     flatHeadings.map((heading) => ({

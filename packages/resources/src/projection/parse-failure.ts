@@ -64,6 +64,20 @@ export function parseFailedMessage(parserKind: ParserKind, error: unknown): stri
 }
 
 /**
+ * The not-admitted entry for a parse that threw: the message as the reason, and the error's
+ * code when it had one. THE one rule for both lanes - the blob lane reads it back from a stored
+ * `BLOB_PARSE_FAILED` row, the registry lane builds it from the throw - so a file whose parser
+ * threw is `RESOURCE_UNREADABLE` with the same reason and code whichever lane saw it.
+ *
+ * @param message - A {@link parseFailedMessage}
+ * @returns The entry's reason and code
+ */
+export function parseFailedEntry(message: string): { readonly reason: string; readonly code?: string } {
+  const failure = parseFailureOf(message);
+  return { reason: message, ...(failure?.kind === 'code' && { code: failure.text }) };
+}
+
+/**
  * The failure a {@link parseFailedMessage} carries. Unambiguous: the marker's FIRST occurrence
  * ends the parser kind (which never holds it), the prefix says code or message, and the rest up
  * to the final `)` is the text — whatever a message itself contains.

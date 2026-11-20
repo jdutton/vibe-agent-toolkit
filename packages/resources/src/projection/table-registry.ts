@@ -256,6 +256,7 @@ export const PROJECTION_TABLES = {
   }, 'contextId'),
   blobs: table('blobs', 'blob', BlobRowSchema, ['contentKey'], {
     contentKey: OTHER, encoding: OTHER, encodingSource: OTHER, frontmatterError: OTHER, frontmatter: OTHER,
+    frontmatterValue: OTHER, anchors: OTHER,
   }),
   // `rawRef` and `text` are what an author wrote, never resolved against a root.
   blobReferences: table('blobReferences', 'blob', BlobReferenceRowSchema, ['blob', 'ordinal'], {
@@ -264,7 +265,7 @@ export const PROJECTION_TABLES = {
   blobSections: table('blobSections', 'blob', BlobSectionRowSchema, ['blob', 'ordinal'], {
     blob: OTHER, title: OTHER, slug: OTHER,
   }),
-  blobConditions: table('blobConditions', 'blob', BlobConditionRowSchema, ['blob', 'code', 'line', 'message'], {
+  blobConditions: table('blobConditions', 'blob', BlobConditionRowSchema, ['blob', 'code', 'ordinal', 'line', 'message'], {
     blob: OTHER, code: OTHER, severity: OTHER, message: OTHER,
   }),
   // ⛔ `blob` FIRST in both keys: a store keys every blob-tier select, delete

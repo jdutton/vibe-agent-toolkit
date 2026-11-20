@@ -337,6 +337,7 @@ describe('parse-fact snapshot', () => {
       frontmatterSource: null,
       frontmatterFields: null,
       anchors: null,
+      contentMeasures: null,
       decodedLength: 10,
       conditions: [],
       optionalArrays: [{ field: 'anchors', state: 'absent' as const }],

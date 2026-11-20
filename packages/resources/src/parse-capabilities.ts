@@ -191,10 +191,10 @@ export interface FlatHeading {
    * 1-based source line, when the implementation reports one.
    *
    * ⚠️ Optional in the type, load-bearing in practice: the projection splits
-   * `blob_sections` rows on this line, and `blob-population.ts` counts what it
-   * had to drop as `headingsSkippedForMissingLine`, in `populateBlobs`' public result (`BlobPopulationResult`), a run counter no stored row carries. An implementation that
-   * omits it is conformant and still silently shrinks the projection, so omit
-   * it only if the sections lane is not in your path.
+   * `blob_sections` rows on this line, and a heading without one is kept with a
+   * null span (`lineStart`, `lineEnd`, `bytes`, `tokens`). An implementation that
+   * omits it is conformant and leaves every section span unknown, so omit it only
+   * if the sections lane is not in your path.
    */
   line?: number;
 }

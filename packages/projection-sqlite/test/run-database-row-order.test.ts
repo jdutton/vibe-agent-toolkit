@@ -14,12 +14,15 @@ import { describe, expect, it } from 'vitest';
 
 import { hydrateRunDatabase } from '../src/run-database.js';
 
-/** `blob_conditions` keys on (blob, code, line, message); `line` is nullable, `severity` is not key. */
+/**
+ * `blob_conditions` keys on (blob, code, ordinal, line, message); `line` is nullable, `severity` is
+ * not key. The two `m` rows share an ordinal so they stay a nullable-key tie.
+ */
 const CONDITIONS: readonly Record<string, unknown>[] = [
-  { blob: 'b1', code: 'C', severity: 'warning', message: 'x', line: 3 },
-  { blob: 'b1', code: 'C', severity: 'warning', message: 'm', line: null },
-  { blob: 'b1', code: 'C', severity: 'info', message: 'm', line: null },
-  { blob: 'b0', code: 'A', severity: 'error', message: 'y', line: 1 },
+  { blob: 'b1', code: 'C', ordinal: 0, severity: 'warning', message: 'x', line: 3 },
+  { blob: 'b1', code: 'C', ordinal: 1, severity: 'warning', message: 'm', line: null },
+  { blob: 'b1', code: 'C', ordinal: 1, severity: 'info', message: 'm', line: null },
+  { blob: 'b0', code: 'A', ordinal: 0, severity: 'error', message: 'y', line: 1 },
 ];
 
 /** `edges` keys on (src, refOrdinal, contextId); `refOrdinal` is nullable, `kind` is not key. */

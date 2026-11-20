@@ -26,8 +26,16 @@
           "description": "Link text for a markdown form, or null for a bare autolink or any lexer-derived form"
         },
         "line": {
-          "type": "integer",
-          "exclusiveMinimum": 0
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "1-based line. Null only for an AST-derived reference whose node carries no position (a GFM autolink literal glued to text)"
         },
         "column": {
           "anyOf": [
@@ -42,14 +50,40 @@
           "description": "1-based column. Null for a markdown form derived from an AST node that carries no column."
         },
         "startOffset": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "0-based UTF-16 code-unit offset of the reference token in the decoded content — NOT characters and NOT bytes; an astral character advances it by two"
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "0-based UTF-16 code-unit offset of the reference token in the decoded content — NOT characters and NOT bytes; an astral character advances it by two. Null only for an AST-derived reference whose node carries no full span"
         },
         "endOffset": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "0-based UTF-16 code-unit offset one past the reference token — the half-open span [startOffset, endOffset)"
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "0-based UTF-16 code-unit offset one past the reference token — the half-open span [startOffset, endOffset). Null exactly when startOffset is"
+        },
+        "astIndex": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "0-based position of an AST-derived reference in its parser's own link order (markdown: links, then link references, then definitions; HTML: walk order), which is what a resource's links are rebuilt in. Null for a lexer-derived reference"
         },
         "syntacticForm": {
           "type": "string",
@@ -113,6 +147,7 @@
         "column",
         "startOffset",
         "endOffset",
+        "astIndex",
         "syntacticForm",
         "hasExtension",
         "leadingAt",

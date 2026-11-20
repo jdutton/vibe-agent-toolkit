@@ -343,15 +343,26 @@ describe('populateBlobs, through populate()', () => {
     expect(lexed[0]?.syntacticForm).toBe(BARE_TOKEN);
   });
 
-  it('skips no heading and no reference for want of a source line', async () => {
-    // `HeadingNode.line` and `ResourceLink.line` are optional while the row
-    // columns they feed are required and positive, and both are handled by
-    // skipping rather than defaulting to line 1. These two counters are the only
-    // way that skip is observable — a skipped row is, definitionally, absent.
-    const counts = await populateBlobsOnOwnDispatcher(await baseBuilderFor(), { cache: NO_CACHE });
+  it('keeps a row for every heading and every parser link, located or not', async () => {
+    // `HeadingNode.line` and `ResourceLink.line` are optional. A node with no
+    // position is kept with null position columns, never skipped and never
+    // defaulted to line 1, so each blob's rows number exactly its own counts:
+    // one section per heading, one AST-derived reference per link.
+    const builder = await baseBuilderFor();
+    await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
+    const projection = builder.build();
 
-    expect(counts.headingsSkippedForMissingLine).toBe(0);
-    expect(counts.referencesSkippedForMissingLine).toBe(0);
+    const rowsPerBlob = projection.blobs.map((blob) => ({
+      blob: blob.contentKey,
+      sections: projection.blobSections.filter((row) => row.blob === blob.contentKey).length,
+      astReferences: projection.blobReferences.filter((row) => row.blob === blob.contentKey && row.astIndex !== null).length,
+    }));
+    expect(rowsPerBlob).toEqual(projection.blobs.map((blob) => ({
+      blob: blob.contentKey,
+      sections: blob.headingCount,
+      astReferences: blob.linkCount,
+    })));
+    expect(projection.blobs.some((blob) => blob.linkCount > 0 && blob.headingCount > 0)).toBe(true);
   });
 
   it('derives one blob per file and attributes every directory it skipped', async () => {
@@ -602,21 +613,22 @@ describe('populateBlobs', () => {
     expect(emitted).toEqual(sorted);
   });
 
-  it('counts a positionless reference as skipped rather than defaulting it to line 1', async () => {
+  it('keeps a positionless reference as a row with null position, never defaulting it to line 1', async () => {
     // Measured, not hypothetical: remark hands `toResourceLink` a `link` node
     // with no `position` when a GFM autolink literal is wrapped in quotes and
-    // parentheses, and this exact shape accounts for all 77 skipped references
-    // over this repository's corpus. If the parser is ever fixed upstream this
-    // test goes red, which is the correct signal — not a reason to default.
+    // parentheses. The link is still one the resource carries, so it is a row
+    // whose position columns are null, never a guess. If the parser is ever
+    // fixed upstream the null assertions go red, which is the correct signal.
     await writeCorpus([{ path: DOC_A, content: '"WebFetch(domain:www.anthropic.com)"\n' }]);
     const builder = await baseBuilderFor();
 
-    const counts = await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
+    await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
     const projection = builder.build();
 
-    expect(counts.referencesSkippedForMissingLine).toBe(1);
-    expect(projection.blobReferences).toHaveLength(0);
     expect(projection.blobs[0]?.linkCount).toBe(1);
+    const astRows = projection.blobReferences.filter((row) => row.astIndex !== null);
+    expect(astRows).toHaveLength(1);
+    expect(astRows[0]).toMatchObject({ astIndex: 0, line: null, column: null, startOffset: null, endOffset: null });
   });
 
   it('changes nothing when run a second time against the same builder', async () => {
@@ -810,7 +822,9 @@ describe('populateBlobs, over blobs no document parser routes to', () => {
       offsetsOf(UNPARSED_TS_CONTENT, '@packages/resources/README.md'),
       offsetsOf(UNPARSED_TS_CONTENT, '${HOME}/.claude/settings.json'),
     ]);
-    expect(lexed.map((row) => UNPARSED_TS_CONTENT.slice(row.startOffset, row.endOffset)))
+    // A lexer row always carries its span; the fallback below is never taken.
+    expect(lexed.every((row) => row.startOffset !== null && row.endOffset !== null)).toBe(true);
+    expect(lexed.map((row) => UNPARSED_TS_CONTENT.slice(row.startOffset ?? 0, row.endOffset ?? 0)))
       .toEqual(lexed.map((row) => row.rawRef));
 
     // Every lexical row reports `inFence: false` / `inCodeSpan: false`, because a

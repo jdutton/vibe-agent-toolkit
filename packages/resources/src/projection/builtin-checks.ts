@@ -36,6 +36,7 @@ import type {
 } from '../schemas/projection-resources.js';
 
 import { RULES_FILE_TAG } from './agentic-tags.js';
+import { FRONTMATTER_NOT_A_MAPPING_REASON, frontmatterInvalidReason } from './blob-facts.js';
 import {
   CLAUDE_RULE_FRONTMATTER_INVALID_NAME,
   CLAUDE_RULE_GLOB_INERT_NAME,
@@ -50,6 +51,7 @@ import {
   isDeclinedSymlinkCode,
 } from './contributors/filesystem-extent.js';
 import { findingLocation } from './finding-location.js';
+import { quoteSqlString } from './sql-identifiers.js';
 
 /**
  * The projection slice the built-in set reads.
@@ -65,8 +67,8 @@ export interface BuiltinCheckInput {
   readonly resourceRealizations: readonly Pick<ResourceRealizationRow, 'resourceId' | 'path' | 'contentKey'>[];
   /** Which identities are rules files — the `rules-file` tag the path classifier emits. */
   readonly resourceTags: readonly Pick<ResourceTagRow, 'resourceId' | 'tag'>[];
-  /** Whether each keyed blob's frontmatter parsed. */
-  readonly blobs: readonly Pick<BlobRow, 'contentKey' | 'frontmatterError'>[];
+  /** Whether each keyed blob's frontmatter parsed, and whether it decoded to a mapping. */
+  readonly blobs: readonly Pick<BlobRow, 'contentKey' | 'frontmatterError' | 'frontmatterNotAMapping'>[];
   /**
    * What the extents could not realize — the only table that holds the links
    * they declined.
@@ -298,7 +300,8 @@ function runClaudeRuleFrontmatterInvalid(input: BuiltinCheckInput): readonly Val
   );
   const errorByKey = new Map<string, string>();
   for (const blob of input.blobs) {
-    if (blob.frontmatterError !== null) errorByKey.set(blob.contentKey, blob.frontmatterError);
+    const reason = frontmatterInvalidReason(blob);
+    if (reason !== null) errorByKey.set(blob.contentKey, reason);
   }
 
   const reported = new Set<string>();
@@ -329,10 +332,11 @@ export const CLAUDE_RULE_FRONTMATTER_INVALID_CHECK: BuiltinCheck = {
   // DISTINCT, not a join per realization: every realization of one identity
   // carries the same path and content key, so DISTINCT collapses the fan-out.
   sqlTwin:
-    'SELECT DISTINCT r.path, b.frontmatterError\n'
+    'SELECT DISTINCT r.path,'
+    + ` COALESCE(b.frontmatterError, CASE WHEN b.frontmatterNotAMapping THEN ${quoteSqlString(FRONTMATTER_NOT_A_MAPPING_REASON)} END) AS frontmatterError\n`
     + '  FROM resource_realizations r\n'
     + '  JOIN blobs b ON b.contentKey = r.contentKey\n'
-    + ' WHERE b.frontmatterError IS NOT NULL\n'
+    + ' WHERE (b.frontmatterError IS NOT NULL OR b.frontmatterNotAMapping)\n'
     + "   AND r.resourceId IN (SELECT t.resourceId FROM resource_tags t WHERE t.tag = 'rules-file')",
   run: runClaudeRuleFrontmatterInvalid,
 };

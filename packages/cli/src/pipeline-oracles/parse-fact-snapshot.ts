@@ -13,9 +13,9 @@ import { createHash } from 'node:crypto';
 
 import {
   classifyParseFailure,
+  contentRoute,
   flattenHeadings,
   type HeadingNode,
-  isParsableContent,
   isParseLimitError,
   ParseCache,
   type KeyedContent,
@@ -27,7 +27,6 @@ import {
   readContentWithKey,
   relativize,
   type ResourceLink,
-  unparsedResourceFacts,
   withParseDispatcher,
 } from '@vibe-agent-toolkit/resources';
 import { forEachInOrder, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
@@ -224,8 +223,7 @@ export function diffParseFactRows(first: ParseFactRow, other: ParseFactRow): str
  * `@throws` says must fail loudly.
  *
  * Returns the whole `KeyedContent` rather than a narrowed struct because
- * `parseOrNull` needs to NARROW it: `isParsableContent` is a type guard on the
- * object, and a hand-picked subset of its fields cannot be narrowed by one.
+ * `parseOrNull` needs to NARROW it: `contentRoute` narrows the object, and a hand-picked subset of its fields cannot be narrowed by one.
  *
  * Read only to parse, so it is held to the dispatcher's input cap before it is read, as every
  * other lane's read is. A file past the cap is the parse refusal `parseOrNull` skips, met one
@@ -258,9 +256,9 @@ async function readKeyedOrSkip(absolutePath: string, inputBytes: number): Promis
  * the worst shape available: it files a key with facts no lane that honours the
  * discriminator can reproduce.
  *
- * `isParsableContent` is the same narrowing `admitResource` uses, and it is a
- * type guard rather than a comparison so the remaining ternary is exhaustive
- * over what is left — a fourth kind would not compile here.
+ * `contentRoute` is the same route the registry's admission takes (not text, no
+ * parser, or a parse), and its `parse` arm carries the narrowed content, so a
+ * fourth kind would not compile here.
  *
  * ## Why the one rethrow
  *
@@ -289,14 +287,14 @@ async function parseOrNull(
   keyed: KeyedContent,
   dispatcher: ParseDispatcher,
 ): Promise<ParseResult | null> {
-  // No parser routes here, so there is nothing to load, nothing to throw, and
-  // nothing to re-read: the facts come from the bytes this function was already
-  // handed. Shared with the registry rather than restated — see
-  // `unparsedResourceFacts`.
-  if (!isParsableContent(keyed)) return unparsedResourceFacts(keyed);
+  // Not text, or no parser routes here: nothing to load, nothing to throw, and
+  // nothing to re-read. The route is the registry's own (`contentRoute`), never
+  // restated here.
+  const route = contentRoute(keyed);
+  if (route.kind !== 'parse') return route.facts;
 
   try {
-    return await dispatcher.parse(keyed);
+    return await dispatcher.parse(route.content);
   } catch (error) {
     classifyParseFailure(error);
     return null;

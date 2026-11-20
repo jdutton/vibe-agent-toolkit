@@ -2,7 +2,8 @@
  * A row that says `none` must not carry a parse.
  *
  * `parserKindForPath` answers `none` for every type that is neither prose nor
- * markup, and the registry honours that by branching on `isParsableContent`.
+ * markup, and the registry honours that by routing every read through
+ * `contentRoute`, which this oracle now shares.
  * This oracle branched on `parserKind === 'html'` instead, so `none` fell into
  * the ELSE arm and was handed to `remark-parse` — and the row was then STAMPED
  * `parserKind: 'none'` while carrying remark's `links` and `headings`. The
@@ -127,14 +128,26 @@ describe('a document no parser routes to', () => {
     );
 
     // `absent` and `empty` are different observations everywhere else in this
-    // snapshot, and they must stay different here: the registry's unparsed
-    // shape deliberately OMITS these keys rather than supplying `[]`, because
-    // it computes neither a lexer scan nor content measures for a resource
-    // whose metadata has nowhere to put them.
+    // snapshot, and they must stay different here: the unparsed shape OMITS
+    // these keys rather than supplying `[]`. `anchors`, `parseErrors` and
+    // `unresolvedReferences` are tree products no parser produced; the lexer
+    // does scan these bytes, but omits `lexicalReferences` when it finds no
+    // candidate, as `parseMarkdownContent` does, and this fixture has none.
     expect(states.get('lexicalReferences')).toBe('absent');
     expect(states.get('anchors')).toBe('absent');
     expect(states.get('parseErrors')).toBe('absent');
     expect(states.get('unresolvedReferences')).toBe('absent');
-    expect(byKind.get('none')?.contentMeasures).toBeNull();
+  });
+
+  it('carries the content measures the bytes alone determine, all of it prose', async () => {
+    // The unparsed route is the registry's own (`contentRoute`), and it measures
+    // the content: with no AST to say where a fence is, every code unit is
+    // prose, so the two measures still sum to the decoded length.
+    const { byKind } = await captureByKind();
+    const measures = byKind.get('none')?.contentMeasures;
+
+    expect(measures?.proseCodeUnits).toBe(CORPUS['strings.ts'].length);
+    expect(measures?.codeBlockCodeUnits).toBe(0);
+    expect(measures?.wordCount).toBeGreaterThan(0);
   });
 });

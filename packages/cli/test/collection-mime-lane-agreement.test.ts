@@ -26,8 +26,8 @@
  *
  * - **Registry**: `resource.headings.length`. Every fixture below opens with an
  *   ATX heading, so "the markdown parser ran" ⟺ "this resource has a heading".
- *   A file routed to no parser gets `unparsedResourceFacts` — empty headings,
- *   empty links — by TYPE, not by accident.
+ *   A file routed to no parser takes `contentRoute`'s `without-parser` route — empty
+ *   headings, empty links — by TYPE, not by accident.
  * - **Projection**: the `contentKey` prefix on the `resource_realizations` row.
  *   The parser kind is part of the key's digest preimage, so the prefix IS the
  *   route (`none.<digest>` for a file nothing parses).

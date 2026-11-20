@@ -12,7 +12,8 @@
  *
  * So every arm carries a POSITIVE tell, asserted on every measured run before
  * any document is compared: store-off touched no store, cold derived and wrote
- * one, warm was served by one. And the divergence seed plants a wrong cache
+ * one, warm was served by one, and partial eviction (warm with part of the blob
+ * tier deleted) re-derived every key it lost. And the divergence seed plants a wrong cache
  * entry the comparison must catch, by relation, exactly.
  *
  * ## One cell per (arm, verb)
@@ -20,7 +21,7 @@
  * Every verb runs in a cell of its own: fresh arm directories, the fixture
  * rewritten at the one corpus path, the seed's state A, the arm's `prepare`
  * (a warm arm primes here, under A), the seed's `toB`, then the one measured
- * run. A cold arm that ran four verbs in one directory would be cold for the
+ * run. A cold arm that ran every verb in one directory would be cold for the
  * first only, and no cell inherits another's state.
  *
  * ## The census reads the one enumeration
@@ -36,6 +37,7 @@
 import { chmodSync, existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { devNull } from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 
 import { allDerivedSpecs, BLOB_NOT_TEXT, PROJECTION_TABLES, quoteIdentifier, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
@@ -51,7 +53,8 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { expectAbsenceCause, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
-import { expect } from 'vitest';
+import { afterAll, beforeAll, expect } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 
 import { StatedLimitSchema } from '../../src/commands/resources/check-schema.js';
@@ -74,10 +77,14 @@ import { contributorsCharged, rowsStoredUnder, storeFilesUnder } from './project
 // ── Names ───────────────────────────────────────────────────────────────────
 
 /** How a run reaches the projection store. Store-off is the reference arm. */
-type ArmName = 'storeOff' | 'cold' | 'warmSameHistory';
+type ArmName = 'storeOff' | 'cold' | 'warmSameHistory' | 'partialEviction';
 
-/** The four verbs the harness runs; `query` is the dump. */
-type VerbName = 'validate' | 'check' | 'query' | 'context';
+/**
+ * The verbs the harness runs; `query` is the dump. `validate` is `vat resources validate`;
+ * `vatValidate` is the top-level `vat validate`, whose phases fold that report, the checks
+ * child's and (when configured) the skills report into one.
+ */
+type VerbName = 'validate' | 'check' | 'query' | 'context' | 'vatValidate';
 
 /** A recorded run: the warm arm's prime, or any arm's measured run. */
 type RunLabel = `${ArmName}:${'prime' | 'measured'}`;
@@ -265,6 +272,16 @@ export const PER_RUN_FIELDS: Readonly<Record<VerbName, readonly string[]>> = {
   check: ['durationMs', 'data.population', 'data.populationSecs', 'data.lensSecs', 'data.lensPopulation', 'data.checks[].durationSecs'],
   query: ['durationMs', 'data.population', 'data.populationSecs', 'data.lensSecs', 'data.lensPopulation'],
   context: [],
+  // The orchestrator's wall clock, and each phase's per-run fields where its own verb's row drops
+  // them: the resources phase's `population`, the checks child's populations and timings.
+  vatValidate: [
+    'durationMs',
+    'data.phases[].data.population',
+    'data.phases[].data.populationSecs',
+    'data.phases[].data.lensSecs',
+    'data.phases[].data.lensPopulation',
+    'data.phases[].data.checks[].durationSecs',
+  ],
 };
 
 /**
@@ -330,10 +347,55 @@ const CONTEXT_DOCUMENT_SCHEMA = z.union([
   reportSchema(z.unknown(), FindingSchema),
 ]);
 
+/** A verb whose document is JSON on stdout (`--format json`). */
+const parseJson = (stdout: string): unknown => JSON.parse(stdout);
+
+/** The population fields a document's `data` says its answer came from. */
+const ORIGIN_FIELDS = ['population', 'lensPopulation'] as const;
+
+/**
+ * Where a one-population verb says its answer came from: `data.population`, and
+ * `data.lensPopulation` for a verb that reports its lenses' own populations.
+ *
+ * @param document - The parsed document
+ * @returns Each origin field the document carries, by name
+ */
+function dataOrigins(document: Record<string, unknown>): Record<string, unknown> {
+  const data = document['data'];
+  if (typeof data !== 'object' || data === null) return {};
+  const record = data as Record<string, unknown>;
+  return Object.fromEntries(ORIGIN_FIELDS.filter((field) => Object.hasOwn(record, field)).map((field) => [field, record[field]]));
+}
+
+/**
+ * Where `vat validate` says its answer came from: the origin fields of its FIRST phase
+ * that reports one, named `<phase>.<field>`. Only that phase can tell the arms apart.
+ * Every later phase that populates (the checks phase, a child process with its own
+ * population) asks the same question after the first phase has answered it, so with a
+ * store on it is served what the first phase wrote: a cold run's checks phase reports
+ * `store`, by design (`commands/validate.ts`). Its origin is per-run, normalized away
+ * with the rest ({@link PER_RUN_FIELDS}); its store charges still reach the arm's tell.
+ *
+ * @param document - The orchestrator's document
+ * @returns The first reporting phase's origin fields
+ */
+function phaseOrigins(document: Record<string, unknown>): Record<string, unknown> {
+  const data = document['data'] as { phases?: readonly { name: string; data?: unknown }[] } | null | undefined;
+  for (const phase of data?.phases ?? []) {
+    const origins = Object.entries(dataOrigins({ data: phase.data }));
+    if (origins.length > 0) return Object.fromEntries(origins.map(([field, value]) => [`${phase.name}.${field}`, value]));
+  }
+  return {};
+}
+
 /** One verb the harness runs, and everything it is judged by. */
 interface VerbRow {
   readonly name: VerbName;
   readonly args: readonly string[];
+  /** Reads the document off stdout, in the format the verb writes it. */
+  readonly parse: (stdout: string) => unknown;
+  /** Where the run says its answer came from, by field: what an arm's tell holds to its origin. */
+  readonly originsOf: (document: Record<string, unknown>) => Record<string, unknown>;
   readonly schema: z.ZodTypeAny;
   readonly normalize: (document: Record<string, unknown>) => Record<string, unknown>;
   readonly censusOf: (document: Record<string, unknown>) => AbsenceCensus;
@@ -351,6 +413,8 @@ export function queryVerb(sql: string): VerbRow {
   return {
     name: 'query',
     args: ['resources', 'query', '--base', 'HEAD', '--format', 'json', sql],
+    parse: parseJson,
+    originsOf: dataOrigins,
     schema: reportShapeFor('resources query').schema,
     normalize: (document) => normalizeDocument('query', document),
     censusOf: queryCensus,
@@ -358,11 +422,13 @@ export function queryVerb(sql: string): VerbRow {
   };
 }
 
-/** The four verbs, query as the dump. */
+/** The verbs, query as the dump. */
 export const VERBS: { readonly [Name in VerbName]: VerbRow } = {
   validate: {
     name: 'validate',
     args: ['resources', 'validate', '--format', 'json'],
+    parse: parseJson,
+    originsOf: dataOrigins,
     schema: reportShapeFor('resources validate').schema,
     normalize: (document) => normalizeDocument('validate', document),
     censusOf: reportCensus,
@@ -371,6 +437,8 @@ export const VERBS: { readonly [Name in VerbName]: VerbRow } = {
   check: {
     name: 'check',
     args: ['resources', 'check', '--format', 'json'],
+    parse: parseJson,
+    originsOf: dataOrigins,
     schema: reportShapeFor('resources check').schema,
     normalize: (document) => normalizeDocument('check', document),
     censusOf: reportCensus,
@@ -380,17 +448,33 @@ export const VERBS: { readonly [Name in VerbName]: VerbRow } = {
   context: {
     name: 'context',
     args: ['claude', 'context', '.', '--format', 'json'],
+    parse: parseJson,
+    originsOf: dataOrigins,
     schema: CONTEXT_DOCUMENT_SCHEMA,
     normalize: (document) => normalizeDocument('context', document),
     censusOf: contextCensus,
     refusingCodesOf: (document) => contextTally(document).codes,
+  },
+  // `vat validate` offers no `--format`: its document is YAML. Its findings are every phase's, flat
+  // and in phase order, and the comparison holds them, their order and the exit code to store-off's.
+  // `--base HEAD` reaches only the checks phase, so a check reading `changed_files` answers rather
+  // than breaks, as `query`'s does.
+  vatValidate: {
+    name: 'vatValidate',
+    args: ['validate', '--base', 'HEAD'],
+    parse: (stdout) => parseYaml(stdout) as unknown,
+    originsOf: phaseOrigins,
+    schema: reportShapeFor('validate').schema,
+    normalize: (document) => normalizeDocument('vatValidate', document),
+    censusOf: reportCensus,
+    refusingCodesOf: (document) => reportTally(document).codes,
   },
 };
 
 /** Every verb, in the order a cell sequence runs them: the keys of {@link VERBS}, so none is skipped. */
 export const VERB_NAMES = Object.keys(VERBS) as readonly VerbName[];
 
-/** The verb rows a subject runs: the four, with any the subject states over them. */
+/** The verb rows a subject runs: {@link VERBS}, with any the subject states over them. */
 type VerbRows = Readonly<Record<VerbName, VerbRow>>;
 
 // ── Arms ────────────────────────────────────────────────────────────────────
@@ -417,6 +501,8 @@ interface RunRecord {
   readonly stdout: string;
   readonly stderr: string;
   readonly document: Record<string, unknown>;
+  /** Where the run says its answer came from, read by its verb's row ({@link VerbRow.originsOf}). */
+  readonly origins: Readonly<Record<string, unknown>>;
   /** Every contributor the run charged, from its own timing directory. */
   readonly charged: readonly string[];
 }
@@ -441,26 +527,20 @@ function storeCharges(run: RunRecord): string[] {
   return run.charged.filter((id) => id.startsWith(STORE_CHARGE_PREFIX));
 }
 
-/** One field of `data`, for a verb whose document carries it. */
-function dataField(run: RunRecord, field: string): unknown {
-  const data = run.document['data'] as Record<string, unknown> | null | undefined;
-  return data !== null && data !== undefined && Object.hasOwn(data, field) ? data[field] : undefined;
-}
-
 /**
- * Where a run says its answer came from: `data.population`, and `data.lensPopulation`
- * for a verb that reports its lenses' own populations. A lens population of `'none'`
- * (no lens the statement reached populates a lane of its own) carries no origin to
- * judge; whether the arm still answered alike is the compared document's to say.
+ * Where a run says its answer came from, every origin field its verb's row reads
+ * ({@link VerbRow.originsOf}). A lens population of `'none'` (no lens the statement
+ * reached populates a lane of its own) carries no origin to judge; whether the arm
+ * still answered alike is the compared document's to say.
  *
  * @param run - The run
  * @param origin - Where this arm's answer must have come from
  */
 function expectOrigin(run: RunRecord, origin: 'derived' | 'store'): void {
-  const population = dataField(run, 'population');
-  if (population !== undefined) expect(population, `${run.label} ${run.verb} population`).toBe(origin);
-  const lens = dataField(run, 'lensPopulation');
-  if (lens !== undefined && lens !== 'none') expect(lens, `${run.label} ${run.verb} lensPopulation`).toBe(origin);
+  for (const [field, value] of Object.entries(run.origins)) {
+    if (field.endsWith('lensPopulation') && value === 'none') continue;
+    expect(value, `${run.label} ${run.verb} ${field}`).toBe(origin);
+  }
 }
 
 /**
@@ -539,6 +619,126 @@ function coldTell(run: RunRecord, dirs: ArmDirs): void {
   expectOrigin(run, 'derived');
 }
 
+// ── Partial eviction ────────────────────────────────────────────────────────
+
+/** The blob-scoped tables, read off the registry, so a blob table added later is evicted too. */
+const BLOB_TABLES = Object.values(PROJECTION_TABLES).filter((spec) => spec.scope === 'blob');
+
+/**
+ * The column a blob-scoped table is keyed by: its first primary-key column, which is
+ * what the store keys every blob-tier select, delete and eviction on.
+ *
+ * @param spec - A blob-scoped table's registry entry
+ * @returns The content-key column
+ */
+function contentKeyColumn(spec: (typeof BLOB_TABLES)[number]): string {
+  const [first] = spec.primaryKey;
+  if (first === undefined) throw new Error(`${spec.name} declares no primary key`);
+  return first;
+}
+
+/** What a measured run does over a partly evicted blob tier: re-derive it, and where it says its answer came from. */
+interface EvictionOutcome {
+  /** Whether the run wrote, and so accounts for every evicted key again; otherwise it wrote nothing and accounts for none. */
+  readonly rederives: boolean;
+  /** Its {@link RunRecord.origins}, exactly. */
+  readonly origins: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * Each verb's outcome under partial eviction, held exactly. An evicted key is one the
+ * stored extent names and the blob tier does not account for, and ONE such key makes the
+ * whole extent a miss for a population that reads the blob tier (`uncoveredContentKeys`,
+ * ADR I10): it reads, misses, derives everything and writes it back. A population that
+ * does not read the blob tier is served the extent and never sees the eviction.
+ *
+ * - `validate` (`vat resources validate`) reads no blob table: served.
+ * - `check`, `query` and `context` read it: re-derived. `query`'s lenses populate after
+ *   its own population has written the extent back, so they are served.
+ * - `vatValidate`: its resources phase is served, as `validate` is; its checks child
+ *   reads the blob tier and re-derives it, which is the write.
+ *
+ * A store that serves the held keys around an evicted one rewrites this table.
+ */
+const EVICTION_OUTCOMES: { readonly [Name in VerbName]: EvictionOutcome } = {
+  validate: { rederives: false, origins: { population: 'store' } },
+  check: { rederives: true, origins: { population: 'derived', lensPopulation: 'none' } },
+  query: { rederives: true, origins: { population: 'derived', lensPopulation: 'store' } },
+  context: { rederives: true, origins: {} },
+  vatValidate: { rederives: true, origins: { 'resources.population': 'store' } },
+};
+
+/** Each cell's evicted content keys, from the arm's `prepare` to its measured run's tell. */
+const evictedByCell = new Map<string, readonly string[]>();
+
+/**
+ * Run `body` against the cell's one projection store, opened read-write, then close it.
+ *
+ * @param dirs - The cell
+ * @param body - What to do with the open database
+ * @returns What `body` returned
+ */
+function withStore<T>(dirs: ArmDirs, body: (database: DatabaseSync) => T): T {
+  const [file, ...others] = storeFilesUnder(dirs.store);
+  if (file === undefined || others.length > 0) throw new Error(`expected one projection store under ${dirs.store}`);
+  const database = new DatabaseSync(file);
+  try {
+    return body(database);
+  } finally {
+    database.close();
+  }
+}
+
+/** Rows each blob-scoped table holds for one content key. */
+function blobRowCounts(database: DatabaseSync, key: string): Record<string, number> {
+  return Object.fromEntries(BLOB_TABLES.map((spec) => {
+    const sql = `SELECT COUNT(*) AS n FROM ${quoteIdentifier(spec.name)} WHERE ${quoteIdentifier(contentKeyColumn(spec))} = ?`;
+    return [spec.name, (database.prepare(sql).get(key) as { n: number }).n];
+  }));
+}
+
+/** Whether the blob tier accounts for a key: a `blobs` row (parsed) or a `blob_conditions` row (declined), the store's own coverage rule. */
+function accountedFor(database: DatabaseSync, key: string): boolean {
+  const counts = blobRowCounts(database, key);
+  return (counts[PROJECTION_TABLES.blobs.name] ?? 0) + (counts[PROJECTION_TABLES.blobConditions.name] ?? 0) > 0;
+}
+
+/**
+ * Evict part of the blob tier the prime wrote: every other keyed content key the stored
+ * realizations name, in sorted order (the first, third, fifth, ...), deleted from every
+ * blob-scoped table. A content key is a digest, so which files that is is arbitrary, but
+ * fixed for fixed bytes; and it is never all or none, so the store holds an evicted key and
+ * a held one. Only the store's rows go: the parse cache keeps its entries, so the measured
+ * run re-derives the evicted rows from parse hits. The store's own `blob_keys` manifest is
+ * not a projection table and is left: it orders eviction, and a re-derivation rewrites it.
+ *
+ * @param dirs - The primed cell
+ * @returns The evicted keys
+ */
+function evictHalfTheBlobTier(dirs: ArmDirs): string[] {
+  return withStore(dirs, (database) => {
+    const realizations = quoteIdentifier(PROJECTION_TABLES.resourceRealizations.name);
+    const keyed = (database
+      .prepare(`SELECT DISTINCT "contentKey" AS key FROM ${realizations} WHERE "contentState" = 'keyed' ORDER BY "contentKey"`)
+      .all() as { key: string }[]).map((row) => row.key);
+    const evicted = keyed.filter((_key, index) => index % 2 === 0);
+    const held = keyed.filter((_key, index) => index % 2 === 1);
+    expect(held.length, 'a partial eviction holds a key back').toBeGreaterThan(0);
+    // Every key accounted for before, so it is the eviction that removes one.
+    expect(keyed.filter((key) => !accountedFor(database, key)), 'keys the prime left unaccounted for').toEqual([]);
+    database.exec('BEGIN IMMEDIATE');
+    for (const spec of BLOB_TABLES) {
+      const statement = database.prepare(`DELETE FROM ${quoteIdentifier(spec.name)} WHERE ${quoteIdentifier(contentKeyColumn(spec))} = ?`);
+      for (const key of evicted) statement.run(key);
+    }
+    database.exec('COMMIT');
+    const none = Object.fromEntries(BLOB_TABLES.map((spec) => [spec.name, 0]));
+    for (const key of evicted) expect(blobRowCounts(database, key), `evicted ${key}`).toEqual(none);
+    expect(held.filter((key) => !accountedFor(database, key)), 'held keys the eviction reached').toEqual([]);
+    return evicted;
+  });
+}
+
 /**
  * The arms, the reference first. Exhaustive over {@link ArmName}: an arm with no
  * tell does not typecheck, and {@link ARM_NAMES} is read off this table.
@@ -571,18 +771,42 @@ const ARMS: { readonly [Name in ArmName]: Arm } = {
       return primed;
     },
     tell: (run) => {
-      // A read with no write. The read is charged for a miss too (it files from a `finally`), so only the
+      // Reads with no write. The read is charged for a miss too (it files from a `finally`), so only the
       // absent write proves a hit: a hit returns before anything is derived, and only a derivation is
       // written. Every verb hits after one query prime because every population a verb makes asks the
       // filesystem extent the same question (the ignored half declined), so one stored extent serves all.
-      expect(storeCharges(run), `${run.verb}: the warm run was not served`).toEqual([CRAWL_STORE_READ_ID]);
+      // One read per process that populates: `vat validate`'s checks phase is a child with its own.
+      const charges = storeCharges(run);
+      expect(charges.length, `${run.verb}: the warm run never read the store`).toBeGreaterThan(0);
+      expect(new Set(charges), `${run.verb}: the warm run was not served`).toEqual(new Set([CRAWL_STORE_READ_ID]));
       expectOrigin(run, 'store');
+    },
+  },
+  partialEviction: {
+    env: storeOnEnv,
+    prepare: async (dirs, _corpus, _git, prime) => {
+      const primed = await prime();
+      coldTell(primed, dirs);
+      evictedByCell.set(dirs.root, evictHalfTheBlobTier(dirs));
+      return primed;
+    },
+    tell: (run, dirs) => {
+      const evicted = evictedByCell.get(dirs.root);
+      if (evicted === undefined) throw new Error(`${run.verb}: no eviction recorded for this cell`);
+      const expected = EVICTION_OUTCOMES[run.verb];
+      const charges = storeCharges(run);
+      expect(charges, `${run.label} ${run.verb}: the store was not read`).toContain(CRAWL_STORE_READ_ID);
+      expect(charges.includes(CRAWL_STORE_WRITE_ID), `${run.label} ${run.verb}: wrote`).toBe(expected.rederives);
+      const covered = withStore(dirs, (database) => evicted.filter((key) => accountedFor(database, key)));
+      // Both ways: a re-deriving run accounts for every evicted key again, a served one for none.
+      expect(covered, `${run.label} ${run.verb}: evicted keys accounted for after the run`).toEqual(expected.rederives ? evicted : []);
+      expect(run.origins, `${run.label} ${run.verb} origins`).toEqual(expected.origins);
     },
   },
 };
 
 /** Every arm, read off {@link ARMS} so none is skipped. */
-const ARM_NAMES = Object.keys(ARMS) as readonly ArmName[];
+export const ARM_NAMES = Object.keys(ARMS) as readonly ArmName[];
 if (ARM_NAMES[0] !== 'storeOff') throw new Error('ARMS must list store-off, the reference, first');
 
 // ── Seeds ───────────────────────────────────────────────────────────────────
@@ -700,6 +924,7 @@ const cellRoots: string[] = [];
 /** Remove every cell directory this process made; a suite's `afterAll`. */
 export function removeCells(): void {
   for (const root of cellRoots.splice(0)) removeTempDir(root);
+  evictedByCell.clear();
 }
 
 /**
@@ -760,20 +985,22 @@ function cellRunner(options: { binPath: string; corpus: string; dirs: ArmDirs; e
       // The published schema first: a document no consumer can read is not an answer to compare.
       let parsed: unknown;
       try {
-        parsed = JSON.parse(result.stdout);
+        parsed = verb.parse(result.stdout);
       } catch {
-        throw new Error(`${label} ${verb.name}: stdout is not JSON (exit ${String(result.status)}): ${result.stderr}`);
+        throw new Error(`${label} ${verb.name}: stdout is not its document (exit ${String(result.status)}): ${result.stderr}`);
       }
       const checked = verb.schema.safeParse(parsed);
       expect(checked.success, `${label} ${verb.name}: ${checked.success ? '' : checked.error.message}`).toBe(true);
       assertOnlyDeclaredCaches(options.dirs, before, `${label} ${verb.name}`);
+      const document = parsed as Record<string, unknown>;
       return {
         label,
         verb: verb.name,
         status: result.status,
         stdout: result.stdout,
         stderr: result.stderr,
-        document: parsed as Record<string, unknown>,
+        document,
+        origins: verb.originsOf(document),
         charged: contributorsCharged(timing),
       };
     },
@@ -844,16 +1071,38 @@ async function runCell(
   }
 }
 
+/** One slice of the unseeded gate: the cells one system file runs. */
+interface GateSlice {
+  readonly slice: string;
+  readonly arms: readonly ArmName[];
+  readonly verbs: readonly VerbName[];
+}
+
 /**
- * Run every cell of a seed (or the unseeded gate) and record what each produced.
+ * The unseeded gate's cells, sliced so each file stays inside the system tier's
+ * per-file budget (`docs/writing-tests.md`): every cell is a CLI spawn, a warm arm's
+ * a second, and `vat validate` spawns its checks child. Every (arm, verb) cell but
+ * store-off's lies in exactly one slice, and each slice runs store-off, the
+ * reference, first and over its own verbs; the unit test holds both, so an arm or a
+ * verb that lands in no slice reds.
+ */
+export const GATE_SLICES = {
+  stores: { slice: 'stores', arms: ['storeOff', 'cold', 'warmSameHistory'], verbs: ['validate', 'check', 'query', 'context'] },
+  vatValidate: { slice: 'vatValidate', arms: ['storeOff', 'cold', 'warmSameHistory', 'partialEviction'], verbs: ['vatValidate'] },
+  partialEviction: { slice: 'partialEviction', arms: ['storeOff', 'partialEviction'], verbs: ['validate', 'check', 'query', 'context'] },
+} as const satisfies Readonly<Record<string, GateSlice>>;
+
+/**
+ * Run every cell of a seed (or of a slice of the unseeded gate) and record what each produced.
  *
  * @param options - The build, the subject, any subject-specific verb rows
- * @param seed - The seed, or undefined for the unseeded gate
+ * @param selection - The seed, or the gate slice
  * @returns Every run, by arm and verb, and by label
  */
-export async function runDifferential(options: DifferentialOptions, seed?: I0Seed): Promise<DifferentialResult> {
-  const arms = seed?.arms ?? ARM_NAMES;
-  const verbs = seed?.verbs ?? VERB_NAMES;
+export async function runDifferential(options: DifferentialOptions, selection: I0Seed | GateSlice): Promise<DifferentialResult> {
+  const seed = 'slice' in selection ? undefined : selection;
+  const arms = selection.arms ?? ARM_NAMES;
+  const verbs = selection.verbs ?? VERB_NAMES;
   expect(arms[0], 'store-off is the reference arm and runs first').toBe('storeOff');
   const measured = Object.fromEntries(ARM_NAMES.map((arm) => [arm, {}])) as Record<ArmName, Partial<Record<VerbName, RunRecord>>>;
   const runs: Partial<Record<RunLabel, Partial<Record<VerbName, RunRecord>>>> = {};
@@ -1142,7 +1391,7 @@ const GATE_UNTRACKED: Readonly<Record<string, string>> = {
  * @param corpus - The corpus path every arm measures at
  * @returns The subject
  */
-export function gateSubject(corpus: string): Subject {
+function gateSubject(corpus: string): Subject {
   return {
     corpus,
     write: (git) => {
@@ -1263,6 +1512,47 @@ export function runEveryStep(steps: ReadonlyArray<() => void>): void {
   }
   const [first] = errors;
   if (errors.length > 0) throw first instanceof Error ? first : new Error(String(first));
+}
+
+/** One gate slice's file: its recorded runs, and the gate's judgment of them. */
+interface GateSuite {
+  /** The slice's recorded runs, once its `beforeAll` has run. */
+  readonly result: () => DifferentialResult;
+  /** Every arm of the slice answers every verb of it as store-off does, with a zero refusal census. */
+  readonly expectAgreement: () => void;
+}
+
+/**
+ * One slice of the unseeded gate: registers its hooks in the calling `describe`, and
+ * returns what the file's own test judges.
+ *
+ * @param slice - The slice ({@link GATE_SLICES})
+ * @param testFileUrl - The calling file's `import.meta.url`, which locates the CLI build
+ * @returns The suite
+ */
+export function gateSuite(slice: GateSlice, testFileUrl: string): GateSuite {
+  const context = createSuiteContext('vat-i0-gate-', testFileUrl);
+  let recorded: DifferentialResult | undefined;
+  const result = (): DifferentialResult => {
+    if (recorded === undefined) throw new Error(`the ${slice.slice} gate slice has not run`);
+    return recorded;
+  };
+  beforeAll(async () => {
+    context.setup();
+    recorded = await runDifferential({ binPath: context.binPath, subject: gateSubject(safePath.join(context.createTempDir(), 'corpus')) }, slice);
+  });
+  afterAll(() => {
+    removeCells();
+    context.cleanup();
+  });
+  return {
+    result,
+    expectAgreement: () => {
+      expect(result().arms).toEqual(slice.arms);
+      expect(result().verbs).toEqual(slice.verbs);
+      expectNoDivergenceAndNoRefusal(result());
+    },
+  };
 }
 
 /** A seed file's suite: its hooks, and one seed run over a fresh gate fixture and judged. */

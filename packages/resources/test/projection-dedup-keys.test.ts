@@ -49,6 +49,7 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { encodeFrontmatterValue } from '../src/frontmatter-codec.js';
 import { RunContentCache } from '../src/projection/content-cache.js';
 import type { HarnessId } from '../src/projection/harness/profile.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
@@ -330,7 +331,10 @@ const FIXTURES: readonly TableFixture[] = [
       replacementCharacters: 0,
       tokenEstimate: 30,
       frontmatter: null,
+      frontmatterValue: null,
       frontmatterError: null,
+      frontmatterNotAMapping: false,
+      anchors: [],
       wordCount: 20,
       proseCodeUnits: 100,
       codeBlockCodeUnits: 20,
@@ -346,7 +350,10 @@ const FIXTURES: readonly TableFixture[] = [
       replacementCharacters: 7,
       tokenEstimate: 60,
       frontmatter: { title: 'alt' },
-      frontmatterError: 'frontmatter is not a mapping',
+      frontmatterValue: encodeFrontmatterValue({ title: 'alt' }),
+      frontmatterError: 'alt yaml error',
+      frontmatterNotAMapping: true,
+      anchors: ['alt'],
       wordCount: 40,
       proseCodeUnits: 200,
       codeBlockCodeUnits: 40,
@@ -367,6 +374,7 @@ const FIXTURES: readonly TableFixture[] = [
       column: 5,
       startOffset: 10,
       endOffset: 20,
+      astIndex: 0,
       syntacticForm: 'markdown-link',
       hasExtension: true,
       leadingAt: false,
@@ -384,6 +392,7 @@ const FIXTURES: readonly TableFixture[] = [
       column: null,
       startOffset: 30,
       endOffset: 44,
+      astIndex: null,
       syntacticForm: 'at-prefixed',
       hasExtension: false,
       leadingAt: true,
@@ -426,8 +435,8 @@ const FIXTURES: readonly TableFixture[] = [
   fixture(
     'blobConditions',
     (builder, row) => builder.addBlobCondition(row),
-    { blob: BLOB_BASE, code: 'PARSE_ODDITY', severity: 'info', message: 'base oddity', line: 4 },
-    { blob: BLOB_ALT, code: 'FRONTMATTER_UNPARSED', severity: 'error', message: 'alt oddity', line: null },
+    { blob: BLOB_BASE, code: 'PARSE_ODDITY', ordinal: 0, severity: 'info', message: 'base oddity', line: 4 },
+    { blob: BLOB_ALT, code: 'FRONTMATTER_UNPARSED', ordinal: 7, severity: 'error', message: 'alt oddity', line: null },
   ),
   harnessFixture(fixture(
     'harnessBlobFacts',

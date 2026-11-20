@@ -355,7 +355,10 @@ function blobRow(key: string): BlobRow {
     replacementCharacters: 0,
     tokenEstimate: 0,
     frontmatter: null,
+    frontmatterValue: null,
     frontmatterError: null,
+    frontmatterNotAMapping: false,
+    anchors: [],
     wordCount: 0,
     proseCodeUnits: 0,
     codeBlockCodeUnits: 0,
@@ -373,7 +376,7 @@ function blobRow(key: string): BlobRow {
  * @returns The row
  */
 function blobConditionRow(key: string): BlobConditionRow {
-  return { blob: key, code: 'BLOB_BINARY', severity: 'info', message: 'NUL byte within the sniff window', line: null };
+  return { blob: key, code: 'BLOB_BINARY', ordinal: 0, severity: 'info', message: 'NUL byte within the sniff window', line: null };
 }
 
 /**
