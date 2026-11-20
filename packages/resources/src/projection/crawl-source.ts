@@ -1113,6 +1113,14 @@ interface Listed {
   readonly refusals: readonly ListedRefusal[];
 }
 
+/** What a {@link RootListing} asks git, each answered once per run by its caller. */
+export interface RootListingGit {
+  /** The root's names, its `GitTracker` listing, or `null` when git did not answer. */
+  readonly names: () => Promise<readonly string[] | null>;
+  /** The tracked links its checkout wrote as plain files (`gitLinksCheckedOutAsFiles`), read once per repository. */
+  readonly linksCheckedOutAsFiles: () => ReadonlySet<string>;
+}
+
 /** The sentence a listing with no git answer refuses with. */
 const NO_GIT_LISTING_CONSEQUENCE =
   'Returning an empty population would be indistinguishable from an empty repository, so this is an error.';
@@ -1159,9 +1167,16 @@ export function declinedLinkApplies(exclude: readonly string[]): (relativePath: 
  * directory it collapses, outside {@link NEVER_CRAWL_GLOBS}, is walked for its
  * refusals, as a stored population walks it. Those two walks collect no links:
  * everything beneath an ignored directory or a nested repository is ignored,
- * and an ignored link is declined without a row on every lane
- * (`DECLINE_IGNORED`). A listing therefore refuses, records and declines what
- * the stored population of the same tree does, with the store on or off.
+ * and every lane a listing serves (the resources registry, with no store)
+ * declines an ignored link without a row (`DECLINE_IGNORED`). A lane that
+ * reports ignored links, as the marketplace inventory does, enumerates a stored
+ * population, never a listing. A listing therefore refuses, records and
+ * declines what the stored population of the same tree does, with the store on
+ * or off.
+ *
+ * A tracked link a `core.symlinks=false` checkout wrote as a plain file is a
+ * declined link, as the stored population's snapshot keeps it
+ * (`gitLinksCheckedOutAsFiles`).
  *
  * {@link RootListing.narrowed} is one crawl's view: its member filter applied to
  * the names, its refusals settled under that crawl's
@@ -1190,19 +1205,15 @@ export class RootListing {
    *
    * @param root - Absolute root to list
    * @param outputs - The trees the calling verb writes (see {@link crawlSourceFor})
-   * @param gitNames - The root's `GitTracker` names, asked only when git is selected
+   * @param git - What to ask git, asked only when git is selected
    * @returns The root's names
    * @throws When git is selected and did not answer, coded by cause
    */
-  static async of(
-    root: string,
-    outputs: readonly string[],
-    gitNames: () => Promise<readonly string[] | null>,
-  ): Promise<RootListing> {
+  static async of(root: string, outputs: readonly string[], git: RootListingGit): Promise<RootListing> {
     if (!gitExtentSelected(root)) return RootListing.#walked(root, outputs);
-    const names = await gitNames();
+    const names = await git.names();
     if (names === null) throw gitNoAnswerError(root, NO_GIT_LISTING_CONSEQUENCE);
-    return new RootListing('git', root, outputs, await gitListed(root, outputs, names));
+    return new RootListing('git', root, outputs, await gitListed(root, outputs, names, git.linksCheckedOutAsFiles()));
   }
 
   /** One walk of `root`, pruning what a crawl never enters. */
@@ -1268,10 +1279,16 @@ function settleListed(refusals: ListingRefusals, refusal: DirectoryRefusal, terr
  * @param root - The listed root, inside a repository
  * @param outputs - The trees the calling verb writes
  * @param gitNames - The tracker's names, absolute
+ * @param linksAsFiles - Tracked links the checkout wrote as plain files
  * @returns The names, links and refusals
  * @throws When git does not answer the ignored listing
  */
-async function gitListed(root: string, outputs: readonly string[], gitNames: readonly string[]): Promise<Listed> {
+async function gitListed(
+  root: string,
+  outputs: readonly string[],
+  gitNames: readonly string[],
+  linksAsFiles: ReadonlySet<string>,
+): Promise<Listed> {
   const isContent = crawlPathFilter(['**/*'], [...NEVER_CONTENT_GLOBS]);
   const isCrawled = crawlPathFilter(['**/*'], [...NEVER_CRAWL_GLOBS]);
   const named = new NameSet(root);
@@ -1279,8 +1296,12 @@ async function gitListed(root: string, outputs: readonly string[], gitNames: rea
   const repositories: string[] = [];
   for (const absolutePath of gitNames) {
     if (!isPathUnderRoot(absolutePath, root) || !isContent(relativeToRoot(absolutePath, root))) continue;
-    const shape = lstatShape(absolutePath);
-    if (shape === 'absent') continue;
+    const observed = lstatShape(absolutePath);
+    if (observed === 'absent') continue;
+    // git's own rule, which the stored population's snapshot applies: with
+    // `core.symlinks=false` a tracked link is a plain file on disk and still a
+    // link in the index, so it is declined, not a member.
+    const shape = observed === 'file' && linksAsFiles.has(absolutePath) ? 'symlink' : observed;
     if (shape === 'symlink') {
       links.add(absolutePath, shape);
       continue;
@@ -1313,8 +1334,8 @@ async function gitListed(root: string, outputs: readonly string[], gitNames: rea
     .map((relativePath) => safePath.resolve(root, relativePath.slice(0, -1)))
     .filter((directory) => isPathUnderRoot(directory, root) && isCrawled(relativeToRoot(directory, root)) && lstatShape(directory) === 'directory');
 
-  // A link beneath either is ignored, declined without a row on every lane, so
-  // neither walk collects one.
+  // A link beneath either is ignored, declined without a row on every lane a
+  // listing serves, so neither walk collects one.
   const ignoreLink = (): void => undefined;
   await forEachInOrder([
     ...repositories.map((directory) => ({ directory, territory: 'population' as const })),

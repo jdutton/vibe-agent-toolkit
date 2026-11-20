@@ -38,7 +38,7 @@
  */
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { gitFindRoot, GitTracker } from '@vibe-agent-toolkit/utils/git';
+import { gitFindRoot, gitLinksCheckedOutAsFiles, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { ParseResult } from '../link-parser.js';
 import { defaultParseCache } from '../parse-cache.js';
@@ -151,6 +151,8 @@ export class RunPopulation implements PopulationRun {
   readonly #enumerations = new Map<string, Promise<ResourceEnumeration>>();
   readonly #listings = new Map<string, Promise<RootListing>>();
   readonly #trackers = new Map<string, Promise<GitTracker | undefined>>();
+  /** Each repository's tracked links checked out as plain files, by repository root. */
+  readonly #linksAsFiles = new Map<string, ReadonlySet<string>>();
   readonly #options: RunPopulationOptions;
 
   /**
@@ -282,7 +284,10 @@ export class RunPopulation implements PopulationRun {
     const collections = await this.#options.collectionsFor(listed);
     const gitTracker = await this.#trackerOf(listed, home);
     const listing = await memoized(this.#listings, `${JSON.stringify(outputs)} ${listed}`, () =>
-      RootListing.of(listed, outputs, () => this.#gitListing(listed, home)));
+      RootListing.of(listed, outputs, {
+        names: () => this.#gitListing(listed, home),
+        linksCheckedOutAsFiles: () => this.#linksAsFilesOf(listed),
+      }));
     const population = await buildResourceListing({
       root: listed,
       listing,
@@ -307,6 +312,21 @@ export class RunPopulation implements PopulationRun {
       await tracker.initialize();
       return tracker;
     });
+  }
+
+  /**
+   * The tracked links a root's checkout wrote as plain files, read once per
+   * repository per run: one `git config` read, and the index only when
+   * `core.symlinks` is `false`.
+   */
+  #linksAsFilesOf(root: string): ReadonlySet<string> {
+    const repository = gitFindRoot(root) ?? root;
+    let links = this.#linksAsFiles.get(repository);
+    if (links === undefined) {
+      links = gitLinksCheckedOutAsFiles(repository);
+      this.#linksAsFiles.set(repository, links);
+    }
+    return links;
   }
 
   /**

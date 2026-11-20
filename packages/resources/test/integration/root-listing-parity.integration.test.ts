@@ -166,6 +166,13 @@ describe.skipIf(CANNOT_DENY_READS)('an unlistable directory is the same gap with
   });
 });
 
+/** The home crawled with the store off and on agrees on its declined links and its members. */
+async function expectSameLinksAndMembers(home: string): Promise<void> {
+  const { off, on } = await bothArms({ home, baseDir: home });
+  expect(off.declinedLinks).toEqual(on.declinedLinks);
+  expect(off.members).toEqual(on.members);
+}
+
 describe.skipIf(symlinkCapability() === null)('a declined link is the same condition with the store on or off', () => {
   it('a tracked directory link no markdown include names by itself', async () => {
     const symlinks = symlinkCapability();
@@ -180,9 +187,11 @@ describe.skipIf(symlinkCapability() === null)('a declined link is the same condi
     expect(off.declinedLinks).toEqual(on.declinedLinks);
   });
 
-  // The working tree decides, never the index: the stored population's
-  // snapshot restages what changed, so a listing that read the index mode
-  // would answer the commit while the store answers the tree.
+  // The stored population's snapshot restages the working tree, so a link that
+  // replaced a tracked file is a link to it, whatever the index held: a listing
+  // that read the index mode would answer the commit while the store answers
+  // the tree. The one exception, git's own, is the `core.symlinks=false` case
+  // below.
   it('a tracked non-markdown file replaced by a directory link, under a markdown include', async () => {
     const symlinks = symlinkCapability();
     if (symlinks === null) return;
@@ -199,6 +208,8 @@ describe.skipIf(symlinkCapability() === null)('a declined link is the same condi
     const symlinks = symlinkCapability();
     if (symlinks === null) return;
     const home = repository({ 'README.md': '# Home\n' });
+    // Pinned: a system-wide `core.symlinks=false` (Git for Windows) is the next case.
+    git(home, 'config', 'core.symlinks', 'true');
     createSymlink(symlinks, 'README.md', safePath.join(home, 'alias.md'), 'file');
     git(home, 'add', '-A');
     git(home, 'commit', '-q', '-m', 'link');
@@ -208,6 +219,44 @@ describe.skipIf(symlinkCapability() === null)('a declined link is the same condi
     expect(on.members, 'positive control: the stored population admits it').toContain('alias.md');
     expect(off.members).toEqual(on.members);
     expect(off.declinedLinks).toEqual(on.declinedLinks);
+  });
+
+  // What a Windows checkout without Developer Mode leaves: git keeps the index
+  // mode 120000 for a plain file holding the target text, and restages it so.
+  it('a committed link a core.symlinks=false checkout wrote as a plain file is declined either way', async () => {
+    const symlinks = symlinkCapability();
+    if (symlinks === null) return;
+    const home = repository({ 'README.md': '# Home\n' });
+    createSymlink(symlinks, 'README.md', safePath.join(home, 'alias.md'), 'file');
+    git(home, 'add', '-A');
+    git(home, 'commit', '-q', '-m', 'link');
+    git(home, 'config', 'core.symlinks', 'false');
+    rmSync(safePath.join(home, 'alias.md'));
+    writeFileSync(safePath.join(home, 'alias.md'), 'README.md');
+    const { off, on } = await bothArms({ home, baseDir: home });
+    expect(on.declinedLinks, 'positive control: the stored population declines it').toEqual(['alias.md']);
+    expect(off.declinedLinks).toEqual(on.declinedLinks);
+    expect(off.members).toEqual(on.members);
+  });
+
+  // Guards, not fixes: every lane a listing serves declines an ignored link
+  // without a row, so neither the store nor the listing reports these.
+  it('a link under an ignored directory', async () => {
+    const symlinks = symlinkCapability();
+    if (symlinks === null) return;
+    const home = repository({ '.gitignore': 'build/\n', 'README.md': '# Home\n' });
+    mkdirSyncReal(safePath.join(home, 'build'), { recursive: true });
+    createSymlink(symlinks, '../README.md', safePath.join(home, 'build', 'alias.md'), 'file');
+    await expectSameLinksAndMembers(home);
+  });
+
+  it('a link inside a nested repository', async () => {
+    const symlinks = symlinkCapability();
+    if (symlinks === null) return;
+    const home = repository({ 'README.md': '# Home\n' });
+    const sub = nestedRepository(home, 'vendor/sub', true);
+    createSymlink(symlinks, 'README.md', safePath.join(sub, 'alias.md'), 'file');
+    await expectSameLinksAndMembers(home);
   });
 });
 

@@ -318,7 +318,11 @@ which asks git nothing when it opened a snapshot: the listing runs its own
 `ls-files --others --ignored --directory`, whose stderr names every directory git could not open
 (refused), and walks each ignored directory it collapses, pruned by `NEVER_CRAWL_GLOBS`, for its
 unlistable directories (recorded; a link beneath an ignored directory or a nested repository is
-ignored, declined without a row on every lane, so neither walk collects one). So a listed root reports the same conditions with the
+ignored, and every lane a listing serves declines it without a row, so neither walk collects one;
+a lane that reports ignored links, such as the marketplace inventory, never enumerates through a
+listing). A tracked link a `core.symlinks=false` checkout wrote as a plain file is declined, as the
+snapshot keeps it, by one index read per repository that happens only when `core.symlinks` is
+`false`. So a listed root reports the same conditions with the
 store off or on. Paths from `ls-files` are relative to the root git ran in, never to the
 repository's top level. Which declined links apply is one predicate, `declinedLinkApplies`, shared
 with a stored population. Outside a repository the names are one walk that prunes

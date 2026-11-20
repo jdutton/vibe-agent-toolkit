@@ -43,6 +43,8 @@
 - `@vibe-agent-toolkit/resources`: the `PopulationMembers` and `PopulationUnreadablePolicy` types.
 - `@vibe-agent-toolkit/utils`: `GitTracker.listing()`: the names the tracker's `ls-files` listed
   (or its open snapshot held).
+- `@vibe-agent-toolkit/utils`: `gitLinksCheckedOutAsFiles`: the tracked links a `core.symlinks=false`
+  checkout wrote as plain files, read from the index only when `core.symlinks` is `false`.
 - `@vibe-agent-toolkit/agent-skills`: `projectConfigOrNone`, `REGISTRY_INCLUDE`, `withSkillRegistries`
   and the `SkillRegistryRuling` type.
 
@@ -63,10 +65,19 @@
 - **A root below a repository's top level reads git's `ls-files --others` paths relative to itself**,
   as git prints them, in the stored population, the listing and the Claude rules scope: an
   ignored directory under such a root was looked for in the wrong place.
-- **A stored population refuses an ignored listing git did not answer** (`GIT_NO_ANSWER`), as a
-  listing does, instead of reading the silence as "nothing ignored".
+- **A stored population refuses an `ls-files --others` listing git did not answer**, ignored or
+  not-ignored, as a listing does, instead of reading the silence as "nothing there". So does the
+  Claude rules scope's ignored listing, which read it as "nothing ignored" and called every glob
+  over ignored territory `inert`. The refusal is coded by cause: `GIT_NOT_FOUND` for a git missing
+  from PATH, `GIT_FAILED` for one that ran out of time or output, and `GIT_NO_ANSWER` otherwise.
+- **A tracked link a `core.symlinks=false` checkout wrote as a plain file is a declined link with
+  the store off**, as git's index and the stored population keep it, not a member.
 
 ### Changed
+
+- **`gitLsFiles` and `gitLsOthers` throw `GIT_FAILED` when git did not run to completion** (out of
+  time, more output than VAT reads) instead of returning `null`, which every caller reported as
+  "not a git repository". A missing git binary, or a tree git declines, is still `null`.
 
 - **Outside a repository, `vat audit` no longer reports links inside a tool-output-named directory**
   (`docs/coverage/`, `.turbo/`): it enumerates with the same source as every other verb, which

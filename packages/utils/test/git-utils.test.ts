@@ -9,6 +9,8 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import type { GitRunResult } from '../src/git-run.js';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '../src/path-utils.js';
 
+import { gitSpawnFailure } from './test-helpers.js';
+
 /**
  * The seam is `runGit`, not `spawnSync`.
  *
@@ -272,5 +274,25 @@ describe('gitFindRoot memoization', () => {
     // ...and the one reset callers already know about clears it.
     resetProjectRootCaches();
     expect(gitFindRoot(late)).toBe(late);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A listing git did not finish is the environment's, never "not a repository"
+// ---------------------------------------------------------------------------
+const { gitLsOthers } = await import('../src/git-utils.js');
+
+describe('gitLsOthers when git does not answer', () => {
+  const degrade = { degrade: () => undefined };
+
+  it('throws GIT_FAILED for a git that ran out of time', () => {
+    vi.mocked(runGit).mockReturnValue({ ...gitSpawnFailure('ETIMEDOUT'), status: 1, stdout: '' });
+    expect(() => gitLsOthers({ cwd: CWD, ignored: true, directory: true, unreadable: degrade }))
+      .toThrow(expect.objectContaining({ code: 'GIT_FAILED' }) as Error);
+  });
+
+  it('answers null for a tree git declined', () => {
+    vi.mocked(runGit).mockReturnValue({ ...makeRunResult(128), stderr: 'fatal: not a git repository' });
+    expect(gitLsOthers({ cwd: CWD, ignored: true, directory: true, unreadable: degrade })).toBeNull();
   });
 });

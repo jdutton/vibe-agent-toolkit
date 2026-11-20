@@ -7,7 +7,9 @@ import { dirname, parse } from 'node:path';
 
 import { errnoForGitReason } from './errors/git-errno.js';
 import { entryPresentIn } from './errors/path-present.js';
+import { VatError } from './errors/vat-error.js';
 import { directoryRefusalFor, listingFailure } from './fs-utils.js';
+import { GIT_FAILED_CODE, gitRunFailureOf } from './git-no-answer.js';
 import { lookupGitRoot, rememberGitRoot } from './git-root-cache.js';
 import { runGit } from './git-run.js';
 import { requireUnreadablePolicy, settleRefusal, type UnreadablePolicy } from './listing-refusal.js';
@@ -87,6 +89,8 @@ export interface GitListingOptions {
  * @param api - The entry point, for the sentence an omitted policy gets
  * @param unreadable - What a skipped directory means to the caller
  * @returns The listed paths, or null when git did not answer
+ * @throws `GIT_FAILED` when git did not run to completion (out of time, more
+ *   output than VAT reads): the environment's, never "not a repository"
  */
 function runListing(
   args: readonly string[],
@@ -104,6 +108,11 @@ function runListing(
   // the buffer, which `ok` folds in because a truncated answer here is files
   // silently missing rather than a short list.
   if (!result.ok) {
+    // A git that never finished is not a tree git declined: a timeout or an
+    // overrun read as `null` was reported as "not a git repository". A missing
+    // binary stays `null`, which every caller classifies (`gitNoAnswerFor`).
+    const failure = gitRunFailureOf(`git ${args[0] ?? 'ls-files'}`, cwd, result);
+    if (failure?.code === GIT_FAILED_CODE) throw new VatError(failure.code, failure.reason);
     return null;
   }
 
@@ -172,6 +181,7 @@ export function gitFindRoot(startDir: string): string | null {
  * @param options.unreadable - See {@link GitListingOptions}. Only the untracked
  *   listing walks the working tree, so only it can have skipped a directory
  * @returns Array of file paths relative to `cwd` (git prints them so), or null if not in a git repo
+ * @throws `GIT_FAILED` when git did not run to completion (out of time or output)
  *
  * @example
  * ```typescript
@@ -241,6 +251,7 @@ export function gitLsFiles(options: GitListingOptions & {
  *   non-ignored directory and so meets every refusal the first one does and
  *   more (measured on git 2.50)
  * @returns Paths relative to `cwd`, as git prints them (not to the repository root), or null if git did not answer
+ * @throws `GIT_FAILED` when git did not run to completion (out of time or output)
  *
  * @example
  * ```typescript

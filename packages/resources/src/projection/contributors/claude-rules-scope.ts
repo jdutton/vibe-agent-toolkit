@@ -80,7 +80,7 @@
  */
 
 import { relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { gitLsOthers } from '@vibe-agent-toolkit/utils/git';
+import { gitLsOthers, gitNoAnswerError } from '@vibe-agent-toolkit/utils/git';
 
 import type { ClaudeRulePatternRow } from '../../schemas/projection-claude-rules.js';
 import type { HarnessBlobFactsRow } from '../../schemas/projection-harness.js';
@@ -426,14 +426,18 @@ function treeIgnores(base: ProjectionBase): TreeIgnores {
  * ⚠️ A directory git could not open is `degrade`d here without a record: the
  * crawl source runs this same listing for the same tree during population and
  * is where such a refusal is reported. A listing git did not answer at all is
- * empty, which leaves a would-be `inert` glob `inert` — the non-git answer.
+ * refused, coded by cause: reading it as empty would call every ignored glob
+ * `inert`, the non-git answer, inside a repository whose oracle did answer.
  *
  * @param root - Absolute corpus root
  * @returns Root-relative entries, directories spelled with a trailing `/`
+ * @throws When git did not answer, coded by cause
  */
 function ignoredListing(root: string): string[] {
   const listing = gitLsOthers({ cwd: root, ignored: true, directory: true, unreadable: { degrade: () => undefined } });
-  if (listing === null) return [];
+  if (listing === null) {
+    throw gitNoAnswerError(root, 'An empty ignored listing would call every glob over ignored territory inert.');
+  }
   const entries: string[] = [];
   for (const entry of listing) {
     const isDirectory = entry.endsWith('/');

@@ -15,7 +15,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 
 import { resetProjectRootCaches, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { type PopulateResult } from '../../src/projection/merge.js';
@@ -23,6 +23,7 @@ import type { Projection } from '../../src/projection/projection.js';
 import { buildResourceProjection } from '../../src/projection/resource-population.js';
 import type { ClaudeRulePatternRow } from '../../src/schemas/projection-claude-rules.js';
 import { FakeFactStore } from '../fake-fact-store.js';
+import { git } from '../helpers/git-fixture.js';
 import { inOwnRun } from '../helpers/population-run.js';
 import { plantTree, razeTree } from '../helpers/temp-corpus.js';
 
@@ -135,13 +136,6 @@ describe('claude_rule_patterns through the resources lane', () => {
   });
 });
 
-/** Identity a commit needs, without touching the developer's config. */
-const COMMIT_IDENTITY = [
-  '-c', 'user.name=VAT Fixture',
-  '-c', 'user.email=fixture@example.invalid',
-  '-c', 'commit.gpgsign=false',
-];
-
 /**
  * A repository whose rule scopes build output: `dist/` is ignored, and the
  * rule's first glob names it. The second glob is the control — dead, over
@@ -196,9 +190,9 @@ async function populateIgnoredTree(
   const repo = await plantTree('vat-rule-patterns-ignored-', tree);
   const dir = safePath.join(repo, corpus);
   try {
-    runGitOrThrow(['init'], { cwd: repo });
-    runGitOrThrow(['add', '--all'], { cwd: repo });
-    runGitOrThrow([...COMMIT_IDENTITY, 'commit', '-m', 'fixture'], { cwd: repo });
+    git(repo, 'init', '-q');
+    git(repo, 'add', '--all');
+    git(repo, 'commit', '-q', '-m', 'fixture');
     for (const file of built) {
       const absolute = safePath.join(repo, file);
       await mkdir(safePath.resolve(absolute, '..'), { recursive: true });

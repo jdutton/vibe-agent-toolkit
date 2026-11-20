@@ -42,6 +42,7 @@ export {
   type GitChangeKind,
 } from './git-changed-files.js';
 export { gitFindRoot, gitLsFiles, gitLsOthers, isGitIgnored } from './git-utils.js';
+export { gitLinksCheckedOutAsFiles } from './git-index-links.js';
 export {
   GIT_FAILED_CODE,
   GIT_NO_ANSWER_CODE,
