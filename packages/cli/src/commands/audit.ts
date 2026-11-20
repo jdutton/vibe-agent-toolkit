@@ -21,7 +21,6 @@ import {
   validateMarketplace,
   validateSkill,
   validateSkillForPackaging,
-  withSkillRegistries,
   type ConventionalSuiteProbe,
   type EvidenceRecord,
   type PackagingValidationResult,
@@ -54,7 +53,7 @@ import {
   listingRefusalRemedy,
   notAdmittedIssues,
   type ParseDispatcher,
-  type RegistryUnreadablePolicy,
+  type PopulationUnreadablePolicy,
   partitionNotAdmitted,
   withParseDispatcher,
 } from '@vibe-agent-toolkit/resources';
@@ -124,6 +123,7 @@ import {
 import { createLogger } from '../utils/logger.js';
 import { classifyInputFault, readInputFile, unlistableDirectoryRefusal } from '../utils/project-root-policy.js';
 import { relativizePath } from '../utils/relativize-paths.js';
+import { runSkillRegistries, withRunContext } from '../utils/resource-loader.js';
 import { RUN_INTEGRITY_CODE } from '../utils/run-integrity.js';
 import { mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../utils/skill-quality-footer.js';
@@ -550,7 +550,7 @@ function degradingRegistry(
   projectRoot: string,
   logger: ReturnType<typeof createLogger>,
   locationRoot: string,
-): RegistryUnreadablePolicy {
+): PopulationUnreadablePolicy {
   return {
     degrade: (refusal) => {
       const err = new DirectoryListingRefusedError(refusal, { root: projectRoot, remedy: listingRefusalRemedy(projectRoot), side: 'source' });
@@ -679,8 +679,6 @@ async function validateSingleSkill(
       // The RUN's probe, not this call's — see {@link runSuiteProbe}. This lane
       // is called in a loop over every skill in a plugin.
       suiteProbe: suiteProbeForRun(),
-      // Each skill holds its own: this lane is called once per skill, with no run dispatcher.
-      dispatcher: undefined,
     };
     if (gitTracker !== null) {
       sharedCtx.gitTracker = gitTracker;
@@ -700,7 +698,7 @@ async function validateSingleSkill(
 
   // Fallback: basic validation. Severity is applied by `applySeverityFilter`.
   // The audited skill is the verb's input.
-  const validateOptions: ValidateOptions = { skillPath, locationRoot, validation: {}, resourcesValidation: {}, side: 'source', dispatcher: undefined };
+  const validateOptions: ValidateOptions = { skillPath, locationRoot, validation: {}, resourcesValidation: {}, side: 'source', dispatcher: options.registries.dispatcher };
   if (options.warnUnreferencedFiles) {
     validateOptions.checkUnreferencedFiles = true;
   }
@@ -1783,10 +1781,12 @@ export async function getValidationResults(
 	locationRoot: string,
 ): Promise<ValidationResult[]> {
 	try {
-		// One run per audit subject: each project root it reaches is crawled once, under audit's ruling.
+		// One run per audit subject, opened as every verb opens its run: each project root it
+		// reaches is crawled once, under audit's ruling. Every crawl degrades, and a degraded
+		// enumeration is a listing that never opens the projection store, so audit stores nothing.
 		return dedupeUnreadablePathResults(
-			await withSkillRegistries(locationRoot, (registries) =>
-				validateAuditSubject(scanPath, recursive, { ...options, registries }, logger, locationRoot)),
+			await withRunContext({ root: locationRoot }, (run) =>
+				validateAuditSubject(scanPath, recursive, { ...options, registries: runSkillRegistries(run) }, logger, locationRoot)),
 		);
 	} catch (error) {
 		// Only the filesystem refusing the subject degrades; a defect in a validator
@@ -2821,8 +2821,8 @@ async function handleFileEntry(
       const skillDir = safePath.resolve(fullPath, '..');
       const unreadable = degradingRegistry(findProjectRoot(skillDir) ?? skillDir, logger, locationRoot);
       const sharedCtx: SkillValidationSharedContext = scanCtx.gitTracker === null
-        ? { registries: options.registries, locationRoot, projectSkills, suiteProbe, unreadable, outputs: [], dispatcher: undefined }
-        : { registries: options.registries, gitTracker: scanCtx.gitTracker, locationRoot, projectSkills, suiteProbe, unreadable, outputs: [], dispatcher: undefined };
+        ? { registries: options.registries, locationRoot, projectSkills, suiteProbe, unreadable, outputs: [] }
+        : { registries: options.registries, gitTracker: scanCtx.gitTracker, locationRoot, projectSkills, suiteProbe, unreadable, outputs: [] };
       // `{}`: resolved at audit's own boundary, as in the lane above.
       const packagingResult = await validateSkillForPackaging(fullPath, {}, skillConfig, 'source', sharedCtx);
       const configAware = packagingResultToValidationResult(
@@ -2837,7 +2837,7 @@ async function handleFileEntry(
 
     // Wild mode: basic validation. Severity is applied by `applySeverityFilter`.
     // The audited skill is the verb's input.
-    const validateOptions: ValidateOptions = { skillPath: fullPath, locationRoot, validation: {}, resourcesValidation: {}, side: 'source', dispatcher: undefined };
+    const validateOptions: ValidateOptions = { skillPath: fullPath, locationRoot, validation: {}, resourcesValidation: {}, side: 'source', dispatcher: options.registries.dispatcher };
     if (options.warnUnreferencedFiles) {
       validateOptions.checkUnreferencedFiles = true;
     }

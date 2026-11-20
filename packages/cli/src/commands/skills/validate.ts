@@ -510,7 +510,7 @@ export async function buildSharedValidationContext(
   // lane must model a bundle that excludes EVERY declared suite, not just the
   // subject's. Present even for an empty batch, so no early return can drop it.
   if (skills.length === 0) {
-    return { allowLedger, projectSkills, suiteProbe, registries: skillsValidateRegistries(run, undefined, config), unreadable: 'refuse', outputs: [], dispatcher: run.dispatcher };
+    return { allowLedger, projectSkills, suiteProbe, registries: skillsValidateRegistries(run, undefined, config), unreadable: 'refuse', outputs: [] };
   }
 
   const projectRoots = new Set<string>();
@@ -541,7 +541,6 @@ export async function buildSharedValidationContext(
     registries: skillsValidateRegistries(run, sharedRoot, config),
     unreadable: 'refuse',
     outputs: [],
-    dispatcher: run.dispatcher,
   };
 
   // One tracker per repo; when the batch spans repos, skip rather than spawn

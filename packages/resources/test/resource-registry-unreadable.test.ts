@@ -19,7 +19,8 @@ import { type DirectoryRefusal, DirectoryListingRefusedError } from '@vibe-agent
 import { setupAsyncTempDirSuite, withReaddirSyncRefused , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { type RegistryUnreadablePolicy, ResourceRegistry } from '../src/resource-registry.js';
+import type { PopulationUnreadablePolicy } from '../src/projection/crawl-source.js';
+import { ResourceRegistry } from '../src/resource-registry.js';
 import type { ValidationIssue } from '../src/schemas/validation-result.js';
 
 import { crawlInRun } from './helpers/population-run.js';
@@ -76,12 +77,12 @@ async function crawlRefusal(
   tempDir: string,
   locked: string,
   code: string,
-  policy: RegistryUnreadablePolicy | undefined,
+  policy: PopulationUnreadablePolicy | undefined,
 ): Promise<{ registry: ResourceRegistry; thrown: unknown }> {
   const registry = new ResourceRegistry({ baseDir: tempDir });
   const thrown = await withReaddirSyncRefused(locked, code, async () => {
     try {
-      await crawlInRun(registry, { unreadable: policy as RegistryUnreadablePolicy, outputs: [], baseDir: tempDir, include: ['**/*.md'] });
+      await crawlInRun(registry, { unreadable: policy as PopulationUnreadablePolicy, outputs: [], baseDir: tempDir, include: ['**/*.md'] });
       return undefined;
     } catch (error) {
       return error;

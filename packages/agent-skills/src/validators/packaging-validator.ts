@@ -24,10 +24,9 @@ import {
   parseFileCached,
   isParseLimitError,
   type ParseRefusedResource,
-  type RegistryUnreadablePolicy,
+  type PopulationUnreadablePolicy,
   ResourceRegistry,
   type SkillExecutableEntry,
-  withParseDispatcher,
 } from '@vibe-agent-toolkit/resources';
 import {
   CODE_REGISTRY,
@@ -428,7 +427,7 @@ const outsideBuildOutput = crawlPathFilter(['**/*'], BUILD_OUTPUT_GLOBS);
 async function withOwnBundle(
   registry: ResourceRegistry,
   bundleDir: string,
-  unreadable: RegistryUnreadablePolicy,
+  unreadable: PopulationUnreadablePolicy,
   outputs: readonly string[],
 ): Promise<ResourceRegistry> {
   const root = registry.baseDir ?? bundleDir;
@@ -470,9 +469,9 @@ export interface SkillValidationSharedContext {
    * What the crawl of a skill's project root does with a directory it cannot
    * list — the caller's ruling: `'refuse'` for `vat skills validate`/`build`,
    * `vat skill review` and the packager's post-build check, `{ degrade }` for
-   * `vat audit`. See {@link RegistryUnreadablePolicy}.
+   * `vat audit`. See {@link PopulationUnreadablePolicy}.
    */
-  unreadable: RegistryUnreadablePolicy;
+  unreadable: PopulationUnreadablePolicy;
   /**
    * The run's skill registries: each skill is validated against the run's view of
    * its project root, crawled once per run. Required: there is no registry a
@@ -488,13 +487,6 @@ export interface SkillValidationSharedContext {
   outputs: readonly string[];
   /** Pre-populated tracker for the repo that contains the skill. */
   gitTracker?: GitTracker;
-  /**
-   * The run's parse dispatcher, for the parse this validator makes itself (the
-   * SKILL.md, whose frontmatter the detectors then read), so a batch pays one worker
-   * start. `undefined` when the caller holds none: each skill's validation holds its own and
-   * shuts it down.
-   */
-  dispatcher: ParseDispatcher | undefined;
   /**
    * Root every emitted `ValidationIssue.location` is expressed relative to.
    *
@@ -617,36 +609,18 @@ function missingFrontmatterIssue(frontmatterError: string | undefined, location:
  *   resolves those codes itself (`vat audit`)
  * @param packagingConfig - The skill's packaging configuration (depth, excludes, validation), if any
  * @param context - Whether the skill is being validated from source or built output
- * @param shared - The run's context: its skill registries, ruling and run-wide memos
+ * @param shared - The run's context: its skill registries, ruling and run-wide memos. Every
+ *   parse this validator makes runs on the run's one dispatcher (`shared.registries.dispatcher`)
  * @returns Validation result with active errors, warnings, and allowed issues
  */
-export function validateSkillForPackaging(
+export async function validateSkillForPackaging(
   skillPath: string,
   resourcesValidation: ValidationConfig,
   packagingConfig: SkillPackagingConfig | undefined,
   context: 'source' | 'built',
   shared: SkillValidationSharedContext,
 ): Promise<PackagingValidationResult> {
-  return withParseDispatcher(
-    (dispatcher) => validateSkillForPackagingOn(skillPath, { resourcesValidation, packagingConfig, context, shared }, dispatcher),
-    { dispatcher: shared.dispatcher },
-  );
-}
-
-/**
- * {@link validateSkillForPackaging}, on a parse dispatcher.
- *
- * @param skillPath - Path to SKILL.md
- * @param call - The caller's arguments, as {@link validateSkillForPackaging} took them
- * @param dispatcher - Where this validator's own parses run
- * @returns Validation result
- */
-async function validateSkillForPackagingOn(
-  skillPath: string,
-  call: PackagingValidationCall,
-  dispatcher: ParseDispatcher,
-): Promise<PackagingValidationResult> {
-  const { resourcesValidation, packagingConfig, context, shared } = call;
+  const { dispatcher } = shared.registries;
   const rawIssues: ValidationIssue[] = [];
 
   // Validation-POLICY boundary (config root -> git root -> skill dir): what is
@@ -918,14 +892,6 @@ async function validateSkillForPackagingOn(
       excludedReferences: excludedDetails,
     },
   };
-}
-
-/** {@link validateSkillForPackaging}'s arguments after the SKILL.md. */
-interface PackagingValidationCall {
-  readonly resourcesValidation: ValidationConfig;
-  readonly packagingConfig: SkillPackagingConfig | undefined;
-  readonly context: 'source' | 'built';
-  readonly shared: SkillValidationSharedContext;
 }
 
 /** How a file not admitted is resolved: by the project's `resources.validation`, matched at its project-relative path. */

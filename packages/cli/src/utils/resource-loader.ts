@@ -287,7 +287,7 @@ function crawlOptionsForPath(
  * The resources verbs' ruling for a directory the crawl cannot list: refuse
  * the run by name, exit 2 — `vat resources validate`/`scan`/`check` and every
  * verb that reaches this loader act on the registry as the whole population.
- * See `RegistryUnreadablePolicy` on the registry.
+ * See `PopulationUnreadablePolicy` on the registry.
  */
 const RESOURCES_UNREADABLE = 'refuse' as const;
 

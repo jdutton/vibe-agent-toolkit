@@ -17,7 +17,7 @@ import {
   loadConfig,
   type ParseDispatcher,
   type ProjectConfig,
-  type RegistryUnreadablePolicy,
+  type PopulationUnreadablePolicy,
   ResourceRegistry,
   type ResourcePopulationSource,
   withRunPopulation,
@@ -40,9 +40,9 @@ export interface SkillRegistryRuling {
   /**
    * What the crawl does with a directory it cannot list: `'refuse'` for every
    * verb that acts on the registry as a complete population, `{ degrade }` for
-   * `vat audit`. See `RegistryUnreadablePolicy`.
+   * `vat audit`. See `PopulationUnreadablePolicy`.
    */
-  readonly unreadable: RegistryUnreadablePolicy;
+  readonly unreadable: PopulationUnreadablePolicy;
   /**
    * What the calling verb writes, or `[]` for a verb that only reads: the crawl's
    * one declaration of which side a fault is on. It decides which side a fault
@@ -112,8 +112,12 @@ export class RunSkillRegistries {
    *
    * LEXICAL on purpose, never the real path: a registry answers `getResource` for
    * the spelling it was crawled under, so two spellings of one root are two views.
-   * A crawl that REJECTED is never served: its fault was classified under the
-   * ruling of the caller that started it, so the next caller crawls again.
+   * A view whose crawl REJECTED is not kept: its fault was classified under the
+   * ruling of the caller that started it, so the next caller crawls the view
+   * again under its own. The run's population keeps a refused enumeration, so a
+   * later 'refuse' caller meets the same refusal without the directory being
+   * listed again; a `{ degrade }` caller is listed afresh and served the readable
+   * remainder.
    *
    * @param root - The project root (or, for a skill with none, its directory)
    * @param ruling - This caller's ruling
@@ -177,7 +181,7 @@ export class RunSkillRegistries {
     const config = await configOf;
     const refusals: DirectoryRefusal[] = [];
     const { unreadable, outputs } = ruling;
-    const recorded: RegistryUnreadablePolicy = unreadable === 'refuse'
+    const recorded: PopulationUnreadablePolicy = unreadable === 'refuse'
       ? 'refuse'
       : { degrade: (refusal) => { refusals.push(refusal); unreadable.degrade(refusal); } };
     const registry = this.registry.view({ baseDir: root, ...(config === undefined ? {} : { config }) });
@@ -220,9 +224,18 @@ export function projectConfigOrNone(root: string): Promise<ProjectConfig | undef
 }
 
 /**
- * Run `work` with skill registries of its own: for a library caller outside a
- * verb (`packageSkill` called directly, a test), whose run is this call. No
- * projection store; every root under its own config.
+ * The LIBRARY run opener: run `work` with skill registries of its own, for a
+ * caller outside a verb (`packageSkill` called directly through the workspace
+ * skill source, a test), whose run is this call. No CLI verb uses it: every verb,
+ * `vat audit` included, opens its run with the CLI's `withRunContext` and builds
+ * its registries with `runSkillRegistries(run)`.
+ *
+ * It differs from the CLI opener on purpose, in two ways. It opens no projection
+ * store: the store and its location are the CLI's, which a library caller does
+ * not carry. And its config is lenient ({@link projectConfigOrNone}): a root
+ * whose config will not parse populates and validates config-free, because a
+ * library caller has no layer of its own that would report the broken config,
+ * where the CLI opener's run refuses it.
  *
  * @param root - The run's home root
  * @param work - The run

@@ -11,7 +11,6 @@ import {
   BLOB_NOT_TEXT,
   BLOB_UNREADABLE,
   parserKindOf,
-  populateBlobs,
   type BlobPopulationResult,
 } from '../src/projection/blob-population.js';
 import { RunContentCache } from '../src/projection/content-cache.js';
@@ -32,6 +31,7 @@ import type { JsonValue } from '../src/schemas/projection-shared.js';
 import {
   IN_CRAWL_ORDER,
   baseBuilderForRoot,
+  populateBlobsOnOwnDispatcher,
   type RealizationOrder,
 } from './blob-fixture-population.js';
 import { inOwnRun } from './helpers/population-run.js';
@@ -267,7 +267,7 @@ interface TwoRouteDerivation {
  */
 async function deriveBothRoutes(): Promise<TwoRouteDerivation> {
   const builder = await baseBuilderFor();
-  const counts = await populateBlobs(builder, { parseCache: NO_CACHE });
+  const counts = await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
   const projection = builder.build();
   const keyFor = (path: string): string =>
     projection.resourceRealizations.find((row) => row.path === path)?.contentKey ?? '';
@@ -348,7 +348,7 @@ describe('populateBlobs, through populate()', () => {
     // columns they feed are required and positive, and both are handled by
     // skipping rather than defaulting to line 1. These two counters are the only
     // way that skip is observable — a skipped row is, definitionally, absent.
-    const counts = await populateBlobs(await baseBuilderFor(), { parseCache: NO_CACHE });
+    const counts = await populateBlobsOnOwnDispatcher(await baseBuilderFor(), { cache: NO_CACHE });
 
     expect(counts.headingsSkippedForMissingLine).toBe(0);
     expect(counts.referencesSkippedForMissingLine).toBe(0);
@@ -356,7 +356,7 @@ describe('populateBlobs, through populate()', () => {
 
   it('derives one blob per file and attributes every directory it skipped', async () => {
     const { projection } = await populateSkillCorpus();
-    const counts = await populateBlobs(await baseBuilderFor(), { parseCache: NO_CACHE });
+    const counts = await populateBlobsOnOwnDispatcher(await baseBuilderFor(), { cache: NO_CACHE });
 
     expect(counts.blobsDerived).toBe(SKILL_CORPUS.length);
     expect(projection.blobs).toHaveLength(SKILL_CORPUS.length);
@@ -388,7 +388,7 @@ describe('populateBlobs', () => {
     await writeCorpus([{ path: 'src/a.ts', content: '/** @param widgets - the acme widgets */\nexport const a = 1;\n' }], ['src']);
     const builder = await baseBuilderFor();
 
-    await populateBlobs(builder, { parseCache: NO_CACHE });
+    await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
 
     expect(builder.base().blobs).toHaveLength(1);
     expect(builder.base().harnessBlobFacts).toHaveLength(0);
@@ -423,7 +423,7 @@ describe('populateBlobs', () => {
     ]);
     const builder = await baseBuilderFor();
 
-    const counts = await populateBlobs(builder, { parseCache: NO_CACHE });
+    const counts = await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
 
     // Two realizations, two paths, ONE blob — the point of a content-addressed
     // blob layer, and the difference between one parse and two.
@@ -439,7 +439,7 @@ describe('populateBlobs', () => {
     ]);
     const builder = await baseBuilderFor();
 
-    await populateBlobs(builder, { parseCache: NO_CACHE });
+    await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
     const { blobs } = builder.build();
 
     // Same bytes, two keys, two rows: the parser kind is in the hash preimage.
@@ -459,7 +459,7 @@ describe('populateBlobs', () => {
     // Readable when the base enumerated it, gone by the time it is derived.
     await rewriteCorpusFile(DOC_A, null);
 
-    const counts = await populateBlobs(builder, { parseCache: NO_CACHE });
+    const counts = await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
     const projection = builder.build();
 
     expect(counts.blobsUnreadable).toBe(1);
@@ -485,7 +485,7 @@ describe('populateBlobs', () => {
     ]);
     const builder = await baseBuilderFor();
 
-    const counts = await populateBlobs(builder, { parseCache: NO_CACHE });
+    const counts = await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
     const projection = builder.build();
 
     expect(counts.blobsNotText).toBe(1);
@@ -519,7 +519,7 @@ describe('populateBlobs', () => {
     await writeCorpus([{ path: 'Makefile', content: '# Build\n\nsee ./a.md for the target\n' }]);
     const builder = await baseBuilderFor();
 
-    const counts = await populateBlobs(builder, { parseCache: NO_CACHE });
+    const counts = await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
 
     expect(counts.blobsNotText).toBe(0);
     expect(counts.blobsDerived).toBe(1);
@@ -531,7 +531,7 @@ describe('populateBlobs', () => {
     const builder = await baseBuilderFor();
     await rewriteCorpusFile(DOC_A, '# A, rewritten between enumeration and derivation\n');
 
-    const counts = await populateBlobs(builder, { parseCache: NO_CACHE });
+    const counts = await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
     const projection = builder.build();
 
     // Filing these facts under the recorded key would be a well-formed row with
@@ -558,7 +558,7 @@ describe('populateBlobs', () => {
       .find((row) => row.path === DOC_A)?.contentKey;
     await rewriteCorpusFile(DOC_A, '# A, rewritten between enumeration and derivation\n');
 
-    const counts = await populateBlobs(builder, { parseCache: NO_CACHE });
+    const counts = await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
     const projection = builder.build();
 
     expect(counts.blobsContentChanged).toBe(0);
@@ -574,7 +574,7 @@ describe('populateBlobs', () => {
     const builder = await baseBuilderFor(IN_CRAWL_ORDER, new RunContentCache());
     await rewriteCorpusFile(DOC_A, null);
 
-    const counts = await populateBlobs(builder, { parseCache: NO_CACHE });
+    const counts = await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
 
     // Same instant, same answer: `BLOB_UNREADABLE` is about a read this run has
     // to make, and with the bytes already held there is no such read.
@@ -590,9 +590,9 @@ describe('populateBlobs', () => {
     ], [NESTED_DIR]);
 
     const forward = await baseBuilderFor(IN_CRAWL_ORDER);
-    await populateBlobs(forward, { parseCache: NO_CACHE });
+    await populateBlobsOnOwnDispatcher(forward, { cache: NO_CACHE });
     const backward = await baseBuilderFor(REVERSED);
-    await populateBlobs(backward, { parseCache: NO_CACHE });
+    await populateBlobsOnOwnDispatcher(backward, { cache: NO_CACHE });
 
     // The two builders hold the same rows in opposite insertion order, so only a
     // stage that sorts by content key can make these strings equal.
@@ -611,7 +611,7 @@ describe('populateBlobs', () => {
     await writeCorpus([{ path: DOC_A, content: '"WebFetch(domain:www.anthropic.com)"\n' }]);
     const builder = await baseBuilderFor();
 
-    const counts = await populateBlobs(builder, { parseCache: NO_CACHE });
+    const counts = await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
     const projection = builder.build();
 
     expect(counts.referencesSkippedForMissingLine).toBe(1);
@@ -626,9 +626,9 @@ describe('populateBlobs', () => {
     ], [NESTED_DIR]);
     const builder = await baseBuilderFor();
 
-    const first = await populateBlobs(builder, { parseCache: NO_CACHE });
+    const first = await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
     const before = blobTablesOf(builder.build());
-    const second = await populateBlobs(builder, { parseCache: NO_CACHE });
+    const second = await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
 
     // The closure stratum re-runs to a fixpoint; blob rows that churned would
     // keep the digests moving and turn convergence into an unconditional error.
@@ -651,7 +651,7 @@ describe('populateBlobs, over deferred realizations', () => {
     const cache = new RunContentCache();
     const builder = await builderWithDeferredPath(DOC_A, DEMAND_CORPUS, cache);
 
-    const counts = await populateBlobs(builder, { parseCache: NO_CACHE });
+    const counts = await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
     const projection = builder.build();
 
     expect(counts.realizationsContentDeferred).toBe(1);
@@ -670,10 +670,10 @@ describe('populateBlobs, over deferred realizations', () => {
   it('derives the promoted blob, and its references, on a second run', async () => {
     const cache = new RunContentCache();
     const builder = await builderWithDeferredPath(DOC_A, DEMAND_CORPUS, cache);
-    await populateBlobs(builder, { parseCache: NO_CACHE });
+    await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
 
     const key = await builder.ensureContentKey(DOC_A);
-    const second = await populateBlobs(builder, { parseCache: NO_CACHE });
+    const second = await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
     const projection = builder.build();
 
     expect(second.realizationsContentDeferred).toBe(0);
@@ -697,7 +697,7 @@ describe('afterClosurePromotion', () => {
   it('derives the blob a promotion keyed, and only that one', async () => {
     const cache = new RunContentCache();
     const builder = await builderWithDeferredPath(DOC_A, DEMAND_CORPUS, cache);
-    await populateBlobs(builder, { parseCache: NO_CACHE });
+    await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
     expect(builder.build().blobs).toHaveLength(1);
     const before = builder.contentPromotionAttempts;
     const key = await builder.ensureContentKey(DOC_A);
@@ -711,7 +711,7 @@ describe('afterClosurePromotion', () => {
   it('records a promotion whose every read FAILED on the realization, with no blob', async () => {
     const cache = new RunContentCache();
     const builder = await builderWithDeferredPath(DOC_A, DEMAND_CORPUS, cache);
-    await populateBlobs(builder, { parseCache: NO_CACHE });
+    await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
     const before = builder.contentPromotionAttempts;
 
     // The read is deferred, so deleting now makes the demand-time read the

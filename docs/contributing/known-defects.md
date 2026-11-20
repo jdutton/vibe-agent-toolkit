@@ -592,9 +592,16 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   in `NEVER_CRAWL_GLOBS`, tool-output names (`coverage/`, `.test-output/`, `.turbo/`) included. The
   git enumerator drops only never-content paths and lets ignore rules decide the rest. So
   `docs/coverage/x.md` is a resource inside a repository and absent outside one, and every link to
-  it goes unfollowed. The deleted walk lane admitted it on both. Admitting tool-output names
-  outright is not the fix either: with no ignore rules, a non-repository tree's real coverage
-  reports would flood the population.
+  it goes unfollowed. Admitting tool-output names outright is not the fix either: with no ignore
+  rules, a non-repository tree's real coverage reports would flood the population.
+- **Scope:** every verb that enumerates through the run population outside a repository —
+  `vat resources validate`/`scan`, `vat skills validate`/`build`, `vat skill review`,
+  `vat claude plugin build` and `vat audit`. Inside a repository every one of them enumerates
+  through git and sees the file.
+- **History:** before the run population, `vat audit` enumerated with its own walk and reported a
+  dead link in such a file outside a repository while `vat skills validate` on the same tree did
+  not. Audit now enumerates with the same source as the other verbs, so the two agree: both report
+  it inside a repository (`audit-skills-validate-parity.system.test.ts`) and neither outside one.
 - **Reproduced** by `resource-registry-default-exclude.integration.test.ts` (the filesystem case
   is `it.fails`; promote it to `it` with the fix).
 - **Where:** [`crawl-source.ts`](../../packages/resources/src/projection/crawl-source.ts)

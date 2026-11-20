@@ -90,7 +90,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { computeContentKey, readContentWithKey } from '../../src/content-key.js';
 import { ParseCache } from '../../src/parse-cache.js';
-import { populateBlobs } from '../../src/projection/blob-population.js';
 import { RunContentCache, type ContentCacheStats } from '../../src/projection/content-cache.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
 import { GitExtentContributor } from '../../src/projection/contributors/git-extent.js';
@@ -104,6 +103,7 @@ import {
 import { ProjectionBuilder, type Projection } from '../../src/projection/projection.js';
 import { buildResourcePopulation, buildResourceProjection } from '../../src/projection/resource-population.js';
 import type { ResourceRealizationRow } from '../../src/schemas/projection-resources.js';
+import { populateBlobsOnOwnDispatcher } from '../blob-fixture-population.js';
 import { FakeFactStore } from '../fake-fact-store.js';
 import { inOwnRun } from '../helpers/population-run.js';
 
@@ -409,7 +409,7 @@ async function runArm(root: string, useGitSource: boolean): Promise<Arm> {
   for (const row of contribution.contexts) builder.addContext(row);
   for (const row of contribution.resources) builder.addResource(row);
   for (const row of contribution.realizations) builder.addRealization(row);
-  await populateBlobs(builder, { parseCache: NO_CACHE });
+  await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE });
 
   return {
     projection: builder.build(),

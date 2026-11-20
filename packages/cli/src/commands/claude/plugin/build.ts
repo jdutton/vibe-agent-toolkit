@@ -10,7 +10,7 @@
 import { mkdir, readdir } from 'node:fs/promises';
 
 import { conventionalSuiteProbe, getMarketplaceOutputDir, getPluginSourceDir, isSkillPackagingInputError, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkillInto, packagingConfigToPackageOptions, pluginDirInMarketplace, skillNameToFsPath, stagedPathMapper, type ConventionalSuiteProbe, type DeclaredEvalSuite, type PackageSkillResult, type RunSkillRegistries } from '@vibe-agent-toolkit/agent-skills';
-import { type ClaudeMarketplaceConfig, type ClaudeMarketplacePluginEntry, type ExternalPluginSource, type ProjectConfig, type SkillsConfig, withParseDispatcher } from '@vibe-agent-toolkit/resources';
+import { type ClaudeMarketplaceConfig, type ClaudeMarketplacePluginEntry, type ExternalPluginSource, type ParseDispatcher, type ProjectConfig, type SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Finding, type Gate, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { applyTreePlan, compareCodeUnits, direntKindFollowing, everyInOrder, foldedSegment, forEachInOrder, type FsSide, isSingleFsSegment, issueLocation, isTreeChangeResidue, mapInOrder, pathPresent, planTreeChanges, safePath, type SideOfPath, sideWithin, toForwardSlash, VatError, withFsFault, writeFileUnder } from '@vibe-agent-toolkit/utils';
 import { onCrawlOutput } from '@vibe-agent-toolkit/utils/crawl';
@@ -1016,6 +1016,7 @@ interface PluginLocalSkill {
  */
 function discoverPluginLocalSkills(
   pluginSourceDir: string,
+  dispatcher: ParseDispatcher,
   logger: ReturnType<typeof createLogger>,
 ): Promise<PluginLocalSkill[]> {
   // Git visibility is the right filter, but a SILENT drop is not: a skill the author
@@ -1030,19 +1031,17 @@ function discoverPluginLocalSkills(
     );
   }
   // In order: a SKILL.md that will not read must be the first one named, deterministically.
-  // One parse dispatcher for the plugin's SKILL.md reads.
-  return withParseDispatcher((dispatcher) =>
-    mapInOrder(listPluginSourceSkillDirs(pluginSourceDir), async (skillDirPath) => {
-      const skillSourceDir = safePath.join(pluginSourceDir, 'skills', skillDirPath);
-      // Resolved through the SAME reader `vat skills build` and `vat verify` use — per-skill
-      // config is keyed by name, so two answers would mean two effective configs.
-      // A SKILL.md the parse worker refused has no name to package or key config by: refused.
-      const read = await readPluginLocalSkillName(skillSourceDir, dispatcher);
-      if (read.kind === 'refused') throw skillParseRefusal(read.refused, pluginSourceDir);
-      const skillName = read.name;
-      return { skillDirPath, skillPath: safePath.join(skillSourceDir, 'SKILL.md'), skillName };
-    }),
-  );
+  // The run's dispatcher parses the plugin's SKILL.md reads: no pool beside the run's.
+  return mapInOrder(listPluginSourceSkillDirs(pluginSourceDir), async (skillDirPath) => {
+    const skillSourceDir = safePath.join(pluginSourceDir, 'skills', skillDirPath);
+    // Resolved through the SAME reader `vat skills build` and `vat verify` use — per-skill
+    // config is keyed by name, so two answers would mean two effective configs.
+    // A SKILL.md the parse worker refused has no name to package or key config by: refused.
+    const read = await readPluginLocalSkillName(skillSourceDir, dispatcher);
+    if (read.kind === 'refused') throw skillParseRefusal(read.refused, pluginSourceDir);
+    const skillName = read.name;
+    return { skillDirPath, skillPath: safePath.join(skillSourceDir, 'SKILL.md'), skillName };
+  });
 }
 
 /**
@@ -1404,7 +1403,7 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildOutcome>
   // Phase 1.4: discover the plugin's own skills ONCE (recursive; git-visible only),
   // resolving each declared name. Every phase below reads this list.
   const localSkills = pluginSourceExists
-    ? await discoverPluginLocalSkills(pluginSourceDir, logger)
+    ? await discoverPluginLocalSkills(pluginSourceDir, registries.dispatcher, logger)
     : [];
 
   // Phase 1.5: collision referee. Resolve the plugin's pool selector BEFORE the

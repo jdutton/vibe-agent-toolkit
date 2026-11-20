@@ -110,13 +110,6 @@ interface Corpus {
   readonly project: string;
   /** Whether the skills batch spans several roots. */
   readonly multiRoot: boolean;
-  /**
-   * The skills batch's root other than the run's home, repository-relative
-   * ('' for the repository root), when it has one. The population enumerates it
-   * under its own oracles and with no store, so on a warm run it reads every
-   * file under it that no earlier phase read.
-   */
-  readonly otherRoot?: string;
 }
 
 /** Two roots: the root project and a nested one whose skill is in the root's pool. */
@@ -129,7 +122,6 @@ const NESTED: Corpus = {
   },
   project: '',
   multiRoot: true,
-  otherRoot: 'nested',
 };
 
 /** One root: the skills view is the shared markdown-only view of the run's home root. */
@@ -152,8 +144,6 @@ const NO_ROOT: Corpus = {
   },
   project: 'project',
   multiRoot: true,
-  // No config governs the loose skill, so its root is the repository's.
-  otherRoot: '',
 };
 
 /** Past the input cap: refused before a byte is read, never keyed. Project-relative. */
@@ -243,24 +233,6 @@ function outsideSkills(corpus: Corpus): string[] {
 /** Documents outside the project root (a skill with no project root): no population keys them. */
 function outsideDocuments(corpus: Corpus): string[] {
   return Object.keys(corpus.files).filter((path) => inProject(corpus, path) === undefined && isDocument(path));
-}
-
-/**
- * Files under the batch's other root that neither view admits: on a warm run
- * the home population is the store's, so the other root's population is the
- * first to read them. Repository-relative.
- */
-function otherRootOnlyFiles(corpus: Corpus): string[] {
-  const { otherRoot } = corpus;
-  if (otherRoot === undefined) return [];
-  const viewed = new Set(resourcesViewDocuments(corpus));
-  const skillsOnly = new Set(skillsOnlyDocuments(corpus));
-  return Object.keys(corpus.files)
-    .filter((path) => otherRoot === '' || toForwardSlash(path).startsWith(`${otherRoot}/`))
-    .filter((path) => {
-      const relative = inProject(corpus, path) ?? path;
-      return !viewed.has(relative) && !skillsOnly.has(relative);
-    });
 }
 
 /** Every document the run admits, in one view or another. */
@@ -490,13 +462,13 @@ describe.each([
     expect(skills?.['registry.admitted'], 'the skills phase admits only what no earlier phase admitted').toBe(
       skillsOnlyDocuments(corpus).length,
     );
-    // On a warm run the home population is the store's, so a file under it is
-    // read only when a view admits it or discovery reads it: the skills phase
-    // reads the documents only it admits, less each outside SKILL.md the
-    // resources phase's discovery already read, plus every file under the
-    // batch's other root that no view admits (that root has no store).
-    expect(skills?.['content.read'], 'skills phase reads what only it admits, and the other root\'s unread files, once').toBe(
-      skillsOnlyDocuments(corpus).length - outsideSkills(corpus).length + otherRootOnlyFiles(corpus).length,
+    // On a warm run the population is the store's, so a file is read only when a
+    // view admits it or discovery reads it: the skills phase reads exactly the
+    // documents only it admits, less each outside SKILL.md the resources phase's
+    // discovery already read. Another root has no store, so it is listed, and a
+    // listing reads nothing.
+    expect(skills?.['content.read'], 'skills phase reads exactly what only it admits, once').toBe(
+      skillsOnlyDocuments(corpus).length - outsideSkills(corpus).length,
     );
     expect(readTwice(warm.parentReads), 'no path read twice at the fs boundary').toEqual([]);
   });

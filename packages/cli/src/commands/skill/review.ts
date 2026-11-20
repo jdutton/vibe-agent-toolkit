@@ -274,7 +274,6 @@ export async function reviewCommand(
     // skill's own directory when there is none.
     const result = await withRunContext({ root: projectRoot ?? dirname(skillPath) }, (run) =>
       validateSkillForPackaging(skillPath, resolveProjectResourcesValidation(skillPath), packagingConfig, 'source', {
-        dispatcher: undefined,
         projectSkills,
         registries: runSkillRegistries(run),
         // Same ruling as the discovery above: a review is acted on whole, so a

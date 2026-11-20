@@ -88,7 +88,6 @@ export function validateForPackagingInRun(
     validateSkillForPackaging(skillPath, resourcesValidation, packagingConfig, context, {
       unreadable: 'refuse',
       outputs: [],
-      dispatcher: undefined,
       ...shared,
       registries,
     }));

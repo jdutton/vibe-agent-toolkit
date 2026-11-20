@@ -180,6 +180,11 @@ function pluginBuildCase(): VerbCase {
     },
     units: [marketplaceDir],
     sources: (r) => [...projectSources(r), ...projectSources(r, DISTRIBUTION_FILES), safePath.join(r.project, 'dist', 'skills')],
+    // The build first checks the pool skill IS built: "not there" is INPUT_UNREADABLE about the
+    // skill, whichever component of its path made it absent (`dist` is also the marketplace's parent,
+    // so the table alone calls an absent `dist` the destination's).
+    // Compared as text with the path the refusal names; never read.
+    presencePreflight: (r) => ({ path: `${r.project}/dist/skills/${SKILL}`, refusal: 'INPUT_UNREADABLE' }),
   });
 }
 
@@ -332,7 +337,7 @@ function cacheClearCase(): VerbCase {
 export const BUILD_FAMILY_SHARDS = {
   'skills/build': { make: skillsBuildCase, files: 26 },
   'skills/package/o-fresh': { make: () => skillsPackageCase('o-fresh'), files: 15 },
-  'skills/package/o-force': { make: () => skillsPackageCase('o-force'), files: 29 },
+  'skills/package/o-force': { make: () => skillsPackageCase('o-force'), files: 19 },
   'skills/package/o-occupied': { make: () => skillsPackageCase('o-occupied'), files: 16 },
   'plugin/build': { make: pluginBuildCase, files: 24 },
   'top-level-build': { make: topLevelBuildCase, files: 61 },

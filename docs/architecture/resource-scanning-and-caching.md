@@ -299,9 +299,16 @@ population, never a difference in what the project's globs were taken to mean.
 **A source answers for any root it is asked about, under that root's own oracles.** A source that
 built tree B's population with tree A's ignore oracle and filed it under **A's extent key** would be
 read back and believed by the next run — worse than a wrong answer in one run. So
-`ResourcePopulationSource.enumerate` takes the root, the run's store holds the home tree's extent
-only, and a crawl of a root other than the population's home is **enumerated for that root under its
-own oracles**: nothing declines and nothing walks. It does not throw: `packaging-validator.ts`'s
+`ResourcePopulationSource.enumerate` takes the root and the crawl's members (its include and exclude
+globs), and the run's store holds the home tree's extent only. The full population — every file under
+the root read and keyed so one stored extent answers every lane next time — is built only where a
+store keeps it: the home root (by the filesystem's answer, `sameDirectory`, so `/tmp` and
+`/private/tmp` are one home) under a store, with `refuse`. Every other enumeration — a root other than
+the home, the home with no store, and any run that degrades — is a **listing**
+(`buildResourceListing`): enumerated for that root under its own oracles, git where there is git,
+and only the files the crawl's globs admit become rows, read when a view admits them and never
+hashed otherwise. A listing touches no store key. Degrade is a refusal policy only and never picks
+the enumerator. It does not throw: `packaging-validator.ts`'s
 `findProjectRoot(...) ?? dirname(skillPath)` legitimately lands on a build output directory in an
 adopter layout with no config and no `.git` above it. And it never yields an *empty* population,
 which would report a confident green over a corpus nothing looked at.

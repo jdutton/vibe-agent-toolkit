@@ -123,6 +123,7 @@ import {
   type JsonValue,
   type Projection,
   RunContentCache,
+  withParseDispatcher,
   withPopulationRun,
 } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
@@ -187,7 +188,7 @@ async function rederiveBlobs(projection: Projection): Promise<RederivedBlobs> {
   for (const row of projection.resolutionContexts) builder.addContext(row);
   for (const row of projection.resources) builder.addResource(row);
   for (const row of projection.resourceRealizations) builder.addRealization(row);
-  const counts = await populateBlobs(builder);
+  const counts = await withParseDispatcher((dispatcher) => populateBlobs(builder, { dispatcher }));
   return { counts, blobKeys: contentKeysOf(builder.build()) };
 }
 

@@ -199,28 +199,6 @@ export const DEFAULT_RESOURCE_INCLUDE: readonly string[] = ['**/*.md', '**/*.htm
 export const DEFAULT_RESOURCE_EXCLUDE: readonly string[] = Object.freeze([...NEVER_CONTENT_GLOBS, ...BUILD_OUTPUT_GLOBS]);
 
 /**
- * What the crawl does with a directory inside its population it cannot list —
- * the CALLER's decision, required, with no default, because the two standing
- * rulings are per-verb and both stand. The one policy the population takes
- * (`PopulationUnreadablePolicy`, which documents both arms):
- *
- * - `'refuse'` — STOP, by name, with the projection's sentence: every verb whose
- *   output is acted on as a complete population — `vat resources validate`/`scan`/`check`,
- *   `vat skills validate`/`build`, `vat build`, `vat claude context`, the
- *   pipeline oracles.
- * - `{ degrade }` — KEEP GOING with the readable remainder and hand the refusal
- *   over: `vat audit`, which reports the gap as `SCAN_PATH_UNREADABLE`.
- *
- * 🪤 The policy used to live INSIDE this class, and whichever ruling it
- * encoded was wrong for the other verb: first "record and warn" (so the walk
- * lane exited 0 on a tree the projection lane exited 2 on), then "refuse" (so
- * `vat audit` exited 2 with zero findings over one `chmod 000` sibling —
- * the unreadable-directory defect's exact shape). It is the caller's knowledge, so it is the
- * caller's field.
- */
-export type RegistryUnreadablePolicy = PopulationUnreadablePolicy;
-
-/**
  * Refuse an omitted `unreadable` up front, by name, before any directory is listed.
  *
  * The type makes the field required and that enumerates the TypeScript callers;
@@ -231,9 +209,9 @@ export type RegistryUnreadablePolicy = PopulationUnreadablePolicy;
  *
  * @param policy - What the caller passed as `unreadable`
  */
-function requireRegistryUnreadablePolicy(
-  policy: RegistryUnreadablePolicy | undefined,
-): asserts policy is RegistryUnreadablePolicy {
+function requirePopulationUnreadablePolicy(
+  policy: PopulationUnreadablePolicy | undefined,
+): asserts policy is PopulationUnreadablePolicy {
   if (policy === undefined) {
     throw new TypeError(
       "ResourceRegistry.crawl: `unreadable` is required — pass 'refuse' to stop on a directory the crawl cannot list, "
@@ -250,12 +228,12 @@ export interface CrawlOptions {
   baseDir: string;
   /**
    * What to do with a directory inside the population the crawl cannot list —
-   * see {@link RegistryUnreadablePolicy}. Required, no default. Handed to the
+   * see {@link PopulationUnreadablePolicy}. Required, no default. Handed to the
    * population source: `'refuse'` stops the run by name, `{ degrade }` keeps the
    * readable remainder and hands each refusal over. A directory inside ignored
    * territory is recorded as a population condition either way.
    */
-  unreadable: RegistryUnreadablePolicy;
+  unreadable: PopulationUnreadablePolicy;
   /** Include patterns (default: {@link DEFAULT_RESOURCE_INCLUDE}) */
   include?: string[];
   /** Exclude patterns, replacing the default (default: {@link DEFAULT_RESOURCE_EXCLUDE}) */
@@ -1023,7 +1001,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * const { registry, population } = await ResourceRegistry.fromCrawl({
    *   baseDir: '/project/docs',
    *   outputs: [],
-   *   unreadable: 'refuse', // or { degrade } — see RegistryUnreadablePolicy
+   *   unreadable: 'refuse', // or { degrade } — see PopulationUnreadablePolicy
    *   include: ['**.md'],
    *   exclude: ['node_modules'],
    * });
@@ -1501,7 +1479,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       populationSource,
       outputs,
     } = options;
-    requireRegistryUnreadablePolicy(unreadable);
+    requirePopulationUnreadablePolicy(unreadable);
 
     // Propagate baseDir to registry if not already set (enables path-relative IDs)
     if (baseDir && !this.baseDir) {
@@ -1549,11 +1527,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     include: string[],
     exclude: string[],
     outputs: readonly string[],
-    unreadable: RegistryUnreadablePolicy,
+    unreadable: PopulationUnreadablePolicy,
   ): Promise<{ admitted: string[]; enumeration: ResourceEnumeration }> {
     const base = safePath.resolve(baseDir);
     const isMember = crawlPathFilter(include, exclude);
-    const enumeration = await source.enumerate(base, outputs, unreadable);
+    const enumeration = await source.enumerate(base, outputs, unreadable, { include, exclude });
     const { paths, conditions } = enumeration;
     // Kept whole, not narrowed by `include`/`exclude`: a condition is about the
     // enumeration, and a gap the enumerator met outside this crawl's globs is

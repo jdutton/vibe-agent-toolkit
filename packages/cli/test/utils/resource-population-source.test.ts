@@ -24,6 +24,9 @@ import { withRunContext } from '../../src/utils/resource-loader.js';
 const GUIDE_REL = 'docs/guide.md';
 const ASSET_REL = 'docs/asset.txt';
 
+/** A crawl that admits every file: the source answers with exactly the members asked for. */
+const ALL_FILES = { include: ['**/*'], exclude: [] } as const;
+
 let root: string;
 
 beforeEach(() => {
@@ -48,15 +51,14 @@ function withSource<T>(work: (source: ResourcePopulationSource) => Promise<T>): 
 }
 
 describe('the run\'s population source', () => {
-  it('enumerates the whole tree, unnarrowed', async () => {
+  it('enumerates every member the crawl asks for', async () => {
     writeFileSync(safePath.join(root, GUIDE_REL), '# guide\n', 'utf-8');
     writeFileSync(safePath.join(root, ASSET_REL), 'asset', 'utf-8');
 
-    const paths = await withSource(async (source) => [...(await source.enumerate(root, [], 'refuse')).paths]);
+    const paths = await withSource(async (source) => [...(await source.enumerate(root, [], 'refuse', ALL_FILES)).paths]);
 
-    // The source enumerates; it does NOT narrow. Narrowing to the caller's own
-    // globs is `ResourceRegistry.crawl`'s job, and asserting the unnarrowed
-    // answer here is what keeps the two responsibilities distinguishable.
+    // Every file the crawl's globs admit, of every kind: a no-store root is
+    // listed to the crawl's members, and these members are every file.
     expect(
       paths.map((p) => safePath.relative(root, p)).sort((left, right) => left.localeCompare(right)),
     ).toEqual([ASSET_REL, GUIDE_REL]);
@@ -65,7 +67,7 @@ describe('the run\'s population source', () => {
   it('carries the enumeration\'s own outcome and enumerator out with its paths', async () => {
     writeFileSync(safePath.join(root, GUIDE_REL), '# guide\n', 'utf-8');
 
-    const enumeration = await withSource((source) => source.enumerate(root, [], 'refuse'));
+    const enumeration = await withSource((source) => source.enumerate(root, [], 'refuse', ALL_FILES));
 
     // A temp tree outside any repository has no store, so the run derived, on
     // the filesystem enumerator — told by the enumeration, not by a side channel.
@@ -90,7 +92,7 @@ describe('the run\'s population source', () => {
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(capture);
 
     try {
-      const paths = await withSource(async (source) => (await source.enumerate(root, [], 'refuse')).paths);
+      const paths = await withSource(async (source) => (await source.enumerate(root, [], 'refuse', ALL_FILES)).paths);
       // The premise: the binary really was in the population.
       expect(paths.map((p) => safePath.relative(root, p))).toContain('docs/logo.png');
     } finally {

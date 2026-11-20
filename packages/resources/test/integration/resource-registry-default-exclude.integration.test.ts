@@ -15,6 +15,7 @@ import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/u
 import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, describe, expect, it } from 'vitest';
 
+import type { PopulationUnreadablePolicy } from '../../src/projection/crawl-source.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import { crawlInRun } from '../helpers/population-run.js';
 
@@ -49,9 +50,9 @@ function fixture(git: boolean): string {
   return root;
 }
 
-async function crawled(root: string): Promise<ResourceRegistry> {
+async function crawled(root: string, unreadable: PopulationUnreadablePolicy = 'refuse'): Promise<ResourceRegistry> {
   const registry = new ResourceRegistry({ baseDir: root });
-  await crawlInRun(registry, { baseDir: root, outputs: [], unreadable: 'refuse' });
+  await crawlInRun(registry, { baseDir: root, outputs: [], unreadable });
   registry.resolveLinks();
   return registry;
 }
@@ -66,6 +67,12 @@ async function crawled(root: string): Promise<ResourceRegistry> {
 const ROUTES: ReadonlyArray<readonly [string, boolean, () => Promise<{ root: string; registry: ResourceRegistry }>]> = [
   ['the filesystem enumerator', false, async () => { const root = fixture(false); return { root, registry: await crawled(root) }; }],
   ['the git route', true, async () => { const root = fixture(true); return { root, registry: await crawled(root) }; }],
+  // `{ degrade }` (`vat audit`) is a refusal policy only: inside a repository it is
+  // enumerated by git, as a refusing crawl is, so it admits what `vat skills validate` admits.
+  ['the git route, degrading', true, async () => {
+    const root = fixture(true);
+    return { root, registry: await crawled(root, { degrade: () => undefined }) };
+  }],
 ];
 
 describe.each(ROUTES)('ResourceRegistry.crawl default exclude — %s', (_route, admitsToolOutputNames, run) => {

@@ -43,11 +43,18 @@ import { defaultParseCache } from '../parse-cache.js';
 import { ParseDispatcher } from '../parse-dispatcher.js';
 import type { SHA256 } from '../schemas/checksum.js';
 import type { CollectionConfig } from '../schemas/project-config.js';
+import { sameDirectory } from '../utils.js';
 
 import { RunContentCache } from './content-cache.js';
 import type { PopulationUnreadablePolicy } from './crawl-source.js';
 import type { PopulationCache } from './merge.js';
-import { buildResourcePopulation, type ResourceEnumeration, type ResourcePopulationSource } from './resource-population.js';
+import {
+  buildResourceListing,
+  buildResourcePopulation,
+  type PopulationMembers,
+  type ResourceEnumeration,
+  type ResourcePopulationSource,
+} from './resource-population.js';
 
 /**
  * One file's admission facts: what a registry admitting it reads, keys and
@@ -152,7 +159,9 @@ export class RunPopulation implements PopulationRun {
     this.gitTracker = options.gitTracker;
     this.content = run.content;
     this.dispatcher = run.dispatcher;
-    this.source = { enumerate: (root, outputs, unreadable) => this.#enumerate(root, outputs, unreadable) };
+    this.source = {
+      enumerate: (root, outputs, unreadable, members) => this.#enumerate(root, outputs, unreadable, members),
+    };
   }
 
   /**
@@ -187,50 +196,107 @@ export class RunPopulation implements PopulationRun {
   /**
    * Enumerate a root once per run.
    *
-   * The home root is enumerated under the run's oracles and store. Another root —
-   * a path argument outside the project, a skill directory with no project root,
-   * a nested project — is enumerated under its own: its own ignore oracle, no
-   * store (the store holds the home tree's extents), and the collections its own
-   * config declares. Nothing is declined and nothing is walked.
+   * The home root, asked by a refusing crawl, is the full population when the
+   * run has a store: read and keyed once, so the store answers every later run
+   * and every resources lane of this one ({@link buildResourcePopulation}). Every
+   * other enumeration has no store to pay off — another root (a path argument
+   * outside the project, a skill directory with no project root, a nested
+   * project), the home with the store off or outside a repository, and every
+   * degrading crawl, whose narrowed population the store's key could not
+   * describe — so it is a listing of the crawl's members alone, which reads no
+   * file ({@link buildResourceListing}). Another root is listed under its own
+   * ignore oracle and the collections its own config declares, and never under
+   * the home's extent key.
+   *
+   * Which root is the home is the filesystem's answer ({@link sameDirectory}):
+   * `/tmp/x` and `/private/tmp/x` are one root, so the second spelling is served
+   * by the home's store and its paths come back in the spelling asked.
    *
    * A degrading enumeration (`{ degrade }`) is not memoized: its refusals are
    * handed to the caller that asked, and another caller must be handed them too.
+   * A refusing one is, rejection included: one enumeration per root per run.
    *
    * @param root - Absolute root to enumerate
    * @param outputs - The trees the calling verb writes
    * @param unreadable - What a refused listing inside the population does
+   * @param members - The calling crawl's include and exclude globs
    * @returns The root's population
    */
-  #enumerate(root: string, outputs: readonly string[], unreadable: PopulationUnreadablePolicy): Promise<ResourceEnumeration> {
+  #enumerate(
+    root: string,
+    outputs: readonly string[],
+    unreadable: PopulationUnreadablePolicy,
+    members: PopulationMembers,
+  ): Promise<ResourceEnumeration> {
     const resolved = safePath.resolve(root);
-    if (unreadable !== 'refuse') return this.#build(resolved, outputs, unreadable);
-    const key = `${JSON.stringify(outputs)} ${resolved}`;
-    const held = this.#enumerations.get(key);
-    if (held !== undefined) return held;
-    const enumeration = this.#build(resolved, outputs, unreadable);
-    this.#enumerations.set(key, enumeration);
-    return enumeration;
+    const home = sameDirectory(this.root, resolved);
+    if (unreadable !== 'refuse') return this.#list(resolved, home, outputs, unreadable, members);
+    // The home's full population is one per run whatever the crawl's members;
+    // a listing is of the members asked for.
+    const key = `${JSON.stringify(outputs)} ${resolved} ${JSON.stringify(members)}`;
+    return memoized(this.#enumerations, key, async () => {
+      const homeKey = `${JSON.stringify(outputs)} home`;
+      const cache = home ? await this.#options.cacheOf() : undefined;
+      if (cache === undefined) return this.#list(resolved, home, outputs, unreadable, members);
+      const population = await memoized(this.#enumerations, homeKey, () => this.#populate(outputs, cache));
+      return respelled(population, this.root, resolved);
+    });
   }
 
-  async #build(root: string, outputs: readonly string[], unreadable: PopulationUnreadablePolicy): Promise<ResourceEnumeration> {
-    const { gitTracker, cacheOf, collectionsFor } = this.#options;
-    const home = this.root === root;
-    const collections = await collectionsFor(root);
-    // The home root's store first: opening it takes the snapshot that keys it,
-    // which the tracker then reads rather than asking git again. Another root
-    // has no store (the store holds the home tree's extents) and opens none.
-    const cache = home ? await cacheOf() : undefined;
-    if (home) await gitTracker.initialize();
+  /** The home root's full population, under the run's store. */
+  async #populate(outputs: readonly string[], cache: PopulationCache): Promise<ResourceEnumeration> {
+    const { gitTracker, collectionsFor } = this.#options;
+    const collections = await collectionsFor(this.root);
+    // The store is open: opening it took the snapshot that keys it, which the
+    // tracker now reads rather than asking git again.
+    await gitTracker.initialize();
     return buildResourcePopulation({
-      root,
+      root: this.root,
       outputs,
-      unreadable,
+      unreadable: 'refuse',
       run: this,
-      gitTracker: home ? gitTracker : await initializedTracker(root),
-      ...(cache !== undefined && { cache }),
+      gitTracker,
+      cache,
       ...(collections !== undefined && { collections }),
     });
   }
+
+  /** A root's members, listed with no store (see {@link buildResourceListing}). */
+  async #list(
+    root: string,
+    home: boolean,
+    outputs: readonly string[],
+    unreadable: PopulationUnreadablePolicy,
+    members: PopulationMembers,
+  ): Promise<ResourceEnumeration> {
+    const { gitTracker, collectionsFor } = this.#options;
+    const collections = await collectionsFor(root);
+    if (home) await gitTracker.initialize();
+    return buildResourceListing({
+      root,
+      outputs,
+      unreadable,
+      members,
+      run: this,
+      gitTracker: home ? gitTracker : await initializedTracker(root),
+      ...(collections !== undefined && { collections }),
+    });
+  }
+}
+
+/**
+ * A population of `from`, with its paths spelled under `to` — the same directory
+ * by another spelling ({@link sameDirectory}), so the crawl that asked by `to`
+ * gets paths under its own base.
+ *
+ * @param population - The population, its paths under `from`
+ * @param from - The spelling it was enumerated under
+ * @param to - The spelling the crawl asked by
+ * @returns The population with its paths under `to`
+ */
+function respelled(population: ResourceEnumeration, from: string, to: string): ResourceEnumeration {
+  if (from === to) return population;
+  return { ...population, paths: population.paths.map((path) => safePath.join(to, safePath.relative(from, path))) };
 }
 
 /**

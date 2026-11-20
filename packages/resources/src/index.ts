@@ -46,7 +46,6 @@ export {
   // this is the one export and not an invitation.
   unparsedResourceFacts,
   type CrawlOptions,
-  type RegistryUnreadablePolicy,
   type DuplicateIdCollision,
   type UnreadableResource,
   type ParseRefusedResource,
@@ -946,6 +945,7 @@ export {
   buildResourceProjection,
   type ResourceEnumeration,
   type CrawlPopulation,
+  type PopulationMembers,
   type ResourcePopulationSource,
 } from './projection/resource-population.js';
 

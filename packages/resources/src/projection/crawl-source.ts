@@ -382,9 +382,7 @@ export class FilesystemCrawlSource implements CrawlSource {
   /**
    * The walk of a DEGRADING population: a directory inside the population that
    * cannot be listed is handed to `degrade` and the walk continues with the
-   * readable remainder, rather than refusing the run. The filesystem arm only:
-   * git's snapshot reads every file it does not ignore and cannot leave a
-   * directory out.
+   * readable remainder, rather than refusing the run.
    *
    * @param root - Absolute corpus root to enumerate
    * @param outputs - The trees the verb writes (see {@link crawlSourceFor})
@@ -539,7 +537,7 @@ export class GitCrawlSource implements CrawlSource {
   readonly kind: CrawlSourceKind = 'git';
 
   readonly #root: string;
-  readonly #refusals: ListingRefusals;
+  #refusals: ListingRefusals;
   readonly #symlinks = new DeclinedSymlinks();
 
   /**
@@ -549,6 +547,23 @@ export class GitCrawlSource implements CrawlSource {
   constructor(root: string, outputs: readonly string[]) {
     this.#root = root;
     this.#refusals = new ListingRefusals(root, outputs, null);
+  }
+
+  /**
+   * Git's enumeration of a DEGRADING population: a directory in git's own
+   * territory it could not open (read off its stderr) is handed to `degrade`,
+   * and the population is what git and the bounded walks could list. The same
+   * enumerator a refusing run uses, so a degrading verb sees the same files.
+   *
+   * @param root - Absolute corpus root, inside a git working tree
+   * @param outputs - The trees the verb writes (see {@link crawlSourceFor})
+   * @param degrade - Receives each refused directory inside the population
+   * @returns The source
+   */
+  static degrading(root: string, outputs: readonly string[], degrade: (refusal: DirectoryRefusal) => void): GitCrawlSource {
+    const source = new GitCrawlSource(root, outputs);
+    source.#refusals = new ListingRefusals(root, outputs, degrade);
+    return source;
   }
 
   get unlistable(): readonly DirectoryRefusal[] {
@@ -1079,8 +1094,10 @@ export function crawlSourceFor(root: string, outputs: readonly string[]): CrawlS
  *   over: the ruling for `vat audit`, where status describes what was found and
  *   exit describes whether the run completed. The caller is promising to REPORT
  *   the gap (audit files `SCAN_PATH_UNREADABLE` on the directory), not to drop it.
- *   A degraded population is enumerated by the filesystem walk and never stored:
- *   the store's key cannot say which directories were left out.
+ *   A refusal policy and nothing else: a degraded population is enumerated by the
+ *   same source a refusing one is ({@link crawlSourceFor}), so `vat audit` and
+ *   `vat skills validate` see the same files of one tree. It is never stored: the
+ *   store's key cannot say which directories were left out.
  */
 export type PopulationUnreadablePolicy = 'refuse' | Extract<UnreadablePolicy, { degrade: unknown }>;
 
@@ -1093,7 +1110,10 @@ export type PopulationUnreadablePolicy = 'refuse' | Extract<UnreadablePolicy, { 
  * @returns The selected source
  */
 export function crawlSourceUnder(root: string, outputs: readonly string[], unreadable: PopulationUnreadablePolicy): CrawlSource {
-  return unreadable === 'refuse' ? crawlSourceFor(root, outputs) : FilesystemCrawlSource.degrading(root, outputs, unreadable.degrade);
+  if (unreadable === 'refuse') return crawlSourceFor(root, outputs);
+  return gitExtentSelected(root)
+    ? GitCrawlSource.degrading(root, outputs, unreadable.degrade)
+    : FilesystemCrawlSource.degrading(root, outputs, unreadable.degrade);
 }
 
 /**

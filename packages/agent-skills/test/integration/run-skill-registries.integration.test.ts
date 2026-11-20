@@ -4,7 +4,8 @@
  *
  * Two callers of one root may hold different `unreadable` rulings (`vat audit` degrades, every
  * other verb refuses), so a view keeps the refusals its one crawl met and settles them again under
- * EACH later caller's policy. A crawl that rejected is never served. What a caller writes decides
+ * EACH later caller's policy. A view whose crawl rejected is never served, but the run's
+ * population keeps a refused enumeration, so a later 'refuse' caller meets the same refusal. What a caller writes decides
  * which side a fault is on, never which files the crawl finds, so it never splits a view.
  */
 import { spawnSync } from 'node:child_process';
@@ -205,6 +206,20 @@ describe('RunSkillRegistries.forRoot replays a view\'s refusals under each calle
 
     expect(members).toContain('docs/open/ok.md');
   });
+
+  // The view is not kept, but the run's population keeps its refused enumeration: one run
+  // answers one population, so a second 'refuse' caller meets the same refusal even once the
+  // directory reads again.
+  it("a second 'refuse' caller after a 'refuse' rejection meets the same refusal", async () => {
+    const { root, locked } = lockedRoot();
+
+    await withSkillRegistries(root, async (registries) => {
+      await expect(withReaddirSyncRefused(locked, 'EACCES', () => registries.forRoot(root, REFUSE)))
+        .rejects.toBeInstanceOf(DirectoryListingRefusedError);
+      // The directory is readable again by now: the run, not the filesystem, answers.
+      await expect(registries.forRoot(root, REFUSE)).rejects.toThrow("the directory 'docs/locked'");
+    });
+  });
 });
 
 describe('a built skill validated against a view that predates the build', () => {
@@ -228,7 +243,6 @@ describe('a built skill validated against a view that predates the build', () =>
       ].join('\n'));
       write(root, 'out/demo/reference.md', '# Reference\n');
       return validateSkillForPackaging(builtSkillPath, {}, undefined, 'built', {
-        dispatcher: undefined,
         registries,
         unreadable: 'refuse',
         outputs: [safePath.join(root, 'out', 'demo')],

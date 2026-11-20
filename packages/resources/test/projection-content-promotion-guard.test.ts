@@ -56,7 +56,6 @@ import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { withParseDispatcher } from '../src/parse-dispatcher.js';
-import { populateBlobs } from '../src/projection/blob-population.js';
 import { RunContentCache } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
@@ -64,6 +63,7 @@ import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { afterClosurePromotion, populate } from '../src/projection/merge.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
 
+import { populateBlobsOnOwnDispatcher } from './blob-fixture-population.js';
 import { inOwnRun } from './helpers/population-run.js';
 import { createGitRepo, setupSubdirTestSuite, writeFileIn } from './test-helpers.js';
 
@@ -152,7 +152,7 @@ describe('demand promotion, over a row the shipped deferral policy produced', ()
     expect(statesAt(builder, DEFERRED_DOC)).toEqual([{ state: 'deferred', key: null }]);
 
     // The between-strata run, exactly where `populate()` places it.
-    const first = await populateBlobs(builder);
+    const first = await populateBlobsOnOwnDispatcher(builder);
     expect(first.realizationsContentDeferred).toBe(2);
     expect(builder.build().blobReferences).toHaveLength(0);
 

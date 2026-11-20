@@ -89,6 +89,7 @@
  */
 
 import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
+import { crawlPathFilter } from '@vibe-agent-toolkit/utils/crawl';
 
 import { RealizationConditionRowSchema, type RealizationConditionRow } from '../schemas/projection-resources.js';
 import type { JsonValue } from '../schemas/projection-shared.js';
@@ -122,12 +123,14 @@ import type { Projection } from './projection.js';
  * pays for no population.
  *
  * It answers for ANY root it is asked about, under that root's own oracles: a
- * source built for tree A and asked about tree B builds B's population with B's
- * ignore oracle and never files it under A's extent key (the store holds the
- * run's home tree only). A crawl of a root other than the run's home — a path
- * argument outside the project, a skill directory with no project root — is
- * therefore answered, never declined and never walked. `RunPopulation.source`
- * is the implementation.
+ * source built for tree A and asked about tree B lists B with B's ignore oracle
+ * and never files it under A's extent key (the store holds the run's home tree
+ * only). A crawl of a root other than the run's home — a path argument outside
+ * the project, a skill directory with no project root, a nested project — is
+ * therefore answered, never declined. `RunPopulation.source` is the
+ * implementation: the home root with a store is the full population (it pays off
+ * because the store keeps it); every root with no store is a listing of the
+ * crawl's members alone ({@link buildResourceListing}), which reads no file.
  */
 export interface ResourcePopulationSource {
   /**
@@ -139,10 +142,27 @@ export interface ResourcePopulationSource {
    *   destination's, any other the input's
    * @param unreadable - What a directory inside the population that cannot be
    *   listed does — see {@link PopulationUnreadablePolicy}
+   * @param members - The files the calling crawl admits. A source may answer
+   *   with more (a stored population is the whole tree); the crawl narrows to
+   *   these either way, so a root with no store enumerates only these
    * @returns Every file the population admits, and the population-time
    *   conditions the enumeration recorded — see {@link ResourceEnumeration}
    */
-  enumerate(root: string, outputs: readonly string[], unreadable: PopulationUnreadablePolicy): Promise<ResourceEnumeration>;
+  enumerate(
+    root: string,
+    outputs: readonly string[],
+    unreadable: PopulationUnreadablePolicy,
+    members: PopulationMembers,
+  ): Promise<ResourceEnumeration>;
+}
+
+/**
+ * The files one crawl admits: its include and exclude globs, relative to the
+ * root it enumerates (`ResourceRegistry.crawl`'s own `include`/`exclude`).
+ */
+export interface PopulationMembers {
+  readonly include: readonly string[];
+  readonly exclude: readonly string[];
 }
 
 /**
@@ -391,6 +411,87 @@ async function membershipThrough(
 
   const { projection, outcome } = await populate(populateOptions);
   return membershipOf(root, projection, source.kind, outcome);
+}
+
+/**
+ * List a root's members with no store: the files `members` admits, and the
+ * conditions the enumeration recorded, with no file read, keyed or parsed.
+ *
+ * ## Why a root with no store is listed rather than populated
+ *
+ * The full population ({@link buildResourcePopulation}) reads and keys every
+ * file under the root so that one stored extent answers every resources lane
+ * next time. With no store there is no next time: the reads buy nothing, and on
+ * a tree of generated sources they are nearly the whole cost of the verb (a
+ * nested project of 20,000 non-markdown files made `vat skills validate` read
+ * 20,005 files to validate one skill). So a root with no store — any root but
+ * the run's home, the home with the store off or outside a repository, and every
+ * degrading enumeration — is listed: the run's enumerator (`crawlSourceUnder`),
+ * the members filtered BEFORE a row is built, the filesystem extent alone under
+ * a `'deferred'` demand (no read, no key), and the conditions its rows carry.
+ * The crawl then reads exactly the files it admits, once, through the run.
+ *
+ * The conditions are the extent's own: a declined symlink and an unlistable
+ * directory are recorded whatever the members, as the full population records
+ * them, so a listing and a stored population report the same findings.
+ *
+ * Never stored: it is a narrowed population, and a stored narrowed population
+ * would answer another crawl as if complete.
+ *
+ * @param options - The root, the run's oracles and the crawl's members
+ * @param options.root - Absolute root to list
+ * @param options.outputs - The trees the calling verb writes, `[]` for none
+ * @param options.unreadable - What a directory inside the root that cannot be
+ *   listed does — see {@link PopulationUnreadablePolicy}. It decides refusals
+ *   only: the enumerator is the one a refusing run selects
+ * @param options.members - The crawl's include and exclude globs
+ * @returns The listed members, the enumerator that found them and a `derived`,
+ *   unstored outcome
+ */
+export async function buildResourceListing(
+  options: Omit<TreePopulationOptions, 'cache'> & {
+    readonly outputs: readonly string[];
+    readonly unreadable: PopulationUnreadablePolicy;
+    readonly members: PopulationMembers;
+  },
+): Promise<ResourceEnumeration> {
+  const root = safePath.resolve(options.root);
+  const source = crawlSourceUnder(root, options.outputs, options.unreadable);
+  const isMember = crawlPathFilter([...options.members.include], [...options.members.exclude]);
+  const registry = new ContributorRegistry();
+  const filesystem = new FilesystemExtentContributor(
+    () => membersOnly(source, (absolutePath) => isMember(safePath.relative(root, absolutePath))),
+    'deferred',
+  );
+  registry.register(filesystem);
+  const { projection, outcome } = await populate({
+    root,
+    registry,
+    parameters: { [filesystem.id]: DECLINE_IGNORED },
+    ...populationOracles({ ...options, cache: undefined }),
+  });
+  return membershipOf(root, projection, source.kind, outcome);
+}
+
+/**
+ * `source` narrowed to the paths `admits` keeps, its declined links and
+ * unlistable directories passed through whole.
+ *
+ * @param source - The run's enumerator for the root
+ * @param admits - Whether a path is a member of the crawl
+ * @returns A source over the members alone
+ */
+function membersOnly(source: CrawlSource, admits: (absolutePath: string) => boolean): CrawlSource {
+  return {
+    kind: source.kind,
+    enumerate: async () => (await source.enumerate()).filter(({ absolutePath }) => admits(absolutePath)),
+    get unlistable() {
+      return source.unlistable;
+    },
+    get symlinks() {
+      return source.symlinks;
+    },
+  };
 }
 
 /**

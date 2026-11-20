@@ -19,6 +19,9 @@ import { writeFile } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
+import type { ParseCache } from '../src/parse-cache.js';
+import { type ParsePoolPolicy, withParseDispatcher } from '../src/parse-dispatcher.js';
+import { type BlobPopulationResult, populateBlobs } from '../src/projection/blob-population.js';
 import { RunContentCache } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
@@ -117,4 +120,19 @@ export function conditionsWithCode(
   code: string,
 ): readonly { blob: string; code: string; message: string }[] {
   return projection.blobConditions.filter((row) => row.code === code);
+}
+
+/**
+ * Drive `populateBlobs` on a dispatcher of this call's own, built from `cache` and `policy` and
+ * shut down however the stage ends: the run a suite driving the stage by hand stands in for.
+ *
+ * @param builder - The builder to derive into
+ * @param dispatch - The dispatcher's cache and pool policy; defaults are what a command gets
+ * @returns What the stage counted
+ */
+export function populateBlobsOnOwnDispatcher(
+  builder: ProjectionBuilder,
+  dispatch: { cache?: ParseCache; policy?: ParsePoolPolicy } = {},
+): Promise<BlobPopulationResult> {
+  return withParseDispatcher((dispatcher) => populateBlobs(builder, { dispatcher }), dispatch);
 }
