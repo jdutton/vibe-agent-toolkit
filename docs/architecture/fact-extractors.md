@@ -184,8 +184,8 @@ Built: the one-read rule, as one admission per VAT process run (`RunContext`, `R
 registry views per phase; see [content keying](./content-keying-and-git.md)), for `vat validate`,
 `vat verify`, `vat resources validate`, `vat skills validate` and `vat resources scan`; `vat rag index`
 admits through one run but its index step re-reads each file, and `vat audit`, `vat skills build`,
-`vat claude plugin build` and `vat ard emit` are not covered yet, and a warm store hit still reads and hashes each admitted file until store hydration
-serves those facts. Not built: the git-OID path
+`vat claude plugin build` and `vat ard emit` are not covered yet, and a warm store hit still reads
+and hashes each admitted file until store hydration serves those facts. Not built: the git-OID path
 (planned with incremental repopulation) and I2's runtime tuple in the parse-cache and blob keys (the
 namespace carries the VAT version only).
 

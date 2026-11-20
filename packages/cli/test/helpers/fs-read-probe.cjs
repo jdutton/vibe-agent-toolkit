@@ -92,7 +92,7 @@ function relativeUnder(target, roots) {
   let raw;
   if (typeof target === 'string') raw = target;
   else if (target instanceof URL) raw = target.protocol === 'file:' ? decodeURIComponent(target.pathname) : undefined;
-  else if (Buffer.isBuffer(target)) raw = target.toString('utf8');
+  else if (Buffer.isBuffer(target)) raw = new TextDecoder().decode(target);
   if (raw === undefined) return undefined;
   const absolute = slashes(nodePath.resolve(raw));
   const root = roots.find((spelling) => absolute.startsWith(spelling));
