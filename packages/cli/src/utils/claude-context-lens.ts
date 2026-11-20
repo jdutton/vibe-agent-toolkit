@@ -18,6 +18,7 @@ import {
   type ClaudeContextRelations,
   type PopulationCache,
   type PopulationOutcome,
+  type PopulationRun,
 } from '@vibe-agent-toolkit/resources';
 
 import type { Logger } from './logger.js';
@@ -34,6 +35,9 @@ import { populateAndReport } from './population-wiring.js';
  * @param options.root - Absolute corpus root. Rooted HERE and nowhere else: a
  *   chain is a property of a position in the tree, and a population rooted at a
  *   subdirectory computes one against a corpus whose ancestors are missing
+ * @param options.run - The query run's population run, which the resources
+ *   population read through first: a file both populations hold is read and
+ *   parsed once
  * @param options.cache - The run's projection store, or undefined to re-derive
  * @param options.logger - Where the lens population's refused content is reported
  * @returns The rows, ready for `writeDerived`, and the lens population's
@@ -42,12 +46,13 @@ import { populateAndReport } from './population-wiring.js';
  */
 export async function evaluateClaudeContextLens(options: {
   root: string;
+  run: PopulationRun;
   cache: PopulationCache | undefined;
   logger: Logger;
 }): Promise<{ rows: ClaudeContextRelations; population: PopulationOutcome['population'] }> {
-  const { root, cache, logger } = options;
+  const { root, run, cache, logger } = options;
   const { projection, population } = await populateAndReport(
-    { root, cache, logger, population: 'claude-context' },
+    { root, run, cache, logger, population: 'claude-context' },
     (wiring) => buildClaudeContextPopulation({ root, ...wiring }),
     (result) => result.projection,
     (result) => result.storeMiss,

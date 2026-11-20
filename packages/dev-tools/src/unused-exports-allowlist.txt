@@ -170,7 +170,6 @@ packages/cli/src/commands/resources/check.ts CheckRunEnding dead
 packages/cli/src/commands/resources/check.ts ProgressSink dead
 packages/cli/src/commands/resources/scan.ts ScanPayloadInput dead
 packages/cli/src/commands/resources/validate.ts computeDeferredArtifacts dead
-packages/cli/src/commands/resources/validate.ts ValidateOptions dead
 packages/cli/src/commands/skill/review.ts reviewCommand dead
 packages/cli/src/commands/skill/review.ts SkillReviewCommandOptions dead
 packages/cli/src/commands/skill/test/auth-flags.ts RequireAuthValue dead
@@ -182,7 +181,6 @@ packages/cli/src/commands/skills/build.ts SkillsBuildCommandOptions dead
 packages/cli/src/commands/skills/command-helpers.ts CommandContext dead
 packages/cli/src/commands/skills/package.ts SkillsPackageCommandOptions dead
 packages/cli/src/commands/skills/source-resolvers.ts ResolvedNpmSource dead
-packages/cli/src/commands/skills/validate.ts SkillsValidateRegistryOptions dead
 packages/cli/src/commands/skills/validate.ts ValidatableSkill dead
 packages/cli/src/commands/validate.ts ValidateCommandOptions dead
 packages/cli/src/commands/verify.ts VerifyCommandOptions dead
@@ -238,8 +236,6 @@ packages/cli/src/utils/population-wiring.ts PopulationWiring dead
 packages/cli/src/utils/projection-query.ts PreflightStatement dead
 packages/cli/src/utils/projection-store.ts OpenedPopulationCache dead
 packages/cli/src/utils/relativize-paths.ts PathEntry dead
-packages/cli/src/utils/resource-loader.ts ResourceLoadResult dead
-packages/cli/src/utils/resource-loader.ts resourcesProjectionCrawlSelected dead
 packages/cli/src/utils/resource-loader.ts scopeIncludeToSubtree dead
 packages/cli/src/utils/root-argv.ts RootArgvGrammar dead
 packages/cli/src/utils/skill-quality-footer.ts SKILL_QUALITY_FOOTER_CODES dead

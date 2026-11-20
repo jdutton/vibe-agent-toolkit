@@ -198,7 +198,7 @@ every cache at once — is the way back to re-deriving each run. And a phase is 
 again under `vat claude plugin build`'s. `vat validate` populates once IN PROCESS: its orchestrator
 holds one population scope around the in-process surfaces (resources, skills), and a nested scope
 over the same repository joins it rather than opening a second store
-(`packages/cli/src/commands/validate.ts › runPhasesUnderOnePopulation()`). Its `checks` phase is the
+(`packages/cli/src/commands/validate.ts › runPhasesInOrder()`, inside `withRunContext()`). Its `checks` phase is the
 exception — a supervised child process (`vat resources check`'s), so it takes its own git snapshot,
 populates under its own scope and, on a miss, writes the store: a run is one in-process population
 plus the child's.

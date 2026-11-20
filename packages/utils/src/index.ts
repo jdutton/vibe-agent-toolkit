@@ -316,6 +316,9 @@ export {
 // Machine-independent string ordering for hashed/serialized output — never `localeCompare`.
 export { compareCodeUnits } from './compare-code-units.js';
 
+// A value shared by reference between readers: a write anywhere inside it throws.
+export { deepFreeze } from './deep-freeze.js';
+
 // The crawl-timing seam: which contributor, stratum and fixpoint pass owns the
 // time it takes to FIND documents.
 //
@@ -374,6 +377,7 @@ export {
   WORK_COUNTER_NAMES,
   WORK_COUNTER_ROLES,
   WORK_COUNTERS_ENV,
+  withWorkPhase,
   type ForbiddenWorkCountPolicy,
   type WorkCounter,
   type WorkCounterDump,

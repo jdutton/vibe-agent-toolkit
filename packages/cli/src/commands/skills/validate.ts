@@ -15,6 +15,7 @@ import { basename, dirname } from 'node:path';
 
 import {
   conventionalSuiteProbe,
+  RunSkillRegistries,
   validateSkillForPackaging,
   type DeclaredEvalSuite,
   type PackagingValidationResult,
@@ -23,11 +24,10 @@ import {
 } from '@vibe-agent-toolkit/agent-skills';
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
 import {
+  loadConfig as loadRootConfig,
   notAdmittedFindings,
   type ParseRefusedResource,
-  ResourceRegistry,
   type ProjectConfig,
-  type ResourcePopulationSource,
   type SkillsConfig,
 } from '@vibe-agent-toolkit/resources';
 import {
@@ -41,13 +41,12 @@ import {
   type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, mapInOrder, safePath } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, mapInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { gitFindRoot, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { DocumentFormat } from '../../report-schemas.js';
-import { refusalCodeOf } from '../../utils/command-refusal.js';
 import { loadConfig } from '../../utils/config-loader.js';
-import { endWithReport, NOTHING_FINISHED, refusalReport } from '../../utils/document-writer.js';
+import { endWithReport } from '../../utils/document-writer.js';
 import {
   formatIssueLines,
   formatRunIssueLines,
@@ -57,12 +56,12 @@ import {
 } from '../../utils/issue-rendering.js';
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
-import { crawlLaneDebugLine, withResourcePopulationSource } from '../../utils/resource-loader.js';
+import { resourcesProjectionCrawlSelected, type RunContext } from '../../utils/resource-loader.js';
 import { verdictBanner } from '../../utils/run-integrity.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../../utils/skill-quality-footer.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
-import type { PhaseOutcome } from '../phase-utils.js';
+import { refusedPhase, runInOwnRun, type PhaseOutcome } from '../phase-utils.js';
 
 import {
   filterSkillsByName,
@@ -426,68 +425,48 @@ function logSkillProgress(
   }
 }
 
-/**
- * Options for {@link buildSkillsValidateRegistry}.
- */
-export interface SkillsValidateRegistryOptions {
-  /**
-   * The project's configuration, or `undefined` for a project that has none.
-   *
-   * **Not optional in the sense of "nice to have".** A collection may declare a
-   * `mimeType` that overrides the extension tables and decides which parser runs
-   * over a file. `ResourceRegistry` routes through `resources.collections` when —
-   * and only when — it was handed a config; the projection lane behind
-   * `populationSource` reads those same declarations off the root. A registry
-   * built without the config therefore reaches a DIFFERENT verdict about whether
-   * a file is prose than the population that enumerated it, inside one command.
-   *
-   * Passed rather than re-read here so this lane cannot answer from a second,
-   * later parse of the same file.
-   */
-  config?: ProjectConfig | undefined;
-  /**
-   * Where the file list comes from — omit for the incumbent walk, supply one to
-   * source it from a projection instead. Enumeration only: `include` below is
-   * re-applied to whatever the source offers.
-   */
-  populationSource?: ResourcePopulationSource | undefined;
-}
+/** What `vat skills validate` crawls for the one project root its batch shares: markdown only. */
+const SHARED_ROOT_INCLUDE: readonly string[] = ['**/*.md'];
+
+/** What it crawls for any other root: markdown and HTML, as the packaging validator's own crawl does. */
+const OTHER_ROOT_INCLUDE: readonly string[] = ['**/*.md', '**/*.html', '**/*.htm'];
 
 /**
- * The markdown-only, link-resolved registry `vat skills validate` shares across
- * every skill in one invocation.
+ * The run's skill registries for a `vat skills validate` batch: one view of the
+ * run's registry per project root a skill resolves to.
  *
- * Exported and named because it had two implementations: this one, and a
- * restatement inside `pipeline-oracles/lanes.ts` whose own comment recorded that
- * it was "the one lane with no reusable builder to point at". A copy of a
- * registry builder is a copy of its ARGUMENTS, and the argument that matters
- * here is `config` — see {@link SkillsValidateRegistryOptions.config}.
+ * When every skill in the batch resolves to the same project root (the normal
+ * monorepo case), that root's view crawls markdown only, under the command's own
+ * config (it governs that root by construction: this command exits early without
+ * a config at `cwd`, every skill is discovered relative to `cwd`, and
+ * `findProjectRoot` stops at the nearest config). Any other root — a batch that
+ * spans several, a skill with no project root, which gets its own directory —
+ * crawls markdown and HTML under its own config (or none, when it will not
+ * parse: the per-skill validation reports that).
  *
- * @param projectRoot - Root every skill in the batch resolves to
- * @param options - The governing config, and optionally the projection-backed
- *   enumeration to build from
- * @returns A crawled registry whose links are already resolved
+ * Only the shared root's view enumerates through the run's population source: a
+ * batch that spans several roots walks every view, its home root's too, which is
+ * what each skill's own registry did before the run held them.
+ *
+ * @param run - The run
+ * @param sharedRoot - The one project root the batch shares, or `undefined`
+ * @param config - The command's own config
+ * @returns The run's skill registries
  */
-export async function buildSkillsValidateRegistry(
-  projectRoot: string,
-  options: SkillsValidateRegistryOptions = {},
-): Promise<ResourceRegistry> {
-  const { config, populationSource } = options;
-  const { registry } = await ResourceRegistry.fromCrawl(
-    {
-      baseDir: projectRoot,
-      include: ['**/*.md'],
-      // `vat skills validate` acts on this registry as the whole population: a
-      // directory it cannot list refuses the run by name, exit 2.
-      unreadable: 'refuse',
-      // It only reads the project.
-      outputs: [],
-      ...(populationSource !== undefined && { populationSource }),
-    },
-    config === undefined ? undefined : { config },
-  );
-  registry.resolveLinks();
-  return registry;
+export function skillsValidateRegistries(
+  run: RunContext,
+  sharedRoot: string | undefined,
+  config: ProjectConfig | undefined,
+): RunSkillRegistries {
+  const shared = sharedRoot === undefined ? undefined : toForwardSlash(safePath.resolve(sharedRoot));
+  return new RunSkillRegistries({
+    registry: run.registry,
+    // The run's source for the shared root only: a batch spanning several roots
+    // walks every root, its home root included, as each skill's own registry did.
+    source: shared !== undefined && resourcesProjectionCrawlSelected() ? run.population.source : undefined,
+    includeFor: (root) => (root === shared ? SHARED_ROOT_INCLUDE : OTHER_ROOT_INCLUDE),
+    configFor: (root) => (root === shared ? Promise.resolve(config) : loadRootConfig(root).catch(() => undefined)),
+  });
 }
 
 /**
@@ -509,6 +488,7 @@ export async function buildSharedValidationContext(
   projectSkills: readonly DeclaredEvalSuite[],
   config: ProjectConfig | undefined,
   logger: ReturnType<typeof createLogger>,
+  run: RunContext,
 ): Promise<SkillValidationSharedContext> {
   // The allow-entry ledger is not an optimization like the two below — it is
   // what makes ALLOW_UNUSED true. `validation.allow` is declared once for the
@@ -538,7 +518,7 @@ export async function buildSharedValidationContext(
   // lane must model a bundle that excludes EVERY declared suite, not just the
   // subject's. Present even for an empty batch, so no early return can drop it.
   if (skills.length === 0) {
-    return { allowLedger, projectSkills, suiteProbe, unreadable: 'refuse', outputs: [], dispatcher: undefined };
+    return { allowLedger, projectSkills, suiteProbe, registries: skillsValidateRegistries(run, undefined, config), unreadable: 'refuse', outputs: [], dispatcher: run.dispatcher };
   }
 
   const projectRoots = new Set<string>();
@@ -558,8 +538,19 @@ export async function buildSharedValidationContext(
     }
   }
 
+  // Only one shared root gets the markdown-only view; a batch spanning several crawls each per skill.
+  const sharedRoot = projectRoots.size === 1 ? [...projectRoots][0] : undefined;
+  if (sharedRoot === undefined) logger.debug(`No shared registry — batch spans ${projectRoots.size} project roots`);
   // Validation only reads the project.
-  const context: SkillValidationSharedContext = { allowLedger, projectSkills, suiteProbe, unreadable: 'refuse', outputs: [], dispatcher: undefined };
+  const context: SkillValidationSharedContext = {
+    allowLedger,
+    projectSkills,
+    suiteProbe,
+    registries: skillsValidateRegistries(run, sharedRoot, config),
+    unreadable: 'refuse',
+    outputs: [],
+    dispatcher: run.dispatcher,
+  };
 
   // One tracker per repo; when the batch spans repos, skip rather than spawn
   // multiple `git ls-files`.
@@ -579,42 +570,6 @@ export async function buildSharedValidationContext(
     }
   } else if (gitRoots.size > 1) {
     logger.debug(`Skipping shared tracker — batch spans ${gitRoots.size} git roots`);
-  }
-
-  // Only reuse a single registry when every skill shares the same project
-  // root. Otherwise the per-skill fallback path is correct and the cost is
-  // unchanged from the pre-refactor baseline.
-  if (projectRoots.size === 1) {
-    const [sharedRoot] = [...projectRoots];
-    if (sharedRoot !== undefined) {
-      logger.debug(`Building shared resource registry rooted at: ${sharedRoot}`);
-      // The lane, and the store that answers it, bracket the crawl and nothing
-      // else: the source is called from inside `fromCrawl` and nowhere after it.
-      // `include` is unchanged either way — `ResourceRegistry.crawl` re-applies
-      // it to whatever the source offers, so this stays a markdown-only registry
-      // on both lanes.
-      const registry = await withResourcePopulationSource(
-        { root: sharedRoot, gitTracker: context.gitTracker },
-        (populationSource) => {
-          logger.debug(crawlLaneDebugLine(populationSource));
-          return buildSkillsValidateRegistry(sharedRoot, {
-            // The command's OWN config, not a second read of the same file. It
-            // governs `sharedRoot` by construction: this command exits early
-            // without a config at `cwd`, every skill is discovered relative to
-            // `cwd`, and `findProjectRoot` stops at the nearest config — so the
-            // root every skill agrees on IS the root this config was loaded
-            // from. Withholding it routes parsing by the extension tables while
-            // the projection behind `populationSource` routes by the declared
-            // `mimeType`, and the two then disagree about which files are prose.
-            config,
-            ...(populationSource !== undefined && { populationSource }),
-          });
-        },
-      );
-      context.registry = registry;
-    }
-  } else {
-    logger.debug(`Skipping shared registry — batch spans ${projectRoots.size} project roots`);
   }
 
   return context;
@@ -660,12 +615,13 @@ async function validateConfiguredSkills(
   config: ProjectConfig,
   options: SkillsValidateCommandOptions,
   logger: ReturnType<typeof createLogger>,
+  run: RunContext,
 ): Promise<SkillsRun> {
   // `'refuse'`: one fewer skill at exit 0 is the drop this command must not
   // make. A directory the OS will not list is refused by code (INPUT_UNREADABLE).
   // A SKILL.md the parse worker refused has no name to key its config by: it is
   // reported through the not-admitted contract below, never validated under a guess.
-  const { skills: discovered, parseRefused } = await discoverSkillsFromConfig(skillsConfig, cwd, 'refuse');
+  const { skills: discovered, parseRefused } = await discoverSkillsFromConfig(skillsConfig, cwd, 'refuse', run.dispatcher);
 
   // No early return on `discovered.length === 0`: the empty batch flows through
   // every step below unchanged — the shared context is built for zero skills
@@ -686,7 +642,7 @@ async function validateConfiguredSkills(
   // Every declared skill, not just `skillsToValidate`: `--skill x` narrows what is
   // REPORTED on, never what counts as some skill's declared test input.
   const projectSkills = collectDeclaredEvalSuites(skillsConfig, discovered);
-  const sharedContext = await buildSharedValidationContext(skillsToValidate, projectSkills, config, logger);
+  const sharedContext = await buildSharedValidationContext(skillsToValidate, projectSkills, config, logger, run);
   // The one config a file not admitted is resolved under — this command's own, never a second read.
   const resourcesValidation = config.resources?.validation ?? {};
 
@@ -742,7 +698,8 @@ async function validateConfiguredSkills(
  */
 export async function runSkillsValidatePhase(
   pathArg: string | undefined,
-  options: SkillsValidateCommandOptions
+  options: SkillsValidateCommandOptions,
+  run: RunContext,
 ): Promise<PhaseOutcome> {
   const { logger, cwd, startTime } = setupCommandContext(pathArg, options.debug);
 
@@ -756,7 +713,7 @@ export async function runSkillsValidatePhase(
     const config = loadConfig(cwd, 'source');
     const { results, runIssues, refused } = config?.skills === undefined
       ? { results: [], runIssues: [], refused: 0 }
-      : await validateConfiguredSkills(config.skills, cwd, config, options, logger);
+      : await validateConfiguredSkills(config.skills, cwd, config, options, logger, run);
 
     const report = buildSkillsValidateReport({
       root: cwd,
@@ -769,16 +726,28 @@ export async function runSkillsValidatePhase(
     if (report.examined === 0) logger.error(nothingDiscoveredLine(config?.skills));
     return { report };
   } catch (error) {
-    return { report: refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED) };
+    return refused(error);
   }
 }
 
+/** The phase's outcome when the run refused, under this verb's gate. */
+function refused(error: unknown): PhaseOutcome {
+  return refusedPhase(error, GATE);
+}
+
 /**
- * Skills validate command implementation
+ * Skills validate command implementation: one run, rooted at the project root
+ * `cwd` resolves to (or `cwd` itself, which the phase then refuses).
  */
 export async function validateCommand(
   pathArg: string | undefined,
   options: SkillsValidateCommandOptions
 ): Promise<void> {
-  endWithReport('skills validate', (await runSkillsValidatePhase(pathArg, options)).report, FORMAT);
+  const start = pathArg === undefined ? process.cwd() : safePath.resolve(pathArg);
+  const { report } = await runInOwnRun(
+    () => findProjectRoot(start) ?? start,
+    (run) => runSkillsValidatePhase(pathArg, options, run),
+    GATE,
+  );
+  endWithReport('skills validate', report, FORMAT);
 }

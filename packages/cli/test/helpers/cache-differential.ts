@@ -594,7 +594,7 @@ type SeedExpectation =
   | { readonly diverges: { readonly relations: readonly string[]; readonly verbs: readonly VerbName[] } }
   | { readonly refuses: { readonly cause: AbsenceMember; readonly perVerb: Readonly<Partial<Record<VerbName, number>>> } }
   | { readonly agreesAndMisses: { readonly arm: ArmName } }
-  | { readonly documentsHole: { readonly arm: ArmName; readonly closedBy: string } };
+  | { readonly documentsHole: { readonly arm: ArmName; readonly because: string } };
 
 /** The recorded runs, by label and verb. */
 export type RecordedRuns = Readonly<Partial<Record<RunLabel, Readonly<Partial<Record<VerbName, RunRecord>>>>>>;
@@ -1226,7 +1226,7 @@ export function corpusBytes(corpus: string, path: string): Buffer {
  */
 export function seedTitle(seed: I0Seed): string {
   const expectation = seed.expect;
-  if ('documentsHole' in expectation) return `${seed.name} documents the hole: closed by ${expectation.documentsHole.closedBy}`;
+  if ('documentsHole' in expectation) return `${seed.name} documents the hole: ${expectation.documentsHole.because}`;
   return `${seed.name}: ${Object.keys(expectation)[0] ?? ''}`;
 }
 

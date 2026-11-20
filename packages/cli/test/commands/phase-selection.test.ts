@@ -54,6 +54,7 @@ import {
   selectVerifyPhases,
 } from '../../src/commands/verify.js';
 import { reportShapeFor, type ReportVerb } from '../../src/report-schemas.js';
+import type { RunContext } from '../../src/utils/resource-loader.js';
 import { type ExaminedDeclaration, withRunIntegrity } from '../../src/utils/run-integrity.js';
 import { fakePluginLocalIndex } from '../helpers/plugin-local-fixture.js';
 import { silentLogger } from '../test-doubles.js';
@@ -163,9 +164,14 @@ const CONFIG_BOTH = {
   skills: { include: [SKILL_GLOB] },
 } as unknown as ProjectConfig;
 const CONFIG_EMPTY = {} as unknown as ProjectConfig;
+/**
+ * The run every in-process phase reads through. Never read: the phases are stubbed, so an opaque
+ * sentinel is enough to prove each phase is handed the run the orchestrator was given.
+ */
+const RUN = { sentinel: 'run-context' } as unknown as RunContext;
 /** The root a `vat validate` run resolved (never touched on disk: the phases are stubbed), and the run's flags. */
 const VALIDATE_ROOT = safePath.join(normalizedTmpdir(), 'resolved-project-root');
-const VALIDATE_RUN = { root: VALIDATE_ROOT, verbose: false, debug: false, base: undefined } as const;
+const VALIDATE_RUN = { root: VALIDATE_ROOT, verbose: false, debug: false, base: undefined, context: RUN } as const;
 /** What a config that exists but does not parse hands back to the orchestrator. */
 const BROKEN_CONFIG_ERROR = 'Failed to load config: bad yaml';
 const CONFIG_MARKETPLACE = {
@@ -178,20 +184,20 @@ describe('selectVerifyPhases', () => {
     // Config-gating is what closed the headline incoherence (a `verify` run
     // claiming coverage of a surface its config does not declare). `--only` is
     // gone; the gating it exposed is not.
-    expect(phaseNames(selectVerifyPhases(CONFIG_RESOURCES_ONLY))).toEqual(['resources']);
-    expect(phaseNames(selectVerifyPhases(CONFIG_SKILLS_ONLY))).toEqual(['skills']);
-    expect(phaseNames(selectVerifyPhases(CONFIG_BOTH))).toEqual(['resources', 'skills']);
+    expect(phaseNames(selectVerifyPhases(CONFIG_RESOURCES_ONLY, RUN))).toEqual(['resources']);
+    expect(phaseNames(selectVerifyPhases(CONFIG_SKILLS_ONLY, RUN))).toEqual(['skills']);
+    expect(phaseNames(selectVerifyPhases(CONFIG_BOTH, RUN))).toEqual(['resources', 'skills']);
   });
 
   it('includes one subprocess phase per configured marketplace', () => {
-    expect(phaseNames(selectVerifyPhases(CONFIG_MARKETPLACE))).toEqual([
+    expect(phaseNames(selectVerifyPhases(CONFIG_MARKETPLACE, RUN))).toEqual([
       'skills',
       'marketplace:test-tools',
     ]);
   });
 
   it('is a warned no-op when nothing at all is configured', () => {
-    const selection = selectVerifyPhases(CONFIG_EMPTY);
+    const selection = selectVerifyPhases(CONFIG_EMPTY, RUN);
 
     expect(selection.kind).toBe('noop');
   });
@@ -201,16 +207,16 @@ describe('selectVerifyPhases', () => {
     // it declares. Run the children and let THEM report the config error
     // (exit 2), rather than answering an unknown with a confident "not
     // configured".
-    expect(phaseNames(selectVerifyPhases(undefined, BROKEN_CONFIG_ERROR))).toEqual([
+    expect(phaseNames(selectVerifyPhases(undefined, RUN, BROKEN_CONFIG_ERROR))).toEqual([
       'resources',
       'skills',
     ]);
   });
 
   it('passes verbose: false to every phase by default', async () => {
-    await invokeAll(selectVerifyPhases(CONFIG_MARKETPLACE));
+    await invokeAll(selectVerifyPhases(CONFIG_MARKETPLACE, RUN));
 
-    expect(runSkillsValidatePhase).toHaveBeenCalledWith(undefined, { verbose: false });
+    expect(runSkillsValidatePhase).toHaveBeenCalledWith(undefined, { verbose: false }, RUN);
     expect(runMarketplaceValidatePhase).toHaveBeenCalledWith(
       'dist/.claude/plugins/marketplaces/test-tools',
       { verbose: false },
@@ -222,9 +228,9 @@ describe('selectVerifyPhases', () => {
     // verbatim, so the only way it can ask for the detailed form is to relay the
     // request. A phase left off silently keeps its compact default while the
     // operator believes they asked the whole run for detail.
-    await invokeAll(selectVerifyPhases(CONFIG_MARKETPLACE, undefined, true));
+    await invokeAll(selectVerifyPhases(CONFIG_MARKETPLACE, RUN, undefined, true));
 
-    expect(runSkillsValidatePhase).toHaveBeenCalledWith(undefined, { verbose: true });
+    expect(runSkillsValidatePhase).toHaveBeenCalledWith(undefined, { verbose: true }, RUN);
     expect(runMarketplaceValidatePhase).toHaveBeenCalledWith(
       'dist/.claude/plugins/marketplaces/test-tools',
       { verbose: true },
@@ -232,10 +238,10 @@ describe('selectVerifyPhases', () => {
   });
 
   it('forwards verbose to the resources phase too', async () => {
-    await invokeAll(selectVerifyPhases(CONFIG_BOTH, undefined, true));
+    await invokeAll(selectVerifyPhases(CONFIG_BOTH, RUN, undefined, true));
 
-    expect(runResourcesValidatePhase).toHaveBeenCalledWith(undefined, { verbose: true });
-    expect(runSkillsValidatePhase).toHaveBeenCalledWith(undefined, { verbose: true });
+    expect(runResourcesValidatePhase).toHaveBeenCalledWith(undefined, { verbose: true }, RUN);
+    expect(runSkillsValidatePhase).toHaveBeenCalledWith(undefined, { verbose: true }, RUN);
   });
 
   it('binds each marketplace phase to its OWN path, not the last one in the loop', async () => {
@@ -247,7 +253,7 @@ describe('selectVerifyPhases', () => {
       claude: { marketplaces: { alpha: {}, beta: {} } },
     } as unknown as ProjectConfig;
 
-    await invokeAll(selectVerifyPhases(twoMarketplaces));
+    await invokeAll(selectVerifyPhases(twoMarketplaces, RUN));
 
     expect(vi.mocked(runMarketplaceValidatePhase).mock.calls.map((c) => c[0])).toEqual([
       'dist/.claude/plugins/marketplaces/alpha',
@@ -273,7 +279,7 @@ describe('each delegated phase names its verb\'s registered schema', () => {
   };
 
   it.each([
-    ['vat verify', () => selectVerifyPhases({ ...CONFIG_BOTH, claude: CONFIG_MARKETPLACE.claude } as ProjectConfig)],
+    ['vat verify', () => selectVerifyPhases({ ...CONFIG_BOTH, claude: CONFIG_MARKETPLACE.claude } as ProjectConfig, RUN)],
     ['vat validate', () => selectValidateSurfaces(CONFIG_BOTH, VALIDATE_RUN)],
   ])('%s', (_label, select) => {
     const phases = runPhases(select());
@@ -325,7 +331,7 @@ describe('every orchestrated phase is judged as its verb judges itself alone', (
   const PHASES: Readonly<Record<keyof typeof EXPECTED, () => ReadonlyArray<Pick<Phase, 'name' | 'examined'>>>> = {
     validate: () => runPhases(selectValidateSurfaces(CONFIG_BOTH, VALIDATE_RUN)),
     verify: () => [
-      ...runPhases(selectVerifyPhases({ ...CONFIG_BOTH, claude: CONFIG_MARKETPLACE.claude } as ProjectConfig)),
+      ...runPhases(selectVerifyPhases({ ...CONFIG_BOTH, claude: CONFIG_MARKETPLACE.claude } as ProjectConfig, RUN)),
       ...Object.values(IN_PROCESS_PHASES),
     ],
     build: () => [...runPhases(selectBuildPhases(undefined, BOTH_SURFACES)), shippedLinksPhase(process.cwd())],
@@ -420,7 +426,7 @@ describe('decidePhaseSelection', () => {
 describe('formatVerifyAnnouncement', () => {
   /** The announcement for a config, built from that run's own selection. */
   const announce = (config: ProjectConfig): string =>
-    formatVerifyAnnouncement(phaseNames(selectVerifyPhases(config)), config);
+    formatVerifyAnnouncement(phaseNames(selectVerifyPhases(config, RUN)), config);
 
   it('names the in-process phases a run also executes', () => {
     // The announcement used to list the DELEGATED phases only, so a run

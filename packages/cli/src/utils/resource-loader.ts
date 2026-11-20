@@ -8,14 +8,17 @@ import {
   DEFAULT_RESOURCE_INCLUDE,
   gitExtentSelected,
   ResourceRegistry,
+  withPopulationRun,
+  withRunPopulation,
   type CrawlOptions,
   type CrawlPopulation,
   type CrawlSourceKind,
+  type ParseDispatcher,
   type PopulationCache,
   type PopulationOutcome,
   type ProjectConfig,
   type ResourcePopulationSource,
-  type ResourceRegistryOptions,
+  type RunPopulation,
 } from '@vibe-agent-toolkit/resources';
 import { relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { GitTracker, gitTreeSnapshot } from '@vibe-agent-toolkit/utils/git';
@@ -25,7 +28,103 @@ import { loadConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
 import { collectionsOption } from './population-wiring.js';
 import { assertDirectoryArgument } from './project-root-policy.js';
-import { withPopulationCache } from './projection-store.js';
+import { withLazyPopulationCache, withPopulationCache } from './projection-store.js';
+
+/**
+ * One VAT process run's shared population, registry and parse dispatcher: what
+ * every phase of the run reads through, so each file is read, keyed, parsed and
+ * admitted once per run whichever phase asks (rule 4 of "Decision: content
+ * identity is per source", `docs/architecture/content-keying-and-git.md`).
+ *
+ * Built with {@link withRunContext} by `vat validate`, `vat verify`,
+ * `vat resources validate`, `vat skills validate` and `vat resources scan`, and
+ * required by every phase runner of those verbs: there is no phase that builds a
+ * registry of its own beside it. `vat rag index` opens one too, but its index
+ * step re-reads each file. `vat audit`, `vat skills build`,
+ * `vat claude plugin build` and `vat ard emit` open none, and still read a file
+ * once per lane that asks.
+ */
+export interface RunContext {
+  /** The run's population: one read, key, parse and admission per file, and each root's enumeration. */
+  readonly population: RunPopulation;
+  /**
+   * The run's registry. A phase never crawls it: it crawls a `view` of it under
+   * its own base directory, config and include set (see `ResourceRegistry.view`).
+   */
+  readonly registry: ResourceRegistry;
+  /** The run's one parse dispatcher, which the run shuts down. */
+  readonly dispatcher: ParseDispatcher;
+}
+
+/** The errors that refuse a whole run, by identity: see {@link isRunRefusal}. */
+const runRefusals = new WeakSet<object>();
+
+/**
+ * Mark `error` as the run's refusal, so no phase claims it as its own.
+ *
+ * @param error - What refused the run
+ * @returns `error`, marked when it is an object
+ */
+function markRunRefusal(error: unknown): unknown {
+  if (typeof error === 'object' && error !== null) runRefusals.add(error);
+  return error;
+}
+
+/**
+ * Whether `error` refuses the whole run rather than the phase it surfaced in: the
+ * run's projection store would not open (a read-only `VAT_CACHE_DIR`, say). The
+ * store opens on the run's first enumeration and every later enumeration is
+ * answered by that same refusal, so it is the run's, said once (`orchestrate`),
+ * never once per phase that enumerates. A phase runner rethrows it.
+ *
+ * @param error - A phase's error
+ * @returns Whether it is the run's refusal
+ */
+export function isRunRefusal(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && runRefusals.has(error);
+}
+
+/**
+ * Run one verb's work with its {@link RunContext}, inside the projection-store
+ * scope that answers it.
+ *
+ * Opening the run reads no file, opens no store and takes no snapshot. The first
+ * enumeration of the home root (inside whichever phase asks first) opens the
+ * store, takes the snapshot that keys it and initializes the root's ignore
+ * oracle; so a phase that refuses at its own guards, or finds nothing to check,
+ * refuses or reports exactly as it would alone. A git refusal is the refusal of
+ * the phase that enumerated; a store that will not open is the run's refusal
+ * ({@link isRunRefusal}), said once, and no later phase runs.
+ * What can still fail here is the parse dispatcher's shutdown when the run ends.
+ *
+ * @param options - The run's home root, and an ignore oracle to reuse
+ * @param work - The verb's work
+ * @returns Whatever `work` returned
+ */
+export function withRunContext<T>(
+  options: { readonly root: string; readonly gitTracker?: GitTracker | undefined },
+  work: (run: RunContext) => Promise<T>,
+): Promise<T> {
+  const root = safePath.resolve(options.root);
+  const gitTracker = options.gitTracker ?? new GitTracker(root);
+  return withLazyPopulationCache({ root }, (cacheOf) =>
+    withRunPopulation(
+      {
+        root,
+        gitTracker,
+        cacheOf: () => cacheOf().catch((error: unknown) => {
+          throw markRunRefusal(error);
+        }),
+        collectionsFor: (enumerated) => Promise.resolve(collectionsOption(enumerated).collections),
+      },
+      (population) => work({
+        population,
+        registry: ResourceRegistry.forRun(population, { baseDir: root, gitTracker }),
+        dispatcher: population.dispatcher,
+      }),
+    ),
+  );
+}
 
 /**
  * Which enumerator produced a load's population.
@@ -351,10 +450,15 @@ function populationSourceFor(
   return {
     root: safePath.resolve(root),
     // `outputs` come from the crawl that asks (the registry's one declaration of what its verb writes).
-    enumerate: (enumeratedRoot: string, outputs: readonly string[]) =>
+    // Each enumeration reads and parses through a run of its own, held only while
+    // it enumerates: these verbs (`vat build`'s phases) are not one-admission runs
+    // yet, and a run held across the whole build is a parse pool held beside every
+    // registry's own.
+    enumerate: (enumeratedRoot: string, outputs: readonly string[]) => withPopulationRun((run) =>
       buildResourcePopulation({
         root: enumeratedRoot,
         outputs,
+        run,
         // `enumeratedRoot` and this source's own `root` are the SAME directory,
         // always: `populationFrom` compares them and declines outright when they
         // differ, so `enumerate` is never called for another tree. Reading the
@@ -365,7 +469,7 @@ function populationSourceFor(
         gitTracker,
         ...(cache !== undefined && { cache }),
         ...collectionsOption(enumeratedRoot),
-      }),
+      })),
   };
 }
 
@@ -375,8 +479,7 @@ function populationSourceFor(
  *
  * The lane-selection seam for every command that builds its OWN registry rather
  * than going through {@link loadResourcesWithConfig} — `vat skills build` and
- * `vat claude plugin build` (via `createProjectRegistry`) and
- * `vat skills validate` (via its shared-context registry). Those three are what
+ * `vat claude plugin build` (via `createProjectRegistry`). Those two are what
  * put `vat build` on the projection lane at all: before this, that verb reached
  * a projection store on NO phase.
  *
@@ -454,21 +557,25 @@ export function withResourcePopulationSource<T>(
  * - When the path argument lies outside the project root, the config's patterns
  *   describe a different tree: they are dropped, with a warning.
  *
- * Per CLI-boundary rule (spec §5): `projectRoot` MUST be resolved by the
- * caller using one of the policy helpers in `project-root-policy.ts`. This
- * function does not call `findProjectRoot` itself.
+ * The project root is the run's (`run.population.root`), which the caller
+ * resolved at the CLI boundary with one of the policy helpers in
+ * `project-root-policy.ts`. The registry is a view of the run's
+ * (`ResourceRegistry.view`), so every file is read, keyed, parsed and admitted
+ * once per run whichever phase asks.
  *
  * @param pathArg - Path argument from CLI (optional)
- * @param projectRoot - Pre-resolved project root from the CLI boundary
+ * @param run - The run this load is one phase of
  * @param logger - Logger instance
  * @returns Resource load result with registry, metadata and the population the
  *   crawl returned
  */
 export async function loadResourcesWithConfig(
   pathArg: string | undefined,
-  projectRoot: string,
+  run: RunContext,
   logger: Logger,
 ): Promise<ResourceLoadResult> {
+  const projectRoot = run.population.root;
+  const { gitTracker } = run.population;
   // Config lookup is anchored at the resolved projectRoot.
   const config = loadConfig(projectRoot, 'source');
 
@@ -476,11 +583,6 @@ export async function loadResourcesWithConfig(
     logger.debug(`Loaded config from ${projectRoot}`);
     assertLinkAuthProvidersCompile(config);
   }
-
-  // Built here, but deliberately NOT initialized here — see the call inside the
-  // population-cache bracket below. The registry only reads the tracker during
-  // `crawl`, which happens inside that bracket, so nothing observes it empty.
-  const gitTracker = new GitTracker(projectRoot);
 
   // Create registry and crawl
   // Build options conditionally to satisfy exactOptionalPropertyTypes.
@@ -494,12 +596,11 @@ export async function loadResourcesWithConfig(
   // lane ran and the run reported success. Every read inside the registry is
   // already `this.config?.resources?.<key>`-guarded, so an undeclared key costs
   // nothing; a key-gate here can only ever hide the next consumer the same way.
-  const registryOptions: ResourceRegistryOptions = {
+  const registry = run.registry.view({
     baseDir: projectRoot,
     gitTracker,
     ...(config === undefined ? {} : { config }),
-  };
-  const registry = new ResourceRegistry(registryOptions);
+  });
 
   let crawlOptions: CrawlOptions;
 
@@ -526,11 +627,9 @@ export async function loadResourcesWithConfig(
 
   // Which lane enumerates. Applied to the options both branches above produced,
   // so the path-argument case and the whole-root case cannot end up on different
-  // crawlers — the bug shape this file already carries one fix for.
-  // The store brackets the crawl and is closed however the crawl ends. Nothing
-  // outside this bracket can reach it: the population source is called from
-  // inside `registry.crawl` and nowhere else.
-  const population = await withPopulationCache({ root: projectRoot }, async (cache) => {
+  // crawlers — the bug shape this file already carries one fix for. The run's
+  // store brackets the whole run (see {@link withRunContext}).
+  const population = await (async () => {
     // The git enumerator takes a `gitTreeSnapshot` during the crawl below no matter
     // what. Taking it HERE instead is the same snapshot moved a few lines earlier —
     // the open bracket memoizes it, so the enumerator's own call becomes a lookup —
@@ -560,7 +659,7 @@ export async function loadResourcesWithConfig(
     await gitTracker.initialize();
     logger.debug(`GitTracker initialized with ${gitTracker.getStats().cacheSize} tracked files`);
 
-    const populationSource = populationSourceFor(projectRoot, gitTracker, cache);
+    const populationSource = resourcesProjectionCrawlSelected() ? run.population.source : undefined;
     logger.debug(crawlLaneDebugLine(populationSource));
     if (populationSource) {
       crawlOptions = { ...crawlOptions, populationSource };
@@ -569,7 +668,7 @@ export async function loadResourcesWithConfig(
     // Read off what the crawl RETURNED, so a crawl that declined the source
     // reports the walk it actually took — with no enumerator.
     return (await registry.crawl(crawlOptions)).population;
-  });
+  })();
 
   return {
     scanPath: pathArg ?? projectRoot,

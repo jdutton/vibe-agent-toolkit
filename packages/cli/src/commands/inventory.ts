@@ -16,7 +16,7 @@ import {
 	projectionCrawlSelected,
 	type SharedPopulationSource,
 } from '@vibe-agent-toolkit/claude-marketplace';
-import { type PopulationCache } from '@vibe-agent-toolkit/resources';
+import { type PopulationCache, withPopulationRun } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Gate, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { everywhere, findProjectRoot, pathPresent, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
@@ -303,12 +303,14 @@ function populationProviderFor(
 ): SharedPopulationSource | undefined {
 	if (!projectionCrawlSelected()) return undefined;
 	if (projectRoot === null) return undefined;
-	return (skillMdPaths) => populateAndReport(
-		{ root: projectRoot, cache, logger, population: 'inventory' },
+	// The extractor memoizes this provider, so it runs once per inventory: one
+	// population run, each file read and parsed once, however many skills it answers.
+	return (skillMdPaths) => withPopulationRun((run) => populateAndReport(
+		{ root: projectRoot, run, cache, logger, population: 'inventory' },
 		(wiring) => buildInventoryPopulation({ root: projectRoot, skillMdPaths, ...wiring }),
 		(population) => population.refusalRows,
 		(population) => population.storeMiss,
-	);
+	));
 }
 
 /**

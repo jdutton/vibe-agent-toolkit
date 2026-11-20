@@ -16,6 +16,7 @@ import { ORCHESTRATOR_GATE, type Phase, phaseVerdict, type PhaseSelection } from
 import { selectValidateSurfaces } from '../../src/commands/validate.js';
 import { selectVerifyPhases } from '../../src/commands/verify.js';
 import { loadConfig } from '../../src/utils/config-loader.js';
+import type { RunContext } from '../../src/utils/resource-loader.js';
 import { pluginSkillDir, writeProjectConfig, writeSkillProject } from '../helpers/plugin-local-fixture.js';
 import { createTempDirTracker } from '../system/test-common.js';
 
@@ -50,10 +51,13 @@ function skillsPhaseOf(select: (root: string) => PhaseSelection, root: string): 
 /** A `skills` phase that finished cleanly over an empty pool. */
 const zero = buildReport({ examined: 0, findings: [], data: null, gate: ORCHESTRATOR_GATE });
 
+/** The run the selected phases would read through: never read, since no phase here is run. */
+const UNREAD_RUN = {} as unknown as RunContext;
+
 const ORCHESTRATORS: ReadonlyArray<readonly [name: string, select: (root: string) => PhaseSelection]> = [
   ['vat build', (root) => selectBuildPhases(undefined, configuredBuildSurfaces(root))],
-  ['vat validate', (root) => selectValidateSurfaces(loadConfig(root, 'source'), { root, verbose: false, debug: false, base: undefined })],
-  ['vat verify', (root) => selectVerifyPhases(loadConfig(root, 'source'))],
+  ['vat validate', (root) => selectValidateSurfaces(loadConfig(root, 'source'), { root, verbose: false, debug: false, base: undefined, context: UNREAD_RUN })],
+  ['vat verify', (root) => selectVerifyPhases(loadConfig(root, 'source'), UNREAD_RUN)],
 ];
 
 describe.each(ORCHESTRATORS)('%s over a pool include that matches nothing', (_name, select) => {

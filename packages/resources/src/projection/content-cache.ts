@@ -104,6 +104,13 @@ export interface ContentCacheStats {
  */
 export class RunContentCache {
   readonly #entries = new Map<string, KeyedContent>();
+  /**
+   * Each size refusal this run gave, by the same key: a file past the cap is
+   * refused once per run, by its size and before a byte is read, and every later
+   * lane that asks is handed the same refusal rather than a second `stat` and a
+   * second count of it. Any other read failure is not held (see {@link read}).
+   */
+  readonly #refused = new Map<string, unknown>();
   #hits = 0;
   #misses = 0;
   #bytesHeld = 0;
@@ -142,7 +149,8 @@ export class RunContentCache {
    * records a null key) has already handled it.
    *
    * A file of a parsed kind past the run's input cap is refused by its size and never read, as
-   * the parse would refuse it ({@link isSizeRefusal}); like any failed read, nothing is held.
+   * the parse would refuse it ({@link isSizeRefusal}); that refusal is held, so the run refuses the
+   * file once and every later lane is handed the same refusal.
    *
    * @param absolutePath - Absolute path to read
    * @param parserKind - The parser these bytes will actually be handed to
@@ -158,11 +166,19 @@ export class RunContentCache {
       return held;
     }
 
+    if (this.#refused.has(key)) throw this.#refused.get(key);
+
     this.#misses += 1;
     // The population's own cap, never a caller's: the dispatcher, the store key and the refusal
     // sentence read the same {@link POPULATION_PARSE_LIMITS}, so no run reads past the cap on one
     // lane and refuses at it on the next.
-    const keyed = await readContentWithKey(absolutePath, parserKind, POPULATION_PARSE_LIMITS.inputBytes);
+    let keyed: KeyedContent;
+    try {
+      keyed = await readContentWithKey(absolutePath, parserKind, POPULATION_PARSE_LIMITS.inputBytes);
+    } catch (error) {
+      if (isSizeRefusal(error)) this.#refused.set(key, error);
+      throw error;
+    }
     this.#entries.set(key, keyed);
     this.#bytesHeld += keyed.byteLength;
     return keyed;

@@ -48,6 +48,18 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * the rows of the relations the run's statements name. `statement.explained`
  * counts every `EXPLAIN` the SQL gate prepares — one per gated statement, and
  * the four virtual-table reference reads each handle makes when it is opened.
+ *
+ * `content.read` counts a member file's bytes read to be keyed (`readContentWithKey`),
+ * one per read that returned bytes; a read refused at the input cap is
+ * `parse.refused.inputCap.read` instead. `registry.built` counts every resource
+ * registry constructed, and `registry.admitted` every resource a registry admitted
+ * from disk (a crawl or `addResource`), never one handed to `fromResources`.
+ * `fs.stat` counts the per-member stats on the admission path: the population's
+ * `lstat` (and, for a link, its followed `stat`) of each member, and the
+ * registry's stat of each file it prepares.
+ * Together they let a test pin rule 4 of "Decision: content identity is per
+ * source" (docs/architecture/content-keying-and-git.md): one read, one key and
+ * one admission per file per run.
  */
 export const WORK_COUNTER_NAMES = [
   'store.rows.decoded.persistent',
@@ -69,6 +81,10 @@ export const WORK_COUNTER_NAMES = [
   'parse.refused.load',
   'content.hashed',
   'content.hashedBytes',
+  'content.read',
+  'fs.stat',
+  'registry.built',
+  'registry.admitted',
   'git.calls',
 ] as const;
 
@@ -95,6 +111,11 @@ export interface WorkCounterDump {
   readonly pid: number;
   readonly role: WorkCounterRole;
   readonly counters: Readonly<Record<WorkCounter, number>>;
+  /**
+   * The same counts split by the phase they were counted in ({@link withWorkPhase}),
+   * one entry per phase that ran; work outside every phase is in `counters` only.
+   */
+  readonly phases: Readonly<Record<string, Readonly<Record<WorkCounter, number>>>>;
 }
 
 /** The variable naming the directory a process writes its dump to. Counting does not depend on it. */
@@ -111,6 +132,12 @@ const SLOT = new Map<string, number>(WORK_COUNTER_NAMES.map((name, slot) => [nam
 
 /** The counts, one slot per {@link WORK_COUNTER_NAMES} entry. Per thread, as every module state is. */
 const counts = new Float64Array(WORK_COUNTER_NAMES.length);
+
+/** Each phase's counts, by phase name, in the order the phases first ran. */
+const phaseCounts = new Map<string, Float64Array>();
+
+/** The phase counting now, if any ({@link withWorkPhase}). */
+let currentPhase: Float64Array | null = null;
 
 /** Set by {@link forbidWorkCounting}: this thread's work is counted by another. */
 let forbidden = false;
@@ -155,6 +182,47 @@ export function countWork(counter: WorkCounter, n: number): void {
     return;
   }
   counts[slot] = (counts[slot] ?? 0) + n;
+  if (currentPhase !== null) currentPhase[slot] = (currentPhase[slot] ?? 0) + n;
+}
+
+/**
+ * Attribute every count `work` makes to a named phase as well as to the process.
+ *
+ * Phases are sequential: a phase opened inside another replaces it for its
+ * duration and restores it after, so an orchestrator that awaits one phase
+ * before the next attributes each count to exactly one phase. Counting stays on
+ * either way; the phase only adds a split to the dump.
+ *
+ * @param phase - The phase's name, as the dump reports it
+ * @param work - The phase's work
+ * @returns Whatever `work` returned
+ */
+export async function withWorkPhase<T>(phase: string, work: () => Promise<T>): Promise<T> {
+  let slots = phaseCounts.get(phase);
+  if (slots === undefined) {
+    slots = new Float64Array(WORK_COUNTER_NAMES.length);
+    phaseCounts.set(phase, slots);
+  }
+  const outer = currentPhase;
+  currentPhase = slots;
+  try {
+    return await work();
+  } finally {
+    currentPhase = outer;
+  }
+}
+
+/**
+ * One slot array as a record, every counter present.
+ *
+ * @param slots - Counts by slot
+ * @returns Counts by name
+ */
+function countsOf(slots: Float64Array): Record<WorkCounter, number> {
+  return Object.fromEntries(WORK_COUNTER_NAMES.map((name, slot) => [name, slots[slot] ?? 0])) as Record<
+    WorkCounter,
+    number
+  >;
 }
 
 /**
@@ -163,10 +231,16 @@ export function countWork(counter: WorkCounter, n: number): void {
  * @returns A snapshot; later counts do not change it
  */
 export function readWorkCounters(): Readonly<Record<WorkCounter, number>> {
-  return Object.fromEntries(WORK_COUNTER_NAMES.map((name, slot) => [name, counts[slot] ?? 0])) as Record<
-    WorkCounter,
-    number
-  >;
+  return countsOf(counts);
+}
+
+/**
+ * This thread's counts per phase ({@link withWorkPhase}).
+ *
+ * @returns A snapshot, one entry per phase that has run
+ */
+function readWorkCountersByPhase(): Readonly<Record<string, Readonly<Record<WorkCounter, number>>>> {
+  return Object.fromEntries([...phaseCounts].map(([phase, slots]) => [phase, countsOf(slots)]));
 }
 
 /**
@@ -199,7 +273,7 @@ export function forbiddenWorkCountPolicy(): ForbiddenWorkCountPolicy {
  * @returns The body
  */
 function buildDump(role: WorkCounterRole): WorkCounterDump {
-  return { pid: process.pid, role, counters: readWorkCounters() };
+  return { pid: process.pid, role, counters: readWorkCounters(), phases: readWorkCountersByPhase() };
 }
 
 /**
@@ -232,6 +306,8 @@ export function installWorkCounterDump(role: WorkCounterRole): void {
  */
 export function __resetWorkCountersForTest(): void {
   counts.fill(0);
+  phaseCounts.clear();
+  currentPhase = null;
   forbidden = false;
   forbiddenPolicy = 'report';
   reportedForbidden = false;

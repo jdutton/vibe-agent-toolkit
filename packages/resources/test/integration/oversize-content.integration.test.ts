@@ -110,51 +110,50 @@ describe('readContentWithKey holds a parsed kind to the input cap at its boundar
 });
 
 /**
- * A dispatcher whose pool records being asked for, and is never built.
+ * A dispatcher whose pool records being asked for, and is never built. Its input cap is the one
+ * every dispatcher runs under (`POPULATION_PARSE_LIMITS`): no caller can name another.
  *
- * @param inputBytes - The input cap, or the default
  * @returns The dispatcher and how many pools it asked for
  */
-function capOnlyDispatcher(inputBytes?: number): { dispatcher: ParseDispatcher; poolsAsked: () => number } {
+function capOnlyDispatcher(): { dispatcher: ParseDispatcher; poolsAsked: () => number } {
   let asked = 0;
   const dispatcher = new ParseDispatcher(new ParseCache({ enabled: false }), {
     createPool: () => {
       asked += 1;
       throw new Error('the input cap must refuse before any pool is asked for');
     },
-    ...(inputBytes !== undefined && { limits: { inputBytes } }),
   });
   return { dispatcher, poolsAsked: () => asked };
 }
 
+/**
+ * Parse a sparse file of `size` bytes through a {@link capOnlyDispatcher} and expect the input cap's
+ * refusal, with no pool ever asked for.
+ *
+ * @param name - The file's name under the root
+ * @param size - Its size in bytes, past the cap
+ */
+async function expectCapRefusal(name: string, size: number): Promise<void> {
+  const file = await sparse(name, size);
+  const { dispatcher, poolsAsked } = capOnlyDispatcher();
+
+  try {
+    await expect(parseFileCached(file, 'markdown', { dispatcher })).rejects.toMatchObject({
+      code: 'PARSE_LIMIT_EXCEEDED', limit: 'inputBytes', bound: new ParseLimitError('inputBytes', POPULATION_PARSE_LIMITS.inputBytes).bound,
+    });
+  } finally {
+    await dispatcher.shutdown();
+  }
+  expect(poolsAsked()).toBe(0);
+}
+
 describe('parseFileCached holds a file to the input cap by its size, before reading it', () => {
   it('refuses a file past the cap and never asks for a pool', async () => {
-    const file = safePath.join(root, 'big.md');
-    await writeFile(file, '#'.repeat(64));
-    const { dispatcher, poolsAsked } = capOnlyDispatcher(16);
-
-    try {
-      await expect(parseFileCached(file, 'markdown', { dispatcher })).rejects.toMatchObject({
-        code: 'PARSE_LIMIT_EXCEEDED', limit: 'inputBytes', bound: new ParseLimitError('inputBytes', 16).bound,
-      });
-    } finally {
-      await dispatcher.shutdown();
-    }
-    expect(poolsAsked()).toBe(0);
+    await expectCapRefusal('big.md', POPULATION_PARSE_LIMITS.inputBytes + 1);
   });
 
   it('refuses a sparse file past 2 GiB as the input cap, where a read would have failed differently', async () => {
-    const file = await sparse('huge.md', PAST_READFILE_LIMIT);
-    const { dispatcher, poolsAsked } = capOnlyDispatcher();
-
-    try {
-      await expect(parseFileCached(file, 'markdown', { dispatcher })).rejects.toMatchObject({
-        code: 'PARSE_LIMIT_EXCEEDED', limit: 'inputBytes', bound: new ParseLimitError('inputBytes', dispatcher.inputBytes).bound,
-      });
-    } finally {
-      await dispatcher.shutdown();
-    }
-    expect(poolsAsked()).toBe(0);
+    await expectCapRefusal('huge.md', PAST_READFILE_LIMIT);
   });
 });
 

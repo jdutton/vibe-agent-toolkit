@@ -123,10 +123,11 @@ describe('vat validate and the population its surfaces share', () => {
     // The claim itself. Every resources lane asks one question, so the extent
     // the resources phase wrote answers the skills phase AND the `checks` child
     // (a supervised child; it inherits `VAT_CRAWL_TIMING`): one derivation, one
-    // write. Four reads: the cold membership read, the `populate()` it falls
-    // through to, then one hit each for skills and the child.
+    // write. Three reads: the cold membership read, the `populate()` it falls
+    // through to, then one hit for the child. The skills phase reads no store: it
+    // is one phase of the same run, and the run's population answers it.
     expect(calls[STORE_WRITE]).toBe(1);
-    expect(calls[STORE_READ]).toBe(4);
+    expect(calls[STORE_READ]).toBe(3);
     expect(calls[FILESYSTEM_EXTENT]).toBe(1);
   });
 });

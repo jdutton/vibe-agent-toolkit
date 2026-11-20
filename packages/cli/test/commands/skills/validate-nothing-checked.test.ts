@@ -33,8 +33,9 @@ import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/u
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SkillsValidateReport } from '../../../src/commands/skills/validate-schema.js';
-import { buildSkillsValidateReport, nothingDiscoveredLine, runSkillsValidatePhase } from '../../../src/commands/skills/validate.js';
+import { buildSkillsValidateReport, nothingDiscoveredLine } from '../../../src/commands/skills/validate.js';
 import { resetSkillDiscoveryCache } from '../../../src/skill-resolution/packaging-config.js';
+import { skillsValidateInRun } from '../../helpers/in-run.js';
 
 import { publishedSkillsValidate } from './skills-validate-document.js';
 
@@ -149,7 +150,7 @@ async function stderrOf(root: string): Promise<string> {
     return true;
   });
   try {
-    await runSkillsValidatePhase(root, {});
+    await skillsValidateInRun(root);
   } finally {
     spy.mockRestore();
   }

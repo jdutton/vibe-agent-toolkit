@@ -19,6 +19,7 @@ import {
   type CollectionConfig,
   type CollectionStats,
   type DeferredSkillFiles,
+  type ParseDispatcher,
   type ProjectConfig,
 } from '@vibe-agent-toolkit/resources';
 import {
@@ -34,8 +35,8 @@ import type { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import * as yaml from 'yaml';
 
 import type { DocumentFormat } from '../../report-schemas.js';
-import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
-import { endWithReport, findingsGoToStderr, NOTHING_FINISHED, refusalReport } from '../../utils/document-writer.js';
+import { CommandRefusalError } from '../../utils/command-refusal.js';
+import { endWithReport, findingsGoToStderr } from '../../utils/document-writer.js';
 import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { classifyInputFault, projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
@@ -43,9 +44,10 @@ import {
   assertDeclaredCollection,
   loadResourcesWithConfig,
   publishedPopulation,
+  type RunContext,
 } from '../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
-import type { PhaseOutcome } from '../phase-utils.js';
+import { refusedPhase, runInOwnRun, type PhaseOutcome } from '../phase-utils.js';
 import { discoverSkillsFromConfig, namedSkillsOrRefuse } from '../skills/skill-discovery.js';
 
 import type { ResourcesValidateData, ResourcesValidateReport } from './validate-schema.js';
@@ -272,10 +274,16 @@ function applyNoCheckFrontmatterLinksFlag(config: ProjectConfig | undefined): vo
  * empty model. The `files:` short-circuit also keeps skill discovery (a read and
  * a frontmatter parse per declared skill) off `vat resources validate` for the
  * majority of projects, which declare no `files:` at all.
+ *
+ * @param config - The project config
+ * @param projectRoot - The project root the skills config is relative to
+ * @param dispatcher - The run's dispatcher, so each SKILL.md the resources phase
+ *   already read is not read, keyed and parsed again for discovery
  */
 export async function computeDeferredArtifacts(
   config: ProjectConfig | undefined,
   projectRoot: string,
+  dispatcher: ParseDispatcher,
 ): Promise<DeferredArtifacts | undefined> {
   if (!config?.skills) {
     return undefined;
@@ -290,7 +298,7 @@ export async function computeDeferredArtifacts(
   // `'refuse'`: the `files:` dest check below is only as complete as this
   // list — a SKILL.md whose parse was refused included, since its `files:` are keyed
   // by a name it has none of. The throw lands in the command's catch → a refusal by its code, exit 2.
-  const discovered = namedSkillsOrRefuse(await discoverSkillsFromConfig(config.skills, projectRoot, 'refuse'), projectRoot);
+  const discovered = namedSkillsOrRefuse(await discoverSkillsFromConfig(config.skills, projectRoot, 'refuse', dispatcher), projectRoot);
   const { defaults, config: perSkillConfig } = config.skills;
 
   // Assembled ONCE for the whole run, then handed to every skill below. Rebuilding
@@ -339,12 +347,10 @@ async function runValidation(
   options: ValidateOptions,
   logger: Logger,
   startTime: number,
+  run: RunContext,
 ): Promise<ResourcesValidateReport> {
-  // Resolve projectRoot at the CLI boundary (spec §5/§7 — loud-cwd policy).
-  const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
-
-  // Load resources with config support (includes GitTracker initialization)
-  const { registry, config, gitTracker, population } = await loadResourcesWithConfig(pathArg, projectRoot, logger);
+  // Load resources with config support, as one phase of the run.
+  const { registry, config, gitTracker, population, projectRoot } = await loadResourcesWithConfig(pathArg, run, logger);
   assertDeclaredCollection(config, options.collection);
 
   // CLI flag: --no-check-frontmatter-links disables the check for every collection.
@@ -363,7 +369,7 @@ async function runValidation(
   // config-merge `vat skills validate` uses, so a `files:`-declared link that
   // lane reports as LINK_DEFERRED_ARTIFACT (info) is never independently
   // reported here as LINK_BROKEN_FILE (error) — the headline bug this closes.
-  const deferredArtifacts = await computeDeferredArtifacts(config, projectRoot);
+  const deferredArtifacts = await computeDeferredArtifacts(config, projectRoot, run.dispatcher);
 
   const validationResult = await registry.validate({
     ...(frontmatterSchemaObj ? { frontmatterSchema: frontmatterSchemaObj } : {}),
@@ -465,28 +471,43 @@ function reportOnStderr(findings: readonly Finding[], options: ValidateOptions):
  * declaration this verb gives its own writer. A
  * refusal is the envelope's error branch, its message already on stderr, and a
  * site-specific run-integrity finding is reported here with every other finding.
+ *
+ * @param pathArg - The path argument, narrowing the scan to that tree
+ * @param options - The command's options
+ * @param run - The run this phase is one of; its root is the project root
  */
 export async function runResourcesValidatePhase(
   pathArg: string | undefined,
-  options: ValidateOptions
+  options: ValidateOptions,
+  run: RunContext,
 ): Promise<PhaseOutcome> {
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
 
   try {
-    const report = await runValidation(pathArg, options, logger, startTime);
+    const report = await runValidation(pathArg, options, logger, startTime, run);
     reportOnStderr(report.findings, options);
     return { report };
   } catch (error) {
-    return { report: refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED) };
+    return refused(error);
   }
+}
+
+/** The phase's outcome when the run refused, under this verb's gate. */
+function refused(error: unknown): PhaseOutcome {
+  return refusedPhase(error, GATE);
 }
 
 export async function validateCommand(
   pathArg: string | undefined,
   options: ValidateOptions
 ): Promise<void> {
-  const { report } = await runResourcesValidatePhase(pathArg, options);
+  // Resolve projectRoot at the CLI boundary (spec §5/§7 — loud-cwd policy): the run's root.
+  const { report } = await runInOwnRun(
+    () => projectRootOrLoudCwd(pathArg ?? process.cwd(), createLogger(options.debug ? { debug: true } : {})),
+    (run) => runResourcesValidatePhase(pathArg, options, run),
+    GATE,
+  );
   endWithReport('resources validate', report, options.format ?? 'yaml');
 }
 

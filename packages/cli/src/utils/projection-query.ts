@@ -61,8 +61,10 @@ import {
   queryableRelationSpecs,
   relationsNamedBy,
   storeMissOf,
+  withPopulationRun,
   type LensRefusalCode,
   type PopulationCache,
+  type PopulationRun,
   type PopulationOutcome,
   type Projection,
 } from '@vibe-agent-toolkit/resources';
@@ -473,20 +475,22 @@ export async function withQueriedProjection<T>(
 
   // The file-backed store, when one is selected, and ONLY as a population cache.
   // Its rows are never queried — see the header.
-  return withPopulationCache({ root }, async (cache) => {
+  // ONE population run for the query: the resources population and a lens that
+  // populates (claude-context) read and parse each file once between them.
+  return withPopulationCache({ root }, (cache) => withPopulationRun(async (populationRun) => {
     // The cache tell is `populate()`'s own outcome — see `ProjectionProvenance.population`.
     const { projection, outcome } = await populateAndReport(
-      { root, cache, logger, population: 'resources' },
+      { root, run: populationRun, cache, logger, population: 'resources' },
       (wiring) => buildResourceProjection({ root, ...wiring }),
       (result) => result.projection,
       (result) => storeMissOf(result.outcome),
     );
 
     return askPopulatedProjection(
-      { projection, outcome, root, logger, statements: options.statements, base: options.base, cache, populationStart },
+      { projection, outcome, root, logger, statements: options.statements, base: options.base, cache, populationRun, populationStart },
       work,
     );
-  });
+  }));
 }
 
 /**
@@ -523,6 +527,8 @@ type QueriedProjectionWork<T> = (
  * @param run.statements - Every statement this run may ask; what is hydrated and evaluated
  * @param run.base - The `--base` ref for the changed-files lens, or undefined
  * @param run.cache - The run's projection store, so a lens's own population can hit it
+ * @param run.populationRun - The population run the projection was read through, so a
+ *   lens's own population reads and parses through the same one
  * @param run.populationStart - When the population clock started (`performance.now()`)
  * @param work - The caller's work; the run database is open for exactly this call
  * @returns Whatever `work` returned
@@ -536,6 +542,7 @@ export async function askPopulatedProjection<T>(
     readonly statements: readonly string[];
     readonly base: string | undefined;
     readonly cache: PopulationCache | undefined;
+    readonly populationRun: PopulationRun;
     readonly populationStart: number;
   },
   work: QueriedProjectionWork<T>,
@@ -576,7 +583,7 @@ export async function askPopulatedProjection<T>(
     const refusals = new Map<string, LensRefusal>();
     const absent = new Set(queryableRelationNames().filter((name) => !plan.relations.includes(name)));
     await forEachInOrder(lenses, async (lens) => {
-      const evaluation = await evaluateLens(lens, { projection, root, base: run.base, cache, logger });
+      const evaluation = await evaluateLens(lens, { projection, root, base: run.base, cache, populationRun: run.populationRun, logger });
       if ('refused' in evaluation) {
         for (const relation of lensRelationNames(lens)) refusals.set(relation, evaluation);
         return;

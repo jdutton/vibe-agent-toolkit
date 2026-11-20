@@ -1258,7 +1258,7 @@ async function prepareBuild(
   logger.info(`Discovering skills from config...`);
   // `'refuse'`: a build that silently ships fewer skills is the drop this
   // command exists to prevent — the coded throw is the report's refusal.
-  const discoveredSkills = namedSkillsOrRefuse(await discoverSkillsFromConfig(skillsConfig, cwd, 'refuse'), cwd);
+  const discoveredSkills = namedSkillsOrRefuse(await discoverSkillsFromConfig(skillsConfig, cwd, 'refuse', undefined), cwd);
   if (discoveredSkills.length === 0) {
     // Before the staging swap, so a glob typo never promotes an EMPTY dist/skills.
     logger.error(`No SKILL.md files found matching include patterns: ${skillsConfig.include.join(', ')}`);

@@ -230,6 +230,7 @@ async function buildVATProjectContext(
       config.skills,
       scanRoot,
       degradingDiscovery(scanRoot, logger, locationRoot),
+      undefined,
     );
     const { defaults, config: perSkillConfig } = config.skills;
 

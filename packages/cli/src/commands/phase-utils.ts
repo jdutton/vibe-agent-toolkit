@@ -53,6 +53,7 @@ import type { DocumentFormat } from '../report-schemas.js';
 import { CommandRefusalError, refusalCodeOf } from '../utils/command-refusal.js';
 import { announceErrorOf, announceRunIntegrity, NOTHING_FINISHED, refusalReport, type FinishedWork } from '../utils/document-writer.js';
 import { createLogger } from '../utils/logger.js';
+import { isRunRefusal, type RunContext, withRunContext } from '../utils/resource-loader.js';
 import { type ExaminedDeclaration, withRunIntegrity } from '../utils/run-integrity.js';
 
 import type { OrchestratorData, OrchestratorPhaseEntry } from './orchestrator-schema.js';
@@ -64,6 +65,51 @@ import type { OrchestratorData, OrchestratorPhaseEntry } from './orchestrator-sc
  */
 export interface PhaseOutcome {
   report: Report<unknown>;
+}
+
+/**
+ * A single verb's phase outcome when its run refused before finishing anything:
+ * the envelope's error branch, by the refusal's code, under the verb's own gate.
+ * The run's own refusal ({@link isRunRefusal}) is not the phase's: it is
+ * rethrown, for the run to say once.
+ *
+ * @param error - What refused the run
+ * @param gate - The verb's gate
+ * @throws `error`, when it is the run's refusal
+ */
+export function refusedPhase(error: unknown, gate: Gate): PhaseOutcome {
+  if (isRunRefusal(error)) throw error;
+  return verbRefusal(error, gate);
+}
+
+/** The verb's refusal report for `error`, under its own gate, with nothing finished. */
+function verbRefusal(error: unknown, gate: Gate): PhaseOutcome {
+  return { report: refusalReport(refusalCodeOf(error), error, gate, NOTHING_FINISHED) };
+}
+
+/**
+ * A single verb's phase, as the one phase of a run of its own. The run's root is
+ * resolved INSIDE the refusal: finding it reads the path argument and the
+ * directories above it, and a path the OS will not list or traverse is the
+ * input's refusal, published like any other, never an uncaught throw that
+ * leaves stdout empty.
+ *
+ * @param rootOf - Resolves the run's root
+ * @param phase - The verb's phase, given the run
+ * @param gate - The verb's gate, for a refusal
+ * @returns The phase's outcome, or the refusal's
+ */
+export async function runInOwnRun(
+  rootOf: () => string,
+  phase: (run: RunContext) => Promise<PhaseOutcome>,
+  gate: Gate,
+): Promise<PhaseOutcome> {
+  try {
+    return await withRunContext({ root: rootOf() }, phase);
+  } catch (error) {
+    // The run is this one verb's, so its refusal, the run's own included, is the verb's.
+    return verbRefusal(error, gate);
+  }
 }
 
 /** A phase for which examining nothing IS an answer, and the reason it is. */
@@ -344,6 +390,9 @@ export function applyPhaseSelection(
  * its own refusal as a report. A throw that escaped that becomes the phase's
  * refusal — classified by its code, `INTERNAL_ERROR` when it carries none —
  * rather than aborting the orchestrator and silently skipping every later phase.
+ * The one exception is the run's own refusal (`isRunRefusal`: its projection
+ * store would not open), which every later phase would hit too: it is rethrown,
+ * and `orchestrate` publishes it once as the run's refusal.
  */
 export async function runPhase(phase: Phase): Promise<PhaseResult> {
   try {
@@ -357,6 +406,8 @@ export async function runPhase(phase: Phase): Promise<PhaseResult> {
     announceRunIntegrity(report, judged);
     return { name: phase.name, report: judged };
   } catch (error) {
+    // The run's own refusal stops the run, said once by `orchestrate`, not once per phase.
+    if (isRunRefusal(error)) throw error;
     return { name: phase.name, report: refusalReport(refusalCodeOf(error), error, ORCHESTRATOR_GATE, NOTHING_FINISHED) };
   }
 }

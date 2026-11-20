@@ -9,7 +9,7 @@
 
 import { lstatSync } from 'node:fs';
 
-import { followedStatSync, type FsFaultFacts, fsFaultOf, isLinkChainRefusedError, linkResolutionFault, realpathNativeSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { countWork, followedStatSync, type FsFaultFacts, fsFaultOf, isLinkChainRefusedError, linkResolutionFault, realpathNativeSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import { matchesCollection } from '../collection-matcher.js';
@@ -182,6 +182,7 @@ interface PathObservation {
  */
 function statObservation(absolutePath: string, root: string): PathObservation {
   try {
+    countWork('fs.stat', 1);
     const link = lstatSync(absolutePath);
     if (!link.isSymbolicLink()) {
       return {
@@ -193,6 +194,7 @@ function statObservation(absolutePath: string, root: string): PathObservation {
       };
     }
     try {
+      countWork('fs.stat', 1);
       const target = followedStatSync(absolutePath, root);
       if (target === undefined) return unresolvedLink(link.mtime);
       return {

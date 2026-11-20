@@ -187,8 +187,16 @@ export function readPluginLocalSkillName(skillSourceDir: string, dispatcher: Par
   return withParseDispatcher((run) => readSkillName(safePath.join(skillSourceDir, 'SKILL.md'), run), { dispatcher });
 }
 
-/** {@link PluginLocalSkillNames} for every location in `pluginLocal`, or the run's refusal ({@link skillParseRefusal}). */
-export async function readPluginLocalSkillNames(pluginLocal: PluginLocalSkillIndex, locationRoot: string): Promise<PluginLocalSkillNames> {
+/**
+ * {@link PluginLocalSkillNames} for every location in `pluginLocal`, or the run's refusal ({@link skillParseRefusal}).
+ * `dispatcher` is required, as for {@link readPluginLocalSkillName}: the run's (so a SKILL.md its
+ * discovery already parsed is not read again), or `undefined` for one call's own.
+ */
+export async function readPluginLocalSkillNames(
+  pluginLocal: PluginLocalSkillIndex,
+  locationRoot: string,
+  dispatcher: ParseDispatcher | undefined,
+): Promise<PluginLocalSkillNames> {
   // The first location per resolved directory, as before; their reads are independent.
   const firstByKey = new Map<string, (typeof pluginLocal.locations)[number]>();
   for (const loc of pluginLocal.locations) {
@@ -196,8 +204,9 @@ export async function readPluginLocalSkillNames(pluginLocal: PluginLocalSkillInd
     if (!firstByKey.has(key)) firstByKey.set(key, loc);
   }
   const entries = [...firstByKey];
-  const read = await withParseDispatcher((dispatcher) =>
-    mapConcurrentFailingInOrder(entries, ([, loc]) => readPluginLocalSkillName(loc.skillSourceDir, dispatcher)),
+  const read = await withParseDispatcher(
+    (run) => mapConcurrentFailingInOrder(entries, ([, loc]) => readPluginLocalSkillName(loc.skillSourceDir, run)),
+    { dispatcher },
   );
   return new Map(entries.map(([key], index) => {
     const name = read[index] as SkillNameRead;
@@ -330,12 +339,15 @@ export const SKILLS_INCLUDE_REMEDY =
  * @param projectRoot - Absolute path to project root (where config yaml lives)
  * @param unreadable - What to do with a directory the crawl cannot list —
  *   see {@link DiscoveryUnreadablePolicy}; required, no default
+ * @param dispatcher - The run's dispatcher, so each SKILL.md is read and parsed
+ *   once per run, or `undefined` for a caller with no run (a dispatcher of its own)
  * @returns The skills it named, with their source paths, and the SKILL.md files the parse worker refused
  */
 export async function discoverSkillsFromConfig(
   skillsConfig: SkillsConfig,
   projectRoot: string,
   unreadable: DiscoveryUnreadablePolicy,
+  dispatcher: ParseDispatcher | undefined,
 ): Promise<SkillDiscovery> {
   const { include, exclude } = skillsConfig;
 
@@ -360,9 +372,9 @@ export async function discoverSkillsFromConfig(
 
   // Independent reads, kept in discovery order.
   const skillPaths = [...foundAbsPaths];
-  const names = await withParseDispatcher((dispatcher) =>
-    mapConcurrentFailingInOrder(skillPaths, (skillPath) => readSkillName(skillPath, dispatcher)),
-  );
+  const names = await withParseDispatcher((route) =>
+    mapConcurrentFailingInOrder(skillPaths, (skillPath) => readSkillName(skillPath, route)),
+  { dispatcher });
   const skills: DiscoveredSkill[] = [];
   const parseRefused: ParseRefusedResource[] = [];
   for (const [index, sourcePath] of skillPaths.entries()) {

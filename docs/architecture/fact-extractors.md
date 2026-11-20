@@ -58,7 +58,7 @@ artifact is uncacheable; exempt: the plugin conformance record's runtime tuple
 *Enforcer:* an observed-inputs instrument shows every input is in the key or the
 stored trace; moving each input class alone must miss.
 
-- **I2a. Content is the bytes used.** The content key hashes the working-tree bytes alone: no parser kind, path, origin, commit, git OID or cleaned blob. Every byte a producer or stratum consumes is re-hashed at use; a mismatch refuses the pair and writes nothing. The content key is never `checksum`. A stat-tuple match is trusted only under git's racy rule. *Fails:* rows filed under bytes other than those read. *Enforcer:* a planning-to-use race test; a stat-seam re-hash test.
+- **I2a. Content is the bytes used.** The content key hashes the working-tree bytes alone: no parser kind, path, origin, commit, git OID or cleaned blob. Every byte a producer or stratum consumes is re-hashed at use; a mismatch refuses the pair and writes nothing. The content key is never `checksum`. A stat-tuple match is trusted only under git's racy rule. *Fails:* rows filed under bytes other than those read. *Enforcer:* a planning-to-use race test; a stat-seam re-hash test. *Amended 2026-11-19; see [Amendment 2026-11-19](#amendment-2026-11-19-content-identity-per-source).*
 - **I2b. Code identity is the code that runs:** the closure loaded from a phase's entry modules, lazy imports included, hashed from compiled source, plus the runtime tuple; never the host's whole closure, a lockfile or a version. A warm hit validates it without importing. *Fails:* rows keyed under code that did not make them, or a rebuild missing everything. *Enforcer:* code edits, both ways: code that runs misses, code that does not run never does.
 
 **I3. One answer to "is this pair present".** One per-pair answer for every consumer: statements,
@@ -124,7 +124,7 @@ every hazard the store enforces or accepts, with its status and its enforcer kin
 - **One file feeds several extractors, and each pair fails alone.** Rejected: one parser per kind.
 - **The manifest is static, checked before code loads, compatible by a digest of the contract's shape plus the contract module's source closure, no runtime tuple.** The contract module's runtime imports stay inside the contract package. Rejected: a version field, a peer range or a deprecation shim.
 - **Cross-file facts come from SQL; resolve is the escape hatch; relations needing git are core producers.** Rejected: everything as resolve.
-- **git runs with the operator's config; the extent key is git's answer.** The extent key is git's dirty-corrected tree hash and content keys hash the bytes read, so a config, ignore or attributes change that moves membership misses. Content normalized beneath an unchanged tree hash is an open hole until the stat memo lands ([register](./fact-extractors-hazard-register.md)). Every call through `runGit` scrubs git's redirect env and turns its pathspec env off; the spawns vibe-validate's tree snapshot makes are an accepted register row, requested of vibe-validate. Rejected: pinning git, which drops the operator's config.
+- **git runs with the operator's config; the extent key is git's answer.** The extent key is git's dirty-corrected tree hash and content keys hash the bytes read, so a config, ignore or attributes change that moves membership misses. Content normalized beneath an unchanged tree hash is an open hole until the stat memo lands ([register](./fact-extractors-hazard-register.md)). Every call through `runGit` scrubs git's redirect env and turns its pathspec env off; the spawns vibe-validate's tree snapshot makes are an accepted register row, requested of vibe-validate. Rejected: pinning git, which drops the operator's config. *Amended 2026-11-19: normalization beneath an unchanged tree hash is outside what VAT supports; see [Amendment 2026-11-19](#amendment-2026-11-19-content-identity-per-source).*
 - **`row_set_key` is the one identity of a per-file fact and the unit of eviction.** Rejected: a per-extent presence summary.
 - **The cache namespace's end state is exactly a shape digest of the core and store-protocol tables plus the store-protocol implementation's code identity.** Rejected: a namespace keyed on all code identity.
 - **Each run gets its own database: only the needed relations, rows restricted to the bound tree's extent; an unhydrated relation does not exist there,** so a statement reaching it refuses. Rejected: an empty schema per relation in the answering database (allowed in a planning database that never answers); an authorizer, which cannot gate rows; TEMP views (I7).
@@ -141,11 +141,53 @@ every hazard the store enforces or accepts, with its status and its enforcer kin
 
 ## Non-goals
 
-Cross-host or container-shared stores; replay of past trees.
+Sharing a store across machine kinds (for example a Windows runner and an Ubuntu runner); replay of
+past trees. Restoring a store onto another machine of the same kind is in scope. *Amended
+2026-11-19; was "Cross-host or container-shared stores"; see
+[Amendment 2026-11-19](#amendment-2026-11-19-content-identity-per-source).*
 
 ## Deferred
 
 P3 governs only detail beyond the bound row sets; limit defaults come from the lab (Measure), the parse pool's recorded in [Parse Limits](./fact-extractors-limits.md) and the extractors' still open; an off-Linux network-fs probe; storing key-determined limit outcomes (the output and input caps) under their limit, until which they are per run like the rest ([register](./fact-extractors-hazard-register.md): `Cost: key-determined parse-limit breaches`); supervising the parse pool off the main thread, until which the heap sampler and the wall-clock timer run on the parent's event loop and a parent blocked past the stall-to-crash window lets V8 stop a worker first (register: the process-wide heap flag row); serving a population's held pairs from the store around a refused one, until which one refusal re-derives the whole population every run while it persists, counted and named as `store miss: N refused pair(s)` ([register](./fact-extractors-hazard-register.md): `A check or query answers at exit 0 over a corpus missing a file`, its store-hit clause).
+
+## Amendment 2026-11-19: content identity per source
+
+The governing text is
+[Content Keying and Git: Decision](./content-keying-and-git.md#decision-content-identity-is-per-source).
+This ADR changes as follows; each old choice becomes a rejected alternative.
+
+- **I2a, content key.** Was: the content key hashes the working-tree bytes alone, never a git OID or
+  cleaned blob, and every consumed byte is re-hashed at use. Now: content identity is per source. A
+  file git holds (tracked, unmodified since the index) is identified by its git blob object id; any
+  other file by VAT's content key. Within one run each file is read and hashed at most once and every
+  lane shares that read and key; "re-hashed at use" means the producer consumes the one read that
+  produced the key, never a second read to re-prove it. Rejected: a working-tree-bytes key for
+  git-held files, because line endings, `eol`/`text` attributes, `core.autocrlf` and clean/smudge
+  filters are not semantic to VAT, so the cleaned blob names the content.
+- **Normalization beneath an unchanged tree hash.** Was: an open hole until the stat memo lands.
+  Now: outside what VAT supports; VAT does not defend against normalization differences. Rejected:
+  closing the hole for files whose meaning depends on normalization.
+- **Warm path.** A warm store hit proves the tree unchanged; no lane re-admits or re-hashes files to
+  prove it again, and a mid-run re-check uses git's tree comparison. "One run" is one VAT process;
+  the supervised checks child of `vat validate` is a separate process. Enforced by
+  `packages/cli/test/system/work-counters-validate.system.test.ts` (`content.read`,
+  `content.hashed`, the parse lookups, `registry.admitted`, `registry.built`). The store is on by
+  default; a store-off run is held to correctness only.
+- **Non-goals.** Was: cross-host or container-shared stores. Now: sharing across machine kinds;
+  same-kind restore (CI save and restore keyed per runner OS) is in scope. Content-keyed entries hit
+  across machine kinds, and by the first change above that hit is correct; machine kinds are
+  separated by the CI cache's own key and the extent key's root id. I2's runtime tuple is the one
+  input that can change facts for the same bytes. Rejected: a host-bound store, which forbids CI
+  cache restore for no soundness gain.
+
+Built: the one-read rule, as one admission per VAT process run (`RunContext`, `RunPopulation`, and
+registry views per phase; see [content keying](./content-keying-and-git.md)), for `vat validate`,
+`vat verify`, `vat resources validate`, `vat skills validate` and `vat resources scan`; `vat rag index`
+admits through one run but its index step re-reads each file, and `vat audit`, `vat skills build`,
+`vat claude plugin build` and `vat ard emit` are not covered yet, and a warm store hit still reads
+and hashes each admitted file until store hydration serves those facts. Not built: the git-OID path
+(planned with incremental repopulation) and I2's runtime tuple in the parse-cache and blob keys (the
+namespace carries the VAT version only).
 
 ## How this ADR changes
 

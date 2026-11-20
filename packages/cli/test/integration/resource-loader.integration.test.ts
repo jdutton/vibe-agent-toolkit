@@ -10,7 +10,8 @@ import { normalizedTmpdir, normalizePath, safePath } from '@vibe-agent-toolkit/u
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createLogger } from '../../src/utils/logger.js';
-import { loadResourcesWithConfig, publishedPopulation } from '../../src/utils/resource-loader.js';
+import { publishedPopulation } from '../../src/utils/resource-loader.js';
+import { loadResourcesInRun } from '../helpers/in-run.js';
 
 const CONFIG_FILE = 'vibe-agent-toolkit.config.yaml';
 
@@ -113,7 +114,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
 
       await inProjectDir(projectDir, async () => {
         const docsPath = safePath.join(projectDir, 'docs');
-        const result = await loadResourcesWithConfig(docsPath, projectDir, logger);
+        const result = await loadResourcesInRun(docsPath, projectDir, logger);
 
         expect(normalizePath(result.scanPath, { within: result.scanPath })).toBe(normalizePath(docsPath, { within: docsPath }));
         expect(normalizePath(result.projectRoot, { within: result.projectRoot })).toBe(normalizePath(projectDir, { within: projectDir }));
@@ -128,7 +129,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
     it('should fail loudly when pathArg does not exist', async () => {
       await inProjectDir(projectDir, async () => {
         await expect(
-          loadResourcesWithConfig(safePath.join(projectDir, 'nope'), projectDir, logger)
+          loadResourcesInRun(safePath.join(projectDir, 'nope'), projectDir, logger)
         ).rejects.toThrow(/does not exist/);
       });
     });
@@ -136,7 +137,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
     it('should crawl from pathArg with default patterns', async () => {
       await inProjectDir(projectDir, async () => {
         const otherPath = safePath.join(projectDir, 'other');
-        const result = await loadResourcesWithConfig(otherPath, projectDir, logger);
+        const result = await loadResourcesInRun(otherPath, projectDir, logger);
 
         expect(normalizePath(result.scanPath, { within: result.scanPath })).toBe(normalizePath(otherPath, { within: otherPath }));
 
@@ -156,7 +157,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
       await mkdir(outside, { recursive: true });
       await writeFile(safePath.join(outside, 'elsewhere.md'), '# Elsewhere\n');
 
-      const result = await loadResourcesWithConfig(outside, projectDir, logger);
+      const result = await loadResourcesInRun(outside, projectDir, logger);
 
       expectSingleResource(result.registry.getAllResources(), 'Elsewhere');
       expect(result.population).toEqual({ lane: 'walk' });
@@ -173,7 +174,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
       );
 
       await inProjectDir(projectDir, async () => {
-        const result = await loadResourcesWithConfig(undefined, projectDir, logger);
+        const result = await loadResourcesInRun(undefined, projectDir, logger);
 
         expectProjectPaths(result, projectDir);
         expect(result.config).toBeDefined();
@@ -196,7 +197,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
       );
 
       await inProjectDir(projectDir, async () => {
-        const result = await loadResourcesWithConfig(undefined, projectDir, logger);
+        const result = await loadResourcesInRun(undefined, projectDir, logger);
 
         // Should only find docs/guide.md
         expectSingleResource(result.registry.getAllResources(), 'Guide');
@@ -205,7 +206,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
 
     it('should work without config file', async () => {
       await inProjectDir(projectDir, async () => {
-        const result = await loadResourcesWithConfig(undefined, projectDir, logger);
+        const result = await loadResourcesInRun(undefined, projectDir, logger);
 
         expectProjectPaths(result, projectDir);
         expect(result.config).toBeUndefined();
@@ -219,7 +220,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
 
   describe('GitTracker integration', () => {
     it('should create and initialize GitTracker for the provided project root', async () => {
-      const result = await loadResourcesWithConfig(projectDir, projectDir, logger);
+      const result = await loadResourcesInRun(projectDir, projectDir, logger);
 
       expect(result.gitTracker).toBeDefined();
       expect(result.gitTracker?.getStats().cacheSize).toBeGreaterThanOrEqual(0);
@@ -233,7 +234,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
       await mkdir(isolatedDir, { recursive: true });
       await writeFile(safePath.join(isolatedDir, 'test.md'), '# Test\n');
 
-      const result = await loadResourcesWithConfig(isolatedDir, isolatedDir, logger);
+      const result = await loadResourcesInRun(isolatedDir, isolatedDir, logger);
 
       expect(normalizePath(result.projectRoot, { within: result.projectRoot })).toBe(normalizePath(isolatedDir, { within: isolatedDir }));
       expect(result.gitTracker).toBeDefined();
@@ -259,7 +260,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
 `
       );
 
-      const result = await loadResourcesWithConfig(projectDir, projectDir, logger);
+      const result = await loadResourcesInRun(projectDir, projectDir, logger);
 
       expect(result.config).toBeDefined();
       expect(result.config?.resources?.collections).toBeDefined();
@@ -273,7 +274,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
 
   describe('return value structure', () => {
     it('should return all expected fields', async () => {
-      const result = await loadResourcesWithConfig(projectDir, projectDir, logger);
+      const result = await loadResourcesInRun(projectDir, projectDir, logger);
 
       expect(result).toHaveProperty('scanPath');
       expect(result).toHaveProperty('projectRoot');

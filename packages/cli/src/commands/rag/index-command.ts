@@ -14,7 +14,7 @@ import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger } from '../../utils/logger.js';
 import { assertReadableDirectoryArgument, projectRootOrNull } from '../../utils/project-root-policy.js';
 import { requireWritableDatabase } from '../../utils/rag-database.js';
-import { loadResourcesWithConfig } from '../../utils/resource-loader.js';
+import { loadResourcesWithConfig, withRunContext } from '../../utils/resource-loader.js';
 
 import { RAG_GATE, resolveDbPath } from './command-helpers.js';
 import type { RagIndexReport } from './index-schema.js';
@@ -143,15 +143,18 @@ export async function indexCommand(
     // when projectRoot is null we fall back to cwd for the crawl baseDir.
     // Indexing doesn't surface URI-reference resolution, so cwd is fine here.
     const crawlRoot = projectRoot ?? process.cwd();
-    const { registry, config } = await loadResourcesWithConfig(pathArg, crawlRoot, logger);
-
-    const allResources = registry.getAllResources();
-    // The declared population is the admitted one PLUS every file the crawl
-    // enumerated and did not admit (unreadable, or its parse refused). Such a
-    // file never reaches `indexResources`, so it is in none of the provider's
-    // counters: it is reported and counted here, through the one contract every
-    // crawling verb uses, or a corpus missing a document is reported clean.
-    const notAdmittedLog = registry.getNotAdmitted();
+    // One run around the load. Only plain data leaves it: the registry is the
+    // run's view, and holding it through the index would keep every content and
+    // parse of the run alive after the run closed.
+    const { allResources, notAdmittedLog, config } = await withRunContext({ root: crawlRoot }, async (run) => {
+      const loaded = await loadResourcesWithConfig(pathArg, run, logger);
+      // The declared population is the admitted one PLUS every file the crawl
+      // enumerated and did not admit (unreadable, or its parse refused). Such a
+      // file never reaches `indexResources`, so it is in none of the provider's
+      // counters: it is reported and counted here, through the one contract every
+      // crawling verb uses, or a corpus missing a document is reported clean.
+      return { allResources: loaded.registry.getAllResources(), notAdmittedLog: loaded.registry.getNotAdmitted(), config: loaded.config };
+    });
     const notAdmittedFiles = notAdmittedCount(notAdmittedLog);
     notAdmitted = notAdmittedFindings(
       notAdmittedLog,

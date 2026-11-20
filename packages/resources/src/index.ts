@@ -950,6 +950,16 @@ export {
   type ResourcePopulationSource,
 } from './projection/resource-population.js';
 
+// One read, key, parse and admission per file per VAT process run, whichever
+// lane asks (content-keying-and-git.md, rule 4).
+export {
+  RunPopulation,
+  withPopulationRun,
+  withRunPopulation,
+  type PopulationRun,
+  type RunPopulationOptions,
+} from './projection/run-population.js';
+
 // The git extent (zones §2): tracked ∪ (untracked ∧ ¬ignored) — what a clone
 // sees. Its disagreement with the filesystem extent over a gitignored path is
 // the visible-to-you/invisible-to-CI fact, not an inconsistency.

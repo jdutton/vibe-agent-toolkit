@@ -21,7 +21,7 @@
  * mean it lands twice — or, far more likely, on one lane only.
  */
 
-import { countWork, type FsSide, withFsFault } from '@vibe-agent-toolkit/utils';
+import { countWork, deepFreeze, type FsSide, withFsFault } from '@vibe-agent-toolkit/utils';
 
 import {
   DOCUMENT_PARSER_KINDS,
@@ -43,6 +43,7 @@ import {
   type ParsePool,
   type ParsePoolOptions,
 } from './parse-pool.js';
+import { POPULATION_PARSE_LIMITS } from './projection/content-cache.js';
 import type { HarnessContentFacts, HarnessId } from './projection/harness/profile.js';
 
 /**
@@ -122,8 +123,27 @@ export interface ParsePoolPolicy {
    * parse on the run's own thread cannot be stopped at a limit (ADR I8). The
    * old `VAT_PARSE_POOL=0` opt-out and the below-threshold in-process route are
    * gone; a small corpus pays one worker, never an unbounded parse.
+   *
+   * ⛔ **There is no `inputBytes`.** Every dispatcher's input cap is the
+   * population's (`POPULATION_PARSE_LIMITS`): one cap, which the run's content
+   * reads, the population's blob stage and every parse apply alike, so no lane
+   * admits a file another lane refuses by its size. The type omits it, and the
+   * constructor overrides any `inputBytes` a caller passes anyway (through a
+   * value typed `ParseLimits`), so the dispatcher and its pool both run under
+   * the one cap.
    */
-  limits?: Partial<ParseLimits>;
+  limits?: Partial<Omit<ParseLimits, 'inputBytes'>>;
+  /**
+   * The run's content reads, which every file this dispatcher is asked to parse
+   * is read through, or omitted for a dispatcher that serves no run (each parse
+   * then reads the file itself). A run's dispatcher carries them so a file one
+   * lane already read (the population, a registry view) is not read and keyed a
+   * second time when another lane parses it by path (a SKILL.md's name, the
+   * packaging validator's parse): content-keying-and-git.md, "Decision: content
+   * identity is per source", rule 4. The source holds files to the population's
+   * input cap, which is every dispatcher's (see {@link limits}).
+   */
+  content?: ParseContentSource;
   /**
    * How parse facts get back from a worker. Defaults to `VAT_PARSE_TRANSPORT`,
    * and to `'wire'` when that names nothing.
@@ -388,9 +408,21 @@ function resolveKnob(fromPolicy: number | undefined, envName: string, fallback: 
  * byte-identical to the sequential loop each lane replaced: one target prepared,
  * one target emitted, in the lane's own output order.
  */
+/** A run's content reads: a file's content and key, read once per run and served after. */
+export interface ParseContentSource {
+  /**
+   * @param absolutePath - The file
+   * @param parserKind - The parser its content will be handed to
+   * @returns The content, its key and the parser it routes to
+   */
+  read(absolutePath: string, parserKind: ParserKind): Promise<KeyedContent>;
+}
+
 export class ParseDispatcher {
   readonly #cache: ParseCache;
-  readonly #limits: Partial<ParseLimits> | undefined;
+  /** The caller's limits with `inputBytes` forced to the one cap: what the pool is built with. */
+  readonly #limits: Partial<ParseLimits>;
+  readonly #content: ParseContentSource | undefined;
   /** The input cap, resolved from {@link #limits} once, at construction: see {@link inputBytes}. */
   readonly #inputBytes: number;
   /** Every limit, resolved once: a cache hit is held to the output caps the worker would apply. */
@@ -421,6 +453,26 @@ export class ParseDispatcher {
     html: { documents: 0, bytes: 0 },
   };
 
+  /**
+   * A run's dispatcher only (one carrying the run's {@link ParsePoolPolicy.content},
+   * so it lives exactly as long as the run): every parse it has answered, by
+   * content key. A run parses (or looks up) each content once, whichever lane
+   * asks, so the population's blob stage and the registry's admission of the same
+   * file share one answer (content-keying-and-git.md, "Decision: content identity
+   * is per source", rule 4). A key names the bytes and the parser, and the limits
+   * are this dispatcher's own, so one key has one answer for the dispatcher's
+   * life. A refusal is an answer too and is held the same way.
+   *
+   * `undefined` for a dispatcher that serves no run: it holds nothing it has
+   * answered, so a long-lived one never grows.
+   *
+   * ⚠️ The answer is SHARED, so it is deep-frozen: a caller that writes to what
+   * it is handed (the registry resolves links in place) copies what it writes,
+   * and a caller that forgets fails loudly rather than changing every other
+   * holder's answer.
+   */
+  readonly #parsed: Map<string, Promise<ParseResult>> | undefined;
+
   #pool: ParsePool | null = null;
   #width = 1;
   #closed = false;
@@ -429,8 +481,12 @@ export class ParseDispatcher {
 
   constructor(cache: ParseCache, policy: ParsePoolPolicy) {
     this.#cache = cache;
-    this.#limits = policy.limits;
-    this.#resolvedLimits = resolveParseLimits(policy.limits);
+    // The one input cap, whatever the caller passed: a `ParseLimits`-typed value
+    // carries `inputBytes` past the type's `Omit`, so it is overridden here.
+    this.#limits = { ...policy.limits, inputBytes: POPULATION_PARSE_LIMITS.inputBytes };
+    this.#content = policy.content;
+    this.#parsed = policy.content === undefined ? undefined : new Map();
+    this.#resolvedLimits = resolveParseLimits(this.#limits);
     this.#inputBytes = this.#resolvedLimits.inputBytes;
     // Read per construction, not at module load. `'cache'` exactly,
     // so the shipped behaviour is the wire protocol unless someone names the
@@ -509,8 +565,14 @@ export class ParseDispatcher {
     return this.#inputBytes;
   }
 
+  /** The run's content reads this dispatcher parses through, or `undefined` (see {@link ParsePoolPolicy.content}). */
+  get content(): ParseContentSource | undefined {
+    return this.#content;
+  }
+
   /**
-   * Parse one document, off-thread once a pool is active.
+   * Parse one document, off-thread once a pool is active: on a run's dispatcher,
+   * once per content key for the run, and frozen (see {@link #parsed}).
    *
    * Every document that passes through here is also the sizing's SAMPLE — see
    * {@link considerActivation}. Recorded for hits as well as misses, because
@@ -526,6 +588,16 @@ export class ParseDispatcher {
    * @throws A `ParseLimitError` (`inputBytes`) for content past the cap
    */
   parse(keyed: ParsableContent): Promise<ParseResult> {
+    if (this.#parsed === undefined) return this.#parseOnce(keyed);
+    const held = this.#parsed.get(keyed.key);
+    if (held !== undefined) return held;
+    const parsed = this.#parseOnce(keyed).then(deepFreeze);
+    this.#parsed.set(keyed.key, parsed);
+    return parsed;
+  }
+
+  /** {@link parse}, for a key this dispatcher has not answered yet. */
+  #parseOnce(keyed: ParsableContent): Promise<ParseResult> {
     const breach: Error | undefined = inputBytesBreach(keyed.byteLength, this.#inputBytes);
     if (breach !== undefined) {
       countWork('parse.refused.inputCap.dispatch', 1);
@@ -576,7 +648,7 @@ export class ParseDispatcher {
       this.#pool = create({
         size: this.#pinnedSize ?? defaultParsePoolSize(),
         cacheDir: this.#cache.directory,
-        ...(this.#limits !== undefined && { limits: this.#limits }),
+        limits: this.#limits,
       });
     }
     return this.#pool;
@@ -831,6 +903,10 @@ export function readContentForParse<K extends DocumentParserKind>(
   parserKind: K,
   route: ParseRoute,
 ): Promise<KeyedContent<K>> {
+  const content = route.dispatcher?.content;
+  // The run's read of this file, when the route serves a run: `read` hands back
+  // the kind it was asked for, as `readContentWithKey` does.
+  if (content !== undefined) return content.read(filePath, parserKind) as Promise<KeyedContent<K>>;
   return readContentWithKey(filePath, parserKind, parseInputBytesOf(route));
 }
 

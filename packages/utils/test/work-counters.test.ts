@@ -114,6 +114,7 @@ describe('work counters', () => {
       pid: process.pid,
       role: 'cli',
       counters: { ...allZero(), 'store.reads.persistent': 1 },
+      phases: {},
     });
   });
 

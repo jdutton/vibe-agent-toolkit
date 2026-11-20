@@ -53,9 +53,10 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
-import { buildSharedValidationContext, buildSkillsValidateRegistry } from '../src/commands/skills/validate.js';
+import { buildSharedValidationContext, skillsValidateRegistries } from '../src/commands/skills/validate.js';
 import { laneById } from '../src/pipeline-oracles/lanes.js';
 import { createLogger } from '../src/utils/logger.js';
+import { withRunContext } from '../src/utils/resource-loader.js';
 
 import { setupCorpusFixture } from './pipeline-oracles/helpers/corpus-fixture.js';
 
@@ -213,8 +214,10 @@ describe('every shipped registry-construction site reaches the projection lane v
     expect(registryVerdicts(registry)).toEqual(EXPECTED);
   });
 
-  it('buildSkillsValidateRegistry — the builder `vat skills validate` shares', async () => {
-    const registry = await buildSkillsValidateRegistry(corpus.root(), { config: CONFIG });
+  it('skillsValidateRegistries — the views `vat skills validate` shares', async () => {
+    const registry = await withRunContext({ root: corpus.root() }, (run) =>
+      skillsValidateRegistries(run, corpus.root(), CONFIG).forRoot(corpus.root(), []),
+    );
 
     expect(registryVerdicts(registry)).toEqual(EXPECTED);
   });
@@ -232,12 +235,14 @@ describe('every shipped registry-construction site reaches the projection lane v
       packagingConfig: {},
     };
 
-    const context = await buildSharedValidationContext([skill], [], CONFIG, createLogger());
-
-    if (context.registry === undefined) {
-      throw new Error('the command built no shared registry — this arm is measuring nothing');
-    }
-    expect(registryVerdicts(context.registry)).toEqual(EXPECTED);
+    const registry = await withRunContext({ root: corpus.root() }, async (run) => {
+      const context = await buildSharedValidationContext([skill], [], CONFIG, createLogger(), run);
+      if (context.registries === undefined) {
+        throw new Error('the command built no run registries — this arm is measuring nothing');
+      }
+      return context.registries.forRoot(corpus.root(), []);
+    });
+    expect(registryVerdicts(registry)).toEqual(EXPECTED);
   });
 
   it('the `skills-validate` pipeline oracle, which restates that command', async () => {

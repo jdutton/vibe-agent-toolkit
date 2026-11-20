@@ -104,6 +104,7 @@ import {
   createCollectionMimeResolver,
   type CollectionMimeResolver,
 } from './realizations.js';
+import type { PopulationRun } from './run-population.js';
 import {
   assembleProjection,
   emptyBlobRows,
@@ -178,6 +179,15 @@ export type ContentParsing = typeof CONTENT_PARSING_DERIVE | typeof CONTENT_PARS
 export interface PopulateOptions {
   /** Absolute corpus root every contributor's paths are relative to. */
   root: string;
+  /**
+   * The run this population reads and parses through: its content cache and its
+   * dispatcher. A verb's population passes its run's, because a population that
+   * read through its own would read, key and parse every file a second time
+   * beside the run's other lanes (content-keying-and-git.md, "Decision: content
+   * identity is per source", rule 4). Omitted, the population reads through a
+   * run of its own, for a caller with no other lane.
+   */
+  run?: PopulationRun | undefined;
   /** The contributors to run, already partitioned by stratum. */
   registry: ContributorRegistry;
   /**
@@ -320,11 +330,13 @@ export interface PopulateOptions {
  * @returns A spreadable object carrying only the oracles that are actually present
  */
 export function populationOracles(options: {
+  run?: PopulationRun | undefined;
   gitTracker?: GitTracker | undefined;
   cache?: PopulationCache | undefined;
   collections?: Readonly<Record<string, CollectionConfig>> | undefined;
-}): Pick<PopulateOptions, 'gitTracker' | 'cache' | 'collections'> {
+}): Pick<PopulateOptions, 'run' | 'gitTracker' | 'cache' | 'collections'> {
   return {
+    ...(options.run !== undefined && { run: options.run }),
     ...(options.gitTracker !== undefined && { gitTracker: options.gitTracker }),
     ...(options.cache !== undefined && { cache: options.cache }),
     ...(options.collections !== undefined && { collections: options.collections }),
@@ -505,6 +517,8 @@ export interface PopulateResult {
  */
 export interface TreePopulationOptions {
   root: string;
+  /** The run this population reads and parses through — see {@link PopulateOptions.run}. */
+  run?: PopulationRun | undefined;
   gitTracker?: GitTracker | undefined;
   cache?: PopulationCache | undefined;
   collections?: Readonly<Record<string, CollectionConfig>> | undefined;
@@ -634,14 +648,16 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
     return { projection: cached.hit, outcome: populationOutcome('hit') };
   }
 
-  // ONE dispatcher for the run — the blob stage's parses, the post-promotion
-  // re-run's, and every harness pass's memory-file reads share its one pool —
-  // shut down however the derivation ends. Built lazily: a run that parses
-  // nothing starts no worker.
-  const projection = await withParseDispatcher(
-    (dispatcher) => deriveProjection(options, { parseContent, routing, dispatcher }),
-    { policy: { limits: POPULATION_PARSE_LIMITS } },
-  );
+  // The RUN's one dispatcher — the blob stage's parses, the post-promotion
+  // re-run's, every harness pass's memory-file reads, and every other lane of the
+  // run share its one pool, which the run's owner shuts down. Built lazily: a
+  // run that parses nothing starts no worker.
+  const run = options.run;
+  const projection = run === undefined
+    ? await withParseDispatcher(
+      (dispatcher) => deriveProjection(options, { parseContent, routing, dispatcher }, new RunContentCache()),
+    )
+    : await deriveProjection(options, { parseContent, routing, dispatcher: run.dispatcher }, run.content);
   const stored = await writeCachedProjection(options, rootId, parseContent, projection, routing);
   return { projection, outcome: populationOutcome(stored, storeMissFor(cached.missed, projection)) };
 }
@@ -673,22 +689,23 @@ interface DerivationRun {
  * @param run - The run's parse decision, routing and dispatcher
  * @returns The frozen projection
  */
-async function deriveProjection(options: PopulateOptions, run: DerivationRun): Promise<Projection> {
+async function deriveProjection(options: PopulateOptions, run: DerivationRun, contentCache: RunContentCache): Promise<Projection> {
   // Full derivation, every time it runs, until the incremental extent lands (ADR
   // register: full extent derivation is a counted cost).
   countWork('extent.derived', 1);
   const { root, registry, parameters, maxIterations = DEFAULT_MAX_ITERATIONS } = options;
   const { parseContent, routing, dispatcher } = run;
-  // Constructed here and nowhere else, so its lifetime is exactly this run's.
-  // A module-level cache would leak bytes across two populations in one process
-  // — including two populations of a tree that changed in between, which would
-  // describe the wrong corpus with complete confidence.
+  // The RUN's content cache, never a module-level one: a module-level cache would
+  // leak bytes across two runs in one process — including two runs over a tree
+  // that changed in between, which would describe the wrong corpus with complete
+  // confidence. Shared with the run's other lanes, so a file this population keys
+  // is admitted from memory.
   const builder = new ProjectionBuilder({
     root,
     gitTracker: options.gitTracker,
     // Held to POPULATION_PARSE_LIMITS, the cap the dispatcher runs under, so a file a parser would
     // refuse by size is refused before it is read.
-    contentCache: new RunContentCache(),
+    contentCache,
     mimeResolver: routing,
   });
 

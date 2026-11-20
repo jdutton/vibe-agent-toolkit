@@ -29,6 +29,7 @@ import {
   PROJECTION_TABLES,
   type Projection,
   readContentWithKey,
+  ResourceRegistry,
   VAT_CACHE_DIR_ENV,
 } from '@vibe-agent-toolkit/resources';
 import { readWorkCounters, safePath, WORK_COUNTER_NAMES, type WorkCounter } from '@vibe-agent-toolkit/utils';
@@ -256,8 +257,8 @@ function uniqueDocument(label: string): string {
  * @param policy - The pool's limits
  * @returns The dispatcher
  */
-function dispatcherOf(scope: SeedScope, policy: ParsePoolPolicy = {}): ParseDispatcher {
-  const dispatcher = new ParseDispatcher(new ParseCache({ cacheDir: scope.dir(), enabled: true }), policy);
+function dispatcherOf(scope: SeedScope, policy: ParsePoolPolicy = {}, cacheDir = scope.dir()): ParseDispatcher {
+  const dispatcher = new ParseDispatcher(new ParseCache({ cacheDir, enabled: true }), policy);
   scope.defer(() => dispatcher.shutdown());
   return dispatcher;
 }
@@ -271,6 +272,11 @@ async function parseOnce(content: string, dispatcher: ParseDispatcher): Promise<
   return undefined;
 }
 
+/** What reading and keying a file holding `content` adds: one read, one hash over its UTF-8 bytes. */
+function readAndKeyed(content: string): Partial<Record<WorkCounter, number>> {
+  return { 'content.read': 1, ...keyed(content) };
+}
+
 /** What keying `content` adds: one hash over its UTF-8 bytes. */
 function keyed(content: string): Partial<Record<WorkCounter, number>> {
   return { 'content.hashed': 1, 'content.hashedBytes': Buffer.byteLength(content, 'utf8') };
@@ -278,7 +284,11 @@ function keyed(content: string): Partial<Record<WorkCounter, number>> {
 
 /** A parse on a pool whose limits the content breaches, or that runs it: one dispatch. */
 function parseSeed(label: string, policy: ParsePoolPolicy, moves: Partial<Record<WorkCounter, number>>): Seed {
-  const content = uniqueDocument(label);
+  return contentSeed(uniqueDocument(label), policy, moves);
+}
+
+/** A seed that parses `content` once on a dispatcher of `policy`, moving what keying it moves plus `moves`. */
+function contentSeed(content: string, policy: ParsePoolPolicy, moves: Partial<Record<WorkCounter, number>>): Seed {
   return {
     prepare: (scope) => {
       const dispatcher = dispatcherOf(scope, policy);
@@ -286,6 +296,15 @@ function parseSeed(label: string, policy: ParsePoolPolicy, moves: Partial<Record
     },
     delta: { ...keyed(content), ...moves },
   };
+}
+
+/** Every dispatcher's input cap, which is the population's: there is no smaller cap to name. */
+const INPUT_CAP = new ParseDispatcher(new ParseCache({ enabled: false }), {}).inputBytes;
+
+/** A document one byte past {@link INPUT_CAP}. */
+function overCapDocument(label: string): string {
+  const head = uniqueDocument(label);
+  return head + 'x'.repeat(INPUT_CAP + 1 - Buffer.byteLength(head, 'utf8'));
 }
 
 /** A document with three links: three output rows past a one-row cap. */
@@ -302,10 +321,13 @@ export const PARSE_SEEDS: Readonly<Record<ParseCounter, Seed>> = {
   'parse.cache.hit': (() => {
     const content = uniqueDocument('hit');
     return {
+      // Filed by one dispatcher, hit by another over the same cache: a dispatcher
+      // answers a key it already parsed from its own memory, with no lookup.
       prepare: async (scope: SeedScope) => {
-        const dispatcher = dispatcherOf(scope);
-        await parseOnce(content, dispatcher);
-        return () => parseOnce(content, dispatcher);
+        const cacheDir = scope.dir();
+        await parseOnce(content, dispatcherOf(scope, {}, cacheDir));
+        const reader = dispatcherOf(scope, {}, cacheDir);
+        return () => parseOnce(content, reader);
       },
       delta: { ...keyed(content), 'parse.cache.hit': 1 },
     };
@@ -344,7 +366,7 @@ export const PARSE_SEEDS: Readonly<Record<ParseCounter, Seed>> = {
     },
     delta: { 'parse.refused.inputCap.read': 1 },
   },
-  'parse.refused.inputCap.dispatch': parseSeed('input cap', { limits: { inputBytes: 4 } }, {
+  'parse.refused.inputCap.dispatch': contentSeed(overCapDocument('input cap'), {}, {
     'parse.refused.inputCap.dispatch': 1,
   }),
   'parse.refused.load': {
@@ -365,9 +387,23 @@ export const PARSE_SEEDS: Readonly<Record<ParseCounter, Seed>> = {
     },
     delta: { 'content.hashed': 1, 'content.hashedBytes': HASHED.byteLength },
   },
-  'content.hashedBytes': parseSeed('hashed bytes', { limits: { inputBytes: 4 } }, {
+  'content.hashedBytes': contentSeed(overCapDocument('hashed bytes'), {}, {
     'parse.refused.inputCap.dispatch': 1,
   }),
+  'content.read': (() => {
+    const content = uniqueDocument('read');
+    return {
+      prepare: (scope: SeedScope) => {
+        const file = safePath.join(scope.dir(), 'read.md');
+        writeFileSync(file, content, 'utf8');
+        return async () => {
+          await readContentWithKey(file, 'markdown', null);
+          return undefined;
+        };
+      },
+      delta: readAndKeyed(content),
+    };
+  })(),
 };
 
 /** A logger that keeps what it is told, so a seed can read back a warning. */
@@ -410,6 +446,33 @@ function queriedTree(scope: SeedScope, files: Readonly<Record<string, string>>):
   };
 }
 
+/**
+ * One document admitted from disk: stated, read, keyed and parsed once, on a
+ * private parse cache so the parse is a dispatch, never another run's hit.
+ *
+ * @param label - Makes the document unique to this seed
+ * @returns The seed
+ */
+function admissionSeed(label: string): Seed {
+  const content = uniqueDocument(label);
+  return {
+    prepare: (scope) => {
+      const root = scope.dir();
+      const file = safePath.join(root, 'admitted.md');
+      writeFileSync(file, content, 'utf8');
+      const registry = new ResourceRegistry({
+        baseDir: root,
+        parseCache: new ParseCache({ cacheDir: scope.dir(), enabled: true }),
+      });
+      return async () => {
+        await registry.addResource(file);
+        return undefined;
+      };
+    },
+    delta: { ...readAndKeyed(content), 'fs.stat': 1, 'parse.dispatched': 1, 'registry.admitted': 1 },
+  };
+}
+
 /** One plain document: what every population seed's tree holds. */
 const PLAIN_TREE = { 'a.md': '# A\n\nPlain.\n' };
 
@@ -426,8 +489,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
       'extent.derived': 1,
       'parse.dispatched': 1,
-      'content.hashed': 1,
-      'content.hashedBytes': Buffer.byteLength(PLAIN_TREE['a.md'], 'utf8'),
+      ...readAndKeyed(PLAIN_TREE['a.md']),
       'git.calls': 4,
     },
   },
@@ -465,6 +527,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'store.miss.refusedPairs': 1,
       'parse.dispatched': 2,
       'parse.refused.keyDetermined': 1,
+      'content.read': 2,
       'content.hashed': 2,
       'content.hashedBytes': Buffer.byteLength(PLAIN_TREE['a.md'] + CYCLIC_FRONTMATTER, 'utf8'),
       'git.calls': 4,
@@ -474,6 +537,16 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
   'hydration.writes': hydrationSeed(),
   'hydration.rows.written': hydrationSeed(),
   'statement.explained': explainedSeed(),
+  // The registry's stat of the file it admits: the admission seed counts it too.
+  'fs.stat': admissionSeed('stat'),
+  'registry.built': {
+    prepare: () => () => {
+      expect(new ResourceRegistry().size()).toBe(0);
+      return undefined;
+    },
+    delta: { 'registry.built': 1 },
+  },
+  'registry.admitted': admissionSeed('admitted'),
   'git.calls': {
     prepare: () => () => {
       checkGitInstalled();

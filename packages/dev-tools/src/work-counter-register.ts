@@ -27,6 +27,10 @@ const I10_STORE_WRITES = 'I10 "store writes included"';
 /** What the content-hashing counters baseline: two rows whose mechanisms are unbuilt. */
 const UNBUILT_REHASH_BASELINE = 'the baseline for the unbuilt stat memo and racy re-hash rows';
 
+/** What the read and registry counters answer to: an enforced decision, not a cost row. */
+const ONE_READ_PER_RUN =
+  'rule 4 of the content-identity decision (one read, one key, one admission per file per run), enforced by work-counters-validate.system.test.ts';
+
 /**
  * Each counter no counted row names, with what it answers to instead. With
  * {@link COUNTED_COST_ROWS}, every counter is accounted for exactly once.
@@ -41,6 +45,10 @@ export const COUNTERS_WITHOUT_A_COUNTED_ROW: Readonly<Partial<Record<WorkCounter
   'parse.refused.load': 'load-dependent, bounded by I8; reported only',
   'content.hashed': UNBUILT_REHASH_BASELINE,
   'content.hashedBytes': UNBUILT_REHASH_BASELINE,
+  'content.read': ONE_READ_PER_RUN,
+  'fs.stat': ONE_READ_PER_RUN,
+  'registry.built': ONE_READ_PER_RUN,
+  'registry.admitted': ONE_READ_PER_RUN,
   'git.calls': 'I10 git calls; git is no longer pinned, so no cost row restates them',
 };
 

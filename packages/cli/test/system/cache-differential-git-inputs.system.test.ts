@@ -33,7 +33,7 @@ import {
 /** The file every hole seed rewrites. It has no links, so `edges` cannot move. */
 const SEEDED = 'docs/two.md';
 
-const HOLE_CLOSED_BY = 'the stat memo';
+const HOLE_BECAUSE = 'normalization is outside what VAT supports';
 
 /** Delete the file and check it out again, so git rewrites it under the current config. */
 function recheckout(corpus: string, git: Git): void {
@@ -67,7 +67,7 @@ function holeSeed(name: string, stateA: NonNullable<I0Seed['stateA']>, toB: NonN
     verbs: ['query'],
     stateA,
     toB,
-    expect: { documentsHole: { arm: 'warmSameHistory', closedBy: HOLE_CLOSED_BY } },
+    expect: { documentsHole: { arm: 'warmSameHistory', because: HOLE_BECAUSE } },
     consumed: { runs: ['warmSameHistory:prime', 'storeOff:measured'], check: seededKeysDiffer },
   };
 }

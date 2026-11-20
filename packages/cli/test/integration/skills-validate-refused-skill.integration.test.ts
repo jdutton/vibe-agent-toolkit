@@ -20,9 +20,9 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildAuditReport, resetAuditCaches } from '../../src/commands/audit.js';
 import type { ResourcesValidateReport } from '../../src/commands/resources/validate-schema.js';
-import { runResourcesValidatePhase } from '../../src/commands/resources/validate.js';
 import { resetSkillDiscoveryCache } from '../../src/skill-resolution/packaging-config.js';
 import { publishedSkillsValidate } from '../commands/skills/skills-validate-document.js';
+import { resourcesValidateInRun } from '../helpers/in-run.js';
 import { publishedPhase } from '../helpers/published-phase.js';
 import { build } from '../helpers/skills-build-fixture.js';
 import { silentLogger } from '../test-helpers.js';
@@ -112,7 +112,7 @@ describe('one resources.validation.allow entry clears the refused file in every 
 
   const resourcesFindings = async (config: string): Promise<string[]> => {
     const root = writeProject(config, { withAlpha: false });
-    const { document } = publishedPhase<ResourcesValidateReport>('resources validate', await runResourcesValidatePhase(root, {}));
+    const { document } = publishedPhase<ResourcesValidateReport>('resources validate', await resourcesValidateInRun(root));
     return codesOf(document.findings);
   };
 

@@ -69,8 +69,8 @@ const BUILDERS: Readonly<Record<string, readonly string[]>> = {
  * refusals still reach the user, or why there is no user to reach.
  */
 const NOT_READ_HERE: Readonly<Record<string, string>> = {
-  'packages/cli/src/commands/skills/validate.ts':
-    'its shared registry reaches `registryForSkill` in `packaging-validator.ts`, which reads the log for every skill it validates.',
+  'packages/agent-skills/src/validators/run-skill-registries.ts':
+    'its views reach `registryForSkill` in `packaging-validator.ts`, which reads the log for every skill it validates.',
   'packages/cli/src/pipeline-oracles/lanes.ts':
     'an oracle that builds each lane\'s registry to compare their enumerations; it reports to no user.',
 };
@@ -131,6 +131,9 @@ const POPULATION_NOT_READ_HERE: Readonly<Record<string, string>> = {
   'packages/cli/src/utils/resource-loader.ts':
     'the population only ENUMERATES (`ResourcePopulationSource` hands the registry paths): the registry parses each on its own '
     + 'bounded route and logs every refusal, which `loadResourcesWithConfig`\'s callers read (`getNotAdmitted()`).',
+  'packages/resources/src/projection/run-population.ts':
+    'the run\'s population only ENUMERATES for the run\'s registry views (`RunPopulation.source`): each view parses on the '
+    + 'run\'s route and logs every refusal, which the view\'s caller reads (`getNotAdmitted()`, `registryForSkill`).',
 };
 
 /**

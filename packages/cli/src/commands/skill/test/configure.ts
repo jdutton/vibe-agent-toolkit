@@ -207,7 +207,7 @@ async function requireDeclaredSkill(
   skills: ProjectConfig['skills'],
   skillName: string,
 ): Promise<void> {
-  const declared = skills === undefined ? [] : namedSkillsOrRefuse(await discoverSkillsFromConfig(skills, dirname(configPath), 'refuse'), dirname(configPath));
+  const declared = skills === undefined ? [] : namedSkillsOrRefuse(await discoverSkillsFromConfig(skills, dirname(configPath), 'refuse', undefined), dirname(configPath));
   if (declared.some((skill) => skill.name === skillName)) return;
   const known = declared.map((skill) => skill.name).sort((a, b) => a.localeCompare(b)).join(', ') || '(none)';
   throw new CommandRefusalError(

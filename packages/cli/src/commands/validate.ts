@@ -26,7 +26,7 @@
  */
 
 import { type ProjectConfig } from '@vibe-agent-toolkit/resources';
-import { forEachInOrder } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, withWorkPhase } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { marksOperandRefusalByHand } from '../command-tree.js';
@@ -35,7 +35,7 @@ import { loadConfig } from '../utils/config-loader.js';
 import { endWithReport } from '../utils/document-writer.js';
 import { createLogger } from '../utils/logger.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
-import { withPopulationCache } from '../utils/projection-store.js';
+import { withRunContext, type RunContext } from '../utils/resource-loader.js';
 
 import {
   addRetiredOnlyOption,
@@ -224,12 +224,19 @@ Example:
  * @param run.verbose - Forwarded to the resources, checks and skills phases
  * @param run.debug - Forwarded to the `checks` phase's child
  * @param run.base - `--base <ref>`, forwarded to the `checks` phase's child; undefined when none was given
+ * @param run.context - The run every in-process phase reads through (the `checks` child is a separate process)
  */
 export function selectValidateSurfaces(
   config: ProjectConfig | undefined,
-  run: { readonly root: string; readonly verbose: boolean; readonly debug: boolean; readonly base: string | undefined },
+  run: {
+    readonly root: string;
+    readonly verbose: boolean;
+    readonly debug: boolean;
+    readonly base: string | undefined;
+    readonly context: RunContext;
+  },
 ): PhaseSelection {
-  const { root, verbose, debug, base } = run;
+  const { root, verbose, debug, base, context } = run;
   // Forwarded to every surface, exactly as `vat verify` forwards its own. Both
   // validators already accept `-v, --verbose`; only this command lacked the
   // flag, which made the collapsed warning/info detail unreachable HERE while
@@ -243,7 +250,7 @@ export function selectValidateSurfaces(
       name: 'resources',
       schema: RESOURCES_VALIDATE_REPORT_SCHEMA,
       examined: RESOURCES_VALIDATE_EXAMINED,
-      run: () => runResourcesValidatePhase(undefined, { verbose }),
+      run: () => runResourcesValidatePhase(undefined, { verbose }, context),
     });
     // Whenever `resources:` is configured — a project with no `resources.checks` still runs VAT's
     // built-in set — and directly after `resources`. The phase report is the supervised child's own.
@@ -262,7 +269,7 @@ export function selectValidateSurfaces(
       // The phase validates the POOL (`skills.include`); a project whose skills are all plugin-local has
       // none, and its block is there for their config. The cwd is where the phase itself loads the config.
       examined: skillsPhaseExamined(SKILLS_VALIDATE_EXAMINED, () => shipsPluginLocalSkills(config, process.cwd())),
-      run: () => runSkillsValidatePhase(undefined, { verbose }),
+      run: () => runSkillsValidatePhase(undefined, { verbose }, context),
     });
   }
 
@@ -270,10 +277,11 @@ export function selectValidateSurfaces(
 }
 
 /**
- * Run every surface inside ONE projection-store scope, so the in-process lanes
- * share one database and one `git write-tree` instead of taking one each. The
- * measurement, and why the hoist is admissible here and nowhere else, are in
- * `docs/architecture/resource-scanning-and-caching.md` §3.7.
+ * Run every surface inside ONE run (`withRunContext`): one projection-store
+ * scope, so the in-process lanes share one database and one `git write-tree`,
+ * and one run population, so each file is read, keyed, parsed and admitted once
+ * for both in-process phases. The measurement, and why the hoist is admissible
+ * here and nowhere else, are in `docs/architecture/resource-scanning-and-caching.md` §3.7.
  *
  * ⚠️ One scope is one git snapshot for the in-process phases. `vat validate`
  * writes nothing into the tree — source-level and build-free by the decision at
@@ -286,26 +294,22 @@ export function selectValidateSurfaces(
  * while this process holds it open inside the scope below. It asks the resources
  * phase's question, so with a store selected it is served that phase's rows.
  *
- * @param projectRoot - The resolved project root, which every surface roots at
  * @param phases - The surfaces to run, in order
  * @param logger - Where the per-surface banner goes
  * @param results - Where each surface's result is recorded as it finishes, so
  *   a later throw still publishes the finished ones
  */
-async function runPhasesUnderOnePopulation(
-  projectRoot: string,
+async function runPhasesInOrder(
   phases: readonly Phase[],
   logger: ReturnType<typeof createLogger>,
   results: PhaseResult[],
 ): Promise<void> {
-  await withPopulationCache({ root: projectRoot }, async () => {
-    // In order, deliberately: surfaces are announced in a fixed order and their
-    // stderr streams live, so overlapping them would interleave two running
-    // reports into one unreadable channel.
-    await forEachInOrder(phases, async (phase) => {
-      logger.info(`\n▶ Surface: ${phase.name}`);
-      results.push(await runPhase(phase));
-    });
+  // In order, deliberately: surfaces are announced in a fixed order and their
+  // stderr streams live, so overlapping them would interleave two running
+  // reports into one unreadable channel.
+  await forEachInOrder(phases, async (phase) => {
+    logger.info(`\n▶ Surface: ${phase.name}`);
+    results.push(await withWorkPhase(phase.name, () => runPhase(phase)));
   });
 }
 
@@ -331,19 +335,22 @@ async function validateTopLevelCommand(
     // requireProjectRoot returns the discovered root; read config from there so a
     // subdirectory invocation doesn't load an empty config and falsely pass.
     const projectRoot = requireProjectRoot(process.cwd(), COMMAND_NAME);
-    const phases = applyPhaseSelection(
-      selectValidateSurfaces(loadConfig(projectRoot, 'source'), {
-        root: projectRoot,
-        verbose: options.verbose === true,
-        debug: options.debug === true,
-        base: options.base,
-      }),
-      logger,
-    );
+    await withRunContext({ root: projectRoot }, async (context) => {
+      const phases = applyPhaseSelection(
+        selectValidateSurfaces(loadConfig(projectRoot, 'source'), {
+          root: projectRoot,
+          verbose: options.verbose === true,
+          debug: options.debug === true,
+          base: options.base,
+          context,
+        }),
+        logger,
+      );
 
-    // A header, not a verdict: no ✅ before anything has run.
-    logger.info(`🔍 vat validate (surfaces: ${phases.map((p) => p.name).join(' → ')})`);
-    await runPhasesUnderOnePopulation(projectRoot, phases, logger, results);
+      // A header, not a verdict: no ✅ before anything has run.
+      logger.info(`🔍 vat validate (surfaces: ${phases.map((p) => p.name).join(' → ')})`);
+      await runPhasesInOrder(phases, logger, results);
+    });
   });
   endWithReport('validate', report, ORCHESTRATOR_FORMAT);
 }

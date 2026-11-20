@@ -133,6 +133,7 @@ export { manifestReadFailure, type MissingManifestFinding, validateMarketplace }
 export { validateSkill } from './validators/skill-validator.js';
 export { validate, type UnifiedValidateOptions } from './validators/unified-validator.js';
 export { detectResourceFormat, enumerateSurfaces } from './validators/format-detection.js';
+export { RunSkillRegistries, type RunSkillRegistriesOptions } from './validators/run-skill-registries.js';
 export {
   activeErrorsOf,
   activeWarningsOf,

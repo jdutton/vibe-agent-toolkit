@@ -109,7 +109,7 @@ export async function getDiscoveredSkillsByPath(
   if (cached !== undefined) return cached;
   const map = new Map<string, string>();
   if (skillsSection !== undefined) {
-    const discovery = await discoverSkillsFromConfig(skillsSection, configRoot, unreadable);
+    const discovery = await discoverSkillsFromConfig(skillsSection, configRoot, unreadable, undefined);
     const named = unreadable === 'refuse' ? namedSkillsOrRefuse(discovery, configRoot) : discovery.skills;
     for (const entry of named) {
       map.set(safePath.resolve(entry.sourcePath), entry.name);

@@ -47,9 +47,9 @@ describe('a cold vat build', () => {
       diagnosticsChannel.unsubscribe('worker_threads', onWorker);
     }
 
-    // A parked thread serves the NEXT pool, never one open beside its own: the run holds two pools
-    // open at once at most (skill discovery's, and the projection's inside it), so two threads is
-    // the floor, against eleven when every pool started its own. Never zero: that would be a run
+    // A parked thread serves the NEXT pool, never one open beside its own: the run holds
+    // MOST_POOLS_OPEN_AT_ONCE pools open at once at most, so that many threads is the floor,
+    // against eleven when every pool started its own. Never zero: that would be a run
     // that parsed nothing, and proved nothing. No thread an earlier file parked can serve this
     // run — the case root stubs HOME and TMPDIR to a fresh directory, and a parked thread serves
     // only a pool started under its own environment.

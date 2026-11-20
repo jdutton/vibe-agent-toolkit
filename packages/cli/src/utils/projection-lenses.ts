@@ -23,6 +23,7 @@ import {
   type DerivedTableName,
   type PopulationCache,
   type PopulationOutcome,
+  type PopulationRun,
   type LensRefusalCode,
   type Projection,
 } from '@vibe-agent-toolkit/resources';
@@ -89,6 +90,8 @@ export interface LensEvaluationInput {
   readonly base: string | undefined;
   /** The run's projection store, so a lens's own population can hit it. */
   readonly cache: PopulationCache | undefined;
+  /** The run's population run, so a lens's own population reads and parses through the run's. */
+  readonly populationRun: PopulationRun;
   /** Where a lens that populates reports its own population's refused content. */
   readonly logger: Logger;
 }
@@ -128,7 +131,7 @@ export const AUTHORED_LINK_LENS: ProjectionLens = {
 export const CLAUDE_CONTEXT_LENS: ProjectionLens = {
   name: 'claude-context',
   relations: ['claudeContextChains', 'claudeContextLoads'],
-  evaluate: ({ root, cache, logger }) => evaluateClaudeContextLens({ root, cache, logger }),
+  evaluate: ({ root, populationRun, cache, logger }) => evaluateClaudeContextLens({ root, run: populationRun, cache, logger }),
 };
 
 /** What changed under the root since the run's `--base`: `changed_files`. Refuses without a base. */

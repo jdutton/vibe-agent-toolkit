@@ -24,7 +24,7 @@ import {
   type PluginLocalSkillIndex,
   type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
-import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
+import type { ParseDispatcher, ProjectConfig } from '@vibe-agent-toolkit/resources';
 import {
   buildReport,
   toFindings,
@@ -42,6 +42,7 @@ import { endWithReport } from '../utils/document-writer.js';
 import { reportFindings } from '../utils/issue-rendering.js';
 import type { createLogger } from '../utils/logger.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
+import { withRunContext, type RunContext } from '../utils/resource-loader.js';
 import { runIntegrityFinding } from '../utils/run-integrity.js';
 import { isSkillPublished, mergeSkillPackagingConfig, pluginLocalSkillConfigEntry, publishScope } from '../utils/skill-packaging-config.js';
 
@@ -605,6 +606,7 @@ const VERIFY_VOCABULARY: PhaseVocabulary = {
  * `only` is passed to {@link decidePhaseSelection} as `undefined` (that helper
  * still routes `--only` for `vat validate` and `vat build`).
  *
+ * @param context - The run the in-process resources and skills phases read through
  * @param configError - The config-load failure, when the config could not be
  *   read. Every delegated phase still runs so THE PHASE reports the real config
  *   error (exit 2) instead of this command guessing.
@@ -613,6 +615,7 @@ const VERIFY_VOCABULARY: PhaseVocabulary = {
  */
 export function selectVerifyPhases(
   config: ProjectConfig | undefined,
+  context: RunContext,
   configError?: string,
   verbose?: boolean,
 ): PhaseSelection {
@@ -625,7 +628,7 @@ export function selectVerifyPhases(
       name: 'resources',
       schema: RESOURCES_VALIDATE_REPORT_SCHEMA,
       examined: RESOURCES_VALIDATE_EXAMINED,
-      run: () => runResourcesValidatePhase(undefined, { verbose: detail }),
+      run: () => runResourcesValidatePhase(undefined, { verbose: detail }, context),
     });
   }
 
@@ -635,7 +638,7 @@ export function selectVerifyPhases(
       schema: SKILLS_VALIDATE_REPORT_SCHEMA,
       // As `vat validate`: the phase validates the pool, and a plugin-local project has none.
       examined: skillsPhaseExamined(SKILLS_VALIDATE_EXAMINED, () => shipsPluginLocalSkills(config, process.cwd())),
-      run: () => runSkillsValidatePhase(undefined, { verbose: detail }),
+      run: () => runSkillsValidatePhase(undefined, { verbose: detail }, context),
     });
   }
 
@@ -930,6 +933,8 @@ async function runInProcessPhases(run: {
   /** `--verbose`: whether each phase's warning and info findings reach stderr. */
   verbose: boolean;
   results: PhaseResult[];
+  /** The run's dispatcher, so discovery reads no SKILL.md the source phases already read. */
+  dispatcher: ParseDispatcher;
 }): Promise<void> {
   const { phases, config, projectRoot, logger, verbose, results } = run;
   // ONE discovery for the whole in-process half of the run: every phase below
@@ -938,11 +943,11 @@ async function runInProcessPhases(run: {
   // command exists to refuse (a SKILL.md whose parse was refused has no name to
   // check by, so it refuses too) — the throw is the run's refusal, published
   // with the phases that already finished.
-  const discoveredSkills = namedSkillsOrRefuse(await discoverSkillsFromConfig(run.skills, projectRoot, 'refuse'), projectRoot);
+  const discoveredSkills = namedSkillsOrRefuse(await discoverSkillsFromConfig(run.skills, projectRoot, 'refuse', run.dispatcher), projectRoot);
   // ONE plugin-local index likewise, and the declared name of each plugin-local
   // skill, which keys its config exactly as the plugin build keyed it.
   const pluginLocal = indexPluginLocalSkills(config, projectRoot);
-  const pluginLocalNames = await readPluginLocalSkillNames(pluginLocal, projectRoot);
+  const pluginLocalNames = await readPluginLocalSkillNames(pluginLocal, projectRoot, run.dispatcher);
 
   if (phases.includes(FILES_CONFIG_DESTS)) {
     results.push(await inProcess(IN_PROCESS_PHASES[FILES_CONFIG_DESTS], () =>
@@ -978,24 +983,36 @@ async function verifyTopLevelCommand(
     // Spec §7: `vat verify` requires a projectRoot.
     const projectRoot = requireProjectRoot(process.cwd(), COMMAND_NAME);
     const { config, error: configError } = loadConfigTolerant(projectRoot);
-    const phases = applyPhaseSelection(selectVerifyPhases(config, configError, options.verbose), logger);
+    // One run for every phase: each file read, keyed, parsed and admitted once.
+    await withRunContext({ root: projectRoot }, async (context) => {
+      const phases = applyPhaseSelection(selectVerifyPhases(config, context, configError, options.verbose), logger);
 
-    // Announced from the same list the in-process gates below read, so the
-    // printed phases and the executed phases cannot disagree.
-    const inProcessPhases = selectInProcessVerifyPhases(config);
-    logger.info(formatVerifyAnnouncement(phases.map((p) => p.name), config));
+      // Announced from the same list the in-process gates below read, so the
+      // printed phases and the executed phases cannot disagree.
+      logger.info(formatVerifyAnnouncement(phases.map((p) => p.name), config));
 
-    // In order, deliberately: phases are announced in a fixed order and their
-    // stderr streams live, so overlapping them would interleave two running
-    // reports into one unreadable channel.
-    await forEachInOrder(phases, async (phase) => {
-      logger.info(`\n▶ Phase: ${phase.name}`);
-      results.push(await runPhase(phase));
+      // In order, deliberately: phases are announced in a fixed order and their
+      // stderr streams live, so overlapping them would interleave two running
+      // reports into one unreadable channel.
+      await forEachInOrder(phases, async (phase) => {
+        logger.info(`\n▶ Phase: ${phase.name}`);
+        results.push(await runPhase(phase));
+      });
+
+      const inProcessPhases = selectInProcessVerifyPhases(config);
+      if (inProcessPhases.length > 0 && config?.skills) {
+        await runInProcessPhases({
+          phases: inProcessPhases,
+          config,
+          skills: config.skills,
+          projectRoot,
+          logger,
+          verbose: options.verbose === true,
+          results,
+          dispatcher: context.dispatcher,
+        });
+      }
     });
-
-    if (inProcessPhases.length > 0 && config?.skills) {
-      await runInProcessPhases({ phases: inProcessPhases, config, skills: config.skills, projectRoot, logger, verbose: options.verbose === true, results });
-    }
   });
   endWithReport('verify', report, ORCHESTRATOR_FORMAT);
 }

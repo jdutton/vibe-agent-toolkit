@@ -19,6 +19,7 @@ import type { ParseLimits } from '../src/parse-limits.js';
 import { ParseLimitError } from '../src/parse-limits.js';
 import type { ParsePool, ParsePoolOptions } from '../src/parse-pool.js';
 import { __readParseTimingSnapshot } from '../src/parse-timing.js';
+import { POPULATION_PARSE_LIMITS } from '../src/projection/content-cache.js';
 
 import { TIGHT_LIMITS } from './parse-limit-fixtures.js';
 
@@ -154,10 +155,26 @@ describe('the dispatcher has one route, and it is bounded', () => {
 });
 
 describe('the input cap a dispatcher hands its reads', () => {
-  it('is the named cap, resolved as the dispatcher is constructed', () => {
-    const dispatcher = new ParseDispatcher(missingCache().cache, { limits: { inputBytes: 4096 } });
+  it('is the population\'s cap, whatever other limits are named', () => {
+    const dispatcher = new ParseDispatcher(missingCache().cache, { limits: { outputRows: 1 } });
 
-    expect(dispatcher.inputBytes).toBe(4096);
+    expect(dispatcher.inputBytes).toBe(POPULATION_PARSE_LIMITS.inputBytes);
+  });
+
+  it('is the population\'s cap even when a caller passes `inputBytes` through a value typed ParseLimits', async () => {
+    // The policy type omits `inputBytes`, but a `ParseLimits` variable carries it past that `Omit`
+    // with no compile error: the cap is enforced at runtime, in the dispatcher and in its pool.
+    const cap = POPULATION_PARSE_LIMITS.inputBytes;
+    const limits: ParseLimits = { ...TIGHT_LIMITS, inputBytes: cap * 4 };
+    const pool = recordingPool(() => Promise.resolve(PARSED));
+    const dispatcher = new ParseDispatcher(missingCache().cache, { limits, createPool: pool.createPool });
+
+    expect(dispatcher.inputBytes).toBe(cap);
+    await expect(dispatcher.parse({ ...DOCUMENT, byteLength: cap + 1 })).rejects.toMatchObject({ limit: 'inputBytes' });
+    await dispatcher.parse(DOCUMENT);
+    await dispatcher.shutdown();
+
+    expect(pool.built[0]?.limits).toStrictEqual({ ...TIGHT_LIMITS, inputBytes: cap });
   });
 
   it('refuses content past its cap before the cache is consulted, so an entry filed under a larger cap is not its answer', async () => {
@@ -173,10 +190,10 @@ describe('the input cap a dispatcher hands its reads', () => {
         return Promise.resolve(PARSED);
       },
     } as unknown as ParseCache;
-    const cap = DOCUMENT.byteLength - 1;
-    const dispatcher = new ParseDispatcher(cache, { limits: { inputBytes: cap } });
+    const cap = POPULATION_PARSE_LIMITS.inputBytes;
+    const dispatcher = new ParseDispatcher(cache, {});
 
-    await expect(dispatcher.parse(DOCUMENT)).rejects.toMatchObject({
+    await expect(dispatcher.parse({ ...DOCUMENT, byteLength: cap + 1 })).rejects.toMatchObject({
       code: 'PARSE_LIMIT_EXCEEDED',
       limit: 'inputBytes',
       bound: new ParseLimitError('inputBytes', cap).bound,
@@ -223,8 +240,8 @@ describe('the input cap a dispatcher hands its reads', () => {
     expect(asked).toStrictEqual([20]);
   });
 
-  it('refuses a named cap that is not a positive number at construction, not at the first read', () => {
-    expect(() => new ParseDispatcher(missingCache().cache, { limits: { inputBytes: 0 } })).toThrow(/inputBytes must be a positive finite number/);
+  it('refuses a named limit that is not a positive number at construction, not at the first read', () => {
+    expect(() => new ParseDispatcher(missingCache().cache, { limits: { outputRows: 0 } })).toThrow(/outputRows must be a positive finite number/);
   });
 });
 

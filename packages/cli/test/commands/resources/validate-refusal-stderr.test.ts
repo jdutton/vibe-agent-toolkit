@@ -22,7 +22,8 @@ import type { Report } from '@vibe-agent-toolkit/schema';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { runResourcesValidatePhase, validateCommand } from '../../../src/commands/resources/validate.js';
+import { validateCommand } from '../../../src/commands/resources/validate.js';
+import { resourcesValidateInRun } from '../../helpers/in-run.js';
 import { captureCommand } from '../../helpers/stdout-capture.js';
 import { captureProcessExit } from '../../test-doubles.js';
 
@@ -62,7 +63,7 @@ describe('resources validate — the refusal message reaches stderr', () => {
   it('refuses a --collection the project does not declare, on stderr and in the report', async () => {
     let report: Report<unknown> | undefined;
     const { stderr } = await captureProcessExit(async () => {
-      ({ report } = await runResourcesValidatePhase(root, { collection: 'no-such-collection' }));
+      ({ report } = await resourcesValidateInRun(root, { collection: 'no-such-collection' }));
     });
 
     // The invocation's mistake — not a run over nothing, and never INTERNAL_ERROR.

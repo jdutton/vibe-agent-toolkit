@@ -5,7 +5,8 @@
  */
 
 import type { SkillsValidateReport } from '../../../src/commands/skills/validate-schema.js';
-import { runSkillsValidatePhase, type SkillsValidateCommandOptions } from '../../../src/commands/skills/validate.js';
+import type { SkillsValidateCommandOptions } from '../../../src/commands/skills/validate.js';
+import { skillsValidateInRun } from '../../helpers/in-run.js';
 import { publishedPhase } from '../../helpers/published-phase.js';
 
 /**
@@ -17,5 +18,5 @@ export async function publishedSkillsValidate(
   root: string,
   options: SkillsValidateCommandOptions = {},
 ): Promise<{ exitCode: number; document: SkillsValidateReport }> {
-  return publishedPhase<SkillsValidateReport>('skills validate', await runSkillsValidatePhase(root, options));
+  return publishedPhase<SkillsValidateReport>('skills validate', await skillsValidateInRun(root, options));
 }

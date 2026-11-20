@@ -541,8 +541,12 @@ const populationScope = new AsyncLocalStorage<ActivePopulationScope>();
  * above me with no store" — two states that take opposite actions.
  */
 interface ActivePopulationScope {
-  /** What the enclosing scope opened, or `undefined` if it opened nothing. */
-  readonly opened: OpenedPopulationCache | undefined;
+  /**
+   * What the enclosing scope opened, or `undefined` if it opened nothing. Opened
+   * on first ask (a scope's store is opened by its first consumer), and the same
+   * answer every later time, a refusal included.
+   */
+  readonly opened: () => Promise<OpenedPopulationCache | undefined>;
 }
 
 /**
@@ -577,8 +581,12 @@ function joinableCache(
   return snapshot.ok && snapshot.hash === active.cache.treeHash ? { cache: active.cache } : undefined;
 }
 
+/** The scope's store, opened on first ask: the cache, or `undefined` when there is none to give. */
+type PopulationCacheOf = () => Promise<PopulationCache | undefined>;
+
 /**
- * Open a store for this scope, run the work inside it, and close it.
+ * Run the work inside a scope whose store is opened on its first ask, and closed
+ * when the scope ends if it was opened.
  *
  * A close that fails never decides the outcome. When the work threw, its error
  * is the one rethrown and the close failure is told to the operator — a
@@ -590,26 +598,40 @@ function joinableCache(
  *
  * @param options - Where the corpus is
  * @param options.root - The absolute corpus root
- * @param work - Given the cache, or `undefined` when there is none to give
+ * @param work - Given the scope's store, opened on first ask
  * @returns Whatever `work` returned
  */
 async function runOwnedScope<T>(
   options: { root: string },
-  work: (cache: PopulationCache | undefined) => Promise<T>,
+  work: (cacheOf: PopulationCacheOf) => Promise<T>,
 ): Promise<T> {
-  const opened = await openPopulationCache(options);
+  let opening: Promise<OpenedPopulationCache | undefined> | undefined;
+  const opened = (): Promise<OpenedPopulationCache | undefined> => (opening ??= openPopulationCache(options));
   let result: T;
   try {
-    // Registered even when nothing was opened, so a nested scope can tell "no
+    // Registered even when nothing is opened, so a nested scope can tell "no
     // store in this process" from "no scope above me" — and so the nested scope
     // stays inside THIS scope's git-snapshot memo either way.
-    result = await populationScope.run({ opened }, () => work(opened?.cache));
+    result = await populationScope.run({ opened }, () => work(async () => (await opened())?.cache));
   } catch (error) {
-    await closeTellingOperator(opened, { workFailed: true });
+    await closeTellingOperator(await openedOrNone(opening), { workFailed: true });
     throw error;
   }
-  await closeTellingOperator(opened, { workFailed: false });
+  await closeTellingOperator(await openedOrNone(opening), { workFailed: false });
   return result;
+}
+
+/**
+ * The store a scope opened, if its first ask opened one. A store that refused to
+ * open has nothing to close: its refusal was its asker's.
+ *
+ * @param opening - The scope's open, or `undefined` when nothing asked
+ * @returns The opened store, or `undefined`
+ */
+async function openedOrNone(opening: Promise<OpenedPopulationCache | undefined> | undefined): Promise<OpenedPopulationCache | undefined> {
+  if (opening === undefined) return undefined;
+  const [settled] = await Promise.allSettled([opening]);
+  return settled?.status === 'fulfilled' ? settled.value : undefined;
 }
 
 /**
@@ -632,6 +654,79 @@ async function closeTellingOperator(opened: OpenedPopulationCache | undefined, o
       + (outcome.workFailed ? 'Reporting the run\'s own failure instead.' : 'The run\'s result stands; the next run reads the cache as it was left.'),
     );
   }
+}
+
+/**
+ * The scope for `work`: the enclosing one's store when it may be joined, else a
+ * scope of its own.
+ *
+ * @param options - Where the corpus is
+ * @param options.root - The absolute corpus root
+ * @param work - Given the scope's store, opened on first ask
+ * @returns Whatever `work` returned
+ */
+function withPopulationScope<T>(
+  options: { root: string },
+  work: (cacheOf: PopulationCacheOf) => Promise<T>,
+): Promise<T> {
+  try {
+    const active = populationScope.getStore();
+    if (active !== undefined) {
+      // 🪤 No new git bracket on either path: an inner scope stays inside the
+      // outer one's memo, which is where the deduplication lives. A fresh bracket
+      // here would start an empty memo and re-snapshot the same repository — a
+      // dedupe that does nothing while looking exactly like one that works.
+      return active.opened().then((opened) => {
+        const joinable = joinableCache(opened, options.root);
+        return joinable === undefined ? runOwnedScope(options, work) : work(() => Promise.resolve(joinable.cache));
+      });
+    }
+    // ONE git snapshot for the whole scope, and this is the level that gets it:
+    // `openPopulationCache` takes one to derive the store key, and the crawl that
+    // runs inside `work` takes another to enumerate the extent — same repository,
+    // sequentially, ~195 ms and ~159 ms measured on a large monorepo.
+    //
+    // The correctness half matters more than the saving. Taken separately, a
+    // working-tree edit landing between them makes the two snapshots DIFFERENT
+    // answers, and the extent from the second is then filed under the key from the
+    // first: a cache entry whose key does not describe its contents, written
+    // silently. The bracket closes that race rather than merely deduplicating.
+    //
+    // Opened here rather than around either consumer because it must enclose BOTH
+    // — a bracket opened deeper than one of them dedupes nothing while looking
+    // exactly like a bracket that works. Every CLI entry into the projection lane
+    // reaches the store through this scope, and a run holds one OUTSIDE all of
+    // them, which the nesting above is what makes safe.
+    //
+    // And the notice scope: the "cannot key this root" notice is printed once per root per
+    // command run — this outermost scope's ledger, which every nested scope joins.
+    return withNoticeLedger(() => withGitSnapshotCache(() => runOwnedScope(options, work)));
+  } catch (error) {
+    return Promise.reject(error as Error);
+  }
+}
+
+/**
+ * Run one VAT run's work in a projection-store scope whose store is opened by
+ * its first consumer rather than up front.
+ *
+ * For a run that may finish without enumerating anything: a phase that refuses
+ * at its own guards, or finds nothing to check, never opens the store or takes
+ * the snapshot that keys it, so its refusal text and stderr are its own. A store
+ * that will not open rejects its first asker, and every later asker with the same
+ * error (`withRunContext` makes that the run's one refusal). Otherwise the same scope as {@link withPopulationCache}: one
+ * snapshot memo, one notice ledger, and nested scopes join it.
+ *
+ * @param options - Where the corpus is
+ * @param options.root - The absolute corpus root
+ * @param work - Given the scope's store, opened on first ask
+ * @returns Whatever `work` returned
+ */
+export function withLazyPopulationCache<T>(
+  options: { root: string },
+  work: (cacheOf: PopulationCacheOf) => Promise<T>,
+): Promise<T> {
+  return withPopulationScope(options, work);
 }
 
 /**
@@ -680,38 +775,5 @@ export function withPopulationCache<T>(
   options: { root: string },
   work: (cache: PopulationCache | undefined) => Promise<T>,
 ): Promise<T> {
-  try {
-    const active = populationScope.getStore();
-    if (active !== undefined) {
-      const joinable = joinableCache(active.opened, options.root);
-      // 🪤 No new git bracket on either path: an inner scope stays inside the
-      // outer one's memo, which is where the deduplication lives. A fresh bracket
-      // here would start an empty memo and re-snapshot the same repository — a
-      // dedupe that does nothing while looking exactly like one that works.
-      return joinable === undefined ? runOwnedScope(options, work) : work(joinable.cache);
-    }
-    // ONE git snapshot for the whole scope, and this is the level that gets it:
-    // `openPopulationCache` below takes one to derive the store key, and the crawl
-    // that runs inside `work` takes another to enumerate the extent — same
-    // repository, sequentially, ~195 ms and ~159 ms measured on a large monorepo.
-    //
-    // The correctness half matters more than the saving. Taken separately, a
-    // working-tree edit landing between them makes the two snapshots DIFFERENT
-    // answers, and the extent from the second is then filed under the key from the
-    // first: a cache entry whose key does not describe its contents, written
-    // silently. The bracket closes that race rather than merely deduplicating.
-    //
-    // Opened here rather than around either consumer because it must enclose BOTH
-    // — a bracket opened deeper than one of them dedupes nothing while looking
-    // exactly like a bracket that works. Every CLI entry into the projection lane
-    // (`inventory`, `resource-loader`'s two) reaches the store through this scope,
-    // and `vat validate`'s orchestrator holds one OUTSIDE all of them, which the
-    // nesting above is what makes safe.
-    //
-    // And the notice scope: the "cannot key this root" notice is printed once per root per
-    // command run — this outermost scope's ledger, which every nested scope joins.
-    return withNoticeLedger(() => withGitSnapshotCache(() => runOwnedScope(options, work)));
-  } catch (error) {
-    return Promise.reject(error as Error);
-  }
+  return withPopulationScope(options, async (cacheOf) => work(await cacheOf()));
 }
