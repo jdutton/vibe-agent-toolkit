@@ -18,14 +18,14 @@
  * `stable` is `false` and no single repeat is *the* population. Picking a middle
  * one would suggest a spread that a set does not have.
  *
- * The arm travels with the repeat: `lane`, `extentSource`, `root` and `files`
+ * The arm travels with the repeat: `extentSource`, `root` and `files`
  * are all read off that FIRST document. ⚠️ This is NOT the repeat `io` reads —
  * `io` discards repeat 0 as a warm-up and takes its arm from the LAST repeat's
  * stdout, the one whose dumps it reports. The two facets share one reader
  * (`harness/lane.ts`) but point it at different repeats, so a subject whose
  * warm-up prints a different arm from its steady state would be named
  * differently by the two facets for one command. `stable` compares file sets,
- * not arms, so a lane that changed between repeats is not what it detects.
+ * not arms, so an arm that changed between repeats is not what it detects.
  */
 
 import { mapInOrder } from '@vibe-agent-toolkit/utils';
@@ -83,7 +83,6 @@ function failedRow(base: RowBase, runs: number, failure: string): PopulationComm
     runs,
     stable: null,
     attribution: 'not-measured',
-    lane: null,
     extentSource: null,
     root: null,
     count: 0,
@@ -192,7 +191,6 @@ function rowFor(measurement: SpecMeasurement): PopulationCommandStats {
     // nothing — and folding it into `measured` would leave a reader reading a
     // count of zero as a small population.
     attribution: reported.files.length === 0 ? 'nothing-enumerated' : 'measured',
-    lane: reported.lane,
     extentSource: reported.extentSource,
     root: reported.root,
     count: reported.files.length,

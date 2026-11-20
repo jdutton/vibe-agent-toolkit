@@ -4,8 +4,8 @@
  * Two rules, both of which this facet can break in ways the others cannot:
  *
  * - **Every set appears with what qualifies it.** A count is never shown without
- *   the lane that produced it and whether the repeats agreed. A population whose
- *   lane is unknown is a population whose arm is unproven, and that has to be
+ *   the enumerator that produced it and whether the repeats agreed. A population
+ *   whose enumerator is unknown is a population whose arm is unproven, and that has to be
  *   visible in the line, not inferable from the absence of one.
  * - **A truncated list says how much it dropped, in the same line.** These lists
  *   run to thousands of paths on a real corpus, so they are capped — but a cap

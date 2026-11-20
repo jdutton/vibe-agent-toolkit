@@ -18,8 +18,8 @@ Four declared lanes:
 | Lane | Entry point | Defined in |
 |---|---|---|
 | `crawl` | `crawlDirectory` / `crawlDirectorySync` | `packages/utils/src/file-crawler.ts` |
-| `registry-md` | `createProjectRegistry` (include `**/*.md`) | `packages/agent-skills/src/skill-packager.ts` |
-| `registry-md-html` | `crawlAndResolveRegistry` (include md **+ html**) | `packages/agent-skills/src/validators/packaging-validator.ts` |
+| `registry-md` | `RunSkillRegistries.packagingRegistry` (include `**/*.md`), a view of the run registry | `packages/agent-skills/src/validators/run-skill-registries.ts` |
+| `registry-md-html` | `RunSkillRegistries.forRoot` (include md **+ html**), a view of the run registry | `packages/agent-skills/src/validators/run-skill-registries.ts` |
 | `okf-bundle-walk` | `discoverOkfBundle` — bare recursive `readdir` | `packages/resources/src/okf/discovery.ts` |
 **`okf-bundle-walk` is deliberate, and the reason generalises.** It does **not** route through
 `crawlDirectory`, because both of that function's narrowings are correctness holes inside an OKF
@@ -65,10 +65,9 @@ projection row's `crawl` mark is true but partial: it names a sink the lane can 
 enumerator doing the work. **Eight rows carry a projection**, each by default unless its escape hatch
 is set: `vat resources scan`, `vat resources validate` and `vat rag index` through
 `packages/cli/src/utils/resource-loader.ts › loadResourcesWithConfig()`; `vat skills validate`,
-`vat skills build` and `vat claude plugin build` for their link registries through
-`› withResourcePopulationSource()` — both gated by `› resourcesProjectionCrawlSelected()`, which is
-`!== 'walk'`; `vat inventory` on a plugin directory; and `vat claude context`, which has no walk
-arm at all. Four more inherit one: `vat build`, `vat validate` and
+`vat skills build` and `vat claude plugin build` for their link registries through views of the
+run registry that `› withRunContext()` opens (one population per run; there is no walk arm);
+`vat inventory` on a plugin directory; and `vat claude context`, which has no walk arm at all. Four more inherit one: `vat build`, `vat validate` and
 `vat verify` through the phases they run in process (and `vat validate` through its `checks`
 child as well), and `vat skill test run` by re-entering `vat claude plugin build`.
 
@@ -94,7 +93,7 @@ share work between it and the phases beside it.
 
 | Command | Lane | Via |
 |---|---|---|
-| `vat audit [path]` | `crawl` + `registry-md-html` | `audit.ts` → `audit/scan-population.ts › enumerateAuditPopulation()` → `crawlDirectory` for the subject tree (git route with untracked files by default; the walk route under `--include-artifacts` or when the scan root is itself gitignored — `NEVER_CRAWL_GLOBS` applies on both); `crawlAndResolveRegistry` once per project root it finds for the link graph. Against a bare skills directory only the crawl runs |
+| `vat audit [path]` | `crawl` + `registry-md-html` | `audit.ts` → `audit/scan-population.ts › enumerateAuditPopulation()` → `crawlDirectory` for the subject tree (git route with untracked files by default; the walk route under `--include-artifacts` or when the scan root is itself gitignored — `NEVER_CRAWL_GLOBS` applies on both); `RunSkillRegistries.forRoot` once per project root it finds for the link graph. Against a bare skills directory only the crawl runs |
 | `vat build` | *runs* `skills build`, `claude plugin build` | `build.ts` → `runPhase` |
 | `vat validate` | *runs* `resources validate`, `resources check` (as a supervised child process), `skills validate` | `validate.ts` → `runPhase` |
 | `vat verify` | `crawl`, *plus runs* `resources validate`, `skills validate` | `verify.ts` → `runPhase` |
@@ -227,7 +226,7 @@ runtime leg.
   such row.
 - **A runtime probe proves presence, never absence.** `vat audit` fired the `crawl` sink against a
   scratch directory holding two markdown files and no skill (its subject population), and
-  `crawlAndResolveRegistry`×2 against this repo. A `NONE` in this table means "no reachable sink under static analysis", corroborated by
+  the `registry-md-html` lane twice against this repo (measured before that lane became a run registry view). A `NONE` in this table means "no reachable sink under static analysis", corroborated by
   runtime where a credential-free invocation exists — not "proven never to enumerate".
 - **The `claude org *` commands were not run** (they need `ANTHROPIC_ADMIN_API_KEY`). Their rows
   rest on static analysis plus the inline HTTPS bodies being directly readable.

@@ -944,7 +944,6 @@ export { BUILTIN_CHECK_NAMES } from './projection/builtin-check-names.js';
 export {
   buildResourcePopulation,
   buildResourceProjection,
-  CRAWL_LANES,
   type ResourceEnumeration,
   type CrawlPopulation,
   type ResourcePopulationSource,
@@ -959,6 +958,7 @@ export {
   type PopulationRun,
   type RunPopulationOptions,
 } from './projection/run-population.js';
+export type { PopulationUnreadablePolicy } from './projection/crawl-source.js';
 
 // The git extent (zones §2): tracked ∪ (untracked ∧ ¬ignored) — what a clone
 // sees. Its disagreement with the filesystem extent over a gitignored path is

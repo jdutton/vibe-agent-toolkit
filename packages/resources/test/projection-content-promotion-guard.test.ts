@@ -64,6 +64,7 @@ import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { afterClosurePromotion, populate } from '../src/projection/merge.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
 
+import { inOwnRun } from './helpers/population-run.js';
 import { createGitRepo, setupSubdirTestSuite, writeFileIn } from './test-helpers.js';
 
 /** The ignored subtree, so `deferGitignored` has something to defer. */
@@ -196,7 +197,7 @@ describe('demand promotion, over a row the shipped deferral policy produced', ()
     const registry = new ContributorRegistry();
     registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
 
-    const { projection } = await populate({ root: suite.tempDir, registry, gitTracker: tracker });
+    const { projection } = await inOwnRun(populate, { root: suite.tempDir, registry, gitTracker: tracker });
 
     const deferred = projection.resourceRealizations.filter((row) => row.path === DEFERRED_DOC);
     expect(deferred.map((row) => [row.contentState, row.contentKey])).toEqual([['deferred', null]]);

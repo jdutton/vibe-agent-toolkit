@@ -8,10 +8,8 @@ import { basename } from 'node:path';
 
 import {
   conventionalSuiteProbe,
-  crawlAndResolveRegistry,
   detectDeclaredButMissing,
   detectMarketplacePluginSourceMissing,
-  resetPackagingRegistryCache,
   detectPresentButUndeclared,
   detectReferenceTargetMissing,
   describeIssues,
@@ -23,9 +21,11 @@ import {
   validateMarketplace,
   validateSkill,
   validateSkillForPackaging,
+  withSkillRegistries,
   type ConventionalSuiteProbe,
   type EvidenceRecord,
   type PackagingValidationResult,
+  type RunSkillRegistries,
   type SkillPackagingConfig,
   type SkillValidationSharedContext,
   type Surface,
@@ -158,6 +158,14 @@ import {
   discoverSkillsFromConfig,
   SKILLS_INCLUDE_REMEDY,
 } from './skills/skill-discovery.js';
+
+/**
+ * The command's options inside one audit run: the run's skill registries ride
+ * with them to every lane that validates a skill, so each project root an audit
+ * reaches is crawled once per run (see {@link getValidationResults}, which opens
+ * the run).
+ */
+type AuditRunOptions = AuditCommandOptions & { readonly registries: RunSkillRegistries };
 
 export interface AuditCommandOptions {
   compat?: boolean;
@@ -514,8 +522,8 @@ function degradingDiscovery(
 }
 
 /**
- * Audit's ruling for the registry crawl — the link graph `crawlAndResolveRegistry`
- * builds over the whole project root for the config-aware lane: enumerate
+ * Audit's ruling for the registry crawl — the link graph the run's skill
+ * registries build over the whole project root for the config-aware lane: enumerate
  * AROUND a directory it cannot list, file the gap, keep every readable document.
  *
  * The other half of {@link degradingDiscovery}, on the other crawl the
@@ -635,7 +643,7 @@ function withDegradedConfigFindings(results: ValidationResult[]): ValidationResu
 
 async function validateSingleSkill(
   skillPath: string,
-  options: AuditCommandOptions,
+  options: AuditRunOptions,
   logger: ReturnType<typeof createLogger>,
   locationRoot: string,
   crawlTree: boolean,
@@ -660,11 +668,9 @@ async function validateSingleSkill(
     // predicts the same bundle the packager produces: no skill's report counts a
     // SIBLING skill's eval suite as an ordinary bundled file.
     // Audit's ruling for the link-graph crawl — see {@link degradingRegistry}.
-    // Stated on the context too, for the fallback crawl `validateSkillForPackaging`
-    // makes when this registry does not cover the skill: one ruling, both crawls.
     const unreadable = degradingRegistry(projectRoot, logger, locationRoot);
     const sharedCtx: SkillValidationSharedContext = {
-      registry: await crawlAndResolveRegistry(projectRoot, { outputs: [], unreadable }),
+      registries: options.registries,
       unreadable,
       // An audit only reads the trees it scans.
       outputs: [],
@@ -1543,7 +1549,7 @@ async function unusableRootRefusal(scanPath: string): Promise<unknown> {
  */
 function validateSurface(
   surface: Surface,
-  options: AuditCommandOptions,
+  options: AuditRunOptions,
   logger: ReturnType<typeof createLogger>,
   locationRoot: string,
 ): Promise<ValidationResult> {
@@ -1567,7 +1573,7 @@ function validateSurface(
 function validateMultipleSurfaces(
   surfaces: readonly Surface[],
   scanPath: string,
-  options: AuditCommandOptions,
+  options: AuditRunOptions,
   logger: ReturnType<typeof createLogger>,
   locationRoot: string,
 ): Promise<ValidationResult[]> {
@@ -1625,7 +1631,7 @@ async function runInventoryDetectors(
 async function recurseIntoMarketplacePlugins(
   marketplaceInv: ClaudeMarketplaceInventory,
   recursive: boolean,
-  options: AuditCommandOptions,
+  options: AuditRunOptions,
   logger: ReturnType<typeof createLogger>,
   locationRoot: string,
 ): Promise<ValidationResult[]> {
@@ -1777,8 +1783,10 @@ export async function getValidationResults(
 	locationRoot: string,
 ): Promise<ValidationResult[]> {
 	try {
+		// One run per audit subject: each project root it reaches is crawled once, under audit's ruling.
 		return dedupeUnreadablePathResults(
-			await validateAuditSubject(scanPath, recursive, options, logger, locationRoot),
+			await withSkillRegistries(locationRoot, (registries) =>
+				validateAuditSubject(scanPath, recursive, { ...options, registries }, logger, locationRoot)),
 		);
 	} catch (error) {
 		// Only the filesystem refusing the subject degrades; a defect in a validator
@@ -1864,7 +1872,7 @@ function withoutHostedRefusals(result: ValidationResult, hosted: ReadonlySet<str
 async function validateAuditSubject(
 	scanPath: string,
 	recursive: boolean,
-	options: AuditCommandOptions,
+	options: AuditRunOptions,
 	logger: ReturnType<typeof createLogger>,
 	locationRoot: string,
 ): Promise<ValidationResult[]> {
@@ -1987,7 +1995,7 @@ async function isScannableDirectory(scanPath: string, locationRoot: string): Pro
  */
 async function validatePluginSkillsViaInventory(
 	scanPath: string,
-	options: AuditCommandOptions,
+	options: AuditRunOptions,
 	logger: ReturnType<typeof createLogger>,
 	locationRoot: string,
 	excludeSkillPaths: ReadonlySet<string> = new Set(),
@@ -2767,7 +2775,7 @@ class SubtreeClaims {
 async function handleFileEntry(
   entry: { name: string },
   fullPath: string,
-  options: AuditCommandOptions,
+  options: AuditRunOptions,
   logger: ReturnType<typeof createLogger>,
   scanCtx: ScanContext,
 ): Promise<ValidationResult | null> {
@@ -2805,17 +2813,16 @@ async function handleFileEntry(
       // `suiteProbe`: the RUN's, not this entry's — the directory walk reaches
       // this function once per SKILL.md it finds. See {@link runSuiteProbe}.
       const suiteProbe = suiteProbeForRun();
-      // No registry is supplied on this lane, so `validateSkillForPackaging`
-      // crawls one per project root through `crawlAndResolveRegistry` — under
-      // audit's ruling, which is the ONLY reason one `chmod 000` sibling no
-      // longer exits this whole run at 2 with zero findings. The root is the
-      // one the validator itself derives (`findProjectRoot(dirname) ?? dirname`),
-      // so the refuse sentence and the finding name the same crawl.
+      // `validateSkillForPackaging` crawls the run's view of each project root under
+      // audit's ruling, which is the ONLY reason one `chmod 000` sibling does not
+      // exit this whole run at 2 with zero findings. The root is the one the
+      // validator itself derives (`findProjectRoot(dirname) ?? dirname`), so the
+      // refuse sentence and the finding name the same crawl.
       const skillDir = safePath.resolve(fullPath, '..');
       const unreadable = degradingRegistry(findProjectRoot(skillDir) ?? skillDir, logger, locationRoot);
       const sharedCtx: SkillValidationSharedContext = scanCtx.gitTracker === null
-        ? { locationRoot, projectSkills, suiteProbe, unreadable, outputs: [], dispatcher: undefined }
-        : { gitTracker: scanCtx.gitTracker, locationRoot, projectSkills, suiteProbe, unreadable, outputs: [], dispatcher: undefined };
+        ? { registries: options.registries, locationRoot, projectSkills, suiteProbe, unreadable, outputs: [], dispatcher: undefined }
+        : { registries: options.registries, gitTracker: scanCtx.gitTracker, locationRoot, projectSkills, suiteProbe, unreadable, outputs: [], dispatcher: undefined };
       // `{}`: resolved at audit's own boundary, as in the lane above.
       const packagingResult = await validateSkillForPackaging(fullPath, {}, skillConfig, 'source', sharedCtx);
       const configAware = packagingResultToValidationResult(
@@ -2971,7 +2978,6 @@ function pluginInventoryAt(dir: string): Promise<Awaited<ReturnType<typeof extra
  */
 export function resetAuditCaches(): void {
   resetGitTrackerCache();
-  resetPackagingRegistryCache();
   inventoryRegistryCache.clear();
   unloadableConfigResults.clear();
   runSuiteProbe = undefined;
@@ -3080,7 +3086,7 @@ function unreadablePathResult(
  */
 async function validateScanSubject(
   subject: AuditScanSubject,
-  options: AuditCommandOptions,
+  options: AuditRunOptions,
   logger: ReturnType<typeof createLogger>,
   scanCtx: ScanContext,
   claims: SubtreeClaims,
@@ -3133,7 +3139,7 @@ function scanRefusalRemedy(): string {
 async function scanDirectory(
   dirPath: string,
   recursive: boolean,
-  options: AuditCommandOptions,
+  options: AuditRunOptions,
   logger: ReturnType<typeof createLogger>,
   scanCtx: ScanContext,
 ): Promise<ValidationResult[]> {

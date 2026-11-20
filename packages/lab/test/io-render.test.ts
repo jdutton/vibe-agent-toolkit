@@ -192,24 +192,17 @@ describe('renderIoReport — the stability qualifier sits next to the numbers', 
 });
 
 describe('renderIoReport — the arm sits on the row, read from the subject’s output', () => {
-  it('names the arm as the lane qualified by its extent source', () => {
-    expect(render({ lane: 'projection', extentSource: 'git' })).toContain('projection via git');
+  it('names the arm as the extent source', () => {
+    expect(render({ extentSource: 'git' })).toContain('git');
   });
 
-  it('names a lane with no extent source bare, which is the walk', () => {
-    const text = render({ lane: 'walk', extentSource: null });
+  it('says the arm is UNREPORTED rather than leaving it blank', () => {
+    // A row whose output named no enumerator cannot prove which arm ran. A
+    // blank would read as an ordinary row; this is a row whose arm is
+    // unproven, and the line has to say so where the numbers are.
+    const text = render({ extentSource: null });
 
-    expect(text).toContain('walk');
-    expect(text).not.toContain('walk via');
-  });
-
-  it('says the lane is UNREPORTED rather than leaving it blank', () => {
-    // The default `resources-scan` spec prints YAML, so its row cannot prove
-    // which arm ran. A blank would read as an ordinary row; this is a row whose
-    // arm is unproven, and the line has to say so where the numbers are.
-    const text = render({ lane: null, extentSource: null });
-
-    expect(text).toContain("lane UNREPORTED by the subject's output");
+    expect(text).toContain("arm UNREPORTED by the subject's output");
   });
 });
 
@@ -368,43 +361,43 @@ describe('renderIoComparison — verdict wording', () => {
   });
 
   it('names both arms when the two sides ran different enumerators', () => {
-    const before = ioCommand({ lane: 'projection', extentSource: 'filesystem' });
-    const after = ioCommand({ lane: 'projection', extentSource: 'git' });
+    const before = ioCommand({ extentSource: 'filesystem' });
+    const after = ioCommand({ extentSource: 'git' });
 
-    expect(renderDiff(before, after)).toContain('[projection via filesystem → projection via git]');
+    expect(renderDiff(before, after)).toContain('[filesystem → git]');
   });
 
   it('WARNS when both sides ran the same arm, because that compares one enumerator with itself', () => {
     // The 2026-09-11 git-vs-filesystem A/B had to INFER which arm ran from a
     // call-site signature (`realizations.js:51` at 0 vs 12,003 calls). Two
-    // sides that both say `projection via git` are two runs of one enumerator,
-    // and their agreement means nothing about the question that was asked.
-    const arm = { lane: 'projection', extentSource: 'git' };
+    // sides that both say `git` are two runs of one enumerator, and their
+    // agreement means nothing about the question that was asked.
+    const arm = { extentSource: 'git' };
 
     const text = renderDiff(ioCommand(arm), ioCommand(arm));
 
     expect(text).toContain(
-      "both sides ran the 'projection via git' arm — this compares one enumerator with itself",
+      "both sides ran the 'git' arm — this compares one enumerator with itself",
     );
   });
 
   it('says the arm is UNPROVEN when neither side reported one', () => {
-    // Both rows are the default `resources-scan` shape: YAML out, no lane read.
+    // Neither row's output named an enumerator.
     // Two nulls are not "the same arm"; they are two rows that cannot prove
     // which arm they ran, and silence here would read as a clean pair.
-    const text = renderDiff(ioCommand({ lane: null }), ioCommand({ lane: null }));
+    const text = renderDiff(ioCommand({ extentSource: null }), ioCommand({ extentSource: null }));
 
     expect(text).toContain('arm UNPROVEN on both sides');
     expect(text).not.toContain('one enumerator with itself');
   });
 
   it('carries the arm note on an unwarranted row too, since both rows are present', () => {
-    const arm = { lane: 'projection', extentSource: 'git', stable: false } as const;
+    const arm = { extentSource: 'git', stable: false } as const;
 
     const text = renderDiff(ioCommand(arm), ioCommand({ ...arm, userCalls: 402 }));
 
     expect(text).toContain('NOT ATTRIBUTABLE');
-    expect(text).toContain("both sides ran the 'projection via git' arm");
+    expect(text).toContain("both sides ran the 'git' arm");
   });
 
   it('says when a distinctArgs comparison could not be read', () => {

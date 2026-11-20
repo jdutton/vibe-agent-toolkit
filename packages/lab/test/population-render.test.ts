@@ -3,8 +3,8 @@
  *
  * Three of these are the rules this facet can break in ways the others cannot:
  * a capped path list that does not say what it dropped renders a wholesale
- * divergence as a handful of files; a row whose lane is unknown renders as an
- * ordinary row while its arm is unproven; and two sides that ran the SAME lane
+ * divergence as a handful of files; a row whose arm is unknown renders as an
+ * ordinary row while its arm is unproven; and two sides that ran the SAME arm
  * render as a clean result while comparing one enumerator with itself.
  */
 
@@ -35,10 +35,7 @@ function row(over: Partial<PopulationCommandStats> = {}): PopulationCommandStats
     runs: 2,
     stable: true,
     attribution: 'measured',
-    lane: 'walk',
-    // The walk sources no extent, so `null` is its real value rather than a
-    // stand-in — cases that need the projection's two enumerators override it.
-    extentSource: null,
+    extentSource: 'filesystem',
     root: '/fixture/project',
     count: 2,
     files: [
@@ -75,18 +72,18 @@ function comparison(
 }
 
 describe('renderPopulationReport', () => {
-  it('states the count, the lane, the repeats and the git reference on one line', () => {
+  it('states the count, the arm, the repeats and the git reference on one line', () => {
     const text = renderPopulationReport(report(row()));
 
     expect(text).toContain('2 files');
-    expect(text).toContain('walk');
+    expect(text).toContain('filesystem');
     expect(text).toContain('repeats agreed');
     expect(text).toContain('0 off-git of 10 tracked');
   });
 
-  it('says the lane is UNREPORTED rather than leaving it blank', () => {
+  it('says the arm is UNREPORTED rather than leaving it blank', () => {
     // A blank would read as an ordinary row. It is a row whose arm is unproven.
-    expect(renderPopulationReport(report(row({ lane: null })))).toContain('lane UNREPORTED');
+    expect(renderPopulationReport(report(row({ extentSource: null })))).toContain('arm UNREPORTED');
   });
 
   it('shouts when the repeats disagreed', () => {
@@ -130,8 +127,8 @@ describe('renderPopulationComparison', () => {
       comparison({
         name: COMMAND,
         verdict: { kind: 'changed', added: ['new.md'], removed: ['gone.md'], changed: ['moved.md'] },
-        before: row({ lane: 'walk' }),
-        after: row({ lane: 'projection' }),
+        before: row({ extentSource: 'filesystem' }),
+        after: row({ extentSource: 'git' }),
       }),
     );
 
@@ -144,67 +141,35 @@ describe('renderPopulationComparison', () => {
     expect(text).toContain('moved.md');
   });
 
-  it('names both lanes when the two sides ran different enumerators', () => {
+  it('names both arms when the two sides ran different enumerators', () => {
     const text = renderPopulationComparison(
       comparison({
         name: COMMAND,
         verdict: { kind: 'unchanged' },
-        before: row({ lane: 'walk' }),
-        after: row({ lane: 'projection' }),
+        before: row({ extentSource: 'filesystem' }),
+        after: row({ extentSource: 'git' }),
       }),
     );
 
-    expect(text).toContain('[walk → projection]');
-  });
-
-  it('WARNS when both sides ran the same lane, because that compares one lane with itself', () => {
-    // The failure this facet exists to make visible: two runs of one enumerator
-    // agree trivially, and without this the row reads as a clean result.
-    const text = renderPopulationComparison(
-      comparison({
-        name: COMMAND,
-        verdict: { kind: 'unchanged' },
-        before: row({ lane: 'walk' }),
-        after: row({ lane: 'walk' }),
-      }),
-    );
-
-    expect(text).toContain("both sides ran the 'walk' arm");
-    expect(text).toContain('compares one enumerator with itself');
-  });
-
-  it('distinguishes two arms that share a lane but differ in extent source', () => {
-    // The gap this field closed. `VAT_EXTENT_SOURCE` is the axis the git-walker
-    // flip turns on, and both of its arms report lane `projection` — so keyed
-    // on the lane alone this pair rendered as "one enumerator compared with
-    // itself" while it was in fact the exact comparison the caller wanted.
-    const text = renderPopulationComparison(
-      comparison({
-        name: COMMAND,
-        verdict: { kind: 'unchanged' },
-        before: row({ lane: 'projection', extentSource: 'filesystem' }),
-        after: row({ lane: 'projection', extentSource: 'git' }),
-      }),
-    );
-
-    expect(text).toContain('[projection via filesystem → projection via git]');
+    expect(text).toContain('[filesystem → git]');
     expect(text).not.toContain('compares one enumerator with itself');
   });
 
-  it('WARNS when two projection arms share an extent source', () => {
-    // The other direction, and the one that would void a flip measurement: a
-    // switch that silently did nothing leaves both arms on `filesystem`, and
-    // their agreement then says nothing at all.
+  it('WARNS when both sides ran the same arm, because that compares one enumerator with itself', () => {
+    // The failure this facet exists to make visible: two runs of one enumerator
+    // agree trivially, and without this the row reads as a clean result. A
+    // switch that silently did nothing leaves both arms on `filesystem`.
     const text = renderPopulationComparison(
       comparison({
         name: COMMAND,
         verdict: { kind: 'unchanged' },
-        before: row({ lane: 'projection', extentSource: 'filesystem' }),
-        after: row({ lane: 'projection', extentSource: 'filesystem' }),
+        before: row({ extentSource: 'filesystem' }),
+        after: row({ extentSource: 'filesystem' }),
       }),
     );
 
-    expect(text).toContain("both sides ran the 'projection via filesystem' arm");
+    expect(text).toContain("both sides ran the 'filesystem' arm");
+    expect(text).toContain('compares one enumerator with itself');
   });
 
   it('renders a refusal to compare as its own outcome, not as no change', () => {

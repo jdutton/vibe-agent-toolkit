@@ -44,6 +44,7 @@ import { type PopulationCache } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
 import type { ExtentKey, ExtentScopedRows } from '../../src/projection/store.js';
 import { FakeFactStore } from '../fake-fact-store.js';
+import { inOwnRun } from '../helpers/population-run.js';
 import { plantTree, razeTree } from '../helpers/temp-corpus.js';
 
 /** Opaque to the store, and held CONSTANT across the emptying — see the header. */
@@ -73,7 +74,7 @@ afterEach(async () => {
  */
 async function populateThrough(store: FakeFactStore): Promise<ClaudeContextPopulation> {
   const cache: PopulationCache = { store, treeHash: TREE_HASH, treeUnchanged: () => true };
-  return buildClaudeContextPopulation({
+  return inOwnRun(buildClaudeContextPopulation, {
     root: root ?? '',
     cache,
   });

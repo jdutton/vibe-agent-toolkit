@@ -9,6 +9,11 @@ import { checkBrokenPackagedLinks, checkUnreferencedFiles } from '../src/post-bu
 
 import { setupTempDir } from './test-helpers.js';
 
+/** A one-off check, outside any run: each check on a one-thread pool of its own. */
+const ONE_OFF = { dispatcher: undefined } as const;
+const unreferencedIn = (dir: string, dests: readonly string[] = []) => checkUnreferencedFiles(dir, dests, ONE_OFF);
+const brokenLinksIn = (dir: string, dropped: readonly string[] = []) => checkBrokenPackagedLinks(dir, dropped, ONE_OFF);
+
 const { getTempDir } = setupTempDir('post-build-checks-');
 
 const SKILL_OUTPUT = 'skill-output';
@@ -69,7 +74,7 @@ describe('checkUnreferencedFiles', () => {
     await writeSkillMd(outputDir, GUIDE_LINK_BODY);
     await writeResource(outputDir, `${RESOURCES}/guide.md`, '# Guide\n');
 
-    const issues = await checkUnreferencedFiles(outputDir);
+    const issues = await unreferencedIn(outputDir);
     expect(issues).toHaveLength(0);
   });
 
@@ -78,7 +83,7 @@ describe('checkUnreferencedFiles', () => {
     await writeSkillMd(outputDir, NO_LINKS_BODY);
     await writeResource(outputDir, SCRIPTS_CLI, CLI_SCRIPT_BODY);
 
-    const issues = await checkUnreferencedFiles(outputDir);
+    const issues = await unreferencedIn(outputDir);
     expectSingleIssue(issues, 'PACKAGED_UNREFERENCED_FILE', SCRIPTS_CLI);
   });
 
@@ -87,7 +92,7 @@ describe('checkUnreferencedFiles', () => {
     await writeSkillMd(outputDir, '# Skill\n\nNo links.\n');
     await writeResource(outputDir, `${RESOURCES}/orphan.md`, '# Orphan\n');
 
-    const issues = await checkUnreferencedFiles(outputDir);
+    const issues = await unreferencedIn(outputDir);
     expectSingleIssue(issues, 'PACKAGED_UNREFERENCED_FILE', 'resources/orphan.md');
   });
 
@@ -101,7 +106,7 @@ describe('checkUnreferencedFiles', () => {
     );
     await writeResource(outputDir, SCRIPTS_CLI, CLI_SCRIPT_BODY);
 
-    const issues = await checkUnreferencedFiles(outputDir);
+    const issues = await unreferencedIn(outputDir);
     expect(issues).toHaveLength(0);
   });
 
@@ -127,7 +132,7 @@ describe('checkUnreferencedFiles', () => {
     );
     await writeResource(outputDir, SCRIPTS_CLI, CLI_SCRIPT_BODY);
 
-    const issues = await checkUnreferencedFiles(outputDir);
+    const issues = await unreferencedIn(outputDir);
     expect(issues).toHaveLength(0);
   });
 
@@ -139,7 +144,7 @@ describe('checkUnreferencedFiles', () => {
     );
     await writeResource(outputDir, SCRIPTS_CLI, CLI_SCRIPT_BODY);
 
-    const issues = await checkUnreferencedFiles(outputDir);
+    const issues = await unreferencedIn(outputDir);
     expect(issues).toHaveLength(0);
   });
 
@@ -148,7 +153,7 @@ describe('checkUnreferencedFiles', () => {
     await writeSkillMd(outputDir, '# Skill\n\nSome unrelated prose.\n');
     await writeResource(outputDir, SCRIPTS_CLI, CLI_SCRIPT_BODY);
 
-    const issues = await checkUnreferencedFiles(outputDir);
+    const issues = await unreferencedIn(outputDir);
     expectSingleIssue(issues, 'PACKAGED_UNREFERENCED_FILE', SCRIPTS_CLI);
   });
 });
@@ -171,7 +176,7 @@ describe('checkUnreferencedFiles - files: config dests', () => {
     await writeSkillMd(outputDir, NO_LINKS_BODY);
     await writeResource(outputDir, VENDOR_WASM, '\0asm');
 
-    const issues = await checkUnreferencedFiles(outputDir, [VENDOR_WASM]);
+    const issues = await unreferencedIn(outputDir, [VENDOR_WASM]);
     expect(issues).toHaveLength(0);
   });
 
@@ -182,7 +187,7 @@ describe('checkUnreferencedFiles - files: config dests', () => {
     await writeResource(outputDir, SCRIPTS_CLI, CLI_SCRIPT_BODY);
 
     // Only the wasm is declared; the stray script must still fail the build.
-    const issues = await checkUnreferencedFiles(outputDir, [VENDOR_WASM]);
+    const issues = await unreferencedIn(outputDir, [VENDOR_WASM]);
     expectSingleIssue(issues, 'PACKAGED_UNREFERENCED_FILE', SCRIPTS_CLI);
     expect(issues[0]!.location).toBe(SCRIPTS_CLI);
   });
@@ -218,12 +223,12 @@ describe('checkUnreferencedFiles - files: config dests', () => {
 
     // Both land in the output and, uninformed, both are reported as orphans —
     // these locations ARE the relativePath basis.
-    const before = await checkUnreferencedFiles(outputDir);
+    const before = await unreferencedIn(outputDir);
     expect(before.map(i => i.location).sort(sortFn)).toEqual([expectedSchemaDest, VENDOR_WASM].sort(sortFn));
 
     // Told what it copied, the check reports nothing.
     expect([...dests].sort(sortFn)).toEqual([expectedSchemaDest, VENDOR_WASM].sort(sortFn));
-    const after = await checkUnreferencedFiles(outputDir, dests);
+    const after = await unreferencedIn(outputDir, dests);
     expect(after).toEqual([]);
   });
 });
@@ -234,7 +239,7 @@ describe('fix hints and reference anchors', () => {
     await writeSkillMd(outputDir, NO_LINKS_BODY);
     await writeResource(outputDir, `${RESOURCES}/orphan.json`, '{}');
 
-    const issues = await checkUnreferencedFiles(outputDir);
+    const issues = await unreferencedIn(outputDir);
     const unref = issues.find(i => i.code === 'PACKAGED_UNREFERENCED_FILE');
     expect(unref).toBeDefined();
     expect(unref?.fix).not.toMatch(/ignoreValidationErrors/);
@@ -249,7 +254,7 @@ describe('fix hints and reference anchors', () => {
     const outputDir = await setupOutputDir();
     await writeSkillMd(outputDir, GUIDE_LINK_BODY);
 
-    const issues = await checkBrokenPackagedLinks(outputDir);
+    const issues = await brokenLinksIn(outputDir);
     const broken = issues.find(i => i.code === 'PACKAGED_BROKEN_LINK');
     expect(broken).toBeDefined();
     expect(broken?.fix).not.toMatch(/ignoreValidationErrors/);
@@ -263,7 +268,7 @@ describe('checkBrokenPackagedLinks', () => {
     await writeSkillMd(outputDir, GUIDE_LINK_BODY);
     await writeResource(outputDir, `${RESOURCES}/guide.md`, '# Guide\n');
 
-    const issues = await checkBrokenPackagedLinks(outputDir);
+    const issues = await brokenLinksIn(outputDir);
     expect(issues).toHaveLength(0);
   });
 
@@ -271,7 +276,7 @@ describe('checkBrokenPackagedLinks', () => {
     const outputDir = await setupOutputDir();
     await writeSkillMd(outputDir, GUIDE_LINK_BODY);
 
-    const issues = await checkBrokenPackagedLinks(outputDir);
+    const issues = await brokenLinksIn(outputDir);
     expectSingleIssue(issues, 'PACKAGED_BROKEN_LINK', 'resources/guide.md');
   });
 
@@ -305,7 +310,7 @@ describe('checkBrokenPackagedLinks', () => {
     });
     expect(applied.dropped.map(d => d.dest)).toEqual(['resources/README.md']);
 
-    const issues = await checkBrokenPackagedLinks(outputDir, applied.dropped.map(d => d.dest));
+    const issues = await brokenLinksIn(outputDir, applied.dropped.map(d => d.dest));
     const broken = issues.find((i) => i.code === 'PACKAGED_BROKEN_LINK');
 
     expect(broken).toBeDefined();
@@ -326,7 +331,7 @@ describe('checkBrokenPackagedLinks', () => {
     await writeSkillMd(outputDir, ['# Skill', '', 'See [guide](vendor/guide.md).'].join('\n'));
     await writeResource(outputDir, 'vendor/guide.md', '# Guide\n\nUp to [readme](../README.md).\n');
 
-    const issues = await checkBrokenPackagedLinks(outputDir);
+    const issues = await brokenLinksIn(outputDir);
     const broken = issues.find((i) => i.code === 'PACKAGED_BROKEN_LINK');
 
     expect(broken).toBeDefined();
@@ -342,7 +347,7 @@ describe('checkBrokenPackagedLinks', () => {
       ['# Skill', '', 'See [docs](https://example.com).'].join('\n'),
     );
 
-    const issues = await checkBrokenPackagedLinks(outputDir);
+    const issues = await brokenLinksIn(outputDir);
     expect(issues).toHaveLength(0);
   });
 
@@ -361,7 +366,7 @@ describe('checkBrokenPackagedLinks', () => {
       ].join('\n'),
     );
 
-    const issues = await checkBrokenPackagedLinks(outputDir);
+    const issues = await brokenLinksIn(outputDir);
     expect(issues).toHaveLength(0);
   });
 
@@ -374,7 +379,7 @@ describe('checkBrokenPackagedLinks', () => {
       ['# Guide', '', 'See [missing](missing.md).'].join('\n'),
     );
 
-    const issues = await checkBrokenPackagedLinks(outputDir);
+    const issues = await brokenLinksIn(outputDir);
     expectSingleIssue(issues, 'PACKAGED_BROKEN_LINK', 'missing.md');
     expect(issues[0]!.location).toContain('guide.md');
   });
@@ -399,7 +404,7 @@ describe('checkBrokenPackagedLinks', () => {
       ].join('\n'),
     );
 
-    const issues = await checkBrokenPackagedLinks(outputDir);
+    const issues = await brokenLinksIn(outputDir);
     expect(issues).toHaveLength(0);
   });
 
@@ -411,7 +416,7 @@ describe('checkBrokenPackagedLinks', () => {
       ['# Skill', '', 'Syntax: `[text](path.md)` is a markdown link.'].join('\n'),
     );
 
-    const issues = await checkBrokenPackagedLinks(outputDir);
+    const issues = await brokenLinksIn(outputDir);
     expect(issues).toHaveLength(0);
   });
 
@@ -426,7 +431,7 @@ describe('checkBrokenPackagedLinks', () => {
     // Add a file inside refs/ so walkDir has something to find there
     await writeResource(outputDir, 'refs/overview.md', '# Refs\n');
 
-    const issues = await checkBrokenPackagedLinks(outputDir);
+    const issues = await brokenLinksIn(outputDir);
     expect(issues).toHaveLength(0);
   });
 
@@ -437,7 +442,7 @@ describe('checkBrokenPackagedLinks', () => {
       ['# Skill', '', 'See [gone](gone/).'].join('\n'),
     );
 
-    const issues = await checkBrokenPackagedLinks(outputDir);
+    const issues = await brokenLinksIn(outputDir);
     expectSingleIssue(issues, 'PACKAGED_BROKEN_LINK', 'gone/');
   });
 });

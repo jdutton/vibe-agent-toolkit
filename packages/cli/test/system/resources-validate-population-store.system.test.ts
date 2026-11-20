@@ -128,13 +128,11 @@ function binaryCorpus(name: string, config?: string): string {
  * The isolated environment every run in this file gets, against one pinned store.
  *
  * @param storeDir - The store directory
- * @param lane - Which lane `VAT_RESOURCES_CRAWL` selects
  * @returns The environment
  */
-function storeEnv(storeDir: string, lane: 'projection' | 'walk' = 'projection'): Record<string, string> {
+function storeEnv(storeDir: string): Record<string, string> {
   return {
     ...isolatedScratchEnv(scratch),
-    VAT_RESOURCES_CRAWL: lane,
     VAT_PROJECTION_STORE: 'sqlite',
     [VAT_CACHE_DIR_ENV]: storeDir,
   };
@@ -145,19 +143,17 @@ function storeEnv(storeDir: string, lane: 'projection' | 'walk' = 'projection'):
  *
  * @param corpus - The tree to validate
  * @param storeDir - The store directory, shared by both runs of one case
- * @param lane - Which lane `VAT_RESOURCES_CRAWL` selects
  * @param verb - The resources verb to run; `validate` unless a case crosses verbs
  * @returns The exit status, the parsed document and stderr
  */
 async function validateOnce(
   corpus: string,
   storeDir: string,
-  lane: 'projection' | 'walk' = 'projection',
   verb: 'validate' | 'check' = 'validate',
 ): Promise<Run> {
   const result = await executeCli(binPath, ['resources', verb, '--format', 'json'], {
     cwd: corpus,
-    env: storeEnv(storeDir, lane),
+    env: storeEnv(storeDir),
   });
   return {
     status: result.status,
@@ -250,7 +246,7 @@ describe('vat resources validate twice against one pinned store (system test)', 
     const storeDir = `${corpus}-store`;
 
     const validated = await validateOnce(corpus, storeDir);
-    const checked = await validateOnce(corpus, storeDir, 'projection', 'check');
+    const checked = await validateOnce(corpus, storeDir, 'check');
 
     expect(validated.document.data['population']).toBe('derived');
     expect(validated.stderr).not.toContain(REFUSAL_LINE);
@@ -276,16 +272,6 @@ describe('vat resources validate twice against one pinned store (system test)', 
     // The run's header is a header, not a verdict: nothing has run when it prints.
     expect(result.stderr).toContain('🔍 vat validate (surfaces: resources → checks)');
     expect(result.stderr).not.toContain('✅ vat validate');
-  });
-
-  it('publishes population: null when the walk lane answered', async () => {
-    const corpus = corpusWith('walked', () => undefined);
-
-    const walked = await validateOnce(corpus, `${corpus}-store`, 'walk');
-
-    // The run still validated: the null is about provenance, not a failed run.
-    expect(locationsOf(walked, 'LINK_BROKEN_FILE')).toHaveLength(2);
-    expect(walked.document.data['population']).toBeNull();
   });
 
   it.skipIf(SYMLINKS === null)('answers two declined symlinks of one code identically, cold and warm', async () => {

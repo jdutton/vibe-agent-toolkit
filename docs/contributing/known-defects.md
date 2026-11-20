@@ -584,6 +584,22 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 
 ## Git and crawl
 
+### Outside a repository, authored markdown under a tool-output-named directory is dropped
+
+- **Severity:** Important · **Effort:** M (decide which tool-output names a non-repository tree
+  admits) · **User-visible:** yes (files silently missing, exit 0)
+- **Mechanism:** the filesystem enumerator (`FilesystemCrawlSource.enumerate`) excludes every name
+  in `NEVER_CRAWL_GLOBS`, tool-output names (`coverage/`, `.test-output/`, `.turbo/`) included. The
+  git enumerator drops only never-content paths and lets ignore rules decide the rest. So
+  `docs/coverage/x.md` is a resource inside a repository and absent outside one, and every link to
+  it goes unfollowed. The deleted walk lane admitted it on both. Admitting tool-output names
+  outright is not the fix either: with no ignore rules, a non-repository tree's real coverage
+  reports would flood the population.
+- **Reproduced** by `resource-registry-default-exclude.integration.test.ts` (the filesystem case
+  is `it.fails`; promote it to `it` with the fix).
+- **Where:** [`crawl-source.ts`](../../packages/resources/src/projection/crawl-source.ts)
+  (`exclude: [...NEVER_CRAWL_GLOBS]` in `FilesystemCrawlSource.enumerate`).
+
 ### An index listing (`ls-files -z`) is read as UTF-8 text, so a path that is not UTF-8 is re-spelled
 
 - **Severity:** Minor · **Effort:** M · **User-visible:** yes (a wrong path, no refusal)

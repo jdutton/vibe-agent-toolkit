@@ -79,13 +79,16 @@ sides swapped) — never the `[A → B]` form, which is reserved for two named a
 
 ```bash
 vat-lab population run ../some-project --instrument tree:. --id some-project \
-  --env VAT_RESOURCES_CRAWL=walk --out ./walk
+  --env VAT_EXTENT_SOURCE=filesystem --out ./filesystem
 vat-lab population run ../some-project --instrument tree:. --id some-project \
-  --env VAT_RESOURCES_CRAWL=projection --out ./projection
-vat-lab population compare ./walk/<report>.json ./projection/<report>.json
+  --env VAT_EXTENT_SOURCE=git --out ./git
+vat-lab population compare ./filesystem/<report>.json ./git/<report>.json
 ```
 
-The lane is chosen with `--env`, never by exporting it in your shell: every arm starts from an
+Current vat builds have one lane, the projection, and the scan no longer reports `lane`; the arm an
+A/B can vary is the extent source. The walk-lane wording above applies to builds that still had it.
+
+The arm is chosen with `--env`, never by exporting it in your shell: every arm starts from an
 environment cleared of INHERITED `VAT_*`, and only what the arm sets explicitly reaches vat.
 
 ⚠️ Separate `--out` directories are required for two arms selected by the **environment**: the

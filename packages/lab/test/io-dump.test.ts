@@ -496,7 +496,6 @@ describe('IoBodySchema', () => {
     runs: 3,
     comparedRuns: 2,
     stable: true,
-    lane: 'projection',
     extentSource: 'git',
     processes: 2,
     loaderCalls: 6371,
@@ -547,17 +546,16 @@ describe('IoBodySchema', () => {
   });
 
   it('accepts a null arm, which is how "the output did not say" is spelled', () => {
-    // The default `resources-scan` spec prints YAML, so a row measured over it
-    // carries no lane. `null` is a value the schema must admit or the capture
-    // cannot express the ordinary case.
-    const unreported = { ...command, lane: null, extentSource: null };
+    // A row whose output named no enumerator carries no arm. `null` is a value
+    // the schema must admit or the capture cannot express that case.
+    const unreported = { ...command, extentSource: null };
     expect(IoBodySchema.safeParse({ ...body, commands: [unreported] }).success).toBe(true);
   });
 
-  it('rejects a row missing `lane`, so a pre-arm report is refused by the shape moving', () => {
-    const withoutLane: Record<string, unknown> = { ...command };
-    delete withoutLane['lane'];
-    expect(IoBodySchema.safeParse({ ...body, commands: [withoutLane] }).success).toBe(false);
+  it('rejects a row missing `extentSource`, so a pre-arm report is refused by the shape moving', () => {
+    const withoutArm: Record<string, unknown> = { ...command };
+    delete withoutArm['extentSource'];
+    expect(IoBodySchema.safeParse({ ...body, commands: [withoutArm] }).success).toBe(false);
   });
 
   it('rejects a body missing `comparedRuns`, which is what makes `stable` readable', () => {

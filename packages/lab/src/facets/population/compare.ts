@@ -18,14 +18,14 @@
  * the three into one count would report "0 differences" for two populations that
  * enumerate the same files with different contents.
  *
- * ## What a lane difference means here
+ * ## What an arm difference means here
  *
- * The two sides record which enumerator each said it used. That is not a gate —
- * comparing two lanes is the single most useful thing this facet does — but it
- * **qualifies every row below it**, so it is surfaced on the comparison rather
+ * The two sides record which enumerator each said it used. That is not a gate:
+ * comparing two enumerators is the single most useful thing this facet does, but
+ * it **qualifies every row below it**, so it is surfaced on the comparison rather
  * than left for a reader to notice in two separate reports. Two sides reporting
- * the SAME lane when the caller meant to compare two is the failure mode: it
- * looks like a clean result and is two runs of one lane agreeing trivially.
+ * the SAME enumerator when the caller meant to compare two is the failure mode:
+ * it looks like a clean result and is two runs of one enumerator agreeing trivially.
  */
 
 import type { Axis, DecideComparisonOptions } from '../../envelope/coordinate.js';

@@ -22,7 +22,7 @@
  *   so its registry types files the same way the projection lane does. A lane
  *   that declined to would disagree with the population it is handed the moment
  *   a collection declares a `mimeType`.
- * - `skills-build` — `vat skills build`, via `createProjectRegistry`;
+ * - `skills-build` — `vat skills build`, via `RunSkillRegistries.packagingRegistry`;
  *   config-aware but markdown-only.
  * - `inventory` — `vat inventory`, the only lane that asks git for untracked
  *   files. Config-aware for the reason `audit` is.

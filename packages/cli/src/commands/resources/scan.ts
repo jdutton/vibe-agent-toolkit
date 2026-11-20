@@ -11,13 +11,7 @@ import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger } from '../../utils/logger.js';
 import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
 import { relativizePathEntries } from '../../utils/relativize-paths.js';
-import {
-  assertDeclaredCollection,
-  extentSourceOf,
-  loadResourcesWithConfig,
-  type ResourceCrawlLane,
-  withRunContext,
-} from '../../utils/resource-loader.js';
+import { assertDeclaredCollection, loadResourcesWithConfig, withRunContext } from '../../utils/resource-loader.js';
 
 import type { ResourcesScanData, ResourcesScanReport } from './scan-schema.js';
 
@@ -51,25 +45,15 @@ export interface ScanPayloadInput {
   /** The stated root: the ONE base every reported `path` is relative to. */
   root: string;
   /**
-   * Which enumerator produced these resources.
+   * Which enumerator produced these resources: git or the filesystem.
    *
    * Provenance, and it sits beside `root` because it qualifies the file list the
-   * same way: two scans of one tree that report different populations are only
-   * interpretable if each says which lane enumerated it. Derived from the load
-   * that ran, never re-read from the environment — the environment records what
-   * was asked for, which is not the same claim.
+   * same way: an A/B varying only `VAT_EXTENT_SOURCE` would otherwise produce two
+   * documents that agree on every field. Derived from the crawl that ran, never
+   * re-read from the environment: the environment records what was asked for,
+   * which is not the same claim.
    */
-  lane: ResourceCrawlLane;
-  /**
-   * Which enumerator the projection lane used, or `null` for the walk.
-   *
-   * `lane` alone cannot qualify a projection population: the lane has two
-   * enumerators and reports the same word for both, so an A/B varying only
-   * `VAT_EXTENT_SOURCE` produces two documents that agree on every field. This
-   * is the field that makes the arms distinguishable, which is what makes the
-   * comparison mean anything.
-   */
-  extentSource: CrawlSourceKind | null;
+  extentSource: CrawlSourceKind;
   durationMs: number;
   /**
    * Every file the crawl enumerated and did not admit — unreadable, or its parse
@@ -110,15 +94,11 @@ function countHeadings(headings: readonly HeadingWithChildren[]): number {
  * 1); a scan of nothing gets the writer's run-integrity refusal.
  */
 export function buildScanReport(input: ScanPayloadInput): ResourcesScanReport {
-  const { resources, root, lane, extentSource, durationMs, collections, verbose, notAdmitted } = input;
+  const { resources, root, extentSource, durationMs, collections, verbose, notAdmitted } = input;
 
   const data: ResourcesScanData = {
     // Stated once, and the only absolute path in the document.
     root,
-    lane,
-    // Always present, `null` included: a field that vanishes for the walk is
-    // indistinguishable from a build too old to report it, which is the same
-    // absence-vs-old-build ambiguity the two lane markers exist to avoid.
     extentSource,
     collections,
   };
@@ -207,8 +187,7 @@ export async function scanCommand(
         notAdmitted,
         resources,
         root: projectRoot,
-        lane: population.lane,
-        extentSource: extentSourceOf(population),
+        extentSource: population.extentSource,
         durationMs: Date.now() - startTime,
         collections: collectionCounts(registry.getCollectionStats(), collection),
         verbose: options.verbose ?? false,

@@ -44,6 +44,7 @@ import {
   FilesystemExtentContributor,
   populate,
   serializeProjection,
+  withPopulationRun,
 } from '@vibe-agent-toolkit/resources';
 
 /** The `resolution_contexts.kind` every closure extent here is registered under. */
@@ -126,7 +127,9 @@ const store = openSqliteFactStore({ directory: storeDirectory });
 const contributorRuns = [];
 
 try {
-  const { projection, outcome } = await populate({
+  // One process is one vat run: the population reads and parses through it.
+  const { projection, outcome } = await withPopulationRun((run) => populate({
+    run,
     root: corpusRoot,
     registry: registryFor(question),
     // Every declaration is handed over on every run, registered or not:
@@ -140,7 +143,7 @@ try {
     // The corpus is a fixture nobody edits mid-run, and `treeHash` is the
     // test's own label rather than a git tree, so the tree never moves.
     cache: { store, treeHash, treeUnchanged: () => true },
-  });
+  }));
 
   // `serializeProjection` sorts every table by its primary key, emits every
   // row's keys in the table registry's column order, and redacts the one column

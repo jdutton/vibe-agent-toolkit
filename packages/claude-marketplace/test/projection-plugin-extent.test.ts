@@ -22,6 +22,7 @@ import {
   type Projection,
   type ResolutionContextRow,
   type ResourceRow,
+  withPopulationRun,
 } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -60,7 +61,7 @@ async function project(root: string): Promise<Projection> {
   registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
   registry.register(new PluginExtentContributor());
   registry.register(new MarketplaceExtentContributor());
-  return (await populate({ root, registry })).projection;
+  return withPopulationRun(async (run) => (await populate({ root, registry, run })).projection);
 }
 
 /** The extent context of one kind whose id carries `discriminator`. */
@@ -241,11 +242,14 @@ describe('the closure fixpoint', () => {
     registry.register(new PluginExtentContributor());
     registry.register(new MarketplaceExtentContributor());
     await expect(
-      populate({
-        root: MARKETPLACE_ROOT,
-        registry,
-        maxIterations: 2,
-      }),
+      withPopulationRun((run) =>
+        populate({
+          root: MARKETPLACE_ROOT,
+          registry,
+          run,
+          maxIterations: 2,
+        }),
+      ),
     ).resolves.toBeDefined();
   }, 60_000);
 

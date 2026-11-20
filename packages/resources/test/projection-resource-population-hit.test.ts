@@ -29,10 +29,12 @@ import {
   buildResourceProjection,
   resourceContributors,
 } from '../src/projection/resource-population.js';
+import { withPopulationRun } from '../src/projection/run-population.js';
 import type { ExtentKey, ExtentScopedRows } from '../src/projection/store.js';
 import type { RealizationConditionRow } from '../src/schemas/projection-resources.js';
 
 import { FakeFactStore } from './fake-fact-store.js';
+import { inOwnRun } from './helpers/population-run.js';
 import { setupSubdirTestSuite } from './test-helpers.js';
 
 const DOC = 'a.md';
@@ -69,14 +71,14 @@ describe('the resources lane on a store hit', () => {
     await write(BINARY, BINARY_BYTES);
     const options = { root: suite.tempDir, cache: freshCache() };
 
-    const miss = await buildResourceProjection(options);
+    const miss = await inOwnRun(buildResourceProjection, options);
     expect(miss.outcome.stored).toBe('written');
     const line = describeBlobRefusals(miss.projection);
     expect(line).toContain('1 not text');
 
     // A hit derives nothing, so a report built from the run went silent here.
     // Built from the stored rows, it cannot tell the two apart.
-    const hit = await buildResourceProjection(options);
+    const hit = await inOwnRun(buildResourceProjection, options);
     expect(hit.outcome.stored).toBe('hit');
     expect(describeBlobRefusals(hit.projection)).toBe(line);
   });
@@ -89,10 +91,10 @@ describe('the resources lane on a store hit', () => {
       prose: { include: ['docs/**'], mimeType: 'text/markdown' },
       data: { include: ['docs/**'], mimeType: 'application/json' },
     };
-    const options = { root: suite.tempDir, outputs: [], cache: freshCache(), collections };
+    const options = { root: suite.tempDir, outputs: [], unreadable: 'refuse' as const, cache: freshCache(), collections };
 
-    const written = await buildResourcePopulation(options);
-    const hit = await buildResourcePopulation(options);
+    const written = await inOwnRun(buildResourcePopulation, options);
+    const hit = await inOwnRun(buildResourcePopulation, options);
 
     expect(written.conditions.map((row) => row.code)).toContain('COLLECTION_MIME_CONFLICT');
     expect(hit.outcome.stored).toBe('hit');
@@ -104,10 +106,10 @@ describe('the resources lane on a store hit', () => {
     // (`DECLINE_IGNORED` drops the first; the second needs a path to vanish
     // mid-run), so the store hands them back itself.
     await write(DOC, '# A\n');
-    const options = { root: suite.tempDir, outputs: [], cache: freshCache(new UnreachableRowsStore()) };
+    const options = { root: suite.tempDir, outputs: [], unreadable: 'refuse' as const, cache: freshCache(new UnreachableRowsStore()) };
 
-    const written = await buildResourcePopulation(options);
-    const hit = await buildResourcePopulation(options);
+    const written = await inOwnRun(buildResourcePopulation, options);
+    const hit = await inOwnRun(buildResourcePopulation, options);
 
     expect(hit.outcome.stored).toBe('hit');
     expect(relative(hit.paths)).toEqual([DOC]);
@@ -165,11 +167,14 @@ describe('readStoredMembership', () => {
     await write(DOC, '# A\n');
     const registry = new ContributorRegistry();
     registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
-    const options = { root: suite.tempDir, registry, cache: freshCache() };
-    await populate(options);
+    const cache = freshCache();
+    await inOwnRun(populate, { root: suite.tempDir, registry, cache });
     const before = readWorkCounters();
 
-    const stored = await readStoredMembership(options, requestedContributors(options));
+    const stored = await withPopulationRun((run) => {
+      const options = { root: suite.tempDir, registry, cache, run };
+      return readStoredMembership(options, requestedContributors(options));
+    });
 
     expect(stored).toBeDefined();
     expect(readWorkCounters()['extent.served'] - before['extent.served']).toBe(1);
@@ -181,10 +186,11 @@ describe('readStoredMembership', () => {
     const registry = new ContributorRegistry();
     registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
     registry.register(new ConditioningClassifier());
-    const options = { root: suite.tempDir, registry, cache: freshCache() };
-
-    const { projection } = await populate(options);
-    const stored = await readStoredMembership(options, requestedContributors(options));
+    const { projection, stored } = await withPopulationRun(async (run) => {
+      const options = { root: suite.tempDir, registry, cache: freshCache(), run };
+      const populated = await populate(options);
+      return { projection: populated.projection, stored: await readStoredMembership(options, requestedContributors(options)) };
+    });
 
     const codes = (rows: readonly RealizationConditionRow[]): string[] => rows.map((row) => `${row.code}\t${row.path}`).sort(compareCodeUnits);
     expect(codes(projection.realizationConditions)).toContain(`${CLASSIFIER_CODE}\t${DOC}`);
@@ -204,10 +210,12 @@ describe('buildResourcePopulation with a classifier that reports a condition', (
       contributors.registry.register(new ConditioningClassifier());
       return contributors;
     };
-    const options = { root: suite.tempDir, outputs: [], cache: freshCache() };
+    const cache = freshCache();
+    const membership = (): ReturnType<typeof __internal.membershipThrough> => withPopulationRun((run) =>
+      __internal.membershipThrough({ root: suite.tempDir, outputs: [], unreadable: 'refuse', cache, run }, withClassifier));
 
-    const written = await __internal.membershipThrough(options, withClassifier);
-    const hit = await __internal.membershipThrough(options, withClassifier);
+    const written = await membership();
+    const hit = await membership();
 
     expect(written.conditions.map((row) => row.code)).toContain(CLASSIFIER_CODE);
     expect(hit.outcome.stored).toBe('hit');

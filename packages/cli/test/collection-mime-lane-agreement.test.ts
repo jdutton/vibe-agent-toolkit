@@ -37,7 +37,7 @@
  * assertion below would describe whichever path sorted first.
  */
 
-import { crawlAndResolveRegistry } from '@vibe-agent-toolkit/agent-skills';
+import { withSkillRegistries } from '@vibe-agent-toolkit/agent-skills';
 import { crawlSkillLinkRegistry } from '@vibe-agent-toolkit/claude-marketplace';
 import {
   ContributorRegistry,
@@ -46,6 +46,7 @@ import {
   ResourceRegistry,
   crawlSourceFor,
   populate,
+  withPopulationRun,
   type CollectionConfig,
   type ProjectConfig,
 } from '@vibe-agent-toolkit/resources';
@@ -97,7 +98,7 @@ const CONFIG: ProjectConfig = { resources: { collections: COLLECTIONS } };
  *
  * The `vibe-agent-toolkit.config.yaml` is not decoration: it is what makes the
  * temp root a discoverable project root (`findProjectRoot`), which is how
- * `crawlAndResolveRegistry` and `crawlSkillLinkRegistry` are reached at all, and
+ * `withSkillRegistries` and `crawlSkillLinkRegistry` find the config at all, and
  * it is generated from {@link CONFIG} so the on-disk declarations and the
  * in-memory ones cannot drift apart.
  */
@@ -145,11 +146,12 @@ async function projectionVerdicts(): Promise<Record<string, Verdict>> {
   const registry = new ContributorRegistry();
   registry.register(new FilesystemExtentContributor(() => crawlSourceFor(corpus.root(), []), DEFAULT_CONTENT_DEMAND));
 
-  const { projection } = await populate({
+  const { projection } = await withPopulationRun((run) => populate({
     root: corpus.root(),
     registry,
     collections: COLLECTIONS,
-  });
+    run,
+  }));
 
   const verdicts: Record<string, Verdict> = {};
   for (const name of [CONTROL, DECLARED]) {
@@ -174,14 +176,18 @@ describe('the projection lane and ResourceRegistry agree about a declared mimeTy
     await expect(projectionVerdicts()).resolves.toEqual(EXPECTED);
   });
 
+  /** The corpus's markdown, crawled in a run of its own under `options`. */
+  const markdownRegistry = (options: { config?: ProjectConfig }): Promise<ResourceRegistry> =>
+    withRunContext({ root: corpus.root() }, async (run) => (await ResourceRegistry.fromCrawl(
+      { outputs: [], unreadable: 'refuse', baseDir: corpus.root(), include: ['**/*.md'], populationSource: run.population.source },
+      options,
+    )).registry);
+
   it('routes the declared file to NO parser in a config-bearing ResourceRegistry', async () => {
     // The class-level contract, and the branch nothing covered: replacing
     // `this.config?.resources?.collections` with `undefined` in
     // `admitResource` left the whole suite green before this existed.
-    const { registry } = await ResourceRegistry.fromCrawl(
-      { outputs: [], unreadable: 'refuse', baseDir: corpus.root(), include: ['**/*.md'] },
-      { config: CONFIG },
-    );
+    const registry = await markdownRegistry({ config: CONFIG });
 
     expect(registryVerdicts(registry)).toEqual(EXPECTED);
   });
@@ -190,20 +196,16 @@ describe('the projection lane and ResourceRegistry agree about a declared mimeTy
     // The mechanism, pinned as a positive fact rather than left as an inference:
     // the disagreement is caused by the absent config and by nothing else, so
     // every failing lane below has exactly one cause.
-    const { registry } = await ResourceRegistry.fromCrawl({
-      outputs: [],
-      unreadable: 'refuse',
-      baseDir: corpus.root(),
-      include: ['**/*.md'],
-    });
+    const registry = await markdownRegistry({});
 
     expect(registryVerdicts(registry)[DECLARED]).toBe('parsed');
   });
 });
 
 describe('every shipped registry-construction site reaches the projection lane verdict', () => {
-  it('crawlAndResolveRegistry — `vat audit`, `vat skills build` post-build validation', async () => {
-    const registry = await crawlAndResolveRegistry(corpus.root(), { outputs: [], unreadable: 'refuse' });
+  it('withSkillRegistries — `vat audit`, and a library caller of the packager', async () => {
+    const registry = await withSkillRegistries(corpus.root(), (registries) =>
+      registries.forRoot(corpus.root(), { outputs: [], unreadable: 'refuse' }));
 
     expect(registryVerdicts(registry)).toEqual(EXPECTED);
   });
@@ -216,7 +218,7 @@ describe('every shipped registry-construction site reaches the projection lane v
 
   it('skillsValidateRegistries — the views `vat skills validate` shares', async () => {
     const registry = await withRunContext({ root: corpus.root() }, (run) =>
-      skillsValidateRegistries(run, corpus.root(), CONFIG).forRoot(corpus.root(), []),
+      skillsValidateRegistries(run, corpus.root(), CONFIG).forRoot(corpus.root(), { outputs: [], unreadable: 'refuse' }),
     );
 
     expect(registryVerdicts(registry)).toEqual(EXPECTED);
@@ -237,10 +239,7 @@ describe('every shipped registry-construction site reaches the projection lane v
 
     const registry = await withRunContext({ root: corpus.root() }, async (run) => {
       const context = await buildSharedValidationContext([skill], [], CONFIG, createLogger(), run);
-      if (context.registries === undefined) {
-        throw new Error('the command built no run registries — this arm is measuring nothing');
-      }
-      return context.registries.forRoot(corpus.root(), []);
+      return context.registries.forRoot(corpus.root(), { outputs: [], unreadable: 'refuse' });
     });
     expect(registryVerdicts(registry)).toEqual(EXPECTED);
   });

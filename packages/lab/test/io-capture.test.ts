@@ -342,74 +342,57 @@ describe('captureIo — which repeat is reported, and which are compared', () =>
 
 /**
  * A scan document as `vat resources scan --format json` prints it, carrying
- * the arm the subject says it took. Only `lane`/`extentSource` matter here; the
- * rest is what makes it look like the real thing.
+ * the arm the subject says it took. Only `extentSource` matters here; the rest
+ * is what makes it look like the real thing.
  *
- * @param lane - The lane to print, or `null` to omit the key
- * @param extentSource - The extent source to print (`null` prints a JSON null)
+ * @param extentSource - The extent source to print, or `null` to omit the key
  * @returns The document, serialised
  */
-function scanJson(lane: string | null, extentSource: string | null): string {
+function scanJson(extentSource: string | null): string {
   return JSON.stringify({
     status: 'success',
     root: '/fixture/project',
     filesScanned: 2,
-    ...(lane === null ? {} : { lane, extentSource }),
+    ...(extentSource === null ? {} : { extentSource }),
   });
 }
 
-/** The default `resources-scan` spec's output shape: YAML, with a lane a human can read. */
-const SCAN_YAML = 'status: success\nlane: projection\nextentSource: git\nfilesScanned: 2\n';
+/** The default `resources-scan` spec's output shape: YAML, with an arm a human can read. */
+const SCAN_YAML = 'status: success\nextentSource: git\nfilesScanned: 2\n';
 
 describe('captureIo — the arm is read from what the subject PRINTED', () => {
-  it('carries the lane and extent source the subject printed', async () => {
+  it('carries the extent source the subject printed', async () => {
     const probe = setupProbe(PREFIX);
 
     const row = onlyRow(
       await capture(probe, {
         runs: 1,
-        env: { [PROBE_STDOUT_ENV]: JSON.stringify([scanJson('projection', 'git')]) },
+        env: { [PROBE_STDOUT_ENV]: JSON.stringify([scanJson('git')]) },
       }),
     );
 
     expect(row.failed).toBe(false);
-    expect(row.lane).toBe('projection');
     expect(row.extentSource).toBe('git');
   });
 
-  it('keeps the lane when the extent source printed is null, which is the walk', async () => {
-    const probe = setupProbe(PREFIX);
-
-    const row = onlyRow(
-      await capture(probe, {
-        runs: 1,
-        env: { [PROBE_STDOUT_ENV]: JSON.stringify([scanJson('walk', null)]) },
-      }),
-    );
-
-    expect(row.lane).toBe('walk');
-    expect(row.extentSource).toBeNull();
-  });
-
-  it('reads the lane and extent source the subject printed as YAML, and does not fail the row', async () => {
+  it('reads the extent source the subject printed as YAML, and does not fail the row', async () => {
     const probe = setupProbe(PREFIX);
 
     // The default `resources-scan` spec prints YAML. Every reader in the lab
     // goes through one document reader (`document-shape.ts`) that parses JSON
-    // first, then YAML, so the `lane:` line is read here exactly as it would be
-    // from the JSON shape above — and a call count is a measurement whether or
-    // not the output named its arm, so the row is not failed either way.
+    // first, then YAML, so the `extentSource:` line is read here exactly as it
+    // would be from the JSON shape above — and a call count is a measurement
+    // whether or not the output named its arm, so the row is not failed either way.
     const row = onlyRow(
       await capture(probe, { runs: 1, env: { [PROBE_STDOUT_ENV]: JSON.stringify([SCAN_YAML]) } }),
     );
 
     expect(row.failed).toBe(false);
     expect(row.userCalls).toBe(DEFAULT_COUNT);
-    expect(row.lane).toBe('projection');
     expect(row.extentSource).toBe('git');
   });
 
-  it('reports both null, and does NOT fail the row, when the subject printed neither JSON nor YAML', async () => {
+  it('reports null, and does NOT fail the row, when the subject printed neither JSON nor YAML', async () => {
     const probe = setupProbe(PREFIX);
 
     // Genuinely unparseable output — not a document this reader can classify
@@ -423,43 +406,51 @@ describe('captureIo — the arm is read from what the subject PRINTED', () => {
 
     expect(row.failed).toBe(false);
     expect(row.userCalls).toBe(DEFAULT_COUNT);
-    expect(row.lane).toBeNull();
     expect(row.extentSource).toBeNull();
   });
 
-  it('CONTROL: with nothing printed at all, both are null too', async () => {
+  it('CONTROL: with nothing printed at all, the arm is null too', async () => {
     const probe = setupProbe(PREFIX);
 
     const row = onlyRow(await capture(probe, { runs: 1 }));
 
-    expect(row.lane).toBeNull();
     expect(row.extentSource).toBeNull();
   });
 
-  it('takes the lane from the REPORTED repeat, which is the last one', async () => {
+  it('CONTROL: a document that names no extent source reads as null', async () => {
+    const probe = setupProbe(PREFIX);
+
+    const row = onlyRow(
+      await capture(probe, { runs: 1, env: { [PROBE_STDOUT_ENV]: JSON.stringify([scanJson(null)]) } }),
+    );
+
+    expect(row.failed).toBe(false);
+    expect(row.extentSource).toBeNull();
+  });
+
+  it('takes the arm from the REPORTED repeat, which is the last one', async () => {
     const probe = setupProbe(PREFIX);
 
     // Three repeats, three different arms. The warm-up says `filesystem`, the
-    // first compared repeat says `walk`, and the reported (last) repeat says
-    // `git`. A capture reading repeat 0 says `filesystem`; one reading the first
-    // compared repeat says `walk`. Only the reported repeat's arm may travel
-    // with the reported repeat's numbers. The first document is the warm arm's
-    // priming run's, which no repeat reads.
+    // first compared repeat says `some-other-source`, and the reported (last)
+    // repeat says `git`. A capture reading repeat 0 says `filesystem`; one
+    // reading the first compared repeat says `some-other-source`. Only the
+    // reported repeat's arm may travel with the reported repeat's numbers. The
+    // first document is the warm arm's priming run's, which no repeat reads.
     const row = onlyRow(
       await capture(probe, {
         runs: 3,
         env: {
           [PROBE_STDOUT_ENV]: JSON.stringify([
-            scanJson('walk', 'filesystem'),
-            scanJson('projection', 'filesystem'),
-            scanJson('walk', null),
-            scanJson('projection', 'git'),
+            scanJson('priming-source'),
+            scanJson('filesystem'),
+            scanJson('some-other-source'),
+            scanJson('git'),
           ]),
         },
       }),
     );
 
-    expect(row.lane).toBe('projection');
     expect(row.extentSource).toBe('git');
   });
 
@@ -470,12 +461,11 @@ describe('captureIo — the arm is read from what the subject PRINTED', () => {
       await capture(probe, {
         runs: 1,
         commands: [PROBE_FAILS],
-        env: { [PROBE_STDOUT_ENV]: JSON.stringify([scanJson('projection', 'git')]) },
+        env: { [PROBE_STDOUT_ENV]: JSON.stringify([scanJson('git')]) },
       }),
     );
 
     expect(row.failed).toBe(true);
-    expect(row.lane).toBeNull();
     expect(row.extentSource).toBeNull();
   });
 });

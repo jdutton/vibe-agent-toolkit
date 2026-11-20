@@ -2,22 +2,17 @@
  * Utilities for loading and crawling resources
  */
 
+import { projectConfigOrNone, REGISTRY_INCLUDE, RunSkillRegistries } from '@vibe-agent-toolkit/agent-skills';
 import {
   buildLinkAuthEngineConfig,
-  buildResourcePopulation,
   DEFAULT_RESOURCE_INCLUDE,
   gitExtentSelected,
   ResourceRegistry,
-  withPopulationRun,
   withRunPopulation,
   type CrawlOptions,
   type CrawlPopulation,
-  type CrawlSourceKind,
   type ParseDispatcher,
-  type PopulationCache,
-  type PopulationOutcome,
   type ProjectConfig,
-  type ResourcePopulationSource,
   type RunPopulation,
 } from '@vibe-agent-toolkit/resources';
 import { relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
@@ -28,7 +23,7 @@ import { loadConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
 import { collectionsOption } from './population-wiring.js';
 import { assertDirectoryArgument } from './project-root-policy.js';
-import { withLazyPopulationCache, withPopulationCache } from './projection-store.js';
+import { withLazyPopulationCache } from './projection-store.js';
 
 /**
  * One VAT process run's shared population, registry and parse dispatcher: what
@@ -124,47 +119,24 @@ export function withRunContext<T>(
 }
 
 /**
- * Which enumerator produced a load's population.
+ * The run's skill registries for every verb that packages or validates skills
+ * outside `vat skills validate` (which narrows its shared root to markdown, see
+ * `skillsValidateRegistries`): every root's view crawls {@link REGISTRY_INCLUDE}
+ * under that root's own config, and packaging uses
+ * `RunSkillRegistries.packagingRegistry`. One per run, built over the run's
+ * registry and population, so every skill of the run shares one crawl per root.
  *
- * `walk` is the incumbent `crawlDirectory` route; `projection` is the
- * projection lane behind {@link RESOURCES_CRAWL_ENV}.
+ * @param run - The run
+ * @returns The run's skill registries
  */
-export type ResourceCrawlLane = CrawlPopulation['lane'];
-
-/**
- * The published `population` an observation implies: `null` for the walk —
- * offered no source, or declined the one it was offered — because nothing was
- * populated from or into the store.
- *
- * @param observation - The load's one observation
- * @returns `'store'`, `'derived'` or `null`
- */
-export function publishedPopulation(observation: CrawlPopulation): PopulationOutcome['population'] | null {
-  return observation.lane === 'walk' ? null : observation.outcome.population;
-}
-
-/**
- * Which enumerator the projection lane used, or `null` when the walk ran and
- * there was no extent to source.
- *
- * Reported for the same reason the lane is, one level down. The lane
- * distinguishes the walk from the projection; it does NOT distinguish the
- * projection's two enumerators, and `VAT_EXTENT_SOURCE` is exactly the axis a
- * flip decision turns on. Without this, both arms of that A/B report
- * `projection` and two identical populations mean either "the enumerators
- * agree" or "the switch was ignored" — indistinguishable, and the second is
- * reachable, because `crawlSourceFor` falls back to the walk without saying so
- * when the root is not in a repository.
- *
- * 🪤 NOT a cache-hit marker: on a hit no enumerator runs and it still names the
- * one this process selected, because the source is chosen before the store is
- * asked.
- *
- * @param population - The load's population
- * @returns The enumerator, or `null` for the walk
- */
-export function extentSourceOf(population: CrawlPopulation): CrawlSourceKind | null {
-  return population.lane === 'walk' ? null : population.extentSource;
+export function runSkillRegistries(run: RunContext): RunSkillRegistries {
+  return new RunSkillRegistries({
+    registry: run.registry,
+    source: run.population.source,
+    dispatcher: run.dispatcher,
+    includeFor: () => REGISTRY_INCLUDE,
+    configFor: projectConfigOrNone,
+  });
 }
 
 export interface ResourceLoadResult {
@@ -172,20 +144,15 @@ export interface ResourceLoadResult {
   projectRoot: string;
   config: ProjectConfig | undefined;
   registry: ResourceRegistry;
-  gitTracker: GitTracker | undefined;
+  gitTracker: GitTracker;
   /**
    * Where the population came from: the `CrawlPopulation` the crawl itself
-   * returned, carried here unchanged — the one channel, so a load cannot report
-   * a lane its crawl did not take. `{ lane: 'walk' }` both when the projection
-   * lane is not selected and when the crawl declined the source.
+   * returned, carried here unchanged — the enumeration's outcome (store or
+   * derived) and the enumerator that produced it.
    *
    * Reported as a fact about the run rather than about the environment that
-   * requested it: two scans of the same tree that disagree are only
-   * interpretable if each says which enumerator produced it. Reading the env var
-   * back instead would prove what was ASKED for, never what happened — a
-   * distinction that has already voided one whole A/B on this codebase, where
-   * both arms silently ran the incumbent. See {@link publishedPopulation} and
-   * {@link extentSourceOf} for the two views callers publish.
+   * requested it: reading `VAT_EXTENT_SOURCE` back would prove what was ASKED
+   * for, never what happened.
    */
   population: CrawlPopulation;
 }
@@ -273,10 +240,12 @@ export function assertDeclaredCollection(config: ProjectConfig | undefined, coll
  */
 function crawlOptionsForPath(
   pathArg: string,
-  projectRoot: string,
+  run: RunContext,
   config: ProjectConfig | undefined,
   logger: Logger,
 ): CrawlOptions {
+  const projectRoot = run.population.root;
+  const populationSource = run.population.source;
   const resolved = safePath.resolve(pathArg);
   // safePath.relative already normalizes, but toForwardSlash makes the
   // separator assumption in the `../` test below explicit on Windows too.
@@ -286,11 +255,12 @@ function crawlOptionsForPath(
     // Outside the project root, so the config's root-relative globs describe a
     // different tree and genuinely cannot apply. Say so rather than dropping
     // them silently — silent dropping is the bug this function exists to fix.
+    // The run's population enumerates that tree under its own oracles.
     logger.warn(
       `${resolved} is outside projectRoot ${projectRoot}; ` +
         `resources include/exclude patterns from the config do not apply to it`,
     );
-    return { baseDir: resolved, unreadable: RESOURCES_UNREADABLE, outputs: [] };
+    return { baseDir: resolved, unreadable: RESOURCES_UNREADABLE, outputs: [], populationSource };
   }
 
   // The crawler used to perform this check itself, because it received the path
@@ -304,6 +274,7 @@ function crawlOptionsForPath(
     unreadable: RESOURCES_UNREADABLE,
     // Every resources verb only reads the tree it crawls.
     outputs: [],
+    populationSource,
     include: scopeIncludeToSubtree(DEFAULT_RESOURCE_INCLUDE, normalizedRelDir),
     ...(config?.resources?.exclude ? { exclude: config.resources.exclude } : {}),
   };
@@ -312,236 +283,19 @@ function crawlOptionsForPath(
 /**
  * The resources verbs' ruling for a directory the crawl cannot list: refuse
  * the run by name, exit 2 — `vat resources validate`/`scan`/`check` and every
- * verb that reaches this loader act on the registry as the whole population,
- * and the projection lane behind `populationSource` refuses the same directory
- * with the same sentence, so the two lanes cannot reach different exits.
+ * verb that reaches this loader act on the registry as the whole population.
  * See `RegistryUnreadablePolicy` on the registry.
  */
 const RESOURCES_UNREADABLE = 'refuse' as const;
 
-/**
- * The env var that selects the crawler behind every resources-crawling verb —
- * `vat resources scan`/`validate`, `vat rag index`, the pipeline oracles, and
- * (via {@link withResourcePopulationSource}) the packaging verbs
- * `vat skills build`/`validate` and `vat claude plugin build`, which is what
- * puts `vat build` on the lane at all.
- *
- * An environment switch rather than a config field, for the same reason
- * `VAT_INVENTORY_CRAWL` is one: it selects which INSTRUMENT runs, not what
- * the project means, and it has to be reachable from the lab, which spawns the
- * binary and controls its environment. A config field would put the A and B arms
- * inside the subject's own tree, where a measurement edits the thing it measures.
- */
-export const RESOURCES_CRAWL_ENV = 'VAT_RESOURCES_CRAWL';
-
-/** {@link RESOURCES_CRAWL_ENV}'s value that selects the projection lane. */
-export const RESOURCES_CRAWL_PROJECTION = 'projection';
 
 /**
- * {@link RESOURCES_CRAWL_ENV}'s value that opts BACK to the incumbent walk.
- *
- * The projection lane is the default now, so this is the escape hatch rather
- * than the selector. Any other value — including the historical `projection` —
- * leaves the projection lane selected, so existing scripts and lab arms that
- * name it explicitly keep working and keep MEANING the same thing.
- */
-export const RESOURCES_CRAWL_WALK = 'walk';
-
-/**
- * The debug line naming the lane a crawl was offered, for every verb that
- * offers one. Each lane says it — a marker only one lane emitted would make the
- * other identifiable by ABSENCE, which is indistinguishable from a build too
- * old to have either lane — and there is no source only when the walk was
- * selected, so the walk's line names {@link RESOURCES_CRAWL_WALK}.
- *
- * @param populationSource - The source offered to the crawl, if any
- * @returns The line to log
- */
-export function crawlLaneDebugLine(populationSource: ResourcePopulationSource | undefined): string {
-  return populationSource === undefined
-    ? `Enumerating via the incumbent walk (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_WALK})`
-    : `Enumerating via the projection lane (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_PROJECTION})`;
-}
-
-/**
- * Whether this process should source the resources population from a projection.
- *
- * **Defaults to the projection lane.** Both lanes now enumerate
- * `tracked ∪ (untracked ∧ ¬ignored)` — `ResourceRegistry.crawl` passes
- * `includeUntracked: true` per `docs/architecture/resource-scanning-and-caching.md`
- * §2.1 — so the population question they answer is the same one.
- *
- * ⚠️⚠️ **ONE DISAGREEMENT SURVIVES, AND IT DROPS FINDINGS: SYMLINKS.** The
- * `filesystem` extent crawls with `followSymlinks: false` and records no link's
- * own path, and `GitCrawlSource` drops one at a single seam to match it (git's
- * mode `120000` for the paths the tree snapshot described, an `lstat` for the
- * collapsed `ls-files --others` entries that carry no mode) — so BOTH projection
- * extents omit a symlink, committed or not, that the incumbent walk includes. For an out-of-tree target those bytes have no other path into the
- * population, which means **a broken symlink the walk reports as
- * `LINK_BROKEN_FILE` is not reported on this lane.** That is a real loss, it is
- * known, and it is the cost this default was accepted at; closing it is its own
- * change (teaching an extent to admit `120000` entries as their own paths).
- * The omission is no longer SILENT — each declined link is an `info` row under
- * one of the four declined-link codes (`EXTENT_SYMLINK_NOT_REALIZED`,
- * `EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT`, `EXTENT_SYMLINK_TARGET_UNRESOLVED` for a
- * dangling in-root target, `EXTENT_SYMLINK_TARGET_UNREADABLE` for one the OS
- * would not resolve) — but no such row is a `LINK_BROKEN_FILE`
- * finding.
- * {@link RESOURCES_CRAWL_WALK} is the one-value escape hatch meanwhile.
- *
- * Read from the environment at each call rather than memoized at module load:
- * `vitest.setup.js` deletes every `VAT_*` variable before any test module loads,
- * so a module-level binding would make the switch unobservable to every test
- * that sets it.
- *
- * @returns `true` when the projection lane is selected
- */
-export function resourcesProjectionCrawlSelected(): boolean {
-  return process.env[RESOURCES_CRAWL_ENV] !== RESOURCES_CRAWL_WALK;
-}
-
-/**
- * The projection-backed enumeration for this run, or `undefined` to keep the
- * incumbent `crawlDirectory` walk.
- *
- * Gated on the selector alone — and NOT additionally on a discoverable project
- * root, which is where this differs from `vat inventory`'s
- * `populationProviderFor`. That gate exists there because inventory membership
- * is resolved per skill against a root the extractor derives itself, so a
- * population rooted anywhere else answers a different question.
- *
- * The root the caller resolved is carried ON the source rather than merely used
- * to build it, which is what lets `ResourceRegistry.populationFrom` decline a
- * crawl of some OTHER tree instead of answering it with this tree's ignore
- * oracle. This function used to argue that no second root existed to disagree
- * with; it does — `crawlOptionsForPath` re-bases `baseDir` onto a path argument
- * that lies outside the project root, and the packaging validator's
- * `findProjectRoot(...) ?? dirname(skillPath)` can land on a build output
- * directory. Both are now declined rather than served.
- *
- * The tracker is threaded through because its absence is not cosmetic: with no
- * tracker every realization row reads `gitignored: false`, and the population
- * would admit the ignored half of a git tree rather than decline it. See
- * `buildResourcePopulation`.
- *
- * The enumeration's outcome and enumerator travel back on what `enumerate`
- * returns, and from there on what `ResourceRegistry.crawl` returns — never on a
- * side channel this closure writes to.
- *
- * @param root - The root this source may answer for, and no other
- * @param gitTracker - The run's ignore oracle
- * @param cache - The run's projection store, or `undefined` to enumerate every
- *   time. A SEPARATE selector from {@link RESOURCES_CRAWL_ENV}: which lane
- *   enumerates and whether its answer is cached are independent choices, and a
- *   cache folded into the lane switch could never be measured against it
- * @returns A population source, or `undefined` to use the walk
- */
-function populationSourceFor(
-  root: string,
-  gitTracker: GitTracker,
-  cache: PopulationCache | undefined,
-): ResourcePopulationSource | undefined {
-  if (!resourcesProjectionCrawlSelected()) {
-    return undefined;
-  }
-  return {
-    root: safePath.resolve(root),
-    // `outputs` come from the crawl that asks (the registry's one declaration of what its verb writes).
-    // Each enumeration reads and parses through a run of its own, held only while
-    // it enumerates: these verbs (`vat build`'s phases) are not one-admission runs
-    // yet, and a run held across the whole build is a parse pool held beside every
-    // registry's own.
-    enumerate: (enumeratedRoot: string, outputs: readonly string[]) => withPopulationRun((run) =>
-      buildResourcePopulation({
-        root: enumeratedRoot,
-        outputs,
-        run,
-        // `enumeratedRoot` and this source's own `root` are the SAME directory,
-        // always: `populationFrom` compares them and declines outright when they
-        // differ, so `enumerate` is never called for another tree. Reading the
-        // declarations off the root being enumerated is therefore not a guard
-        // against a second root — it is how the declaration and the enumeration
-        // are kept demonstrably on one tree at the point of use, with no second
-        // variable to fall out of step with the one that was checked.
-        gitTracker,
-        ...(cache !== undefined && { cache }),
-        ...collectionsOption(enumeratedRoot),
-      })),
-  };
-}
-
-/**
- * Run one command's work with the projection-backed population source it
- * selected, and the store that answers it open for the whole call.
- *
- * The lane-selection seam for every command that builds its OWN registry rather
- * than going through {@link loadResourcesWithConfig} — `vat skills build` and
- * `vat claude plugin build` (via `createProjectRegistry`). Those two are what
- * put `vat build` on the projection lane at all: before this, that verb reached
- * a projection store on NO phase.
- *
- * Same selector, same store, same ignore oracle as the resource loader —
- * deliberately, and not merely for tidiness. A second way to decide the lane is
- * a second thing to keep in step, and a packaging lane that answered the
- * selector differently from the validation lane would make a whole-run A/B
- * uninterpretable: half the phases on one population, half on the other, and
- * nothing in the output saying so.
- *
- * ⚠️ The tracker is **not optional dressing**. With no `GitTracker` every
- * realization row reads `gitignored: false`, so the population would admit the
- * ignored half of a git tree — generated markdown, caches, vendored corpora —
- * and the packaging run would start bundling and validating files the project
- * told git to forget. One is built here when the caller has none, rooted at the
- * same root the population is enumerated from.
- *
- * @param options - Where the corpus is, and what to reuse
- * @param options.root - The absolute corpus root, which is also the basis every
- *   enumerated path is returned against
- * @param options.gitTracker - An already-initialized tracker to reuse. Omit to
- *   have one built, which costs a `git ls-files` spawn — and only when the lane
- *   is actually selected
- * @param work - Given the source, or `undefined` when the walk stays selected
- * @returns Whatever `work` returned
- */
-export function withResourcePopulationSource<T>(
-  options: {
-    root: string;
-    gitTracker?: GitTracker | undefined;
-  },
-  work: (populationSource: ResourcePopulationSource | undefined) => Promise<T>,
-): Promise<T> {
-  try {
-    // Checked before anything is built or opened: an unselected lane must cost
-    // nothing, or every command pays a tracker and a store to decline them.
-    if (!resourcesProjectionCrawlSelected()) {
-      return work(undefined);
-    }
-
-    const gitTracker = options.gitTracker ?? new GitTracker(options.root);
-
-    return withPopulationCache({ root: options.root }, async (cache) => {
-      // Initialized inside the bracket for the reason `loadResourcesWithConfig`
-      // gives at its own call: the store has already taken the snapshot that
-      // answers this tracker's question, so asking git again is a spawn spent
-      // rebuilding a set the process is holding.
-      if (options.gitTracker === undefined) {
-        await gitTracker.initialize();
-      }
-
-      return work(populationSourceFor(options.root, gitTracker, cache));
-    });
-  } catch (error) {
-    return Promise.reject(error as Error);
-  }
-}
-
-/**
- * Load resources from a path with config support
+ * Load resources from a path with config support, as one phase of a run.
  *
  * Common pattern for CLI commands that need to:
  * 1. Determine scan path
- * 2. Load config from the pre-resolved project root
- * 3. Create registry and crawl
+ * 2. Load config from the run's root
+ * 3. Crawl a view of the run's registry
  *
  * Behavior:
  * - When no path argument: crawl the project root, applying the config's
@@ -552,13 +306,12 @@ export function withResourcePopulationSource<T>(
  *   `exclude` still applied. A path argument says WHICH tree to scan; it does
  *   not license scanning files the project excluded.
  * - When the path argument lies outside the project root, the config's patterns
- *   describe a different tree: they are dropped, with a warning.
+ *   describe a different tree: they are dropped, with a warning, and the run's
+ *   population enumerates that tree under its own oracles.
  *
  * The project root is the run's (`run.population.root`), which the caller
  * resolved at the CLI boundary with one of the policy helpers in
- * `project-root-policy.ts`. The registry is a view of the run's
- * (`ResourceRegistry.view`), so every file is read, keyed, parsed and admitted
- * once per run whichever phase asks.
+ * `project-root-policy.ts`.
  *
  * @param pathArg - Path argument from CLI (optional)
  * @param run - The run this load is one phase of
@@ -581,18 +334,11 @@ export async function loadResourcesWithConfig(
     assertLinkAuthProvidersCompile(config);
   }
 
-  // Create registry and crawl
-  // Build options conditionally to satisfy exactOptionalPropertyTypes.
-  //
   // 🚨 The config is handed over WHENEVER one was loaded — never gated on one of
-  // its keys. This used to read `if (config?.resources?.collections)`, written
-  // when collections were the only thing the registry read from it. The registry
-  // has since grown a second consumer, `resources.linkAuth`, and the gate made
-  // it silently inert for every adopter who declared `linkAuth` without
-  // `collections`: no rewrite, no token, no `LINK_AUTH_*` code — the anonymous
-  // lane ran and the run reported success. Every read inside the registry is
-  // already `this.config?.resources?.<key>`-guarded, so an undeclared key costs
-  // nothing; a key-gate here can only ever hide the next consumer the same way.
+  // its keys. Every read inside the registry is already
+  // `this.config?.resources?.<key>`-guarded, so an undeclared key costs nothing;
+  // a key-gate here can only hide the next consumer (it once hid
+  // `resources.linkAuth` from every adopter without `collections`).
   const registry = run.registry.view({
     baseDir: projectRoot,
     gitTracker,
@@ -605,7 +351,7 @@ export async function loadResourcesWithConfig(
     // Path argument provided: narrow the scan to that subtree, but keep the
     // project's exclude patterns — see crawlOptionsForPath.
     logger.debug(`Path argument provided: ${pathArg}`);
-    crawlOptions = crawlOptionsForPath(pathArg, projectRoot, config, logger);
+    crawlOptions = crawlOptionsForPath(pathArg, run, config, logger);
     logger.debug(`Crawling ${crawlOptions.baseDir} with include: ${JSON.stringify(crawlOptions.include)}`);
   } else {
     // No path argument: crawl from projectRoot with config patterns
@@ -615,6 +361,7 @@ export async function loadResourcesWithConfig(
       baseDir: projectRoot,
       unreadable: RESOURCES_UNREADABLE,
       outputs: [],
+      populationSource: run.population.source,
       // Apply include patterns from config (if specified)
       ...(config?.resources?.include ? { include: config.resources.include } : {}),
       // Apply exclude patterns from config (if specified)
@@ -622,50 +369,18 @@ export async function loadResourcesWithConfig(
     };
   }
 
-  // Which lane enumerates. Applied to the options both branches above produced,
-  // so the path-argument case and the whole-root case cannot end up on different
-  // crawlers — the bug shape this file already carries one fix for. The run's
-  // store brackets the whole run (see {@link withRunContext}).
-  const population = await (async () => {
-    // The git enumerator takes a `gitTreeSnapshot` during the crawl below no matter
-    // what. Taking it HERE instead is the same snapshot moved a few lines earlier —
-    // the open bracket memoizes it, so the enumerator's own call becomes a lookup —
-    // and it puts the answer in hand before the tracker asks its question.
-    //
-    // ⚠️ Gated, because ungated this is a LOSS: a snapshot is `git add --all` plus
-    // two more spawns, and on the filesystem enumerator or the incumbent walk
-    // nothing would ever consume it. Guarded by `gitExtentSelected` rather than a
-    // second copy of the condition, so the two cannot drift.
-    //
-    // ⚠️⚠️ BOTH HALVES, and the second one is not redundant. `gitExtentSelected`
-    // answers "which ENUMERATOR would the projection lane use", which stopped
-    // implying "the projection lane is running" the moment git became the extent
-    // default: under `VAT_RESOURCES_CRAWL=walk` it still answers true inside any
-    // repository, so the walk paid for a snapshot nothing consumed — measured at
-    // 7 git spawns on the escape hatch against 2 before the flip. The lane check
-    // is the half that went missing when the default moved.
-    if (resourcesProjectionCrawlSelected() && gitExtentSelected(projectRoot)) {
-      gitTreeSnapshot({ cwd: projectRoot });
-    }
+  // The git enumerator takes a `gitTreeSnapshot` during the crawl below no matter
+  // what. Taking it HERE instead is the same snapshot moved a few lines earlier —
+  // the open store bracket memoizes it, so the enumerator's own call becomes a
+  // lookup — and it puts the answer in hand before the tracker asks its question
+  // (the run initializes the home tracker on the first enumeration of the root).
+  // Gated on `gitExtentSelected`: on the filesystem enumerator nothing consumes it.
+  if (gitExtentSelected(projectRoot)) {
+    gitTreeSnapshot({ cwd: projectRoot });
+  }
 
-    // Now inside the bracket, and after the snapshot above. The set a snapshot
-    // describes — `tracked ∪ (untracked ∧ ¬ignored)` — is exactly the set this
-    // would otherwise spawn `git ls-files --cached --others --exclude-standard` to
-    // rebuild, so on the git lane it reads the answer instead of re-asking. Where
-    // no snapshot was taken the peek misses and it spawns exactly as before.
-    await gitTracker.initialize();
-    logger.debug(`GitTracker initialized with ${gitTracker.getStats().cacheSize} tracked files`);
-
-    const populationSource = resourcesProjectionCrawlSelected() ? run.population.source : undefined;
-    logger.debug(crawlLaneDebugLine(populationSource));
-    if (populationSource) {
-      crawlOptions = { ...crawlOptions, populationSource };
-    }
-
-    // Read off what the crawl RETURNED, so a crawl that declined the source
-    // reports the walk it actually took — with no enumerator.
-    return (await registry.crawl(crawlOptions)).population;
-  })();
+  const { population } = await registry.crawl(crawlOptions);
+  logger.debug(`GitTracker initialized with ${gitTracker.getStats().cacheSize} tracked files`);
 
   return {
     scanPath: pathArg ?? projectRoot,

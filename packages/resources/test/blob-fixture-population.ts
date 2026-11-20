@@ -27,6 +27,8 @@ import { populate } from '../src/projection/merge.js';
 import { ProjectionBuilder, type Projection } from '../src/projection/projection.js';
 import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
 
+import { inOwnRun } from './helpers/population-run.js';
+
 /** Reorders the realizations before they reach the builder. */
 export type RealizationOrder = (
   rows: readonly ResourceRealizationRow[],
@@ -99,7 +101,7 @@ export async function populateFixtureRoot(rootDir: string): Promise<{ projection
   const registry = new ContributorRegistry();
   registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
 
-  const { projection } = await populate({ root: rootDir, registry });
+  const { projection } = await inOwnRun(populate, { root: rootDir, registry });
   return { projection };
 }
 

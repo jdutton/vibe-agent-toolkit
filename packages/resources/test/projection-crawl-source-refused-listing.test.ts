@@ -18,10 +18,8 @@
  * git's population reaches (its files would be absent from every count), and
  * for a gitignored one record it and carry on (nothing beneath it was ever in
  * the population). The test that could not exist before is the one asserting
- * the two arms AGREE — and, since the registry's incumbent walk
- * (`VAT_RESOURCES_CRAWL=walk`) is a third lane over the same tree that used to
- * answer with a WARNING at exit 1, that it agrees with them too, sentence for
- * sentence. The remedy in that sentence is decided per root: an ignore rule
+ * the two arms AGREE, sentence for sentence. The remedy in that sentence is
+ * decided per root: an ignore rule
  * inside a repository, and — pinned in the last suite — no such rule outside
  * one, where "gitignore it" would be a dead knob.
  *
@@ -56,7 +54,6 @@ import {
   GitCrawlSource,
 } from '../src/projection/crawl-source.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
-import { ResourceRegistry } from '../src/resource-registry.js';
 
 import { createCommittedRepo, writeFileIn } from './test-helpers.js';
 
@@ -109,22 +106,11 @@ async function thrownBy(source: CrawlSource): Promise<unknown> {
   }
 }
 
-/** What the registry's incumbent walk (`VAT_RESOURCES_CRAWL=walk`) threw over `crawlRoot`, or `undefined`. */
-async function thrownByWalk(crawlRoot: string): Promise<unknown> {
-  try {
-    await new ResourceRegistry({ baseDir: crawlRoot }).crawl({ unreadable: 'refuse', outputs: [], baseDir: crawlRoot, include: ['**/*.md'] });
-    return undefined;
-  } catch (error) {
-    return error;
-  }
-}
-
-/** What the filesystem arm and the walk lane each threw for `docs/locked` refusing to list under `crawlRoot`. */
-async function refusalsOn(crawlRoot: string): Promise<{ projection: unknown; walk: unknown }> {
-  return withReaddirSyncRefused(safePath.join(crawlRoot, LOCKED_DIR), 'EACCES', async () => ({
-    projection: await thrownBy(new FilesystemCrawlSource(crawlRoot, [])),
-    walk: await thrownByWalk(crawlRoot),
-  }));
+/** What the filesystem arm threw for `docs/locked` refusing to list under `crawlRoot`. */
+function refusalOn(crawlRoot: string): Promise<unknown> {
+  return withReaddirSyncRefused(safePath.join(crawlRoot, LOCKED_DIR), 'EACCES', () =>
+    thrownBy(new FilesystemCrawlSource(crawlRoot, [])),
+  );
 }
 
 describe.skipIf(CANNOT_DENY_READS)('crawl sources: a refused listing gets one verdict on both arms', () => {
@@ -176,21 +162,6 @@ describe.skipIf(CANNOT_DENY_READS)('crawl sources: a refused listing gets one ve
         ARMS.map(async ([, sourceFor]) => (await thrownBy(sourceFor(root)) as Error).message),
       );
       expect(fromGit).toBe(fromFilesystem);
-    });
-
-    /**
-     * The registry's incumbent walk (`VAT_RESOURCES_CRAWL=walk`) is the third
-     * lane over the same tree, and it used to answer with a WARNING and exit 1
-     * where both projection arms exit 2. Standing ruling: one class, one
-     * sentence, on every lane.
-     */
-    it('the registry walk lane throws the SAME class and sentence as the projection arms', async () => {
-      lock(LOCKED_DIR);
-      const fromWalk = await thrownByWalk(root);
-      const fromGit = await thrownBy(new GitCrawlSource(root, []));
-
-      expect(fromWalk).toBeInstanceOf(DirectoryListingRefusedError);
-      expect((fromWalk as Error).message).toBe((fromGit as Error).message);
     });
   });
 
@@ -281,7 +252,7 @@ describe('a refused listing under a root with NO repository', () => {
   });
 
   it('names the missing repository as the reason no ignore rule can help, and does not say "gitignore it"', async () => {
-    const { projection } = await refusalsOn(plainRoot);
+    const projection = await refusalOn(plainRoot);
 
     expect(projection).toBeInstanceOf(DirectoryListingRefusedError);
     const message = (projection as Error).message;
@@ -289,12 +260,6 @@ describe('a refused listing under a root with NO repository', () => {
     expect(message).toMatch(/no git repository/i);
     expect(message).not.toMatch(/gitignore it/);
     expect(message).toMatch(/regardless of resources\.include or resources\.exclude/);
-  });
-
-  it('the registry walk lane throws the SAME class and sentence here too', async () => {
-    const { projection, walk } = await refusalsOn(plainRoot);
-    expect(walk).toBeInstanceOf(DirectoryListingRefusedError);
-    expect((walk as Error).message).toBe((projection as Error).message);
   });
 });
 

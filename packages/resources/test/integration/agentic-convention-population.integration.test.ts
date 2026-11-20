@@ -45,6 +45,7 @@ import { CONTENT_PARSING_SKIP, populate } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
 import { ProjectionBuilder } from '../../src/projection/projection.js';
 import { collectRealization } from '../../src/projection/realizations.js';
+import { inOwnRun } from '../helpers/population-run.js';
 import { writeFileIn as plant } from '../test-helpers.js';
 
 /** The contributor id, which is also its `resource_tags.source` and its kind. */
@@ -130,7 +131,7 @@ beforeAll(async () => {
   registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), 'deferred'));
   registry.register(new AgenticConventionContributor());
 
-  ({ projection } = await populate({
+  ({ projection } = await inOwnRun(populate, {
     root,
     registry,
     contentParsing: CONTENT_PARSING_SKIP,

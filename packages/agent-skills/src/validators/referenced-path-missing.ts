@@ -366,6 +366,7 @@ export async function detectMissingReferencedPaths(
   docFiles: readonly string[],
   skillDir: string,
   target: PackagingTarget,
+  route: ParseRoute,
 ): Promise<ValidationIssue[]> {
   const registryEntry = CODE_REGISTRY.PACKAGED_REFERENCED_PATH_MISSING;
   const issues: ValidationIssue[] = [];
@@ -381,7 +382,7 @@ export async function detectMissingReferencedPaths(
         const limit = parseRefusalIssue(error, docFile, skillDir);
         if (limit === undefined) throw error;
         return limit;
-      })));
+      })), { dispatcher: route.dispatcher });
   for (const [index, docFile] of docFiles.entries()) {
     const scanned = candidatesByDoc[index] ?? [];
     if (!Array.isArray(scanned)) {

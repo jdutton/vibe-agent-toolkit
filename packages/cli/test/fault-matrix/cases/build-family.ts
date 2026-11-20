@@ -332,7 +332,7 @@ function cacheClearCase(): VerbCase {
 export const BUILD_FAMILY_SHARDS = {
   'skills/build': { make: skillsBuildCase, files: 26 },
   'skills/package/o-fresh': { make: () => skillsPackageCase('o-fresh'), files: 15 },
-  'skills/package/o-force': { make: () => skillsPackageCase('o-force'), files: 19 },
+  'skills/package/o-force': { make: () => skillsPackageCase('o-force'), files: 29 },
   'skills/package/o-occupied': { make: () => skillsPackageCase('o-occupied'), files: 16 },
   'plugin/build': { make: pluginBuildCase, files: 24 },
   'top-level-build': { make: topLevelBuildCase, files: 61 },

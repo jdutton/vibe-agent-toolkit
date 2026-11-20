@@ -22,7 +22,7 @@
  * of the capture to touch the subject's files, so it stays excluded from the
  * stability comparison, and reported only when it is also the last repeat
  * (`runs: 1`). Everything else compares repeats `1 … runs-1` and reports the
- * last of them — its dumps AND its arm: `lane` / `extentSource` are read out
+ * last of them — its dumps AND its arm: `extentSource` is read out
  * of that LAST repeat's stdout, so the arm on the row is the arm of the counts
  * on the row. ⚠️ `population` points the same reader (`harness/lane.ts`) at
  * its FIRST repeat, because it discards none; the reader is shared, the repeat
@@ -137,7 +137,6 @@ function failedRow(base: RowBase, runs: number, failure: string): IoCommandStats
     stable: null,
     // Not read off the failed run's stdout even when it printed one: an arm on
     // a row with no measurement would be an arm the row never proved it ran.
-    lane: null,
     extentSource: null,
     processes: 0,
     loaderCalls: 0,
@@ -230,7 +229,6 @@ async function rowFromDumps(
     // Below two compared repeats there is nothing to disagree, so there is
     // nothing to report. `null` is not `false` and emphatically not `true`.
     stable: comparedRuns < 2 ? null : read.allSame,
-    lane: arm.lane,
     extentSource: arm.extentSource,
     processes: read.reported.processes,
     loaderCalls: read.reported.loaderCalls,

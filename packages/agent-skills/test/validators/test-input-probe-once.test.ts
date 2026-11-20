@@ -34,7 +34,6 @@
 
 import * as fs from 'node:fs';
 
-
 import type * as Utils from '@vibe-agent-toolkit/utils';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
@@ -42,8 +41,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_EVALS_SUBPATH } from '../../src/skill-test/eval-suite-isolation.js';
 import { conventionalSuiteProbe, packagedFileEntries, type DeclaredEvalSuite } from '../../src/test-input.js';
-import { validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
-import { createSkillContent, setupTempDir } from '../test-helpers.js';
+import { createSkillContent, setupTempDir , validateForPackagingInRun } from '../test-helpers.js';
 
 const { suiteProbes } = vi.hoisted(() => ({ suiteProbes: [] as string[] }));
 
@@ -85,7 +83,7 @@ describe('validateSkillForPackaging - declared test-input resolution', () => {
       config: {},
     }));
 
-    await validateSkillForPackaging(skillPath, {}, {}, 'source', { dispatcher: undefined, unreadable: 'refuse', outputs: [], projectSkills });
+    await validateForPackagingInRun(skillPath, {}, {}, 'source', { dispatcher: undefined, unreadable: 'refuse', outputs: [], projectSkills });
 
     const expected = [tempDir, ...SIBLING_DIRS.map((n) => safePath.join(tempDir, n))].map(suitePathFor);
     // Every skill root IS reached — without this the count assertion below passes vacuously.
@@ -142,7 +140,7 @@ describe('a run-scoped conventional-suite probe', () => {
     const suiteProbe = conventionalSuiteProbe();
 
     for (const skillDir of skillDirs) {
-      await validateSkillForPackaging(safePath.join(skillDir, 'SKILL.md'), {}, {}, 'source', {
+      await validateForPackagingInRun(safePath.join(skillDir, 'SKILL.md'), {}, {}, 'source', {
         dispatcher: undefined,
         unreadable: 'refuse',
         outputs: [],

@@ -14,9 +14,7 @@ import { FS_FAULT_CODE, safePath, TREE_DEST_HOLDS_SOURCE_CODE, TREE_DEST_NOT_OWN
 import { CANNOT_DENY_READS, installFaultFs, withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
-import { packageSkill } from '../src/skill-packager.js';
-
-import { createFrontmatter, setupTempDir } from './test-helpers.js';
+import { createFrontmatter, setupTempDir , packageSkillInRun } from './test-helpers.js';
 
 const { getTempDir } = setupTempDir('package-output-unit-');
 
@@ -64,7 +62,7 @@ describe('packageSkill - artifacts the OS will not let it write', () => {
     const manifest = safePath.join(tmp, `${SKILL_NAME}.marketplace.json`);
 
     await withStagedWriteRefused(tmp, manifest, 'ENOSPC', async () => {
-      await expect(packageSkill(sp, { outputPath: safePath.join(tmp, 'pkg'), formats: [DIRECTORY, 'marketplace'] }))
+      await expect(packageSkillInRun(sp, { outputPath: safePath.join(tmp, 'pkg'), formats: [DIRECTORY, 'marketplace'] }))
         .rejects.toMatchObject(OUTPUT_FAULT);
     });
     expectNothingLanded(tmp, 'SKILL.md');
@@ -75,7 +73,7 @@ describe('packageSkill - artifacts the OS will not let it write', () => {
     const sp = await writeSkill(tmp);
     const session = installFaultFs({ within: tmp, faults: [{ family: 'write', path: (path) => path.endsWith('/package.json'), errno: 'EACCES' }] });
     try {
-      await expect(packageSkill(sp, { outputPath: safePath.join(tmp, 'pkg'), formats: [DIRECTORY, 'npm'] }))
+      await expect(packageSkillInRun(sp, { outputPath: safePath.join(tmp, 'pkg'), formats: [DIRECTORY, 'npm'] }))
         .rejects.toMatchObject(OUTPUT_FAULT);
     } finally {
       session.restore();
@@ -89,7 +87,7 @@ describe('packageSkill - artifacts the OS will not let it write', () => {
     const out = safePath.join(tmp, 'z');
 
     await withStagedWriteRefused(tmp, `${out}.zip`, 'ENOSPC', async () => {
-      await expect(packageSkill(sp, { outputPath: out, formats: [DIRECTORY, 'zip'] }))
+      await expect(packageSkillInRun(sp, { outputPath: out, formats: [DIRECTORY, 'zip'] }))
         .rejects.toMatchObject({ ...OUTPUT_FAULT, message: expect.stringContaining('z.zip') as unknown });
     });
     // Left behind, the next run would refuse it as "something VAT did not make".
@@ -102,7 +100,7 @@ describe('packageSkill - artifacts the OS will not let it write', () => {
     const out = safePath.join(tmp, 'z');
     await mkdir(safePath.join(`${out}.zip`, 'inside'), { recursive: true });
 
-    await expect(packageSkill(sp, { outputPath: out, formats: [DIRECTORY, 'zip'], replaceExistingOutput: true }))
+    await expect(packageSkillInRun(sp, { outputPath: out, formats: [DIRECTORY, 'zip'], replaceExistingOutput: true }))
       .rejects.toMatchObject({ code: TREE_DEST_OCCUPIED_CODE, message: expect.stringContaining('is a directory') as unknown });
     expect(existsSync(safePath.join(`${out}.zip`, 'inside'))).toBe(true);
     expect(existsSync(out)).toBe(false);
@@ -111,7 +109,7 @@ describe('packageSkill - artifacts the OS will not let it write', () => {
 
 /** The output's plan, decided by a dry run: the check the real run makes, before anything is written. */
 const dryRun = (sp: string, out: string, extra: { formats?: Array<'directory' | 'zip'>; replaceExistingOutput?: boolean } = {}) =>
-  packageSkill(sp, { outputPath: out, formats: extra.formats ?? [DIRECTORY], dryRun: true, ...(extra.replaceExistingOutput === true && { replaceExistingOutput: true }) });
+  packageSkillInRun(sp, { outputPath: out, formats: extra.formats ?? [DIRECTORY], dryRun: true, ...(extra.replaceExistingOutput === true && { replaceExistingOutput: true }) });
 
 /**
  * A listing of the output the OS refused: the project crawl meets it first (the output lies in

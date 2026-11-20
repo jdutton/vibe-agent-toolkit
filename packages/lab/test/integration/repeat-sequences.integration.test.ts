@@ -72,17 +72,17 @@ describe('runRepeats — sequences', () => {
 
   it('hands a VAT step a VAT_* name the ARM sets explicitly, over an inherited one — only the inherited VAT_* is cleared', async () => {
     const probe = setupProbe(PREFIX);
-    vi.stubEnv('VAT_RESOURCES_CRAWL', 'inherited');
+    vi.stubEnv('VAT_EXTENT_SOURCE', 'inherited');
 
     const spec = probeSpec(probe, {
       runs: 1,
       cache: 'cold',
-      env: { VAT_RESOURCES_CRAWL: 'walk', [PROBE_ECHO_ENV]: 'VAT_RESOURCES_CRAWL' },
+      env: { VAT_EXTENT_SOURCE: 'git', [PROBE_ECHO_ENV]: 'VAT_EXTENT_SOURCE' },
     });
     const run = await runRepeats(spec);
 
-    expect(JSON.parse(run.results[0]?.steps[0]?.stdout ?? '{}')).toEqual({ VAT_RESOURCES_CRAWL: 'walk' });
-    expect(run.removed).not.toContain('VAT_RESOURCES_CRAWL'); // set, not removed
+    expect(JSON.parse(run.results[0]?.steps[0]?.stdout ?? '{}')).toEqual({ VAT_EXTENT_SOURCE: 'git' });
+    expect(run.removed).not.toContain('VAT_EXTENT_SOURCE'); // set, not removed
   });
 
   it("runs a non-VAT step in the developer's environment minus VAT_* only", async () => {

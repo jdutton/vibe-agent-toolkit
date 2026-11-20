@@ -11,13 +11,11 @@ import {
   isLinkChainRefusedError,
   LINK_CHAIN_REFUSED_CODE,
   linkResolutionFault,
-  normalizePath,
   realpathRowFrom,
   type RealpathTable,
   safePath,
   toForwardSlash,
   toForwardSlashAnyPlatform,
-  toNfc,
 } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
@@ -275,77 +273,6 @@ function isPathUnderRoot(normalizedFile: string, normalizedRoot: string): boolea
   // The trailing slash prevents false positives like `/project-other` reading
   // as being inside `/project`.
   return normalizedFile.startsWith(normalizedRoot + '/') || normalizedFile === normalizedRoot;
-}
-
-/**
- * Whether two path strings name the **same directory**, as the filesystem would
- * judge it.
- *
- * The identity question, not the containment question — {@link isPathUnderRoot}
- * answers the latter and is deliberately a different function. This one exists
- * for {@link ResourcePopulationSource}'s root guard, where the two sides arrive
- * from different producers (one from a CLI boundary that resolved a project
- * root, one from a crawl's `baseDir`) and any of four legitimate spelling
- * differences must NOT read as two roots:
- *
- * - a trailing separator (`/project/` against `/project`);
- * - a non-normalised traversal (`/project/out/..`);
- * - a symlinked ancestor (macOS `/var/folders/…` against `/private/var/folders/…`);
- * - differing case, **where the filesystem folds case** and only there.
- *
- * ⚠️ The asymmetry between over- and under-strictness is what shapes this. An
- * over-strict answer declines a source that was perfectly entitled to answer,
- * and its symptom is not an error but a lane that quietly stopped helping —
- * unfalsifiable from the outside. So the comparison is made twice: once on the
- * resolved strings, which is pure and settles the first two cases, and once on
- * what the filesystem reports on disk, which settles the last two.
- *
- * The second pass goes through `normalizePath` — `realpathSync.native` with
- * fallbacks — and NOT through {@link canonicalizeSync}. That is a deliberate
- * split from this file's containment rule and the reason is the one
- * {@link canonicalizeSync} documents: Node's JS realpath preserves the casing the
- * CALLER asked for, which is exactly the difference being tested here, while the
- * native route reports the casing on disk. Containment verdicts need the former
- * and must not change; identity needs the latter.
- *
- * A path that is not on disk has no on-disk spelling, so `normalizePath` returns
- * its input and two different spellings of a nonexistent path stay different —
- * which is the honest answer rather than a gap: nothing observed them to be one
- * directory.
- *
- * @param left - A path, absolute or relative to the process CWD
- * @param right - The path to compare it against
- * @returns True when both name one directory
- *
- * @example
- * sameDirectory('/project', '/project/')             // true
- * sameDirectory('/project', '/project/out/..')       // true
- * sameDirectory('/project', '/project/out/demo')     // false
- */
-export function sameDirectory(left: string, right: string): boolean {
-  const leftResolved = safePath.resolve(left);
-  const rightResolved = safePath.resolve(right);
-  // NFC on both sides for the reason `toNfc`'s docblock states: a decomposed and
-  // a composed spelling of the same name are the same file on macOS, and this is
-  // a comparison rather than a path on its way to a syscall.
-  if (toNfc(leftResolved) === toNfc(rightResolved)) return true;
-  return toNfc(onDiskSpelling(leftResolved)) === toNfc(onDiskSpelling(rightResolved));
-}
-
-/**
- * What the filesystem calls this path — symlinks resolved, and the casing it
- * actually stores rather than the casing the caller typed.
- *
- * Both callers' sides are the operator's OWN roots (a crawl base and the root a
- * population source was bound to), so each is its own `within`: the kernel
- * answers the operator's input directly, as `link-following.ts` rules for an edge.
- *
- * @param resolvedPath - An already-resolved absolute path the operator named
- * @returns Its on-disk, forward-slashed spelling, or the input when it is not on
- *   disk (`normalizePath`'s own last resort)
- */
-function onDiskSpelling(resolvedPath: string): string {
-  return toForwardSlash(normalizePath(resolvedPath, { within: resolvedPath }));
 }
 
 /**

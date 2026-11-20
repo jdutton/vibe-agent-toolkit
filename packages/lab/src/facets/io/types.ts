@@ -178,7 +178,7 @@ export interface IoCommandStats {
    * subject's own stdout — or `null` when that output did not say.
    *
    * **The value the subject PRINTED, never the env var the caller set.** An A/B
-   * of two enumerators is selected by `VAT_RESOURCES_CRAWL` / `VAT_EXTENT_SOURCE`,
+   * of the two enumerators is selected by `VAT_EXTENT_SOURCE`,
    * and the variable proves only what was asked for. Before this field existed,
    * the first git-vs-filesystem A/B had to infer which arm each side ran
    * from a call-site signature (`realizations.js:51` at 0 calls versus 12,003)
@@ -187,38 +187,13 @@ export interface IoCommandStats {
    * cannot disagree about what one document said — but NOT off the same
    * repeat: this is the LAST repeat's arm (the one whose dumps the row
    * reports), where `population` reads its FIRST. And not with the same
-   * tolerance: a lane of the wrong type is `null` here, a qualifier on counts
+   * tolerance: an arm of the wrong type is `null` here, a qualifier on counts
    * that are real either way, where `population` refuses the document.
    *
-   * A free string and not an enum of the lanes this build knows, for the reason
-   * `population`'s own `lane` field gives: a vat that grows a third lane must
-   * show up under that name, and `null` has to stay distinguishable from every
-   * real lane because it means *the output did not say*, which is the one case
-   * where the arm is unproven.
-   *
-   * ⚠️ **`null` is the ORDINARY value for the default spec.** `resources-scan`
-   * — what a bare `io run` measures — prints YAML, and the lab reads a lane out
-   * of JSON only (see `harness/lane.ts` for why the YAML `lane:` line is
-   * deliberately not read). A row measured over it honestly says nothing about
-   * its arm. To carry the arm on an io row, measure the spec that prints JSON:
-   * `--command resources-population`.
-   */
-  readonly lane: string | null;
-  /**
-   * Which source the reported lane enumerated from, verbatim from the subject's
-   * own stdout — or `null` when the output stated none.
-   *
-   * {@link IoCommandStats.lane} is not fine-grained enough to identify an arm on
-   * its own: the projection lane has two enumerators and reports the same word
-   * for both, so an A/B varying only the extent source produces two rows that
-   * differ in nothing but their counts — and "the enumerators agree" and "the
-   * switch did nothing" are then the same picture until this field separates
-   * them.
-   *
-   * `null` here means *the output stated none*, which is also what the walk
-   * lane prints — it has no extent to source. It does NOT mean the walk ran:
-   * read {@link IoCommandStats.lane} for that. Same `null`-for-the-default-spec
-   * caveat as that field.
+   * A free string and not an enum of the enumerators this build knows: a vat
+   * that grows a third must show up under that name, and `null` has to stay
+   * distinguishable from every real arm because it means *the output did not
+   * say*, which is the one case where the arm is unproven.
    */
   readonly extentSource: string | null;
   /**
@@ -314,7 +289,6 @@ export const IoBodySchema = z
           // their arm is refused HERE, by the shape moving — which is the
           // project's replacement for a version integer somebody would have had
           // to remember to bump. `null` is a value, not an absence.
-          lane: z.string().min(1).nullable(),
           extentSource: z.string().min(1).nullable(),
           processes: z.number().int().nonnegative(),
           loaderCalls: z.number().int().nonnegative(),

@@ -122,10 +122,8 @@ const GITDIR_PREFIX = 'gitdir:';
  * ⚠️ Whether a locked directory REFUSES at all is a different question with a
  * standing answer: a locked gitignored directory is a warning row
  * (`EXTENT_DIRECTORY_UNLISTABLE`), never an abort; a locked non-ignored one
- * refuses by name on every lane. The registry's walk lane used to degrade to a
- * `SCAN_PATH_UNREADABLE` warning here while the default lane exited 2 on the
- * identical tree — two lanes that are documented as cost models rather than
- * behaviours reaching opposite exit codes. It now refuses with THIS sentence.
+ * refuses by name under `'refuse'`, with THIS sentence, and under `{ degrade }`
+ * is handed to the caller and left out of the population.
  *
  * @param root - The corpus root, whose repository (or lack of one) decides
  *   which knob is real
@@ -180,6 +178,8 @@ class ListingRefusals {
   readonly #recorded: DirectoryRefusal[] = [];
   readonly #seen = new Set<string>();
   readonly #remedy: string;
+  /** The caller's `degrade`, for a population that keeps going past a refusal inside it — see {@link PopulationUnreadablePolicy}. */
+  readonly #degrade: ((refusal: DirectoryRefusal) => void) | null;
   /** The trees the calling verb writes: the crawl's one declaration of which side a refusal is on. */
   readonly outputs: readonly string[];
 
@@ -189,11 +189,13 @@ class ListingRefusals {
    *   a refused directory that is one of them, lies inside one or holds one — the root of a
    *   project a build writes into included — is the verb's destination; any other is the
    *   corpus's content, which the verb reads (`source`)
+   * @param degrade - The caller's `degrade` for a refusal inside the population, or `null` to refuse
    */
-  constructor(root: string, outputs: readonly string[]) {
+  constructor(root: string, outputs: readonly string[], degrade: ((refusal: DirectoryRefusal) => void) | null) {
     this.#root = root;
     this.#remedy = listingRefusalRemedy(root);
     this.outputs = outputs;
+    this.#degrade = degrade;
   }
 
   /** Every refusal met inside ignored territory, in the order met, once each. */
@@ -230,8 +232,15 @@ class ListingRefusals {
     };
   }
 
-  /** Refuse a directory in the population: on what the verb writes, the destination's; anything else, the corpus's content. */
+  /**
+   * Refuse a directory in the population: on what the verb writes, the destination's; anything
+   * else, the corpus's content. A degrading population hands it to its caller instead.
+   */
   settleInPopulation(refusal: DirectoryRefusal): void {
+    if (this.#degrade !== null) {
+      this.#degrade(refusal);
+      return;
+    }
     settleCrawlRefusal({ refuse: { root: this.#root, remedy: this.#remedy, side: 'source' } }, refusal, this.outputs);
   }
 
@@ -358,7 +367,7 @@ export class FilesystemCrawlSource implements CrawlSource {
   readonly kind: CrawlSourceKind = 'filesystem';
 
   readonly #root: string;
-  readonly #refusals: ListingRefusals;
+  #refusals: ListingRefusals;
   readonly #symlinks = new DeclinedSymlinks();
 
   /**
@@ -367,7 +376,25 @@ export class FilesystemCrawlSource implements CrawlSource {
    */
   constructor(root: string, outputs: readonly string[]) {
     this.#root = root;
-    this.#refusals = new ListingRefusals(root, outputs);
+    this.#refusals = new ListingRefusals(root, outputs, null);
+  }
+
+  /**
+   * The walk of a DEGRADING population: a directory inside the population that
+   * cannot be listed is handed to `degrade` and the walk continues with the
+   * readable remainder, rather than refusing the run. The filesystem arm only:
+   * git's snapshot reads every file it does not ignore and cannot leave a
+   * directory out.
+   *
+   * @param root - Absolute corpus root to enumerate
+   * @param outputs - The trees the verb writes (see {@link crawlSourceFor})
+   * @param degrade - Receives each refused directory inside the population
+   * @returns The source
+   */
+  static degrading(root: string, outputs: readonly string[], degrade: (refusal: DirectoryRefusal) => void): FilesystemCrawlSource {
+    const source = new FilesystemCrawlSource(root, outputs);
+    source.#refusals = new ListingRefusals(root, outputs, degrade);
+    return source;
   }
 
   get unlistable(): readonly DirectoryRefusal[] {
@@ -521,7 +548,7 @@ export class GitCrawlSource implements CrawlSource {
    */
   constructor(root: string, outputs: readonly string[]) {
     this.#root = root;
-    this.#refusals = new ListingRefusals(root, outputs);
+    this.#refusals = new ListingRefusals(root, outputs, null);
   }
 
   get unlistable(): readonly DirectoryRefusal[] {
@@ -954,9 +981,8 @@ function relativeToRoot(absolutePath: string, root: string): string {
 /**
  * The env var selecting which implementation enumerates the `filesystem` extent.
  *
- * An environment switch rather than a config field, for the reason
- * `VAT_RESOURCES_CRAWL` is one: it selects which INSTRUMENT runs, not what the
- * project means, and it has to be reachable from the lab, which spawns the binary
+ * An environment switch rather than a config field: it selects which INSTRUMENT
+ * runs, not what the project means, and it has to be reachable from the lab, which spawns the binary
  * and controls its environment. A config field would put the A and B arms inside
  * the subject's own tree, where a measurement edits the thing it measures.
  */
@@ -1041,6 +1067,33 @@ export function crawlSourceFor(root: string, outputs: readonly string[]): CrawlS
     return new GitCrawlSource(root, outputs);
   }
   return new FilesystemCrawlSource(root, outputs);
+}
+
+/**
+ * What a population does with a directory inside it that cannot be listed — the
+ * CALLER's decision, because the two standing rulings are per-verb and both stand:
+ *
+ * - `'refuse'` — STOP, by name, with {@link listingRefusalRemedy}'s sentence: the
+ *   ruling for every verb whose output is acted on as a complete population.
+ * - `{ degrade }` — KEEP GOING with the readable remainder and hand the refusal
+ *   over: the ruling for `vat audit`, where status describes what was found and
+ *   exit describes whether the run completed. The caller is promising to REPORT
+ *   the gap (audit files `SCAN_PATH_UNREADABLE` on the directory), not to drop it.
+ *   A degraded population is enumerated by the filesystem walk and never stored:
+ *   the store's key cannot say which directories were left out.
+ */
+export type PopulationUnreadablePolicy = 'refuse' | Extract<UnreadablePolicy, { degrade: unknown }>;
+
+/**
+ * {@link crawlSourceFor} under a caller's {@link PopulationUnreadablePolicy}.
+ *
+ * @param root - Absolute corpus root
+ * @param outputs - The trees the verb writes
+ * @param unreadable - What a refused listing inside the population does
+ * @returns The selected source
+ */
+export function crawlSourceUnder(root: string, outputs: readonly string[], unreadable: PopulationUnreadablePolicy): CrawlSource {
+  return unreadable === 'refuse' ? crawlSourceFor(root, outputs) : FilesystemCrawlSource.degrading(root, outputs, unreadable.degrade);
 }
 
 /**

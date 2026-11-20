@@ -58,6 +58,7 @@ import { populate, type ContributorTiming } from '../src/projection/merge.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
+import { fromCrawlInRun, inOwnRun } from './helpers/population-run.js';
 import { registryWithClosure, setupSubdirTestSuite, useCorpusSuite } from './test-helpers.js';
 
 // ---------------------------------------------------------------------------
@@ -120,7 +121,7 @@ function closureDeclaration(): Record<string, JsonValue> {
  * @param onTiming - Optional in-process observer, to pin that both destinations fire
  */
 async function runPopulation(onTiming?: (timing: ContributorTiming) => void): Promise<void> {
-  await populate({
+  await inOwnRun(populate, {
     root: suite.tempDir,
     registry: registryWithClosure(EXTENT_NAME, SKILL_KIND),
     parameters: { [CLOSURE_DRIVER_ID]: closureDeclaration() },
@@ -204,7 +205,7 @@ class RegistryBuildingContributor implements ExtentContributor {
    * @returns An empty contribution — the rows are irrelevant; the registry build is the point
    */
   async contribute(): Promise<ExtentContribution> {
-    const { registry } = await ResourceRegistry.fromCrawl({ outputs: [], unreadable: 'refuse', baseDir: suite.tempDir });
+    const { registry } = await fromCrawlInRun({ outputs: [], unreadable: 'refuse', baseDir: suite.tempDir });
     registry.resolveLinks();
     return {
       contexts: [], resources: [], realizations: [], memberships: [], tags: [], conditions: [],
@@ -271,11 +272,8 @@ describe('crawl timing seam', () => {
         outputs: [],
         baseDir: suite.tempDir,
         populationSource: {
-          // Bound to the very root the crawl is about, or the registry's root
-          // guard would decline it and this dump would hold no `base` rows at all.
-          root: suite.tempDir,
           enumerate: async (root: string) => {
-            await populate({
+            await inOwnRun(populate, {
               root,
               registry: registryWithClosure(EXTENT_NAME, SKILL_KIND),
               parameters: { [CLOSURE_DRIVER_ID]: closureDeclaration() },
@@ -331,15 +329,15 @@ describe('crawl timing seam', () => {
     });
 
     // -----------------------------------------------------------------------
-    // The incumbent arm. These are the tests the seam shipped without, and
+    // The registry arm. These are the tests the seam shipped without, and
     // their absence is why the two arms were bracketed at different depths for
     // three commits: every existing assertion above names a PROJECTION bracket,
-    // so the walker arm could charge nothing but its own traversal and the whole
+    // so the registry could charge nothing but its own enumeration and the whole
     // suite stayed green.
     // -----------------------------------------------------------------------
 
-    it('charges the incumbent for building the registry its walk consumes, not only for the walk', async () => {
-      const { registry } = await ResourceRegistry.fromCrawl({ outputs: [], unreadable: 'refuse', baseDir: suite.tempDir });
+    it('charges the registry for admitting and resolving its crawl, not only for enumerating it', async () => {
+      const { registry } = await fromCrawlInRun({ outputs: [], unreadable: 'refuse', baseDir: suite.tempDir });
       registry.resolveLinks();
       const snapshot = __readCrawlTimingSnapshot();
 
@@ -388,7 +386,7 @@ describe('crawl timing seam', () => {
     it('charges registry work inside a base contributor to the projection arm, never to the walker arm', async () => {
       const contributors = new ContributorRegistry();
       contributors.register(new RegistryBuildingContributor());
-      await populate({
+      await inOwnRun(populate, {
         root: suite.tempDir,
         registry: contributors,
       });

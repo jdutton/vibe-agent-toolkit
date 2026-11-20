@@ -91,8 +91,6 @@ const UNIT_TIER_IO_RATCHET = { allowFiles: [
   'packages/agent-skills/test/validators/packaged-size-limit.test.ts',
   'packages/agent-skills/test/validators/plugin-hosted-shape.test.ts',
   'packages/agent-skills/test/validators/referenced-path-missing.test.ts',
-  'packages/agent-skills/test/validators/registry-memo-refusal-replay.test.ts',
-  'packages/agent-skills/test/validators/registry-memoization.test.ts',
   'packages/agent-skills/test/zip-size-validation.test.ts',
   'packages/claude-marketplace/test/compatibility-analyzer.test.ts',
   'packages/claude-marketplace/test/inventory/extract-install.test.ts',

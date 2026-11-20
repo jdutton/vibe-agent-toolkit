@@ -141,8 +141,8 @@ function buildTag(commit: string | null, closure: string): string {
  * allowlist) and putting it in {@link instrumentTag} — a coordinate change, so
  * it is recorded here rather than patched around.
  *
- * The family has since grown to three — `VAT_INVENTORY_CRAWL`,
- * `VAT_RESOURCES_CRAWL` and `VAT_EXTENT_SOURCE` — which is the argument for a
+ * The family has since grown to two — `VAT_INVENTORY_CRAWL` and
+ * `VAT_EXTENT_SOURCE` — which is the argument for a
  * general variant axis rather than for lengthening this list again. Every one of
  * them selects an INSTRUMENT rather than a subject, and every one of them is
  * invisible here.

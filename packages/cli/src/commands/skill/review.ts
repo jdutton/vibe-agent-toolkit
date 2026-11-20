@@ -36,6 +36,7 @@ import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/doc
 import { formatIssueLines } from '../../utils/issue-rendering.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { projectRootOrNull, requireInputPath } from '../../utils/project-root-policy.js';
+import { runSkillRegistries, withRunContext } from '../../utils/resource-loader.js';
 import { renderSkillQualityFooter } from '../../utils/skill-quality-footer.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
 
@@ -255,7 +256,7 @@ export async function reviewCommand(
     // operates with or without a governing project). Per-skill config now flows
     // through the shared resolveSkillPackagingConfig walk-up (the same one audit
     // uses), so review, audit, and skill test stay in lockstep.
-    projectRootOrNull(process.cwd());
+    const projectRoot = projectRootOrNull(process.cwd());
 
     const skillPath = resolveSkillPath(pathArg);
     logger.debug(`Reviewing SKILL.md at: ${skillPath}`);
@@ -268,15 +269,21 @@ export async function reviewCommand(
     const packagingConfig = (await resolveSkillPackagingConfig(skillPath, 'refuse')) ?? undefined;
     // Project-wide test input: a review of skill A must not count skill B's eval
     // suite as content A ships. Memoized per config root; `[]` in wild mode.
-    const result = await validateSkillForPackaging(skillPath, resolveProjectResourcesValidation(skillPath), packagingConfig, 'source', {
-      dispatcher: undefined,
-      projectSkills: await resolveProjectDeclaredEvalSuites(skillPath, 'refuse'),
-      // Same ruling as the discovery above: a review is acted on whole, so a
-      // directory the registry crawl cannot list refuses it by name.
-      unreadable: 'refuse',
-      // A review only reads the project.
-      outputs: [],
-    });
+    const projectSkills = await resolveProjectDeclaredEvalSuites(skillPath, 'refuse');
+    // One run for the review, rooted at the project when there is one and at the
+    // skill's own directory when there is none.
+    const result = await withRunContext({ root: projectRoot ?? dirname(skillPath) }, (run) =>
+      validateSkillForPackaging(skillPath, resolveProjectResourcesValidation(skillPath), packagingConfig, 'source', {
+        dispatcher: undefined,
+        projectSkills,
+        registries: runSkillRegistries(run),
+        // Same ruling as the discovery above: a review is acted on whole, so a
+        // directory the registry crawl cannot list refuses it by name.
+        unreadable: 'refuse',
+        // A review only reads the project.
+        outputs: [],
+      }),
+    );
     // The anchor root for a single-skill review is the skill's own project
     // boundary — the same base the packaging validator anchored its issues
     // against, so one report speaks one coordinate system.

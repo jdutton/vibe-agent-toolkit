@@ -22,7 +22,7 @@
  *    disagree about *which* 1,382 are not the same measurement, and a facet
  *    reporting only `count` would render that as agreement. `count` is here as a
  *    convenience and as the `ab` estimate; it is never the evidence.
- * 2. **The lane the run REPORTED it took** ({@link PopulationCommandStats.lane}).
+ * 2. **The arm the run REPORTED it took** ({@link PopulationCommandStats.extentSource}).
  *    Setting an environment variable proves what was *asked for*; only the
  *    subject's own output proves what happened. A whole A/B on this codebase was
  *    voided once by two arms that both silently ran the incumbent crawler, and
@@ -97,25 +97,11 @@ export interface PopulationCommandStats {
    * Which enumerator the run said produced this set, verbatim from its own
    * output — or `null` when the document stated none.
    *
-   * Deliberately a free string and not an enum of the lanes this build knows.
-   * A vat that grows a third lane must show up as that lane's name, not be
-   * quietly folded into whichever known value is nearest; and `null` has to stay
-   * distinguishable from any real lane, because it means *this build of vat does
+   * Deliberately a free string and not an enum of the enumerators this build
+   * knows. A vat that grows a third must show up under its name, not be quietly
+   * folded into whichever known value is nearest; and `null` has to stay
+   * distinguishable from any real arm, because it means *this build of vat does
    * not say*, which is the one case where an arm's identity is unproven.
-   */
-  readonly lane: string | null;
-  /**
-   * Which enumerator the reported lane used, verbatim from the run's own output
-   * — or `null` when the document stated none.
-   *
-   * {@link lane} is not fine-grained enough to identify an arm on its own: the
-   * projection lane has two enumerators and reports the same word for both, so
-   * an A/B varying only the extent source produces two rows identical in every
-   * other field. Two such rows agreeing then means either "the enumerators
-   * agree" or "the switch did nothing", and only this field separates them.
-   *
-   * A free string for the same reason {@link lane} is, and `null` likewise
-   * means *this build of vat does not say* rather than *the walk ran*.
    */
   readonly extentSource: string | null;
   /** The stated root every {@link PopulationEntry.path} is relative to. */
@@ -191,7 +177,6 @@ export const PopulationBodySchema = z
           ...measuredCommandShape,
           stable: z.boolean().nullable(),
           attribution: z.enum(['measured', 'nothing-enumerated', 'not-measured']),
-          lane: z.string().nullable(),
           extentSource: z.string().nullable(),
           root: z.string().nullable(),
           count: z.number().int().nonnegative(),

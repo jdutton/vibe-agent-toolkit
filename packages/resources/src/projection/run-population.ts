@@ -24,7 +24,7 @@
  *   view: the id, duplicate detection, link resolution, population conditions and
  *   parse refusals are computed per registry view by the same code as ever. Views
  *   never share link objects: a registry copies the links it is handed.
- * - The home root's enumeration, once per outputs set ({@link RunPopulation.source}).
+ * - Each root's enumeration, once ({@link RunPopulation.source}).
  *
  * ## Lifetime
  *
@@ -36,7 +36,7 @@
  */
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import type { GitTracker } from '@vibe-agent-toolkit/utils/git';
+import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { ParseResult } from '../link-parser.js';
 import { defaultParseCache } from '../parse-cache.js';
@@ -45,6 +45,7 @@ import type { SHA256 } from '../schemas/checksum.js';
 import type { CollectionConfig } from '../schemas/project-config.js';
 
 import { RunContentCache } from './content-cache.js';
+import type { PopulationUnreadablePolicy } from './crawl-source.js';
 import type { PopulationCache } from './merge.js';
 import { buildResourcePopulation, type ResourceEnumeration, type ResourcePopulationSource } from './resource-population.js';
 
@@ -119,7 +120,7 @@ export interface RunPopulationOptions {
    */
   readonly cacheOf: () => Promise<PopulationCache | undefined>;
   /**
-   * The `resources.collections` governing the root, so a declared `mimeType`
+   * The `resources.collections` governing a root, so a declared `mimeType`
    * routes the file it matches to a parser: read off the root being enumerated,
    * so the declaration and the enumeration are always of one tree.
    */
@@ -151,9 +152,7 @@ export class RunPopulation implements PopulationRun {
     this.gitTracker = options.gitTracker;
     this.content = run.content;
     this.dispatcher = run.dispatcher;
-    // Bound to the home root: `ResourceRegistry.populationFrom` declines a crawl
-    // of any other root to the walk, so `enumerate` is only ever asked about it.
-    this.source = { root: this.root, enumerate: (_root, outputs) => this.#enumerate(outputs) };
+    this.source = { enumerate: (root, outputs, unreadable) => this.#enumerate(root, outputs, unreadable) };
   }
 
   /**
@@ -186,28 +185,48 @@ export class RunPopulation implements PopulationRun {
   }
 
   /**
-   * Enumerate the home root once per run per outputs set, under the run's
-   * oracles and store.
+   * Enumerate a root once per run.
    *
+   * The home root is enumerated under the run's oracles and store. Another root —
+   * a path argument outside the project, a skill directory with no project root,
+   * a nested project — is enumerated under its own: its own ignore oracle, no
+   * store (the store holds the home tree's extents), and the collections its own
+   * config declares. Nothing is declined and nothing is walked.
+   *
+   * A degrading enumeration (`{ degrade }`) is not memoized: its refusals are
+   * handed to the caller that asked, and another caller must be handed them too.
+   *
+   * @param root - Absolute root to enumerate
    * @param outputs - The trees the calling verb writes
-   * @returns The home root's population
+   * @param unreadable - What a refused listing inside the population does
+   * @returns The root's population
    */
-  #enumerate(outputs: readonly string[]): Promise<ResourceEnumeration> {
-    return memoized(this.#enumerations, JSON.stringify(outputs), () => this.#build(outputs));
+  #enumerate(root: string, outputs: readonly string[], unreadable: PopulationUnreadablePolicy): Promise<ResourceEnumeration> {
+    const resolved = safePath.resolve(root);
+    if (unreadable !== 'refuse') return this.#build(resolved, outputs, unreadable);
+    const key = `${JSON.stringify(outputs)} ${resolved}`;
+    const held = this.#enumerations.get(key);
+    if (held !== undefined) return held;
+    const enumeration = this.#build(resolved, outputs, unreadable);
+    this.#enumerations.set(key, enumeration);
+    return enumeration;
   }
 
-  async #build(outputs: readonly string[]): Promise<ResourceEnumeration> {
+  async #build(root: string, outputs: readonly string[], unreadable: PopulationUnreadablePolicy): Promise<ResourceEnumeration> {
     const { gitTracker, cacheOf, collectionsFor } = this.#options;
-    const collections = await collectionsFor(this.root);
-    // The store first: opening it takes the snapshot that keys it, which the
-    // tracker then reads rather than asking git again.
-    const cache = await cacheOf();
-    await gitTracker.initialize();
+    const home = this.root === root;
+    const collections = await collectionsFor(root);
+    // The home root's store first: opening it takes the snapshot that keys it,
+    // which the tracker then reads rather than asking git again. Another root
+    // has no store (the store holds the home tree's extents) and opens none.
+    const cache = home ? await cacheOf() : undefined;
+    if (home) await gitTracker.initialize();
     return buildResourcePopulation({
-      root: this.root,
+      root,
       outputs,
+      unreadable,
       run: this,
-      gitTracker,
+      gitTracker: home ? gitTracker : await initializedTracker(root),
       ...(cache !== undefined && { cache }),
       ...(collections !== undefined && { collections }),
     });
@@ -224,6 +243,18 @@ function memoized<T>(memo: Map<string, Promise<T>>, key: string, compute: () => 
   const computed = compute();
   memo.set(key, computed);
   return computed;
+}
+
+/**
+ * An initialized ignore oracle for a root that is not the run's home root.
+ *
+ * @param root - The root
+ * @returns Its tracker
+ */
+async function initializedTracker(root: string): Promise<GitTracker> {
+  const tracker = new GitTracker(root);
+  await tracker.initialize();
+  return tracker;
 }
 
 /**

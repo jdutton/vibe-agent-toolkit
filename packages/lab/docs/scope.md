@@ -49,8 +49,10 @@ should live with what it generates.
 
 **`vat pipeline` → vat's own test infrastructure, and the public verb is deleted. ✅ Done.** The five
 enumeration lanes and the parse-fact oracle reach internal builders directly —
-`pipeline-oracles/lanes.ts` imports `crawlAndResolveRegistry` and `createProjectRegistry` from
-agent-skills, `crawlSkillLinkRegistry` from claude-marketplace, and the resource loaders from cli.
+`pipeline-oracles/lanes.ts` builds each lane inside a cli run (`withRunContext`) and reaches
+agent-skills' `RunSkillRegistries` through cli's `runSkillRegistries` and
+`skillsValidateRegistries`, `crawlSkillLinkRegistry` from claude-marketplace, and the resource
+loaders from cli.
 That coupling is the instrument's whole purpose, and it means the oracle **can never compare two vat
 versions**. Putting it in the lab would be putting a version-pinned tool inside a version-agnostic
 one. So the three subcommands were removed from the CLI and nothing moved here: `src/pipeline-oracles/`

@@ -17,6 +17,7 @@ import {
   FilesystemExtentContributor,
   populate,
   type Projection,
+  withPopulationRun,
 } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { expectAbsenceCause, refuseSyncFs, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
@@ -42,7 +43,7 @@ async function project(root: string): Promise<Projection> {
   const registry = new ContributorRegistry();
   registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
   registry.register(new PluginExtentContributor());
-  return (await populate({ root, registry })).projection;
+  return withPopulationRun(async (run) => (await populate({ root, registry, run })).projection);
 }
 
 /** The `MANIFEST_UNREADABLE` messages recorded against the planted manifest. */

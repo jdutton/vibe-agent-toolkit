@@ -7,7 +7,7 @@
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { expect } from 'vitest';
 
-import { packageSkill } from '../../src/skill-packager.js';
+import { packageSkillInRun } from '../test-helpers.js';
 
 /**
  * Package the canonical `skills/example/SKILL.md` skill inside `projectRoot`
@@ -24,7 +24,7 @@ export async function buildExampleSkill(projectRoot: string): Promise<{ outputPa
   const skillPath = safePath.join(projectRoot, 'skills', 'example', 'SKILL.md');
   const outputPath = safePath.join(projectRoot, 'dist', 'example');
   // `dist/example` is a build directory the fixture owns: a second build replaces the first.
-  const result = await packageSkill(skillPath, { outputPath, formats: ['directory'], replaceExistingOutput: true });
+  const result = await packageSkillInRun(skillPath, { outputPath, formats: ['directory'], replaceExistingOutput: true });
   expect(result.hasErrors).toBe(false);
   return { outputPath };
 }

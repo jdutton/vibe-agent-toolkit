@@ -55,6 +55,7 @@ import type { BlobScopedRows, ExtentKey, ExtentScopedRows, FactStore } from '../
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
 import { FakeFactStore } from './fake-fact-store.js';
+import { inOwnRun } from './helpers/population-run.js';
 import { setupSubdirTestSuite, useCorpusSuite } from './test-helpers.js';
 
 /** A self-referencing YAML anchor: it nests without end, so `outputDepth` refuses it at once. */
@@ -286,7 +287,7 @@ interface Run {
  */
 async function run(request: RunRequest): Promise<Run> {
   const contributorRuns: string[] = [];
-  const { projection, outcome } = await populate({
+  const { projection, outcome } = await inOwnRun(populate, {
     root: suite.tempDir,
     registry: request.registry,
     // Handed on every run, registered or not: `requestedContributors` reads the

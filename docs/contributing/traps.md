@@ -279,12 +279,11 @@ env-driven negative control is a green that disabled nothing.
 **Remedy:** drive test controls through constructor options (`new ParseCache({ enabled, env })`),
 never `process.env`; confirm a control's positive twin is non-zero before trusting its negative.
 
-### The projection store needs two switches, and file size is not a tell
+### A schema-only store file is not a working cache, and file size is not a tell
 
-Both the store and the projection lane are defaults now, so this trap has become its own mirror
-image: `VAT_PROJECTION_STORE=off` turns the store off and `VAT_RESOURCES_CRAWL=walk` leaves the lane,
-and turning off ONE of them brackets a crawl with nothing to store — zero rows, exit 0, a
-schema-only `projection.db` that looks like a working cache, and pure overhead. The store lives at
+The store is on by default and the projection is the only lane. A run that brackets a crawl with
+nothing to store still writes a store: zero rows, exit 0, a schema-only `projection.db` that looks
+like a working cache, and pure overhead. The store lives at
 `<cache root>/<namespace>/` (`VAT_CACHE_DIR`, else `<normalizedTmpdir()>/.vat-cache`), not under the project unless that variable puts it there.
 **Tell:** a `.db` file of exactly schema size; a "cache" that never changes a timing.
 **Remedy:** before believing a null result from a feature, enumerate every input the feature is
@@ -850,12 +849,13 @@ including a directory named `rag`.
 
 ### A population source is bound to one tree
 
-`withResourcePopulationSource` yields a source bound to the project root and its git tree hash;
-handing it a build-output directory asks a question it cannot answer and can write the output's
-membership under the project's extent key. The failure looked like a stale count.
+A population source is bound to the project root and its git tree hash; asking it about a
+build-output directory asks a question it cannot answer and can write the output's membership under
+the project's extent key. The failure looked like a stale count.
 **Tell:** `expected [ …(2) ] to deeply equal [ Array(1) ]` where the received value is
 `<root>/out/<skill>`, not a second copy of the root.
-**Remedy:** read the received value, not the count; post-build validation stays on the walk.
+**Remedy:** read the received value, not the count. The run population enumerates a root other than
+its home for that root, under that root's own oracles, so post-build validation needs no walk.
 
 ### A glob is a net, not a declaration
 

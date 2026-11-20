@@ -1,8 +1,8 @@
 /**
  * Post-build validation sees the output it validates, for EVERY skill of a run.
  *
- * The project crawl is memoized on the root, so the crawl made for the first
- * skill's post-build check is served to every later one. A build writing its
+ * The project crawl is made once per run, so the crawl made for the first
+ * skill's post-build check is served to every later one of that run. A build writing its
  * output INSIDE the root and outside `dist/` (`<root>/out/<skill>`) — where a
  * crawl of the root does admit it — therefore validated the second skill's built
  * SKILL.md against a registry crawled before that skill was written: the
@@ -26,7 +26,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { SkillPackageChecksFailedError } from '../../src/packaging-errors.js';
 import { packageSkill, type PackageSkillResult } from '../../src/skill-packager.js';
-import { resetPackagingRegistryCache } from '../../src/validators/packaging-validator.js';
+import { type RunSkillRegistries, withSkillRegistries } from '../../src/validators/run-skill-registries.js';
 
 const SKILLS = ['first-skill', 'second-skill'] as const;
 
@@ -44,9 +44,9 @@ function writeSkill(root: string, name: string): string {
 }
 
 /** The package's result, whether it landed or its own checks refused it. */
-async function packagedOrRefused(skillPath: string, outputPath: string): Promise<PackageSkillResult> {
+async function packagedOrRefused(skillPath: string, outputPath: string, registries: RunSkillRegistries): Promise<PackageSkillResult> {
   try {
-    return await packageSkill(skillPath, { outputPath });
+    return await packageSkill(skillPath, { outputPath, registries });
   } catch (error) {
     if (error instanceof SkillPackageChecksFailedError) return error.result;
     throw error;
@@ -61,7 +61,6 @@ describe.each([
   const results = new Map<string, PackageSkillResult>();
 
   beforeAll(async () => {
-    resetPackagingRegistryCache();
     root = safePath.resolve(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-post-build-own-output-')));
     writeFileSync(safePath.join(root, 'vibe-agent-toolkit.config.yaml'), '{}\n', 'utf-8');
     if (gitIgnoresOut) {
@@ -69,14 +68,15 @@ describe.each([
       writeFileSync(safePath.join(root, '.gitignore'), 'out/\n', 'utf-8');
     }
     const paths = SKILLS.map((name) => writeSkill(root, name));
-    // In order, one process, one memo: the second skill is written after the first's check crawled the root.
-    for (const [index, name] of SKILLS.entries()) {
-      results.set(name, await packagedOrRefused(paths[index] ?? '', safePath.join(root, 'out', name)));
-    }
+    // In order, in ONE run: the second skill is written after the first's check crawled the root.
+    await withSkillRegistries(root, async (registries) => {
+      for (const [index, name] of SKILLS.entries()) {
+        results.set(name, await packagedOrRefused(paths[index] ?? '', safePath.join(root, 'out', name), registries));
+      }
+    });
   });
 
   afterAll(() => {
-    resetPackagingRegistryCache();
     rmSync(root, { recursive: true, force: true });
   });
 

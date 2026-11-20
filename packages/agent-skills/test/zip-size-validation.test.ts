@@ -1,7 +1,7 @@
 /**
  * Unit tests for ZipSizeLimitError and validateZipSize.
  *
- * validateZipSize is an internal function called via packageSkill() when
+ * validateZipSize is an internal function called via packageSkillInRun() when
  * target === 'claude-web' and 'zip' is in formats. The archive is judged by the
  * size of its bytes in memory, BEFORE the package's plan lands it, so this file
  * fakes the archive the archive module produces ({@link fakeZipSize}) to test the thresholds
@@ -17,9 +17,9 @@ import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import type * as ArchiveModule from '@vibe-agent-toolkit/utils/archive';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ZipSizeLimitError, packageSkill } from '../src/skill-packager.js';
+import { ZipSizeLimitError } from '../src/skill-packager.js';
 
-import { createFrontmatter } from './test-helpers.js';
+import { createFrontmatter , packageSkillInRun } from './test-helpers.js';
 
 /** The size of the archive the faked archive module produces next. */
 const fakeArchive = { bytes: 1024 };
@@ -88,14 +88,14 @@ const CLAUDE_WEB_ZIP_FORMATS = ['directory', 'zip'] as const;
 async function runClaudeWebZipWithSize(
   scenario: string,
   fakeZipBytes: number,
-): Promise<{ result: Awaited<ReturnType<typeof packageSkill>>; stderrSpy: ReturnType<typeof vi.spyOn> }> {
+): Promise<{ result: Awaited<ReturnType<typeof packageSkillInRun>>; stderrSpy: ReturnType<typeof vi.spyOn> }> {
   const outDir = safePath.join(tempDir, `${scenario}-out`);
   const sp = writeSkillMd(tempDir, `# ${scenario}`);
 
   fakeZipSize(fakeZipBytes);
   const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
 
-  const result = await packageSkill(sp, {
+  const result = await packageSkillInRun(sp, {
     outputPath: outDir,
     formats: [...CLAUDE_WEB_ZIP_FORMATS],
     target: CLAUDE_WEB,
@@ -145,7 +145,7 @@ describe('validateZipSize (via packageSkill, target: claude-web)', () => {
     fakeZipSize(ZIP_ERROR_BYTES);
 
     await expect(
-      packageSkill(sp, {
+      packageSkillInRun(sp, {
         outputPath: outDir,
         formats: [...CLAUDE_WEB_ZIP_FORMATS],
         target: CLAUDE_WEB,
@@ -163,7 +163,7 @@ describe('validateZipSize (via packageSkill, target: claude-web)', () => {
     fakeZipSize(ZIP_ERROR_BYTES + 1024);
 
     await expect(
-      packageSkill(sp, {
+      packageSkillInRun(sp, {
         outputPath: outDir,
         formats: [...CLAUDE_WEB_ZIP_FORMATS],
         target: CLAUDE_WEB,
@@ -197,7 +197,7 @@ describe('validateZipSize (via packageSkill, target: claude-web)', () => {
     // Even with a huge fake size, claude-code should never call validateZipSize
     fakeZipSize(ZIP_ERROR_BYTES + 1024);
 
-    const result = await packageSkill(sp, {
+    const result = await packageSkillInRun(sp, {
       outputPath: outDir,
       formats: [...CLAUDE_WEB_ZIP_FORMATS],
       target: 'claude-code',

@@ -19,6 +19,7 @@ import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from
 
 import { fragmentIndex, validateLink, type FragmentIndex } from '../../src/link-validator.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
+import { crawlInRun } from '../helpers/population-run.js';
 import { assertValidation, createGitRepo, createLink, setupSubdirTestSuite, type ValidateLinkOptions } from '../test-helpers.js';
 
 /**
@@ -92,7 +93,7 @@ async function crawlAndValidate(
   validateOptions?: { checkHtmlAnchors?: boolean },
 ): Promise<Awaited<ReturnType<ResourceRegistry['validate']>>> {
   const reg = new ResourceRegistry({ baseDir: dir });
-  await reg.crawl({ unreadable: 'refuse', outputs: [], baseDir: dir });
+  await crawlInRun(reg, { unreadable: 'refuse', outputs: [], baseDir: dir });
   return reg.validate({ skipGitIgnoreCheck: true, ...validateOptions });
 }
 

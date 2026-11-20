@@ -9,8 +9,7 @@ import {
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
-import { packageInPlace } from '../test-helpers.js';
+import { packageInPlace , validateForPackagingInRun } from '../test-helpers.js';
 
 // ---------------------------------------------------------------------------
 // Link-code constants (string literals avoids importing internal types)
@@ -145,7 +144,7 @@ async function runBothPaths(
   outputPath: string,
 ): Promise<BothPathsResult> {
   // Source path — no injected gitTracker; real git check-ignore runs.
-  const sourceResult = await validateSkillForPackaging(
+  const sourceResult = await validateForPackagingInRun(
     skillPath,
     {}, { files: FILES_CONFIG },
     'source',

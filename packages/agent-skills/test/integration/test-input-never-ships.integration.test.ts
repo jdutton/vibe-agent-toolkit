@@ -22,10 +22,10 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { direntKindFollowingSync, mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { packageSkill, packagingConfigToPackageOptions } from '../../src/skill-packager.js';
+import { packagingConfigToPackageOptions } from '../../src/skill-packager.js';
 import { conventionalSuiteProbe, type DeclaredEvalSuite } from '../../src/test-input.js';
-import { activeErrorsOf, activeWarningsOf, validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
-import { packageInPlace } from '../test-helpers.js';
+import { activeErrorsOf, activeWarningsOf } from '../../src/validators/packaging-validator.js';
+import { packageInPlace , packageSkillInRun, validateForPackagingInRun } from '../test-helpers.js';
 
 const ANSWER_KEY = 'the model must output exactly forty-two';
 /** Basename of the declared eval suite, used as both a source leaf and a dest. */
@@ -171,7 +171,7 @@ describe('declared test input never ships (integration)', () => {
   it('excludes a linked eval suite from the bundle while packaging everything else', async () => {
     const { skillPath, outputPath, evalsDir } = writeProject();
 
-    const result = await packageSkill(skillPath, {
+    const result = await packageSkillInRun(skillPath, {
       outputPath,
       formats: ['directory'],
       testInputDirs: [evalsDir],
@@ -207,7 +207,7 @@ describe('declared test input never ships (integration)', () => {
     // from the two commands that exist to agree.
     const { skillPath } = writeProject();
 
-    const validated = await validateSkillForPackaging(skillPath, {}, {
+    const validated = await validateForPackagingInRun(skillPath, {}, {
       test: { evals: EVALS_SUBPATH },
     });
 
@@ -223,7 +223,7 @@ describe('declared test input never ships (integration)', () => {
     // just get told the entry did nothing.
     const { skillPath, outputPath, evalsDir } = writeProject();
 
-    const result = await packageSkill(skillPath, {
+    const result = await packageSkillInRun(skillPath, {
       outputPath,
       formats: ['directory'],
       testInputDirs: [evalsDir],
@@ -261,7 +261,7 @@ describe('declared test input never ships (integration)', () => {
     // Lane 2 — `vat skills validate` (source-level, no build): same input, and now
     // the same answer. It used to call this link an info-severity
     // LINK_DEFERRED_ARTIFACT because it modeled the RAW files: list.
-    const validated = await validateSkillForPackaging(skillPath, {}, {
+    const validated = await validateForPackagingInRun(skillPath, {}, {
       files,
       test: { evals: EVALS_SUBPATH },
     });
@@ -274,7 +274,7 @@ describe('declared test input never ships (integration)', () => {
     const { skillPath, outputPath, evalsDir } = writeProject();
     writeFileSync(safePath.join(projectRoot, 'generated.md'), '# Generated\n', 'utf8');
 
-    await packageSkill(skillPath, {
+    await packageSkillInRun(skillPath, {
       outputPath,
       formats: ['directory'],
       testInputDirs: [evalsDir],
@@ -287,7 +287,7 @@ describe('declared test input never ships (integration)', () => {
   it('packages the suite normally when the skill declares no test input (no rule, no surprise)', async () => {
     const { skillPath, outputPath } = writeProject();
 
-    await packageSkill(skillPath, { outputPath, formats: ['directory'] });
+    await packageSkillInRun(skillPath, { outputPath, formats: ['directory'] });
 
     // Without a `test:` declaration VAT does not guess that `evals/` is test input —
     // the linked file bundles like any other resource.
@@ -309,7 +309,7 @@ describe('a skill\'s bundle never carries another skill\'s eval suite (integrati
     const skillPath = safePath.join(subjectDir, SKILL_MD);
     const outputPath = safePath.join(projectRoot, 'dist', SUBJECT_NAME);
 
-    const result = await packageSkill(
+    const result = await packageSkillInRun(
       skillPath,
       packagingConfigToPackageOptions(
         { test: { evals: SUBJECT_EVALS } },
@@ -346,7 +346,7 @@ describe('a skill\'s bundle never carries another skill\'s eval suite (integrati
     const skillPath = safePath.join(subjectDir, SKILL_MD);
     const outputPath = safePath.join(projectRoot, 'dist', `${SUBJECT_NAME}-unwired`);
 
-    await packageSkill(
+    await packageSkillInRun(
       skillPath,
       packagingConfigToPackageOptions({ test: { evals: SUBJECT_EVALS } }, { skillPath, outputPath }, [], conventionalSuiteProbe()),
     );
@@ -360,7 +360,7 @@ describe('a skill\'s bundle never carries another skill\'s eval suite (integrati
     // build never produces — same input, one answer about what ships.
     const skillPath = safePath.join(subjectDir, SKILL_MD);
 
-    const validated = await validateSkillForPackaging(
+    const validated = await validateForPackagingInRun(
       skillPath,
       {}, { test: { evals: SUBJECT_EVALS } },
       'source',

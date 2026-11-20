@@ -57,12 +57,10 @@ stderr.
   every `data.files[].path` is relative to it.
 - `data.collections` — resources per configured collection (`{}` when none).
 
-`data.lane` names which enumerator produced the population — `projection` (the
-default) or `walk` (`VAT_RESOURCES_CRAWL=walk`). Two scans of one tree
-that report different populations are only interpretable if each says which lane
-produced it, so the field is derived from the load that ran rather than read back
-from the environment. `data.extentSource` names the projection lane's own
-enumerator (`git` or `filesystem`), or is `null` for the walk.
+`data.extentSource` names the enumerator that produced the population (`git` or
+`filesystem`). It is derived from the load that ran rather than read back from
+the environment, so two scans of one tree that report different populations
+say which enumerator produced each.
 
 The lab's population facet (`packages/lab`) reads this document: the file count
 from `examined`, the population from `data.files` (so it runs the scan with
@@ -170,9 +168,7 @@ for the loud-cwd fallback policy and the projectRoot discovery ladder.
   `validationMode?`, `filesWithErrors`, and `summary` over its files' findings
 - `data.population` — where the file list came from: `store` (the projection
   store answered), `derived` (the projection was built this run, including with
-  `VAT_PROJECTION_STORE=0`, which skips only the store), or `null` when the walk
-  answered: the walk lane was selected (`VAT_RESOURCES_CRAWL=walk`), or the crawl
-  declined a projection bound to another root and walked
+  `VAT_PROJECTION_STORE=0`, which skips only the store); never `null`
 - `data.files` — under `--verbose` only
 
 **Example (success):**
@@ -568,7 +564,6 @@ gate:
 durationMs: 184
 data:
   root: /work/project
-  lane: projection
   extentSource: git
   collections: {}
 ```

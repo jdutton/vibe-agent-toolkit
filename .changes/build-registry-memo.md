@@ -21,24 +21,19 @@
 ### Fixed
 
 - **`vat build` could run out of memory on a project with many plugin-local skills** (0.2.0-rc.12):
-  validating each packaged skill re-read the whole project and kept every copy. It no longer re-reads
-  it for every skill. If you raised `--max-old-space-size` to get past this, you can drop it.
-- **A crawl that failed is retried, never replayed.** Inside one run, a later caller of the same project
-  re-reads it under its own `unreadable` policy instead of inheriting the first caller's failure.
-  Callers that were already waiting on the failed crawl share ONE retry, started under the policy of
-  the first of them, and all get its outcome — a waiter whose own policy differs is not retried again.
+  validating each packaged skill re-read the whole project and kept every copy. It now reads the
+  project once per run. If you raised `--max-old-space-size` to get past this, you can drop it.
 - **No default crawl reads a build's staging residue.** The `.<name>.vat-staged-*` entries a build
   stages its output in are now in `NEVER_CRAWL_GLOBS`, and so in the crawl's default exclude. A library
   build whose output sits inside the project but outside `dist/` no longer has one skill's staged copy
   validated as the next skill's project content. A caller that passes its own `exclude` replaces the
   default, residue globs included, and must spread `NEVER_CONTENT_GLOBS` to keep them.
 - **The post-build check of a skill packaged inside the project, outside `dist/`, sees its own bundle
-  again.** With the project crawl memoized, the check ran against a registry that did not hold the
-  bundle (written after the crawl, at an excluded staging name), walked nothing, and passed whatever
-  the bundled files said. It now reads that bundle — and only it — over the memoized crawl, ignored
-  or not: a bundle under a gitignored directory (`out/`) is checked too, and its own files are not
-  reported as `LINK_TO_GITIGNORED_FILE`. A skill outside any project (no config, no git) is
-  crawled afresh each time rather than memoized under its own directory.
+  again.** With the project crawled once per run, the check ran against a registry that did not hold
+  the bundle (written after the crawl, at an excluded staging name), walked nothing, and passed
+  whatever the bundled files said. It now reads that bundle, and only it, over the run's crawl,
+  ignored or not: a bundle under a gitignored directory (`out/`) is checked too, and its own files
+  are not reported as `LINK_TO_GITIGNORED_FILE`.
 - **`ResourceRegistry.crawl`'s default exclude is now `NEVER_CONTENT_GLOBS` + `BUILD_OUTPUT_GLOBS`.**
   0.1.42's default was `node_modules/`, `.git/` and `dist/`; it now also drops `.worktrees/`,
   `.claude/worktrees/` and a build's staging residue (`.<name>.vat-staged-*`), so a crawl from a

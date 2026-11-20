@@ -201,7 +201,7 @@ first is what makes the persistence work worth doing — and it banks most of th
 `GitCrawlSource` is git plus a bounded walk of only what git cannot see. `FilesystemExtentContributor`
 takes one, chosen at the seam by `crawlSourceFor()` behind `VAT_EXTENT_SOURCE=git` — **the walk is
 still the default**, because the git route reaches the same population by a different mechanism and
-that is a change to measure before taking (§3.4 makes the same argument for `VAT_RESOURCES_CRAWL`).
+that is a change to measure before taking.
 
 The git implementation composes four questions, and the last two are not optional extras — they are
 what makes it return the same set rather than a faster smaller one:
@@ -284,28 +284,27 @@ to be discovered.
 
 ### 3.4 ✅ The resources lane on the projection — shipped opt-in, and what it measured
 
-`ResourceRegistry.crawl()` takes an optional `populationSource`. Supplied, the file list comes from
-the resources population (`buildResourcePopulation`, a membership view over the same stored
-population `vat resources query` reads) instead of from `crawlDirectory`; omitted, nothing
-changes. The CLI selects the lane at its boundary with
-`VAT_RESOURCES_CRAWL=projection`, which covers `vat resources scan`/`validate`, `vat rag index` and
-the pipeline oracles in one place — they all load through `loadResourcesWithConfig`.
+`ResourceRegistry.crawl()` takes a required `populationSource`. The file list comes from the
+resources population (`buildResourcePopulation`, a membership view over the same stored population
+`vat resources query` reads), never from `crawlDirectory`: the walk fallback that once sat inside
+`crawl()`, and the environment switch that selected it, are deleted. This section's title and the
+measurements below record the opt-in period. `vat resources scan`/`validate`, `vat rag index` and
+the pipeline oracles all load through `loadResourcesWithConfig`.
 
 **`include`/`exclude` are still applied by the registry, using `crawlPathFilter` — the same compiled
 matcher `crawlDirectory` uses on its `git ls-files` branch.** The source answers enumeration only.
 That split is what makes the two lanes reviewable: a difference in the output is a difference in the
 population, never a difference in what the project's globs were taken to mean.
 
-**A source carries the ONE root it may answer for, and `populationFrom` checks it.** A source built
-against tree A but asked about tree B would build B's population with A's ignore oracle and file it
-under **A's extent key**, which the next run reads back and believes — worse than a wrong answer in
-one run. So `ResourcePopulationSource` is `{ root, enumerate }` rather than a bare function, and the
-registry compares the two roots *resolved* (trailing separator, `a/../a`, symlinked ancestor, and
-case where the filesystem folds it, all compare equal — `sameDirectory` in `resources/src/utils.ts`).
-A mismatch **declines back to the walk** and warns on stderr naming both roots. It does not throw:
-`packaging-validator.ts`'s `findProjectRoot(...) ?? dirname(skillPath)` legitimately lands on a build
-output directory in an adopter layout with no config and no `.git` above it. And it never declines to
-an *empty* population, which would report a confident green over a corpus nothing looked at.
+**A source answers for any root it is asked about, under that root's own oracles.** A source that
+built tree B's population with tree A's ignore oracle and filed it under **A's extent key** would be
+read back and believed by the next run — worse than a wrong answer in one run. So
+`ResourcePopulationSource.enumerate` takes the root, the run's store holds the home tree's extent
+only, and a crawl of a root other than the population's home is **enumerated for that root under its
+own oracles**: nothing declines and nothing walks. It does not throw: `packaging-validator.ts`'s
+`findProjectRoot(...) ?? dirname(skillPath)` legitimately lands on a build output directory in an
+adopter layout with no config and no `.git` above it. And it never yields an *empty* population,
+which would report a confident green over a corpus nothing looked at.
 
 **What it changes.** The population is `tracked ∪ (untracked ∧ ¬ignored)` — §2.1's rule, reached by a
 different mechanism. ⚠️ **This used to be the lane's distinguishing property and no longer is:** the
@@ -647,11 +646,29 @@ arm: cold 6,140 / 4,961 ms → 5,228 / 4,281 ms, warm 3,509–3,812 ms → 3,354
 `git-tracker:initialize` falling from 132–159 ms to 57–64 ms as the second surface reads the first's
 snapshot instead of taking its own.
 
+**One admission per run.** Each file is read, keyed, parsed and admitted once per VAT process run,
+whichever phase asks. The verb opens the run (`withRunContext()` in
+`packages/cli/src/utils/resource-loader.ts`, a `RunContext { population, registry, dispatcher }`),
+and every phase runner requires it; there is no ambient context. `RunPopulation`
+(`packages/resources/src/projection/run-population.ts`) holds one content cache, one
+`ParseDispatcher` memoized by content key (each key parsed once per run), the per-file admission
+facts (parse result, size, mtime, checksum) shared across views, and each root's enumeration, done
+once. `ResourceRegistry.forRun(population)` is the run's registry; each phase crawls a
+`registry.view(...)` with its own base directory, config and include set, and the view computes its
+own ids, duplicates, links, population conditions and parse refusals with the same code. Views
+never share link objects. Skills get their views from `RunSkillRegistries`
+(`packages/agent-skills/src/validators/run-skill-registries.ts`): one per project root per run,
+markdown only for the one root a `vat skills validate` batch shares, `**/*.md` plus HTML elsewhere,
+and a view of its own directory for a skill with no project root. This replaces the per-root
+registry memo caches, which are deleted. The work counters `content.read`, `fs.stat`,
+`registry.built` and `registry.admitted`, attributed per phase, hold the rule:
+`packages/cli/test/system/work-counters-validate.system.test.ts` enforces it.
+
 ⚠️ **That hoist is admissible only for a verb whose phases write nothing into the tree, and is not a
 free refactor**: one scope is one git snapshot for every in-process phase. `vat validate` and
 `vat verify` write nothing into the tree, so no phase can miss another's output. A verb whose phases
-produce files for the next to read (`vat build`) must not be hoisted this way, and is not: it opens
-no run. `vat validate`'s `checks` phase is a supervised child
+produce files for the next to read (`vat build`) must not be hoisted this way, and is not: each of its
+phases opens a run of its own, and no run spans two phases. `vat validate`'s `checks` phase is a supervised child
 process OUTSIDE that scope: it takes its own git snapshot, and opens — and on a miss writes — the
 projection store while the parent holds it open. `validate-checks-phase.system.test.ts` smoke-tests
 that pair on a fixture: the first run's checks phase reports `population: derived` with a store left
@@ -663,10 +680,8 @@ processes inheriting it across a `spawnSync`, which reached the same place by a 
 the `checks` child inherits the orchestrator's environment, so no `vat validate` phase can see a
 different selection from the one its orchestrator did.
 
-That sharing has a within-verb instance. `vat build`'s two phases — `skills build` and
-`claude plugin build` — both reach the lane through `withResourcePopulationSource`
-(`resource-loader.ts`), rooted at the same directory, so phase 2 reads the extent phase 1 wrote.
-Measured on `packages/vat-development-agents` with `VAT_CRAWL_TIMING`: with a cold store, phase 1
+That sharing has a within-verb instance. `vat build`'s two phases, `skills build` and
+`claude plugin build`, both populate the same root, so phase 2 reads the extent phase 1 wrote. Measured on `packages/vat-development-agents` with `VAT_CRAWL_TIMING`: with a cold store, phase 1
 files `builtin:filesystem` 39.2 ms and `projection-store:write` 10.1 ms; phase 2 files neither, and
 its `resource-registry:enumerate` reads 3.6 ms against phase 1's 66.6 ms. It did NOT need the closure
 to emit reasons, which an earlier reading expected: the packaging lanes consume
@@ -674,11 +689,9 @@ to emit reasons, which an earlier reading expected: the packaging lanes consume
 extent alone answers them. The cross-INVOCATION win is unchanged and independent: `vat validate` and
 `vat verify` spawn a byte-identical `resources validate` child, so the second hits the store.
 
-⚠️ One packaging enumeration is still on the walk: `vat claude plugin build`'s per-skill post-build
-validation, which reaches `crawlAndResolveRegistry` in `packaging-validator.ts` without a source —
-its `withResourcePopulationSource` bracket closes around `createProjectRegistry` and does not span
-the marketplace loop. `vat skills build` no longer does: it holds one bracket over the whole run, and
-the registry memo is keyed on the population source.
+No packaging enumeration is on the walk: `vat claude plugin build`'s per-skill post-build validation
+and `vat skills build` both take their registries from the run's `RunSkillRegistries`
+(`validateSkillForPackaging` requires `shared`, and `packageSkill` requires `registries`).
 
 ⚠️ `VAT_PROJECTION_STORE=sqlite` is redundant with the default now, and is kept because every
 measurement arm, CI job and adopter script written while the store was opt-in spells it. It is not a
@@ -847,7 +860,7 @@ side (tree-shape caching vs. the blob-keyed tables).
 
 **Amended by [Content Keying and Git: Decision](./content-keying-and-git.md#decision-content-identity-is-per-source).**
 The cache stays lane-agnostic in shape, but its key is per source: a file git holds (tracked,
-unmodified since the index) is keyed by its git blob object id, any other file by VAT's checksum, and
+unmodified since the index) is keyed by its git blob object id, any other file by VAT's content key, and
 the two need not agree for identical bytes. Each file is read and keyed at most once per run, shared
 by every lane. Caches are per machine kind. The git-OID key is planned, not built.
 
@@ -865,7 +878,7 @@ by every lane. Caches are per machine kind. The git-OID key is planned, not buil
   `eol`) no longer bind: those cases are outside what VAT supports, and a git-held file's blob OID
   is its content identity. The git-OID path is planned with incremental repopulation. Objections
   that do not rest on normalization still apply to it: a tracked file modified since the index is
-  keyed by VAT's checksum, mode `120000` entries are not keyed by their target-string OID, and a key
+  keyed by VAT's content key, mode `120000` entries are not keyed by their target-string OID, and a key
   is never bound to bytes read at a different moment. The measurements are kept.
 
   ⛔ The *within-run* half was built and removed. A cross-path `(blob OID, parserKind)` hint let a

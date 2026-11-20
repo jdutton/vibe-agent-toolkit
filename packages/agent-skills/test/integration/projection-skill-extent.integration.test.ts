@@ -13,7 +13,7 @@
  * Both roots are **copies** of `test/fixtures/skill-files/post-build`, cloned
  * into a temp directory. Copying rather than reading in place is what keeps the
  * comparison a comparison: rooted at its real location the corpus sits inside
- * this repository, so `createProjectRegistry` would load the repo's own
+ * this repository, so the packaging registry would load the repo's own
  * `vibe-agent-toolkit.config.yaml` from an ancestor and the walker's last
  * cascade branch would ask the repo's git for a gitignore verdict — two ambient
  * inputs that the projection base has no equivalent of. A difference sourced
@@ -49,6 +49,7 @@ import {
   type ExtentContribution,
   type ProjectionBase,
   type ResourceRealizationRow,
+  type ResourceRegistry,
   type SkillPackagingConfig,
   RunContentCache,
 } from '@vibe-agent-toolkit/resources';
@@ -64,7 +65,7 @@ import {
   SkillExtentContributor,
   skillExtentDeclaration,
 } from '../../src/projection/skill-extent.js';
-import { createProjectRegistry } from '../../src/skill-packager.js';
+import { withSkillRegistries } from '../../src/validators/run-skill-registries.js';
 import { walkLinkGraph, type WalkableRegistry, type WalkLinkGraphOptions } from '../../src/walk-link-graph.js';
 import {
   BEHIND_TXT_REL,
@@ -367,8 +368,12 @@ async function populatedBase(root: string): Promise<ProjectionBase> {
 }
 
 /** What `walkLinkGraph` bundles, including the skill root it never lists itself. */
-async function walkerBundle(root: string, config: SkillPackagingConfig): Promise<string[]> {
-  const registry = await createProjectRegistry(root, { outputs: [] });
+function walkerBundle(root: string, config: SkillPackagingConfig): Promise<string[]> {
+  return withSkillRegistries(root, async (registries) => walkerBundleOver(await registries.packagingRegistry(root, []), root, config));
+}
+
+/** {@link walkerBundle} over the run's packaging registry of `root`. */
+function walkerBundleOver(registry: ResourceRegistry, root: string, config: SkillPackagingConfig): string[] {
   const skillAbsolute = safePath.resolve(safePath.join(root, SKILL_REL));
   const declaredDepth = config.linkFollowDepth ?? DEFAULT_DEPTH;
   const options: WalkLinkGraphOptions = {

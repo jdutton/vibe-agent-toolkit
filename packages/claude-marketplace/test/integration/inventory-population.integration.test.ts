@@ -33,6 +33,7 @@ import {
   extractClaudePluginInventory,
   type InventoryPopulation,
 } from '@vibe-agent-toolkit/claude-marketplace';
+import { withPopulationRun } from '@vibe-agent-toolkit/resources';
 import {
   mkdirSyncReal,
   normalizedTmpdir,
@@ -151,12 +152,21 @@ async function linkedBySkill(
   return out;
 }
 
+/**
+ * Build an inventory population inside its own run. The population is fully
+ * indexed when it returns, so it outlives the run that built it.
+ *
+ * @param populationRoot - The population's root
+ * @param skillMdPaths - Absolute SKILL.md paths to give an extent each
+ * @returns The population
+ */
+async function populationOf(populationRoot: string, skillMdPaths: readonly string[]): Promise<InventoryPopulation> {
+  return withPopulationRun((run) => buildInventoryPopulation({ root: populationRoot, skillMdPaths, run }));
+}
+
 /** The population every projection-arm case reads from. */
 async function populationForFixture(): Promise<InventoryPopulation> {
-  return buildInventoryPopulation({
-    root,
-    skillMdPaths: [skillMd('alpha'), skillMd('beta')],
-  });
+  return populationOf(root, [skillMd('alpha'), skillMd('beta')]);
 }
 
 describe('vat inventory: the projection lane answers what the walk answers', () => {
@@ -206,6 +216,8 @@ describe('vat inventory: a population that cannot serve the question defers to t
       root: safePath.join(root, 'skills'),
       membersOf: () => [],
       parseRefusedAmong: () => [],
+      refusalRows: { blobs: [], blobConditions: [], resourceRealizations: [] },
+      storeMiss: undefined,
     };
 
     expect(await linkedBySkill(misrooted)).toEqual(await linkedBySkill(undefined));
@@ -215,10 +227,7 @@ describe('vat inventory: a population that cannot serve the question defers to t
     // The stale-list case: a skill added since the population was built. An empty
     // membership would be a confident wrong answer, so `membersOf` returns
     // undefined and the walk runs — for that skill only.
-    const partial = await buildInventoryPopulation({
-      root,
-      skillMdPaths: [skillMd('alpha')],
-    });
+    const partial = await populationOf(root, [skillMd('alpha')]);
 
     expect(partial.membersOf(skillMd('beta'))).toBeUndefined();
     expect(await linkedBySkill(partial)).toEqual(await linkedBySkill(undefined));
@@ -235,10 +244,7 @@ describe('vat inventory: a population that cannot serve the question defers to t
       `---\nname: bare\ndescription: A fixture skill that links to nothing at all.\n---\n\nNo links.\n`,
     );
 
-    const population = await buildInventoryPopulation({
-      root,
-      skillMdPaths: [safePath.join(bare, 'SKILL.md')],
-    });
+    const population = await populationOf(root, [safePath.join(bare, 'SKILL.md')]);
 
     expect(population.membersOf(safePath.join(bare, 'SKILL.md'))).toEqual([]);
     rmSync(bare, { recursive: true, force: true });
@@ -304,10 +310,10 @@ describe('vat inventory: a refused linked document is a parse error in both arms
   });
 
   it('reports the same row, with the same reason, from the projection as from the walk', async () => {
-    const population = await buildInventoryPopulation({
-      root: refusedRoot,
-      skillMdPaths: ['delta', 'gamma'].map((name) => safePath.join(refusedRoot, 'skills', name, 'SKILL.md')),
-    });
+    const population = await populationOf(
+      refusedRoot,
+      ['delta', 'gamma'].map((name) => safePath.join(refusedRoot, 'skills', name, 'SKILL.md')),
+    );
 
     const walked = await refusedRows(refusedRoot, undefined);
     const projected = await refusedRows(refusedRoot, population);

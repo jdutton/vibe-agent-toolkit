@@ -58,7 +58,7 @@ function report(issues: readonly ValidationIssue[], overrides: Partial<Resources
 const severities = (...list: Array<ValidationIssue['severity']>) => list.map((s) => issue(s));
 
 describe('buildResourcesValidateReport — membership provenance', () => {
-  it.each(['store', 'derived', null] as const)('publishes population: %s as the run observed it', (population) => {
+  it.each(['store', 'derived'] as const)('publishes population: %s as the run observed it', (population) => {
     expect(report([], { population }).data.population).toBe(population);
   });
 

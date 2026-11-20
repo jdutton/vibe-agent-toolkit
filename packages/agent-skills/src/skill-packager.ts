@@ -20,7 +20,6 @@ import { basename, dirname } from 'node:path';
 import {
   DeferredArtifacts,
   ResourceRegistry,
-  loadConfig,
   openFrontmatter,
   parseFileCached,
   parseRefusedEntryFor,
@@ -32,12 +31,12 @@ import {
   transformContent,
   type DuplicateIdCollision,
   type LinkRewriteRule,
+  type ParseDispatcher,
   type ParseRefusedResource,
   type ParseResult,
   type ProjectConfig,
   type ResourceLink,
   type ResourceMetadata,
-  type ResourcePopulationSource,
   type UnreadableResource,
 } from '@vibe-agent-toolkit/resources';
 import {
@@ -92,7 +91,6 @@ import {
   skippedGlobMatchesToIssues,
   type SkillFileEntry,
 } from './files-config.js';
-import { LINK_GRAPH_MEMBER_GLOBS } from './link-graph-members.js';
 import { packagingInputError, SKILL_NAME_NOT_A_SEGMENT_CODE, SkillPackageChecksFailedError } from './packaging-errors.js';
 import { refusedAmong, SKILL_REACHED_REFUSAL_CONSEQUENCE } from './parse-refusal-issues.js';
 import { checkBrokenPackagedLinks, checkMissingReferencedPaths, checkUnreferencedFiles } from './post-build-checks.js';
@@ -110,6 +108,7 @@ import { detectPackagedAgentInstructionFiles } from './validators/agent-instruct
 import { checkPackagedSizeLimit } from './validators/packaged-size-limit.js';
 import { validateSkillForPackaging, type PackagingValidationResult, type SkillPackagingConfig } from './validators/packaging-validator.js';
 import { materializeIssue } from './validators/rule-engine/index.js';
+import type { RunSkillRegistries } from './validators/run-skill-registries.js';
 import { deferredAssetsToIssues, outsideSkillDirLinksToIssues, walkerExclusionsToIssues } from './validators/walker-to-issues.js';
 import { walkLinkGraph, type WalkableRegistry } from './walk-link-graph.js';
 
@@ -273,11 +272,13 @@ export interface PackageSkillOptions {
   } | undefined;
 
   /**
-   * Pre-built ResourceRegistry for the project.
-   * When provided, packageSkill() skips creating its own registry.
-   * Used by packageSkills() to share a single registry across multiple skill builds.
+   * The run's skill registries. The project registry every skill of the run is
+   * packaged against is {@link RunSkillRegistries.packagingRegistry} of the
+   * project root, crawled once per run, and the post-build check validates
+   * against the run's views. Required: a library caller outside a verb holds one
+   * from `withSkillRegistries`.
    */
-  registry?: ResourceRegistry | undefined;
+  registries: RunSkillRegistries;
 
   /**
    * Pre-populated {@link GitTracker} for the containing repo.
@@ -369,7 +370,7 @@ export function packagingConfigToPackageOptions(
   anchors: { skillPath: string; outputPath: string },
   projectSkills: readonly DeclaredEvalSuite[],
   hasConventionalSuite: ConventionalSuiteProbe,
-): PackageSkillOptions & { outputPath: string } {
+): Omit<PackageSkillOptions, 'registries'> & { outputPath: string } {
   return {
     outputPath: anchors.outputPath,
     // Every lane converting through here builds into a directory VAT manages —
@@ -489,9 +490,10 @@ export interface SkillBuildSpec {
   /**
    * Packaging options for this skill. `outputPath` is required: it is the directory the
    * bundle is written into, in place — a directory inside the caller's own plan's staged
-   * tree (see {@link packageSkills}).
+   * tree (see {@link packageSkills}). No `registries`: the batch packages every skill
+   * against the run's, which {@link packageSkills} takes once.
    */
-  options: PackageSkillOptions & { outputPath: string };
+  options: Omit<PackageSkillOptions, 'registries'> & { outputPath: string };
 }
 
 /**
@@ -544,11 +546,10 @@ export type SkillPackageOutcome =
  *   (`vat build` also validates the SOURCE tree, whose matches count too).
  *   Containment does not change that: a skill that threw may still have matched
  *   allow entries before it threw, and those matches count for the run.
- * @param runOptions - Registry-build options for the RUN. Named apart from the
- *   per-skill `options` destructured in the loop below, which it is not: it
- *   configures the ONE shared registry {@link createProjectRegistry} builds here.
- *   It does NOT reach the per-skill post-build validation, which builds a private
- *   registry over the BUILT tree — see {@link runPostBuildValidation}
+ * @param runOptions - The RUN's skill registries and what the run writes. Named apart
+ *   from the per-skill `options` destructured in the loop below, which it is not:
+ *   the ONE project registry (`RunSkillRegistries.packagingRegistry`) is crawled
+ *   here, before the containment, and every skill is packaged against it.
  * @returns One outcome per input spec, in input order
  *
  * @example
@@ -558,7 +559,8 @@ export type SkillPackageOutcome =
  *   { skillPath: '/project/skills/SKILL2.md', options: { outputPath: '/out/skill-b' } },
  * ];
  * const ledger = createAllowUsageLedger();
- * const outcomes = await packageSkills(specs, '/project', ledger, { outputs: ['/out'] });
+ * const outcomes = await withSkillRegistries('/project', (registries) =>
+ *   packageSkills(specs, '/project', ledger, { registries, outputs: ['/out'] }));
  * const runIssues = allowUnusedIssues(ledger);
  * ```
  */
@@ -566,7 +568,7 @@ export async function packageSkills(
   skills: SkillBuildSpec[],
   projectRoot: string,
   allowLedger: AllowUsageLedger,
-  runOptions: ProjectRegistryOptions,
+  runOptions: { readonly registries: RunSkillRegistries; readonly outputs: readonly string[] },
 ): Promise<SkillPackageOutcome[]> {
   // 1. Create one registry for the entire project, through the shared builder so
   // skills built here belong to the same collections as a single-skill build.
@@ -577,7 +579,8 @@ export async function packageSkills(
   // reaching a store it opened and never used.
   // `runOptions.outputs` is the run's one declaration of what it writes (every skill's
   // output, and the staging around them): a crawl fault on it is the destination's.
-  const registry = await createProjectRegistry(projectRoot, runOptions);
+  const registries = runOptions.registries;
+  await registries.packagingRegistry(projectRoot, runOptions.outputs);
 
   // 2. Package each skill against the shared registry
   // In order: each build writes against the shared registry, and outcomes and logs follow input order.
@@ -585,7 +588,7 @@ export async function packageSkills(
     try {
       const { result, siblings } = await packageSkillInto(skillPath, options.outputPath, {
         ...options,
-        registry,
+        registries,
         allowLedger,
       }, runOptions.outputs);
       // Nothing beside a bundle is written here: an archive a format asks for is a plan's to place.
@@ -633,7 +636,7 @@ export async function packageSkills(
  */
 export async function packageSkill(
   skillPath: string,
-  options: PackageSkillOptions = {}
+  options: PackageSkillOptions,
 ): Promise<PackageSkillResult> {
   // The package's own output is the only thing this call writes.
   const prepared = await preparePackage(skillPath, options, []);
@@ -733,7 +736,7 @@ async function preparePackage(
   } = options;
 
   // 1. Parse SKILL.md frontmatter and links
-  const parseResult = await parseSkillOrRefuse(skillPath);
+  const parseResult = await parseSkillOrRefuse(skillPath, options.registries.dispatcher);
   const skillMetadata = extractSkillMetadata(parseResult, skillPath);
 
   // 2. Find project boundary (config root -> git root -> skill dir).
@@ -746,7 +749,7 @@ async function preparePackage(
   // `projectRoot` handed to `walkerExclusionsToIssues` / `testInputLinkIssues` /
   // `deferredAssetsToIssues` at step 13b. It is derived HERE, per skill, from the
   // skill's own path. It is NOT the `projectRoot` argument `packageSkills` was called
-  // with (that one is used only for `createProjectRegistry`), and it is not the `cwd`
+  // with (that one is used only for the run's packaging registry), and it is not the `cwd`
   // that `vat skills build` treats as the root of the document it emits.
   //
   // UNVERIFIED that these can actually diverge: in every path exercised so far the two
@@ -766,12 +769,8 @@ async function preparePackage(
   // destination's.
   const runOutputs = [outputPath, ...outputs];
 
-  // 3. Get or create the resource registry.
-  // The fallback crawls and parses EVERY markdown file in the project, so any
-  // caller packaging more than one skill must build the registry once itself
-  // (see createProjectRegistry) and pass it — otherwise the whole-project scan
-  // is paid once PER SKILL.
-  const registry = options.registry ?? await createProjectRegistry(projectRoot, { outputs: runOutputs });
+  // 3. The run's project registry: crawled once per run, whichever skill asks first.
+  const registry = await options.registries.packagingRegistry(projectRoot, runOutputs);
   // The skill itself unread by the crawl is no skill to package: never a bundle of its SKILL.md alone.
   refuseUnreadableSkill(registry, skillPath);
 
@@ -1007,8 +1006,8 @@ async function preparePackage(
       // channel as every other one rather than aborting the run from inside a
       // helper.
       ...collisionIssues,
-      ...await checkUnreferencedFiles(outputPath, filesConfigDests),
-      ...await checkBrokenPackagedLinks(outputPath, droppedGlobDests),
+      ...await checkUnreferencedFiles(outputPath, filesConfigDests, { dispatcher: options.registries.dispatcher }),
+      ...await checkBrokenPackagedLinks(outputPath, droppedGlobDests, { dispatcher: options.registries.dispatcher }),
       // The inverse of checkUnreferencedFiles: paths the docs NAME that the bundle
       // does not contain. Built phase only — a `files:` dest exists here and not in
       // the source tree, so the same check at source phase flags every injected
@@ -1018,7 +1017,7 @@ async function preparePackage(
       // directory, not the plugin the skill will be installed into, so there is no
       // wider root to give it — the sibling-search parameter that measured 1.9%
       // instead of 3.8% was deleted for having no caller. The shipped rate is 3.8%.
-      ...await checkMissingReferencedPaths(outputPath, target),
+      ...await checkMissingReferencedPaths(outputPath, target, { dispatcher: options.registries.dispatcher }),
       // The only byte measurement in the pipeline. Built phase for the same reason
       // as its neighbour above: a `files:` entry materializes files here that the
       // source tree does not have, so the bytes that ship are only knowable now.
@@ -1110,7 +1109,7 @@ async function preparePackage(
       outputPath,
       options.validation,
       buildRunLedger,
-      writing,
+      { registries: options.registries, outputs: writing },
     );
 
     // 14. Generate the distribution artifacts: the npm manifest into the bundle, and the
@@ -1411,13 +1410,9 @@ function withIssues(framework: FrameworkResult, issues: readonly ValidationIssue
  * `allowLedger` is required, not optional: this lane is one half of a build, so
  * it must never conclude on its own that an allow entry matched nothing.
  *
- * ⛔ This lane stays on the walk and is handed no `populationSource`. It validates
- * the BUILT tree under `outputPath` — a different tree from the one the run
- * enumerated, not tracked by git, and not covered by the packaging registry. A
- * source produced by `withResourcePopulationSource` is bound to the PROJECT root
- * and its git tree hash, so offering it a build-output directory asks it a
- * question about a tree it does not describe (`ResourceRegistry.populationFrom`
- * declines such a mismatch back onto the walk anyway).
+ * It validates the BUILT tree under `outputPath` against the run's view of the
+ * project root the built SKILL.md resolves to, with the bundle layered over it
+ * (`withOwnBundle`): the view never holds this run's output.
  *
  * ## 🚨 This lane's link graph is EMPTY — and that is the NORMAL case
  *
@@ -1463,18 +1458,18 @@ function withIssues(framework: FrameworkResult, issues: readonly ValidationIssue
  * behaviour. When this is fixed, those assertions flip in the fixing change.
  *
  * ⛔ Do NOT fix it by widening the crawl. That same `**\/dist\/**` exclusion is
- * the stated correctness proof for `crawlAndResolveRegistry`'s process-lifetime
- * memo, which the audit lane, the validate lane AND this lane all share — see the
- * comment on `walkRegistryCache` in `validators/packaging-validator.ts`. Widening
- * it retracts that argument for every lane sharing the memo; this is not a
- * one-lane fix.
+ * the stated correctness proof for the run's per-root views
+ * (`RunSkillRegistries`), which the validate lane and this lane share: a view
+ * never holds the run's own output. Widening it retracts that argument for every
+ * lane sharing the view; this is not a one-lane fix.
  */
 function runPostBuildValidation(
   outputPath: string,
   validation: ValidationConfig | undefined,
   allowLedger: AllowUsageLedger,
-  outputs: readonly string[],
+  run: { readonly registries: RunSkillRegistries; readonly outputs: readonly string[] },
 ): Promise<PackagingValidationResult> {
+  const { registries, outputs } = run;
   const builtSkillPath = safePath.join(outputPath, 'SKILL.md');
   return validateSkillForPackaging(
     builtSkillPath,
@@ -1485,7 +1480,7 @@ function runPostBuildValidation(
     'built',
     // The built skill IS this run's output, inside the project the check crawls — and so is
     // everything else the run writes (`outputs`, the previous output beside a staged one).
-    { allowLedger, unreadable: 'refuse', outputs, dispatcher: undefined },
+    { allowLedger, registries, unreadable: 'refuse', outputs, dispatcher: registries.dispatcher },
   );
 }
 
@@ -1520,11 +1515,10 @@ function unreadableFault(entry: UnreadableResource, ctx: FsFaultContext): unknow
  * worker) — or, when the worker refuses it, the packager's one refusal of a
  * refused file ({@link parseRefusedPackagingError}), never the parser's raw throw.
  */
-async function parseSkillOrRefuse(skillPath: string): Promise<Awaited<ReturnType<typeof parseFileCached>>> {
+async function parseSkillOrRefuse(skillPath: string, dispatcher: ParseDispatcher): Promise<Awaited<ReturnType<typeof parseFileCached>>> {
   try {
-    // The packager holds no run dispatcher: its one SKILL.md parse is a one-thread pool, under the
-    // default limits, said here rather than left to a default.
-    return await parseFileCached(skillPath, 'markdown', { dispatcher: undefined, side: 'source' });
+    // On the run's dispatcher: the run holds one pool open, never one per parse.
+    return await parseFileCached(skillPath, 'markdown', { dispatcher, side: 'source' });
   } catch (error) {
     const refused = parseRefusedEntryFor(skillPath, error);
     if (refused === undefined) throw error;
@@ -1597,95 +1591,6 @@ function assemblePackageResult(input: AssembleResultInput): PackageSkillResult {
   }
 
   return result;
-}
-
-// ============================================================================
-// Registry Creation
-// ============================================================================
-
-/**
- * Options for {@link createProjectRegistry}.
- */
-export interface ProjectRegistryOptions {
-  /**
-   * Where the file list comes from — omit for the incumbent walk, supply one to
-   * source it from a projection instead.
-   *
-   * See {@link createProjectRegistry}'s docstring: the source answers
-   * enumeration only, and this builder's markdown-only scoping survives it.
-   */
-  populationSource?: ResourcePopulationSource | undefined;
-  /**
-   * What the run writes — every output, and the staging it builds them in — or `[]` for a
-   * run that writes nothing under the project: the crawl's one declaration of which side a
-   * fault is on (on, in or holding an output: the destination's; anything else the
-   * project's content). Required: only the caller knows.
-   */
-  outputs: readonly string[];
-}
-
-/**
- * Build THE project registry: every markdown file under `projectRoot`, parsed,
- * with links resolved and the project config attached.
- *
- * This is the one builder for "the registry a packaging run works against", and
- * every lane that packages skills must call it EXACTLY ONCE per run and pass the
- * result into each {@link packageSkill}. It crawls and parses the entire project
- * — on a large monorepo that is thousands of files and tens of seconds — so a
- * caller that lets `packageSkill` fall back to it per skill turns a fixed
- * project-sized cost into a per-skill one.
- *
- * It also carries the config, which decides collection membership: the packager
- * rewrites frontmatter URI-references per collection schema, mirroring the
- * validator. A registry built without config silently belongs to no collection,
- * so a lane that built its own config-less registry rewrote frontmatter
- * differently from the lane that used this one — which is why there is now only
- * one builder rather than two that happened to differ in one argument.
- *
- * ## Why the include set is markdown-only, unlike `crawlAndResolveRegistry`'s
- *
- * The difference is deliberate and is NOT a hole that leaves HTML unrewritten.
- * A bundled HTML file joins this registry later, on demand, via
- * {@link registerBundledAssets} — which parses it and resolves its links before
- * the copy step, so `rewriteHtmlLinks` reaches it. Crawling every `.html` under
- * the project up front would parse generated output the build never bundles,
- * and would move `page.md` vs `page.html` id collisions from the narrow
- * bundled-asset path onto the whole-project crawl.
- *
- * Widening this glob would NOT widen what the walker follows: routing is
- * markdown-only regardless — see `isRoutable` in `walk-link-graph.ts`.
- *
- * ## The optional population source, and why it cannot widen that glob
- *
- * `populationSource` replaces the ENUMERATION only. `ResourceRegistry.crawl`
- * re-applies this function's `include` — and the crawl's default `exclude` —
- * to whatever the source offers, through the same compiled matcher the walk
- * itself uses, so a source that enumerates a whole tree still yields exactly
- * the project's markdown here. That is what makes handing this builder a
- * projection a cost change rather than a scope change.
- *
- * Selecting the lane stays the CLI's job: this signature takes a source, never
- * an environment. A library caller that passes nothing keeps the walk.
- */
-export async function createProjectRegistry(
-  projectRoot: string,
-  options: ProjectRegistryOptions,
-): Promise<ResourceRegistry> {
-  const config = await loadConfig(projectRoot);
-  const { registry } = await ResourceRegistry.fromCrawl(
-    {
-      baseDir: projectRoot,
-      include: [...LINK_GRAPH_MEMBER_GLOBS],
-      // A build must not ship a shorter bundle: a directory this crawl cannot
-      // list refuses the run by name — see `RegistryUnreadablePolicy`.
-      unreadable: 'refuse',
-      ...(options.populationSource !== undefined && { populationSource: options.populationSource }),
-      outputs: options.outputs,
-    },
-    config === undefined ? undefined : { config },
-  );
-  registry.resolveLinks();
-  return registry;
 }
 
 /**

@@ -23,6 +23,7 @@ import type {
 import { ResourceRegistry, type RegistryCrawl } from '../src/resource-registry.js';
 
 import { extentKeyOf, FakeFactStore } from './fake-fact-store.js';
+import { inOwnRun } from './helpers/population-run.js';
 import { setupSubdirTestSuite } from './test-helpers.js';
 
 /** The plain markdown member every fixture below starts from. */
@@ -34,7 +35,7 @@ const GITIGNORE = '.gitignore';
 /** Tracked: the half `git ls-files` and this lane agree about. */
 const COMMITTED = 'committed.md';
 
-/** Untracked but not ignored — the member the incumbent walk cannot see at all. */
+/** Untracked but not ignored — a member `git ls-files` alone does not list. */
 const UNCOMMITTED = 'uncommitted.md';
 
 /** Ignored, and the directory holding it. The half this lane declines. */
@@ -99,7 +100,7 @@ async function buildIgnoredFixture(): Promise<GitTracker> {
  */
 async function populateCapturing(tracker: GitTracker): Promise<CapturingStore> {
   const store = new CapturingStore();
-  await buildResourcePopulation({ outputs: [], root: suite.tempDir,
+  await inOwnRun(buildResourcePopulation, { outputs: [], unreadable: 'refuse', root: suite.tempDir,
     gitTracker: tracker,
     cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH },
   });
@@ -108,7 +109,7 @@ async function populateCapturing(tracker: GitTracker): Promise<CapturingStore> {
 
 /** The population as root-relative, forward-slashed paths — the readable unit. */
 async function populationOf(gitTracker?: GitTracker): Promise<string[]> {
-  const { paths } = await buildResourcePopulation({ outputs: [], root: suite.tempDir,
+  const { paths } = await inOwnRun(buildResourcePopulation, { outputs: [], unreadable: 'refuse', root: suite.tempDir,
     ...(gitTracker !== undefined && { gitTracker }),
   });
   // Code-unit order, never `localeCompare`: the expected arrays below are
@@ -145,8 +146,7 @@ describe('buildResourcePopulation', () => {
     await write('docs/c.md', '# C\n');
     const cache = { store: new ReorderingStore(), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
     const source: ResourcePopulationSource = {
-      root: suite.tempDir,
-      enumerate: (root, outputs) => buildResourcePopulation({ outputs, root, cache }),
+      enumerate: (root, outputs, unreadable) => inOwnRun(buildResourcePopulation, { outputs, unreadable, root, cache }),
     };
     const crawlOnce = (): Promise<RegistryCrawl> =>
       new ResourceRegistry({ baseDir: suite.tempDir }).crawl({
@@ -156,7 +156,7 @@ describe('buildResourcePopulation', () => {
     const written = await crawlOnce();
     const hit = await crawlOnce();
 
-    expect(hit.population).toEqual({ lane: 'projection', outcome: { population: 'store', stored: 'hit' }, extentSource: 'filesystem' });
+    expect(hit.population).toEqual({ outcome: { population: 'store', stored: 'hit' }, extentSource: 'filesystem' });
     const order = (crawl: RegistryCrawl): string[] => crawl.resources.map((resource) => resource.filePath);
     expect(order(written)).toEqual(order(written).toSorted(compareCodeUnits));
     expect(order(hit)).toEqual(order(written));
@@ -170,8 +170,8 @@ describe('buildResourcePopulation', () => {
     createSymlink(cap, 'missing-two.md', safePath.join(suite.tempDir, 'dangling-y.md'));
     const cache = { store: new ReorderingStore(), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
 
-    const written = await buildResourcePopulation({ outputs: [], root: suite.tempDir, cache });
-    const hit = await buildResourcePopulation({ outputs: [], root: suite.tempDir, cache });
+    const written = await inOwnRun(buildResourcePopulation, { outputs: [], unreadable: 'refuse', root: suite.tempDir, cache });
+    const hit = await inOwnRun(buildResourcePopulation, { outputs: [], unreadable: 'refuse', root: suite.tempDir, cache });
 
     expect(hit.outcome.stored).toBe('hit');
     expect(written.conditions.map((row) => row.path)).toEqual(['dangling-y.md', 'dangling-z.md']);
@@ -183,9 +183,9 @@ describe('buildResourcePopulation', () => {
     const store = new FakeFactStore();
     const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
 
-    const uncached = await buildResourcePopulation({ outputs: [], root: suite.tempDir });
-    const written = await buildResourcePopulation({ outputs: [], root: suite.tempDir, cache });
-    const hit = await buildResourcePopulation({ outputs: [], root: suite.tempDir, cache });
+    const uncached = await inOwnRun(buildResourcePopulation, { outputs: [], unreadable: 'refuse', root: suite.tempDir });
+    const written = await inOwnRun(buildResourcePopulation, { outputs: [], unreadable: 'refuse', root: suite.tempDir, cache });
+    const hit = await inOwnRun(buildResourcePopulation, { outputs: [], unreadable: 'refuse', root: suite.tempDir, cache });
 
     expect(uncached.outcome).toEqual({ population: 'derived', stored: 'no-store' });
     expect(written.outcome).toEqual({ population: 'derived', stored: 'written' });
@@ -338,8 +338,8 @@ describe('buildResourceProjection', () => {
     const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
     const options = { root: suite.tempDir, cache };
 
-    const derived = await buildResourceProjection(options);
-    const served = await buildResourceProjection(options);
+    const derived = await inOwnRun(buildResourceProjection, options);
+    const served = await inOwnRun(buildResourceProjection, options);
 
     expect(derived.outcome).toEqual({ population: 'derived', stored: 'written' });
     expect(served.outcome).toEqual({ population: 'store', stored: 'hit' });
@@ -352,7 +352,7 @@ describe('buildResourceProjection', () => {
     await write(DOC_A, '# A\n\nSee [b](./docs/b.md).\n');
     await write('docs/b.md', '# B\n');
 
-    const { projection } = await buildResourceProjection({
+    const { projection } = await inOwnRun(buildResourceProjection, {
       root: suite.tempDir,
     });
 
@@ -373,7 +373,7 @@ describe('buildResourceProjection', () => {
     await write(DOC_A, '# A\n');
     await write('docs/b.md', '# B\n');
 
-    const { projection } = await buildResourceProjection({
+    const { projection } = await inOwnRun(buildResourceProjection, {
       root: suite.tempDir,
     });
     const realizedFiles = projection.resourceRealizations
@@ -391,7 +391,7 @@ describe('buildResourceProjection', () => {
     // sees.
     const tracker = await buildIgnoredFixture();
 
-    const { projection } = await buildResourceProjection({
+    const { projection } = await inOwnRun(buildResourceProjection, {
       root: suite.tempDir,
       gitTracker: tracker,
     });
@@ -412,7 +412,7 @@ describe('buildResourceProjection', () => {
     await write('.claude/rules/scoped.md', RULE_WITH_ONE_DEAD_GLOB);
     await write('docs/guide.md', '# Guide\n');
 
-    const { projection } = await buildResourceProjection({
+    const { projection } = await inOwnRun(buildResourceProjection, {
       root: suite.tempDir,
     });
 
@@ -449,9 +449,9 @@ describe('one question for every resources lane', () => {
     };
     const root = suite.tempDir;
 
-    const membership = await keyOf((cache) => buildResourcePopulation({ outputs: [], root, cache }));
-    const query = await keyOf((cache) => buildResourceProjection({ root, cache }));
-    const lens = await keyOf((cache) => buildClaudeContextPopulation({ root, cache }));
+    const membership = await keyOf((cache) => inOwnRun(buildResourcePopulation, { outputs: [], unreadable: 'refuse', root, cache }));
+    const query = await keyOf((cache) => inOwnRun(buildResourceProjection, { root, cache }));
+    const lens = await keyOf((cache) => inOwnRun(buildClaudeContextPopulation, { root, cache }));
 
     expect(membership).toBeDefined();
     expect(query).toBe(membership);
@@ -467,8 +467,8 @@ describe('one question for every resources lane', () => {
     const contributorIds = (projection: { zoneProvenance: readonly { contributorId: string }[] }): Set<string> =>
       new Set(projection.zoneProvenance.map((row) => row.contributorId));
 
-    const resources = contributorIds((await buildResourceProjection({ root })).projection);
-    const lens = contributorIds((await buildClaudeContextPopulation({ root })).projection);
+    const resources = contributorIds((await inOwnRun(buildResourceProjection, { root })).projection);
+    const lens = contributorIds((await inOwnRun(buildClaudeContextPopulation, { root })).projection);
 
     // The discriminator: the classifiers as well as the enumerator.
     expect(resources.size).toBeGreaterThan(1);
@@ -483,14 +483,14 @@ describe('one question for every resources lane', () => {
     const store = new FakeFactStore();
     const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
     const options = { root: suite.tempDir, gitTracker, cache };
-    const { projection } = await buildResourceProjection(options);
+    const { projection } = await inOwnRun(buildResourceProjection, options);
     const evicted = projection.resourceRealizations.find((row) => row.path === COMMITTED)?.contentKey;
     expect(evicted).toEqual(expect.any(String));
     store.forgetBlobFacts(evicted ?? '');
 
-    const membership = await buildResourcePopulation({ ...options, outputs: [] });
-    const full = await buildResourceProjection(options);
-    const healed = await buildResourceProjection(options);
+    const membership = await inOwnRun(buildResourcePopulation, { ...options, outputs: [], unreadable: 'refuse' });
+    const full = await inOwnRun(buildResourceProjection, options);
+    const healed = await inOwnRun(buildResourceProjection, options);
 
     expect(membership.outcome).toEqual({ population: 'store', stored: 'hit' });
     expect(full.outcome).toEqual({ population: 'derived', stored: 'written' });

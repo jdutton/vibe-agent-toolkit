@@ -23,6 +23,7 @@ import type { Projection } from '../../src/projection/projection.js';
 import { buildResourceProjection } from '../../src/projection/resource-population.js';
 import type { ClaudeRulePatternRow } from '../../src/schemas/projection-claude-rules.js';
 import { FakeFactStore } from '../fake-fact-store.js';
+import { inOwnRun } from '../helpers/population-run.js';
 import { plantTree, razeTree } from '../helpers/temp-corpus.js';
 
 /** The rules file whose `paths:` list every assertion below is about. */
@@ -72,7 +73,7 @@ function root(): string {
  * @returns The projection the lane produced, and whether the store served it
  */
 async function populateTree(store?: FakeFactStore): Promise<PopulateResult> {
-  return buildResourceProjection({
+  return inOwnRun(buildResourceProjection, {
     root: root(),
     ...(store === undefined ? {} : { cache: { store, treeUnchanged: () => true, treeHash: TREE_HASH } }),
   });
@@ -194,7 +195,7 @@ async function populateIgnoredTree(
     // Positive control on the oracle: an unusable tracker answers "nothing is
     // ignored", and every row below would be the non-repository answer.
     expect(gitTracker.isUsable()).toBe(true);
-    const { projection } = await buildResourceProjection({
+    const { projection } = await inOwnRun(buildResourceProjection, {
       root: dir, gitTracker, });
     // The premise: the ignored file is never realized, so no witness can exist.
     expect(projection.resourceRealizations.filter((row) => built.includes(toForwardSlash(row.path)))).toEqual([]);

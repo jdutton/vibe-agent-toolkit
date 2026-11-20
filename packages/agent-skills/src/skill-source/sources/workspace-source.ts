@@ -1,6 +1,9 @@
-import { safePath, withTempDir } from '@vibe-agent-toolkit/utils';
+import { dirname } from 'node:path';
+
+import { findProjectRoot, safePath, withTempDir } from '@vibe-agent-toolkit/utils';
 
 import { packageSkill } from '../../skill-packager.js';
+import { withSkillRegistries } from '../../validators/run-skill-registries.js';
 import { hashDirectory } from '../content-hash.js';
 import { stageDirInto } from '../stage.js';
 import type { ResolvedSkillSource, ResolveSkillSourceContext } from '../types.js';
@@ -28,10 +31,13 @@ export async function resolveWorkspaceSource(
   // stageDirInto copies the built bundle OUT into the staging root before we
   // return, so the build temp dir is safe to dispose of once the work is done.
   const { value, leftover } = await withTempDir('vat-ws-build-', async (buildOut) => {
-    const result = await packageSkill(opts.skillPath, {
+    // This build is its own run: the project the skill resolves to, under its own config.
+    const projectRoot = findProjectRoot(dirname(opts.skillPath)) ?? dirname(opts.skillPath);
+    const result = await withSkillRegistries(projectRoot, (registries) => packageSkill(opts.skillPath, {
       outputPath: safePath.join(buildOut, skillName),
       formats: ['directory'],
-    });
+      registries,
+    }));
     const builtDir = result.outputPath;
     const hash = await hashDirectory(builtDir);
     const stagedDir = await stageDirInto(builtDir, ctx, `workspace-${skillName}-${hash}`);

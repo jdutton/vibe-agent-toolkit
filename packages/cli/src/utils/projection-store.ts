@@ -63,14 +63,14 @@ import { installSqliteWarningFilter } from './sqlite-experimental-warning.js';
  * process.
  *
  * 🔑 **The store is on by default, so this is the escape hatch rather than the
- * selector.** Same shape and same reason as `VAT_RESOURCES_CRAWL`: any value the
+ * selector.** Any value the
  * off-parser does not read as false leaves the store selected, including the
  * historical `sqlite`, so every script and lab arm that names it explicitly
  * keeps working and keeps MEANING the same thing. See
  * {@link PROJECTION_STORE_OFF} for the one way out.
  *
  * An environment switch rather than a config field, for the same reason
- * `VAT_INVENTORY_CRAWL` and `VAT_RESOURCES_CRAWL` are: it selects which
+ * `VAT_INVENTORY_CRAWL` and `VAT_EXTENT_SOURCE` are: it selects which
  * INSTRUMENT runs, not what the project means, and it has to be reachable from
  * the lab, which spawns the binary and controls its environment. A config field
  * would put the A and B arms inside the subject's own tree, where a measurement

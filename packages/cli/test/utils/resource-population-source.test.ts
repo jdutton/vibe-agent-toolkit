@@ -1,30 +1,24 @@
 /**
- * `withResourcePopulationSource` — the one seam that puts a command which does
- * NOT go through `loadResourcesWithConfig` onto the projection lane.
+ * The run's population source (`withRunContext`'s `run.population.source`) — the
+ * one source every verb's registry crawls through, whether or not it goes
+ * through `loadResourcesWithConfig`.
  *
- * `vat skills build`, `vat skills validate` and `vat claude plugin build` all
- * build their own registry, so they cannot reach the lane through the resource
- * loader. This helper is the shared answer: same selector, same store, same
- * git-ignore oracle, handed back as a source the caller threads into whichever
- * builder it owns.
+ * `vat skills build`, `vat skills validate` and `vat claude plugin build` each
+ * build their own view of the run's registry, so they reach the population only
+ * through this source: same store, same git-ignore oracle.
  *
- * The assertions here are about the SELECTOR and the SOURCE'S ANSWER, never
- * about the environment being set — an opt-in that reports itself from the env
- * it read rather than from what it did is the exact failure this lane keeps
- * hitting.
+ * The assertions here are about the SOURCE'S ANSWER, never about the
+ * environment: a source that reports itself from the env it read rather than
+ * from what it did is the exact failure this seam keeps hitting.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
+import type { ResourcePopulationSource } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  RESOURCES_CRAWL_ENV,
-  RESOURCES_CRAWL_PROJECTION,
-  RESOURCES_CRAWL_WALK,
-  withResourcePopulationSource,
-} from '../../src/utils/resource-loader.js';
+import { withRunContext } from '../../src/utils/resource-loader.js';
 
 /** The two fixture members, named once so the writes and the expectation agree. */
 const GUIDE_REL = 'docs/guide.md';
@@ -40,45 +34,25 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  delete process.env[RESOURCES_CRAWL_ENV];
   rmSync(root, { recursive: true, force: true });
 });
 
-describe('withResourcePopulationSource', () => {
-  it('hands back a source when the selector is unset, because the projection lane is the default', async () => {
-    const received = await withResourcePopulationSource({ root }, async (source) => source);
+/**
+ * Run `work` against the population source of a run rooted at the fixture.
+ *
+ * @param work - What to do with the source, inside the run
+ * @returns Whatever `work` returned
+ */
+function withSource<T>(work: (source: ResourcePopulationSource) => Promise<T>): Promise<T> {
+  return withRunContext({ root }, (run) => work(run.population.source));
+}
 
-    expect(received).toBeDefined();
-  });
-
-  it('hands back NO source when opted out to the walk', async () => {
-    // The escape hatch has to actually reach this seam: an opt-out that still
-    // installed a population source would leave the walk unreachable, and the
-    // lane label would be the only thing that changed.
-    process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_WALK;
-
-    try {
-      const received = await withResourcePopulationSource({ root }, async (source) => source);
-
-      expect(received).toBeUndefined();
-    } finally {
-      delete process.env[RESOURCES_CRAWL_ENV];
-    }
-  });
-
-  it('hands back a source that enumerates the tree when the selector chose the projection lane', async () => {
+describe('the run\'s population source', () => {
+  it('enumerates the whole tree, unnarrowed', async () => {
     writeFileSync(safePath.join(root, GUIDE_REL), '# guide\n', 'utf-8');
     writeFileSync(safePath.join(root, ASSET_REL), 'asset', 'utf-8');
-    process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_PROJECTION;
 
-    const paths = await withResourcePopulationSource({ root }, async (source) => {
-      expect(source).toBeDefined();
-      // The root it declares is the root it may be asked about — the registry's
-      // guard compares exactly this, so a seam that handed back the wrong one
-      // would silently put every crawl back on the walk.
-      expect(source?.root).toBe(safePath.resolve(root));
-      return [...((await source?.enumerate(root, []))?.paths ?? [])];
-    });
+    const paths = await withSource(async (source) => [...(await source.enumerate(root, [], 'refuse')).paths]);
 
     // The source enumerates; it does NOT narrow. Narrowing to the caller's own
     // globs is `ResourceRegistry.crawl`'s job, and asserting the unnarrowed
@@ -91,12 +65,12 @@ describe('withResourcePopulationSource', () => {
   it('carries the enumeration\'s own outcome and enumerator out with its paths', async () => {
     writeFileSync(safePath.join(root, GUIDE_REL), '# guide\n', 'utf-8');
 
-    const enumeration = await withResourcePopulationSource({ root }, async (source) => source?.enumerate(root, []));
+    const enumeration = await withSource((source) => source.enumerate(root, [], 'refuse'));
 
     // A temp tree outside any repository has no store, so the run derived, on
     // the filesystem enumerator — told by the enumeration, not by a side channel.
-    expect(enumeration?.outcome).toEqual({ population: 'derived', stored: 'no-store' });
-    expect(enumeration?.extentSource).toBe('filesystem');
+    expect(enumeration.outcome).toEqual({ population: 'derived', stored: 'no-store' });
+    expect(enumeration.extentSource).toBe('filesystem');
   });
 
   it('says nothing about a binary it declined: membership verbs stay quiet', async () => {
@@ -116,7 +90,7 @@ describe('withResourcePopulationSource', () => {
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(capture);
 
     try {
-      const paths = await withResourcePopulationSource({ root }, async (source) => (await source?.enumerate(root, []))?.paths ?? []);
+      const paths = await withSource(async (source) => (await source.enumerate(root, [], 'refuse')).paths);
       // The premise: the binary really was in the population.
       expect(paths.map((p) => safePath.relative(root, p))).toContain('docs/logo.png');
     } finally {

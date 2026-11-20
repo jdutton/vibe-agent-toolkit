@@ -42,7 +42,7 @@
  * ## Both arms are driven the way `extract-skill.ts` drives them
  *
  * - **Walker arm.** `crawlSkillLinkRegistry(root)` — the markdown-only registry
- *   the extractor builds, NOT `createProjectRegistry` — then one `walkLinkGraph`
+ *   the extractor builds, NOT a project-wide registry — then one `walkLinkGraph`
  *   per skill with {@link walkOptionsFor}, which is `collectLinkedFiles`'s option
  *   object transcribed, conditional `gitTracker` assignment included.
  * - **Closure arm.** One `populate()` per (root, tracker state), with the
@@ -68,6 +68,7 @@ import {
   type Projection,
   type ProjectionBase,
   RunContentCache,
+  withPopulationRun,
 } from '@vibe-agent-toolkit/resources';
 import {
   mkdirSyncReal,
@@ -335,12 +336,15 @@ async function populateCorpus(
     parameters[inventoryExtentContributorId(skill.name)] = declarationFor(skill, gitTracker !== undefined);
   }
 
-  const { projection } = await populate({
-    root,
-    registry,
-    parameters,
-    ...(gitTracker !== undefined && { gitTracker }),
-  });
+  const { projection } = await withPopulationRun((run) =>
+    populate({
+      root,
+      registry,
+      run,
+      parameters,
+      ...(gitTracker !== undefined && { gitTracker }),
+    }),
+  );
 
   const extentIdByName = new Map<string, string>();
   for (const skill of skills) {

@@ -60,7 +60,7 @@ describe('following walkers on a tree with a link back into itself', () => {
     const skillDir = plantLoopedSkill(tree());
     if (skillDir === '') skip('host cannot create symlinks');
 
-    await expect(checkUnreferencedFiles(skillDir)).rejects.toThrow(DirectoryWalkRevisitedError);
+    await expect(checkUnreferencedFiles(skillDir, [], { dispatcher: undefined })).rejects.toThrow(DirectoryWalkRevisitedError);
   });
 
   // The validator walks whatever tree its caller hands it — an author's skill, or a ZIP extracted
@@ -81,6 +81,6 @@ describe('following walkers on a tree with a link back into itself', () => {
 
     expect(await hashDirectory(skillDir)).toMatch(/^[0-9a-f]{64}$/);
     expect(detectBundledResourceWithoutLinks('scripts/a.sh', skillDir, [], skillDir, 'source')).toEqual([]);
-    expect(Array.isArray(await checkUnreferencedFiles(skillDir))).toBe(true);
+    expect(Array.isArray(await checkUnreferencedFiles(skillDir, [], { dispatcher: undefined }))).toBe(true);
   });
 });

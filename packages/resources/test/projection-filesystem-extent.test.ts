@@ -436,7 +436,7 @@ describe('FilesystemExtentContributor content demand', () => {
  * A directory the walk could not list is a gap in the POPULATION, and the
  * projection lane refuses the run for it rather than answering with a shorter
  * list — see `ListingRefusals` in `crawl-source.ts` for why (a cached
- * population cannot carry the gap; the incumbent walk refuses the same way),
+ * population cannot carry the gap),
  * and for the one case it does NOT stop (gitignored territory, pinned by
  * `projection-crawl-source-refused-listing.test.ts`).
  *

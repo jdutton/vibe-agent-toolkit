@@ -5,12 +5,10 @@
 
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 
-
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { packageSkill } from '../../src/skill-packager.js';
-import { packageInPlace } from '../test-helpers.js';
+import { packageInPlace , packageSkillInRun } from '../test-helpers.js';
 
 const KB_PATH = 'knowledge-base';
 const GUIDES_PATH = 'guides';
@@ -100,7 +98,7 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
       const skillPath = safePath.join(testProjectDir, SKILL_MD);
       const outputPath = safePath.join(tempDir, 'output-resource-id');
 
-      await packageSkill(skillPath, {
+      await packageSkillInRun(skillPath, {
         outputPath,
         resourceNaming: RESOURCE_ID_STRATEGY,
         excludeNavigationFiles: false,
@@ -116,7 +114,7 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
       const skillPath = safePath.join(testProjectDir, SKILL_MD);
       const outputPath = safePath.join(tempDir, 'output-resource-id-stripped');
 
-      await packageSkill(skillPath, {
+      await packageSkillInRun(skillPath, {
         outputPath,
         resourceNaming: RESOURCE_ID_STRATEGY,
         stripPrefix: KB_PATH,
@@ -140,7 +138,7 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
       
       // Test with trailing slash
       const output1 = safePath.join(tempDir, 'output-with-slash');
-      await packageSkill(skillPath, {
+      await packageSkillInRun(skillPath, {
         outputPath: output1,
         resourceNaming: RESOURCE_ID_STRATEGY,
         stripPrefix: 'knowledge-base/',
@@ -149,7 +147,7 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
 
       // Test without trailing slash
       const output2 = safePath.join(tempDir, 'output-without-slash');
-      await packageSkill(skillPath, {
+      await packageSkillInRun(skillPath, {
         outputPath: output2,
         resourceNaming: RESOURCE_ID_STRATEGY,
         stripPrefix: KB_PATH,
@@ -169,7 +167,7 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
       const skillPath = safePath.join(testProjectDir, SKILL_MD);
       const outputPath = safePath.join(tempDir, 'output-preserve-path');
 
-      await packageSkill(skillPath, {
+      await packageSkillInRun(skillPath, {
         outputPath,
         resourceNaming: PRESERVE_PATH_STRATEGY,
         excludeNavigationFiles: false,
@@ -184,7 +182,7 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
       const skillPath = safePath.join(testProjectDir, SKILL_MD);
       const outputPath = safePath.join(tempDir, 'output-preserve-stripped');
 
-      await packageSkill(skillPath, {
+      await packageSkillInRun(skillPath, {
         outputPath,
         resourceNaming: PRESERVE_PATH_STRATEGY,
         stripPrefix: KB_PATH,
@@ -204,7 +202,7 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
       
       // Test with trailing slash
       const output1 = safePath.join(tempDir, 'output-path-slash');
-      await packageSkill(skillPath, {
+      await packageSkillInRun(skillPath, {
         outputPath: output1,
         resourceNaming: PRESERVE_PATH_STRATEGY,
         stripPrefix: `${KB_PATH}/`,
@@ -213,7 +211,7 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
 
       // Test without trailing slash
       const output2 = safePath.join(tempDir, 'output-path-no-slash');
-      await packageSkill(skillPath, {
+      await packageSkillInRun(skillPath, {
         outputPath: output2,
         resourceNaming: PRESERVE_PATH_STRATEGY,
         stripPrefix: KB_PATH,
@@ -231,7 +229,7 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
       const skillPath = safePath.join(testProjectDir, SKILL_MD);
       const outputPath = safePath.join(tempDir, 'output-nested-prefix');
 
-      await packageSkill(skillPath, {
+      await packageSkillInRun(skillPath, {
         outputPath,
         resourceNaming: RESOURCE_ID_STRATEGY,
         stripPrefix: `${KB_PATH}/${GUIDES_PATH}`,
@@ -248,7 +246,7 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
       const skillPath = safePath.join(testProjectDir, SKILL_MD);
       const outputPath = safePath.join(tempDir, 'output-no-match');
 
-      await packageSkill(skillPath, {
+      await packageSkillInRun(skillPath, {
         outputPath,
         resourceNaming: RESOURCE_ID_STRATEGY,
         stripPrefix: 'does-not-exist',

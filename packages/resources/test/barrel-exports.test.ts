@@ -69,7 +69,6 @@ const BARREL_EXPORTS = [
   'CONFIG_LOAD_CODE',
   'CONTENT_PARSING_DERIVE',
   'CONTENT_PARSING_SKIP',
-  'CRAWL_LANES',
   'CRAWL_SOURCE_KINDS',
   'ChangedFileRowSchema',
   'ClaudeContextChainRowSchema',

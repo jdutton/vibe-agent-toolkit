@@ -7,7 +7,14 @@ import { registerScratchTmpdir, setupSyncTempDirSuite } from '@vibe-agent-toolki
 import { afterAll, afterEach, beforeAll, beforeEach, expect } from 'vitest';
 import type { z } from 'zod';
 
-import { packageSkillInto, type PackageSkillOptions, type PackageSkillResult } from '../src/skill-packager.js';
+import { packageSkill, packageSkillInto, type PackageSkillOptions, type PackageSkillResult } from '../src/skill-packager.js';
+import {
+  type PackagingValidationResult,
+  type SkillPackagingConfig,
+  type SkillValidationSharedContext,
+  validateSkillForPackaging,
+} from '../src/validators/packaging-validator.js';
+import { withSkillRegistries } from '../src/validators/run-skill-registries.js';
 import { validateSkill } from '../src/validators/skill-validator.js';
 import type { LinkedFileValidationResult, ValidationResult } from '../src/validators/types.js';
 
@@ -36,11 +43,55 @@ export function setupParseRoute(): ParseRoute {
  * @param skillPath - The SKILL.md
  * @param options - Packaging options; `outputPath` is where the bundle is written
  */
-export async function packageInPlace(
+export function packageInPlace(
   skillPath: string,
-  options: Omit<PackageSkillOptions, 'replaceExistingOutput' | 'dryRun'> & { outputPath: string },
+  options: Omit<TestPackageSkillOptions, 'replaceExistingOutput' | 'dryRun'> & { outputPath: string },
 ): Promise<PackageSkillResult> {
-  return (await packageSkillInto(skillPath, options.outputPath, options, [])).result;
+  return withSkillRegistries(path.dirname(skillPath), async (registries) =>
+    (await packageSkillInto(skillPath, options.outputPath, { ...options, registries }, [])).result);
+}
+
+/** Packaging options as a test states them: the run's `registries` are the helper's. */
+export type TestPackageSkillOptions = Omit<PackageSkillOptions, 'registries'>;
+
+/**
+ * `packageSkill` in a run of its own: the skill registries a library caller outside a verb
+ * holds (`withSkillRegistries`), homed on the skill's directory.
+ *
+ * @param skillPath - The SKILL.md
+ * @param options - Packaging options, without `registries`
+ * @returns The package result
+ */
+export function packageSkillInRun(skillPath: string, options: TestPackageSkillOptions): Promise<PackageSkillResult> {
+  return withSkillRegistries(path.dirname(skillPath), (registries) => packageSkill(skillPath, { ...options, registries }));
+}
+
+/**
+ * `validateSkillForPackaging` in a run of its own, with the read-only verb's shared context
+ * (`'refuse'`, no outputs, no dispatcher) unless `shared` says otherwise.
+ *
+ * @param skillPath - The SKILL.md
+ * @param resourcesValidation - The resources validation config
+ * @param packagingConfig - The skill's packaging config
+ * @param context - Source or built
+ * @param shared - Shared-context fields that differ from the read-only verb's
+ * @returns The validation result
+ */
+export function validateForPackagingInRun(
+  skillPath: string,
+  resourcesValidation: Parameters<typeof validateSkillForPackaging>[1],
+  packagingConfig?: SkillPackagingConfig,
+  context: 'source' | 'built' = 'source',
+  shared: Partial<Omit<SkillValidationSharedContext, 'registries'>> = {},
+): Promise<PackagingValidationResult> {
+  return withSkillRegistries(path.dirname(skillPath), (registries) =>
+    validateSkillForPackaging(skillPath, resourcesValidation, packagingConfig, context, {
+      unreadable: 'refuse',
+      outputs: [],
+      dispatcher: undefined,
+      ...shared,
+      registries,
+    }));
 }
 
 export function setupTempDir(prefix: string): { getTempDir: () => string } {
@@ -552,21 +603,18 @@ export function createAmbiguousDirectory(
  * @param metadata - Optional skill metadata for validation
  * @returns Validation result from validateSkillForPackaging
  */
-export async function setupPackagingValidationTest(
+export function setupPackagingValidationTest(
 	getTempDir: () => string,
 	contentOptions: { name: string; description: string },
 	bodyContent: string,
 	linkedFiles: Record<string, string> = {},
 	metadata?: unknown
 ): Promise<unknown> {
-	const { validateSkillForPackaging } = await import('../src/validators/packaging-validator.js');
-	const { createSkillContent, createTransitiveSkillStructure } = await import('./test-helpers.js');
-
 	const tempDir = getTempDir();
 	const content = createSkillContent(contentOptions, bodyContent);
 	const { skillPath } = createTransitiveSkillStructure(tempDir, linkedFiles, content);
 
-	return validateSkillForPackaging(skillPath, {}, metadata as never);
+	return validateForPackagingInRun(skillPath, {}, metadata as never);
 }
 
 /**
@@ -583,19 +631,17 @@ export async function setupPackagingValidationTest(
  * @param contentOptions - Options for createSkillContent
  * @returns Validation result with metadata
  */
-export async function setupTransitiveValidationTest(
+export function setupTransitiveValidationTest(
 	getTempDir: () => string,
 	files: Record<string, string>,
 	skillBody: string,
 	contentOptions: { name: string; description: string }
 ): Promise<unknown> {
-	const { validateSkillForPackaging } = await import('../src/validators/packaging-validator.js');
-
 	const tempDir = getTempDir();
 	const skillContent = createSkillContent(contentOptions, skillBody);
 	const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 
-	return validateSkillForPackaging(skillPath, {});
+	return validateForPackagingInRun(skillPath, {});
 }
 
 /**
@@ -618,13 +664,11 @@ export async function setupNavigationValidationTest(
 	skillBody: string,
 	contentOptions: { name: string; description: string }
 ): Promise<{ result: unknown; findNavWarn: () => unknown }> {
-	const { validateSkillForPackaging } = await import('../src/validators/packaging-validator.js');
-
 	const tempDir = getTempDir();
 	const skillContent = createSkillContent(contentOptions, skillBody);
 	const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 
-	const result = await validateSkillForPackaging(skillPath, {});
+	const result = await validateForPackagingInRun(skillPath, {});
 
 	return {
 		result,

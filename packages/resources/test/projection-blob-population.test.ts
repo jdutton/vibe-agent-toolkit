@@ -34,6 +34,7 @@ import {
   baseBuilderForRoot,
   type RealizationOrder,
 } from './blob-fixture-population.js';
+import { inOwnRun } from './helpers/population-run.js';
 import { registryWithClosure, setupSubdirTestSuite } from './test-helpers.js';
 
 const SKILL_KIND = 'skill';
@@ -294,7 +295,7 @@ function closureDeclaration(): Record<string, JsonValue> {
 
 /** Run the whole driver over the skill corpus. */
 async function populateSkillCorpus(): Promise<{ projection: Projection }> {
-  const { projection } = await populate({
+  const { projection } = await inOwnRun(populate, {
     root: suite.tempDir,
     registry: registryWithClosure(EXTENT_NAME, SKILL_KIND),
     parameters: { [`closure:${EXTENT_NAME}`]: closureDeclaration() },
@@ -403,7 +404,7 @@ describe('populateBlobs', () => {
     const registry = new ContributorRegistry();
     registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
 
-    const { projection } = await populate({ root: suite.tempDir, registry });
+    const { projection } = await inOwnRun(populate, { root: suite.tempDir, registry });
 
     const keyOf = (path: string): string => {
       const key = projection.resourceRealizations.find((row) => row.path === path)?.contentKey;

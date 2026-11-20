@@ -301,7 +301,7 @@ interface LinkedGlobRepo {
  * Build a REAL git repository whose `gen/packs/alpha/` tree is both matched by a
  * glob `files:` entry and linked from SKILL.md by its SOURCE path.
  *
- * `git init` + `.gitignore` + a commit are deliberate. `createProjectRegistry`
+ * `git init` + `.gitignore` + a commit are deliberate. The packaging registry
  * answers a crawl with `git ls-files` whenever the base is inside a repo, and
  * the walker's gitignore rule only has an opinion when a repo exists; a bare
  * `mkdtemp` tree takes the manual-walk fallback and silently disables both, so

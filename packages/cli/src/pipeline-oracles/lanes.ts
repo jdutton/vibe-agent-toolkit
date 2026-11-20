@@ -22,7 +22,6 @@
  * holds every lane to the projection's verdict.
  */
 
-import { crawlAndResolveRegistry, createProjectRegistry } from '@vibe-agent-toolkit/agent-skills';
 import { crawlSkillLinkRegistry } from '@vibe-agent-toolkit/claude-marketplace';
 import { DEFAULT_RESOURCE_EXCLUDE, DEFAULT_RESOURCE_INCLUDE, type ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import type { CrawlOptions, UnreadablePolicy } from '@vibe-agent-toolkit/utils/crawl';
@@ -30,7 +29,7 @@ import type { CrawlOptions, UnreadablePolicy } from '@vibe-agent-toolkit/utils/c
 import { skillsValidateRegistries } from '../commands/skills/validate.js';
 import { loadConfig } from '../utils/config-loader.js';
 import { createLogger } from '../utils/logger.js';
-import { loadResourcesWithConfig, withRunContext } from '../utils/resource-loader.js';
+import { loadResourcesWithConfig, runSkillRegistries, withRunContext } from '../utils/resource-loader.js';
 
 import type { LaneId } from './types.js';
 
@@ -55,7 +54,11 @@ export interface LaneDefinition {
    * where a measurement must refuse — so each capture supplies its own.
    */
   crawlOptions: (projectRoot: string) => Omit<CrawlOptions, 'unreadable'>;
-  /** The production builder. Called as-is; never reimplemented. */
+  /**
+   * The production builder. Called as-is; never reimplemented. Each call is one
+   * run of its own (`withRunContext` rooted at the project), as the verb it
+   * mirrors opens one: the registry it returns is data once the run closes.
+   */
   build: (projectRoot: string) => Promise<ResourceRegistry>;
 }
 
@@ -118,11 +121,13 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
       filesOnly: true,
     }),
     // An oracle arm is a complete population or nothing: refuse, like the verbs it mirrors.
-    build: (projectRoot) => crawlAndResolveRegistry(projectRoot, { outputs: [], unreadable: 'refuse' }),
+    build: (projectRoot) => withRunContext({ root: projectRoot }, (run) =>
+      runSkillRegistries(run).forRoot(projectRoot, { outputs: [], unreadable: 'refuse' }),
+    ),
   },
   {
     id: 'skills-build',
-    description: '`vat skills build` via createProjectRegistry — config-aware but markdown-only',
+    description: '`vat skills build` via the packaging registry — config-aware but markdown-only',
     crawlOptions: (projectRoot) => ({
       baseDir: projectRoot,
       outputs: [],
@@ -131,7 +136,9 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
       absolute: true,
       filesOnly: true,
     }),
-    build: (projectRoot) => createProjectRegistry(projectRoot, { outputs: [] }),
+    build: (projectRoot) => withRunContext({ root: projectRoot }, (run) =>
+      runSkillRegistries(run).packagingRegistry(projectRoot, []),
+    ),
   },
   {
     id: 'inventory',
@@ -165,7 +172,8 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
     // `mimeType`s and this copy did not, so the oracle described a lane nobody
     // runs. Naming the builder is what makes that class of drift impossible.
     build: (projectRoot) => withRunContext({ root: projectRoot }, (run) =>
-      skillsValidateRegistries(run, projectRoot, loadConfig(projectRoot, 'source')).forRoot(projectRoot, []),
+      skillsValidateRegistries(run, projectRoot, loadConfig(projectRoot, 'source'))
+        .forRoot(projectRoot, { unreadable: 'refuse', outputs: [] }),
     ),
   },
 ]);

@@ -1,5 +1,5 @@
 /**
- * Fault matrix: `vat skills package`, o-force — shard 6 of 19 (the injections with `shardOf(id, 19) === 5`).
+ * Fault matrix: `vat skills package`, o-force — shard 6 of 29 (the injections with `shardOf(id, 29) === 5`).
  * The cases and the shard table are `fault-matrix/cases/build-family.ts`; the runner is `fault-matrix/matrix.ts`.
  */
 import { it } from 'vitest';

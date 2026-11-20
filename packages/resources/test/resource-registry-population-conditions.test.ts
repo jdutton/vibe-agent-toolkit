@@ -8,12 +8,12 @@
  *   `COLLECTION_MIME_CONFLICT` `realization_conditions` row that NO command
  *   read, and the registry lane "stayed silent about it" by its own docstring —
  *   so `vat resources validate` exited 0 and said nothing on either lane. The
- *   registry resolves the type for every admitted file itself, on both lanes,
- *   which makes its own accumulator the lane-independent witness.
+ *   registry resolves the type for every admitted file itself, which makes its
+ *   own accumulator the witness that does not depend on the population.
  * - **The population source.** A projection-backed enumeration carries the
  *   extent's `realization_conditions` (an unlistable gitignored directory is the
- *   motivating row); the walk has none. Whatever arrives is surfaced with the
- *   row's own code and severity, once per `(code, path)`.
+ *   motivating row). Whatever arrives is surfaced with the row's own code and
+ *   severity, once per `(code, path)`.
  *
  * Control: one collection ⇒ no finding; a source with no conditions ⇒ none.
  */
@@ -29,6 +29,8 @@ import { ResourceRegistry } from '../src/resource-registry.js';
 import type { ProjectConfig } from '../src/schemas/project-config.js';
 import type { RealizationConditionRow } from '../src/schemas/projection-resources.js';
 import type { ValidationIssue } from '../src/schemas/validation-result.js';
+
+import { crawlInRun } from './helpers/population-run.js';
 
 const DOC = 'docs/guide.md';
 const LOCKED = 'build/locked';
@@ -50,17 +52,19 @@ function configTyping(second: string | undefined): ProjectConfig {
   };
 }
 
-/** Crawl `root` under `config` on the walk lane (no population source) and validate. */
-async function validateWalk(root: string, config: ProjectConfig): Promise<ValidationIssue[]> {
+/**
+ * Crawl `root` under `config` through a population that is told no collections,
+ * so the registry's own resolver is the only witness, and validate.
+ */
+async function validateCrawled(root: string, config: ProjectConfig): Promise<ValidationIssue[]> {
   const registry = new ResourceRegistry({ baseDir: root, config });
-  await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: root, include: ['**/*.md'] });
+  await crawlInRun(registry, { unreadable: 'refuse', outputs: [], baseDir: root, include: ['**/*.md'] });
   return (await registry.validate({ skipGitIgnoreCheck: true })).issues;
 }
 
 /** A source that hands back the tree's one file plus whatever conditions it is given. */
 function sourceWith(root: string, conditions: readonly RealizationConditionRow[]): ResourcePopulationSource {
   return {
-    root,
     enumerate: async () => ({
       paths: [safePath.join(root, DOC)],
       conditions,
@@ -94,9 +98,9 @@ describe('ResourceRegistry surfaces population-time conditions', () => {
     writeFileSync(safePath.join(root, DOC), '# guide\n');
   });
 
-  describe('COLLECTION_MIME_CONFLICT from the registry\'s own resolver (walk lane)', () => {
+  describe('COLLECTION_MIME_CONFLICT from the registry\'s own resolver', () => {
     it('is an error naming the file and both collections, so the run is status: error', async () => {
-      const issues = await validateWalk(root, configTyping('text/plain'));
+      const issues = await validateCrawled(root, configTyping('text/plain'));
 
       const conflicts = issues.filter((issue) => issue.code === MIME_CONFLICT);
       expect(conflicts).toHaveLength(1);
@@ -110,12 +114,12 @@ describe('ResourceRegistry surfaces population-time conditions', () => {
     });
 
     it('is absent when a single collection types the file (control)', async () => {
-      const issues = await validateWalk(root, configTyping(undefined));
+      const issues = await validateCrawled(root, configTyping(undefined));
       expect(issues.filter((issue) => issue.code === MIME_CONFLICT)).toEqual([]);
     });
 
     it('is absent when two collections AGREE on the type (control)', async () => {
-      const issues = await validateWalk(root, configTyping('text/markdown'));
+      const issues = await validateCrawled(root, configTyping('text/markdown'));
       expect(issues.filter((issue) => issue.code === MIME_CONFLICT)).toEqual([]);
     });
   });

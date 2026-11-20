@@ -22,12 +22,13 @@ import {
   type PackageSkillResult,
   type PackagingValidationResult,
   type PluginLocalSkillIndex,
+  type RunSkillRegistries,
   type SkillBuildSpec,
   type SkillPackageOutcome,
   type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
-import type { ResourcePopulationSource, SkillsConfig } from '@vibe-agent-toolkit/resources';
+import type { SkillsConfig } from '@vibe-agent-toolkit/resources';
 import {
   allowUnusedIssues,
   buildReport,
@@ -68,7 +69,7 @@ import {
 } from '../../utils/issue-rendering.js';
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
-import { withResourcePopulationSource } from '../../utils/resource-loader.js';
+import { runSkillRegistries, withRunContext } from '../../utils/resource-loader.js';
 import { verdictBanner } from '../../utils/run-integrity.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig, publishScope } from '../../utils/skill-packaging-config.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
@@ -362,14 +363,11 @@ interface ValidateSkillInput {
    */
   suiteProbe: ConventionalSuiteProbe;
   /**
-   * The RUN's enumeration lane, or `undefined` to keep the incumbent walk.
-   *
-   * This lane has no shared registry to inherit one from — unlike
-   * `vat skills validate`, this command passes none — so the validator builds a
-   * private registry per project root and this is the only thing that can put it
-   * anywhere but the walk.
+   * The RUN's skill registries, shared with the PACKAGING phase below: every skill
+   * in the loop is validated against one view per project root, so the run pays
+   * one crawl per root, not one per skill.
    */
-  populationSource: ResourcePopulationSource | undefined;
+  registries: RunSkillRegistries;
   verbose: boolean;
 }
 
@@ -388,7 +386,7 @@ interface ValidateSkillInput {
 async function validateSkillBeforeBuild(
   input: ValidateSkillInput,
 ): Promise<SkillValidationFailure | undefined> {
-  const { skillName, sourcePath, packagingConfig, resourcesValidation, logger, locationRoot, allowLedger, projectSkills, suiteProbe, populationSource, verbose, outputs } = input;
+  const { skillName, sourcePath, packagingConfig, resourcesValidation, logger, locationRoot, allowLedger, projectSkills, suiteProbe, registries, verbose, outputs } = input;
   logger.debug(`   Validating skill: ${skillName}`);
 
   // The run's ledger, not this call's: an allow entry scoped to a SOURCE
@@ -406,7 +404,7 @@ async function validateSkillBeforeBuild(
     {
       allowLedger,
       projectSkills,
-      dispatcher: undefined,
+      dispatcher: registries.dispatcher,
       // A build must not ship a shorter bundle: a directory the validator's own
       // registry crawl cannot list refuses the run by name.
       unreadable: 'refuse',
@@ -415,9 +413,9 @@ async function validateSkillBeforeBuild(
       // lane resolves test input for the subject AND every entry in
       // `projectSkills`, so a per-call probe is S² over the loop.
       suiteProbe,
-      // The RUN's source, so every skill in the loop shares one memo entry
-      // behind `crawlAndResolveRegistry` and the run pays one crawl, not N.
-      ...(populationSource !== undefined && { populationSource }),
+      // The RUN's registries, so every skill in the loop shares one view per
+      // project root and the run pays one crawl, not N.
+      registries,
     },
   );
   applyConfigVerdicts(
@@ -653,7 +651,7 @@ function finalOutputPath(cwd: string, skillName: string): string {
  *
  * 1. **Same filesystem.** Beside the destination under `dist/`, so the swap never copies a tree
  *    that can be tens of thousands of files.
- * 2. **Invisible to the run.** `createProjectRegistry` crawls the project for `**\/*.md` and
+ * 2. **Invisible to the run.** The run's skill registry crawls the project for `**\/*.md` and
  *    excludes `**\/dist/**`, so nothing staged can enter the registry the packager resolves
  *    links against; the staged name's leading dot is a second belt (a `files:` glob like
  *    `dist/**` does not descend into dot-directories).
@@ -995,24 +993,13 @@ async function buildInto(input: SkillBuildRunInput, target: BuildTarget, staged:
   const buildable: BuildSkillSpec[] = [];
   const validationFailures: SkillValidationFailure[] = [];
 
-  // ONE bracket over the WHOLE run — both validation lanes and the packaging —
-  // rather than over `packageSkills` alone.
-  //
-  // Two properties depend on it, and neither is cosmetic. First, every
-  // enumeration of the SOURCE tree this run performs is then on the lane the
-  // process selected: the pre-build check builds a private registry through
-  // `crawlAndResolveRegistry`, and outside the bracket it had no source to reach,
-  // so a projection-lane build still did one full walk. (Each skill's POST-build
-  // check is deliberately NOT on the lane — `runPostBuildValidation` passes no
-  // source, because it validates the built output rather than the source tree.
-  // See its docstring in `skill-packager.ts`.) Second, the memo behind that crawl
-  // is keyed on the source's IDENTITY, so one closure for the run means one crawl
-  // for the run; a bracket per phase would hand out two closures and buy a second
-  // crawl to save the first.
-  //
-  // `populationSource` is `undefined` when the walk stays selected, and every
-  // consumer below treats that as "keep the incumbent" — the default path is
-  // structurally unchanged.
+  // ONE run over the WHOLE build — both validation lanes and the packaging —
+  // rather than over `packageSkills` alone: every enumeration of the SOURCE tree
+  // this build performs reads through the run's one population, and the run's
+  // skill registries serve each root's view to every skill, so one run means one
+  // crawl per root; a run per phase would buy a second crawl to save the first.
+  // (Each skill's POST-build check validates the built output rather than the
+  // source tree; see `runPostBuildValidation` in `skill-packager.ts`.)
   // Run-scoped for the same reason `projectSkills` is, and it is the more expensive
   // half: resolving a skill's test-input dirs probes the filesystem for a conventional
   // eval suite under the subject AND under every entry of `projectSkills`, so a probe
@@ -1029,8 +1016,9 @@ async function buildInto(input: SkillBuildRunInput, target: BuildTarget, staged:
   // them is the run's destination, never its input.
   const outputs = [target.dest, staged, ...input.runOutputs];
 
-  const outcomes = await withResourcePopulationSource({ root: cwd }, async (populationSource) => {
-    // In order: shared population source, suite probe and logger; failures listed in spec order.
+  const outcomes = await withRunContext({ root: cwd }, async (run) => {
+    const registries = runSkillRegistries(run);
+    // In order: shared registries, suite probe and logger; failures listed in spec order.
     await forEachInOrder(specs, async (spec) => {
       const { skill, packagingConfig } = spec;
       logger.info(`\nBuilding skill: ${skill.name}`);
@@ -1047,7 +1035,7 @@ async function buildInto(input: SkillBuildRunInput, target: BuildTarget, staged:
         allowLedger,
         projectSkills,
         suiteProbe,
-        populationSource,
+        registries,
         verbose,
         outputs,
       });
@@ -1075,15 +1063,9 @@ async function buildInto(input: SkillBuildRunInput, target: BuildTarget, staged:
       ),
     }));
 
-    // `packageSkills` builds THE registry for the run, so this is the only seam
-    // that can put `vat skills build` — and therefore `vat build`'s packaging
-    // phase — on the lane. The registry's markdown-only `include` is re-applied
-    // to whatever the source offers, so what gets packaged is unchanged; only how
-    // the file list was obtained differs.
-    return packageSkills(buildSpecs, cwd, allowLedger, {
-      outputs,
-      ...(populationSource !== undefined && { populationSource }),
-    });
+    // `packageSkills` crawls THE packaging registry for the run, through the same
+    // registries the validation above used.
+    return packageSkills(buildSpecs, cwd, allowLedger, { registries, outputs });
   });
 
   throwPackagerDefect(outcomes);

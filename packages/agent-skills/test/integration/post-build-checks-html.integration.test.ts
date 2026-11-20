@@ -67,7 +67,7 @@ describe('post-build checks: HTML/HTM file support', () => {
       // missing.html intentionally absent — the link inside page.html is broken.
 
       // Act
-      const issues = await checkBrokenPackagedLinks(outputDir);
+      const issues = await checkBrokenPackagedLinks(outputDir, [], { dispatcher: undefined });
 
       // Assert: HTML file is checked and the broken link is reported as an error
       expect(issues.map(i => i.code)).toContain(PACKAGED_BROKEN_LINK);
@@ -88,7 +88,7 @@ describe('post-build checks: HTML/HTM file support', () => {
       );
 
       // Act
-      const issues = await checkBrokenPackagedLinks(outputDir);
+      const issues = await checkBrokenPackagedLinks(outputDir, [], { dispatcher: undefined });
 
       // Assert: valid HTML links produce no broken-link issue
       expect(issues.filter(i => i.code === PACKAGED_BROKEN_LINK)).toHaveLength(0);
@@ -111,7 +111,7 @@ describe('post-build checks: HTML/HTM file support', () => {
       );
 
       // Act
-      const issues = await checkUnreferencedFiles(outputDir);
+      const issues = await checkUnreferencedFiles(outputDir, [], { dispatcher: undefined });
 
       // Assert: traversal follows HTML <a href> links so linked-page.html is NOT unreferenced
       const unreferencedLocations = issues
@@ -131,7 +131,7 @@ describe('post-build checks: HTML/HTM file support', () => {
       `<!-- ${randomUUID()} -->\n${'<a href="../SKILL.md">l</a>\n'.repeat(20_000)}`,
     );
 
-    const issues = await checkBrokenPackagedLinks(outputDir);
+    const issues = await checkBrokenPackagedLinks(outputDir, [], { dispatcher: undefined });
 
     expect(issues).toEqual([expect.objectContaining({ code: 'RESOURCE_PARSE_LIMIT_EXCEEDED', location: `${RESOURCES_DIR}/page.html` })]);
   });
