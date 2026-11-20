@@ -1126,38 +1126,6 @@ interface RootListingGit {
   readonly names: () => Promise<readonly string[] | null>;
   /** The tracked links its checkout wrote as plain files (`gitLinksCheckedOutAsFiles`), read once per listed root, or `null` when git did not answer. */
   readonly linksCheckedOutAsFiles: () => ReadonlySet<string> | null;
-  /** Git's ignored territory at or above the root ({@link listIgnored}), or `null` when git did not answer. */
-  readonly ignored: () => IgnoredListing | null;
-}
-
-/** What one `ls-files --others --ignored --directory` saw, absolute. */
-export interface IgnoredListing {
-  /** The ignored directories git collapsed to one entry each. */
-  readonly directories: readonly string[];
-  /** The directories git could not open, each named on its stderr. */
-  readonly refusals: readonly DirectoryRefusal[];
-}
-
-/**
- * Git's ignored territory under `cwd`: `ls-files --others --ignored --directory`,
- * which opens every directory git does not ignore, so its stderr is the one
- * witness to each it could not open, however a tracker was initialized (a
- * tracker filled from an open snapshot asked git nothing). Asked of a directory
- * above a root, it answers for the root too: git's ignore rules are the
- * repository's, whatever the cwd.
- *
- * @param cwd - The directory to list under
- * @returns The collapsed directories and the refusals, or `null` when git did not answer
- */
-export function listIgnored(cwd: string): IgnoredListing | null {
-  const refusals: DirectoryRefusal[] = [];
-  const collapsed = gitLsOthers({ cwd, ignored: true, directory: true, unreadable: { degrade: (refusal) => refusals.push(refusal) } });
-  if (collapsed === null) return null;
-  const directories = collapsed
-    .filter((relativePath) => relativePath.endsWith('/'))
-    // Relative to `cwd`, as git prints it: never to the repository root.
-    .map((relativePath) => safePath.resolve(cwd, relativePath.slice(0, -1)));
-  return { directories, refusals };
 }
 
 /** The sentence a listing with no git answer refuses with. */
@@ -1202,8 +1170,8 @@ export function declinedLinkApplies(exclude: readonly string[]): (relativePath: 
  * Each git name is `lstat`ed once: a tracked file deleted from the working tree
  * is dropped, a link is declined, and a directory (git names one only for a
  * nested repository or submodule) is walked for its refusals, as a stored
- * population walks it. Git's `ls-files --others --ignored --directory`
- * ({@link listIgnored}), never read off the tracker (a tracker initialized
+ * population walks it. Git's `ls-files --others --ignored --directory`, asked
+ * by the listing itself and never read off the tracker (a tracker initialized
  * from an open snapshot asked git nothing), opens every directory git does not
  * ignore, so its stderr names each one it could not list; and each ignored
  * directory it collapses, outside {@link NEVER_CRAWL_GLOBS}, is walked for its
@@ -1265,9 +1233,7 @@ export class RootListing {
     if (names === null) throw gitNoAnswerError(root, NO_GIT_LISTING_CONSEQUENCE);
     const linksAsFiles = git.linksCheckedOutAsFiles();
     if (linksAsFiles === null) throw gitNoAnswerError(root, NO_LINKS_AS_FILES_CONSEQUENCE);
-    const ignored = git.ignored();
-    if (ignored === null) throw gitNoAnswerError(root, NO_GIT_LISTING_CONSEQUENCE);
-    return new RootListing('git', root, outputs, await gitListed(root, outputs, { names, linksAsFiles, ignored }));
+    return new RootListing('git', root, outputs, await gitListed(root, outputs, names, linksAsFiles));
   }
 
   /** One walk of `root`, pruning what a crawl never enters. */
@@ -1354,9 +1320,9 @@ function settleListed(refusals: ListingRefusals, refusal: DirectoryRefusal, terr
 async function gitListed(
   root: string,
   outputs: readonly string[],
-  git: { readonly names: readonly string[]; readonly linksAsFiles: ReadonlySet<string>; readonly ignored: IgnoredListing },
+  gitNames: readonly string[],
+  linksAsFiles: ReadonlySet<string>,
 ): Promise<Listed> {
-  const { names: gitNames, linksAsFiles } = git;
   const isContent = crawlPathFilter(['**/*'], [...NEVER_CONTENT_GLOBS]);
   const isCrawled = crawlPathFilter(['**/*'], [...NEVER_CRAWL_GLOBS]);
   const named = new NameSet(root);
@@ -1379,10 +1345,27 @@ async function gitListed(
   }
   named.addAncestors();
 
-  const refusals: ListedRefusal[] = git.ignored.refusals
-    .filter((refusal) => isPathUnderRoot(refusal.directory, root) && admitsUnderRoot(refusal.directory, root))
-    .map((refusal) => ({ refusal, territory: 'population' as const }));
-  const ignored = git.ignored.directories
+  const refusals: ListedRefusal[] = [];
+  // Every directory git does not ignore is opened for this listing, so its
+  // stderr is the one witness to each it could not open, however the tracker
+  // was initialized.
+  const collapsed = gitLsOthers({
+    cwd: root,
+    ignored: true,
+    directory: true,
+    unreadable: {
+      degrade: (refusal) => {
+        if (isPathUnderRoot(refusal.directory, root) && admitsUnderRoot(refusal.directory, root)) {
+          refusals.push({ refusal, territory: 'population' });
+        }
+      },
+    },
+  });
+  if (collapsed === null) throw gitNoAnswerError(root, NO_GIT_LISTING_CONSEQUENCE);
+  const ignored = collapsed
+    .filter((relativePath) => relativePath.endsWith('/'))
+    // Relative to `cwd`, this root, as git prints it: never to the repository root.
+    .map((relativePath) => safePath.resolve(root, relativePath.slice(0, -1)))
     .filter((directory) => isPathUnderRoot(directory, root) && isCrawled(relativeToRoot(directory, root)) && lstatShape(directory) === 'directory');
 
   await forEachInOrder(repositories, async (directory) => {

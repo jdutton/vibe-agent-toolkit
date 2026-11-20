@@ -43,6 +43,9 @@ const existingDirectories = new Set<string>();
 let lastRegistryOptions: Record<string, unknown> | undefined;
 let lastCrawlOptions: Record<string, unknown> | undefined;
 
+/** What every crawl the loader asks for carries beside its patterns. */
+const CRAWL_DEFAULTS = { unreadable: 'refuse', ignoredRefusals: 'record', outputs: [] } as const;
+
 /**
  * The crawl options minus the population source.
  *
@@ -214,8 +217,7 @@ describe('loadResourcesWithConfig', () => {
 
     expect(crawlPatterns()).toEqual({
       baseDir: PROJECT_ROOT,
-      unreadable: 'refuse', ignoredRefusals: 'record',
-      outputs: [],
+      ...CRAWL_DEFAULTS,
       include: INCLUDE_PATTERNS,
       exclude: EXCLUDE_PATTERNS,
     });
@@ -239,8 +241,7 @@ describe('loadResourcesWithConfig', () => {
     // prefix instead of a new base.
     expect(crawlPatterns()).toEqual({
       baseDir: PROJECT_ROOT,
-      unreadable: 'refuse', ignoredRefusals: 'record',
-      outputs: [],
+      ...CRAWL_DEFAULTS,
       include: SUBTREE_INCLUDE,
       exclude: EXCLUDE_PATTERNS,
     });
@@ -256,8 +257,7 @@ describe('loadResourcesWithConfig', () => {
 
     expect(crawlPatterns()).toEqual({
       baseDir: PROJECT_ROOT,
-      unreadable: 'refuse', ignoredRefusals: 'record',
-      outputs: [],
+      ...CRAWL_DEFAULTS,
       include: ['**/*.md', '**/*.html', '**/*.htm'],
       exclude: EXCLUDE_PATTERNS,
     });
@@ -272,8 +272,7 @@ describe('loadResourcesWithConfig', () => {
 
     expect(crawlPatterns()).toEqual({
       baseDir: safePath.resolve('.'),
-      unreadable: 'refuse', ignoredRefusals: 'record',
-      outputs: [],
+      ...CRAWL_DEFAULTS,
       include: ['docs/**/*.md', 'docs/**/*.html', 'docs/**/*.htm'],
       exclude: EXCLUDE_PATTERNS,
     });
@@ -288,7 +287,7 @@ describe('loadResourcesWithConfig', () => {
 
     const result = await load(EXPLICIT_PATH, PROJECT_ROOT, logger);
 
-    expect(crawlPatterns()).toEqual({ baseDir: EXPLICIT_PATH, unreadable: 'refuse', ignoredRefusals: 'record', outputs: [] });
+    expect(crawlPatterns()).toEqual({ baseDir: EXPLICIT_PATH, ...CRAWL_DEFAULTS });
     expect(warnCalls.join('\n')).toContain(EXPLICIT_PATH);
     expect(result.scanPath).toBe(EXPLICIT_PATH);
   });
@@ -381,7 +380,7 @@ describe('loadResourcesWithConfig', () => {
 
     const result = await load(undefined, PROJECT_ROOT, logger);
 
-    expect(crawlPatterns()).toEqual({ baseDir: PROJECT_ROOT, unreadable: 'refuse', ignoredRefusals: 'record', outputs: [] });
+    expect(crawlPatterns()).toEqual({ baseDir: PROJECT_ROOT, ...CRAWL_DEFAULTS });
     expect(result.config).toBeUndefined();
   });
 
