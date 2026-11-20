@@ -310,12 +310,10 @@ the home, the home with no store, and any run that degrades — is a **listing**
 when a view admits them and never hashed otherwise. In a repository the names are the root's
 `GitTracker` listing (`git ls-files --cached --others --exclude-standard`), never a tree snapshot:
 a snapshot is `git add --all` into a throwaway index, which reads and hashes every untracked file
-and fails on one file the OS will not let git read. A tracked name's shape is its index mode
-(`ls-files -s`, an index read with no tree walk): `120000` is a declined link, `160000` a
-submodule, and a tracked file is `lstat`ed only when a crawl admits it (dropped if deleted from the
-working tree, declined if a link replaced it). An untracked name, and a submodule, is `lstat`ed
-when listed: a symlink is a declined link, and a directory (a nested repository, one name to git)
-is walked for its refusals as a stored population walks it. The listing's refusals never come from the tracker,
+and fails on one file the OS will not let git read. Each name `NEVER_CONTENT_GLOBS` admits is
+`lstat`ed once: a tracked file deleted from the working tree is dropped, a symlink is a declined
+link, and a directory (a submodule or nested repository, one name to git) is walked for its
+refusals as a stored population walks it. The listing's refusals never come from the tracker,
 which asks git nothing when it opened a snapshot: the listing runs its own
 `ls-files --others --ignored --directory`, whose stderr names every directory git could not open
 (refused), and walks each ignored directory it collapses, pruned by `NEVER_CRAWL_GLOBS`, for its

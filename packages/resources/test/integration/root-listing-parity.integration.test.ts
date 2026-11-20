@@ -180,18 +180,34 @@ describe.skipIf(symlinkCapability() === null)('a declined link is the same condi
     expect(off.declinedLinks).toEqual(on.declinedLinks);
   });
 
-  // The listing reads a tracked name's shape from the index, where this one is
-  // still a file: only the `lstat` a crawl's admission asks can see the link.
-  it('a tracked file replaced by a link in the working tree', async () => {
+  // The working tree decides, never the index: the stored population's
+  // snapshot restages what changed, so a listing that read the index mode
+  // would answer the commit while the store answers the tree.
+  it('a tracked non-markdown file replaced by a directory link, under a markdown include', async () => {
     const symlinks = symlinkCapability();
     if (symlinks === null) return;
-    const home = repository({ 'guide.md': '# Guide\n', 'README.md': '# Home\n' });
-    rmSync(safePath.join(home, 'guide.md'));
-    createSymlink(symlinks, 'README.md', safePath.join(home, 'guide.md'), 'file');
-    const { off, on } = await bothArms({ home, baseDir: home });
-    expect(on.declinedLinks, 'positive control: the stored population reports it').toEqual(['guide.md']);
+    const home = repository({ 'shared/rule.md': '# Rule\n', '.claude/rules/shared': 'placeholder\n', 'README.md': '# Home\n' });
+    rmSync(safePath.join(home, '.claude', 'rules', 'shared'));
+    createSymlink(symlinks, '../../shared', safePath.join(home, '.claude', 'rules', 'shared'), 'dir');
+    const { off, on } = await bothArms({ home, baseDir: home, include: ['**/*.md'] });
+    expect(on.declinedLinks, 'positive control: the stored population reports it').toEqual(['.claude/rules/shared']);
     expect(off.declinedLinks).toEqual(on.declinedLinks);
     expect(off.members).toEqual(on.members);
+  });
+
+  it('a committed link replaced by a regular file is a member either way', async () => {
+    const symlinks = symlinkCapability();
+    if (symlinks === null) return;
+    const home = repository({ 'README.md': '# Home\n' });
+    createSymlink(symlinks, 'README.md', safePath.join(home, 'alias.md'), 'file');
+    git(home, 'add', '-A');
+    git(home, 'commit', '-q', '-m', 'link');
+    rmSync(safePath.join(home, 'alias.md'));
+    writeFileSync(safePath.join(home, 'alias.md'), '# Alias, now a file\n');
+    const { off, on } = await bothArms({ home, baseDir: home });
+    expect(on.members, 'positive control: the stored population admits it').toContain('alias.md');
+    expect(off.members).toEqual(on.members);
+    expect(off.declinedLinks).toEqual(on.declinedLinks);
   });
 });
 

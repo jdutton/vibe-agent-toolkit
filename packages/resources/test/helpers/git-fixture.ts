@@ -9,12 +9,29 @@ import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 
 /**
- * Run git in `cwd` with a committer identity and local-file submodules allowed.
+ * The fixture's git configuration, through git's `GIT_CONFIG_COUNT` channel
+ * rather than `-c`: the subcommand stays `args[0]`, which is what
+ * `runGitOrThrow` names in its failure.
+ */
+const FIXTURE_CONFIG: ReadonlyArray<readonly [string, string]> = [
+  ['user.email', 't@example.com'],
+  ['user.name', 't'],
+  ['commit.gpgsign', 'false'],
+  ['protocol.file.allow', 'always'],
+];
+
+const FIXTURE_ENV: Record<string, string> = Object.fromEntries([
+  ['GIT_CONFIG_COUNT', String(FIXTURE_CONFIG.length)],
+  ...FIXTURE_CONFIG.flatMap(([key, value], index) => [[`GIT_CONFIG_KEY_${String(index)}`, key], [`GIT_CONFIG_VALUE_${String(index)}`, value]]),
+]);
+
+/**
+ * Run git in `cwd` with a committer identity, no signing, and local-file submodules allowed.
  *
- * @throws When git fails, so a fixture git never built is never mistaken for one it did
+ * @throws When git fails, naming the subcommand, so a fixture git never built is never mistaken for one it did
  */
 export function git(cwd: string, ...args: string[]): void {
-  runGitOrThrow(['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', '-c', 'protocol.file.allow=always', ...args], { cwd });
+  runGitOrThrow(args, { cwd, env: FIXTURE_ENV });
 }
 
 /**
