@@ -24,7 +24,9 @@
  *   view: the id, duplicate detection, link resolution, population conditions and
  *   parse refusals are computed per registry view by the same code as ever. Views
  *   never share link objects: a registry copies the links it is handed.
- * - Each root's enumeration, once ({@link RunPopulation.source}).
+ * - Each root's enumeration, once ({@link RunPopulation.source}): the home's
+ *   full population under a store, or each root's names ({@link RootListing}),
+ *   listed once and narrowed per crawl.
  *
  * ## Lifetime
  *
@@ -36,7 +38,7 @@
  */
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { GitTracker } from '@vibe-agent-toolkit/utils/git';
+import { gitFindRoot, GitTracker, type GitTrackerListing } from '@vibe-agent-toolkit/utils/git';
 
 import type { ParseResult } from '../link-parser.js';
 import { defaultParseCache } from '../parse-cache.js';
@@ -46,7 +48,7 @@ import type { CollectionConfig } from '../schemas/project-config.js';
 import { sameDirectory } from '../utils.js';
 
 import { RunContentCache } from './content-cache.js';
-import type { PopulationUnreadablePolicy } from './crawl-source.js';
+import { RootListing, type PopulationUnreadablePolicy } from './crawl-source.js';
 import type { PopulationCache } from './merge.js';
 import {
   buildResourceListing,
@@ -147,6 +149,8 @@ export class RunPopulation implements PopulationRun {
   readonly #admissions = new Map<string, Promise<AdmittedFacts>>();
   readonly #stats = new Map<string, Promise<AdmittedStat>>();
   readonly #enumerations = new Map<string, Promise<ResourceEnumeration>>();
+  readonly #listings = new Map<string, Promise<RootListing>>();
+  readonly #trackers = new Map<string, Promise<GitTracker | undefined>>();
   readonly #options: RunPopulationOptions;
 
   /**
@@ -204,9 +208,11 @@ export class RunPopulation implements PopulationRun {
    * project), the home with the store off or outside a repository, and every
    * degrading crawl, whose narrowed population the store's key could not
    * describe — so it is a listing of the crawl's members alone, which reads no
-   * file ({@link buildResourceListing}). Another root is listed under its own
-   * ignore oracle and the collections its own config declares, and never under
-   * the home's extent key.
+   * file ({@link buildResourceListing}). The root's names are listed once per
+   * run per `outputs` ({@link RootListing}) and narrowed per member set, so a
+   * second crawl of the root with other globs lists nothing again. Another root
+   * is listed under its own ignore oracle and the collections its own config
+   * declares, and never under the home's extent key.
    *
    * Which root is the home is the filesystem's answer ({@link sameDirectory}):
    * `/tmp/x` and `/private/tmp/x` are one root, so the second spelling is served
@@ -253,7 +259,6 @@ export class RunPopulation implements PopulationRun {
     return buildResourcePopulation({
       root: this.root,
       outputs,
-      unreadable: 'refuse',
       run: this,
       gitTracker,
       cache,
@@ -261,7 +266,11 @@ export class RunPopulation implements PopulationRun {
     });
   }
 
-  /** A root's members, listed with no store (see {@link buildResourceListing}). */
+  /**
+   * A root's members, listed with no store (see {@link buildResourceListing}).
+   * The home is listed under the run's spelling of it, which its tracker's
+   * names are spelled under, and handed back in the spelling asked.
+   */
   async #list(
     root: string,
     home: boolean,
@@ -269,18 +278,47 @@ export class RunPopulation implements PopulationRun {
     unreadable: PopulationUnreadablePolicy,
     members: PopulationMembers,
   ): Promise<ResourceEnumeration> {
-    const { gitTracker, collectionsFor } = this.#options;
-    const collections = await collectionsFor(root);
-    if (home) await gitTracker.initialize();
-    return buildResourceListing({
-      root,
-      outputs,
+    const listed = home ? this.root : root;
+    const collections = await this.#options.collectionsFor(listed);
+    const gitTracker = await this.#trackerOf(listed, home);
+    const listing = await memoized(this.#listings, `${JSON.stringify(outputs)} ${listed}`, () =>
+      RootListing.of(listed, outputs, () => this.#gitListing(listed, home)));
+    const population = await buildResourceListing({
+      root: listed,
+      listing,
       unreadable,
       members,
       run: this,
-      gitTracker: home ? gitTracker : await initializedTracker(root),
+      ...(gitTracker !== undefined && { gitTracker }),
       ...(collections !== undefined && { collections }),
     });
+    return respelled(population, listed, root);
+  }
+
+  /**
+   * A root's ignore oracle, initialized once per run: the run's own for the
+   * home, none outside a repository (there is nothing to ask, and asking costs
+   * a spawn).
+   */
+  #trackerOf(root: string, home: boolean): Promise<GitTracker | undefined> {
+    return memoized(this.#trackers, root, async () => {
+      if (gitFindRoot(root) === null) return undefined;
+      const tracker = home ? this.gitTracker : new GitTracker(root);
+      await tracker.initialize();
+      return tracker;
+    });
+  }
+
+  /**
+   * A root's names as git lists them: its tracker's listing, or a tracker of
+   * the root's own when the run's was initialized without untracked files.
+   */
+  async #gitListing(root: string, home: boolean): Promise<GitTrackerListing | null> {
+    const listing = (await this.#trackerOf(root, home))?.listing() ?? null;
+    if (listing !== null || !home) return listing;
+    const own = new GitTracker(root);
+    await own.initialize();
+    return own.listing();
   }
 }
 
@@ -309,18 +347,6 @@ function memoized<T>(memo: Map<string, Promise<T>>, key: string, compute: () => 
   const computed = compute();
   memo.set(key, computed);
   return computed;
-}
-
-/**
- * An initialized ignore oracle for a root that is not the run's home root.
- *
- * @param root - The root
- * @returns Its tracker
- */
-async function initializedTracker(root: string): Promise<GitTracker> {
-  const tracker = new GitTracker(root);
-  await tracker.initialize();
-  return tracker;
 }
 
 /**

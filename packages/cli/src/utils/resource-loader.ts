@@ -32,12 +32,13 @@ import { withLazyPopulationCache } from './projection-store.js';
  * identity is per source", `docs/architecture/content-keying-and-git.md`).
  *
  * Built with {@link withRunContext} by `vat validate`, `vat verify`,
- * `vat resources validate`, `vat skills validate` and `vat resources scan`, and
- * required by every phase runner of those verbs: there is no phase that builds a
- * registry of its own beside it. `vat rag index` opens one too, but its index
- * step re-reads each file. `vat audit`, `vat skills build`,
- * `vat claude plugin build` and `vat ard emit` open none, and still read a file
- * once per lane that asks.
+ * `vat resources validate`, `vat skills validate`, `vat resources scan`,
+ * `vat audit`, `vat skill review`, `vat skills build`, `vat skills package`,
+ * `vat skill test run` and `vat claude plugin build`, and required by every
+ * phase runner of those verbs: there is no phase that builds a registry of its
+ * own beside it. `vat rag index` opens one too, but its index step re-reads
+ * each file. `vat ard emit` opens none, and still reads a file once per lane
+ * that asks.
  */
 export interface RunContext {
   /** The run's population: one read, key, parse and admission per file, and each root's enumeration. */

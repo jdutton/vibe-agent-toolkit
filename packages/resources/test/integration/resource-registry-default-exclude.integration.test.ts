@@ -58,25 +58,27 @@ async function crawled(root: string, unreadable: PopulationUnreadablePolicy = 'r
 }
 
 /**
- * Each enumerator, and whether it admits authored markdown under a tool-output name today.
- * The filesystem enumerator (outside a repository) does not: it excludes every name in
- * `NEVER_CRAWL_GLOBS`, tool-output names included, so its case is `it.fails` until the
- * known defect "Outside a repository, authored markdown under a tool-output-named directory is
- * dropped" (docs/contributing/known-defects.md) is fixed. Promote it to `it` with the fix.
+ * Each enumerator a crawl with no store lists through. Outside a repository the listing walk
+ * prunes only what can never be content: with no ignore oracle a tool-output name may be
+ * authored, so the crawl's own exclude (the registry default) decides.
  */
-const ROUTES: ReadonlyArray<readonly [string, boolean, () => Promise<{ root: string; registry: ResourceRegistry }>]> = [
-  ['the filesystem enumerator', false, async () => { const root = fixture(false); return { root, registry: await crawled(root) }; }],
-  ['the git route', true, async () => { const root = fixture(true); return { root, registry: await crawled(root) }; }],
+const ROUTES: ReadonlyArray<readonly [string, () => Promise<{ root: string; registry: ResourceRegistry }>]> = [
+  ['the filesystem enumerator', async () => { const root = fixture(false); return { root, registry: await crawled(root) }; }],
+  ['the filesystem enumerator, degrading', async () => {
+    const root = fixture(false);
+    return { root, registry: await crawled(root, { degrade: () => undefined }) };
+  }],
+  ['the git route', async () => { const root = fixture(true); return { root, registry: await crawled(root) }; }],
   // `{ degrade }` (`vat audit`) is a refusal policy only: inside a repository it is
   // enumerated by git, as a refusing crawl is, so it admits what `vat skills validate` admits.
-  ['the git route, degrading', true, async () => {
+  ['the git route, degrading', async () => {
     const root = fixture(true);
     return { root, registry: await crawled(root, { degrade: () => undefined }) };
   }],
 ];
 
-describe.each(ROUTES)('ResourceRegistry.crawl default exclude — %s', (_route, admitsToolOutputNames, run) => {
-  (admitsToolOutputNames ? it : it.fails)('admits authored markdown under a tool-output-named directory, and follows its links', async () => {
+describe.each(ROUTES)('ResourceRegistry.crawl default exclude — %s', (_route, run) => {
+  it('admits authored markdown under a tool-output-named directory, and follows its links', async () => {
     const { root, registry } = await run();
     const at = (relative: string) => safePath.join(root, relative);
 

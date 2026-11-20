@@ -259,16 +259,18 @@ describe('a lane never deletes or re-modes what the operator owns (system test)'
   );
 
   // One file the OS will not read, ANYWHERE in the repository: git refuses the whole
-  // snapshot. That is the input's refusal, naming the file — not "not a git repository".
-  it.skipIf(CANNOT_DENY_READS)('vat skills build names an unreadable file that refused the git snapshot', () => {
+  // snapshot, so the store cannot key the tree and says so, naming the file. The build
+  // lists the repository by name and never reads a file no skill references, so it builds.
+  it.skipIf(CANNOT_DENY_READS)('vat skills build names an unreadable file that refused the store key, and builds', () => {
     const cwd = skillsProject('build-unreadable');
     writeFileSync(safePath.join(cwd, 'private.txt'), 'secret');
     lock(safePath.join(cwd, 'private.txt'), 0o000);
 
     const { status, document, output } = run(cwd, ['skills', 'build']);
 
-    expect(refusalOf(document), output).toStrictEqual({ status: 'error', code: 'INPUT_UNREADABLE' });
-    expect(JSON.stringify(document['error'])).toContain('private.txt');
-    expect(status).toBe(2);
+    expect(document['status'], output).toBe('ok');
+    expect(output).toContain('git cannot key this tree');
+    expect(output).toContain('private.txt');
+    expect(status).toBe(0);
   });
 });

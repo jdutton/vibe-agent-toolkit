@@ -305,10 +305,21 @@ the root read and keyed so one stored extent answers every lane next time — is
 store keeps it: the home root (by the filesystem's answer, `sameDirectory`, so `/tmp` and
 `/private/tmp` are one home) under a store, with `refuse`. Every other enumeration — a root other than
 the home, the home with no store, and any run that degrades — is a **listing**
-(`buildResourceListing`): enumerated for that root under its own oracles, git where there is git,
-and only the files the crawl's globs admit become rows, read when a view admits them and never
-hashed otherwise. A listing touches no store key. Degrade is a refusal policy only and never picks
-the enumerator. It does not throw: `packaging-validator.ts`'s
+(`buildResourceListing`): the root's NAMES, listed once per run under its own oracles
+(`RootListing`) and narrowed per crawl, so only the files the crawl's globs admit become rows, read
+when a view admits them and never hashed otherwise. In a repository the names are the root's
+`GitTracker` listing (`git ls-files --cached --others --exclude-standard`), never a tree snapshot:
+a snapshot is `git add --all` into a throwaway index, which reads and hashes every untracked file
+and fails on one file the OS will not let git read. Each admitted name is `lstat`ed once (a tracked
+file deleted from the working tree is dropped, a symlink declined); a submodule or nested
+repository is the one name git gives it, and its files are ignored by the oracle, as in a stored
+population. Ignored territory is walked for its refusals alone, as a stored population walks it
+(each directory `ls-files --others --ignored --directory` collapses, pruned by
+`NEVER_CRAWL_GLOBS`), so an unlistable ignored directory is reported the same with the store off
+or on. Outside a repository the names are one walk that
+prunes only `NEVER_CONTENT_GLOBS`: with no ignore oracle a tool-output-named directory
+(`docs/coverage/`) may be authored, and the crawl's own exclude decides. A listing touches no store
+key. Degrade is a refusal policy only and never picks the enumerator. It does not throw: `packaging-validator.ts`'s
 `findProjectRoot(...) ?? dirname(skillPath)` legitimately lands on a build output directory in an
 adopter layout with no config and no `.git` above it. And it never yields an *empty* population,
 which would report a confident green over a corpus nothing looked at.

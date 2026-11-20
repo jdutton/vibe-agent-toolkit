@@ -16,7 +16,7 @@
 
 import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
 import type * as MarketplaceModule from '@vibe-agent-toolkit/claude-marketplace';
-import { ParserUnavailableError } from '@vibe-agent-toolkit/resources';
+import { ParserUnavailableError, withParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { runCompatAnalysis } from '../../src/commands/audit.js';
@@ -61,7 +61,8 @@ function refusedRead(): Error {
   return Object.assign(new Error(`EACCES: permission denied, scandir '${PLUGIN_DIR}'`), { code: 'EACCES', syscall: 'scandir', path: PLUGIN_DIR });
 }
 
-const run = (settings?: MarketplaceModule.EffectiveSettings) => runCompatAnalysis([PLUGIN_RESULT], silentLogger, PLUGIN_DIR, settings);
+const run = (settings?: MarketplaceModule.EffectiveSettings) =>
+  withParseDispatcher((dispatcher) => runCompatAnalysis([PLUGIN_RESULT], silentLogger, PLUGIN_DIR, dispatcher, settings));
 
 afterEach(() => {
   armed.analyze = undefined;

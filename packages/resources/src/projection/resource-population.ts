@@ -102,7 +102,7 @@ import {
   DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
 } from './contributors/filesystem-extent.js';
-import { crawlSourceFor, crawlSourceUnder, type CrawlSource, type CrawlSourceKind, type PopulationUnreadablePolicy } from './crawl-source.js';
+import { crawlSourceFor, type CrawlSource, type CrawlSourceKind, type PopulationUnreadablePolicy, type RootListing } from './crawl-source.js';
 import {
   populate,
   populationOracles,
@@ -355,9 +355,6 @@ function membershipOf(
  *   one declaration of which side a fault is on (see `crawlSourceFor`). Kept out
  *   of the store key, which is sound only because a fault on an output throws
  *   (`refuse`, `listing-refusal.ts`) rather than storing a side-labelled row
- * @param options.unreadable - What a directory inside the population that cannot
- *   be listed does; a degrading population is walked and never stored (see
- *   `PopulationUnreadablePolicy`)
  * @param options.gitTracker - The ignore oracle, or omitted. Not cosmetic: with
  *   no tracker no row is `gitignored`, so the ignored half of a git tree would
  *   be admitted rather than declined
@@ -368,7 +365,7 @@ function membershipOf(
  * @returns The population, the enumerator that produced it, and its outcome
  */
 export function buildResourcePopulation(
-  options: TreePopulationOptions & { readonly outputs: readonly string[]; readonly unreadable: PopulationUnreadablePolicy },
+  options: TreePopulationOptions & { readonly outputs: readonly string[] },
 ): Promise<ResourceEnumeration> {
   return membershipThrough(options, (source) => resourceContributors(() => source));
 }
@@ -382,19 +379,10 @@ export function buildResourcePopulation(
  * @returns The population, the enumerator that produced it, and its outcome
  */
 async function membershipThrough(
-  options: TreePopulationOptions & { readonly outputs: readonly string[]; readonly unreadable: PopulationUnreadablePolicy },
+  options: TreePopulationOptions & { readonly outputs: readonly string[] },
   contributorsFor: (source: CrawlSource) => ResourceContributors,
 ): Promise<ResourceEnumeration> {
   const root = safePath.resolve(options.root);
-  // A degrading population is never stored, nor served from the store: the key
-  // cannot say which directories it left out, and a stored narrowed population
-  // would answer a refusing run as if complete.
-  if (options.unreadable !== 'refuse') {
-    const source = crawlSourceUnder(root, options.outputs, options.unreadable);
-    const uncached = { ...options, cache: undefined };
-    const { projection, outcome } = await populate(resourcePopulateOptions(uncached, root, contributorsFor(source)));
-    return membershipOf(root, projection, source.kind, outcome);
-  }
 
   // Selected here, one call earlier than `FilesystemExtentContributor` would
   // select it, so the INSTANCE that enumerates is nameable afterwards. Which
@@ -415,7 +403,7 @@ async function membershipThrough(
 
 /**
  * List a root's members with no store: the files `members` admits, and the
- * conditions the enumeration recorded, with no file read, keyed or parsed.
+ * conditions the enumeration recorded, with no file read, hashed or parsed.
  *
  * ## Why a root with no store is listed rather than populated
  *
@@ -424,45 +412,42 @@ async function membershipThrough(
  * next time. With no store there is no next time: the reads buy nothing, and on
  * a tree of generated sources they are nearly the whole cost of the verb (a
  * nested project of 20,000 non-markdown files made `vat skills validate` read
- * 20,005 files to validate one skill). So a root with no store — any root but
+ * 20,005 files to validate one skill). So a root with no store (any root but
  * the run's home, the home with the store off or outside a repository, and every
- * degrading enumeration — is listed: the run's enumerator (`crawlSourceUnder`),
- * the members filtered BEFORE a row is built, the filesystem extent alone under
- * a `'deferred'` demand (no read, no key), and the conditions its rows carry.
- * The crawl then reads exactly the files it admits, once, through the run.
+ * degrading enumeration) is listed: the root's names, once per run
+ * ({@link RootListing}: git's `ls-files` in a repository, one walk outside one,
+ * never a snapshot), narrowed to the members BEFORE a row is built, under the
+ * filesystem extent alone with a `'deferred'` demand (no read, no key). The crawl
+ * then reads exactly the files it admits, once, through the run.
  *
- * The conditions are the extent's own: a declined symlink and an unlistable
- * directory are recorded whatever the members, as the full population records
- * them, so a listing and a stored population report the same findings.
+ * The conditions are the listing's, narrowed with the members: a declined
+ * symlink the crawl's filter admits, and each directory the listing could not
+ * list, settled under the crawl's `unreadable`.
  *
  * Never stored: it is a narrowed population, and a stored narrowed population
  * would answer another crawl as if complete.
  *
- * @param options - The root, the run's oracles and the crawl's members
+ * @param options - The root, its listing, the run's oracles and the crawl's members
  * @param options.root - Absolute root to list
- * @param options.outputs - The trees the calling verb writes, `[]` for none
+ * @param options.listing - The root's names, listed once per run
  * @param options.unreadable - What a directory inside the root that cannot be
- *   listed does — see {@link PopulationUnreadablePolicy}. It decides refusals
- *   only: the enumerator is the one a refusing run selects
+ *   listed does for this crawl (see {@link PopulationUnreadablePolicy})
  * @param options.members - The crawl's include and exclude globs
  * @returns The listed members, the enumerator that found them and a `derived`,
  *   unstored outcome
  */
 export async function buildResourceListing(
   options: Omit<TreePopulationOptions, 'cache'> & {
-    readonly outputs: readonly string[];
+    readonly listing: RootListing;
     readonly unreadable: PopulationUnreadablePolicy;
     readonly members: PopulationMembers;
   },
 ): Promise<ResourceEnumeration> {
   const root = safePath.resolve(options.root);
-  const source = crawlSourceUnder(root, options.outputs, options.unreadable);
   const isMember = crawlPathFilter([...options.members.include], [...options.members.exclude]);
+  const source = options.listing.narrowed(isMember, options.unreadable);
   const registry = new ContributorRegistry();
-  const filesystem = new FilesystemExtentContributor(
-    () => membersOnly(source, (absolutePath) => isMember(safePath.relative(root, absolutePath))),
-    'deferred',
-  );
+  const filesystem = new FilesystemExtentContributor(() => source, 'deferred');
   registry.register(filesystem);
   const { projection, outcome } = await populate({
     root,
@@ -471,27 +456,6 @@ export async function buildResourceListing(
     ...populationOracles({ ...options, cache: undefined }),
   });
   return membershipOf(root, projection, source.kind, outcome);
-}
-
-/**
- * `source` narrowed to the paths `admits` keeps, its declined links and
- * unlistable directories passed through whole.
- *
- * @param source - The run's enumerator for the root
- * @param admits - Whether a path is a member of the crawl
- * @returns A source over the members alone
- */
-function membersOnly(source: CrawlSource, admits: (absolutePath: string) => boolean): CrawlSource {
-  return {
-    kind: source.kind,
-    enumerate: async () => (await source.enumerate()).filter(({ absolutePath }) => admits(absolutePath)),
-    get unlistable() {
-      return source.unlistable;
-    },
-    get symlinks() {
-      return source.symlinks;
-    },
-  };
 }
 
 /**

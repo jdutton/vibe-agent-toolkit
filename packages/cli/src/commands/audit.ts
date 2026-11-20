@@ -55,7 +55,6 @@ import {
   type ParseDispatcher,
   type PopulationUnreadablePolicy,
   partitionNotAdmitted,
-  withParseDispatcher,
 } from '@vibe-agent-toolkit/resources';
 import {
   buildReport,
@@ -123,7 +122,7 @@ import {
 import { createLogger } from '../utils/logger.js';
 import { classifyInputFault, readInputFile, unlistableDirectoryRefusal } from '../utils/project-root-policy.js';
 import { relativizePath } from '../utils/relativize-paths.js';
-import { runSkillRegistries, withRunContext } from '../utils/resource-loader.js';
+import { type RunContext, runSkillRegistries, withRunContext } from '../utils/resource-loader.js';
 import { RUN_INTEGRITY_CODE } from '../utils/run-integrity.js';
 import { mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../utils/skill-quality-footer.js';
@@ -162,8 +161,7 @@ import {
 /**
  * The command's options inside one audit run: the run's skill registries ride
  * with them to every lane that validates a skill, so each project root an audit
- * reaches is crawled once per run (see {@link getValidationResults}, which opens
- * the run).
+ * reaches is crawled once per run (see {@link withAuditRun}, which opens the run).
  */
 type AuditRunOptions = AuditCommandOptions & { readonly registries: RunSkillRegistries };
 
@@ -207,12 +205,16 @@ export interface VATProjectContext {
  * config (via `findProjectRoot` + `loadConfigCached`) so per-skill packaging
  * rules still apply when auditing from above a project.
  *
+ * Its SKILL.md files parse on the audit run's dispatcher: a pool of its own would
+ * open beside the run's and start a second thread.
+ *
  * Returns `null` if `scanRoot` has no config or the config has no skills.
  */
 async function buildVATProjectContext(
   scanRoot: string,
   logger: ReturnType<typeof createLogger>,
   locationRoot: string,
+  dispatcher: ParseDispatcher,
 ): Promise<VATProjectContext | null> {
   const configPath = safePath.join(scanRoot, VAT_CONFIG_FILENAME);
   // A probe the OS refuses is the config's source fault, never "no config here".
@@ -238,7 +240,7 @@ async function buildVATProjectContext(
       config.skills,
       scanRoot,
       degradingDiscovery(scanRoot, logger, locationRoot),
-      undefined,
+      dispatcher,
     );
     const { defaults, config: perSkillConfig } = config.skills;
 
@@ -1002,8 +1004,6 @@ async function auditUserDirectories(
     );
   }
 
-  const scanned: ValidationResult[] = [];
-
   // The roots that exist, minus any one another already covers — see
   // {@link userScanTargets}. `marketplaces/` lives inside `plugins/`.
   const present = [
@@ -1011,22 +1011,23 @@ async function auditUserDirectories(
     ...(skillsDirExists ? [skillsDir] : []),
     ...(marketplacesDirExists ? [marketplacesDir] : []),
   ];
-  // In order: the targets share the population cache and the logger.
-  await forEachInOrder(userScanTargets(present, recursive), async (target) => {
-    logger.debug(`Auditing user-level resources at: ${target}`);
-    scanned.push(...await getValidationResults(target, recursive, options, logger, scanRoot));
+  const { results, compatMap } = await withAuditRun(scanRoot, async (run) => {
+    const scanned: ValidationResult[] = [];
+    // In order: the targets share the run and the logger.
+    await forEachInOrder(userScanTargets(present, recursive), async (target) => {
+      logger.debug(`Auditing user-level resources at: ${target}`);
+      scanned.push(...await auditSubject(target, recursive, inAuditRun(options, run), logger, scanRoot));
+    });
+
+    // The `--user` report is assembled here rather than by `buildAuditReport`, so
+    // it needs its own append or the config findings would reach stderr and not the
+    // document — see the same call in `buildAuditReport`. The misconfiguration
+    // findings join the RESULTS, not only the hierarchy, so the envelope counts them.
+    const userResults = addMisconfigurationIssues(withDegradedConfigFindings(scanned), scanRoot);
+    // Run compatibility analysis if --compat flag is set; --settings is refused under --user.
+    const userCompat = options.compat ? await runCompatAnalysis(userResults, logger, scanRoot, run.dispatcher) : undefined;
+    return { results: userResults, compatMap: userCompat };
   });
-
-  // The `--user` report is assembled here rather than by `buildAuditReport`, so
-  // it needs its own append or the config findings would reach stderr and not the
-  // document — see the same call in `buildAuditReport`. The misconfiguration
-  // findings join the RESULTS, not only the hierarchy, so the envelope counts them.
-  const results = addMisconfigurationIssues(withDegradedConfigFindings(scanned), scanRoot);
-
-  // Run compatibility analysis if --compat flag is set
-  const compatMap = options.compat
-    ? await runCompatAnalysis(results, logger, scanRoot)  // --settings is refused under --user
-    : undefined;
 
   const verbose = options.verbose ?? false;
   const skillResults = results.filter((r: ValidationResult) => SKILL_RESULT_TYPES.has(r.type));
@@ -1289,7 +1290,21 @@ interface AuditAtPathOverrides {
  *
  * @internal Exported for integration testing only — not part of the public CLI API.
  */
-export async function buildAuditReport(
+export function buildAuditReport(
+  scanPath: string,
+  options: AuditCommandOptions,
+  startTime: number,
+  logger: ReturnType<typeof createLogger>,
+): Promise<{
+  results: ValidationResult[];
+  report: CompletedAuditReport;
+}> {
+  return withAuditRun(deriveScanRoot(scanPath), (run) => auditReportInRun(run, scanPath, options, startTime, logger));
+}
+
+/** {@link buildAuditReport} inside its run: the scan and the compatibility lanes share its dispatcher. */
+async function auditReportInRun(
+  run: RunContext,
   scanPath: string,
   options: AuditCommandOptions,
   startTime: number,
@@ -1302,7 +1317,7 @@ export async function buildAuditReport(
   logger.debug(`Auditing resources at: ${scanPath}`);
 
   const scanRoot = deriveScanRoot(scanPath);
-  const scanned = await getValidationResults(scanPath, recursive, options, logger, scanRoot);
+  const scanned = await auditSubject(scanPath, recursive, inAuditRun(options, run), logger, scanRoot);
 
   // Build config-aware context scoped to the single derived config root —
   // used by compat analysis to resolve the plugin-level `targets` union.
@@ -1313,7 +1328,7 @@ export async function buildAuditReport(
   // and a refusal it meets is recorded in the same ledger the append below
   // reads. Built afterwards, that finding reached stderr and not the document.
   const configRoot = deriveConfigRoot(scanPath);
-  const vatContextForCompat = await buildVATProjectContext(configRoot, logger, scanRoot);
+  const vatContextForCompat = await buildVATProjectContext(configRoot, logger, scanRoot, run.dispatcher);
 
   // See {@link withDegradedConfigFindings} for why these are appended, not merged.
   const rawResults = withDegradedConfigFindings(scanned);
@@ -1352,7 +1367,7 @@ export async function buildAuditReport(
 
   // Run compatibility analysis if --compat flag is set
   const compatMap = options.compat
-    ? await runCompatAnalysis(results, logger, scanRoot, await resolveEffectiveSettings(options, scanPath), vatContextForCompat)
+    ? await runCompatAnalysis(results, logger, scanRoot, run.dispatcher, await resolveEffectiveSettings(options, scanPath), vatContextForCompat)
     : undefined;
 
   const verbose = options.verbose ?? false;
@@ -1646,7 +1661,7 @@ async function recurseIntoMarketplacePlugins(
     seen.add(pluginPath);
     logger.debug(`  Recursing into marketplace path-source plugin: ${pluginPath}`);
     // Same run root — recursing into a co-located plugin must NOT re-anchor.
-    const pluginResults = await getValidationResults(pluginPath, recursive, options, logger, locationRoot);
+    const pluginResults = await auditSubject(pluginPath, recursive, options, logger, locationRoot);
     results.push(...pluginResults);
   });
   return results;
@@ -1752,6 +1767,40 @@ function appendInventoryParseErrors(
  *   several coordinate systems. Recursion passes it through unchanged.
  */
 /**
+ * Validate ONE audit subject in a run of its own (see {@link auditSubject}).
+ */
+export function getValidationResults(
+	scanPath: string,
+	recursive: boolean,
+	options: AuditCommandOptions,
+	logger: ReturnType<typeof createLogger>,
+	locationRoot: string,
+): Promise<ValidationResult[]> {
+	return withAuditRun(locationRoot, (run) => auditSubject(scanPath, recursive, inAuditRun(options, run), logger, locationRoot));
+}
+
+/**
+ * Run `work` in the audit's one run, opened as every verb opens its run: each project root
+ * the audit reaches is crawled once, under audit's ruling. Every crawl degrades, and a degraded
+ * enumeration is a listing that never opens the projection store, so audit stores nothing. The
+ * run's ignore oracle is the repository's tracker the scan holds, so the repository is listed once.
+ *
+ * @param locationRoot - The invocation scan root, the run's home
+ * @param work - The audit inside the run
+ * @returns Whatever `work` returned
+ */
+async function withAuditRun<T>(locationRoot: string, work: (run: RunContext) => Promise<T>): Promise<T> {
+	const repositoryRoot = gitFindRoot(locationRoot);
+	const gitTracker = repositoryRoot === null ? undefined : await getOrCreateGitTracker(repositoryRoot);
+	return withRunContext({ root: locationRoot, gitTracker }, work);
+}
+
+/** The command's options inside `run`: its skill registries ride with them. */
+function inAuditRun(options: AuditCommandOptions, run: RunContext): AuditRunOptions {
+	return { ...options, registries: runSkillRegistries(run) };
+}
+
+/**
  * Validate ONE audit subject, degrading if the filesystem refuses it.
  *
  * THE boundary guard, and deliberately the only one of its kind. The first
@@ -1766,28 +1815,22 @@ function appendInventoryParseErrors(
  * a seventh time. This function is what every one of them is reached through, so
  * it is where "the environment refused this subject" becomes a finding instead of
  * an abort. It is also the recursion point — `recurseIntoMarketplacePlugins` and
- * the `--user` target loop both re-enter here — so an unreadable plugin costs its
- * own subject and nothing else.
+ * the `--user` target loop both re-enter here, inside the audit's one run — so an
+ * unreadable plugin costs its own subject and nothing else.
  *
  * The walk keeps its own per-entry guard: this one would answer at whole-subject
  * granularity, discarding findings already collected from readable siblings, and
  * degrading as narrowly as possible is the entire point.
  */
-export async function getValidationResults(
+async function auditSubject(
 	scanPath: string,
 	recursive: boolean,
-	options: AuditCommandOptions,
+	options: AuditRunOptions,
 	logger: ReturnType<typeof createLogger>,
 	locationRoot: string,
 ): Promise<ValidationResult[]> {
 	try {
-		// One run per audit subject, opened as every verb opens its run: each project root it
-		// reaches is crawled once, under audit's ruling. Every crawl degrades, and a degraded
-		// enumeration is a listing that never opens the projection store, so audit stores nothing.
-		return dedupeUnreadablePathResults(
-			await withRunContext({ root: locationRoot }, (run) =>
-				validateAuditSubject(scanPath, recursive, { ...options, registries: runSkillRegistries(run) }, logger, locationRoot)),
-		);
+		return dedupeUnreadablePathResults(await validateAuditSubject(scanPath, recursive, options, logger, locationRoot));
 	} catch (error) {
 		// Only the filesystem refusing the subject degrades; a defect in a validator
 		// must still fail loudly rather than be reported as a permissions problem.
@@ -2135,27 +2178,25 @@ export async function runCompatAnalysis(
   results: ValidationResult[],
   logger: ReturnType<typeof createLogger>,
   locationRoot: string,
+  dispatcher: ParseDispatcher,
   effectiveSettings?: EffectiveSettings,
   vatContext: VATProjectContext | null = null,
 ): Promise<Map<string, PluginCompatEntry>> {
   const compatMap = new Map<string, PluginCompatEntry>();
 
   // In order: each plugin's explanations go to the logger as it is analyzed.
-  // One parse dispatcher for both lanes across the whole run: a pool per plugin
-  // was started and torn down for each, which the run paid once per plugin.
-  await withParseDispatcher((dispatcher) =>
-    forEachInOrder(results, async (result) => {
-      if (result.type !== RESOURCE_TYPE_CLAUDE_PLUGIN) return;
+  // Both lanes parse on the run's one dispatcher, which the scan parsed on too.
+  await forEachInOrder(results, async (result) => {
+    if (result.type !== RESOURCE_TYPE_CLAUDE_PLUGIN) return;
 
-      const entry: PluginCompatEntry = {
-        compat: await analyzeOrExplain(result.path, locationRoot, vatContext, logger, dispatcher),
-      };
-      if (effectiveSettings !== undefined) {
-        entry.settings = await settingsVerdict(result.path, effectiveSettings, locationRoot, logger, dispatcher);
-      }
-      compatMap.set(result.path, entry);
-    }),
-  );
+    const entry: PluginCompatEntry = {
+      compat: await analyzeOrExplain(result.path, locationRoot, vatContext, logger, dispatcher),
+    };
+    if (effectiveSettings !== undefined) {
+      entry.settings = await settingsVerdict(result.path, effectiveSettings, locationRoot, logger, dispatcher);
+    }
+    compatMap.set(result.path, entry);
+  });
 
   fileLaneFindings(results, compatMap, locationRoot);
   return compatMap;

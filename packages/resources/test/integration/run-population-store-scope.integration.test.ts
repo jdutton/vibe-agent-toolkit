@@ -9,11 +9,12 @@
  * store, while another root never touches the store at all.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, readWorkCounters, safePath } from '@vibe-agent-toolkit/utils';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
-import { createSymlink, symlinkCapability } from '@vibe-agent-toolkit/utils/testing';
+import { createSymlink, gitExecutable, symlinkCapability } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import {
@@ -91,11 +92,15 @@ function inRun<T>(home: string, store: FactStore | undefined, work: (population:
   );
 }
 
-/** Crawl `baseDir`'s markdown through the run, and count the content reads it made. */
-async function crawlMarkdown(population: RunPopulation, baseDir: string): Promise<{ members: string[]; reads: number }> {
+/** Crawl `baseDir`'s markdown (or `include`) through the run, and count the content reads it made. */
+async function crawlMarkdown(
+  population: RunPopulation,
+  baseDir: string,
+  include: readonly string[] = ['**/*.md'],
+): Promise<{ members: string[]; reads: number }> {
   const before = readWorkCounters()['content.read'];
   const registry = ResourceRegistry.forRun(population, { baseDir }).view({ baseDir });
-  await registry.crawl({ baseDir, include: ['**/*.md'], outputs: [], unreadable: 'refuse', populationSource: population.source });
+  await registry.crawl({ baseDir, include: [...include], outputs: [], unreadable: 'refuse', populationSource: population.source });
   const members = registry.getAllResources().map((resource) => safePath.relative(baseDir, resource.filePath)).toSorted((left, right) => left.localeCompare(right));
   return { members, reads: readWorkCounters()['content.read'] - before };
 }
@@ -152,5 +157,53 @@ describe('only the home root reaches the store, by the filesystem\'s answer to w
     // The home's full population, plus each member admitted under the alias's
     // spelling: the run's content cache is keyed by the path asked.
     expect(reads).toBe(2 + GENERATED + 2);
+  });
+});
+
+/** Run git in `cwd`, quietly. */
+function git(cwd: string, ...args: string[]): void {
+  spawnSync(gitExecutable(), args, { cwd, stdio: 'ignore' });
+}
+
+/**
+ * A repository with a tracked document deleted from the working tree, an ignored one, and an
+ * untracked nested repository git names as one entry.
+ */
+function repository(): string {
+  const { home } = fixture();
+  writeFileSync(safePath.join(home, '.gitignore'), 'ignored.md\n');
+  writeFileSync(safePath.join(home, 'ignored.md'), '# Ignored\n');
+  writeFileSync(safePath.join(home, 'gone.md'), '# Gone\n');
+  git(home, 'init', '-q');
+  git(home, 'add', 'gone.md');
+  unlinkSync(safePath.join(home, 'gone.md'));
+  const sub = safePath.join(home, 'vendor', 'sub');
+  mkdirSyncReal(sub, { recursive: true });
+  writeFileSync(safePath.join(sub, 'README.md'), '# Sub\n');
+  git(sub, 'init', '-q');
+  return home;
+}
+
+describe('in a repository a listing is git\'s names, never a snapshot', () => {
+  it('lists what git names and drops a deleted tracked file', async () => {
+    const home = repository();
+    const { members, reads } = await inRun(home, undefined, (population) => crawlMarkdown(population, home));
+    // Not `gone.md` (deleted), not `ignored.md`, and not `vendor/sub/README.md`: git names the
+    // nested repository as one entry, so the ignore oracle calls its files ignored, as it does
+    // for a stored population.
+    expect(members).toEqual(['nested/guide.md', 'README.md']);
+    expect(reads, 'one read per member').toBe(2);
+  });
+
+  it('lists a root once per run: a second crawl with other globs asks git nothing', async () => {
+    const home = repository();
+    const calls = await inRun(home, undefined, async (population) => {
+      await crawlMarkdown(population, home);
+      const before = readWorkCounters()['git.calls'];
+      const { members } = await crawlMarkdown(population, home, ['nested/**/*.md']);
+      expect(members).toEqual(['nested/guide.md']);
+      return readWorkCounters()['git.calls'] - before;
+    });
+    expect(calls).toBe(0);
   });
 });

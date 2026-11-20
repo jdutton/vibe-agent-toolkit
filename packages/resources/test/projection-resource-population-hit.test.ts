@@ -91,7 +91,7 @@ describe('the resources lane on a store hit', () => {
       prose: { include: ['docs/**'], mimeType: 'text/markdown' },
       data: { include: ['docs/**'], mimeType: 'application/json' },
     };
-    const options = { root: suite.tempDir, outputs: [], unreadable: 'refuse' as const, cache: freshCache(), collections };
+    const options = { root: suite.tempDir, outputs: [], cache: freshCache(), collections };
 
     const written = await inOwnRun(buildResourcePopulation, options);
     const hit = await inOwnRun(buildResourcePopulation, options);
@@ -106,7 +106,7 @@ describe('the resources lane on a store hit', () => {
     // (`DECLINE_IGNORED` drops the first; the second needs a path to vanish
     // mid-run), so the store hands them back itself.
     await write(DOC, '# A\n');
-    const options = { root: suite.tempDir, outputs: [], unreadable: 'refuse' as const, cache: freshCache(new UnreachableRowsStore()) };
+    const options = { root: suite.tempDir, outputs: [], cache: freshCache(new UnreachableRowsStore()) };
 
     const written = await inOwnRun(buildResourcePopulation, options);
     const hit = await inOwnRun(buildResourcePopulation, options);
@@ -212,7 +212,7 @@ describe('buildResourcePopulation with a classifier that reports a condition', (
     };
     const cache = freshCache();
     const membership = (): ReturnType<typeof __internal.membershipThrough> => withPopulationRun((run) =>
-      __internal.membershipThrough({ root: suite.tempDir, outputs: [], unreadable: 'refuse', cache, run }, withClassifier));
+      __internal.membershipThrough({ root: suite.tempDir, outputs: [], cache, run }, withClassifier));
 
     const written = await membership();
     const hit = await membership();

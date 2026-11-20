@@ -100,7 +100,7 @@ async function buildIgnoredFixture(): Promise<GitTracker> {
  */
 async function populateCapturing(tracker: GitTracker): Promise<CapturingStore> {
   const store = new CapturingStore();
-  await inOwnRun(buildResourcePopulation, { outputs: [], unreadable: 'refuse', root: suite.tempDir,
+  await inOwnRun(buildResourcePopulation, { outputs: [], root: suite.tempDir,
     gitTracker: tracker,
     cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH },
   });
@@ -109,7 +109,7 @@ async function populateCapturing(tracker: GitTracker): Promise<CapturingStore> {
 
 /** The population as root-relative, forward-slashed paths — the readable unit. */
 async function populationOf(gitTracker?: GitTracker): Promise<string[]> {
-  const { paths } = await inOwnRun(buildResourcePopulation, { outputs: [], unreadable: 'refuse', root: suite.tempDir,
+  const { paths } = await inOwnRun(buildResourcePopulation, { outputs: [], root: suite.tempDir,
     ...(gitTracker !== undefined && { gitTracker }),
   });
   // Code-unit order, never `localeCompare`: the expected arrays below are
@@ -146,7 +146,7 @@ describe('buildResourcePopulation', () => {
     await write('docs/c.md', '# C\n');
     const cache = { store: new ReorderingStore(), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
     const source: ResourcePopulationSource = {
-      enumerate: (root, outputs, unreadable) => inOwnRun(buildResourcePopulation, { outputs, unreadable, root, cache }),
+      enumerate: (root, outputs) => inOwnRun(buildResourcePopulation, { outputs, root, cache }),
     };
     const crawlOnce = (): Promise<RegistryCrawl> =>
       new ResourceRegistry({ baseDir: suite.tempDir }).crawl({
@@ -170,8 +170,8 @@ describe('buildResourcePopulation', () => {
     createSymlink(cap, 'missing-two.md', safePath.join(suite.tempDir, 'dangling-y.md'));
     const cache = { store: new ReorderingStore(), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
 
-    const written = await inOwnRun(buildResourcePopulation, { outputs: [], unreadable: 'refuse', root: suite.tempDir, cache });
-    const hit = await inOwnRun(buildResourcePopulation, { outputs: [], unreadable: 'refuse', root: suite.tempDir, cache });
+    const written = await inOwnRun(buildResourcePopulation, { outputs: [], root: suite.tempDir, cache });
+    const hit = await inOwnRun(buildResourcePopulation, { outputs: [], root: suite.tempDir, cache });
 
     expect(hit.outcome.stored).toBe('hit');
     expect(written.conditions.map((row) => row.path)).toEqual(['dangling-y.md', 'dangling-z.md']);
@@ -183,9 +183,9 @@ describe('buildResourcePopulation', () => {
     const store = new FakeFactStore();
     const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
 
-    const uncached = await inOwnRun(buildResourcePopulation, { outputs: [], unreadable: 'refuse', root: suite.tempDir });
-    const written = await inOwnRun(buildResourcePopulation, { outputs: [], unreadable: 'refuse', root: suite.tempDir, cache });
-    const hit = await inOwnRun(buildResourcePopulation, { outputs: [], unreadable: 'refuse', root: suite.tempDir, cache });
+    const uncached = await inOwnRun(buildResourcePopulation, { outputs: [], root: suite.tempDir });
+    const written = await inOwnRun(buildResourcePopulation, { outputs: [], root: suite.tempDir, cache });
+    const hit = await inOwnRun(buildResourcePopulation, { outputs: [], root: suite.tempDir, cache });
 
     expect(uncached.outcome).toEqual({ population: 'derived', stored: 'no-store' });
     expect(written.outcome).toEqual({ population: 'derived', stored: 'written' });
@@ -449,7 +449,7 @@ describe('one question for every resources lane', () => {
     };
     const root = suite.tempDir;
 
-    const membership = await keyOf((cache) => inOwnRun(buildResourcePopulation, { outputs: [], unreadable: 'refuse', root, cache }));
+    const membership = await keyOf((cache) => inOwnRun(buildResourcePopulation, { outputs: [], root, cache }));
     const query = await keyOf((cache) => inOwnRun(buildResourceProjection, { root, cache }));
     const lens = await keyOf((cache) => inOwnRun(buildClaudeContextPopulation, { root, cache }));
 
@@ -488,7 +488,7 @@ describe('one question for every resources lane', () => {
     expect(evicted).toEqual(expect.any(String));
     store.forgetBlobFacts(evicted ?? '');
 
-    const membership = await inOwnRun(buildResourcePopulation, { ...options, outputs: [], unreadable: 'refuse' });
+    const membership = await inOwnRun(buildResourcePopulation, { ...options, outputs: [] });
     const full = await inOwnRun(buildResourceProjection, options);
     const healed = await inOwnRun(buildResourceProjection, options);
 
