@@ -36,10 +36,13 @@ import { withLazyPopulationCache, withPopulationCache } from './projection-store
  * admitted once per run whichever phase asks (rule 4 of "Decision: content
  * identity is per source", `docs/architecture/content-keying-and-git.md`).
  *
- * Built by the verb (`vat validate`, `vat verify`, `vat resources validate`,
- * `vat skills validate`, and every other verb that crawls resources) with
- * {@link withRunContext}, and required by every phase runner: there is no
- * phase that builds a registry of its own beside it.
+ * Built with {@link withRunContext} by `vat validate`, `vat verify`,
+ * `vat resources validate`, `vat skills validate` and `vat resources scan`, and
+ * required by every phase runner of those verbs: there is no phase that builds a
+ * registry of its own beside it. `vat rag index` opens one too, but its index
+ * step re-reads each file. `vat audit`, `vat skills build`,
+ * `vat claude plugin build` and `vat ard emit` open none, and still read a file
+ * once per lane that asks.
  */
 export interface RunContext {
   /** The run's population: one read, key, parse and admission per file, and each root's enumeration. */
