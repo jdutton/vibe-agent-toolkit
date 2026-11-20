@@ -20,7 +20,7 @@ import {
 } from '@vibe-agent-toolkit/agent-skills';
 import type { ParseResult } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Gate, type Report, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, followedStatSync, issueLocation, isVatError, requireFollowedStatSync, safePath, toForwardSlash, withFsFault } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, followedStatSync, issueLocation, isVatError, requireFollowedStatSync, safePath, toForwardSlash, withFsFault, appendAll } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
@@ -309,7 +309,7 @@ export function formatSkillValidationLines(validationResult: ValidationResult): 
 
   const lines = [headline, `   Summary: ${validationResult.description}\n`];
   for (const issue of issues) {
-    lines.push(...formatIssueLines(issue, '  '));
+    appendAll(lines, formatIssueLines(issue, '  '));
   }
   lines.push('');
   return lines;

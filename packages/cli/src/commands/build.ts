@@ -17,7 +17,7 @@ import {
   type Report,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowing, everyInOrder, everywhere, findConfigFile, mapConcurrentFailingInOrder, mapInOrder, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, everyInOrder, everywhere, findConfigFile, mapConcurrentFailingInOrder, mapInOrder, pathPresent, safePath, appendAll } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { marksOperandRefusalByHand } from '../command-tree.js';
@@ -178,7 +178,7 @@ async function collectShippedSkillDirs(marketplacesDir: string): Promise<string[
     if (!shippedPresent(pluginsDir, marketplacesDir)) return [];
     return collectPluginSkillDirs(pluginsDir, marketplacesDir);
   });
-  skillDirs.push(...perMarketplace.flat());
+  appendAll(skillDirs, perMarketplace.flat());
 
   return skillDirs;
 }

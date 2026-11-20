@@ -11,9 +11,7 @@
 
 import { GIT_MODE_SYMLINK } from '@vibe-validate/git';
 
-import { VatError } from './errors/vat-error.js';
-import { gitNoAnswerError, gitRunFailureOf } from './git-no-answer.js';
-import { type GitRunResult, runGit } from './git-run.js';
+import { runGit } from './git-run.js';
 import { safePath } from './path-utils.js';
 
 /**
@@ -26,26 +24,22 @@ const STAGE_PREFERENCE: readonly string[] = ['0', '2', '1', '3'];
 /** `git config --get` exits 1 for a key that is not set. */
 const CONFIG_KEY_UNSET_STATUS = 1;
 
-/** Throw the classified cause when git did not run to completion. */
-function refuseUnfinished(command: string, cwd: string, result: GitRunResult): void {
-  const failure = gitRunFailureOf(command, cwd, result);
-  if (failure !== undefined) throw new VatError(failure.code, failure.reason);
-}
-
 /**
- * Whether `core.symlinks` is false for the repository at `cwd`.
+ * Whether `core.symlinks` is false for the repository at `cwd`, or `null` when
+ * git did not answer.
  *
  * Unset is the platform's default, which is not the same everywhere: git's own
  * default is `true`, but Git for Windows starts with `has_symlinks = 0` and
  * turns it on only when `core.symlinks` says so, so an unset key on win32 is
  * `false`.
  */
-function symlinksOff(cwd: string): boolean {
+function symlinksOff(cwd: string): boolean | null {
   const config = runGit(['config', '--type=bool', '--get', 'core.symlinks'], { cwd });
-  refuseUnfinished('git config', cwd, config);
   if (config.ok) return config.stdout === 'false';
-  if (config.status === CONFIG_KEY_UNSET_STATUS) return process.platform === 'win32';
-  throw gitNoAnswerError(cwd, 'Without core.symlinks, a link checked out as a plain file could be read as a member.');
+  // Only a git that ran and exited 1 says "unset": one that never ran, was killed
+  // or timed out reports status 1 too, with an `error` beside it.
+  if (config.status === CONFIG_KEY_UNSET_STATUS && config.error === undefined) return process.platform === 'win32';
+  return null;
 }
 
 /**
@@ -56,18 +50,17 @@ function symlinksOff(cwd: string): boolean {
  *
  * @param cwd - The listed root: the index is read under it alone, so a small
  *   root in a large repository reads only its own entries
- * @returns The links' absolute, forward-slashed paths
- * @throws Coded by cause (`GIT_FAILED`, `GIT_NOT_FOUND`, `GIT_NO_ANSWER`) when
- *   git did not answer
+ * @returns The links' absolute, forward-slashed paths, or `null` for every way
+ *   asking git can fail, as `gitLsFiles` and `gitLsOthers` return it: the
+ *   caller refuses with `GIT_NO_ANSWER`
  */
-export function gitLinksCheckedOutAsFiles(cwd: string): ReadonlySet<string> {
-  if (!symlinksOff(cwd)) return new Set();
+export function gitLinksCheckedOutAsFiles(cwd: string): ReadonlySet<string> | null {
+  const off = symlinksOff(cwd);
+  if (off === null) return null;
+  if (!off) return new Set();
 
   const index = runGit(['ls-files', '-s', '-z'], { cwd, trim: false, env: { LC_ALL: 'C' } });
-  refuseUnfinished('git ls-files', cwd, index);
-  if (!index.ok) {
-    throw gitNoAnswerError(cwd, 'Without the index, a link checked out as a plain file would be read as a member.');
-  }
+  if (!index.ok) return null;
   // `<mode> <oid> <stage>\t<path>`, NUL-separated, the path relative to `cwd`.
   const modes = new Map<string, Map<string, string>>();
   for (const record of index.stdout.split('\0')) {

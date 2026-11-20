@@ -152,7 +152,7 @@ export class RunPopulation implements PopulationRun {
   readonly #listings = new Map<string, Promise<RootListing>>();
   readonly #trackers = new Map<string, Promise<GitTracker | undefined>>();
   /** Each listed root's tracked links checked out as plain files, by root. */
-  readonly #linksAsFiles = new Map<string, ReadonlySet<string>>();
+  readonly #linksAsFiles = new Map<string, ReadonlySet<string> | null>();
   readonly #options: RunPopulationOptions;
 
   /**
@@ -317,17 +317,13 @@ export class RunPopulation implements PopulationRun {
   /**
    * The tracked links under a root its checkout wrote as plain files, read once per
    * root per run: one `git config` read, and the index under it only when
-   * `core.symlinks` is `false`.
+   * `core.symlinks` is `false`. `null` when git did not answer.
    */
-  #linksAsFilesOf(root: string): ReadonlySet<string> {
+  #linksAsFilesOf(root: string): ReadonlySet<string> | null {
     // Read under the root, never the whole repository: `ls-files -s` of a large
     // monorepo is twice its names and could pass the output cap for a small root.
-    let links = this.#linksAsFiles.get(root);
-    if (links === undefined) {
-      links = gitLinksCheckedOutAsFiles(root);
-      this.#linksAsFiles.set(root, links);
-    }
-    return links;
+    if (!this.#linksAsFiles.has(root)) this.#linksAsFiles.set(root, gitLinksCheckedOutAsFiles(root));
+    return this.#linksAsFiles.get(root) ?? null;
   }
 
   /**

@@ -53,6 +53,7 @@ import {
   toForwardSlashAnyPlatform,
   safePath,
   withFsFaultSync,
+  appendAll,
 } from '@vibe-agent-toolkit/utils';
 import {
   BUILD_OUTPUT_GLOBS,
@@ -650,10 +651,10 @@ export async function validateSkillForPackaging(
 
   // Validate frontmatter schema (name format, required fields, etc.)
   if (parseResult.frontmatter) {
-    rawIssues.push(
+    appendAll(rawIssues, [
       ...validateFrontmatterSchema(parseResult.frontmatter, skillLocation),
       ...validateFrontmatterRules(parseResult.frontmatter, skillLocation),
-    );
+    ]);
   } else {
     rawIssues.push(missingFrontmatterIssue(parseResult.frontmatterError, skillLocation));
   }
@@ -675,7 +676,7 @@ export async function validateSkillForPackaging(
 
   // Validate files config (requires projectRoot to resolve source paths for
   // directory-source detection — must run after projectRoot is computed).
-  rawIssues.push(...validateFilesConfig(packagingConfig?.files, projectRoot, locationRoot));
+  appendAll(rawIssues, validateFilesConfig(packagingConfig?.files, projectRoot, locationRoot));
 
   // Build resource registry and walk the link graph.
   // Prefer the caller-supplied shared registry (when `vat skills validate` or
@@ -740,8 +741,8 @@ export async function validateSkillForPackaging(
   //     gate is what adopters run before that build. Reporting the harmless drop
   //     while staying silent about the fatal zero-match was the asymmetry that
   //     let `vat skills validate` return success on a config that cannot build.
-  rawIssues.push(
-    ...preBuildGlobFindingsToIssues(
+  appendAll(rawIssues, 
+    preBuildGlobFindingsToIssues(
       await collectPreBuildGlobFindings(packagedFiles, projectRoot),
       locationRoot,
     ),
@@ -789,13 +790,13 @@ export async function validateSkillForPackaging(
   //  5. every file the skill reaches whose parse the crawl refused: absent from the
   //     registry, the walk found it on disk and bundled it as an opaque asset, its
   //     links unwalked and nothing in it checked
-  rawIssues.push(
+  appendAll(rawIssues, [
     ...parseRefusedIssues(parseRefused, [skillPath, ...bundledAssets], locationRoot),
     ...walkerExclusionsToIssues(excludedReferences, locationRoot),
     ...testInputLinkIssues(excludedReferences, testInputDirs, projectRoot, locationRoot),
     ...deferredAssetsToIssues(deferredAssets, locationRoot),
     ...outsideSkillDirLinksToIssues(outsideSkillDirLinks, locationRoot),
-  );
+  ]);
 
   const fileCount = bundledFiles.length + 1; // +1 for SKILL.md itself
   const maxLinkDepth = maxBundledDepth;
@@ -856,7 +857,7 @@ export async function validateSkillForPackaging(
   // which is what this detector wants, since the declaration it looks for can be
   // written either side of the fence.
   if (parseResult.frontmatter) {
-    rawIssues.push(...detectUndeclaredCrossSkillAuth(parseResult.frontmatter, parseResult.content, skillLocation));
+    appendAll(rawIssues, detectUndeclaredCrossSkillAuth(parseResult.frontmatter, parseResult.content, skillLocation));
   }
 
   // Filter out source-only codes when validating built output

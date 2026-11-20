@@ -88,6 +88,7 @@ import {
   resetProjectRootCaches,
   safePath,
   toForwardSlash,
+  appendAll,
 } from '@vibe-agent-toolkit/utils';
 import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
 import {
@@ -308,7 +309,7 @@ function appendIssues(result: ValidationResult, issues: readonly ValidationIssue
   if (issues.length === 0) {
     return;
   }
-  result.issues.push(...issues);
+  appendAll(result.issues, issues);
   Object.assign(result, describeIssues(result.issues, result.type));
 }
 
@@ -1016,7 +1017,7 @@ async function auditUserDirectories(
     // In order: the targets share the run and the logger.
     await forEachInOrder(userScanTargets(present, recursive), async (target) => {
       logger.debug(`Auditing user-level resources at: ${target}`);
-      scanned.push(...await auditSubject(target, recursive, inAuditRun(options, run), logger, scanRoot));
+      appendAll(scanned, await auditSubject(target, recursive, inAuditRun(options, run), logger, scanRoot));
     });
 
     // The `--user` report is assembled here rather than by `buildAuditReport`, so
@@ -1662,7 +1663,7 @@ async function recurseIntoMarketplacePlugins(
     logger.debug(`  Recursing into marketplace path-source plugin: ${pluginPath}`);
     // Same run root — recursing into a co-located plugin must NOT re-anchor.
     const pluginResults = await auditSubject(pluginPath, recursive, options, logger, locationRoot);
-    results.push(...pluginResults);
+    appendAll(results, pluginResults);
   });
   return results;
 }
@@ -1731,7 +1732,7 @@ function appendInventoryParseErrors(
 			// against this report's root. The skill lane may already have filed it
 			// on this result — one file, one finding.
 			if (!result.issues.some((issue) => issue.code === err.parseRefused && issue.location === location)) {
-				parseIssues.push(...notAdmittedIssues(
+				appendAll(parseIssues, notAdmittedIssues(
 					{ unreadable: [], parseRefused: [{ filePath: err.path, code: err.parseRefused, reason: err.message }] },
 					{ locationRoot, consequence: SKILL_REACHED_REFUSAL_CONSEQUENCE },
 				));
@@ -1943,7 +1944,7 @@ async function validateAuditSubject(
 					.filter((s) => s.type === RESOURCE_TYPE_AGENT_SKILL)
 					.map((s) => safePath.resolve(s.path)),
 			);
-			surfaceResults.push(...(await validatePluginSkillsViaInventory(scanPath, options, logger, locationRoot, alreadyValidated)));
+			appendAll(surfaceResults, (await validatePluginSkillsViaInventory(scanPath, options, logger, locationRoot, alreadyValidated)));
 			await appendPluginInventoryToSurfaceResults(surfaceResults, scanPath, logger, locationRoot);
 		}
 		return surfaceResults;
@@ -2218,7 +2219,7 @@ function fileLaneFindings(results: ValidationResult[], compatMap: ReadonlyMap<st
       ...(entry.settings !== undefined && { settings: renderSettingsBlock(entry.settings, locationRoot) }),
     }, filed);
     appendIssues(result, issues);
-    filed.push(...issues.map((issue) => ({ code: issue.code, location: issue.location ?? locationOf(result.path) })));
+    appendAll(filed, issues.map((issue) => ({ code: issue.code, location: issue.location ?? locationOf(result.path) })));
   }
 }
 
@@ -2742,7 +2743,7 @@ export function formatAuditFindingsLines(
     const heading = `\n${findingSubject(result, root)} — ${formatSeverityBreakdown(countBySeverity(result.issues))}`;
     lines.push(rendered.length === 0 ? heading : `${heading}:`);
     for (const issue of rendered) {
-      lines.push(...formatIssueLines(issue, '  '));
+      appendAll(lines, formatIssueLines(issue, '  '));
     }
   }
 
@@ -3217,7 +3218,7 @@ async function scanDirectory(
   const claims = new SubtreeClaims();
   // In order: `claims` resolves each subtree against the subjects before it.
   await forEachInOrder(population.subjects, async (subject) => {
-    results.push(...await validateScanSubject(subject, options, logger, scanCtx, claims));
+    appendAll(results, await validateScanSubject(subject, options, logger, scanCtx, claims));
   });
   return results;
 }

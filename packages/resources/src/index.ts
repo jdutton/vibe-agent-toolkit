@@ -16,7 +16,13 @@
  *
  * // Add resources
  * await registry.addResource('./README.md');
- * await registry.crawl({ outputs: [], baseDir: './docs', unreadable: 'refuse' });
+ * await registry.crawl({
+ *   outputs: [],
+ *   baseDir: './docs',
+ *   unreadable: 'refuse',
+ *   populationSource: run.population.source, // the run's population (ResourcePopulationSource)
+ *   ignoredRefusals: 'record',
+ * });
  *
  * // Validate all links
  * const result = await registry.validate();

@@ -122,7 +122,7 @@
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import { relativeEscapesRoot, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { relativeEscapesRoot, safePath, toForwardSlashAnyPlatform, appendAll } from '@vibe-agent-toolkit/utils';
 
 import { collapseParentSegments, compilePathPattern, matchesPathPattern, witnessOf } from './path-pattern.js';
 
@@ -870,8 +870,8 @@ function denySegments(command: string): { segments: string[]; truncated: boolean
   const { regions, truncated } = nestedRegions(command);
   for (const region of [command, ...regions]) {
     const parts = splitCompound(region);
-    if (parts === undefined || parts.length === 0) segments.push(...unparseableSegments(region));
-    else segments.push(...parts);
+    if (parts === undefined || parts.length === 0) appendAll(segments, unparseableSegments(region));
+    else appendAll(segments, parts);
   }
   return { segments, truncated };
 }
@@ -1002,12 +1002,12 @@ function denyReadings(segment: string): { readings: string[]; truncated: boolean
     if (current.length > budget) return { readings: [...seen], truncated: true };
     budget -= current.length;
     seen.add(current);
-    queue.push(
+    appendAll(queue, [
       stripLeadingControlKeyword(current),
       stripCaseArmPattern(current),
       stripLeadingAssignment(current, 'deny'),
       ...stripOneWrapperReadings(current),
-    );
+    ]);
   }
 
   return { readings: [...seen], truncated: false };

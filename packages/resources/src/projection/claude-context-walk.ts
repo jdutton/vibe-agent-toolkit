@@ -43,7 +43,7 @@
  * @vendor-claim reviewed=2026-09-23 verify=Re-extract `$yn`, `$q`, `Lke`, `y3`, `dQe`, `q7e` and `Syn` from the current Claude Code binary per docs/external/claude-code-memory-loader.md and diff them against this walk and `harness/claude-code.ts`
  */
 
-import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { toForwardSlash, appendAll } from '@vibe-agent-toolkit/utils';
 
 import type { BlobRow } from '../schemas/projection-blobs.js';
 import type { HarnessBlobFactsRow } from '../schemas/projection-harness.js';
@@ -292,7 +292,7 @@ function visit(state: Visit, path: string, depth: number, viaPath: string | null
   }
   const loaded = [{ ...entry, scope: scopeOf(state.index, row) }];
   for (const target of hopsOf(state.index, path)) {
-    loaded.push(...visit(state, target, depth + 1, path));
+    appendAll(loaded, visit(state, target, depth + 1, path));
   }
   return loaded;
 }

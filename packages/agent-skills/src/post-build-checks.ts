@@ -12,6 +12,7 @@ import { dirname } from 'node:path';
 import { parseFileCached, type ParseRoute, withParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
+  appendAll,
   direntKindFollowingSync,
   FollowedWalk,
   followedKindSync,
@@ -88,8 +89,7 @@ function walkInto(dir: string, root: string, guard: FollowedWalk): string[] {
     // link back into the tree is refused by the walk guard, not recursed.
     if (withFsFaultSync(outputProbe(fullPath), () => direntKindFollowingSync(dir, entry, root)) === 'directory') {
       guard.enter(fullPath);
-      // One at a time, never a spread: `push(...walked)` is an argument list, which throws `Maximum call stack size exceeded` past roughly 125,000 entries, and a walk is unbounded.
-      for (const file of walkInto(fullPath, root, guard)) files.push(file);
+      appendAll(files, walkInto(fullPath, root, guard));
     } else {
       files.push(fullPath);
     }

@@ -12,6 +12,8 @@
  * renderer never reaches back into a manifest or the filesystem.
  */
 
+import { appendAll } from '@vibe-agent-toolkit/utils';
+
 import type { ArtifactDelta, ArtifactStatus, CompareReport } from './types.js';
 
 /** Title line shared by the summary and the drill-down. */
@@ -73,10 +75,10 @@ export function renderCompareSummary(report: CompareReport): string {
   ];
 
   if (report.constraints.length > 0) {
-    lines.push('', ...report.constraints.map((constraint) => `!! ${constraint}`));
+    appendAll(lines, ['', ...report.constraints.map((constraint) => `!! ${constraint}`)]);
   }
 
-  lines.push('', ...renderBody(report));
+  appendAll(lines, ['', ...renderBody(report)]);
   return `${lines.join('\n')}\n`;
 }
 
@@ -228,10 +230,10 @@ export function renderDetailHeader(delta: ArtifactDelta): string {
   ];
 
   if (delta.headlines.length > 0) {
-    lines.push(
+    appendAll(lines, [
       ...delta.headlines.map((headline) => `headline: ${headline}`),
       '!! headlines come from a shallow scan of leading key/value lines, not a parse — they are advisory.',
-    );
+    ]);
   }
   if (delta.status === 'changed' && delta.addedLines === 0 && delta.removedLines === 0) {
     lines.push(

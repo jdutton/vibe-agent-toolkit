@@ -5,6 +5,8 @@
  * through progressively finer boundaries until every chunk fits the budget.
  */
 
+import { appendAll } from '@vibe-agent-toolkit/utils';
+
 import type { TokenCounter } from '../interfaces/token-counter.js';
 
 import type { ChunkingConfig, RawChunk } from './types.js';
@@ -161,7 +163,7 @@ function packToBudget(
     if (tokenCounter.count(unit) <= budget) {
       current = unit;
     } else {
-      pieces.push(...breakUp(unit));
+      appendAll(pieces, breakUp(unit));
     }
   }
 

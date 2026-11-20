@@ -43,6 +43,8 @@
  * every spawn site — the most convincing wrong finding this renderer has produced.
  */
 
+import { appendAll } from '@vibe-agent-toolkit/utils';
+
 import type { ReportEnvelope } from '../../envelope/envelope.js';
 import { armLabel, laneNote } from '../../harness/lane.js';
 import {
@@ -290,7 +292,7 @@ function commandLines(row: IoCommandStats, maxSites: number): readonly string[] 
 
   const lines = [summaryLine(row), stabilityLine(row)];
   if (measuredLauncherOnly(row)) lines.push(PROPAGATION_WARNING);
-  lines.push(...row.sites.slice(0, maxSites).map((site) => siteLine(site)));
+  appendAll(lines, row.sites.slice(0, maxSites).map((site) => siteLine(site)));
 
   const withheld = row.sites.length - Math.min(row.sites.length, maxSites);
   if (withheld > 0) {

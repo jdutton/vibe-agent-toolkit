@@ -17,6 +17,8 @@
  * "The two claude-context relations, and the rules they carry".
  */
 
+import { appendAll } from '@vibe-agent-toolkit/utils';
+
 import type {
   ClaudeContextAdmissionKind,
   ClaudeContextChainRow,
@@ -145,7 +147,7 @@ export function claudeContextRelations(projection: Projection): ClaudeContextRel
         chainId: chain.chainId, directory, representative: chain.representative, preambleTokens: chain.preambleTokens,
       });
     }
-    loads.push(...chain.loads);
+    appendAll(loads, chain.loads);
   }
 
   return { claudeContextChains: chains, claudeContextLoads: loads };

@@ -74,6 +74,7 @@ import {
   VatError,
   withFsFault,
   withFsFaultSync,
+  appendAll,
 } from '@vibe-agent-toolkit/utils';
 import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import {
@@ -899,8 +900,8 @@ async function preparePackage(
     // Register files: deferred-dest links so the build preserves/rewrites them (mirrors
     // the collided-asset handling). Stamps resolvedId on dest links and adds a synthetic
     // output resource so the rewriter renders [text](dest) instead of stripping to ().
-    outputResources.push(
-      ...registerDeferredDestLinks(
+    appendAll(outputResources, 
+      registerDeferredDestLinks(
         filesConfig,
         collectResourcesWithLinks(bundledResources, skillResource),
         skillPath,

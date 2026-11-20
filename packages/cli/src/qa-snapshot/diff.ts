@@ -20,7 +20,7 @@
  *    statement. It says so in its own output rather than looking complete.
  */
 
-import { toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { toForwardSlashAnyPlatform, appendAll } from '@vibe-agent-toolkit/utils';
 
 import type {
   ArtifactDelta,
@@ -186,14 +186,14 @@ export function compareSnapshots(before: LoadedSnapshot, after: LoadedSnapshot):
   const provenanceNotes = collectProvenanceNotes(before.manifest, after.manifest);
 
   const constraints: string[] = [];
-  constraints.push(
+  appendAll(constraints, [
     ...corpusConstraints(before.manifest, after.manifest),
     ...platformConstraints(before.manifest, after.manifest),
-  );
+  ]);
 
   const pairs = pairArtifacts(before.manifest, after.manifest);
   const deltas = pairs.map((pair) => toDelta(pair, before, after));
-  constraints.push(...presenceConstraints(deltas));
+  appendAll(constraints, presenceConstraints(deltas));
 
   return {
     beforeDir: before.dir,
@@ -502,7 +502,7 @@ export function renderUnifiedDiff(
   const hunks = buildHunks(ops, options.context);
   const lines: string[] = [];
   for (const hunk of hunks) {
-    lines.push(...hunk);
+    appendAll(lines, hunk);
   }
 
   if (lines.length <= options.maxLines) {

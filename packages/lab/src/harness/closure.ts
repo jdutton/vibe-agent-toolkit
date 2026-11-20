@@ -59,7 +59,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 
-import { everywhere, isPathAbsentError, isUnderRoot, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
+import { everywhere, isPathAbsentError, isUnderRoot, pathPresent, safePath, appendAll } from '@vibe-agent-toolkit/utils';
 import { normalizePath } from '@vibe-agent-toolkit/utils/fs';
 
 import { type InstrumentVersion, sameInstrument } from '../envelope/coordinate.js';
@@ -319,7 +319,7 @@ export function closureDigest(cliPackageRoot: string, ceiling: string): string {
     } else {
       versions.add(`version${FIELD_SEPARATOR}${manifest.name}${FIELD_SEPARATOR}${manifest.version}\n`);
     }
-    pending.push(...dependencyDirectories(dir, manifest, top));
+    appendAll(pending, dependencyDirectories(dir, manifest, top));
   }
 
   // Sorted, and the path left out of every digested line: the same closure

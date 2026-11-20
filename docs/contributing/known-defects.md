@@ -752,9 +752,9 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 ### A git listing that ran out of time or output is reported as "not a git repository"
 
 - **Severity:** Minor · **Effort:** M (one result type, every caller migrated) · **User-visible:** yes
-- **Mechanism:** `gitLsFiles` and `gitLsOthers` return `null` for every git that did not answer,
-  whether the tree is not a repository, the binary is missing, or git ran past its timeout or
-  past the output VAT reads. The callers that classify `null` (`gitNoAnswerError`, the crawl
+- **Mechanism:** `gitLsFiles`, `gitLsOthers` and `gitLinksCheckedOutAsFiles` return `null` for
+  every git that did not answer, whether the tree is not a repository, the binary is missing, or
+  git ran past its timeout or past the output VAT reads. The callers that classify `null` (`gitNoAnswerError`, the crawl
   sources, the rules scope) then call a timeout `GIT_NO_ANSWER` "not a git repository, or git
   could not read it". Throwing `GIT_FAILED` from the listing instead breaks the callers that
   promise to report or fall back on `null`: `gitChangedFiles` ("never throws"),
@@ -764,9 +764,10 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Reproduce:** traced in code: a listing whose `runGit` result is `ETIMEDOUT` returns `null`
   ([`git-utils.ts`](../../packages/utils/src/git-utils.ts) `runListing`).
 - **Where:** [`git-utils.ts`](../../packages/utils/src/git-utils.ts) (`runListing`),
+  [`git-index-links.ts`](../../packages/utils/src/git-index-links.ts) (`gitLinksCheckedOutAsFiles`),
   [`git-no-answer.ts`](../../packages/utils/src/git-no-answer.ts) (`gitNoAnswerFor`)
 - **Fix:** one classified result type (`{ ok: true, paths } | { ok: false, cause }`, the cause
-  from `gitRunFailureOf`) returned by both listings, with every caller migrated to it in the same
+  from `gitRunFailureOf`) returned by all three, with every caller migrated to it in the same
   change: each decides from the cause whether to refuse, report or fall back.
 
 ### The same tree flips between exit 1 and exit 2 across runs

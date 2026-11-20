@@ -18,7 +18,7 @@
  */
 
 import { vatCacheNamespace } from '@vibe-agent-toolkit/resources';
-import { forEachInOrder, safePath } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, safePath, appendAll } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 
 import {
@@ -178,7 +178,7 @@ async function captureLanes(request: CaptureRequest, corpusRoot: string): Promis
       enumeratedPaths.add(safePath.resolve(corpusRoot, row.path));
     }
 
-    warnings.push(...laneWarnings(lane.id, orderPortable, snapshot.buildError));
+    appendAll(warnings, laneWarnings(lane.id, orderPortable, snapshot.buildError));
     entries.push({
       laneId: lane.id,
       artifact,

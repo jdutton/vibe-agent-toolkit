@@ -310,8 +310,10 @@ the home, the home with no store, and any run that degrades — is a **listing**
 when a view admits them and never hashed otherwise. In a repository the names are the root's
 `GitTracker` listing (`git ls-files --cached --others --exclude-standard`), never a tree snapshot:
 a snapshot is `git add --all` into a throwaway index, which reads and hashes every untracked file
-and fails on one file the OS will not let git read. Each name `NEVER_CONTENT_GLOBS` admits is
-`lstat`ed once: a tracked file deleted from the working tree is dropped, a symlink is a declined
+and fails on one file the OS will not let git read. Each name `NEVER_CONTENT_GLOBS` admits has its
+shape read once, off one `readdir` with file types of its directory (an `lstat` where the directory
+holds no entry by that spelling or will not list): a tracked file deleted from the working tree is
+dropped, a symlink is a declined
 link, and a directory (a submodule or nested repository, one name to git) is walked for its
 refusals as a stored population walks it. The listing's refusals never come from the tracker,
 which asks git nothing when it opened a snapshot: the listing runs its own

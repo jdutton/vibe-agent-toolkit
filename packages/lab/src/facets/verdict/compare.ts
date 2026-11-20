@@ -42,7 +42,7 @@
 import { readdir } from 'node:fs/promises';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { everyInOrder, safePath } from '@vibe-agent-toolkit/utils';
+import { everyInOrder, safePath, appendAll } from '@vibe-agent-toolkit/utils';
 
 import { type InstrumentVersion, movedAxes, sameInstrument } from '../../envelope/coordinate.js';
 import type { ReportEnvelope } from '../../envelope/envelope.js';
@@ -167,9 +167,9 @@ export function compareVerdict(
     const reasons = new Map(before.body.excluded.map((exclusion) => [exclusion.name, exclusion.reason]));
     const compared = compareRows(alias, before.body, after.body, reasons);
     if (!compared.ok) return compared;
-    rows.push(...compared.value.rows);
-    excluded.push(...compared.value.held);
-    staleExclusions.push(...compared.value.stale);
+    appendAll(rows, compared.value.rows);
+    appendAll(excluded, compared.value.held);
+    appendAll(staleExclusions, compared.value.stale);
   }
 
   const [first] = pairs.value.values();
@@ -562,10 +562,10 @@ function rowDeltas(alias: string, before: VerdictRow, after: VerdictRow, exclude
   );
   const itemized = itemizedTallies(before, after, added, removed);
   if (itemized !== null) deltas.push({ ...at, change: { kind: 'findings-itemized' }, detail: itemized.detail });
-  deltas.push(
+  appendAll(deltas, [
     ...(itemized?.rest ?? added).map((finding): ObservedDelta => ({ ...at, change: { kind: 'finding-added', finding }, detail: [] })),
     ...removed.map((finding): ObservedDelta => ({ ...at, change: { kind: 'finding-removed', finding }, detail: [] })),
-  );
+  ]);
   if (before.document !== after.document) {
     deltas.push({ ...at, change: { kind: 'document' }, detail: diffExcerpt(before.document, after.document) });
   }

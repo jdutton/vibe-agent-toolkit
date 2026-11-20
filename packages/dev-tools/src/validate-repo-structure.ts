@@ -46,6 +46,7 @@ import {
   isPathAbsentError,
   safePath,
   toForwardSlash,
+  appendAll,
 } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 
@@ -1701,7 +1702,7 @@ export async function collectEngineFloorFindings(
  * Gate: the Node engine floor is declared once and agreed everywhere.
  */
 async function validateEngineFloorAgreement(): Promise<void> {
-  errors.push(...(await collectEngineFloorFindings(REPO_ROOT)));
+  appendAll(errors, (await collectEngineFloorFindings(REPO_ROOT)));
 }
 
 /**
@@ -1775,7 +1776,7 @@ async function validateBinsInstallLastResortExit(): Promise<void> {
       );
     }),
   );
-  errors.push(...findBinsWithoutLastResort(perPackage.flat()));
+  appendAll(errors, findBinsWithoutLastResort(perPackage.flat()));
 }
 
 /**
@@ -1818,7 +1819,7 @@ async function validate(): Promise<void> {
   // Lint configuration: the generated per-package lint files, each package's `lint` script, ESLint
   // ignoring what git ignores, and the installed-linter inputs (generate-lint-config.ts).
   const lintConfigFindings = await collectLintConfigFindings(REPO_ROOT);
-  errors.push(...collectDerivedArtifactFindings(REPO_ROOT), ...lintConfigFindings);
+  appendAll(errors, [...collectDerivedArtifactFindings(REPO_ROOT), ...lintConfigFindings]);
 
   printResults();
 

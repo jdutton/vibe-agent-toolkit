@@ -40,11 +40,11 @@ describe('gitLinksCheckedOutAsFiles over a real index', () => {
 
   it.each(['false', 'no', 'off', '0'])('reads core.symlinks=%s as false', (value) => {
     git(dir, 'config', 'core.symlinks', value);
-    expect([...gitLinksCheckedOutAsFiles(safePath.join(dir, 'docs'))]).toEqual([safePath.join(dir, 'docs', 'link.md')]);
+    expect(gitLinksCheckedOutAsFiles(safePath.join(dir, 'docs'))).toEqual(new Set([safePath.join(dir, 'docs', 'link.md')]));
   });
 
   it.each(['true', 'yes', '1'])('reads nothing for core.symlinks=%s', (value) => {
     git(dir, 'config', 'core.symlinks', value);
-    expect(gitLinksCheckedOutAsFiles(safePath.join(dir, 'docs')).size).toBe(0);
+    expect(gitLinksCheckedOutAsFiles(safePath.join(dir, 'docs'))).toEqual(new Set());
   });
 });

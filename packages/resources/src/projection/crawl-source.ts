@@ -65,7 +65,7 @@
  * empty.
  */
 
-import { lstatSync } from 'node:fs';
+import { type Dirent, lstatSync, readdirSync } from 'node:fs';
 
 import {
   followedKindSync,
@@ -1084,6 +1084,9 @@ export function crawlSourceFor(root: string, outputs: readonly string[]): CrawlS
  */
 export type PopulationUnreadablePolicy = 'refuse' | Extract<UnreadablePolicy, { degrade: unknown }>;
 
+/** What one `lstat` says a name is: `absent` when it is gone, `null` when the filesystem would not say. */
+type ObservedShape = PathShape | 'symlink' | 'absent' | null;
+
 /** One name a {@link RootListing} holds: its two spellings, and its shape once observed. */
 interface ListedName {
   /** Absolute, forward-slashed. */
@@ -1094,7 +1097,7 @@ interface ListedName {
    * What the path is: `undefined` until a crawl admits it and it is `lstat`ed
    * ({@link observedShape}), `null` where the realization must stat it.
    */
-  shape: PathShape | 'symlink' | 'absent' | null | undefined;
+  shape: ObservedShape | undefined;
 }
 
 /** A directory a {@link RootListing} could not list, and whose territory it is in. */
@@ -1124,13 +1127,16 @@ interface Listed {
 interface RootListingGit {
   /** The root's names, its `GitTracker` listing, or `null` when git did not answer. */
   readonly names: () => Promise<readonly string[] | null>;
-  /** The tracked links its checkout wrote as plain files (`gitLinksCheckedOutAsFiles`), read once per repository. */
-  readonly linksCheckedOutAsFiles: () => ReadonlySet<string>;
+  /** The tracked links its checkout wrote as plain files (`gitLinksCheckedOutAsFiles`), read once per listed root, or `null` when git did not answer. */
+  readonly linksCheckedOutAsFiles: () => ReadonlySet<string> | null;
 }
 
 /** The sentence a listing with no git answer refuses with. */
 const NO_GIT_LISTING_CONSEQUENCE =
   'Returning an empty population would be indistinguishable from an empty repository, so this is an error.';
+
+/** The sentence a listing refuses with when git would not say which tracked links its checkout wrote as files. */
+const NO_LINKS_AS_FILES_CONSEQUENCE = 'Without core.symlinks and the index, a link checked out as a plain file would be read as a member.';
 
 /**
  * Which declined links are a crawl's business: every one not under an excluded
@@ -1164,7 +1170,8 @@ export function declinedLinkApplies(exclude: readonly string[]): (relativePath: 
  *
  * ## The same conditions as a stored population
  *
- * Each git name is `lstat`ed once: a tracked file deleted from the working tree
+ * Each git name's shape is read once, off one `readdir` of its directory: a
+ * tracked file deleted from the working tree
  * is dropped, a link is declined, and a directory (git names one only for a
  * nested repository or submodule) is walked for its refusals, as a stored
  * population walks it. Git's `ls-files --others --ignored --directory`, asked
@@ -1183,7 +1190,9 @@ export function declinedLinkApplies(exclude: readonly string[]): (relativePath: 
  * reports ignored links, as the marketplace inventory does, enumerates a stored
  * population, never a listing. A listing therefore refuses, records and
  * declines what the stored population of the same tree does, with the store on
- * or off.
+ * or off, for a crawl that records ignored-territory refusals; a crawl that drops
+ * them gets the same members, links and in-population refusals, and no
+ * ignored-territory rows.
  *
  * A tracked link a `core.symlinks=false` checkout wrote as a plain file is a
  * declined link, as the stored population's snapshot keeps it
@@ -1226,7 +1235,9 @@ export class RootListing {
     if (!gitExtentSelected(root)) return RootListing.#walked(root, outputs);
     const names = await git.names();
     if (names === null) throw gitNoAnswerError(root, NO_GIT_LISTING_CONSEQUENCE);
-    return new RootListing('git', root, outputs, await gitListed(root, outputs, names, git.linksCheckedOutAsFiles()));
+    const linksAsFiles = git.linksCheckedOutAsFiles();
+    if (linksAsFiles === null) throw gitNoAnswerError(root, NO_LINKS_AS_FILES_CONSEQUENCE);
+    return new RootListing('git', root, outputs, await gitListed(root, outputs, names, linksAsFiles));
   }
 
   /** One walk of `root`, pruning what a crawl never enters. */
@@ -1298,7 +1309,7 @@ function settleListed(refusals: ListingRefusals, refusal: DirectoryRefusal, terr
 }
 
 /**
- * What git's names under `root` hold, `lstat`ed once each, with each nested
+ * What git's names under `root` hold, each shape read once ({@link DirectoryShapes}), with each nested
  * repository walked for its refusals (in population) as a stored population
  * walks it, and each collapsed ignored directory named for
  * {@link RootListing}'s walk on demand.
@@ -1321,20 +1332,25 @@ async function gitListed(
   const named = new NameSet(root);
   const links = new NameSet(root);
   const repositories: string[] = [];
-  for (const absolutePath of gitNames) {
-    if (!isPathUnderRoot(absolutePath, root) || !isContent(relativeToRoot(absolutePath, root))) continue;
-    const observed = lstatShape(absolutePath);
+  const shapes = new DirectoryShapes();
+  // Every name is checked against this one prefix: a `resolve` and a `relative`
+  // per name were most of the cost of listing 40,000 names.
+  const normalizedRoot = `${toForwardSlash(safePath.resolve(root))}/`;
+  for (const name of gitNames) {
+    const normalized = toForwardSlash(name);
+    if (!normalized.startsWith(normalizedRoot) || !isContent(normalized.slice(normalizedRoot.length))) continue;
+    const observed = shapes.of(normalized);
     if (observed === 'absent') continue;
     // git's own rule, which the stored population's snapshot applies: with
     // `core.symlinks=false` a tracked link is a plain file on disk and still a
     // link in the index, so it is declined, not a member.
-    const shape = observed === 'file' && linksAsFiles.has(absolutePath) ? 'symlink' : observed;
+    const shape = observed === 'file' && linksAsFiles.has(normalized) ? 'symlink' : observed;
     if (shape === 'symlink') {
-      links.add(absolutePath, shape);
+      links.add(normalized, shape);
       continue;
     }
-    if (shape === 'directory') repositories.push(absolutePath);
-    named.add(absolutePath, shape);
+    if (shape === 'directory') repositories.push(normalized);
+    named.add(normalized, shape);
   }
   named.addAncestors();
 
@@ -1481,14 +1497,56 @@ async function walkRefusals(directory: string, outputs: readonly string[], onRef
  * @param name - The name
  * @returns Its shape
  */
-function observedShape(name: ListedName): PathShape | 'symlink' | 'absent' | null {
+function observedShape(name: ListedName): ObservedShape {
   // `null` is an answer (stat it later), so only `undefined` is asked.
   if (name.shape === undefined) name.shape = lstatShape(name.absolutePath);
   return name.shape;
 }
 
+/** A directory's entries by name, or `null` where it would not list. */
+type DirectoryEntries = ReadonlyMap<string, Dirent> | null;
+
+/**
+ * Names' shapes read off their directories: one `readdir` with file types per
+ * directory, not one `lstat` per name. The entry type is the `lstat` answer (a
+ * link is a link, never followed). A name its directory does not hold under that
+ * spelling (a case-folded spelling, a tracked file deleted from the working tree)
+ * and every name in a directory that would not list fall back to one `lstat`,
+ * so the answer is always the `lstat` answer.
+ */
+class DirectoryShapes {
+  readonly #entries = new Map<string, DirectoryEntries>();
+
+  of(absolutePath: string): ObservedShape {
+    const entry = this.#entriesOf(parentOf(absolutePath))?.get(absolutePath.slice(absolutePath.lastIndexOf('/') + 1));
+    if (entry === undefined) return lstatShape(absolutePath);
+    if (entry.isSymbolicLink()) return 'symlink';
+    if (entry.isDirectory()) return 'directory';
+    return entry.isFile() ? 'file' : null;
+  }
+
+  #entriesOf(directory: string): DirectoryEntries {
+    let entries = this.#entries.get(directory);
+    if (entries === undefined) {
+      entries = readEntries(directory);
+      this.#entries.set(directory, entries);
+    }
+    return entries;
+  }
+}
+
+/** A directory's entries by name, or `null` where it would not list (each name then `lstat`ed). */
+function readEntries(directory: string): DirectoryEntries {
+  try {
+    return new Map(readdirSync(directory, { withFileTypes: true }).map((entry) => [entry.name, entry]));
+  } catch (error) {
+    if (fsFaultOf(error) === undefined) throw error;
+    return null;
+  }
+}
+
 /** One `lstat`, as a {@link ListedName} shape. */
-function lstatShape(absolutePath: string): PathShape | 'symlink' | 'absent' | null {
+function lstatShape(absolutePath: string): ObservedShape {
   try {
     const stats = lstatSync(absolutePath);
     if (stats.isSymbolicLink()) return 'symlink';

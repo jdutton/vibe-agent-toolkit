@@ -3,6 +3,7 @@
  */
 import type { OrgApiClient } from '@vibe-agent-toolkit/claude-marketplace';
 import { createOrgApiClientFromEnv } from '@vibe-agent-toolkit/claude-marketplace';
+import { appendAll } from '@vibe-agent-toolkit/utils';
 import type { Command } from 'commander';
 
 import type { ExternalOutcome, ExternalVerb } from '../../../report-schemas.js';
@@ -77,7 +78,7 @@ async function collectPages<P extends { data: unknown[] }>(
   const allData: Array<P['data'][number]> = [];
   const fetchFrom = async (cursor: string | undefined): Promise<void> => {
     const page = await fetchPage(cursor);
-    allData.push(...page.data);
+    appendAll(allData, page.data);
     const next = nextCursor(page);
     if (next !== undefined) await fetchFrom(next);
   };
