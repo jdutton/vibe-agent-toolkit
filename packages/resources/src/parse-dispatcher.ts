@@ -43,6 +43,7 @@ import {
   type ParsePool,
   type ParsePoolOptions,
 } from './parse-pool.js';
+import { POPULATION_PARSE_LIMITS } from './projection/content-cache.js';
 import type { HarnessContentFacts, HarnessId } from './projection/harness/profile.js';
 
 /**
@@ -126,7 +127,10 @@ export interface ParsePoolPolicy {
    * ⛔ **There is no `inputBytes`.** Every dispatcher's input cap is the
    * population's (`POPULATION_PARSE_LIMITS`): one cap, which the run's content
    * reads, the population's blob stage and every parse apply alike, so no lane
-   * admits a file another lane refuses by its size.
+   * admits a file another lane refuses by its size. The type omits it, and the
+   * constructor overrides any `inputBytes` a caller passes anyway (through a
+   * value typed `ParseLimits`), so the dispatcher and its pool both run under
+   * the one cap.
    */
   limits?: Partial<Omit<ParseLimits, 'inputBytes'>>;
   /**
@@ -416,7 +420,8 @@ export interface ParseContentSource {
 
 export class ParseDispatcher {
   readonly #cache: ParseCache;
-  readonly #limits: Partial<ParseLimits> | undefined;
+  /** The caller's limits with `inputBytes` forced to the one cap: what the pool is built with. */
+  readonly #limits: Partial<ParseLimits>;
   readonly #content: ParseContentSource | undefined;
   /** The input cap, resolved from {@link #limits} once, at construction: see {@link inputBytes}. */
   readonly #inputBytes: number;
@@ -476,10 +481,12 @@ export class ParseDispatcher {
 
   constructor(cache: ParseCache, policy: ParsePoolPolicy) {
     this.#cache = cache;
-    this.#limits = policy.limits;
+    // The one input cap, whatever the caller passed: a `ParseLimits`-typed value
+    // carries `inputBytes` past the type's `Omit`, so it is overridden here.
+    this.#limits = { ...policy.limits, inputBytes: POPULATION_PARSE_LIMITS.inputBytes };
     this.#content = policy.content;
     this.#parsed = policy.content === undefined ? undefined : new Map();
-    this.#resolvedLimits = resolveParseLimits(policy.limits);
+    this.#resolvedLimits = resolveParseLimits(this.#limits);
     this.#inputBytes = this.#resolvedLimits.inputBytes;
     // Read per construction, not at module load. `'cache'` exactly,
     // so the shipped behaviour is the wire protocol unless someone names the
@@ -641,7 +648,7 @@ export class ParseDispatcher {
       this.#pool = create({
         size: this.#pinnedSize ?? defaultParsePoolSize(),
         cacheDir: this.#cache.directory,
-        ...(this.#limits !== undefined && { limits: this.#limits }),
+        limits: this.#limits,
       });
     }
     return this.#pool;

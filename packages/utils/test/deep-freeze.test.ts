@@ -32,6 +32,33 @@ describe('deepFreeze', () => {
     expect(() => { (value.frontmatter as { blob: Uint8Array }).blob = new Uint8Array(); }).toThrow(TypeError);
   });
 
+  it('freezes the objects inside a Map or Set, as in a YAML !!omap or !!set', () => {
+    const inMap = { title: 'a' };
+    const mapKey = { id: 'k' };
+    const inSet = { title: 'b' };
+    const value = { frontmatter: { omap: new Map<unknown, unknown>([['first', inMap], [mapKey, 1]]), set: new Set([inSet]) } };
+
+    deepFreeze(value);
+
+    expect(Object.isFrozen(value.frontmatter.omap)).toBe(true);
+    expect(Object.isFrozen(inMap)).toBe(true);
+    expect(Object.isFrozen(mapKey)).toBe(true);
+    expect(Object.isFrozen(inSet)).toBe(true);
+    expect(() => { inMap.title = 'x'; }).toThrow(TypeError);
+  });
+
+  it('leaves Map, Set and Date containers mutable: Object.freeze cannot stop .set, .add or .setTime', () => {
+    const value = deepFreeze({ omap: new Map([['a', 1]]), set: new Set([1]), date: new Date(0) });
+
+    value.omap.set('b', 2);
+    value.set.add(2);
+    value.date.setTime(1);
+
+    expect(value.omap.get('b')).toBe(2);
+    expect(value.set.has(2)).toBe(true);
+    expect(value.date.getTime()).toBe(1);
+  });
+
   it('passes primitives and null through', () => {
     expect(deepFreeze('text')).toBe('text');
     expect(deepFreeze(3)).toBe(3);

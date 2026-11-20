@@ -44,12 +44,13 @@ not asserted for it.
 What is built:
 
 - Rule 1 needs no code; it removes obligations.
-- Rule 4 is built for `vat validate`, `vat verify`, `vat resources validate`, `vat skills validate`,
-  `vat resources scan` and `vat rag index`. Each opens the run: `RunContext { population, registry,
+- Rule 4 is built for `vat validate`, `vat verify`, `vat resources validate`, `vat skills validate`
+  and `vat resources scan`. Each opens the run: `RunContext { population, registry,
   dispatcher }` (`withRunContext()` in `packages/cli/src/utils/resource-loader.ts`); phase runners
   require it, and there is no ambient context. Not covered yet: `vat audit`, `vat skills build`,
   `vat claude plugin build` (so `vat build`) and `vat ard emit`, which still read a file once per
-  lane that asks. The run opens its projection store on its first enumeration, so a phase that
+  lane that asks. `vat rag index` admits its corpus through one run, but its index step re-reads and
+  re-hashes each file it indexes, so it reads each file twice. The run opens its projection store on its first enumeration, so a phase that
   refuses at its own guards opens nothing. A warm store hit still reads and hashes each file a view
   admits; serving those facts from the store instead is the store-hydration change, not built. `RunPopulation`
   (`packages/resources/src/projection/run-population.ts`) holds one content cache, one

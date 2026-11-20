@@ -161,6 +161,22 @@ describe('the input cap a dispatcher hands its reads', () => {
     expect(dispatcher.inputBytes).toBe(POPULATION_PARSE_LIMITS.inputBytes);
   });
 
+  it('is the population\'s cap even when a caller passes `inputBytes` through a value typed ParseLimits', async () => {
+    // The policy type omits `inputBytes`, but a `ParseLimits` variable carries it past that `Omit`
+    // with no compile error: the cap is enforced at runtime, in the dispatcher and in its pool.
+    const cap = POPULATION_PARSE_LIMITS.inputBytes;
+    const limits: ParseLimits = { ...TIGHT_LIMITS, inputBytes: cap * 4 };
+    const pool = recordingPool(() => Promise.resolve(PARSED));
+    const dispatcher = new ParseDispatcher(missingCache().cache, { limits, createPool: pool.createPool });
+
+    expect(dispatcher.inputBytes).toBe(cap);
+    await expect(dispatcher.parse({ ...DOCUMENT, byteLength: cap + 1 })).rejects.toMatchObject({ limit: 'inputBytes' });
+    await dispatcher.parse(DOCUMENT);
+    await dispatcher.shutdown();
+
+    expect(pool.built[0]?.limits).toStrictEqual({ ...TIGHT_LIMITS, inputBytes: cap });
+  });
+
   it('refuses content past its cap before the cache is consulted, so an entry filed under a larger cap is not its answer', async () => {
     // Content handed over in memory (a frontmatter block, a ZIP entry) had no read to refuse it, and
     // an entry an earlier run filed under a larger cap would otherwise answer it here.

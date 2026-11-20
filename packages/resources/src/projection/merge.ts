@@ -656,7 +656,6 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
   const projection = run === undefined
     ? await withParseDispatcher(
       (dispatcher) => deriveProjection(options, { parseContent, routing, dispatcher }, new RunContentCache()),
-      { policy: { limits: POPULATION_PARSE_LIMITS } },
     )
     : await deriveProjection(options, { parseContent, routing, dispatcher: run.dispatcher }, run.content);
   const stored = await writeCachedProjection(options, rootId, parseContent, projection, routing);

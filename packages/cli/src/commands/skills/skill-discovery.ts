@@ -187,8 +187,16 @@ export function readPluginLocalSkillName(skillSourceDir: string, dispatcher: Par
   return withParseDispatcher((run) => readSkillName(safePath.join(skillSourceDir, 'SKILL.md'), run), { dispatcher });
 }
 
-/** {@link PluginLocalSkillNames} for every location in `pluginLocal`, or the run's refusal ({@link skillParseRefusal}). */
-export async function readPluginLocalSkillNames(pluginLocal: PluginLocalSkillIndex, locationRoot: string): Promise<PluginLocalSkillNames> {
+/**
+ * {@link PluginLocalSkillNames} for every location in `pluginLocal`, or the run's refusal ({@link skillParseRefusal}).
+ * `dispatcher` is required, as for {@link readPluginLocalSkillName}: the run's (so a SKILL.md its
+ * discovery already parsed is not read again), or `undefined` for one call's own.
+ */
+export async function readPluginLocalSkillNames(
+  pluginLocal: PluginLocalSkillIndex,
+  locationRoot: string,
+  dispatcher: ParseDispatcher | undefined,
+): Promise<PluginLocalSkillNames> {
   // The first location per resolved directory, as before; their reads are independent.
   const firstByKey = new Map<string, (typeof pluginLocal.locations)[number]>();
   for (const loc of pluginLocal.locations) {
@@ -196,8 +204,9 @@ export async function readPluginLocalSkillNames(pluginLocal: PluginLocalSkillInd
     if (!firstByKey.has(key)) firstByKey.set(key, loc);
   }
   const entries = [...firstByKey];
-  const read = await withParseDispatcher((dispatcher) =>
-    mapConcurrentFailingInOrder(entries, ([, loc]) => readPluginLocalSkillName(loc.skillSourceDir, dispatcher)),
+  const read = await withParseDispatcher(
+    (run) => mapConcurrentFailingInOrder(entries, ([, loc]) => readPluginLocalSkillName(loc.skillSourceDir, run)),
+    { dispatcher },
   );
   return new Map(entries.map(([key], index) => {
     const name = read[index] as SkillNameRead;

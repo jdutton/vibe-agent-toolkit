@@ -53,6 +53,34 @@ export interface RunContext {
   readonly dispatcher: ParseDispatcher;
 }
 
+/** The errors that refuse a whole run, by identity: see {@link isRunRefusal}. */
+const runRefusals = new WeakSet<object>();
+
+/**
+ * Mark `error` as the run's refusal, so no phase claims it as its own.
+ *
+ * @param error - What refused the run
+ * @returns `error`, marked when it is an object
+ */
+function markRunRefusal(error: unknown): unknown {
+  if (typeof error === 'object' && error !== null) runRefusals.add(error);
+  return error;
+}
+
+/**
+ * Whether `error` refuses the whole run rather than the phase it surfaced in: the
+ * run's projection store would not open (a read-only `VAT_CACHE_DIR`, say). The
+ * store opens on the run's first enumeration and every later enumeration is
+ * answered by that same refusal, so it is the run's, said once (`orchestrate`),
+ * never once per phase that enumerates. A phase runner rethrows it.
+ *
+ * @param error - A phase's error
+ * @returns Whether it is the run's refusal
+ */
+export function isRunRefusal(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && runRefusals.has(error);
+}
+
 /**
  * Run one verb's work with its {@link RunContext}, inside the projection-store
  * scope that answers it.
@@ -61,8 +89,9 @@ export interface RunContext {
  * enumeration of the home root (inside whichever phase asks first) opens the
  * store, takes the snapshot that keys it and initializes the root's ignore
  * oracle; so a phase that refuses at its own guards, or finds nothing to check,
- * refuses or reports exactly as it would alone, and a store or git refusal is
- * the refusal of the phase that enumerated, not of phases that never needed it.
+ * refuses or reports exactly as it would alone. A git refusal is the refusal of
+ * the phase that enumerated; a store that will not open is the run's refusal
+ * ({@link isRunRefusal}), said once, and no later phase runs.
  * What can still fail here is the parse dispatcher's shutdown when the run ends.
  *
  * @param options - The run's home root, and an ignore oracle to reuse
@@ -77,7 +106,14 @@ export function withRunContext<T>(
   const gitTracker = options.gitTracker ?? new GitTracker(root);
   return withLazyPopulationCache({ root }, (cacheOf) =>
     withRunPopulation(
-      { root, gitTracker, cacheOf, collectionsFor: (enumerated) => Promise.resolve(collectionsOption(enumerated).collections) },
+      {
+        root,
+        gitTracker,
+        cacheOf: () => cacheOf().catch((error: unknown) => {
+          throw markRunRefusal(error);
+        }),
+        collectionsFor: (enumerated) => Promise.resolve(collectionsOption(enumerated).collections),
+      },
       (population) => work({
         population,
         registry: ResourceRegistry.forRun(population, { baseDir: root, gitTracker }),

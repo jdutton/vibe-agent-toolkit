@@ -947,7 +947,7 @@ async function runInProcessPhases(run: {
   // ONE plugin-local index likewise, and the declared name of each plugin-local
   // skill, which keys its config exactly as the plugin build keyed it.
   const pluginLocal = indexPluginLocalSkills(config, projectRoot);
-  const pluginLocalNames = await readPluginLocalSkillNames(pluginLocal, projectRoot);
+  const pluginLocalNames = await readPluginLocalSkillNames(pluginLocal, projectRoot, run.dispatcher);
 
   if (phases.includes(FILES_CONFIG_DESTS)) {
     results.push(await inProcess(IN_PROCESS_PHASES[FILES_CONFIG_DESTS], () =>

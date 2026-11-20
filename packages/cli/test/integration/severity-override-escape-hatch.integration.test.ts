@@ -241,7 +241,7 @@ async function verifyFindings(root: string): Promise<string[]> {
   const config = loadConfig(root, 'source');
   const discovered = config?.skills ? (await discoverSkillsFromConfig(config.skills, root, 'refuse', undefined)).skills : [];
   const pluginLocal = indexPluginLocalSkills(config ?? {}, root);
-  return checkPackagedAgentInstructionFiles(root, discovered, pluginLocal, await readPluginLocalSkillNames(pluginLocal, root)).issues.map((i) => String(i.location));
+  return checkPackagedAgentInstructionFiles(root, discovered, pluginLocal, await readPluginLocalSkillNames(pluginLocal, root, undefined)).issues.map((i) => String(i.location));
 }
 
 /** Every agent-instruction issue `vat audit <target>` publishes, AFTER severity resolution. */

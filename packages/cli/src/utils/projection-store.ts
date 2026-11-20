@@ -712,9 +712,9 @@ function withPopulationScope<T>(
  *
  * For a run that may finish without enumerating anything: a phase that refuses
  * at its own guards, or finds nothing to check, never opens the store or takes
- * the snapshot that keys it, so its refusal text and stderr are its own; and a
- * store that will not open refuses the phase that asked for it, not phases that
- * never needed it. Otherwise the same scope as {@link withPopulationCache}: one
+ * the snapshot that keys it, so its refusal text and stderr are its own. A store
+ * that will not open rejects its first asker, and every later asker with the same
+ * error (`withRunContext` makes that the run's one refusal). Otherwise the same scope as {@link withPopulationCache}: one
  * snapshot memo, one notice ledger, and nested scopes join it.
  *
  * @param options - Where the corpus is

@@ -1,3 +1,4 @@
+'use strict';
 /**
  * A content-read probe at the `node:fs` boundary, for system tests.
  *
@@ -24,20 +25,15 @@
  * - **Inert unless activated**: nothing is wrapped without {@link DIR_ENV} and
  *   {@link ROOT_ENV}.
  * - **Builtins only**: it runs before anything else in a process it observes.
- * - **Erasable TypeScript only**: Node strips the types when it loads the file,
- *   so there is no build step; `require` is used rather than `import x =
- *   require(...)`, which type stripping cannot erase.
+ * - **Plain JavaScript**: Node loads a `--require` preload as it is, and the
+ *   declared Node floor does not strip types from one, so the types are JSDoc.
  * - **One dump per thread** at exit, so a worker thread's reads are not lost.
  */
 
-import type * as FsModule from 'node:fs';
-import type * as ModuleModule from 'node:module';
-import type * as PathModule from 'node:path';
-import type * as WorkerThreadsModule from 'node:worker_threads';
-
-const fs = require('node:fs') as typeof FsModule;
-const nodePath = require('node:path') as typeof PathModule;
-const { threadId } = require('node:worker_threads') as typeof WorkerThreadsModule;
+const fs = require('node:fs');
+const nodeModule = require('node:module');
+const nodePath = require('node:path');
+const { threadId } = require('node:worker_threads');
 
 /** The directory each thread writes its dump to. */
 const DIR_ENV = 'VAT_TEST_READ_PROBE_DIR';
@@ -45,10 +41,14 @@ const DIR_ENV = 'VAT_TEST_READ_PROBE_DIR';
 /** The root under which reads are counted. */
 const ROOT_ENV = 'VAT_TEST_READ_PROBE_ROOT';
 
-type AnyFunction = (this: unknown, ...args: unknown[]) => unknown;
+/** @typedef {(this: unknown, ...args: unknown[]) => unknown} AnyFunction */
 
-/** Reads per root-relative path, forward slashes. */
-const reads = new Map<string, number>();
+/**
+ * Reads per root-relative path, forward slashes.
+ *
+ * @type {Map<string, number>}
+ */
+const reads = new Map();
 
 /** Set while a counted sync read runs, so its own nested `openSync` is not counted. */
 let insideSyncRead = false;
@@ -57,11 +57,11 @@ let insideSyncRead = false;
  * Each spelling of the root a read's path may start with: as given, and with
  * its symlinks resolved (a temp directory is often reached through one).
  *
- * @param root - The root as the test named it
- * @returns The spellings, each ending in a separator
+ * @param {string} root - The root as the test named it
+ * @returns {string[]} The spellings, each ending in a separator
  */
-function rootSpellings(root: string): string[] {
-  const spellings = new Set<string>([nodePath.resolve(root)]);
+function rootSpellings(root) {
+  const spellings = new Set([nodePath.resolve(root)]);
   // The test creates the root before it starts a process, so it resolves; a probe
   // that cannot resolve it should fail the process loudly, not count nothing.
   // eslint-disable-next-line local/no-fs-realpathSync -- a --require preload runs before VAT loads and must use builtins only; it cannot import normalizePath
@@ -69,8 +69,13 @@ function rootSpellings(root: string): string[] {
   return [...spellings].map((spelling) => slashes(spelling).replace(/\/?$/u, '/'));
 }
 
-/** A path with forward slashes. */
-function slashes(value: string): string {
+/**
+ * A path with forward slashes.
+ *
+ * @param {string} value - A native path
+ * @returns {string} The path with forward slashes
+ */
+function slashes(value) {
   // eslint-disable-next-line local/no-manual-path-normalize -- a --require preload uses builtins only; the value is a native path from node:path on the platform that produced it
   return value.replaceAll('\\', '/');
 }
@@ -78,12 +83,13 @@ function slashes(value: string): string {
 /**
  * The root-relative path a read names, if it names one under the root.
  *
- * @param target - The path argument a read was given
- * @param roots - {@link rootSpellings}
- * @returns The relative path, or `undefined` for a descriptor, a handle or a path outside
+ * @param {unknown} target - The path argument a read was given
+ * @param {readonly string[]} roots - {@link rootSpellings}
+ * @returns {string | undefined} The relative path, or `undefined` for a descriptor, a handle or a path outside
  */
-function relativeUnder(target: unknown, roots: readonly string[]): string | undefined {
-  let raw: string | undefined;
+function relativeUnder(target, roots) {
+  /** @type {string | undefined} */
+  let raw;
   if (typeof target === 'string') raw = target;
   else if (target instanceof URL) raw = target.protocol === 'file:' ? decodeURIComponent(target.pathname) : undefined;
   else if (Buffer.isBuffer(target)) raw = target.toString('utf8');
@@ -93,8 +99,13 @@ function relativeUnder(target: unknown, roots: readonly string[]): string | unde
   return root === undefined ? undefined : absolute.slice(root.length);
 }
 
-/** Whether `open` flags only read. */
-function readOnly(flags: unknown): boolean {
+/**
+ * Whether `open` flags only read.
+ *
+ * @param {unknown} flags - The flags an open was given
+ * @returns {boolean} Whether they only read
+ */
+function readOnly(flags) {
   if (flags === undefined || flags === null) return true;
   // Numeric flags carry modifiers (VAT opens with O_RDONLY | O_NONBLOCK): only the access mode decides.
   if (typeof flags === 'number') return (flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR)) === 0;
@@ -104,22 +115,16 @@ function readOnly(flags: unknown): boolean {
 /**
  * Replace `holder[name]` with a wrapper that counts a content read first.
  *
- * @param holder - The module object
- * @param name - The method
- * @param roots - {@link rootSpellings}
- * @param isRead - Whether a call with these arguments reads content
- * @param sync - Whether the method is synchronous (its nested sync reads are its own)
+ * @param {Record<string, unknown>} holder - The module object
+ * @param {string} name - The method
+ * @param {readonly string[]} roots - {@link rootSpellings}
+ * @param {(args: readonly unknown[]) => boolean} isRead - Whether a call with these arguments reads content
+ * @param {boolean} sync - Whether the method is synchronous (its nested sync reads are its own)
  */
-function wrap(
-  holder: Record<string, unknown>,
-  name: string,
-  roots: readonly string[],
-  isRead: (args: readonly unknown[]) => boolean,
-  sync: boolean,
-): void {
-  const original = holder[name] as AnyFunction | undefined;
+function wrap(holder, name, roots, isRead, sync) {
+  const original = /** @type {AnyFunction | undefined} */ (holder[name]);
   if (typeof original !== 'function') return;
-  holder[name] = function counted(this: unknown, ...args: unknown[]): unknown {
+  holder[name] = function counted(...args) {
     const relative = insideSyncRead ? undefined : relativeUnder(args[0], roots);
     if (relative === undefined || !isRead(args)) return original.apply(this, args);
     reads.set(relative, (reads.get(relative) ?? 0) + 1);
@@ -134,16 +139,17 @@ function wrap(
 }
 
 /** Install the wrappers and the exit dump, when activated. */
-function install(): void {
+function install() {
   const dir = process.env[DIR_ENV];
   const root = process.env[ROOT_ENV];
   if (dir === undefined || dir === '' || root === undefined || root === '') return;
   const writeFileSync = fs.writeFileSync.bind(fs);
   const roots = rootSpellings(root);
-  const always = (): boolean => true;
-  const openReads = (args: readonly unknown[]): boolean => readOnly(args[1]);
-  const fsHolder = fs as unknown as Record<string, unknown>;
-  const promisesHolder = fs.promises as unknown as Record<string, unknown>;
+  const always = () => true;
+  /** @param {readonly unknown[]} args */
+  const openReads = (args) => readOnly(args[1]);
+  const fsHolder = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (fs));
+  const promisesHolder = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (fs.promises));
   wrap(fsHolder, 'readFile', roots, always, false);
   wrap(fsHolder, 'readFileSync', roots, always, true);
   wrap(fsHolder, 'createReadStream', roots, always, false);
@@ -153,7 +159,7 @@ function install(): void {
   wrap(promisesHolder, 'open', roots, openReads, false);
   // An ES module's named import of a builtin binds to its own export record; this
   // carries the wrappers into it even if an ES module loaded `node:fs` first.
-  (require('node:module') as typeof ModuleModule).syncBuiltinESMExports();
+  nodeModule.syncBuiltinESMExports();
   process.on('exit', () => {
     const dump = { pid: process.pid, threadId, reads: Object.fromEntries(reads) };
     writeFileSync(nodePath.join(dir, `reads-${String(process.pid)}-${String(threadId)}.json`), JSON.stringify(dump));

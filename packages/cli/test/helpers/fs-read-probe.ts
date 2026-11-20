@@ -1,5 +1,5 @@
 /**
- * The system tests' side of the `node:fs` content-read probe (`fs-read-probe.cts`):
+ * The system tests' side of the `node:fs` content-read probe (`fs-read-probe.cjs`):
  * the environment that injects it into every VAT process a run starts, and the
  * per-path read counts read back from the dumps those processes leave.
  */
@@ -8,8 +8,8 @@ import { readdirSync, readFileSync } from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
-/** The probe itself, loaded by Node with its types stripped. */
-const PROBE_PATH = safePath.resolve(safePath.join(import.meta.dirname, 'fs-read-probe.cts'));
+/** The probe itself: plain JavaScript, which every supported Node loads as a `--require` preload. */
+const PROBE_PATH = safePath.resolve(safePath.join(import.meta.dirname, 'fs-read-probe.cjs'));
 
 /** One thread's dump. */
 interface ProbeDump {

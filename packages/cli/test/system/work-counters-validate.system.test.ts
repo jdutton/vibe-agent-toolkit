@@ -10,7 +10,7 @@
  *
  * - VAT's work counters, from the dump of the `vat validate` process itself
  *   (the one whose dump carries the `resources` phase), split per phase.
- * - A content-read probe at the `node:fs` boundary (`../helpers/fs-read-probe.cts`),
+ * - A content-read probe at the `node:fs` boundary (`../helpers/fs-read-probe.cjs`),
  *   which sees a lane that reads around VAT's own read seam. Its positive control
  *   is a file every phase reads, counted at exactly one read.
  *
@@ -22,8 +22,9 @@
  *   home root, enumerated through the run's population;
  * - a skill outside the project, with no project root of its own.
  *
- * Every arm has a private store and temp directory (where the parse cache lives),
- * so no other run's cache turns a cold run warm.
+ * Every arm has a private `VAT_CACHE_DIR` (where the projection store and the
+ * parse cache live) and temp directory, so no other run's cache turns a cold run
+ * warm.
  */
 
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';

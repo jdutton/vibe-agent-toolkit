@@ -44,7 +44,7 @@ import { ParseDispatcher } from '../parse-dispatcher.js';
 import type { SHA256 } from '../schemas/checksum.js';
 import type { CollectionConfig } from '../schemas/project-config.js';
 
-import { POPULATION_PARSE_LIMITS, RunContentCache } from './content-cache.js';
+import { RunContentCache } from './content-cache.js';
 import type { PopulationCache } from './merge.js';
 import { buildResourcePopulation, type ResourceEnumeration, type ResourcePopulationSource } from './resource-population.js';
 
@@ -93,7 +93,7 @@ export async function withPopulationRun<T>(work: (run: PopulationRun) => Promise
   // The dispatcher parses through the run's content cache, so a file any lane
   // parses by path is read once per run whichever lane read it first.
   const content = new RunContentCache();
-  const dispatcher = new ParseDispatcher(defaultParseCache(), { limits: POPULATION_PARSE_LIMITS, content });
+  const dispatcher = new ParseDispatcher(defaultParseCache(), { content });
   try {
     return await work({ content, dispatcher });
   } finally {
