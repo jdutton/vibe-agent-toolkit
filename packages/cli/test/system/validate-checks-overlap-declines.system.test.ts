@@ -151,7 +151,11 @@ describe('vat validate — the checks overlap over store states the gate judges,
       store: 'warm',
       // No parse cache: the member's cold parse writes one, inside the post-spawn window.
       prepare: (cache) => {
-        for (const namespace of readdirSync(cache)) rmSync(safePath.join(cache, namespace, 'parse'), { recursive: true, force: true });
+        // Namespaces only: the cache root also holds CACHEDIR.TAG, and a path through a file is
+        // ENOTDIR on Node versions whose `force` does not cover it.
+        for (const namespace of readdirSync(cache).filter((name) => name !== 'CACHEDIR.TAG')) {
+          rmSync(safePath.join(cache, namespace, 'parse'), { recursive: true, force: true });
+        }
       },
       preloads: ['parent-only-probe-refused.mjs'],
       during: (running, files) => {
