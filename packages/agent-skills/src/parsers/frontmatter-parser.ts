@@ -1,5 +1,6 @@
 import {
   frontmatterFencesOf,
+  type FrontmatterFence,
   isPerRunParseRefusal,
   type MeasuredContent,
   parseContentCached,
@@ -29,6 +30,19 @@ export interface FrontmatterError {
 }
 
 export type FrontmatterResult = FrontmatterSuccess | FrontmatterError;
+
+/** The frontmatter, or why there is none: {@link FrontmatterResult} without the body. */
+type FrontmatterVerdict = Omit<FrontmatterSuccess, 'body'> | FrontmatterError;
+
+/** What the parse worker decoded a document's frontmatter block to: `parseFrontmatterSource`'s result. */
+interface DecodedFrontmatter {
+  readonly frontmatter: Record<string, unknown> | undefined;
+  readonly frontmatterError: string | undefined;
+  readonly frontmatterNotAMapping: boolean;
+}
+
+/** A block the worker never decoded: no fences, or nothing between them. */
+const NOTHING_DECODED: DecodedFrontmatter = { frontmatter: undefined, frontmatterError: undefined, frontmatterNotAMapping: false };
 
 /** The refusal for a block that declares nothing. */
 const EMPTY_BLOCK: FrontmatterError = {
@@ -108,17 +122,8 @@ export function parseFrontmatter(input: MeasuredContent, route: ParseRoute): Pro
   const { content } = input;
   const { lines, opened, closing } = frontmatterFencesOf(content, SKILL_TEXT_DECLARATION);
 
-  if (!opened) {
-    return Promise.resolve({
-      success: false,
-      error: 'No frontmatter found - must start at beginning with "---" delimiter',
-      cause: undefined,
-    });
-  }
-
-  if (closing === -1) {
-    return Promise.resolve({ success: false, error: 'No closing delimiter found', cause: undefined });
-  }
+  if (!opened) return Promise.resolve(withBody(frontmatterVerdictOf('none', NOTHING_DECODED), ''));
+  if (closing === -1) return Promise.resolve(withBody(frontmatterVerdictOf('unclosed', NOTHING_DECODED), ''));
 
   const { lineSeparator } = SKILL_TEXT_DECLARATION;
   const source = lines.slice(1, closing).join(lineSeparator);
@@ -129,9 +134,51 @@ export function parseFrontmatter(input: MeasuredContent, route: ParseRoute): Pro
   // "no value" by the document's own word, NOT a non-mapping, and no keys. A
   // skill without frontmatter fields is not a skill, so it is refused — saying
   // it is empty, never that it is not a mapping.
-  if (source.trim() === '') return Promise.resolve(EMPTY_BLOCK);
+  if (source.trim() === '') return Promise.resolve(withBody(frontmatterVerdictOf('closed', NOTHING_DECODED), body));
 
   return decodeBlock(source, body, route);
+}
+
+/**
+ * A SKILL.md's frontmatter verdict from where its fences are and what its block
+ * decoded to: the ONE wording of every refusal of the bytes, which
+ * {@link parseFrontmatter} returns and a lane holding a document's stored facts
+ * (the record's `frontmatterFence`, the parse's frontmatter verdict) returns
+ * without reading the file. A per-run refusal (`cause`) is not one of these: a
+ * caller with the document's facts never met one, and this parser returns its
+ * own.
+ *
+ * A closed block that declares NOTHING (empty, whitespace, comment-only, `~`,
+ * `null`) is "no value" by the document's own word, as `parseFrontmatterSource`
+ * reads it: NOT a non-mapping, and no keys. A skill without frontmatter fields
+ * is not a skill, so it is refused, saying it is empty. A block that decoded
+ * but is not a PLAIN mapping (a scalar, a sequence, a `!!set` / `!!omap` /
+ * `!!timestamp` / `!!binary` root) is refused saying so, because "no
+ * frontmatter" over a file that plainly has a `---` block sends the author to
+ * the wrong fix.
+ *
+ * @param fence - Where the fences are
+ * @param decoded - The block's decode; nothing for a document whose fences are not closed
+ * @returns The frontmatter, or the refusal
+ */
+export function frontmatterVerdictOf(fence: FrontmatterFence, decoded: DecodedFrontmatter): FrontmatterVerdict {
+  if (fence === 'none') {
+    return { success: false, error: 'No frontmatter found - must start at beginning with "---" delimiter', cause: undefined };
+  }
+  if (fence === 'unclosed') return { success: false, error: 'No closing delimiter found', cause: undefined };
+  if (decoded.frontmatterError !== undefined) {
+    return { success: false, error: `Failed to parse YAML frontmatter: ${decoded.frontmatterError}`, cause: undefined };
+  }
+  if (decoded.frontmatterNotAMapping) {
+    return {
+      success: false,
+      error:
+        'Frontmatter is not a YAML mapping: the block between the "---" delimiters is a sequence, a scalar or a typed value, not key: value fields',
+      cause: undefined,
+    };
+  }
+  if (decoded.frontmatter === undefined) return EMPTY_BLOCK;
+  return { success: true, frontmatter: decoded.frontmatter };
 }
 
 /**
@@ -168,24 +215,19 @@ async function decodeBlock(source: string, body: string, route: ParseRoute): Pro
     );
   }
 
-  if (parsed.frontmatterError !== undefined) {
-    return { success: false, error: `Failed to parse YAML frontmatter: ${parsed.frontmatterError}`, cause: undefined };
-  }
+  const verdict = frontmatterVerdictOf('closed', {
+    frontmatter: parsed.frontmatter,
+    frontmatterError: parsed.frontmatterError,
+    frontmatterNotAMapping: parsed.frontmatterNotAMapping === true,
+  });
+  return withBody(verdict, body);
+}
 
-  // A block that decoded but is not a PLAIN mapping is refused HERE, by the
-  // rule every lane reads (`isPlainMapping`, applied by the worker): a scalar,
-  // a sequence, and the typed roots `!!set` / `!!omap` / `!!timestamp` /
-  // `!!binary`. The refusal says so, because "no frontmatter" over a file that
-  // plainly has a `---` block sends the author to the wrong fix.
-  if (parsed.frontmatterNotAMapping === true) {
-    return {
-      success: false,
-      error:
-        'Frontmatter is not a YAML mapping: the block between the "---" delimiters is a sequence, a scalar or a typed value, not key: value fields',
-      cause: undefined,
-    };
-  }
-
-  if (parsed.frontmatter === undefined) return EMPTY_BLOCK;
-  return { success: true, frontmatter: parsed.frontmatter, body };
+/**
+ * @param verdict - A block's verdict
+ * @param body - What follows its closing fence
+ * @returns This parser's result: the body beside the frontmatter, a refusal as it is
+ */
+function withBody(verdict: FrontmatterVerdict, body: string): FrontmatterResult {
+  return verdict.success ? { ...verdict, body } : verdict;
 }

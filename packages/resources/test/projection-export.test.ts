@@ -223,7 +223,7 @@ function contribute(builder: ProjectionBuilder, side: Side): void {
   builder.addHarnessBlobFacts({ blob: side.blob, harness: 'claude-code', injectedBytes: 12, injectedTokens: 3, paths: null });
   builder.addHarnessBlobImport({ blob: side.blob, harness: 'claude-code', ordinal: 0, rawRef: '@other.md', target: 'other.md', line: 1 });
   // Keys deliberately out of registry order: the export puts them back.
-  builder.addSkillTextFacts({ matchCount: 1, held: true, h1: 'Fixture', lineCount: 3, blob: side.blob });
+  builder.addSkillTextFacts({ matchCount: 1, held: true, frontmatterFence: 'none', h1: 'Fixture', lineCount: 3, blob: side.blob });
   builder.addSkillTextMatch({ matchText: 'as of March 2024', loneSurrogates: null, line: 2, patternId: 'as-of-month', family: 'timeSensitive', ordinal: 0, blob: side.blob });
 }
 

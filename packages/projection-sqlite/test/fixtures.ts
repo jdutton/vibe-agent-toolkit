@@ -127,7 +127,7 @@ export function sampleBlobRows(key: string = FIRST_BLOB): BlobScopedRows {
     }],
     // A markdown blob carries exactly one facts row; the CR in `h1` and
     // `matchText` is a CRLF file's, kept raw.
-    skillTextFacts: [{ blob: key, lineCount: 3, h1: 'Heading\r', matchCount: 1, held: true }],
+    skillTextFacts: [{ blob: key, lineCount: 3, h1: 'Heading\r', frontmatterFence: 'none', matchCount: 1, held: true }],
     skillTextMatches: [{
       blob: key,
       ordinal: 0,

@@ -32,8 +32,10 @@ import {
   readContentWithKey,
   ResourceRegistry,
   VAT_CACHE_DIR_ENV,
+  withRunPopulation,
 } from '@vibe-agent-toolkit/resources';
 import { readWorkCounters, safePath, WORK_COUNTER_NAMES, type WorkCounter } from '@vibe-agent-toolkit/utils';
+import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { createTempDir, removeTempDir, scratchTmpdirEnv } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, expect, vi } from 'vitest';
 
@@ -563,7 +565,62 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
     delta: { 'git.calls': 1 },
   },
   'skillText.storeMiss': skillTextStoreMissSeed(),
+  'skillText.storeUnopened': skillTextStoreUnopenedSeed(),
+  'skillText.outsideRoot': skillTextOutsideRootSeed(),
 };
+
+/**
+ * A run's stored-document question about a file outside its root, asked twice:
+ * answered nothing once per file per run, opening nothing (its store would
+ * refuse), and reading, keying or listing nothing to say so.
+ */
+function skillTextOutsideRootSeed(): Seed {
+  return {
+    prepare: (scope) => {
+      const root = safePath.join(scope.dir(), 'home');
+      const outside = safePath.join(scope.dir(), 'elsewhere', 'SKILL.md');
+      return () => withRunPopulation({
+        root,
+        outputs: [],
+        gitTracker: new GitTracker(root),
+        cacheOf: () => Promise.reject(new Error('the run never opens its store for this')),
+        questionCacheOf: () => Promise.reject(new Error('the question never opens its store for this')),
+        collectionsFor: () => Promise.resolve(undefined),
+      }, async (population) => {
+        await population.source.storedDocument(outside, 'markdown');
+        await population.source.storedDocument(outside, 'markdown');
+        return undefined;
+      });
+    },
+    delta: { 'skillText.outsideRoot': 1 },
+  };
+}
+
+/**
+ * A run's stored-document questions meeting a store that will not open (here,
+ * another process's lock): two questions, one failed opening counted, and
+ * nothing read, keyed or listed to answer either.
+ */
+function skillTextStoreUnopenedSeed(): Seed {
+  return {
+    prepare: (scope) => {
+      const root = scope.dir();
+      return () => withRunPopulation({
+        root,
+        outputs: [],
+        gitTracker: new GitTracker(root),
+        cacheOf: () => Promise.resolve(undefined),
+        questionCacheOf: () => Promise.reject(new Error('database is locked')),
+        collectionsFor: () => Promise.resolve(undefined),
+      }, async (population) => {
+        await population.source.storedDocument(safePath.join(root, 'SKILL.md'), 'markdown');
+        await population.source.storedDocument(safePath.join(root, 'guide.md'), 'markdown');
+        return undefined;
+      });
+    },
+    delta: { 'skillText.storeUnopened': 1 },
+  };
+}
 
 /**
  * The skills lane reading a SKILL.md its run's store does not serve, twice in

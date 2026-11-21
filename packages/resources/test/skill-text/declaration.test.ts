@@ -29,21 +29,12 @@ function reachable(value: unknown, found: object[] = []): object[] {
 }
 
 describe('SKILL_TEXT_DECLARATION', () => {
-  it('is frozen all the way down, so no holder can change what the core reads', () => {
+  it('freezes every object and array, and leaves every regex unfrozen (a frozen one runs on V8\'s slow path)', () => {
     const objects = reachable(SKILL_TEXT_DECLARATION);
-    expect(objects.filter((object) => !Object.isFrozen(object))).toEqual([]);
-    expect(objects.filter((object) => object instanceof RegExp).length).toBeGreaterThan(20);
-  });
-
-  it('refuses exec on a declared global regex, so a stray lastIndex cannot drop a later match', () => {
-    const global = reachable(SKILL_TEXT_DECLARATION).filter(
-      (object): object is RegExp => object instanceof RegExp && object.global,
-    );
-    expect(global.length).toBeGreaterThan(0);
-    for (const regex of global) {
-      expect(() => regex.exec('`a` b:c x')).toThrow(TypeError);
-      expect(regex.lastIndex).toBe(0);
-    }
+    const regexes = objects.filter((object) => object instanceof RegExp);
+    expect(regexes.length).toBeGreaterThan(20);
+    expect(objects.filter((object) => !(object instanceof RegExp) && !Object.isFrozen(object))).toEqual([]);
+    expect(regexes.filter((regex) => Object.isFrozen(regex))).toEqual([]);
   });
 
   it('lists exactly the families its sections name, both ways', () => {
@@ -105,6 +96,23 @@ describe('SKILL_TEXT_DECLARATION', () => {
 
 describe('skillTextDeclarationDigest', () => {
   const digest = skillTextDeclarationDigest(SKILL_TEXT_DECLARATION);
+
+  // A change to the declaration's content moves the digest on purpose (stored facts must be
+  // recomputed); a change to how it is held (frozen or not) must not.
+  it('does not move with how the declaration is held: an unfrozen deep copy digests the same', () => {
+    const copy = structuredClone(SKILL_TEXT_DECLARATION);
+    expect(Object.isFrozen(copy.body)).toBe(false);
+    expect(skillTextDeclarationDigest(copy)).toBe(digest);
+  });
+
+  // The content as committed at 7acf4e8ca, while the declaration was still deep-frozen: unfreezing
+  // its regexes kept that value. `body.fenceStates` came later, so it is taken out to compare.
+  it('kept its 7acf4e8ca value through the regex unfreeze', () => {
+    const { fenceStates, ...bodyAt7acf4e8ca } = SKILL_TEXT_DECLARATION.body;
+    expect(Object.keys(fenceStates)).toHaveLength(3);
+    const at7acf4e8ca = { ...SKILL_TEXT_DECLARATION, body: bodyAt7acf4e8ca } as unknown as typeof SKILL_TEXT_DECLARATION;
+    expect(skillTextDeclarationDigest(at7acf4e8ca)).toBe('297d5cb627b3908b290c287b4487dfebd4f5bd3c0c2baa11f4b9cc6dcfdafe1c');
+  });
 
   it('is a stable sha256 hex', () => {
     expect(digest).toMatch(/^[0-9a-f]{64}$/);

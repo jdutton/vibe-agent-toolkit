@@ -39,6 +39,7 @@ function recordOf(count: number, matchText = 'You should x.'): SkillTextFacts {
   return {
     lineCount: count + 1,
     h1: null,
+    frontmatterFence: 'none',
     matches: Array.from({ length: count }, (_, ordinal) => ({ ordinal, family, patternId: id, line: ordinal + 1, matchText })),
   };
 }
@@ -110,7 +111,7 @@ describe('the bound the caches hold a record to', () => {
 describe('a stored record past its bound', () => {
   it('is a facts row saying it is not held, with no match rows', () => {
     const rows = skillTextRowsFor(KEY, recordOf(PAST_BOUND_MATCHES));
-    expect(rows.facts).toEqual({ blob: KEY, lineCount: PAST_BOUND_MATCHES + 1, h1: null, matchCount: PAST_BOUND_MATCHES, held: false });
+    expect(rows.facts).toEqual({ blob: KEY, lineCount: PAST_BOUND_MATCHES + 1, h1: null, frontmatterFence: 'none', matchCount: PAST_BOUND_MATCHES, held: false });
     expect(rows.matches).toEqual([]);
   });
 

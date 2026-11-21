@@ -212,6 +212,13 @@ const FLAT_HEADING_FIELDS: FieldReaders<FlatHeading, BlobSectionRow> = {
  */
 export type BlobResourceFacts = Omit<Pick<ResourceMetadata, BlobFactField>, 'links'> & {
   links: BlobLink[];
+  /**
+   * Whether the frontmatter block is valid YAML but not a mapping
+   * (`ParseResult.frontmatterNotAMapping`, the blob's `frontmatterNotAMapping`
+   * column): with `frontmatter` and `frontmatterError`, the parse's whole verdict
+   * on the block, so a skills lane words its refusal without decoding it again.
+   */
+  frontmatterNotAMapping: boolean;
   skillText: SkillTextFacts | null;
 };
 
@@ -251,6 +258,7 @@ export function blobResourceFactsOf(parse: ParseResult, contentKey: string): Blo
     ...optionalParseFacts(parse),
     estimatedTokenCount: parse.estimatedTokenCount,
     contentKey,
+    frontmatterNotAMapping: parse.frontmatterNotAMapping === true,
     // What the store keeps, so a cold resource's facts are the warm one's: a record past its bound is none.
     skillText: parse.skillText === null || skillTextHeld(parse.skillText) ? parse.skillText : null,
   };
@@ -339,7 +347,7 @@ function outcomeOf(contentKey: string, rows: KeyRows | undefined): BlobFactsOutc
   }
   // Not text: one rule for both lanes (`document-facts.ts`), so the facts are the constant.
   if (rows.conditions.some((row) => row.code === BLOB_NOT_TEXT)) {
-    return { kind: 'facts', facts: { ...NOT_TEXT_RESOURCE_FACTS, links: [], headings: [], contentKey }, decoding: null };
+    return { kind: 'facts', facts: { ...NOT_TEXT_RESOURCE_FACTS, links: [], headings: [], contentKey, frontmatterNotAMapping: false }, decoding: null };
   }
   const entry = notAdmittedEntriesByBlob(rows.conditions).get(contentKey);
   if (entry !== undefined) return { kind: 'not-admitted', entry };
@@ -469,6 +477,7 @@ function factsOf(blob: BlobRow, rows: KeyRows): Rebuilt<BlobResourceFacts> {
       ...(blob.frontmatterError !== null && { frontmatterError: blob.frontmatterError }),
       estimatedTokenCount: blob.tokenEstimate,
       contentKey: blob.contentKey,
+      frontmatterNotAMapping: blob.frontmatterNotAMapping,
       skillText: skillText.value,
     },
   };
@@ -518,7 +527,7 @@ function skillTextOf(contentKey: string, rows: KeyRows): Rebuilt<SkillTextFacts 
   // The core's own schema is the one contract for a record: a family/pattern
   // pairing or family order the core never emits is not a record, whatever the
   // row schemas let through one column at a time.
-  const record = SkillTextFactsSchema.safeParse({ lineCount: facts.lineCount, h1: facts.h1, matches });
+  const record = SkillTextFactsSchema.safeParse({ lineCount: facts.lineCount, h1: facts.h1, frontmatterFence: facts.frontmatterFence, matches });
   return record.success
     ? { ok: true, value: record.data }
     : { ok: false, reason: `the skill-text rows are not a record the core emits: ${record.error.message}` };

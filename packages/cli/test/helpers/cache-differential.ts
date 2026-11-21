@@ -718,7 +718,7 @@ const evictedByCell = new Map<string, readonly string[]>();
  * @param body - What to do with the open database
  * @returns What `body` returned
  */
-function withStore<T>(dirs: ArmDirs, body: (database: DatabaseSync) => T): T {
+function withStore<T>(dirs: Pick<ArmDirs, 'store'>, body: (database: DatabaseSync) => T): T {
   const [file, ...others] = storeFilesUnder(dirs.store);
   if (file === undefined || others.length > 0) throw new Error(`expected one projection store under ${dirs.store}`);
   const database = new DatabaseSync(file);
@@ -801,11 +801,11 @@ function holdsSkillText(database: DatabaseSync, key: string): boolean {
  * its resource facts, and only its skill-text record is gone. No verb re-derives it:
  * the skills lane scans each file of such a key, as it does with no store.
  *
- * @param dirs - The primed cell
+ * @param dirs - The primed cell, or any cache directory holding one store
  * @param mustEvict - Keys deleted whatever their place in the order: a case the caller needs evicted
  * @returns The keys whose skill-text rows were deleted
  */
-export function evictHalfTheSkillText(dirs: ArmDirs, mustEvict: readonly string[]): string[] {
+export function evictHalfTheSkillText(dirs: Pick<ArmDirs, 'store'>, mustEvict: readonly string[]): string[] {
   return withStore(dirs, (database) => {
     const facts = quoteIdentifier(PROJECTION_TABLES.skillTextFacts.name);
     const keys = (database.prepare(`SELECT "blob" AS key FROM ${facts} ORDER BY "blob"`).all() as { key: string }[]).map((row) => row.key);
@@ -836,10 +836,10 @@ export function evictHalfTheSkillText(dirs: ArmDirs, mustEvict: readonly string[
  * Every keyed realization the cell's store holds, by path: the content key each file's
  * bytes were filed under, read by raw SQL.
  *
- * @param dirs - A primed cell
+ * @param dirs - A primed cell, or any cache directory holding one store
  * @returns Root-relative path to its content key
  */
-export function storedContentKeys(dirs: ArmDirs): Map<string, string> {
+export function storedContentKeys(dirs: Pick<ArmDirs, 'store'>): Map<string, string> {
   const realizations = quoteIdentifier(PROJECTION_TABLES.resourceRealizations.name);
   const rows = withStore(dirs, (database) => database
     .prepare(`SELECT DISTINCT "path", "contentKey" FROM ${realizations} WHERE "contentState" = 'keyed' ORDER BY "path"`)

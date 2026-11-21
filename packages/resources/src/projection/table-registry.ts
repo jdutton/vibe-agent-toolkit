@@ -283,7 +283,7 @@ export const PROJECTION_TABLES = {
   // are written with the blob's other rows and replaced by the same write.
   // `h1` and `matchText` are text as authored, never resolved against a root.
   skillTextFacts: table('skillTextFacts', 'blob', SkillTextFactsRowSchema, ['blob'], {
-    blob: OTHER, h1: OTHER,
+    blob: OTHER, h1: OTHER, frontmatterFence: OTHER,
   }),
   skillTextMatches: table('skillTextMatches', 'blob', SkillTextMatchRowSchema, ['blob', 'ordinal'], {
     blob: OTHER, family: OTHER, patternId: OTHER, matchText: OTHER, loneSurrogates: OTHER,

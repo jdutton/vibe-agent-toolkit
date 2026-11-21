@@ -252,20 +252,54 @@ function storeKeyOrNotice(root: string): GitTreeSnapshot | null {
  *   the resulting hash covers that whole repository, not this subtree
  * @returns The cache and its closer, or `undefined` to populate uncached
  */
-export async function openPopulationCache(options: {
+export function openPopulationCache(options: {
   root: string;
 }): Promise<OpenedPopulationCache | undefined> {
+  return openCacheWith(options.root, loadStore);
+}
+
+/**
+ * Open a second connection to the projection store for a run's stored-document
+ * questions, one that never waits on a lock: its busy timeout is zero, so a
+ * store another process is writing refuses at once instead of holding the
+ * question for the store's busy timeout.
+ *
+ * The question is optional (a lane answered nothing reads the file itself), so
+ * every failure here, contention included, is the caller's to answer with
+ * nothing; and a damaged store file is never discarded from this connection,
+ * which is the run's own open's job ({@link loadStore}). Keyed exactly as
+ * {@link openPopulationCache} keys the run's own connection, from the same
+ * snapshot when both are inside one scope.
+ *
+ * @param options - Where the corpus is
+ * @param options.root - The absolute corpus root
+ * @returns The cache and its closer, or `undefined` to answer without a store
+ */
+export function openQuestionCache(options: {
+  root: string;
+}): Promise<OpenedPopulationCache | undefined> {
+  return openCacheWith(options.root, async () => (await loadBackend()).openSqliteFactStore({ busyTimeoutMs: 0 }));
+}
+
+/**
+ * {@link openPopulationCache}'s body, opening the store with `open`.
+ *
+ * @param root - The absolute corpus root
+ * @param open - Opens the store, or answers `undefined` for no store
+ * @returns The cache and its closer, or `undefined` to populate uncached
+ */
+async function openCacheWith(root: string, open: () => Promise<FactStore | undefined>): Promise<OpenedPopulationCache | undefined> {
   if (!projectionStoreSelected()) return undefined;
 
   // Before the import, so a corpus outside a repository costs nothing and says
   // why.
-  const snapshot = storeKeyOrNotice(options.root);
+  const snapshot = (populationScope.getStore()?.keyOf ?? storeKeyOrNotice)(root);
   if (snapshot === null) return undefined;
 
-  noticeCacheRootInsideTree(options.root);
-  const store = await loadStore();
+  noticeCacheRootInsideTree(root);
+  const store = await open();
   if (store === undefined) return undefined;
-  const cwd = options.root;
+  const cwd = root;
   return {
     cache: {
       store,
@@ -552,6 +586,13 @@ interface ActivePopulationScope {
    * answer every later time, a refusal included.
    */
   readonly opened: () => Promise<OpenedPopulationCache | undefined>;
+  /**
+   * The store key of a root, or `null` where git cannot key it (told once), asked
+   * once per root per scope: the run's own connection and its stored-document
+   * questions' connection ({@link openQuestionCache}) key one tree with one
+   * answer, a failed one included, which the snapshot memo does not hold.
+   */
+  readonly keyOf: (root: string) => GitTreeSnapshot | null;
 }
 
 /**
@@ -612,12 +653,20 @@ async function runOwnedScope<T>(
 ): Promise<T> {
   let opening: Promise<OpenedPopulationCache | undefined> | undefined;
   const opened = (): Promise<OpenedPopulationCache | undefined> => (opening ??= openPopulationCache(options));
+  const keys = new Map<string, GitTreeSnapshot | null>();
+  const keyOf = (root: string): GitTreeSnapshot | null => {
+    const held = keys.get(root);
+    if (held !== undefined) return held;
+    const key = storeKeyOrNotice(root);
+    keys.set(root, key);
+    return key;
+  };
   let result: T;
   try {
     // Registered even when nothing is opened, so a nested scope can tell "no
     // store in this process" from "no scope above me" — and so the nested scope
     // stays inside THIS scope's git-snapshot memo either way.
-    result = await populationScope.run({ opened }, () => work(async () => (await opened())?.cache));
+    result = await populationScope.run({ opened, keyOf }, () => work(async () => (await opened())?.cache));
   } catch (error) {
     await closeTellingOperator(await openedOrNone(opening), { workFailed: true });
     throw error;

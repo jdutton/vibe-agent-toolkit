@@ -232,7 +232,6 @@ packages/cli/src/utils/edge-lens-evaluation.ts EvaluatedLenses dead
 packages/cli/src/utils/output.ts WriteAllSyncOptions dead
 packages/cli/src/utils/population-wiring.ts PopulationWiring dead
 packages/cli/src/utils/projection-query.ts PreflightStatement dead
-packages/cli/src/utils/projection-store.ts OpenedPopulationCache dead
 packages/cli/src/utils/relativize-paths.ts PathEntry dead
 packages/cli/src/utils/resource-loader.ts scopeIncludeToSubtree dead
 packages/cli/src/utils/root-argv.ts RootArgvGrammar dead

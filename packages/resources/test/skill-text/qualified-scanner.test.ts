@@ -27,7 +27,11 @@ interface CountedWork {
   readonly methods: Map<string, number>;
 }
 
-/** String methods whose one call scans a run of the text: none may appear, or a call count hides their cost. */
+/**
+ * String methods whose one call scans a run of the text: none may appear, or a call count hides
+ * their cost. The one exception is the scanner's single prefix `includes`, which its `steps`
+ * counts as a full pass and the counted test allows exactly once.
+ */
 const SCANNING_METHODS = ['indexOf', 'lastIndexOf', 'includes', 'search', 'match', 'matchAll', 'split', 'replace', 'replaceAll', 'endsWith'];
 
 /**
@@ -142,12 +146,23 @@ describe('scanClaudeCodeQualified', () => {
     expect(hits).toBeGreaterThan(200);
   });
 
-  it.each([1000, 10_000, 100_000, 1_000_000])('takes at most 3 steps per character on n=%i', (size) => {
+  it('does no per-character work on a text without the prefix, and finds nothing there', () => {
+    const text = 'mcp_ x__get_me `mcp_-_a__b` MCP__a__b '.repeat(500);
+    expect(oldCaptures(text)).toEqual([]);
+    const { captures, work } = countedScan(text);
+    expect(captures).toEqual([]);
+    expect(work.classTests).toBe(0);
+    expect([...work.methods.entries()]).toEqual([['includes', 1]]);
+    expect(scanClaudeCodeQualified(text, SKILL_TEXT_DECLARATION).steps).toBe(text.length);
+  });
+
+  // One pass for the prefix check, two right-to-left passes and the left-to-right walk.
+  it.each([1000, 10_000, 100_000, 1_000_000])('takes at most 4 steps per character on n=%i', (size) => {
     const adversarial = 'mcp__-'.repeat(Math.ceil(size / 6)).slice(0, size);
     const mixed = `${'mcp__a__b '.repeat(Math.ceil(size / 10))}`.slice(0, size);
     for (const text of [adversarial, mixed]) {
       const { steps } = scanClaudeCodeQualified(text, SKILL_TEXT_DECLARATION);
-      expect(steps).toBeLessThanOrEqual(3 * text.length);
+      expect(steps).toBeLessThanOrEqual(4 * text.length);
     }
   });
 
@@ -166,7 +181,8 @@ describe('scanClaudeCodeQualified', () => {
       const calls = [...work.methods.values()].reduce((sum, count) => sum + count, 0);
       // charAt per class test, startsWith per position in two places, a slice per capture.
       expect(calls).toBeLessThanOrEqual(6 * text.length);
-      expect(SCANNING_METHODS.filter((name) => work.methods.has(name))).toEqual([]);
+      expect(work.methods.get('includes')).toBe(1);
+      expect(SCANNING_METHODS.filter((name) => name !== 'includes' && work.methods.has(name))).toEqual([]);
     }
   });
 

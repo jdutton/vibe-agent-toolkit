@@ -25,6 +25,7 @@ import {
 } from '../skill-text/declaration.js';
 
 import { ContentKeySchema } from './projection-shared.js';
+import { FRONTMATTER_FENCES } from './skill-text-facts.js';
 
 /**
  * A row of the `skill_text_facts` table — one per markdown blob: the record's
@@ -36,6 +37,8 @@ export const SkillTextFactsRowSchema = z.object({
     .describe(String.raw`Lines in the decoded text, split on "\n" alone: a CRLF file counts its CRs into the lines, not as separators`),
   h1: z.string().nullable()
     .describe('The rest of the first line that starts with "#" and a space or tab, raw (untrimmed; a CRLF file keeps its CR), anywhere in the text — frontmatter and code blocks included — or null when there is none'),
+  frontmatterFence: z.enum(FRONTMATTER_FENCES)
+    .describe('Where the frontmatter fences are, by the skill frontmatter fence rule (a leading BOM dropped, CRLF, lone CR and LF each a line ending, the first line "---" then optional spaces or tabs, the block closed by the next such line): "none" with no opening fence, "unclosed" with no closing one, "closed" with both. Kept whether or not the record is held'),
   matchCount: z.number().int().nonnegative()
     .describe('How many matches the record has; when held, how many skill_text_matches rows the blob has, and the reader refuses a blob whose rows do not add up to it'),
   held: z.boolean()

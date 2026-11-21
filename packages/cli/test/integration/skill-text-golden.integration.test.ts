@@ -1,6 +1,7 @@
 /**
- * The skills phase against the skill-text golden, in the three ways a run can
- * reach a skill's text: store off, store on and cold, store on and warm.
+ * The skills phase against the skill-text golden, in the four ways a run can
+ * reach a skill's text: store off, store on and cold, store on and warm, and
+ * warm with half the stored skill-text records deleted.
  *
  * `packages/agent-skills/test/fixtures/skill-text-golden/golden.json` is what
  * the skills phase reported for every skill of that corpus before its
@@ -15,17 +16,19 @@
  * `content.read` do not move outside the name reads (which run with no run, so
  * they read every time). The cold runs scan each markdown file of the corpus
  * exactly once: every skill's SKILL.md and every other markdown file, each
- * bundled by a skill.
+ * bundled by a skill. With half the skill-text records deleted (their keys'
+ * other facts kept), each lane scans exactly the files whose record is gone,
+ * plus its declared fallback, and still reproduces the golden.
  *
  * The config-free lane (`validateSkill`, which `vat audit` runs for a skill no
  * config governs) runs first and alone in a run of its own, so the run's store
  * is opened for it by the run itself, not by a phase before it. With no store it
  * scans each SKILL.md and each markdown file its links reach, once. Warm it
- * scans only its declared fallback and reads only these:
+ * scans only its declared fallback and reads only these (a SKILL.md whose
+ * frontmatter does not decode reads nothing: every refusal's wording, no block,
+ * an unclosed one, an empty one, invalid YAML, not a mapping, comes from its
+ * stored facts):
  *
- * - a SKILL.md whose frontmatter does not decode: that refusal's wording (no
- *   block, an unclosed one, an empty one) is read off the fences, which no
- *   stored fact carries;
  * - a SKILL.md whose skill directory bundles a file no link reaches: the
  *   bundled-resource check searches its text for the file's path;
  * - a linked file that is not plain UTF-8 (a BOM, UTF-16): the lane has always
@@ -50,6 +53,7 @@ import { loadConfig } from '../../src/utils/config-loader.js';
 import { createLogger } from '../../src/utils/logger.js';
 import { withRunContext } from '../../src/utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../src/utils/skill-packaging-config.js';
+import { evictHalfTheSkillText, storedContentKeys } from '../helpers/cache-differential.js';
 import { captureSkillTextGolden, type Counters, type GoldenCapture, type SkillsLane, type SkillsLaneRun } from '../helpers/skill-text-golden-capture.js';
 import { skillLaneScannedFiles, SKILL_TEXT_GOLDEN_DIR, writeSkillTextGoldenProject } from '../helpers/skill-text-golden.js';
 
@@ -66,7 +70,7 @@ const PARSED = JSON.parse(GOLDEN) as { capturedFrom: string; configFree: ConfigF
 /** The commit the golden was captured from, as the capture recorded it. */
 const CAPTURED_FROM = PARSED.capturedFrom;
 
-/** The corpus skills whose frontmatter does not decode, as the golden records them. */
+/** The corpus skills whose frontmatter does not decode, as the golden records them: each one's refusal is worded warm without a read. */
 const UNDECODED_FRONTMATTER = PARSED.configFree.filter(({ result }) => result.issues.some((issue) => issue.code === 'SKILL_MISSING_FRONTMATTER')).length;
 
 /**
@@ -95,13 +99,13 @@ function textWork(moved: Counters): Record<(typeof TEXT_COUNTERS)[number], numbe
  * The files the config-free lane scans with no store, from the golden: each
  * SKILL.md, and each distinct markdown file a skill's links reach.
  */
-function configFreeScanned(): number {
+function configFreeScanned(): Set<string> {
   const files = new Set<string>();
   for (const { dir, result } of PARSED.configFree) {
     files.add(`${dir}/SKILL.md`);
     for (const linked of result.linkedFiles ?? []) files.add(linked.path);
   }
-  return files.size;
+  return files;
 }
 
 /** The capture's listed skills, as the shared validation context takes them. */
@@ -162,7 +166,7 @@ describe('the skills phase reproduces the skill-text golden', () => {
     const { text, packagingMoved, configFreeMoved } = await capture();
     expect(text).toBe(GOLDEN);
     expect(packagingMoved['skillText.storeMiss']).toBe(skillLaneScannedFiles(root).length);
-    expect(configFreeMoved['skillText.storeMiss']).toBe(configFreeScanned());
+    expect(configFreeMoved['skillText.storeMiss']).toBe(configFreeScanned().size);
   });
 
   it('with the store on, cold: every file the packaging lane reads scanned from its text once', async () => {
@@ -180,8 +184,29 @@ describe('the skills phase reproduces the skill-text golden', () => {
     expect(UNDECODED_FRONTMATTER).toBeGreaterThan(0);
     expect(textWork(configFreeMoved)).toEqual({
       'skillText.storeMiss': NOT_PLAIN_UTF8_LINKED.length,
-      'content.read': UNDECODED_FRONTMATTER + BUNDLED_UNLINKED.length + NOT_PLAIN_UTF8_LINKED.length,
+      'content.read': BUNDLED_UNLINKED.length + NOT_PLAIN_UTF8_LINKED.length,
       'parse.dispatched': 0,
     });
+  });
+
+  it('with half the skill-text records deleted: scans exactly the files whose record is gone, and the declared fallback', async () => {
+    vi.stubEnv('VAT_PROJECTION_STORE', 'sqlite');
+    const keyOf = storedContentKeys({ store: cacheDir });
+    const evicted = new Set(evictHalfTheSkillText({ store: cacheDir }, []));
+    const recordGone = (path: string): boolean => {
+      const key = keyOf.get(path);
+      if (key === undefined) throw new Error(`the store keyed no ${path}`);
+      return evicted.has(key);
+    };
+    const packagingScans = skillLaneScannedFiles(root).filter((path) => recordGone(path));
+    const configFreeScans = new Set([...[...configFreeScanned()].filter((path) => recordGone(path)), ...NOT_PLAIN_UTF8_LINKED]);
+    // Non-vacuous both ways: some scanned file lost its record, and some kept it.
+    expect(packagingScans.length).toBeGreaterThan(0);
+    expect(packagingScans.length).toBeLessThan(skillLaneScannedFiles(root).length);
+
+    const { text, packagingMoved, configFreeMoved } = await capture();
+    expect(text).toBe(GOLDEN);
+    expect(packagingMoved['skillText.storeMiss']).toBe(packagingScans.length);
+    expect(configFreeMoved['skillText.storeMiss']).toBe(configFreeScans.size);
   });
 });

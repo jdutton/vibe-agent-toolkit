@@ -10,9 +10,17 @@ import {
   type PatternId,
   SKILL_TEXT_FAMILIES,
   SKILL_TEXT_FAMILY_PATTERNS,
+  SKILL_TEXT_DECLARATION,
   SKILL_TEXT_PATTERN_IDS,
   type SkillTextFamily,
 } from '../skill-text/declaration.js';
+
+/** The record's `frontmatterFence` values, as the declaration spells them. */
+const { none, unclosed, closed } = SKILL_TEXT_DECLARATION.body.fenceStates;
+export const FRONTMATTER_FENCES = [none, unclosed, closed] as const;
+
+/** Where a document's frontmatter fences are: the record's `frontmatterFence`. */
+export type FrontmatterFence = (typeof FRONTMATTER_FENCES)[number];
 
 const SkillTextMatchSchema = z
   .object({
@@ -50,6 +58,13 @@ export const SkillTextFactsSchema = z
     lineCount: z.number().int().positive(),
     /** The first H1's raw capture (untrimmed; a CRLF file keeps its CR), or `null`. */
     h1: z.string().nullable(),
+    /**
+     * Where the frontmatter fences are, by the one fence rule (`frontmatterFencesOf`):
+     * no opening fence line, an opening fence with no closing one, or both. With the
+     * parse's frontmatter verdict it says why a document has no frontmatter without
+     * reading it again.
+     */
+    frontmatterFence: z.enum(FRONTMATTER_FENCES),
     matches: z.array(SkillTextMatchSchema),
   })
   .strict()

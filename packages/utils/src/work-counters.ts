@@ -68,6 +68,17 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * a cold or store-off run it equals the files the lane scanned; on a warm run it
  * is the per-file fallback, every one of which is a file the store does not
  * cover.
+ *
+ * `skillText.storeUnopened` counts each run whose stored-document questions
+ * opened the store or built the home population and met a failure there (a
+ * read-only cache directory, git giving no answer for the root): the question
+ * is optional, so the failure answers every question with nothing, and each
+ * file the lane then scans is a `skillText.storeMiss`. One per run at most.
+ *
+ * `skillText.outsideRoot` counts each (run, file) a stored-document question
+ * asked about a file outside the run's root, answered nothing without opening
+ * the store: no member of the run's home population can be there. Each is also
+ * a `skillText.storeMiss` when the lane scans it.
  */
 export const WORK_COUNTER_NAMES = [
   'store.rows.decoded.persistent',
@@ -94,6 +105,8 @@ export const WORK_COUNTER_NAMES = [
   'registry.built',
   'registry.admitted',
   'skillText.storeMiss',
+  'skillText.storeUnopened',
+  'skillText.outsideRoot',
   'git.calls',
 ] as const;
 

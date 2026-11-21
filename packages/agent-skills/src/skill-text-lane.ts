@@ -55,15 +55,30 @@ export function withSkillTextRun<T>(work: (run: SkillTextRun) => Promise<T>, run
 /** How a document's bytes were decoded: what the store's `blobs` row and a read's `KeyedContent` both say. */
 export type SkillDocumentDecoding = Pick<TextProvenance, 'encoding' | 'encodingSource'>;
 
-/** A SKILL.md as the skills lane reads it. */
+/**
+ * A SKILL.md as the skills lane reads it: the ONE mapping from a document's
+ * facts, stored or parsed, that discovery, the packaging lane and the skill
+ * validator each read. The frontmatter verdict is the parse's whole one, so a
+ * lane words its refusal from it and the record's `frontmatterFence`
+ * (`frontmatterVerdictOf`) without reading the file.
+ */
 export interface SkillDocument {
   readonly frontmatter: Record<string, unknown> | undefined;
   readonly frontmatterError: string | undefined;
+  /** Whether the block is valid YAML but not a mapping. */
+  readonly frontmatterNotAMapping: boolean;
   /** Each link's shape (never its resolution), in document order, with its line when the parse knew it. */
   readonly links: ReadonlyArray<Pick<ResourceLink, 'href' | 'type' | 'line'>>;
   readonly skillText: SkillTextFacts;
   /** How its bytes were decoded, which {@link linkedFileSkillText} decides by. */
   readonly decoding: SkillDocumentDecoding;
+  /**
+   * Its decoded text, for a detector that needs the bytes: the read the parse
+   * was made from, or, for a document the store served, a read made only when
+   * called (the run's content read, decoded as a cold read is, counted as
+   * `content.read`).
+   */
+  readonly text: () => Promise<string>;
 }
 
 /** One file a run's lane scanned from text: the text, and the record the core built from it. */
@@ -183,8 +198,16 @@ export function readSkillDocument(skillPath: string, run: SkillTextRun | undefin
 async function readSkillDocumentOn(skillPath: string, run: SkillTextRun, side: FsSide): Promise<SkillDocument> {
   const stored = await run.source.storedDocument(skillPath, 'markdown');
   if (stored !== undefined) {
-    const { frontmatter, frontmatterError, links, skillText } = stored.facts;
-    return { frontmatter, frontmatterError, links, skillText, decoding: stored.decoding };
+    const { frontmatter, frontmatterError, frontmatterNotAMapping, links, skillText } = stored.facts;
+    return {
+      frontmatter,
+      frontmatterError,
+      frontmatterNotAMapping,
+      links,
+      skillText,
+      decoding: stored.decoding,
+      text: async () => (await readContentForParse(skillPath, 'markdown', { dispatcher: run.dispatcher })).content,
+    };
   }
   const keyed = await withFsFault({ side, origin: 'content', action: `read ${skillPath}`, path: skillPath }, () =>
     readContentForParse(skillPath, 'markdown', { dispatcher: run.dispatcher }),
@@ -195,9 +218,11 @@ async function readSkillDocumentOn(skillPath: string, run: SkillTextRun, side: F
   return {
     frontmatter: parsed.frontmatter,
     frontmatterError: parsed.frontmatterError,
+    frontmatterNotAMapping: parsed.frontmatterNotAMapping === true,
     links: parsed.links,
     skillText: parsed.skillText,
     decoding: { encoding: keyed.decoding.encoding, encodingSource: keyed.decoding.encodingSource },
+    text: () => Promise.resolve(keyed.content),
   };
 }
 

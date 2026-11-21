@@ -1898,6 +1898,256 @@
       }
     },
     {
+      "dir": "fm-empty",
+      "discoveredName": "Empty frontmatter",
+      "readSkillName": {
+        "kind": "named",
+        "name": "Empty frontmatter"
+      },
+      "packagingConfig": {},
+      "result": {
+        "skillName": "Empty frontmatter",
+        "status": "findings",
+        "summary": {
+          "errors": 1,
+          "warnings": 0,
+          "info": 0
+        },
+        "allErrors": [
+          {
+            "severity": "error",
+            "code": "SKILL_MISSING_FRONTMATTER",
+            "message": "No YAML frontmatter found — a skill starts with a `---` block that names and describes it",
+            "location": "fm-empty/SKILL.md",
+            "line": 1,
+            "fix": "Add YAML frontmatter with name and description fields, or narrow `skills.include` so it no longer matches this file"
+          }
+        ],
+        "ignoredErrors": [],
+        "observations": [],
+        "evidence": [],
+        "metadata": {
+          "skillLines": 6,
+          "totalLines": 6,
+          "fileCount": 1,
+          "directFileCount": 0,
+          "maxLinkDepth": 0,
+          "excludedReferenceCount": 0,
+          "excludedReferences": []
+        }
+      }
+    },
+    {
+      "dir": "fm-invalid-yaml",
+      "discoveredName": "Invalid YAML",
+      "readSkillName": {
+        "kind": "named",
+        "name": "Invalid YAML"
+      },
+      "packagingConfig": {},
+      "result": {
+        "skillName": "Invalid YAML",
+        "status": "findings",
+        "summary": {
+          "errors": 1,
+          "warnings": 0,
+          "info": 0
+        },
+        "allErrors": [
+          {
+            "severity": "error",
+            "code": "SKILL_MISSING_FRONTMATTER",
+            "message": "Frontmatter did not parse as YAML: Flow sequence in block collection must be sufficiently indented and end with a ] at line 2, column 27:\n\ndescription: [never closed\n                          ^\n",
+            "location": "fm-invalid-yaml/SKILL.md",
+            "line": 1,
+            "fix": "Add YAML frontmatter with name and description fields, or narrow `skills.include` so it no longer matches this file"
+          }
+        ],
+        "ignoredErrors": [],
+        "observations": [],
+        "evidence": [],
+        "metadata": {
+          "skillLines": 8,
+          "totalLines": 8,
+          "fileCount": 1,
+          "directFileCount": 0,
+          "maxLinkDepth": 0,
+          "excludedReferenceCount": 0,
+          "excludedReferences": []
+        }
+      }
+    },
+    {
+      "dir": "fm-not-a-mapping",
+      "discoveredName": "Not a mapping",
+      "readSkillName": {
+        "kind": "named",
+        "name": "Not a mapping"
+      },
+      "packagingConfig": {},
+      "result": {
+        "skillName": "Not a mapping",
+        "status": "findings",
+        "summary": {
+          "errors": 1,
+          "warnings": 0,
+          "info": 0
+        },
+        "allErrors": [
+          {
+            "severity": "error",
+            "code": "SKILL_MISSING_FRONTMATTER",
+            "message": "No YAML frontmatter found — a skill starts with a `---` block that names and describes it",
+            "location": "fm-not-a-mapping/SKILL.md",
+            "line": 1,
+            "fix": "Add YAML frontmatter with name and description fields, or narrow `skills.include` so it no longer matches this file"
+          }
+        ],
+        "ignoredErrors": [],
+        "observations": [],
+        "evidence": [],
+        "metadata": {
+          "skillLines": 8,
+          "totalLines": 8,
+          "fileCount": 1,
+          "directFileCount": 0,
+          "maxLinkDepth": 0,
+          "excludedReferenceCount": 0,
+          "excludedReferences": []
+        }
+      }
+    },
+    {
+      "dir": "fm-unclosed",
+      "discoveredName": "Unclosed",
+      "readSkillName": {
+        "kind": "named",
+        "name": "Unclosed"
+      },
+      "packagingConfig": {},
+      "result": {
+        "skillName": "Unclosed",
+        "status": "findings",
+        "summary": {
+          "errors": 1,
+          "warnings": 0,
+          "info": 0
+        },
+        "allErrors": [
+          {
+            "severity": "error",
+            "code": "SKILL_MISSING_FRONTMATTER",
+            "message": "No YAML frontmatter found — a skill starts with a `---` block that names and describes it",
+            "location": "fm-unclosed/SKILL.md",
+            "line": 1,
+            "fix": "Add YAML frontmatter with name and description fields, or narrow `skills.include` so it no longer matches this file"
+          }
+        ],
+        "ignoredErrors": [],
+        "observations": [],
+        "evidence": [],
+        "metadata": {
+          "skillLines": 7,
+          "totalLines": 7,
+          "fileCount": 1,
+          "directFileCount": 0,
+          "maxLinkDepth": 0,
+          "excludedReferenceCount": 0,
+          "excludedReferences": []
+        }
+      }
+    },
+    {
+      "dir": "imperative-body",
+      "discoveredName": "imperative-body",
+      "readSkillName": {
+        "kind": "named",
+        "name": "imperative-body"
+      },
+      "packagingConfig": {},
+      "result": {
+        "skillName": "imperative-body",
+        "status": "findings",
+        "summary": {
+          "errors": 0,
+          "warnings": 0,
+          "info": 1
+        },
+        "allErrors": [
+          {
+            "severity": "info",
+            "code": "CAPABILITY_LOCAL_SHELL",
+            "message": "Skill requires a local shell environment.",
+            "location": "imperative-body/SKILL.md",
+            "fix": "Informational. Declare a plugin target that provides shell (claude-code, claude-cowork) so this observation resolves to an expected verdict.",
+            "reference": "#capability_local_shell"
+          }
+        ],
+        "ignoredErrors": [],
+        "observations": [
+          {
+            "code": "CAPABILITY_LOCAL_SHELL",
+            "description": "Skill requires a local shell environment.",
+            "supportingEvidence": [
+              "FENCED_SHELL_BLOCK"
+            ]
+          }
+        ],
+        "evidence": [
+          {
+            "source": "code",
+            "patternId": "FENCED_SHELL_BLOCK",
+            "location": {
+              "file": "imperative-body/SKILL.md",
+              "line": 19
+            },
+            "matchText": "```bash block",
+            "confidence": "high"
+          }
+        ],
+        "metadata": {
+          "skillLines": 24,
+          "totalLines": 24,
+          "fileCount": 1,
+          "directFileCount": 0,
+          "maxLinkDepth": 0,
+          "excludedReferenceCount": 0,
+          "excludedReferences": []
+        }
+      }
+    },
+    {
+      "dir": "imperative-surrogate",
+      "discoveredName": "imperative-surrogate",
+      "readSkillName": {
+        "kind": "named",
+        "name": "imperative-surrogate"
+      },
+      "packagingConfig": {},
+      "result": {
+        "skillName": "imperative-surrogate",
+        "status": "ok",
+        "summary": {
+          "errors": 0,
+          "warnings": 0,
+          "info": 0
+        },
+        "allErrors": [],
+        "ignoredErrors": [],
+        "observations": [],
+        "evidence": [],
+        "metadata": {
+          "skillLines": 9,
+          "totalLines": 9,
+          "fileCount": 1,
+          "directFileCount": 0,
+          "maxLinkDepth": 0,
+          "excludedReferenceCount": 0,
+          "excludedReferences": []
+        }
+      }
+    },
+    {
       "dir": "linked-bom",
       "discoveredName": "linked-bom",
       "readSkillName": {
@@ -5251,6 +5501,257 @@
             "confidence": "high"
           }
         ]
+      }
+    },
+    {
+      "dir": "fm-empty",
+      "result": {
+        "path": "fm-empty/SKILL.md",
+        "type": "agent-skill",
+        "status": "findings",
+        "summary": {
+          "errors": 1,
+          "warnings": 0,
+          "info": 0
+        },
+        "description": "1 errors, 0 warnings, 0 info",
+        "issues": [
+          {
+            "severity": "error",
+            "code": "SKILL_MISSING_FRONTMATTER",
+            "message": "Frontmatter is empty: the block between the \"---\" delimiters declares no fields",
+            "location": "fm-empty/SKILL.md",
+            "line": 1,
+            "fix": "Add YAML frontmatter with name and description fields"
+          }
+        ],
+        "metadata": {
+          "lineCount": 6
+        }
+      }
+    },
+    {
+      "dir": "fm-invalid-yaml",
+      "result": {
+        "path": "fm-invalid-yaml/SKILL.md",
+        "type": "agent-skill",
+        "status": "findings",
+        "summary": {
+          "errors": 1,
+          "warnings": 0,
+          "info": 0
+        },
+        "description": "1 errors, 0 warnings, 0 info",
+        "issues": [
+          {
+            "severity": "error",
+            "code": "SKILL_MISSING_FRONTMATTER",
+            "message": "Failed to parse YAML frontmatter: Flow sequence in block collection must be sufficiently indented and end with a ] at line 2, column 27:\n\ndescription: [never closed\n                          ^\n",
+            "location": "fm-invalid-yaml/SKILL.md",
+            "line": 1,
+            "fix": "Add YAML frontmatter with name and description fields"
+          }
+        ],
+        "metadata": {
+          "lineCount": 8
+        }
+      }
+    },
+    {
+      "dir": "fm-not-a-mapping",
+      "result": {
+        "path": "fm-not-a-mapping/SKILL.md",
+        "type": "agent-skill",
+        "status": "findings",
+        "summary": {
+          "errors": 1,
+          "warnings": 0,
+          "info": 0
+        },
+        "description": "1 errors, 0 warnings, 0 info",
+        "issues": [
+          {
+            "severity": "error",
+            "code": "SKILL_MISSING_FRONTMATTER",
+            "message": "Frontmatter is not a YAML mapping: the block between the \"---\" delimiters is a sequence, a scalar or a typed value, not key: value fields",
+            "location": "fm-not-a-mapping/SKILL.md",
+            "line": 1,
+            "fix": "Add YAML frontmatter with name and description fields"
+          }
+        ],
+        "metadata": {
+          "lineCount": 8
+        }
+      }
+    },
+    {
+      "dir": "fm-unclosed",
+      "result": {
+        "path": "fm-unclosed/SKILL.md",
+        "type": "agent-skill",
+        "status": "findings",
+        "summary": {
+          "errors": 1,
+          "warnings": 0,
+          "info": 0
+        },
+        "description": "1 errors, 0 warnings, 0 info",
+        "issues": [
+          {
+            "severity": "error",
+            "code": "SKILL_MISSING_FRONTMATTER",
+            "message": "No closing delimiter found",
+            "location": "fm-unclosed/SKILL.md",
+            "line": 1,
+            "fix": "Add YAML frontmatter with name and description fields"
+          }
+        ],
+        "metadata": {
+          "lineCount": 7
+        }
+      }
+    },
+    {
+      "dir": "imperative-body",
+      "result": {
+        "path": "imperative-body/SKILL.md",
+        "type": "agent-skill",
+        "status": "findings",
+        "summary": {
+          "errors": 0,
+          "warnings": 0,
+          "info": 8
+        },
+        "description": "0 errors, 0 warnings, 8 info",
+        "issues": [
+          {
+            "severity": "info",
+            "code": "SKILL_BODY_NOT_IMPERATIVE",
+            "message": "Second-person opener \"You should run the check first.\" — prefer imperative form (e.g. \"Configure…\").",
+            "location": "imperative-body/SKILL.md",
+            "line": 3,
+            "fix": "Rewrite as imperative (\"Configure the MCP server…\" instead of \"You should configure…\"). Skill bodies read more cleanly as instructions to the agent rather than to a human reader. Allow via validation.allow if the heuristic misfires on quoted prompts or user dialog.",
+            "reference": "#skill_body_not_imperative"
+          },
+          {
+            "severity": "info",
+            "code": "SKILL_BODY_NOT_IMPERATIVE",
+            "message": "Second-person opener \"you can skip this step when it already passed.\" — prefer imperative form (e.g. \"Configure…\").",
+            "location": "imperative-body/SKILL.md",
+            "line": 4,
+            "fix": "Rewrite as imperative (\"Configure the MCP server…\" instead of \"You should configure…\"). Skill bodies read more cleanly as instructions to the agent rather than to a human reader. Allow via validation.allow if the heuristic misfires on quoted prompts or user dialog.",
+            "reference": "#skill_body_not_imperative"
+          },
+          {
+            "severity": "info",
+            "code": "SKILL_BODY_NOT_IMPERATIVE",
+            "message": "Second-person opener \"You need to build it before you test it.\" — prefer imperative form (e.g. \"Configure…\").",
+            "location": "imperative-body/SKILL.md",
+            "line": 5,
+            "fix": "Rewrite as imperative (\"Configure the MCP server…\" instead of \"You should configure…\"). Skill bodies read more cleanly as instructions to the agent rather than to a human reader. Allow via validation.allow if the heuristic misfires on quoted prompts or user dialog.",
+            "reference": "#skill_body_not_imperative"
+          },
+          {
+            "severity": "info",
+            "code": "SKILL_BODY_NOT_IMPERATIVE",
+            "message": "Second-person opener \"YOU MUST read the output.\" — prefer imperative form (e.g. \"Configure…\").",
+            "location": "imperative-body/SKILL.md",
+            "line": 6,
+            "fix": "Rewrite as imperative (\"Configure the MCP server…\" instead of \"You should configure…\"). Skill bodies read more cleanly as instructions to the agent rather than to a human reader. Allow via validation.allow if the heuristic misfires on quoted prompts or user dialog.",
+            "reference": "#skill_body_not_imperative"
+          },
+          {
+            "severity": "info",
+            "code": "SKILL_BODY_NOT_IMPERATIVE",
+            "message": "Second-person opener \"You will see one line per file.\" — prefer imperative form (e.g. \"Configure…\").",
+            "location": "imperative-body/SKILL.md",
+            "line": 7,
+            "fix": "Rewrite as imperative (\"Configure the MCP server…\" instead of \"You should configure…\"). Skill bodies read more cleanly as instructions to the agent rather than to a human reader. Allow via validation.allow if the heuristic misfires on quoted prompts or user dialog.",
+            "reference": "#skill_body_not_imperative"
+          },
+          {
+            "severity": "info",
+            "code": "SKILL_BODY_NOT_IMPERATIVE",
+            "message": "Second-person opener \"You may stop here.\" — prefer imperative form (e.g. \"Configure…\").",
+            "location": "imperative-body/SKILL.md",
+            "line": 8,
+            "fix": "Rewrite as imperative (\"Configure the MCP server…\" instead of \"You should configure…\"). Skill bodies read more cleanly as instructions to the agent rather than to a human reader. Allow via validation.allow if the heuristic misfires on quoted prompts or user dialog.",
+            "reference": "#skill_body_not_imperative"
+          },
+          {
+            "severity": "info",
+            "code": "SKILL_BODY_NOT_IMPERATIVE",
+            "message": "Second-person opener \"You must count after the fence closes.\" — prefer imperative form (e.g. \"Configure…\").",
+            "location": "imperative-body/SKILL.md",
+            "line": 19,
+            "fix": "Rewrite as imperative (\"Configure the MCP server…\" instead of \"You should configure…\"). Skill bodies read more cleanly as instructions to the agent rather than to a human reader. Allow via validation.allow if the heuristic misfires on quoted prompts or user dialog.",
+            "reference": "#skill_body_not_imperative"
+          },
+          {
+            "severity": "info",
+            "code": "CAPABILITY_LOCAL_SHELL",
+            "message": "Skill requires a local shell environment.",
+            "location": "imperative-body/SKILL.md",
+            "fix": "Informational. Declare a plugin target that provides shell (claude-code, claude-cowork) so this observation resolves to an expected verdict.",
+            "reference": "#capability_local_shell"
+          }
+        ],
+        "metadata": {
+          "lineCount": 24,
+          "name": "imperative-body",
+          "description": "Pins what the text detectors report for this fixture. It exists only for tests."
+        },
+        "evidence": [
+          {
+            "source": "code",
+            "patternId": "FENCED_SHELL_BLOCK",
+            "location": {
+              "file": "imperative-body/SKILL.md",
+              "line": 19
+            },
+            "matchText": "```bash block",
+            "confidence": "high"
+          }
+        ]
+      }
+    },
+    {
+      "dir": "imperative-surrogate",
+      "result": {
+        "path": "imperative-surrogate/SKILL.md",
+        "type": "agent-skill",
+        "status": "findings",
+        "summary": {
+          "errors": 0,
+          "warnings": 0,
+          "info": 2
+        },
+        "description": "0 errors, 0 warnings, 2 info",
+        "issues": [
+          {
+            "severity": "info",
+            "code": "SKILL_BODY_NOT_IMPERATIVE",
+            "message": "Second-person opener \"You should xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\ud83d\" — prefer imperative form (e.g. \"Configure…\").",
+            "location": "imperative-surrogate/SKILL.md",
+            "line": 3,
+            "fix": "Rewrite as imperative (\"Configure the MCP server…\" instead of \"You should configure…\"). Skill bodies read more cleanly as instructions to the agent rather than to a human reader. Allow via validation.allow if the heuristic misfires on quoted prompts or user dialog.",
+            "reference": "#skill_body_not_imperative"
+          },
+          {
+            "severity": "info",
+            "code": "SKILL_BODY_NOT_IMPERATIVE",
+            "message": "Second-person opener \"You should yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy😀\" — prefer imperative form (e.g. \"Configure…\").",
+            "location": "imperative-surrogate/SKILL.md",
+            "line": 4,
+            "fix": "Rewrite as imperative (\"Configure the MCP server…\" instead of \"You should configure…\"). Skill bodies read more cleanly as instructions to the agent rather than to a human reader. Allow via validation.allow if the heuristic misfires on quoted prompts or user dialog.",
+            "reference": "#skill_body_not_imperative"
+          }
+        ],
+        "metadata": {
+          "lineCount": 9,
+          "name": "imperative-surrogate",
+          "description": "Pins what the text detectors report for this fixture. It exists only for tests."
+        }
       }
     },
     {

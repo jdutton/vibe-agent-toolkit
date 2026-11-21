@@ -22,7 +22,7 @@
  * by {@link scanClaudeCodeQualified}, whose step count its test bounds.
  */
 
-import type { SkillTextFacts, SkillTextMatch } from '../schemas/skill-text-facts.js';
+import type { FrontmatterFence, SkillTextFacts, SkillTextMatch } from '../schemas/skill-text-facts.js';
 
 import type { PatternId, SkillTextDeclaration, SkillTextFamily } from './declaration.js';
 import { frontmatterFencesOf } from './frontmatter-fences.js';
@@ -171,15 +171,18 @@ function crossSkillRecords(
 }
 
 /**
- * The body the frontmatter parser returns on success, or `undefined` when the
+ * Where the frontmatter fences are (the record's `frontmatterFence`), and the
+ * body the frontmatter parser returns on success, or `undefined` when the
  * fences it requires are absent. Whether the block between them decodes is
  * judgement the caller has already made: on a failed parse it reads no body
  * record.
  */
-function parserBody(text: string, declaration: SkillTextDeclaration): string | undefined {
-  const { lines, closing } = frontmatterFencesOf(text, declaration);
-  if (closing === -1) return undefined;
-  return lines.slice(closing + 1).join(declaration.lineSeparator);
+function parserBody(text: string, declaration: SkillTextDeclaration): { fence: FrontmatterFence; body: string | undefined } {
+  const { fenceStates } = declaration.body;
+  const { lines, opened, closing } = frontmatterFencesOf(text, declaration);
+  if (!opened) return { fence: fenceStates.none, body: undefined };
+  if (closing === -1) return { fence: fenceStates.unclosed, body: undefined };
+  return { fence: fenceStates.closed, body: lines.slice(closing + 1).join(declaration.lineSeparator) };
 }
 
 /** SKILL_BODY_NOT_IMPERATIVE: second-person openers outside fences and quotes, with the line's leading sample. */
@@ -277,7 +280,7 @@ export function skillTextFactsOf(text: string, declaration: SkillTextDeclaration
   mcpRecords(index.lines, declaration, emit);
   crossSkillRecords(text, index, declaration.crossSkill.family, declaration, emit);
 
-  const body = parserBody(text, declaration);
+  const { fence, body } = parserBody(text, declaration);
   if (body !== undefined) {
     const bodyIndex = indexLines(body, declaration.lineSeparator);
     crossSkillRecords(body, bodyIndex, declaration.crossSkill.bodyFamily, declaration, emit);
@@ -289,6 +292,7 @@ export function skillTextFactsOf(text: string, declaration: SkillTextDeclaration
   return {
     lineCount: index.lines.length,
     h1: declaration.h1.exec(text)?.[1] ?? null,
+    frontmatterFence: fence,
     matches,
   };
 }

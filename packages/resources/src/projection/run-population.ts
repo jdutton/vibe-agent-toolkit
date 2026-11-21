@@ -43,14 +43,14 @@
 
 import { open } from 'node:fs/promises';
 
-import { countWork, deepFreeze, isVatError, safePath } from '@vibe-agent-toolkit/utils';
-import { GIT_NO_ANSWER_CODE, gitFindRoot, gitLinksCheckedOutAsFiles, GitTracker } from '@vibe-agent-toolkit/utils/git';
+import { countWork, deepFreeze, safePath } from '@vibe-agent-toolkit/utils';
+import { gitFindRoot, gitLinksCheckedOutAsFiles, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { ParserKind } from '../content-key.js';
 import { defaultParseCache } from '../parse-cache.js';
 import { ParseDispatcher } from '../parse-dispatcher.js';
 import type { CollectionConfig } from '../schemas/project-config.js';
-import { sameDirectory } from '../utils.js';
+import { isWithinProject, sameDirectory } from '../utils.js';
 
 import type { NotAdmittedEntry } from './blob-refusals.js';
 import type { BlobResourceFacts } from './blob-resource-facts.js';
@@ -151,6 +151,16 @@ export interface RunPopulationOptions {
    * at the first enumeration, so a run that enumerates nothing never opens it.
    */
   readonly cacheOf: () => Promise<PopulationCache | undefined>;
+  /**
+   * The store as the run's stored-document questions open it
+   * (`storedDocument`), or `undefined` when the store is off: a connection that
+   * never waits on a lock, so a store another process is writing answers a
+   * question at once instead of holding it for the store's busy timeout. Asked
+   * for only by a question asked before any enumeration built the home. Required,
+   * and separate from {@link cacheOf}, because only the verb's caller knows how
+   * to open a store that does not wait.
+   */
+  readonly questionCacheOf: () => Promise<PopulationCache | undefined>;
   /**
    * The `resources.collections` governing a root, so a declared `mimeType`
    * routes the file it matches to a parser: read off the root being enumerated,
@@ -256,7 +266,10 @@ export class RunPopulation implements PopulationRun {
    * store miss, an evicted key, a store-off run) is never an answer here, so
    * every file the store does not serve is a counted miss.
    *
-   * Answers only for a member of the home population a store hit recorded.
+   * Answers only for a member of the home population a store hit recorded,
+   * so a file outside the run's root (judged by real path,
+   * `isWithinProject`) is answered nothing at once, opening nothing, and
+   * counted `skillText.outsideRoot`.
    * The first question opens that population when no crawl has yet
    * (`#openHome`), so a lane asking before any phase enumerated the home
    * is served all the same: no caller has to open it first.
@@ -276,11 +289,20 @@ export class RunPopulation implements PopulationRun {
    * @param parserKind - The parser its content routes to
    * @returns The facts, or `undefined`
    */
-  async storedDocument(absolutePath: string, parserKind: ParserKind): Promise<StoredDocumentFacts | undefined> {
-    this.#homeOpening ??= this.#openHome();
-    await this.#homeOpening;
+  storedDocument(absolutePath: string, parserKind: ParserKind): Promise<StoredDocumentFacts | undefined> {
     const resolved = safePath.resolve(absolutePath);
-    return memoized(this.#storedDocuments, `${parserKind} ${resolved}`, () => this.#storedFacts(resolved, parserKind));
+    return memoized(this.#storedDocuments, `${parserKind} ${resolved}`, async () => {
+      // No member of the home population lives outside the home, so a file
+      // there is answered nothing before anything is opened: building the home
+      // to answer it would crawl the whole home for a guaranteed miss.
+      if (!isWithinProject(resolved, this.root)) {
+        countWork('skillText.outsideRoot', 1);
+        return undefined;
+      }
+      this.#homeOpening ??= this.#openHome();
+      await this.#homeOpening;
+      return this.#storedFacts(resolved, parserKind);
+    });
   }
 
   /**
@@ -292,29 +314,47 @@ export class RunPopulation implements PopulationRun {
    * asks first. Nothing with no store (no listing: a lane with no
    * store reads the files it scans, and lists nothing to do so).
    *
-   * A store that fails to open rejects, as a crawl's does: the store's failure
-   * refuses the run. One failure of the population records nothing instead: git
-   * giving no answer for the root (`GIT_NO_ANSWER`, matched by its code), such
-   * as a built bundle under a gitignored directory that a verb was pointed at. The opening is this
-   * question's, not an enumeration the verb asked for, so that must not refuse
-   * a verb that never enumerates its home; every answer is then a miss the lane
-   * counts (`skillText.storeMiss`) and reads the file for, and a verb that does
-   * enumerate the home meets the refusal there, as itself. Every other failure
-   * of the population (its extent read, its collections, the tracker, a defect)
-   * rejects, as the same failure rejects a crawl of the home.
+   * The question is optional: a lane that is answered nothing reads the file
+   * itself, so its answer never decides whether the run can do its job, and it
+   * never waits for one: it opens the store through
+   * {@link RunPopulationOptions.questionCacheOf}, which meets another process's
+   * lock by failing at once. Any failure to open the store or to build or
+   * enumerate the home population (a store another process is writing, a
+   * read-only cache directory, git giving no answer for the root, a defect)
+   * therefore records nothing and answers every question of the run with
+   * nothing: each a miss the lane counts (`skillText.storeMiss`) and reads the
+   * file for, the failure itself counted once (`skillText.storeUnopened`).
+   * Refusals stay on the enumerations a verb asked for: a home population the
+   * question failed to build is never filed for them, so a verb that
+   * enumerates its home opens and builds it itself, with the run's patience,
+   * and refuses only if it fails there, as itself.
    */
   async #openHome(): Promise<void> {
-    let home = this.#firstHome;
-    if (home === undefined) {
-      const cache = await this.#options.cacheOf();
-      if (cache === undefined) return;
-      home = this.#homePopulation(this.#options.outputs, cache);
-    }
-    const recorded = await home.catch((error: unknown) => {
-      if (isVatError(error, GIT_NO_ANSWER_CODE)) return undefined;
-      throw error;
+    const recorded = await this.#homeForQuestions().catch(() => {
+      countWork('skillText.storeUnopened', 1);
+      return undefined;
     });
     if (recorded !== undefined) this.#recordStored(recorded);
+  }
+
+  /**
+   * The home population the stored-document questions read: the one a crawl
+   * already built, else the one for the run's declared outputs, built under
+   * the run's store. `undefined` with no store.
+   */
+  async #homeForQuestions(): Promise<ResourceEnumeration | undefined> {
+    if (this.#firstHome !== undefined) return this.#firstHome;
+    const cache = await this.#options.questionCacheOf();
+    if (cache === undefined) return undefined;
+    const { outputs } = this.#options;
+    const population = this.#populate(outputs, cache);
+    const home = await population;
+    // Filed only once built, under the key the run's crawls of its home use, so
+    // they reuse it; a crawl that started meanwhile keeps its own.
+    const key = homePopulationKey(outputs);
+    if (!this.#enumerations.has(key)) this.#enumerations.set(key, population);
+    this.#firstHome ??= population;
+    return home;
   }
 
   /**
@@ -432,7 +472,7 @@ export class RunPopulation implements PopulationRun {
 
   /** The home root's full population for `outputs`: one per run, memoized beside the enumerations. */
   #homePopulation(outputs: readonly string[], cache: PopulationCache): Promise<ResourceEnumeration> {
-    const population = memoized(this.#enumerations, `${JSON.stringify(outputs)} home`, () => this.#populate(outputs, cache));
+    const population = memoized(this.#enumerations, homePopulationKey(outputs), () => this.#populate(outputs, cache));
     this.#firstHome ??= population;
     return population;
   }
@@ -566,6 +606,11 @@ async function readRefusal(absolutePath: string): Promise<{ readonly refused: un
   } catch (error) {
     return { refused: error };
   }
+}
+
+/** The memo key of the home root's full population for `outputs`, whichever caller builds it. */
+function homePopulationKey(outputs: readonly string[]): string {
+  return `${JSON.stringify(outputs)} home`;
 }
 
 /**

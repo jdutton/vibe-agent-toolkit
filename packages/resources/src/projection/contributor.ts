@@ -146,7 +146,7 @@ export interface ExtentContributor {
    * registration keys nothing, so `keyedContentKeys` returns the empty list and
    * `uncoveredContentKeys` — the guard that stops a blob-reading run accepting a
    * content-less extent — passes **vacuously**, having no keys to fail on. The
-   * deriving run then hydrates four empty blob tables and reports success.
+   * deriving run then hydrates empty blob tables and reports success.
    *
    * ⇒ Whatever a contributor learns at construction and cannot state in a
    * parameter set is declared here, and {@link storeKeyFor} folds it into the

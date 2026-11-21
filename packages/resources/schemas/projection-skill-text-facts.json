@@ -21,6 +21,15 @@
           ],
           "description": "The rest of the first line that starts with \"#\" and a space or tab, raw (untrimmed; a CRLF file keeps its CR), anywhere in the text — frontmatter and code blocks included — or null when there is none"
         },
+        "frontmatterFence": {
+          "type": "string",
+          "enum": [
+            "none",
+            "unclosed",
+            "closed"
+          ],
+          "description": "Where the frontmatter fences are, by the skill frontmatter fence rule (a leading BOM dropped, CRLF, lone CR and LF each a line ending, the first line \"---\" then optional spaces or tabs, the block closed by the next such line): \"none\" with no opening fence, \"unclosed\" with no closing one, \"closed\" with both. Kept whether or not the record is held"
+        },
         "matchCount": {
           "type": "integer",
           "minimum": 0,
@@ -35,6 +44,7 @@
         "blob",
         "lineCount",
         "h1",
+        "frontmatterFence",
         "matchCount",
         "held"
       ],

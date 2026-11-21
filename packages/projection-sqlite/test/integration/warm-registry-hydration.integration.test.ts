@@ -15,6 +15,7 @@ import { mkdtempSync } from 'node:fs';
 import { openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import {
   type FactStore,
+  type PopulationCache,
   type ResourceMetadata,
   ResourceRegistry,
   withRunPopulation,
@@ -58,13 +59,16 @@ let off: RunOutput;
  */
 async function runOnce(withStore: boolean): Promise<RunOutput> {
   const store: FactStore | undefined = withStore ? openSqliteFactStore({ directory: storeDirectory }) : undefined;
+  const storeOf = (): Promise<PopulationCache | undefined> =>
+    Promise.resolve(store === undefined ? undefined : { store, treeHash: 'warm-registry-hydration', treeUnchanged: () => true });
   try {
     return await withRunPopulation(
       {
         root,
         outputs: [],
         gitTracker: new GitTracker(root),
-        cacheOf: () => Promise.resolve(store === undefined ? undefined : { store, treeHash: 'warm-registry-hydration', treeUnchanged: () => true }),
+        cacheOf: storeOf,
+        questionCacheOf: storeOf,
         collectionsFor: () => Promise.resolve(undefined),
       },
       async (population) => {

@@ -18,8 +18,7 @@ import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import type { SkillTextRun } from '../../src/skill-text-lane.js';
-import { validateSkill } from '../../src/validators/skill-validator.js';
-import { setupParseRoute, setupTempDir } from '../test-helpers.js';
+import { setupParseRoute, setupTempDir, validateSkillThrough } from '../test-helpers.js';
 
 const route = setupParseRoute();
 const { getTempDir } = setupTempDir('skill-validator-stored-refusal-');
@@ -37,15 +36,8 @@ function grownSkill(): string {
   return skillPath;
 }
 
-function validate(skillPath: string, source: SkillTextRun['source']): ReturnType<typeof validateSkill> {
-  return validateSkill({
-    skillPath,
-    locationRoot: getTempDir(),
-    validation: {},
-    resourcesValidation: {},
-    side: 'source',
-    run: { source, dispatcher: route.dispatcher },
-  });
+function validate(skillPath: string, source: SkillTextRun['source']): ReturnType<typeof validateSkillThrough> {
+  return validateSkillThrough(skillPath, getTempDir(), source, route);
 }
 
 describe('validateSkill: a store-served SKILL.md that grew past the cap mid-run', () => {
@@ -55,6 +47,7 @@ describe('validateSkill: a store-served SKILL.md that grew past the cap mid-run'
       facts: {
         frontmatter: { name: 'Not_Kebab', description: 'grew' },
         frontmatterError: undefined,
+        frontmatterNotAMapping: false,
         links: [],
         skillText: skillTextFactsOf(RECORDED, SKILL_TEXT_DECLARATION),
       },

@@ -27,11 +27,11 @@
  *
  * ## Both writes replace, and both are one transaction
  *
- * `writeBlobFacts` deletes the four tables' rows for the content keys it is
+ * `writeBlobFacts` deletes every blob-scoped table's rows for the content keys it is
  * about to write and inserts those. Replace rather than insert-if-absent for a
  * specific reason — see `schema-sql.ts` on SQLite's treatment of NULL in a
- * primary key, which makes a conflict clause unable to dedup three of the thirteen
- * tables. 🪤 The keys it clears are the union of what **all four** tables name,
+ * primary key, which makes a conflict clause unable to dedup the tables whose key
+ * holds a nullable column. 🪤 The keys it clears are the union of what **every** blob-scoped table names,
  * never `blobs` alone: a declined blob is a `blob_conditions` row with no
  * `blobs` row, which is what every binary file in a corpus produces — see
  * {@link uniqueContentKeys}.
@@ -557,7 +557,7 @@ export function isStoreInUse(directory: string): boolean {
  * 🪤 What keeps the blob bound from being true only of fresh stores — see
  * {@link adoptBlobKeysSql}. Gated on the manifest being empty, so it costs one
  * indexed `LIMIT 1` per open after the first write; on a genuinely empty store
- * the four statements scan four empty tables.
+ * its statements scan empty tables.
  *
  * @param database - An open connection whose schema exists
  */
@@ -980,11 +980,11 @@ function clearSpaceForBlobs(
 }
 
 /**
- * Delete every blob-scoped row for a set of content keys, in all four tables.
+ * Delete every blob-scoped row for a set of content keys, in every blob-scoped table.
  *
  * The range a write clears before filling it, and the range an eviction
  * reclaims: they are the same operation over different keys, which is why
- * there is one of it. 🪤 The keys are the union all four tables name, never
+ * there is one of it. 🪤 The keys are the union every blob-scoped table names, never
  * `blobs` alone — see {@link uniqueContentKeys}.
  *
  * @param tables - The connection's statements
@@ -1440,8 +1440,8 @@ function decodeRows(plan: TablePlan, raw: readonly unknown[]): readonly Record<s
 }
 
 /**
- * Every content key a bundle names **anywhere**, across all four blob-scoped
- * tables, deduplicated.
+ * Every content key a bundle names **anywhere**, across every blob-scoped
+ * table, deduplicated.
  *
  * ## 🪤 Why the union, and not the `blobs` table alone
  *

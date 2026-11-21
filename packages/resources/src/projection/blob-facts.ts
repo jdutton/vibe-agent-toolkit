@@ -325,7 +325,14 @@ export function skillTextRowsFor(
 ): { facts: SkillTextFactsRow; matches: SkillTextMatchRow[] } {
   const held = skillTextHeld(facts);
   return {
-    facts: { blob: contentKey, lineCount: facts.lineCount, h1: facts.h1, matchCount: facts.matches.length, held },
+    facts: {
+      blob: contentKey,
+      lineCount: facts.lineCount,
+      h1: facts.h1,
+      frontmatterFence: facts.frontmatterFence,
+      matchCount: facts.matches.length,
+      held,
+    },
     matches: held ? facts.matches.map((match) => ({
       blob: contentKey,
       ordinal: match.ordinal,

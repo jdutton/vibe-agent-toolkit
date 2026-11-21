@@ -10,7 +10,10 @@
  * H1, the line, file-count and total-line thresholds on each side, a SKILL.md with a BOM,
  * one with CRLF line endings and one in UTF-16LE, linked documents with a BOM and in
  * UTF-16LE, bundled documents a SKILL.md (UTF-8 and UTF-16LE) mentions but never links,
- * two skills with identical bytes, and a skill that links another skill's SKILL.md. The
+ * two skills with identical bytes, a skill that links another skill's SKILL.md, every
+ * frontmatter refusal (none, unclosed, empty, invalid YAML, not a mapping), second-person
+ * openers in and out of fences and quotes, and an opener whose 80-code-unit sample ends
+ * on an emoji's high surrogate. The
  * BOM and UTF-16LE files are served warm like any other: `vat validate`'s skills lane
  * scans decoded text, as it always has (only `validateSkill`'s linked-file lane scans a
  * file's raw reading, which the golden test holds). To it this file adds one skill bundling a
@@ -90,7 +93,12 @@ const SKILL_TEXT_TREE: FixtureTree = {
   untracked: () => undefined,
 };
 
-/** A code from every detector family and name source the corpus seeds, each of which the reference must report. */
+/**
+ * A code from every detector family and name source the corpus seeds that `vat validate`
+ * runs, each of which the reference must report. Not `SKILL_BODY_NOT_IMPERATIVE`: only
+ * the config-free lane (`validateSkill`, which `vat audit` runs) detects second-person
+ * openers, so `vat validate` never reports one; the golden integration test holds that family.
+ */
 const EXPECTED_CODES: ReadonlySet<string> = new Set([
   'CAPABILITY_LOCAL_SHELL',
   'CAPABILITY_BROWSER_AUTH',

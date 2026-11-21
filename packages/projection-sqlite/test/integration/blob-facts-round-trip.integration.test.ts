@@ -283,13 +283,15 @@ beforeAll(async () => {
   }
 
   // The cold lane: the registry, crawled through a run with no store.
+  const noStore = (): Promise<undefined> => Promise.resolve(undefined);
   cold = await withRunPopulation(
     {
       root,
       outputs: [],
       gitTracker: new GitTracker(root),
-      cacheOf: () => Promise.resolve(undefined),
-      collectionsFor: () => Promise.resolve(undefined),
+      cacheOf: noStore,
+      questionCacheOf: noStore,
+      collectionsFor: noStore,
     },
     async (population) => {
       const registry = new ResourceRegistry({ baseDir: root });

@@ -46,7 +46,7 @@
  * Every arm has a private `VAT_CACHE_DIR` and temp directory.
  */
 
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
 import { DEFAULT_PARSE_LIMITS, SKILL_TEXT_HELD_LIMITS, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
@@ -527,19 +527,12 @@ claude:
 };
 
 /**
- * The built SKILL.md is read, keyed and parsed twice in one `vat verify` run: the tree
- * under outputs has no store, and the two reads of it do not share the run's one
- * content read. Declared so it is held, and so the day it becomes one read this file
- * reds.
+ * The parse lookups one `vat verify` run makes of the built SKILL.md, all answered from
+ * its one read and its one key: the skill's validation and its skill-text record each
+ * ask for the document. The tree under outputs has no store, so each is a parse-cache
+ * lookup, never a second read.
  */
-const BUILT_SKILL_MD_TWICE = 2;
-
-/** A document's frontmatter block, fences and all, as the frontmatter parser keys it from text. */
-function frontmatterBlockOf(text: string): string {
-  const match = /^---\n([\s\S]*?)\n---\n/u.exec(text);
-  if (match === null) throw new Error('no frontmatter block');
-  return `---\n${match[1] ?? ''}\n---\n`;
-}
+const BUILT_SKILL_MD_PARSE_LOOKUPS = 2;
 
 /** Where the build puts the marketplace's copy of the plugin skill, which `vat verify`'s marketplace phase validates. */
 const BUILT_SKILL_DIR = 'dist/.claude/plugins/marketplaces/one-market/plugins/one-plugin/skills/one-skill';
@@ -571,7 +564,6 @@ describe('warm vat verify reads only the declared fallback and the built tree', 
       .map((path) => `${BUILT_SKILL_DIR}/${toForwardSlash(path)}`);
     expect(built, 'the build bundled the skill and its documents').toHaveLength(Object.keys(VERIFY_SEEDS).length);
     expect(built, 'the built SKILL.md').toContain(builtSkill);
-    const builtDocuments = built.filter((path) => path !== builtSkill);
     const sizeOf = (path: string): number => statSync(join(root, path)).size;
 
     // The source tree costs its declared fallback alone.
@@ -584,16 +576,15 @@ describe('warm vat verify reads only the declared fallback and the built tree', 
       spend.bytes += lane.hashed * sizeOf(path);
       spend.lookups += lane.lookups;
     }
-    // The built tree is under the verb's outputs, which no store serves. Its SKILL.md is
-    // read, keyed and parsed twice (BUILT_SKILL_MD_TWICE), and its frontmatter block once
-    // more from text (keyed, never read); each bundled document is read and scanned, a
-    // miss, never parsed. Each built file is one miss.
-    const frontmatter = Buffer.byteLength(frontmatterBlockOf(readFileSync(join(root, builtSkill), 'utf-8')));
+    // The built tree is under the verb's outputs, which no store serves. Every built file
+    // is read and keyed once and is one miss; the SKILL.md's parse is looked up
+    // BUILT_SKILL_MD_PARSE_LOOKUPS times from that one read; each bundled document is
+    // scanned, never parsed.
     spend.miss += built.length;
-    spend.reads += BUILT_SKILL_MD_TWICE + builtDocuments.length;
-    spend.hashed += BUILT_SKILL_MD_TWICE + 1 + builtDocuments.length;
-    spend.bytes += BUILT_SKILL_MD_TWICE * sizeOf(builtSkill) + frontmatter + builtDocuments.reduce((sum, path) => sum + sizeOf(path), 0);
-    spend.lookups += BUILT_SKILL_MD_TWICE + 1;
+    spend.reads += built.length;
+    spend.hashed += built.length;
+    spend.bytes += built.reduce((sum, path) => sum + sizeOf(path), 0);
+    spend.lookups += BUILT_SKILL_MD_PARSE_LOOKUPS;
     const counters = run.dump.counters;
     expect({
       miss: counters['skillText.storeMiss'],
@@ -612,10 +603,9 @@ describe('warm vat verify reads only the declared fallback and the built tree', 
       ['package.json', 1],
       ['dist/.claude/plugins/marketplaces/one-market/.claude-plugin/marketplace.json', 1],
       ['dist/.claude/plugins/marketplaces/one-market/plugins/one-plugin/.claude-plugin/plugin.json', 1],
-      [builtSkill, BUILT_SKILL_MD_TWICE],
     ]);
     for (const [path, category] of Object.entries(VERIFY_SEEDS)) expected.set(path, 1 + CATEGORY[category].laneOpens);
-    for (const path of builtDocuments) expected.set(path, 1);
+    for (const path of built) expected.set(path, 1);
     expect(contentOpens(run.reads), 'warm opens at the fs boundary, per path').toEqual(contentOpens(expected));
   });
 });

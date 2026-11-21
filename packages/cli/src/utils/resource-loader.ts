@@ -25,7 +25,7 @@ import { loadConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
 import { collectionsOption } from './population-wiring.js';
 import { assertDirectoryArgument } from './project-root-policy.js';
-import { projectionStoreSelected, withLazyPopulationCache } from './projection-store.js';
+import { type OpenedPopulationCache, openQuestionCache, projectionStoreSelected, withLazyPopulationCache } from './projection-store.js';
 
 /**
  * One VAT process run's shared population, registry and parse dispatcher: what
@@ -130,6 +130,36 @@ async function runCacheOf(cacheOf: () => Promise<PopulationCache | undefined>): 
 }
 
 /**
+ * The store as a run's stored-document questions open it: a connection that
+ * never waits on a lock ({@link openQuestionCache}), opened by the first
+ * question that needs it and closed when the run ends. Its blob tier reads are
+ * marked as the run's refusal, as the run's own connection's are.
+ *
+ * @param root - The run's home root
+ * @param projectionStore - Whether the run has a projection store
+ * @returns The opener and the closer
+ */
+function questionStoreOf(root: string, projectionStore: 'on-demand' | 'none'): {
+  readonly cacheOf: () => Promise<PopulationCache | undefined>;
+  readonly close: () => Promise<void>;
+} {
+  let opened: Promise<OpenedPopulationCache | undefined> | undefined;
+  return {
+    cacheOf: async () => {
+      if (projectionStore === 'none') return undefined;
+      opened ??= openQuestionCache({ root });
+      const cache = (await opened)?.cache;
+      return cache === undefined ? undefined : { ...cache, store: markingBlobReads(cache.store) };
+    },
+    close: async () => {
+      // A connection that failed to open has nothing to close; its failure was
+      // the question's, answered already.
+      await (await opened?.catch(() => undefined))?.close();
+    },
+  };
+}
+
+/**
  * Run one verb's work with its {@link RunContext}, inside the projection-store
  * scope that answers it.
  *
@@ -139,9 +169,10 @@ async function runCacheOf(cacheOf: () => Promise<PopulationCache | undefined>): 
  * opens the store, takes the snapshot that keys it and initializes the root's
  * ignore oracle; so a phase that refuses at its own guards, or finds nothing to
  * check, refuses or reports exactly as it would alone. A verb that asks only a
- * stored-document question (`vat skill review`, a `vat verify` with only
- * non-resource phases) therefore opens the store for it, and on a cold store
- * derives the whole home population to answer one skill. A git refusal is the refusal of
+ * stored-document question (a `vat verify` with only non-resource phases)
+ * therefore opens the store for it, and on a cold store
+ * derives the whole home population to answer one skill. The questions open
+ * their own connection, one that never waits on a lock ({@link questionStoreOf}). A git refusal is the refusal of
  * the phase that enumerated; a store that will not open, or whose blob tier
  * cannot be read, is the run's refusal ({@link isRunRefusal}), said once, and no
  * later phase runs.
@@ -166,6 +197,7 @@ export function withRunContext<T>(
 ): Promise<T> {
   const root = safePath.resolve(options.root);
   const gitTracker = options.gitTracker ?? new GitTracker(root);
+  const questionStore = questionStoreOf(root, options.projectionStore);
   return withLazyPopulationCache({ root }, (cacheOf) =>
     withRunPopulation(
       {
@@ -173,6 +205,7 @@ export function withRunContext<T>(
         outputs: options.outputs,
         gitTracker,
         cacheOf: options.projectionStore === 'none' ? () => Promise.resolve(undefined) : () => runCacheOf(cacheOf),
+        questionCacheOf: questionStore.cacheOf,
         collectionsFor: (enumerated) => Promise.resolve(collectionsOption(enumerated).collections),
       },
       (population) => work({
@@ -181,7 +214,7 @@ export function withRunContext<T>(
         dispatcher: population.dispatcher,
       }),
     ),
-  );
+  ).finally(() => questionStore.close());
 }
 
 /**

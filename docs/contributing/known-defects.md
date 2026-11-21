@@ -594,33 +594,22 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Fix:** let the child answer a refused key from the refusal the run already holds, as the
   parent does, instead of re-deriving the population.
 
-### `vat verify` reads each built SKILL.md twice
-
-- **Severity:** Minor · **Effort:** S · **User-visible:** no (cost only)
-- **Mechanism:** the marketplace lane's skill validation reads the built SKILL.md for its text
-  (`readSkillMarkdown`, `readContentForParse`), then reads it again for its parsed document
-  (`readSkillDocument`, `parseFileCached`). Both calls pass the run's dispatcher, but neither
-  shares the other's read, so the file is opened, read and keyed twice. Reproduced at the fs
-  boundary and with the work counters.
-- **Where:** [`skill-validator.ts`](../../packages/agent-skills/src/validators/skill-validator.ts)
-  (`readSkillMarkdown`), [`skill-text-lane.ts`](../../packages/agent-skills/src/skill-text-lane.ts)
-  (`readSkillDocument`)
-- **Fix:** parse from the text the first read returned, or have the dispatcher serve the second
-  call from the first read.
-
 ### The inventory extent admits a SKILL.md that another skill links, where the walker refuses it
 
-- **Severity:** Minor · **Effort:** M (a refusal rule that can express the branch) · **User-visible:**
-  no while the extent stays a shadow; yes if it replaces `collectLinkedFiles`
-- **Mechanism:** the link walker refuses a linked SKILL.md as `skill-definition`, but no
-  extent refusal rule can express that branch, so the inventory closure admits every SKILL.md a
-  skill links (and whatever those link), in both git-tracker states. Reproduced by the
-  real-repository sweep in `inventory-extent-corpus.integration.test.ts`, which names the
-  divergence exactly (`KNOWN_SKILL_DEFINITION_GAP`); delete that entry with the fix.
+- **Severity:** Minor · **Effort:** S · **User-visible:** no while the extent stays a shadow; yes
+  if it replaces `collectLinkedFiles`
+- **Mechanism:** the link walker refuses a linked SKILL.md as `skill-definition`, but
+  `inventoryRefusals` carries no rule for that branch, though the packaging translation
+  expresses it (`SKILL_REFUSED_SKILL_DEFINITION`, a `basenames: ['SKILL.md']` rule). So the
+  inventory closure admits every SKILL.md a skill links, in both git-tracker states. Reproduced
+  by the KNOWN GAP test in `inventory-extent-corpus.integration.test.ts`, which holds the
+  difference exactly and reds when the rule lands; delete it then and let the sweep take the
+  skill back.
 - **Where:** [`inventory-extent.ts`](../../packages/claude-marketplace/src/inventory/inventory-extent.ts)
   (`inventoryRefusals`)
-- **Fix:** add a refusal rule for a target that is a skill definition, so the closure matches
-  the walker's cascade.
+- **Fix:** add the basename rule between the agent-instruction and gitignore rules, under a new
+  exported label beside the other `INVENTORY_REFUSED_*` labels (barrel, barrel test, the CLI's
+  absence-cause table, the cascade-order unit test).
 
 ## Git and crawl
 

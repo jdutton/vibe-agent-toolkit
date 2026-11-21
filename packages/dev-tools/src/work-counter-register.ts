@@ -15,7 +15,7 @@ export const COUNTED_STATUS_PREFIX = 'accepted, counted';
 
 /** Register line number to the counters that count that row. */
 export const COUNTED_COST_ROWS: Readonly<Record<number, readonly [WorkCounter, ...WorkCounter[]]>> = {
-  43: ['skillText.storeMiss'],
+  43: ['skillText.storeMiss', 'skillText.storeUnopened', 'skillText.outsideRoot'],
   60: ['extent.derived', 'extent.served'],
   61: ['store.rows.decoded.persistent', 'hydration.rows.written'],
   65: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],

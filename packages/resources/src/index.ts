@@ -1235,4 +1235,4 @@ export {
 export { skillTextFactsOf } from './skill-text/core.js';
 // The one frontmatter fence rule: agent-skills' `parseFrontmatter` and the core's body families both apply it.
 export { frontmatterFencesOf, type FrontmatterFences } from './skill-text/frontmatter-fences.js';
-export { type SkillTextFacts, SkillTextFactsSchema, type SkillTextMatch } from './schemas/skill-text-facts.js';
+export { type FrontmatterFence, type SkillTextFacts, SkillTextFactsSchema, type SkillTextMatch } from './schemas/skill-text-facts.js';

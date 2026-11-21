@@ -12,6 +12,11 @@
  * can drift, and a type (a type-only import, a literal type, `RegExp` as a
  * type) is erased, so both pass.
  *
+ * It also refuses the name `lastIndex` in any position (a member, an alias's
+ * member, a destructured key, an object key): the declared regexes are shared,
+ * unfrozen objects, and a `lastIndex` the core moved would change what a later
+ * `matchAll` over the same regex finds.
+ *
  * Why: the skill-text core's output is stored and served from a cache keyed by
  * the digest of its declaration (`SKILL_TEXT_DECLARATION` in resources). A
  * pattern or constant written into the core itself would change its output
@@ -40,6 +45,12 @@
 /** A literal value the core may spell: the indices, the sign, and the empty string. */
 function isAllowedValue(value) {
   return value === 0 || value === 1 || value === '' || value === true || value === false || value === null;
+}
+
+/** Whether `node` is the value half of a shorthand property, whose key half is reported instead. */
+function isShorthandValue(node) {
+  const { parent } = node;
+  return parent?.type === 'Property' && parent.shorthand === true && parent.value === node && parent.key !== node;
 }
 
 /** The names the global object goes by. */
@@ -142,6 +153,9 @@ module.exports = {
     messages: {
       regexLiteral: 'A regex belongs in the declaration, where its digest sees it.',
       regexReference: 'Reach no RegExp here: a pattern belongs in the declaration, where its digest sees it.',
+      lastIndex:
+        'Touch no lastIndex here: the declared regexes are shared, so a moved lastIndex changes what every later ' +
+        'scan over them finds.',
       literal: 'Only 0, 1, -1 and \'\' may be spelled here: every other constant belongs in the declaration, where its digest sees it.',
       valueImport:
         'Import no runtime value here but a sibling module (./x.js) or, from {{declaration}}, {{allowed}}: what ' +
@@ -204,6 +218,7 @@ module.exports = {
       },
       Identifier(node) {
         if (isRegExpReference(node)) context.report({ node, messageId: 'regexReference' });
+        if (node.name === 'lastIndex' && !isShorthandValue(node)) context.report({ node, messageId: 'lastIndex' });
       },
       CallExpression(node) {
         if (node.callee.type === 'Identifier' && node.callee.name === 'require') reportImport(node);

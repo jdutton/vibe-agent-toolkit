@@ -21,9 +21,13 @@ import type { SkillTextDeclaration } from './declaration.js';
  * its name run ends and where the next `__[a-z]` is; each start is then decided
  * in constant time, and a match resumes after its run as `matchAll` does.
  *
+ * Every match starts with the prefix, so a text without it (most documents)
+ * is answered by one native `includes` and none of the passes.
+ *
  * @returns `captures`, the tool half of each match in text order; and `steps`,
- *   the work done (one per position each pass visits), at most three per
- *   character, which is what proves the scan linear
+ *   the work done (the prefix check counted as one full pass, then one per
+ *   position each pass visits), at most four per character, which is what
+ *   proves the scan linear
  */
 export function scanClaudeCodeQualified(
   text: string,
@@ -31,11 +35,12 @@ export function scanClaudeCodeQualified(
 ): { captures: string[]; steps: number } {
   const { prefix, separator, wordChar, nameChar, toolStart } = declaration.mcp;
   const length = text.length;
+  if (!text.includes(prefix)) return { captures: [], steps: length };
   const runEnd = rightToLeft(length, (index, next) => (nameChar.test(text.charAt(index)) ? next : index));
   const nextToolSeparator = rightToLeft(length, (index, next) =>
     text.startsWith(separator, index) && toolStart.test(text.charAt(index + separator.length)) ? index : next,
   );
-  let steps = runEnd.steps + nextToolSeparator.steps;
+  let steps = length + runEnd.steps + nextToolSeparator.steps;
 
   /** The end of the match a `\bmcp__` at `start` opens, or `undefined` when it opens none. */
   const matchEndAt = (start: number): { tool: number; end: number } | undefined => {

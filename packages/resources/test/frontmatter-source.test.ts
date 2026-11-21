@@ -50,6 +50,17 @@ describe('parseFrontmatterSource', () => {
     expect(parseFrontmatterSource('paths:\n  - "src/**"')).toStrictEqual({ frontmatter: { paths: ['src/**'] } });
   });
 
+  // The whole-document parse hands over the block as the markdown parser found it, line endings
+  // and all; a skill lane's block parse joins its lines with `\n`. One decode for both: a lone CR
+  // and a CRLF are each a line ending, as they are to the fence rule.
+  it.each([
+    ['a lone CR between keys', 'name: x\rdescription: y', 'name: x\ndescription: y'],
+    ['a lone-CR folded scalar', 'name: x\rdescription: >\r  a\r  b', 'name: x\ndescription: >\n  a\n  b'],
+    ['CRLF', 'name: x\r\ndescription: >\r\n  a\r\n  b', 'name: x\ndescription: >\n  a\n  b'],
+  ])('decodes %s as the same block with LF line endings', (_label, source, lf) => {
+    expect(parseFrontmatterSource(source)).toStrictEqual(parseFrontmatterSource(lf));
+  });
+
   it('returns invalid YAML as an error', () => {
     expect(Object.keys(parseFrontmatterSource('a: [unclosed'))).toStrictEqual(['frontmatterError']);
   });

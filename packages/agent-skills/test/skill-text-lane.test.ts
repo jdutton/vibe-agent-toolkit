@@ -64,7 +64,15 @@ function skillFile(): string {
 
 /** A document with `frontmatter` and the H1 `h1`. */
 function documentWith(frontmatter: Record<string, unknown> | undefined, h1: string | null): SkillDocument {
-  return { frontmatter, frontmatterError: undefined, links: [], skillText: { lineCount: 1, h1, matches: [] }, decoding: PLAIN_UTF8 };
+  return {
+    frontmatter,
+    frontmatterError: undefined,
+    frontmatterNotAMapping: false,
+    links: [],
+    skillText: { lineCount: 1, h1, frontmatterFence: 'closed', matches: [] },
+    decoding: PLAIN_UTF8,
+    text: () => Promise.reject(new Error('no detector reads this document\'s text')),
+  };
 }
 
 describe('skillNameOf', () => {

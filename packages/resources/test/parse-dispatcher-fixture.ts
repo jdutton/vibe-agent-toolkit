@@ -33,7 +33,7 @@ const CANNED_PARSE = {
   links: [],
   headings: [],
   estimatedTokenCount: 0,
-  skillText: { lineCount: 1, h1: null, matches: [] },
+  skillText: { lineCount: 1, h1: null, frontmatterFence: 'none', matches: [] },
 } as unknown as ParseResult;
 
 /** Cache outcomes a run has accrued. `misses` is what clears the threshold. */

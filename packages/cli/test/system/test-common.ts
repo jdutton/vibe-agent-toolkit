@@ -3,16 +3,17 @@
  * Extracts common setup to reduce duplication across test files
  */
 
-import type { SpawnOptionsWithoutStdio, SpawnSyncReturns } from 'node:child_process';
-import { spawn as nodeSpawn } from 'node:child_process';
+import type { ChildProcess, SpawnOptionsWithoutStdio, SpawnSyncReturns } from 'node:child_process';
+import { spawn as nodeSpawn, spawnSync as nodeSpawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import { dirname as pathDirname, join as pathJoin, resolve as pathResolve } from 'node:path';
 import { fileURLToPath as urlFileURLToPath, pathToFileURL } from 'node:url';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { isProcessGoneError, mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { createTempDir, removeTempDir, tempDirTracker } from '@vibe-agent-toolkit/utils/testing';
-import { expect } from 'vitest';
+import { afterAll, expect, onTestFinished } from 'vitest';
+import { getCurrentTest } from 'vitest/suite';
 import * as yaml from 'yaml';
 
 // Re-export commonly used functions
@@ -244,6 +245,99 @@ function mergeEnvWithOverrides(overrides: Record<string, string>): NodeJS.Proces
 /** What a spawned command may print on either stream before it is killed, unless the caller states more. */
 const DEFAULT_COLLECT_MAX_BUFFER = 10 * 1024 * 1024;
 
+/** Where the process keeps {@link startedCommands}, so every evaluation of this module shares one set and one set of signal handlers. */
+const STARTED_COMMANDS = Symbol.for('vibe-agent-toolkit.test.startedCommands');
+
+/**
+ * The signals that end a test process before any test teardown runs: a terminal's Ctrl-C (SIGINT,
+ * to the whole foreground group, the test process included), vitest stopping a fork at the end of
+ * a run or on cancel (SIGTERM, then SIGKILL 500 ms later, which nothing can catch), and a closed
+ * terminal (SIGHUP). A started command leads its own process group, so none of these reach it.
+ */
+const ENDING_SIGNALS: readonly NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+
+/** Every command {@link spawnAndCollect} started that its teardown has not yet ended. */
+const startedCommands = sharedStartedCommands();
+
+/**
+ * The process's one set of started commands, created with the handlers that end them on an
+ * {@link ENDING_SIGNALS} signal: each ends every started command's group, then lets the signal do
+ * what it would have (with no other listener left, it is raised again, now with its default
+ * action). Installed once per process, however many test files evaluate this module.
+ *
+ * @returns The set
+ */
+function sharedStartedCommands(): Set<ChildProcess> {
+  const holder = globalThis as unknown as Record<symbol, Set<ChildProcess> | undefined>;
+  const existing = holder[STARTED_COMMANDS];
+  if (existing !== undefined) return existing;
+  const created = new Set<ChildProcess>();
+  holder[STARTED_COMMANDS] = created;
+  for (const signal of ENDING_SIGNALS) {
+    const onSignal = (): void => {
+      for (const started of created) endStartedCommand(started);
+      process.off(signal, onSignal);
+      if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
+    };
+    process.on(signal, onSignal);
+  }
+  // A SIGINT or SIGTERM sent to the vitest process alone (`kill <pid>`, a CI step cancelled) ends
+  // it with `process.exit` and no fork is stopped or signalled; the fork learns of it only as its
+  // IPC channel closing.
+  process.once('disconnect', () => {
+    for (const started of created) endStartedCommand(started);
+  });
+  return created;
+}
+
+/**
+ * End `child` and every process it started, unless they have ended.
+ *
+ * POSIX: the child leads its own process group (spawned `detached`), so one SIGKILL to the group
+ * reaches a grandchild the child left behind (`bun run vat` starts `node`). A group that is
+ * already empty answers ESRCH, which is "gone". Windows has no process groups: `taskkill /T`
+ * ends the child's tree, asked only while the child still runs, since Windows may hand a dead
+ * child's pid to an unrelated process at once.
+ *
+ * @param child - A command {@link spawnAndCollect} started
+ */
+function endStartedCommand(child: ChildProcess): void {
+  startedCommands.delete(child);
+  const pid = child.pid;
+  if (pid === undefined) return;
+  if (process.platform === 'win32') {
+    if (child.exitCode === null && child.signalCode === null) {
+      nodeSpawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
+    }
+    return;
+  }
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch (error) {
+    if (!isProcessGoneError(error)) throw error;
+  }
+}
+
+/**
+ * Tie `child` to the test that started it: it ends when that test finishes, whether it passed,
+ * failed or timed out (a timed-out test stops awaiting its command but never stopped the command).
+ * A command started outside a test (`beforeAll`) ends when its file's tests do, below.
+ *
+ * @param child - A command {@link spawnAndCollect} just started
+ */
+function endWithItsTest(child: ChildProcess): void {
+  startedCommands.add(child);
+  if (getCurrentTest() !== undefined) onTestFinished(() => endStartedCommand(child));
+}
+
+// Registered on the file that imports this module (each file evaluates it afresh), so a command a
+// `beforeAll` started ends with that file. Not a worker `exit` handler: vitest stops its forks with
+// SIGTERM, whose default action runs none, so a command left to it outlived the file.
+afterAll(() => {
+  // Deleting the entry being visited is safe in a Set's for-of.
+  for (const started of startedCommands) endStartedCommand(started);
+});
+
 function spawnAndCollect(
   command: string,
   args: string[],
@@ -252,7 +346,8 @@ function spawnAndCollect(
 ): Promise<SpawnSyncReturns<string>> {
 
   return new Promise((resolvePromise) => {
-    const child = nodeSpawn(command, args, options);
+    const child = nodeSpawn(command, args, { ...options, detached: process.platform !== 'win32' });
+    endWithItsTest(child);
 
     let stdout = '';
     let stderr = '';

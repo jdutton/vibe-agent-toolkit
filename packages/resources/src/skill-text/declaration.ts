@@ -17,18 +17,45 @@
  * other than this module.
  *
  * Every pattern below is the agent-skills detector's pattern verbatim (same
- * source, same flags). The regexes are shared objects, so the whole declaration
- * is deep-frozen: `matchAll` copies its source's `lastIndex` into the clone it
- * iterates, so one `exec`/`test` on a shared global regex anywhere in the
- * process would make every later scan drop matches, and the digest cannot see
- * that. Frozen, `lastIndex` stays 0 and such a call throws instead. The core
- * reads a global regex only through `matchAll` and `split` (which never write
- * it) and a non-global one through `exec`/`test` (which do not either).
+ * source, same flags). The declaration's objects and arrays are frozen, so no
+ * holder can swap a pattern or a constant under the digest. Its regexes are
+ * shared and deliberately NOT frozen: V8 runs every operation on a frozen
+ * regex on its slow path (`split` measured 25x slower, a one-character `test`
+ * 3.5x), which more than doubled the core's time over a repository.
+ *
+ * What an unfrozen regex leaves open is its `lastIndex`: `matchAll` copies the
+ * source's `lastIndex` into the clone it iterates, so an `exec`/`test` on a
+ * shared GLOBAL regex, or a `lastIndex` write, would make the next scan over it
+ * start mid-text and drop matches, and the digest cannot see that. So:
+ * `local/skill-text-core-purity` refuses any `lastIndex` reference in the core;
+ * the core reads a global regex only through `matchAll` and `split` (which
+ * leave `lastIndex` as they found it) and a non-global one through
+ * `exec`/`test` (which never read or write it); and a test scans the golden
+ * corpus and asserts every declared regex still has `lastIndex` 0. A consumer
+ * outside the core holds the same objects: it uses a declared global regex only
+ * through `matchAll`, `split`, `replace` or `replaceAll`.
  */
 
 import { createHash } from 'node:crypto';
 
-import { deepFreeze } from '@vibe-agent-toolkit/utils';
+/**
+ * Freeze `value` and every object and array reachable from it, leaving each
+ * regex (and what it holds) unfrozen: see the module note for why.
+ *
+ * @param value - The declaration, frozen in place
+ * @returns `value`
+ */
+function freezeAllButRegexes<T extends object>(value: T): T {
+  freezeReachable(value);
+  return value;
+}
+
+/** Freeze one value and what it reaches, stopping at a regex, a primitive or an already-frozen object. */
+function freezeReachable(value: unknown): void {
+  if (!(value instanceof Object) || value instanceof RegExp || Object.isFrozen(value)) return;
+  Object.freeze(value);
+  for (const child of Object.values(value)) freezeReachable(child);
+}
 
 /*
  * Every regex is a literal, written out from fragments (a month list, an
@@ -47,7 +74,7 @@ import { deepFreeze } from '@vibe-agent-toolkit/utils';
  *   (`[^\n|;&\x60]*?`) before the flag.
  * - External CLI: `(^|[\s;|&])<binary>(\s|$)`, multiline.
  */
-export const SKILL_TEXT_DECLARATION = deepFreeze({
+export const SKILL_TEXT_DECLARATION = freezeAllButRegexes({
   /** The one line separator every line number and line count is taken on. */
   lineSeparator: '\n',
 
@@ -166,6 +193,8 @@ export const SKILL_TEXT_DECLARATION = deepFreeze({
     bom: String.fromCodePoint(0xfe_ff),
     lineEnding: /\r\n?|\n/,
     fence: /^---[ \t]*$/,
+    /** The record's `frontmatterFence`: no opening fence line, an opening fence with no closing one, or both. */
+    fenceStates: { none: 'none', unclosed: 'unclosed', closed: 'closed' },
   },
 
   /** The compat capability evidence, in the order the detector emits it. */

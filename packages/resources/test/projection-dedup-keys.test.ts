@@ -455,8 +455,8 @@ const FIXTURES: readonly TableFixture[] = [
   fixture(
     'skillTextFacts',
     (builder, row) => builder.addSkillTextFacts(row),
-    { blob: BLOB_BASE, lineCount: 9, h1: 'Base', matchCount: 0, held: true },
-    { blob: BLOB_ALT, lineCount: 19, h1: null, matchCount: 2, held: false },
+    { blob: BLOB_BASE, lineCount: 9, h1: 'Base', frontmatterFence: 'closed', matchCount: 0, held: true },
+    { blob: BLOB_ALT, lineCount: 19, h1: null, frontmatterFence: 'none', matchCount: 2, held: false },
   ),
   fixture(
     'skillTextMatches',

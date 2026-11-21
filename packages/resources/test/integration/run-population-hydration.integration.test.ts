@@ -133,6 +133,14 @@ interface RunVariation {
   readonly homeFault?: Error;
   /** The run's home, when it is not the suite's repository root. */
   readonly home?: string;
+  /** What opening the run's store fails with, if anything. */
+  readonly storeFault?: Error;
+  /**
+   * What every write through the questions' own connection fails with, if
+   * anything: another process holding the lock, met by a connection that does
+   * not wait. The run's own connection writes as ever.
+   */
+  readonly questionWriteFault?: Error;
 }
 
 /**
@@ -194,6 +202,28 @@ async function runOnce(withStore: boolean, variation: RunVariation = {}): Promis
 }
 
 /**
+ * `cache` with every store write failing with `fault`, or `cache` itself with no fault.
+ *
+ * @param cache - The cache, if any
+ * @param fault - What each write fails with, if anything
+ * @returns The cache the questions open
+ */
+function writesFailing(cache: PopulationCache | undefined, fault: Error | undefined): PopulationCache | undefined {
+  if (cache === undefined || fault === undefined) return cache;
+  const { store: inner } = cache;
+  return {
+    ...cache,
+    store: {
+      writeBlobFacts: () => Promise.reject(fault),
+      writeExtent: () => Promise.reject(fault),
+      readBlobFacts: (contentKeys) => inner.readBlobFacts(contentKeys),
+      readExtent: (key) => inner.readExtent(key),
+      close: () => inner.close(),
+    },
+  };
+}
+
+/**
  * One run of its own: its content cache, dispatcher and population, shut down however `work` ends.
  *
  * @param withStore - Whether the run has the suite's store
@@ -209,11 +239,15 @@ async function withRun<T>(withStore: boolean, variation: RunVariation, work: (po
   const policy = { content, ...failingPolicy(), ...(variation.limits !== undefined && { limits: variation.limits }) };
   const dispatcher = new ParseDispatcher(new ParseCache({ enabled: false }), policy);
   const home = variation.home ?? root;
+  // One in-process store, which no other process can hold a lock on: the
+  // questions open the same one, injected fault included.
+  const storeOf = (): Promise<PopulationCache | undefined> => (variation.storeFault === undefined ? Promise.resolve(cache) : Promise.reject(variation.storeFault));
   const population = new RunPopulation({
     root: home,
     outputs: variation.outputs ?? [],
     gitTracker: new GitTracker(home),
-    cacheOf: () => Promise.resolve(cache),
+    cacheOf: storeOf,
+    questionCacheOf: () => storeOf().then((opened) => writesFailing(opened, variation.questionWriteFault)),
     collectionsFor: () => (variation.homeFault === undefined ? Promise.resolve(undefined) : Promise.reject(variation.homeFault)),
   }, { content, dispatcher });
   try {
@@ -609,10 +643,41 @@ describe('storedDocument: one file\'s facts, skill-text record included, from th
     expect(warm.homePopulations, 'one home population per run, whichever asks first').toBe(1);
   });
 
-  it('answers nothing when git gives no answer for the home it opens, so the ask refuses no verb', async () => {
+  it.each([
+    ['git giving no answer for the root', { homeFault: new VatError(GIT_NO_ANSWER_CODE, 'git did not answer for the root') }],
+    ['a plain failure of the population', { homeFault: new Error('the extent could not be read') }],
+    ['a git failure of the environment\'s', { homeFault: new VatError(GIT_FAILED_CODE, 'git ran out of time') }],
+    ['a store that will not open', { storeFault: new Error('EACCES: permission denied, mkdir') }],
+  ] as const)('answers nothing when the home it opens fails (%s), counted, and the verb\'s own enumeration still refuses', async (_case, variation) => {
     await runOnce(true);
-    const homeFault = new VatError(GIT_NO_ANSWER_CODE, 'git did not answer for the root');
-    expect((await documentOf(true, SKILL, { first: true, variation: { homeFault } })).document).toBeUndefined();
+    const fault = 'homeFault' in variation ? variation.homeFault : variation.storeFault;
+    const unopenedBefore = readWorkCounters()['skillText.storeUnopened'];
+    const answered = await withRun(true, variation, async (population) => {
+      const first = await population.source.storedDocument(safePath.join(root, SKILL), 'markdown');
+      const again = await population.source.storedDocument(safePath.join(root, 'docs', 'guide.md'), 'markdown');
+      const enumerated = await population.source.enumerate(root, [], 'refuse', { include: INCLUDE, exclude: [], ignoredRefusals: 'record' })
+        .then(() => undefined, (error: unknown) => error);
+      return { first, again, enumerated };
+    });
+    expect(answered.first).toBeUndefined();
+    expect(answered.again).toBeUndefined();
+    expect(readWorkCounters()['skillText.storeUnopened'] - unopenedBefore, 'one failed opening per run').toBe(1);
+    // The refusal stays on the enumeration the verb asked for: the same failure, as itself.
+    expect(answered.enumerated).toBe(fault);
+  });
+
+  it('never hands the verb a home population the question failed to write: it builds the home itself', async () => {
+    // Cold: the question derives the home and meets the lock at its first write.
+    const fault = new Error('database is locked');
+    const unopenedBefore = readWorkCounters()['skillText.storeUnopened'];
+    const answered = await withRun(true, { questionWriteFault: fault }, async (population) => {
+      const document = await population.source.storedDocument(safePath.join(root, SKILL), 'markdown');
+      const enumerated = await population.source.enumerate(root, [], 'refuse', { include: INCLUDE, exclude: [], ignoredRefusals: 'record' });
+      return { document, outcome: enumerated.outcome.stored };
+    });
+    expect(answered.document).toBeUndefined();
+    expect(readWorkCounters()['skillText.storeUnopened'] - unopenedBefore, 'the question counted its failure').toBe(1);
+    expect(answered.outcome, 'the verb built and filed the home through its own connection').toBe('written');
   });
 
   it('answers nothing for a home git will not list, which reaches the ask as git\'s own no-answer', async () => {
@@ -629,14 +694,6 @@ describe('storedDocument: one file\'s facts, skill-text record included, from th
     const document = await withRun(true, { home }, (population) =>
       population.source.storedDocument(safePath.join(home, 'SKILL.md'), 'markdown'));
     expect(document).toBeUndefined();
-  });
-
-  it.each([
-    ['a plain failure', new Error('the extent could not be read')],
-    ['a git failure of the environment\'s', new VatError(GIT_FAILED_CODE, 'git ran out of time')],
-  ])('refuses on every other failure of the home it opens: %s', async (_case, homeFault) => {
-    await runOnce(true);
-    await expect(documentOf(true, SKILL, { first: true, variation: { homeFault } })).rejects.toBe(homeFault);
   });
 
   it('answers nothing asked first on a store-off run, reading nothing to say so', async () => {

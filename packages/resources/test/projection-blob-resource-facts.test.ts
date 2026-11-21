@@ -243,7 +243,7 @@ describe('blobFactsReader', () => {
     const source = '<p>x</p>\n';
     const htmlKey = `html.${'e'.repeat(64)}`;
     const rows = rowsOf(htmlKey, source, parseHtmlContent(source, source.length));
-    const strayFacts = { blob: htmlKey, lineCount: 1, h1: null, matchCount: 0, held: true };
+    const strayFacts = { blob: htmlKey, lineCount: 1, h1: null, frontmatterFence: 'none', matchCount: 0, held: true } as const;
     const outcome = blobFactsReader({ ...rows, skillTextFacts: [strayFacts] })(htmlKey);
     expect(outcome).toMatchObject({ kind: 'uncovered', reason: expect.stringContaining('not markdown') });
   });

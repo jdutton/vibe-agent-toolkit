@@ -26,22 +26,6 @@ function vocabularyOf(text: string, candidates: readonly string[]): string[] {
   return sorted(new Set(links(issuesFor(`${text}\n\n${bare}\n`)).filter((link) => link !== undefined)));
 }
 
-/**
- * Fastest wall-clock ms of a few runs. The FASTEST run, not the median: the
- * question this asks is "can this input ever be processed quickly", and a
- * scheduler steal only ever makes a sample slower, never faster. Taking the
- * minimum is the statistic least contaminated by an unrelated busy core.
- */
-function fastestMs(work: () => void, runs = 5): number {
-  let best = Number.POSITIVE_INFINITY;
-  for (let index = 0; index < runs; index++) {
-    const started = performance.now();
-    work();
-    best = Math.min(best, performance.now() - started);
-  }
-  return best;
-}
-
 describe('the mcpUnqualified vocabulary — the detector’s premise', () => {
   // The docstring used to claim the non-greedy server segment made the LAST
   // `__` the separator. It does not — non-greedy stops at the FIRST one, and
@@ -225,36 +209,9 @@ describe('the mcpUnqualified vocabulary — the detector’s premise', () => {
   });
 });
 
-// A regex can be rewritten into a shape a checker likes while staying
-// quadratic, so the linter's verdict is not evidence about runtime. This
-// measures instead — but as an ABSOLUTE budget, not a ratio.
-//
-// What it proves: the catastrophic case is gone. Removing the `(?<![\w-])`
-// lookbehind from `API_QUALIFIED` was measured at 2595 ms on 80 KB of a
-// colonless token; keeping it costs 0.22 ms. Four orders of magnitude separate
-// the two, so a fixed budget anywhere between them is a real gate.
-//
-// What it does NOT prove: linearity. It is a single input size, and it says
-// nothing about the growth curve below the budget. The previous shape — a
-// ratio against a `Math.max(…, 0.05)` floor — looked stronger and was weaker:
-// on a fast machine the floor is fabricated rather than measured, which
-// silently converts the ratio into an absolute of the test author's choosing,
-// and this file is coverage-instrumented on `test:coverage`, where the v8
-// overhead is not uniform across input sizes.
-describe('collectUnqualifiedMcpToolIssues over its text — no catastrophic backtracking', () => {
-  // A long token carrying no colon is the shape that goes quadratic without the
-  // lookbehind: every character is a candidate start, and each start scans to
-  // the end of the token before failing.
-  it.each([
-    ['one colonless token', (n: number) => 'a'.repeat(n)],
-    ['a hyphenated run', (n: number) => 'a-'.repeat(n / 2)],
-    ['tokens ending in a colon that never completes', (n: number) => 'ab:'.repeat(n / 3)],
-    ['an mcp__ prefix that never completes', (n: number) => 'mcp__a'.repeat(n / 6)],
-  ])('processes 80 KB of %s well inside a fixed budget', (_label, build) => {
-    const large = build(80_000);
-    expect(fastestMs(() => issuesFor(large))).toBeLessThan(250);
-  });
-});
+// No catastrophic backtracking: the qualified-name scan, the shape that went quadratic as
+// a regex, is proven linear by counted work, never by wall clock, in
+// `scanClaudeCodeQualified`'s own suite (packages/resources/test/skill-text/qualified-scanner.test.ts).
 
 describe('collectUnqualifiedMcpToolIssues', () => {
   it('reports a bare tool name the same document spells fully-qualified', () => {

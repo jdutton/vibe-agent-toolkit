@@ -6,11 +6,8 @@ import {
   isLocalFileLink,
   type NotAdmittedRoots,
   partitionNotAdmitted,
-  readContentForParse,
   resolveLocalHref,
   type LinkType,
-  type MeasuredContent,
-  type SkillTextFacts,
 } from '@vibe-agent-toolkit/resources';
 import {
   anchoredAt,
@@ -38,8 +35,8 @@ import {
 
 import type { EvidenceRecord } from '../evidence/index.js';
 import { parseRefusalIssue } from '../parse-refusal-issues.js';
-import { parseFrontmatter, type FrontmatterError } from '../parsers/frontmatter-parser.js';
-import { linkedFileSkillText, readSkillDocument, scannedSkillText, type SkillDocument, type SkillTextRun, withSkillTextRun } from '../skill-text-lane.js';
+import { frontmatterVerdictOf } from '../parsers/frontmatter-parser.js';
+import { linkedFileSkillText, readSkillDocument, type SkillDocument, type SkillTextRun, withSkillTextRun } from '../skill-text-lane.js';
 
 import { detectBundledResourceWithoutLinks } from './bundled-resource-link-detection.js';
 import { observationToIssue, runCompatDetectors } from './compat-detectors.js';
@@ -68,59 +65,30 @@ export function validateSkill(options: ValidateOptions): Promise<ValidationResul
   return withSkillTextRun((run) => validateSkillOn(options, run), options.run);
 }
 
-/** The SKILL.md as this lane reads it, or the issue its read was refused with. */
-type SkillMarkdownRead =
-  | { readonly kind: 'refused'; readonly issue: ValidationIssue }
-  | {
-    readonly kind: 'read';
-    readonly frontmatter: { readonly success: true; readonly frontmatter: Record<string, unknown> } | FrontmatterError;
-    readonly skillText: SkillTextFacts;
-    /**
-     * Its decoded text: read only when a detector needs the bytes (served from
-     * the store, nothing is read until then), through the run's content read,
-     * so the read is decoded as the cold read is, and counted (`content.read`).
-     */
-    readonly text: () => Promise<string>;
-  };
-
 /**
- * Read the SKILL.md for {@link validateSkillOn}: from the run's store when it
- * holds the file and its frontmatter decoded, else its bounded read and the
- * frontmatter parse, whose refusals carry this lane's own wording. A record the
- * store holds is used either way; one scanned from the text is a counted miss.
+ * The SKILL.md's document for {@link validateSkillOn}, read once for the whole
+ * validation (its frontmatter, its record and the link walk's root): the run's
+ * store's facts when it serves the file, else its bounded read and parse. A
+ * refusal of the read or the parse (a limit, a dead worker) is the result's one
+ * issue; any other failure propagates.
  *
  * @param skillPath - The SKILL.md
  * @param run - The run
- * @param locationRoot - Root the refusal's location is relative to
- * @returns The read, or the refusal
+ * @param where - The caller's side, and the root the refusal's location is relative to
+ * @returns The document, or the refusal
  */
-async function readSkillMarkdown(skillPath: string, run: SkillTextRun, locationRoot: string): Promise<SkillMarkdownRead> {
-  const stored = await run.source.storedDocument(skillPath, 'markdown');
-  const storedFrontmatter = stored?.facts.frontmatter;
-  if (stored !== undefined && storedFrontmatter !== undefined) {
-    return {
-      kind: 'read',
-      frontmatter: { success: true, frontmatter: storedFrontmatter },
-      skillText: stored.facts.skillText,
-      text: async () => (await readContentForParse(skillPath, 'markdown', { dispatcher: run.dispatcher })).content,
-    };
-  }
-  // Read file — held to the parse input cap by its size before it is read, as every lane that
-  // parses it is: past the cap, the limit, never a frontmatter parse of the block at its top.
-  let read: MeasuredContent;
+async function readRootDocument(
+  skillPath: string,
+  run: SkillTextRun,
+  where: { readonly side: ValidateOptions['side']; readonly locationRoot: string },
+): Promise<{ readonly document: SkillDocument } | { readonly refused: ValidationIssue }> {
   try {
-    read = await readContentForParse(skillPath, 'markdown', { dispatcher: run.dispatcher });
+    return { document: await readSkillDocument(skillPath, run, where.side) };
   } catch (error) {
-    const refused = parseRefusalIssue(error, skillPath, locationRoot);
+    const refused = parseRefusalIssue(error, skillPath, where.locationRoot);
     if (refused === undefined) throw error;
-    return { kind: 'refused', issue: refused };
+    return { refused };
   }
-  return {
-    kind: 'read',
-    frontmatter: await parseFrontmatter(read, { dispatcher: run.dispatcher }),
-    skillText: stored?.facts.skillText ?? scannedSkillText(skillPath, read.content, run.dispatcher),
-    text: () => Promise.resolve(read.content),
-  };
 }
 
 /**
@@ -162,19 +130,16 @@ async function validateSkillOn(options: ValidateOptions, run: SkillTextRun): Pro
     return buildResult(skillPath, issues, policy);
   }
 
-  const read = await readSkillMarkdown(skillPath, run, locationRoot);
-  if (read.kind === 'refused') {
-    issues.push(read.issue);
-    return buildResult(skillPath, issues, policy);
-  }
-  const { skillText } = read;
+  const read = await readRootDocument(skillPath, run, { side: options.side, locationRoot });
+  if ('refused' in read) return buildResult(skillPath, [read.refused], policy);
+  const { document } = read;
+  const { skillText } = document;
   const lineCount = skillText.lineCount;
-  const parseResult = read.frontmatter;
+  // Worded from the document's facts, never a second read of the file.
+  const parseResult = frontmatterVerdictOf(skillText.frontmatterFence, document);
 
   if (!parseResult.success) {
-    // Frontmatter the worker refused (a limit, a dead worker) is there, and is
-    // the author's to simplify: the parse limit, never "add the frontmatter you have".
-    issues.push(parseRefusalIssue(parseResult.cause, skillPath, locationRoot) ?? {
+    issues.push({
       severity: 'error',
       code: 'SKILL_MISSING_FRONTMATTER',
       message: parseResult.error,
@@ -240,11 +205,11 @@ async function validateSkillOn(options: ValidateOptions, run: SkillTextRun): Pro
 
   // Transitive link traversal (BFS)
   const skillDir = options.rootDir ?? dirname(skillPath);
-  const linkedFiles = await traverseLinks(skillPath, skillDir, { locationRoot, side: options.side }, issues, allEvidence, run);
+  const linkedFiles = await traverseLinks(document, skillPath, skillDir, { locationRoot, side: options.side }, issues, allEvidence, run);
 
   // Bundled-resource link detection — fires after link traversal so the
   // linkedFiles set reflects everything reachable from SKILL.md.
-  const bundled = await bundledResourceIssues(read.text, skillDir, linkedFiles, { locationRoot, side: options.side, skillPath });
+  const bundled = await bundledResourceIssues(document.text, skillDir, linkedFiles, { locationRoot, side: options.side, skillPath });
   if ('refused' in bundled) return buildResult(skillPath, [bundled.refused], policy);
   appendAll(issues, bundled.issues);
 
@@ -466,11 +431,15 @@ type LinkedFileWalkRecord = Omit<LinkedFileValidationResult, 'issues'>;
  * - Existing .md file -> recurse (add to BFS queue)
  * - Non-markdown asset -> existence check only
  *
+ * The root's document is the one the caller read: the SKILL.md is read once
+ * per validation.
+ *
  * @throws {ParserUnavailableError} If the markdown parser module cannot be
  *   loaded — a broken install fails the validation rather than being demoted to
  *   a per-document finding
  */
 async function traverseLinks(
+  root: SkillDocument,
   skillPath: string,
   skillDir: string,
   { locationRoot, side }: { readonly locationRoot: string; readonly side: ValidateOptions['side'] },
@@ -490,7 +459,8 @@ async function traverseLinks(
     // the file, else its parse, a counted miss.
     let document: SkillDocument;
     try {
-      document = await readSkillDocument(currentPath, run, side);
+      // The SKILL.md is the document the caller already read; every other file is read here.
+      document = currentPath === resolvedSkillPath ? root : await readSkillDocument(currentPath, run, side);
     } catch (error) {
       // A broken INSTALL, not a broken document. The parser loads in the
       // worker — lazily, only on a cache miss, so a fully warm validation loads

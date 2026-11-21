@@ -210,7 +210,8 @@ dropped and its imports never followed. Which files it scopes by `paths:` is
 ### `skill_text_facts` / `skill_text_matches`: what the skill validators matched in a markdown file
 
 Every markdown blob has exactly one `skill_text_facts` row (`lineCount`, the raw first-H1 text `h1`,
-`matchCount`, `held`); no other blob has one. `skill_text_matches` holds one row per match, keyed
+`frontmatterFence` (`none`, `unclosed` or `closed`: whether the file opens a `---` frontmatter block
+and closes it), `matchCount`, `held`); no other blob has one. `skill_text_matches` holds one row per match, keyed
 `(blob, ordinal)`: `family` (the detector), `patternId`, `line`, the raw `matchText` and
 `loneSurrogates` (null unless the match held a lone surrogate). A record past 16,384 matches or 4 MiB
 is not held: `held` is false and it has no match rows, so count matches with `matchCount`, not by

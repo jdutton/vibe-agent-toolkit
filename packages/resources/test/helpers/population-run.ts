@@ -71,6 +71,7 @@ export function withTestPopulation<R>(
       outputs: [],
       gitTracker: new GitTracker(root),
       cacheOf: () => Promise.resolve(undefined),
+      questionCacheOf: () => Promise.resolve(undefined),
       collectionsFor: () => Promise.resolve(options.collections),
     },
     work,
