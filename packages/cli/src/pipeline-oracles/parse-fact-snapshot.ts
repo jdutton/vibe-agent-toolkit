@@ -457,7 +457,7 @@ function toLinkFact(link: ResourceLink, index: number): LinkFact {
     text: link.text,
     type: link.type,
     line: link.line ?? null,
-    nodeType: link.nodeType ?? null,
+    nodeType: link.nodeType,
     resolvedId: link.resolvedId ?? null,
   };
 }

@@ -135,8 +135,9 @@ const FIXTURE: Readonly<Record<string, FidelityCase>> = {
   'f7-conditions.md': {
     content: '# F7\n\nSee [one][missing] and [two][missing].\n',
     precondition: ({ rows }) => {
-      const [first, second, ...rest] = conditionsOf(rows, 'UNRESOLVED_REFERENCE');
-      expect(rest).toEqual([]);
+      const unresolved = conditionsOf(rows, 'UNRESOLVED_REFERENCE');
+      expect(unresolved).toHaveLength(2);
+      const [first, second] = unresolved;
       expect([second?.message, second?.line]).toEqual([first?.message, first?.line]);
     },
   },

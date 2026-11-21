@@ -105,8 +105,9 @@ describe('blobReferencesFor', () => {
   });
 
   it('admits no link whose producer stated no nodeType, so no form is ever guessed', () => {
-    // The public parser contract requires the node type: a link without one is
-    // refused where it is declared, not crashed on in the blob lane.
+    // The node type is required by the link schema: `ResourceLinkSchema.safeParse`
+    // rejects a link without one, and so does the parse cache's schema check when
+    // it reads an entry back. A parser's own return value is held by the type.
     const unstated: Partial<ResourceLink> = link(1);
     delete unstated.nodeType;
     expect(ResourceLinkSchema.safeParse(unstated).success).toBe(false);

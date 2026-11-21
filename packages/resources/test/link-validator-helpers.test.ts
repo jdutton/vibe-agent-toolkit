@@ -24,7 +24,7 @@ import {
 import type { ResourceLink } from '../src/types.js';
 
 function makeLink(href: string, line = 1): ResourceLink {
-  return { type: 'local_file', href, text: 'link', line };
+  return { type: 'local_file', href, text: 'link', line, nodeType: 'link' };
 }
 
 const PROJECT_ROOT = '/project';
