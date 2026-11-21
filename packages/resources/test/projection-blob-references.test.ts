@@ -2,11 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { parseHtmlContent } from '../src/html-link-parser.js';
 import { parseMarkdownContent, type ParseResult } from '../src/link-parser.js';
-import {
-  AST_SYNTACTIC_FORMS,
-  blobReferencesFor,
-  LINK_NODE_TYPE_MISSING,
-} from '../src/projection/blob-references.js';
+import { AST_SYNTACTIC_FORMS, blobReferencesFor } from '../src/projection/blob-references.js';
 import { FOLLOWED_FORMS } from '../src/projection/claude-context-discovery.js';
 import { LexicalSyntacticFormSchema, type LexicalReference } from '../src/schemas/parse-facts.js';
 import { ExtentDeclarationSchema } from '../src/schemas/project-config.js';
@@ -15,7 +11,7 @@ import {
   type BlobReferenceRow,
   BlobReferenceRowSchema,
 } from '../src/schemas/projection-blobs.js';
-import type { LinkNodeType, ResourceLink } from '../src/schemas/resource-metadata.js';
+import { ResourceLinkSchema, type LinkNodeType, type ResourceLink } from '../src/schemas/resource-metadata.js';
 
 const CONTENT_KEY = `markdown.${'c'.repeat(64)}`;
 const AT_TOKEN = '@docs/setup.md';
@@ -33,7 +29,8 @@ function parseResult(overrides: Partial<ParseResult>): ParseResult {
  *
  * The span is derived from `line` rather than passed, because these fixtures
  * assert ORDER and shape, not positions — but it has to be present and distinct
- * per line, since a link with no span is skipped rather than admitted.
+ * per line, since a link with no span is a different row (null position, placed
+ * after every positioned one) and would change the order under test.
  */
 function link(line: number, nodeType: LinkNodeType = 'link'): ResourceLink {
   return {
@@ -107,11 +104,26 @@ describe('blobReferencesFor', () => {
     ]);
   });
 
-  it('refuses a link whose producer stated no nodeType, rather than guess its form', () => {
-    const unstated: ResourceLink = link(1);
+  it('admits no link whose producer stated no nodeType, so no form is ever guessed', () => {
+    // The public parser contract requires the node type: a link without one is
+    // refused where it is declared, not crashed on in the blob lane.
+    const unstated: Partial<ResourceLink> = link(1);
     delete unstated.nodeType;
-    expect(() => blobReferencesFor(CONTENT_KEY, parseResult({ links: [unstated] })))
-      .toThrow(expect.objectContaining({ code: LINK_NODE_TYPE_MISSING }));
+    expect(ResourceLinkSchema.safeParse(unstated).success).toBe(false);
+    expect(ResourceLinkSchema.safeParse(link(1)).success).toBe(true);
+  });
+
+  it('places an offsetless HTML link after the offset-bearing ones on its line', () => {
+    // An HTML link's offset and a `links` index are different units, so they
+    // are never compared: offset-bearing links order by offset, then the
+    // offsetless ones follow in the parser's own order.
+    const offsetless: ResourceLink = { ...link(1, 'htmlAttribute'), href: './offsetless.md' };
+    delete offsetless.startOffset;
+    delete offsetless.endOffset;
+    const placed = { ...link(1, 'htmlAttribute'), startOffset: 400, endOffset: 410 };
+    const rows = blobReferencesFor(CONTENT_KEY, parseResult({ links: [offsetless, placed] }));
+
+    expect(rows.map((row) => row.rawRef)).toEqual([HREF, './offsetless.md']);
   });
 
   it('partitions every syntacticForm into exactly one of AST-derived or lexer-derived', () => {

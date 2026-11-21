@@ -28,11 +28,12 @@ import {
   judgeOptionsFrom,
   resolveLinkEntry,
   type FragmentIndex,
+  type LinkEntry,
   type ResolvedLinkEntry,
   type ValidateLinkOptions,
 } from './link-validator.js';
 import { walkFrontmatterUriReferences } from './schema-uri-walker.js';
-import type { ResourceLink, ValidationIssue } from './types.js';
+import type { ValidationIssue } from './types.js';
 import { locationRoot } from './utils.js';
 
 /** Map the link-level code emitted by the link judge to its frontmatter-scoped code. */
@@ -115,7 +116,7 @@ export async function validateFrontmatterLinks(
     }
     if (linkType === 'email') continue;
 
-    const link: ResourceLink = {
+    const link: LinkEntry['link'] = {
       text: capture.dottedPath,
       href: capture.value,
       type: linkType,

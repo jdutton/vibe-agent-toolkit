@@ -49,6 +49,7 @@ import { isVatError } from '@vibe-agent-toolkit/utils';
 import { decodeFrontmatterValue, FRONTMATTER_VALUE_MALFORMED } from '../frontmatter-codec.js';
 import { toHeadingTree } from '../heading-tree.js';
 import { classifyLink } from '../link-classify.js';
+import type { FlatHeading } from '../parse-capabilities.js';
 import type { BlobConditionRow, BlobReferenceRow, BlobRow, BlobSectionRow } from '../schemas/projection-blobs.js';
 import type { HtmlParseError, ResourceLink, ResourceMetadata, UnresolvedReference } from '../schemas/resource-metadata.js';
 
@@ -134,6 +135,59 @@ type BlobLinkField = {
 
 /** A link as the blob tier holds it: its shape, never its resolution. */
 type BlobLink = Pick<ResourceLink, BlobLinkField>;
+
+/**
+ * One reader per field of `Target`, each reading it off a stored `Row`. Total
+ * over `Target`'s keys (`-?`), and an optional field's reader may return
+ * `undefined` (the field is then left out) while a required one's may not — so a
+ * field added to the parser's output shape is a compile error here until the
+ * reader says where it comes from.
+ */
+type FieldReaders<Target, Row> = { readonly [Field in keyof Target]-?: (row: Row) => Target[Field] };
+
+/**
+ * Build one object from its field readers, in the table's key order (the order
+ * the parser writes them), leaving out a field whose reader returned
+ * `undefined`.
+ *
+ * @param readers - One reader per field of `Target`
+ * @param row - The stored row the fields are read from
+ * @returns The rebuilt object
+ */
+function buildFrom<Target, Row>(readers: FieldReaders<Target, Row>, row: Row): Target {
+  const built: Record<string, unknown> = {};
+  for (const [field, read] of Object.entries(readers) as [string, (from: Row) => unknown][]) {
+    const value = read(row);
+    if (value !== undefined) built[field] = value;
+  }
+  return built as Target;
+}
+
+/** A finding row whose line the caller has already required. */
+type LinedConditionRow = BlobConditionRow & { line: number };
+
+/** `UnresolvedReference`, from an `UNRESOLVED_REFERENCE` condition row. */
+const UNRESOLVED_REFERENCE_FIELDS: FieldReaders<UnresolvedReference, LinedConditionRow> = {
+  label: (row) => row.message,
+  line: (row) => row.line,
+};
+
+/** `HtmlParseError`, from an `HTML_PARSE_ERROR` condition row. */
+const HTML_PARSE_ERROR_FIELDS: FieldReaders<HtmlParseError, BlobConditionRow> = {
+  message: (row) => row.message,
+  line: (row) => row.line ?? undefined,
+};
+
+/**
+ * `FlatHeading`, from a `blob_sections` row. The `HeadingNode` tree is built
+ * from these by `toHeadingTree`, the same code the parser runs, so its fields
+ * need no table of their own.
+ */
+const FLAT_HEADING_FIELDS: FieldReaders<FlatHeading, BlobSectionRow> = {
+  level: (row) => row.depth,
+  text: (row) => row.title,
+  line: (row) => row.lineStart ?? undefined,
+};
 
 /** The content-addressed half of a `ResourceMetadata`. */
 export type BlobResourceFacts = Omit<Pick<ResourceMetadata, BlobFactField>, 'links'> & { links: BlobLink[] };
@@ -238,7 +292,7 @@ function unresolvedOf(rows: KeyRows): Rebuilt<UnresolvedReference[]> {
   const unresolved: UnresolvedReference[] = [];
   for (const row of findings(rows, 'UNRESOLVED_REFERENCE')) {
     if (row.line === null) return { ok: false, reason: 'an UNRESOLVED_REFERENCE row has no line' };
-    unresolved.push({ label: row.message, line: row.line });
+    unresolved.push(buildFrom(UNRESOLVED_REFERENCE_FIELDS, { ...row, line: row.line }));
   }
   return { ok: true, value: unresolved };
 }
@@ -317,8 +371,7 @@ function factsOf(blob: BlobRow, rows: KeyRows): Rebuilt<BlobResourceFacts> {
   if (!unresolved.ok) return unresolved;
   const frontmatter = frontmatterOf(blob);
   if (!frontmatter.ok) return frontmatter;
-  const parseErrors: HtmlParseError[] = findings(rows, 'HTML_PARSE_ERROR')
-    .map((row) => ({ message: row.message, ...(row.line !== null && { line: row.line }) }));
+  const parseErrors = findings(rows, 'HTML_PARSE_ERROR').map((row) => buildFrom(HTML_PARSE_ERROR_FIELDS, row));
   return {
     ok: true,
     value: {
@@ -378,9 +431,5 @@ function linksOf(references: readonly BlobReferenceRow[]): Rebuilt<BlobLink[]> {
  * @returns The heading tree
  */
 function headingsOf(sections: readonly BlobSectionRow[]): ResourceMetadata['headings'] {
-  return toHeadingTree([...sections].sort(byOrdinal).map((row) => ({
-    level: row.depth,
-    text: row.title,
-    ...(row.lineStart !== null && { line: row.lineStart }),
-  })));
+  return toHeadingTree([...sections].sort(byOrdinal).map((row) => buildFrom(FLAT_HEADING_FIELDS, row)));
 }

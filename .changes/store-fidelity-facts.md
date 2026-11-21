@@ -19,9 +19,12 @@
   and code the projection records, instead of failing the run.
 - **A file whose bytes are not text (a NUL in its decoded head) is the same resource in both lanes**:
   no links, no headings, `estimatedTokenCount` 0. The registry no longer parses it.
-- **`blobReferencesFor` refuses a link with no `nodeType`** (`VatError` coded
-  `LINK_NODE_TYPE_MISSING`) instead of filing it as `markdown-link`; the fact reader would otherwise
-  rebuild it with a `nodeType` the parse never gave it. Both shipped parsers always state one.
+- **`ResourceLink.nodeType` is required.** Every link a parser returns through the public
+  `MarkdownParser` interface (and every `ResourceLink` in `ResourceMetadata`) must state the node it
+  came from: `link`, `linkReference`, `definition` or `htmlAttribute`. An absent one used to be
+  filed as `markdown-link`, and the fact reader would rebuild it with a `nodeType` the parse never
+  gave it. Both shipped parsers always state one. `LinkEntry.link` (link judging) is a
+  `JudgedLink`, a `ResourceLink` without `nodeType`, since judging never reads it.
 - **`unparsedResourceFacts` is removed.** `contentRoute` (not text, no parser, or a parse) is the one
   route both lanes and the CLI's parse-fact snapshot take; a file no parser routes to now carries
   `lexicalReferences` and `contentMeasures` in that snapshot.
