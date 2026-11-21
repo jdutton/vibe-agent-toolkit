@@ -56,7 +56,7 @@ import { createLogger } from '../../src/utils/logger.js';
 import { withRunContext } from '../../src/utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../src/utils/skill-packaging-config.js';
 import { evictHalfTheSkillText, storedContentKeys } from '../helpers/cache-differential.js';
-import { captureSkillTextGolden, type Counters, type GoldenCapture, type SkillsLane, type SkillsLaneRun } from '../helpers/skill-text-golden-capture.js';
+import { captureSkillTextGolden, firstDifferingLine, type Counters, type GoldenCapture, type SkillsLane, type SkillsLaneRun } from '../helpers/skill-text-golden-capture.js';
 import { skillLaneScannedFiles, SKILL_TEXT_GOLDEN_DIR, writeSkillTextGoldenProject } from '../helpers/skill-text-golden.js';
 
 const PACKAGE_DIR = resolveFromImportMeta(import.meta.url, '..', '..');
@@ -108,6 +108,11 @@ function configFreeScanned(): Set<string> {
     for (const linked of result.linkedFiles ?? []) files.add(linked.path);
   }
   return files;
+}
+
+/** The capture reproduces the golden byte for byte; a mismatch leads with its first differing line. */
+function expectGolden(text: string): void {
+  expect(text, firstDifferingLine(text, GOLDEN)).toBe(GOLDEN);
 }
 
 /** The capture's listed skills, as the shared validation context takes them. */
@@ -166,7 +171,7 @@ describe('the skills phase reproduces the skill-text golden', () => {
   it('with the projection store off: every file each lane reads is scanned from its text once, with no store to miss', async () => {
     vi.stubEnv('VAT_PROJECTION_STORE', 'off');
     const { text, packagingMoved, configFreeMoved } = await capture();
-    expect(text).toBe(GOLDEN);
+    expectGolden(text);
     expect([packagingMoved['skillText.noStore'], packagingMoved['skillText.storeMiss']]).toEqual([skillLaneScannedFiles(root).length, 0]);
     expect([configFreeMoved['skillText.noStore'], configFreeMoved['skillText.storeMiss']]).toEqual([configFreeScanned().size, 0]);
   });
@@ -174,14 +179,14 @@ describe('the skills phase reproduces the skill-text golden', () => {
   it('with the store on, cold: every file the packaging lane reads scanned from its text once', async () => {
     vi.stubEnv('VAT_PROJECTION_STORE', 'sqlite');
     const { text, packagingMoved } = await capture();
-    expect(text).toBe(GOLDEN);
+    expectGolden(text);
     expect([packagingMoved['skillText.storeMiss'], packagingMoved['skillText.noStore']]).toEqual([skillLaneScannedFiles(root).length, 0]);
   });
 
   it('with the store on, warm: served from the store but the declared fallback', async () => {
     vi.stubEnv('VAT_PROJECTION_STORE', 'sqlite');
     const { text, packagingMoved, configFreeMoved } = await capture();
-    expect(text).toBe(GOLDEN);
+    expectGolden(text);
     expect(textWork(packagingMoved)).toEqual({ 'skillText.storeMiss': 0, 'skillText.noStore': 0, 'content.read': 0, 'parse.dispatched': 0 });
     expect(UNDECODED_FRONTMATTER).toBeGreaterThan(0);
     expect(textWork(configFreeMoved)).toEqual({
@@ -197,7 +202,7 @@ describe('the skills phase reproduces the skill-text golden', () => {
     const store = safePath.join(scratch, 'evicted-cache');
     vi.stubEnv('VAT_CACHE_DIR', store);
     vi.stubEnv('VAT_PROJECTION_STORE', 'sqlite');
-    expect((await capture()).text).toBe(GOLDEN);
+    expectGolden((await capture()).text);
     const keyOf = storedContentKeys({ store });
     const evicted = new Set(evictHalfTheSkillText({ store }, []));
     const recordGone = (path: string): boolean => {
@@ -215,7 +220,7 @@ describe('the skills phase reproduces the skill-text golden', () => {
     expect(configFreeEvicted.length).toBeLessThan(configFreeScanned().size);
 
     const { text, packagingMoved, configFreeMoved } = await capture();
-    expect(text).toBe(GOLDEN);
+    expectGolden(text);
     expect(packagingMoved['skillText.storeMiss']).toBe(packagingScans.length);
     expect(configFreeMoved['skillText.storeMiss']).toBe(configFreeScans.size);
   });

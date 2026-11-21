@@ -4,13 +4,14 @@
  */
 
 import type { ChildProcess, SpawnOptionsWithoutStdio, SpawnSyncReturns } from 'node:child_process';
-import { spawn as nodeSpawn, spawnSync as nodeSpawnSync } from 'node:child_process';
+import { spawn as nodeSpawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import { dirname as pathDirname, join as pathJoin, resolve as pathResolve } from 'node:path';
 import { fileURLToPath as urlFileURLToPath, pathToFileURL } from 'node:url';
 
-import { isProcessGoneError, mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { killProcessTree } from '@vibe-agent-toolkit/utils/process';
 import { createTempDir, removeTempDir, tempDirTracker } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, expect, onTestFinished } from 'vitest';
 import { getCurrentTest } from 'vitest/suite';
@@ -297,26 +298,16 @@ function sharedStartedCommands(): Set<ChildProcess> {
  * the operating system may hand it to an unrelated process at once (on POSIX, to an unrelated
  * process group's leader). So a grandchild still running after the child exited is not reached.
  *
- * POSIX: the child leads its own process group (spawned `detached`), so one SIGKILL to the group
- * reaches a grandchild the child started (`bun run vat` starts `node`). A group that is already
- * empty answers ESRCH, which is "gone". Windows has no process groups: `taskkill /T` ends the
- * child's tree.
+ * The child leads its own process group (spawned `detached` on POSIX), so the one process-tree kill
+ * ({@link killProcessTree}) reaches a grandchild the child started (`bun run vat` starts `node`);
+ * on Windows it is `taskkill /T` by absolute path.
  *
  * @param child - A command {@link spawnAndCollect} started
  */
 function endStartedCommand(child: ChildProcess): void {
   startedCommands.delete(child);
-  const pid = child.pid;
-  if (pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
-  if (process.platform === 'win32') {
-    nodeSpawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
-    return;
-  }
-  try {
-    process.kill(-pid, 'SIGKILL');
-  } catch (error) {
-    if (!isProcessGoneError(error)) throw error;
-  }
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  killProcessTree(child, { groupLeader: true, throughChild: false });
 }
 
 /**

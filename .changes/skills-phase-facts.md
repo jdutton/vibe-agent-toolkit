@@ -98,6 +98,9 @@
 - **When the parse of a SKILL.md is refused (a limit, a dead worker), `validateSkill` reports that
   refusal as its only issue**, as the packaging lane does. Before, it read the frontmatter block
   alone and then reported the refusal from the link walk, beside findings made from the frontmatter.
+- **On Windows, a process-tree kill runs `taskkill` by its absolute path** under
+  `%SystemRoot%\System32`, never through `PATH`, and refuses with an error naming `SystemRoot` when
+  that variable is missing.
 - **The parse cache and the projection store start cold once after upgrading**: both hold the new
   skill-text facts. No action needed.
 - **Some runs still scan skill text themselves (time only; findings are unchanged)**: `vat audit`,

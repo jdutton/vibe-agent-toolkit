@@ -46,7 +46,7 @@
  * Every arm has a private `VAT_CACHE_DIR` and temp directory.
  */
 
-import { readdirSync, statSync } from 'node:fs';
+import { cpSync, readdirSync, statSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
 import { DEFAULT_PARSE_LIMITS, SKILL_TEXT_HELD_LIMITS, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
@@ -328,6 +328,13 @@ function freshArm(): Arm {
   return { cacheDir: context.createTempDir(), tmpDir: context.createTempDir() };
 }
 
+/** A fresh arm holding a copy of another's caches, taken while no run holds them. */
+function copyOf(arm: Arm): Arm {
+  const copy = freshArm();
+  cpSync(arm.cacheDir, copy.cacheDir, { recursive: true });
+  return copy;
+}
+
 /** What one run left: its exit code, report, its processes' counters and its fs-boundary reads. */
 interface Run {
   readonly status: number | null;
@@ -372,8 +379,20 @@ function findingsText(stdout: string): string {
   return JSON.stringify(document.findings);
 }
 
+/** `vat verify`'s built fixture and its filled caches. */
+interface VerifyFixture {
+  readonly root: string;
+  readonly arm: Arm;
+}
+
+/** Prepared beside the first suite's fixture; awaited, and any failure reported, by the suite that uses it. */
+let verifyFixture: Promise<VerifyFixture>;
+
 beforeAll(() => {
   context.setup();
+  verifyFixture = prepareVerifyFixture();
+  // Held until its suite awaits it, so a failure before then is not an unhandled rejection.
+  verifyFixture.catch(() => undefined);
 });
 
 afterAll(() => {
@@ -381,22 +400,34 @@ afterAll(() => {
 });
 
 describe('warm skills lanes read only the files the store is declared not to serve', () => {
-  let repo: string;
-  let cwd: string;
-  /** One store every verb's warm run is served by: a populating `vat validate` filled it. */
+  /** The caches a populating `vat validate` filled, left as it left them: every verb's warm run is served by a copy. */
   let warm: Arm;
+  /** Each verb's warm run, and its store-off run: the oracle the warm run must answer as. */
+  let runs: ReadonlyMap<string, { readonly warm: Run; readonly off: Run }>;
 
   beforeAll(async () => {
-    repo = writeCommittedCorpus(join(context.createTempDir(), 'repo'), SKILL_TEXT_CORPUS);
-    cwd = join(repo, PROJECT);
+    const repo = writeCommittedCorpus(join(context.createTempDir(), 'repo'), SKILL_TEXT_CORPUS);
+    const cwd = join(repo, PROJECT);
     warm = freshArm();
+    const verbs = Object.entries(VERBS);
+    // A store-off run has a fresh arm and reads no store, so it runs beside the populating run.
+    const offRuns = Promise.all(verbs.map(async ([, verb]) => runVerb(cwd, verb.args, freshArm(), true, repo)));
+    // Awaited below; held so a failure while the populating run is still going is not an unhandled rejection.
+    offRuns.catch(() => undefined);
     const populate = await runVerb(cwd, ['validate'], warm, false, repo);
     // Positive control: the populating run was cold, so it scanned every file the skills lane reaches.
     expect(populate.dump.counters['skillText.storeMiss'], 'the populating run scanned every skills-lane file').toBe(Object.keys(SEEDS).length);
+    // A warm run may write its caches, so each verb's runs on a private copy of the populated
+    // ones, which lets them run side by side and serves each from exactly what populating left.
+    const warmRuns = await Promise.all(verbs.map(async ([, verb]) => runVerb(cwd, verb.args, copyOf(warm), false, repo)));
+    const off = await offRuns;
+    runs = new Map(verbs.map(([name], index) => [name, { warm: warmRuns[index] as Run, off: off[index] as Run }]));
   });
 
-  it.each(Object.entries(VERBS))('%s: misses, reads, keys and parse lookups are exactly the declared fallback\'s, per phase', async (_name, verb) => {
-    const run = await runVerb(cwd, verb.args, warm, false, repo);
+  it.each(Object.entries(VERBS))('%s: misses, reads, keys and parse lookups are exactly the declared fallback\'s, per phase', (name, verb) => {
+    const pair = runs.get(name);
+    if (pair === undefined) throw new Error(`no runs for ${name}`);
+    const { warm: run, off } = pair;
     expect(measuredSpend(run.dump, verb)).toEqual(expectedSpend(verb));
     // Which files: every process's opens, per path, exactly the declared map.
     expect(contentOpens(run.reads), 'opens at the fs boundary, per path').toEqual(contentOpens(expectedOpens(verb)));
@@ -414,7 +445,6 @@ describe('warm skills lanes read only the files the store is declared not to ser
       hashed: rederives ? TRACKED_PROJECT_FILES.length : 0,
       refusedPairs: rederives ? 1 : 0,
     });
-    const off = await runVerb(cwd, verb.args, freshArm(), true, repo);
     expect({ status: run.status, findings: findingsText(run.stdout) }, 'warm answers as store-off does').toEqual({
       status: off.status,
       findings: findingsText(off.stdout),
@@ -424,7 +454,7 @@ describe('warm skills lanes read only the files the store is declared not to ser
   it('every keyed markdown blob has exactly one skill_text_facts row, and no other blob any skill-text row', () => {
     const [file, ...others] = storeFilesUnder(warm.cacheDir);
     if (file === undefined || others.length > 0) throw new Error('expected one projection store');
-    // On a copy: every verb's warm run is served by the store, so the red below must not damage it.
+    // On a copy: the red below must not damage the store this suite holds.
     const copy = join(context.createTempDir(), 'projection.db');
     const source = new DatabaseSync(file, { readOnly: true });
     try {
@@ -537,24 +567,36 @@ const BUILT_SKILL_MD_PARSE_LOOKUPS = 2;
 /** Where the build puts the marketplace's copy of the plugin skill, which `vat verify`'s marketplace phase validates. */
 const BUILT_SKILL_DIR = 'dist/.claude/plugins/marketplaces/one-market/plugins/one-plugin/skills/one-skill';
 
+/**
+ * `vat verify`'s fixture, built, with its caches filled by a first `vat verify`: shares
+ * nothing with the other suite's fixture, so it is prepared beside it.
+ *
+ * @returns The corpus root and the arm its caches are in
+ */
+async function prepareVerifyFixture(): Promise<VerifyFixture> {
+  const root = writeCommittedCorpus(join(context.createTempDir(), 'corpus'), VERIFY_CORPUS);
+  const tmp = context.createTempDir();
+  const build = await executeCli(context.binPath, ['build'], {
+    cwd: root,
+    env: { [VAT_CACHE_DIR_ENV]: context.createTempDir(), TMPDIR: tmp, TEMP: tmp, TMP: tmp },
+  });
+  expect(build.status, `${build.stdout}\n${build.stderr}`).toBe(0);
+  // Marketplace validation requires a LICENSE in the built marketplace root.
+  writeFileTree(join(root, 'dist/.claude/plugins/marketplaces/one-market'), { LICENSE: 'MIT License - Test' });
+  const arm = freshArm();
+  await runVerb(root, ['verify'], arm, false, root);
+  return { root, arm };
+}
+
 describe('warm vat verify reads only the declared fallback and the built tree', () => {
   let root: string;
+  let arm: Arm;
 
   beforeAll(async () => {
-    root = writeCommittedCorpus(join(context.createTempDir(), 'corpus'), VERIFY_CORPUS);
-    const tmp = context.createTempDir();
-    const build = await executeCli(context.binPath, ['build'], {
-      cwd: root,
-      env: { [VAT_CACHE_DIR_ENV]: context.createTempDir(), TMPDIR: tmp, TEMP: tmp, TMP: tmp },
-    });
-    expect(build.status, `${build.stdout}\n${build.stderr}`).toBe(0);
-    // Marketplace validation requires a LICENSE in the built marketplace root.
-    writeFileTree(join(root, 'dist/.claude/plugins/marketplaces/one-market'), { LICENSE: 'MIT License - Test' });
+    ({ root, arm } = await verifyFixture);
   });
 
   it('reads, keys, parses and misses exactly the declared source fallback and the built tree', async () => {
-    const arm = freshArm();
-    await runVerb(root, ['verify'], arm, false, root);
     const run = await runVerb(root, ['verify'], arm, false, root);
     expect(run.status, run.stdout).toBe(0);
 

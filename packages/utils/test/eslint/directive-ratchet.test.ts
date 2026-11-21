@@ -87,7 +87,6 @@ const CEILINGS: Readonly<Record<string, number>> = {
   'sonarjs/function-return-type': 2,
   'sonarjs/no-alphabetical-sort': 1,
   'sonarjs/no-nested-functions': 1,
-  'sonarjs/no-os-command-from-path': 1,
   'sonarjs/regex-complexity': 1,
   'sonarjs/void-use': 1,
   'unicorn/prefer-structured-clone': 4,

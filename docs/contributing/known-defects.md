@@ -1067,6 +1067,19 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Fix:** refuse an orphan marker, and strip markers in the stable fold once the deltas file is
   re-baselined.
 
+### The SIGCONT ordering probe can see the signal after the late timer's `setImmediate`
+
+- **Severity:** Minor (flake) · **Effort:** S to M · **User-visible:** unmeasured
+- **Mechanism:** the `--budget` watchdog judges a late poll one event-loop turn later, on the
+  measured ordering that a pending SIGCONT is delivered before the late timer's `setImmediate`
+  runs. The probe that pins that ordering, at the declared Node floor in CI, once read
+  `{"gapMs":540,"inTimer":false,"inImmediate":false}`: the SIGCONT was not seen by the immediate.
+  The test fails on such a run; whether a supervised run can then misjudge a stop is not measured.
+- **Where:** [`resources-budget-stopped.system.test.ts`](../../packages/cli/test/system/resources-budget-stopped.system.test.ts)
+  line 181
+- **Fix:** establish whether the ordering is a guarantee at the floor or only usual, and if only
+  usual, have the watchdog wait for the signal rather than rely on one turn.
+
 ## Dependencies
 
 ### zod 3 carries an advisory fixed only in zod 4, and 18 workspaces declare zod `^3.25`

@@ -19,7 +19,7 @@
 
 import { existsSync, readdirSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 /** Work counters by name: a tree's own `readWorkCounters()`, or none for a tree whose counters the caller cannot read. */
 export type Counters = Readonly<Record<string, number>>;
@@ -79,11 +79,84 @@ function movedBetween(before: Counters, after: Counters): Counters {
   return Object.fromEntries(Object.entries(after).map(([name, value]) => [name, value - (before[name] ?? 0)]));
 }
 
-/** `value`, serialized, with every root made relative, as the golden holds paths. */
-function scrubbed(value: unknown, roots: readonly string[]): unknown {
-  let text = JSON.stringify(value);
-  for (const root of new Set(roots)) text = text.replaceAll(`${root}/`, '').replaceAll(root, '.');
+/** A drive-letter prefix (`C:`), whose case a Windows path may spell either way. */
+const DRIVE_LETTER = /^[A-Za-z]:/;
+
+/**
+ * Every spelling a root can take in a captured value, longest first so a root
+ * beneath another (the project under its scratch parent) is stripped whole.
+ *
+ * On Windows the project root comes from `mkdirSyncReal` with backslashes while
+ * every producer joins forward slashes onto it, and a drive letter can reach a
+ * producer in either case; so each root is spelled with either separator and,
+ * when it has one, either drive-letter case. Lexical, so it holds on every host.
+ */
+function rootSpellings(roots: readonly string[]): string[] {
+  const spellings = new Set<string>();
+  for (const root of roots) {
+    const forward = toForwardSlashAnyPlatform(root);
+    for (const separated of [forward, forward.split('/').join('\\')]) {
+      spellings.add(separated);
+      if (DRIVE_LETTER.test(separated)) {
+        spellings.add(separated.charAt(0).toUpperCase() + separated.slice(1));
+        spellings.add(separated.charAt(0).toLowerCase() + separated.slice(1));
+      }
+    }
+  }
+  return [...spellings].sort((a, b) => b.length - a.length);
+}
+
+/**
+ * `text` with every root spelling made relative: `<root>/x` and `<root>\x` become
+ * `x`, the bare root `.`. Only the root is rewritten; a native separator after it
+ * is kept, so a producer that emits one still fails the golden.
+ */
+function relativized(text: string, spellings: readonly string[]): string {
+  let out = text;
+  for (const root of spellings) out = out.replaceAll(`${root}/`, '').replaceAll(`${root}\\`, '').replaceAll(root, '.');
+  return out;
+}
+
+/**
+ * `value` as JSON reads it, with every root made relative in every string and
+ * key, as the golden holds paths. Each string is rewritten as a value, never as
+ * JSON text, so a backslash path (escaped `\\` in JSON) is matched as written.
+ *
+ * @param value - What a run reported
+ * @param roots - Every root to make relative, in any spelling
+ * @returns The value, scrubbed
+ */
+export function scrubbed(value: unknown, roots: readonly string[]): unknown {
+  const spellings = rootSpellings(roots);
+  // The replacer sees each value as JSON will write it (after `toJSON`), and then each child of what it returns.
+  const text = JSON.stringify(value, (_key, node: unknown) => {
+    if (typeof node === 'string') return relativized(node, spellings);
+    if (node !== null && typeof node === 'object' && !Array.isArray(node)) {
+      return Object.fromEntries(Object.entries(node).map(([key, child]) => [relativized(key, spellings), child]));
+    }
+    return node;
+  });
   return JSON.parse(text) as unknown;
+}
+
+/**
+ * The first line where `received` and `expected` differ, named with its number
+ * and both sides, or `undefined` when they are the same text. A golden mismatch
+ * leads with it, so a truncated CI message still shows where the capture went
+ * wrong.
+ *
+ * @param received - The capture's text
+ * @param expected - The golden's text
+ * @returns The difference, or `undefined`
+ */
+export function firstDifferingLine(received: string, expected: string): string | undefined {
+  const got = received.split('\n');
+  const want = expected.split('\n');
+  const spell = (line: string | undefined): string => (line === undefined ? '(no line)' : JSON.stringify(line));
+  for (let index = 0; index < Math.max(got.length, want.length); index += 1) {
+    if (got[index] !== want[index]) return `golden line ${index + 1} differs: expected ${spell(want[index])} but received ${spell(got[index])}`;
+  }
+  return undefined;
 }
 
 /**

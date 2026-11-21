@@ -166,6 +166,23 @@ export class FakeFactStore implements FactStore {
   readonly #blobs = new Map<string, RowBundle>();
 
   /**
+   * A store holding what this one holds, with every counter at zero: one warm
+   * store filed once, and a copy per case that writes or evicts in its own.
+   *
+   * The maps are copied and the bundles shared: nothing here changes a held
+   * bundle in place (a write files a new one, an eviction deletes the entry), so
+   * no change to the copy reaches this store.
+   *
+   * @returns The copy
+   */
+  copy(): FakeFactStore {
+    const copy = new FakeFactStore();
+    for (const [key, rows] of this.#extents) copy.#extents.set(key, rows);
+    for (const [key, bundle] of this.#blobs) copy.#blobs.set(key, bundle);
+    return copy;
+  }
+
+  /**
    * Record blob facts, idempotently.
    *
    * A key the double already holds is left alone, matching the interface's own
