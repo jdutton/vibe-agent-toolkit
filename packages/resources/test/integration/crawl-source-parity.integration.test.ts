@@ -443,3 +443,35 @@ describe.skipIf(!symlinkCapability())('entries whose OID is not file bytes', () 
   });
 
 });
+
+/**
+ * A sparse checkout: the file outside its definition is absent from disk and skip-worktree in the
+ * index, so `git add --all` does not stage its deletion and the snapshot still lists it. The git
+ * source drops it, as the walk never meets it.
+ */
+describe('a sparse checkout', () => {
+  let sparseRoot = '';
+
+  afterAll(() => {
+    if (sparseRoot) rmSync(sparseRoot, { recursive: true, force: true });
+  });
+
+  it('agree on the population: the file the checkout leaves out is a member of neither', async () => {
+    sparseRoot = toForwardSlash(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-crawl-sparse-')));
+    gitIn(sparseRoot, ['init', '-b', 'main']);
+    writeIn(sparseRoot, 'kept.md', '# kept\n');
+    writeIn(sparseRoot, 'out/left.md', '# left out\n');
+    gitIn(sparseRoot, ['add', '-A']);
+    gitIn(sparseRoot, [...COMMIT_CONFIG, 'commit', '-m', 'fixture']);
+    gitIn(sparseRoot, ['sparse-checkout', 'set', '--no-cone', '/*', '!/out/']);
+    expect(gitIn(sparseRoot, ['ls-files', '-v', '--', 'out/left.md']), 'skip-worktree').toMatch(/^S /);
+
+    const paths = (enumerated: readonly EnumeratedPath[]): string[] => enumerated
+      .map((entry) => toForwardSlash(safePath.relative(sparseRoot, entry.absolutePath)))
+      .sort((a, b) => a.localeCompare(b));
+    const gitted = paths(await new GitCrawlSource(sparseRoot, []).enumerate());
+    expect(gitted).toContain('kept.md');
+    expect(gitted).not.toContain('out/left.md');
+    expect(gitted).toEqual(paths(await new FilesystemCrawlSource(sparseRoot, []).enumerate()));
+  });
+});

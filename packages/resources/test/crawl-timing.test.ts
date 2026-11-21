@@ -279,7 +279,7 @@ describe('crawl timing seam', () => {
               registry: registryWithClosure(EXTENT_NAME, SKILL_KIND),
               parameters: { [CLOSURE_DRIVER_ID]: closureDeclaration() },
             });
-            return { paths: [], conditions: [], outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem' };
+            return { paths: [], conditions: [], outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem', stored: null };
           },
         },
       });

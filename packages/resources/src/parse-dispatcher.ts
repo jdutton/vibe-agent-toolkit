@@ -421,12 +421,12 @@ export interface ParseContentSource {
 export class ParseDispatcher {
   readonly #cache: ParseCache;
   /** The caller's limits with `inputBytes` forced to the one cap: what the pool is built with. */
-  readonly #limits: Partial<ParseLimits>;
+  readonly #poolLimits: Partial<ParseLimits>;
   readonly #content: ParseContentSource | undefined;
-  /** The input cap, resolved from {@link #limits} once, at construction: see {@link inputBytes}. */
+  /** The input cap, resolved from {@link #poolLimits} once, at construction: see {@link inputBytes}. */
   readonly #inputBytes: number;
   /** Every limit, resolved once: a cache hit is held to the output caps the worker would apply. */
-  readonly #resolvedLimits: ParseLimits;
+  readonly #limits: ParseLimits;
   readonly #transport: ParseTransport;
   readonly #missThreshold: number;
   readonly #baselineHits: number;
@@ -483,11 +483,11 @@ export class ParseDispatcher {
     this.#cache = cache;
     // The one input cap, whatever the caller passed: a `ParseLimits`-typed value
     // carries `inputBytes` past the type's `Omit`, so it is overridden here.
-    this.#limits = { ...policy.limits, inputBytes: POPULATION_PARSE_LIMITS.inputBytes };
+    this.#poolLimits = { ...policy.limits, inputBytes: POPULATION_PARSE_LIMITS.inputBytes };
     this.#content = policy.content;
     this.#parsed = policy.content === undefined ? undefined : new Map();
-    this.#resolvedLimits = resolveParseLimits(this.#limits);
-    this.#inputBytes = this.#resolvedLimits.inputBytes;
+    this.#limits = resolveParseLimits(this.#poolLimits);
+    this.#inputBytes = this.#limits.inputBytes;
     // Read per construction, not at module load. `'cache'` exactly,
     // so the shipped behaviour is the wire protocol unless someone names the
     // other one — this switch exists to be A/B'd, not to be guessed at.
@@ -565,6 +565,16 @@ export class ParseDispatcher {
     return this.#inputBytes;
   }
 
+  /**
+   * Every limit a parse on this dispatcher runs under, resolved once at construction: what a
+   * warm run compares with the limits the store's facts were filed under before it admits from them.
+   *
+   * @returns The resolved limits
+   */
+  get limits(): ParseLimits {
+    return this.#limits;
+  }
+
   /** The run's content reads this dispatcher parses through, or `undefined` (see {@link ParsePoolPolicy.content}). */
   get content(): ParseContentSource | undefined {
     return this.#content;
@@ -607,7 +617,7 @@ export class ParseDispatcher {
     seen.documents += 1;
     seen.bytes += keyed.byteLength;
 
-    return parseKeyedInPool(keyed, { cache: this.#cache, limits: this.#resolvedLimits }, () => this.#poolForMiss(), this.#transport);
+    return parseKeyedInPool(keyed, { cache: this.#cache, limits: this.#limits }, () => this.#poolForMiss(), this.#transport);
   }
 
   /**
@@ -648,7 +658,7 @@ export class ParseDispatcher {
       this.#pool = create({
         size: this.#pinnedSize ?? defaultParsePoolSize(),
         cacheDir: this.#cache.directory,
-        limits: this.#limits,
+        limits: this.#poolLimits,
       });
     }
     return this.#pool;

@@ -30,7 +30,15 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { commitTestFixture } from '../test-helpers.js';
 
-import { createSkillMarkdown, createSuiteContext, executeCli, fs, join, writeTestFile } from './test-common.js';
+import {
+  MARKDOWN_AND_SKILLS_CONFIG,
+  createSkillMarkdown,
+  createSuiteContext,
+  executeCli,
+  fs,
+  join,
+  writeTestFile,
+} from './test-common.js';
 
 const context = createSuiteContext('vat-work-unreadable-', import.meta.url);
 
@@ -48,7 +56,7 @@ const FILES: Readonly<Record<string, string>> = {
 /** The same corpus with a skill linking the file the fixture locks. */
 const FILES_WITH_SKILL: Readonly<Record<string, string>> = {
   ...FILES,
-  'vibe-agent-toolkit.config.yaml': 'resources:\n  include:\n    - "**/*.md"\nskills:\n  include:\n    - "skills/**/SKILL.md"\n',
+  'vibe-agent-toolkit.config.yaml': MARKDOWN_AND_SKILLS_CONFIG,
   'skills/one/SKILL.md': `${createSkillMarkdown('one')}\nSee [the guide](../../docs/guide.md) and [the secret](../../docs/secret.md).\n`,
 };
 

@@ -482,7 +482,8 @@ const PLAIN_TREE = { 'a.md': '# A\n\nPlain.\n' };
 
 export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
   // A cold population: the one document parsed and keyed, the extent derived
-  // and written to the store, and git asked for the tree. The statement names
+  // and written to the store, and git asked for the tree: the key's snapshot
+  // and its flag listing, then the write path's fresh pair. The statement names
   // no relation, so the run database is hydrated with none.
   'extent.derived': {
     prepare: (scope) => queriedTree(scope, PLAIN_TREE),
@@ -494,11 +495,11 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'extent.derived': 1,
       'parse.dispatched': 1,
       ...readAndKeyed(PLAIN_TREE['a.md']),
-      'git.calls': 4,
+      'git.calls': 6,
     },
   },
   // The same tree again: the extent served from the store, nothing parsed,
-  // nothing hashed, one git call.
+  // nothing hashed, two git calls (the key's snapshot and its flag listing).
   'extent.served': {
     prepare: async (scope) => {
       const query = queriedTree(scope, PLAIN_TREE);
@@ -510,7 +511,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'store.reads.persistent': 2,
       'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
       'extent.served': 1,
-      'git.calls': 1,
+      'git.calls': 2,
     },
   },
   // A refusal no store holds forces the whole population again on the second
@@ -534,7 +535,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'content.read': 2,
       'content.hashed': 2,
       'content.hashedBytes': Buffer.byteLength(PLAIN_TREE['a.md'] + CYCLIC_FRONTMATTER, 'utf8'),
-      'git.calls': 4,
+      'git.calls': 6,
     },
     reported: (result) => Number(/store miss: (\d+) refused/u.exec(result ?? '')?.[1] ?? Number.NaN),
   },

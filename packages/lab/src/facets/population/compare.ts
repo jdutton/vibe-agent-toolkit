@@ -14,7 +14,7 @@
  *
  * `added` and `removed` are membership. `changed` is a path present on both
  * sides whose content identity moved — invisible to a comparison of path lists,
- * and the reason the entries carry the subject's own checksum at all. Collapsing
+ * and the reason the entries carry the subject's own identity at all. Collapsing
  * the three into one count would report "0 differences" for two populations that
  * enumerate the same files with different contents.
  *
@@ -42,7 +42,19 @@ import {
   PopulationBodySchema,
   type PopulationCommandStats,
   type PopulationEntry,
+  type PopulationIdentity,
 } from './types.js';
+
+/**
+ * Whether content identity could be compared between the two sides.
+ *
+ * Not comparable when a path on both sides carries identities of different
+ * schemes (an rc.17 `checksum` against a `contentKey`): neither equal nor
+ * different, so no path is called changed on that evidence.
+ */
+export type ContentComparison =
+  | { readonly kind: 'compared' }
+  | { readonly kind: 'incomparable'; readonly reason: string };
 
 /** What happened to one command's population between two reports. */
 export type PopulationCommandVerdict =
@@ -53,8 +65,21 @@ export type PopulationCommandVerdict =
       readonly added: readonly string[];
       /** Paths only the baseline enumerated. */
       readonly removed: readonly string[];
-      /** Paths on both sides whose checksum moved. */
+      /** Paths on both sides whose identity moved; empty when content was incomparable. */
       readonly changed: readonly string[];
+      /** Whether {@link changed} is evidence of anything: see {@link ContentComparison}. */
+      readonly contentComparison: ContentComparison;
+    }
+  | {
+      /**
+       * Identical membership, and content that could not be compared because the
+       * two sides identify content under different schemes.
+       *
+       * Its own verdict rather than `unchanged`: "the same files, same content"
+       * is a claim nothing here supports.
+       */
+      readonly kind: 'content-incomparable';
+      readonly reason: string;
     }
   | {
       /** Identical membership and identical content. */
@@ -116,10 +141,33 @@ const unmeasurableReason = unmeasurableReasonFor<PopulationAttribution>({
  * Index a population's entries by path.
  *
  * @param files - Entries, path-sorted
- * @returns Checksums keyed by path
+ * @returns Identities keyed by path
  */
-function byPath(files: readonly PopulationEntry[]): ReadonlyMap<string, string> {
-  return new Map(files.map((entry) => [entry.path, entry.checksum]));
+function byPath(files: readonly PopulationEntry[]): ReadonlyMap<string, PopulationIdentity> {
+  return new Map(files.map((entry) => [entry.path, entry.identity]));
+}
+
+/**
+ * Decide whether the identities at the paths both sides enumerate can be compared.
+ *
+ * @param before - The baseline entries
+ * @param afterByPath - The compared side's identities by path
+ * @returns `compared`, or `incomparable` with the schemes that disagree
+ */
+function contentComparisonOf(
+  before: readonly PopulationEntry[],
+  afterByPath: ReadonlyMap<string, PopulationIdentity>,
+): ContentComparison {
+  const mismatch = before
+    .map((entry) => ({ was: entry.identity.scheme, now: afterByPath.get(entry.path)?.scheme }))
+    .find((pair) => pair.now !== undefined && pair.now !== pair.was);
+  if (mismatch?.now === undefined) return { kind: 'compared' };
+  return {
+    kind: 'incomparable',
+    reason:
+      `the baseline identifies content by \`${mismatch.was}\` and the compared side by \`${mismatch.now}\`, ` +
+      'which are different schemes, so no path is reported as changed or unchanged by content',
+  };
 }
 
 /**
@@ -145,17 +193,22 @@ function verdictFor(
   const removed = before.files
     .filter((entry) => !afterByPath.has(entry.path))
     .map((entry) => entry.path);
-  const changed = before.files
-    .filter((entry) => {
-      const other = afterByPath.get(entry.path);
-      return other !== undefined && other !== entry.checksum;
-    })
-    .map((entry) => entry.path);
+  const contentComparison = contentComparisonOf(before.files, afterByPath);
+  const changed = contentComparison.kind === 'incomparable'
+    ? []
+    : before.files
+        .filter((entry) => {
+          const other = afterByPath.get(entry.path);
+          return other !== undefined && other.value !== entry.identity.value;
+        })
+        .map((entry) => entry.path);
 
   if (added.length === 0 && removed.length === 0 && changed.length === 0) {
-    return { kind: 'unchanged' };
+    return contentComparison.kind === 'incomparable'
+      ? { kind: 'content-incomparable', reason: contentComparison.reason }
+      : { kind: 'unchanged' };
   }
-  return { kind: 'changed', added, removed, changed };
+  return { kind: 'changed', added, removed, changed, contentComparison };
 }
 
 /** This facet's body contract, as the shared comparison gates need it. */

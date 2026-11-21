@@ -57,5 +57,5 @@ export const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
  * the foreign key every blob-keyed and path-dependent table joins through.
  */
 export const ContentKeySchema = z.string().regex(CONTENT_KEY_PATTERN)
-  .describe('A parser-kind-qualified content key: "<markdown|html>.<sha256>"');
+  .describe('A parser-kind-qualified content key: "<parserKind>.<sha256>"');
 

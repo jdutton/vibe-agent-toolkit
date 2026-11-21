@@ -1809,10 +1809,24 @@ function addBundledAssetsToOutputRegistry(
 }
 
 /**
+ * The PLACEHOLDER content key for a synthetic asset: the asset was not read here, so the key is
+ * not its bytes'. A `none` key whose digest is all zeros: well-formed under the content key's
+ * shape, and no bytes hash to it, so a synthetic asset is never grouped as a duplicate of a real
+ * file (an empty `.gitkeep` keys as `none.` plus the SHA-256 of the domain-separated empty input).
+ * Every synthetic asset shares it, so the output registry's duplicate groups put them together.
+ * A constant, not a computed key: nothing is hashed, so no work counter moves.
+ */
+const SYNTHETIC_ASSET_CONTENT_KEY = `none.${'0'.repeat(64)}`;
+
+/**
  * Build a minimal ResourceMetadata record for a non-markdown asset that couldn't
  * be added to the source registry due to an ID collision with a paired markdown file.
+ *
+ * @param assetPath - The asset's source path
+ * @param outputFilePath - Where the build writes it
+ * @returns The record, keyed by {@link SYNTHETIC_ASSET_CONTENT_KEY}
  */
-function buildSyntheticAssetResource(
+export function buildSyntheticAssetResource(
   assetPath: string,
   outputFilePath: string,
 ): ResourceMetadata {
@@ -1824,8 +1838,7 @@ function buildSyntheticAssetResource(
     sizeBytes: 0,
     estimatedTokenCount: 0,
     modifiedAt: new Date(0),
-    // Synthetic asset; no real content hash. Use all-zeros to satisfy the SHA256 brand.
-    checksum: '0'.repeat(64) as ResourceMetadata['checksum'],
+    contentKey: SYNTHETIC_ASSET_CONTENT_KEY,
   };
 }
 

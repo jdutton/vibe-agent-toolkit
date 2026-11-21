@@ -74,7 +74,7 @@ vat audit ./resources --recursive
 **Features:**
 - Auto-detects resource type (plugin, marketplace, skill, registry)
 - Schema validation using Zod
-- Cache staleness detection using checksums
+- Cache staleness detection using content keys
 - Hierarchical output showing relationships
 - Cross-platform support
 

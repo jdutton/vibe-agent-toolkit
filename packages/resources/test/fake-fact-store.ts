@@ -271,6 +271,19 @@ export class FakeFactStore implements FactStore {
 }
 
 
+/** A store whose blob tier rejects, once told to, with an error carrying a filesystem errno. */
+export class FailingBlobStore extends FakeFactStore {
+  failBlobs = false;
+  /** What the tier rejects with: a filesystem errno, which no lane may file as a file's. */
+  readonly failure: Error = Object.assign(new Error('ENOENT: no such file or directory, open \'/store/blobs\''), { code: 'ENOENT', errno: -2, syscall: 'open', path: '/store/blobs' });
+
+  override readBlobFacts(contentKeys: readonly string[]): Promise<BlobScopedRows> {
+    if (!this.failBlobs) return super.readBlobFacts(contentKeys);
+    return Promise.reject(this.failure);
+  }
+}
+
+
 /**
  * One comparable string per {@link ExtentKey}.
  *

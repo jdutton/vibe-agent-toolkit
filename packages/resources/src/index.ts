@@ -75,10 +75,6 @@ export {
   type NotAdmittedWording,
 } from './not-admitted.js';
 
-// The checksum the registry records for a resource's decoded text, so a consumer
-// re-hashing that text at use (ADR I2a) runs the one implementation.
-export { calculateChecksumFromContent } from './checksum.js';
-
 // Export ResourceQuery for lazy evaluation and filtering
 export { ResourceQuery } from './resource-query.js';
 
@@ -1089,10 +1085,14 @@ export {
   BLOB_PARSE_LIMIT_EXCEEDED,
   BLOB_PARSE_WORKER_DIED,
   BLOB_UNREADABLE,
+  parserKindOf,
   populateBlobs,
   type BlobPopulationOptions,
   type BlobPopulationResult,
 } from './projection/blob-population.js';
+
+// A warm run's blob tier read failing is the store's refusal, by this code (the CLI's refusal table).
+export { PROJECTION_STORE_READ_FAILED_CODE } from './projection/stored-admission.js';
 
 // Emitting the projection as a document — "no engine" (zones §15 step 6). Rows
 // out; no index, no join, no filter, no query. Two properties are load-bearing:

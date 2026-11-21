@@ -222,7 +222,7 @@ export function uncoveredContentKeys(blobs: BlobScopedRows, contentKeys: readonl
  * @param extent - Extent-scoped rows, already narrowed to one run
  * @returns The keys, deduplicated, in first-seen order
  */
-export function keyedContentKeys(extent: ExtentScopedRows): readonly string[] {
+export function keyedContentKeys(extent: Pick<ExtentScopedRows, 'resourceRealizations'>): readonly string[] {
   const keys = new Set<string>();
   for (const row of extent.resourceRealizations) {
     if (row.contentState === 'keyed' && row.contentKey !== null) keys.add(row.contentKey);

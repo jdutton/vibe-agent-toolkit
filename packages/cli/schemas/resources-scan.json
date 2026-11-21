@@ -172,15 +172,17 @@
                         "type": "integer",
                         "minimum": 0
                       },
-                      "checksum": {
-                        "type": "string"
+                      "contentKey": {
+                        "type": "string",
+                        "pattern": "^(?:markdown|html|none)\\.[0-9a-f]{64}$",
+                        "description": "A parser-kind-qualified content key: \"<parserKind>.<sha256>\""
                       }
                     },
                     "required": [
                       "path",
                       "links",
                       "anchors",
-                      "checksum"
+                      "contentKey"
                     ],
                     "additionalProperties": false
                   }

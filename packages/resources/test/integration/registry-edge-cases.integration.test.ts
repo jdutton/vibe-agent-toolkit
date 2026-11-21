@@ -109,9 +109,9 @@ describe('ResourceRegistry.fromResources index building', () => {
     expect(registry.getResourcesByName('doc1.md')).toContain(resource1);
     expect(registry.getResourcesByName('doc2.md')).toContain(resource2);
 
-    // 4. By checksum
-    expect(registry.getResourcesByChecksum(resource1.checksum)).toContain(resource1);
-    expect(registry.getResourcesByChecksum(resource2.checksum)).toContain(resource2);
+    // 4. By content key
+    expect(registry.getResourcesByContentKey(resource1.contentKey)).toContain(resource1);
+    expect(registry.getResourcesByContentKey(resource2.contentKey)).toContain(resource2);
   });
 });
 

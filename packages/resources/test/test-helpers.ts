@@ -791,7 +791,7 @@ export function expectFirstSchemaHasErrors(
 
 /**
  * Create two markdown files with the same content in a temp directory.
- * Useful for testing checksum/dedup behavior.
+ * Useful for testing content-key/dedup behavior.
  */
 export async function createTwoFilesWithSameContent(
   tempDir: string,

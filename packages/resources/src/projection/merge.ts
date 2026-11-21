@@ -120,6 +120,7 @@ import {
   type ExtentScopedRows,
   type FactStore,
 } from './store.js';
+import { readBlobTier } from './stored-admission.js';
 
 /**
  * The pass number every driver-placed row in the `base` stratum carries.
@@ -361,10 +362,13 @@ export interface PopulationCache {
   /**
    * A hash naming this tree's exact contents — see {@link ExtentKey.treeHash}.
    *
-   * In a repository, `@vibe-validate/git`'s dirty-corrected `write-tree` hash
-   * (`gitTreeSnapshot().hash`), which covers unstaged edits and untracked files
-   * and carries no timestamp. 🪤 Never `git stash create`, whose commit object
-   * does — two calls over byte-identical content would disagree and every read
+   * In a repository, `gitTreeKey().hash`: `@vibe-validate/git`'s dirty-corrected
+   * `write-tree` hash, which covers unstaged edits and untracked files and
+   * carries no timestamp, and is no key at all where the index hides edits.
+   * 🪤 Never `gitTreeSnapshot().hash` alone: the snapshot is blind to git's index
+   * flags, so a file flagged assume-unchanged or skip-worktree keeps its staged
+   * bytes in the hash whatever the disk holds, and an edit to it moves no key.
+   * 🪤 Never `git stash create`, whose commit object carries a timestamp — two calls over byte-identical content would disagree and every read
    * would miss.
    *
    * ⚠️ That hash covers the whole **repository**, not the subtree `root` names.
@@ -901,9 +905,10 @@ function storeKeyFor(
     extentSource: crawlSourceSelector() ?? null,
     parseRouting: routing.fingerprint,
     // A constant within one release, so this guards invalidation ACROSS releases: a realization
-    // past the input cap is stored `oversize`, and rows a release derived under its cap answer no
-    // run of a release with another.
-    inputBytes: POPULATION_PARSE_LIMITS.inputBytes,
+    // past the input cap is stored `oversize`, and a warm run builds its registry from the parse
+    // facts stored under these limits, so rows a release derived under its limits answer no run of
+    // a release with others. The whole object, so a limit added to it is in the key unasked.
+    parseLimits: { ...POPULATION_PARSE_LIMITS },
     registrations: registrationQuestions(options),
   });
   return { rootId, treeHash: `${cache.treeHash} ${ambient}` };
@@ -1000,7 +1005,7 @@ async function readCachedProjection(
   if (!parseContent) return { hit: assembleProjection(extent, emptyBlobRows()) };
 
   const contentKeys = keyedContentKeys(extent);
-  const blobs = await cache.store.readBlobFacts(contentKeys);
+  const blobs = await readBlobTier(cache.store, contentKeys);
   // See `store-hydration.ts`: an extent written by a run that skipped blob
   // derivation names keys the blob tier does not hold, and accepting it would
   // reduce every closure extent to its own root while reporting success.

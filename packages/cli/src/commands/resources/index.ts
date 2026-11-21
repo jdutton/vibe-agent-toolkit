@@ -161,7 +161,7 @@ Output Fields (the shared report envelope):
               Which enumerator produced the population ('git' or 'filesystem')
   data.collections:
               Per-collection resource counts ({resourceCount}); {} when none
-  data.files: (only with --verbose) {path, links, anchors, checksum} per file
+  data.files: (only with --verbose) {path, links, anchors, contentKey} per file
 
 Exit Codes:
   0 - Scanned at least one file, and admitted every file it enumerated

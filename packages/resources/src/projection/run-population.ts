@@ -19,14 +19,18 @@
  * - ONE {@link ParseDispatcher}, which parses each content key once
  *   (`ParseDispatcher.parse`), so the blob stage's parse of a file is the
  *   registry's.
- * - The **per-file admission facts** ({@link AdmittedFacts}): the parse, the size,
- *   the modification time and the checksum, by path. Nothing that depends on a
- *   view: the id, duplicate detection, link resolution, population conditions and
- *   parse refusals are computed per registry view by the same code as ever. Views
- *   never share link objects: a registry copies the links it is handed.
+ * - The **per-file admission facts** ({@link AdmittedFacts}): the content-addressed
+ *   half of each resource (its content key included), by path. Nothing that depends
+ *   on a view: the id, duplicate detection, link resolution, population conditions
+ *   and parse refusals are computed per registry view by the same code as ever.
+ *   Views never share link objects: a registry copies the links it is handed.
  * - Each root's enumeration, once ({@link RunPopulation.source}): the home's
  *   full population under a store, or each root's names ({@link RootListing}),
  *   listed once and narrowed per crawl.
+ * - On a store hit, what the store holds about each of the home's members
+ *   (`stored-admission.ts`): a member is admitted from the blob tier through the
+ *   one fact reader, with no read, key or parse, wherever the stored answer is
+ *   the cold one.
  *
  * ## Lifetime
  *
@@ -37,16 +41,18 @@
  * reads its own output through a population of that output's directory.
  */
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { open } from 'node:fs/promises';
+
+import { countWork, safePath } from '@vibe-agent-toolkit/utils';
 import { gitFindRoot, gitLinksCheckedOutAsFiles, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
-import type { ParseResult } from '../link-parser.js';
 import { defaultParseCache } from '../parse-cache.js';
 import { ParseDispatcher } from '../parse-dispatcher.js';
-import type { SHA256 } from '../schemas/checksum.js';
 import type { CollectionConfig } from '../schemas/project-config.js';
 import { sameDirectory } from '../utils.js';
 
+import type { NotAdmittedEntry } from './blob-refusals.js';
+import type { BlobResourceFacts } from './blob-resource-facts.js';
 import { RunContentCache } from './content-cache.js';
 import { RootListing, type PopulationUnreadablePolicy } from './crawl-source.js';
 import type { PopulationCache } from './merge.js';
@@ -57,19 +63,26 @@ import {
   type ResourceEnumeration,
   type ResourcePopulationSource,
 } from './resource-population.js';
+import { hydratesUnder, readRoute, respelledContent, storedRoute, type StoredMember } from './stored-admission.js';
 
 /**
  * One file's admission facts: what a registry admitting it reads, keys and
  * parses, and nothing that depends on which view admits it. The stat is not
  * here: its link chain is read beneath a view's root, so it is its own fact per
  * (root, path) ({@link RunPopulation.stat}).
+ *
+ * - `facts`: the content-addressed half of the resource, built from a cold
+ *   parse (`blobResourceFactsOf`) or from the store's blob tier
+ *   (`blobFactsReader`) alike, so both are built into a resource by one code
+ *   path. SHARED between views: a view copies what it mutates (its links and
+ *   headings).
+ * - `not-admitted`: the stored refusal of a file a warm run admits from the
+ *   store, in the not-admitted log's own entry. A cold refusal is a throw, as
+ *   it always was.
  */
-export interface AdmittedFacts {
-  /** The parse, SHARED between views: a view copies what it mutates (its links). */
-  readonly parse: ParseResult;
-  /** SHA-256 of the decoded content (`ResourceMetadata.checksum`). */
-  readonly checksum: SHA256;
-}
+export type AdmittedFacts =
+  | { readonly kind: 'facts'; readonly facts: BlobResourceFacts }
+  | { readonly kind: 'not-admitted'; readonly entry: NotAdmittedEntry };
 
 /** What a registry reads off a file's stat. */
 export interface AdmittedStat {
@@ -151,6 +164,12 @@ export class RunPopulation implements PopulationRun {
   readonly #enumerations = new Map<string, Promise<ResourceEnumeration>>();
   readonly #listings = new Map<string, Promise<RootListing>>();
   readonly #trackers = new Map<string, Promise<GitTracker | undefined>>();
+  /**
+   * What the store holds about each member of the home's population, by absolute
+   * path in every spelling a crawl asked by: recorded when a store hit resolves,
+   * empty for a run whose home was derived or listed.
+   */
+  readonly #stored = new Map<string, StoredMember>();
   /** Each listed root's tracked links checked out as plain files, by root. */
   readonly #linksAsFiles = new Map<string, ReadonlySet<string> | null>();
   readonly #options: RunPopulationOptions;
@@ -171,19 +190,60 @@ export class RunPopulation implements PopulationRun {
   }
 
   /**
-   * One file's admission facts: computed by `compute` the first time this run
-   * asks for this path under this parser kind, and handed back every later time —
-   * a rejection included, so a file that cannot be read is read once and refused
-   * the same way in every view.
+   * One file's admission facts: decided the first time this run asks for this
+   * path under this parser kind, and handed back every later time — a rejection
+   * included, so a file that cannot be read is read once and refused the same
+   * way in every view.
+   *
+   * On a store hit a member is admitted from what the store holds about it when
+   * {@link storedRoute} and {@link readRoute} say so (built from the blob tier by
+   * the one fact reader, no read, key or parse), and by `compute` otherwise —
+   * see `stored-admission.ts`. Counted `registry.admitted` once whichever way it
+   * was admitted; a stated refusal is not an admission.
    *
    * @param absolutePath - The file, resolved
    * @param parserKind - The parser its content routes to: part of the key, as in
    *   the content cache, since one path's reading under another kind is another fact
-   * @param compute - Reads, keys and parses the file
+   * @param compute - Reads, keys and parses the file: the cold lane
    * @returns The run's one answer for the file
    */
   admit(absolutePath: string, parserKind: string, compute: () => Promise<AdmittedFacts>): Promise<AdmittedFacts> {
-    return memoized(this.#admissions, `${parserKind} ${safePath.resolve(absolutePath)}`, compute);
+    const resolved = safePath.resolve(absolutePath);
+    return memoized(this.#admissions, `${parserKind} ${resolved}`, () => this.#admitted(resolved, parserKind, compute));
+  }
+
+  /** The body of {@link admit}'s memo miss. */
+  async #admitted(absolutePath: string, parserKind: string, compute: () => Promise<AdmittedFacts>): Promise<AdmittedFacts> {
+    const stored = this.#stored.get(absolutePath);
+    if (stored === undefined) return compute();
+    const route = storedRoute(stored.realization, parserKind);
+    if (route.kind === 'compute') return compute();
+    // A file that cannot be read now is the cold lane's: its read raises the cold error, an
+    // oversize file's included (the cold lane opens it before it refuses it by its size).
+    if (route.kind === 'not-admitted') {
+      return (await readRefusal(absolutePath)) === null ? { kind: 'not-admitted', entry: route.entry } : compute();
+    }
+    const read = readRoute((await stored.facts())(route.contentKey));
+    if (read.kind === 'compute' || (await readRefusal(absolutePath)) !== null) return compute();
+    if (read.admitted.kind === 'facts') countWork('registry.admitted', 1);
+    return read.admitted;
+  }
+
+  /**
+   * Record what a store hit holds about its members, under the spelling the
+   * crawl asked by, so {@link admit} can admit them from it. Nothing is
+   * recorded for a run whose dispatcher parses under other limits than the ones
+   * the store's facts were filed under ({@link hydratesUnder}): every member is
+   * then computed.
+   *
+   * @param enumeration - A resolved enumeration
+   */
+  #recordStored(enumeration: ResourceEnumeration): void {
+    const { stored } = enumeration;
+    if (stored === null || !hydratesUnder(this.dispatcher.limits)) return;
+    for (const [path, realization] of stored.members) {
+      if (!this.#stored.has(path)) this.#stored.set(path, { realization, facts: stored.facts });
+    }
   }
 
   /**
@@ -247,7 +307,9 @@ export class RunPopulation implements PopulationRun {
       const cache = home ? await this.#options.cacheOf() : undefined;
       if (cache === undefined) return this.#list(resolved, home, outputs, unreadable, members);
       const population = await memoized(this.#enumerations, homeKey, () => this.#populate(outputs, cache));
-      return respelled(population, this.root, resolved);
+      const enumeration = respelled(population, this.root, resolved);
+      this.#recordStored(enumeration);
+      return enumeration;
     });
   }
 
@@ -351,7 +413,35 @@ export class RunPopulation implements PopulationRun {
  */
 function respelled(population: ResourceEnumeration, from: string, to: string): ResourceEnumeration {
   if (from === to) return population;
-  return { ...population, paths: population.paths.map((path) => safePath.join(to, safePath.relative(from, path))) };
+  const respell = (path: string): string => safePath.join(to, safePath.relative(from, path));
+  return {
+    ...population,
+    paths: population.paths.map(respell),
+    stored: population.stored === null ? null : respelledContent(population.stored, respell),
+  };
+}
+
+/**
+ * What refuses reading a file the store answers for now, if anything: the one
+ * probe a warm admission makes in place of the cold read, counted as the stat it
+ * is. An open and a close, reading nothing: it fails exactly as the cold read's
+ * own open would, a Windows sharing lock included, where a permission check
+ * (`access`) succeeds. Any refusal sends the file to the cold lane, whose read
+ * raises (and classifies) the cold error, so the refusal itself is only
+ * reported, never judged.
+ *
+ * @param absolutePath - The file
+ * @returns The refusal, or `null` when the file can be read
+ */
+async function readRefusal(absolutePath: string): Promise<{ readonly refused: unknown } | null> {
+  countWork('fs.stat', 1);
+  try {
+    const handle = await open(absolutePath, 'r');
+    await handle.close();
+    return null;
+  } catch (error) {
+    return { refused: error };
+  }
 }
 
 /**

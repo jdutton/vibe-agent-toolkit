@@ -4,6 +4,11 @@
  * the one fact reader (`blobFactsReader`), field by field over the mapping table
  * (`BLOB_FACT_FIELDS`), each link's fields over `RESOURCE_LINK_FACT_SOURCES`.
  *
+ * Warm `vat validate` builds its resources registry from exactly these rebuilt
+ * facts on a store hit, so a case that fails here is a warm finding that differs
+ * from the cold one (`warm-registry-hydration.integration.test.ts` holds the
+ * registry itself warm against cold).
+ *
  * Through the real SQLite store, never an in-memory double: a double hands rows
  * back by reference, so a value JSON cannot carry (`-0`, `.inf`, a timestamp, a
  * set) survives it and the test could not fail on the encoding at all.
@@ -21,7 +26,7 @@
  * no offsets (parse5 no longer emits one) in `projection-blob-resource-facts.test.ts`.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 
 import { openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import {
@@ -42,6 +47,8 @@ import {
 import { compareCodeUnits, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+import { crawlWholeTree, teardownTreeSuite } from '../fixtures.js';
 
 /** An SVG link through a namespaced attribute (F11). */
 const XLINK_PAGE = '<!DOCTYPE html><svg><a xlink:href="./baseline.md">x</a></svg>\n';
@@ -273,24 +280,13 @@ beforeAll(async () => {
     },
     async (population) => {
       const registry = new ResourceRegistry({ baseDir: root });
-      await registry.crawl({
-        baseDir: root,
-        include: ['**/*.md', '**/*.html', '**/*.json'],
-        outputs: [],
-        unreadable: 'refuse',
-        ignoredRefusals: 'record',
-        populationSource: population.source,
-      });
+      await crawlWholeTree(registry, root, population.source);
       return new Map(registry.getAllResources().map((resource) => [safePath.relative(root, resource.filePath), resource]));
     },
   );
 });
 
-afterAll(() => {
-  vi.unstubAllEnvs();
-  rmSync(root, { recursive: true, force: true });
-  rmSync(storeDirectory, { recursive: true, force: true });
-});
+afterAll(() => teardownTreeSuite(root, storeDirectory));
 
 /**
  * A link's blob-fact fields, read off `RESOURCE_LINK_FACT_SOURCES` (its

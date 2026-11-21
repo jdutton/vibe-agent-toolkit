@@ -12,7 +12,7 @@
  * here is a rename there.
  */
 
-import { CRAWL_SOURCE_KINDS } from '@vibe-agent-toolkit/resources';
+import { CRAWL_SOURCE_KINDS, ContentKeySchema } from '@vibe-agent-toolkit/resources';
 import { FindingSchema, reportSchema, type Report } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
@@ -34,8 +34,8 @@ const ScannedFileSchema = z.object({
   links: z.number().int().nonnegative(),
   /** Headings the file carries, every nested level counted. */
   anchors: z.number().int().nonnegative(),
-  /** The content checksum the registry keyed the file on. */
-  checksum: z.string(),
+  /** The content key the registry keyed the file on: `<parserKind>.<sha-256 of the raw bytes>`. */
+  contentKey: ContentKeySchema,
 }).strict();
 
 const ResourcesScanDataSchema = z.object({

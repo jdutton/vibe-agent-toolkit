@@ -11,10 +11,6 @@
  * ```
  */
 
-// Checksum types
-export type { SHA256 } from './schemas/checksum.js';
-export { SHA256Schema } from './schemas/checksum.js';
-
 // Resource metadata types
 export type {
   LinkNodeType,

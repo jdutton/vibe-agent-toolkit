@@ -217,6 +217,25 @@ describe('the projection store key and the input cap', () => {
     expect(await underCap(configured)).toBe(await underCap(configured));
     expect(await underCap(configured)).not.toBe(await underCap(configured + 1));
   });
+
+  it('DIFFERS between two runs under any other different parse limit', async () => {
+    // A warm run builds the registry from stored parse facts, so a parse a run under another limit
+    // would have refused (or let through) is not this run's answer: every limit is the question,
+    // never the input cap alone.
+    const limits = POPULATION_PARSE_LIMITS as { outputRows: number };
+    const configured = limits.outputRows;
+    const underLimit = async (outputRows: number): Promise<string> => {
+      limits.outputRows = outputRows;
+      try {
+        return await storeKeyFor(undefined);
+      } finally {
+        limits.outputRows = configured;
+      }
+    };
+
+    expect(await underLimit(configured)).toBe(await underLimit(configured));
+    expect(await underLimit(configured)).not.toBe(await underLimit(configured + 1));
+  });
 });
 
 describe('the routing fingerprint itself', () => {

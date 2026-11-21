@@ -47,6 +47,7 @@ export {
   GIT_FAILED_CODE,
   GIT_NO_ANSWER_CODE,
   GIT_NOT_FOUND_CODE,
+  GIT_SNAPSHOT_INDEX_HIDES_CODE,
   GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE,
   GIT_SNAPSHOT_REFUSED_CODE,
   GIT_SNAPSHOT_UNREADABLE_CODE,
@@ -66,11 +67,15 @@ export {
   gitTreeSnapshot,
   peekGitTreeSnapshot,
   withGitSnapshotCache,
+  type GitHiddenEntry,
   type GitSnapshotEntry,
   type GitSnapshotFailure,
   type GitSnapshotOutcome,
+  type GitTreeKeyFailure,
+  type GitTreeKeyOutcome,
   type GitTreeSnapshot,
 } from './git-snapshot.js';
+export { freshGitTreeKey, gitSnapshotAbsentEntries, gitTreeKey } from './git-tree-key.js';
 export { loadGitignoreRules } from './gitignore-checker.js';
 export { GitTracker, type GitTrackerInitOptions } from './git-tracker.js';
 export {

@@ -19,7 +19,7 @@
 import { isNoSuchEntryError, isOutputOverrunError, isTimedOutError } from './errors/errno-table.js';
 import { VatError } from './errors/vat-error.js';
 import { gitIsMissing, runGit } from './git-run.js';
-import { type GitSnapshotFailure, unreadableSnapshotReason } from './git-snapshot.js';
+import { type GitSnapshotFailure, type GitTreeKeyFailure, unreadableSnapshotReason } from './git-snapshot.js';
 import { shownName } from './shown-text.js';
 
 /** git's silence was a git binary missing from PATH: the environment's, repaired by installing git. */
@@ -46,6 +46,12 @@ export const GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE = 'GIT_SNAPSHOT_OUTSIDE_SPARSE';
 /** A snapshot git refuses with a `fatal:` or `error:` it states: the tree's, git's words quoted. */
 export const GIT_SNAPSHOT_REFUSED_CODE = 'GIT_SNAPSHOT_REFUSED';
 
+/**
+ * A snapshot git took but cannot key the tree with: its index flags files assume-unchanged or
+ * skip-worktree, so the hash holds their staged bytes whatever is on disk (`gitTreeKey`). The tree's.
+ */
+export const GIT_SNAPSHOT_INDEX_HIDES_CODE = 'GIT_SNAPSHOT_INDEX_HIDES';
+
 /** The remedy for a git binary missing from PATH, as a sentence a refusal can carry. */
 export const GIT_NOT_FOUND_REMEDY = 'git was not found on PATH: install it, or put it on PATH.';
 
@@ -56,7 +62,8 @@ export type GitNoAnswerCode =
   | typeof GIT_NO_ANSWER_CODE
   | typeof GIT_SNAPSHOT_UNREADABLE_CODE
   | typeof GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE
-  | typeof GIT_SNAPSHOT_REFUSED_CODE;
+  | typeof GIT_SNAPSHOT_REFUSED_CODE
+  | typeof GIT_SNAPSHOT_INDEX_HIDES_CODE;
 
 /** Which cause git's silence was, and the reason naming it. */
 export interface GitNoAnswer {
@@ -223,10 +230,15 @@ export function snapshotAttemptCause(root: string, attempt: GitAttempt, sparseCh
  * `GIT_NO_ANSWER`; a file the OS will not let git read is named; everything else is what git's own
  * account states ({@link snapshotAttemptCause}).
  *
- * @param failure - What {@link gitTreeSnapshot} returned instead of a snapshot
+ * A key git declined (`gitTreeKey`) is classified here too: its index hides working-tree bytes
+ * from the snapshot (`GIT_SNAPSHOT_INDEX_HIDES`), or git would not list the flags that say whether.
+ *
+ * @param failure - What {@link gitTreeSnapshot} or `gitTreeKey` returned instead of a snapshot
  * @returns The cause, its reason one or more whole sentences
  */
-export function gitSnapshotFailureOf(failure: GitSnapshotFailure): GitNoAnswer {
+export function gitSnapshotFailureOf(failure: GitSnapshotFailure | GitTreeKeyFailure): GitNoAnswer {
+  if (failure.kind === 'index-hides') return indexHidesCause(failure);
+  if (failure.kind === 'flags-unlisted' || failure.kind === 'flags-unreadable') return flagsUnlistedCause(failure);
   const ran = gitRunFailureOf(SNAPSHOT_ATTEMPT, failure.cwd, failure.attempt);
   if (ran !== undefined) return snapshotAttemptCause(failure.cwd, failure.attempt, false);
   if (failure.repositoryRoot === null) return { code: GIT_NO_ANSWER_CODE, reason: `${notARepositoryReason(failure.cwd)}.` };
@@ -238,6 +250,51 @@ export function gitSnapshotFailureOf(failure: GitSnapshotFailure): GitNoAnswer {
   return snapshotAttemptCause(failure.repositoryRoot, failure.attempt, sparse.ok && sparse.stdout === 'true');
 }
 
+/** The flag listing's command, as a reason names it. */
+const FLAGS_LISTING = 'git ls-files -v';
+
+/**
+ * The cause of a key declined because git gave no usable flag listing. A git that did not run is
+ * git's (`GIT_NOT_FOUND`, a missing directory); every other cause is `GIT_FAILED`, with the key's
+ * own remedy, never one written for another lane.
+ *
+ * @param failure - The declined key
+ * @returns The cause
+ */
+function flagsUnlistedCause(failure: Extract<GitTreeKeyFailure, { kind: 'flags-unlisted' | 'flags-unreadable' }>): GitNoAnswer {
+  const could = `VAT cannot tell whether git's index in ${shownName(failure.repositoryRoot)} hides any file from the snapshot:`;
+  const remedy = ' Run again; if it keeps failing, check that git runs here.';
+  if (failure.kind === 'flags-unreadable') return { code: GIT_FAILED_CODE, reason: `${could} ${failure.reason}${remedy}` };
+  const ran = gitRunFailureOf(FLAGS_LISTING, failure.repositoryRoot, failure.attempt);
+  if (ran !== undefined && ran.code !== GIT_FAILED_CODE) return ran;
+  const { error, stderr } = failure.attempt;
+  const gitSaid = stderr === '' ? '' : ` git said: ${stderr}`;
+  const what = error === undefined
+    ? `${FLAGS_LISTING} failed.${gitSaid}`
+    : `${FLAGS_LISTING} did not run to completion (${error.message}).`;
+  return { code: GIT_FAILED_CODE, reason: `${could} ${what}${remedy}` };
+}
+
+/**
+ * The cause of a key declined because git's index hides files from the snapshot: the flags, the
+ * first files and the count, and the one command that clears each flag.
+ *
+ * @param failure - The declined key
+ * @returns The cause
+ */
+function indexHidesCause(failure: Extract<GitTreeKeyFailure, { kind: 'index-hides' }>): GitNoAnswer {
+  const named = failure.hidden.map(({ shownPath, flag }) => `${shownPath} (${flag})`).join(', ');
+  const more = failure.hiddenCount > failure.hidden.length ? ` and ${failure.hiddenCount - failure.hidden.length} more` : '';
+  return {
+    code: GIT_SNAPSHOT_INDEX_HIDES_CODE,
+    reason: `git's index in ${shownName(failure.repositoryRoot)} flags ${failure.hiddenCount} file(s) assume-unchanged or`
+      + ` skip-worktree: ${named}${more}. git does not read those files, so a snapshot of this tree holds their`
+      + ' staged bytes whatever is on disk and cannot key it. (A skip-worktree file absent from disk, as a sparse'
+      + ' checkout leaves one, hides nothing and is not counted.) Clear the flags'
+      + ' (git update-index --no-assume-unchanged / --no-skip-worktree -- <path>) and run again.',
+  };
+}
+
 /**
  * {@link gitSnapshotFailureOf} as the error to throw: coded by cause, its message the reason
  * followed by what the caller would otherwise have had to do with the failure.
@@ -246,7 +303,7 @@ export function gitSnapshotFailureOf(failure: GitSnapshotFailure): GitNoAnswer {
  * @param consequence - One or more sentences: why the caller refuses rather than answers
  * @returns The coded error
  */
-export function gitSnapshotError(failure: GitSnapshotFailure, consequence: string): VatError {
+export function gitSnapshotError(failure: GitSnapshotFailure | GitTreeKeyFailure, consequence: string): VatError {
   const { code, reason } = gitSnapshotFailureOf(failure);
   return new VatError(code, `${reason} ${consequence}`);
 }

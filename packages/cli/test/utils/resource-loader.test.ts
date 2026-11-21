@@ -131,7 +131,7 @@ import type { Logger } from '../../src/utils/logger.js';
 // eslint-disable-next-line import/first -- must come after vi.mock calls
 import { PROJECTION_STORE_ENV, PROJECTION_STORE_OFF } from '../../src/utils/projection-store.js';
 // eslint-disable-next-line import/first -- must come after vi.mock calls
-import { loadResourcesWithConfig, withRunContext } from '../../src/utils/resource-loader.js';
+import { isRunRefusal, loadResourcesWithConfig, withRunContext } from '../../src/utils/resource-loader.js';
 // eslint-disable-next-line import/first -- must come after vi.mock calls
 import { loadResourcesInRun as load } from '../helpers/in-run.js';
 
@@ -181,6 +181,26 @@ async function loadedPopulation(): Promise<CrawlPopulation> {
   const { logger } = createTestLogger();
   return (await load(undefined, PROJECT_ROOT, logger)).population;
 }
+
+describe('isRunRefusal', () => {
+  it('ends its cause walk at a cycle (e.cause = e) and answers no', { timeout: 1000 }, () => {
+    // `e.cause = e` through a counting getter: a walk with no visited set reads it
+    // forever, and a synchronous loop outlives any test timeout, so the getter
+    // stops it with a failure instead of hanging the worker.
+    const error = new Error('its own cause');
+    let reads = 0;
+    Object.defineProperty(error, 'cause', {
+      get: () => {
+        reads++;
+        if (reads > 100) throw new Error('the cause walk did not end at the cycle');
+        return error;
+      },
+    });
+
+    expect(isRunRefusal(error)).toBe(false);
+    expect(reads).toBe(1);
+  });
+});
 
 describe('loadResourcesWithConfig', () => {
   beforeEach(() => {

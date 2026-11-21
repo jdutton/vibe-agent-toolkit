@@ -51,6 +51,7 @@ function stubSource(
           paths: names.map((name) => safePath.join(root, name)),
           conditions: [],
           ...STUB_PROVENANCE,
+          stored: null,
         });
       },
     },

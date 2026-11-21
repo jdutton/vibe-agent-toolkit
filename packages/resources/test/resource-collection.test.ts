@@ -58,7 +58,7 @@ describe('ResourceCollection', () => {
     expect(all).toContain(resource2);
   });
 
-  it('should detect duplicates by checksum', async () => {
+  it('should detect duplicates by content key', async () => {
     // Create two files with identical content
     const resource1 = await createAndAddResource(suite.tempDir, 'file1.md', '# Same', suite.registry);
     const resource2 = await createAndAddResource(suite.tempDir, 'file2.md', '# Same', suite.registry);
@@ -86,14 +86,14 @@ describe('ResourceCollection', () => {
     expect(duplicates).toHaveLength(0);
   });
 
-  it('should return unique resources by checksum', async () => {
+  it('should return unique resources by content key', async () => {
     // Create three files: two with identical content, one unique
     const resource1 = await createAndAddResource(suite.tempDir, 'file1.md', '# Same', suite.registry);
     const resource2 = await createAndAddResource(suite.tempDir, 'file2.md', '# Same', suite.registry);
     const resource3 = await createAndAddResource(suite.tempDir, 'file3.md', '# Different', suite.registry);
 
     const collection = new ResourceCollection([resource1, resource2, resource3]);
-    const unique = collection.getUniqueByChecksum();
+    const unique = collection.getUniqueByContentKey();
 
     expect(unique).toHaveLength(2);
     // Should have one from the duplicate pair and the unique one

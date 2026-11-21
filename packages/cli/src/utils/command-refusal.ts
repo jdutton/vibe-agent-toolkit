@@ -31,6 +31,7 @@ import {
   LINK_AUTH_CONFIG_CODE,
   OKF_UNKNOWN_BUNDLE_CODE,
   PROJECTION_STATEMENT_REFUSED_CODE,
+  PROJECTION_STORE_READ_FAILED_CODE,
 } from '@vibe-agent-toolkit/resources';
 import { fsFaultRefusal, type RefusalCode } from '@vibe-agent-toolkit/schema';
 import {
@@ -56,6 +57,7 @@ import {
   GIT_FAILED_CODE,
   GIT_NO_ANSWER_CODE,
   GIT_NOT_FOUND_CODE,
+  GIT_SNAPSHOT_INDEX_HIDES_CODE,
   GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE,
   GIT_SNAPSHOT_REFUSED_CODE,
   GIT_SNAPSHOT_UNREADABLE_CODE,
@@ -100,6 +102,9 @@ const REFUSAL_BY_ERROR_CODE: Readonly<Record<string, RefusalCode>> = {
   [LINK_AUTH_CONFIG_CODE]: 'CONFIG_INVALID',
   // A SQL statement the projection store refused — the statement the operator passed is wrong.
   [PROJECTION_STATEMENT_REFUSED_CODE]: 'USAGE_INVALID',
+  // A warm run's projection store that opened and then could not read its blob tier back: the database
+  // file the run depends on, not the project and not a defect in VAT.
+  [PROJECTION_STORE_READ_FAILED_CODE]: 'BACKEND_UNAVAILABLE',
   // A Claude Code registry or settings file whose content VAT cannot use: not JSON, the wrong shape.
   [CLAUDE_USER_STATE_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
   // A plugin key argument that is not `<plugin>@<marketplace>`.
@@ -118,6 +123,7 @@ const REFUSAL_BY_ERROR_CODE: Readonly<Record<string, RefusalCode>> = {
   [GIT_SNAPSHOT_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
   [GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE]: 'INPUT_UNREADABLE',
   [GIT_SNAPSHOT_REFUSED_CODE]: 'INPUT_UNREADABLE',
+  [GIT_SNAPSHOT_INDEX_HIDES_CODE]: 'INPUT_UNREADABLE',
   // An org command run without the key its endpoint authenticates with: nothing was sent.
   [ORG_API_KEY_MISSING_CODE]: 'USAGE_INVALID',
   // The Anthropic API answered with a non-success status (`ApiRequestError`)…

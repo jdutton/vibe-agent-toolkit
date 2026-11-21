@@ -434,6 +434,9 @@ export const GIT_CHANGED_FILES_KIND_BY_CODE: Readonly<Record<GitNoAnswerCode, Gi
   GIT_SNAPSHOT_UNREADABLE: 'repository',
   GIT_SNAPSHOT_OUTSIDE_SPARSE: 'repository',
   GIT_SNAPSHOT_REFUSED: 'repository',
+  // Never met here (the relation takes the snapshot, not the key), but the same cause as its own
+  // hidden-edit refusal below, which is the repository's.
+  GIT_SNAPSHOT_INDEX_HIDES: 'repository',
 };
 
 /** The refusal for a cause the one classifier (`git-no-answer.ts`) decided. */
@@ -605,6 +608,39 @@ function hiddenEditFlagsOf(tag: string): HiddenEditFlags {
   return { skipWorktree: tag === 'S' || tag === 's', assumeUnchanged: tag >= 'a' && tag <= 'z' };
 }
 
+/** One `ls-files -v` entry git does not read: its flags, and whether they hide any bytes. */
+export interface FlaggedEntry {
+  readonly flags: HiddenEditFlags;
+  /** The entry's path, decoded; `undefined` when it is not UTF-8. */
+  readonly path: string | undefined;
+  /**
+   * Skip-worktree only, with nothing on disk at its path: there are no bytes for git to miss (a
+   * sparse checkout's file, or one deleted under the flag). Every other flagged entry hides bytes.
+   */
+  readonly absentSkipWorktree: boolean;
+}
+
+/**
+ * The one rule for an index flag, shared by `changed_files` (`hiddenEditsRefusal`) and the store key
+ * (`gitTreeKey`): which entries git does not read, and which of those hide no bytes.
+ *
+ * The existence check is an `lstat` of a skip-worktree entry's path, and nothing else: it reads the
+ * directory entry, never the file's bytes, so no file is opened, read or hashed. An assume-unchanged
+ * entry is never stat'd (it hides bytes either way), and a path that is not UTF-8, or one the OS will
+ * not stat, counts as present, so it hides bytes too.
+ *
+ * @param root - The directory the listing's paths are relative to
+ * @param entry - One entry of {@link hiddenEditEntriesOf}
+ * @returns The entry's flags and verdict, or undefined for an entry git reads
+ */
+export function flaggedEntryOf(root: string, entry: TaggedEntry): FlaggedEntry | undefined {
+  const flags = hiddenEditFlagsOf(entry.tag);
+  if (!flags.skipWorktree && !flags.assumeUnchanged) return undefined;
+  const path = decodeUtf8Exactly(entry.path);
+  if (flags.assumeUnchanged) return { flags, path, absentSkipWorktree: false };
+  return { flags, path, absentSkipWorktree: path !== undefined && !onDisk(safePath.join(root, path)) };
+}
+
 /** Whether anything is at `path` on disk; a path the OS will not stat counts as there. */
 function onDisk(path: string): boolean {
   try {
@@ -643,17 +679,16 @@ function hiddenEditsRefusal(root: string): Refusal | undefined {
   let sparseAnswer: { ok: true; value: boolean } | Refusal | undefined;
   const sparse = (): { ok: true; value: boolean } | Refusal => (sparseAnswer ??= configIsTrue(root, SPARSE_CHECKOUT_KEY));
   for (const entry of read.entries) {
-    const flags = hiddenEditFlagsOf(entry.tag);
-    if (!flags.skipWorktree && !flags.assumeUnchanged) continue;
-    const path = decodeUtf8Exactly(entry.path);
-    const present = path === undefined || onDisk(safePath.join(root, path));
-    // Absent and only skip-worktree: a sparse checkout's file, absent by design — else a deletion git hides.
-    if (!present && !flags.assumeUnchanged) {
+    const flagged = flaggedEntryOf(root, entry);
+    if (flagged === undefined) continue;
+    // Absent and only skip-worktree hides no bytes. This answer is a diff, though: outside a sparse
+    // checkout such an entry is a deletion git hides from it, so only a sparse one is exempt here.
+    if (flagged.absentSkipWorktree) {
       const answer = sparse();
       if (!answer.ok) return answer;
       if (answer.value) continue;
     }
-    return hiddenEditRefusal(shownName(path ?? entry.path), flags);
+    return hiddenEditRefusal(shownName(flagged.path ?? entry.path), flagged.flags);
   }
   return undefined;
 }

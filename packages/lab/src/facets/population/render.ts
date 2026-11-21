@@ -138,12 +138,16 @@ function verdictLines(diff: PopulationComparisonResult['commands'][number]): str
   const arms = laneNote(diff.before, diff.after);
   switch (verdict.kind) {
     case 'changed': {
+      const content = verdict.contentComparison.kind === 'compared'
+        ? `~${String(verdict.changed.length)} content`
+        : 'content NOT COMPARED';
       const head =
         `  ${diff.name}: CHANGED — ` +
         `+${String(verdict.added.length)} / −${String(verdict.removed.length)} / ` +
-        `~${String(verdict.changed.length)} content${arms}`;
+        `${content}${arms}`;
       return [
         head,
+        ...(verdict.contentComparison.kind === 'incomparable' ? [`    content: ${verdict.contentComparison.reason}`] : []),
         ...pathLines('only in compared', verdict.added),
         ...pathLines('only in baseline', verdict.removed),
         ...pathLines('same path, different content', verdict.changed),
@@ -153,6 +157,11 @@ function verdictLines(diff: PopulationComparisonResult['commands'][number]): str
       const count = diff.after?.count ?? 0;
       return [
         `  ${diff.name}: unchanged — the same ${String(count)} files, same content${arms}`,
+      ];
+    }
+    case 'content-incomparable': {
+      return [
+        `  ${diff.name}: same membership, content NOT COMPARED — ${verdict.reason}${arms}`,
       ];
     }
     case 'unmeasurable': {

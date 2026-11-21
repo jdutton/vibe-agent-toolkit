@@ -19,9 +19,9 @@
  *   never the first read to finish.
  * - **Results come back in input order**, so a caller's array is a function of
  *   its own argument rather than of the machine.
- * - **The 1:many indexes stay in corpus order.** `resourcesByChecksum` and
+ * - **The 1:many indexes stay in corpus order.** `resourcesByContentKey` and
  *   `resourcesByName` are arrays whose insertion order `getDuplicates` and
- *   `getResourcesByChecksum` read back. Nothing throws when these scramble; the
+ *   `getResourcesByContentKey` read back. Nothing throws when these scramble; the
  *   answers just quietly become machine-dependent.
  * - **A genuine defect fails on the corpus-first offender**, because a failure
  *   raised where it was discovered would make which one kills the run a race.
@@ -178,9 +178,9 @@ describe('registry admission under a parse pool', () => {
     expect(results.map((r) => r.filePath)).toStrictEqual(paths);
   });
 
-  it('keeps the 1:many checksum index in corpus order', async () => {
-    // Identical bytes under two names: ONE checksum, two entries, and the array
-    // order is what `getResourcesByChecksum` and `getDuplicates` hand back.
+  it('keeps the 1:many content-key index in corpus order', async () => {
+    // Identical bytes under two names: ONE content key, two entries, and the array
+    // order is what `getResourcesByContentKey` and `getDuplicates` hand back.
     const lead = await plantLead();
     const shared = '# Same\n\nIdentical bytes.\n';
     const alpha = await plant('alpha.md', shared);
@@ -191,8 +191,8 @@ describe('registry admission under a parse pool', () => {
     const added = await registry.addResources([lead, alpha, beta]);
 
     expect(record.maxInFlight).toBe(2);
-    const checksum = added[1]?.checksum ?? '';
-    expect(registry.getResourcesByChecksum(checksum).map((r) => r.filePath)).toStrictEqual([
+    const contentKey = added[1]?.contentKey ?? '';
+    expect(registry.getResourcesByContentKey(contentKey).map((r) => r.filePath)).toStrictEqual([
       alpha,
       beta,
     ]);

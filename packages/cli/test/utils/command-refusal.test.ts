@@ -4,7 +4,7 @@
  */
 
 import { ApiRequestError, ApiTransportError, OrgApiClient } from '@vibe-agent-toolkit/claude-marketplace';
-import { LinkAuthConfigError, OKF_UNKNOWN_BUNDLE_CODE, okfBundleRuns, PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources';
+import { LinkAuthConfigError, OKF_UNKNOWN_BUNDLE_CODE, okfBundleRuns, PROJECTION_STATEMENT_REFUSED_CODE, PROJECTION_STORE_READ_FAILED_CODE } from '@vibe-agent-toolkit/resources';
 import { ExitCode, type ErrorReport } from '@vibe-agent-toolkit/schema';
 import { compareCodeUnits, COPY_LINK_ESCAPES_SOURCE_CODE, CopyLinkEscapesSourceError, DIRECTORY_WALK_REVISITED_CODE, DirectoryWalkRevisitedError, RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE, classifyFsFault, FS_FAULT_CODE, TEMP_DIR_OUTSIDE_TMPDIR_CODE, TREE_DEST_HOLDS_SOURCE_CODE, TREE_DEST_NOT_OWNED_CODE, TREE_DEST_OCCUPIED_CODE, TREE_DESTS_OVERLAP_CODE, TREE_ROLLBACK_INCOMPLETE_CODE, TREE_SOURCE_HOLDS_DEST_CODE, VatError } from '@vibe-agent-toolkit/utils';
 import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
@@ -13,6 +13,7 @@ import {
   GIT_FAILED_CODE,
   GIT_NO_ANSWER_CODE,
   GIT_NOT_FOUND_CODE,
+  GIT_SNAPSHOT_INDEX_HIDES_CODE,
   GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE,
   GIT_SNAPSHOT_REFUSED_CODE,
   GIT_SNAPSHOT_UNREADABLE_CODE,
@@ -90,11 +91,12 @@ describe('refusalCodeOf', () => {
     },
   );
 
-  it('covers all six git codes', () => {
+  it('covers all seven git codes', () => {
     expect(Object.keys(GIT_CHANGED_FILES_KIND_BY_CODE).sort(compareCodeUnits)).toStrictEqual([
       GIT_FAILED_CODE,
       GIT_NO_ANSWER_CODE,
       GIT_NOT_FOUND_CODE,
+      GIT_SNAPSHOT_INDEX_HIDES_CODE,
       GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE,
       GIT_SNAPSHOT_REFUSED_CODE,
       GIT_SNAPSHOT_UNREADABLE_CODE,
@@ -107,6 +109,10 @@ describe('refusalCodeOf', () => {
 
   it('reads a statement the projection store refused as the operator\'s USAGE_INVALID', () => {
     expect(refusalCodeOf(new VatError(PROJECTION_STATEMENT_REFUSED_CODE, 'no such column: nope'))).toBe('USAGE_INVALID');
+  });
+
+  it('reads a projection store whose blob tier could not be read back as BACKEND_UNAVAILABLE', () => {
+    expect(refusalCodeOf(new VatError(PROJECTION_STORE_READ_FAILED_CODE, 'blob facts could not be read'))).toBe('BACKEND_UNAVAILABLE');
   });
 
   it('reads a resources.linkAuth provider that does not compile as CONFIG_INVALID', () => {

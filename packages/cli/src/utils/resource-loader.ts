@@ -11,7 +11,9 @@ import {
   withRunPopulation,
   type CrawlOptions,
   type CrawlPopulation,
+  type FactStore,
   type ParseDispatcher,
+  type PopulationCache,
   type ProjectConfig,
   type RunPopulation,
 } from '@vibe-agent-toolkit/resources';
@@ -68,16 +70,63 @@ function markRunRefusal(error: unknown): unknown {
 
 /**
  * Whether `error` refuses the whole run rather than the phase it surfaced in: the
- * run's projection store would not open (a read-only `VAT_CACHE_DIR`, say). The
- * store opens on the run's first enumeration and every later enumeration is
- * answered by that same refusal, so it is the run's, said once (`orchestrate`),
- * never once per phase that enumerates. A phase runner rethrows it.
+ * run's projection store would not open (a read-only `VAT_CACHE_DIR`, say), or
+ * opened and then could not read its blob tier back. The store opens on the
+ * run's first enumeration and every later enumeration is answered by that same
+ * refusal; the blob tier is read once per run and every later admission is
+ * answered by that same rejection. So it is the run's, said once (`orchestrate`),
+ * never once per phase that meets it. A phase runner rethrows it.
+ *
+ * An error that carries the run's refusal as its `cause` is the run's refusal
+ * too: the population codes a blob tier failure in its own error
+ * (`PROJECTION_STORE_READ_FAILED`) around the store's.
+ *
+ * The walk stops at the first error it has already seen, so a `cause` chain that
+ * loops back on itself (`e.cause = e`) ends rather than spinning the run.
  *
  * @param error - A phase's error
  * @returns Whether it is the run's refusal
  */
 export function isRunRefusal(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && runRefusals.has(error);
+  const seen = new Set<object>();
+  for (let current = error; typeof current === 'object' && current !== null && !seen.has(current); current = (current as { cause?: unknown }).cause) {
+    if (runRefusals.has(current)) return true;
+    seen.add(current);
+  }
+  return false;
+}
+
+/**
+ * The run's store, with a failed blob tier read marked as the run's refusal
+ * ({@link isRunRefusal}). Every other call is the store's own.
+ *
+ * @param store - The run's store
+ * @returns The same store, marking
+ */
+function markingBlobReads(store: FactStore): FactStore {
+  return {
+    writeBlobFacts: (rows) => store.writeBlobFacts(rows),
+    readBlobFacts: (contentKeys) => store.readBlobFacts(contentKeys).catch((error: unknown) => {
+      throw markRunRefusal(error);
+    }),
+    writeExtent: (key, rows) => store.writeExtent(key, rows),
+    readExtent: (key) => store.readExtent(key),
+    close: () => store.close(),
+  };
+}
+
+/**
+ * The run's population cache, as {@link withRunContext} hands it to the run: a
+ * store that will not open, or whose blob tier cannot be read, is the run's refusal.
+ *
+ * @param cacheOf - Opens the run's population cache
+ * @returns The cache, or `undefined` when the run has no store
+ */
+async function runCacheOf(cacheOf: () => Promise<PopulationCache | undefined>): Promise<PopulationCache | undefined> {
+  const cache = await cacheOf().catch((error: unknown) => {
+    throw markRunRefusal(error);
+  });
+  return cache === undefined ? undefined : { ...cache, store: markingBlobReads(cache.store) };
 }
 
 /**
@@ -89,8 +138,9 @@ export function isRunRefusal(error: unknown): boolean {
  * store, takes the snapshot that keys it and initializes the root's ignore
  * oracle; so a phase that refuses at its own guards, or finds nothing to check,
  * refuses or reports exactly as it would alone. A git refusal is the refusal of
- * the phase that enumerated; a store that will not open is the run's refusal
- * ({@link isRunRefusal}), said once, and no later phase runs.
+ * the phase that enumerated; a store that will not open, or whose blob tier
+ * cannot be read, is the run's refusal ({@link isRunRefusal}), said once, and no
+ * later phase runs.
  * What can still fail here is the parse dispatcher's shutdown when the run ends.
  *
  * @param options - The run's home root, and an ignore oracle to reuse
@@ -108,9 +158,7 @@ export function withRunContext<T>(
       {
         root,
         gitTracker,
-        cacheOf: () => cacheOf().catch((error: unknown) => {
-          throw markRunRefusal(error);
-        }),
+        cacheOf: () => runCacheOf(cacheOf),
         collectionsFor: (enumerated) => Promise.resolve(collectionsOption(enumerated).collections),
       },
       (population) => work({
@@ -384,7 +432,8 @@ export async function loadResourcesWithConfig(
 
   // With a store, the crawl below opens it, and opening it takes the snapshot that
   // keys it. Taking that snapshot HERE is the same one moved a few lines earlier
-  // (the open store bracket memoizes it, so the store's own call is a lookup), and
+  // (the open store bracket memoizes it, so the store's key reuses it and adds only
+  // its one flag listing, `git ls-files -v`), and
   // it puts the answer in hand before the tracker asks its question (the run
   // initializes the home tracker on the first enumeration of the root). With no
   // store, nothing takes a snapshot: the population is a listing, which reads no

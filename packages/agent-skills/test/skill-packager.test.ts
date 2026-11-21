@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 
+import { computeContentKey, ResourceRegistry, type ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { allowUnusedIssues, createAllowUsageLedger, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { FS_FAULT_CODE, toForwardSlash, safePath, TREE_DEST_HOLDS_SOURCE_CODE, TREE_DEST_NOT_OWNED_CODE } from '@vibe-agent-toolkit/utils';
 import { buildHostileTree, CANNOT_DENY_READS, diffSnapshots, HOSTILE_NAMES, installFaultFs, snapshotTree, underTemp } from '@vibe-agent-toolkit/utils/testing';
@@ -8,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import { getResourceSubdirForFile } from '../src/content-type-routing.js';
 import { isSkillPackagingInputError, SkillPackageChecksFailedError } from '../src/packaging-errors.js';
-import { extractH1Title, findCommonAncestor, generateTargetPath, packageSkills, type SkillPackageOutcome, synthesizeAssetId, type SkillBuildSpec } from '../src/skill-packager.js';
+import { buildSyntheticAssetResource, extractH1Title, findCommonAncestor, generateTargetPath, packageSkills, type SkillPackageOutcome, synthesizeAssetId, type SkillBuildSpec } from '../src/skill-packager.js';
 import { withSkillRegistries } from '../src/validators/run-skill-registries.js';
 
 import { createFrontmatter, packageInPlace, setupTempDir, type TestPackageSkillOptions } from './test-helpers.js';
@@ -1767,6 +1768,25 @@ describe('synthesizeAssetId', () => {
     // synthesizeAssetId resolves via safePath.resolve, which prepends the current
     // drive letter on Windows (asset::D:/a/b/c.yaml). Anchor on the same resolve.
     expect(id).toBe(`asset::${toForwardSlash(safePath.resolve('/a/b/c.yaml'))}`);
+  });
+});
+
+describe('buildSyntheticAssetResource', () => {
+  it('is never a duplicate of a real empty file nothing parses (.gitkeep)', () => {
+    // The synthetic asset was not read, so its key must be one no bytes can produce:
+    // a placeholder equal to the zero-byte key would group it with every real empty file.
+    const root = safePath.resolve('/pkg');
+    const synthetic = buildSyntheticAssetResource(safePath.resolve('/src/data.yaml'), safePath.join(root, 'data.yaml'));
+    const gitkeep: ResourceMetadata = {
+      ...synthetic,
+      id: 'gitkeep',
+      filePath: safePath.join(root, '.gitkeep'),
+      contentKey: computeContentKey(new Uint8Array(), 'none'),
+    };
+
+    // Still a well-formed content key: the output registry's schema holds every key to that shape.
+    expect(synthetic.contentKey).toMatch(/^none\.[0-9a-f]{64}$/);
+    expect(ResourceRegistry.fromResources(root, [synthetic, gitkeep]).getDuplicates()).toEqual([]);
   });
 });
 

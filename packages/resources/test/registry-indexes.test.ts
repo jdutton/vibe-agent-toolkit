@@ -132,19 +132,18 @@ describe('ResourceRegistry indexes', () => {
     });
   });
 
-  describe('getResourcesByChecksum', () => {
-    it('should return empty array for non-existent checksum', () => {
-      const fakeChecksum = 'a'.repeat(64);
-      const resources = registry.getResourcesByChecksum(fakeChecksum as any);
+  describe('getResourcesByContentKey', () => {
+    it('should return empty array for non-existent content key', () => {
+      const resources = registry.getResourcesByContentKey(`markdown.${'a'.repeat(64)}`);
       expect(resources).toEqual([]);
     });
 
-    it('should return resource by checksum', async () => {
+    it('should return resource by content key', async () => {
       const file = safePath.join(tempDir, 'test.md');
       await fs.writeFile(file, '# Test Content', 'utf-8');
       const metadata = await registry.addResource(file);
 
-      const resources = registry.getResourcesByChecksum(metadata.checksum);
+      const resources = registry.getResourcesByContentKey(metadata.contentKey);
       expect(resources).toHaveLength(1);
       expect(resources[0]?.filePath).toBe(file);
     });
@@ -159,10 +158,25 @@ describe('ResourceRegistry indexes', () => {
       const meta1 = await registry.addResource(file1);
       await registry.addResource(file2);
 
-      const resources = registry.getResourcesByChecksum(meta1.checksum);
+      const resources = registry.getResourcesByContentKey(meta1.contentKey);
       expect(resources).toHaveLength(2);
       expect(resources.map(r => r.filePath)).toContain(file1);
       expect(resources.map(r => r.filePath)).toContain(file2);
+    });
+
+    it('keeps identical bytes routed to different parsers apart: the key includes the parse route', async () => {
+      const identicalContent = '<h1>Same bytes</h1>\n';
+      const markdownFile = safePath.join(tempDir, 'same.md');
+      const htmlFile = safePath.join(tempDir, 'same.html');
+      await fs.writeFile(markdownFile, identicalContent, 'utf-8');
+      await fs.writeFile(htmlFile, identicalContent, 'utf-8');
+
+      const markdown = await registry.addResource(markdownFile);
+      const html = await registry.addResource(htmlFile);
+
+      expect(markdown.contentKey).not.toBe(html.contentKey);
+      expect(registry.getResourcesByContentKey(markdown.contentKey).map(r => r.filePath)).toEqual([markdownFile]);
+      expect(registry.getDuplicates()).toEqual([]);
     });
   });
 });

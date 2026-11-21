@@ -154,7 +154,7 @@ describe('vat resources scan (system test)', () => {
   // --verbose". There is no parent `--verbose`: `resources` declares none, and
   // `scan` declares its own. The skip outlived whatever provoked it and took
   // the ONLY coverage of the `files:` list — and of its paths — with it.
-  it('should include checksums in file output with --verbose flag', async () => {
+  it('should include content keys in file output with --verbose flag', async () => {
     writeTestFile(safePath.join(tempDir, 'test.md'), '# Test');
 
     const { result, parsed } = await executeCliAndParseYaml(binPath, [
@@ -167,8 +167,8 @@ describe('vat resources scan (system test)', () => {
     expect(result.status).toBe(0);
     const files = RESOURCES_SCAN_REPORT_SCHEMA.parse(parsed).data.files ?? [];
     expect(files.length).toBeGreaterThan(0);
-    expect(files[0]).toHaveProperty('checksum');
-    expect(files[0]?.checksum).toMatch(/^[a-f0-9]{64}$/); // SHA-256 format
+    expect(files[0]).toHaveProperty('contentKey');
+    expect(files[0]?.contentKey).toMatch(/^markdown\.[a-f0-9]{64}$/); // <parserKind>.<SHA-256>
   });
 
   it('states one root and reports every --verbose path relative to it', async () => {

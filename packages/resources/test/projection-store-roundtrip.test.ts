@@ -52,9 +52,10 @@ import { CONTENT_PARSING_SKIP, describeStoreMiss, populate, type PopulationOutco
 import type { Projection } from '../src/projection/projection.js';
 import type { ContentDemand } from '../src/projection/realizations.js';
 import type { BlobScopedRows, ExtentKey, ExtentScopedRows, FactStore } from '../src/projection/store.js';
+import { PROJECTION_STORE_READ_FAILED_CODE } from '../src/projection/stored-admission.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
-import { FakeFactStore } from './fake-fact-store.js';
+import { FailingBlobStore, FakeFactStore } from './fake-fact-store.js';
 import { inOwnRun } from './helpers/population-run.js';
 import { setupSubdirTestSuite, useCorpusSuite } from './test-helpers.js';
 
@@ -814,6 +815,17 @@ describe('populate through a projection store', () => {
       // outside; only the error is.
       await expect(run({ registry: filesystemAndClosure(), store: new BrokenFactStore() }))
         .rejects.toThrow(STORE_FAILURE);
+    });
+
+    it('refuses a hit whose blob tier cannot be read as the store\'s read failure, whatever errno it carries', async () => {
+      // The same code the stored admission refuses with, so every verb that reads the
+      // tier back publishes one refusal for one failure, never the errno as a file's.
+      const store = new FailingBlobStore();
+      await run({ registry: filesystemAndClosure(), store });
+      store.failBlobs = true;
+
+      await expect(run({ registry: filesystemAndClosure(), store }))
+        .rejects.toMatchObject({ code: PROJECTION_STORE_READ_FAILED_CODE, cause: store.failure });
     });
   });
 

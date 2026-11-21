@@ -104,7 +104,7 @@ describe('Resource Collection System - End to End', () => {
     expect(duplicates[0]?.every((r) => r.filePath.endsWith('README.md'))).toBe(true);
   });
 
-  it('should get unique resources by checksum', async () => {
+  it('should get unique resources by content key', async () => {
     await crawlInRun(registry, {
       ignoredRefusals: 'record',
       unreadable: 'refuse',
@@ -113,7 +113,7 @@ describe('Resource Collection System - End to End', () => {
       include: ['**/*.md'],
     });
 
-    const unique = registry.getUniqueByChecksum();
+    const unique = registry.getUniqueByContentKey();
 
     expect(unique).toHaveLength(5); // 6 total - 1 duplicate = 5 unique
   });
@@ -154,7 +154,7 @@ describe('Resource Collection System - End to End', () => {
     expect(readmeFiles.every((r) => r.filePath.endsWith('README.md'))).toBe(true);
   });
 
-  it('should support checksum-based lookups', async () => {
+  it('should support content-key lookups', async () => {
     await crawlInRun(registry, {
       ignoredRefusals: 'record',
       unreadable: 'refuse',
@@ -163,7 +163,7 @@ describe('Resource Collection System - End to End', () => {
       include: ['**/*.md'],
     });
 
-    // Get first README's checksum
+    // Get first README's content key
     const readme = registry.getResourcesByName('README.md')[0];
     expect(readme).toBeDefined();
 
@@ -171,7 +171,7 @@ describe('Resource Collection System - End to End', () => {
       throw new Error('README not found');
     }
 
-    const sameContent = registry.getResourcesByChecksum(readme.checksum);
+    const sameContent = registry.getResourcesByContentKey(readme.contentKey);
     expect(sameContent).toHaveLength(2);
   });
 
@@ -223,9 +223,9 @@ describe('Resource Collection System - End to End', () => {
       .filter((r) => r.sizeBytes > 15)
       .execute();
 
-    // 2. Create collection and get unique by checksum
+    // 2. Create collection and get unique by content key
     const collection = new ResourceCollection(allResources);
-    const unique = collection.getUniqueByChecksum();
+    const unique = collection.getUniqueByContentKey();
 
     // 3. Verify results - 6 total, 1 duplicate = 5 unique
     expect(unique).toHaveLength(5);

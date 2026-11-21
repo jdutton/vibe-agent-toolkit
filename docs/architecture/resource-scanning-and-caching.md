@@ -683,8 +683,12 @@ whichever phase asks. The verb opens the run (`withRunContext()` in
 and every phase runner requires it; there is no ambient context. `RunPopulation`
 (`packages/resources/src/projection/run-population.ts`) holds one content cache, one
 `ParseDispatcher` memoized by content key (each key parsed once per run), the per-file admission
-facts (parse result, size, mtime, checksum) shared across views, and each root's enumeration, done
-once. `ResourceRegistry.forRun(population)` is the run's registry; each phase crawls a
+facts (blob facts or a not-admitted entry, by content key) shared across views, and each root's enumeration, done
+once. On a warm store hit a member is admitted from what the store holds (hydration):
+`packages/resources/src/projection/stored-admission.ts` decides per file between the stored blob
+facts, read through the one fact reader, and the cold read, key and parse, never a third answer, so
+the resources view reads, hashes and parses nothing for a covered member and a warm run's findings
+are the cold run's. `ResourceRegistry.forRun(population)` is the run's registry; each phase crawls a
 `registry.view(...)` with its own base directory, config and include set, and the view computes its
 own ids, duplicates, links, population conditions and parse refusals with the same code. Views
 never share link objects. Skills get their views from `RunSkillRegistries`

@@ -27,11 +27,11 @@ function getFileName(filePath: string): string {
 }
 
 /**
- * Detect cache staleness by comparing checksums between installed and cached resources.
+ * Detect cache staleness by comparing content keys between installed and cached resources.
  *
- * Compares resources by filename and checksum to determine:
- * - Fresh: Cache and installed have matching checksums
- * - Stale: Cache and installed have different checksums
+ * Compares resources by filename and content key to determine:
+ * - Fresh: Cache and installed have matching content keys
+ * - Stale: Cache and installed have different content keys
  * - Cache-only: File exists in cache but not in installed
  * - Installed-only: File exists in installed but not in cache
  *
@@ -72,14 +72,14 @@ export function detectCacheStaleness(
 
     matchedInstalledNames.add(cachedFilename);
 
-    if (cachedResource.checksum === installedResource.checksum) {
-      // Checksums match - cache is fresh
+    if (cachedResource.contentKey === installedResource.contentKey) {
+      // Content keys match - cache is fresh
       fresh.push({
         installed: installedResource,
         cached: cachedResource,
       });
     } else {
-      // Checksums differ - cache is stale
+      // Content keys differ - cache is stale
       stale.push({
         installed: installedResource,
         cached: cachedResource,

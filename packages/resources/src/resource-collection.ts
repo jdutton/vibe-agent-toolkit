@@ -3,8 +3,8 @@
  *
  * ResourceCollection wraps an array of resources and provides efficient
  * duplicate detection and filtering operations. Duplicate detection is
- * performed lazily - the collection builds checksum indexes only when
- * getDuplicates() or getUniqueByChecksum() is first called.
+ * performed lazily - the collection builds its content-key index only when
+ * getDuplicates() or getUniqueByContentKey() is first called.
  *
  * @example
  * ```typescript
@@ -12,12 +12,11 @@
  *
  * console.log(collection.size());
  * const duplicates = collection.getDuplicates();
- * const unique = collection.getUniqueByChecksum();
+ * const unique = collection.getUniqueByContentKey();
  * ```
  */
 
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
-import type { SHA256 } from './schemas/checksum.js';
 import type { ResourceMetadata } from './schemas/resource-metadata.js';
 
 /**
@@ -25,11 +24,11 @@ import type { ResourceMetadata } from './schemas/resource-metadata.js';
  *
  * This class implements the ResourceCollectionInterface and provides
  * efficient operations for working with collections of resources.
- * Duplicate detection is lazy - checksum indexes are only built when needed.
+ * Duplicate detection is lazy - the content-key index is only built when needed.
  */
 export class ResourceCollection implements ResourceCollectionInterface {
   private readonly resources: ResourceMetadata[];
-  private checksumIndex: Map<SHA256, ResourceMetadata[]> | null = null;
+  private contentKeyIndex: Map<string, ResourceMetadata[]> | null = null;
 
   /**
    * Create a new ResourceCollection from an array of resources.
@@ -73,21 +72,22 @@ export class ResourceCollection implements ResourceCollectionInterface {
   }
 
   /**
-   * Get groups of duplicate resources based on checksum.
+   * Get groups of duplicate resources based on content key.
    *
-   * Lazily builds a checksum index on first call. Returns an array where
-   * each element is an array of resources that have the same checksum
-   * (i.e., identical content). Only groups with 2+ resources are included.
+   * Lazily builds a content-key index on first call. Returns an array where
+   * each element is an array of resources that have the same content key
+   * (identical bytes, same parse route). Only groups with 2+ resources are
+   * included. Identical bytes routed to different parsers are not duplicates.
    *
    * @returns Array of duplicate groups
    */
   getDuplicates(): ResourceMetadata[][] {
-    this.ensureChecksumIndex();
-    if (!this.checksumIndex) {
+    this.ensureContentKeyIndex();
+    if (!this.contentKeyIndex) {
       return [];
     }
     const duplicateGroups: ResourceMetadata[][] = [];
-    for (const group of this.checksumIndex.values()) {
+    for (const group of this.contentKeyIndex.values()) {
       if (group.length >= 2) {
         duplicateGroups.push(group);
       }
@@ -96,21 +96,21 @@ export class ResourceCollection implements ResourceCollectionInterface {
   }
 
   /**
-   * Get one representative resource for each unique checksum.
+   * Get one representative resource for each unique content key.
    *
-   * Lazily builds a checksum index on first call. When multiple resources
-   * have the same checksum, only the first one encountered is included
+   * Lazily builds a content-key index on first call. When multiple resources
+   * have the same content key, only the first one encountered is included
    * in the result.
    *
-   * @returns Array of unique resources (one per checksum)
+   * @returns Array of unique resources (one per content key)
    */
-  getUniqueByChecksum(): ResourceMetadata[] {
-    this.ensureChecksumIndex();
-    if (!this.checksumIndex) {
+  getUniqueByContentKey(): ResourceMetadata[] {
+    this.ensureContentKeyIndex();
+    if (!this.contentKeyIndex) {
       return [];
     }
     const unique: ResourceMetadata[] = [];
-    for (const group of this.checksumIndex.values()) {
+    for (const group of this.contentKeyIndex.values()) {
       if (group[0]) {
         unique.push(group[0]);
       }
@@ -119,23 +119,23 @@ export class ResourceCollection implements ResourceCollectionInterface {
   }
 
   /**
-   * Ensure the checksum index is built.
+   * Ensure the content-key index is built.
    *
    * Builds the index on first call, subsequent calls do nothing.
    * This provides lazy evaluation for duplicate detection.
    */
-  private ensureChecksumIndex(): void {
-    if (this.checksumIndex !== null) {
+  private ensureContentKeyIndex(): void {
+    if (this.contentKeyIndex !== null) {
       return;
     }
 
-    this.checksumIndex = new Map();
+    this.contentKeyIndex = new Map();
     for (const resource of this.resources) {
-      const group = this.checksumIndex.get(resource.checksum);
+      const group = this.contentKeyIndex.get(resource.contentKey);
       if (group) {
         group.push(resource);
       } else {
-        this.checksumIndex.set(resource.checksum, [resource]);
+        this.contentKeyIndex.set(resource.contentKey, [resource]);
       }
     }
   }

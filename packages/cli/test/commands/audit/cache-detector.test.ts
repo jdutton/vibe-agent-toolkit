@@ -4,16 +4,16 @@ import { describe, expect, it } from 'vitest';
 import { detectCacheStaleness } from '../../../src/commands/audit/cache-detector.js';
 
 // Constants for test data
-const COMMON_CHECKSUM = 'abc123';
+const COMMON_KEY = `markdown.${'a'.repeat(64)}`;
 const COMMON_DATE = new Date('2024-01-01');
 
 describe('detectCacheStaleness', () => {
-  it('should detect when cache is fresh (checksums match)', () => {
+  it('should detect when cache is fresh (content keys match)', () => {
     const installed: ResourceMetadata[] = [
       {
         id: 'skill-1',
         filePath: '/plugins/marketplace1/plugin1/skills/skill1/SKILL.md',
-        checksum: COMMON_CHECKSUM,
+        contentKey: COMMON_KEY,
         links: [],
         headings: [],
         sizeBytes: 1000,
@@ -26,7 +26,7 @@ describe('detectCacheStaleness', () => {
       {
         id: 'skill-1-cached',
         filePath: '/cache/marketplace1/plugin1/skills/skill1/SKILL.md',
-        checksum: COMMON_CHECKSUM, // Same checksum
+        contentKey: COMMON_KEY, // Same key
         links: [],
         headings: [],
         sizeBytes: 1000,
@@ -50,12 +50,12 @@ describe('detectCacheStaleness', () => {
     });
   });
 
-  it('should detect when cache is stale (checksums differ)', () => {
+  it('should detect when cache is stale (content keys differ)', () => {
     const installed: ResourceMetadata[] = [
       {
         id: 'skill-1',
         filePath: '/plugins/marketplace1/plugin1/skills/skill1/SKILL.md',
-        checksum: COMMON_CHECKSUM,
+        contentKey: COMMON_KEY,
         links: [],
         headings: [],
         sizeBytes: 1000,
@@ -68,7 +68,7 @@ describe('detectCacheStaleness', () => {
       {
         id: 'skill-1-cached',
         filePath: '/cache/marketplace1/plugin1/skills/skill1/SKILL.md',
-        checksum: 'old456', // Different checksum
+        contentKey: `markdown.${'b'.repeat(64)}`, // Different key
         links: [],
         headings: [],
         sizeBytes: 900,
@@ -99,7 +99,7 @@ describe('detectCacheStaleness', () => {
       {
         id: 'skill-orphan',
         filePath: '/cache/old-plugin/SKILL.md',
-        checksum: 'xyz789',
+        contentKey: `markdown.${'c'.repeat(64)}`,
         links: [],
         headings: [],
         sizeBytes: 500,
@@ -123,7 +123,7 @@ describe('detectCacheStaleness', () => {
       {
         id: 'skill-new',
         filePath: '/plugins/new-plugin/SKILL.md',
-        checksum: 'new999',
+        contentKey: `markdown.${'d'.repeat(64)}`,
         links: [],
         headings: [],
         sizeBytes: 2000,

@@ -58,7 +58,7 @@ artifact is uncacheable; exempt: the plugin conformance record's runtime tuple
 *Enforcer:* an observed-inputs instrument shows every input is in the key or the
 stored trace; moving each input class alone must miss.
 
-- **I2a. Content is the bytes used.** The content key hashes the working-tree bytes alone: no parser kind, path, origin, commit, git OID or cleaned blob. Every byte a producer or stratum consumes is re-hashed at use; a mismatch refuses the pair and writes nothing. The content key is never `checksum`. A stat-tuple match is trusted only under git's racy rule. *Fails:* rows filed under bytes other than those read. *Enforcer:* a planning-to-use race test; a stat-seam re-hash test. *Amended 2026-11-19; see [Amendment 2026-11-19](#amendment-2026-11-19-content-identity-per-source).*
+- **I2a. Content is the bytes used.** The content key hashes the working-tree bytes alone: no parser kind, path, origin, commit, git OID or cleaned blob. Every byte a producer or stratum consumes is re-hashed at use; a mismatch refuses the pair and writes nothing. A stat-tuple match is trusted only under git's racy rule. *Fails:* rows filed under bytes other than those read. *Enforcer:* a planning-to-use race test; a stat-seam re-hash test. *Amended 2026-11-19; see [Amendment 2026-11-19](#amendment-2026-11-19-content-identity-per-source).*
 - **I2b. Code identity is the code that runs:** the closure loaded from a phase's entry modules, lazy imports included, hashed from compiled source, plus the runtime tuple; never the host's whole closure, a lockfile or a version. A warm hit validates it without importing. *Fails:* rows keyed under code that did not make them, or a rebuild missing everything. *Enforcer:* code edits, both ways: code that runs misses, code that does not run never does.
 
 **I3. One answer to "is this pair present".** One per-pair answer for every consumer: statements,
@@ -184,8 +184,11 @@ Built: the one-read rule, as one admission per VAT process run (`RunContext`, `R
 registry views per phase; see [content keying](./content-keying-and-git.md)), for `vat validate`,
 `vat verify`, `vat resources validate`, `vat skills validate` and `vat resources scan`; `vat rag index`
 admits through one run but its index step re-reads each file, and `vat audit`, `vat skills build`,
-`vat claude plugin build` and `vat ard emit` are not covered yet, and a warm store hit still reads
-and hashes each admitted file until store hydration serves those facts. Not built: the git-OID path
+`vat claude plugin build` and `vat ard emit` are not covered yet. Store hydration is built for the
+resources view: on a warm store hit each member is admitted from its stored blob facts
+(`stored-admission.ts`) with no read, hash or parse; the resources phase still reads and parses each
+discovered `SKILL.md`, as the skills phase reads what it validates, until the skills-phase facts are
+built. Not built: the git-OID path
 (planned with incremental repopulation) and I2's runtime tuple in the parse-cache and blob keys (the
 namespace carries the VAT version only).
 

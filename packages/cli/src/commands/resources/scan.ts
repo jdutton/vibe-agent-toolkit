@@ -37,7 +37,7 @@ interface ScanResource {
   filePath: string;
   links: readonly unknown[];
   headings: HeadingWithChildren[];
-  checksum: string;
+  contentKey: string;
 }
 
 export interface ScanPayloadInput {
@@ -108,7 +108,7 @@ export function buildScanReport(input: ScanPayloadInput): ResourcesScanReport {
         path: resource.filePath,
         links: resource.links.length,
         anchors: countHeadings(resource.headings),
-        checksum: resource.checksum,
+        contentKey: resource.contentKey,
       })),
       root,
     );

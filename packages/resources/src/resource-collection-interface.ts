@@ -41,11 +41,12 @@ export interface ResourceCollectionInterface {
   getAllResources(): ResourceMetadata[];
 
   /**
-   * Get groups of duplicate resources based on checksum.
+   * Get groups of duplicate resources based on content key.
    *
    * Returns an array where each element is an array of resources
-   * that have the same checksum (i.e., identical content).
-   * Only groups with 2+ resources are included.
+   * that have the same content key (identical bytes, same parse route).
+   * Only groups with 2+ resources are included. Identical bytes routed to
+   * different parsers are not duplicates: the key includes the parse route.
    *
    * @returns Array of duplicate groups
    *
@@ -58,18 +59,18 @@ export interface ResourceCollectionInterface {
   getDuplicates(): ResourceMetadata[][];
 
   /**
-   * Get one representative resource for each unique checksum.
+   * Get one representative resource for each unique content key.
    *
-   * When multiple resources have the same checksum, only the first
+   * When multiple resources have the same content key, only the first
    * one encountered is included in the result.
    *
-   * @returns Array of unique resources (one per checksum)
+   * @returns Array of unique resources (one per content key)
    *
    * @example
    * ```typescript
-   * const unique = collection.getUniqueByChecksum();
-   * // All resources have different checksums
+   * const unique = collection.getUniqueByContentKey();
+   * // All resources have different content keys
    * ```
    */
-  getUniqueByChecksum(): ResourceMetadata[];
+  getUniqueByContentKey(): ResourceMetadata[];
 }

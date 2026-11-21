@@ -42,8 +42,8 @@ const CAPTURED_AT = '2026-08-17T00:00:00.000Z';
 const SPEC = { name: 'population', args: ['scan'] } as const;
 
 /** Content identities. Distinct, so a swap between two files is visible. */
-const SUM_A = 'aaa';
-const SUM_B = 'bbb';
+const SUM_A = `markdown.${'a'.repeat(64)}`;
+const SUM_B = `markdown.${'b'.repeat(64)}`;
 
 /** Temp-directory prefix, so a stray probe directory names this suite. */
 const PROBE_PREFIX = 'lab-population-';
@@ -60,7 +60,7 @@ afterAll(async () => {
 /** A scan document over the given files, rooted where the caller says. */
 function document(
   root: string,
-  files: readonly { path: string; checksum: string }[],
+  files: readonly { path: string; contentKey: string }[],
   extentSource: string | null = 'filesystem',
 ): string {
   return JSON.stringify({
@@ -117,8 +117,8 @@ describe('capturePopulation', () => {
   it('reports the enumerated set, sorted, with the arm the run declared', async () => {
     const probe = setupProbe(PROBE_PREFIX);
     const output = document(probe.cwd, [
-      { path: 'b.md', checksum: SUM_B },
-      { path: 'a.md', checksum: SUM_A },
+      { path: 'b.md', contentKey: SUM_B },
+      { path: 'a.md', contentKey: SUM_A },
     ]);
 
     const row = await captureRow(probe, [output]);
@@ -132,10 +132,10 @@ describe('capturePopulation', () => {
 
   it('marks repeats that enumerated different sets as UNSTABLE', async () => {
     const probe = setupProbe(PROBE_PREFIX);
-    const first = document(probe.cwd, [{ path: 'a.md', checksum: SUM_A }]);
+    const first = document(probe.cwd, [{ path: 'a.md', contentKey: SUM_A }]);
     const second = document(probe.cwd, [
-      { path: 'a.md', checksum: SUM_A },
-      { path: 'b.md', checksum: SUM_B },
+      { path: 'a.md', contentKey: SUM_A },
+      { path: 'b.md', contentKey: SUM_B },
     ]);
 
     const row = await captureRow(probe, [first, second]);
@@ -145,7 +145,7 @@ describe('capturePopulation', () => {
 
   it('reports stable when the repeats agreed, and null when only one ran', async () => {
     const probe = setupProbe(PROBE_PREFIX);
-    const output = document(probe.cwd, [{ path: 'a.md', checksum: SUM_A }]);
+    const output = document(probe.cwd, [{ path: 'a.md', contentKey: SUM_A }]);
 
     expect((await captureRow(probe, [output])).stable).toBe(true);
     // `null` is not `true`: a single repeat had nothing to disagree with.
@@ -189,7 +189,7 @@ describe('capturePopulation', () => {
 
   it('reports a null arm when the build did not say which enumerator ran', async () => {
     const probe = setupProbe(PROBE_PREFIX);
-    const output = document(probe.cwd, [{ path: 'a.md', checksum: SUM_A }], null);
+    const output = document(probe.cwd, [{ path: 'a.md', contentKey: SUM_A }], null);
 
     expect((await captureRow(probe, [output])).extentSource).toBeNull();
   });
@@ -207,8 +207,8 @@ describe('capturePopulation', () => {
 
     const probe = setupProbe(PROBE_PREFIX);
     const output = document(repo, [
-      { path: 'tracked.md', checksum: SUM_A },
-      { path: 'never-committed.md', checksum: SUM_B },
+      { path: 'tracked.md', contentKey: SUM_A },
+      { path: 'never-committed.md', contentKey: SUM_B },
     ]);
 
     const row = await captureRow(probe, [output]);
@@ -220,7 +220,7 @@ describe('capturePopulation', () => {
 
   it('reports no git reference — and no off-git findings — outside a repository', async () => {
     const probe = setupProbe(PROBE_PREFIX);
-    const output = document(probe.cwd, [{ path: 'a.md', checksum: SUM_A }]);
+    const output = document(probe.cwd, [{ path: 'a.md', contentKey: SUM_A }]);
 
     const row = await captureRow(probe, [output]);
 

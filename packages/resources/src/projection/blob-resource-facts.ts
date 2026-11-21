@@ -32,7 +32,11 @@
  *
  * A warm lane that rebuilds a resource from the store does so through
  * {@link blobFactsReader} and nothing else, so the round-trip test that holds
- * this reader against the cold registry holds every such lane against it.
+ * this reader against the cold registry holds every such lane against it. Warm
+ * `vat validate` is one: on a store hit its resources registry admits each
+ * member from these facts (`stored-admission.ts`), and a cold admission builds
+ * the same facts from its parse through {@link blobResourceFactsOf}, so both are
+ * turned into a `ResourceMetadata` by one code path.
  *
  * ## What the reader refuses
  *
@@ -49,6 +53,7 @@ import { isVatError } from '@vibe-agent-toolkit/utils';
 import { decodeFrontmatterValue, FRONTMATTER_VALUE_MALFORMED } from '../frontmatter-codec.js';
 import { toHeadingTree } from '../heading-tree.js';
 import { classifyLink } from '../link-classify.js';
+import type { ParseResult } from '../link-parser.js';
 import type { FlatHeading } from '../parse-capabilities.js';
 import type { BlobConditionRow, BlobReferenceRow, BlobRow, BlobSectionRow } from '../schemas/projection-blobs.js';
 import type { HtmlParseError, ResourceLink, ResourceMetadata, UnresolvedReference } from '../schemas/resource-metadata.js';
@@ -93,9 +98,8 @@ const RESOURCE_METADATA_FACT_SOURCES = {
   sizeBytes: PER_FILE_READ,
   estimatedTokenCount: BLOB_FACT,
   modifiedAt: PER_FILE_READ,
-  // A hash of the decoded content: its fate (the content key, or a stored fact) is decided where
-  // warm validate starts reading blob facts. Until then it is the read it always was.
-  checksum: PER_FILE_READ,
+  // The blob tier's own key: the rows are filed under it.
+  contentKey: BLOB_FACT,
   // The config's collection patterns, matched against the path.
   collections: LIVE,
 } as const satisfies { readonly [Field in keyof ResourceMetadata]-?: FactSource };
@@ -201,6 +205,50 @@ export type BlobFactsOutcome =
   /** The tier holds nothing usable for the key: a warm run derives it again. */
   | { readonly kind: 'uncovered'; readonly reason: string };
 
+/**
+ * The content-addressed half of a resource, from a cold parse: the ONE
+ * projection a cold admission builds its facts through, so a cold resource and
+ * one rebuilt from the store by {@link blobFactsReader} are built into a
+ * `ResourceMetadata` by the same code (`ResourceRegistry`'s `readAndKey`).
+ *
+ * Shares the parse's objects rather than copying them: a registry view copies
+ * what it mutates (its links and headings).
+ *
+ * @param parse - The parse of the bytes (or the not-text constant facts)
+ * @param contentKey - The key of the bytes parsed
+ * @returns The resource's blob facts
+ */
+export function blobResourceFactsOf(parse: ParseResult, contentKey: string): BlobResourceFacts {
+  return {
+    links: parse.links,
+    headings: parse.headings,
+    ...optionalParseFacts(parse),
+    estimatedTokenCount: parse.estimatedTokenCount,
+    contentKey,
+  };
+}
+
+/** The parse facts a resource carries only when its parse produced them. */
+type OptionalParseFacts = Pick<BlobResourceFacts, 'anchors' | 'parseErrors' | 'unresolvedReferences' | 'frontmatter' | 'frontmatterError'>;
+
+/**
+ * The optional parse facts, each present exactly when the source holds it, in
+ * the one order a resource carries them: what {@link blobResourceFactsOf} takes
+ * from a parse and what a registry takes from either builder's facts.
+ *
+ * @param source - A parse, or a resource's blob facts
+ * @returns The optional facts it holds
+ */
+export function optionalParseFacts(source: OptionalParseFacts): OptionalParseFacts {
+  return {
+    ...(source.anchors !== undefined && { anchors: source.anchors }),
+    ...(source.parseErrors !== undefined && { parseErrors: source.parseErrors }),
+    ...(source.unresolvedReferences !== undefined && { unresolvedReferences: source.unresolvedReferences }),
+    ...(source.frontmatter !== undefined && { frontmatter: source.frontmatter }),
+    ...(source.frontmatterError !== undefined && { frontmatterError: source.frontmatterError }),
+  };
+}
+
 /** One key's rows, gathered in one pass over the bundle. */
 interface KeyRows {
   blob: BlobRow | undefined;
@@ -257,7 +305,7 @@ function outcomeOf(contentKey: string, rows: KeyRows | undefined): BlobFactsOutc
   }
   // Not text: one rule for both lanes (`document-facts.ts`), so the facts are the constant.
   if (rows.conditions.some((row) => row.code === BLOB_NOT_TEXT)) {
-    return { kind: 'facts', facts: { ...NOT_TEXT_RESOURCE_FACTS, links: [], headings: [] } };
+    return { kind: 'facts', facts: { ...NOT_TEXT_RESOURCE_FACTS, links: [], headings: [], contentKey } };
   }
   const entry = notAdmittedEntriesByBlob(rows.conditions).get(contentKey);
   if (entry !== undefined) return { kind: 'not-admitted', entry };
@@ -384,6 +432,7 @@ function factsOf(blob: BlobRow, rows: KeyRows): Rebuilt<BlobResourceFacts> {
       ...(frontmatter.value !== undefined && { frontmatter: frontmatter.value }),
       ...(blob.frontmatterError !== null && { frontmatterError: blob.frontmatterError }),
       estimatedTokenCount: blob.tokenEstimate,
+      contentKey: blob.contentKey,
     },
   };
 }

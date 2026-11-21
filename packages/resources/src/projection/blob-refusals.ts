@@ -369,10 +369,13 @@ export function notAdmittedEntriesByBlob(conditions: readonly Projection['blobCo
  * the cap and no size; one nothing parses was too large to decode, the registry lane's
  * `TextTooLargeError`.
  *
- * @param row - The realization
+ * The one rule: the not-admitted log reads it, and so does a warm registry admitting an `oversize`
+ * member from the store (`stored-admission.ts`), so the two never word one refusal two ways.
+ *
+ * @param row - The realization's content state and type
  * @returns Its entry, or `undefined` when the state is not a refusal (`none`, `deferred`)
  */
-function unkeyedEntry(row: Projection['resourceRealizations'][number]): NotAdmittedEntry | undefined {
+export function unkeyedEntry(row: Pick<Projection['resourceRealizations'][number], 'contentState' | 'mime'>): NotAdmittedEntry | undefined {
   if (row.contentState === 'unreadable') {
     return { log: 'unreadable', entry: { reason: 'its bytes could not be read when the realization was keyed' } };
   }

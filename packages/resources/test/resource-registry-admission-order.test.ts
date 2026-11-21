@@ -128,6 +128,7 @@ describe('ResourceRegistry admission order', () => {
         conditions: [],
         outcome: { population: 'derived', stored: 'no-store' },
         extentSource: 'filesystem',
+        stored: null,
       }),
     };
     const populated = new ResourceRegistry({ baseDir: root });

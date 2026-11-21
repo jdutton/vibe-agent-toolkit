@@ -69,7 +69,7 @@ const SCAN_RESOURCE = {
   filePath: README,
   links: [{}, {}],
   headings: [{ children: [{}] }, {}],
-  checksum: 'a'.repeat(64),
+  contentKey: `markdown.${'a'.repeat(64)}`,
 };
 
 /** The scan report's `data` for one README, with and without `--verbose` — parsed with the published schema. */
@@ -93,7 +93,7 @@ describe('resources scan payload', () => {
 
     expect(data.root).toBe(ROOT);
     expect(data.files).toEqual([
-      { path: README_REL, links: 2, anchors: 3, checksum: 'a'.repeat(64) },
+      { path: README_REL, links: 2, anchors: 3, contentKey: `markdown.${'a'.repeat(64)}` },
     ]);
     expectNoAbsolutePaths(data.files);
   });
