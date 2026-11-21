@@ -340,7 +340,7 @@ async function readBundledMarkdown(
       ),
     };
   }
-  return { facts: scannedSkillText(file, text, run.dispatcher) };
+  return { facts: scannedSkillText(file, text, run) };
 }
 
 /**

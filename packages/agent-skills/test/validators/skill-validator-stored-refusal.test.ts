@@ -54,8 +54,8 @@ describe('validateSkill: a store-served SKILL.md that grew past the cap mid-run'
       decoding: { encoding: 'utf-8', encodingSource: 'assumed' },
     } as unknown as StoredDocumentFacts;
 
-    const warm = await validate(skillPath, { storedDocument: (path) => Promise.resolve(path === skillPath ? stored : undefined) });
-    const cold = await validate(skillPath, { storedDocument: () => Promise.resolve(undefined) });
+    const warm = await validate(skillPath, { storedDocument: (path) => Promise.resolve(path === skillPath ? stored : undefined), holdsStore: true });
+    const cold = await validate(skillPath, { storedDocument: () => Promise.resolve(undefined), holdsStore: false });
 
     expect(cold.issues).toHaveLength(1);
     expect(warm.issues).toEqual(cold.issues);

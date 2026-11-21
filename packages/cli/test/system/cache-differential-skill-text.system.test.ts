@@ -122,9 +122,19 @@ const EXPECTED_CODES: ReadonlySet<string> = new Set([
   'RESOURCE_PARSE_LIMIT_EXCEEDED',
 ]);
 
-/** The skills lane's scans in one run: `skillText.storeMiss` over every CLI process's dump. */
+/** The skills lane's scans in one run, by reason: `counter` over every CLI process's dump. */
+function scans(work: readonly WorkCounterDump[], counter: 'skillText.storeMiss' | 'skillText.noStore'): number {
+  return work.reduce((sum, dump) => sum + dump.counters[counter], 0);
+}
+
+/** The skills lane's store misses in one run. */
 function storeMisses(work: readonly WorkCounterDump[]): number {
-  return work.reduce((sum, dump) => sum + dump.counters['skillText.storeMiss'], 0);
+  return scans(work, 'skillText.storeMiss');
+}
+
+/** Each arm's scans, as store misses and as scans with no store, in that order. */
+function scansOf(work: readonly WorkCounterDump[]): readonly [number, number] {
+  return [storeMisses(work), scans(work, 'skillText.noStore')];
 }
 
 describe('vat validate answers every skill-text case alike whether or not the projection store is engaged', () => {
@@ -152,8 +162,9 @@ describe('vat validate answers every skill-text case alike whether or not the pr
     // The skills lane's files, as the golden test counts them: the context chain is in no skill directory.
     const skillFiles = skillLaneScannedFiles(run('cold').cell.corpus);
     expect(skillFiles, 'the declared fallback is a skill file').toEqual(expect.arrayContaining([...DECLARED_FALLBACK]));
-    expect({ storeOff: storeMisses(run('storeOff').work), cold: storeMisses(run('cold').work), warm: storeMisses(run('warmSameHistory').work) })
-      .toEqual({ storeOff: skillFiles.length, cold: skillFiles.length, warm: DECLARED_FALLBACK.length });
+    // With the store off there is no store to miss: every scan is a `noStore`; with it on, none is.
+    expect({ storeOff: scansOf(run('storeOff').work), cold: scansOf(run('cold').work), warm: scansOf(run('warmSameHistory').work) })
+      .toEqual({ storeOff: [0, skillFiles.length], cold: [skillFiles.length, 0], warm: [DECLARED_FALLBACK.length, 0] });
   });
 });
 

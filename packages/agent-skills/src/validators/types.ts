@@ -126,7 +126,7 @@ export interface ValidateOptions {
    * and every linked markdown file are served from its store when it holds them,
    * and every parse runs on its dispatcher. `undefined` when the caller holds
    * none: the validation holds a dispatcher of its own for the one skill, asks no
-   * store, and every file it scans is a counted `skillText.storeMiss`.
+   * store, and every file it scans is a counted `skillText.noStore`.
    */
   run: SkillTextRun | undefined;
 }

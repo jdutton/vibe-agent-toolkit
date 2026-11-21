@@ -291,6 +291,7 @@ beforeAll(async () => {
       gitTracker: new GitTracker(root),
       cacheOf: noStore,
       questionCacheOf: noStore,
+      holdsStore: false,
       collectionsFor: noStore,
     },
     async (population) => {

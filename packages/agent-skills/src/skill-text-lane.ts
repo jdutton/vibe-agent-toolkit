@@ -2,7 +2,9 @@
  * Where the skills lane gets a markdown document's skill-text record and the
  * facts it reads beside it: from the run's store when it serves the file
  * (`ResourcePopulationSource.storedDocument`), else from the file's text — and
- * then it counts that (`skillText.storeMiss`), once per file per run.
+ * then it counts that, once per file per run: a store miss
+ * (`skillText.storeMiss`) when the run has a store to ask, else
+ * `skillText.noStore` (`ResourcePopulationSource.holdsStore`).
  *
  * Every skills-lane detector is a constructor over the record (the skill-text
  * core's output, `skillTextFactsOf`), so a document's findings are one function
@@ -28,16 +30,16 @@ import { countWork, type FsSide, safePath, type TextProvenance, withFsFault } fr
 
 /**
  * The run a skills-lane read belongs to: the population source that answers
- * from the store, and the dispatcher a cold parse runs on. A `RunPopulation`,
- * and a `RunSkillRegistries`, are each one.
+ * from the store and says whether the run has one, and the dispatcher a cold
+ * parse runs on. A `RunPopulation`, and a `RunSkillRegistries`, are each one.
  */
 export interface SkillTextRun {
-  readonly source: Pick<ResourcePopulationSource, 'storedDocument'>;
+  readonly source: Pick<ResourcePopulationSource, 'storedDocument' | 'holdsStore'>;
   readonly dispatcher: ParseDispatcher;
 }
 
-/** A source with no store: every file is the lane's own to read. */
-const NO_STORE: SkillTextRun['source'] = { storedDocument: () => Promise.resolve(undefined) };
+/** A source with no store: every file is the lane's own to read, each scan a `skillText.noStore`. */
+const NO_STORE: SkillTextRun['source'] = { storedDocument: () => Promise.resolve(undefined), holdsStore: false };
 
 /**
  * Run `work` on `run`, or, for a caller with no run (`undefined`), on a run of
@@ -111,34 +113,36 @@ function scannedOf(dispatcher: ParseDispatcher): Map<string, ScannedFile | undef
 }
 
 /**
- * Count `file` as scanned from its text this run (`skillText.storeMiss`), the
- * first time any skills lane of the run does so.
+ * Count `file` as scanned from its text this run, the first time any skills
+ * lane of the run does so: a store miss (`skillText.storeMiss`) when the run
+ * has a store to ask, else `skillText.noStore`.
  *
  * @param file - The file, resolved
- * @param dispatcher - The run's dispatcher
+ * @param run - The run
  */
-function countStoreMiss(file: string, dispatcher: ParseDispatcher): void {
-  const scanned = scannedOf(dispatcher);
+function countScan(file: string, run: SkillTextRun): void {
+  const scanned = scannedOf(run.dispatcher);
   if (scanned.has(file)) return;
   scanned.set(file, undefined);
-  countWork('skillText.storeMiss', 1);
+  countWork(run.source.holdsStore ? 'skillText.storeMiss' : 'skillText.noStore', 1);
 }
 
 /**
  * The skill-text record of a file's text, for a lane that reads the text itself
- * and has no store to ask (the skill validator's lane): the core, counted as
- * a store miss once per file per run. The same text a lane of the run already
- * scanned is answered from that scan.
+ * (the skill validator's linked-file lane, the packaging lane on a file the
+ * store does not serve): the core, counted once per file per run
+ * ({@link countScan}). The same text a lane of the run already scanned is
+ * answered from that scan.
  *
  * @param file - The file, absolute
  * @param text - Its text, frontmatter and all
- * @param dispatcher - The run's dispatcher, which identifies the run
+ * @param run - The run: its dispatcher identifies it, its source says whether it has a store
  * @returns The record
  */
-export function scannedSkillText(file: string, text: string, dispatcher: ParseDispatcher): SkillTextFacts {
+export function scannedSkillText(file: string, text: string, run: SkillTextRun): SkillTextFacts {
   const resolved = safePath.resolve(file);
-  countStoreMiss(resolved, dispatcher);
-  const scanned = scannedOf(dispatcher);
+  countScan(resolved, run);
+  const scanned = scannedOf(run.dispatcher);
   const held = scanned.get(resolved);
   if (held?.text === text) return held.facts;
   const facts = skillTextFactsOf(text, SKILL_TEXT_DECLARATION);
@@ -165,18 +169,18 @@ function isPlainUtf8(decoding: SkillDocumentDecoding): boolean {
  * undecoded), not its decoded content. For a plain UTF-8 file the two are the
  * same text, so the document's record serves. For any other file the lane
  * reads the raw text and scans it, as it always did: a `content.read` and a
- * store miss (`skillText.storeMiss`), counted.
+ * scan ({@link countScan}), counted.
  *
  * @param file - The linked file, absolute
  * @param document - Its document
- * @param dispatcher - The run's dispatcher
+ * @param run - The run
  * @returns The record to scan
  */
-export function linkedFileSkillText(file: string, document: SkillDocument, dispatcher: ParseDispatcher): SkillTextFacts {
+export function linkedFileSkillText(file: string, document: SkillDocument, run: SkillTextRun): SkillTextFacts {
   if (isPlainUtf8(document.decoding)) return document.skillText;
   const raw = readFileSync(file, 'utf-8');
   countWork('content.read', 1);
-  return scannedSkillText(file, raw, dispatcher);
+  return scannedSkillText(file, raw, run);
 }
 
 /**
@@ -214,7 +218,7 @@ async function readSkillDocumentOn(skillPath: string, run: SkillTextRun, side: F
   );
   const parsed = await run.dispatcher.parse(keyed);
   if (parsed.skillText === null) throw new Error(`The markdown parse of ${skillPath} carried no skill-text record`);
-  countStoreMiss(safePath.resolve(skillPath), run.dispatcher);
+  countScan(safePath.resolve(skillPath), run);
   return {
     frontmatter: parsed.frontmatter,
     frontmatterError: parsed.frontmatterError,

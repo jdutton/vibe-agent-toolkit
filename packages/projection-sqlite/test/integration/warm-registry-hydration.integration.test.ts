@@ -69,6 +69,7 @@ async function runOnce(withStore: boolean): Promise<RunOutput> {
         gitTracker: new GitTracker(root),
         cacheOf: storeOf,
         questionCacheOf: storeOf,
+        holdsStore: true,
         collectionsFor: () => Promise.resolve(undefined),
       },
       async (population) => {

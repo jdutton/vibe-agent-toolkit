@@ -67,11 +67,11 @@ async function storeServing(skillPath: string, text: string): Promise<SkillTextR
     },
     decoding: { encoding: 'utf-8', encodingSource: 'assumed' },
   } as unknown as StoredDocumentFacts;
-  return { storedDocument: (path) => Promise.resolve(path === skillPath ? stored : undefined) };
+  return { storedDocument: (path) => Promise.resolve(path === skillPath ? stored : undefined), holdsStore: true };
 }
 
-/** A store that holds nothing: every file is read. */
-const NO_STORE: SkillTextRun['source'] = { storedDocument: () => Promise.resolve(undefined) };
+/** A run with no store: every file is read. */
+const NO_STORE: SkillTextRun['source'] = { storedDocument: () => Promise.resolve(undefined), holdsStore: false };
 
 function validate(skillPath: string, source: SkillTextRun['source']): ReturnType<typeof validateSkillThrough> {
   return validateSkillThrough(skillPath, getTempDir(), source, route);

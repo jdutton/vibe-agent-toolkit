@@ -274,6 +274,7 @@ describe('crawl timing seam', () => {
         baseDir: suite.tempDir,
         populationSource: {
           storedDocument: noStoredDocument,
+          holdsStore: false,
           enumerate: async (root: string) => {
             await inOwnRun(populate, {
               root,

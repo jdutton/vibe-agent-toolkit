@@ -256,6 +256,7 @@ export function withSkillRegistries<T>(root: string, work: (registries: RunSkill
       gitTracker,
       cacheOf: () => Promise.resolve(undefined),
       questionCacheOf: () => Promise.resolve(undefined),
+      holdsStore: false,
       collectionsFor: async (enumerated) => (await projectConfigOrNone(enumerated))?.resources?.collections,
     },
     (population) => work(new RunSkillRegistries({

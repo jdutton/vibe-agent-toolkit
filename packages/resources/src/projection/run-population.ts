@@ -185,6 +185,15 @@ export interface RunPopulationOptions {
    */
   readonly questionCacheOf: () => Promise<PopulationCache | undefined>;
   /**
+   * Whether the run has a projection store to ask: `false` when the verb
+   * declares none or the store is switched off, and then {@link cacheOf} and
+   * {@link questionCacheOf} answer `undefined`. Required, because only the verb's
+   * caller knows; the run's source states it
+   * (`ResourcePopulationSource.holdsStore`), so the skills lane counts a scan
+   * with no store as `skillText.noStore`, never as a store miss.
+   */
+  readonly holdsStore: boolean;
+  /**
    * The `resources.collections` governing a root, so a declared `mimeType`
    * routes the file it matches to a parser: read off the root being enumerated,
    * so the declaration and the enumeration are always of one tree.
@@ -240,6 +249,7 @@ export class RunPopulation implements PopulationRun {
     this.source = {
       enumerate: (root, outputs, unreadable, members) => this.#enumerate(root, outputs, unreadable, members),
       storedDocument: (absolutePath, parserKind) => this.storedDocument(absolutePath, parserKind),
+      holdsStore: options.holdsStore,
     };
   }
 
@@ -286,10 +296,11 @@ export class RunPopulation implements PopulationRun {
   /**
    * One file's document facts, skill-text record included, from the run's
    * store, or `undefined`: the skills lane then scans the file's text itself and
-   * counts it (`skillText.storeMiss`). Never reads the file's bytes, and answers
-   * from the store alone: a run's own admission of the file (a cold parse on a
-   * store miss, an evicted key, a store-off run) is never an answer here, so
-   * every file the store does not serve is a counted miss.
+   * counts it (`skillText.storeMiss`, or `skillText.noStore` in a run with no
+   * store, {@link RunPopulationOptions.holdsStore}). Never reads the file's
+   * bytes, and answers from the store alone: a run's own admission of the file
+   * (a cold parse on a store miss, an evicted key, a store-off run) is never an
+   * answer here, so every file the store does not serve is a counted scan.
    *
    * Answers only for a member of the home population a store hit recorded,
    * so a file outside the run's root (judged by real path,

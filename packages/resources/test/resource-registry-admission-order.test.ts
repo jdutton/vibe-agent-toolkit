@@ -124,6 +124,7 @@ describe('ResourceRegistry admission order', () => {
     const offered = [SLASH_DIR, 'z.md', HYPHEN_DIR];
     const source: ResourcePopulationSource = {
       storedDocument: noStoredDocument,
+      holdsStore: false,
       enumerate: (enumeratedRoot: string) => Promise.resolve({
         paths: offered.map((relative) => safePath.join(enumeratedRoot, relative)),
         conditions: [],

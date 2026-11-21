@@ -565,7 +565,8 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
     },
     delta: { 'git.calls': 1 },
   },
-  'skillText.storeMiss': skillTextStoreMissSeed(),
+  'skillText.storeMiss': skillTextScanSeed(true),
+  'skillText.noStore': skillTextScanSeed(false),
   'skillText.storeUnopened': skillTextStoreUnopenedSeed(),
   'skillText.outsideRoot': skillTextOutsideRootSeed(),
 };
@@ -586,6 +587,7 @@ function skillTextOutsideRootSeed(): Seed {
         gitTracker: new GitTracker(root),
         cacheOf: () => Promise.reject(new Error('the run never opens its store for this')),
         questionCacheOf: () => Promise.reject(new Error('the question never opens its store for this')),
+        holdsStore: true,
         collectionsFor: () => Promise.resolve(undefined),
       }, async (population) => {
         await population.source.storedDocument(outside, 'markdown');
@@ -612,6 +614,7 @@ function skillTextStoreUnopenedSeed(): Seed {
         gitTracker: new GitTracker(root),
         cacheOf: () => Promise.resolve(undefined),
         questionCacheOf: () => Promise.reject(new StoreQuestionUnavailableError(new Error('database is locked'))),
+        holdsStore: true,
         collectionsFor: () => Promise.resolve(undefined),
       }, async (population) => {
         await population.source.storedDocument(safePath.join(root, 'SKILL.md'), 'markdown');
@@ -624,19 +627,23 @@ function skillTextStoreUnopenedSeed(): Seed {
 }
 
 /**
- * The skills lane reading a SKILL.md its run's store does not serve, twice in
- * one run: the file is read and keyed each time, parsed once and answered from
- * the parse cache the second time, and counted as scanned from its text once
- * per run.
+ * The skills lane reading a SKILL.md no store serves, twice in one run: the
+ * file is read and keyed each time, parsed once and answered from the parse
+ * cache the second time, and counted as scanned from its text once per run: a
+ * store miss when the run has a store that does not serve it, `noStore` when
+ * the run has none.
+ *
+ * @param holdsStore - Whether the run has a store to ask
+ * @returns The seed
  */
-function skillTextStoreMissSeed(): Seed {
+function skillTextScanSeed(holdsStore: boolean): Seed {
   const content = `---\nname: seed\n---\n${uniqueDocument('skill text')}`;
   return {
     prepare: (scope) => {
       const skillPath = safePath.join(scope.dir(), 'SKILL.md');
       writeFileSync(skillPath, content);
       const run: SkillTextRun = {
-        source: { storedDocument: () => Promise.resolve(undefined) },
+        source: { storedDocument: () => Promise.resolve(undefined), holdsStore },
         dispatcher: dispatcherOf(scope),
       };
       return async () => {
@@ -646,7 +653,7 @@ function skillTextStoreMissSeed(): Seed {
       };
     },
     delta: {
-      'skillText.storeMiss': 1,
+      [holdsStore ? 'skillText.storeMiss' : 'skillText.noStore']: 1,
       'parse.dispatched': 1,
       'parse.cache.hit': 1,
       'content.read': 2,

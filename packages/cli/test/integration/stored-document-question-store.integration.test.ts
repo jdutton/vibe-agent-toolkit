@@ -62,6 +62,14 @@ function accessRefused(): Error {
   return Object.assign(new Error('EACCES: permission denied, mkdir'), { code: 'EACCES', errno: -13, syscall: 'mkdir' });
 }
 
+/**
+ * A read-only filesystem under the cache, as `mkdir` refuses it: an errno the
+ * table classes `unsupported`, not `refused`. A real one cannot be made in a test.
+ */
+function readOnlyFilesystem(): Error {
+  return Object.assign(new Error('EROFS: read-only file system, mkdir'), { code: 'EROFS', errno: -30, syscall: 'mkdir' });
+}
+
 /** A SQLite refusal the store does not expect at close: a full disk under the checkpoint. */
 function diskFull(): Error {
   return Object.assign(new Error('database or disk is full'), { code: 'ERR_SQLITE_ERROR', errcode: 13 });
@@ -76,6 +84,7 @@ describe('the stored-document questions\' connection', () => {
   it.each([
     ['another process\'s lock, as the backend names it', () => new FakeUnavailableNowError()],
     ['a read-only cache directory', accessRefused],
+    ['a read-only filesystem', readOnlyFilesystem],
   ])('codes an open the question expects to fail (%s) as the store unable to answer now', async (_case, fault) => {
     const raised = fault();
     backend.openFailures.push(raised);
@@ -84,8 +93,12 @@ describe('the stored-document questions\' connection', () => {
     expect((opened as Error).cause).toBe(raised);
   });
 
-  it('leaves every other open failure as itself', async () => {
-    const raised = new Error('a defect in the backend');
+  it.each([
+    ['a defect in the backend', () => new Error('a defect in the backend')],
+    ['an unsupported filesystem operation other than a read-only filesystem', () =>
+      Object.assign(new Error('ENOTSUP: operation not supported, mkdir'), { code: 'ENOTSUP', errno: -45, syscall: 'mkdir' })],
+  ])('leaves every other open failure as itself (%s)', async (_case, fault) => {
+    const raised = fault();
     backend.openFailures.push(raised);
     expect(await openQuestion()).toBe(raised);
   });

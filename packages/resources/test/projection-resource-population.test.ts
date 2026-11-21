@@ -147,6 +147,7 @@ describe('buildResourcePopulation', () => {
     const cache = { store: new ReorderingStore(), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
     const source: ResourcePopulationSource = {
       storedDocument: noStoredDocument,
+      holdsStore: false,
       enumerate: (root, outputs) => inOwnRun(buildResourcePopulation, { outputs, root, cache }),
     };
     const crawlOnce = (): Promise<RegistryCrawl> =>

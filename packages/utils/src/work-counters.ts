@@ -62,12 +62,18 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * one admission per file per run.
  *
  * `skillText.storeMiss` counts each (run, file) the skills lane scanned from
- * its text instead of reading the file's stored skill-text facts: one per file
- * per run for which the run's population source answered no document
+ * its text instead of reading the file's stored skill-text facts, in a run that
+ * has a store to ask (`ResourcePopulationSource.holdsStore`): one per file per
+ * run for which the run's population source answered no document
  * (`ResourcePopulationSource.storedDocument`), however many skills reach it. On
- * a cold or store-off run it equals the files the lane scanned; on a warm run it
- * is the per-file fallback, every one of which is a file the store does not
- * cover.
+ * a cold run it equals the files the lane scanned; on a warm run it is the
+ * per-file fallback, every one of which is a file the store does not cover.
+ *
+ * `skillText.noStore` counts each (run, file) the skills lane scanned from its
+ * text because the run has no store to ask: a verb that declares none
+ * (`vat audit`), the store switched off, or a lane given no run. Counted once
+ * per file per run, as `skillText.storeMiss` is, and never beside it: a run
+ * counts its scans under one or the other.
  *
  * `skillText.storeUnopened` counts each run whose stored-document questions
  * opened the store or built the home population and met a failure there (a
@@ -79,7 +85,8 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * `skillText.outsideRoot` counts each (run, file) a stored-document question
  * asked about a file outside the run's root, answered nothing without opening
  * the store: no member of the run's home population can be there. Each is also
- * a `skillText.storeMiss` when the lane scans it.
+ * a `skillText.storeMiss` when the lane scans it (a `skillText.noStore` in a
+ * run with no store).
  */
 export const WORK_COUNTER_NAMES = [
   'store.rows.decoded.persistent',
@@ -106,6 +113,7 @@ export const WORK_COUNTER_NAMES = [
   'registry.built',
   'registry.admitted',
   'skillText.storeMiss',
+  'skillText.noStore',
   'skillText.storeUnopened',
   'skillText.outsideRoot',
   'git.calls',

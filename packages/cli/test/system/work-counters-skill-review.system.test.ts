@@ -86,7 +86,9 @@ function reviewWork(members: readonly string[], layout: Layout): Record<string, 
   const bytes = (path: string): number => Buffer.byteLength(layout.files[path] ?? '');
   const skill = `${layout.skillDir}/SKILL.md`;
   // A lone skill's one admitted member IS its SKILL.md, read once; in a home the SKILL.md is
-  // read again for its skill text, past the population's one read of it.
+  // read again for its skill text, past the population's one read of it, by the packaging
+  // config's resolution, which runs before the run opens and so has no store to ask: a
+  // `skillText.noStore`, never a miss.
   const extraSkillRead = members.length > 1 ? 1 : 0;
   return {
     'content.read': members.length + extraSkillRead,
@@ -97,7 +99,8 @@ function reviewWork(members: readonly string[], layout: Layout): Record<string, 
     'registry.built': 1,
     'registry.admitted': members.length,
     'extent.derived': 1,
-    'skillText.storeMiss': 1 + extraSkillRead,
+    'skillText.storeMiss': 1,
+    ...(extraSkillRead > 0 && { 'skillText.noStore': extraSkillRead }),
   };
 }
 

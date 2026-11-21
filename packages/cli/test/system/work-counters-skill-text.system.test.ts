@@ -567,7 +567,7 @@ describe('warm vat verify reads only the declared fallback and the built tree', 
     const sizeOf = (path: string): number => statSync(join(root, path)).size;
 
     // The source tree costs its declared fallback alone.
-    const spend = { miss: 0, reads: 0, hashed: 0, bytes: 0, lookups: 0 };
+    const spend = { miss: 0, noStore: 0, reads: 0, hashed: 0, bytes: 0, lookups: 0 };
     for (const [path, category] of Object.entries(VERIFY_SEEDS)) {
       const { lane } = CATEGORY[category];
       spend.miss += lane.miss;
@@ -576,11 +576,13 @@ describe('warm vat verify reads only the declared fallback and the built tree', 
       spend.bytes += lane.hashed * sizeOf(path);
       spend.lookups += lane.lookups;
     }
-    // The built tree is under the verb's outputs, which no store serves. Every built file
-    // is read and keyed once and is one miss; the SKILL.md's parse is looked up
-    // BUILT_SKILL_MD_PARSE_LOOKUPS times from that one read; each bundled document is
+    // The built tree is under the verb's outputs, which no store serves, and the marketplace
+    // phase validates it with no run (`validateSkill({ run: undefined })` in
+    // `claude/marketplace/validate.ts`), so its lane asks no store at all: every built file is
+    // read and keyed once and is one `skillText.noStore`, never a miss; the SKILL.md's parse is
+    // looked up BUILT_SKILL_MD_PARSE_LOOKUPS times from that one read; each bundled document is
     // scanned, never parsed.
-    spend.miss += built.length;
+    spend.noStore += built.length;
     spend.reads += built.length;
     spend.hashed += built.length;
     spend.bytes += built.reduce((sum, path) => sum + sizeOf(path), 0);
@@ -588,6 +590,7 @@ describe('warm vat verify reads only the declared fallback and the built tree', 
     const counters = run.dump.counters;
     expect({
       miss: counters['skillText.storeMiss'],
+      noStore: counters['skillText.noStore'],
       reads: counters['content.read'],
       hashed: counters['content.hashed'],
       bytes: counters['content.hashedBytes'],

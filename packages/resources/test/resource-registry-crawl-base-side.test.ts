@@ -22,6 +22,7 @@ describe('ResourceRegistry.crawl - what a population source is told the verb wri
     const asked: unknown[] = [];
     const populationSource: ResourcePopulationSource = {
       storedDocument: noStoredDocument,
+      holdsStore: false,
       enumerate: (root, outputs) => {
         asked.push([root, outputs]);
         return Promise.resolve({ paths: [], conditions: [], outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem', stored: null });

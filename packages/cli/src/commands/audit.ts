@@ -1781,7 +1781,7 @@ export function getValidationResults(
  * enumeration is a listing that never opens the projection store, so audit stores nothing; the
  * run declares it has no store (`projectionStore: 'none'`), so a skills lane's stored-document
  * question answers nothing without opening a home or taking a snapshot, and the lane reads and
- * scans the file itself, counted (`content.read`, `skillText.storeMiss`). The run's ignore
+ * scans the file itself, counted (`content.read`, `skillText.noStore`). The run's ignore
  * oracle is the repository's tracker the scan holds, so the repository is listed once.
  *
  * @param locationRoot - The invocation scan root, the run's home

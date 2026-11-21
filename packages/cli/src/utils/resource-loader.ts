@@ -137,17 +137,17 @@ async function runCacheOf(cacheOf: () => Promise<PopulationCache | undefined>): 
  * run's refusal, as the run's own connection's are.
  *
  * @param root - The run's home root
- * @param projectionStore - Whether the run has a projection store
+ * @param holdsStore - Whether the run has a projection store
  * @returns The opener, and its open for the closer: `undefined` when nothing asked
  */
-function questionStoreOf(root: string, projectionStore: 'on-demand' | 'none'): {
+function questionStoreOf(root: string, holdsStore: boolean): {
   readonly cacheOf: () => Promise<PopulationCache | undefined>;
   readonly opening: () => Promise<OpenedPopulationCache | undefined> | undefined;
 } {
   let opened: Promise<OpenedPopulationCache | undefined> | undefined;
   return {
     cacheOf: async () => {
-      if (projectionStore === 'none') return undefined;
+      if (!holdsStore) return undefined;
       opened ??= openQuestionCache({ root });
       const cache = (await opened)?.cache;
       return cache === undefined ? undefined : { ...cache, store: markingBlobReads(cache.store) };
@@ -194,7 +194,10 @@ export function withRunContext<T>(
 ): Promise<T> {
   const root = safePath.resolve(options.root);
   const gitTracker = options.gitTracker ?? new GitTracker(root);
-  const questionStore = questionStoreOf(root, options.projectionStore);
+  // One decision whether the run has a store: what the openers answer and what the
+  // skills lane counts a scan as (`skillText.storeMiss` or `skillText.noStore`).
+  const holdsStore = options.projectionStore === 'on-demand' && projectionStoreSelected();
+  const questionStore = questionStoreOf(root, holdsStore);
   // The questions' connection closes inside the scope, before the run's own.
   return withLazyPopulationCache({ root }, (cacheOf) => runThenClose(() =>
     withRunPopulation(
@@ -202,8 +205,9 @@ export function withRunContext<T>(
         root,
         outputs: options.outputs,
         gitTracker,
-        cacheOf: options.projectionStore === 'none' ? () => Promise.resolve(undefined) : () => runCacheOf(cacheOf),
+        cacheOf: holdsStore ? () => runCacheOf(cacheOf) : () => Promise.resolve(undefined),
         questionCacheOf: questionStore.cacheOf,
+        holdsStore,
         collectionsFor: (enumerated) => Promise.resolve(collectionsOption(enumerated).collections),
       },
       (population) => work({

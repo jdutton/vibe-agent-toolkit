@@ -16,10 +16,14 @@
  * here; that the questions' connection waits no time for the lock (its busy
  * timeout is zero) is pinned where the open is scripted,
  * `stored-document-question-store.integration.test.ts`.
+ *
+ * The same answer for a read-only store directory with no database file yet,
+ * where SQLite cannot create one (`SQLITE_CANTOPEN`): a question-only verb
+ * reads the file itself rather than refusing.
  */
 
 import { type ChildProcess, spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { chmodSync, writeFileSync } from 'node:fs';
 
 import { defaultStoreDirectory, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
@@ -156,5 +160,32 @@ describe('a stored-document question under another process\'s write lock', () =>
     const result = await askUnderLock(root);
 
     expectAnsweredUnderLock(result);
+  });
+});
+
+/**
+ * 🪤 Skipped on Windows, where a directory's mode cannot forbid creating a file
+ * in it, and as root, whom no mode refuses: the premise is never met.
+ */
+describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a stored-document question over a read-only store directory with no database', () => {
+  let storeDirectory: string | undefined;
+
+  afterEach(() => {
+    if (storeDirectory !== undefined) chmodSync(storeDirectory, 0o700);
+    storeDirectory = undefined;
+  });
+
+  it('answers nothing, so the lane reads the file itself', async () => {
+    const root = makeRepo();
+    storeDirectory = defaultStoreDirectory();
+    mkdirSyncReal(storeDirectory, { recursive: true, mode: 0o700 });
+    chmodSync(storeDirectory, 0o500);
+    const unopenedBefore = readWorkCounters()['skillText.storeUnopened'];
+
+    const answer = await withRunContext({ projectionStore: 'on-demand', root, outputs: [] }, (run) =>
+      run.population.source.storedDocument(safePath.join(root, SKILL), 'markdown'));
+
+    expect(answer).toBeUndefined();
+    expect(readWorkCounters()['skillText.storeUnopened'] - unopenedBefore, 'the question counted its failed opening').toBe(1);
   });
 });

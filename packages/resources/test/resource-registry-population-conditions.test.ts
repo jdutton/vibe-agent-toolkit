@@ -66,6 +66,7 @@ async function validateCrawled(root: string, config: ProjectConfig): Promise<Val
 function sourceWith(root: string, conditions: readonly RealizationConditionRow[]): ResourcePopulationSource {
   return {
     storedDocument: noStoredDocument,
+    holdsStore: false,
     enumerate: async () => ({
       paths: [safePath.join(root, DOC)],
       conditions,

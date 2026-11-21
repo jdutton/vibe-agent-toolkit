@@ -500,24 +500,29 @@ export function isStoreUnopenableError(error: unknown): error is StoreUnopenable
 }
 
 /**
- * SQLite's primary result code for a database this connection may not write:
- * `SQLITE_READONLY` (8), its whole family (a read-only file, a read-only
- * directory for the journal, a recovery it may not run).
+ * SQLite's primary result codes that say this connection may not use the store
+ * file while the file itself is sound: `SQLITE_READONLY` (8), its whole family
+ * (a read-only file, a read-only directory for the journal, a recovery it may
+ * not run), and `SQLITE_CANTOPEN` (14), its whole family (a read-only directory
+ * with no database file yet, which SQLite cannot create). The machine's state,
+ * not the file's.
  */
-const READ_ONLY_RESULT_CODE = 8;
+const NOT_WRITABLE_HERE_RESULT_CODES: ReadonlySet<number> = new Set([8, 14]);
 
 /**
  * Whether `error`, or any error in its `cause` chain, is a SQLite failure that
  * says the store cannot answer now while the file itself is sound: another
- * connection holds it (`SQLITE_BUSY`, `SQLITE_LOCKED`), or this one may not
- * write it (`SQLITE_READONLY`). For a caller whose use of the store is optional
- * and that would rather go without than wait or refuse.
+ * connection holds it (`SQLITE_BUSY`, `SQLITE_LOCKED`), this one may not write
+ * it (`SQLITE_READONLY`), or this one cannot open or create it
+ * (`SQLITE_CANTOPEN`). For a caller whose use of the store is optional and that
+ * would rather go without than wait or refuse; a caller that needs the store
+ * does not ask, and meets these as themselves.
  *
  * @param error - Anything a store call or open threw
- * @returns True when the store is contended or read-only
+ * @returns True when the store is contended, read-only or cannot be opened here
  */
 export function isStoreUnavailableNow(error: unknown): boolean {
-  return someSqliteFault(error, (primary) => CONTENDED_RESULT_CODES.has(primary) || primary === READ_ONLY_RESULT_CODE);
+  return someSqliteFault(error, (primary) => CONTENDED_RESULT_CODES.has(primary) || NOT_WRITABLE_HERE_RESULT_CODES.has(primary));
 }
 
 /**

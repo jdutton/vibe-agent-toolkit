@@ -48,6 +48,7 @@ function stubSource(
     offeredRoots,
     source: {
       storedDocument: noStoredDocument,
+      holdsStore: false,
       enumerate: (root: string) => {
         offeredRoots.push(root);
         return Promise.resolve({

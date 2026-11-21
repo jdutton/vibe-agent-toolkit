@@ -37,6 +37,9 @@ const SKILL_TEXT = '---\nname: from-frontmatter\n---\n# Heading\n\nYou should ru
 /** `skillText.storeMiss` now. */
 const misses = (): number => readWorkCounters()['skillText.storeMiss'];
 
+/** `skillText.noStore` now. */
+const noStores = (): number => readWorkCounters()['skillText.noStore'];
+
 /** `content.read` now. */
 const reads = (): number => readWorkCounters()['content.read'];
 
@@ -49,11 +52,19 @@ const NO_PARSE = {} as ParseDispatcher;
 /** A store holding `text`'s facts for every file it is asked about. */
 function storeOf(text: string): SkillTextRun['source'] & { storedDocument: ReturnType<typeof vi.fn> } {
   const facts = { frontmatter: { name: 'stored' }, frontmatterError: undefined, links: [], skillText: skillTextFactsOf(text, SKILL_TEXT_DECLARATION) };
-  return { storedDocument: vi.fn(() => Promise.resolve({ facts, decoding: PLAIN_UTF8 } as unknown as StoredDocumentFacts)) };
+  return { storedDocument: vi.fn(() => Promise.resolve({ facts, decoding: PLAIN_UTF8 } as unknown as StoredDocumentFacts)), holdsStore: true };
 }
 
 /** A store that holds nothing. */
-const EMPTY_STORE: SkillTextRun['source'] = { storedDocument: () => Promise.resolve(undefined) };
+const EMPTY_STORE: SkillTextRun['source'] = { storedDocument: () => Promise.resolve(undefined), holdsStore: true };
+
+/** A run's source with no store to ask. */
+const NO_STORE: SkillTextRun['source'] = { storedDocument: () => Promise.resolve(undefined), holdsStore: false };
+
+/** A run over `source` whose dispatcher no parse reaches: it identifies the run. */
+function scanRun(source: SkillTextRun['source']): SkillTextRun {
+  return { source, dispatcher: {} as ParseDispatcher };
+}
 
 /** A SKILL.md holding {@link SKILL_TEXT} in a fresh directory. */
 function skillFile(): string {
@@ -127,12 +138,21 @@ describe('readSkillDocument', () => {
     expect(document.frontmatter).toEqual({ name: 'from-frontmatter' });
   });
 
-  it('counts every read of a caller with no run', async () => {
+  it('counts a file a run with no store parses as noStore once per run, never as a miss', async () => {
     const path = skillFile();
-    const before = misses();
+    const run: SkillTextRun = { source: NO_STORE, dispatcher: ROUTE.dispatcher as ParseDispatcher };
+    const [missesBefore, noStoresBefore] = [misses(), noStores()];
+    await readSkillDocument(path, run, 'source');
+    await readSkillDocument(path, run, 'source');
+    expect([misses() - missesBefore, noStores() - noStoresBefore]).toEqual([0, 1]);
+  });
+
+  it('counts every read of a caller with no run as noStore, never as a miss', async () => {
+    const path = skillFile();
+    const [missesBefore, noStoresBefore] = [misses(), noStores()];
     await readSkillDocument(path, undefined, 'source');
     await readSkillDocument(path, undefined, 'source');
-    expect(misses() - before).toBe(2);
+    expect([misses() - missesBefore, noStores() - noStoresBefore]).toEqual([0, 2]);
   });
 });
 
@@ -154,21 +174,30 @@ describe('storedSkillText', () => {
 });
 
 describe('scannedSkillText', () => {
-  it('runs the core over the text, counting the file once per run', () => {
+  it('runs the core over the text, counting the file once per run as a miss in a run with a store', () => {
     const text = '# Ref\n\nYou must call it.\n';
-    const dispatcher = {} as ParseDispatcher;
-    const before = misses();
-    const facts = scannedSkillText('/nowhere/ref.md', text, dispatcher);
-    scannedSkillText('/nowhere/ref.md', text, dispatcher);
+    const run = scanRun(EMPTY_STORE);
+    const [missesBefore, noStoresBefore] = [misses(), noStores()];
+    const facts = scannedSkillText('/nowhere/ref.md', text, run);
+    scannedSkillText('/nowhere/ref.md', text, run);
     expect(facts).toEqual(skillTextFactsOf(text, SKILL_TEXT_DECLARATION));
-    expect(misses() - before).toBe(1);
+    expect([misses() - missesBefore, noStores() - noStoresBefore]).toEqual([1, 0]);
+  });
+
+  it('counts the file once per run as noStore, never as a miss, in a run with no store', () => {
+    const text = '# Ref\n\nYou must call it.\n';
+    const run = scanRun(NO_STORE);
+    const [missesBefore, noStoresBefore] = [misses(), noStores()];
+    scannedSkillText('/nowhere/ref.md', text, run);
+    scannedSkillText('/nowhere/ref.md', text, run);
+    expect([misses() - missesBefore, noStores() - noStoresBefore]).toEqual([0, 1]);
   });
 
   it('answers the same text a run already scanned from that scan, and rescans changed text', () => {
-    const dispatcher = {} as ParseDispatcher;
-    const first = scannedSkillText('/nowhere/ref.md', '# One\n', dispatcher);
-    expect(scannedSkillText('/nowhere/ref.md', '# One\n', dispatcher)).toBe(first);
-    const changed = scannedSkillText('/nowhere/ref.md', '# Two\n', dispatcher);
+    const run = scanRun(EMPTY_STORE);
+    const first = scannedSkillText('/nowhere/ref.md', '# One\n', run);
+    expect(scannedSkillText('/nowhere/ref.md', '# One\n', run)).toBe(first);
+    const changed = scannedSkillText('/nowhere/ref.md', '# Two\n', run);
     expect(changed).not.toBe(first);
     expect(changed.h1).toBe('Two');
   });
@@ -178,7 +207,7 @@ describe('linkedFileSkillText', () => {
   it('serves a plain UTF-8 file from its document, reading and counting nothing', () => {
     const document = documentWith(undefined, 'Heading');
     const [missesBefore, readsBefore] = [misses(), reads()];
-    expect(linkedFileSkillText('/nowhere/ref.md', document, {} as ParseDispatcher)).toBe(document.skillText);
+    expect(linkedFileSkillText('/nowhere/ref.md', document, scanRun(EMPTY_STORE))).toBe(document.skillText);
     expect([misses() - missesBefore, reads() - readsBefore]).toEqual([0, 0]);
   });
 
@@ -188,7 +217,7 @@ describe('linkedFileSkillText', () => {
     writeFileSync(path, raw);
     const document = { ...documentWith(undefined, null), decoding: { encoding: 'utf-8', encodingSource: 'bom' } } as const;
     const [missesBefore, readsBefore] = [misses(), reads()];
-    const facts = linkedFileSkillText(path, document, {} as ParseDispatcher);
+    const facts = linkedFileSkillText(path, document, scanRun(EMPTY_STORE));
     expect(facts).toEqual(skillTextFactsOf(raw, SKILL_TEXT_DECLARATION));
     expect(facts).not.toEqual(skillTextFactsOf(raw.slice(1), SKILL_TEXT_DECLARATION));
     expect([misses() - missesBefore, reads() - readsBefore]).toEqual([1, 1]);

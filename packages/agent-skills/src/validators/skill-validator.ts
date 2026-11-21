@@ -497,7 +497,7 @@ async function traverseLinks(
     // its whole text, fenced code blocks intact.
     if (currentPath !== resolvedSkillPath) {
       // The raw text this lane has always scanned: the record when the file is plain UTF-8, else a read.
-      const linkedText = linkedFileSkillText(currentPath, document, run.dispatcher);
+      const linkedText = linkedFileSkillText(currentPath, document, run);
       const { evidence: linkedEvidence, observations: linkedObservations } =
         runCompatDetectors(linkedText, currentPath, locationRoot, document.frontmatter);
       appendAll(allEvidence, linkedEvidence);

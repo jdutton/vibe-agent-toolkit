@@ -260,6 +260,7 @@ async function withRun<T>(withStore: boolean, variation: RunVariation, work: (po
     cacheOf: storeOf,
     questionCacheOf: () => (variation.questionStoreFault === undefined ? storeOf() : Promise.reject(variation.questionStoreFault))
       .then((opened) => callsFailing(opened, { write: variation.questionWriteFault, blobRead: variation.questionBlobReadFault })),
+    holdsStore: true,
     collectionsFor: () => (variation.homeFault === undefined ? Promise.resolve(undefined) : Promise.reject(variation.homeFault)),
   }, { content, dispatcher });
   try {

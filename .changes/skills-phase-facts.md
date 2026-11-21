@@ -15,7 +15,9 @@
   run whose store and dispatcher the validation reads through (a `RunPopulation` or
   `RunSkillRegistries`), or `undefined` to validate with a dispatcher of its own and no store.
 - **(library) `ResourcePopulationSource` has a required `storedDocument(absolutePath, parserKind)`**;
-  a custom source with no store returns `undefined`. **`RunPopulationOptions.outputs` is required**:
+  a custom source with no store returns `undefined`. **`ResourcePopulationSource.holdsStore` and
+  `RunPopulationOptions.holdsStore` are required**: whether the run has a projection store to ask.
+  `scannedSkillText` and `linkedFileSkillText` take the `SkillTextRun` instead of its dispatcher. **`RunPopulationOptions.outputs` is required**:
   the trees the run writes, `[]` for a run that writes none.
 - **(library) `RunPopulationOptions.questionCacheOf` is required**: the store as the run's
   stored-document questions open it, or `undefined` with no store. A caller with no store passes
@@ -34,8 +36,13 @@
   every skill finding's input, from the store instead of reading and parsing the file. Findings are
   unchanged. No action needed.
 - **`VAT_WORK_COUNTERS` dumps `skillText.storeMiss`**: each file per run that the skills lane scanned
-  from its text because the store did not serve it. On a cold or store-off run it equals the files
-  scanned.
+  from its text because the run's projection store did not serve it. On a cold run it equals the
+  files scanned; on a warm run it is the per-file fallback. A run with the store switched off counts
+  none.
+- **`VAT_WORK_COUNTERS` dumps `skillText.noStore`**: each file per run that the skills lane scanned
+  from its text because the run has no projection store to ask: `vat audit`, which opens none, or
+  the store switched off (`VAT_PROJECTION_STORE=off`, `VAT_CACHE=false`). A run counts its scans
+  under this or `skillText.storeMiss`, never both.
 - **`VAT_WORK_COUNTERS` dumps `skillText.storeUnopened`**: once per run, when the skills lane's
   optional stored-document question was what opened the projection store or built the home
   population, and that failed with an expected failure (a read-only `VAT_CACHE_DIR`, another
@@ -53,10 +60,13 @@
 - **(library) `StoreQuestionUnavailableError` on `@vibe-agent-toolkit/resources`** (code
   `PROJECTION_STORE_QUESTION_UNAVAILABLE`): what a `RunPopulationOptions.questionCacheOf`
   implementation throws around a store failure the stored-document question expects (another
-  process's lock, a read-only cache); the question answers nothing for it and refuses on any other
-  failure. **`isStoreUnavailableNow(error)` on `@vibe-agent-toolkit/projection-sqlite`**: true when
-  SQLite reports the store contended (`SQLITE_BUSY`, `SQLITE_LOCKED`) or read-only
-  (`SQLITE_READONLY`) anywhere in the cause chain.
+  process's lock, a read-only cache or filesystem); the question answers nothing for it and refuses
+  on any other failure. **`isStoreUnavailableNow(error)` on `@vibe-agent-toolkit/projection-sqlite`**: true when
+  SQLite reports the store contended (`SQLITE_BUSY`, `SQLITE_LOCKED`), read-only
+  (`SQLITE_READONLY`) or unopenable here (`SQLITE_CANTOPEN`: a read-only directory with no
+  database file yet) anywhere in the cause chain. **`isReadOnlyFilesystemError(error)` on
+  `@vibe-agent-toolkit/utils`**: the single-errno question for `EROFS`, which the errno table classes
+  `unsupported` beside faults that are defects.
 - **(library) The skill-text core on `@vibe-agent-toolkit/resources`**: `skillTextFactsOf`,
   `SKILL_TEXT_DECLARATION`, `skillTextDeclarationDigest`, `SkillTextFactsSchema`,
   `SKILL_TEXT_FAMILY_PATTERNS`, `EXTERNAL_CLI_BINARIES`, `frontmatterFencesOf`, the

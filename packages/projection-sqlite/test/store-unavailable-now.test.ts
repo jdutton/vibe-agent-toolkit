@@ -21,6 +21,8 @@ describe('isStoreUnavailableNow', () => {
     ['SQLITE_READONLY', 8],
     ['SQLITE_BUSY_RECOVERY, an extended code of the busy family', 5 | (1 << 8)],
     ['SQLITE_READONLY_DIRECTORY, an extended code of the read-only family', 8 | (6 << 8)],
+    ['SQLITE_CANTOPEN, a read-only directory with no database to open', 14],
+    ['SQLITE_CANTOPEN_ISDIR, an extended code of the cannot-open family', 14 | (2 << 8)],
   ])('answers yes for %s', (_name, errcode) => {
     expect(isStoreUnavailableNow(sqliteError(errcode))).toBe(true);
   });

@@ -14,7 +14,9 @@
  * it byte for byte. The warm run must also scan no text: every SKILL.md and
  * bundled markdown file is served from the store, so `skillText.storeMiss` and
  * `content.read` do not move outside the name reads (which run with no run, so
- * they read every time). The cold runs scan each markdown file of the corpus
+ * they read every time). With the store off every scan is a `skillText.noStore`
+ * and none a miss; with it on, none is a `skillText.noStore`. The cold runs
+ * scan each markdown file of the corpus
  * exactly once: every skill's SKILL.md and every other markdown file, each
  * bundled by a skill. With half the skill-text records deleted (their keys'
  * other facts kept), each lane scans exactly the files whose record is gone,
@@ -88,7 +90,7 @@ const BUNDLED_UNLINKED = ['bundled-mention', 'bundled-mention-utf16'] as const;
 const NOT_PLAIN_UTF8_LINKED = ['linked-bom/references/guide.md', 'linked-utf16/references/guide.md'] as const;
 
 /** Counters a run's text work moves. */
-const TEXT_COUNTERS = ['skillText.storeMiss', 'content.read', 'parse.dispatched'] as const satisfies readonly WorkCounter[];
+const TEXT_COUNTERS = ['skillText.storeMiss', 'skillText.noStore', 'content.read', 'parse.dispatched'] as const satisfies readonly WorkCounter[];
 
 /** The text counters a capture's run moved. */
 function textWork(moved: Counters): Record<(typeof TEXT_COUNTERS)[number], number | undefined> {
@@ -161,29 +163,30 @@ describe('the skills phase reproduces the skill-text golden', () => {
     rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
-  it('with the projection store off: every file each lane reads is scanned from its text once', async () => {
+  it('with the projection store off: every file each lane reads is scanned from its text once, with no store to miss', async () => {
     vi.stubEnv('VAT_PROJECTION_STORE', 'off');
     const { text, packagingMoved, configFreeMoved } = await capture();
     expect(text).toBe(GOLDEN);
-    expect(packagingMoved['skillText.storeMiss']).toBe(skillLaneScannedFiles(root).length);
-    expect(configFreeMoved['skillText.storeMiss']).toBe(configFreeScanned().size);
+    expect([packagingMoved['skillText.noStore'], packagingMoved['skillText.storeMiss']]).toEqual([skillLaneScannedFiles(root).length, 0]);
+    expect([configFreeMoved['skillText.noStore'], configFreeMoved['skillText.storeMiss']]).toEqual([configFreeScanned().size, 0]);
   });
 
   it('with the store on, cold: every file the packaging lane reads scanned from its text once', async () => {
     vi.stubEnv('VAT_PROJECTION_STORE', 'sqlite');
     const { text, packagingMoved } = await capture();
     expect(text).toBe(GOLDEN);
-    expect(packagingMoved['skillText.storeMiss']).toBe(skillLaneScannedFiles(root).length);
+    expect([packagingMoved['skillText.storeMiss'], packagingMoved['skillText.noStore']]).toEqual([skillLaneScannedFiles(root).length, 0]);
   });
 
   it('with the store on, warm: served from the store but the declared fallback', async () => {
     vi.stubEnv('VAT_PROJECTION_STORE', 'sqlite');
     const { text, packagingMoved, configFreeMoved } = await capture();
     expect(text).toBe(GOLDEN);
-    expect(textWork(packagingMoved)).toEqual({ 'skillText.storeMiss': 0, 'content.read': 0, 'parse.dispatched': 0 });
+    expect(textWork(packagingMoved)).toEqual({ 'skillText.storeMiss': 0, 'skillText.noStore': 0, 'content.read': 0, 'parse.dispatched': 0 });
     expect(UNDECODED_FRONTMATTER).toBeGreaterThan(0);
     expect(textWork(configFreeMoved)).toEqual({
       'skillText.storeMiss': NOT_PLAIN_UTF8_LINKED.length,
+      'skillText.noStore': 0,
       'content.read': BUNDLED_UNLINKED.length + NOT_PLAIN_UTF8_LINKED.length,
       'parse.dispatched': 0,
     });

@@ -63,7 +63,7 @@ import {
   type ProjectionTableName,
   vatCacheRoot,
 } from '@vibe-agent-toolkit/resources';
-import { fsFaultOf, parseEnvBoolean, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { fsFaultOf, isReadOnlyFilesystemError, parseEnvBoolean, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { freshGitTreeKey, gitSnapshotFailureOf, gitTreeKey, type GitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 
 import { noticeToOperator, withNoticeLedger } from './operator-notices.js';
@@ -281,9 +281,13 @@ export function openPopulationCache(options: {
  * snapshot when both are inside one scope.
  *
  * The question is optional, so the failures it expects (another process's lock,
- * a read-only cache) are coded `StoreQuestionUnavailableError`, at the open and
- * at every store call on this connection, and the population answers the
- * question with nothing for them; every other failure stays itself and refuses.
+ * a read-only cache directory or store file, a read-only filesystem) are coded
+ * `StoreQuestionUnavailableError`, at the open and at every store call on this
+ * connection, and the population answers the question with nothing for them;
+ * every other failure stays itself and refuses. Decided by SQLite's result code
+ * (`isStoreUnavailableNow`) and by the errno ({@link isReadOnlyFsFault}), never
+ * by message. The run's own connection ({@link openPopulationCache}) codes none
+ * of these: it meets them as themselves.
  *
  * @param options - Where the corpus is
  * @param options.root - The absolute corpus root
@@ -295,12 +299,25 @@ export function openQuestionCache(options: {
   return openCacheWith(options.root, async () => {
     const backend = await loadBackend();
     const coded = (error: unknown): unknown =>
-      backend.isStoreUnavailableNow(error) || fsFaultOf(error)?.faultClass === 'refused' ? new StoreQuestionUnavailableError(error) : error;
+      backend.isStoreUnavailableNow(error) || isReadOnlyFsFault(error) ? new StoreQuestionUnavailableError(error) : error;
     const store = await loadStore({ busyTimeoutMs: 0 }).catch((error: unknown) => {
       throw coded(error);
     });
     return store === undefined ? undefined : codingFailures(store, coded);
   });
+}
+
+/**
+ * Whether `error` is a filesystem fault that says the cache cannot be written
+ * here: a permission refusal (the `refused` class), or a read-only filesystem
+ * (`EROFS`, which the errno table classes `unsupported` beside faults that are
+ * defects here, so it is asked by its own predicate, not its class).
+ *
+ * @param error - Anything the open or a store call threw
+ * @returns True for a read-only cache
+ */
+function isReadOnlyFsFault(error: unknown): boolean {
+  return fsFaultOf(error)?.faultClass === 'refused' || isReadOnlyFilesystemError(error);
 }
 
 /**

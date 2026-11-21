@@ -163,7 +163,8 @@ export interface ResourcePopulationSource {
    * One file's document facts as the run's store holds them, skill-text record
    * included, or `undefined` when the store does not serve the file: the skills
    * lane then scans the file's text itself, and counts that
-   * (`skillText.storeMiss`).
+   * (`skillText.storeMiss`, or `skillText.noStore` when the source
+   * {@link holdsStore} none).
    *
    * Answers from the store's blob tier alone, never from a cold parse the run
    * made: for a member of the home population whose stored realization routes to
@@ -177,6 +178,17 @@ export interface ResourcePopulationSource {
    * @returns The facts, or `undefined` when the run holds none for the file
    */
   storedDocument(absolutePath: string, parserKind: ParserKind): Promise<StoredDocumentFacts | undefined>;
+
+  /**
+   * Whether the run has a projection store to ask: `false` when the verb
+   * declares none (`vat audit`) or the store is switched off. A skills lane that
+   * scans a file from its text counts the scan by it: a store miss
+   * (`skillText.storeMiss`) when a store was there to ask and did not serve the
+   * file, `skillText.noStore` when there was none. A store the run has that
+   * cannot answer (no repository to key it, another process's lock) is still a
+   * store, and every file it does not serve a miss.
+   */
+  readonly holdsStore: boolean;
 }
 
 /**
