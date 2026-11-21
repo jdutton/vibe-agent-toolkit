@@ -713,7 +713,7 @@ export {
 // THE route every read takes before a parse, in every lane: not text, no parser,
 // or a parse. Exported for the CLI's parse-fact snapshot, which must route
 // exactly as the registry does rather than restate the rule.
-export { contentRoute, type ContentRoute } from './projection/document-facts.js';
+export { contentRoute } from './projection/document-facts.js';
 
 // The filesystem extent (zones §2): everything on disk under the root, files
 // AND directories, excluding NEVER_CRAWL_GLOBS but deliberately NOT build
@@ -1033,22 +1033,14 @@ export {
 // derived. With `BLOB_REFUSAL_CONDITION_CODES` it is every code a row carries,
 // so a census of refusals classifies each row from these two lists alone.
 export { BLOB_FINDING_CONDITION_CODES } from './projection/blob-facts.js';
-// Where every fact warm validate reads about a resource comes from (blob fact,
-// live recomputation, counted per-file read), and the ONE reader that rebuilds a
-// resource's blob facts from the stored rows.
+// The ONE reader that rebuilds a resource's blob facts from the stored rows, and
+// which resource and link fields it rebuilds: what the store-fidelity round trip
+// in projection-sqlite holds against the cold registry.
 export {
   BLOB_FACT_FIELDS,
   blobFactsReader,
-  REGISTRY_OUTPUT_FACT_SOURCES,
   RESOURCE_LINK_FACT_SOURCES,
-  RESOURCE_METADATA_FACT_SOURCES,
-  type BlobFactField,
   type BlobFactsOutcome,
-  type BlobLink,
-  type BlobLinkField,
-  type BlobResourceFacts,
-  type FactSource,
-  type RegistryOutput,
 } from './projection/blob-resource-facts.js';
 
 // The declarative closure primitive (zones §7.3): a closure-defined extent is a

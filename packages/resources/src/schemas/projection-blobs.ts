@@ -89,6 +89,8 @@ export const BlobRowSchema = z.object({
   linkCount: z.number().int().nonnegative(),
   headingCount: z.number().int().nonnegative(),
   sectionCount: z.number().int().nonnegative(),
+  findingCount: z.number().int().nonnegative()
+    .describe('How many finding rows (HTML_PARSE_ERROR, UNRESOLVED_REFERENCE) the parse filed in blob_conditions for this blob: what a reader checks those rows against, as linkCount checks blob_references'),
 }).strict().describe('A row of the blob-keyed `blobs` table');
 
 export type BlobRow = z.infer<typeof BlobRowSchema>;

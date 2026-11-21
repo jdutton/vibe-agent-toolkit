@@ -434,8 +434,8 @@ loader, Codex's `AGENTS.md` reader, is transcribed the same way in
   any extension, then the `paths:` normaliser; null when it scopes the file by none. The launch and
   read walks and `ClaudeRulesScopeContributor` read path-scoping from this column only — never from
   `blobs.frontmatter`, which is VAT's parser's answer and is absent for a `.ts` import routed to no
-  parser. `blobs.frontmatterError` stays the parser's, and is what `CLAUDE_RULE_FRONTMATTER_INVALID`
-  reports.
+  parser. `blobs.frontmatterError` stays the parser's; `CLAUDE_RULE_FRONTMATTER_INVALID` reports it,
+  and `blobs.frontmatterNotAMapping` (valid YAML that is not a mapping) beside it.
 - **`harness_blob_imports`** — one row per `@` import the harness reads out of the blob, keyed
   `(blob, harness, ordinal)`: `rawRef` as authored, `target` (the spelling the harness resolves —
   `@` dropped, `#fragment` cut, `\ ` unescaped, unique per `(blob, harness)`), and the `line` of the

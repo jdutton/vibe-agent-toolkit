@@ -5,8 +5,8 @@
  *
  * ## The mapping table
  *
- * Every `ResourceMetadata` field, and every registry output validate reads, maps
- * to exactly one source:
+ * Every `ResourceMetadata` field, and every `ResourceLink` field, maps to exactly
+ * one source:
  *
  * - `blob-fact` — a pure function of the bytes, held per content key in the blob
  *   tier (`blobs`, `blob_references`, `blob_sections`, `blob_conditions`) and
@@ -21,10 +21,12 @@
  * There is no cold-only category: a fact warm validate needs that the store lacks
  * becomes a blob fact (an extractor fact), never an exception list.
  *
- * {@link RESOURCE_METADATA_FACT_SOURCES} is checked against `ResourceMetadata`'s
- * keys by the type system: a field added to `ResourceMetadataSchema` and not
- * mapped here, or mapped here and gone from the schema, stops this module
- * compiling.
+ * {@link RESOURCE_METADATA_FACT_SOURCES} and {@link RESOURCE_LINK_FACT_SOURCES} are
+ * checked against `ResourceMetadata`'s and `ResourceLink`'s keys by the type
+ * system: a field added to either schema and not mapped here, or mapped here and
+ * gone from the schema, stops this module compiling. The registry's other outputs
+ * (its not-admitted and refusal logs, collisions, conditions) are not mapped
+ * here: no type enumerates them, so a table of them would be a hand-kept list.
  *
  * ## The reader is the only reader
  *
@@ -35,19 +37,25 @@
  * ## What the reader refuses
  *
  * The rows are checked against the counts the `blobs` row carries (`linkCount`,
- * `headingCount`) and against what a parse can produce (an AST link has text, an
- * unresolved reference has a line). A mismatch is `uncovered`, never a guess: a
+ * `headingCount`, `findingCount`), their numbering is checked for gaps and repeats
+ * (`astIndex`, each table's `ordinal`), and they are checked against what a parse
+ * can produce (an AST link has text, an unresolved reference has a line, the
+ * frontmatter decodes). A mismatch is `uncovered`, never a guess or a throw: a
  * warm run derives the blob again rather than validate a partial resource.
  */
 
-import { decodeFrontmatterValue } from '../frontmatter-codec.js';
-import { classifyLink } from '../link-classify.js';
-import { toHeadingTree } from '../link-parser.js';
-import type { BlobConditionRow, BlobReferenceRow, BlobRow, BlobSectionRow, ReferenceSyntacticForm } from '../schemas/projection-blobs.js';
-import type { HtmlParseError, LinkNodeType, ResourceLink, ResourceMetadata, UnresolvedReference } from '../schemas/resource-metadata.js';
+import { isVatError } from '@vibe-agent-toolkit/utils';
 
+import { decodeFrontmatterValue, FRONTMATTER_VALUE_MALFORMED } from '../frontmatter-codec.js';
+import { toHeadingTree } from '../heading-tree.js';
+import { classifyLink } from '../link-classify.js';
+import type { BlobConditionRow, BlobReferenceRow, BlobRow, BlobSectionRow } from '../schemas/projection-blobs.js';
+import type { HtmlParseError, ResourceLink, ResourceMetadata, UnresolvedReference } from '../schemas/resource-metadata.js';
+
+import { BLOB_FINDING_CONDITION_CODES } from './blob-facts.js';
 import { BLOB_NOT_TEXT, parserKindOf } from './blob-population.js';
-import { blobConditionEntry, type NotAdmittedEntry } from './blob-refusals.js';
+import { NODE_TYPE_OF_AST_FORM } from './blob-references.js';
+import { notAdmittedEntriesByBlob, type NotAdmittedEntry } from './blob-refusals.js';
 import { NOT_TEXT_RESOURCE_FACTS } from './document-facts.js';
 import type { BlobScopedRows } from './store.js';
 
@@ -59,7 +67,7 @@ const LIVE = 'live';
 const PER_FILE_READ = 'per-file-read';
 
 /** Where one fact comes from on a warm run. See this module's header. */
-export type FactSource = typeof BLOB_FACT | typeof LIVE | typeof PER_FILE_READ;
+type FactSource = typeof BLOB_FACT | typeof LIVE | typeof PER_FILE_READ;
 
 /**
  * Every `ResourceMetadata` field, and where a warm run gets it.
@@ -67,7 +75,7 @@ export type FactSource = typeof BLOB_FACT | typeof LIVE | typeof PER_FILE_READ;
  * `satisfies` over `keyof ResourceMetadata` with `-?`: a field missing here is a
  * compile error, and so is a key the schema does not have.
  */
-export const RESOURCE_METADATA_FACT_SOURCES = {
+const RESOURCE_METADATA_FACT_SOURCES = {
   // `generateId`: the frontmatter id field, else the path relative to the view's base.
   id: LIVE,
   // Where the population found the bytes.
@@ -108,38 +116,10 @@ export const RESOURCE_LINK_FACT_SOURCES = {
   resolvedId: LIVE,
 } as const satisfies { readonly [Field in keyof ResourceLink]-?: FactSource };
 
-/** Every registry output `vat validate` reads besides the resources themselves. */
-export type RegistryOutput =
-  | 'populationConditions'
-  | 'parseRefusals'
-  | 'unresolvedReferences'
-  | 'duplicateIdCollisions'
-  | 'notAdmittedUnreadable'
-  | 'notAdmittedParseFailed';
-
-/**
- * Every registry output, and where a warm run gets it.
- *
- * - population conditions: the population's own rows, recomputed per view;
- * - parse refusals (a limit, a dead worker): describe this run, never stored (ADR I6);
- * - unresolved references: `blob_conditions` `UNRESOLVED_REFERENCE`, via `ResourceMetadata`;
- * - duplicate id collisions: first-wins over the view's admission order, live;
- * - unreadable: this run's read failed;
- * - parse failed: `blob_conditions` `BLOB_PARSE_FAILED`, a fact of the bytes.
- */
-export const REGISTRY_OUTPUT_FACT_SOURCES = {
-  populationConditions: LIVE,
-  parseRefusals: PER_FILE_READ,
-  unresolvedReferences: BLOB_FACT,
-  duplicateIdCollisions: LIVE,
-  notAdmittedUnreadable: PER_FILE_READ,
-  notAdmittedParseFailed: BLOB_FACT,
-} as const satisfies { readonly [Output in RegistryOutput]-?: FactSource };
-
 type MetadataSources = typeof RESOURCE_METADATA_FACT_SOURCES;
 
 /** The `ResourceMetadata` fields the blob tier holds. */
-export type BlobFactField = {
+type BlobFactField = {
   [Field in keyof MetadataSources]: MetadataSources[Field] extends typeof BLOB_FACT ? Field : never;
 }[keyof MetadataSources];
 
@@ -148,12 +128,12 @@ export const BLOB_FACT_FIELDS: readonly BlobFactField[] = (Object.keys(RESOURCE_
   .filter((field): field is BlobFactField => RESOURCE_METADATA_FACT_SOURCES[field] === BLOB_FACT);
 
 /** The `ResourceLink` fields the blob tier holds. */
-export type BlobLinkField = {
+type BlobLinkField = {
   [Field in keyof typeof RESOURCE_LINK_FACT_SOURCES]: (typeof RESOURCE_LINK_FACT_SOURCES)[Field] extends typeof BLOB_FACT ? Field : never;
 }[keyof typeof RESOURCE_LINK_FACT_SOURCES];
 
 /** A link as the blob tier holds it: its shape, never its resolution. */
-export type BlobLink = Pick<ResourceLink, BlobLinkField>;
+type BlobLink = Pick<ResourceLink, BlobLinkField>;
 
 /** The content-addressed half of a `ResourceMetadata`. */
 export type BlobResourceFacts = Omit<Pick<ResourceMetadata, BlobFactField>, 'links'> & { links: BlobLink[] };
@@ -225,10 +205,8 @@ function outcomeOf(contentKey: string, rows: KeyRows | undefined): BlobFactsOutc
   if (rows.conditions.some((row) => row.code === BLOB_NOT_TEXT)) {
     return { kind: 'facts', facts: { ...NOT_TEXT_RESOURCE_FACTS, links: [], headings: [] } };
   }
-  for (const row of rows.conditions) {
-    const entry = blobConditionEntry(row);
-    if (entry !== undefined) return { kind: 'not-admitted', entry };
-  }
+  const entry = notAdmittedEntriesByBlob(rows.conditions).get(contentKey);
+  if (entry !== undefined) return { kind: 'not-admitted', entry };
   return { kind: 'uncovered', reason: `the blob tier holds no blobs row for ${contentKey}` };
 }
 
@@ -266,6 +244,66 @@ function unresolvedOf(rows: KeyRows): Rebuilt<UnresolvedReference[]> {
 }
 
 /**
+ * Whether rows numbered from 0 are numbered exactly 0..n-1: no gap, no repeat.
+ *
+ * @param numbers - Each row's number
+ * @returns Whether the sorted numbers are their own indexes
+ */
+function isDense(numbers: readonly number[]): boolean {
+  return [...numbers].sort((left, right) => left - right).every((value, index) => value === index);
+}
+
+/**
+ * The finding rows checked against the `blobs` row: as many as it counted, each
+ * code numbered 0..n-1.
+ *
+ * @param blob - The key's `blobs` row
+ * @param rows - Every row the key holds
+ * @returns Why the finding rows cannot be trusted, or `undefined`
+ */
+function findingRowsFault(blob: BlobRow, rows: KeyRows): string | undefined {
+  let total = 0;
+  for (const code of BLOB_FINDING_CONDITION_CODES) {
+    const ordinals = rows.conditions.filter((row) => row.code === code).map((row) => row.ordinal);
+    if (!isDense(ordinals)) return `the ${code} rows' ordinals have a gap or a repeat`;
+    total += ordinals.length;
+  }
+  return total === blob.findingCount ? undefined : `${String(total)} finding rows against findingCount ${String(blob.findingCount)}`;
+}
+
+/**
+ * The stored frontmatter, decoded, or why it cannot be. Only the codec's own
+ * refusal is a fact about the rows; anything else it throws is a defect and propagates.
+ *
+ * @param blob - The key's `blobs` row
+ * @returns The frontmatter, `undefined` when the blob has none, or the reason
+ */
+function frontmatterOf(blob: BlobRow): Rebuilt<Record<string, unknown> | undefined> {
+  if (blob.frontmatterValue === null) return { ok: true, value: undefined };
+  try {
+    return { ok: true, value: decodeFrontmatterValue(blob.frontmatterValue) };
+  } catch (error) {
+    if (!isVatError(error, FRONTMATTER_VALUE_MALFORMED)) throw error;
+    return { ok: false, reason: `frontmatterValue does not decode: ${error.message}` };
+  }
+}
+
+/**
+ * @param blob - The key's `blobs` row
+ * @param rows - Every row the key holds
+ * @param links - The links rebuilt from the key's reference rows
+ * @returns Why the rows do not add up to what the `blobs` row says the parse produced, or `undefined`
+ */
+function countsFault(blob: BlobRow, rows: KeyRows, links: readonly BlobLink[]): string | undefined {
+  if (links.length !== blob.linkCount) return `${String(links.length)} AST reference rows against linkCount ${String(blob.linkCount)}`;
+  if (rows.sections.length !== blob.headingCount) {
+    return `${String(rows.sections.length)} section rows against headingCount ${String(blob.headingCount)}`;
+  }
+  if (!isDense(rows.sections.map((row) => row.ordinal))) return 'the section rows\' ordinals have a gap or a repeat';
+  return findingRowsFault(blob, rows);
+}
+
+/**
  * @param blob - The key's `blobs` row
  * @param rows - Every row the key holds
  * @returns The resource facts, or why the rows cannot be trusted
@@ -273,14 +311,12 @@ function unresolvedOf(rows: KeyRows): Rebuilt<UnresolvedReference[]> {
 function factsOf(blob: BlobRow, rows: KeyRows): Rebuilt<BlobResourceFacts> {
   const links = linksOf(rows.references);
   if (!links.ok) return links;
-  if (links.value.length !== blob.linkCount) {
-    return { ok: false, reason: `${String(links.value.length)} AST reference rows against linkCount ${String(blob.linkCount)}` };
-  }
-  if (rows.sections.length !== blob.headingCount) {
-    return { ok: false, reason: `${String(rows.sections.length)} section rows against headingCount ${String(blob.headingCount)}` };
-  }
+  const fault = countsFault(blob, rows, links.value);
+  if (fault !== undefined) return { ok: false, reason: fault };
   const unresolved = unresolvedOf(rows);
   if (!unresolved.ok) return unresolved;
+  const frontmatter = frontmatterOf(blob);
+  if (!frontmatter.ok) return frontmatter;
   const parseErrors: HtmlParseError[] = findings(rows, 'HTML_PARSE_ERROR')
     .map((row) => ({ message: row.message, ...(row.line !== null && { line: row.line }) }));
   return {
@@ -292,38 +328,37 @@ function factsOf(blob: BlobRow, rows: KeyRows): Rebuilt<BlobResourceFacts> {
       ...(parseErrors.length > 0 && { parseErrors }),
       // Present for every markdown parse, empty or not; no other parser produces the field.
       ...(parserKindOf(blob.contentKey) === 'markdown' && { unresolvedReferences: unresolved.value }),
-      ...(blob.frontmatterValue !== null && { frontmatter: decodeFrontmatterValue(blob.frontmatterValue) }),
+      ...(frontmatter.value !== undefined && { frontmatter: frontmatter.value }),
       ...(blob.frontmatterError !== null && { frontmatterError: blob.frontmatterError }),
       estimatedTokenCount: blob.tokenEstimate,
     },
   };
 }
 
-/** The node type each AST-derived syntactic form was produced from; a lexer form has none. */
-const NODE_TYPE_OF_FORM: Readonly<Partial<Record<ReferenceSyntacticForm, LinkNodeType>>> = {
-  'markdown-link': 'link',
-  'markdown-link-reference': 'linkReference',
-  'markdown-definition': 'definition',
-  'html-link': 'htmlAttribute',
-};
-
 /**
  * The parser's links, in the parser's order (`astIndex`), never source order.
+ * Each link's keys are in the order every parser writes them (`ResourceLink`'s
+ * own: text, href, type, line, startOffset, endOffset, nodeType).
  *
  * @param references - The key's reference rows
  * @returns The links, or why the rows cannot be links
  */
 function linksOf(references: readonly BlobReferenceRow[]): Rebuilt<BlobLink[]> {
   const ast = references.flatMap((row) => {
-    const nodeType = NODE_TYPE_OF_FORM[row.syntacticForm];
+    const nodeType = NODE_TYPE_OF_AST_FORM.get(row.syntacticForm);
     return nodeType === undefined ? [] : [{ row, nodeType }];
   });
-  ast.sort((left, right) => (left.row.astIndex ?? -1) - (right.row.astIndex ?? -1));
   const links: BlobLink[] = [];
-  for (const { row, nodeType } of ast) {
+  const indexes: number[] = [];
+  for (const { row } of ast) {
     if (row.text === null || row.astIndex === null) return { ok: false, reason: `AST reference row ${String(row.ordinal)} has no text or no astIndex` };
+    indexes.push(row.astIndex);
+  }
+  if (!isDense(indexes)) return { ok: false, reason: 'the AST reference rows\' astIndex values have a gap or a repeat' };
+  ast.sort((left, right) => (left.row.astIndex ?? 0) - (right.row.astIndex ?? 0));
+  for (const { row, nodeType } of ast) {
     links.push({
-      text: row.text,
+      text: row.text ?? '',
       href: row.rawRef,
       type: classifyLink(row.rawRef),
       ...(row.line !== null && { line: row.line }),

@@ -29,6 +29,7 @@ describe('BlobRowSchema', () => {
     linkCount: 0,
     headingCount: 0,
     sectionCount: 0,
+    findingCount: 0,
   };
 
   it('accepts a fully-populated row', () => {
@@ -50,6 +51,7 @@ describe('BlobRowSchema', () => {
       linkCount: 3,
       headingCount: 2,
       sectionCount: 2,
+      findingCount: 0,
     };
     expect(BlobRowSchema.safeParse(row).success).toBe(true);
   });

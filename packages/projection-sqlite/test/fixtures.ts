@@ -55,6 +55,7 @@ export function sampleBlobRows(key: string = FIRST_BLOB): BlobScopedRows {
       linkCount: 1,
       headingCount: 1,
       sectionCount: 1,
+      findingCount: 0,
     }],
     blobReferences: [{
       blob: key,

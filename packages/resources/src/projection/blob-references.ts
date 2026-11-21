@@ -71,6 +71,8 @@
  * meaning belongs to a lens (resource-projection.md §5).
  */
 
+import { VatError } from '@vibe-agent-toolkit/utils';
+
 import type { ParseResult } from '../link-parser.js';
 import { detectVariableExpansion, EXTENSION_SUFFIX, stripQueryOrFragment } from '../reference-lexer.js';
 import { LexicalSyntacticFormSchema, type LexicalReference } from '../schemas/parse-facts.js';
@@ -345,38 +347,52 @@ function lexicalRow(contentKey: string, reference: LexicalReference): Omit<BlobR
   };
 }
 
+/** The code {@link syntacticFormFor} throws for a link whose producer stated no `nodeType`. */
+export const LINK_NODE_TYPE_MISSING = 'LINK_NODE_TYPE_MISSING';
+
+/**
+ * Every AST node type and the syntactic form its links are stored under — the
+ * ONE table both directions read: the population writes a form from a node type
+ * here, and the fact reader rebuilds the node type from the form by inverting
+ * it ({@link NODE_TYPE_OF_AST_FORM}). Total over `LinkNodeType`, so a new node
+ * type does not compile until it has a form.
+ *
+ * `htmlAttribute` has its own form, which neither `closure-extent`'s default
+ * `follow` nor `claude-context-discovery`'s `FOLLOWED_FORMS` follows: labelling
+ * an HTML link `markdown-link` would make `vat inventory` report members
+ * `vat build` does not bundle.
+ */
+const AST_FORM_OF_NODE_TYPE: { readonly [NodeType in LinkNodeType]: ReferenceSyntacticForm } = {
+  link: 'markdown-link',
+  linkReference: 'markdown-link-reference',
+  definition: 'markdown-definition',
+  htmlAttribute: 'html-link',
+};
+
+/** {@link AST_FORM_OF_NODE_TYPE} inverted: the node type each AST form was stored from. */
+export const NODE_TYPE_OF_AST_FORM: ReadonlyMap<ReferenceSyntacticForm, LinkNodeType> = new Map(
+  (Object.entries(AST_FORM_OF_NODE_TYPE) as [LinkNodeType, ReferenceSyntacticForm][]).map(([nodeType, form]) => [form, nodeType]),
+);
+
 /**
  * Map an AST node type onto its syntactic form.
  *
- * An `if`/`else if` chain rather than a `switch`:
- * `@typescript-eslint/switch-exhaustiveness-check` requires a switch over a
- * union to name every member even with a `default`, and the absent case is not
- * a member of the union at all.
+ * ⛔ An absent node type is refused, never defaulted. It used to default to
+ * `markdown-link`, and the fact reader then rebuilt such a link as a `link`
+ * node: a resource the cold lane built with no `nodeType` came back from the
+ * store with one. Every parser states it (`remark-parser`'s `toResourceLink`,
+ * `html-link-parser`'s `makeLink`), so a link without one is a producer's
+ * defect, and guessing would file a fact the bytes never said.
  *
- * ⛔ The absent case used to be the HTML parser's, which emitted links with no
- * `nodeType` and so collected the `markdown-link` default. That was wrong and
- * INERT at the same time: every HTML link was dropped by {@link astCandidates}
- * for want of a span, so the mislabel described a population of zero and no
- * test could see it. Giving HTML rows a span is exactly what would have made it
- * load-bearing — `markdown-link` is followed by `closure-extent`'s default
- * `follow` and by `claude-context-discovery`'s `FOLLOWED_FORMS`, so
- * `vat inventory` would have begun reporting members `vat build` does not
- * bundle. The parser now states `htmlAttribute` and this maps it to its own
- * form, which neither list follows.
- *
- * The remaining absent case is a producer that did not say. It keeps
- * `markdown-link` because mdast is the only other producer feeding this
- * function, and every mdast inline link arrives as `'link'` — but the default
- * is now a fallback nothing shipped relies on, rather than a live path.
- *
- * @param nodeType - `ResourceLink.nodeType`, possibly absent
- * @returns The matching syntactic form, defaulting an absent node type to `markdown-link`
+ * @param nodeType - `ResourceLink.nodeType`
+ * @returns The matching syntactic form
+ * @throws A `VatError` coded {@link LINK_NODE_TYPE_MISSING} when the producer stated none
  */
 function syntacticFormFor(nodeType: LinkNodeType | undefined): ReferenceSyntacticForm {
-  if (nodeType === 'linkReference') return 'markdown-link-reference';
-  if (nodeType === 'definition') return 'markdown-definition';
-  if (nodeType === 'htmlAttribute') return 'html-link';
-  return 'markdown-link';
+  if (nodeType === undefined) {
+    throw new VatError(LINK_NODE_TYPE_MISSING, 'A parser produced a link with no nodeType; every link a parser emits must state the AST node type it came from.');
+  }
+  return AST_FORM_OF_NODE_TYPE[nodeType];
 }
 
 /**

@@ -1149,7 +1149,8 @@ function discoverySection(discoverable: DiscoverableContext | null): string[] {
     lines.push(`  ${displayPath(row.path)} — ${discoverableCost(row)}`);
     for (const citation of row.citedBy) {
       const text = citation.text === null ? '' : ` as "${citation.text}"`;
-      lines.push(`      linked from ${displayPath(citation.fromPath)}:${citation.line}${text}`);
+      const at = citation.line === null ? '' : `:${String(citation.line)}`;
+      lines.push(`      linked from ${displayPath(citation.fromPath)}${at}${text}`);
     }
   }
   lines.push('');

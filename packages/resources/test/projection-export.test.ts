@@ -214,6 +214,7 @@ function contribute(builder: ProjectionBuilder, side: Side): void {
     linkCount: 0,
     headingCount: 1,
     sectionCount: 1,
+    findingCount: 0,
   });
   builder.addBlobReference(referenceRow(side.blob));
   // Both sections land on BLOB_A so that (blob, ordinal) ordering is exercised

@@ -5,6 +5,7 @@ import { parseMarkdownContent, type ParseResult } from '../src/link-parser.js';
 import {
   AST_SYNTACTIC_FORMS,
   blobReferencesFor,
+  LINK_NODE_TYPE_MISSING,
 } from '../src/projection/blob-references.js';
 import { FOLLOWED_FORMS } from '../src/projection/claude-context-discovery.js';
 import { LexicalSyntacticFormSchema, type LexicalReference } from '../src/schemas/parse-facts.js';
@@ -19,7 +20,7 @@ import type { LinkNodeType, ResourceLink } from '../src/schemas/resource-metadat
 const CONTENT_KEY = `markdown.${'c'.repeat(64)}`;
 const AT_TOKEN = '@docs/setup.md';
 const HREF = './b.md';
-/** The `syntacticForm` an absent/`'link'` `nodeType` defaults to — the one this file names three times. */
+/** The `syntacticForm` of a `'link'` node — the one this file names three times. */
 const MARKDOWN_LINK = 'markdown-link';
 
 function parseResult(overrides: Partial<ParseResult>): ParseResult {
@@ -27,13 +28,14 @@ function parseResult(overrides: Partial<ParseResult>): ParseResult {
 }
 
 /**
- * An AST link as the parser really shapes it. `nodeType` decides syntacticForm.
+ * An AST link as the parser really shapes it. `nodeType` decides syntacticForm;
+ * every parser states one, so the fixture does too (`link` unless told).
  *
  * The span is derived from `line` rather than passed, because these fixtures
  * assert ORDER and shape, not positions — but it has to be present and distinct
  * per line, since a link with no span is skipped rather than admitted.
  */
-function link(line: number, nodeType?: LinkNodeType): ResourceLink {
+function link(line: number, nodeType: LinkNodeType = 'link'): ResourceLink {
   return {
     text: 'b',
     href: HREF,
@@ -41,7 +43,7 @@ function link(line: number, nodeType?: LinkNodeType): ResourceLink {
     line,
     startOffset: line * 100,
     endOffset: line * 100 + HREF.length,
-    ...(nodeType !== undefined && { nodeType }),
+    nodeType,
   };
 }
 
@@ -90,21 +92,26 @@ describe('blobReferencesFor', () => {
     expect(rows[0]?.inCodeSpan).toBe(true);
   });
 
-  it('derives syntacticForm from nodeType, defaulting an absent one to markdown-link', () => {
+  it('derives syntacticForm from nodeType', () => {
     const rows = blobReferencesFor(CONTENT_KEY, parseResult({
       links: [
         link(1, 'link'),
         link(2, 'linkReference'),
         link(3, 'definition'),
         link(4, 'htmlAttribute'),
-        link(5),
       ],
     }));
 
     expect(rows.map((row) => row.syntacticForm)).toEqual([
       MARKDOWN_LINK, 'markdown-link-reference', 'markdown-definition', 'html-link',
-      MARKDOWN_LINK,
     ]);
+  });
+
+  it('refuses a link whose producer stated no nodeType, rather than guess its form', () => {
+    const unstated: ResourceLink = link(1);
+    delete unstated.nodeType;
+    expect(() => blobReferencesFor(CONTENT_KEY, parseResult({ links: [unstated] })))
+      .toThrow(expect.objectContaining({ code: LINK_NODE_TYPE_MISSING }));
   });
 
   it('partitions every syntacticForm into exactly one of AST-derived or lexer-derived', () => {
@@ -280,7 +287,7 @@ describe('blobReferencesFor', () => {
     // Defaulting would pile every position-less reference onto the first line,
     // where no assertion could ever catch it; dropping it lost a resource fact.
     const rows = blobReferencesFor(CONTENT_KEY, parseResult({
-      links: [{ text: 'b', href: HREF, type: 'local_file' }],
+      links: [{ text: 'b', href: HREF, type: 'local_file', nodeType: 'link' }],
     }));
 
     expect(rows).toMatchObject([{ rawRef: HREF, line: null, startOffset: null, endOffset: null, astIndex: 0 }]);

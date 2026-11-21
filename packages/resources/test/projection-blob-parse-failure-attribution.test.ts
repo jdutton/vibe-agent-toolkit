@@ -72,8 +72,8 @@ import { ParseCache, ParserUnavailableError } from '../src/parse-cache.js';
 import type { ParsePoolPolicy } from '../src/parse-dispatcher.js';
 import { reviveParserThrow } from '../src/parse-limits.js';
 import { createParsePool, type ParsePool, type ParsePoolOptions } from '../src/parse-pool.js';
-import { BLOB_PARSE_FAILED } from '../src/projection/blob-population.js';
-import { blobConditionEntry } from '../src/projection/blob-refusals.js';
+import { BLOB_PARSE_FAILED, storableBlobFacts } from '../src/projection/blob-population.js';
+import { blobFactsReader } from '../src/projection/blob-resource-facts.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 
 import { baseBuilderForRoot, conditionsWithCode, populateBlobsOnOwnDispatcher } from './blob-fixture-population.js';
@@ -319,6 +319,10 @@ describe('a parser-load failure during registry admission', () => {
  * lane records the same entry from the throw - the same reason and the same code -
  * rather than failing the run. A warm run serving the stored row and a cold run
  * meeting the throw then report one finding.
+ *
+ * The stored side is read the way a warm run reads it: the rows the store keeps
+ * (`storableBlobFacts`), through the one fact reader (`blobFactsReader`), whose
+ * not-admitted answer no file's bytes can reach any other way.
  */
 describe('an ordinary parser failure in both lanes', () => {
   it.each([
@@ -328,7 +332,12 @@ describe('an ordinary parser failure in both lanes', () => {
     failures.parse = error;
     const builder = await baseBuilderForRoot(suite.tempDir);
     await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE, policy: failingPolicy() });
-    const stored = conditionsWithCode(builder.build(), BLOB_PARSE_FAILED).map((row) => blobConditionEntry(row));
+    const projection = builder.build();
+    const read = blobFactsReader(storableBlobFacts(projection));
+    const stored = conditionsWithCode(projection, BLOB_PARSE_FAILED).map((row) => {
+      const outcome = read(row.blob);
+      return outcome.kind === 'not-admitted' ? outcome.entry : outcome;
+    });
 
     const registry = new ResourceRegistry({ parseCache: NO_CACHE, parsePool: failingPolicy() });
     const admitted = await registry.addResources(corpusPaths());

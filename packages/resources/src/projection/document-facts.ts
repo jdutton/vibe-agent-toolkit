@@ -218,7 +218,7 @@ function notTextFacts(keyed: KeyedContent): ParseResult {
 }
 
 /** Where one read goes: see the module docblock. */
-export type ContentRoute =
+type ContentRoute =
   | { readonly kind: 'not-text'; readonly facts: ParseResult }
   | { readonly kind: 'without-parser'; readonly facts: ParseResult }
   | { readonly kind: 'parse'; readonly content: ParsableContent };

@@ -177,6 +177,8 @@ export function blobRowFor(
     linkCount: parsed.links.length,
     headingCount,
     sectionCount: headingCount,
+    // The rows `blobConditionsFor` files, counted by the same walk.
+    findingCount: blobConditionsFor(contentKey, parsed).length,
   };
 }
 

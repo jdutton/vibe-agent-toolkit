@@ -144,7 +144,8 @@ export interface DiscoverableRow {
 export interface DiscoveryCitation {
   /** Root-relative path of the LOADED file carrying the reference. */
   readonly fromPath: string;
-  readonly line: number;
+  /** The reference's line, or null for a link its parser gave no position (stored, never dropped). */
+  readonly line: number | null;
   /** Link text, or null for a bare autolink or a definition. */
   readonly text: string | null;
 }
@@ -400,7 +401,7 @@ function totalsOf(rows: readonly DiscoverableRow[]): DiscoveryTotals {
 }
 
 /**
- * Order two citations by source path, then line.
+ * Order two citations by source path, then line, a citation with no line last.
  *
  * @param left - One citation
  * @param right - The other
@@ -408,6 +409,9 @@ function totalsOf(rows: readonly DiscoverableRow[]): DiscoveryTotals {
  */
 function compareCitations(left: DiscoveryCitation, right: DiscoveryCitation): number {
   if (left.fromPath !== right.fromPath) return comparePaths(left.fromPath, right.fromPath);
+  if (left.line === right.line) return 0;
+  if (left.line === null) return 1;
+  if (right.line === null) return -1;
   return left.line - right.line;
 }
 

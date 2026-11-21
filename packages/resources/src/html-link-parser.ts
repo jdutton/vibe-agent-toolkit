@@ -354,9 +354,11 @@ function makeLink(element: P5Element, attr: P5Attribute): ResourceLink {
     text: element.tagName === 'a' ? elementText(element) : '',
     href: attr.value,
     type: classifyLink(attr.value),
-    nodeType: 'htmlAttribute',
+    // Keys in `ResourceLink`'s own order, as the markdown parser and the blob
+    // fact reader write them, so a link is one shape whichever lane built it.
     ...(line !== undefined && { line }),
     ...(span !== undefined && { startOffset: span.startOffset, endOffset: span.endOffset }),
+    nodeType: 'htmlAttribute',
   };
 }
 

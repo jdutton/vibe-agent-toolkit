@@ -1159,7 +1159,7 @@ A rules file with a `paths:` list is **path-scoped**: Claude Code does not load 
 - **Emitted by:** `vat resources check`, and `vat validate`'s `checks` phase, as the built-in check `claude-rule-frontmatter-invalid`, beside `claude-rule-glob-inert`. One finding per rules file, at the file, with `field: frontmatter` and the parser's first line of explanation.
 - **Ask it yourself:**
   ```sql
-  SELECT DISTINCT r.path, b.frontmatterError, b.frontmatterNotAMapping
+  SELECT DISTINCT r.path, COALESCE(b.frontmatterError, CASE WHEN b.frontmatterNotAMapping THEN 'the frontmatter block is valid YAML but not a YAML mapping — it decodes to a sequence, a scalar or a typed value (!!set, !!omap, !!timestamp, !!binary), so it declares no keys at all' END) AS frontmatterError
     FROM resource_realizations r
     JOIN blobs b ON b.contentKey = r.contentKey
    WHERE (b.frontmatterError IS NOT NULL OR b.frontmatterNotAMapping)

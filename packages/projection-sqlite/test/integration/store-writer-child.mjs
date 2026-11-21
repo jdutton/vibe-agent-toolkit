@@ -61,6 +61,7 @@ function blobBundle(contentKey) {
       linkCount: 0,
       headingCount: 0,
       sectionCount: 0,
+      findingCount: 0,
     }],
     blobReferences: [],
     blobSections: [],

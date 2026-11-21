@@ -365,6 +365,7 @@ function blobRow(key: string): BlobRow {
     linkCount: 0,
     headingCount: 0,
     sectionCount: 0,
+    findingCount: 0,
   };
 }
 

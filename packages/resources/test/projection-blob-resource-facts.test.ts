@@ -11,7 +11,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { parseMarkdownContent } from '../src/link-parser.js';
+import { parseHtmlContent } from '../src/html-link-parser.js';
+import { parseMarkdownContent, type ParseResult } from '../src/link-parser.js';
 import { blobConditionsFor, blobRowFor } from '../src/projection/blob-facts.js';
 import { blobReferencesFor } from '../src/projection/blob-references.js';
 import { blobFactsReader } from '../src/projection/blob-resource-facts.js';
@@ -27,12 +28,23 @@ const DOC = '# Title\n\nSee [a](./a.md) and [x][missing].\n\n## Next\n';
  * @returns Every blob-scoped table, harness tables empty
  */
 function rowsOfDoc(): BlobScopedRows {
-  const parsed = parseMarkdownContent(DOC, DOC.length);
+  return rowsOf(CONTENT_KEY, DOC, parseMarkdownContent(DOC, DOC.length));
+}
+
+/**
+ * The rows the blob lane writes for one parse.
+ *
+ * @param contentKey - The blob's key
+ * @param source - The decoded text
+ * @param parsed - Its parse
+ * @returns Every blob-scoped table, harness tables empty
+ */
+function rowsOf(contentKey: string, source: string, parsed: ParseResult): BlobScopedRows {
   return {
-    blobs: [blobRowFor(CONTENT_KEY, DOC.length, { encoding: 'utf-8', encodingSource: 'assumed', replacementCharacters: 0 }, parsed)],
-    blobReferences: blobReferencesFor(CONTENT_KEY, parsed),
-    blobSections: blobSectionsFor(CONTENT_KEY, DOC, parsed.headings),
-    blobConditions: blobConditionsFor(CONTENT_KEY, parsed),
+    blobs: [blobRowFor(contentKey, source.length, { encoding: 'utf-8', encodingSource: 'assumed', replacementCharacters: 0 }, parsed)],
+    blobReferences: blobReferencesFor(contentKey, parsed),
+    blobSections: blobSectionsFor(contentKey, source, parsed.headings),
+    blobConditions: blobConditionsFor(contentKey, parsed),
     harnessBlobFacts: [],
     harnessBlobImports: [],
   };
@@ -73,5 +85,54 @@ describe('blobFactsReader', () => {
 
   it('is uncovered for a key the bundle does not hold', () => {
     expect(blobFactsReader(rowsOfDoc())(`markdown.${'d'.repeat(64)}`).kind).toBe('uncovered');
+  });
+
+  // parse5 no longer emits a link with a line and no offsets (the clone that
+  // carried one is dropped upstream), so no file reaches this shape and the
+  // store-fidelity round trip cannot hold it: it is held here, from a real HTML
+  // parse with the offsets taken off one link.
+  it('rebuilds an HTML link that has a line and no offsets exactly as the parser left it', () => {
+    const source = '<p><a href="./a.md">A</a></p>\n';
+    const parsed = parseHtmlContent(source, source.length);
+    const [located] = parsed.links;
+    expect(located?.line).toBe(1);
+    const halfPositioned = { ...located ?? { text: '', href: '', type: 'local_file' as const } };
+    delete halfPositioned.startOffset;
+    delete halfPositioned.endOffset;
+    const htmlKey = `html.${'e'.repeat(64)}`;
+    const outcome = blobFactsReader(rowsOf(htmlKey, source, { ...parsed, links: [halfPositioned] }))(htmlKey);
+    expect(outcome.kind).toBe('facts');
+    if (outcome.kind !== 'facts') return;
+    expect(outcome.facts.links).toStrictEqual([halfPositioned]);
+    expect(outcome.facts.links.map((link) => Object.keys(link))).toEqual([Object.keys(halfPositioned)]);
+  });
+
+  it('is uncovered, not a throw, when the stored frontmatter encoding is malformed', () => {
+    const rows = rowsOfDoc();
+    const blobs = rows.blobs.map((row) => ({ ...row, frontmatterValue: 'not the codec encoding' }));
+    const outcome = blobFactsReader({ ...rows, blobs })(CONTENT_KEY);
+    expect(outcome).toMatchObject({ kind: 'uncovered', reason: expect.stringContaining('frontmatterValue') });
+  });
+
+  it('is uncovered when the astIndex values have a gap', () => {
+    const rows = rowsOfDoc();
+    const blobReferences = rows.blobReferences.map((row) => (row.astIndex === 0 ? { ...row, astIndex: 1 } : row));
+    expect(blobReferences.filter((row) => row.astIndex === 1)).toHaveLength(1);
+    const outcome = blobFactsReader({ ...rows, blobReferences })(CONTENT_KEY);
+    expect(outcome).toMatchObject({ kind: 'uncovered', reason: expect.stringContaining('astIndex') });
+  });
+
+  it('is uncovered when the section ordinals have a gap', () => {
+    const rows = rowsOfDoc();
+    const blobSections = rows.blobSections.map((row) => (row.ordinal === 1 ? { ...row, ordinal: 5 } : row));
+    const outcome = blobFactsReader({ ...rows, blobSections })(CONTENT_KEY);
+    expect(outcome).toMatchObject({ kind: 'uncovered', reason: expect.stringContaining('section') });
+  });
+
+  it('is uncovered when a finding condition row is missing against findingCount', () => {
+    const rows = rowsOfDoc();
+    expect(rows.blobs[0]?.findingCount).toBeGreaterThan(0);
+    const outcome = blobFactsReader({ ...rows, blobConditions: [] })(CONTENT_KEY);
+    expect(outcome).toMatchObject({ kind: 'uncovered', reason: expect.stringContaining('findingCount') });
   });
 });

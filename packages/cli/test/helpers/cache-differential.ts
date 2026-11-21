@@ -668,6 +668,18 @@ const EVICTION_OUTCOMES: { readonly [Name in VerbName]: EvictionOutcome } = {
   vatValidate: { rederives: true, origins: { 'resources.population': 'store' } },
 };
 
+/**
+ * How many store reads a served warm run makes: one per process that populates.
+ * `vat validate` runs its checks phase as a child process, so it reads twice.
+ */
+const WARM_STORE_READS: { readonly [Name in VerbName]: number } = {
+  validate: 1,
+  check: 1,
+  query: 1,
+  context: 1,
+  vatValidate: 2,
+};
+
 /** Each cell's evicted content keys, from the arm's `prepare` to its measured run's tell. */
 const evictedByCell = new Map<string, readonly string[]>();
 
@@ -775,10 +787,10 @@ const ARMS: { readonly [Name in ArmName]: Arm } = {
       // absent write proves a hit: a hit returns before anything is derived, and only a derivation is
       // written. Every verb hits after one query prime because every population a verb makes asks the
       // filesystem extent the same question (the ignored half declined), so one stored extent serves all.
-      // One read per process that populates: `vat validate`'s checks phase is a child with its own.
-      const charges = storeCharges(run);
-      expect(charges.length, `${run.verb}: the warm run never read the store`).toBeGreaterThan(0);
-      expect(new Set(charges), `${run.verb}: the warm run was not served`).toEqual(new Set([CRAWL_STORE_READ_ID]));
+      // One read per process that populates, counted exactly: a second read in one process is a
+      // regression this arm must catch, and `vat validate`'s checks phase is a child with its own.
+      expect(storeCharges(run), `${run.verb}: the warm run was not served by exactly its reads`)
+        .toEqual(Array.from({ length: WARM_STORE_READS[run.verb] }, () => CRAWL_STORE_READ_ID));
       expectOrigin(run, 'store');
     },
   },

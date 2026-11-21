@@ -133,6 +133,11 @@
         "sectionCount": {
           "type": "integer",
           "minimum": 0
+        },
+        "findingCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many finding rows (HTML_PARSE_ERROR, UNRESOLVED_REFERENCE) the parse filed in blob_conditions for this blob: what a reader checks those rows against, as linkCount checks blob_references"
         }
       },
       "required": [
@@ -152,7 +157,8 @@
         "codeBlockCodeUnits",
         "linkCount",
         "headingCount",
-        "sectionCount"
+        "sectionCount",
+        "findingCount"
       ],
       "additionalProperties": false,
       "description": "A row of the blob-keyed `blobs` table"

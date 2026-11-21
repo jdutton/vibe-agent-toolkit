@@ -341,6 +341,7 @@ const FIXTURES: readonly TableFixture[] = [
       linkCount: 2,
       headingCount: 3,
       sectionCount: 3,
+      findingCount: 0,
     },
     {
       contentKey: BLOB_ALT,
@@ -360,6 +361,7 @@ const FIXTURES: readonly TableFixture[] = [
       linkCount: 4,
       headingCount: 6,
       sectionCount: 6,
+      findingCount: 2,
     },
   ),
   fixture(

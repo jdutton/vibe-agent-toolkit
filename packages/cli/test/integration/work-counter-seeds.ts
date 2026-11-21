@@ -102,6 +102,7 @@ function oneBlobRow(): BlobScopedRows {
       linkCount: 0,
       headingCount: 1,
       sectionCount: 1,
+      findingCount: 0,
     }],
     blobReferences: [],
     blobSections: [],
