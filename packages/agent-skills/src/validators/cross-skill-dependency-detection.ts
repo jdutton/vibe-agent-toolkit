@@ -14,36 +14,24 @@
  * The detector is narrow on purpose: false positives cost author attention,
  * so we only match the two explicit patterns where the author has already
  * stated the dependency in the body.
+ *
+ * The text half (a backtick-wrapped `plugin:skill` ref or an
+ * `ANTHROPIC_*_KEY` with a "requires" / "depends on" phrase in the 60
+ * characters before it, each distinct token once, refs then keys) is the
+ * skill-text core's `crossSkillAuth` family (over the whole file) and
+ * `crossSkillAuthBody` family (over the frontmatter parser's body) in
+ * `@vibe-agent-toolkit/resources`. The comparison against `description` is
+ * judgement, and stays here.
  */
 
+import type { SkillTextFacts } from '@vibe-agent-toolkit/resources';
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+
+import { recordsOf } from './skill-text-records.js';
 
 
 /** Document-internal pointer — belongs in `ValidationIssue.field`, not `location`. */
 const DESCRIPTION_FIELD = 'frontmatter.description';
-
-/**
- * Backtick-wrapped skill reference, e.g. `plugin:skill-name` or
- * `plugin:namespaced-skill`. Plugin and skill parts are both kebab-case.
- * We require a colon so bare words like `` `scripts` `` don't match.
- */
-const BACKTICK_SKILL_REF_RE = /`([a-z][a-z0-9-]*):([a-z][a-z0-9-]*)`/gi;
-
-/**
- * ANTHROPIC_<ANYTHING>_API_KEY or ANTHROPIC_<ANYTHING>_KEY, e.g.
- * ANTHROPIC_ADMIN_API_KEY, ANTHROPIC_WORKBENCH_API_KEY, ANTHROPIC_ORG_KEY.
- * The generic `ANTHROPIC_API_KEY` (no segment) is intentionally excluded —
- * it is the universal default, not a cross-skill dependency.
- */
-const ANTHROPIC_KEY_RE = /\bANTHROPIC_[A-Z][A-Z0-9_]*_(?:API_)?KEY\b/g;
-
-/**
- * Phrases that introduce a dependency statement. Case-insensitive.
- * We look for the phrase within ~60 characters of the dependency token.
- */
-const DEPENDENCY_INTRO_RE = /\b(requires?|depends?\s+on)\b/i;
-
-const LOOKBEHIND_CHARS = 60;
 
 /**
  * Build the set of description-recognizable shards for a sibling-skill
@@ -89,52 +77,6 @@ function descriptionDeclaresAny(description: string, shards: readonly string[]):
 }
 
 /**
- * Returns true when the text surrounding `matchIndex` contains a
- * "requires" / "depends on" phrase within the lookback window.
- */
-function hasDependencyIntro(body: string, matchIndex: number): boolean {
-	const start = Math.max(0, matchIndex - LOOKBEHIND_CHARS);
-	const window = body.slice(start, matchIndex);
-	return DEPENDENCY_INTRO_RE.test(window);
-}
-
-/**
- * Scan body prose for backtick-wrapped `plugin:skill` references introduced
- * by a dependency phrase. Returns the distinct skill tokens found.
- */
-function findSiblingSkillDependencies(body: string): string[] {
-	const found = new Set<string>();
-	for (const match of body.matchAll(BACKTICK_SKILL_REF_RE)) {
-		const fullRef = match[0].slice(1, -1); // strip backticks
-		if (hasDependencyIntro(body, match.index ?? 0)) {
-			found.add(fullRef);
-		}
-	}
-	return [...found];
-}
-
-/**
- * Scan body prose for ANTHROPIC_*_KEY env-var references introduced by a
- * dependency phrase. Returns the distinct env-var tokens found.
- */
-function findEnvKeyDependencies(body: string): string[] {
-	const found = new Set<string>();
-	for (const match of body.matchAll(ANTHROPIC_KEY_RE)) {
-		const envKey = match[0];
-		// Bare ANTHROPIC_API_KEY is the universal default for Claude API, not a
-		// cross-skill dependency signal. The regex above matches it because the
-		// [A-Z][A-Z0-9_]* segment can greedily consume "API", leaving "_KEY" to
-		// match with the optional (?:API_)? skipped. Skip it explicitly here so
-		// the regex stays readable.
-		if (envKey === 'ANTHROPIC_API_KEY') continue;
-		if (hasDependencyIntro(body, match.index ?? 0)) {
-			found.add(envKey);
-		}
-	}
-	return [...found];
-}
-
-/**
  * Extract the skill name from a `plugin:skill` reference. Returns the
  * reference unchanged if no colon is present.
  */
@@ -147,13 +89,17 @@ function skillPartOfRef(ref: string): string {
  * Detect undeclared cross-skill auth / env-var dependencies.
  *
  * @param frontmatter - Parsed frontmatter (uses `description`).
- * @param bodyText - SKILL.md body text (post-frontmatter).
+ * @param facts - The document's skill-text record.
+ * @param family - Which scan the lane reads: `crossSkillAuth` (the whole file,
+ *   frontmatter included — the packaging lane) or `crossSkillAuthBody` (the
+ *   frontmatter parser's body — the skill lane).
  * @param location - Project-relative POSIX path of the containing SKILL.md.
  * @returns One issue per undeclared dependency (deduplicated by token).
  */
 export function detectUndeclaredCrossSkillAuth(
-	frontmatter: Record<string, unknown>,
-	bodyText: string,
+	frontmatter: Readonly<Record<string, unknown>>,
+	facts: SkillTextFacts,
+	family: 'crossSkillAuth' | 'crossSkillAuthBody',
 	location: string,
 ): ValidationIssue[] {
 	const description = frontmatter['description'];
@@ -165,35 +111,25 @@ export function detectUndeclaredCrossSkillAuth(
 
 	const issues: ValidationIssue[] = [];
 	const registryEntry = CODE_REGISTRY.SKILL_CROSS_SKILL_AUTH_UNDECLARED;
+	const undeclared = (message: string): ValidationIssue => ({
+		severity: registryEntry.defaultSeverity,
+		code: 'SKILL_CROSS_SKILL_AUTH_UNDECLARED',
+		message,
+		location,
+		field: DESCRIPTION_FIELD,
+		fix: registryEntry.fix,
+		reference: registryEntry.reference,
+	});
 
-	// Sibling-skill backtick refs
-	for (const ref of findSiblingSkillDependencies(bodyText)) {
-		const skillName = skillPartOfRef(ref);
-		if (!descriptionDeclaresAny(description, siblingSkillShards(skillName))) {
-			issues.push({
-				severity: registryEntry.defaultSeverity,
-				code: 'SKILL_CROSS_SKILL_AUTH_UNDECLARED',
-				message: `Body declares a dependency on \`${ref}\` but the description does not mention "${skillName}".`,
-				location,
-				field: DESCRIPTION_FIELD,
-				fix: registryEntry.fix,
-				reference: registryEntry.reference,
-			});
-		}
-	}
-
-	// ANTHROPIC_*_KEY env vars
-	for (const envKey of findEnvKeyDependencies(bodyText)) {
-		if (!descriptionDeclaresAny(description, envKeyShards(envKey))) {
-			issues.push({
-				severity: registryEntry.defaultSeverity,
-				code: 'SKILL_CROSS_SKILL_AUTH_UNDECLARED',
-				message: `Body declares a dependency on ${envKey} but the description does not mention it.`,
-				location,
-				field: DESCRIPTION_FIELD,
-				fix: registryEntry.fix,
-				reference: registryEntry.reference,
-			});
+	// Sibling-skill backtick refs, then ANTHROPIC_*_KEY env vars: the core's order.
+	for (const { patternId, matchText: token } of recordsOf(facts, family)) {
+		if (patternId === 'sibling-skill-ref') {
+			const skillName = skillPartOfRef(token);
+			if (!descriptionDeclaresAny(description, siblingSkillShards(skillName))) {
+				issues.push(undeclared(`Body declares a dependency on \`${token}\` but the description does not mention "${skillName}".`));
+			}
+		} else if (!descriptionDeclaresAny(description, envKeyShards(token))) {
+			issues.push(undeclared(`Body declares a dependency on ${token} but the description does not mention it.`));
 		}
 	}
 

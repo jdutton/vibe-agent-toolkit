@@ -22,6 +22,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { ResourcePopulationSource } from '../src/projection/resource-population.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 
+import { noStoredDocument } from './helpers/population-run.js';
+
 /** The fixture members every test in this file writes. */
 const FIXTURE_NAMES = ['a.md', 'b.md', 'notes.txt'] as const;
 
@@ -45,6 +47,7 @@ function stubSource(
   return {
     offeredRoots,
     source: {
+      storedDocument: noStoredDocument,
       enumerate: (root: string) => {
         offeredRoots.push(root);
         return Promise.resolve({

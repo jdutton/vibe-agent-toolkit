@@ -15,6 +15,7 @@ import {
 import { vatCacheRoot } from '../src/cache-root.js';
 import { isProjectionStoreDirectoryName, projectionShapeDigest, projectionStoreDirectoryName } from '../src/projection/store.js';
 import { ParseFactsSchema, parseFactsShapeSource, schemaShapeSource } from '../src/schemas/parse-facts.js';
+import { SKILL_TEXT_DECLARATION, skillTextDeclarationDigest } from '../src/skill-text/declaration.js';
 
 /**
  * The emitted modules the *removed* build fingerprint used to stat.
@@ -54,6 +55,7 @@ async function restampModules(dir: string, epochSeconds: number): Promise<void> 
 
 /** A stand-in for the shape input, so path-only tests state what they hold fixed. */
 const A_SHAPE = '{"type":"object"}';
+const A_DECLARATION = skillTextDeclarationDigest(SKILL_TEXT_DECLARATION);
 
 describe('devNamespaceDigest', () => {
   let tempDir: string;
@@ -72,11 +74,11 @@ describe('devNamespaceDigest', () => {
     // a negative control by construction: it was RED before, because both the
     // size (different body length) and the mtime move below.
     await writeRebuiltModules(tempDir, 'export const version = 1;');
-    const before = devNamespaceDigest(tempDir, A_SHAPE);
+    const before = devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION);
 
     await writeRebuiltModules(tempDir, 'export const version = 2; // rebuilt, and longer than before');
     await restampModules(tempDir, Date.now() / 1000 + 3600);
-    const after = devNamespaceDigest(tempDir, A_SHAPE);
+    const after = devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION);
 
     expect(after).toBe(before);
   });
@@ -86,29 +88,30 @@ describe('devNamespaceDigest', () => {
     // recorded each missing module as `<name>:absent`, so mid-clean runs got
     // their own namespace; nothing about a parse fact changed.
     await writeRebuiltModules(tempDir, 'export const version = 1;');
-    const populated = devNamespaceDigest(tempDir, A_SHAPE);
+    const populated = devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION);
 
     await Promise.all(REBUILT_MODULE_FILES.map(async (name) => fs.rm(safePath.join(tempDir, name))));
 
-    expect(devNamespaceDigest(tempDir, A_SHAPE)).toBe(populated);
+    expect(devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION)).toBe(populated);
   });
 
-  it('depends on the module directory and the entry shape, and NOTHING else', () => {
+  it('depends on the module directory, the entry shape and the skill-text declaration, and NOTHING else', () => {
     // Pins the whole input set, so a fourth input cannot appear quietly. A
     // hand-bumped parser-revision constant was once an argument here and must
-    // not return: both survivors are DERIVED — the path from where this code
-    // was resolved, the shape from `ParseFactsSchema` itself — so neither can
-    // fall behind what it stands for. What is left over lives in `vat cache
-    // clear` (a change of meaning, at unchanged shape).
-    expect(devNamespaceDigest).toHaveLength(2);
+    // not return: every input is DERIVED — the path from where this code was
+    // resolved, the shape from `ParseFactsSchema` itself, the declaration digest
+    // from the patterns the skill-text core applies — so none can fall behind
+    // what it stands for. What is left over lives in `vat cache clear` (a change
+    // of meaning, at unchanged shape and declaration).
+    expect(devNamespaceDigest).toHaveLength(3);
   });
 
   it('moves when the module directory moves, so two worktrees never share a namespace', () => {
     // The one thing the path component is for. Every worktree reads the same
     // version from the same manifest, so without this, branch A and branch B
     // would collide — precisely when invalidation matters most.
-    expect(devNamespaceDigest(safePath.join(tempDir, 'other-worktree'), A_SHAPE)).not.toBe(
-      devNamespaceDigest(tempDir, A_SHAPE)
+    expect(devNamespaceDigest(safePath.join(tempDir, 'other-worktree'), A_SHAPE, A_DECLARATION)).not.toBe(
+      devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION)
     );
   });
 
@@ -116,17 +119,27 @@ describe('devNamespaceDigest', () => {
     // The counterpart. Without this input, adding an OPTIONAL field to
     // `ParseFacts` leaves every pre-existing entry valid, correctly keyed and
     // silently missing the new field — the exact defect that shipped once.
-    expect(devNamespaceDigest(tempDir, A_SHAPE)).not.toBe(devNamespaceDigest(tempDir, '{"type":"array"}'));
+    expect(devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION)).not.toBe(devNamespaceDigest(tempDir, '{"type":"array"}', A_DECLARATION));
   });
 
-  it('cannot be confused by moving the boundary between its two inputs', () => {
+  it('moves when the skill-text declaration moves, so a pattern edit never serves the old pattern\'s records', () => {
+    // Every markdown entry holds the skill-text core's record, computed under
+    // the declaration's patterns. A pattern edit leaves the entry's shape and
+    // key unchanged, so only this input sends a dev checkout to a new namespace.
+    const edited = skillTextDeclarationDigest({ ...SKILL_TEXT_DECLARATION, h1: /^#[ \t]([^\n]+)$/m });
+    expect(edited).not.toBe(A_DECLARATION);
+    expect(devNamespaceDigest(tempDir, A_SHAPE, edited)).not.toBe(devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION));
+  });
+
+  it('cannot be confused by moving the boundary between its inputs', () => {
     // Concatenating inputs into one hash without a separator lets ('ab', 'c')
     // and ('a', 'bc') collide. Cheap to get wrong, invisible when wrong.
-    expect(devNamespaceDigest(`${tempDir}/x`, 'y')).not.toBe(devNamespaceDigest(tempDir, '/xy'));
+    expect(devNamespaceDigest(`${tempDir}/x`, 'y', A_DECLARATION)).not.toBe(devNamespaceDigest(tempDir, '/xy', A_DECLARATION));
+    expect(devNamespaceDigest(tempDir, `${A_SHAPE}z`, 'w')).not.toBe(devNamespaceDigest(tempDir, A_SHAPE, 'zw'));
   });
 
   it('is six lowercase hex digits, so it is safe as a path segment', () => {
-    expect(devNamespaceDigest(tempDir, A_SHAPE)).toMatch(/^[0-9a-f]{6}$/u);
+    expect(devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION)).toMatch(/^[0-9a-f]{6}$/u);
   });
 });
 
@@ -186,7 +199,7 @@ describe('vatCacheNamespace', () => {
     // Ties the memoized entry point to the function the tests above exercise:
     // without this, `devNamespaceDigest` could drift into being decoration.
     const moduleDir = safePath.join(resolveFromImportMeta(import.meta.url), '..', '..', 'src');
-    expect(vatCacheNamespace().endsWith(`-dev-${devNamespaceDigest(moduleDir, parseFactsShapeSource())}`)).toBe(true);
+    expect(vatCacheNamespace().endsWith(`-dev-${devNamespaceDigest(moduleDir, parseFactsShapeSource(), A_DECLARATION)}`)).toBe(true);
   });
 
   it('is stable within a process, so two lookups cannot disagree', () => {

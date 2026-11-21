@@ -117,7 +117,7 @@ import { isParseLimitError, isParserThrewError, isPerRunParseRefusal, type PerRu
 import type { BlobConditionRow } from '../schemas/projection-blobs.js';
 import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
 
-import { blobConditionsFor, blobRowFor } from './blob-facts.js';
+import { blobConditionsFor, blobRowFor, skillTextRowsFor } from './blob-facts.js';
 import { blobReferencesFor } from './blob-references.js';
 import { blobSectionsFor } from './blob-sections.js';
 import { readKeyedContent } from './content-cache.js';
@@ -933,6 +933,34 @@ function emitBlobRows(
   for (const row of blobReferencesFor(contentKey, parsed)) {
     builder.addBlobReference(row);
   }
+
+  emitSkillTextRows(builder, contentKey, parsed);
+}
+
+/**
+ * Add a markdown blob's skill-text rows: exactly one `skill_text_facts` row
+ * and its matches for every markdown blob, none for any other. A markdown parse
+ * always computes the record (`parseMarkdownContent`) and the parse cache
+ * refuses an entry that disagrees with its key's kind, so a mismatch here is
+ * VAT's defect and is thrown, never filed.
+ *
+ * @param builder - The builder to add rows to
+ * @param contentKey - The blob's key
+ * @param parsed - The parse
+ * @throws {Error} When the parse's record disagrees with the key's parser kind
+ */
+function emitSkillTextRows(builder: ProjectionBuilder, contentKey: string, parsed: ParseResult): void {
+  const isMarkdown = parserKindOf(contentKey) === 'markdown';
+  if (isMarkdown !== (parsed.skillText !== null)) {
+    throw new Error(
+      `The parse filed under ${contentKey} ${isMarkdown ? 'carries no' : 'carries a'} skill-text record. `
+      + 'A markdown parse always computes one and no other parser does, so this is a defect in VAT, not in the bytes.',
+    );
+  }
+  if (parsed.skillText === null) return;
+  const rows = skillTextRowsFor(contentKey, parsed.skillText);
+  builder.addSkillTextFacts(rows.facts);
+  for (const row of rows.matches) builder.addSkillTextMatch(row);
 }
 
 /**

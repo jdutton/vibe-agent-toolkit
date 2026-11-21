@@ -99,7 +99,7 @@ function crawl(options: {
     return Promise.resolve({ store: emptyStore(), treeHash: snapshot.hash, treeUnchanged: () => true });
   };
   const run = (): Promise<Crawled> => withRunPopulation(
-    { root: home, gitTracker: new GitTracker(home), cacheOf, collectionsFor: () => Promise.resolve(undefined) },
+    { root: home, outputs: [], gitTracker: new GitTracker(home), cacheOf, collectionsFor: () => Promise.resolve(undefined) },
     async (population) => {
       // The CLI opens the store before anything else asks git: the snapshot is then in hand.
       if (store) await cacheOf();

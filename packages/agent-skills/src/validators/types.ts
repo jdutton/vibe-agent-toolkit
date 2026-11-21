@@ -1,8 +1,8 @@
-import type { ParseDispatcher } from '@vibe-agent-toolkit/resources';
 import type { SeverityCounts, ValidationConfig, ValidationIssue } from '@vibe-agent-toolkit/schema';
 import type { FsSide } from '@vibe-agent-toolkit/utils';
 
 import type { EvidenceRecord } from '../evidence/index.js';
+import type { SkillTextRun } from '../skill-text-lane.js';
 
 export interface ValidationResult {
   path: string;
@@ -122,12 +122,13 @@ export interface ValidateOptions {
    */
   side: FsSide;
   /**
-   * The run's parse dispatcher, when the caller validates many skills: every
-   * parse this validation makes (the frontmatter, the link walk) runs on it, so
-   * the run pays one worker start. `undefined` when the caller holds none: the
-   * validation holds its own for the one skill and shuts it down.
+   * The run the validation reads through, when the caller holds one: the SKILL.md
+   * and every linked markdown file are served from its store when it holds them,
+   * and every parse runs on its dispatcher. `undefined` when the caller holds
+   * none: the validation holds a dispatcher of its own for the one skill, asks no
+   * store, and every file it scans is a counted `skillText.storeMiss`.
    */
-  dispatcher: ParseDispatcher | undefined;
+  run: SkillTextRun | undefined;
 }
 
 /**

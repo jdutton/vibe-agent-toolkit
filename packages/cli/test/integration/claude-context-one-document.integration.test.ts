@@ -11,6 +11,7 @@
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
+import { DEFAULT_PARSE_LIMITS } from '@vibe-agent-toolkit/resources';
 import type * as resources from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -57,8 +58,8 @@ vi.mock('../../src/utils/config-loader.js', async (importOriginal) => {
   };
 });
 
-/** One import more than the default `outputRows` cap allows a single read. */
-const PAST_THE_CAP = Array.from({ length: 16_385 }, (_, index) => `@a${index}.md`).join('\n');
+/** One import more than the default `outputRows` cap (`DEFAULT_PARSE_LIMITS.outputRows`) allows a single read. */
+const PAST_THE_CAP = Array.from({ length: DEFAULT_PARSE_LIMITS.outputRows + 1 }, (_, index) => `@a${index}.md`).join('\n');
 
 /** Run the command over a project whose scoped rule is refused; return what reached stdout. */
 async function runOverRefusedRule(roots: string[]): Promise<string> {

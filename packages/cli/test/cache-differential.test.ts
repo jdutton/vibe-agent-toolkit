@@ -316,7 +316,6 @@ describe('the hydration tell', () => {
   // Ten view members, one refused by size; three evicted, two of them twins of one key; no skill.
   const facts: HydrationFacts = {
     members: 10,
-    discoveredSkills: [],
     evicted: [
       { path: 'docs/a.md', bytes: 5, contentKey: 'k1' },
       { path: 'docs/twin-a.md', bytes: 7, contentKey: 'k2' },
@@ -341,10 +340,12 @@ describe('the hydration tell', () => {
     expect(resourcesPhaseSpend([extra])).not.toEqual(hydratedSpend(facts));
   });
 
-  it('counts the discovered SKILL.md files as the residual: read, keyed and looked up once each', () => {
-    const skill = { path: 'skills/one/SKILL.md', bytes: 11 };
-    expect(hydratedSpend({ members: 2, discoveredSkills: [skill], evicted: [], refusedFromStore: 0 }))
-      .toEqual({ read: 1, hashedBytes: 11, parseLookups: 1, admitted: 2, probed: 2 });
+  it('charges skill discovery nothing: a phase that read one SKILL.md besides reds', () => {
+    // Two members, both admitted from the store; the discovery read a SKILL.md of 11 bytes and looked it up.
+    const residual = validateDump({ 'content.read': 1, 'content.hashed': 1, 'content.hashedBytes': 11, 'parse.cache.hit': 1, 'registry.admitted': 2, 'fs.stat': 4 });
+    const hydrated = hydratedSpend({ members: 2, evicted: [], refusedFromStore: 0 });
+    expect(hydrated).toEqual({ read: 0, hashedBytes: 0, parseLookups: 0, admitted: 2, probed: 2 });
+    expect(resourcesPhaseSpend([residual])).not.toEqual(hydrated);
   });
 
   it('reads only the one dump that carries the resources phase', () => {

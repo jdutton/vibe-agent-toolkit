@@ -65,6 +65,8 @@ const BLOB_KEY_COLUMNS: Readonly<Record<string, string>> = {
   blobConditions: BLOB_COLUMN,
   harnessBlobFacts: BLOB_COLUMN,
   harnessBlobImports: BLOB_COLUMN,
+  skillTextFacts: BLOB_COLUMN,
+  skillTextMatches: BLOB_COLUMN,
 };
 
 /**

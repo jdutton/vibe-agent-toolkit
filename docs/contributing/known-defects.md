@@ -582,6 +582,46 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Fix:** decide what the count means, then either count every `SCAN_PATH_UNREADABLE` issue's
   path or state in the schema docstring that only whole-path refusals are counted.
 
+### A warm `vat validate` checks child re-reads every tracked file while one file's parse is refused
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** no (cost only; the run reports the store miss)
+- **Mechanism:** a refused parse is filed in no store (`storeMissFor`), so the checks child of
+  `vat validate` misses the store and re-derives its whole population on every warm run: it reads
+  and keys every tracked project file and writes the store again, while the parent process serves
+  the same tree from the store. Reproduced.
+- **Where:** [`merge.ts`](../../packages/resources/src/projection/merge.ts) (`storeMissFor`), the
+  checks child spawned by [`validate.ts`](../../packages/cli/src/commands/validate.ts)
+- **Fix:** let the child answer a refused key from the refusal the run already holds, as the
+  parent does, instead of re-deriving the population.
+
+### `vat verify` reads each built SKILL.md twice
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** no (cost only)
+- **Mechanism:** the marketplace lane's skill validation reads the built SKILL.md for its text
+  (`readSkillMarkdown`, `readContentForParse`), then reads it again for its parsed document
+  (`readSkillDocument`, `parseFileCached`). Both calls pass the run's dispatcher, but neither
+  shares the other's read, so the file is opened, read and keyed twice. Reproduced at the fs
+  boundary and with the work counters.
+- **Where:** [`skill-validator.ts`](../../packages/agent-skills/src/validators/skill-validator.ts)
+  (`readSkillMarkdown`), [`skill-text-lane.ts`](../../packages/agent-skills/src/skill-text-lane.ts)
+  (`readSkillDocument`)
+- **Fix:** parse from the text the first read returned, or have the dispatcher serve the second
+  call from the first read.
+
+### The inventory extent admits a SKILL.md that another skill links, where the walker refuses it
+
+- **Severity:** Minor · **Effort:** M (a refusal rule that can express the branch) · **User-visible:**
+  no while the extent stays a shadow; yes if it replaces `collectLinkedFiles`
+- **Mechanism:** the link walker refuses a linked SKILL.md as `skill-definition`, but no
+  extent refusal rule can express that branch, so the inventory closure admits every SKILL.md a
+  skill links (and whatever those link), in both git-tracker states. Reproduced by the
+  real-repository sweep in `inventory-extent-corpus.integration.test.ts`, which names the
+  divergence exactly (`KNOWN_SKILL_DEFINITION_GAP`); delete that entry with the fix.
+- **Where:** [`inventory-extent.ts`](../../packages/claude-marketplace/src/inventory/inventory-extent.ts)
+  (`inventoryRefusals`)
+- **Fix:** add a refusal rule for a target that is a skill definition, so the closure matches
+  the walker's cascade.
+
 ## Git and crawl
 
 ### Outside a repository, authored markdown under a tool-output-named directory is not enumerated

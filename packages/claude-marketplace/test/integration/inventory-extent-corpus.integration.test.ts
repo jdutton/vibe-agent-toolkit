@@ -604,6 +604,35 @@ function renderDivergences(divergences: readonly Divergence[]): string[] {
     + (row.walkerOnly.length > 0 ? ` | walker-only: ${row.walkerOnly.join(', ')}` : ''));
 }
 
+/**
+ * The one difference the real repository is known to produce, named path by path:
+ * a SKILL.md that links other SKILL.md files. The walker refuses each linked
+ * definition (`skill-definition`); the closure admits it, because no refusal rule
+ * can express that branch (`inventoryRefusals` in inventory-extent.ts, and the
+ * known-defects.md entry for it). The skill-text golden fixture holds the planned
+ * case. Asserted exactly, in both tracker states: the sweep reds if this
+ * difference disappears (fix the gap, delete this entry) or any other appears.
+ */
+const GOLDEN = 'packages/agent-skills/test/fixtures/skill-text-golden';
+const KNOWN_SKILL_DEFINITION_GAP = {
+  corpus: 'repo-root',
+  skill: `${GOLDEN}/links-skill-md/SKILL.md`,
+  walkerOnly: [],
+  closureOnly: [
+    `${GOLDEN}/dup-a/SKILL.md`,
+    `${GOLDEN}/links-skill-md/nested/SKILL.md`,
+    `${GOLDEN}/name-frontmatter-vs-dir/SKILL.md`,
+  ].map((path): AttributedPath => ({ path, cause: 'skill-definition' })),
+} as const;
+
+/** {@link KNOWN_SKILL_DEFINITION_GAP} at every tracker state, in sweep order. */
+const EXPECTED_REAL_CORPUS_DIVERGENCES: readonly Divergence[] = TRACKER_STATES.map((state) => ({
+  ...KNOWN_SKILL_DEFINITION_GAP,
+  walkerOnly: [...KNOWN_SKILL_DEFINITION_GAP.walkerOnly],
+  closureOnly: [...KNOWN_SKILL_DEFINITION_GAP.closureOnly],
+  state,
+}));
+
 // ============================================================================
 // Setup
 // ============================================================================
@@ -696,7 +725,7 @@ describe('inventory extent as a shadow of collectLinkedFiles', () => {
     expect(compared).toBeGreaterThan(rows.length);
     expect(followed).toBeGreaterThan(0);
 
-    expect(renderDivergences(divergences)).toEqual([]);
+    expect(renderDivergences(divergences)).toEqual(renderDivergences(EXPECTED_REAL_CORPUS_DIVERGENCES));
   }, atLeastTierTimeout(inject('tierTestTimeout'), 1_800_000));
 
   it('FIXTURE: with a tracker, the gitignore rule closes the only remaining difference', async () => {

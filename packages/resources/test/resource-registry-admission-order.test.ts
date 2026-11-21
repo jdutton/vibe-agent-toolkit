@@ -20,7 +20,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import type { ResourcePopulationSource } from '../src/projection/resource-population.js';
 import { admissionOrder, ResourceRegistry } from '../src/resource-registry.js';
 
-import { crawlInRun } from './helpers/population-run.js';
+import { crawlInRun, noStoredDocument } from './helpers/population-run.js';
 
 /** Two spellings of one id: `-` (0x2d) sorts before `/` (0x2f), so this one is first. */
 const HYPHEN_DIR = 'dup-hyphen/note.md';
@@ -123,6 +123,7 @@ describe('ResourceRegistry admission order', () => {
   it('admits a real population and a source listing out of order in one order, so both keep the same file', async () => {
     const offered = [SLASH_DIR, 'z.md', HYPHEN_DIR];
     const source: ResourcePopulationSource = {
+      storedDocument: noStoredDocument,
       enumerate: (enumeratedRoot: string) => Promise.resolve({
         paths: offered.map((relative) => safePath.join(enumeratedRoot, relative)),
         conditions: [],

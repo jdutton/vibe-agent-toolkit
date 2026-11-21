@@ -43,9 +43,10 @@
 
 import { open } from 'node:fs/promises';
 
-import { countWork, safePath } from '@vibe-agent-toolkit/utils';
-import { gitFindRoot, gitLinksCheckedOutAsFiles, GitTracker } from '@vibe-agent-toolkit/utils/git';
+import { countWork, deepFreeze, isVatError, safePath } from '@vibe-agent-toolkit/utils';
+import { GIT_NO_ANSWER_CODE, gitFindRoot, gitLinksCheckedOutAsFiles, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
+import type { ParserKind } from '../content-key.js';
 import { defaultParseCache } from '../parse-cache.js';
 import { ParseDispatcher } from '../parse-dispatcher.js';
 import type { CollectionConfig } from '../schemas/project-config.js';
@@ -62,6 +63,7 @@ import {
   type PopulationMembers,
   type ResourceEnumeration,
   type ResourcePopulationSource,
+  type StoredDocumentFacts,
 } from './resource-population.js';
 import { hydratesUnder, readRoute, respelledContent, storedRoute, type StoredMember } from './stored-admission.js';
 
@@ -129,6 +131,14 @@ export interface RunPopulationOptions {
   /** The run's root: the project root a verb resolved. */
   readonly root: string;
   /**
+   * The trees this run writes (its output and the staging it builds it in), or
+   * `[]` for a run that only reads: declared once for the run, so the home
+   * population a stored-document question opens before any crawl
+   * (`storedDocument`) is the one the run's own crawls of the home use, under
+   * the same key. Required: only the verb knows what it writes.
+   */
+  readonly outputs: readonly string[];
+  /**
    * The home root's ignore oracle. Not cosmetic: with none every realization row
    * reads `gitignored: false`, so the population would admit the ignored half of a
    * git tree. Initialized by the first enumeration of the home root (initializing
@@ -170,6 +180,14 @@ export class RunPopulation implements PopulationRun {
    * empty for a run whose home was derived or listed.
    */
   readonly #stored = new Map<string, StoredMember>();
+  /** {@link storedDocument}'s opening of the home population, once per run. */
+  #homeOpening: Promise<void> | undefined;
+  /** The first home population the run built under its store, whichever caller's outputs it was for. */
+  #firstHome: Promise<ResourceEnumeration> | undefined;
+  /** {@link storedDocument}'s answers from the store, by `<parserKind> <path>`: one tier lookup and probe per file per run. */
+  readonly #storedDocuments = new Map<string, Promise<StoredDocumentFacts | undefined>>();
+  /** The readability probe's answer by resolved path: one probe (one `fs.stat`) per file per run, whichever lane asks. */
+  readonly #probes = new Map<string, Promise<{ readonly refused: unknown } | null>>();
   /** Each listed root's tracked links checked out as plain files, by root. */
   readonly #linksAsFiles = new Map<string, ReadonlySet<string> | null>();
   readonly #options: RunPopulationOptions;
@@ -186,6 +204,7 @@ export class RunPopulation implements PopulationRun {
     this.dispatcher = run.dispatcher;
     this.source = {
       enumerate: (root, outputs, unreadable, members) => this.#enumerate(root, outputs, unreadable, members),
+      storedDocument: (absolutePath, parserKind) => this.storedDocument(absolutePath, parserKind),
     };
   }
 
@@ -221,12 +240,111 @@ export class RunPopulation implements PopulationRun {
     // A file that cannot be read now is the cold lane's: its read raises the cold error, an
     // oversize file's included (the cold lane opens it before it refuses it by its size).
     if (route.kind === 'not-admitted') {
-      return (await readRefusal(absolutePath)) === null ? { kind: 'not-admitted', entry: route.entry } : compute();
+      return (await this.#probe(absolutePath)) === null ? { kind: 'not-admitted', entry: route.entry } : compute();
     }
     const read = readRoute((await stored.facts())(route.contentKey));
-    if (read.kind === 'compute' || (await readRefusal(absolutePath)) !== null) return compute();
+    if (read.kind === 'compute' || (await this.#probe(absolutePath)) !== null) return compute();
     if (read.admitted.kind === 'facts') countWork('registry.admitted', 1);
     return read.admitted;
+  }
+
+  /**
+   * One file's document facts, skill-text record included, from the run's
+   * store, or `undefined`: the skills lane then scans the file's text itself and
+   * counts it (`skillText.storeMiss`). Never reads the file's bytes, and answers
+   * from the store alone: a run's own admission of the file (a cold parse on a
+   * store miss, an evicted key, a store-off run) is never an answer here, so
+   * every file the store does not serve is a counted miss.
+   *
+   * Answers only for a member of the home population a store hit recorded.
+   * The first question opens that population when no crawl has yet
+   * (`#openHome`), so a lane asking before any phase enumerated the home
+   * is served all the same: no caller has to open it first.
+   *
+   * (none is recorded unless the run parses under the limits the store's facts
+   * were filed under, {@link hydratesUnder}), whose stored realization routes to
+   * `parserKind` ({@link storedRoute}), whose blob facts the tier holds (read
+   * once, through the hit's one memo), and which is readable now (the run's one
+   * probe of the path, shared with {@link admit}, counted `fs.stat`).
+   *
+   * A blob with no skill-text record (not markdown, not text) answers
+   * `undefined` before any probe. A blob tier that cannot be read rejects, as
+   * the admission does: the store's failure refuses the run. The answer is
+   * decided once per `(parserKind, path)` per run.
+   *
+   * @param absolutePath - The file
+   * @param parserKind - The parser its content routes to
+   * @returns The facts, or `undefined`
+   */
+  async storedDocument(absolutePath: string, parserKind: ParserKind): Promise<StoredDocumentFacts | undefined> {
+    this.#homeOpening ??= this.#openHome();
+    await this.#homeOpening;
+    const resolved = safePath.resolve(absolutePath);
+    return memoized(this.#storedDocuments, `${parserKind} ${resolved}`, () => this.#storedFacts(resolved, parserKind));
+  }
+
+  /**
+   * Open the home population for {@link storedDocument}: the run's store hit
+   * for the home, recorded as a crawl's is. A home population the run already
+   * built is the one recorded; with none yet, the one for the run's declared
+   * outputs ({@link RunPopulationOptions.outputs}) is built, under the key the
+   * run's crawls of its home use, so a run builds one home population whichever
+   * asks first. Nothing with no store (no listing: a lane with no
+   * store reads the files it scans, and lists nothing to do so).
+   *
+   * A store that fails to open rejects, as a crawl's does: the store's failure
+   * refuses the run. One failure of the population records nothing instead: git
+   * giving no answer for the root (`GIT_NO_ANSWER`, matched by its code), such
+   * as a built bundle under a gitignored directory that a verb was pointed at. The opening is this
+   * question's, not an enumeration the verb asked for, so that must not refuse
+   * a verb that never enumerates its home; every answer is then a miss the lane
+   * counts (`skillText.storeMiss`) and reads the file for, and a verb that does
+   * enumerate the home meets the refusal there, as itself. Every other failure
+   * of the population (its extent read, its collections, the tracker, a defect)
+   * rejects, as the same failure rejects a crawl of the home.
+   */
+  async #openHome(): Promise<void> {
+    let home = this.#firstHome;
+    if (home === undefined) {
+      const cache = await this.#options.cacheOf();
+      if (cache === undefined) return;
+      home = this.#homePopulation(this.#options.outputs, cache);
+    }
+    const recorded = await home.catch((error: unknown) => {
+      if (isVatError(error, GIT_NO_ANSWER_CODE)) return undefined;
+      throw error;
+    });
+    if (recorded !== undefined) this.#recordStored(recorded);
+  }
+
+  /**
+   * {@link storedDocument}'s body: the tier's facts for a member and its `blobs`
+   * row's decoding, once it is readable now.
+   */
+  async #storedFacts(absolutePath: string, parserKind: ParserKind): Promise<StoredDocumentFacts | undefined> {
+    const stored = this.#stored.get(absolutePath);
+    if (stored === undefined) return undefined;
+    const route = storedRoute(stored.realization, parserKind);
+    if (route.kind !== 'read') return undefined;
+    const outcome = (await stored.facts())(route.contentKey);
+    if (outcome.kind !== 'facts' || outcome.decoding === null) return undefined;
+    const { facts, decoding } = outcome;
+    const { skillText } = facts;
+    if (skillText === null) return undefined;
+    if ((await this.#probe(absolutePath)) !== null) return undefined;
+    return deepFreeze({ facts: { ...facts, skillText }, decoding });
+  }
+
+  /**
+   * Whether a file can be read now: {@link readRefusal}, once per resolved path
+   * per run, so {@link admit} and {@link storedDocument} asking about one file
+   * pay one probe between them.
+   *
+   * @param absolutePath - The file, resolved
+   * @returns The refusal, or `null` when the file can be read
+   */
+  #probe(absolutePath: string): Promise<{ readonly refused: unknown } | null> {
+    return memoized(this.#probes, absolutePath, () => readRefusal(absolutePath));
   }
 
   /**
@@ -303,14 +421,20 @@ export class RunPopulation implements PopulationRun {
     // a listing is of the members asked for.
     const key = `${JSON.stringify(outputs)} ${resolved} ${JSON.stringify(members)}`;
     return memoized(this.#enumerations, key, async () => {
-      const homeKey = `${JSON.stringify(outputs)} home`;
       const cache = home ? await this.#options.cacheOf() : undefined;
       if (cache === undefined) return this.#list(resolved, home, outputs, unreadable, members);
-      const population = await memoized(this.#enumerations, homeKey, () => this.#populate(outputs, cache));
+      const population = await this.#homePopulation(outputs, cache);
       const enumeration = respelled(population, this.root, resolved);
       this.#recordStored(enumeration);
       return enumeration;
     });
+  }
+
+  /** The home root's full population for `outputs`: one per run, memoized beside the enumerations. */
+  #homePopulation(outputs: readonly string[], cache: PopulationCache): Promise<ResourceEnumeration> {
+    const population = memoized(this.#enumerations, `${JSON.stringify(outputs)} home`, () => this.#populate(outputs, cache));
+    this.#firstHome ??= population;
+    return population;
   }
 
   /** The home root's full population, under the run's store. */

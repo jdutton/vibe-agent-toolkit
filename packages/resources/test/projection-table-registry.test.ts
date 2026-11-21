@@ -3,36 +3,12 @@ import { describe, expect, it } from 'vitest';
 
 import { RunContentCache } from '../src/projection/content-cache.js';
 import { exportProjection } from '../src/projection/export.js';
-import { ProjectionBuilder, type Projection } from '../src/projection/projection.js';
+import { ProjectionBuilder } from '../src/projection/projection.js';
 import { PROJECTION_TABLES, type ProjectionTableName } from '../src/projection/table-registry.js';
 
-const ROOT = safePath.join(normalizedTmpdir(), 'vat-table-registry');
+import { EXPECTED_TABLES } from './helpers/expected-projection-tables.js';
 
-/**
- * The tables, in {@link Projection}'s declaration order.
- *
- * `satisfies readonly (keyof Projection)[]` makes a renamed table a compile
- * error here; the runtime assertions below make an *added* or *removed* one a
- * red test, which is the half the compiler cannot cover once esbuild has
- * stripped the types.
- */
-const EXPECTED_TABLES = [
-  'roots',
-  'resources',
-  'resourceRealizations',
-  'resourceExtents',
-  'resourceTags',
-  'realizationConditions',
-  'claudeRulePatterns',
-  'resolutionContexts',
-  'zoneProvenance',
-  'blobs',
-  'blobReferences',
-  'blobSections',
-  'blobConditions',
-  'harnessBlobFacts',
-  'harnessBlobImports',
-] as const satisfies readonly (keyof Projection)[];
+const ROOT = safePath.join(normalizedTmpdir(), 'vat-table-registry');
 
 /**
  * Every table's primary key, transcribed from `exportProjection`'s sort-key
@@ -70,6 +46,8 @@ const EXPECTED_PRIMARY_KEYS: Record<ProjectionTableName, readonly string[]> = {
   blobConditions: ['blob', 'code', 'ordinal', 'line', 'message'],
   harnessBlobFacts: ['blob', 'harness'],
   harnessBlobImports: ['blob', 'harness', 'ordinal'],
+  skillTextFacts: ['blob'],
+  skillTextMatches: ['blob', 'ordinal'],
 };
 
 /**
@@ -94,6 +72,8 @@ const EXPECTED_SQL_NAMES: Record<ProjectionTableName, string> = {
   blobConditions: 'blob_conditions',
   harnessBlobFacts: 'harness_blob_facts',
   harnessBlobImports: 'harness_blob_imports',
+  skillTextFacts: 'skill_text_facts',
+  skillTextMatches: 'skill_text_matches',
 };
 
 /**

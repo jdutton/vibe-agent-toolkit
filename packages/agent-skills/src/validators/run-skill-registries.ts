@@ -250,6 +250,9 @@ export function withSkillRegistries<T>(root: string, work: (registries: RunSkill
   return withRunPopulation(
     {
       root: resolved,
+      // No store, so no stored-document question opens a home population: what
+      // each packaging crawl writes is passed to that crawl.
+      outputs: [],
       gitTracker,
       cacheOf: () => Promise.resolve(undefined),
       collectionsFor: async (enumerated) => (await projectConfigOrNone(enumerated))?.resources?.collections,

@@ -20,20 +20,24 @@
 
 import { chmod, mkdir, open, rm, writeFile } from 'node:fs/promises';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
-import { GitTracker, gitTreeKey, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { readWorkCounters, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { GIT_FAILED_CODE, GIT_NO_ANSWER_CODE, GitTracker, gitTreeKey, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { type WorkSpent, workSpentNow, workSpentSince } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { ParserKind } from '../../src/content-key.js';
 import { ParseCache } from '../../src/parse-cache.js';
 import { ParseDispatcher, type ParsePoolPolicy } from '../../src/parse-dispatcher.js';
 import { isParseLimitError, isParserThrewError, reviveParserThrow } from '../../src/parse-limits.js';
 import { POPULATION_PARSE_LIMITS, RunContentCache } from '../../src/projection/content-cache.js';
+import { GitCrawlSource } from '../../src/projection/crawl-source.js';
 import type { PopulationCache } from '../../src/projection/merge.js';
 import { RunPopulation } from '../../src/projection/run-population.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { ProjectConfig } from '../../src/schemas/project-config.js';
 import type { ResourceMetadata } from '../../src/schemas/resource-metadata.js';
+import { skillTextFactsOf } from '../../src/skill-text/core.js';
+import { SKILL_TEXT_DECLARATION } from '../../src/skill-text/declaration.js';
 import { FailingBlobStore, FakeFactStore } from '../fake-fact-store.js';
 import { failingParsePolicy } from '../helpers/failing-parse-policy.js';
 import { createCommittedRepo } from '../test-helpers.js';
@@ -72,7 +76,7 @@ afterEach(async () => {
  * @param relative - A root-relative path
  * @param content - Its bytes
  */
-async function plant(relative: string, content: string): Promise<void> {
+async function plant(relative: string, content: string | Buffer): Promise<void> {
   const path = safePath.join(root, relative);
   await mkdir(safePath.join(path, '..'), { recursive: true });
   await writeFile(path, content);
@@ -123,6 +127,12 @@ interface RunVariation {
    * instead of under the suite's fixed key.
    */
   readonly gitKeyed?: boolean;
+  /** The trees the run declares it writes; none by default. */
+  readonly outputs?: readonly string[];
+  /** What building the home population fails with (its collections lookup rejects), if anything. */
+  readonly homeFault?: Error;
+  /** The run's home, when it is not the suite's repository root. */
+  readonly home?: string;
 }
 
 /**
@@ -198,11 +208,13 @@ async function withRun<T>(withStore: boolean, variation: RunVariation, work: (po
   const content = new RunContentCache();
   const policy = { content, ...failingPolicy(), ...(variation.limits !== undefined && { limits: variation.limits }) };
   const dispatcher = new ParseDispatcher(new ParseCache({ enabled: false }), policy);
+  const home = variation.home ?? root;
   const population = new RunPopulation({
-    root,
-    gitTracker: new GitTracker(root),
+    root: home,
+    outputs: variation.outputs ?? [],
+    gitTracker: new GitTracker(home),
     cacheOf: () => Promise.resolve(cache),
-    collectionsFor: () => Promise.resolve(undefined),
+    collectionsFor: () => (variation.homeFault === undefined ? Promise.resolve(undefined) : Promise.reject(variation.homeFault)),
   }, { content, dispatcher });
   try {
     return await work(population, workSpentNow());
@@ -472,5 +484,225 @@ describe('a blob tier that cannot be read refuses the run', () => {
     await runOnce(true);
     failing.failBlobs = true;
     await expect(runOnce(true)).rejects.toMatchObject({ code: 'PROJECTION_STORE_READ_FAILED' });
+  });
+});
+
+/** A document the skill-text core matches, planted beside the suite's tree. */
+const SKILL = 'docs/skill.md';
+const SKILL_TEXT = '# Skill\n\nData as of March 2024.\n\nRun `sed -i x` here.\n';
+
+/** What one run's `storedDocument` answered, and the work the run spent. */
+interface DocumentAnswer {
+  readonly document: Awaited<ReturnType<RunPopulation['storedDocument']>>;
+  readonly work: WorkSpent;
+  /** The readability probes (`fs.stat`) the ask itself spent, after the crawl or enumeration. */
+  readonly askProbes: number;
+}
+
+/** How a run reaches its `storedDocument` call. */
+interface DocumentAsk {
+  /** Admit the tree through a registry first (the lane's own admissions), rather than only enumerate it. */
+  readonly admit?: boolean;
+  /** Ask before anything enumerates the home: the ask is the run's first work. */
+  readonly first?: boolean;
+  /** The parser the file is asked under; markdown by default. */
+  readonly parserKind?: ParserKind;
+  /** What else this run varies. */
+  readonly variation?: RunVariation;
+  /** Done after the population is known and before the ask. */
+  readonly between?: () => Promise<void>;
+}
+
+/**
+ * One run that enumerates the home population (or crawls it, with `admit`) and then asks for one file.
+ *
+ * @param withStore - Whether the run has the suite's store
+ * @param relative - The root-relative file to ask for
+ * @param ask - How the run reaches the ask
+ * @returns The answer and the run's work
+ */
+async function documentOf(withStore: boolean, relative: string, ask: DocumentAsk = {}): Promise<DocumentAnswer> {
+  return withRun(withStore, ask.variation ?? {}, async (population, before) => {
+    if (ask.admit === true) {
+      const registry = ResourceRegistry.forRun(population, { baseDir: root });
+      await registry.crawl({ baseDir: root, include: INCLUDE, outputs: [], unreadable: 'refuse', ignoredRefusals: 'record', populationSource: population.source });
+    } else if (ask.first !== true) {
+      await population.source.enumerate(root, [], 'refuse', { include: INCLUDE, exclude: [], ignoredRefusals: 'record' });
+    }
+    await ask.between?.();
+    const probesBefore = readWorkCounters()['fs.stat'];
+    const document = await population.source.storedDocument(safePath.join(root, relative), ask.parserKind ?? 'markdown');
+    return { document, work: workSpentSince(workSpentNow(), before), askProbes: readWorkCounters()['fs.stat'] - probesBefore };
+  });
+}
+
+/**
+ * A cold run that files the store, then the eviction of one file's key from the blob tier.
+ *
+ * @param relative - The root-relative file whose key is evicted
+ */
+async function coldThenEvict(relative: string): Promise<void> {
+  const cold = await runOnce(true);
+  const evicted = cold.resources.find((resource) => resource.filePath === safePath.join(root, relative));
+  if (evicted === undefined) throw new Error(`the cold run admitted no ${relative}`);
+  store.current.forgetBlobFacts(evicted.contentKey);
+}
+
+describe('storedDocument: one file\'s facts, skill-text record included, from the run\'s store alone', () => {
+  const expected = skillTextFactsOf(SKILL_TEXT, SKILL_TEXT_DECLARATION);
+
+  beforeEach(async () => {
+    await plant(SKILL, SKILL_TEXT);
+    runGitOrThrow(['add', '-A'], { cwd: root });
+    runGitOrThrow(['commit', '-q', '-m', 'skill'], { cwd: root });
+  });
+
+  it.each([
+    ['after the run enumerated the home', {}],
+    ['asked before anything enumerated the home: the ask opens it', { first: true }],
+  ] as const)('answers a warm member from the blob tier, with no read, hash or parse, %s', async (_when, ask) => {
+    expect(expected.matches.length, 'the document must exercise the match rows').toBeGreaterThan(1);
+    await runOnce(true);
+    const warm = await documentOf(true, SKILL, ask);
+    expect(warm.document?.facts.skillText).toStrictEqual(expected);
+    expect(warm.work).toEqual({ reads: 0, hashed: 0, parseLookups: 0, admitted: 0 });
+  });
+
+  it('says how each stored document was decoded: its blobs row\'s encoding and source', async () => {
+    const bom = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(SKILL_TEXT, 'utf8')]);
+    const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(SKILL_TEXT, 'utf16le')]);
+    await plant('docs/bom.md', bom);
+    await plant('docs/utf16.md', utf16);
+    runGitOrThrow(['add', '-A'], { cwd: root });
+    runGitOrThrow(['commit', '-q', '-m', 'encodings'], { cwd: root });
+    await runOnce(true);
+    const decodings = await withRun(true, {}, async (population) => {
+      const ask = async (relative: string) => (await population.source.storedDocument(safePath.join(root, relative), 'markdown'))?.decoding;
+      return { plain: await ask(SKILL), bom: await ask('docs/bom.md'), utf16: await ask('docs/utf16.md') };
+    });
+    expect(decodings).toStrictEqual({
+      plain: { encoding: 'utf-8', encodingSource: 'assumed' },
+      bom: { encoding: 'utf-8', encodingSource: 'bom' },
+      utf16: { encoding: 'utf-16le', encodingSource: 'bom' },
+    });
+  });
+
+  it('opens the one home population a run that writes output crawls with, and serves nothing it writes', async () => {
+    // A build: its output tree is gitignored, and the run declares it.
+    await plant('.gitignore', 'dist/\n');
+    await plant('dist/built.md', SKILL_TEXT);
+    runGitOrThrow(['add', '-A'], { cwd: root });
+    runGitOrThrow(['commit', '-q', '-m', 'ignore dist'], { cwd: root });
+    const outputs = [safePath.join(root, 'dist')];
+    const members = { include: INCLUDE, exclude: [], ignoredRefusals: 'record' } as const;
+    await withRun(true, { outputs }, (population) => population.source.enumerate(root, outputs, 'refuse', members));
+    const warm = await withRun(true, { outputs }, async (population) => {
+      const readsBefore = store.current.readExtentCalls;
+      // Asked before any crawl, as discovery asks; then the build's own crawl of its home.
+      const skill = await population.source.storedDocument(safePath.join(root, SKILL), 'markdown');
+      const built = await population.source.storedDocument(safePath.join(root, 'dist', 'built.md'), 'markdown');
+      await population.source.enumerate(root, outputs, 'refuse', members);
+      return { skill, built, homePopulations: store.current.readExtentCalls - readsBefore };
+    });
+    expect(warm.skill?.facts.skillText).toStrictEqual(expected);
+    expect(warm.built).toBeUndefined();
+    expect(warm.homePopulations, 'one home population per run, whichever asks first').toBe(1);
+  });
+
+  it('answers nothing when git gives no answer for the home it opens, so the ask refuses no verb', async () => {
+    await runOnce(true);
+    const homeFault = new VatError(GIT_NO_ANSWER_CODE, 'git did not answer for the root');
+    expect((await documentOf(true, SKILL, { first: true, variation: { homeFault } })).document).toBeUndefined();
+  });
+
+  it('answers nothing for a home git will not list, which reaches the ask as git\'s own no-answer', async () => {
+    // The real case the narrowed catch exists for, as `vat audit <bundle>` meets it: a built
+    // bundle under a gitignored `dist/` of a committed repository, whose untracked listing git
+    // will not give for a home inside ignored territory.
+    await plant('.gitignore', 'dist/\n');
+    runGitOrThrow(['add', '-A'], { cwd: root });
+    runGitOrThrow(['commit', '-q', '-m', 'ignore dist'], { cwd: root });
+    const home = safePath.join(root, 'dist', 'skills', 'demo');
+    await plant('dist/skills/demo/SKILL.md', SKILL_TEXT);
+    const refusal = await new GitCrawlSource(home, []).enumerate().then(() => undefined, (error: unknown) => error);
+    expect(refusal, 'premise: git gives no answer for that home, unwrapped').toMatchObject({ code: GIT_NO_ANSWER_CODE });
+    const document = await withRun(true, { home }, (population) =>
+      population.source.storedDocument(safePath.join(home, 'SKILL.md'), 'markdown'));
+    expect(document).toBeUndefined();
+  });
+
+  it.each([
+    ['a plain failure', new Error('the extent could not be read')],
+    ['a git failure of the environment\'s', new VatError(GIT_FAILED_CODE, 'git ran out of time')],
+  ])('refuses on every other failure of the home it opens: %s', async (_case, homeFault) => {
+    await runOnce(true);
+    await expect(documentOf(true, SKILL, { first: true, variation: { homeFault } })).rejects.toBe(homeFault);
+  });
+
+  it('answers nothing asked first on a store-off run, reading nothing to say so', async () => {
+    const off = await documentOf(false, SKILL, { first: true });
+    expect(off.document).toBeUndefined();
+    expect(off.work).toEqual({ reads: 0, hashed: 0, parseLookups: 0, admitted: 0 });
+  });
+
+  it('answers nothing from the run\'s own admission: a cold store-on run and a store-off run both miss', async () => {
+    // Every file the store does not serve is a counted miss, whatever a registry
+    // in the same run admitted: an admission is a cold parse, not a store hit.
+    expect((await documentOf(true, SKILL, { admit: true })).document).toBeUndefined();
+    expect((await documentOf(false, SKILL, { admit: true })).document).toBeUndefined();
+  });
+
+  it('answers a warm member a registry admitted from the store, sharing the admission\'s one probe', async () => {
+    await runOnce(true);
+    const warm = await documentOf(true, SKILL, { admit: true });
+    expect(warm.document?.facts.skillText).toStrictEqual(expected);
+    expect(warm.askProbes, 'the admission already probed the path').toBe(0);
+  });
+
+  it('answers nothing for an evicted key a registry then admitted by a cold parse', async () => {
+    await coldThenEvict(SKILL);
+    const warm = await documentOf(true, SKILL, { admit: true });
+    expect(warm.work.reads, 'the evicted key was admitted by a cold read').toBe(1);
+    expect(warm.document).toBeUndefined();
+  });
+
+  it('answers nothing on a store-off run that admitted nothing', async () => {
+    expect((await documentOf(false, SKILL)).document).toBeUndefined();
+  });
+
+  it('answers nothing on a store miss that admitted nothing: the population was derived, not served', async () => {
+    expect((await documentOf(true, SKILL)).document).toBeUndefined();
+  });
+
+  it('answers nothing under a parser the stored realization does not route to', async () => {
+    await runOnce(true);
+    expect((await documentOf(true, SKILL, { parserKind: 'none' })).document).toBeUndefined();
+  });
+
+  it('answers nothing for a blob with no skill-text record', async () => {
+    await runOnce(true);
+    expect((await documentOf(true, 'docs/page.html', { parserKind: 'html' })).document).toBeUndefined();
+  });
+
+  it('answers nothing for a member whose key the tier no longer holds', async () => {
+    await coldThenEvict(SKILL);
+    expect((await documentOf(true, SKILL)).document).toBeUndefined();
+  });
+
+  it('answers nothing when the run parses under other limits than the store\'s facts were filed under', async () => {
+    await runOnce(true);
+    const variation = { limits: { timeMs: POPULATION_PARSE_LIMITS.timeMs + 1 } };
+    expect((await documentOf(true, SKILL, { variation })).document).toBeUndefined();
+  });
+
+  it('answers nothing for a member that cannot be read now', async () => {
+    await runOnce(true);
+    const between = (): Promise<void> => rm(safePath.join(root, SKILL));
+    expect((await documentOf(true, SKILL, { between })).document).toBeUndefined();
+  });
+
+  it('answers nothing for a path the population does not hold', async () => {
+    await runOnce(true);
+    expect((await documentOf(true, 'docs/absent.md')).document).toBeUndefined();
   });
 });

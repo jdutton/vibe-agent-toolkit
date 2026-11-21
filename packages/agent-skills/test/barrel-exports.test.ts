@@ -190,6 +190,7 @@ const BARREL_EXPORTS = [
   'preBuildGlobFindingsToIssues',
   'projectConfigOrNone',
   'readDeclaredSkillName',
+  'readSkillDocument',
   'reanchorStagedResult',
   'reconcileGrading',
   'refusedAmong',
@@ -209,6 +210,7 @@ const BARREL_EXPORTS = [
   'serializedInventory',
   'skillExtentContributorId',
   'skillExtentDeclaration',
+  'skillNameOf',
   'skillNameToFsPath',
   'skillTestFailureReason',
   'skillZipLayout',
@@ -229,6 +231,7 @@ const BARREL_EXPORTS = [
   'verifyVendoredManifest',
   'walkLinkGraph',
   'withSkillRegistries',
+  'withSkillTextRun',
   'writeEvalsTemplate',
 ];
 

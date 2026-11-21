@@ -134,21 +134,34 @@ async function runCacheOf(cacheOf: () => Promise<PopulationCache | undefined>): 
  * scope that answers it.
  *
  * Opening the run reads no file, opens no store and takes no snapshot. The first
- * enumeration of the home root (inside whichever phase asks first) opens the
- * store, takes the snapshot that keys it and initializes the root's ignore
- * oracle; so a phase that refuses at its own guards, or finds nothing to check,
- * refuses or reports exactly as it would alone. A git refusal is the refusal of
+ * enumeration of the home root, or the first stored-document question a skills
+ * lane asks (`RunPopulation.storedDocument`), inside whichever phase asks first,
+ * opens the store, takes the snapshot that keys it and initializes the root's
+ * ignore oracle; so a phase that refuses at its own guards, or finds nothing to
+ * check, refuses or reports exactly as it would alone. A verb that asks only a
+ * stored-document question (`vat skill review`, a `vat verify` with only
+ * non-resource phases) therefore opens the store for it, and on a cold store
+ * derives the whole home population to answer one skill. A git refusal is the refusal of
  * the phase that enumerated; a store that will not open, or whose blob tier
  * cannot be read, is the run's refusal ({@link isRunRefusal}), said once, and no
  * later phase runs.
  * What can still fail here is the parse dispatcher's shutdown when the run ends.
  *
- * @param options - The run's home root, and an ignore oracle to reuse
+ * @param options - The run's home root, the trees it writes (`[]` for a verb that
+ *   only reads; see `RunPopulationOptions.outputs`), an ignore oracle to reuse,
+ *   and whether the run has a projection store: `'on-demand'` opens it as above,
+ *   `'none'` declares a run that never opens it (`vat audit`), so its enumerations
+ *   and stored-document questions open no home and take no snapshot
  * @param work - The verb's work
  * @returns Whatever `work` returned
  */
 export function withRunContext<T>(
-  options: { readonly root: string; readonly gitTracker?: GitTracker | undefined },
+  options: {
+    readonly root: string;
+    readonly outputs: readonly string[];
+    readonly projectionStore: 'on-demand' | 'none';
+    readonly gitTracker?: GitTracker | undefined;
+  },
   work: (run: RunContext) => Promise<T>,
 ): Promise<T> {
   const root = safePath.resolve(options.root);
@@ -157,8 +170,9 @@ export function withRunContext<T>(
     withRunPopulation(
       {
         root,
+        outputs: options.outputs,
         gitTracker,
-        cacheOf: () => runCacheOf(cacheOf),
+        cacheOf: options.projectionStore === 'none' ? () => Promise.resolve(undefined) : () => runCacheOf(cacheOf),
         collectionsFor: (enumerated) => Promise.resolve(collectionsOption(enumerated).collections),
       },
       (population) => work({

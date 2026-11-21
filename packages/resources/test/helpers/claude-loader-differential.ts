@@ -46,6 +46,7 @@
  */
 
 import { forEachInOrder } from '@vibe-agent-toolkit/utils';
+import { seededRandom } from '@vibe-agent-toolkit/utils/testing';
 
 import { estimateTokens } from '../../src/link-classify.js';
 import { account, type AccountedRow } from '../../src/projection/claude-context-accounting.js';
@@ -110,17 +111,6 @@ export interface LoaderCase {
 }
 
 // ── The generator ─────────────────────────────────────────────────────────
-
-/** mulberry32 — a tiny seeded PRNG, so every case is reproducible from its seed. */
-function seeded(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6d_2b_79_f5) >>> 0;
-    let mixed = Math.imul(state ^ (state >>> 15), state | 1);
-    mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), mixed | 61);
-    return ((mixed ^ (mixed >>> 14)) >>> 0) / 4_294_967_296;
-  };
-}
 
 function choose<T>(random: () => number, items: readonly T[]): T {
   const item = items[Math.floor(random() * items.length)];
@@ -234,7 +224,7 @@ function scopedSlot(random: () => number, path: string, features: ReadonlySet<Lo
  * @returns The case
  */
 export function generatedLoaderCase(seed: number, features: ReadonlySet<LoaderFeature>): LoaderCase {
-  const random = seeded(seed);
+  const random = seededRandom(seed);
   const slots = LEVELS.flatMap((level) => slotsAt(level, features)).filter(() => random() < 0.45);
   const documents = DOCUMENTS.filter(() => random() < 0.6);
   const targets = [...slots, ...documents, ...(features.has('names') ? ODD_TARGETS : [])];

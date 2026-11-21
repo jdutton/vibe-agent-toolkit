@@ -1,0 +1,46 @@
+{
+  "$ref": "#/definitions/projection-skill-text-facts",
+  "definitions": {
+    "projection-skill-text-facts": {
+      "type": "object",
+      "properties": {
+        "blob": {
+          "type": "string",
+          "pattern": "^(?:markdown|html|none)\\.[0-9a-f]{64}$",
+          "description": "Foreign key to blobs.contentKey; a markdown blob only"
+        },
+        "lineCount": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Lines in the decoded text, split on \"\\n\" alone: a CRLF file counts its CRs into the lines, not as separators"
+        },
+        "h1": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The rest of the first line that starts with \"#\" and a space or tab, raw (untrimmed; a CRLF file keeps its CR), anywhere in the text — frontmatter and code blocks included — or null when there is none"
+        },
+        "matchCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many matches the record has; when held, how many skill_text_matches rows the blob has, and the reader refuses a blob whose rows do not add up to it"
+        },
+        "held": {
+          "type": "boolean",
+          "description": "Whether the store keeps the record: false when it is past its bound (as many matches as the default outputRows, as many JSON bytes as the default outputBytes), and the blob then has no skill_text_matches rows and the skills lane scans the text itself"
+        }
+      },
+      "required": [
+        "blob",
+        "lineCount",
+        "h1",
+        "matchCount",
+        "held"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the blob-keyed `skill_text_facts` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

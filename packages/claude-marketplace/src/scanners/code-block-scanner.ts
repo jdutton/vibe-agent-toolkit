@@ -8,6 +8,7 @@
  */
 
 import { runCompatDetectors, type EvidenceRecord } from '@vibe-agent-toolkit/agent-skills';
+import type { SkillTextFacts } from '@vibe-agent-toolkit/resources';
 
 const SHELL_AND_BROWSER_PATTERN_PREFIXES = ['FENCED_SHELL_BLOCK', 'EXTERNAL_CLI_', 'BROWSER_AUTH_'];
 
@@ -18,15 +19,16 @@ function isCodeBlockEvidence(record: EvidenceRecord): boolean {
 /**
  * Scan markdown content for fenced shell blocks and the external-CLI /
  * browser-auth invocations they may contain. Returns an EvidenceRecord
- * for each detected pattern. `frontmatter` is the caller's one parse of it.
+ * for each detected pattern. `facts` is the file's skill-text record
+ * (`skillTextFactsOf`) and `frontmatter` the caller's one parse of it.
  */
 export function scanCodeBlocks(
-  content: string,
+  facts: SkillTextFacts,
   filePath: string,
   locationRoot: string,
   frontmatter: Readonly<Record<string, unknown>> | undefined,
 ): EvidenceRecord[] {
-  const { evidence } = runCompatDetectors(content, filePath, locationRoot, frontmatter);
+  const { evidence } = runCompatDetectors(facts, filePath, locationRoot, frontmatter);
   // Filter to evidence types this scanner is responsible for: shell-block /
   // external-CLI / browser-auth. Frontmatter-scoped evidence is emitted by
   // scanFrontmatter.

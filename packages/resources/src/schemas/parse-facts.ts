@@ -59,6 +59,7 @@
 import { toJsonSchema } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
+
 import { LEXICAL_FEATURE_COLUMNS } from './projection-blobs.js';
 import {
   HeadingNodeSchema,
@@ -66,6 +67,7 @@ import {
   ResourceLinkSchema,
   UnresolvedReferenceSchema,
 } from './resource-metadata.js';
+import { SkillTextFactsSchema } from './skill-text-facts.js';
 
 /**
  * Code-unit and word accounting for one blob, split by code context.
@@ -139,6 +141,13 @@ export const ParseFactsSchema = z.object({
    * avoid building.
    */
   contentMeasures: ContentMeasuresSchema.optional(),
+  /**
+   * See `ParseResult.skillText`. Required, `null` for a parse that is not
+   * markdown: an entry that predates the field is a miss here, and a markdown
+   * entry holding `null` (or another kind's holding a record) is a miss in
+   * `ParseCache.read`, where the key's kind is known.
+   */
+  skillText: SkillTextFactsSchema.nullable(),
   /** Raw YAML of the frontmatter block, without the `---` delimiters. */
   frontmatterSource: z.string().optional(),
   /**

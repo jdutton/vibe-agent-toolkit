@@ -84,6 +84,7 @@ function inRun<T>(home: string, store: FactStore | undefined, work: (population:
   return withRunPopulation(
     {
       root: home,
+      outputs: [],
       gitTracker: new GitTracker(home),
       cacheOf: () => Promise.resolve(cache),
       collectionsFor: () => Promise.resolve(undefined),

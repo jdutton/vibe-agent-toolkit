@@ -62,6 +62,7 @@ async function runOnce(withStore: boolean): Promise<RunOutput> {
     return await withRunPopulation(
       {
         root,
+        outputs: [],
         gitTracker: new GitTracker(root),
         cacheOf: () => Promise.resolve(store === undefined ? undefined : { store, treeHash: 'warm-registry-hydration', treeUnchanged: () => true }),
         collectionsFor: () => Promise.resolve(undefined),

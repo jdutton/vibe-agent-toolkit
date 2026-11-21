@@ -198,7 +198,7 @@ export function createSkillAndValidate(
 ): Promise<ValidationResult> {
   const skillPath = safePath.join(tempDir, 'SKILL.md');
   fs.writeFileSync(skillPath, content);
-  return validateSkill({ dispatcher: undefined, resourcesValidation: {}, side: 'source', skillPath, validation: {} });
+  return validateSkill({ run: undefined, resourcesValidation: {}, side: 'source', skillPath, validation: {} });
 }
 
 /**
@@ -247,7 +247,7 @@ export function validateSkillWithTransitiveChecking(
   skillPath: string,
   rootDir?: string,
 ): Promise<ValidationResult> {
-  return validateSkill({ dispatcher: undefined, resourcesValidation: {},
+  return validateSkill({ run: undefined, resourcesValidation: {},
     side: 'source',
     skillPath,
     rootDir: rootDir ?? path.dirname(skillPath),
@@ -266,7 +266,7 @@ export function validateSkillWithUnreferencedFileCheck(
   skillPath: string,
   rootDir: string,
 ): Promise<ValidationResult> {
-  return validateSkill({ dispatcher: undefined, resourcesValidation: {},
+  return validateSkill({ run: undefined, resourcesValidation: {},
     side: 'source',
     skillPath,
     rootDir,

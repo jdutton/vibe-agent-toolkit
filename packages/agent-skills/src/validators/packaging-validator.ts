@@ -21,12 +21,12 @@ import {
   type NotAdmittedRoots,
   partitionNotAdmitted,
   type ParseDispatcher,
-  parseFileCached,
   isParseLimitError,
   type ParseRefusedResource,
   type PopulationUnreadablePolicy,
   ResourceRegistry,
   type SkillExecutableEntry,
+  type SkillTextFacts,
 } from '@vibe-agent-toolkit/resources';
 import {
   CODE_REGISTRY,
@@ -54,6 +54,7 @@ import {
   safePath,
   withFsFaultSync,
   appendAll,
+  countWork,
 } from '@vibe-agent-toolkit/utils';
 import {
   BUILD_OUTPUT_GLOBS,
@@ -67,6 +68,7 @@ import type { EvidenceRecord, Observation } from '../evidence/index.js';
 import { collectPreBuildGlobFindings, preBuildGlobFindingsToIssues } from '../files-config.js';
 import { isSkillPackagingInputError } from '../packaging-errors.js';
 import { parseRefusalIssue, parseRefusedIssues } from '../parse-refusal-issues.js';
+import { readSkillDocument, scannedSkillText, type SkillDocument, skillNameOf, storedSkillText, type SkillTextRun } from '../skill-text-lane.js';
 import {
   conventionalSuiteProbe,
   partitionTestInputFileEntries,
@@ -82,6 +84,11 @@ import { observationToIssue, runCompatDetectors } from './compat-detectors.js';
 import { detectUndeclaredCrossSkillAuth } from './cross-skill-dependency-detection.js';
 import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
 import { collectUnqualifiedMcpToolIssues } from './mcp-tool-qualification.js';
+import {
+  collectNonPortableAssetReferenceIssues,
+  collectNonPortableCommandIssues,
+  collectTimeSensitiveContentIssues,
+} from './portability-issues.js';
 import { materializeIssue } from './rule-engine/index.js';
 import { REGISTRY_INCLUDE, type RunSkillRegistries } from './run-skill-registries.js';
 import { SOURCE_ONLY_CODES } from './source-only-codes.js';
@@ -298,23 +305,28 @@ function unreadableRemedy(error: unknown): string {
 }
 
 /**
- * A bundled markdown file's text, or the finding that replaces it when the OS
- * will not read it — `LINK_TARGET_UNREADABLE` at that file, the code the walker
+ * A bundled markdown file's skill-text record — the store's when the run's
+ * store serves it ({@link storedSkillText}), else the core over the file's text
+ * ({@link scannedSkillText}) — or the finding that replaces it when the OS will not read it — `LINK_TARGET_UNREADABLE` at that file, the code the walker
  * gives a link target it cannot stat. The fault is classified once, on `side`:
  * one the skill's source owns (`isSkillPackagingInputError`) is a finding against
  * the skill; a capacity fault, or one on VAT's own output, is the run's — carried
  * as the failure. Read through `readTextContent`, which refuses a named pipe
  * unread (`EFTYPE`) — a bare `readFile` blocked on one until a writer appeared,
- * hanging the build.
+ * hanging the build. Only the read is classified here: a store that fails to
+ * answer rejects as itself, the run's failure, never a fault of this file.
  */
 async function readBundledMarkdown(
   file: string,
   location: string,
   side: FsSide,
-  dispatcher: ParseDispatcher,
+  run: SkillTextRun,
 ): Promise<BundledMarkdownRead> {
+  const stored = await storedSkillText(file, run);
+  if (stored !== undefined) return { facts: stored };
+  let text: string;
   try {
-    return { text: await bundledText(file, dispatcher) };
+    text = await bundledText(file, run.dispatcher);
   } catch (error) {
     // Carried, not thrown: reads run in parallel, and the failure the caller
     // raises must be the first in bundle order, not the first to finish.
@@ -328,13 +340,17 @@ async function readBundledMarkdown(
       ),
     };
   }
+  return { facts: scannedSkillText(file, text, run.dispatcher) };
 }
 
 /**
  * A bundled file's text: the run's read of it when the dispatcher serves a run
  * (one read per file per run, content-keying-and-git.md rule 4), else a read of
  * its own. A file past the run's parse input cap is still read whole here, as it
- * always was: this lane scans text, it does not parse it.
+ * always was: this lane scans text, it does not parse it. That read is counted as
+ * `content.read`, as the run's read is: the run's read refused it before reading,
+ * so this is the one read of its bytes, and an uncounted one would hide it from
+ * every work-counter check. It is never keyed, so it adds no `content.hashed`.
  */
 async function bundledText(file: string, dispatcher: ParseDispatcher): Promise<string> {
   const content = dispatcher.content;
@@ -342,13 +358,15 @@ async function bundledText(file: string, dispatcher: ParseDispatcher): Promise<s
   try {
     return (await content.read(file, 'markdown')).content;
   } catch (error) {
-    if (isParseLimitError(error)) return (await readTextContent(file)).text;
-    throw error;
+    if (!isParseLimitError(error)) throw error;
+    const { text } = await readTextContent(file);
+    countWork('content.read', 1);
+    return text;
   }
 }
 
-/** One bundled markdown read: its text, the finding that replaces it, or a failure that refuses the run. */
-type BundledMarkdownRead = { text: string } | { issue: ValidationIssue } | { failure: unknown };
+/** One bundled markdown read: its record, the finding that replaces it, or a failure that refuses the run. */
+type BundledMarkdownRead = { facts: SkillTextFacts } | { issue: ValidationIssue } | { failure: unknown };
 
 /**
  * Create a validation issue from a code-registry code with a bespoke message,
@@ -621,7 +639,7 @@ export async function validateSkillForPackaging(
   context: 'source' | 'built',
   shared: SkillValidationSharedContext,
 ): Promise<PackagingValidationResult> {
-  const { dispatcher } = shared.registries;
+  const run: SkillTextRun = shared.registries;
   const rawIssues: ValidationIssue[] = [];
 
   // Validation-POLICY boundary (config root -> git root -> skill dir): what is
@@ -639,31 +657,30 @@ export async function validateSkillForPackaging(
   // A `built` skill is VAT's own output re-read: every read of its tree the OS refuses is the
   // destination's, never the user's input. The ONE mapping; every read below takes `side`.
   const side: FsSide = context === 'built' ? 'destination' : 'source';
-  const parsed = await parseSkillMarkdown(skillPath, side, locationRoot, dispatcher);
+  const parsed = await parseSkillMarkdown(skillPath, side, locationRoot, run);
   const notAdmitted: NotAdmittedPolicy = { resourcesValidation, roots: { locationRoot, projectRoot } };
   if ('limit' in parsed) return parseLimitResult(skillPath, parsed.limit, packagingConfig, shared, notAdmitted);
-  const { parseResult } = parsed;
-  // The parser already decoded these bytes; a second whole-file read of the same
-  // path would only add a syscall and a TOCTOU window. `content` is the raw
-  // source verbatim, so fenced code blocks reach `runCompatDetectors` intact.
-  const skillContent = parseResult.content;
-  const skillLines = skillContent.split('\n').length;
+  // The SKILL.md as the store holds it, or as its parse decoded it: every
+  // detector below reads its skill-text record, never the file again.
+  const { document } = parsed;
+  const { frontmatter, skillText } = document;
+  const skillLines = skillText.lineCount;
 
   // Validate frontmatter schema (name format, required fields, etc.)
-  if (parseResult.frontmatter) {
+  if (frontmatter) {
     appendAll(rawIssues, [
-      ...validateFrontmatterSchema(parseResult.frontmatter, skillLocation),
-      ...validateFrontmatterRules(parseResult.frontmatter, skillLocation),
+      ...validateFrontmatterSchema(frontmatter, skillLocation),
+      ...validateFrontmatterRules(frontmatter, skillLocation),
     ]);
   } else {
-    rawIssues.push(missingFrontmatterIssue(parseResult.frontmatterError, skillLocation));
+    rawIssues.push(missingFrontmatterIssue(document.frontmatterError, skillLocation));
   }
 
   // Compat capability detection: collect observations from SKILL.md and
   // surface each as a CAPABILITY_* issue. Observations are also returned
   // on the result so downstream verdict computation (CLI layer) can recover
   // payloads such as EXTERNAL_CLI binary names.
-  const { evidence, observations } = runCompatDetectors(skillContent, skillPath, locationRoot, parseResult.frontmatter);
+  const { evidence, observations } = runCompatDetectors(skillText, skillPath, locationRoot, frontmatter);
   for (const obs of observations) {
     rawIssues.push(observationToIssue(obs, skillLocation));
   }
@@ -776,7 +793,7 @@ export async function validateSkillForPackaging(
   const bundledFiles = [...bundledResources.map(r => r.filePath), ...bundledAssets];
 
   // Count direct links that actually made it into the bundle
-  const directLinks = getResolvedMarkdownLinks(parseResult.links, skillPath, projectRoot, side);
+  const directLinks = getResolvedMarkdownLinks(document.links, skillPath, projectRoot, side);
   const bundledFileSet = new Set(bundledFiles);
   const directFileCount = directLinks.filter(p => bundledFileSet.has(p)).length;
 
@@ -810,7 +827,7 @@ export async function validateSkillForPackaging(
   const bundledLocations = bundledMarkdown.map((file) => issueLocation(file, locationRoot));
   // Independent reads, folded below in bundle order.
   const bundledReads = await mapWithConcurrency(bundledMarkdown, (file, index) =>
-    readBundledMarkdown(file, bundledLocations[index] ?? '', side, dispatcher));
+    readBundledMarkdown(file, bundledLocations[index] ?? '', side, run));
   for (const [index, read] of bundledReads.entries()) {
     const bundledLocation = bundledLocations[index] ?? '';
     if ('failure' in read) throw read.failure;
@@ -818,46 +835,45 @@ export async function validateSkillForPackaging(
       rawIssues.push(read.issue);
       continue;
     }
-    const content = read.text;
-    totalLines += content.split('\n').length;
-    collectNonPortableAssetReferenceIssues(content, bundledLocation, rawIssues);
-    collectNonPortableCommandIssues(content, bundledLocation, rawIssues);
-    // Whole-file bytes, frontmatter included — safe because the detector
-    // strips leading frontmatter itself. It did not always, and this lane was
+    const { facts } = read;
+    totalLines += facts.lineCount;
+    collectNonPortableAssetReferenceIssues(facts, bundledLocation, rawIssues);
+    collectNonPortableCommandIssues(facts, bundledLocation, rawIssues);
+    // The record of the whole file, frontmatter included — safe because the
+    // core strips leading frontmatter itself. It did not always, and this lane was
     // the half of the invariant nobody was enforcing: a bundled file carrying
     // `allowed-tools: [mcp__x__do_thing]` seeded the vocabulary the SKILL.md
     // lane's comment (below) says must come from prose, then fired on its own
     // body. Pinned by "does not let a bundled file's allowed-tools frontmatter
     // supply the vocabulary" in packaging-validator.test.ts.
-    collectUnqualifiedMcpToolIssues(content, bundledLocation, rawIssues);
+    collectUnqualifiedMcpToolIssues(facts, bundledLocation, rawIssues);
   }
 
   const excludedDetails = deduplicateExcludedReferences(excludedReferences, skillPath);
 
   // Run quality / best-practice checks
   collectSizeIssues(skillLines, totalLines, fileCount, maxLinkDepth, skillLocation, rawIssues);
-  collectDescriptionIssue(parseResult.frontmatter, skillLocation, rawIssues);
+  collectDescriptionIssue(frontmatter, skillLocation, rawIssues);
   collectProgressiveDisclosureIssue(skillLines, bundledFiles.length, skillLocation, rawIssues);
-  collectNameMismatchIssue(parseResult.frontmatter, skillPath, skillLocation, rawIssues);
-  collectTimeSensitiveContentIssues(parseResult.content, skillLocation, rawIssues);
-  collectNonPortableAssetReferenceIssues(parseResult.content, skillLocation, rawIssues);
-  collectNonPortableCommandIssues(parseResult.content, skillLocation, rawIssues);
+  collectNameMismatchIssue(frontmatter, skillPath, skillLocation, rawIssues);
+  collectTimeSensitiveContentIssues(skillText, skillLocation, rawIssues);
+  collectNonPortableAssetReferenceIssues(skillText, skillLocation, rawIssues);
+  collectNonPortableCommandIssues(skillText, skillLocation, rawIssues);
   // An `allowed-tools:` list of `mcp__…` names does not by itself supply the
   // vocabulary: the qualified spelling has to appear in the prose an agent
   // reads, or "the document contradicts itself" is not the finding. That holds
-  // because the DETECTOR strips frontmatter. ⛔ It was NEVER true that this call
-  // site passed a post-frontmatter slice — `parseResult.content` is the raw file
-  // verbatim, as the comment 190 lines above says — so before the detector
-  // stripped, this lane did read `allowed-tools:` as prose and did ship the
-  // findings that came of it.
-  collectUnqualifiedMcpToolIssues(parseResult.content, skillLocation, rawIssues);
+  // because the core strips frontmatter. ⛔ It was NEVER true that this call
+  // site passed a post-frontmatter slice — the record is of the raw file
+  // verbatim — so before the detector stripped, this lane did read
+  // `allowed-tools:` as prose and did ship the findings that came of it.
+  collectUnqualifiedMcpToolIssues(skillText, skillLocation, rawIssues);
 
   // Cross-skill dependency smell: body declares a requires/depends token the
-  // description does not mention. Reads the RAW file, frontmatter included —
-  // which is what this detector wants, since the declaration it looks for can be
-  // written either side of the fence.
-  if (parseResult.frontmatter) {
-    appendAll(rawIssues, detectUndeclaredCrossSkillAuth(parseResult.frontmatter, parseResult.content, skillLocation));
+  // description does not mention. Reads the RAW file's record (`crossSkillAuth`),
+  // frontmatter included — which is what this detector wants, since the
+  // declaration it looks for can be written either side of the fence.
+  if (frontmatter) {
+    appendAll(rawIssues, detectUndeclaredCrossSkillAuth(frontmatter, skillText, 'crossSkillAuth', skillLocation));
   }
 
   // Filter out source-only codes when validating built output
@@ -874,7 +890,7 @@ export async function validateSkillForPackaging(
   // answer folded in here.
   const framework = runFrameworkFor(filteredIssues, packagingConfig, shared, notAdmitted);
 
-  const skillName = extractSkillName(parseResult, skillPath);
+  const skillName = skillNameOf(document, skillPath);
 
   return {
     skillName,
@@ -923,24 +939,25 @@ function runFrameworkFor(
 }
 
 /**
- * The skill's SKILL.md, parsed on the bounded route (`parseFileCached`, in the
- * worker) — or the finding that replaces the parse when the worker refuses it.
- * Any other failure propagates as it always did.
+ * The skill's SKILL.md: the run's store's facts when it serves the file, else
+ * parsed on the bounded route (`parseFileCached`, in the worker) — or the
+ * finding that replaces the parse when the worker refuses it. Any other failure
+ * propagates as it always did.
  *
  * @param skillPath - The SKILL.md
  * @param side - Whose fault a refused read is
  * @param locationRoot - The base issues are located against
- * @param dispatcher - Where the parse runs
- * @returns The parse, or the refusal's issue
+ * @param run - The run: its store, and where a parse runs
+ * @returns The document, or the refusal's issue
  */
 async function parseSkillMarkdown(
   skillPath: string,
   side: FsSide,
   locationRoot: string,
-  dispatcher: ParseDispatcher,
-): Promise<{ parseResult: Awaited<ReturnType<typeof parseFileCached>> } | { limit: ValidationIssue }> {
+  run: SkillTextRun,
+): Promise<{ document: SkillDocument } | { limit: ValidationIssue }> {
   try {
-    return { parseResult: await parseFileCached(skillPath, 'markdown', { side, dispatcher }) };
+    return { document: await readSkillDocument(skillPath, run, side) };
   } catch (error) {
     const limit = parseRefusalIssue(error, skillPath, locationRoot);
     if (limit === undefined) throw error;
@@ -1142,320 +1159,6 @@ function collectNameMismatchIssue(
 }
 
 /**
- * Time-sensitive content patterns. Case-insensitive.
- * Matches: "as of <month> YYYY", "after/before/until <month> YYYY",
- * and the year-first form "as of YYYY-MM".
- */
-const MONTH_NAME_PATTERN = '(?:january|february|march|april|may|june|july|august|september|october|november|december)';
-/* eslint-disable security/detect-non-literal-regexp -- compile-time constant patterns composed from MONTH_NAME_PATTERN, no user input */
-const TIME_SENSITIVE_PATTERNS: readonly RegExp[] = [
-  new RegExp(String.raw`\bas of ${MONTH_NAME_PATTERN} \d{4}\b`, 'i'),
-  new RegExp(String.raw`\bafter ${MONTH_NAME_PATTERN} \d{4}\b`, 'i'),
-  new RegExp(String.raw`\bbefore ${MONTH_NAME_PATTERN} \d{4}\b`, 'i'),
-  new RegExp(String.raw`\buntil ${MONTH_NAME_PATTERN} \d{4}\b`, 'i'),
-  /\bas of \d{4}-\d{2}\b/i,
-];
-/* eslint-enable security/detect-non-literal-regexp */
-
-/**
- * A member of a *portability check family*. Each variant detects one specific
- * non-portable pattern; all variants in a family roll up to a single registry
- * code so one `validation.allow` entry (or severity override) silences the whole
- * concern for a file — adding an esoteric check never explodes the override
- * surface. Each variant still carries its own `label` (named in the finding) and
- * `fix` (tailored remediation), so the guidance stays specific. Extend a family
- * by appending a row.
- */
-interface PortabilityVariant {
-  /** Short stable id for the sub-check, surfaced in the finding message. */
-  readonly label: string;
-  readonly pattern: RegExp;
-  /** Variant-specific remediation shown as the finding's `fix`. */
-  readonly fix: string;
-}
-
-/**
- * The NON_PORTABLE_ASSET_REFERENCE family — ways a skill document hard-codes a
- * path to a bundled asset that won't resolve across the surfaces a skill runs on
- * (Claude Code plugin, claude.ai upload, API container).
- *
- * Patterns are case-sensitive (env vars are upper-case; lowercase prose mentions
- * are not flagged).
- */
-const RELATIVE_PATH_HINT =
-  'Reference bundled files by a path relative to the skill directory (e.g. `scripts/run.mjs`).';
-
-/**
- * Match `$NAME` or `${NAME}`, without ever consuming a brace that belongs to an
- * enclosing expansion.
- *
- * A naive `\$\{?NAME\}?` mis-captures inside nested parameter expansion: given
- * `"${VAR:-$CLAUDE_PROJECT_DIR}"` the optional trailing `\}?` eats the closing
- * brace of the *outer* `${…:-…}`, and the finding reads `"$CLAUDE_PROJECT_DIR}"`
- * — which looks exactly like the typo `$FOO}` for `${FOO}` and sends reviewers
- * to a file that is in fact correct shell.
- *
- * The two alternatives, in order:
- *  1. `\$\{NAME\}` — the fully-braced form `${NAME}`, captured *with* its own
- *     closing brace so the message renders it intact.
- *  2. `\$\{?NAME\b` — a bare `$NAME` or a braced expansion that carries an
- *     operator (`${NAME:-…}`, `${NAME#…}`, `${NAME/…}`), matched only up to the
- *     word boundary after NAME so it never swallows a brace that isn't the
- *     variable's own. Trying (1) first is what keeps the closing brace on the
- *     plain form; falling to (2) is what still flags the operator forms — a
- *     lone `\$\{NAME\}` alternative silently missed `${NAME:-default}`, an
- *     idiomatic non-portable reference.
- *  3. `\$\{?env:NAME\b` — PowerShell's expansion, BOTH spellings. A skill that
- *     documents a Windows invocation writes `$env:CLAUDE_SKILL_DIR` or
- *     `${env:CLAUDE_SKILL_DIR}`, neither of which the two POSIX alternatives
- *     match: after `$`/`${` comes `env:`, not the variable name. The forms are
- *     equally non-portable, so leaving them out flagged the bash line of a skill
- *     and waved through the PowerShell line directly beneath it.
- *
- * ⚠️ Compiled with the `i` flag, and that is about alternative 3 specifically.
- * PowerShell variable and drive names are case-INSENSITIVE, so `$Env:NAME` and
- * `$ENV:NAME` are as valid — and as commonly authored — as `$env:NAME`. A
- * case-SENSITIVE `\$env:` matched one of the three and silently passed the other
- * two, reintroducing exactly the asymmetry this alternative was added to remove.
- * The variable names themselves are uppercase literals passed in by the call
- * sites below, so case-insensitivity costs nothing there.
- */
-// eslint-disable-next-line security/detect-non-literal-regexp -- composed from a compile-time constant name, no user input
-const envVarPattern = (name: string): RegExp => new RegExp(String.raw`\$\{${name}\}|\$\{?env:${name}\b|\$\{?${name}\b`, 'i');
-
-const NON_PORTABLE_ASSET_VARIANTS: readonly PortabilityVariant[] = [
-  {
-    label: 'claude-plugin-root',
-    pattern: envVarPattern('CLAUDE_PLUGIN_ROOT'),
-    fix: `\`CLAUDE_PLUGIN_ROOT\` is a Claude Code plugin-only variable that points at the plugin, not the skill, and is absent under standalone mounts. ${RELATIVE_PATH_HINT}`,
-  },
-  {
-    // NOT an asset reference. CLAUDE_PROJECT_DIR denotes the *user's repository*
-    // — the thing the skill operates on — so there is no skill-relative path
-    // that can express it and the RELATIVE_PATH_HINT advice does not apply.
-    // Advising it here actively misleads: an adopter reported that the pattern
-    // this flags (`--project-dir` → `$CLAUDE_PROJECT_DIR` → cwd) was their *fix*
-    // for anchoring user artifacts on the plugin install dir by mistake.
-    label: 'claude-project-dir',
-    pattern: envVarPattern('CLAUDE_PROJECT_DIR'),
-    fix: '`CLAUDE_PROJECT_DIR` is a Claude Code-only variable, so a skill relying on it will not resolve the user\'s project on other runtimes. There is no skill-relative equivalent — if the skill genuinely operates on the user\'s repository, take the location as an explicit parameter with `$CLAUDE_PROJECT_DIR` as a fallback, and make sure the skill\'s declared `targets` reflect the Claude Code dependency.',
-  },
-  {
-    // Load-bearing in Claude Code and MEANINGLESS in the API code-execution
-    // container. Both facts are true for good reasons, which is why this is a
-    // warning and not a rename: in Claude Code a skill may live under
-    // `~/.claude/skills/`, a plugin tree, a project dir or a marketplace install
-    // path while cwd is the user's repo, and the consumer needing a real path is
-    // often a PROCESS (a script argument) that does not share the model's
-    // context — there is no literal an author can write. The API container has
-    // the opposite property: the location is a stable literal (`/skills/<name>/`,
-    // cwd `/`) so nothing is parameterised and no equivalent variable is set,
-    // measured live against the Messages API. `${CLAUDE_SKILL_DIR}` therefore
-    // expands to empty there and `node "/scripts/x.mjs"` does not exist.
-    label: 'claude-skill-dir',
-    pattern: envVarPattern('CLAUDE_SKILL_DIR'),
-    fix: `\`CLAUDE_SKILL_DIR\` is set by Claude Code and is absent in the API code-execution container, where it expands to empty. ${RELATIVE_PATH_HINT} A relative path resolves on every target because the MODEL resolves it against the skill directory — not because cwd happens to be right. When a process genuinely needs an absolute path, instruct the agent to cd into the skill directory first rather than reaching for another variable.`,
-  },
-  {
-    // The same mistake pointed the other way: the API container's literal mount
-    // point hardcoded into a skill, which resolves nowhere in Claude Code. Anchored
-    // at a path boundary so `~/.claude/skills/x/` and `.claude/skills/` in prose
-    // (both preceded by a word character) are not flagged.
-    //
-    // ⚠️ The TRAILING separator is optional, and that is the common spelling —
-    // not an edge case. `/skills/<name>` with nothing after it is the mount
-    // POINT, which is what the sibling `claude-skill-dir` fix text tells authors
-    // to reach for ("cd into the skill directory first"). Requiring the trailing
-    // `/` made `cd /skills/my-skill && node scripts/run.mjs` invisible while
-    // firing on `node /skills/my-skill/scripts/run.mjs` on the next line. The
-    // `(?![\w.-])` branch keeps the name from being truncated mid-token, so a
-    // longer name is still matched whole rather than at a prefix.
-    label: 'api-skill-mount',
-    pattern: /(?:^|[\s"'`(])\/skills\/[A-Za-z0-9._-]+(?:\/|(?![\w.-]))/,
-    fix: `\`/skills/<name>/\` is the Anthropic API code-execution container's mount point and does not exist in Claude Code, a claude.ai upload, or any other host. ${RELATIVE_PATH_HINT} When a process genuinely needs an absolute path, instruct the agent to cd into the skill directory first.`,
-  },
-  {
-    label: 'absolute-script-path',
-    pattern: /\b(?:node|bun|deno|python3?|ruby|sh|bash|uv)\s+["']?\/[^\s"']+\.(?:mjs|cjs|js|ts|py|rb|sh)\b/,
-    fix: `An absolute path to a bundled script will not exist on another machine or runtime. ${RELATIVE_PATH_HINT}`,
-  },
-];
-
-/**
- * The NON_PORTABLE_COMMAND family — ways a skill document instructs an agent to
- * run a shell command that hard-codes a GNU/Linux-only utility or flag. The agent
- * copies these invocations verbatim, so a command that only works on Linux fails
- * the moment the skill runs on macOS/BSD.
- *
- * Patterns match commands in *command position* only (start of line, or after a
- * pipe/semicolon/ampersand or a backtick/code fence) so bare prose nouns
- * ("the request will timeout", "grep the logs") are not flagged. See
- * COMMAND_POSITION / COMMAND_SEGMENT below.
- *
- * Every `fix` below asserts how a utility behaves on macOS/BSD. The CI matrix is
- * Ubuntu + Windows only, so no test in this repo can contradict these claims —
- * they are vendor claims and go stale silently. The `readlink-f` variant already
- * did: `-f` was absent from macOS for years, and is present and working as of
- * macOS 26.5.2. When a variant's macOS behaviour converges with GNU, DELETE the
- * variant — do not reword it, or the detector trains adopters to ignore the code.
- *
- * @vendor-claim reviewed=2026-07-29 verify=On a current macOS, run each variant against the system binaries rather than Homebrew coreutils — `ls /usr/bin/timeout`, `echo x | /usr/bin/grep -P x`, `/usr/bin/sed -i s/a/b/ FILE`, `/usr/bin/readlink -f ./missing.txt`, `/bin/date -d 2020-01-01` — and run the GNU counterparts on Linux to confirm the difference still exists
- */
-/* eslint-disable security/detect-non-literal-regexp -- compile-time constants composed from COMMAND_POSITION/COMMAND_SEGMENT, no user input */
-// Command position: start of line, or after a pipe/semicolon/ampersand or a
-// backtick (\x60). Leading whitespace is consumed so indented code blocks match.
-const COMMAND_POSITION = String.raw`(?:^|[|;&\x60])\s*`;
-// One command segment: characters up to the next separator (lazy), used to skip
-// over leading flags/args before the non-portable flag the variant looks for.
-const COMMAND_SEGMENT = String.raw`[^\n|;&\x60]*?`;
-
-const NON_PORTABLE_COMMAND_VARIANTS: readonly PortabilityVariant[] = [
-  {
-    label: 'timeout',
-    // `timeout <arg>` in command position; requires an argument so backtick-wrapped
-    // lone mentions (`timeout`) and object keys (`timeout:`) are not flagged.
-    pattern: new RegExp(COMMAND_POSITION + String.raw`timeout\s+\S+`),
-    fix: '`timeout` is not installed on macOS by default. Gate on its availability (`command -v timeout`), use a portable alternative, or drop it.',
-  },
-  {
-    label: 'grep-pcre',
-    pattern: new RegExp(COMMAND_POSITION + String.raw`grep\b` + COMMAND_SEGMENT + String.raw`\s(?:-[A-Za-z]*P|--perl-regexp)\b`),
-    fix: 'PCRE (`grep -P` / `--perl-regexp`) is unsupported by BSD/macOS grep. Use `grep -E` (extended regex) instead.',
-  },
-  {
-    label: 'sed-i-no-backup',
-    // `sed -i` followed by whitespace/end (no attached suffix). GNU `sed -i` and
-    // BSD `sed -i ''` differ; `sed -i.bak` (attached suffix) is portable and is
-    // not flagged (the `-i` here is followed by `.`, not whitespace).
-    pattern: new RegExp(COMMAND_POSITION + String.raw`sed\b` + COMMAND_SEGMENT + String.raw`\s-i(?=\s|$)`),
-    fix: 'GNU `sed -i` and BSD `sed -i \'\'` differ. Pass an explicit suffix (`sed -i.bak ...`) or write to a temp file and move it back.',
-  },
-  {
-    label: 'readlink-f',
-    pattern: new RegExp(COMMAND_POSITION + String.raw`readlink\b` + COMMAND_SEGMENT + String.raw`\s-[a-z]*f\b`),
-    fix: '`readlink -f` is not portable: on macOS it fails (exit 1, no output) when the final path component does not exist, where GNU canonicalizes it, and `-f` was absent from macOS entirely for years. Use a portable resolve (e.g. a `cd "$(dirname …)" && pwd` shell function or a Node/Python one-liner).',
-  },
-  {
-    label: 'date-d',
-    pattern: new RegExp(COMMAND_POSITION + String.raw`date\b` + COMMAND_SEGMENT + String.raw`\s-d\b`),
-    fix: 'GNU `date -d` is not supported by BSD/macOS `date`, which uses `-v` or `-j -f`. Avoid `-d` or branch on the platform.',
-  },
-];
-/* eslint-enable security/detect-non-literal-regexp */
-
-/**
- * Collect SKILL_TIME_SENSITIVE_CONTENT issues — scan the SKILL.md body for
- * time-sensitive prose that may become stale. One issue per distinct match
- * with line-number location.
- */
-function collectTimeSensitiveContentIssues(
-  content: string,
-  skillLocation: string,
-  issues: ValidationIssue[],
-): void {
-  const registryEntry = CODE_REGISTRY.SKILL_TIME_SENSITIVE_CONTENT;
-  const lines = content.split('\n');
-
-  for (const [index, line] of lines.entries()) {
-    for (const pattern of TIME_SENSITIVE_PATTERNS) {
-      const match = pattern.exec(line);
-      if (match !== null) {
-        const lineNumber = index + 1;
-        issues.push({
-          severity: registryEntry.defaultSeverity,
-          code: 'SKILL_TIME_SENSITIVE_CONTENT',
-          message: `Time-sensitive phrase "${match[0]}" may become stale`,
-          location: skillLocation,
-          line: lineNumber,
-          fix: registryEntry.fix,
-          reference: registryEntry.reference,
-        });
-        // Only emit one issue per line (first match wins)
-        break;
-      }
-    }
-  }
-}
-
-/**
- * Scan one skill document for any member of a portability check family. One issue
- * per line (first matching variant wins), anchored at `docLocation` + `line`, carrying the
- * variant's label and tailored fix. Shared by the NON_PORTABLE_ASSET_REFERENCE and
- * NON_PORTABLE_COMMAND families.
- */
-function collectPortabilityFamilyIssues(
-  content: string,
-  docLocation: string,
-  issues: ValidationIssue[],
-  family: {
-    readonly code: IssueCode;
-    readonly variants: readonly PortabilityVariant[];
-    readonly summarize: (label: string, match: string) => string;
-  },
-): void {
-  const registryEntry = CODE_REGISTRY[family.code];
-  const lines = content.split('\n');
-
-  for (const [index, line] of lines.entries()) {
-    for (const variant of family.variants) {
-      const match = variant.pattern.exec(line);
-      if (match !== null) {
-        issues.push({
-          severity: registryEntry.defaultSeverity,
-          code: family.code,
-          message: family.summarize(variant.label, match[0].trim()),
-          location: docLocation,
-          line: index + 1,
-          fix: variant.fix,
-          reference: registryEntry.reference,
-        });
-        // Only emit one issue per line (first matching variant wins)
-        break;
-      }
-    }
-  }
-}
-
-/**
- * Collect NON_PORTABLE_ASSET_REFERENCE issues — scan one skill document for any
- * member of the non-portable asset-reference family.
- */
-export function collectNonPortableAssetReferenceIssues(
-  content: string,
-  docLocation: string,
-  issues: ValidationIssue[],
-): void {
-  collectPortabilityFamilyIssues(content, docLocation, issues, {
-    code: 'NON_PORTABLE_ASSET_REFERENCE',
-    variants: NON_PORTABLE_ASSET_VARIANTS,
-    // The headline names the finding only; remediation differs per variant (a
-    // skill-relative path is the answer for bundled assets but is meaningless
-    // for CLAUDE_PROJECT_DIR), so the advice lives in each variant's `fix`.
-    summarize: (label, match) =>
-      `Non-portable reference [${label}]: "${match}" — will not resolve on every surface this skill can run on`,
-  });
-}
-
-/**
- * Collect NON_PORTABLE_COMMAND issues — scan one skill document for any member of
- * the non-portable shell-command family.
- */
-export function collectNonPortableCommandIssues(
-  content: string,
-  docLocation: string,
-  issues: ValidationIssue[],
-): void {
-  collectPortabilityFamilyIssues(content, docLocation, issues, {
-    code: 'NON_PORTABLE_COMMAND',
-    variants: NON_PORTABLE_COMMAND_VARIANTS,
-    // Strip the leading command-position separator (backtick / pipe / etc.) the
-    // pattern captured, so the message shows just the command.
-    summarize: (label, match) =>
-      `Non-portable command [${label}]: "${match.replace(/^[`|;&\s]+/, '')}" — fails on macOS/BSD; use a portable equivalent`,
-  });
-}
-
-/**
  * Collect progressive disclosure issue (NO_PROGRESSIVE_DISCLOSURE)
  */
 function collectProgressiveDisclosureIssue(
@@ -1482,7 +1185,7 @@ function collectProgressiveDisclosureIssue(
  * through `validateSkillForPackaging`'s result alone.
  */
 export function getResolvedMarkdownLinks(
-  links: Array<{ href: string; type: string }>,
+  links: ReadonlyArray<{ readonly href: string; readonly type: string }>,
   markdownPath: string,
   within: string,
   side: FsSide,
@@ -1591,30 +1294,4 @@ function mapExcludeReason(
     default:
       return DETAIL_REASON_DEPTH;
   }
-}
-
-/**
- * Extract skill name from parse result
- */
-function extractSkillName(
-  parseResult: { frontmatter?: Record<string, unknown>; content: string },
-  skillPath: string
-): string {
-  // Try frontmatter name
-  const frontmatterName = parseResult.frontmatter?.['name'];
-  if (frontmatterName && typeof frontmatterName === 'string') {
-    return frontmatterName;
-  }
-
-  // Try H1 title. `[ \t]` is a single fixed-width class, not a quantifier, so it
-  // cannot compete with the `[^\n]*` capture for the same space — that ambiguity
-  // is what made the old `\s+([^\n]+)` form backtrack super-linearly. Trailing
-  // whitespace is removed by the .trim() below, exactly as before.
-  const h1Match = /^#[ \t]([^\n]*)$/m.exec(parseResult.content);
-  if (h1Match?.[1]) {
-    return h1Match[1].trim();
-  }
-
-  // Fall back to filename
-  return basename(skillPath, '.md');
 }

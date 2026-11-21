@@ -1378,4 +1378,22 @@ export default [
       'local/projection-sqlite-import-boundary': 'error',
     },
   },
+  // The skill-text core computes from SKILL_TEXT_DECLARATION alone, so the declaration's digest
+  // covers everything its output depends on but control flow: no regex or RegExp, no constant
+  // beyond 0/1/-1/'', and no runtime import but SKILL_TEXT_DECLARATION itself and sibling modules.
+  // Scoped to the whole directory by glob, the declaration aside, so every sibling a module may
+  // import is held to the same terms.
+  {
+    files: ['packages/resources/src/skill-text/**/*.ts'],
+    ignores: ['packages/resources/src/skill-text/declaration.ts'],
+    plugins: {
+      local: localRules,
+    },
+    rules: {
+      'local/skill-text-core-purity': [
+        'error',
+        { declaration: './declaration.js', declarationExports: ['SKILL_TEXT_DECLARATION'] },
+      ],
+    },
+  },
 ];

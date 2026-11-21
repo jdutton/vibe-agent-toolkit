@@ -35,6 +35,7 @@
 import { VatError } from '@vibe-agent-toolkit/utils';
 
 import type { ParseResult } from './link-parser.js';
+import type { SkillTextFacts } from './schemas/skill-text-facts.js';
 
 /** The limits one parse job runs under. */
 export interface ParseLimits {
@@ -85,7 +86,7 @@ export type ParseLimitName = keyof ParseLimits;
  * 1,000-level nested list, 9.3 s), with headroom for a loaded machine; a cold
  * worker's parser load runs on a clock of its own (`JobClock` in `parse-pool.ts`). Named for what they bound, never a version.
  */
-const DEFAULT_PARSE_LIMITS: ParseLimits = {
+export const DEFAULT_PARSE_LIMITS: Readonly<ParseLimits> = Object.freeze({
   timeMs: 30_000,
   heapMb: 1024,
   stackMb: 4,
@@ -93,7 +94,7 @@ const DEFAULT_PARSE_LIMITS: ParseLimits = {
   outputBytes: 4 * 1024 * 1024,
   outputDepth: 1000,
   inputBytes: 8 * 1024 * 1024,
-};
+});
 
 /**
  * The deepest JSON SQLite's JSON functions read (its `JSON_MAX_DEPTH`): one
@@ -562,7 +563,11 @@ interface OutputBreach {
  * cache never holds facts the bounded route would refuse.
  *
  * Counted over the facts as stored and sent (the result minus `content`,
- * `sizeBytes` and the decoded `frontmatter`); bytes are their JSON. The
+ * `sizeBytes`, the decoded `frontmatter` and the skill-text record); bytes are
+ * their JSON. The skill-text record never counts: it is computed for every
+ * markdown parse, skill or not, so counting it would refuse documents the caps
+ * admitted before the record existed. It is bounded on its own terms instead
+ * ({@link skillTextHeld}). The
  * frontmatter is counted over its EXPANDED value, never its encoding: the
  * encoding writes a shared anchor once, so an anchor aliased 99 times would
  * cost one anchor's rows and bytes on the wire and a hundred in every consumer
@@ -588,6 +593,7 @@ export function outputBreach(
   delete facts.content;
   delete facts.sizeBytes;
   delete facts.frontmatter;
+  delete facts.skillText;
   return factsOutputBreach(facts, limits, result.frontmatter === undefined ? NOTHING_EXPANDED : expandedSize(result.frontmatter));
 }
 
@@ -619,19 +625,62 @@ export function factsOutputBreach(
 }
 
 /**
- * Whether an in-process parse's result may be filed in the shared cache: only
- * when the bounded route, under the default limits, would have admitted the
- * same bytes. Time, heap and stack are per run and never stored either way; the
- * input and output caps are key-determined, so an entry past them would turn a
- * bounded run's refusal into an admission that depends on what ran first.
+ * Whether a parse's result may be filed in the shared cache: only when the
+ * bounded route, under the default limits, would have admitted the same bytes,
+ * and its skill-text record, if any, is one the caches hold
+ * ({@link skillTextHeld}). Time, heap and stack are per run and never stored
+ * either way; the input and output caps are key-determined, so an entry past
+ * them would turn a bounded run's refusal into an admission that depends on
+ * what ran first. A record past its bound is never filed: the next run parses
+ * the bytes again, which is what the skills lane then reads.
  *
  * @param byteLength - Raw bytes of the document parsed
- * @param result - What the in-process parser produced
- * @returns True when a bounded parse of the same bytes would not be refused for its size
+ * @param result - What the parser produced
+ * @returns True when the facts may be filed
  */
 export function storableUnderDefaultLimits(byteLength: number, result: ParseResult): boolean {
   return inputBytesBreach(byteLength, DEFAULT_PARSE_LIMITS.inputBytes) === undefined
-    && outputBreach(result, DEFAULT_PARSE_LIMITS) === undefined;
+    && outputBreach(result, DEFAULT_PARSE_LIMITS) === undefined
+    && (result.skillText === null || skillTextHeld(result.skillText));
+}
+
+/**
+ * The bound on a skill-text record the parse cache and the projection store
+ * hold: as many matches as the default `outputRows`, and as many bytes of JSON
+ * as the default `outputBytes` — the bound every other fact set of one
+ * document is held to, at its default so whether a record is held depends on
+ * its bytes alone, never on a run's configured limits.
+ *
+ * Not a parse cap: a record past it refuses nothing and changes no finding. The
+ * parse still computes it in full and every lane of that run reads it; the
+ * caches only decline to keep it (the parse cache files no entry; the store
+ * writes its `skill_text_facts` row with `held` false and no match rows), so a
+ * later run's skills lane finds no stored record and scans the text again,
+ * counted as a store miss.
+ */
+export const SKILL_TEXT_HELD_LIMITS: Readonly<{ matches: number; bytes: number }> = Object.freeze({
+  matches: DEFAULT_PARSE_LIMITS.outputRows,
+  bytes: DEFAULT_PARSE_LIMITS.outputBytes,
+});
+
+/** {@link skillTextHeld}'s answers, by record: a record is checked once however many caches ask. */
+const heldRecords = new WeakMap<SkillTextFacts, boolean>();
+
+/**
+ * Whether the caches hold a skill-text record: within {@link SKILL_TEXT_HELD_LIMITS}
+ * by its match count and by the bytes of its JSON.
+ *
+ * @param facts - The record
+ * @returns True when the parse cache and the store keep it
+ */
+export function skillTextHeld(facts: SkillTextFacts): boolean {
+  let held = heldRecords.get(facts);
+  if (held === undefined) {
+    held = facts.matches.length <= SKILL_TEXT_HELD_LIMITS.matches
+      && Buffer.byteLength(JSON.stringify(facts)) <= SKILL_TEXT_HELD_LIMITS.bytes;
+    heldRecords.set(facts, held);
+  }
+  return held;
 }
 
 /**

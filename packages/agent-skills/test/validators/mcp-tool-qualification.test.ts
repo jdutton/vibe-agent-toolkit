@@ -1,22 +1,30 @@
+import { SKILL_TEXT_DECLARATION, skillTextFactsOf } from '@vibe-agent-toolkit/resources';
 import { applyAllowFilter, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
-import {
-  collectUnqualifiedMcpToolIssues,
-  qualifiedMcpToolNames,
-} from '../../src/validators/mcp-tool-qualification.js';
+import { collectUnqualifiedMcpToolIssues } from '../../src/validators/mcp-tool-qualification.js';
 
 const LOCATION = 'SKILL.md';
 
 function issuesFor(body: string): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
-  collectUnqualifiedMcpToolIssues(body, LOCATION, issues);
+  collectUnqualifiedMcpToolIssues(skillTextFactsOf(body, SKILL_TEXT_DECLARATION), LOCATION, issues);
   return issues;
 }
 
 const links = (issues: readonly ValidationIssue[]) => issues.map(issue => issue.link);
 
 const sorted = (vocabulary: Iterable<string>) => [...vocabulary].sort((a, b) => a.localeCompare(b));
+
+/**
+ * The tools `text` puts in the document's vocabulary, out of `candidates`: the
+ * candidates are spelled bare on a line of their own after it, and a bare
+ * name is reported exactly when the vocabulary holds it.
+ */
+function vocabularyOf(text: string, candidates: readonly string[]): string[] {
+  const bare = candidates.map((candidate) => `\`${candidate}\``).join(' ');
+  return sorted(new Set(links(issuesFor(`${text}\n\n${bare}\n`)).filter((link) => link !== undefined)));
+}
 
 /**
  * Fastest wall-clock ms of a few runs. The FASTEST run, not the median: the
@@ -34,7 +42,7 @@ function fastestMs(work: () => void, runs = 5): number {
   return best;
 }
 
-describe('qualifiedMcpToolNames — the detector’s premise', () => {
+describe('the mcpUnqualified vocabulary — the detector’s premise', () => {
   // The docstring used to claim the non-greedy server segment made the LAST
   // `__` the separator. It does not — non-greedy stops at the FIRST one, and
   // FIRST is also what Claude Code's own naming wants: it joins the server
@@ -44,12 +52,12 @@ describe('qualifiedMcpToolNames — the detector’s premise', () => {
     // Single-underscore server half: first and last `__` coincide, so this
     // fixture cannot tell the two readings apart on its own — it is here for
     // the shape it documents, not as the discriminator.
-    ['a multi-segment server name', 'mcp__plugin_github_github__get_me', 'get_me'],
+    ['a multi-segment server name', 'mcp__plugin_github_github__get_me', 'get_me', 'github__get_me'],
     // THE discriminator: two `__` after the server. First-`__` yields
     // `gmail__send_email`; last-`__` would yield `send_email`.
-    ['a tool half that itself contains __', 'mcp__zapier__gmail__send_email', 'gmail__send_email'],
-  ])('splits %s at the FIRST __ after the server', (_label, qualified, tool) => {
-    expect([...qualifiedMcpToolNames(`\`${qualified}\``)]).toEqual([tool]);
+    ['a tool half that itself contains __', 'mcp__zapier__gmail__send_email', 'gmail__send_email', 'send_email'],
+  ])('splits %s at the FIRST __ after the server', (_label, qualified, tool, otherSplit) => {
+    expect(vocabularyOf(`\`${qualified}\``, [tool, otherSplit])).toEqual([tool]);
   });
 
   // Claude Code mounts plugin servers as `plugin_<plugin>_<server>`, and
@@ -64,7 +72,7 @@ describe('qualifiedMcpToolNames — the detector’s premise', () => {
       'microsoft_docs_search',
     ],
   ])('reads %s', (_label, qualified, tool) => {
-    expect([...qualifiedMcpToolNames(`\`${qualified}\``)]).toEqual([tool]);
+    expect(vocabularyOf(`\`${qualified}\``, [tool])).toEqual([tool]);
   });
 
   // Hyphenated TOOL names are just as common (context7 ships both of these).
@@ -72,16 +80,17 @@ describe('qualifiedMcpToolNames — the detector’s premise', () => {
   // `resolve` and `query` into the vocabulary, and every later code span
   // spelling either of them became a finding.
   it('captures a hyphenated tool name whole, not up to the first hyphen', () => {
-    const vocabulary = qualifiedMcpToolNames(
+    const vocabulary = vocabularyOf(
       'Look it up with `mcp__plugin_context7_context7__resolve-library-id`,\n' +
       'then `mcp__plugin_context7_context7__query-docs`.\n',
+      ['resolve', 'query', 'resolve-library-id', 'query-docs'],
     );
-    expect(sorted(vocabulary)).toEqual(['query-docs', 'resolve-library-id']);
+    expect(vocabulary).toEqual(['query-docs', 'resolve-library-id']);
   });
 
   it('reads the API spelling when the server half carries an uppercase letter', () => {
-    const vocabulary = qualifiedMcpToolNames('Call `GitHub:create_issue` and `BigQuery:bigquery_schema`.');
-    expect(sorted(vocabulary)).toEqual(['bigquery_schema', 'create_issue']);
+    const vocabulary = vocabularyOf('Call `GitHub:create_issue` and `BigQuery:bigquery_schema`.', ['create_issue', 'bigquery_schema']);
+    expect(vocabulary).toEqual(['bigquery_schema', 'create_issue']);
   });
 
   /**
@@ -108,11 +117,11 @@ describe('qualifiedMcpToolNames — the detector’s premise', () => {
     ['snake_case with a camelCase tail', 'mcp__x__get_userInfo', 'get_userInfo'],
     ['a camelCase tool on a hyphenated server', 'mcp__claude-in-chrome__uploadImage', 'uploadImage'],
   ])('reads %s', (_label, qualified, tool) => {
-    expect([...qualifiedMcpToolNames(`\`${qualified}\``)]).toEqual([tool]);
+    expect(vocabularyOf(`\`${qualified}\``, [tool])).toEqual([tool]);
   });
 
   it('reads a camelCase tool in the API spelling', () => {
-    expect(sorted(qualifiedMcpToolNames('Call `GitHub:createIssue` then `GitHub:listIssues`.')))
+    expect(vocabularyOf('Call `GitHub:createIssue` then `GitHub:listIssues`.', ['createIssue', 'listIssues']))
       .toEqual(['createIssue', 'listIssues']);
   });
 
@@ -125,10 +134,11 @@ describe('qualifiedMcpToolNames — the detector’s premise', () => {
    * as a separator does.
    */
   it('still refuses a ONE-WORD camelCase-free name from the same server', () => {
-    const vocabulary = qualifiedMcpToolNames(
+    const vocabulary = vocabularyOf(
       'Use `mcp__claude-in-chrome__find` and `mcp__claude-in-chrome__uploadImage`.',
+      ['find', 'uploadImage'],
     );
-    expect(sorted(vocabulary)).toEqual(['uploadImage']);
+    expect(vocabulary).toEqual(['uploadImage']);
   });
 
   // Both of these were MEASURED false-vocabulary sources: the first on VAT's own
@@ -136,19 +146,19 @@ describe('qualifiedMcpToolNames — the detector’s premise', () => {
   // corpus. Neither is visible on a corpus of ordinary skills, which is exactly
   // why docs/validation-rule-design.md requires the authoring-project check.
   it.each([
-    ['a node builtin specifier', 'Import from `node:child_process` for spawning.'],
-    ['an OAuth scope string', 'Requires the `whiteboard:read:list_whiteboards` scope.'],
-    ['a lowercase URI scheme', 'See `https://example.com/get_thing_x` for details.'],
+    ['a node builtin specifier', 'Import from `node:child_process` for spawning.', ['child_process']],
+    ['an OAuth scope string', 'Requires the `whiteboard:read:list_whiteboards` scope.', ['list_whiteboards', 'read:list_whiteboards']],
+    ['a lowercase URI scheme', 'See `https://example.com/get_thing_x` for details.', ['get_thing_x']],
     // The server half must be spelled the way Anthropic's examples spell one:
     // uppercase FIRST, and no underscore. Measured cost-free — over 884 documents
     // (206 authoring-project `.md` + 678 installed `SKILL.md`) the looser
     // "uppercase anywhere" rule accepted exactly three distinct server halves,
     // `GitHub`, `BigQuery` and the guidance template's own `ServerName`, and the
     // strict rule accepts all three.
-    ['a server half whose uppercase is not first', 'Set `xGitHub:create_issue` in the map.'],
-    ['a server half carrying an underscore', 'Set `My_Server:create_issue` in the map.'],
-  ])('does not build vocabulary from %s', (_label, body) => {
-    expect(qualifiedMcpToolNames(body).size).toBe(0);
+    ['a server half whose uppercase is not first', 'Set `xGitHub:create_issue` in the map.', ['create_issue']],
+    ['a server half carrying an underscore', 'Set `My_Server:create_issue` in the map.', ['create_issue']],
+  ])('does not build vocabulary from %s', (_label, body, candidates) => {
+    expect(vocabularyOf(body, candidates)).toEqual([]);
   });
 
   // The invariant the packaging validator's SKILL.md lane has always asserted —
@@ -157,10 +167,11 @@ describe('qualifiedMcpToolNames — the detector’s premise', () => {
   // only because that one lane happened to pass a frontmatter-stripped slice,
   // while the bundled-`.md` lane passed whole files.
   it('does not build vocabulary from YAML frontmatter', () => {
-    const vocabulary = qualifiedMcpToolNames(
+    const vocabulary = vocabularyOf(
       '---\nname: demo\nallowed-tools:\n  - mcp__x__do_thing\n---\n\nRun the thing.\n',
+      ['do_thing'],
     );
-    expect(vocabulary.size).toBe(0);
+    expect(vocabulary).toEqual([]);
   });
 
   /**
@@ -176,17 +187,18 @@ describe('qualifiedMcpToolNames — the detector’s premise', () => {
    * the camelCase fix — so it is structural rather than observed.
    */
   it('does not build vocabulary from a ONE-WORD tool name in the mcp__ spelling', () => {
-    const vocabulary = qualifiedMcpToolNames(
+    const vocabulary = vocabularyOf(
       'Locate it with `mcp__claude-in-chrome__find`, then use `find` again later.',
+      ['find'],
     );
 
-    expect(vocabulary.size).toBe(0);
+    expect(vocabulary).toEqual([]);
   });
 
   it('still admits a multi-word tool name spelled with hyphens, not just underscores', () => {
     // The gate is "multi-segment", not "contains an underscore". Requiring `_`
     // would drop the real kebab-cased tools the hyphen fix exists to preserve.
-    expect(sorted(qualifiedMcpToolNames('`mcp__plugin_context7_context7__query-docs`')))
+    expect(vocabularyOf('`mcp__plugin_context7_context7__query-docs`', ['query-docs']))
       .toEqual(['query-docs']);
   });
 
@@ -203,12 +215,12 @@ describe('qualifiedMcpToolNames — the detector’s premise', () => {
    * NON-name character, which the closing backtick supplies here.
    */
   it('strips a trailing separator the greedy capture leaves behind', () => {
-    expect(sorted(qualifiedMcpToolNames('Call `mcp__x__browser_click_` on the beta server.')))
+    expect(vocabularyOf('Call `mcp__x__browser_click_` on the beta server.', ['browser_click', 'browser_click_']))
       .toEqual(['browser_click']);
   });
 
   it('captures a hyphen-then-uppercase tool name whole', () => {
-    expect(sorted(qualifiedMcpToolNames('`mcp__x__browser_click-Beta` in the beta server')))
+    expect(vocabularyOf('`mcp__x__browser_click-Beta` in the beta server', ['browser_click', 'browser_click-Beta']))
       .toEqual(['browser_click-Beta']);
   });
 });
@@ -229,7 +241,7 @@ describe('qualifiedMcpToolNames — the detector’s premise', () => {
 // silently converts the ratio into an absolute of the test author's choosing,
 // and this file is coverage-instrumented on `test:coverage`, where the v8
 // overhead is not uniform across input sizes.
-describe('qualifiedMcpToolNames — no catastrophic backtracking', () => {
+describe('collectUnqualifiedMcpToolIssues over its text — no catastrophic backtracking', () => {
   // A long token carrying no colon is the shape that goes quadratic without the
   // lookbehind: every character is a candidate start, and each start scans to
   // the end of the token before failing.
@@ -240,7 +252,7 @@ describe('qualifiedMcpToolNames — no catastrophic backtracking', () => {
     ['an mcp__ prefix that never completes', (n: number) => 'mcp__a'.repeat(n / 6)],
   ])('processes 80 KB of %s well inside a fixed budget', (_label, build) => {
     const large = build(80_000);
-    expect(fastestMs(() => qualifiedMcpToolNames(large))).toBeLessThan(250);
+    expect(fastestMs(() => issuesFor(large))).toBeLessThan(250);
   });
 });
 

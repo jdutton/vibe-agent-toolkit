@@ -79,7 +79,7 @@ generated JSON Schema — `packages/resources/src/schemas/projection-blobs.ts` a
 `PROJECTION_SCHEMA_VERSION` is removed, and a *stored* projection would take a derived digest of the
 row schemas' shape instead (the parse cache's `parseFactsShapeSource()` is the pattern).
 
-**Population is ✅ real for the fifteen shipped tables.** `populate()` derives rows from `ParseFacts`
+**Population is ✅ real for the shipped tables.** `populate()` derives rows from `ParseFacts`
 and `ResourceRegistry` at runtime. What remains 🔷 proposed is the REMAINDER described below:
 columns the parser does not yet carry, and the zone modeling several tables depend on.
 
@@ -118,6 +118,8 @@ boundaries) that does not exist anywhere in the codebase yet — a separate, lar
 | `blob_conditions` | `(blob, code, ordinal, severity, message, line)` — parse-time oddities; `ordinal` numbers each code's rows in the order the parse reported them, so two identical findings on one line are two rows |
 | `harness_blob_facts` | `(blob, harness)`, the bytes and tokens the harness INJECTS for it as a memory file (`injectedBytes`, `injectedTokens`), the `paths:` globs it scopes the file by (`paths`, JSON, read the harness's way) — derived lazily, only for blobs the harness reaches ([zones.md](zones.md#harness_blob_facts-and-harness_blob_imports--a-harnesss-content-rules-derived-on-reach)) |
 | `harness_blob_imports` | `(blob, harness, ordinal)`, raw ref, target, line — the `@` imports the named harness's own extractor reads ([zones.md](zones.md#harness_blob_facts-and-harness_blob_imports--a-harnesss-content-rules-derived-on-reach)) |
+| `skill_text_facts` | `blob`, `lineCount`, `h1`, `matchCount`, `held` — the skill-text core's per-document facts for a markdown blob, computed by the markdown parse over the text the skills lane scans; exactly one row per markdown blob, none for any other. `held` is false for a record past `SKILL_TEXT_HELD_LIMITS` (16,384 matches or 4 MiB): it has no match rows, the reader answers no record, and the skills lane scans that file from its text, counted as `skillText.storeMiss` |
+| `skill_text_matches` | `(blob, ordinal)`, `family`, `patternId`, `line`, `matchText`, `loneSurrogates` — each thing a skills-phase detector family matched, in emission order. `matchText` is stored well-formed; `loneSurrogates` (JSON `[index, codeUnit]` pairs, or null) records each lone surrogate the match held, and the reader restores it exactly. The fact reader refuses a held blob whose rows do not add up to `matchCount` |
 
 **The proposed schema would store frontmatter as a JSON column, not DuckDB's `VARIANT`.** (Measured
 against `@duckdb/duckdb-wasm` v1.5.4, 2026-08 — a claim about another vendor's product, worth
@@ -421,9 +423,11 @@ move or restore clears leases.
 - **Namespacing is version-based, with a dev-checkout escape hatch.** For an installed VAT, the
   namespace is the package version alone (e.g. `0.1.42`) — deliberately, so every machine on the same
   release shares one cache. Version alone is insufficient for a **dev checkout**, so there the
-  namespace gets a `-dev-<hash>` suffix over two inputs: the package-root path, which separates one
-  worktree from another, and a digest of `ParseFactsSchema`'s own shape, which separates two entry
-  formats within one worktree. Both are **derived**, and that is the settled position after two
+  namespace gets a `-dev-<hash>` suffix over three inputs: the package-root path, which separates one
+  worktree from another, a digest of `ParseFactsSchema`'s own shape, which separates two entry
+  formats within one worktree, and a digest of the skill-text declaration a markdown parse applies
+  (`skillTextDeclarationDigest`), which separates two pattern sets, so a pattern edit cold-starts the
+  parse cache and the projection store beneath the namespace. All are **derived**, and that is the settled position after two
   attempts at hand-maintaining the second half: a build fingerprint of the emitted parser modules
   (rejected — 65 namespaces holding 267 MB, because every rebuild minted one) and then a hand-bumped
   `PARSER_BEHAVIOR_REVISION` (rejected — a second versioning scheme carried alongside the version

@@ -87,12 +87,12 @@ opens (the JSON walkers' pointers on that connection), one per gated call.
 
 ## What it stores, and where
 
-The fifteen projection tables split in two, by the `scope` each declares in
+The projection tables split in two, by the `scope` each declares in
 `PROJECTION_TABLES`:
 
 | scope | tables | keyed by | lifetime |
 |---|---|---|---|
-| `blob` | `blobs`, `blob_references`, `blob_sections`, `blob_conditions`, `harness_blob_facts`, `harness_blob_imports` | content key — the last two are additionally partitioned by `harness`: a write clears exactly the `(blob, harness)` pairs it carries, but a read selects by content key alone and returns every harness's rows for it, since these rows are derived only for what one tree's harness reaches; narrowing to one harness happens in memory (`harnessFactsIndex`), not in the SQL | bounded by the `blob_keys` manifest — a pure function of the bytes, shared by every tree containing them, and retained until it falls out of the newest `DEFAULT_RETAINED_BLOB_KEYS` keys |
+| `blob` | `blobs`, `blob_references`, `blob_sections`, `blob_conditions`, `harness_blob_facts`, `harness_blob_imports`, `skill_text_facts`, `skill_text_matches` | content key — the two harness tables are additionally partitioned by `harness`: a write clears exactly the `(blob, harness)` pairs it carries, but a read selects by content key alone and returns every harness's rows for it, since these rows are derived only for what one tree's harness reaches; narrowing to one harness happens in memory (`harnessFactsIndex`), not in the SQL | bounded by the `blob_keys` manifest — a pure function of the bytes, shared by every tree containing them, and retained until it falls out of the newest `DEFAULT_RETAINED_BLOB_KEYS` keys |
 | `extent` | the other nine, `claude_rule_patterns` among them | `(storeRootId, storeTreeHash)` | forever *for that tree* — the extent of a tree is a pure function of that tree |
 
 Extent-scoped tables carry two extra leading columns holding that key, and their
@@ -105,7 +105,8 @@ kind) gets a full table scan, and would have to bring its own indexes.
 
 The database lives at
 `<vatCacheNamespaceRoot()>/projection-<shape digest>/projection.db`. The
-namespace already moves on every VAT release; the shape digest is derived from
+namespace already moves on every VAT release (and in a source checkout with the
+parse-facts shape and the skill-text declaration); the shape digest is derived from
 the row schemas themselves, so a schema edit lands in a different file rather
 than being read back as rows this build would misinterpret. There is no version
 number and no migration — the old directory goes cold, and only the OS temporary

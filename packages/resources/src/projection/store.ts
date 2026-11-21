@@ -80,7 +80,7 @@ import { PROJECTION_TABLES, type ProjectionRow, type ProjectionTableName } from 
 /** Hex digits kept from the shape digest. Short on purpose — it is a path component. */
 const SHAPE_DIGEST_LENGTH = 12;
 
-/** Pure and mildly expensive: fifteen schemas through the JSON Schema converter. */
+/** Pure and mildly expensive: every table's schema through the JSON Schema converter. */
 let memoizedShapeDigest: string | undefined;
 
 /**
@@ -297,6 +297,13 @@ export interface FactStore {
  *   rows this build would never have kept;
  * - its **partition column** (the harness tables' `harness`), which decides
  *   what a lazy blob-tier write replaces, for the same reason.
+ *
+ * What changes facts without changing their shape is not an input: the
+ * extraction code, and the skill-text declaration whose matches
+ * `skill_text_facts` and `skill_text_matches` hold. The cache namespace above
+ * this directory (`cache-namespace.ts`) separates those, the declaration by its
+ * digest in a dev checkout and by the package version in a published build,
+ * because the parse cache holds the same records and this digest does not key it.
  *
  * @returns Twelve lowercase hex digits, stable across processes and rebuilds
  *

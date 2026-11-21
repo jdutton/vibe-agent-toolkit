@@ -1,10 +1,12 @@
 import {
+  frontmatterFencesOf,
   isPerRunParseRefusal,
   type MeasuredContent,
   parseContentCached,
   parseInputRefusal,
   parseRefusal,
   type ParseRoute,
+  SKILL_TEXT_DECLARATION,
 } from '@vibe-agent-toolkit/resources';
 
 export interface FrontmatterSuccess {
@@ -34,17 +36,6 @@ const EMPTY_BLOCK: FrontmatterError = {
   error: 'Frontmatter is empty: the block between the "---" delimiters declares no fields',
   cause: undefined,
 };
-
-/**
- * A frontmatter fence line, as the markdown parser's frontmatter extension
- * (`remark-frontmatter`) reads one: exactly three dashes at the start of the
- * line, then optional spaces or tabs. Not `----`, not `---x`, not an indented
- * `---` — the crawl lane sees no fence in any of those, so neither does this.
- */
-const FENCE = /^---[ \t]*$/;
-
-/** U+FEFF, which the crawl lane's decode strips before the parser sees a byte. */
-const BOM = String.fromCodePoint(0xfe_ff);
 
 /** U+0000, which CommonMark replaces before any extension reads the block. */
 const NUL = String.fromCodePoint(0);
@@ -92,10 +83,12 @@ function asParserReads(source: string): string {
  *
  * ## Where the block is — the crawl lane's fence rule
  *
- * Line endings are normalized first (`\r\n` and a lone `\r` are both one line
- * ending, as they are to the markdown parser) and a leading BOM dropped. The
- * first line must be a fence; the block ends at the next fence line
- * ({@link FENCE}); no closing fence, no frontmatter.
+ * `frontmatterFencesOf` (resources) owns the rule, so the skill-text core's
+ * body families count lines in exactly the body returned here: a leading BOM
+ * dropped, `\r\n` and a lone `\r` each one line ending (as they are to the
+ * markdown parser), the first line a fence (exactly three dashes, then optional
+ * spaces or tabs, as `remark-frontmatter` reads one), the block ended by the
+ * next fence line; no closing fence, no frontmatter.
  *
  * @param input - Full SKILL.md content, measured in the bytes it came from: a file lane's own read
  *   (`readContentForParse`), so the cap is in the unit that read was held to; content never read,
@@ -113,10 +106,9 @@ export function parseFrontmatter(input: MeasuredContent, route: ParseRoute): Pro
   const tooLarge = parseInputRefusal(input.byteLength, route);
   if (tooLarge !== undefined) return Promise.resolve(refused(tooLarge));
   const { content } = input;
-  const normalized = (content.startsWith(BOM) ? content.slice(1) : content).replaceAll(/\r\n?/g, '\n');
-  const lines = normalized.split('\n');
+  const { lines, opened, closing } = frontmatterFencesOf(content, SKILL_TEXT_DECLARATION);
 
-  if (!FENCE.test(lines[0] ?? '')) {
+  if (!opened) {
     return Promise.resolve({
       success: false,
       error: 'No frontmatter found - must start at beginning with "---" delimiter',
@@ -124,13 +116,13 @@ export function parseFrontmatter(input: MeasuredContent, route: ParseRoute): Pro
     });
   }
 
-  const closing = lines.findIndex((line, index) => index > 0 && FENCE.test(line));
   if (closing === -1) {
     return Promise.resolve({ success: false, error: 'No closing delimiter found', cause: undefined });
   }
 
-  const source = lines.slice(1, closing).join('\n');
-  const body = lines.slice(closing + 1).join('\n');
+  const { lineSeparator } = SKILL_TEXT_DECLARATION;
+  const source = lines.slice(1, closing).join(lineSeparator);
+  const body = lines.slice(closing + 1).join(lineSeparator);
 
   // A block that declares NOTHING — empty, whitespace, comment-only, `~`, `null`
   // — is the rule `parseFrontmatterSource` (the crawl lane's decode) applies:

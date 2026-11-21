@@ -59,6 +59,7 @@ import {
   ResourceTagRowSchema,
   RootRowSchema,
 } from '../schemas/projection-resources.js';
+import { SkillTextFactsRowSchema, SkillTextMatchRowSchema } from '../schemas/projection-skill-text.js';
 import { ResolutionContextRowSchema, ZoneProvenanceRowSchema } from '../schemas/projection-zones.js';
 
 import { OTHER, projectionRowShape, ROOT_RELATIVE_PATH, type ColumnRoles } from './column-kinds.js';
@@ -278,6 +279,15 @@ export const PROJECTION_TABLES = {
   harnessBlobImports: table('harnessBlobImports', 'blob', HarnessBlobImportRowSchema, ['blob', 'harness', 'ordinal'], {
     blob: OTHER, harness: OTHER, rawRef: OTHER, target: OTHER,
   }, undefined, 'harness'),
+  // No partition column: a markdown parse produces the whole record, so these
+  // are written with the blob's other rows and replaced by the same write.
+  // `h1` and `matchText` are text as authored, never resolved against a root.
+  skillTextFacts: table('skillTextFacts', 'blob', SkillTextFactsRowSchema, ['blob'], {
+    blob: OTHER, h1: OTHER,
+  }),
+  skillTextMatches: table('skillTextMatches', 'blob', SkillTextMatchRowSchema, ['blob', 'ordinal'], {
+    blob: OTHER, family: OTHER, patternId: OTHER, matchText: OTHER, loneSurrogates: OTHER,
+  }),
 } as const satisfies { readonly [Name in ProjectionTableName]: ProjectionTableSpec<Name, ProjectionRow<Name>> };
 
 /**

@@ -18,7 +18,7 @@ import { loadResourcesWithConfig, withRunContext, type ResourceLoadResult } from
  * @returns The phase's outcome
  */
 export function skillsValidateInRun(root: string, options: SkillsValidateCommandOptions = {}): Promise<PhaseOutcome> {
-  return withRunContext({ root }, (run) => runSkillsValidatePhase(root, options, run));
+  return withRunContext({ projectionStore: 'on-demand', root, outputs: [] }, (run) => runSkillsValidatePhase(root, options, run));
 }
 
 /**
@@ -32,7 +32,7 @@ export function resourcesValidateInRun(
   root: string,
   options: ValidateOptions = {},
 ): Promise<PhaseOutcome> {
-  return withRunContext({ root }, (run) => runResourcesValidatePhase(root, options, run));
+  return withRunContext({ projectionStore: 'on-demand', root, outputs: [] }, (run) => runResourcesValidatePhase(root, options, run));
 }
 
 /**
@@ -44,5 +44,5 @@ export function resourcesValidateInRun(
  * @returns The load result
  */
 export function loadResourcesInRun(pathArg: string | undefined, projectRoot: string, logger: Logger): Promise<ResourceLoadResult> {
-  return withRunContext({ root: projectRoot }, (run) => loadResourcesWithConfig(pathArg, run, logger));
+  return withRunContext({ projectionStore: 'on-demand', root: projectRoot, outputs: [] }, (run) => loadResourcesWithConfig(pathArg, run, logger));
 }

@@ -14,6 +14,7 @@
 
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
+import type { StoredDocumentFacts } from '../../src/projection/resource-population.js';
 import { type PopulationRun, type RunPopulation, withPopulationRun, withRunPopulation } from '../../src/projection/run-population.js';
 import { type CrawlOptions, type RegistryCrawl, ResourceRegistry, type ResourceRegistryOptions } from '../../src/resource-registry.js';
 import type { CollectionConfig } from '../../src/schemas/project-config.js';
@@ -31,6 +32,17 @@ export function inOwnRun<P extends { run: PopulationRun }, R>(
   options: Omit<P, 'run'>,
 ): Promise<R> {
   return withPopulationRun((run) => lane({ ...options, run } as P));
+}
+
+/**
+ * `storedDocument` for a test population source that holds no run and no store:
+ * it has no admission and no stored facts for any file, so `undefined` is its
+ * true answer for every one.
+ *
+ * @returns `undefined`
+ */
+export function noStoredDocument(): Promise<StoredDocumentFacts | undefined> {
+  return Promise.resolve(undefined);
 }
 
 /** What a test run population is built over, past its root. */
@@ -56,6 +68,7 @@ export function withTestPopulation<R>(
   return withRunPopulation(
     {
       root,
+      outputs: [],
       gitTracker: new GitTracker(root),
       cacheOf: () => Promise.resolve(undefined),
       collectionsFor: () => Promise.resolve(options.collections),

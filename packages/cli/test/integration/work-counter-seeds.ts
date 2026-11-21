@@ -17,6 +17,7 @@
 
 import { writeFileSync } from 'node:fs';
 
+import { readSkillDocument, type SkillTextRun } from '@vibe-agent-toolkit/agent-skills';
 import { hydrateRunDatabase, openSqliteFactStore, type RunDatabase } from '@vibe-agent-toolkit/projection-sqlite';
 import {
   type BlobScopedRows,
@@ -109,6 +110,8 @@ function oneBlobRow(): BlobScopedRows {
     blobConditions: [],
     harnessBlobFacts: [],
     harnessBlobImports: [],
+    skillTextFacts: [],
+    skillTextMatches: [],
   } as unknown as BlobScopedRows;
 }
 
@@ -490,7 +493,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
     delta: {
       'store.reads.persistent': 1,
       'store.writes.persistent': 2,
-      'store.rows.written.persistent': 12,
+      'store.rows.written.persistent': 13,
       'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
       'extent.derived': 1,
       'parse.dispatched': 1,
@@ -507,7 +510,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       return query;
     },
     delta: {
-      'store.rows.decoded.persistent': 12,
+      'store.rows.decoded.persistent': 13,
       'store.reads.persistent': 2,
       'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
       'extent.served': 1,
@@ -523,10 +526,10 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       return query;
     },
     delta: {
-      'store.rows.decoded.persistent': 15,
+      'store.rows.decoded.persistent': 16,
       'store.reads.persistent': 2,
       'store.writes.persistent': 2,
-      'store.rows.written.persistent': 15,
+      'store.rows.written.persistent': 16,
       'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
       'extent.derived': 1,
       'store.miss.refusedPairs': 1,
@@ -559,7 +562,41 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
     },
     delta: { 'git.calls': 1 },
   },
+  'skillText.storeMiss': skillTextStoreMissSeed(),
 };
+
+/**
+ * The skills lane reading a SKILL.md its run's store does not serve, twice in
+ * one run: the file is read and keyed each time, parsed once and answered from
+ * the parse cache the second time, and counted as scanned from its text once
+ * per run.
+ */
+function skillTextStoreMissSeed(): Seed {
+  const content = `---\nname: seed\n---\n${uniqueDocument('skill text')}`;
+  return {
+    prepare: (scope) => {
+      const skillPath = safePath.join(scope.dir(), 'SKILL.md');
+      writeFileSync(skillPath, content);
+      const run: SkillTextRun = {
+        source: { storedDocument: () => Promise.resolve(undefined) },
+        dispatcher: dispatcherOf(scope),
+      };
+      return async () => {
+        await readSkillDocument(skillPath, run, 'source');
+        await readSkillDocument(skillPath, run, 'source');
+        return undefined;
+      };
+    },
+    delta: {
+      'skillText.storeMiss': 1,
+      'parse.dispatched': 1,
+      'parse.cache.hit': 1,
+      'content.read': 2,
+      'content.hashed': 2,
+      'content.hashedBytes': 2 * Buffer.byteLength(content, 'utf8'),
+    },
+  };
+}
 
 /**
  * Every counter's movement between two reads.

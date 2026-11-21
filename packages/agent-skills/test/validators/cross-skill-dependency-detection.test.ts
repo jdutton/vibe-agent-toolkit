@@ -8,9 +8,22 @@
  * the description.
  */
 
+import { SKILL_TEXT_DECLARATION, skillTextFactsOf } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
-import { detectUndeclaredCrossSkillAuth } from '../../src/validators/cross-skill-dependency-detection.js';
+import { detectUndeclaredCrossSkillAuth as detectOnFacts } from '../../src/validators/cross-skill-dependency-detection.js';
+
+/**
+ * The detector on the parser-body family, over the skill-text record of a
+ * SKILL.md whose body is `body` (a file with no frontmatter has no body).
+ */
+function detectUndeclaredCrossSkillAuth(
+  frontmatter: Record<string, unknown>,
+  body: string,
+): ReturnType<typeof detectOnFacts> {
+  const facts = skillTextFactsOf(`---\nname: x\n---\n${body}`, SKILL_TEXT_DECLARATION);
+  return detectOnFacts(frontmatter, facts, 'crossSkillAuthBody', 'SKILL.md');
+}
 
 const BODY_REQUIRES_ENTERPRISE_ORG =
   'Requires `vibe-agent-toolkit:vat-enterprise-org` for authentication.';
