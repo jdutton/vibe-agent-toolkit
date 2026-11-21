@@ -22,6 +22,10 @@
  *   home root, enumerated through the run's population;
  * - a skill outside the project, with no project root of its own.
  *
+ * Warm (a second run over the same store), the resources view is admitted from
+ * the store and reads, keys and parses nothing: the run reads only the SKILL.md
+ * files skill discovery reaches and the markdown a skill bundles, each once.
+ *
  * Every arm has a private `VAT_CACHE_DIR` (where the projection store and the
  * parse cache live) and temp directory, so no other run's cache turns a cold run
  * warm.
@@ -153,7 +157,6 @@ const OVER_CAP = 'docs/huge.md';
 const ALIAS = 'docs/alias.md';
 
 const symlinks = symlinkCapability();
-
 /** Whether the probe can parse a path: markdown or HTML. */
 function isDocument(path: string): boolean {
   return /\.(?:md|html?)$/u.test(path);
@@ -225,9 +228,50 @@ function skillsOnlyDocuments(corpus: Corpus): string[] {
   return [...inside, ...outsideDocuments(corpus)];
 }
 
-/** The SKILL.md files outside the project root. */
-function outsideSkills(corpus: Corpus): string[] {
-  return outsideDocuments(corpus).filter((path) => path.endsWith('/SKILL.md'));
+/**
+ * The SKILL.md files the resources phase's skill discovery reads, repository-relative:
+ * every one in the corpus, since each corpus's root config includes all of its skills.
+ */
+function discoveredSkills(corpus: Corpus): string[] {
+  return Object.keys(corpus.files).filter((path) => path.endsWith('/SKILL.md'));
+}
+
+/** A relative link target in a document, fragment included. */
+const RELATIVE_LINK = /\]\((\.\.?\/[^)\s]*)\)/gu;
+
+/**
+ * The markdown files a skill links, repository-relative: what its packaging
+ * bundles and scans, so what the skills phase reads.
+ */
+function bundledMarkdown(corpus: Corpus): string[] {
+  const targets = discoveredSkills(corpus).flatMap((skill) => {
+    const dir = skill.slice(0, skill.lastIndexOf('/'));
+    return [...(corpus.files[skill] ?? '').matchAll(RELATIVE_LINK)]
+      .map((match) => (match[1] ?? '').split('#')[0] ?? '')
+      .filter((target) => target.endsWith('.md'))
+      .map((target) => join(dir, target));
+  });
+  return [...new Set(targets)];
+}
+
+/**
+ * Documents a warm run admits from the store, project-relative: every admitted
+ * document under the project root (the run's home root, which the store covers).
+ * A document outside the project has no store and is admitted by its read.
+ */
+function storeAdmittedDocuments(corpus: Corpus): string[] {
+  const outside = new Set(outsideDocuments(corpus));
+  return admittedPaths(corpus).filter((path) => !outside.has(path));
+}
+
+/** A path-to-count map as entries sorted by path, for an order-free comparison. */
+function sortedEntries(counts: ReadonlyMap<string, number>): Array<[string, number]> {
+  return [...counts].sort(([a], [b]) => a.localeCompare(b));
+}
+
+/** The total byte length of some corpus files, repository-relative. */
+function bytesOf(corpus: Corpus, paths: readonly string[]): number {
+  return paths.reduce((sum, path) => sum + Buffer.byteLength(corpus.files[path] ?? ''), 0);
 }
 
 /** Documents outside the project root (a skill with no project root): no population keys them. */
@@ -386,6 +430,15 @@ function probed(cwd: string, path: string): string {
 }
 
 /**
+ * The probe's key for a repository-relative path: the probe is rooted one
+ * directory above the project, which is the repository's parent for a project at
+ * the repository root and the repository itself for a project one level down.
+ */
+function probedInRepo(cwd: string, corpus: Corpus, path: string): string {
+  return corpus.project === '' ? probed(cwd, path) : path;
+}
+
+/**
  * A report with what may differ between two runs of one tree dropped: timings,
  * and where the population came from (`store` or `derived`), which is the point
  * of the store and not a finding.
@@ -442,35 +495,58 @@ describe.each([
     expect([...childReads.keys()].filter((path) => !isConfig(path)), 'checks child fs reads').toEqual([]);
   });
 
-  it('warm: the resources phase hits the parse cache once per distinct view document; nothing is admitted twice', async () => {
+  it('warm: the resources view is admitted from the store; the run reads only discovery\'s SKILL.md files and the bundled markdown', async () => {
     const arm = freshArm(false);
     await validateCounts(cwd, arm);
     const warm = await validateCounts(cwd, arm);
-    const resources = warm.phases['resources'];
-    const skills = warm.phases['skills'];
+    const resources = warm.phases['resources'] as Readonly<Record<WorkCounter, number>>;
+    const skills = warm.phases['skills'] as Readonly<Record<WorkCounter, number>>;
     expect(resources).toBeDefined();
     expect(skills).toBeDefined();
+    const discovered = discoveredSkills(corpus);
+    const bundled = bundledMarkdown(corpus);
 
-    // Plus each SKILL.md outside the project: the `files:` entry makes the
-    // resources phase discover skills, and discovery parses one no view admitted yet.
-    expect(resources?.['parse.cache.hit'], 'resources phase: one hit per distinct view document, and per outside SKILL.md').toBe(
-      distinctContents(corpus, resourcesViewDocuments(corpus)).length
-        + outsideSkills(corpus).length,
+    // The resources view reads, keys and parses nothing: every member is
+    // admitted from the store. What the phase still reads is the skill discovery
+    // the `files:` entry asks for (`computeDeferredArtifacts`): each SKILL.md
+    // once, its parse answered from the parse cache. The bytes pin the set.
+    expect(resources['content.read'], 'resources phase reads only the SKILL.md files discovery reaches').toBe(discovered.length);
+    expect(resources['content.hashed'], 'resources phase keys only those').toBe(discovered.length);
+    expect(resources['content.hashedBytes'], 'resources phase: exactly the discovered SKILL.md bytes').toBe(bytesOf(corpus, discovered));
+    expect(parseLookups(resources), 'resources phase parse lookups: discovery\'s only').toBe(discovered.length);
+    expect(resources['parse.cache.hit'], 'each discovery parse is a cache hit').toBe(discovered.length);
+    // A hydrated member costs a readability probe and the registry's one stat:
+    // two per view document; the over-cap file is refused from the store unprobed.
+    expect(resources['fs.stat'], 'resources phase: a probe and a stat per hydrated view document').toBe(
+      2 * resourcesViewDocuments(corpus).length,
     );
+    expect(resources['registry.admitted'], 'resources phase admits the view, from the store').toBe(resourcesViewDocuments(corpus).length);
+
     expect(warm.parent['registry.built'], 'one registry per view set').toBe(1);
     expect(warm.parent['registry.admitted'], 'nothing admitted twice').toBe(admittedPaths(corpus).length);
-    expect(skills?.['registry.admitted'], 'the skills phase admits only what no earlier phase admitted').toBe(
+    expect(skills['registry.admitted'], 'the skills phase admits only what no earlier phase admitted').toBe(
       skillsOnlyDocuments(corpus).length,
     );
-    // On a warm run the population is the store's, so a file is read only when a
-    // view admits it or discovery reads it: the skills phase reads exactly the
-    // documents only it admits, less each outside SKILL.md the resources phase's
-    // discovery already read. Another root has no store, so it is listed, and a
-    // listing reads nothing.
-    expect(skills?.['content.read'], 'skills phase reads exactly what only it admits, once').toBe(
-      skillsOnlyDocuments(corpus).length - outsideSkills(corpus).length,
-    );
-    expect(readTwice(warm.parentReads), 'no path read twice at the fs boundary').toEqual([]);
+    // The skills phase reads no SKILL.md (discovery read each once) and exactly
+    // the markdown files a skill links: the packager scans each bundled file's
+    // text, and a skill outside the project has no store to admit its own from.
+    expect(skills['content.read'], 'skills phase reads exactly the bundled markdown, once').toBe(bundled.length);
+    expect(skills['content.hashedBytes'], 'skills phase: exactly the bundled markdown bytes').toBe(bytesOf(corpus, bundled));
+
+    // At the fs boundary, the whole process. The probe counts a read-only open
+    // as a content read, so each member admitted from the store shows once for
+    // its readability probe (an open and a close, no bytes read); on top of that,
+    // discovery's SKILL.md files and the bundled markdown are each read once.
+    const expected = new Map<string, number>();
+    const add = (path: string): void => {
+      expected.set(path, (expected.get(path) ?? 0) + 1);
+    };
+    for (const path of storeAdmittedDocuments(corpus)) add(probed(cwd, path));
+    for (const path of [...discovered, ...bundled]) add(probedInRepo(cwd, corpus, path));
+    expect(
+      sortedEntries(new Map([...warm.parentReads].filter(([path]) => !isConfig(path)))),
+      'warm fs-boundary reads: one probe open per store-admitted member, one read per discovered SKILL.md and bundled file',
+    ).toEqual(sortedEntries(expected));
   });
 
   it('store off: findings and exit code identical to store on', async () => {

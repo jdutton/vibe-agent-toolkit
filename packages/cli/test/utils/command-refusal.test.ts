@@ -13,6 +13,7 @@ import {
   GIT_FAILED_CODE,
   GIT_NO_ANSWER_CODE,
   GIT_NOT_FOUND_CODE,
+  GIT_SNAPSHOT_INDEX_HIDES_CODE,
   GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE,
   GIT_SNAPSHOT_REFUSED_CODE,
   GIT_SNAPSHOT_UNREADABLE_CODE,
@@ -90,11 +91,12 @@ describe('refusalCodeOf', () => {
     },
   );
 
-  it('covers all six git codes', () => {
+  it('covers all seven git codes', () => {
     expect(Object.keys(GIT_CHANGED_FILES_KIND_BY_CODE).sort(compareCodeUnits)).toStrictEqual([
       GIT_FAILED_CODE,
       GIT_NO_ANSWER_CODE,
       GIT_NOT_FOUND_CODE,
+      GIT_SNAPSHOT_INDEX_HIDES_CODE,
       GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE,
       GIT_SNAPSHOT_REFUSED_CODE,
       GIT_SNAPSHOT_UNREADABLE_CODE,

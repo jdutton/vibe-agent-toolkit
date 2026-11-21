@@ -56,6 +56,7 @@ import {
   GIT_FAILED_CODE,
   GIT_NO_ANSWER_CODE,
   GIT_NOT_FOUND_CODE,
+  GIT_SNAPSHOT_INDEX_HIDES_CODE,
   GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE,
   GIT_SNAPSHOT_REFUSED_CODE,
   GIT_SNAPSHOT_UNREADABLE_CODE,
@@ -118,6 +119,7 @@ const REFUSAL_BY_ERROR_CODE: Readonly<Record<string, RefusalCode>> = {
   [GIT_SNAPSHOT_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
   [GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE]: 'INPUT_UNREADABLE',
   [GIT_SNAPSHOT_REFUSED_CODE]: 'INPUT_UNREADABLE',
+  [GIT_SNAPSHOT_INDEX_HIDES_CODE]: 'INPUT_UNREADABLE',
   // An org command run without the key its endpoint authenticates with: nothing was sent.
   [ORG_API_KEY_MISSING_CODE]: 'USAGE_INVALID',
   // The Anthropic API answered with a non-success status (`ApiRequestError`)…

@@ -34,7 +34,7 @@
  * when it refuses and no member surfaces it.
  */
 
-import { chmodSync, existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { devNull } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
@@ -510,13 +510,19 @@ interface RunRecord {
 /** What an arm's `prepare` may do besides touching the corpus: run the subject's query, recorded as this cell's prime. */
 type Prime = () => Promise<RunRecord>;
 
+/** A run's positive tell. */
+type Tell = (run: RunRecord, dirs: ArmDirs) => void;
+
 /** One way a run reaches the store. */
 interface Arm {
   readonly env: (dirs: ArmDirs) => Record<string, string>;
-  /** After the fixture and state A; returns the prime it ran, if any. */
-  readonly prepare: (dirs: ArmDirs, corpus: string, git: Git, prime: Prime) => Promise<RunRecord | undefined>;
+  /**
+   * After the fixture and state A; returns the prime it ran, if any, having held `primeTell` on it
+   * (the cold tell, unless the seed declares the store declines the prime).
+   */
+  readonly prepare: (dirs: ArmDirs, corpus: string, git: Git, prime: Prime, primeTell: Tell) => Promise<RunRecord | undefined>;
   /** The positive tell, asserted on every measured run the seed does not claim. */
-  readonly tell: (run: RunRecord, dirs: ArmDirs) => void;
+  readonly tell: Tell;
 }
 
 /** The prefix of every charge the store itself files (`CRAWL_STORE_READ_ID`, `CRAWL_STORE_WRITE_ID`). */
@@ -619,6 +625,20 @@ function coldTell(run: RunRecord, dirs: ArmDirs): void {
   expectOrigin(run, 'derived');
 }
 
+/** What the operator is told when git's index hides files from the tree key (`GIT_SNAPSHOT_INDEX_HIDES`). */
+const INDEX_HIDES_NOTICE = 'git does not read those files';
+
+/**
+ * A store-on run whose tree git declined to key: it says why, opens no store,
+ * charges none of it, and derives everything, as store-off does.
+ */
+function declinedTell(run: RunRecord, dirs: ArmDirs): void {
+  expect(run.stderr, `${run.label} ${run.verb}: the decline was not told`).toContain(INDEX_HIDES_NOTICE);
+  expect(storeFilesUnder(dirs.store), `${run.label} ${run.verb}: a declined run opened a store`).toEqual([]);
+  expect(storeCharges(run), `${run.label} ${run.verb}`).toEqual([]);
+  expectOrigin(run, 'derived');
+}
+
 // ── Partial eviction ────────────────────────────────────────────────────────
 
 /** The blob-scoped tables, read off the registry, so a blob table added later is evicted too. */
@@ -648,15 +668,17 @@ interface EvictionOutcome {
 /**
  * Each verb's outcome under partial eviction, held exactly. An evicted key is one the
  * stored extent names and the blob tier does not account for, and ONE such key makes the
- * whole extent a miss for a population that reads the blob tier (`uncoveredContentKeys`,
- * ADR I10): it reads, misses, derives everything and writes it back. A population that
- * does not read the blob tier is served the extent and never sees the eviction.
+ * whole extent a miss for a population that projects the blob tier (`uncoveredContentKeys`,
+ * ADR I10): it reads, misses, derives everything and writes it back. A resources registry
+ * is served the extent and admits each member from its blob facts (`stored-admission.ts`),
+ * so it reads the blob tier too, but per key: an evicted key is re-derived in memory for
+ * that one file and nothing is written, so the eviction stays and the origin is `store`.
  *
- * - `validate` (`vat resources validate`) reads no blob table: served.
- * - `check`, `query` and `context` read it: re-derived. `query`'s lenses populate after
- *   its own population has written the extent back, so they are served.
+ * - `validate` (`vat resources validate`) is a registry: served, the evicted keys re-derived in memory.
+ * - `check`, `query` and `context` project the blob tier: re-derived. `query`'s lenses populate
+ *   after its own population has written the extent back, so they are served.
  * - `vatValidate`: its resources phase is served, as `validate` is; its checks child
- *   reads the blob tier and re-derives it, which is the write.
+ *   projects the blob tier and re-derives it, which is the write.
  *
  * A store that serves the held keys around an evicted one rewrites this table.
  */
@@ -777,9 +799,9 @@ const ARMS: { readonly [Name in ArmName]: Arm } = {
   },
   warmSameHistory: {
     env: storeOnEnv,
-    prepare: async (dirs, _corpus, _git, prime) => {
+    prepare: async (dirs, _corpus, _git, prime, primeTell) => {
       const primed = await prime();
-      coldTell(primed, dirs);
+      primeTell(primed, dirs);
       return primed;
     },
     tell: (run) => {
@@ -796,9 +818,9 @@ const ARMS: { readonly [Name in ArmName]: Arm } = {
   },
   partialEviction: {
     env: storeOnEnv,
-    prepare: async (dirs, _corpus, _git, prime) => {
+    prepare: async (dirs, _corpus, _git, prime, primeTell) => {
       const primed = await prime();
-      coldTell(primed, dirs);
+      primeTell(primed, dirs);
       evictedByCell.set(dirs.root, evictHalfTheBlobTier(dirs));
       return primed;
     },
@@ -823,9 +845,22 @@ if (ARM_NAMES[0] !== 'storeOff') throw new Error('ARMS must list store-off, the 
 
 // ── Seeds ───────────────────────────────────────────────────────────────────
 
+/** Which of a store-on cell's runs git declines to key. */
+interface StoreDeclines {
+  readonly prime: boolean;
+  readonly measured: boolean;
+}
+
 /** What a seed must produce. */
 type SeedExpectation =
   | { readonly diverges: { readonly relations: readonly string[]; readonly verbs: readonly VerbName[] } }
+  /**
+   * Every arm answers as store-off does: a plant the store must not mask. `storeDeclines` says which
+   * store-on runs git declines to key (an index that hides files): a declined run is held to the
+   * declined tell in place of its arm's, and a measured run after a declined prime to the cold tell,
+   * since the prime filed nothing. `null` holds every arm to its own tell.
+   */
+  | { readonly agrees: { readonly because: string; readonly storeDeclines: StoreDeclines | null } }
   | { readonly refuses: { readonly cause: AbsenceMember; readonly perVerb: Readonly<Partial<Record<VerbName, number>>> } }
   | { readonly agreesAndMisses: { readonly arm: ArmName } }
   | { readonly documentsHole: { readonly arm: ArmName; readonly because: string } };
@@ -1050,6 +1085,21 @@ function seedClaims(seed: I0Seed | undefined, arm: ArmName): boolean {
 }
 
 /**
+ * The tells a seed's cell is held to: the arm's own, unless the seed declares the store declines.
+ *
+ * @param seed - The seed, or `undefined` for the unseeded gate
+ * @param arm - The arm
+ * @returns The prime's tell and the measured run's
+ */
+function cellTells(seed: I0Seed | undefined, arm: ArmName): { readonly prime: Tell; readonly measured: Tell } {
+  const declines = seed !== undefined && 'agrees' in seed.expect ? seed.expect.agrees.storeDeclines : null;
+  if (arm === 'storeOff' || declines === null) return { prime: coldTell, measured: ARMS[arm].tell };
+  if (arm === 'partialEviction' && declines.prime) throw new Error(`${seed?.name ?? ''}: a declined prime leaves nothing to evict`);
+  if (declines.measured) return { prime: declines.prime ? declinedTell : coldTell, measured: declinedTell };
+  return declines.prime ? { prime: declinedTell, measured: coldTell } : { prime: coldTell, measured: ARMS[arm].tell };
+}
+
+/**
  * Run one cell: fresh directories, the fixture, state A, prepare, B, the plant, one measured run.
  */
 async function runCell(
@@ -1072,11 +1122,12 @@ async function runCell(
     await seed?.stateA?.(corpus, git, dirs);
     const runner = cellRunner({ binPath: options.binPath, corpus, dirs, env, maxBuffer: options.maxBuffer });
     // A warm arm primes with the subject's own query, so its prime and a measured dump are one statement.
-    const prime = await ARMS[arm].prepare(dirs, corpus, git, () => runner.run(rows.query, `${arm}:prime`));
+    const tells = cellTells(seed, arm);
+    const prime = await ARMS[arm].prepare(dirs, corpus, git, () => runner.run(rows.query, `${arm}:prime`), tells.prime);
     await seed?.toB?.(arm, dirs, corpus, git);
     await seed?.beforeRun?.(arm, dirs, corpus);
     const measured = await runner.run(verb, `${arm}:measured`);
-    if (!seedClaims(seed, arm)) ARMS[arm].tell(measured, dirs);
+    if (!seedClaims(seed, arm)) tells.measured(measured, dirs);
     return { prime, measured };
   } finally {
     seed?.restore?.(corpus);
@@ -1340,6 +1391,7 @@ function expectDocumentsHole(result: DifferentialResult, arm: ArmName): void {
 export function expectSeed(seed: I0Seed, result: DifferentialResult): void {
   const expectation = seed.expect;
   if ('diverges' in expectation) expectDiverges(result, expectation.diverges);
+  else if ('agrees' in expectation) expectSameAnswers(result);
   else if ('refuses' in expectation) expectRefuses(result, expectation.refuses);
   else if ('agreesAndMisses' in expectation) expectAgreesAndMisses(result, expectation.agreesAndMisses.arm);
   else expectDocumentsHole(result, expectation.documentsHole.arm);
@@ -1397,21 +1449,37 @@ const GATE_UNTRACKED: Readonly<Record<string, string>> = {
   'docs/notes.md': '# Notes\n\nNot committed yet.\n',
 };
 
+/** A fixture a subject rewrites in every cell: what it commits, then what it leaves untracked. */
+export interface FixtureTree {
+  /** Writes the files the fixture commits, into an empty corpus. */
+  readonly committed: (corpus: string) => void;
+  /** Writes the files it leaves untracked, after the commit. */
+  readonly untracked: (corpus: string) => void;
+}
+
+/** The gate fixture, committed, plus one untracked file. */
+const GATE_TREE: FixtureTree = {
+  committed: (corpus) => writeFileTree(corpus, GATE_FIXTURE),
+  untracked: (corpus) => writeFileTree(corpus, GATE_UNTRACKED),
+};
+
 /**
- * The gate subject: the fixture, committed, plus one untracked file.
+ * A subject that rewrites a fixture tree in every cell: its committed files, a fresh
+ * repository holding them, then its untracked files.
  *
  * @param corpus - The corpus path every arm measures at
+ * @param tree - The fixture
  * @returns The subject
  */
-function gateSubject(corpus: string): Subject {
+function treeSubject(corpus: string, tree: FixtureTree): Subject {
   return {
     corpus,
     write: (git) => {
-      writeFileTree(corpus, GATE_FIXTURE);
+      tree.committed(corpus);
       git(['init', '-q', '-b', 'main']);
       git(['add', '-A']);
       git(['commit', '-q', '-m', 'fixture']);
-      writeFileTree(corpus, GATE_UNTRACKED);
+      tree.untracked(corpus);
     },
   };
 }
@@ -1474,6 +1542,125 @@ export function corpusBytes(corpus: string, path: string): Buffer {
   return readFileSync(safePath.join(corpus, path));
 }
 
+/** The flags by which git's index hides a tracked file's bytes from the tree hash. */
+export type IndexFlag = 'assume-unchanged' | 'skip-worktree';
+
+/** The link every index-flag seed's edit adds, to a file no fixture holds. */
+const INDEX_FLAG_BROKEN_LINK = './gone.md';
+
+/** Where an index-flag seed plants, and what it runs. */
+export interface IndexFlagPlant {
+  /** A tracked file that links nowhere broken until edited. */
+  readonly path: string;
+  /** The edited bytes: the file with a link to {@link INDEX_FLAG_BROKEN_LINK} added. */
+  readonly edited: string;
+  readonly arms: readonly ArmName[];
+  /** Must include `vatValidate`, whose store-off findings show the edit. */
+  readonly verbs: readonly VerbName[];
+}
+
+/**
+ * `git update-index --<flag>` and its undo, then `git status` is asserted clean for the path either way.
+ */
+function setIndexFlag(git: Git, flag: IndexFlag, path: string, on: boolean): void {
+  git(['update-index', `--${on ? '' : 'no-'}${flag}`, '--', path]);
+  expect(git(['status', '--porcelain', '--', path]).trim(), `git status after --${on ? '' : 'no-'}${flag}`).toBe('');
+}
+
+/**
+ * The two seeds for one index flag. A flagged file's edit leaves `git status` clean and the
+ * snapshot's hash where it was, so the tree key declines while any file is flagged
+ * (`GIT_SNAPSHOT_INDEX_HIDES`) and every store-on run over a flagged tree answers as store-off does.
+ *
+ * - forward: flag before the prime, edit after it. A key that did not decline would serve the
+ *   measured run the prime's facts for the unedited bytes and miss the broken link store-off reports.
+ * - reverse: flag and edit before the prime, revert and unflag after it. A key that did not decline
+ *   would file the edited bytes' facts under the clean tree's hash, and the measured run, now over
+ *   the clean tree, would be served a broken link that is not there.
+ *
+ * @param flag - The `git update-index` flag
+ * @param plant - The file, its edit, the arms and verbs
+ * @returns The forward seed, then the reverse
+ */
+export function indexFlagSeeds(flag: IndexFlag, plant: IndexFlagPlant): readonly [I0Seed, I0Seed] {
+  const { path, edited, arms, verbs } = plant;
+  const referenceFindingsAtPath = (runs: RecordedRuns): unknown[][] => {
+    const findings = (runs['storeOff:measured']?.vatValidate?.document['findings'] ?? []) as Array<Record<string, unknown>>;
+    return findings
+      .filter((finding) => finding['location'] === path && finding['code'] === 'LINK_BROKEN_FILE')
+      .map((finding) => [finding['code'], finding['link']]);
+  };
+  const brokenLinkReported = (runs: RecordedRuns): void => {
+    expect(referenceFindingsAtPath(runs)).toEqual([['LINK_BROKEN_FILE', INDEX_FLAG_BROKEN_LINK]]);
+  };
+  const forward: I0Seed = {
+    name: `${flag} edit after the prime`,
+    needs: null,
+    arms,
+    verbs,
+    stateA: (_corpus, git) => {
+      setIndexFlag(git, flag, path, true);
+      return Promise.resolve();
+    },
+    toB: (_arm, _dirs, corpus, git) => {
+      writeFileSync(safePath.join(corpus, path), edited);
+      expect(git(['status', '--porcelain', '--', path]).trim(), 'git does not see the edit').toBe('');
+      return Promise.resolve();
+    },
+    expect: {
+      agrees: {
+        because: 'git declines to key a tree whose index hides a file, so nothing is filed or served under it',
+        storeDeclines: { prime: true, measured: true },
+      },
+    },
+    // The edit is observable: the reference reports the link it broke.
+    consumed: { runs: ['storeOff:measured'], check: brokenLinkReported },
+  };
+  const original = new Map<string, Buffer>();
+  const reverse: I0Seed = {
+    name: `${flag} edit reverted before the measured run`,
+    needs: null,
+    arms,
+    verbs,
+    stateA: (corpus, git) => {
+      original.set(corpus, corpusBytes(corpus, path));
+      setIndexFlag(git, flag, path, true);
+      writeFileSync(safePath.join(corpus, path), edited);
+      expect(git(['status', '--porcelain', '--', path]).trim(), 'git does not see the edit').toBe('');
+      return Promise.resolve();
+    },
+    toB: (_arm, _dirs, corpus, git) => {
+      const bytes = original.get(corpus);
+      if (bytes === undefined) throw new Error(`${path}: state A recorded no original bytes`);
+      writeFileSync(safePath.join(corpus, path), bytes);
+      setIndexFlag(git, flag, path, false);
+      return Promise.resolve();
+    },
+    expect: {
+      agrees: {
+        because: 'a prime over a tree whose index hides an edit files nothing the clean tree could be served',
+        storeDeclines: { prime: true, measured: false },
+      },
+    },
+    consumed: {
+      runs: ['warmSameHistory:prime', 'storeOff:measured'],
+      check: (runs) => {
+        // Every prime (the dump, one per verb) ran over the flagged tree: it populates, then refuses the
+        // statement, since the dump reads `changed_files` and git cannot say what changed under the flag.
+        // Store-off over the reverted tree reports no broken link.
+        const primes = Object.values(runs['warmSameHistory:prime'] ?? {});
+        expect(primes, 'one warm prime per verb').toHaveLength(verbs.length);
+        for (const primed of primes) {
+          expect(primed.document['error'], 'the prime ran over the flagged tree').toMatchObject({ code: 'INPUT_UNREADABLE' });
+          expect(JSON.stringify(primed.document['error']), 'the prime ran over the flagged tree').toContain(`marked ${flag}`);
+        }
+        expect(referenceFindingsAtPath(runs), 'store-off over the reverted tree').toEqual([]);
+      },
+    },
+  };
+  return [forward, reverse];
+}
+
 // ── Seed suites ─────────────────────────────────────────────────────────────
 
 /**
@@ -1486,6 +1673,7 @@ export function corpusBytes(corpus: string, path: string): Buffer {
 export function seedTitle(seed: I0Seed): string {
   const expectation = seed.expect;
   if ('documentsHole' in expectation) return `${seed.name} documents the hole: ${expectation.documentsHole.because}`;
+  if ('agrees' in expectation) return `${seed.name} agrees: ${expectation.agrees.because}`;
   return `${seed.name}: ${Object.keys(expectation)[0] ?? ''}`;
 }
 
@@ -1526,45 +1714,111 @@ export function runEveryStep(steps: ReadonlyArray<() => void>): void {
   if (errors.length > 0) throw first instanceof Error ? first : new Error(String(first));
 }
 
-/** One gate slice's file: its recorded runs, and the gate's judgment of them. */
+/** One unseeded slice's file: its recorded runs, and the judgment of them. */
 interface GateSuite {
   /** The slice's recorded runs, once its `beforeAll` has run. */
   readonly result: () => DifferentialResult;
-  /** Every arm of the slice answers every verb of it as store-off does, with a zero refusal census. */
+  /** Every arm of the slice answers every verb of it as store-off does, and whatever else the suite holds. */
   readonly expectAgreement: () => void;
 }
 
 /**
+ * Registers, in the calling `describe`, the hooks that run one unseeded slice over a
+ * fixture tree, and returns its recorded runs.
+ *
+ * @param prefix - The suite's temp-directory prefix
+ * @param slice - The cells
+ * @param tree - The fixture every cell rewrites
+ * @param testFileUrl - The calling file's `import.meta.url`, which locates the CLI build
+ * @returns The recorded runs, once `beforeAll` has run
+ */
+function recordedSlice(prefix: string, slice: GateSlice, tree: FixtureTree, testFileUrl: string): () => DifferentialResult {
+  const context = createSuiteContext(prefix, testFileUrl);
+  let recorded: DifferentialResult | undefined;
+  beforeAll(async () => {
+    context.setup();
+    recorded = await runDifferential({ binPath: context.binPath, subject: treeSubject(safePath.join(context.createTempDir(), 'corpus'), tree) }, slice);
+  });
+  afterAll(() => {
+    removeCells();
+    context.cleanup();
+  });
+  return () => {
+    if (recorded === undefined) throw new Error(`the ${slice.slice} slice has not run`);
+    expect(recorded.arms).toEqual(slice.arms);
+    expect(recorded.verbs).toEqual(slice.verbs);
+    return recorded;
+  };
+}
+
+/**
  * One slice of the unseeded gate: registers its hooks in the calling `describe`, and
- * returns what the file's own test judges.
+ * returns what the file's own test judges: no divergence, and a zero refusal census.
  *
  * @param slice - The slice ({@link GATE_SLICES})
  * @param testFileUrl - The calling file's `import.meta.url`, which locates the CLI build
  * @returns The suite
  */
 export function gateSuite(slice: GateSlice, testFileUrl: string): GateSuite {
-  const context = createSuiteContext('vat-i0-gate-', testFileUrl);
-  let recorded: DifferentialResult | undefined;
-  const result = (): DifferentialResult => {
-    if (recorded === undefined) throw new Error(`the ${slice.slice} gate slice has not run`);
-    return recorded;
-  };
-  beforeAll(async () => {
-    context.setup();
-    recorded = await runDifferential({ binPath: context.binPath, subject: gateSubject(safePath.join(context.createTempDir(), 'corpus')) }, slice);
-  });
-  afterAll(() => {
-    removeCells();
-    context.cleanup();
-  });
-  return {
-    result,
-    expectAgreement: () => {
-      expect(result().arms).toEqual(slice.arms);
-      expect(result().verbs).toEqual(slice.verbs);
-      expectNoDivergenceAndNoRefusal(result());
-    },
-  };
+  const result = recordedSlice('vat-i0-gate-', slice, GATE_TREE, testFileUrl);
+  return { result, expectAgreement: () => expectNoDivergenceAndNoRefusal(result()) };
+}
+
+/**
+ * The store-fidelity differential's cells: `vat validate` in every arm. Warm `vat
+ * validate` admits each resource from its stored blob facts, and partial eviction
+ * re-derives in memory exactly the keys it lost, so these two arms are the ones a
+ * wrong stored fact reaches.
+ */
+export const FIDELITY_SLICE = { slice: 'fidelity', arms: ARM_NAMES, verbs: ['vatValidate'] } as const satisfies GateSlice;
+
+/**
+ * Each arm's findings, in order, as the comparison prints them: the first thing a
+ * fidelity failure needs to show is which finding moved.
+ *
+ * @param result - The recorded runs
+ * @param verb - The verb
+ * @returns Arm to its status and findings
+ */
+function findingsByArm(result: DifferentialResult, verb: VerbName): Record<string, unknown> {
+  return Object.fromEntries(result.arms.map((arm) => {
+    const run = result.measured[arm][verb];
+    if (run === undefined) throw new Error(`no ${arm} run of ${verb}`);
+    return [arm, { status: run.status, findings: run.document['findings'] }];
+  }));
+}
+
+/**
+ * Every arm exits as store-off does with byte-identical findings in order (compared
+ * first, so a failure shows which finding moved), and no other field of any verb's
+ * document diverges.
+ *
+ * @param result - The recorded runs
+ */
+function expectSameAnswers(result: DifferentialResult): void {
+  for (const verb of result.verbs) {
+    const byArm = findingsByArm(result, verb);
+    const reference = JSON.stringify(byArm['storeOff']);
+    const differing = result.arms.filter((arm) => JSON.stringify(byArm[arm]) !== reference);
+    expect(byArm, `${verb}: exit code or findings differ from store-off's in [${differing.join(', ')}]`)
+      .toEqual(Object.fromEntries(result.arms.map((arm) => [arm, byArm['storeOff']])));
+  }
+  expect(divergences(result)).toEqual([]);
+}
+
+/**
+ * The store-fidelity differential over a fixture seeding every fidelity case (the
+ * calling file's): every arm's `vat validate` exits as store-off's does with
+ * byte-identical findings in order, and no other field of its document diverges.
+ * Refusals are part of the fixture, so no zero census is asked of it.
+ *
+ * @param tree - The fixture
+ * @param testFileUrl - The calling file's `import.meta.url`, which locates the CLI build
+ * @returns The suite
+ */
+export function fidelitySuite(tree: FixtureTree, testFileUrl: string): GateSuite {
+  const result = recordedSlice('vat-i0-fidelity-', FIDELITY_SLICE, tree, testFileUrl);
+  return { result, expectAgreement: () => expectSameAnswers(result()) };
 }
 
 /** A seed file's suite: its hooks, and one seed run over a fresh gate fixture and judged. */
@@ -1576,12 +1830,24 @@ interface SeedSuite {
 }
 
 /**
- * The suite a seed file runs its seeds in.
+ * The suite a seed file runs its seeds in, over the gate fixture.
  *
  * @param testFileUrl - The calling file's `import.meta.url`, which locates the CLI build
  * @returns The suite
  */
 export function seedSuite(testFileUrl: string): SeedSuite {
+  return treeSeedSuite(GATE_TREE, testFileUrl);
+}
+
+/**
+ * The suite a seed file runs its seeds in, over a fixture of its own: for a seed whose
+ * claim the gate fixture's custom checks would blur.
+ *
+ * @param tree - The fixture every cell rewrites before the seed's state A
+ * @param testFileUrl - The calling file's `import.meta.url`, which locates the CLI build
+ * @returns The suite
+ */
+export function treeSeedSuite(tree: FixtureTree, testFileUrl: string): SeedSuite {
   const context = createSuiteContext('vat-i0-seed-', testFileUrl);
   const tempDirs: string[] = [];
   return {
@@ -1592,7 +1858,7 @@ export function seedSuite(testFileUrl: string): SeedSuite {
     run: async (seed) => {
       const tempDir = context.createTempDir();
       tempDirs.push(tempDir);
-      const subject = gateSubject(safePath.join(tempDir, 'corpus'));
+      const subject = treeSubject(safePath.join(tempDir, 'corpus'), tree);
       const result = await runDifferential({ binPath: context.binPath, subject }, seed);
       expectSeed(seed, result);
       return result.arms;

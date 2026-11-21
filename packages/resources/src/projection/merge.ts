@@ -901,9 +901,10 @@ function storeKeyFor(
     extentSource: crawlSourceSelector() ?? null,
     parseRouting: routing.fingerprint,
     // A constant within one release, so this guards invalidation ACROSS releases: a realization
-    // past the input cap is stored `oversize`, and rows a release derived under its cap answer no
-    // run of a release with another.
-    inputBytes: POPULATION_PARSE_LIMITS.inputBytes,
+    // past the input cap is stored `oversize`, and a warm run builds its registry from the parse
+    // facts stored under these limits, so rows a release derived under its limits answer no run of
+    // a release with others. The whole object, so a limit added to it is in the key unasked.
+    parseLimits: { ...POPULATION_PARSE_LIMITS },
     registrations: registrationQuestions(options),
   });
   return { rootId, treeHash: `${cache.treeHash} ${ambient}` };

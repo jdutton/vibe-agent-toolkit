@@ -384,7 +384,8 @@ export async function loadResourcesWithConfig(
 
   // With a store, the crawl below opens it, and opening it takes the snapshot that
   // keys it. Taking that snapshot HERE is the same one moved a few lines earlier
-  // (the open store bracket memoizes it, so the store's own call is a lookup), and
+  // (the open store bracket memoizes it, so the store's key reuses it and adds only
+  // its one flag listing, `git ls-files -v`), and
   // it puts the answer in hand before the tracker asks its question (the run
   // initializes the home tracker on the first enumeration of the root). With no
   // store, nothing takes a snapshot: the population is a listing, which reads no

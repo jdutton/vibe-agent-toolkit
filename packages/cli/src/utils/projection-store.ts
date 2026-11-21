@@ -22,10 +22,13 @@
  * root id itself so a caller cannot file one root's contents under another's;
  * this module supplies the other half.
  *
- * {@link gitTreeSnapshot} answers it with `git write-tree` against a throwaway
+ * {@link gitTreeKey} answers it with `git write-tree` against a throwaway
  * index, which covers staged edits, unstaged edits and untracked files, and
  * carries **no timestamp** — byte-identical content always produces the same
- * hash. 🪤 Never `git stash create`: a stash is a *commit*, so two calls over
+ * hash. It declines a tree whose index flags any file assume-unchanged or
+ * skip-worktree (a sparse checkout included): git does not read such a file, so
+ * the hash would not describe its bytes, and the run populates without a store.
+ * 🪤 Never `git stash create`: a stash is a *commit*, so two calls over
  * identical content agree only within the same wall-clock second, and every
  * read would miss.
  *
@@ -51,7 +54,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
 import { PROJECTION_TABLES, VAT_CACHE_DIR_ENV, type FactStore, type PopulationCache, type Projection, type ProjectionTableName, vatCacheRoot } from '@vibe-agent-toolkit/resources';
 import { parseEnvBoolean, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { freshGitTreeSnapshot, gitSnapshotFailureOf, gitTreeSnapshot, type GitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
+import { freshGitTreeKey, gitSnapshotFailureOf, gitTreeKey, type GitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 
 import { noticeToOperator, withNoticeLedger } from './operator-notices.js';
 import { isModuleMissing, missingBackendError, type OptionalBackend } from './optional-backend.js';
@@ -205,8 +208,9 @@ export interface OpenedPopulationCache {
  * root per command run (the notice scope {@link withPopulationCache} enters), that the run
  * populates without a cache.
  *
- * `gitTreeSnapshot` returns a failure for every "git could not answer" case — no `git` on PATH, not
- * a repository, a bare or unreadable one — and an empty snapshot of an initialized repository stays
+ * `gitTreeKey` returns a failure for every "git could not answer" case — no `git` on PATH, not
+ * a repository, a bare or unreadable one — and for an index that hides files from the snapshot
+ * (assume-unchanged, skip-worktree); an empty snapshot of an initialized repository stays
  * distinguishable from it. The notice names the cause the one classifier (`gitSnapshotFailureOf`) decides.
  *
  * 🪤 Once per root: `vat validate`'s orchestrator scope and each lane's own scope inside it both ask
@@ -217,7 +221,7 @@ export interface OpenedPopulationCache {
  * @returns The snapshot, or `null` when the tree cannot be keyed
  */
 function storeKeyOrNotice(root: string): GitTreeSnapshot | null {
-  const snapshot = gitTreeSnapshot({ cwd: root });
+  const snapshot = gitTreeKey({ cwd: root });
   if (snapshot.ok) return snapshot;
   // Not "the selector is set": the store is on by default, so most users who
   // see this never wrote the variable.
@@ -266,7 +270,7 @@ export async function openPopulationCache(options: {
       store,
       treeHash: snapshot.hash,
       treeUnchanged: () => {
-        const fresh = freshGitTreeSnapshot({ cwd });
+        const fresh = freshGitTreeKey({ cwd });
         return fresh.ok && fresh.hash === snapshot.hash;
       },
     },
@@ -573,7 +577,7 @@ function joinableCache(
   if (active === undefined) return undefined;
   // Memoized by the enclosing `withGitSnapshotCache` bracket, so a map lookup
   // for a repository it has visited and a real snapshot only for one it has not.
-  const snapshot = gitTreeSnapshot({ cwd: root });
+  const snapshot = gitTreeKey({ cwd: root });
   // 🔑 The tree hash, never "a scope is open". An extent is filed under
   // `(rootId, treeHash)`, so a lane in another repository handed this one's hash
   // would file its extent under a key that does not describe it — silently. Two

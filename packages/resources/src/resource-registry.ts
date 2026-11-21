@@ -60,11 +60,13 @@ import {
 import { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
 import { fillLinkFacts, fragmentIndex, judgeLink, resolveLinkEntries, unreadableTargetsFrom, type FragmentIndex, type JudgeLinkOptions, type LinkEntry, type ValidateLinkOptions } from './link-validator.js';
 import { parserKindForMimeType } from './mime-type.js';
-import { type NotAdmittedLog, notAdmittedIssues, parseRefusedEntry } from './not-admitted.js';
+import { type NotAdmittedLog, notAdmittedIssues, parseRefusal } from './not-admitted.js';
 import { ParseCache, type ParseCacheStats } from './parse-cache.js';
 import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } from './parse-dispatcher.js';
 import { isReadFailure, readFailureCode } from './parse-failure.js';
-import { isParserThrewError, isPerRunParseRefusal, type PerRunParseRefusal } from './parse-limits.js';
+import { isParserThrewError, isPerRunParseRefusal, ParseLimitError, reviveParserThrow } from './parse-limits.js';
+import type { NotAdmittedEntry } from './projection/blob-refusals.js';
+import { blobResourceFactsOf, optionalParseFacts } from './projection/blob-resource-facts.js';
 import { POPULATION_PARSE_LIMITS } from './projection/content-cache.js';
 import { isDeclinedSymlinkCode } from './projection/contributors/filesystem-extent.js';
 import { declinedLinkApplies, type PopulationUnreadablePolicy } from './projection/crawl-source.js';
@@ -90,7 +92,7 @@ import type { AdmittedFacts, AdmittedStat, RunPopulation } from './projection/ru
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { ProjectConfig, ValidationMode } from './schemas/project-config.js';
 import type { RealizationConditionRow } from './schemas/projection-resources.js';
-import type { HeadingNode, ResourceMetadata } from './schemas/resource-metadata.js';
+import type { HeadingNode, ResourceLink, ResourceMetadata } from './schemas/resource-metadata.js';
 import type { ValidationResult } from './schemas/validation-result.js';
 import { locationRoot, matchesGlobPattern, resolveLocalHref } from './utils.js';
 
@@ -147,8 +149,48 @@ export interface UnreadableResource {
 type PreparedResource =
   | { outcome: 'admitted'; resource: ResourceMetadata }
   | { outcome: 'unreadable'; filePath: string; reason: string; code?: string; error: Error }
-  | { outcome: 'parse-refused'; filePath: string; error: PerRunParseRefusal }
+  | { outcome: 'parse-refused'; filePath: string; refusal: Omit<ParseRefusedResource, 'filePath'>; error: Error }
   | { outcome: 'failed'; error: unknown };
+
+/**
+ * A refusal a warm run's store states for a file (`AdmittedFacts`'s
+ * `not-admitted`), as the preparation the cold lane makes for the same file:
+ * the same log, reason and code, so the finding is the cold one.
+ *
+ * The error is what a single-file add throws for it, rebuilt as the cold lane's
+ * class, since no read raised one. A store states two refusals and no other
+ * (per-run refusals are never stored, and every other unadmitted state is
+ * computed: `stored-admission.ts`): the input cap, the cold read's
+ * `ParseLimitError`; and a parser's throw, branded as the parser's
+ * (`isParserThrewError`) under its stored code, its message the stored reason.
+ *
+ * @param filePath - The file, as the caller named it
+ * @param stated - The stored entry
+ * @returns The preparation
+ */
+function statedRefusal(filePath: string, stated: NotAdmittedEntry): PreparedResource {
+  if (stated.log === 'parseRefused') {
+    return parseRefusedPreparation(filePath, stated.entry, new ParseLimitError('inputBytes', POPULATION_PARSE_LIMITS.inputBytes));
+  }
+  const { reason, code } = stated.entry;
+  return {
+    outcome: 'unreadable',
+    filePath,
+    reason,
+    ...(code !== undefined && { code }),
+    error: reviveParserThrow({ name: 'Error', message: reason, ...(code !== undefined && { code }) }, true),
+  };
+}
+
+/**
+ * @param filePath - The file, as the caller named it
+ * @param refusal - What refused its parse for this run, as the log states it
+ * @param error - What a single-file add throws for it
+ * @returns The parse-refused preparation, cold or stated alike
+ */
+function parseRefusedPreparation(filePath: string, refusal: Omit<ParseRefusedResource, 'filePath'>, error: Error): PreparedResource {
+  return { outcome: 'parse-refused', filePath, refusal, error };
+}
 
 /**
  * One enumerated file whose parse this run refused — stopped at a limit, or lost
@@ -1040,7 +1082,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       // and sending a read failure through emission would additionally record a
       // `RESOURCE_UNREADABLE` finding that a direct `addResource` caller never
       // used to get. `unreadable` carries the original error precisely so this
-      // route can re-raise it unchanged.
+      // route can re-raise it unchanged; a refusal a warm run's store states
+      // carries the same class rebuilt (`statedRefusal`).
       if (prepared.outcome !== 'admitted') throw prepared.error;
       return this.indexAdmitted(prepared.resource);
     } finally {
@@ -1074,12 +1117,13 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     dispatcher: ParseDispatcher,
   ): Promise<PreparedResource> {
     try {
-      return { outcome: 'admitted', resource: await this.readAndKey(filePath, dispatcher) };
+      const prepared = await this.readAndKey(filePath, dispatcher);
+      return 'notAdmitted' in prepared ? statedRefusal(filePath, prepared.notAdmitted) : { outcome: 'admitted', resource: prepared };
     } catch (error) {
       // A parse stopped at a limit, or lost with its worker, is the run's, not
       // the file's or VAT's: a finding, so one runaway document never fails the
       // whole crawl (ADR I6, I8).
-      if (isPerRunParseRefusal(error)) return { outcome: 'parse-refused', filePath, error };
+      if (isPerRunParseRefusal(error)) return parseRefusedPreparation(filePath, parseRefusal(error), error);
       // The parser threw on these bytes: a fact of the document, so the file is
       // unreadable under the parser's code - exactly as the blob lane records a
       // `BLOB_PARSE_FAILED` row (`parseFailedEntry`, one rule for both lanes) -
@@ -1160,36 +1204,40 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
-   * Read, parse, key and measure one file. The body of a preparation, minus its
-   * classification of what went wrong.
+   * Read, parse, key and measure one file, or take the run's stored answer for
+   * it. The body of a preparation, minus its classification of what went wrong.
    *
    * @param filePath - Path to the file (will be normalized to absolute)
    * @param dispatcher - Decides whether the parse runs here or on a worker
-   * @returns The resource this file describes — **not yet indexed**
+   * @returns The resource this file describes — **not yet indexed** — or the
+   *   refusal a warm run's store states for it
    * @throws Whatever the read or the parse threw
    */
   private async readAndKey(
     filePath: string,
     dispatcher: ParseDispatcher,
-  ): Promise<ResourceMetadata> {
+  ): Promise<ResourceMetadata | { readonly notAdmitted: NotAdmittedEntry }> {
     // Normalize path to absolute
     const absolutePath = safePath.resolve(filePath);
     const parserKind = this.parserKindFor(absolutePath);
     const statRoot = locationRoot(this.baseDir);
     // The per-file facts: this run's, when it has already admitted the file in
-    // another view, or computed here. See {@link AdmissionRoute}.
-    const facts = await this.#admission.admit(absolutePath, parserKind, () =>
+    // another view or the store holds them, or computed here. See
+    // {@link AdmissionRoute}.
+    const admitted = await this.#admission.admit(absolutePath, parserKind, () =>
       this.admitFacts(absolutePath, parserKind, dispatcher),
     );
-    // The parse is shared, one frozen answer per content key, with every other
+    if (admitted.kind === 'not-admitted') return { notAdmitted: admitted.entry };
+    // The facts are shared, one frozen answer per content key, with every other
     // view of the run, every identically-contented file and the population that
     // keyed it. A view writes two things in place, so it takes its OWN copy of
     // exactly those: the links (`resolveLinks` sets each link's `resolvedId`
     // against this view's ids; the packager rewrites links while bundling) and
-    // the headings. The rest, the content string included, stays shared.
-    const parseResult = facts.parse;
-    const links = parseResult.links.map((link) => ({ ...link }));
-    const headings = structuredClone(parseResult.headings);
+    // the headings. The rest stays shared. Built the same way whether the facts
+    // came from a cold parse (`blobResourceFactsOf`) or the store.
+    const facts = admitted.facts;
+    const links: ResourceLink[] = facts.links.map((link) => ({ ...link }));
+    const headings = structuredClone(facts.headings);
 
     // THE stat — one call serving both `modifiedAt` and `sizeBytes`, its link
     // chain read beneath the crawl base first (`link-following.ts`). After the
@@ -1200,7 +1248,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     });
 
     // Generate ID using priority chain: frontmatter field → relative path → filename stem
-    const id = this.generateId(absolutePath, parseResult.frontmatter);
+    const id = this.generateId(absolutePath, facts.frontmatter);
 
     // Determine collections if config is present
     const collections = this.config?.resources?.collections
@@ -1213,20 +1261,14 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       filePath: absolutePath,
       links,
       headings,
-      ...(parseResult.anchors !== undefined && { anchors: parseResult.anchors }),
-      ...(parseResult.parseErrors !== undefined && { parseErrors: parseResult.parseErrors }),
-      ...(parseResult.unresolvedReferences !== undefined && {
-        unresolvedReferences: parseResult.unresolvedReferences,
-      }),
-      ...(parseResult.frontmatter !== undefined && { frontmatter: parseResult.frontmatter }),
-      ...(parseResult.frontmatterError !== undefined && { frontmatterError: parseResult.frontmatterError }),
+      ...optionalParseFacts(facts),
       // `stat().size` — the on-disk byte count, exactly as before. Never
       // `Buffer.byteLength(content)` or `content.length`: those measure the
       // decoded string, and this number reaches packaged-output accounting
       // (agent-skills/src/content-transform.ts) and adopter-visible rule
       // variables.
       sizeBytes: stats.size,
-      estimatedTokenCount: parseResult.estimatedTokenCount,
+      estimatedTokenCount: facts.estimatedTokenCount,
       modifiedAt: stats.mtime,
       contentKey: facts.contentKey,
       ...(collections !== undefined && collections.length > 0 && { collections }),
@@ -1275,7 +1317,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     const parseResult = route.kind === 'parse' ? await dispatcher.parse(route.content) : route.facts;
 
     countWork('registry.admitted', 1);
-    return { parse: parseResult, contentKey: keyed.key };
+    return { kind: 'facts', facts: blobResourceFactsOf(parseResult, keyed.key) };
   }
 
   /**
@@ -1305,7 +1347,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private emitPreparedResource(prepared: PreparedResource): ResourceMetadata | undefined {
     if (prepared.outcome === 'failed') throw prepared.error;
     if (prepared.outcome === 'parse-refused') {
-      this.parseRefusedResources.push(parseRefusedEntry(prepared.filePath, prepared.error));
+      this.parseRefusedResources.push({ filePath: prepared.filePath, ...prepared.refusal });
       return undefined;
     }
     if (prepared.outcome === 'unreadable') {

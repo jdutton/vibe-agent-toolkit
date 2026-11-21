@@ -68,7 +68,7 @@ function sourceWith(root: string, conditions: readonly RealizationConditionRow[]
     enumerate: async () => ({
       paths: [safePath.join(root, DOC)],
       conditions,
-      outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem',
+      outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem', stored: null,
     }),
   };
 }

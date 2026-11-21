@@ -565,6 +565,16 @@ export class ParseDispatcher {
     return this.#inputBytes;
   }
 
+  /**
+   * Every limit a parse on this dispatcher runs under, resolved once at construction: what a
+   * warm run compares with the limits the store's facts were filed under before it admits from them.
+   *
+   * @returns The resolved limits
+   */
+  get limits(): ParseLimits {
+    return this.#resolvedLimits;
+  }
+
   /** The run's content reads this dispatcher parses through, or `undefined` (see {@link ParsePoolPolicy.content}). */
   get content(): ParseContentSource | undefined {
     return this.#content;

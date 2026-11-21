@@ -35,8 +35,11 @@
  *    backend constructed — asserted through the counter below.
  */
 
+import { writeFileSync } from 'node:fs';
+
 import { type PopulationCache, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 // Type-only, purely so the mock factory can spread the real module without an
 // inline `typeof import()` annotation, which this repo's lint forbids.
 import type * as UtilsGitModule from '@vibe-agent-toolkit/utils/git';
@@ -59,7 +62,8 @@ vi.mock('@vibe-agent-toolkit/projection-sqlite', async () =>
   (await import('../projection-store-test-doubles.js')).backend.moduleExports());
 
 /**
- * `gitTreeSnapshot` is left REAL and merely counted.
+ * `gitTreeKey` (the store's key: the snapshot, unless the index hides files
+ * from it) is left REAL and merely counted.
  *
  * The counter exists for one assertion: that a process with no store selected
  * returns before the key is even derived, which is upstream of the dynamic
@@ -71,9 +75,9 @@ vi.mock('@vibe-agent-toolkit/utils/git', async (importOriginal) => {
   const actual = await importOriginal<typeof UtilsGitModule>();
   return {
     ...actual,
-    gitTreeSnapshot: (options: { cwd: string }) => {
+    gitTreeKey: (options: { cwd: string }) => {
       git.calls.count += 1;
-      return actual.gitTreeSnapshot(options);
+      return actual.gitTreeKey(options);
     },
   };
 });
@@ -255,7 +259,7 @@ describe('openPopulationCache', () => {
     const opened = await openPopulationCache({ root: repoRoot });
 
     expect(opened).toBeUndefined();
-    // The lazy seam, observed from both sides. `gitTreeSnapshot` runs BEFORE the
+    // The lazy seam, observed from both sides. `gitTreeKey` runs BEFORE the
     // dynamic import in the one path that reaches it, so a zero snapshot count
     // proves the function returned upstream of anywhere the import could be
     // reached; the zero open count says the backend was never constructed. A
@@ -288,6 +292,31 @@ describe('openPopulationCache', () => {
 
       // And it costs nothing: the backend is never loaded for a tree that
       // cannot be keyed, which is why the git call is placed before the import.
+      expect(backend.openCalls.count).toBe(0);
+      // The counter's positive control: the zero counts the store-off tests
+      // assert are only evidence if this path moves it.
+      expect(git.calls.count).toBe(1);
+    } finally {
+      stderr.restore();
+    }
+  });
+
+  it('declines out loud for a repository whose index hides a file from the key, naming the file and its flag', async () => {
+    // git does not read a flagged file, so a key over the tree would not describe its bytes.
+    const flagged = safePath.join(createTempDir(), 'flagged');
+    mkdirSyncReal(flagged, { recursive: true });
+    writeFileSync(safePath.join(flagged, 'a.md'), '# A\n');
+    for (const args of [['init', '-q'], ['add', '-A'], ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'init'], ['update-index', '--skip-worktree', 'a.md']]) {
+      runGitOrThrow(args, { cwd: flagged });
+    }
+    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
+    const stderr = captureStderr();
+    try {
+      expect(await openPopulationCache({ root: flagged })).toBeUndefined();
+      const said = stderr.written.join('');
+      expect(said).toContain('git cannot key this tree');
+      expect(said).toContain('"a.md" (skip-worktree)');
+      expect(said).toContain('without a cache');
       expect(backend.openCalls.count).toBe(0);
     } finally {
       stderr.restore();

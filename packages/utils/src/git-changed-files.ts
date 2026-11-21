@@ -434,6 +434,9 @@ export const GIT_CHANGED_FILES_KIND_BY_CODE: Readonly<Record<GitNoAnswerCode, Gi
   GIT_SNAPSHOT_UNREADABLE: 'repository',
   GIT_SNAPSHOT_OUTSIDE_SPARSE: 'repository',
   GIT_SNAPSHOT_REFUSED: 'repository',
+  // Never met here (the relation takes the snapshot, not the key), but the same cause as its own
+  // hidden-edit refusal below, which is the repository's.
+  GIT_SNAPSHOT_INDEX_HIDES: 'repository',
 };
 
 /** The refusal for a cause the one classifier (`git-no-answer.ts`) decided. */
@@ -593,7 +596,7 @@ function rootPrefix(root: string): { ok: true; prefix: Uint8Array } | Refusal {
 }
 
 /** The flags an `ls-files -v` tag carries that hide a file's edits from git. */
-interface HiddenEditFlags {
+export interface HiddenEditFlags {
   /** `S`, or `s` (both flags). */
   readonly skipWorktree: boolean;
   /** Any lowercase tag. */
@@ -601,7 +604,7 @@ interface HiddenEditFlags {
 }
 
 /** The flags `tag` carries: `S` skip-worktree, a lowercase letter assume-unchanged, `s` both. */
-function hiddenEditFlagsOf(tag: string): HiddenEditFlags {
+export function hiddenEditFlagsOf(tag: string): HiddenEditFlags {
   return { skipWorktree: tag === 'S' || tag === 's', assumeUnchanged: tag >= 'a' && tag <= 'z' };
 }
 

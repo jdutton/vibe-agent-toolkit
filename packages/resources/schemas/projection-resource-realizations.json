@@ -52,7 +52,7 @@
             {
               "type": "string",
               "pattern": "^(?:markdown|html|none)\\.[0-9a-f]{64}$",
-              "description": "A parser-kind-qualified content key: \"<markdown|html>.<sha256>\""
+              "description": "A parser-kind-qualified content key: \"<parserKind>.<sha256>\""
             },
             {
               "type": "null"

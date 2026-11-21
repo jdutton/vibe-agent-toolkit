@@ -4,6 +4,11 @@
  * the one fact reader (`blobFactsReader`), field by field over the mapping table
  * (`BLOB_FACT_FIELDS`), each link's fields over `RESOURCE_LINK_FACT_SOURCES`.
  *
+ * Warm `vat validate` builds its resources registry from exactly these rebuilt
+ * facts on a store hit, so a case that fails here is a warm finding that differs
+ * from the cold one (`warm-registry-hydration.integration.test.ts` holds the
+ * registry itself warm against cold).
+ *
  * Through the real SQLite store, never an in-memory double: a double hands rows
  * back by reference, so a value JSON cannot carry (`-0`, `.inf`, a timestamp, a
  * set) survives it and the test could not fail on the encoding at all.

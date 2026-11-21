@@ -103,6 +103,8 @@ export interface GitTreeSnapshot {
  */
 export interface GitSnapshotFailure {
   readonly ok: false;
+  /** Git took no snapshot. */
+  readonly kind: 'not-taken';
   /** The directory the snapshot was asked from, as given. */
   readonly cwd: string;
   /** The repository root git resolved, or `null` when it resolved none. */
@@ -113,6 +115,51 @@ export interface GitSnapshotFailure {
 
 /** A snapshot, or why there is none. */
 export type GitSnapshotOutcome = GitTreeSnapshot | GitSnapshotFailure;
+
+/** One index entry whose working-tree bytes the snapshot does not read, and the flag that hides them. */
+export interface GitHiddenEntry {
+  /** Repository-relative, as a message shows it (`shownName`: quoted, escaped). */
+  readonly shownPath: string;
+  readonly flag: 'assume-unchanged' | 'skip-worktree' | 'assume-unchanged and skip-worktree';
+}
+
+/**
+ * A snapshot git took but cannot key the tree with (`gitTreeKey`): its index hides working-tree
+ * bytes from it, or git would not say whether it does. Classified by `gitSnapshotFailureOf`.
+ */
+export type GitTreeKeyFailure =
+  | {
+    readonly ok: false;
+    /** Entries flagged assume-unchanged or skip-worktree: the hash holds their staged bytes, not the disk's. */
+    readonly kind: 'index-hides';
+    readonly cwd: string;
+    readonly repositoryRoot: string;
+    /** The first flagged entries, in git's order. */
+    readonly hidden: readonly GitHiddenEntry[];
+    /** How many entries are flagged in all. */
+    readonly hiddenCount: number;
+  }
+  | {
+    readonly ok: false;
+    /** The flag listing (`git ls-files -v`) gave no usable answer. */
+    readonly kind: 'flags-unlisted';
+    readonly cwd: string;
+    readonly repositoryRoot: string;
+    /** What the listing did. */
+    readonly attempt: { readonly ok: boolean; readonly stderr: string; readonly error?: Error };
+  }
+  | {
+    readonly ok: false;
+    /** git wrote a flag listing VAT cannot read (cut short: no closing NUL). */
+    readonly kind: 'flags-unreadable';
+    readonly cwd: string;
+    readonly repositoryRoot: string;
+    /** VAT's account of the listing, never git's words. */
+    readonly reason: string;
+  };
+
+/** A key for the tree, or why git cannot give one. */
+export type GitTreeKeyOutcome = GitTreeSnapshot | GitSnapshotFailure | GitTreeKeyFailure;
 
 /**
  * The snapshots taken inside the bracket now open, keyed by repository root.
@@ -335,7 +382,7 @@ function snapshotFailure(cwd: string, repositoryRoot: string | null): GitSnapsho
   try {
     // `LC_ALL=C`: what this is read for (`fatal:`, the sparse-definition sentence) is git's C-locale wording.
     const attempt = runGit(['add', '--all'], { cwd, env: { GIT_INDEX_FILE: index, LC_ALL: 'C' } });
-    return { ok: false, cwd, repositoryRoot, attempt };
+    return { ok: false, kind: 'not-taken', cwd, repositoryRoot, attempt };
   } finally {
     rmSync(index, { force: true });
   }

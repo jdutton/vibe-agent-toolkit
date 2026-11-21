@@ -113,6 +113,8 @@ import {
   type TreePopulationOptions,
 } from './merge.js';
 import type { Projection } from './projection.js';
+import type { FactStore } from './store.js';
+import { storedContentOf, type StoredContent } from './stored-admission.js';
 
 /**
  * Where a registry crawl's file population comes from: a run's enumeration of
@@ -209,6 +211,14 @@ export interface ResourceEnumeration {
    * a root that is not in a repository.
    */
   readonly extentSource: CrawlSourceKind;
+  /**
+   * What the store holds about each member, when the store served this
+   * population: the realization's content columns by path, and the blob tier
+   * they name, read on first ask (`stored-admission.ts`). `null` for a derived
+   * population and for a listing: their members are read, keyed and parsed by
+   * the run, so there is nothing stored to admit them from.
+   */
+  readonly stored: StoredContent | null;
 }
 
 /**
@@ -315,6 +325,7 @@ function resourcePopulateOptions(options: TreePopulationOptions, root: string, c
  * @param rows.realizationConditions - Its `realization_conditions`
  * @param extentSource - The enumerator the run selected
  * @param outcome - Whether the store served the rows
+ * @param store - The store that served them, or `null` when they were derived or listed
  * @returns The members and what the population said about itself
  */
 function membershipOf(
@@ -322,8 +333,9 @@ function membershipOf(
   rows: Pick<Projection, 'resourceRealizations' | 'realizationConditions'>,
   extentSource: CrawlSourceKind,
   outcome: PopulationOutcome,
+  store: FactStore | null,
 ): ResourceEnumeration {
-  const paths = rows.resourceRealizations
+  const members = rows.resourceRealizations
     // `filesOnly: true` is the crawl contract every resources caller passes; the
     // extent enumerates directories too (the `claude-context` lens keys on one).
     // A row can be a member without being present (`exists: false`: it vanished
@@ -333,11 +345,17 @@ function membershipOf(
     // backstop for `DECLINE_IGNORED`: with no tracker the extent declines
     // nothing, and this is where the admitted set is STATED.
     .filter((row) => !row.isDirectory && row.exists && !row.gitignored)
-    .map((row) => safePath.resolve(root, row.path));
+    .map((row) => ({ path: safePath.resolve(root, row.path), row }));
   // Carried out whole rather than filtered here: which rows matter is the
   // consumer's call (the registry surfaces every one as a finding, and severity
   // overrides are the adopter's).
-  return { paths, conditions: canonicalConditions(rows.realizationConditions), outcome, extentSource };
+  return {
+    paths: members.map(({ path }) => path),
+    conditions: canonicalConditions(rows.realizationConditions),
+    outcome,
+    extentSource,
+    stored: store === null ? null : storedContentOf(members, store),
+  };
 }
 
 /**
@@ -348,9 +366,12 @@ function membershipOf(
  *
  * The store is asked first, under the key every resources lane shares, through
  * `readStoredMembership`: the extent's realization and condition rows answer
- * membership, so a hit reads no blob table and populates nothing. That is why a
- * stored extent whose blob key was evicted is a hit here and a miss for
- * {@link buildResourceProjection}.
+ * membership, so a hit populates nothing. That is why a stored extent whose
+ * blob key was evicted is a hit here and a miss for
+ * {@link buildResourceProjection}. The hit carries the members' stored content
+ * ({@link ResourceEnumeration.stored}); the blob tier is read once, when the
+ * registry first admits a member from it, and an evicted key is admitted the
+ * cold way.
  *
  * ## A miss is the full population
  *
@@ -406,10 +427,12 @@ async function membershipThrough(
   // Every contributor's context is requested, so a hit is exactly the rows a
   // derive below would have produced.
   const stored = await readStoredMembership(populateOptions, requestedContributors(populateOptions));
-  if (stored !== undefined) return membershipOf(root, stored, source.kind, stored.outcome);
+  // A hit carries what the store holds about each member, so the registry can
+  // admit it from the blob tier; a derive has read every member into the run.
+  if (stored !== undefined) return membershipOf(root, stored, source.kind, stored.outcome, options.cache?.store ?? null);
 
   const { projection, outcome } = await populate(populateOptions);
-  return membershipOf(root, projection, source.kind, outcome);
+  return membershipOf(root, projection, source.kind, outcome, null);
 }
 
 /**
@@ -465,7 +488,7 @@ export async function buildResourceListing(
     parameters: { [filesystem.id]: DECLINE_IGNORED },
     ...populationOracles({ ...options, cache: undefined }),
   });
-  return membershipOf(root, projection, source.kind, outcome);
+  return membershipOf(root, projection, source.kind, outcome, null);
 }
 
 /**
