@@ -54,8 +54,8 @@ const README_ID = 'readme-md';
 const README_PATH = safePath.resolve('/project/docs/README.md');
 const README_HREF = './docs/README.md';
 
-// Valid 64-char hex string cast to branded SHA256 type
-const MOCK_CHECKSUM = 'a'.repeat(64) as ResourceMetadata['checksum'];
+// A well-formed content key for the mock resources
+const MOCK_CONTENT_KEY = `markdown.${'a'.repeat(64)}`;
 
 // Exclude reason literals — avoid string duplication in assertions
 const REASON_SKILL_DEFINITION = 'skill-definition';
@@ -341,7 +341,7 @@ function createMockResource(
     sizeBytes: 100,
     estimatedTokenCount: 25,
     modifiedAt: new Date('2024-01-01'),
-    checksum: MOCK_CHECKSUM,
+    contentKey: MOCK_CONTENT_KEY,
   };
 }
 

@@ -16,7 +16,7 @@ Markdown resource parsing, validation, and link integrity checking for AI agent 
 - **Track resource collections** - Manage multiple markdown files with automatic ID generation
 - **Resolve cross-references** - Link resources together and track dependencies
 - **Query capabilities** - Find resources by path, ID, or glob patterns with lazy evaluation
-- **Duplicate detection** - Identify duplicate content using SHA-256 checksums
+- **Duplicate detection** - Identify duplicate content using content keys (hash of the bytes plus the parse route)
 - **Collection operations** - Filter, transform, and materialize resource collections efficiently
 - **GitHub Flavored Markdown** - Full support for GFM including tables, task lists, and autolinks
 
@@ -282,7 +282,7 @@ if (registry.isEmpty()) {
 
 ##### getDuplicates(): ResourceMetadata[][]
 
-Get groups of duplicate resources based on content checksum.
+Get groups of duplicate resources based on the content key (identical bytes routed to the same parser).
 
 Returns an array where each element is an array of resources that have identical content. Only groups with 2+ resources are included.
 
@@ -296,14 +296,14 @@ for (const group of duplicates) {
 }
 ```
 
-##### getUniqueByChecksum(): ResourceMetadata[]
+##### getUniqueByContentKey(): ResourceMetadata[]
 
-Get one representative resource for each unique checksum.
+Get one representative resource for each unique content key.
 
 When multiple resources have identical content, only the first one encountered is included.
 
 ```typescript
-const unique = registry.getUniqueByChecksum();
+const unique = registry.getUniqueByContentKey();
 console.log(`${unique.length} unique resources by content`);
 ```
 
@@ -318,16 +318,16 @@ const readmeFiles = registry.getResourcesByName('README.md');
 console.log(`Found ${readmeFiles.length} README.md files`);
 ```
 
-##### getResourcesByChecksum(checksum: SHA256): ResourceMetadata[]
+##### getResourcesByContentKey(contentKey: string): ResourceMetadata[]
 
-Get resources by SHA-256 checksum.
+Get resources by content key.
 
-Returns all resources with the given content checksum (i.e., identical content).
+Returns all resources with the given content key (identical bytes, same parse route).
 
 ```typescript
 const resource = registry.getResourceById('readme');
 if (resource) {
-  const sameContent = registry.getResourcesByChecksum(resource.checksum);
+  const sameContent = registry.getResourcesByContentKey(resource.contentKey);
   console.log(`Found ${sameContent.length} files with identical content`);
 }
 ```
@@ -412,14 +412,14 @@ const docsWithLinks = ResourceQuery.from(registry.getAllResources())
 const uniqueApiDocs = ResourceQuery.from(registry.getAllResources())
   .matchesPattern('**/api/**')
   .toCollection()
-  .getUniqueByChecksum();
+  .getUniqueByContentKey();
 ```
 
 ### ResourceCollection
 
 Immutable collection of resources with lazy duplicate detection.
 
-ResourceCollection wraps an array of resources and provides efficient duplicate detection. Duplicate detection is performed lazily - checksum indexes are only built when `getDuplicates()` or `getUniqueByChecksum()` is first called.
+ResourceCollection wraps an array of resources and provides efficient duplicate detection. Duplicate detection is performed lazily - content-key indexes are only built when `getDuplicates()` or `getUniqueByContentKey()` is first called.
 
 #### Creating Collections
 
@@ -464,7 +464,7 @@ const all = collection.getAllResources();
 
 ##### getDuplicates(): ResourceMetadata[][]
 
-Get groups of duplicate resources based on checksum.
+Get groups of duplicate resources based on the content key.
 
 ```typescript
 const duplicates = collection.getDuplicates();
@@ -473,12 +473,12 @@ for (const group of duplicates) {
 }
 ```
 
-##### getUniqueByChecksum(): ResourceMetadata[]
+##### getUniqueByContentKey(): ResourceMetadata[]
 
-Get one representative resource for each unique checksum.
+Get one representative resource for each unique content key.
 
 ```typescript
-const unique = collection.getUniqueByChecksum();
+const unique = collection.getUniqueByContentKey();
 console.log(`${unique.length} unique resources`);
 ```
 

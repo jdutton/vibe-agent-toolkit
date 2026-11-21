@@ -11,7 +11,7 @@
 
 import { writeFile } from 'node:fs/promises';
 
-import { ParseCache, ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import { ParseCache, ResourceRegistry, type ProjectConfig } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -44,14 +44,21 @@ afterEach(suite.afterEach);
  * @param files - File name to content
  * @returns The registry's metadata for each, in the order given
  */
-async function admitted(files: Record<string, string>): Promise<Awaited<ReturnType<ResourceRegistry['addResources']>>> {
+async function admitted(
+  files: Record<string, string>,
+  config?: ProjectConfig,
+): Promise<Awaited<ReturnType<ResourceRegistry['addResources']>>> {
   const paths: string[] = [];
   for (const [name, content] of Object.entries(files)) {
     const filePath = safePath.join(suite.tempDir, name);
     await writeFile(filePath, content, 'utf-8');
     paths.push(filePath);
   }
-  const registry = new ResourceRegistry({ baseDir: suite.tempDir, parseCache: new ParseCache({ enabled: false }) });
+  const registry = new ResourceRegistry({
+    baseDir: suite.tempDir,
+    parseCache: new ParseCache({ enabled: false }),
+    ...(config === undefined ? {} : { config }),
+  });
   return registry.addResources(paths);
 }
 
@@ -74,10 +81,26 @@ describe('rag indexing on the bounded parse route', () => {
     expect(chunks.map((chunk) => chunk.headingPath)).toStrictEqual(chunks.map(() => undefined));
   });
 
-  // The indexer re-hashes what it reads and refuses a mismatch with the
-  // registry's checksum, so its hash must be the registry's for every text — a
+  // The key's own prefix, not the path, names the parser the bytes were keyed under. A collection
+  // that declares a `mimeType` routes a file away from its extension; re-keying under the path's
+  // kind would hash these bytes as `markdown` and refuse a file the registry just admitted.
+  it('indexes a file a collection routed away from its extension: the re-key uses the resource\'s own parser kind', async () => {
+    const resources = await admitted(
+      { 'page.txt': '<h1 id="alpha">Alpha</h1>\n<p>alpha prose</p>\n' },
+      { resources: { collections: { pages: { include: ['**/*.txt'], mimeType: 'text/html' } } } },
+    );
+    expect(resources.map((resource) => resource.contentKey.split('.')[0])).toStrictEqual(['html']);
+
+    const result = await suite.provider?.indexResources(resources);
+
+    expect(result?.errors).toStrictEqual([]);
+    expect(result?.resourcesIndexed).toBe(1);
+  });
+
+  // The indexer re-keys what it reads and refuses a mismatch with the
+  // registry's content key, so its key must be the registry's for every text — a
   // BOM and multibyte characters are where a byte-vs-string preimage would split.
-  it('indexes a non-ASCII document the registry admitted: the re-hash at use agrees with admission', async () => {
+  it('indexes a non-ASCII document the registry admitted: the re-key at use agrees with admission', async () => {
     const resources = await admitted({ 'intl.md': `${String.fromCodePoint(0xfe_ff)}# Café\n\nnaïve façade — 東京 and 🚀 prose.\n` });
 
     const result = await suite.provider?.indexResources(resources);

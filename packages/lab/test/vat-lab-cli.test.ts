@@ -47,11 +47,12 @@ import {
 import type { ReportEnvelope } from '../src/envelope/envelope.js';
 import type { PerfBody, PerfCommandStats } from '../src/facets/perf/types.js';
 import { PERF_FACET } from '../src/facets/perf/types.js';
+import { POPULATION_FACET, type PopulationBody, type PopulationCommandStats, type PopulationEntry } from '../src/facets/population/types.js';
 import type { VerdictBody } from '../src/facets/verdict/types.js';
 import { exactExit, MEASURABLE_COMMAND_NAMES, MEASURABLE_COMMANDS } from '../src/harness/commands.js';
 import { writeReport } from '../src/store.js';
 
-import { makeReport } from './report-fixtures.js';
+import { CLEAN_LOAD, makeReport } from './report-fixtures.js';
 
 let tempDir: string;
 
@@ -589,6 +590,54 @@ describe('vat-lab perf compare — exit codes', () => {
     const after = await writePerfReport('clean-after', [cleanRow('vat build', 101)]);
 
     await createProgram().parseAsync(['node', 'vat-lab', 'perf', 'compare', before, after]);
+
+    expect(process.exitCode).toBeUndefined();
+  });
+});
+
+/** A measured population row over the given entries. */
+function populationRow(files: readonly PopulationEntry[]): PopulationCommandStats {
+  return {
+    name: 'resources-population',
+    args: ['resources', 'scan', '.', '--verbose'],
+    cache: 'warm',
+    runs: 2,
+    stable: true,
+    attribution: 'measured',
+    extentSource: 'filesystem',
+    root: '/fixture/project',
+    count: files.length,
+    files,
+    gitTracked: 1,
+    offGit: [],
+    failed: false,
+    failure: null,
+  };
+}
+
+async function writePopulationReport(label: string, files: readonly PopulationEntry[]): Promise<string> {
+  const body: PopulationBody = { commands: [populationRow(files)], load: CLEAN_LOAD };
+  return writeReport(safePath.join(tempDir, label), makeReport({ facet: POPULATION_FACET, body }));
+}
+
+describe('vat-lab population compare: content identity schemes', () => {
+  const OLD: PopulationEntry = { path: 'a.md', identity: { scheme: 'checksum', value: 'aaa' } };
+  const NEW: PopulationEntry = { path: 'a.md', identity: { scheme: 'contentKey', value: 'markdown.aaa' } };
+
+  it('exits ERROR, not 0, when membership is identical but content could not be compared', async () => {
+    const before = await writePopulationReport('pop-old', [OLD]);
+    const after = await writePopulationReport('pop-new', [NEW]);
+
+    await createProgram().parseAsync(['node', 'vat-lab', 'population', 'compare', before, after]);
+
+    expect(process.exitCode).toBe(ExitCode.ERROR);
+  });
+
+  it('exits 0 for the same membership under one scheme with the same content', async () => {
+    const before = await writePopulationReport('pop-same-1', [NEW]);
+    const after = await writePopulationReport('pop-same-2', [NEW]);
+
+    await createProgram().parseAsync(['node', 'vat-lab', 'population', 'compare', before, after]);
 
     expect(process.exitCode).toBeUndefined();
   });

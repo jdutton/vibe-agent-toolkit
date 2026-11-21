@@ -145,7 +145,6 @@ const UNIT_TIER_IO_RATCHET = { allowFiles: [
   'packages/resource-compiler/test/cli/stdio-blocking.test.ts',
   'packages/resources/test/ard/ard-manifest.test.ts',
   'packages/resources/test/cache-namespace.test.ts',
-  'packages/resources/test/checksum-utils.test.ts',
   'packages/resources/test/content-key.test.ts',
   'packages/resources/test/external-link-validator-auth.test.ts',
   'packages/resources/test/external-link-validator-os-user.test.ts',

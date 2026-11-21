@@ -29,7 +29,8 @@ import {
   RAGQuerySchema,
 } from '@vibe-agent-toolkit/rag';
 import {
-  calculateChecksumFromContent,
+  parserKindOf,
+  readContentWithKey,
   transformContent,
   type ContentTransformOptions,
   type ResourceMetadata,
@@ -42,7 +43,6 @@ import {
   VatError,
   withFsFault,
 } from '@vibe-agent-toolkit/utils';
-import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import type { ZodObject, ZodRawShape } from 'zod';
 
 import { chunkTableReadFailure, type ChunkTableShape, foreignTableRefusal } from './chunk-table-failure.js';
@@ -918,21 +918,26 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     // A parse here would run on this thread, unbounded (ADR I8), and as
     // markdown whatever the type: an HTML resource re-read as markdown, and a
     // deep enough document overflowing the stack of the process running the
-    // index. Decoded by the one decoder, so the text is the one the registry's
-    // facts describe.
-    const { text } = await withFsFault(
+    // index.
+    //
+    // ONE read, keyed by the ONE keying function under the parser kind the
+    // resource's own content key names: the text indexed is the decode of the
+    // very bytes whose key is compared below. The cap is `null` because the
+    // registry already admitted these bytes under the run's limits.
+    const keyed = await withFsFault(
       { side: 'source', origin: 'content', action: `read ${resource.filePath}`, path: resource.filePath },
-      () => readTextContent(resource.filePath),
+      () => readContentWithKey(resource.filePath, parserKindOf(resource.contentKey), null),
     );
+    const text = keyed.content;
 
     // The facts above describe the bytes the registry ADMITTED; these are the
     // bytes on disk now. A file changed in between would be indexed as new text
-    // under old links, headings and frontmatter — so the text is re-hashed at use
-    // and a mismatch refuses this resource before anything is written for it
+    // under old links, headings and frontmatter — so the bytes are re-keyed at
+    // use and a mismatch refuses this resource before anything is written for it
     // (ADR I2a). Thrown, it becomes this resource's entry in `result.errors`.
-    if (calculateChecksumFromContent(text) !== resource.checksum) {
+    if (keyed.key !== resource.contentKey) {
       throw new Error(
-        `${resource.filePath} changed since it was crawled: its content no longer matches the checksum the registry recorded, so it was not indexed. Re-run to index the current content.`,
+        `${resource.filePath} changed since it was crawled: its content no longer matches the content key the registry recorded, so it was not indexed. Re-run to index the current content.`,
       );
     }
 

@@ -25,6 +25,7 @@
 import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 
+import { computeContentKey } from '@vibe-agent-toolkit/resources';
 import { RAG_DATABASE_UNREADABLE_CODE, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -427,7 +428,7 @@ Content for section 4 with even more text.`
       sizeBytes: 0,
       estimatedTokenCount: 0,
       modifiedAt: new Date(),
-      checksum: '0000000000000000000000000000000000000000000000000000000000000000',
+      contentKey: computeContentKey(new Uint8Array(), 'markdown'),
     };
 
     const result = await provider.indexResources([badResource]);

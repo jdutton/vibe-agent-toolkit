@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 
 import { ResourceMetadataSchema } from '../src/schemas/resource-metadata.js';
 
-describe('ResourceMetadataSchema with checksum', () => {
+const VALID_CONTENT_KEY = `markdown.${'a'.repeat(64)}`;
+
+describe('ResourceMetadataSchema with content key', () => {
   const TEST_FILE_PATH = '/path/to/test.md';
 
   /**
@@ -17,27 +19,34 @@ describe('ResourceMetadataSchema with checksum', () => {
     sizeBytes: 100,
     estimatedTokenCount: 25,
     modifiedAt: new Date(),
-    checksum: 'a'.repeat(64),
+    contentKey: VALID_CONTENT_KEY,
     ...overrides,
   });
 
-  it('should require checksum field', () => {
-    const metadataWithoutChecksum = createBaseMetadata();
-    delete (metadataWithoutChecksum as { checksum?: string }).checksum;
+  it('should require contentKey field', () => {
+    const metadataWithoutKey = createBaseMetadata();
+    delete (metadataWithoutKey as { contentKey?: string }).contentKey;
 
-    const result = ResourceMetadataSchema.safeParse(metadataWithoutChecksum);
+    const result = ResourceMetadataSchema.safeParse(metadataWithoutKey);
     expect(result.success).toBe(false);
   });
 
-  it('should accept valid checksum', () => {
+  it('should accept a valid content key', () => {
     const result = ResourceMetadataSchema.safeParse(createBaseMetadata());
     expect(result.success).toBe(true);
   });
 
-  it('should reject invalid checksum format', () => {
-    const result = ResourceMetadataSchema.safeParse(
-      createBaseMetadata({ checksum: 'not-a-valid-checksum' })
-    );
+  it.each([
+    ['a bare SHA-256 (the old checksum shape)', 'a'.repeat(64)],
+    ['an unknown parser kind', `yaml.${'a'.repeat(64)}`],
+    ['uppercase hex', `markdown.${'A'.repeat(64)}`],
+  ])('should reject %s', (_label, contentKey) => {
+    const result = ResourceMetadataSchema.safeParse(createBaseMetadata({ contentKey }));
+    expect(result.success).toBe(false);
+  });
+
+  it('should reject the removed checksum field (strict)', () => {
+    const result = ResourceMetadataSchema.safeParse(createBaseMetadata({ checksum: 'a'.repeat(64) }));
     expect(result.success).toBe(false);
   });
 
@@ -72,7 +81,7 @@ describe('ResourceMetadataSchema HTML fields', () => {
     sizeBytes: 1,
     estimatedTokenCount: 1,
     modifiedAt: new Date(),
-    checksum: 'a'.repeat(64),
+    contentKey: `html.${'a'.repeat(64)}`,
   };
 
   it('accepts optional anchors and parseErrors', () => {

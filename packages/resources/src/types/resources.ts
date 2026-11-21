@@ -8,8 +8,6 @@
 
 import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 
-import type { SHA256 } from '../schemas/checksum.js';
-
 /**
  * Resource type discriminator for type-safe handling
  */
@@ -75,8 +73,8 @@ export interface BaseResource {
   /** Last modification timestamp */
   modifiedAt: Date;
 
-  /** SHA-256 checksum of file content */
-  checksum: SHA256;
+  /** Content key of the bytes read (`<parserKind>.<sha256>`, content-key.ts) */
+  contentKey: string;
 
   /** Collections this resource belongs to (empty for Phase 1) */
   collections: string[];

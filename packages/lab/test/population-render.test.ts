@@ -39,8 +39,8 @@ function row(over: Partial<PopulationCommandStats> = {}): PopulationCommandStats
     root: '/fixture/project',
     count: 2,
     files: [
-      { path: 'a.md', checksum: 'aaa' },
-      { path: 'b.md', checksum: 'bbb' },
+      { path: 'a.md', identity: { scheme: 'contentKey', value: 'aaa' } },
+      { path: 'b.md', identity: { scheme: 'contentKey', value: 'bbb' } },
     ],
     gitTracked: 10,
     offGit: [],
@@ -126,7 +126,7 @@ describe('renderPopulationComparison', () => {
     const text = renderPopulationComparison(
       comparison({
         name: COMMAND,
-        verdict: { kind: 'changed', added: ['new.md'], removed: ['gone.md'], changed: ['moved.md'] },
+        verdict: { kind: 'changed', added: ['new.md'], removed: ['gone.md'], changed: ['moved.md'], contentComparison: { kind: 'compared' } },
         before: row({ extentSource: 'filesystem' }),
         after: row({ extentSource: 'git' }),
       }),
@@ -184,5 +184,40 @@ describe('renderPopulationComparison', () => {
 
     expect(text).toContain('NO COMPARISON');
     expect(text).not.toContain('unchanged');
+  });
+
+  it('says content was NOT compared when the two sides identify content differently, never "same content"', () => {
+    const text = renderPopulationComparison(
+      comparison({
+        name: COMMAND,
+        verdict: { kind: 'content-incomparable', reason: 'checksum against contentKey' },
+        before: row(),
+        after: row(),
+      }),
+    );
+
+    expect(text).toContain('content NOT COMPARED');
+    expect(text).toContain('checksum against contentKey');
+    expect(text).not.toContain('same content');
+  });
+
+  it('flags a changed verdict whose content was incomparable', () => {
+    const text = renderPopulationComparison(
+      comparison({
+        name: COMMAND,
+        verdict: {
+          kind: 'changed',
+          added: ['new.md'],
+          removed: [],
+          changed: [],
+          contentComparison: { kind: 'incomparable', reason: 'checksum against contentKey' },
+        },
+        before: row(),
+        after: row(),
+      }),
+    );
+
+    expect(text).toContain('+1 / −0 / content NOT COMPARED');
+    expect(text).not.toContain('~0 content');
   });
 });

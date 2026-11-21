@@ -235,7 +235,7 @@ Verified three ways: `crawl-source-parity.integration.test.ts` differences the t
 the two extents' realization rows (`path` **and** `contentKey`) on one fixture built so that each row
 of the table above is reached differently by each source; five mutations were run to confirm the
 right assertions redden. End to end, `vat resources scan --format json --verbose` over this
-repository returns byte-identical `path + checksum` sets on both arms — 176 files.
+repository returns byte-identical `path + contentKey` sets on both arms — 176 files.
 
 #### ✅ The `shape` column — where "symlink detection is free" finally became true
 
@@ -683,7 +683,7 @@ whichever phase asks. The verb opens the run (`withRunContext()` in
 and every phase runner requires it; there is no ambient context. `RunPopulation`
 (`packages/resources/src/projection/run-population.ts`) holds one content cache, one
 `ParseDispatcher` memoized by content key (each key parsed once per run), the per-file admission
-facts (parse result, size, mtime, checksum) shared across views, and each root's enumeration, done
+facts (parse result, size, mtime, content key) shared across views, and each root's enumeration, done
 once. `ResourceRegistry.forRun(population)` is the run's registry; each phase crawls a
 `registry.view(...)` with its own base directory, config and include set, and the view computes its
 own ids, duplicates, links, population conditions and parse refusals with the same code. Views

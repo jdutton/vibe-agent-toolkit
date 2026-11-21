@@ -34,8 +34,8 @@ describe('ResourceCollectionInterface', () => {
     expect(duplicates).toEqual([]);
   });
 
-  it('should provide getUniqueByChecksum() method', () => {
-    const unique = collection.getUniqueByChecksum();
+  it('should provide getUniqueByContentKey() method', () => {
+    const unique = collection.getUniqueByContentKey();
     expect(unique).toEqual([]);
   });
 });

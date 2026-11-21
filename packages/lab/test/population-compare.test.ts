@@ -27,6 +27,16 @@ import { CLEAN_LOAD, makeReport } from './report-fixtures.js';
 
 const COMMAND = 'resources-population';
 
+/** An rc.17 identity: the SHA-256 of the decoded text, a different scheme from a content key. */
+function sum(value: string): PopulationEntry['identity'] {
+  return { scheme: 'checksum', value };
+}
+
+/** A content-key identity, the scheme a current build reports. */
+function key(value: string): PopulationEntry['identity'] {
+  return { scheme: 'contentKey', value };
+}
+
 /** A measured row over the given files, with everything else at its quiet default. */
 function row(
   files: readonly PopulationEntry[],
@@ -59,9 +69,9 @@ function report(command: PopulationCommandStats): ReportEnvelope<unknown> {
   });
 }
 
-const A: PopulationEntry = { path: 'a.md', checksum: 'aaa' };
-const B: PopulationEntry = { path: 'b.md', checksum: 'bbb' };
-const C: PopulationEntry = { path: 'c.md', checksum: 'ccc' };
+const A: PopulationEntry = { path: 'a.md', identity: key('aaa') };
+const B: PopulationEntry = { path: 'b.md', identity: key('bbb') };
+const C: PopulationEntry = { path: 'c.md', identity: key('ccc') };
 
 /**
  * Compare two populations and return the single command's verdict.
@@ -93,29 +103,32 @@ describe('comparePopulation', () => {
       added: ['c.md'],
       removed: ['b.md'],
       changed: [],
+      contentComparison: { kind: 'compared' },
     });
   });
 
   it('reports a content change at a path both sides enumerate', () => {
     // Invisible to a comparison of path lists, which is why this is its own
     // bucket rather than folded into added/removed.
-    expect(verdictOf(row([A, B]), row([A, { path: 'b.md', checksum: 'MOVED' }]))).toEqual({
+    expect(verdictOf(row([A, B]), row([A, { path: 'b.md', identity: key('MOVED') }]))).toEqual({
       kind: 'changed',
       added: [],
       removed: [],
       changed: ['b.md'],
+      contentComparison: { kind: 'compared' },
     });
   });
 
   it('keeps the three kinds of difference apart in one verdict', () => {
     const before = row([A, B]);
-    const after = row([{ path: 'a.md', checksum: 'MOVED' }, C]);
+    const after = row([{ path: 'a.md', identity: key('MOVED') }, C]);
 
     expect(verdictOf(before, after)).toEqual({
       kind: 'changed',
       added: ['c.md'],
       removed: ['b.md'],
       changed: ['a.md'],
+      contentComparison: { kind: 'compared' },
     });
   });
 
@@ -167,5 +180,37 @@ describe('comparePopulation', () => {
     expect(comparison.ok).toBe(false);
     if (comparison.ok) return;
     expect(comparison.refusal).toMatch(/'population' report was captured by a lab whose report shape differs.*re-capture it/u);
+  });
+
+  describe('across identity schemes (an rc.17 baseline against a content-key candidate)', () => {
+    const OLD_A: PopulationEntry = { path: 'a.md', identity: sum('aaa') };
+    const OLD_B: PopulationEntry = { path: 'b.md', identity: sum('bbb') };
+
+    it('does NOT report every path as changed: content is incomparable, with the reason stated', () => {
+      expect(verdictOf(row([OLD_A, OLD_B]), row([A, B]))).toEqual({
+        kind: 'content-incomparable',
+        reason: expect.stringContaining('checksum') as unknown,
+      });
+    });
+
+    it('still compares membership across schemes, and says content was not compared', () => {
+      expect(verdictOf(row([OLD_A, OLD_B]), row([A, C]))).toEqual({
+        kind: 'changed',
+        added: ['c.md'],
+        removed: ['b.md'],
+        changed: [],
+        contentComparison: { kind: 'incomparable', reason: expect.stringContaining('contentKey') as unknown },
+      });
+    });
+
+    it('compares content when both sides carry the same scheme', () => {
+      expect(verdictOf(row([OLD_A, OLD_B]), row([OLD_A, { path: 'b.md', identity: sum('MOVED') }]))).toEqual({
+        kind: 'changed',
+        added: [],
+        removed: [],
+        changed: ['b.md'],
+        contentComparison: { kind: 'compared' },
+      });
+    });
   });
 });

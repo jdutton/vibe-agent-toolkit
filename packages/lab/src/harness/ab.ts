@@ -61,6 +61,12 @@ import type { CacheMode, CaptureRequest, ResolvedInstrument, ResolvedSubject } f
 export const CHANGED_VERDICT = 'changed';
 /** The verdict kind that means no usable measurement exists for a command. */
 export const UNMEASURABLE_VERDICT = 'unmeasurable';
+/**
+ * The verdict kind that means membership matched but content identity could not be compared
+ * (the two sides identify content under different schemes). Not a clean run, so it exits like
+ * {@link UNMEASURABLE_VERDICT}.
+ */
+export const CONTENT_INCOMPARABLE_VERDICT = 'content-incomparable';
 
 /** Stands in for a pair whose comparison refused, so it can never read as agreement. */
 const NO_VERDICT = 'NO VERDICT (pair refused)';

@@ -36,7 +36,7 @@ import {
 const PIPE_BUFFER_BYTES = 65_536;
 
 /**
- * Enough markdown files that `--verbose` (which emits a path/links/anchors/checksum
+ * Enough markdown files that `--verbose` (which emits a path/links/anchors/contentKey
  * block per file) is comfortably past one pipe buffer. Each block runs ~150 bytes
  * plus the absolute path, so 700 files clears 64 KB several times over.
  */

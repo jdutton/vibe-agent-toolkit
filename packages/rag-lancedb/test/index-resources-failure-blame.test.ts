@@ -19,8 +19,8 @@
  */
 
 import { type EmbeddingProvider, partialIndexResultOf, type ResourceMetadata } from '@vibe-agent-toolkit/rag';
+import type * as ResourcesModule from '@vibe-agent-toolkit/resources';
 import { isVatError, RAG_DATABASE_UNREADABLE_CODE, safePath, VatError } from '@vibe-agent-toolkit/utils';
-import type * as UtilsFsModule from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LanceDBRAGProvider } from '../src/lancedb-rag-provider.js';
@@ -44,13 +44,13 @@ const failures = vi.hoisted(() => ({ queue: [] as Error[] }));
 // Only the read seam is replaced, and only when armed: the real read stays live
 // via `importOriginal`, so the read-failure cases below fail for the reason a
 // real unreadable document fails rather than because a stub said so.
-vi.mock('@vibe-agent-toolkit/utils/fs', async (importOriginal) => {
-  const actual = await importOriginal<typeof UtilsFsModule>();
-  const readTextContent = async (filePath: string) => {
+vi.mock('@vibe-agent-toolkit/resources', async (importOriginal) => {
+  const actual = await importOriginal<typeof ResourcesModule>();
+  const readContentWithKey: typeof actual.readContentWithKey = async (...args) => {
     const next = failures.queue.shift();
-    return next ? Promise.reject(next) : actual.readTextContent(filePath);
+    return next ? Promise.reject(next) : actual.readContentWithKey(...args);
   };
-  return { ...actual, readTextContent };
+  return { ...actual, readContentWithKey };
 });
 
 // A connection that accepts rows and forgets them. Nothing here asserts on what
@@ -148,8 +148,8 @@ describe('an ordinary read failure during resource indexing', () => {
  * before it.
  */
 /**
- * The bytes the indexer reads are re-hashed and checked against the registry's
- * checksum for them (ADR I2a): the resource's facts — links, headings,
+ * The bytes the indexer reads are re-keyed and checked against the registry's
+ * content key for them (ADR I2a): the resource's facts — links, headings,
  * frontmatter — describe the bytes the registry admitted, and a file changed
  * between admission and indexing would otherwise be indexed as new text under
  * the old facts. A mismatch refuses that one resource and writes nothing for it.
@@ -166,7 +166,7 @@ describe('a file changed between registry admission and indexing', () => {
     const result = await provider().indexResources([changed, steady]);
 
     expect(result.errors).toEqual([
-      { resourceId: 'changed', error: expect.stringContaining('changed since') as unknown },
+      { resourceId: 'changed', error: expect.stringMatching(/changed since.*content key/) as unknown },
     ]);
     expect(result.resourcesIndexed).toBe(1);
     // One embed call — the steady neighbour's — and none for the changed file.

@@ -56,7 +56,7 @@ function makeResource(overrides?: Partial<ResourceMetadata>): ResourceMetadata {
     sizeBytes: 100,
     estimatedTokenCount: 20,
     modifiedAt: new Date(),
-    checksum: 'abc123' as ResourceMetadata['checksum'],
+    contentKey: `markdown.${'a'.repeat(64)}`,
     ...overrides,
   };
 }

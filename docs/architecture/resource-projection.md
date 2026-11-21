@@ -56,15 +56,18 @@ correctness testing, `packages/cli/src/pipeline-oracles/types.ts` (`ParseFactRow
 
 🎯 **Target, per [fact-extractors.md](./fact-extractors.md) (I2a): the content key is the bytes
 alone.** The parser kind leaves the preimage and `CONTENT_KEY_PATTERN`, which carries no display
-label and stays the one pattern every consumer shares. The content key and `checksum` remain separate
-columns. The parse cache and its `ParseFacts` tenant retire, and the store becomes the one persistent
+label and stays the one pattern every consumer shares. The parse cache and its `ParseFacts` tenant retire, and the store becomes the one persistent
 tier for per-file facts. The per-format tables are renamed per instance (`<instance>__<table>`), a
 `Breaking` query-surface change. Today the key is `<parserKind>.<sha256>`, as described above.
+`ResourceMetadata.contentKey` is that key, and `getDuplicates` / `getResourcesByContentKey` currently
+treat identical bytes under different parsers as distinct because the parser kind is in the key.
+When the kind leaves the preimage those two flip back to grouping them, which is a `Breaking`
+change the PR that lands the target must list.
 
 **The table sets in §2 and §3 below are the proposed (🔷), unbuilt blob-keyed schema** — carried
 over from the (retired, uncommitted) design spec as the target shape for stage 3 ("projection
 publication and export") to build toward, not a description of what exists in code today. (The prose
-*around* those tables still correctly describes shipped reality where it says so — e.g. `checksum`,
+*around* those tables still correctly describes shipped reality where it says so — e.g. the content key on `ResourceMetadata`,
 collections, and `routable` below are each partly or fully real; only the tables themselves, and any
 column introduced by them, are proposed.) The tables are keyed on content, not path: the same bytes
 anywhere in the corpus — same file at two paths, same file at two points in history, same file
@@ -201,15 +204,15 @@ never enters a `row_set_key`; the chosen variant enters as an option; `mime` ent
 two. Routability is a traversal rule, owned by [fact-extractors.md](./fact-extractors.md#settled-decisions);
 `routable` below describes how it is enforced today.
 
-**Content key ≠ `checksum`, and both must be kept as separate columns.** Both are real and shipped
-today, in different roles. `checksum` is `SHA256` of the *decoded* UTF-8 string (`checksum.ts`);
-invalid UTF-8 collapses to `U+FFFD`, so distinct byte sequences can share a checksum. It's user-facing
-(`resources scan --verbose` prints it; `getResourcesByChecksum`, `getUniqueByChecksum`,
-`getDuplicates` are public API keyed on it). The content key (also shipped — see §2) is a
-**byte-domain** hash (`<parserKind>.<sha256>`) used internally by the parse cache and is a different
-column from `checksum` today; the constraint that matters for the *proposed* `resources` table (§3)
-is that adding a content-key column there must not collapse it onto `checksum` — doing so would
-silently change cross-tree equality and break existing, shipped output.
+**`checksum` is gone; `ResourceMetadata.contentKey` is the content key.** The registry used to carry two
+identities for one file: `checksum`, a SHA-256 of the *decoded* UTF-8 string (invalid UTF-8 collapses to
+`U+FFFD`, so distinct byte sequences could share one), and the byte-domain content key (`<parserKind>.<sha256>`)
+the parse cache and the store file facts under. Only the content key remains. It is `ResourceMetadata.contentKey`,
+it is what `vat resources scan --verbose` prints per file, and `getResourcesByContentKey`,
+`getUniqueByContentKey` and `getDuplicates` key on it. Because the key includes the parser kind, identical bytes
+routed to different parsers are not duplicates. Consumers that compared checksums (the audit cache detector, the
+RAG indexer's changed-since-crawl refusal, the lab population facet) compare content keys; the indexer re-reads the
+file with `readContentWithKey` under the parser kind its resource's key names.
 
 ### Agentic conventions — native modeling (✅ shipped, stage 4)
 

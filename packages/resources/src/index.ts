@@ -75,10 +75,6 @@ export {
   type NotAdmittedWording,
 } from './not-admitted.js';
 
-// The checksum the registry records for a resource's decoded text, so a consumer
-// re-hashing that text at use (ADR I2a) runs the one implementation.
-export { calculateChecksumFromContent } from './checksum.js';
-
 // Export ResourceQuery for lazy evaluation and filtering
 export { ResourceQuery } from './resource-query.js';
 
@@ -1089,6 +1085,7 @@ export {
   BLOB_PARSE_LIMIT_EXCEEDED,
   BLOB_PARSE_WORKER_DIED,
   BLOB_UNREADABLE,
+  parserKindOf,
   populateBlobs,
   type BlobPopulationOptions,
   type BlobPopulationResult,

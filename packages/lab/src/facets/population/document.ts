@@ -20,7 +20,7 @@ import { z } from 'zod';
 import { parseDocument } from '../../harness/document-shape.js';
 import { LaneFieldsSchema, laneOfDocument, type ReportedLane } from '../../harness/lane.js';
 
-import type { PopulationEntry } from './types.js';
+import type { PopulationEntry, PopulationIdentity } from './types.js';
 
 /**
  * The part of a `vat resources scan` document this facet reads.
@@ -49,8 +49,15 @@ const ScanDocumentSchema = LaneFieldsSchema.extend({
     .array(
       z.object({
         path: z.string().min(1),
-        checksum: z.string(),
-      }).strip(), /* a row ANOTHER vat build printed: keep only the two fields a population compares on */
+        /** rc.17 and earlier. */
+        checksum: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+        /** Every later build. */
+        contentKey: z.string().regex(/^[a-z]+\.[0-9a-f]{64}$/).optional(),
+      })
+        .strip() /* a row ANOTHER vat build printed: keep only the fields a population compares on */
+        .refine((file) => (file.checksum === undefined) !== (file.contentKey === undefined), {
+          message: 'a file must carry exactly one of `checksum` (rc.17 and earlier) or `contentKey`',
+        }),
     )
     .optional(),
 });
@@ -144,9 +151,22 @@ export function readPopulationDocument(stdout: string): PopulationDocumentResult
     document: {
       root: document.root,
       extentSource: arm.extentSource,
-      files: sortByPath(document.files),
+      files: sortByPath(document.files.map(toEntry)),
     },
   };
+}
+
+/**
+ * One document row as a population entry, carrying which identity scheme it spoke.
+ *
+ * @param file - A row the schema already proved carries exactly one identity field
+ * @returns The entry
+ */
+function toEntry(file: { path: string; checksum?: string | undefined; contentKey?: string | undefined }): PopulationEntry {
+  const identity: PopulationIdentity = file.contentKey === undefined
+    ? { scheme: 'checksum', value: file.checksum as string }
+    : { scheme: 'contentKey', value: file.contentKey };
+  return { path: file.path, identity };
 }
 
 /**
@@ -183,7 +203,7 @@ function comparePaths(a: string, b: string): number {
 /**
  * Do two populations contain the same files with the same content?
  *
- * Compares membership and checksums, which is the whole of what this facet
+ * Compares membership and identities (scheme and value), which is the whole of what this facet
  * measures. Used to decide {@link PopulationCommandStats.stable} across repeats.
  *
  * @param a - One population
@@ -196,10 +216,10 @@ export function samePopulation(
 ): boolean {
   if (a.length !== b.length) return false;
   // Both sides are path-sorted by the time they reach here, so a positional walk
-  // is a set comparison — and it reports a checksum difference on an otherwise
+  // is a set comparison — and it reports an identity difference on an otherwise
   // identical membership, which a set of paths alone would call equal.
   return a.every((entry, index) => {
     const other = b[index];
-    return other?.path === entry.path && other.checksum === entry.checksum;
+    return other?.path === entry.path && other.identity.scheme === entry.identity.scheme && other.identity.value === entry.identity.value;
   });
 }

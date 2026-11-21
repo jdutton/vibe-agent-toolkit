@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import type * as FsPromises from 'node:fs/promises';
 
@@ -7,6 +6,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from 'vitest';
 
+import { CONTENT_KEY_PATTERN, computeContentKey } from '../src/content-key.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 
 import { createTwoFilesWithSameContent } from './test-helpers.js';
@@ -68,8 +68,8 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   return { ...counted, default: counted };
 });
 
-describe('ResourceRegistry with checksum', () => {
-  const suite = setupAsyncTempDirSuite('parser-checksum');
+describe('ResourceRegistry with content key', () => {
+  const suite = setupAsyncTempDirSuite('parser-content-key');
   let tempDir: string;
   let registry: ResourceRegistry;
 
@@ -79,21 +79,21 @@ describe('ResourceRegistry with checksum', () => {
   beforeEach(async () => {
     await suite.beforeEach();
     tempDir = suite.getTempDir();
-    // Create fresh registry for checksum validation
     registry = new ResourceRegistry();
   });
 
-  it('should calculate checksum when adding resource', async () => {
+  it('records the content key of the bytes it read when adding a resource', async () => {
     const testFile = safePath.join(tempDir, 'test.md');
-    await fs.writeFile(testFile, '# Test\n\nContent here.', 'utf-8');
+    const content = '# Test\n\nContent here.';
+    await fs.writeFile(testFile, content, 'utf-8');
 
     const metadata = await registry.addResource(testFile);
 
-    expect(metadata.checksum).toBeDefined();
-    expect(metadata.checksum).toMatch(/^[a-f0-9]{64}$/);
+    expect(metadata.contentKey).toMatch(CONTENT_KEY_PATTERN);
+    expect(metadata.contentKey).toBe(computeContentKey(Buffer.from(content, 'utf-8'), 'markdown'));
   });
 
-  it('should return same checksum for same content', async () => {
+  it('should return same content key for same content', async () => {
     const { file1, file2 } = await createTwoFilesWithSameContent(
       tempDir, '# Same Content\n\nIdentical text.',
     );
@@ -101,10 +101,10 @@ describe('ResourceRegistry with checksum', () => {
     const metadata1 = await registry.addResource(file1);
     const metadata2 = await registry.addResource(file2);
 
-    expect(metadata1.checksum).toBe(metadata2.checksum);
+    expect(metadata1.contentKey).toBe(metadata2.contentKey);
   });
 
-  it('should return different checksums for different content', async () => {
+  it('should return different content keys for different content', async () => {
     const file1 = safePath.join(tempDir, 'file1.md');
     const file2 = safePath.join(tempDir, 'file2.md');
     await fs.writeFile(file1, '# Content A', 'utf-8');
@@ -113,7 +113,7 @@ describe('ResourceRegistry with checksum', () => {
     const metadata1 = await registry.addResource(file1);
     const metadata2 = await registry.addResource(file2);
 
-    expect(metadata1.checksum).not.toBe(metadata2.checksum);
+    expect(metadata1.contentKey).not.toBe(metadata2.contentKey);
   });
 
   it('reads and stats each file exactly once', async () => {
@@ -122,9 +122,9 @@ describe('ResourceRegistry with checksum', () => {
 
     // `node:fs`'s `promises` object is a DIFFERENT object from the mocked
     // `node:fs/promises` module above, so the module mock cannot see calls made
-    // through it — and that is exactly the door `checksum.ts`'s path-taking
-    // `calculateChecksum` used for its second whole-file read. Count both
-    // routes, so an extra read is caught whichever one it comes through.
+    // through it — and that is exactly the door a path-taking re-hash of the
+    // file once used for a second whole-file read. Count both routes, so an
+    // extra read is caught whichever one it comes through.
     const legacyReadFile = vi.spyOn(fs, 'readFile');
     fsCalls.readFile.length = 0;
     fsCalls.open.length = 0;
@@ -147,7 +147,7 @@ describe('ResourceRegistry with checksum', () => {
     expect({ reads: totalReads, stats: totalStats }).toEqual({ reads: 1, stats: 1 });
   });
 
-  it('takes sizeBytes from stat() and the checksum from the decoded string', async () => {
+  it('takes sizeBytes from stat() and the content key from the raw bytes', async () => {
     // Every other fixture in this suite is ASCII, where `stat().size` and
     // `Buffer.byteLength(decoded)` are the same number — so none of them can
     // tell the two apart. A lone 0xFF is invalid UTF-8 and decodes to U+FFFD,
@@ -178,13 +178,11 @@ describe('ResourceRegistry with checksum', () => {
     expect(metadata.sizeBytes).toBe(stats.size);
     expect(metadata.sizeBytes).not.toBe(Buffer.byteLength(decoded));
 
-    // Invariant 2: the checksum hashes the DECODED string — a different
-    // keyspace from the content key, which hashes the raw bytes on purpose.
-    expect(metadata.checksum).toBe(createHash('sha256').update(decoded, 'utf-8').digest('hex'));
-    expect(metadata.checksum).not.toBe(
-      createHash('sha256')
-        .update(Uint8Array.from([...Buffer.from('# Bad\n'), 0xff, ...Buffer.from('\n')]))
-        .digest('hex'),
-    );
+    // Invariant 2: the content key hashes the RAW bytes under the parse route
+    // (content-key.ts), never the decoded string, which re-encodes here to
+    // different bytes.
+    const raw = Uint8Array.from([...Buffer.from('# Bad\n'), 0xff, ...Buffer.from('\n')]);
+    expect(metadata.contentKey).toBe(computeContentKey(raw, 'markdown'));
+    expect(metadata.contentKey).not.toBe(computeContentKey(Buffer.from(decoded, 'utf-8'), 'markdown'));
   });
 });

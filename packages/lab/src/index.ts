@@ -241,6 +241,7 @@ export {
 } from './facets/population/capture.js';
 export {
   comparePopulation,
+  type ContentComparison,
   type PopulationCommandDiff,
   type PopulationCommandVerdict,
   type PopulationComparison,
@@ -263,6 +264,8 @@ export {
   PopulationBodySchema,
   type PopulationCommandStats,
   type PopulationEntry,
+  type PopulationIdentity,
+  type PopulationIdentityScheme,
 } from './facets/population/types.js';
 
 export {
@@ -403,6 +406,7 @@ export {
   type AbResult,
   type AbSpec,
   CHANGED_VERDICT,
+  CONTENT_INCOMPARABLE_VERDICT,
   type ComparisonLike,
   type FacetEstimate,
   type FacetFunctions,

@@ -20,6 +20,7 @@ import { basename, dirname } from 'node:path';
 import {
   DeferredArtifacts,
   ResourceRegistry,
+  computeContentKey,
   openFrontmatter,
   parseFileCached,
   parseRefusedEntryFor,
@@ -1809,6 +1810,21 @@ function addBundledAssetsToOutputRegistry(
 }
 
 /**
+ * The PLACEHOLDER content key for a synthetic asset: the asset was not read here. It is the `none`
+ * key of zero bytes, computed once and shared by every synthetic asset (so the output registry's
+ * duplicate groups put them together), and it is not the key of the asset's real bytes.
+ * Computed on first use, never at module load: keying counts `content.hashed`, and importing this
+ * module must not move any process's work counters.
+ */
+let syntheticAssetContentKey: string | undefined;
+
+/** @returns {@link syntheticAssetContentKey}, computed once */
+function syntheticAssetKey(): string {
+  syntheticAssetContentKey ??= computeContentKey(new Uint8Array(), 'none');
+  return syntheticAssetContentKey;
+}
+
+/**
  * Build a minimal ResourceMetadata record for a non-markdown asset that couldn't
  * be added to the source registry due to an ID collision with a paired markdown file.
  */
@@ -1824,8 +1840,7 @@ function buildSyntheticAssetResource(
     sizeBytes: 0,
     estimatedTokenCount: 0,
     modifiedAt: new Date(0),
-    // Synthetic asset; no real content hash. Use all-zeros to satisfy the SHA256 brand.
-    checksum: '0'.repeat(64) as ResourceMetadata['checksum'],
+    contentKey: syntheticAssetKey(),
   };
 }
 

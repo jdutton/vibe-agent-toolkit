@@ -892,8 +892,6 @@ tags: test
       });
 
       it('should detect duplicates in fromResources', () => {
-        // Use type assertion for branded checksum type
-        const fakeChecksum = 'a'.repeat(64) as unknown as ResourceMetadata['checksum'];
         const resource1: ResourceMetadata = {
           id: 'readme',
           filePath: '/a/readme.md',
@@ -902,7 +900,7 @@ tags: test
           sizeBytes: 10,
           estimatedTokenCount: 3,
           modifiedAt: new Date(),
-          checksum: fakeChecksum,
+          contentKey: `markdown.${'a'.repeat(64)}`,
         };
         const resource2: ResourceMetadata = {
           ...resource1,

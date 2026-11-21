@@ -92,9 +92,8 @@ const RESOURCE_METADATA_FACT_SOURCES = {
   sizeBytes: PER_FILE_READ,
   estimatedTokenCount: BLOB_FACT,
   modifiedAt: PER_FILE_READ,
-  // A hash of the decoded content: its fate (the content key, or a stored fact) is decided where
-  // warm validate starts reading blob facts. Until then it is the read it always was.
-  checksum: PER_FILE_READ,
+  // The blob tier's own key: the rows are filed under it.
+  contentKey: BLOB_FACT,
   // The config's collection patterns, matched against the path.
   collections: LIVE,
 } as const satisfies { readonly [Field in keyof ResourceMetadata]-?: FactSource };
@@ -203,7 +202,7 @@ function outcomeOf(contentKey: string, rows: KeyRows | undefined): BlobFactsOutc
   }
   // Not text: one rule for both lanes (`document-facts.ts`), so the facts are the constant.
   if (rows.conditions.some((row) => row.code === BLOB_NOT_TEXT)) {
-    return { kind: 'facts', facts: { ...NOT_TEXT_RESOURCE_FACTS, links: [], headings: [] } };
+    return { kind: 'facts', facts: { ...NOT_TEXT_RESOURCE_FACTS, links: [], headings: [], contentKey } };
   }
   const entry = notAdmittedEntriesByBlob(rows.conditions).get(contentKey);
   if (entry !== undefined) return { kind: 'not-admitted', entry };
@@ -331,6 +330,7 @@ function factsOf(blob: BlobRow, rows: KeyRows): Rebuilt<BlobResourceFacts> {
       ...(frontmatter.value !== undefined && { frontmatter: frontmatter.value }),
       ...(blob.frontmatterError !== null && { frontmatterError: blob.frontmatterError }),
       estimatedTokenCount: blob.tokenEstimate,
+      contentKey: blob.contentKey,
     },
   };
 }

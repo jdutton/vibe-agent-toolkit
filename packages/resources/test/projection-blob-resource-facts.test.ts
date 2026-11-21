@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 import { parseHtmlContent } from '../src/html-link-parser.js';
 import { parseMarkdownContent, type ParseResult } from '../src/link-parser.js';
 import { blobConditionsFor, blobRowFor } from '../src/projection/blob-facts.js';
+import { BLOB_NOT_TEXT } from '../src/projection/blob-population.js';
 import { blobReferencesFor } from '../src/projection/blob-references.js';
 import { blobFactsReader } from '../src/projection/blob-resource-facts.js';
 import { blobSectionsFor } from '../src/projection/blob-sections.js';
@@ -54,6 +55,24 @@ describe('blobFactsReader', () => {
   it('rebuilds the untampered rows', () => {
     const outcome = blobFactsReader(rowsOfDoc())(CONTENT_KEY);
     expect(outcome.kind).toBe('facts');
+  });
+
+  it('carries the key it rebuilt as the resource content key', () => {
+    const outcome = blobFactsReader(rowsOfDoc())(CONTENT_KEY);
+    expect(outcome.kind === 'facts' && outcome.facts.contentKey).toBe(CONTENT_KEY);
+  });
+
+  it('carries the key of a not-text blob, which has no blobs row', () => {
+    const notTextKey = `markdown.${'f'.repeat(64)}`;
+    const outcome = blobFactsReader({
+      blobs: [],
+      blobReferences: [],
+      blobSections: [],
+      blobConditions: [{ blob: notTextKey, code: BLOB_NOT_TEXT, ordinal: 0, severity: 'warning', message: 'not text', line: null }],
+      harnessBlobFacts: [],
+      harnessBlobImports: [],
+    })(notTextKey);
+    expect(outcome.kind === 'facts' && outcome.facts.contentKey).toBe(notTextKey);
   });
 
   it('is uncovered when a reference row is missing against linkCount', () => {

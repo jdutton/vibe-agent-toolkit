@@ -5,15 +5,14 @@
  * and resource metadata to avoid duplication across test files.
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { rm, writeFile } from 'node:fs/promises';
 
 
 import type { EmbeddingProvider } from '@vibe-agent-toolkit/rag';
 import type { ContentTransformOptions, LinkType, ResourceMetadata } from '@vibe-agent-toolkit/resources';
-import { calculateChecksumFromContent, parseFileCached } from '@vibe-agent-toolkit/resources';
+import { computeContentKey, parseFileCached, parserKindForPath } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { readTextContentSync } from '@vibe-agent-toolkit/utils/fs';
 import { createTempDirAsync } from '@vibe-agent-toolkit/utils/testing';
 
 import { LanceDBRAGProvider } from '../src/lancedb-rag-provider.js';
@@ -58,9 +57,9 @@ export async function createTestResource(
     sizeBytes: parseResult.sizeBytes,
     estimatedTokenCount: parseResult.estimatedTokenCount,
     modifiedAt: new Date(),
-    // The registry's checksum of the bytes the parse read, as admission records it:
-    // the indexer refuses a resource whose bytes no longer hash to it.
-    checksum: calculateChecksumFromContent(parseResult.content),
+    // The registry's content key of the bytes the parse read, as admission records it:
+    // the indexer refuses a resource whose bytes no longer key to it.
+    contentKey: fileContentKey(filePath),
   };
 }
 
@@ -226,23 +225,23 @@ export function createBareResource(id: string, filePath: string): ResourceMetada
     sizeBytes: 0,
     estimatedTokenCount: 0,
     modifiedAt: new Date(0),
-    // The registry's checksum of the bytes as they are now, as admission would
-    // record it: the indexer refuses a resource whose bytes no longer hash to it.
-    // A file that does not exist gets a placeholder its failed read never reaches.
-    checksum: existsSync(filePath) ? fileChecksum(filePath) : `${id}-checksum`,
+    // The registry's content key of the bytes as they are now, as admission would
+    // record it: the indexer refuses a resource whose bytes no longer key to it.
+    // A file that does not exist gets the key of no bytes, which its failed read never reaches.
+    contentKey: existsSync(filePath) ? fileContentKey(filePath) : computeContentKey(new Uint8Array(), 'markdown'),
   };
 }
 
 /**
- * The checksum a registry records for `filePath` as it is on disk now — what a
+ * The content key a registry records for `filePath` as it is on disk now — what a
  * hand-built resource must carry, because the indexer refuses one whose bytes
- * no longer hash to it.
+ * no longer key to it.
  *
  * @param filePath - An existing file
- * @returns The registry's checksum of its decoded text
+ * @returns The registry's content key: the parser kind its path routes to, over its raw bytes
  */
-export function fileChecksum(filePath: string): ResourceMetadata['checksum'] {
-  return calculateChecksumFromContent(readTextContentSync(filePath).text);
+export function fileContentKey(filePath: string): ResourceMetadata['contentKey'] {
+  return computeContentKey(readFileSync(filePath), parserKindForPath(filePath));
 }
 
 export function setupLanceDBTestSuite(autoCreateProvider = false): {

@@ -77,6 +77,7 @@ import { WORK_MIN_RUNS, type WorkCommandStats } from '../facets/work/types.js';
 import {
   abExitCondition,
   CHANGED_VERDICT,
+  CONTENT_INCOMPARABLE_VERDICT,
   type ComparisonLike,
   type FacetEstimate,
   type FacetFunctions,
@@ -1014,10 +1015,14 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
         if (comparison.commands.some((command) => command.verdict.kind === CHANGED_VERDICT)) {
           process.exitCode = ExitCode.FINDINGS;
         } else if (
-          comparison.commands.some((command) => command.verdict.kind === UNMEASURABLE_VERDICT)
+          comparison.commands.some(
+            (command) =>
+              command.verdict.kind === UNMEASURABLE_VERDICT ||
+              command.verdict.kind === CONTENT_INCOMPARABLE_VERDICT,
+          )
         ) {
           // No real change, but not a clean run either — at least one command
-          // produced no usable measurement. Exiting 0 here would be
+          // produced no usable measurement, or its content could not be compared. Exiting 0 here would be
           // indistinguishable from a genuinely clean comparison to anything
           // reading `$?`, and it is not a finding: the lab could not do its job.
           process.exitCode = ExitCode.ERROR;

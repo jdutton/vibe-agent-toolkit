@@ -12,6 +12,15 @@ import { describe, expect, it } from 'vitest';
 
 import { readPopulationDocument, samePopulation } from '../src/facets/population/document.js';
 
+const HEX_A = 'a'.repeat(64);
+const HEX_B = 'b'.repeat(64);
+const KEY_A = `markdown.${HEX_A}`;
+const KEY_B = `markdown.${HEX_B}`;
+
+/** The two identity schemes a document can carry: `checksum` (rc.17 and earlier) and `contentKey`. */
+const CHECKSUM = (value: string) => ({ scheme: 'checksum', value }) as const;
+const CONTENT_KEY = (value: string) => ({ scheme: 'contentKey', value }) as const;
+
 /** How every schema refusal opens, before it names the field. */
 const NOT_A_SCAN_DOCUMENT = 'not a resource-scan document';
 
@@ -26,8 +35,8 @@ function scanDocument(overrides: Record<string, unknown> = {}): string {
     anchorsFound: 4,
     durationSecs: 0.1,
     files: [
-      { path: 'b.md', links: 1, anchors: 1, checksum: 'bbb' },
-      { path: 'a.md', links: 2, anchors: 3, checksum: 'aaa' },
+      { path: 'b.md', links: 1, anchors: 1, checksum: HEX_B },
+      { path: 'a.md', links: 2, anchors: 3, checksum: HEX_A },
     ],
     ...overrides,
   });
@@ -44,8 +53,8 @@ function reportScanDocument(dataOverrides: Record<string, unknown> = {}): string
       root: '/fixture/project',
       extentSource: 'filesystem',
       files: [
-        { path: 'b.md', checksum: 'bbb' },
-        { path: 'a.md', checksum: 'aaa' },
+        { path: 'b.md', contentKey: KEY_B },
+        { path: 'a.md', contentKey: KEY_A },
       ],
       ...dataOverrides,
     },
@@ -70,8 +79,8 @@ const REPORT_SHAPED_SCAN = JSON.stringify({
     extentSource: 'git',
     collections: {},
     files: [
-      { path: 'docs/b.md', links: 1, anchors: 1, checksum: 'bbb' },
-      { path: 'docs/a.md', links: 2, anchors: 3, checksum: 'aaa' },
+      { path: 'docs/b.md', links: 1, anchors: 1, contentKey: KEY_B },
+      { path: 'docs/a.md', links: 2, anchors: 3, contentKey: KEY_A },
     ],
   },
 });
@@ -86,8 +95,8 @@ describe('readPopulationDocument', () => {
       root: '/fixture/project',
       extentSource: 'git',
       files: [
-        { path: 'docs/a.md', checksum: 'aaa' },
-        { path: 'docs/b.md', checksum: 'bbb' },
+        { path: 'docs/a.md', identity: CONTENT_KEY(KEY_A) },
+        { path: 'docs/b.md', identity: CONTENT_KEY(KEY_B) },
       ],
     });
   });
@@ -126,8 +135,8 @@ describe('readPopulationDocument', () => {
     expect(result.document.root).toBe('/fixture/project');
     expect(result.document.extentSource).toBe('filesystem');
     expect(result.document.files).toEqual([
-      { path: 'a.md', checksum: 'aaa' },
-      { path: 'b.md', checksum: 'bbb' },
+      { path: 'a.md', identity: CHECKSUM(HEX_A) },
+      { path: 'b.md', identity: CHECKSUM(HEX_B) },
     ]);
   });
 
@@ -227,13 +236,13 @@ describe('readPopulationDocument', () => {
   it('reads the default YAML scan (opened with ---), now that YAML is parsed', () => {
     // `vat resources scan` prints this by default; `--format json` is no
     // longer required for this facet to read it.
-    const yaml = '---\nroot: /fixture/project\nstatus: success\nfilesScanned: 1\nfiles:\n  - path: a.md\n    checksum: aaa\n';
+    const yaml = '---\nroot: /fixture/project\nstatus: success\nfilesScanned: 1\nfiles:\n  - path: a.md\n    checksum: ' + HEX_A + '\n';
     const result = readPopulationDocument(yaml);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.document.root).toBe('/fixture/project');
-    expect(result.document.files).toEqual([{ path: 'a.md', checksum: 'aaa' }]);
+    expect(result.document.files).toEqual([{ path: 'a.md', identity: CHECKSUM(HEX_A) }]);
   });
 
   it('REFUSES output that is neither JSON nor YAML, carrying the reason', () => {
@@ -255,10 +264,50 @@ describe('readPopulationDocument', () => {
   });
 });
 
+describe('readPopulationDocument identity schemes', () => {
+  const entries = (files: unknown[]): string => reportScanDocument({ files });
+
+  it('reads a file carrying contentKey as the contentKey scheme', () => {
+    const result = readPopulationDocument(entries([{ path: 'a.md', contentKey: KEY_A }]));
+    expect(result.ok, result.ok ? '' : result.refusal).toBe(true);
+    if (!result.ok) return;
+    expect(result.document.files).toEqual([{ path: 'a.md', identity: CONTENT_KEY(KEY_A) }]);
+  });
+
+  it('reads a file carrying checksum (rc.17 and earlier) as the checksum scheme, never as a content key', () => {
+    const result = readPopulationDocument(entries([{ path: 'a.md', checksum: HEX_A }]));
+    expect(result.ok, result.ok ? '' : result.refusal).toBe(true);
+    if (!result.ok) return;
+    expect(result.document.files).toEqual([{ path: 'a.md', identity: CHECKSUM(HEX_A) }]);
+  });
+
+  it('REFUSES a file carrying both, since one entry has one identity', () => {
+    const result = readPopulationDocument(entries([{ path: 'a.md', checksum: HEX_A, contentKey: KEY_A }]));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.refusal).toContain(NOT_A_SCAN_DOCUMENT);
+    expect(result.refusal).toContain('exactly one');
+  });
+
+  it('REFUSES an identity that is not shaped like its scheme (a contentKey with no parser kind, an empty checksum)', () => {
+    for (const file of [{ contentKey: HEX_A }, { contentKey: '' }, { checksum: '' }, { checksum: KEY_A }]) {
+      const result = readPopulationDocument(entries([{ path: 'a.md', ...file }]));
+      expect(result.ok, JSON.stringify(file)).toBe(false);
+    }
+  });
+
+  it('REFUSES a file carrying neither', () => {
+    const result = readPopulationDocument(entries([{ path: 'a.md' }]));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.refusal).toContain('exactly one');
+  });
+});
+
 describe('samePopulation', () => {
   const base = [
-    { path: 'a.md', checksum: 'aaa' },
-    { path: 'b.md', checksum: 'bbb' },
+    { path: 'a.md', identity: CONTENT_KEY('aaa') },
+    { path: 'b.md', identity: CONTENT_KEY('bbb') },
   ];
 
   it('accepts identical populations', () => {
@@ -272,19 +321,19 @@ describe('samePopulation', () => {
   it('rejects different membership at the same size', () => {
     expect(
       samePopulation(base, [
-        { path: 'a.md', checksum: 'aaa' },
-        { path: 'c.md', checksum: 'bbb' },
+        { path: 'a.md', identity: CONTENT_KEY('aaa') },
+        { path: 'c.md', identity: CONTENT_KEY('bbb') },
       ]),
     ).toBe(false);
   });
 
   it('rejects the same paths with different content', () => {
     // The case a comparison of path lists alone would call equal, and the whole
-    // reason the entries carry the subject's own checksum.
+    // reason the entries carry the subject's own identity.
     expect(
       samePopulation(base, [
-        { path: 'a.md', checksum: 'aaa' },
-        { path: 'b.md', checksum: 'CHANGED' },
+        { path: 'a.md', identity: CONTENT_KEY('aaa') },
+        { path: 'b.md', identity: CONTENT_KEY('CHANGED') },
       ]),
     ).toBe(false);
   });

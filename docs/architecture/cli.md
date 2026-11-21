@@ -438,7 +438,7 @@ data:
     - path: docs/README.md
       links: 5
       anchors: 3
-      checksum: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      contentKey: markdown.e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 ```
 
 ### `vat resources validate [path]`

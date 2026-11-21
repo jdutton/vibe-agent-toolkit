@@ -121,7 +121,7 @@ function createTestResource(overrides: Partial<ResourceMetadata> & Pick<Resource
     sizeBytes: overrides.sizeBytes ?? 1024,
     estimatedTokenCount: overrides.estimatedTokenCount ?? 256,
     modifiedAt: overrides.modifiedAt ?? new Date('2025-01-01'),
-    checksum: overrides.checksum ?? ('abc123def456abc123def456abc123def456abc123def456abc123def456abcd' as ResourceMetadata['checksum']),
+    contentKey: overrides.contentKey ?? 'markdown.abc123def456abc123def456abc123def456abc123def456abc123def456abcd',
     ...(overrides.frontmatter !== undefined && { frontmatter: overrides.frontmatter }),
     ...(overrides.collections !== undefined && { collections: overrides.collections }),
   };

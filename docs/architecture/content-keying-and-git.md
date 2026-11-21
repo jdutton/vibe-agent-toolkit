@@ -56,7 +56,7 @@ What is built:
   the store-hydration change, not built. `RunPopulation`
   (`packages/resources/src/projection/run-population.ts`) holds one content cache, one
   `ParseDispatcher` that parses each content key once per run, the per-file admission facts (parse
-  result, size, mtime, checksum) shared across views, and each root's enumeration, done once.
+  result, size, mtime, content key) shared across views, and each root's enumeration, done once.
   `ResourceRegistry.forRun(population)` is the run's registry, built once; each phase crawls a
   `registry.view(...)` with its own base directory, config and include set, and computes its own
   ids, duplicates, links, population conditions and parse refusals with the same code. Views never

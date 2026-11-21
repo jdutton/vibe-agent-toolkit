@@ -18,7 +18,7 @@ import { z } from 'zod';
 
 import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
-import { createTempDir, createTestMarkdownFile, fileChecksum } from '../test-helpers.js';
+import { createTempDir, createTestMarkdownFile, fileContentKey } from '../test-helpers.js';
 
 // The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.
 describe.skipIf(onnxModelUnreachable())('Custom metadata system tests', () => {
@@ -96,7 +96,7 @@ describe.skipIf(onnxModelUnreachable())('Custom metadata system tests', () => {
           sizeBytes: 100,
           estimatedTokenCount: 20,
           modifiedAt: new Date(),
-          checksum: fileChecksum(securityDoc),
+          contentKey: fileContentKey(securityDoc),
           frontmatter: {
             filePath: securityDoc,
             domain: 'security',
@@ -112,7 +112,7 @@ describe.skipIf(onnxModelUnreachable())('Custom metadata system tests', () => {
           sizeBytes: 100,
           estimatedTokenCount: 20,
           modifiedAt: new Date(),
-          checksum: fileChecksum(apiDoc),
+          contentKey: fileContentKey(apiDoc),
           frontmatter: {
             filePath: apiDoc,
             domain: 'api',
@@ -129,7 +129,7 @@ describe.skipIf(onnxModelUnreachable())('Custom metadata system tests', () => {
           sizeBytes: 100,
           estimatedTokenCount: 20,
           modifiedAt: new Date(),
-          checksum: fileChecksum(tutorialDoc),
+          contentKey: fileContentKey(tutorialDoc),
           frontmatter: {
             filePath: tutorialDoc,
             domain: 'tutorial',
@@ -239,7 +239,7 @@ describe.skipIf(onnxModelUnreachable())('Custom metadata system tests', () => {
           sizeBytes: 100,
           estimatedTokenCount: 20,
           modifiedAt: new Date(),
-          checksum: fileChecksum(docV1),
+          contentKey: fileContentKey(docV1),
           frontmatter: {
             filePath: docV1,
             category: DOCUMENTATION_CATEGORY,
@@ -303,7 +303,7 @@ describe.skipIf(onnxModelUnreachable())('Custom metadata system tests', () => {
           sizeBytes: 100,
           estimatedTokenCount: 20,
           modifiedAt: new Date(),
-          checksum: fileChecksum(docV2),
+          contentKey: fileContentKey(docV2),
           frontmatter: {
             filePath: docV2,
             category: 'documentation',
@@ -382,7 +382,7 @@ describe.skipIf(onnxModelUnreachable())('Custom metadata system tests', () => {
           sizeBytes: 100,
           estimatedTokenCount: 20,
           modifiedAt: new Date(),
-          checksum: fileChecksum(complexDoc),
+          contentKey: fileContentKey(complexDoc),
           frontmatter: {
             filePath: complexDoc,
             author: {

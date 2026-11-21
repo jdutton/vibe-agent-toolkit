@@ -45,7 +45,6 @@ import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 
 import { vatLinkCacheDirectory } from './cache-root.js';
-import { calculateChecksumFromContent } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
 import { type KeyedContent, NO_PARSER_KIND, type ParserKind, readContentWithKey } from './content-key.js';
 import type { DeferredArtifacts } from './deferred-artifacts.js';
@@ -89,7 +88,6 @@ import type {
 } from './projection/resource-population.js';
 import type { AdmittedFacts, AdmittedStat, RunPopulation } from './projection/run-population.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
-import type { SHA256 } from './schemas/checksum.js';
 import type { ProjectConfig, ValidationMode } from './schemas/project-config.js';
 import type { RealizationConditionRow } from './schemas/projection-resources.js';
 import type { HeadingNode, ResourceMetadata } from './schemas/resource-metadata.js';
@@ -698,7 +696,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private readonly resourcesByPath: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesById: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesByName: Map<string, ResourceMetadata[]> = new Map();
-  private readonly resourcesByChecksum: Map<SHA256, ResourceMetadata[]> = new Map();
+  private readonly resourcesByContentKey: Map<string, ResourceMetadata[]> = new Map();
 
   /**
    * Frontmatter-sourced external URLs keyed by resource absolute path.
@@ -913,7 +911,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   /**
    * Create a registry from an existing array of resources.
    *
-   * Initializes all indexes (by path, ID, name, checksum) from the provided resources.
+   * Initializes all indexes (by path, ID, name, content key) from the provided resources.
    * Throws if any resources have duplicate IDs.
    *
    * **Deliberately uncharged by the crawl-timing seam.** Unlike {@link crawl} and
@@ -998,8 +996,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * Add a single resource to the registry.
    *
    * Parses the file, generates a unique ID, and stores the resource. Costs
-   * exactly one `readFile` and one `stat` per file — the parse, the checksum and
-   * the size all come off that single pair. The parse itself may be served from
+   * exactly one `readFile` and one `stat` per file — the parse, the content key
+   * and the size all come off that single pair. The parse itself may be served from
    * the disk-backed cache ({@link parseCached}); the read and the stat happen
    * either way, because the key and every non-parse field come from them.
    *
@@ -1230,7 +1228,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       sizeBytes: stats.size,
       estimatedTokenCount: parseResult.estimatedTokenCount,
       modifiedAt: stats.mtime,
-      checksum: facts.checksum,
+      contentKey: facts.contentKey,
       ...(collections !== undefined && collections.length > 0 && { collections }),
     };
 
@@ -1253,8 +1251,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     parserKind: ParserKind,
     dispatcher: ParseDispatcher,
   ): Promise<AdmittedFacts> {
-    // THE read. Everything below is a function of these bytes — this used to be
-    // two whole-file reads (parse, then checksum).
+    // THE read. Everything below is a function of these bytes, the content key
+    // included.
     // The discriminator runs exactly ONCE here and its answer rides on `keyed`
     // into both the content key and the parser selection in the dispatcher:
     // parser selection is part of a document's parse identity (content-key.ts),
@@ -1276,15 +1274,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     const route = contentRoute(keyed);
     const parseResult = route.kind === 'parse' ? await dispatcher.parse(route.content) : route.facts;
 
-    // Checksum from the bytes already decoded, not a second read of the file.
-    // It hashes the DECODED STRING, which is a different keyspace from
-    // `keyed.key` — that one hashes the raw bytes on purpose (content-key.ts).
-    // Both must survive: this value is user-facing (`vat resources scan
-    // --verbose`, `audit/cache-detector.ts`, `getResourcesByChecksum`).
-    const checksum = calculateChecksumFromContent(keyed.content);
-
     countWork('registry.admitted', 1);
-    return { parse: parseResult, checksum };
+    return { parse: parseResult, contentKey: keyed.key };
   }
 
   /**
@@ -1300,8 +1291,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    *    to consult once every file ahead of this one has been emitted.
    * 2. The two finding lists stay in **attempt order**, which their own
    *    docblocks promise and which reaches a user as issue order.
-   * 3. `resourcesByName` and `resourcesByChecksum` are **1:many arrays**, and
-   *    `getResourcesByChecksum` / `getDuplicates` read their insertion order
+   * 3. `resourcesByName` and `resourcesByContentKey` are **1:many arrays**, and
+   *    `getResourcesByContentKey` / `getDuplicates` read their insertion order
    *    back. Nothing throws when these scramble — the answers simply become
    *    machine-dependent, which is the worst way for this to fail.
    *
@@ -2456,26 +2447,28 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
-   * Get resources by checksum.
+   * Get resources by content key.
    *
-   * Returns all resources with identical content (same SHA-256 hash).
-   * Useful for detecting duplicate content across different files.
+   * Returns all resources with identical bytes routed to the same parser (same
+   * content key). The key includes the parse route, so two files with identical
+   * bytes routed to different parsers (a `.md` and a `.html`) are not returned
+   * together.
    *
-   * @param checksum - SHA-256 checksum to search for
-   * @returns Array of resources with matching checksum (empty if none found)
+   * @param contentKey - Content key to search for (`<parserKind>.<sha256>`)
+   * @returns Array of resources with that content key (empty if none found)
    *
    * @example
    * ```typescript
    * const resource = registry.getResource('./docs/README.md');
-   * const duplicates = registry.getResourcesByChecksum(resource.checksum);
+   * const duplicates = registry.getResourcesByContentKey(resource.contentKey);
    * if (duplicates.length > 1) {
    *   console.log('Found duplicate content in:');
    *   duplicates.forEach(r => console.log(`  ${r.filePath}`));
    * }
    * ```
    */
-  getResourcesByChecksum(checksum: SHA256): ResourceMetadata[] {
-    return this.resourcesByChecksum.get(checksum) ?? [];
+  getResourcesByContentKey(contentKey: string): ResourceMetadata[] {
+    return this.resourcesByContentKey.get(contentKey) ?? [];
   }
 
   /**
@@ -2513,7 +2506,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     this.resourcesByPath.clear();
     this.resourcesById.clear();
     this.resourcesByName.clear();
-    this.resourcesByChecksum.clear();
+    this.resourcesByContentKey.clear();
     this.duplicateIdCollisions = [];
     this.unreadableResources = [];
     this.parseRefusedResources = [];
@@ -2557,11 +2550,12 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
-   * Get groups of duplicate resources based on checksum.
+   * Get groups of duplicate resources based on content key.
    *
    * Returns an array where each element is an array of resources
-   * that have the same checksum (i.e., identical content).
-   * Only groups with 2+ resources are included.
+   * that have the same content key (identical bytes, same parse route).
+   * Only groups with 2+ resources are included. Identical bytes routed to
+   * different parsers are not duplicates: the key includes the parse route.
    *
    * @returns Array of duplicate groups
    *
@@ -2578,7 +2572,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   getDuplicates(): ResourceMetadata[][] {
     const duplicateGroups: ResourceMetadata[][] = [];
-    for (const group of this.resourcesByChecksum.values()) {
+    for (const group of this.resourcesByContentKey.values()) {
       if (group.length >= 2) {
         duplicateGroups.push(group);
       }
@@ -2587,22 +2581,23 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
-   * Get one representative resource for each unique checksum.
+   * Get one representative resource for each unique content key.
    *
-   * When multiple resources have the same checksum, only the first
-   * one encountered is included in the result.
+   * When multiple resources have the same content key, only the first
+   * one encountered is included in the result. Identical bytes routed to
+   * different parsers have different keys, so each is kept.
    *
-   * @returns Array of unique resources (one per checksum)
+   * @returns Array of unique resources (one per content key)
    *
    * @example
    * ```typescript
-   * const unique = registry.getUniqueByChecksum();
+   * const unique = registry.getUniqueByContentKey();
    * console.log(`${unique.length} unique resources by content`);
    * ```
    */
-  getUniqueByChecksum(): ResourceMetadata[] {
+  getUniqueByContentKey(): ResourceMetadata[] {
     const unique: ResourceMetadata[] = [];
-    for (const group of this.resourcesByChecksum.values()) {
+    for (const group of this.resourcesByContentKey.values()) {
       if (group[0]) {
         unique.push(group[0]);
       }
@@ -2761,7 +2756,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * - byPath: Single resource per absolute path (Map)
    * - byId: Single resource per unique ID (Map)
    * - byName: Multiple resources per filename (Map<string, Array>)
-   * - byChecksum: Multiple resources per content hash (Map<SHA256, Array>)
+   * - byContentKey: Multiple resources per content key (Map<string, Array>)
    *
    * @param resource - Resource to index
    */
@@ -2781,12 +2776,12 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       this.resourcesByName.set(name, [resource]);
     }
 
-    // Index by checksum (1:many)
-    const checksumArray = this.resourcesByChecksum.get(resource.checksum);
-    if (checksumArray) {
-      checksumArray.push(resource);
+    // Index by content key (1:many)
+    const contentKeyArray = this.resourcesByContentKey.get(resource.contentKey);
+    if (contentKeyArray) {
+      contentKeyArray.push(resource);
     } else {
-      this.resourcesByChecksum.set(resource.checksum, [resource]);
+      this.resourcesByContentKey.set(resource.contentKey, [resource]);
     }
   }
 

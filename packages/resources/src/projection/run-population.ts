@@ -20,7 +20,7 @@
  *   (`ParseDispatcher.parse`), so the blob stage's parse of a file is the
  *   registry's.
  * - The **per-file admission facts** ({@link AdmittedFacts}): the parse, the size,
- *   the modification time and the checksum, by path. Nothing that depends on a
+ *   the modification time and the content key, by path. Nothing that depends on a
  *   view: the id, duplicate detection, link resolution, population conditions and
  *   parse refusals are computed per registry view by the same code as ever. Views
  *   never share link objects: a registry copies the links it is handed.
@@ -43,7 +43,6 @@ import { gitFindRoot, gitLinksCheckedOutAsFiles, GitTracker } from '@vibe-agent-
 import type { ParseResult } from '../link-parser.js';
 import { defaultParseCache } from '../parse-cache.js';
 import { ParseDispatcher } from '../parse-dispatcher.js';
-import type { SHA256 } from '../schemas/checksum.js';
 import type { CollectionConfig } from '../schemas/project-config.js';
 import { sameDirectory } from '../utils.js';
 
@@ -67,8 +66,8 @@ import {
 export interface AdmittedFacts {
   /** The parse, SHARED between views: a view copies what it mutates (its links). */
   readonly parse: ParseResult;
-  /** SHA-256 of the decoded content (`ResourceMetadata.checksum`). */
-  readonly checksum: SHA256;
+  /** The content key of the one read (`ResourceMetadata.contentKey`). */
+  readonly contentKey: string;
 }
 
 /** What a registry reads off a file's stat. */

@@ -379,8 +379,6 @@ packages/resources/src/types.ts RegistryStats dead
 packages/resources/src/types.ts Resource dead
 packages/resources/src/types.ts ResourceRegistryOptions dead
 packages/resources/src/types.ts ResourceType dead
-packages/resources/src/types.ts SHA256 dead
-packages/resources/src/types.ts SHA256Schema dead
 packages/resources/src/types.ts validateFrontmatterLinks dead
 packages/resources/src/types.ts validateFrontmatterMultiSchema dead
 packages/resources/src/types.ts validateLink test-only
