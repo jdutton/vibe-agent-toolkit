@@ -29,6 +29,12 @@ describe('the golden capture scrubs every spelling of its roots', () => {
     expect(scrubbed({ file: String.raw`${PROJECT}\enc-bom\SKILL.md` }, ROOTS)).toEqual({ file: String.raw`enc-bom\SKILL.md` });
   });
 
+  it('keeps a separator that does not match the root spelling it follows visible, for the golden to catch', () => {
+    expect(scrubbed({ file: String.raw`${SCRATCH}/project\SKILL.md`, mixed: String.raw`${SCRATCH}/project\x/SKILL.md` }, ROOTS))
+      .toEqual({ file: String.raw`.\SKILL.md`, mixed: String.raw`.\x/SKILL.md` });
+    expect(scrubbed({ file: `${PROJECT}/SKILL.md` }, ROOTS)).toEqual({ file: './SKILL.md' });
+  });
+
   it('makes a root embedded in a message relative, and the bare root "."', () => {
     expect(scrubbed([`see ${SCRATCH}/project/x/SKILL.md`, `${SCRATCH}/project`, `${SCRATCH}/cache/y`], ROOTS))
       .toEqual(['see x/SKILL.md', '.', 'cache/y']);

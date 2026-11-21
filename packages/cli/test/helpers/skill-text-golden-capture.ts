@@ -82,38 +82,48 @@ function movedBetween(before: Counters, after: Counters): Counters {
 /** A drive-letter prefix (`C:`), whose case a Windows path may spell either way. */
 const DRIVE_LETTER = /^[A-Za-z]:/;
 
+/** One spelling of a root and the separator that spelling uses, the only one stripped after it. */
+interface RootSpelling {
+  readonly root: string;
+  readonly separator: '/' | '\\';
+}
+
 /**
  * Every spelling a root can take in a captured value, longest first so a root
  * beneath another (the project under its scratch parent) is stripped whole.
  *
  * On Windows the project root comes from `mkdirSyncReal` with backslashes while
- * every producer joins forward slashes onto it, and a drive letter can reach a
+ * every producer reports it forward-slashed, and a drive letter can reach a
  * producer in either case; so each root is spelled with either separator and,
  * when it has one, either drive-letter case. Lexical, so it holds on every host.
  */
-function rootSpellings(roots: readonly string[]): string[] {
-  const spellings = new Set<string>();
+function rootSpellings(roots: readonly string[]): RootSpelling[] {
+  const spellings = new Map<string, RootSpelling>();
   for (const root of roots) {
     const forward = toForwardSlashAnyPlatform(root);
-    for (const separated of [forward, forward.split('/').join('\\')]) {
-      spellings.add(separated);
-      if (DRIVE_LETTER.test(separated)) {
-        spellings.add(separated.charAt(0).toUpperCase() + separated.slice(1));
-        spellings.add(separated.charAt(0).toLowerCase() + separated.slice(1));
-      }
+    for (const separator of ['/', '\\'] as const) {
+      const separated = forward.split('/').join(separator);
+      const cased = DRIVE_LETTER.test(separated)
+        ? [separated, separated.charAt(0).toUpperCase() + separated.slice(1), separated.charAt(0).toLowerCase() + separated.slice(1)]
+        : [separated];
+      for (const spelled of cased) spellings.set(spelled, { root: spelled, separator });
     }
   }
-  return [...spellings].sort((a, b) => b.length - a.length);
+  return [...spellings.values()].sort((a, b) => b.root.length - a.root.length);
 }
 
 /**
- * `text` with every root spelling made relative: `<root>/x` and `<root>\x` become
- * `x`, the bare root `.`. Only the root is rewritten; a native separator after it
- * is kept, so a producer that emits one still fails the golden.
+ * `text` with every root spelling made relative. A forward-slash root followed
+ * by `/` and a backslash root followed by `\` are stripped with that separator
+ * (`<root>/x` and `<root>\x` become `x`); any other occurrence of a root becomes
+ * `.`, so the bare root reads `.`. A separator that does not match the root's
+ * own spelling is never stripped: `<forward root>\x` reads `.\x` and
+ * `<backslash root>/x` reads `./x`, so a producer that mixes separators fails
+ * the golden. Separators after the root are kept as written for the same reason.
  */
-function relativized(text: string, spellings: readonly string[]): string {
+function relativized(text: string, spellings: readonly RootSpelling[]): string {
   let out = text;
-  for (const root of spellings) out = out.replaceAll(`${root}/`, '').replaceAll(`${root}\\`, '').replaceAll(root, '.');
+  for (const { root, separator } of spellings) out = out.replaceAll(`${root}${separator}`, '').replaceAll(root, '.');
   return out;
 }
 
