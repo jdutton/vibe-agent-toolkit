@@ -50,6 +50,9 @@ import {
   relativeEscapesRoot,
   safePath,
   toForwardSlash,
+  WORK_COUNTERS_ENV,
+  type WorkCounter,
+  type WorkCounterDump,
 } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { expectAbsenceCause, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
@@ -505,6 +508,10 @@ interface RunRecord {
   readonly origins: Readonly<Record<string, unknown>>;
   /** Every contributor the run charged, from its own timing directory. */
   readonly charged: readonly string[];
+  /** Every CLI process's work-counter dump, from the run's own directory (`VAT_WORK_COUNTERS`). */
+  readonly work: readonly WorkCounterDump[];
+  /** The cell it ran in, and the corpus it ran over. */
+  readonly cell: { readonly dirs: ArmDirs; readonly corpus: string };
 }
 
 /** What an arm's `prepare` may do besides touching the corpus: run the subject's query, recorded as this cell's prime. */
@@ -1034,6 +1041,19 @@ function assertOnlyDeclaredCaches(dirs: ArmDirs, before: ReadonlySet<string>, la
   expect(undeclared, `${label}: a run wrote outside its declared caches`).toEqual([]);
 }
 
+/**
+ * Every CLI process's work-counter dump in a directory: the context-detecting
+ * wrapper's are left out, since the work happens in the CLI.
+ *
+ * @param directory - The run's `VAT_WORK_COUNTERS` directory
+ * @returns The dumps
+ */
+function workDumpsUnder(directory: string): WorkCounterDump[] {
+  return readdirSync(directory)
+    .map((name) => JSON.parse(readFileSync(safePath.join(directory, name), 'utf-8')) as WorkCounterDump)
+    .filter((dump) => dump.role === 'cli');
+}
+
 /** The cell-scoped runner: spawns one verb, parses and schema-checks its document, records its charges. */
 interface CellRunner {
   readonly run: (verb: VerbRow, label: RunLabel) => Promise<RunRecord>;
@@ -1045,11 +1065,14 @@ function cellRunner(options: { binPath: string; corpus: string; dirs: ArmDirs; e
     run: async (verb, label) => {
       ordinal += 1;
       const timing = safePath.join(options.dirs.timing, String(ordinal));
+      // Beside the timing directory, not in it: that one is read as charges.
+      const work = safePath.join(options.dirs.timing, `${String(ordinal)}-work`);
       mkdirSyncReal(timing, { recursive: true });
+      mkdirSyncReal(work, { recursive: true });
       const before = new Set(pathsUnder(options.dirs.root));
       const result = await executeCli(options.binPath, [...verb.args], {
         cwd: options.corpus,
-        env: { ...options.env, VAT_CRAWL_TIMING: timing },
+        env: { ...options.env, VAT_CRAWL_TIMING: timing, [WORK_COUNTERS_ENV]: work },
         ...(options.maxBuffer === undefined ? {} : { maxBuffer: options.maxBuffer }),
       });
       // The published schema first: a document no consumer can read is not an answer to compare.
@@ -1072,6 +1095,8 @@ function cellRunner(options: { binPath: string; corpus: string; dirs: ArmDirs; e
         document,
         origins: verb.originsOf(document),
         charged: contributorsCharged(timing),
+        work: workDumpsUnder(work),
+        cell: { dirs: options.dirs, corpus: options.corpus },
       };
     },
   };
@@ -1566,13 +1591,13 @@ export function corpusBytes(corpus: string, path: string): Buffer {
 }
 
 /** The flags by which git's index hides a tracked file's bytes from the tree hash. */
-export type IndexFlag = 'assume-unchanged' | 'skip-worktree';
+type IndexFlag = 'assume-unchanged' | 'skip-worktree';
 
 /** The link every index-flag seed's edit adds, to a file no fixture holds. */
 const INDEX_FLAG_BROKEN_LINK = './gone.md';
 
 /** Where an index-flag seed plants, and what it runs. */
-export interface IndexFlagPlant {
+interface IndexFlagPlant {
   /** A tracked file that links nowhere broken until edited. */
   readonly path: string;
   /** The edited bytes: the file with a link to {@link INDEX_FLAG_BROKEN_LINK} added. */
@@ -1793,7 +1818,7 @@ export function gateSuite(slice: GateSlice, testFileUrl: string): GateSuite {
  * re-derives in memory exactly the keys it lost, so these two arms are the ones a
  * wrong stored fact reaches.
  */
-export const FIDELITY_SLICE = { slice: 'fidelity', arms: ARM_NAMES, verbs: ['vatValidate'] } as const satisfies GateSlice;
+const FIDELITY_SLICE = { slice: 'fidelity', arms: ARM_NAMES, verbs: ['vatValidate'] } as const satisfies GateSlice;
 
 /**
  * Each arm's findings, in order, as the comparison prints them: the first thing a
@@ -1829,19 +1854,187 @@ function expectSameAnswers(result: DifferentialResult): void {
   expect(divergences(result)).toEqual([]);
 }
 
+// ── Hydration ───────────────────────────────────────────────────────────────
+
+/**
+ * What the resources phase of one `vat validate` run spent, from its work counters.
+ * Findings cannot tell a warm run that admitted its view from the store apart from one
+ * that fell back to the cold lane: the cold lane answers identically by design. These can.
+ */
+interface ResourcesPhaseSpend {
+  /** `content.read`: files read to be keyed. */
+  readonly read: number;
+  /** `content.hashedBytes`: the bytes those reads keyed, which pin which files they were. */
+  readonly hashedBytes: number;
+  /** Every `parse.*` counter: each way a parse was answered. */
+  readonly parseLookups: number;
+  /** `registry.admitted`: every member admitted, from the store or computed. */
+  readonly admitted: number;
+  /**
+   * `fs.stat` less `registry.admitted`: the readability probes a store admission makes
+   * in place of the cold read (`readRefusal`, `run-population.ts`), each a stat. Every
+   * admitted member costs the registry's one stat whichever way it came; only one
+   * admitted from the store costs a probe as well. No counter names a store admission,
+   * so this is its tell.
+   */
+  readonly probed: number;
+}
+
+/**
+ * The resources phase's spend, read off the one dump that carries the phase (the
+ * `vat validate` process; its checks child is another process).
+ *
+ * @param work - A run's CLI dumps
+ * @returns The spend
+ */
+export function resourcesPhaseSpend(work: readonly WorkCounterDump[]): ResourcesPhaseSpend {
+  const phases = work.flatMap((dump) => {
+    const phase = dump.phases['resources'];
+    return phase === undefined ? [] : [phase];
+  });
+  const [phase, ...others] = phases;
+  if (phase === undefined || others.length > 0) throw new Error(`expected one dump with a resources phase, found ${String(phases.length)}`);
+  const parseLookups = (Object.entries(phase) as Array<[WorkCounter, number]>)
+    .filter(([name]) => name.startsWith('parse.'))
+    .reduce((sum, [, count]) => sum + count, 0);
+  return {
+    read: phase['content.read'],
+    hashedBytes: phase['content.hashedBytes'],
+    parseLookups,
+    admitted: phase['registry.admitted'],
+    probed: phase['fs.stat'] - phase['registry.admitted'],
+  };
+}
+
+/** A file a hydrated resources phase still reads, with its size. */
+export interface ReadFile {
+  readonly path: string;
+  readonly bytes: number;
+}
+
+/** What a hydrated resources phase must spend, from what the cell holds. */
+export interface HydrationFacts {
+  /** The resources view's members: what the store-off reference's resources phase admitted. */
+  readonly members: number;
+  /**
+   * The SKILL.md files the resources phase's skill discovery reads (`computeDeferredArtifacts`):
+   * the phase's one residual read while that discovery stays in the resources phase.
+   */
+  readonly discoveredSkills: readonly ReadFile[];
+  /** The view's members whose content key was evicted from the blob tier, each with that key. */
+  readonly evicted: ReadonlyArray<ReadFile & { readonly contentKey: string }>;
+  /** Members the store refuses by size (`oversize`), each probed and never admitted. */
+  readonly refusedFromStore: number;
+}
+
+/**
+ * What a hydrated resources phase spends. Every member is admitted. One whose key the
+ * tier holds is admitted from the store: probed, never read, keyed or parsed. One whose
+ * key was evicted is computed for that key alone: read, keyed, and parsed once per
+ * distinct key (the dispatcher answers a second file of one key from its memo). The
+ * discovered SKILL.md files are read and looked up once each, as the residual.
+ *
+ * @param facts - The cell's facts
+ * @returns The spend
+ */
+export function hydratedSpend(facts: HydrationFacts): ResourcesPhaseSpend {
+  const bytes = (files: readonly ReadFile[]): number => files.reduce((sum, file) => sum + file.bytes, 0);
+  const evictedKeys = new Set(facts.evicted.map((file) => file.contentKey));
+  return {
+    read: facts.discoveredSkills.length + facts.evicted.length,
+    hashedBytes: bytes(facts.discoveredSkills) + bytes(facts.evicted),
+    parseLookups: facts.discoveredSkills.length + evictedKeys.size,
+    admitted: facts.members,
+    probed: facts.members - facts.evicted.length + facts.refusedFromStore,
+  };
+}
+
+/** The arms whose resources phase admits from the store. */
+const HYDRATING_ARMS = ['warmSameHistory', 'partialEviction'] as const satisfies readonly ArmName[];
+
+/** One stored realization's path, state and key. */
+interface StoredPath {
+  readonly path: string;
+  readonly contentState: string;
+  readonly contentKey: string | null;
+}
+
+/**
+ * A run's {@link HydrationFacts}, read off its cell: the store's realizations (the
+ * blob tier was evicted, never the realizations) and the corpus's bytes.
+ *
+ * @param run - A hydrating arm's measured run
+ * @param members - The view's member count
+ * @param inView - Whether a root-relative path is a member of the resources view
+ * @returns The facts
+ */
+function hydrationFactsOf(run: RunRecord, members: number, inView: (path: string) => boolean): HydrationFacts {
+  const { dirs, corpus } = run.cell;
+  const realizations = quoteIdentifier(PROJECTION_TABLES.resourceRealizations.name);
+  const stored = withStore(dirs, (database) =>
+    database.prepare(`SELECT DISTINCT "path", "contentState", "contentKey" FROM ${realizations} ORDER BY "path"`).all() as unknown as StoredPath[]);
+  const sized = (path: string): ReadFile => ({ path, bytes: statSync(safePath.join(corpus, path)).size });
+  const evictedKeys = new Set(evictedByCell.get(dirs.root) ?? []);
+  return {
+    members,
+    // Every SKILL.md the population holds, as `work-counters-validate` counts every one in its corpus.
+    discoveredSkills: stored.filter((row) => row.contentState === 'keyed' && /(?:^|\/)SKILL\.md$/u.test(row.path)).map((row) => sized(row.path)),
+    evicted: stored.flatMap((row) =>
+      row.contentKey !== null && evictedKeys.has(row.contentKey) && inView(row.path) ? [{ ...sized(row.path), contentKey: row.contentKey }] : []),
+    refusedFromStore: stored.filter((row) => row.contentState === 'oversize' && inView(row.path)).length,
+  };
+}
+
+/**
+ * Warm and partly evicted, the resources phase admitted its view from the store: it
+ * spent exactly {@link hydratedSpend}. Without this an arm that fell back to the cold
+ * lane for every file would agree with store-off and pass.
+ *
+ * @param result - The fidelity slice's recorded runs
+ * @param inView - Whether a root-relative path is a member of the resources view
+ */
+function expectHydrated(result: DifferentialResult, inView: (path: string) => boolean): void {
+  const run = (arm: ArmName): RunRecord => {
+    const measured = result.measured[arm].vatValidate;
+    if (measured === undefined) throw new Error(`no ${arm} run of vatValidate`);
+    return measured;
+  };
+  const members = resourcesPhaseSpend(run('storeOff').work).admitted;
+  expect(members, 'the store-off reference admits the resources view').toBeGreaterThan(0);
+  const facts = Object.fromEntries(HYDRATING_ARMS.map((arm) => [arm, hydrationFactsOf(run(arm), members, inView)]));
+  const evicted = facts['partialEviction']?.evicted.length ?? 0;
+  // A partial eviction that reached no view member, or every one, would hold nothing apart.
+  expect(evicted, 'evicted view members').toBeGreaterThan(0);
+  expect(evicted, 'evicted view members').toBeLessThan(members);
+  expect(
+    Object.fromEntries(HYDRATING_ARMS.map((arm) => [arm, resourcesPhaseSpend(run(arm).work)])),
+    'resources phase spend: reads, keys and parses only the discovered SKILL.md files (the residual) and the evicted view members; '
+      + 'every other member admitted from the store (a probe each), none read',
+  ).toEqual(Object.fromEntries(HYDRATING_ARMS.map((arm) => [arm, hydratedSpend(facts[arm] as HydrationFacts)])));
+}
+
 /**
  * The store-fidelity differential over a fixture seeding every fidelity case (the
  * calling file's): every arm's `vat validate` exits as store-off's does with
- * byte-identical findings in order, and no other field of its document diverges.
- * Refusals are part of the fixture, so no zero census is asked of it.
+ * byte-identical findings in order, and no other field of its document diverges;
+ * and warm and partly evicted, its resources phase admitted from the store
+ * ({@link expectHydrated}). Refusals are part of the fixture, so no zero census is
+ * asked of it.
  *
  * @param tree - The fixture
+ * @param inView - Whether a root-relative path is a member of the fixture's resources view
  * @param testFileUrl - The calling file's `import.meta.url`, which locates the CLI build
  * @returns The suite
  */
-export function fidelitySuite(tree: FixtureTree, testFileUrl: string): GateSuite {
+export function fidelitySuite(tree: FixtureTree, inView: (path: string) => boolean, testFileUrl: string): GateSuite {
   const result = recordedSlice('vat-i0-fidelity-', FIDELITY_SLICE, tree, testFileUrl);
-  return { result, expectAgreement: () => expectSameAnswers(result()) };
+  return {
+    result,
+    expectAgreement: () => {
+      expectSameAnswers(result());
+      expectHydrated(result(), inView);
+    },
+  };
 }
 
 /** A seed file's suite: its hooks, and one seed run over a fresh gate fixture and judged. */

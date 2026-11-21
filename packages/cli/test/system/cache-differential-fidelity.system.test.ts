@@ -21,7 +21,7 @@
 
 import { truncateSync, writeFileSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { fidelitySuite, indexFlagSeeds, seedTitle, treeSeedSuite, type FixtureTree } from '../helpers/cache-differential.js';
@@ -151,7 +151,8 @@ const EXPECTED_FINDINGS = [
 ].map((finding) => comparable(finding));
 
 describe('vat validate answers every store-fidelity case alike whether or not the projection store is engaged', () => {
-  const fidelity = fidelitySuite(FIDELITY_TREE, import.meta.url);
+  // The config's one resources include, `docs/**`.
+  const fidelity = fidelitySuite(FIDELITY_TREE, (path) => toForwardSlash(path).startsWith('docs/'), import.meta.url);
 
   it('surfaces every observable case in the store-off reference', () => {
     const reference = fidelity.result().measured.storeOff.vatValidate;

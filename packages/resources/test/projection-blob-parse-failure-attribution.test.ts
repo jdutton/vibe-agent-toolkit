@@ -71,12 +71,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ParseCache, ParserUnavailableError } from '../src/parse-cache.js';
 import type { ParsePoolPolicy } from '../src/parse-dispatcher.js';
 import { reviveParserThrow } from '../src/parse-limits.js';
-import { createParsePool, type ParsePool, type ParsePoolOptions } from '../src/parse-pool.js';
 import { BLOB_PARSE_FAILED, storableBlobFacts } from '../src/projection/blob-population.js';
 import { blobFactsReader } from '../src/projection/blob-resource-facts.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 
 import { baseBuilderForRoot, conditionsWithCode, populateBlobsOnOwnDispatcher } from './blob-fixture-population.js';
+import { failingParsePolicy } from './helpers/failing-parse-policy.js';
 import { setupSubdirTestSuite, useCorpusSuite, type CorpusFile } from './test-helpers.js';
 
 /**
@@ -97,27 +97,7 @@ const failures: { load: Error | undefined; parse: Error | undefined } = { load: 
  * @returns The policy both crawl lanes accept as `parsePool`
  */
 function failingPolicy(): ParsePoolPolicy {
-  return {
-    createPool: (options?: ParsePoolOptions): ParsePool => {
-      const real = createParsePool(options);
-      const failure = (): Error | undefined => failures.load ?? failures.parse;
-      return {
-        size: real.size,
-        parse: async (kind, content, byteLength) => {
-          const error = failure();
-          if (error) throw error;
-          return real.parse(kind, content, byteLength);
-        },
-        parseIntoCache: async (kind, content, byteLength, cacheKey) => {
-          const error = failure();
-          if (error) throw error;
-          return real.parseIntoCache(kind, content, byteLength, cacheKey);
-        },
-        harnessFacts: async (harness, content, byteLength) => real.harnessFacts(harness, content, byteLength),
-        shutdown: async () => real.shutdown(),
-      };
-    },
-  };
+  return failingParsePolicy(() => failures.load ?? failures.parse);
 }
 
 /**

@@ -68,6 +68,26 @@ export const UNMEASURABLE_VERDICT = 'unmeasurable';
  */
 export const CONTENT_INCOMPARABLE_VERDICT = 'content-incomparable';
 
+/**
+ * The verdict kinds that are not a result: the lab could not measure or compare the command, so
+ * neither a clean exit nor a finding is honest. `ab` and `compare` both decide "could not do its
+ * job" from this one set, so they cannot drift apart.
+ */
+const NOT_A_RESULT_VERDICTS: ReadonlySet<string> = new Set([
+  UNMEASURABLE_VERDICT,
+  CONTENT_INCOMPARABLE_VERDICT,
+]);
+
+/**
+ * Is this verdict kind one that is not a result?
+ *
+ * @param kind - A verdict kind string
+ * @returns True when the verdict means the lab could not measure or compare the command
+ */
+export function isNotAResultVerdict(kind: string): boolean {
+  return NOT_A_RESULT_VERDICTS.has(kind);
+}
+
 /** Stands in for a pair whose comparison refused, so it can never read as agreement. */
 const NO_VERDICT = 'NO VERDICT (pair refused)';
 
@@ -622,7 +642,7 @@ export function abExitCondition(
   );
   if (stablyChanged) return 'changed';
   const doubtful = result.commands.some(
-    (command) => !command.stable || command.verdicts.includes(UNMEASURABLE_VERDICT),
+    (command) => !command.stable || command.verdicts.some(isNotAResultVerdict),
   );
   return doubtful ? 'unmeasurable' : 'clean';
 }

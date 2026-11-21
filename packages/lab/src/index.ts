@@ -407,6 +407,7 @@ export {
   type AbSpec,
   CHANGED_VERDICT,
   CONTENT_INCOMPARABLE_VERDICT,
+  isNotAResultVerdict,
   type ComparisonLike,
   type FacetEstimate,
   type FacetFunctions,

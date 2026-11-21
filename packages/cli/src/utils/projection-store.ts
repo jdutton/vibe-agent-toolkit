@@ -25,9 +25,10 @@
  * {@link gitTreeKey} answers it with `git write-tree` against a throwaway
  * index, which covers staged edits, unstaged edits and untracked files, and
  * carries **no timestamp** — byte-identical content always produces the same
- * hash. It declines a tree whose index flags any file assume-unchanged or
- * skip-worktree (a sparse checkout included): git does not read such a file, so
- * the hash would not describe its bytes, and the run populates without a store.
+ * hash. It declines a tree whose index flags a file assume-unchanged or
+ * skip-worktree that is on disk: git does not read such a file, so the hash
+ * would not describe its bytes, and the run populates without a store. A sparse
+ * checkout's absent files hide nothing, so it keys (see `git-tree-key.ts`).
  * 🪤 Never `git stash create`: a stash is a *commit*, so two calls over
  * identical content agree only within the same wall-clock second, and every
  * read would miss.

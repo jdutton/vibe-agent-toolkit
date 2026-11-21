@@ -5,11 +5,12 @@
  * The snapshot stages the working tree through a copy of the real index, so a file flagged
  * assume-unchanged or skip-worktree keeps its staged bytes in the hash whatever is on disk. A key
  * over such a tree describes bytes that may not exist, on the run that writes a store and on the run
- * that reads it, so the key declines. Detected from the index flags alone: no file is read, hashed
- * or stat'd for it.
+ * that reads it, so the key declines. The one exemption is a skip-worktree entry with nothing on
+ * disk (a sparse checkout's), which hides no bytes; it keys under a hash of its own. Decided from
+ * the index flags and an existence check of a flagged entry: no file is read or hashed for it.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -17,25 +18,14 @@ import { GIT_SNAPSHOT_INDEX_HIDES_CODE, gitSnapshotFailureOf } from '../../src/g
 import { runGit } from '../../src/git-run.js';
 import { gitTreeSnapshot, withGitSnapshotCache } from '../../src/git-snapshot.js';
 import { gitTreeKey } from '../../src/git-tree-key.js';
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '../../src/path-utils.js';
+import { normalizedTmpdir, safePath } from '../../src/path-utils.js';
+import { plantFiles } from '../../src/testing/plant-files.js';
 import { readWorkCounters } from '../../src/work-counters.js';
 
 /** Run git in `cwd`, failing the test on a refusal. */
 function git(cwd: string, ...args: string[]): void {
   const result = runGit(['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd });
   expect(result.ok, `git ${args.join(' ')}: ${result.stderr}`).toBe(true);
-}
-
-/**
- * @param root - The directory to write under
- * @param files - Root-relative path to contents
- */
-function plant(root: string, files: Readonly<Record<string, string>>): void {
-  for (const [relative, content] of Object.entries(files)) {
-    const path = safePath.join(root, relative);
-    mkdirSyncReal(safePath.join(path, '..'), { recursive: true });
-    writeFileSync(path, content);
-  }
 }
 
 /** The declined key's cause, as the one classifier states it. */
@@ -51,7 +41,7 @@ describe('gitTreeKey over a real repository', () => {
   beforeEach(() => {
     dir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-tree-key-'));
     git(dir, 'init', '-q');
-    plant(dir, { 'docs/a.md': 'a', 'docs/b.md': 'b', 'other/c.md': 'c' });
+    plantFiles(dir, { 'docs/a.md': 'a', 'docs/b.md': 'b', 'other/c.md': 'c' });
     git(dir, 'add', '-A');
     git(dir, 'commit', '-qm', 'init');
   });
@@ -74,7 +64,7 @@ describe('gitTreeKey over a real repository', () => {
     expect(cause.reason).toContain('docs/a.md');
   });
 
-  it('declines a tree with a file flagged skip-worktree, naming the flag and the file', () => {
+  it('declines a tree with a file flagged skip-worktree and present on disk, naming the flag and the file', () => {
     git(dir, 'update-index', '--skip-worktree', 'docs/b.md');
     const cause = declined(dir);
     expect(cause.code).toBe(GIT_SNAPSHOT_INDEX_HIDES_CODE);
@@ -88,11 +78,28 @@ describe('gitTreeKey over a real repository', () => {
     expect(declined(dir).reason).toContain('"docs/a.md" (assume-unchanged and skip-worktree)');
   });
 
-  it('declines a sparse checkout too: its absent entries carry skip-worktree, and the flags alone decide (no file is stat\'d)', () => {
-    // The trade-off, visible: a sparse checkout hides nothing on disk, but telling it apart from a
-    // flagged file would take a stat of every flagged path. Such a tree loses the store.
+  it('keys a sparse checkout: an entry skip-worktree hides is absent from disk, so it hides no bytes', () => {
     git(dir, 'sparse-checkout', 'set', '--no-cone', '/docs/');
-    expect(declined(dir).reason).toContain('other/c.md');
+    expect(gitTreeKey({ cwd: dir }).ok, 'other/c.md is absent and skip-worktree').toBe(true);
+  });
+
+  it('keys a tree with an absent skip-worktree entry apart from the same tree with the file back', () => {
+    // Both states write one tree: the index still holds other/c.md's bytes. The store filed while it
+    // was absent must never serve the tree where it is back, so the absence is part of the key.
+    git(dir, 'sparse-checkout', 'set', '--no-cone', '/docs/');
+    const sparse = gitTreeKey({ cwd: dir });
+    git(dir, 'sparse-checkout', 'disable');
+    const whole = gitTreeKey({ cwd: dir });
+    const snapshot = gitTreeSnapshot({ cwd: dir });
+    if (!sparse.ok || !whole.ok || !snapshot.ok) throw new Error('both states key');
+    expect(whole.hash, 'nothing flagged: the snapshot\'s own hash').toBe(snapshot.hash);
+    expect(sparse.hash).not.toBe(whole.hash);
+  });
+
+  it('declines an absent assume-unchanged entry: its deletion is one git hides', () => {
+    git(dir, 'update-index', '--assume-unchanged', 'other/c.md');
+    rmSync(safePath.join(dir, 'other/c.md'));
+    expect(declined(dir).reason).toContain('"other/c.md" (assume-unchanged)');
   });
 
   it('declines a key asked from a subdirectory for a flag anywhere in the repository: the hash covers it all', () => {

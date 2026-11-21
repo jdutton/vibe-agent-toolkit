@@ -89,6 +89,7 @@ import {
   gitFindRoot,
   gitLsOthers,
   gitNoAnswerError,
+  gitSnapshotAbsentEntries,
   gitSnapshotError,
   gitTreeSnapshot,
   isGitIgnored,
@@ -667,6 +668,18 @@ export class GitCrawlSource implements CrawlSource {
       );
     }
 
+    // A skip-worktree entry with nothing on disk (a sparse checkout's file) is in
+    // the snapshot with its staged bytes, but no file is there: not a member, as
+    // a walk never meets it. From the tree key's own flag listing, so no second
+    // spawn inside the run's snapshot bracket, and no file is read.
+    const absent = gitSnapshotAbsentEntries({ cwd: this.#root, snapshot });
+    if ('ok' in absent) {
+      throw gitSnapshotError(
+        absent,
+        'Without the index flags a sparse checkout\'s absent files would be members, so this is an error.',
+      );
+    }
+
     const members: CrawlCandidate[] = [];
     const submodules: string[] = [];
 
@@ -675,6 +688,7 @@ export class GitCrawlSource implements CrawlSource {
       // corpus root. Narrowing is this caller's job — see `gitTreeSnapshot`.
       if (!isPathUnderRoot(entry.absolutePath, this.#root)) continue;
       if (!admits(entry.absolutePath)) continue;
+      if (absent.has(entry.absolutePath)) continue;
 
       // A symlink is REPORTED here, never dropped here. This is the only code
       // that reads git's mode bits, so the observation has to be made here — but
@@ -698,7 +712,8 @@ export class GitCrawlSource implements CrawlSource {
       // from a stat: it EXISTS because `getGitTreeSnapshot` is `git add --all`
       // into a throwaway index, which stages deletions — a tracked file removed
       // from the working tree is absent from `entries` rather than present and
-      // stale; it is NOT A DIRECTORY because a tree object records blobs and
+      // stale, and the one deletion it does not stage (skip-worktree) was dropped
+      // above; it is NOT A DIRECTORY because a tree object records blobs and
       // git lists no directories at all; and it is NOT A SYMLINK because every
       // mode-`120000` entry took the branch above and never reaches here.
       members.push({ absolutePath: entry.absolutePath, shape: 'file' });

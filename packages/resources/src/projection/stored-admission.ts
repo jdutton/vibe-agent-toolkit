@@ -20,8 +20,9 @@
  *   that key alone;
  * - `oversize` of a kind a parser reads: refused at the input cap before any
  *   read, as cold refuses it (`unkeyedEntry`, the one rule the not-admitted log
- *   reads). Of a kind nothing parses: cold, whose refusal states a size the store
- *   does not hold;
+ *   reads), once the file is still readable now (the same probe); one that cannot
+ *   be read now is cold. Of a kind nothing parses: cold, whose refusal states a
+ *   size the store does not hold;
  * - any other state (`unreadable`, `deferred`, `none`): cold.
  *
  * And none of it unless the run parses under the limits the store's facts were
@@ -74,6 +75,9 @@ export interface StoredContent {
   readonly facts: () => Promise<(contentKey: string) => BlobFactsOutcome>;
 }
 
+/** The code of a blob tier that could not be read ({@link BlobTierReadError}): the store's refusal. */
+export const PROJECTION_STORE_READ_FAILED_CODE = 'PROJECTION_STORE_READ_FAILED';
+
 /**
  * The blob tier could not be read. The store's failure, never a file's: coded,
  * so the per-file read classifier cannot file it as a file's errno whatever the
@@ -83,7 +87,7 @@ class BlobTierReadError extends VatError {
   /** @param cause - What the store's blob read rejected with */
   constructor(cause: unknown) {
     super(
-      'PROJECTION_STORE_READ_FAILED',
+      PROJECTION_STORE_READ_FAILED_CODE,
       `The projection store's blob facts could not be read: ${cause instanceof Error ? cause.message : String(cause)}`,
       { cause },
     );
@@ -153,10 +157,10 @@ export function hydratesUnder(limits: ParseLimits): boolean {
 }
 
 /** What a stored realization says to do before the tier is read. */
-export type StoredRoute =
+type StoredRoute =
   /** Compute it the cold way. */
   | { readonly kind: 'compute' }
-  /** Refused by its size before any read, as cold refuses it. */
+  /** Refused by its size before any read, as cold refuses it, once the file is still readable now. */
   | { readonly kind: 'not-admitted'; readonly entry: NotAdmittedEntry }
   /** Ask the tier about this key. */
   | { readonly kind: 'read'; readonly contentKey: string };
@@ -184,7 +188,7 @@ export function storedRoute(realization: StoredRealization | undefined, parserKi
 }
 
 /** What the tier's answer for a key says to do. */
-export type ReadRoute =
+type ReadRoute =
   /** Compute it the cold way. */
   | { readonly kind: 'compute' }
   /** Admit the stored answer, once the file is still readable now. */

@@ -67,6 +67,22 @@ describe('gitTreeKey over a scripted flag listing', () => {
     expect(gitTreeKey({ cwd: ROOT })).toMatchObject({ ok: true, hash: SNAPSHOT.hash });
   });
 
+  it('keys a skip-worktree entry with nothing on disk, under a hash apart from the unflagged tree\'s', () => {
+    // ROOT does not exist, so every listed path is absent.
+    seams.listing = listed(entries(['H', 'a.md'], ['S', 'gone.md']));
+    const key = gitTreeKey({ cwd: ROOT });
+    if (!key.ok) throw new Error(`declined: ${gitSnapshotFailureOf(key).reason}`);
+    expect(key.hash).not.toBe(SNAPSHOT.hash);
+    seams.listing = listed(entries(['H', 'a.md'], ['S', 'other.md']));
+    const other = gitTreeKey({ cwd: ROOT });
+    expect(other.ok && other.hash, 'another absent set, another key').not.toBe(key.hash);
+  });
+
+  it('declines an absent entry that is assume-unchanged as well (tag `s`)', () => {
+    seams.listing = listed(entries(['s', 'gone.md']));
+    expect(declined().code).toBe(GIT_SNAPSHOT_INDEX_HIDES_CODE);
+  });
+
   it('names a file carrying both flags (tag `s`) with both', () => {
     seams.listing = listed(entries(['s', 'both.md']));
     const cause = declined();
@@ -82,7 +98,7 @@ describe('gitTreeKey over a scripted flag listing', () => {
   });
 
   it('counts the flagged entries past the ones it names', () => {
-    seams.listing = listed(entries(['S', 'a.md'], ['S', 'b.md'], ['S', 'c.md']));
+    seams.listing = listed(entries(['h', 'a.md'], ['h', 'b.md'], ['h', 'c.md']));
     const { reason } = declined();
     expect(reason).toContain('flags 3 file(s)');
     expect(reason).toContain('and 1 more');

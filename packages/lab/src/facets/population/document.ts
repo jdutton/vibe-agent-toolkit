@@ -51,7 +51,11 @@ const ScanDocumentSchema = LaneFieldsSchema.extend({
         path: z.string().min(1),
         /** rc.17 and earlier. */
         checksum: z.string().regex(/^[0-9a-f]{64}$/).optional(),
-        /** Every later build. */
+        /**
+         * Every later build. This pattern restates the resources package's CONTENT_KEY_PATTERN on
+         * purpose: the lab reads other builds' output and has no runtime dependency on resources
+         * (it is a devDependency only), so it cannot import the current build's definition.
+         */
         contentKey: z.string().regex(/^[a-z]+\.[0-9a-f]{64}$/).optional(),
       })
         .strip() /* a row ANOTHER vat build printed: keep only the fields a population compares on */

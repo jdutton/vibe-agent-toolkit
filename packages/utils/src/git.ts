@@ -75,7 +75,7 @@ export {
   type GitTreeKeyOutcome,
   type GitTreeSnapshot,
 } from './git-snapshot.js';
-export { freshGitTreeKey, gitTreeKey } from './git-tree-key.js';
+export { freshGitTreeKey, gitSnapshotAbsentEntries, gitTreeKey } from './git-tree-key.js';
 export { loadGitignoreRules } from './gitignore-checker.js';
 export { GitTracker, type GitTrackerInitOptions } from './git-tracker.js';
 export {

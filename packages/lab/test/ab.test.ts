@@ -469,6 +469,21 @@ describe('runAb — no pair comparable', () => {
     expect(text).not.toContain('effect (B - A)');
   });
 
+  // The compare verb exits ERROR on content-incomparable; ab must not call the same verdict clean.
+  it('refuses to exit clean when every pair said content-incomparable', async () => {
+    const { result } = await runFixture(
+      {
+        pairs: 2,
+        aValues: [10, 10],
+        bValues: [10, 10],
+        script: ['content-incomparable', 'content-incomparable'],
+      },
+      'content-incomparable',
+    );
+
+    expect(abExitCondition(result)).toBe('unmeasurable');
+  });
+
   it('takes the effect when one pair judged it, though another pair did not', async () => {
     const { result } = await runFixture(
       { pairs: 2, aValues: [10, 10], bValues: [50, 50], script: ['unmeasurable', 'unchanged'] },

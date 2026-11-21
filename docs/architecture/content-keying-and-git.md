@@ -51,12 +51,13 @@ What is built:
   `vat claude plugin build` (so `vat build`) and `vat ard emit`, which still read a file once per
   lane that asks. `vat rag index` admits its corpus through one run, but its index step re-reads and
   re-hashes each file it indexes, so it reads each file twice. The run opens its projection store
-  on its first enumeration, so a phase that refuses at its own guards opens nothing. A warm store
-  hit still reads and hashes each file a view admits; serving those facts from the store instead is
-  the store-hydration change, not built. `RunPopulation`
+  on its first enumeration, so a phase that refuses at its own guards opens nothing. On a warm store
+  hit a view admits each member from its stored blob facts, reading, hashing and parsing nothing for
+  it (`packages/resources/src/projection/stored-admission.ts`); a member the store does not cover is
+  admitted the cold way. `RunPopulation`
   (`packages/resources/src/projection/run-population.ts`) holds one content cache, one
-  `ParseDispatcher` that parses each content key once per run, the per-file admission facts (parse
-  result, size, mtime, content key) shared across views, and each root's enumeration, done once.
+  `ParseDispatcher` that parses each content key once per run, the per-file admission facts (blob
+  facts or a not-admitted entry, by content key) shared across views, and each root's enumeration, done once.
   `ResourceRegistry.forRun(population)` is the run's registry, built once; each phase crawls a
   `registry.view(...)` with its own base directory, config and include set, and computes its own
   ids, duplicates, links, population conditions and parse refusals with the same code. Views never

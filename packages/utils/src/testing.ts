@@ -57,10 +57,12 @@ export { faultFsSpecOf, faultRuleOf, INJECTED_ERRNOS, injectedErrnoError } from 
 export type { FaultFsSpec, FaultRule, FaultSpec, FsApi, FsOpFamily, InjectedErrno } from './testing/fault-spec.js';
 export * from './testing/hostile-tree.js';
 export * from './testing/parse-limit-fixtures.js';
+export * from './testing/plant-files.js';
 export * from './testing/platform-gates.js';
 export * from './testing/temp-dir.js';
 export * from './testing/tier-timeout.js';
 export * from './testing/tree-snapshot.js';
+export * from './testing/work-spent.js';
 
 /** A planted fixture tree and the means to remove it. */
 export interface TempCorpus {

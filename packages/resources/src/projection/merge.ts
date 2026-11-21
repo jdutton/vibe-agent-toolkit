@@ -361,10 +361,13 @@ export interface PopulationCache {
   /**
    * A hash naming this tree's exact contents — see {@link ExtentKey.treeHash}.
    *
-   * In a repository, `@vibe-validate/git`'s dirty-corrected `write-tree` hash
-   * (`gitTreeSnapshot().hash`), which covers unstaged edits and untracked files
-   * and carries no timestamp. 🪤 Never `git stash create`, whose commit object
-   * does — two calls over byte-identical content would disagree and every read
+   * In a repository, `gitTreeKey().hash`: `@vibe-validate/git`'s dirty-corrected
+   * `write-tree` hash, which covers unstaged edits and untracked files and
+   * carries no timestamp, and is no key at all where the index hides edits.
+   * 🪤 Never `gitTreeSnapshot().hash` alone: the snapshot is blind to git's index
+   * flags, so a file flagged assume-unchanged or skip-worktree keeps its staged
+   * bytes in the hash whatever the disk holds, and an edit to it moves no key.
+   * 🪤 Never `git stash create`, whose commit object carries a timestamp — two calls over byte-identical content would disagree and every read
    * would miss.
    *
    * ⚠️ That hash covers the whole **repository**, not the subtree `root` names.

@@ -55,20 +55,25 @@ const context = createSuiteContext('vat-work-validate-', import.meta.url);
 /** The parse input cap in force (`DEFAULT_PARSE_LIMITS.inputBytes`): one byte past it is refused. */
 const INPUT_CAP_BYTES = 8 * 1024 * 1024;
 
-/** The root config's skills block: one skill declaring a `files:` entry. */
-function rootConfig(skillsInclude: readonly string[]): string {
+/**
+ * The root config's skills block. With `declareFiles`, one skill declares a
+ * `files:` entry, which makes the resources phase discover the skills (reading
+ * each SKILL.md); without it, the skills phase is the first to read them.
+ */
+function rootConfig(skillsInclude: readonly string[], declareFiles: boolean): string {
+  const files = `  config:
+    one-admission:
+      files:
+        - source: scripts/run.mjs
+          dest: scripts/run.mjs
+`;
   return `resources:
   exclude:
     - "reference/**"
 skills:
   include:
 ${skillsInclude.map((pattern) => `    - "${pattern}"`).join('\n')}
-  config:
-    one-admission:
-      files:
-        - source: scripts/run.mjs
-          dest: scripts/run.mjs
-`;
+${declareFiles ? files : ''}`;
 }
 
 const NESTED_CONFIG = `skills:
@@ -99,8 +104,8 @@ const SHARED_FILES: Readonly<Record<string, string>> = {
   // An id (`reference-shared-md`) shared by an included file and a resources-excluded one.
   'reference-shared.md': '# Shared id, included\n',
   'reference/shared.md': '# Shared id, excluded\n',
-  // A skill linking a skills-only member and an HTML file, and declaring a
-  // `files:` entry, which makes the resources phase discover skills: that
+  // A skill linking a skills-only member and an HTML file. Where the corpus
+  // declares its `files:` entry, the resources phase discovers skills, and that
   // discovery must read no SKILL.md the run already read.
   'skills/one/SKILL.md': `${createSkillMarkdown('one-admission')}\nSee [hidden](../../reference/hidden.md) and [the page](./page.html).\n`,
   'skills/one/page.html': '<html><body><h1 id="top">Page</h1></body></html>\n',
@@ -114,25 +119,33 @@ interface Corpus {
   readonly project: string;
   /** Whether the skills batch spans several roots. */
   readonly multiRoot: boolean;
+  /** Whether a skill declares a `files:` entry, so the resources phase discovers (reads) every SKILL.md. */
+  readonly declaresFiles: boolean;
 }
 
 /** Two roots: the root project and a nested one whose skill is in the root's pool. */
 const NESTED: Corpus = {
   files: {
     ...SHARED_FILES,
-    'vibe-agent-toolkit.config.yaml': rootConfig(['skills/**/SKILL.md', 'nested/skills/**/SKILL.md']),
+    'vibe-agent-toolkit.config.yaml': rootConfig(['skills/**/SKILL.md', 'nested/skills/**/SKILL.md'], true),
     'nested/vibe-agent-toolkit.config.yaml': NESTED_CONFIG,
     'nested/skills/two/SKILL.md': createSkillMarkdown('nested-two'),
   },
   project: '',
   multiRoot: true,
+  declaresFiles: true,
 };
 
-/** One root: the skills view is the shared markdown-only view of the run's home root. */
+/**
+ * One root: the skills view is the shared markdown-only view of the run's home
+ * root. No `files:` entry, so the resources phase discovers no skill and the
+ * skills phase reads each SKILL.md itself.
+ */
 const SINGLE_ROOT: Corpus = {
-  files: { ...SHARED_FILES, 'vibe-agent-toolkit.config.yaml': rootConfig(['skills/**/SKILL.md']) },
+  files: { ...SHARED_FILES, 'vibe-agent-toolkit.config.yaml': rootConfig(['skills/**/SKILL.md'], false) },
   project: '',
   multiRoot: false,
+  declaresFiles: false,
 };
 
 /**
@@ -142,12 +155,13 @@ const SINGLE_ROOT: Corpus = {
 const NO_ROOT: Corpus = {
   files: {
     ...Object.fromEntries(Object.entries(SHARED_FILES).map(([path, content]) => [`project/${path}`, content])),
-    'project/vibe-agent-toolkit.config.yaml': rootConfig(['skills/**/SKILL.md', '../loose/**/SKILL.md']),
+    'project/vibe-agent-toolkit.config.yaml': rootConfig(['skills/**/SKILL.md', '../loose/**/SKILL.md'], true),
     'loose/rootless/SKILL.md': `${createSkillMarkdown('rootless')}\nSee [its note](./note.md).\n`,
     'loose/rootless/note.md': '# Note\n\nBeside a skill with no project root.\n',
   },
   project: 'project',
   multiRoot: true,
+  declaresFiles: true,
 };
 
 /** Past the input cap: refused before a byte is read, never keyed. Project-relative. */
@@ -229,11 +243,21 @@ function skillsOnlyDocuments(corpus: Corpus): string[] {
 }
 
 /**
- * The SKILL.md files the resources phase's skill discovery reads, repository-relative:
- * every one in the corpus, since each corpus's root config includes all of its skills.
+ * The SKILL.md files skill discovery reads, repository-relative: every one in the
+ * corpus, since each corpus's root config includes all of its skills.
  */
 function discoveredSkills(corpus: Corpus): string[] {
   return Object.keys(corpus.files).filter((path) => path.endsWith('/SKILL.md'));
+}
+
+/**
+ * Which phase reads each SKILL.md first: the resources phase when a skill declares
+ * `files:` (its deferred-artifact discovery), else the skills phase. Either way once
+ * per run; the later phase is served that read.
+ */
+function skillMdReadsByPhase(corpus: Corpus): { resources: string[]; skills: string[] } {
+  const all = discoveredSkills(corpus);
+  return corpus.declaresFiles ? { resources: all, skills: [] } : { resources: [], skills: all };
 }
 
 /** A relative link target in a document, fragment included. */
@@ -504,21 +528,23 @@ describe.each([
     expect(resources).toBeDefined();
     expect(skills).toBeDefined();
     const discovered = discoveredSkills(corpus);
+    const skillMd = skillMdReadsByPhase(corpus);
     const bundled = bundledMarkdown(corpus);
 
     // The resources view reads, keys and parses nothing: every member is
     // admitted from the store. What the phase still reads is the skill discovery
-    // the `files:` entry asks for (`computeDeferredArtifacts`): each SKILL.md
+    // a `files:` entry asks for (`computeDeferredArtifacts`): each SKILL.md
     // once, its parse answered from the parse cache. The bytes pin the set.
-    expect(resources['content.read'], 'resources phase reads only the SKILL.md files discovery reaches').toBe(discovered.length);
-    expect(resources['content.hashed'], 'resources phase keys only those').toBe(discovered.length);
-    expect(resources['content.hashedBytes'], 'resources phase: exactly the discovered SKILL.md bytes').toBe(bytesOf(corpus, discovered));
-    expect(parseLookups(resources), 'resources phase parse lookups: discovery\'s only').toBe(discovered.length);
-    expect(resources['parse.cache.hit'], 'each discovery parse is a cache hit').toBe(discovered.length);
+    expect(resources['content.read'], 'resources phase reads only the SKILL.md files discovery reaches').toBe(skillMd.resources.length);
+    expect(resources['content.hashed'], 'resources phase keys only those').toBe(skillMd.resources.length);
+    expect(resources['content.hashedBytes'], 'resources phase: exactly the discovered SKILL.md bytes').toBe(bytesOf(corpus, skillMd.resources));
+    expect(parseLookups(resources), 'resources phase parse lookups: discovery\'s only').toBe(skillMd.resources.length);
+    expect(resources['parse.cache.hit'], 'each discovery parse is a cache hit').toBe(skillMd.resources.length);
     // A hydrated member costs a readability probe and the registry's one stat:
-    // two per view document; the over-cap file is refused from the store unprobed.
-    expect(resources['fs.stat'], 'resources phase: a probe and a stat per hydrated view document').toBe(
-      2 * resourcesViewDocuments(corpus).length,
+    // two per view document. The over-cap file is refused from the store once the
+    // same probe finds it still readable: one more.
+    expect(resources['fs.stat'], 'resources phase: a probe and a stat per hydrated view document, and the over-cap file\'s probe').toBe(
+      2 * resourcesViewDocuments(corpus).length + 1,
     );
     expect(resources['registry.admitted'], 'resources phase admits the view, from the store').toBe(resourcesViewDocuments(corpus).length);
 
@@ -527,21 +553,30 @@ describe.each([
     expect(skills['registry.admitted'], 'the skills phase admits only what no earlier phase admitted').toBe(
       skillsOnlyDocuments(corpus).length,
     );
-    // The skills phase reads no SKILL.md (discovery read each once) and exactly
-    // the markdown files a skill links: the packager scans each bundled file's
-    // text, and a skill outside the project has no store to admit its own from.
-    expect(skills['content.read'], 'skills phase reads exactly the bundled markdown, once').toBe(bundled.length);
-    expect(skills['content.hashedBytes'], 'skills phase: exactly the bundled markdown bytes').toBe(bytesOf(corpus, bundled));
+    // The skills phase reads exactly the SKILL.md files no earlier phase read
+    // (none when the resources phase's discovery read them) plus the markdown
+    // files a skill links: the packager scans each bundled file's text, and the
+    // store-hydrated resources view read none of them. Each once.
+    expect(
+      skills['content.read'],
+      `skills phase content.read = ${skillMd.skills.length} SKILL.md (not read by an earlier phase) + ${bundled.length} bundled markdown`,
+    ).toBe(skillMd.skills.length + bundled.length);
+    expect(skills['content.hashed'], 'skills phase keys exactly what it reads').toBe(skills['content.read']);
+    expect(skills['content.hashedBytes'], 'skills phase: exactly those SKILL.md and bundled markdown bytes').toBe(
+      bytesOf(corpus, [...skillMd.skills, ...bundled]),
+    );
 
     // At the fs boundary, the whole process. The probe counts a read-only open
     // as a content read, so each member admitted from the store shows once for
-    // its readability probe (an open and a close, no bytes read); on top of that,
-    // discovery's SKILL.md files and the bundled markdown are each read once.
+    // its readability probe (an open and a close, no bytes read), as does the
+    // over-cap file before its stored refusal; on top of that, discovery's
+    // SKILL.md files and the bundled markdown are each read once.
     const expected = new Map<string, number>();
     const add = (path: string): void => {
       expected.set(path, (expected.get(path) ?? 0) + 1);
     };
     for (const path of storeAdmittedDocuments(corpus)) add(probed(cwd, path));
+    add(probed(cwd, OVER_CAP));
     for (const path of [...discovered, ...bundled]) add(probedInRepo(cwd, corpus, path));
     expect(
       sortedEntries(new Map([...warm.parentReads].filter(([path]) => !isConfig(path)))),

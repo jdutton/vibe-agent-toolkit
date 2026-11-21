@@ -93,6 +93,23 @@ export function writeFileTree(dir: string, files: Readonly<Record<string, string
   }
 }
 
+/** A project config that collects every markdown file and every `skills/<name>/SKILL.md`. */
+export const MARKDOWN_AND_SKILLS_CONFIG =
+  'resources:\n  include:\n    - "**/*.md"\nskills:\n  include:\n    - "skills/**/SKILL.md"\n';
+
+/**
+ * The smallest tree a store-refusal suite needs: a README and one skill that both link one doc,
+ * under {@link MARKDOWN_AND_SKILLS_CONFIG}, so every phase enumerates.
+ */
+export function oneDocOneSkillTree(): Readonly<Record<string, string>> {
+  return {
+    'vibe-agent-toolkit.config.yaml': MARKDOWN_AND_SKILLS_CONFIG,
+    'README.md': '# Corpus\n\nSee [the guide](./docs/guide.md).\n',
+    'docs/guide.md': '# Guide\n',
+    'skills/one/SKILL.md': `${createSkillMarkdown('one')}\nSee [the guide](../../docs/guide.md).\n`,
+  };
+}
+
 /**
  * Clean up a temporary directory.
  *

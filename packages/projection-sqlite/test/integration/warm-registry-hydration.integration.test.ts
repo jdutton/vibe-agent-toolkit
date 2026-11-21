@@ -10,7 +10,7 @@
  * `resources`' `run-population-hydration.integration.test.ts`.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 
 import { openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import {
@@ -19,9 +19,12 @@ import {
   ResourceRegistry,
   withRunPopulation,
 } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal, normalizedTmpdir, readWorkCounters, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { plantFiles, type WorkSpent, workSpentNow, workSpentSince } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+import { crawlWholeTree, teardownTreeSuite } from '../fixtures.js';
 
 /** One file per kind of fact a resource carries: frontmatter values JSON cannot hold, links, anchors, a parse error. */
 const TREE: Readonly<Record<string, string>> = {
@@ -38,7 +41,7 @@ interface RunOutput {
   readonly notAdmitted: unknown;
   readonly issues: unknown;
   readonly stored: string;
-  readonly work: Readonly<Record<'reads' | 'hashed' | 'parseLookups' | 'admitted', number>>;
+  readonly work: WorkSpent;
 }
 
 let root: string;
@@ -46,15 +49,6 @@ let storeDirectory: string;
 let cold: RunOutput;
 let warm: RunOutput;
 let off: RunOutput;
-
-/** @returns The counters this suite reads, every parse lookup summed */
-function workNow(): RunOutput['work'] {
-  const counters = readWorkCounters();
-  const parseLookups = Object.entries(counters)
-    .filter(([name]) => name.startsWith('parse.'))
-    .reduce((sum, [, value]) => sum + value, 0);
-  return { reads: counters['content.read'], hashed: counters['content.hashed'], parseLookups, admitted: counters['registry.admitted'] };
-}
 
 /**
  * Crawl and validate the tree in one run, on a store connection of its own or none.
@@ -73,28 +67,16 @@ async function runOnce(withStore: boolean): Promise<RunOutput> {
         collectionsFor: () => Promise.resolve(undefined),
       },
       async (population) => {
-        const before = workNow();
+        const before = workSpentNow();
         const registry = ResourceRegistry.forRun(population, { baseDir: root });
-        const crawl = await registry.crawl({
-          baseDir: root,
-          include: ['**/*.md', '**/*.html', '**/*.json'],
-          outputs: [],
-          unreadable: 'refuse',
-          ignoredRefusals: 'record',
-          populationSource: population.source,
-        });
-        const after = workNow();
+        const crawl = await crawlWholeTree(registry, root, population.source);
+        const after = workSpentNow();
         return {
           resources: registry.getAllResources(),
           notAdmitted: registry.getNotAdmitted(),
           issues: (await registry.validate()).issues,
           stored: crawl.population.outcome.stored,
-          work: {
-            reads: after.reads - before.reads,
-            hashed: after.hashed - before.hashed,
-            parseLookups: after.parseLookups - before.parseLookups,
-            admitted: after.admitted - before.admitted,
-          },
+          work: workSpentSince(after, before),
         };
       },
     );
@@ -112,21 +94,13 @@ beforeAll(async () => {
   // admitted from the store, and git says which those are (untracked and not ignored, here).
   runGitOrThrow(['init', '-q'], { cwd: root });
   storeDirectory = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-warm-registry-store-'));
-  for (const [relative, content] of Object.entries(TREE)) {
-    const path = safePath.join(root, relative);
-    mkdirSyncReal(safePath.join(path, '..'), { recursive: true });
-    writeFileSync(path, content);
-  }
+  plantFiles(root, TREE);
   cold = await runOnce(true);
   warm = await runOnce(true);
   off = await runOnce(false);
 });
 
-afterAll(() => {
-  vi.unstubAllEnvs();
-  rmSync(root, { recursive: true, force: true });
-  rmSync(storeDirectory, { recursive: true, force: true });
-});
+afterAll(() => teardownTreeSuite(root, storeDirectory));
 
 describe('warm registry hydration through the SQLite store', () => {
   it('runs cold, then warm from the store, then with no store', () => {

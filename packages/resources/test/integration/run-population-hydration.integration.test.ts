@@ -20,14 +20,14 @@
 
 import { chmod, mkdir, open, rm, writeFile } from 'node:fs/promises';
 
-import { readWorkCounters, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { GitTracker, gitTreeKey, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { type WorkSpent, workSpentNow, workSpentSince } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ParseCache } from '../../src/parse-cache.js';
 import { ParseDispatcher, type ParsePoolPolicy } from '../../src/parse-dispatcher.js';
 import { isParseLimitError, isParserThrewError, reviveParserThrow } from '../../src/parse-limits.js';
-import { createParsePool, type ParsePool, type ParsePoolOptions } from '../../src/parse-pool.js';
 import { POPULATION_PARSE_LIMITS, RunContentCache } from '../../src/projection/content-cache.js';
 import type { PopulationCache } from '../../src/projection/merge.js';
 import { RunPopulation } from '../../src/projection/run-population.js';
@@ -36,6 +36,7 @@ import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { ProjectConfig } from '../../src/schemas/project-config.js';
 import type { ResourceMetadata } from '../../src/schemas/resource-metadata.js';
 import { FakeFactStore } from '../fake-fact-store.js';
+import { failingParsePolicy } from '../helpers/failing-parse-policy.js';
 import { createCommittedRepo } from '../test-helpers.js';
 
 /** A document the injected parse pool fails, by this marker in its text. */
@@ -78,21 +79,21 @@ async function plant(relative: string, content: string): Promise<void> {
   await writeFile(path, content);
 }
 
-/** The work counters a warm admission must leave untouched, and the ones it moves. */
-interface WorkSpent {
-  readonly reads: number;
-  readonly hashed: number;
-  readonly parseLookups: number;
-  readonly admitted: number;
-}
-
-/** @returns The counters this suite reads, summed over every parse lookup */
-function workNow(): WorkSpent {
-  const counters = readWorkCounters();
-  const parseLookups = Object.entries(counters)
-    .filter(([name]) => name.startsWith('parse.'))
-    .reduce((sum, [, value]) => sum + value, 0);
-  return { reads: counters['content.read'], hashed: counters['content.hashed'], parseLookups, admitted: counters['registry.admitted'] };
+/**
+ * Plant a document one byte past the population's input cap. Sparse, so it costs no disk.
+ *
+ * @param relative - A root-relative path
+ * @returns Its absolute path
+ */
+async function plantPastCap(relative: string): Promise<string> {
+  const path = safePath.join(root, relative);
+  const handle = await open(path, 'w');
+  try {
+    await handle.truncate(POPULATION_PARSE_LIMITS.inputBytes + 1);
+  } finally {
+    await handle.close();
+  }
+  return path;
 }
 
 /** What one run's registry produced: everything validate reports from. */
@@ -107,24 +108,7 @@ interface RunOutput {
 /** A pool that throws a parser's own error for a document carrying {@link PARSE_FAILS}, and parses the rest for real. */
 function failingPolicy(): ParsePoolPolicy {
   const failure = reviveParserThrow({ name: 'TypeError', message: 'bad input', code: 'ERR_INVALID_ARG_TYPE' }, true);
-  return {
-    createPool: (options?: ParsePoolOptions): ParsePool => {
-      const real = createParsePool(options);
-      return {
-        size: real.size,
-        parse: async (kind, content, byteLength) => {
-          if (content.includes(PARSE_FAILS)) throw failure;
-          return real.parse(kind, content, byteLength);
-        },
-        parseIntoCache: async (kind, content, byteLength, cacheKey) => {
-          if (content.includes(PARSE_FAILS)) throw failure;
-          return real.parseIntoCache(kind, content, byteLength, cacheKey);
-        },
-        harnessFacts: async (harness, content, byteLength) => real.harnessFacts(harness, content, byteLength),
-        shutdown: async () => real.shutdown(),
-      };
-    },
-  };
+  return failingParsePolicy((content) => (content.includes(PARSE_FAILS) ? failure : undefined));
 }
 
 /** What a case varies about one run beyond whether it has the store. */
@@ -188,18 +172,13 @@ async function runOnce(withStore: boolean, variation: RunVariation = {}): Promis
       ignoredRefusals: 'record',
       populationSource: population.source,
     });
-    const after = workNow();
+    const after = workSpentNow();
     const issues = (await registry.validate()).issues;
     return {
       resources: registry.getAllResources(),
       notAdmitted: registry.getNotAdmitted(),
       issues,
-      work: {
-        reads: after.reads - before.reads,
-        hashed: after.hashed - before.hashed,
-        parseLookups: after.parseLookups - before.parseLookups,
-        admitted: after.admitted - before.admitted,
-      },
+      work: workSpentSince(after, before),
       outcome: crawl.population.outcome.stored,
     };
   });
@@ -227,7 +206,7 @@ async function withRun<T>(withStore: boolean, variation: RunVariation, work: (po
     collectionsFor: () => Promise.resolve(undefined),
   }, { content, dispatcher });
   try {
-    return await work(population, workNow());
+    return await work(population, workSpentNow());
   } finally {
     await dispatcher.shutdown();
   }
@@ -267,12 +246,17 @@ function findingsOf(run: RunOutput): unknown {
   return { resources: run.resources, notAdmitted: run.notAdmitted, issues: run.issues };
 }
 
+/** Warm's findings are cold's and store-off's. */
+function expectWarmIsCold(runs: { cold: RunOutput; warm: RunOutput; off: RunOutput }): void {
+  expect(findingsOf(runs.warm)).toEqual(findingsOf(runs.cold));
+  expect(findingsOf(runs.warm)).toEqual(findingsOf(runs.off));
+}
+
 describe('a warm registry is built from the store and is the cold registry', () => {
   it('admits every member from the blob tier: no read, hash or parse lookup', async () => {
     const { cold, warm, off } = await threeWays();
     expect(warm.resources).toHaveLength(Object.keys(TREE).length);
-    expect(findingsOf(warm)).toEqual(findingsOf(cold));
-    expect(findingsOf(warm)).toEqual(findingsOf(off));
+    expectWarmIsCold({ cold, warm, off });
     expect(JSON.stringify(findingsOf(warm))).toBe(JSON.stringify(findingsOf(cold)));
     expect(warm.work).toEqual({ reads: 0, hashed: 0, parseLookups: 0, admitted: Object.keys(TREE).length });
     expect(cold.work.admitted, 'counted once per admitted file whichever way').toBe(warm.work.admitted);
@@ -302,25 +286,16 @@ describe('a stored refusal is the cold refusal', () => {
     const { cold, warm, off } = await threeWays();
     expect(cold.notAdmitted.unreadable.map((entry) => entry.filePath)).toEqual([safePath.join(root, 'docs/broken.md')]);
     expect(cold.notAdmitted.unreadable[0]?.code).toBe('ERR_INVALID_ARG_TYPE');
-    expect(findingsOf(warm)).toEqual(findingsOf(cold));
-    expect(findingsOf(warm)).toEqual(findingsOf(off));
+    expectWarmIsCold({ cold, warm, off });
     expect(warm.work).toMatchObject({ reads: 0, hashed: 0, parseLookups: 0 });
   });
 
   it('a document past the input cap: the same parse-limit refusal, with no read', async () => {
-    const big = safePath.join(root, 'docs/big.md');
-    const handle = await open(big, 'w');
-    try {
-      // Sparse: one byte past the cap costs no disk.
-      await handle.truncate(POPULATION_PARSE_LIMITS.inputBytes + 1);
-    } finally {
-      await handle.close();
-    }
+    const big = await plantPastCap('docs/big.md');
     const { cold, warm, off } = await threeWays();
     expect(cold.notAdmitted.parseRefused.map((entry) => [entry.filePath, entry.code]))
       .toEqual([[big, 'RESOURCE_PARSE_LIMIT_EXCEEDED']]);
-    expect(findingsOf(warm)).toEqual(findingsOf(cold));
-    expect(findingsOf(warm)).toEqual(findingsOf(off));
+    expectWarmIsCold({ cold, warm, off });
     expect(warm.work).toMatchObject({ reads: 0, hashed: 0, parseLookups: 0 });
   });
 });
@@ -341,6 +316,21 @@ describe.skipIf(CANNOT_REFUSE_READ)('a member that cannot be read now', () => {
       expect(warm.resources).toHaveLength(cold.resources.length - 1);
     } finally {
       await chmod(guide, 0o644);
+    }
+  });
+
+  it('past the input cap too: the cold read error, not the stored size refusal', async () => {
+    const big = await plantPastCap('docs/big.md');
+    await runOnce(true);
+    await chmod(big, 0o000);
+    try {
+      const warm = await runOnce(true);
+      const off = await runOnce(false);
+      expect(warm.outcome).toBe('hit');
+      expect(off.notAdmitted.unreadable.map((entry) => [entry.filePath, entry.code])).toEqual([[big, 'EACCES']]);
+      expect(findingsOf(warm)).toEqual(findingsOf(off));
+    } finally {
+      await chmod(big, 0o644);
     }
   });
 });
@@ -413,8 +403,7 @@ describe('a warm view routes, adjudicates and refuses as the cold one', () => {
     const { cold, warm, off } = await threeWays({ config });
     const data = warm.resources.find((resource) => resource.filePath.endsWith('data.json'));
     expect(data?.links.map((link) => link.href)).toEqual(['./guide.md']);
-    expect(findingsOf(warm)).toEqual(findingsOf(cold));
-    expect(findingsOf(warm)).toEqual(findingsOf(off));
+    expectWarmIsCold({ cold, warm, off });
     expect(warm.work.reads, 'the retyped file alone is read').toBe(1);
   });
 
@@ -422,16 +411,14 @@ describe('a warm view routes, adjudicates and refuses as the cold one', () => {
     await plant('docs/twin.md', '---\nid: home\n---\n# Twin\n');
     const { cold, warm, off } = await threeWays({ idField: 'id' });
     expect(JSON.stringify(off.issues)).toContain('DUPLICATE_RESOURCE_ID');
-    expect(findingsOf(warm)).toEqual(findingsOf(cold));
-    expect(findingsOf(warm)).toEqual(findingsOf(off));
+    expectWarmIsCold({ cold, warm, off });
     expect(warm.work.reads).toBe(0);
   });
 
   it('a binary .md: the same admission, with no read', async () => {
     await writeFile(safePath.join(root, 'docs/blob.md'), Buffer.from([0x23, 0x20, 0x00, 0x01, 0x02, 0xff, 0x00, 0x0a]));
     const { cold, warm, off } = await threeWays();
-    expect(findingsOf(warm)).toEqual(findingsOf(cold));
-    expect(findingsOf(warm)).toEqual(findingsOf(off));
+    expectWarmIsCold({ cold, warm, off });
     expect(warm.work.reads).toBe(0);
   });
 

@@ -218,10 +218,12 @@ export class RunPopulation implements PopulationRun {
     if (stored === undefined) return compute();
     const route = storedRoute(stored.realization, parserKind);
     if (route.kind === 'compute') return compute();
-    // Refused by its size before any read, as the cold read refuses it: nothing to probe.
-    if (route.kind === 'not-admitted') return { kind: 'not-admitted', entry: route.entry };
+    // A file that cannot be read now is the cold lane's: its read raises the cold error, an
+    // oversize file's included (the cold lane opens it before it refuses it by its size).
+    if (route.kind === 'not-admitted') {
+      return (await readRefusal(absolutePath)) === null ? { kind: 'not-admitted', entry: route.entry } : compute();
+    }
     const read = readRoute((await stored.facts())(route.contentKey));
-    // A file that cannot be read now is the cold lane's: its read raises the cold error.
     if (read.kind === 'compute' || (await readRefusal(absolutePath)) !== null) return compute();
     if (read.admitted.kind === 'facts') countWork('registry.admitted', 1);
     return read.admitted;

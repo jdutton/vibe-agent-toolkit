@@ -1091,6 +1091,9 @@ export {
   type BlobPopulationResult,
 } from './projection/blob-population.js';
 
+// A warm run's blob tier read failing is the store's refusal, by this code (the CLI's refusal table).
+export { PROJECTION_STORE_READ_FAILED_CODE } from './projection/stored-admission.js';
+
 // Emitting the projection as a document — "no engine" (zones §15 step 6). Rows
 // out; no index, no join, no filter, no query. Two properties are load-bearing:
 // `roots.path` is the only absolute path in the model and is replaced with

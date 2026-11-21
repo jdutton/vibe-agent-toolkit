@@ -4,7 +4,7 @@
  */
 
 import { BLOB_NOT_TEXT, BLOB_PARSE_LIMIT_EXCEEDED, BLOB_PARSE_WORKER_DIED, EXTENT_DIRECTORY_UNLISTABLE } from '@vibe-agent-toolkit/resources';
-import { CRAWL_STORE_READ_ID } from '@vibe-agent-toolkit/utils';
+import { CRAWL_STORE_READ_ID, WORK_COUNTER_NAMES, type WorkCounter, type WorkCounterDump } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { groupOf, UNGROUPED } from './helpers/absence-causes.js';
@@ -16,13 +16,17 @@ import {
   expectSeed,
   GATE_SLICES,
   HOLE_MOVED_COLUMNS,
+  hydratedSpend,
   normalizeDocument,
   PER_RUN_FIELDS,
   RELATION_NAMES,
+  resourcesPhaseSpend,
   runEveryStep,
   VERB_NAMES,
   VERBS,
+  type ArmDirs,
   type DifferentialResult,
+  type HydrationFacts,
   type I0Seed,
 } from './helpers/cache-differential.js';
 
@@ -191,9 +195,13 @@ function holeDump(blob: string, contentKey: string): Record<string, unknown> {
   return { status: 'success', data: { population: 'store', rows } };
 }
 
+/** A recorded run's cell, for a run no test reads it of. */
+const NO_DIRS: ArmDirs = { root: '', tmp: '', home: '', store: '', timing: '', parse: '' };
+const NO_CELL = { work: [], cell: { dirs: NO_DIRS, corpus: '' } } as const;
+
 /** A query run the store served. */
 function servedQuery(label: keyof DifferentialResult['runs'], document: Record<string, unknown>) {
-  return { label, verb: 'query', status: 0, stdout: '', stderr: '', document, origins: VERBS.query.originsOf(document), charged: [CRAWL_STORE_READ_ID] } as const;
+  return { label, verb: 'query', status: 0, stdout: '', stderr: '', document, origins: VERBS.query.originsOf(document), charged: [CRAWL_STORE_READ_ID], ...NO_CELL } as const;
 }
 
 /** The reference reads the new bytes; the warm arm was primed on the old ones, then measured. */
@@ -232,7 +240,7 @@ describe('a documented hole', () => {
 /** A store-off-only result: the reference arm's dump, and one validate report. */
 function storeOffResult(dump: Record<string, unknown>, report: Record<string, unknown>): DifferentialResult {
   const run = (verb: 'query' | 'validate', document: Record<string, unknown>) =>
-    ({ label: 'storeOff:measured', verb, status: 0, stdout: '', stderr: '', document, origins: VERBS[verb].originsOf(document), charged: [] }) as const;
+    ({ label: 'storeOff:measured', verb, status: 0, stdout: '', stderr: '', document, origins: VERBS[verb].originsOf(document), charged: [], ...NO_CELL }) as const;
   const measured = { query: run('query', dump), validate: run('validate', report) };
   return {
     arms: ['storeOff'],
@@ -295,5 +303,53 @@ describe('the seed suite\'s cleanup', () => {
     const ran: string[] = [];
     runEveryStep([step(ran, 'a'), step(ran, 'b')]);
     expect(ran).toEqual(['a', 'b']);
+  });
+});
+
+/** A `vat validate` process's dump whose resources phase counted `counts`, every other counter 0. */
+function validateDump(counts: Partial<Record<WorkCounter, number>>): WorkCounterDump {
+  const phase = Object.fromEntries(WORK_COUNTER_NAMES.map((name) => [name, counts[name] ?? 0])) as Record<WorkCounter, number>;
+  return { pid: 1, role: 'cli', counters: phase, phases: { resources: phase } };
+}
+
+describe('the hydration tell', () => {
+  // Ten view members, one refused by size; three evicted, two of them twins of one key; no skill.
+  const facts: HydrationFacts = {
+    members: 10,
+    discoveredSkills: [],
+    evicted: [
+      { path: 'docs/a.md', bytes: 5, contentKey: 'k1' },
+      { path: 'docs/twin-a.md', bytes: 7, contentKey: 'k2' },
+      { path: 'docs/twin-b.md', bytes: 7, contentKey: 'k2' },
+    ],
+    refusedFromStore: 1,
+  };
+
+  it('holds a phase that admitted every held member from the store and computed only the evicted keys', () => {
+    // Seven store admissions and the refusal probed; ten registry stats; three reads; two parses.
+    const hydrated = validateDump({ 'content.read': 3, 'content.hashed': 3, 'content.hashedBytes': 19, 'parse.cache.hit': 2, 'registry.admitted': 10, 'fs.stat': 18 });
+    expect(resourcesPhaseSpend([hydrated])).toEqual(hydratedSpend(facts));
+  });
+
+  it('reds on a phase that fell back to the cold lane for every member, though it admitted every one', () => {
+    const cold = validateDump({ 'content.read': 10, 'content.hashed': 10, 'content.hashedBytes': 60, 'parse.cache.hit': 9, 'registry.admitted': 10, 'fs.stat': 10 });
+    expect(resourcesPhaseSpend([cold])).not.toEqual(hydratedSpend(facts));
+  });
+
+  it('reds on a phase that read one held member besides the evicted ones', () => {
+    const extra = validateDump({ 'content.read': 4, 'content.hashed': 4, 'content.hashedBytes': 25, 'parse.cache.hit': 3, 'registry.admitted': 10, 'fs.stat': 17 });
+    expect(resourcesPhaseSpend([extra])).not.toEqual(hydratedSpend(facts));
+  });
+
+  it('counts the discovered SKILL.md files as the residual: read, keyed and looked up once each', () => {
+    const skill = { path: 'skills/one/SKILL.md', bytes: 11 };
+    expect(hydratedSpend({ members: 2, discoveredSkills: [skill], evicted: [], refusedFromStore: 0 }))
+      .toEqual({ read: 1, hashedBytes: 11, parseLookups: 1, admitted: 2, probed: 2 });
+  });
+
+  it('reads only the one dump that carries the resources phase', () => {
+    const child: WorkCounterDump = { ...validateDump({}), phases: {} };
+    expect(() => resourcesPhaseSpend([child])).toThrow(/found 0/u);
+    expect(() => resourcesPhaseSpend([validateDump({}), validateDump({})])).toThrow(/found 2/u);
   });
 });

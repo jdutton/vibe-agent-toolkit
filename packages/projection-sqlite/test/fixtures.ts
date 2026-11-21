@@ -7,7 +7,18 @@
  * would pass against a broken codec.
  */
 
-import { PROJECTION_TABLES, type BlobScopedRows, type ExtentScopedRows, type Projection } from '@vibe-agent-toolkit/resources';
+import { rmSync } from 'node:fs';
+
+import {
+  PROJECTION_TABLES,
+  type BlobScopedRows,
+  type CrawlOptions,
+  type ExtentScopedRows,
+  type Projection,
+  type RegistryCrawl,
+  type ResourceRegistry,
+} from '@vibe-agent-toolkit/resources';
+import { vi } from 'vitest';
 
 import {
   hydrateRunDatabase,
@@ -324,4 +335,33 @@ function hydrateTables(projection: Projection, tables: readonly (keyof typeof PR
   const rootId = projection.roots[0]?.id ?? 'root-1';
   const relations = new Map(tables.map((key) => [PROJECTION_TABLES[key].name, projection[key]] as const));
   return hydrateRunDatabase({ rootId, relations });
+}
+
+/**
+ * Crawl `root` for every markdown, HTML and JSON file, refusing the unreadable, through a run's population.
+ *
+ * @param registry - The registry to crawl into
+ * @param root - The tree's root
+ * @param populationSource - The run's population source
+ * @returns The crawl
+ */
+export function crawlWholeTree(registry: ResourceRegistry, root: string, populationSource: CrawlOptions['populationSource']): Promise<RegistryCrawl> {
+  return registry.crawl({
+    baseDir: root,
+    include: ['**/*.md', '**/*.html', '**/*.json'],
+    outputs: [],
+    unreadable: 'refuse',
+    ignoredRefusals: 'record',
+    populationSource,
+  });
+}
+
+/**
+ * The `afterAll` of a suite that stubbed its environment and planted a tree and a store directory.
+ *
+ * @param directories - The directories to remove
+ */
+export function teardownTreeSuite(...directories: readonly string[]): void {
+  vi.unstubAllEnvs();
+  for (const directory of directories) rmSync(directory, { recursive: true, force: true });
 }

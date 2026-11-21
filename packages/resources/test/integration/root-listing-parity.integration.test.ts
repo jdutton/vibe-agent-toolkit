@@ -10,8 +10,8 @@ import { chmodSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
-import { GIT_NO_ANSWER_CODE, GitTracker, gitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
-import { CANNOT_DENY_READS, createSymlink, symlinkCapability } from '@vibe-agent-toolkit/utils/testing';
+import { GIT_NO_ANSWER_CODE, GitTracker, gitTreeKey, gitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
+import { CANNOT_DENY_READS, createSymlink, plantFiles, symlinkCapability } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -39,11 +39,7 @@ afterEach(() => {
 function repository(files: Readonly<Record<string, string>>): string {
   const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-root-listing-parity-'));
   roots.push(root);
-  for (const [relative, content] of Object.entries(files)) {
-    const path = safePath.join(root, relative);
-    mkdirSyncReal(safePath.join(path, '..'), { recursive: true });
-    writeFileSync(path, content);
-  }
+  plantFiles(root, files);
   git(root, 'init', '-q');
   git(root, 'add', '-A');
   git(root, 'commit', '-q', '-m', 'init');
@@ -290,7 +286,8 @@ describe('a listing git did not answer', () => {
   it('refuses the stored population rather than reading it as nothing ignored', async () => {
     const home = repository({ 'a.md': '# A\n' });
     const thrown = await withGitSnapshotCache(async () => {
-      expect(gitTreeSnapshot({ cwd: home }).ok, 'premise: the snapshot is in the bracket').toBe(true);
+      // The key, as a store-on run takes it: the snapshot and its index flags are both read in the bracket.
+      expect(gitTreeKey({ cwd: home }).ok, 'premise: the snapshot and its flags are in the bracket').toBe(true);
       renameSync(safePath.join(home, '.git'), safePath.join(home, '.git-away'));
       try {
         await new GitCrawlSource(home, []).enumerate();

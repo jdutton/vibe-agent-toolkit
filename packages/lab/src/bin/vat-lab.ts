@@ -76,14 +76,13 @@ import { renderWorkComparison, renderWorkReport } from '../facets/work/render.js
 import { WORK_MIN_RUNS, type WorkCommandStats } from '../facets/work/types.js';
 import {
   abExitCondition,
+  isNotAResultVerdict,
   CHANGED_VERDICT,
-  CONTENT_INCOMPARABLE_VERDICT,
   type ComparisonLike,
   type FacetEstimate,
   type FacetFunctions,
   renderAb,
   runAb,
-  UNMEASURABLE_VERDICT,
 } from '../harness/ab.js';
 import {
   ARM_REFUSED_CODE,
@@ -1015,11 +1014,7 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
         if (comparison.commands.some((command) => command.verdict.kind === CHANGED_VERDICT)) {
           process.exitCode = ExitCode.FINDINGS;
         } else if (
-          comparison.commands.some(
-            (command) =>
-              command.verdict.kind === UNMEASURABLE_VERDICT ||
-              command.verdict.kind === CONTENT_INCOMPARABLE_VERDICT,
-          )
+          comparison.commands.some((command) => isNotAResultVerdict(command.verdict.kind))
         ) {
           // No real change, but not a clean run either — at least one command
           // produced no usable measurement, or its content could not be compared. Exiting 0 here would be

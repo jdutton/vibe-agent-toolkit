@@ -289,9 +289,9 @@ function indexHidesCause(failure: Extract<GitTreeKeyFailure, { kind: 'index-hide
     code: GIT_SNAPSHOT_INDEX_HIDES_CODE,
     reason: `git's index in ${shownName(failure.repositoryRoot)} flags ${failure.hiddenCount} file(s) assume-unchanged or`
       + ` skip-worktree: ${named}${more}. git does not read those files, so a snapshot of this tree holds their`
-      + ' staged bytes whatever is on disk and cannot key it. A sparse checkout flags every file outside its'
-      + ' definition this way. Clear the flags (git update-index --no-assume-unchanged / --no-skip-worktree -- <path>)'
-      + ' or disable the sparse checkout (git sparse-checkout disable).',
+      + ' staged bytes whatever is on disk and cannot key it. (A skip-worktree file absent from disk, as a sparse'
+      + ' checkout leaves one, hides nothing and is not counted.) Clear the flags'
+      + ' (git update-index --no-assume-unchanged / --no-skip-worktree -- <path>) and run again.',
   };
 }
 
@@ -303,7 +303,7 @@ function indexHidesCause(failure: Extract<GitTreeKeyFailure, { kind: 'index-hide
  * @param consequence - One or more sentences: why the caller refuses rather than answers
  * @returns The coded error
  */
-export function gitSnapshotError(failure: GitSnapshotFailure, consequence: string): VatError {
+export function gitSnapshotError(failure: GitSnapshotFailure | GitTreeKeyFailure, consequence: string): VatError {
   const { code, reason } = gitSnapshotFailureOf(failure);
   return new VatError(code, `${reason} ${consequence}`);
 }
