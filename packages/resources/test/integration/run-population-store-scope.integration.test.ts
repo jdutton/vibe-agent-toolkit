@@ -24,7 +24,7 @@ import {
   type FactStore,
 } from '../../src/index.js';
 import type { PopulationCache } from '../../src/projection/merge.js';
-import { type RunPopulation, withRunPopulation } from '../../src/projection/run-population.js';
+import { IGNORE_HOME_SETTLEMENT, type RunPopulation, withRunPopulation } from '../../src/projection/run-population.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import { git, nestedRepository } from '../helpers/git-fixture.js';
 
@@ -87,6 +87,7 @@ function inRun<T>(home: string, store: FactStore | undefined, work: (population:
       gitTracker: new GitTracker(home),
       cacheOf: () => Promise.resolve(cache),
       collectionsFor: () => Promise.resolve(undefined),
+      onHomeSettled: IGNORE_HOME_SETTLEMENT,
     },
     work,
   );

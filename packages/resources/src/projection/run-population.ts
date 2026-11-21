@@ -63,7 +63,7 @@ import {
   type ResourceEnumeration,
   type ResourcePopulationSource,
 } from './resource-population.js';
-import { hydratesUnder, readRoute, respelledContent, storedRoute, type StoredMember } from './stored-admission.js';
+import { hydratesUnder, respelledContent, storedAnswer, type StoredMember } from './stored-admission.js';
 
 /**
  * One file's admission facts: what a registry admitting it reads, keys and
@@ -124,6 +124,17 @@ export async function withPopulationRun<T>(work: (run: PopulationRun) => Promise
   }
 }
 
+/**
+ * How the home population's memo entry settled: the enumeration it resolved to,
+ * or the error it rejected with. The rejection stays memoized for the callers.
+ */
+export type HomeSettlement =
+  | { readonly ok: true; readonly enumeration: ResourceEnumeration }
+  | { readonly ok: false; readonly error: unknown };
+
+/** The `onHomeSettled` of a verb that does not overlap work with the home population. */
+export const IGNORE_HOME_SETTLEMENT: (key: string, settlement: HomeSettlement) => void = () => undefined;
+
 /** What a run's population is built over: its home root and that root's oracles. */
 export interface RunPopulationOptions {
   /** The run's root: the project root a verb resolved. */
@@ -147,6 +158,14 @@ export interface RunPopulationOptions {
    * so the declaration and the enumeration are always of one tree.
    */
   readonly collectionsFor: (root: string) => Promise<Readonly<Record<string, CollectionConfig>> | undefined>;
+  /**
+   * Fired once, with {@link RunPopulation.homeKey}, when the home population's
+   * memo entry settles (resolved or rejected). It runs on a side branch, so it
+   * never changes the enumeration's outcome; a throw is a programming error and
+   * surfaces as an unhandled rejection. A verb that does not overlap passes
+   * {@link IGNORE_HOME_SETTLEMENT}.
+   */
+  readonly onHomeSettled: (key: string, settlement: HomeSettlement) => void;
 }
 
 /** One VAT process run's shared reads, parses, admissions and enumerations. */
@@ -175,6 +194,17 @@ export class RunPopulation implements PopulationRun {
   readonly #options: RunPopulationOptions;
 
   /**
+   * The memo key of the home population for the trees a verb writes: the one
+   * spelling of it, which `onHomeSettled` is called with.
+   *
+   * @param outputs - The trees the calling verb writes
+   * @returns The home memo key
+   */
+  static homeKey(outputs: readonly string[]): string {
+    return `${JSON.stringify(outputs)} home`;
+  }
+
+  /**
    * @param options - The home root and its oracles
    * @param run - The run's content cache and dispatcher, which {@link withRunPopulation} owns
    */
@@ -196,7 +226,7 @@ export class RunPopulation implements PopulationRun {
    * way in every view.
    *
    * On a store hit a member is admitted from what the store holds about it when
-   * {@link storedRoute} and {@link readRoute} say so (built from the blob tier by
+   * {@link storedAnswer} says so (built from the blob tier by
    * the one fact reader, no read, key or parse), and by `compute` otherwise —
    * see `stored-admission.ts`. Counted `registry.admitted` once whichever way it
    * was admitted; a stated refusal is not an admission.
@@ -216,17 +246,12 @@ export class RunPopulation implements PopulationRun {
   async #admitted(absolutePath: string, parserKind: string, compute: () => Promise<AdmittedFacts>): Promise<AdmittedFacts> {
     const stored = this.#stored.get(absolutePath);
     if (stored === undefined) return compute();
-    const route = storedRoute(stored.realization, parserKind);
-    if (route.kind === 'compute') return compute();
+    const answer = await storedAnswer(stored.realization, parserKind, stored.facts);
     // A file that cannot be read now is the cold lane's: its read raises the cold error, an
     // oversize file's included (the cold lane opens it before it refuses it by its size).
-    if (route.kind === 'not-admitted') {
-      return (await readRefusal(absolutePath)) === null ? { kind: 'not-admitted', entry: route.entry } : compute();
-    }
-    const read = readRoute((await stored.facts())(route.contentKey));
-    if (read.kind === 'compute' || (await readRefusal(absolutePath)) !== null) return compute();
-    if (read.admitted.kind === 'facts') countWork('registry.admitted', 1);
-    return read.admitted;
+    if (answer.kind === 'compute' || (await readRefusal(absolutePath)) !== null) return compute();
+    if (answer.admitted.kind === 'facts') countWork('registry.admitted', 1);
+    return answer.admitted;
   }
 
   /**
@@ -303,14 +328,29 @@ export class RunPopulation implements PopulationRun {
     // a listing is of the members asked for.
     const key = `${JSON.stringify(outputs)} ${resolved} ${JSON.stringify(members)}`;
     return memoized(this.#enumerations, key, async () => {
-      const homeKey = `${JSON.stringify(outputs)} home`;
+      const homeKey = RunPopulation.homeKey(outputs);
       const cache = home ? await this.#options.cacheOf() : undefined;
       if (cache === undefined) return this.#list(resolved, home, outputs, unreadable, members);
-      const population = await memoized(this.#enumerations, homeKey, () => this.#populate(outputs, cache));
+      const population = await memoized(this.#enumerations, homeKey, () => this.#settled(homeKey, this.#populate(outputs, cache)));
       const enumeration = respelled(population, this.root, resolved);
       this.#recordStored(enumeration);
       return enumeration;
     });
+  }
+
+  /**
+   * Report how the home population settled, handing the promise back unchanged.
+   * The report is a side branch: the memo's outcome is the original promise, so a
+   * listener cannot alter it. A throwing listener is a programming error and
+   * surfaces as an unhandled rejection of the side branch, never swallowed.
+   */
+  #settled(key: string, population: Promise<ResourceEnumeration>): Promise<ResourceEnumeration> {
+    const { onHomeSettled } = this.#options;
+    population.then(
+      (enumeration) => onHomeSettled(key, { ok: true, enumeration }),
+      (error: unknown) => onHomeSettled(key, { ok: false, error }),
+    );
+    return population;
   }
 
   /** The home root's full population, under the run's store. */

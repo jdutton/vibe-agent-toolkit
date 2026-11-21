@@ -28,8 +28,8 @@ describe('workSpentNow().parseLookups', () => {
     expect(workSpentNow().parseLookups).toBe(answered.length);
   });
 
-  it('names every parse counter either a lookup or the redispatch, so a new one is a decision', () => {
+  it('names every parse counter either a lookup, the redispatch or the cache write, so a new one is a decision', () => {
     const parseCounters = WORK_COUNTER_NAMES.filter((name) => name.startsWith('parse.'));
-    expect(new Set(parseCounters)).toEqual(new Set([...PARSE_LOOKUP_COUNTERS, 'parse.redispatched']));
+    expect(new Set(parseCounters)).toEqual(new Set([...PARSE_LOOKUP_COUNTERS, 'parse.redispatched', 'parse.cache.written']));
   });
 });

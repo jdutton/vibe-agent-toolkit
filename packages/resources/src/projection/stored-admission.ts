@@ -217,3 +217,41 @@ export function readRoute(outcome: BlobFactsOutcome): ReadRoute {
   if (outcome.kind === NOT_ADMITTED) return { kind: 'probe', admitted: { kind: NOT_ADMITTED, entry: outcome.entry } };
   return COMPUTE;
 }
+
+/** The predicate that sent a member to the cold lane: its stored realization, or the tier's answer for its key. */
+export type StoredComputeBy = 'storedRoute' | 'readRoute';
+
+/** What the store's answer for one member comes to, short of the readability probe. */
+export type StoredAnswer =
+  /** Compute it the cold way, as `by` decided. */
+  | { readonly kind: 'compute'; readonly by: StoredComputeBy }
+  /** Admit the stored answer, once the file is still readable now. */
+  | { readonly kind: 'probe'; readonly admitted: AdmittedFacts };
+
+/**
+ * The ONE composition of {@link storedRoute} and {@link readRoute}: what the store
+ * says about one member under the parser a view routes it to, short of the
+ * readability probe. A warm admission (`RunPopulation.admit`) acts on it, and
+ * `vat validate`'s checks overlap gate asks it of every member before it lets
+ * the checks child start early, so the gate's "admitted from the store" is
+ * admission's own, never a second reading of it. The tier is read only when the
+ * route asks, through the members' one memoized read, so a rejection stays there
+ * for every later caller.
+ *
+ * @param realization - The member's stored realization, or `undefined` when the store holds none for it
+ * @param parserKind - The parser the view routes the file to
+ * @param facts - The members' blob tier ({@link StoredContent.facts})
+ * @returns Compute, naming the predicate that said so, or the stored answer to admit once probed
+ * @throws What the tier read rejected with
+ */
+export async function storedAnswer(
+  realization: StoredRealization | undefined,
+  parserKind: string,
+  facts: StoredContent['facts'],
+): Promise<StoredAnswer> {
+  const route = storedRoute(realization, parserKind);
+  if (route.kind === 'compute') return { kind: 'compute', by: 'storedRoute' };
+  if (route.kind === NOT_ADMITTED) return { kind: 'probe', admitted: { kind: NOT_ADMITTED, entry: route.entry } };
+  const read = readRoute((await facts())(route.contentKey));
+  return read.kind === 'compute' ? { kind: 'compute', by: 'readRoute' } : read;
+}

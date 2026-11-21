@@ -1942,6 +1942,7 @@ function settleJob(
   if ('stored' in response) {
     // The facts are on disk under the key the parent supplied. Nothing crossed
     // the boundary but that key, which is the entire point of this arm.
+    countWork('parse.cache.written', 1);
     job.resolve({ type: 'parse', result: null });
     return;
   }

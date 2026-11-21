@@ -707,7 +707,8 @@ phases opens a run of its own, and no run spans two phases. `vat validate`'s `ch
 process OUTSIDE that scope: it takes its own git snapshot, and opens — and on a miss writes — the
 projection store while the parent holds it open. `validate-checks-phase.system.test.ts` smoke-tests
 that pair on a fixture: the first run's checks phase reports `population: derived` with a store left
-on disk, and the next run's reports `population: store`.
+on disk, and the next run's reports `population: store`. On a warm store the child can start during
+the resources phase instead of after it ([3.7b](#37b-the-checks-child-starts-during-the-resources-phase-on-a-warm-store)).
 
 **Where the store is shared, within and across invocations.** The selector is read from the
 environment. Every phase but `checks` runs in the process that read it — phases used to be child
@@ -800,6 +801,86 @@ it does not recognise is never touched, and an entry holding a store a running V
 listed under `inUse`; the answer is point-in-time, so a store opened during the delete itself is not
 caught. `--dry-run` reports the same removal without deleting. Run it before a CI cache is saved, so
 the saved cache does not grow with every release.
+
+### 3.7b The checks child starts during the resources phase on a warm store
+
+Rule 4 holds either way: the checks child is a separate process and holds the rule within itself.
+What changes is when it starts. `vat validate` runs resources, then the supervised checks child,
+then skills. The child takes no data from the parent, so on a warm store, once every member of the
+home population has been admitted from the store, the child starts during the resources phase and
+its stderr is held in a file until the checks phase's turn. At the turn the parent prints the
+banner, copies the held stderr from offset 0, follows the file while the child runs, and makes one
+final read after the child ends. The run's stdout, stderr, phase order and exit code are the same as
+a sequential run, apart from the exceptions listed below.
+
+**The gate.** All of these must hold, checked in this order; any other outcome spawns at the checks
+turn exactly as before:
+
+- (a) `--debug` is off (the child's first `--debug` line describes its stderr, a file instead of a
+  terminal or pipe);
+- (b) `os.availableParallelism()` is at least 2;
+- (c) the home population's settlement (the one `homeKey([])` names) resolved as a store `hit`;
+- (d) the store's facts may be admitted under the current parse limits (`hydratesUnder`);
+- (e) every member is admitted from the store, by admission's own predicate: under the parser kind
+  the registry routes it to, `storedAnswer` (the composition of `storedRoute` and `readRoute`)
+  answers `probe`. A member that would be computed turns overlap off.
+
+Cold runs, `--debug`, one core and any declined or rejected condition stay sequential. Condition (e)
+is why the parent writes neither the store nor the shared parse cache after the spawn: it computes
+nothing, so the child is the only possible writer. One path remains: a member the gate admitted
+whose file is unreadable by the time admission probes it is computed after the spawn, and its
+parse-cache write is a second writer beside the child (an atomic rename, so neither reads a torn
+entry; the store is not written). A cold run is excluded because both processes
+would derive and write under the store's 5 s busy timeout.
+
+**Stderr.** A sequential spawn inherits the parent's stderr, as always. An overlapped spawn writes
+to `stderr.log` (mode 0600) in the progress directory. One supervision scope, the guard, the
+directory and the file, opens at the spawn and closes after the turn's final read. The two remedy
+texts that say the child's stderr "was inherited" stay word for word: in both modes the child's
+stderr is above the report when the parent writes it. In overlapped mode the 2 s stdout grace after
+the child exits starts at the later of the exit and the turn.
+
+**Where an overlapped run differs from a sequential one:**
+
+- If the parent dies running none of its code (SIGKILL, an out-of-memory kill), a POSIX child reads
+  end-of-file on its stdin and writes its one supervisor-gone line. Overlapped, that line goes to
+  `stderr.log` in the progress directory the dead parent leaves behind, not to the terminal. On
+  Windows the job object ends the child with the parent in both modes.
+- Bytes a grandchild writes to the held stderr after the turn's final read are not shown. On
+  Windows, a grandchild that inherited the child's stderr and still holds `stderr.log` when the
+  scope closes can leave the progress directory behind with a leftover line: after the turn's
+  final read, or after a run refusal that ended the run once the child had spawned.
+- On Windows, a direct `node` invocation interrupted during an overlapped resources phase exits 2
+  instead of STATUS_CONTROL_C_EXIT. On POSIX the signal is re-raised and the run dies of SIGINT, as
+  before.
+- The guard is installed during the resources phase, whose loop runs synchronous SQLite, so an
+  interrupt lands late by the longest synchronous stretch.
+- If copying the held stderr at the turn fails, the run ends incomplete. This arm exists only when
+  overlapped.
+
+**The OOM window.** Before this, no child existed during the resources phase. Now a parent killed by
+the kernel during an overlapped resources phase leaves a running child with no watchdog. On POSIX it
+ends itself on end-of-file: at once during its population, after the last check returns during its
+checks. The same window already existed from the turn onward; it opens earlier.
+
+**Risks.**
+
+- Memory: overlapped, the child's peak can coincide with the parent's resources-phase peak, so the
+  combined resident set at one instant can approach the sum of the two per-process peaks. On a
+  memory-capped runner that is an out-of-memory risk. Sequentially the child peaks while the parent
+  sits at its post-resources size.
+- `os.availableParallelism()` honours CPU affinity and a cgroup quota, not CPU shares. A container
+  limited by shares alone overlaps on less CPU than it sees. On a 2-core runner the parse pool and
+  the child share two cores.
+
+**The mode is observable.** When `VAT_VALIDATE_DEBUG_FACTS` names a directory, a `vat validate` run
+with a checks phase writes a dump there at exit: `checksOverlapped` (0 or 1), `gateDeclinedBy` (the first failing condition,
+and for (e) the first member and its route; for a rejected judgment, the error),
+`childStderrBytesAtTurn`, `parentStoreWritesUntilChildExit` and
+`parentParseCacheWritesUntilChildExit`. These are a mode and post-spawn facts, not work counters.
+The store write count is 0 in every overlapped run; the parse-cache write count is 0 unless a
+member became unreadable after the gate admitted it, and then it counts that member's write. The lab's `perf` facet reads the dump (see
+`packages/lab/README.md`).
 
 ### 3.8 ✅ Every parse is bounded — one route, in a worker, under limits
 

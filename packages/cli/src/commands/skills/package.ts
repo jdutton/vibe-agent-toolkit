@@ -28,7 +28,7 @@ import { endWithRefusal, endWithReport, leftoverIssuesOf, leftoverIssuesOfWarnin
 import { collectPostBuildIssues, formatIssueLines, formatIssueSetHeading } from '../../utils/issue-rendering.js';
 import { createLogger } from '../../utils/logger.js';
 import { readInputFile, requireProjectRoot } from '../../utils/project-root-policy.js';
-import { runSkillRegistries, withRunContext } from '../../utils/resource-loader.js';
+import { runSkillRegistries, NO_HOME_SETTLED_LISTENER, withRunContext } from '../../utils/resource-loader.js';
 import { resolveSkillPath } from '../skill/review.js';
 
 import { packagingFailedIssue } from './build.js';
@@ -584,7 +584,7 @@ async function runPackage(
     return buildSkillsPackageReport({ validation, data: { skill, version: null, outputPath: null, dryRun: options.dryRun === true }, runFindings: [] });
   }
   // One run for the package, rooted at the project root this command required.
-  return withRunContext({ root: projectRoot }, (run) =>
+  return withRunContext({ root: projectRoot, homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
     packageAndReport(skillPath, options, { target, formats, registries: runSkillRegistries(run) }, validation, locationRoot, logger),
   );
 }

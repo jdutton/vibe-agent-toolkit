@@ -19,6 +19,7 @@ import {
   hydratesUnder,
   readRoute,
   respelledContent,
+  storedAnswer,
   storedContentOf,
   storedRoute,
   type StoredRealization,
@@ -91,6 +92,44 @@ describe('readRoute: what the tier\'s answer means', () => {
 
   it('computes a key the tier does not cover: per-key fallback', () => {
     expect(readRoute({ kind: 'uncovered', reason: 'evicted' })).toEqual(COMPUTE);
+  });
+});
+
+describe('storedAnswer: the one composition of the two routes', () => {
+  const tier = (outcome: BlobFactsOutcome): { asked: string[]; facts: () => Promise<(key: string) => BlobFactsOutcome> } => {
+    const asked: string[] = [];
+    const reader = (key: string): BlobFactsOutcome => {
+      asked.push(key);
+      return outcome;
+    };
+    return { asked, facts: () => Promise.resolve(reader) };
+  };
+
+  it('names storedRoute when the realization alone sends the member cold, without reading the tier', async () => {
+    const { asked, facts } = tier({ kind: 'uncovered', reason: 'unused' });
+    expect(await storedAnswer(unkeyed('unreadable', 'text/markdown'), 'markdown', facts)).toEqual({ kind: 'compute', by: 'storedRoute' });
+    expect(asked).toEqual([]);
+  });
+
+  it('admits an oversize realization of a parsed kind without reading the tier', async () => {
+    const { asked, facts } = tier({ kind: 'uncovered', reason: 'unused' });
+    const answer = await storedAnswer(unkeyed('oversize', 'text/markdown'), 'markdown', facts);
+    expect(answer).toMatchObject({ kind: 'probe', admitted: { kind: 'not-admitted' } });
+    expect(asked).toEqual([]);
+  });
+
+  it('names readRoute when the tier does not cover the key', async () => {
+    const { asked, facts } = tier({ kind: 'uncovered', reason: 'evicted' });
+    expect(await storedAnswer(keyed(MARKDOWN_KEY, 'text/markdown'), 'markdown', facts)).toEqual({ kind: 'compute', by: 'readRoute' });
+    expect(asked).toEqual([MARKDOWN_KEY]);
+  });
+
+  it('hands back the tier\'s answer for a covered key, and its rejection unchanged', async () => {
+    const entry = { log: 'unreadable', entry: { reason: 'the parser threw', code: 'EFOO' } } as const;
+    const { facts } = tier({ kind: 'not-admitted', entry });
+    expect(await storedAnswer(keyed(MARKDOWN_KEY, 'text/markdown'), 'markdown', facts)).toEqual({ kind: 'probe', admitted: { kind: 'not-admitted', entry } });
+    const refused = new Error('tier refused');
+    await expect(storedAnswer(keyed(MARKDOWN_KEY, 'text/markdown'), 'markdown', () => Promise.reject(refused))).rejects.toBe(refused);
   });
 });
 

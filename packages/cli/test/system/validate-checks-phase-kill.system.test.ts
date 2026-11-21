@@ -1,117 +1,92 @@
 /**
- * The checks child, KILLED: by the watchdog while a check runs or during the population (the
- * kill rows of `vat validate`'s exit table). A supervisor ended from outside is
- * `checks-supervisor-orphan.system.test.ts`.
+ * The checks child KILLED by the watchdog while a check runs (the budget row of `vat validate`'s
+ * exit table), and DEAD before it published anything. A child killed during its population is
+ * `validate-checks-phase-kill-population.system.test.ts`; a supervisor ended from outside is
+ * `checks-supervisor-orphan.system.test.ts` and, overlapped, `validate-checks-overlap-ended.system.test.ts`.
  *
- * 🪤 The phase runs its child under the DEFAULT bound and `vat validate` accepts no flag to change
- * it, so a watchdog kill case would wait five minutes. `parent-only-fast-clock.mjs` scales the
- * supervising process's clock from the spawn on, so the default bound elapses in the real seconds
- * `measureBudget()` derives for this machine, exactly as a standalone kill case derives `--budget`.
- *
- * 🚨 Every case asserts the run ended within {@link KILL_WITHIN_BUDGETS} measured budgets. A preload
- * that silently failed to load would leave the default bound in force, and the case would wait the
- * full default bound for the same kill. Only the scaled clock ends a run that soon: before it, the
- * run is two populations (the `resources` phase's and the child's); after it, one budget of scaled
- * silence.
- *
- * ⚠️ The headroom is EMPIRICAL. `measureBudget()` times `vat resources check --budget 0`, so it
- * bounds the CHILD's population, not the `resources` phase's — which `vat validate` runs first and
- * nothing here measures. That the multiple holds is observed on the CI runners, not derived —
- * and on Windows it was observed with the system tier on ONE worker; at two, a sibling fork can
- * load the machine between the measurement and the run it sizes. Re-observe it there if it reds.
+ * 🚨 Every case is the checks overlap's same-build differential (`test-helpers/checks-overlap.ts`):
+ * one build run on a warm store overlapped (the child spawned during the resources phase, its
+ * stderr held in a file until its turn) and sequential, and the two must publish the same bytes.
+ * A kill or death that lands before the turn is recorded and published at it, as if it had
+ * happened there. How the default bound is scaled to this machine, and why the headroom is
+ * empirical: `test-helpers/checks-overlap-kill.ts`.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { DEFAULT_BUDGET_SECONDS } from '../../src/commands/resources/check-supervisor.js';
 import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
 import { cleanupTestTempDir } from './test-common.js';
 import {
-  checksPhase,
-  preload,
-  RUN_INTEGRITY,
-  RUNAWAY_SQL,
-  TXT_ROWS,
-  vat,
-  writeConfig,
-} from './test-helpers/checks-phase.js';
-import { createMarkdownGitFixture } from './test-helpers/index.js';
-import { measureBudget } from './test-helpers/measure-check-budget.js';
+  boundedPhase,
+  errorsOf,
+  expectKilledInBothModes,
+  expectReplayedAtTurn,
+  findingsOf,
+  SEED_UNDER_FAST_CLOCK,
+} from './test-helpers/checks-overlap-kill.js';
+import {
+  createOverlapFixture,
+  expectFacts,
+  MARKER_BYTES,
+  type OverlapFixture,
+  overlappedFacts,
+  runBothModes,
+} from './test-helpers/checks-overlap.js';
+import { RUN_INTEGRITY, RUNAWAY_SQL } from './test-helpers/checks-phase.js';
 
 // ⛔ Disposal paths: every `vat` process (and its checks child) inherits the scratch TMPDIR.
 useScratchTmpdir('vat-scratch-validate-checks-kill-');
 
-let projectDir: string;
-
 /**
- * How many measured budgets a scaled kill may take, end to end: the `resources` phase's population,
- * the child's, one budget of silence, and headroom for a loaded machine. Chosen by observation —
- * see the file header for why it is not derived.
+ * The fixture's one committed check, which never finishes. Committed, so the store seeded from the
+ * tree answers every run: a config edited per case would be a tree the store has not seen. A child
+ * dead before it reaches the check never runs it.
  */
-const KILL_WITHIN_BUDGETS = 3;
+const CHECKS = [['runaway', RUNAWAY_SQL]] as const;
 
-/**
- * The environment that makes the phase's default bound elapse in this machine's measured budget:
- * `NODE_OPTIONS` loading the fast clock (plus `more`), and the scale that maps the default bound
- * onto the measured one — and the real time the kill must beat. Measured beside each killed case,
- * never once per file.
- */
-function boundedPhase(...more: string[]): { env: NodeJS.ProcessEnv; withinMs: number } {
-  const { budgetSeconds } = measureBudget(() => {
-    writeConfig(projectDir, [['quick', TXT_ROWS]]);
-    return vat(projectDir, ['resources', 'check', '--budget', '0']).elapsedMs;
-  });
-  const withinMs = KILL_WITHIN_BUDGETS * budgetSeconds * 1000;
-  return {
-    env: {
-      NODE_OPTIONS: [preload('parent-only-fast-clock.mjs'), ...more].join(' '),
-      TEST_PARENT_CLOCK_SCALE: String(DEFAULT_BUDGET_SECONDS / budgetSeconds),
-      // A stalled child ends itself only well past the bound, so the kill asserted is the watchdog's.
-      TEST_CHILD_MAX_STALL_MS: String(2 * withinMs),
-    },
-    withinMs,
-  };
-}
+let fixture: OverlapFixture;
 
-describe('vat validate — the checks phase, killed by its bound', () => {
-  beforeAll(() => {
-    projectDir = createMarkdownGitFixture('vat-validate-checks-kill-');
+describe('vat validate — the checks phase, a check killed by its bound or a dead child, same build, both modes', () => {
+  beforeAll(async () => {
+    fixture = await createOverlapFixture('vat-validate-checks-kill-', { checks: CHECKS, seed: SEED_UNDER_FAST_CLOCK });
   });
 
   afterAll(() => {
-    cleanupTestTempDir(projectDir);
+    cleanupTestTempDir(fixture.scratch);
   });
 
-  it('kills a check that never finishes: RESOURCE_CHECK_BROKEN naming it, the statement remedy, exit 1', () => {
-    const { env, withinMs } = boundedPhase();
-    writeConfig(projectDir, [['runaway', RUNAWAY_SQL]]);
+  it('kills a check that never finishes: RESOURCE_CHECK_BROKEN naming it, the statement remedy, exit 1', async () => {
+    const { arm, withinMs } = boundedPhase(fixture, CHECKS);
 
-    const run = vat(projectDir, ['validate'], env);
+    const both = await runBothModes(fixture, [], arm);
 
-    expect(run.elapsedMs).toBeLessThan(withinMs);
-    expect(run.status).toBe(1);
-    const broken = run.findings.find((f) => f.code === RUN_INTEGRITY && f.message.includes('runaway'));
+    expectKilledInBothModes(both, withinMs);
+    expect(both.overlapped.code).toBe(1);
+    const broken = findingsOf(both.overlapped).find((f) => f.code === RUN_INTEGRITY && f.message.includes('runaway'));
     // The statement branch's own sentence — not the population's, startup's or reporting's.
     expect(broken?.message).toContain('A statement that will not finish');
     expect(broken?.message).toContain('`vat resources check --budget <seconds>`');
     expect(broken?.message).not.toMatch(/(?<!vat resources check )`--budget/);
   });
 
-  it('a child killed during population is a phase error: RUN_INCOMPLETE, the population remedy, exit 2', () => {
-    const { env, withinMs } = boundedPhase(preload('child-only-stall-in-population.mjs'));
-    writeConfig(projectDir, [['quick', TXT_ROWS]]);
+  it('a child dead before it published anything is a phase error: RUN_INCOMPLETE, exit 2', async () => {
+    // The overlapped parent waits, right after its spawn, for the child to have exited: its
+    // abnormal ending is recorded long before the turn publishes it.
+    const both = await runBothModes(fixture, [], {
+      store: 'warm',
+      preloads: ['child-only-exit-at-start.mjs', 'parent-only-await-overlapped-child.mjs'],
+      env: (files) => ({ VAT_TEST_PARENT_AWAIT_FILE: files.childExit, VAT_TEST_PARENT_TURN_TRACE: files.path('turn.trace') }),
+    });
 
-    const run = vat(projectDir, ['validate'], env);
-
-    expect(run.elapsedMs).toBeLessThan(withinMs);
-    expect(run.status).toBe(2);
-    expect(run.error?.code).toBe('RUN_INCOMPLETE');
-    const phase = checksPhase(run);
-    expect(phase.status).toBe('error');
-    expect(phase.error?.message).toContain('Population is legitimately slow');
-    expect(phase.error?.message).toContain('`vat resources check --budget <seconds>`');
-    expect(phase.error?.message).not.toMatch(/(?<!vat resources check )`--budget/);
+    expectReplayedAtTurn(both);
+    // Every byte the dead child wrote was in its held stderr when the turn began.
+    expectFacts(both, overlappedFacts(MARKER_BYTES));
+    expect(both.overlapped.code).toBe(2);
+    const errors = errorsOf(both.overlapped);
+    expect(errors.run?.code).toBe('RUN_INCOMPLETE');
+    // ITS ending: a child that exited 0 having written nothing, before it had reported starting.
+    expect(errors.phase?.message).toContain('the child process exited 0 and published no report at all');
+    expect(errors.phase?.message).toContain('before the child process had finished starting');
   });
 });
-

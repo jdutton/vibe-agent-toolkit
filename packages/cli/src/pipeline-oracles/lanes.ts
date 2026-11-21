@@ -29,7 +29,7 @@ import type { CrawlOptions, UnreadablePolicy } from '@vibe-agent-toolkit/utils/c
 import { skillsValidateRegistries } from '../commands/skills/validate.js';
 import { loadConfig } from '../utils/config-loader.js';
 import { createLogger } from '../utils/logger.js';
-import { loadResourcesWithConfig, runSkillRegistries, withRunContext } from '../utils/resource-loader.js';
+import { loadResourcesWithConfig, runSkillRegistries, NO_HOME_SETTLED_LISTENER, withRunContext } from '../utils/resource-loader.js';
 
 import type { LaneId } from './types.js';
 
@@ -105,7 +105,7 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
       };
     },
     build: async (projectRoot) => {
-      const loaded = await withRunContext({ root: projectRoot }, (run) => loadResourcesWithConfig(undefined, run, createLogger()));
+      const loaded = await withRunContext({ root: projectRoot, homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) => loadResourcesWithConfig(undefined, run, createLogger()));
       return loaded.registry;
     },
   },
@@ -121,7 +121,7 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
       filesOnly: true,
     }),
     // An oracle arm is a complete population or nothing: refuse, like the verbs it mirrors.
-    build: (projectRoot) => withRunContext({ root: projectRoot }, (run) =>
+    build: (projectRoot) => withRunContext({ root: projectRoot, homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
       runSkillRegistries(run).forRoot(projectRoot, { outputs: [], unreadable: 'refuse' }),
     ),
   },
@@ -136,7 +136,7 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
       absolute: true,
       filesOnly: true,
     }),
-    build: (projectRoot) => withRunContext({ root: projectRoot }, (run) =>
+    build: (projectRoot) => withRunContext({ root: projectRoot, homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
       runSkillRegistries(run).packagingRegistry(projectRoot, []),
     ),
   },
@@ -171,7 +171,7 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
     // learned to route parsing through the project's declared collection
     // `mimeType`s and this copy did not, so the oracle described a lane nobody
     // runs. Naming the builder is what makes that class of drift impossible.
-    build: (projectRoot) => withRunContext({ root: projectRoot }, (run) =>
+    build: (projectRoot) => withRunContext({ root: projectRoot, homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
       skillsValidateRegistries(run, projectRoot, loadConfig(projectRoot, 'source'))
         .forRoot(projectRoot, { unreadable: 'refuse', outputs: [] }),
     ),

@@ -30,7 +30,7 @@ import { ParseDispatcher, type ParsePoolPolicy } from '../../src/parse-dispatche
 import { isParseLimitError, isParserThrewError, reviveParserThrow } from '../../src/parse-limits.js';
 import { POPULATION_PARSE_LIMITS, RunContentCache } from '../../src/projection/content-cache.js';
 import type { PopulationCache } from '../../src/projection/merge.js';
-import { RunPopulation } from '../../src/projection/run-population.js';
+import { IGNORE_HOME_SETTLEMENT, RunPopulation } from '../../src/projection/run-population.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { ProjectConfig } from '../../src/schemas/project-config.js';
 import type { ResourceMetadata } from '../../src/schemas/resource-metadata.js';
@@ -203,6 +203,7 @@ async function withRun<T>(withStore: boolean, variation: RunVariation, work: (po
     gitTracker: new GitTracker(root),
     cacheOf: () => Promise.resolve(cache),
     collectionsFor: () => Promise.resolve(undefined),
+    onHomeSettled: IGNORE_HOME_SETTLEMENT,
   }, { content, dispatcher });
   try {
     return await work(population, workSpentNow());

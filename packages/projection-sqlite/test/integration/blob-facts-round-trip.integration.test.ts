@@ -37,6 +37,7 @@ import {
   RESOURCE_LINK_FACT_SOURCES,
   type BlobFactsOutcome,
   type BlobScopedRows,
+  IGNORE_HOME_SETTLEMENT,
   type FactStore,
   type ResourceLink,
   type ResourceMetadata,
@@ -277,6 +278,7 @@ beforeAll(async () => {
       gitTracker: new GitTracker(root),
       cacheOf: () => Promise.resolve(undefined),
       collectionsFor: () => Promise.resolve(undefined),
+      onHomeSettled: IGNORE_HOME_SETTLEMENT,
     },
     async (population) => {
       const registry = new ResourceRegistry({ baseDir: root });

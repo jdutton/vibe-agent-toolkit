@@ -14,6 +14,7 @@ import { mkdtempSync } from 'node:fs';
 
 import { openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import {
+  IGNORE_HOME_SETTLEMENT,
   type FactStore,
   type ResourceMetadata,
   ResourceRegistry,
@@ -65,6 +66,7 @@ async function runOnce(withStore: boolean): Promise<RunOutput> {
         gitTracker: new GitTracker(root),
         cacheOf: () => Promise.resolve(store === undefined ? undefined : { store, treeHash: 'warm-registry-hydration', treeUnchanged: () => true }),
         collectionsFor: () => Promise.resolve(undefined),
+        onHomeSettled: IGNORE_HOME_SETTLEMENT,
       },
       async (population) => {
         const before = workSpentNow();

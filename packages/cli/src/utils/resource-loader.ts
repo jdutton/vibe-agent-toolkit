@@ -7,11 +7,13 @@ import {
   buildLinkAuthEngineConfig,
   DEFAULT_RESOURCE_INCLUDE,
   gitExtentSelected,
+  IGNORE_HOME_SETTLEMENT,
   ResourceRegistry,
   withRunPopulation,
   type CrawlOptions,
   type CrawlPopulation,
   type FactStore,
+  type HomeSettlement,
   type ParseDispatcher,
   type PopulationCache,
   type ProjectConfig,
@@ -53,6 +55,15 @@ export interface RunContext {
   /** The run's one parse dispatcher, which the run shuts down. */
   readonly dispatcher: ParseDispatcher;
 }
+
+/** What a run's population calls when its home population settles (`RunPopulationOptions.onHomeSettled`). */
+export type HomeSettledListener = (key: string, settlement: HomeSettlement) => void;
+
+/**
+ * The {@link withRunContext} `homeSettledListener` of every verb that overlaps no work with the home
+ * population: every verb but `vat validate`, whose checks overlap gate listens.
+ */
+export const NO_HOME_SETTLED_LISTENER = (): HomeSettledListener => IGNORE_HOME_SETTLEMENT;
 
 /** The errors that refuse a whole run, by identity: see {@link isRunRefusal}. */
 const runRefusals = new WeakSet<object>();
@@ -143,16 +154,28 @@ async function runCacheOf(cacheOf: () => Promise<PopulationCache | undefined>): 
  * later phase runs.
  * What can still fail here is the parse dispatcher's shutdown when the run ends.
  *
- * @param options - The run's home root, and an ignore oracle to reuse
+ * @param options - The run's home root, an ignore oracle to reuse, and the listener for the home
+ *   population's settlement
+ * @param options.homeSettledListener - Builds, from the run before `work` starts, what the run
+ *   population calls when its home population settles. Built from the run because what listens
+ *   needs the run's own dispatcher and root; called before any enumeration can settle, since
+ *   enumerations start only inside `work`. A verb that overlaps nothing passes
+ *   {@link NO_HOME_SETTLED_LISTENER}.
  * @param work - The verb's work
  * @returns Whatever `work` returned
  */
 export function withRunContext<T>(
-  options: { readonly root: string; readonly gitTracker?: GitTracker | undefined },
+  options: {
+    readonly root: string;
+    readonly gitTracker?: GitTracker | undefined;
+    readonly homeSettledListener: (run: RunContext) => HomeSettledListener;
+  },
   work: (run: RunContext) => Promise<T>,
 ): Promise<T> {
   const root = safePath.resolve(options.root);
   const gitTracker = options.gitTracker ?? new GitTracker(root);
+  // Replaced by the verb's listener before `work` starts, so before any enumeration can settle.
+  let listener: HomeSettledListener = IGNORE_HOME_SETTLEMENT;
   return withLazyPopulationCache({ root }, (cacheOf) =>
     withRunPopulation(
       {
@@ -160,12 +183,17 @@ export function withRunContext<T>(
         gitTracker,
         cacheOf: () => runCacheOf(cacheOf),
         collectionsFor: (enumerated) => Promise.resolve(collectionsOption(enumerated).collections),
+        onHomeSettled: (key, settlement) => listener(key, settlement),
       },
-      (population) => work({
-        population,
-        registry: ResourceRegistry.forRun(population, { baseDir: root, gitTracker }),
-        dispatcher: population.dispatcher,
-      }),
+      (population) => {
+        const run: RunContext = {
+          population,
+          registry: ResourceRegistry.forRun(population, { baseDir: root, gitTracker }),
+          dispatcher: population.dispatcher,
+        };
+        listener = options.homeSettledListener(run);
+        return work(run);
+      },
     ),
   );
 }

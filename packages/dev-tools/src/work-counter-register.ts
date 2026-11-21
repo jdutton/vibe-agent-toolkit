@@ -43,6 +43,8 @@ export const COUNTERS_WITHOUT_A_COUNTED_ROW: Readonly<Partial<Record<WorkCounter
   'statement.explained': 'the schema-introspection row\'s cost, an enforced row, not a counted cost',
   'store.miss.refusedPairs': 'the store-miss row, an enforced row, not a counted cost',
   'parse.refused.load': 'load-dependent, bounded by I8; reported only',
+  'parse.cache.written':
+    "the parse cache's write side, which validate's checks overlap reads as its post-spawn parent writes (resource-scanning-and-caching.md 3.7b); no cost row",
   'content.hashed': UNBUILT_REHASH_BASELINE,
   'content.hashedBytes': UNBUILT_REHASH_BASELINE,
   'content.read': ONE_READ_PER_RUN,

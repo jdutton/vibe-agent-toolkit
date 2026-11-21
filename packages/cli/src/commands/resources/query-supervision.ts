@@ -134,6 +134,7 @@ export async function superviseQuery(request: QueryRequest & { logger: Logger })
         log,
         budgetMs: request.budgetSecs * 1000,
         format: request.format,
+        stderr: 'inherit',
       });
       return run.outcome === 'completed'
         ? { forward: run.document }

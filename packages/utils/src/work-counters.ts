@@ -49,6 +49,10 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * counts every `EXPLAIN` the SQL gate prepares — one per gated statement, and
  * the four virtual-table reference reads each handle makes when it is opened.
  *
+ * `parse.cache.written` counts parse-cache entries that reached their final path, on the
+ * parent side only: `ParseCache.setByKey` for a write the parent made, and the pool's
+ * settlement of a worker's `stored` reply for one a worker made.
+ *
  * `content.read` counts a member file's bytes read to be keyed (`readContentWithKey`),
  * one per read that returned bytes; a read refused at the input cap is
  * `parse.refused.inputCap.read` instead. `registry.built` counts every resource
@@ -73,6 +77,7 @@ export const WORK_COUNTER_NAMES = [
   'extent.served',
   'store.miss.refusedPairs',
   'parse.cache.hit',
+  'parse.cache.written',
   'parse.dispatched',
   'parse.redispatched',
   'parse.refused.keyDetermined',

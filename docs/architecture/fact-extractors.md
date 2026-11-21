@@ -169,7 +169,8 @@ This ADR changes as follows; each old choice becomes a rejected alternative.
   closing the hole for files whose meaning depends on normalization.
 - **Warm path.** A warm store hit proves the tree unchanged; no lane re-admits or re-hashes files to
   prove it again, and a mid-run re-check uses git's tree comparison. "One run" is one VAT process;
-  the supervised checks child of `vat validate` is a separate process. Enforced by
+  the supervised checks child of `vat validate` is a separate process (on a warm store it can start during the resources phase, see
+  [resource-scanning-and-caching 3.7b](resource-scanning-and-caching.md#37b-the-checks-child-starts-during-the-resources-phase-on-a-warm-store)). Enforced by
   `packages/cli/test/system/work-counters-validate.system.test.ts` (`content.read`,
   `content.hashed`, the parse lookups, `registry.admitted`, `registry.built`). The store is on by
   default; a store-off run is held to correctness only.

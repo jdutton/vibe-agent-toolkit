@@ -268,7 +268,17 @@ type Rebuilt<T> = { readonly ok: true; readonly value: T } | { readonly ok: fals
  */
 export function blobFactsReader(rows: BlobScopedRows): (contentKey: string) => BlobFactsOutcome {
   const byKey = indexByKey(rows);
-  return (contentKey) => outcomeOf(contentKey, byKey.get(contentKey));
+  // One decode per key: the overlap gate and admission both ask, and must get the
+  // same outcome object rather than two rebuilds of it.
+  const outcomes = new Map<string, BlobFactsOutcome>();
+  return (contentKey) => {
+    let outcome = outcomes.get(contentKey);
+    if (outcome === undefined) {
+      outcome = outcomeOf(contentKey, byKey.get(contentKey));
+      outcomes.set(contentKey, outcome);
+    }
+    return outcome;
+  };
 }
 
 /**

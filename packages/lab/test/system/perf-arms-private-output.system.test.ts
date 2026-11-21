@@ -25,6 +25,7 @@ import { afterAll, afterEach, describe, expect, it, type MockInstance, vi } from
 
 import { createProgram } from '../../src/bin/vat-lab.js';
 import { readArmsReportFile } from '../../src/facets/perf/arms-report-file.js';
+import { builtLabProgram } from '../integration/probe-fixtures.js';
 import { cleanupVerdictFixtures, tempDir } from '../integration/verdict-fixtures.js';
 
 import { CANDIDATE_SOURCE, cleanSubject } from './candidate-subject.js';
@@ -192,7 +193,8 @@ describe('vat-lab perf run — the default run directory of arms ends with the c
     const subject = cleanSubject();
     const out = mkdirSyncReal(safePath.join(tempDir('lab-arms-cleanup-out-'), 'out'));
 
-    await createProgram().parseAsync([
+    // The built CLI: `perf run` loads the emitted probe, which exists only beside the built capture.
+    await (await builtLabProgram()).parseAsync([
       'node', 'vat-lab', 'perf', 'run', subject, '--instrument', candidate(),
       '--command', 'resources-scan', '--runs', '1', '--cache', 'cold', '--out', out,
       ...(keep ? ['--keep-arms'] : []),

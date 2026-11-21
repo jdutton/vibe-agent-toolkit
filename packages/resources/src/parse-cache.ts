@@ -123,6 +123,7 @@ import { threadId } from 'node:worker_threads';
 
 import {
   applyTreePlan,
+  countWork,
   fsFaultOf,
   isPathAbsentError,
   isVatError,
@@ -176,7 +177,7 @@ const SAFE_KEY = CONTENT_KEY_PATTERN;
  * Disambiguates concurrent temp files within one ISOLATE.
  *
  * ⚠️ Per-isolate, not per-process, and the difference became load-bearing when
- * {@link ParseCache.setByKey} started being called from parse workers. Each
+ * parse workers started writing entries ({@link persistFromWorker}). Each
  * worker thread gets its own module instance and therefore its own counter at
  * zero, while `process.pid` is shared across every thread — so pid + counter
  * alone mints the SAME temp path in two threads that write their first entry
@@ -187,6 +188,9 @@ const SAFE_KEY = CONTENT_KEY_PATTERN;
  * neither of which is actually a uniqueness guarantee.
  */
 let tempFileCounter = 0;
+
+/** The key of {@link ParseCache}'s shared persist: never exported, so no caller outside this module reaches it. */
+const PERSIST: unique symbol = Symbol('ParseCache.persist');
 
 export type { ParseFacts } from './schemas/parse-facts.js';
 
@@ -532,9 +536,9 @@ export class ParseCache {
    *
    * The primitive {@link set} always was: an entry stores facts only, so the
    * key is the only part of a `KeyedContent` a write has ever consulted.
-   * Exposed because a **parse worker** files entries and has no `KeyedContent`
-   * to offer — it received a decoded string and a key over the boundary, never
-   * a read. Making it fabricate the other fields to reach `set` would put
+   * A **parse worker** files entries by key too ({@link persistFromWorker},
+   * this write uncounted) and has no `KeyedContent` to offer — it received a
+   * decoded string and a key over the boundary, never a read. Making it fabricate the other fields to reach `set` would put
    * invented decode provenance into a struct nothing reads, which is the same
    * mistake `parse-pool.ts`'s `attachContent` docstring refuses.
    *
@@ -543,9 +547,9 @@ export class ParseCache {
    * entry past the default input or output caps — written by an in-process
    * parse, or by a pool given looser limits, on either side of the thread
    * boundary — would be served to a later default run as an admission that run
-   * would have refused: the outcome would hang on what ran first (I0). This is
-   * the one place every write passes, so the guard lives here and no caller
-   * can forget it. `result.sizeBytes` is the raw byte count every parser is
+   * would have refused: the outcome would hang on what ran first (I0). The
+   * persist this and the worker's write share is the one place every write
+   * passes, so the guard lives there and no caller can forget it. `result.sizeBytes` is the raw byte count every parser is
    * handed.
    *
    * @param key - The content key to file under
@@ -555,6 +559,21 @@ export class ParseCache {
    *   failure is REPORTED here as well as counted, never thrown — see below.
    */
   async setByKey(key: string, result: ParseResult): Promise<boolean> {
+    const persisted = await this[PERSIST](key, result);
+    if (persisted) countWork('parse.cache.written', 1);
+    return persisted;
+  }
+
+  /**
+   * The persist both writers share: {@link setByKey} counted, and
+   * {@link persistFromWorker} uncounted. Keyed by a module-internal symbol so
+   * the only public writer is {@link setByKey}, the counted one.
+   *
+   * @param key - The content key to file under
+   * @param result - The parse result whose facts to store
+   * @returns True when the entry was persisted; see {@link setByKey}
+   */
+  async [PERSIST](key: string, result: ParseResult): Promise<boolean> {
     // Outside the bracket for the same reason `get`'s guards are — see there.
     if (!this.enabled || !SAFE_KEY.test(key)) return false;
     if (!storableUnderDefaultLimits(result.sizeBytes, result)) return false;
@@ -1008,4 +1027,23 @@ async function removeTempQuietly(target: string): Promise<void> {
   } catch (error) {
     if (fsFaultOf(error) === undefined) throw error;
   }
+}
+
+/**
+ * {@link ParseCache.setByKey} without the `parse.cache.written` count, for a
+ * parse worker, the one writer that may not count.
+ *
+ * A worker thread forbids work counting (its parent counts every job it
+ * settles), so the worker's write is counted by the pool when it settles the
+ * `stored` reply. Not in the package barrel: `parse-worker.ts` imports it from
+ * this module, and every other caller uses {@link ParseCache.setByKey}. The
+ * default-limits guard is the same one, in the persist both share.
+ *
+ * @param cache - The worker's cache
+ * @param key - The content key to file under
+ * @param result - The parse result whose facts to store
+ * @returns True when the entry was persisted; see {@link ParseCache.setByKey}
+ */
+export function persistFromWorker(cache: ParseCache, key: string, result: ParseResult): Promise<boolean> {
+  return cache[PERSIST](key, result);
 }

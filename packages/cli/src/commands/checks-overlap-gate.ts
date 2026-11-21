@@ -1,0 +1,256 @@
+/**
+ * The checks overlap gate: once per `vat validate` run, whether the supervised checks child starts
+ * during the resources phase (overlapped) or at its turn (sequential), and the ONE decision promise
+ * the checks turn awaits.
+ *
+ * ## The conditions, in order, all required
+ *
+ * - (a) `--debug` is off: the child's first `--debug` line describes its stderr stream, which an
+ *   overlapped child holds as a file;
+ * - (b) at least two cores (`os.availableParallelism()`);
+ * - (c) the home population for the child's outputs (`childHomeKey`) settled as a store hit;
+ * - (d) the run parses under the limits the store's facts were filed under (`hydratesUnder`);
+ * - (e) every stored member is admitted from the store by admission's OWN predicate
+ *   (`storedAnswer`), under the parser the run's one routing sends it to
+ *   (`parserKindForResolvedPath`). Any member admission would compute means the parent could
+ *   write the store or the parse cache after the spawn, so the run stays sequential.
+ *
+ * (a) and (b) are decided when the gate is created. (c) to (e) are judged when the home settles,
+ * on a side branch of the population memo: {@link ChecksOverlapGate.onHomeSettled} never throws.
+ * Every failure of its judgment (a rejected settlement, a rejected tier read, a spawn that
+ * rejected) is the decline `rejected`, carrying the failure's message, so the debug-facts dump and
+ * the lab show it. Each rejection also stays where the run meets it: the tier read is memoized, and
+ * a sequential turn spawns as it always did.
+ *
+ * ## One decision, one spawn
+ *
+ * The checks turn calls {@link ChecksOverlapGate.disarm} and then awaits the decision. Disarming
+ * resolves it `sequential` unless something already did, and from then on the gate decodes
+ * nothing, counts nothing and spawns nothing. A disarm that lands while a spawn is minting its
+ * scope resolves the decision only once that spawn has torn its scope down, so whoever awaits the
+ * decision (the checks turn, or {@link abandoningUnread}) never runs beside a closing scope: no
+ * leftover line in the middle of the sequential checks phase, no minted directory after a refusal.
+ * The spawn checks `isArmed` after the progress directory is minted and immediately before its
+ * synchronous spawn; a `true` answer COMMITS the
+ * gate, so a disarm that lands between the child's start and its handle reaching the gate waits for
+ * that handle instead of deciding `sequential` beside a running child.
+ *
+ * The spawn's contract (`startOverlappedSupervision`): once `isArmed` answered true it rejects only
+ * before the synchronous spawn (the stderr sink would not open), with its scope already closed; a
+ * spawn that fails at the OS is a recorded ending of the run it returns, never a rejection. So a
+ * rejected spawn leaves no child, and the sequential turn it falls back to is the only spawn.
+ */
+
+import {
+  hydratesUnder,
+  parserKindForResolvedPath,
+  storedAnswer,
+  type BlobFactsOutcome,
+  type CollectionMimeResolver,
+  type HomeSettlement,
+  type ParseLimits,
+  type StoredComputeBy,
+  type StoredContent,
+} from '@vibe-agent-toolkit/resources';
+import { safePath } from '@vibe-agent-toolkit/utils';
+
+import type { OverlappedRun } from './resources/overlapped-supervision.js';
+
+/** Why the gate left the checks child to its turn: the first condition that failed. */
+export type GateDecline =
+  /**
+   * `disarmed`: the turn came while the gate was still judging the settlement it saw.
+   * `not-settled`: the turn came before any settlement for the child's key (a run with no store
+   * never sends one).
+   */
+  | { readonly condition: 'debug' | 'cores' | 'not-hit' | 'limits' | 'disarmed' | 'not-settled' }
+  /**
+   * The judgment failed: the failure's message (or its string), for the dump to show. Copied as it
+   * is, unlike `member`'s path: a message that names an absolute path carries it into the dump.
+   */
+  | { readonly condition: 'rejected'; readonly error: string }
+  /**
+   * A member admission would compute: its path relative to the routing's base directory (never
+   * absolute, so a dump does not carry the machine's home directory), and the predicate that said so.
+   */
+  | { readonly condition: 'member'; readonly member: string; readonly route: StoredComputeBy };
+
+/** The one decision the checks turn acts on. */
+export type GateDecision =
+  | { readonly mode: 'overlapped'; readonly run: OverlappedRun }
+  | { readonly mode: 'sequential'; readonly declinedBy: GateDecline };
+
+/** What the gate is built over. */
+export interface ChecksOverlapGateOptions {
+  /** Whether the run is under `--debug`: condition (a). */
+  readonly debug: boolean;
+  /** The cores the run may use (`os.availableParallelism`), asked once at creation: condition (b). */
+  readonly cores: () => number;
+  /** The home population's memo key for the child's outputs (`RunPopulation.homeKey`). */
+  readonly childHomeKey: string;
+  /** The run dispatcher's resolved limits: condition (d). */
+  readonly limits: ParseLimits;
+  /** The resources phase's parse routing, which admission routes each member by: condition (e). */
+  readonly routing: { readonly resolver: CollectionMimeResolver; readonly baseDir: string };
+  /**
+   * Open the overlapped scope and spawn the child, asking `isArmed` after the mint and immediately
+   * before the synchronous spawn; `'disarmed'` when it answered false and the scope was torn down.
+   */
+  readonly spawn: (isArmed: () => boolean) => Promise<OverlappedRun | 'disarmed'>;
+}
+
+/** The gate: the population's settlement listener, the turn's disarm, and the decision. */
+export interface ChecksOverlapGate {
+  /** The run population's `onHomeSettled`. Never throws. */
+  readonly onHomeSettled: (key: string, settlement: HomeSettlement) => void;
+  /** The checks turn's first act: synchronous, and final unless a spawn already committed. */
+  readonly disarm: () => void;
+  /** Resolves exactly once. */
+  readonly decision: Promise<GateDecision>;
+}
+
+/** What a reader asked after a disarm answers instead of decoding: never acted on, the gate is closed. */
+const NOT_DECODED: BlobFactsOutcome = { kind: 'uncovered', reason: 'the overlap gate was disarmed' };
+
+/**
+ * Build the gate for one `vat validate` run.
+ *
+ * @param options - The run's facts and its spawn
+ * @returns The gate
+ */
+export function createChecksOverlapGate(options: ChecksOverlapGateOptions): ChecksOverlapGate {
+  const settled = Promise.withResolvers<GateDecision>();
+  // open: judging, or waiting for the home; committed: a spawn answered armed; closing: disarmed
+  // while a spawn mints, waiting for its teardown to decide; decided: resolved.
+  let state: 'open' | 'committed' | 'closing' | 'decided' = 'open';
+  let sawHome = false;
+  let spawning = false;
+  const decide = (decision: GateDecision): void => {
+    if (state === 'decided') return;
+    state = 'decided';
+    settled.resolve(decision);
+  };
+  const decline = (declinedBy: GateDecline): void => decide({ mode: 'sequential', declinedBy });
+  const rejected = (error: unknown): void =>
+    decline({ condition: 'rejected', error: error instanceof Error ? error.message : String(error) });
+  const open = (): boolean => state === 'open';
+  // Idempotent: the first true answer commits, and every later ask while committed is true too.
+  const isArmed = (): boolean => {
+    if (state === 'committed') return true;
+    if (!open()) return false;
+    state = 'committed';
+    return true;
+  };
+
+  if (options.debug) decline({ condition: 'debug' });
+  else if (options.cores() < 2) decline({ condition: 'cores' });
+
+  async function judge(settlement: HomeSettlement): Promise<void> {
+    if (!settlement.ok) return rejected(settlement.error);
+    const { outcome, stored } = settlement.enumeration;
+    if (outcome.stored !== 'hit' || stored === null) return decline({ condition: 'not-hit' });
+    if (!hydratesUnder(options.limits)) return decline({ condition: 'limits' });
+    // (e) ranges over EVERY member of the home population, not only the ones the resources crawl
+    // admits: the spec requires every member to route `read`, which makes the parent compute
+    // nothing anywhere in the population after the spawn. That is stronger than the post-spawn
+    // window needs (the checks turn waits for the child's exit before the skills phase starts).
+    // The lab's `gateDeclinedBy` reports when this keeps the gate from firing.
+    const computed = await firstComputedMember(stored, options.routing, open);
+    if (!open()) return;
+    if (computed !== undefined) return decline({ condition: 'member', ...computed });
+    spawning = true;
+    const run = await options.spawn(isArmed);
+    decide(run === 'disarmed' ? { mode: 'sequential', declinedBy: { condition: 'disarmed' } } : { mode: 'overlapped', run });
+  }
+
+  return {
+    onHomeSettled: (key, settlement) => {
+      if (key !== options.childHomeKey || !open()) return;
+      sawHome = true;
+      judge(settlement).catch(rejected);
+    },
+    disarm: () => {
+      if (!open()) return;
+      // The spawn answers `disarmed` (or rejects) once its scope is down, and that decides.
+      if (spawning) state = 'closing';
+      else decline({ condition: sawHome ? 'disarmed' : 'not-settled' });
+    },
+    decision: settled.promise,
+  };
+}
+
+/**
+ * Run a validate run's phases, then end the gate however they ended: disarm it, await its one
+ * decision, and abandon an overlapped child whose turn never came (its tree killed, its scope
+ * closed), before the phases' result or throw goes on to be published, exactly as a sequential run
+ * publishes it. No child outlives the run that spawned it.
+ *
+ * A child whose turn came is the turn's: its abandonment is a no-op (`OverlappedRun.abandon`). A
+ * throw that escapes the phases is a run refusal (`isRunRefusal`), since `runPhase` records every
+ * other phase throw and the run goes on to the checks turn; anything else that escapes is answered
+ * the same way.
+ *
+ * An abandonment that fails after phases that threw is said on stderr, and the phases' own throw is
+ * the one rethrown, so the run's refusal is never replaced by its cleanup's. After phases that
+ * finished, it is the run's one failure and is thrown, not said.
+ *
+ * @param gate - The run's gate
+ * @param phases - The run's phases
+ * @returns What `phases` returned
+ * @throws What `phases` threw, after the child is gone; or, after phases that finished, the
+ *   abandonment's failure
+ */
+export async function abandoningUnread<T>(
+  gate: Pick<ChecksOverlapGate, 'disarm' | 'decision'>,
+  phases: () => Promise<T>,
+): Promise<T> {
+  const ended = await phases().then(
+    (value) => ({ ok: true, value }) as const,
+    (error: unknown) => ({ ok: false, error }) as const,
+  );
+  gate.disarm();
+  const decision = await gate.decision;
+  if (decision.mode === 'overlapped') {
+    try {
+      await decision.run.abandon();
+    } catch (failure) {
+      const detail = failure instanceof Error ? failure.message : String(failure);
+      const said = `the checks child could not be abandoned: ${detail}`;
+      if (ended.ok) throw new Error(said, { cause: failure });
+      process.stderr.write(`vat: ${said}\n`);
+    }
+  }
+  if (!ended.ok) throw ended.error;
+  return ended.value;
+}
+
+/**
+ * The first stored member, in the store's order, that admission would compute, by admission's own
+ * predicate; `undefined` when every one is admitted from the store. Every member is asked in one
+ * synchronous pass over the one memoized tier read, through a reader that decodes nothing once the
+ * gate has closed, so a disarm that lands while the tier is read stops every decode.
+ *
+ * @param stored - The hit's stored content
+ * @param routing - The run's parse routing
+ * @param open - Whether the gate still judges
+ * @returns The member and the predicate that sends it cold
+ * @throws What the tier read rejected with
+ */
+async function firstComputedMember(
+  stored: StoredContent,
+  routing: ChecksOverlapGateOptions['routing'],
+  open: () => boolean,
+): Promise<{ member: string; route: StoredComputeBy } | undefined> {
+  const facts = async (): Promise<(contentKey: string) => BlobFactsOutcome> => {
+    const reader = await stored.facts();
+    return (contentKey) => (open() ? reader(contentKey) : NOT_DECODED);
+  };
+  const answers = await Promise.all([...stored.members].map(async ([path, realization]) => ({
+    path,
+    answer: await storedAnswer(realization, parserKindForResolvedPath(path, routing.resolver, routing.baseDir), facts),
+  })));
+  for (const { path, answer } of answers) {
+    if (answer.kind === 'compute') return { member: safePath.relative(routing.baseDir, path), route: answer.by };
+  }
+  return undefined;
+}

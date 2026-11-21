@@ -36,7 +36,7 @@ import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/doc
 import { formatIssueLines } from '../../utils/issue-rendering.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { projectRootOrNull, requireInputPath } from '../../utils/project-root-policy.js';
-import { runSkillRegistries, withRunContext } from '../../utils/resource-loader.js';
+import { runSkillRegistries, NO_HOME_SETTLED_LISTENER, withRunContext } from '../../utils/resource-loader.js';
 import { renderSkillQualityFooter } from '../../utils/skill-quality-footer.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
 
@@ -272,7 +272,7 @@ export async function reviewCommand(
     const projectSkills = await resolveProjectDeclaredEvalSuites(skillPath, 'refuse');
     // One run for the review, rooted at the project when there is one and at the
     // skill's own directory when there is none.
-    const result = await withRunContext({ root: projectRoot ?? dirname(skillPath) }, (run) =>
+    const result = await withRunContext({ root: projectRoot ?? dirname(skillPath), homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
       validateSkillForPackaging(skillPath, resolveProjectResourcesValidation(skillPath), packagingConfig, 'source', {
         projectSkills,
         registries: runSkillRegistries(run),

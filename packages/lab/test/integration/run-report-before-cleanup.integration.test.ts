@@ -9,7 +9,8 @@
  * (`TMPDIR`/`TEMP`/`TMP`, `HOME`, `CLAUDE_CONFIG_DIR`) points at this case's
  * scratch directory.
  *
- * Integration-tier: the lab in-process, spawning a stand-in `dist:` build.
+ * Integration-tier: the built lab in-process (its perf capture loads the emitted
+ * probe), spawning a stand-in `dist:` build.
  */
 
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -17,7 +18,7 @@ import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdirSyncReal, normalizedTmpdir, normalizePath, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 
-import { createProgram } from '../../src/bin/vat-lab.js';
+import { builtLabProgram } from './probe-fixtures.js';
 
 /** The stand-in build: answers `--version`, and in an arm removes its arms root's marker. */
 const STAND_IN = [
@@ -68,7 +69,7 @@ describe('vat-lab <facet> run — the report is written before the arms root end
     const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
     const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
 
-    await createProgram().parseAsync([
+    await (await builtLabProgram()).parseAsync([
       'node', 'vat-lab', 'perf', 'run', subject, '--instrument', `dist:${bin}`,
       '--command', 'skills-list', '--runs', '1', '--cache', 'cold', '--out', out,
     ]);

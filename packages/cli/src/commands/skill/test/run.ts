@@ -63,7 +63,7 @@ import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../../uti
 import { loadConfig, loadConfigCached } from '../../../utils/config-loader.js';
 import { endWithRefusal, endWithReport, leftoverIssueOf, NOTHING_FINISHED } from '../../../utils/document-writer.js';
 import { collectRepeated } from '../../../utils/repeatable-option.js';
-import { runSkillRegistries, withRunContext } from '../../../utils/resource-loader.js';
+import { runSkillRegistries, NO_HOME_SETTLED_LISTENER, withRunContext } from '../../../utils/resource-loader.js';
 import { isSkillPublished } from '../../../utils/skill-packaging-config.js';
 import { runClaudePluginBuild } from '../../claude/plugin/build.js';
 import { packagingFailedIssue } from '../../skills/build.js';
@@ -1006,7 +1006,7 @@ async function runDeclaredSkillBuild(ref: BuildableReference): Promise<void> {
       conventionalSuiteProbe(),
     );
     // One run per build, rooted at the skill's declaring project, as `vat skills build` is.
-    await withRunContext({ root: ref.configRoot }, (run) =>
+    await withRunContext({ root: ref.configRoot, homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
       packageSkill(ref.sourcePath, { ...options, registries: runSkillRegistries(run) }),
     ).catch((error: unknown) => {
       throw asPackagerRefusal(error);

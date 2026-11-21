@@ -458,6 +458,7 @@ export { classifyLink, isLocalFileLink } from './link-classify.js';
 // `parseFileCached` and a `ParseDispatcher` accept. `isParsableContent`
 // is the narrowing between them, and is exported because there is no other way
 // for a caller holding a path-routed blob to reach the parse path.
+export { parserKindForResolvedPath } from './parser-kind-for-path.js';
 export {
   computeContentKey,
   inMemoryContent,
@@ -950,9 +951,11 @@ export {
 // One read, key, parse and admission per file per VAT process run, whichever
 // lane asks (content-keying-and-git.md, rule 4).
 export {
+  IGNORE_HOME_SETTLEMENT,
   RunPopulation,
   withPopulationRun,
   withRunPopulation,
+  type HomeSettlement,
   type PopulationRun,
   type RunPopulationOptions,
 } from './projection/run-population.js';
@@ -1092,7 +1095,16 @@ export {
 } from './projection/blob-population.js';
 
 // A warm run's blob tier read failing is the store's refusal, by this code (the CLI's refusal table).
-export { PROJECTION_STORE_READ_FAILED_CODE } from './projection/stored-admission.js';
+// `hydratesUnder` and `storedAnswer` are warm admission's own predicates, exported so `vat
+// validate`'s checks overlap gate judges "admitted from the store" by them, never by a copy.
+export {
+  PROJECTION_STORE_READ_FAILED_CODE,
+  hydratesUnder,
+  storedAnswer,
+  type StoredAnswer,
+  type StoredComputeBy,
+  type StoredContent,
+} from './projection/stored-admission.js';
 
 // Emitting the projection as a document — "no engine" (zones §15 step 6). Rows
 // out; no index, no join, no filter, no query. Two properties are load-bearing:
