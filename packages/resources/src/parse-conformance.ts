@@ -412,7 +412,7 @@ function collectFactDifferences(
   candidate: ParseFacts,
   findings: ConformanceFinding[],
 ): void {
-  const emitted = candidate.links.map((link) => link.nodeType ?? 'unknown');
+  const emitted = candidate.links.map((link) => link.nodeType);
   if (!isBucketedByKind(emitted)) {
     findings.push({ kind: 'link-order', document: name, emitted });
   }

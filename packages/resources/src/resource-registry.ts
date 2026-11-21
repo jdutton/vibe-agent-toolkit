@@ -47,7 +47,7 @@ import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 import { vatLinkCacheDirectory } from './cache-root.js';
 import { calculateChecksumFromContent } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
-import { isParsableContent, type KeyedContent, NO_PARSER_KIND, type ParserKind, readContentWithKey } from './content-key.js';
+import { type KeyedContent, NO_PARSER_KIND, type ParserKind, readContentWithKey } from './content-key.js';
 import type { DeferredArtifacts } from './deferred-artifacts.js';
 import {
   validateFrontmatterLinks,
@@ -59,18 +59,18 @@ import {
   type CompiledFrontmatterSchema,
 } from './frontmatter-validator.js';
 import { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
-import { estimateTokens } from './link-classify.js';
-import type { ParseResult } from './link-parser.js';
 import { fillLinkFacts, fragmentIndex, judgeLink, resolveLinkEntries, unreadableTargetsFrom, type FragmentIndex, type JudgeLinkOptions, type LinkEntry, type ValidateLinkOptions } from './link-validator.js';
 import { parserKindForMimeType } from './mime-type.js';
 import { type NotAdmittedLog, notAdmittedIssues, parseRefusedEntry } from './not-admitted.js';
 import { ParseCache, type ParseCacheStats } from './parse-cache.js';
 import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } from './parse-dispatcher.js';
 import { isReadFailure, readFailureCode } from './parse-failure.js';
-import { isPerRunParseRefusal, type PerRunParseRefusal } from './parse-limits.js';
+import { isParserThrewError, isPerRunParseRefusal, type PerRunParseRefusal } from './parse-limits.js';
 import { POPULATION_PARSE_LIMITS } from './projection/content-cache.js';
 import { isDeclinedSymlinkCode } from './projection/contributors/filesystem-extent.js';
 import { declinedLinkApplies, type PopulationUnreadablePolicy } from './projection/crawl-source.js';
+import { contentRoute } from './projection/document-facts.js';
+import { parseFailedEntry, parseFailedMessage } from './projection/parse-failure.js';
 import {
   collectionMimeConflictFinding,
   createCollectionMimeResolver,
@@ -538,51 +538,6 @@ type LoadedCollectionSchema =
  */
 function collectionSchemaCacheKey(resolvedSchemaPath: string, mode: ValidationMode): string {
   return `${mode}:${resolvedSchemaPath}`;
-}
-
-/**
- * What a resource is when nothing parses it.
- *
- * `parserKindForPath` answers `none` for every type that is neither prose nor
- * markup, and the dispatcher refuses that kind in its SIGNATURE — so this is not a
- * fallback the registry may forget, it is the other half of a decision the
- * compiler insists on. The alternative was the status quo ante, where a `.ts`
- * file went to `remark-parse` and came back with reference-style "links" made of
- * adjacent bracket groups: 5,329 TypeScript and 713 JSON files produced 100% of
- * one adopter tree's dangling-reference warnings that way.
- *
- * Empty because there is nothing to report, not because reporting was skipped:
- * `links` and `headings` are AST products and there is no AST, while `anchors`,
- * `parseErrors`, `unresolvedReferences` and the frontmatter trio are omitted
- * exactly as `parseHtmlContent` omits whatever it cannot produce. What survives
- * is the one fact that is a function of the bytes alone and that consumers
- * genuinely use for a non-prose file: its token estimate.
- *
- * ⚠️ NOT the same function as `unparsedFacts` in `projection/blob-population.ts`,
- * and deliberately so. That one additionally runs the raw-source lexer and
- * `measureContent`, because the projection has columns for both and its whole
- * purpose is making a bundled script's references queryable. `ResourceMetadata`
- * has nowhere to put either, so computing them here would buy a lexer scan per
- * resource and then drop the result.
- *
- * ⛔ Exported for ONE reason: the CLI's parse-fact snapshot needs the same
- * answer, and a third copy of this shape in the CLI would be both the
- * parallel-implementation anti-pattern and business logic in a layer that must
- * stay dumb. Two copies already exist and the split between them is a measured
- * difference in what their consumers can store — a third would be a duplicate,
- * not a distinction. Do not add callers casually.
- *
- * @param keyed - The bytes, their key and their byte length, from ONE read
- * @returns Parse facts describing exactly what the bytes say and nothing more
- */
-export function unparsedResourceFacts(keyed: KeyedContent): ParseResult {
-  return {
-    links: [],
-    headings: [],
-    content: keyed.content,
-    sizeBytes: keyed.byteLength,
-    estimatedTokenCount: estimateTokens(keyed.content),
-  };
 }
 
 /**
@@ -1127,6 +1082,14 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       // the file's or VAT's: a finding, so one runaway document never fails the
       // whole crawl (ADR I6, I8).
       if (isPerRunParseRefusal(error)) return { outcome: 'parse-refused', filePath, error };
+      // The parser threw on these bytes: a fact of the document, so the file is
+      // unreadable under the parser's code - exactly as the blob lane records a
+      // `BLOB_PARSE_FAILED` row (`parseFailedEntry`, one rule for both lanes) -
+      // never a failed run.
+      if (isParserThrewError(error)) {
+        const entry = parseFailedEntry(parseFailedMessage(this.parserKindFor(safePath.resolve(filePath)), error));
+        return { outcome: 'unreadable', filePath, ...entry, error };
+      }
       if (isReadFailure(error)) {
         // A file the crawl handed us that we cannot read. Recorded, not thrown:
         // previously this terminated `vat resources scan|validate` and `vat
@@ -1307,13 +1270,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Parse from the bytes already in hand — or from a cache entry filed under
     // the key those bytes just produced. See `ParseDispatcher.parse`.
     //
-    // …unless nothing parses this at all. `parserKindForPath` answers `none` for
-    // every type that is neither prose nor markup, and the dispatcher refuses that
-    // kind by TYPE rather than by throwing, so the branch cannot be forgotten.
-    // See {@link unparsedResourceFacts} for what a resource is without a parse.
-    const parseResult = isParsableContent(keyed)
-      ? await dispatcher.parse(keyed)
-      : unparsedResourceFacts(keyed);
+    // …unless the bytes are not text, or nothing parses this kind at all: the ONE
+    // route both lanes take (`contentRoute`, projection/document-facts.ts), so a
+    // binary `.md` is the same resource here as the blob lane's stored facts say.
+    const route = contentRoute(keyed);
+    const parseResult = route.kind === 'parse' ? await dispatcher.parse(route.content) : route.facts;
 
     // Checksum from the bytes already decoded, not a second read of the file.
     // It hashes the DECODED STRING, which is a different keyspace from

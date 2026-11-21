@@ -17,6 +17,7 @@ import {
   CLAUDE_RULE_FRONTMATTER_INVALID_CHECK,
   CLAUDE_RULE_GLOB_INERT_CHECK,
   CLAUDE_RULE_LINK_UNCHECKED_CHECK,
+  type BlobRow,
   type ExtentScopedRows,
 } from '@vibe-agent-toolkit/resources';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -30,6 +31,18 @@ const ROOT_ID = 'root-1';
 
 const RULES_ID = 'res-rules';
 const RULES_PATH = '.claude/rules/demo.md';
+/**
+ * The sample `blobs` row for one content key.
+ *
+ * @param key - The content key
+ * @returns The row
+ */
+function sampleBlob(key: string): BlobRow {
+  const [row] = sampleBlobRows(key).blobs;
+  if (row === undefined) throw new Error('sampleBlobRows returned no blobs row');
+  return row;
+}
+
 /** A rules identity with no realization row — the twin's LEFT JOIN arm. */
 const UNREALIZED_ID = 'res-unrealized';
 
@@ -223,7 +236,9 @@ describe('built-in SQL twins', () => {
   it('claude-rule-frontmatter-invalid: one row per broken rules FILE, never per realization', async () => {
     const broken = contentKey('c');
     const healthy = contentKey('d');
+    const sequence = contentKey('e');
     const HEALTHY_RULES = '.claude/rules/fine.md';
+    const SEQUENCE_RULES = '.claude/rules/list.md';
     const base = sampleExtentRows(ROOT_ID);
     const rows: ExtentScopedRows = {
       ...base,
@@ -233,6 +248,8 @@ describe('built-in SQL twins', () => {
         { ...realizationRow({ resourceId: RULES_ID, extentId: 'ext-1', path: RULES_PATH }), contentKey: broken },
         { ...realizationRow({ resourceId: RULES_ID, extentId: 'ext-2', path: RULES_PATH }), contentKey: broken },
         { ...realizationRow({ resourceId: 'res-fine', extentId: 'ext-1', path: HEALTHY_RULES }), contentKey: healthy },
+        // Valid YAML that is not a mapping: no parser error, only the flag.
+        { ...realizationRow({ resourceId: 'res-list', extentId: 'ext-1', path: SEQUENCE_RULES }), contentKey: sequence },
         // Same broken bytes, NOT a rules file: validate's business, not this check's.
         { ...realizationRow({ resourceId: 'res-doc', extentId: 'ext-1', path: 'docs/copy.md' }), contentKey: broken },
       ],
@@ -240,22 +257,34 @@ describe('built-in SQL twins', () => {
         ...base.resourceTags,
         { resourceId: RULES_ID, tag: 'rules-file', value: null, source: 'agentic-convention' },
         { resourceId: 'res-fine', tag: 'rules-file', value: null, source: 'agentic-convention' },
+        { resourceId: 'res-list', tag: 'rules-file', value: null, source: 'agentic-convention' },
       ],
     };
-    const brokenBlob = { ...sampleBlobRows(broken).blobs[0], contentKey: broken, frontmatter: null, frontmatterError: 'bad yaml' };
-    const healthyBlob = { ...sampleBlobRows(healthy).blobs[0], contentKey: healthy };
-    store = hydrateEveryTable({ ...sampleProjection([]), blobs: [brokenBlob, healthyBlob], ...rows });
+    const brokenBlob = { ...sampleBlob(broken), frontmatter: null, frontmatterValue: null, frontmatterError: 'bad yaml' };
+    const healthyBlob = sampleBlob(healthy);
+    const sequenceBlob = {
+      ...sampleBlob(sequence), frontmatter: null, frontmatterValue: null, frontmatterError: null, frontmatterNotAMapping: true,
+    };
+    const blobs = [brokenBlob, healthyBlob, sequenceBlob];
+    store = hydrateEveryTable({ ...sampleProjection([]), blobs, ...rows });
 
-    const fromSql = store.query(CLAUDE_RULE_FRONTMATTER_INVALID_CHECK.sqlTwin)
-      .map((row) => String(row['path']))
-      .sort((a, b) => a.localeCompare(b));
-    const fromPredicate = CLAUDE_RULE_FRONTMATTER_INVALID_CHECK.run({ ...rows, blobs: [brokenBlob, healthyBlob] })
-      .map((issue) => issue.location ?? '')
-      .sort((a, b) => a.localeCompare(b));
+    const sqlRows = store.query(CLAUDE_RULE_FRONTMATTER_INVALID_CHECK.sqlTwin)
+      .map((row) => ({ path: String(row['path']), reason: String(row['frontmatterError']) }))
+      .sort((a, b) => a.path.localeCompare(b.path));
+    const issues = CLAUDE_RULE_FRONTMATTER_INVALID_CHECK.run({ ...rows, blobs })
+      .toSorted((a, b) => (a.location ?? '').localeCompare(b.location ?? ''));
 
-    // Non-vacuous: exactly the one broken rules file.
-    expect(fromPredicate).toEqual([RULES_PATH]);
-    expect(fromSql).toEqual(fromPredicate);
+    // Non-vacuous: the YAML-error rules file and the not-a-mapping one, never
+    // the healthy one, the non-rules copy, or a second realization.
+    expect(issues.map((issue) => issue.location)).toEqual([RULES_PATH, SEQUENCE_RULES]);
+    expect(sqlRows.map((row) => row.path)).toEqual(issues.map((issue) => issue.location));
+    // And the same reason: the SQL column's text is what the TS check reports,
+    // for a parser error and for the not-a-mapping flag alike.
+    expect(sqlRows[0]?.reason).toBe('bad yaml');
+    expect(sqlRows[1]?.reason).toContain('not a YAML mapping');
+    for (const [index, row] of sqlRows.entries()) {
+      expect(issues[index]?.message, row.path).toContain(row.reason);
+    }
   });
 
   it('claude-rule-link-unchecked: the same rules links, and no case variant of one', async () => {

@@ -27,3 +27,18 @@
 export function quoteIdentifier(identifier: string): string {
   return `"${identifier.replaceAll('"', '""')}"`;
 }
+
+/**
+ * Quote a string as an SQL string literal: single quotes, each embedded quote
+ * doubled. For a constant spliced into a statement VAT writes itself, never for
+ * a value a user supplied (that is a bound parameter).
+ *
+ * @param value - The text
+ * @returns The literal
+ *
+ * @example
+ * quoteSqlString("it's")  // "'it''s'"
+ */
+export function quoteSqlString(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}

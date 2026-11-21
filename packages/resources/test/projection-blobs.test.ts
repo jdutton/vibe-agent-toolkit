@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { encodeFrontmatterValue } from '../src/frontmatter-codec.js';
 import {
   BlobConditionRowSchema,
   BlobReferenceRowSchema,
@@ -18,13 +19,17 @@ describe('BlobRowSchema', () => {
     replacementCharacters: 0,
     tokenEstimate: 2,
     frontmatter: null,
+    frontmatterValue: null,
     frontmatterError: null,
+    frontmatterNotAMapping: false,
+    anchors: [],
     wordCount: 1,
     proseCodeUnits: 10,
     codeBlockCodeUnits: 0,
     linkCount: 0,
     headingCount: 0,
     sectionCount: 0,
+    findingCount: 0,
   };
 
   it('accepts a fully-populated row', () => {
@@ -36,19 +41,35 @@ describe('BlobRowSchema', () => {
       replacementCharacters: 3,
       tokenEstimate: 256,
       frontmatter: { status: 'accepted', sources: ['a.md', 'b.md'] },
+      frontmatterValue: encodeFrontmatterValue({ status: 'accepted', sources: ['a.md', 'b.md'] }),
       frontmatterError: null,
+      frontmatterNotAMapping: false,
+      anchors: ['intro', 'usage'],
       wordCount: 150,
       proseCodeUnits: 900,
       codeBlockCodeUnits: 124,
       linkCount: 3,
       headingCount: 2,
       sectionCount: 2,
+      findingCount: 0,
     };
     expect(BlobRowSchema.safeParse(row).success).toBe(true);
   });
 
   it('accepts a blob with no frontmatter block', () => {
     expect(BlobRowSchema.safeParse(minimalBlob).success).toBe(true);
+  });
+
+  it('requires the exact-frontmatter, not-a-mapping and anchor columns', () => {
+    for (const missing of ['frontmatterValue', 'frontmatterNotAMapping', 'anchors']) {
+      const row: Record<string, unknown> = { ...minimalBlob };
+      delete row[missing];
+      expect(BlobRowSchema.safeParse(row).success, missing).toBe(false);
+    }
+  });
+
+  it('accepts a block that is valid YAML but not a mapping: no error, the flag set', () => {
+    expect(BlobRowSchema.safeParse({ ...minimalBlob, frontmatterNotAMapping: true }).success).toBe(true);
   });
 
   it('rejects an unknown field', () => {
@@ -72,6 +93,7 @@ describe('BlobReferenceRowSchema', () => {
     column: null,
     startOffset: 240,
     endOffset: 258,
+    astIndex: 0,
     syntacticForm: 'markdown-link',
     hasExtension: true,
     leadingAt: false,
@@ -85,17 +107,22 @@ describe('BlobReferenceRowSchema', () => {
     expect(BlobReferenceRowSchema.safeParse(markdownLink).success).toBe(true);
   });
 
-  it('requires the span, so no row can be admitted that a rewriter cannot locate', () => {
-    // `column` is null for every AST-derived link, so the span is the ONLY
-    // column that can place a reference precisely — a nullable one would leave
-    // exactly the population a rewriter cares about unlocatable, which is the
-    // state this column pair was added to end. A candidate with no span is
-    // skipped by `blobReferencesFor` and counted, never admitted with a hole.
-    for (const missing of ['startOffset', 'endOffset']) {
+  it('requires every position column and astIndex to be present, never omitted', () => {
+    // A column may be null (the parser supplied no position) but never absent:
+    // an omitted column is a producer that forgot it, and the row would read
+    // the same as one the parser could not place.
+    for (const missing of ['line', 'startOffset', 'endOffset', 'astIndex']) {
       const row: Record<string, unknown> = { ...markdownLink };
       delete row[missing];
-      expect(BlobReferenceRowSchema.safeParse(row).success).toBe(false);
+      expect(BlobReferenceRowSchema.safeParse(row).success, missing).toBe(false);
     }
+  });
+
+  it('accepts an AST-derived link the parser gave no position, kept with null position columns', () => {
+    // A GFM autolink literal glued to text arrives with no position. It is still
+    // a link the resource carries, so it is a row rather than a skip.
+    const row = { ...markdownLink, line: null, startOffset: null, endOffset: null };
+    expect(BlobReferenceRowSchema.safeParse(row).success).toBe(true);
   });
 
   it('accepts an @-prefixed token with a column (lexer-derived)', () => {
@@ -105,6 +132,7 @@ describe('BlobReferenceRowSchema', () => {
       rawRef: '@README.md',
       text: null,
       column: 1,
+      astIndex: null,
       syntacticForm: 'at-prefixed',
       leadingAt: true,
       slashCount: 0,
@@ -168,6 +196,11 @@ describe('BlobSectionRowSchema', () => {
     expect(BlobSectionRowSchema.safeParse(topLevelSection).success).toBe(true);
   });
 
+  it('accepts a heading the parser gave no position, kept with all four span columns null', () => {
+    const row = { ...topLevelSection, lineStart: null, lineEnd: null, bytes: null, tokens: null };
+    expect(BlobSectionRowSchema.safeParse(row).success).toBe(true);
+  });
+
   it('rejects a `characters` column, which the table deliberately does not carry', () => {
     // `bytes` is a real UTF-8 byte count and is the ONLY size column here. A
     // code-point column was added and then dropped: it cost an O(n) spread per
@@ -217,6 +250,7 @@ describe('BlobConditionRowSchema', () => {
     const row = {
       blob: VALID_KEY,
       code: 'PARSE_ODDITY',
+      ordinal: 0,
       severity: 'warning',
       message: 'unrecognized YAML anchor reuse',
       line: 4,
@@ -228,6 +262,7 @@ describe('BlobConditionRowSchema', () => {
     const row = {
       blob: VALID_KEY,
       code: 'FRONTMATTER_PARSE_ERROR',
+      ordinal: 2,
       severity: 'error',
       message: 'YAML syntax error',
       line: null,
@@ -235,10 +270,16 @@ describe('BlobConditionRowSchema', () => {
     expect(BlobConditionRowSchema.safeParse(row).success).toBe(true);
   });
 
+  it('requires the per-code ordinal', () => {
+    const row = { blob: VALID_KEY, code: 'PARSE_ODDITY', severity: 'warning', message: 'x', line: null };
+    expect(BlobConditionRowSchema.safeParse(row).success).toBe(false);
+  });
+
   it('rejects an invalid severity', () => {
     const row = {
       blob: VALID_KEY,
       code: 'PARSE_ODDITY',
+      ordinal: 0,
       severity: 'critical',
       message: 'x',
       line: null,

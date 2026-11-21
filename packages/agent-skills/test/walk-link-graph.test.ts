@@ -376,6 +376,7 @@ function createLocalLink(text: string, href: string, resolvedId?: string): Resou
     href,
     type: 'local_file',
     line: 1,
+    nodeType: 'link',
     ...(resolvedId === undefined ? {} : { resolvedId }),
   };
 }
@@ -681,8 +682,8 @@ describe('walkLinkGraph', () => {
 
     it('should skip non-local_file link types', () => {
       const result = walkSingleSkill([
-        { text: 'external', href: 'https://example.com', type: 'external', line: 1 },
-        { text: 'section', href: '#heading', type: 'anchor', line: 2 },
+        { text: 'external', href: 'https://example.com', type: 'external', line: 1, nodeType: 'link' },
+        { text: 'section', href: '#heading', type: 'anchor', line: 2, nodeType: 'link' },
       ]);
 
       expectEmptyWalkResult(result);

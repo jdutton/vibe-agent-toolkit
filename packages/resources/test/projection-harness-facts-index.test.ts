@@ -45,7 +45,7 @@ describe('harnessFactsIndex', () => {
   });
 
   it('reads a blob whose read this run refused as refused, and only for a parse-refusal code', () => {
-    const refusal = (code: string): BlobConditionRow => ({ blob: OTHER, code, severity: 'warning', message: 'm', line: null });
+    const refusal = (code: string): BlobConditionRow => ({ blob: OTHER, code, ordinal: 0, severity: 'warning', message: 'm', line: null });
     expect(harnessFactsIndex(view, 'claude-code').refused(OTHER)).toBe(false);
     expect(harnessFactsIndex({ ...view, blobConditions: [refusal(BLOB_PARSE_LIMIT_EXCEEDED)] }, 'claude-code').refused(OTHER)).toBe(true);
     expect(harnessFactsIndex({ ...view, blobConditions: [refusal(BLOB_PARSE_WORKER_DIED)] }, 'claude-code').refused(OTHER)).toBe(true);
@@ -56,7 +56,7 @@ describe('harnessFactsIndex', () => {
     const conditions: BlobConditionRow[] = [];
     const live = { ...view, blobConditions: conditions };
     expect(harnessFactsIndex(live, 'claude-code').refused(OTHER)).toBe(false);
-    conditions.push({ blob: OTHER, code: BLOB_PARSE_LIMIT_EXCEEDED, severity: 'warning', message: 'm', line: null });
+    conditions.push({ blob: OTHER, code: BLOB_PARSE_LIMIT_EXCEEDED, ordinal: 0, severity: 'warning', message: 'm', line: null });
     expect(harnessFactsIndex(live, 'claude-code').refused(OTHER)).toBe(true);
   });
 

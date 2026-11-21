@@ -109,20 +109,19 @@
 import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
 import type { TextProvenance } from '@vibe-agent-toolkit/utils/text';
 
-import { isParsableContent, type KeyedContent, type ParsableContent, type ParserKind } from '../content-key.js';
-import { estimateTokens } from '../link-classify.js';
+import type { KeyedContent, ParsableContent, ParserKind } from '../content-key.js';
 import type { ParseResult } from '../link-parser.js';
 import { parseRefusal } from '../not-admitted.js';
 import { type ParseDispatcher, driveInOrder, tallyParsable } from '../parse-dispatcher.js';
 import { isParseLimitError, isParserThrewError, isPerRunParseRefusal, type PerRunParseRefusal } from '../parse-limits.js';
-import { type CodeContextRanges, findLexicalReferences } from '../reference-lexer.js';
 import type { BlobConditionRow } from '../schemas/projection-blobs.js';
 import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
 
-import { blobConditionsFor, blobRowFor, measureContent } from './blob-facts.js';
+import { blobConditionsFor, blobRowFor } from './blob-facts.js';
 import { blobReferencesFor } from './blob-references.js';
-import { blobSectionsFor, flattenHeadings } from './blob-sections.js';
+import { blobSectionsFor } from './blob-sections.js';
 import { readKeyedContent } from './content-cache.js';
+import { contentRoute, NOT_TEXT_MESSAGE } from './document-facts.js';
 import { errorLabel } from './error-label.js';
 import { parseFailedMessage } from './parse-failure.js';
 import type { ProjectionBase, ProjectionBuilder } from './projection.js';
@@ -159,106 +158,6 @@ export const BLOB_PARSE_WORKER_DIED = 'BLOB_PARSE_WORKER_DIED';
 /** The bytes are not text, so no text parser was run over them. */
 export const BLOB_NOT_TEXT = 'BLOB_NOT_TEXT';
 
-/**
- * How far into a blob's DECODED content to look for the NUL that says "not
- * text".
- *
- * Git's own heuristic, and the same 8000-unit window it uses: a NUL inside the
- * first block is the one signal that separates binary from text without knowing
- * anything about the format. Bounded rather than whole-file because the check
- * must be cheap enough to run on every blob — the point is to avoid touching
- * megabytes, so a test that reads megabytes defeats itself.
- *
- * **Characters, not bytes**, and the name says so because the difference is
- * real: {@link looksBinary} runs over the decoded string, so for a UTF-16
- * document this window covers ~16 000 bytes and for UTF-32 ~32 000. Git counts
- * bytes because git never decodes. Nothing downstream depends on the exact
- * width, so the window is left at git's number rather than scaled per encoding —
- * a scaled window would be a second encoding-dependent behaviour to keep in step
- * with the decoder for no gain.
- */
-const BINARY_SNIFF_CHARS = 8000;
-
-/**
- * Whether these bytes are binary, and therefore have nothing a text parser can
- * find.
- *
- * ## Why this exists, with the measurement
- *
- * `parserKindForPath` used to route `.html`/`.htm` to the HTML parser and
- * **everything else to markdown** — so the filesystem extent, which enumerates
- * the whole tree rather than a glob, handed `remark-parse` every zip, PDF and
- * `.docx` under the root. What was never measured is what "arbitrary bytes"
- * costs when they are not text at all.
- *
- * Measured: a project of one 13-byte markdown file plus one 8 MB zip takes
- * **4.83 s on the projection lane against 0.035 s on the walker — 138×** — and
- * produces the identical answer, because the zip was never a member of the
- * result in the first place. On a real 86 MB adopter corpus carrying 77 MB of
- * PDFs and zips the command did not finish in five minutes, at 100% CPU.
- * `remark-parse` does not *fail* on binary input; it succeeds, slowly, building
- * an AST of garbage that every downstream stage then walks.
- *
- * ## Routing by MIME type did NOT retire this test
- *
- * A `.zip` now routes to `none`, so remark no longer sees it — and that removes
- * none of the reason for sniffing. This test runs **ahead of the kind split** and
- * refuses all three kinds, for two independent reasons. A `none`-routed binary
- * would otherwise earn a `blobs` row carrying a token estimate computed over
- * megabytes of mojibake, plus a full lexer scan of the same. And typing is by
- * NAME (`mime-type.ts` is a pure path lookup), so a `.docx` renamed `.md` still
- * routes to markdown and still hangs — which is exactly the case an extension
- * table can never see, and the case below is about.
- *
- * ## Why a content sniff and not an extension list
- *
- * An extension list would be a claim about a FILENAME, and a filename cannot
- * observe a cause: a `.zip` renamed `.md` would still hang, while a `.sh` a
- * skill bundles — which the closure genuinely wants read — has no extension in
- * common with `.md`. A NUL byte is the property itself. It also keeps the
- * deliberate capability intact: scripts, configs, `.txt`, files with no
- * extension at all are text, and are still parsed.
- *
- * ## This is a refusal, not a silence
- *
- * The caller records a {@link BLOB_NOT_TEXT} condition, exactly as it does for
- * an unreadable or changed blob. A blob with no rows and no condition would be
- * indistinguishable from a blob that genuinely had nothing to say — and the
- * whole `blob_conditions` table exists to keep those two apart. The blob is
- * still KEYED and still a member: identity, `gitignored`, and the realization
- * row are untouched. Only the parse is declined.
- *
- * ## The sniff runs AFTER the decode, and that ordering is the whole reason
- * UTF-16 works
- *
- * This takes the **decoded string**, never the raw bytes, and the argument type
- * is the enforcement. UTF-16 and UTF-32 text legitimately contains NUL *bytes* —
- * every ASCII character in a UTF-16 document carries one — so a sniff over bytes
- * classifies every such document as binary. That is precisely what used to
- * happen: `readContentWithKey` decoded as UTF-8 unconditionally, the NUL bytes
- * survived into the string as U+0000, and a perfectly ordinary markdown document
- * was refused here before any parser saw it. The decoder fix
- * (`decodeTextContent`, in `@vibe-agent-toolkit/utils/text`) removes the NULs by
- * decoding correctly, and this function needs no encoding table of its own to
- * benefit — it needs only to keep running second. **Moving this test onto raw bytes reinstates the defect in full.**
- *
- * What remains, stated rather than hidden: a genuinely binary file whose first
- * bytes happen to match a recognised BOM is decoded as text, and whether its
- * NULs survive that decode is luck. UTF-16 pairs `00 00` to U+0000 and UTF-32
- * maps most 4-byte runs to U+FFFD, so binary content usually still trips this
- * test — usually, not always. The consequence of a miss is a slow parse of
- * garbage, which is the cost this function exists to avoid, not a wrong answer.
- *
- * @param content - The decoded content, as the parser would receive it
- * @returns `true` when the content is binary
- */
-function looksBinary(content: string): boolean {
-  const limit = Math.min(content.length, BINARY_SNIFF_CHARS);
-  for (let index = 0; index < limit; index += 1) {
-    if (content.codePointAt(index) === 0) return true;
-  }
-  return false;
-}
 
 /**
  * Every parser kind, keyed by itself.
@@ -300,13 +199,9 @@ const PARSER_KIND_BY_PREFIX = new Map<string, ParserKind>(
  * What one run of {@link populateBlobs} did, and what it declined to do.
  *
  * Counters rather than a boolean, because the interesting claim about this
- * stage is quantitative. Two of them exist specifically to be asserted at zero
- * on a real corpus: `HeadingNode.line` and `ResourceLink.line` are optional
- * while `blob_sections.lineStart` and `blob_references.line` are required and
- * positive, and both are handled by **skipping, never defaulting** — a default
- * of line 1 would pile every position-less row onto the top of the document,
- * where no assertion could ever catch it. A skip that is never counted is the
- * same silence by another route, so it is counted here.
+ * stage is quantitative. A heading or link with no position is never skipped
+ * and never defaulted to line 1: it is a row with a null position, so nothing
+ * about it needs counting here.
  */
 export interface BlobPopulationResult {
   /** Distinct content keys that produced a `blobs` row in this run. */
@@ -433,46 +328,6 @@ export interface BlobPopulationResult {
    */
   readonly realizationsContentDeferred: number;
   /**
-   * Headings dropped by `blobSectionsFor` for want of a source line.
-   *
-   * Measured **0** over this repository's 4,425 blobs — remark always positions
-   * a heading.
-   */
-  readonly headingsSkippedForMissingLine: number;
-  /**
-   * Reference candidates dropped by `blobReferencesFor` for want of a source line.
-   *
-   * ⚠️ Non-zero on this repository, and reliably so. The cause is upstream of
-   * this module: a GFM autolink literal the tokenizer does not see is
-   * reconstructed by `mdast-util-gfm-autolink-literal`'s `findAndReplace`
-   * post-pass, which builds the `link` node with **no `position`**, so
-   * `toResourceLink` emits it with neither a line nor offsets. Minimal repro,
-   * verified:
-   *
-   * ```text
-   * parseMarkdownContent('"WebFetch(domain:www.anthropic.com)"\n', 36)
-   *   .links[0].line === undefined      // whereas '(www.anthropic.com)' → 1
-   * ```
-   *
-   * ⛔ **The count is deliberately not written here.** It used to read
-   * "measured 77 over this repository's 4,425 blobs, with a per-extension
-   * breakdown". Re-measured over the tracked tree it came back **94** — the
-   * figure moves whenever anyone adds a file quoting a URL, so pinning it in
-   * prose only guarantees a docstring that is wrong most of the time. Run the
-   * stage and read this counter if you want today's number.
-   *
-   * 🔑 What IS stable, and what the counter is really for, is the SHAPE: every
-   * dropped candidate observed so far is an http/www/email target sitting in a
-   * *non-markdown* blob (`.ts`, `.json`, `.yaml` — quoted URLs in source and
-   * fixtures), so none of them is a closure edge. That is a measured property
-   * of GFM autolink literals, not a guarantee — a position-less node naming a
-   * local file would be a lost edge, and this counter is the only thing that
-   * would show it. "Harmless" is a judgement a lens makes, not a reason to stop
-   * counting. Defaulting them to line 1 instead would plant rows at the top of
-   * documents where nothing could falsify them.
-   */
-  readonly referencesSkippedForMissingLine: number;
-  /**
    * Blobs whose decode produced at least one U+FFFD.
    *
    * The one counter here that describes a blob the stage **derived** rather than
@@ -481,8 +336,8 @@ export interface BlobPopulationResult {
    * queryable row whose text is garbage. Nothing else in this result set would
    * ever go non-zero for it.
    *
-   * Counted at row-emission time, deliberately **after** the {@link looksBinary}
-   * refusal. Counting it at read time would count every PNG, zip and PDF in the
+   * Counted at row-emission time, deliberately **after** the not-text
+   * refusal (`looksBinary`, `document-facts.ts`). Counting it at read time would count every PNG, zip and PDF in the
    * corpus — their bytes are invalid UTF-8 by the megabyte — and a warning that
    * fires on every repository containing an image is wallpaper. What survives to
    * here is the population that actually reached the index.
@@ -647,8 +502,6 @@ function emptyCounts(): MutableCounts {
     realizationsSkippedUnkeyed: 0,
     realizationsSkippedOversize: 0,
     realizationsContentDeferred: 0,
-    headingsSkippedForMissingLine: 0,
-    referencesSkippedForMissingLine: 0,
     blobsDecodedWithReplacements: 0,
     blobsAssumedEncodingWithReplacements: 0,
     replacementCharacters: 0,
@@ -842,30 +695,21 @@ async function prepareBlob(
   if ('outcome' in keyed) return keyed;
 
   // Before the parse, never after: the whole cost this refuses IS the parse.
-  // And after the DECODE, never before — see {@link looksBinary} for why a sniff
+  // And after the DECODE, never before — see `looksBinary` (document-facts.ts) for why a sniff
   // over raw bytes refuses every UTF-16 document, and for why the test is on the
   // content rather than on the extension. Ahead of the kind split below, because
   // a `none`-routed binary is just as much a waste as a markdown-routed one.
-  if (looksBinary(keyed.content)) {
-    return refused('blobsNotText', condition(
-      target.contentKey,
-      BLOB_NOT_TEXT,
-      `This blob contains a NUL within the first ${BINARY_SNIFF_CHARS} characters of its decoded`
-      + ' content, so it is not text; no parser was run over it. It has no sections or references'
-      + ' because it cannot have any, not because it was skipped silently',
-    ));
+  // THE route, one rule for both lanes (`document-facts.ts`): not text, no
+  // parser, or a parse.
+  const route = contentRoute(keyed);
+  if (route.kind === 'not-text') {
+    return refused('blobsNotText', condition(target.contentKey, BLOB_NOT_TEXT, NOT_TEXT_MESSAGE));
+  }
+  if (route.kind === 'without-parser') {
+    return { outcome: 'derived', target, keyed, parsed: route.facts, withoutParser: true };
   }
 
-  // THE kind split. `isParsableContent` is a type guard rather than a
-  // `parserKind !== 'none'` comparison because narrowing a property does not
-  // narrow the object, and the parse path accepts only the narrowed type — so
-  // forgetting this branch is a compile error at the call site rather than a
-  // parser handed bytes nothing routed to it.
-  if (!isParsableContent(keyed)) {
-    return { outcome: 'derived', target, keyed, parsed: unparsedFacts(keyed), withoutParser: true };
-  }
-
-  const parsed = await parseTarget(target, keyed, dispatcher);
+  const parsed = await parseTarget(target, route.content, dispatcher);
   if ('outcome' in parsed) return parsed;
   return { outcome: 'derived', target, keyed, parsed, withoutParser: false };
 }
@@ -912,67 +756,6 @@ function emitPreparedBlob(
   counts.blobsDerived += 1;
 }
 
-/**
- * The code context a blob with no AST has: none.
- *
- * `findLexicalReferences` normally receives the ranges `codeContextRangesFrom`
- * filtered out of the parse's spans, and a `none` blob is never parsed. Empty ranges are honest
- * rather than lossy here, and the measurement is what says so: the
- * fence/code-span annotation covered 0.0–2.7% of source files, and on those it
- * **inverted** — a backtick in a JSDoc comment read `inCodeSpan: true` while the
- * executable code beneath it read `false`, because remark was reading TypeScript
- * as CommonMark. An annotation that is wrong exactly where it applies is worth
- * less than an absent one, and every consumer already handles `false`.
- *
- * `excluded` is empty for a second, independent reason: it suppresses tokens
- * inside `link` / `image` / `yaml` / `html` NODES, so that a markdown link's
- * destination is not counted twice. Nothing is being double-counted here,
- * because no AST recorded it the first time.
- *
- * Shared rather than rebuilt per blob — the lexer only reads it — since being
- * cheap is the point of this route.
- */
-const NO_CODE_CONTEXT: CodeContextRanges = { fences: [], codeSpans: [], excluded: [] };
-
-/**
- * The facts a blob with no document parser has: everything derivable from its
- * bytes, and nothing derivable from a tree.
- *
- * Assembled here rather than fetched from a parser because there is no parser to
- * fetch it from — that is what `none` *means*. The empty fields are empty
- * because the document genuinely has no such facts, not because they were
- * skipped: `links` and `headings` are AST products, and `anchors`,
- * `parseErrors`, `unresolvedReferences` and the frontmatter trio are omitted
- * exactly as `parseHtmlContent` omits the ones it cannot produce.
- *
- * ⚠️ Deliberately NOT routed through `ParseCache`. An entry buys the cost
- * of the computation it replaces, and this one is `estimateTokens`, one lexer
- * scan and one offset walk — over a cold population of 8,713 documents the whole
- * `estimateTokens` pass measured 0.0006 s against `remark-parse`'s 66.0 s. Filing
- * that behind a disk read, a JSON parse and a Zod validate would cost more than
- * it saves, and would put a second, staler answer where the bytes already are.
- *
- * @param keyed - The confirmed read, of the kind no parser routes to
- * @returns Parse facts describing exactly what the bytes say and nothing more
- */
-function unparsedFacts(keyed: KeyedContent): ParseResult {
-  const lexicalReferences = findLexicalReferences(keyed.content, NO_CODE_CONTEXT);
-  return {
-    links: [],
-    headings: [],
-    // Omitted when empty, matching `parseMarkdownContent`: no own property of a
-    // `ParseResult` is ever valued `undefined`, and the cache's JSON round trip
-    // is exact under `toStrictEqual` only while that holds.
-    ...(lexicalReferences.length > 0 && { lexicalReferences }),
-    // No fence ranges, because no AST said where any are — so every code unit
-    // counts as prose. That is the only thing that can honestly be said, and it
-    // keeps `proseCodeUnits + codeBlockCodeUnits === content.length` true.
-    contentMeasures: measureContent(keyed.content, []),
-    content: keyed.content,
-    sizeBytes: keyed.byteLength,
-    estimatedTokenCount: estimateTokens(keyed.content),
-  };
-}
 
 /**
  * Read a target's bytes and confirm they still key to the blob the base named.
@@ -1108,16 +891,12 @@ async function parseTarget(
 }
 
 /**
- * Add every row one parse yields, and count what the assemblers dropped.
+ * Add every row one parse yields.
  *
- * The skip counts are measured by **comparison**, not reported by the
- * assemblers: `flattenHeadings(...).length` against the section rows, and
- * `links + lexicalReferences` against the reference rows. A count the producer
- * hands back could stop being true without anything noticing; a difference
- * between the input population and the output population cannot.
- *
- * `ParseResult.headings` is a **tree** — `headings.length` counts root headings
- * only, so it would silently under-report the population these rows come from.
+ * Nothing is dropped: every heading is a section row and every link a
+ * reference row, positioned or not, so `blobs.headingCount` and
+ * `blobs.linkCount` count the rows a reader rebuilds the resource from, and the
+ * reader checks them against each other.
  *
  * @param builder - The builder to add rows to
  * @param target - The blob and its path
@@ -1147,18 +926,13 @@ function emitBlobRows(
     builder.addBlobCondition(row);
   }
 
-  const sections = blobSectionsFor(contentKey, keyed.content, parsed.headings);
-  for (const row of sections) {
+  for (const row of blobSectionsFor(contentKey, keyed.content, parsed.headings)) {
     builder.addBlobSection(row);
   }
-  counts.headingsSkippedForMissingLine += flattenHeadings(parsed.headings).length - sections.length;
 
-  const references = blobReferencesFor(contentKey, parsed);
-  for (const row of references) {
+  for (const row of blobReferencesFor(contentKey, parsed)) {
     builder.addBlobReference(row);
   }
-  const candidates = parsed.links.length + (parsed.lexicalReferences?.length ?? 0);
-  counts.referencesSkippedForMissingLine += candidates - references.length;
 }
 
 /**
@@ -1269,7 +1043,8 @@ export function parseRefusalCondition(blob: string, error: PerRunParseRefusal): 
  * @returns The condition row
  */
 function condition(blob: string, code: string, message: string): BlobConditionRow {
-  return { blob, code, severity: 'warning', message, line: null };
+  // The one row of its code for its blob: a refusal is said once.
+  return { blob, code, ordinal: 0, severity: 'warning', message, line: null };
 }
 
 // `compareCodeUnits` comes from `@vibe-agent-toolkit/utils`. Never `localeCompare`: collation is

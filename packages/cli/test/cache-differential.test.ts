@@ -9,10 +9,12 @@ import { describe, expect, it } from 'vitest';
 
 import { groupOf, UNGROUPED } from './helpers/absence-causes.js';
 import {
+  ARM_NAMES,
   DECLARED_EMPTY,
   DUMPED_RELATIONS,
   expectNoDivergenceAndNoRefusal,
   expectSeed,
+  GATE_SLICES,
   HOLE_MOVED_COLUMNS,
   normalizeDocument,
   PER_RUN_FIELDS,
@@ -27,32 +29,49 @@ import {
 /** SQLite's default argument limit, which `json_object` (two per column) must stay under. */
 const SQLITE_MAX_FUNCTION_ARG = 127;
 
-/** A document holding every per-run field of a verb, valued `'per-run'`, beside a field that must survive. */
-function documentWithPerRunFields(paths: readonly string[]): Record<string, unknown> {
-  const document: Record<string, unknown> = { kept: 'answer', data: { kept: 'answer', checks: [{ id: 'a' }, { id: 'b' }] } };
-  for (const path of paths) {
-    const segments = path.split('.');
-    let cursor: unknown = document;
-    for (const [index, segment] of segments.entries()) {
-      const last = index === segments.length - 1;
-      const key = segment.endsWith('[]') ? segment.slice(0, -2) : segment;
-      const record = cursor as Record<string, unknown>;
-      if (segment.endsWith('[]')) {
-        for (const element of record[key] as Array<Record<string, unknown>>) element[segments[index + 1] ?? ''] = 'per-run';
-        break;
-      }
-      if (last) record[key] = 'per-run';
-      else cursor = record[key] ??= {};
-    }
+/** A document every verb's per-run paths reach into: lists at `data.checks` and `data.phases[].data.checks`. */
+function keptDocument(): Record<string, unknown> {
+  const checks = (): unknown[] => [{ id: 'a' }, { id: 'b' }];
+  return {
+    kept: 'answer',
+    data: { kept: 'answer', checks: checks(), phases: [{ name: 'one', data: { kept: 'answer', checks: checks() } }, { name: 'two', data: { kept: 'answer' } }] },
+  };
+}
+
+/**
+ * Value one dotted path (`a.b`, `a.list[].c`, nested lists too) `'per-run'` in place,
+ * through every element of every list it names.
+ */
+function plant(value: unknown, segments: readonly string[]): void {
+  const [head, ...rest] = segments;
+  if (head === undefined) return;
+  const record = value as Record<string, unknown>;
+  const key = head.endsWith('[]') ? head.slice(0, -2) : head;
+  if (head.endsWith('[]')) {
+    for (const element of (record[key] as unknown[] | undefined) ?? []) plant(element, rest);
+  } else if (rest.length === 0) {
+    record[key] = 'per-run';
+  } else {
+    record[key] ??= {};
+    plant(record[key], rest);
   }
+}
+
+/** A document holding every per-run field of a verb, valued `'per-run'`, beside fields that must survive. */
+function documentWithPerRunFields(paths: readonly string[]): Record<string, unknown> {
+  const document = keptDocument();
+  for (const path of paths) plant(document, path.split('.'));
   return document;
 }
 
 describe('normalizeDocument', () => {
   it.each(VERB_NAMES)('removes exactly the per-run fields of %s', (verb) => {
-    const normalized = normalizeDocument(verb, documentWithPerRunFields(PER_RUN_FIELDS[verb]));
+    const planted = documentWithPerRunFields(PER_RUN_FIELDS[verb]);
+    // Each path planted at least once, so a path the base document does not reach cannot pass vacuously.
+    expect(JSON.stringify(planted).split('per-run').length - 1, 'plants').toBeGreaterThanOrEqual(PER_RUN_FIELDS[verb].length);
+    const normalized = normalizeDocument(verb, planted);
     expect(JSON.stringify(normalized)).not.toContain('per-run');
-    expect(normalized).toEqual({ kept: 'answer', data: { kept: 'answer', checks: [{ id: 'a' }, { id: 'b' }] } });
+    expect(normalized).toEqual(keptDocument());
   });
 
   it('leaves a document without the fields as it was', () => {
@@ -129,6 +148,39 @@ describe('the census', () => {
   });
 });
 
+describe('the gate slices', () => {
+  const slices = Object.values(GATE_SLICES);
+
+  it('run store-off, the reference, first in every slice', () => {
+    for (const slice of slices) expect(slice.arms[0], slice.slice).toBe('storeOff');
+  });
+
+  it('hold every (arm, verb) cell but store-off\'s in exactly one slice, and name only real arms and verbs', () => {
+    const counts = new Map<string, number>();
+    for (const slice of slices) {
+      for (const arm of slice.arms.filter((name) => name !== 'storeOff')) {
+        for (const verb of slice.verbs) counts.set(`${arm} ${verb}`, (counts.get(`${arm} ${verb}`) ?? 0) + 1);
+      }
+    }
+    const every = ARM_NAMES.filter((arm) => arm !== 'storeOff').flatMap((arm) => VERB_NAMES.map((verb) => `${arm} ${verb}`));
+    expect(Object.fromEntries(counts)).toEqual(Object.fromEntries(every.map((cell) => [cell, 1])));
+  });
+});
+
+describe('where a run says its answer came from', () => {
+  it('reads vat validate\'s from its first phase that reports one, under that phase\'s name', () => {
+    const phases = [{ name: 'resources', data: { population: 'derived' } }, { name: 'checks', data: { population: 'store', lensPopulation: 'none' } }];
+    expect(VERBS.vatValidate.originsOf({ data: { phases } })).toEqual({ 'resources.population': 'derived' });
+    expect(VERBS.vatValidate.originsOf({ data: { phases: [{ name: 'skills', data: {} }, ...phases.slice(1)] } }))
+      .toEqual({ 'checks.population': 'store', 'checks.lensPopulation': 'none' });
+  });
+
+  it('reads a one-population verb\'s from data, and nothing from a refusal', () => {
+    expect(VERBS.check.originsOf({ data: { population: 'store', lensPopulation: 'derived' } })).toEqual({ population: 'store', lensPopulation: 'derived' });
+    expect(VERBS.vatValidate.originsOf({ status: 'error', data: null })).toEqual({});
+  });
+});
+
 /** A dump: one row in a blob-scoped relation, and one in each relation a hole moves a column of. */
 function holeDump(blob: string, contentKey: string): Record<string, unknown> {
   const rows = [
@@ -141,7 +193,7 @@ function holeDump(blob: string, contentKey: string): Record<string, unknown> {
 
 /** A query run the store served. */
 function servedQuery(label: keyof DifferentialResult['runs'], document: Record<string, unknown>) {
-  return { label, verb: 'query', status: 0, stdout: '', stderr: '', document, charged: [CRAWL_STORE_READ_ID] } as const;
+  return { label, verb: 'query', status: 0, stdout: '', stderr: '', document, origins: VERBS.query.originsOf(document), charged: [CRAWL_STORE_READ_ID] } as const;
 }
 
 /** The reference reads the new bytes; the warm arm was primed on the old ones, then measured. */
@@ -152,7 +204,7 @@ function holeResult(measuredBlob: string): DifferentialResult {
   return {
     arms: ['storeOff', 'warmSameHistory'],
     verbs: ['query'],
-    measured: { storeOff: { query: reference }, cold: {}, warmSameHistory: { query: measured } },
+    measured: { storeOff: { query: reference }, cold: {}, warmSameHistory: { query: measured }, partialEviction: {} },
     runs: { 'storeOff:measured': { query: reference }, 'warmSameHistory:prime': { query: prime }, 'warmSameHistory:measured': { query: measured } },
     rows: VERBS,
   };
@@ -180,12 +232,12 @@ describe('a documented hole', () => {
 /** A store-off-only result: the reference arm's dump, and one validate report. */
 function storeOffResult(dump: Record<string, unknown>, report: Record<string, unknown>): DifferentialResult {
   const run = (verb: 'query' | 'validate', document: Record<string, unknown>) =>
-    ({ label: 'storeOff:measured', verb, status: 0, stdout: '', stderr: '', document, charged: [] }) as const;
+    ({ label: 'storeOff:measured', verb, status: 0, stdout: '', stderr: '', document, origins: VERBS[verb].originsOf(document), charged: [] }) as const;
   const measured = { query: run('query', dump), validate: run('validate', report) };
   return {
     arms: ['storeOff'],
     verbs: ['validate', 'query'],
-    measured: { storeOff: measured, cold: {}, warmSameHistory: {} },
+    measured: { storeOff: measured, cold: {}, warmSameHistory: {}, partialEviction: {} },
     runs: { 'storeOff:measured': measured },
     rows: VERBS,
   };

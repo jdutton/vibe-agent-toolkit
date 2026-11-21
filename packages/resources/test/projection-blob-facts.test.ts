@@ -1,8 +1,16 @@
 import type { TextProvenance } from '@vibe-agent-toolkit/utils/text';
 import { describe, expect, it } from 'vitest';
 
+import { decodeFrontmatterValue, encodeFrontmatterValue } from '../src/frontmatter-codec.js';
 import { type ParseResult, parseMarkdownContent } from '../src/link-parser.js';
-import { BLOB_FINDING_CONDITION_CODES, blobConditionsFor, blobRowFor, harnessRowsFor } from '../src/projection/blob-facts.js';
+import {
+  BLOB_FINDING_CONDITION_CODES,
+  blobConditionsFor,
+  blobRowFor,
+  FRONTMATTER_NOT_A_MAPPING_REASON,
+  frontmatterInvalidReason,
+  harnessRowsFor,
+} from '../src/projection/blob-facts.js';
 import { claudeMemoryFactsOf } from '../src/projection/claude-memory.js';
 import { CLAUDE_CODE } from '../src/projection/harness/claude-code.js';
 import { BlobRowSchema } from '../src/schemas/projection-blobs.js';
@@ -94,33 +102,50 @@ describe('blobRowFor', () => {
 
   it('nulls frontmatter rather than emitting an empty object', () => {
     // Null and {} are different states: no frontmatter block versus an empty one.
-    expect(rowFor(8, decoding(), parseResult()).frontmatter).toBeNull();
+    const row = rowFor(8, decoding(), parseResult());
+    expect(row.frontmatter).toBeNull();
+    expect(row.frontmatterValue).toBeNull();
   });
 
-  it('⭐ calls a frontmatter block that is not a MAPPING an error, not silence', () => {
+  it('stores a mapping exactly, in the codec encoding, beside its lossy JSON view', () => {
+    const content = '---\ntitle: T\nn: .inf\n---\n\n# T\n';
+    const parsed = parseMarkdownContent(content, content.length);
+    const row = rowFor(8, decoding(), parsed);
+
+    expect(parsed.frontmatter).toBeDefined();
+    expect(row.frontmatterValue).toBe(encodeFrontmatterValue(parsed.frontmatter ?? {}));
+    expect(decodeFrontmatterValue(row.frontmatterValue ?? '')).toEqual(parsed.frontmatter);
+  });
+
+  it('⭐ calls a frontmatter block that is not a MAPPING invalid, not silence', () => {
     // `---\n- a\n- b\n---` is valid YAML and decodes to a sequence, so the
-    // parser reports no error and no object — and a `blobs` row carrying
-    // `frontmatter: null, frontmatterError: null` is indistinguishable from a
-    // file with no frontmatter at all. A `.claude/rules/` file in that state
-    // reads as declaring no `paths:`, so it looks unconditional and nothing
-    // says otherwise. The column's own contract is "why frontmatter did not
-    // parse TO AN OBJECT", which this is.
+    // parser reports no error and no object. Without its own column a `blobs`
+    // row carrying `frontmatter: null, frontmatterError: null` would be
+    // indistinguishable from a file with no frontmatter at all, and a
+    // `.claude/rules/` file in that state reads as declaring no `paths:`. The
+    // verdict is `frontmatterNotAMapping`, kept apart from the parser's own
+    // error, and `frontmatterInvalidReason` is where the two are joined.
     const row = rowFor(8, decoding(), parseMarkdownContent('---\n- a\n- b\n---\n\n# T\n', 20));
 
     expect(row.frontmatter).toBeNull();
-    expect(row.frontmatterError).toContain('not a YAML mapping');
+    expect(row.frontmatterValue).toBeNull();
+    expect(row.frontmatterError).toBeNull();
+    expect(row.frontmatterNotAMapping).toBe(true);
+    expect(frontmatterInvalidReason(row)).toBe(FRONTMATTER_NOT_A_MAPPING_REASON);
+    expect(frontmatterInvalidReason(row)).toContain('not a YAML mapping');
   });
 
   it('says nothing about a document with NO frontmatter block, or an empty one', () => {
     // The controls either side of it: absent and empty are both "nothing to
     // read", and neither is a defect. Without these the case above passes on a
     // rule that accuses every markdown file in the corpus.
-    expect(rowFor(8, decoding(), parseMarkdownContent('# T\n', 4)).frontmatterError)
+    expect(frontmatterInvalidReason(rowFor(8, decoding(), parseMarkdownContent('# T\n', 4))))
       .toBeNull();
-    expect(rowFor(8, decoding(), parseMarkdownContent('---\n---\n\n# T\n', 12))
-      .frontmatterError).toBeNull();
-    expect(rowFor(8, decoding(), parseMarkdownContent('---\ntitle: T\n---\n\n# T\n', 21))
-      .frontmatterError).toBeNull();
+    expect(frontmatterInvalidReason(rowFor(8, decoding(), parseMarkdownContent('---\n---\n\n# T\n', 12))))
+      .toBeNull();
+    const mapping = rowFor(8, decoding(), parseMarkdownContent('---\ntitle: T\n---\n\n# T\n', 21));
+    expect(frontmatterInvalidReason(mapping)).toBeNull();
+    expect(mapping.frontmatterNotAMapping).toBe(false);
   });
 
   it('says nothing about a block that decodes to NULL — comment-only, `~`, `null`', () => {
@@ -131,13 +156,16 @@ describe('blobRowFor', () => {
     for (const block of ['# paths come later', '~', 'null']) {
       const content = `---\n${block}\n---\n\n# T\n`;
       const row = rowFor(8, decoding(), parseMarkdownContent(content, content.length));
-      expect(row.frontmatterError, block).toBeNull();
+      expect(row.frontmatterNotAMapping, block).toBe(false);
+      expect(frontmatterInvalidReason(row), block).toBeNull();
     }
     // The controls that must still red: a real sequence and a real scalar.
     for (const block of ['- a', '42', 'just text']) {
       const content = `---\n${block}\n---\n\n# T\n`;
       const row = rowFor(8, decoding(), parseMarkdownContent(content, content.length));
-      expect(row.frontmatterError, block).toContain('not a YAML mapping');
+      expect(row.frontmatterError, block).toBeNull();
+      expect(row.frontmatterNotAMapping, block).toBe(true);
+      expect(frontmatterInvalidReason(row), block).toContain('not a YAML mapping');
     }
   });
 
@@ -147,6 +175,7 @@ describe('blobRowFor', () => {
     const row = rowFor(8, decoding(), parseResult({ frontmatterError: 'boom' }));
 
     expect(row.frontmatterError).toBe('boom');
+    expect(frontmatterInvalidReason(row)).toBe('boom');
   });
 
   it('counts every heading in the tree, not just its roots', () => {

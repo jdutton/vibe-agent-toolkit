@@ -474,6 +474,7 @@ export function createLink(
     href,
     type,
     line,
+    nodeType: 'link',
   };
 }
 

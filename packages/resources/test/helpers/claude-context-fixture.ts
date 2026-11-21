@@ -47,7 +47,7 @@ import { computeContentKey, inMemoryContent } from '../../src/content-key.js';
 import { parseMarkdownContent } from '../../src/link-parser.js';
 import { mimeTypeForPath } from '../../src/mime-type.js';
 import { blobRowFor, harnessRowsFor } from '../../src/projection/blob-facts.js';
-import { blobReferencesFor } from '../../src/projection/blob-references.js';
+import { AST_SYNTACTIC_FORMS, blobReferencesFor } from '../../src/projection/blob-references.js';
 import { claudeMemoryFactsOf } from '../../src/projection/claude-memory.js';
 import { RunContentCache } from '../../src/projection/content-cache.js';
 import type { ExtentContribution } from '../../src/projection/contributor.js';
@@ -233,6 +233,7 @@ function referenceRow(blob: string, ordinal: number, ref: FixtureRef): BlobRefer
     column: 1,
     startOffset,
     endOffset: startOffset + ref.rawRef.length,
+    astIndex: AST_SYNTACTIC_FORMS.has(ref.syntacticForm ?? MARKDOWN_LINK) ? ordinal : null,
     syntacticForm: ref.syntacticForm ?? MARKDOWN_LINK,
     hasExtension: true,
     leadingAt: false,

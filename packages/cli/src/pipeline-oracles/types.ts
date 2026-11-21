@@ -169,7 +169,7 @@ export interface LinkFact {
   text: string;
   type: string;
   line: number | null;
-  nodeType: string | null;
+  nodeType: string;
   /**
    * `ResourceLink.resolvedId`, which is `undefined` on a freshly-parsed link.
    *

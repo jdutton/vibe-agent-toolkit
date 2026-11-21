@@ -565,10 +565,10 @@ stays askable by anyone who wants a different answer.
 ✅ The second is `claude-rule-frontmatter-invalid` (`CLAUDE_RULE_FRONTMATTER_INVALID`), and it
 exists because of the first one's blind spot: a rules file whose YAML frontmatter VAT cannot read
 produces no `claude_rule_patterns` rows, so the inert check had nothing to read and passed. It reads
-`blobs.frontmatterError` for identities tagged `rules-file` instead — one finding per file. Two
-reasons fill that column: YAML that does not parse, and a block that parses to a **sequence or a
-scalar**, which has no `paths:` key to read and used to be indistinguishable from a file with no
-frontmatter at all.
+`blobs.frontmatterError` and `blobs.frontmatterNotAMapping` for identities tagged `rules-file`
+instead — one finding per file. Two reasons fire it: YAML that does not parse (`frontmatterError`),
+and a block that parses to a **sequence or a scalar** (`frontmatterNotAMapping`), which has no
+`paths:` key to read and used to be indistinguishable from a file with no frontmatter at all.
 
 ✅ The third is `claude-rule-link-unchecked` (`CLAUDE_RULE_LINK_UNCHECKED`), and it exists because of
 BOTH of their blind spots. VAT realizes no symbolic link's own path, so a `.claude/rules/x.md` that

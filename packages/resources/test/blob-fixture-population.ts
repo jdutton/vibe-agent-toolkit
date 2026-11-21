@@ -118,7 +118,7 @@ export async function populateFixtureRoot(rootDir: string): Promise<{ projection
 export function conditionsWithCode(
   projection: Projection,
   code: string,
-): readonly { blob: string; code: string; message: string }[] {
+): readonly Projection['blobConditions'][number][] {
   return projection.blobConditions.filter((row) => row.code === code);
 }
 

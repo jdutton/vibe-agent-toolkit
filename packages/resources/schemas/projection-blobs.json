@@ -81,14 +81,32 @@
               "type": "null"
             }
           ],
-          "description": "Parsed frontmatter as JSON, or null when the blob has no frontmatter block"
+          "description": "Parsed frontmatter as JSON, for SQL, or null when the blob has no frontmatter mapping. LOSSY where JSON is: `.inf` and `.nan` read as null, `-0` as 0, a `!!timestamp` as a string, a `!!set` as an object. The exact value is frontmatterValue"
+        },
+        "frontmatterValue": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The decoded frontmatter mapping in the frontmatter codec encoding (frontmatter-codec.ts), exact for every value YAML decodes to; null exactly when frontmatter is null. What a resource's frontmatter is rebuilt from"
         },
         "frontmatterError": {
           "type": [
             "string",
             "null"
           ],
-          "description": "Why frontmatter did not parse to an object, or null when it did (including \"no block at all\")"
+          "description": "The YAML parser's own error for the frontmatter block, verbatim, or null when it parsed (including \"no block at all\" and a block that is not a mapping: see frontmatterNotAMapping)"
+        },
+        "frontmatterNotAMapping": {
+          "type": "boolean",
+          "description": "True when the block is valid YAML that decodes to a sequence, a scalar or a typed value, so it declares no keys; frontmatter and frontmatterError are then both null. False for no block, a block declaring nothing (`~`, comment-only), a mapping and a YAML error"
+        },
+        "anchors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Fragment targets the blob declares as id/name attributes, in parser order: every HTML element's, and a markdown blob's raw-HTML ones (lowercased). Empty when it declares none"
         },
         "wordCount": {
           "type": "integer",
@@ -115,6 +133,11 @@
         "sectionCount": {
           "type": "integer",
           "minimum": 0
+        },
+        "findingCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many finding rows (HTML_PARSE_ERROR, UNRESOLVED_REFERENCE) the parse filed in blob_conditions for this blob: what a reader checks those rows against, as linkCount checks blob_references"
         }
       },
       "required": [
@@ -125,13 +148,17 @@
         "replacementCharacters",
         "tokenEstimate",
         "frontmatter",
+        "frontmatterValue",
         "frontmatterError",
+        "frontmatterNotAMapping",
+        "anchors",
         "wordCount",
         "proseCodeUnits",
         "codeBlockCodeUnits",
         "linkCount",
         "headingCount",
-        "sectionCount"
+        "sectionCount",
+        "findingCount"
       ],
       "additionalProperties": false,
       "description": "A row of the blob-keyed `blobs` table"

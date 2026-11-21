@@ -51,7 +51,7 @@ function vatParseFailedWarning(failure: string): string {
   const line = describeBlobRefusals({
     blobs: [],
     resourceRealizations: [],
-    blobConditions: [{ blob: 'markdown.0', code: BLOB_PARSE_FAILED, severity: 'warning', message, line: null }],
+    blobConditions: [{ blob: 'markdown.0', code: BLOB_PARSE_FAILED, ordinal: 0, severity: 'warning', message, line: null }],
   });
   if (line === undefined) throw new Error('describeBlobRefusals reported nothing for a failed parse');
   return `resources population: ${line}`;

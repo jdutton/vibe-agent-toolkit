@@ -2,6 +2,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { describe, expect, it } from 'vitest';
 
+import { AST_SYNTACTIC_FORMS } from '../src/projection/blob-references.js';
 import {
   AUTHORED_EDGE_FORMS,
   buildReferenceIndex,
@@ -90,6 +91,7 @@ function reference(
     column: 1,
     startOffset: 0,
     endOffset: rawRef.length,
+    astIndex: AST_SYNTACTIC_FORMS.has(syntacticForm) ? ordinal : null,
     syntacticForm,
     hasExtension: rawRef.includes('.'),
     leadingAt: rawRef.startsWith('@'),

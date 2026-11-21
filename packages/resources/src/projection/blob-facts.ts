@@ -9,6 +9,7 @@
 
 import type { TextProvenance } from '@vibe-agent-toolkit/utils/text';
 
+import { encodeFrontmatterValue } from '../frontmatter-codec.js';
 import type { ParseResult } from '../link-parser.js';
 import type { OffsetRange } from '../reference-lexer.js';
 import type { ContentMeasures } from '../schemas/parse-facts.js';
@@ -158,63 +159,67 @@ export function blobRowFor(
     replacementCharacters: decoding.replacementCharacters,
     tokenEstimate: parsed.estimatedTokenCount,
     // `ParseResult` types frontmatter values as `unknown` — YAML can decode to
-    // `Infinity`, `NaN` or a `Buffer`, none of which are JSON. The projection
-    // schema is the enforcement point for that, not this assembler: narrowing
-    // here would have to either drop or invent values.
+    // `Infinity`, `NaN` or a `Buffer`, none of which are JSON. This column is the
+    // SQL view of the mapping and is lossy where JSON is; the exact value is
+    // `frontmatterValue`, the codec's encoding, which is what a resource's
+    // frontmatter is rebuilt from.
     frontmatter: (parsed.frontmatter ?? null) as BlobRow['frontmatter'],
-    frontmatterError: frontmatterErrorFor(parsed),
+    frontmatterValue: parsed.frontmatter === undefined ? null : encodeFrontmatterValue(parsed.frontmatter),
+    // The parser's own verdict, verbatim, and the not-a-mapping verdict beside it:
+    // never folded together, because a resource's `frontmatterError` is the
+    // first alone and is rebuilt from this column.
+    frontmatterError: parsed.frontmatterError ?? null,
+    frontmatterNotAMapping: parsed.frontmatterNotAMapping === true,
+    anchors: parsed.anchors ?? [],
     wordCount: measures?.wordCount ?? 0,
     proseCodeUnits: measures?.proseCodeUnits ?? 0,
     codeBlockCodeUnits: measures?.codeBlockCodeUnits ?? 0,
     linkCount: parsed.links.length,
     headingCount,
     sectionCount: headingCount,
+    // The rows `blobConditionsFor` files, counted by the same walk.
+    findingCount: blobConditionsFor(contentKey, parsed).length,
   };
 }
 
 /**
- * What `blobs.frontmatterError` says about one parse — *why the frontmatter did
- * not parse to an object*, which is two questions and not one.
+ * Why a blob's frontmatter declares nothing a reader can use, or null when it
+ * declares a mapping (or has no block, or declares nothing at all) — *why the
+ * frontmatter did not parse to an object*, which is two questions and not one.
  *
  * The YAML parser's own failure is the first and is passed through verbatim.
  * The second is the silent one: a block that is valid YAML and decodes to a
- * **sequence, a scalar or a typed value** such as `!!set` (`---\n- a\n- b\n---`). `parseFrontmatterSource`
- * reports no `frontmatter` and no `frontmatterError` for such a value by design
- * (its acceptance rules are behaviour-preserving for every lane that reads
- * `frontmatter`), only `frontmatterNotAMapping`; before that flag the row that came out was byte-identical to one for a
- * file with no frontmatter at all. A `.claude/rules/` file in that state reads
- * as declaring no `paths:`, so it is counted as an unconditional rule and no
- * check can tell it from one.
+ * **sequence, a scalar or a typed value** such as `!!set` (`---\n- a\n- b\n---`).
+ * `parseFrontmatterSource` reports no `frontmatter` and no `frontmatterError` for
+ * such a value by design (its acceptance rules are behaviour-preserving for every
+ * lane that reads `frontmatter`), only `frontmatterNotAMapping`. A
+ * `.claude/rules/` file in that state reads as declaring no `paths:`, so it is
+ * counted as an unconditional rule and no check could tell it from one.
  *
- * ⚠️ Decided from `frontmatterNotAMapping`, set by the one decode in the parse
- * worker and stored with the facts, so a cache HIT carries it and warm and
- * cold cannot disagree here. Nothing on this thread decodes YAML.
+ * The two are stored as two columns (`frontmatterError`, `frontmatterNotAMapping`)
+ * and joined only here, for the readers that report either: a resource's own
+ * `frontmatterError` is the parser's verdict alone, and is rebuilt from the first
+ * column unchanged.
  *
  * 🪤 **A block that decodes to YAML `null` declares nothing — it is not a
  * non-mapping value.** A comment-only block, `~` and `null` all decode to `null`,
- * so "no object and no error" cannot tell a placeholder from a `- a` list. Only
- * the decoded value can, and only the decode sets the flag; the OKF judges read
- * the same one. The KIND of a real non-mapping value is still not named: the
- * author is sent to the block either way.
+ * and only the decode sets the flag. The KIND of a real non-mapping value is not
+ * named: the author is sent to the block either way.
  *
- * @param parsed - The parse this row describes
- * @returns The reason, or null when the frontmatter parsed (including "no block")
+ * @param blob - The blob's two frontmatter verdicts
+ * @returns The reason, or null
  */
-function frontmatterErrorFor(parsed: ParseResult): string | null {
-  if (parsed.frontmatterError !== undefined) return parsed.frontmatterError;
-  if (parsed.frontmatter !== undefined) return null;
-  // Absent, blank, or declaring nothing (`~`, comment-only): not a value that
-  // was ignored, and not a defect.
-  return parsed.frontmatterNotAMapping === true ? NOT_A_MAPPING : null;
+export function frontmatterInvalidReason(blob: Pick<BlobRow, 'frontmatterError' | 'frontmatterNotAMapping'>): string | null {
+  if (blob.frontmatterError !== null) return blob.frontmatterError;
+  return blob.frontmatterNotAMapping ? FRONTMATTER_NOT_A_MAPPING_REASON : null;
 }
 
 /**
  * What a frontmatter block that is valid YAML but not a mapping says.
  *
- * Content, never a path: it is stored on a content-addressed row and repeated by
- * every finding that reads the column.
+ * Content, never a path: it is repeated by every finding that reads it.
  */
-const NOT_A_MAPPING =
+export const FRONTMATTER_NOT_A_MAPPING_REASON =
   'the frontmatter block is valid YAML but not a YAML mapping — it decodes to a sequence, a'
   + ' scalar or a typed value (!!set, !!omap, !!timestamp, !!binary), so it declares no keys at all';
 
@@ -255,11 +260,13 @@ export const BLOB_FINDING_CONDITION_CODES: readonly string[] = Object.keys(FINDI
  *
  * @param contentKey - The blob's key, written into every row's `blob` column
  * @param parsed - The parse whose diagnostics become rows
- * @returns Zero or more condition rows, HTML parse errors first
+ * @returns Zero or more condition rows, HTML parse errors first; each code's
+ *   rows numbered by `ordinal` in the order the parse reported them, so two
+ *   identical findings stay two rows and the parser's order survives the store
  */
 export function blobConditionsFor(contentKey: string, parsed: ParseResult): BlobConditionRow[] {
   return Object.entries(FINDING_CONDITIONS).flatMap(([code, findingsOf]) =>
-    findingsOf(parsed).map(({ message, line }) => ({ blob: contentKey, code, severity: 'warning' as const, message, line })),
+    findingsOf(parsed).map(({ message, line }, ordinal) => ({ blob: contentKey, code, ordinal, severity: 'warning' as const, message, line })),
   );
 }
 

@@ -48,6 +48,12 @@ interface PositionedHeading {
   line: number;
 }
 
+/** A section's span columns: all four, or (no position) none. */
+type SectionSpan = Pick<BlobSectionRow, 'lineStart' | 'lineEnd' | 'bytes' | 'tokens'>;
+
+/** The span of a heading that carries no position: it spans nothing it can name. */
+const NO_SPAN: SectionSpan = { lineStart: null, lineEnd: null, bytes: null, tokens: null };
+
 /** An enclosing heading still open at the current point in the document. */
 interface OpenAncestor {
   ordinal: number;
@@ -73,34 +79,36 @@ interface OpenAncestor {
  * `BlobSectionRowSchema` documents — a nested subsection is therefore counted
  * twice across the table, once in its own row and once in each ancestor's.
  *
- * ## Headings with no position are skipped, not defaulted
+ * ## Headings with no position are kept, with no span
  *
- * `HeadingNode.line` is optional; `lineStart` is required and positive. Remark
- * always supplies a position, so in practice none are skipped — but "in
- * practice" is not a type, and defaulting to line 1 would silently pile every
- * position-less section onto the top of the document where nothing could
- * falsify it.
+ * `HeadingNode.line` is optional. Defaulting an absent line to 1 would pile every
+ * position-less section onto the top of the document where nothing could falsify
+ * it; skipping it left a resource rebuilt from these rows a heading short of the
+ * parse it came from, and moved every later heading's GitHub slug (the slugger
+ * is replayed over the titles in order). So it is a row with null span columns,
+ * placed in the tree by its level like any other, and spanning nothing: a
+ * positioned section's `lineEnd` is decided by the positioned headings alone.
+ * One row per heading is what lets `blobs.headingCount` cross-check the rows.
  *
  * @param contentKey - The blob's content key, as `computeContentKey` produces it
  * @param content - The decoded document text the headings were parsed from
  * @param headings - The heading tree, as `ParseResult.headings` carries it
- * @returns One row per positioned heading, in document order
+ * @returns One row per heading, in document order
  */
 export function blobSectionsFor(
   contentKey: string,
   content: string,
   headings: readonly HeadingNode[],
 ): BlobSectionRow[] {
-  const positioned = positionedHeadings(headings);
-  if (positioned.length === 0) return [];
+  const flat = flattenHeadings(headings);
+  if (flat.length === 0) return [];
 
-  const lineStarts = lineStartOffsets(content);
+  const positioned = flat.flatMap<PositionedHeading>((node) => (node.line === undefined ? [] : [{ node, line: node.line }]));
+  const spans = sectionSpans(content, positioned);
   const occurrences = new Map<string, number>();
   const openAncestors: OpenAncestor[] = [];
-  const rows: BlobSectionRow[] = [];
 
-  for (const [ordinal, { node, line }] of positioned.entries()) {
-    const lineEnd = sectionEndLine(positioned, ordinal, lineStarts.length);
+  return flat.map((node, ordinal) => {
     const slug = new GithubSlugger().slug(node.text);
     const slugOccurrence = occurrences.get(slug) ?? 0;
     occurrences.set(slug, slugOccurrence + 1);
@@ -109,12 +117,7 @@ export function blobSectionsFor(
     const parentOrdinal = openAncestors.at(-1)?.ordinal ?? null;
     openAncestors.push({ ordinal, level: node.level });
 
-    const body = content.slice(
-      lineStarts[line - 1] ?? content.length,
-      lineStarts[lineEnd] ?? content.length,
-    );
-
-    rows.push({
+    return {
       blob: contentKey,
       ordinal,
       depth: node.level,
@@ -122,6 +125,28 @@ export function blobSectionsFor(
       slug,
       slugOccurrence,
       parentOrdinal,
+      ...(spans.get(node) ?? NO_SPAN),
+    };
+  });
+}
+
+/**
+ * The span of every positioned heading's section.
+ *
+ * @param content - The decoded document text
+ * @param positioned - The positioned headings, in document order
+ * @returns Each positioned heading's span, by node
+ */
+function sectionSpans(content: string, positioned: readonly PositionedHeading[]): Map<HeadingNode, SectionSpan> {
+  const lineStarts = lineStartOffsets(content);
+  const spans = new Map<HeadingNode, SectionSpan>();
+  for (const [index, { node, line }] of positioned.entries()) {
+    const lineEnd = sectionEndLine(positioned, index, lineStarts.length);
+    const body = content.slice(
+      lineStarts[line - 1] ?? content.length,
+      lineStarts[lineEnd] ?? content.length,
+    );
+    spans.set(node, {
       lineStart: line,
       lineEnd,
       // A real UTF-8 byte count, not `body.length` — this is a size rather than
@@ -132,20 +157,7 @@ export function blobSectionsFor(
       tokens: estimateTokens(body),
     });
   }
-
-  return rows;
-}
-
-/**
- * Flatten, then drop the headings that carry no source position.
- *
- * @param headings - The heading tree
- * @returns Document-order headings whose `line` is known
- */
-function positionedHeadings(headings: readonly HeadingNode[]): PositionedHeading[] {
-  return flattenHeadings(headings).flatMap<PositionedHeading>((node) =>
-    node.line === undefined ? [] : [{ node, line: node.line }],
-  );
+  return spans;
 }
 
 /**

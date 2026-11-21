@@ -72,7 +72,8 @@ import { ParseCache, ParserUnavailableError } from '../src/parse-cache.js';
 import type { ParsePoolPolicy } from '../src/parse-dispatcher.js';
 import { reviveParserThrow } from '../src/parse-limits.js';
 import { createParsePool, type ParsePool, type ParsePoolOptions } from '../src/parse-pool.js';
-import { BLOB_PARSE_FAILED } from '../src/projection/blob-population.js';
+import { BLOB_PARSE_FAILED, storableBlobFacts } from '../src/projection/blob-population.js';
+import { blobFactsReader } from '../src/projection/blob-resource-facts.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 
 import { baseBuilderForRoot, conditionsWithCode, populateBlobsOnOwnDispatcher } from './blob-fixture-population.js';
@@ -309,5 +310,42 @@ describe('a parser-load failure during registry admission', () => {
     const unreadable = registry.getUnreadableResources();
     expect(unreadable).toHaveLength(1);
     expect(unreadable[0]?.code).toBe('ENOENT');
+  });
+});
+
+/**
+ * One rule for a parse that threw, in both lanes: the blob lane stores a
+ * `BLOB_PARSE_FAILED` row and reads it back as an unreadable entry; the registry
+ * lane records the same entry from the throw - the same reason and the same code -
+ * rather than failing the run. A warm run serving the stored row and a cold run
+ * meeting the throw then report one finding.
+ *
+ * The stored side is read the way a warm run reads it: the rows the store keeps
+ * (`storableBlobFacts`), through the one fact reader (`blobFactsReader`), whose
+ * not-admitted answer no file's bytes can reach any other way.
+ */
+describe('an ordinary parser failure in both lanes', () => {
+  it.each([
+    { label: 'with a code', error: reviveParserThrow({ name: 'TypeError', message: 'bad input', code: 'ERR_INVALID_ARG_TYPE' }, true) },
+    { label: 'with no code', error: reviveParserThrow({ name: 'Error', message: 'unexpected token' }, true) },
+  ])('records the same unreadable entry $label', async ({ error }) => {
+    failures.parse = error;
+    const builder = await baseBuilderForRoot(suite.tempDir);
+    await populateBlobsOnOwnDispatcher(builder, { cache: NO_CACHE, policy: failingPolicy() });
+    const projection = builder.build();
+    const read = blobFactsReader(storableBlobFacts(projection));
+    const stored = conditionsWithCode(projection, BLOB_PARSE_FAILED).map((row) => {
+      const outcome = read(row.blob);
+      return outcome.kind === 'not-admitted' ? outcome.entry : outcome;
+    });
+
+    const registry = new ResourceRegistry({ parseCache: NO_CACHE, parsePool: failingPolicy() });
+    const admitted = await registry.addResources(corpusPaths());
+
+    expect(admitted).toEqual([]);
+    const cold = registry.getUnreadableResources().map(({ filePath: _path, ...entry }) => ({ log: 'unreadable', entry }));
+    expect(cold).toHaveLength(CORPUS.length);
+    expect(stored).toHaveLength(CORPUS.length);
+    expect(cold).toStrictEqual(stored);
   });
 });

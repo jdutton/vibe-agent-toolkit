@@ -73,75 +73,55 @@
 
 import type { ParseResult } from '../link-parser.js';
 import { detectVariableExpansion, EXTENSION_SUFFIX, stripQueryOrFragment } from '../reference-lexer.js';
-import { LexicalSyntacticFormSchema, type LexicalReference } from '../schemas/parse-facts.js';
-import {
-  ReferenceSyntacticFormSchema,
-  type BlobReferenceRow,
-  type ReferenceSyntacticForm,
-} from '../schemas/projection-blobs.js';
+import type { LexicalReference } from '../schemas/parse-facts.js';
+import type { BlobReferenceRow, ReferenceSyntacticForm } from '../schemas/projection-blobs.js';
 import type { LinkNodeType, ResourceLink } from '../schemas/resource-metadata.js';
 
 /**
- * The forms {@link syntacticFormFor} can assign — every `ReferenceSyntacticForm`
- * the raw-source lexer does **not** claim for itself.
+ * Every AST node type and the syntactic form its links are stored under — the
+ * ONE table both directions read: the population writes a form from a node type
+ * here, and the fact reader rebuilds the node type from the form by inverting
+ * it ({@link NODE_TYPE_OF_AST_FORM}). Total over `LinkNodeType`, so a new node
+ * type does not compile until it has a form.
  *
- * Derived by subtracting one producer's enum from the whole, never hand-listed.
- * A hand-listed copy is precisely what went wrong: the whole-corpus population
- * test carried its own `MARKDOWN_FORMS` triple and used
- * `blobs.linkCount - (rows in that set)` as an independent measurement of
- * "AST links dropped for want of a span". That subtraction was right only while
- * mdast was the only producer whose links reached a row. Giving HTML links a
- * span — and their own `html-link` form — made every one of them look dropped
- * to that derivation, and the two measurements disagreed by exactly the number
- * of HTML references in the corpus (4).
- *
- * So the partition is stated **here**, beside the only function that assigns an
- * AST form, and consumers read it. Add a fourth parser and its form is counted
- * as AST-derived the moment it joins `ReferenceSyntacticFormSchema`; add a
- * lexer form and it must join `LexicalSyntacticFormSchema`, which is what
- * `LexicalReference.syntacticForm` is typed by, so the lexer cannot emit one
- * without moving this set with it.
- *
- * Why the lexer's half is the one subtracted, rather than the AST's half
- * listed: `LexicalReference.line`/`startOffset`/`endOffset` are all **required**
- * (`parse-facts.ts`), so a lexer candidate can never be dropped by
- * {@link hasReferenceSpan}. "Not the lexer's" and "droppable" are the same
- * population, and this constant names it once.
+ * `htmlAttribute` has its own form, which neither `closure-extent`'s default
+ * `follow` nor `claude-context-discovery`'s `FOLLOWED_FORMS` follows: labelling
+ * an HTML link `markdown-link` would make `vat inventory` report members
+ * `vat build` does not bundle.
  */
-export const AST_SYNTACTIC_FORMS: ReadonlySet<ReferenceSyntacticForm> = new Set(
-  ReferenceSyntacticFormSchema.options.filter(
-    (form): boolean => !(LexicalSyntacticFormSchema.options as readonly string[]).includes(form),
-  ),
-);
-
-/** A link carrying every positional column a `blob_references` row requires. */
-export type PositionedLink = ResourceLink & {
-  line: number;
-  startOffset: number;
-  endOffset: number;
+const AST_FORM_OF_NODE_TYPE: { readonly [NodeType in LinkNodeType]: ReferenceSyntacticForm } = {
+  link: 'markdown-link',
+  linkReference: 'markdown-link-reference',
+  definition: 'markdown-definition',
+  htmlAttribute: 'html-link',
 };
 
+/** {@link AST_FORM_OF_NODE_TYPE} inverted: the node type each AST form was stored from. */
+export const NODE_TYPE_OF_AST_FORM: ReadonlyMap<ReferenceSyntacticForm, LinkNodeType> = new Map(
+  (Object.entries(AST_FORM_OF_NODE_TYPE) as [LinkNodeType, ReferenceSyntacticForm][]).map(([nodeType, form]) => [form, nodeType]),
+);
+
 /**
- * Can this link become a row at all?
+ * The forms a parser's links are stored under — the values of
+ * {@link AST_FORM_OF_NODE_TYPE}, read off that one table rather than listed again.
  *
- * The single definition of "droppable", exported because more than one place
- * needs to agree with it. {@link astCandidates} rejects on it, `emitBlobRows`
- * counts the rejects by difference (`referencesSkippedForMissingLine`, in
- * `populateBlobs`' public result (`BlobPopulationResult`), a run counter no stored row carries), and a
- * consumer enumerating *which* links were dropped has to ask the same question
- * — asking a narrower one (`link.line === undefined`) would silently miss a
- * link that carried a line and no offsets, which is exactly the shape the HTML
- * parser used to produce.
+ * A hand-listed copy is precisely what went wrong once: the whole-corpus
+ * population test carried its own `MARKDOWN_FORMS` triple and used
+ * `blobs.linkCount - (rows in that set)` as an independent measurement of
+ * "AST links dropped for want of a span". Giving HTML links their own
+ * `html-link` form made every one of them look dropped to that derivation, and
+ * the two measurements disagreed by exactly the number of HTML references in the
+ * corpus (4).
  *
- * @param link - One parser-supplied link
- * @returns True when the line and both offsets are present
+ * The partition against the lexer's forms (`LexicalSyntacticFormSchema`) is
+ * asserted both ways in `projection-blob-references.test.ts`: every
+ * `ReferenceSyntacticForm` is in exactly one of the two sets, so a form added to
+ * the enum and to neither producer fails there.
  */
-export function hasReferenceSpan(link: ResourceLink): link is PositionedLink {
-  return link.line !== undefined && link.startOffset !== undefined && link.endOffset !== undefined;
-}
+export const AST_SYNTACTIC_FORMS: ReadonlySet<ReferenceSyntacticForm> = new Set(Object.values(AST_FORM_OF_NODE_TYPE));
 
 /** The row columns a `LexicalReference` supplies directly, under the same names. */
-type LexicalColumns = Omit<BlobReferenceRow, 'blob' | 'ordinal' | 'rawRef' | 'text'>;
+type LexicalColumns = Omit<BlobReferenceRow, 'blob' | 'ordinal' | 'rawRef' | 'text' | 'astIndex'>;
 
 /**
  * `Omit<LexicalReference, 'raw'>` — but only while its key set is *exactly*
@@ -169,7 +149,8 @@ type ExactLexicalColumns =
 
 /** A candidate with its sort key, before ordinals are assigned. */
 interface OrderedCandidate {
-  line: number;
+  /** The row's line, or null for a reference whose node carries no position: it sorts after every positioned one. */
+  line: number | null;
   column: number | null;
   /**
    * Tie-break within the same `(line, column)` — what decides order among
@@ -189,33 +170,38 @@ interface OrderedCandidate {
    *   IS document order (the lexer is a single raw-source scan).
    */
   tieBreak: number;
+  /**
+   * Which unit {@link tieBreak} is in, compared first: 0 for every candidate
+   * but one, 1 for an HTML link with no `startOffset`. That link can only
+   * tie-break by its `links` index, and an index is never compared against
+   * another link's character offset, so it orders after the offset-bearing
+   * links on its line, in the parser's own order.
+   */
+  tieTier: 0 | 1;
   row: Omit<BlobReferenceRow, 'ordinal'>;
 }
 
 /**
  * Derive the `blob_references` rows for one blob.
  *
- * ## References with no line are skipped, not defaulted
+ * ## Every link is a row, positioned or not
  *
- * `ResourceLink.line` is optional; `BlobReferenceRow.line` is required and
- * `positive()`. Defaulting an absent line to 1 would pile every position-less
- * reference onto the top of the document, where no assertion could ever catch
- * it — the same rule `blob-sections.ts` applies to position-less headings.
+ * `ResourceLink.line` and its offsets are optional, and a GFM autolink literal
+ * glued to text (`domain:www.example.com`) really arrives with none. Such a link
+ * is still a link the resource carries, so it is stored with null position
+ * columns — never defaulted to line 1, where it would pile onto the top of the
+ * document, and never skipped, which left a resource rebuilt from these rows
+ * one link short of the parse it came from. One row per link is what lets
+ * `blobs.linkCount` cross-check the rows: the AST-derived rows of a blob number
+ * exactly its `linkCount`.
  *
- * ⛔ This used to say *"Remark always supplies a position, so in practice none
- * are skipped"*, which reasoned about **one** of the two link producers and was
- * read as covering both. The HTML parser emitted a line and **no offsets**, so
- * the skip below discarded every `<a href>` and `<img src>` in the tree and
- * each HTML blob contributed **zero** reference rows — an under-report no
- * stated limit covered, sitting behind a comment asserting it could not happen.
- * Fixed at `html-link-parser.ts › makeLink`, which now carries the attribute
- * span. The lesson is the comment, not the parser: a claim about "the parser"
- * has to name **which**, because a second producer is exactly what makes an
- * always-true invariant quietly false.
+ * `astIndex` records each AST row's position in the parser's own `links`, so
+ * the links are rebuilt in the parser's order whatever order `ordinal` gives
+ * the rows.
  *
  * @param contentKey - The blob's content key, as `computeContentKey` produces it
  * @param parsed - The parse result whose `links` and `lexicalReferences` are unified
- * @returns One row per positioned candidate, ordered by `(line, column)`
+ * @returns One row per candidate, ordered by `(line, column)`, the position-less last
  */
 export function blobReferencesFor(contentKey: string, parsed: ParseResult): BlobReferenceRow[] {
   const candidates: OrderedCandidate[] = [
@@ -230,14 +216,20 @@ export function blobReferencesFor(contentKey: string, parsed: ParseResult): Blob
 
 /**
  * Order by line, then by column with a null column first, then by
- * {@link OrderedCandidate.tieBreak}.
+ * {@link OrderedCandidate.tieTier}, then by {@link OrderedCandidate.tieBreak}.
  *
  * @param left - First candidate
  * @param right - Second candidate
  * @returns Negative, zero or positive, as `Array#sort` expects
  */
 function compareCandidates(left: OrderedCandidate, right: OrderedCandidate): number {
-  if (left.line !== right.line) return left.line - right.line;
+  if (left.line !== right.line) {
+    // A reference with no position cannot be placed among positioned ones, so
+    // it goes after all of them, in its producer's own order (`tieBreak`).
+    if (left.line === null) return 1;
+    if (right.line === null) return -1;
+    return left.line - right.line;
+  }
   // A null column is "somewhere on this line" and cannot be placed among the
   // known columns, so it is placed first — stated, rather than left to
   // whatever a numeric comparison does with null.
@@ -246,6 +238,7 @@ function compareCandidates(left: OrderedCandidate, right: OrderedCandidate): num
   } else if (left.column !== right.column) {
     return left.column - right.column;
   }
+  if (left.tieTier !== right.tieTier) return left.tieTier - right.tieTier;
   return left.tieBreak - right.tieBreak;
 }
 
@@ -275,56 +268,61 @@ function compareCandidates(left: OrderedCandidate, right: OrderedCandidate): num
  *
  * @param contentKey - The blob's content key
  * @param links - `ParseResult.links`, in the producing parser's own order
- * @returns One candidate per positioned link
+ * @returns One candidate per link, positioned or not
  */
 function astCandidates(contentKey: string, links: readonly ResourceLink[]): OrderedCandidate[] {
-  return links.flatMap<OrderedCandidate>((link, sequence) => {
-    // Both halves of the position, and both required — the row's span columns
-    // are non-nullable, so a link whose node carried no offsets is skipped here
-    // exactly as a link with no line is, and counted by the same difference
-    // `emitBlobRows` takes.
-    //
-    // ⚠️ The offset check is NOT redundant with the line check, and the comment
-    // that used to stand here claimed it was ("mdast fills the two together, so
-    // this admits and rejects the same population"). True of mdast; false of
-    // the OTHER producer feeding this function. The HTML parser supplied a line
-    // and no offsets, so this branch — not the line check — is what silently
-    // dropped every HTML reference. Both parsers now fill both halves; the
-    // check stays because it is the only thing that would catch a third one
-    // that does not.
-    //
-    // The predicate is {@link hasReferenceSpan} rather than three inline
-    // comparisons so that a consumer enumerating the drops asks the SAME
-    // question this rejects on. Spelt out twice, the two drift — and the
-    // narrower spelling (`line === undefined` alone) is blind to precisely the
-    // shape the HTML parser used to produce.
-    if (!hasReferenceSpan(link)) return [];
-    return [{
-      line: link.line,
+  return links.map<OrderedCandidate>((link, sequence) => ({
+    // A position-less link is a row too (null line and span): see
+    // {@link blobReferencesFor}. Its line and its offsets are read
+    // independently, because the producers fill them independently: the HTML
+    // parser has emitted a line with no offsets.
+    line: link.line ?? null,
+    column: null,
+    ...astTieBreak(link, sequence),
+    row: {
+      blob: contentKey,
+      rawRef: link.href,
+      text: link.text,
+      line: link.line ?? null,
       column: null,
-      // htmlAttribute: tie-break by real source position (immune to DOM/foster-
-      // parenting order). Anything else (markdown, or a producer that did not
-      // say): tie-break by `links` index, preserving the kind-order bucket
-      // contract — see this function's docstring.
-      tieBreak: link.nodeType === 'htmlAttribute' ? link.startOffset : sequence,
-      row: {
-        blob: contentKey,
-        rawRef: link.href,
-        text: link.text,
-        line: link.line,
-        column: null,
-        startOffset: link.startOffset,
-        endOffset: link.endOffset,
-        syntacticForm: syntacticFormFor(link.nodeType),
-        ...lexicalFeatures(link.href),
-        // A link inside a fence or a code span is not parsed as a link at all
-        // — it is a `code`/`inlineCode` node — so an AST-derived row is never
-        // in either context.
-        inCodeSpan: false,
-        inFence: false,
-      },
-    }];
-  });
+      ...spanOf(link),
+      astIndex: sequence,
+      syntacticForm: AST_FORM_OF_NODE_TYPE[link.nodeType],
+      ...lexicalFeatures(link.href),
+      // A link inside a fence or a code span is not parsed as a link at all
+      // — it is a `code`/`inlineCode` node — so an AST-derived row is never
+      // in either context.
+      inCodeSpan: false,
+      inFence: false,
+    },
+  }));
+}
+
+/**
+ * An AST candidate's tie-break. `htmlAttribute` with an offset: its real source
+ * position (immune to DOM/foster-parenting order). Markdown: its `links` index,
+ * preserving the kind-order bucket contract — see {@link astCandidates}.
+ * `htmlAttribute` with no offset: its `links` index in the later tier, since an
+ * index and an offset are different units.
+ *
+ * @param link - One parser-supplied link
+ * @param sequence - Its index in `links`
+ * @returns The candidate's `tieTier` and `tieBreak`
+ */
+function astTieBreak(link: ResourceLink, sequence: number): Pick<OrderedCandidate, 'tieBreak' | 'tieTier'> {
+  if (link.nodeType !== 'htmlAttribute') return { tieTier: 0, tieBreak: sequence };
+  return link.startOffset === undefined ? { tieTier: 1, tieBreak: sequence } : { tieTier: 0, tieBreak: link.startOffset };
+}
+
+/**
+ * A link's span columns, each exactly as the parser supplied it: an absent offset
+ * is `null`, never a guess, so the fact reader rebuilds the link the parser made.
+ *
+ * @param link - One parser-supplied link
+ * @returns The row's two offset columns
+ */
+function spanOf(link: ResourceLink): Pick<BlobReferenceRow, 'startOffset' | 'endOffset'> {
+  return { startOffset: link.startOffset ?? null, endOffset: link.endOffset ?? null };
 }
 
 /**
@@ -346,6 +344,7 @@ function lexicalCandidates(
     line: reference.line,
     column: reference.column,
     tieBreak: sequence,
+    tieTier: 0,
     row: lexicalRow(contentKey, reference),
   }));
 }
@@ -369,42 +368,10 @@ function lexicalRow(contentKey: string, reference: LexicalReference): Omit<BlobR
     rawRef: raw,
     // A lexer token has no link text — there is no markup to carry one.
     text: null,
+    // Nor a place in a parser's links: it is not one.
+    astIndex: null,
     ...checked,
   };
-}
-
-/**
- * Map an AST node type onto its syntactic form.
- *
- * An `if`/`else if` chain rather than a `switch`:
- * `@typescript-eslint/switch-exhaustiveness-check` requires a switch over a
- * union to name every member even with a `default`, and the absent case is not
- * a member of the union at all.
- *
- * ⛔ The absent case used to be the HTML parser's, which emitted links with no
- * `nodeType` and so collected the `markdown-link` default. That was wrong and
- * INERT at the same time: every HTML link was dropped by {@link astCandidates}
- * for want of a span, so the mislabel described a population of zero and no
- * test could see it. Giving HTML rows a span is exactly what would have made it
- * load-bearing — `markdown-link` is followed by `closure-extent`'s default
- * `follow` and by `claude-context-discovery`'s `FOLLOWED_FORMS`, so
- * `vat inventory` would have begun reporting members `vat build` does not
- * bundle. The parser now states `htmlAttribute` and this maps it to its own
- * form, which neither list follows.
- *
- * The remaining absent case is a producer that did not say. It keeps
- * `markdown-link` because mdast is the only other producer feeding this
- * function, and every mdast inline link arrives as `'link'` — but the default
- * is now a fallback nothing shipped relies on, rather than a live path.
- *
- * @param nodeType - `ResourceLink.nodeType`, possibly absent
- * @returns The matching syntactic form, defaulting an absent node type to `markdown-link`
- */
-function syntacticFormFor(nodeType: LinkNodeType | undefined): ReferenceSyntacticForm {
-  if (nodeType === 'linkReference') return 'markdown-link-reference';
-  if (nodeType === 'definition') return 'markdown-definition';
-  if (nodeType === 'htmlAttribute') return 'html-link';
-  return 'markdown-link';
 }
 
 /**

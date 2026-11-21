@@ -46,11 +46,6 @@ export {
   // file at a time (the packager's bundled assets) and must not invent its own.
   admissionOrder,
   generateIdFromPath,
-  // What a resource is when `parserKindForPath` answers `none`. Exported for
-  // the CLI's parse-fact snapshot, which routes by the same discriminator and
-  // must not re-implement the shape — see the function's own docstring for why
-  // this is the one export and not an invitation.
-  unparsedResourceFacts,
   type CrawlOptions,
   type DuplicateIdCollision,
   type UnreadableResource,
@@ -707,18 +702,18 @@ export {
 // Blob-keyed reference rows — a parser AST's links (mdast or parse5) and the
 // raw-source lexer's tokens unified into one position-ordered ordinal space.
 //
-// `AST_SYNTACTIC_FORMS` and `hasReferenceSpan` are exported because they are
-// the producer's own answers to "which rows came from a parser?" and "which
-// links could become rows at all?". A consumer that reconstructs either by hand
-// is a second opinion that goes stale the next time a parser is added — which
-// is exactly how a hand-listed markdown triple made a whole-corpus invariant
-// disagree with its own counter once HTML references started producing rows.
+// `AST_SYNTACTIC_FORMS` is exported because it is the producer's own answer to
+// "which rows came from a parser?". A consumer that reconstructs it by hand is a
+// second opinion that goes stale the next time a parser is added.
 export {
   AST_SYNTACTIC_FORMS,
   blobReferencesFor,
-  hasReferenceSpan,
-  type PositionedLink,
 } from './projection/blob-references.js';
+
+// THE route every read takes before a parse, in every lane: not text, no parser,
+// or a parse. Exported for the CLI's parse-fact snapshot, which must route
+// exactly as the registry does rather than restate the rule.
+export { contentRoute } from './projection/document-facts.js';
 
 // The filesystem extent (zones §2): everything on disk under the root, files
 // AND directories, excluding NEVER_CRAWL_GLOBS but deliberately NOT build
@@ -1038,6 +1033,15 @@ export {
 // derived. With `BLOB_REFUSAL_CONDITION_CODES` it is every code a row carries,
 // so a census of refusals classifies each row from these two lists alone.
 export { BLOB_FINDING_CONDITION_CODES } from './projection/blob-facts.js';
+// The ONE reader that rebuilds a resource's blob facts from the stored rows, and
+// which resource and link fields it rebuilds: what the store-fidelity round trip
+// in projection-sqlite holds against the cold registry.
+export {
+  BLOB_FACT_FIELDS,
+  blobFactsReader,
+  RESOURCE_LINK_FACT_SOURCES,
+  type BlobFactsOutcome,
+} from './projection/blob-resource-facts.js';
 
 // The declarative closure primitive (zones §7.3): a closure-defined extent is a
 // GENERIC contributor handed an `ExtentDeclaration`, never new privileged code —

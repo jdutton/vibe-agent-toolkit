@@ -627,7 +627,7 @@ describe('.gitattributes eol=crlf beside eol=lf', () => {
     expect(blobOf(arms.walk.projection, keyB)?.tokenEstimate).toBe(6);
 
     // The character offsets shift by the two carriage returns preceding the link.
-    const offsets = (key: string): number[] => arms.walk.projection.blobReferences
+    const offsets = (key: string): (number | null)[] => arms.walk.projection.blobReferences
       .filter((row) => row.blob === key)
       .map((row) => row.startOffset);
     expect(offsets(keyA)).toEqual([7]);

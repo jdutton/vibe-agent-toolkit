@@ -1,9 +1,12 @@
 /**
- * A sub-root reached through a symlinked spelling of its repository is
- * validated as the directory it spells: `vat resources validate` finds the
- * same broken link under `real/` whether the run starts in the repository or in
- * a symlinked alias of it, and whether the sub-root is named relatively or by
- * the alias's absolute path, store on and off.
+ * Pins the spellings an aliased sub-root accepts: `vat resources validate`
+ * reports the broken link under `real/` whether the run starts in the
+ * repository or in a symlinked alias of it, and whether the sub-root is named
+ * relatively or by the alias's absolute path, store on and off.
+ *
+ * It does NOT pin which git a sub-root's listing comes from: every row passes
+ * whether the sub-root runs its own git or reads the home's answers, so it
+ * cannot catch a regression in that choice.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -23,7 +26,7 @@ const TREE = {
 
 const symlinks = symlinkCapability();
 
-describe.runIf(symlinks !== null)('resources validate over a sub-root by a symlinked spelling (system test)', () => {
+describe.runIf(symlinks !== null)('resources validate accepts every aliased spelling of a sub-root (system test)', () => {
   const binPath = getBinPath(import.meta.url);
   let tempDir: string;
   let root: string;
@@ -35,8 +38,10 @@ describe.runIf(symlinks !== null)('resources validate over a sub-root by a symli
     root = safePath.join(tempDir, 'repo');
     alias = safePath.join(tempDir, 'alias');
     writeFileTree(root, TREE);
-    spawnSync(gitExecutable(), ['init', '--quiet'], { cwd: root, stdio: 'pipe' });
-    spawnSync(gitExecutable(), ['add', '--all'], { cwd: root, stdio: 'pipe' });
+    for (const args of [['init', '--quiet'], ['add', '--all']]) {
+      const git = spawnSync(gitExecutable(), args, { cwd: root, stdio: 'pipe', encoding: 'utf8' });
+      expect(git.status, `git ${args.join(' ')}: ${git.stderr}`).toBe(0);
+    }
     createSymlink(symlinks, root, alias, 'dir');
   });
 
@@ -51,7 +56,7 @@ describe.runIf(symlinks !== null)('resources validate over a sub-root by a symli
     ['repo', 'real', 'off'],
     ['alias', 'real', 'off'],
     ['repo', 'alias/real', 'off'],
-  ] as const)('from %s, validate %s with the store %s reports the broken link', async (from, subRoot, store) => {
+  ] as const)('from %s, the spelling %s with the store %s reaches the sub-root and reports its broken link', async (from, subRoot, store) => {
     const env: Record<string, string> = { VAT_CACHE_DIR: safePath.join(tempDir, `cache-${from}-${subRoot.replace('/', '-')}-${store}`) };
     if (store === 'off') env['VAT_PROJECTION_STORE'] = 'off';
     const cwd = from === 'repo' ? root : alias;

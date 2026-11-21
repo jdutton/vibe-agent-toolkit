@@ -77,7 +77,7 @@ import {
   BLOB_UNREADABLE,
 } from './blob-population.js';
 import { POPULATION_PARSE_LIMITS } from './content-cache.js';
-import { formatParseFailures, parseFailureOf } from './parse-failure.js';
+import { formatParseFailures, parseFailedEntry, parseFailureOf } from './parse-failure.js';
 import type { Projection } from './projection.js';
 
 /** The three tables the line is a function of — every one of them stored. */
@@ -317,7 +317,7 @@ export function parseRefusalOf(row: Projection['blobConditions'][number]): Omit<
 const UNADMITTED_BLOB_CODES: ReadonlySet<string> = new Set([BLOB_UNREADABLE, BLOB_CONTENT_CHANGED, BLOB_PARSE_FAILED]);
 
 /** Which of the two logs one realization goes in, and its entry less the path. */
-type NotAdmittedEntry =
+export type NotAdmittedEntry =
   | { readonly log: 'unreadable'; readonly entry: Omit<UnreadableResource, 'filePath'> }
   | { readonly log: 'parseRefused'; readonly entry: Omit<ParseRefusedResource, 'filePath'> };
 
@@ -328,8 +328,8 @@ type NotAdmittedEntry =
  * A `BLOB_PARSE_FAILED` row — a stored fact of the bytes — is logged
  * `unreadable` under the code its parser threw (`parseFailureOf`, the one reader
  * of that message), so the file fails `RESOURCE_UNREADABLE` like any other file
- * the run holds no rows for. The registry lane never gets that far: a parse that
- * throws anything but a read failure ends its run.
+ * the run holds no rows for. The registry lane builds the same entry from the
+ * throw (`parseFailedEntry`, one rule for both).
  *
  * @param row - A blob condition row
  * @returns Its entry, or `undefined`
@@ -338,8 +338,24 @@ function blobConditionEntry(row: Projection['blobConditions'][number]): NotAdmit
   const refusal = parseRefusalOf(row);
   if (refusal !== undefined) return { log: 'parseRefused', entry: refusal };
   if (!UNADMITTED_BLOB_CODES.has(row.code)) return undefined;
-  const failure = row.code === BLOB_PARSE_FAILED ? parseFailureOf(row.message) : undefined;
-  return { log: 'unreadable', entry: { reason: row.message, ...(failure?.kind === 'code' && { code: failure.text }) } };
+  return { log: 'unreadable', entry: row.code === BLOB_PARSE_FAILED ? parseFailedEntry(row.message) : { reason: row.message } };
+}
+
+/**
+ * Each blob's not-admitted entry: the first of its condition rows that has one
+ * ({@link blobConditionEntry}). The one rule for which row speaks for a blob, read
+ * by the not-admitted log and by the blob fact reader alike.
+ *
+ * @param conditions - Condition rows, any blobs, in row order
+ * @returns Blob key to its entry; a blob none of whose rows refuses it is absent
+ */
+export function notAdmittedEntriesByBlob(conditions: readonly Projection['blobConditions'][number][]): Map<string, NotAdmittedEntry> {
+  const byBlob = new Map<string, NotAdmittedEntry>();
+  for (const row of conditions) {
+    const found = byBlob.has(row.blob) ? undefined : blobConditionEntry(row);
+    if (found !== undefined) byBlob.set(row.blob, found);
+  }
+  return byBlob;
 }
 
 /**
@@ -395,11 +411,7 @@ export function notAdmittedRealizations(
   rows: Pick<Projection, 'blobConditions' | 'resourceRealizations'>,
   root: string,
 ): NotAdmittedLog {
-  const byBlob = new Map<string, NotAdmittedEntry>();
-  for (const row of rows.blobConditions) {
-    const found = byBlob.has(row.blob) ? undefined : blobConditionEntry(row);
-    if (found !== undefined) byBlob.set(row.blob, found);
-  }
+  const byBlob = notAdmittedEntriesByBlob(rows.blobConditions);
   const seen = new Set<string>();
   const log: { unreadable: UnreadableResource[]; parseRefused: ParseRefusedResource[] } = { unreadable: [], parseRefused: [] };
   for (const row of rows.resourceRealizations) {

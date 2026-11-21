@@ -201,13 +201,12 @@ export type ParsePassSlot = (typeof ParsePass)[keyof typeof ParsePass];
  * here and was false, because there are two `none` routes and it described only
  * the cheap one:
  *
- * - `resource-registry.ts`'s `unparsedResourceFacts` runs `estimateTokens` and
- *   nothing else. ✅ Effectively free, and nothing worth bracketing.
- * - `projection/blob-population.ts`'s `unparsedFacts` runs **three real passes
+ * - `projection/document-facts.ts`'s `unparsedFacts`, which both the registry
+ *   and the blob lane route through (`contentRoute`), runs **three real passes
  *   over the full content** — `findLexicalReferences`, `measureContent` and
  *   `estimateTokens` — on every non-prose file. ❌ That work is real, it is
  *   unattributed, and it is the lane `claude context`, the claude-context SQL
- *   relations and cold population all use.
+ *   relations, cold population and the registry all use.
  *
  * The gap is **bounded, not zero**: the same three passes measured 605 ms +
  * 469 ms + 0.585 ms over 8,713 documents / 108.9 MB, so on an adopter tree whose

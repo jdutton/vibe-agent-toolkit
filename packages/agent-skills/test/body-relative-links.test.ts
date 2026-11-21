@@ -75,7 +75,7 @@ describe('bodyRelativeLinks — a body that IS a suffix of the content', () => {
 
   it('leaves a link with no span alone, and keeps its other fields', () => {
     const log = recorder();
-    const spanless = { text: 'Guide', href: HREF, type: 'local_file' as const, line: 3 };
+    const spanless = { text: 'Guide', href: HREF, type: 'local_file' as const, line: 3, nodeType: 'link' as const };
 
     expect(bodyRelativeLinks(CONTENT, BODY, [spanless], log.warn)).toEqual([spanless]);
     expect(log.calls).toBe(0);

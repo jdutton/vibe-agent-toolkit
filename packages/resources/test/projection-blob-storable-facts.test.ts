@@ -31,7 +31,7 @@ import type { BlobConditionRow } from '../src/schemas/projection-blobs.js';
  * @returns The row
  */
 function conditionFor(blob: string, code: string): BlobConditionRow {
-  return { blob, code, severity: 'warning', message: `${code} happened`, line: null };
+  return { blob, code, ordinal: 0, severity: 'warning', message: `${code} happened`, line: null };
 }
 
 describe('storableBlobFacts', () => {

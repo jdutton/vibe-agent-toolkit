@@ -74,15 +74,23 @@ export const BlobRowSchema = z.object({
     .describe('How many U+FFFD REPLACEMENT CHARACTERs the decode produced — a count of characters, not of malformed bytes, and one malformed run can collapse to a single U+FFFD. 0 for a clean decode, INCLUDING a document whose own text legitimately contains U+FFFD (the decode is attempted in fatal mode first, so valid input is never accused). Greater than 0 is proof the bytes are not valid in `encoding` — that much of this blob\'s indexed text is already garbage'),
   tokenEstimate: z.number().int().nonnegative().describe('Estimated token count for LLM context — over the WHOLE decoded text. What a harness charges for this blob as a memory file is `harness_blob_facts.injectedTokens`'),
   frontmatter: z.record(z.string(), JsonValueSchema).nullable()
-    .describe('Parsed frontmatter as JSON, or null when the blob has no frontmatter block'),
+    .describe('Parsed frontmatter as JSON, for SQL, or null when the blob has no frontmatter mapping. LOSSY where JSON is: `.inf` and `.nan` read as null, `-0` as 0, a `!!timestamp` as a string, a `!!set` as an object. The exact value is frontmatterValue'),
+  frontmatterValue: z.string().nullable()
+    .describe('The decoded frontmatter mapping in the frontmatter codec encoding (frontmatter-codec.ts), exact for every value YAML decodes to; null exactly when frontmatter is null. What a resource\'s frontmatter is rebuilt from'),
   frontmatterError: z.string().nullable()
-    .describe('Why frontmatter did not parse to an object, or null when it did (including "no block at all")'),
+    .describe('The YAML parser\'s own error for the frontmatter block, verbatim, or null when it parsed (including "no block at all" and a block that is not a mapping: see frontmatterNotAMapping)'),
+  frontmatterNotAMapping: z.boolean()
+    .describe('True when the block is valid YAML that decodes to a sequence, a scalar or a typed value, so it declares no keys; frontmatter and frontmatterError are then both null. False for no block, a block declaring nothing (`~`, comment-only), a mapping and a YAML error'),
+  anchors: z.array(z.string())
+    .describe('Fragment targets the blob declares as id/name attributes, in parser order: every HTML element\'s, and a markdown blob\'s raw-HTML ones (lowercased). Empty when it declares none'),
   wordCount: z.number().int().nonnegative(),
   proseCodeUnits: z.number().int().nonnegative().describe('UTF-16 code units outside code blocks — NOT characters and NOT bytes; an astral character counts as two. Inline code spans are NOT excluded — `measureContent` is passed only the fence ranges, so a `` `token` `` counts as prose'),
   codeBlockCodeUnits: z.number().int().nonnegative().describe('UTF-16 code units inside code blocks — NOT characters and NOT bytes; an astral character counts as two. Fenced AND indented blocks, since both are one `code` AST node. Excludes inline code spans'),
   linkCount: z.number().int().nonnegative(),
   headingCount: z.number().int().nonnegative(),
   sectionCount: z.number().int().nonnegative(),
+  findingCount: z.number().int().nonnegative()
+    .describe('How many finding rows (HTML_PARSE_ERROR, UNRESOLVED_REFERENCE) the parse filed in blob_conditions for this blob: what a reader checks those rows against, as linkCount checks blob_references'),
 }).strict().describe('A row of the blob-keyed `blobs` table');
 
 export type BlobRow = z.infer<typeof BlobRowSchema>;
@@ -222,30 +230,15 @@ export const LEXICAL_FEATURE_COLUMNS = {
  * cannot locate the second link on a line — and AST-derived links are exactly
  * the population a link rewriter would edit.
  *
- * Both columns are **required**, which is what makes the table's rows uniformly
- * actionable: a candidate whose AST node carries no position is skipped and
- * counted (`referencesSkippedForMissingLine`, in `populateBlobs`' public result (`BlobPopulationResult`), a run counter no stored row carries), never
- * admitted with a null span.
- *
- * ⛔ This used to close with "Line and offsets come from one `position` object,
- * so they are present or absent together and no new skip class exists." That is
- * true of the **mdast** producer and was never true of the HTML one, so the
- * conclusion drawn from it was wrong. `html-link-parser.ts › makeLink` composes
- * the two from different sources — offsets from the attribute's span, `line`
- * from `span?.startLine ?? element.sourceCodeLocation?.startLine` — so a line
- * without offsets is a shape this table's producers really emit. It was
- * measured on a namespaced `<a xlink:href>`, whose element carries a full
- * location while a span lookup keyed on the bare local name misses: `{ line: 1
- * }`, no offsets.
- *
- * So there IS a skip class beyond "no position at all", and it is already
- * handled rather than newly introduced: `blob-references.ts › hasReferenceSpan`
- * requires line and both offsets **independently** — deliberately, per its own
- * docstring, because "asking a narrower one (`link.line === undefined`) would
- * silently miss a link that carried a line and no offsets". The invariant this
- * paragraph guards is therefore unchanged (no row is ever admitted with a null
- * span), but it holds because the admission test checks all three columns, NOT
- * because a producer cannot supply one without the others.
+ * Both columns, and `line`, are **nullable, each on its own**: a row holds
+ * exactly the position its parser supplied. Every parser link is a row, located
+ * or not, because the links are a resource fact the fact reader rebuilds from
+ * these rows; a link dropped here would be a link warm validate never sees. The
+ * producers that leave a hole are real: remark's GFM autolink post-pass builds a
+ * `link` with no `position`, and `html-link-parser.ts › makeLink` composes `line`
+ * and the offsets from different sources, so a line without offsets is a shape
+ * it can emit. A query that needs a span filters `startOffset IS NOT NULL`; the
+ * table never invents one.
  *
  * They are offsets into the **decoded** content — UTF-16 code units, the same
  * units `estimateTokens` counts, the same units `String.prototype.slice` takes,
@@ -285,13 +278,16 @@ export const BlobReferenceRowSchema = z.object({
   ordinal: z.number().int().nonnegative().describe("0-based position among this blob's references"),
   rawRef: z.string().describe('The reference exactly as authored — unresolved'),
   text: z.string().nullable().describe('Link text for a markdown form, or null for a bare autolink or any lexer-derived form'),
-  line: z.number().int().positive(),
+  line: z.number().int().positive().nullable()
+    .describe('1-based line. Null only for an AST-derived reference whose node carries no position (a GFM autolink literal glued to text)'),
   column: z.number().int().positive().nullable()
     .describe('1-based column. Null for a markdown form derived from an AST node that carries no column.'),
-  startOffset: z.number().int().nonnegative()
-    .describe('0-based UTF-16 code-unit offset of the reference token in the decoded content — NOT characters and NOT bytes; an astral character advances it by two'),
-  endOffset: z.number().int().nonnegative()
-    .describe('0-based UTF-16 code-unit offset one past the reference token — the half-open span [startOffset, endOffset)'),
+  startOffset: z.number().int().nonnegative().nullable()
+    .describe('0-based UTF-16 code-unit offset of the reference token in the decoded content — NOT characters and NOT bytes; an astral character advances it by two. Null only for an AST-derived reference whose node carries no full span'),
+  endOffset: z.number().int().nonnegative().nullable()
+    .describe('0-based UTF-16 code-unit offset one past the reference token — the half-open span [startOffset, endOffset). Null exactly when startOffset is'),
+  astIndex: z.number().int().nonnegative().nullable()
+    .describe('0-based position of an AST-derived reference in its parser\'s own link order (markdown: links, then link references, then definitions; HTML: walk order), which is what a resource\'s links are rebuilt in. Null for a lexer-derived reference'),
   syntacticForm: ReferenceSyntacticFormSchema,
   ...LEXICAL_FEATURE_COLUMNS,
 }).strict().describe('A row of the blob-keyed `blob_references` table');
@@ -319,10 +315,12 @@ export const BlobSectionRowSchema = z.object({
     .describe('0 for the first heading with this slug in the blob, 1 for the second, etc.'),
   parentOrdinal: z.number().int().nonnegative().nullable()
     .describe('ordinal of the enclosing heading, or null at the top of the tree'),
-  lineStart: z.number().int().positive(),
-  lineEnd: z.number().int().positive(),
-  bytes: z.number().int().nonnegative().describe('UTF-8 bytes spanned by this section, including nested subsections'),
-  tokens: z.number().int().nonnegative(),
+  lineStart: z.number().int().positive().nullable()
+    .describe('1-based first line. Null only for a heading whose node carries no position: it is kept, so the heading list is whole, and spans nothing'),
+  lineEnd: z.number().int().positive().nullable().describe('1-based last line. Null exactly when lineStart is'),
+  bytes: z.number().int().nonnegative().nullable()
+    .describe('UTF-8 bytes spanned by this section, including nested subsections. Null exactly when lineStart is'),
+  tokens: z.number().int().nonnegative().nullable().describe('Estimated tokens over the same span. Null exactly when lineStart is'),
 }).strict().describe('A row of the blob-keyed `blob_sections` table');
 
 export type BlobSectionRow = z.infer<typeof BlobSectionRowSchema>;
@@ -341,9 +339,11 @@ export type BlobSectionRow = z.infer<typeof BlobSectionRowSchema>;
 export const BlobConditionRowSchema = z.object({
   blob: ContentKeySchema.describe(BLOB_FK_DESC),
   code: z.string().min(1).describe('An enum member, or "PARSE_ODDITY" for an unclassified oddity'),
+  ordinal: z.number().int().nonnegative()
+    .describe('0-based position among this blob\'s rows of this code, in the order the parse reported them: two identical findings are two rows, and the order is the parser\'s, not the key\'s'),
   severity: SeveritySchema,
   message: z.string(),
-  line: z.number().int().positive().nullable(),
+  line: z.number().int().positive().nullable().describe('1-based line, or null when the finding names none'),
 }).strict().describe('A row of the blob-keyed `blob_conditions` table');
 
 export type BlobConditionRow = z.infer<typeof BlobConditionRowSchema>;

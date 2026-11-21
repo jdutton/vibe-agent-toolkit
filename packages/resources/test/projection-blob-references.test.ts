@@ -2,11 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { parseHtmlContent } from '../src/html-link-parser.js';
 import { parseMarkdownContent, type ParseResult } from '../src/link-parser.js';
-import {
-  AST_SYNTACTIC_FORMS,
-  blobReferencesFor,
-  hasReferenceSpan,
-} from '../src/projection/blob-references.js';
+import { AST_SYNTACTIC_FORMS, blobReferencesFor } from '../src/projection/blob-references.js';
 import { FOLLOWED_FORMS } from '../src/projection/claude-context-discovery.js';
 import { LexicalSyntacticFormSchema, type LexicalReference } from '../src/schemas/parse-facts.js';
 import { ExtentDeclarationSchema } from '../src/schemas/project-config.js';
@@ -15,12 +11,12 @@ import {
   type BlobReferenceRow,
   BlobReferenceRowSchema,
 } from '../src/schemas/projection-blobs.js';
-import type { LinkNodeType, ResourceLink } from '../src/schemas/resource-metadata.js';
+import { ResourceLinkSchema, type LinkNodeType, type ResourceLink } from '../src/schemas/resource-metadata.js';
 
 const CONTENT_KEY = `markdown.${'c'.repeat(64)}`;
 const AT_TOKEN = '@docs/setup.md';
 const HREF = './b.md';
-/** The `syntacticForm` an absent/`'link'` `nodeType` defaults to — the one this file names three times. */
+/** The `syntacticForm` of a `'link'` node — the one this file names three times. */
 const MARKDOWN_LINK = 'markdown-link';
 
 function parseResult(overrides: Partial<ParseResult>): ParseResult {
@@ -28,13 +24,15 @@ function parseResult(overrides: Partial<ParseResult>): ParseResult {
 }
 
 /**
- * An AST link as the parser really shapes it. `nodeType` decides syntacticForm.
+ * An AST link as the parser really shapes it. `nodeType` decides syntacticForm;
+ * every parser states one, so the fixture does too (`link` unless told).
  *
  * The span is derived from `line` rather than passed, because these fixtures
  * assert ORDER and shape, not positions — but it has to be present and distinct
- * per line, since a link with no span is skipped rather than admitted.
+ * per line, since a link with no span is a different row (null position, placed
+ * after every positioned one) and would change the order under test.
  */
-function link(line: number, nodeType?: LinkNodeType): ResourceLink {
+function link(line: number, nodeType: LinkNodeType = 'link'): ResourceLink {
   return {
     text: 'b',
     href: HREF,
@@ -42,7 +40,7 @@ function link(line: number, nodeType?: LinkNodeType): ResourceLink {
     line,
     startOffset: line * 100,
     endOffset: line * 100 + HREF.length,
-    ...(nodeType !== undefined && { nodeType }),
+    nodeType,
   };
 }
 
@@ -91,21 +89,42 @@ describe('blobReferencesFor', () => {
     expect(rows[0]?.inCodeSpan).toBe(true);
   });
 
-  it('derives syntacticForm from nodeType, defaulting an absent one to markdown-link', () => {
+  it('derives syntacticForm from nodeType', () => {
     const rows = blobReferencesFor(CONTENT_KEY, parseResult({
       links: [
         link(1, 'link'),
         link(2, 'linkReference'),
         link(3, 'definition'),
         link(4, 'htmlAttribute'),
-        link(5),
       ],
     }));
 
     expect(rows.map((row) => row.syntacticForm)).toEqual([
       MARKDOWN_LINK, 'markdown-link-reference', 'markdown-definition', 'html-link',
-      MARKDOWN_LINK,
     ]);
+  });
+
+  it('admits no link whose producer stated no nodeType, so no form is ever guessed', () => {
+    // The node type is required by the link schema: `ResourceLinkSchema.safeParse`
+    // rejects a link without one, and so does the parse cache's schema check when
+    // it reads an entry back. A parser's own return value is held by the type.
+    const unstated: Partial<ResourceLink> = link(1);
+    delete unstated.nodeType;
+    expect(ResourceLinkSchema.safeParse(unstated).success).toBe(false);
+    expect(ResourceLinkSchema.safeParse(link(1)).success).toBe(true);
+  });
+
+  it('places an offsetless HTML link after the offset-bearing ones on its line', () => {
+    // An HTML link's offset and a `links` index are different units, so they
+    // are never compared: offset-bearing links order by offset, then the
+    // offsetless ones follow in the parser's own order.
+    const offsetless: ResourceLink = { ...link(1, 'htmlAttribute'), href: './offsetless.md' };
+    delete offsetless.startOffset;
+    delete offsetless.endOffset;
+    const placed = { ...link(1, 'htmlAttribute'), startOffset: 400, endOffset: 410 };
+    const rows = blobReferencesFor(CONTENT_KEY, parseResult({ links: [offsetless, placed] }));
+
+    expect(rows.map((row) => row.rawRef)).toEqual([HREF, './offsetless.md']);
   });
 
   it('partitions every syntacticForm into exactly one of AST-derived or lexer-derived', () => {
@@ -138,12 +157,10 @@ describe('blobReferencesFor', () => {
     expect(rows.filter((row) => lexical.has(row.syntacticForm))).toHaveLength(1);
   });
 
-  it('drops a link missing any one of line, startOffset or endOffset', () => {
-    // `hasReferenceSpan` is the producer's own predicate and the one a consumer
-    // enumerating drops must reuse. A link with a LINE and no offsets is the
-    // shape the HTML parser used to emit, and it is dropped just as a
-    // line-less one is — asserted here because `line === undefined` alone
-    // cannot see it.
+  it('keeps a link missing any one of line, startOffset or endOffset, the missing column null', () => {
+    // A link is a resource fact whether or not the parser placed it: dropping one
+    // made the stored links disagree with the parse. Each column is null exactly
+    // where the parser supplied nothing, so the reader rebuilds the same link.
     const positioned = link(1, 'link');
     const shapes: ResourceLink[] = [
       { ...positioned, line: undefined },
@@ -151,9 +168,11 @@ describe('blobReferencesFor', () => {
       { ...positioned, endOffset: undefined },
     ];
 
-    expect(shapes.map((shape) => hasReferenceSpan(shape))).toEqual([false, false, false]);
-    expect(hasReferenceSpan(positioned)).toBe(true);
-    expect(blobReferencesFor(CONTENT_KEY, parseResult({ links: shapes }))).toEqual([]);
+    // A located row sorts before an unlocated one; `astIndex` keeps the parser's order.
+    const rows = blobReferencesFor(CONTENT_KEY, parseResult({ links: shapes }));
+    expect(rows.map((row) => [row.line, row.startOffset === null, row.endOffset === null]))
+      .toEqual([[1, true, false], [1, false, true], [null, false, false]]);
+    expect(rows.map((row) => row.astIndex)).toEqual([1, 2, 0]);
   });
 
   it('keeps html-link out of every form a closure follows', () => {
@@ -277,15 +296,14 @@ describe('blobReferencesFor', () => {
     expect(rows[0]?.inFence).toBe(false);
   });
 
-  it('skips a link with no line rather than defaulting it to line 1', () => {
-    // ResourceLink.line is optional; BlobReferenceRow.line is required and
-    // positive(). Defaulting would pile every position-less reference onto the
-    // first line, where no assertion could ever catch it.
+  it('keeps a link with no position as a row with null position, never line 1', () => {
+    // Defaulting would pile every position-less reference onto the first line,
+    // where no assertion could ever catch it; dropping it lost a resource fact.
     const rows = blobReferencesFor(CONTENT_KEY, parseResult({
-      links: [{ text: 'b', href: HREF, type: 'local_file' }],
+      links: [{ text: 'b', href: HREF, type: 'local_file', nodeType: 'link' }],
     }));
 
-    expect(rows).toEqual([]);
+    expect(rows).toMatchObject([{ rawRef: HREF, line: null, startOffset: null, endOffset: null, astIndex: 0 }]);
   });
 
   it('produces rows the shipped schema accepts', () => {
@@ -302,8 +320,7 @@ describe('blobReferencesFor', () => {
  * The HTML producer, driven through the REAL parser rather than a fixture.
  *
  * ⭐ Every fixture above hands `blobReferencesFor` a hand-built `ResourceLink`
- * that carries a span, because the helper's own docstring notes a span-less
- * link is skipped. That made the whole suite structurally incapable of seeing
+ * that carries a span. That made the whole suite structurally incapable of seeing
  * the shipped bug: the HTML parser emitted `line` and **no offsets**, so every
  * `<a href>` and `<img src>` was dropped and each HTML blob contributed zero
  * rows. Only real parser output can pin this — a synthetic `ParseResult` proves
@@ -364,7 +381,8 @@ describe('blobReferencesFor over real HTML parser output', () => {
     // HTML analogue is `href="./guide.md"`, not `./guide.md`. A consumer slicing
     // source by this column must not get two different meanings by extension.
     // Sliced out of the real source, so a plausible-but-wrong offset cannot pass.
-    const spans = htmlRows().map((row) => HTML.slice(row.startOffset, row.endOffset));
+    expect(htmlRows().every((row) => row.startOffset !== null && row.endOffset !== null)).toBe(true);
+    const spans = htmlRows().map((row) => HTML.slice(row.startOffset ?? 0, row.endOffset ?? 0));
 
     expect(spans).toEqual(['href="./guide.md"', 'src="./diagram.png"']);
   });
@@ -388,8 +406,8 @@ describe('blobReferencesFor over real HTML parser output', () => {
     // `html-link` is in neither follow list, which the sibling test above pins
     // against the shipped constants.
     expect(rows).toEqual([
-      { ...HTML_ROW_BASE, text: 'the guide', syntacticForm: 'html-link', ordinal: 0, rawRef: './guide.md', line: 2, startOffset: 23, endOffset: 40 },
-      { ...HTML_ROW_BASE, text: '', syntacticForm: 'html-link', ordinal: 1, rawRef: './diagram.png', line: 3, startOffset: 68, endOffset: 87 },
+      { ...HTML_ROW_BASE, text: 'the guide', syntacticForm: 'html-link', ordinal: 0, astIndex: 0, rawRef: './guide.md', line: 2, startOffset: 23, endOffset: 40 },
+      { ...HTML_ROW_BASE, text: '', syntacticForm: 'html-link', ordinal: 1, astIndex: 1, rawRef: './diagram.png', line: 3, startOffset: 68, endOffset: 87 },
     ]);
   });
 });
@@ -426,22 +444,12 @@ function reconstructedParse(): ParseResult {
 }
 
 /**
- * A REAL parsed link with one HALF of its position removed.
+ * The first link of the reconstructed-anchor page, less one half of its position.
  *
- * The guard in `astCandidates` rejects a link missing `line`, `startOffset` or
- * `endOffset` — three conditions, but no shipping parser produces a link with
- * only one half of a position: mdast fills line and offsets from one
- * `position`, and parse5's reconstructed clone withholds both together. So the
- * half-positioned shapes are unreachable end-to-end, and a suite built only
- * from real output cannot distinguish the two halves of the guard: deleting
- * either one leaves every test green (measured across all 2147 resources unit
- * tests). Yet the guard's own comment says it is kept precisely for "a third
- * one that does not" fill both.
- *
- * Subtracting from real output rather than inventing a link is the compromise:
- * the surviving half carries positions parse5 actually produced, so the test
- * cannot be satisfied by a fixture that happens to agree with a wrong offset
- * convention — the failure mode that shipped the original bug.
+ * No shipping parser produces a half-positioned link (mdast fills line and offsets
+ * from one `position`, and parse5's reconstructed clone withholds both together),
+ * so the shape is subtracted from real output rather than invented: the surviving
+ * half carries positions parse5 actually produced.
  *
  * @param drop - Which half of the position to remove
  * @returns The first parsed link, less that half
@@ -489,7 +497,7 @@ const POSITIONLESS_KEY = `markdown.${'f'.repeat(64)}`;
  * returns for a document it cannot fully locate.
  */
 describe('blobReferencesFor over a location-less real markdown link', () => {
-  it('drops the autolink remark located nowhere and keeps the one it did', () => {
+  it('keeps the autolink remark located nowhere, with no position, beside the one it did', () => {
     const parsed = parseMarkdownContent(POSITIONLESS_MARKDOWN, POSITIONLESS_MARKDOWN.length);
 
     // Guard the guard: if remark ever starts locating the reconstructed
@@ -503,13 +511,17 @@ describe('blobReferencesFor over a location-less real markdown link', () => {
     expect(parsed.links[0]?.href.endsWith('//www.anthropic.com')).toBe(true);
     expect(parsed.links[1]?.href).toBe('./handbook.md');
 
-    // Two links in, one row out — and the survivor is sliced back out of the
-    // source, so a plausible-but-wrong offset pair cannot pass.
+    // Two links in, two rows out. The located one is sliced back out of the
+    // source, so a plausible-but-wrong offset pair cannot pass; the other has no
+    // position at all, and sorts after every located row.
     const rows = blobReferencesFor(POSITIONLESS_KEY, parsed);
 
-    expect(rows.map((row) => row.rawRef)).toEqual(['./handbook.md']);
-    expect(rows.map((row) => POSITIONLESS_MARKDOWN.slice(row.startOffset, row.endOffset)))
-      .toEqual(['[the handbook](./handbook.md)']);
+    expect(rows.map((row) => row.rawRef.endsWith('//www.anthropic.com') || row.rawRef)).toEqual(['./handbook.md', true]);
+    const [located, unlocated] = rows;
+    expect(POSITIONLESS_MARKDOWN.slice(located?.startOffset ?? 0, located?.endOffset ?? 0))
+      .toBe('[the handbook](./handbook.md)');
+    expect(unlocated).toMatchObject({ line: null, startOffset: null, endOffset: null, astIndex: 0 });
+    expect(located?.astIndex).toBe(1);
   });
 });
 
@@ -530,28 +542,28 @@ describe('blobReferencesFor over the reconstructed-anchor HTML page', () => {
 
     expect(rows.map((row) => row.rawRef)).toEqual(['./x.md', './y.md']);
     expect(rows.map((row) => row.ordinal)).toEqual([0, 1]);
-    expect(rows.map((row) => RECONSTRUCTED_ANCHOR_HTML.slice(row.startOffset, row.endOffset)))
+    expect(rows.map((row) => RECONSTRUCTED_ANCHOR_HTML.slice(row.startOffset ?? 0, row.endOffset ?? 0)))
       .toEqual(['href="./x.md"', 'href="./y.md"']);
   });
 
-  it('skips a link with a line but no offsets — the exact shape that shipped', () => {
-    // Deleting the offset half of the guard admits this link and writes
-    // `startOffset: undefined` into a column the schema requires.
+  it('keeps a link with a line but no offsets, its offsets null', () => {
     const link = halfPositionedLink('offsets');
 
     expect(link.line).toBe(1);
     expect(link.startOffset).toBeUndefined();
-    expect(blobReferencesFor(RECONSTRUCTED_KEY, parseResult({ links: [link] }))).toEqual([]);
+    const rows = blobReferencesFor(RECONSTRUCTED_KEY, parseResult({ links: [link] }));
+    expect(rows.map((row) => [row.line, row.startOffset, row.endOffset])).toEqual([[1, null, null]]);
+    expect(() => rows.map((row) => BlobReferenceRowSchema.parse(row))).not.toThrow();
   });
 
-  it('skips a link with offsets but no line', () => {
-    // The mirror image: deleting the line half of the guard admits this one and
-    // writes `line: undefined` into a `positive()` column.
+  it('keeps a link with offsets but no line, its line null', () => {
     const link = halfPositionedLink('line');
 
     expect(link.line).toBeUndefined();
     expect(link.startOffset).toBe(3);
-    expect(blobReferencesFor(RECONSTRUCTED_KEY, parseResult({ links: [link] }))).toEqual([]);
+    const rows = blobReferencesFor(RECONSTRUCTED_KEY, parseResult({ links: [link] }));
+    expect(rows.map((row) => [row.line, row.startOffset])).toEqual([[null, 3]]);
+    expect(() => rows.map((row) => BlobReferenceRowSchema.parse(row))).not.toThrow();
   });
 });
 
@@ -584,11 +596,11 @@ function orderedHtmlRows(source: string): BlobReferenceRow[] {
  * order — i.e. `ordinal` order agrees with physical position.
  *
  * @param rows - Rows already in ordinal order
- * @returns `true` when `startOffset` never decreases from one row to the next
+ * @returns `true` when every row has a `startOffset` and it never decreases from one row to the next
  */
 function startOffsetsAreSorted(rows: readonly BlobReferenceRow[]): boolean {
   const offsets = rows.map((row) => row.startOffset);
-  return offsets.every((offset, index) => index === 0 || (offsets[index - 1] ?? 0) <= offset);
+  return offsets.every((offset, index) => offset !== null && (index === 0 || (offsets[index - 1] ?? 0) <= offset));
 }
 
 describe('B1 — HTML ordinal follows source position, not DOM/foster-parenting order', () => {

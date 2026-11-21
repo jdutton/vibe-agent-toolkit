@@ -570,7 +570,10 @@ function indexReferenceShapes(
 ): ReadonlyMap<string, boolean> {
   const shapes = new Map<string, boolean>();
   for (const reference of references) {
-    shapes.set(referenceKey(reference), reference.hasExtension || reference.slashCount > 0);
+    // A reference with no line (a positionless AST link) cannot be the one a condition names:
+    // every condition this joins against carries its source line.
+    if (reference.line === null) continue;
+    shapes.set(referenceKey({ ...reference, line: reference.line }), reference.hasExtension || reference.slashCount > 0);
   }
   for (const entry of imports) {
     shapes.set(referenceKey(entry), CLAUDE_CODE.importShape(entry.target) === 'path');
@@ -1160,7 +1163,7 @@ function severityFor(
  * @param reference - One `blob_references` row
  * @returns The composite key
  */
-function referenceKey(reference: Pick<BlobReferenceRow, 'blob' | 'line' | 'rawRef'>): string {
+function referenceKey(reference: Pick<BlobReferenceRow, 'blob' | 'rawRef'> & { readonly line: number }): string {
   return joinKey(reference.blob, reference.line, reference.rawRef);
 }
 
