@@ -115,7 +115,8 @@ describe('blobFactsReader', () => {
     const parsed = parseHtmlContent(source, source.length);
     const [located] = parsed.links;
     expect(located?.line).toBe(1);
-    const halfPositioned = { ...located ?? { text: '', href: '', type: 'local_file' as const } };
+    if (located === undefined) throw new Error('the page yielded no link');
+    const halfPositioned = { ...located };
     delete halfPositioned.startOffset;
     delete halfPositioned.endOffset;
     const htmlKey = `html.${'e'.repeat(64)}`;

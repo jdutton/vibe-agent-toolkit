@@ -104,6 +104,7 @@ async function judgeHrefs(root: string, hrefs: readonly string[]) {
     href,
     type: 'local_file',
     line: offset + 1,
+    nodeType: 'link',
   }));
   const drafts = await linkFindings('a.md', safePath.join(root, 'a.md'), links, root, index);
   return { drafts, index };

@@ -48,6 +48,9 @@ import { compareCodeUnits, normalizedTmpdir, safePath } from '@vibe-agent-toolki
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+/** An SVG link through a namespaced attribute (F11). */
+const XLINK_PAGE = '<!DOCTYPE html><svg><a xlink:href="./baseline.md">x</a></svg>\n';
+
 /** What a precondition sees: the cold resource and the stored rows of its key. */
 interface CaseEvidence {
   readonly resource: ResourceMetadata;
@@ -137,8 +140,9 @@ const FIXTURE: Readonly<Record<string, FidelityCase>> = {
   'f7-conditions.md': {
     content: '# F7\n\nSee [one][missing] and [two][missing].\n',
     precondition: ({ rows }) => {
-      const [first, second, ...rest] = conditionsOf(rows, 'UNRESOLVED_REFERENCE');
-      expect(rest).toEqual([]);
+      const unresolved = conditionsOf(rows, 'UNRESOLVED_REFERENCE');
+      expect(unresolved).toHaveLength(2);
+      const [first, second] = unresolved;
       expect([second?.message, second?.line]).toEqual([first?.message, first?.line]);
     },
   },
@@ -151,6 +155,16 @@ const FIXTURE: Readonly<Record<string, FidelityCase>> = {
       const errors = conditionsOf(rows, 'HTML_PARSE_ERROR');
       expect(errors.map((row) => [row.message, row.line])).toEqual([['duplicate-attribute', 1], ['duplicate-attribute', 1]]);
       expect(resource.links).toHaveLength(1);
+    },
+  },
+  // F11: a namespaced `xlink:href`, the attribute whose span lookup once missed and
+  // left a link with a line and no offsets. Its span is now the attribute's own.
+  'f11-xlink.html': {
+    content: XLINK_PAGE,
+    precondition: ({ resource }) => {
+      const [link] = resource.links;
+      expect(resource.links).toHaveLength(1);
+      expect(XLINK_PAGE.slice(link?.startOffset ?? 0, link?.endOffset ?? 0)).toBe('xlink:href="./baseline.md"');
     },
   },
   // F8: a lexer-only form (`@`-prefixed) beside AST links: never a ResourceLink.

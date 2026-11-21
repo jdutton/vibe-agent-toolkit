@@ -67,6 +67,7 @@ function createTestLink(
 ): ResourceLink {
   return {
     type: LOCAL_FILE,
+    nodeType: 'link',
     ...overrides,
   };
 }
@@ -1325,26 +1326,6 @@ describe('transformContent', () => {
 
       expect(result).toContain(`[Guide](${DEF_EXPECTED_REL})`);
       expect(result).toContain(`[api-ref]: resources/api.md`);
-    });
-
-    it('should not rewrite definitions when no nodeType is set (backward compat)', () => {
-      const content = `[ref]: ./guide.md`;
-      // Old-style link without nodeType — should be skipped by definition pass
-      const links: ResourceLink[] = [
-        createTestLink({ text: 'ref', href: DEF_GUIDE_HREF, resolvedId: DEF_GUIDE_ID }),
-      ];
-
-      const resource = createTestResource({ id: DEF_GUIDE_ID, filePath: DEF_GUIDE_OUTPUT_PATH });
-      const registry = createTestRegistry([resource]);
-
-      const result = transformContent(content, links, {
-        linkRewriteRules: [createTypeRule(LOCAL_FILE, REWRITE_LINK_TEMPLATE)],
-        resourceRegistry: registry,
-        sourceFilePath: DEF_SOURCE_OUTPUT,
-      });
-
-      // Without nodeType: 'definition', the link is NOT matched by definition pass
-      expect(result).toBe(`[ref]: ./guide.md`);
     });
   });
 });

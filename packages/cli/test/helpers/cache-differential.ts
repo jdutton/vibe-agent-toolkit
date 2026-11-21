@@ -738,26 +738,33 @@ function accountedFor(database: DatabaseSync, key: string): boolean {
 }
 
 /**
- * Evict part of the blob tier the prime wrote: every other keyed content key the stored
- * realizations name, in sorted order (the first, third, fifth, ...), deleted from every
- * blob-scoped table. A content key is a digest, so which files that is is arbitrary, but
- * fixed for fixed bytes; and it is never all or none, so the store holds an evicted key and
- * a held one. Only the store's rows go: the parse cache keeps its entries, so the measured
- * run re-derives the evicted rows from parse hits. The store's own `blob_keys` manifest is
- * not a projection table and is left: it orders eviction, and a re-derivation rewrites it.
+ * Every keyed content key the stored realizations name, sorted.
+ *
+ * @param database - The primed cell's store
+ * @returns The keys
+ */
+function keyedContentKeys(database: DatabaseSync): string[] {
+  const realizations = quoteIdentifier(PROJECTION_TABLES.resourceRealizations.name);
+  return (database
+    .prepare(`SELECT DISTINCT "contentKey" AS key FROM ${realizations} WHERE "contentState" = 'keyed' ORDER BY "contentKey"`)
+    .all() as { key: string }[]).map((row) => row.key);
+}
+
+/**
+ * Evict a named subset of the blob tier the prime wrote: each given content key,
+ * deleted from every blob-scoped table. Only the store's rows go: the parse cache
+ * keeps its entries, so the measured run re-derives the evicted rows from parse
+ * hits. The store's own `blob_keys` manifest is not a projection table and is
+ * left: it orders eviction, and a re-derivation rewrites it.
  *
  * @param dirs - The primed cell
- * @returns The evicted keys
+ * @param evicted - Keyed content keys of that cell to evict
  */
-function evictHalfTheBlobTier(dirs: ArmDirs): string[] {
-  return withStore(dirs, (database) => {
-    const realizations = quoteIdentifier(PROJECTION_TABLES.resourceRealizations.name);
-    const keyed = (database
-      .prepare(`SELECT DISTINCT "contentKey" AS key FROM ${realizations} WHERE "contentState" = 'keyed' ORDER BY "contentKey"`)
-      .all() as { key: string }[]).map((row) => row.key);
-    const evicted = keyed.filter((_key, index) => index % 2 === 0);
-    const held = keyed.filter((_key, index) => index % 2 === 1);
-    expect(held.length, 'a partial eviction holds a key back').toBeGreaterThan(0);
+function evictBlobKeys(dirs: ArmDirs, evicted: readonly string[]): void {
+  withStore(dirs, (database) => {
+    const keyed = keyedContentKeys(database);
+    expect(evicted.filter((key) => !keyed.includes(key)), 'evicted keys the prime never keyed').toEqual([]);
+    const held = keyed.filter((key) => !evicted.includes(key));
     // Every key accounted for before, so it is the eviction that removes one.
     expect(keyed.filter((key) => !accountedFor(database, key)), 'keys the prime left unaccounted for').toEqual([]);
     database.exec('BEGIN IMMEDIATE');
@@ -769,8 +776,24 @@ function evictHalfTheBlobTier(dirs: ArmDirs): string[] {
     const none = Object.fromEntries(BLOB_TABLES.map((spec) => [spec.name, 0]));
     for (const key of evicted) expect(blobRowCounts(database, key), `evicted ${key}`).toEqual(none);
     expect(held.filter((key) => !accountedFor(database, key)), 'held keys the eviction reached').toEqual([]);
-    return evicted;
   });
+}
+
+/**
+ * Evict half the blob tier: every other keyed content key, in sorted order (the
+ * first, third, fifth, ...). A content key is a digest, so which files that is is
+ * arbitrary, but fixed for fixed bytes; and it is never all or none, so the store
+ * holds an evicted key and a held one.
+ *
+ * @param dirs - The primed cell
+ * @returns The evicted keys
+ */
+function evictHalfTheBlobTier(dirs: ArmDirs): string[] {
+  const keyed = withStore(dirs, keyedContentKeys);
+  const evicted = keyed.filter((_key, index) => index % 2 === 0);
+  expect(keyed.length - evicted.length, 'a partial eviction holds a key back').toBeGreaterThan(0);
+  evictBlobKeys(dirs, evicted);
+  return evicted;
 }
 
 /**

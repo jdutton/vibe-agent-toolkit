@@ -219,7 +219,7 @@ export function renderParseFactSnapshot(snapshot: ParseFactSnapshot): string {
     lines.push(`links: ${String(row.links.length)}`);
     for (const link of row.links) {
       lines.push(
-        `  ${String(link.ordinal)}\t${link.type}\t${link.nodeType ?? '-'}\tline=${String(link.line ?? '-')}\tresolvedId=${link.resolvedId ?? '-'}\thref=${renderInline(link.href)}\ttext=${renderInline(link.text)}`,
+        `  ${String(link.ordinal)}\t${link.type}\t${link.nodeType}\tline=${String(link.line ?? '-')}\tresolvedId=${link.resolvedId ?? '-'}\thref=${renderInline(link.href)}\ttext=${renderInline(link.text)}`,
       );
     }
 

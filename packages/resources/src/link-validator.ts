@@ -98,7 +98,7 @@ type LinkIssueExtras = Partial<Pick<ValidationIssue, 'location' | 'line' | 'link
  * `location` is expressed against. One issue, one root.
  */
 function linkExtras(
-  link: ResourceLink,
+  link: JudgedLink,
   sourceFilePath: string,
   projectRoot: string | undefined,
   suggestion?: string,
@@ -127,10 +127,17 @@ function messagePath(absolutePath: string, projectRoot: string | undefined): str
 }
 
 /**
+ * The link fields judging reads: every `ResourceLink` field but `nodeType`.
+ * Judging never reads the node type, and a link a frontmatter field declares
+ * came from no AST node, so it has none to state.
+ */
+export type JudgedLink = Omit<ResourceLink, 'nodeType'>;
+
+/**
  * One link paired with the file it was found in — the unit the fill pass takes.
  */
 export interface LinkEntry {
-  link: ResourceLink;
+  link: JudgedLink;
   sourceFilePath: string;
 }
 
@@ -671,7 +678,7 @@ export function judgeLink(
  * ```
  */
 export async function validateLink(
-  link: ResourceLink,
+  link: JudgedLink,
   sourceFilePath: string,
   fragmentsByFile: FragmentIndex,
   options?: ValidateLinkOptions
@@ -696,7 +703,7 @@ export async function validateLink(
  */
 export function resolutionFailureIssue(
   resolved: ReturnType<typeof resolveLocalHref>,
-  link: ResourceLink,
+  link: JudgedLink,
   sourceFilePath: string,
   projectRoot?: string,
 ): ValidationIssue | null {
@@ -732,7 +739,7 @@ export function resolutionFailureIssue(
  */
 export function fileExistenceIssue(
   fileResult: { exists: boolean; resolvedPath: string; correction?: PathCorrection },
-  link: ResourceLink,
+  link: JudgedLink,
   sourceFilePath: string,
   projectRoot?: string,
 ): ValidationIssue | null {
@@ -916,7 +923,7 @@ export function escapeNonAscii(name: string): string {
  */
 export function normalizationMismatchIssue(
   fileResult: Pick<FileVerification, 'match' | 'resolvedPath' | 'correction'>,
-  link: ResourceLink,
+  link: JudgedLink,
   sourceFilePath: string,
   projectRoot?: string,
 ): ValidationIssue | null {
@@ -956,7 +963,7 @@ export function normalizationMismatchIssue(
  */
 export function deferredArtifactIssue(
   fileResult: { exists: boolean; resolvedPath: string; correction?: PathCorrection },
-  link: ResourceLink,
+  link: JudgedLink,
   sourceFilePath: string,
   deferredArtifacts: DeferredArtifacts | undefined,
   projectRoot?: string,
@@ -989,7 +996,7 @@ export function deferredArtifactIssue(
  * column (ledger entry D9).
  */
 export function gitIgnoreSafetyIssue(
-  link: ResourceLink,
+  link: JudgedLink,
   sourceFilePath: string,
   resolvedTarget: string,
   options: GitIgnoreCheckOptions | undefined,
@@ -1171,7 +1178,7 @@ function validateLocalFileLink(
  */
 function unreadableTargetIssue(
   fileResult: Pick<FileVerification, 'unreadable' | 'resolvedPath'>,
-  link: ResourceLink,
+  link: JudgedLink,
   sourceFilePath: string,
   projectRoot?: string,
 ): ValidationIssue | null {
@@ -1218,7 +1225,7 @@ function unreadableTargetIssue(
  */
 function unresolvedTargetIssue(
   fault: RealpathFault,
-  link: ResourceLink,
+  link: JudgedLink,
   sourceFilePath: string,
   resolvedTarget: string,
   projectRoot: string,
@@ -1319,7 +1326,7 @@ function judgeVerifiedTarget(
 function unreadableFileAnchorIssue(
   anchor: string,
   resolvedPath: string,
-  link: ResourceLink,
+  link: JudgedLink,
   sourceFilePath: string,
   options: Pick<JudgeLinkOptions, 'unreadableTargets' | 'projectRoot'>,
 ): ValidationIssue | null {
@@ -1347,7 +1354,7 @@ function assertNever(value: never): never {
  * Validate an anchor link (within current file).
  */
 function validateAnchorLink(
-  link: ResourceLink,
+  link: JudgedLink,
   sourceFilePath: string,
   fragmentsByFile: FragmentIndex,
   options: JudgeLinkOptions,

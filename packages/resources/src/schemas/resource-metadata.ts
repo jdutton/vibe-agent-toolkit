@@ -37,8 +37,8 @@ export type LinkType = z.infer<typeof LinkTypeSchema>;
  * stated rather than inferred from the absence of the other three: the HTML
  * parser used to leave `nodeType` unset, and every consumer that switched on it
  * therefore had to treat "absent" as "markdown", which is how HTML rows reached
- * `blob_references` labelled `markdown-link`. An absent `nodeType` now means
- * only that some producer did not say, never that the link is markdown.
+ * `blob_references` labelled `markdown-link`. It is now required: a link
+ * states the node it came from, so no consumer and no stored row ever guesses.
  */
 export const LinkNodeTypeSchema = z.enum([
   'link',
@@ -119,7 +119,7 @@ export const ResourceLinkSchema = z.object({
   resolvedPath: z.string().optional().describe('Absolute file path (for local_file links)'),
   anchorTarget: z.string().optional().describe('Target heading slug (for anchor links)'),
   resolvedId: z.string().optional().describe('Resolved resource ID in the collection (for local_file links)'),
-  nodeType: LinkNodeTypeSchema.optional().describe('AST node type: link, linkReference, or definition'),
+  nodeType: LinkNodeTypeSchema.describe('AST node type: link, linkReference, definition, or htmlAttribute'),
 }).strip().describe('Link found in a markdown resource'); // .strip(): a parse-cache ELEMENT — a stale key here is a field this build no longer reads; see parse-facts.ts "Nested schemas are NOT strict, on purpose"
 
 export type ResourceLink = z.infer<typeof ResourceLinkSchema>;

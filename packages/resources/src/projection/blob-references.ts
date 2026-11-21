@@ -71,49 +71,54 @@
  * meaning belongs to a lens (resource-projection.md §5).
  */
 
-import { VatError } from '@vibe-agent-toolkit/utils';
-
 import type { ParseResult } from '../link-parser.js';
 import { detectVariableExpansion, EXTENSION_SUFFIX, stripQueryOrFragment } from '../reference-lexer.js';
-import { LexicalSyntacticFormSchema, type LexicalReference } from '../schemas/parse-facts.js';
-import {
-  ReferenceSyntacticFormSchema,
-  type BlobReferenceRow,
-  type ReferenceSyntacticForm,
-} from '../schemas/projection-blobs.js';
+import type { LexicalReference } from '../schemas/parse-facts.js';
+import type { BlobReferenceRow, ReferenceSyntacticForm } from '../schemas/projection-blobs.js';
 import type { LinkNodeType, ResourceLink } from '../schemas/resource-metadata.js';
 
 /**
- * The forms {@link syntacticFormFor} can assign — every `ReferenceSyntacticForm`
- * the raw-source lexer does **not** claim for itself.
+ * Every AST node type and the syntactic form its links are stored under — the
+ * ONE table both directions read: the population writes a form from a node type
+ * here, and the fact reader rebuilds the node type from the form by inverting
+ * it ({@link NODE_TYPE_OF_AST_FORM}). Total over `LinkNodeType`, so a new node
+ * type does not compile until it has a form.
  *
- * Derived by subtracting one producer's enum from the whole, never hand-listed.
- * A hand-listed copy is precisely what went wrong: the whole-corpus population
- * test carried its own `MARKDOWN_FORMS` triple and used
- * `blobs.linkCount - (rows in that set)` as an independent measurement of
- * "AST links dropped for want of a span". That subtraction was right only while
- * mdast was the only producer whose links reached a row. Giving HTML links a
- * span — and their own `html-link` form — made every one of them look dropped
- * to that derivation, and the two measurements disagreed by exactly the number
- * of HTML references in the corpus (4).
- *
- * So the partition is stated **here**, beside the only function that assigns an
- * AST form, and consumers read it. Add a fourth parser and its form is counted
- * as AST-derived the moment it joins `ReferenceSyntacticFormSchema`; add a
- * lexer form and it must join `LexicalSyntacticFormSchema`, which is what
- * `LexicalReference.syntacticForm` is typed by, so the lexer cannot emit one
- * without moving this set with it.
- *
- * Why the lexer's half is the one subtracted, rather than the AST's half
- * listed: the forms a parser's `links` produce are exactly the rows a resource's
- * links are rebuilt from, and the lexer is the one producer whose forms are not
- * links; this constant names that population once.
+ * `htmlAttribute` has its own form, which neither `closure-extent`'s default
+ * `follow` nor `claude-context-discovery`'s `FOLLOWED_FORMS` follows: labelling
+ * an HTML link `markdown-link` would make `vat inventory` report members
+ * `vat build` does not bundle.
  */
-export const AST_SYNTACTIC_FORMS: ReadonlySet<ReferenceSyntacticForm> = new Set(
-  ReferenceSyntacticFormSchema.options.filter(
-    (form): boolean => !(LexicalSyntacticFormSchema.options as readonly string[]).includes(form),
-  ),
+const AST_FORM_OF_NODE_TYPE: { readonly [NodeType in LinkNodeType]: ReferenceSyntacticForm } = {
+  link: 'markdown-link',
+  linkReference: 'markdown-link-reference',
+  definition: 'markdown-definition',
+  htmlAttribute: 'html-link',
+};
+
+/** {@link AST_FORM_OF_NODE_TYPE} inverted: the node type each AST form was stored from. */
+export const NODE_TYPE_OF_AST_FORM: ReadonlyMap<ReferenceSyntacticForm, LinkNodeType> = new Map(
+  (Object.entries(AST_FORM_OF_NODE_TYPE) as [LinkNodeType, ReferenceSyntacticForm][]).map(([nodeType, form]) => [form, nodeType]),
 );
+
+/**
+ * The forms a parser's links are stored under — the values of
+ * {@link AST_FORM_OF_NODE_TYPE}, read off that one table rather than listed again.
+ *
+ * A hand-listed copy is precisely what went wrong once: the whole-corpus
+ * population test carried its own `MARKDOWN_FORMS` triple and used
+ * `blobs.linkCount - (rows in that set)` as an independent measurement of
+ * "AST links dropped for want of a span". Giving HTML links their own
+ * `html-link` form made every one of them look dropped to that derivation, and
+ * the two measurements disagreed by exactly the number of HTML references in the
+ * corpus (4).
+ *
+ * The partition against the lexer's forms (`LexicalSyntacticFormSchema`) is
+ * asserted both ways in `projection-blob-references.test.ts`: every
+ * `ReferenceSyntacticForm` is in exactly one of the two sets, so a form added to
+ * the enum and to neither producer fails there.
+ */
+export const AST_SYNTACTIC_FORMS: ReadonlySet<ReferenceSyntacticForm> = new Set(Object.values(AST_FORM_OF_NODE_TYPE));
 
 /** The row columns a `LexicalReference` supplies directly, under the same names. */
 type LexicalColumns = Omit<BlobReferenceRow, 'blob' | 'ordinal' | 'rawRef' | 'text' | 'astIndex'>;
@@ -165,6 +170,14 @@ interface OrderedCandidate {
    *   IS document order (the lexer is a single raw-source scan).
    */
   tieBreak: number;
+  /**
+   * Which unit {@link tieBreak} is in, compared first: 0 for every candidate
+   * but one, 1 for an HTML link with no `startOffset`. That link can only
+   * tie-break by its `links` index, and an index is never compared against
+   * another link's character offset, so it orders after the offset-bearing
+   * links on its line, in the parser's own order.
+   */
+  tieTier: 0 | 1;
   row: Omit<BlobReferenceRow, 'ordinal'>;
 }
 
@@ -203,7 +216,7 @@ export function blobReferencesFor(contentKey: string, parsed: ParseResult): Blob
 
 /**
  * Order by line, then by column with a null column first, then by
- * {@link OrderedCandidate.tieBreak}.
+ * {@link OrderedCandidate.tieTier}, then by {@link OrderedCandidate.tieBreak}.
  *
  * @param left - First candidate
  * @param right - Second candidate
@@ -225,6 +238,7 @@ function compareCandidates(left: OrderedCandidate, right: OrderedCandidate): num
   } else if (left.column !== right.column) {
     return left.column - right.column;
   }
+  if (left.tieTier !== right.tieTier) return left.tieTier - right.tieTier;
   return left.tieBreak - right.tieBreak;
 }
 
@@ -264,11 +278,7 @@ function astCandidates(contentKey: string, links: readonly ResourceLink[]): Orde
     // parser has emitted a line with no offsets.
     line: link.line ?? null,
     column: null,
-    // htmlAttribute: tie-break by real source position (immune to DOM/foster-
-    // parenting order). Anything else (markdown, or a producer that did not
-    // say), and a link with no offset: tie-break by `links` index, preserving
-    // the kind-order bucket contract — see this function's docstring.
-    tieBreak: link.nodeType === 'htmlAttribute' && link.startOffset !== undefined ? link.startOffset : sequence,
+    ...astTieBreak(link, sequence),
     row: {
       blob: contentKey,
       rawRef: link.href,
@@ -277,7 +287,7 @@ function astCandidates(contentKey: string, links: readonly ResourceLink[]): Orde
       column: null,
       ...spanOf(link),
       astIndex: sequence,
-      syntacticForm: syntacticFormFor(link.nodeType),
+      syntacticForm: AST_FORM_OF_NODE_TYPE[link.nodeType],
       ...lexicalFeatures(link.href),
       // A link inside a fence or a code span is not parsed as a link at all
       // — it is a `code`/`inlineCode` node — so an AST-derived row is never
@@ -286,6 +296,22 @@ function astCandidates(contentKey: string, links: readonly ResourceLink[]): Orde
       inFence: false,
     },
   }));
+}
+
+/**
+ * An AST candidate's tie-break. `htmlAttribute` with an offset: its real source
+ * position (immune to DOM/foster-parenting order). Markdown: its `links` index,
+ * preserving the kind-order bucket contract — see {@link astCandidates}.
+ * `htmlAttribute` with no offset: its `links` index in the later tier, since an
+ * index and an offset are different units.
+ *
+ * @param link - One parser-supplied link
+ * @param sequence - Its index in `links`
+ * @returns The candidate's `tieTier` and `tieBreak`
+ */
+function astTieBreak(link: ResourceLink, sequence: number): Pick<OrderedCandidate, 'tieBreak' | 'tieTier'> {
+  if (link.nodeType !== 'htmlAttribute') return { tieTier: 0, tieBreak: sequence };
+  return link.startOffset === undefined ? { tieTier: 1, tieBreak: sequence } : { tieTier: 0, tieBreak: link.startOffset };
 }
 
 /**
@@ -318,6 +344,7 @@ function lexicalCandidates(
     line: reference.line,
     column: reference.column,
     tieBreak: sequence,
+    tieTier: 0,
     row: lexicalRow(contentKey, reference),
   }));
 }
@@ -345,54 +372,6 @@ function lexicalRow(contentKey: string, reference: LexicalReference): Omit<BlobR
     astIndex: null,
     ...checked,
   };
-}
-
-/** The code {@link syntacticFormFor} throws for a link whose producer stated no `nodeType`. */
-export const LINK_NODE_TYPE_MISSING = 'LINK_NODE_TYPE_MISSING';
-
-/**
- * Every AST node type and the syntactic form its links are stored under — the
- * ONE table both directions read: the population writes a form from a node type
- * here, and the fact reader rebuilds the node type from the form by inverting
- * it ({@link NODE_TYPE_OF_AST_FORM}). Total over `LinkNodeType`, so a new node
- * type does not compile until it has a form.
- *
- * `htmlAttribute` has its own form, which neither `closure-extent`'s default
- * `follow` nor `claude-context-discovery`'s `FOLLOWED_FORMS` follows: labelling
- * an HTML link `markdown-link` would make `vat inventory` report members
- * `vat build` does not bundle.
- */
-const AST_FORM_OF_NODE_TYPE: { readonly [NodeType in LinkNodeType]: ReferenceSyntacticForm } = {
-  link: 'markdown-link',
-  linkReference: 'markdown-link-reference',
-  definition: 'markdown-definition',
-  htmlAttribute: 'html-link',
-};
-
-/** {@link AST_FORM_OF_NODE_TYPE} inverted: the node type each AST form was stored from. */
-export const NODE_TYPE_OF_AST_FORM: ReadonlyMap<ReferenceSyntacticForm, LinkNodeType> = new Map(
-  (Object.entries(AST_FORM_OF_NODE_TYPE) as [LinkNodeType, ReferenceSyntacticForm][]).map(([nodeType, form]) => [form, nodeType]),
-);
-
-/**
- * Map an AST node type onto its syntactic form.
- *
- * ⛔ An absent node type is refused, never defaulted. It used to default to
- * `markdown-link`, and the fact reader then rebuilt such a link as a `link`
- * node: a resource the cold lane built with no `nodeType` came back from the
- * store with one. Every parser states it (`remark-parser`'s `toResourceLink`,
- * `html-link-parser`'s `makeLink`), so a link without one is a producer's
- * defect, and guessing would file a fact the bytes never said.
- *
- * @param nodeType - `ResourceLink.nodeType`
- * @returns The matching syntactic form
- * @throws A `VatError` coded {@link LINK_NODE_TYPE_MISSING} when the producer stated none
- */
-function syntacticFormFor(nodeType: LinkNodeType | undefined): ReferenceSyntacticForm {
-  if (nodeType === undefined) {
-    throw new VatError(LINK_NODE_TYPE_MISSING, 'A parser produced a link with no nodeType; every link a parser emits must state the AST node type it came from.');
-  }
-  return AST_FORM_OF_NODE_TYPE[nodeType];
 }
 
 /**
