@@ -441,9 +441,21 @@ function sqlitePrimaryResultCode(error: unknown): number | undefined {
  * @returns True for a damaged-file fault
  */
 function isDamagedDatabaseFault(error: unknown): boolean {
+  return someSqliteFault(error, (primary) => DAMAGED_DATABASE_RESULT_CODES.has(primary));
+}
+
+/**
+ * Whether `error`, or any error in its `cause` chain, is a SQLite failure whose
+ * primary result code `matches`.
+ *
+ * @param error - Anything thrown
+ * @param matches - Decides by primary result code
+ * @returns True when one in the chain matches
+ */
+function someSqliteFault(error: unknown, matches: (primary: number) => boolean): boolean {
   for (let current = error; current instanceof Error; current = current.cause) {
     const primary = sqlitePrimaryResultCode(current);
-    if (primary !== undefined && DAMAGED_DATABASE_RESULT_CODES.has(primary)) return true;
+    if (primary !== undefined && matches(primary)) return true;
   }
   return false;
 }
@@ -485,6 +497,27 @@ export class StoreUnopenableError extends VatError {
  */
 export function isStoreUnopenableError(error: unknown): error is StoreUnopenableError {
   return isVatError(error, PROJECTION_STORE_UNOPENABLE_CODE) && error instanceof StoreUnopenableError;
+}
+
+/**
+ * SQLite's primary result code for a database this connection may not write:
+ * `SQLITE_READONLY` (8), its whole family (a read-only file, a read-only
+ * directory for the journal, a recovery it may not run).
+ */
+const READ_ONLY_RESULT_CODE = 8;
+
+/**
+ * Whether `error`, or any error in its `cause` chain, is a SQLite failure that
+ * says the store cannot answer now while the file itself is sound: another
+ * connection holds it (`SQLITE_BUSY`, `SQLITE_LOCKED`), or this one may not
+ * write it (`SQLITE_READONLY`). For a caller whose use of the store is optional
+ * and that would rather go without than wait or refuse.
+ *
+ * @param error - Anything a store call or open threw
+ * @returns True when the store is contended or read-only
+ */
+export function isStoreUnavailableNow(error: unknown): boolean {
+  return someSqliteFault(error, (primary) => CONTENDED_RESULT_CODES.has(primary) || primary === READ_ONLY_RESULT_CODE);
 }
 
 /**
@@ -814,8 +847,8 @@ function prepareStoreTables(database: DatabaseSync, retention: Retention): Store
 /**
  * Write blob facts: the row writer behind `FactStore.writeBlobFacts`.
  *
- * The range this write clears is the union of the content keys **all four**
- * tables name, not the keys `blobs` alone names — see
+ * The range this write clears is the union of the content keys **every**
+ * blob-scoped table names, not the keys `blobs` alone names — see
  * {@link uniqueContentKeys} for why the difference is the whole feature.
  *
  * ⛔ Except in a PARTITIONED table (`partitionColumn` — the harness tables),

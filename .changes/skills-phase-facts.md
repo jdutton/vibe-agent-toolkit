@@ -23,10 +23,6 @@
   lock, as the CLI's `openQuestionCache` does.
 - **(library) `ParseResult.skillText` is required** (the record for markdown, `null` otherwise); a
   value you construct adds it.
-- **`skill_text_facts` gains a `frontmatterFence` column (`none`, `unclosed`, `closed`)**, and the
-  skill-text record (`SkillTextFacts`, `ParseResult.skillText`) gains the same `frontmatterFence`
-  field: where the skill frontmatter fence rule finds a document's fences. A store or parse cache
-  written before it is cold once (the shape digest moves; no version constant).
 - **(library) `BlobResourceFacts` (and so `StoredDocumentFacts.facts`) carries
   `frontmatterNotAMapping`**: the parse's not-a-mapping verdict on the frontmatter block.
 
@@ -42,16 +38,30 @@
   scanned.
 - **`VAT_WORK_COUNTERS` dumps `skillText.storeUnopened`**: once per run, when the skills lane's
   optional stored-document question was what opened the projection store or built the home
-  population, and that failed (a read-only `VAT_CACHE_DIR`, say). That question now answers nothing
+  population, and that failed with an expected failure (a read-only `VAT_CACHE_DIR`, another
+  process holding the store's lock, git giving no answer for the root); any other failure refuses
+  the run. That question now answers nothing
   and the lane reads each file itself, so a verb that never enumerates its home, such as
   `vat verify` on a project whose skills are all plugin-local, no longer refuses with exit 2. A verb
   that enumerates its home still refuses as before.
 - **`VAT_WORK_COUNTERS` dumps `skillText.outsideRoot`**: each file per run the skills lane asked the
   store about that lies outside the run's root, answered without opening the store.
+- **`skill_text_facts.frontmatterFence` (`none`, `unclosed`, `closed`)**, with the same
+  `frontmatterFence` field on the skill-text record (`SkillTextFacts`, `ParseResult.skillText`):
+  where the skill frontmatter fence rule finds a document's fences, so a store-served `SKILL.md`'s
+  frontmatter refusal is worded with no read of the file.
+- **(library) `StoreQuestionUnavailableError` on `@vibe-agent-toolkit/resources`** (code
+  `PROJECTION_STORE_QUESTION_UNAVAILABLE`): what a `RunPopulationOptions.questionCacheOf`
+  implementation throws around a store failure the stored-document question expects (another
+  process's lock, a read-only cache); the question answers nothing for it and refuses on any other
+  failure. **`isStoreUnavailableNow(error)` on `@vibe-agent-toolkit/projection-sqlite`**: true when
+  SQLite reports the store contended (`SQLITE_BUSY`, `SQLITE_LOCKED`) or read-only
+  (`SQLITE_READONLY`) anywhere in the cause chain.
 - **(library) The skill-text core on `@vibe-agent-toolkit/resources`**: `skillTextFactsOf`,
   `SKILL_TEXT_DECLARATION`, `skillTextDeclarationDigest`, `SkillTextFactsSchema`,
   `SKILL_TEXT_FAMILY_PATTERNS`, `EXTERNAL_CLI_BINARIES`, `frontmatterFencesOf`, the
-  `StoredDocumentFacts`, `SkillTextFactsRow` and `SkillTextMatchRow` types and the record types,
+  `StoredDocumentFacts`, `SkillTextFactsRow`, `SkillTextMatchRow` and `FrontmatterFence` types and
+  the record types,
   `SKILL_TEXT_HELD_LIMITS` and `DEFAULT_PARSE_LIMITS` (the default parse caps, frozen); on
   `@vibe-agent-toolkit/agent-skills`, `readSkillDocument`, `skillNameOf`, `withSkillTextRun` and
   `SkillTextRun`; on `@vibe-agent-toolkit/utils/testing`, `seededRandom`.
@@ -60,11 +70,14 @@
 
 - **The skills lane's store lookups never wait on another process**: when another `vat` holds the
   projection store's lock, the lookup answers nothing at once and the file is read instead, where it
-  used to wait up to the store's busy timeout. A skill outside the project the command runs in (a
+  used to wait up to the store's busy timeout. The lookup's connection discards a damaged
+  `projection.db` with the same notice as the run's own, and closes the same way. A skill outside the project the command runs in (a
   `vat skill review` of a directory elsewhere) is read directly, without crawling that project.
   Findings are unchanged.
 - **A frontmatter block whose lines end in a lone CR or CRLF decodes as the same block with LF
-  endings in every lane** (`parseFrontmatterSource`). The whole-document parse used to call a
+  endings in skill discovery, `validateSkill` and packaging** (`parseFrontmatterSource`). The
+  frontmatter editor and the Claude memory reader keep their own fence handling. The
+  whole-document parse used to call a
   lone-CR block invalid YAML, while `validateSkill` read the same file as valid. So discovery named
   such a skill from its H1, and packaging reported SKILL_MISSING_FRONTMATTER, where `validateSkill`
   accepted it. All three now agree with `validateSkill`.

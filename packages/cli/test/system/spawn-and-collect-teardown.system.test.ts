@@ -9,9 +9,14 @@
  * behind. The second case asserts both are gone. A timed-out test reaches the same teardown
  * (vitest runs `onTestFinished` hooks after a timeout, as after a pass), so this pair proves it
  * without a test that has to fail.
+ *
+ * The teardown signals a command only while it still runs: once it has exited, its pid (on POSIX,
+ * its process group id) may already name an unrelated process. The third case runs a command to
+ * its exit with `process.kill` stubbed in-process, so no group kill is ever sent; the fourth asserts
+ * the teardown attempted none.
  */
 
-import { afterAll, it } from 'vitest';
+import { afterAll, it, type MockInstance, vi } from 'vitest';
 
 import { cleanupTestTempDir, createTestTempDir, describe, executeCli, expect, fs, join, writeFileTree } from './test-common.js';
 import { alive, within } from './test-helpers/live-vat.js';
@@ -62,5 +67,42 @@ describe('a command a system test started ends with its test', () => {
     expect(gone, `still running: ${started.filter((pid) => alive(pid)).join(', ')}`).toBe(true);
     // Its collector settles once the command is gone, so nothing is left waiting on it either.
     await running;
+  });
+});
+
+/** The pid of the third case's command, which exited before its case ended. */
+let exitedPid: number | undefined;
+
+/** Every group kill aimed at {@link exitedPid}'s group, recorded instead of sent. */
+const groupKillsAfterExit: number[] = [];
+
+describe('a command that exited before its test ended is not signalled again', () => {
+  // The teardown runs after the case's body, so the stub stays in place until the next case reads
+  // what it recorded. A kill aimed at the exited command's group is recorded and never sent: by
+  // then that group id may name an unrelated group. Every other call reaches the real process.kill.
+  const realKill = process.kill.bind(process);
+  let stub: MockInstance<typeof process.kill> | undefined;
+
+  afterAll(() => {
+    stub?.mockRestore();
+  });
+
+  it.runIf(process.platform !== 'win32')('runs a command to its exit and ends the case', async () => {
+    stub = vi.spyOn(process, 'kill').mockImplementation((pid: number, signal?: string | number) => {
+      if (exitedPid !== undefined && pid === -exitedPid) {
+        groupKillsAfterExit.push(pid);
+        return true;
+      }
+      return realKill(pid, signal);
+    });
+    const result = await executeCli('-e', ['']);
+    expect(result.status, result.stderr).toBe(0);
+    exitedPid = result.pid;
+  });
+
+  it.runIf(process.platform !== 'win32')('sent no group kill to the exited command once that case ended', () => {
+    stub?.mockRestore();
+    expect(exitedPid).toBeGreaterThan(0);
+    expect(groupKillsAfterExit, `group kills sent after pid ${String(exitedPid)} exited`).toEqual([]);
   });
 });

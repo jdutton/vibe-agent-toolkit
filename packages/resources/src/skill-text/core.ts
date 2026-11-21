@@ -24,9 +24,39 @@
 
 import type { FrontmatterFence, SkillTextFacts, SkillTextMatch } from '../schemas/skill-text-facts.js';
 
-import type { PatternId, SkillTextDeclaration, SkillTextFamily } from './declaration.js';
+import { type PatternId, SKILL_TEXT_DECLARATION, type SkillTextDeclaration, type SkillTextFamily } from './declaration.js';
 import { frontmatterFencesOf } from './frontmatter-fences.js';
 import { scanClaudeCodeQualified } from './qualified-scanner.js';
+
+/**
+ * The core's own copy of each declaration it is given, made the first time it
+ * sees that declaration and never handed out. `SKILL_TEXT_DECLARATION`'s copy
+ * is made here, at module load, before any code outside this package can hold
+ * the public object.
+ *
+ * The public declaration's regexes are shared and unfrozen (a frozen regex runs
+ * on V8's slow path), so any holder can move a global regex's `lastIndex`,
+ * which `matchAll` copies into the scan, or `compile()` a pattern in place.
+ * The core reads only its copy, so neither reaches its answer.
+ * `structuredClone` copies each regex's source and flags into a fresh,
+ * unfrozen regex with `lastIndex` 0, so the copy keeps the fast path and the
+ * declaration's digest (source and flags only) describes it exactly. A
+ * declaration is applied as it was at first sight: a later change to the
+ * object passed in is not seen.
+ */
+const ownedCopies = new WeakMap<SkillTextDeclaration, SkillTextDeclaration>([
+  [SKILL_TEXT_DECLARATION, structuredClone(SKILL_TEXT_DECLARATION)],
+]);
+
+/** The core's own copy of `declaration`: see {@link ownedCopies}. */
+function ownedCopyOf(declaration: SkillTextDeclaration): SkillTextDeclaration {
+  let owned = ownedCopies.get(declaration);
+  if (owned === undefined) {
+    owned = structuredClone(declaration);
+    ownedCopies.set(declaration, owned);
+  }
+  return owned;
+}
 
 type Emit = (family: SkillTextFamily, patternId: PatternId, line: number, matchText: string) => void;
 
@@ -265,9 +295,10 @@ function compatRecords(text: string, index: LineIndex, declaration: SkillTextDec
  * The skill-text facts of `text`: see the module note.
  *
  * @param text - The document's decoded text, frontmatter and all
- * @param declaration - `SKILL_TEXT_DECLARATION`
+ * @param given - `SKILL_TEXT_DECLARATION`; the core reads its own copy (see {@link ownedCopies})
  */
-export function skillTextFactsOf(text: string, declaration: SkillTextDeclaration): SkillTextFacts {
+export function skillTextFactsOf(text: string, given: SkillTextDeclaration): SkillTextFacts {
+  const declaration = ownedCopyOf(given);
   const matches: SkillTextMatch[] = [];
   const emit: Emit = (family, patternId, line, matchText) => {
     matches.push({ ordinal: matches.length, family, patternId, line, matchText });

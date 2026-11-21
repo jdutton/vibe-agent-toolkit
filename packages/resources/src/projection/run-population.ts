@@ -43,8 +43,8 @@
 
 import { open } from 'node:fs/promises';
 
-import { countWork, deepFreeze, safePath } from '@vibe-agent-toolkit/utils';
-import { gitFindRoot, gitLinksCheckedOutAsFiles, GitTracker } from '@vibe-agent-toolkit/utils/git';
+import { countWork, deepFreeze, isVatError, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { GIT_NO_ANSWER_CODE, gitFindRoot, gitLinksCheckedOutAsFiles, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { ParserKind } from '../content-key.js';
 import { defaultParseCache } from '../parse-cache.js';
@@ -85,6 +85,29 @@ import { hydratesUnder, readRoute, respelledContent, storedRoute, type StoredMem
 export type AdmittedFacts =
   | { readonly kind: 'facts'; readonly facts: BlobResourceFacts }
   | { readonly kind: 'not-admitted'; readonly entry: NotAdmittedEntry };
+
+/** The code of {@link StoreQuestionUnavailableError}. */
+const STORE_QUESTION_UNAVAILABLE_CODE = 'PROJECTION_STORE_QUESTION_UNAVAILABLE';
+
+/**
+ * The store cannot answer a stored-document question now, for a reason the
+ * question expects: another process holds its lock, or its cache is read-only.
+ * Thrown by whoever opens the questions' connection
+ * ({@link RunPopulationOptions.questionCacheOf}), from the open and from every
+ * store call on that connection, around the backend's own error: so this
+ * package tells an expected failure from a defect by its code without knowing
+ * the backend. The question answers nothing for it; any other failure refuses.
+ */
+export class StoreQuestionUnavailableError extends VatError {
+  /** @param cause - The backend's own failure */
+  constructor(cause: unknown) {
+    super(
+      STORE_QUESTION_UNAVAILABLE_CODE,
+      `The projection store cannot answer a stored-document question now: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause },
+    );
+  }
+}
 
 /** What a registry reads off a file's stat. */
 export interface AdmittedStat {
@@ -192,8 +215,10 @@ export class RunPopulation implements PopulationRun {
   readonly #stored = new Map<string, StoredMember>();
   /** {@link storedDocument}'s opening of the home population, once per run. */
   #homeOpening: Promise<void> | undefined;
-  /** The first home population the run built under its store, whichever caller's outputs it was for. */
+  /** The first home population a crawl built under the run's store, whichever caller's outputs it was for. */
   #firstHome: Promise<ResourceEnumeration> | undefined;
+  /** The home population the questions built over their own connection, `undefined` once it failed. */
+  #questionHome: Promise<ResourceEnumeration | undefined> | undefined;
   /** {@link storedDocument}'s answers from the store, by `<parserKind> <path>`: one tier lookup and probe per file per run. */
   readonly #storedDocuments = new Map<string, Promise<StoredDocumentFacts | undefined>>();
   /** The readability probe's answer by resolved path: one probe (one `fs.stat`) per file per run, whichever lane asks. */
@@ -318,19 +343,22 @@ export class RunPopulation implements PopulationRun {
    * itself, so its answer never decides whether the run can do its job, and it
    * never waits for one: it opens the store through
    * {@link RunPopulationOptions.questionCacheOf}, which meets another process's
-   * lock by failing at once. Any failure to open the store or to build or
-   * enumerate the home population (a store another process is writing, a
-   * read-only cache directory, git giving no answer for the root, a defect)
+   * lock by failing at once. A failure the question expects, to open the store
+   * or to build the home population or read its blob tier (a store another
+   * process is writing or a read-only cache, coded
+   * {@link StoreQuestionUnavailableError}; git giving no answer for the root),
    * therefore records nothing and answers every question of the run with
    * nothing: each a miss the lane counts (`skillText.storeMiss`) and reads the
-   * file for, the failure itself counted once (`skillText.storeUnopened`).
+   * file for, the failure itself counted once (`skillText.storeUnopened`). Any
+   * other failure is a defect and refuses the question, as itself.
    * Refusals stay on the enumerations a verb asked for: a home population the
    * question failed to build is never filed for them, so a verb that
    * enumerates its home opens and builds it itself, with the run's patience,
    * and refuses only if it fails there, as itself.
    */
   async #openHome(): Promise<void> {
-    const recorded = await this.#homeForQuestions().catch(() => {
+    const recorded = await this.#homeForQuestions().catch((error: unknown) => {
+      if (!questionExpects(error)) throw error;
       countWork('skillText.storeUnopened', 1);
       return undefined;
     });
@@ -339,21 +367,35 @@ export class RunPopulation implements PopulationRun {
 
   /**
    * The home population the stored-document questions read: the one a crawl
-   * already built, else the one for the run's declared outputs, built under
-   * the run's store. `undefined` with no store.
+   * already built, else the one for the run's declared outputs, built over the
+   * questions' connection. `undefined` with no store.
+   *
+   * The questions' build is offered to the run's crawls of the home under the
+   * same outputs (`#homePopulation`): a crawl that starts while it is in
+   * flight waits for it rather than building a second, and builds its own if
+   * the question's failed, so the question's failure is never the crawl's.
    */
-  async #homeForQuestions(): Promise<ResourceEnumeration | undefined> {
+  #homeForQuestions(): Promise<ResourceEnumeration | undefined> {
     if (this.#firstHome !== undefined) return this.#firstHome;
+    const building = this.#buildQuestionHome();
+    // The failure is the question's own, answered by `#openHome`; a crawl that
+    // meets it builds the home itself.
+    this.#questionHome = building.catch(() => undefined);
+    return building;
+  }
+
+  /**
+   * Build the home population over the questions' connection, its blob tier
+   * read here too: the facts are read once per hit (the hit's one memo), so
+   * every later admission and question reads that one answer, and a connection
+   * that cannot answer meets it inside the question, which answers nothing,
+   * never at a later admission, which would refuse the run.
+   */
+  async #buildQuestionHome(): Promise<ResourceEnumeration | undefined> {
     const cache = await this.#options.questionCacheOf();
     if (cache === undefined) return undefined;
-    const { outputs } = this.#options;
-    const population = this.#populate(outputs, cache);
-    const home = await population;
-    // Filed only once built, under the key the run's crawls of its home use, so
-    // they reuse it; a crawl that started meanwhile keeps its own.
-    const key = homePopulationKey(outputs);
-    if (!this.#enumerations.has(key)) this.#enumerations.set(key, population);
-    this.#firstHome ??= population;
+    const home = await this.#populate(this.#options.outputs, cache);
+    if (home.stored !== null && hydratesUnder(this.dispatcher.limits)) await home.stored.facts();
     return home;
   }
 
@@ -470,9 +512,15 @@ export class RunPopulation implements PopulationRun {
     });
   }
 
-  /** The home root's full population for `outputs`: one per run, memoized beside the enumerations. */
+  /**
+   * The home root's full population for `outputs`: one per run, memoized beside
+   * the enumerations; the questions' when they built one for the same outputs
+   * (see `#homeForQuestions`).
+   */
   #homePopulation(outputs: readonly string[], cache: PopulationCache): Promise<ResourceEnumeration> {
-    const population = memoized(this.#enumerations, homePopulationKey(outputs), () => this.#populate(outputs, cache));
+    const key = homePopulationKey(outputs);
+    const population = memoized(this.#enumerations, key, async () =>
+      (key === homePopulationKey(this.#options.outputs) ? await this.#questionHome : undefined) ?? this.#populate(outputs, cache));
     this.#firstHome ??= population;
     return population;
   }
@@ -606,6 +654,25 @@ async function readRefusal(absolutePath: string): Promise<{ readonly refused: un
   } catch (error) {
     return { refused: error };
   }
+}
+
+/**
+ * Whether a stored-document question answers `error` with nothing rather than
+ * refusing: git giving no answer for the root, or the questions' store unable
+ * to answer now ({@link StoreQuestionUnavailableError}), as `error` itself or
+ * anywhere in its `cause` chain (a blob tier read wraps the store's failure in
+ * its own code). Decided by code alone, never by message.
+ *
+ * @param error - What opening the home for the questions failed with
+ * @returns True for a failure the question expects
+ */
+function questionExpects(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  for (let current = error; current instanceof Error && !seen.has(current); current = current.cause) {
+    if (isVatError(current, GIT_NO_ANSWER_CODE) || isVatError(current, STORE_QUESTION_UNAVAILABLE_CODE)) return true;
+    seen.add(current);
+  }
+  return false;
 }
 
 /** The memo key of the home root's full population for `outputs`, whichever caller builds it. */

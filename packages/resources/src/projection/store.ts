@@ -95,7 +95,7 @@ export type ProjectionTableNamesOfScope<Scope extends string> = {
   [Name in ProjectionTableName]: (typeof PROJECTION_TABLES)[Name]['scope'] extends Scope ? Name : never;
 }[ProjectionTableName];
 
-/** The four tables whose rows are a pure function of a blob's bytes. */
+/** The tables whose rows are a pure function of a blob's bytes. */
 export type BlobScopedTableName = ProjectionTableNamesOfScope<'blob'>;
 
 /** The eight tables whose rows describe what is present in one tree. */
@@ -107,8 +107,8 @@ type ProjectionTablesOf<Names extends ProjectionTableName> = {
 };
 
 /**
- * The blob-keyed half of a projection: `blobs` and the three tables that hang
- * off it.
+ * The blob-keyed half of a projection: `blobs` and the tables that hang off
+ * it.
  */
 export type BlobScopedRows = ProjectionTablesOf<BlobScopedTableName>;
 
@@ -197,7 +197,7 @@ export interface FactStore {
    * miss forever.
    *
    * @param contentKeys - The keys to look up; may be empty
-   * @returns The rows held for those keys, across all four blob-scoped tables
+   * @returns The rows held for those keys, across every blob-scoped table
    */
   readBlobFacts(contentKeys: readonly string[]): Promise<BlobScopedRows>;
 

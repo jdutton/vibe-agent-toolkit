@@ -129,7 +129,7 @@ function withPartitionsOf(held: RowBundle, incoming: RowBundle): RowBundle {
 /**
  * An empty blob bundle, one array per blob-scoped table.
  *
- * @returns Four empty tables
+ * @returns One empty array per blob-scoped table
  */
 function emptyBlobBundle(): RowBundle {
   const bundle: RowBundle = {};
@@ -176,7 +176,7 @@ export class FakeFactStore implements FactStore {
    * those are written per `(blob, partition)`, as the interface requires — see
    * {@link withPartitionsOf}.
    *
-   * @param rows - The four blob-scoped tables
+   * @param rows - The blob-scoped tables
    */
   writeBlobFacts(rows: BlobScopedRows): Promise<void> {
     this.writeBlobFactsCalls++;

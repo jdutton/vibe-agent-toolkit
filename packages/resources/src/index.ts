@@ -955,6 +955,7 @@ export {
 // lane asks (content-keying-and-git.md, rule 4).
 export {
   RunPopulation,
+  StoreQuestionUnavailableError,
   withPopulationRun,
   withRunPopulation,
   type PopulationRun,

@@ -9,10 +9,13 @@
  * out the store's busy timeout the way a verb's own enumeration does.
  *
  * The lock is held by a child process (an in-process holder would be blocked by
- * the synchronous wait it is testing). The child gives the lock back on its own
- * after {@link SELF_RELEASE_MS}, inside the store's busy timeout: a question that
- * waits therefore gets the lock and builds the home, so it counts no failure and
- * answers after the child released. Neither assertion reads a clock.
+ * the synchronous wait it is testing), and given back only when the test asks,
+ * after it has observed the question's outcome: nothing here reads a clock or
+ * waits on a deadline. What makes the real backend's contention reach the
+ * question as an expected failure (coded, answered with nothing) is asserted
+ * here; that the questions' connection waits no time for the lock (its busy
+ * timeout is zero) is pinned where the open is scripted,
+ * `stored-document-question-store.integration.test.ts`.
  */
 
 import { type ChildProcess, spawn } from 'node:child_process';
@@ -32,41 +35,31 @@ import { gitAddAll, initTestGitRepo } from '../test-helpers.js';
 
 const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-stored-document-contention-');
 
-/** How long the holder keeps the lock unless told to give it back: inside the store's 5,000 ms busy timeout. */
-const SELF_RELEASE_MS = 2500;
-
 const SKILL = safePath.join('skills', 'demo', 'SKILL.md');
 const MEMBERS = { include: ['**/*.md'], exclude: [], ignoredRefusals: 'record' } as const;
 
-/** Holds the store's write lock until told to release it, or until {@link SELF_RELEASE_MS}. */
+/** Holds the store's write lock until told to release it. */
 const HOLDER = String.raw`
 const { DatabaseSync } = require('node:sqlite');
 const database = new DatabaseSync(process.argv[1]);
 database.exec('BEGIN IMMEDIATE');
 process.stdout.write('held\n');
-let done = false;
-const release = () => {
-  if (done) return;
-  done = true;
+process.stdin.once('data', () => {
   database.exec('COMMIT');
   database.close();
-  process.stdout.write('released\n');
   process.exit(0);
-};
-process.stdin.on('data', release);
-setTimeout(release, Number(process.argv[2]));
+});
 `;
 
-/** A child holding the store's write lock, and whether it has given it back. */
+/** A child holding the store's write lock until {@link LockHolder.release}. */
 interface LockHolder {
-  readonly released: () => boolean;
   readonly release: () => Promise<void>;
 }
 
 /** Start a child holding the write lock on the store's database, once it holds it. */
 async function holdWriteLock(): Promise<LockHolder> {
   const databasePath = safePath.join(defaultStoreDirectory(), 'projection.db');
-  const child: ChildProcess = spawn(process.execPath, ['-e', HOLDER, databasePath, String(SELF_RELEASE_MS)], { stdio: ['pipe', 'pipe', 'inherit'] });
+  const child: ChildProcess = spawn(process.execPath, ['-e', HOLDER, databasePath], { stdio: ['pipe', 'pipe', 'inherit'] });
   let output = '';
   const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
   await new Promise<void>((resolve, reject) => {
@@ -77,7 +70,6 @@ async function holdWriteLock(): Promise<LockHolder> {
     child.once('exit', (code) => reject(new Error(`the lock holder exited (${String(code)}) before holding the lock: ${output}`)));
   });
   return {
-    released: () => output.includes('released\n'),
     release: async () => {
       child.stdin?.end('release\n');
       await exited;
@@ -117,15 +109,13 @@ afterAll(() => {
  * Ask the one question under another process's write lock, then (lock given
  * back) enumerate the home as a verb does, in the same run.
  */
-async function askUnderLock(root: string): Promise<{ answer: unknown; releasedAtAnswer: boolean; unopened: number; enumerated: number }> {
+async function askUnderLock(root: string): Promise<{ answer: unknown; unopened: number; enumerated: number }> {
   const unopenedBefore = readWorkCounters()['skillText.storeUnopened'];
   return withRunContext({ projectionStore: 'on-demand', root, outputs: [] }, async (run) => {
     const holder = await holdWriteLock();
     let answer: unknown;
-    let releasedAtAnswer: boolean;
     try {
       answer = await run.population.source.storedDocument(safePath.join(root, SKILL), 'markdown');
-      releasedAtAnswer = holder.released();
     } finally {
       await holder.release();
     }
@@ -133,35 +123,38 @@ async function askUnderLock(root: string): Promise<{ answer: unknown; releasedAt
     // The verb's own enumeration, lock given back: it opens and builds the home
     // itself, never handed the question's failure.
     const enumerated = await run.population.source.enumerate(root, [], 'refuse', MEMBERS);
-    return { answer, releasedAtAnswer, unopened, enumerated: enumerated.paths.length };
+    return { answer, unopened, enumerated: enumerated.paths.length };
   });
 }
 
-/** The question answered nothing, at once and counted, and the verb's own enumeration still built the home. */
-function expectAnsweredAtOnce(result: Awaited<ReturnType<typeof askUnderLock>>): void {
+/**
+ * The question answered nothing while the other process still held the lock
+ * (it is given back only after), counted, and the verb's own enumeration still
+ * built the home.
+ */
+function expectAnsweredUnderLock(result: Awaited<ReturnType<typeof askUnderLock>>): void {
   expect(result.answer).toBeUndefined();
   expect(result.unopened, 'the question counted its failed opening').toBe(1);
-  expect(result.releasedAtAnswer, 'answered while the other process still held the lock').toBe(false);
   expect(result.enumerated).toBeGreaterThan(0);
 }
 
 describe('a stored-document question under another process\'s write lock', () => {
-  it('answers nothing at once from a cold store, and the verb\'s enumeration still builds the home', async () => {
+  it('answers nothing from a cold store, and the verb\'s enumeration still builds the home', async () => {
     // A store that exists and holds nothing. Opening a connection configures it
     // (`PRAGMA auto_vacuum` takes the write lock), so the open is what meets it.
     await openSqliteFactStore().close();
     const result = await askUnderLock(makeRepo());
 
-    expectAnsweredAtOnce(result);
+    expectAnsweredUnderLock(result);
   });
 
-  it('answers nothing at once from a warm store, never waiting for the hit, and the verb\'s enumeration still serves the home', async () => {
+  it('answers nothing from a warm store, and the verb\'s enumeration still serves the home', async () => {
     const root = makeRepo();
     // A first run files this tree's facts: the question would be a hit, if it waited.
     await withRunContext({ projectionStore: 'on-demand', root, outputs: [] }, (run) => run.population.source.enumerate(root, [], 'refuse', MEMBERS));
 
     const result = await askUnderLock(root);
 
-    expectAnsweredAtOnce(result);
+    expectAnsweredUnderLock(result);
   });
 });

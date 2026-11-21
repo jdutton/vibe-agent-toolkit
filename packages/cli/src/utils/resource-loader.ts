@@ -25,7 +25,7 @@ import { loadConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
 import { collectionsOption } from './population-wiring.js';
 import { assertDirectoryArgument } from './project-root-policy.js';
-import { type OpenedPopulationCache, openQuestionCache, projectionStoreSelected, withLazyPopulationCache } from './projection-store.js';
+import { type OpenedPopulationCache, openQuestionCache, projectionStoreSelected, runThenClose, withLazyPopulationCache } from './projection-store.js';
 
 /**
  * One VAT process run's shared population, registry and parse dispatcher: what
@@ -132,16 +132,17 @@ async function runCacheOf(cacheOf: () => Promise<PopulationCache | undefined>): 
 /**
  * The store as a run's stored-document questions open it: a connection that
  * never waits on a lock ({@link openQuestionCache}), opened by the first
- * question that needs it and closed when the run ends. Its blob tier reads are
- * marked as the run's refusal, as the run's own connection's are.
+ * question that needs it and closed when the run ends ({@link runThenClose}, the
+ * run's own connection's close contract). Its blob tier reads are marked as the
+ * run's refusal, as the run's own connection's are.
  *
  * @param root - The run's home root
  * @param projectionStore - Whether the run has a projection store
- * @returns The opener and the closer
+ * @returns The opener, and its open for the closer: `undefined` when nothing asked
  */
 function questionStoreOf(root: string, projectionStore: 'on-demand' | 'none'): {
   readonly cacheOf: () => Promise<PopulationCache | undefined>;
-  readonly close: () => Promise<void>;
+  readonly opening: () => Promise<OpenedPopulationCache | undefined> | undefined;
 } {
   let opened: Promise<OpenedPopulationCache | undefined> | undefined;
   return {
@@ -151,11 +152,7 @@ function questionStoreOf(root: string, projectionStore: 'on-demand' | 'none'): {
       const cache = (await opened)?.cache;
       return cache === undefined ? undefined : { ...cache, store: markingBlobReads(cache.store) };
     },
-    close: async () => {
-      // A connection that failed to open has nothing to close; its failure was
-      // the question's, answered already.
-      await (await opened?.catch(() => undefined))?.close();
-    },
+    opening: () => opened,
   };
 }
 
@@ -198,7 +195,8 @@ export function withRunContext<T>(
   const root = safePath.resolve(options.root);
   const gitTracker = options.gitTracker ?? new GitTracker(root);
   const questionStore = questionStoreOf(root, options.projectionStore);
-  return withLazyPopulationCache({ root }, (cacheOf) =>
+  // The questions' connection closes inside the scope, before the run's own.
+  return withLazyPopulationCache({ root }, (cacheOf) => runThenClose(() =>
     withRunPopulation(
       {
         root,
@@ -213,8 +211,8 @@ export function withRunContext<T>(
         registry: ResourceRegistry.forRun(population, { baseDir: root, gitTracker }),
         dispatcher: population.dispatcher,
       }),
-    ),
-  ).finally(() => questionStore.close());
+    ), questionStore.opening),
+  );
 }
 
 /**

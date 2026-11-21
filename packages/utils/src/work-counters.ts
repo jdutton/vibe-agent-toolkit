@@ -71,7 +71,8 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  *
  * `skillText.storeUnopened` counts each run whose stored-document questions
  * opened the store or built the home population and met a failure there (a
- * read-only cache directory, git giving no answer for the root): the question
+ * read-only cache directory, another process holding the store's lock, git
+ * giving no answer for the root): the question
  * is optional, so the failure answers every question with nothing, and each
  * file the lane then scans is a `skillText.storeMiss`. One per run at most.
  *

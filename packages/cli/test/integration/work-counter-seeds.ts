@@ -31,6 +31,7 @@ import {
   type Projection,
   readContentWithKey,
   ResourceRegistry,
+  StoreQuestionUnavailableError,
   VAT_CACHE_DIR_ENV,
   withRunPopulation,
 } from '@vibe-agent-toolkit/resources';
@@ -610,7 +611,7 @@ function skillTextStoreUnopenedSeed(): Seed {
         outputs: [],
         gitTracker: new GitTracker(root),
         cacheOf: () => Promise.resolve(undefined),
-        questionCacheOf: () => Promise.reject(new Error('database is locked')),
+        questionCacheOf: () => Promise.reject(new StoreQuestionUnavailableError(new Error('database is locked'))),
         collectionsFor: () => Promise.resolve(undefined),
       }, async (population) => {
         await population.source.storedDocument(safePath.join(root, 'SKILL.md'), 'markdown');

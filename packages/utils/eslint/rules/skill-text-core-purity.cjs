@@ -13,9 +13,11 @@
  * type) is erased, so both pass.
  *
  * It also refuses the name `lastIndex` in any position (a member, an alias's
- * member, a destructured key, an object key): the declared regexes are shared,
- * unfrozen objects, and a `lastIndex` the core moved would change what a later
- * `matchAll` over the same regex finds.
+ * member, a destructured key, an object key): the declared regexes are
+ * unfrozen and reused across calls (the public ones, and the private copy the
+ * core reads from), and a `lastIndex` moved here would change what a later
+ * `matchAll` over the same regex finds. What a holder outside does to the
+ * public regexes is the core's private copy's job, not this rule's.
  *
  * Why: the skill-text core's output is stored and served from a cache keyed by
  * the digest of its declaration (`SKILL_TEXT_DECLARATION` in resources). A
@@ -154,8 +156,8 @@ module.exports = {
       regexLiteral: 'A regex belongs in the declaration, where its digest sees it.',
       regexReference: 'Reach no RegExp here: a pattern belongs in the declaration, where its digest sees it.',
       lastIndex:
-        'Touch no lastIndex here: the declared regexes are shared, so a moved lastIndex changes what every later ' +
-        'scan over them finds.',
+        'Touch no lastIndex here: the declared regexes are reused across calls, so a moved lastIndex changes what ' +
+        'every later scan over them finds.',
       literal: 'Only 0, 1, -1 and \'\' may be spelled here: every other constant belongs in the declaration, where its digest sees it.',
       valueImport:
         'Import no runtime value here but a sibling module (./x.js) or, from {{declaration}}, {{allowed}}: what ' +

@@ -18,22 +18,34 @@
  *
  * Every pattern below is the agent-skills detector's pattern verbatim (same
  * source, same flags). The declaration's objects and arrays are frozen, so no
- * holder can swap a pattern or a constant under the digest. Its regexes are
- * shared and deliberately NOT frozen: V8 runs every operation on a frozen
+ * holder can replace a pattern object or change a constant. Its regexes are
+ * public and deliberately NOT frozen: V8 runs every operation on a frozen
  * regex on its slow path (`split` measured 25x slower, a one-character `test`
  * 3.5x), which more than doubled the core's time over a repository.
  *
- * What an unfrozen regex leaves open is its `lastIndex`: `matchAll` copies the
- * source's `lastIndex` into the clone it iterates, so an `exec`/`test` on a
- * shared GLOBAL regex, or a `lastIndex` write, would make the next scan over it
- * start mid-text and drop matches, and the digest cannot see that. So:
- * `local/skill-text-core-purity` refuses any `lastIndex` reference in the core;
- * the core reads a global regex only through `matchAll` and `split` (which
- * leave `lastIndex` as they found it) and a non-global one through
- * `exec`/`test` (which never read or write it); and a test scans the golden
- * corpus and asserts every declared regex still has `lastIndex` 0. A consumer
- * outside the core holds the same objects: it uses a declared global regex only
- * through `matchAll`, `split`, `replace` or `replaceAll`.
+ * So any same-process holder CAN change a declared regex in place: write a
+ * global regex's `lastIndex` (directly, or through `exec`/`test`), which
+ * `matchAll` copies into the scan it starts, or call `compile()`, which
+ * replaces its source and flags. `EXTERNAL_CLI_BINARIES` reaches the same
+ * objects. What is guaranteed:
+ *
+ * - The core (`skillTextFactsOf`) is immune. It reads only its own private
+ *   copy of a declaration, made with `structuredClone` the first time it sees
+ *   that declaration (for this one, when the core module loads, before code
+ *   outside this package can reach it); the copy's regexes are fresh and
+ *   unfrozen, so they keep the fast path. A test moves `lastIndex` on every
+ *   global regex, and `compile()`s every regex, then asserts the core's answer
+ *   over the golden corpus is unchanged.
+ * - The core never moves a public regex's `lastIndex`
+ *   (`local/skill-text-core-purity` refuses a `lastIndex` reference there, and
+ *   a test asserts every declared regex is left at 0).
+ * - Nothing else is. {@link skillTextDeclarationDigest} reads source and flags
+ *   as they are when it is called, so a `compile()` moves it while the core's
+ *   answer stays put. A consumer outside the core that reads a declared regex
+ *   directly (`frontmatterFencesOf` called with this object, or anything that
+ *   holds `EXTERNAL_CLI_BINARIES`) sees whatever a holder did to it; such a
+ *   consumer uses a declared global regex only through `matchAll`, `split`,
+ *   `replace` or `replaceAll`, and never `compile()`s one.
  */
 
 import { createHash } from 'node:crypto';

@@ -190,19 +190,26 @@ describe('the skills phase reproduces the skill-text golden', () => {
   });
 
   it('with half the skill-text records deleted: scans exactly the files whose record is gone, and the declared fallback', async () => {
+    // A store of its own, warmed here, so the case stands alone: it never leans on the runs above.
+    const store = safePath.join(scratch, 'evicted-cache');
+    vi.stubEnv('VAT_CACHE_DIR', store);
     vi.stubEnv('VAT_PROJECTION_STORE', 'sqlite');
-    const keyOf = storedContentKeys({ store: cacheDir });
-    const evicted = new Set(evictHalfTheSkillText({ store: cacheDir }, []));
+    expect((await capture()).text).toBe(GOLDEN);
+    const keyOf = storedContentKeys({ store });
+    const evicted = new Set(evictHalfTheSkillText({ store }, []));
     const recordGone = (path: string): boolean => {
       const key = keyOf.get(path);
       if (key === undefined) throw new Error(`the store keyed no ${path}`);
       return evicted.has(key);
     };
     const packagingScans = skillLaneScannedFiles(root).filter((path) => recordGone(path));
-    const configFreeScans = new Set([...[...configFreeScanned()].filter((path) => recordGone(path)), ...NOT_PLAIN_UTF8_LINKED]);
-    // Non-vacuous both ways: some scanned file lost its record, and some kept it.
+    const configFreeEvicted = [...configFreeScanned()].filter((path) => recordGone(path));
+    const configFreeScans = new Set([...configFreeEvicted, ...NOT_PLAIN_UTF8_LINKED]);
+    // Non-vacuous both ways, in each lane: some scanned file lost its record, and some kept it.
     expect(packagingScans.length).toBeGreaterThan(0);
     expect(packagingScans.length).toBeLessThan(skillLaneScannedFiles(root).length);
+    expect(configFreeEvicted.length).toBeGreaterThan(0);
+    expect(configFreeEvicted.length).toBeLessThan(configFreeScanned().size);
 
     const { text, packagingMoved, configFreeMoved } = await capture();
     expect(text).toBe(GOLDEN);

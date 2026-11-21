@@ -32,7 +32,7 @@ import { isParseLimitError, isParserThrewError, reviveParserThrow } from '../../
 import { POPULATION_PARSE_LIMITS, RunContentCache } from '../../src/projection/content-cache.js';
 import { GitCrawlSource } from '../../src/projection/crawl-source.js';
 import type { PopulationCache } from '../../src/projection/merge.js';
-import { RunPopulation } from '../../src/projection/run-population.js';
+import { RunPopulation, StoreQuestionUnavailableError } from '../../src/projection/run-population.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { ProjectConfig } from '../../src/schemas/project-config.js';
 import type { ResourceMetadata } from '../../src/schemas/resource-metadata.js';
@@ -133,14 +133,18 @@ interface RunVariation {
   readonly homeFault?: Error;
   /** The run's home, when it is not the suite's repository root. */
   readonly home?: string;
-  /** What opening the run's store fails with, if anything. */
+  /** What opening the run's store fails with, if anything: the run's connection and the questions' alike. */
   readonly storeFault?: Error;
+  /** What opening the questions' own connection fails with, if anything, in place of {@link storeFault}. */
+  readonly questionStoreFault?: Error;
   /**
    * What every write through the questions' own connection fails with, if
    * anything: another process holding the lock, met by a connection that does
    * not wait. The run's own connection writes as ever.
    */
   readonly questionWriteFault?: Error;
+  /** What every blob tier read through the questions' own connection fails with, if anything. */
+  readonly questionBlobReadFault?: Error;
 }
 
 /**
@@ -202,21 +206,28 @@ async function runOnce(withStore: boolean, variation: RunVariation = {}): Promis
 }
 
 /**
- * `cache` with every store write failing with `fault`, or `cache` itself with no fault.
+ * `cache` with every store write failing with `faults.write` and every blob
+ * tier read with `faults.blobRead`, or `cache` itself with neither.
  *
  * @param cache - The cache, if any
- * @param fault - What each write fails with, if anything
+ * @param faults - What each write and blob read fails with, if anything
+ * @param faults.write - What each write fails with
+ * @param faults.blobRead - What each blob tier read fails with
  * @returns The cache the questions open
  */
-function writesFailing(cache: PopulationCache | undefined, fault: Error | undefined): PopulationCache | undefined {
-  if (cache === undefined || fault === undefined) return cache;
+function callsFailing(
+  cache: PopulationCache | undefined,
+  faults: { readonly write: Error | undefined; readonly blobRead: Error | undefined },
+): PopulationCache | undefined {
+  if (cache === undefined) return cache;
   const { store: inner } = cache;
+  const failing = <T>(fault: Error | undefined, call: () => Promise<T>): Promise<T> => (fault === undefined ? call() : Promise.reject(fault));
   return {
     ...cache,
     store: {
-      writeBlobFacts: () => Promise.reject(fault),
-      writeExtent: () => Promise.reject(fault),
-      readBlobFacts: (contentKeys) => inner.readBlobFacts(contentKeys),
+      writeBlobFacts: (rows) => failing(faults.write, () => inner.writeBlobFacts(rows)),
+      writeExtent: (key, rows) => failing(faults.write, () => inner.writeExtent(key, rows)),
+      readBlobFacts: (contentKeys) => failing(faults.blobRead, () => inner.readBlobFacts(contentKeys)),
       readExtent: (key) => inner.readExtent(key),
       close: () => inner.close(),
     },
@@ -247,7 +258,8 @@ async function withRun<T>(withStore: boolean, variation: RunVariation, work: (po
     outputs: variation.outputs ?? [],
     gitTracker: new GitTracker(home),
     cacheOf: storeOf,
-    questionCacheOf: () => storeOf().then((opened) => writesFailing(opened, variation.questionWriteFault)),
+    questionCacheOf: () => (variation.questionStoreFault === undefined ? storeOf() : Promise.reject(variation.questionStoreFault))
+      .then((opened) => callsFailing(opened, { write: variation.questionWriteFault, blobRead: variation.questionBlobReadFault })),
     collectionsFor: () => (variation.homeFault === undefined ? Promise.resolve(undefined) : Promise.reject(variation.homeFault)),
   }, { content, dispatcher });
   try {
@@ -643,11 +655,10 @@ describe('storedDocument: one file\'s facts, skill-text record included, from th
     expect(warm.homePopulations, 'one home population per run, whichever asks first').toBe(1);
   });
 
+  const denied = new Error('EACCES: permission denied, mkdir');
   it.each([
     ['git giving no answer for the root', { homeFault: new VatError(GIT_NO_ANSWER_CODE, 'git did not answer for the root') }],
-    ['a plain failure of the population', { homeFault: new Error('the extent could not be read') }],
-    ['a git failure of the environment\'s', { homeFault: new VatError(GIT_FAILED_CODE, 'git ran out of time') }],
-    ['a store that will not open', { storeFault: new Error('EACCES: permission denied, mkdir') }],
+    ['a store the question cannot open now', { storeFault: denied, questionStoreFault: new StoreQuestionUnavailableError(denied) }],
   ] as const)('answers nothing when the home it opens fails (%s), counted, and the verb\'s own enumeration still refuses', async (_case, variation) => {
     await runOnce(true);
     const fault = 'homeFault' in variation ? variation.homeFault : variation.storeFault;
@@ -666,9 +677,23 @@ describe('storedDocument: one file\'s facts, skill-text record included, from th
     expect(answered.enumerated).toBe(fault);
   });
 
+  it.each([
+    ['a plain failure of the population', { homeFault: new Error('the extent could not be read') }],
+    ['a git failure of the environment\'s', { homeFault: new VatError(GIT_FAILED_CODE, 'git ran out of time') }],
+    ['a store refusing for a reason the question does not expect', { storeFault: new Error('the backend is not installed') }],
+  ] as const)('refuses on every other failure of the home it opens: %s', async (_case, variation) => {
+    await runOnce(true);
+    const fault = 'homeFault' in variation ? variation.homeFault : variation.storeFault;
+    const unopenedBefore = readWorkCounters()['skillText.storeUnopened'];
+    const asked = await withRun(true, variation, (population) =>
+      population.source.storedDocument(safePath.join(root, SKILL), 'markdown').then(() => undefined, (error: unknown) => error));
+    expect(asked).toBe(fault);
+    expect(readWorkCounters()['skillText.storeUnopened'] - unopenedBefore, 'a defect is no failed opening').toBe(0);
+  });
+
   it('never hands the verb a home population the question failed to write: it builds the home itself', async () => {
     // Cold: the question derives the home and meets the lock at its first write.
-    const fault = new Error('database is locked');
+    const fault = new StoreQuestionUnavailableError(new Error('database is locked'));
     const unopenedBefore = readWorkCounters()['skillText.storeUnopened'];
     const answered = await withRun(true, { questionWriteFault: fault }, async (population) => {
       const document = await population.source.storedDocument(safePath.join(root, SKILL), 'markdown');
@@ -678,6 +703,38 @@ describe('storedDocument: one file\'s facts, skill-text record included, from th
     expect(answered.document).toBeUndefined();
     expect(readWorkCounters()['skillText.storeUnopened'] - unopenedBefore, 'the question counted its failure').toBe(1);
     expect(answered.outcome, 'the verb built and filed the home through its own connection').toBe('written');
+  });
+
+  it('builds one home population when a verb\'s enumeration starts while the question is building it', async () => {
+    await runOnce(true);
+    const members = { include: INCLUDE, exclude: [], ignoredRefusals: 'record' } as const;
+    const homePopulations = await withRun(true, {}, async (population) => {
+      const readsBefore = store.current.readExtentCalls;
+      // Neither awaited before the other starts: the verb meets the question's build in flight.
+      await Promise.all([
+        population.source.storedDocument(safePath.join(root, SKILL), 'markdown'),
+        population.source.enumerate(root, [], 'refuse', members),
+      ]);
+      return store.current.readExtentCalls - readsBefore;
+    });
+    expect(homePopulations).toBe(1);
+  });
+
+  it('reads the question-built home\'s blob tier inside the question, so a connection that cannot answer refuses no later admission', async () => {
+    await runOnce(true);
+    const fault = new StoreQuestionUnavailableError(new Error('database is locked'));
+    const unopenedBefore = readWorkCounters()['skillText.storeUnopened'];
+    const answered = await withRun(true, { questionBlobReadFault: fault }, async (population) => {
+      const document = await population.source.storedDocument(safePath.join(root, SKILL), 'markdown');
+      // The verb's own crawl after the question: it admits from its own connection's read.
+      const registry = ResourceRegistry.forRun(population, { baseDir: root });
+      const crawl = await registry.crawl({ baseDir: root, include: INCLUDE, outputs: [], unreadable: 'refuse', ignoredRefusals: 'record', populationSource: population.source });
+      return { document, outcome: crawl.population.outcome.stored, admitted: registry.getAllResources().length };
+    });
+    expect(answered.document).toBeUndefined();
+    expect(readWorkCounters()['skillText.storeUnopened'] - unopenedBefore, 'the question counted its failure').toBe(1);
+    expect(answered.outcome).toBe('hit');
+    expect(answered.admitted).toBeGreaterThan(0);
   });
 
   it('answers nothing for a home git will not list, which reaches the ask as git\'s own no-answer', async () => {

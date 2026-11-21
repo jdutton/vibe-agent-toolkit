@@ -192,6 +192,7 @@ const BARREL_EXPORTS = [
   'SkillSourceDescriptorSchema',
   'SkillTextFactsSchema',
   'SkillsConfigSchema',
+  'StoreQuestionUnavailableError',
   'TestConfigSchema',
   'TreeRoleSchema',
   'UnknownMacroError',

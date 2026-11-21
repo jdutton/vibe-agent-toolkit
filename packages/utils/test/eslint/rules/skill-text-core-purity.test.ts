@@ -31,6 +31,8 @@ const CASES: RuleCases = {
     "import { type X } from './other.js';\nexport type Y = X;",
     "import type { SkillTextDeclaration } from './declaration.js';\nexport type D = SkillTextDeclaration;",
     "import { type PatternId, SKILL_TEXT_DECLARATION } from './declaration.js';\nexport const a: PatternId | typeof SKILL_TEXT_DECLARATION = SKILL_TEXT_DECLARATION;",
+    // The core's private copy of the declaration: a structured clone, no RegExp reached by name.
+    "import { SKILL_TEXT_DECLARATION } from './declaration.js';\nexport const owned = new WeakMap([[SKILL_TEXT_DECLARATION, structuredClone(SKILL_TEXT_DECLARATION)]]);",
     "import { helper } from './helper.js';\nexport const a = helper;",
     "import { helper } from './nested/helper.js';\nexport const a = helper;",
     "export { helper } from './helper.js';",

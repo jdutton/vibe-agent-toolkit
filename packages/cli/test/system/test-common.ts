@@ -293,22 +293,23 @@ function sharedStartedCommands(): Set<ChildProcess> {
 /**
  * End `child` and every process it started, unless they have ended.
  *
+ * Asked only while the child still runs: once it has exited and been reaped its pid is free, and
+ * the operating system may hand it to an unrelated process at once (on POSIX, to an unrelated
+ * process group's leader). So a grandchild still running after the child exited is not reached.
+ *
  * POSIX: the child leads its own process group (spawned `detached`), so one SIGKILL to the group
- * reaches a grandchild the child left behind (`bun run vat` starts `node`). A group that is
- * already empty answers ESRCH, which is "gone". Windows has no process groups: `taskkill /T`
- * ends the child's tree, asked only while the child still runs, since Windows may hand a dead
- * child's pid to an unrelated process at once.
+ * reaches a grandchild the child started (`bun run vat` starts `node`). A group that is already
+ * empty answers ESRCH, which is "gone". Windows has no process groups: `taskkill /T` ends the
+ * child's tree.
  *
  * @param child - A command {@link spawnAndCollect} started
  */
 function endStartedCommand(child: ChildProcess): void {
   startedCommands.delete(child);
   const pid = child.pid;
-  if (pid === undefined) return;
+  if (pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
   if (process.platform === 'win32') {
-    if (child.exitCode === null && child.signalCode === null) {
-      nodeSpawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
-    }
+    nodeSpawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
     return;
   }
   try {
