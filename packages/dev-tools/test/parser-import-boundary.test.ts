@@ -32,14 +32,10 @@
  */
 
 
-import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
-import { packageSources } from './package-sources.js';
-
-/** Packages that ship nothing to a user, so run no user's parse. */
-const PRIVATE_PACKAGES = ['packages/dev-tools/', 'packages/lab/'] as const;
+import { importIsTypeOnly, nodesOf, shippingImporters, sourceOf } from './typescript-ast.js';
 
 /** Parser libraries named exactly. */
 const PARSER_LIBRARY_NAMES: ReadonlySet<string> = new Set(['remark', 'unified', 'marked']);
@@ -70,36 +66,6 @@ function isParserModule(specifier: string): boolean {
   if (!specifier.startsWith('.') && !specifier.startsWith('@vibe-agent-toolkit/resources/')) return false;
   const base = specifier.slice(specifier.lastIndexOf('/') + 1);
   return PARSER_MODULES.has(base.endsWith('.js') ? base.slice(0, -'.js'.length) : base);
-}
-
-/** `body` as a TypeScript AST. Comments are trivia, so a JSDoc example is never an import. */
-function sourceOf(body: string): ts.SourceFile {
-  return ts.createSourceFile('module.ts', body, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
-}
-
-/** Every node of `source`, depth first. */
-function nodesOf(source: ts.SourceFile): ts.Node[] {
-  const nodes: ts.Node[] = [];
-  const visit = (node: ts.Node): void => {
-    nodes.push(node);
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
-  return nodes;
-}
-
-/** Whether an import clause loads nothing at runtime: `import type`, or `{ type A, type B }`. */
-function importIsTypeOnly(clause: ts.ImportClause | undefined): boolean {
-  if (clause === undefined) return false;
-  if (clause.phaseModifier === ts.SyntaxKind.TypeKeyword) return true;
-  const bindings = clause.namedBindings;
-  return (
-    clause.name === undefined &&
-    bindings !== undefined &&
-    ts.isNamedImports(bindings) &&
-    bindings.elements.length > 0 &&
-    bindings.elements.every((element) => element.isTypeOnly)
-  );
 }
 
 /** Whether a re-export loads nothing at runtime: `export type`, or `{ type A, type B }`. */
@@ -198,11 +164,7 @@ const ALLOWED: Readonly<Record<string, string>> = {
 };
 
 describe('only the parse worker\'s closure imports a parser', () => {
-  const files = new Map(
-    [...packageSources()]
-      .filter(([file]) => !PRIVATE_PACKAGES.some((prefix) => toForwardSlash(file).startsWith(prefix)))
-  );
-  const importers = new Map([...files].map(([file, body]) => [file, parserImports(body)]).filter(([, found]) => found.length > 0) as Array<[string, string[]]>);
+  const { importers } = shippingImporters(parserImports);
 
   it('finds the importers — at least the worker and the markdown composer', () => {
     expect([...importers.keys()]).toEqual(expect.arrayContaining([

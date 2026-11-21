@@ -175,7 +175,7 @@ describe('mimeTypeForPath — extension casing and multiple dots', () => {
     expect(mimeTypeForPath(filePath)).toBe(mime);
   });
 
-  // Pinned to match `parserKindForPath` in content-key.ts, whose own test already
+  // Pinned to match `parserKindForPath` in projection/router.ts, whose test already
   // pins this: only the LAST extension decides.
   it('only the last extension counts', () => {
     expect(mimeTypeForPath('x.html.md')).toBe(MD);

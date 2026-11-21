@@ -264,22 +264,21 @@ export {
 // Projection substrate — population, not schema. `resource_realizations` rows
 // for one path in one extent, plus the two path primitives every population
 // pass and every enumeration instrument shares.
-// Also the run's parse routing. `createCollectionMimeResolver` is exported for a
-// caller assembling a population by hand and for the tests that drive routing
-// directly — `populate()` builds one from `PopulateOptions.collections` for
-// every ordinary caller, and that ONE instance is what the conflict accumulator
-// depends on. `COLLECTION_MIME_CONFLICT` and its row builder go with it because
-// a consumer that wants to FAIL on a config error needs the code to match on.
+// Also the run's parse routing (`projection/router.ts`), for a caller assembling a
+// population by hand; `populate()` builds the one resolver every ordinary run uses.
+// `COLLECTION_MIME_CONFLICT` and its row builder let a consumer FAIL on a config error.
 export {
-  collectionMimeConflictCondition,
-  collectRealization,
   createCollectionMimeResolver,
-  resolveRealPath,
-  relativize,
-  COLLECTION_MIME_CONFLICT,
   NO_DECLARED_MIME_TYPES,
   type CollectionMimeConflict,
   type CollectionMimeResolver,
+} from './projection/router.js';
+export {
+  collectionMimeConflictCondition,
+  collectRealization,
+  resolveRealPath,
+  relativize,
+  COLLECTION_MIME_CONFLICT,
   type ContentDemand,
   type PathShape,
   type RealizationContext,
@@ -462,7 +461,6 @@ export {
   computeContentKey,
   inMemoryContent,
   isParsableContent,
-  parserKindForPath,
   readContentWithKey,
   type KeyedContent,
   type MeasuredContent,
@@ -470,6 +468,7 @@ export {
   type ParserKind,
 } from './content-key.js';
 export type { DocumentParserKind } from './mime-type.js';
+export { parserKindForPath } from './projection/router.js';
 
 // Parse cache: the disk-backed store `ResourceRegistry` files parse facts in,
 // and where it puts them. Exported for two callers only — an operator surface
@@ -972,20 +971,6 @@ export {
 // id carries its root, so two federated roots' same-kind (and same-package)
 // extents cannot collide in a table keyed on `contextId` alone.
 export { extentContextId } from './projection/contributors/context-id.js';
-
-// The package extent: the workspace's own packages plus declared dependencies,
-// located by resolution through each package's `exports` map — never by walking
-// `node_modules`. A dependency that is declared but not installed contributes a
-// resource with ZERO realizations, which is the "known but not present" case.
-export {
-  PACKAGE_NOT_INSTALLED,
-  PACKAGE_RESOLUTION_FAILED,
-  PACKAGE_SUBPATH_ABSENT,
-  PACKAGE_SUBPATH_NOT_EXPORTED,
-  PackageExtentContributor,
-  PackageExtentParametersSchema,
-  type PackageExtentParameters,
-} from './projection/contributors/package-extent.js';
 
 // The stratified merge driver (zones §7.2): base contributors run once, closure
 // contributors iterate to a fixed point under a declared cap, and a cap that is

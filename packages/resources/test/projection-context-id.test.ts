@@ -3,24 +3,28 @@
  *
  * `resolution_contexts` is keyed on `contextId` **alone**, keep-first
  * (`ProjectionTable.add` returns the occupant and `addContext` reports `false`).
- * The package contributor originally spelled its ids `extent:package:<name>`,
- * with no root in them — so in a projection federating two roots that both
- * depend on one package, the second root's context row lost the key race and
- * was dropped, leaving that root's membership rows pointing at the *other*
- * root's extent. The last two tests here go red against that spelling.
+ * A package-kind extent was once spelled `extent:package:<name>`, with no root
+ * in it - so in a projection federating two roots that both depend on one
+ * package, the second root's context row lost the key race and was dropped,
+ * leaving that root's membership rows pointing at the *other* root's extent.
+ * The last two tests here go red against that spelling.
+ *
+ * No shipped contributor mints package-kind extents any more, so the fixture
+ * carries its own: {@link ManifestNameContributor} declares one `package`
+ * context per root manifest name through {@link extentContextId}, the exact
+ * row shape a package extent takes.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { RunContentCache } from '../src/projection/content-cache.js';
-import type { ExtentContribution } from '../src/projection/contributor.js';
+import type { ContributorStratum, ExtentContribution, ExtentContributor } from '../src/projection/contributor.js';
 import { extentContextId } from '../src/projection/contributors/context-id.js';
-import { PackageExtentContributor } from '../src/projection/contributors/package-extent.js';
 import { rootIdFor } from '../src/projection/identity.js';
-import { ProjectionBuilder } from '../src/projection/projection.js';
+import { type ProjectionBase, ProjectionBuilder } from '../src/projection/projection.js';
 
 /** Sentinel root ids, spelled the way `rootIdFor` spells them: `root-` + 32 hex. */
 const ROOT_A = 'root-0123456789abcdef0123456789abcdef';
@@ -47,9 +51,37 @@ function makeRoot(): string {
   return directory;
 }
 
+/**
+ * Declares one `package`-kind extent for the corpus root's own manifest name.
+ *
+ * The package name is a within-root discriminator, never the whole id: the
+ * context id goes through {@link extentContextId} with the base's root id.
+ */
+class ManifestNameContributor implements ExtentContributor {
+  readonly id = 'test:manifest-name';
+  readonly kind = PACKAGE_KIND;
+  readonly stratum: ContributorStratum = 'base';
+  readonly readsBlobs = false;
+
+  async contribute(base: ProjectionBase): Promise<ExtentContribution> {
+    const manifest = JSON.parse(readFileSync(safePath.join(base.root, MANIFEST), 'utf8')) as { name: string };
+    return {
+      contexts: [{
+        contextId: extentContextId(PACKAGE_KIND, base.identities.rootId, manifest.name),
+        species: 'extent',
+        kind: PACKAGE_KIND,
+        rootId: base.identities.rootId,
+        extentContextId: null,
+        role: null,
+      }],
+      resources: [], realizations: [], memberships: [], tags: [], conditions: [], claudeRulePatterns: [],
+    };
+  }
+}
+
 /** The package extents of one corpus root. */
 async function contribute(root: string): Promise<ExtentContribution> {
-  return new PackageExtentContributor().contribute(new ProjectionBuilder({ root, contentCache: new RunContentCache() }).base(), {});
+  return new ManifestNameContributor().contribute(new ProjectionBuilder({ root, contentCache: new RunContentCache() }).base());
 }
 
 /** The context ids one contribution declared. */

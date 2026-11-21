@@ -68,8 +68,9 @@ read throws at run time.
 
 **I4. One answer to "which extractors read this path".** Every lane gets the same (instance, variant)
 set for a path. Which instances read a path is an extent fact, never in a
-`row_set_key`; the chosen variant enters as an option; `mime` enters only through those two. *Fails:* lanes disagree on a file's facts. *Enforcer:* a lint rule makes one module the only
-router; every lane routes a fixture tree alike.
+`row_set_key`; the chosen variant enters as an option; `mime` enters only through those two. *Fails:* lanes disagree on a file's facts. *Enforcer:* `projection/router.ts` is the only
+router, held by the tree test `dev-tools/test/parser-kind-router-boundary.test.ts`; every lane routes a
+fixture tree alike (`resources/test/projection-mime-routing-sites.test.ts`).
 
 **I5. Pure producers.** Extract is a pure function of (bytes, options, declared inputs). Resolve is pure over its declared reads and sources. *Fails:*
 rows unlike their key, shared across trees. *Enforcer:* the conformance suite fails a set of impure

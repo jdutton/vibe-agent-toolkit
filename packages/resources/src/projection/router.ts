@@ -1,0 +1,177 @@
+/**
+ * The projection router: the one module that answers "which parser reads this path".
+ *
+ * ADR I4 (one router): path -> mime (`mimeTypeForPath`, or a collection's
+ * declared `mimeType`) -> parser kind (`parserKindForMimeType`) is composed here
+ * and nowhere else; no other shipping `src` file imports either table function
+ * (enforced by `packages/dev-tools/test/parser-kind-router-boundary.test.ts`).
+ * A directory is not routed here: callers that walk directories keep their own
+ * `isDirectory` test.
+ */
+
+import { matchesCollection } from '../collection-matcher.js';
+import { NO_PARSER_KIND, type ParserKind } from '../content-key.js';
+import { mimeTypeForPath, parserKindForMimeType } from '../mime-type.js';
+import type { CollectionConfig } from '../schemas/project-config.js';
+
+import { canonicalJson } from './digest.js';
+
+/**
+ * The type of one path: the run's collection resolver's answer when it has one,
+ * the built-in table's otherwise.
+ *
+ * @param resolver - The run's collection-aware resolver, when it has one
+ * @param absolutePath - The path to type
+ * @param relativePath - Root-relative spelling, for the resolver's conflict rows
+ * @returns The type, or null when nothing names one
+ */
+export function mimeFor(
+  resolver: CollectionMimeResolver | undefined,
+  absolutePath: string,
+  relativePath: string,
+): string | null {
+  return resolver === undefined ? mimeTypeForPath(absolutePath) : resolver.mimeFor(absolutePath, relativePath);
+}
+
+/**
+ * The parser kind for a type, with `none` for a type no parser reads.
+ *
+ * Non-nullable so the sites that start from a stored or resolved type compare
+ * against {@link NO_PARSER_KIND} rather than each spelling a null test. The
+ * `ParserKind` return type binds the two modules' kind sets: a kind added in
+ * `mime-type.ts` and not to `content-key.ts`'s `PARSER_KINDS` fails to compile.
+ *
+ * @param mime - The type, or null when the path has none
+ * @returns The parser kind VAT hands a file of this type to, or `none`
+ */
+export function parserKindForMime(mime: string | null): ParserKind {
+  return parserKindForMimeType(mime) ?? NO_PARSER_KIND;
+}
+
+/**
+ * Which parser handles a document, judged by its path alone.
+ *
+ * Path-only: it IGNORES a collection's declared `mimeType`. Its two
+ * cross-package callers, `agent-skills/src/walk-link-graph.ts` and
+ * `cli/src/pipeline-oracles/parse-fact-snapshot.ts`, therefore answer `none` for
+ * a `.ts` file a collection types `text/markdown` while the projection and
+ * registry lanes answer `markdown`. That divergence is recorded, not fixed here;
+ * whether they should take the run's resolver is a follow-up. A lane that has
+ * the resolver uses {@link mimeFor} and {@link parserKindForMime} instead.
+ *
+ * @param filePath - Path the document was read from (need not exist)
+ * @returns The parser kind VAT will hand this document to, or `none`
+ */
+export function parserKindForPath(filePath: string): ParserKind {
+  return parserKindForMime(mimeTypeForPath(filePath));
+}
+
+/**
+ * One file that two collections declare incompatible types for. A pair, not a
+ * list: naming two is enough for the author's first edit.
+ */
+export interface CollectionMimeConflict {
+  /** Root-relative path of the file the collections disagree about. */
+  path: string;
+  /** The two collections, in the order the config declares them. */
+  collections: readonly [string, string];
+  /** What each of them declared, positionally paired with {@link collections}. */
+  mimeTypes: readonly [string, string];
+}
+
+/**
+ * The run's answer to "what is this file", and the config errors it found asking.
+ * Stateful: one path is walked once per extent, so the conflict accumulator
+ * outlives a single `collectRealization` call and reports each file once.
+ */
+export interface CollectionMimeResolver {
+  /**
+   * Type one path, recording a conflict rather than throwing on one.
+   *
+   * @param absolutePath - The path to type, matched against collection patterns
+   * @param relativePath - The path as `resource_realizations.path` spells it,
+   *   which is what a conflict names (an absolute path would leak `$HOME`)
+   * @returns The declared type, or `mime-type.ts`'s answer when nothing declared
+   *   one or the declarations conflict
+   */
+  mimeFor(absolutePath: string, relativePath: string): string | null;
+  /** Every conflict seen so far, one per path, in first-encounter order. Read it after the population. */
+  readonly conflicts: readonly CollectionMimeConflict[];
+  /**
+   * A digest of the routing rules, folded into the store key by `storeKeyFor`
+   * (merge.ts, which says why). Declaration ORDER is part of it and must not be
+   * sorted away: the first match is the one a conflict row names.
+   */
+  readonly fingerprint: string;
+}
+
+/** The fingerprint of a routing no collection contributes to: a legible literal, as nearly every run carries it. */
+export const NO_DECLARED_MIME_TYPES = 'mime:none-declared';
+
+/** A collection that actually declares a type, the only kind that participates. */
+interface DeclaringCollection {
+  /** The collection's name, as the config keys it. */
+  name: string;
+  /** The type it declares. */
+  mimeType: string;
+  /** Its patterns, for {@link matchesCollection}. */
+  config: CollectionConfig;
+}
+
+/**
+ * Build the run's MIME resolver from the project's collections.
+ *
+ * Only a collection that declares a `mimeType` participates. However many
+ * declare the SAME type, that is the answer; two distinct values are recorded as
+ * a {@link CollectionMimeConflict} and the file takes `mime-type.ts`'s answer, so
+ * the run completes with every offending file named. (One file parsed by two
+ * parsers is not representable: a blob has one content key.)
+ *
+ * @param collections - The project's `resources.collections`, or undefined
+ * @returns A resolver whose conflicts accumulate across every path it is asked about
+ */
+export function createCollectionMimeResolver(
+  collections: Readonly<Record<string, CollectionConfig>> | undefined,
+): CollectionMimeResolver {
+  const declaring: DeclaringCollection[] = Object.entries(collections ?? {})
+    .flatMap(([name, config]) => (
+      config.mimeType === undefined ? [] : [{ name, mimeType: config.mimeType, config }]
+    ));
+  const conflicts: CollectionMimeConflict[] = [];
+  // Keyed on the path: one file is one authoring mistake however many extents realize it.
+  const reported = new Set<string>();
+  // Off the same `declaring` array the matcher uses, in declaration order.
+  const fingerprint = declaring.length === 0
+    ? NO_DECLARED_MIME_TYPES
+    : canonicalJson(declaring.map((candidate) => ({
+      name: candidate.name,
+      mimeType: candidate.mimeType,
+      include: candidate.config.include,
+      exclude: candidate.config.exclude ?? null,
+    })));
+
+  return {
+    conflicts,
+    fingerprint,
+    mimeFor(absolutePath: string, relativePath: string): string | null {
+      const matched = declaring.filter((candidate) => matchesCollection(absolutePath, candidate.config));
+      const winner = matched[0];
+      if (winner === undefined) {
+        return mimeTypeForPath(absolutePath);
+      }
+      const rival = matched.find((candidate) => candidate.mimeType !== winner.mimeType);
+      if (rival === undefined) {
+        return winner.mimeType;
+      }
+      if (!reported.has(relativePath)) {
+        reported.add(relativePath);
+        conflicts.push({
+          path: relativePath,
+          collections: [winner.name, rival.name],
+          mimeTypes: [winner.mimeType, rival.mimeType],
+        });
+      }
+      return mimeTypeForPath(absolutePath);
+    },
+  };
+}

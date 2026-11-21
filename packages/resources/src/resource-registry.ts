@@ -46,7 +46,7 @@ import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 
 import { vatLinkCacheDirectory } from './cache-root.js';
 import { getCollectionsForFile } from './collection-matcher.js';
-import { type KeyedContent, NO_PARSER_KIND, type ParserKind, readContentWithKey } from './content-key.js';
+import { type KeyedContent, type ParserKind, readContentWithKey } from './content-key.js';
 import type { DeferredArtifacts } from './deferred-artifacts.js';
 import {
   validateFrontmatterLinks,
@@ -59,7 +59,6 @@ import {
 } from './frontmatter-validator.js';
 import { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
 import { fillLinkFacts, fragmentIndex, judgeLink, resolveLinkEntries, unreadableTargetsFrom, type FragmentIndex, type JudgeLinkOptions, type LinkEntry, type ValidateLinkOptions } from './link-validator.js';
-import { parserKindForMimeType } from './mime-type.js';
 import { type NotAdmittedLog, notAdmittedIssues, parseRefusal } from './not-admitted.js';
 import { ParseCache, type ParseCacheStats } from './parse-cache.js';
 import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } from './parse-dispatcher.js';
@@ -72,12 +71,7 @@ import { isDeclinedSymlinkCode } from './projection/contributors/filesystem-exte
 import { declinedLinkApplies, type PopulationUnreadablePolicy } from './projection/crawl-source.js';
 import { contentRoute } from './projection/document-facts.js';
 import { parseFailedEntry, parseFailedMessage } from './projection/parse-failure.js';
-import {
-  collectionMimeConflictFinding,
-  createCollectionMimeResolver,
-  relativize,
-  type CollectionMimeResolver,
-} from './projection/realizations.js';
+import { collectionMimeConflictFinding, relativize } from './projection/realizations.js';
 // Type-only, and that is what keeps it acyclic: the projection's population
 // builder is a CALLER of the registry's world, not a dependency of it, so the
 // import is erased before any module graph exists at runtime.
@@ -88,6 +82,7 @@ import type {
   ResourceEnumeration,
   ResourcePopulationSource,
 } from './projection/resource-population.js';
+import { type CollectionMimeResolver, createCollectionMimeResolver, parserKindForMime } from './projection/router.js';
 import type { AdmittedFacts, AdmittedStat, RunPopulation } from './projection/run-population.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { ProjectConfig, ValidationMode } from './schemas/project-config.js';
@@ -1167,14 +1162,10 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * @returns The parser kind, or `none` when nothing parses this type
    */
   private parserKindFor(absolutePath: string): ParserKind {
-    // Routed through the run's resolver, never `parserKindForPath` directly: a
-    // collection may declare a `mimeType` that overrides the extension tables,
-    // and this lane must reach the same verdict the projection lane does or the
-    // two disagree about whether a file is prose. `mimeFor` falls back to the
-    // built-in table for every path no declaration matches, which is every path
-    // in a project that declares none.
+    // Routed through the run's resolver, never the path-only `parserKindForPath`,
+    // so this lane reaches the projection lane's verdict.
     //
-    // ⚠️ ONE authority, deliberately: the read's parser selection and the
+    // ONE authority, deliberately: the read's parser selection and the
     // sizing tally in {@link addResources} must be the same answer. Parser
     // selection is part of a document's parse identity (content-key.ts), so a
     // second resolver here is how the parse route and the key's parse-route
@@ -1186,7 +1177,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       absolutePath,
       this.baseDir === undefined ? absolutePath : relativize(absolutePath, this.baseDir),
     );
-    return parserKindForMimeType(declaredMime) ?? NO_PARSER_KIND;
+    return parserKindForMime(declaredMime);
   }
 
   /**

@@ -5,12 +5,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { RunContentCache } from '../src/projection/content-cache.js';
 import { ProjectionBuilder, REALIZATION_PROMOTION_UNREADABLE } from '../src/projection/projection.js';
-import {
-  collectRealization,
-  createCollectionMimeResolver,
-  type CollectionMimeResolver,
-  type ContentDemand,
-} from '../src/projection/realizations.js';
+import { collectRealization, type ContentDemand } from '../src/projection/realizations.js';
+import { type CollectionMimeResolver, createCollectionMimeResolver } from '../src/projection/router.js';
 
 import { setupSubdirTestSuite } from './test-helpers.js';
 

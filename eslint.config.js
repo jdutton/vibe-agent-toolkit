@@ -162,7 +162,6 @@ const UNIT_TIER_IO_RATCHET = { allowFiles: [
   'packages/resources/test/projection-filesystem-extent.test.ts',
   'packages/resources/test/projection-git-extent.test.ts',
   'packages/resources/test/projection-identity.test.ts',
-  'packages/resources/test/projection-package-extent.test.ts',
   'packages/resources/test/projection-realizations.test.ts',
   'packages/resources/test/resolve-local-href.test.ts',
   'packages/utils/test/asset-reference.test.ts',

@@ -16,7 +16,7 @@ import {
 
 const PACKAGE_EXTENT = 'ctx-package';
 const FILESYSTEM_EXTENT = 'ctx-filesystem';
-const NOT_EXPORTED = 'PACKAGE_SUBPATH_NOT_EXPORTED';
+const NOT_EXPORTED = 'SAMPLE_CONDITION_CODE';
 
 /** One row of each table an absence cause is observed in, and the contexts naming two extents. */
 function rows(): AbsenceRows {
