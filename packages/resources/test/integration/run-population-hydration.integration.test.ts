@@ -31,11 +31,10 @@ import { isParseLimitError, isParserThrewError, reviveParserThrow } from '../../
 import { POPULATION_PARSE_LIMITS, RunContentCache } from '../../src/projection/content-cache.js';
 import type { PopulationCache } from '../../src/projection/merge.js';
 import { RunPopulation } from '../../src/projection/run-population.js';
-import type { BlobScopedRows } from '../../src/projection/store.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { ProjectConfig } from '../../src/schemas/project-config.js';
 import type { ResourceMetadata } from '../../src/schemas/resource-metadata.js';
-import { FakeFactStore } from '../fake-fact-store.js';
+import { FailingBlobStore, FakeFactStore } from '../fake-fact-store.js';
 import { failingParsePolicy } from '../helpers/failing-parse-policy.js';
 import { createCommittedRepo } from '../test-helpers.js';
 
@@ -465,16 +464,6 @@ describe('a single-file add throws the cold error for a stated refusal', () => {
   });
 });
 
-/** A store whose blob tier rejects, once told to, with an error carrying a filesystem errno. */
-class FailingBlobStore extends FakeFactStore {
-  failBlobs = false;
-
-  override readBlobFacts(contentKeys: readonly string[]): Promise<BlobScopedRows> {
-    if (!this.failBlobs) return super.readBlobFacts(contentKeys);
-    const error = Object.assign(new Error('ENOENT: no such file or directory, open \'/store/blobs\''), { code: 'ENOENT', errno: -2, syscall: 'open', path: '/store/blobs' });
-    return Promise.reject(error);
-  }
-}
 
 describe('a blob tier that cannot be read refuses the run', () => {
   it('is never filed as a per-file finding, whatever errno it carries', async () => {

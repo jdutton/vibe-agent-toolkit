@@ -45,7 +45,7 @@ import { blobFactsReader, type BlobFactsOutcome } from './blob-resource-facts.js
 import { POPULATION_PARSE_LIMITS } from './content-cache.js';
 import type { AdmittedFacts } from './run-population.js';
 import { keyedContentKeys } from './store-hydration.js';
-import type { FactStore } from './store.js';
+import type { BlobScopedRows, FactStore } from './store.js';
 
 /**
  * What the store holds about one member's bytes: its realization's content columns. The store's
@@ -88,10 +88,28 @@ class BlobTierReadError extends VatError {
   constructor(cause: unknown) {
     super(
       PROJECTION_STORE_READ_FAILED_CODE,
-      `The projection store's blob facts could not be read: ${cause instanceof Error ? cause.message : String(cause)}`,
+      `The projection store's blob facts could not be read: ${cause instanceof Error ? cause.message : String(cause)}. `
+        + 'The store is a cache: clear it (`vat cache clear`) or point VAT_CACHE_DIR elsewhere.',
       { cause },
     );
   }
+}
+
+/**
+ * Read the blob tier for `contentKeys`, a failed read rejecting as the store's
+ * ({@link BlobTierReadError}): the one read every lane that reads the tier back
+ * goes through, the stored admission and a projection hit alike, so one failure
+ * is one refusal whichever lane met it.
+ *
+ * @param store - The run's store
+ * @param contentKeys - The keys to read
+ * @returns The tier's rows for them
+ * @throws A {@link BlobTierReadError} when the store's read rejects
+ */
+export function readBlobTier(store: FactStore, contentKeys: readonly string[]): Promise<BlobScopedRows> {
+  return store.readBlobFacts(contentKeys).catch((error: unknown) => {
+    throw new BlobTierReadError(error);
+  });
 }
 
 /**
@@ -119,12 +137,7 @@ export function storedContentOf(
   let read: Promise<(contentKey: string) => BlobFactsOutcome> | undefined;
   return {
     members: stored,
-    facts: () => (read ??= store.readBlobFacts(keys).then(
-      (rows) => blobFactsReader(rows),
-      (error: unknown) => {
-        throw new BlobTierReadError(error);
-      },
-    )),
+    facts: () => (read ??= readBlobTier(store, keys).then((rows) => blobFactsReader(rows))),
   };
 }
 

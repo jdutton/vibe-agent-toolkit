@@ -175,4 +175,10 @@ describe('storedContentOf: the members\' stored content', () => {
     const stored = storedContentOf([member('/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown'))], store);
     await expect(stored.facts()).rejects.toMatchObject({ code: 'PROJECTION_STORE_READ_FAILED', cause: errno });
   });
+
+  it('names the remedy: the store is a cache, so clear it or move it', async () => {
+    const { store } = countingStore(new Error('database disk image is malformed'));
+    const stored = storedContentOf([member('/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown'))], store);
+    await expect(stored.facts()).rejects.toThrow(/database disk image is malformed.*`vat cache clear`.*VAT_CACHE_DIR/s);
+  });
 });

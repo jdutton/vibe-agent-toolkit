@@ -48,10 +48,12 @@
   under skip-worktree.
 - **(library) `parserKindOf` on `@vibe-agent-toolkit/resources`**: the parser kind a content key
   names, so a consumer re-keys a file with the route the registry keyed it under.
-- **(library) `plantFiles()`, `workSpentNow()` and `workSpentSince()` (with `WorkSpent`) on
-  `@vibe-agent-toolkit/utils/testing`**: write a fixture tree from a path-to-contents map, and read
-  the work counters a store-hydration suite compares (content reads, hashes, parse lookups,
-  admissions) as one snapshot and its difference across a run.
+- **(library) `plantFiles()`, `workSpentNow()` and `workSpentSince()` (with `WorkSpent`),
+  `PARSE_LOOKUP_COUNTERS` and `parseLookupsIn()` on `@vibe-agent-toolkit/utils/testing`**: write a
+  fixture tree from a path-to-contents map, and read the work counters a store-hydration suite
+  compares (content reads, hashes, parse lookups, admissions) as one snapshot and its difference
+  across a run. A parse lookup is one per document the parse lane answered (a cache hit, a
+  dispatch or a refusal); a second dispatch of the same document (`parse.redispatched`) is not one.
 
 ### Changed
 

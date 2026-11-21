@@ -134,9 +134,12 @@ export type GitTreeKeyFailure =
     readonly kind: 'index-hides';
     readonly cwd: string;
     readonly repositoryRoot: string;
-    /** The first flagged entries, in git's order. */
+    /** The first flagged entries that hide bytes, in git's order. */
     readonly hidden: readonly GitHiddenEntry[];
-    /** How many entries are flagged in all. */
+    /**
+     * How many flagged entries hide bytes in all. An absent skip-worktree-only entry (a sparse
+     * checkout's file) hides none and is not counted.
+     */
     readonly hiddenCount: number;
   }
   | {

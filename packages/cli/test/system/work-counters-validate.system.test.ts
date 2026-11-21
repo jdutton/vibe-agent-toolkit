@@ -41,7 +41,7 @@ import {
   type WorkCounter,
   type WorkCounterDump,
 } from '@vibe-agent-toolkit/utils';
-import { createSymlink, symlinkCapability } from '@vibe-agent-toolkit/utils/testing';
+import { createSymlink, parseLookupsIn, symlinkCapability } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { PROJECTION_STORE_ENV, PROJECTION_STORE_OFF } from '../../src/utils/projection-store.js';
@@ -430,18 +430,6 @@ async function validateCounts(cwd: string, arm: Arm): Promise<RunCounts> {
   };
 }
 
-/** Parse lookups: every way a parse can be answered. */
-function parseLookups(counts: Readonly<Record<WorkCounter, number>>): number {
-  return (
-    counts['parse.cache.hit'] +
-    counts['parse.dispatched'] +
-    counts['parse.refused.keyDetermined'] +
-    counts['parse.refused.inputCap.read'] +
-    counts['parse.refused.inputCap.dispatch'] +
-    counts['parse.refused.load']
-  );
-}
-
 /** Paths the parent's probe saw read more than once, config files aside. */
 function readTwice(reads: ReadonlyMap<string, number>): string[] {
   return [...reads].filter(([path, count]) => count > 1 && !isConfig(path)).map(([path]) => path);
@@ -511,7 +499,7 @@ describe.each([
       expect(storeOnCold.stdout, 'the alias is declined, not silent').toContain(ALIAS);
     }
     if (!corpus.multiRoot) {
-      expect(parseLookups(parent), 'parse lookups = parsed subset').toBe(parsedPaths(corpus).length);
+      expect(parseLookupsIn(parent), 'parse lookups = parsed subset').toBe(parsedPaths(corpus).length);
     }
 
     // The checks child asks the store the resources phase wrote: it reads no content.
@@ -538,7 +526,7 @@ describe.each([
     expect(resources['content.read'], 'resources phase reads only the SKILL.md files discovery reaches').toBe(skillMd.resources.length);
     expect(resources['content.hashed'], 'resources phase keys only those').toBe(skillMd.resources.length);
     expect(resources['content.hashedBytes'], 'resources phase: exactly the discovered SKILL.md bytes').toBe(bytesOf(corpus, skillMd.resources));
-    expect(parseLookups(resources), 'resources phase parse lookups: discovery\'s only').toBe(skillMd.resources.length);
+    expect(parseLookupsIn(resources), 'resources phase parse lookups: discovery\'s only').toBe(skillMd.resources.length);
     expect(resources['parse.cache.hit'], 'each discovery parse is a cache hit').toBe(skillMd.resources.length);
     // A hydrated member costs a readability probe and the registry's one stat:
     // two per view document. The over-cap file is refused from the store once the

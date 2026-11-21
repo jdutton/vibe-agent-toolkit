@@ -81,12 +81,17 @@ function markRunRefusal(error: unknown): unknown {
  * too: the population codes a blob tier failure in its own error
  * (`PROJECTION_STORE_READ_FAILED`) around the store's.
  *
+ * The walk stops at the first error it has already seen, so a `cause` chain that
+ * loops back on itself (`e.cause = e`) ends rather than spinning the run.
+ *
  * @param error - A phase's error
  * @returns Whether it is the run's refusal
  */
 export function isRunRefusal(error: unknown): boolean {
-  for (let current = error; typeof current === 'object' && current !== null; current = (current as { cause?: unknown }).cause) {
+  const seen = new Set<object>();
+  for (let current = error; typeof current === 'object' && current !== null && !seen.has(current); current = (current as { cause?: unknown }).cause) {
     if (runRefusals.has(current)) return true;
+    seen.add(current);
   }
   return false;
 }

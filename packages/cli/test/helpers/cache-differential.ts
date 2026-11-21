@@ -51,11 +51,10 @@ import {
   safePath,
   toForwardSlash,
   WORK_COUNTERS_ENV,
-  type WorkCounter,
   type WorkCounterDump,
 } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
-import { expectAbsenceCause, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
+import { expectAbsenceCause, parseLookupsIn, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, expect } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
@@ -1894,13 +1893,10 @@ export function resourcesPhaseSpend(work: readonly WorkCounterDump[]): Resources
   });
   const [phase, ...others] = phases;
   if (phase === undefined || others.length > 0) throw new Error(`expected one dump with a resources phase, found ${String(phases.length)}`);
-  const parseLookups = (Object.entries(phase) as Array<[WorkCounter, number]>)
-    .filter(([name]) => name.startsWith('parse.'))
-    .reduce((sum, [, count]) => sum + count, 0);
   return {
     read: phase['content.read'],
     hashedBytes: phase['content.hashedBytes'],
-    parseLookups,
+    parseLookups: parseLookupsIn(phase),
     admitted: phase['registry.admitted'],
     probed: phase['fs.stat'] - phase['registry.admitted'],
   };

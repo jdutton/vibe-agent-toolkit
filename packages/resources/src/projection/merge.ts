@@ -120,6 +120,7 @@ import {
   type ExtentScopedRows,
   type FactStore,
 } from './store.js';
+import { readBlobTier } from './stored-admission.js';
 
 /**
  * The pass number every driver-placed row in the `base` stratum carries.
@@ -1004,7 +1005,7 @@ async function readCachedProjection(
   if (!parseContent) return { hit: assembleProjection(extent, emptyBlobRows()) };
 
   const contentKeys = keyedContentKeys(extent);
-  const blobs = await cache.store.readBlobFacts(contentKeys);
+  const blobs = await readBlobTier(cache.store, contentKeys);
   // See `store-hydration.ts`: an extent written by a run that skipped blob
   // derivation names keys the blob tier does not hold, and accepting it would
   // reduce every closure extent to its own root while reporting success.
