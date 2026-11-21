@@ -6,7 +6,7 @@
  */
 import type * as ChildProcessModule from 'node:child_process';
 import type * as FsModule from 'node:fs';
-import { existsSync, fstatSync, writeFileSync } from 'node:fs';
+import { existsSync, fstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import type * as UtilsModule from '@vibe-agent-toolkit/utils';
@@ -124,6 +124,16 @@ function mintedDir(): string {
   return hooks.minted[0] ?? '';
 }
 
+/** Resolve once the held `stderr.log` contains `text`; fail the case after a bound. */
+async function heldStderrContains(text: string): Promise<void> {
+  const log = safePath.join(mintedDir(), 'stderr.log');
+  for (let waited = 0; waited < 8000; waited += 10) {
+    if (existsSync(log) && readFileSync(log, 'utf-8').includes(text)) return;
+    await delay(10);
+  }
+  throw new Error(`the held stderr never contained ${JSON.stringify(text)}`);
+}
+
 beforeEach(() => {
   work = createTestTempDir('vat-overlap-test-');
   documentFile = safePath.join(work, 'document.json');
@@ -204,7 +214,8 @@ describe('startOverlappedSupervision', () => {
 
     const { value } = await run.atTurn(collector().write);
 
-    expect(value).toMatchObject({ outcome: 'completed' });
+    // The whole ending in the message: an `abnormal` one says why (its kind and what was read).
+    expect(value, JSON.stringify(value)).toMatchObject({ outcome: 'completed' });
   });
 
   it('records a supervision throw before the turn without an unhandled rejection, and rethrows it at the turn', async () => {
@@ -212,8 +223,11 @@ describe('startOverlappedSupervision', () => {
     process.on('unhandledRejection', unhandled);
     try {
       const refusal = new Error('stat refused');
-      hooks.statThrows = refusal;
       const run = await startArmed('hang', 500);
+      // Throw only once the child's line is held: armed at the spawn, a slow runner's first
+      // watchdog stat can kill the child before it writes anything, leaving nothing to replay.
+      await heldStderrContains('early stderr\n');
+      hooks.statThrows = refusal;
       await run.exited;
       // `exited` is the killed child's real exit, not the supervision's earlier rejection.
       expect(hasEnded(hooks.children[0])).toBe(true);

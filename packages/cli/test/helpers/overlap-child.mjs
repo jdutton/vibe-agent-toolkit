@@ -49,7 +49,12 @@ if (mode === 'quick') {
   await waitFor(`${trigger}.exit`);
   publish();
 } else if (mode === 'grandchild') {
-  spawn(process.execPath, [process.argv[1], 'grandchild-writer', documentFile, trigger], { stdio: ['ignore', 'inherit', 'ignore'] }).unref();
+  // Detached on Windows only: libuv puts every non-detached child in a kill-on-close job object,
+  // so the grandchild would die with this process and close the stdout it is here to hold.
+  spawn(process.execPath, [process.argv[1], 'grandchild-writer', documentFile, trigger], {
+    stdio: ['ignore', 'inherit', 'ignore'],
+    detached: process.platform === 'win32',
+  }).unref();
 } else if (mode === 'grandchild-writer') {
   await waitFor(trigger);
   publish();

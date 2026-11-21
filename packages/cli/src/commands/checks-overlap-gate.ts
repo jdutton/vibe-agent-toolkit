@@ -213,10 +213,10 @@ export async function abandoningUnread<T>(
   if (decision.mode === 'overlapped') {
     try {
       await decision.run.abandon();
-    } catch (failure) {
-      const detail = failure instanceof Error ? failure.message : String(failure);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
       const said = `the checks child could not be abandoned: ${detail}`;
-      if (ended.ok) throw new Error(said, { cause: failure });
+      if (ended.ok) throw new Error(said, { cause: error });
       process.stderr.write(`vat: ${said}\n`);
     }
   }
