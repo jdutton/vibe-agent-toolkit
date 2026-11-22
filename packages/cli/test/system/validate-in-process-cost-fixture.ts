@@ -221,6 +221,12 @@ export interface ValidateRun {
   readonly child: WorkCounterDump;
 }
 
+/** How `vat validate`'s checks child runs: overlapping a warm resources phase, or at its turn. */
+export type ChecksMode = 'overlapped' | 'sequential';
+
+/** The core count the parent reports for each mode: the overlap gate needs two. */
+const CHECKS_CORES: Readonly<Record<ChecksMode, number>> = { overlapped: 2, sequential: 1 };
+
 /**
  * Run `vat validate` in `repo` over `cacheDir`, require it to pass, and read it back. A damaged
  * store is read whole by the checks child (a projection hit reads every table); every damage
@@ -229,10 +235,12 @@ export interface ValidateRun {
  * @param suite - The suite's build and temp directories
  * @param repo - The fixture
  * @param cacheDir - The run's `VAT_CACHE_DIR`
+ * @param checks - How the checks child runs on a warm store, pinned through the core count the
+ *   parent reports, so the run is the same on every machine
  * @returns The run
  */
-export async function validateOver(suite: CostSuite, repo: string, cacheDir: string): Promise<ValidateRun> {
-  const run = await runWithWorkCounters(suite, repo, VERBS.vatValidate.args, { cacheDir, tmpDir: null, storeOff: false, probeRoot: null });
+export async function validateOver(suite: CostSuite, repo: string, cacheDir: string, checks: ChecksMode): Promise<ValidateRun> {
+  const run = await runWithWorkCounters(suite, repo, VERBS.vatValidate.args, { cacheDir, tmpDir: null, storeOff: false, probeRoot: null, cores: CHECKS_CORES[checks] });
   expect(run.result.status, `validate\n${run.result.stdout}\n${run.result.stderr}`).toBe(0);
   const parent = run.dumps.find((dump) => dump.phases['resources'] !== undefined);
   const child = run.dumps.find((dump) => dump.phases['resources'] === undefined);
@@ -302,7 +310,7 @@ export async function expectEveryDamageObserved(suite: CostSuite, store: WarmSto
   const outcomes = await Promise.all(targets.map(async ({ table, form }) => {
     const copy = safePath.join(suite.createTempDir(), 'cache');
     const deleted = damagedCopy(store.cacheDir, copy, table, form);
-    const damaged = await validateOver(suite, store.repo, copy);
+    const damaged = await validateOver(suite, store.repo, copy, 'overlapped');
     return {
       target: form === null ? table : `${table}:${form}`,
       deleted,

@@ -1062,7 +1062,7 @@ async function parseThroughCache(
   const stored = await cache.read(keyed);
   if (stored !== null) return stored;
 
-  // The worker answered `stored` only after its `setByKey` returned true, so
+  // The worker answered `stored` only after its `persistFromWorker` returned true, so
   // reaching here means the entry was written and then removed, or written in a
   // form this read refuses — a concurrent `vat cache clear`, the OS purging its
   // temp directory mid-run, or a torn write. Rare, real, and recoverable — in

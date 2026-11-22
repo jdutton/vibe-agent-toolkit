@@ -58,8 +58,8 @@ describe.skipIf(symlinkCapability() === null)('the membership read reads only wh
     repo = writeInProcessCostFixture(context.createTempDir());
     createSymlink(cap, 'two.md', safePath.join(repo, PLANTED_LINK));
     warmCache = context.createTempDir();
-    await validateOver(context, repo, warmCache);
-    warm = await validateOver(context, repo, warmCache);
+    await validateOver(context, repo, warmCache, 'overlapped');
+    warm = await validateOver(context, repo, warmCache, 'overlapped');
   });
 
   // The control: the damage arm below can only fail on a table that holds a row to damage.

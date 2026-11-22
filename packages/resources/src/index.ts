@@ -476,6 +476,9 @@ export {
   type ParserKind,
 } from './content-key.js';
 export type { DocumentParserKind } from './mime-type.js';
+// The run's one parse routing: the parser kind a path goes to through the run's collection MIME
+// resolver, so a declared `mimeType` overrides the extension table (parser-kind-for-path.ts).
+export { parseRoutingFor, parserKindForResolvedPath, type ParseRouting } from './parser-kind-for-path.js';
 
 // Parse cache: the disk-backed store `ResourceRegistry` files parse facts in,
 // and where it puts them. Exported for two callers only — an operator surface
@@ -959,10 +962,12 @@ export {
 // One read, key, parse and admission per file per VAT process run, whichever
 // lane asks (content-keying-and-git.md, rule 4).
 export {
+  IGNORE_HOME_SETTLEMENT,
   RunPopulation,
   StoreQuestionUnavailableError,
   withPopulationRun,
   withRunPopulation,
+  type HomeSettlement,
   type PopulationRun,
   type RunPopulationOptions,
 } from './projection/run-population.js';
@@ -1048,6 +1053,7 @@ export {
   blobFactsReader,
   RESOURCE_LINK_FACT_SOURCES,
   type BlobFactsOutcome,
+  type BlobFactsReader,
 } from './projection/blob-resource-facts.js';
 
 // The declarative closure primitive (zones §7.3): a closure-defined extent is a
@@ -1104,7 +1110,16 @@ export {
 
 // A warm run's blob tier read failing is the store's refusal, by this code (the CLI's refusal table);
 // and what the stored admission reads of the tier, which the CLI's in-process cost arms damage table by table.
-export { ADMISSION_BLOB_REQUEST, PROJECTION_STORE_READ_FAILED_CODE } from './projection/stored-admission.js';
+// `hydratesUnder` and `storedComputeBy` are warm admission's own predicates, exported so `vat
+// validate`'s checks overlap gate judges "admitted from the store" by them, never by a copy.
+export {
+  ADMISSION_BLOB_REQUEST,
+  PROJECTION_STORE_READ_FAILED_CODE,
+  hydratesUnder,
+  storedComputeBy,
+  type StoredComputeBy,
+  type StoredContent,
+} from './projection/stored-admission.js';
 
 // Emitting the projection as a document — "no engine" (zones §15 step 6). Rows
 // out; no index, no join, no filter, no query. Two properties are load-bearing:

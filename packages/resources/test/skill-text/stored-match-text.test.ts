@@ -60,7 +60,7 @@ describe('a match text through the store', () => {
       blobConditions: blobConditionsFor(KEY, parsed),
       skillTextFacts: [skillText.facts],
       skillTextMatches: skillText.matches,
-    })(KEY);
+    }).outcome(KEY);
     expect(outcome.kind === 'facts' && outcome.facts.skillText).toStrictEqual(record);
   });
 });

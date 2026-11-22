@@ -157,6 +157,7 @@ async function runReview(
     tmpDir: null,
     storeOff,
     probeRoot: null,
+    cores: null,
   });
   const [dump, ...others] = dumps;
   if (dump === undefined || others.length > 0) throw new Error(`expected one CLI process, got ${String(dumps.length)}`);
@@ -220,10 +221,10 @@ describe('vat skill review on one skill', () => {
     const { cold, warm } = await runsOf(layout);
     const work = reviewWork(members, layout);
     // Cold, a lone skill's one parse is dispatched; a home's SKILL.md is parsed once for the
-    // population and asked again from the cache for its skill text.
+    // population and asked again from the cache for its skill text. Each dispatch writes its entry.
     const coldParses = members.length === 1
-      ? { 'parse.dispatched': 1 }
-      : { 'parse.dispatched': members.length, 'parse.cache.hit': 1 };
+      ? { 'parse.dispatched': 1, 'parse.cache.written': 1 }
+      : { 'parse.dispatched': members.length, 'parse.cache.written': members.length, 'parse.cache.hit': 1 };
     expect(cold.held, 'cold').toEqual({ ...work, ...coldParses });
     expect(warm.held, 'warm').toEqual({ ...work, 'parse.cache.hit': members.length + (members.length > 1 ? 1 : 0) });
   });
@@ -254,7 +255,7 @@ describe('vat skill review on one skill', () => {
     // No git call either: the lone skill's one call was its question's store key, and this
     // question asks for none.
     const outside = { 'skillText.outsideRoot': 1, 'git.calls': undefined };
-    expect((await review(parent, OUTSIDE, cacheDir)).held, 'cold').toEqual({ ...work, ...outside, 'parse.dispatched': 1 });
+    expect((await review(parent, OUTSIDE, cacheDir)).held, 'cold').toEqual({ ...work, ...outside, 'parse.dispatched': 1, 'parse.cache.written': 1 });
     expect((await review(parent, OUTSIDE, cacheDir)).held, 'warm').toEqual({ ...work, ...outside, 'parse.cache.hit': 1 });
   });
 

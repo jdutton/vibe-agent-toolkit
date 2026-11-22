@@ -53,6 +53,7 @@ async function heldCounters(args: readonly string[], storeOff: boolean): Promise
     tmpDir: null,
     storeOff,
     probeRoot: null,
+    cores: null,
   });
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
   const [dump, ...others] = dumps;

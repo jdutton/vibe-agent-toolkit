@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
 import { parseRefusal } from '../src/not-admitted.js';
 import { ParseLimitError } from '../src/parse-limits.js';
 import { AST_SYNTACTIC_FORMS } from '../src/projection/blob-references.js';
-import { BLOB_FACT_READER_TABLES, type BlobFactsOutcome, type BlobResourceFacts } from '../src/projection/blob-resource-facts.js';
+import { BLOB_FACT_READER_TABLES, type BlobFactsOutcome, type BlobFactsReader, type BlobResourceFacts } from '../src/projection/blob-resource-facts.js';
 import { POPULATION_PARSE_LIMITS } from '../src/projection/content-cache.js';
 import { emptyBlobRows, STORE_REQUEST_UNMET } from '../src/projection/store-hydration.js';
 import type { BlobRequest, BlobScopedRows, BlobScopedTableName, FactStore } from '../src/projection/store.js';
@@ -21,6 +21,7 @@ import {
   hydratesUnder,
   readRoute,
   respelledContent,
+  storedComputeBy,
   storedContentOf,
   storedRoute,
   type StoredRealization,
@@ -93,6 +94,64 @@ describe('readRoute: what the tier\'s answer means', () => {
 
   it('computes a key the tier does not cover: per-key fallback', () => {
     expect(readRoute({ kind: 'uncovered', reason: 'evicted' })).toEqual(COMPUTE);
+  });
+});
+
+describe('storedComputeBy: the two routes, asked route-only', () => {
+  const tier = (outcome: BlobFactsOutcome): { asked: string[]; built: number; facts: () => Promise<BlobFactsReader> } => {
+    const probe = {
+      asked: [] as string[],
+      built: 0,
+      facts: (): Promise<BlobFactsReader> => Promise.resolve({
+        outcome: () => {
+          probe.built += 1;
+          return outcome;
+        },
+        answer: (key: string) => {
+          probe.asked.push(key);
+          return { kind: outcome.kind, rowsRead: 3 };
+        },
+      }),
+    };
+    return probe;
+  };
+
+  it('names storedRoute when the realization alone sends the member cold, without reading the tier', async () => {
+    const probe = tier({ kind: 'uncovered', reason: 'unused' });
+    expect(await storedComputeBy(unkeyed('unreadable', 'text/markdown'), 'markdown', probe.facts)).toEqual({ computeBy: 'storedRoute', rowsRead: 0 });
+    expect(probe.asked).toEqual([]);
+  });
+
+  it('serves an oversize realization of a parsed kind without reading the tier', async () => {
+    const probe = tier({ kind: 'uncovered', reason: 'unused' });
+    expect(await storedComputeBy(unkeyed('oversize', 'text/markdown'), 'markdown', probe.facts)).toEqual({ computeBy: null, rowsRead: 0 });
+    expect(probe.asked).toEqual([]);
+  });
+
+  it('names readRoute when the tier does not cover the key, counting the rows it read', async () => {
+    const probe = tier({ kind: 'uncovered', reason: 'evicted' });
+    expect(await storedComputeBy(keyed(MARKDOWN_KEY, 'text/markdown'), 'markdown', probe.facts)).toEqual({ computeBy: 'readRoute', rowsRead: 3 });
+    expect(probe.asked).toEqual([MARKDOWN_KEY]);
+  });
+
+  it('serves a covered key (facts or a stated refusal) building nothing, and hands back the tier\'s rejection unchanged', async () => {
+    const entry = { log: 'unreadable', entry: { reason: 'the parser threw', code: 'EFOO' } } as const;
+    for (const outcome of [{ kind: 'not-admitted', entry }, { kind: 'facts', facts: {} as BlobResourceFacts, decoding: null }] as const) {
+      const probe = tier(outcome);
+      expect(await storedComputeBy(keyed(MARKDOWN_KEY, 'text/markdown'), 'markdown', probe.facts), outcome.kind).toEqual({ computeBy: null, rowsRead: 3 });
+      expect(probe.built).toBe(0);
+    }
+    const refused = new Error('tier refused');
+    await expect(storedComputeBy(keyed(MARKDOWN_KEY, 'text/markdown'), 'markdown', () => Promise.reject(refused))).rejects.toBe(refused);
+  });
+
+  it('agrees with readRoute on every kind the tier answers', async () => {
+    const entry = { log: 'unreadable', entry: { reason: 'the parser threw', code: 'EFOO' } } as const;
+    const outcomes: BlobFactsOutcome[] = [{ kind: 'facts', facts: {} as BlobResourceFacts, decoding: null }, { kind: 'not-admitted', entry }, { kind: 'uncovered', reason: 'evicted' }];
+    for (const outcome of outcomes) {
+      const answer = await storedComputeBy(keyed(MARKDOWN_KEY, 'text/markdown'), 'markdown', tier(outcome).facts);
+      expect(answer.computeBy === null, outcome.kind).toBe(readRoute(outcome).kind === 'probe');
+    }
   });
 });
 
@@ -173,7 +232,7 @@ describe('storedContentOf: the members\' stored content', () => {
     expect(reads).toEqual([[MARKDOWN_KEY, NONE_KEY]]);
     expect(requests).toEqual([ADMISSION_BLOB_REQUEST]);
     expect(first).toBe(second);
-    const outcome: BlobFactsOutcome = first(MARKDOWN_KEY);
+    const outcome: BlobFactsOutcome = first.outcome(MARKDOWN_KEY);
     expect(outcome.kind).toBe('uncovered');
   });
 

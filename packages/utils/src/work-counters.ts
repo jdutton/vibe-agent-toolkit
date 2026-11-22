@@ -54,6 +54,10 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * counts every `EXPLAIN` the SQL gate prepares — one per gated statement, and
  * the four virtual-table reference reads each handle makes when it is opened.
  *
+ * `parse.cache.written` counts parse-cache entries whose write was reported, parent side only:
+ * `ParseCache.setByKey`, and the pool's settlement of a worker's `stored` reply. A worker killed
+ * after its entry reached the final path but before its reply arrived wrote an entry this does not
+ * count, so it is a lower bound on the entries written, exact when no worker died mid-job.
  * `content.read` counts a member file's bytes read to be keyed (`readContentWithKey`),
  * one per read that returned bytes; a read refused at the input cap is
  * `parse.refused.inputCap.read` instead. `registry.built` counts every resource
@@ -65,42 +69,26 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * admission's readability probe (an open and a close, counted as the stat it
  * stands in for); `fs.lstat` counts a realization's own `lstat` of its path,
  * and every `lstat` the link-chain walk (`hostPlaceKind`) makes: per path, the
- * components walked below the root plus one per link hop followed, whoever
- * asks for the walk. A direct `stat` or `lstat` elsewhere (the crawl source's
- * link check, the filesystem extent's, the file crawler's, a path-presence
- * check's own `lstat`) is not counted. The one member read neither
+ * components walked below the root plus one per link hop followed. A direct
+ * `stat` or `lstat` elsewhere is not counted. The one member read neither
  * sees is the skills lane's `readFileSync` of a file it scans
  * (`skill-text-lane.ts`), whose own `fstat` happens inside Node, uncounted.
  * Together they let a test pin rule 4 of "Decision: content identity is per
  * source" (docs/architecture/content-keying-and-git.md): one read, one key and
  * one admission per file per run.
  *
- * `skillText.storeMiss` counts each (run, file) the skills lane scanned from
- * its text instead of reading the file's stored skill-text facts, in a run that
- * has a store to ask (`ResourcePopulationSource.holdsStore`): one per file per
- * run for which the run's population source answered no document
- * (`ResourcePopulationSource.storedDocument`), however many skills reach it. On
- * a cold run it equals the files the lane scanned; on a warm run it is the
- * per-file fallback, every one of which is a file the store does not cover.
+ * `skillText.*` counts the skills lane's scans, once per (run, file) however many skills reach
+ * the file. `storeMiss`: scanned from its text in a run with a store
+ * (`ResourcePopulationSource.holdsStore`) because the source answered no stored document; cold, the
+ * files scanned, warm, the files the store does not cover. `noStore`: scanned because the run has
+ * no store (`vat audit`, the store off, or no run); never beside `storeMiss`. `storeUnopened`: once
+ * per run at most, when the stored-document questions met a failure opening the store or building
+ * the home population (a read-only cache, the store's lock held, git giving no answer); every scan
+ * then is a `storeMiss`. `outsideRoot`: a question about a file outside the run's root, answered
+ * nothing without opening the store, and also a `storeMiss` (or `noStore`) when scanned.
  *
- * `skillText.noStore` counts each (run, file) the skills lane scanned from its
- * text because the run has no store to ask: a verb that declares none
- * (`vat audit`), the store switched off, or a lane given no run. Counted once
- * per file per run, as `skillText.storeMiss` is, and never beside it: a run
- * counts its scans under one or the other.
- *
- * `skillText.storeUnopened` counts each run whose stored-document questions
- * opened the store or built the home population and met a failure there (a
- * read-only cache directory, another process holding the store's lock, git
- * giving no answer for the root): the question
- * is optional, so the failure answers every question with nothing, and each
- * file the lane then scans is a `skillText.storeMiss`. One per run at most.
- *
- * `skillText.outsideRoot` counts each (run, file) a stored-document question
- * asked about a file outside the run's root, answered nothing without opening
- * the store: no member of the run's home population can be there. Each is also
- * a `skillText.storeMiss` when the lane scans it (a `skillText.noStore` in a
- * run with no store).
+ * `checks.gate.rows.read` counts the tier rows the checks overlap gate's predicates read, summed
+ * per member (resource-scanning-and-caching.md 3.7b).
  */
 export const WORK_COUNTER_NAMES = [
   'store.rows.decoded.persistent',
@@ -115,6 +103,7 @@ export const WORK_COUNTER_NAMES = [
   'extent.served',
   'store.miss.refusedPairs',
   'parse.cache.hit',
+  'parse.cache.written',
   'parse.dispatched',
   'parse.redispatched',
   'parse.refused.keyDetermined',
@@ -133,6 +122,7 @@ export const WORK_COUNTER_NAMES = [
   'skillText.storeUnopened',
   'skillText.outsideRoot',
   'git.calls',
+  'checks.gate.rows.read',
 ] as const;
 
 /**
@@ -267,8 +257,6 @@ const dumpListeners: Array<() => void> = [];
  *   a count on a thread that forbids counting with the `throw` policy
  */
 export function countWork(counter: Exclude<WorkCounter, 'git.calls'>, n: number): void {
-  // One way to count a git process, and it names the process: see {@link countGitSpawn}. The
-  // type refuses it at compile time; this refuses a caller the compiler did not see.
   if ((counter as WorkCounter) === 'git.calls') throw new RangeError("'git.calls' is counted by countGitSpawn, which names the spawn");
   add(counter, n);
 }

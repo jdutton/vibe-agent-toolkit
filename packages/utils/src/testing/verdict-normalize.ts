@@ -1,55 +1,34 @@
 /**
- * Normalization of captured whole-command output — the ONE normalizer.
- *
- * The qa-snapshot copy (`packages/cli/src/qa-snapshot/normalize.ts`) was
- * absorbed here with the whole-command half it served; the `verdict` facet's
- * layer 2 (the normalized full document) is its only caller. There is no second
- * normalizer anywhere in the repository, and there must not be one.
- *
- * ## Why this exists
+ * Normalization of captured whole-command output: the ONE normalizer, shared by
+ * the lab's `verdict` facet and the CLI's system tests (two packages compare
+ * whole-command output, so a second copy would be a second contract). A pure
+ * function over text: no I/O, no environment reads, no `vitest` import.
  *
  * A document comparison is only worth reading if two runs over an *unchanged*
- * tree diff to zero lines. Anything that varies between such runs is noise that
- * appears in every comparison forever, and a reader who has learned to ignore
- * lines is a reader who will ignore the real one.
- *
- * ## Why it does so little
- *
- * The rewrites below are the complete list of instabilities **measured** across
- * 3 runs x 6 commands over two corpora: a duration, and the absolute paths in a
- * `root:` header plus the config-less fallback warning on stderr. Every
- * per-file path inside the reports is already corpus-relative, so nothing else
- * needed touching.
- *
- * Two more wall-clock fields joined the duration rule when the verdict facet
- * took the normalizer over, each wall time BY CONSTRUCTION: `durationMs`
- * (`Report.durationMs`, stamped `Date.now() - startTime`, e.g. okf/validate.ts:256)
- * and `populationSecs` (resources query.ts:105 / check.ts:471; check's `null`
- * when it built no population is left alone).
- *
- * `lensSecs` (query.ts:109, check.ts:477) joined on a MEASUREMENT: a crucible
- * control run of rc.11 twice differed only in it, on every query/check row,
- * incl. scientific notation (7.08e-7 vs 5.41e-7) — which `[\d.eE+-]` covers.
+ * tree diff to zero lines; a reader who learns to ignore noisy lines will
+ * ignore the real one. The rewrites are the instabilities **measured** across
+ * 3 runs x 6 commands over two corpora: a duration, the absolute paths in a
+ * `root:` header, and the config-less fallback warning on stderr. Further
+ * wall-clock fields are each wall time BY CONSTRUCTION: `durationMs`
+ * (`Report.durationMs`, e.g. okf/validate.ts:256) and `populationSecs`
+ * (resources query.ts:105 / check.ts:471; check's `null` is left alone).
+ * `lensSecs` (query.ts:109, check.ts:477) joined on a crucible control run of
+ * rc.11 that differed only in it, incl. scientific notation (7.08e-7 vs
+ * 5.41e-7), which `[\d.eE+-]` covers.
  *
  * ⛔ **Do not add a rewrite without a measurement behind it.** Every extra
- * substitution is a real difference that has been made invisible: the diff goes
- * quiet and nobody can audit what it swallowed. A normalizer that erases too
- * much fails in exactly the direction that cannot be noticed.
+ * substitution makes a real difference invisible.
  *
- * The duration rewrites replace the *value* (`0`, `0ms`) rather than a
- * placeholder token, so normalized text stays valid YAML/JSON and can still be
- * piped through `jq`/`yq`.
+ * Duration rewrites replace the *value* (`0`, `0ms`), not a placeholder token,
+ * so normalized text stays valid YAML/JSON for `jq`/`yq`.
  *
- * ## Performance is a correctness concern here
- *
- * This runs over `vat audit` output, which reaches ~1.8 MB. Every pattern below
- * is written so that no two adjacent quantifiers can match the same character —
- * that is what keeps matching linear instead of backtracking super-linearly on
- * a long near-miss line. `sonarjs/slow-regex` guards the property; do not
- * silence it.
+ * Performance is a correctness concern: this runs over `vat audit` output of
+ * ~1.8 MB, so no two adjacent quantifiers in a pattern may match the same
+ * character (linear, not super-linear backtracking). `sonarjs/slow-regex`
+ * guards it; do not silence it.
  */
 
-import { toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { toForwardSlashAnyPlatform } from '../path-core.js';
 
 /** The roots a captured stream may name absolutely. */
 export interface NormalizeContext {
@@ -81,33 +60,21 @@ interface DurationRule {
 }
 
 /**
- * Wall time is the only kind of field three runs of every verb were observed
- * to disagree on — `durationSecs`/`duration` measured, `durationMs` and
- * `populationSecs` wall clock by construction (see this module's docstring).
+ * Every pattern is a **regex literal**, never a `new RegExp` composed from a
+ * shared sub-pattern: a constructed string is flagged by
+ * `security/detect-non-literal-regexp` and hides the pattern from the static
+ * backtracking analysis that guards a 1.8 MB capture. The value shape is
+ * therefore spelled out twice, on purpose.
  *
- * Every pattern is a **regex literal**, not a `new RegExp` composed from a
- * shared number sub-pattern. Composing read better, but it meant handing the
- * engine a constructed string — which `security/detect-non-literal-regexp`
- * flags, and which (the part that actually matters) hides the pattern from the
- * static backtracking analysis that is the only thing standing between this
- * module and a hang on a 1.8 MB capture. The value shape is therefore spelled
- * out twice, on purpose.
+ * Each pattern is anchored with `^`/`$` under the `m` flag and uses `[ \t]`,
+ * not `\s`, which would match a newline and swallow the next line. No `[ \t]*`
+ * sits beside another space-matching quantifier, which is why the JSON rule
+ * captures a bare `,?` and lets the single trailing `[ \t]*$` absorb the rest.
  *
- * Each pattern is anchored with `^`/`$` under the `m` flag and uses `[ \t]`
- * rather than `\s` for surrounding space, because `\s` matches a newline and
- * would swallow the following line. No `[ \t]*` ever sits beside another
- * space-matching quantifier, so there is no ambiguity to backtrack through —
- * which is why the JSON rule captures a bare `,?` and lets the single trailing
- * `[ \t]*$` absorb the rest.
- *
- * The value is matched as `-?\d[\d.eE+-]*` — one digit then one character
- * class — rather than as a precise number grammar. A precise grammar needs
- * optional groups (`(?:\.\d+)?(?:[eE][-+]?\d+)?`), and a quantified group
- * inside another quantifier is star height 2, which `security/detect-unsafe-regex`
- * rejects outright. The looseness costs nothing: `^[ \t]*durationSecs:` has
- * already established that this is the duration line, so there is no second
- * candidate for what the value could be, and a normalizer's job is to zero it
- * rather than to validate it.
+ * The value is `-?\d[\d.eE+-]*`, not a precise number grammar: that needs a
+ * quantified group inside a quantifier (star height 2, rejected by
+ * `security/detect-unsafe-regex`). The looseness costs nothing, because
+ * `^[ \t]*durationSecs:` has already identified the duration line.
  */
 const DURATION_RULES: readonly DurationRule[] = Object.freeze([
   // YAML: `durationSecs: 12.481`, `durationMs: 1873`, `populationSecs: 0.412`,
@@ -202,15 +169,11 @@ function spellingsOf(root: string, placeholder: string): PathSubstitution[] {
  *
  * **The corpus is the one exception, and the asymmetry is deliberate.** When
  * `vatRoot` is the corpus or sits inside it, the vatRoot substitution is
- * dropped entirely rather than winning on length. The corpus is the *subject*
- * of the snapshot, so every path inside it must render corpus-relative;
- * `homeDir`, by contrast, is an outer container with no claim on anything it
- * happens to enclose. Without this, snapshotting VAT's own repository would
- * split one corpus across two placeholders — `/repo` as `<CORPUS>` but
- * `/repo/packages/cli/…` as `<VATROOT>/…` — and, worse, the split would land
- * differently for a dev checkout than for an installed `vat`, so two captures
- * of the *same* corpus would diff on the very lines the placeholders exist to
- * mask.
+ * dropped rather than winning on length. The corpus is the *subject* of the
+ * snapshot, so every path inside it must render corpus-relative; `homeDir` is
+ * an outer container with no claim on what it encloses. Otherwise snapshotting
+ * VAT's own repository would split one corpus across `<CORPUS>` and
+ * `<VATROOT>/…`, differently for a dev checkout than for an installed `vat`.
  *
  * ⚠️ Substitution is plain text replacement (see {@link applySubstitutions}),
  * so a root that is a strict text prefix of an unrelated path — `/repo` inside
@@ -266,12 +229,7 @@ function applySubstitutions(text: string, substitutions: readonly PathSubstituti
   return result;
 }
 
-/**
- * Zero out the duration values.
- *
- * @param text - Text to rewrite.
- * @returns The text with every whole-line duration value replaced by zero.
- */
+/** The text with every whole-line duration value replaced by zero. */
 function normalizeDurations(text: string): string {
   let result = text;
   for (const { pattern, replacement } of DURATION_RULES) {
@@ -280,22 +238,12 @@ function normalizeDurations(text: string): string {
   return result;
 }
 
-/**
- * Convert CRLF and lone CR to LF.
- *
- * @param text - Text to rewrite.
- * @returns The text with LF line endings only.
- */
+/** The text with CRLF and lone CR converted to LF. */
 function toLf(text: string): string {
   return text.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
 }
 
-/**
- * Give the text a trailing newline iff it has content.
- *
- * @param text - Text to rewrite.
- * @returns The text, newline-terminated unless it is empty.
- */
+/** The text, newline-terminated unless it is empty. */
 function ensureTrailingNewline(text: string): string {
   if (text.length === 0 || text.endsWith('\n')) {
     return text;

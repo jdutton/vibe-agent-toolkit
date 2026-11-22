@@ -12,6 +12,9 @@
   counts only git processes VAT starts, and `countWork('git.calls')` throws.
 - **`VAT_GIT_SPAWNS=<dir>` writes a git spawn log per vat process** (`git-spawns-<pid>.json`):
   each git process it started, with its arguments, working directory and `vat validate` phase.
+- **Library: `parseRoutingFor(config, baseDir)` and `ParseRouting` in `@vibe-agent-toolkit/resources`**:
+  the parse routing `vat validate`'s checks overlap gate routes members by, built from the run's
+  config, so a caller judging the gate builds the gate's own routing.
 - **Library: `memoized(memo, key, compute)` in `@vibe-agent-toolkit/utils`**: one promise per key,
   computed on first ask, a rejection kept as the answer.
 

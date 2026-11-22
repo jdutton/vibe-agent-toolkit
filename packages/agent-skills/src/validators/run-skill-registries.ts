@@ -13,6 +13,7 @@
  */
 
 import {
+  IGNORE_HOME_SETTLEMENT,
   listingRefusalRemedy,
   loadConfig,
   type ParseDispatcher,
@@ -275,6 +276,7 @@ export function withSkillRegistries<T>(root: string, work: (registries: RunSkill
       questionCacheOf: () => Promise.resolve(undefined),
       holdsStore: false,
       collectionsFor: async (enumerated) => (await projectConfigOrNone(enumerated))?.resources?.collections,
+      onHomeSettled: IGNORE_HOME_SETTLEMENT,
     },
     (population) => work(new RunSkillRegistries({
       registry: ResourceRegistry.forRun(population, { baseDir: resolved, gitTracker }),

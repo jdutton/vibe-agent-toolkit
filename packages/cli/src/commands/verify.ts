@@ -43,7 +43,7 @@ import { endWithReport } from '../utils/document-writer.js';
 import { reportFindings } from '../utils/issue-rendering.js';
 import type { createLogger } from '../utils/logger.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
-import { withRunContext, type RunContext } from '../utils/resource-loader.js';
+import { NO_HOME_SETTLED_LISTENER, withRunContext, type RunContext } from '../utils/resource-loader.js';
 import { runIntegrityFinding } from '../utils/run-integrity.js';
 import { isSkillPublished, mergeSkillPackagingConfig, pluginLocalSkillConfigEntry, publishScope } from '../utils/skill-packaging-config.js';
 
@@ -985,7 +985,7 @@ async function verifyTopLevelCommand(
     const projectRoot = requireProjectRoot(process.cwd(), COMMAND_NAME);
     const { config, error: configError } = loadConfigTolerant(projectRoot);
     // One run for every phase: each file read, keyed, parsed and admitted once.
-    await withRunContext({ projectionStore: 'on-demand', root: projectRoot , outputs: [] }, async (context) => {
+    await withRunContext({ projectionStore: 'on-demand', root: projectRoot, outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (context) => {
       const phases = applyPhaseSelection(selectVerifyPhases(config, context, configError, options.verbose), logger);
 
       // Announced from the same list the in-process gates below read, so the

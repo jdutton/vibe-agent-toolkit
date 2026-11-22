@@ -19,7 +19,7 @@ import { dirname } from 'node:path';
 import type * as Utils from '@vibe-agent-toolkit/utils';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { __internal, type ProgressLog, superviseRun, withProgressLog } from '../../src/commands/resources/check-supervisor.js';
+import { __internal, isStillRunning, type ProgressLog, superviseRun, withProgressLog } from '../../src/commands/resources/check-supervisor.js';
 import { interruptedQueryRefusal } from '../../src/commands/resources/query-supervision.js';
 
 const { spawnMock, spawnSyncMock, statMock } = vi.hoisted(() => ({ spawnMock: vi.fn(), spawnSyncMock: vi.fn(), statMock: vi.fn() }));
@@ -117,7 +117,7 @@ function signalTheGuard(
 }
 
 /** A progress log for `superviseRun`, under a guard that watches nothing until it is spawned. */
-function progressLog(): ProgressLog {
+function progressLog(): ProgressLog & { guard: ReturnType<typeof __internal.guardSupervision> } {
   return { path: 'progress.jsonl', guard: __internal.guardSupervision() };
 }
 
@@ -186,6 +186,14 @@ describe('the supervision guard — its lifetime', () => {
     expect(listenerCounts()).toStrictEqual(baseline);
   });
 
+  it('never calls a child that never started still running, so nothing kills or waits on it', () => {
+    const child = new StandInChild();
+    child.pid = undefined;
+
+    expect(isStillRunning(child as unknown as ChildProcess)).toBe(false);
+    expect(isStillRunning(new StandInChild() as unknown as ChildProcess)).toBe(true);
+  });
+
   // 🚨 A run settled with its child alive — a refused kill, a poll that threw — used to drop the
   // signal handlers at once: a SIGTERM meanwhile ended this process and orphaned the child.
   it('keeps every handler past a run that settled with its child alive, until the child ends', () => {
@@ -237,7 +245,7 @@ describe('the watchdog poll that throws', () => {
     });
 
     const log = progressLog();
-    const run = superviseRun({ verb: 'resources check', args: [], log, budgetMs: 500, format: 'json' });
+    const run = superviseRun({ verb: 'resources check', args: [], log, budgetMs: 500, format: 'json', stderr: 'inherit' });
 
     await expect(run).rejects.toThrow('EACCES');
     expect(child.kill).toHaveBeenCalledWith('SIGKILL');
@@ -260,7 +268,7 @@ describe('a SIGKILL the kernel ACCEPTS that does not end the child', () => {
     // The watchdog's own clock and timer, driven by hand: 20 polls on a real clock would be seconds.
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
     try {
-      const run = superviseRun({ verb: 'resources check', args: [], log, budgetMs: 100, format: 'json' });
+      const run = superviseRun({ verb: 'resources check', args: [], log, budgetMs: 100, format: 'json', stderr: 'inherit' });
       await vi.advanceTimersByTimeAsync(5000);
 
       await expect(run).resolves.toMatchObject({
@@ -295,7 +303,7 @@ describe('a SIGKILL the kernel REFUSES, every time', () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
     try {
       let settled = false;
-      const run = superviseRun({ verb: 'resources check', args: [], log, budgetMs: 100, format: 'json' });
+      const run = superviseRun({ verb: 'resources check', args: [], log, budgetMs: 100, format: 'json', stderr: 'inherit' });
       const markSettled = (): void => {
         settled = true;
       };
@@ -332,7 +340,7 @@ describe('the child\'s death is its exit, not its close', () => {
     const log = progressLog();
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'performance'] });
     try {
-      const run = superviseRun({ verb: 'resources check', args: [], log, budgetMs: 60_000, format: 'json' });
+      const run = superviseRun({ verb: 'resources check', args: [], log, budgetMs: 60_000, format: 'json', stderr: 'inherit' });
       log.guard.release();
       child.exitCode = 3;
       child.emit('exit', 3, null);
@@ -362,7 +370,7 @@ describe('a spawn that THROWS synchronously', () => {
     const baseline = listenerCounts();
     const log = progressLog();
 
-    const run = await superviseRun({ verb: 'resources query', args: [], log, budgetMs: 100, format: 'json' });
+    const run = await superviseRun({ verb: 'resources query', args: [], log, budgetMs: 100, format: 'json', stderr: 'inherit' });
     log.guard.release();
 
     expect(run).toMatchObject({ outcome: 'abnormal', death: { kind: 'spawn-failed', binary: 'vat-bin.js', detail: 'spawn E2BIG' } });
@@ -384,7 +392,7 @@ describe('the child\'s process tree', () => {
     statMock.mockImplementation(() => ({ size: 0 }));
     const log = progressLog();
 
-    await superviseRun({ verb: 'resources check', args: [], log, budgetMs: 100, format: 'json' });
+    await superviseRun({ verb: 'resources check', args: [], log, budgetMs: 100, format: 'json', stderr: 'inherit' });
     log.guard.release();
 
     const options = spawnMock.mock.lastCall?.[2] as { detached?: boolean } | undefined;

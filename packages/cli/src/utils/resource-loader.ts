@@ -7,11 +7,13 @@ import {
   buildLinkAuthEngineConfig,
   DEFAULT_RESOURCE_INCLUDE,
   gitExtentSelected,
+  IGNORE_HOME_SETTLEMENT,
   ResourceRegistry,
   withRunPopulation,
   type CrawlOptions,
   type CrawlPopulation,
   type FactStore,
+  type HomeSettlement,
   type ParseDispatcher,
   type PopulationCache,
   type ProjectConfig,
@@ -53,6 +55,15 @@ export interface RunContext {
   /** The run's one parse dispatcher, which the run shuts down. */
   readonly dispatcher: ParseDispatcher;
 }
+
+/** What a run's population calls when its home population settles (`RunPopulationOptions.onHomeSettled`). */
+export type HomeSettledListener = (key: string, settlement: HomeSettlement) => void;
+
+/**
+ * The {@link withRunContext} `homeSettledListener` of every verb that overlaps no work with the home
+ * population: every verb but `vat validate`, whose checks overlap gate listens.
+ */
+export const NO_HOME_SETTLED_LISTENER = (): HomeSettledListener => IGNORE_HOME_SETTLEMENT;
 
 /** The errors that refuse a whole run, by identity: see {@link isRunRefusal}. */
 const runRefusals = new WeakSet<object>();
@@ -177,9 +188,15 @@ function questionStoreOf(root: string, holdsStore: boolean): {
  *
  * @param options - The run's home root, the trees it writes (`[]` for a verb that
  *   only reads; see `RunPopulationOptions.outputs`), an ignore oracle to reuse,
- *   and whether the run has a projection store: `'on-demand'` opens it as above,
+ *   whether the run has a projection store (`'on-demand'` opens it as above,
  *   `'none'` declares a run that never opens it (`vat audit`), so its enumerations
- *   and stored-document questions open no home and take no snapshot
+ *   and stored-document questions open no home and take no snapshot), and the
+ *   listener for the home population's settlement
+ * @param options.homeSettledListener - Builds, from the run before `work` starts, what the run
+ *   population calls when its home population settles. Built from the run because what listens
+ *   needs the run's own dispatcher and root; called before any enumeration can settle, since
+ *   enumerations start only inside `work`. A verb that overlaps nothing passes
+ *   {@link NO_HOME_SETTLED_LISTENER}.
  * @param work - The verb's work
  * @returns Whatever `work` returned
  */
@@ -189,6 +206,7 @@ export function withRunContext<T>(
     readonly outputs: readonly string[];
     readonly projectionStore: 'on-demand' | 'none';
     readonly gitTracker?: GitTracker | undefined;
+    readonly homeSettledListener: (run: RunContext) => HomeSettledListener;
   },
   work: (run: RunContext) => Promise<T>,
 ): Promise<T> {
@@ -198,6 +216,8 @@ export function withRunContext<T>(
   // skills lane counts a scan as (`skillText.storeMiss` or `skillText.noStore`).
   const holdsStore = options.projectionStore === 'on-demand' && projectionStoreSelected();
   const questionStore = questionStoreOf(root, holdsStore);
+  // Replaced by the verb's listener before `work` starts, so before any enumeration can settle.
+  let listener: HomeSettledListener = IGNORE_HOME_SETTLEMENT;
   // The questions' connection closes inside the scope, before the run's own.
   return withLazyPopulationCache({ root }, (cacheOf) => runThenClose(() =>
     withRunPopulation(
@@ -209,12 +229,17 @@ export function withRunContext<T>(
         questionCacheOf: questionStore.cacheOf,
         holdsStore,
         collectionsFor: (enumerated) => Promise.resolve(collectionsOption(enumerated).collections),
+        onHomeSettled: (key, settlement) => listener(key, settlement),
       },
-      (population) => work({
-        population,
-        registry: ResourceRegistry.forRun(population, { baseDir: root, gitTracker }),
-        dispatcher: population.dispatcher,
-      }),
+      (population) => {
+        const run: RunContext = {
+          population,
+          registry: ResourceRegistry.forRun(population, { baseDir: root, gitTracker }),
+          dispatcher: population.dispatcher,
+        };
+        listener = options.homeSettledListener(run);
+        return work(run);
+      },
     ), questionStore.opening),
   );
 }

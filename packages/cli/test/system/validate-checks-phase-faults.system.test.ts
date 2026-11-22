@@ -5,6 +5,9 @@
  * `test-helpers/checks-phase.ts`): it exits before publishing, garbles its stdout, exits against its
  * own report, or refuses a config only it reads. The nested-project cases pin the root operand the
  * supervisor hands the child.
+ *
+ * The garbled and contradicting children under `vat validate` are the checks overlap's same-build
+ * differential: `validate-checks-overlap-faults.system.test.ts`.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -51,30 +54,6 @@ describe('vat validate — the checks phase, a faulty child', () => {
     // nothing, before it had even reported starting.
     expect(phase.error?.message).toContain('the child process exited 0 and published no report at all');
     expect(phase.error?.message).toContain('before the child process had finished starting');
-  });
-
-  it('garbled stdout after population is RESOURCE_CHECK_BROKEN naming the unreadable report (exit 1)', () => {
-    writeConfig(projectDir, [['quick', TXT_ROWS]]);
-
-    const run = vat(projectDir, ['validate'], { NODE_OPTIONS: preload('child-only-garbled-stdout.mjs') });
-
-    expect(run.status).toBe(1);
-    expect(checksPhase(run).status).toBe('findings');
-    const broken = run.findings.filter((f) => f.code === RUN_INTEGRITY);
-    expect(broken).toHaveLength(1);
-    expect(broken[0]?.message).toContain('is not this command\'s document');
-  });
-
-  it('a child whose exit contradicts its clean report fails the phase (RESOURCE_CHECK_BROKEN, exit 1)', () => {
-    writeConfig(projectDir, [['quick', TXT_ROWS]]);
-
-    const run = vat(projectDir, ['validate'], { NODE_OPTIONS: preload('child-only-exit-disagrees.mjs') });
-
-    expect(run.status, run.stderr).toBe(1);
-    expect(checksPhase(run).status).toBe('findings');
-    const broken = run.findings.filter((f) => f.code === RUN_INTEGRITY);
-    expect(broken).toHaveLength(1);
-    expect(broken[0]?.message).toContain('verdict is exit 0, and then exited 3');
   });
 
   it('standalone, the same contradiction is not forwarded as a pass (exit 1)', () => {

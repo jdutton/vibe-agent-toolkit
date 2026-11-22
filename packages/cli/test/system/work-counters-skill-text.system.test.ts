@@ -359,7 +359,7 @@ interface Run {
  * @returns The run
  */
 async function runVerb(cwd: string, args: readonly string[], arm: Arm, storeOff: boolean, probeRoot: string): Promise<Run> {
-  const { result, dumps, probeDir } = await runWithWorkCounters(context, cwd, args, { cacheDir: arm.cacheDir, tmpDir: arm.tmpDir, storeOff, probeRoot });
+  const { result, dumps, probeDir } = await runWithWorkCounters(context, cwd, args, { cacheDir: arm.cacheDir, tmpDir: arm.tmpDir, storeOff, probeRoot, cores: null });
   if (probeDir === null) throw new Error('runVerb runs with the probe');
   const built = dumps.filter((dump) => dump.counters['registry.built'] > 0);
   expect(built, `${args.join(' ')}: exactly one process built a registry\n${result.stderr}`).toHaveLength(1);

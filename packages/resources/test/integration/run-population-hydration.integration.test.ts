@@ -32,7 +32,7 @@ import { isParseLimitError, isParserThrewError, reviveParserThrow } from '../../
 import { POPULATION_PARSE_LIMITS, RunContentCache } from '../../src/projection/content-cache.js';
 import { GitCrawlSource } from '../../src/projection/crawl-source.js';
 import type { PopulationCache } from '../../src/projection/merge.js';
-import { RunPopulation, StoreQuestionUnavailableError } from '../../src/projection/run-population.js';
+import { IGNORE_HOME_SETTLEMENT, RunPopulation, StoreQuestionUnavailableError } from '../../src/projection/run-population.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { ProjectConfig } from '../../src/schemas/project-config.js';
 import type { ResourceMetadata } from '../../src/schemas/resource-metadata.js';
@@ -303,6 +303,7 @@ async function withRun<T>(withStore: boolean, variation: RunVariation, work: (po
       .then((opened) => callsFailing(opened, { write: variation.questionWriteFault, blobRead: variation.questionBlobReadFault })),
     holdsStore: true,
     collectionsFor: () => (variation.homeFault === undefined ? Promise.resolve(undefined) : Promise.reject(variation.homeFault)),
+    onHomeSettled: IGNORE_HOME_SETTLEMENT,
   }, { content, dispatcher });
   try {
     return await work(population, workSpentNow());

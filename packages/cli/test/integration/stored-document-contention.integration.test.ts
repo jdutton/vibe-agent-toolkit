@@ -33,7 +33,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 
 import { resetUnscopedNoticeLedger } from '../../src/utils/operator-notices.js';
 import { PROJECTION_STORE_ENV } from '../../src/utils/projection-store.js';
-import { withRunContext } from '../../src/utils/resource-loader.js';
+import { NO_HOME_SETTLED_LISTENER, withRunContext } from '../../src/utils/resource-loader.js';
 import { createTempDirTracker } from '../system/test-common.js';
 import { gitAddAll, initTestGitRepo } from '../test-helpers.js';
 
@@ -115,7 +115,7 @@ afterAll(() => {
  */
 async function askUnderLock(root: string): Promise<{ answer: unknown; unopened: number; enumerated: number }> {
   const unopenedBefore = readWorkCounters()['skillText.storeUnopened'];
-  return withRunContext({ projectionStore: 'on-demand', root, outputs: [] }, async (run) => {
+  return withRunContext({ projectionStore: 'on-demand', root, outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
     const holder = await holdWriteLock();
     let answer: unknown;
     try {
@@ -155,7 +155,7 @@ describe('a stored-document question under another process\'s write lock', () =>
   it('answers nothing from a warm store, and the verb\'s enumeration still serves the home', async () => {
     const root = makeRepo();
     // A first run files this tree's facts: the question would be a hit, if it waited.
-    await withRunContext({ projectionStore: 'on-demand', root, outputs: [] }, (run) => run.population.source.enumerate(root, [], 'refuse', MEMBERS));
+    await withRunContext({ projectionStore: 'on-demand', root, outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) => run.population.source.enumerate(root, [], 'refuse', MEMBERS));
 
     const result = await askUnderLock(root);
 
@@ -182,7 +182,7 @@ describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a sto
     chmodSync(storeDirectory, 0o500);
     const unopenedBefore = readWorkCounters()['skillText.storeUnopened'];
 
-    const answer = await withRunContext({ projectionStore: 'on-demand', root, outputs: [] }, (run) =>
+    const answer = await withRunContext({ projectionStore: 'on-demand', root, outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
       run.population.source.storedDocument(safePath.join(root, SKILL), 'markdown'));
 
     expect(answer).toBeUndefined();

@@ -397,6 +397,7 @@ async function validateCounts(cwd: string, arm: Arm): Promise<RunCounts> {
     tmpDir: arm.tmpDir,
     storeOff: arm.storeOff,
     probeRoot: join(cwd, '..'),
+    cores: null,
   });
   if (probeDir === null) throw new Error('validateCounts runs with the probe');
   // Positive control: both in-process surfaces ran, so the counts cover them.

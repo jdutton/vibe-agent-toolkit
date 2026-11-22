@@ -45,6 +45,8 @@ export const COUNTERS_WITHOUT_A_COUNTED_ROW: Readonly<Partial<Record<WorkCounter
   'statement.explained': 'the schema-introspection row\'s cost, an enforced row, not a counted cost',
   'store.miss.refusedPairs': 'the store-miss row, an enforced row, not a counted cost',
   'parse.refused.load': 'load-dependent, bounded by I8; reported only',
+  'parse.cache.written':
+    "the parse cache's write side as reported (a worker killed after writing but before replying goes uncounted), which validate's checks overlap reads as its post-spawn parent writes (resource-scanning-and-caching.md 3.7b); no cost row",
   'content.hashed': UNBUILT_REHASH_BASELINE,
   'content.hashedBytes': UNBUILT_REHASH_BASELINE,
   'content.read': ONE_READ_PER_RUN,
@@ -54,6 +56,8 @@ export const COUNTERS_WITHOUT_A_COUNTED_ROW: Readonly<Partial<Record<WorkCounter
   'registry.built': ONE_READ_PER_RUN,
   'registry.admitted': ONE_READ_PER_RUN,
   'git.calls': 'I10 git calls; git is no longer pinned, so no cost row restates them',
+  'checks.gate.rows.read':
+    "the tier rows validate's checks overlap gate reads to judge its members, summed per member (a content key several members share counts once per member), kept off every store counter so the overlapped and sequential runs count alike, but for the shared tier read when no crawled member reads the tier (resource-scanning-and-caching.md 3.7b); no cost row",
 };
 
 /** A counted cost row whose counter waits on its mechanism. */

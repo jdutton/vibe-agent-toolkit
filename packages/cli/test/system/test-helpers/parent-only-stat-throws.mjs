@@ -21,7 +21,9 @@ if (!process.argv.includes('--supervised-by') && pidFile !== undefined) {
   const stat = fs.statSync;
   fs.statSync = (path, ...rest) => {
     if (String(path).endsWith('progress.jsonl') && fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf-8') !== '') {
-      throw Object.assign(new Error(`EACCES: permission denied, stat '${String(path)}'`), { code: 'EACCES', syscall: 'stat', path });
+      // The message names the log by its basename: its directory is minted per run, so a full path
+      // would make two runs' output differ for a reason that is not the case's.
+      throw Object.assign(new Error("EACCES: permission denied, stat 'progress.jsonl'"), { code: 'EACCES', syscall: 'stat', path });
     }
     return stat(path, ...rest);
   };

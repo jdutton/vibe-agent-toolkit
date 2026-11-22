@@ -52,7 +52,7 @@ import { parentPort, resourceLimits, workerData } from 'node:worker_threads';
 import { forbidWorkCounting } from '@vibe-agent-toolkit/utils';
 
 import type { ParseResult } from './link-parser.js';
-import { ParseCache, type ParserModuleKind } from './parse-cache.js';
+import { ParseCache, persistFromWorker, type ParserModuleKind } from './parse-cache.js';
 import { acquireCollector } from './parse-collector.js';
 import {
   factsOutputBreach,
@@ -267,7 +267,7 @@ async function answerHarness(request: Extract<JobRequest, { type: 'harness' }>):
  * all, having paid for the parse twice over. So a write that did not persist
  * sends the facts over the wire instead.
  *
- * ⚠️ **`setByKey`'s boolean is the authority, and it had to be added for this.**
+ * ⚠️ **`persistFromWorker`'s boolean is the authority, and it had to be added for this.**
  * `ParseCache` is fail-SOFT: every failure path returned `void`, so there was
  * nothing to believe and the first version of this function proved the write by
  * reading the entry back. Measured, that cost 1,677 extra reads and decodes per
@@ -289,7 +289,7 @@ async function answerFor(
   if (breach !== undefined) return { id: request.id, breach: breach.limit, found: breach.found };
   if (cacheKey === undefined) return { id: request.id, facts };
 
-  const persisted = await workerCache().setByKey(cacheKey, result);
+  const persisted = await persistFromWorker(workerCache(), cacheKey, result);
   if (!persisted) return { id: request.id, facts };
   return { id: request.id, stored: cacheKey };
 }

@@ -5,13 +5,12 @@
  */
 
 import type { SpawnSyncReturns } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
 
-import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
-import { GIT_SPAWNS_ENV, safePath, WORK_COUNTERS_ENV, type GitSpawnDump, type WorkCounterDump } from '@vibe-agent-toolkit/utils';
+import { GIT_SPAWNS_ENV, type GitSpawnDump, type WorkCounterDump } from '@vibe-agent-toolkit/utils';
 
-import { PROJECTION_STORE_ENV, PROJECTION_STORE_OFF } from '../../src/utils/projection-store.js';
 import { executeCli } from '../system/test-common.js';
+
+import { cliDumps, countedStoreEnv } from './work-counter-run.js';
 
 /** What a run needs of its suite: the CLI build, and private directories. */
 interface GitSpawnSuite {
@@ -30,18 +29,6 @@ export interface GitSpawnRun {
   readonly result: SpawnSyncReturns<string>;
   /** Every CLI process (`role: 'cli'`), in no order. */
   readonly processes: readonly GitSpawnProcess[];
-}
-
-/**
- * The dumps one directory holds, of CLI processes only.
- *
- * @param directory - A dump directory
- * @returns Each dump, parsed
- */
-function cliDumps<T extends { readonly role: string }>(directory: string): T[] {
-  return readdirSync(directory)
-    .map((name) => JSON.parse(readFileSync(safePath.join(directory, name), 'utf-8')) as T)
-    .filter((dump) => dump.role === 'cli');
 }
 
 /**
@@ -65,12 +52,7 @@ export async function runWithGitSpawns(
   const spawnsDir = suite.createTempDir();
   const result = await executeCli(suite.binPath, [...args], {
     cwd,
-    env: {
-      [VAT_CACHE_DIR_ENV]: options.cacheDir,
-      ...(options.storeOff && { [PROJECTION_STORE_ENV]: PROJECTION_STORE_OFF }),
-      [WORK_COUNTERS_ENV]: countsDir,
-      [GIT_SPAWNS_ENV]: spawnsDir,
-    },
+    env: { ...countedStoreEnv(options, countsDir), [GIT_SPAWNS_ENV]: spawnsDir },
   });
   const counters = cliDumps<WorkCounterDump>(countsDir);
   const spawns = new Map(cliDumps<GitSpawnDump>(spawnsDir).map((dump) => [dump.pid, dump]));

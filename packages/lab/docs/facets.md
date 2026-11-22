@@ -180,9 +180,8 @@ directory, `vat validate` writes its mode there, and the lab records it per row:
 When it is 0, `gateDeclinedBy` names the first failing gate condition and, for the every-member-admitted
 condition, the member and its route; a rejected judgment carries `error`. Repeats that disagree make
 the row failed. A 0 on the repo being judged means a wall figure compares sequential runs, so say so
-first. The checks phase and its supervised child are described in
-[`vat validate`'s command](../../cli/src/commands/validate.ts); a build without the gate writes no
-debug facts, so its rows read `null`.
+first. The gate itself is described in
+[the checks child](../../../docs/architecture/resource-scanning-and-caching.md#37b-the-checks-child-starts-during-the-resources-phase-on-a-warm-store).
 
 Perf rows gained required fields (`surfaces`, `cpuMs`, `processes`, `checksOverlapped`,
 `gateDeclinedBy`), and a schema is strict, so a perf report stored by an earlier build is refused:

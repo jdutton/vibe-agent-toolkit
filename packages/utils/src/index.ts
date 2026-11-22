@@ -324,8 +324,6 @@ export { compareCodeUnits } from './compare-code-units.js';
 // A value shared by reference between readers: a write anywhere inside it throws.
 export { deepFreeze } from './deep-freeze.js';
 
-// A run-owned promise memo: the first caller's computation, a rejection included, answers every
-// later caller of its key.
 export { memoized } from './memoized.js';
 
 // The crawl-timing seam: which contributor, stratum and fixpoint pass owns the

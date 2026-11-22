@@ -39,6 +39,7 @@ import {
   SKILLS_ONLY_MARKDOWN,
   storedRowCount,
   validateOver,
+  type ChecksMode,
   type ValidateRun,
   withStoreDatabase,
   writeInProcessCostFixture,
@@ -69,7 +70,7 @@ function readsOf(counters: Readonly<Record<WorkCounter, number>> | undefined): R
  * @returns Every CLI process's dump of the warm run
  */
 async function warmDumps(root: string, args: readonly string[]): Promise<readonly WorkCounterDump[]> {
-  const options = { cacheDir: context.createTempDir(), tmpDir: null, storeOff: false, probeRoot: null } as const;
+  const options = { cacheDir: context.createTempDir(), tmpDir: null, storeOff: false, probeRoot: null, cores: 2 } as const;
   const cold = await runWithWorkCounters(context, root, args, options);
   expect(cold.result.status, `cold ${args.join(' ')}\n${cold.result.stdout}\n${cold.result.stderr}`).toBe(0);
   const warm = await runWithWorkCounters(context, root, args, options);
@@ -89,12 +90,13 @@ interface ColdWarm {
  * Run `vat validate` over a committed fixture cold, then warm, on a fresh private cache.
  *
  * @param repo - The fixture
+ * @param checks - How the checks child runs
  * @returns The two runs
  */
-async function coldThenWarm(repo: string): Promise<ColdWarm> {
+async function coldThenWarm(repo: string, checks: ChecksMode): Promise<ColdWarm> {
   const cacheDir = context.createTempDir();
-  const cold = await validateOver(context, repo, cacheDir);
-  const warm = await validateOver(context, repo, cacheDir);
+  const cold = await validateOver(context, repo, cacheDir, checks);
+  const warm = await validateOver(context, repo, cacheDir, checks);
   return { repo, cacheDir, cold, warm };
 }
 
@@ -103,7 +105,7 @@ let fixtureRuns: Promise<ColdWarm> | undefined;
 
 /** The cost fixture's ({@link root}'s) cold then warm runs: once per file, however many arms ask. */
 function costFixtureRuns(): Promise<ColdWarm> {
-  fixtureRuns ??= coldThenWarm(root);
+  fixtureRuns ??= coldThenWarm(root, 'overlapped');
   return fixtureRuns;
 }
 
@@ -141,7 +143,7 @@ describe('the fixture holds what the cost arms need', () => {
     const ask = (sql: string): Promise<Array<Record<string, unknown>>> => queryRows(context.binPath, root, cacheDir, sql);
     // The skills-only document is outside the resources view: validate's resources phase admits
     // every other markdown document and HTML page, and its skills phase admits it alone.
-    const { result, dumps } = await runWithWorkCounters(context, root, ['validate'], { cacheDir, tmpDir: null, storeOff: false, probeRoot: null });
+    const { result, dumps } = await runWithWorkCounters(context, root, ['validate'], { cacheDir, tmpDir: null, storeOff: false, probeRoot: null, cores: 2 });
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     // The view by path: `vat resources scan` admits the `resources` view the phase admits, and
     // names each member, so the skills-only document's absence is read, not inferred from a count.
@@ -292,17 +294,25 @@ function lstatsByPhase(run: ValidateRun): Record<(typeof LSTAT_PHASES)[number], 
 }
 
 describe('fs.lstat per phase, warm, by relation', () => {
-  it('one more member below the root costs the resources phase its walk below the root, and the other phases nothing', async () => {
-    const bare = await costFixtureRuns();
-    const decoyed = await coldThenWarm(writeCommittedCorpus(context.createTempDir(), { ...IN_PROCESS_COST_FIXTURE, [DECOY]: '# Decoy\n\nNothing links here.\n' }));
+  // Overlapped, the checks child starts during the resources phase and the parent's checks phase
+  // only takes its turn; sequential, that phase spawns the child. Either way the decoy costs the
+  // resources phase its walk below the root and every other phase nothing.
+  it.each(['overlapped', 'sequential'] as const)('%s: one more member below the root costs the resources phase its walk below the root, and the other phases nothing', async (checks) => {
+    const bare = checks === 'overlapped' ? await costFixtureRuns() : await coldThenWarm(root, checks);
+    const decoyed = await coldThenWarm(writeCommittedCorpus(context.createTempDir(), { ...IN_PROCESS_COST_FIXTURE, [DECOY]: '# Decoy\n\nNothing links here.\n' }), checks);
     const without = lstatsByPhase(bare.warm);
     const withDecoy = lstatsByPhase(decoyed.warm);
-    for (const phase of LSTAT_PHASES) expect(without[phase], `${phase}: the phase counted fs.lstat`).toBeGreaterThan(0);
+    // The phases that walk paths in the parent, so the relation below is not over zeros.
+    for (const phase of ['resources', 'skills'] as const) expect(without[phase], `${phase}: the phase counted fs.lstat`).toBeGreaterThan(0);
     const walkBelowRoot = toForwardSlash(DECOY).split('/').length;
     expect({
       resources: (withDecoy.resources ?? 0) - (without.resources ?? 0),
       skills: (withDecoy.skills ?? 0) - (without.skills ?? 0),
       checks: (withDecoy.checks ?? 0) - (without.checks ?? 0),
     }, `the decoy ${DECOY}: its components below the root, in the resources phase alone`).toEqual({ resources: walkBelowRoot, skills: 0, checks: 0 });
+    // The pin took: the parent's checks phase lstats only when it spawns the child itself, so an
+    // arm that silently ran the other mode fails here.
+    if (checks === 'overlapped') expect(without.checks ?? 0, 'overlapped: the checks phase only takes its turn').toBe(0);
+    else expect(without.checks, 'sequential: the checks phase spawns the child').toBeGreaterThan(0);
   });
 });

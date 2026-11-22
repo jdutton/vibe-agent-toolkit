@@ -171,7 +171,16 @@ const CONFIG_EMPTY = {} as unknown as ProjectConfig;
 const RUN = { sentinel: 'run-context' } as unknown as RunContext;
 /** The root a `vat validate` run resolved (never touched on disk: the phases are stubbed), and the run's flags. */
 const VALIDATE_ROOT = safePath.join(normalizedTmpdir(), 'resolved-project-root');
-const VALIDATE_RUN = { root: VALIDATE_ROOT, verbose: false, debug: false, base: undefined, context: RUN } as const;
+/** The checks turn's decision when no gate overlapped: the phase spawns its child itself. */
+const SEQUENTIAL_DECISION = Promise.resolve({ mode: 'sequential', declinedBy: { condition: 'not-settled' } } as const);
+const VALIDATE_RUN = {
+  root: VALIDATE_ROOT,
+  verbose: false,
+  debug: false,
+  base: undefined,
+  context: RUN,
+  checksTurn: () => SEQUENTIAL_DECISION,
+} as const;
 /** What a config that exists but does not parse hands back to the orchestrator. */
 const BROKEN_CONFIG_ERROR = 'Failed to load config: bad yaml';
 const CONFIG_MARKETPLACE = {
@@ -570,7 +579,7 @@ describe('selectValidateSurfaces', () => {
   it.each([false, true])('roots the checks phase at the resolved root and forwards debug and verbose=%s', async (flag) => {
     await invokeAll(selectValidateSurfaces(CONFIG_RESOURCES_ONLY, { ...VALIDATE_RUN, debug: flag, verbose: !flag }));
 
-    expect(runResourcesCheckPhase).toHaveBeenCalledExactlyOnceWith({ root: VALIDATE_ROOT, debug: flag, verbose: !flag });
+    expect(runResourcesCheckPhase).toHaveBeenCalledExactlyOnceWith({ root: VALIDATE_ROOT, debug: flag, verbose: !flag, decision: SEQUENTIAL_DECISION });
   });
 
   it('is a warned no-op when nothing at all is configured', () => {

@@ -84,6 +84,7 @@ import {
 } from '../../utils/projection-query.js';
 import { relationBoundsFor } from '../../utils/relation-limits.js';
 import { RUN_INTEGRITY_CODE, runIntegrityFinding } from '../../utils/run-integrity.js';
+import type { GateDecision } from '../checks-overlap-gate.js';
 import type { PhaseOutcome } from '../phase-utils.js';
 
 import {
@@ -113,8 +114,10 @@ import {
   type RunEnding,
   type SupervisedChild,
   type SupervisedEnding,
+  type SupervisedRun,
   type SupervisedVerb,
 } from './check-supervisor.js';
+import { startOverlappedSupervision, type OverlappedRun } from './overlapped-supervision.js';
 
 /** The verb this module runs, as the supervisor keys it. */
 const CHECK_VERB = 'resources check' satisfies SupervisedVerb;
@@ -1406,6 +1409,19 @@ interface ChildRequest {
   readonly invocation: CheckInvocation;
 }
 
+/** One supervised check run: the tree it checks, what the child is asked, and its bound. */
+interface CheckRun {
+  /**
+   * The project root the caller resolved. REQUIRED: the child checks exactly this tree, and a
+   * killed run's document is labelled with it.
+   */
+  readonly root: string;
+  /** What the child is asked to run, and who asked. */
+  readonly request: ChildRequest;
+  /** The bound, in seconds. */
+  readonly budgetSecs: number;
+}
+
 /**
  * Run the checks in a child bounded by `budgetSecs`, and report either what it
  * said or what killing it revealed.
@@ -1416,17 +1432,9 @@ interface ChildRequest {
  * which are all of them but one, that would accumulate.
  *
  * @param options - The run
- * @param options.root - The project root the caller resolved. REQUIRED: the
- *   child checks exactly this tree, and a killed run's document is labelled with it
- * @param options.request - What the child is asked to run, and who asked
- * @param options.budgetSecs - The bound, in seconds
  * @returns What to publish, and with what exit code
  */
-async function superviseCheckRun(options: {
-  root: string;
-  request: ChildRequest;
-  budgetSecs: number;
-}): Promise<SupervisedEnding<CheckReport>> {
+async function superviseCheckRun(options: CheckRun): Promise<SupervisedEnding<CheckReport>> {
   const { root, request } = options;
   const { value: ending, leftover } = await withProgressLog(CHECK_VERB, async (log): Promise<SupervisedEnding<CheckReport>> => {
     const run = await superviseRun({
@@ -1435,23 +1443,96 @@ async function superviseCheckRun(options: {
       log,
       budgetMs: options.budgetSecs * 1000,
       format: request.format,
+      stderr: 'inherit',
     });
-    if (run.outcome === 'completed') return { forward: run.document };
-
-    return {
-      payload: buildCheckOutputData(buildInterruptedCheckInput({
-        entries: parseProgressLog(run.log),
-        root,
-        // 🚨 The abnormal ending reaches the SAME fail-closed document the
-        // watchdog's kill does, never `{ outcome: 'completed', code: 0 }`.
-        ending: run.outcome === 'killed'
-          ? { kind: 'budget', budgetSecs: options.budgetSecs, invocation: request.invocation }
-          : { kind: 'abnormal', death: run.death, invocation: request.invocation },
-        durationMs: run.elapsedMs,
-      })),
-    };
+    return checkEndingOf(run, options);
   });
   return withLeftover(ending, leftover);
+}
+
+/**
+ * What a supervised check run came to, as the report to publish: the child's forwarded document,
+ * or the fail-closed document its progress log rebuilds. One mapping for a sequential run and an
+ * overlapped one, so the two publish the same bytes for the same ending.
+ *
+ * @param run - The run's recorded ending
+ * @param options - The run
+ * @returns What to publish
+ */
+function checkEndingOf(
+  run: SupervisedRun,
+  options: CheckRun,
+): SupervisedEnding<CheckReport> {
+  if (run.outcome === 'completed') return { forward: run.document };
+  const { request } = options;
+  return {
+    payload: buildCheckOutputData(buildInterruptedCheckInput({
+      entries: parseProgressLog(run.log),
+      root: options.root,
+      // 🚨 The abnormal ending reaches the SAME fail-closed document the
+      // watchdog's kill does, never `{ outcome: 'completed', code: 0 }`.
+      ending: run.outcome === 'killed'
+        ? { kind: 'budget', budgetSecs: options.budgetSecs, invocation: request.invocation }
+        : { kind: 'abnormal', death: run.death, invocation: request.invocation },
+      durationMs: run.elapsedMs,
+    })),
+  };
+}
+
+/**
+ * The checks turn of an overlapped run: replay the child's held stderr onto this process's stderr,
+ * then map its recorded ending exactly as {@link superviseCheckRun} maps a sequential one, the
+ * leftover directory included.
+ *
+ * @param run - The child spawned during the resources phase
+ * @param options - The run it was spawned for
+ * @returns What to publish
+ */
+async function overlappedCheckRun(
+  run: OverlappedRun,
+  options: CheckRun,
+): Promise<SupervisedEnding<CheckReport>> {
+  const { value, leftover } = await run.atTurn((chunk) => process.stderr.write(chunk));
+  return withLeftover(checkEndingOf(value, options), leftover);
+}
+
+/**
+ * The one request an orchestrator's `checks` phase sends its child, in either mode.
+ *
+ * @param options - The phase
+ * @param options.debug - Whether the orchestrator was run with `--debug`
+ * @param options.base - `--base <ref>`, or undefined when none was given
+ * @returns The request
+ */
+function phaseRequest(options: { debug: boolean; base: string | undefined }): ChildRequest {
+  return { check: undefined, format: 'json', debug: options.debug, base: options.base, invocation: 'phase' };
+}
+
+/**
+ * Spawn the `checks` phase's child ahead of its turn, for `vat validate`'s overlap gate: the same
+ * child, argv and bound the phase spawns at its turn, inside an overlapped supervision scope.
+ *
+ * @param options - The phase
+ * @param options.root - The project root the orchestrator resolved
+ * @param options.debug - Whether the orchestrator was run with `--debug` (the gate declines then)
+ * @param options.base - `--base <ref>`, or undefined when none was given
+ * @param options.isArmed - The gate's question, asked after the mint and before the spawn
+ * @returns The open run, or `'disarmed'` with its scope already closed
+ */
+export function startOverlappedChecksPhase(options: {
+  root: string;
+  debug: boolean;
+  base: string | undefined;
+  isArmed: () => boolean;
+}): Promise<OverlappedRun | 'disarmed'> {
+  const request = phaseRequest(options);
+  return startOverlappedSupervision({
+    verb: CHECK_VERB,
+    args: (logPath) => childArgs(options.root, request, logPath),
+    budgetMs: DEFAULT_BUDGET_SECONDS * 1000,
+    format: request.format,
+    isArmed: options.isArmed,
+  });
 }
 
 /**
@@ -1470,16 +1551,21 @@ async function superviseCheckRun(options: {
  * @param options.debug - Whether the orchestrator was run with `--debug`, forwarded to the child
  * @param options.verbose - Whether the orchestrator was run with `--verbose`: the warning and info
  *   rows are reported on stderr too, not only the errors
+ * @param options.base - `--base <ref>`, forwarded to the child; undefined when none was given
+ * @param options.decision - The overlap gate's one decision, already disarmed by the caller: an
+ *   overlapped run's child is read at this turn; a sequential one is spawned here, as it always was
  * @returns The phase's report
  */
-export async function runResourcesCheckPhase(
-  options: { root: string; debug: boolean; verbose: boolean; base: string | undefined },
-): Promise<PhaseOutcome> {
-  const ending = await superviseCheckRun({
-    root: options.root,
-    request: { check: undefined, format: 'json', debug: options.debug, base: options.base, invocation: 'phase' },
-    budgetSecs: DEFAULT_BUDGET_SECONDS,
-  });
+export async function runResourcesCheckPhase(options: {
+  root: string;
+  debug: boolean;
+  verbose: boolean;
+  base: string | undefined;
+  decision: Promise<GateDecision>;
+}): Promise<PhaseOutcome> {
+  const run = { root: options.root, request: phaseRequest(options), budgetSecs: DEFAULT_BUDGET_SECONDS };
+  const decision = await options.decision;
+  const ending = decision.mode === 'overlapped' ? await overlappedCheckRun(decision.run, run) : await superviseCheckRun(run);
   const report = 'forward' in ending ? ending.forward.report : ending.payload;
   // The human half, on this process's stderr: the child's own stdout is the document it forwarded.
   reportFindings(report.findings, { verbose: options.verbose, write: createLogger().error });

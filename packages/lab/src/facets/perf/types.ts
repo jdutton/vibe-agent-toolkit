@@ -74,9 +74,11 @@ export type PerfProcessDump = z.infer<typeof PerfProcessDumpSchema>;
  * The first condition that kept `vat validate` from overlapping its checks child, as
  * the build names it. Only present on a build that writes a debug-facts dump.
  *
- * Mirrors the cli's `GateDecline` exactly (`packages/cli/src/commands/checks-overlap-gate.ts`):
- * a `member` decline carries the member and the route that sends it cold, a `rejected` one the
- * error it failed with, and every other condition nothing else.
+ * Reads the cli's `GateDecline` (`packages/cli/src/commands/checks-overlap-gate.ts`): a `member`
+ * decline carries the member and the route that sends it cold, a `rejected` one the error it failed
+ * with, and every other condition nothing else. The cli's
+ * `test/integration/validate-debug-facts-lab-schema.integration.test.ts` writes every variant, keyed
+ * by the cli's own condition and route types, through the real dump writer and parses it here.
  */
 export const GateDeclinedBySchema = z.discriminatedUnion('condition', [
   z.object({ condition: z.enum(['debug', 'cores', 'not-hit', 'limits', 'disarmed', 'not-settled']) }).strict(),
@@ -95,8 +97,10 @@ export type GateDeclinedBy = z.infer<typeof GateDeclinedBySchema>;
  * row then says the mode is unknown.
  *
  * The writer is the cli's `ValidateDebugFacts` (`packages/cli/src/commands/validate-debug-facts.ts`).
- * Neither package depends on the other; `test/system/validate-debug-facts.system.test.ts` runs the
- * built vat and parses its dumps with this schema, so the two change together or that test fails.
+ * The lab does not depend on the cli; the cli dev-depends on the lab, and its
+ * `test/integration/validate-debug-facts-lab-schema.integration.test.ts` writes every variant
+ * through the real writer and parses it with this schema. The lab's
+ * `test/system/validate-debug-facts.system.test.ts` also parses a built vat's real dumps.
  */
 export const ValidateDebugFactsSchema = z
   .object({

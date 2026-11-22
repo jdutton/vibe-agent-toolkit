@@ -30,6 +30,10 @@
  *   its code runs (`expectOrphanedChildEnding`). A child blocked inside one SQLite statement reads
  *   nothing until it returns: `checks-supervisor-orphan-loop.system.test.ts`.
  *
+ * A Ctrl-C, a SIGTERM, an uncaught throw and a SIGKILL under `vat validate` on a warm store with the
+ * checks child OVERLAPPED (spawned during the resources phase, its stderr held in `stderr.log`):
+ * `validate-checks-overlap-ended.system.test.ts`.
+ *
  * 🚨 Every "the child is gone within N ms" here starts its clock the moment the SUPERVISOR has
  * exited (`startVat().ended`), never after its stderr drains: the child inherits that stderr, so a
  * drain waited for the child, and the bound could not fail. On Windows the check itself IS that

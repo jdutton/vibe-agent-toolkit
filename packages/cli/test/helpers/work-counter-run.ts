@@ -13,6 +13,7 @@ import { expect } from 'vitest';
 
 import { PROJECTION_STORE_ENV, PROJECTION_STORE_OFF } from '../../src/utils/projection-store.js';
 import { executeCli } from '../system/test-common.js';
+import { preload } from '../system/test-helpers/checks-phase.js';
 
 import { probedReads, readProbeEnv } from './fs-read-probe.js';
 
@@ -32,6 +33,12 @@ interface WorkCounterRunOptions {
   readonly storeOff: boolean;
   /** The directory under which the fs-read probe counts reads, or `null` for no probe. */
   readonly probeRoot: string | null;
+  /**
+   * The core count the supervising process reports (`parent-only-cores.mjs`), or `null` for the
+   * host's. `vat validate`'s checks overlap gate reads it: 1 runs the checks child sequential, 2
+   * lets it overlap a warm resources phase. A run whose counts depend on the mode states it.
+   */
+  readonly cores: number | null;
 }
 
 /** One run, read back. */
@@ -63,19 +70,47 @@ export async function runWithWorkCounters(
   const workDir = suite.createTempDir();
   const probeDir = options.probeRoot === null ? null : suite.createTempDir();
   const tmp = options.tmpDir;
+  const probeEnv = probeDir !== null && options.probeRoot !== null ? readProbeEnv(probeDir, options.probeRoot) : {};
+  const coresEnv: Record<string, string> = options.cores === null ? {} : { VAT_TEST_CORES: String(options.cores) };
+  const nodeOptions = [probeEnv['NODE_OPTIONS'], options.cores === null ? undefined : preload('parent-only-cores.mjs')].filter((option) => option !== undefined);
   const result = await executeCli(suite.binPath, [...args], {
     cwd,
     env: {
-      [VAT_CACHE_DIR_ENV]: options.cacheDir,
-      ...(options.storeOff && { [PROJECTION_STORE_ENV]: PROJECTION_STORE_OFF }),
-      [WORK_COUNTERS_ENV]: workDir,
+      ...countedStoreEnv(options, workDir),
       ...(tmp !== null && { TMPDIR: tmp, TEMP: tmp, TMP: tmp }),
-      ...(probeDir !== null && options.probeRoot !== null && readProbeEnv(probeDir, options.probeRoot)),
+      ...probeEnv,
+      ...coresEnv,
+      ...(nodeOptions.length > 0 && { NODE_OPTIONS: nodeOptions.join(' ') }),
     },
   });
-  const dumps = readdirSync(workDir)
-    .map((name) => JSON.parse(readFileSync(safePath.join(workDir, name), 'utf-8')) as WorkCounterDump)
-    .filter((dump) => dump.role === 'cli');
+  const dumps = cliDumps<WorkCounterDump>(workDir);
   if (probeDir !== null) expect(probedReads(probeDir).dumps, `${args.join(' ')}: the read probe ran\n${result.stderr}`).toBeGreaterThan(0);
   return { result, dumps, probeDir };
+}
+
+/**
+ * A counted run's store and counter environment.
+ *
+ * @param store - The run's `VAT_CACHE_DIR`, and whether the projection store is off
+ * @param countsDir - Where the work counters are dumped
+ * @returns The variables
+ */
+export function countedStoreEnv(store: { readonly cacheDir: string; readonly storeOff: boolean }, countsDir: string): Record<string, string> {
+  return {
+    [VAT_CACHE_DIR_ENV]: store.cacheDir,
+    ...(store.storeOff && { [PROJECTION_STORE_ENV]: PROJECTION_STORE_OFF }),
+    [WORK_COUNTERS_ENV]: countsDir,
+  };
+}
+
+/**
+ * The dumps one directory holds, of CLI processes only.
+ *
+ * @param directory - A dump directory
+ * @returns Each dump, parsed
+ */
+export function cliDumps<T extends { readonly role: string }>(directory: string): T[] {
+  return readdirSync(directory)
+    .map((name) => JSON.parse(readFileSync(safePath.join(directory, name), 'utf-8')) as T)
+    .filter((dump) => dump.role === 'cli');
 }
