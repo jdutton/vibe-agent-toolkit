@@ -15,10 +15,9 @@
 - **`vat validate` starts its checks child during the resources phase when the projection store is
   warm and every member is admitted from it;** output matches a sequential run apart from the
   exceptions in `docs/architecture/resource-scanning-and-caching.md` section 3.7b. On a
-  memory-capped runner, budget for roughly the sum of the parent's and the child's peaks. The parent
-  runs one major garbage collection at an overlapped checks turn, where a sequential parent idles
-  and V8 collects on its own, which holds its peak to a sequential run's (figures:
-  `docs/architecture/resource-scanning-and-caching.md` section 3.7b).
+  memory-capped runner, budget for roughly the sum of the parent's and the child's peaks. The
+  overlapped parent's uncapped peak is higher because it never idles for V8 to collect; under a
+  heap cap at the sequential peak it runs in less (figures: section 3.7b).
 - **A new work counter, `parse.cache.written`,** counts parse-cache entries written, in the parent and
   by parse workers.
 - **A new work counter, `checks.gate.rows.read`,** counts the blob tier rows `vat validate`'s checks

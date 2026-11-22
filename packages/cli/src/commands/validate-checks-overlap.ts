@@ -20,8 +20,6 @@
  */
 
 import os from 'node:os';
-import v8 from 'node:v8';
-import vm from 'node:vm';
 
 import { createCollectionMimeResolver, RunPopulation, type ProjectConfig } from '@vibe-agent-toolkit/resources';
 import { readWorkCounters } from '@vibe-agent-toolkit/utils';
@@ -69,22 +67,6 @@ export interface OverlapSeams {
   readonly counters: () => CounterSnapshot;
   /** Write the debug-facts dump (nothing when the seam is off). Never throws. */
   readonly writeFacts: (observed: ChecksPhaseObservation) => void;
-  /** Run one full major garbage collection in this process. */
-  readonly collectGarbage: () => void;
-}
-
-/** V8's collector, obtained once: the `--expose-gc` flag reaches only contexts created after it is set. */
-let majorCollector: (() => void) | undefined;
-
-/** Run one full major garbage collection, without `--expose-gc` on the command line. */
-function collectMajorGarbage(): void {
-  if (majorCollector === undefined) {
-    v8.setFlagsFromString('--expose-gc');
-    const collector: unknown = vm.runInNewContext('gc');
-    if (typeof collector !== 'function') throw new Error('V8 exposed no gc() function under --expose-gc');
-    majorCollector = collector as () => void;
-  }
-  majorCollector();
 }
 
 /**
@@ -105,7 +87,6 @@ export function liveOverlapSeams(request: OverlapRequest, env: NodeJS.ProcessEnv
     writeFacts: (observed) => {
       writeDebugFacts(factsDirectory, observed);
     },
-    collectGarbage: collectMajorGarbage,
   };
 }
 
@@ -170,15 +151,9 @@ export function createValidateChecksOverlap(
       });
       return gate.onHomeSettled;
     },
-    checksTurn: async () => {
+    checksTurn: () => {
       gateOf().disarm();
-      const decision = await gateOf().decision;
-      // A sequential parent idles about 2 s at this turn waiting for its child, and V8 runs a major
-      // collection then; an overlapped parent never idles, so the resources phase's garbage stays
-      // resident and its peak RSS rose. One forced collection here brings it back to the sequential
-      // peak at no measured wall-time cost (figures: resource-scanning-and-caching.md section 3.7b).
-      if (decision.mode === 'overlapped') collectOrForgo(seams);
-      return decision;
+      return gateOf().decision;
     },
     runPhases: async (phases) => {
       try {
@@ -188,26 +163,6 @@ export function createValidateChecksOverlap(
       }
     },
   };
-}
-
-/**
- * Run the overlapped turn's major collection, forgoing it if the collector cannot be had or run.
- *
- * Node documents a V8 flag set after the VM started as undefined behaviour, so obtaining or running
- * the collector may throw. The collection only returns the peak RSS to the sequential figure; the
- * child is healthy and the checks phase does not depend on it, so a failure costs the memory benefit
- * and nothing else. It is dropped without a report because an overlapped run never has `--debug`
- * on (the gate's condition (a)), so the run has no channel a message could reach.
- *
- * @param seams - The collector
- */
-function collectOrForgo(seams: OverlapSeams): void {
-  try {
-    seams.collectGarbage();
-    // eslint-disable-next-line local/no-blind-catch -- any failure only forgoes the memory benefit, and an overlapped run has no --debug channel to report it on (see the doc comment)
-  } catch {
-    // Forgone: see the doc comment above.
-  }
 }
 
 /**

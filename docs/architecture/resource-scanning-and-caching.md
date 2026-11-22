@@ -879,11 +879,16 @@ checks. The same window already existed from the turn onward; it opens earlier.
 - Memory: overlapped, the child's peak can coincide with the parent's resources-phase peak, so the
   combined resident set at one instant can approach the sum of the two per-process peaks. On a
   memory-capped runner that is an out-of-memory risk. Sequentially the child peaks while the parent
-  sits at its post-resources size. The parent's own peak is held to a sequential run's by one forced
-  major collection at an overlapped checks turn: a sequential parent idles about 2 s there waiting
-  for the child and V8 collects then, but an overlapped one never idles, and on the adopter's warm
-  run (Node 24) its peak resident set was 1221-1233 MiB against 883 sequential without the
-  collection and 879-891 MiB with it, at no cost in wall time.
+  sits at its post-resources size. Uncapped, the overlapped parent's own peak resident set is also
+  higher than a sequential one's: a sequential parent idles at the checks turn waiting for its child,
+  and V8 runs a major collection then, but an overlapped parent never idles there. That difference
+  is collection timing, not demand. On the adopter, warm store, overlapped, 5 runs each with
+  `NODE_OPTIONS=--max-old-space-size` set to the sequential base parent's peak (MiB): Node 24,
+  cap 889, parent peak 775-799 MiB against 1221-1234 uncapped and 883-889 for base, wall
+  5.64-6.75 s against 5.64-6.58 uncapped; Node 26, cap 825, parent peak 674-683 MiB against
+  997-1031 uncapped and 823-825 for base, wall 5.57-5.71 s against 5.44-5.65 uncapped. No run ran
+  out of memory, and stdout was byte-identical across capped and uncapped runs once timing fields
+  were removed. Judge the parent's memory under such a cap, not by its uncapped peak.
 - `os.availableParallelism()` honours CPU affinity and a cgroup quota, not CPU shares. A container
   limited by shares alone overlaps on less CPU than it sees. On a 2-core runner the parse pool and
   the child share two cores.
