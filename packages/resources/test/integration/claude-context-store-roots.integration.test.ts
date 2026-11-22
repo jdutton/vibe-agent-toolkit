@@ -42,7 +42,7 @@ import {
 import { ClaudeRulesScopeContributor } from '../../src/projection/contributors/claude-rules-scope.js';
 import { type PopulationCache } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
-import type { ExtentKey, ExtentScopedRows } from '../../src/projection/store.js';
+import type { ExtentKey, ExtentRequest, ExtentScopedRows, ExtentScopedTableName } from '../../src/projection/store.js';
 import { FakeFactStore } from '../fake-fact-store.js';
 import { inOwnRun } from '../helpers/population-run.js';
 import { plantTree, razeTree } from '../helpers/temp-corpus.js';
@@ -85,8 +85,8 @@ class LateStore extends FakeFactStore {
   missNext = false;
   missed = 0;
 
-  override readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
-    if (!this.missNext) return super.readExtent(key);
+  override readExtent<Table extends ExtentScopedTableName>(key: ExtentKey, request: ExtentRequest<Table>): Promise<Pick<ExtentScopedRows, Table> | undefined> {
+    if (!this.missNext) return super.readExtent(key, request);
     this.missNext = false;
     this.missed += 1;
     return Promise.resolve(undefined);

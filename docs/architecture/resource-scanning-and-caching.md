@@ -828,11 +828,12 @@ turn exactly as before:
   rebuild, with the frontmatter value decoded and dropped), read by the same rule `readRoute`
   applies. No member's facts are built or kept, so the gate adds nothing to the parent's live
   memory. The rows its predicates check are counted `checks.gate.rows.read`, summed per member (a
-  content key several members share is counted once for each), and in no other counter. The tier itself is read once per run through the population's shared memo, which
-  admission reads too, so every other work counter is the same overlapped and sequential, with one
+  content key several members share is counted once for each), and in no other counter. The tier
+  itself is read once per run through the population's shared memo, which admission reads too, so
+  every other work counter is the same overlapped and sequential, with one
   exception: the gate asks every member of the home population, admission only the members the
   crawl reaches. When no crawled member routes to a tier read but some home member does, the
-  overlapped run counts one `store.reads.persistent` and that read's `store.rows.decoded.persistent`
+  overlapped run counts one `store.reads.blob` and that read's `store.rows.decoded.persistent`
   that a sequential run does not. That needs a crawl that reaches no keyed member, so it is left
   as is. A member that would be computed turns overlap off.
 
@@ -848,8 +849,8 @@ would derive and write under the store's 5 s busy timeout.
 to `stderr.log` (mode 0600) in the progress directory. One supervision scope (the guard, the
 directory and the file) opens before the progress directory is minted, ahead of the gate's last
 `isArmed` check, and closes after the turn's final read. When that check answers false (the turn
-disarmed the gate during the mint) or throws, the scope closes again and nothing is spawned. The two remedy
-texts that say the child's stderr "was inherited" stay word for word: in both modes the child's
+disarmed the gate during the mint) or throws, the scope closes and nothing is spawned. The two
+remedy texts that say the child's stderr "was inherited" stay word for word: in both modes the child's
 stderr is above the report when the parent writes it. In overlapped mode the 2 s stdout grace after
 the child exits starts at the later of the exit and the turn.
 

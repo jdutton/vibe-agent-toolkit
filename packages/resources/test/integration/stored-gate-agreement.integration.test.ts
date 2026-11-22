@@ -27,12 +27,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ParseCache } from '../../src/parse-cache.js';
 import { ParseDispatcher } from '../../src/parse-dispatcher.js';
 import { reviveParserThrow } from '../../src/parse-limits.js';
-import { parserKindForResolvedPath } from '../../src/parser-kind-for-path.js';
+import { parseRoutingFor, parserKindForResolvedPath } from '../../src/parser-kind-for-path.js';
 import { POPULATION_PARSE_LIMITS, RunContentCache } from '../../src/projection/content-cache.js';
 import type { PopulationCache } from '../../src/projection/merge.js';
-import { createCollectionMimeResolver } from '../../src/projection/realizations.js';
 import { type AdmittedFacts, type HomeSettlement, RunPopulation } from '../../src/projection/run-population.js';
-import type { BlobScopedRows, FactStore } from '../../src/projection/store.js';
+import type { BlobScopedRows, BlobScopedTableName, FactStore } from '../../src/projection/store.js';
 import { storedComputeBy, type StoredContent } from '../../src/projection/stored-admission.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { CollectionConfig, ProjectConfig } from '../../src/schemas/project-config.js';
@@ -160,11 +159,13 @@ async function fileTheStore(collections: Readonly<Record<string, CollectionConfi
 async function bothAnswers(view: FactStore): Promise<{ answers: Answers[]; keys: ReadonlyMap<string, string> }> {
   return inRun(view, undefined, async (population, stored) => {
     if (stored === null) throw new Error('the warm run did not hit');
-    const resolver = createCollectionMimeResolver(undefined);
+    // The gate's routing from the constructor `vat validate`'s `gateOptionsFor` calls (that lives in
+    // the cli, which this package cannot import): `parseRoutingFor`, with no config here.
+    const routing = parseRoutingFor(undefined, population.root);
     const relative = (path: string): string => safePath.relative(root, path);
     const asks: Ask[] = [...stored.members.keys(), safePath.join(root, LATE)].map((path) => ({
       path,
-      parserKind: parserKindForResolvedPath(path, resolver, root),
+      parserKind: parserKindForResolvedPath(path, routing.resolver, routing.baseDir),
     }));
     // A member asked under another parser than the one its key names.
     asks.push({ path: safePath.join(root, 'docs/a.md'), parserKind: 'none' });
@@ -186,17 +187,28 @@ async function bothAnswers(view: FactStore): Promise<{ answers: Answers[]; keys:
   });
 }
 
+/** The blob tables a case damages. */
+const DAMAGEABLE_TABLES = ['blobs', 'blobReferences', 'blobSections'] as const satisfies readonly BlobScopedTableName[];
+type DamageableRows = Pick<BlobScopedRows, (typeof DAMAGEABLE_TABLES)[number]>;
+
 /**
  * The store as `transform` leaves each blob read.
  *
  * @param transform - What happens to the rows a read returns
  * @returns A view over the suite's store
  */
-function viewOf(transform: (rows: BlobScopedRows) => BlobScopedRows): FactStore {
+function viewOf(transform: (rows: DamageableRows) => DamageableRows): FactStore {
   return {
-    readBlobFacts: async (keys) => transform(await store.readBlobFacts(keys)),
+    async readBlobFacts(keys, request) {
+      const rows = await store.readBlobFacts(keys, request);
+      // Every read here is the stored admission's, whose request names every table a case damages.
+      const requested = new Set<string>(request.tables);
+      const missing = DAMAGEABLE_TABLES.find((table) => !requested.has(table));
+      if (missing !== undefined) throw new Error(`the view damages ${missing}, which this read did not request`);
+      return { ...rows, ...transform(rows as unknown as DamageableRows) };
+    },
     writeBlobFacts: (rows) => store.writeBlobFacts(rows),
-    readExtent: (key) => store.readExtent(key),
+    readExtent: (key, request) => store.readExtent(key, request),
     writeExtent: (key, rows) => store.writeExtent(key, rows),
     close: () => store.close(),
   };
@@ -277,8 +289,9 @@ describe('a collection whose mimeType retypes a member', () => {
     const note = safePath.join(root, NOTE);
     const seen = await inRun(store, RETYPED, async (population, stored) => {
       if (stored === null) throw new Error('the warm run did not hit');
-      // The gate's routing, as `vat validate` builds it: a resolver of its own over the config.
-      const gateKind = parserKindForResolvedPath(note, createCollectionMimeResolver(config.resources?.collections), population.root);
+      // The gate's routing, as `vat validate` builds it (`parseRoutingFor`) over the same config.
+      const routing = parseRoutingFor(config, population.root);
+      const gateKind = parserKindForResolvedPath(note, routing.resolver, routing.baseDir);
       const gate = (await storedComputeBy(stored.members.get(note), gateKind, stored.facts)).computeBy === null;
       // Admission's routing: the registry's own resolver over the same config, observed at `admit`.
       const registryKinds: string[] = [];
@@ -295,7 +308,8 @@ describe('a collection whose mimeType retypes a member', () => {
       return { gateKind, registryKinds, gate, admission: !computed };
     });
 
-    expect(parserKindForResolvedPath(note, createCollectionMimeResolver(undefined), root), 'the override changes the kind').toBe('none');
+    const unconfigured = parseRoutingFor(undefined, root);
+    expect(parserKindForResolvedPath(note, unconfigured.resolver, unconfigured.baseDir), 'the override changes the kind').toBe('none');
     expect(seen).toEqual({ gateKind: 'markdown', registryKinds: ['markdown'], gate: true, admission: true });
   });
 });

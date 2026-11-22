@@ -63,7 +63,7 @@ const NO_STORE: SkillTextRun['source'] = { storedDocument: () => Promise.resolve
 
 /** A run over `source` whose dispatcher no parse reaches: it identifies the run. */
 function scanRun(source: SkillTextRun['source']): SkillTextRun {
-  return { source, dispatcher: {} as ParseDispatcher };
+  return { source, dispatcher: {} as ParseDispatcher, crawlOnce: (_key, crawl) => crawl() };
 }
 
 /** A SKILL.md holding {@link SKILL_TEXT} in a fresh directory. */
@@ -120,7 +120,7 @@ describe('readSkillDocument', () => {
 
   it('parses a file the store does not serve, counting it once per run', async () => {
     const path = skillFile();
-    const run: SkillTextRun = { source: EMPTY_STORE, dispatcher: ROUTE.dispatcher as ParseDispatcher };
+    const run: SkillTextRun = { source: EMPTY_STORE, dispatcher: ROUTE.dispatcher as ParseDispatcher, crawlOnce: (_key, crawl) => crawl() };
     const before = misses();
     const first = await readSkillDocument(path, run, 'source');
     await readSkillDocument(path, run, 'source');
@@ -140,7 +140,7 @@ describe('readSkillDocument', () => {
 
   it('counts a file a run with no store parses as noStore once per run, never as a miss', async () => {
     const path = skillFile();
-    const run: SkillTextRun = { source: NO_STORE, dispatcher: ROUTE.dispatcher as ParseDispatcher };
+    const run: SkillTextRun = { source: NO_STORE, dispatcher: ROUTE.dispatcher as ParseDispatcher, crawlOnce: (_key, crawl) => crawl() };
     const [missesBefore, noStoresBefore] = [misses(), noStores()];
     await readSkillDocument(path, run, 'source');
     await readSkillDocument(path, run, 'source');

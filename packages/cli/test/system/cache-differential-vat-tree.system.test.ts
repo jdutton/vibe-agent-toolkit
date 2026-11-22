@@ -32,6 +32,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { CLASSIFIED_RELATIONS } from '../helpers/absence-causes.js';
 import {
+  absenceRowsOf,
   censusOf,
   clonedSubject,
   DUMPED_RELATIONS,
@@ -134,10 +135,15 @@ describe("the projection store answers a slice of VAT's own repository as store-
     const cold = result.measured.cold.query;
     if (storeOff === undefined || cold === undefined) throw new Error('a query did not run');
     expect(storeOff.status).toBe(0);
-    const normalized = (document: Record<string, unknown>): string => JSON.stringify(QUERY.normalize(document));
-    expect(digestOf(normalized(cold.document))).toBe(digestOf(normalized(storeOff.document)));
-    expectSeed(VAT_TREE, result);
+    // Refusals first: a file refused in one arm alone (a parse that met its wall-clock timeMs
+    // across a machine sleep, say) is named here, never left to read as a digest mismatch. A digest
+    // that differs under matching refusals is the arms answering differently.
+    // Each refused blob's condition row carries its key, its code and the limit it met.
+    expect(absenceRowsOf(cold.document).rows.blobConditions, 'the arms refused different blobs').toEqual(absenceRowsOf(storeOff.document).rows.blobConditions);
     const census = censusOf(result);
-    expect(census.cold.query).toEqual(census.storeOff.query);
+    expect(census.cold.query, 'the arms refused different files').toEqual(census.storeOff.query);
+    const normalized = (document: Record<string, unknown>): string => JSON.stringify(QUERY.normalize(document));
+    expect(digestOf(normalized(cold.document)), 'the arms answered differently under the same refusals').toBe(digestOf(normalized(storeOff.document)));
+    expectSeed(VAT_TREE, result);
   });
 });

@@ -44,11 +44,12 @@ import { isPathAbsentError, resolveFromImportMeta, safePath } from '@vibe-agent-
 import type { ReportEnvelope } from '../../envelope/envelope.js';
 import { buildArmEnv } from '../../harness/arm-env.js';
 import { captureDumpReport } from '../../harness/dump-capture.js';
-import { type DumpKind, readDumpFiles, refuseDumps } from '../../harness/dumps.js';
+import { type DumpKind, messageOf, readDumpFiles, refuseDumps } from '../../harness/dumps.js';
 import { nodeOptionsWith, resolvePreloadPath } from '../../harness/preload.js';
 import type { SpecMeasurement } from '../../harness/repeat.js';
 import type { CaptureRequest } from '../../harness/types.js';
 
+import { CPU_PROFILE_DIRECTORY, cpuProfileNodeOptions, keepRepeatProfiles } from './cpu-profiles.js';
 import { foldDebugFacts, foldProcessRepeats } from './process-fold.js';
 import { summarize } from './stats.js';
 import {
@@ -107,6 +108,39 @@ const DEBUG_FACTS_KIND: DumpKind<ValidateDebugFacts> = {
  */
 export interface CapturePerfOptions extends CaptureRequest {
   readonly probePath?: string;
+  /**
+   * Where to keep every vat process's V8 CPU profile, per command and repeat
+   * (`<dir>/<command>/repeat-<n>/`); absent, nothing is profiled. See `cpu-profiles.ts`.
+   */
+  readonly cpuProfileDir?: string;
+}
+
+/**
+ * Keep each repeat's vat profiles under `cpuProfileDir`, or say why they are not one per process.
+ *
+ * @param cpuProfileDir - Where profiles are kept
+ * @param command - The command's name, the first level under it
+ * @param directories - The repeats' dump directories, in repeat order
+ * @param recordsPerRepeat - The probe's records per repeat, which name vat's pids
+ * @returns `null` once every repeat's profiles are kept, or the refusal
+ */
+async function keepProfiles(
+  cpuProfileDir: string,
+  command: string,
+  directories: readonly string[],
+  recordsPerRepeat: readonly (readonly PerfProcessDump[])[],
+): Promise<string | null> {
+  const kept = await Promise.all(
+    directories.map((directory, index) =>
+      keepRepeatProfiles(
+        directory,
+        safePath.join(cpuProfileDir, command, `repeat-${String(index + 1)}`),
+        (recordsPerRepeat[index] ?? []).map((record) => record.pid),
+      ),
+    ),
+  );
+  const refusal = kept.find((result) => typeof result === 'string');
+  return refusal === undefined ? null : `CPU profiles: ${refusal}`;
 }
 
 /**
@@ -126,7 +160,7 @@ async function readOptionalDumps<TDump>(
     entries = await readdir(directory);
   } catch (error) {
     if (isPathAbsentError(error)) return { ok: true, dumps: [] };
-    return refuseDumps(`could not read the ${kind.noun} directory '${directory}': ${error instanceof Error ? error.message : String(error)}`);
+    return refuseDumps(`could not read the ${kind.noun} directory '${directory}': ${messageOf(error)}`);
   }
   if (!entries.some((name) => name.endsWith('.json'))) return { ok: true, dumps: [] };
   return readDumpFiles(directory, kind);
@@ -190,7 +224,11 @@ async function readRepeat(
  * @param directories - The repeats' dump directories, in repeat order
  * @returns The row, marked failed when no usable measurement exists
  */
-async function rowFromDumps(measurement: SpecMeasurement, directories: readonly string[]): Promise<PerfCommandStats> {
+async function rowFromDumps(
+  measurement: SpecMeasurement,
+  directories: readonly string[],
+  cpuProfileDir: string | undefined,
+): Promise<PerfCommandStats> {
   const { spec, args, cache, results, failure } = measurement;
 
   // Any failure poisons the row — `armRunFailure` owns that rule and its wording.
@@ -208,6 +246,10 @@ async function rowFromDumps(measurement: SpecMeasurement, directories: readonly 
   if (typeof processes === 'string') return failedRow(measurement, processes);
   const mode = foldDebugFacts(factsPerRepeat);
   if (typeof mode === 'string') return failedRow(measurement, mode);
+  if (cpuProfileDir !== undefined) {
+    const refusal = await keepProfiles(cpuProfileDir, spec.name, directories, recordsPerRepeat);
+    if (refusal !== null) return failedRow(measurement, refusal);
+  }
 
   const samplesMs = results.map((result) => result.wallMs);
   return {
@@ -250,6 +292,7 @@ export async function capturePerf(options: CapturePerfOptions): Promise<ReportEn
   // From the environment the child would actually get, so an arm's own
   // NODE_OPTIONS survives under the probe.
   const nodeOptions = nodeOptionsWith(probePath, buildArmEnv(process.env, options.env)['NODE_OPTIONS']);
+  const { cpuProfileDir } = options;
 
   return await captureDumpReport(
     PERF_FACET,
@@ -258,8 +301,11 @@ export async function capturePerf(options: CapturePerfOptions): Promise<ReportEn
     (directory) => ({
       [PERF_LOG_DIR_ENV]: directory,
       [DEBUG_FACTS_ENV]: safePath.join(directory, DEBUG_FACTS_DIRECTORY),
-      NODE_OPTIONS: nodeOptions,
+      NODE_OPTIONS:
+        cpuProfileDir === undefined
+          ? nodeOptions
+          : `${nodeOptions} ${cpuProfileNodeOptions(safePath.join(directory, CPU_PROFILE_DIRECTORY))}`,
     }),
-    rowFromDumps,
+    (measurement, directories) => rowFromDumps(measurement, directories, cpuProfileDir),
   );
 }

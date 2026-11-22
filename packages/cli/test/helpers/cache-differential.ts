@@ -227,7 +227,7 @@ function tallyEnvelope(document: Record<string, unknown>, tally: FindingTally): 
  * @param document - A `vat resources query` document over a `(relation, row)` statement
  * @returns The rows and labels
  */
-function absenceRowsOf(document: Record<string, unknown>): ReturnType<typeof absenceRowsOfDump> {
+export function absenceRowsOf(document: Record<string, unknown>): ReturnType<typeof absenceRowsOfDump> {
   const grouped = rowsByRelation(document);
   return absenceRowsOfDump((relation) => grouped.get(relation) ?? []);
 }

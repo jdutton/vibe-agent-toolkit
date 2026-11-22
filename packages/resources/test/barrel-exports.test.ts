@@ -11,6 +11,9 @@ import { describe, expect, it } from 'vitest';
 import { findBarrelDrift } from '../../dev-tools/src/pin-barrel-exports.js';
 
 const BARREL_EXPORTS = [
+  'ADMISSION_BLOB_REQUEST',
+  'ALL_BLOB_REQUEST',
+  'ALL_EXTENT_REQUEST',
   'ARD_CONTEXT_URI',
   'ARD_DEFAULT_NAMESPACES',
   'ARD_IDENTIFIER_PATTERN_SOURCE',
@@ -132,6 +135,7 @@ const BARREL_EXPORTS = [
   'LinkAuthConfigError',
   'LinkNodeTypeSchema',
   'LinkTypeSchema',
+  'MEMBERSHIP_EXTENT_REQUEST',
   'MissingCapabilityError',
   'NO_DECLARED_MIME_TYPES',
   'OKF_FINDING_CODES',
@@ -194,6 +198,7 @@ const BARREL_EXPORTS = [
   'SkillTextFactsSchema',
   'SkillsConfigSchema',
   'StoreQuestionUnavailableError',
+  'StoreRequestUnmetError',
   'TestConfigSchema',
   'TreeRoleSchema',
   'UnknownMacroError',
@@ -315,6 +320,7 @@ const BARREL_EXPORTS = [
   'parseRefusedEntry',
   'parseRefusedEntryFor',
   'parseRefusedMessage',
+  'parseRoutingFor',
   'parserKindForPath',
   'parserKindForResolvedPath',
   'parserKindOf',

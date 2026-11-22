@@ -17,7 +17,7 @@ import { DERIVED_TABLES } from '../src/projection/derived-table-registry.js';
 import { exportProjection } from '../src/projection/export.js';
 import { ProjectionBuilder, type Projection } from '../src/projection/projection.js';
 import { assembleProjection, emptyBlobRows, selectRequestedRows } from '../src/projection/store-hydration.js';
-import { splitProjectionByScope } from '../src/projection/store.js';
+import { ALL_EXTENT_REQUEST, splitProjectionByScope } from '../src/projection/store.js';
 import { PROJECTION_TABLES } from '../src/projection/table-registry.js';
 import type { ClaudeRulePatternRow } from '../src/schemas/projection-claude-rules.js';
 
@@ -213,6 +213,7 @@ describe('claude_rule_patterns hydration', () => {
     // than a cache miss anyone can diagnose.
     const stored = selectRequestedRows(
       splitProjectionByScope(new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() }).build()).extent,
+      ALL_EXTENT_REQUEST,
       { contexts: [], rootId: 'root-none' },
     );
 
@@ -240,6 +241,7 @@ describe('claude_rule_patterns hydration', () => {
 
     const kept = selectRequestedRows(
       splitProjectionByScope(builder.build()).extent,
+      ALL_EXTENT_REQUEST,
       { contexts: ['ctx-kept'], rootId: 'root-none' },
     );
 

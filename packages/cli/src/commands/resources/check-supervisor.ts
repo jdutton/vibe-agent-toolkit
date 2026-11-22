@@ -838,8 +838,12 @@ export function openOverlapSink(logPath: string): OverlapSinkFds {
  * @param sink - From {@link openOverlapSink}
  */
 export function closeOverlapSink(sink: OverlapSinkFds): void {
-  closeSync(sink.writeFd);
-  closeSync(sink.readFd);
+  try {
+    closeSync(sink.writeFd);
+  } finally {
+    // The read fd closes even when the write fd's close throws.
+    closeSync(sink.readFd);
+  }
 }
 
 /**

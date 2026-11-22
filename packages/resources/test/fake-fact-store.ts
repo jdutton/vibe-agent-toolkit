@@ -30,12 +30,17 @@ import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import type {
+  BlobRequest,
   BlobScopedRows,
+  BlobScopedTableName,
   ExtentKey,
+  ExtentRequest,
   ExtentScopedRows,
+  ExtentScopedTableName,
   FactStore,
 } from '../src/projection/store.js';
 import { PROJECTION_TABLES } from '../src/projection/table-registry.js';
+import type { ReferenceSyntacticForm } from '../src/schemas/projection-blobs.js';
 
 import { inOwnRun } from './helpers/population-run.js';
 
@@ -231,20 +236,31 @@ export class FakeFactStore implements FactStore {
    * deciding what an incomplete answer means is `blobFactsCover`'s job, not a
    * backend's.
    *
+   * Honours the request as a real backend does: only the requested tables,
+   * and of `blobReferences` only the requested forms.
+   *
    * @param contentKeys - The keys to look up
-   * @returns The rows held for them
+   * @param request - Which tables and reference forms to read
+   * @returns The rows held for them, in the requested tables
    */
-  readBlobFacts(contentKeys: readonly string[]): Promise<BlobScopedRows> {
+  readBlobFacts<Table extends BlobScopedTableName>(
+    contentKeys: readonly string[],
+    request: BlobRequest<Table>,
+  ): Promise<Pick<BlobScopedRows, Table>> {
     this.readBlobFactsCalls++;
-    const merged = emptyBlobBundle();
+    const forms = request.referenceForms;
+    const kept = (table: string, row: unknown): boolean =>
+      table !== 'blobReferences' || forms === 'all' || forms.has((row as { syntacticForm: ReferenceSyntacticForm }).syntacticForm);
+    const merged: Record<string, unknown[]> = {};
+    for (const table of request.tables) merged[table] = [];
     for (const key of contentKeys) {
       const held = this.#blobs.get(key);
       if (held === undefined) continue;
-      for (const table of BLOB_TABLES) {
-        merged[table] = [...(merged[table] ?? []), ...(held[table] ?? [])];
+      for (const table of request.tables) {
+        merged[table] = [...(merged[table] ?? []), ...(held[table] ?? []).filter((row) => kept(table, row))];
       }
     }
-    return Promise.resolve(merged as unknown as BlobScopedRows);
+    return Promise.resolve(merged as unknown as Pick<BlobScopedRows, Table>);
   }
 
   /**
@@ -273,14 +289,22 @@ export class FakeFactStore implements FactStore {
   }
 
   /**
-   * Read back everything stored under one tree.
+   * Read back the requested tables stored under one tree, honouring the
+   * request as a real backend does: a table not requested is absent.
    *
    * @param key - Which root, which tree
-   * @returns The eight tables, or `undefined` when this tree was never written
+   * @param request - Which tables to read
+   * @returns The requested tables, or `undefined` when this tree was never written
    */
-  readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
+  readExtent<Table extends ExtentScopedTableName>(
+    key: ExtentKey,
+    request: ExtentRequest<Table>,
+  ): Promise<Pick<ExtentScopedRows, Table> | undefined> {
     this.readExtentCalls++;
-    return Promise.resolve(this.#extents.get(extentKeyOf(key)));
+    const held = this.#extents.get(extentKeyOf(key));
+    if (held === undefined) return Promise.resolve(undefined);
+    const picked = Object.fromEntries(request.tables.map((table) => [table, held[table]]));
+    return Promise.resolve(picked as unknown as Pick<ExtentScopedRows, Table>);
   }
 
   /** Release nothing. */
@@ -296,8 +320,11 @@ export class FailingBlobStore extends FakeFactStore {
   /** What the tier rejects with: a filesystem errno, which no lane may file as a file's. */
   readonly failure: Error = Object.assign(new Error('ENOENT: no such file or directory, open \'/store/blobs\''), { code: 'ENOENT', errno: -2, syscall: 'open', path: '/store/blobs' });
 
-  override readBlobFacts(contentKeys: readonly string[]): Promise<BlobScopedRows> {
-    if (!this.failBlobs) return super.readBlobFacts(contentKeys);
+  override readBlobFacts<Table extends BlobScopedTableName>(
+    contentKeys: readonly string[],
+    request: BlobRequest<Table>,
+  ): Promise<Pick<BlobScopedRows, Table>> {
+    if (!this.failBlobs) return super.readBlobFacts(contentKeys, request);
     return Promise.reject(this.failure);
   }
 }

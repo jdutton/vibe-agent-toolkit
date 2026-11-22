@@ -36,13 +36,18 @@
  * {@link forbidWorkCounting}.
  */
 
+import { toForwardSlash } from './path-core.js';
 import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from './timing-dump.js';
 
 /**
  * Every work counter, in dump order. Closed: a new counter is a new entry here,
  * and the lab's schema follows from this tuple.
  *
- * `store.*` counts the file-backed fact store a warm run reads and writes;
+ * `store.*` counts the file-backed fact store a warm run reads and writes:
+ * `store.reads.extent` one per `FactStore.readExtent` (a miss included, since
+ * the manifest was read), `store.reads.blob` one per `FactStore.readBlobFacts`
+ * that asked for at least one key, and `store.rows.decoded.persistent` the rows
+ * either decoded;
  * `hydration.*` counts loading the per-run run database a query's SQL runs on,
  * which I10 does not bound: one write per hydration that wrote a relation, and
  * the rows of the relations the run's statements name. `statement.explained`
@@ -58,45 +63,37 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * `parse.refused.inputCap.read` instead. `registry.built` counts every resource
  * registry constructed, and `registry.admitted` every resource a registry admitted
  * from disk (a crawl or `addResource`), never one handed to `fromResources`.
- * `fs.stat` counts the per-member stats on the admission path: the population's
- * `lstat` (and, for a link, its followed `stat`) of each member, and the
- * registry's stat of each file it prepares.
+ * The `fs.*` counters count syscalls on the admission path, each at its call,
+ * and only there: `fs.stat` counts the registry's `stat` of each file it
+ * prepares, a realization's followed `stat` of a link, and the warm
+ * admission's readability probe (an open and a close, counted as the stat it
+ * stands in for); `fs.lstat` counts a realization's own `lstat` of its path,
+ * and every `lstat` the link-chain walk (`hostPlaceKind`) makes: per path, the
+ * components walked below the root plus one per link hop followed. A direct
+ * `stat` or `lstat` elsewhere is not counted. The one member read neither
+ * sees is the skills lane's `readFileSync` of a file it scans
+ * (`skill-text-lane.ts`), whose own `fstat` happens inside Node, uncounted.
  * Together they let a test pin rule 4 of "Decision: content identity is per
  * source" (docs/architecture/content-keying-and-git.md): one read, one key and
  * one admission per file per run.
  *
- * `skillText.storeMiss` counts each (run, file) the skills lane scanned from
- * its text instead of reading the file's stored skill-text facts, in a run that
- * has a store to ask (`ResourcePopulationSource.holdsStore`): one per file per
- * run for which the run's population source answered no document
- * (`ResourcePopulationSource.storedDocument`), however many skills reach it. On
- * a cold run it equals the files the lane scanned; on a warm run it is the
- * per-file fallback, every one of which is a file the store does not cover.
+ * `skillText.*` counts the skills lane's scans, once per (run, file) however many skills reach
+ * the file. `storeMiss`: scanned from its text in a run with a store
+ * (`ResourcePopulationSource.holdsStore`) because the source answered no stored document; cold, the
+ * files scanned, warm, the files the store does not cover. `noStore`: scanned because the run has
+ * no store (`vat audit`, the store off, or no run); never beside `storeMiss`. `storeUnopened`: once
+ * per run at most, when the stored-document questions met a failure opening the store or building
+ * the home population (a read-only cache, the store's lock held, git giving no answer); every scan
+ * then is a `storeMiss`. `outsideRoot`: a question about a file outside the run's root, answered
+ * nothing without opening the store, and also a `storeMiss` (or `noStore`) when scanned.
  *
- * `skillText.noStore` counts each (run, file) the skills lane scanned from its
- * text because the run has no store to ask: a verb that declares none
- * (`vat audit`), the store switched off, or a lane given no run. Counted once
- * per file per run, as `skillText.storeMiss` is, and never beside it: a run
- * counts its scans under one or the other.
- *
- * `skillText.storeUnopened` counts each run whose stored-document questions
- * opened the store or built the home population and met a failure there (a
- * read-only cache directory, another process holding the store's lock, git
- * giving no answer for the root): the question
- * is optional, so the failure answers every question with nothing, and each
- * file the lane then scans is a `skillText.storeMiss`. One per run at most.
- *
- * `skillText.outsideRoot` counts each (run, file) a stored-document question
- * asked about a file outside the run's root, answered nothing without opening
- * the store: no member of the run's home population can be there. Each is also
- * a `skillText.storeMiss` when the lane scans it (a `skillText.noStore` in a
- * run with no store). `checks.gate.rows.read` counts the tier rows the checks overlap gate's
- * predicates read, summed per member: a content key several members share is counted once per
- * member (resource-scanning-and-caching.md 3.7b).
+ * `checks.gate.rows.read` counts the tier rows the admission request reads for the checks overlap
+ * gate, summed per member (resource-scanning-and-caching.md 3.7b).
  */
 export const WORK_COUNTER_NAMES = [
   'store.rows.decoded.persistent',
-  'store.reads.persistent',
+  'store.reads.extent',
+  'store.reads.blob',
   'store.writes.persistent',
   'store.rows.written.persistent',
   'hydration.writes',
@@ -117,6 +114,7 @@ export const WORK_COUNTER_NAMES = [
   'content.hashedBytes',
   'content.read',
   'fs.stat',
+  'fs.lstat',
   'registry.built',
   'registry.admitted',
   'skillText.storeMiss',
@@ -160,8 +158,49 @@ export interface WorkCounterDump {
 /** The variable naming the directory a process writes its dump to. Counting does not depend on it. */
 export const WORK_COUNTERS_ENV = 'VAT_WORK_COUNTERS';
 
+/**
+ * The variable naming the directory a process writes its git spawn log to: every git process the
+ * process started, in order, with its arguments, working directory and phase. Counting `git.calls`
+ * does not depend on it, as counting does not depend on {@link WORK_COUNTERS_ENV}; recording each
+ * spawn's details does, so a process with no log holds none.
+ */
+export const GIT_SPAWNS_ENV = 'VAT_GIT_SPAWNS';
+
+/**
+ * One git process a VAT process started, counted as one `git.calls` ({@link countGitSpawn}).
+ *
+ * - `runGit`: one `git <args>` (`runGit`, `runGitBytes`), run in `cwd`.
+ * - `snapshot`: one `getGitTreeSnapshot` from `@vibe-validate/git`, which starts several git
+ *   processes of its own (`rev-parse`, `add --all` into a temporary index, `ls-files -s`,
+ *   `write-tree`); `args` is empty, because they are not VAT's to name.
+ */
+export interface GitSpawn {
+  readonly via: 'runGit' | 'snapshot';
+  readonly args: readonly string[];
+  /** Where it ran; the log records it forward-slashed ({@link toForwardSlash}). */
+  readonly cwd: string;
+}
+
+/** A {@link GitSpawn} as the log records it: with the phase it ran in, `null` outside every phase. */
+export interface LoggedGitSpawn extends GitSpawn {
+  readonly phase: string | null;
+}
+
+/** One process's git spawn log, as {@link GIT_SPAWNS_ENV} files it. */
+export interface GitSpawnDump {
+  readonly pid: number;
+  readonly role: WorkCounterRole;
+  readonly spawns: readonly LoggedGitSpawn[];
+}
+
 /** What the seam is called in a failure line. */
 const DUMP_NOUN = 'work-counter';
+
+/** What the git spawn log is called in a failure line. */
+const SPAWN_DUMP_NOUN = 'git-spawn';
+
+/** Basename stem of a git spawn log; the pid and any collision counter follow it. */
+const SPAWN_DUMP_BASENAME = 'git-spawns';
 
 /** Basename stem of a dump; the pid and any collision counter follow it. */
 const DUMP_BASENAME = 'work-counters';
@@ -178,6 +217,18 @@ const phaseCounts = new Map<string, Float64Array>();
 /** The phase counting now, if any ({@link withWorkPhase}). */
 let currentPhase: Float64Array | null = null;
 
+/** The name of {@link currentPhase}, for the git spawn log. */
+let currentPhaseName: string | null = null;
+
+/**
+ * Every git process this thread started, in order ({@link countGitSpawn}), while
+ * {@link spawnLogInstalled}: a process with no log holds no details, so nothing grows for its life.
+ */
+const gitSpawns: LoggedGitSpawn[] = [];
+
+/** Whether {@link installWorkCounterDump} installed the git spawn log ({@link GIT_SPAWNS_ENV} set). */
+let spawnLogInstalled = false;
+
 /** Set by {@link forbidWorkCounting}: this thread's work is counted by another. */
 let forbidden = false;
 
@@ -193,19 +244,45 @@ let throwOnForbidden = false;
 /** Whether {@link installWorkCounterDump} has been called with the dump on. */
 let dumpInstalled = false;
 
-/** The exit write {@link installWorkCounterDump} registered, so a test reset can take it back. */
-let dumpListener: (() => void) | null = null;
+/** The exit writes {@link installWorkCounterDump} registered, so a test reset can take them back. */
+const dumpListeners: Array<() => void> = [];
 
 /**
  * Count `n` units of work against one counter.
  *
- * @param counter - Which counter
+ * @param counter - Which counter; never `git.calls`, which only {@link countGitSpawn} counts
  * @param n - How many: a non-negative integer, never defaulted
- * @throws RangeError for a name outside {@link WORK_COUNTER_NAMES} or an `n`
- *   that is not a count; Error for a count on a thread that forbids counting
- *   with the `throw` policy
+ * @throws RangeError for a name outside {@link WORK_COUNTER_NAMES}, for
+ *   `git.calls` (an untyped caller), or for an `n` that is not a count; Error for
+ *   a count on a thread that forbids counting with the `throw` policy
  */
-export function countWork(counter: WorkCounter, n: number): void {
+export function countWork(counter: Exclude<WorkCounter, 'git.calls'>, n: number): void {
+  if ((counter as WorkCounter) === 'git.calls') throw new RangeError("'git.calls' is counted by countGitSpawn, which names the spawn");
+  add(counter, n);
+}
+
+/**
+ * Count one git process (`git.calls`) and, when the spawn log is installed ({@link GIT_SPAWNS_ENV}),
+ * log it: what it ran, where, and in which phase. The one way `git.calls` is counted, so every
+ * counted spawn is one a log could name.
+ *
+ * @param spawn - The process, every field stated
+ * @throws As {@link countWork} does
+ */
+export function countGitSpawn(spawn: GitSpawn): void {
+  add('git.calls', 1);
+  // Every logged directory forward-slashed here, whichever site spelled it (a caller's, or
+  // `runGit`'s `process.cwd()` fallback, native on Windows).
+  if (!forbidden && spawnLogInstalled) gitSpawns.push({ via: spawn.via, args: [...spawn.args], cwd: toForwardSlash(spawn.cwd), phase: currentPhaseName });
+}
+
+/**
+ * The body of {@link countWork}, for any counter.
+ *
+ * @param counter - Which counter
+ * @param n - How many
+ */
+function add(counter: WorkCounter, n: number): void {
   const slot = SLOT.get(counter);
   if (slot === undefined) throw new RangeError(`'${String(counter)}' is not a work counter`);
   if (!Number.isInteger(n) || n < 0) {
@@ -243,11 +320,14 @@ export async function withWorkPhase<T>(phase: string, work: () => Promise<T>): P
     phaseCounts.set(phase, slots);
   }
   const outer = currentPhase;
+  const outerName = currentPhaseName;
   currentPhase = slots;
+  currentPhaseName = phase;
   try {
     return await work();
   } finally {
     currentPhase = outer;
+    currentPhaseName = outerName;
   }
 }
 
@@ -325,18 +405,45 @@ function buildDump(role: WorkCounterRole): WorkCounterDump {
  *   exit writes would file the same counts twice
  */
 export function installWorkCounterDump(role: WorkCounterRole): void {
-  const directory = normalizeTimingDirectory(process.env[WORK_COUNTERS_ENV]);
-  if (directory === null) return;
+  const counts = normalizeTimingDirectory(process.env[WORK_COUNTERS_ENV]);
+  const spawns = normalizeTimingDirectory(process.env[GIT_SPAWNS_ENV]);
+  if (counts === null && spawns === null) return;
   if (dumpInstalled) throw new Error('installWorkCounterDump was called twice in one process');
   dumpInstalled = true;
+  if (counts !== null) onExitWrite(DUMP_NOUN, counts, DUMP_BASENAME, () => buildDump(role));
+  if (spawns !== null) {
+    spawnLogInstalled = true;
+    onExitWrite(SPAWN_DUMP_NOUN, spawns, SPAWN_DUMP_BASENAME, (): GitSpawnDump => ({ pid: process.pid, role, spawns: readGitSpawns() }));
+  }
+}
+
+/**
+ * Register one dump's exit write.
+ *
+ * @param noun - What the dump is called in a failure line
+ * @param directory - Where it goes
+ * @param basename - Its basename stem
+ * @param body - Its body, built at exit
+ */
+function onExitWrite(noun: string, directory: string, basename: string, body: () => object): void {
   // A directory that could not be made is reported here, once; an exit write
   // into it would only report the same failure again.
-  const made = ensureTimingDirectory(DUMP_NOUN, directory);
+  const made = ensureTimingDirectory(noun, directory);
   if (made === null) return;
-  dumpListener = (): void => {
-    writeTimingDump(DUMP_NOUN, made, DUMP_BASENAME, () => buildDump(role));
+  const listener = (): void => {
+    writeTimingDump(noun, made, basename, body);
   };
-  process.on('exit', dumpListener);
+  dumpListeners.push(listener);
+  process.on('exit', listener);
+}
+
+/**
+ * This thread's git spawn log ({@link countGitSpawn}).
+ *
+ * @returns A snapshot; later spawns do not change it
+ */
+export function readGitSpawns(): readonly LoggedGitSpawn[] {
+  return [...gitSpawns];
 }
 
 /**
@@ -347,13 +454,16 @@ export function __resetWorkCountersForTest(): void {
   counts.fill(0);
   phaseCounts.clear();
   currentPhase = null;
+  currentPhaseName = null;
+  gitSpawns.length = 0;
+  spawnLogInstalled = false;
   forbidden = false;
   forbiddenPolicy = 'report';
   reportedForbidden = false;
   throwOnForbidden = false;
   dumpInstalled = false;
-  if (dumpListener !== null) process.off('exit', dumpListener);
-  dumpListener = null;
+  for (const listener of dumpListeners) process.off('exit', listener);
+  dumpListeners.length = 0;
 }
 
 /**

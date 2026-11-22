@@ -64,7 +64,7 @@ export function tierOf(outcomes: Readonly<Record<string, BlobFactsOutcome>>): {
   return tier;
 }
 
-export const FACTS: BlobFactsOutcome = { kind: 'facts', facts: { links: [], headings: [] } as unknown as Extract<BlobFactsOutcome, { kind: 'facts' }>['facts'] };
+export const FACTS: BlobFactsOutcome = { kind: 'facts', facts: { links: [], headings: [] } as unknown as Extract<BlobFactsOutcome, { kind: 'facts' }>['facts'], decoding: null };
 
 export function hit(members: Record<string, Realization>, facts: StoredContent['facts']): HomeSettlement {
   const enumeration: ResourceEnumeration = {

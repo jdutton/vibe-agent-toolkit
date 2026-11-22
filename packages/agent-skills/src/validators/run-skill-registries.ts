@@ -73,6 +73,11 @@ export interface RunSkillRegistriesOptions {
   readonly includeFor: (root: string) => readonly string[];
   /** The config governing a root: decides collection membership and a declared `mimeType`'s parser. */
   readonly configFor: (root: string) => Promise<ProjectConfig | undefined>;
+  /**
+   * The run's one skill discovery crawl per key (`RunPopulation.crawlOnce`): every registries
+   * object over the run hands its crawls here, so one run holds one memo.
+   */
+  readonly crawlOnce: (key: string, crawl: () => Promise<readonly string[]>) => Promise<readonly string[]>;
 }
 
 /**
@@ -105,6 +110,18 @@ export class RunSkillRegistries {
     this.registry = options.registry;
     this.source = options.source;
     this.dispatcher = options.dispatcher;
+  }
+
+  /**
+   * One skill discovery crawl per key per run, its rejection included (see `SkillTextRun.crawlOnce`):
+   * the run's, {@link RunSkillRegistriesOptions.crawlOnce}.
+   *
+   * @param key - The crawl's identity
+   * @param crawl - The crawl
+   * @returns The run's one result for `key`
+   */
+  crawlOnce(key: string, crawl: () => Promise<readonly string[]>): Promise<readonly string[]> {
+    return this.#options.crawlOnce(key, crawl);
   }
 
   /**
@@ -267,6 +284,7 @@ export function withSkillRegistries<T>(root: string, work: (registries: RunSkill
       dispatcher: population.dispatcher,
       includeFor: () => REGISTRY_INCLUDE,
       configFor: projectConfigOrNone,
+      crawlOnce: (key, crawl) => population.crawlOnce(key, crawl),
     })),
   );
 }

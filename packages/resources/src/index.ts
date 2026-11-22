@@ -378,9 +378,13 @@ export {
 // about blobs, the extent of a tree — so each backend owns its physical
 // strategy instead of inheriting another's.
 export {
+  ALL_BLOB_REQUEST,
+  ALL_EXTENT_REQUEST,
+  type BlobRequest,
   type BlobScopedRows,
   type BlobScopedTableName,
   type ExtentKey,
+  type ExtentRequest,
   type ExtentScopedRows,
   type ExtentScopedTableName,
   type FactStore,
@@ -401,6 +405,7 @@ export {
   keyedContentKeys,
   selectRequestedContexts,
   selectRequestedRows,
+  StoreRequestUnmetError,
   type RequestedContributor,
   uncoveredContentKeys,
 } from './projection/store-hydration.js';
@@ -473,7 +478,7 @@ export {
 export type { DocumentParserKind } from './mime-type.js';
 // The run's one parse routing: the parser kind a path goes to through the run's collection MIME
 // resolver, so a declared `mimeType` overrides the extension table (parser-kind-for-path.ts).
-export { parserKindForResolvedPath } from './parser-kind-for-path.js';
+export { parseRoutingFor, parserKindForResolvedPath, type ParseRouting } from './parser-kind-for-path.js';
 
 // Parse cache: the disk-backed store `ResourceRegistry` files parse facts in,
 // and where it puts them. Exported for two callers only — an operator surface
@@ -1009,6 +1014,7 @@ export {
   CONTENT_PARSING_SKIP,
   ClosureNonConvergenceError,
   describeStoreMiss,
+  MEMBERSHIP_EXTENT_REQUEST,
   POPULATION_ORIGINS,
   populate,
   populationOracles,
@@ -1102,10 +1108,12 @@ export {
   type BlobPopulationResult,
 } from './projection/blob-population.js';
 
-// A warm run's blob tier read failing is the store's refusal, by this code (the CLI's refusal table).
+// A warm run's blob tier read failing is the store's refusal, by this code (the CLI's refusal table);
+// and what the stored admission reads of the tier, which the CLI's in-process cost arms damage table by table.
 // `hydratesUnder` and `storedComputeBy` are warm admission's own predicates, exported so `vat
 // validate`'s checks overlap gate judges "admitted from the store" by them, never by a copy.
 export {
+  ADMISSION_BLOB_REQUEST,
   PROJECTION_STORE_READ_FAILED_CODE,
   hydratesUnder,
   storedComputeBy,

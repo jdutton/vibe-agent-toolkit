@@ -41,7 +41,10 @@ import { captureArms, type ExpectedExit, expectedExitRefusal, renderArmsReport, 
 import { type Bar, judgeBars, parseBar, renderBars } from '../facets/perf/bars.js';
 import { capturePerf } from '../facets/perf/capture.js';
 import { comparePerf } from '../facets/perf/compare.js';
+import { VALIDATE_PHASE_BUCKETS } from '../facets/perf/profile-buckets.js';
+import { attributeReport, renderAttributions } from '../facets/perf/profile-report.js';
 import { renderPerfComparison, renderPerfReport } from '../facets/perf/render.js';
+import { PERF_FACET, PerfBodySchema } from '../facets/perf/types.js';
 import { capturePopulation } from '../facets/population/capture.js';
 import { comparePopulation } from '../facets/population/compare.js';
 import {
@@ -114,7 +117,7 @@ import { npmInstall, type NpxInstallSite, npxInstallSite } from '../harness/npx-
 import { instrumentLabel, instrumentTrustNotes } from '../harness/render.js';
 import type { SequenceStep } from '../harness/sequence.js';
 import { resolveSubject } from '../harness/subject.js';
-import type { CacheMode, InstrumentSource, ResolvedInstrument } from '../harness/types.js';
+import type { CacheMode, CaptureRequest, InstrumentSource, ResolvedInstrument } from '../harness/types.js';
 import { readReport, writeReport } from '../store.js';
 
 /*
@@ -465,6 +468,8 @@ interface RunOptions {
   readonly env?: ArmEnvironment['set'];
   /** Variables removed from every child; absent unless `--unset` was given. */
   readonly unset?: readonly string[];
+  /** Where to keep CPU profiles; absent unless `--cpu-prof-dir` was given (only a profiling facet declares it). */
+  readonly cpuProfDir?: string;
 }
 
 /**
@@ -523,6 +528,12 @@ interface FacetWiring<TBody, TComparison extends ComparisonLike>
   readonly defaultCommands?: readonly MeasuredCommandSpec[];
   readonly renderReport: (report: ReportEnvelope<TBody>) => string;
   readonly renderComparison: (comparison: TComparison) => string;
+  /**
+   * The capture that also keeps every vat process's CPU profile under a
+   * directory. Present only for a facet that can profile (`perf`); its `run`
+   * then declares `--cpu-prof-dir`, and a facet without it never sees the flag.
+   */
+  readonly profilingCapture?: (request: CaptureRequest, cpuProfileDir: string) => Promise<ReportEnvelope<TBody>>;
 }
 
 /** Options Commander collects for a facet's `ab`. */
@@ -890,6 +901,29 @@ export function assertRunsFloor(wiring: Pick<FacetWiring<unknown, ComparisonLike
   }
 }
 
+/** `perf run`'s profile flag; declared only by a facet with a {@link FacetWiring.profilingCapture}. */
+const CPU_PROF_DIR_OPTION = '--cpu-prof-dir <dir>';
+
+/**
+ * The capture a `run` makes: the facet's own, or, under `--cpu-prof-dir`, its
+ * profiling capture into that directory, opened like `--out`.
+ *
+ * @param wiring - The facet
+ * @param cpuProfDir - `--cpu-prof-dir`, absolute, when given
+ * @param subject - The measured tree, which the directory must not be
+ * @returns The capture to run
+ */
+function runCaptureFor<TBody, TComparison extends ComparisonLike>(
+  wiring: FacetWiring<TBody, TComparison>,
+  cpuProfDir: string | undefined,
+  subject: string,
+): (request: CaptureRequest) => Promise<ReportEnvelope<TBody>> {
+  const { profilingCapture } = wiring;
+  if (cpuProfDir === undefined || profilingCapture === undefined) return wiring.capture;
+  const directory = openOutDirectory(cpuProfDir, [subject]);
+  return (request) => profilingCapture(request, directory);
+}
+
 /**
  * Build one facet's `run`, `compare` and `ab` subcommands.
  *
@@ -902,7 +936,7 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
   assertRunsFloor(wiring);
   const group = new Command(wiring.name).description(wiring.summary);
 
-  group
+  const run = group
     .command('run')
     .argument('<subject>', 'Path to the project to measure')
     .requiredOption(
@@ -945,7 +979,15 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
     .option(
       '--id <name>',
       'Subject id recorded in the report (default: the <subject> argument exactly as given)',
-    )
+    );
+  if (wiring.profilingCapture !== undefined) {
+    run.option(
+      CPU_PROF_DIR_OPTION,
+      "Also keep every vat process's V8 CPU profile, as <dir>/<command>/repeat-<n>/*.cpuprofile; the sampler inflates the wall",
+      resolvedOut,
+    );
+  }
+  run
     .description(wiring.runSummary)
     .action((subjectPath: string, options: RunOptions) =>
       refusingArmErrors(async () => {
@@ -955,9 +997,10 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
         const prepared = await prepareInstrument(options.instrument);
         const subject = await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath });
         const out = openOutDirectory(options.out, [subject.path]);
+        const capture = runCaptureFor(wiring, options.cpuProfDir, subject.path);
         await withArmsRoot(options, [subject.path], async ({ path: root }) => {
           const instrument = await resolveInstrument(prepared, npxInstallSite(root, npmInstall));
-          const report = await wiring.capture({
+          const report = await capture({
             instrument,
             subject,
             // No `--command` means the facet's default set, unchanged — the flag
@@ -1583,6 +1626,37 @@ function createPerfBarsCommand(): Command {
     });
 }
 
+/**
+ * Attribute a `perf run --cpu-prof-dir` report's profiles to cost buckets, per surface.
+ *
+ * @param reportPath - The perf report
+ * @param options - `--profiles`, the directory it was captured with, and `--json`, a file for the figures
+ */
+async function runPerfAttribute(reportPath: string, options: { readonly profiles: string; readonly json?: string }): Promise<void> {
+  const read = await readReport(safePath.resolve(reportPath));
+  if (!read.ok) return refuse(read.refusal);
+  const body = PerfBodySchema.safeParse(read.envelope.body);
+  if (read.envelope.facet !== PERF_FACET || !body.success) return refuse(`REFUSED: '${reportPath}' is not a perf report.`);
+  const attributions = await attributeReport(body.data, options.profiles, VALIDATE_PHASE_BUCKETS);
+  if (typeof attributions === 'string') return refuse(`REFUSED: ${attributions}`);
+  if (options.json !== undefined) writePrivateFile(options.json, `${JSON.stringify(attributions, null, 2)}\n`);
+  process.stdout.write(`${renderAttributions(attributions)}\n`);
+}
+
+/**
+ * Build `perf attribute`.
+ *
+ * @returns The configured command
+ */
+function createPerfAttributeCommand(): Command {
+  return new Command('attribute')
+    .argument('<report>', 'A perf report captured with --cpu-prof-dir')
+    .requiredOption('--profiles <dir>', 'The --cpu-prof-dir it was captured with', resolvedOut)
+    .option('--json <file>', 'Also write the figures as JSON', resolvedOut)
+    .description('Attribute each surface of a profiled perf report to cost buckets, median over repeats')
+    .action((reportPath: string, options: { readonly profiles: string; readonly json?: string }) => runPerfAttribute(reportPath, options));
+}
+
 /** Options Commander collects for `verdict run`. */
 interface VerdictRunOptions {
   readonly subjects: string;
@@ -1893,6 +1967,7 @@ export function createProgram(): Command {
         minRuns: 1,
         defaultCache: 'warm',
         capture: capturePerf,
+        profilingCapture: (request, cpuProfileDir) => capturePerf({ ...request, cpuProfileDir }),
         compare: comparePerf,
         renderReport: renderPerfReport,
         renderComparison: renderPerfComparison,
@@ -1903,7 +1978,8 @@ export function createProgram(): Command {
         estimate: (report) => rowEstimates(report.body.commands, 'ms', (row) => row.minMs, FAILURE_IS_THE_REASON, NO_WARRANT_NEEDED),
       })
         .addCommand(createPerfArmsCommand())
-        .addCommand(createPerfBarsCommand()),
+        .addCommand(createPerfBarsCommand())
+        .addCommand(createPerfAttributeCommand()),
     )
     .addCommand(
       createFacetCommand({

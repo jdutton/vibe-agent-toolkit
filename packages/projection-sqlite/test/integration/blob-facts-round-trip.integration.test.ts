@@ -30,6 +30,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 
 import { openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import {
+  ALL_BLOB_REQUEST,
   BLOB_FACT_FIELDS,
   blobFactsReader,
   buildResourceProjection,
@@ -270,7 +271,7 @@ beforeAll(async () => {
   // A second connection, so every fact comes back through SQLite rather than a handle's memory.
   const reader: FactStore = openSqliteFactStore({ directory: storeDirectory });
   try {
-    const stored = await reader.readBlobFacts([...new Set(keyOf.values())]);
+    const stored = await reader.readBlobFacts([...new Set(keyOf.values())], ALL_BLOB_REQUEST);
     const facts = blobFactsReader(stored);
     const keyAt = (relativePath: string): string => {
       const key = keyOf.get(relativePath);

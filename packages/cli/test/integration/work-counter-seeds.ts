@@ -20,14 +20,17 @@ import { writeFileSync } from 'node:fs';
 import { readSkillDocument, type SkillTextRun } from '@vibe-agent-toolkit/agent-skills';
 import { hydrateRunDatabase, openSqliteFactStore, type RunDatabase } from '@vibe-agent-toolkit/projection-sqlite';
 import {
+  ALL_BLOB_REQUEST,
+  ALL_EXTENT_REQUEST,
   blobFactsReader,
   type BlobScopedRows,
   computeContentKey,
-  createCollectionMimeResolver,
   type ExtentScopedRows,
   ParseCache,
+  markVatCacheRoot,
   ParseDispatcher,
   parseContentCached,
+  parseRoutingFor,
   type ParsePoolPolicy,
   PROJECTION_TABLES,
   type Projection,
@@ -37,7 +40,7 @@ import {
   VAT_CACHE_DIR_ENV,
   withRunPopulation,
 } from '@vibe-agent-toolkit/resources';
-import { readWorkCounters, safePath, WORK_COUNTER_NAMES, type WorkCounter } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, readWorkCounters, safePath, toForwardSlash, WORK_COUNTER_NAMES, type WorkCounter } from '@vibe-agent-toolkit/utils';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { createTempDir, removeTempDir, scratchTmpdirEnv } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, expect, vi } from 'vitest';
@@ -85,6 +88,25 @@ interface Seed {
   /** For a seed whose act reports its count in words: that number, read back. */
   readonly reported?: (result: ActResult) => number;
 }
+
+/**
+ * The `fs.lstat`s every population's crawl-source choice makes below its root to ask whether
+ * the git marker is readable: `.git`, then the chain to `.git/HEAD` (two components).
+ */
+const GIT_MARKER_LSTATS = 3;
+
+/**
+ * The `fs.lstat`s the first population of a root in a process adds, each one component below
+ * the root: git's root discovery probing `.git`, and the config loader probing the config file.
+ * Both answers are kept for the process, so a later population of the same root walks neither.
+ */
+const FIRST_POPULATION_LSTATS = 2;
+
+/**
+ * The real temp directory's components below the filesystem root (a drive is not one): what a
+ * chain walk of a path under it from that root lstats before it reaches the path's own.
+ */
+const TMP_DEPTH = toForwardSlash(normalizedTmpdir()).split('/').filter((part) => part !== '' && !/^[A-Za-z]:$/u.test(part)).length;
 
 /** A content key the store seeds file rows under. */
 const BLOB_KEY = 'markdown.seed';
@@ -147,11 +169,11 @@ function decodeSeed(): Seed {
       const store = storeOf(scope);
       await store.writeBlobFacts(oneBlobRow());
       return async () => {
-        await store.readBlobFacts([BLOB_KEY]);
+        await store.readBlobFacts([BLOB_KEY], ALL_BLOB_REQUEST);
         return undefined;
       };
     },
-    delta: { 'store.reads.persistent': 1, 'store.rows.decoded.persistent': 1 },
+    delta: { 'store.reads.blob': 1, 'store.rows.decoded.persistent': 1 },
   };
 }
 
@@ -161,11 +183,11 @@ function readMissSeed(): Seed {
     prepare: (scope) => {
       const store = storeOf(scope);
       return async () => {
-        await store.readExtent(EXTENT_KEY);
+        await store.readExtent(EXTENT_KEY, ALL_EXTENT_REQUEST);
         return undefined;
       };
     },
-    delta: { 'store.reads.persistent': 1 },
+    delta: { 'store.reads.extent': 1 },
   };
 }
 
@@ -187,7 +209,9 @@ function writeSeed(rows: 'one blob row' | 'no rows'): Seed {
 
 export const STORE_SEEDS: Readonly<Record<StoreLaneCounter, Seed>> = {
   'store.rows.decoded.persistent': decodeSeed(),
-  'store.reads.persistent': readMissSeed(),
+  // The blob read that decodes one row: the decode seed counts it too.
+  'store.reads.blob': decodeSeed(),
+  'store.reads.extent': readMissSeed(),
   'store.writes.persistent': writeSeed('no rows'),
   'store.rows.written.persistent': writeSeed('one blob row'),
 };
@@ -458,6 +482,10 @@ function queriedTree(scope: SeedScope, files: Readonly<Record<string, string>>):
   for (const [name, content] of Object.entries(files)) writeFileSync(safePath.join(root, name), content, 'utf8');
   commitTestFixture(root);
   vi.stubEnv(VAT_CACHE_DIR_ENV, scope.dir());
+  // Tag the cache root here, unmeasured: its once-per-process guard walks the
+  // current directory's chain from the filesystem root (`fs.lstat`), a count set
+  // by where the checkout lives, not by the population the act measures.
+  markVatCacheRoot();
   return async () => {
     const lines: string[] = [];
     await withQueriedProjection(
@@ -491,9 +519,11 @@ function admissionSeed(label: string): Seed {
         return undefined;
       };
     },
+    // The stat follows the file's chain first: one lstat, the file itself below the root.
     delta: {
       ...readAndKeyed(content),
       'fs.stat': 1,
+      'fs.lstat': 1,
       'parse.dispatched': 1,
       'parse.cache.written': 1,
       'registry.admitted': 1,
@@ -512,7 +542,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
   'extent.derived': {
     prepare: (scope) => queriedTree(scope, PLAIN_TREE),
     delta: {
-      'store.reads.persistent': 1,
+      'store.reads.extent': 1,
       'store.writes.persistent': 2,
       'store.rows.written.persistent': 13,
       'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
@@ -521,6 +551,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'parse.cache.written': 1,
       ...readAndKeyed(PLAIN_TREE['a.md']),
       'git.calls': 6,
+      'fs.lstat': GIT_MARKER_LSTATS + FIRST_POPULATION_LSTATS,
     },
   },
   // The same tree again: the extent served from the store, nothing parsed,
@@ -533,10 +564,12 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
     },
     delta: {
       'store.rows.decoded.persistent': 13,
-      'store.reads.persistent': 2,
+      'store.reads.extent': 1,
+      'store.reads.blob': 1,
       'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
       'extent.served': 1,
       'git.calls': 2,
+      'fs.lstat': GIT_MARKER_LSTATS,
     },
   },
   // A refusal no store holds forces the whole population again on the second
@@ -549,7 +582,8 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
     },
     delta: {
       'store.rows.decoded.persistent': 16,
-      'store.reads.persistent': 2,
+      'store.reads.extent': 1,
+      'store.reads.blob': 1,
       'store.writes.persistent': 2,
       'store.rows.written.persistent': 16,
       'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
@@ -561,6 +595,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'content.hashed': 2,
       'content.hashedBytes': Buffer.byteLength(PLAIN_TREE['a.md'] + CYCLIC_FRONTMATTER, 'utf8'),
       'git.calls': 6,
+      'fs.lstat': GIT_MARKER_LSTATS,
     },
     reported: (result) => Number(/store miss: (\d+) refused/u.exec(result ?? '')?.[1] ?? Number.NaN),
   },
@@ -569,6 +604,8 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
   'statement.explained': explainedSeed(),
   // The registry's stat of the file it admits: the admission seed counts it too.
   'fs.stat': admissionSeed('stat'),
+  // The chain walk before that stat: the admission seed counts it too.
+  'fs.lstat': admissionSeed('lstat'),
   'registry.built': {
     prepare: () => () => {
       expect(new ResourceRegistry().size()).toBe(0);
@@ -597,7 +634,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
         cores: () => 2,
         childHomeKey: HOME_KEY,
         limits: POPULATION_LIMITS,
-        routing: { resolver: createCollectionMimeResolver(undefined), baseDir: ROOT },
+        routing: parseRoutingFor(undefined, ROOT),
         spawn: () => Promise.reject(new Error('the seed never spawns')),
       });
       gate.onHomeSettled(HOME_KEY, hit({ [`${ROOT}/a.md`]: keyedRealization(BLOB_KEY) }, () => Promise.resolve(blobFactsReader(oneBlobRow()))));
@@ -632,7 +669,11 @@ function skillTextOutsideRootSeed(): Seed {
         return undefined;
       });
     },
-    delta: { 'skillText.outsideRoot': 1 },
+    // Whether the file is inside the root walks its chain, and the root's, from the filesystem
+    // root, since neither is beneath the other: the file and its absent directory (each the temp
+    // directory, the seed directory and `elsewhere`), the seed directory, and the absent root's
+    // parent (each the temp directory and the seed directory). Set by the temp directory's depth.
+    delta: { 'skillText.outsideRoot': 1, 'fs.lstat': 2 * (TMP_DEPTH + 2) + 2 * (TMP_DEPTH + 1) },
   };
 }
 
@@ -659,7 +700,8 @@ function skillTextStoreUnopenedSeed(): Seed {
         return undefined;
       });
     },
-    delta: { 'skillText.storeUnopened': 1 },
+    // Whether each file is inside the root walks it below the root: one component each.
+    delta: { 'skillText.storeUnopened': 1, 'fs.lstat': 2 },
   };
 }
 
@@ -682,6 +724,7 @@ function skillTextScanSeed(holdsStore: boolean): Seed {
       const run: SkillTextRun = {
         source: { storedDocument: () => Promise.resolve(undefined), holdsStore },
         dispatcher: dispatcherOf(scope),
+        crawlOnce: (_key, crawl) => crawl(),
       };
       return async () => {
         await readSkillDocument(skillPath, run, 'source');

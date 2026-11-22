@@ -30,12 +30,24 @@ import { countWork, type FsSide, safePath, type TextProvenance, withFsFault } fr
 
 /**
  * The run a skills-lane read belongs to: the population source that answers
- * from the store and says whether the run has one, and the dispatcher a cold
- * parse runs on. A `RunPopulation`, and a `RunSkillRegistries`, are each one.
+ * from the store and says whether the run has one, the dispatcher a cold
+ * parse runs on, and the run's one crawl of each skill discovery base. A
+ * `RunPopulation`, and a `RunSkillRegistries`, are each one.
  */
 export interface SkillTextRun {
   readonly source: Pick<ResourcePopulationSource, 'storedDocument' | 'holdsStore'>;
   readonly dispatcher: ParseDispatcher;
+  /**
+   * One skill discovery crawl per key per run: the first caller's `crawl`, its rejection included,
+   * handed to every later caller of the key. A run's phases discover the same include bases (`vat
+   * validate`'s resources phase, for the skills' declared `files:`, and its skills phase), and
+   * each crawl lists its base with git: the same arguments in the same directory over the same tree.
+   *
+   * @param key - The crawl's identity: everything its result depends on
+   * @param crawl - The crawl
+   * @returns The run's one result for `key`
+   */
+  crawlOnce(key: string, crawl: () => Promise<readonly string[]>): Promise<readonly string[]>;
 }
 
 /** A source with no store: every file is the lane's own to read, each scan a `skillText.noStore`. */
@@ -51,7 +63,8 @@ const NO_STORE: SkillTextRun['source'] = { storedDocument: () => Promise.resolve
  */
 export function withSkillTextRun<T>(work: (run: SkillTextRun) => Promise<T>, run: SkillTextRun | undefined): Promise<T> {
   if (run !== undefined) return work(run);
-  return withParseDispatcher((dispatcher) => work({ source: NO_STORE, dispatcher }), { dispatcher: undefined });
+  // A run of one call: nothing to share a crawl with, so each crawls.
+  return withParseDispatcher((dispatcher) => work({ source: NO_STORE, dispatcher, crawlOnce: (_key, crawl) => crawl() }), { dispatcher: undefined });
 }
 
 /** How a document's bytes were decoded: what the store's `blobs` row and a read's `KeyedContent` both say. */

@@ -372,9 +372,13 @@ describe('vat-lab <facet> ab — every facet gets the verb, not just the one tha
   it.for(FACETS)('declares ab on %s', (facet) => {
     const group = createProgram().commands.find((candidate) => candidate.name() === facet);
 
-    // `perf` alone also times whole CI sequences, and judges bars over them.
-    const expected = facet === 'perf' ? ['run', 'compare', 'ab', 'arms', 'bars'] : ['run', 'compare', 'ab'];
+    // `perf` alone also times whole CI sequences, judges bars over them, and attributes CPU profiles.
+    const expected = facet === 'perf' ? ['run', 'compare', 'ab', 'arms', 'bars', 'attribute'] : ['run', 'compare', 'ab'];
     expect(group?.commands.map((sub) => sub.name())).toEqual(expected);
+  });
+
+  it.for(FACETS)('offers --cpu-prof-dir on run for perf only', (facet) => {
+    expect(optionOf(facet, 'run', '--cpu-prof-dir') !== undefined).toBe(facet === 'perf');
   });
 
   it.for(FACETS)('gives %s ab both arms, the pair count and a control switch', (facet) => {

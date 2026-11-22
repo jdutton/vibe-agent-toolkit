@@ -32,6 +32,13 @@
  * says whether the tier must be read at all, and {@link readRoute} what its answer
  * means. Both are pure. {@link storedComputeBy} asks the same two questions
  * without building any facts, for `vat validate`'s checks overlap gate.
+ *
+ * What the warm read decodes: one tier read per run, for every keyed home member
+ * at once, of {@link ADMISSION_BLOB_REQUEST} only: the fact reader's tables, and
+ * of `blobReferences` only the AST forms. The lexical reference rows and the
+ * harness tables stay undecoded on this path; a projection hit asks for every
+ * table and form (`ALL_BLOB_REQUEST`). Rows of keys no view admits are still
+ * decoded, since the read is one for the whole home.
  */
 
 import { deepFreeze, VatError } from '@vibe-agent-toolkit/utils';
@@ -41,12 +48,13 @@ import type { ParseLimits } from '../parse-limits.js';
 import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
 
 import { parserKindOf } from './blob-population.js';
+import { AST_SYNTACTIC_FORMS } from './blob-references.js';
 import { type NotAdmittedEntry, unkeyedEntry } from './blob-refusals.js';
-import { blobFactsReader, type BlobFactsOutcome, type BlobFactsReader } from './blob-resource-facts.js';
+import { BLOB_FACT_READER_TABLES, blobFactsReader, type BlobFactsOutcome, type BlobFactsReader } from './blob-resource-facts.js';
 import { POPULATION_PARSE_LIMITS } from './content-cache.js';
 import type { AdmittedFacts } from './run-population.js';
-import { keyedContentKeys } from './store-hydration.js';
-import type { BlobScopedRows, FactStore } from './store.js';
+import { keyedContentKeys, StoreRequestUnmetError } from './store-hydration.js';
+import type { BlobRequest, BlobScopedRows, BlobScopedTableName, FactStore } from './store.js';
 
 /**
  * What the store holds about one member's bytes: its realization's content columns. The store's
@@ -97,20 +105,47 @@ class BlobTierReadError extends VatError {
 }
 
 /**
+ * What the stored admission reads of the blob tier: exactly what
+ * {@link blobFactsReader} consumes: its tables, and of `blobReferences` only
+ * the AST forms its links are rebuilt from. The lexical forms and the harness
+ * tables are never decoded on this path; a projection hit, which serves them,
+ * asks for everything. Frozen, its forms set included (`AST_SYNTACTIC_FORMS`
+ * refuses `add`, `delete` and `clear`): every caller shares it.
+ */
+export const ADMISSION_BLOB_REQUEST: BlobRequest<(typeof BLOB_FACT_READER_TABLES)[number]> = deepFreeze({
+  tables: BLOB_FACT_READER_TABLES,
+  referenceForms: AST_SYNTACTIC_FORMS,
+});
+
+/**
  * Read the blob tier for `contentKeys`, a failed read rejecting as the store's
  * ({@link BlobTierReadError}): the one read every lane that reads the tier back
  * goes through, the stored admission and a projection hit alike, so one failure
  * is one refusal whichever lane met it.
  *
+ * It restricts nothing itself: each caller states what it reads, because the
+ * callers read different things (see {@link ADMISSION_BLOB_REQUEST}).
+ *
  * @param store - The run's store
  * @param contentKeys - The keys to read
- * @returns The tier's rows for them
+ * @param request - The tables and reference forms to read
+ * @returns The tier's rows for them, in the requested tables
  * @throws A {@link BlobTierReadError} when the store's read rejects
+ * @throws A {@link StoreRequestUnmetError} when its answer lacks a requested table
  */
-export function readBlobTier(store: FactStore, contentKeys: readonly string[]): Promise<BlobScopedRows> {
-  return store.readBlobFacts(contentKeys).catch((error: unknown) => {
+export async function readBlobTier<Table extends BlobScopedTableName>(
+  store: FactStore,
+  contentKeys: readonly string[],
+  request: BlobRequest<Table>,
+): Promise<Pick<BlobScopedRows, Table>> {
+  const rows = await store.readBlobFacts(contentKeys, request).catch((error: unknown) => {
     throw new BlobTierReadError(error);
   });
+  // Typed as present, but a backend is code outside this module: hold it to the request.
+  const answered: Partial<Record<BlobScopedTableName, unknown>> = rows;
+  const missing = request.tables.find((table) => answered[table] === undefined);
+  if (missing !== undefined) throw new StoreRequestUnmetError('blob', missing, 'was requested and is absent from the stored rows');
+  return rows;
 }
 
 /**
@@ -138,7 +173,7 @@ export function storedContentOf(
   let read: Promise<BlobFactsReader> | undefined;
   return {
     members: stored,
-    facts: () => (read ??= readBlobTier(store, keys).then((rows) => blobFactsReader(rows))),
+    facts: () => (read ??= readBlobTier(store, keys, ADMISSION_BLOB_REQUEST).then((rows) => blobFactsReader(rows))),
   };
 }
 

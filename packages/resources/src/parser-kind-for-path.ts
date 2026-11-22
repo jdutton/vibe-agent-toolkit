@@ -12,7 +12,8 @@
 
 import { NO_PARSER_KIND, type ParserKind } from './content-key.js';
 import { parserKindForMimeType } from './mime-type.js';
-import { relativize, type CollectionMimeResolver } from './projection/realizations.js';
+import { createCollectionMimeResolver, relativize, type CollectionMimeResolver } from './projection/realizations.js';
+import type { ProjectConfig } from './schemas/project-config.js';
 
 /**
  * @param absolutePath - The resolved path to route
@@ -29,4 +30,26 @@ export function parserKindForResolvedPath(
 ): ParserKind {
   const declaredMime = resolver.mimeFor(absolutePath, baseDir === undefined ? absolutePath : relativize(absolutePath, baseDir));
   return parserKindForMimeType(declaredMime) ?? NO_PARSER_KIND;
+}
+
+/**
+ * A parse routing: its collection MIME resolver and the directory declarations are relative to
+ * (`undefined` for a registry not yet given one, which matches declarations against the absolute path).
+ */
+export interface ParseRouting<Base extends string | undefined> {
+  readonly resolver: CollectionMimeResolver;
+  readonly baseDir: Base;
+}
+
+/**
+ * The one constructor of a parse routing, from a project config: the registry's read and sizing,
+ * `vat validate`'s checks overlap gate, and a caller judging what the gate decides all build theirs
+ * here, never a resolver of their own.
+ *
+ * @param config - The project config, if there is one
+ * @param baseDir - The directory collection declarations are relative to
+ * @returns The routing
+ */
+export function parseRoutingFor<Base extends string | undefined>(config: ProjectConfig | undefined, baseDir: Base): ParseRouting<Base> {
+  return { resolver: createCollectionMimeResolver(config?.resources?.collections), baseDir };
 }

@@ -23,6 +23,8 @@ import { skillTextFactsOf } from '../src/skill-text/core.js';
 import { SKILL_TEXT_DECLARATION } from '../src/skill-text/declaration.js';
 
 const CONTENT_KEY = `markdown.${'c'.repeat(64)}`;
+/** A key whose `blobs` row the bundle does not hold. */
+const OTHER_KEY = `markdown.${'e'.repeat(64)}`;
 const DOC = '# Title\n\nSee [a](./a.md) and [x][missing].\n\n## Next\n';
 
 /** A document the skill-text core matches more than once, across two families. */
@@ -76,7 +78,7 @@ function rowsOf(contentKey: string, source: string, parsed: ParseResult): BlobSc
  * @param rows - The bundle
  * @returns The outcome for a key
  */
-function agreedReader(rows: BlobScopedRows): (contentKey: string) => BlobFactsOutcome {
+function agreedReader(rows: Parameters<typeof blobFactsReader>[0]): (contentKey: string) => BlobFactsOutcome {
   const reader = blobFactsReader(rows);
   return (contentKey) => {
     const outcome = reader.outcome(contentKey);
@@ -110,8 +112,6 @@ describe('blobFactsReader', () => {
       blobReferences: [],
       blobSections: [],
       blobConditions: [{ blob: refusedKey, code: BLOB_PARSE_FAILED, ordinal: 0, severity: 'warning', message: 'the parse failed', line: null }],
-      harnessBlobFacts: [],
-      harnessBlobImports: [],
       skillTextFacts: [],
       skillTextMatches: [],
     })(refusedKey);
@@ -142,8 +142,6 @@ describe('blobFactsReader', () => {
       blobReferences: [],
       blobSections: [],
       blobConditions: [{ blob: notTextKey, code: BLOB_NOT_TEXT, ordinal: 0, severity: 'warning', message: 'not text', line: null }],
-      harnessBlobFacts: [],
-      harnessBlobImports: [],
       skillTextFacts: [],
       skillTextMatches: [],
     })(notTextKey);
@@ -180,6 +178,18 @@ describe('blobFactsReader', () => {
 
   it('is uncovered for a key the bundle does not hold', () => {
     expect(agreedReader(rowsOfDoc())(`markdown.${'d'.repeat(64)}`).kind).toBe('uncovered');
+  });
+
+  // The reader never sees the lexical reference rows or the harness tables when
+  // the admission's request leaves them out, so a key holding only those must
+  // read the same as one holding a lexical row the reader did see: no blobs row.
+  it.each([
+    ['holds no row the reader sees', (_doc: BlobScopedRows): BlobScopedRows['blobReferences'] => []],
+    ['holds only reference rows', (doc: BlobScopedRows) => doc.blobReferences.map((row) => ({ ...row, blob: OTHER_KEY }))],
+  ] as const)('names the missing blobs row when a key %s', (_label, referencesOf) => {
+    const doc = rowsOfDoc();
+    const rows = { ...doc, blobReferences: [...doc.blobReferences, ...referencesOf(doc)] };
+    expect(agreedReader(rows)(OTHER_KEY)).toEqual({ kind: 'uncovered', reason: `the blob tier holds no blobs row for ${OTHER_KEY}` });
   });
 
   // parse5 no longer emits a link with a line and no offsets (the clone that

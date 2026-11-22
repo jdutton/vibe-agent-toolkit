@@ -113,6 +113,7 @@ async function run(root: string, args: string[]) {
     tmpDir: null,
     storeOff: false,
     probeRoot: null,
+    cores: null,
   });
   return { ...result, dumps };
 }

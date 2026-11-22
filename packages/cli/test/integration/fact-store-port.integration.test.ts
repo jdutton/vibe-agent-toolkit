@@ -27,7 +27,15 @@
  * - no other export produces a run database: not a function returning one, as a union member
  *   (`RunDatabase | undefined`) or behind a promise, and not a class constructing one. Known
  *   limits: a run database wrapped in what an export returns (`{ db }` or a tuple), a `const`
- *   export holding one, and any overload but the last, which is the only one `infer` reads.
+ *   export holding one, and any overload but the last, which is the only one `infer` reads;
+ * - a blob read takes a request (which tables, which reference forms) and answers only the tables
+ *   it asked for: a read with no request does not compile, and a restricted answer cannot be
+ *   assembled into a projection (`assembleProjection` needs every blob table), while an answer to
+ *   `ALL_BLOB_REQUEST` can;
+ * - an extent read takes a request (which tables, which reconstruction steps) and answers only the
+ *   tables it asked for: a read with no request, or a step whose tables are not requested, does
+ *   not compile, and membership's answer (and `selectRequestedRows` of it) cannot stand for a
+ *   whole extent, while an answer to `ALL_EXTENT_REQUEST` can.
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
@@ -80,6 +88,24 @@ const PROBE_LINES = [
   "import type { ProjectionStore } from '@vibe-agent-toolkit/resources';",
   "import type { SqlQueryableStore } from '@vibe-agent-toolkit/projection-sqlite';",
   "import { openRunDatabase } from '@vibe-agent-toolkit/projection-sqlite';",
+  // 26-29: a blob read states what it reads, and its answer is only that.
+  "import { ALL_BLOB_REQUEST, assembleProjection, type ExtentScopedRows } from '@vibe-agent-toolkit/resources';",
+  'declare const store: FactStore;',
+  'declare const extent: ExtentScopedRows;',
+  "export const restricted = store.readBlobFacts([], { tables: ['blobs', 'blobReferences'], referenceForms: 'all' }).then((rows) => assembleProjection(extent, rows));",
+  // 30: everything assembles; 31: no request does not compile.
+  'export const whole = store.readBlobFacts([], ALL_BLOB_REQUEST).then((rows) => assembleProjection(extent, rows));',
+  'export const unrequested = store.readBlobFacts([]);',
+  // 32-33: an extent read states its tables and steps, and membership's answer (three tables, no
+  // step) cannot be assembled into a projection; 34: an answer to ALL_EXTENT_REQUEST can.
+  "import { ALL_EXTENT_REQUEST, MEMBERSHIP_EXTENT_REQUEST, emptyBlobRows, selectRequestedRows } from '@vibe-agent-toolkit/resources';",
+  "export const membership = store.readExtent({ rootId: 'r', treeHash: 't' }, MEMBERSHIP_EXTENT_REQUEST).then((rows) => rows && assembleProjection(rows, emptyBlobRows()));",
+  "export const wholeExtent = store.readExtent({ rootId: 'r', treeHash: 't' }, ALL_EXTENT_REQUEST).then((rows) => rows && assembleProjection(rows, emptyBlobRows()));",
+  // 35: a step without the tables it reads does not compile; 36: nor does a read with no request.
+  "export const stepWithoutInputs = store.readExtent({ rootId: 'r', treeHash: 't' }, { tables: ['resourceRealizations', 'realizationConditions', 'zoneProvenance'], steps: ['identity'] });",
+  "export const unrequestedExtent = store.readExtent({ rootId: 'r', treeHash: 't' });",
+  // 37: the selection is generic over the request: membership's is not a whole extent.
+  "export const membershipRows: ExtentScopedRows = selectRequestedRows(extent, MEMBERSHIP_EXTENT_REQUEST, { contexts: [], rootId: 'r' });",
 ];
 
 /** "is not assignable" (TS2322), or "is missing the following properties" (TS2739, TS2740). */
@@ -91,6 +117,14 @@ const EXPECTED: Readonly<Record<number, readonly number[]>> = {
   23: NO_EXPORTED_MEMBER,
   24: NO_EXPORTED_MEMBER,
   25: NO_EXPORTED_MEMBER,
+  // An argument not assignable to the parameter.
+  29: [2345],
+  // Expected 2 arguments, but got 1.
+  31: [2554],
+  33: [2345],
+  35: NOT_ASSIGNABLE,
+  36: [2554],
+  37: NOT_ASSIGNABLE,
 };
 
 /** Semantic diagnostics of the probe, keyed by its 1-based line. */

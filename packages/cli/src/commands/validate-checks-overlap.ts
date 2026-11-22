@@ -21,7 +21,7 @@
 
 import os from 'node:os';
 
-import { createCollectionMimeResolver, RunPopulation, type ProjectConfig } from '@vibe-agent-toolkit/resources';
+import { parseRoutingFor, RunPopulation, type ProjectConfig } from '@vibe-agent-toolkit/resources';
 import { readWorkCounters } from '@vibe-agent-toolkit/utils';
 
 import { NO_HOME_SETTLED_LISTENER, type HomeSettledListener, type RunContext } from '../utils/resource-loader.js';
@@ -108,7 +108,7 @@ export function gateOptionsFor(
     cores,
     childHomeKey: RunPopulation.homeKey([]),
     limits: run.dispatcher.limits,
-    routing: { resolver: createCollectionMimeResolver(request.config?.resources?.collections), baseDir: run.population.root },
+    routing: parseRoutingFor(request.config, run.population.root),
   };
 }
 

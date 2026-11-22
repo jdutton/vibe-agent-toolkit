@@ -11,11 +11,13 @@ import { describe, expect, it } from 'vitest';
 
 import { parseRefusal } from '../src/not-admitted.js';
 import { ParseLimitError } from '../src/parse-limits.js';
-import type { BlobFactsOutcome, BlobFactsReader, BlobResourceFacts } from '../src/projection/blob-resource-facts.js';
+import { AST_SYNTACTIC_FORMS } from '../src/projection/blob-references.js';
+import { BLOB_FACT_READER_TABLES, type BlobFactsOutcome, type BlobFactsReader, type BlobResourceFacts } from '../src/projection/blob-resource-facts.js';
 import { POPULATION_PARSE_LIMITS } from '../src/projection/content-cache.js';
-import { emptyBlobRows } from '../src/projection/store-hydration.js';
-import type { BlobScopedRows, FactStore } from '../src/projection/store.js';
+import { emptyBlobRows, STORE_REQUEST_UNMET } from '../src/projection/store-hydration.js';
+import type { BlobRequest, BlobScopedRows, BlobScopedTableName, FactStore } from '../src/projection/store.js';
 import {
+  ADMISSION_BLOB_REQUEST,
   hydratesUnder,
   readRoute,
   respelledContent,
@@ -134,7 +136,7 @@ describe('storedComputeBy: the two routes, asked route-only', () => {
 
   it('serves a covered key (facts or a stated refusal) building nothing, and hands back the tier\'s rejection unchanged', async () => {
     const entry = { log: 'unreadable', entry: { reason: 'the parser threw', code: 'EFOO' } } as const;
-    for (const outcome of [{ kind: 'not-admitted', entry }, { kind: 'facts', facts: {} as BlobResourceFacts }] as const) {
+    for (const outcome of [{ kind: 'not-admitted', entry }, { kind: 'facts', facts: {} as BlobResourceFacts, decoding: null }] as const) {
       const probe = tier(outcome);
       expect(await storedComputeBy(keyed(MARKDOWN_KEY, 'text/markdown'), 'markdown', probe.facts), outcome.kind).toEqual({ computeBy: null, rowsRead: 3 });
       expect(probe.built).toBe(0);
@@ -145,7 +147,7 @@ describe('storedComputeBy: the two routes, asked route-only', () => {
 
   it('agrees with readRoute on every kind the tier answers', async () => {
     const entry = { log: 'unreadable', entry: { reason: 'the parser threw', code: 'EFOO' } } as const;
-    const outcomes: BlobFactsOutcome[] = [{ kind: 'facts', facts: {} as BlobResourceFacts }, { kind: 'not-admitted', entry }, { kind: 'uncovered', reason: 'evicted' }];
+    const outcomes: BlobFactsOutcome[] = [{ kind: 'facts', facts: {} as BlobResourceFacts, decoding: null }, { kind: 'not-admitted', entry }, { kind: 'uncovered', reason: 'evicted' }];
     for (const outcome of outcomes) {
       const answer = await storedComputeBy(keyed(MARKDOWN_KEY, 'text/markdown'), 'markdown', tier(outcome).facts);
       expect(answer.computeBy === null, outcome.kind).toBe(readRoute(outcome).kind === 'probe');
@@ -165,13 +167,15 @@ describe('hydratesUnder: the limits the store\'s facts were filed under', () => 
  * A store that answers every blob read with empty rows, or rejects with `fails`, and counts the reads.
  *
  * @param fails - What every blob read rejects with, or `undefined` to answer
- * @returns The store and the keys each read asked for
+ * @returns The store, the keys each read asked for, and what each read asked for of them
  */
-function countingStore(fails?: Error): { store: FactStore; reads: (readonly string[])[] } {
+function countingStore(fails?: Error): { store: FactStore; reads: (readonly string[])[]; requests: BlobRequest<BlobScopedTableName>[] } {
   const reads: (readonly string[])[] = [];
+  const requests: BlobRequest<BlobScopedTableName>[] = [];
   const store: FactStore = {
-    readBlobFacts: (keys: readonly string[]): Promise<BlobScopedRows> => {
+    readBlobFacts: (keys, request) => {
       reads.push(keys);
+      requests.push(request);
       return fails === undefined ? Promise.resolve(emptyBlobRows()) : Promise.reject(fails);
     },
     writeBlobFacts: () => Promise.resolve(),
@@ -179,7 +183,7 @@ function countingStore(fails?: Error): { store: FactStore; reads: (readonly stri
     writeExtent: () => Promise.resolve(),
     close: () => Promise.resolve(),
   };
-  return { store, reads };
+  return { store, reads, requests };
 }
 
 /**
@@ -191,9 +195,31 @@ function member(path: string, realization: StoredRealization): { path: string; r
   return { path, row: realization as ResourceRealizationRow };
 }
 
+describe('ADMISSION_BLOB_REQUEST: what the admission reads of the tier', () => {
+  it('is the reader\'s tables and the AST forms, never a copy of either', () => {
+    expect(ADMISSION_BLOB_REQUEST.tables).toBe(BLOB_FACT_READER_TABLES);
+    expect(ADMISSION_BLOB_REQUEST.referenceForms).toBe(AST_SYNTACTIC_FORMS);
+    // Literal, not the constant: the harness tables are not the reader's.
+    expect(ADMISSION_BLOB_REQUEST.tables).not.toContain('harnessBlobFacts');
+    expect(ADMISSION_BLOB_REQUEST.tables).not.toContain('harnessBlobImports');
+  });
+
+  it('cannot be changed at run time, since every caller shares it', () => {
+    const forms = ADMISSION_BLOB_REQUEST.referenceForms as Set<string>;
+    const [first] = [...forms];
+    const before = [...forms];
+    expect(Object.isFrozen(ADMISSION_BLOB_REQUEST)).toBe(true);
+    expect(Object.isFrozen(ADMISSION_BLOB_REQUEST.tables)).toBe(true);
+    expect(() => forms.add('not-a-form')).toThrow(TypeError);
+    expect(() => forms.delete(first ?? '')).toThrow(TypeError);
+    expect(() => forms.clear()).toThrow(TypeError);
+    expect([...forms]).toEqual(before);
+  });
+});
+
 describe('storedContentOf: the members\' stored content', () => {
   it('reads the tier once, for the keyed members alone, and only when asked', async () => {
-    const { store, reads } = countingStore();
+    const { store, reads, requests } = countingStore();
     const stored = storedContentOf([
       member('/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown')),
       member('/r/b.md', keyed(MARKDOWN_KEY, 'text/markdown')),
@@ -204,6 +230,7 @@ describe('storedContentOf: the members\' stored content', () => {
     const [first, second] = await Promise.all([stored.facts(), stored.facts()]);
     await stored.facts();
     expect(reads).toEqual([[MARKDOWN_KEY, NONE_KEY]]);
+    expect(requests).toEqual([ADMISSION_BLOB_REQUEST]);
     expect(first).toBe(second);
     const outcome: BlobFactsOutcome = first.outcome(MARKDOWN_KEY);
     expect(outcome.kind).toBe('uncovered');
@@ -233,6 +260,13 @@ describe('storedContentOf: the members\' stored content', () => {
     const { store } = countingStore(errno);
     const stored = storedContentOf([member('/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown'))], store);
     await expect(stored.facts()).rejects.toMatchObject({ code: 'PROJECTION_STORE_READ_FAILED', cause: errno });
+  });
+
+  it('refuses, by code, a store that answers without a requested table, never reading it as empty', async () => {
+    const withoutOne = Object.fromEntries(Object.entries(emptyBlobRows()).filter(([table]) => table !== 'skillTextMatches'));
+    const store: FactStore = { ...countingStore().store, readBlobFacts: () => Promise.resolve(withoutOne as BlobScopedRows) };
+    const stored = storedContentOf([member('/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown'))], store);
+    await expect(stored.facts()).rejects.toMatchObject({ code: STORE_REQUEST_UNMET, tier: 'blob', table: 'skillTextMatches' });
   });
 
   it('names the remedy: the store is a cache, so clear it or move it', async () => {

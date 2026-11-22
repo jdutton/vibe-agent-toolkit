@@ -1,7 +1,7 @@
 /**
  * The debug-facts dump has two contracts: the cli's writer (`validate-debug-facts.ts`) and the
- * lab's strict reader (`ValidateDebugFactsSchema`). Neither package depends on the other, so this
- * is where they meet: the BUILT vat runs `validate` on a committed subject, cold and then warm,
+ * lab's strict reader (`ValidateDebugFactsSchema`). The lab does not depend on the cli, so this is
+ * where the lab meets a real build (the cli's own agreement test parses every variant): the BUILT vat runs `validate` on a committed subject, cold and then warm,
  * with `VAT_VALIDATE_DEBUG_FACTS` set, and every dump it writes must parse under the lab's schema.
  * A field renamed on either side fails here.
  *

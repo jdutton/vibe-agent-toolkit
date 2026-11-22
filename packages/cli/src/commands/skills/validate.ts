@@ -458,6 +458,7 @@ export function skillsValidateRegistries(
     dispatcher: run.dispatcher,
     includeFor: (root) => (root === shared ? SHARED_ROOT_INCLUDE : REGISTRY_INCLUDE),
     configFor: (root) => (root === shared ? Promise.resolve(config) : projectConfigOrNone(root)),
+    crawlOnce: (key, crawl) => run.population.crawlOnce(key, crawl),
   });
 }
 

@@ -17,6 +17,7 @@
  */
 
 import * as fs from 'node:fs/promises';
+import { dirname } from 'node:path';
 
 import type * as Resources from '@vibe-agent-toolkit/resources';
 import { ParseCache, ParseDispatcher, ParseLimitError, parseRefusal } from '@vibe-agent-toolkit/resources';
@@ -25,12 +26,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { analyzeCompatibility } from '../src/compatibility-analyzer.js';
 import { extractClaudeSkillInventory, NO_GIT_TRACKER } from '../src/inventory/extract-skill.js';
+import type { InventoryPopulation } from '../src/inventory/inventory-population.js';
 import { checkSettingsCompatibility } from '../src/settings/settings-compat-checker.js';
 
-import { BASH_SKILL, DENY_BASH, SKILLS, setupRefusedSkillFixture, writeSkill } from './refused-skill-fixture.js';
+import { BASH_SKILL, CAP, DENY_BASH, SKILLS, WIDE_BLOCK, WIDE_TEXT, setupRefusedSkillFixture, wideSkill, writeSkill } from './refused-skill-fixture.js';
 
-/** Every dispatcher's input cap: the population's, which no lane names a different one of. */
-const CAP = new ParseDispatcher(new ParseCache({ enabled: false }), {}).inputBytes;
 const REASON = parseRefusal(new ParseLimitError('inputBytes', CAP)).reason;
 const OVERSIZE = 'skills/oversize/SKILL.md';
 const WIDE = 'skills/wide/SKILL.md';
@@ -48,22 +48,6 @@ vi.mock('@vibe-agent-toolkit/resources', async (importOriginal) => {
     },
   };
 });
-
-/** The wide skill's text: a Bash-declaring frontmatter block, then megabytes of CJK body. */
-const WIDE_TEXT = `${BASH_SKILL('wide')}${'字'.repeat(Math.floor(CAP * 0.4))}\n`;
-
-/** The length of the one content each lane hands the dispatcher: the wide skill's frontmatter block, fences included. */
-const WIDE_BLOCK = BASH_SKILL('wide').indexOf('\n---\n') + '\n---\n'.length;
-
-/**
- * A Bash-declaring SKILL.md in UTF-16LE (with its BOM) whose bytes are under {@link CAP} and whose
- * text is past it as UTF-8: each CJK character is two bytes here and three in UTF-8.
- */
-function wideSkill(): Buffer {
-  const bytes = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(WIDE_TEXT, 'utf16le')]);
-  if (bytes.length > CAP || Buffer.byteLength(WIDE_TEXT, 'utf8') <= CAP) throw new Error('the wide fixture no longer straddles the cap');
-  return bytes;
-}
 
 let dispatcher: ParseDispatcher;
 
@@ -148,9 +132,29 @@ describe('a UTF-16 SKILL.md under the cap in its own bytes and past it as UTF-8'
     expect({ coreRuns, parses }).toEqual({ coreRuns: [], parses: [WIDE_BLOCK] });
   });
 
-  it('declares its name in the skill inventory, parsing only its block, once', async () => {
-    const { result: inventory, coreRuns, parses } = await counted(() => extractClaudeSkillInventory(wide, { dispatcher, gitTrackerSource: NO_GIT_TRACKER }));
+  it('declares its name in the skill inventory under a population, parsing only its block, once', async () => {
+    // The link walk answered by a population, as the plugin and marketplace inventory lanes answer
+    // it: this test is the frontmatter's. `vat inventory <SKILL.md>` passes no population, so its
+    // walk falls back to a registry that parses the whole body (known-defects.md, "`vat inventory`
+    // of one SKILL.md parses its whole body"); that lane is pinned by
+    // `integration/skill-md-input-cap-fallback.integration.test.ts`.
+    const asked: string[] = [];
+    // A whole population that holds the skill with no links, no refusals and no store miss: the
+    // skill lane reads only `membersOf` and `parseRefusedAmong`, and `asked` proves it took this lane.
+    const noLinks = {
+      root: dirname(wide),
+      membersOf: (skillMdPath: string) => {
+        asked.push(skillMdPath);
+        return [];
+      },
+      parseRefusedAmong: () => [],
+      refusalRows: { blobs: [], blobConditions: [], resourceRealizations: [] },
+      storeMiss: undefined,
+    } satisfies InventoryPopulation;
+    const { result: inventory, coreRuns, parses } = await counted(() =>
+      extractClaudeSkillInventory(wide, { dispatcher, gitTrackerSource: NO_GIT_TRACKER, sharedPopulation: noLinks }));
 
+    expect(asked, 'the walk was answered by the population, not a registry of its own').toEqual([wide]);
     expect(inventory.parseErrors).toEqual([]);
     expect(inventory.manifest.name).toBe('wide');
     expect({ coreRuns, parses }).toEqual({ coreRuns: [], parses: [WIDE_BLOCK] });

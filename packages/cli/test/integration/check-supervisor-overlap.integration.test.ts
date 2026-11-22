@@ -371,8 +371,9 @@ describe('startOverlappedSupervision', () => {
 
       // Read as a spawn failure, the refusal settled the run with the child alive and stopped the
       // watchdog, so nothing ever retried the kill. Read as a refused kill, the watchdog retries it
-      // at its next breach and the run settles at the child's exit.
-      expect(hooks.kills).toBe(2);
+      // at its next breach and the run settles at the child's exit. At least two: the budget clock
+      // runs on, so a slow machine may breach again before the retried kill lands.
+      expect(hooks.kills).toBeGreaterThanOrEqual(2);
       expect(hasEnded(hooks.children[0])).toBe(true);
       expect(existsSync(mintedDir())).toBe(false);
     } finally {

@@ -26,7 +26,7 @@ import {
 } from '../../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../../src/projection/crawl-source.js';
 import { populate } from '../../src/projection/merge.js';
-import type { ExtentKey, ExtentScopedRows } from '../../src/projection/store.js';
+import type { ExtentKey, ExtentRequest, ExtentScopedRows, ExtentScopedTableName } from '../../src/projection/store.js';
 import { CONDITION_WITHOUT_REFERENCE } from '../../src/schemas/projection-resources.js';
 import { FakeFactStore } from '../fake-fact-store.js';
 import { inOwnRun } from '../helpers/population-run.js';
@@ -48,12 +48,13 @@ const ROW_DIR = 'build/locked';
 class UnlistableRowStore extends FakeFactStore {
   inject = false;
 
-  override async readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
-    const stored = await super.readExtent(key);
+  override async readExtent<Table extends ExtentScopedTableName>(key: ExtentKey, request: ExtentRequest<Table>): Promise<Pick<ExtentScopedRows, Table> | undefined> {
+    // Every request this double serves carries the realizations and conditions it rewrites.
+    const stored = await super.readExtent(key, request) as ExtentScopedRows | undefined;
     if (stored === undefined || !this.inject) return stored;
     const anchor = stored.resourceRealizations[0];
     if (anchor === undefined) throw new Error('fixture produced no realization to anchor the injected row on');
-    return {
+    const injected: ExtentScopedRows = {
       ...stored,
       realizationConditions: [
         ...stored.realizationConditions,
@@ -68,6 +69,7 @@ class UnlistableRowStore extends FakeFactStore {
         },
       ],
     };
+    return injected;
   }
 }
 

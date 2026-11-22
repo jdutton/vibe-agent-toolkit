@@ -292,6 +292,15 @@ vat-lab perf arms ../subject --build base=dist:/path/to/base/packages/cli/dist -
   --arms-dir /tmp/lab-arms --out ./arms
 ```
 
+To see where a phase's time goes, capture V8 CPU profiles of every vat process and attribute their
+samples to cost buckets (rules and semantics: [`docs/facets.md`](docs/facets.md)). A profiled row is
+for attribution, never for a gate: profiling inflates wall.
+
+```bash
+vat-lab perf run ../subject --id subject --cpu-prof-dir /tmp/lab-prof --out ./perf
+vat-lab perf attribute ./perf/<report>.json --profiles /tmp/lab-prof [--json ./attribution.json]
+```
+
 The verdict facet reads the same prepared tree with `verdict run --prepared <alias>=<prepared.path>`
 (the report records it as `preparedClone`), runs `validate` and the `*-ci` verbs, and
 **bar 3** is

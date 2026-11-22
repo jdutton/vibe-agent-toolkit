@@ -102,6 +102,40 @@ export const NODE_TYPE_OF_AST_FORM: ReadonlyMap<ReferenceSyntacticForm, LinkNode
 );
 
 /**
+ * A set whose mutators throw: `Object.freeze` does not stop `Set.add`, so a
+ * shared constant typed `ReadonlySet` is read-only only to the type checker
+ * unless its mutators refuse at run time too.
+ */
+class SealedSet<T> extends Set<T> {
+  /** @param values - The members, fixed here */
+  constructor(values: Iterable<T>) {
+    super();
+    for (const value of values) super.add(value);
+    Object.freeze(this);
+  }
+
+  /** @returns Never: the set is sealed */
+  override add(): never {
+    return refuseMutation();
+  }
+
+  /** @returns Never: the set is sealed */
+  override delete(): never {
+    return refuseMutation();
+  }
+
+  /** @returns Never: the set is sealed */
+  override clear(): never {
+    return refuseMutation();
+  }
+}
+
+/** @returns Never: what every {@link SealedSet} mutator does */
+function refuseMutation(): never {
+  throw new TypeError('This set is read-only');
+}
+
+/**
  * The forms a parser's links are stored under — the values of
  * {@link AST_FORM_OF_NODE_TYPE}, read off that one table rather than listed again.
  *
@@ -117,8 +151,11 @@ export const NODE_TYPE_OF_AST_FORM: ReadonlyMap<ReferenceSyntacticForm, LinkNode
  * asserted both ways in `projection-blob-references.test.ts`: every
  * `ReferenceSyntacticForm` is in exactly one of the two sets, so a form added to
  * the enum and to neither producer fails there.
+ *
+ * Read-only at run time, not only by type: it is shared, as a request's
+ * `referenceForms` (`ADMISSION_BLOB_REQUEST`), by every caller.
  */
-export const AST_SYNTACTIC_FORMS: ReadonlySet<ReferenceSyntacticForm> = new Set(Object.values(AST_FORM_OF_NODE_TYPE));
+export const AST_SYNTACTIC_FORMS: ReadonlySet<ReferenceSyntacticForm> = new SealedSet(Object.values(AST_FORM_OF_NODE_TYPE));
 
 /** The row columns a `LexicalReference` supplies directly, under the same names. */
 type LexicalColumns = Omit<BlobReferenceRow, 'blob' | 'ordinal' | 'rawRef' | 'text' | 'astIndex'>;

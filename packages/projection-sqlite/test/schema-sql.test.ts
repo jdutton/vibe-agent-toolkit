@@ -22,6 +22,7 @@ import {
   deleteRowByKeySql,
   insertSql,
   selectBlobFactsSql,
+  selectBlobFactsWhereSql,
   selectExtentSql,
   storedColumns,
   storedPrimaryKey,
@@ -214,6 +215,15 @@ describe('blob-fact statements', () => {
 
   it('refuses a fractional count, which would emit a wrong placeholder run', () => {
     expect(() => selectBlobFactsSql(PROJECTION_TABLES.blobs, 1.5)).toThrow(RangeError);
+  });
+
+  it('filters on one column after the keys, one placeholder per value', () => {
+    expect(selectBlobFactsWhereSql(PROJECTION_TABLES.blobReferences, 2, 'syntacticForm', 3))
+      .toMatch(/WHERE "blob" IN \(\?, \?\) AND "syntacticForm" IN \(\?, \?, \?\)$/);
+  });
+
+  it('refuses an empty value set, which would emit IN ()', () => {
+    expect(() => selectBlobFactsWhereSql(PROJECTION_TABLES.blobReferences, 1, 'syntacticForm', 0)).toThrow(RangeError);
   });
 });
 

@@ -41,7 +41,7 @@ boundary, or every invocation prints it.
 ## Usage
 
 ```typescript
-import { splitProjectionByScope } from '@vibe-agent-toolkit/resources';
+import { ALL_EXTENT_REQUEST, splitProjectionByScope } from '@vibe-agent-toolkit/resources';
 import { openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 
 const store = openSqliteFactStore();
@@ -50,7 +50,8 @@ const { blobs, extent } = splitProjectionByScope(projection);
 await store.writeBlobFacts(blobs);
 await store.writeExtent({ rootId, treeHash }, extent);
 
-const cached = await store.readExtent({ rootId, treeHash });
+// Every table; a caller that reads fewer names them, and the rest are never decoded.
+const cached = await store.readExtent({ rootId, treeHash }, ALL_EXTENT_REQUEST);
 if (cached === undefined) {
   // never scanned — populate it
 }

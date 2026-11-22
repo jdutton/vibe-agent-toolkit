@@ -117,11 +117,11 @@ export function isRunRefusal(error: unknown): boolean {
 function markingBlobReads(store: FactStore): FactStore {
   return {
     writeBlobFacts: (rows) => store.writeBlobFacts(rows),
-    readBlobFacts: (contentKeys) => store.readBlobFacts(contentKeys).catch((error: unknown) => {
+    readBlobFacts: (contentKeys, request) => store.readBlobFacts(contentKeys, request).catch((error: unknown) => {
       throw markRunRefusal(error);
     }),
     writeExtent: (key, rows) => store.writeExtent(key, rows),
-    readExtent: (key) => store.readExtent(key),
+    readExtent: (key, request) => store.readExtent(key, request),
     close: () => store.close(),
   };
 }
@@ -262,6 +262,7 @@ export function runSkillRegistries(run: RunContext): RunSkillRegistries {
     dispatcher: run.dispatcher,
     includeFor: () => REGISTRY_INCLUDE,
     configFor: projectConfigOrNone,
+    crawlOnce: (key, crawl) => run.population.crawlOnce(key, crawl),
   });
 }
 

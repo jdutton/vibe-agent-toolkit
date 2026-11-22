@@ -58,8 +58,6 @@ describe('a match text through the store', () => {
       blobReferences: blobReferencesFor(KEY, parsed),
       blobSections: blobSectionsFor(KEY, SPLIT_SAMPLE, parsed.headings),
       blobConditions: blobConditionsFor(KEY, parsed),
-      harnessBlobFacts: [],
-      harnessBlobImports: [],
       skillTextFacts: [skillText.facts],
       skillTextMatches: skillText.matches,
     }).outcome(KEY);

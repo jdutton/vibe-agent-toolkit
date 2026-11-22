@@ -30,7 +30,12 @@
  * - On a store hit, what the store holds about each of the home's members
  *   (`stored-admission.ts`): a member is admitted from the blob tier through the
  *   one fact reader, with no read, key or parse, wherever the stored answer is
- *   the cold one.
+ *   the cold one. A warm run decodes two reads for this, each once per run
+ *   however many views admit: the membership read (`MEMBERSHIP_EXTENT_REQUEST`'s
+ *   three extent tables) and the blob tier read (`ADMISSION_BLOB_REQUEST`).
+ * - Each skill discovery crawl, once per key ({@link RunPopulation.crawlOnce}):
+ *   every phase that discovers skills lists the same include bases with git, so
+ *   the second phase reuses the first's listing.
  *
  * ## Lifetime
  *
@@ -43,7 +48,7 @@
 
 import { open } from 'node:fs/promises';
 
-import { countWork, deepFreeze, isVatError, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { countWork, deepFreeze, isVatError, memoized, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { GIT_NO_ANSWER_CODE, gitFindRoot, gitLinksCheckedOutAsFiles, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { ParserKind } from '../content-key.js';
@@ -253,6 +258,8 @@ export class RunPopulation implements PopulationRun {
   readonly #probes = new Map<string, Promise<{ readonly refused: unknown } | null>>();
   /** Each listed root's tracked links checked out as plain files, by root. */
   readonly #linksAsFiles = new Map<string, ReadonlySet<string> | null>();
+  /** Each skill discovery crawl, by its key ({@link crawlOnce}). */
+  readonly #discoveryCrawls = new Map<string, Promise<readonly string[]>>();
   readonly #options: RunPopulationOptions;
 
   /**
@@ -321,6 +328,20 @@ export class RunPopulation implements PopulationRun {
     if (read.kind === 'compute' || (await this.#probe(absolutePath)) !== null) return compute();
     if (read.admitted.kind === 'facts') countWork('registry.admitted', 1);
     return read.admitted;
+  }
+
+  /**
+   * One skill discovery crawl per key per run: the first caller's `crawl`, its
+   * rejection included, handed to every later caller of the key. Every phase of
+   * a run that discovers skills crawls the same include bases, each listed with
+   * git: the same arguments in the same directory over the same tree.
+   *
+   * @param key - The crawl's identity: everything its result depends on
+   * @param crawl - The crawl
+   * @returns The run's one result for `key`
+   */
+  crawlOnce(key: string, crawl: () => Promise<readonly string[]>): Promise<readonly string[]> {
+    return memoized(this.#discoveryCrawls, key, crawl);
   }
 
   /**
@@ -730,18 +751,6 @@ function questionExpects(error: unknown): boolean {
     seen.add(current);
   }
   return false;
-}
-
-/**
- * The memo's answer for `key`, computed by `compute` on first ask; a rejection is
- * an answer too.
- */
-function memoized<T>(memo: Map<string, Promise<T>>, key: string, compute: () => Promise<T>): Promise<T> {
-  const held = memo.get(key);
-  if (held !== undefined) return held;
-  const computed = compute();
-  memo.set(key, computed);
-  return computed;
 }
 
 /**

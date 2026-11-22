@@ -24,7 +24,7 @@ export const COMMENT_DENSITY_CEILINGS: Readonly<Record<string, number>> = {
   // 30.6 when the built-output path evaluator landed.
   'dev-tools': 30.6,
   'discovery': 42.1,
-  'lab': 51.1,
+  'lab': 50.1,
   'projection-sqlite': 61.6,
   'rag': 48.9,
   'rag-lancedb': 47.3,
