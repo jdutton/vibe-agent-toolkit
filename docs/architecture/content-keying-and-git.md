@@ -30,7 +30,9 @@ conflicting conclusion is marked superseded in place and its measurements are ke
 4. **One read and one key per file per run.** Within one VAT process run each file is read and
    content-hashed at most once, and every lane (projection population, the resource registry, skills
    validation, `check`, link resolution) shares that one read and key. The supervised checks child of
-   `vat validate` is a separate process and holds the rule within itself. A warm projection-store hit
+   `vat validate` is a separate process and holds the rule within itself; on a warm store with every
+   member admitted from it, the child starts during the resources phase and its stderr is held until
+   its turn ([the gate and its exceptions](resource-scanning-and-caching.md#37b-the-checks-child-starts-during-the-resources-phase-on-a-warm-store)). A warm projection-store hit
    proves the tree unchanged; no lane re-admits or re-hashes files to prove it again. Re-checking
    whether the tree changed mid-run uses git's tree comparison, not file re-hashing. Enforced by
    `packages/cli/test/system/work-counters-validate.system.test.ts`, which asserts on the counters

@@ -35,6 +35,19 @@ describe('the supervision signal contract', () => {
     }
   });
 
+  // Starting during the resources phase is E1's overlap; the contract names what it changes.
+  it('states the overlapped start, the OOM window, the interrupt latency and the Windows direct exit', () => {
+    for (const claim of [
+      'resources phase on a warm store',
+      'no watchdog',
+      'longest synchronous stretch',
+      'direct node invocation',
+      'exits 2',
+    ]) {
+      expect(SUPERVISION_SIGNAL_CONTRACT).toContain(claim);
+    }
+  });
+
   // The child is not a process-group leader (that would put it outside the terminal's job
   // control), so on POSIX a process it started is not killed with it.
   it('claims no kill of what the child itself started on POSIX', () => {

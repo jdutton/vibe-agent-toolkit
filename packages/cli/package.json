@@ -63,6 +63,7 @@
   },
   "devDependencies": {
     "@vibe-agent-toolkit/dev-tools": "workspace:*",
+    "@vibe-agent-toolkit/lab": "workspace:*",
     "@vibe-agent-toolkit/rag": "workspace:*",
     "@vibe-agent-toolkit/rag-lancedb": "workspace:*"
   },

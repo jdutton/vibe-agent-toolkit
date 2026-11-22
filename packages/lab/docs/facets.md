@@ -157,6 +157,36 @@ lane on one side and not the other — a `resources-population` row measured und
 old to print `lane`, against one measured under a current build — and it is never rendered as an
 arm change.
 
+`perf` also reads what the memory preload cannot: a second preload, `perf-probe.cts`, with the same
+three properties (zero non-builtin dependencies, inert unless activated, main thread only) and the
+same vat-process identification, so it measures a build without that build's cooperation. Each vat
+process writes one record at exit: pid, parent pid, start and end (epoch milliseconds, one clock),
+`process.resourceUsage()` user and system CPU, and, in the process that writes the `Surface:`
+banners, when each banner reached stderr, observed without altering the bytes. A command's row then
+carries, each as a median with min, max and IQR over the repeats:
+
+- **Total wall.** Start to exit of the launched command.
+- **Per-surface wall** (`surfaces`): banner to the next banner, the last to the exit of the process
+  that wrote the banners. Surfaces within one process are sequential, so they may be read against the
+  total. A command that writes no banners has none.
+- **Total CPU** (`cpuMs`): user plus system, summed over every vat process, one record per process.
+  Wall is never summed. `null` means no vat process wrote a record; unknown is not zero.
+- **Processes** (`processes`): each repeat's records, so a reader can see lifetimes overlap.
+
+**Report `checksOverlapped` before any wall figure.** When `VAT_VALIDATE_DEBUG_FACTS` names a
+directory, `vat validate` writes its mode there, and the lab records it per row: `checksOverlapped` is
+1 when the supervised checks child started during the resources phase and 0 when it did not.
+`null` means the build wrote no dump (main, before the overlap), which is not "did not overlap".
+When it is 0, `gateDeclinedBy` names the first failing gate condition and, for the every-member-admitted
+condition, the member and its route; a rejected judgment carries `error`. Repeats that disagree make
+the row failed. A 0 on the repo being judged means a wall figure compares sequential runs, so say so
+first. The gate itself is described in
+[the checks child](../../../docs/architecture/resource-scanning-and-caching.md#37b-the-checks-child-starts-during-the-resources-phase-on-a-warm-store).
+
+Perf rows gained required fields (`surfaces`, `cpuMs`, `processes`, `checksOverlapped`,
+`gateDeclinedBy`), and a schema is strict, so a perf report stored by an earlier build is refused:
+re-capture it.
+
 Every shape uses the same coordinate header. The comparator knows which kind it is holding and
 diffs accordingly — multiset differences for findings, set differences for populations,
 distribution differences for numbers.

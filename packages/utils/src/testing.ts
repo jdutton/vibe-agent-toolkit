@@ -63,6 +63,7 @@ export * from './testing/seeded-random.js';
 export * from './testing/temp-dir.js';
 export * from './testing/tier-timeout.js';
 export * from './testing/tree-snapshot.js';
+export * from './testing/verdict-normalize.js';
 export * from './testing/work-spent.js';
 
 /** A planted fixture tree and the means to remove it. */

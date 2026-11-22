@@ -59,7 +59,7 @@ const CRAWL_DEFAULTS = { unreadable: 'refuse', ignoredRefusals: 'record', output
 function crawlPatterns(): Record<string, unknown> | undefined {
   if (lastCrawlOptions === undefined) return undefined;
   const rest = { ...lastCrawlOptions };
-  delete rest.populationSource;
+  delete rest['populationSource'];
   return rest;
 }
 
@@ -131,7 +131,7 @@ import type { Logger } from '../../src/utils/logger.js';
 // eslint-disable-next-line import/first -- must come after vi.mock calls
 import { PROJECTION_STORE_ENV, PROJECTION_STORE_OFF } from '../../src/utils/projection-store.js';
 // eslint-disable-next-line import/first -- must come after vi.mock calls
-import { isRunRefusal, loadResourcesWithConfig, withRunContext } from '../../src/utils/resource-loader.js';
+import { isRunRefusal, loadResourcesWithConfig, NO_HOME_SETTLED_LISTENER, withRunContext } from '../../src/utils/resource-loader.js';
 // eslint-disable-next-line import/first -- must come after vi.mock calls
 import { loadResourcesInRun as load } from '../helpers/in-run.js';
 
@@ -335,8 +335,8 @@ describe('loadResourcesWithConfig', () => {
 
     await load(undefined, PROJECT_ROOT, logger);
 
-    expect(lastRegistryOptions?.config).toBe(config);
-    expect(lastRegistryOptions?.baseDir).toBe(PROJECT_ROOT);
+    expect(lastRegistryOptions?.['config']).toBe(config);
+    expect(lastRegistryOptions?.['baseDir']).toBe(PROJECT_ROOT);
   });
 
   it('refuses a linkAuth provider that cannot compile at config load, before any crawl', async () => {
@@ -391,7 +391,7 @@ describe('loadResourcesWithConfig', () => {
 
     await load(undefined, PROJECT_ROOT, logger);
 
-    expect(lastRegistryOptions?.config).toBe(config);
+    expect(lastRegistryOptions?.['config']).toBe(config);
   });
 
   it('proceeds without config (no crash, no patterns applied)', async () => {
@@ -426,7 +426,7 @@ describe('loadResourcesWithConfig', () => {
       loadConfigMock.mockReturnValue(undefined);
       const { logger } = createTestLogger();
 
-      await withRunContext({ projectionStore: 'on-demand', root: PROJECT_ROOT, outputs: [] }, async (run) => {
+      await withRunContext({ projectionStore: 'on-demand', root: PROJECT_ROOT, outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
         await loadResourcesWithConfig(undefined, run, logger);
         // No second source beside the run's: the run enumerates its home root
         // once, and that enumeration's outcome is what the crawl returns.

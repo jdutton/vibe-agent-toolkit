@@ -39,6 +39,7 @@ import {
   skillTextFactsOf,
   type BlobFactsOutcome,
   type BlobScopedRows,
+  IGNORE_HOME_SETTLEMENT,
   type FactStore,
   type ResourceLink,
   type ResourceMetadata,
@@ -276,7 +277,7 @@ beforeAll(async () => {
       if (key === undefined) throw new Error(`the projection keyed no realization at ${relativePath}`);
       return key;
     };
-    read = (relativePath) => facts(keyAt(relativePath));
+    read = (relativePath) => facts.outcome(keyAt(relativePath));
     storedOf = (relativePath) => rowsOfKey(keyAt(relativePath), stored);
   } finally {
     await reader.close();
@@ -293,6 +294,7 @@ beforeAll(async () => {
       questionCacheOf: noStore,
       holdsStore: false,
       collectionsFor: noStore,
+      onHomeSettled: IGNORE_HOME_SETTLEMENT,
     },
     async (population) => {
       const registry = new ResourceRegistry({ baseDir: root });

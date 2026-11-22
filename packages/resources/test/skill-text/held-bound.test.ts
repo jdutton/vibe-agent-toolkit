@@ -117,7 +117,7 @@ describe('a stored record past its bound', () => {
 
   it('reads back as no record, the rest of the blob\'s facts served', () => {
     const parsed = pastBound();
-    const outcome = blobFactsReader(rowsWith(parsed, recordOf(PAST_BOUND_MATCHES)))(KEY);
+    const outcome = blobFactsReader(rowsWith(parsed, recordOf(PAST_BOUND_MATCHES))).outcome(KEY);
     expect(outcome).toMatchObject({ kind: 'facts', facts: { contentKey: KEY, skillText: null } });
   });
 
@@ -131,7 +131,7 @@ describe('a stored record past its bound', () => {
   it('reads back in full at its bound', () => {
     const parsed = pastBound();
     const atBound = recordOf(SKILL_TEXT_HELD_LIMITS.matches);
-    const outcome = blobFactsReader(rowsWith(parsed, atBound))(KEY);
+    const outcome = blobFactsReader(rowsWith(parsed, atBound)).outcome(KEY);
     expect(outcome.kind === 'facts' && outcome.facts.skillText).toStrictEqual(atBound);
   });
 
@@ -139,7 +139,7 @@ describe('a stored record past its bound', () => {
     const parsed = pastBound();
     const rows = rowsWith(parsed, recordOf(PAST_BOUND_MATCHES));
     const stray = skillTextRowsFor(KEY, recordOf(1)).matches;
-    const outcome = blobFactsReader({ ...rows, skillTextMatches: stray })(KEY);
+    const outcome = blobFactsReader({ ...rows, skillTextMatches: stray }).outcome(KEY);
     expect(outcome).toMatchObject({ kind: 'uncovered', reason: expect.stringContaining('does not hold') });
   });
 });

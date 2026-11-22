@@ -27,7 +27,10 @@ vat-lab <facet> compare <baseline> <candidate>
 (`--command validate --command verify`); see
 [Which commands get measured](docs/run-harness.md#which-commands-get-measured).
 
-Facets today are **`io`** (filesystem-call counts), **`perf`** (wall time), **`parse`** (where the
+Facets today are **`io`** (filesystem-call counts), **`perf`** (wall time, plus total CPU summed over vat's processes, per-surface wall read from the
+`Surface:` banners, and, from a build that writes a `VAT_VALIDATE_DEBUG_FACTS` dump, whether `vat validate`
+overlapped its checks child; a build that writes none is reported unknown, never as not overlapped),
+**`parse`** (where the
 time inside vat's document parse goes, pass by pass), **`crawl`** (where the time spent *finding*
 those documents goes, per contributor, stratum and fixpoint pass), **`population`** (*which*
 files a command enumerated), **`memory`** (peak RSS per repeat — the largest VAT-owned process's

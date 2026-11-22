@@ -16,7 +16,7 @@ import type { ReportEnvelope } from '../../envelope/envelope.js';
 import { coordinateLines } from '../../harness/render.js';
 
 import type { PerfComparisonResult } from './compare.js';
-import type { PerfBody, PerfCommandStats } from './types.js';
+import type { GateDeclinedBy, PerfBody, PerfCommandStats, PerfStats } from './types.js';
 
 /** Decimal places used for millisecond values. */
 const MS_PRECISION = 1;
@@ -53,6 +53,61 @@ function rowLine(row: PerfCommandStats): string {
 }
 
 /**
+ * A statistic with its spread, in the one spelling every figure here uses.
+ *
+ * @param stats - Median, spread and range
+ * @returns `12.3ms median (+-1.0ms IQR, 11.0ms-14.0ms)`
+ */
+function spread(stats: PerfStats): string {
+  return `${ms(stats.medianMs)} median (±${ms(stats.iqrMs)} IQR, ${ms(stats.minMs)}-${ms(stats.maxMs)})`;
+}
+
+/**
+ * Name what declined the overlap, as the build said it.
+ *
+ * @param declined - The build's answer, or `null` when it named nothing
+ * @returns A phrase
+ */
+function declinedBy(declined: GateDeclinedBy | null): string {
+  if (declined === null) return 'a condition the build did not name';
+  if (declined.condition === 'member') return `member (member ${declined.member}, route ${declined.route})`;
+  if (declined.condition === 'rejected') return `rejected (error: ${declined.error})`;
+  return declined.condition;
+}
+
+/**
+ * The lines under a row: CPU over processes, each surface's wall, and whether the checks child overlapped.
+ *
+ * @param row - A row that completed
+ * @returns Indented lines
+ */
+function probeLines(row: PerfCommandStats): string[] {
+  const cpu =
+    row.cpuMs === null
+      ? '    CPU: NOT MEASURED (no vat process wrote a record): unknown, not zero'
+      : `    CPU: ${spread(row.cpuMs)}, summed over ${String(row.processes[0]?.length ?? 0)} vat process(es); wall is never summed`;
+  const surfaces = Object.entries(row.surfaces).map(([name, stats]) => `    surface ${name}: ${spread(stats)}`);
+  let overlap = '    checks child: unknown (this build wrote no debug facts; that is not "did not overlap")';
+  if (row.checksOverlapped === 1) overlap = '    checks child: overlapped';
+  if (row.checksOverlapped === 0) overlap = `    checks child: NOT overlapped, declined by ${declinedBy(row.gateDeclinedBy)}`;
+  return [cpu, ...surfaces, overlap];
+}
+
+/**
+ * One line per command whose gate declined, ahead of every wall figure: a run
+ * that did not overlap measures something else, so no timing below it is read as
+ * the overlap's.
+ *
+ * @param body - The report body
+ * @returns The lines, none when every gate fired or is unknown
+ */
+function gateLines(body: PerfBody): string[] {
+  return body.commands
+    .filter((row) => row.checksOverlapped === 0)
+    .map((row) => `GATE DID NOT FIRE: ${row.name} (${row.cache}) ran its checks child sequentially, declined by ${declinedBy(row.gateDeclinedBy)}.`);
+}
+
+/**
  * Describe how much the machine load qualifies a report's numbers.
  *
  * @param body - The report body
@@ -81,8 +136,9 @@ export function renderPerfReport(report: ReportEnvelope<PerfBody>): string {
     // instrument's DIRTY label when axis C finally acquired one.
     ...coordinateLines(report.coordinate),
     loadLine(report.body),
+    ...gateLines(report.body),
     '',
-    ...report.body.commands.map((row) => rowLine(row)),
+    ...report.body.commands.flatMap((row) => (row.failed ? [rowLine(row)] : [rowLine(row), ...probeLines(row)])),
   ].join('\n');
 }
 

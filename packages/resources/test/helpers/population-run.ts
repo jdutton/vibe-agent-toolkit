@@ -15,7 +15,7 @@
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { StoredDocumentFacts } from '../../src/projection/resource-population.js';
-import { type PopulationRun, type RunPopulation, withPopulationRun, withRunPopulation } from '../../src/projection/run-population.js';
+import { IGNORE_HOME_SETTLEMENT, type PopulationRun, type RunPopulation, withPopulationRun, withRunPopulation } from '../../src/projection/run-population.js';
 import { type CrawlOptions, type RegistryCrawl, ResourceRegistry, type ResourceRegistryOptions } from '../../src/resource-registry.js';
 import type { CollectionConfig } from '../../src/schemas/project-config.js';
 
@@ -74,6 +74,7 @@ export function withTestPopulation<R>(
       questionCacheOf: () => Promise.resolve(undefined),
       holdsStore: false,
       collectionsFor: () => Promise.resolve(options.collections),
+      onHomeSettled: IGNORE_HOME_SETTLEMENT,
     },
     work,
   );

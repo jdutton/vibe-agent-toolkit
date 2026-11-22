@@ -14,6 +14,7 @@ import { mkdtempSync } from 'node:fs';
 
 import { openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import {
+  IGNORE_HOME_SETTLEMENT,
   type FactStore,
   type PopulationCache,
   type ResourceMetadata,
@@ -71,6 +72,7 @@ async function runOnce(withStore: boolean): Promise<RunOutput> {
         questionCacheOf: storeOf,
         holdsStore: true,
         collectionsFor: () => Promise.resolve(undefined),
+        onHomeSettled: IGNORE_HOME_SETTLEMENT,
       },
       async (population) => {
         const before = workSpentNow();

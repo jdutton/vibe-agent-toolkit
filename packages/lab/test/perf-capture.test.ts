@@ -36,6 +36,9 @@
  * probe's own temp directory.
  */
 
+import { fileURLToPath } from 'node:url';
+
+import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { readEnvelope, type ReportEnvelope } from '../src/envelope/envelope.js';
@@ -74,6 +77,9 @@ afterAll(cleanupProbes);
 afterEach(() => {
   vi.unstubAllEnvs();
 });
+
+/** The built probe `capturePerf` injects: the emitted file is what ships. */
+const PROBE_DIST = toForwardSlash(fileURLToPath(new URL('../dist/facets/perf/perf-probe.cjs', import.meta.url)));
 
 /** Temp-directory prefix, so a stray directory names this suite. */
 const PREFIX = 'lab-perf-capture-';
@@ -160,6 +166,7 @@ function capture(
   const { env, ...rest } = overrides;
   return capturePerf({
     ...probeCaptureDefaults(probe, subjectAt(probe.cwd), CAPTURED_AT),
+    probePath: PROBE_DIST,
     ...rest,
     env: { set: env ?? {}, unset: [] },
   });

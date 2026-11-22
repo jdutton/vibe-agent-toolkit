@@ -149,6 +149,17 @@ export async function withPopulationRun<T>(work: (run: PopulationRun) => Promise
   }
 }
 
+/**
+ * How the home population's memo entry settled: the enumeration it resolved to,
+ * or the error it rejected with. The rejection stays memoized for the callers.
+ */
+export type HomeSettlement =
+  | { readonly ok: true; readonly enumeration: ResourceEnumeration }
+  | { readonly ok: false; readonly error: unknown };
+
+/** The `onHomeSettled` of a verb that does not overlap work with the home population. */
+export const IGNORE_HOME_SETTLEMENT: (key: string, settlement: HomeSettlement) => void = () => undefined;
+
 /** What a run's population is built over: its home root and that root's oracles. */
 export interface RunPopulationOptions {
   /** The run's root: the project root a verb resolved. */
@@ -199,6 +210,14 @@ export interface RunPopulationOptions {
    * so the declaration and the enumeration are always of one tree.
    */
   readonly collectionsFor: (root: string) => Promise<Readonly<Record<string, CollectionConfig>> | undefined>;
+  /**
+   * Fired once, with {@link RunPopulation.homeKey}, when the home population's
+   * memo entry settles (resolved or rejected). It runs on a side branch, so it
+   * never changes the enumeration's outcome; a throw is a programming error and
+   * surfaces as an unhandled rejection. A verb that does not overlap passes
+   * {@link IGNORE_HOME_SETTLEMENT}.
+   */
+  readonly onHomeSettled: (key: string, settlement: HomeSettlement) => void;
 }
 
 /** One VAT process run's shared reads, parses, admissions and enumerations. */
@@ -235,6 +254,17 @@ export class RunPopulation implements PopulationRun {
   /** Each listed root's tracked links checked out as plain files, by root. */
   readonly #linksAsFiles = new Map<string, ReadonlySet<string> | null>();
   readonly #options: RunPopulationOptions;
+
+  /**
+   * The memo key of the home population for the trees a verb writes, whichever
+   * caller builds it: the one spelling of it, which `onHomeSettled` is called with.
+   *
+   * @param outputs - The trees the calling verb writes
+   * @returns The home memo key
+   */
+  static homeKey(outputs: readonly string[]): string {
+    return `${JSON.stringify(outputs)} home`;
+  }
 
   /**
    * @param options - The home root and its oracles
@@ -287,7 +317,7 @@ export class RunPopulation implements PopulationRun {
     if (route.kind === 'not-admitted') {
       return (await this.#probe(absolutePath)) === null ? { kind: 'not-admitted', entry: route.entry } : compute();
     }
-    const read = readRoute((await stored.facts())(route.contentKey));
+    const read = readRoute((await stored.facts()).outcome(route.contentKey));
     if (read.kind === 'compute' || (await this.#probe(absolutePath)) !== null) return compute();
     if (read.admitted.kind === 'facts') countWork('registry.admitted', 1);
     return read.admitted;
@@ -419,7 +449,7 @@ export class RunPopulation implements PopulationRun {
     if (stored === undefined) return undefined;
     const route = storedRoute(stored.realization, parserKind);
     if (route.kind !== 'read') return undefined;
-    const outcome = (await stored.facts())(route.contentKey);
+    const outcome = (await stored.facts()).outcome(route.contentKey);
     if (outcome.kind !== 'facts' || outcome.decoding === null) return undefined;
     const { facts, decoding } = outcome;
     const { skillText } = facts;
@@ -526,13 +556,29 @@ export class RunPopulation implements PopulationRun {
   /**
    * The home root's full population for `outputs`: one per run, memoized beside
    * the enumerations; the questions' when they built one for the same outputs
-   * (see `#homeForQuestions`).
+   * (see `#homeForQuestions`). Its memo entry's settlement is reported to
+   * `onHomeSettled` ({@link RunPopulation.homeKey}).
    */
   #homePopulation(outputs: readonly string[], cache: PopulationCache): Promise<ResourceEnumeration> {
-    const key = homePopulationKey(outputs);
-    const population = memoized(this.#enumerations, key, async () =>
-      (key === homePopulationKey(this.#options.outputs) ? await this.#questionHome : undefined) ?? this.#populate(outputs, cache));
+    const key = RunPopulation.homeKey(outputs);
+    const population = memoized(this.#enumerations, key, () => this.#settled(key, (async () =>
+      (key === RunPopulation.homeKey(this.#options.outputs) ? await this.#questionHome : undefined) ?? this.#populate(outputs, cache))()));
     this.#firstHome ??= population;
+    return population;
+  }
+
+  /**
+   * Report how the home population settled, handing the promise back unchanged.
+   * The report is a side branch: the memo's outcome is the original promise, so a
+   * listener cannot alter it. A throwing listener is a programming error and
+   * surfaces as an unhandled rejection of the side branch, never swallowed.
+   */
+  #settled(key: string, population: Promise<ResourceEnumeration>): Promise<ResourceEnumeration> {
+    const { onHomeSettled } = this.#options;
+    population.then(
+      (enumeration) => onHomeSettled(key, { ok: true, enumeration }),
+      (error: unknown) => onHomeSettled(key, { ok: false, error }),
+    );
     return population;
   }
 
@@ -684,11 +730,6 @@ function questionExpects(error: unknown): boolean {
     seen.add(current);
   }
   return false;
-}
-
-/** The memo key of the home root's full population for `outputs`, whichever caller builds it. */
-function homePopulationKey(outputs: readonly string[]): string {
-  return `${JSON.stringify(outputs)} home`;
 }
 
 /**

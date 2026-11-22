@@ -30,7 +30,7 @@ import { createLogger } from '../../../utils/logger.js';
 import { copyFileIntoMarketplace, copyTreeIntoMarketplace, writingMarketplace } from '../../../utils/marketplace-io.js';
 import { readPackageJsonOrAbsent } from '../../../utils/package-json.js';
 import { requireInputPath } from '../../../utils/project-root-policy.js';
-import { runSkillRegistries, withRunContext } from '../../../utils/resource-loader.js';
+import { runSkillRegistries, NO_HOME_SETTLED_LISTENER, withRunContext } from '../../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig, pluginLocalSkillConfigEntry } from '../../../utils/skill-packaging-config.js';
 import type { PhaseOutcome } from '../../phase-utils.js';
 import { packagingFailedIssue } from '../../skills/build.js';
@@ -347,7 +347,7 @@ async function buildClaudePluginMarketplaces(
   // ONE run for the build: its population, store and ignore oracle are the ones
   // `vat resources validate` uses, and every plugin-local skill in every
   // marketplace is packaged against the run's one packaging registry.
-  await withRunContext({ projectionStore: 'on-demand', root: configDir, outputs }, (run) =>
+  await withRunContext({ projectionStore: 'on-demand', root: configDir, outputs, homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
     buildMarketplacesInRun(configDir, runSkillRegistries(run), { marketplaces, availableSkills, skillsConfig, rootVersion, outputs, options }, built),
   );
 }

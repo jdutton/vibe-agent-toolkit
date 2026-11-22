@@ -46,7 +46,7 @@ import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 
 import { vatLinkCacheDirectory } from './cache-root.js';
 import { getCollectionsForFile } from './collection-matcher.js';
-import { type KeyedContent, NO_PARSER_KIND, type ParserKind, readContentWithKey } from './content-key.js';
+import { type KeyedContent, type ParserKind, readContentWithKey } from './content-key.js';
 import type { DeferredArtifacts } from './deferred-artifacts.js';
 import {
   validateFrontmatterLinks,
@@ -59,12 +59,12 @@ import {
 } from './frontmatter-validator.js';
 import { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
 import { fillLinkFacts, fragmentIndex, judgeLink, resolveLinkEntries, unreadableTargetsFrom, type FragmentIndex, type JudgeLinkOptions, type LinkEntry, type ValidateLinkOptions } from './link-validator.js';
-import { parserKindForMimeType } from './mime-type.js';
 import { type NotAdmittedLog, notAdmittedIssues, parseRefusal } from './not-admitted.js';
 import { ParseCache, type ParseCacheStats } from './parse-cache.js';
 import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } from './parse-dispatcher.js';
 import { isReadFailure, readFailureCode } from './parse-failure.js';
 import { isParserThrewError, isPerRunParseRefusal, ParseLimitError, reviveParserThrow } from './parse-limits.js';
+import { parserKindForResolvedPath } from './parser-kind-for-path.js';
 import type { NotAdmittedEntry } from './projection/blob-refusals.js';
 import { blobResourceFactsOf, optionalParseFacts } from './projection/blob-resource-facts.js';
 import { POPULATION_PARSE_LIMITS } from './projection/content-cache.js';
@@ -75,7 +75,6 @@ import { parseFailedEntry, parseFailedMessage } from './projection/parse-failure
 import {
   collectionMimeConflictFinding,
   createCollectionMimeResolver,
-  relativize,
   type CollectionMimeResolver,
 } from './projection/realizations.js';
 // Type-only, and that is what keeps it acyclic: the projection's population
@@ -1182,11 +1181,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     this.mimeResolverInstance ??= createCollectionMimeResolver(
       this.config?.resources?.collections,
     );
-    const declaredMime = this.mimeResolverInstance.mimeFor(
-      absolutePath,
-      this.baseDir === undefined ? absolutePath : relativize(absolutePath, this.baseDir),
-    );
-    return parserKindForMimeType(declaredMime) ?? NO_PARSER_KIND;
+    return parserKindForResolvedPath(absolutePath, this.mimeResolverInstance, this.baseDir);
   }
 
   /**

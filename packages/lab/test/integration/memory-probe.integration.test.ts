@@ -10,21 +10,18 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { readdirSync, readFileSync } from 'node:fs';
 
-import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { createSymlink, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { type RssDump, RssDumpSchema } from '../../src/facets/memory/types.js';
 
-/** The emitted probe. */
-const PROBE_DIST = toForwardSlash(fileURLToPath(new URL('../../dist/facets/memory/rss-probe.cjs', import.meta.url)));
+import { cleanupScratch, CLI_PACKAGE, distFile, itKeepsTheProbeContract, mainScript, scratchDir } from './probe-fixtures.js';
 
-/** The CLI package's name: a main script it owns is vat. */
-const CLI_PACKAGE = '@vibe-agent-toolkit/cli';
+/** The emitted probe. */
+const PROBE_DIST = distFile('facets/memory/rss-probe.cjs');
 
 /** The activation variable `capture.ts` sets — pinned against the probe's own below. */
 const LOG_DIR_ENV = 'VAT_LAB_RSS_LOG';
@@ -32,36 +29,7 @@ const LOG_DIR_ENV = 'VAT_LAB_RSS_LOG';
 /** Kilobytes in a mebibyte. */
 const MIB_KB = 1024;
 
-const scratch: string[] = [];
-
-afterAll(() => {
-  for (const dir of scratch) rmSync(dir, { recursive: true, force: true });
-});
-
-/** A fresh scratch directory, removed after the suite. */
-function scratchDir(prefix: string): string {
-  const dir = mkdtempSync(safePath.join(normalizedTmpdir(), prefix));
-  scratch.push(dir);
-  return dir;
-}
-
-/**
- * Write `source` as a main script at `relativePath` inside a package.
- *
- * @param owner - The owning `package.json`: its name, the whole manifest, or null for a script no package owns
- * @param relativePath - Where the script sits inside the package
- * @param source - The script
- * @returns The script's path
- */
-function mainScript(owner: string | Readonly<Record<string, unknown>> | null, relativePath: string, source: string): string {
-  const root = scratchDir('lab-rss-package-');
-  const manifest = typeof owner === 'string' ? { name: owner } : owner;
-  if (manifest !== null) writeFileSync(safePath.join(root, 'package.json'), JSON.stringify(manifest));
-  const script = safePath.join(root, relativePath);
-  mkdirSyncReal(safePath.join(script, '..'), { recursive: true });
-  writeFileSync(script, source);
-  return script;
-}
+afterAll(cleanupScratch);
 
 /**
  * The environment that switches the probe on into `dir` — or leaves it inert.
@@ -223,27 +191,5 @@ describe('the RSS probe', () => {
     expect(runWithProbe(mainScript(CLI_PACKAGE, 'dist/bin.js', allocate(1)), undefined)).toEqual([]);
   });
 
-  it('activates on exactly the variable the capture sets', () => {
-    const probe = createRequire(import.meta.url)(PROBE_DIST) as { __internals: { LOG_DIR_ENV: string } };
-
-    expect(probe.__internals.LOG_DIR_ENV).toBe(LOG_DIR_ENV);
-  });
-
-  it('requires nothing but node builtins — it runs inside an npx vat', () => {
-    const required = requiredBy(PROBE_DIST);
-
-    expect(required.length).toBeGreaterThan(0);
-    expect(required.filter((name) => name?.startsWith('node:') !== true)).toEqual([]);
-  });
+  itKeepsTheProbeContract(PROBE_DIST, LOG_DIR_ENV);
 });
-
-/**
- * The `require()` specifiers a built file names, comments stripped.
- *
- * @param file - An emitted `.cjs`
- * @returns Every specifier, in order
- */
-function requiredBy(file: string): (string | undefined)[] {
-  const source = readFileSync(file, 'utf-8').replaceAll(/\/\*[\S\s]*?\*\//g, '');
-  return [...source.matchAll(/require\(["']([^"']+)["']\)/g)].map((match) => match[1]);
-}

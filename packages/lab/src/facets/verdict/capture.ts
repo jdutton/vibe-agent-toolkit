@@ -34,6 +34,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 
 import { everyInOrder, safePath, withTempDir, appendAll } from '@vibe-agent-toolkit/utils';
+import { type NormalizeContext, normalizeCommandOutput } from '@vibe-agent-toolkit/utils/testing';
 
 import { currentHost, type ReportEnvelope } from '../../envelope/envelope.js';
 import {
@@ -54,7 +55,6 @@ import type { ResolvedInstrument } from '../../harness/types.js';
 import { writeReport } from '../../store.js';
 
 import { planApfsClone } from './clone.js';
-import { type NormalizeContext, normalizeCommandOutput } from './normalize.js';
 import type { VerdictSubject } from './subjects.js';
 import { VERDICT_FACET, type VerdictBody, type VerdictRow } from './types.js';
 import { planBuildVerbs, type VerbInvocation, type VerbQuery, type VerbSubject, verdictVerb } from './verbs.js';

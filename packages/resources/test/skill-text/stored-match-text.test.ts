@@ -62,7 +62,7 @@ describe('a match text through the store', () => {
       harnessBlobImports: [],
       skillTextFacts: [skillText.facts],
       skillTextMatches: skillText.matches,
-    })(KEY);
+    }).outcome(KEY);
     expect(outcome.kind === 'facts' && outcome.facts.skillText).toStrictEqual(record);
   });
 });

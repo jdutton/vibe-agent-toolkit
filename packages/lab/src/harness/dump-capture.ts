@@ -21,9 +21,13 @@
 
 import { mapInOrder } from '@vibe-agent-toolkit/utils';
 
+import type { ReportEnvelope } from '../envelope/envelope.js';
+
 import { withDumpDirs } from './dumps.js';
+import { judgeLoad, readLoad } from './load-guard.js';
 import { measureSpec, type SpecMeasurement } from './repeat.js';
-import type { CaptureRequest } from './types.js';
+import { buildReportEnvelope } from './report.js';
+import type { CaptureRequest, LoadReadings } from './types.js';
 
 /**
  * Run every requested command, each over its own fresh per-repeat dump
@@ -55,4 +59,35 @@ export async function captureCommandRows<TRow>(
     }),
   );
   return { rows, measured };
+}
+
+/**
+ * {@link captureCommandRows}, with the load read around it and the envelope built:
+ * the whole capture of a facet whose body is its rows and the load.
+ *
+ * The load is read here, around every command together, because it qualifies the
+ * report and not a row: `memory` and `perf` both said so in their own words, and
+ * a copy in each is how one of them stops reading it.
+ *
+ * @param facet - The facet's name, for the envelope header
+ * @param options - The capture request
+ * @param prefix - Temp-directory prefix, so a stray directory names its facet
+ * @param repeatEnv - See {@link captureCommandRows}
+ * @param rowFrom - See {@link captureCommandRows}
+ * @returns A complete report envelope, ready to store
+ */
+export async function captureDumpReport<TRow>(
+  facet: string,
+  options: CaptureRequest,
+  prefix: string,
+  repeatEnv: (directory: string) => Readonly<Record<string, string>>,
+  rowFrom: (measurement: SpecMeasurement, directories: readonly string[]) => Promise<TRow>,
+): Promise<ReportEnvelope<{ readonly commands: TRow[]; readonly load: LoadReadings }>> {
+  const loadBefore = readLoad();
+  const { rows, measured } = await captureCommandRows(options, prefix, repeatEnv, rowFrom);
+  const loadAfter = readLoad();
+  return buildReportEnvelope(facet, options, {
+    commands: rows,
+    load: judgeLoad(loadBefore.loadAvg1, loadAfter.loadAvg1, loadAfter.cpus),
+  }, measured);
 }

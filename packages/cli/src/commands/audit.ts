@@ -124,7 +124,7 @@ import {
 import { createLogger } from '../utils/logger.js';
 import { classifyInputFault, readInputFile, unlistableDirectoryRefusal } from '../utils/project-root-policy.js';
 import { relativizePath } from '../utils/relativize-paths.js';
-import { type RunContext, runSkillRegistries, withRunContext } from '../utils/resource-loader.js';
+import { type RunContext, runSkillRegistries, NO_HOME_SETTLED_LISTENER, withRunContext } from '../utils/resource-loader.js';
 import { RUN_INTEGRITY_CODE } from '../utils/run-integrity.js';
 import { mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../utils/skill-quality-footer.js';
@@ -1791,7 +1791,7 @@ export function getValidationResults(
 async function withAuditRun<T>(locationRoot: string, work: (run: RunContext) => Promise<T>): Promise<T> {
 	const repositoryRoot = gitFindRoot(locationRoot);
 	const gitTracker = repositoryRoot === null ? undefined : await getOrCreateGitTracker(repositoryRoot);
-	return withRunContext({ projectionStore: 'none', root: locationRoot, outputs: [], gitTracker }, work);
+	return withRunContext({ projectionStore: 'none', root: locationRoot, outputs: [], gitTracker, homeSettledListener: NO_HOME_SETTLED_LISTENER }, work);
 }
 
 /** The command's options inside `run`: its skill registries ride with them. */

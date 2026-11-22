@@ -299,14 +299,40 @@ interface KeyRows {
 type Rebuilt<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly reason: string };
 
 /**
+ * What the tier says about one key without building its facts: the kind
+ * {@link BlobFactsReader.outcome} returns for it, and how many of the key's rows
+ * were read to say so.
+ */
+interface BlobTierAnswer {
+  readonly kind: BlobFactsOutcome['kind'];
+  /** The key's rows: its `blobs` row and every reference, section, condition and skill-text row. */
+  readonly rowsRead: number;
+}
+
+/** The ONE reader of the blob tier's resource facts, over one indexed bundle. */
+export interface BlobFactsReader {
+  /** The key's facts, rebuilt on every ask and never retained by the reader: its caller owns them. */
+  readonly outcome: (contentKey: string) => BlobFactsOutcome;
+  /**
+   * The kind {@link outcome} returns, decided by the same checks of the same rows
+   * without building the facts. A stored frontmatter value is decoded and
+   * dropped: whether it decodes is decided only by decoding it.
+   */
+  readonly answer: (contentKey: string) => BlobTierAnswer;
+}
+
+/**
  * The ONE reader of the blob tier's resource facts.
  *
  * @param rows - Blob-scoped rows for any set of keys, as a store returns them
- * @returns A reader for one key at a time; the bundle is indexed once
+ * @returns The reader; the bundle is indexed once, and nothing decoded is kept
  */
-export function blobFactsReader(rows: BlobScopedRows): (contentKey: string) => BlobFactsOutcome {
+export function blobFactsReader(rows: BlobScopedRows): BlobFactsReader {
   const byKey = indexByKey(rows);
-  return (contentKey) => outcomeOf(contentKey, byKey.get(contentKey));
+  return {
+    outcome: (contentKey) => outcomeOf(contentKey, byKey.get(contentKey)),
+    answer: (contentKey) => answerOf(contentKey, byKey.get(contentKey)),
+  };
 }
 
 /**
@@ -332,26 +358,60 @@ function indexByKey(rows: BlobScopedRows): Map<string, KeyRows> {
   return byKey;
 }
 
+/** What a key's rows are, before any fact is built: the one classification both of the reader's answers make. */
+type KeyVerdict =
+  /** A `blobs` row: facts, once {@link blobRowsFault} finds nothing wrong with the rows. */
+  | { readonly kind: 'blob'; readonly blob: BlobRow; readonly rows: KeyRows }
+  /** Not text: the constant facts. */
+  | { readonly kind: 'not-text' }
+  | Extract<BlobFactsOutcome, { kind: 'not-admitted' | 'uncovered' }>;
+
+/**
+ * @param contentKey - The key asked about
+ * @param rows - Its rows, if the bundle held any
+ * @returns What its rows are
+ */
+function verdictOf(contentKey: string, rows: KeyRows | undefined): KeyVerdict {
+  if (rows === undefined) return { kind: 'uncovered', reason: `the blob tier holds no rows for ${contentKey}` };
+  if (rows.blob !== undefined) return { kind: 'blob', blob: rows.blob, rows };
+  // Not text: one rule for both lanes (`document-facts.ts`), so the facts are the constant.
+  if (rows.conditions.some((row) => row.code === BLOB_NOT_TEXT)) return { kind: 'not-text' };
+  const entry = notAdmittedEntriesByBlob(rows.conditions).get(contentKey);
+  if (entry !== undefined) return { kind: 'not-admitted', entry };
+  return { kind: 'uncovered', reason: `the blob tier holds no blobs row for ${contentKey}` };
+}
+
 /**
  * @param contentKey - The key asked about
  * @param rows - Its rows, if the bundle held any
  * @returns What the tier says about it
  */
 function outcomeOf(contentKey: string, rows: KeyRows | undefined): BlobFactsOutcome {
-  if (rows === undefined) return { kind: 'uncovered', reason: `the blob tier holds no rows for ${contentKey}` };
-  if (rows.blob !== undefined) {
-    const facts = factsOf(rows.blob, rows);
-    if (!facts.ok) return { kind: 'uncovered', reason: `${contentKey}: ${facts.reason}` };
-    const { encoding, encodingSource } = rows.blob;
-    return { kind: 'facts', facts: facts.value, decoding: { encoding, encodingSource } };
-  }
-  // Not text: one rule for both lanes (`document-facts.ts`), so the facts are the constant.
-  if (rows.conditions.some((row) => row.code === BLOB_NOT_TEXT)) {
+  const verdict = verdictOf(contentKey, rows);
+  if (verdict.kind === 'not-text') {
     return { kind: 'facts', facts: { ...NOT_TEXT_RESOURCE_FACTS, links: [], headings: [], contentKey, frontmatterNotAMapping: false }, decoding: null };
   }
-  const entry = notAdmittedEntriesByBlob(rows.conditions).get(contentKey);
-  if (entry !== undefined) return { kind: 'not-admitted', entry };
-  return { kind: 'uncovered', reason: `the blob tier holds no blobs row for ${contentKey}` };
+  if (verdict.kind !== 'blob') return verdict;
+  const facts = factsOf(verdict.blob, verdict.rows);
+  if (!facts.ok) return { kind: 'uncovered', reason: `${contentKey}: ${facts.reason}` };
+  const { encoding, encodingSource } = verdict.blob;
+  return { kind: 'facts', facts: facts.value, decoding: { encoding, encodingSource } };
+}
+
+/**
+ * @param contentKey - The key asked about
+ * @param rows - Its rows, if the bundle held any
+ * @returns The kind {@link outcomeOf} returns for it, and the rows read to say so
+ */
+function answerOf(contentKey: string, rows: KeyRows | undefined): BlobTierAnswer {
+  const rowCountOf = (held: KeyRows): number =>
+    (held.blob === undefined ? 0 : 1) + held.references.length + held.sections.length + held.conditions.length
+    + held.skillTextFacts.length + held.skillTextMatches.length;
+  const rowsRead = rows === undefined ? 0 : rowCountOf(rows);
+  const verdict = verdictOf(contentKey, rows);
+  if (verdict.kind === 'not-text') return { kind: 'facts', rowsRead };
+  if (verdict.kind !== 'blob') return { kind: verdict.kind, rowsRead };
+  return { kind: blobRowsFault(verdict.blob, verdict.rows) === undefined ? 'facts' : 'uncovered', rowsRead };
 }
 
 /**
@@ -375,16 +435,13 @@ function findings(rows: KeyRows, code: string): BlobConditionRow[] {
 }
 
 /**
- * @param rows - Every row the key holds
- * @returns The unresolved references, or why the rows cannot be one (a reference always has a line)
+ * @param rows - Every row the key holds, already found sound by {@link rowsFault}
+ * @returns The unresolved references
  */
-function unresolvedOf(rows: KeyRows): Rebuilt<UnresolvedReference[]> {
-  const unresolved: UnresolvedReference[] = [];
-  for (const row of findings(rows, 'UNRESOLVED_REFERENCE')) {
-    if (row.line === null) return { ok: false, reason: 'an UNRESOLVED_REFERENCE row has no line' };
-    unresolved.push(buildFrom(UNRESOLVED_REFERENCE_FIELDS, { ...row, line: row.line }));
-  }
-  return { ok: true, value: unresolved };
+function unresolvedOf(rows: KeyRows): UnresolvedReference[] {
+  // `rowsFault` refused a row without a line, so none is skipped here.
+  return findings(rows, 'UNRESOLVED_REFERENCE').flatMap((row) =>
+    row.line === null ? [] : [buildFrom(UNRESOLVED_REFERENCE_FIELDS, { ...row, line: row.line })]);
 }
 
 /**
@@ -432,19 +489,66 @@ function frontmatterOf(blob: BlobRow): Rebuilt<Record<string, unknown> | undefin
   }
 }
 
+/** An AST reference row and the link node type its syntactic form names. */
+interface AstReference {
+  readonly row: BlobReferenceRow;
+  readonly nodeType: BlobLink['nodeType'];
+}
+
 /**
+ * @param references - The key's reference rows
+ * @returns The rows that are AST links (a raw-source reference is not), in stored order
+ */
+function astReferences(references: readonly BlobReferenceRow[]): AstReference[] {
+  return references.flatMap((row) => {
+    const nodeType = NODE_TYPE_OF_AST_FORM.get(row.syntacticForm);
+    return nodeType === undefined ? [] : [{ row, nodeType }];
+  });
+}
+
+/**
+ * Every check of a key's rows that needs no decode, in the order a rebuild meets
+ * them: each AST link row has text and an `astIndex`, numbered 0..n-1; the rows
+ * add up to the `blobs` row's counts; every unresolved reference has a line.
+ *
  * @param blob - The key's `blobs` row
  * @param rows - Every row the key holds
- * @param links - The links rebuilt from the key's reference rows
- * @returns Why the rows do not add up to what the `blobs` row says the parse produced, or `undefined`
+ * @param ast - The key's AST reference rows
+ * @returns Why the rows cannot be trusted, or `undefined`
  */
-function countsFault(blob: BlobRow, rows: KeyRows, links: readonly BlobLink[]): string | undefined {
-  if (links.length !== blob.linkCount) return `${String(links.length)} AST reference rows against linkCount ${String(blob.linkCount)}`;
+function rowsFault(blob: BlobRow, rows: KeyRows, ast: readonly AstReference[]): string | undefined {
+  const unindexed = ast.find(({ row }) => row.text === null || row.astIndex === null);
+  if (unindexed !== undefined) return `AST reference row ${String(unindexed.row.ordinal)} has no text or no astIndex`;
+  if (!isDense(ast.map(({ row }) => row.astIndex ?? -1))) return 'the AST reference rows\' astIndex values have a gap or a repeat';
+  if (ast.length !== blob.linkCount) return `${String(ast.length)} AST reference rows against linkCount ${String(blob.linkCount)}`;
   if (rows.sections.length !== blob.headingCount) {
     return `${String(rows.sections.length)} section rows against headingCount ${String(blob.headingCount)}`;
   }
   if (!isDense(rows.sections.map((row) => row.ordinal))) return 'the section rows\' ordinals have a gap or a repeat';
-  return findingRowsFault(blob, rows);
+  const findingFault = findingRowsFault(blob, rows);
+  if (findingFault !== undefined) return findingFault;
+  return rows.conditions.some((row) => row.code === 'UNRESOLVED_REFERENCE' && row.line === null)
+    ? 'an UNRESOLVED_REFERENCE row has no line'
+    : undefined;
+}
+
+/**
+ * Why a key's `blobs` row and the rows filed under it cannot be rebuilt into
+ * facts, or `undefined` when they can: exactly the refusals of {@link factsOf},
+ * which runs these same checks before it builds anything. The frontmatter value
+ * and the skill-text record are decoded to answer and the decoded values dropped.
+ *
+ * @param blob - The key's `blobs` row
+ * @param rows - Every row the key holds
+ * @returns Why the rows cannot be trusted, or `undefined`
+ */
+function blobRowsFault(blob: BlobRow, rows: KeyRows): string | undefined {
+  const fault = rowsFault(blob, rows, astReferences(rows.references));
+  if (fault !== undefined) return fault;
+  const frontmatter = frontmatterOf(blob);
+  if (!frontmatter.ok) return frontmatter.reason;
+  const skillText = skillTextOf(blob.contentKey, rows);
+  return skillText.ok ? undefined : skillText.reason;
 }
 
 /**
@@ -453,12 +557,10 @@ function countsFault(blob: BlobRow, rows: KeyRows, links: readonly BlobLink[]): 
  * @returns The resource facts, or why the rows cannot be trusted
  */
 function factsOf(blob: BlobRow, rows: KeyRows): Rebuilt<BlobResourceFacts> {
-  const links = linksOf(rows.references);
-  if (!links.ok) return links;
-  const fault = countsFault(blob, rows, links.value);
+  // The checks of `blobRowsFault`, in its order, with the decoded frontmatter and skill-text record kept.
+  const ast = astReferences(rows.references);
+  const fault = rowsFault(blob, rows, ast);
   if (fault !== undefined) return { ok: false, reason: fault };
-  const unresolved = unresolvedOf(rows);
-  if (!unresolved.ok) return unresolved;
   const frontmatter = frontmatterOf(blob);
   if (!frontmatter.ok) return frontmatter;
   const skillText = skillTextOf(blob.contentKey, rows);
@@ -467,12 +569,12 @@ function factsOf(blob: BlobRow, rows: KeyRows): Rebuilt<BlobResourceFacts> {
   return {
     ok: true,
     value: {
-      links: links.value,
+      links: linksOf(ast),
       headings: headingsOf(rows.sections),
       ...(blob.anchors.length > 0 && { anchors: blob.anchors }),
       ...(parseErrors.length > 0 && { parseErrors }),
       // Present for every markdown parse, empty or not; no other parser produces the field.
-      ...(parserKindOf(blob.contentKey) === 'markdown' && { unresolvedReferences: unresolved.value }),
+      ...(parserKindOf(blob.contentKey) === 'markdown' && { unresolvedReferences: unresolvedOf(rows) }),
       ...(frontmatter.value !== undefined && { frontmatter: frontmatter.value }),
       ...(blob.frontmatterError !== null && { frontmatterError: blob.frontmatterError }),
       estimatedTokenCount: blob.tokenEstimate,
@@ -538,24 +640,13 @@ function skillTextOf(contentKey: string, rows: KeyRows): Rebuilt<SkillTextFacts 
  * Each link's keys are in the order every parser writes them (`ResourceLink`'s
  * own: text, href, type, line, startOffset, endOffset, nodeType).
  *
- * @param references - The key's reference rows
- * @returns The links, or why the rows cannot be links
+ * @param ast - The key's AST reference rows, already found sound by {@link rowsFault}
+ * @returns The links
  */
-function linksOf(references: readonly BlobReferenceRow[]): Rebuilt<BlobLink[]> {
-  const ast = references.flatMap((row) => {
-    const nodeType = NODE_TYPE_OF_AST_FORM.get(row.syntacticForm);
-    return nodeType === undefined ? [] : [{ row, nodeType }];
-  });
-  const links: BlobLink[] = [];
-  const indexes: number[] = [];
-  for (const { row } of ast) {
-    if (row.text === null || row.astIndex === null) return { ok: false, reason: `AST reference row ${String(row.ordinal)} has no text or no astIndex` };
-    indexes.push(row.astIndex);
-  }
-  if (!isDense(indexes)) return { ok: false, reason: 'the AST reference rows\' astIndex values have a gap or a repeat' };
-  ast.sort((left, right) => (left.row.astIndex ?? 0) - (right.row.astIndex ?? 0));
-  for (const { row, nodeType } of ast) {
-    links.push({
+function linksOf(ast: readonly AstReference[]): BlobLink[] {
+  return [...ast]
+    .sort((left, right) => (left.row.astIndex ?? 0) - (right.row.astIndex ?? 0))
+    .map(({ row, nodeType }) => ({
       text: row.text ?? '',
       href: row.rawRef,
       type: classifyLink(row.rawRef),
@@ -563,9 +654,7 @@ function linksOf(references: readonly BlobReferenceRow[]): Rebuilt<BlobLink[]> {
       ...(row.startOffset !== null && { startOffset: row.startOffset }),
       ...(row.endOffset !== null && { endOffset: row.endOffset }),
       nodeType,
-    });
-  }
-  return { ok: true, value: links };
+    }));
 }
 
 /**

@@ -18,7 +18,7 @@ import type { ResourcePopulationSource } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { withRunContext } from '../../src/utils/resource-loader.js';
+import { NO_HOME_SETTLED_LISTENER, withRunContext } from '../../src/utils/resource-loader.js';
 
 /** The two fixture members, named once so the writes and the expectation agree. */
 const GUIDE_REL = 'docs/guide.md';
@@ -47,7 +47,7 @@ afterEach(() => {
  * @returns Whatever `work` returned
  */
 function withSource<T>(work: (source: ResourcePopulationSource) => Promise<T>): Promise<T> {
-  return withRunContext({ projectionStore: 'on-demand', root, outputs: [] }, (run) => work(run.population.source));
+  return withRunContext({ projectionStore: 'on-demand', root, outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) => work(run.population.source));
 }
 
 describe('the run\'s population source', () => {

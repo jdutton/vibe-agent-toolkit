@@ -198,6 +198,8 @@ export interface Ending {
   readonly code: number | null;
   readonly signal: NodeJS.Signals | null;
   readonly document: Record<string, unknown>;
+  /** Its stdout, as written: the document's own bytes. */
+  readonly stdout: string;
   readonly stderr: string;
 }
 
@@ -269,8 +271,9 @@ export function startVat(
     child.stdout?.once('close', () => resolve());
   });
   const ended = Promise.all([exited, stdoutClosed]).then(([{ code, signal }]) => {
-    const document = (yaml.parse(Buffer.concat(chunks).toString('utf-8')) ?? {}) as Record<string, unknown>;
-    return { code, signal, document, stderr: stderr() };
+    const stdout = Buffer.concat(chunks).toString('utf-8');
+    const document = (yaml.parse(stdout) ?? {}) as Record<string, unknown>;
+    return { code, signal, document, stdout, stderr: stderr() };
   });
   const drained = new Promise<string>((resolve) => {
     child.once('close', () => resolve(stderr()));

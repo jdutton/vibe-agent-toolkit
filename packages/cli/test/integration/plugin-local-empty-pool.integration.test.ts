@@ -56,7 +56,7 @@ const UNREAD_RUN = {} as unknown as RunContext;
 
 const ORCHESTRATORS: ReadonlyArray<readonly [name: string, select: (root: string) => PhaseSelection]> = [
   ['vat build', (root) => selectBuildPhases(undefined, configuredBuildSurfaces(root))],
-  ['vat validate', (root) => selectValidateSurfaces(loadConfig(root, 'source'), { root, verbose: false, debug: false, base: undefined, context: UNREAD_RUN })],
+  ['vat validate', (root) => selectValidateSurfaces(loadConfig(root, 'source'), { root, verbose: false, debug: false, base: undefined, context: UNREAD_RUN, checksTurn: () => Promise.reject(new Error('no checks turn: the phase is selected, never run')) })],
   ['vat verify', (root) => selectVerifyPhases(loadConfig(root, 'source'), UNREAD_RUN)],
 ];
 

@@ -31,14 +31,9 @@
  * - **The PARENT's resident set: excluded, on every platform** — by the choice
  *   of figure above, so a repeat launched straight from the lab is measured from
  *   its own start. `test/integration/memory-probe.integration.test.ts` pins it.
- * - **Only vat's own processes.** A process is vat's when its
- *   main script (`process.argv[1]`, its own links read — npm's `.bin/vat` is one)
- *   belongs to one of {@link VAT_PACKAGE_NAMES}: the nearest `package.json`
- *   above it names the launcher or the CLI and is not `private` (the
- *   monorepo's root shares the launcher's name). Decided by the probe from the
- *   install alone, so it holds for every vat ever published — a build needs no
- *   cooperation to be measured — and it excludes what vat is not: `npm` under
- *   `npx`, a `node -e`, a tool vat spawns.
+ * - **Only vat's own processes**, by the one rule `harness/vat-process.cts`
+ *   owns and the `perf` probe shares: decided from the install alone, so a
+ *   build needs no cooperation to be measured.
  * - **Read at exit, FIRST.** A high-water mark is monotonic, but the preload's
  *   `exit` listener is registered before vat's own, so it runs before them:
  *   what vat's synchronous exit handlers allocate is not in the figure. A
@@ -59,88 +54,19 @@
  * figure — one process counted twice. A worker returns before registering.
  */
 
-import crypto = require('node:crypto');
 import fs = require('node:fs');
-import path = require('node:path');
 import workerThreads = require('node:worker_threads');
+
+import vatProcess = require('../../harness/vat-process.cjs');
 
 /** Activation variable: the directory to write the dump into. */
 const LOG_DIR_ENV = 'VAT_LAB_RSS_LOG';
 
-/** The packages whose scripts are vat: the umbrella launcher, and the CLI it delegates to. */
-const VAT_PACKAGE_NAMES: ReadonlySet<string> = new Set(['vibe-agent-toolkit', '@vibe-agent-toolkit/cli']);
-
-/** Links read from a main script before the probe gives up deciding — a cycle, not an install. */
-const MAX_LINK_HOPS = 40;
+/** How this probe names itself on stderr. */
+const PROBE_NAME = 'rss probe';
 
 /** Where Linux states this process image's resident high-water mark. */
 const PROC_STATUS = '/proc/self/status';
-
-/**
- * Say on stderr why the probe could not decide, and decide "not vat".
- *
- * A probe that could not tell must not guess vat — that would count an
- * unrelated process — and must not be silent: a repeat that then fails for
- * want of a vat peak needs its cause on record.
- *
- * @param what - What the probe was reading
- * @param error - Why it failed
- */
-function undecided(what: string, error: unknown): false {
-  const reason = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`[vat-lab rss probe] cannot read ${what}: ${reason}\n`);
-  return false;
-}
-
-/**
- * Whether the nearest `package.json` above `file` names one of vat's packages.
- *
- * @param file - A real (link-resolved) absolute path
- */
-function ownedByVat(file: string): boolean {
-  let dir = path.dirname(file);
-  for (;;) {
-    const manifest = path.join(dir, 'package.json');
-    // `lstat`, which follows nothing; an absent manifest moves the walk up.
-    if (fs.lstatSync(manifest, { throwIfNoEntry: false }) !== undefined) {
-      try {
-        const parsed: unknown = JSON.parse(fs.readFileSync(manifest, 'utf-8'));
-        const owner = typeof parsed === 'object' && parsed !== null ? (parsed as { name?: unknown; private?: unknown }) : {};
-        // Published packages only: the monorepo's private root is named `vibe-agent-toolkit` too.
-        return typeof owner.name === 'string' && VAT_PACKAGE_NAMES.has(owner.name) && owner.private !== true;
-      } catch (error) {
-        return undecided(manifest, error);
-      }
-    }
-    const parent = path.dirname(dir);
-    if (parent === dir) return false;
-    dir = parent;
-  }
-}
-
-/**
- * Whether this process's main script is one of vat's.
- *
- * @param main - The main script as the process was started with it
- */
-function isVatMainScript(main: string | undefined): boolean {
-  if (main === undefined || main === '') return false;
-  let file = path.resolve(main);
-  try {
-    // The installed `.bin/vat` is a link into the package, and its own directory
-    // owns nothing — so the script's own link is read, by its text, hop by hop.
-    // A link among its ancestors needs no reading: the walk up to the nearest
-    // `package.json` passes through it.
-    let hops = 0;
-    while (fs.lstatSync(file).isSymbolicLink()) {
-      if (++hops > MAX_LINK_HOPS) throw new Error(`more than ${String(MAX_LINK_HOPS)} links`);
-      file = path.resolve(path.dirname(file), fs.readlinkSync(file));
-    }
-  } catch (error) {
-    return undecided(main, error);
-  }
-  return ownedByVat(file);
-}
 
 /**
  * This process image's peak resident set, in kilobytes — see the module header for why Linux
@@ -157,39 +83,15 @@ function peakRssKb(): number {
   return Number(line[1]);
 }
 
-/**
- * Write this process's peak, under a name no other process in the directory holds.
- *
- * A random suffix rather than the pid alone: pids are recycled across the
- * processes one repeat spawns, and a pid-keyed name would let a later process
- * overwrite a sibling's dump. `wx` makes the impossible collision a loud failure
- * instead of a silent overwrite.
- *
- * Never throws — a measurement must not break the thing it measures — but a
- * failure is said on stderr: a missing dump nobody mentioned would read as a
- * process that never ran.
- *
- * @param logDir - Directory to write into — the capture's own, made before the process started
- */
-function writeDump(logDir: string): void {
-  try {
-    const dump = JSON.stringify({ pid: process.pid, maxRssKb: peakRssKb() });
-    const file = path.join(logDir, `rss-${String(process.pid)}-${crypto.randomUUID()}.json`);
-    fs.writeFileSync(file, dump, { flag: 'wx' });
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`[vat-lab rss probe] failed to write dump: ${reason}\n`);
-  }
-}
-
 const configuredLogDir = process.env[LOG_DIR_ENV];
 if (workerThreads.isMainThread && typeof configuredLogDir === 'string' && configuredLogDir !== '') {
   process.once('exit', () => {
-    if (isVatMainScript(process.argv[1])) writeDump(configuredLogDir);
+    if (!vatProcess.isVatMainScript(PROBE_NAME, process.argv[1])) return;
+    vatProcess.writeProbeRecord(PROBE_NAME, configuredLogDir, 'rss', () => ({ pid: process.pid, maxRssKb: peakRssKb() }));
   });
 }
 
 export = {
   /** Testing surface. The contract with the reader is the JSON file, and only that. */
-  __internals: { LOG_DIR_ENV, VAT_PACKAGE_NAMES },
+  __internals: { LOG_DIR_ENV },
 };

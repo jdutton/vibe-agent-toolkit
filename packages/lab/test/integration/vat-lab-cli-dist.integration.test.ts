@@ -17,6 +17,8 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { abArmFlags, createProgram, resolveAbArms } from '../../src/bin/vat-lab.js';
 import { npxInstallSite } from '../../src/harness/npx-install.js';
 
+import { builtLabProgram } from './probe-fixtures.js';
+
 let tempDir: string;
 
 beforeAll(async () => {
@@ -244,7 +246,8 @@ describe('vat-lab <facet> run — an arm-owned variable on a real build', () => 
   ] as const)('refuses an arm-owned variable on perf %s cleanly, as REFUSED, rather than throwing out of the action', async ([subcommand, name, flags]) => {
     const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
 
-    await createProgram().parseAsync(['node', 'vat-lab', 'perf', subcommand, tempDir, ...flags(), '--out', safePath.join(tempDir, 'out')]);
+    // The built lab: the refusal comes from the arm, inside a capture that loads the probe.
+    await (await builtLabProgram()).parseAsync(['node', 'vat-lab', 'perf', subcommand, tempDir, ...flags(), '--out', safePath.join(tempDir, 'out')]);
 
     expect(process.exitCode).toBe(ExitCode.ERROR);
     const written = stderr.mock.calls.map(([chunk]) => String(chunk)).join('');

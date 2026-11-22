@@ -39,6 +39,82 @@ export const PERF_FACET = 'perf';
  * `envelope/envelope.ts`'s header for why one is prohibited here.
  */
 
+/** The statistics every figure in a row carries: median with its spread, over the repeats. */
+export interface PerfStats {
+  readonly medianMs: number;
+  readonly minMs: number;
+  readonly maxMs: number;
+  readonly iqrMs: number;
+}
+
+/**
+ * One vat process's record, exactly as `perf-probe.cts` writes it.
+ *
+ * Times are epoch milliseconds read from one clock, so two processes' records
+ * order against each other. CPU is `process.resourceUsage()`, in microseconds,
+ * read at exit.
+ */
+export const PerfProcessDumpSchema = z
+  .object({
+    pid: z.number().int(),
+    ppid: z.number().int(),
+    startMs: z.number().nonnegative(),
+    endMs: z.number().nonnegative(),
+    userCpuUs: z.number().nonnegative(),
+    systemCpuUs: z.number().nonnegative(),
+    /** Every `Surface:` banner this process wrote to stderr, in order; empty for a process that wrote none. */
+    banners: z.array(z.object({ name: z.string().min(1), atMs: z.number().nonnegative() }).strict()),
+  })
+  .strict();
+
+/** One vat process's record. */
+export type PerfProcessDump = z.infer<typeof PerfProcessDumpSchema>;
+
+/**
+ * The first condition that kept `vat validate` from overlapping its checks child, as
+ * the build names it. Only present on a build that writes a debug-facts dump.
+ *
+ * Reads the cli's `GateDecline` (`packages/cli/src/commands/checks-overlap-gate.ts`): a `member`
+ * decline carries the member and the route that sends it cold, a `rejected` one the error it failed
+ * with, and every other condition nothing else. The cli's
+ * `test/integration/validate-debug-facts-lab-schema.integration.test.ts` writes every variant, keyed
+ * by the cli's own condition and route types, through the real dump writer and parses it here.
+ */
+export const GateDeclinedBySchema = z.discriminatedUnion('condition', [
+  z.object({ condition: z.enum(['debug', 'cores', 'not-hit', 'limits', 'disarmed', 'not-settled']) }).strict(),
+  /** What a `rejected` judgment failed with, as the build words it. */
+  z.object({ condition: z.literal('rejected'), error: z.string() }).strict(),
+  z.object({ condition: z.literal('member'), member: z.string(), route: z.enum(['storedRoute', 'readRoute']) }).strict(),
+]);
+
+/** The condition that declined the overlap. */
+export type GateDeclinedBy = z.infer<typeof GateDeclinedBySchema>;
+
+/**
+ * What `vat validate` says about itself when `VAT_VALIDATE_DEBUG_FACTS` names a
+ * directory: a mode and post-spawn facts, not work counters. A build that does
+ * not write it (main, before the overlap) leaves the directory empty, and the
+ * row then says the mode is unknown.
+ *
+ * The writer is the cli's `ValidateDebugFacts` (`packages/cli/src/commands/validate-debug-facts.ts`).
+ * The lab does not depend on the cli; the cli dev-depends on the lab, and its
+ * `test/integration/validate-debug-facts-lab-schema.integration.test.ts` writes every variant
+ * through the real writer and parses it with this schema. The lab's
+ * `test/system/validate-debug-facts.system.test.ts` also parses a built vat's real dumps.
+ */
+export const ValidateDebugFactsSchema = z
+  .object({
+    checksOverlapped: z.union([z.literal(0), z.literal(1)]),
+    gateDeclinedBy: GateDeclinedBySchema.nullable(),
+    childStderrBytesAtTurn: z.number().int().nonnegative(),
+    parentStoreWritesUntilChildExit: z.number().int().nonnegative(),
+    parentParseCacheWritesUntilChildExit: z.number().int().nonnegative(),
+  })
+  .strict();
+
+/** What a validate run says about its own mode. */
+export type ValidateDebugFacts = z.infer<typeof ValidateDebugFactsSchema>;
+
 /** The measured result for one command. */
 export interface PerfCommandStats {
   readonly name: string;
@@ -98,6 +174,35 @@ export interface PerfCommandStats {
   readonly failed: boolean;
   /** Why it failed, when it did. */
   readonly failure: string | null;
+  /**
+   * Wall per `Surface:` banner: banner to the next banner, the last to the
+   * bannering process's exit. A repeat's surfaces are sequential in one process,
+   * so these never overlap and may be read against the total. Empty when the
+   * command wrote no banners (and on a failed row). A surface named twice in
+   * one run is keyed `name`, then `name#2`.
+   */
+  readonly surfaces: Readonly<Record<string, PerfStats>>;
+  /**
+   * Total CPU per repeat: user plus system, summed over every vat process's
+   * record, one record per process. Wall is never summed. `null` when no vat
+   * process wrote a record (a command whose main script no vat package owns)
+   * and on a failed row: unknown is not zero.
+   */
+  readonly cpuMs: PerfStats | null;
+  /**
+   * Each repeat's vat process records (pid, parent, start, end, CPU), in repeat
+   * order, so a reader can see lifetimes overlap. Empty when `cpuMs` is `null`.
+   */
+  readonly processes: readonly (readonly PerfProcessDump[])[];
+  /**
+   * Whether `vat validate` overlapped its checks child, as the build's own
+   * debug-facts dump says, and `null` when no repeat wrote one: a build that
+   * predates the dump says nothing, which is not "did not overlap". Repeats that
+   * disagree make the row failed.
+   */
+  readonly checksOverlapped: 0 | 1 | null;
+  /** Why the overlap was declined, when `checksOverlapped` is 0 and the build says; else `null`. */
+  readonly gateDeclinedBy: GateDeclinedBy | null;
 }
 
 /** The `perf` facet's report body. */
@@ -105,6 +210,15 @@ export interface PerfBody {
   readonly commands: readonly PerfCommandStats[];
   readonly load: LoadReadings;
 }
+
+const PerfStatsSchema = z
+  .object({
+    medianMs: z.number().nonnegative(),
+    minMs: z.number().nonnegative(),
+    maxMs: z.number().nonnegative(),
+    iqrMs: z.number().nonnegative(),
+  })
+  .strict();
 
 /**
  * Runtime schema for {@link PerfBody}.
@@ -129,6 +243,11 @@ export const PerfBodySchema = z
           iqrMs: z.number().nonnegative(),
           samplesMs: z.array(z.number().nonnegative()),
           exitCode: z.number().int().nullable(),
+          surfaces: z.record(z.string(), PerfStatsSchema),
+          cpuMs: PerfStatsSchema.nullable(),
+          processes: z.array(z.array(PerfProcessDumpSchema)),
+          checksOverlapped: z.union([z.literal(0), z.literal(1)]).nullable(),
+          gateDeclinedBy: GateDeclinedBySchema.nullable(),
         })
         .strict(),
     ),

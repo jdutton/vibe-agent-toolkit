@@ -53,7 +53,7 @@ import { discoverSkillsFromConfig, readPluginLocalSkillName } from '../../src/co
 import { buildSharedValidationContext } from '../../src/commands/skills/validate.js';
 import { loadConfig } from '../../src/utils/config-loader.js';
 import { createLogger } from '../../src/utils/logger.js';
-import { withRunContext } from '../../src/utils/resource-loader.js';
+import { NO_HOME_SETTLED_LISTENER, withRunContext } from '../../src/utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../src/utils/skill-packaging-config.js';
 import { evictHalfTheSkillText, storedContentKeys } from '../helpers/cache-differential.js';
 import { captureSkillTextGolden, firstDifferingLine, type Counters, type GoldenCapture, type SkillsLane, type SkillsLaneRun } from '../helpers/skill-text-golden-capture.js';
@@ -129,7 +129,7 @@ function thisTree(root: string): SkillsLane {
   const { defaults, config: perSkill } = skillsConfig;
   return {
     root,
-    withRun: (work) => withRunContext({ projectionStore: 'on-demand', root, outputs: [] }, (run) => work({
+    withRun: (work) => withRunContext({ projectionStore: 'on-demand', root, outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) => work({
       discover: () => discoverSkillsFromConfig(skillsConfig, root, 'refuse', run.population),
       sharedContext: (listed, discovered) => buildSharedValidationContext(
         validatedSkillsOf(listed),

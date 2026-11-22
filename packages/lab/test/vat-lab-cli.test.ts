@@ -52,6 +52,7 @@ import type { VerdictBody } from '../src/facets/verdict/types.js';
 import { exactExit, MEASURABLE_COMMAND_NAMES, MEASURABLE_COMMANDS } from '../src/harness/commands.js';
 import { writeReport } from '../src/store.js';
 
+import { NO_PROBE_DATA } from './perf-fixtures.js';
 import { CLEAN_LOAD, makeReport } from './report-fixtures.js';
 
 let tempDir: string;
@@ -83,6 +84,7 @@ function failedRow(name: string): PerfCommandStats {
     exitCode: null,
     failed: true,
     failure: 'boom',
+    ...NO_PROBE_DATA,
   };
 }
 
@@ -101,6 +103,7 @@ function cleanRow(name: string, medianMs: number): PerfCommandStats {
     exitCode: 0,
     failed: false,
     failure: null,
+    ...NO_PROBE_DATA,
   };
 }
 

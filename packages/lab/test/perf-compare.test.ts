@@ -44,6 +44,7 @@ import {
 } from '../src/facets/perf/types.js';
 import type { LoadReadings } from '../src/harness/types.js';
 
+import { NO_PROBE_DATA } from './perf-fixtures.js';
 import { makeReport } from './report-fixtures.js';
 
 /** A quiet machine, so contamination is never an accidental variable. */
@@ -79,6 +80,7 @@ function perfRow(over: Partial<PerfCommandStats> = {}): PerfCommandStats {
     exitCode: 0,
     failed: false,
     failure: null,
+    ...NO_PROBE_DATA,
     ...over,
   };
 }

@@ -24,7 +24,7 @@ vi.mock('@vibe-agent-toolkit/projection-sqlite', async () =>
   (await import('../projection-store-test-doubles.js')).backend.moduleExports());
 
 const { CACHE_ENV, openQuestionCache, PROJECTION_STORE_ENV, PROJECTION_STORE_SQLITE } = await import('../../src/utils/projection-store.js');
-const { withRunContext } = await import('../../src/utils/resource-loader.js');
+const { NO_HOME_SETTLED_LISTENER, withRunContext } = await import('../../src/utils/resource-loader.js');
 const { resetUnscopedNoticeLedger } = await import('../../src/utils/operator-notices.js');
 
 const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-question-store-');
@@ -129,7 +129,7 @@ async function runAsking(work: () => Promise<number>, closeFault: Error): Promis
   backend.closeFailures.push(closeFault);
   const capture = captureStderr();
   try {
-    const settled = await withRunContext({ projectionStore: 'on-demand', root: repoRoot, outputs: [] }, async (run) => {
+    const settled = await withRunContext({ projectionStore: 'on-demand', root: repoRoot, outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
       await run.population.source.storedDocument(safePath.join(repoRoot, 'skills', 'demo', 'SKILL.md'), 'markdown');
       return work();
     }).then((value) => value, (error: unknown) => error);

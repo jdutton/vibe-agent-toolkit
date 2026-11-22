@@ -20,8 +20,10 @@ import { writeFileSync } from 'node:fs';
 import { readSkillDocument, type SkillTextRun } from '@vibe-agent-toolkit/agent-skills';
 import { hydrateRunDatabase, openSqliteFactStore, type RunDatabase } from '@vibe-agent-toolkit/projection-sqlite';
 import {
+  blobFactsReader,
   type BlobScopedRows,
   computeContentKey,
+  createCollectionMimeResolver,
   type ExtentScopedRows,
   ParseCache,
   ParseDispatcher,
@@ -40,9 +42,11 @@ import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { createTempDir, removeTempDir, scratchTmpdirEnv } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, expect, vi } from 'vitest';
 
+import { createChecksOverlapGate } from '../../src/commands/checks-overlap-gate.js';
 import { checkGitInstalled } from '../../src/commands/doctor.js';
 import type { Logger } from '../../src/utils/logger.js';
 import { withQueriedProjection } from '../../src/utils/projection-query.js';
+import { HOME_KEY, hit, keyed as keyedRealization, POPULATION_LIMITS, ROOT } from '../helpers/overlap-gate-fixtures.js';
 import { commitTestFixture } from '../test-helpers.js';
 
 /** The fact store's counters. */
@@ -327,7 +331,14 @@ const DEEPLY_NESTED_LIST = Array.from({ length: 1000 }, (_, level) => ' '.repeat
 const HASHED = new TextEncoder().encode('# hashed\n');
 
 export const PARSE_SEEDS: Readonly<Record<ParseCounter, Seed>> = {
-  'parse.dispatched': parseSeed('dispatched', {}, { 'parse.dispatched': 1 }),
+  // A dispatch files what it parsed: the parent's write on the wire transport.
+  'parse.dispatched': parseSeed('dispatched', {}, { 'parse.dispatched': 1, 'parse.cache.written': 1 }),
+  // The wire transport named outright, so an exported VAT_PARSE_TRANSPORT cannot
+  // move this seed to the worker's site, which PARSE_SITE_SEEDS covers.
+  'parse.cache.written': parseSeed('written', { transport: 'wire' }, {
+    'parse.dispatched': 1,
+    'parse.cache.written': 1,
+  }),
   'parse.cache.hit': (() => {
     const content = uniqueDocument('hit');
     return {
@@ -345,7 +356,8 @@ export const PARSE_SEEDS: Readonly<Record<ParseCounter, Seed>> = {
   'parse.redispatched': (() => {
     // The worker files the entry and says so; the read-back then finds it gone,
     // as after a concurrent cache clear, so the document is parsed again: one
-    // document dispatched once, and one re-dispatch.
+    // document dispatched once, and one re-dispatch. Each parse files an entry:
+    // the worker's, counted at its stored reply, and the re-parse's.
     const content = uniqueDocument('redispatched');
     return {
       prepare: (scope: SeedScope) => {
@@ -355,7 +367,7 @@ export const PARSE_SEEDS: Readonly<Record<ParseCounter, Seed>> = {
         scope.defer(() => dispatcher.shutdown());
         return () => parseOnce(content, dispatcher);
       },
-      delta: { ...keyed(content), 'parse.dispatched': 1, 'parse.redispatched': 1 },
+      delta: { ...keyed(content), 'parse.dispatched': 1, 'parse.redispatched': 1, 'parse.cache.written': 2 },
     };
   })(),
   'parse.refused.keyDetermined': {
@@ -479,7 +491,13 @@ function admissionSeed(label: string): Seed {
         return undefined;
       };
     },
-    delta: { ...readAndKeyed(content), 'fs.stat': 1, 'parse.dispatched': 1, 'registry.admitted': 1 },
+    delta: {
+      ...readAndKeyed(content),
+      'fs.stat': 1,
+      'parse.dispatched': 1,
+      'parse.cache.written': 1,
+      'registry.admitted': 1,
+    },
   };
 }
 
@@ -500,6 +518,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
       'extent.derived': 1,
       'parse.dispatched': 1,
+      'parse.cache.written': 1,
       ...readAndKeyed(PLAIN_TREE['a.md']),
       'git.calls': 6,
     },
@@ -569,6 +588,24 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
   'skillText.noStore': skillTextScanSeed(false),
   'skillText.storeUnopened': skillTextStoreUnopenedSeed(),
   'skillText.outsideRoot': skillTextOutsideRootSeed(),
+  // The gate judging a hit whose one member's tier holds one `blobs` row (whose
+  // section rows are missing, so it declines): one row read, and no store counter.
+  'checks.gate.rows.read': {
+    prepare: () => async () => {
+      const gate = createChecksOverlapGate({
+        debug: false,
+        cores: () => 2,
+        childHomeKey: HOME_KEY,
+        limits: POPULATION_LIMITS,
+        routing: { resolver: createCollectionMimeResolver(undefined), baseDir: ROOT },
+        spawn: () => Promise.reject(new Error('the seed never spawns')),
+      });
+      gate.onHomeSettled(HOME_KEY, hit({ [`${ROOT}/a.md`]: keyedRealization(BLOB_KEY) }, () => Promise.resolve(blobFactsReader(oneBlobRow()))));
+      expect(await gate.decision).toEqual({ mode: 'sequential', declinedBy: { condition: 'member', member: 'a.md', route: 'readRoute' } });
+      return undefined;
+    },
+    delta: { 'checks.gate.rows.read': 1 },
+  },
 };
 
 /**
@@ -655,6 +692,7 @@ function skillTextScanSeed(holdsStore: boolean): Seed {
     delta: {
       [holdsStore ? 'skillText.storeMiss' : 'skillText.noStore']: 1,
       'parse.dispatched': 1,
+      'parse.cache.written': 1,
       'parse.cache.hit': 1,
       'content.read': 2,
       'content.hashed': 2,
@@ -701,6 +739,16 @@ export const PARSE_SITE_SEEDS: ReadonlyArray<readonly [label: string, counter: P
       },
       delta: { ...keyed(THREE_LINKS), 'parse.cache.hit': 1, 'parse.refused.keyDetermined': 1 },
     },
+  ],
+  [
+    'parse.cache.written at a worker\'s stored reply',
+    'parse.cache.written',
+    // Cache as transport: the worker files the entry, the parent counts its
+    // stored reply and reads the entry back, with no write of its own.
+    contentSeed(uniqueDocument('written by a worker'), { transport: 'cache' }, {
+      'parse.dispatched': 1,
+      'parse.cache.written': 1,
+    }),
   ],
 ];
 

@@ -1,5 +1,5 @@
 /**
- * Unit tests for the verdict facet's output normalization — the ONE normalizer.
+ * Unit tests for the shared verdict normalizer — the ONE normalizer.
  *
  * The property under test throughout: two runs over an unchanged tree must
  * normalize to identical text, **and nothing beyond the measured instabilities
@@ -14,7 +14,7 @@ import {
   buildPathSubstitutions,
   normalizeCommandOutput,
   type NormalizeContext,
-} from '../src/facets/verdict/normalize.js';
+} from '../src/testing/verdict-normalize.js';
 
 /** Shared by every context below; named so the literal appears exactly once. */
 const HOME_DIR = '/Users/dev';
