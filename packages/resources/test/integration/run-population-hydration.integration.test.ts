@@ -268,8 +268,8 @@ function callsFailing(
     store: {
       writeBlobFacts: (rows) => failing(faults.write, () => inner.writeBlobFacts(rows)),
       writeExtent: (key, rows) => failing(faults.write, () => inner.writeExtent(key, rows)),
-      readBlobFacts: (contentKeys) => failing(faults.blobRead, () => inner.readBlobFacts(contentKeys)),
-      readExtent: (key) => inner.readExtent(key),
+      readBlobFacts: (contentKeys, request) => failing(faults.blobRead, () => inner.readBlobFacts(contentKeys, request)),
+      readExtent: (key, request) => inner.readExtent(key, request),
       close: () => inner.close(),
     },
   };

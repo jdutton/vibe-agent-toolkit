@@ -334,9 +334,9 @@ function codingFailures(store: FactStore, coded: (error: unknown) => unknown): F
   };
   return {
     writeBlobFacts: (rows) => store.writeBlobFacts(rows).catch(rethrowCoded),
-    readBlobFacts: (contentKeys) => store.readBlobFacts(contentKeys).catch(rethrowCoded),
+    readBlobFacts: (contentKeys, request) => store.readBlobFacts(contentKeys, request).catch(rethrowCoded),
     writeExtent: (key, rows) => store.writeExtent(key, rows).catch(rethrowCoded),
-    readExtent: (key) => store.readExtent(key).catch(rethrowCoded),
+    readExtent: (key, request) => store.readExtent(key, request).catch(rethrowCoded),
     close: () => store.close(),
   };
 }

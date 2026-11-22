@@ -182,7 +182,7 @@ interface PathObservation {
  */
 function statObservation(absolutePath: string, root: string): PathObservation {
   try {
-    countWork('fs.stat', 1);
+    countWork('fs.lstat', 1);
     const link = lstatSync(absolutePath);
     if (!link.isSymbolicLink()) {
       return {

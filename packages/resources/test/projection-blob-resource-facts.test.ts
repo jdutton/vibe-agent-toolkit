@@ -94,8 +94,6 @@ describe('blobFactsReader', () => {
       blobReferences: [],
       blobSections: [],
       blobConditions: [{ blob: notTextKey, code: BLOB_NOT_TEXT, ordinal: 0, severity: 'warning', message: 'not text', line: null }],
-      harnessBlobFacts: [],
-      harnessBlobImports: [],
       skillTextFacts: [],
       skillTextMatches: [],
     })(notTextKey);

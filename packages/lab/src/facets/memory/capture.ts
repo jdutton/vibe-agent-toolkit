@@ -20,12 +20,10 @@ import { resolveFromImportMeta } from '@vibe-agent-toolkit/utils';
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
 import { buildArmEnv } from '../../harness/arm-env.js';
-import { captureCommandRows } from '../../harness/dump-capture.js';
+import { captureDumpReport } from '../../harness/dump-capture.js';
 import { type DumpKind, readDumpFiles } from '../../harness/dumps.js';
-import { judgeLoad, readLoad } from '../../harness/load-guard.js';
 import { nodeOptionsWith, resolvePreloadPath } from '../../harness/preload.js';
 import type { SpecMeasurement } from '../../harness/repeat.js';
-import { buildReportEnvelope } from '../../harness/report.js';
 import type { SequenceResult } from '../../harness/sequence.js';
 import type { CaptureRequest } from '../../harness/types.js';
 import { summarize } from '../perf/stats.js';
@@ -268,17 +266,11 @@ export async function captureMemory(options: CaptureMemoryOptions): Promise<Repo
   // NODE_OPTIONS (a raised `--max-old-space-size`, say) survives under the probe.
   const nodeOptions = nodeOptionsWith(probePath, buildArmEnv(process.env, options.env)['NODE_OPTIONS']);
 
-  const loadBefore = readLoad();
-  const { rows, measured } = await captureCommandRows(
+  return await captureDumpReport(
+    MEMORY_FACET,
     options,
     DUMP_DIR_PREFIX,
     (directory) => ({ [RSS_LOG_DIR_ENV]: directory, NODE_OPTIONS: nodeOptions }),
     rowFromDumps,
   );
-  const loadAfter = readLoad();
-
-  return buildReportEnvelope(MEMORY_FACET, options, {
-    commands: rows,
-    load: judgeLoad(loadBefore.loadAvg1, loadAfter.loadAvg1, loadAfter.cpus),
-  }, measured);
 }

@@ -7,11 +7,34 @@ import { writeFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { afterAll, beforeAll, beforeEach } from 'vitest';
 
 import type { UnreadablePolicy } from '../src/listing-refusal.js';
-import { mkdirSyncReal } from '../src/path-utils.js';
+import { mkdirSyncReal, normalizePath, toForwardSlash } from '../src/path-utils.js';
 import { resetProjectRootCaches } from '../src/project-utils.js';
 import { gitExecutable } from '../src/testing/executables.js';
+import { setupSyncTempDirSuite } from '../src/testing/temp-dir.js';
+
+/**
+ * A fresh temp directory per test, as its canonical real path with forward slashes: a root a
+ * link walk can be checked against, never itself reached through a link (macOS's `/var`).
+ * Registers its own hooks, so call it inside a `describe`.
+ *
+ * @param name - The temp directory's prefix
+ * @returns The current test's root
+ */
+export function useCanonicalTempRoot(name: string): () => string {
+  const suite = setupSyncTempDirSuite(name);
+  let root = '';
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(() => {
+    suite.beforeEach();
+    const made = suite.getTempDir();
+    root = toForwardSlash(normalizePath(made, { within: made }));
+  });
+  return () => root;
+}
 
 /**
  * Drop comment lines before scanning source for `import`/`require` specifiers.

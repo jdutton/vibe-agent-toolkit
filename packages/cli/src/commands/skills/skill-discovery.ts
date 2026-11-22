@@ -307,6 +307,26 @@ function crawlOneBase(
   });
 }
 
+/**
+ * {@link crawlOneBase}, once per run for a refusing crawl: the run's phases discover the same bases
+ * (`vat validate`'s resources phase, for the skills' declared `files:`, then its skills phase), and
+ * each crawl lists its base with git, the same arguments in the same directory over the same tree.
+ * A degrading crawl hands its refusals to its own caller, so it is never shared; a caller with no
+ * run has no one to share with.
+ */
+function crawlBaseOnce(
+  base: string,
+  globs: string[],
+  projectRoot: string,
+  unreadable: DiscoveryUnreadablePolicy,
+  run: SkillTextRun | undefined,
+): Promise<readonly string[]> {
+  const crawl = (): Promise<string[]> => crawlOneBase(base, globs, projectRoot, unreadable);
+  if (run === undefined || unreadable !== 'refuse') return crawl();
+  // Everything the crawl's result depends on: the base, its globs, and the root its refusal names.
+  return run.crawlOnce(JSON.stringify(['skill-discovery', base, globs, projectRoot]), crawl);
+}
+
 /** The knob an adopter has when `skills.include` reaches a directory the crawl cannot list. */
 export const SKILLS_INCLUDE_REMEDY =
   'Fix the permissions on that directory, or narrow the `skills.include` pattern so its base no longer reaches into it.';
@@ -329,8 +349,9 @@ export const SKILLS_INCLUDE_REMEDY =
  * @param unreadable - What to do with a directory the crawl cannot list —
  *   see {@link DiscoveryUnreadablePolicy}; required, no default
  * @param run - The run's population, so each SKILL.md its store holds is not read
- *   at all and every other is read and parsed once per run, or `undefined` for a
- *   caller with no run (a dispatcher of its own, no store)
+ *   at all and every other is read and parsed once per run, and each base is crawled
+ *   once per run, or `undefined` for a caller with no run (a dispatcher of its own,
+ *   no store)
  * @returns The skills it named, with their source paths, and the SKILL.md files the parse worker refused
  */
 export async function discoverSkillsFromConfig(
@@ -350,7 +371,7 @@ export async function discoverSkillsFromConfig(
   // One base at a time: under `'refuse'` the first unlistable directory in
   // pattern order is the one named, and a degrade handler hears them in order.
   await forEachInOrder(patternsByBase, async ([base, globs]) => {
-    const crawled = await crawlOneBase(base, globs, projectRoot, unreadable);
+    const crawled = await crawlBaseOnce(base, globs, projectRoot, unreadable, run);
     for (const absPath of crawled) {
       if (userExcludeMatcher) {
         const relFromProject = toForwardSlash(safePath.relative(projectRoot, absPath));

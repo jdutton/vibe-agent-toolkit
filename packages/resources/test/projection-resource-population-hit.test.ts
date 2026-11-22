@@ -30,7 +30,7 @@ import {
   resourceContributors,
 } from '../src/projection/resource-population.js';
 import { withPopulationRun } from '../src/projection/run-population.js';
-import type { ExtentKey, ExtentScopedRows } from '../src/projection/store.js';
+import type { ExtentKey, ExtentRequest, ExtentScopedRows, ExtentScopedTableName } from '../src/projection/store.js';
 import type { RealizationConditionRow } from '../src/schemas/projection-resources.js';
 
 import { FakeFactStore } from './fake-fact-store.js';
@@ -119,8 +119,9 @@ describe('the resources lane on a store hit', () => {
 
 /** Serves every stored extent with a gitignored copy and an absent copy of its first file row. */
 class UnreachableRowsStore extends FakeFactStore {
-  override async readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
-    const held = await super.readExtent(key);
+  override async readExtent<Table extends ExtentScopedTableName>(key: ExtentKey, request: ExtentRequest<Table>): Promise<Pick<ExtentScopedRows, Table> | undefined> {
+    // Every request this double serves carries the realizations it rewrites.
+    const held = await super.readExtent(key, request) as ExtentScopedRows | undefined;
     const file = held?.resourceRealizations.find((row) => !row.isDirectory);
     if (held === undefined || file === undefined) return held;
     const copy = (path: string): typeof file => ({ ...file, path, pathLower: path, basenameLower: path });

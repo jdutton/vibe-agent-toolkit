@@ -51,7 +51,16 @@ import { serializeProjection } from '../src/projection/export.js';
 import { CONTENT_PARSING_SKIP, describeStoreMiss, populate, type PopulationOutcome, storeMissOf } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import type { ContentDemand } from '../src/projection/realizations.js';
-import type { BlobScopedRows, ExtentKey, ExtentScopedRows, FactStore } from '../src/projection/store.js';
+import type {
+  BlobRequest,
+  BlobScopedRows,
+  BlobScopedTableName,
+  ExtentKey,
+  ExtentRequest,
+  ExtentScopedRows,
+  ExtentScopedTableName,
+  FactStore,
+} from '../src/projection/store.js';
 import { PROJECTION_STORE_READ_FAILED_CODE } from '../src/projection/stored-admission.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
@@ -187,10 +196,18 @@ class HarnesslessFactStore implements FactStore {
 
   /**
    * @param contentKeys - The keys to look up
+   * @param request - Passed through
    * @returns What the inner store holds, with both harness tables empty
    */
-  async readBlobFacts(contentKeys: readonly string[]): Promise<BlobScopedRows> {
-    return { ...(await this.inner.readBlobFacts(contentKeys)), harnessBlobFacts: [], harnessBlobImports: [] };
+  async readBlobFacts<Table extends BlobScopedTableName>(
+    contentKeys: readonly string[],
+    request: BlobRequest<Table>,
+  ): Promise<Pick<BlobScopedRows, Table>> {
+    const held: Record<string, readonly unknown[]> = { ...(await this.inner.readBlobFacts(contentKeys, request)) };
+    for (const table of ['harnessBlobFacts', 'harnessBlobImports']) {
+      if (table in held) held[table] = [];
+    }
+    return held as unknown as Pick<BlobScopedRows, Table>;
   }
 
   /**
@@ -203,10 +220,11 @@ class HarnesslessFactStore implements FactStore {
 
   /**
    * @param key - Passed through
+   * @param request - Passed through
    * @returns The inner store's extent
    */
-  readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
-    return this.inner.readExtent(key);
+  readExtent<Table extends ExtentScopedTableName>(key: ExtentKey, request: ExtentRequest<Table>): Promise<Pick<ExtentScopedRows, Table> | undefined> {
+    return this.inner.readExtent(key, request);
   }
 
   /** @returns The inner store's close */

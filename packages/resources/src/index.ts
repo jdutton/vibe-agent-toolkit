@@ -378,9 +378,13 @@ export {
 // about blobs, the extent of a tree — so each backend owns its physical
 // strategy instead of inheriting another's.
 export {
+  ALL_BLOB_REQUEST,
+  ALL_EXTENT_REQUEST,
+  type BlobRequest,
   type BlobScopedRows,
   type BlobScopedTableName,
   type ExtentKey,
+  type ExtentRequest,
   type ExtentScopedRows,
   type ExtentScopedTableName,
   type FactStore,
@@ -398,6 +402,7 @@ export {
 export {
   assembleProjection,
   emptyBlobRows,
+  ExtentRequestUnmetError,
   keyedContentKeys,
   selectRequestedContexts,
   selectRequestedRows,
@@ -1004,6 +1009,7 @@ export {
   CONTENT_PARSING_SKIP,
   ClosureNonConvergenceError,
   describeStoreMiss,
+  MEMBERSHIP_EXTENT_REQUEST,
   POPULATION_ORIGINS,
   populate,
   populationOracles,
@@ -1096,8 +1102,9 @@ export {
   type BlobPopulationResult,
 } from './projection/blob-population.js';
 
-// A warm run's blob tier read failing is the store's refusal, by this code (the CLI's refusal table).
-export { PROJECTION_STORE_READ_FAILED_CODE } from './projection/stored-admission.js';
+// A warm run's blob tier read failing is the store's refusal, by this code (the CLI's refusal table);
+// and what the stored admission reads of the tier, which the CLI's in-process cost arms damage table by table.
+export { ADMISSION_BLOB_REQUEST, PROJECTION_STORE_READ_FAILED_CODE } from './projection/stored-admission.js';
 
 // Emitting the projection as a document — "no engine" (zones §15 step 6). Rows
 // out; no index, no join, no filter, no query. Two properties are load-bearing:

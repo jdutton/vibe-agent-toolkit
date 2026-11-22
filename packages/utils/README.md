@@ -275,11 +275,11 @@ These replace `await` inside a loop, which the repo's ESLint config refuses (`no
 
 ### Work counters — `@vibe-agent-toolkit/utils` (barrel only)
 
-- `countWork(counter, n)` - add `n` to one counter of the closed set `WORK_COUNTER_NAMES` (type `WorkCounter`); `n` is required, and a negative or non-integer `n`, or a name outside the set, throws `RangeError`. Always on
+- `countWork(counter, n)` - add `n` to one counter of the closed set `WORK_COUNTER_NAMES` (type `WorkCounter`); `n` is required, and a negative or non-integer `n`, or a name outside the set, throws `RangeError`. Always on. `git.calls` throws here too: a git process is counted only at the two spawn sites in this package (`runGit` and the tree snapshot), which also log it
 - `readWorkCounters()` - this thread's counts, every counter present, zeros included
 - `forbidWorkCounting(policy)` - declare a thread whose work its parent counts (the parse worker); a later count is reported once per thread on stderr and dropped (`'report'`), or thrown (`'throw'`)
 - `forbiddenWorkCountPolicy()` - the policy (`ForbiddenWorkCountPolicy`) to hand a thread this one starts: `'throw'` once a test turned the throw on here, else `'report'`
-- `installWorkCounterDump(role)` - at a process entry point (one of `WORK_COUNTER_ROLES`: `'wrapper'` or `'cli'`), register the exit write of one `{ pid, role, counters }` dump (`WorkCounterDump`) into the directory `WORK_COUNTERS_ENV` (`VAT_WORK_COUNTERS`) names; a no-op while it is unset, and a directory it cannot make is reported once and nothing is written
+- `installWorkCounterDump(role)` - at a process entry point (one of `WORK_COUNTER_ROLES`: `'wrapper'` or `'cli'`), register the exit write of one `{ pid, role, counters }` dump (`WorkCounterDump`) into the directory `WORK_COUNTERS_ENV` (`VAT_WORK_COUNTERS`) names, and of one `{ pid, role, spawns }` git spawn log (`GitSpawnDump`: each git process in order, with `via`, `args`, `cwd` and the `withWorkPhase` phase it ran in) into the directory `GIT_SPAWNS_ENV` (`VAT_GIT_SPAWNS`) names; a no-op while both are unset, and a directory it cannot make is reported once and nothing is written there
 - On `./testing`: `__resetWorkCountersForTest()` (zero every counter, lift a forbid and the test throw, take back an installed dump's exit write), `__readWorkCounterDumpForTest(role)` (the body the exit write would file) and `__throwOnForbiddenWorkCountForTest()` (make threads this one starts throw on a count)
 
 ### Errors — `@vibe-agent-toolkit/utils` (barrel only)

@@ -323,6 +323,19 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     // the same lane but each bundle other work on top of it.
     args: Object.freeze(['skills', 'validate', '{subject}']),
   }),
+  'skills-build': Object.freeze({
+    name: 'skills-build',
+    provenance: 'none',
+    // Clean only, as `build`: a 1 is a build that stopped at an error finding.
+    exit: COMPLETES_CLEAN,
+    populates: false,
+    // It replaces the subject's `dist/skills`, so it runs in the arm's copy of the
+    // subject with `dist/` deleted before every repeat, as `build` does.
+    writes: Object.freeze(['dist']),
+    // Cwd-scoped: in a copy, the cwd is the copy, and a `{subject}` path would
+    // name the real tree it must never write.
+    args: Object.freeze(['skills', 'build']),
+  }),
   'skills-list': Object.freeze({
     name: 'skills-list',
     provenance: 'none',

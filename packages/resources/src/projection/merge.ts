@@ -65,6 +65,7 @@ import {
   CRAWL_STORE_READ_ID,
   CRAWL_STORE_WRITE_ID,
   crawlTimingStart,
+  deepFreeze,
   forEachInOrder,
   recordContributorInvocation,
   recordCrawlPass,
@@ -115,9 +116,13 @@ import {
   type RequestedContributor,
 } from './store-hydration.js';
 import {
+  ALL_BLOB_REQUEST,
+  ALL_EXTENT_REQUEST,
   splitProjectionByScope,
   type ExtentKey,
+  type ExtentRequest,
   type ExtentScopedRows,
+  type ExtentScopedTableName,
   type FactStore,
 } from './store.js';
 import { readBlobTier } from './stored-admission.js';
@@ -991,11 +996,14 @@ async function readCachedProjection(
   const cache = options.cache;
   if (cache === undefined) return NOTHING_HELD;
 
+  // Every table and both reconstruction steps: the projection is assembled
+  // from all of them, where membership reads three.
   const extent = await readStoredExtent(
     options,
     rootId,
     routing,
     requestedContributors(options),
+    ALL_EXTENT_REQUEST,
   );
   if (extent === undefined) return NOTHING_HELD;
 
@@ -1006,7 +1014,10 @@ async function readCachedProjection(
   if (!parseContent) return { hit: assembleProjection(extent, emptyBlobRows()) };
 
   const contentKeys = keyedContentKeys(extent);
-  const blobs = await readBlobTier(cache.store, contentKeys);
+  // Every table and every form: the projection serves the lexical references
+  // (edge lenses, claude context, SQL) and the harness tables, which the stored
+  // admission's narrower read leaves out.
+  const blobs = await readBlobTier(cache.store, contentKeys, ALL_BLOB_REQUEST);
   // See `store-hydration.ts`: an extent written by a run that skipped blob
   // derivation names keys the blob tier does not hold, and accepting it would
   // reduce every closure extent to its own root while reporting success.
@@ -1032,31 +1043,41 @@ async function readCachedProjection(
  * tables, and a caller asking only *which paths are in this tree* has no use
  * for it and should not pay a `readBlobFacts`.
  *
+ * It restricts nothing itself: each caller states the tables and steps it
+ * reads (see {@link MEMBERSHIP_EXTENT_REQUEST}), and every request carries the
+ * three the reuse rule and the staleness gates read here
+ * ({@link StoredExtentGateTable}).
+ *
  * @param options - The run's options, including its cache
  * @param rootId - This run's corpus root id
  * @param routing - The run's parse routing, whose fingerprint is part of the key
  * @param requested - The contributors whose provenance the store must hold
- * @returns The stored rows narrowed to those contributors' contexts, or
- *   `undefined` on any kind of miss
+ * @param request - The tables to read and the reconstruction steps to run
+ * @returns The stored rows narrowed to those contributors' contexts, in the
+ *   requested tables, or `undefined` on any kind of miss
  */
-async function readStoredExtent(
+async function readStoredExtent<Table extends ExtentScopedTableName>(
   options: PopulateOptions,
   rootId: string,
   routing: CollectionMimeResolver,
   requested: readonly RequestedContributor[],
-): Promise<ExtentScopedRows | undefined> {
+  request: ExtentRequest<Table> & ([StoredExtentGateTable] extends [Table] ? unknown : never),
+): Promise<Pick<ExtentScopedRows, Table | StoredExtentGateTable> | undefined> {
   const cache = options.cache;
   if (cache === undefined) return undefined;
 
   const startedAt = crawlTimingStart();
   try {
-    const stored = await cache.store.readExtent(storeKeyFor(options, rootId, cache, routing));
+    // The gate tables are in every request (the parameter's type refuses one
+    // without them), which the compiler cannot carry through the generic.
+    const read = request as unknown as ExtentRequest<Table | StoredExtentGateTable>;
+    const stored = await cache.store.readExtent(storeKeyFor(options, rootId, cache, routing), read);
     if (stored === undefined) return undefined;
 
     const contexts = selectRequestedContexts(stored, requested);
     if (contexts === undefined) return undefined;
 
-    const extent = selectRequestedRows(stored, { contexts, rootId });
+    const extent = selectRequestedRows(stored, read, { contexts, rootId });
     // A stored extent enumerated AROUND a directory it could not list is a hit
     // only while that directory still cannot be listed. The key cannot tell —
     // an ignored directory's mode bit is in no tree hash — so the rows say
@@ -1078,6 +1099,26 @@ async function readStoredExtent(
     recordCrawlPass(CRAWL_STORE_READ_ID, 'base', BASE_STRATUM_PASS, startedAt);
   }
 }
+
+/**
+ * The extent tables {@link readStoredExtent} itself reads: `zoneProvenance`
+ * (the reuse rule, `selectRequestedContexts`), and `realizationConditions` and
+ * `resourceRealizations` (the unlistable and declined-link staleness gates).
+ */
+type StoredExtentGateTable = 'zoneProvenance' | 'realizationConditions' | 'resourceRealizations';
+
+/**
+ * What {@link readStoredMembership} reads of a stored extent: the realization
+ * and condition rows it answers with, and the provenance rows the reuse rule
+ * selects their contexts by. No reconstruction step: membership reads no
+ * identity table and no root, so the context-less tables and the two tables
+ * only the steps read (`resourceExtents`, `resolutionContexts`) are never
+ * decoded. A projection hit reads {@link ALL_EXTENT_REQUEST}. Frozen: every caller shares it.
+ */
+export const MEMBERSHIP_EXTENT_REQUEST: ExtentRequest<StoredExtentGateTable> = deepFreeze({
+  tables: ['resourceRealizations', 'realizationConditions', 'zoneProvenance'],
+  steps: [],
+});
 
 /**
  * A tree's membership as the store holds it: the realization and condition rows
@@ -1146,7 +1187,7 @@ export async function readStoredMembership(
   // read, and the conflicts it would accumulate belong to the run's own
   // instance, which `populate` builds for itself.
   const routing = createCollectionMimeResolver(options.collections);
-  const extent = await readStoredExtent(options, rootIdFor(options.root), routing, requested);
+  const extent = await readStoredExtent(options, rootIdFor(options.root), routing, requested, MEMBERSHIP_EXTENT_REQUEST);
   if (extent === undefined) return undefined;
   countWork('extent.served', 1);
   return {

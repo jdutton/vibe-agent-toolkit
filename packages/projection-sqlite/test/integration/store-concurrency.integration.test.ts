@@ -18,6 +18,7 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
+import { ALL_BLOB_REQUEST, ALL_EXTENT_REQUEST } from '@vibe-agent-toolkit/resources';
 import { resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -142,7 +143,7 @@ describe('concurrent writers', () => {
     try {
       // Every writer's extent landed…
       for (let index = 0; index < WRITERS; index += 1) {
-        const extent = await store.readExtent({ rootId: 'root-shared', treeHash: `tree-w${index}` });
+        const extent = await store.readExtent({ rootId: 'root-shared', treeHash: `tree-w${index}` }, ALL_EXTENT_REQUEST);
         expect(extent, `writer ${index} extent`).toBeDefined();
       }
       // …and so did every blob row. Counting is the assertion: a lost row
@@ -152,7 +153,7 @@ describe('concurrent writers', () => {
         const digits = seed.padEnd(64, '0').slice(0, 64).replaceAll(/[^\da-f]/gu, '0');
         return `markdown.${digits}`;
       });
-      const facts = await store.readBlobFacts([...new Set(keys)]);
+      const facts = await store.readBlobFacts([...new Set(keys)], ALL_BLOB_REQUEST);
       expect(facts.blobs).toHaveLength(new Set(keys).size);
     } finally {
       await store.close();
@@ -179,7 +180,7 @@ describe('concurrent writers', () => {
       // to catch a tear is all this needs.
       while (writing && samples < ENOUGH_SAMPLES && Date.now() < deadline) {
         attempts += 1;
-        const extent = await store.readExtent({ rootId: 'root-shared', treeHash: 'tree-contended' });
+        const extent = await store.readExtent({ rootId: 'root-shared', treeHash: 'tree-contended' }, ALL_EXTENT_REQUEST);
         if (extent !== undefined) {
           samples += 1;
           if (extent.roots.length !== extent.zoneProvenance.length) torn += 1;

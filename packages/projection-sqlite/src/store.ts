@@ -104,9 +104,14 @@ import { unlinkSync } from 'node:fs';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 
 import {
+  type BlobReferenceRow,
+  type BlobRequest,
   type BlobScopedRows,
+  type BlobScopedTableName,
   type ExtentKey,
+  type ExtentRequest,
   type ExtentScopedRows,
+  type ExtentScopedTableName,
   type FactStore,
   type ProjectionColumnType,
   projectionColumnTypes,
@@ -115,7 +120,7 @@ import {
   markVatCacheRoot,
   vatCacheNamespaceRoot,
 } from '@vibe-agent-toolkit/resources';
-import { VatError, classifyFsFault, countWork, everywhere, isPathAbsentError, isVatError, pathPresent, promised, safePath, appendAll } from '@vibe-agent-toolkit/utils';
+import { VatError, classifyFsFault, compareCodeUnits, countWork, everywhere, isPathAbsentError, isVatError, pathPresent, promised, safePath, appendAll } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 
 import {
@@ -137,9 +142,10 @@ import {
   deleteRowByKeySql,
   insertSql,
   selectBlobFactsSql,
+  selectBlobFactsWhereSql,
   selectExtentSql,
 } from './schema-sql.js';
-import { decodeValue, encodeValue, type SqliteResultValue } from './values.js';
+import { decodeValue, encodeValue, type SqliteResultValue, type SqliteValue } from './values.js';
 
 /**
  * How long a blocked connection waits for a lock before giving up.
@@ -501,20 +507,23 @@ export function isStoreUnopenableError(error: unknown): error is StoreUnopenable
 
 /**
  * SQLite's primary result codes that say this connection may not use the store
- * file while the file itself is sound: `SQLITE_READONLY` (8), its whole family
- * (a read-only file, a read-only directory for the journal, a recovery it may
- * not run), and `SQLITE_CANTOPEN` (14), its whole family (a read-only directory
- * with no database file yet, which SQLite cannot create). The machine's state,
- * not the file's.
+ * file here: `SQLITE_READONLY` (8), its whole family (a read-only file, a
+ * read-only directory for the journal, a recovery it may not run), and
+ * `SQLITE_CANTOPEN` (14), its whole family (a read-only directory with no
+ * database file yet, which SQLite cannot create). Mostly the machine's state,
+ * not the file's; one member is not: `SQLITE_CANTOPEN_ISDIR` (a directory where
+ * the store file should be) is in the family too, so an optional question
+ * connection swallows it as well and goes without the store.
  */
 const NOT_WRITABLE_HERE_RESULT_CODES: ReadonlySet<number> = new Set([8, 14]);
 
 /**
  * Whether `error`, or any error in its `cause` chain, is a SQLite failure that
- * says the store cannot answer now while the file itself is sound: another
- * connection holds it (`SQLITE_BUSY`, `SQLITE_LOCKED`), this one may not write
- * it (`SQLITE_READONLY`), or this one cannot open or create it
- * (`SQLITE_CANTOPEN`). For a caller whose use of the store is optional and that
+ * says the store cannot answer now: another connection holds it
+ * (`SQLITE_BUSY`, `SQLITE_LOCKED`), this one may not write it
+ * (`SQLITE_READONLY`), or this one cannot open or create it (`SQLITE_CANTOPEN`,
+ * including `SQLITE_CANTOPEN_ISDIR`, a directory at the store's path, which is
+ * not a sound file). For a caller whose use of the store is optional and that
  * would rather go without than wait or refuse; a caller that needs the store
  * does not ask, and meets these as themselves.
  *
@@ -1252,41 +1261,104 @@ function partitionStatement(tables: StoreTables, spec: StoredTableSpec): Stateme
 }
 
 /**
+ * The table whose rows a {@link BlobRequest}'s `referenceForms` filters, and the
+ * column it filters on. Typed against the row, so a renamed column stops this
+ * compiling rather than silently reading every form.
+ */
+const REFERENCE_TABLE = 'blobReferences' satisfies BlobScopedTableName;
+const REFERENCE_FORM_COLUMN = 'syntacticForm' satisfies keyof BlobReferenceRow;
+
+/**
+ * The `SELECT` for one table of one batch under a request, with the values it
+ * binds after the keys: the request's forms on {@link REFERENCE_TABLE} when it
+ * names a set, each encoded as its column's kind is ({@link encodeValue}, as a
+ * write binds it), nothing otherwise.
+ *
+ * @param tables - The connection's statements
+ * @param plan - A blob-scoped table's plan
+ * @param keyCount - The batch's size
+ * @param forms - The request's forms, sorted, or `'all'`
+ * @returns The statement and its trailing values
+ * @throws Error when {@link REFERENCE_TABLE}'s plan declares no {@link REFERENCE_FORM_COLUMN}
+ */
+function blobSelect(
+  tables: StoreTables,
+  plan: TablePlan,
+  keyCount: number,
+  forms: readonly string[] | 'all',
+): { statement: StatementSync; values: readonly SqliteValue[] } {
+  const { spec } = plan;
+  if (spec.key !== REFERENCE_TABLE || forms === 'all') return { statement: blobStatement(tables, 'select', spec, keyCount), values: [] };
+  const formColumn = plan.columns.find(([column]) => column === REFERENCE_FORM_COLUMN);
+  if (formColumn === undefined) throw new Error(`${spec.name} declares no ${REFERENCE_FORM_COLUMN} column to filter reference forms on`);
+  const cacheKey = `select-forms:${spec.name}:${keyCount}:${forms.join(',')}`;
+  let statement = tables.blobStatements.get(cacheKey);
+  if (statement === undefined) {
+    statement = tables.database.prepare(selectBlobFactsWhereSql(spec, keyCount, REFERENCE_FORM_COLUMN, forms.length));
+    tables.blobStatements.set(cacheKey, statement);
+  }
+  const [, { kind }] = formColumn;
+  return { statement, values: forms.map((form) => encodeValue(kind, form)) };
+}
+
+/**
  * Read back the facts held for a set of content keys — see
- * `FactStore.readBlobFacts`.
+ * `FactStore.readBlobFacts`. Reads only the requested tables, and of
+ * `blobReferences` only the requested forms: a row not asked for is never
+ * decoded, so it is not counted in `decoded`.
  *
  * @param tables - The connection's statements
  * @param contentKeys - The keys to look up
+ * @param request - Which tables and reference forms to read
  * @returns The rows, and how many stored rows were decoded
  */
-function readBlobRows(tables: StoreTables, contentKeys: readonly string[]): { rows: BlobScopedRows; decoded: number } {
+function readBlobRows<Table extends BlobScopedTableName>(
+  tables: StoreTables,
+  contentKeys: readonly string[],
+  request: BlobRequest<Table>,
+): { rows: Pick<BlobScopedRows, Table>; decoded: number } {
+  const requested = new Set<string>(request.tables);
+  const plans = plansOfScope(tables, 'blob').filter((plan) => requested.has(plan.spec.key));
+  const forms = request.referenceForms === 'all' ? 'all' : [...request.referenceForms].sort(compareCodeUnits);
   let decoded = 0;
   const rows = inReadTransaction(tables.database, () => {
     const result: Record<string, unknown[]> = {};
-    for (const { spec } of plansOfScope(tables, 'blob')) {
+    for (const { spec } of plans) {
       result[spec.key] = [];
     }
     for (const batch of batched(contentKeys)) {
-      for (const plan of plansOfScope(tables, 'blob')) {
-        const raw = blobStatement(tables, 'select', plan.spec, batch.length).all(...batch);
+      for (const plan of plans) {
+        // No form asked for: an `IN ()` cannot parse, and the answer is no rows.
+        if (plan.spec.key === REFERENCE_TABLE && forms !== 'all' && forms.length === 0) continue;
+        const { statement, values } = blobSelect(tables, plan, batch.length, forms);
+        const raw = statement.all(...batch, ...values);
         decoded += raw.length;
         const into = result[plan.spec.key];
         if (into !== undefined) appendAll(into, decodeRows(plan, raw));
       }
     }
-    return result as unknown as BlobScopedRows;
+    return result as unknown as Pick<BlobScopedRows, Table>;
   });
   return { rows, decoded };
 }
 
 /**
- * Read back everything stored under one tree — see `FactStore.readExtent`.
+ * Read back the requested tables stored under one tree — see
+ * `FactStore.readExtent`. A table not requested is never selected, so its rows
+ * are not counted in `decoded`.
  *
  * @param tables - The connection's statements
  * @param key - Which root, which tree
+ * @param request - Which tables to read
  * @returns The rows or `undefined` for a tree never written, and how many stored rows were decoded
  */
-function readExtentRows(tables: StoreTables, key: ExtentKey): { rows: ExtentScopedRows | undefined; decoded: number } {
+function readExtentRows<Table extends ExtentScopedTableName>(
+  tables: StoreTables,
+  key: ExtentKey,
+  request: ExtentRequest<Table>,
+): { rows: Pick<ExtentScopedRows, Table> | undefined; decoded: number } {
+  const requested = new Set<string>(request.tables);
+  const plans = plansOfScope(tables, 'extent').filter((plan) => requested.has(plan.spec.key));
   let decoded = 0;
   const rows = inReadTransaction(tables.database, () => {
     // An extent that was written but holds nothing is a hit with empty tables;
@@ -1297,12 +1369,12 @@ function readExtentRows(tables: StoreTables, key: ExtentKey): { rows: ExtentScop
     if (tables.extentPresent.get(key.rootId, key.treeHash) === undefined) return undefined;
 
     const result: Record<string, unknown[]> = {};
-    for (const plan of plansOfScope(tables, 'extent')) {
+    for (const plan of plans) {
       const raw = plan.selectExtent?.all(key.rootId, key.treeHash) ?? [];
       decoded += raw.length;
       result[plan.spec.key] = [...decodeRows(plan, raw)];
     }
-    return result as unknown as ExtentScopedRows;
+    return result as unknown as Pick<ExtentScopedRows, Table>;
   });
   return { rows, decoded };
 }
@@ -1333,13 +1405,16 @@ class SqliteFactStore implements FactStore {
   }
 
   /** @inheritdoc */
-  readBlobFacts(contentKeys: readonly string[]): Promise<BlobScopedRows> {
+  readBlobFacts<Table extends BlobScopedTableName>(
+    contentKeys: readonly string[],
+    request: BlobRequest<Table>,
+  ): Promise<Pick<BlobScopedRows, Table>> {
     return promised(() => {
       this.#assertOpen();
       const keys = [...new Set(contentKeys)];
-      const { rows, decoded } = readBlobRows(this.#tables, keys);
+      const { rows, decoded } = readBlobRows(this.#tables, keys, request);
       // Asking for no keys reads nothing.
-      if (keys.length > 0) countRead(decoded);
+      if (keys.length > 0) countRead('store.reads.blob', decoded);
       return rows;
     });
   }
@@ -1353,12 +1428,15 @@ class SqliteFactStore implements FactStore {
   }
 
   /** @inheritdoc */
-  readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
+  readExtent<Table extends ExtentScopedTableName>(
+    key: ExtentKey,
+    request: ExtentRequest<Table>,
+  ): Promise<Pick<ExtentScopedRows, Table> | undefined> {
     return promised(() => {
       this.#assertOpen();
-      const { rows, decoded } = readExtentRows(this.#tables, key);
+      const { rows, decoded } = readExtentRows(this.#tables, key, request);
       // A miss included: the manifest was read.
-      countRead(decoded);
+      countRead('store.reads.extent', decoded);
       return rows;
     });
   }
@@ -1387,17 +1465,20 @@ class SqliteFactStore implements FactStore {
 }
 
 /**
- * Count one completed read and every row it decoded.
+ * Count one completed read, against the port read it was (`store.reads.blob`
+ * for `readBlobFacts`, `store.reads.extent` for `readExtent`), and every row it
+ * decoded.
  *
  * After the transaction, so a read that failed counts nothing, not even the
  * rows it decoded from the tables it reached first. Hydration is a counted
  * cost (ADR I10), and a row decoded outside the answer is exactly what the
  * decoded counter exposes.
  *
+ * @param read - Which port read completed
  * @param decoded - How many stored rows the read decoded
  */
-function countRead(decoded: number): void {
-  countWork('store.reads.persistent', 1);
+function countRead(read: 'store.reads.blob' | 'store.reads.extent', decoded: number): void {
+  countWork(read, 1);
   countWork('store.rows.decoded.persistent', decoded);
 }
 

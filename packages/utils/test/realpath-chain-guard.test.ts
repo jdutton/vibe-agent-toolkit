@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LINK_CHAIN_REFUSED_CODE } from '../src/errors/errno-table.js';
 import { linkResolutionFault } from '../src/errors/fs-fault.js';
@@ -20,7 +20,8 @@ import { canonicalPath } from '../src/path-containment.js';
 import { normalizePath, safePath, toForwardSlash } from '../src/path-utils.js';
 import { createSymlink, symlinkCapability } from '../src/test-helpers.js';
 import { installFaultFs } from '../src/testing/fault-fs.js';
-import { setupSyncTempDirSuite } from '../src/testing/temp-dir.js';
+
+import { useCanonicalTempRoot } from './test-helpers.js';
 
 vi.mock('../src/tree-change/link-chain.js', async (importOriginal) => ({ ...(await importOriginal<object>()), HOST_PATH_FLAVOR: 'win32' }));
 
@@ -64,16 +65,12 @@ function planted(root: string, skip: () => never): ReturnType<typeof spyOnTheKer
 }
 
 describe('the link-following primitives ask the kernel only about a chain read and shown local (win32 semantics)', () => {
-  const suite = setupSyncTempDirSuite('realpath-chain-guard');
+  const tempRoot = useCanonicalTempRoot('realpath-chain-guard');
   let root: string;
   let kernel: ReturnType<typeof spyOnTheKernel> | undefined;
 
-  beforeAll(suite.beforeAll);
-  afterAll(suite.afterAll);
   beforeEach(() => {
-    suite.beforeEach();
-    const made = suite.getTempDir();
-    root = toForwardSlash(normalizePath(made, { within: made }));
+    root = tempRoot();
   });
   afterEach(() => {
     kernel?.restore();

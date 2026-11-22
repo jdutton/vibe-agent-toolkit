@@ -75,7 +75,7 @@ import { NODE_TYPE_OF_AST_FORM } from './blob-references.js';
 import { notAdmittedEntriesByBlob, type NotAdmittedEntry } from './blob-refusals.js';
 import { NOT_TEXT_RESOURCE_FACTS } from './document-facts.js';
 import { restoredMatchText } from './skill-text-match-text.js';
-import type { BlobScopedRows } from './store.js';
+import type { BlobScopedRows, BlobScopedTableName } from './store.js';
 
 /** A pure function of the bytes, held per content key in the blob tier. */
 const BLOB_FACT = 'blob-fact';
@@ -299,12 +299,36 @@ interface KeyRows {
 type Rebuilt<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly reason: string };
 
 /**
+ * The blob-scoped tables {@link blobFactsReader} consumes, and no other: what the
+ * stored admission asks the store for. The harness tables are not here: they
+ * describe what one harness reaches, not a resource.
+ *
+ * Held both ways: the reader's input type is these tables only, so reading
+ * another does not compile; and every table here is one whose damage the
+ * in-process cost system test proves changes what a warm run does.
+ */
+export const BLOB_FACT_READER_TABLES = [
+  'blobs',
+  'blobReferences',
+  'blobSections',
+  'blobConditions',
+  'skillTextFacts',
+  'skillTextMatches',
+] as const satisfies readonly BlobScopedTableName[];
+
+/** The rows {@link blobFactsReader} reads: {@link BLOB_FACT_READER_TABLES} only. */
+type BlobFactReaderRows = Pick<BlobScopedRows, (typeof BLOB_FACT_READER_TABLES)[number]>;
+
+/**
  * The ONE reader of the blob tier's resource facts.
+ *
+ * Its `blobReferences` rows need only the AST forms (`AST_SYNTACTIC_FORMS`):
+ * {@link linksOf} drops every lexical row, so a bundle without them reads the same.
  *
  * @param rows - Blob-scoped rows for any set of keys, as a store returns them
  * @returns A reader for one key at a time; the bundle is indexed once
  */
-export function blobFactsReader(rows: BlobScopedRows): (contentKey: string) => BlobFactsOutcome {
+export function blobFactsReader(rows: BlobFactReaderRows): (contentKey: string) => BlobFactsOutcome {
   const byKey = indexByKey(rows);
   return (contentKey) => outcomeOf(contentKey, byKey.get(contentKey));
 }
@@ -313,7 +337,7 @@ export function blobFactsReader(rows: BlobScopedRows): (contentKey: string) => B
  * @param rows - The bundle
  * @returns Each key's rows
  */
-function indexByKey(rows: BlobScopedRows): Map<string, KeyRows> {
+function indexByKey(rows: BlobFactReaderRows): Map<string, KeyRows> {
   const byKey = new Map<string, KeyRows>();
   const of = (key: string): KeyRows => {
     let entry = byKey.get(key);

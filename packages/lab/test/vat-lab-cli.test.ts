@@ -52,6 +52,7 @@ import type { VerdictBody } from '../src/facets/verdict/types.js';
 import { exactExit, MEASURABLE_COMMAND_NAMES, MEASURABLE_COMMANDS } from '../src/harness/commands.js';
 import { writeReport } from '../src/store.js';
 
+import { NO_PROBE_DATA } from './perf-fixtures.js';
 import { CLEAN_LOAD, makeReport } from './report-fixtures.js';
 
 let tempDir: string;
@@ -83,6 +84,7 @@ function failedRow(name: string): PerfCommandStats {
     exitCode: null,
     failed: true,
     failure: 'boom',
+    ...NO_PROBE_DATA,
   };
 }
 
@@ -101,6 +103,7 @@ function cleanRow(name: string, medianMs: number): PerfCommandStats {
     exitCode: 0,
     failed: false,
     failure: null,
+    ...NO_PROBE_DATA,
   };
 }
 
@@ -369,9 +372,13 @@ describe('vat-lab <facet> ab — every facet gets the verb, not just the one tha
   it.for(FACETS)('declares ab on %s', (facet) => {
     const group = createProgram().commands.find((candidate) => candidate.name() === facet);
 
-    // `perf` alone also times whole CI sequences, and judges bars over them.
-    const expected = facet === 'perf' ? ['run', 'compare', 'ab', 'arms', 'bars'] : ['run', 'compare', 'ab'];
+    // `perf` alone also times whole CI sequences, judges bars over them, and attributes CPU profiles.
+    const expected = facet === 'perf' ? ['run', 'compare', 'ab', 'arms', 'bars', 'attribute'] : ['run', 'compare', 'ab'];
     expect(group?.commands.map((sub) => sub.name())).toEqual(expected);
+  });
+
+  it.for(FACETS)('offers --cpu-prof-dir on run for perf only', (facet) => {
+    expect(optionOf(facet, 'run', '--cpu-prof-dir') !== undefined).toBe(facet === 'perf');
   });
 
   it.for(FACETS)('gives %s ab both arms, the pair count and a control switch', (facet) => {

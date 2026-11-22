@@ -12,7 +12,7 @@
 
 import { writeFileSync } from 'node:fs';
 
-import { StoreQuestionUnavailableError, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
+import { ALL_EXTENT_REQUEST, StoreQuestionUnavailableError, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -112,7 +112,7 @@ describe('the stored-document questions\' connection', () => {
       backend.callFailures.push(locked, defect);
       const store = opened?.cache.store;
       const first = await store?.writeBlobFacts({}).then(() => undefined, (error: unknown) => error);
-      const second = await store?.readExtent({ rootId: 'r', treeHash: 'h' }).then(() => undefined, (error: unknown) => error);
+      const second = await store?.readExtent({ rootId: 'r', treeHash: 'h' }, ALL_EXTENT_REQUEST).then(() => undefined, (error: unknown) => error);
       expect(first).toBeInstanceOf(StoreQuestionUnavailableError);
       expect((first as Error).cause).toBe(locked);
       expect(second).toBe(defect);

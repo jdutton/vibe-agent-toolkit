@@ -1,0 +1,50 @@
+{
+  "bareToken": [
+    {
+      "blob": "markdown.59939b8f827599e7f2e892d026b886427e92fa3e2d63b0e8b14c692569973622",
+      "ordinal": 3,
+      "rawRef": "./helper.mts",
+      "text": null,
+      "line": 9,
+      "column": 5,
+      "startOffset": 137,
+      "endOffset": 149,
+      "astIndex": null,
+      "syntacticForm": "bare-token",
+      "hasExtension": 1,
+      "leadingAt": 0,
+      "slashCount": 1,
+      "variableExpansion": null,
+      "inCodeSpan": 0,
+      "inFence": 0
+    },
+    {
+      "blob": "none.ba5546f0e0cbd6ebabda40972ef61324599fa21848638dc75dee35cd1eca80e5",
+      "ordinal": 0,
+      "rawRef": "skills/**/SKILL.md",
+      "text": null,
+      "line": 15,
+      "column": 8,
+      "startOffset": 657,
+      "endOffset": 675,
+      "astIndex": null,
+      "syntacticForm": "bare-token",
+      "hasExtension": 1,
+      "leadingAt": 0,
+      "slashCount": 2,
+      "variableExpansion": null,
+      "inCodeSpan": 0,
+      "inFence": 0
+    }
+  ],
+  "harnessImports": [
+    {
+      "blob": "markdown.685072d572723158e100b3a5c111b28fa59c5f66e8f7bfd5002e6c2ee1b43dca",
+      "harness": "claude-code",
+      "ordinal": 0,
+      "rawRef": "@docs/guide.md",
+      "target": "docs/guide.md",
+      "line": 5
+    }
+  ]
+}

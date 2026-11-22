@@ -10,7 +10,7 @@
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-import type { ExtentKey } from '@vibe-agent-toolkit/resources';
+import { ALL_EXTENT_REQUEST, type ExtentKey } from '@vibe-agent-toolkit/resources';
 import { isVatError, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -100,7 +100,7 @@ describe('a damaged store file is reported as unopenable', () => {
 
     const store = openSqliteFactStore({ directory });
     try {
-      expect(await store.readExtent(KEY)).toBeUndefined();
+      expect(await store.readExtent(KEY, ALL_EXTENT_REQUEST)).toBeUndefined();
     } finally {
       await store.close();
     }
@@ -127,7 +127,7 @@ describe('close leaves one complete database file', () => {
         writeFileSync(databaseFile(copy), readFileSync(databaseFile()));
         const reopened = openSqliteFactStore({ directory: copy });
         try {
-          expect((await reopened.readExtent(KEY))?.resources).toHaveLength(1);
+          expect((await reopened.readExtent(KEY, ALL_EXTENT_REQUEST))?.resources).toHaveLength(1);
         } finally {
           await reopened.close();
         }
@@ -164,7 +164,7 @@ describe('close leaves one complete database file', () => {
     }
     const reopened = openSqliteFactStore({ directory });
     try {
-      expect((await reopened.readExtent({ ...KEY, treeHash: 'tree-bbb' }))?.resources).toHaveLength(1);
+      expect((await reopened.readExtent({ ...KEY, treeHash: 'tree-bbb' }, ALL_EXTENT_REQUEST))?.resources).toHaveLength(1);
     } finally {
       await reopened.close();
     }

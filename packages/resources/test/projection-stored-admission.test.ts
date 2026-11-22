@@ -11,11 +11,13 @@ import { describe, expect, it } from 'vitest';
 
 import { parseRefusal } from '../src/not-admitted.js';
 import { ParseLimitError } from '../src/parse-limits.js';
-import type { BlobFactsOutcome, BlobResourceFacts } from '../src/projection/blob-resource-facts.js';
+import { AST_SYNTACTIC_FORMS } from '../src/projection/blob-references.js';
+import { BLOB_FACT_READER_TABLES, type BlobFactsOutcome, type BlobResourceFacts } from '../src/projection/blob-resource-facts.js';
 import { POPULATION_PARSE_LIMITS } from '../src/projection/content-cache.js';
 import { emptyBlobRows } from '../src/projection/store-hydration.js';
-import type { BlobScopedRows, FactStore } from '../src/projection/store.js';
+import type { BlobRequest, BlobScopedTableName, FactStore } from '../src/projection/store.js';
 import {
+  ADMISSION_BLOB_REQUEST,
   hydratesUnder,
   readRoute,
   respelledContent,
@@ -106,13 +108,15 @@ describe('hydratesUnder: the limits the store\'s facts were filed under', () => 
  * A store that answers every blob read with empty rows, or rejects with `fails`, and counts the reads.
  *
  * @param fails - What every blob read rejects with, or `undefined` to answer
- * @returns The store and the keys each read asked for
+ * @returns The store, the keys each read asked for, and what each read asked for of them
  */
-function countingStore(fails?: Error): { store: FactStore; reads: (readonly string[])[] } {
+function countingStore(fails?: Error): { store: FactStore; reads: (readonly string[])[]; requests: BlobRequest<BlobScopedTableName>[] } {
   const reads: (readonly string[])[] = [];
+  const requests: BlobRequest<BlobScopedTableName>[] = [];
   const store: FactStore = {
-    readBlobFacts: (keys: readonly string[]): Promise<BlobScopedRows> => {
+    readBlobFacts: (keys, request) => {
       reads.push(keys);
+      requests.push(request);
       return fails === undefined ? Promise.resolve(emptyBlobRows()) : Promise.reject(fails);
     },
     writeBlobFacts: () => Promise.resolve(),
@@ -120,7 +124,7 @@ function countingStore(fails?: Error): { store: FactStore; reads: (readonly stri
     writeExtent: () => Promise.resolve(),
     close: () => Promise.resolve(),
   };
-  return { store, reads };
+  return { store, reads, requests };
 }
 
 /**
@@ -132,9 +136,19 @@ function member(path: string, realization: StoredRealization): { path: string; r
   return { path, row: realization as ResourceRealizationRow };
 }
 
+describe('ADMISSION_BLOB_REQUEST: what the admission reads of the tier', () => {
+  it('is the reader\'s tables and the AST forms, never a copy of either', () => {
+    expect(ADMISSION_BLOB_REQUEST.tables).toBe(BLOB_FACT_READER_TABLES);
+    expect(ADMISSION_BLOB_REQUEST.referenceForms).toBe(AST_SYNTACTIC_FORMS);
+    // Literal, not the constant: the harness tables are not the reader's.
+    expect(ADMISSION_BLOB_REQUEST.tables).not.toContain('harnessBlobFacts');
+    expect(ADMISSION_BLOB_REQUEST.tables).not.toContain('harnessBlobImports');
+  });
+});
+
 describe('storedContentOf: the members\' stored content', () => {
   it('reads the tier once, for the keyed members alone, and only when asked', async () => {
-    const { store, reads } = countingStore();
+    const { store, reads, requests } = countingStore();
     const stored = storedContentOf([
       member('/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown')),
       member('/r/b.md', keyed(MARKDOWN_KEY, 'text/markdown')),
@@ -145,6 +159,7 @@ describe('storedContentOf: the members\' stored content', () => {
     const [first, second] = await Promise.all([stored.facts(), stored.facts()]);
     await stored.facts();
     expect(reads).toEqual([[MARKDOWN_KEY, NONE_KEY]]);
+    expect(requests).toEqual([ADMISSION_BLOB_REQUEST]);
     expect(first).toBe(second);
     const outcome: BlobFactsOutcome = first(MARKDOWN_KEY);
     expect(outcome.kind).toBe('uncovered');

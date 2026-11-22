@@ -36,7 +36,7 @@ const FILES: Readonly<Record<string, string>> = {
 const SCANNED = Object.keys(FILES).filter((path) => path.endsWith('.md')).length;
 
 /** The counters this suite holds. */
-const HELD = ['skillText.storeMiss', 'skillText.noStore', 'store.reads.persistent'] as const satisfies readonly WorkCounter[];
+const HELD = ['skillText.storeMiss', 'skillText.noStore', 'store.reads.extent', 'store.reads.blob'] as const satisfies readonly WorkCounter[];
 
 /**
  * Run `vat <args>` in a fresh committed copy of the fixture and read back the held counters
@@ -73,7 +73,8 @@ describe('a skills lane with no store to ask counts its scans as noStore, never 
     expect(await heldCounters(['audit', '{root}'], false)).toEqual({
       'skillText.storeMiss': 0,
       'skillText.noStore': SCANNED,
-      'store.reads.persistent': 0,
+      'store.reads.extent': 0,
+      'store.reads.blob': 0,
     });
   });
 
@@ -81,13 +82,15 @@ describe('a skills lane with no store to ask counts its scans as noStore, never 
     expect(await heldCounters(['skills', 'validate'], true)).toEqual({
       'skillText.storeMiss': 0,
       'skillText.noStore': SCANNED,
-      'store.reads.persistent': 0,
+      'store.reads.extent': 0,
+      'store.reads.blob': 0,
     });
   });
 
   it('a cold vat skills validate with the store on asks its store: every scan is a miss', async () => {
     const counters = await heldCounters(['skills', 'validate'], false);
     expect({ miss: counters['skillText.storeMiss'], noStore: counters['skillText.noStore'] }).toEqual({ miss: SCANNED, noStore: 0 });
-    expect(counters['store.reads.persistent'], 'the run asked its store').toBeGreaterThan(0);
+    // A cold run's extent read is a miss, still a read: the manifest was asked.
+    expect(counters['store.reads.extent'], 'the run asked its store').toBeGreaterThan(0);
   });
 });
