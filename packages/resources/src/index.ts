@@ -402,10 +402,10 @@ export {
 export {
   assembleProjection,
   emptyBlobRows,
-  ExtentRequestUnmetError,
   keyedContentKeys,
   selectRequestedContexts,
   selectRequestedRows,
+  StoreRequestUnmetError,
   type RequestedContributor,
   uncoveredContentKeys,
 } from './projection/store-hydration.js';

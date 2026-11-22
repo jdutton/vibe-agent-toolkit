@@ -25,7 +25,7 @@ import { MEMBERSHIP_EXTENT_REQUEST } from '../src/projection/merge.js';
 import {
   assembleProjection,
   emptyBlobRows,
-  EXTENT_REQUEST_UNMET,
+  STORE_REQUEST_UNMET,
   keyedContentKeys,
   selectRequestedContexts,
   selectRequestedRows,
@@ -487,13 +487,13 @@ describe('selectRequestedContexts', () => {
     expect(selectRequestedContexts(storedExtent(), requested)).toBeUndefined();
   });
 
-  it(`throws ${EXTENT_REQUEST_UNMET} when the stored rows carry no zoneProvenance table, rather than failing on an absent value`, () => {
+  it(`throws ${STORE_REQUEST_UNMET} when the stored rows carry no zoneProvenance table, rather than failing on an absent value`, () => {
     // A backend that ignored the request: the reuse rule's own input is missing, which must name
     // the table, never surface as a TypeError.
     const withoutProvenance: Partial<ExtentScopedRows> = storedExtent();
     delete withoutProvenance.zoneProvenance;
     expect(() => selectRequestedContexts(withoutProvenance as ExtentScopedRows, []))
-      .toThrow(expect.objectContaining({ code: EXTENT_REQUEST_UNMET, table: 'zoneProvenance' }));
+      .toThrow(expect.objectContaining({ code: STORE_REQUEST_UNMET, tier: 'extent', table: 'zoneProvenance' }));
   });
 
   it('returns an empty array, and NOT undefined, for a run that registered no contributors', () => {
@@ -611,32 +611,32 @@ describe('selectRequestedRows', () => {
       .toHaveLength(1);
   });
 
-  it(`throws ${EXTENT_REQUEST_UNMET} for the membership request plus the identity step, whose resourceExtents input is missing`, () => {
+  it(`throws ${STORE_REQUEST_UNMET} for the membership request plus the identity step, whose resourceExtents input is missing`, () => {
     // The type refuses this request; the cast is what a caller the type cannot see would hand in.
     const request = { ...MEMBERSHIP_EXTENT_REQUEST, steps: ['identity'] } as unknown as ExtentRequest<ExtentScopedTableName>;
 
     expect(() => selectRequestedRows(storedExtent(), request, { contexts: [CTX_FILESYSTEM], rootId: ROOT_ID }))
-      .toThrow(expect.objectContaining({ code: EXTENT_REQUEST_UNMET, table: 'resourceExtents' }));
+      .toThrow(expect.objectContaining({ code: STORE_REQUEST_UNMET, tier: 'extent', table: 'resourceExtents' }));
   });
 
-  it(`throws ${EXTENT_REQUEST_UNMET} for a context-less table requested without the step that narrows it`, () => {
+  it(`throws ${STORE_REQUEST_UNMET} for a context-less table requested without the step that narrows it`, () => {
     // Without the roots step, every root under the key would come back unnarrowed.
     const request = { tables: [...MEMBERSHIP_EXTENT_REQUEST.tables, 'roots'], steps: [] } as ExtentRequest<ExtentScopedTableName>;
 
     expect(() => selectRequestedRows(storedExtent(), request, { contexts: [CTX_FILESYSTEM], rootId: ROOT_ID }))
-      .toThrow(expect.objectContaining({ code: EXTENT_REQUEST_UNMET, table: 'roots' }));
+      .toThrow(expect.objectContaining({ code: STORE_REQUEST_UNMET, tier: 'extent', table: 'roots' }));
   });
 
-  it(`has no empty fallback: a source missing a requested table throws ${EXTENT_REQUEST_UNMET} rather than reading it as empty`, () => {
+  it(`has no empty fallback: a source missing a requested table throws ${STORE_REQUEST_UNMET} rather than reading it as empty`, () => {
     // A backend that ignored the request: read as empty, this is a membership with no members, served as a hit.
     const without = (table: string): ExtentScopedRows =>
       Object.fromEntries(Object.entries(storedExtent()).filter(([key]) => key !== table)) as unknown as ExtentScopedRows;
 
     expect(() => selectRequestedRows(without('resourceRealizations'), MEMBERSHIP_EXTENT_REQUEST, { contexts: [CTX_FILESYSTEM], rootId: ROOT_ID }))
-      .toThrow(expect.objectContaining({ code: EXTENT_REQUEST_UNMET, table: 'resourceRealizations' }));
+      .toThrow(expect.objectContaining({ code: STORE_REQUEST_UNMET, tier: 'extent', table: 'resourceRealizations' }));
     // The same for a table only a step reads.
     expect(() => selectRequestedRows(without('resolutionContexts'), ALL_EXTENT_REQUEST, { contexts: [CTX_FILESYSTEM], rootId: ROOT_ID }))
-      .toThrow(expect.objectContaining({ code: EXTENT_REQUEST_UNMET, table: 'resolutionContexts' }));
+      .toThrow(expect.objectContaining({ code: STORE_REQUEST_UNMET, tier: 'extent', table: 'resolutionContexts' }));
   });
 });
 

@@ -324,7 +324,9 @@ function crawlBaseOnce(
   const crawl = (): Promise<string[]> => crawlOneBase(base, globs, projectRoot, unreadable);
   if (run === undefined || unreadable !== 'refuse') return crawl();
   // Everything the crawl's result depends on: the base, its globs, and the root its refusal names.
-  return run.crawlOnce(JSON.stringify(['skill-discovery', base, globs, projectRoot]), crawl);
+  // The root resolved, as `base` already is: the phases spell one root differently (a config's
+  // directory and the cwd; on Windows, `D:/x` and `D:\x`), and a spelling is not a second crawl.
+  return run.crawlOnce(JSON.stringify(['skill-discovery', base, globs, safePath.resolve(projectRoot)]), crawl);
 }
 
 /** The knob an adopter has when `skills.include` reaches a directory the crawl cannot list. */

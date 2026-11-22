@@ -192,7 +192,7 @@ re-capture it.
 V8 profile per vat process per repeat under `<dir>/<command>/repeat-<n>/` (the probe's pids decide
 which processes are vat's; a vat process without exactly one main-thread profile fails the row).
 Profiling inflates wall, so such a row is for attribution, not for a gate. `perf attribute <report>
---profiles <dir>` then splits each process's time at its `Surface:` banners and attributes every
+--profiles <dir> [--json <file>]` then splits each process's time at its `Surface:` banners and attributes every
 sample to a cost bucket: the first rule in `src/facets/perf/profile-buckets.ts` with a frame anywhere
 on the sample's stack takes it, unmatched samples are `other` with their frame named, and idle time
 is listed by the bucket that ran just before it.

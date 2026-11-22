@@ -55,7 +55,7 @@
  * names the steps it needs in its {@link ExtentRequest}: membership reads three
  * context-scoped tables and runs neither. A step whose tables the request does
  * not name, or a requested table the stored rows lack, is an
- * {@link ExtentRequestUnmetError}: an absent table never reads as empty.
+ * {@link StoreRequestUnmetError}: an absent table never reads as empty.
  *
  * That reconstruction is a claim, and the claim is falsifiable rather than
  * argued: `exportProjection` emits a byte-identical document from a projection,
@@ -97,29 +97,33 @@ import {
 } from './store.js';
 import { PROJECTION_TABLES } from './table-registry.js';
 
-/** The `code` an {@link ExtentRequestUnmetError} carries — dispatch on this, never on the message. */
-export const EXTENT_REQUEST_UNMET = 'EXTENT_REQUEST_UNMET';
+/** The `code` a {@link StoreRequestUnmetError} carries — dispatch on this, never on the message. */
+export const STORE_REQUEST_UNMET = 'STORE_REQUEST_UNMET';
 
 /**
- * An extent request `selectRequestedRows` cannot answer: a step whose tables
- * the request does not name, a context-less table requested without the step
- * that narrows it, or a requested table the stored rows do not carry. A VAT
- * bug, never a property of the corpus; recognise it with `isVatError(error,
- * ExtentRequestUnmetError.code)`.
+ * A store request that cannot be answered, on either tier. On the extent tier:
+ * a step whose tables the request does not name, a context-less table requested
+ * without the step that narrows it, or a requested table the stored rows do not
+ * carry. On the blob tier: a store answer missing a requested table, a backend
+ * that ignored the request; reading the absent table as empty would serve every
+ * key as uncovered. A VAT or backend bug, never a property of the corpus;
+ * recognise it with `isVatError(error, StoreRequestUnmetError.code)`.
  */
-export class ExtentRequestUnmetError extends VatError {
+export class StoreRequestUnmetError extends VatError {
   /** The code every instance carries. */
-  static readonly code = EXTENT_REQUEST_UNMET;
+  static readonly code = STORE_REQUEST_UNMET;
 
   /**
+   * @param tier - The tier whose request is unmet
    * @param table - The table the request or the stored rows lack
    * @param reason - Why it was needed
    */
   constructor(
+    readonly tier: 'extent' | 'blob',
     readonly table: string,
     reason: string,
   ) {
-    super(EXTENT_REQUEST_UNMET, `The extent request cannot be answered: ${table} ${reason}. This is a VAT bug.`);
+    super(STORE_REQUEST_UNMET, `The ${tier} request cannot be answered: ${table} ${reason}. This is a VAT bug.`);
   }
 }
 
@@ -194,7 +198,7 @@ export function selectRequestedContexts(
  *   a `roots` row for before any contributor runs — so the roots step keeps it
  *   whether or not a context happens to name it
  * @returns The requested tables, holding only this run's rows
- * @throws An {@link ExtentRequestUnmetError} when a step's table is not
+ * @throws An {@link StoreRequestUnmetError} when a step's table is not
  *   requested, a context-less table is requested without its step, or a
  *   requested table is absent from `extent`
  */
@@ -345,20 +349,20 @@ function stepOutputs(step: ExtentStep): readonly ExtentScopedTableName[] {
  * unnarrowed, every context's rows at once.
  *
  * @param request - The request
- * @throws An {@link ExtentRequestUnmetError} on either disagreement
+ * @throws An {@link StoreRequestUnmetError} on either disagreement
  */
 function assertRequestComplete<Table extends ExtentScopedTableName>(request: ExtentRequest<Table>): void {
   const tables = new Set<ExtentScopedTableName>(request.tables);
   const steps = new Set<ExtentStep>(request.steps);
   for (const step of steps) {
     const missing = EXTENT_STEP_TABLES[step].find((table) => !tables.has(table));
-    if (missing !== undefined) throw new ExtentRequestUnmetError(missing, `is read by the ${step} step but not requested`);
+    if (missing !== undefined) throw new StoreRequestUnmetError('extent', missing, `is read by the ${step} step but not requested`);
   }
   for (const table of tables) {
     if (PROJECTION_TABLES[table].contextColumn !== undefined) continue;
     const narrowedBy = (Object.keys(EXTENT_STEP_TABLES) as ExtentStep[]).filter((step) => stepOutputs(step).includes(table));
     if (!narrowedBy.some((step) => steps.has(step))) {
-      throw new ExtentRequestUnmetError(table, `has no context column and is requested without the step that narrows it (${narrowedBy.join(', ')})`);
+      throw new StoreRequestUnmetError('extent', table, `has no context column and is requested without the step that narrows it (${narrowedBy.join(', ')})`);
     }
   }
 }
@@ -371,11 +375,11 @@ function assertRequestComplete<Table extends ExtentScopedTableName>(request: Ext
  * @param bundle - The rows
  * @param table - The table
  * @returns Its rows
- * @throws An {@link ExtentRequestUnmetError} when the bundle lacks it
+ * @throws An {@link StoreRequestUnmetError} when the bundle lacks it
  */
 function rowsOf(bundle: RowBundle, table: string): readonly Record<string, unknown>[] {
   const rows = bundle[table];
-  if (rows === undefined) throw new ExtentRequestUnmetError(table, 'was requested and is absent from the stored rows');
+  if (rows === undefined) throw new StoreRequestUnmetError('extent', table, 'was requested and is absent from the stored rows');
   return rows;
 }
 
@@ -385,7 +389,7 @@ function rowsOf(bundle: RowBundle, table: string): readonly Record<string, unkno
  * @param extent - The stored rows
  * @param table - The table, which must be there
  * @returns Its rows
- * @throws An {@link ExtentRequestUnmetError} when `extent` lacks it
+ * @throws An {@link StoreRequestUnmetError} when `extent` lacks it
  */
 function requestedTable<Table extends ExtentScopedTableName>(extent: Pick<ExtentScopedRows, Table>, table: Table): ExtentScopedRows[Table] {
   return rowsOf(extent as unknown as RowBundle, table) as unknown as ExtentScopedRows[Table];

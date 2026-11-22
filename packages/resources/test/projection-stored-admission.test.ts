@@ -14,8 +14,8 @@ import { ParseLimitError } from '../src/parse-limits.js';
 import { AST_SYNTACTIC_FORMS } from '../src/projection/blob-references.js';
 import { BLOB_FACT_READER_TABLES, type BlobFactsOutcome, type BlobResourceFacts } from '../src/projection/blob-resource-facts.js';
 import { POPULATION_PARSE_LIMITS } from '../src/projection/content-cache.js';
-import { emptyBlobRows } from '../src/projection/store-hydration.js';
-import type { BlobRequest, BlobScopedTableName, FactStore } from '../src/projection/store.js';
+import { emptyBlobRows, STORE_REQUEST_UNMET } from '../src/projection/store-hydration.js';
+import type { BlobRequest, BlobScopedRows, BlobScopedTableName, FactStore } from '../src/projection/store.js';
 import {
   ADMISSION_BLOB_REQUEST,
   hydratesUnder,
@@ -144,6 +144,18 @@ describe('ADMISSION_BLOB_REQUEST: what the admission reads of the tier', () => {
     expect(ADMISSION_BLOB_REQUEST.tables).not.toContain('harnessBlobFacts');
     expect(ADMISSION_BLOB_REQUEST.tables).not.toContain('harnessBlobImports');
   });
+
+  it('cannot be changed at run time, since every caller shares it', () => {
+    const forms = ADMISSION_BLOB_REQUEST.referenceForms as Set<string>;
+    const [first] = [...forms];
+    const before = [...forms];
+    expect(Object.isFrozen(ADMISSION_BLOB_REQUEST)).toBe(true);
+    expect(Object.isFrozen(ADMISSION_BLOB_REQUEST.tables)).toBe(true);
+    expect(() => forms.add('not-a-form')).toThrow(TypeError);
+    expect(() => forms.delete(first ?? '')).toThrow(TypeError);
+    expect(() => forms.clear()).toThrow(TypeError);
+    expect([...forms]).toEqual(before);
+  });
 });
 
 describe('storedContentOf: the members\' stored content', () => {
@@ -189,6 +201,13 @@ describe('storedContentOf: the members\' stored content', () => {
     const { store } = countingStore(errno);
     const stored = storedContentOf([member('/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown'))], store);
     await expect(stored.facts()).rejects.toMatchObject({ code: 'PROJECTION_STORE_READ_FAILED', cause: errno });
+  });
+
+  it('refuses, by code, a store that answers without a requested table, never reading it as empty', async () => {
+    const withoutOne = Object.fromEntries(Object.entries(emptyBlobRows()).filter(([table]) => table !== 'skillTextMatches'));
+    const store: FactStore = { ...countingStore().store, readBlobFacts: () => Promise.resolve(withoutOne as BlobScopedRows) };
+    const stored = storedContentOf([member('/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown'))], store);
+    await expect(stored.facts()).rejects.toMatchObject({ code: STORE_REQUEST_UNMET, tier: 'blob', table: 'skillTextMatches' });
   });
 
   it('names the remedy: the store is a cache, so clear it or move it', async () => {

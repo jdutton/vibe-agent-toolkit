@@ -17,6 +17,7 @@
  */
 
 import * as fs from 'node:fs/promises';
+import { dirname } from 'node:path';
 
 import type * as Resources from '@vibe-agent-toolkit/resources';
 import { ParseCache, ParseDispatcher, ParseLimitError, parseRefusal } from '@vibe-agent-toolkit/resources';
@@ -25,6 +26,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { analyzeCompatibility } from '../src/compatibility-analyzer.js';
 import { extractClaudeSkillInventory, NO_GIT_TRACKER } from '../src/inventory/extract-skill.js';
+import type { InventoryPopulation } from '../src/inventory/inventory-population.js';
 import { checkSettingsCompatibility } from '../src/settings/settings-compat-checker.js';
 
 import { BASH_SKILL, DENY_BASH, SKILLS, setupRefusedSkillFixture, writeSkill } from './refused-skill-fixture.js';
@@ -149,8 +151,27 @@ describe('a UTF-16 SKILL.md under the cap in its own bytes and past it as UTF-8'
   });
 
   it('declares its name in the skill inventory, parsing only its block, once', async () => {
-    const { result: inventory, coreRuns, parses } = await counted(() => extractClaudeSkillInventory(wide, { dispatcher, gitTrackerSource: NO_GIT_TRACKER }));
+    // The link walk answered by a population, as `vat inventory`'s projection lane answers it: this
+    // test is the frontmatter's. Left to its fallback, the walk builds a registry with a parse pool
+    // of its own and parses the whole megabyte body there, unseen by `counted` and uncached on a
+    // fresh runner: seconds on CI, past the timeout on the Node floor.
+    const asked: string[] = [];
+    // A whole population that holds the skill with no links, no refusals and no store miss: the
+    // skill lane reads only `membersOf` and `parseRefusedAmong`, and `asked` proves it took this lane.
+    const noLinks = {
+      root: dirname(wide),
+      membersOf: (skillMdPath: string) => {
+        asked.push(skillMdPath);
+        return [];
+      },
+      parseRefusedAmong: () => [],
+      refusalRows: { blobs: [], blobConditions: [], resourceRealizations: [] },
+      storeMiss: undefined,
+    } satisfies InventoryPopulation;
+    const { result: inventory, coreRuns, parses } = await counted(() =>
+      extractClaudeSkillInventory(wide, { dispatcher, gitTrackerSource: NO_GIT_TRACKER, sharedPopulation: noLinks }));
 
+    expect(asked, 'the walk was answered by the population, not a registry of its own').toEqual([wide]);
     expect(inventory.parseErrors).toEqual([]);
     expect(inventory.manifest.name).toBe('wide');
     expect({ coreRuns, parses }).toEqual({ coreRuns: [], parses: [WIDE_BLOCK] });

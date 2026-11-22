@@ -29,11 +29,25 @@ function slashed(url: string): string {
   return toForwardSlashAnyPlatform(url);
 }
 
-/** A frame in one of vat's emitted modules: `<package>/dist/<module>.js`, `modules` a `|`-separated list. */
-function vatModule(pkg: string, modules: string): UrlPattern {
+/**
+ * A pattern over named vat modules, carrying the names it matches: a module
+ * path, never a regex, so a test can check every one names a source file.
+ */
+export interface VatModulePattern extends UrlPattern {
+  /** The package directory under `packages/`. */
+  readonly pkg: string;
+  /** Each module's path below the package's `src/` (and `dist/`), no extension. */
+  readonly modules: readonly string[];
+}
+
+/** A frame in one of vat's emitted modules: `<package>/dist/<module>.js`, `modules` a `|`-separated list of literal paths. */
+function vatModule(pkg: string, modules: string): VatModulePattern {
   const marker = `/${pkg}/dist/`;
-  const files = new Set(modules.split('|').map((name) => `${name}.js`));
+  const names = modules.split('|');
+  const files = new Set(names.map((name) => `${name}.js`));
   return {
+    pkg,
+    modules: names,
     test: (url) => {
       const path = slashed(url);
       const at = path.lastIndexOf(marker);
@@ -100,9 +114,9 @@ export const VALIDATE_PHASE_BUCKETS: readonly BucketRule[] = [
   },
   { bucket: 'frontmatter schema validation', url: dependency('ajv') },
   { bucket: 'skills detectors', url: /[/\\]agent-skills[/\\]dist[/\\]validators[/\\]/u },
-  { bucket: 'check lenses', url: vatModule('resources', String.raw`projection/edge-lens|projection/sql-checks|projection/builtin-checks|projection/closure-extent`) },
+  { bucket: 'check lenses', url: vatModule('resources', String.raw`projection/edge-lens|projection/sql-checks|projection/builtin-checks|projection/contributors/closure-extent`) },
   { bucket: 'population bookkeeping', url: vatModule('resources', String.raw`projection/run-population|projection/resource-population|projection/content-cache|resource-registry`) },
   { bucket: 'report', url: vatModule('cli', String.raw`utils/output|utils/issue-rendering|utils/document-writer|utils/verdict-helpers`) },
-  { bucket: 'report', url: vatModule('utils', String.raw`yaml|yaml[/\\]\w+`) },
+  { bucket: 'report', url: vatModule('utils', 'yaml|yaml/surgical-yaml') },
   { bucket: 'module load', url: /^node:internal\/modules\//u },
 ];

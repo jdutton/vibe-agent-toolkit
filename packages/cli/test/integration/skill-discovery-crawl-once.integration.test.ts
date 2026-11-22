@@ -68,6 +68,17 @@ describe('skill discovery crawls each base once per run', () => {
     }, undefined);
   });
 
+  it('shares the crawl across two spellings of one project root', async () => {
+    // `vat validate`'s phases name the root differently (one its config's directory, one the cwd;
+    // on Windows, `D:/x` and `D:\x`): the key is the root, not its spelling.
+    await withSkillTextRun(async (lane) => {
+      const { run, crawled } = recordingRun(lane);
+      await discoverSkillsFromConfig(CONFIG, projectRoot, 'refuse', run);
+      await discoverSkillsFromConfig(CONFIG, `${projectRoot}/.`, 'refuse', run);
+      expect(crawled).toHaveLength(2);
+    }, undefined);
+  });
+
   it('never shares a degrading crawl', async () => {
     await withSkillTextRun(async (lane) => {
       const { run, asked } = recordingRun(lane);

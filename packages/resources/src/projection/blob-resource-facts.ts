@@ -362,7 +362,11 @@ function indexByKey(rows: BlobFactReaderRows): Map<string, KeyRows> {
  * @returns What the tier says about it
  */
 function outcomeOf(contentKey: string, rows: KeyRows | undefined): BlobFactsOutcome {
-  if (rows === undefined) return { kind: 'uncovered', reason: `the blob tier holds no rows for ${contentKey}` };
+  // One reason whether or not the key had other rows: what reaches the reader
+  // depends on the request (the admission's omits the lexical reference rows and
+  // the harness tables), so "no rows" would be false for a key the store holds.
+  const noBlobsRow: BlobFactsOutcome = { kind: 'uncovered', reason: `the blob tier holds no blobs row for ${contentKey}` };
+  if (rows === undefined) return noBlobsRow;
   if (rows.blob !== undefined) {
     const facts = factsOf(rows.blob, rows);
     if (!facts.ok) return { kind: 'uncovered', reason: `${contentKey}: ${facts.reason}` };
@@ -375,7 +379,7 @@ function outcomeOf(contentKey: string, rows: KeyRows | undefined): BlobFactsOutc
   }
   const entry = notAdmittedEntriesByBlob(rows.conditions).get(contentKey);
   if (entry !== undefined) return { kind: 'not-admitted', entry };
-  return { kind: 'uncovered', reason: `the blob tier holds no blobs row for ${contentKey}` };
+  return noBlobsRow;
 }
 
 /**

@@ -4,8 +4,10 @@
  * stack lands in, how banners become profile windows, and how repeats fold.
  */
 
+import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
+import { resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { parseProfileName, selectVatProfiles } from '../src/facets/perf/cpu-profiles.js';
@@ -16,8 +18,9 @@ import {
   type CpuProfile,
   OTHER_BUCKET,
   sampleTimes,
+  type UrlPattern,
 } from '../src/facets/perf/profile-attribution.js';
-import { VALIDATE_PHASE_BUCKETS } from '../src/facets/perf/profile-buckets.js';
+import { VALIDATE_PHASE_BUCKETS, type VatModulePattern } from '../src/facets/perf/profile-buckets.js';
 import { foldWindows, repeatWindows } from '../src/facets/perf/profile-report.js';
 import type { PerfProcessDump } from '../src/facets/perf/types.js';
 
@@ -206,6 +209,17 @@ function installed(pkg: string, module: string): string {
   return pathToFileURL(`/app/node_modules/@vibe-agent-toolkit/${pkg}/dist/${module}.js`).href;
 }
 
+/** The monorepo's `packages/` directory: a vat module rule names `<package>/src/<module>.ts` under it. */
+const PACKAGES_DIR = resolveFromImportMeta(import.meta.url, '../..');
+
+/**
+ * @param url - A rule's url pattern
+ * @returns Whether it is a pattern over named vat modules
+ */
+function isVatModulePattern(url: UrlPattern | undefined): url is VatModulePattern {
+  return url !== undefined && 'modules' in url;
+}
+
 describe('VALIDATE_PHASE_BUCKETS', () => {
   it.each([
     ['a sync git spawn', [frame('takeSnapshot', dist('utils', 'git-snapshot')), frame('spawnSync', 'node:child_process')], 'git spawns'],
@@ -224,5 +238,13 @@ describe('VALIDATE_PHASE_BUCKETS', () => {
     ['a module whose name only starts like a listed one', [frame('helper', dist('utils', 'git-snapshot-extra'))], 'other'],
   ] as const)('puts %s in its bucket', (_label, stack, bucket) => {
     expect(bucketFor(stack)).toBe(bucket);
+  });
+
+  it('names only vat modules that exist, so no rule is one that can never match', () => {
+    const named = VALIDATE_PHASE_BUCKETS.map(({ url }) => url)
+      .filter((url) => isVatModulePattern(url))
+      .flatMap(({ pkg, modules }) => modules.map((module) => `${pkg}/src/${module}.ts`));
+    expect(named.length, 'the rules name vat modules').toBeGreaterThan(0);
+    expect(named.filter((path) => !existsSync(safePath.join(PACKAGES_DIR, path)))).toEqual([]);
   });
 });
