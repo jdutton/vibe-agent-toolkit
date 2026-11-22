@@ -459,7 +459,6 @@ export { classifyLink, isLocalFileLink } from './link-classify.js';
 // `parseFileCached` and a `ParseDispatcher` accept. `isParsableContent`
 // is the narrowing between them, and is exported because there is no other way
 // for a caller holding a path-routed blob to reach the parse path.
-export { parserKindForResolvedPath } from './parser-kind-for-path.js';
 export {
   computeContentKey,
   inMemoryContent,
@@ -472,6 +471,9 @@ export {
   type ParserKind,
 } from './content-key.js';
 export type { DocumentParserKind } from './mime-type.js';
+// The run's one parse routing: the parser kind a path goes to through the run's collection MIME
+// resolver, so a declared `mimeType` overrides the extension table (parser-kind-for-path.ts).
+export { parserKindForResolvedPath } from './parser-kind-for-path.js';
 
 // Parse cache: the disk-backed store `ResourceRegistry` files parse facts in,
 // and where it puts them. Exported for two callers only — an operator surface

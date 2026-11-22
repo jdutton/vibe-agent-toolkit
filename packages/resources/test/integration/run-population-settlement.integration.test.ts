@@ -1,6 +1,7 @@
 /**
  * The home population's memo entry reports how it settled, once, through the
- * run's required `onHomeSettled`, under the one spelling of its key.
+ * run's required `onHomeSettled`, under the one spelling of its key: whether a
+ * crawl built it, or adopted the one a stored-document question built first.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -43,7 +44,16 @@ function inRun<T>(
   roots.push(home);
   writeFileSync(safePath.join(home, 'README.md'), '# Home\n');
   return withRunPopulation(
-    { root: home, gitTracker: new GitTracker(home), cacheOf: () => Promise.resolve(CACHE), collectionsFor, onHomeSettled },
+    {
+      root: home,
+      outputs: [],
+      gitTracker: new GitTracker(home),
+      cacheOf: () => Promise.resolve(CACHE),
+      questionCacheOf: () => Promise.resolve(CACHE),
+      holdsStore: true,
+      collectionsFor,
+      onHomeSettled,
+    },
     (population) => work(population, home),
   );
 }
@@ -84,6 +94,31 @@ describe('onHomeSettled', () => {
     expect(only?.key).toBe(RunPopulation.homeKey([]));
     expect(only?.settlement.ok).toBe(true);
     if (only?.settlement.ok === true) expect(only.settlement.enumeration.paths.length).toBeGreaterThan(0);
+  });
+
+  it('calls it once, resolved, when the crawl adopts the home a stored-document question built', async () => {
+    let populations = 0;
+    const calls: Settled[] = [];
+    await inRun(
+      () => {
+        populations += 1;
+        return Promise.resolve(undefined);
+      },
+      (key, settlement) => calls.push({ key, settlement }),
+      async (population, home) => {
+        await population.source.storedDocument(safePath.join(home, 'README.md'), 'markdown');
+        await flush();
+        expect(calls, 'a question alone settles no crawl').toHaveLength(0);
+        await enumerateHome(population, home);
+        await enumerateHome(population, home);
+        await flush();
+      },
+    );
+    // One population built: the question's, which the crawl adopted rather than building its own.
+    expect(populations).toBe(1);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.key).toBe(RunPopulation.homeKey([]));
+    expect(calls[0]?.settlement.ok).toBe(true);
   });
 
   it('calls it with ok:false on a rejected populate and leaves the memoized rejection for the caller', async () => {

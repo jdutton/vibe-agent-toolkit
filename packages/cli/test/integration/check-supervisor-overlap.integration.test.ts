@@ -11,6 +11,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 import type * as UtilsModule from '@vibe-agent-toolkit/utils';
 import { safePath } from '@vibe-agent-toolkit/utils';
+import type * as ProcessModule from '@vibe-agent-toolkit/utils/process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { __internal } from '../../src/commands/resources/check-supervisor.js';
@@ -27,6 +28,12 @@ const hooks = vi.hoisted(() => ({
   minted: [] as string[],
   /** Every read fd opened on a `stderr.log`. */
   readFds: [] as number[],
+  /** Every write fd opened on a `stderr.log`. */
+  writeFds: [] as number[],
+  /** How many of the next tree kills are refused, as Node reports a refused `child.kill` (EPERM). */
+  killRefusals: 0,
+  /** Every tree kill asked for, refused or not. */
+  kills: 0,
   /** Every child spawned, in order. */
   children: [] as ChildProcessModule.ChildProcess[],
 }));
@@ -53,7 +60,24 @@ vi.mock('node:fs', async (original) => {
     openSync: (...args: Parameters<typeof actual.openSync>) => {
       const fd = actual.openSync(...args);
       if (String(args[0]).endsWith('stderr.log') && args[1] === 'r') hooks.readFds.push(fd);
+      if (String(args[0]).endsWith('stderr.log') && args[1] === 'w') hooks.writeFds.push(fd);
       return fd;
+    },
+  };
+});
+vi.mock('@vibe-agent-toolkit/utils/process', async (original) => {
+  const actual = await original<typeof ProcessModule>();
+  return {
+    ...actual,
+    killProcessTree: (...args: Parameters<typeof actual.killProcessTree>) => {
+      hooks.kills += 1;
+      if (hooks.killRefusals > 0) {
+        hooks.killRefusals -= 1;
+        // What Node does when `subprocess.kill()` itself fails: an `error` event on the child.
+        (args[0] as ChildProcessModule.ChildProcess).emit('error', Object.assign(new Error('kill EPERM'), { code: 'EPERM' }));
+        return;
+      }
+      actual.killProcessTree(...args);
     },
   };
 });
@@ -95,10 +119,13 @@ let documentFile: string;
 let trigger: string;
 
 /** Start an overlapped supervision of the stand-in child in `mode`. */
-function start(mode: string, overrides: { budgetMs?: number; isArmed?: () => boolean } = {}): Promise<OverlappedRun | 'disarmed'> {
+function start(
+  mode: string,
+  overrides: { budgetMs?: number; isArmed?: () => boolean; args?: () => readonly string[] } = {},
+): Promise<OverlappedRun | 'disarmed'> {
   return startOverlappedSupervision({
     verb: 'resources check',
-    args: () => [mode, documentFile, trigger],
+    args: overrides.args ?? (() => [mode, documentFile, trigger]),
     budgetMs: overrides.budgetMs ?? QUIET_BUDGET_MS,
     format: 'json',
     isArmed: overrides.isArmed ?? (() => true),
@@ -143,6 +170,9 @@ beforeEach(() => {
   hooks.beforeDispose = undefined;
   hooks.minted = [];
   hooks.readFds = [];
+  hooks.writeFds = [];
+  hooks.killRefusals = 0;
+  hooks.kills = 0;
   hooks.children = [];
 });
 afterEach(() => {
@@ -292,18 +322,13 @@ describe('startOverlappedSupervision', () => {
   });
 
   it('tears the scope down and spawns nothing when the armed check throws', async () => {
-    const exitListeners = process.listeners('exit').length;
     const refusal = new Error('gate failed');
 
-    await expect(start('quick', {
+    await expectRefusedBeforeSpawn(refusal, {
       isArmed: () => {
         throw refusal;
       },
-    })).rejects.toBe(refusal);
-
-    expect(existsSync(mintedDir())).toBe(false);
-    expect(hooks.children).toHaveLength(0);
-    expect(process.listeners('exit')).toHaveLength(exitListeners);
+    });
   });
 
   it('tears the scope down and spawns nothing when disarmed after the mint', async () => {
@@ -321,6 +346,40 @@ describe('startOverlappedSupervision', () => {
     expect(hooks.children).toHaveLength(0);
   });
 
+  it('closes both fds and the scope, and spawns nothing, when building the child\'s arguments throws', async () => {
+    const refusal = new Error('args failed');
+
+    await expectRefusedBeforeSpawn(refusal, {
+      args: () => {
+        throw refusal;
+      },
+    });
+
+    expect(hooks.readFds).toHaveLength(1);
+    expect(hooks.writeFds).toHaveLength(1);
+    expect(isOpen(hooks.readFds[0] ?? -1)).toBe(false);
+    expect(isOpen(hooks.writeFds[0] ?? -1)).toBe(false);
+  });
+
+  it('kills an abandoned child through the watchdog: a refused kill is retried, never read as a spawn failure', async () => {
+    const run = await startArmed('hang', 500);
+    try {
+      await heldStderrContains('early stderr\n');
+      hooks.killRefusals = 1;
+
+      await run.abandon();
+
+      // Read as a spawn failure, the refusal settled the run with the child alive and stopped the
+      // watchdog, so nothing ever retried the kill. Read as a refused kill, the watchdog retries it
+      // at its next breach and the run settles at the child's exit.
+      expect(hooks.kills).toBe(2);
+      expect(hasEnded(hooks.children[0])).toBe(true);
+      expect(existsSync(mintedDir())).toBe(false);
+    } finally {
+      hooks.children[0]?.kill('SIGKILL');
+    }
+  });
+
   it('kills a running child and closes the scope when abandoned', async () => {
     const run = await startArmed('hang');
 
@@ -330,6 +389,18 @@ describe('startOverlappedSupervision', () => {
     expect(existsSync(mintedDir())).toBe(false);
   });
 });
+
+/**
+ * Start with `overrides` and expect the start to reject with `refusal` before any spawn: the
+ * directory removed, no child, and the guard's `exit` handler released.
+ */
+async function expectRefusedBeforeSpawn(refusal: Error, overrides: Parameters<typeof start>[1]): Promise<void> {
+  const exitListeners = process.listeners('exit').length;
+  await expect(start('quick', overrides)).rejects.toBe(refusal);
+  expect(existsSync(mintedDir())).toBe(false);
+  expect(hooks.children).toHaveLength(0);
+  expect(process.listeners('exit')).toHaveLength(exitListeners);
+}
 
 /** Whether a spawned child has ended (an exit code or a terminating signal). */
 function hasEnded(child: ChildProcessModule.ChildProcess | undefined): boolean {

@@ -12,6 +12,10 @@
  * not add up, and a frontmatter value that does not decode). The tree carries the other answers: facts, a stated
  * parse refusal, a not-text blob, an oversize file refused by its size, a member under another
  * parser, and a file the store holds no realization for.
+ *
+ * A collection that declares a `mimeType` retypes a file: the gate routes it through a resolver it
+ * builds from the config, as `vat validate` does, and the registry through its own, and the two
+ * must still agree.
  */
 
 import { open, rm, writeFile } from 'node:fs/promises';
@@ -30,6 +34,8 @@ import { createCollectionMimeResolver } from '../../src/projection/realizations.
 import { type AdmittedFacts, type HomeSettlement, RunPopulation } from '../../src/projection/run-population.js';
 import type { BlobScopedRows, FactStore } from '../../src/projection/store.js';
 import { storedComputeBy, type StoredContent } from '../../src/projection/stored-admission.js';
+import { ResourceRegistry } from '../../src/resource-registry.js';
+import type { CollectionConfig, ProjectConfig } from '../../src/schemas/project-config.js';
 import { FakeFactStore } from '../fake-fact-store.js';
 import { failingParsePolicy } from '../helpers/failing-parse-policy.js';
 import { createCommittedRepo } from '../test-helpers.js';
@@ -42,12 +48,18 @@ const TREE: Readonly<Record<string, string>> = {
   'docs/b.md': '# B\n\n## Two\n\nBack [a](./a.md).\n',
   'docs/fails.md': `# Fails\n\n${PARSE_FAILS}\n`,
   'docs/binary.md': 'bin\u0000ary\n',
+  // Routed to no parser by its extension; the RETYPED collection makes it markdown.
+  'notes/n.json': '# Note\n\nSee [a](../docs/a.md).\n',
 };
 const INCLUDE = ['**/*.md'];
 /** Planted past the input cap after the commit: refused by its size, never read. */
 const OVERSIZE = 'docs/big.md';
 /** Planted after the cold run: the store holds no realization for it. */
 const LATE = 'docs/late.md';
+/** The file {@link RETYPED} retypes. */
+const NOTE = 'notes/n.json';
+/** A collection whose declared `mimeType` overrides the extension table for {@link NOTE}. */
+const RETYPED: Readonly<Record<string, CollectionConfig>> = { notes: { include: ['notes/*.json'], mimeType: 'text/markdown' } };
 
 let root = '';
 let store = new FakeFactStore();
@@ -90,10 +102,15 @@ const COMPUTED: AdmittedFacts = { kind: 'not-admitted', entry: { log: 'unreadabl
  * One run over `view`: the home enumerated (a derive, or a hit), and its settlement handed back.
  *
  * @param view - The store the run reads
+ * @param collections - The root's `resources.collections`
  * @param work - What to do once the home settled, given the run and the hit's stored content
  * @returns What `work` returns
  */
-async function inRun<T>(view: FactStore, work: (population: RunPopulation, stored: StoredContent | null) => Promise<T>): Promise<T> {
+async function inRun<T>(
+  view: FactStore,
+  collections: Readonly<Record<string, CollectionConfig>> | undefined,
+  work: (population: RunPopulation, stored: StoredContent | null) => Promise<T>,
+): Promise<T> {
   const cache: PopulationCache = { store: view, treeHash: 'agreement-suite', treeUnchanged: () => true };
   const failure = reviveParserThrow({ name: 'TypeError', message: 'bad input', code: 'ERR_INVALID_ARG_TYPE' }, true);
   const content = new RunContentCache();
@@ -102,9 +119,12 @@ async function inRun<T>(view: FactStore, work: (population: RunPopulation, store
   let settled: HomeSettlement | undefined;
   const population = new RunPopulation({
     root,
+    outputs: [],
     gitTracker: new GitTracker(root),
     cacheOf: () => Promise.resolve(cache),
-    collectionsFor: () => Promise.resolve(undefined),
+    questionCacheOf: () => Promise.resolve(cache),
+    holdsStore: true,
+    collectionsFor: () => Promise.resolve(collections),
     onHomeSettled: (_key, settlement) => {
       settled = settlement;
     },
@@ -119,9 +139,13 @@ async function inRun<T>(view: FactStore, work: (population: RunPopulation, store
   }
 }
 
-/** The cold run: the store misses, so the run derives and files the population. */
-async function fileTheStore(): Promise<void> {
-  await inRun(store, async (_population, stored) => {
+/**
+ * The cold run: the store misses, so the run derives and files the population.
+ *
+ * @param collections - The root's `resources.collections`
+ */
+async function fileTheStore(collections: Readonly<Record<string, CollectionConfig>> | undefined = undefined): Promise<void> {
+  await inRun(store, collections, async (_population, stored) => {
     expect(stored, 'the cold run is a derive').toBeNull();
   });
   await writeFile(safePath.join(root, LATE), '# Late\n');
@@ -134,7 +158,7 @@ async function fileTheStore(): Promise<void> {
  * @returns Every ask with both answers, and the hit's content keys by root-relative path
  */
 async function bothAnswers(view: FactStore): Promise<{ answers: Answers[]; keys: ReadonlyMap<string, string> }> {
-  return inRun(view, async (population, stored) => {
+  return inRun(view, undefined, async (population, stored) => {
     if (stored === null) throw new Error('the warm run did not hit');
     const resolver = createCollectionMimeResolver(undefined);
     const relative = (path: string): string => safePath.relative(root, path);
@@ -192,6 +216,7 @@ const UNTOUCHED = {
   'docs/b.md as markdown': true,
   'docs/fails.md as markdown': true,
   'docs/binary.md as markdown': true,
+  [`${NOTE} as none`]: true,
   [`${OVERSIZE} as markdown`]: true,
   [`${LATE} as markdown`]: false,
   'docs/a.md as none': false,
@@ -242,5 +267,35 @@ describe('the gate\'s member check and warm admission agree on the same store', 
       blobs: rows.blobs.map((row) => (row.contentKey === damaged ? { ...row, frontmatterValue: 'not the codec encoding' } : row)),
     }));
     expect(served((await bothAnswers(view)).answers)).toEqual({ ...UNTOUCHED, 'docs/a.md as markdown': false });
+  });
+});
+
+describe('a collection whose mimeType retypes a member', () => {
+  it('is routed alike by the gate and the registry, each from the config, and served by both', async () => {
+    const config: ProjectConfig = { resources: { collections: RETYPED } };
+    await fileTheStore(RETYPED);
+    const note = safePath.join(root, NOTE);
+    const seen = await inRun(store, RETYPED, async (population, stored) => {
+      if (stored === null) throw new Error('the warm run did not hit');
+      // The gate's routing, as `vat validate` builds it: a resolver of its own over the config.
+      const gateKind = parserKindForResolvedPath(note, createCollectionMimeResolver(config.resources?.collections), population.root);
+      const gate = (await storedComputeBy(stored.members.get(note), gateKind, stored.facts)).computeBy === null;
+      // Admission's routing: the registry's own resolver over the same config, observed at `admit`.
+      const registryKinds: string[] = [];
+      let computed = false;
+      const admit = population.admit.bind(population);
+      vi.spyOn(population, 'admit').mockImplementation((absolutePath, parserKind, compute) => {
+        registryKinds.push(parserKind);
+        return admit(absolutePath, parserKind, () => {
+          computed = true;
+          return compute();
+        });
+      });
+      await ResourceRegistry.forRun(population, { baseDir: root, config, gitTracker: population.gitTracker }).addResource(note);
+      return { gateKind, registryKinds, gate, admission: !computed };
+    });
+
+    expect(parserKindForResolvedPath(note, createCollectionMimeResolver(undefined), root), 'the override changes the kind').toBe('none');
+    expect(seen).toEqual({ gateKind: 'markdown', registryKinds: ['markdown'], gate: true, admission: true });
   });
 });

@@ -796,11 +796,13 @@ export type SupervisedRun =
 type OverlapSink = { fd: number; path: string };
 
 /**
- * An overlapped run's stderr: the sink the child writes, and the turn the post-exit stdout grace
- * waits for. The grace starts at the later of the child's exit and `graceFrom`, so a parent busy
- * with an earlier phase cannot spend it before the turn reads the run.
+ * An overlapped run's stderr: the sink the child writes, the turn the post-exit stdout grace
+ * waits for, and the run's abandonment. The grace starts at the later of the child's exit and
+ * `graceFrom`, so a parent busy with an earlier phase cannot spend it before the turn reads the run.
+ * `abandoned` settling kills the child through the watchdog's own kill, so a refused kill is
+ * counted and retried as the watchdog's are, never read as a spawn failure.
  */
-type OverlapStderr = { sink: OverlapSink; graceFrom: Promise<void> };
+type OverlapStderr = { sink: OverlapSink; graceFrom: Promise<void>; abandoned: Promise<void> };
 
 /** An overlapped run's `stderr.log`: the write fd the child inherits and the read fd the turn copies from. */
 export type OverlapSinkFds = { writeFd: number; readFd: number; path: string };
@@ -827,6 +829,17 @@ export function openOverlapSink(logPath: string): OverlapSinkFds {
     closeSync(writeFd);
     throw error;
   }
+}
+
+/**
+ * Close both of a sink's fds, for a spawn given up before either had an owner ({@link superviseRun}
+ * closes the write fd, the guard the read fd, only once handed them).
+ *
+ * @param sink - From {@link openOverlapSink}
+ */
+export function closeOverlapSink(sink: OverlapSinkFds): void {
+  closeSync(sink.writeFd);
+  closeSync(sink.readFd);
 }
 
 /**
@@ -1031,6 +1044,18 @@ export async function superviseRun(options: {
         reject(error as Error);
       }
     };
+    // The watchdog's kill: a breach's, or an abandonment's. Counted here, so the `error` a refused
+    // kill raises is read as a refused kill and retried at the next breach, never as a spawn failure.
+    const kill = (): void => {
+      killed = true;
+      killAttempts += 1;
+      // SIGKILL, because no code the child could ever gain can handle, ignore
+      // or block it. See this module's header — and note the reason is NOT that
+      // SIGTERM fails to reach a blocked process, which was measured false.
+      killProcessTree(child, CHECKS_CHILD_TREE);
+      const unended = unendedKill(killAttempts, killFailure, child.pid);
+      if (unended !== undefined) resolve(resolveChildEnding({ code: null, signal: null, killed, killFailure: unended }));
+    };
     const judge = (): void => {
       deferred = undefined;
       if (exited) return;
@@ -1043,16 +1068,12 @@ export async function superviseRun(options: {
         budgetMs: options.budgetMs,
       });
       state = reading.state;
-      if (!reading.breach) return;
-      killed = true;
-      killAttempts += 1;
-      // SIGKILL, because no code the child could ever gain can handle, ignore
-      // or block it. See this module's header — and note the reason is NOT that
-      // SIGTERM fails to reach a blocked process, which was measured false.
-      killProcessTree(child, CHECKS_CHILD_TREE);
-      const unended = unendedKill(killAttempts, killFailure, child.pid);
-      if (unended !== undefined) resolve(resolveChildEnding({ code: null, signal: null, killed, killFailure: unended }));
+      if (reading.breach) kill();
     };
+    // 🚨 Only a child still running: one that has exited may be reaped, and its pid reused.
+    if (options.stderr !== 'inherit') options.stderr.abandoned.then(guarded(() => {
+      if (!exited) kill();
+    }), () => undefined);
     // 🔑 A late poll — this process may have been stopped — is judged one event-loop turn later:
     // libuv delivers a pending SIGCONT in the poll phase, before `setImmediate`'s check phase.
     const poll = (): void => {
@@ -1290,7 +1311,7 @@ function guardSupervision(): SupervisionGuard & { cover(logPath: string): void; 
  * first made the watchdog's kill read as the child exiting 1 on its own. Windows then sweeps the
  * tree with `taskkill /T`, best-effort (see `killProcessTree`).
  */
-export const CHECKS_CHILD_TREE: KillProcessTreeOptions = { groupLeader: false, throughChild: true };
+const CHECKS_CHILD_TREE: KillProcessTreeOptions = { groupLeader: false, throughChild: true };
 
 /**
  * Whether a spawned child started (it has a pid) and has neither exited nor died of a signal yet.

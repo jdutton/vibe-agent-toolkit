@@ -827,8 +827,8 @@ turn exactly as before:
   fact reader would return for the key (`BlobFactsReader.answer`: the same row checks as a
   rebuild, with the frontmatter value decoded and dropped), read by the same rule `readRoute`
   applies. No member's facts are built or kept, so the gate adds nothing to the parent's live
-  memory. The rows its predicates check are counted `checks.gate.rows.read` and in no other
-  counter. The tier itself is read once per run through the population's shared memo, which
+  memory. The rows its predicates check are counted `checks.gate.rows.read`, summed per member (a
+  content key several members share is counted once for each), and in no other counter. The tier itself is read once per run through the population's shared memo, which
   admission reads too, so every other work counter is the same overlapped and sequential, with one
   exception: the gate asks every member of the home population, admission only the members the
   crawl reaches. When no crawled member routes to a tier read but some home member does, the
@@ -845,8 +845,10 @@ entry; the store is not written). A cold run is excluded because both processes
 would derive and write under the store's 5 s busy timeout.
 
 **Stderr.** A sequential spawn inherits the parent's stderr, as always. An overlapped spawn writes
-to `stderr.log` (mode 0600) in the progress directory. One supervision scope, the guard, the
-directory and the file, opens at the spawn and closes after the turn's final read. The two remedy
+to `stderr.log` (mode 0600) in the progress directory. One supervision scope (the guard, the
+directory and the file) opens before the progress directory is minted, ahead of the gate's last
+`isArmed` check, and closes after the turn's final read. When that check answers false (the turn
+disarmed the gate during the mint) or throws, the scope closes again and nothing is spawned. The two remedy
 texts that say the child's stderr "was inherited" stay word for word: in both modes the child's
 stderr is above the report when the parent writes it. In overlapped mode the 2 s stdout grace after
 the child exits starts at the later of the exit and the turn.
@@ -861,6 +863,9 @@ the child exits starts at the later of the exit and the turn.
   Windows, a grandchild that inherited the child's stderr and still holds `stderr.log` when the
   scope closes can leave the progress directory behind with a leftover line: after the turn's
   final read, or after a run refusal that ended the run once the child had spawned.
+- A disarm that lands while the overlapped spawn is minting its progress directory tears that
+  directory down before the run goes sequential. If the OS will not remove it, the run prints the
+  leftover-directory line, which a sequential run never prints.
 - On Windows, a direct `node` invocation interrupted during an overlapped resources phase exits 2
   instead of STATUS_CONTROL_C_EXIT. On POSIX the signal is re-raised and the run dies of SIGINT, as
   before.

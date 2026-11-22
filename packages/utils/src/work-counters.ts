@@ -49,8 +49,10 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * counts every `EXPLAIN` the SQL gate prepares — one per gated statement, and
  * the four virtual-table reference reads each handle makes when it is opened.
  *
- * `parse.cache.written` counts parse-cache entries that reached their final path, parent side
- * only: `ParseCache.setByKey`, and the pool's settlement of a worker's `stored` reply.
+ * `parse.cache.written` counts parse-cache entries whose write was reported, parent side only:
+ * `ParseCache.setByKey`, and the pool's settlement of a worker's `stored` reply. A worker killed
+ * after its entry reached the final path but before its reply arrived wrote an entry this does not
+ * count, so it is a lower bound on the entries written, exact when no worker died mid-job.
  * `content.read` counts a member file's bytes read to be keyed (`readContentWithKey`),
  * one per read that returned bytes; a read refused at the input cap is
  * `parse.refused.inputCap.read` instead. `registry.built` counts every resource
@@ -88,7 +90,9 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * asked about a file outside the run's root, answered nothing without opening
  * the store: no member of the run's home population can be there. Each is also
  * a `skillText.storeMiss` when the lane scans it (a `skillText.noStore` in a
- * run with no store). `checks.gate.rows.read`: resource-scanning-and-caching.md 3.7b.
+ * run with no store). `checks.gate.rows.read` counts the tier rows the checks overlap gate's
+ * predicates read, summed per member: a content key several members share is counted once per
+ * member (resource-scanning-and-caching.md 3.7b).
  */
 export const WORK_COUNTER_NAMES = [
   'store.rows.decoded.persistent',

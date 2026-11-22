@@ -31,14 +31,12 @@
 import type { ChildProcess } from 'node:child_process';
 
 import type { TempDirOutcome } from '@vibe-agent-toolkit/utils';
-import { killProcessTree } from '@vibe-agent-toolkit/utils/process';
 
 import { errorMessageOf } from '../../utils/command-refusal.js';
 
 import {
-  CHECKS_CHILD_TREE,
+  closeOverlapSink,
   copyOverlapSink,
-  isStillRunning,
   openOverlapSink,
   type OverlapSinkFds,
   type ProgressLog,
@@ -83,7 +81,9 @@ export interface OverlappedRun {
   /**
    * End the run without a turn, for a run refusal in an earlier phase: kill the child's tree while
    * it runs, then close the scope. Its ending, a supervision throw included, is not published: the
-   * refusal is the answer. A directory the OS would not remove is said on stderr.
+   * refusal is the answer. A directory the OS would not remove is said on stderr. The kill is the
+   * watchdog's own, so a refused kill is retried at its next breach, and the scope closes once the
+   * child has exited or the watchdog has given up on it.
    *
    * A no-op once {@link atTurn} has been called: the turn owns the run's ending and its scope, so
    * an abandonment after it never closes the scope a second time, says no second leftover line,
@@ -148,7 +148,12 @@ export async function startOverlappedSupervision(options: {
     sayLeftover(await scopeCloser.close());
     return 'disarmed';
   }
-  return spawnInScope(options, log, sink, scopeCloser);
+  // Any throw from here to the spawn rejects with the scope already closed, as the contract says.
+  try {
+    return spawnInScope(options, log, sink, scopeCloser);
+  } catch (error) {
+    return scopeCloser.fail(error);
+  }
 }
 
 /** How the open scope ends: closed after its work, or failed with the error the caller then throws. */
@@ -172,8 +177,17 @@ function spawnInScope(
   sink: OverlapSinkFds,
   scope: ScopeCloser,
 ): OverlappedRun {
-  const closeRead = log.guard.adoptFd(sink.readFd);
+  let args: readonly string[];
+  let closeRead: () => void;
+  try {
+    args = options.args(log.path);
+    closeRead = log.guard.adoptFd(sink.readFd);
+  } catch (error) {
+    closeOverlapSink(sink);
+    throw error;
+  }
   const turn = Promise.withResolvers<undefined>();
+  const abandoned = Promise.withResolvers<undefined>();
   const exited = Promise.withResolvers<undefined>();
   let child: ChildProcess | undefined;
   // Set by the turn: from then on the turn alone ends the run.
@@ -194,11 +208,11 @@ function spawnInScope(
   // recorded, never an unhandled rejection.
   const recorded: Promise<RecordedEnding> = superviseRun({
     verb: options.verb,
-    args: options.args(log.path),
+    args,
     log: watched,
     budgetMs: options.budgetMs,
     format: options.format,
-    stderr: { sink: { fd: sink.writeFd, path: sink.path }, graceFrom: turn.promise },
+    stderr: { sink: { fd: sink.writeFd, path: sink.path }, graceFrom: turn.promise, abandoned: abandoned.promise },
   }).then((run) => run, (error: unknown) => ({ outcome: 'supervision-threw', error }));
   // A child that never started (no child, or one with no pid) has no `exit`: the settled run stands
   // in for it. A child that did start resolves `exited` only at its own `exit`, even after a
@@ -223,7 +237,8 @@ function spawnInScope(
     },
     abandon: async () => {
       if (turnStarted) return;
-      if (isStillRunning(child)) killProcessTree(child, CHECKS_CHILD_TREE);
+      // The watchdog kills it, so a refused kill is retried as the watchdog's own are.
+      abandoned.resolve(undefined);
       turn.resolve(undefined);
       await recorded;
       closeRead();

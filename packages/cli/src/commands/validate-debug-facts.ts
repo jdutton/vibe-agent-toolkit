@@ -17,9 +17,11 @@
  *   (an atomic rename beside the child's) is counted here.
  *
  * 🔑 The reader is the lab's `ValidateDebugFactsSchema` (`packages/lab/src/facets/perf/types.ts`), a
- * strict schema. Neither package depends on the other; the lab's
- * `test/system/validate-debug-facts.system.test.ts` runs the built vat and parses its dumps with that
- * schema, so {@link ValidateDebugFacts} and the schema change together or that test fails.
+ * strict schema. This package dev-depends on the lab for one test,
+ * `test/integration/validate-debug-facts-lab-schema.integration.test.ts`: it writes every
+ * `GateDecline` variant (keyed by the condition and route types, so a new one fails typecheck until
+ * listed) and an overlapped dump through {@link writeDebugFacts} and parses each with that schema, so
+ * {@link ValidateDebugFacts} and the schema change together or that test fails.
  *
  * Written through `writeTimingDump`, as every VAT dump seam is: a failure is a stderr line, never a
  * throw, and the name is claimed per pid.

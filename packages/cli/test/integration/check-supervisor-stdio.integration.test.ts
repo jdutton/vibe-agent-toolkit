@@ -16,6 +16,8 @@ vi.mock('../../src/utils/vat-bin-path.js', () => ({ resolveVatBinPath: binPathMo
 
 const log = { path: 'progress.log', guard: { watch: vi.fn() } } as unknown as ProgressLog;
 const base = { verb: 'resources check', args: [], log, budgetMs: 500, format: 'json' } as const;
+/** No case abandons its run. */
+const NEVER_ABANDONED = new Promise<void>(() => undefined);
 
 describe('superviseRun stdio', () => {
   let dir: string;
@@ -39,7 +41,7 @@ describe('superviseRun stdio', () => {
   it('passes the sink fd as stderr and closes the parent write fd after spawn', async () => {
     const path = safePath.join(dir, 'stderr.log');
     const fd = openSync(path, 'w');
-    await superviseRun({ ...base, stderr: { sink: { fd, path }, graceFrom: Promise.resolve() } });
+    await superviseRun({ ...base, stderr: { sink: { fd, path }, graceFrom: Promise.resolve(), abandoned: NEVER_ABANDONED } });
     expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({ stdio: ['pipe', 'pipe', fd] });
     expect(() => fstatSync(fd)).toThrow(expect.objectContaining({ code: 'EBADF' }));
   });
@@ -52,7 +54,7 @@ describe('superviseRun stdio', () => {
       throw refusal;
     });
 
-    await expect(superviseRun({ ...base, stderr: { sink: { fd, path }, graceFrom: Promise.resolve() } })).rejects.toBe(refusal);
+    await expect(superviseRun({ ...base, stderr: { sink: { fd, path }, graceFrom: Promise.resolve(), abandoned: NEVER_ABANDONED } })).rejects.toBe(refusal);
 
     expect(spawnMock).not.toHaveBeenCalled();
     expect(() => fstatSync(fd)).toThrow(expect.objectContaining({ code: 'EBADF' }));
@@ -68,7 +70,7 @@ describe('superviseRun stdio', () => {
     const watch = vi.mocked(log.guard.watch);
     watch.mockClear();
 
-    await expect(superviseRun({ ...base, stderr: { sink: { fd, path }, graceFrom: Promise.resolve() } }))
+    await expect(superviseRun({ ...base, stderr: { sink: { fd, path }, graceFrom: Promise.resolve(), abandoned: NEVER_ABANDONED } }))
       .rejects.toMatchObject({ code: 'EBADF' });
 
     expect(watch).toHaveBeenCalledWith(child);

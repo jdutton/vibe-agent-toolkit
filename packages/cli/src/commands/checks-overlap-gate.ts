@@ -15,7 +15,7 @@
  *   key), under the parser the run's one routing sends it to (`parserKindForResolvedPath`). The
  *   check is route-only: it builds no member's facts and keeps nothing it read, so the parent's
  *   memory is admission's alone. The rows its predicates check are counted
- *   `checks.gate.rows.read`, and no other counter. The tier read itself is the population's shared
+ *   `checks.gate.rows.read`, summed per member, and no other counter. The tier read itself is the population's shared
  *   one, which admission reads too, except that the gate asks every home member and admission only
  *   the crawled ones: when no crawled member reads the tier, an overlapped run counts the one
  *   `store.reads.persistent` (and its decoded rows) a sequential run skips
@@ -81,6 +81,28 @@ export type GateDecline =
    * absolute, so a dump does not carry the machine's home directory), and the predicate that said so.
    */
   | { readonly condition: 'member'; readonly member: string; readonly route: StoredComputeBy };
+
+/**
+ * Every condition a {@link GateDecline} names, at runtime: the lab's debug-facts contract test
+ * writes one decline per entry. `satisfies` on the record makes a condition added to (or dropped
+ * from) the union fail typecheck here until the list matches it.
+ */
+export const GATE_DECLINE_CONDITIONS: ReadonlyArray<GateDecline['condition']> = Object.keys({
+  debug: true,
+  cores: true,
+  'not-hit': true,
+  limits: true,
+  disarmed: true,
+  'not-settled': true,
+  rejected: true,
+  member: true,
+} satisfies Record<GateDecline['condition'], true>) as Array<GateDecline['condition']>;
+
+/** Every route a `member` decline can carry, at runtime, held to {@link StoredComputeBy} as above. */
+export const GATE_MEMBER_ROUTES: readonly StoredComputeBy[] = Object.keys({
+  storedRoute: true,
+  readRoute: true,
+} satisfies Record<StoredComputeBy, true>) as StoredComputeBy[];
 
 /** The one decision the checks turn acts on. */
 export type GateDecision =
@@ -240,7 +262,7 @@ export async function abandoningUnread<T>(
  * no member's facts are built, and nothing read is kept. The tier is read once, when the first
  * member's route asks, through a reader that reads no row once the gate has closed, so a disarm
  * that lands while the tier is read stops the judgment. The rows read are counted
- * `checks.gate.rows.read`.
+ * `checks.gate.rows.read`, summed per member: a content key several members share counts once for each.
  *
  * @param stored - The hit's stored content
  * @param routing - The run's parse routing

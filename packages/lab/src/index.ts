@@ -233,6 +233,8 @@ export {
   type PerfBody,
   PerfBodySchema,
   type PerfCommandStats,
+  type ValidateDebugFacts,
+  ValidateDebugFactsSchema,
 } from './facets/perf/types.js';
 
 export {
