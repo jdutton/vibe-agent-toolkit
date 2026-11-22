@@ -207,7 +207,7 @@ describe('blob facts', () => {
     await store.writeBlobFacts(written);
 
     const read = await store.readBlobFacts([FIRST_BLOB]) as unknown as Record<string, readonly unknown[]>;
-    expectSchemaValid(read, ['blobs', 'blobReferences', 'blobSections', 'blobConditions', 'harnessBlobFacts', 'harnessBlobImports']);
+    expectSchemaValid(read, ['blobs', 'blobReferences', 'blobSections', 'blobConditions', 'harnessBlobFacts', 'harnessBlobImports', 'skillTextFacts', 'skillTextMatches']);
     expect(read).toEqual(written);
   });
 
@@ -640,6 +640,7 @@ describe('decoded rows are counted against the store they came from', () => {
     const empty = sampleBlobRows();
     await store.writeBlobFacts({
       ...empty, blobs: [], blobReferences: [], blobSections: [], blobConditions: [], harnessBlobFacts: [], harnessBlobImports: [],
+      skillTextFacts: [], skillTextMatches: [],
     });
     expect(readWorkCounters()['store.writes.persistent']).toBe(0);
     expect(readWorkCounters()['store.rows.written.persistent']).toBe(0);
@@ -1013,6 +1014,7 @@ describe('the blob tier is bounded', () => {
     // leave a growing tier behind a green sum.
     expect(blobRowCounts(oldest)).toEqual({
       blobs: 0, blob_references: 0, blob_sections: 0, blob_conditions: 0, harness_blob_facts: 0, harness_blob_imports: 0,
+      skill_text_facts: 0, skill_text_matches: 0,
     });
     expect(trackedBlobKeys()).toBe(2);
     // And the survivors really did survive — an eviction that emptied the tier

@@ -29,7 +29,7 @@ import type {
   MultipartResult,
   OrgApiClient,
 } from '@vibe-agent-toolkit/claude-marketplace';
-import { parseInputRefusal, withParseDispatcher } from '@vibe-agent-toolkit/resources';
+import { parseInputRefusal, SKILL_TEXT_DECLARATION, skillTextFactsOf, withParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { createAllowUsageLedger, runValidationFramework } from '@vibe-agent-toolkit/schema';
 import type { RefusalCode, ValidationConfig, ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { ARCHIVE_REFUSED_CODE, archiveEntryPlace, decodeTextContent, direntKindFollowingSync, everywhere, forEachInOrder, isAbsoluteAnyPlatform, isArchiveEntryReadRefusal, isVatError, pathPresent, requireFollowedStatSync, safePath, toForwardSlash, toForwardSlashAnyPlatform, withTempDir, appendAll } from '@vibe-agent-toolkit/utils';
@@ -928,7 +928,7 @@ async function declaredTestInputPaths(skillDir: string): Promise<ReadonlySet<str
 	// `'refuse'`: an upload that cannot tell which paths are test input might
 	// publish an answer key. The throw is reported per skill by the install
 	// loop's catch (logged, and counted in its failures) — never swallowed.
-	const config = await resolveSkillPackagingConfig(safePath.join(skillDir, 'SKILL.md'), 'refuse');
+	const config = await resolveSkillPackagingConfig(safePath.join(skillDir, 'SKILL.md'), 'refuse', undefined);
 	const declared = config?.test?.evals;
 	if (declared === undefined) return new Set();
 	const unit = evalSuiteUnitPath(safePath.resolve(skillDir), declared);
@@ -1104,7 +1104,7 @@ async function prepareSkillUpload(
 	// one map lookup. Resolved HERE rather than plumbed out of the exported
 	// `collectSkillUploadFiles`, which resolves its own so no caller can hand it
 	// a config with the exclusion skipped.
-	const packaging = await resolveSkillPackagingConfig(skillMdPath, 'refuse');
+	const packaging = await resolveSkillPackagingConfig(skillMdPath, 'refuse', undefined);
 	warnUnportableReferences(files, dirName, packaging?.validation, logger);
 
 	return { displayTitle, files, dirName };
@@ -1153,10 +1153,10 @@ export function warnUnportableReferences(
 		// reads as instructions.
 		if (!file.filename.toLowerCase().endsWith('.md')) continue;
 		const location = bundleRelativeName(file.filename, bundleRoot);
-		const content = file.content.toString('utf8');
-		collectNonPortableAssetReferenceIssues(content, location, rawIssues);
-		collectNonPortableCommandIssues(content, location, rawIssues);
-		collectUnqualifiedMcpToolIssues(content, location, rawIssues);
+		const facts = skillTextFactsOf(file.content.toString('utf8'), SKILL_TEXT_DECLARATION);
+		collectNonPortableAssetReferenceIssues(facts, location, rawIssues);
+		collectNonPortableCommandIssues(facts, location, rawIssues);
+		collectUnqualifiedMcpToolIssues(facts, location, rawIssues);
 	}
 	const { emitted: issues } = runValidationFramework(
 		rawIssues,

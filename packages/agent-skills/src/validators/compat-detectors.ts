@@ -1,80 +1,70 @@
 /**
  * Compat capability detectors.
  *
- * (content, filePath, frontmatter) -> { evidence, observations }. It parses
- * nothing: `allowed-tools` is read from the frontmatter the caller's own parse
- * returned ({@link detectorFrontmatter} for a caller that has none). Detectors
- * collect raw EvidenceRecord[] from the source, then deriveObservations()
- * rolls evidence up into capability-level Observation[]. The verdict layer
+ * (skill-text record, filePath, frontmatter) -> { evidence, observations }. It
+ * parses and scans nothing: the text half of every detector (the `allowed-tools:`
+ * key's line, the first prose tool reference, the first fenced shell block,
+ * external CLIs per shell block, browser-auth flows) is the skill-text core's
+ * `compat*` families in `@vibe-agent-toolkit/resources`, and `allowed-tools` is
+ * read from the frontmatter the caller's own parse returned
+ * ({@link detectorFrontmatter} for a caller that has none). The detectors turn
+ * those records into raw EvidenceRecord[], then deriveObservations() rolls
+ * evidence up into capability-level Observation[]. The verdict layer
  * (downstream) decides whether each observation produces a compat issue.
+ *
+ * Known quirk, kept: a fenced block's opening line must end in `\n`, so a CRLF
+ * document has no fenced-block evidence (no FENCED_SHELL_BLOCK, no external CLI).
  *
  * Pattern IDs MUST be registered in PATTERN_REGISTRY (assertPatternRegistered
  * is called against every emitted record).
  */
 
-import { isPerRunParseRefusal, type MeasuredContent, type ParseRoute } from '@vibe-agent-toolkit/resources';
+import {
+  EXTERNAL_CLI_BINARIES,
+  isPerRunParseRefusal,
+  type MeasuredContent,
+  type ParseRoute,
+  type SkillTextFacts,
+  type SkillTextFamilyPatternId,
+} from '@vibe-agent-toolkit/resources';
 import { CODE_REGISTRY, type IssueCode, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
-import {
-  buildEvidence,
-  deriveObservationsFromEvidence,
-  EXTERNAL_CLI_BINARIES,
-} from '../evidence/index.js';
+import { buildEvidence, deriveObservationsFromEvidence } from '../evidence/index.js';
 import { parseFrontmatter } from '../parsers/frontmatter-parser.js';
 import { allowedToolsOf } from '../schemas/allowed-tools.js';
 
-const SHELL_LANGUAGES = new Set(['bash', 'sh', 'shell', 'zsh']);
+import { recordsOf } from './skill-text-records.js';
+
 const LOCAL_SHELL_TOOLS = ['Bash', 'Edit', 'Write', 'NotebookEdit'] as const;
 
-const BROWSER_AUTH_PATTERNS: ReadonlyArray<{ patternId: string; re: RegExp; description: string }> = [
-  { patternId: 'BROWSER_AUTH_MSAL_PYTHON_IMPORT', re: /\bfrom\s+msal\b/, description: 'from msal import' },
-  { patternId: 'BROWSER_AUTH_MSAL_JS_IMPORT', re: /@azure\/msal-(node|browser|common)/, description: '@azure/msal-* import' },
-  { patternId: 'BROWSER_AUTH_AZ_LOGIN', re: /(^|[\s;|&])az\s+login\b/m, description: "'az login' in shell" },
-  { patternId: 'BROWSER_AUTH_GCLOUD_LOGIN', re: /(^|[\s;|&])gcloud\s+auth\s+login\b/m, description: "'gcloud auth login' in shell" },
-  { patternId: 'BROWSER_AUTH_AWS_SSO_LOGIN', re: /(^|[\s;|&])aws\s+sso\s+login\b/m, description: "'aws sso login' in shell" },
-  { patternId: 'BROWSER_AUTH_WEBBROWSER_OPEN', re: /\bwebbrowser\.open\s*\(/, description: 'webbrowser.open() call' },
-];
+/** A browser-auth pattern's ID. */
+type BrowserAuthId = SkillTextFamilyPatternId<'compatBrowserAuth'>;
 
-// The frontmatter span, on `\n`-normalized content, used ONLY to locate the
-// line the `allowed-tools:` key sits on. The value is read through
-// `parseFrontmatter`, never from this regex. YAML lets the key be quoted and
-// pads before the colon (`"allowed-tools": …`, `allowed-tools : …`); those
-// parsed fine but the locator missed them, so the evidence went out with no line.
-const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---/;
-const ALLOWED_TOOLS_KEY_RE = /^(?:"allowed-tools"|'allowed-tools'|allowed-tools)\s*:/m;
-const PROSE_TOOL_RE = /\b(Bash|Edit|Write|NotebookEdit)\s+tool\b/;
+/** An external CLI's pattern ID. */
+type ExternalCliId = SkillTextFamilyPatternId<'compatExternalCli'>;
+
+/** What each browser-auth flow's evidence says it found: judgement, never the matched text. */
+const BROWSER_AUTH_DESCRIPTIONS = {
+  BROWSER_AUTH_MSAL_PYTHON_IMPORT: 'from msal import',
+  BROWSER_AUTH_MSAL_JS_IMPORT: '@azure/msal-* import',
+  BROWSER_AUTH_AZ_LOGIN: "'az login' in shell",
+  BROWSER_AUTH_GCLOUD_LOGIN: "'gcloud auth login' in shell",
+  BROWSER_AUTH_AWS_SSO_LOGIN: "'aws sso login' in shell",
+  BROWSER_AUTH_WEBBROWSER_OPEN: 'webbrowser.open() call',
+} as const satisfies Record<BrowserAuthId, string>;
+
+/**
+ * An external CLI's binary, by the pattern ID its evidence carries: total by
+ * construction, since {@link ExternalCliId} is the IDs of this same list.
+ */
+const EXTERNAL_CLI_BINARY = Object.fromEntries(
+  EXTERNAL_CLI_BINARIES.map(({ binary, patternId }) => [patternId, binary]),
+) as Readonly<Record<ExternalCliId, string>>;
 
 export interface DetectorOutput {
   evidence: EvidenceRecord[];
   observations: Observation[];
-}
-
-/**
- * Locate the line number (1-based) within `content` where `index` falls.
- */
-function lineForIndex(content: string, index: number): number {
-  return content.slice(0, index).split('\n').length;
-}
-
-/**
- * Iterate over fenced code blocks. Yields {language, body, line, index} for
- * each fence. `line` points at the opening fence; `index` is the offset of
- * the body start within `content`.
- */
-function* iterCodeBlocks(
-  content: string,
-): Generator<{ language: string; body: string; line: number; bodyIndex: number }> {
-  const CODE_BLOCK_RE = /^```(\w*)\n([\s\S]*?)^```/gm;
-  let match: RegExpExecArray | null;
-  while ((match = CODE_BLOCK_RE.exec(content)) !== null) {
-    const language = match[1] ?? '';
-    const body = match[2] ?? '';
-    const line = lineForIndex(content, match.index);
-    // body starts after the opening fence + language + '\n'
-    const bodyIndex = match.index + match[0].indexOf('\n', 0) + 1;
-    yield { language, body, line, bodyIndex };
-  }
 }
 
 /**
@@ -101,22 +91,18 @@ export async function detectorFrontmatter(input: MeasuredContent, route: ParseRo
  * block sequence is valid YAML, so `allowed-tools: Read Bash` and a `- Bash`
  * list both read as NO declaration and the local-shell capability reported
  * clean over them. The value comes from the caller's YAML parse and goes
- * through the same `allowedToolsOf` the settings-compat checker uses.
+ * through the same `allowedToolsOf` the settings-compat checker uses; the key's
+ * line is the core's `compatAllowedToolsKey` record (YAML lets the key be
+ * quoted and pad before the colon, and the locator finds those too).
  */
 export function allowedToolsDeclarations(
-  content: string,
+  facts: SkillTextFacts,
   frontmatter: Readonly<Record<string, unknown>> | undefined,
 ): { tools: string[]; line: number } {
   const tools = allowedToolsOf(frontmatter?.['allowed-tools']) ?? [];
   if (tools.length === 0) return { tools: [], line: 0 };
-
-  // Locate the line of the key. parseFrontmatter normalized CRLF; do the same.
-  const normalized = content.replaceAll('\r\n', '\n');
-  const fmBody = FRONTMATTER_RE.exec(normalized)?.[1] ?? '';
-  const at = ALLOWED_TOOLS_KEY_RE.exec(fmBody);
-  // The opening `---` is line 1, so the key's line is 1 + its line within the body.
-  const line = at ? 1 + lineForIndex(fmBody, at.index) : 0;
-  return { tools, line };
+  const [key] = recordsOf(facts, 'compatAllowedToolsKey');
+  return { tools, line: key?.line ?? 0 };
 }
 
 /**
@@ -130,7 +116,7 @@ function toolNameOf(declaration: string): string {
 }
 
 function collectLocalShellEvidence(
-  content: string,
+  facts: SkillTextFacts,
   filePath: string,
   locationRoot: string,
   frontmatter: Readonly<Record<string, unknown>> | undefined,
@@ -138,7 +124,7 @@ function collectLocalShellEvidence(
   const out: EvidenceRecord[] = [];
 
   // Frontmatter allowed-tools
-  const { tools, line: atLine } = allowedToolsDeclarations(content, frontmatter);
+  const { tools, line: atLine } = allowedToolsDeclarations(facts, frontmatter);
   const matchedTool = tools.find(t => (LOCAL_SHELL_TOOLS as readonly string[]).includes(toolNameOf(t)));
   if (matchedTool !== undefined) {
     out.push(
@@ -152,102 +138,38 @@ function collectLocalShellEvidence(
     );
   }
 
-  // Prose reference to a local-shell tool by name
-  const proseMatch = PROSE_TOOL_RE.exec(content);
-  if (proseMatch) {
-    out.push(
-      buildEvidence(
-        'PROSE_LOCAL_SHELL_TOOL_REFERENCE',
-        filePath,
-        locationRoot,
-        proseMatch[0],
-        lineForIndex(content, proseMatch.index),
-      ),
-    );
+  // Prose reference to a local-shell tool by name (the first one).
+  for (const { line, matchText } of recordsOf(facts, 'compatProseTool')) {
+    out.push(buildEvidence('PROSE_LOCAL_SHELL_TOOL_REFERENCE', filePath, locationRoot, matchText, line));
   }
 
-  // Fenced shell code block (record the first one — one is enough to assert
-  // the capability; downstream verdict only needs the existence claim).
-  for (const block of iterCodeBlocks(content)) {
-    if (SHELL_LANGUAGES.has(block.language.toLowerCase())) {
-      out.push(
-        buildEvidence(
-          'FENCED_SHELL_BLOCK',
-          filePath,
-          locationRoot,
-          `\`\`\`${block.language} block`,
-          block.line,
-        ),
-      );
-      break;
-    }
+  // Fenced shell code block (the first one — one is enough to assert the
+  // capability; downstream verdict only needs the existence claim).
+  for (const { line, matchText: language } of recordsOf(facts, 'compatFencedShell')) {
+    out.push(buildEvidence('FENCED_SHELL_BLOCK', filePath, locationRoot, `\`\`\`${language} block`, line));
   }
 
   return out;
 }
 
-function binaryLineRE(binary: string): RegExp {
-  // Start of line or after a shell separator (space/tab/;|&), followed by whitespace/EOL.
-  // This prevents matching `az-foo` or `gh-cli`.
-  // eslint-disable-next-line security/detect-non-literal-regexp -- whitelist of literals
-  return new RegExp(String.raw`(^|[\s;|&])${binary}(\s|$)`, 'm');
-}
-
-export function collectExternalCLIEvidence(
-  content: string,
+/** An external CLI invoked in a shell (or unlabelled) block: one per binary per block, at the invocation's line. */
+function collectExternalCLIEvidence(
+  facts: SkillTextFacts,
   filePath: string,
   locationRoot: string,
 ): EvidenceRecord[] {
-  const out: EvidenceRecord[] = [];
-  const seen = new Set<string>();
-  for (const block of iterCodeBlocks(content)) {
-    const lang = block.language.toLowerCase();
-    if (!SHELL_LANGUAGES.has(lang) && lang !== '') continue;
-    for (const { binary, patternId } of EXTERNAL_CLI_BINARIES) {
-      const m = binaryLineRE(binary).exec(block.body);
-      if (!m) continue;
-      const key = `${patternId}|${block.line}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      // Compute line within the original content: opening-fence line + offset
-      // within block body. block.line already points at the opening fence,
-      // so body's first line is block.line + 1.
-      const offsetWithinBody = block.body.slice(0, m.index).split('\n').length - 1;
-      const matchedLine = block.line + 1 + offsetWithinBody;
-      out.push(
-        buildEvidence(
-          patternId,
-          filePath,
-          locationRoot,
-          `${binary} invocation in shell block`,
-          matchedLine,
-        ),
-      );
-    }
-  }
-  return out;
+  return recordsOf(facts, 'compatExternalCli').map(({ patternId, line }) =>
+    buildEvidence(patternId, filePath, locationRoot, `${EXTERNAL_CLI_BINARY[patternId]} invocation in shell block`, line));
 }
 
-export function collectBrowserAuthEvidence(
-  content: string,
+/** A browser-auth flow anywhere in the file: one per pattern, at its first match. */
+function collectBrowserAuthEvidence(
+  facts: SkillTextFacts,
   filePath: string,
   locationRoot: string,
 ): EvidenceRecord[] {
-  const out: EvidenceRecord[] = [];
-  for (const { patternId, re, description } of BROWSER_AUTH_PATTERNS) {
-    const m = re.exec(content);
-    if (!m) continue;
-    out.push(
-      buildEvidence(
-        patternId,
-        filePath,
-        locationRoot,
-        description,
-        lineForIndex(content, m.index),
-      ),
-    );
-  }
-  return out;
+  return recordsOf(facts, 'compatBrowserAuth').map(({ patternId, line }) =>
+    buildEvidence(patternId, filePath, locationRoot, BROWSER_AUTH_DESCRIPTIONS[patternId], line));
 }
 
 const SKILL_LOCAL_SHELL_PATTERN_IDS: ReadonlySet<string> = new Set([
@@ -281,22 +203,25 @@ export function observationToIssue(obs: Observation, location: string): Validati
 }
 
 /**
+ * @param facts - The file's skill-text record (`skillTextFactsOf` over its raw
+ *   text, frontmatter and all; or the store's copy of it)
+ * @param filePath - The file, for each evidence record's location
  * @param locationRoot - The ONE base every emitted evidence `location.file` is
  *   expressed relative to. Required, so a producer cannot emit an absolute
  *   location by omission.
- * @param frontmatter - The frontmatter the caller's parse of `content` returned
+ * @param frontmatter - The frontmatter the caller's parse of the file returned
  *   (`undefined` when it did not parse) — never parsed again here
  */
 export function runCompatDetectors(
-  content: string,
+  facts: SkillTextFacts,
   filePath: string,
   locationRoot: string,
   frontmatter: Readonly<Record<string, unknown>> | undefined,
 ): DetectorOutput {
   const evidence: EvidenceRecord[] = [
-    ...collectLocalShellEvidence(content, filePath, locationRoot, frontmatter),
-    ...collectExternalCLIEvidence(content, filePath, locationRoot),
-    ...collectBrowserAuthEvidence(content, filePath, locationRoot),
+    ...collectLocalShellEvidence(facts, filePath, locationRoot, frontmatter),
+    ...collectExternalCLIEvidence(facts, filePath, locationRoot),
+    ...collectBrowserAuthEvidence(facts, filePath, locationRoot),
   ];
   const observations = deriveObservations(evidence);
   return { evidence, observations };

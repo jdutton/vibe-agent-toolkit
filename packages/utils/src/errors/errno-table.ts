@@ -322,6 +322,15 @@ export function isNameTooLongError(error: unknown): boolean {
   return hasAnyErrno(error, ['ENAMETOOLONG']);
 }
 
+/**
+ * `EROFS` alone: the filesystem is mounted read-only. The class table files it under
+ * `unsupported` beside faults that are defects (`EXDEV`, `EINVAL`), so a site that treats a
+ * read-only cache as "go without" asks this, not the class.
+ */
+export function isReadOnlyFilesystemError(error: unknown): boolean {
+  return hasAnyErrno(error, ['EROFS']);
+}
+
 /** `EINVAL`: the filesystem rejected the argument (e.g. `readlink` on a non-link). */
 export function isInvalidArgumentError(error: unknown): boolean {
   return hasAnyErrno(error, ['EINVAL']);

@@ -149,6 +149,7 @@ const BARREL_EXPORTS = [
   'isParkedTreeEntry',
   'isPathAbsentError',
   'isProcessGoneError',
+  'isReadOnlyFilesystemError',
   'isRenameContentionError',
   'isSingleFsSegment',
   'isSymlinkUnsupportedError',

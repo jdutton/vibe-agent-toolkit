@@ -52,33 +52,60 @@ import {
 } from '../test-helpers.js';
 
 /**
- * What the next `parseFileCached` call throws, or nothing.
+ * What the next whole-document parse throws, or nothing.
  *
  * `vi.hoisted` because the mock factory below is hoisted above every import and
- * would otherwise close over an uninitialised binding. The parse arm is a path
- * SUBSTRING rather than a flag: the negative control has to let SKILL.md parse
- * (or nothing downstream is ever queued) while failing the documents it links,
- * which is the only shape that can show the walk continuing past a failure.
+ * would otherwise close over an uninitialised binding. Both arms match on a
+ * CONTENT substring rather than a flag (a dispatcher's parse sees the read, not
+ * the path): the load arm on {@link DOCUMENT_BODY}, which every document the walk
+ * parses carries and the validator's frontmatter-only parse of the SKILL.md never
+ * does; the parse arm on text only the linked documents carry, because the
+ * negative control has to let SKILL.md parse (or nothing downstream is ever
+ * queued) while failing the documents it links, which is the only shape that can
+ * show the walk continuing past a failure.
  */
 const failures = vi.hoisted(() => ({ load: undefined as Error | undefined, parseFor: undefined as ParseArm }));
 
-/** A parse failure armed for every path containing `pathContains`. */
-type ParseArm = { pathContains: string; error: Error } | undefined;
+/** A parse failure armed for every document whose content contains `contentContains`. */
+type ParseArm = { contentContains: string; error: Error } | undefined;
 
-// Only `parseFileCached` is replaced — the seam the lazy parser load throws
-// THROUGH. Link resolution, the content-key machinery, the real parser and the
+/** What every document the link walk parses carries: a body heading. */
+const DOCUMENT_BODY = '\n# ';
+
+/** Text only the linked documents carry. */
+const LINKED_ONLY = 'Nothing links out of here';
+
+/**
+ * The run's dispatcher with its `parse` armed: the seam the lazy parser load
+ * throws THROUGH. Everything else is the real dispatcher's.
+ */
+function armed(dispatcher: ResourcesModule.ParseDispatcher): ResourcesModule.ParseDispatcher {
+  return new Proxy(dispatcher, {
+    get(target, property) {
+      if (property === 'parse') {
+        return (keyed: ResourcesModule.ParsableContent) => {
+          if (failures.load && keyed.content.includes(DOCUMENT_BODY)) return Promise.reject(failures.load);
+          return failures.parseFor && keyed.content.includes(failures.parseFor.contentContains)
+            ? Promise.reject(failures.parseFor.error)
+            : target.parse(keyed);
+        };
+      }
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+// Only the dispatcher a validation runs on is replaced, by one whose `parse` is
+// armed. Link resolution, the content-key machinery, the real parser and the
 // real `isParserUnavailable` all stay live via `importOriginal`, so the walk
 // under test is the one a real validation performs and the predicate under test
 // is the shipped one.
 vi.mock('@vibe-agent-toolkit/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof ResourcesModule>();
-  const parseFileCached = async (filePath: string, kind: ResourcesModule.DocumentParserKind, route: ResourcesModule.ParseRoute) => {
-    if (failures.load) return Promise.reject(failures.load);
-    return failures.parseFor && filePath.includes(failures.parseFor.pathContains)
-      ? Promise.reject(failures.parseFor.error)
-      : actual.parseFileCached(filePath, kind, route);
-  };
-  return { ...actual, parseFileCached };
+  const withParseDispatcher: typeof actual.withParseDispatcher = (work, options) =>
+    actual.withParseDispatcher((dispatcher) => work(armed(dispatcher)), options);
+  return { ...actual, withParseDispatcher };
 });
 
 /**
@@ -172,7 +199,7 @@ describe('an ordinary parse failure during skill link traversal', () => {
     failures.parseFor = {
       // SKILL.md keeps parsing, so both linked documents are still discovered
       // and queued; only they fail.
-      pathContains: 'linked-',
+      contentContains: LINKED_ONLY,
       // A failure on `classifyParseFailure`'s allowlist — a read the OS refused
       // for the file. An unbranded `Error` is VAT's defect and is rethrown.
       error: Object.assign(new Error("EACCES: permission denied, open 'linked-a.md'"), { code: 'EACCES', syscall: 'open', path: 'linked-a.md' }),

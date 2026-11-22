@@ -52,6 +52,7 @@ import type {
   ResourceTagRow,
   RootRow,
 } from '../schemas/projection-resources.js';
+import type { SkillTextFactsRow, SkillTextMatchRow } from '../schemas/projection-skill-text.js';
 import type { ResolutionContextRow, ZoneProvenanceRow } from '../schemas/projection-zones.js';
 
 import { isSizeRefusal, readKeyedContent, type RunContentCache } from './content-cache.js';
@@ -97,7 +98,7 @@ const NO_PARSER_KIND: ParserKind = 'none';
 const KEY_SEPARATOR = '\u0000';
 
 /**
- * The fifteen materialised tables of the resource projection.
+ * The materialised tables of the resource projection.
  *
  * `edges`, `edge_resolutions` and `lens_entry_points` are absent on purpose:
  * zones.md §2 places them in the derived-per-lens column, so they are the
@@ -151,6 +152,10 @@ export interface Projection {
   readonly harnessBlobFacts: readonly HarnessBlobFactsRow[];
   /** `(blob, harness)`-keyed imports — each harness's own extractor, not VAT's lexer. */
   readonly harnessBlobImports: readonly HarnessBlobImportRow[];
+  /** Blob-keyed skill-text facts: one row per markdown blob, none for any other. */
+  readonly skillTextFacts: readonly SkillTextFactsRow[];
+  /** Blob-keyed skill-text matches, in the order the skills-phase detectors emit them. */
+  readonly skillTextMatches: readonly SkillTextMatchRow[];
 }
 
 /**
@@ -223,7 +228,7 @@ type RowKey<T> = (row: T) => string;
 /**
  * One table: insertion-ordered rows plus a key index.
  *
- * Fifteen near-identical `add` implementations would be fifteen places for the
+ * A near-identical `add` implementation per table would be a place per table for the
  * de-duplication rule to drift, so there is one, parameterised by the key.
  */
 class ProjectionTable<T> {
@@ -394,6 +399,10 @@ export class ProjectionBuilder {
   );
   readonly #harnessBlobImports = new ProjectionTable<HarnessBlobImportRow>(
     (row) => compositeKey(row.blob, row.harness, row.ordinal),
+  );
+  readonly #skillTextFacts = new ProjectionTable<SkillTextFactsRow>((row) => row.blob);
+  readonly #skillTextMatches = new ProjectionTable<SkillTextMatchRow>(
+    (row) => compositeKey(row.blob, row.ordinal),
   );
 
   readonly #gitTracker: GitTracker | undefined;
@@ -799,6 +808,26 @@ export class ProjectionBuilder {
   }
 
   /**
+   * Record one markdown blob's skill-text facts.
+   *
+   * @param row - The facts row
+   * @returns True when recorded, false when this blob was already present
+   */
+  addSkillTextFacts(row: SkillTextFactsRow): boolean {
+    return this.#skillTextFacts.add(row) === undefined;
+  }
+
+  /**
+   * Record one skill-text match.
+   *
+   * @param row - The match row
+   * @returns True when recorded, false when this `(blob, ordinal)` was already present
+   */
+  addSkillTextMatch(row: SkillTextMatchRow): boolean {
+    return this.#skillTextMatches.add(row) === undefined;
+  }
+
+  /**
    * Restamp a set of realization rows with one `(contentKey, contentState)` pair.
    *
    * The two columns are written together and never separately: the schema pins
@@ -854,6 +883,8 @@ export class ProjectionBuilder {
       blobConditions: this.#blobConditions.rows,
       harnessBlobFacts: this.#harnessBlobFacts.rows,
       harnessBlobImports: this.#harnessBlobImports.rows,
+      skillTextFacts: this.#skillTextFacts.rows,
+      skillTextMatches: this.#skillTextMatches.rows,
     };
     return this.#base;
   }
@@ -883,6 +914,8 @@ export class ProjectionBuilder {
       blobConditions: this.#blobConditions.snapshot(),
       harnessBlobFacts: this.#harnessBlobFacts.snapshot(),
       harnessBlobImports: this.#harnessBlobImports.snapshot(),
+      skillTextFacts: this.#skillTextFacts.snapshot(),
+      skillTextMatches: this.#skillTextMatches.snapshot(),
     });
   }
 }

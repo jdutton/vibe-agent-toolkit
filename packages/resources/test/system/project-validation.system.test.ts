@@ -35,6 +35,7 @@ describe('System Test: Project Link Validation (Dogfooding)', () => {
         '**/coverage/**',
         '**/test-fixtures/**', // Exclude test fixtures with intentionally broken links
         '**/test/fixtures/skill-files/**', // Exclude skill-files fixture (intentionally broken links for build artifact testing)
+        '**/test/fixtures/skill-text-golden/**', // Exclude the skill-text golden corpus: its UTF-16 link targets are written at test run time, so they are absent on disk
         '**/resources/skills/evals/**', // Exclude skill-test eval fixtures (intentionally-broken SKILL.md/.md used to verify vat-audit/vat-skill-review). Mirrors the exclusion in the root + package vibe-agent-toolkit.config.yaml, eslint.config.js, and validate-repo-structure.ts.
         '**/docs/plans/**', // Exclude implementation plans (reference code that doesn't exist yet)
       ],

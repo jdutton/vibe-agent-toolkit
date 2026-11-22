@@ -10,7 +10,7 @@
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 
-import { conventionalSuiteProbe, packagedFileEntries } from '@vibe-agent-toolkit/agent-skills';
+import { conventionalSuiteProbe, packagedFileEntries, type SkillTextRun } from '@vibe-agent-toolkit/agent-skills';
 import {
   DeferredArtifacts,
   matchesCollection,
@@ -19,7 +19,6 @@ import {
   type CollectionConfig,
   type CollectionStats,
   type DeferredSkillFiles,
-  type ParseDispatcher,
   type ProjectConfig,
 } from '@vibe-agent-toolkit/resources';
 import {
@@ -276,13 +275,14 @@ function applyNoCheckFrontmatterLinksFlag(config: ProjectConfig | undefined): vo
  *
  * @param config - The project config
  * @param projectRoot - The project root the skills config is relative to
- * @param dispatcher - The run's dispatcher, so each SKILL.md the resources phase
- *   already read is not read, keyed and parsed again for discovery
+ * @param run - The run's population: each SKILL.md its store holds is served
+ *   from it, and one the resources phase already read is not read, keyed and
+ *   parsed again for discovery
  */
 export async function computeDeferredArtifacts(
   config: ProjectConfig | undefined,
   projectRoot: string,
-  dispatcher: ParseDispatcher,
+  run: SkillTextRun,
 ): Promise<DeferredArtifacts | undefined> {
   if (!config?.skills) {
     return undefined;
@@ -297,7 +297,7 @@ export async function computeDeferredArtifacts(
   // `'refuse'`: the `files:` dest check below is only as complete as this
   // list — a SKILL.md whose parse was refused included, since its `files:` are keyed
   // by a name it has none of. The throw lands in the command's catch → a refusal by its code, exit 2.
-  const discovered = namedSkillsOrRefuse(await discoverSkillsFromConfig(config.skills, projectRoot, 'refuse', dispatcher), projectRoot);
+  const discovered = namedSkillsOrRefuse(await discoverSkillsFromConfig(config.skills, projectRoot, 'refuse', run), projectRoot);
   const { defaults, config: perSkillConfig } = config.skills;
 
   // Assembled ONCE for the whole run, then handed to every skill below. Rebuilding
@@ -368,7 +368,7 @@ async function runValidation(
   // config-merge `vat skills validate` uses, so a `files:`-declared link that
   // lane reports as LINK_DEFERRED_ARTIFACT (info) is never independently
   // reported here as LINK_BROKEN_FILE (error) — the headline bug this closes.
-  const deferredArtifacts = await computeDeferredArtifacts(config, projectRoot, run.dispatcher);
+  const deferredArtifacts = await computeDeferredArtifacts(config, projectRoot, run.population);
 
   const validationResult = await registry.validate({
     ...(frontmatterSchemaObj ? { frontmatterSchema: frontmatterSchemaObj } : {}),

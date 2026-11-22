@@ -335,7 +335,7 @@ async function validateTopLevelCommand(
     // requireProjectRoot returns the discovered root; read config from there so a
     // subdirectory invocation doesn't load an empty config and falsely pass.
     const projectRoot = requireProjectRoot(process.cwd(), COMMAND_NAME);
-    await withRunContext({ root: projectRoot }, async (context) => {
+    await withRunContext({ projectionStore: 'on-demand', root: projectRoot , outputs: [] }, async (context) => {
       const phases = applyPhaseSelection(
         selectValidateSurfaces(loadConfig(projectRoot, 'source'), {
           root: projectRoot,

@@ -17,6 +17,7 @@
 
 import { writeFileSync } from 'node:fs';
 
+import { readSkillDocument, type SkillTextRun } from '@vibe-agent-toolkit/agent-skills';
 import { hydrateRunDatabase, openSqliteFactStore, type RunDatabase } from '@vibe-agent-toolkit/projection-sqlite';
 import {
   type BlobScopedRows,
@@ -30,9 +31,12 @@ import {
   type Projection,
   readContentWithKey,
   ResourceRegistry,
+  StoreQuestionUnavailableError,
   VAT_CACHE_DIR_ENV,
+  withRunPopulation,
 } from '@vibe-agent-toolkit/resources';
 import { readWorkCounters, safePath, WORK_COUNTER_NAMES, type WorkCounter } from '@vibe-agent-toolkit/utils';
+import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { createTempDir, removeTempDir, scratchTmpdirEnv } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, expect, vi } from 'vitest';
 
@@ -109,6 +113,8 @@ function oneBlobRow(): BlobScopedRows {
     blobConditions: [],
     harnessBlobFacts: [],
     harnessBlobImports: [],
+    skillTextFacts: [],
+    skillTextMatches: [],
   } as unknown as BlobScopedRows;
 }
 
@@ -490,7 +496,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
     delta: {
       'store.reads.persistent': 1,
       'store.writes.persistent': 2,
-      'store.rows.written.persistent': 12,
+      'store.rows.written.persistent': 13,
       'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
       'extent.derived': 1,
       'parse.dispatched': 1,
@@ -507,7 +513,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       return query;
     },
     delta: {
-      'store.rows.decoded.persistent': 12,
+      'store.rows.decoded.persistent': 13,
       'store.reads.persistent': 2,
       'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
       'extent.served': 1,
@@ -523,10 +529,10 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       return query;
     },
     delta: {
-      'store.rows.decoded.persistent': 15,
+      'store.rows.decoded.persistent': 16,
       'store.reads.persistent': 2,
       'store.writes.persistent': 2,
-      'store.rows.written.persistent': 15,
+      'store.rows.written.persistent': 16,
       'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
       'extent.derived': 1,
       'store.miss.refusedPairs': 1,
@@ -559,7 +565,103 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
     },
     delta: { 'git.calls': 1 },
   },
+  'skillText.storeMiss': skillTextScanSeed(true),
+  'skillText.noStore': skillTextScanSeed(false),
+  'skillText.storeUnopened': skillTextStoreUnopenedSeed(),
+  'skillText.outsideRoot': skillTextOutsideRootSeed(),
 };
+
+/**
+ * A run's stored-document question about a file outside its root, asked twice:
+ * answered nothing once per file per run, opening nothing (its store would
+ * refuse), and reading, keying or listing nothing to say so.
+ */
+function skillTextOutsideRootSeed(): Seed {
+  return {
+    prepare: (scope) => {
+      const root = safePath.join(scope.dir(), 'home');
+      const outside = safePath.join(scope.dir(), 'elsewhere', 'SKILL.md');
+      return () => withRunPopulation({
+        root,
+        outputs: [],
+        gitTracker: new GitTracker(root),
+        cacheOf: () => Promise.reject(new Error('the run never opens its store for this')),
+        questionCacheOf: () => Promise.reject(new Error('the question never opens its store for this')),
+        holdsStore: true,
+        collectionsFor: () => Promise.resolve(undefined),
+      }, async (population) => {
+        await population.source.storedDocument(outside, 'markdown');
+        await population.source.storedDocument(outside, 'markdown');
+        return undefined;
+      });
+    },
+    delta: { 'skillText.outsideRoot': 1 },
+  };
+}
+
+/**
+ * A run's stored-document questions meeting a store that will not open (here,
+ * another process's lock): two questions, one failed opening counted, and
+ * nothing read, keyed or listed to answer either.
+ */
+function skillTextStoreUnopenedSeed(): Seed {
+  return {
+    prepare: (scope) => {
+      const root = scope.dir();
+      return () => withRunPopulation({
+        root,
+        outputs: [],
+        gitTracker: new GitTracker(root),
+        cacheOf: () => Promise.resolve(undefined),
+        questionCacheOf: () => Promise.reject(new StoreQuestionUnavailableError(new Error('database is locked'))),
+        holdsStore: true,
+        collectionsFor: () => Promise.resolve(undefined),
+      }, async (population) => {
+        await population.source.storedDocument(safePath.join(root, 'SKILL.md'), 'markdown');
+        await population.source.storedDocument(safePath.join(root, 'guide.md'), 'markdown');
+        return undefined;
+      });
+    },
+    delta: { 'skillText.storeUnopened': 1 },
+  };
+}
+
+/**
+ * The skills lane reading a SKILL.md no store serves, twice in one run: the
+ * file is read and keyed each time, parsed once and answered from the parse
+ * cache the second time, and counted as scanned from its text once per run: a
+ * store miss when the run has a store that does not serve it, `noStore` when
+ * the run has none.
+ *
+ * @param holdsStore - Whether the run has a store to ask
+ * @returns The seed
+ */
+function skillTextScanSeed(holdsStore: boolean): Seed {
+  const content = `---\nname: seed\n---\n${uniqueDocument('skill text')}`;
+  return {
+    prepare: (scope) => {
+      const skillPath = safePath.join(scope.dir(), 'SKILL.md');
+      writeFileSync(skillPath, content);
+      const run: SkillTextRun = {
+        source: { storedDocument: () => Promise.resolve(undefined), holdsStore },
+        dispatcher: dispatcherOf(scope),
+      };
+      return async () => {
+        await readSkillDocument(skillPath, run, 'source');
+        await readSkillDocument(skillPath, run, 'source');
+        return undefined;
+      };
+    },
+    delta: {
+      [holdsStore ? 'skillText.storeMiss' : 'skillText.noStore']: 1,
+      'parse.dispatched': 1,
+      'parse.cache.hit': 1,
+      'content.read': 2,
+      'content.hashed': 2,
+      'content.hashedBytes': 2 * Buffer.byteLength(content, 'utf8'),
+    },
+  };
+}
 
 /**
  * Every counter's movement between two reads.

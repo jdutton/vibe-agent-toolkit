@@ -49,11 +49,11 @@ describe('following walkers on a tree with a link back into itself', () => {
     await expect(hashDirectory(skillDir)).rejects.toThrow(DirectoryWalkRevisitedError);
   });
 
-  it('detectBundledResourceWithoutLinks refuses the loop under a bundled subdirectory', ({ skip }) => {
+  it('detectBundledResourceWithoutLinks refuses the loop under a bundled subdirectory', async ({ skip }) => {
     const skillDir = plantLoopedSkill(tree());
     if (skillDir === '') skip('host cannot create symlinks');
 
-    expect(() => detectBundledResourceWithoutLinks('', skillDir, [], skillDir, 'source')).toThrow(DirectoryWalkRevisitedError);
+    await expect(detectBundledResourceWithoutLinks(() => Promise.resolve(''), skillDir, [], skillDir, 'source')).rejects.toThrow(DirectoryWalkRevisitedError);
   });
 
   it('checkUnreferencedFiles refuses the loop in a packaged output tree', async ({ skip }) => {
@@ -65,12 +65,12 @@ describe('following walkers on a tree with a link back into itself', () => {
 
   // The validator walks whatever tree its caller hands it — an author's skill, or a ZIP extracted
   // into $TMPDIR — so a directory it cannot resolve is a fault on the side the CALLER names.
-  it.each(['source', 'environment'] as const)('detectBundledResourceWithoutLinks raises a refused realpath on the side its caller names (%s)', (side) => {
+  it.each(['source', 'environment'] as const)('detectBundledResourceWithoutLinks raises a refused realpath on the side its caller names (%s)', async (side) => {
     const { skillDir, scripts } = plantSkill(tree(), 'refused');
     const session = installFaultFs({ within: tree().root, faults: [{ family: 'meta', op: 'realpath', path: (p) => p === scripts, errno: 'EACCES' }] });
     try {
-      expect(() => detectBundledResourceWithoutLinks('', skillDir, [], skillDir, side))
-        .toThrow(expect.objectContaining({ code: 'FS_FAULT', side, faultClass: 'refused', path: scripts }));
+      await expect(detectBundledResourceWithoutLinks(() => Promise.resolve(''), skillDir, [], skillDir, side))
+        .rejects.toThrow(expect.objectContaining({ code: 'FS_FAULT', side, faultClass: 'refused', path: scripts }));
     } finally {
       session.restore();
     }
@@ -80,7 +80,7 @@ describe('following walkers on a tree with a link back into itself', () => {
     const { skillDir } = plantSkill(tree(), 'plain');
 
     expect(await hashDirectory(skillDir)).toMatch(/^[0-9a-f]{64}$/);
-    expect(detectBundledResourceWithoutLinks('scripts/a.sh', skillDir, [], skillDir, 'source')).toEqual([]);
+    expect(await detectBundledResourceWithoutLinks(() => Promise.resolve('scripts/a.sh'), skillDir, [], skillDir, 'source')).toEqual([]);
     expect(Array.isArray(await checkUnreferencedFiles(skillDir, [], { dispatcher: undefined }))).toBe(true);
   });
 });

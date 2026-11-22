@@ -12,7 +12,7 @@
 
 import { chmodSync, rmSync, truncateSync } from 'node:fs';
 
-import { ParseLimitError, parseRefusal } from '@vibe-agent-toolkit/resources';
+import { DEFAULT_PARSE_LIMITS, ParseLimitError, parseRefusal } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { MAX_DECODABLE_BYTES } from '@vibe-agent-toolkit/utils/fs';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
@@ -261,7 +261,7 @@ describe('a document past the parse input cap, in every verb that crawls (system
   it('fails validate and check alike, with RESOURCE_PARSE_LIMIT_EXCEEDED at its path, in one identical sentence', async () => {
     // The default cap, in the sentence every lane gives a parse refused at a limit, naming the cap
     // alone: a realization records no size, so no lane says one.
-    const reason = parseRefusal(new ParseLimitError('inputBytes', 8 * 1024 * 1024)).reason;
+    const reason = parseRefusal(new ParseLimitError('inputBytes', DEFAULT_PARSE_LIMITS.inputBytes)).reason;
     for (const { args, status, report, stderr } of await publishedEach(scratch, oversize, [['resources', 'validate'], ['resources', 'check']])) {
       const verb = `${args.join(' ')}: ${stderr}`;
       const found = report.findings.filter((finding) => finding.location === 'docs/huge.md');

@@ -1,8 +1,18 @@
+import { SKILL_TEXT_DECLARATION, skillTextFactsOf } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
-import { detectNonImperativeBody } from '../../src/validators/imperative-body-detection.js';
+import { detectNonImperativeBody as detectOnFacts } from '../../src/validators/imperative-body-detection.js';
 
 const LOC = '/skill.md';
+
+/**
+ * The detector over the skill-text record of a SKILL.md whose parser body is
+ * `body` (the family scans the body after the frontmatter; a file with none
+ * has no body). Lines are body-relative.
+ */
+function detectNonImperativeBody(body: string, location: string): ReturnType<typeof detectOnFacts> {
+  return detectOnFacts(skillTextFactsOf(`---\nname: x\n---\n${body}`, SKILL_TEXT_DECLARATION), location);
+}
 
 describe('detectNonImperativeBody', () => {
   it('emits one issue per second-person-opener line outside code/quote blocks', () => {

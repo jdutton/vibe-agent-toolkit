@@ -58,7 +58,7 @@ import { populate, type ContributorTiming } from '../src/projection/merge.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
-import { fromCrawlInRun, inOwnRun } from './helpers/population-run.js';
+import { fromCrawlInRun, inOwnRun, noStoredDocument } from './helpers/population-run.js';
 import { registryWithClosure, setupSubdirTestSuite, useCorpusSuite } from './test-helpers.js';
 
 // ---------------------------------------------------------------------------
@@ -273,6 +273,8 @@ describe('crawl timing seam', () => {
         outputs: [],
         baseDir: suite.tempDir,
         populationSource: {
+          storedDocument: noStoredDocument,
+          holdsStore: false,
           enumerate: async (root: string) => {
             await inOwnRun(populate, {
               root,

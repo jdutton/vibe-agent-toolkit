@@ -30,7 +30,7 @@ import type { ProjectConfig } from '../src/schemas/project-config.js';
 import type { RealizationConditionRow } from '../src/schemas/projection-resources.js';
 import type { ValidationIssue } from '../src/schemas/validation-result.js';
 
-import { crawlInRun } from './helpers/population-run.js';
+import { crawlInRun, noStoredDocument } from './helpers/population-run.js';
 
 const DOC = 'docs/guide.md';
 const LOCKED = 'build/locked';
@@ -65,6 +65,8 @@ async function validateCrawled(root: string, config: ProjectConfig): Promise<Val
 /** A source that hands back the tree's one file plus whatever conditions it is given. */
 function sourceWith(root: string, conditions: readonly RealizationConditionRow[]): ResourcePopulationSource {
   return {
+    storedDocument: noStoredDocument,
+    holdsStore: false,
     enumerate: async () => ({
       paths: [safePath.join(root, DOC)],
       conditions,

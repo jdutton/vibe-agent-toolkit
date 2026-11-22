@@ -211,6 +211,24 @@ dropped and its imports never followed. Which files it scopes by `paths:` is
 `harness_blob_facts.paths` (null = unscoped), read the harness's way for any extension — never
 `blobs.frontmatter`.
 
+### `skill_text_facts` / `skill_text_matches`: what the skill validators matched in a markdown file
+
+Every markdown blob has exactly one `skill_text_facts` row (`lineCount`, the raw first-H1 text `h1`,
+`frontmatterFence` (`none`, `unclosed` or `closed`: whether the file opens a `---` frontmatter block
+and closes it), `matchCount`, `held`); no other blob has one. `skill_text_matches` holds one row per match, keyed
+`(blob, ordinal)`: `family` (the detector), `patternId`, `line`, the raw `matchText` and
+`loneSurrogates` (null unless the match held a lone surrogate). A record past 16,384 matches or 4 MiB
+is not held: `held` is false and it has no match rows, so count matches with `matchCount`, not by
+counting rows. A family ending in `Body` numbers `line` within the body below the frontmatter, not
+from the top of the file:
+
+```sql
+SELECT r.path, m.family, m.patternId, m.line
+  FROM skill_text_matches m
+  JOIN resource_realizations r ON r.contentKey = m.blob
+ WHERE m.family = 'nonPortableCommand'
+```
+
 ### Relations that are COMPUTED, not stored — and are skipped unless you name them
 
 Beside the materialised tables, `query` and `check` expose relations a lens computes for the run:

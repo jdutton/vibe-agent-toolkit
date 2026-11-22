@@ -23,7 +23,7 @@ import type {
 import { ResourceRegistry, type RegistryCrawl } from '../src/resource-registry.js';
 
 import { extentKeyOf, FakeFactStore } from './fake-fact-store.js';
-import { inOwnRun } from './helpers/population-run.js';
+import { inOwnRun, noStoredDocument } from './helpers/population-run.js';
 import { setupSubdirTestSuite } from './test-helpers.js';
 
 /** The plain markdown member every fixture below starts from. */
@@ -146,6 +146,8 @@ describe('buildResourcePopulation', () => {
     await write('docs/c.md', '# C\n');
     const cache = { store: new ReorderingStore(), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
     const source: ResourcePopulationSource = {
+      storedDocument: noStoredDocument,
+      holdsStore: false,
       enumerate: (root, outputs) => inOwnRun(buildResourcePopulation, { outputs, root, cache }),
     };
     const crawlOnce = (): Promise<RegistryCrawl> =>

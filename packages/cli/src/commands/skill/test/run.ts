@@ -994,7 +994,7 @@ async function runDeclaredSkillBuild(ref: BuildableReference): Promise<void> {
       // `'refuse'`: staging a dist around a directory discovery could not
       // list may hand the executor another skill's answer key. The throw is
       // wrapped as `SkillBuildError` by the caller, message intact.
-      await resolveProjectDeclaredEvalSuites(ref.sourcePath, 'refuse'),
+      await resolveProjectDeclaredEvalSuites(ref.sourcePath, 'refuse', undefined),
       // Per CALL, deliberately, and this is parity rather than a regression: the
       // probe was built inside `resolveTestInputDirs` on every path before it was
       // threaded, so this lane pays exactly what it paid before. It is also the
@@ -1006,7 +1006,8 @@ async function runDeclaredSkillBuild(ref: BuildableReference): Promise<void> {
       conventionalSuiteProbe(),
     );
     // One run per build, rooted at the skill's declaring project, as `vat skills build` is.
-    await withRunContext({ root: ref.configRoot }, (run) =>
+    // What the package writes is planned inside `packageSkill`, whose crawls pass it.
+    await withRunContext({ projectionStore: 'on-demand', root: ref.configRoot, outputs: [] }, (run) =>
       packageSkill(ref.sourcePath, { ...options, registries: runSkillRegistries(run) }),
     ).catch((error: unknown) => {
       throw asPackagerRefusal(error);

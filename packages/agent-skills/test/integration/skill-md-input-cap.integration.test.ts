@@ -9,7 +9,7 @@
 
 import { truncateSync, writeFileSync } from 'node:fs';
 
-import { isParseLimitError, ParseLimitError, parseRefusal } from '@vibe-agent-toolkit/resources';
+import { DEFAULT_PARSE_LIMITS, isParseLimitError, ParseLimitError, parseRefusal } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
 import { readDeclaredSkillName } from '../../src/skill-identity.js';
@@ -18,7 +18,7 @@ import { createSkillContent, createTransitiveSkillStructure, setupTempDir, valid
 const { getTempDir } = setupTempDir('skill-md-input-cap-');
 
 /** The default parse input cap. */
-const CAP = 8 * 1024 * 1024;
+const CAP = DEFAULT_PARSE_LIMITS.inputBytes;
 
 /**
  * @returns A skill whose SKILL.md declares a valid name and description and is one byte past the cap

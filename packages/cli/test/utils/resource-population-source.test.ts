@@ -47,7 +47,7 @@ afterEach(() => {
  * @returns Whatever `work` returned
  */
 function withSource<T>(work: (source: ResourcePopulationSource) => Promise<T>): Promise<T> {
-  return withRunContext({ root }, (run) => work(run.population.source));
+  return withRunContext({ projectionStore: 'on-demand', root, outputs: [] }, (run) => work(run.population.source));
 }
 
 describe('the run\'s population source', () => {

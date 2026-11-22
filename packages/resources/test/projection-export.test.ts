@@ -13,6 +13,8 @@ import { PROJECTION_TABLES, type ProjectionTableName } from '../src/projection/t
 import type { BlobReferenceRow } from '../src/schemas/projection-blobs.js';
 import { CONDITION_WITHOUT_REFERENCE, type RootRow } from '../src/schemas/projection-resources.js';
 
+import { EXPECTED_TABLES } from './helpers/expected-projection-tables.js';
+
 /**
  * Two real tmpdir-shaped roots. Nothing is written: the only thing under test
  * is that neither string survives into the serialized document.
@@ -41,28 +43,6 @@ const BLOB_B = `markdown.${'b'.repeat(64)}`;
  */
 const HIGH_ORDINAL = 10;
 const LOW_ORDINAL = 2;
-
-/**
- * The tables, taken from {@link Projection} itself so the compiler
- * rejects this list the moment a table is added or renamed.
- */
-const EXPECTED_TABLES = [
-  'roots',
-  'resources',
-  'resourceRealizations',
-  'resourceExtents',
-  'resourceTags',
-  'realizationConditions',
-  'claudeRulePatterns',
-  'resolutionContexts',
-  'zoneProvenance',
-  'blobs',
-  'blobReferences',
-  'blobSections',
-  'blobConditions',
-  'harnessBlobFacts',
-  'harnessBlobImports',
-] as const satisfies readonly (keyof Projection)[];
 
 /** One side of the fixture — every table gets a row keyed on this side's ids. */
 interface Side {
@@ -242,6 +222,9 @@ function contribute(builder: ProjectionBuilder, side: Side): void {
   });
   builder.addHarnessBlobFacts({ blob: side.blob, harness: 'claude-code', injectedBytes: 12, injectedTokens: 3, paths: null });
   builder.addHarnessBlobImport({ blob: side.blob, harness: 'claude-code', ordinal: 0, rawRef: '@other.md', target: 'other.md', line: 1 });
+  // Keys deliberately out of registry order: the export puts them back.
+  builder.addSkillTextFacts({ matchCount: 1, held: true, frontmatterFence: 'none', h1: 'Fixture', lineCount: 3, blob: side.blob });
+  builder.addSkillTextMatch({ matchText: 'as of March 2024', loneSurrogates: null, line: 2, patternId: 'as-of-month', family: 'timeSensitive', ordinal: 0, blob: side.blob });
 }
 
 /**
@@ -354,7 +337,7 @@ describe('the key order of an exported row', () => {
 
   it('is the registry column order for every row of every table', () => {
     // Uniform across the registry rather than patched at the one producer known
-    // to be wrong: any of the fifteen can grow a producer that builds a row by
+    // to be wrong: any of them can grow a producer that builds a row by
     // spreading, and none of them should have to know that it must not.
     const tables = exportProjection(buildFixture('reverse')).tables;
 

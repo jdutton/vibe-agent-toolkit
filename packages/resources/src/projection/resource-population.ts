@@ -88,11 +88,14 @@
  * first place; the two moves look alike and are not.
  */
 
-import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, safePath, type TextProvenance } from '@vibe-agent-toolkit/utils';
 
+import type { ParserKind } from '../content-key.js';
 import { RealizationConditionRowSchema, type RealizationConditionRow } from '../schemas/projection-resources.js';
 import type { JsonValue } from '../schemas/projection-shared.js';
+import type { SkillTextFacts } from '../schemas/skill-text-facts.js';
 
+import type { BlobResourceFacts } from './blob-resource-facts.js';
 import { ContributorRegistry } from './contributor.js';
 import { AgenticConventionContributor } from './contributors/agentic-convention.js';
 import { ClaudeRulesScopeContributor } from './contributors/claude-rules-scope.js';
@@ -155,6 +158,54 @@ export interface ResourcePopulationSource {
     unreadable: PopulationUnreadablePolicy,
     members: PopulationMembers,
   ): Promise<ResourceEnumeration>;
+
+  /**
+   * One file's document facts as the run's store holds them, skill-text record
+   * included, or `undefined` when the store does not serve the file: the skills
+   * lane then scans the file's text itself, and counts that
+   * (`skillText.storeMiss`, or `skillText.noStore` when the source
+   * {@link holdsStore} none).
+   *
+   * Answers from the store's blob tier alone, never from a cold parse the run
+   * made: for a member of the home population whose stored realization routes to
+   * `parserKind`, whose facts the tier holds, under the limits the store's facts
+   * were filed under, and which is still readable now (the run's one probe of
+   * the path, counted `fs.stat`). A source that holds no store answers
+   * `undefined` for every file, and says so by doing it.
+   *
+   * @param absolutePath - The file, absolute
+   * @param parserKind - The parser its content routes to
+   * @returns The facts, or `undefined` when the run holds none for the file
+   */
+  storedDocument(absolutePath: string, parserKind: ParserKind): Promise<StoredDocumentFacts | undefined>;
+
+  /**
+   * Whether the run has a projection store to ask: `false` when the verb
+   * declares none (`vat audit`) or the store is switched off. A skills lane that
+   * scans a file from its text counts the scan by it: a store miss
+   * (`skillText.storeMiss`) when a store was there to ask and did not serve the
+   * file, `skillText.noStore` when there was none. A store the run has that
+   * cannot answer (no repository to key it, another process's lock) is still a
+   * store, and every file it does not serve a miss.
+   */
+  readonly holdsStore: boolean;
+}
+
+/**
+ * What {@link ResourcePopulationSource.storedDocument} answers: a file's blob
+ * facts with its skill-text record, which is never `null` here (a blob with no
+ * record is answered `undefined`), and how its bytes were decoded into the text
+ * those facts were computed from.
+ */
+export interface StoredDocumentFacts {
+  readonly facts: BlobResourceFacts & { readonly skillText: SkillTextFacts };
+  /**
+   * The blob's `blobs` row `encoding` and `encodingSource`: `utf-8` and
+   * `assumed` exactly when the bytes carry no byte-order mark, and the decoded
+   * text is then what a plain UTF-8 read of the file gives, replacement
+   * characters included.
+   */
+  readonly decoding: Pick<TextProvenance, 'encoding' | 'encodingSource'>;
 }
 
 /** Whether a crawl reports the directories it could not list inside ignored territory. */

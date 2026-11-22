@@ -21,6 +21,12 @@
  * There is no cold-only category: a fact warm validate needs that the store lacks
  * becomes a blob fact (an extractor fact), never an exception list.
  *
+ * One blob fact is not a `ResourceMetadata` field: `skillText`, the skill-text
+ * record of a markdown blob (`skill_text_facts`, `skill_text_matches`), which
+ * the skills lane reads through `storedDocument` rather than a resource. It is
+ * on {@link BlobResourceFacts} beside the mapped fields, `null` for a blob that
+ * is not markdown.
+ *
  * {@link RESOURCE_METADATA_FACT_SOURCES} and {@link RESOURCE_LINK_FACT_SOURCES} are
  * checked against `ResourceMetadata`'s and `ResourceLink`'s keys by the type
  * system: a field added to either schema and not mapped here, or mapped here and
@@ -41,28 +47,34 @@
  * ## What the reader refuses
  *
  * The rows are checked against the counts the `blobs` row carries (`linkCount`,
- * `headingCount`, `findingCount`), their numbering is checked for gaps and repeats
- * (`astIndex`, each table's `ordinal`), and they are checked against what a parse
+ * `headingCount`, `findingCount`) and the `skill_text_facts` row carries
+ * (`matchCount`), their numbering is checked for gaps and repeats
+ * (`astIndex`, each table's `ordinal`), a markdown blob must have its one
+ * `skill_text_facts` row and no other blob any, and they are checked against what a parse
  * can produce (an AST link has text, an unresolved reference has a line, the
  * frontmatter decodes). A mismatch is `uncovered`, never a guess or a throw: a
  * warm run derives the blob again rather than validate a partial resource.
  */
 
-import { isVatError } from '@vibe-agent-toolkit/utils';
+import { isVatError, type TextProvenance } from '@vibe-agent-toolkit/utils';
 
 import { decodeFrontmatterValue, FRONTMATTER_VALUE_MALFORMED } from '../frontmatter-codec.js';
 import { toHeadingTree } from '../heading-tree.js';
 import { classifyLink } from '../link-classify.js';
 import type { ParseResult } from '../link-parser.js';
 import type { FlatHeading } from '../parse-capabilities.js';
+import { skillTextHeld } from '../parse-limits.js';
 import type { BlobConditionRow, BlobReferenceRow, BlobRow, BlobSectionRow } from '../schemas/projection-blobs.js';
+import type { SkillTextFactsRow, SkillTextMatchRow } from '../schemas/projection-skill-text.js';
 import type { HtmlParseError, ResourceLink, ResourceMetadata, UnresolvedReference } from '../schemas/resource-metadata.js';
+import { SkillTextFactsSchema, type SkillTextFacts, type SkillTextMatch } from '../schemas/skill-text-facts.js';
 
 import { BLOB_FINDING_CONDITION_CODES } from './blob-facts.js';
 import { BLOB_NOT_TEXT, parserKindOf } from './blob-population.js';
 import { NODE_TYPE_OF_AST_FORM } from './blob-references.js';
 import { notAdmittedEntriesByBlob, type NotAdmittedEntry } from './blob-refusals.js';
 import { NOT_TEXT_RESOURCE_FACTS } from './document-facts.js';
+import { restoredMatchText } from './skill-text-match-text.js';
 import type { BlobScopedRows } from './store.js';
 
 /** A pure function of the bytes, held per content key in the blob tier. */
@@ -193,13 +205,34 @@ const FLAT_HEADING_FIELDS: FieldReaders<FlatHeading, BlobSectionRow> = {
   line: (row) => row.lineStart ?? undefined,
 };
 
-/** The content-addressed half of a `ResourceMetadata`. */
-export type BlobResourceFacts = Omit<Pick<ResourceMetadata, BlobFactField>, 'links'> & { links: BlobLink[] };
+/**
+ * The content-addressed half of a `ResourceMetadata`, and the blob's skill-text
+ * record (`ParseResult.skillText`): required, `null` for a blob that is not
+ * markdown or whose record is past the bound the store holds (`skillTextHeld`).
+ */
+export type BlobResourceFacts = Omit<Pick<ResourceMetadata, BlobFactField>, 'links'> & {
+  links: BlobLink[];
+  /**
+   * Whether the frontmatter block is valid YAML but not a mapping
+   * (`ParseResult.frontmatterNotAMapping`, the blob's `frontmatterNotAMapping`
+   * column): with `frontmatter` and `frontmatterError`, the parse's whole verdict
+   * on the block, so a skills lane words its refusal without decoding it again.
+   */
+  frontmatterNotAMapping: boolean;
+  skillText: SkillTextFacts | null;
+};
+
+/** How a blob's bytes were decoded: its `blobs` row's `encoding` and `encodingSource`. */
+export type BlobDecoding = Pick<TextProvenance, 'encoding' | 'encodingSource'>;
 
 /** What the blob tier says about one content key. */
 export type BlobFactsOutcome =
-  /** The resource's blob facts. */
-  | { readonly kind: 'facts'; readonly facts: BlobResourceFacts }
+  /**
+   * The resource's blob facts, and how its bytes were decoded into the text
+   * they were parsed from (its `blobs` row's `encoding` and `encodingSource`),
+   * or `null` for bytes that are not text (no `blobs` row, nothing decoded).
+   */
+  | { readonly kind: 'facts'; readonly facts: BlobResourceFacts; readonly decoding: BlobDecoding | null }
   /** Every realization of the key is refused, as the registry lane refuses it. */
   | { readonly kind: 'not-admitted'; readonly entry: NotAdmittedEntry }
   /** The tier holds nothing usable for the key: a warm run derives it again. */
@@ -225,6 +258,9 @@ export function blobResourceFactsOf(parse: ParseResult, contentKey: string): Blo
     ...optionalParseFacts(parse),
     estimatedTokenCount: parse.estimatedTokenCount,
     contentKey,
+    frontmatterNotAMapping: parse.frontmatterNotAMapping === true,
+    // What the store keeps, so a cold resource's facts are the warm one's: a record past its bound is none.
+    skillText: parse.skillText === null || skillTextHeld(parse.skillText) ? parse.skillText : null,
   };
 }
 
@@ -255,6 +291,8 @@ interface KeyRows {
   references: BlobReferenceRow[];
   sections: BlobSectionRow[];
   conditions: BlobConditionRow[];
+  skillTextFacts: SkillTextFactsRow[];
+  skillTextMatches: SkillTextMatchRow[];
 }
 
 /** A rebuild step's answer: the value, or why the rows cannot be trusted. */
@@ -280,7 +318,7 @@ function indexByKey(rows: BlobScopedRows): Map<string, KeyRows> {
   const of = (key: string): KeyRows => {
     let entry = byKey.get(key);
     if (entry === undefined) {
-      entry = { blob: undefined, references: [], sections: [], conditions: [] };
+      entry = { blob: undefined, references: [], sections: [], conditions: [], skillTextFacts: [], skillTextMatches: [] };
       byKey.set(key, entry);
     }
     return entry;
@@ -289,6 +327,8 @@ function indexByKey(rows: BlobScopedRows): Map<string, KeyRows> {
   for (const row of rows.blobReferences) of(row.blob).references.push(row);
   for (const row of rows.blobSections) of(row.blob).sections.push(row);
   for (const row of rows.blobConditions) of(row.blob).conditions.push(row);
+  for (const row of rows.skillTextFacts) of(row.blob).skillTextFacts.push(row);
+  for (const row of rows.skillTextMatches) of(row.blob).skillTextMatches.push(row);
   return byKey;
 }
 
@@ -301,11 +341,13 @@ function outcomeOf(contentKey: string, rows: KeyRows | undefined): BlobFactsOutc
   if (rows === undefined) return { kind: 'uncovered', reason: `the blob tier holds no rows for ${contentKey}` };
   if (rows.blob !== undefined) {
     const facts = factsOf(rows.blob, rows);
-    return facts.ok ? { kind: 'facts', facts: facts.value } : { kind: 'uncovered', reason: `${contentKey}: ${facts.reason}` };
+    if (!facts.ok) return { kind: 'uncovered', reason: `${contentKey}: ${facts.reason}` };
+    const { encoding, encodingSource } = rows.blob;
+    return { kind: 'facts', facts: facts.value, decoding: { encoding, encodingSource } };
   }
   // Not text: one rule for both lanes (`document-facts.ts`), so the facts are the constant.
   if (rows.conditions.some((row) => row.code === BLOB_NOT_TEXT)) {
-    return { kind: 'facts', facts: { ...NOT_TEXT_RESOURCE_FACTS, links: [], headings: [], contentKey } };
+    return { kind: 'facts', facts: { ...NOT_TEXT_RESOURCE_FACTS, links: [], headings: [], contentKey, frontmatterNotAMapping: false }, decoding: null };
   }
   const entry = notAdmittedEntriesByBlob(rows.conditions).get(contentKey);
   if (entry !== undefined) return { kind: 'not-admitted', entry };
@@ -419,6 +461,8 @@ function factsOf(blob: BlobRow, rows: KeyRows): Rebuilt<BlobResourceFacts> {
   if (!unresolved.ok) return unresolved;
   const frontmatter = frontmatterOf(blob);
   if (!frontmatter.ok) return frontmatter;
+  const skillText = skillTextOf(blob.contentKey, rows);
+  if (!skillText.ok) return skillText;
   const parseErrors = findings(rows, 'HTML_PARSE_ERROR').map((row) => buildFrom(HTML_PARSE_ERROR_FIELDS, row));
   return {
     ok: true,
@@ -433,8 +477,60 @@ function factsOf(blob: BlobRow, rows: KeyRows): Rebuilt<BlobResourceFacts> {
       ...(blob.frontmatterError !== null && { frontmatterError: blob.frontmatterError }),
       estimatedTokenCount: blob.tokenEstimate,
       contentKey: blob.contentKey,
+      frontmatterNotAMapping: blob.frontmatterNotAMapping,
+      skillText: skillText.value,
     },
   };
+}
+
+/**
+ * The blob's skill-text record, rebuilt from its `skill_text_facts` row and its
+ * `skill_text_matches` rows in `ordinal` order: what the parse computed, field
+ * for field (`skillTextRowsFor` writes them).
+ *
+ * A markdown blob holds exactly one facts row, and its match rows add up to that
+ * row's `matchCount`, numbered 0..n-1; a blob of any other kind holds none. A
+ * record the store does not hold (`held` false, past its bound) has no match
+ * rows and reads as no record (`null`): the skills lane scans the text itself.
+ * Anything else is a fault, so the key is `uncovered` and derived again, never
+ * served a partial record. The rows are checked by count and numbering only: a
+ * row whose text was altered in place is served as it reads.
+ *
+ * @param contentKey - The blob's key
+ * @param rows - Every row the key holds
+ * @returns The record (`null` for a blob that is not markdown, or a record not held), or why the rows cannot be one
+ */
+function skillTextOf(contentKey: string, rows: KeyRows): Rebuilt<SkillTextFacts | null> {
+  if (parserKindOf(contentKey) !== 'markdown') {
+    return rows.skillTextFacts.length === 0 && rows.skillTextMatches.length === 0
+      ? { ok: true, value: null }
+      : { ok: false, reason: 'a blob that is not markdown holds skill-text rows' };
+  }
+  const [facts, ...extra] = rows.skillTextFacts;
+  if (facts === undefined) return { ok: false, reason: 'the blob tier holds no skill_text_facts row for this markdown blob' };
+  if (extra.length > 0) return { ok: false, reason: 'the blob tier holds more than one skill_text_facts row' };
+  if (!facts.held) {
+    return rows.skillTextMatches.length === 0
+      ? { ok: true, value: null }
+      : { ok: false, reason: 'a skill-text record the store does not hold has skill_text_matches rows' };
+  }
+  if (rows.skillTextMatches.length !== facts.matchCount) {
+    return { ok: false, reason: `${String(rows.skillTextMatches.length)} skill_text_matches rows against matchCount ${String(facts.matchCount)}` };
+  }
+  if (!isDense(rows.skillTextMatches.map((row) => row.ordinal))) return { ok: false, reason: 'the skill_text_matches rows\' ordinals have a gap or a repeat' };
+  const matches: SkillTextMatch[] = [];
+  for (const row of [...rows.skillTextMatches].sort(byOrdinal)) {
+    const matchText = restoredMatchText(row.matchText, row.loneSurrogates);
+    if (matchText === undefined) return { ok: false, reason: `skill_text_matches row ${String(row.ordinal)}'s lone surrogates are not ones its text held` };
+    matches.push({ ordinal: row.ordinal, family: row.family, patternId: row.patternId, line: row.line, matchText });
+  }
+  // The core's own schema is the one contract for a record: a family/pattern
+  // pairing or family order the core never emits is not a record, whatever the
+  // row schemas let through one column at a time.
+  const record = SkillTextFactsSchema.safeParse({ lineCount: facts.lineCount, h1: facts.h1, frontmatterFence: facts.frontmatterFence, matches });
+  return record.success
+    ? { ok: true, value: record.data }
+    : { ok: false, reason: `the skill-text rows are not a record the core emits: ${record.error.message}` };
 }
 
 /**

@@ -1,0 +1,19 @@
+# Applied by the capture to a scratch project holding this corpus; not a vat config of this repo.
+skills:
+  include:
+    - "*/SKILL.md"
+  config:
+    size-depth-3:
+      linkFollowDepth: full
+    declared-name:
+      files:
+        - { source: clean-skill, dest: applied-via-frontmatter-name }
+    Different Heading:
+      files:
+        - { source: name-number, dest: applied-via-h1-of-a-named-skill }
+    H1 Derived Name:
+      files:
+        - { source: name-h1-only, dest: applied-via-h1-only }
+    SKILL:
+      files:
+        - { source: name-basename, dest: applied-via-basename }

@@ -1,12 +1,35 @@
-import { inMemoryContent, isPerRunParseRefusal } from '@vibe-agent-toolkit/resources';
+import { inMemoryContent, isPerRunParseRefusal, SKILL_TEXT_DECLARATION, skillTextFactsOf } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { allowedToolsDeclarations, detectorFrontmatter, runCompatDetectors, type DetectorOutput } from '../../src/validators/compat-detectors.js';
+import {
+  allowedToolsDeclarations as allowedToolsOnFacts,
+  detectorFrontmatter,
+  runCompatDetectors as runOnFacts,
+  type DetectorOutput,
+} from '../../src/validators/compat-detectors.js';
 import { setupParseRoute } from '../test-helpers.js';
 
 /** Every parse in this file runs in the bounded worker, on one dispatcher. */
 const ROUTE = setupParseRoute();
+
+/** The detectors over `content`'s skill-text record, as every lane hands them one. */
+function runCompatDetectors(
+  content: string,
+  filePath: string,
+  locationRoot: string,
+  frontmatter: Readonly<Record<string, unknown>> | undefined,
+): DetectorOutput {
+  return runOnFacts(skillTextFactsOf(content, SKILL_TEXT_DECLARATION), filePath, locationRoot, frontmatter);
+}
+
+/** `allowed-tools` declarations over `content`'s skill-text record. */
+function allowedToolsDeclarations(
+  content: string,
+  frontmatter: Readonly<Record<string, unknown>> | undefined,
+): ReturnType<typeof allowedToolsOnFacts> {
+  return allowedToolsOnFacts(skillTextFactsOf(content, SKILL_TEXT_DECLARATION), frontmatter);
+}
 
 /**
  * Anchor root for these detector tests. `runCompatDetectors` requires one and

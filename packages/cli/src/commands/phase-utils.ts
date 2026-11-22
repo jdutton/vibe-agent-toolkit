@@ -105,7 +105,7 @@ export async function runInOwnRun(
   gate: Gate,
 ): Promise<PhaseOutcome> {
   try {
-    return await withRunContext({ root: rootOf() }, phase);
+    return await withRunContext({ projectionStore: 'on-demand', root: rootOf() , outputs: [] }, phase);
   } catch (error) {
     // The run is this one verb's, so its refusal, the run's own included, is the verb's.
     return verbRefusal(error, gate);

@@ -81,6 +81,7 @@ const MARKDOWN_PASS_ORDER = [
   'code-context-ranges',
   'lexical-references',
   'measure-content',
+  'skill-text',
 ];
 
 /** The HTML group's pass names, in the exact order the dump contract fixes. */

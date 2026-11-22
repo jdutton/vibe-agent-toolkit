@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
 
 import { detectorFrontmatter, type EvidenceRecord, type Observation } from '@vibe-agent-toolkit/agent-skills';
-import { classifyParseFailure, type ParseDispatcher, type ParseFailureKind, readContentForParse } from '@vibe-agent-toolkit/resources';
+import { classifyParseFailure, type ParseDispatcher, type ParseFailureKind, readContentForParse, SKILL_TEXT_DECLARATION, skillTextFactsOf } from '@vibe-agent-toolkit/resources';
 import { issueLocation, mapWithConcurrency, safePath, appendAll } from '@vibe-agent-toolkit/utils';
 
 import { readMarketplaceDefaultTargets, resolveEffectiveTargets } from './marketplace-defaults.js';
@@ -150,9 +150,9 @@ async function scanMarkdownFile(
   dispatcher: ParseDispatcher,
 ): Promise<EvidenceRecord[]> {
   const read = await readContentForParse(fullPath, 'markdown', { dispatcher });
-  const { content } = read;
+  const facts = skillTextFactsOf(read.content, SKILL_TEXT_DECLARATION);
   const frontmatter = await detectorFrontmatter(read, { dispatcher });
-  return [...scanCodeBlocks(content, fullPath, locationRoot, frontmatter), ...scanFrontmatter(content, fullPath, locationRoot, frontmatter)];
+  return [...scanCodeBlocks(facts, fullPath, locationRoot, frontmatter), ...scanFrontmatter(facts, fullPath, locationRoot, frontmatter)];
 }
 
 /**

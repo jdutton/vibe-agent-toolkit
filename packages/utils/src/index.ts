@@ -105,6 +105,7 @@ export {
   isNotARegularFileError,
   isPathAbsentError,
   isProcessGoneError,
+  isReadOnlyFilesystemError,
   isRenameContentionError,
   isSymlinkUnsupportedError,
   isTimedOutError,

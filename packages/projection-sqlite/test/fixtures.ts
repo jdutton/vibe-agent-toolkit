@@ -42,7 +42,7 @@ export const SECOND_BLOB = contentKey('b');
  * Blob-scoped rows for one blob, exercising every column kind.
  *
  * @param key - Which content key the rows are about
- * @returns The four blob-scoped tables
+ * @returns Every blob-scoped table
  */
 export function sampleBlobRows(key: string = FIRST_BLOB): BlobScopedRows {
   return {
@@ -124,6 +124,18 @@ export function sampleBlobRows(key: string = FIRST_BLOB): BlobScopedRows {
       rawRef: String.raw`@my\ other.md#top`,
       target: 'my other.md',
       line: 1,
+    }],
+    // A markdown blob carries exactly one facts row; the CR in `h1` and
+    // `matchText` is a CRLF file's, kept raw.
+    skillTextFacts: [{ blob: key, lineCount: 3, h1: 'Heading\r', frontmatterFence: 'none', matchCount: 1, held: true }],
+    skillTextMatches: [{
+      blob: key,
+      ordinal: 0,
+      family: 'timeSensitive',
+      patternId: 'as-of-month',
+      line: 2,
+      matchText: 'as of March 2024',
+      loneSurrogates: null,
     }],
   };
 }
@@ -268,6 +280,8 @@ export function declinedBlobRows(key: string = FIRST_BLOB): BlobScopedRows {
     }],
     harnessBlobFacts: [],
     harnessBlobImports: [],
+    skillTextFacts: [],
+    skillTextMatches: [],
   };
 }
 
