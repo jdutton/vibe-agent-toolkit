@@ -130,10 +130,8 @@ inferred, because a correct store hit and a correct re-derivation produce identi
 you have to take on faith. `vat resources check --help` carries the current reference timings
 (VAT's own repo and a ~10k-file adopter tree, warm and cold) — read them there rather than from a
 number pasted here. `lensPopulation` (`none`, `store`, `derived`) is the same tell for the lens
-relations the statement named, and `vat resources validate` publishes `data.population` too — `null`
-there means the walk answered: the walk lane was selected (`VAT_RESOURCES_CRAWL=walk`), or the crawl
-declined a projection bound to another root and walked. `VAT_PROJECTION_STORE=0` is not one of them:
-it skips only the store, so the run reports `derived`.
+relations the statement named, and `vat resources validate` publishes `data.population` too, always
+`store` or `derived`. `VAT_PROJECTION_STORE=0` skips only the store, so the run reports `derived`.
 
 ⛔ There is **no `engine` field**. An earlier RC published one (`sqlite | ephemeral`) to say which
 database answered the SQL; it is gone, because the answer is now always the same. The statement
@@ -212,6 +210,24 @@ comment blocks removed, trimmed), not `blobs.tokenEstimate`; `injectedBytes = 0`
 dropped and its imports never followed. Which files it scopes by `paths:` is
 `harness_blob_facts.paths` (null = unscoped), read the harness's way for any extension — never
 `blobs.frontmatter`.
+
+### `skill_text_facts` / `skill_text_matches`: what the skill validators matched in a markdown file
+
+Every markdown blob has exactly one `skill_text_facts` row (`lineCount`, the raw first-H1 text `h1`,
+`frontmatterFence` (`none`, `unclosed` or `closed`: whether the file opens a `---` frontmatter block
+and closes it), `matchCount`, `held`); no other blob has one. `skill_text_matches` holds one row per match, keyed
+`(blob, ordinal)`: `family` (the detector), `patternId`, `line`, the raw `matchText` and
+`loneSurrogates` (null unless the match held a lone surrogate). A record past 16,384 matches or 4 MiB
+is not held: `held` is false and it has no match rows, so count matches with `matchCount`, not by
+counting rows. A family ending in `Body` numbers `line` within the body below the frontmatter, not
+from the top of the file:
+
+```sql
+SELECT r.path, m.family, m.patternId, m.line
+  FROM skill_text_matches m
+  JOIN resource_realizations r ON r.contentKey = m.blob
+ WHERE m.family = 'nonPortableCommand'
+```
 
 ### Relations that are COMPUTED, not stored — and are skipped unless you name them
 
