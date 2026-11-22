@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createValidateChecksOverlap,
   gateOptionsFor,
+  liveOverlapSeams,
   type OverlapSeams,
   type ValidateChecksOverlap,
 } from '../src/commands/validate-checks-overlap.js';
@@ -42,16 +43,40 @@ describe('gateOptionsFor', () => {
   });
 });
 
+describe('liveOverlapSeams', () => {
+  it('collects an unreachable object without the --expose-gc command-line flag', async () => {
+    const seams = liveOverlapSeams({ root: ROOT, debug: false, base: undefined, config: undefined }, {});
+    const held = new WeakRef({ payload: 'garbage once this job ends' });
+    // A WeakRef target is kept alive until the job that created it ends.
+    await flush();
+
+    seams.collectGarbage();
+
+    expect(held.deref()).toBeUndefined();
+  });
+});
+
 /** The store and parse-cache writes the stubbed counters report; every other counter is 0. */
 interface Writes {
   store: number;
   parseCache: number;
 }
 
-/** An overlap over `child`, its home settled as a store hit every member of which is admitted. */
-async function overlapOver(child: FakeOverlappedRun): Promise<{ overlap: ValidateChecksOverlap; writes: Writes; dumps: ChecksPhaseObservation[] }> {
+/** The major collections the parent ran. */
+interface Collections {
+  count: number;
+}
+
+/**
+ * An overlap over `child`, its home settled as a store hit every member of which is admitted.
+ *
+ * @param child - The fake child
+ * @param collectionFails - What the collector throws, or `undefined` for one that succeeds
+ */
+async function overlapOver(child: FakeOverlappedRun, collectionFails?: Error): Promise<{ overlap: ValidateChecksOverlap; writes: Writes; dumps: ChecksPhaseObservation[]; collections: Collections }> {
   const writes: Writes = { store: 0, parseCache: 0 };
   const dumps: ChecksPhaseObservation[] = [];
+  const collections: Collections = { count: 0 };
   const spawned = Promise.withResolvers<undefined>();
   const seams: OverlapSeams = {
     cores: () => 4,
@@ -66,12 +91,16 @@ async function overlapOver(child: FakeOverlappedRun): Promise<{ overlap: Validat
       'parse.cache.written': writes.parseCache,
     }),
     writeFacts: (observed) => dumps.push(observed),
+    collectGarbage: () => {
+      collections.count += 1;
+      if (collectionFails !== undefined) throw collectionFails;
+    },
   };
   const overlap = createValidateChecksOverlap({ root: ROOT, debug: false, base: undefined, config: undefined, checksPhase: true }, seams);
   overlap.homeSettledListener(runAt(ROOT))(HOME_KEY, ADMITTED_HOME().settlement);
   await spawned.promise;
   await flush();
-  return { overlap, writes, dumps };
+  return { overlap, writes, dumps, collections };
 }
 
 /** The checks phase as validate runs it: take the decision, and read an overlapped child at its turn. */
@@ -92,7 +121,7 @@ function onlyDump(dumps: readonly ChecksPhaseObservation[]): ValidateDebugFacts 
 describe('createValidateChecksOverlap', () => {
   it('counts the parent\'s writes from the spawn to the child\'s exit, and none after the exit', async () => {
     const child = fakeOverlappedRun({ turn: { stderrBytesAtTurn: 7 }, abandonFails: undefined });
-    const { overlap, writes, dumps } = await overlapOver(child);
+    const { overlap, writes, dumps, collections } = await overlapOver(child);
     // In the window: after the spawn, before the child exits.
     writes.store = 2;
     writes.parseCache = 1;
@@ -112,17 +141,35 @@ describe('createValidateChecksOverlap', () => {
       parentParseCacheWritesUntilChildExit: 1,
     });
     expect(child.abandons).toBe(0);
+    // One major collection at the overlapped turn, the one a sequential parent gets while it idles.
+    expect(collections.count).toBe(1);
+  });
+
+  it('hands the checks turn its overlapped decision when the collector throws', async () => {
+    const child = fakeOverlappedRun({ turn: { stderrBytesAtTurn: 7 }, abandonFails: undefined });
+    const { overlap, collections } = await overlapOver(child, new Error('V8 refused --expose-gc after start'));
+
+    const decision = await overlap.checksTurn();
+
+    expect(decision.mode).toBe('overlapped');
+    expect(collections.count).toBe(1);
+    await overlap.runPhases(async () => {
+      if (decision.mode === 'overlapped') await decision.run.atTurn(() => undefined);
+    });
+    expect(child.abandons).toBe(0);
+    expect(child.turns).toBe(1);
   });
 
   it('abandons a child whose turn a run refusal took away, and still writes the dump without waiting for an exit that never comes', async () => {
     const child = fakeOverlappedRun({ turn: { stderrBytesAtTurn: 7 }, abandonFails: undefined });
-    const { overlap, writes, dumps } = await overlapOver(child);
+    const { overlap, writes, dumps, collections } = await overlapOver(child);
     writes.store = 1;
     const refusal = new Error('the projection store would not open');
 
     await expect(overlap.runPhases(() => Promise.reject(refusal))).rejects.toBe(refusal);
 
     expect(child.abandons).toBe(1);
+    expect(collections.count).toBe(0);
     expect(onlyDump(dumps)).toMatchObject({ checksOverlapped: 1, childStderrBytesAtTurn: 0, parentStoreWritesUntilChildExit: 1 });
   });
 
@@ -139,20 +186,30 @@ describe('createValidateChecksOverlap', () => {
 
   it('abandons a child whose turn never came after phases that finished, and writes the dump', async () => {
     const child = fakeOverlappedRun({ turn: { stderrBytesAtTurn: 7 }, abandonFails: undefined });
-    const { overlap, dumps } = await overlapOver(child);
+    const { overlap, dumps, collections } = await overlapOver(child);
 
     await overlap.runPhases(() => Promise.resolve());
 
     expect(child.abandons).toBe(1);
     expect(child.turns).toBe(0);
+    expect(collections.count).toBe(0);
     expect(onlyDump(dumps)).toMatchObject({ checksOverlapped: 1 });
   });
 
-  it('states a sequential run with the gate\'s decline and no window', async () => {
+  it('states a sequential run with the gate\'s decline and no window, and runs no collection at its turn', async () => {
     const dumps: ChecksPhaseObservation[] = [];
+    const collections: Collections = { count: 0 };
     const overlap = createValidateChecksOverlap(
       { root: ROOT, debug: true, base: undefined, config: undefined, checksPhase: true },
-      { cores: () => 4, start: () => Promise.reject(new Error('never spawned')), counters: () => { throw new Error('never read'); }, writeFacts: (observed) => dumps.push(observed) },
+      {
+        cores: () => 4,
+        start: () => Promise.reject(new Error('never spawned')),
+        counters: () => { throw new Error('never read'); },
+        writeFacts: (observed) => dumps.push(observed),
+        collectGarbage: () => {
+          collections.count += 1;
+        },
+      },
     );
     overlap.homeSettledListener(runAt(ROOT))(HOME_KEY, ADMITTED_HOME().settlement);
 
@@ -165,5 +222,6 @@ describe('createValidateChecksOverlap', () => {
       parentStoreWritesUntilChildExit: 0,
       parentParseCacheWritesUntilChildExit: 0,
     });
+    expect(collections.count).toBe(0);
   });
 });

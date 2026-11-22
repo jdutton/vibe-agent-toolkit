@@ -3,10 +3,10 @@
  * starts during the resources phase or at its turn, and the one decision the turn awaits.
  *
  * Pure: the settlement, the blob tier and the spawn are fakes, and the routes are admission's own
- * (`storedAnswer`), so a member the gate calls admitted is one admission admits from the store.
+ * (`storedComputeBy`), so a member the gate calls admitted is one admission admits from the store.
  */
 
-import { createCollectionMimeResolver, type BlobFactsOutcome, type ResourceEnumeration } from '@vibe-agent-toolkit/resources';
+import { createCollectionMimeResolver, type BlobFactsReader, type ResourceEnumeration } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it, vi } from 'vitest';
 
 import { abandoningUnread, createChecksOverlapGate } from '../src/commands/checks-overlap-gate.js';
@@ -21,6 +21,7 @@ import {
   keyed,
   MARKDOWN_KEY,
   POPULATION_LIMITS,
+  readerOf,
   ROOT,
   settledDecision,
   tierOf,
@@ -181,7 +182,7 @@ describe('createChecksOverlapGate', () => {
     const gate = gateOf({ spawn: fake.spawn });
     const refused = new Error('the blob tier could not be read');
     const read = Promise.reject(refused);
-    const facts = (): Promise<(key: string) => BlobFactsOutcome> => read;
+    const facts = (): Promise<BlobFactsReader> => read;
     gate.onHomeSettled(HOME_KEY, hit({ [`${ROOT}/a.md`]: keyed(MARKDOWN_KEY) }, facts));
     expect(await gate.decision).toEqual({ mode: 'sequential', declinedBy: { condition: 'rejected', error: 'the blob tier could not be read' } });
     await expect(facts()).rejects.toBe(refused);
@@ -200,21 +201,29 @@ describe('createChecksOverlapGate', () => {
     expect(fake.calls).toBe(0);
   });
 
-  it('decodes nothing and spawns nothing when disarmed while the tier read is in flight', async () => {
+  it('reads no row and spawns nothing when disarmed while the tier read is in flight', async () => {
     const fake = fakeSpawn();
     const gate = gateOf({ spawn: fake.spawn });
-    const read = Promise.withResolvers<(key: string) => BlobFactsOutcome>();
-    let decodes = 0;
+    const read = Promise.withResolvers<BlobFactsReader>();
+    const reader = readerOf({ [MARKDOWN_KEY]: FACTS });
     gate.onHomeSettled(HOME_KEY, hit({ [`${ROOT}/a.md`]: keyed(MARKDOWN_KEY) }, () => read.promise));
     gate.disarm();
-    read.resolve(() => {
-      decodes += 1;
-      return FACTS;
-    });
+    read.resolve(reader);
     expect(await gate.decision).toEqual({ mode: 'sequential', declinedBy: { condition: 'disarmed' } });
     await settledDecision(gate.decision);
-    expect(decodes).toBe(0);
+    expect(reader.answered + reader.built).toBe(0);
     expect(fake.calls).toBe(0);
+  });
+
+  it('judges route-only: answers every member\'s key and builds no member\'s facts', async () => {
+    const fake = fakeSpawn();
+    const gate = gateOf({ spawn: fake.spawn });
+    const tier = tierOf({ [MARKDOWN_KEY]: FACTS, [OTHER_MARKDOWN_KEY]: FACTS });
+    gate.onHomeSettled(HOME_KEY, hit({ [`${ROOT}/a.md`]: keyed(MARKDOWN_KEY), [`${ROOT}/b.md`]: keyed(OTHER_MARKDOWN_KEY) }, tier.facts));
+    expect(await gate.decision).toEqual({ mode: 'overlapped', run: RUN });
+    expect(tier.reads).toBe(2);
+    expect(tier.reader.answered).toBe(2);
+    expect(tier.reader.built).toBe(0);
   });
 
   it('tears the minted scope down and spawns no child when disarmed after the mint began', async () => {

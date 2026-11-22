@@ -315,7 +315,7 @@ describe('an ordinary parser failure in both lanes', () => {
     const projection = builder.build();
     const read = blobFactsReader(storableBlobFacts(projection));
     const stored = conditionsWithCode(projection, BLOB_PARSE_FAILED).map((row) => {
-      const outcome = read(row.blob);
+      const outcome = read.outcome(row.blob);
       return outcome.kind === 'not-admitted' ? outcome.entry : outcome;
     });
 

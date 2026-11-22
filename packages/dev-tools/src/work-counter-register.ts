@@ -52,6 +52,8 @@ export const COUNTERS_WITHOUT_A_COUNTED_ROW: Readonly<Partial<Record<WorkCounter
   'registry.built': ONE_READ_PER_RUN,
   'registry.admitted': ONE_READ_PER_RUN,
   'git.calls': 'I10 git calls; git is no longer pinned, so no cost row restates them',
+  'checks.gate.rows.read':
+    "the tier rows validate's checks overlap gate reads to judge its members, kept off every store counter so the overlapped and sequential runs count alike, but for the shared tier read when no crawled member reads the tier (resource-scanning-and-caching.md 3.7b); no cost row",
 };
 
 /** A counted cost row whose counter waits on its mechanism. */

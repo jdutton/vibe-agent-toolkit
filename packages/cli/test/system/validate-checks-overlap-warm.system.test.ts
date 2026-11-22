@@ -7,7 +7,8 @@
  *
  * This file holds the arms where the gate lets the overlap happen (warm, a stat-dirty index), the
  * replay of the held stderr (the child's marker lands after the checks banner and before the
- * findings, and the overlapped run had buffered it), its liveness from the turn (a line the child
+ * findings, and the overlapped run had buffered it), the parent's work counters (the same in both
+ * modes but for the gate's own `checks.gate.rows.read`), its liveness from the turn (a line the child
  * writes after the turn reaches the terminal while the child still runs), and the cold store the
  * gate leaves sequential. The arms the gate declines are `validate-checks-overlap-declines`; the
  * phases that fail, `validate-checks-overlap-failures`.
@@ -30,6 +31,7 @@ import {
   expectFacts,
   expectMarkerInItsTurn,
   expectSameOutput,
+  expectSameWork,
   type InFlight,
   killInFlight,
   MARKER_BYTES,
@@ -93,6 +95,7 @@ describe('vat validate — the checks overlap on a warm store, same build, both 
     expectMarkerInItsTurn(both.overlapped);
     expectMarkerInItsTurn(both.sequential);
     expectSameOutput(both.overlapped, both.sequential);
+    expectSameWork(both);
     expect(both.overlapped.code).toBe(1);
   });
 
@@ -132,6 +135,7 @@ describe('vat validate — the checks overlap on a warm store, same build, both 
     expect(statDirty(), 'neither run refreshed the real index').toBe('docs/a.md');
     expectFacts(both, expect.objectContaining({ checksOverlapped: 1, parentStoreWritesUntilChildExit: 0, parentParseCacheWritesUntilChildExit: 0 }));
     expectSameOutput(both.overlapped, both.sequential);
+    expectSameWork(both);
   });
 
   it('cold: the gate leaves it sequential (not-hit), and both modes populate alike', async () => {

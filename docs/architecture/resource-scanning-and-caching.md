@@ -821,9 +821,20 @@ turn exactly as before:
 - (b) `os.availableParallelism()` is at least 2;
 - (c) the home population's settlement (the one `homeKey([])` names) resolved as a store `hit`;
 - (d) the store's facts may be admitted under the current parse limits (`hydratesUnder`);
-- (e) every member is admitted from the store, by admission's own predicate: under the parser kind
-  the registry routes it to, `storedAnswer` (the composition of `storedRoute` and `readRoute`)
-  answers `probe`. A member that would be computed turns overlap off.
+- (e) every member is admitted from the store, by admission's own predicates: under the parser kind
+  the registry routes it to, `storedComputeBy` finds no reason to compute it. It is route-only:
+  `storedRoute` on the member's realization, then, when that route reads the tier, the kind the one
+  fact reader would return for the key (`BlobFactsReader.answer`: the same row checks as a
+  rebuild, with the frontmatter value decoded and dropped), read by the same rule `readRoute`
+  applies. No member's facts are built or kept, so the gate adds nothing to the parent's live
+  memory. The rows its predicates check are counted `checks.gate.rows.read` and in no other
+  counter. The tier itself is read once per run through the population's shared memo, which
+  admission reads too, so every other work counter is the same overlapped and sequential, with one
+  exception: the gate asks every member of the home population, admission only the members the
+  crawl reaches. When no crawled member routes to a tier read but some home member does, the
+  overlapped run counts one `store.reads.persistent` and that read's `store.rows.decoded.persistent`
+  that a sequential run does not. That needs a crawl that reaches no keyed member, so it is left
+  as is. A member that would be computed turns overlap off.
 
 Cold runs, `--debug`, one core and any declined or rejected condition stay sequential. Condition (e)
 is why the parent writes neither the store nor the shared parse cache after the spawn: it computes
@@ -868,7 +879,11 @@ checks. The same window already existed from the turn onward; it opens earlier.
 - Memory: overlapped, the child's peak can coincide with the parent's resources-phase peak, so the
   combined resident set at one instant can approach the sum of the two per-process peaks. On a
   memory-capped runner that is an out-of-memory risk. Sequentially the child peaks while the parent
-  sits at its post-resources size.
+  sits at its post-resources size. The parent's own peak is held to a sequential run's by one forced
+  major collection at an overlapped checks turn: a sequential parent idles about 2 s there waiting
+  for the child and V8 collects then, but an overlapped one never idles, and on the adopter's warm
+  run (Node 24) its peak resident set was 1221-1233 MiB against 883 sequential without the
+  collection and 879-891 MiB with it, at no cost in wall time.
 - `os.availableParallelism()` honours CPU affinity and a cgroup quota, not CPU shares. A container
   limited by shares alone overlaps on less CPU than it sees. On a 2-core runner the parse pool and
   the child share two cores.

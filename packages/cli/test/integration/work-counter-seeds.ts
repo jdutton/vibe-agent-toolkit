@@ -19,8 +19,10 @@ import { writeFileSync } from 'node:fs';
 
 import { hydrateRunDatabase, openSqliteFactStore, type RunDatabase } from '@vibe-agent-toolkit/projection-sqlite';
 import {
+  blobFactsReader,
   type BlobScopedRows,
   computeContentKey,
+  createCollectionMimeResolver,
   type ExtentScopedRows,
   ParseCache,
   ParseDispatcher,
@@ -36,9 +38,11 @@ import { readWorkCounters, safePath, WORK_COUNTER_NAMES, type WorkCounter } from
 import { createTempDir, removeTempDir, scratchTmpdirEnv } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, expect, vi } from 'vitest';
 
+import { createChecksOverlapGate } from '../../src/commands/checks-overlap-gate.js';
 import { checkGitInstalled } from '../../src/commands/doctor.js';
 import type { Logger } from '../../src/utils/logger.js';
 import { withQueriedProjection } from '../../src/utils/projection-query.js';
+import { HOME_KEY, hit, keyed as keyedRealization, POPULATION_LIMITS, ROOT } from '../helpers/overlap-gate-fixtures.js';
 import { commitTestFixture } from '../test-helpers.js';
 
 /** The fact store's counters. */
@@ -573,6 +577,24 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       return undefined;
     },
     delta: { 'git.calls': 1 },
+  },
+  // The gate judging a hit whose one member's tier holds one `blobs` row (whose
+  // section rows are missing, so it declines): one row read, and no store counter.
+  'checks.gate.rows.read': {
+    prepare: () => async () => {
+      const gate = createChecksOverlapGate({
+        debug: false,
+        cores: () => 2,
+        childHomeKey: HOME_KEY,
+        limits: POPULATION_LIMITS,
+        routing: { resolver: createCollectionMimeResolver(undefined), baseDir: ROOT },
+        spawn: () => Promise.reject(new Error('the seed never spawns')),
+      });
+      gate.onHomeSettled(HOME_KEY, hit({ [`${ROOT}/a.md`]: keyedRealization(BLOB_KEY) }, () => Promise.resolve(blobFactsReader(oneBlobRow()))));
+      expect(await gate.decision).toEqual({ mode: 'sequential', declinedBy: { condition: 'member', member: 'a.md', route: 'readRoute' } });
+      return undefined;
+    },
+    delta: { 'checks.gate.rows.read': 1 },
   },
 };
 

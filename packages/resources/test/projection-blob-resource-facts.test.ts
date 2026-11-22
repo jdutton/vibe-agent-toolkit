@@ -14,9 +14,9 @@ import { describe, expect, it } from 'vitest';
 import { parseHtmlContent } from '../src/html-link-parser.js';
 import { parseMarkdownContent, type ParseResult } from '../src/link-parser.js';
 import { blobConditionsFor, blobRowFor } from '../src/projection/blob-facts.js';
-import { BLOB_NOT_TEXT } from '../src/projection/blob-population.js';
+import { BLOB_NOT_TEXT, BLOB_PARSE_FAILED } from '../src/projection/blob-population.js';
 import { blobReferencesFor } from '../src/projection/blob-references.js';
-import { blobFactsReader } from '../src/projection/blob-resource-facts.js';
+import { blobFactsReader, type BlobFactsOutcome } from '../src/projection/blob-resource-facts.js';
 import { blobSectionsFor } from '../src/projection/blob-sections.js';
 import type { BlobScopedRows } from '../src/projection/store.js';
 
@@ -51,20 +51,65 @@ function rowsOf(contentKey: string, source: string, parsed: ParseResult): BlobSc
   };
 }
 
+/**
+ * The reader's outcome for a key, with its route-only answer held to the same kind in every case:
+ * `answer` runs the checks `outcome` runs, without building the facts.
+ *
+ * @param rows - The bundle
+ * @returns The outcome for a key
+ */
+function agreedReader(rows: BlobScopedRows): (contentKey: string) => BlobFactsOutcome {
+  const reader = blobFactsReader(rows);
+  return (contentKey) => {
+    const outcome = reader.outcome(contentKey);
+    expect(reader.answer(contentKey).kind, 'the route-only answer agrees with the rebuild').toBe(outcome.kind);
+    return outcome;
+  };
+}
+
 describe('blobFactsReader', () => {
+  it('builds a key\'s facts afresh on every ask, keeping none of them', () => {
+    const reader = blobFactsReader(rowsOfDoc());
+    const first = reader.outcome(CONTENT_KEY);
+    expect(first.kind).toBe('facts');
+    expect(reader.outcome(CONTENT_KEY)).not.toBe(first);
+    expect(reader.outcome(CONTENT_KEY)).toEqual(first);
+  });
+
+  it('answers a key by its rows: every row filed under it is read, none for a key it does not hold', () => {
+    const rows = rowsOfDoc();
+    const reader = blobFactsReader(rows);
+    const held = 1 + rows.blobReferences.length + rows.blobSections.length + rows.blobConditions.length;
+    expect(reader.answer(CONTENT_KEY)).toEqual({ kind: 'facts', rowsRead: held });
+    expect(reader.answer(`markdown.${'d'.repeat(64)}`)).toEqual({ kind: 'uncovered', rowsRead: 0 });
+  });
+
+  it('agrees on a key whose every realization is refused (not-admitted)', () => {
+    const refusedKey = `markdown.${'9'.repeat(64)}`;
+    const outcome = agreedReader({
+      blobs: [],
+      blobReferences: [],
+      blobSections: [],
+      blobConditions: [{ blob: refusedKey, code: BLOB_PARSE_FAILED, ordinal: 0, severity: 'warning', message: 'the parse failed', line: null }],
+      harnessBlobFacts: [],
+      harnessBlobImports: [],
+    })(refusedKey);
+    expect(outcome.kind).toBe('not-admitted');
+  });
+
   it('rebuilds the untampered rows', () => {
-    const outcome = blobFactsReader(rowsOfDoc())(CONTENT_KEY);
+    const outcome = agreedReader(rowsOfDoc())(CONTENT_KEY);
     expect(outcome.kind).toBe('facts');
   });
 
   it('carries the key it rebuilt as the resource content key', () => {
-    const outcome = blobFactsReader(rowsOfDoc())(CONTENT_KEY);
+    const outcome = agreedReader(rowsOfDoc())(CONTENT_KEY);
     expect(outcome.kind === 'facts' && outcome.facts.contentKey).toBe(CONTENT_KEY);
   });
 
   it('carries the key of a not-text blob, which has no blobs row', () => {
     const notTextKey = `markdown.${'f'.repeat(64)}`;
-    const outcome = blobFactsReader({
+    const outcome = agreedReader({
       blobs: [],
       blobReferences: [],
       blobSections: [],
@@ -77,13 +122,13 @@ describe('blobFactsReader', () => {
 
   it('is uncovered when a reference row is missing against linkCount', () => {
     const rows = rowsOfDoc();
-    const outcome = blobFactsReader({ ...rows, blobReferences: rows.blobReferences.slice(1) })(CONTENT_KEY);
+    const outcome = agreedReader({ ...rows, blobReferences: rows.blobReferences.slice(1) })(CONTENT_KEY);
     expect(outcome).toMatchObject({ kind: 'uncovered', reason: expect.stringContaining('linkCount') });
   });
 
   it('is uncovered when a section row is missing against headingCount', () => {
     const rows = rowsOfDoc();
-    const outcome = blobFactsReader({ ...rows, blobSections: rows.blobSections.slice(1) })(CONTENT_KEY);
+    const outcome = agreedReader({ ...rows, blobSections: rows.blobSections.slice(1) })(CONTENT_KEY);
     expect(outcome).toMatchObject({ kind: 'uncovered', reason: expect.stringContaining('headingCount') });
   });
 
@@ -91,19 +136,19 @@ describe('blobFactsReader', () => {
     const rows = rowsOfDoc();
     const blobConditions = rows.blobConditions.map((row) => (row.code === 'UNRESOLVED_REFERENCE' ? { ...row, line: null } : row));
     expect(blobConditions.some((row) => row.code === 'UNRESOLVED_REFERENCE')).toBe(true);
-    const outcome = blobFactsReader({ ...rows, blobConditions })(CONTENT_KEY);
+    const outcome = agreedReader({ ...rows, blobConditions })(CONTENT_KEY);
     expect(outcome).toMatchObject({ kind: 'uncovered', reason: expect.stringContaining('UNRESOLVED_REFERENCE') });
   });
 
   it('is uncovered when an AST reference row has no text', () => {
     const rows = rowsOfDoc();
     const blobReferences = rows.blobReferences.map((row) => (row.astIndex === 0 ? { ...row, text: null } : row));
-    const outcome = blobFactsReader({ ...rows, blobReferences })(CONTENT_KEY);
+    const outcome = agreedReader({ ...rows, blobReferences })(CONTENT_KEY);
     expect(outcome).toMatchObject({ kind: 'uncovered', reason: expect.stringContaining('no text') });
   });
 
   it('is uncovered for a key the bundle does not hold', () => {
-    expect(blobFactsReader(rowsOfDoc())(`markdown.${'d'.repeat(64)}`).kind).toBe('uncovered');
+    expect(agreedReader(rowsOfDoc())(`markdown.${'d'.repeat(64)}`).kind).toBe('uncovered');
   });
 
   // parse5 no longer emits a link with a line and no offsets (the clone that
@@ -120,7 +165,7 @@ describe('blobFactsReader', () => {
     delete halfPositioned.startOffset;
     delete halfPositioned.endOffset;
     const htmlKey = `html.${'e'.repeat(64)}`;
-    const outcome = blobFactsReader(rowsOf(htmlKey, source, { ...parsed, links: [halfPositioned] }))(htmlKey);
+    const outcome = agreedReader(rowsOf(htmlKey, source, { ...parsed, links: [halfPositioned] }))(htmlKey);
     expect(outcome.kind).toBe('facts');
     if (outcome.kind !== 'facts') return;
     expect(outcome.facts.links).toStrictEqual([halfPositioned]);
@@ -130,7 +175,7 @@ describe('blobFactsReader', () => {
   it('is uncovered, not a throw, when the stored frontmatter encoding is malformed', () => {
     const rows = rowsOfDoc();
     const blobs = rows.blobs.map((row) => ({ ...row, frontmatterValue: 'not the codec encoding' }));
-    const outcome = blobFactsReader({ ...rows, blobs })(CONTENT_KEY);
+    const outcome = agreedReader({ ...rows, blobs })(CONTENT_KEY);
     expect(outcome).toMatchObject({ kind: 'uncovered', reason: expect.stringContaining('frontmatterValue') });
   });
 
@@ -138,21 +183,21 @@ describe('blobFactsReader', () => {
     const rows = rowsOfDoc();
     const blobReferences = rows.blobReferences.map((row) => (row.astIndex === 0 ? { ...row, astIndex: 1 } : row));
     expect(blobReferences.filter((row) => row.astIndex === 1)).toHaveLength(1);
-    const outcome = blobFactsReader({ ...rows, blobReferences })(CONTENT_KEY);
+    const outcome = agreedReader({ ...rows, blobReferences })(CONTENT_KEY);
     expect(outcome).toMatchObject({ kind: 'uncovered', reason: expect.stringContaining('astIndex') });
   });
 
   it('is uncovered when the section ordinals have a gap', () => {
     const rows = rowsOfDoc();
     const blobSections = rows.blobSections.map((row) => (row.ordinal === 1 ? { ...row, ordinal: 5 } : row));
-    const outcome = blobFactsReader({ ...rows, blobSections })(CONTENT_KEY);
+    const outcome = agreedReader({ ...rows, blobSections })(CONTENT_KEY);
     expect(outcome).toMatchObject({ kind: 'uncovered', reason: expect.stringContaining('section') });
   });
 
   it('is uncovered when a finding condition row is missing against findingCount', () => {
     const rows = rowsOfDoc();
     expect(rows.blobs[0]?.findingCount).toBeGreaterThan(0);
-    const outcome = blobFactsReader({ ...rows, blobConditions: [] })(CONTENT_KEY);
+    const outcome = agreedReader({ ...rows, blobConditions: [] })(CONTENT_KEY);
     expect(outcome).toMatchObject({ kind: 'uncovered', reason: expect.stringContaining('findingCount') });
   });
 });

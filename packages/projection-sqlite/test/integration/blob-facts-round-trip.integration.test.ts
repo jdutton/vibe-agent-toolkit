@@ -265,7 +265,7 @@ beforeAll(async () => {
       if (key === undefined) throw new Error(`the projection keyed no realization at ${relativePath}`);
       return key;
     };
-    read = (relativePath) => facts(keyAt(relativePath));
+    read = (relativePath) => facts.outcome(keyAt(relativePath));
     storedOf = (relativePath) => rowsOfKey(keyAt(relativePath), stored);
   } finally {
     await reader.close();

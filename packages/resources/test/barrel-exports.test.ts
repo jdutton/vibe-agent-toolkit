@@ -353,7 +353,7 @@ const BARREL_EXPORTS = [
   'sqlSpanAt',
   'sqlTokens',
   'storeMissOf',
-  'storedAnswer',
+  'storedComputeBy',
   'strongestLoading',
   'transformContent',
   'uncoveredContentKeys',

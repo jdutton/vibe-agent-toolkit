@@ -15,6 +15,9 @@
  * - The store: each run starts from the same state. The cache directory is one path, removed and
  *   (warm) refilled from the seeded copy before every run, then handed to the arm's `prepare`.
  *
+ * - `VAT_WORK_COUNTERS` in every run: {@link expectSameWork} holds the parent's counters equal
+ *   across the modes but for the gate's own `checks.gate.rows.read`.
+ *
  * Asserted per arm by {@link expectSameOutput}: normalized stdout and stderr equal (the one
  * normalizer, `@vibe-agent-toolkit/utils/testing`), phase order equal, and exit code or terminating
  * signal equal.
@@ -26,7 +29,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 
 import { PROJECTION_TABLES, quoteIdentifier, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal, normalizePath, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizePath, safePath, WORK_COUNTER_NAMES, WORK_COUNTERS_ENV, type WorkCounter, type WorkCounterDump } from '@vibe-agent-toolkit/utils';
 import { normalizeCommandOutput, type NormalizeContext } from '@vibe-agent-toolkit/utils/testing';
 import { expect } from 'vitest';
 
@@ -119,6 +122,8 @@ export interface ModeRun {
   readonly document: Record<string, unknown>;
   /** Wall time from the start to the process's exit with its stdout closed. */
   readonly elapsedMs: number;
+  /** The run's `VAT_WORK_COUNTERS` directory, read by {@link expectSameWork}: a killed run may write no dump. */
+  readonly workCounters: string;
 }
 
 /** The run a case has in flight, recorded by its `during`, so a red case leaves nothing running. */
@@ -240,12 +245,14 @@ async function runMode(fixture: OverlapFixture, mode: Mode, args: readonly strin
     path: (name) => safePath.join(own, name),
   };
   const dumps = safePath.join(own, 'facts');
+  const work = safePath.join(own, 'work');
   const startedAt = Date.now();
   const running = startVat(fixture.project, ['validate', ...args], {
     nodeOptions: [preload('parent-only-cores.mjs'), preload('child-only-stderr-marker.mjs'), ...(options.preloads ?? []).map(preload)],
     env: {
       [VAT_CACHE_DIR_ENV]: fixture.cache,
       [VALIDATE_DEBUG_FACTS_ENV]: dumps,
+      [WORK_COUNTERS_ENV]: work,
       VAT_PARSE_POOL_SIZE: '1',
       VAT_TEST_CORES: String(CORES[mode]),
       VAT_TEST_CHILD_PID_FILE: files.childPid,
@@ -270,7 +277,42 @@ async function runMode(fixture: OverlapFixture, mode: Mode, args: readonly strin
     childStarted: existsSync(files.childPid),
     document: ending.document,
     elapsedMs,
+    workCounters: work,
   };
+}
+
+/**
+ * The `vat validate` process's work counters: the one CLI dump that ran a resources phase.
+ *
+ * @param directory - The run's `VAT_WORK_COUNTERS`
+ * @returns Its counters
+ */
+function parentCounters(directory: string): Readonly<Record<WorkCounter, number>> {
+  const parents = readdirSync(directory)
+    .map((name) => JSON.parse(readFileSync(safePath.join(directory, name), 'utf-8')) as WorkCounterDump)
+    .filter((dump) => dump.role === 'cli' && 'resources' in dump.phases);
+  expect(parents, `the validate process's dump in ${directory}`).toHaveLength(1);
+  return (parents[0] as WorkCounterDump).counters;
+}
+
+/** The gate's own counter: the one counter an overlapped run may count and a sequential one not. */
+const GATE_COUNTER: WorkCounter = 'checks.gate.rows.read';
+
+/**
+ * The work invariant: the parent counted the same work in both modes, but for the gate's own
+ * reads, which only an overlapped run that judged its members makes. A gate whose reads leaked
+ * into any other counter (a store read, a decode) fails here.
+ *
+ * @param both - An arm's runs, the overlapped one having judged its members
+ */
+export function expectSameWork(both: BothModes): void {
+  const overlapped = parentCounters(both.overlapped.workCounters);
+  const sequential = parentCounters(both.sequential.workCounters);
+  for (const name of WORK_COUNTER_NAMES.filter((counter) => counter !== GATE_COUNTER)) {
+    expect(overlapped[name], name).toBe(sequential[name]);
+  }
+  expect(overlapped[GATE_COUNTER], 'the gate read its members\' rows').toBeGreaterThan(0);
+  expect(sequential[GATE_COUNTER], 'a gate that declined at once read none').toBe(0);
 }
 
 /**

@@ -63,7 +63,7 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * registry's stat of each file it prepares.
  * Together they let a test pin rule 4 of "Decision: content identity is per
  * source" (docs/architecture/content-keying-and-git.md): one read, one key and
- * one admission per file per run.
+ * one admission per file per run. `checks.gate.rows.read`: resource-scanning-and-caching.md 3.7b.
  */
 export const WORK_COUNTER_NAMES = [
   'store.rows.decoded.persistent',
@@ -91,6 +91,7 @@ export const WORK_COUNTER_NAMES = [
   'registry.built',
   'registry.admitted',
   'git.calls',
+  'checks.gate.rows.read',
 ] as const;
 
 /**

@@ -63,7 +63,7 @@ import {
   type ResourceEnumeration,
   type ResourcePopulationSource,
 } from './resource-population.js';
-import { hydratesUnder, respelledContent, storedAnswer, type StoredMember } from './stored-admission.js';
+import { hydratesUnder, readRoute, respelledContent, storedRoute, type StoredMember } from './stored-admission.js';
 
 /**
  * One file's admission facts: what a registry admitting it reads, keys and
@@ -226,7 +226,7 @@ export class RunPopulation implements PopulationRun {
    * way in every view.
    *
    * On a store hit a member is admitted from what the store holds about it when
-   * {@link storedAnswer} says so (built from the blob tier by
+   * {@link storedRoute} and {@link readRoute} say so (built from the blob tier by
    * the one fact reader, no read, key or parse), and by `compute` otherwise —
    * see `stored-admission.ts`. Counted `registry.admitted` once whichever way it
    * was admitted; a stated refusal is not an admission.
@@ -246,12 +246,17 @@ export class RunPopulation implements PopulationRun {
   async #admitted(absolutePath: string, parserKind: string, compute: () => Promise<AdmittedFacts>): Promise<AdmittedFacts> {
     const stored = this.#stored.get(absolutePath);
     if (stored === undefined) return compute();
-    const answer = await storedAnswer(stored.realization, parserKind, stored.facts);
+    const route = storedRoute(stored.realization, parserKind);
+    if (route.kind === 'compute') return compute();
     // A file that cannot be read now is the cold lane's: its read raises the cold error, an
     // oversize file's included (the cold lane opens it before it refuses it by its size).
-    if (answer.kind === 'compute' || (await readRefusal(absolutePath)) !== null) return compute();
-    if (answer.admitted.kind === 'facts') countWork('registry.admitted', 1);
-    return answer.admitted;
+    if (route.kind === 'not-admitted') {
+      return (await readRefusal(absolutePath)) === null ? { kind: 'not-admitted', entry: route.entry } : compute();
+    }
+    const read = readRoute((await stored.facts()).outcome(route.contentKey));
+    if (read.kind === 'compute' || (await readRefusal(absolutePath)) !== null) return compute();
+    if (read.admitted.kind === 'facts') countWork('registry.admitted', 1);
+    return read.admitted;
   }
 
   /**

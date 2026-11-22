@@ -6,6 +6,7 @@
 import {
   ParseDispatcher,
   type BlobFactsOutcome,
+  type BlobFactsReader,
   type HomeSettlement,
   type ParseCache,
   type ResourceEnumeration,
@@ -25,13 +26,39 @@ type Realization = StoredContent['members'] extends ReadonlyMap<string, infer R>
 
 export const keyed = (contentKey: string): Realization => ({ contentKey, contentState: 'keyed', mime: 'text/markdown' });
 
+/**
+ * A reader answering `outcomes` by key, each key one row, counting the keys it answered and the
+ * outcomes it built.
+ */
+export function readerOf(outcomes: Readonly<Record<string, BlobFactsOutcome>>): BlobFactsReader & { answered: number; built: number } {
+  const outcomeOf = (key: string): BlobFactsOutcome => outcomes[key] ?? { kind: 'uncovered', reason: 'not in the fake tier' };
+  const reader = {
+    answered: 0,
+    built: 0,
+    outcome: (key: string): BlobFactsOutcome => {
+      reader.built += 1;
+      return outcomeOf(key);
+    },
+    answer: (key: string) => {
+      reader.answered += 1;
+      return { kind: outcomeOf(key).kind, rowsRead: 1 };
+    },
+  };
+  return reader;
+}
+
 /** A blob tier answering `outcomes` by key, recording each read of it. */
-export function tierOf(outcomes: Readonly<Record<string, BlobFactsOutcome>>): { reads: number; facts: StoredContent['facts'] } {
+export function tierOf(outcomes: Readonly<Record<string, BlobFactsOutcome>>): {
+  reads: number;
+  reader: ReturnType<typeof readerOf>;
+  facts: StoredContent['facts'];
+} {
   const tier = {
     reads: 0,
+    reader: readerOf(outcomes),
     facts: () => {
       tier.reads += 1;
-      return Promise.resolve((key: string): BlobFactsOutcome => outcomes[key] ?? { kind: 'uncovered', reason: 'not in the fake tier' });
+      return Promise.resolve<BlobFactsReader>(tier.reader);
     },
   };
   return tier;

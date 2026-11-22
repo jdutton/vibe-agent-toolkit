@@ -1040,6 +1040,7 @@ export {
   blobFactsReader,
   RESOURCE_LINK_FACT_SOURCES,
   type BlobFactsOutcome,
+  type BlobFactsReader,
 } from './projection/blob-resource-facts.js';
 
 // The declarative closure primitive (zones §7.3): a closure-defined extent is a
@@ -1095,13 +1096,12 @@ export {
 } from './projection/blob-population.js';
 
 // A warm run's blob tier read failing is the store's refusal, by this code (the CLI's refusal table).
-// `hydratesUnder` and `storedAnswer` are warm admission's own predicates, exported so `vat
+// `hydratesUnder` and `storedComputeBy` are warm admission's own predicates, exported so `vat
 // validate`'s checks overlap gate judges "admitted from the store" by them, never by a copy.
 export {
   PROJECTION_STORE_READ_FAILED_CODE,
   hydratesUnder,
-  storedAnswer,
-  type StoredAnswer,
+  storedComputeBy,
   type StoredComputeBy,
   type StoredContent,
 } from './projection/stored-admission.js';
