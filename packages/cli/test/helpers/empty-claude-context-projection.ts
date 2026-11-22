@@ -31,5 +31,6 @@ export function emptyClaudeContextProjection(): Projection {
     blobSections: [],
     blobConditions: [],
     harnessBlobFacts: [], harnessBlobImports: [],
+    skillTextFacts: [], skillTextMatches: [],
   };
 }

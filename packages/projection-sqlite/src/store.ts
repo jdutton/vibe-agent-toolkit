@@ -27,11 +27,11 @@
  *
  * ## Both writes replace, and both are one transaction
  *
- * `writeBlobFacts` deletes the four tables' rows for the content keys it is
+ * `writeBlobFacts` deletes every blob-scoped table's rows for the content keys it is
  * about to write and inserts those. Replace rather than insert-if-absent for a
  * specific reason — see `schema-sql.ts` on SQLite's treatment of NULL in a
- * primary key, which makes a conflict clause unable to dedup three of the thirteen
- * tables. 🪤 The keys it clears are the union of what **all four** tables name,
+ * primary key, which makes a conflict clause unable to dedup the tables whose key
+ * holds a nullable column. 🪤 The keys it clears are the union of what **every** blob-scoped table names,
  * never `blobs` alone: a declined blob is a `blob_conditions` row with no
  * `blobs` row, which is what every binary file in a corpus produces — see
  * {@link uniqueContentKeys}.
@@ -441,9 +441,21 @@ function sqlitePrimaryResultCode(error: unknown): number | undefined {
  * @returns True for a damaged-file fault
  */
 function isDamagedDatabaseFault(error: unknown): boolean {
+  return someSqliteFault(error, (primary) => DAMAGED_DATABASE_RESULT_CODES.has(primary));
+}
+
+/**
+ * Whether `error`, or any error in its `cause` chain, is a SQLite failure whose
+ * primary result code `matches`.
+ *
+ * @param error - Anything thrown
+ * @param matches - Decides by primary result code
+ * @returns True when one in the chain matches
+ */
+function someSqliteFault(error: unknown, matches: (primary: number) => boolean): boolean {
   for (let current = error; current instanceof Error; current = current.cause) {
     const primary = sqlitePrimaryResultCode(current);
-    if (primary !== undefined && DAMAGED_DATABASE_RESULT_CODES.has(primary)) return true;
+    if (primary !== undefined && matches(primary)) return true;
   }
   return false;
 }
@@ -485,6 +497,32 @@ export class StoreUnopenableError extends VatError {
  */
 export function isStoreUnopenableError(error: unknown): error is StoreUnopenableError {
   return isVatError(error, PROJECTION_STORE_UNOPENABLE_CODE) && error instanceof StoreUnopenableError;
+}
+
+/**
+ * SQLite's primary result codes that say this connection may not use the store
+ * file while the file itself is sound: `SQLITE_READONLY` (8), its whole family
+ * (a read-only file, a read-only directory for the journal, a recovery it may
+ * not run), and `SQLITE_CANTOPEN` (14), its whole family (a read-only directory
+ * with no database file yet, which SQLite cannot create). The machine's state,
+ * not the file's.
+ */
+const NOT_WRITABLE_HERE_RESULT_CODES: ReadonlySet<number> = new Set([8, 14]);
+
+/**
+ * Whether `error`, or any error in its `cause` chain, is a SQLite failure that
+ * says the store cannot answer now while the file itself is sound: another
+ * connection holds it (`SQLITE_BUSY`, `SQLITE_LOCKED`), this one may not write
+ * it (`SQLITE_READONLY`), or this one cannot open or create it
+ * (`SQLITE_CANTOPEN`). For a caller whose use of the store is optional and that
+ * would rather go without than wait or refuse; a caller that needs the store
+ * does not ask, and meets these as themselves.
+ *
+ * @param error - Anything a store call or open threw
+ * @returns True when the store is contended, read-only or cannot be opened here
+ */
+export function isStoreUnavailableNow(error: unknown): boolean {
+  return someSqliteFault(error, (primary) => CONTENDED_RESULT_CODES.has(primary) || NOT_WRITABLE_HERE_RESULT_CODES.has(primary));
 }
 
 /**
@@ -557,7 +595,7 @@ export function isStoreInUse(directory: string): boolean {
  * 🪤 What keeps the blob bound from being true only of fresh stores — see
  * {@link adoptBlobKeysSql}. Gated on the manifest being empty, so it costs one
  * indexed `LIMIT 1` per open after the first write; on a genuinely empty store
- * the four statements scan four empty tables.
+ * its statements scan empty tables.
  *
  * @param database - An open connection whose schema exists
  */
@@ -814,8 +852,8 @@ function prepareStoreTables(database: DatabaseSync, retention: Retention): Store
 /**
  * Write blob facts: the row writer behind `FactStore.writeBlobFacts`.
  *
- * The range this write clears is the union of the content keys **all four**
- * tables name, not the keys `blobs` alone names — see
+ * The range this write clears is the union of the content keys **every**
+ * blob-scoped table names, not the keys `blobs` alone names — see
  * {@link uniqueContentKeys} for why the difference is the whole feature.
  *
  * ⛔ Except in a PARTITIONED table (`partitionColumn` — the harness tables),
@@ -980,11 +1018,11 @@ function clearSpaceForBlobs(
 }
 
 /**
- * Delete every blob-scoped row for a set of content keys, in all four tables.
+ * Delete every blob-scoped row for a set of content keys, in every blob-scoped table.
  *
  * The range a write clears before filling it, and the range an eviction
  * reclaims: they are the same operation over different keys, which is why
- * there is one of it. 🪤 The keys are the union all four tables name, never
+ * there is one of it. 🪤 The keys are the union every blob-scoped table names, never
  * `blobs` alone — see {@link uniqueContentKeys}.
  *
  * @param tables - The connection's statements
@@ -1440,8 +1478,8 @@ function decodeRows(plan: TablePlan, raw: readonly unknown[]): readonly Record<s
 }
 
 /**
- * Every content key a bundle names **anywhere**, across all four blob-scoped
- * tables, deduplicated.
+ * Every content key a bundle names **anywhere**, across every blob-scoped
+ * table, deduplicated.
  *
  * ## 🪤 Why the union, and not the `blobs` table alone
  *

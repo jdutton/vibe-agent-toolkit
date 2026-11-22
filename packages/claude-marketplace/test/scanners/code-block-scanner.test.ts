@@ -1,7 +1,19 @@
+import type { EvidenceRecord } from '@vibe-agent-toolkit/agent-skills';
+import { SKILL_TEXT_DECLARATION, skillTextFactsOf } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
-import { scanCodeBlocks } from '../../src/scanners/code-block-scanner.js';
+import { scanCodeBlocks as scanOnFacts } from '../../src/scanners/code-block-scanner.js';
 import { bashCodeBlock, TEST_LOCATION_ROOT } from '../test-helpers.js';
+
+/** The scanner over `content`'s skill-text record, as the compatibility analyzer hands it one. */
+function scanCodeBlocks(
+  content: string,
+  filePath: string,
+  locationRoot: string,
+  frontmatter: Readonly<Record<string, unknown>> | undefined,
+): EvidenceRecord[] {
+  return scanOnFacts(skillTextFactsOf(content, SKILL_TEXT_DECLARATION), filePath, locationRoot, frontmatter);
+}
 
 describe('scanCodeBlocks', () => {
   it('returns empty array for markdown with no code blocks', () => {

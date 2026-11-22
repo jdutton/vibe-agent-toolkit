@@ -147,11 +147,15 @@ export {
   type PackagingValidationResult,
   type SkillPackagingConfig,
   type SkillValidationSharedContext,
-  collectNonPortableAssetReferenceIssues,
-  collectNonPortableCommandIssues,
 } from './validators/packaging-validator.js';
-
+export { collectNonPortableAssetReferenceIssues, collectNonPortableCommandIssues } from './validators/portability-issues.js';
 export { collectUnqualifiedMcpToolIssues } from './validators/mcp-tool-qualification.js';
+export {
+  readSkillDocument,
+  skillNameOf,
+  withSkillTextRun,
+  type SkillTextRun,
+} from './skill-text-lane.js';
 export {
   AGENT_INSTRUCTION_FILE_PATTERNS,
   createIssue,

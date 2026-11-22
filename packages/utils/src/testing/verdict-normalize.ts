@@ -60,9 +60,6 @@ interface DurationRule {
 }
 
 /**
- * Wall time is the only kind of field three runs of every verb were observed
- * to disagree on (see this module's docstring).
- *
  * Every pattern is a **regex literal**, never a `new RegExp` composed from a
  * shared sub-pattern: a constructed string is flagged by
  * `security/detect-non-literal-regexp` and hides the pattern from the static
@@ -232,12 +229,7 @@ function applySubstitutions(text: string, substitutions: readonly PathSubstituti
   return result;
 }
 
-/**
- * Zero out the duration values.
- *
- * @param text - Text to rewrite.
- * @returns The text with every whole-line duration value replaced by zero.
- */
+/** The text with every whole-line duration value replaced by zero. */
 function normalizeDurations(text: string): string {
   let result = text;
   for (const { pattern, replacement } of DURATION_RULES) {
@@ -246,22 +238,12 @@ function normalizeDurations(text: string): string {
   return result;
 }
 
-/**
- * Convert CRLF and lone CR to LF.
- *
- * @param text - Text to rewrite.
- * @returns The text with LF line endings only.
- */
+/** The text with CRLF and lone CR converted to LF. */
 function toLf(text: string): string {
   return text.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
 }
 
-/**
- * Give the text a trailing newline iff it has content.
- *
- * @param text - Text to rewrite.
- * @returns The text, newline-terminated unless it is empty.
- */
+/** The text, newline-terminated unless it is empty. */
 function ensureTrailingNewline(text: string): string {
   if (text.length === 0 || text.endsWith('\n')) {
     return text;

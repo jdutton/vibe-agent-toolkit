@@ -49,10 +49,8 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * counts every `EXPLAIN` the SQL gate prepares — one per gated statement, and
  * the four virtual-table reference reads each handle makes when it is opened.
  *
- * `parse.cache.written` counts parse-cache entries that reached their final path, on the
- * parent side only: `ParseCache.setByKey` for a write the parent made, and the pool's
- * settlement of a worker's `stored` reply for one a worker made.
- *
+ * `parse.cache.written` counts parse-cache entries that reached their final path, parent side
+ * only: `ParseCache.setByKey`, and the pool's settlement of a worker's `stored` reply.
  * `content.read` counts a member file's bytes read to be keyed (`readContentWithKey`),
  * one per read that returned bytes; a read refused at the input cap is
  * `parse.refused.inputCap.read` instead. `registry.built` counts every resource
@@ -63,7 +61,34 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * registry's stat of each file it prepares.
  * Together they let a test pin rule 4 of "Decision: content identity is per
  * source" (docs/architecture/content-keying-and-git.md): one read, one key and
- * one admission per file per run. `checks.gate.rows.read`: resource-scanning-and-caching.md 3.7b.
+ * one admission per file per run.
+ *
+ * `skillText.storeMiss` counts each (run, file) the skills lane scanned from
+ * its text instead of reading the file's stored skill-text facts, in a run that
+ * has a store to ask (`ResourcePopulationSource.holdsStore`): one per file per
+ * run for which the run's population source answered no document
+ * (`ResourcePopulationSource.storedDocument`), however many skills reach it. On
+ * a cold run it equals the files the lane scanned; on a warm run it is the
+ * per-file fallback, every one of which is a file the store does not cover.
+ *
+ * `skillText.noStore` counts each (run, file) the skills lane scanned from its
+ * text because the run has no store to ask: a verb that declares none
+ * (`vat audit`), the store switched off, or a lane given no run. Counted once
+ * per file per run, as `skillText.storeMiss` is, and never beside it: a run
+ * counts its scans under one or the other.
+ *
+ * `skillText.storeUnopened` counts each run whose stored-document questions
+ * opened the store or built the home population and met a failure there (a
+ * read-only cache directory, another process holding the store's lock, git
+ * giving no answer for the root): the question
+ * is optional, so the failure answers every question with nothing, and each
+ * file the lane then scans is a `skillText.storeMiss`. One per run at most.
+ *
+ * `skillText.outsideRoot` counts each (run, file) a stored-document question
+ * asked about a file outside the run's root, answered nothing without opening
+ * the store: no member of the run's home population can be there. Each is also
+ * a `skillText.storeMiss` when the lane scans it (a `skillText.noStore` in a
+ * run with no store). `checks.gate.rows.read`: resource-scanning-and-caching.md 3.7b.
  */
 export const WORK_COUNTER_NAMES = [
   'store.rows.decoded.persistent',
@@ -90,6 +115,10 @@ export const WORK_COUNTER_NAMES = [
   'fs.stat',
   'registry.built',
   'registry.admitted',
+  'skillText.storeMiss',
+  'skillText.noStore',
+  'skillText.storeUnopened',
+  'skillText.outsideRoot',
   'git.calls',
   'checks.gate.rows.read',
 ] as const;

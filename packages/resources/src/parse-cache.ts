@@ -36,6 +36,7 @@
  * | Field | Fate |
  * |---|---|
  * | `links`, `headings`, `estimatedTokenCount` | stored |
+ * | `skillText` | stored; a markdown entry without a record, or another kind's with one, is a miss |
  * | `anchors`, `parseErrors`, `unresolvedReferences`, `lexicalReferences`, `contentMeasures` | stored when present |
  * | `frontmatterSource`, `frontmatterError`, `frontmatterNotAMapping` | stored when present |
  * | `frontmatterValue` | the decoded mapping, encoded (`frontmatter-codec.ts`), when present |
@@ -267,6 +268,7 @@ export function dehydrate(result: ParseResult): ParseFacts {
     links: result.links,
     headings: result.headings,
     estimatedTokenCount: result.estimatedTokenCount,
+    skillText: result.skillText,
     ...(result.anchors !== undefined && { anchors: result.anchors }),
     ...(result.parseErrors !== undefined && { parseErrors: result.parseErrors }),
     ...(result.unresolvedReferences !== undefined && {
@@ -330,6 +332,7 @@ export function rehydrate(facts: ParseFacts, keyed: KeyedContent): ParseResult {
     }),
     ...(facts.frontmatterError !== undefined && { frontmatterError: facts.frontmatterError }),
     ...(facts.frontmatterNotAMapping === true && { frontmatterNotAMapping: true }),
+    skillText: facts.skillText,
     content: keyed.content,
     sizeBytes: keyed.byteLength,
     estimatedTokenCount: facts.estimatedTokenCount,
@@ -504,7 +507,7 @@ export class ParseCache {
     const decodeStartedAt = parseTimingStart();
     try {
       const facts = readFacts(raw);
-      if (facts === null) return null;
+      if (facts === null || !skillTextFitsKind(facts, keyed.parserKind)) return null;
 
       // `readFacts` returns the product of a fresh `JSON.parse`, so this graph is
       // not shared with any previous caller. See the standing constraint in the
@@ -888,6 +891,21 @@ let sharedCache: ParseCache | undefined;
 export function defaultParseCache(): ParseCache {
   sharedCache ??= new ParseCache();
   return sharedCache;
+}
+
+/**
+ * Whether an entry's skill-text record is the one its key's parser produces: a
+ * record for a markdown parse, `null` for any other. The schema cannot say it
+ * (one `ParseFacts` shape serves every parser kind), so the read says it, and a
+ * markdown entry without a record is a miss rather than a parse served without
+ * the facts the skills lane reads from it.
+ *
+ * @param facts - Facts that passed the schema
+ * @param parserKind - The parser the read routes to, which its key names
+ * @returns True when the record's presence matches the kind
+ */
+function skillTextFitsKind(facts: ParseFacts, parserKind: KeyedContent['parserKind']): boolean {
+  return (facts.skillText !== null) === (parserKind === 'markdown');
 }
 
 /**

@@ -106,7 +106,7 @@ const PROBE_HARNESS = 'probe-harness' as HarnessId;
  * Read a row as an untyped record.
  *
  * The one cast in this file, and it widens rather than narrows: the assertions
- * below are generic over thirteen unrelated row types and address columns by name.
+ * below are generic over every table's unrelated row type and address columns by name.
  *
  * @param row - Any projection row
  * @returns The same object, typed column-wise
@@ -172,7 +172,7 @@ function pick(row: RowRecord, columns: readonly string[]): RowRecord {
 }
 
 /**
- * The thirteen fixtures, in the registry's own declaration order.
+ * One fixture per table, in the registry's own declaration order.
  *
  * Every `alt` differs from its `base` in **every** column — asserted below
  * rather than assumed, because a fixture whose columns move together is exactly
@@ -452,6 +452,18 @@ const FIXTURES: readonly TableFixture[] = [
     { blob: BLOB_BASE, harness: 'claude-code', ordinal: 0, rawRef: '@base.md', target: 'base.md', line: 2 },
     { blob: BLOB_ALT, harness: PROBE_HARNESS, ordinal: 7, rawRef: String.raw`@alt\ doc.md#top`, target: 'alt doc.md', line: 12 },
   )),
+  fixture(
+    'skillTextFacts',
+    (builder, row) => builder.addSkillTextFacts(row),
+    { blob: BLOB_BASE, lineCount: 9, h1: 'Base', frontmatterFence: 'closed', matchCount: 0, held: true },
+    { blob: BLOB_ALT, lineCount: 19, h1: null, frontmatterFence: 'none', matchCount: 2, held: false },
+  ),
+  fixture(
+    'skillTextMatches',
+    (builder, row) => builder.addSkillTextMatch(row),
+    { blob: BLOB_BASE, ordinal: 0, family: 'timeSensitive', patternId: 'as-of-month', line: 3, matchText: 'as of March 2024', loneSurrogates: null },
+    { blob: BLOB_ALT, ordinal: 7, family: 'nonPortableCommand', patternId: 'sed-i-no-backup', line: 12, matchText: '\uFFFDsed -i x', loneSurrogates: [[0, 0xd8_3d]] },
+  ),
 ];
 
 /**

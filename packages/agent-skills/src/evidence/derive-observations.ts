@@ -7,6 +7,8 @@
  * wording.
  */
 
+import { EXTERNAL_CLI_BINARIES } from '@vibe-agent-toolkit/resources';
+
 import {
   detectInterpreter,
   extractMcpCommandFromMatchText,
@@ -22,18 +24,6 @@ export interface DeriveObservationsOptions {
   /** Subject label used in observation summaries. */
   subject: DerivationSubject;
 }
-
-/** External-CLI pattern IDs paired with their binary name. */
-export const EXTERNAL_CLI_BINARIES: ReadonlyArray<{ binary: string; patternId: string }> = [
-  { binary: 'az', patternId: 'EXTERNAL_CLI_AZ' },
-  { binary: 'aws', patternId: 'EXTERNAL_CLI_AWS' },
-  { binary: 'gcloud', patternId: 'EXTERNAL_CLI_GCLOUD' },
-  { binary: 'kubectl', patternId: 'EXTERNAL_CLI_KUBECTL' },
-  { binary: 'docker', patternId: 'EXTERNAL_CLI_DOCKER' },
-  { binary: 'terraform', patternId: 'EXTERNAL_CLI_TERRAFORM' },
-  { binary: 'gh', patternId: 'EXTERNAL_CLI_GH' },
-  { binary: 'op', patternId: 'EXTERNAL_CLI_OP' },
-];
 
 const BROWSER_AUTH_PATTERN_IDS: ReadonlySet<string> = new Set([
   'BROWSER_AUTH_MSAL_PYTHON_IMPORT',

@@ -718,7 +718,7 @@ const evictedByCell = new Map<string, readonly string[]>();
  * @param body - What to do with the open database
  * @returns What `body` returned
  */
-function withStore<T>(dirs: ArmDirs, body: (database: DatabaseSync) => T): T {
+function withStore<T>(dirs: Pick<ArmDirs, 'store'>, body: (database: DatabaseSync) => T): T {
   const [file, ...others] = storeFilesUnder(dirs.store);
   if (file === undefined || others.length > 0) throw new Error(`expected one projection store under ${dirs.store}`);
   const database = new DatabaseSync(file);
@@ -783,6 +783,68 @@ function evictBlobKeys(dirs: ArmDirs, evicted: readonly string[]): void {
     for (const key of evicted) expect(blobRowCounts(database, key), `evicted ${key}`).toEqual(none);
     expect(held.filter((key) => !accountedFor(database, key)), 'held keys the eviction reached').toEqual([]);
   });
+}
+
+/** The skill-text tables: the facts row a markdown blob needs, and its match rows. */
+const SKILL_TEXT_TABLES = [PROJECTION_TABLES.skillTextFacts, PROJECTION_TABLES.skillTextMatches] as const;
+
+/** Whether the store holds a key's skill-text record: its one `skill_text_facts` row. */
+function holdsSkillText(database: DatabaseSync, key: string): boolean {
+  const facts = quoteIdentifier(PROJECTION_TABLES.skillTextFacts.name);
+  return (database.prepare(`SELECT COUNT(*) AS n FROM ${facts} WHERE "blob" = ?`).get(key) as { n: number }).n > 0;
+}
+
+/**
+ * Delete the skill-text rows of every other key that has them, in sorted order, by raw
+ * SQL, and nothing else (a seed's plant, after a warm arm's prime): the key keeps its
+ * `blobs` row and every other blob fact, so the store still accounts for it and serves
+ * its resource facts, and only its skill-text record is gone. No verb re-derives it:
+ * the skills lane scans each file of such a key, as it does with no store.
+ *
+ * @param dirs - The primed cell, or any cache directory holding one store
+ * @param mustEvict - Keys deleted whatever their place in the order: a case the caller needs evicted
+ * @returns The keys whose skill-text rows were deleted
+ */
+export function evictHalfTheSkillText(dirs: Pick<ArmDirs, 'store'>, mustEvict: readonly string[]): string[] {
+  return withStore(dirs, (database) => {
+    const facts = quoteIdentifier(PROJECTION_TABLES.skillTextFacts.name);
+    const keys = (database.prepare(`SELECT "blob" AS key FROM ${facts} ORDER BY "blob"`).all() as { key: string }[]).map((row) => row.key);
+    expect(mustEvict.filter((key) => !keys.includes(key)), 'keys to evict that hold no skill-text record').toEqual([]);
+    const evicted = keys.filter((key, index) => index % 2 === 0 || mustEvict.includes(key));
+    expect(evicted.length, 'a skill-text eviction deletes a record').toBeGreaterThan(0);
+    expect(keys.length - evicted.length, 'a skill-text eviction holds a record back').toBeGreaterThan(0);
+    const others = (key: string): Record<string, number> => {
+      const counts = blobRowCounts(database, key);
+      for (const spec of SKILL_TEXT_TABLES) delete counts[spec.name];
+      return counts;
+    };
+    const before = evicted.map((key) => others(key));
+    database.exec('BEGIN IMMEDIATE');
+    for (const spec of SKILL_TEXT_TABLES) {
+      const statement = database.prepare(`DELETE FROM ${quoteIdentifier(spec.name)} WHERE "blob" = ?`);
+      for (const key of evicted) statement.run(key);
+    }
+    database.exec('COMMIT');
+    for (const key of evicted) expect(holdsSkillText(database, key), `skill text of ${key} deleted`).toBe(false);
+    expect(evicted.map((key) => others(key)), 'every other blob fact of an evicted key kept').toEqual(before);
+    expect(evicted.filter((key) => !accountedFor(database, key)), 'evicted keys still accounted for').toEqual([]);
+    return evicted;
+  });
+}
+
+/**
+ * Every keyed realization the cell's store holds, by path: the content key each file's
+ * bytes were filed under, read by raw SQL.
+ *
+ * @param dirs - A primed cell, or any cache directory holding one store
+ * @returns Root-relative path to its content key
+ */
+export function storedContentKeys(dirs: Pick<ArmDirs, 'store'>): Map<string, string> {
+  const realizations = quoteIdentifier(PROJECTION_TABLES.resourceRealizations.name);
+  const rows = withStore(dirs, (database) => database
+    .prepare(`SELECT DISTINCT "path", "contentKey" FROM ${realizations} WHERE "contentState" = 'keyed' ORDER BY "path"`)
+    .all() as unknown as Array<{ path: string; contentKey: string }>);
+  return new Map(rows.map((row) => [row.path, row.contentKey]));
 }
 
 /**
@@ -1472,7 +1534,9 @@ export const GATE_FIXTURE: Readonly<Record<string, string>> = {
   'docs/one.md': '---\ntitle: One\ntags: [alpha]\n---\n# One\n\nSee [two](./two.md#two) and [the page](./page.html).\n\n## Detail\n\nBack to [the guide](guide.md#guide).\n',
   'docs/two.md': '# Two\n\nA page with no links.\n',
   // A reference-style link with no definition: a `blob_conditions` row (a finding, not a refusal).
-  'docs/guide.md': '# Guide\n\nRead [one](./one.md#detail) and [the spec][spec-ref].\n',
+  // Its dated line is a skill-text match (`timeSensitive`), so `skill_text_matches` holds a row
+  // as every markdown blob's `skill_text_facts` does: no skill reads it, the parse records it.
+  'docs/guide.md': '# Guide\n\nRead [one](./one.md#detail) and [the spec][spec-ref].\n\nCurrent as of March 2024.\n',
   'docs/page.html': '<!DOCTYPE html>\n<html><head><title>Page</title></head><body><a href="one.md">one</a></body></html>\n',
   'CLAUDE.md': '# Corpus\n\nProject notes.\n\n@docs/guide.md\n',
   '.claude/rules/docs.md': '---\npaths: ["docs/**"]\n---\n# Docs rule\n\nKeep [the guide](../../docs/guide.md) current.\n',
@@ -1912,11 +1976,6 @@ export interface ReadFile {
 export interface HydrationFacts {
   /** The resources view's members: what the store-off reference's resources phase admitted. */
   readonly members: number;
-  /**
-   * The SKILL.md files the resources phase's skill discovery reads (`computeDeferredArtifacts`):
-   * the phase's one residual read while that discovery stays in the resources phase.
-   */
-  readonly discoveredSkills: readonly ReadFile[];
   /** The view's members whose content key was evicted from the blob tier, each with that key. */
   readonly evicted: ReadonlyArray<ReadFile & { readonly contentKey: string }>;
   /** Members the store refuses by size (`oversize`), each probed and never admitted. */
@@ -1928,7 +1987,9 @@ export interface HydrationFacts {
  * tier holds is admitted from the store: probed, never read, keyed or parsed. One whose
  * key was evicted is computed for that key alone: read, keyed, and parsed once per
  * distinct key (the dispatcher answers a second file of one key from its memo). The
- * discovered SKILL.md files are read and looked up once each, as the residual.
+ * phase's skill discovery (`computeDeferredArtifacts`) reads each SKILL.md's stored
+ * facts, so it adds nothing: a fixture whose skills the store cannot serve declares
+ * them, and holds their cost in its own suite.
  *
  * @param facts - The cell's facts
  * @returns The spend
@@ -1937,9 +1998,9 @@ export function hydratedSpend(facts: HydrationFacts): ResourcesPhaseSpend {
   const bytes = (files: readonly ReadFile[]): number => files.reduce((sum, file) => sum + file.bytes, 0);
   const evictedKeys = new Set(facts.evicted.map((file) => file.contentKey));
   return {
-    read: facts.discoveredSkills.length + facts.evicted.length,
-    hashedBytes: bytes(facts.discoveredSkills) + bytes(facts.evicted),
-    parseLookups: facts.discoveredSkills.length + evictedKeys.size,
+    read: facts.evicted.length,
+    hashedBytes: bytes(facts.evicted),
+    parseLookups: evictedKeys.size,
     admitted: facts.members,
     probed: facts.members - facts.evicted.length + facts.refusedFromStore,
   };
@@ -1973,8 +2034,6 @@ function hydrationFactsOf(run: RunRecord, members: number, inView: (path: string
   const evictedKeys = new Set(evictedByCell.get(dirs.root) ?? []);
   return {
     members,
-    // Every SKILL.md the population holds, as `work-counters-validate` counts every one in its corpus.
-    discoveredSkills: stored.filter((row) => row.contentState === 'keyed' && /(?:^|\/)SKILL\.md$/u.test(row.path)).map((row) => sized(row.path)),
     evicted: stored.flatMap((row) =>
       row.contentKey !== null && evictedKeys.has(row.contentKey) && inView(row.path) ? [{ ...sized(row.path), contentKey: row.contentKey }] : []),
     refusedFromStore: stored.filter((row) => row.contentState === 'oversize' && inView(row.path)).length,
@@ -2004,7 +2063,7 @@ function expectHydrated(result: DifferentialResult, inView: (path: string) => bo
   expect(evicted, 'evicted view members').toBeLessThan(members);
   expect(
     Object.fromEntries(HYDRATING_ARMS.map((arm) => [arm, resourcesPhaseSpend(run(arm).work)])),
-    'resources phase spend: reads, keys and parses only the discovered SKILL.md files (the residual) and the evicted view members; '
+    'resources phase spend: reads, keys and parses only the evicted view members; '
       + 'every other member admitted from the store (a probe each), none read',
   ).toEqual(Object.fromEntries(HYDRATING_ARMS.map((arm) => [arm, hydratedSpend(facts[arm] as HydrationFacts)])));
 }

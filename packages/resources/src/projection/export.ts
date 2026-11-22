@@ -5,7 +5,7 @@
  * This module emits rows. It does not index them, does not join them, does not
  * filter them, and accepts no query. Anything that reads like a query is a
  * lens's job, over the projection, and belongs nowhere near here — the whole
- * point of materialising fifteen flat tables is that the consumer chooses the
+ * point of materialising flat tables is that the consumer chooses the
  * engine (DuckDB, a JSON reader, a golden diff) rather than inheriting one.
  *
  * ## Two properties the emitted document must have
@@ -150,7 +150,7 @@ export class UnregisteredProjectionColumnError extends VatError {
  * order the emitter just imposed.
  *
  * @param projection - The projection to emit
- * @returns The document: fifteen primary-key-sorted tables, roots redacted
+ * @returns The document: every registry table, primary-key-sorted, roots redacted
  * @throws {UnregisteredProjectionColumnError} If a row carries a column the
  *   table registry does not declare
  */
@@ -172,6 +172,8 @@ export function exportProjection(projection: Projection): ProjectionDocument {
       blobConditions: emitTable(projection, 'blobConditions'),
       harnessBlobFacts: emitTable(projection, 'harnessBlobFacts'),
       harnessBlobImports: emitTable(projection, 'harnessBlobImports'),
+      skillTextFacts: emitTable(projection, 'skillTextFacts'),
+      skillTextMatches: emitTable(projection, 'skillTextMatches'),
     },
   };
 }

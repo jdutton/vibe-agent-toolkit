@@ -14,6 +14,8 @@ import { parseHtmlContent } from '../src/html-link-parser.js';
 import { type ParseResult, parseMarkdownContent } from '../src/link-parser.js';
 import type { DocumentParserKind } from '../src/mime-type.js';
 import type { ParsePool } from '../src/parse-pool.js';
+import { skillTextFactsOf } from '../src/skill-text/core.js';
+import { SKILL_TEXT_DECLARATION } from '../src/skill-text/declaration.js';
 
 /** What a fake pool observed about the way a lane drove it. */
 export interface PoolRecord {
@@ -61,13 +63,18 @@ export interface FakePoolBehaviour {
  * See {@link FakePoolBehaviour.emptyFacts}. Every required field is present and
  * every optional one absent, so a consumer that walks it behaves exactly as it
  * would for a document that genuinely had no links, headings or frontmatter.
+ * Its skill-text record is the core's real one (regex scans, no remark): the
+ * blob stage refuses a markdown parse without one, and a made-up record would
+ * be a fact the document does not have.
  *
  * @param content - The document's decoded content, carried through verbatim
  * @param sizeBytes - Its raw byte count, carried through verbatim
- * @returns Facts with nothing in them
+ * @param kind - The parser the request routed to
+ * @returns Facts with nothing in them but the skill-text record
  */
-function emptyParse(content: string, sizeBytes: number): ParseResult {
-  return { links: [], headings: [], content, sizeBytes, estimatedTokenCount: 0 };
+function emptyParse(content: string, sizeBytes: number, kind: DocumentParserKind): ParseResult {
+  const skillText = kind === 'markdown' ? skillTextFactsOf(content, SKILL_TEXT_DECLARATION) : null;
+  return { links: [], headings: [], content, sizeBytes, estimatedTokenCount: 0, skillText };
 }
 
 /** Milliseconds per step of the reversed-completion ladder. */
@@ -141,7 +148,7 @@ export function fakePool(
         );
         const failure = behaviour.failWith?.(content);
         if (failure !== undefined) throw failure;
-        if (behaviour.emptyFacts === true) return emptyParse(content, byteLength);
+        if (behaviour.emptyFacts === true) return emptyParse(content, byteLength, kind);
         return kind === 'html'
           ? parseHtmlContent(content, byteLength)
           : parseMarkdownContent(content, byteLength);

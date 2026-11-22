@@ -78,7 +78,7 @@ const CEILINGS: Readonly<Record<string, number>> = {
   'no-void': 1,
   'security/detect-child-process': 1,
   // `generate-tsconfig-refs.ts`: assembled from a module constant, never input.
-  'security/detect-non-literal-regexp': 19,
+  'security/detect-non-literal-regexp': 15,
   'security/detect-possible-timing-attacks': 1,
   'security/detect-unsafe-regex': 8,
   'sonarjs/cognitive-complexity': 2,
@@ -87,7 +87,6 @@ const CEILINGS: Readonly<Record<string, number>> = {
   'sonarjs/function-return-type': 2,
   'sonarjs/no-alphabetical-sort': 1,
   'sonarjs/no-nested-functions': 1,
-  'sonarjs/no-os-command-from-path': 1,
   'sonarjs/regex-complexity': 1,
   'sonarjs/void-use': 1,
   'unicorn/prefer-structured-clone': 4,

@@ -10,7 +10,7 @@
  * 1. Every `base` contributor runs **once**. What git tracks, what is on disk,
  *    what a package manifest declares — none of it depends on what another
  *    contributor found, so a second pass could only re-derive the same rows.
- * 2. {@link populateBlobs} derives the four blob-keyed tables from the content
+ * 2. {@link populateBlobs} derives the blob-keyed tables from the content
  *    keys the base recorded. Not a contributor — it declares no extent — but
  *    the position is forced: the base is what produces `contentKey` columns and
  *    the closure stratum is what *reads* `blob_references`. Without it every
@@ -162,13 +162,13 @@ const BASE_STRATUM_PASS = 1;
 const DEFAULT_MAX_ITERATIONS = 8;
 
 /**
- * Parse the content of every distinct keyed path, deriving the four blob-keyed
+ * Parse the content of every distinct keyed path, deriving the blob-keyed
  * tables from it — {@link PopulateOptions.contentParsing}'s default.
  */
 export const CONTENT_PARSING_DERIVE = 'derive';
 
 /**
- * Read and parse nothing, leaving the four blob-keyed tables empty — only sound
+ * Read and parse nothing, leaving the blob-keyed tables empty — only sound
  * when nothing reads them.
  */
 export const CONTENT_PARSING_SKIP = 'skip';
@@ -222,8 +222,9 @@ export interface PopulateOptions {
    * ## What is and is not gated
    *
    * Gated: the blob-derivation stage — one read-and-parse of **every distinct
-   * keyed path**, and the four blob-keyed tables (`blobs`, `blob_references`,
-   * `blob_sections`, `blob_conditions`) derived from it; the store's blob tier
+   * keyed path**, and the blob-keyed tables (`blobs`, `blob_references`,
+   * `blob_sections`, `blob_conditions`, `skill_text_facts`, `skill_text_matches`)
+   * derived from it; the store's blob tier
    * on both the read-back and write-back paths; and the post-fixpoint re-run
    * that would pick up a demand promotion.
    *
@@ -249,7 +250,7 @@ export interface PopulateOptions {
    * can see which registered contributors read them
    * ({@link ContributorRegistry.blobReaders}); it cannot see what the CALLER
    * does with the returned `Projection`. Inferring `'skip'` from "no registered
-   * blob reader" would silently empty four tables under a caller that queries
+   * blob reader" would silently empty those tables under a caller that queries
    * them — token estimates and section trees are exactly the sort of thing a
    * lens reads with no contributor involved.
    *
@@ -999,7 +1000,7 @@ async function readCachedProjection(
   if (extent === undefined) return NOTHING_HELD;
 
   // A run that declined to derive the blob tier must also decline to read it
-  // back, or a hit would hand it four tables a populate would have left empty
+  // back, or a hit would hand it blob tables a populate would have left empty
   // — and `'skip'` is a claim about what the caller reads, so honouring it on
   // both paths is what keeps hydrated and populated indistinguishable.
   if (!parseContent) return { hit: assembleProjection(extent, emptyBlobRows()) };
@@ -1187,7 +1188,7 @@ function unlistableRowsStillHold(conditions: readonly RealizationConditionRow[],
  * fails the coverage check, and re-derives a corpus that was moments from being
  * complete.
  *
- * `writeBlobFacts` is skipped rather than called with four empty tables when the
+ * `writeBlobFacts` is skipped rather than called with every table empty when the
  * run derived none — the call would be a no-op, but skipping it keeps "this run
  * had nothing to say about blobs" distinguishable from "it said there are none"
  * in anything that watches the store.

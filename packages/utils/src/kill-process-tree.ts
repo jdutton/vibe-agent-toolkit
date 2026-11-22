@@ -1,6 +1,29 @@
 import { spawnSync } from 'node:child_process';
 
 import { isProcessGoneError } from './errors/errno-table.js';
+import { safePath } from './path-core.js';
+
+/**
+ * The absolute path of Windows' `taskkill.exe`: `%SystemRoot%\System32\taskkill.exe`.
+ *
+ * A bare `taskkill` resolves through PATH, so any directory ahead of System32 there could supply a
+ * stand-in. SystemRoot is set by Windows for every process; when it is missing or empty this
+ * refuses, naming the variable, rather than fall back to the PATH lookup it exists to avoid.
+ * Pure: it only computes the path, so it answers on any host.
+ *
+ * @param env - The environment to read SystemRoot from (`process.env` for a real kill)
+ * @returns `<SystemRoot>/System32/taskkill.exe`, forward slashes
+ * @throws Error naming SystemRoot when it is missing or empty
+ */
+export function windowsTaskkillPath(env: NodeJS.ProcessEnv): string {
+  const systemRoot = env['SystemRoot'];
+  if (systemRoot === undefined || systemRoot === '') {
+    throw new Error(
+      'Cannot locate taskkill.exe: the SystemRoot environment variable is not set. Refusing to look taskkill up through PATH.',
+    );
+  }
+  return safePath.join(systemRoot, 'System32', 'taskkill.exe');
+}
 
 /** A spawned child, as {@link killProcessTree} needs it. */
 export interface KillableChild {
@@ -28,7 +51,7 @@ export interface KillProcessTreeOptions {
  * SIGKILL a child and every process it started — the ONE way VAT kills a process tree.
  *
  * - **POSIX**: the child's process group when it leads one (`groupLeader`), else its pid.
- * - **Windows**: `taskkill /T /F`, which terminates the child and its whole tree. Windows has no
+ * - **Windows**: `taskkill /T /F` (by its {@link windowsTaskkillPath}), which terminates the child and its whole tree. Windows has no
  *   process groups, and `child.kill` there is `TerminateProcess` of the child alone.
  * - A child with no pid (never spawned) has nothing to kill. A kill whose target is already gone
  *   ({@link isProcessGoneError}) is absorbed; anything else the kill throws stays loud — a reaper
@@ -50,8 +73,7 @@ export function killProcessTree(child: KillableChild, options: KillProcessTreeOp
   const { pid } = child;
   if (pid !== undefined) {
     if (process.platform === 'win32') {
-      // eslint-disable-next-line sonarjs/no-os-command-from-path -- taskkill is a fixed Windows system command (no PATH-injection surface); it is the only way to terminate a Windows process tree.
-      spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      spawnSync(windowsTaskkillPath(process.env), ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
     } else {
       killAbsorbingGone(options.groupLeader ? -pid : pid);
     }

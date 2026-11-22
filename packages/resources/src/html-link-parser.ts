@@ -535,6 +535,8 @@ export function parseHtmlContent(content: string, sizeBytes: number): ParseResul
     sizeBytes,
     estimatedTokenCount,
     contentMeasures,
+    // The skill-text core reads markdown only: an HTML document has no record.
+    skillText: null,
     ...(anchorList.length > 0 && { anchors: anchorList }),
     ...(parseErrors.length > 0 && { parseErrors }),
   };

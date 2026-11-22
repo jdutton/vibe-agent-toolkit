@@ -266,13 +266,13 @@ export async function reviewCommand(
     // wrong rules at exit 0. The throw lands in the catch below → a refusal
     // (`CONFIG_INVALID` for a broken config, `INPUT_UNREADABLE` for a refused
     // listing), exit 2.
-    const packagingConfig = (await resolveSkillPackagingConfig(skillPath, 'refuse')) ?? undefined;
+    const packagingConfig = (await resolveSkillPackagingConfig(skillPath, 'refuse', undefined)) ?? undefined;
     // Project-wide test input: a review of skill A must not count skill B's eval
     // suite as content A ships. Memoized per config root; `[]` in wild mode.
-    const projectSkills = await resolveProjectDeclaredEvalSuites(skillPath, 'refuse');
+    const projectSkills = await resolveProjectDeclaredEvalSuites(skillPath, 'refuse', undefined);
     // One run for the review, rooted at the project when there is one and at the
     // skill's own directory when there is none.
-    const result = await withRunContext({ root: projectRoot ?? dirname(skillPath), homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
+    const result = await withRunContext({ projectionStore: 'on-demand', root: projectRoot ?? dirname(skillPath), outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
       validateSkillForPackaging(skillPath, resolveProjectResourcesValidation(skillPath), packagingConfig, 'source', {
         projectSkills,
         registries: runSkillRegistries(run),

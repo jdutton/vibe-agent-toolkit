@@ -11,6 +11,7 @@
  * repository holds none.
  */
 
+import { DEFAULT_PARSE_LIMITS } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -26,13 +27,8 @@ import {
 /** The rule the worker refuses. */
 const REFUSED_RULE = '.claude/rules/scoped.md';
 
-/**
- * One import more than the default `outputRows` cap (16,384) allows a single
- * read to produce. A literal because the resolver is not public API; if the
- * default ever rises, the rule is read in full and every assertion below goes
- * RED — the literal cannot make this test pass vacuously.
- */
-const PAST_THE_CAP = Array.from({ length: 16_385 }, (_, index) => `@a${index}.md`).join('\n');
+/** One import more than the default `outputRows` cap (`DEFAULT_PARSE_LIMITS.outputRows`) allows a single read to produce. */
+const PAST_THE_CAP = Array.from({ length: DEFAULT_PARSE_LIMITS.outputRows + 1 }, (_, index) => `@a${index}.md`).join('\n');
 
 let scratch: string;
 let tree: string;

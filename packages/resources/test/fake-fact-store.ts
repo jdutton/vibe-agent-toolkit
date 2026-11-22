@@ -65,6 +65,8 @@ const BLOB_KEY_COLUMNS: Readonly<Record<string, string>> = {
   blobConditions: BLOB_COLUMN,
   harnessBlobFacts: BLOB_COLUMN,
   harnessBlobImports: BLOB_COLUMN,
+  skillTextFacts: BLOB_COLUMN,
+  skillTextMatches: BLOB_COLUMN,
 };
 
 /**
@@ -127,7 +129,7 @@ function withPartitionsOf(held: RowBundle, incoming: RowBundle): RowBundle {
 /**
  * An empty blob bundle, one array per blob-scoped table.
  *
- * @returns Four empty tables
+ * @returns One empty array per blob-scoped table
  */
 function emptyBlobBundle(): RowBundle {
   const bundle: RowBundle = {};
@@ -164,6 +166,23 @@ export class FakeFactStore implements FactStore {
   readonly #blobs = new Map<string, RowBundle>();
 
   /**
+   * A store holding what this one holds, with every counter at zero: one warm
+   * store filed once, and a copy per case that writes or evicts in its own.
+   *
+   * The maps are copied and the bundles shared: nothing here changes a held
+   * bundle in place (a write files a new one, an eviction deletes the entry), so
+   * no change to the copy reaches this store.
+   *
+   * @returns The copy
+   */
+  copy(): FakeFactStore {
+    const copy = new FakeFactStore();
+    for (const [key, rows] of this.#extents) copy.#extents.set(key, rows);
+    for (const [key, bundle] of this.#blobs) copy.#blobs.set(key, bundle);
+    return copy;
+  }
+
+  /**
    * Record blob facts, idempotently.
    *
    * A key the double already holds is left alone, matching the interface's own
@@ -174,7 +193,7 @@ export class FakeFactStore implements FactStore {
    * those are written per `(blob, partition)`, as the interface requires — see
    * {@link withPartitionsOf}.
    *
-   * @param rows - The four blob-scoped tables
+   * @param rows - The blob-scoped tables
    */
   writeBlobFacts(rows: BlobScopedRows): Promise<void> {
     this.writeBlobFactsCalls++;

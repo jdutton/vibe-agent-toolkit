@@ -612,7 +612,7 @@ async function validateConfiguredSkills(
   // make. A directory the OS will not list is refused by code (INPUT_UNREADABLE).
   // A SKILL.md the parse worker refused has no name to key its config by: it is
   // reported through the not-admitted contract below, never validated under a guess.
-  const { skills: discovered, parseRefused } = await discoverSkillsFromConfig(skillsConfig, cwd, 'refuse', run.dispatcher);
+  const { skills: discovered, parseRefused } = await discoverSkillsFromConfig(skillsConfig, cwd, 'refuse', run.population);
 
   // No early return on `discovered.length === 0`: the empty batch flows through
   // every step below unchanged — the shared context is built for zero skills

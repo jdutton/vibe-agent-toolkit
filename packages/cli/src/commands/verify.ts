@@ -23,8 +23,9 @@ import {
   indexPluginLocalSkills,
   type PluginLocalSkillIndex,
   type SkillPackagingConfig,
+  type SkillTextRun,
 } from '@vibe-agent-toolkit/agent-skills';
-import type { ParseDispatcher, ProjectConfig } from '@vibe-agent-toolkit/resources';
+import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
 import {
   buildReport,
   toFindings,
@@ -933,8 +934,8 @@ async function runInProcessPhases(run: {
   /** `--verbose`: whether each phase's warning and info findings reach stderr. */
   verbose: boolean;
   results: PhaseResult[];
-  /** The run's dispatcher, so discovery reads no SKILL.md the source phases already read. */
-  dispatcher: ParseDispatcher;
+  /** The run's population, so discovery reads no SKILL.md the store holds or the source phases already read. */
+  population: SkillTextRun;
 }): Promise<void> {
   const { phases, config, projectRoot, logger, verbose, results } = run;
   // ONE discovery for the whole in-process half of the run: every phase below
@@ -943,11 +944,11 @@ async function runInProcessPhases(run: {
   // command exists to refuse (a SKILL.md whose parse was refused has no name to
   // check by, so it refuses too) — the throw is the run's refusal, published
   // with the phases that already finished.
-  const discoveredSkills = namedSkillsOrRefuse(await discoverSkillsFromConfig(run.skills, projectRoot, 'refuse', run.dispatcher), projectRoot);
+  const discoveredSkills = namedSkillsOrRefuse(await discoverSkillsFromConfig(run.skills, projectRoot, 'refuse', run.population), projectRoot);
   // ONE plugin-local index likewise, and the declared name of each plugin-local
   // skill, which keys its config exactly as the plugin build keyed it.
   const pluginLocal = indexPluginLocalSkills(config, projectRoot);
-  const pluginLocalNames = await readPluginLocalSkillNames(pluginLocal, projectRoot, run.dispatcher);
+  const pluginLocalNames = await readPluginLocalSkillNames(pluginLocal, projectRoot, run.population);
 
   if (phases.includes(FILES_CONFIG_DESTS)) {
     results.push(await inProcess(IN_PROCESS_PHASES[FILES_CONFIG_DESTS], () =>
@@ -984,7 +985,7 @@ async function verifyTopLevelCommand(
     const projectRoot = requireProjectRoot(process.cwd(), COMMAND_NAME);
     const { config, error: configError } = loadConfigTolerant(projectRoot);
     // One run for every phase: each file read, keyed, parsed and admitted once.
-    await withRunContext({ root: projectRoot, homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (context) => {
+    await withRunContext({ projectionStore: 'on-demand', root: projectRoot, outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (context) => {
       const phases = applyPhaseSelection(selectVerifyPhases(config, context, configError, options.verbose), logger);
 
       // Announced from the same list the in-process gates below read, so the
@@ -1009,7 +1010,7 @@ async function verifyTopLevelCommand(
           logger,
           verbose: options.verbose === true,
           results,
-          dispatcher: context.dispatcher,
+          population: context.population,
         });
       }
     });

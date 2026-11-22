@@ -1016,7 +1016,7 @@ async function buildInto(input: SkillBuildRunInput, target: BuildTarget, staged:
   // them is the run's destination, never its input.
   const outputs = [target.dest, staged, ...input.runOutputs];
 
-  const outcomes = await withRunContext({ root: cwd, homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
+  const outcomes = await withRunContext({ projectionStore: 'on-demand', root: cwd, outputs, homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
     const registries = runSkillRegistries(run);
     // In order: shared registries, suite probe and logger; failures listed in spec order.
     await forEachInOrder(specs, async (spec) => {

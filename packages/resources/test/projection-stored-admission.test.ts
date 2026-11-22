@@ -78,7 +78,7 @@ describe('readRoute: what the tier\'s answer means', () => {
   const facts = (): BlobResourceFacts => ({ contentKey: MARKDOWN_KEY, links: [], headings: [], frontmatter: { id: 'a' } } as unknown as BlobResourceFacts);
 
   it('admits the stored facts once probed, deep-frozen as the cold lane\'s parse is', () => {
-    const route = readRoute({ kind: 'facts', facts: facts() });
+    const route = readRoute({ kind: 'facts', facts: facts(), decoding: { encoding: 'utf-8', encodingSource: 'assumed' } });
     expect(route).toEqual({ kind: 'probe', admitted: { kind: 'facts', facts: facts() } });
     const admitted = route.kind === 'probe' && route.admitted.kind === 'facts' ? route.admitted.facts : undefined;
     expect(Object.isFrozen(admitted)).toBe(true);

@@ -10,6 +10,7 @@
  * | `links`, `anchors`, `frontmatterSource` (spans-and-kinds) | `estimatedTokenCount` |
  * | flat headings (structure) | `unresolvedReferences`, `lexicalReferences` |
  * | | `contentMeasures`, `frontmatter`, `frontmatterError` |
+ * | | `skillText` (the skill-text core, `skill-text/core.ts`) |
  * | | heading slugs and the heading tree |
  *
  * Also defines the format-neutral `ParseResult` contract shared with the HTML
@@ -38,6 +39,9 @@ import { codeContextRangesFrom, findLexicalReferences } from './reference-lexer.
 import { remarkParser } from './remark-parser.js';
 import type { ContentMeasures, LexicalReference } from './schemas/parse-facts.js';
 import type { HtmlParseError } from './schemas/resource-metadata.js';
+import type { SkillTextFacts } from './schemas/skill-text-facts.js';
+import { skillTextFactsOf } from './skill-text/core.js';
+import { SKILL_TEXT_DECLARATION } from './skill-text/declaration.js';
 import type { HeadingNode, ResourceLink, UnresolvedReference } from './types.js';
 import { findUnresolvedReferences } from './unresolved-references.js';
 
@@ -117,6 +121,20 @@ export interface ParseResult {
    * say here.
    */
   contentMeasures?: ContentMeasures;
+  /**
+   * The skill-text facts of the document (`skill-text/core.ts`): what the
+   * skills-phase detectors match in its text, computed over `content` itself —
+   * the one string the skills lane scans (a SKILL.md's parse `content`, a
+   * bundled file's run read), so a stored record and a cold scan are of the same
+   * text.
+   *
+   * REQUIRED on every parse, never an optional key: a markdown parse always
+   * carries the record, and every other producer (HTML, a blob with no parser,
+   * a blob that is not text) says `null`. The parse cache refuses a markdown
+   * entry without one and any other entry with one (`parse-cache.ts`), so a
+   * markdown parse served from anywhere carries it.
+   */
+  skillText: SkillTextFacts | null;
 }
 
 /**
@@ -209,6 +227,12 @@ export function parseMarkdownContent(
   const contentMeasures = measureContent(content, ranges.fences);
   recordParsePass(ParsePass.MeasureContent, passStartedAt);
 
+  // Over `content` itself — the string the skills lane scans — never a
+  // normalized copy: the core derives the frontmatter parser's body on its own.
+  passStartedAt = parseTimingStart();
+  const skillText = skillTextFactsOf(content, SKILL_TEXT_DECLARATION);
+  recordParsePass(ParsePass.SkillText, passStartedAt);
+
   // The decode is `parseFrontmatterSource`'s, the one decode of a block. In the
   // parse worker it runs under the worker's stack limit; a cache hit and the
   // parent never re-run it — they rebuild the mapping from the worker's encoding.
@@ -230,6 +254,7 @@ export function parseMarkdownContent(
     ...(frontmatterNotAMapping === true && { frontmatterNotAMapping }),
     ...(frontmatterSource !== undefined && { frontmatterSource }),
     contentMeasures,
+    skillText,
     content,
     sizeBytes,
     estimatedTokenCount,

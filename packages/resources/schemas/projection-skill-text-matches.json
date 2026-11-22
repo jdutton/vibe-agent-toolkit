@@ -1,0 +1,128 @@
+{
+  "$ref": "#/definitions/projection-skill-text-matches",
+  "definitions": {
+    "projection-skill-text-matches": {
+      "type": "object",
+      "properties": {
+        "blob": {
+          "type": "string",
+          "pattern": "^(?:markdown|html|none)\\.[0-9a-f]{64}$",
+          "description": "Foreign key to blobs.contentKey"
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based emission order across every family: families in declaration order, each family's matches in the order its detector reports them"
+        },
+        "family": {
+          "type": "string",
+          "enum": [
+            "timeSensitive",
+            "nonPortableAsset",
+            "nonPortableCommand",
+            "mcpUnqualified",
+            "crossSkillAuth",
+            "crossSkillAuthBody",
+            "imperativeBody",
+            "compatAllowedToolsKey",
+            "compatProseTool",
+            "compatFencedShell",
+            "compatExternalCli",
+            "compatBrowserAuth"
+          ],
+          "description": "The detector family that matched; a \"*Body\" family scanned the frontmatter parser's body rather than the whole text"
+        },
+        "patternId": {
+          "type": "string",
+          "enum": [
+            "as-of-month",
+            "after-month",
+            "before-month",
+            "until-month",
+            "as-of-year-month",
+            "claude-plugin-root",
+            "claude-project-dir",
+            "claude-skill-dir",
+            "api-skill-mount",
+            "absolute-script-path",
+            "timeout",
+            "grep-pcre",
+            "sed-i-no-backup",
+            "readlink-f",
+            "date-d",
+            "mcp-code-span",
+            "sibling-skill-ref",
+            "anthropic-env-key",
+            "second-person-opener",
+            "allowed-tools-key",
+            "PROSE_LOCAL_SHELL_TOOL_REFERENCE",
+            "FENCED_SHELL_BLOCK",
+            "EXTERNAL_CLI_AZ",
+            "EXTERNAL_CLI_AWS",
+            "EXTERNAL_CLI_GCLOUD",
+            "EXTERNAL_CLI_KUBECTL",
+            "EXTERNAL_CLI_DOCKER",
+            "EXTERNAL_CLI_TERRAFORM",
+            "EXTERNAL_CLI_GH",
+            "EXTERNAL_CLI_OP",
+            "BROWSER_AUTH_MSAL_PYTHON_IMPORT",
+            "BROWSER_AUTH_MSAL_JS_IMPORT",
+            "BROWSER_AUTH_AZ_LOGIN",
+            "BROWSER_AUTH_GCLOUD_LOGIN",
+            "BROWSER_AUTH_AWS_SSO_LOGIN",
+            "BROWSER_AUTH_WEBBROWSER_OPEN"
+          ],
+          "description": "Which of the family's declared patterns matched"
+        },
+        "line": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "1-based line in the string the family scans: the whole text, or the frontmatter parser's body for a \"*Body\" family"
+        },
+        "matchText": {
+          "type": "string",
+          "description": "What matched, raw (the skills lane trims, truncates or formats it as its message does), well-formed: a lone surrogate the match held (a sample cut inside a surrogate pair) is U+FFFD here and recorded in loneSurrogates"
+        },
+        "loneSurrogates": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "items": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": 55296,
+                    "maximum": 57343
+                  }
+                ]
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The lone surrogates matchText held before it was made well-formed, as [code-unit index, code unit] pairs in index order, or null when it held none: the reader puts each back, so the record is the one the core computed"
+        }
+      },
+      "required": [
+        "blob",
+        "ordinal",
+        "family",
+        "patternId",
+        "line",
+        "matchText",
+        "loneSurrogates"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the blob-keyed `skill_text_matches` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

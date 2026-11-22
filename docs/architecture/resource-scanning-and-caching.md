@@ -884,11 +884,11 @@ checks. The same window already existed from the turn onward; it opens earlier.
   and V8 runs a major collection then, but an overlapped parent never idles there. That difference
   is collection timing, not demand. On the adopter, warm store, overlapped, 5 runs each with
   `NODE_OPTIONS=--max-old-space-size` set to the sequential base parent's peak (MiB): Node 24,
-  cap 889, parent peak 775-799 MiB against 1221-1234 uncapped and 883-889 for base, wall
-  5.64-6.75 s against 5.64-6.58 uncapped; Node 26, cap 825, parent peak 674-683 MiB against
-  997-1031 uncapped and 823-825 for base, wall 5.57-5.71 s against 5.44-5.65 uncapped. No run ran
-  out of memory, and stdout was byte-identical across capped and uncapped runs once timing fields
-  were removed. Judge the parent's memory under such a cap, not by its uncapped peak.
+  cap 850, parent peak 811-836 MiB against 1195-1196 uncapped and 848-850 for base, wall
+  5.19-5.23 s against 5.09-5.26 uncapped; Node 26, cap 783, parent peak 715-797 MiB against
+  918-1056 uncapped and 759-783 for base, wall 5.36-5.96 s against 5.33-5.93 uncapped. No run ran
+  out of memory, and stdout was byte-identical across capped, uncapped and base runs once timing
+  fields were removed. Judge the parent's memory under such a cap, not by its uncapped peak.
 - `os.availableParallelism()` honours CPU affinity and a cgroup quota, not CPU shares. A container
   limited by shares alone overlaps on less CPU than it sees. On a 2-core runner the parse pool and
   the child share two cores.

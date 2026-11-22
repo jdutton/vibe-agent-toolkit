@@ -53,8 +53,11 @@
  * that would otherwise be skipped.
  */
 
+import { readdirSync } from 'node:fs';
+
 import { resolveFromImportMeta } from '@vibe-agent-toolkit/utils';
 import localRules from '@vibe-agent-toolkit/utils/eslint';
+import { toForwardSlash } from '@vibe-agent-toolkit/utils/path';
 import { ESLint } from 'eslint';
 import { describe, expect, it } from 'vitest';
 
@@ -130,6 +133,9 @@ const PROBE_FILES: Readonly<Record<string, string>> = {
   'no-text-git-object-read': 'packages/agent-skills/src/skill-source/git-clone.ts',
   // Scoped to product `src/`; the probe appends a walk through `appendAll`.
   'no-spread-push': 'packages/agent-skills/src/post-build-checks.ts',
+  // Scoped to the skill-text directory by glob, the declaration aside; the core is the probe,
+  // and the scope itself is held both ways below.
+  'skill-text-core-purity': 'packages/resources/src/skill-text/core.ts',
 };
 
 /** `error` as ESLint normalizes it out of `calculateConfigForFile`. */
@@ -178,6 +184,33 @@ describe('local ESLint rules excluded from `recommended` are enabled in this rep
         + 'eslint.config.js turns it on — `configs.recommended` excludes it — so if '
         + 'that line is gone, the rule is dead everywhere and nothing else notices.',
     ).toBe(ERROR);
+  });
+});
+
+/** The purity rule's severity for one repository path, or `undefined` when it is not configured there. */
+async function puritySeverityAt(eslint: ESLint, relative: string): Promise<unknown> {
+  const config = await eslint.calculateConfigForFile(`${REPO_ROOT}/${relative}`);
+  return config.rules?.['local/skill-text-core-purity']?.[0];
+}
+
+describe('`local/skill-text-core-purity` governs the skill-text directory by glob, the declaration aside', () => {
+  const directory = 'packages/resources/src/skill-text';
+  const declaration = `${directory}/declaration.ts`;
+  const eslint = new ESLint({ cwd: REPO_ROOT });
+
+  it('holds every module there but the declaration, and a module not yet written', async () => {
+    const modules = readdirSync(`${REPO_ROOT}/${directory}`, { recursive: true, encoding: 'utf-8' })
+      .filter((name) => name.endsWith('.ts'))
+      .map((name) => `${directory}/${toForwardSlash(name)}`)
+      .filter((path) => path !== declaration);
+    expect(modules.length, 'the directory must hold modules other than the declaration').toBeGreaterThan(1);
+    for (const path of [...modules, `${directory}/a-helper-not-yet-written.ts`, `${directory}/nested/helper.ts`]) {
+      expect(await puritySeverityAt(eslint, path), path).toBe(ERROR);
+    }
+  });
+
+  it('does not hold the declaration, which is where every pattern and constant lives', async () => {
+    expect(await puritySeverityAt(eslint, declaration)).toBeUndefined();
   });
 });
 

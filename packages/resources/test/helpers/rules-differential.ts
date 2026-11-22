@@ -70,6 +70,7 @@
  */
 
 import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { seededRandom } from '@vibe-agent-toolkit/utils/testing';
 import ignore from 'ignore';
 
 import {
@@ -117,18 +118,6 @@ const ROOT_IGNORE_LINES = ['dist/', '/dist/', 'dist', 'pkg/dist/', '/pkg/dist/',
 /** Lines the nested project's own `.gitignore` draws from, relative to it. */
 const NESTED_IGNORE_LINES = ['/dist', 'dist/', '*.js', '/sub/', 'a.md', '!keep.md'];
 
-/** mulberry32 — a tiny seeded PRNG, so every case is reproducible from its seed. */
-function prng(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6d_2b_79_f5) >>> 0;
-    let mixed = state;
-    mixed = Math.imul(mixed ^ (mixed >>> 15), mixed | 1);
-    mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), mixed | 61);
-    return ((mixed ^ (mixed >>> 14)) >>> 0) / 4_294_967_296;
-  };
-}
-
 function pick<T>(random: () => number, items: readonly T[]): T {
   const item = items[Math.floor(random() * items.length)];
   if (item === undefined) throw new Error('pick from an empty list');
@@ -165,7 +154,7 @@ function generatedGitignores(random: () => number, nested: boolean): GitignoreFi
 }
 
 function generatedCase(seed: number): DifferentialCase {
-  const random = prng(seed);
+  const random = seededRandom(seed);
   const nested = random() < 0.35;
   // Skewed small: most interactions need only a handful of files, and a small
   // tree is cheap, so more cases fit the unit budget. The tail still reaches 30.

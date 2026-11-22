@@ -13,15 +13,30 @@ import { describe, expect, it } from 'vitest';
 
 import { parseHtmlContent } from '../src/html-link-parser.js';
 import { parseMarkdownContent, type ParseResult } from '../src/link-parser.js';
-import { blobConditionsFor, blobRowFor } from '../src/projection/blob-facts.js';
+import { blobConditionsFor, blobRowFor, skillTextRowsFor } from '../src/projection/blob-facts.js';
 import { BLOB_NOT_TEXT, BLOB_PARSE_FAILED } from '../src/projection/blob-population.js';
 import { blobReferencesFor } from '../src/projection/blob-references.js';
 import { blobFactsReader, type BlobFactsOutcome } from '../src/projection/blob-resource-facts.js';
 import { blobSectionsFor } from '../src/projection/blob-sections.js';
 import type { BlobScopedRows } from '../src/projection/store.js';
+import { skillTextFactsOf } from '../src/skill-text/core.js';
+import { SKILL_TEXT_DECLARATION } from '../src/skill-text/declaration.js';
 
 const CONTENT_KEY = `markdown.${'c'.repeat(64)}`;
 const DOC = '# Title\n\nSee [a](./a.md) and [x][missing].\n\n## Next\n';
+
+/** A document the skill-text core matches more than once, across two families. */
+const SKILL_DOC = '# Skill\n\nData as of March 2024.\n\nRun `sed -i x` here.\n\n${CLAUDE_PLUGIN_ROOT}/scripts/a.sh\n';
+const SKILL_KEY = `markdown.${'5'.repeat(64)}`;
+
+/**
+ * The rows the blob lane writes for {@link SKILL_DOC}.
+ *
+ * @returns Every blob-scoped table, harness tables empty
+ */
+function rowsOfSkillDoc(): BlobScopedRows {
+  return rowsOf(SKILL_KEY, SKILL_DOC, parseMarkdownContent(SKILL_DOC, SKILL_DOC.length));
+}
 
 /**
  * The rows the blob lane writes for {@link DOC}.
@@ -41,6 +56,7 @@ function rowsOfDoc(): BlobScopedRows {
  * @returns Every blob-scoped table, harness tables empty
  */
 function rowsOf(contentKey: string, source: string, parsed: ParseResult): BlobScopedRows {
+  const skillText = parsed.skillText === null ? undefined : skillTextRowsFor(contentKey, parsed.skillText);
   return {
     blobs: [blobRowFor(contentKey, source.length, { encoding: 'utf-8', encodingSource: 'assumed', replacementCharacters: 0 }, parsed)],
     blobReferences: blobReferencesFor(contentKey, parsed),
@@ -48,6 +64,8 @@ function rowsOf(contentKey: string, source: string, parsed: ParseResult): BlobSc
     blobConditions: blobConditionsFor(contentKey, parsed),
     harnessBlobFacts: [],
     harnessBlobImports: [],
+    skillTextFacts: skillText === undefined ? [] : [skillText.facts],
+    skillTextMatches: skillText?.matches ?? [],
   };
 }
 
@@ -79,7 +97,8 @@ describe('blobFactsReader', () => {
   it('answers a key by its rows: every row filed under it is read, none for a key it does not hold', () => {
     const rows = rowsOfDoc();
     const reader = blobFactsReader(rows);
-    const held = 1 + rows.blobReferences.length + rows.blobSections.length + rows.blobConditions.length;
+    const held = 1 + rows.blobReferences.length + rows.blobSections.length + rows.blobConditions.length
+      + rows.skillTextFacts.length + rows.skillTextMatches.length;
     expect(reader.answer(CONTENT_KEY)).toEqual({ kind: 'facts', rowsRead: held });
     expect(reader.answer(`markdown.${'d'.repeat(64)}`)).toEqual({ kind: 'uncovered', rowsRead: 0 });
   });
@@ -93,6 +112,8 @@ describe('blobFactsReader', () => {
       blobConditions: [{ blob: refusedKey, code: BLOB_PARSE_FAILED, ordinal: 0, severity: 'warning', message: 'the parse failed', line: null }],
       harnessBlobFacts: [],
       harnessBlobImports: [],
+      skillTextFacts: [],
+      skillTextMatches: [],
     })(refusedKey);
     expect(outcome.kind).toBe('not-admitted');
   });
@@ -107,6 +128,13 @@ describe('blobFactsReader', () => {
     expect(outcome.kind === 'facts' && outcome.facts.contentKey).toBe(CONTENT_KEY);
   });
 
+  it('carries the blobs row\'s encoding and encodingSource as the decoding', () => {
+    const rows = rowsOfDoc();
+    expect(agreedReader(rows)(CONTENT_KEY)).toMatchObject({ kind: 'facts', decoding: { encoding: 'utf-8', encodingSource: 'assumed' } });
+    const blobs = rows.blobs.map((row) => ({ ...row, encoding: 'utf-16le' as const, encodingSource: 'bom' as const }));
+    expect(agreedReader({ ...rows, blobs })(CONTENT_KEY)).toMatchObject({ kind: 'facts', decoding: { encoding: 'utf-16le', encodingSource: 'bom' } });
+  });
+
   it('carries the key of a not-text blob, which has no blobs row', () => {
     const notTextKey = `markdown.${'f'.repeat(64)}`;
     const outcome = agreedReader({
@@ -116,8 +144,11 @@ describe('blobFactsReader', () => {
       blobConditions: [{ blob: notTextKey, code: BLOB_NOT_TEXT, ordinal: 0, severity: 'warning', message: 'not text', line: null }],
       harnessBlobFacts: [],
       harnessBlobImports: [],
+      skillTextFacts: [],
+      skillTextMatches: [],
     })(notTextKey);
     expect(outcome.kind === 'facts' && outcome.facts.contentKey).toBe(notTextKey);
+    expect(outcome.kind === 'facts' && outcome.decoding).toBeNull();
   });
 
   it('is uncovered when a reference row is missing against linkCount', () => {
@@ -192,6 +223,77 @@ describe('blobFactsReader', () => {
     const blobSections = rows.blobSections.map((row) => (row.ordinal === 1 ? { ...row, ordinal: 5 } : row));
     const outcome = agreedReader({ ...rows, blobSections })(CONTENT_KEY);
     expect(outcome).toMatchObject({ kind: 'uncovered', reason: expect.stringContaining('section') });
+  });
+
+  it('carries the skill-text record the parse computed, rebuilt from its rows', () => {
+    const expected = skillTextFactsOf(SKILL_DOC, SKILL_TEXT_DECLARATION);
+    expect(expected.matches.length, 'the document must exercise the match rows').toBeGreaterThan(1);
+    const outcome = agreedReader(rowsOfSkillDoc())(SKILL_KEY);
+    expect(outcome.kind === 'facts' && outcome.facts.skillText).toStrictEqual(expected);
+  });
+
+  it('rebuilds the match order from the ordinals, not the order the rows arrive in', () => {
+    const rows = rowsOfSkillDoc();
+    const outcome = agreedReader({ ...rows, skillTextMatches: rows.skillTextMatches.toReversed() })(SKILL_KEY);
+    expect(outcome.kind === 'facts' && outcome.facts.skillText).toStrictEqual(skillTextFactsOf(SKILL_DOC, SKILL_TEXT_DECLARATION));
+  });
+
+  it('carries no skill-text record for an HTML blob', () => {
+    const source = '<p><a href="./a.md">A</a></p>\n';
+    const htmlKey = `html.${'e'.repeat(64)}`;
+    const outcome = agreedReader(rowsOf(htmlKey, source, parseHtmlContent(source, source.length)))(htmlKey);
+    expect(outcome.kind === 'facts' && outcome.facts.skillText).toBeNull();
+  });
+
+  it('is uncovered, not an empty record, when a markdown blob has no skill_text_facts row', () => {
+    const outcome = agreedReader({ ...rowsOfDoc(), skillTextFacts: [] })(CONTENT_KEY);
+    expect(outcome).toMatchObject({ kind: 'uncovered', reason: expect.stringContaining('no skill_text_facts row') });
+  });
+
+  it('is uncovered when a markdown blob has two skill_text_facts rows', () => {
+    const rows = rowsOfDoc();
+    const outcome = agreedReader({ ...rows, skillTextFacts: [...rows.skillTextFacts, ...rows.skillTextFacts] })(CONTENT_KEY);
+    expect(outcome).toMatchObject({ kind: 'uncovered', reason: expect.stringContaining('more than one') });
+  });
+
+  it('is uncovered when a match row is missing against matchCount', () => {
+    const rows = rowsOfSkillDoc();
+    const outcome = agreedReader({ ...rows, skillTextMatches: rows.skillTextMatches.slice(1) })(SKILL_KEY);
+    expect(outcome).toMatchObject({ kind: 'uncovered', reason: expect.stringContaining('matchCount') });
+  });
+
+  it('is uncovered when the match ordinals have a gap', () => {
+    const rows = rowsOfSkillDoc();
+    const skillTextMatches = rows.skillTextMatches.map((row) => (row.ordinal === 0 ? { ...row, ordinal: 9 } : row));
+    const outcome = agreedReader({ ...rows, skillTextMatches })(SKILL_KEY);
+    expect(outcome).toMatchObject({ kind: 'uncovered', reason: expect.stringContaining('ordinals') });
+  });
+
+  it('is uncovered when a match pairs a pattern with a family it is not one of', () => {
+    const rows = rowsOfSkillDoc();
+    const skillTextMatches = rows.skillTextMatches.map((row) => (row.ordinal === 0 ? { ...row, patternId: 'sed-i-no-backup' as const } : row));
+    expect(rows.skillTextMatches[0]?.family).toBe('timeSensitive');
+    const outcome = agreedReader({ ...rows, skillTextMatches })(SKILL_KEY);
+    expect(outcome).toMatchObject({ kind: 'uncovered', reason: expect.stringContaining('not a record the core emits') });
+  });
+
+  it('is uncovered when the matches\' families go back in declaration order', () => {
+    const rows = rowsOfSkillDoc();
+    const families = rows.skillTextMatches.map((row) => row.family);
+    expect(new Set(families).size, 'the document must match two families').toBeGreaterThan(1);
+    const reversed = rows.skillTextMatches.toReversed();
+    const skillTextMatches = rows.skillTextMatches.map((row, index) => ({ ...row, family: reversed[index]?.family ?? row.family, patternId: reversed[index]?.patternId ?? row.patternId }));
+    const outcome = agreedReader({ ...rows, skillTextMatches })(SKILL_KEY);
+    expect(outcome).toMatchObject({ kind: 'uncovered', reason: expect.stringContaining('not a record the core emits') });
+  });
+
+  it('is uncovered when a blob that is not markdown holds skill-text rows', () => {
+    const source = '<p>x</p>\n';
+    const htmlKey = `html.${'e'.repeat(64)}`;
+    const rows = rowsOf(htmlKey, source, parseHtmlContent(source, source.length));
+    const strayFacts = { blob: htmlKey, lineCount: 1, h1: null, frontmatterFence: 'none', matchCount: 0, held: true } as const;
+    const outcome = agreedReader({ ...rows, skillTextFacts: [strayFacts] })(htmlKey);
+    expect(outcome).toMatchObject({ kind: 'uncovered', reason: expect.stringContaining('not markdown') });
   });
 
   it('is uncovered when a finding condition row is missing against findingCount', () => {

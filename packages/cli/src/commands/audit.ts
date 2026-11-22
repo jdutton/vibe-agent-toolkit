@@ -30,6 +30,7 @@ import {
   type Surface,
   type ValidateOptions,
   type ValidationResult,
+  type SkillTextRun,
 } from '@vibe-agent-toolkit/agent-skills';
 import {
   analyzeCompatibility,
@@ -206,8 +207,9 @@ export interface VATProjectContext {
  * config (via `findProjectRoot` + `loadConfigCached`) so per-skill packaging
  * rules still apply when auditing from above a project.
  *
- * Its SKILL.md files parse on the audit run's dispatcher: a pool of its own would
- * open beside the run's and start a second thread.
+ * Its SKILL.md files are read through the audit run's population: served by its
+ * store when it holds them, else parsed on the run's dispatcher (a pool of its
+ * own would open beside the run's and start a second thread).
  *
  * Returns `null` if `scanRoot` has no config or the config has no skills.
  */
@@ -215,7 +217,7 @@ async function buildVATProjectContext(
   scanRoot: string,
   logger: ReturnType<typeof createLogger>,
   locationRoot: string,
-  dispatcher: ParseDispatcher,
+  run: SkillTextRun,
 ): Promise<VATProjectContext | null> {
   const configPath = safePath.join(scanRoot, VAT_CONFIG_FILENAME);
   // A probe the OS refuses is the config's source fault, never "no config here".
@@ -241,7 +243,7 @@ async function buildVATProjectContext(
       config.skills,
       scanRoot,
       degradingDiscovery(scanRoot, logger, locationRoot),
-      dispatcher,
+      run,
     );
     const { defaults, config: perSkillConfig } = config.skills;
 
@@ -392,6 +394,7 @@ async function resolveGoverningConfig(
   skillPath: string,
   logger: ReturnType<typeof createLogger>,
   locationRoot: string,
+  run: SkillTextRun,
 ): Promise<ReturnType<typeof stripValidationAllowForDisplay> | null> {
   // The walk-up the resolver is about to do (cached), so the degrade handler can
   // name the config whose include reached the directory. `null` means no config
@@ -400,7 +403,7 @@ async function resolveGoverningConfig(
   if (configRoot === null) return null;
   let fullConfig: Awaited<ReturnType<typeof resolveSkillPackagingConfig>>;
   try {
-    fullConfig = await resolveSkillPackagingConfig(skillPath, degradingDiscovery(configRoot, logger, locationRoot));
+    fullConfig = await resolveSkillPackagingConfig(skillPath, degradingDiscovery(configRoot, logger, locationRoot), run);
   } catch (err) {
     if (err instanceof ConfigLoadError) {
       recordUnloadableConfig(err, logger, locationRoot);
@@ -658,7 +661,7 @@ async function validateSingleSkill(
   // disagree about that again. The warn-once ledger is run-scoped module state,
   // NOT a set minted here — a fresh `new Set()` on this line is what made a
   // 40-skill plugin print 40 identical warnings.
-  const skillConfig = await resolveGoverningConfig(skillPath, logger, locationRoot);
+  const skillConfig = await resolveGoverningConfig(skillPath, logger, locationRoot, options.registries);
   if (skillConfig !== null) {
     logger.debug(`  Using config-aware validation for: ${skillPath}`);
     const { gitTracker } = await resolveScanContext(safePath.resolve(skillPath), locationRoot, logger);
@@ -678,7 +681,7 @@ async function validateSingleSkill(
       // An audit only reads the trees it scans.
       outputs: [],
       locationRoot,
-      projectSkills: await resolveProjectDeclaredEvalSuites(skillPath, degradingDiscovery(projectRoot, logger, locationRoot)),
+      projectSkills: await resolveProjectDeclaredEvalSuites(skillPath, degradingDiscovery(projectRoot, logger, locationRoot), options.registries),
       // The RUN's probe, not this call's — see {@link runSuiteProbe}. This lane
       // is called in a loop over every skill in a plugin.
       suiteProbe: suiteProbeForRun(),
@@ -701,7 +704,7 @@ async function validateSingleSkill(
 
   // Fallback: basic validation. Severity is applied by `applySeverityFilter`.
   // The audited skill is the verb's input.
-  const validateOptions: ValidateOptions = { skillPath, locationRoot, validation: {}, resourcesValidation: {}, side: 'source', dispatcher: options.registries.dispatcher };
+  const validateOptions: ValidateOptions = { skillPath, locationRoot, validation: {}, resourcesValidation: {}, side: 'source', run: options.registries };
   if (options.warnUnreferencedFiles) {
     validateOptions.checkUnreferencedFiles = true;
   }
@@ -1329,7 +1332,7 @@ async function auditReportInRun(
   // and a refusal it meets is recorded in the same ledger the append below
   // reads. Built afterwards, that finding reached stderr and not the document.
   const configRoot = deriveConfigRoot(scanPath);
-  const vatContextForCompat = await buildVATProjectContext(configRoot, logger, scanRoot, run.dispatcher);
+  const vatContextForCompat = await buildVATProjectContext(configRoot, logger, scanRoot, run.population);
 
   // See {@link withDegradedConfigFindings} for why these are appended, not merged.
   const rawResults = withDegradedConfigFindings(scanned);
@@ -1775,8 +1778,11 @@ export function getValidationResults(
 /**
  * Run `work` in the audit's one run, opened as every verb opens its run: each project root
  * the audit reaches is crawled once, under audit's ruling. Every crawl degrades, and a degraded
- * enumeration is a listing that never opens the projection store, so audit stores nothing. The
- * run's ignore oracle is the repository's tracker the scan holds, so the repository is listed once.
+ * enumeration is a listing that never opens the projection store, so audit stores nothing; the
+ * run declares it has no store (`projectionStore: 'none'`), so a skills lane's stored-document
+ * question answers nothing without opening a home or taking a snapshot, and the lane reads and
+ * scans the file itself, counted (`content.read`, `skillText.noStore`). The run's ignore
+ * oracle is the repository's tracker the scan holds, so the repository is listed once.
  *
  * @param locationRoot - The invocation scan root, the run's home
  * @param work - The audit inside the run
@@ -1785,7 +1791,7 @@ export function getValidationResults(
 async function withAuditRun<T>(locationRoot: string, work: (run: RunContext) => Promise<T>): Promise<T> {
 	const repositoryRoot = gitFindRoot(locationRoot);
 	const gitTracker = repositoryRoot === null ? undefined : await getOrCreateGitTracker(repositoryRoot);
-	return withRunContext({ root: locationRoot, gitTracker, homeSettledListener: NO_HOME_SETTLED_LISTENER }, work);
+	return withRunContext({ projectionStore: 'none', root: locationRoot, outputs: [], gitTracker, homeSettledListener: NO_HOME_SETTLED_LISTENER }, work);
 }
 
 /** The command's options inside `run`: its skill registries ride with them. */
@@ -2840,7 +2846,7 @@ async function handleFileEntry(
     // ledger lives in `unloadableConfigResults` (module scope, cleared by
     // `resetAuditCaches`) rather than being threaded here, so BOTH lanes dedupe
     // against the same state.
-    const skillConfig = await resolveGoverningConfig(fullPath, logger, locationRoot);
+    const skillConfig = await resolveGoverningConfig(fullPath, logger, locationRoot, options.registries);
     if (skillConfig !== null) {
       logger.debug(`  Using config-aware validation for: ${fullPath}`);
       // Thread the per-scan tracker into packaging validation so gitignore
@@ -2850,6 +2856,7 @@ async function handleFileEntry(
       const projectSkills = await resolveProjectDeclaredEvalSuites(
         fullPath,
         degradingDiscovery(findProjectRoot(safePath.resolve(fullPath, '..')) ?? locationRoot, logger, locationRoot),
+        options.registries,
       );
       // `suiteProbe`: the RUN's, not this entry's — the directory walk reaches
       // this function once per SKILL.md it finds. See {@link runSuiteProbe}.
@@ -2878,7 +2885,7 @@ async function handleFileEntry(
 
     // Wild mode: basic validation. Severity is applied by `applySeverityFilter`.
     // The audited skill is the verb's input.
-    const validateOptions: ValidateOptions = { skillPath: fullPath, locationRoot, validation: {}, resourcesValidation: {}, side: 'source', dispatcher: options.registries.dispatcher };
+    const validateOptions: ValidateOptions = { skillPath: fullPath, locationRoot, validation: {}, resourcesValidation: {}, side: 'source', run: options.registries };
     if (options.warnUnreferencedFiles) {
       validateOptions.checkUnreferencedFiles = true;
     }

@@ -11,13 +11,17 @@ import type { TextProvenance } from '@vibe-agent-toolkit/utils/text';
 
 import { encodeFrontmatterValue } from '../frontmatter-codec.js';
 import type { ParseResult } from '../link-parser.js';
+import { skillTextHeld } from '../parse-limits.js';
 import type { OffsetRange } from '../reference-lexer.js';
 import type { ContentMeasures } from '../schemas/parse-facts.js';
 import type { BlobConditionRow, BlobRow } from '../schemas/projection-blobs.js';
 import type { HarnessBlobFactsRow, HarnessBlobImportRow } from '../schemas/projection-harness.js';
+import type { SkillTextFactsRow, SkillTextMatchRow } from '../schemas/projection-skill-text.js';
+import type { SkillTextFacts } from '../schemas/skill-text-facts.js';
 
 import { flattenHeadings } from './blob-sections.js';
 import type { HarnessContentFacts, HarnessId } from './harness/profile.js';
+import { storedMatchText } from './skill-text-match-text.js';
 
 // `ContentMeasures` is defined by `ContentMeasuresSchema`
 // (`schemas/parse-facts.ts`), not here: the parse cache persists these three
@@ -301,6 +305,42 @@ export function harnessRowsFor(
       target: entry.target,
       line: entry.line,
     })),
+  };
+}
+
+/**
+ * Build one markdown blob's rows in the two skill-text tables: its
+ * `skill_text_facts` row and one `skill_text_matches` row per record, in the
+ * record's order. The reader rebuilds the record from exactly these
+ * (`blobFactsReader`). A record past its bound (`skillTextHeld`) is not kept:
+ * its facts row says so and no match row is written.
+ *
+ * @param contentKey - The blob's key, written into every row's `blob` column
+ * @param facts - The parse's skill-text record (`ParseResult.skillText`)
+ * @returns The facts row and the match rows
+ */
+export function skillTextRowsFor(
+  contentKey: string,
+  facts: SkillTextFacts,
+): { facts: SkillTextFactsRow; matches: SkillTextMatchRow[] } {
+  const held = skillTextHeld(facts);
+  return {
+    facts: {
+      blob: contentKey,
+      lineCount: facts.lineCount,
+      h1: facts.h1,
+      frontmatterFence: facts.frontmatterFence,
+      matchCount: facts.matches.length,
+      held,
+    },
+    matches: held ? facts.matches.map((match) => ({
+      blob: contentKey,
+      ordinal: match.ordinal,
+      family: match.family,
+      patternId: match.patternId,
+      line: match.line,
+      ...storedMatchText(match.matchText),
+    })) : [],
   };
 }
 

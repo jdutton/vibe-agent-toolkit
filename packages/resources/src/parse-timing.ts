@@ -165,16 +165,18 @@ export const ParsePass = {
   CodeContextRanges: 6,
   LexicalReferences: 7,
   MeasureContent: 8,
+  /** The skill-text core over the document (`skill-text/core.ts`), charged by the composer. */
+  SkillText: 9,
   /** Brackets the whole markdown parse. Always last in its group. */
-  MarkdownTotal: 9,
+  MarkdownTotal: 10,
 
   // HTML — `parseHtmlContent` in html-link-parser.ts.
-  HtmlParse: 10,
-  HtmlElementWalk: 11,
-  HtmlEstimateTokens: 12,
-  HtmlMeasureContent: 13,
+  HtmlParse: 11,
+  HtmlElementWalk: 12,
+  HtmlEstimateTokens: 13,
+  HtmlMeasureContent: 14,
   /** Brackets the whole HTML parse. Always last in its group. */
-  HtmlTotal: 14,
+  HtmlTotal: 15,
 } as const;
 
 /**
@@ -347,7 +349,7 @@ export const TIER_PASS_NAMES: readonly string[] = [
 ];
 
 /** How many slots {@link ParsePass} declares. */
-const PASS_SLOT_COUNT = 15;
+const PASS_SLOT_COUNT = 16;
 
 /**
  * What one parser kind contributes to the dump.
@@ -394,6 +396,7 @@ export const PARSE_KIND_SHAPES: readonly ParseKindShape[] = [
       'code-context-ranges',
       'lexical-references',
       'measure-content',
+      'skill-text',
     ],
     firstPassSlot: ParsePass.EstimateTokens,
     totalSlot: ParsePass.MarkdownTotal,

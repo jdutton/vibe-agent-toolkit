@@ -53,8 +53,17 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
-import { PROJECTION_TABLES, VAT_CACHE_DIR_ENV, type FactStore, type PopulationCache, type Projection, type ProjectionTableName, vatCacheRoot } from '@vibe-agent-toolkit/resources';
-import { parseEnvBoolean, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import {
+  PROJECTION_TABLES,
+  StoreQuestionUnavailableError,
+  VAT_CACHE_DIR_ENV,
+  type FactStore,
+  type PopulationCache,
+  type Projection,
+  type ProjectionTableName,
+  vatCacheRoot,
+} from '@vibe-agent-toolkit/resources';
+import { fsFaultOf, isReadOnlyFilesystemError, parseEnvBoolean, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { freshGitTreeKey, gitSnapshotFailureOf, gitTreeKey, type GitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 
 import { noticeToOperator, withNoticeLedger } from './operator-notices.js';
@@ -252,20 +261,105 @@ function storeKeyOrNotice(root: string): GitTreeSnapshot | null {
  *   the resulting hash covers that whole repository, not this subtree
  * @returns The cache and its closer, or `undefined` to populate uncached
  */
-export async function openPopulationCache(options: {
+export function openPopulationCache(options: {
   root: string;
 }): Promise<OpenedPopulationCache | undefined> {
+  return openCacheWith(options.root, () => loadStore(undefined));
+}
+
+/**
+ * Open a second connection to the projection store for a run's stored-document
+ * questions, one that never waits on a lock: its busy timeout is zero, so a
+ * store another process is writing refuses at once instead of holding the
+ * question for the store's busy timeout.
+ *
+ * Opened through the run's own open ({@link loadStore}) with only the busy
+ * timeout changed, so a damaged store file is discarded, and the operator told,
+ * whichever connection meets it first: a verb that only asks questions never
+ * leaves a damaged file cold for every later run. Keyed exactly as
+ * {@link openPopulationCache} keys the run's own connection, from the same
+ * snapshot when both are inside one scope.
+ *
+ * The question is optional, so the failures it expects (another process's lock,
+ * a read-only cache directory or store file, a read-only filesystem) are coded
+ * `StoreQuestionUnavailableError`, at the open and at every store call on this
+ * connection, and the population answers the question with nothing for them;
+ * every other failure stays itself and refuses. Decided by SQLite's result code
+ * (`isStoreUnavailableNow`) and by the errno ({@link isReadOnlyFsFault}), never
+ * by message. The run's own connection ({@link openPopulationCache}) codes none
+ * of these: it meets them as themselves.
+ *
+ * @param options - Where the corpus is
+ * @param options.root - The absolute corpus root
+ * @returns The cache and its closer, or `undefined` to answer without a store
+ */
+export function openQuestionCache(options: {
+  root: string;
+}): Promise<OpenedPopulationCache | undefined> {
+  return openCacheWith(options.root, async () => {
+    const backend = await loadBackend();
+    const coded = (error: unknown): unknown =>
+      backend.isStoreUnavailableNow(error) || isReadOnlyFsFault(error) ? new StoreQuestionUnavailableError(error) : error;
+    const store = await loadStore({ busyTimeoutMs: 0 }).catch((error: unknown) => {
+      throw coded(error);
+    });
+    return store === undefined ? undefined : codingFailures(store, coded);
+  });
+}
+
+/**
+ * Whether `error` is a filesystem fault that says the cache cannot be written
+ * here: a permission refusal (the `refused` class), or a read-only filesystem
+ * (`EROFS`, which the errno table classes `unsupported` beside faults that are
+ * defects here, so it is asked by its own predicate, not its class).
+ *
+ * @param error - Anything the open or a store call threw
+ * @returns True for a read-only cache
+ */
+function isReadOnlyFsFault(error: unknown): boolean {
+  return fsFaultOf(error)?.faultClass === 'refused' || isReadOnlyFilesystemError(error);
+}
+
+/**
+ * `store`, with every read and write failure passed through `coded`. The close
+ * is the store's own: it has its own contract ({@link closeTellingOperator}).
+ *
+ * @param store - An open store
+ * @param coded - The error to throw for a failure
+ * @returns The same store, coding its failures
+ */
+function codingFailures(store: FactStore, coded: (error: unknown) => unknown): FactStore {
+  const rethrowCoded = (error: unknown): never => {
+    throw coded(error);
+  };
+  return {
+    writeBlobFacts: (rows) => store.writeBlobFacts(rows).catch(rethrowCoded),
+    readBlobFacts: (contentKeys) => store.readBlobFacts(contentKeys).catch(rethrowCoded),
+    writeExtent: (key, rows) => store.writeExtent(key, rows).catch(rethrowCoded),
+    readExtent: (key) => store.readExtent(key).catch(rethrowCoded),
+    close: () => store.close(),
+  };
+}
+
+/**
+ * {@link openPopulationCache}'s body, opening the store with `open`.
+ *
+ * @param root - The absolute corpus root
+ * @param open - Opens the store, or answers `undefined` for no store
+ * @returns The cache and its closer, or `undefined` to populate uncached
+ */
+async function openCacheWith(root: string, open: () => Promise<FactStore | undefined>): Promise<OpenedPopulationCache | undefined> {
   if (!projectionStoreSelected()) return undefined;
 
   // Before the import, so a corpus outside a repository costs nothing and says
   // why.
-  const snapshot = storeKeyOrNotice(options.root);
+  const snapshot = (populationScope.getStore()?.keyOf ?? storeKeyOrNotice)(root);
   if (snapshot === null) return undefined;
 
-  noticeCacheRootInsideTree(options.root);
-  const store = await loadStore();
+  noticeCacheRootInsideTree(root);
+  const store = await open();
   if (store === undefined) return undefined;
-  const cwd = options.root;
+  const cwd = root;
   return {
     cache: {
       store,
@@ -305,6 +399,9 @@ function noticeCacheRootInsideTree(root: string): void {
   );
 }
 
+/** How long a connection waits on a lock: the backend's own option, and only it. */
+type StorePatience = Pick<ProjectionSqlite.SqliteStoreOptions, 'busyTimeoutMs'>;
+
 /**
  * Load the selected backend, or throw its `BACKEND_UNAVAILABLE` refusal when it is uninstalled.
  *
@@ -329,17 +426,19 @@ function noticeCacheRootInsideTree(root: string): void {
  * still surfaces through `populate()` — a cache that silently stops working is
  * how a week of full-price runs goes unnoticed.
  *
+ * @param patience - How long the connection waits on a lock: `undefined` for
+ *   the store's own busy timeout (the run's connection), zero for its questions'
  * @returns The opened store — the engine-free port, which is all the backend's
  *   factory returns, so the population path has no query to grow — or
  *   `undefined` when a damaged store could not be replaced
  */
-async function loadStore(): Promise<FactStore | undefined> {
+async function loadStore(patience: StorePatience | undefined): Promise<FactStore | undefined> {
   const backend = await loadBackend();
   try {
-    return backend.openSqliteFactStore();
+    return backend.openSqliteFactStore(patience);
   } catch (error) {
     if (!backend.isStoreUnopenableError(error)) throw error;
-    return replaceUnopenableStore(backend, error);
+    return replaceUnopenableStore(backend, error, patience);
   }
 }
 
@@ -348,12 +447,17 @@ async function loadStore(): Promise<FactStore | undefined> {
  *
  * @param backend - The loaded backend
  * @param error - Its refusal to open the existing file
+ * @param patience - The fresh connection's busy timeout, as {@link loadStore} was asked
  * @returns The fresh store, or `undefined` when it could not be replaced
  */
-function replaceUnopenableStore(backend: typeof ProjectionSqlite, error: ProjectionSqlite.StoreUnopenableError): FactStore | undefined {
+function replaceUnopenableStore(
+  backend: typeof ProjectionSqlite,
+  error: ProjectionSqlite.StoreUnopenableError,
+  patience: StorePatience | undefined,
+): FactStore | undefined {
   try {
     backend.discardStoreDatabase(error.databasePath);
-    const store = backend.openSqliteFactStore();
+    const store = backend.openSqliteFactStore(patience);
     noticeToOperator('store', `${error.message}. Discarded it and started an empty projection store; this run populates without a warm cache.`, error.databasePath);
     return store;
   } catch (retryError) {
@@ -552,6 +656,13 @@ interface ActivePopulationScope {
    * answer every later time, a refusal included.
    */
   readonly opened: () => Promise<OpenedPopulationCache | undefined>;
+  /**
+   * The store key of a root, or `null` where git cannot key it (told once), asked
+   * once per root per scope: the run's own connection and its stored-document
+   * questions' connection ({@link openQuestionCache}) key one tree with one
+   * answer, a failed one included, which the snapshot memo does not hold.
+   */
+  readonly keyOf: (root: string) => GitTreeSnapshot | null;
 }
 
 /**
@@ -606,23 +717,49 @@ type PopulationCacheOf = () => Promise<PopulationCache | undefined>;
  * @param work - Given the scope's store, opened on first ask
  * @returns Whatever `work` returned
  */
-async function runOwnedScope<T>(
+function runOwnedScope<T>(
   options: { root: string },
   work: (cacheOf: PopulationCacheOf) => Promise<T>,
 ): Promise<T> {
   let opening: Promise<OpenedPopulationCache | undefined> | undefined;
   const opened = (): Promise<OpenedPopulationCache | undefined> => (opening ??= openPopulationCache(options));
+  const keys = new Map<string, GitTreeSnapshot | null>();
+  const keyOf = (root: string): GitTreeSnapshot | null => {
+    const held = keys.get(root);
+    if (held !== undefined) return held;
+    const key = storeKeyOrNotice(root);
+    keys.set(root, key);
+    return key;
+  };
+  // Registered even when nothing is opened, so a nested scope can tell "no
+  // store in this process" from "no scope above me" — and so the nested scope
+  // stays inside THIS scope's git-snapshot memo either way.
+  return runThenClose(() => populationScope.run({ opened, keyOf }, () => work(async () => (await opened())?.cache)), () => opening);
+}
+
+/**
+ * Run `work`, then close the store `opening` names if it opened one, through
+ * the one close contract every connection to the store shares
+ * ({@link closeTellingOperator}): a close that fails never decides the outcome.
+ * The run's own connection closes this way ({@link runOwnedScope}), and so does
+ * its stored-document questions' ({@link openQuestionCache}).
+ *
+ * @param work - The work the store served
+ * @param opening - The store's open, read after `work` ends, or `undefined` when nothing asked
+ * @returns Whatever `work` returned
+ */
+export async function runThenClose<T>(
+  work: () => Promise<T>,
+  opening: () => Promise<OpenedPopulationCache | undefined> | undefined,
+): Promise<T> {
   let result: T;
   try {
-    // Registered even when nothing is opened, so a nested scope can tell "no
-    // store in this process" from "no scope above me" — and so the nested scope
-    // stays inside THIS scope's git-snapshot memo either way.
-    result = await populationScope.run({ opened }, () => work(async () => (await opened())?.cache));
+    result = await work();
   } catch (error) {
-    await closeTellingOperator(await openedOrNone(opening), { workFailed: true });
+    await closeTellingOperator(await openedOrNone(opening()), { workFailed: true });
     throw error;
   }
-  await closeTellingOperator(await openedOrNone(opening), { workFailed: false });
+  await closeTellingOperator(await openedOrNone(opening()), { workFailed: false });
   return result;
 }
 

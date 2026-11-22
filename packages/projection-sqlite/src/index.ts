@@ -84,6 +84,7 @@ export {
   defaultStoreDirectory,
   discardStoreDatabase,
   isStoreInUse,
+  isStoreUnavailableNow,
   isStoreUnopenableError,
   openSqliteFactStore,
 } from './store.js';
