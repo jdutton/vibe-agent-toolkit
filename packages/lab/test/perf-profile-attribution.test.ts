@@ -4,7 +4,7 @@
  * stack lands in, how banners become profile windows, and how repeats fold.
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
@@ -246,5 +246,26 @@ describe('VALIDATE_PHASE_BUCKETS', () => {
       .flatMap(({ pkg, modules }) => modules.map((module) => `${pkg}/src/${module}.ts`));
     expect(named.length, 'the rules name vat modules').toBeGreaterThan(0);
     expect(named.filter((path) => !existsSync(safePath.join(PACKAGES_DIR, path)))).toEqual([]);
+  });
+
+  it('names only functions its vat modules define, so no function rule is one that can never match', () => {
+    // Each alternative of a rule's `^(?:a|b)$` (or `^a$`) must be declared, as a function, method or
+    // arrow (an identifier before `(`, `<` or `=`), in one of the modules the rule's url names;
+    // `prefix\w*` by a name that starts with it.
+    const missing = VALIDATE_PHASE_BUCKETS.flatMap(({ bucket, functionName, url }) => {
+      if (functionName === undefined || !isVatModulePattern(url)) return [];
+      const declared = new Set(url.modules.flatMap((module) => {
+        const source = readFileSync(safePath.join(PACKAGES_DIR, `${url.pkg}/src/${module}.ts`), 'utf-8');
+        return [...source.matchAll(/\b([A-Za-z_$][\w$]*)\s*[(<=]/gu)].map((match) => match[1] ?? '');
+      }));
+      const alternatives = functionName.source.replace(/^\^(?:\(\?:)?/u, '').replace(/\)?\$$/u, '').split('|');
+      return alternatives
+        .filter((alternative) => {
+          const prefix = alternative.endsWith(String.raw`\w*`) ? alternative.slice(0, -3) : undefined;
+          return prefix === undefined ? !declared.has(alternative) : ![...declared].some((name) => name.startsWith(prefix));
+        })
+        .map((name) => `${bucket}: ${name}`);
+    });
+    expect(missing).toEqual([]);
   });
 });

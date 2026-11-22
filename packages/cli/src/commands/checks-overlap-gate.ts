@@ -18,7 +18,7 @@
  *   `checks.gate.rows.read`, summed per member, and no other counter. The tier read itself is the population's shared
  *   one, which admission reads too, except that the gate asks every home member and admission only
  *   the crawled ones: when no crawled member reads the tier, an overlapped run counts the one
- *   `store.reads.persistent` (and its decoded rows) a sequential run skips
+ *   `store.reads.blob` (and its decoded rows) a sequential run skips
  *   (resource-scanning-and-caching.md 3.7b). Any member admission would compute means the parent could write the store
  *   or the parse cache after the spawn, so the run stays sequential.
  *
@@ -120,7 +120,7 @@ export interface ChecksOverlapGateOptions {
   /** The run dispatcher's resolved limits: condition (d). */
   readonly limits: ParseLimits;
   /** The resources phase's parse routing, which admission routes each member by: condition (e). */
-  readonly routing: ParseRouting;
+  readonly routing: ParseRouting<string>;
   /**
    * Open the overlapped scope and spawn the child, asking `isArmed` after the mint and immediately
    * before the synchronous spawn; `'disarmed'` when it answered false and the scope was torn down.

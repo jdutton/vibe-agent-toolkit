@@ -6,7 +6,7 @@
  * (`storedComputeBy`), so a member the gate calls admitted is one admission admits from the store.
  */
 
-import { createCollectionMimeResolver, type BlobFactsReader, type ResourceEnumeration } from '@vibe-agent-toolkit/resources';
+import { parseRoutingFor, type BlobFactsReader, type ResourceEnumeration } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it, vi } from 'vitest';
 
 import { abandoningUnread, createChecksOverlapGate } from '../src/commands/checks-overlap-gate.js';
@@ -67,7 +67,7 @@ function gateOf(overrides: {
     cores: () => overrides.cores ?? 4,
     childHomeKey: HOME_KEY,
     limits: overrides.limits ?? POPULATION_LIMITS,
-    routing: { resolver: createCollectionMimeResolver(undefined), baseDir: ROOT },
+    routing: parseRoutingFor(undefined, ROOT),
     spawn: overrides.spawn,
   });
 }

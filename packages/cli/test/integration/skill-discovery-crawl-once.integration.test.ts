@@ -79,6 +79,15 @@ describe('skill discovery crawls each base once per run', () => {
     }, undefined);
   });
 
+  it.runIf(process.platform === 'win32')('shares the crawl across the slash and backslash spellings of one root on Windows', async () => {
+    await withSkillTextRun(async (lane) => {
+      const { run, crawled } = recordingRun(lane);
+      await discoverSkillsFromConfig(CONFIG, projectRoot, 'refuse', run);
+      await discoverSkillsFromConfig(CONFIG, projectRoot.replaceAll('/', '\\'), 'refuse', run);
+      expect(crawled).toHaveLength(2);
+    }, undefined);
+  });
+
   it('never shares a degrading crawl', async () => {
     await withSkillTextRun(async (lane) => {
       const { run, asked } = recordingRun(lane);

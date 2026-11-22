@@ -18,6 +18,7 @@ import { writeCommittedCorpus } from '../test-helpers.js';
 import { createSuiteContext } from './test-common.js';
 import {
   type DamageTarget,
+  expectChecksMode,
   expectEveryDamageObserved,
   IN_PROCESS_COST_FIXTURE,
   storedRowCount,
@@ -60,6 +61,7 @@ describe.skipIf(symlinkCapability() === null)('the membership read reads only wh
     warmCache = context.createTempDir();
     await validateOver(context, repo, warmCache, 'overlapped');
     warm = await validateOver(context, repo, warmCache, 'overlapped');
+    expectChecksMode(warm, 'overlapped');
   });
 
   // The control: the damage arm below can only fail on a table that holds a row to damage.

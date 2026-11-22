@@ -159,7 +159,8 @@ async function fileTheStore(collections: Readonly<Record<string, CollectionConfi
 async function bothAnswers(view: FactStore): Promise<{ answers: Answers[]; keys: ReadonlyMap<string, string> }> {
   return inRun(view, undefined, async (population, stored) => {
     if (stored === null) throw new Error('the warm run did not hit');
-    // The gate's routing, as `vat validate` builds it (`parseRoutingFor`): no config here.
+    // The gate's routing from the constructor `vat validate`'s `gateOptionsFor` calls (that lives in
+    // the cli, which this package cannot import): `parseRoutingFor`, with no config here.
     const routing = parseRoutingFor(undefined, population.root);
     const relative = (path: string): string => safePath.relative(root, path);
     const asks: Ask[] = [...stored.members.keys(), safePath.join(root, LATE)].map((path) => ({

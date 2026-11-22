@@ -13,6 +13,7 @@
 
 import * as fs from 'node:fs/promises';
 
+import { ParseCache, ParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { createSymlinkAsync, forEachInOrder, normalizedTmpdir, safePath, type SymlinkCapability } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll } from 'vitest';
 
@@ -29,6 +30,25 @@ export const DENY_BASH: EffectiveSettings = {
 
 export const BASH_SKILL = (name: string): string =>
   `---\nname: ${name}\ndescription: declares Bash\nallowed-tools: Bash\n---\n# ${name}\n`;
+
+/** Every dispatcher's input cap: the population's, which no lane names a different one of. */
+export const CAP = new ParseDispatcher(new ParseCache({ enabled: false }), {}).inputBytes;
+
+/** The wide skill's text: a Bash-declaring frontmatter block, then megabytes of CJK body. */
+export const WIDE_TEXT = `${BASH_SKILL('wide')}${'字'.repeat(Math.floor(CAP * 0.4))}\n`;
+
+/** The length of the one content each lane hands the dispatcher: the wide skill's frontmatter block, fences included. */
+export const WIDE_BLOCK = BASH_SKILL('wide').indexOf('\n---\n') + '\n---\n'.length;
+
+/**
+ * A Bash-declaring SKILL.md in UTF-16LE (with its BOM) whose bytes are under {@link CAP} and whose
+ * text is past it as UTF-8: each CJK character is two bytes here and three in UTF-8.
+ */
+export function wideSkill(): Buffer {
+  const bytes = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(WIDE_TEXT, 'utf16le')]);
+  if (bytes.length > CAP || Buffer.byteLength(WIDE_TEXT, 'utf8') <= CAP) throw new Error('the wide fixture no longer straddles the cap');
+  return bytes;
+}
 
 export const SKILLS = 'skills';
 export const PLAIN_SKILL = 'skills/plain/SKILL.md';

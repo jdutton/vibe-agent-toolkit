@@ -833,7 +833,7 @@ turn exactly as before:
   every other work counter is the same overlapped and sequential, with one
   exception: the gate asks every member of the home population, admission only the members the
   crawl reaches. When no crawled member routes to a tier read but some home member does, the
-  overlapped run counts one `store.reads.persistent` and that read's `store.rows.decoded.persistent`
+  overlapped run counts one `store.reads.blob` and that read's `store.rows.decoded.persistent`
   that a sequential run does not. That needs a crawl that reaches no keyed member, so it is left
   as is. A member that would be computed turns overlap off.
 

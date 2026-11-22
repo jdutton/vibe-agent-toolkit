@@ -326,7 +326,7 @@ type BlobFactReaderRows = Pick<BlobScopedRows, (typeof BLOB_FACT_READER_TABLES)[
  */
 interface BlobTierAnswer {
   readonly kind: BlobFactsOutcome['kind'];
-  /** The key's rows: its `blobs` row and every reference, section, condition and skill-text row. */
+  /** The key's rows the admission request reads: its `blobs` row and its reference, section, condition and skill-text rows. */
   readonly rowsRead: number;
 }
 

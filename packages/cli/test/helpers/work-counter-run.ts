@@ -11,6 +11,7 @@ import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
 import { safePath, WORK_COUNTERS_ENV, type WorkCounterDump } from '@vibe-agent-toolkit/utils';
 import { expect } from 'vitest';
 
+import { VALIDATE_DEBUG_FACTS_ENV, type ValidateDebugFacts } from '../../src/commands/validate-debug-facts.js';
 import { PROJECTION_STORE_ENV, PROJECTION_STORE_OFF } from '../../src/utils/projection-store.js';
 import { executeCli } from '../system/test-common.js';
 import { preload } from '../system/test-helpers/checks-phase.js';
@@ -36,7 +37,8 @@ interface WorkCounterRunOptions {
   /**
    * The core count the supervising process reports (`parent-only-cores.mjs`), or `null` for the
    * host's. `vat validate`'s checks overlap gate reads it: 1 runs the checks child sequential, 2
-   * lets it overlap a warm resources phase. A run whose counts depend on the mode states it.
+   * lets it overlap a warm resources phase. A run whose counts depend on the mode states it, and
+   * reads back the mode it got ({@link WorkCounterRun.debugFacts}).
    */
   readonly cores: number | null;
 }
@@ -48,6 +50,12 @@ interface WorkCounterRun {
   readonly dumps: readonly WorkCounterDump[];
   /** The probe's dump directory, or `null` when the run had no probe. */
   readonly probeDir: string | null;
+  /**
+   * `vat validate`'s debug facts (`VAT_VALIDATE_DEBUG_FACTS`), one per validate process, read on
+   * every run that pins its cores: the checks mode the run got, and the gate condition that
+   * declined it. Empty for a run that does not pin its cores, or a verb that writes none.
+   */
+  readonly debugFacts: readonly ValidateDebugFacts[];
 }
 
 /**
@@ -69,6 +77,7 @@ export async function runWithWorkCounters(
 ): Promise<WorkCounterRun> {
   const workDir = suite.createTempDir();
   const probeDir = options.probeRoot === null ? null : suite.createTempDir();
+  const factsDir = options.cores === null ? null : suite.createTempDir();
   const tmp = options.tmpDir;
   const probeEnv = probeDir !== null && options.probeRoot !== null ? readProbeEnv(probeDir, options.probeRoot) : {};
   const coresEnv: Record<string, string> = options.cores === null ? {} : { VAT_TEST_CORES: String(options.cores) };
@@ -80,12 +89,16 @@ export async function runWithWorkCounters(
       ...(tmp !== null && { TMPDIR: tmp, TEMP: tmp, TMP: tmp }),
       ...probeEnv,
       ...coresEnv,
+      ...(factsDir !== null && { [VALIDATE_DEBUG_FACTS_ENV]: factsDir }),
       ...(nodeOptions.length > 0 && { NODE_OPTIONS: nodeOptions.join(' ') }),
     },
   });
   const dumps = cliDumps<WorkCounterDump>(workDir);
   if (probeDir !== null) expect(probedReads(probeDir).dumps, `${args.join(' ')}: the read probe ran\n${result.stderr}`).toBeGreaterThan(0);
-  return { result, dumps, probeDir };
+  const debugFacts = factsDir === null
+    ? []
+    : readdirSync(factsDir).map((name) => JSON.parse(readFileSync(safePath.join(factsDir, name), 'utf-8')) as ValidateDebugFacts);
+  return { result, dumps, probeDir, debugFacts };
 }
 
 /**

@@ -25,12 +25,12 @@ import {
   blobFactsReader,
   type BlobScopedRows,
   computeContentKey,
-  createCollectionMimeResolver,
   type ExtentScopedRows,
   ParseCache,
   markVatCacheRoot,
   ParseDispatcher,
   parseContentCached,
+  parseRoutingFor,
   type ParsePoolPolicy,
   PROJECTION_TABLES,
   type Projection,
@@ -634,7 +634,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
         cores: () => 2,
         childHomeKey: HOME_KEY,
         limits: POPULATION_LIMITS,
-        routing: { resolver: createCollectionMimeResolver(undefined), baseDir: ROOT },
+        routing: parseRoutingFor(undefined, ROOT),
         spawn: () => Promise.reject(new Error('the seed never spawns')),
       });
       gate.onHomeSettled(HOME_KEY, hit({ [`${ROOT}/a.md`]: keyedRealization(BLOB_KEY) }, () => Promise.resolve(blobFactsReader(oneBlobRow()))));

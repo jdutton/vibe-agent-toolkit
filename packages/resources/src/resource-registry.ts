@@ -64,7 +64,7 @@ import { ParseCache, type ParseCacheStats } from './parse-cache.js';
 import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } from './parse-dispatcher.js';
 import { isReadFailure, readFailureCode } from './parse-failure.js';
 import { isParserThrewError, isPerRunParseRefusal, ParseLimitError, reviveParserThrow } from './parse-limits.js';
-import { parserKindForResolvedPath } from './parser-kind-for-path.js';
+import { parseRoutingFor, parserKindForResolvedPath } from './parser-kind-for-path.js';
 import type { NotAdmittedEntry } from './projection/blob-refusals.js';
 import { blobResourceFactsOf, optionalParseFacts } from './projection/blob-resource-facts.js';
 import { POPULATION_PARSE_LIMITS } from './projection/content-cache.js';
@@ -72,11 +72,7 @@ import { isDeclinedSymlinkCode } from './projection/contributors/filesystem-exte
 import { declinedLinkApplies, type PopulationUnreadablePolicy } from './projection/crawl-source.js';
 import { contentRoute } from './projection/document-facts.js';
 import { parseFailedEntry, parseFailedMessage } from './projection/parse-failure.js';
-import {
-  collectionMimeConflictFinding,
-  createCollectionMimeResolver,
-  type CollectionMimeResolver,
-} from './projection/realizations.js';
+import { collectionMimeConflictFinding, type CollectionMimeResolver } from './projection/realizations.js';
 // Type-only, and that is what keeps it acyclic: the projection's population
 // builder is a CALLER of the registry's world, not a dependency of it, so the
 // import is erased before any module graph exists at runtime.
@@ -680,7 +676,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * in flight.
    *
    * That is not the "parallel resolver" CLAUDE.md bans — this is the SAME
-   * `createCollectionMimeResolver`, called twice, not a second implementation of
+   * routing constructor (`parseRoutingFor`), called twice, not a second implementation of
    * the rule. What differs per instance is only the conflict accumulator, and
    * that is correct: the projection lane reports conflicts as
    * `realization_conditions` rows, while `ResourceMetadata` has nowhere to put
@@ -1178,9 +1174,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // selection is part of a document's parse identity (content-key.ts), so a
     // second resolver here is how the parse route and the key's parse-route
     // component drift apart.
-    this.mimeResolverInstance ??= createCollectionMimeResolver(
-      this.config?.resources?.collections,
-    );
+    // The resolver is kept (its conflict accumulator is this registry's); the base directory is read
+    // per call, because a crawl may set it after an earlier `addResource` built the resolver.
+    this.mimeResolverInstance ??= parseRoutingFor(this.config, this.baseDir).resolver;
     return parserKindForResolvedPath(absolutePath, this.mimeResolverInstance, this.baseDir);
   }
 

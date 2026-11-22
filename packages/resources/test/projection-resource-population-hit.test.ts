@@ -125,7 +125,7 @@ class UnreachableRowsStore extends FakeFactStore {
     const file = held?.resourceRealizations.find((row) => !row.isDirectory);
     if (held === undefined || file === undefined) return held;
     const copy = (path: string): typeof file => ({ ...file, path, pathLower: path, basenameLower: path });
-    return {
+    const rewritten: ExtentScopedRows = {
       ...held,
       resourceRealizations: [
         ...held.resourceRealizations,
@@ -133,6 +133,7 @@ class UnreachableRowsStore extends FakeFactStore {
         { ...copy('vanished.md'), exists: false },
       ],
     };
+    return rewritten;
   }
 }
 

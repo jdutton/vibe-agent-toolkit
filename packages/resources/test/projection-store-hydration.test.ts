@@ -490,7 +490,7 @@ describe('selectRequestedContexts', () => {
   it(`throws ${STORE_REQUEST_UNMET} when the stored rows carry no zoneProvenance table, rather than failing on an absent value`, () => {
     // A backend that ignored the request: the reuse rule's own input is missing, which must name
     // the table, never surface as a TypeError.
-    const withoutProvenance: Partial<ExtentScopedRows> = storedExtent();
+    const withoutProvenance: Partial<Record<keyof ExtentScopedRows, unknown>> = { ...storedExtent() };
     delete withoutProvenance.zoneProvenance;
     expect(() => selectRequestedContexts(withoutProvenance as ExtentScopedRows, []))
       .toThrow(expect.objectContaining({ code: STORE_REQUEST_UNMET, tier: 'extent', table: 'zoneProvenance' }));

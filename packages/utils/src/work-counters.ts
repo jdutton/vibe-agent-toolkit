@@ -87,8 +87,8 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * then is a `storeMiss`. `outsideRoot`: a question about a file outside the run's root, answered
  * nothing without opening the store, and also a `storeMiss` (or `noStore`) when scanned.
  *
- * `checks.gate.rows.read` counts the tier rows the checks overlap gate's predicates read, summed
- * per member (resource-scanning-and-caching.md 3.7b).
+ * `checks.gate.rows.read` counts the tier rows the admission request reads for the checks overlap
+ * gate, summed per member (resource-scanning-and-caching.md 3.7b).
  */
 export const WORK_COUNTER_NAMES = [
   'store.rows.decoded.persistent',

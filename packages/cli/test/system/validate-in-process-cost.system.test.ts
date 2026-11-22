@@ -28,6 +28,7 @@ import {
   BUNDLED_JSON,
   type DamageTarget,
   declinesOf,
+  expectChecksMode,
   expectEveryDamageObserved,
   FORMS_MARKDOWN,
   HTML_PAGE,
@@ -97,6 +98,7 @@ async function coldThenWarm(repo: string, checks: ChecksMode): Promise<ColdWarm>
   const cacheDir = context.createTempDir();
   const cold = await validateOver(context, repo, cacheDir, checks);
   const warm = await validateOver(context, repo, cacheDir, checks);
+  expectChecksMode(warm, checks);
   return { repo, cacheDir, cold, warm };
 }
 

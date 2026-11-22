@@ -611,6 +611,22 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   exported label beside the other `INVENTORY_REFUSED_*` labels (barrel, barrel test, the CLI's
   absence-cause table, the cascade-order unit test).
 
+### `vat inventory` of one SKILL.md parses its whole body
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** no (time only)
+- **Mechanism:** `vat inventory <SKILL.md>` calls `extractClaudeSkillInventory` with no
+  `sharedPopulation`, so the skill's link walk falls back to `crawlSkillLinkRegistry`, whose
+  registry parses the SKILL.md whole, body included, in a parse pool of its own. The frontmatter is
+  parsed again, alone, on the caller's dispatcher. On a SKILL.md of megabytes that is a second full
+  parse for an answer the block already gives. The plugin and marketplace lanes pass a population
+  and do not pay it. Reproduced by `skill-md-input-cap-fallback.integration.test.ts`, which pins the
+  two parses and reds when the second goes.
+- **Where:** [`inventory.ts`](../../packages/cli/src/commands/inventory.ts) (the single-skill
+  branch), [`extract-skill.ts`](../../packages/claude-marketplace/src/inventory/extract-skill.ts)
+  (`registryFor`)
+- **Fix:** build a one-skill population for the single-skill branch, as the plugin lane does, so
+  the walk never builds a registry; then update the pinning test to the block alone.
+
 ## Git and crawl
 
 ### Outside a repository, authored markdown under a tool-output-named directory is not enumerated

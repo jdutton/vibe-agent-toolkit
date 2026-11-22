@@ -54,7 +54,7 @@ class UnlistableRowStore extends FakeFactStore {
     if (stored === undefined || !this.inject) return stored;
     const anchor = stored.resourceRealizations[0];
     if (anchor === undefined) throw new Error('fixture produced no realization to anchor the injected row on');
-    return {
+    const injected: ExtentScopedRows = {
       ...stored,
       realizationConditions: [
         ...stored.realizationConditions,
@@ -69,6 +69,7 @@ class UnlistableRowStore extends FakeFactStore {
         },
       ],
     };
+    return injected;
   }
 }
 

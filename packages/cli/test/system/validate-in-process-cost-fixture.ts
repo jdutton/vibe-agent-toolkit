@@ -27,9 +27,10 @@ import { cpSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
 import { BUILTIN_CHECKS, PROJECTION_TABLES, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
-import { safePath, type WorkCounter, type WorkCounterDump } from '@vibe-agent-toolkit/utils';
+import { mapWithConcurrency, safePath, type WorkCounter, type WorkCounterDump } from '@vibe-agent-toolkit/utils';
 import { expect } from 'vitest';
 
+import type { ValidateDebugFacts } from '../../src/commands/validate-debug-facts.js';
 import { RUN_INTEGRITY_CODE } from '../../src/utils/run-integrity.js';
 import { GATE_FIXTURE, VERBS } from '../helpers/cache-differential.js';
 import { storeFilesUnder } from '../helpers/projection-store-probe.js';
@@ -219,6 +220,8 @@ export interface ValidateRun {
   /** The validate process's dump (the one with phases); the checks child's is `child`. */
   readonly parent: WorkCounterDump;
   readonly child: WorkCounterDump;
+  /** The validate process's debug facts: the checks mode it got, and the gate condition that declined it. */
+  readonly facts: ValidateDebugFacts;
 }
 
 /** How `vat validate`'s checks child runs: overlapping a warm resources phase, or at its turn. */
@@ -245,7 +248,24 @@ export async function validateOver(suite: CostSuite, repo: string, cacheDir: str
   const parent = run.dumps.find((dump) => dump.phases['resources'] !== undefined);
   const child = run.dumps.find((dump) => dump.phases['resources'] === undefined);
   if (parent === undefined || child === undefined) throw new Error(`expected the validate process's dump and its checks child's, got ${String(run.dumps.length)}`);
-  return { document: VERBS.vatValidate.parse(run.result.stdout) as Record<string, unknown>, parent, child };
+  const [facts, ...extra] = run.debugFacts;
+  if (facts === undefined || extra.length > 0) throw new Error(`expected one validate debug-facts dump, got ${String(run.debugFacts.length)}`);
+  return { document: VERBS.vatValidate.parse(run.result.stdout) as Record<string, unknown>, parent, child, facts };
+}
+
+/**
+ * Require a warm run to have run its checks child in the mode its cores pinned, so a run the gate
+ * declined for another reason (a timing, a member sent cold) names that reason instead of failing
+ * later on a count.
+ *
+ * @param run - A warm run
+ * @param checks - The mode its cores pinned
+ */
+export function expectChecksMode(run: ValidateRun, checks: ChecksMode): void {
+  expect(
+    { checksOverlapped: run.facts.checksOverlapped, gateDeclinedBy: checks === 'overlapped' ? run.facts.gateDeclinedBy : 'any' },
+    `the warm run's checks mode (declined by ${JSON.stringify(run.facts.gateDeclinedBy)})`,
+  ).toEqual({ checksOverlapped: checks === 'overlapped' ? 1 : 0, gateDeclinedBy: checks === 'overlapped' ? null : 'any' });
 }
 
 /**
@@ -289,6 +309,13 @@ export interface DamageTarget {
   readonly form: string | null;
 }
 
+/**
+ * How many damaged runs go at once. Each is a `vat validate` with its checks child (two Node
+ * processes); unbounded, a damage arm starts a dozen beside other files' tests that bound a stall
+ * in seconds.
+ */
+const DAMAGE_RUN_CONCURRENCY = 2;
+
 /** A warm store: the fixture, the cache written over it, and the undamaged warm run over that cache. */
 interface WarmStore {
   readonly repo: string;
@@ -307,7 +334,7 @@ interface WarmStore {
  * @param reader - Who reads the targets, for the failure message
  */
 export async function expectEveryDamageObserved(suite: CostSuite, store: WarmStore, targets: readonly DamageTarget[], reader: string): Promise<void> {
-  const outcomes = await Promise.all(targets.map(async ({ table, form }) => {
+  const outcomes = await mapWithConcurrency(targets, async ({ table, form }) => {
     const copy = safePath.join(suite.createTempDir(), 'cache');
     const deleted = damagedCopy(store.cacheDir, copy, table, form);
     const damaged = await validateOver(suite, store.repo, copy, 'overlapped');
@@ -317,7 +344,7 @@ export async function expectEveryDamageObserved(suite: CostSuite, store: WarmSto
       findingsChanged: JSON.stringify(admissionView(damaged.document)) !== JSON.stringify(admissionView(store.warm.document)),
       declines: declinesOf(damaged.parent),
     };
-  }));
+  }, DAMAGE_RUN_CONCURRENCY);
   const undamaged = declinesOf(store.warm.parent);
   for (const outcome of outcomes) expect(outcome.deleted, `${outcome.target}: the store held a row to damage`).toBe(1);
   // Every unobserved target at once, so a red names all of them.

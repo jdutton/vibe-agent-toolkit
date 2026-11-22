@@ -32,21 +32,24 @@ export function parserKindForResolvedPath(
   return parserKindForMimeType(declaredMime) ?? NO_PARSER_KIND;
 }
 
-/** A run's parse routing: its collection MIME resolver and the directory declarations are relative to. */
-export interface ParseRouting {
+/**
+ * A parse routing: its collection MIME resolver and the directory declarations are relative to
+ * (`undefined` for a registry not yet given one, which matches declarations against the absolute path).
+ */
+export interface ParseRouting<Base extends string | undefined> {
   readonly resolver: CollectionMimeResolver;
-  readonly baseDir: string;
+  readonly baseDir: Base;
 }
 
 /**
- * The parse routing a run admits its members by, built from the run's config: `vat validate`'s
- * checks overlap gate routes each member by it, so a caller judging what the gate decides builds
- * the gate's routing here rather than a resolver of its own.
+ * The one constructor of a parse routing, from a project config: the registry's read and sizing,
+ * `vat validate`'s checks overlap gate, and a caller judging what the gate decides all build theirs
+ * here, never a resolver of their own.
  *
- * @param config - The run's project config, if it has one
- * @param baseDir - The run's root, which collection declarations are relative to
+ * @param config - The project config, if there is one
+ * @param baseDir - The directory collection declarations are relative to
  * @returns The routing
  */
-export function parseRoutingFor(config: ProjectConfig | undefined, baseDir: string): ParseRouting {
+export function parseRoutingFor<Base extends string | undefined>(config: ProjectConfig | undefined, baseDir: Base): ParseRouting<Base> {
   return { resolver: createCollectionMimeResolver(config?.resources?.collections), baseDir };
 }

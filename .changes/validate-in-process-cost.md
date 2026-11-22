@@ -2,8 +2,8 @@
 
 - **Library: `FactStore.readBlobFacts` and `FactStore.readExtent` take a required `BlobRequest` /
   `ExtentRequest`** naming the tables to read, and answer only those (`ALL_BLOB_REQUEST`,
-  `ALL_EXTENT_REQUEST` read everything). A backend must honour it: an answer missing a requested
-  table is refused (`StoreRequestUnmetError`, code
+  `ALL_EXTENT_REQUEST` read everything). A backend must answer every requested table: an answer missing one
+  is refused (`StoreRequestUnmetError`, code
   `STORE_REQUEST_UNMET`, with `tier: 'blob' | 'extent'`).
 - **Library: `SkillTextRun` and `RunSkillRegistriesOptions` require `crawlOnce(key, crawl)`**, the
   run's one crawl of each skill discovery base; `RunPopulation` holds one per run.
