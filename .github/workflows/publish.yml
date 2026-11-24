@@ -136,3 +136,12 @@ jobs:
           gh release create "v${{ steps.version.outputs.version }}" \
             --title "Release v${{ steps.version.outputs.version }}" \
             --notes-file /tmp/release-notes.md
+
+      # Last, so a dist-tag problem never holds back the marketplaces or the
+      # release: everything is already published. It re-reads the registry for
+      # up to ~5 minutes (npm processes a publish asynchronously), then fails
+      # printing the `npm dist-tag add` commands; they need the owner's OTP, so
+      # it never runs them.
+      - name: Verify every published package's latest is this release
+        if: steps.version.outputs.is_stable == 'true'
+        run: bun run npm-registry-guard --after-stable-publish ${{ steps.version.outputs.version }} --root .

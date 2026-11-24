@@ -161,6 +161,14 @@ The publish workflow asserts that the pushed tag equals the root `package.json` 
 builds anything, then runs `bun run pre-publish -- --release-readiness --tag <version>` (in CI the
 remote tag must exist and name the manifest version; locally, without `--tag`, it must be absent).
 
+The same release-readiness run reads the npm registry (`npm-registry-guard.ts`): a package in the
+`@vibe-agent-toolkit` scope, or `vibe-agent-toolkit`, that is no longer a workspace package fails
+until it is deprecated; on an RC, a package whose `latest` is a prerelease or that has never been
+published is a warning. After a stable publish, the workflow's last step fails if any published
+package's `latest` is not the release. The guard prints the `npm deprecate` / `npm dist-tag`
+commands and never runs them: they need the owner's one-time password. Why `latest` can sit on an
+RC: [traps](contributing/traps.md#a-package-first-published-as-an-rc-keeps-latest-on-that-rc-and-latest-cannot-be-removed).
+
 ### Changelog fragments
 
 Changes may land as fragments under `.changes/` instead of editing `CHANGELOG.md` directly — see

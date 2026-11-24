@@ -99,6 +99,7 @@
     "pre-release": "tsx packages/dev-tools/src/pre-publish-check.ts --root . --release-readiness",
     "determine-publish-tags": "tsx packages/dev-tools/src/determine-publish-tags.ts",
     "publish-with-rollback": "tsx packages/dev-tools/src/publish-with-rollback.ts",
+    "npm-registry-guard": "tsx packages/dev-tools/src/npm-registry-guard.ts",
     "extract-changelog": "tsx packages/dev-tools/src/extract-changelog.ts",
     "import-marketplace": "tsx packages/dev-tools/src/import-marketplace.ts",
     "fix-workspace-deps": "tsx packages/dev-tools/src/fix-workspace-deps.ts",
