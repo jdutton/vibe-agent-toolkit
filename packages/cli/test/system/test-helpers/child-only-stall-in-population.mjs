@@ -23,19 +23,16 @@
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 
+import { onChildStarted } from './on-child-started.mjs';
+
 if (process.argv.includes('--supervised-by')) {
   const ceiling = Number(process.env['TEST_CHILD_MAX_STALL_MS']);
   if (!Number.isFinite(ceiling) || ceiling <= 0) throw new Error('child-only-stall-in-population.mjs needs TEST_CHILD_MAX_STALL_MS');
-  const append = fs.appendFileSync;
-  fs.appendFileSync = (path, data, ...rest) => {
-    const result = append(path, data, ...rest);
-    if (typeof data === 'string' && data.includes('"kind":"started"')) {
-      const pidFile = process.env['TEST_CHILD_PID_FILE'];
-      if (pidFile !== undefined) fs.writeFileSync(pidFile, String(process.pid), 'utf-8');
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ceiling);
-      process.kill(process.pid, 'SIGKILL');
-    }
-    return result;
-  };
+  onChildStarted(() => {
+    const pidFile = process.env['TEST_CHILD_PID_FILE'];
+    if (pidFile !== undefined) fs.writeFileSync(pidFile, String(process.pid), 'utf-8');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ceiling);
+    process.kill(process.pid, 'SIGKILL');
+  });
   syncBuiltinESMExports();
 }

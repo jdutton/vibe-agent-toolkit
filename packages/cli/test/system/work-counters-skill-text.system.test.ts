@@ -53,9 +53,9 @@ import { DEFAULT_PARSE_LIMITS, SKILL_TEXT_HELD_LIMITS, VAT_CACHE_DIR_ENV } from 
 import { toForwardSlash, type WorkCounter, type WorkCounterDump } from '@vibe-agent-toolkit/utils';
 import { parseLookupsIn } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { parse as parseYaml } from 'yaml';
 
 import { probedReads } from '../helpers/fs-read-probe.js';
+import { expectAnswersAsStoreOff } from '../helpers/load-refusals.js';
 import { storeFilesUnder } from '../helpers/projection-store-probe.js';
 import { runWithWorkCounters } from '../helpers/work-counter-run.js';
 import { writeCommittedCorpus } from '../test-helpers.js';
@@ -373,12 +373,6 @@ async function runVerb(cwd: string, args: readonly string[], arm: Arm, storeOff:
   };
 }
 
-/** A report's exit-relevant answer: its findings, as the serialized text a reader compares. */
-function findingsText(stdout: string): string {
-  const document = parseYaml(stdout) as { findings?: unknown };
-  return JSON.stringify(document.findings);
-}
-
 /** `vat verify`'s built fixture and its filled caches. */
 interface VerifyFixture {
   readonly root: string;
@@ -445,10 +439,13 @@ describe('warm skills lanes read only the files the store is declared not to ser
       hashed: rederives ? TRACKED_PROJECT_FILES.length : 0,
       refusedPairs: rederives ? 1 : 0,
     });
-    expect({ status: run.status, findings: findingsText(run.stdout) }, 'warm answers as store-off does').toEqual({
-      status: off.status,
-      findings: findingsText(off.stdout),
-    });
+    // The runs parse beside each other, so a load-dependent refusal may be one side's alone.
+    const loadRefusals = (of: Run): number =>
+      [of.dump, ...of.children].reduce((sum, dump) => sum + dump.counters['parse.refused.load'], 0);
+    expectAnswersAsStoreOff(
+      { status: run.status, stdout: run.stdout, loadRefusals: loadRefusals(run) },
+      { status: off.status, stdout: off.stdout, loadRefusals: loadRefusals(off) },
+    );
   });
 
   it('every keyed markdown blob has exactly one skill_text_facts row, and no other blob any skill-text row', () => {
