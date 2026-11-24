@@ -30,7 +30,7 @@ function register(blocking: boolean): string {
 /** Run the check over a tree at `version` whose register blocks the stable tag or not; the registry holds nothing. */
 async function run(version: string, blocking: boolean): Promise<{ status: number | null; stdout: string }> {
   const root = fixtureTree(version, { 'docs/contributing/known-defects.md': register(blocking) });
-  return prePublish(root, await fakeRegistry({ [SCOPE_LISTING_PATH]: {} }));
+  return prePublish(root, (await fakeRegistry({ [SCOPE_LISTING_PATH]: {} })).url);
 }
 
 describe('pre-publish-check --release-readiness: Check 16 (known defects)', () => {

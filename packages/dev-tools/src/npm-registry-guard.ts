@@ -1,27 +1,32 @@
 #!/usr/bin/env tsx
 /**
  * npm registry guard: what the registry says about this repository's packages
- * that `npm publish` does not check.
+ * that `npm publish` does not check. The one reader of the npm registry in the
+ * release tooling.
  *
  * - Before any publish (`pre-publish-check --release-readiness` calls
  *   {@link checkBeforePublish}): a package on npm that is no longer a workspace
  *   package must be deprecated (an error), and on a prerelease, a published
- *   package whose `latest` is a prerelease or a package never published is
- *   reported as a warning. npm gives a package's FIRST publish `latest` even
- *   under `--tag next`, and refuses to remove `latest`, so such a package keeps
- *   a prerelease `latest` until the next stable publish moves it.
- * - After a stable publish (this file's CLI, a late step of `publish.yml`):
+ *   package whose `latest` is a prerelease or a package not on npm is reported
+ *   as a warning. npm gives a package's FIRST publish `latest` even under
+ *   `--tag next`, and refuses to remove `latest`, so such a package keeps a
+ *   prerelease `latest` until the next stable publish moves it.
+ * - After a stable publish (this file's CLI, its own job in `publish.yml`):
  *   every published package's `latest` must be the version just released.
+ * - `determine-publish-tags` reads the current `next` through {@link readDistTag}.
  *
- * Deprecate and dist-tag writes need the owner's npm one-time password, so the
- * guard never runs them: it reports, prints the exact command, and fails.
+ * The guard never writes to npm (an owner ruling): it reports, prints the exact
+ * `npm deprecate` / `npm dist-tag` command, and fails. Run from a maintainer's
+ * machine, both commands need the owner's one-time password.
  *
  * Every registry read goes through one injectable {@link RegistryGet}, so the
  * decisions are unit-tested offline.
  *
  * Usage:
  *   tsx packages/dev-tools/src/npm-registry-guard.ts --after-stable-publish VERSION [--root DIR] [--registry URL]
- *     [--attempts N] [--wait-ms MS]   (defaults: 10 reads, 30 s apart, for npm's processing lag)
+ *     [--interval-ms MS] [--max-reads N] [--stall-reads N]
+ *   Defaults: a read every 30 s, ending when no package is left, when the set
+ *   left has not shrunk for 10 reads (5 min), or after 30 reads (15 min).
  */
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
@@ -45,13 +50,20 @@ export const UMBRELLA_PACKAGE_NAME = 'vibe-agent-toolkit';
  */
 export const SCOPE_LISTING_PATH = `/-/org/${NPM_SCOPE.slice(1)}/package`;
 
-/** The message `npm deprecate` is given for a package removed from the repository. */
-const REMOVED_PACKAGE_MESSAGE =
-  'Removed from vibe-agent-toolkit and no longer maintained. See https://github.com/jdutton/vibe-agent-toolkit/blob/main/CHANGELOG.md';
+/**
+ * Removed packages that have a successor, for the deprecation message the guard
+ * suggests. A removed package not named here gets a message that claims no
+ * replacement either way.
+ */
+const REMOVED_PACKAGE_REPLACEMENTS: Readonly<Record<string, string>> = {
+  [`${NPM_SCOPE}/agent-schema`]: `${NPM_SCOPE}/schema`,
+  [`${NPM_SCOPE}/runtime-claude-skills`]: `${NPM_SCOPE}/agent-skills`,
+};
 
-/** After a stable publish: how often to read the registry, and how long to wait between reads. */
-const AFTER_PUBLISH_ATTEMPTS = 10;
-const AFTER_PUBLISH_WAIT_MS = 30_000;
+/** After a stable publish: the defaults of {@link LatestPoll}. */
+const AFTER_PUBLISH_INTERVAL_MS = 30_000;
+const AFTER_PUBLISH_MAX_READS = 30;
+const AFTER_PUBLISH_STALL_READS = 10;
 
 /**
  * GET a registry path (`/` + name, or {@link SCOPE_LISTING_PATH}). Resolves the
@@ -64,7 +76,7 @@ export interface RegistryFinding {
   readonly severity: 'warning' | 'error';
   readonly packageName: string;
   readonly message: string;
-  /** The command the owner runs to fix it (needs their npm one-time password). */
+  /** The command that fixes it, when one does. */
   readonly fix?: string;
 }
 
@@ -91,9 +103,25 @@ export function packumentPath(name: string): string {
   return `/${name.replace('/', '%2f')}`;
 }
 
+/**
+ * npm's record of a package whose every version was unpublished: a 200 with
+ * `name` and `modified`, no `versions` (or none left), sometimes
+ * `time.unpublished`. It is a package npm does not have, exactly like a 404.
+ */
+function isUnpublishedRecord(body: unknown): boolean {
+  if (typeof body !== 'object' || body === null) return false;
+  const record = body as Record<string, unknown>;
+  const time = record['time'];
+  if (typeof time === 'object' && time !== null && 'unpublished' in time) return true;
+  const versions = record['versions'];
+  if (versions === undefined) return true;
+  return typeof versions === 'object' && versions !== null && Object.keys(versions).length === 0;
+}
+
+/** A package's packument, or `undefined` when npm does not have the package (404 or unpublished). */
 async function readPackument(get: RegistryGet, name: string): Promise<Packument | undefined> {
   const body = await get(packumentPath(name));
-  if (body === undefined) return undefined;
+  if (body === undefined || isUnpublishedRecord(body)) return undefined;
   const parsed = PackumentSchema.safeParse(body);
   if (!parsed.success) {
     throw new Error(`The registry document for ${name} is not a packument: ${parsed.error.message}`);
@@ -101,10 +129,26 @@ async function readPackument(get: RegistryGet, name: string): Promise<Packument 
   return parsed.data;
 }
 
+/** Every packument of `names`, in order; `undefined` where npm has none. */
+function readPackuments(get: RegistryGet, names: readonly string[]): Promise<(Packument | undefined)[]> {
+  return Promise.all(names.map((name) => readPackument(get, name)));
+}
+
+/** A package's dist-tag, or `undefined` when npm has no such package or tag. Rejects on a registry error. */
+export async function readDistTag(get: RegistryGet, name: string, tag: string): Promise<string | undefined> {
+  return (await readPackument(get, name))?.['dist-tags'][tag];
+}
+
 /** Deprecated means every version is: `npm deprecate <name> <message>` marks them all. */
 function isWhollyDeprecated(packument: Packument): boolean {
   const versions = Object.values(packument.versions);
   return versions.length > 0 && versions.every((v) => (v.deprecated ?? '') !== '');
+}
+
+function deprecationMessage(name: string): string {
+  const replacement = REMOVED_PACKAGE_REPLACEMENTS[name];
+  const advice = replacement === undefined ? 'and is no longer maintained' : `; use ${replacement} instead`;
+  return `Removed from vibe-agent-toolkit ${advice}. See https://github.com/jdutton/vibe-agent-toolkit/blob/main/CHANGELOG.md`;
 }
 
 async function removedPackageFindings(
@@ -129,15 +173,10 @@ async function removedPackageFindings(
         severity: 'error',
         packageName: name,
         message: `${name} is on npm but is no longer a workspace package, and is not deprecated`,
-        fix: `npm deprecate ${name} "${REMOVED_PACKAGE_MESSAGE}"`,
+        fix: `npm deprecate ${name} "${deprecationMessage(name)}"`,
       },
     ];
   });
-}
-
-/** Every packument of `names`, in order; `undefined` where the registry has none. */
-function readPackuments(get: RegistryGet, names: readonly string[]): Promise<(Packument | undefined)[]> {
-  return Promise.all(names.map((name) => readPackument(get, name)));
 }
 
 async function prereleaseLatestFindings(
@@ -153,7 +192,7 @@ async function prereleaseLatestFindings(
         {
           severity: 'warning',
           packageName: name,
-          message: `${name} has never been published: npm gives a first publish latest even under --tag next, so it will have latest = ${version} until the next stable publish`,
+          message: `${name} is not on npm (never published, or every version unpublished): npm gives a first publish latest even under --tag next, so it will have latest = ${version} until the next stable publish`,
         },
       ];
     }
@@ -185,62 +224,122 @@ export async function checkBeforePublish(options: {
   return [...(await prereleaseLatestFindings(get, version, published)), ...removed];
 }
 
-/** Which of `names` do not (yet) have `latest` = `version`, and what each has instead. */
-async function latestMismatches(
+/** How the after-publish check re-reads the registry while npm processes the publish. */
+export interface LatestPoll {
+  /** Wait between reads. */
+  readonly intervalMs: number;
+  /** Reads at most, however the set left is moving. */
+  readonly maxReads: number;
+  /** Reads in a row without the set left shrinking that end the poll. */
+  readonly stallReads: number;
+  readonly sleep: (ms: number) => Promise<void>;
+}
+
+/** One package's state on one read, other than "latest is the release". */
+type LatestState =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'behind'; readonly latest: string | undefined }
+  | { readonly kind: 'unreadable'; readonly reason: string };
+
+/** The packages of `names` whose `latest` is not (yet) `version`, with what each shows instead. */
+async function latestStates(
   get: RegistryGet,
   version: string,
   names: readonly string[],
-): Promise<Map<string, string | undefined>> {
-  const packuments = await readPackuments(get, names);
-  const mismatches = new Map<string, string | undefined>();
+): Promise<Map<string, LatestState>> {
+  const reads = await Promise.allSettled(names.map((name) => readPackument(get, name)));
+  const states = new Map<string, LatestState>();
   for (const [i, name] of names.entries()) {
-    const latest = packuments[i]?.['dist-tags']['latest'];
-    if (latest !== version) mismatches.set(name, latest);
+    const read = reads[i];
+    if (read?.status !== 'fulfilled') {
+      states.set(name, { kind: 'unreadable', reason: read === undefined ? 'no read' : String(read.reason) });
+      continue;
+    }
+    const packument = read.value;
+    if (packument?.versions[version] === undefined) {
+      states.set(name, { kind: 'absent' });
+    } else if (packument['dist-tags']['latest'] !== version) {
+      states.set(name, { kind: 'behind', latest: packument['dist-tags']['latest'] });
+    }
   }
-  return mismatches;
+  return states;
+}
+
+interface PollProgress {
+  readonly left: Map<string, LatestState>;
+  readonly reads: number;
+  readonly fewest: number;
+  readonly stalled: number;
 }
 
 /**
- * Re-read the `pending` packages until none mismatches or `attemptsLeft` runs
- * out, `sleep` between reads. Recursive so each wait is one awaited step.
+ * Re-read the packages left until none is, the set left has not shrunk for
+ * `stallReads` reads, or `maxReads` reads are spent. A registry error is a
+ * package left for that read, never an immediate failure.
  */
 async function pollLatest(
-  options: { version: string; get: RegistryGet; sleep: () => Promise<void> },
-  pending: readonly string[],
-  attemptsLeft: number,
-): Promise<Map<string, string | undefined>> {
-  const mismatches = await latestMismatches(options.get, options.version, pending);
-  if (mismatches.size === 0 || attemptsLeft <= 1) return mismatches;
-  await options.sleep();
-  return pollLatest(options, [...mismatches.keys()], attemptsLeft - 1);
+  get: RegistryGet,
+  version: string,
+  poll: LatestPoll,
+  progress: PollProgress,
+): Promise<Map<string, LatestState>> {
+  const left = await latestStates(get, version, [...progress.left.keys()]);
+  const reads = progress.reads + 1;
+  const shrank = left.size < progress.fewest;
+  const stalled = shrank ? 0 : progress.stalled + 1;
+  if (left.size === 0 || reads >= poll.maxReads || stalled >= poll.stallReads) return left;
+  await poll.sleep(poll.intervalMs);
+  return pollLatest(get, version, poll, { left, reads, fewest: Math.min(left.size, progress.fewest), stalled });
+}
+
+function latestFinding(name: string, version: string, state: LatestState): RegistryFinding {
+  if (state.kind === 'behind') {
+    return {
+      severity: 'error',
+      packageName: name,
+      message: `${name} has latest = ${String(state.latest)}, not the ${version} just published`,
+      fix: `npm dist-tag add ${name}@${version} latest`,
+    };
+  }
+  return {
+    severity: 'error',
+    packageName: name,
+    message: `${name}@${version} is not on npm: the publish did not land; run npm publish --access public --tag latest from that package's directory`,
+  };
 }
 
 /**
  * After a stable publish, every published package's `latest` must be `version`.
- * npm processes a publish asynchronously, so a mismatch is re-read up to
- * `attempts` times, `sleep` apart, before it is reported.
+ * npm processes a publish asynchronously, so the registry is polled (see
+ * {@link LatestPoll}) before anything is reported. Rejects when a package still
+ * cannot be read at the end: an outage is not a verdict.
  */
 export async function checkLatestAfterStablePublish(options: {
   version: string;
   publishedPackages: readonly string[];
   get: RegistryGet;
-  attempts: number;
-  sleep: () => Promise<void>;
+  poll: LatestPoll;
 }): Promise<RegistryFinding[]> {
-  const { version } = options;
+  const { version, get, poll } = options;
   if (semver.prerelease(version) !== null) {
     throw new Error(`${version} is a prerelease: only a stable publish moves latest`);
   }
-  const mismatches = await pollLatest(options, options.publishedPackages, options.attempts);
-  return [...mismatches].map(([name, latest]): RegistryFinding => ({
-    severity: 'error',
-    packageName: name,
-    message:
-      latest === undefined
-        ? `${name} is not on the registry after the publish`
-        : `${name} has latest = ${latest}, not the ${version} just published`,
-    fix: `npm dist-tag add ${name}@${version} latest`,
-  }));
+  const start = new Map<string, LatestState>(
+    options.publishedPackages.map((name) => [name, { kind: 'absent' }]),
+  );
+  const left = await pollLatest(get, version, poll, {
+    left: start,
+    reads: 0,
+    fewest: Number.POSITIVE_INFINITY,
+    stalled: 0,
+  });
+  const unreadable = [...left].flatMap(([name, state]) =>
+    state.kind === 'unreadable' ? [`${name}: ${state.reason}`] : [],
+  );
+  if (unreadable.length > 0) {
+    throw new Error(`The registry could not be read for: ${unreadable.join('; ')}`);
+  }
+  return [...left].map(([name, state]) => latestFinding(name, version, state));
 }
 
 /** FINDINGS when any finding is an error; a warning never fails. */
@@ -255,17 +354,26 @@ export function printFindings(findings: readonly RegistryFinding[]): void {
   }
   const fixes = findings.flatMap((f) => (f.fix === undefined ? [] : [f.fix]));
   if (fixes.length > 0) {
-    console.log('  Run (each needs your npm one-time password; add --otp=<code>):');
+    console.log('  The guard never writes to npm. Run (from a maintainer machine, add --otp=<code>):');
     for (const fix of fixes) console.log(`    ${fix}`);
   }
 }
 
-/** The real {@link RegistryGet}: `fetch` against `registry`, abbreviated packuments. */
-export function registryGet(registry: string = NPM_REGISTRY): RegistryGet {
+/**
+ * The real {@link RegistryGet}: `fetch` against `registry`, abbreviated
+ * packuments. Every read carries a unique query parameter: npm's CDN caches a
+ * package document for `max-age=300` and keys on the full URL, so a read right
+ * after a publish would otherwise see the document from before it.
+ */
+export function registryGet(registry: string): RegistryGet {
   let base = registry;
   while (base.endsWith('/')) base = base.slice(0, -1);
+  let reads = 0;
   return async (path) => {
-    const response = await fetch(`${base}${path}`, {
+    reads++;
+    const url = new URL(`${base}${path}`);
+    url.searchParams.set('vat-read', `${Date.now().toString(36)}-${reads.toString(36)}`);
+    const response = await fetch(url, {
       headers: { accept: 'application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8' },
     });
     if (response.status === 404) return undefined;
@@ -281,28 +389,37 @@ export function guardWorkspacePackages(repoRoot: string): GuardWorkspacePackage[
   return readWorkspaceGraph(repoRoot).packages.map((p) => ({ name: p.name, isPrivate: p.isPrivate }));
 }
 
-interface CliArgs {
-  version: string;
-  root: string;
-  registry: string;
-  attempts: number;
-  waitMs: number;
+export interface GuardArgs {
+  readonly version: string;
+  readonly root: string;
+  readonly registry: string;
+  readonly intervalMs: number;
+  readonly maxReads: number;
+  readonly stallReads: number;
 }
 
 const USAGE =
-  'Usage: npm-registry-guard.ts --after-stable-publish VERSION [--root DIR] [--registry URL] [--attempts N] [--wait-ms MS]';
+  'Usage: npm-registry-guard.ts --after-stable-publish VERSION [--root DIR] [--registry URL] [--interval-ms MS] [--max-reads N] [--stall-reads N]';
 
-function parseCount(flag: string, value: string): number {
+function parseCount(flag: string, value: string, min: number): number {
   const n = Number(value);
-  if (!Number.isInteger(n) || n < 0) throw new Error(`${flag} takes a whole number, not ${value}`);
+  if (!Number.isInteger(n) || n < min) throw new Error(`${flag} takes a whole number of at least ${min}, not ${value}`);
   return n;
 }
 
-/** Apply one `flag value` pair to `args`; throws on an unknown flag. */
-function applyFlag(args: Partial<CliArgs>, flag: string, value: string): void {
+function parseStableVersion(value: string): string {
+  if (semver.valid(value) === null) throw new Error(`--after-stable-publish: ${value} is not a version`);
+  if (semver.prerelease(value) !== null) {
+    throw new Error(`--after-stable-publish: ${value} is a prerelease; only a stable publish moves latest`);
+  }
+  return value;
+}
+
+/** Apply one `flag value` pair to `args`; throws on an unknown flag or a bad value. */
+function applyFlag(args: { -readonly [K in keyof GuardArgs]?: GuardArgs[K] }, flag: string, value: string): void {
   switch (flag) {
     case '--after-stable-publish': {
-      args.version = value;
+      args.version = parseStableVersion(value);
       break;
     }
     case '--root': {
@@ -313,12 +430,16 @@ function applyFlag(args: Partial<CliArgs>, flag: string, value: string): void {
       args.registry = value;
       break;
     }
-    case '--attempts': {
-      args.attempts = Math.max(1, parseCount(flag, value));
+    case '--interval-ms': {
+      args.intervalMs = parseCount(flag, value, 0);
       break;
     }
-    case '--wait-ms': {
-      args.waitMs = parseCount(flag, value);
+    case '--max-reads': {
+      args.maxReads = parseCount(flag, value, 1);
+      break;
+    }
+    case '--stall-reads': {
+      args.stallReads = parseCount(flag, value, 1);
       break;
     }
     default: {
@@ -327,8 +448,9 @@ function applyFlag(args: Partial<CliArgs>, flag: string, value: string): void {
   }
 }
 
-function parseArgs(argv: readonly string[]): CliArgs {
-  const args: Partial<CliArgs> = {};
+/** The CLI's arguments; `cwd` is the default root. Throws on anything it cannot use. */
+export function parseGuardArgs(argv: readonly string[], cwd: string): GuardArgs {
+  const args: { -readonly [K in keyof GuardArgs]?: GuardArgs[K] } = {};
   for (let i = 0; i < argv.length; i += 2) {
     const flag = String(argv[i]);
     const value = argv[i + 1];
@@ -338,22 +460,27 @@ function parseArgs(argv: readonly string[]): CliArgs {
   if (args.version === undefined) throw new Error('--after-stable-publish VERSION is required');
   return {
     version: args.version,
-    root: args.root ?? process.cwd(),
+    root: args.root ?? cwd,
     registry: args.registry ?? NPM_REGISTRY,
-    attempts: args.attempts ?? AFTER_PUBLISH_ATTEMPTS,
-    waitMs: args.waitMs ?? AFTER_PUBLISH_WAIT_MS,
+    intervalMs: args.intervalMs ?? AFTER_PUBLISH_INTERVAL_MS,
+    maxReads: args.maxReads ?? AFTER_PUBLISH_MAX_READS,
+    stallReads: args.stallReads ?? AFTER_PUBLISH_STALL_READS,
   };
 }
 
-async function afterStablePublish(args: CliArgs): Promise<number> {
+async function afterStablePublish(args: GuardArgs): Promise<number> {
   const published = guardWorkspacePackages(args.root).filter((p) => !p.isPrivate).map((p) => p.name);
   log(`Checking that latest is ${args.version} for ${published.length} published packages...`, 'blue');
   const findings = await checkLatestAfterStablePublish({
     version: args.version,
     publishedPackages: published,
     get: registryGet(args.registry),
-    attempts: args.attempts,
-    sleep: () => new Promise((resolve) => setTimeout(resolve, args.waitMs)),
+    poll: {
+      intervalMs: args.intervalMs,
+      maxReads: args.maxReads,
+      stallReads: args.stallReads,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    },
   });
   printFindings(findings);
   if (findings.length === 0) log(`✓ latest is ${args.version} for every published package`, 'green');
@@ -361,9 +488,9 @@ async function afterStablePublish(args: CliArgs): Promise<number> {
 }
 
 async function main(): Promise<number> {
-  let args: CliArgs;
+  let args: GuardArgs;
   try {
-    args = parseArgs(process.argv.slice(2));
+    args = parseGuardArgs(process.argv.slice(2), process.cwd());
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     console.error(USAGE);

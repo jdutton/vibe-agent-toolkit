@@ -39,9 +39,11 @@ authority. Fix every smell at its cause; `NOSONAR` does nothing under automatic 
 Releases are cut from `main` after merge — never from a branch.
 
 1. `bun run pre-release` must pass. It is the pre-publish check plus release readiness: a
-   marketplace publish dry-run, no tag of this version already on the remote, and (stable only)
-   a non-empty, stamped CHANGELOG section with nothing left under `[Unreleased]` and no entry in
-   [`known-defects.md`](known-defects.md) marked `- **Blocks:** the stable tag`.
+   marketplace publish dry-run, no tag of this version already on the remote, the npm registry
+   guard (every package removed from the repo is deprecated on npm; on an RC, a prerelease or
+   missing `latest` is a warning), and (stable only) a non-empty, stamped CHANGELOG section with
+   nothing left under `[Unreleased]` and no entry in [`known-defects.md`](known-defects.md)
+   marked `- **Blocks:** the stable tag`. It needs network access to npmjs.org.
 2. Only then `git tag v<version>` and `git push origin main v<version>` — the tag push triggers
    `publish.yml`, which re-runs the same check against the pushed tag.
 3. Watch the workflow; rollback and the manual fallback are in

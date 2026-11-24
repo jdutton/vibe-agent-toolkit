@@ -75,19 +75,28 @@ export function fixtureTree(version: string, extra: Record<string, string>): str
   return root;
 }
 
+/** A loopback registry's base URL, and every request URL it has served (query included). */
+interface FakeRegistry {
+  readonly url: string;
+  readonly requests: string[];
+}
+
 /**
- * A loopback registry answering GETs from `docs` (request path to JSON body);
- * any other path is a 404. Resolves its base URL.
+ * A loopback registry answering GETs from `docs` (request path, query ignored,
+ * to JSON body); any other path is a 404.
  */
-export async function fakeRegistry(docs: Record<string, unknown>): Promise<string> {
+export async function fakeRegistry(docs: Record<string, unknown>): Promise<FakeRegistry> {
+  const requests: string[] = [];
   const server = createServer((request, response) => {
-    const body = docs[request.url ?? ''];
+    const url = request.url ?? '';
+    requests.push(url);
+    const body = docs[url.split('?')[0] ?? ''];
     response.writeHead(body === undefined ? 404 : 200, { 'content-type': 'application/json' });
     response.end(body === undefined ? '{}' : JSON.stringify(body));
   });
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, requests };
 }
 
 /** A script's exit status and its stdout and stderr, interleaved. */

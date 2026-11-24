@@ -34,7 +34,7 @@ function packument(latest: string, deprecated: boolean): unknown {
 /** A tree at `version` publishing the schema package, against a registry holding `docs`. */
 async function run(version: string, docs: Record<string, unknown>): Promise<{ status: number | null; stdout: string }> {
   const root = fixtureTree(version, { 'packages/schema/package.json': publishedManifest(SCHEMA, version) });
-  return prePublish(root, await fakeRegistry(docs));
+  return prePublish(root, (await fakeRegistry(docs)).url);
 }
 
 describe('pre-publish-check --release-readiness: the npm registry guard', () => {
@@ -75,20 +75,29 @@ describe('pre-publish-check --release-readiness: the npm registry guard', () => 
   });
 });
 
-/** The guard over a tree at `STABLE` publishing the schema package, against a registry whose schema latest is `latest`. */
-async function afterPublish(latest: string): Promise<{ status: number | null; stdout: string }> {
+/**
+ * The guard over a tree at `STABLE` publishing the schema package, against a
+ * registry holding `STABLE` whose schema latest is `latest`, polled twice with
+ * no wait. Also returns every URL the registry served.
+ */
+async function afterPublish(latest: string): Promise<{ status: number | null; stdout: string; requests: string[] }> {
   const root = fixtureTree(STABLE, { 'packages/schema/package.json': publishedManifest(SCHEMA, STABLE) });
-  const registry = await fakeRegistry({ [packumentPath(SCHEMA)]: packument(latest, false) });
-  return runDevTool('npm-registry-guard', [
+  const registry = await fakeRegistry({
+    [packumentPath(SCHEMA)]: { 'dist-tags': { latest }, versions: { [latest]: {}, [STABLE]: {} } },
+  });
+  const run = await runDevTool('npm-registry-guard', [
     '--after-stable-publish',
     STABLE,
     '--root',
     root,
     '--registry',
-    registry,
-    '--attempts',
-    '1',
+    registry.url,
+    '--interval-ms',
+    '0',
+    '--max-reads',
+    '2',
   ]);
+  return { ...run, requests: registry.requests };
 }
 
 describe('npm-registry-guard --after-stable-publish', () => {
@@ -103,5 +112,12 @@ describe('npm-registry-guard --after-stable-publish', () => {
     const { status, stdout } = await afterPublish('0.9.0-rc.3');
     expect(stdout).toContain(`npm dist-tag add ${SCHEMA}@${STABLE} latest`);
     expect(status).toBe(ExitCode.FINDINGS);
+  });
+
+  it('busts the registry CDN cache: every read carries its own query, so none can be served from cache', async () => {
+    const { requests } = await afterPublish('0.9.0-rc.3');
+    expect(requests).toHaveLength(2);
+    expect(requests.every((url) => url.startsWith(`${packumentPath(SCHEMA)}?vat-read=`))).toBe(true);
+    expect(new Set(requests).size).toBe(requests.length);
   });
 });
