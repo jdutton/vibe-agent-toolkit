@@ -5,13 +5,14 @@ on:
     tags:
       - 'v*.*.*'
 
-permissions:
-  contents: write
-  id-token: write
+permissions: {}
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
     # Read by `verify-dist-tags`, which runs whenever the npm publish step
     # succeeded, however a later step of this job ends.
     outputs:
