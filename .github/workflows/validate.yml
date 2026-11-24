@@ -30,7 +30,8 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       # VAT's own cache, persisted between runs so the `vat` dogfood steps start warm:
-      # the same recipe the vat-adoption-and-configuration skill gives adopters.
+      # the vat-adoption-and-configuration skill's key recipe plus a VAT source digest;
+      # unlike that recipe, this workflow also saves from pull-request runs.
       # Outside the checkout, set from a step (the runner context is not available in a
       # job-level env:), and in bash: on Windows the default shell is pwsh, where
       # $RUNNER_TEMP is an unset PowerShell variable. GITHUB_ENV carries it into every

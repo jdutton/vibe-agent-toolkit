@@ -175,12 +175,13 @@ phases:
 
 Every resource-scanning verb populates a projection and, by default, keeps it in a SQLite file
 under the cache root (`VAT_CACHE_DIR`, else `<tmpdir>/.vat-cache/`) beside the parse cache. A warm
-`vat validate` is served from that store, so a CI job that restores it skips the cold scan. The root
-holds only `CACHEDIR.TAG`, `<namespace>/parse/` and `<namespace>/projection-<shape>/projection.db`;
-the external-link caches live in `<tmpdir>/.vat-link-cache` and never travel with it, since they are
-network verdicts and one user's credentialed content. Size: about 71 MB for a 12,600-file
-repository, about 250 MB (210 MB store, 40 MB parse cache) for a monorepo of about 30,000 examined
-resources. Internals: [where the caches live](https://github.com/jdutton/vibe-agent-toolkit/blob/main/docs/architecture/resource-scanning-and-caching.md#37a--where-the-caches-live-and-persisting-them-between-ci-runs).
+`vat validate` is served from that store. A CI job that restores it re-parses only the files whose
+bytes changed; a stored whole tree is reused only when the repository's tree is identical, such as a
+rerun of the same commit. VAT writes `CACHEDIR.TAG`, `<namespace>/parse/` and
+`<namespace>/projection-<shape>/projection.db` under the root; the external-link caches live in
+`<tmpdir>/.vat-link-cache` and never travel with it, since they are network verdicts and one user's
+credentialed content. Size: one 12,600-file repository measured 71 MB of projection store alone;
+measure yours with `du` after a warm run. Internals: [where the caches live](https://github.com/jdutton/vibe-agent-toolkit/blob/main/docs/architecture/resource-scanning-and-caching.md#37a--where-the-caches-live-and-persisting-them-between-ci-runs).
 
 - **Point `VAT_CACHE_DIR` at a directory used only by VAT, outside the checkout**
   (`$RUNNER_TEMP/vat-cache` in GitHub Actions; VAT warns when it is inside the scanned tree), and
@@ -191,8 +192,11 @@ resources. Internals: [where the caches live](https://github.com/jdutton/vibe-ag
   facts of files it missed, so saving after each default-branch run keeps the cache warm, and a
   pull request never overwrites it.
 - **Run `vat cache prune` before the save.** It drops every other release's namespace and every
-  other store shape, so the cache does not grow with each release.
-- **Key the cache as `vat cache --help` says:** runner OS, architecture, installed Node version,
+  other store shape, so the cache does not grow with each release. Within one release the store
+  keeps the three most recent trees per root, the eight most recent roots and 50,000 content keys;
+  the parse cache keeps everything until `vat cache clear`, or until `vat cache prune` runs under
+  another release.
+- **Key the cache on** runner OS, architecture, installed Node version,
   lockfile hash and the commit, with restore keys the same string without the commit, so a restore
   never crosses OSes, machine kinds, lockfiles or Node versions. The namespace of an installed VAT
   is only its version, VAT's parser dependencies are caret ranges a lockfile change can move, and
@@ -225,6 +229,7 @@ steps:
   - shell: bash
     run: echo "VAT_CACHE_DIR=$RUNNER_TEMP/vat-cache" >> "$GITHUB_ENV"
   - uses: actions/cache/restore@v6
+    id: vat-cache
     with:
       path: ${{ env.VAT_CACHE_DIR }}
       key: vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock', '**/bun.lock') }}-${{ github.sha }}
@@ -239,11 +244,13 @@ steps:
     uses: actions/cache/save@v6
     with:
       path: ${{ env.VAT_CACHE_DIR }}
-      key: vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock', '**/bun.lock') }}-${{ github.sha }}
+      # Reuse the restore step's key: hashFiles here would also hash lockfiles that npm ci
+      # just unpacked under node_modules, and a different key is never restored.
+      key: ${{ steps.vat-cache.outputs.cache-primary-key }}
 ```
 
 Other CI systems follow the same rules: in Azure Pipelines, `Cache@2` with `path:
-$(Agent.TempDirectory)/vat-cache`, the same key terms, and `restoreKeys` without the commit.
+$(Agent.TempDirectory)/vat-cache` and `VAT_CACHE_DIR` set to the same path, the same key terms, and `restoreKeys` without the commit.
 
 ## First-Time Setup Checklist
 
