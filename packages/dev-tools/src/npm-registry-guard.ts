@@ -13,7 +13,8 @@
  *   prerelease `latest` until the next stable publish moves it.
  * - After a stable publish (this file's CLI, its own job in `publish.yml`):
  *   every published package's `latest` must be the version just released.
- * - `determine-publish-tags` reads the current `next` through {@link readDistTag}.
+ * - `determine-publish-tags` decides whether to move `next` through
+ *   {@link decideUpdateNext}, which retries a registry error, then fails closed.
  *
  * The guard never writes to npm (an owner ruling): it reports, prints the exact
  * `npm deprecate` / `npm dist-tag` command, and fails. Run from a maintainer's
@@ -26,7 +27,7 @@
  *   tsx packages/dev-tools/src/npm-registry-guard.ts --after-stable-publish VERSION [--root DIR] [--registry URL]
  *     [--interval-ms MS] [--max-reads N] [--stall-reads N]
  *   Defaults: a read every 30 s, ending when no package is left, when the set
- *   left has not shrunk for 10 reads (5 min), or after 30 reads (15 min).
+ *   left has not shrunk for 14 reads (7 min), or after 30 reads (15 min).
  */
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
@@ -63,7 +64,9 @@ const REMOVED_PACKAGE_REPLACEMENTS: Readonly<Record<string, string>> = {
 /** After a stable publish: the defaults of {@link LatestPoll}. */
 const AFTER_PUBLISH_INTERVAL_MS = 30_000;
 const AFTER_PUBLISH_MAX_READS = 30;
-const AFTER_PUBLISH_STALL_READS = 10;
+// The stall rule, not the cap, ends a poll that makes no progress, so it alone
+// must outlast the CDN's max-age=300 plus processing lag: 14 x 30 s = 7 min.
+const AFTER_PUBLISH_STALL_READS = 14;
 
 /**
  * GET a registry path (`/` + name, or {@link SCOPE_LISTING_PATH}). Resolves the
@@ -104,15 +107,19 @@ export function packumentPath(name: string): string {
 }
 
 /**
- * npm's record of a package whose every version was unpublished: a 200 with
- * `name` and `modified`, no `versions` (or none left), sometimes
- * `time.unpublished`. It is a package npm does not have, exactly like a 404.
+ * npm's record of package `name` whose every version was unpublished: a 200
+ * carrying `time.unpublished`, or this package's `name` and a `modified` string
+ * with no `versions` (or none left). It is a package npm does not have, exactly
+ * like a 404. Anything else without versions (`{}`, `{"error": ...}` from a
+ * proxy) is not npm's answer and falls through to the packument parse, which
+ * refuses it: read as "not there" it would pass the guard.
  */
-function isUnpublishedRecord(body: unknown): boolean {
+function isUnpublishedRecord(body: unknown, name: string): boolean {
   if (typeof body !== 'object' || body === null) return false;
   const record = body as Record<string, unknown>;
   const time = record['time'];
   if (typeof time === 'object' && time !== null && 'unpublished' in time) return true;
+  if (record['name'] !== name || typeof record['modified'] !== 'string') return false;
   const versions = record['versions'];
   if (versions === undefined) return true;
   return typeof versions === 'object' && versions !== null && Object.keys(versions).length === 0;
@@ -121,7 +128,7 @@ function isUnpublishedRecord(body: unknown): boolean {
 /** A package's packument, or `undefined` when npm does not have the package (404 or unpublished). */
 async function readPackument(get: RegistryGet, name: string): Promise<Packument | undefined> {
   const body = await get(packumentPath(name));
-  if (body === undefined || isUnpublishedRecord(body)) return undefined;
+  if (body === undefined || isUnpublishedRecord(body, name)) return undefined;
   const parsed = PackumentSchema.safeParse(body);
   if (!parsed.success) {
     throw new Error(`The registry document for ${name} is not a packument: ${parsed.error.message}`);
@@ -137,6 +144,40 @@ function readPackuments(get: RegistryGet, names: readonly string[]): Promise<(Pa
 /** A package's dist-tag, or `undefined` when npm has no such package or tag. Rejects on a registry error. */
 export async function readDistTag(get: RegistryGet, name: string, tag: string): Promise<string | undefined> {
   return (await readPackument(get, name))?.['dist-tags'][tag];
+}
+
+/** How a one-off registry read is retried before it fails closed. */
+export interface ReadRetry {
+  readonly tries: number;
+  readonly waitMs: number;
+  readonly sleep: (ms: number) => Promise<void>;
+}
+
+/** `read()`, re-run up to `retry.tries` times, `retry.waitMs` apart, while it rejects. */
+async function withRetry<T>(read: () => Promise<T>, retry: ReadRetry): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    if (retry.tries <= 1) throw error;
+    await retry.sleep(retry.waitMs);
+    return withRetry(read, { ...retry, tries: retry.tries - 1 });
+  }
+}
+
+/**
+ * Whether a stable `version` should also move `next`: when npm has no `next`
+ * for `packageName`, or `version` is newer than it. A registry error is retried,
+ * then rejects: an outage is never "no next tag".
+ */
+export async function decideUpdateNext(options: {
+  version: string;
+  packageName: string;
+  get: RegistryGet;
+  retry: ReadRetry;
+}): Promise<{ updateNext: boolean; currentNext: string | undefined }> {
+  const { version, packageName, get, retry } = options;
+  const currentNext = await withRetry(() => readDistTag(get, packageName, 'next'), retry);
+  return { updateNext: currentNext === undefined || semver.gt(version, currentNext), currentNext };
 }
 
 /** Deprecated means every version is: `npm deprecate <name> <message>` marks them all. */
@@ -292,34 +333,46 @@ async function pollLatest(
   return pollLatest(get, version, poll, { left, reads, fewest: Math.min(left.size, progress.fewest), stalled });
 }
 
-function latestFinding(name: string, version: string, state: LatestState): RegistryFinding {
+/** The finding for a package whose `latest` is not the release, or `undefined` for one npm could not be read for. */
+function latestFinding(name: string, version: string, state: LatestState): RegistryFinding | undefined {
+  if (state.kind === 'unreadable') return undefined;
   if (state.kind === 'behind') {
+    const now = state.latest === undefined ? 'has no latest tag' : `has latest = ${state.latest}`;
     return {
       severity: 'error',
       packageName: name,
-      message: `${name} has latest = ${String(state.latest)}, not the ${version} just published`,
+      message: `${name} ${now}, not the ${version} just published`,
       fix: `npm dist-tag add ${name}@${version} latest`,
     };
   }
+  // Never a bare `npm publish` from the package directory: that ships its
+  // `workspace:*` specifiers unresolved, and a published version can never be reused.
   return {
     severity: 'error',
     packageName: name,
-    message: `${name}@${version} is not on npm: the publish did not land; run npm publish --access public --tag latest from that package's directory`,
+    message: `${name}@${version} is not on npm: the publish may not have landed, or npm may still be processing it. Re-check with npm view ${name}@${version}; if it is missing, follow the manual fallback in docs/publishing.md (build, resolve-workspace-deps, then publish)`,
   };
+}
+
+/** What the after-publish check found: findings to fix, and packages npm could not be read for. */
+export interface LatestReport {
+  readonly findings: RegistryFinding[];
+  /** `<name>: <reason>` for each package still unreadable when the poll ended. */
+  readonly unreadable: string[];
 }
 
 /**
  * After a stable publish, every published package's `latest` must be `version`.
  * npm processes a publish asynchronously, so the registry is polled (see
- * {@link LatestPoll}) before anything is reported. Rejects when a package still
- * cannot be read at the end: an outage is not a verdict.
+ * {@link LatestPoll}) before anything is reported. A package still unreadable
+ * at the end is reported apart from the findings: an outage is not a verdict.
  */
 export async function checkLatestAfterStablePublish(options: {
   version: string;
   publishedPackages: readonly string[];
   get: RegistryGet;
   poll: LatestPoll;
-}): Promise<RegistryFinding[]> {
+}): Promise<LatestReport> {
   const { version, get, poll } = options;
   if (semver.prerelease(version) !== null) {
     throw new Error(`${version} is a prerelease: only a stable publish moves latest`);
@@ -336,10 +389,8 @@ export async function checkLatestAfterStablePublish(options: {
   const unreadable = [...left].flatMap(([name, state]) =>
     state.kind === 'unreadable' ? [`${name}: ${state.reason}`] : [],
   );
-  if (unreadable.length > 0) {
-    throw new Error(`The registry could not be read for: ${unreadable.join('; ')}`);
-  }
-  return [...left].map(([name, state]) => latestFinding(name, version, state));
+  const findings = [...left].flatMap(([name, state]) => latestFinding(name, version, state) ?? []);
+  return { findings, unreadable };
 }
 
 /** FINDINGS when any finding is an error; a warning never fails. */
@@ -471,7 +522,7 @@ export function parseGuardArgs(argv: readonly string[], cwd: string): GuardArgs 
 async function afterStablePublish(args: GuardArgs): Promise<number> {
   const published = guardWorkspacePackages(args.root).filter((p) => !p.isPrivate).map((p) => p.name);
   log(`Checking that latest is ${args.version} for ${published.length} published packages...`, 'blue');
-  const findings = await checkLatestAfterStablePublish({
+  const { findings, unreadable } = await checkLatestAfterStablePublish({
     version: args.version,
     publishedPackages: published,
     get: registryGet(args.registry),
@@ -479,12 +530,21 @@ async function afterStablePublish(args: GuardArgs): Promise<number> {
       intervalMs: args.intervalMs,
       maxReads: args.maxReads,
       stallReads: args.stallReads,
-      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      sleep: sleepMs,
     },
   });
   printFindings(findings);
+  if (unreadable.length > 0) {
+    log(`✗ The registry could not be read for: ${unreadable.join('; ')}`, 'red');
+    return ExitCode.ERROR;
+  }
   if (findings.length === 0) log(`✓ latest is ${args.version} for every published package`, 'green');
   return findingsExitCode(findings);
+}
+
+/** The real wait. */
+export function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function main(): Promise<number> {

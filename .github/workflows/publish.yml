@@ -148,7 +148,7 @@ jobs:
   # the release, and is not skipped when a later step of `publish` fails: it runs
   # whenever the npm publish step succeeded on a stable tag. It polls the
   # registry (cache-busted) until every package's latest is the release, the set
-  # left stops shrinking for 5 minutes, or 15 minutes pass, then fails printing
+  # left stops shrinking for 7 minutes, or 15 minutes pass, then fails printing
   # the `npm dist-tag add` commands. It never writes to npm (owner ruling).
   verify-dist-tags:
     needs: publish

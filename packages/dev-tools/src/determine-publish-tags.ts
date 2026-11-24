@@ -32,7 +32,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import semver from 'semver';
 
 import { log, PROJECT_ROOT } from './common.js';
-import { NPM_REGISTRY, readDistTag, registryGet } from './npm-registry-guard.js';
+import { decideUpdateNext, NPM_REGISTRY, registryGet, sleepMs } from './npm-registry-guard.js';
 
 /**
  * Output GitHub Actions output variable
@@ -136,34 +136,32 @@ if (isStable) {
   }
 
   if (packageName) {
-    let currentNextVersion: string | undefined;
+    let decision: Awaited<ReturnType<typeof decideUpdateNext>>;
     try {
-      currentNextVersion = await readDistTag(registryGet(NPM_REGISTRY), packageName, 'next');
+      decision = await decideUpdateNext({
+        version,
+        packageName,
+        get: registryGet(NPM_REGISTRY),
+        retry: { tries: 3, waitMs: 5000, sleep: sleepMs },
+      });
     } catch (error) {
       // Fail closed: an outage is not "no @next tag". This step runs before
       // anything is published, so stopping here costs only a re-run.
       const message = error instanceof Error ? error.message : String(error);
-      log(`  ✗ Failed to read @next from the npm registry: ${message}`, 'red');
+      log(`  ✗ Failed to read @next from the npm registry after 3 tries: ${message}`, 'red');
       process.exit(ExitCode.ERROR);
     }
 
-    if (currentNextVersion) {
-      log(`  Current @next version: ${currentNextVersion}`, 'blue');
-
-      // Compare versions using semver
-      if (semver.gt(version, currentNextVersion)) {
-        log(`  ✓ ${version} > ${currentNextVersion}`, 'green');
-        log('  → Will update @next to this stable version', 'green');
-        updateNext = true;
-      } else {
-        log(`  - ${version} <= ${currentNextVersion}`, 'yellow');
-        log('  → Will NOT update @next (already newer or equal)', 'yellow');
-      }
-    } else {
+    updateNext = decision.updateNext;
+    if (decision.currentNext === undefined) {
       log('  ⚠ No current @next version found on npm', 'yellow');
-      log('  → Will update @next to this stable version', 'green');
-      updateNext = true;
+    } else {
+      log(`  Current @next version: ${decision.currentNext}`, 'blue');
     }
+    log(
+      updateNext ? '  → Will update @next to this stable version' : '  → Will NOT update @next (already newer or equal)',
+      updateNext ? 'green' : 'yellow',
+    );
   }
 }
 

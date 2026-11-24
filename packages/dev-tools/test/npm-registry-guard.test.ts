@@ -8,11 +8,13 @@ import { describe, expect, it } from 'vitest';
 import {
   checkBeforePublish,
   checkLatestAfterStablePublish,
+  decideUpdateNext,
   findingsExitCode,
   type LatestPoll,
   packumentPath,
   parseGuardArgs,
   readDistTag,
+  type ReadRetry,
   SCOPE_LISTING_PATH,
   type RegistryFinding,
   type RegistryGet,
@@ -240,7 +242,7 @@ describe('checkLatestAfterStablePublish', () => {
 
   it('passes on the first read when every published package\'s latest is the release, without waiting', async () => {
     const p = poll();
-    const findings = await checkLatestAfterStablePublish({
+    const { findings } = await checkLatestAfterStablePublish({
       version: STABLE,
       publishedPackages: [SCHEMA, CLI],
       get: registry({ [packumentPath(SCHEMA)]: current, [packumentPath(CLI)]: current }),
@@ -252,7 +254,7 @@ describe('checkLatestAfterStablePublish', () => {
 
   it('fails with the npm dist-tag command once the mismatch stops shrinking', async () => {
     const p = poll({ stallReads: 3 });
-    const findings = await checkLatestAfterStablePublish({
+    const { findings } = await checkLatestAfterStablePublish({
       version: STABLE,
       publishedPackages: [SCHEMA, CLI],
       get: registry({ [packumentPath(SCHEMA)]: behind, [packumentPath(CLI)]: current }),
@@ -272,7 +274,7 @@ describe('checkLatestAfterStablePublish', () => {
 
   it('keeps polling past the stall limit while the mismatch keeps shrinking', async () => {
     const p = poll({ stallReads: 2 });
-    const findings = await checkLatestAfterStablePublish({
+    const { findings } = await checkLatestAfterStablePublish({
       version: STABLE,
       publishedPackages: [SCHEMA, CLI],
       get: scripted({
@@ -287,7 +289,7 @@ describe('checkLatestAfterStablePublish', () => {
 
   it('stops at the overall read cap even while the mismatch is still shrinking', async () => {
     const p = poll({ maxReads: 2, stallReads: 10 });
-    const findings = await checkLatestAfterStablePublish({
+    const { findings } = await checkLatestAfterStablePublish({
       version: STABLE,
       publishedPackages: [SCHEMA, CLI],
       get: scripted({ [packumentPath(SCHEMA)]: [behind], [packumentPath(CLI)]: [behind, current] }),
@@ -298,7 +300,7 @@ describe('checkLatestAfterStablePublish', () => {
   });
 
   it('waits out the processing lag: a 404 that clears is not a failure', async () => {
-    const findings = await checkLatestAfterStablePublish({
+    const { findings } = await checkLatestAfterStablePublish({
       version: STABLE,
       publishedPackages: [SCHEMA],
       get: scripted({ [packumentPath(SCHEMA)]: [undefined, undefined, current] }),
@@ -309,7 +311,7 @@ describe('checkLatestAfterStablePublish', () => {
 
   it('reports a release missing from npm with a publish hint, never a dist-tag command that would E404', async () => {
     for (const body of [undefined, UNPUBLISHED_RECORD, UNPUBLISHED_BARE, packument(OLD_RC, { [OLD_RC]: false })]) {
-      const findings = await checkLatestAfterStablePublish({
+      const { findings } = await checkLatestAfterStablePublish({
         version: STABLE,
         publishedPackages: [SCHEMA],
         get: registry({ [packumentPath(SCHEMA)]: body }),
@@ -318,13 +320,29 @@ describe('checkLatestAfterStablePublish', () => {
       expect(findings).toHaveLength(1);
       expect(findings[0]).toMatchObject({ severity: 'error', packageName: SCHEMA });
       expect(findings[0]?.fix).toBeUndefined();
-      expect(findings[0]?.message).toContain(`${SCHEMA}@${STABLE} is not on npm`);
-      expect(findings[0]?.message).toContain('npm publish');
+      const message = findings[0]?.message ?? '';
+      expect(message).toContain(`${SCHEMA}@${STABLE} is not on npm`);
+      expect(message).toContain(`npm view ${SCHEMA}@${STABLE}`);
+      expect(message).toContain('docs/publishing.md');
+      // A bare `npm publish` from the package directory would ship workspace:* specifiers.
+      expect(message).not.toMatch(/run npm publish/);
     }
   });
 
+  it('says a release with no latest tag has no latest tag, and gives the dist-tag command', async () => {
+    const { findings } = await checkLatestAfterStablePublish({
+      version: STABLE,
+      publishedPackages: [SCHEMA],
+      get: registry({ [packumentPath(SCHEMA)]: { 'dist-tags': {}, versions: { [STABLE]: {} } } }),
+      poll: poll({ stallReads: 1 }),
+    });
+    expect(findings[0]?.message).toContain('has no latest tag');
+    expect(findings[0]?.message).not.toContain('undefined');
+    expect(findings[0]?.fix).toBe(`npm dist-tag add ${SCHEMA}@${STABLE} latest`);
+  });
+
   it('retries a registry error inside the poll instead of failing at once', async () => {
-    const findings = await checkLatestAfterStablePublish({
+    const { findings } = await checkLatestAfterStablePublish({
       version: STABLE,
       publishedPackages: [SCHEMA],
       get: scripted({ [packumentPath(SCHEMA)]: [new Error('503 Service Unavailable'), current] }),
@@ -333,15 +351,20 @@ describe('checkLatestAfterStablePublish', () => {
     expect(findings).toEqual([]);
   });
 
-  it('refuses when the registry still cannot be read at the end of the poll', async () => {
-    await expect(
-      checkLatestAfterStablePublish({
-        version: STABLE,
-        publishedPackages: [SCHEMA],
-        get: scripted({ [packumentPath(SCHEMA)]: [new Error('503 Service Unavailable')] }),
-        poll: poll({ stallReads: 2 }),
+  it('names a package still unreadable at the end, and still reports the others with their fixes', async () => {
+    const report = await checkLatestAfterStablePublish({
+      version: STABLE,
+      publishedPackages: [SCHEMA, CLI],
+      get: scripted({
+        [packumentPath(SCHEMA)]: [behind],
+        [packumentPath(CLI)]: [new Error('503 Service Unavailable')],
       }),
-    ).rejects.toThrow(/503/);
+      poll: poll({ stallReads: 2 }),
+    });
+    expect(report.findings).toEqual([
+      expect.objectContaining({ packageName: SCHEMA, fix: `npm dist-tag add ${SCHEMA}@${STABLE} latest` }),
+    ]);
+    expect(report.unreadable).toEqual([expect.stringMatching(new RegExp(`^${CLI}: .*503`))]);
   });
 
   it('refuses a prerelease version: only a stable publish owns latest', async () => {
@@ -370,15 +393,111 @@ describe('readDistTag', () => {
       'ECONNRESET',
     );
   });
+
+  it('fails closed on a 200 that is neither a packument nor npm\'s record of this package unpublished', async () => {
+    for (const body of [{}, { error: 'x' }, { name: 'some-other-package', modified: '2026-11-24T00:00:00.000Z' }]) {
+      await expect(readDistTag(registry({ [packumentPath(UMBRELLA)]: body }), UMBRELLA, 'next')).rejects.toThrow(UMBRELLA);
+    }
+  });
+});
+
+describe('checkBeforePublish: a registry answer that is not npm\'s', () => {
+  it('refuses a removed package whose document is an empty or error object, rather than passing it', async () => {
+    for (const body of [{}, { error: 'x' }]) {
+      await expect(
+        checkBeforePublish({
+          version: RC,
+          workspacePackages: [],
+          get: registry({ ...listing([REMOVED]), [packumentPath(REMOVED)]: body }),
+        }),
+      ).rejects.toThrow(REMOVED);
+    }
+  });
+});
+
+describe('decideUpdateNext', () => {
+  const p = (): ReadRetry & { slept: number[] } => {
+    const slept: number[] = [];
+    return {
+      tries: 3,
+      waitMs: 5000,
+      sleep: (ms) => {
+        slept.push(ms);
+        return Promise.resolve();
+      },
+      slept,
+    };
+  };
+  const withNext = (next: string): unknown => ({
+    'dist-tags': { latest: OLD_STABLE, next },
+    versions: { [OLD_STABLE]: {}, [next]: {} },
+  });
+
+  it('updates next when npm has no next tag', async () => {
+    const decision = await decideUpdateNext({
+      version: STABLE,
+      packageName: UMBRELLA,
+      get: registry({ [packumentPath(UMBRELLA)]: packument(OLD_STABLE, { [OLD_STABLE]: false }) }),
+      retry: p(),
+    });
+    expect(decision).toEqual({ updateNext: true, currentNext: undefined });
+  });
+
+  it('updates next when the release is newer than it', async () => {
+    const decision = await decideUpdateNext({
+      version: STABLE,
+      packageName: UMBRELLA,
+      get: registry({ [packumentPath(UMBRELLA)]: withNext(OLD_RC) }),
+      retry: p(),
+    });
+    expect(decision).toEqual({ updateNext: true, currentNext: OLD_RC });
+  });
+
+  it('leaves a newer next alone', async () => {
+    const decision = await decideUpdateNext({
+      version: STABLE,
+      packageName: UMBRELLA,
+      get: registry({ [packumentPath(UMBRELLA)]: withNext('1.1.0-rc.1') }),
+      retry: p(),
+    });
+    expect(decision).toEqual({ updateNext: false, currentNext: '1.1.0-rc.1' });
+  });
+
+  it('retries a registry error before deciding', async () => {
+    const retry = p();
+    const decision = await decideUpdateNext({
+      version: STABLE,
+      packageName: UMBRELLA,
+      get: scripted({ [packumentPath(UMBRELLA)]: [new Error('ECONNRESET'), withNext(OLD_RC)] }),
+      retry,
+    });
+    expect(decision.updateNext).toBe(true);
+    expect(retry.slept).toEqual([5000]);
+  });
+
+  it('refuses once every try failed: an outage is never "no next tag"', async () => {
+    const retry = p();
+    await expect(
+      decideUpdateNext({
+        version: STABLE,
+        packageName: UMBRELLA,
+        get: scripted({ [packumentPath(UMBRELLA)]: [new Error('503 Service Unavailable')] }),
+        retry,
+      }),
+    ).rejects.toThrow(/503/);
+    expect(retry.slept).toEqual([5000, 5000]);
+  });
 });
 
 describe('parseGuardArgs', () => {
   const cwd = '/repo';
 
-  it('defaults to npm, the working directory and a poll capped well past the registry cache\'s 300 s', () => {
+  it('defaults to npm, the working directory and a poll that outlasts the registry cache\'s 300 s', () => {
     const args = parseGuardArgs([AFTER_FLAG, STABLE], cwd);
     expect(args).toMatchObject({ version: STABLE, root: cwd, registry: 'https://registry.npmjs.org' });
-    expect(args.intervalMs * args.maxReads).toBeGreaterThan(300_000 + 300_000);
+    // The stall rule, not the cap, ends a poll that makes no progress: it alone must outlast max-age.
+    expect(args.intervalMs * args.stallReads).toBeGreaterThan(300_000);
+    expect(args.maxReads).toBeGreaterThan(args.stallReads);
   });
 
   it('reads every flag', () => {
