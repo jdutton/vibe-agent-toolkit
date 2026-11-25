@@ -105,8 +105,8 @@ const RES_BETA = 'res-beta-only';
 /**
  * An identity with a membership and no realization.
  *
- * `PackageExtentContributor` mints exactly this for a dependency declared but
- * absent from `node_modules` — "membership is knowledge; realization is
+ * A contributor mints exactly this for an entity declared but not present on
+ * disk (a dependency absent from `node_modules`) - "membership is knowledge; realization is
  * presence" — so reachability has to follow memberships and not only
  * realizations, or a cache hit loses every declared-but-absent entity the
  * populate path would have carried.

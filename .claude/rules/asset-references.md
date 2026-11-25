@@ -32,6 +32,5 @@ Call sites today — the templates for a new one (generated; regenerate with
 - `packages/cli/src/commands/resources/validate.ts`
 - `packages/cli/src/commands/skill/test/run.ts`
 - `packages/resources/src/okf/config.ts`
-- `packages/resources/src/projection/contributors/package-extent.ts`
 - `packages/resources/src/resource-registry.ts`
 <!-- /gen:asset-reference-sites -->

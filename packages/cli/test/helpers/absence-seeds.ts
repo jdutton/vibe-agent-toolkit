@@ -29,8 +29,6 @@ import {
   BLOB_UNREADABLE,
   EXTENT_DIRECTORY_UNLISTABLE,
   EXTENT_SYMLINK_NOT_REALIZED,
-  PACKAGE_RESOLUTION_FAILED,
-  PACKAGE_SUBPATH_NOT_EXPORTED,
   DEFAULT_PARSE_LIMITS,
 } from '@vibe-agent-toolkit/resources';
 import { createSymlink, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
@@ -292,7 +290,6 @@ interface LowerTierSeed {
 const SNAPSHOT_REFUSES_FIRST = 'The git snapshot refuses the run on any unreadable non-ignored file, and nothing shipped asks for an ignored file\'s content.';
 const NO_EXTENT_VERB = 'No CLI verb runs this extent.';
 const BLOB_POPULATION_TEST = 'packages/resources/test/projection-blob-population.test.ts';
-const PACKAGE_EXTENT_TEST = 'packages/resources/test/projection-package-extent.test.ts';
 
 /** The transitional seeds. */
 export const LOWER_TIER_SEEDS: readonly LowerTierSeed[] = [
@@ -325,18 +322,6 @@ export const LOWER_TIER_SEEDS: readonly LowerTierSeed[] = [
     file: 'packages/resources/test/projection-blob-population-pool.test.ts',
     testName: 'is a per-run worker death carrying its cause, and is named by the population warning',
     reason: 'The parsers do not throw on bytes, and a worker dies only under a test seam.',
-  },
-  {
-    member: PACKAGE_RESOLUTION_FAILED,
-    file: PACKAGE_EXTENT_TEST,
-    testName: 'records a dependency whose resolution failed for a reason that is neither absence nor an exclusion',
-    reason: NO_EXTENT_VERB,
-  },
-  {
-    member: PACKAGE_SUBPATH_NOT_EXPORTED,
-    file: PACKAGE_EXTENT_TEST,
-    testName: 'records a dependency whose exports map hides its own manifest at the package level',
-    reason: NO_EXTENT_VERB,
   },
   {
     member: MANIFEST_UNREADABLE,

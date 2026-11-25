@@ -9,13 +9,9 @@
 
 import { lstatSync } from 'node:fs';
 
-import { countWork, followedStatSync, type FsFaultFacts, fsFaultOf, isLinkChainRefusedError, linkResolutionFault, realpathNativeSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { countWork, followedStatSync, type FsFaultFacts, fsFaultOf, isLinkChainRefusedError, linkResolutionFault, realpathNativeSync } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
-import { matchesCollection } from '../collection-matcher.js';
-import type { ParserKind } from '../content-key.js';
-import { mimeTypeForPath, parserKindForMimeType } from '../mime-type.js';
-import type { CollectionConfig } from '../schemas/project-config.js';
 import {
   CONDITION_WITHOUT_REFERENCE,
   type ContentState,
@@ -24,35 +20,8 @@ import {
 } from '../schemas/projection-resources.js';
 
 import { isSizeRefusal, readKeyedContent, type RunContentCache } from './content-cache.js';
-import { canonicalJson } from './digest.js';
-
-/**
- * The kind meaning "no document parser runs on this".
- *
- * A second spelling of a literal `content-key.ts` keeps private, and it is here
- * only because that module does not export it. The binding to {@link ParserKind}
- * is what stops the two drifting silently: a kind renamed there stops this
- * assignment compiling. Delete this the moment `content-key.ts` exports its own
- * `NO_PARSER_KIND` — see the report accompanying this change.
- */
-const NO_PARSER_KIND: ParserKind = 'none';
-
-/**
- * Render an absolute path relative to a root, forward-slashed.
- *
- * Every path a realization row or a snapshot prints goes through here. An
- * absolute path in a golden file makes the golden machine-specific and leaks
- * `$HOME`; both have bitten this repo before.
- *
- * @param absolutePath - Path to render
- * @param root - Root the path is rendered relative to
- * @returns Forward-slashed relative path (or the forward-slashed absolute path
- *   when the target lies outside the root, which is itself worth seeing)
- */
-export function relativize(absolutePath: string, root: string): string {
-  const rel = safePath.relative(root, absolutePath);
-  return rel === '' ? '.' : toForwardSlash(rel);
-}
+import { relativize } from './root-relative-path.js';
+import { type CollectionMimeConflict, type CollectionMimeResolver, mimeFor, parserKindForMime } from './router.js';
 
 /**
  * When a realization should pay to read and hash a path's bytes.
@@ -134,17 +103,9 @@ export interface RealizationContext {
    */
   observedShape?: PathShape | undefined;
   /**
-   * The run's collection-declared MIME types, when the project declares any.
-   *
-   * Absent means "nobody declared a type", and the row is typed by
-   * `mime-type.ts`'s tables alone — which is what every caller outside a
-   * populate (the CLI's enumeration oracle, a test realizing one path) wants and
-   * what every caller that has not opted in continues to get.
-   *
-   * It is a RESOLVER rather than the raw collections map on purpose: it holds
-   * the run's accumulated {@link CollectionMimeResolver.conflicts}, so two
-   * extents realizing one conflicted file report the config error once rather
-   * than once each.
+   * The run's collection-declared MIME types; absent, the row is typed by
+   * `mime-type.ts`'s tables alone. A resolver, not the raw collections map, so
+   * the run's one conflict accumulator reports each conflicted file once.
    */
   mimeResolver?: CollectionMimeResolver | undefined;
 }
@@ -461,13 +422,9 @@ async function keyOrState(
   try {
     const keyed = await readKeyedContent(
       absolutePath,
-      // The row's OWN type, not `parserKindForPath`'s answer, and the difference
-      // is the whole of part two: a collection that declares `text/markdown` for
-      // a `.ts` file must reach the parser, not merely the column. Re-deriving
-      // the kind from the path here would key the bytes under `none.<digest>`
-      // while the row claimed markdown, and every downstream stage reads the
-      // kind back off that prefix.
-      parserKindForMimeType(mime) ?? NO_PARSER_KIND,
+      // The row's OWN type, never the path-only `parserKindForPath`: a declared
+      // `mimeType` must reach the parser, not merely the column.
+      parserKindForMime(mime),
       context.contentCache,
     );
     return { contentKey: keyed.key, contentState: 'keyed' };
@@ -508,191 +465,7 @@ function defers(demand: ContentDemand, gitignored: boolean): boolean {
  */
 export const COLLECTION_MIME_CONFLICT = 'COLLECTION_MIME_CONFLICT';
 
-/**
- * One file that two collections declare incompatible types for.
- *
- * Both halves are pairs rather than lists because the report only has to be
- * ACTIONABLE, not exhaustive: an author who deletes or aligns one of two named
- * declarations has fixed the file, and if a third collection also disagrees the
- * next run says so. Carrying every disagreeing collection would make the message
- * longer without making the first edit any different.
- */
-export interface CollectionMimeConflict {
-  /** Root-relative path of the file the collections disagree about. */
-  path: string;
-  /** The two collections, in the order the config declares them. */
-  collections: readonly [string, string];
-  /** What each of them declared, positionally paired with {@link collections}. */
-  mimeTypes: readonly [string, string];
-}
-
-/**
- * The run's answer to "what is this file", and the config errors it found asking.
- *
- * Stateful on purpose. A conflict is a property of the CONFIG, but it is only
- * discovered while walking paths, and the same path is walked once per extent —
- * so the accumulator has to outlive a single {@link collectRealization} call or
- * a three-extent population would report one authoring mistake three times.
- */
-export interface CollectionMimeResolver {
-  /**
-   * Type one path, recording a conflict rather than throwing on one.
-   *
-   * @param absolutePath - The path to type; matched against collection patterns,
-   *   which are written to match absolute paths (see `pattern-expander.ts`)
-   * @param relativePath - The same path as `resource_realizations.path` spells
-   *   it, which is what a conflict names — an absolute path in a report leaks
-   *   `$HOME` and makes the finding machine-specific
-   * @returns The declared type, or `mime-type.ts`'s answer when nothing declared
-   *   one AND when the declarations conflict
-   */
-  mimeFor(absolutePath: string, relativePath: string): string | null;
-  /**
-   * Every conflict seen so far, in first-encounter order, one per path.
-   *
-   * Live: it grows as {@link mimeFor} is called. Read it after the population
-   * finishes.
-   */
-  readonly conflicts: readonly CollectionMimeConflict[];
-  /**
-   * A stable digest of the RULES this routing will apply — the run's parse
-   * routing, named so a cache can be keyed on it.
-   *
-   * ## Why this exists, and why it is derived rather than listed
-   *
-   * A projection store's reuse rule compares `(contributorId, parameterSet)`.
-   * Declared types appear in NO parameter set, so two runs over an unchanged
-   * tree that disagree about routing ask genuinely different questions and would
-   * otherwise be a **false hit**: same key, materially different `mime` columns,
-   * different content keys, different blob rows, exit 0.
-   *
-   * `storeKeyFor` therefore folds this in. It is one entry rather than a growing
-   * hand-maintained list because its VALUE is computed from the rules
-   * themselves — that module's own warning is that an enumerated list is "the
-   * set someone remembered to model", and a fingerprint derived from the rules
-   * cannot fall behind them. A new parser, a new declaration field, or a whole
-   * new routing rule extends the key by being part of what is digested, with no
-   * edit at the cache.
-   *
-   * ⚠️ **Declaration ORDER is part of the fingerprint and must not be sorted
-   * away.** Two collections that declare the same type in either order produce
-   * the same `mime`, but the first match is the one a conflict names, and
-   * conflicts are ROWS. Sorting would make two configs that emit different
-   * `realization_conditions` share a key.
-   *
-   * A project declaring no types at all gets {@link NO_DECLARED_MIME_TYPES}, so
-   * the overwhelmingly common case is a constant and every such run shares a
-   * key with every other.
-   */
-  readonly fingerprint: string;
-}
-
-/**
- * The fingerprint of a routing that no collection contributes to.
- *
- * A literal rather than a digest of the empty list: this is the value nearly
- * every run in existence carries, and it should be legible in a store key
- * someone is debugging rather than being an opaque hash of nothing.
- */
-export const NO_DECLARED_MIME_TYPES = 'mime:none-declared';
-
-/** A collection that actually declares a type — the only kind that participates. */
-interface DeclaringCollection {
-  /** The collection's name, as the config keys it. */
-  name: string;
-  /** The type it declares — non-optional here, which is the whole filter. */
-  mimeType: string;
-  /** Its patterns, for {@link matchesCollection}. */
-  config: CollectionConfig;
-}
-
-/**
- * Build the run's MIME resolver from the project's collections.
- *
- * ## Only a DECLARING collection participates
- *
- * The declaring collections are selected once, up front, and a collection with
- * no `mimeType` is not in the list at all — so it cannot match, cannot win, and
- * cannot conflict. That is the owner's rule stated as a data structure rather
- * than as a check inside the loop, which is what makes it cheap: the common
- * project declares none, `declaring` is empty, and every path costs one table
- * lookup and no pattern match at all.
- *
- * ## One distinct value wins; two are an error the run survives
- *
- * However many collections declare the SAME type, that is the answer. Two
- * distinct values are recorded as a {@link CollectionMimeConflict} and the file
- * takes `mime-type.ts`'s answer for the rest of the run, so the report
- * completes and the caller can fail at the end with every offending file named.
- * Throwing on the first would kill a 9,000-file run on file 400 and hide the
- * other six — a config authoring mistake should read like a linter finding.
- *
- * Parsing one file with two parsers was considered and rejected: a blob has one
- * content key and one set of derived facts, so "both" is not representable.
- *
- * @param collections - The project's `resources.collections`, or undefined
- * @returns A resolver whose {@link CollectionMimeResolver.conflicts} accumulate
- *   across every path it is asked about
- */
-export function createCollectionMimeResolver(
-  collections: Readonly<Record<string, CollectionConfig>> | undefined,
-): CollectionMimeResolver {
-  const declaring: DeclaringCollection[] = Object.entries(collections ?? {})
-    .flatMap(([name, config]) => (
-      config.mimeType === undefined ? [] : [{ name, mimeType: config.mimeType, config }]
-    ));
-  const conflicts: CollectionMimeConflict[] = [];
-  // Keyed on the path, not on the collection pair: one file is one authoring
-  // mistake however many extents realize it.
-  const reported = new Set<string>();
-  // Computed ONCE, off the same `declaring` array the matcher uses, so the
-  // fingerprint cannot describe a different rule set from the one that runs.
-  // Order preserved deliberately — see {@link CollectionMimeResolver.fingerprint}.
-  const fingerprint = declaring.length === 0
-    ? NO_DECLARED_MIME_TYPES
-    : canonicalJson(declaring.map((candidate) => ({
-      name: candidate.name,
-      mimeType: candidate.mimeType,
-      include: candidate.config.include,
-      exclude: candidate.config.exclude ?? null,
-    })));
-
-  return {
-    conflicts,
-    fingerprint,
-    mimeFor(absolutePath: string, relativePath: string): string | null {
-      const matched = declaring.filter((candidate) => matchesCollection(absolutePath, candidate.config));
-      const winner = matched[0];
-      if (winner === undefined) {
-        return mimeTypeForPath(absolutePath);
-      }
-      const rival = matched.find((candidate) => candidate.mimeType !== winner.mimeType);
-      if (rival === undefined) {
-        return winner.mimeType;
-      }
-      if (!reported.has(relativePath)) {
-        reported.add(relativePath);
-        conflicts.push({
-          path: relativePath,
-          collections: [winner.name, rival.name],
-          mimeTypes: [winner.mimeType, rival.mimeType],
-        });
-      }
-      return mimeTypeForPath(absolutePath);
-    },
-  };
-}
-
-/**
- * The `mime` column for one realization — null for a directory, the resolver's
- * (or the built-in table's) answer for anything else.
- *
- * @param absolutePath - The path
- * @param relativePath - Root-relative spelling, for the resolver
- * @param isDirectory - Whether the path is a directory
- * @param resolver - The run's collection-aware resolver, when it has one
- * @returns The type, or null when there is none to state
- */
+/** The `mime` column for one realization: null for a directory, the router's {@link mimeFor} otherwise. */
 function mimeForRealization(
   absolutePath: string,
   relativePath: string,
@@ -700,21 +473,14 @@ function mimeForRealization(
   resolver: CollectionMimeResolver | undefined,
 ): string | null {
   if (isDirectory) return null;
-  return resolver === undefined ? mimeTypeForPath(absolutePath) : resolver.mimeFor(absolutePath, relativePath);
+  return mimeFor(resolver, absolutePath, relativePath);
 }
 
 /**
- * Render one conflict as the `realization_conditions` row that carries it.
- *
- * The projection's existing channel for a collected population-time finding, so
- * a config error is queryable exactly like a path collision or a refused closure
- * candidate rather than living in a channel of its own. The six provenance
- * columns are spread from {@link CONDITION_WITHOUT_REFERENCE}: no reference
- * provoked this, a config file did.
- *
- * The message names the file, both collections and both types, because the fix
- * is an edit to `vibe-agent-toolkit.config.yaml` and an author who has to re-run
- * the tool to find out which two collections disagreed has been told nothing.
+ * Render one conflict as the `realization_conditions` row that carries it, so a
+ * config error is queryable like any population-time finding. The provenance
+ * columns come from {@link CONDITION_WITHOUT_REFERENCE}: a config file, not a
+ * reference, provoked it.
  *
  * @param conflict - The recorded disagreement
  * @param extentId - The extent whose realization of this path is being reported

@@ -17,14 +17,12 @@
  *
  * - A code signature matches a `blob_conditions` or `realization_conditions`
  *   row of that code. `extentKind`, when given, holds a realization condition
- *   to its own extent's `resolution_contexts.kind`; `resourceIdPresent`, when
- *   given, to whether the row names a resource (a non-null `resourceId`). Both
- *   are row shapes: what a shape means for one extent is the caller's to say.
+ *   to its own extent's `resolution_contexts.kind`.
  * - A state signature matches a `resource_realizations` row in that
  *   `contentState`.
  */
 export type AbsenceSignature =
-  | { readonly code: string; readonly extentKind?: string; readonly resourceIdPresent?: boolean }
+  | { readonly code: string; readonly extentKind?: string }
   | { readonly contentState: string };
 
 /**
@@ -36,7 +34,7 @@ export type AbsenceSignature =
 export interface AbsenceRows {
   readonly blobConditions: readonly { readonly code: string }[];
   readonly resourceRealizations: readonly { readonly contentState: string }[];
-  readonly realizationConditions: readonly { readonly code: string; readonly extentId: string; readonly resourceId: string | null }[];
+  readonly realizationConditions: readonly { readonly code: string; readonly extentId: string }[];
   readonly resolutionContexts: readonly { readonly contextId: string; readonly kind: string }[];
 }
 
@@ -50,8 +48,6 @@ export type AbsenceObservation =
     readonly extentId: string;
     /** The extent's `resolution_contexts.kind`, or null when the rows carry no such context. */
     readonly extentKind: string | null;
-    /** Whether the row's `resourceId` is non-null. */
-    readonly resourceIdPresent: boolean;
   };
 
 /**
@@ -70,7 +66,6 @@ export function absenceObservations(rows: AbsenceRows): AbsenceObservation[] {
       code: row.code,
       extentId: row.extentId,
       extentKind: kinds.get(row.extentId) ?? null,
-      resourceIdPresent: row.resourceId !== null,
     })),
   ];
 }
@@ -87,10 +82,8 @@ export function matchesAbsenceCause(observation: AbsenceObservation, signature: 
     return observation.table === 'resource_realizations' && observation.contentState === signature.contentState;
   }
   if (observation.table === 'resource_realizations' || observation.code !== signature.code) return false;
-  if (signature.extentKind === undefined && signature.resourceIdPresent === undefined) return true;
-  if (observation.table !== 'realization_conditions') return false;
-  if (signature.extentKind !== undefined && observation.extentKind !== signature.extentKind) return false;
-  return signature.resourceIdPresent === undefined || observation.resourceIdPresent === signature.resourceIdPresent;
+  if (signature.extentKind === undefined) return true;
+  return observation.table === 'realization_conditions' && observation.extentKind === signature.extentKind;
 }
 
 /**

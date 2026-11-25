@@ -20,14 +20,10 @@ import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { COLLECTION_MIME_CONFLICT } from '../src/index.js';
-import { ContributorRegistry } from '../src/projection/contributor.js';
-import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
-import { crawlSourceFor } from '../src/projection/crawl-source.js';
-import { populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import type { CollectionConfig } from '../src/schemas/project-config.js';
 
-import { inOwnRun } from './helpers/population-run.js';
+import { populateFilesystem } from './helpers/population-run.js';
 import { setupTempCorpus } from './helpers/temp-corpus.js';
 
 /**
@@ -59,28 +55,14 @@ const SUBJECT = 'strings.ts';
 const fixture = setupTempCorpus('vat-mime-routing-', CORPUS);
 
 /**
- * Populate the fixture under the given declarations.
- *
- * Runs the REAL `populate()` with the real filesystem extent, so what is
- * exercised is the shipped path from `PopulateOptions.collections` through the
- * builder and the extent to `collectRealization` — not a hand-assembled base
- * that would restate the wiring under test.
+ * Populate the fixture under the given declarations, through the real
+ * `populate()` and filesystem extent.
  *
  * @param collections - The project's collections, or undefined to declare none
  * @returns The populated projection
  */
-async function populateWith(
-  collections: Readonly<Record<string, CollectionConfig>> | undefined,
-): Promise<Projection> {
-  const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor(() => crawlSourceFor(fixture.root(), []), DEFAULT_CONTENT_DEMAND));
-
-  const { projection } = await inOwnRun(populate, {
-    root: fixture.root(),
-    registry,
-    ...(collections !== undefined && { collections }),
-  });
-  return projection;
+function populateWith(collections: Readonly<Record<string, CollectionConfig>> | undefined): Promise<Projection> {
+  return populateFilesystem(fixture.root(), collections);
 }
 
 /**

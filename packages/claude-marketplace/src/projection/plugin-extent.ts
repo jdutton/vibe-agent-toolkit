@@ -352,7 +352,7 @@ function contributeDeclaredPlugin(
  *
  * An external source (`github`, `url`, `npm`, `pip`) names no local path at all.
  * Its identity is minted at the location an install would use — the same
- * honest prediction `PackageExtentContributor` makes at `node_modules/<name>` —
+ * honest prediction an npm install would occupy at `node_modules/<name>` -
  * so the row is a stable thing to join against, while `observed: false` and the
  * absence of any realization keep it from claiming to be there.
  *

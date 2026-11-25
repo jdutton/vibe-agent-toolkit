@@ -14,6 +14,11 @@
 
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
+import { ContributorRegistry } from '../../src/projection/contributor.js';
+import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
+import { crawlSourceFor } from '../../src/projection/crawl-source.js';
+import { populate } from '../../src/projection/merge.js';
+import type { Projection } from '../../src/projection/projection.js';
 import type { StoredDocumentFacts } from '../../src/projection/resource-population.js';
 import { IGNORE_HOME_SETTLEMENT, type PopulationRun, type RunPopulation, withPopulationRun, withRunPopulation } from '../../src/projection/run-population.js';
 import { type CrawlOptions, type RegistryCrawl, ResourceRegistry, type ResourceRegistryOptions } from '../../src/resource-registry.js';
@@ -32,6 +37,25 @@ export function inOwnRun<P extends { run: PopulationRun }, R>(
   options: Omit<P, 'run'>,
 ): Promise<R> {
   return withPopulationRun((run) => lane({ ...options, run } as P));
+}
+
+/**
+ * Run the REAL `populate()` over `root` with the real filesystem extent, under
+ * a run of its own, so the shipped path from `collections` through the builder
+ * and the extent is what a test exercises.
+ *
+ * @param root - The corpus root
+ * @param collections - The project's collections, or undefined to declare none
+ * @returns The populated projection
+ */
+export async function populateFilesystem(
+  root: string,
+  collections: Readonly<Record<string, CollectionConfig>> | undefined,
+): Promise<Projection> {
+  const registry = new ContributorRegistry();
+  registry.register(new FilesystemExtentContributor(() => crawlSourceFor(root, []), DEFAULT_CONTENT_DEMAND));
+  const { projection } = await inOwnRun(populate, { root, registry, ...(collections !== undefined && { collections }) });
+  return projection;
 }
 
 /**

@@ -32,7 +32,7 @@ import { ContributorRegistry } from '../src/projection/contributor.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { CONTENT_PARSING_SKIP, populate } from '../src/projection/merge.js';
-import { createCollectionMimeResolver } from '../src/projection/realizations.js';
+import { createCollectionMimeResolver } from '../src/projection/router.js';
 import type {
   BlobScopedRows,
   ExtentKey,

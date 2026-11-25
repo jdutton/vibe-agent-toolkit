@@ -32,8 +32,7 @@
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
-import type { KeyedContent, ParserKind } from '../content-key.js';
-import { parserKindForMimeType } from '../mime-type.js';
+import type { KeyedContent } from '../content-key.js';
 import type {
   BlobConditionRow,
   BlobReferenceRow,
@@ -58,7 +57,7 @@ import type { ResolutionContextRow, ZoneProvenanceRow } from '../schemas/project
 import { isSizeRefusal, readKeyedContent, type RunContentCache } from './content-cache.js';
 import { errorLabel } from './error-label.js';
 import { ResourceIdentityMap } from './identity.js';
-import type { CollectionMimeResolver } from './realizations.js';
+import { type CollectionMimeResolver, parserKindForMime } from './router.js';
 
 /**
  * Condition code for a second identity offered at an already-realized
@@ -83,16 +82,6 @@ export const REALIZATION_PATH_COLLISION = 'REALIZATION_PATH_COLLISION';
  * rather than an enum member.
  */
 export const REALIZATION_PROMOTION_UNREADABLE = 'REALIZATION_PROMOTION_UNREADABLE';
-
-/**
- * The kind that means "hand this to no document parser".
- *
- * Spelled here because `content-key.ts` keeps its own copy private; the
- * {@link ParserKind} annotation is the tie, so renaming the kind there stops
- * this line compiling rather than leaving a stale literal behind. Replace with
- * an import the moment that module exports one.
- */
-const NO_PARSER_KIND: ParserKind = 'none';
 
 /** Composite-key separator — a NUL can never occur in a path or an id. */
 const KEY_SEPARATOR = '\u0000';
@@ -620,16 +609,8 @@ export class ProjectionBuilder {
     try {
       keyed = await readKeyedContent(
         absolutePath,
-        // The ROW's own type, never re-derived from the path. `mime` can come
-        // from a collection's declared `mimeType`, which overrides the
-        // extension tables — so `parserKindForPath` here would key a `.ts` file
-        // a collection typed `text/markdown` as `none.<digest>` while its own
-        // `mime` column said prose. Every downstream stage reads the kind back
-        // off that prefix, so the two contradicting each other is the
-        // well-formed-entry-with-the-wrong-contents class `content-key.ts`
-        // exists to rule out. `realizations.ts`'s `keyOrState` routes the
-        // eager path the same way; this is the deferred path's copy of that
-        // one decision.
+        // The ROW's own type, never the path-only `parserKindForPath`, as
+        // `realizations.ts`'s `keyOrState` does on the eager path.
         //
         // The FIRST deferred row types the read for all of them, which is sound
         // because typing is a function of the path and the run's single
@@ -638,7 +619,7 @@ export class ProjectionBuilder {
         // resolvers, and that population is already broken one layer up: this
         // method writes ONE key onto every row it promotes, so a per-row kind
         // would have nothing to write.
-        parserKindForMimeType(routing.mime) ?? NO_PARSER_KIND,
+        parserKindForMime(routing.mime),
         this.#contentCache,
       );
     } catch (error) {

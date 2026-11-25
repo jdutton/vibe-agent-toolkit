@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { parserKindForResolvedPath } from '../src/parser-kind-for-path.js';
-import { createCollectionMimeResolver } from '../src/projection/realizations.js';
+import { createCollectionMimeResolver, parserKindForResolvedPath } from '../src/projection/router.js';
 
 const BASE = '/repo';
 

@@ -43,7 +43,7 @@
 
 import { deepFreeze, VatError } from '@vibe-agent-toolkit/utils';
 
-import { parserKindForMimeType } from '../mime-type.js';
+import { NO_PARSER_KIND } from '../content-key.js';
 import type { ParseLimits } from '../parse-limits.js';
 import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
 
@@ -52,6 +52,7 @@ import { AST_SYNTACTIC_FORMS } from './blob-references.js';
 import { type NotAdmittedEntry, unkeyedEntry } from './blob-refusals.js';
 import { BLOB_FACT_READER_TABLES, blobFactsReader, type BlobFactsOutcome, type BlobFactsReader } from './blob-resource-facts.js';
 import { POPULATION_PARSE_LIMITS } from './content-cache.js';
+import { parserKindForMime } from './router.js';
 import type { AdmittedFacts } from './run-population.js';
 import { keyedContentKeys, StoreRequestUnmetError } from './store-hydration.js';
 import type { BlobRequest, BlobScopedRows, BlobScopedTableName, FactStore } from './store.js';
@@ -230,8 +231,8 @@ export function storedRoute(realization: StoredRealization | undefined, parserKi
   if (realization.contentState !== 'oversize') return COMPUTE;
   // Only a kind a parser reads is refused at the one input cap, in a sentence that names the cap.
   // One nothing parses is refused by the cold read for its size, which the store does not hold.
-  const kind = parserKindForMimeType(realization.mime);
-  if (kind === null || kind !== parserKind) return COMPUTE;
+  const kind = parserKindForMime(realization.mime);
+  if (kind === NO_PARSER_KIND || kind !== parserKind) return COMPUTE;
   const entry = unkeyedEntry(realization);
   return entry === undefined ? COMPUTE : { kind: NOT_ADMITTED, entry };
 }

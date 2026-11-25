@@ -22,9 +22,9 @@ import {
   isParsableContent,
   type KeyedContent,
   type ParserKind,
-  parserKindForPath,
   readContentWithKey,
 } from '../src/content-key.js';
+import { parserKindForPath } from '../src/projection/router.js';
 
 describe('parserKindForPath', () => {
   it.each([

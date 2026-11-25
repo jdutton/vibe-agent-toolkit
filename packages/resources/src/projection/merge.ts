@@ -100,11 +100,8 @@ import {
 import { HARNESS_PROFILES, type HarnessProfile } from './harness/profile.js';
 import { rootIdFor } from './identity.js';
 import { ProjectionBuilder, type Projection } from './projection.js';
-import {
-  collectionMimeConflictCondition,
-  createCollectionMimeResolver,
-  type CollectionMimeResolver,
-} from './realizations.js';
+import { collectionMimeConflictCondition } from './realizations.js';
+import { type CollectionMimeResolver, createCollectionMimeResolver } from './router.js';
 import type { PopulationRun } from './run-population.js';
 import {
   assembleProjection,
@@ -303,20 +300,12 @@ export interface PopulateOptions {
   cache?: PopulationCache | undefined;
   /**
    * The project's `resources.collections`, so a declared `mimeType` can route
-   * the file it matches to a parser.
+   * the file it matches to a parser; omitted, `mime-type.ts`'s tables alone.
    *
-   * Omitted, every path is typed by `mime-type.ts`'s tables alone — which is
-   * what every caller outside a configured project wants and what every caller
-   * that has not opted in continues to get.
-   *
-   * The raw config, not a resolver: {@link populate} builds the run's
-   * {@link CollectionMimeResolver} from it exactly once, beside the run's
-   * content cache and for the same reason. The resolver ACCUMULATES conflicts,
-   * so its lifetime has to be the population's — two extents handed two
-   * resolvers would report one authoring mistake twice, and
-   * {@link ProjectionBuilder.ensureContentKey} explicitly relies on there being
-   * exactly one ("two rows at one path cannot disagree unless a caller hands two
-   * extents two different resolvers").
+   * The raw config, not a resolver: {@link populate} builds the run's one
+   * {@link CollectionMimeResolver} from it, because the resolver accumulates
+   * conflicts and {@link ProjectionBuilder.ensureContentKey} relies on there
+   * being exactly one per population.
    */
   collections?: Readonly<Record<string, CollectionConfig>> | undefined;
 }
@@ -870,29 +859,15 @@ function recordMimeConflicts(builder: ProjectionBuilder, routing: CollectionMime
  * Ask of every populate option: *would two runs differing only in this produce
  * different rows?* Every yes belongs here.
  *
- * ## 🔑 The third entry is DERIVED, which is why the list did not have to stop
+ * ## The third entry is DERIVED, not listed
  *
- * This paragraph used to say: if the list grows past two, stop extending it and
- * let each contributor declare its own ambient fingerprint instead — because
- * *"the list below is the set someone remembered to model, which is exactly the
- * property that failed the first time."* That warning is about **hand-maintained
- * enumeration**, and it still stands for anything spelled out here as a literal.
- *
- * `parseRouting` is not that. Its value is
- * {@link CollectionMimeResolver.fingerprint}, computed from the routing rules
- * themselves at the moment the routing is built — so it cannot fall behind them.
- * A new parser kind, a new declaration field, or a whole new routing rule
- * changes the fingerprint by being part of what is digested, with **no edit
- * here**. The entry is a pointer at a self-describing input rather than
- * somebody's recollection of one.
- *
- * That is the shape a fourth entry should take too. A fourth *literal* is still
- * the thing to refuse; a fourth input that can describe itself is not.
- *
- * Without it, declared types would be a textbook false hit: they appear in no
- * parameter set, so two runs over an unchanged tree that route differently share
- * a key and the second is served the first's `mime` columns, content keys and
- * blob rows, at exit 0.
+ * `parseRouting` is {@link CollectionMimeResolver.fingerprint}, computed from
+ * the routing rules themselves, so a new parser kind, declaration field or
+ * routing rule changes it with no edit here. A fourth entry should take that
+ * shape too; a fourth hand-maintained *literal* is the thing to refuse. Without
+ * it, declared types (in no parameter set) would be a false hit: two runs that
+ * route differently share a key and the second is served the first's `mime`
+ * columns, content keys and blob rows, at exit 0.
  *
  * @param options - The run's options, for its ambient inputs
  * @param rootId - This run's corpus root id

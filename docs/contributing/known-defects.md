@@ -310,6 +310,53 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Fix:** a lint rule flagging a `catch` around a `realpath*` call that returns a value without
   calling `linkResolutionFault` / `assertUnresolvableLink` / `isUnresolvableLinkError`.
 
+### Parser-kind decisions outside the router
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** yes, as lanes that disagree about one file
+- **Mechanism:** the projection router decides which parser reads a path, and a collection's declared
+  `mimeType` overrides the extension there. The skill lanes below still decide by a hand-written
+  extension test or a literal kind, so they disagree with the router and with each other. The router
+  sends `text/plain` to markdown, so it calls `LICENSE`, `README`, `CHANGELOG`, `.txt`, `.MD` and
+  `.markdown` files markdown; these sites mostly test `.md` alone, case-sensitively except where
+  noted: the packager (`skill-packager.ts:2506`) and the compatibility analyzer lower-case the path
+  first, so they take `.MD` but not `.markdown` or `.txt` (OKF discovery also lower-cases, and is
+  `.md` by the format spec, so it is not a site here). The link walk behind `vat
+  inventory` and `vat build` already asks the router's path-only answer, so it walks through a
+  linked `notes.txt` that the packager then copies as bytes, links unrewritten. None of these sites
+  honours a declared `mimeType`.
+- **Where:**
+  - [`skill-packager.ts:2507`](../../packages/agent-skills/src/skill-packager.ts) `copyAndRewriteFile`:
+    rewrites links only in `.md`/`.html`/`.htm`.
+  - [`post-build-checks.ts:147`](../../packages/agent-skills/src/post-build-checks.ts) (and 151, 312,
+    399, 472, 500): the packaged-link, unreferenced-file and packaged-path checks read only
+    `.md`/`.html`/`.htm`, lower case.
+  - [`skill-validator.ts:413`](../../packages/agent-skills/src/validators/skill-validator.ts)
+    `processFileLinks`: `vat skills validate` follows only `.md` links.
+  - [`packaging-validator.ts:825`](../../packages/agent-skills/src/validators/packaging-validator.ts)
+    (line totals and the non-portable check over `.md` only), `:1218` `getResolvedMarkdownLinks`,
+    and `:359` `bundledText` (a literal `'markdown'`).
+  - [`skill-text-lane.ts:259`](../../packages/agent-skills/src/skill-text-lane.ts) `storedSkillText`
+    and [`referenced-path-missing.ts:214`](../../packages/agent-skills/src/validators/referenced-path-missing.ts)
+    `bundledPathCandidates`: a literal `'markdown'` for a file the caller chose by `.md`.
+  - [`link-validator.ts:1495`](../../packages/resources/src/link-validator.ts) `isHtmlPath`: `/\.html?$/i`.
+  - [`compatibility-analyzer.ts:26`](../../packages/claude-marketplace/src/compatibility-analyzer.ts)
+    `MARKDOWN_EXTENSIONS`, tested at `:129` in `scanFile`, then a literal `'markdown'` at `:152`:
+    `vat audit --compat` scans a plugin's lower-cased `.md` files as skill text and no other.
+  - [`walk-link-graph.ts:835`](../../packages/agent-skills/src/walk-link-graph.ts) `isRoutable`: the
+    path-only answer, so it ignores a declared `mimeType`.
+- **What changes when they move onto the router:** `vat skills validate` link-checks `LICENSE`,
+  `README`, `CHANGELOG`, `.txt`, `.MD` and `.markdown` files; they count in line totals and the
+  packaged-path and non-portable checks scan them; `vat audit --compat` scans them for skill
+  evidence; the packager re-encodes them (a `readTextContent`
+  round-trip) when it rewrites their links; and `vat inventory` follows links inside a file a
+  collection types `text/markdown`. Moved one at a time, they disagree in a new way: a packager on
+  the config-aware answer rewrites a `.ts` file typed `text/markdown`, and the post-build checks, which
+  read packaged output with no config, never check it.
+- **Fix:** move every site onto the router in one change, the packager and the post-build checks on
+  one answer, and remove each from the reviewed lists in `parser-kind-decisions.test.ts`. The move
+  needs an adopter run before it ships: the new findings it produces ship at default severity with
+  config opt-out, per the detector policy, never behind a flag.
+
 ### No test inflates a DEFLATED ZIP entry past the size it declares
 
 - **Severity:** Minor · **Effort:** S · **User-visible:** not today

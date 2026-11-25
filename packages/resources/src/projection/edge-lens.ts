@@ -94,7 +94,7 @@ export interface EdgeLens {
  * 🪤 The reference index is a pure function of `blob_references` and reads
  * nothing from the lens, so rebuilding it per lens is duplicated work that a
  * one-member extent pays in full — and the number of extents is config-driven
- * and unbounded (`package-extent.ts` mints one per declared spec). Measured on
+ * and unbounded (a contributor may mint one per declared spec). Measured on
  * this repository (2,300 files, 31,496 references) with overlapping full-tree
  * extents: **43 ms at one extent, 713 ms at ten**, before the write.
  *

@@ -36,8 +36,8 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { parserKindForPath } from '../src/content-key.js';
 import type { Projection } from '../src/projection/projection.js';
+import { parserKindForPath } from '../src/projection/router.js';
 import type { BlobReferenceRow, BlobRow, BlobSectionRow } from '../src/schemas/projection-blobs.js';
 
 import { conditionsWithCode, populateFixtureRoot } from './blob-fixture-population.js';
