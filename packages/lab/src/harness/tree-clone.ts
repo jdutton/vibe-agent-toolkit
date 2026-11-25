@@ -19,7 +19,8 @@ import { lstatSync, readdirSync } from 'node:fs';
 import { copyTree, fsFaultOf, isPathAbsentError, isTreeChangeResidue, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { NEVER_CRAWL_GLOBS } from '@vibe-agent-toolkit/utils/crawl';
 
-import type { PreparationGit } from './arm-git.js';
+import type { PreparationGit, TreeOrigin } from './arm-git.js';
+import { runGit } from './git-state.js';
 
 /**
  * Never skipped though the crawler skips them: `.git` (the clone needs it) and
@@ -201,33 +202,69 @@ function kindOf(path: string): GitKind {
   }
 }
 
+/** The gits a plan runs: the arm's, and which one refreshes the copy's index. */
+interface PlanGit {
+  readonly git: PreparationGit;
+  readonly origin: TreeOrigin;
+}
+
 /**
  * Run a plan's steps in order, stopping at the first that fails.
  *
  * @param plan - An accepted plan
- * @param git - The arm's git (`arm-git.ts`), for the copy's index refresh and remote:
- *   under the developer's config a global `core.excludesFile` or a system
- *   `core.autocrlf` would decide what the copy's index records
+ * @param git - The arm's git (`arm-git.ts`), for the copy's remote, and its index
+ *   refresh when the source is a lab-made tree
+ * @param origin - Whose config the SOURCE was checked out under: the copy's index
+ *   is refreshed under that config, the arm's for a `'lab-clone'` and the
+ *   developer's for an `'operator'` checkout (see `arm-git.ts`)
  * @returns `null` on success, else a refusal naming the step that failed
  */
-export function executeClonePlan(plan: Extract<ClonePlan, { ok: true }>, git: PreparationGit): Promise<string | null> {
-  return executeFrom(plan.steps, 0, git);
+export function executeClonePlan(
+  plan: Extract<ClonePlan, { ok: true }>,
+  git: PreparationGit,
+  origin: TreeOrigin,
+): Promise<string | null> {
+  return executeFrom(plan.steps, 0, { git, origin });
 }
 
 /** Steps run one after another, each on what the last left: `index` onward, stopping at the first refusal. */
-async function executeFrom(steps: readonly CloneStep[], index: number, git: PreparationGit): Promise<string | null> {
+async function executeFrom(steps: readonly CloneStep[], index: number, gits: PlanGit): Promise<string | null> {
   const step = steps[index];
   if (step === undefined) return null;
-  const failed = await executeStep(step, git);
-  return failed ?? executeFrom(steps, index + 1, git);
+  const failed = await executeStep(step, gits);
+  return failed ?? executeFrom(steps, index + 1, gits);
+}
+
+/**
+ * Re-stat the copy's tracked files under the config its source was checked out
+ * under: a filter or `autocrlf` that config carries decides what every re-hashed
+ * file reads as, and `-q` would hide a wrong answer as "modified".
+ *
+ * @param repository - The copy
+ * @param gits - The arm's git, and the source's origin
+ * @returns The exit (`null` when the arm's git never ran) and git's words
+ */
+function refreshIndex(repository: string, gits: PlanGit): { readonly status: number | null; readonly detail: string } {
+  // `-q` BEFORE `--refresh`: git applies options in order, so a trailing `-q`
+  // is not yet read and a modified or skipped tracked file ("needs update")
+  // would exit 1. Such a subject is the normal one, and its dirt must stay
+  // visible in the clone.
+  const args = ['update-index', '-q', '--refresh'];
+  if (gits.origin === 'operator') {
+    const ran = runGit(args, repository);
+    return { status: ran.status, detail: ran.stdout.trim() };
+  }
+  const ran = gits.git(args, repository);
+  return { status: ran.status, detail: `${ran.stdout} ${ran.stderr}`.trim() };
 }
 
 /**
  * @param step - One step
- * @param git - The arm's git
+ * @param gits - The arm's git, and the source's origin
  * @returns `null` on success, else a refusal naming the step
  */
-function executeStep(step: CloneStep, git: PreparationGit): string | null | Promise<string | null> {
+function executeStep(step: CloneStep, gits: PlanGit): string | null | Promise<string | null> {
+  const { git } = gits;
   switch (step.kind) {
     case 'mkdir': {
       mkdirSyncReal(step.path, { recursive: true });
@@ -237,14 +274,10 @@ function executeStep(step: CloneStep, git: PreparationGit): string | null | Prom
       return copyEntry(step.from, step.to);
     }
     case 'refresh-index': {
-      // `-q` BEFORE `--refresh`: git applies options in order, so a trailing `-q`
-      // is not yet read and a modified or skipped tracked file ("needs update")
-      // would exit 1. Such a subject is the normal one, and its dirt must stay
-      // visible in the clone. Through the arm's git, like remove-origin.
-      const refreshed = git(['update-index', '-q', '--refresh'], step.repository);
+      const refreshed = refreshIndex(step.repository, gits);
       return refreshed.status === 0
         ? null
-        : `REFUSED: cannot refresh the clone's index at ${step.repository} (git exit ${String(refreshed.status)}): ${refreshed.stdout} ${refreshed.stderr}`.trim();
+        : `REFUSED: cannot refresh the clone's index at ${step.repository} (git exit ${String(refreshed.status)}): ${refreshed.detail}`.trim();
     }
     case 'remove-origin': {
       // Through the arm's git, which clears an inherited GIT_DIR: a capture

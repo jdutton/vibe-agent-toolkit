@@ -29,7 +29,7 @@ import { hasParentTraversalSegment, isAbsolutePath, toForwardSlash } from '@vibe
 import { gitFindRoot } from '@vibe-agent-toolkit/utils/git';
 
 import { armRefusal } from './arm-dirs.js';
-import type { PreparationGit } from './arm-git.js';
+import type { PreparationGit, TreeOrigin } from './arm-git.js';
 import { type ClonePlan, type CopyMode, executeClonePlan, readCloneSource, planTreeClone } from './tree-clone.js';
 
 /**
@@ -95,11 +95,17 @@ export function planSubjectCopy(subject: string, destination: string, platform: 
  *
  * @param subject - The real subject's absolute root
  * @param destination - The arm's copy; must not exist yet
- * @param git - The arm's git, which refreshes the copy's index
+ * @param git - The arm's git
+ * @param origin - Whose config `subject` was checked out under, so whose refreshes the copy's index (`arm-git.ts`)
  * @throws {VatError} `ARM_REFUSED` when the copy cannot be planned or made
  */
-export async function copySubject(subject: string, destination: string, git: PreparationGit): Promise<void> {
+export async function copySubject(
+  subject: string,
+  destination: string,
+  git: PreparationGit,
+  origin: TreeOrigin,
+): Promise<void> {
   const plan = planSubjectCopy(subject, destination, process.platform);
-  const refusal = plan.ok ? await executeClonePlan(plan, git) : plan.refusal;
+  const refusal = plan.ok ? await executeClonePlan(plan, git, origin) : plan.refusal;
   if (refusal !== null) throw armRefusal(refusal);
 }

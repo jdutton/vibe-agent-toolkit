@@ -11,10 +11,31 @@
  * so under it a system `core.autocrlf=true` rewrites a restored file's line
  * endings, a global `core.excludesFile` hides a created file from a count, and an
  * installed git-lfs filter replaces the lab's: an arm tree never sees it.
+ *
+ * ## Two kinds of tree, two configs
+ *
+ * A git run on a tree must use the config the tree was checked out under, or it
+ * misreads the tree's own bytes. The arm's git is right for a tree the LAB made:
+ * a prepared clone (`clone.ts`) and the copies, edits and replays made from it.
+ * It is wrong for an OPERATOR's checkout, or a copy of one, which the developer
+ * made under their own config: without the global `filter.lfs` driver every LFS
+ * file re-hashes as modified, and on Windows a system `core.autocrlf=true` makes
+ * every CRLF text file read dirty. Such a tree is refreshed through the lab's
+ * `runGit` (`git-state.ts`), which inherits the developer's config. So a copy's
+ * caller names its source's {@link TreeOrigin}, required, never defaulted; and an
+ * edit arm, whose edits and restores run through this git, runs only in the
+ * lab's prepared clone.
  */
 
 import { type ArmDirectories, armStepEnvironment } from './arm-dirs.js';
 import { runCommand } from './run.js';
+
+/**
+ * Whose config a tree was checked out under, so which git may refresh a copy of
+ * its index: `'lab-clone'` the arm's (a prepared clone, or a copy of one),
+ * `'operator'` the developer's (a subject the operator checked out).
+ */
+export type TreeOrigin = 'lab-clone' | 'operator';
 
 /** One arm git's outcome: its exit (`null` when it never ran or was killed), and its streams. */
 export interface ArmGitOutcome {

@@ -62,7 +62,7 @@ import {
   removeArmSubject,
 } from './arm-dirs.js';
 import { type ArmEnvironment, clearedEnvironment, mergeArmEnvironments } from './arm-env.js';
-import { preparationGit } from './arm-git.js';
+import { preparationGit, type TreeOrigin } from './arm-git.js';
 import { isEditState } from './arm-state.js';
 import type { MeasuredCommandSpec } from './commands.js';
 import { fingerprintFiles } from './fingerprint.js';
@@ -388,7 +388,7 @@ async function runPreparedArms(
 async function makeSubjectCopy(arm: PreparedArm): Promise<string | null> {
   if (arm.copy === null) return null;
   await removeArmSubject(arm.context.dirs);
-  await copySubject(arm.copy.from, arm.context.dirs.subject, arm.context.git);
+  await copySubject(arm.copy.from, arm.context.dirs.subject, arm.context.git, arm.copy.origin);
   return copyFingerprint(arm.context.dirs.subject, arm.copy.writes);
 }
 
@@ -474,7 +474,7 @@ interface PreparedArm {
    * The real subject the arm's copy is made from and what its steps write in
    * it, or `null` when no step writes the subject and the arm runs in it.
    */
-  readonly copy: { readonly from: string; readonly writes: readonly string[] } | null;
+  readonly copy: { readonly from: string; readonly writes: readonly string[]; readonly origin: TreeOrigin } | null;
   readonly removed: readonly string[];
   readonly removedTool: readonly string[];
   readonly npmNetwork: readonly string[];
@@ -495,11 +495,19 @@ function prepareArm(spec: RepeatSpec): PreparedArm {
   const dirs = armDirectories(spec.arm);
   const placement = armPlacementRefusal(dirs.root, [spec.cwd]);
   if (placement !== null) throw armRefusal(`arm '${spec.arm.arm}': ${placement}`);
-  // An edit arm writes the tree it runs in: only the lab's own prepared clone may receive that.
-  const notOurs = isEditState(spec.arm.state) ? preparedCloneRefusal(spec.arm.root, spec.cwd) : null;
-  if (notOurs !== null) throw armRefusal(`arm '${spec.arm.arm}' edits the tree it runs in: ${notOurs}`);
+  // Is the subject the lab's prepared clone, checked out under the arm's git, or an operator's checkout?
+  const notOurs = preparedCloneRefusal(spec.arm.root, spec.cwd);
+  // An edit arm edits the tree it runs in, which is `dirs.subject` when its steps
+  // also declare writes. That copy is the lab's either way, yet the guard
+  // deliberately checks the SOURCE, `spec.cwd`: the edits, the candidate listing
+  // and the restore all run through the arm's git, which reads a tree right only
+  // when the tree was checked out under it (`arm-git.ts`). A copy of an operator's
+  // checkout was checked out under the developer's config, so it is refused too.
+  if (isEditState(spec.arm.state) && notOurs !== null) {
+    throw armRefusal(`arm '${spec.arm.arm}' edits the tree it runs in: ${notOurs}`);
+  }
   const writes = writtenDirectories(spec.steps);
-  const copy = writes.length === 0 ? null : { from: spec.cwd, writes };
+  const copy = writes.length === 0 ? null : { from: spec.cwd, writes, origin: originOf(notOurs) };
   if (copy !== null) refuseSubjectArguments(spec);
   // A writing arm runs in its copy: the cwd every step and every resolution sees.
   const cwd = copy === null ? spec.cwd : dirs.subject;
@@ -533,6 +541,14 @@ function prepareArm(spec: RepeatSpec): PreparedArm {
       return own === undefined ? vat.env : mergeArmEnvironments(vat.env, { set: own, unset: [] });
     },
   };
+}
+
+/**
+ * @param notOurs - {@link preparedCloneRefusal} of the arm's subject
+ * @returns Whose config the subject was checked out under: the arm's for the lab's prepared clone, else the operator's
+ */
+function originOf(notOurs: string | null): TreeOrigin {
+  return notOurs === null ? 'lab-clone' : 'operator';
 }
 
 /**

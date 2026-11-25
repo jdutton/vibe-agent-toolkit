@@ -63,8 +63,9 @@ additive. The parse capabilities a parser implements and the load-boundary rule 
 - **Nested repositories (git submodules).** A general design exists: every mode `160000` entry
   with a git directory gets its own snapshot, LFS pass and reader, and joins the store key as a
   digest of each repository's tree key. Until then a submodule's contents are walked from disk
-  and are not in the store key, so an uncommitted edit inside one is served stale (a known
-  defect). What would bring it forward: a VAT user whose repository has submodules.
+  and are not in the store key, so an uncommitted edit inside one is served stale (a
+  [known defect](../contributing/known-defects.md#an-uncommitted-edit-inside-a-submodule-is-served-stale)).
+  What would bring it forward: a VAT user whose repository has submodules.
 - **Speed-ups with diminishing returns.** Measured once the warm edit loop is done, each worth a
   fraction of a second per run:
   - an integer surrogate key for extent rows;

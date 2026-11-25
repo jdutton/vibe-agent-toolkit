@@ -37,6 +37,7 @@ describe('executeClonePlan: a copy step the host cannot write', () => {
     const refusal = await executeClonePlan(
       { ok: true, steps: [{ kind: 'copy', from: '/subject/docs', to: '/copy/docs' }] },
       NO_GIT,
+      'operator',
     );
 
     expect(refusal).toMatch(/^REFUSED: clone step 'copy \/subject\/docs \/copy\/docs' failed: EPERM: operation not permitted, symlink/u);

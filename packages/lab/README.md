@@ -342,6 +342,11 @@ and the report spell the state the same way.
 
 The count and the kind live only in the arm name; there is no flag for either.
 
+- An edit arm edits and restores the tree it runs in, so it runs only in the lab's prepared clone,
+  `<arms root>/clone` under a marked arms root: any other working directory is refused before
+  anything runs, a copy of an operator's checkout included. The edits and restores run through the
+  arm's git, which reads a tree right only when the tree was checked out under it.
+
 - `--edit <path>` (repeatable) names the files to edit, relative to the subject, and applies only to
   edit arms; it is global, so every edit arm of the invocation edits from the same paths. Every
   `--edit` path must be a tracked file of the subject: an untracked one is refused before priming,
@@ -384,6 +389,8 @@ violates the rule: it did not do the work an edit costs, so its time is not an e
 exit code that differs from the same build's clean arm in that round, since an edit that moved a
 finding would time a different run. (Under the default exact exit commitment a differing exit is
 already a step violation; the clean-arm check also holds when `--expect-exit` admits another code.)
+A round whose clean arm has no repetition (its priming failed) fails the edit arm's repetition too:
+there is no clean exit to compare, so no gap to time.
 
 **Work dumps per repetition.** Every arm repetition runs with `VAT_WORK_COUNTERS` pointed at a fresh
 directory and the report keeps the merged counters for that repetition. With `GIT_TRACE2_EVENT` set
