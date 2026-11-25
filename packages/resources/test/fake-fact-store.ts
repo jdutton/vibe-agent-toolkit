@@ -30,6 +30,7 @@ import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import type {
+  BlobFactsWrite,
   BlobRequest,
   BlobScopedRows,
   BlobScopedTableName,
@@ -107,25 +108,45 @@ const PARTITION_COLUMNS: ReadonlyMap<string, string> = new Map(
 );
 
 /**
- * One held key's bundle with a later write's partitioned rows applied: the
- * partitions that write carries replace what was held for them, and every
- * other row — every unpartitioned table, every partition it does not carry —
- * stays, as the real store's pair-scoped delete leaves it.
+ * A row's partition value — the harness path every partitioned blob table is
+ * keyed by. Settled pairs name it as a string, so any other value is a fixture
+ * error, not a partition.
  *
- * @param held - What the double holds for the key
+ * @param row - A partitioned table's row
+ * @param column - The table's partition column
+ * @returns The partition value
+ */
+function partitionValue(row: Readonly<Record<string, unknown>>, column: string): string {
+  const value = row[column];
+  if (typeof value !== 'string') {
+    throw new TypeError(`partition column ${column} holds a ${typeof value}, not a string`);
+  }
+  return value;
+}
+
+/**
+ * One held key's bundle with a later write's rows applied, as the real store's
+ * deletes leave it: a replaced key takes the write's unpartitioned rows; in a
+ * partitioned table the partitions it replaces (every carried one for a
+ * replaced key, the unsettled ones otherwise) take the write's rows, and every
+ * other row stays.
+ *
+ * @param held - What the double holds for the key, if anything
  * @param incoming - What the later write carries for it
+ * @param replaces - Whether the key is replaced
+ * @param settled - The partition values settled at read for this key
  * @returns The merged bundle
  */
-function withPartitionsOf(held: RowBundle, incoming: RowBundle): RowBundle {
-  const carried = new Set<string>();
+function applyWrite(held: RowBundle | undefined, incoming: RowBundle, replaces: boolean, settled: ReadonlySet<string>): RowBundle {
+  // A key not replaced keeps what the double holds, which is nothing when it
+  // holds nothing: its unpartitioned rows are not written, as in the real store.
+  const merged: RowBundle = replaces ? { ...incoming } : { ...(held ?? emptyBlobBundle()) };
   for (const [table, column] of PARTITION_COLUMNS) {
-    for (const row of incoming[table] ?? []) carried.add(JSON.stringify(row[column]));
-  }
-  const merged: RowBundle = { ...held };
-  for (const [table, column] of PARTITION_COLUMNS) {
+    const written = (incoming[table] ?? []).filter((row) => replaces || !settled.has(partitionValue(row, column)));
+    const carried = new Set(written.map((row) => JSON.stringify(row[column])));
     merged[table] = [
-      ...(held[table] ?? []).filter((row) => !carried.has(JSON.stringify(row[column]))),
-      ...(incoming[table] ?? []),
+      ...(held?.[table] ?? []).filter((row) => !carried.has(JSON.stringify(row[column]))),
+      ...written,
     ];
   }
   return merged;
@@ -171,6 +192,21 @@ export class FakeFactStore implements FactStore {
   readonly #blobs = new Map<string, RowBundle>();
 
   /**
+   * The ledger: every held content key, oldest stamp first. A re-stamp deletes
+   * and re-adds the key, so `Map` order is the real store's
+   * `(writtenAt, rowid)` order.
+   */
+  readonly #ledger = new Set<string>();
+
+  /** How many content keys a write keeps; unbounded unless a case says otherwise. */
+  readonly #retainedBlobKeys: number;
+
+  /** @param retainedBlobKeys - The blob window, as the real store's `retainedBlobKeys` */
+  constructor(retainedBlobKeys = Number.POSITIVE_INFINITY) {
+    this.#retainedBlobKeys = retainedBlobKeys;
+  }
+
+  /**
    * A store holding what this one holds, with every counter at zero: one warm
    * store filed once, and a copy per case that writes or evicts in its own.
    *
@@ -181,32 +217,48 @@ export class FakeFactStore implements FactStore {
    * @returns The copy
    */
   copy(): FakeFactStore {
-    const copy = new FakeFactStore();
+    const copy = new FakeFactStore(this.#retainedBlobKeys);
     for (const [key, rows] of this.#extents) copy.#extents.set(key, rows);
     for (const [key, bundle] of this.#blobs) copy.#blobs.set(key, bundle);
+    for (const key of this.#ledger) copy.#ledger.add(key);
     return copy;
   }
 
   /**
-   * Record blob facts, idempotently.
+   * Record blob facts by the port's replace-and-re-stamp rule: a held key the
+   * read did not cover, or that left the ledger since, is replaced; a covered
+   * key still in the ledger keeps its rows; every held key is re-stamped; then
+   * the window is applied past `max(retention, held keys)`. PARTITIONED rows
+   * (the harness tables) are written per `(blob, partition)`, as the interface
+   * requires — see {@link applyWrite}.
    *
-   * A key the double already holds is left alone, matching the interface's own
-   * promise — and not merely for fidelity: appending instead would duplicate
-   * every row on the second write, and a hydration carrying doubled rows would
-   * fail the byte-identical oracle for a reason that is the double's fault
-   * rather than the driver's. Except its PARTITIONED rows (the harness tables):
-   * those are written per `(blob, partition)`, as the interface requires — see
-   * {@link withPartitionsOf}.
-   *
-   * @param rows - The blob-scoped tables
+   * @param write - The held rows and what the read covered
    */
-  writeBlobFacts(rows: BlobScopedRows): Promise<void> {
+  writeBlobFacts(write: BlobFactsWrite): Promise<void> {
     this.writeBlobFactsCalls++;
-    return promised(() => this.#mergeBlobFacts(rows));
+    return promised(() => this.#mergeBlobFacts(write));
   }
 
   /** The synchronous body of {@link writeBlobFacts}. */
-  #mergeBlobFacts(rows: BlobScopedRows): void {
+  #mergeBlobFacts(write: BlobFactsWrite): void {
+    const incoming = this.#bundlesByKey(write.rows);
+    const covered = new Set(write.coveredAtRead);
+    for (const [key, bundle] of incoming) {
+      const replaces = !covered.has(key) || !this.#ledger.has(key);
+      const settled = new Set(write.settledAtRead.filter((pair) => pair.contentKey === key).map((pair) => pair.harness));
+      this.#blobs.set(key, applyWrite(this.#blobs.get(key), bundle, replaces, settled));
+    }
+    for (const key of incoming.keys()) {
+      this.#ledger.delete(key);
+      this.#ledger.add(key);
+    }
+    const keep = Math.max(this.#retainedBlobKeys, incoming.size);
+    const victims = [...this.#ledger].slice(0, Math.max(0, this.#ledger.size - keep));
+    for (const key of victims) this.forgetBlobFacts(key);
+  }
+
+  /** A write's rows, one bundle per content key. */
+  #bundlesByKey(rows: BlobScopedRows): Map<string, RowBundle> {
     const source = rows as unknown as RowBundle;
     const incoming = new Map<string, RowBundle>();
     for (const table of BLOB_TABLES) {
@@ -223,10 +275,7 @@ export class FakeFactStore implements FactStore {
         bundle[table] = [...(bundle[table] ?? []), row];
       }
     }
-    for (const [key, bundle] of incoming) {
-      const held = this.#blobs.get(key);
-      this.#blobs.set(key, held === undefined ? bundle : withPartitionsOf(held, bundle));
-    }
+    return incoming;
   }
 
   /**
@@ -264,13 +313,15 @@ export class FakeFactStore implements FactStore {
   }
 
   /**
-   * Drop every blob row held for one content key — a count-window eviction of
-   * that key, which a real backend does in `#forgetBlobKeys`.
+   * Drop every blob row held for one content key, and its ledger entry — a
+   * count-window eviction of that key, which a real backend does in
+   * `evictBlobKeysPastRetention`.
    *
    * @param contentKey - The key to forget
    */
   forgetBlobFacts(contentKey: string): void {
     this.#blobs.delete(contentKey);
+    this.#ledger.delete(contentKey);
   }
 
   /**

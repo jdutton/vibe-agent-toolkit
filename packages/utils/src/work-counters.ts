@@ -54,6 +54,12 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * counts every `EXPLAIN` the SQL gate prepares — one per gated statement, and
  * the four virtual-table reference reads each handle makes when it is opened.
  *
+ * `blob.storeServed` counts the content keys a derivation serves from the stored blob
+ * tier rather than extracting them; `harness.pairsDerived` counts the `(blob, harness)`
+ * pairs the harness pass derives facts for, one per pair it derived, a refused or
+ * unreadable pair not included. Together with the parse lookups they say what one
+ * extent miss extracted and what it reused.
+ *
  * `parse.cache.written` counts parse-cache entries whose write was reported, parent side only:
  * `ParseCache.setByKey`, and the pool's settlement of a worker's `stored` reply. A worker killed
  * after its entry reached the final path but before its reply arrived wrote an entry this does not
@@ -79,17 +85,17 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  *
  * `skillText.*` counts the skills lane's scans, once per (run, file) however many skills reach
  * the file. `storeMiss`: scanned from its text in a run with a store
- * (`ResourcePopulationSource.holdsStore`) because the source answered no stored document; cold, the
- * files scanned, warm, the files the store does not cover. `noStore`: scanned because the run has
+ * (`ResourcePopulationSource.holdsStore`) because the source answered no stored document: on a hit,
+ * the files the store does not cover; on a miss, the files the run's own derived population does
+ * not cover (a miss answers from the rows it derived). `noStore`: scanned because the run has
  * no store (`vat audit`, the store off, or no run); never beside `storeMiss`. `storeUnopened`: once
  * per run at most, when the stored-document questions met a failure opening the store or building
  * the home population (a read-only cache, the store's lock held, git giving no answer); every scan
  * then is a `storeMiss`. `outsideRoot`: a question about a file outside the run's root, answered
  * nothing without opening the store, and also a `storeMiss` (or `noStore`) when scanned.
  *
- * `git.snapshots` counts the git tree snapshots taken (`gitTreeSnapshot` memo misses, one per
- * snapshot however many git processes it starts), so a run's snapshot count reads straight off a
- * dump.
+ * `git.snapshots` counts `gitTreeSnapshot` memo misses, one per snapshot however many git
+ * processes it starts.
  *
  * `checks.gate.rows.read` counts the tier rows the admission request reads for the checks overlap
  * gate, summed per member (resource-scanning-and-caching.md 3.7b).
@@ -105,6 +111,8 @@ export const WORK_COUNTER_NAMES = [
   'statement.explained',
   'extent.derived',
   'extent.served',
+  'blob.storeServed',
+  'harness.pairsDerived',
   'store.miss.refusedPairs',
   'parse.cache.hit',
   'parse.cache.written',

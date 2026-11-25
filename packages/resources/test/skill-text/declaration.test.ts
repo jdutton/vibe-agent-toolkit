@@ -4,7 +4,6 @@ import {
   SKILL_TEXT_DECLARATION,
   SKILL_TEXT_FAMILIES,
   SKILL_TEXT_PATTERN_IDS,
-  skillTextDeclarationDigest,
 } from '../../src/skill-text/declaration.js';
 
 /** Every `family` a section of the declaration names, found by walking it. */
@@ -91,56 +90,5 @@ describe('SKILL_TEXT_DECLARATION', () => {
       ['gh', 'EXTERNAL_CLI_GH'],
       ['op', 'EXTERNAL_CLI_OP'],
     ]);
-  });
-});
-
-describe('skillTextDeclarationDigest', () => {
-  const digest = skillTextDeclarationDigest(SKILL_TEXT_DECLARATION);
-
-  // A change to the declaration's content moves the digest on purpose (stored facts must be
-  // recomputed); a change to how it is held (frozen or not) must not.
-  it('does not move with how the declaration is held: an unfrozen deep copy digests the same', () => {
-    const copy = structuredClone(SKILL_TEXT_DECLARATION);
-    expect(Object.isFrozen(copy.body)).toBe(false);
-    expect(skillTextDeclarationDigest(copy)).toBe(digest);
-  });
-
-  // The content as committed at 7acf4e8ca, while the declaration was still deep-frozen: unfreezing
-  // its regexes kept that value. `body.fenceStates` came later, so it is taken out to compare.
-  it('kept its 7acf4e8ca value through the regex unfreeze', () => {
-    const { fenceStates, ...bodyAt7acf4e8ca } = SKILL_TEXT_DECLARATION.body;
-    expect(Object.keys(fenceStates)).toHaveLength(3);
-    const at7acf4e8ca = { ...SKILL_TEXT_DECLARATION, body: bodyAt7acf4e8ca } as unknown as typeof SKILL_TEXT_DECLARATION;
-    expect(skillTextDeclarationDigest(at7acf4e8ca)).toBe('297d5cb627b3908b290c287b4487dfebd4f5bd3c0c2baa11f4b9cc6dcfdafe1c');
-  });
-
-  it('is a stable sha256 hex', () => {
-    expect(digest).toMatch(/^[0-9a-f]{64}$/);
-    expect(skillTextDeclarationDigest(SKILL_TEXT_DECLARATION)).toBe(digest);
-  });
-
-  it('moves with a regex source', () => {
-    expect(skillTextDeclarationDigest({ ...SKILL_TEXT_DECLARATION, h1: /^#[ \t]([^\n]+)$/m })).not.toBe(digest);
-  });
-
-  it('moves with a regex flag', () => {
-    expect(skillTextDeclarationDigest({ ...SKILL_TEXT_DECLARATION, h1: /^#[ \t]([^\n]*)$/mu })).not.toBe(digest);
-  });
-
-  it('moves with a constant', () => {
-    const crossSkill = { ...SKILL_TEXT_DECLARATION.crossSkill, lookbehindChars: 61 };
-    expect(skillTextDeclarationDigest({ ...SKILL_TEXT_DECLARATION, crossSkill } as typeof SKILL_TEXT_DECLARATION)).not.toBe(digest);
-  });
-
-  it('moves with array order', () => {
-    const reordered = [...SKILL_TEXT_DECLARATION.timeSensitive.patterns].reverse();
-    const timeSensitive = { ...SKILL_TEXT_DECLARATION.timeSensitive, patterns: reordered };
-    // The declaration's type IS its pattern order (a literal tuple), so a reordered copy cannot be typed as one.
-    expect(skillTextDeclarationDigest({ ...SKILL_TEXT_DECLARATION, timeSensitive } as unknown as typeof SKILL_TEXT_DECLARATION)).not.toBe(digest);
-  });
-
-  it('does not move with object key order', () => {
-    const { h1, ...rest } = SKILL_TEXT_DECLARATION;
-    expect(skillTextDeclarationDigest({ h1, ...rest })).toBe(digest);
   });
 });

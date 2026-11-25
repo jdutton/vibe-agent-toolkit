@@ -15,13 +15,13 @@ export const COUNTED_STATUS_PREFIX = 'accepted, counted';
 
 /** Register line number to the counters that count that row. */
 export const COUNTED_COST_ROWS: Readonly<Record<number, readonly [WorkCounter, ...WorkCounter[]]>> = {
-  43: ['skillText.storeMiss', 'skillText.noStore', 'skillText.storeUnopened', 'skillText.outsideRoot'],
-  45: ['store.reads.extent', 'store.reads.blob'],
-  46: ['store.rows.decoded.persistent'],
-  62: ['extent.derived', 'extent.served'],
-  63: ['hydration.rows.written'],
-  67: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
-  75: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
+  44: ['skillText.storeMiss', 'skillText.noStore', 'skillText.storeUnopened', 'skillText.outsideRoot'],
+  46: ['store.reads.extent', 'store.reads.blob'],
+  47: ['store.rows.decoded.persistent'],
+  64: ['extent.derived', 'extent.served', 'blob.storeServed', 'harness.pairsDerived'],
+  69: ['hydration.rows.written'],
+  73: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
+  81: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
 };
 
 /** I10's own term for the store's write side, which no counted row restates. */
@@ -41,7 +41,7 @@ const ONE_READ_PER_RUN =
 export const COUNTERS_WITHOUT_A_COUNTED_ROW: Readonly<Partial<Record<WorkCounter, string>>> = {
   'store.writes.persistent': I10_STORE_WRITES,
   'store.rows.written.persistent': I10_STORE_WRITES,
-  'hydration.writes': "one per hydration that wrote a relation; row 63 is counted by its rows, not its writes.",
+  'hydration.writes': "one per hydration that wrote a relation; row 69 is counted by its rows, not its writes.",
   'statement.explained': 'the schema-introspection row\'s cost, an enforced row, not a counted cost',
   'store.miss.refusedPairs': 'the store-miss row, an enforced row, not a counted cost',
   'parse.refused.load': 'load-dependent, bounded by I8; reported only',
@@ -74,12 +74,12 @@ export interface UncountedCostRow {
 export const UNCOUNTED_COST_ROWS: Readonly<Record<number, UncountedCostRow>> = {
   31: { mechanism: 'start-time probe', status: 'unbuilt' },
   36: { mechanism: 'code identity', status: 'unbuilt' },
-  50: { mechanism: 'lease claim', status: 'unbuilt' },
-  60: { mechanism: 'leases and pinned bytes', status: 'unbuilt' },
-  61: { mechanism: 'stat memo', status: 'unbuilt' },
-  64: { mechanism: 'lens', status: 'unbuilt' },
-  65: { mechanism: 'racy re-hash', status: 'unbuilt' },
-  83: {
+  52: { mechanism: 'lease claim', status: 'unbuilt' },
+  62: { mechanism: 'leases and pinned bytes', status: 'unbuilt' },
+  63: { mechanism: 'stat memo', status: 'unbuilt' },
+  70: { mechanism: 'lens', status: 'unbuilt' },
+  71: { mechanism: 'racy re-hash', status: 'unbuilt' },
+  89: {
     mechanism: "worker round trip (measured by the lab's parse-facet tier row, not a work counter)",
     status: 'unbuilt',
   },

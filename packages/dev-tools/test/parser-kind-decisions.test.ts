@@ -82,7 +82,7 @@ const KIND_LITERAL_SITES: ReadonlyMap<string, ReviewedSite> = new Map([
   ['packages/resources/src/parse-pool.ts', { count: 1, reason: 'labels a parser-unavailable error with no job, not a parse' }],
   ['packages/resources/src/parse-timing.ts', { count: 2, reason: 'names each parser the timing probe loads' }],
   ['packages/resources/src/parser-loader.ts', { count: 1, reason: 'loads the parser for a kind already decided' }],
-  ['packages/resources/src/projection/blob-population.ts', { count: 3, reason: 'maps and compares a content key kind already decided' }],
+  ['packages/resources/src/projection/blob-population.ts', { count: 1, reason: 'compares a content key kind already decided' }],
   ['packages/resources/src/projection/blob-resource-facts.ts', { count: 2, reason: 'compares a content key kind already decided' }],
   ['packages/resources/src/projection/claude-memory.ts', { count: 2, reason: 'a marked token type, not a parser kind' }],
   ['packages/resources/src/remark-parser.ts', { count: 2, reason: 'an mdast node type, not a parser kind' }],

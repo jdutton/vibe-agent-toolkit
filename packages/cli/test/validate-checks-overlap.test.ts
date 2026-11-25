@@ -17,10 +17,10 @@ import {
 import { validateDebugFacts, type ChecksPhaseObservation, type ValidateDebugFacts } from '../src/commands/validate-debug-facts.js';
 import type { RunContext } from '../src/utils/resource-loader.js';
 
-import { ADMITTED_HOME, fakeOverlappedRun, HOME_KEY, POPULATION_LIMITS, ROOT, type FakeOverlappedRun } from './helpers/overlap-gate-fixtures.js';
+import { ADMITTED_HOME, fakeOverlappedRun, HOME_KEY, ROOT, type FakeOverlappedRun } from './helpers/overlap-gate-fixtures.js';
 
 /** A run carrying only what the gate reads. */
-const runAt = (root: string): RunContext => ({ population: { root }, dispatcher: { limits: POPULATION_LIMITS } }) as unknown as RunContext;
+const runAt = (root: string): RunContext => ({ population: { root } }) as unknown as RunContext;
 
 /** Every queued callback, and the ones they queue, has run. */
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
@@ -37,7 +37,6 @@ describe('gateOptionsFor', () => {
 
     expect(options.routing.baseDir).toBe('/private/tmp/project');
     expect(options.childHomeKey).toBe(RunPopulation.homeKey([]));
-    expect(options.limits).toBe(POPULATION_LIMITS);
     expect(options.debug).toBe(false);
   });
 });

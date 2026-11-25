@@ -25,7 +25,7 @@
  *
  * | | `projection-sqlite` | a file-per-table backend |
  * |---|---|---|
- * | {@link FactStore.writeBlobFacts} | `INSERT … ON CONFLICT DO NOTHING`, one transaction | a staged file per table, renamed into a content-addressed directory |
+ * | {@link FactStore.writeBlobFacts} | one `BEGIN IMMEDIATE` transaction: look up each key covered at read in the ledger, replace the keys uncovered at read or evicted since, re-stamp every held key, evict past `max(retention, held keys)` | a staged file per table, renamed into a content-addressed directory |
  * | {@link FactStore.writeExtent} | delete-then-insert under the key, one transaction | a file per table under `root=…/tree=…/`, published through a manifest |
  * | {@link FactStore.readExtent} | `SELECT … WHERE rootId = ? AND treeHash = ?` | read the manifest, then scan exactly the files it lists |
  *
@@ -77,6 +77,7 @@ import { deepFreeze } from '@vibe-agent-toolkit/utils';
 import { schemaShapeSource } from '../schemas/parse-facts.js';
 import type { ReferenceSyntacticForm } from '../schemas/projection-blobs.js';
 
+import type { HarnessId } from './harness/profile.js';
 import type { Projection } from './projection.js';
 import { PROJECTION_TABLES, type ProjectionRow, type ProjectionTableName } from './table-registry.js';
 
@@ -114,6 +115,27 @@ type ProjectionTablesOf<Names extends ProjectionTableName> = {
  * it.
  */
 export type BlobScopedRows = ProjectionTablesOf<BlobScopedTableName>;
+
+/** One (blob, harness) pair of the partitioned harness tables: the unit a harness row is written in. */
+export interface HarnessPair {
+  readonly contentKey: string;
+  readonly harness: HarnessId;
+}
+
+/**
+ * One {@link FactStore.writeBlobFacts}: the rows the run holds and what its read
+ * already covered. Every field is required: an omitted coverage would read as
+ * "nothing was covered", which replaces every held key, and a caller that
+ * forgot it would still compile.
+ */
+export interface BlobFactsWrite {
+  /** Every blob-scoped row the run holds for the extent's keys, derived and reused alike. */
+  readonly rows: BlobScopedRows;
+  /** The keys the one coverage predicate called covered in the run's read; a key `rows` does not hold is not written. */
+  readonly coveredAtRead: readonly string[];
+  /** The reached (blob, harness) pairs the run served from that read. */
+  readonly settledAtRead: readonly HarnessPair[];
+}
 
 /**
  * What one {@link FactStore.readBlobFacts} reads: which blob-scoped tables,
@@ -253,22 +275,33 @@ export interface FactStore {
   /**
    * Record facts about blobs, keyed by content.
    *
-   * **Idempotent.** A content key the store already holds is left alone rather
-   * than rewritten: identical bytes yield identical rows, so a re-write would
-   * be a no-op that only costs I/O. This is what makes concurrent writers safe
-   * without any coordination — the worst case is duplicated work, never
-   * disagreeing data.
+   * **Replaces what the run's read did not cover; re-stamps the rest.** The
+   * write carries every blob-scoped row the run holds for the extent's keys,
+   * derived and reused, with the keys the one coverage predicate called
+   * covered in the run's read and the pairs the harness predicate called
+   * settled in it. In one transaction it (1) looks up each covered key in the
+   * ledger, which answers whether the key was evicted since the read, not
+   * whether it is present; (2) replaces the keys uncovered at read or evicted
+   * since, and the pairs not settled at read; (3) re-stamps every held key,
+   * after the inserts and before eviction; (4) evicts past
+   * `max(retention, held keys)`, so a large tree cannot evict its own keys.
+   * Blob and harness rows are immutable per key (per pair for harness rows):
+   * identical bytes yield identical rows, so a key still in the ledger is
+   * unchanged since the read, and two writers that both replace a key leave
+   * one copy. Concurrent writers are safe without coordination; the worst
+   * case is duplicated work, never disagreeing data.
    *
    * ⛔ **A partitioned table is written per `(blob, partition)` pair**
    * (`ProjectionTableSpec.partitionColumn` — the harness tables). Their rows
    * are derived lazily, only for what one tree reaches, so one write can carry
    * a key's `blobs` row and none of its harness facts. A write must never
-   * remove a pair it carries no rows for; a pair it does carry replaces what
-   * the store held for that pair.
+   * remove a pair it carries no rows for; a pair it carries and did not settle
+   * at read, or whose key it replaces, replaces what the store held for that
+   * pair.
    *
-   * @param rows - The blob-scoped tables; any of them may be empty
+   * @param write - The held rows, the keys covered at read and the pairs settled at read
    */
-  writeBlobFacts(rows: BlobScopedRows): Promise<void>;
+  writeBlobFacts(write: BlobFactsWrite): Promise<void>;
 
   /**
    * Read back the facts held for a set of content keys.
@@ -372,11 +405,9 @@ export interface FactStore {
  * in its path so two incompatible shapes cannot share a directory.
  *
  * `schemas/projection-shared.ts` records that `PROJECTION_SCHEMA_VERSION` was
- * removed, and states exactly what replaces it if a projection is ever stored
- * rather than returned in-process: *"a **derived** digest of the row schemas'
- * own shape, exactly as the parse cache does with `parseFactsShapeSource()` —
- * not this constant reinstated."* Storing a projection is that moment, and this
- * is that digest.
+ * removed, and that a stored projection takes a **derived** digest of the row
+ * schemas' own shape in its place, never that constant reinstated. This is
+ * that digest.
  *
  * It is not a version. Nobody bumps it, no reader branches on it, and there is
  * no migration path — a schema edit simply lands in a different directory, the
@@ -401,9 +432,8 @@ export interface FactStore {
  * What changes facts without changing their shape is not an input: the
  * extraction code, and the skill-text declaration whose matches
  * `skill_text_facts` and `skill_text_matches` hold. The cache namespace above
- * this directory (`cache-namespace.ts`) separates those, the declaration by its
- * digest in a dev checkout and by the package version in a published build,
- * because the parse cache holds the same records and this digest does not key it.
+ * this directory (`cache-namespace.ts`) separates those by the VAT version
+ * only; within one version a developer who changes them clears the cache.
  *
  * @returns Twelve lowercase hex digits, stable across processes and rebuilds
  *
@@ -464,7 +494,7 @@ export function isProjectionStoreDirectoryName(name: string): boolean {
  *
  * @example
  * const { blobs, extent } = splitProjectionByScope(projection);
- * await store.writeBlobFacts(blobs);
+ * await store.writeBlobFacts({ rows: blobs, coveredAtRead: [], settledAtRead: [] });
  * await store.writeExtent(key, extent);
  */
 export function splitProjectionByScope(

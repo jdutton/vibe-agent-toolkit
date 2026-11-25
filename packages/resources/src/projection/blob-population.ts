@@ -106,10 +106,10 @@
  * lens's job; this layer records shape.
  */
 
-import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, countWork, safePath } from '@vibe-agent-toolkit/utils';
 import type { TextProvenance } from '@vibe-agent-toolkit/utils/text';
 
-import type { KeyedContent, ParsableContent, ParserKind } from '../content-key.js';
+import type { KeyedContent, ParsableContent } from '../content-key.js';
 import type { ParseResult } from '../link-parser.js';
 import { parseRefusal } from '../not-admitted.js';
 import { type ParseDispatcher, driveInOrder, tallyParsable } from '../parse-dispatcher.js';
@@ -117,83 +117,19 @@ import { isParseLimitError, isParserThrewError, isPerRunParseRefusal, type PerRu
 import type { BlobConditionRow } from '../schemas/projection-blobs.js';
 import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
 
+import { BLOB_UNREADABLE, BLOB_CONTENT_CHANGED, BLOB_PARSE_FAILED, BLOB_PARSE_LIMIT_EXCEEDED, BLOB_PARSE_WORKER_DIED, BLOB_NOT_TEXT } from './blob-condition-codes.js';
 import { blobConditionsFor, blobRowFor, skillTextRowsFor } from './blob-facts.js';
 import { blobReferencesFor } from './blob-references.js';
+import { type BlobKeyRows, blobRowsByKey } from './blob-resource-facts.js';
 import { blobSectionsFor } from './blob-sections.js';
-import { readKeyedContent } from './content-cache.js';
 import { contentRoute, NOT_TEXT_MESSAGE } from './document-facts.js';
 import { errorLabel } from './error-label.js';
 import { parseFailedMessage } from './parse-failure.js';
 import type { ProjectionBase, ProjectionBuilder } from './projection.js';
+import { parserKindOf } from './router.js';
+import type { RunContentSource } from './run-population.js';
+import type { StoredBlobTier } from './store-hydration.js';
 import type { BlobScopedRows } from './store.js';
-
-/** A blob whose bytes could not be read at derivation time. */
-export const BLOB_UNREADABLE = 'BLOB_UNREADABLE';
-
-/** The bytes at the chosen path no longer key to the blob the base recorded. */
-export const BLOB_CONTENT_CHANGED = 'BLOB_CONTENT_CHANGED';
-
-/** The parser threw on this blob's bytes. */
-export const BLOB_PARSE_FAILED = 'BLOB_PARSE_FAILED';
-
-/**
- * The parse of this blob was stopped at one of its limits (`parse-limits.ts`).
- *
- * A per-run outcome, never stored (ADR I6): the next run re-attempts the blob.
- * The message names the path and the limit, like {@link BLOB_UNREADABLE}'s,
- * because the row describes this run, not the bytes.
- */
-export const BLOB_PARSE_LIMIT_EXCEEDED = 'BLOB_PARSE_LIMIT_EXCEEDED';
-
-/**
- * The parse worker holding this blob's job died without answering — it exited,
- * or an uncaught error killed it (`ParseWorkerDiedError`).
- *
- * A per-run outcome, never stored (ADR I6), and never {@link BLOB_PARSE_FAILED}:
- * nothing says the bytes caused it, so the next run re-attempts the blob. The
- * message names the path and the cause, because the row describes this run.
- */
-export const BLOB_PARSE_WORKER_DIED = 'BLOB_PARSE_WORKER_DIED';
-
-/** The bytes are not text, so no text parser was run over them. */
-export const BLOB_NOT_TEXT = 'BLOB_NOT_TEXT';
-
-
-/**
- * Every parser kind, keyed by itself.
- *
- * The redundant-looking `markdown: 'markdown'` earns its place twice over. The
- * KEY set is what `satisfies Record<ParserKind, ParserKind>` checks for
- * exhaustiveness, so a fourth kind added in `content-key.ts` stops this file
- * compiling instead of falling into an else-branch. The VALUES are already typed
- * as the union, so {@link parserKindOf} can hand one back without casting a
- * substring of a key into a type nobody checked.
- *
- * The shape exists because the else-branch shape has now shipped the same defect
- * twice, one level apart. `parserKindForPath` was
- * `endsWith('.html') ? html : markdown` and handed every `.ts` file in a
- * repository to remark; {@link parserKindOf} was
- * `startsWith('html.') ? 'html' : 'markdown'` and, the instant `none` existed,
- * silently relabelled every `none.` key as markdown — with no type error
- * anywhere, because both arms of that ternary are valid {@link ParserKind}s.
- */
-const PARSER_KIND_BY_NAME = {
-  markdown: 'markdown',
-  html: 'html',
-  none: 'none',
-} as const satisfies Record<ParserKind, ParserKind>;
-
-/**
- * `<kind>.` → the kind it names, derived from {@link PARSER_KIND_BY_NAME} rather
- * than written out again, so a prefix table and a kind set cannot drift apart.
- *
- * The `.` is part of the lookup key on purpose: matching bare kind names would
- * make a future `markdown-lite` collide with `markdown`, which is the same class
- * of near-miss `startsWith` invited.
- */
-const PARSER_KIND_BY_PREFIX = new Map<string, ParserKind>(
-  Object.values(PARSER_KIND_BY_NAME).map((kind) => [`${kind}.`, kind]),
-);
 
 /**
  * What one run of {@link populateBlobs} did, and what it declined to do.
@@ -214,6 +150,13 @@ export interface BlobPopulationResult {
    * if blob rows churned.
    */
   readonly blobsAlreadyPresent: number;
+  /**
+   * Distinct content keys the stored tier covers, whose stored rows were emitted
+   * with no read and no parse (`BlobPopulationOptions.stored`). Disjoint from
+   * {@link blobsDerived} and from every refusal bucket: a served refusal is the
+   * stored one, re-emitted.
+   */
+  readonly blobsServed: number;
   /** Blobs whose bytes could not be read now — a {@link BLOB_UNREADABLE} row each. */
   readonly blobsUnreadable: number;
   /** Blobs whose bytes changed since enumeration — a {@link BLOB_CONTENT_CHANGED} row each. */
@@ -382,8 +325,20 @@ export interface BlobPopulationOptions {
    * making the cache's own correctness unobservable.
    */
   dispatcher: ParseDispatcher;
+  /**
+   * Where an uncovered blob's bytes are read: the run's one content source, the
+   * one the harness pass reads through too.
+   */
+  content: RunContentSource;
+  /**
+   * What the store already holds for this run's keys. A key it covers is emitted
+   * from its stored rows, in target order and through the same `builder.add*`
+   * calls a parse would make, and is never read or parsed; every other key is.
+   * Required: a run with no store passes `EMPTY_STORED_TIER`, and nothing defaults
+   * to it.
+   */
+  stored: StoredBlobTier;
 }
-
 
 /** One blob to derive, and the path its bytes are read from. */
 interface BlobTarget {
@@ -433,7 +388,7 @@ export async function populateBlobs(
   options: BlobPopulationOptions,
 ): Promise<BlobPopulationResult> {
   const base = builder.base();
-  const { dispatcher } = options;
+  const { dispatcher, content } = options;
   const counts = emptyCounts();
 
   for (const row of base.resourceRealizations) {
@@ -441,19 +396,79 @@ export async function populateBlobs(
   }
 
   const pending = pendingTargets(base, counts);
-  // The run's dispatcher (a population's, shut down by it).
+  const served = servedBlobs(options.stored, pending);
+  // The run's dispatcher (a population's, shut down by it). A covered key goes
+  // through the same ordered drive as a parsed one, so its rows land in target
+  // order — the order a run that never read the store emits them in.
   await driveInOrder(
     pending,
     dispatcher,
-    (target) => prepareBlob(target, base, dispatcher),
+    (target) => {
+      const held = served.get(target.contentKey);
+      return held === undefined ? prepareBlob(target, base, { dispatcher, content }) : Promise.resolve(held);
+    },
     (prepared) => emitPreparedBlob(builder, prepared, counts),
     // The key's own prefix is the routing record — see `parserKindOf`, which
     // is the single authority so this cannot drift from what `prepareBlob`
-    // decides, and which answers without touching the file.
-    (from) => tallyParsable(pending, from, (target) => parserKindOf(target.contentKey)),
+    // decides, and which answers without touching the file. A served key reaches
+    // no parser, so it is tallied as one that has none.
+    (from) => tallyParsable(pending, from, (target) => (served.has(target.contentKey) ? 'none' : parserKindOf(target.contentKey))),
   );
 
   return counts;
+}
+
+/** A covered key: its stored rows, each table in the order a parse would emit them. */
+interface ServedBlob {
+  readonly outcome: 'served';
+  readonly rows: BlobKeyRows;
+}
+
+/**
+ * The stored rows of every pending key the tier covers, grouped and ordered by the one
+ * {@link blobRowsByKey}.
+ *
+ * @param stored - What the run read of the stored tier
+ * @param pending - The targets this run must emit
+ * @returns The covered pending keys' rows, by key
+ */
+function servedBlobs(stored: StoredBlobTier, pending: readonly BlobTarget[]): Map<string, ServedBlob> {
+  const byKey = blobRowsByKey(stored.rows);
+  const served = new Map<string, ServedBlob>();
+  for (const { contentKey } of pending) {
+    const rows = byKey.get(contentKey);
+    if (rows !== undefined && stored.covered.has(contentKey)) served.set(contentKey, { outcome: 'served', rows });
+  }
+  return served;
+}
+
+/**
+ * Emit a covered key's stored rows, through the same calls and in the same order
+ * as {@link emitBlobRows}, and count it served.
+ *
+ * @param builder - The builder to add rows to
+ * @param held - The key's stored rows
+ * @param counts - The accumulator
+ */
+function emitServedBlob(builder: ProjectionBuilder, { rows }: ServedBlob, counts: MutableCounts): void {
+  if (rows.blob !== undefined) builder.addBlob(rows.blob);
+  for (const row of rows.conditions) builder.addBlobCondition(row);
+  for (const row of rows.sections) builder.addBlobSection(row);
+  for (const row of rows.references) builder.addBlobReference(row);
+  for (const row of rows.skillTextFacts) builder.addSkillTextFacts(row);
+  for (const row of rows.skillTextMatches) builder.addSkillTextMatch(row);
+  counts.blobsServed += 1;
+  countWork('blob.storeServed', 1);
+}
+
+/**
+ * Throw for a content key that names no parser kind: {@link parserKindOf} is the one judge.
+ *
+ * @param contentKey - The key
+ * @throws What {@link parserKindOf} throws for a key naming no kind
+ */
+function assertKeyNamesParserKind(contentKey: string): void {
+  parserKindOf(contentKey);
 }
 
 /**
@@ -483,12 +498,12 @@ function pendingTargets(base: ProjectionBase, counts: MutableCounts): BlobTarget
   return pending;
 }
 
-
 /** A zeroed accumulator — one place that knows every bucket. */
 function emptyCounts(): MutableCounts {
   return {
     blobsDerived: 0,
     blobsAlreadyPresent: 0,
+    blobsServed: 0,
     blobsUnreadable: 0,
     blobsContentChanged: 0,
     blobsParseFailed: 0,
@@ -666,7 +681,7 @@ interface DerivedBlob {
  * `blob_conditions` in completion order while `blobs` stayed in target order —
  * two tables from one run disagreeing about what "first" means.
  */
-type PreparedBlob = RefusedBlob | DerivedBlob;
+type PreparedBlob = RefusedBlob | DerivedBlob | ServedBlob;
 
 /**
  * Read and parse one blob, deciding everything and recording nothing.
@@ -676,8 +691,9 @@ type PreparedBlob = RefusedBlob | DerivedBlob;
  * `builder.*` call here would order rows by which read finished first.
  *
  * @param target - The blob and the path its bytes come from
- * @param base - Supplies the corpus root and the run's content cache
- * @param dispatcher - Decides whether the parse runs here or on a worker
+ * @param base - Supplies the corpus root
+ * @param lanes - The run's dispatcher, which decides whether the parse runs here
+ *   or on a worker, and its content source, which the bytes are read through
  * @returns What this blob turned out to be, for the caller to emit in order
  * @throws {ParserUnavailableError} If the parser module cannot be loaded — a
  *   broken install fails the run rather than accusing the corpus
@@ -685,13 +701,12 @@ type PreparedBlob = RefusedBlob | DerivedBlob;
 async function prepareBlob(
   target: BlobTarget,
   base: ProjectionBase,
-  dispatcher: ParseDispatcher,
+  lanes: { readonly dispatcher: ParseDispatcher; readonly content: RunContentSource },
 ): Promise<PreparedBlob> {
-  // Read back HERE rather than inside `readTarget`, which would put it inside
-  // that function's `try`: a key naming no kind is a producer bug, and reporting
-  // one as `BLOB_UNREADABLE` would blame the corpus for it.
-  const parserKind = parserKindOf(target.contentKey);
-  const keyed = await readTarget(target, parserKind, base);
+  // Asked HERE, before `readTarget`'s `try`: a key naming no kind is a producer
+  // bug, and reporting one as `BLOB_UNREADABLE` would blame the corpus for it.
+  assertKeyNamesParserKind(target.contentKey);
+  const keyed = await readTarget(target, base, lanes.content);
   if ('outcome' in keyed) return keyed;
 
   // Before the parse, never after: the whole cost this refuses IS the parse.
@@ -709,7 +724,7 @@ async function prepareBlob(
     return { outcome: 'derived', target, keyed, parsed: route.facts, withoutParser: true };
   }
 
-  const parsed = await parseTarget(target, route.content, dispatcher);
+  const parsed = await parseTarget(target, route.content, lanes.dispatcher);
   if ('outcome' in parsed) return parsed;
   return { outcome: 'derived', target, keyed, parsed, withoutParser: false };
 }
@@ -745,6 +760,10 @@ function emitPreparedBlob(
   prepared: PreparedBlob,
   counts: MutableCounts,
 ): void {
+  if (prepared.outcome === 'served') {
+    emitServedBlob(builder, prepared, counts);
+    return;
+  }
   if (prepared.outcome === 'refused') {
     counts[prepared.bucket] += 1;
     builder.addBlobCondition(prepared.row);
@@ -755,7 +774,6 @@ function emitPreparedBlob(
   emitBlobRows(builder, prepared.target, prepared.keyed, prepared.parsed, counts);
   counts.blobsDerived += 1;
 }
-
 
 /**
  * Read a target's bytes and confirm they still key to the blob the base named.
@@ -788,28 +806,23 @@ function emitPreparedBlob(
  * is in, reached one stage later.
  *
  * @param target - The blob and its path
- * @param parserKind - The routing read back off the key by {@link parserKindOf}.
- *   It must be the kind the key names, or the read computes a different key and
- *   every blob looks like it changed under the run.
- * @param base - Supplies the absolute corpus root and the run's content cache
+ * @param base - Supplies the absolute corpus root
+ * @param content - The run's content source, which keys the read under the
+ *   parser kind the target's key names
  * @returns The read, or the refusal to emit in its place
  */
 async function readTarget(
   target: BlobTarget,
-  parserKind: ParserKind,
   base: ProjectionBase,
+  content: RunContentSource,
 ): Promise<KeyedContent | RefusedBlob> {
-  let keyed: KeyedContent;
+  let keyed: KeyedContent | null;
   try {
-    keyed = await readKeyedContent(safePath.join(base.root, target.path), parserKind, base.contentCache);
+    keyed = await content.read({ absolutePath: safePath.join(base.root, target.path), contentKey: target.contentKey });
   } catch (error) {
-    return refused('blobsUnreadable', condition(
-      target.contentKey,
-      BLOB_UNREADABLE,
-      `The bytes for "${target.path}" could not be read during blob derivation (${errorLabel(error)});`
-      + ' this blob has no rows because it could not be observed, not because it has nothing to say',
-    ));
+    return unreadable(target, errorLabel(error));
   }
+  if (keyed === null) return unreadable(target, 'the file is gone');
 
   if (keyed.key !== target.contentKey) {
     return refused('blobsContentChanged', condition(
@@ -821,6 +834,20 @@ async function readTarget(
   }
 
   return keyed;
+}
+
+/**
+ * @param target - The blob whose bytes could not be read
+ * @param why - What stopped the read, path-free
+ * @returns The {@link BLOB_UNREADABLE} refusal
+ */
+function unreadable(target: BlobTarget, why: string): RefusedBlob {
+  return refused('blobsUnreadable', condition(
+    target.contentKey,
+    BLOB_UNREADABLE,
+    `The bytes for "${target.path}" could not be read during blob derivation (${why});`
+    + ' this blob has no rows because it could not be observed, not because it has nothing to say',
+  ));
 }
 
 /**
@@ -961,39 +988,6 @@ function emitSkillTextRows(builder: ProjectionBuilder, contentKey: string, parse
   const rows = skillTextRowsFor(contentKey, parsed.skillText);
   builder.addSkillTextFacts(rows.facts);
   for (const row of rows.matches) builder.addSkillTextMatch(row);
-}
-
-/**
- * The parser a blob's bytes were routed to, read back off its own key.
- *
- * `computeContentKey` mixes the parser kind into the hash preimage *and* spells
- * it as the key's prefix, so the key is the authoritative record of the routing
- * decision the base already made. Calling `parserKindForPath` again here would
- * be a second run of the discriminator against a path — and at least one shipped
- * caller deliberately parses `.html` as markdown, so the two answers can
- * legitimately differ.
- *
- * Exported for one reason: the mislabel this function shipped is invisible to
- * `tsc` — every branch returns a valid {@link ParserKind} — so the only thing
- * that can catch it is a test that asks all three prefixes directly.
- *
- * @param contentKey - A `<parserKind>.<sha256>` key
- * @returns The parser kind the key names
- * @throws {Error} If the key names no kind. Unreachable through
- *   `ContentKeySchema`, which is exactly why guessing would be worse: a default
- *   would derive a whole blob's worth of real-looking facts under a parser
- *   nothing routed those bytes to, and nothing downstream could tell.
- */
-export function parserKindOf(contentKey: string): ParserKind {
-  const kind = PARSER_KIND_BY_PREFIX.get(contentKey.slice(0, contentKey.indexOf('.') + 1));
-  if (kind === undefined) {
-    throw new Error(
-      `Content key "${contentKey}" names no parser kind. Keys are minted only by `
-      + '`computeContentKey` and validated by `ContentKeySchema`, so this is a producer bug '
-      + 'rather than anything the corpus did.',
-    );
-  }
-  return kind;
 }
 
 /**

@@ -27,7 +27,7 @@ import { parseMarkdownContent } from '../src/link-parser.js';
 import { ParseCache } from '../src/parse-cache.js';
 import { classifyParseFailure } from '../src/parse-failure.js';
 import { ParseDecodeDefectError } from '../src/parse-limits.js';
-import { BLOB_PARSE_FAILED } from '../src/projection/blob-population.js';
+import { BLOB_PARSE_FAILED } from '../src/projection/blob-condition-codes.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 
 import { baseBuilderForRoot, conditionsWithCode, populateBlobsOnOwnDispatcher } from './blob-fixture-population.js';

@@ -51,6 +51,7 @@ import {
   type ResourceTagRow,
 } from '../src/schemas/projection-resources.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
+import type { SkillTextFactsRow } from '../src/schemas/projection-skill-text.js';
 import type { ResolutionContextRow, ZoneProvenanceRow } from '../src/schemas/projection-zones.js';
 
 /** The corpus root this run is over. */
@@ -387,8 +388,18 @@ function blobRow(key: string): BlobRow {
  * @param key - The content key it declined to parse
  * @returns The row
  */
-function blobConditionRow(key: string): BlobConditionRow {
-  return { blob: key, code: 'BLOB_BINARY', ordinal: 0, severity: 'info', message: 'NUL byte within the sniff window', line: null };
+function blobConditionRow(key: string, code: string): BlobConditionRow {
+  return { blob: key, code, ordinal: 0, severity: 'info', message: 'NUL byte within the sniff window', line: null };
+}
+
+/**
+ * The `skill_text_facts` row a markdown blob holds exactly one of.
+ *
+ * @param key - The markdown blob's key
+ * @returns A held record with no matches
+ */
+function skillTextFactsRow(key: string): SkillTextFactsRow {
+  return { blob: key, lineCount: 1, h1: null, frontmatterFence: 'none', matchCount: 0, held: true };
 }
 
 /**
@@ -397,9 +408,14 @@ function blobConditionRow(key: string): BlobConditionRow {
  * @param rows - What the store holds
  * @param rows.blobs - `blobs` rows
  * @param rows.blobConditions - `blob_conditions` rows
+ * @param rows.skillTextFacts - `skill_text_facts` rows
  * @returns The four blob-scoped tables
  */
-function blobFacts(rows: { blobs?: readonly BlobRow[]; blobConditions?: readonly BlobConditionRow[] }): BlobScopedRows {
+function blobFacts(rows: {
+  blobs?: readonly BlobRow[];
+  blobConditions?: readonly BlobConditionRow[];
+  skillTextFacts?: readonly SkillTextFactsRow[];
+}): BlobScopedRows {
   return { ...emptyBlobRows(), ...rows };
 }
 
@@ -665,25 +681,39 @@ describe('EXTENT_STEP_TABLES', () => {
 });
 
 describe('uncoveredContentKeys', () => {
-  it('counts a key that a blobs row accounts for as covered', () => {
-    expect(uncoveredContentKeys(blobFacts({ blobs: [blobRow(KEY_SHARED)] }), [KEY_SHARED])).toEqual([]);
+  it('counts a markdown key as covered only when its blobs row AND its skillTextFacts row are held', () => {
+    expect(uncoveredContentKeys(blobFacts({ blobs: [blobRow(KEY_SHARED)], skillTextFacts: [skillTextFactsRow(KEY_SHARED)] }), [KEY_SHARED])).toEqual([]);
   });
 
-  it('counts a key that ONLY a blobConditions row accounts for as covered, because declining to parse is an accounting', () => {
-    // 🪤 The derivation stage records a `blob_conditions` row *instead of* a
-    // `blobs` row whenever it declines to parse — unreadable, changed
-    // underneath, or binary (the NUL sniff). Any corpus shipping one image has
-    // such keys, so a cover check reading `blobs` alone would call every real
-    // corpus a miss forever and the blob tier would never be reused once.
-    expect(uncoveredContentKeys(blobFacts({ blobConditions: [blobConditionRow(KEY_BETA)] }), [KEY_BETA])).toEqual([]);
+  it('a blobs row without its skillTextFacts row is uncovered', () => {
+    // One predicate for the blob tier: `BlobFactsReader.answer`. The old
+    // two-table test counted this key covered while stored admission, which asks
+    // the reader, called it uncovered, so it was recomputed on every run.
+    expect(uncoveredContentKeys(blobFacts({ blobs: [blobRow(KEY_SHARED)] }), [KEY_SHARED])).toEqual([KEY_SHARED]);
   });
 
-  it('names the one key accounted for by neither table, which makes the whole extent a miss', () => {
+  it('counts a key that ONLY a BLOB_NOT_TEXT condition accounts for as covered, because declining to parse is an accounting', () => {
+    // The derivation stage records a `blob_conditions` row *instead of* a
+    // `blobs` row whenever it declines to parse a binary file. Any corpus
+    // shipping one image has such keys, so a predicate that called them
+    // uncovered would make every real corpus a miss forever.
+    expect(uncoveredContentKeys(blobFacts({ blobConditions: [blobConditionRow(KEY_BETA, 'BLOB_NOT_TEXT')] }), [KEY_BETA])).toEqual([]);
+  });
+
+  it('counts a key that ONLY a not-admitted condition accounts for as covered', () => {
+    expect(uncoveredContentKeys(blobFacts({ blobConditions: [blobConditionRow(KEY_BETA, 'BLOB_UNREADABLE')] }), [KEY_BETA])).toEqual([]);
+  });
+
+  it('names the one key accounted for by no answer, which makes the whole extent a miss', () => {
     // One unaccounted key means the extent was written by a run that skipped
     // blob derivation. Accepting it leaves `blob_references` empty, reduces every
     // closure extent to its own declared root, converges on iteration one, and
-    // reports success — the silent-emptiness failure arriving through the cache.
-    const blobs = blobFacts({ blobs: [blobRow(KEY_SHARED)], blobConditions: [blobConditionRow(KEY_BETA)] });
+    // reports success: the silent-emptiness failure arriving through the cache.
+    const blobs = blobFacts({
+      blobs: [blobRow(KEY_SHARED)],
+      skillTextFacts: [skillTextFactsRow(KEY_SHARED)],
+      blobConditions: [blobConditionRow(KEY_BETA, 'BLOB_NOT_TEXT')],
+    });
 
     expect(uncoveredContentKeys(blobs, [KEY_SHARED, KEY_BETA, KEY_ALPHA])).toEqual([KEY_ALPHA]);
   });

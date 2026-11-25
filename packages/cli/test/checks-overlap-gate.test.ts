@@ -20,7 +20,6 @@ import {
   hit,
   keyed,
   MARKDOWN_KEY,
-  POPULATION_LIMITS,
   readerOf,
   ROOT,
   settledDecision,
@@ -59,14 +58,12 @@ function fakeSpawn(mint: Promise<void> = Promise.resolve()): {
 function gateOf(overrides: {
   debug?: boolean;
   cores?: number;
-  limits?: typeof POPULATION_LIMITS;
   spawn: (isArmed: () => boolean) => Promise<OverlappedRun | 'disarmed'>;
 }): ReturnType<typeof createChecksOverlapGate> {
   return createChecksOverlapGate({
     debug: overrides.debug ?? false,
     cores: () => overrides.cores ?? 4,
     childHomeKey: HOME_KEY,
-    limits: overrides.limits ?? POPULATION_LIMITS,
     routing: parseRoutingFor(undefined, ROOT),
     spawn: overrides.spawn,
   });
@@ -96,15 +93,17 @@ describe('createChecksOverlapGate', () => {
   it('declines a home the store did not serve', async () => {
     const fake = fakeSpawn();
     const gate = gateOf({ spawn: fake.spawn });
+    // A derived home carries its own projection's rows, every member admitted from them: only the
+    // outcome can decline it, so a gate that read the content alone would spawn here.
+    const { tier, settlement } = ADMITTED_HOME();
+    if (!settlement.ok) throw new Error('the fixture settles');
     const derived: ResourceEnumeration = {
-      paths: [],
-      conditions: [],
+      ...settlement.enumeration,
       outcome: { population: 'derived', stored: 'written' },
-      extentSource: 'git',
-      stored: null,
     };
     gate.onHomeSettled(HOME_KEY, { ok: true, enumeration: derived });
     expect(await gate.decision).toEqual({ mode: 'sequential', declinedBy: { condition: 'not-hit' } });
+    expect(tier.reads).toBe(0);
     expect(fake.calls).toBe(0);
   });
 
@@ -125,16 +124,6 @@ describe('createChecksOverlapGate', () => {
     expect(tier.reads).toBe(0);
     gate.disarm();
     expect(await gate.decision).toEqual({ mode: 'sequential', declinedBy: { condition: 'not-settled' } });
-    expect(fake.calls).toBe(0);
-  });
-
-  it('declines when the run parses under other limits than the store\'s facts were filed under', async () => {
-    const fake = fakeSpawn();
-    const gate = gateOf({ limits: { ...POPULATION_LIMITS, outputRows: POPULATION_LIMITS.outputRows / 2 }, spawn: fake.spawn });
-    const { tier, settlement } = ADMITTED_HOME();
-    gate.onHomeSettled(HOME_KEY, settlement);
-    expect(await gate.decision).toEqual({ mode: 'sequential', declinedBy: { condition: 'limits' } });
-    expect(tier.reads).toBe(0);
     expect(fake.calls).toBe(0);
   });
 

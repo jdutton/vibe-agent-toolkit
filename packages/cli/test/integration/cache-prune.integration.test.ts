@@ -76,6 +76,22 @@ describe('pruneCacheRoot', () => {
     expect((await fs.readdir(safePath.join(root, CURRENT))).sort(byName)).toEqual(['parse', KEPT_STORE]);
   });
 
+  it('keeps the version-only namespace and removes every suffixed name that shares its prefix', async () => {
+    const root = await populatedRoot(scratch());
+    // A namespace is the VAT version alone, so a `<version>-<suffix>` name beside it is another build's
+    // (a prerelease, or a name an unreleased build wrote): it shares this version's prefix and is not kept.
+    const earlier = [`${CURRENT}-dev-9f2c1a`, `${CURRENT}-pabc123`, `${CURRENT}-rc.1-p0f9e8d`];
+    await Promise.all(earlier.map(async (name) => put(root, `${name}/parse/ab/facts.json`, '{"s":1}')));
+
+    const { data } = await pruneCacheRoot({ root, namespace: CURRENT, keptStore: KEPT_STORE, dryRun: false, storeInUse });
+
+    for (const name of earlier) {
+      expect(data.removed, name).toContain(name);
+      expect(existsSync(safePath.join(root, name)), name).toBe(false);
+    }
+    expect(existsSync(safePath.join(root, CURRENT, KEPT_STORE))).toBe(true);
+  });
+
   it('leaves every entry it does not recognise as VAT\'s, at the root and inside the namespace', async () => {
     const root = await populatedRoot(scratch());
     // A VAT_CACHE_DIR that someone else also writes into: none of this is VAT's to delete.

@@ -52,6 +52,7 @@ import { CONTENT_PARSING_SKIP, describeStoreMiss, populate, type PopulationOutco
 import type { Projection } from '../src/projection/projection.js';
 import type { ContentDemand } from '../src/projection/realizations.js';
 import type {
+  BlobFactsWrite,
   BlobRequest,
   BlobScopedRows,
   BlobScopedTableName,
@@ -189,9 +190,9 @@ class HarnesslessFactStore implements FactStore {
    */
   constructor(private readonly inner: FactStore) {}
 
-  /** @param rows - Passed through */
-  writeBlobFacts(rows: BlobScopedRows): Promise<void> {
-    return this.inner.writeBlobFacts(rows);
+  /** @param write - Passed through */
+  writeBlobFacts(write: BlobFactsWrite): Promise<void> {
+    return this.inner.writeBlobFacts(write);
   }
 
   /**
@@ -775,7 +776,12 @@ describe('populate through a projection store', () => {
 
       const deriving = await run({ registry: filesystemOnly(), store });
 
-      expect(store.readBlobFactsCalls).toBe(1);
+      // Two reads, each its own question: the extent hit's coverage read finds
+      // the keys uncovered and misses, then derivation reads the tier for the
+      // keys it may reuse, as it does on every deriving path (`deriveProjection`
+      // in merge.ts). Sharing the first read with derivation would be a speed
+      // change, not a correctness one.
+      expect(store.readBlobFactsCalls).toBe(2);
       expect(deriving.contributorRuns).toContain(`${FILESYSTEM_ID}@1`);
       expect(deriving.projection.blobs.length).toBeGreaterThan(0);
       expect(store.writeBlobFactsCalls).toBe(1);

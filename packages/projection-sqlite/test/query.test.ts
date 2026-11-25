@@ -33,6 +33,7 @@ import {
   quoteIdentifier,
   splitProjectionByScope,
 } from '@vibe-agent-toolkit/resources';
+import { uncoveredBlobWrite } from '@vibe-agent-toolkit/resources/testing';
 import { isVatError, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -578,7 +579,7 @@ describe('the file-backed fact store answers no SQL, and holds what the run data
   it('returns the same rows from every table as the run database, for the same projection', async () => {
     const writer = openSqliteFactStore({ directory });
     const { blobs, extent } = splitProjectionByScope(sampleProjection([FIRST_BLOB, SECOND_BLOB]));
-    await writer.writeBlobFacts(blobs);
+    await writer.writeBlobFacts(uncoveredBlobWrite(blobs));
     await writer.writeExtent({ rootId: 'root-1', treeHash: 'tree-aaa' }, extent);
     await writer.close();
 

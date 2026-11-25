@@ -7,10 +7,9 @@
 
 import { type ArmRepetition, type ArmsReport, captureArms, sequenceSteps } from '../../src/facets/perf/arms.js';
 import { exactExit, MEASURABLE_SEQUENCES } from '../../src/harness/commands.js';
-import { runGit } from '../../src/harness/git-state.js';
 import type { SequenceStep } from '../../src/harness/sequence.js';
 import type { ArmState } from '../../src/harness/types.js';
-import { preparedCloneDirectory } from '../arm-tree-fixtures.js';
+import { cloneAsPrepared } from '../arm-tree-fixtures.js';
 import { tempDir } from '../integration/verdict-fixtures.js';
 
 import { CANDIDATE_SOURCE, CANDIDATE_VAT, candidateSubject } from './candidate-subject.js';
@@ -63,7 +62,8 @@ export const UNLINKED_PAGES = ['docs/page-1.md', 'docs/page-2.md', 'docs/page-3.
 
 /**
  * One three-round invocation of the given arms of {@link BUILD}, in a
- * `git clone --local` of the subject at the arms root's prepared-clone path.
+ * `git clone --local` of the subject at the arms root's prepared-clone path,
+ * under the arm's git as `prepareClone` makes it ({@link cloneAsPrepared}).
  *
  * @param subject - The subject
  * @param arms - Each arm's name, state and steps
@@ -76,9 +76,7 @@ export async function captureBuildArms(
   editPaths: readonly string[] | null,
 ): Promise<{ readonly report: ArmsReport; readonly clone: string }> {
   const armsRoot = tempDir('lab-edit-arms-');
-  const clone = preparedCloneDirectory(armsRoot);
-  const cloned = runGit(['clone', '--quiet', '--local', subject, clone], armsRoot);
-  if (cloned.status !== 0) throw new Error(`git clone --local of '${subject}' exited ${String(cloned.status)}`);
+  const clone = cloneAsPrepared(subject, armsRoot, tempDir('lab-edit-arms-git-'));
   const report = await captureArms({
     armsRoot,
     cwd: clone,

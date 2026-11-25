@@ -25,25 +25,67 @@
  * install, a bug — propagates.
  */
 
-import { forEachInOrder, isPathAbsentError } from '@vibe-agent-toolkit/utils';
+import { countWork, forEachInOrder } from '@vibe-agent-toolkit/utils';
 
 import type { MeasuredContent } from '../../content-key.js';
 import type { ParseDispatcher } from '../../parse-dispatcher.js';
 import { isPerRunParseRefusal } from '../../parse-limits.js';
+import type { HarnessBlobFactsRow, HarnessBlobImportRow } from '../../schemas/projection-harness.js';
 import { harnessRowsFor } from '../blob-facts.js';
-import { parseRefusalCondition, parserKindOf } from '../blob-population.js';
-import { readKeyedContent, type RunContentCache } from '../content-cache.js';
+import { parseRefusalCondition } from '../blob-population.js';
 import type { ProjectionBuilder } from '../projection.js';
+import type { RunContentSource } from '../run-population.js';
+import type { StoredBlobTier } from '../store-hydration.js';
+import type { HarnessPair } from '../store.js';
 
 import { HarnessFactsAbsentError } from './facts-index.js';
 import type { HarnessContentFacts, HarnessId, HarnessProfile } from './profile.js';
 import { harnessFrontier, type HarnessFrontierEntry, type HarnessReachView } from './reach.js';
 
+/** One stored `(blob, harness)` pair: its facts row and its import rows, in ordinal order. */
+interface StoredHarnessPair {
+  readonly facts: HarnessBlobFactsRow;
+  readonly imports: readonly HarnessBlobImportRow[];
+}
+
 /**
- * Reads one frontier blob's content, or answers null when its bytes cannot be
- * read or no longer key to it.
+ * The stored harness rows a pass may serve, looked up by pair. Only a key the
+ * stored tier covers is held: a key the store does not cover is derived whole.
  */
-export type HarnessContentReader = (entry: HarnessFrontierEntry) => Promise<MeasuredContent | null>;
+export interface StoredHarnessRows {
+  /** The stored rows for one pair, or undefined when the store holds none for it. */
+  readonly rowsFor: (pair: HarnessPair) => StoredHarnessPair | undefined;
+}
+
+/**
+ * The harness rows of a stored tier's covered keys, by pair.
+ *
+ * Served at the frontier, pair by pair, never up front: a stored pair this run
+ * does not reach must not enter the projection, or it would disagree row for row
+ * with a run that never read the store.
+ *
+ * @param tier - What the derivation read of the stored tier
+ * @returns The covered keys' harness rows
+ */
+export function storedHarnessRows(tier: StoredBlobTier): StoredHarnessRows {
+  const byPair = new Map<string, { facts: HarnessBlobFactsRow; imports: HarnessBlobImportRow[] }>();
+  for (const facts of tier.rows.harnessBlobFacts) {
+    if (tier.covered.has(facts.blob)) byPair.set(pairKey({ contentKey: facts.blob, harness: facts.harness }), { facts, imports: [] });
+  }
+  for (const row of tier.rows.harnessBlobImports) {
+    byPair.get(pairKey({ contentKey: row.blob, harness: row.harness }))?.imports.push(row);
+  }
+  for (const held of byPair.values()) held.imports.sort((left, right) => left.ordinal - right.ordinal);
+  return { rowsFor: (pair) => byPair.get(pairKey(pair)) };
+}
+
+/**
+ * @param pair - A (blob, harness) pair
+ * @returns One string per pair: a content key holds no NUL
+ */
+function pairKey(pair: HarnessPair): string {
+  return `${pair.contentKey}\0${pair.harness}`;
+}
 
 /**
  * Runs one harness's memory-file read over one file's decoded bytes — in a
@@ -64,23 +106,26 @@ export function dispatcherHarnessFacts(dispatcher: ParseDispatcher): HarnessFact
 
 /** What one {@link runHarnessPass} call did. */
 interface HarnessPassResult {
-  /** Facts rows added — 0 means the projection was already settled. */
+  /** Facts rows derived from content: with nothing served, 0 means the projection was already settled. */
   readonly derived: number;
+  /** The pairs this call settled from their stored rows, in frontier order. */
+  readonly served: readonly HarnessPair[];
   /** Blobs whose read this run refused — a per-run condition row each, no facts. */
   readonly refused: number;
-  /** Frontier blobs whose reader answered null. */
+  /** Frontier blobs whose bytes were gone or no longer keyed to them. */
   readonly unreadable: number;
   /** Their content keys — excused from {@link assertHarnessSettled}, and nothing else. */
   readonly unreadableKeys: ReadonlySet<string>;
 }
 
 /**
- * Derive facts for the frontier until it is empty.
+ * Settle the frontier until it is empty: a pair the store holds is served from
+ * its stored rows, every other pair is derived from content.
  *
- * Each round asks for the frontier afresh, because deriving one blob's facts
- * is what reveals its imports — the next hop's frontier. A blob whose reader
- * answers null is remembered for the rest of the call, or the loop would ask
- * for it forever.
+ * Each round asks for the frontier afresh, because settling one blob's facts
+ * is what reveals its imports — the next hop's frontier. A blob whose bytes are
+ * gone or no longer key to it is remembered for the rest of the call, or the
+ * loop would ask for it forever.
  *
  * ⛔ The facts row is added LAST, after the blob's import rows: the facts row
  * is what makes a blob "derived", so an interruption between the two leaves
@@ -93,32 +138,40 @@ interface HarnessPassResult {
  * @param profiles - The harnesses to derive for
  * @param readContent - Where a frontier blob's bytes come from
  * @param deriveFacts - Runs the harness's read over them
- * @returns How many facts rows were added, how many reads were refused, and
- *   which blobs could not be read
+ * @param stored - The stored rows a reached pair is served from before any read
+ * @returns How many facts rows were derived, which pairs were served, how many
+ *   reads were refused, and which blobs could not be read
  */
 export async function runHarnessPass(
   builder: ProjectionBuilder,
   profiles: readonly HarnessProfile[],
-  readContent: HarnessContentReader,
+  readContent: RunContentSource,
   deriveFacts: HarnessFactsDeriver,
+  stored: StoredHarnessRows,
 ): Promise<HarnessPassResult> {
-  const tally: FrontierTally = { derived: 0, refused: 0, unreadable: new Set<string>() };
+  const tally: FrontierTally = { derived: 0, served: [], refused: 0, unreadable: new Set<string>() };
   // One round per frontier, each only after the last one's rows are in the builder.
   const drain = async (profile: HarnessProfile, attempted: Set<string>): Promise<void> => {
     const frontier = harnessFrontier(builder.base(), profile).filter((entry) => !tally.unreadable.has(entry.contentKey));
     if (frontier.length === 0) return;
     assertProgress(profile, frontier, attempted);
-    await deriveFrontier(builder, profile, frontier, { readContent, deriveFacts }, tally);
+    await settleFrontier(builder, profile, frontier, { readContent, deriveFacts, stored }, tally);
     return drain(profile, attempted);
   };
   await forEachInOrder(profiles, (profile) => drain(profile, new Set<string>()));
-  return { derived: tally.derived, refused: tally.refused, unreadable: tally.unreadable.size, unreadableKeys: tally.unreadable };
+  return {
+    derived: tally.derived,
+    served: tally.served,
+    refused: tally.refused,
+    unreadable: tally.unreadable.size,
+    unreadableKeys: tally.unreadable,
+  };
 }
 
 /**
- * Refuse a frontier that demands a blob this pass already derived (ADR I8).
+ * Refuse a frontier that demands a blob this pass already settled (ADR I8).
  *
- * A derived blob leaves the frontier by its facts row, a refused one by its
+ * A settled blob leaves the frontier by its facts row, a refused one by its
  * condition row, an unreadable one by the pass's own filter. A blob back on the
  * frontier after one of those means a round filed neither row — and the next
  * round would demand it again, forever. That is a VAT defect, so the run ends
@@ -126,7 +179,7 @@ export async function runHarnessPass(
  *
  * @param profile - The harness the frontier is for
  * @param frontier - This round's blobs
- * @param attempted - Every key an earlier round of this pass derived; this
+ * @param attempted - Every key an earlier round of this pass settled; this
  *   round's are added
  * @throws {@link HarnessFactsAbsentError} for the first blob demanded twice
  */
@@ -139,28 +192,32 @@ function assertProgress(profile: HarnessProfile, frontier: readonly HarnessFront
 /** What a pass has done so far, accumulated across its rounds. */
 interface FrontierTally {
   derived: number;
+  /** The pairs served from their stored rows. */
+  readonly served: HarnessPair[];
   refused: number;
-  /** The keys whose reader answered null. */
+  /** The keys whose bytes were gone or no longer keyed to them. */
   readonly unreadable: Set<string>;
 }
 
-/** Where a pass's bytes come from, and what runs over them. */
+/** The stored rows a pass serves first, where other bytes come from, and what runs over them. */
 interface HarnessSources {
-  readonly readContent: HarnessContentReader;
+  readonly readContent: RunContentSource;
   readonly deriveFacts: HarnessFactsDeriver;
+  readonly stored: StoredHarnessRows;
 }
 
 /**
- * Derive one frontier's facts, in content-key order.
+ * Settle one frontier, in frontier order: each pair from its stored rows when
+ * the store holds them, otherwise derived from its bytes.
  *
  * @param builder - The builder to add rows to
- * @param profile - The harness deriving them
- * @param frontier - The blobs to derive
- * @param sources - Where their bytes come from, and what runs over them
- * @param tally - Counts what was derived and refused, and collects the keys
- *   whose reader answered null
+ * @param profile - The harness settling them
+ * @param frontier - The blobs to settle
+ * @param sources - The stored rows, where bytes come from, and what runs over them
+ * @param tally - Counts what was derived and refused, and collects the served
+ *   pairs and the keys whose bytes could not be read
  */
-async function deriveFrontier(
+async function settleFrontier(
   builder: ProjectionBuilder,
   profile: HarnessProfile,
   frontier: readonly HarnessFrontierEntry[],
@@ -168,55 +225,60 @@ async function deriveFrontier(
   tally: FrontierTally,
 ): Promise<void> {
   await forEachInOrder(frontier, async (entry) => {
-    const content = await sources.readContent(entry);
-    if (content === null) {
+    const pair: HarnessPair = { contentKey: entry.contentKey, harness: profile.id };
+    const held = sources.stored.rowsFor(pair);
+    if (held !== undefined) {
+      // The facts row last, as for a derived pair: it is what settles the pair.
+      for (const row of held.imports) builder.addHarnessBlobImport(row);
+      builder.addHarnessBlobFacts(held.facts);
+      tally.served.push(pair);
+      return;
+    }
+    const content = await sources.readContent.read(entry);
+    // Gone, or rewritten since the base keyed it: deriving from other bytes would
+    // file one blob's facts under another blob's key.
+    if (content?.key !== entry.contentKey) {
       tally.unreadable.add(entry.contentKey);
       return;
     }
-    let facts: HarnessContentFacts;
-    try {
-      facts = await sources.deriveFacts(profile.id, content);
-    } catch (error) {
-      // Refused for this run (I6): a condition row, never a facts row (I1).
-      // Anything else — a broken install, a bug — is not the file's doing.
-      if (!isPerRunParseRefusal(error)) throw error;
-      builder.addBlobCondition(parseRefusalCondition(entry.contentKey, error));
-      tally.refused += 1;
-      return;
-    }
-    const rows = harnessRowsFor(entry.contentKey, profile.id, facts);
-    for (const row of rows.imports) builder.addHarnessBlobImport(row);
-    builder.addHarnessBlobFacts(rows.facts);
-    tally.derived += 1;
+    await derivePair(builder, profile, entry.contentKey, content, sources.deriveFacts, tally);
   });
 }
 
 /**
- * The on-disk reader, through the run's cache: the same bytes the base keyed and
- * the blob stage parsed.
+ * Derive one pair's facts from its bytes, or file its per-run refusal.
  *
- * Null when the file is gone or its bytes no longer key to the blob: deriving
- * from other bytes would file one blob's facts under another blob's key. Any
- * other failure — a refusal, a bug — is rethrown: the blob stage read these
- * very bytes moments ago, so it is not an absence to paper over.
- *
- * @param cache - The run's content cache
- * @returns The reader
+ * @param builder - The builder to add rows to
+ * @param profile - The harness deriving them
+ * @param contentKey - The blob
+ * @param content - Its bytes
+ * @param deriveFacts - Runs the harness's read over them
+ * @param tally - Counts what was derived and refused
  */
-export function diskHarnessContentReader(cache: RunContentCache): HarnessContentReader {
-  return async (entry) => {
-    // Outside the `try`: a key naming no parser kind is a producer bug, and
-    // reading it as "unreadable" would blame the corpus for it.
-    const parserKind = parserKindOf(entry.contentKey);
-    try {
-      const keyed = await readKeyedContent(entry.absolutePath, parserKind, cache);
-      return keyed.key === entry.contentKey ? keyed : null;
-    } catch (error) {
-      // Deleted since the base keyed it: counted as unreadable by the pass.
-      if (isPathAbsentError(error)) return null;
-      throw error;
-    }
-  };
+async function derivePair(
+  builder: ProjectionBuilder,
+  profile: HarnessProfile,
+  contentKey: string,
+  content: MeasuredContent,
+  deriveFacts: HarnessFactsDeriver,
+  tally: FrontierTally,
+): Promise<void> {
+  let facts: HarnessContentFacts;
+  try {
+    facts = await deriveFacts(profile.id, content);
+  } catch (error) {
+    // Refused for this run (I6): a condition row, never a facts row (I1).
+    // Anything else — a broken install, a bug — is not the file's doing.
+    if (!isPerRunParseRefusal(error)) throw error;
+    builder.addBlobCondition(parseRefusalCondition(contentKey, error));
+    tally.refused += 1;
+    return;
+  }
+  const rows = harnessRowsFor(contentKey, profile.id, facts);
+  for (const row of rows.imports) builder.addHarnessBlobImport(row);
+  builder.addHarnessBlobFacts(rows.facts);
+  tally.derived += 1;
+  countWork('harness.pairsDerived', 1);
 }
 
 /**

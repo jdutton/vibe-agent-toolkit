@@ -78,13 +78,15 @@
  *
  * {@link uncoveredContentKeys} is the guard, and it needs no new metadata: the
  * derivation stage accounts for **every** keyed content key, with a `blobs` row
- * when it parsed and a `blobConditions` row when it declined to (unreadable,
- * changed underneath, or binary). A key with neither is a key the store never
- * derived, and one such key makes the whole extent a miss.
+ * (and its companion rows) when it parsed and a `blobConditions` row when it
+ * declined to (unreadable, changed underneath, or binary). A key the blob fact
+ * reader cannot answer from its rows is a key the store never fully derived, and
+ * one such key makes the whole extent a miss.
  */
 
 import { VatError } from '@vibe-agent-toolkit/utils';
 
+import { type BlobCoverageRows, blobFactsReader } from './blob-resource-facts.js';
 import { canonicalJson } from './digest.js';
 import type { Projection } from './projection.js';
 import {
@@ -238,25 +240,74 @@ export function selectRequestedRows<Table extends ExtentScopedTableName>(
 
 /**
  * The content keys these realizations name that the stored blob tier does not
- * account for — none, when it covers them all.
+ * cover, by the ONE blob-tier predicate: {@link blobFactsReader}'s `answer`.
  *
- * See this module's header: accounted for means a `blobs` row **or** a
- * `blobConditions` row, because the derivation stage records the latter instead
- * of the former whenever it declined to parse — and a binary file makes that the
- * common case rather than an exotic one.
+ * A key is covered when it answers `facts` (a sound `blobs` row with its
+ * reference, section and skill-text rows, or a `BLOB_NOT_TEXT` condition, the
+ * constant facts) or `not-admitted` (a refusal condition: the derivation stage
+ * records it instead of a `blobs` row when it declined to parse). Anything else,
+ * a `blobs` row whose companion rows are missing or unsound included, is
+ * `uncovered` and derived again. Stored admission and the checks gate ask the
+ * same reader, so no caller can call a key covered that another calls uncovered.
  *
- * @param blobs - What {@link FactStore.readBlobFacts} returned for
- *   {@link keyedContentKeys} of the same realizations
+ * @param rows - What {@link FactStore.readBlobFacts} returned for
+ *   {@link keyedContentKeys} of the same realizations; only the tables of
+ *   `BLOB_FACT_READER_TABLES` are read, and the type admits no others
  * @param contentKeys - The keys those realizations name
- * @returns The keys accounted for by neither table, in `contentKeys` order —
- *   empty when every key is covered. Returned rather than a yes/no so a miss
- *   can be counted and named (ADR I10).
+ * @returns The keys the tier does not cover, in `contentKeys` order: empty when
+ *   every key is covered. Returned rather than a yes/no so a miss can be counted
+ *   and named (ADR I10).
  */
-export function uncoveredContentKeys(blobs: BlobScopedRows, contentKeys: readonly string[]): string[] {
-  const held = new Set<string>();
-  for (const row of blobs.blobs) held.add(row.contentKey);
-  for (const row of blobs.blobConditions) held.add(row.blob);
-  return contentKeys.filter((key) => !held.has(key));
+export function uncoveredContentKeys(rows: BlobCoverageRows, contentKeys: readonly string[]): string[] {
+  const reader = blobFactsReader(rows);
+  return contentKeys.filter((key) => reader.answer(key).kind === 'uncovered');
+}
+
+/**
+ * What one derivation read of the stored blob tier: every blob-scoped row the
+ * store held for the keys it asked about, and the keys among them the one
+ * predicate ({@link uncoveredContentKeys}) calls covered.
+ *
+ * A covered key's rows are emitted in place of a read and a parse; every other
+ * key is derived. `covered` is what the write reports as covered at read
+ * (`FactStore.writeBlobFacts`).
+ */
+export interface StoredBlobTier {
+  /** The rows the read returned, every blob-scoped table. */
+  readonly rows: BlobScopedRows;
+  /** The keys the one predicate called covered in that read. */
+  readonly covered: ReadonlySet<string>;
+}
+
+/** The tier of a run with no store, or one that parses no content: nothing held, nothing covered. */
+export const EMPTY_STORED_TIER: StoredBlobTier = Object.freeze({ rows: emptyBlobRows(), covered: new Set<string>() });
+
+/**
+ * The tier one read answered, judged by the one predicate.
+ *
+ * @param rows - What `readBlobTier` returned for `contentKeys`, every blob-scoped table
+ * @param contentKeys - The keys the read asked about
+ * @returns The rows, and the keys among `contentKeys` they cover
+ */
+export function storedBlobTier(rows: BlobScopedRows, contentKeys: readonly string[]): StoredBlobTier {
+  const uncovered = new Set(uncoveredContentKeys(rows, contentKeys));
+  return { rows, covered: new Set(contentKeys.filter((key) => !uncovered.has(key))) };
+}
+
+/**
+ * Two reads of the tier over disjoint keys, as one: a derivation's base read and
+ * its read of the keys a demand promotion added.
+ *
+ * @param first - The earlier read
+ * @param second - A read over keys `first` did not ask about
+ * @returns Both reads' rows, table by table, and both covered sets
+ */
+export function joinStoredTiers(first: StoredBlobTier, second: StoredBlobTier): StoredBlobTier {
+  const left = first.rows as unknown as RowBundle;
+  const right = second.rows as unknown as RowBundle;
+  const rows: RowBundle = {};
+  for (const table of Object.keys(left)) rows[table] = [...(left[table] ?? []), ...(right[table] ?? [])];
+  return { rows: rows as unknown as BlobScopedRows, covered: new Set([...first.covered, ...second.covered]) };
 }
 
 /**

@@ -48,10 +48,10 @@
 
 import { open } from 'node:fs/promises';
 
-import { countWork, deepFreeze, isVatError, memoized, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { countWork, deepFreeze, isPathAbsentError, isVatError, memoized, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { GIT_NO_ANSWER_CODE, gitFindRoot, gitLinksCheckedOutAsFiles, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
-import type { ParserKind } from '../content-key.js';
+import type { KeyedContent, ParserKind } from '../content-key.js';
 import { defaultParseCache } from '../parse-cache.js';
 import { ParseDispatcher } from '../parse-dispatcher.js';
 import type { CollectionConfig } from '../schemas/project-config.js';
@@ -59,7 +59,7 @@ import { isWithinProject, sameDirectory } from '../utils.js';
 
 import type { NotAdmittedEntry } from './blob-refusals.js';
 import type { BlobResourceFacts } from './blob-resource-facts.js';
-import { RunContentCache } from './content-cache.js';
+import { readKeyedContent, RunContentCache } from './content-cache.js';
 import { RootListing, type PopulationUnreadablePolicy } from './crawl-source.js';
 import type { PopulationCache } from './merge.js';
 import {
@@ -70,6 +70,7 @@ import {
   type ResourcePopulationSource,
   type StoredDocumentFacts,
 } from './resource-population.js';
+import { parserKindOf } from './router.js';
 import { hydratesUnder, readRoute, respelledContent, storedRoute, type StoredMember } from './stored-admission.js';
 
 /**
@@ -132,6 +133,44 @@ export interface PopulationRun {
   readonly content: RunContentCache;
   /** The run's one parse dispatcher, under the population's parse limits. */
   readonly dispatcher: ParseDispatcher;
+}
+
+/**
+ * Where a population reads one blob's bytes: the ONE reader the blob stage and
+ * the harness pass both read through, so the two cannot read a blob two ways.
+ */
+export interface RunContentSource {
+  /**
+   * The bytes at `absolutePath`, keyed under the parser kind `contentKey` names,
+   * or null when the file is gone. The answer's `key` may differ from
+   * `contentKey` (the file was rewritten): each caller decides what that means
+   * for it. Any other failure rejects.
+   *
+   * @param entry - The blob's path and the key the population recorded for it
+   */
+  read(entry: { readonly absolutePath: string; readonly contentKey: string }): Promise<KeyedContent | null>;
+}
+
+/**
+ * The on-disk source, through the run's cache: the same bytes the base keyed.
+ *
+ * @param cache - The run's content cache
+ * @returns The source
+ */
+export function diskRunContentSource(cache: RunContentCache): RunContentSource {
+  return {
+    read: async ({ absolutePath, contentKey }) => {
+      // Outside the `try`: a key naming no parser kind is a producer bug, and
+      // reading it as "gone" would blame the corpus for it.
+      const parserKind = parserKindOf(contentKey);
+      try {
+        return await readKeyedContent(absolutePath, parserKind, cache);
+      } catch (error) {
+        if (isPathAbsentError(error)) return null;
+        throw error;
+      }
+    },
+  };
 }
 
 /**
@@ -225,6 +264,13 @@ export interface RunPopulationOptions {
   readonly onHomeSettled: (key: string, settlement: HomeSettlement) => void;
 }
 
+/** A run's store options when it has no store it may use. */
+const WITHOUT_STORE: Pick<RunPopulationOptions, 'cacheOf' | 'questionCacheOf' | 'holdsStore'> = {
+  cacheOf: () => Promise.resolve(undefined),
+  questionCacheOf: () => Promise.resolve(undefined),
+  holdsStore: false,
+};
+
 /** One VAT process run's shared reads, parses, admissions and enumerations. */
 export class RunPopulation implements PopulationRun {
   /** The run's home root, resolved. */
@@ -278,7 +324,12 @@ export class RunPopulation implements PopulationRun {
    * @param run - The run's content cache and dispatcher, which {@link withRunPopulation} owns
    */
   constructor(options: RunPopulationOptions, run: PopulationRun) {
-    this.#options = options;
+    // The run's store is resolved here, once, for every reader of it: a run that
+    // parses under other limits than the store's facts were filed under
+    // ({@link hydratesUnder}) has no store, as `populationOracles` decides for a
+    // lane, so it opens none, lists its roots, and counts every skills-lane scan
+    // `skillText.noStore`, exactly as a store-off run does.
+    this.#options = hydratesUnder(run.dispatcher.limits) ? options : { ...options, ...WITHOUT_STORE };
     this.root = safePath.resolve(options.root);
     this.gitTracker = options.gitTracker;
     this.content = run.content;
@@ -286,7 +337,7 @@ export class RunPopulation implements PopulationRun {
     this.source = {
       enumerate: (root, outputs, unreadable, members) => this.#enumerate(root, outputs, unreadable, members),
       storedDocument: (absolutePath, parserKind) => this.storedDocument(absolutePath, parserKind),
-      holdsStore: options.holdsStore,
+      holdsStore: this.#options.holdsStore,
     };
   }
 
@@ -322,10 +373,10 @@ export class RunPopulation implements PopulationRun {
     // A file that cannot be read now is the cold lane's: its read raises the cold error, an
     // oversize file's included (the cold lane opens it before it refuses it by its size).
     if (route.kind === 'not-admitted') {
-      return (await this.#probe(absolutePath)) === null ? { kind: 'not-admitted', entry: route.entry } : compute();
+      return (await this.#readable(absolutePath, stored)) === null ? { kind: 'not-admitted', entry: route.entry } : compute();
     }
     const read = readRoute((await stored.facts()).outcome(route.contentKey));
-    if (read.kind === 'compute' || (await this.#probe(absolutePath)) !== null) return compute();
+    if (read.kind === 'compute' || (await this.#readable(absolutePath, stored)) !== null) return compute();
     if (read.admitted.kind === 'facts') countWork('registry.admitted', 1);
     return read.admitted;
   }
@@ -349,9 +400,12 @@ export class RunPopulation implements PopulationRun {
    * store, or `undefined`: the skills lane then scans the file's text itself and
    * counts it (`skillText.storeMiss`, or `skillText.noStore` in a run with no
    * store, {@link RunPopulationOptions.holdsStore}). Never reads the file's
-   * bytes, and answers from the store alone: a run's own admission of the file
-   * (a cold parse on a store miss, an evicted key, a store-off run) is never an
-   * answer here, so every file the store does not serve is a counted scan.
+   * bytes. The answer is read through {@link StoredContent.facts}, the reader
+   * admission uses, so it covers what the run holds for the member: the store's
+   * rows for a member the store serves, and the run's own derived rows for a
+   * member the run derived (`StoredMember.readByRun`). A file with no such
+   * answer (a store-off run, a key the tier does not hold, a refused key) is a
+   * counted scan.
    *
    * Answers only for a member of the home population a store hit recorded,
    * so a file outside the run's root (judged by real path,
@@ -361,8 +415,8 @@ export class RunPopulation implements PopulationRun {
    * (`#openHome`), so a lane asking before any phase enumerated the home
    * is served all the same: no caller has to open it first.
    *
-   * (none is recorded unless the run parses under the limits the store's facts
-   * were filed under, {@link hydratesUnder}), whose stored realization routes to
+   * It answers for a recorded member (none is recorded for a run with no store
+   * it may use, see the constructor), whose stored realization routes to
    * `parserKind` ({@link storedRoute}), whose blob facts the tier holds (read
    * once, through the hit's one memo), and which is readable now (the run's one
    * probe of the path, shared with {@link admit}, counted `fs.stat`).
@@ -457,7 +511,7 @@ export class RunPopulation implements PopulationRun {
     const cache = await this.#options.questionCacheOf();
     if (cache === undefined) return undefined;
     const home = await this.#populate(this.#options.outputs, cache);
-    if (home.stored !== null && hydratesUnder(this.dispatcher.limits)) await home.stored.facts();
+    if (home.stored !== null) await home.stored.facts();
     return home;
   }
 
@@ -475,7 +529,7 @@ export class RunPopulation implements PopulationRun {
     const { facts, decoding } = outcome;
     const { skillText } = facts;
     if (skillText === null) return undefined;
-    if ((await this.#probe(absolutePath)) !== null) return undefined;
+    if ((await this.#readable(absolutePath, stored)) !== null) return undefined;
     return deepFreeze({ facts: { ...facts, skillText }, decoding });
   }
 
@@ -492,19 +546,32 @@ export class RunPopulation implements PopulationRun {
   }
 
   /**
+   * {@link #probe}, unless the run already read the member (a derived population,
+   * `StoredMember.readByRun`): then readability is that read's, and the member's
+   * file is not touched again. The run's content cache hands every later read the
+   * bytes it first saw, so a second open could only disagree with what the run
+   * already admitted.
+   *
+   * @param absolutePath - The file, resolved
+   * @param stored - What the population holds about it
+   * @returns The refusal, or `null` when the file can be read
+   */
+  #readable(absolutePath: string, stored: StoredMember): Promise<{ readonly refused: unknown } | null> {
+    return stored.readByRun ? Promise.resolve(null) : this.#probe(absolutePath);
+  }
+
+  /**
    * Record what a store hit holds about its members, under the spelling the
-   * crawl asked by, so {@link admit} can admit them from it. Nothing is
-   * recorded for a run whose dispatcher parses under other limits than the ones
-   * the store's facts were filed under ({@link hydratesUnder}): every member is
-   * then computed.
+   * crawl asked by, so {@link admit} can admit them from it. A run with no store
+   * it may use (see the constructor) lists its roots, so it records nothing.
    *
    * @param enumeration - A resolved enumeration
    */
   #recordStored(enumeration: ResourceEnumeration): void {
     const { stored } = enumeration;
-    if (stored === null || !hydratesUnder(this.dispatcher.limits)) return;
+    if (stored === null) return;
     for (const [path, realization] of stored.members) {
-      if (!this.#stored.has(path)) this.#stored.set(path, { realization, facts: stored.facts });
+      if (!this.#stored.has(path)) this.#stored.set(path, { realization, facts: stored.facts, readByRun: stored.readByRun });
     }
   }
 

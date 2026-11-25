@@ -4,9 +4,9 @@
  *
  * The cold rule asserts that a sequence's first step wrote at least one parse
  * shard, and the directory to look in is not the lab's to compute: the root and
- * the namespace are each build's own decision (an installed build names its
- * namespace by version, a checkout by a digest of where it lives), and they
- * change between builds. So the lab imports the build's own
+ * the namespace are each build's own decision (a current build names its
+ * namespace by its version alone; older builds added a suffix, a checkout's a
+ * digest of where it lives), and they change between builds. So the lab imports the build's own
  * `@vibe-agent-toolkit/resources`, resolved from the build's own entry point
  * (an `npx:` build's is its install's — `npx-install.ts`), and calls its `parseCacheDirectory()` under the arm's own VAT-step
  * environment (`armStepEnvironment`) — the one its steps run in, so no

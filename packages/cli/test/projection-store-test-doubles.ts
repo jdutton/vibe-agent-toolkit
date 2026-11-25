@@ -14,6 +14,7 @@
  * factory would be a cycle.
  */
 
+import { emptyBlobRows } from '@vibe-agent-toolkit/resources';
 import { detachGitEnv } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, vi } from 'vitest';
 
@@ -76,7 +77,8 @@ function makeStore(): unknown {
     });
   return {
     writeBlobFacts: guarded(undefined),
-    readBlobFacts: guarded({}),
+    // Holds nothing: a warm miss asks the blob tier for reusable facts and gets none.
+    readBlobFacts: guarded(emptyBlobRows()),
     writeExtent: guarded(undefined),
     readExtent: guarded(undefined),
     close: () => {

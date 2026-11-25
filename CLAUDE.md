@@ -19,7 +19,7 @@ deprecation cycles starts at 1.0. (not enforced)
 No hand-maintained integer decides whether stored data is still valid: no `CACHE_VERSION`,
 `SCHEMA_VERSION`, `*_REVISION`, no `z.literal(<n>)` on a `version` field, no `schema:`/`v1alpha`
 label in VAT's own output. Derive the fact from the shape itself (a digest of the schema's
-declaration, as `parseFactsShapeSource()` does), validate with a `.strict()` schema, or invalidate
+declaration, as `projectionShapeDigest()` does), validate with a `.strict()` schema, or invalidate
 explicitly by deleting the stored artifact. Any PR that introduces one must say so under its own
 heading so it is removed before merge. Not offenders: an external API header value, a real list of
 supported versions, a regex that parses versions, a `VERSION` string in a test fixture. Rationale:

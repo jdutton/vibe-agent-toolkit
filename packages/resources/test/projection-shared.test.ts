@@ -10,10 +10,9 @@ describe('the removed contract version', () => {
   it('exports no hand-bumped version constant', () => {
     // An absence pin, not decoration. `PROJECTION_SCHEMA_VERSION` reached 4 by
     // hand and nothing ever branched on it, so every bump was cost without a
-    // beneficiary. The pressure to reinstate one arrives with the first STORED
-    // projection, and the answer then is a derived digest of the row schemas'
-    // shape (as `parseFactsShapeSource()` is for the parse cache) — not this
-    // constant back. That is why the guard names the shape rather than the
+    // beneficiary. The pressure to reinstate one arrives with a STORED
+    // projection, and the answer is a derived digest of the row schemas' shape
+    // (`projectionShapeDigest()`) — not this constant back. That is why the guard names the shape rather than the
     // symbol: `PROJECTION_SCHEMA_VERSION_2` would pass a symbol-only check.
     const versionish = Object.keys(projectionShared).filter((name) => /VERSION|REVISION/u.test(name));
 

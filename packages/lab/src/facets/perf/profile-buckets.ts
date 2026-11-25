@@ -90,7 +90,7 @@ export const VALIDATE_PHASE_BUCKETS: readonly BucketRule[] = [
   },
   {
     bucket: 'store write',
-    functionName: /^(?:writeBlobRows|writeExtentRows|writeBlobFacts|writeExtent|insertBundle|clearSpaceFor\w*|evict\w*)$/u,
+    functionName: /^(?:writeBlobRows|writeExtentRows|writeBlobFacts|writeExtent|keysToReplace|rowsToReplace|insertBundle|clearSpaceFor\w*|evict\w*)$/u,
     url: PROJECTION_STORE,
   },
   { bucket: EXTENT_READ, url: vatModule('resources', 'projection/store-hydration') },

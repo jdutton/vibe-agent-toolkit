@@ -158,9 +158,9 @@ describe('only the home root reaches the store, by the filesystem\'s answer to w
     const { members, reads } = await inRun(home, store, (population) => crawlMarkdown(population, alias));
     expect(store.touchedRootIds.length).toBeGreaterThan(0);
     expect(members).toEqual(['nested/guide.md', 'README.md']);
-    // The home's full population, plus each member admitted under the alias's
-    // spelling: the run's content cache is keyed by the path asked.
-    expect(reads).toBe(2 + GENERATED + 2);
+    // The home's full population alone: each member asked under the alias's
+    // spelling is admitted from the population's own rows, so nothing is read twice.
+    expect(reads).toBe(2 + GENERATED);
   });
 });
 

@@ -289,6 +289,20 @@ like a working cache, and pure overhead. The store lives at
 **Remedy:** before believing a null result from a feature, enumerate every input the feature is
 AND-ed behind; proving one switch took effect proves nothing about the ones you did not set.
 
+### Two checkouts of one VAT version serve each other's facts from one cache root
+
+The cache namespace is the VAT version alone, so every checkout of one version shares the namespace
+and the store under whatever cache root they share. Two worktrees on the default
+`<tmpdir>/.vat-cache`, one with an extractor edit and one without, are served each other's rows: a
+key one of them filed is covered for the other, and the edited code never runs on it. `bun run
+vat` (the gate's `vat` steps and a hand run alike) gives each checkout its own `VAT_CACHE_DIR`
+(`packages/dev-tools/src/run-vat.ts`, a value already set passes through); running
+`packages/cli/dist/bin/vat.js` or an installed `vat` directly does not.
+**Tell:** a warm run in one worktree disagrees with a cold run of the same tree, or an extractor
+edit changes nothing until `vat cache clear`; the run's facts were filed by the other worktree.
+**Remedy:** run VAT from a checkout as `bun run vat`; otherwise set `VAT_CACHE_DIR` per checkout
+or clear the cache.
+
 ### `--no-cache` must reach every cache, and a store must evict
 
 `VAT_CACHE=0` / `--no-cache` once bypassed the parse cache and still wrote the projection store; and
@@ -303,7 +317,7 @@ store's rows** (153,245 of 193,605 on a 12,602-file adopter tree) and extent evi
 attribute a single one of them, because a blob fact belongs to bytes rather than to a tree. Its
 "bound" was the release namespace rotating, which is not a bound — and the day the store became the
 default was the day that stopped being survivable. `writeBlobFacts` now keeps the 50,000 most
-recently written content keys, sized from a measured ~5.3 KB per key on two corpora, with a manifest
+recently held content keys (a write re-stamps every key it holds), sized from a measured ~5.3 KB per key on two corpora, with a manifest
 table of its own and a one-time adoption pass for the rows a pre-manifest store already holds.
 **Tell:** a cache directory growing on every edit; a `.db` written under `--no-cache`; a tier whose
 eviction policy is a sentence about something else rotating.

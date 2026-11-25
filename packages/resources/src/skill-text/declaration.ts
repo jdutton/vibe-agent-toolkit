@@ -11,10 +11,9 @@
  * records every run.
  *
  * Everything the core's output depends on, other than its own control flow, is
- * here, so {@link skillTextDeclarationDigest} moves whenever a pattern, a
- * constant or an order does. `local/skill-text-core-purity` holds the core to
- * that: it refuses a regex, a non-trivial literal or a runtime import there
- * other than this module.
+ * here. `local/skill-text-core-purity` holds the core to that: it refuses a
+ * regex, a non-trivial literal or a runtime import there other than this
+ * module.
  *
  * Every pattern below is the agent-skills detector's pattern verbatim (same
  * source, same flags). The declaration's objects and arrays are frozen, so no
@@ -39,16 +38,12 @@
  * - The core never moves a public regex's `lastIndex`
  *   (`local/skill-text-core-purity` refuses a `lastIndex` reference there, and
  *   a test asserts every declared regex is left at 0).
- * - Nothing else is. {@link skillTextDeclarationDigest} reads source and flags
- *   as they are when it is called, so a `compile()` moves it while the core's
- *   answer stays put. A consumer outside the core that reads a declared regex
+ * - Nothing else is. A consumer outside the core that reads a declared regex
  *   directly (`frontmatterFencesOf` called with this object, or anything that
  *   holds `EXTERNAL_CLI_BINARIES`) sees whatever a holder did to it; such a
  *   consumer uses a declared global regex only through `matchAll`, `split`,
  *   `replace` or `replaceAll`, and never `compile()`s one.
  */
-
-import { createHash } from 'node:crypto';
 
 /**
  * Freeze `value` and every object and array reachable from it, leaving each
@@ -310,36 +305,3 @@ export const SKILL_TEXT_FAMILIES = Object.keys(SKILL_TEXT_FAMILY_PATTERNS) as Sk
 export const SKILL_TEXT_PATTERN_IDS: PatternId[] = [
   ...new Set<PatternId>(Object.values(SKILL_TEXT_FAMILY_PATTERNS).flat()),
 ];
-
-/** Code-unit order: the same on every machine, unlike a locale's collation. */
-function byCodeUnits(a: string, b: string): number {
-  if (a === b) return 0;
-  return a < b ? -1 : 1;
-}
-
-/**
- * A canonical serialization: a regex as its source and flags, an array in
- * order, an object as `[key, value]` pairs in code-unit key order, a string or
- * number as JSON.
- */
-function canonical(value: unknown): unknown {
-  if (value instanceof RegExp) return { regexFlags: value.flags, regexSource: value.source };
-  if (Array.isArray(value)) return value.map((item) => canonical(item));
-  if (typeof value === 'object' && value !== null) {
-    return Object.keys(value)
-      .sort(byCodeUnits)
-      .map((key) => [key, canonical((value as Record<string, unknown>)[key])]);
-  }
-  return value;
-}
-
-/**
- * The sha256 of `declaration`'s canonical serialization: it moves with every
- * regex source or flag, constant and order the core applies, and not with
- * object key order. The core's control flow is not covered.
- *
- * @param declaration - The declaration a core applies: {@link SKILL_TEXT_DECLARATION}
- */
-export function skillTextDeclarationDigest(declaration: SkillTextDeclaration): string {
-  return createHash('sha256').update(JSON.stringify(canonical(declaration))).digest('hex');
-}

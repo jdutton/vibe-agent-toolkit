@@ -3,8 +3,7 @@
  * checks turn that disarms it and takes its one decision, the end of the run that abandons a child
  * nobody read, and the debug-facts dump that states which mode ran.
  *
- * The gate itself (`checks-overlap-gate.ts`) is built from the run it listens to: the population's
- * dispatcher limits, the population's own root as the routing's base directory (the spelling the
+ * The gate itself (`checks-overlap-gate.ts`) is built from the run it listens to: the population's own root as the routing's base directory (the spelling the
  * population names its members by, so a `/tmp` root and its `/private/tmp` realpath cannot make
  * every member look foreign), and `RunPopulation.homeKey([])`, the home population the resources
  * phase crawls and the child populates the same way.
@@ -107,7 +106,6 @@ export function gateOptionsFor(
     debug: request.debug,
     cores,
     childHomeKey: RunPopulation.homeKey([]),
-    limits: run.dispatcher.limits,
     routing: parseRoutingFor(request.config, run.population.root),
   };
 }

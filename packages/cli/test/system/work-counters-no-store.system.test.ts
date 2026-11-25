@@ -11,7 +11,10 @@
  * - `vat skills validate` with the store switched off (`VAT_PROJECTION_STORE=off`).
  *
  * And the store-on reference: a cold `vat skills validate` asks its store, which holds nothing
- * yet, so the same files are misses and none is a `noStore`.
+ * yet, so it derives the home population under the store, and the skills lane is answered from
+ * those derived rows (`StoredMember.readByRun`): no file is scanned, and none is a `noStore`. A
+ * store-on scan counted as a miss is held by work-counters-skill-text, whose fixture plants
+ * files no population row serves.
  */
 
 import type { WorkCounter } from '@vibe-agent-toolkit/utils';
@@ -88,9 +91,9 @@ describe('a skills lane with no store to ask counts its scans as noStore, never 
     });
   });
 
-  it('a cold vat skills validate with the store on asks its store: every scan is a miss', async () => {
+  it('a cold vat skills validate with the store on asks its store: its derived home answers every file', async () => {
     const counters = await heldCounters(['skills', 'validate'], false);
-    expect({ miss: counters['skillText.storeMiss'], noStore: counters['skillText.noStore'] }).toEqual({ miss: SCANNED, noStore: 0 });
+    expect({ miss: counters['skillText.storeMiss'], noStore: counters['skillText.noStore'] }).toEqual({ miss: 0, noStore: 0 });
     // A cold run's extent read is a miss, still a read: the manifest was asked.
     expect(counters['store.reads.extent'], 'the run asked its store').toBeGreaterThan(0);
   });

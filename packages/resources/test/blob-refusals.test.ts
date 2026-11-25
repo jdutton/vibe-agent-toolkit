@@ -13,13 +13,7 @@ import { describe, expect, it } from 'vitest';
 
 import { parseRefusal } from '../src/not-admitted.js';
 import { ParseLimitError } from '../src/parse-limits.js';
-import {
-  BLOB_CONTENT_CHANGED,
-  BLOB_NOT_TEXT,
-  BLOB_PARSE_FAILED,
-  BLOB_PARSE_LIMIT_EXCEEDED,
-  BLOB_UNREADABLE,
-} from '../src/projection/blob-population.js';
+import { BLOB_CONTENT_CHANGED, BLOB_NOT_TEXT, BLOB_PARSE_FAILED, BLOB_PARSE_LIMIT_EXCEEDED, BLOB_UNREADABLE } from '../src/projection/blob-condition-codes.js';
 import { describeBlobRefusals, notAdmittedRealizations, type BlobRefusalRows } from '../src/projection/blob-refusals.js';
 import { POPULATION_PARSE_LIMITS } from '../src/projection/content-cache.js';
 import { parseFailedMessage, parseFailureOf } from '../src/projection/parse-failure.js';

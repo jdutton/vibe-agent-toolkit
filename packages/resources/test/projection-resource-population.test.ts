@@ -14,7 +14,9 @@ import {
   buildResourceProjection,
   type ResourcePopulationSource,
 } from '../src/projection/resource-population.js';
+import { emptyBlobRows } from '../src/projection/store-hydration.js';
 import type {
+  BlobFactsWrite,
   BlobScopedRows,
   ExtentKey,
   ExtentRequest,
@@ -275,14 +277,14 @@ class CapturingStore implements FactStore {
     return undefined;
   }
 
-  async writeBlobFacts(_rows: BlobScopedRows): Promise<void> {
+  async writeBlobFacts(_write: BlobFactsWrite): Promise<void> {
     // The blob tier is not what these tests observe; nothing to record.
   }
 
   async readBlobFacts(_contentKeys: readonly string[]): Promise<BlobScopedRows> {
-    // Loud rather than a fiction: `readExtent` never answers, so no path reaches
-    // the coverage check, and a call here would mean one did.
-    throw new Error('a store that never answers an extent read must never be asked for blob facts');
+    // A warm miss asks the blob tier for reusable per-file facts; this store holds
+    // none, so every file is still derived and the run stays a full enumeration.
+    return emptyBlobRows();
   }
 
   async close(): Promise<void> {

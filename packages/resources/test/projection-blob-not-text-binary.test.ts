@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { BLOB_NOT_TEXT } from '../src/projection/blob-population.js';
+import { BLOB_NOT_TEXT } from '../src/projection/blob-condition-codes.js';
 import { describeBlobRefusals } from '../src/projection/blob-refusals.js';
 import type { Projection } from '../src/projection/projection.js';
 

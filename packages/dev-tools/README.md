@@ -21,10 +21,11 @@ Every top-level script under `src/`, by basename (generated from the directory; 
 `known-defects-gate`, `link-all`, `link-workspace-packages`, `markdown-it-parser`,
 `npm-registry-guard`, `osv-ignore-register`, `osv-ignore-scan`, `override-register`,
 `parser-bakeoff`, `pin-barrel-exports`, `pin-emitted-schemas`, `pre-publish-check`, `prepare-bin`,
-`print-failed-step-output`, `publish-with-rollback`, `resolve-workspace-deps`, `structure-finding`,
-`test-tier-budget-allowlist`, `test-tier-budget-reporter`, `test-tier-budget-seed`,
-`tsc-clean-build`, `unlink-all`, `unused-exports-allowlist`, `unused-exports`,
-`validate-repo-structure`, `validate-version`, `work-counter-register`, `workspace-graph`
+`print-failed-step-output`, `publish-with-rollback`, `resolve-workspace-deps`, `run-vat`,
+`structure-finding`, `test-tier-budget-allowlist`, `test-tier-budget-reporter`,
+`test-tier-budget-seed`, `tsc-clean-build`, `unlink-all`, `unused-exports-allowlist`,
+`unused-exports`, `validate-repo-structure`, `validate-version`, `work-counter-register`,
+`workspace-graph`
 <!-- /gen:dev-tools-scripts -->
 
 ## Where the rules they enforce are stated

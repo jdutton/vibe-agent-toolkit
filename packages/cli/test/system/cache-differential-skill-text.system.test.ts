@@ -30,8 +30,10 @@
  * Warm `vat validate` serves every SKILL.md and bundled document from its stored
  * skill-text record, so a record the store carries wrongly is a warm finding that
  * differs from the cold one. Deleting a key's skill-text rows by raw SQL, with its blob
- * facts kept, leaves the store accounting for the key with no record for it: the skills
- * lane then scans each file of that key, once per file, and answers as it does cold.
+ * facts kept, leaves the store holding the key with no record for it: the skills lane
+ * then scans each file of that key, once per file, and answers as it does cold, and the
+ * checks child, whose population calls the key uncovered, re-derives it and writes the
+ * record back, so the next run is served again.
  *
  * Not asserted: a tampered served match row. The store checks a record's integrity by
  * its counts only (`matchCount` against its match rows), so a match row rewritten in
@@ -41,7 +43,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 
 import { DEFAULT_PARSE_LIMITS } from '@vibe-agent-toolkit/resources';
-import { safePath, toForwardSlash, type WorkCounterDump } from '@vibe-agent-toolkit/utils';
+import { CRAWL_STORE_READ_ID, CRAWL_STORE_WRITE_ID, safePath, toForwardSlash, type WorkCounterDump } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -50,6 +52,7 @@ import {
   fidelitySuite,
   seedTitle,
   storedContentKeys,
+  storedSkillTextKeys,
   treeSeedSuite,
   type FixtureTree,
   type I0Seed,
@@ -152,7 +155,7 @@ describe('vat validate answers every skill-text case alike whether or not the pr
 
   it('answers in every arm with the reference\'s findings, serialized byte for byte, and its exit code', fidelity.expectAgreement);
 
-  it('scans every skill file with no store and cold, and only the declared fallback warm', () => {
+  it('scans every skill file with no store, and only the declared fallback cold and warm', () => {
     const { measured } = fidelity.result();
     const run = (arm: 'storeOff' | 'cold' | 'warmSameHistory'): NonNullable<typeof measured.storeOff.vatValidate> => {
       const recorded = measured[arm].vatValidate;
@@ -163,8 +166,11 @@ describe('vat validate answers every skill-text case alike whether or not the pr
     const skillFiles = skillLaneScannedFiles(run('cold').cell.corpus);
     expect(skillFiles, 'the declared fallback is a skill file').toEqual(expect.arrayContaining([...DECLARED_FALLBACK]));
     // With the store off there is no store to miss: every scan is a `noStore`; with it on, none is.
+    // A cold store-on run's miss derives the home population under the store, and the skills lane
+    // is answered from those derived rows through the reader a warm run uses on the store's
+    // (`StoredMember.readByRun`), so cold scans exactly what warm does: the declared fallback.
     expect({ storeOff: scansOf(run('storeOff').work), cold: scansOf(run('cold').work), warm: scansOf(run('warmSameHistory').work) })
-      .toEqual({ storeOff: [0, skillFiles.length], cold: [skillFiles.length, 0], warm: [DECLARED_FALLBACK.length, 0] });
+      .toEqual({ storeOff: [0, skillFiles.length], cold: [DECLARED_FALLBACK.length, 0], warm: [DECLARED_FALLBACK.length, 0] });
   });
 });
 
@@ -174,11 +180,25 @@ const IDENTICAL_BYTES = ['dup-a/SKILL.md', 'dup-b/SKILL.md'] as const;
 /** The keys each skill-text eviction deleted, by cell. */
 const evictedByCell = new Map<string, readonly string[]>();
 
+/** The keys holding a skill-text record just before each eviction, by cell: what the repair must restore. */
+const heldBeforeByCell = new Map<string, readonly string[]>();
+
+/** Where each phase of a `vat validate` report that populates says its population came from, by phase name. */
+function phasePopulations(document: Record<string, unknown>): Record<string, unknown> {
+  const data = document['data'] as { phases?: readonly { name: string; data?: Record<string, unknown> }[] } | undefined;
+  return Object.fromEntries((data?.phases ?? [])
+    .filter((phase) => phase.data?.['population'] !== undefined)
+    .map((phase) => [phase.name, phase.data?.['population']]));
+}
+
 /**
  * Half the skill-text records deleted after the warm prime, the blob tier kept: the
  * findings are store-off's, and the skills lane scans exactly the declared fallback plus
  * every skill file whose key lost its record (once per file, so two files of one key are
- * two scans).
+ * two scans). The resources phase is served from the store; the checks child calls the
+ * evicted keys uncovered, re-derives them and writes once, so after the run the store
+ * holds a record for exactly the keys it held before the eviction: every evicted key
+ * restored, none added.
  */
 const SKILL_TEXT_EVICTION: I0Seed = {
   name: 'half the skill-text records deleted after the prime',
@@ -193,10 +213,16 @@ const SKILL_TEXT_EVICTION: I0Seed = {
     const twin = keys.get(IDENTICAL_BYTES[0]);
     if (twin === undefined) throw new Error(`${IDENTICAL_BYTES[0]}: no stored content key`);
     expect(IDENTICAL_BYTES.map((path) => keys.get(path)), 'the identical-bytes skills share one content key').toEqual([twin, twin]);
+    heldBeforeByCell.set(dirs.root, storedSkillTextKeys(dirs));
     evictedByCell.set(dirs.root, evictHalfTheSkillText(dirs, [twin]));
     return Promise.resolve();
   },
-  expect: { agrees: { because: 'the skills lane scans a file whose key has no skill-text record, as it does cold', storeDeclines: null } },
+  expect: {
+    agreesAndRepairs: {
+      arm: 'warmSameHistory',
+      because: 'the skills lane scans a file whose key has no skill-text record, as it does cold, and the checks child writes the record back',
+    },
+  },
   consumed: {
     runs: ['warmSameHistory:measured'],
     check: (runs) => {
@@ -207,6 +233,13 @@ const SKILL_TEXT_EVICTION: I0Seed = {
       const scanned = [...storedContentKeys(run.cell.dirs)].filter(([path, key]) => skillFiles.has(path) && evicted.has(key)).map(([path]) => path);
       expect(scanned, 'both identical-bytes files are scanned').toEqual(expect.arrayContaining([...IDENTICAL_BYTES]));
       expect(storeMisses(run.work), 'scans: the declared fallback, then each file whose record was deleted').toBe(DECLARED_FALLBACK.length + scanned.length);
+      // One read per process and one write: the resources phase is served, the checks child re-derives.
+      const charged = (id: string): number => run.charged.filter((entry) => entry === id).length;
+      expect({ reads: charged(CRAWL_STORE_READ_ID), writes: charged(CRAWL_STORE_WRITE_ID) }, 'store charges').toEqual({ reads: 2, writes: 1 });
+      expect(phasePopulations(run.document), 'phase populations').toEqual({ resources: 'store', checks: 'derived' });
+      // Both ways: every evicted key holds its record again, and no key holds one it did not before.
+      expect(storedSkillTextKeys(run.cell.dirs), 'keys holding a skill-text record after the run')
+        .toEqual(heldBeforeByCell.get(run.cell.dirs.root));
     },
   },
 };

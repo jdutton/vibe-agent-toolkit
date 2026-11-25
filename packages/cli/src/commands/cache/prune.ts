@@ -8,9 +8,10 @@
  * the restore was for. Prune removes only entries VAT recognises as its own
  * (`isVatCacheRootEntryName`, `isProjectionStoreDirectoryName`):
  *
- * - at the root, every namespace but this build's — older AND newer releases,
- *   and, under the shared default root, other worktrees' and other VATs'
- *   namespaces too — and what older releases kept there: the link-cache files
+ * - at the root, every namespace but this version's (older AND newer releases,
+ *   prereleases included; a namespace is the VAT version alone, so every
+ *   checkout and install of this version shares the kept one), and what older
+ *   releases kept there: the link-cache files
  *   (before they moved to `<tmpdir>/.vat-link-cache`) and the root-level
  *   `parse/` directory (before the parse cache moved under the namespace);
  * - inside this build's namespace, every projection store but this shape's.

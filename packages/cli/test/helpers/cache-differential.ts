@@ -40,17 +40,31 @@ import { devNull } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 
-import { allDerivedSpecs, BLOB_NOT_TEXT, PROJECTION_TABLES, quoteIdentifier } from '@vibe-agent-toolkit/resources';
+import { openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
+import {
+  ALL_BLOB_REQUEST,
+  allDerivedSpecs,
+  BLOB_NOT_TEXT,
+  BLOB_PARSE_LIMIT_EXCEEDED,
+  BLOB_PARSE_WORKER_DIED,
+  computeContentKey,
+  parserKindOf,
+  PROJECTION_TABLES,
+  quoteIdentifier,
+  uncoveredContentKeys,
+} from '@vibe-agent-toolkit/resources';
 import { FindingSchema, reportSchema } from '@vibe-agent-toolkit/schema';
 import {
   CRAWL_STORE_READ_ID,
   CRAWL_STORE_WRITE_ID,
+  isPathAbsentError,
   isUnderRoot,
   mkdirSyncReal,
   relativeEscapesRoot,
   safePath,
   toForwardSlash,
   WORK_COUNTERS_ENV,
+  type WorkCounter,
   type WorkCounterDump,
   VAT_CACHE_DIR_ENV,
 } from '@vibe-agent-toolkit/utils';
@@ -89,8 +103,8 @@ type ArmName = 'storeOff' | 'cold' | 'warmSameHistory' | 'partialEviction';
  */
 type VerbName = 'validate' | 'check' | 'query' | 'context' | 'vatValidate';
 
-/** A recorded run: the warm arm's prime, or any arm's measured run. */
-type RunLabel = `${ArmName}:${'prime' | 'measured'}`;
+/** A recorded run: the warm arm's prime, a seed's unmeasured intermediate run, or any arm's measured run. */
+type RunLabel = `${ArmName}:${'prime' | 'intermediate' | 'measured'}`;
 
 // ── The dump ────────────────────────────────────────────────────────────────
 
@@ -510,6 +524,8 @@ interface RunRecord {
   readonly charged: readonly string[];
   /** Every CLI process's work-counter dump, from the run's own directory (`VAT_WORK_COUNTERS`). */
   readonly work: readonly WorkCounterDump[];
+  /** The store's extent manifest just before the run ({@link extentManifest}): what tells the oracle which extent is the run's. */
+  readonly extentsBefore: readonly string[];
   /** The cell it ran in, and the corpus it ran over. */
   readonly cell: { readonly dirs: ArmDirs; readonly corpus: string };
 }
@@ -709,8 +725,60 @@ const WARM_STORE_READS: { readonly [Name in VerbName]: number } = {
   vatValidate: 2,
 };
 
+/** What an edit seed's measured verb runs in its counted scope ({@link populationCounts}). */
+interface EditVerbScope {
+  /** `store.reads.extent`, exactly. */
+  readonly extentReads: number;
+  /**
+   * The populations it derives over the edited tree, `extent.derived` exactly. The first reads
+   * the primed store, so it extracts the seed's uncovered keys; each later one runs after the
+   * first has written the edited tree's blob facts, so it finds every key covered. One population
+   * run shares one dispatcher, so parse lookups are the run's, not each population's.
+   */
+  readonly populations: number;
+}
+
+/**
+ * Each verb an edit seed measures, and only those, measured on a one-file tracked edit of the
+ * gate fixture over a build whose miss derives every key, each extent read traced to its call
+ * site:
+ *
+ * - `vat validate` counts its parent's `resources` phase (its checks child is another process):
+ *   the membership lane's `readStoredMembership` (a miss), then `populate`'s
+ *   `readCachedProjection` (a miss, derived). One population.
+ * - `vat resources query` is one process with no phases, so its counted scope is the process:
+ *   the resources population's `populate` (a miss, derived and written), then the claude-context
+ *   lens's `importRoots` `readStoredMembership` (served from the extent just written), then the
+ *   lens's own `populate` (a miss: its registry adds the `@`-import contributors, so its key
+ *   differs; derived over the same tree). Two populations; no phase separates them.
+ *
+ * A change that adds or drops a read or a population rewrites this table.
+ *
+ * Unproven until the stored tier is read on a miss: the `query` tell's `(populations - 1) *
+ * distinct keys` term of `blob.storeServed` assumes the lens population's keys equal the resources
+ * population's. If its `@`-import contributors add keys, restate the term from a measured run.
+ */
+const EDIT_VERBS = {
+  query: { extentReads: 3, populations: 2 },
+  vatValidate: { extentReads: 2, populations: 1 },
+} as const satisfies Partial<Record<VerbName, EditVerbScope>>;
+
+/** A verb an edit seed measures: one {@link EDIT_VERBS} holds. */
+function isEditVerb(verb: VerbName): verb is keyof typeof EDIT_VERBS {
+  return Object.hasOwn(EDIT_VERBS, verb);
+}
+
 /** Each cell's evicted content keys, from the arm's `prepare` to its measured run's tell. */
 const evictedByCell = new Map<string, readonly string[]>();
+
+/** Each `editServed` cell's uncovered keys, computed from the primed store before its measured run. */
+const uncoveredByCell = new Map<string, readonly string[]>();
+
+/** Each `editServed` cell's refused keys: the uncovered keys no run can file. */
+const refusedByCell = new Map<string, readonly string[]>();
+
+/** Each `editServed` cell's keys of the new tree its store does not cover after the measured run. */
+const uncoveredAfterByCell = new Map<string, readonly string[]>();
 
 /**
  * Run `body` against the cell's one projection store, opened read-write, then close it.
@@ -738,7 +806,7 @@ function blobRowCounts(database: DatabaseSync, key: string): Record<string, numb
   }));
 }
 
-/** Whether the blob tier accounts for a key: a `blobs` row (parsed) or a `blob_conditions` row (declined), the store's own coverage rule. */
+/** Whether the blob tier accounts for a key: a `blobs` row or a `blob_conditions` row at all. This is a presence probe, not the coverage rule: coverage is the one predicate (`uncoveredContentKeys`, over `BlobFactsReader.answer`). */
 function accountedFor(database: DatabaseSync, key: string): boolean {
   const counts = blobRowCounts(database, key);
   return (counts[PROJECTION_TABLES.blobs.name] ?? 0) + (counts[PROJECTION_TABLES.blobConditions.name] ?? 0) > 0;
@@ -795,12 +863,31 @@ function holdsSkillText(database: DatabaseSync, key: string): boolean {
   return (database.prepare(`SELECT COUNT(*) AS n FROM ${facts} WHERE "blob" = ?`).get(key) as { n: number }).n > 0;
 }
 
+/** Every key whose skill-text record the store holds, sorted. */
+function skillTextKeysIn(database: DatabaseSync): string[] {
+  const facts = quoteIdentifier(PROJECTION_TABLES.skillTextFacts.name);
+  return (database.prepare(`SELECT "blob" AS key FROM ${facts} ORDER BY "blob"`).all() as { key: string }[]).map((row) => row.key);
+}
+
+/**
+ * Every key whose skill-text record the cell's store holds, read by raw SQL.
+ *
+ * @param dirs - A primed cell, or any cache directory holding one store
+ * @returns The keys, sorted
+ */
+export function storedSkillTextKeys(dirs: Pick<ArmDirs, 'store'>): string[] {
+  return withStore(dirs, skillTextKeysIn);
+}
+
 /**
  * Delete the skill-text rows of every other key that has them, in sorted order, by raw
  * SQL, and nothing else (a seed's plant, after a warm arm's prime): the key keeps its
  * `blobs` row and every other blob fact, so the store still accounts for it and serves
- * its resource facts, and only its skill-text record is gone. No verb re-derives it:
- * the skills lane scans each file of such a key, as it does with no store.
+ * its resource facts, and only its skill-text record is gone. The writer never leaves a
+ * markdown blob so, and the one blob-tier predicate (`uncoveredContentKeys`) calls such a
+ * key uncovered: the next population that asks it (`vat validate`'s checks child)
+ * re-derives the key and writes its record back, while the skills lane, which reads the
+ * record and never repairs it, scans each file of such a key, as it does with no store.
  *
  * @param dirs - The primed cell, or any cache directory holding one store
  * @param mustEvict - Keys deleted whatever their place in the order: a case the caller needs evicted
@@ -808,8 +895,7 @@ function holdsSkillText(database: DatabaseSync, key: string): boolean {
  */
 export function evictHalfTheSkillText(dirs: Pick<ArmDirs, 'store'>, mustEvict: readonly string[]): string[] {
   return withStore(dirs, (database) => {
-    const facts = quoteIdentifier(PROJECTION_TABLES.skillTextFacts.name);
-    const keys = (database.prepare(`SELECT "blob" AS key FROM ${facts} ORDER BY "blob"`).all() as { key: string }[]).map((row) => row.key);
+    const keys = skillTextKeysIn(database);
     expect(mustEvict.filter((key) => !keys.includes(key)), 'keys to evict that hold no skill-text record').toEqual([]);
     const evicted = keys.filter((key, index) => index % 2 === 0 || mustEvict.includes(key));
     expect(evicted.length, 'a skill-text eviction deletes a record').toBeGreaterThan(0);
@@ -955,6 +1041,42 @@ type SeedExpectation =
   | { readonly agrees: { readonly because: string; readonly storeDeclines: StoreDeclines | null } }
   | { readonly refuses: { readonly cause: AbsenceMember; readonly perVerb: Readonly<Partial<Record<VerbName, number>>> } }
   | { readonly agreesAndMisses: { readonly arm: ArmName } }
+  /**
+   * Every arm answers as store-off does, and the seed's own consumed check holds `arm`'s
+   * measured runs in place of that arm's tell: for a plant the store repairs, which the arm's
+   * tell (a warm run only reads) would call a regression.
+   */
+  | { readonly agreesAndRepairs: { readonly arm: ArmName; readonly because: string } }
+  /**
+   * An edit the warm arm's miss serves from the stored blob tier: it extracts exactly the
+   * keys `uncovered` names and reuses every other ({@link expectEditServed}). `uncovered` is
+   * read off the primed store before the measured run: the new tree's keyed paths' keys the
+   * store does not cover, plus every key the closure promotion adds outside the base's reads.
+   * Before that run the harness holds the list to the store: each listed key is uncovered there
+   * by the one predicate (`uncoveredContentKeys`), and each other key of the new tree covered.
+   * An edit seed never moves `HEAD` (no commit, no checkout): `--base HEAD` would then name
+   * another commit than the prime's. The harness asserts `HEAD` after `prepare` equals `HEAD`
+   * just before the measured run.
+   *
+   * `refused` names the uncovered keys whose parse a run refuses at a limit or loses with its
+   * worker: that refusal is filed nowhere (`storableBlobFacts` drops it, ADR I6), so the key stays
+   * uncovered after every run, and no later population is served it from the store. The harness holds the
+   * list both ways: to the refusal rows the store-off reference reports for the new tree before
+   * the measured run, and to exactly the keys the store leaves uncovered after it.
+   */
+  | {
+    readonly editServed: {
+      readonly arm: 'warmSameHistory';
+      readonly uncovered: (dirs: ArmDirs, corpus: string) => readonly string[];
+      readonly refused: (dirs: ArmDirs, corpus: string) => readonly string[];
+    };
+  }
+  /**
+   * The oracle's red proof: the arm's measured run is made to key the pre-edit tree, is served its
+   * stale extent, and {@link expectEditOracle} alone must fail on it, naming `editedPath`. Nothing
+   * else is asserted of the arm: a write, origin or agreement assertion would trip first.
+   */
+  | { readonly staleServed: { readonly arm: 'warmSameHistory'; readonly editedPath: string } }
   | { readonly documentsHole: { readonly arm: ArmName; readonly because: string } };
 
 /** The recorded runs, by label and verb. */
@@ -969,7 +1091,11 @@ export interface I0Seed {
   /** What the host must be able to do to plant it; null for a plant every host can make. */
   readonly needs: HostNeed | null;
   readonly verbs?: readonly VerbName[];
-  readonly arms?: readonly ArmName[];
+  /**
+   * The arms it runs, store-off first. Required: an omitted list would run every arm of
+   * {@link ARMS}, so a seed would silently grow every arm added later.
+   */
+  readonly arms: readonly ArmName[];
   /** Applied after the fixture is written. */
   readonly stateA?: (corpus: string, git: Git, dirs: ArmDirs) => Promise<void>;
   /**
@@ -977,7 +1103,13 @@ export interface I0Seed {
    * corpus can be removed: runs in a `finally` wrapping state A through the measured run.
    */
   readonly restore?: (corpus: string) => void;
-  /** After `arm.prepare`, before the measured run. */
+  /**
+   * After `arm.prepare`: a step the cell then runs the measured verb over once, unmeasured
+   * (recorded as `<arm>:intermediate`), before `toB`. For an edit that must reach the store
+   * before the measured edit does; a seed that uses it asserts its effect, so a dropped run reds.
+   */
+  readonly intermediate?: (arm: ArmName, dirs: ArmDirs, corpus: string, git: Git) => Promise<void>;
+  /** After `arm.prepare` (and any intermediate run), before the measured run. */
   readonly toB?: (arm: ArmName, dirs: ArmDirs, corpus: string, git: Git) => Promise<void>;
   /** A plant outside the corpus (a forged cache entry), after `toB`. */
   readonly beforeRun?: (arm: ArmName, dirs: ArmDirs, corpus: string) => Promise<void>;
@@ -1064,6 +1196,9 @@ const cellRoots: string[] = [];
 export function removeCells(): void {
   for (const root of cellRoots.splice(0)) removeTempDir(root);
   evictedByCell.clear();
+  uncoveredByCell.clear();
+  refusedByCell.clear();
+  uncoveredAfterByCell.clear();
 }
 
 /**
@@ -1131,6 +1266,7 @@ function cellRunner(options: { binPath: string; corpus: string; dirs: ArmDirs; e
       const work = safePath.join(options.dirs.timing, `${String(ordinal)}-work`);
       mkdirSyncReal(timing, { recursive: true });
       mkdirSyncReal(work, { recursive: true });
+      const extentsBefore = extentManifest(options.dirs);
       const before = new Set(pathsUnder(options.dirs.root));
       const result = await executeCli(options.binPath, [...verb.args], {
         cwd: options.corpus,
@@ -1158,6 +1294,7 @@ function cellRunner(options: { binPath: string; corpus: string; dirs: ArmDirs; e
         origins: verb.originsOf(document),
         charged: contributorsCharged(timing),
         work: workDumpsUnder(work),
+        extentsBefore,
         cell: { dirs: options.dirs, corpus: options.corpus },
       };
     },
@@ -1190,6 +1327,9 @@ function seedClaims(seed: I0Seed | undefined, arm: ArmName): boolean {
   if (seed === undefined) return false;
   const expectation = seed.expect;
   if ('agreesAndMisses' in expectation) return expectation.agreesAndMisses.arm === arm;
+  if ('agreesAndRepairs' in expectation) return expectation.agreesAndRepairs.arm === arm;
+  if ('editServed' in expectation) return expectation.editServed.arm === arm;
+  if ('staleServed' in expectation) return expectation.staleServed.arm === arm;
   if ('documentsHole' in expectation) return expectation.documentsHole.arm === arm;
   return false;
 }
@@ -1210,15 +1350,148 @@ function cellTells(seed: I0Seed | undefined, arm: ArmName): { readonly prime: Te
 }
 
 /**
- * Run one cell: fresh directories, the fixture, state A, prepare, B, the plant, one measured run.
+ * The new tree's distinct keyed content keys, read off the store-off reference's dump: what
+ * an edit seed's measured run populates, from an arm no store reached.
+ *
+ * @param reference - The store-off arm's measured query run
+ * @returns The keys, sorted
+ */
+function newTreeKeys(reference: RunRecord | undefined): string[] {
+  if (reference === undefined) throw new Error('an editServed seed must run the query: its store-off dump names the new tree\'s keys');
+  const keyed = (rowsByRelation(reference.document).get('resource_realizations') ?? [])
+    .map((row) => JSON.parse(row) as { contentState: string; contentKey: string | null })
+    .flatMap((row) => (row.contentState === 'keyed' && row.contentKey !== null ? [row.contentKey] : []));
+  return [...new Set(keyed)].sort((a, b) => a.localeCompare(b));
+}
+
+/** Whether a content key names a document parser, so a miss looks a parse up for it. */
+function hasParser(contentKey: string): boolean {
+  return parserKindOf(contentKey) !== 'none';
+}
+
+/**
+ * Before an `editServed` cell's measured run: read the seed's uncovered keys and hold them for
+ * the tell, after asserting the primed store agrees with them (the one predicate calls exactly
+ * those keys of the new tree uncovered) and that the seed can tell reuse from none. A seed whose
+ * edit leaves no key with a parser covered is one where a miss that extracts every key and one
+ * that reuses agree, so it cannot pass.
+ *
+ * @param seed - The `editServed` seed of the cell's claimed arm
+ * @param dirs - The cell
+ * @param corpus - The corpus, in its measured state
+ * @param reference - The store-off arm's measured query run
+ */
+async function recordUncovered(seed: I0Seed, dirs: ArmDirs, corpus: string, reference: RunRecord | undefined): Promise<void> {
+  if (!('editServed' in seed.expect)) return;
+  const unmeasured = (seed.verbs ?? VERB_NAMES).filter((verb) => !isEditVerb(verb));
+  expect(unmeasured, `${seed.name}: verbs an edit seed has no count for`).toEqual([]);
+  const uncovered = seed.expect.editServed.uncovered(dirs, corpus);
+  expect(new Set(uncovered).size, `${seed.name}: uncovered keys listed twice`).toBe(uncovered.length);
+  const keys = newTreeKeys(reference);
+  const asked = [...new Set([...keys, ...uncovered])];
+  expect(
+    sortedKeys(await primedUncovered(dirs, asked)),
+    `${seed.name}: the keys the primed store does not cover, by the one predicate, are exactly the seed's`,
+  ).toEqual(sortedKeys(uncovered));
+  const parsed = keys.filter((key) => hasParser(key));
+  expect(uncovered.length, `${seed.name}: uncovered keys must be fewer than the new tree's keys with a parser`).toBeLessThan(parsed.length);
+  const refused = seed.expect.editServed.refused(dirs, corpus);
+  expect(refused.filter((key) => !uncovered.includes(key)), `${seed.name}: refused keys the seed does not list uncovered`).toEqual([]);
+  expect(
+    sortedKeys(refused),
+    `${seed.name}: the refused keys are exactly the new tree's keys the store-off reference refused a parse`,
+  ).toEqual(parseRefusedKeys(reference, keys));
+  uncoveredByCell.set(dirs.root, uncovered);
+  refusedByCell.set(dirs.root, refused);
+}
+
+/** The parse refusals no store files (`storableBlobFacts`): a limit hit, a worker lost. */
+const UNFILED_PARSE_REFUSALS: ReadonlySet<string> = new Set([BLOB_PARSE_LIMIT_EXCEEDED, BLOB_PARSE_WORKER_DIED]);
+
+/**
+ * The keys of the new tree whose parse the store-off reference refused with a code no store files.
+ *
+ * @param reference - The store-off arm's measured query run
+ * @param keys - The new tree's keys
+ * @returns The refused ones, sorted
+ */
+function parseRefusedKeys(reference: RunRecord | undefined, keys: readonly string[]): string[] {
+  if (reference === undefined) throw new Error('an editServed seed must run the query: its store-off dump names the refusals');
+  const refused = (rowsByRelation(reference.document).get(PROJECTION_TABLES.blobConditions.name) ?? [])
+    .map((row) => JSON.parse(row) as { blob: string; code: string })
+    .filter((row) => UNFILED_PARSE_REFUSALS.has(row.code) && keys.includes(row.blob))
+    .map((row) => row.blob);
+  return sortedKeys([...new Set(refused)]);
+}
+
+/** Keys sorted as every key list here is, a copy. */
+function sortedKeys(keys: readonly string[]): string[] {
+  return [...keys].sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * After an `editServed` cell's measured run: the new tree's keys its store still does not cover,
+ * by the one predicate, held for the tell to compare with the seed's refused keys.
+ *
+ * @param dirs - The cell
+ * @param reference - The store-off arm's measured query run
+ */
+async function recordUncoveredAfter(dirs: ArmDirs, reference: RunRecord | undefined): Promise<void> {
+  const keys = newTreeKeys(reference);
+  const uncovered = uncoveredByCell.get(dirs.root) ?? [];
+  uncoveredAfterByCell.set(dirs.root, await primedUncovered(dirs, [...new Set([...keys, ...uncovered])]));
+}
+
+/**
+ * The keys the cell's store does not cover, by the one blob-tier predicate
+ * (`uncoveredContentKeys` over `ALL_BLOB_REQUEST`), read through the store's own port.
+ *
+ * @param dirs - The primed cell
+ * @param keys - The keys to ask about
+ * @returns The uncovered ones, in `keys` order
+ */
+export async function primedUncovered(dirs: ArmDirs, keys: readonly string[]): Promise<string[]> {
+  const [file, ...others] = storeFilesUnder(dirs.store);
+  if (file === undefined || others.length > 0) throw new Error(`expected one projection store under ${dirs.store}`);
+  const store = openSqliteFactStore({ directory: safePath.join(file, '..') });
+  try {
+    return uncoveredContentKeys(await store.readBlobFacts(keys, ALL_BLOB_REQUEST), keys);
+  } finally {
+    await store.close();
+  }
+}
+
+/** The `editServed` seed whose claimed arm a cell runs, if any. */
+function editSeedOf(seed: I0Seed | undefined, arm: ArmName): I0Seed | undefined {
+  return seed !== undefined && 'editServed' in seed.expect && seed.expect.editServed.arm === arm ? seed : undefined;
+}
+
+/** One cell's recorded runs. */
+interface CellRuns {
+  readonly prime: RunRecord | undefined;
+  readonly intermediate: RunRecord | undefined;
+  readonly measured: RunRecord;
+}
+
+/**
+ * Run one cell: fresh directories, the fixture, state A, prepare, any intermediate step and its
+ * unmeasured run, B, the plant, one measured run.
+ *
+ * @param options - The build and subject
+ * @param seed - The seed, or `undefined` for the unseeded gate
+ * @param arm - The arm
+ * @param verb - The verb measured
+ * @param context - Every verb row, and the store-off reference's measured runs so far
+ * @returns The cell's runs
  */
 async function runCell(
   options: DifferentialOptions,
   seed: I0Seed | undefined,
   arm: ArmName,
   verb: VerbRow,
-  rows: VerbRows,
-): Promise<{ prime: RunRecord | undefined; measured: RunRecord }> {
+  context: { readonly rows: VerbRows; readonly reference: Partial<Record<VerbName, RunRecord>> },
+): Promise<CellRuns> {
+  const { rows } = context;
   const { corpus } = options.subject;
   const dirs = await freshCell(options.binPath);
   const env = { ...ARMS[arm].env(dirs), ...seed?.env?.(arm, dirs) };
@@ -1234,11 +1507,23 @@ async function runCell(
     // A warm arm primes with the subject's own query, so its prime and a measured dump are one statement.
     const tells = cellTells(seed, arm);
     const prime = await ARMS[arm].prepare(dirs, corpus, git, () => runner.run(rows.query, `${arm}:prime`), tells.prime);
+    const editSeed = editSeedOf(seed, arm);
+    const head = editSeed === undefined ? undefined : git(['rev-parse', 'HEAD']);
+    let intermediate: RunRecord | undefined;
+    if (seed?.intermediate !== undefined) {
+      await seed.intermediate(arm, dirs, corpus, git);
+      intermediate = await runner.run(verb, `${arm}:intermediate`);
+    }
     await seed?.toB?.(arm, dirs, corpus, git);
     await seed?.beforeRun?.(arm, dirs, corpus);
+    if (editSeed !== undefined) {
+      expect(git(['rev-parse', 'HEAD']), `${editSeed.name}: an edit seed moved HEAD`).toBe(head);
+      await recordUncovered(editSeed, dirs, corpus, context.reference.query);
+    }
     const measured = await runner.run(verb, `${arm}:measured`);
+    if (editSeed !== undefined) await recordUncoveredAfter(dirs, context.reference.query);
     if (!seedClaims(seed, arm)) tells.measured(measured, dirs);
-    return { prime, measured };
+    return { prime, intermediate, measured };
   } finally {
     seed?.restore?.(corpus);
   }
@@ -1274,7 +1559,7 @@ export const GATE_SLICES = {
  */
 export async function runDifferential(options: DifferentialOptions, selection: I0Seed | GateSlice): Promise<DifferentialResult> {
   const seed = 'slice' in selection ? undefined : selection;
-  const arms = selection.arms ?? ARM_NAMES;
+  const { arms } = selection;
   const verbs = selection.verbs ?? VERB_NAMES;
   expect(arms[0], 'store-off is the reference arm and runs first').toBe('storeOff');
   const measured = Object.fromEntries(ARM_NAMES.map((arm) => [arm, {}])) as Record<ArmName, Partial<Record<VerbName, RunRecord>>>;
@@ -1283,10 +1568,11 @@ export async function runDifferential(options: DifferentialOptions, selection: I
   for (const arm of arms) {
     for (const verb of verbs) {
       // eslint-disable-next-line no-await-in-loop -- one cell at a time: every cell rewrites the one corpus path
-      const cell = await runCell(options, seed, arm, rows[verb], rows);
+      const cell = await runCell(options, seed, arm, rows[verb], { rows, reference: measured.storeOff });
       measured[arm][verb] = cell.measured;
       runs[`${arm}:measured`] = { ...runs[`${arm}:measured`], [verb]: cell.measured };
       if (cell.prime !== undefined) runs[`${arm}:prime`] = { ...runs[`${arm}:prime`], [verb]: cell.prime };
+      if (cell.intermediate !== undefined) runs[`${arm}:intermediate`] = { ...runs[`${arm}:intermediate`], [verb]: cell.intermediate };
     }
   }
   return { arms, verbs, measured, runs, rows };
@@ -1462,6 +1748,217 @@ function expectAgreesAndMisses(result: DifferentialResult, arm: ArmName): void {
   expect(divergences(result)).toEqual([]);
 }
 
+/** The extent manifest's table (`projection-sqlite`'s `extents`): one row per extent the store files. */
+const EXTENTS_TABLE = 'extents';
+
+/**
+ * The cell's extent manifest: one entry per extent the store files, `<storeRootId>\0<storeTreeHash>\0
+ * <writtenAt>`, or none when the cell has no store yet. A write re-stamps `writtenAt`, so an entry
+ * the run added is one it wrote, even under a key the store already held.
+ *
+ * @param dirs - The cell
+ * @returns The entries, sorted
+ */
+function extentManifest(dirs: Pick<ArmDirs, 'store'>): string[] {
+  if (storeFilesUnder(dirs.store).length === 0) return [];
+  const rows = withStore(dirs, (database) => database
+    .prepare(`SELECT "storeRootId" AS root, "storeTreeHash" AS tree, "writtenAt" AS at FROM ${quoteIdentifier(EXTENTS_TABLE)}`)
+    .all() as unknown as Array<{ root: string; tree: string; at: string }>);
+  return rows.map((row) => `${row.root}\0${row.tree}\0${row.at}`).sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * The snapshot half of a stored extent key: `merge.ts`'s `storeKeyFor` files an extent under
+ * `<snapshot hash> <ambient inputs>`, and the snapshot hash holds no space.
+ *
+ * @param storeTreeHash - The stored key's tree half
+ * @returns The snapshot hash
+ */
+function snapshotHashOf(storeTreeHash: string): string {
+  const space = storeTreeHash.indexOf(' ');
+  return space === -1 ? storeTreeHash : storeTreeHash.slice(0, space);
+}
+
+/**
+ * The distinct snapshot hashes a set of manifest entries files extents under.
+ *
+ * @param entries - {@link extentManifest} entries
+ * @returns The hashes, sorted
+ */
+function snapshotHashesOf(entries: readonly string[]): string[] {
+  return [...new Set(entries.map((entry) => snapshotHashOf(entry.split('\0')[1] ?? '')))].sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Every snapshot hash the cell's store files an extent under: what a seed reads to key a later
+ * run to the primed tree.
+ *
+ * @param dirs - The cell
+ * @returns The distinct hashes, sorted
+ */
+export function heldSnapshotHashes(dirs: Pick<ArmDirs, 'store'>): string[] {
+  return snapshotHashesOf(extentManifest(dirs));
+}
+
+/**
+ * The snapshot hash a run populated under, read from the store's extent manifest: the run reports
+ * no key of its own (no debug-facts field, no row names it). A run that wrote filed its extents
+ * under the key it used, so the entries it added name it; a run that wrote nothing was served, and
+ * then the store must hold one tree, which is the one that served it. Never "the newest": after a
+ * miss the store holds the primed tree's extents beside the run's.
+ *
+ * @param run - A store-on run, its cell untouched since
+ * @returns The hash
+ */
+function runSnapshotHash(run: RunRecord): string {
+  const before = new Set(run.extentsBefore);
+  const after = extentManifest(run.cell.dirs);
+  const written = after.filter((entry) => !before.has(entry));
+  const trees = snapshotHashesOf(written.length > 0 ? written : after);
+  const [tree, ...others] = trees;
+  if (tree === undefined || others.length > 0) {
+    const how = written.length > 0 ? 'wrote' : 'was served by';
+    throw new Error(`${run.label} ${run.verb}: the run ${how} extents under ${String(trees.length)} trees (${trees.join(', ')}); the oracle cannot tell which is the run's`);
+  }
+  return tree;
+}
+
+/**
+ * The independent oracle (D20), the `editServed` tell's first assertion and callable alone: every
+ * member row of the extent the run served or wrote ({@link runSnapshotHash}), each keyed
+ * `resource_realizations` path and content key, must key the path's bytes on disk now
+ * (`computeContentKey` under the stored key's parser kind). A stale hit serves rows without
+ * reading anything, so comparing only the bytes the run read could never fail; this reads them
+ * itself. A path no longer on disk keys as `absent`, one it cannot read as the read's error.
+ *
+ * @param run - A store-on measured run, its cell untouched since
+ */
+function expectEditOracle(run: RunRecord): void {
+  const label = `${run.label} ${run.verb}`;
+  expect(storeFilesUnder(run.cell.dirs.store), `${label}: the oracle reads the cell's one store`).toHaveLength(1);
+  const tree = runSnapshotHash(run);
+  const realizations = quoteIdentifier(PROJECTION_TABLES.resourceRealizations.name);
+  const members = withStore(run.cell.dirs, (database) => database
+    .prepare(`SELECT DISTINCT "storeTreeHash" AS tree, "path", "contentKey" FROM ${realizations} WHERE "contentState" = 'keyed' AND "contentKey" IS NOT NULL`)
+    .all() as unknown as Array<{ tree: string; path: string; contentKey: string }>)
+    .filter((row) => snapshotHashOf(row.tree) === tree);
+  expect(members.length, `${label}: the run's extent (${tree}) holds no keyed member to check`).toBeGreaterThan(0);
+  const distinct = new Map(members.map((row) => [`${row.path}\0${row.contentKey}`, row]));
+  const stale = [...distinct.values()]
+    .map((row) => ({ path: row.path, stored: row.contentKey, onDisk: diskKeyOf(run.cell.corpus, row.path, row.contentKey) }))
+    .filter((row) => row.onDisk !== row.stored)
+    .sort((a, b) => a.path.localeCompare(b.path));
+  expect(stale, `${label}: the extent under the run's key (${tree}) keys members to bytes that are not on disk`).toEqual([]);
+}
+
+/**
+ * The key of a corpus path's bytes on disk now, under a stored key's parser kind.
+ *
+ * @param corpus - The corpus
+ * @param path - The root-relative path
+ * @param storedKey - The key the store holds for it, whose parser kind is used
+ * @returns The key; `absent` when the path is gone, or the read's error when it cannot be read
+ */
+function diskKeyOf(corpus: string, path: string, storedKey: string): string {
+  let bytes: Buffer;
+  try {
+    bytes = corpusBytes(corpus, path);
+  } catch (error) {
+    return isPathAbsentError(error) ? 'absent' : `unreadable: ${String(error)}`;
+  }
+  return computeContentKey(bytes, parserKindOf(storedKey));
+}
+
+/**
+ * An edit seed's tell over its warm arm, in order: the oracle on every verb; agreement with
+ * store-off (exit code, findings in order, and the dump's rows; the dump sorts its rows, `ORDER BY
+ * relation, row` in `DUMP_SQL`, so row ORDER is not compared here: the tier-reuse integration test's
+ * "row for row, in order" `toEqual` holds it); then per verb: the store after the run leaves exactly the
+ * refused keys uncovered; and from its {@link populationCounts} and its {@link EDIT_VERBS} row:
+ * `extent.derived` its populations; parse lookups; `blob.storeServed`; its extent reads; a
+ * write; and a derived origin.
+ *
+ * With `D` distinct keys of the new tree, `U` uncovered (`R` of them refused, `R` within `U`),
+ * `P` populations, and `Up`/`Rp` the uncovered/refused keys with a parser:
+ *
+ * ```text
+ * parse lookups      = Up + Rp
+ * blob.storeServed   = (D - U) + (P - 1) * (D - R)
+ * ```
+ *
+ * The first population looks up each uncovered key with a parser and is served every other; its
+ * write files every uncovered key but the refused ones, so each later population is served all
+ * but the refused keys. A refusal is filed nowhere, so no store ever holds it: this is an exact
+ * account, not an allowance.
+ *
+ * Lookups are `parseLookupsIn`'s sum (`PARSE_LOOKUP_COUNTERS`), which counts a refused parse
+ * TWICE: the worker's dispatch (`parse.dispatched`) and its output-cap breach
+ * (`parse.refused.keyDetermined`, `parse-pool.ts` `settleJob`); a breach of a cache hit is
+ * likewise `parse.cache.hit` plus `parse.refused.keyDetermined`. So each refused key with a
+ * parser adds `Rp` once more on top of its place in `Up`. A later population of the same run pays
+ * no lookup for it: the run's one dispatcher holds each key's parse, rejection included, for the
+ * run (`ParseDispatcher`'s `#parsed`), so the later ask settles from that and counts nothing. The
+ * lookup terms are per run, not per population.
+ *
+ * @param result - The recorded runs
+ * @param arm - The warm arm the seed claims
+ */
+function expectEditServed(result: DifferentialResult, arm: ArmName): void {
+  const runs = result.verbs.map((verb) => {
+    const run = result.measured[arm][verb];
+    if (run === undefined) throw new Error(`no ${arm} run of ${verb}`);
+    return run;
+  });
+  for (const run of runs) expectEditOracle(run);
+  expectSameAnswers(result);
+  const keys = newTreeKeys(result.measured.storeOff.query);
+  const recorded = (run: RunRecord): { uncovered: readonly string[]; refused: readonly string[] } => {
+    const uncovered = uncoveredByCell.get(run.cell.dirs.root);
+    const refused = refusedByCell.get(run.cell.dirs.root);
+    const after = uncoveredAfterByCell.get(run.cell.dirs.root);
+    if (uncovered === undefined || refused === undefined || after === undefined) throw new Error(`${run.label} ${run.verb}: no uncovered keys recorded for this cell`);
+    expect(sortedKeys(after), `${run.label} ${run.verb}: after the run the store covers every key of the new tree but the refused ones`).toEqual(sortedKeys(refused));
+    return { uncovered, refused };
+  };
+  // Every cell's store first (`map` runs eagerly), so a count's red on one verb never hides another's store.
+  for (const { run, uncovered, refused } of runs.map((run) => ({ run, ...recorded(run) }))) {
+    const label = `${run.label} ${run.verb}`;
+    if (!isEditVerb(run.verb)) throw new Error(`${label}: an edit seed measures ${Object.keys(EDIT_VERBS).join(' and ')} only`);
+    const scope: EditVerbScope = EDIT_VERBS[run.verb];
+    const counts = populationCounts(run.work);
+    expect(counts['extent.derived'], `${label}: populations derived over the edited tree`).toBe(scope.populations);
+    expect(parseLookupsIn(counts), `${label}: parse lookups, one per uncovered key with a parser, and a refused one's dispatch and refusal both counted`)
+      .toBe(uncovered.filter((key) => hasParser(key)).length + refused.filter((key) => hasParser(key)).length);
+    expect(counts['blob.storeServed'], `${label}: the first population's covered keys, then every key but the refused per later population`)
+      .toBe(keys.length - uncovered.length + (scope.populations - 1) * (keys.length - refused.length));
+    expect(counts['store.reads.extent'], `${label}: extent reads`).toBe(scope.extentReads);
+    expect(storeCharges(run), `${label}: the miss writes`).toContain(CRAWL_STORE_WRITE_ID);
+    expectOrigin(run, 'derived');
+  }
+}
+
+/**
+ * The oracle's red proof over a stale hit: on every verb of the arm, {@link expectEditOracle}
+ * fails, and its failure names the edited path.
+ *
+ * @param result - The recorded runs
+ * @param stale - The arm made to key the pre-edit tree, and the path edited since the prime
+ */
+function expectStaleServed(result: DifferentialResult, stale: { readonly arm: ArmName; readonly editedPath: string }): void {
+  for (const verb of result.verbs) {
+    const run = result.measured[stale.arm][verb];
+    if (run === undefined) throw new Error(`no ${stale.arm} run of ${verb}`);
+    let failure = '';
+    try {
+      expectEditOracle(run);
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+    expect(failure, `${run.label} ${verb}: the oracle passed a run served the pre-edit extent`).not.toBe('');
+    expect(failure, `${run.label} ${verb}: the oracle's failure names the edited path`).toContain(stale.editedPath);
+  }
+}
+
 function expectDocumentsHole(result: DifferentialResult, arm: ArmName): void {
   const blobScoped = new Set(DUMPED_RELATIONS.filter((relation) => relation.blobScoped).map((relation) => relation.name));
   for (const verb of result.verbs) {
@@ -1501,9 +1998,11 @@ function expectDocumentsHole(result: DifferentialResult, arm: ArmName): void {
 export function expectSeed(seed: I0Seed, result: DifferentialResult): void {
   const expectation = seed.expect;
   if ('diverges' in expectation) expectDiverges(result, expectation.diverges);
-  else if ('agrees' in expectation) expectSameAnswers(result);
+  else if ('agrees' in expectation || 'agreesAndRepairs' in expectation) expectSameAnswers(result);
   else if ('refuses' in expectation) expectRefuses(result, expectation.refuses);
   else if ('agreesAndMisses' in expectation) expectAgreesAndMisses(result, expectation.agreesAndMisses.arm);
+  else if ('editServed' in expectation) expectEditServed(result, expectation.editServed.arm);
+  else if ('staleServed' in expectation) expectStaleServed(result, expectation.staleServed);
   else expectDocumentsHole(result, expectation.documentsHole.arm);
   const consumed: Partial<Record<RunLabel, Partial<Record<VerbName, RunRecord>>>> = {};
   for (const label of seed.consumed.runs) {
@@ -1786,6 +2285,7 @@ export function seedTitle(seed: I0Seed): string {
   const expectation = seed.expect;
   if ('documentsHole' in expectation) return `${seed.name} documents the hole: ${expectation.documentsHole.because}`;
   if ('agrees' in expectation) return `${seed.name} agrees: ${expectation.agrees.because}`;
+  if ('agreesAndRepairs' in expectation) return `${seed.name} agrees and repairs: ${expectation.agreesAndRepairs.because}`;
   return `${seed.name}: ${Object.keys(expectation)[0] ?? ''}`;
 }
 
@@ -1952,12 +2452,8 @@ interface ResourcesPhaseSpend {
  * @returns The spend
  */
 export function resourcesPhaseSpend(work: readonly WorkCounterDump[]): ResourcesPhaseSpend {
-  const phases = work.flatMap((dump) => {
-    const phase = dump.phases['resources'];
-    return phase === undefined ? [] : [phase];
-  });
-  const [phase, ...others] = phases;
-  if (phase === undefined || others.length > 0) throw new Error(`expected one dump with a resources phase, found ${String(phases.length)}`);
+  const phase = resourcesPhaseOf(work);
+  if (phase === undefined) throw new Error('expected one dump with a resources phase, found 0');
   return {
     read: phase['content.read'],
     hashedBytes: phase['content.hashedBytes'],
@@ -1965,6 +2461,37 @@ export function resourcesPhaseSpend(work: readonly WorkCounterDump[]): Resources
     admitted: phase['registry.admitted'],
     probed: phase['fs.stat'] - phase['registry.admitted'],
   };
+}
+
+/**
+ * The `resources` phase of the one dump that carries it (the `vat validate` process; its
+ * checks child is another process), or `undefined` when no dump does.
+ *
+ * @param work - A run's CLI dumps
+ * @returns The phase's counts
+ */
+function resourcesPhaseOf(work: readonly WorkCounterDump[]): Readonly<Record<WorkCounter, number>> | undefined {
+  const phases = work.flatMap((dump) => {
+    const phase = dump.phases['resources'];
+    return phase === undefined ? [] : [phase];
+  });
+  if (phases.length > 1) throw new Error(`expected at most one dump with a resources phase, found ${String(phases.length)}`);
+  return phases[0];
+}
+
+/**
+ * What a run's population counted, never summed over every process's dump: the `resources`
+ * phase of the parent (`vat validate`), or, for a verb that runs no phases, its one CLI process.
+ *
+ * @param work - A run's CLI dumps
+ * @returns The counts
+ */
+function populationCounts(work: readonly WorkCounterDump[]): Readonly<Record<WorkCounter, number>> {
+  const phase = resourcesPhaseOf(work);
+  if (phase !== undefined) return phase;
+  const [only, ...others] = work;
+  if (only === undefined || others.length > 0) throw new Error(`expected one CLI dump for a verb without phases, found ${String(work.length)}`);
+  return only.counters;
 }
 
 /** A file a hydrated resources phase still reads, with its size. */

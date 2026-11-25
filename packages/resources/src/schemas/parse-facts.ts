@@ -36,13 +36,11 @@
  * and "this link never had one" are the same bytes. No validator can separate
  * them, and no amount of strictness changes that.
  *
- * It is closed one level up instead, by never letting the two kinds of entry
- * share a cache directory: {@link parseFactsShapeSource} feeds this schema's own
- * shape into the dev namespace, and an installed build's namespace is the VAT
- * version, which moves on every release. What remains outside both is a change
- * to what a parse *means* with its shape unchanged — swapping the token
- * estimator, say — and `vat cache clear` owns that, deliberately: a developer
- * who changes what a parse means knows they did. See `cache-namespace.ts`.
+ * Across releases it is closed one level up: the cache namespace is the VAT
+ * version, which moves on every release. Within one version nothing closes it,
+ * by decision: a developer who adds an optional field, or changes what a parse
+ * *means* with its shape unchanged (swapping the token estimator, say), clears
+ * the cache with `vat cache clear`. See `cache-namespace.ts`.
  *
  * ## Nested schemas are NOT strict, on purpose
  *
@@ -203,31 +201,20 @@ export function schemaShapeSource(schema: z.ZodTypeAny): string {
 }
 
 /**
- * {@link ParseFactsSchema}'s own shape — the one input the cache namespace takes
- * from this module.
+ * {@link ParseFactsSchema}'s own shape, which a parse-conformance report
+ * records (`parse-conformance.ts`).
  *
- * It exists because of the ❌ row in this file's docstring: an added *optional*
- * field is invisible to validation, so the entries that predate it must be kept
- * in a different directory instead of being rejected on read. Feeding this
- * string into `devNamespaceDigest` does exactly that, and it does it for every
- * other shape edit too — the reparse is then a consequence of the edit, not of
- * anyone remembering.
+ * It sees the ❌ row in this file's docstring: an added *optional* field is
+ * invisible to validation, and moves this string.
  *
- * Three properties make it usable as a namespace input:
- *
- * - **Derived** — generated from the schema itself, so it cannot fall behind the
- *   way a hand-bumped revision constant did (see `cache-namespace.ts`). Pinned
- *   by a test that adds an optional field and expects a different string.
- * - **Stable across a rebuild** — by construction, not by care: this reads no
- *   file, no mtime and no module state, so `tsc --build` cannot move it. That is
- *   what separates it from the emitted-module fingerprint this repo removed,
- *   which minted a namespace per build.
- * - **Deterministic across processes** — same build, same string, on any
+ * - **Derived**: generated from the schema itself, so it cannot fall behind the
+ *   way a hand-bumped revision constant would. Pinned by a test that adds an
+ *   optional field and expects a different string.
+ * - **Stable across a rebuild**: this reads no file, no mtime and no module
+ *   state, so `tsc --build` cannot move it.
+ * - **Deterministic across processes**: same build, same string, on any
  *   machine. Pinned by a test. "Same build" includes the lockfile: bumping
- *   `zod-to-json-schema` can change how a schema is emitted and so move this
- *   string once. That is the only input here that is not VAT's own code, it
- *   costs one rescan, and it is arguably the right answer anyway — a converter
- *   change is a change to what this digest can see.
+ *   `zod-to-json-schema` can change how a schema is emitted.
  *
  * @returns Canonical JSON of the schema's shape, prose stripped
  */

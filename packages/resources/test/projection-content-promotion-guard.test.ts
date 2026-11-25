@@ -63,7 +63,7 @@ import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { afterClosurePromotion, populate } from '../src/projection/merge.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
 
-import { populateBlobsOnOwnDispatcher } from './blob-fixture-population.js';
+import { populateBlobsOnOwnDispatcher, storeOffBlobStage } from './blob-fixture-population.js';
 import { inOwnRun } from './helpers/population-run.js';
 import { createGitRepo, setupSubdirTestSuite, writeFileIn } from './test-helpers.js';
 
@@ -177,7 +177,7 @@ describe('demand promotion, over a row the shipped deferral policy produced', ()
     expect(statesAt(builder, DEFERRED_DOC)).toEqual([{ state: 'keyed', key }]);
 
     const blobsBeforePromotion = builder.build().blobs.length;
-    await withParseDispatcher(async (dispatcher) => afterClosurePromotion(builder, attemptsBeforeClosure, dispatcher));
+    await withParseDispatcher(async (dispatcher) => afterClosurePromotion(builder, attemptsBeforeClosure, storeOffBlobStage(builder, dispatcher)));
 
     // One blob, not two: `DEFERRED_LEAF` is still deferred, so a stage that
     // simply re-derived everything keyed would add a different number of rows.

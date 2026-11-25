@@ -60,6 +60,7 @@
  */
 
 import {
+  appendAll,
   countWork,
   CRAWL_BLOB_POPULATE_ID,
   CRAWL_STORE_READ_ID,
@@ -93,36 +94,42 @@ import { canonicalJson, extentDigest } from './digest.js';
 import {
   assertHarnessSettled,
   dispatcherHarnessFacts,
-  diskHarnessContentReader,
   harnessUnsettledKeys,
   runHarnessPass,
+  storedHarnessRows,
+  type StoredHarnessRows,
 } from './harness/harness-pass.js';
 import { HARNESS_PROFILES, type HarnessProfile } from './harness/profile.js';
 import { rootIdFor } from './identity.js';
 import { ProjectionBuilder, type Projection } from './projection.js';
 import { collectionMimeConflictCondition } from './realizations.js';
 import { type CollectionMimeResolver, createCollectionMimeResolver } from './router.js';
-import type { PopulationRun } from './run-population.js';
+import { diskRunContentSource, type PopulationRun, type RunContentSource } from './run-population.js';
 import {
   assembleProjection,
+  EMPTY_STORED_TIER,
   emptyBlobRows,
+  joinStoredTiers,
   keyedContentKeys,
   selectRequestedContexts,
   selectRequestedRows,
+  storedBlobTier,
   uncoveredContentKeys,
   type RequestedContributor,
+  type StoredBlobTier,
 } from './store-hydration.js';
 import {
   ALL_BLOB_REQUEST,
   ALL_EXTENT_REQUEST,
   splitProjectionByScope,
   type ExtentKey,
+  type HarnessPair,
   type ExtentRequest,
   type ExtentScopedRows,
   type ExtentScopedTableName,
   type FactStore,
 } from './store.js';
-import { readBlobTier } from './stored-admission.js';
+import { hydratesUnder, readBlobTier } from './stored-admission.js';
 
 /**
  * The pass number every driver-placed row in the `base` stratum carries.
@@ -321,6 +328,17 @@ export interface PopulateOptions {
  * pair of spreads, and a fourth would have written a fourth copy — one of which
  * would eventually pass `undefined` and quietly change what the store is asked.
  *
+ * ## The one decision whether a run may use its store
+ *
+ * The store is carried only when the run parses under the limits its facts were
+ * filed under ({@link hydratesUnder}). A parse the run's own limits stop is never
+ * stored, so under other limits no stored row can stand for this run. Decided
+ * here, where every lane resolves the run's store, so every reader downstream
+ * (the stored membership read, `populate`'s extent hit and blob-tier read,
+ * admission, the write) gets the store or none, and such a run is a store-off
+ * run in every count. `RunPopulation` makes the same decision for the run's own
+ * handle, so a run whose limits differ never opens its store.
+ *
  * @param options - Whatever the lane received from ITS caller
  * @returns A spreadable object carrying only the oracles that are actually present
  */
@@ -330,10 +348,11 @@ export function populationOracles(options: {
   cache?: PopulationCache | undefined;
   collections?: Readonly<Record<string, CollectionConfig>> | undefined;
 }): Pick<PopulateOptions, 'run' | 'gitTracker' | 'cache' | 'collections'> {
+  const { cache } = options;
   return {
     run: options.run,
     ...(options.gitTracker !== undefined && { gitTracker: options.gitTracker }),
-    ...(options.cache !== undefined && { cache: options.cache }),
+    ...(cache !== undefined && hydratesUnder(options.run.dispatcher.limits) && { cache }),
     ...(options.collections !== undefined && { collections: options.collections }),
   };
 }
@@ -613,7 +632,8 @@ export class ClosureNonConvergenceError extends VatError {
  * and no record that git was ever asked, which is exactly the empty-extent-as-a-
  * result posture `ContributorRegistry.forKind` already refuses.
  *
- * @param options - Root, contributors, per-contributor parameters and the cap
+ * @param options - Root, contributors, per-contributor parameters and the cap;
+ *   its store as {@link populationOracles} resolved it for the run
  * @returns The frozen projection every registered contributor agreed on, and
  *   the {@link PopulationOutcome} that says whether the store served it
  * @throws {@link ClosureNonConvergenceError} when the closure stratum is still
@@ -650,9 +670,9 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
   // re-run's, every harness pass's memory-file reads, and every other lane of the
   // run share its one pool, which the run's owner shuts down. Built lazily: a
   // run that parses nothing starts no worker.
-  const projection = await deriveProjection(options, { parseContent, routing, dispatcher: options.run.dispatcher });
-  const stored = await writeCachedProjection(options, rootId, parseContent, projection, routing);
-  return { projection, outcome: populationOutcome(stored, storeMissFor(cached.missed, projection)) };
+  const derived = await deriveProjection(options, { parseContent, routing, dispatcher: options.run.dispatcher });
+  const stored = await writeCachedProjection(options, rootId, parseContent, derived, routing);
+  return { projection: derived.projection, outcome: populationOutcome(stored, storeMissFor(cached.missed, derived.projection)) };
 }
 
 /**
@@ -675,14 +695,81 @@ interface DerivationRun {
 }
 
 /**
+ * What a derivation produced, and what it took from the store: what the write
+ * reports as covered and settled at read (`FactStore.writeBlobFacts`).
+ */
+interface Derivation {
+  readonly projection: Projection;
+  /** The keys the one blob-tier predicate called covered in the derivation's reads. */
+  readonly coveredAtRead: readonly string[];
+  /** The reached pairs the harness passes served from those reads. */
+  readonly settledAtRead: readonly HarnessPair[];
+}
+
+/**
+ * The stored blob tier one derivation reads: the base stratum's keys first, then
+ * any key a demand promotion added that no earlier read asked about.
+ */
+export interface StoredTierReads {
+  /** Every read so far, as one tier. */
+  current(): StoredBlobTier;
+  /**
+   * Read the keys no earlier read asked about, only when there are any.
+   *
+   * @param contentKeys - The keys the derivation now holds
+   * @returns Every read so far, as one tier
+   */
+  cover(contentKeys: readonly string[]): Promise<StoredBlobTier>;
+}
+
+/**
+ * The tier reads of one derivation, over `store`.
+ *
+ * @param store - The run's store, or undefined for a run with none (or that parses no content): nothing is read
+ * @returns The reads
+ */
+export function storedTierReads(store: FactStore | undefined): StoredTierReads {
+  const asked = new Set<string>();
+  let tier = EMPTY_STORED_TIER;
+  return {
+    current: () => tier,
+    cover: async (contentKeys) => {
+      const fresh = contentKeys.filter((key) => !asked.has(key));
+      if (store === undefined || fresh.length === 0) return tier;
+      for (const key of fresh) asked.add(key);
+      // Every table and every form: a covered key's rows are emitted into the
+      // projection, the lexical references and the harness tables included.
+      const read = storedBlobTier(await readBlobTier(store, fresh, ALL_BLOB_REQUEST), fresh);
+      tier = joinStoredTiers(tier, read);
+      return tier;
+    },
+  };
+}
+
+/**
+ * What the blob stage runs on: the run's dispatcher and content source, and the
+ * derivation's reads of the stored tier.
+ */
+export interface BlobStage {
+  readonly dispatcher: ParseDispatcher;
+  readonly content: RunContentSource;
+  readonly tier: StoredTierReads;
+}
+
+/**
  * Derive the projection: every contributor, the blob stage, the harness passes
  * and the closure fixpoint, into one builder — {@link populate} on a store miss.
  *
+ * The stored blob tier is read after the base stratum, for the keys it
+ * recorded, on every deriving path: an edit moves the tree key, so the extent
+ * misses and this is the only read that can find the unchanged files' rows. A
+ * covered key is emitted from the store; only the rest are read and parsed.
+ *
  * @param options - The run's options
  * @param run - The run's parse decision, routing and dispatcher
- * @returns The frozen projection
+ * @returns The frozen projection, and what it took from the store
  */
-async function deriveProjection(options: PopulateOptions, run: DerivationRun): Promise<Projection> {
+async function deriveProjection(options: PopulateOptions, run: DerivationRun): Promise<Derivation> {
   // Full derivation, every time it runs, until the incremental extent lands (ADR
   // register: full extent derivation is a counted cost).
   countWork('extent.derived', 1);
@@ -742,7 +829,13 @@ async function deriveProjection(options: PopulateOptions, run: DerivationRun): P
   //
   // Nothing observes the stage's counters: what a user is told about refused
   // content is read from the rows it writes, which a store hit returns too.
-  if (parseContent) await runBlobStage(builder, dispatcher);
+  // One content source for the blob stage and the harness pass, over the run's cache.
+  const stage: BlobStage = {
+    dispatcher,
+    content: diskRunContentSource(options.run.content),
+    tier: storedTierReads(parseContent ? options.cache?.store : undefined),
+  };
+  if (parseContent) await runBlobStage(builder, stage);
   const attemptsBeforeClosure = builder.contentPromotionAttempts;
 
   // The harness facts, LAZILY: derived only for what a harness reaches. Before
@@ -751,7 +844,7 @@ async function deriveProjection(options: PopulateOptions, run: DerivationRun): P
   // every fixpoint iteration, because a declared closure's members arrive
   // there; and once more after the promotion, which can key a reachable path.
   // Under `'skip'` no blob has a `blobs` row, so there is nothing to reach.
-  const harness = harnessStageFor(builder, dispatcher);
+  const harness = harnessStageFor(builder, stage);
   await harness.run();
 
   await iterateClosure(
@@ -763,7 +856,7 @@ async function deriveProjection(options: PopulateOptions, run: DerivationRun): P
     options.onContributorTiming,
   );
 
-  if (parseContent) await afterClosurePromotion(builder, attemptsBeforeClosure, dispatcher);
+  if (parseContent) await afterClosurePromotion(builder, attemptsBeforeClosure, stage);
   await harness.run();
   // A reached blob with no facts after the last pass is a producer bug: every
   // strict reader of this projection would throw on it later, far from here.
@@ -782,7 +875,7 @@ async function deriveProjection(options: PopulateOptions, run: DerivationRun): P
   // Before `build()`, because a frozen projection takes no more rows.
   recordMimeConflicts(builder, routing);
 
-  return builder.build();
+  return { projection: builder.build(), coveredAtRead: [...stage.tier.current().covered], settledAtRead: harness.served() };
 }
 
 /**
@@ -1212,7 +1305,7 @@ function unlistableRowsStillHold(conditions: readonly RealizationConditionRow[],
  * @param options - The run's options, including its cache if it has one
  * @param rootId - This run's corpus root id
  * @param parseContent - Whether this run read and parsed content
- * @param projection - What the run produced
+ * @param derived - What the run produced, and what its reads covered and settled
  * @param routing - The run's parse routing, whose fingerprint is part of the key
  * @returns What happened to the extent — the miss half of {@link PopulationOutcome.stored}
  */
@@ -1220,17 +1313,19 @@ async function writeCachedProjection(
   options: PopulateOptions,
   rootId: string,
   parseContent: boolean,
-  projection: Projection,
+  derived: Derivation,
   routing: CollectionMimeResolver,
 ): Promise<Exclude<PopulationOutcome['stored'], 'hit'>> {
   const cache = options.cache;
   if (cache === undefined) return 'no-store';
 
   const startedAt = crawlTimingStart();
-  const { blobs, extent } = splitProjectionByScope(projection);
+  const { blobs, extent } = splitProjectionByScope(derived.projection);
   // Blob facts are keyed by the bytes actually read, so they are true whatever
-  // the tree did meanwhile. The extent is keyed by the tree, so it is not.
-  if (parseContent) await cache.store.writeBlobFacts(storableBlobFacts(blobs));
+  // the tree did meanwhile. The extent is keyed by the tree, so it is not. What
+  // the reads covered and settled is re-stamped, not rewritten.
+  const { coveredAtRead, settledAtRead } = derived;
+  if (parseContent) await cache.store.writeBlobFacts({ rows: storableBlobFacts(blobs), coveredAtRead, settledAtRead });
   const unchanged = cache.treeUnchanged();
   if (unchanged) {
     await cache.store.writeExtent(storeKeyFor(options, rootId, cache, routing), extent);
@@ -1283,12 +1378,16 @@ function contentParsingFor(options: PopulateOptions): boolean {
  * biased the one comparison the seam exists to support, and only on one side;
  * see `CRAWL_BLOB_POPULATE_ID`.
  *
+ * The stored tier is read here, for the keys the base recorded: a covered key's
+ * rows replace its read and parse, so the read belongs to the stage it saves.
+ *
  * @param builder - The builder to derive into
- * @param dispatcher - The run's dispatcher
+ * @param stage - The run's dispatcher and content source, and the derivation's tier reads
  */
-async function runBlobStage(builder: ProjectionBuilder, dispatcher: ParseDispatcher): Promise<void> {
+async function runBlobStage(builder: ProjectionBuilder, stage: BlobStage): Promise<void> {
   const startedAt = crawlTimingStart();
-  await populateBlobs(builder, { dispatcher });
+  const stored = await stage.tier.cover(keyedContentKeys(builder.base()));
+  await populateBlobs(builder, { dispatcher: stage.dispatcher, content: stage.content, stored });
   recordCrawlPass(CRAWL_BLOB_POPULATE_ID, 'base', BASE_STRATUM_PASS, startedAt);
 }
 
@@ -1345,14 +1444,22 @@ async function runBlobStage(builder: ProjectionBuilder, dispatcher: ParseDispatc
  * would mean walking a real tree to reach a decision that is a comparison of
  * two integers. {@link populate} is its only production caller.
  *
+ * ## A promoted key is covered or parsed by the same rule
+ *
+ * A key a promotion added was not among the keys the stage's tier read asked
+ * about, so the stored tier is read once more, for those keys only and only
+ * when there are any ({@link StoredTierReads.cover}); a promoted key the store
+ * covers is served, the rest are parsed.
+ *
  * @param builder - The builder whose closure stratum has just converged
  * @param attemptsBefore - `contentPromotionAttempts` as it stood before the stratum
- * @param dispatcher - The run's dispatcher, which the blob stage parsed on
+ * @param stage - The run's dispatcher and content source, which the blob stage
+ *   ran on, and the derivation's tier reads
  */
 export async function afterClosurePromotion(
   builder: ProjectionBuilder,
   attemptsBefore: number,
-  dispatcher: ParseDispatcher,
+  stage: BlobStage,
 ): Promise<void> {
   if (builder.contentPromotionAttempts === attemptsBefore) {
     return;
@@ -1362,9 +1469,8 @@ export async function afterClosurePromotion(
   //
   // Files the SAME row as the pre-closure run — one accounting unit, so `calls`
   // reads as "how many times the stage ran" and its ms/call stays divisible.
-  const startedAt = crawlTimingStart();
-  await populateBlobs(builder, { dispatcher });
-  recordCrawlPass(CRAWL_BLOB_POPULATE_ID, 'base', BASE_STRATUM_PASS, startedAt);
+  // The base's keys were all asked about, so its tier read reads the promoted ones only.
+  await runBlobStage(builder, stage);
 }
 
 /** Every harness a population derives facts for. */
@@ -1376,36 +1482,50 @@ const HARNESS_PROFILE_LIST: readonly HarnessProfile[] = Object.values(HARNESS_PR
  */
 const HARNESS_PASS_ID = 'harness-pass';
 
-/** One population's harness pass, bound to its builder and reader. */
+/** One population's harness pass, bound to its builder, its content source and its stored tier. */
 interface HarnessStage {
-  /** Run the pass to exhaustion; resolves to the facts rows it added. */
+  /** Run the pass to exhaustion; resolves to the facts rows it added, derived and served. */
   run(): Promise<number>;
   /** Throw `HarnessFactsAbsentError` for a reached blob with no facts, excusing only what a pass could not read. */
   assertSettled(): void;
+  /** Every pair a pass served from the stored tier: what the write reports as settled at read. */
+  served(): readonly HarnessPair[];
 }
 
 /**
  * Bind the harness pass to one population: every harness, the run's content
- * cache as the reader, the run's dispatcher as what reads it, and the keys any
- * pass could not read.
+ * source as the reader, the run's dispatcher as what reads it, the stored
+ * tier's harness rows as what a reached pair is served from first, and the
+ * keys any pass could not read.
+ *
+ * The stored rows are taken from the tier as it stands at each pass, so a
+ * pass after a promotion serves the promoted keys the store covers too.
  *
  * @param builder - The population's builder
- * @param dispatcher - The run's dispatcher
+ * @param stage - The run's dispatcher and content source, and the derivation's tier reads
  * @returns The stage
  */
-function harnessStageFor(builder: ProjectionBuilder, dispatcher: ParseDispatcher): HarnessStage {
-  const reader = diskHarnessContentReader(builder.base().contentCache);
-  const derive = dispatcherHarnessFacts(dispatcher);
+function harnessStageFor(builder: ProjectionBuilder, stage: BlobStage): HarnessStage {
+  const derive = dispatcherHarnessFacts(stage.dispatcher);
   const unreadable = new Set<string>();
+  const served: HarnessPair[] = [];
+  let indexed: { readonly tier: StoredBlobTier; readonly rows: StoredHarnessRows } | undefined;
+  const storedRows = (): StoredHarnessRows => {
+    const tier = stage.tier.current();
+    if (indexed?.tier !== tier) indexed = { tier, rows: storedHarnessRows(tier) };
+    return indexed.rows;
+  };
   return {
     run: async () => {
-      const result = await runHarnessPass(builder, HARNESS_PROFILE_LIST, reader, derive);
+      const result = await runHarnessPass(builder, HARNESS_PROFILE_LIST, stage.content, derive, storedRows());
       for (const key of result.unreadableKeys) unreadable.add(key);
-      return result.derived;
+      appendAll(served, result.served);
+      return result.derived + result.served.length;
     },
     assertSettled: () => {
       assertHarnessSettled(builder.base(), HARNESS_PROFILE_LIST, unreadable);
     },
+    served: () => [...served],
   };
 }
 

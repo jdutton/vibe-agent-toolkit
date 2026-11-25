@@ -86,8 +86,8 @@ export interface SnapshotManifest {
   /** `packages/cli/package.json`'s version — which VAT produced this. */
   vatVersion: string;
   /**
-   * The cache namespace this capture ran under — `<version>` installed, or
-   * `<version>-dev-<hash>` from a checkout.
+   * The cache namespace this capture ran under: the VAT version (a capture by
+   * an earlier build may carry that build's `-dev-<hash>` suffix).
    *
    * Provenance only; it is **never compared**. Content keys no longer carry a
    * schema version, so two builds of VAT produce identical keys for identical

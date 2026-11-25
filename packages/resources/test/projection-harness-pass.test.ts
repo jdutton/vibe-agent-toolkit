@@ -5,23 +5,27 @@
  * extent, and for nothing else.
  */
 
-import { compareCodeUnits, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, readWorkCounters, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
 
-import { computeContentKey, inMemoryContent } from '../src/content-key.js';
+import { computeContentKey, keyContent } from '../src/content-key.js';
 import { ParseLimitError, ParseWorkerDiedError } from '../src/parse-limits.js';
-import { BLOB_PARSE_LIMIT_EXCEEDED, BLOB_PARSE_WORKER_DIED } from '../src/projection/blob-population.js';
+import { BLOB_PARSE_LIMIT_EXCEEDED, BLOB_PARSE_WORKER_DIED } from '../src/projection/blob-condition-codes.js';
+import { harnessRowsFor } from '../src/projection/blob-facts.js';
 import { describeBlobRefusals, notAdmittedRealizations } from '../src/projection/blob-refusals.js';
 import { RunContentCache } from '../src/projection/content-cache.js';
 import { extentContextId } from '../src/projection/contributors/context-id.js';
 import { CLAUDE_CODE, CLAUDE_OVERSIZE_BYTES } from '../src/projection/harness/claude-code.js';
-import { runHarnessPass, type HarnessContentReader, type HarnessFactsDeriver } from '../src/projection/harness/harness-pass.js';
+import { runHarnessPass, storedHarnessRows, type HarnessFactsDeriver } from '../src/projection/harness/harness-pass.js';
 import { harnessFrontier } from '../src/projection/harness/reach.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
+import type { RunContentSource } from '../src/projection/run-population.js';
+import { emptyBlobRows } from '../src/projection/store-hydration.js';
+import type { HarnessPair } from '../src/projection/store.js';
 import { ExtentDeclarationSchema, type ReferenceDialect } from '../src/schemas/project-config.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
-import { addFile, IN_PROCESS_HARNESS_FACTS } from './helpers/claude-context-fixture.js';
+import { addFile, contentSourceOver, IN_PROCESS_HARNESS_FACTS, NO_STORED_HARNESS_ROWS } from './helpers/claude-context-fixture.js';
 
 /**
  * Resolved, so it is absolute on every platform: a bare `/vat-corpus/…` has no
@@ -41,12 +45,9 @@ function refusing(refused: string, error: Error): HarnessFactsDeriver & ReturnTy
     input.content === refused ? Promise.reject(error) : IN_PROCESS_HARNESS_FACTS(harness, input)) as HarnessFactsDeriver & ReturnType<typeof vi.fn>;
 }
 
-/** A reader over the fixture's own file map — never the disk. */
-function readerOver(files: Readonly<Record<string, string>>): HarnessContentReader {
-  return (entry) => {
-    const content = files[entry.path];
-    return Promise.resolve(content === undefined ? null : inMemoryContent(content));
-  };
+/** A content source over the fixture's own file map — never the disk. */
+function readerOver(files: Readonly<Record<string, string>>): RunContentSource {
+  return contentSourceOver(ROOT, files);
 }
 
 /** A builder holding the files — realizations, blobs, NO harness facts. */
@@ -132,7 +133,7 @@ async function passOver(files: Readonly<Record<string, string>>): Promise<{
 }> {
   const builder = builderFor(files);
   const derive = spiedDeriver();
-  const result = await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), derive);
+  const result = await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), derive, NO_STORED_HARNESS_ROWS);
   return { derived: derivedPaths(builder, files), factsOfCalls: derive.mock.calls.length, result };
 }
 
@@ -150,14 +151,14 @@ describe('runHarnessPass', () => {
 
     expect(derived).toEqual(['CLAUDE.md', 'docs/a.md', 'docs/b.md']);
     expect(factsOfCalls).toBe(3);
-    expect(result).toEqual({ derived: 3, refused: 0, unreadable: 0, unreadableKeys: new Set() });
+    expect(result).toEqual({ derived: 3, served: [], refused: 0, unreadable: 0, unreadableKeys: new Set() });
   });
 
   it('stops at four hops', async () => {
     const files = chain('CLAUDE.md', 'c', 5);
     const builder = builderFor(files);
 
-    await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), IN_PROCESS_HARNESS_FACTS);
+    await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), IN_PROCESS_HARNESS_FACTS, NO_STORED_HARNESS_ROWS);
 
     expect(derivedPaths(builder, files)).toEqual(['CLAUDE.md', 'docs/c1.md', 'docs/c2.md', 'docs/c3.md', 'docs/c4.md']);
   });
@@ -194,7 +195,7 @@ describe('runHarnessPass', () => {
     };
     const builder = builderFor(files);
 
-    await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), IN_PROCESS_HARNESS_FACTS);
+    await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), IN_PROCESS_HARNESS_FACTS, NO_STORED_HARNESS_ROWS);
 
     expect(builder.base().harnessBlobFacts.map((row) => row.injectedBytes)).toEqual([0]);
     expect(derivedPaths(builder, files)).toEqual(['CLAUDE.md']);
@@ -210,7 +211,7 @@ describe('runHarnessPass', () => {
     builder.addHarnessBlobImport({ blob: keyOf(files['CLAUDE.md']), harness: 'claude-code', ordinal: 0, rawRef: '@a.md', target: 'a.md', line: 1 });
     builder.addHarnessBlobFacts({ blob: keyOf(files['CLAUDE.md']), harness: 'claude-code', injectedBytes: 0, injectedTokens: 0, paths: null });
 
-    await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), IN_PROCESS_HARNESS_FACTS);
+    await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), IN_PROCESS_HARNESS_FACTS, NO_STORED_HARNESS_ROWS);
 
     expect(derivedPaths(builder, files)).toEqual(['CLAUDE.md']);
   });
@@ -233,7 +234,7 @@ describe('runHarnessPass', () => {
     for (const [path, markdown] of Object.entries(files)) addFile(builder, { path, refs: [], markdown }, ROOT);
     expect(builder.base().blobs.find((row) => row.contentKey === keyOf(files['big.md']))?.bytes).toBe(CLAUDE_OVERSIZE_BYTES + 1);
 
-    await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), IN_PROCESS_HARNESS_FACTS);
+    await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), IN_PROCESS_HARNESS_FACTS, NO_STORED_HARNESS_ROWS);
 
     expect(derivedPaths(builder, files)).toEqual(['CLAUDE.md', 'after.md', 'big.md']);
   });
@@ -248,7 +249,7 @@ describe('runHarnessPass', () => {
     const builder = builderFor(files);
     const derive = spiedDeriver();
 
-    await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), derive);
+    await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), derive, NO_STORED_HARNESS_ROWS);
 
     expect(builder.base().harnessBlobFacts.filter((row) => row.blob === keyOf(shared))).toHaveLength(1);
     expect(derive).toHaveBeenCalledTimes(2);
@@ -258,7 +259,7 @@ describe('runHarnessPass', () => {
     const files = { 'CLAUDE.md': '# acme\n\n@a.md\n', 'a.md': '# a\n' };
     const builder = builderFor(files, ['CLAUDE.md']);
 
-    const result = await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), IN_PROCESS_HARNESS_FACTS);
+    const result = await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), IN_PROCESS_HARNESS_FACTS, NO_STORED_HARNESS_ROWS);
 
     expect(result.derived).toBe(0);
     expect(builder.base().harnessBlobFacts).toEqual([]);
@@ -273,7 +274,7 @@ describe('runHarnessPass', () => {
     };
     const builder = builderFor(files);
 
-    await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), IN_PROCESS_HARNESS_FACTS);
+    await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), IN_PROCESS_HARNESS_FACTS, NO_STORED_HARNESS_ROWS);
 
     expect(derivedPaths(builder, files)).toEqual(['.claude/rules/r.md', 'acme/CLAUDE.local.md', 'acme/widgets/.claude/CLAUDE.md']);
   });
@@ -283,7 +284,7 @@ describe('runHarnessPass', () => {
     const builder = builderFor(files);
     plantExtent(builder, { closureFrom: 'CLAUDE.md', maxDepth: 4, dialect: 'claude-import', members: ['docs/c6.md'] });
 
-    await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), IN_PROCESS_HARNESS_FACTS);
+    await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), IN_PROCESS_HARNESS_FACTS, NO_STORED_HARNESS_ROWS);
 
     expect(derivedPaths(builder, files)).toEqual(
       ['CLAUDE.md', 'docs/c1.md', 'docs/c2.md', 'docs/c3.md', 'docs/c4.md', 'docs/c6.md'],
@@ -298,7 +299,7 @@ describe('runHarnessPass', () => {
     const builder = builderFor(files);
     plantExtent(builder, { closureFrom: 'docs/start.md', maxDepth: 'full', dialect: 'claude-import', members: [] });
 
-    await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), IN_PROCESS_HARNESS_FACTS);
+    await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), IN_PROCESS_HARNESS_FACTS, NO_STORED_HARNESS_ROWS);
 
     expect(derivedPaths(builder, files)).toEqual(Object.keys(files).sort(compareCodeUnits));
   });
@@ -308,7 +309,7 @@ describe('runHarnessPass', () => {
     const builder = builderFor(files);
     plantExtent(builder, { closureFrom: 'docs/start.md', maxDepth: 'full', dialect: 'href', members: ['docs/d2.md'] });
 
-    await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), IN_PROCESS_HARNESS_FACTS);
+    await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), IN_PROCESS_HARNESS_FACTS, NO_STORED_HARNESS_ROWS);
 
     expect(builder.base().harnessBlobFacts).toEqual([]);
   });
@@ -354,10 +355,10 @@ describe('runHarnessPass', () => {
     const files = { 'CLAUDE.md': '# acme\n\n@a.md\n', 'a.md': '# a\n' };
     const builder = builderFor(files);
     const derive = spiedDeriver();
-    await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), derive);
+    await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), derive, NO_STORED_HARNESS_ROWS);
     derive.mockClear();
 
-    const second = await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), derive);
+    const second = await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), derive, NO_STORED_HARNESS_ROWS);
 
     expect(second.derived).toBe(0);
     expect(derive).not.toHaveBeenCalled();
@@ -371,10 +372,12 @@ describe('runHarnessPass', () => {
       'docs/b.md': '# b\n',
     };
     const builder = builderFor(files);
-    const read = readerOver(files);
-    const reader: HarnessContentReader = (entry) => (entry.path === 'docs/a.md' ? Promise.resolve(null) : read(entry));
+    const source = readerOver(files);
+    const reader: RunContentSource = {
+      read: (entry) => (entry.absolutePath === safePath.join(ROOT, 'docs/a.md') ? Promise.resolve(null) : source.read(entry)),
+    };
 
-    const result = await runHarnessPass(builder, [CLAUDE_CODE], reader, IN_PROCESS_HARNESS_FACTS);
+    const result = await runHarnessPass(builder, [CLAUDE_CODE], reader, IN_PROCESS_HARNESS_FACTS, NO_STORED_HARNESS_ROWS);
 
     expect(result.unreadable).toBe(1);
     expect(result.unreadableKeys).toEqual(new Set([keyOf(files['docs/a.md'])]));
@@ -389,7 +392,7 @@ describe('runHarnessPass', () => {
     vi.spyOn(builder, 'addHarnessBlobFacts').mockImplementation(() => false);
     const derive = spiedDeriver();
 
-    await expect(runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), derive))
+    await expect(runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), derive, NO_STORED_HARNESS_ROWS))
       .rejects.toMatchObject({ code: 'HARNESS_FACTS_ABSENT', contentKey: keyOf(files['CLAUDE.md']) });
     expect(derive).toHaveBeenCalledTimes(1);
   });
@@ -410,7 +413,7 @@ describe('runHarnessPass', () => {
       const builder = builderFor(files);
       const derive = refusing(files['docs/deep.md'], error);
 
-      const result = await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), derive);
+      const result = await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), derive, NO_STORED_HARNESS_ROWS);
 
       expect(result).toMatchObject({ derived: 3, refused: 1, unreadable: 0 });
       expect(derivedPaths(builder, files)).toEqual(['CLAUDE.md', 'docs/a.md', 'docs/b.md']);
@@ -432,8 +435,101 @@ describe('runHarnessPass', () => {
       const builder = builderFor(files);
       const broken = Object.assign(new Error('cannot load the reader'), { code: 'VAT_PARSER_UNAVAILABLE' });
 
-      await expect(runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), refusing(files['docs/deep.md'], broken))).rejects.toBe(broken);
+      await expect(runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), refusing(files['docs/deep.md'], broken), NO_STORED_HARNESS_ROWS)).rejects.toBe(broken);
       expect(builder.base().blobConditions).toEqual([]);
     });
+  });
+
+  it('counts bytes that no longer key to the blob as unreadable, never deriving from them', async () => {
+    const files = { 'CLAUDE.md': '# acme\n\n@a.md\n', 'a.md': '# a\n' };
+    const builder = builderFor(files);
+    const rewritten: RunContentSource = { read: () => Promise.resolve(keyContent('# rewritten\n', 'markdown')) };
+    const derive = spiedDeriver();
+
+    const result = await runHarnessPass(builder, [CLAUDE_CODE], rewritten, derive, NO_STORED_HARNESS_ROWS);
+
+    expect(result.unreadableKeys).toEqual(new Set([keyOf(files['CLAUDE.md'])]));
+    expect(derive).not.toHaveBeenCalled();
+  });
+});
+
+// A chain of three reached pairs (CLAUDE.md, docs/a.md, docs/b.md), and docs/c.md, reached by nothing.
+const TIER_FILES = {
+  'CLAUDE.md': '# acme\n\n@docs/a.md\n',
+  'docs/a.md': '# a\n\n@b.md\n',
+  'docs/b.md': '# b — widgets\n',
+  'README.md': '# readme\n\n@docs/c.md\n',
+  'docs/c.md': '# c — never loaded\n',
+};
+
+/**
+ * The stored rows a store would hold for `stored` (what an earlier run derived for them), every
+ * file's key covered.
+ */
+async function tierHolding(stored: readonly string[]): Promise<ReturnType<typeof storedHarnessRows>> {
+  const rows = await Promise.all(stored.map(async (path) => {
+    const text = TIER_FILES[path as keyof typeof TIER_FILES];
+    return harnessRowsFor(keyOf(text), CLAUDE_CODE.id, await IN_PROCESS_HARNESS_FACTS(CLAUDE_CODE.id, keyContent(text, 'markdown')));
+  }));
+  return storedHarnessRows({
+    rows: { ...emptyBlobRows(), harnessBlobFacts: rows.map((row) => row.facts), harnessBlobImports: rows.flatMap((row) => row.imports) },
+    covered: new Set(Object.values(TIER_FILES).map((text) => keyOf(text))),
+  });
+}
+
+/** One pass over a fresh builder, counting the content source's reads and the pairs derived. */
+async function passOverTier(stored: readonly string[]): Promise<{
+  builder: ProjectionBuilder;
+  result: Awaited<ReturnType<typeof runHarnessPass>>;
+  reads: number;
+  pairsDerived: number;
+}> {
+  const builder = builderFor(TIER_FILES);
+  const source = readerOver(TIER_FILES);
+  const read = vi.fn(source.read);
+  const before = readWorkCounters()['harness.pairsDerived'];
+  const result = await runHarnessPass(builder, [CLAUDE_CODE], { read }, IN_PROCESS_HARNESS_FACTS, await tierHolding(stored));
+  return { builder, result, reads: read.mock.calls.length, pairsDerived: readWorkCounters()['harness.pairsDerived'] - before };
+}
+
+/** The pair `path`'s blob makes with Claude Code. */
+function pairOf(path: keyof typeof TIER_FILES): HarnessPair {
+  return { contentKey: keyOf(TIER_FILES[path]), harness: CLAUDE_CODE.id };
+}
+
+describe('runHarnessPass over a stored tier', () => {
+  it('served pairs are not re-derived', async () => {
+    const { builder, result, reads, pairsDerived } = await passOverTier(['CLAUDE.md', 'docs/a.md', 'docs/c.md']);
+
+    expect(pairsDerived, 'only the pair the store does not hold is derived').toBe(1);
+    expect(reads, 'the content source is asked for that pair alone').toBe(1);
+    expect(result.served).toEqual([pairOf('CLAUDE.md'), pairOf('docs/a.md')]);
+    expect(derivedPaths(builder, TIER_FILES), 'a stored pair the run does not reach never enters the builder')
+      .toEqual(['CLAUDE.md', 'docs/a.md', 'docs/b.md']);
+  });
+
+  it('a newly reached pair is derived', async () => {
+    // docs/a.md is covered, but the store never reached it, so it holds no pair for it.
+    const { builder, result, pairsDerived } = await passOverTier(['CLAUDE.md']);
+
+    expect(pairsDerived).toBe(2);
+    expect(result.served).toEqual([pairOf('CLAUDE.md')]);
+    const storeOff = builderFor(TIER_FILES);
+    await runHarnessPass(storeOff, [CLAUDE_CODE], readerOver(TIER_FILES), IN_PROCESS_HARNESS_FACTS, NO_STORED_HARNESS_ROWS);
+    expect(builder.build().harnessBlobFacts, 'the derived pairs are what a run with no store derives')
+      .toEqual(storeOff.build().harnessBlobFacts);
+  });
+
+  it('serves a pair\'s stored imports in the order the pass derives them, whatever order the store returns', async () => {
+    const memory = '# m\n\n@docs/a.md\n@docs/b.md\n@docs/c.md\n';
+    const { facts, imports } = harnessRowsFor(keyOf(memory), CLAUDE_CODE.id, await IN_PROCESS_HARNESS_FACTS(CLAUDE_CODE.id, keyContent(memory, 'markdown')));
+    expect(imports.map((row) => row.ordinal), 'the premise: three imports, derived in ordinal order').toEqual([0, 1, 2]);
+
+    const stored = storedHarnessRows({
+      rows: { ...emptyBlobRows(), harnessBlobFacts: [facts], harnessBlobImports: imports.toReversed() },
+      covered: new Set([keyOf(memory)]),
+    });
+
+    expect(stored.rowsFor({ contentKey: keyOf(memory), harness: CLAUDE_CODE.id })?.imports).toEqual(imports);
   });
 });

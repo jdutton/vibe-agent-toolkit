@@ -14,13 +14,14 @@
  * thread-based harness passes without testing the claim.
  */
 
-import { spawn } from 'node:child_process';
+import { type ChildProcess, spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-import { ALL_BLOB_REQUEST, ALL_EXTENT_REQUEST } from '@vibe-agent-toolkit/resources';
+import { ALL_BLOB_REQUEST, ALL_EXTENT_REQUEST, PROJECTION_TABLES } from '@vibe-agent-toolkit/resources';
+import { contractBlobRows, contractContentKey, uncoveredBlobWrite } from '@vibe-agent-toolkit/resources/testing';
 import { resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
+import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openSqliteFactStore, type SqliteStoreOptions } from '../../src/store.js';
@@ -50,11 +51,17 @@ const READ_DEADLINE_MS = 20_000;
 
 let directory: string;
 
+/** Every writer process this file started and has not yet seen exit. */
+const running = new Set<ChildProcess>();
+
 beforeEach(() => {
   directory = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-projection-sqlite-conc-'));
 });
 
 afterEach(() => {
+  // A test that failed before its writers exited must not leave them running.
+  for (const child of running) child.kill('SIGKILL');
+  running.clear();
   rmSync(directory, { recursive: true, force: true });
 });
 
@@ -75,14 +82,26 @@ function runWriter(
   retention?: number,
 ): Promise<{ code: number; stderr: string }> {
   const retentionArgs = retention === undefined ? [] : [String(retention)];
+  return runChild([writerId, mode, String(iterations), ...retentionArgs]);
+}
+
+/**
+ * Run the writer script with `args` after the shared directory, to completion.
+ *
+ * @param args - The script's arguments after `<directory>`
+ * @returns Its exit code and anything it wrote to stderr
+ */
+function runChild(args: readonly string[]): Promise<{ code: number; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [WRITER, directory, writerId, mode, String(iterations), ...retentionArgs], {
-      stdio: ['ignore', 'ignore', 'pipe'],
-    });
+    const child = spawn(process.execPath, [WRITER, directory, ...args], { stdio: ['ignore', 'ignore', 'pipe'] });
+    running.add(child);
     let stderr = '';
     child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
     child.on('error', reject);
-    child.on('exit', (code) => resolve({ code: code ?? -1, stderr }));
+    child.on('exit', (code) => {
+      running.delete(child);
+      resolve({ code: code ?? -1, stderr });
+    });
   });
 }
 
@@ -198,5 +217,117 @@ describe('concurrent writers', () => {
     // the extent is not evidence of anything.
     expect(samples, `${attempts} attempts`).toBeGreaterThan(0);
     expect(torn).toBe(0);
+  });
+});
+
+/**
+ * The two-writer arm's keys. Each writer holds the shared uncovered pair, an
+ * uncovered marker of its own and its own three covered keys, so the union
+ * (10) is larger than either held set (6), which is the window.
+ */
+const UNCOVERED = ['7', '8'].map((seed) => contractContentKey(seed));
+const MARKER_OF = { A: contractContentKey('a'), B: contractContentKey('b') } as const;
+const COVERED_BY = { A: ['1', '2', '3'], B: ['4', '5', '6'] } as const;
+const TWO_WRITER_WINDOW = 6;
+
+type Writer = keyof typeof COVERED_BY;
+
+/**
+ * Seed the covered keys oldest first, INTERLEAVED (A1 B1 A2 B2 A3 B3), one
+ * write each so every key has its own place in the ledger order.
+ *
+ * Interleaving is what makes the named mutant red whichever writer commits
+ * second: the first writer's eviction takes A1 B1 A2, so the later writer
+ * heals some of its keys and leaves others at the old end of the order, where
+ * a writer that re-stamps only what it replaced then evicts them.
+ */
+async function seedInterleaved(): Promise<void> {
+  const store = open({ retainedBlobKeys: 100 });
+  try {
+    for (let index = 0; index < COVERED_BY.A.length; index += 1) {
+      for (const seeds of [COVERED_BY.A, COVERED_BY.B]) {
+        await store.writeBlobFacts(uncoveredBlobWrite(contractBlobRows(contractContentKey(seeds[index] ?? ''))));
+      }
+    }
+  } finally {
+    await store.close();
+  }
+}
+
+/**
+ * The ledger's keys with their rowids and, per blob-scoped table, the keys it
+ * holds rows for, read from the file.
+ */
+function ledgerAndRows(): { ledger: Map<string, number>; rows: Map<string, Set<string>> } {
+  const database = new DatabaseSync(safePath.join(directory, 'projection.db'), { readOnly: true });
+  try {
+    const ledger = new Map((database.prepare('SELECT "contentKey", "rowid" AS id FROM "blob_keys"').all() as { contentKey: string; id: number }[])
+      .map((row) => [row.contentKey, row.id] as const));
+    const rows = new Map<string, Set<string>>();
+    for (const spec of Object.values(PROJECTION_TABLES)) {
+      if (spec.scope !== 'blob') continue;
+      const column = String(spec.primaryKey[0]);
+      const keys = (database.prepare(`SELECT DISTINCT "${column}" AS k FROM "${spec.name}"`).all() as { k: string }[]).map((row) => row.k);
+      rows.set(spec.name, new Set(keys));
+    }
+    return { ledger, rows };
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Which writer committed second, from the ledger: each writer's marker is a key
+ * only it holds and never covers, so it replaces and stamps it in its own
+ * transaction, and transactions are serialized, so the later commit holds the
+ * larger rowid. An earlier writer's marker may since have been evicted; the
+ * later writer's cannot be, by its own write or by the earlier one.
+ *
+ * 🪤 Not a sequence number taken after the commit: a child descheduled between
+ * its commit and taking the number lets the other writer commit and take the
+ * number first. Measured: the post-commit counter named the wrong writer in 1
+ * of 20 runs against the correct writer.
+ *
+ * @param ledger - Ledger key to rowid
+ * @returns The later writer, or `undefined` when neither marker is held
+ */
+function laterWriter(ledger: ReadonlyMap<string, number>): Writer | undefined {
+  const a = ledger.get(MARKER_OF.A) ?? -1;
+  const b = ledger.get(MARKER_OF.B) ?? -1;
+  if (a === b) return undefined;
+  return a > b ? 'A' : 'B';
+}
+
+describe('two writers sharing one store', () => {
+  it('leave the ledger and the rows agreeing, and keep the later writer\'s whole held set', async () => {
+    await seedInterleaved();
+    const barrier = mkdirSyncReal(safePath.join(directory, 'barrier'));
+    const heldBy = (writer: Writer): string[] =>
+      [...UNCOVERED, MARKER_OF[writer], ...COVERED_BY[writer].map((seed) => contractContentKey(seed))];
+
+    const results = await Promise.all((['A', 'B'] as const).map((writer) =>
+      runChild([writer, 'covering', String(TWO_WRITER_WINDOW), barrier, '2', heldBy(writer).join(',')])));
+
+    for (const [index, result] of results.entries()) {
+      expect(result.code, `writer ${index}: ${result.stderr}`).toBe(0);
+    }
+    const { ledger, rows } = ledgerAndRows();
+    const later = laterWriter(ledger);
+    expect(later, 'neither writer\'s marker is in the ledger').toBeDefined();
+
+    // Every ledger key has its tier rows (the writers write a `blobs` and a
+    // harness row per key), and no tier row's key lacks a ledger row.
+    const blobs = rows.get('blobs') ?? new Set<string>();
+    const harness = rows.get('harness_blob_facts') ?? new Set<string>();
+    expect([...ledger.keys()].filter((key) => !blobs.has(key) || !harness.has(key)), 'ledger keys without their rows').toEqual([]);
+    for (const [table, keys] of rows) {
+      expect([...keys].filter((key) => !ledger.has(key)), `${table} rows without a ledger row`).toEqual([]);
+    }
+    const laterHeld = heldBy(later ?? 'A');
+    expect(laterHeld.filter((key) => !ledger.has(key)), `writer ${String(later)} (later) lost held keys`).toEqual([]);
+    // Independent of the marker: the later commit re-stamped every key it
+    // holds, so they are exactly the newest rowids in the ledger.
+    const newest = [...ledger].sort(([, left], [, right]) => right - left).slice(0, laterHeld.length).map(([key]) => key);
+    expect(new Set(newest), 'the newest ledger stamps are not the later writer\'s held set').toEqual(new Set(laterHeld));
   });
 });

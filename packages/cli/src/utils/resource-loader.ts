@@ -116,7 +116,7 @@ export function isRunRefusal(error: unknown): boolean {
  */
 function markingBlobReads(store: FactStore): FactStore {
   return {
-    writeBlobFacts: (rows) => store.writeBlobFacts(rows),
+    writeBlobFacts: (write) => store.writeBlobFacts(write),
     readBlobFacts: (contentKeys, request) => store.readBlobFacts(contentKeys, request).catch((error: unknown) => {
       throw markRunRefusal(error);
     }),

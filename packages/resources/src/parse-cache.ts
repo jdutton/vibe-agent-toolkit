@@ -73,8 +73,9 @@
  * There is no version number here or anywhere else, on purpose. The content key
  * covers the parser's *inputs* and cannot see a change to the parser itself, so
  * that is handled one level up by the namespace directory in
- * `cache-namespace.ts`: an installed VAT gets a namespace per release, a dev
- * checkout one per worktree.
+ * `cache-namespace.ts`: one namespace per VAT version, installed or checked
+ * out alike. Within one version a parser change is not seen; a developer
+ * clears the cache (`vat cache clear`) when they want it cold.
  *
  * What guards the *shape* stored here is {@link ParseFactsSchema} — a real
  * schema at the read boundary, so an entry that disagrees with this build about
@@ -199,11 +200,10 @@ export type { ParseFacts } from './schemas/parse-facts.js';
  * The entry envelope.
  *
  * No version field: the namespace directory (see `cache-namespace.ts`) carries
- * the build discrimination — per release when installed, per worktree in a dev
- * checkout — and {@link ParseFactsSchema} carries the shape discrimination on
- * read. A serialization change therefore needs no number bumped anywhere; what
- * it needs, in a dev checkout whose namespace deliberately survives a rebuild,
- * is either a shape the schema can reject or a `vat cache clear`.
+ * the release discrimination (the VAT version) and {@link ParseFactsSchema}
+ * carries the shape discrimination on read. A serialization change therefore
+ * needs no number bumped anywhere; what it needs within one version is either a
+ * shape the schema can reject or a `vat cache clear`.
  */
 interface StoredEntry {
   facts: ParseFacts;

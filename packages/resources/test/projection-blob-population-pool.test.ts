@@ -44,7 +44,8 @@ import {
   defaultParsePoolSize,
   type ParsePool,
 } from '../src/parse-pool.js';
-import { BLOB_PARSE_FAILED, BLOB_PARSE_WORKER_DIED, type BlobPopulationResult } from '../src/projection/blob-population.js';
+import { BLOB_PARSE_FAILED, BLOB_PARSE_WORKER_DIED } from '../src/projection/blob-condition-codes.js';
+import { type BlobPopulationResult } from '../src/projection/blob-population.js';
 import { describeBlobRefusals } from '../src/projection/blob-refusals.js';
 import type { Projection } from '../src/projection/projection.js';
 

@@ -134,10 +134,10 @@ export const CREATE_EXTENTS_TABLE_SQL
  * one. `store.ts` keeps the newest `retainedBlobKeys`, ordered by this column
  * then `rowid` — same ordering and same tie-break reason as the extent manifest.
  *
- * ⚠️ WRITE recency, not use recency: a key served from the store every run is
- * never rewritten, so it ages as if idle. The cheap side of the trade — evicting
- * a key still in use costs one cold re-derivation — against a write on every
- * read path.
+ * ⚠️ WRITE recency, not use recency: a write re-stamps every key it holds,
+ * covered or not, but a run served whole from the store writes nothing, so its
+ * keys age as if idle. The cheap side of the trade — evicting a key still in
+ * use costs one re-derivation — against a write on every read path.
  */
 export const BLOB_KEYS_TABLE = 'blob_keys';
 

@@ -153,9 +153,10 @@ Example:
 Description:
   Keeps this build's warm cache and drops everything else VAT wrote. Under
   the cache root (VAT_CACHE_DIR, else <tmpdir>/.vat-cache) it removes every
-  namespace except this build's (older AND newer releases; under the shared
-  default root, other worktrees' and other installed VATs' namespaces too, so
-  they run cold next time), what older releases kept at the root (the
+  namespace except this version's (older AND newer releases, prereleases
+  included, so they run cold next time; every checkout and install of this
+  version shares its namespace and keeps it),
+  what older releases kept at the root (the
   link-cache files and the root-level parse/ directory), and inside this
   build's namespace every projection-<shape> store except the current
   shape's. Only names VAT recognises as its own are removed: anything else in

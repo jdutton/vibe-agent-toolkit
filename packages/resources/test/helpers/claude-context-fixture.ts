@@ -43,7 +43,7 @@
 import { forEachInOrder, safePath } from '@vibe-agent-toolkit/utils';
 import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 
-import { computeContentKey, inMemoryContent } from '../../src/content-key.js';
+import { computeContentKey, keyContent } from '../../src/content-key.js';
 import { parseMarkdownContent } from '../../src/link-parser.js';
 import { mimeTypeForPath } from '../../src/mime-type.js';
 import { blobRowFor, harnessRowsFor } from '../../src/projection/blob-facts.js';
@@ -66,10 +66,11 @@ import { CLAUDE_CODE } from '../../src/projection/harness/claude-code.js';
 import {
   assertHarnessSettled,
   runHarnessPass,
-  type HarnessContentReader,
   type HarnessFactsDeriver,
+  type StoredHarnessRows,
 } from '../../src/projection/harness/harness-pass.js';
 import { ProjectionBuilder, type Projection, type ProjectionBase } from '../../src/projection/projection.js';
+import type { RunContentSource } from '../../src/projection/run-population.js';
 import type { BlobReferenceRow, ReferenceSyntacticForm } from '../../src/schemas/projection-blobs.js';
 import type { ResourceRealizationRow } from '../../src/schemas/projection-resources.js';
 import type { JsonValue } from '../../src/schemas/projection-shared.js';
@@ -410,6 +411,27 @@ function addDirectory(builder: ProjectionBuilder, dirPath: string, root: string)
  */
 export const IN_PROCESS_HARNESS_FACTS: HarnessFactsDeriver = (_harness, input) => Promise.resolve(claudeMemoryFactsOf(input.content));
 
+/** A pass with no store behind it: no pair is served, every reached pair is derived. */
+export const NO_STORED_HARNESS_ROWS: StoredHarnessRows = { rowsFor: () => undefined };
+
+/**
+ * A content source over an in-memory fixture, never the disk: each file's text
+ * keyed as markdown, as {@link addFile} keys it, and null for a path not in `files`.
+ *
+ * @param root - The fixture's root, which every frontier path is joined to
+ * @param files - Root-relative path to text
+ * @returns The source
+ */
+export function contentSourceOver(root: string, files: Readonly<Record<string, string>>): RunContentSource {
+  const byPath = new Map(Object.entries(files).map(([path, text]) => [safePath.join(root, path), text]));
+  return {
+    read: (entry) => {
+      const text = byPath.get(entry.absolutePath);
+      return Promise.resolve(text === undefined ? null : keyContent(text, 'markdown'));
+    },
+  };
+}
+
 /** The tables `closureProvenance` reads — see {@link closureFixtureFrom}. */
 export interface ClosureFixture {
   readonly resourceRealizations: ProjectionBase['resourceRealizations'];
@@ -574,10 +596,7 @@ export async function claudeContextFixture(
   // row a contributor below adds becomes visible to the NEXT contributor
   // through this same reference — see `ProjectionBuilder.base()`.
   const base: ProjectionBase = builder.base();
-  const readContent: HarnessContentReader = (entry) => {
-    const content = files[entry.path];
-    return Promise.resolve(content === undefined ? null : inMemoryContent(content));
-  };
+  const readContent = contentSourceOver(root, files);
 
   applyContribution(builder, await new AgenticConventionContributor().contribute(base, {}));
 
@@ -587,13 +606,13 @@ export async function claudeContextFixture(
   // `frontier` mode, so a member whose facts arrive in one round is followed
   // in the next; and a contributor still changing its answer is unsettled
   // whatever the pass did.
-  await runHarnessPass(builder, [CLAUDE_CODE], readContent, IN_PROCESS_HARNESS_FACTS);
+  await runHarnessPass(builder, [CLAUDE_CODE], readContent, IN_PROCESS_HARNESS_FACTS, NO_STORED_HARNESS_ROWS);
   const settle = async (round: number, digests: readonly string[]): Promise<void> => {
     if (round > MAX_FIXTURE_ROUNDS) {
       throw new Error(`claudeContextFixture: the closure stratum was still moving after ${MAX_FIXTURE_ROUNDS} rounds.`);
     }
     const next = await contributeClosureStratum(builder, base);
-    const { derived } = await runHarnessPass(builder, [CLAUDE_CODE], readContent, IN_PROCESS_HARNESS_FACTS);
+    const { derived } = await runHarnessPass(builder, [CLAUDE_CODE], readContent, IN_PROCESS_HARNESS_FACTS, NO_STORED_HARNESS_ROWS);
     const contributorsMoved = next.join('\0') !== digests.join('\0');
     if (derived === 0 && !contributorsMoved) return;
     return settle(round + 1, next);

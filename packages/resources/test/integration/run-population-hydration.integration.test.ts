@@ -266,7 +266,7 @@ function callsFailing(
   return {
     ...cache,
     store: {
-      writeBlobFacts: (rows) => failing(faults.write, () => inner.writeBlobFacts(rows)),
+      writeBlobFacts: (write) => failing(faults.write, () => inner.writeBlobFacts(write)),
       writeExtent: (key, rows) => failing(faults.write, () => inner.writeExtent(key, rows)),
       readBlobFacts: (contentKeys, request) => failing(faults.blobRead, () => inner.readBlobFacts(contentKeys, request)),
       readExtent: (key, request) => inner.readExtent(key, request),
@@ -356,15 +356,20 @@ describe('a warm registry is built from the store and is the cold registry', () 
   eachCaseCopies(() => committedTree);
 
   it('admits every member from the blob tier: no read, hash or parse lookup', async () => {
-    const { cold, warm, off } = await threeWays();
+    const cold = await runOnce(true);
+    // The cold run missed at the extent, then read the blob tier once in derivation to reuse
+    // whatever keys it already covers (none here).
+    expect(store.current.readBlobFactsCalls, 'the cold miss reads the tier once, to reuse it').toBe(1);
+    const warm = await runOnce(true);
+    // The warm run read the tier once for every member it admitted.
+    expect(store.current.readBlobFactsCalls, 'the warm hit reads the tier once').toBe(2);
+    const off = await runOnce(false);
+    expect([cold.outcome, warm.outcome, off.outcome]).toEqual(['written', 'hit', 'no-store']);
     expect(warm.resources).toHaveLength(Object.keys(TREE).length);
     expectWarmIsCold({ cold, warm, off });
     expect(JSON.stringify(findingsOf(warm))).toBe(JSON.stringify(findingsOf(cold)));
     expect(warm.work).toEqual({ reads: 0, hashed: 0, parseLookups: 0, admitted: Object.keys(TREE).length });
     expect(cold.work.admitted, 'counted once per admitted file whichever way').toBe(warm.work.admitted);
-    // The cold run missed at the extent, before any blob read; the warm run read the tier once
-    // for every member it admitted.
-    expect(store.current.readBlobFactsCalls).toBe(1);
   });
 
   it('falls back per key: an evicted key is read and parsed in memory, the rest come from the store', async () => {
@@ -551,7 +556,11 @@ describe('a warm run only hydrates under the limits its facts were stored under'
     const variation = { limits: { timeMs: POPULATION_PARSE_LIMITS.timeMs + 1 } };
     const warm = await runOnce(true, variation);
     const off = await runOnce(false, variation);
-    expect(warm.outcome).toBe('hit');
+    // Such a run has no store it may use (decided where its store is resolved), so it is a
+    // store-off run throughout: no stored membership either, never a membership hit beside a
+    // computed admission.
+    expect(warm.outcome).toBe('no-store');
+    expect(warm.outcome).toBe(off.outcome);
     expect(findingsOf(warm)).toEqual(findingsOf(off));
     expect(warm.work.reads).toBe(Object.keys(TREE).length);
   });
@@ -643,7 +652,7 @@ async function documentOf(withStore: boolean, relative: string, ask: DocumentAsk
   });
 }
 
-describe('storedDocument: one file\'s facts, skill-text record included, from the run\'s store alone', () => {
+describe('storedDocument: one file\'s facts, skill-text record included, from the run\'s store or its own derived projection', () => {
   const expected = skillTextFactsOf(SKILL_TEXT, SKILL_TEXT_DECLARATION);
 
   /** {@link TREE} with {@link SKILL} committed beside it, built once. */
@@ -849,11 +858,12 @@ describe('storedDocument: one file\'s facts, skill-text record included, from th
       expect(off.work).toEqual({ reads: 0, hashed: 0, parseLookups: 0, admitted: 0 });
     });
 
-    it('answers nothing from the run\'s own admission: a cold store-on run and a store-off run both miss', async () => {
-      // Every file the store does not serve is a counted miss, whatever a registry
-      // in the same run admitted: an admission is a cold parse, not a store hit.
+    it('a cold store-on run answers from its own projection; a store-off run misses', async () => {
+      // A store-on miss derives the population and carries its blob rows, so the question is
+      // answered from them, by the same reader a hit uses. A store-off run lists its members and
+      // derives no blob row, so every file is a miss whatever a registry in the run admitted.
       fromEmptyStore();
-      expect((await documentOf(true, SKILL, { admit: true })).document).toBeUndefined();
+      expect((await documentOf(true, SKILL, { admit: true })).document?.facts.skillText).toStrictEqual(expected);
       expect((await documentOf(false, SKILL, { admit: true })).document).toBeUndefined();
     });
 
@@ -874,9 +884,9 @@ describe('storedDocument: one file\'s facts, skill-text record included, from th
       expect((await documentOf(false, SKILL)).document).toBeUndefined();
     });
 
-    it('answers nothing on a store miss that admitted nothing: the population was derived, not served', async () => {
+    it('answers a store miss that admitted nothing from the projection it derived', async () => {
       fromEmptyStore();
-      expect((await documentOf(true, SKILL)).document).toBeUndefined();
+      expect((await documentOf(true, SKILL)).document?.facts.skillText).toStrictEqual(expected);
     });
 
     it('answers nothing under a parser the stored realization does not route to', async () => {

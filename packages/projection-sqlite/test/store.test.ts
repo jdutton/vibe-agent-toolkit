@@ -24,6 +24,7 @@ import {
   type Projection,
   type ProjectionTableName,
 } from '@vibe-agent-toolkit/resources';
+import { BLOB_WRITER_CONTRACT, uncoveredBlobWrite, type BlobWriterContractFactory } from '@vibe-agent-toolkit/resources/testing';
 import { readWorkCounters, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { __resetWorkCountersForTest } from '@vibe-agent-toolkit/utils/testing';
@@ -229,7 +230,7 @@ function everyFormRows(): { rows: BlobScopedRows; astRows: number } {
 describe('a blob read states what it reads', () => {
   it('reads only the requested tables and forms', async () => {
     const { rows, astRows } = everyFormRows();
-    await store.writeBlobFacts(rows);
+    await store.writeBlobFacts(uncoveredBlobWrite(rows));
     __resetWorkCountersForTest();
 
     const read = await store.readBlobFacts([FIRST_BLOB], { tables: ['blobs', 'blobReferences'], referenceForms: AST_SYNTACTIC_FORMS });
@@ -245,14 +246,14 @@ describe('a blob read states what it reads', () => {
 
   it('reads every row of every table for every table and every form', async () => {
     const { rows } = everyFormRows();
-    await store.writeBlobFacts(rows);
+    await store.writeBlobFacts(uncoveredBlobWrite(rows));
 
     expect(await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST)).toEqual(rows);
   });
 
   it('reads no reference row for an empty form set, and still reads the other tables', async () => {
     const { rows } = everyFormRows();
-    await store.writeBlobFacts(rows);
+    await store.writeBlobFacts(uncoveredBlobWrite(rows));
 
     const read = await store.readBlobFacts([FIRST_BLOB], { tables: ['blobs', 'blobReferences'], referenceForms: new Set() });
     expect(read).toEqual({ blobs: rows.blobs, blobReferences: [] });
@@ -262,7 +263,7 @@ describe('a blob read states what it reads', () => {
 describe('blob facts', () => {
   it('round-trips every column kind back into schema-valid rows', async () => {
     const written = sampleBlobRows();
-    await store.writeBlobFacts(written);
+    await store.writeBlobFacts(uncoveredBlobWrite(written));
 
     const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST) as unknown as Record<string, readonly unknown[]>;
     expectSchemaValid(read, ['blobs', 'blobReferences', 'blobSections', 'blobConditions', 'harnessBlobFacts', 'harnessBlobImports', 'skillTextFacts', 'skillTextMatches']);
@@ -279,7 +280,7 @@ describe('blob facts', () => {
     // A blob with no references legitimately has zero `blobReferences` rows;
     // a caller inferring "not cached" from that would re-parse it forever.
     const bare = sampleBlobRows();
-    await store.writeBlobFacts({ ...bare, blobReferences: [], blobSections: [], blobConditions: [], harnessBlobFacts: [], harnessBlobImports: [] });
+    await store.writeBlobFacts(uncoveredBlobWrite({ ...bare, blobReferences: [], blobSections: [], blobConditions: [], harnessBlobFacts: [], harnessBlobImports: [] }));
 
     const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
     expect(read.blobs).toHaveLength(1);
@@ -287,8 +288,8 @@ describe('blob facts', () => {
   });
 
   it('is idempotent — writing the same facts twice does not duplicate a row', async () => {
-    await store.writeBlobFacts(sampleBlobRows());
-    await store.writeBlobFacts(sampleBlobRows());
+    await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows()));
+    await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows()));
 
     const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
     expect(read.blobs).toHaveLength(1);
@@ -305,9 +306,9 @@ describe('blob facts', () => {
     const rootA = sampleBlobRows();
     expect(rootA.harnessBlobFacts.length).toBeGreaterThan(0);
     expect(rootA.harnessBlobImports.length).toBeGreaterThan(0);
-    await store.writeBlobFacts(rootA);
+    await store.writeBlobFacts(uncoveredBlobWrite(rootA));
 
-    await store.writeBlobFacts({ ...rootA, harnessBlobFacts: [], harnessBlobImports: [] });
+    await store.writeBlobFacts(uncoveredBlobWrite({ ...rootA, harnessBlobFacts: [], harnessBlobImports: [] }));
 
     const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
     expect(read.blobs).toHaveLength(1);
@@ -317,11 +318,11 @@ describe('blob facts', () => {
 
   it('replaces a key\'s harness facts for a pair a later write carries', async () => {
     const first = sampleBlobRows();
-    await store.writeBlobFacts(first);
+    await store.writeBlobFacts(uncoveredBlobWrite(first));
     const [facts] = first.harnessBlobFacts;
     if (facts === undefined) throw new Error('fixture: sampleBlobRows carries no harness facts');
 
-    await store.writeBlobFacts({ ...first, harnessBlobFacts: [{ ...facts, injectedTokens: facts.injectedTokens + 1 }], harnessBlobImports: [] });
+    await store.writeBlobFacts(uncoveredBlobWrite({ ...first, harnessBlobFacts: [{ ...facts, injectedTokens: facts.injectedTokens + 1 }], harnessBlobImports: [] }));
 
     const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
     expect(read.harnessBlobFacts.map((row) => row.injectedTokens)).toEqual([facts.injectedTokens + 1]);
@@ -329,17 +330,17 @@ describe('blob facts', () => {
   });
 
   it('keeps one blob\'s facts when another is rewritten', async () => {
-    await store.writeBlobFacts(sampleBlobRows(FIRST_BLOB));
-    await store.writeBlobFacts(sampleBlobRows(SECOND_BLOB));
-    await store.writeBlobFacts(sampleBlobRows(SECOND_BLOB));
+    await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(FIRST_BLOB)));
+    await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(SECOND_BLOB)));
+    await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(SECOND_BLOB)));
 
     const read = await store.readBlobFacts([FIRST_BLOB, SECOND_BLOB], ALL_BLOB_REQUEST);
     expect(read.blobs).toHaveLength(2);
   });
 
   it('returns only the keys asked for', async () => {
-    await store.writeBlobFacts(sampleBlobRows(FIRST_BLOB));
-    await store.writeBlobFacts(sampleBlobRows(SECOND_BLOB));
+    await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(FIRST_BLOB)));
+    await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(SECOND_BLOB)));
 
     const read = await store.readBlobFacts([SECOND_BLOB], ALL_BLOB_REQUEST);
     expect(read.blobs.map((row) => row.contentKey)).toEqual([SECOND_BLOB]);
@@ -352,9 +353,9 @@ describe('blob facts', () => {
 
   it('accepts an empty bundle', async () => {
     const empty = sampleBlobRows();
-    await expect(store.writeBlobFacts({
+    await expect(store.writeBlobFacts(uncoveredBlobWrite({
       ...empty, blobs: [], blobReferences: [], blobSections: [], blobConditions: [], harnessBlobFacts: [], harnessBlobImports: [],
-    })).resolves.toBeUndefined();
+    }))).resolves.toBeUndefined();
   });
 
   it('holds a blob the derivation stage declined to parse, which has no blobs row', async () => {
@@ -362,7 +363,7 @@ describe('blob facts', () => {
     // REFUSE it outright — see the header of `writeBlobFacts` — which made
     // `vat inventory` cache nothing at all on any root shipping one `.so`,
     // `.pyc` or image, while exiting 0.
-    await store.writeBlobFacts(declinedBlobRows(FIRST_BLOB));
+    await store.writeBlobFacts(uncoveredBlobWrite(declinedBlobRows(FIRST_BLOB)));
 
     const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
     expect(read.blobs).toEqual([]);
@@ -376,18 +377,18 @@ describe('blob facts', () => {
     // range the write clears, so its rows would pile up one copy per write —
     // silently, since `blob_conditions` keys on a nullable `line` and so
     // cannot be deduplicated by a conflict clause.
-    await store.writeBlobFacts(declinedBlobRows(FIRST_BLOB));
-    await store.writeBlobFacts(declinedBlobRows(FIRST_BLOB));
-    await store.writeBlobFacts(declinedBlobRows(FIRST_BLOB));
+    await store.writeBlobFacts(uncoveredBlobWrite(declinedBlobRows(FIRST_BLOB)));
+    await store.writeBlobFacts(uncoveredBlobWrite(declinedBlobRows(FIRST_BLOB)));
+    await store.writeBlobFacts(uncoveredBlobWrite(declinedBlobRows(FIRST_BLOB)));
 
     const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
     expect(read.blobConditions).toHaveLength(1);
   });
 
   it('leaves a declined blob alone while a parsed one is rewritten', async () => {
-    await store.writeBlobFacts(declinedBlobRows(FIRST_BLOB));
-    await store.writeBlobFacts(sampleBlobRows(SECOND_BLOB));
-    await store.writeBlobFacts(sampleBlobRows(SECOND_BLOB));
+    await store.writeBlobFacts(uncoveredBlobWrite(declinedBlobRows(FIRST_BLOB)));
+    await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(SECOND_BLOB)));
+    await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(SECOND_BLOB)));
 
     const read = await store.readBlobFacts([FIRST_BLOB, SECOND_BLOB], ALL_BLOB_REQUEST);
     expect(read.blobs.map((row) => row.contentKey)).toEqual([SECOND_BLOB]);
@@ -593,7 +594,7 @@ describe('lifetime', () => {
   it('rejects use after close rather than silently reopening', async () => {
     await store.close();
     await expect(store.readExtent(KEY, ALL_EXTENT_REQUEST)).rejects.toThrow(/closed/u);
-    await expect(store.writeBlobFacts(sampleBlobRows())).rejects.toThrow(/closed/u);
+    await expect(store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows()))).rejects.toThrow(/closed/u);
   });
 
   it('closes twice without complaint', async () => {
@@ -635,7 +636,7 @@ describe('decoded rows are counted against the store they came from', () => {
     .reduce((total, rows) => total + rows.length, 0);
 
   beforeEach(async () => {
-    await store.writeBlobFacts(sampleBlobRows());
+    await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows()));
     __resetWorkCountersForTest();
   });
 
@@ -697,7 +698,7 @@ describe('decoded rows are counted against the store they came from', () => {
   });
 
   it('a fact-store write counts one persistent write and every row it wrote, and no hydration', async () => {
-    await store.writeBlobFacts(sampleBlobRows(SECOND_BLOB));
+    await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(SECOND_BLOB)));
     expect(readWorkCounters()['store.writes.persistent']).toBe(1);
     expect(readWorkCounters()['store.rows.written.persistent']).toBe(bundleRowCount);
 
@@ -713,10 +714,10 @@ describe('decoded rows are counted against the store they came from', () => {
 
   it('a blob write naming no content key writes nothing and counts nothing', async () => {
     const empty = sampleBlobRows();
-    await store.writeBlobFacts({
+    await store.writeBlobFacts(uncoveredBlobWrite({
       ...empty, blobs: [], blobReferences: [], blobSections: [], blobConditions: [], harnessBlobFacts: [], harnessBlobImports: [],
       skillTextFacts: [], skillTextMatches: [],
-    });
+    }));
     expect(readWorkCounters()['store.writes.persistent']).toBe(0);
     expect(readWorkCounters()['store.rows.written.persistent']).toBe(0);
   });
@@ -1061,8 +1062,8 @@ describe('the blob tier is bounded', () => {
     // something: an eviction that reclaimed whatever it touched would satisfy
     // all of them.
     const evicting = openWithBlobWindow(3);
-    await evicting.writeBlobFacts(sampleBlobRows(contentKey('a')));
-    await evicting.writeBlobFacts(sampleBlobRows(contentKey('b')));
+    await evicting.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(contentKey('a'))));
+    await evicting.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(contentKey('b'))));
     await evicting.close();
 
     expect(blobRowTotal(contentKey('a'))).toBeGreaterThan(0);
@@ -1077,11 +1078,11 @@ describe('the blob tier is bounded', () => {
     // adopter tree it is 153,245 of the store's 193,605 rows.
     const evicting = openWithBlobWindow(2);
     const oldest = contentKey('a');
-    await evicting.writeBlobFacts(sampleBlobRows(oldest));
-    await evicting.writeBlobFacts(sampleBlobRows(contentKey('b')));
+    await evicting.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(oldest)));
+    await evicting.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(contentKey('b'))));
     const beforeEviction = blobRowTotal(oldest);
 
-    await evicting.writeBlobFacts(sampleBlobRows(contentKey('c')));
+    await evicting.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(contentKey('c'))));
     await evicting.close();
 
     expect(beforeEviction).toBeGreaterThan(0);
@@ -1103,11 +1104,11 @@ describe('the blob tier is bounded', () => {
     // one an eviction keyed on `blobs` would never see.
     const evicting = openWithBlobWindow(1);
     const declined = contentKey('d');
-    await evicting.writeBlobFacts(declinedBlobRows(declined));
+    await evicting.writeBlobFacts(uncoveredBlobWrite(declinedBlobRows(declined)));
     expect(blobRowCounts(declined)['blobs']).toBe(0);
     expect(blobRowTotal(declined)).toBeGreaterThan(0);
 
-    await evicting.writeBlobFacts(sampleBlobRows(contentKey('e')));
+    await evicting.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(contentKey('e'))));
     await evicting.close();
 
     expect(blobRowTotal(declined)).toBe(0);
@@ -1120,7 +1121,7 @@ describe('the blob tier is bounded', () => {
     // the `rowid` tie-break holds for a REFRESHED key too.
     const evicting = openWithBlobWindow(1);
     for (const seed of ['a', 'b', 'c']) {
-      await evicting.writeBlobFacts(sampleBlobRows(contentKey(seed)));
+      await evicting.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(contentKey(seed))));
       const held = await evicting.readBlobFacts([contentKey(seed)], ALL_BLOB_REQUEST);
       expect(held.blobs).toHaveLength(1);
     }
@@ -1135,10 +1136,10 @@ describe('the blob tier is bounded', () => {
     // tree larger than the window a full re-derivation that could never hit.
     const evicting = openWithBlobWindow(3);
     const keys = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'].map((seed) => contentKey(seed));
-    await evicting.writeBlobFacts({
+    await evicting.writeBlobFacts(uncoveredBlobWrite({
       blobs: [], blobReferences: [], blobSections: [], harnessBlobFacts: [], harnessBlobImports: [], skillTextFacts: [], skillTextMatches: [],
       blobConditions: keys.flatMap((key) => declinedBlobRows(key).blobConditions),
-    });
+    }));
     const held = await evicting.readBlobFacts(keys, ALL_BLOB_REQUEST);
     await evicting.close();
 
@@ -1149,13 +1150,13 @@ describe('the blob tier is bounded', () => {
     // The oversized write above holds more than the window until a later write
     // reclaims the surplus — so the bound is still a bound.
     const evicting = openWithBlobWindow(2);
-    await evicting.writeBlobFacts({
+    await evicting.writeBlobFacts(uncoveredBlobWrite({
       blobs: [], blobReferences: [], blobSections: [], harnessBlobFacts: [], harnessBlobImports: [], skillTextFacts: [], skillTextMatches: [],
       blobConditions: ['a', 'b', 'c', 'd'].flatMap((seed) => declinedBlobRows(contentKey(seed)).blobConditions),
-    });
+    }));
     expect(trackedBlobKeys()).toBe(4);
 
-    await evicting.writeBlobFacts(sampleBlobRows(contentKey('e')));
+    await evicting.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(contentKey('e'))));
     await evicting.close();
 
     expect(trackedBlobKeys()).toBe(2);
@@ -1167,7 +1168,7 @@ describe('the blob tier is bounded', () => {
     // the rows it just wrote — a store that pays every write cost and can never
     // hit.
     const evicting = openWithBlobWindow(0);
-    await evicting.writeBlobFacts(sampleBlobRows(contentKey('a')));
+    await evicting.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(contentKey('a'))));
     await evicting.close();
 
     expect(blobRowTotal(contentKey('a'))).toBeGreaterThan(0);
@@ -1178,8 +1179,8 @@ describe('the blob tier is bounded', () => {
     // shipped: the cache namespace is per RELEASE, so a store an earlier build
     // of the same release wrote keeps blob rows the manifest never names — rows
     // no eviction can see, under code that claims a ceiling.
-    await store.writeBlobFacts(sampleBlobRows(contentKey('a')));
-    await store.writeBlobFacts(sampleBlobRows(contentKey('b')));
+    await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(contentKey('a'))));
+    await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(contentKey('b'))));
     await store.close();
     dropBlobManifest();
     expect(blobRowTotal(contentKey('a'))).toBeGreaterThan(0);
@@ -1187,7 +1188,7 @@ describe('the blob tier is bounded', () => {
     // Reopening is what adopts; the write that follows is what evicts.
     const evicting = openWithBlobWindow(1);
     expect(trackedBlobKeys()).toBe(2);
-    await evicting.writeBlobFacts(sampleBlobRows(contentKey('c')));
+    await evicting.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(contentKey('c'))));
     await evicting.close();
     // Reassigned so the suite's own `afterEach` closes a live store.
     store = openSqliteFactStore({ directory });
@@ -1196,6 +1197,38 @@ describe('the blob tier is bounded', () => {
     expect(blobRowTotal(contentKey('b'))).toBe(0);
     expect(blobRowTotal(contentKey('c'))).toBeGreaterThan(0);
   });
+});
+
+/**
+ * The SQLite store under the shared writer contract: a fresh store on this
+ * case's directory, evicting a key as `evictBlobKeysPastRetention` does —
+ * every blob-scoped table's rows and the ledger row, in one transaction.
+ */
+const openForContract: BlobWriterContractFactory = ({ retainedBlobKeys }) => Promise.resolve({
+  store: openWithBlobWindow(retainedBlobKeys),
+  evict: (key) => {
+    const database = new DatabaseSync(safePath.join(directory, 'projection.db'));
+    try {
+      database.exec('BEGIN IMMEDIATE');
+      for (const spec of Object.values(PROJECTION_TABLES)) {
+        if (spec.scope !== 'blob') continue;
+        database.prepare(`DELETE FROM "${spec.name}" WHERE "${String(spec.primaryKey[0])}" = ?`).run(key);
+      }
+      database.prepare('DELETE FROM "blob_keys" WHERE "contentKey" = ?').run(key);
+      database.exec('COMMIT');
+    } finally {
+      database.close();
+    }
+    return Promise.resolve();
+  },
+});
+
+describe('the blob writer contract', () => {
+  for (const contractCase of BLOB_WRITER_CONTRACT) {
+    it(contractCase.name, async () => {
+      await expect(contractCase.run(openForContract), contractCase.mutant).resolves.toBeUndefined();
+    });
+  }
 });
 
 /** Turn the store on disk back into a pre-manifest one. */

@@ -106,7 +106,7 @@
     "fix-workspace-deps": "tsx packages/dev-tools/src/fix-workspace-deps.ts",
     "resolve-workspace-deps": "tsx packages/dev-tools/src/resolve-workspace-deps.ts",
     "prepare-cli-bin": "cd packages/cli && tsx ../dev-tools/src/prepare-bin.ts",
-    "vat": "node packages/cli/dist/bin/vat.js",
+    "vat": "tsx packages/dev-tools/src/run-vat.ts",
     "link-all": "tsx packages/dev-tools/src/link-all.ts",
     "unlink-all": "tsx packages/dev-tools/src/unlink-all.ts",
     "clean:deps": "rimraf --glob node_modules 'packages/*/node_modules'",

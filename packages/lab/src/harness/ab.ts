@@ -19,7 +19,7 @@
  * whichever arm ran during it. Alternation converts a systematic bias into a
  * per-pair one that shows up as disagreement between pairs, which is a signal
  * you can read rather than one that silently favours an arm. The second reason
- * is specific to this harness: vat namespaces its dev parse cache per build, so
+ * is specific to this harness: each arm keeps its own cache directory, so
  * each arm's *first* invocation is cold whatever `--cache` says. Under a block
  * design that cold invocation is one sample out of many for each arm and
  * disappears into the aggregate; under alternation it recurs symmetrically and

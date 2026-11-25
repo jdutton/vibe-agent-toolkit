@@ -409,8 +409,15 @@ describe('warm skills lanes read only the files the store is declared not to ser
     // Awaited below; held so a failure while the populating run is still going is not an unhandled rejection.
     offRuns.catch(() => undefined);
     const populate = await runVerb(cwd, ['validate'], warm, false, repo);
-    // Positive control: the populating run was cold, so it scanned every file the skills lane reaches.
-    expect(populate.dump.counters['skillText.storeMiss'], 'the populating run scanned every skills-lane file').toBe(Object.keys(SEEDS).length);
+    // Positive control: the populating run was cold, so its miss derived the home population and
+    // the run answers the skills lane from those rows, as a warm run answers from the store. So it
+    // scans exactly the files the declarations say no population row serves (each category's
+    // `lane.miss`): a file outside the home, over the cap, under another parser, not held, not
+    // text, or parse refused. The served categories are scanned by neither run.
+    const coldMisses = Object.values(SEEDS).reduce((sum, seed) => sum + CATEGORY[seed.category].lane.miss, 0);
+    expect(coldMisses, 'some seeds are served and some are not').toBeGreaterThan(0);
+    expect(coldMisses).toBeLessThan(Object.keys(SEEDS).length);
+    expect(populate.dump.counters['skillText.storeMiss'], 'the populating run scanned every declared fallback').toBe(coldMisses);
     // A warm run may write its caches, so each verb's runs on a private copy of the populated
     // ones, which lets them run side by side and serves each from exactly what populating left.
     const warmRuns = await Promise.all(verbs.map(async ([, verb]) => runVerb(cwd, verb.args, copyOf(warm), false, repo)));

@@ -10,8 +10,8 @@
 
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { runGit } from '../../src/harness/git-state.js';
-import { cleanupVerdictFixtures } from '../integration/verdict-fixtures.js';
+import { fixtureArmGit } from '../arm-tree-fixtures.js';
+import { cleanupVerdictFixtures, tempDir } from '../integration/verdict-fixtures.js';
 
 import { captureBuildArms, CI_C_STEPS, repetitionsOf, twelveFileSubject, UNLINKED_PAGES } from './edit-arms.js';
 
@@ -49,6 +49,7 @@ describe('perf arms: create and delete edit arms', () => {
     }
     expect(created.map((repetition) => repetition.edits?.changed)).toEqual([2, 2, 2]);
     expect(deleted.map((repetition) => repetition.edits?.changed)).toEqual([1, 1, 1]);
-    expect(runGit(['status', '--porcelain', '--untracked-files=all'], clone).stdout).toBe('');
+    // A lab-made tree, so read as the arms read it: under the arm's git (`arm-git.ts`).
+    expect(fixtureArmGit(tempDir('lab-edit-kinds-git-'))(['status', '--porcelain', '--untracked-files=all'], clone).stdout).toBe('');
   });
 });
