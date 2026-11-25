@@ -130,11 +130,12 @@ validation:
     # five cold populations at once on a CI runner can time a writer out. Serial,
     # the first populates and the rest reuse it.
     #
-    # The store lives under VAT_CACHE_DIR, which `bun run validate` sets for every
-    # step from packages/dev-tools/src/gate-vat-cache-dir.ts: CI's own value when
-    # set, else one directory per checkout. The cache namespace is the VAT version
-    # alone, so worktrees on the shared default root would be served each other's
-    # rows (not enforced: a bare `vibe-validate validate` skips it).
+    # The store lives under VAT_CACHE_DIR. Every step runs `bun run vat`, whose
+    # script (packages/dev-tools/src/run-vat.ts) keeps a VAT_CACHE_DIR already set
+    # (CI's own) and otherwise sets one directory per checkout. The cache namespace
+    # is the VAT version alone, so worktrees on the shared default root would be
+    # served each other's rows (not enforced: a step that runs the CLI without
+    # `bun run vat` skips it).
     - name: 'VAT dogfood'
       parallel: false
       steps:

@@ -295,12 +295,13 @@ The cache namespace is the VAT version alone, so every checkout of one version s
 and the store under whatever cache root they share. Two worktrees on the default
 `<tmpdir>/.vat-cache`, one with an extractor edit and one without, are served each other's rows: a
 key one of them filed is covered for the other, and the edited code never runs on it. `bun run
-validate` gives each checkout its own `VAT_CACHE_DIR` (`gate-vat-cache-dir.ts`, CI's value when
-set); a bare `vibe-validate validate` or a hand-run `bun run vat` does not.
+vat` (the gate's `vat` steps and a hand run alike) gives each checkout its own `VAT_CACHE_DIR`
+(`packages/dev-tools/src/run-vat.ts`, a value already set passes through); running
+`packages/cli/dist/bin/vat.js` or an installed `vat` directly does not.
 **Tell:** a warm run in one worktree disagrees with a cold run of the same tree, or an extractor
 edit changes nothing until `vat cache clear`; the run's facts were filed by the other worktree.
-**Remedy:** run the gate as `bun run validate`; for hand runs, set `VAT_CACHE_DIR` per checkout
-(the path `bun packages/dev-tools/src/gate-vat-cache-dir.ts` prints) or clear the cache.
+**Remedy:** run VAT from a checkout as `bun run vat`; otherwise set `VAT_CACHE_DIR` per checkout
+or clear the cache.
 
 ### `--no-cache` must reach every cache, and a store must evict
 

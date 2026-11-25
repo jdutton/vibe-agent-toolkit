@@ -41,9 +41,9 @@
  * changes what VAT derives clears the cache when they want a cold one:
  * `vat cache clear` deletes the whole cache root. `vat cache prune` removes
  * every other version's namespace and every other-shape store, and keeps this
- * version's. This repo's own gate and CI are each isolated. `bun run validate`
+ * version's. This repo's own gate and CI are each isolated. `bun run vat`
  * gives every checkout its own `VAT_CACHE_DIR`
- * (`packages/dev-tools/src/gate-vat-cache-dir.ts`) unless one is set. CI sets
+ * (`packages/dev-tools/src/run-vat.ts`) unless one is set. CI sets
  * `$RUNNER_TEMP/vat-cache`, and its `actions/cache` key hashes `bun.lock` and
  * the `src/` of the packages the CLI runs (utils, schema, resources,
  * projection-sqlite, discovery, agent-skills, claude-marketplace, cli;
