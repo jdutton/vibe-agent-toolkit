@@ -59,7 +59,7 @@ import { resolveFromImportMeta } from '@vibe-agent-toolkit/utils';
 import localRules from '@vibe-agent-toolkit/utils/eslint';
 import { toForwardSlash } from '@vibe-agent-toolkit/utils/path';
 import { ESLint } from 'eslint';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, inject, it } from 'vitest';
 
 
 /** The repo root, where `eslint.config.js` lives. */
@@ -141,6 +141,18 @@ const PROBE_FILES: Readonly<Record<string, string>> = {
 /** `error` as ESLint normalizes it out of `calculateConfigForFile`. */
 const ERROR = 2;
 
+/**
+ * One resolver for the whole file. Its first question imports `eslint.config.js` and every plugin
+ * it names, about 1-2 s and the whole cost of this file (each later question is ~15 ms); that import is
+ * paid once, in the hook below, rather than by whichever case happens to ask first, where on a
+ * loaded runner it spent a single case's 15 s. The hook keeps the allowance a case had.
+ */
+const eslint = new ESLint({ cwd: REPO_ROOT });
+
+beforeAll(async () => {
+  await eslint.calculateConfigForFile(`${REPO_ROOT}/${REPO_WIDE_PROBE}`);
+}, inject('tierTestTimeout'));
+
 /** Rule ids are `<namespace>/<name>`; the namespace is not a path. */
 function bareName(ruleId: string): string {
   return ruleId.slice(ruleId.lastIndexOf('/') + 1);
@@ -160,7 +172,6 @@ function locallyEnabledOnlyRules(): string[] {
 }
 
 describe('local ESLint rules excluded from `recommended` are enabled in this repo', () => {
-  const eslint = new ESLint({ cwd: REPO_ROOT });
   const derived = locallyEnabledOnlyRules();
 
   it('names a probe file for every rule `recommended` excludes, and no others', () => {
@@ -188,7 +199,7 @@ describe('local ESLint rules excluded from `recommended` are enabled in this rep
 });
 
 /** The purity rule's severity for one repository path, or `undefined` when it is not configured there. */
-async function puritySeverityAt(eslint: ESLint, relative: string): Promise<unknown> {
+async function puritySeverityAt(relative: string): Promise<unknown> {
   const config = await eslint.calculateConfigForFile(`${REPO_ROOT}/${relative}`);
   return config.rules?.['local/skill-text-core-purity']?.[0];
 }
@@ -196,7 +207,6 @@ async function puritySeverityAt(eslint: ESLint, relative: string): Promise<unkno
 describe('`local/skill-text-core-purity` governs the skill-text directory by glob, the declaration aside', () => {
   const directory = 'packages/resources/src/skill-text';
   const declaration = `${directory}/declaration.ts`;
-  const eslint = new ESLint({ cwd: REPO_ROOT });
 
   it('holds every module there but the declaration, and a module not yet written', async () => {
     const modules = readdirSync(`${REPO_ROOT}/${directory}`, { recursive: true, encoding: 'utf-8' })
@@ -205,12 +215,12 @@ describe('`local/skill-text-core-purity` governs the skill-text directory by glo
       .filter((path) => path !== declaration);
     expect(modules.length, 'the directory must hold modules other than the declaration').toBeGreaterThan(1);
     for (const path of [...modules, `${directory}/a-helper-not-yet-written.ts`, `${directory}/nested/helper.ts`]) {
-      expect(await puritySeverityAt(eslint, path), path).toBe(ERROR);
+      expect(await puritySeverityAt(path), path).toBe(ERROR);
     }
   });
 
   it('does not hold the declaration, which is where every pattern and constant lives', async () => {
-    expect(await puritySeverityAt(eslint, declaration)).toBeUndefined();
+    expect(await puritySeverityAt(declaration)).toBeUndefined();
   });
 });
 
@@ -219,7 +229,7 @@ describe('sonarjs `aws-*` rules stay off', () => {
   // of, and one of them was 9% of lint time. A later block that re-applies sonarjs's
   // `recommended` would turn all of them back on with lint still green.
   it('resolves every one to off for a product source file', async () => {
-    const config = await new ESLint({ cwd: REPO_ROOT }).calculateConfigForFile(
+    const config = await eslint.calculateConfigForFile(
       `${REPO_ROOT}/packages/cli/src/bin.ts`,
     );
     const aws = Object.entries(config.rules ?? {}).filter(([rule]) => rule.startsWith('sonarjs/aws-'));

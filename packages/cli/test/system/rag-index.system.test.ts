@@ -86,7 +86,7 @@ describe('RAG index command (system test)', () => {
     expect(report.examined).toBeGreaterThanOrEqual(report.data?.resourcesIndexed ?? Number.NaN);
     expect(report.data?.resourcesIndexed).toBeGreaterThan(0);
     expect(report.data?.chunksCreated).toBeGreaterThan(0);
-    expect(report.durationMs).toBeGreaterThanOrEqual(0);
+    expect(report.status === 'error' ? undefined : report.durationMs).toBeGreaterThanOrEqual(0);
 
     // Verify database was created
     expect(fs.existsSync(dbPath)).toBe(true);
@@ -114,7 +114,7 @@ describe('RAG index command (system test)', () => {
     );
 
     expect(result1.status).toBe(0);
-    expect(parsed1.status).toBe('ok');
+    expect(parsed1['status']).toBe('ok');
     const first = RAG_INDEX_REPORT_SCHEMA.parse(parsed1).data;
     expect(first?.resourcesIndexed).toBeGreaterThan(0);
 
@@ -127,7 +127,7 @@ describe('RAG index command (system test)', () => {
     );
 
     expect(result2.status).toBe(0);
-    expect(parsed2.status).toBe('ok');
+    expect(parsed2['status']).toBe('ok');
     expect(RAG_INDEX_REPORT_SCHEMA.parse(parsed2).data).toMatchObject({
       resourcesSkipped: first?.resourcesIndexed,
       resourcesIndexed: 0,

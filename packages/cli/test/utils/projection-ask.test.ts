@@ -4,7 +4,7 @@
  * projection is built in memory and the run database lives in memory.
  */
 
-import { PROJECTION_STATEMENT_REFUSED_CODE, PROJECTION_TABLES, type Projection } from '@vibe-agent-toolkit/resources';
+import { PROJECTION_STATEMENT_REFUSED_CODE, PROJECTION_TABLES, withPopulationRun, type Projection } from '@vibe-agent-toolkit/resources';
 import { isVatError } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -20,7 +20,7 @@ function emptyProjection(): Projection {
 
 /** Run `work` over the empty projection with `statements` declared. */
 function askEmpty<T>(statements: readonly string[], work: Parameters<typeof askPopulatedProjection<T>>[1]): Promise<T> {
-  return askPopulatedProjection(
+  return withPopulationRun((populationRun) => askPopulatedProjection(
     {
       projection: emptyProjection(),
       outcome: { population: 'derived' },
@@ -29,10 +29,11 @@ function askEmpty<T>(statements: readonly string[], work: Parameters<typeof askP
       statements,
       base: undefined,
       cache: undefined,
+      populationRun,
       populationStart: performance.now(),
     },
     work,
-  );
+  ));
 }
 
 /** What one call threw, or undefined. */

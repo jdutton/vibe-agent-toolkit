@@ -115,8 +115,8 @@ ${paragraph.repeat(3)}
       limit: 5,
     });
     console.log(`Unfiltered returned ${testUnfilteredResult.chunks.length} chunks`);
-    if (testUnfilteredResult.chunks.length > 0) {
-      const firstChunk = testUnfilteredResult.chunks[0];
+    const firstChunk = testUnfilteredResult.chunks[0];
+    if (firstChunk !== undefined) {
       console.log('First chunk metadata:', {
         type: firstChunk.type,
         tags: firstChunk.tags,

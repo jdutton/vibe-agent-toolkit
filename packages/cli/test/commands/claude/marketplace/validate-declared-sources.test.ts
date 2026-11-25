@@ -43,6 +43,7 @@ import type { MarketplaceValidateReport } from '../../../../src/commands/claude/
 import { runMarketplaceValidatePhase } from '../../../../src/commands/claude/marketplace/validate.js';
 import { publishedPhase } from '../../../helpers/published-phase.js';
 import { errno, realBehind, refuseOnDefault, refusingOnly } from '../../../helpers/refusal-doubles.js';
+import { reportData } from '../../../report-envelope.js';
 
 // `readdirSync` is a named import in the command, so the refused-`skills/` case injects at the
 // module seam. A source's `stat` goes through utils' link-following, which reaches the kernel through
@@ -113,7 +114,7 @@ function writePlugin(dir: string, name: string): void {
 function expectRefusedRun(exitCode: number, doc: MarketplaceValidateReport): void {
   expect(exitCode).toBe(1);
   expect(doc.status).toBe('findings');
-  expect(doc.data.plugins).toEqual([]);
+  expect(reportData(doc).plugins).toEqual([]);
 }
 
 /** Run the command the way the CLI does, minus the emission; the document parsed with its registry schema. */
@@ -129,9 +130,9 @@ async function validate(root: string, verbose = false): Promise<{ exitCode: numb
 async function expectPassedValidating(
   root: string,
   rows: Array<[name: string, path: string]>,
-): Promise<{ doc: MarketplaceValidateReport; plugins: MarketplaceValidateReport['data']['plugins'] }> {
+): Promise<{ doc: MarketplaceValidateReport; plugins: NonNullable<MarketplaceValidateReport['data']>['plugins'] }> {
   const { exitCode, doc } = await validate(root);
-  const plugins = doc.data.plugins;
+  const plugins = reportData(doc).plugins;
 
   expect(exitCode).toBe(0);
   expect(doc.summary.errors).toBe(0);
@@ -178,7 +179,7 @@ describe('marketplace validate — the denominator is the DECLARED local sources
     const { doc, plugins } = await expectPassedValidating(root, [['colocated-plugin', '.']]);
 
     expect(plugins.map((p) => [p.source, p.manifestRead, p.summary.errors])).toEqual([['./', true, 0]]);
-    expect(doc.data.undeclared).toEqual([]);
+    expect(reportData(doc).undeclared).toEqual([]);
   });
 
   it('(b) refuses when the declared source does not resolve, naming it — an undeclared sibling does not count', async () => {
@@ -196,7 +197,7 @@ describe('marketplace validate — the denominator is the DECLARED local sources
     expectRefusedRun(exitCode, doc);
     // The undeclared directory is LISTED, not validated: nothing about `b`
     // appears in `issues`, and its presence is not what fails the run.
-    expect(doc.data.undeclared).toEqual(['plugins/b']);
+    expect(reportData(doc).undeclared).toEqual(['plugins/b']);
     expect(issues.filter((i) => i.code !== RUN_INTEGRITY_CODE)).toEqual([]);
     // ONE refusal, at error, naming the source that did not resolve.
     expect(issues.filter((i) => i.code === RUN_INTEGRITY_CODE)).toHaveLength(1);
@@ -218,7 +219,7 @@ describe('marketplace validate — the denominator is the DECLARED local sources
 
     const { doc } = await expectPassedValidating(root, [['a', PLUGIN_A]]);
 
-    expect(doc.data.undeclared).toEqual(['plugins/b']);
+    expect(reportData(doc).undeclared).toEqual(['plugins/b']);
   });
 
   it('refuses a declared source that resolves to a FILE, not a directory', async () => {
@@ -233,9 +234,9 @@ describe('marketplace validate — the denominator is the DECLARED local sources
     const issues = doc.findings;
 
     expect(exitCode).toBe(1);
-    expect(doc.data.plugins).toHaveLength(0);
+    expect(reportData(doc).plugins).toHaveLength(0);
     expect(issues.map((i) => i.code)).toEqual([RUN_INTEGRITY_CODE]);
-    expect(doc.data.undeclared).toEqual([]);
+    expect(reportData(doc).undeclared).toEqual([]);
   });
 
   it('refuses the RUN when the OS refuses a declared source, rather than reporting it as unresolved', async () => {
@@ -269,7 +270,7 @@ describe('marketplace validate — the denominator is the DECLARED local sources
     const issues = doc.findings;
 
     expect(exitCode).toBe(1);
-    expect(doc.data.plugins).toHaveLength(1);
+    expect(reportData(doc).plugins).toHaveLength(1);
     expect(issues.map((i) => i.code)).not.toContain(RUN_INTEGRITY_CODE);
     expect(issues.map((i) => i.code)).toContain('PLUGIN_MISSING_MANIFEST');
   });
@@ -287,8 +288,8 @@ describe('marketplace validate — the denominator is the DECLARED local sources
     const doc = await expectUnreadRefusal(root, 'plugins/a/.claude-plugin/plugin.json');
     // The per-path finding still names the errno; the row says it was not read.
     expect(doc.findings.map((i) => i.code)).toContain('SCAN_PATH_UNREADABLE');
-    expect(doc.data.plugins.map((p) => [p.path, p.manifestRead])).toEqual([['plugins/a', false]]);
-    expect(doc.data.refused).toEqual([]);
+    expect(reportData(doc).plugins.map((p) => [p.path, p.manifestRead])).toEqual([['plugins/a', false]]);
+    expect(reportData(doc).refused).toEqual([]);
   });
 
   it('refuses the RUN when the OS will not read a plugin skill\'s SKILL.md — never INTERNAL_ERROR, never a pass', async () => {
@@ -303,7 +304,7 @@ describe('marketplace validate — the denominator is the DECLARED local sources
     const doc = await expectUnreadRefusal(root, 'plugins/a/skills/s1/SKILL.md');
     expect(doc.findings.filter((i) => i.code === 'SCAN_PATH_UNREADABLE').map((i) => i.location)).toEqual(['plugins/a/skills/s1/SKILL.md']);
     // The plugin's own manifest WAS read; only the skill was not.
-    expect(doc.data.plugins.map((p) => [p.path, p.manifestRead])).toEqual([['plugins/a', true]]);
+    expect(reportData(doc).plugins.map((p) => [p.path, p.manifestRead])).toEqual([['plugins/a', true]]);
   });
 
   it('refuses the RUN when the OS will not list a plugin\'s skills/ directory — never INTERNAL_ERROR, never a pass', async () => {
@@ -340,8 +341,8 @@ describe('marketplace validate — the denominator is the DECLARED local sources
 
     expect(exitCode).toBe(0);
     expect(doc.summary.errors).toBe(0);
-    expect(doc.data.plugins).toHaveLength(0);
-    expect(doc.data.undeclared).toEqual([]);
+    expect(reportData(doc).plugins).toHaveLength(0);
+    expect(reportData(doc).undeclared).toEqual([]);
   });
 });
 
@@ -351,7 +352,7 @@ describe('marketplace validate — the denominator is the DECLARED local sources
  * and names something INSIDE it, so none may begin with `../`.
  */
 function everyLocationIn(doc: MarketplaceValidateReport): string[] {
-  return [...doc.findings.map((i) => i.location), ...doc.data.plugins.map((p) => p.path)]
+  return [...doc.findings.map((i) => i.location), ...reportData(doc).plugins.map((p) => p.path)]
     .filter((l): l is string => typeof l === 'string');
 }
 
@@ -510,12 +511,12 @@ describe('marketplace validate — a declared source never leaves the marketplac
     writePlugin(safePath.join(root, 'plugins', 'x'), 'x');
 
     const { doc } = await validate(root);
-    const validatedPaths = doc.data.plugins.map((p) => p.path);
-    const undeclared = doc.data.undeclared;
+    const validatedPaths = reportData(doc).plugins.map((p) => p.path);
+    const undeclared = reportData(doc).undeclared;
 
     // XOR: the directory appears on exactly one side of the ledger.
     expect(validatedPaths.includes(PLUGIN_X)).not.toBe(undeclared.includes(PLUGIN_X));
-    expect(doc.data.plugins).toHaveLength(1);
+    expect(reportData(doc).plugins).toHaveLength(1);
     expect(undeclared).toEqual([]);
   });
 
@@ -598,8 +599,8 @@ describe.skipIf(SYMLINK_CAP === null)('marketplace validate — containment hold
 
     expect(exitCode).toBe(1);
     expect(doc.status).toBe('findings');
-    expect(doc.data.plugins).toHaveLength(1);
-    expect(doc.data.refused).toEqual([refusedPath]);
+    expect(reportData(doc).plugins).toHaveLength(1);
+    expect(reportData(doc).refused).toEqual([refusedPath]);
     expect(integrity).toHaveLength(1);
     expect(integrity[0]?.message).toContain(`\`${refusedPath}\``);
     // Never read: the outside skill's broken link is not a finding here, and
@@ -645,7 +646,7 @@ describe.skipIf(SYMLINK_CAP === null)('marketplace validate — containment hold
     const issues = doc.findings;
 
     expect(exitCode).toBe(1);
-    expect(doc.data.refused).toEqual(['plugins/a/.claude-plugin/plugin.json']);
+    expect(reportData(doc).refused).toEqual(['plugins/a/.claude-plugin/plugin.json']);
     expect(issues.filter((i) => i.code === RUN_INTEGRITY_CODE)).toHaveLength(1);
     // Not parsed: none of the manifest-content findings a read would produce.
     expect(issues.map((i) => i.code)).not.toContain('PLUGIN_MISSING_AUTHOR');
@@ -653,7 +654,7 @@ describe.skipIf(SYMLINK_CAP === null)('marketplace validate — containment hold
     // The unread plugin's own row is `error`, not a clean row over an empty
     // issue list — the library `status` of an unread result is `ok`, so only
     // `manifestRead: false` can say it.
-    expect(doc.data.plugins.map((p) => [p.path, p.manifestRead, p.summary])).toEqual([
+    expect(reportData(doc).plugins.map((p) => [p.path, p.manifestRead, p.summary])).toEqual([
       ['plugins/a', false, { errors: 0, warnings: 0, info: 0 }],
     ]);
   });
@@ -671,7 +672,7 @@ describe.skipIf(SYMLINK_CAP === null)('marketplace validate — containment hold
     const { doc } = await validate(root, true);
     const issues = doc.findings;
 
-    expect(doc.data.refused).toEqual([]);
+    expect(reportData(doc).refused).toEqual([]);
     expect(issues.map((i) => i.code)).not.toContain(RUN_INTEGRITY_CODE);
     expect(issues.some((i) => i.code === 'LINK_INTEGRITY_BROKEN' && i.location === SKILL_LEAK)).toBe(true);
   });

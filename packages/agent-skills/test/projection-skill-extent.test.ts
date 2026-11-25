@@ -8,7 +8,7 @@
  */
 
 
-import { ContributorRegistry } from '@vibe-agent-toolkit/resources';
+import { ContributorRegistry, type SkillPackagingConfig } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
 import { LINK_GRAPH_MEMBER_GLOBS } from '../src/link-graph-members.js';

@@ -82,7 +82,7 @@ describe('vat audit — YAML states one root and re-bases every path onto it (sy
   it('exits 1 (the tree has findings) and states the scan root as the only absolute path in the document', () => {
     // Exit 1: this tree has an error-severity finding.
     expect(exitStatus).toBe(1);
-    expect(AUDIT_REPORT_SCHEMA.parse(parsed).data.root).toBe(toForwardSlash(scanRoot));
+    expect(AUDIT_REPORT_SCHEMA.parse(parsed).data?.root).toBe(toForwardSlash(scanRoot));
 
     const anchors = anchorsBelowRoot(parsed);
     expect(anchors.length).toBeGreaterThan(0);
@@ -90,7 +90,7 @@ describe('vat audit — YAML states one root and re-bases every path onto it (sy
   });
 
   it('makes every path and location joinable against that one root', () => {
-    expect(anchorContractViolations(anchorsBelowRoot(parsed), AUDIT_REPORT_SCHEMA.parse(parsed).data.root ?? '')).toEqual([]);
+    expect(anchorContractViolations(anchorsBelowRoot(parsed), AUDIT_REPORT_SCHEMA.parse(parsed).data?.root ?? '')).toEqual([]);
   });
 
   it('keeps the two same-named plugins distinguishable — one location per manifest', () => {

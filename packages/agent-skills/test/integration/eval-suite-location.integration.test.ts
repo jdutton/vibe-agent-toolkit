@@ -143,7 +143,7 @@ describe('${fixturesDir} wiring (integration)', () => {
 
     const fake = makeHarnessFakeSpawn({
       onExecutorSpawn: (opts) => {
-        injected = opts.env?.CUSTOMER_SNAPSHOT_PATH;
+        injected = opts.env?.['CUSTOMER_SNAPSHOT_PATH'];
       },
     });
 

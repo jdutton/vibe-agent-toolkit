@@ -62,7 +62,7 @@ describe('loadConfig', () => {
 
     const result = loadConfig(tempDir, 'source');
     expect(result?.resources?.exclude).toEqual(['node_modules/**']);
-    expect(result?.resources?.collections?.docs?.include).toEqual(['docs/**/*.md']);
+    expect(result?.resources?.collections?.['docs']?.include).toEqual(['docs/**/*.md']);
   });
 
   it('should throw on invalid config schema', () => {
@@ -206,7 +206,7 @@ claude:
     fs.writeFileSync(configPath, configContent);
 
     const result = loadConfig(tempDir, 'source');
-    expect(result?.resources?.collections?.docs).toBeDefined();
+    expect(result?.resources?.collections?.['docs']).toBeDefined();
     expect(result?.claude?.marketplaces?.['vat-skills']?.owner?.name).toBe(
       'vibe-agent-toolkit contributors'
     );

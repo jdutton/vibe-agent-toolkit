@@ -6,11 +6,16 @@ import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapabi
 import { archiveEntriesOfDirectory, CANNOT_DENY_READS, installFaultFs, tarFixture, zipFixture } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
+import type { z } from 'zod';
 
-import { SKILLS_INSTALL_REPORT_SCHEMA, type SkillsInstallReport } from '../../src/commands/skills/install-schema.js';
+import { SKILLS_INSTALL_REPORT_SCHEMA } from '../../src/commands/skills/install-schema.js';
 import { installCommand, type InstallCommandOptions } from '../../src/commands/skills/install.js';
 import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 import { captureCommand } from '../helpers/stdout-capture.js';
+import { refusalOf } from '../report-envelope.js';
+
+/** The install report as its registry schema parses it. */
+type SkillsInstallReport = z.infer<typeof SKILLS_INSTALL_REPORT_SCHEMA>;
 
 /** Run the install lane: the report it published (validated against its registry schema) and the code it ended on. */
 async function runInstall(
@@ -33,8 +38,8 @@ async function install(source: string, options: InstallCommandOptions): Promise<
 async function expectRefusal(source: string, options: InstallCommandOptions, code: RefusalCode, message: RegExp): Promise<void> {
   const { report, exited } = await runInstall(source, options);
   expect(exited).toBe(ExitCode.ERROR);
-  expect(report.error?.code).toBe(code);
-  expect(report.error?.message).toMatch(message);
+  expect(refusalOf(report)?.code).toBe(code);
+  expect(refusalOf(report)?.message).toMatch(message);
 }
 
 /**
@@ -407,7 +412,7 @@ describe('vat skills install — refusals coded at their cause', () => {
       session.restore();
     }
     expect(outcome.exited).toBe(ExitCode.ERROR);
-    expect(outcome.report.error?.code).toBe('RUN_INCOMPLETE');
+    expect(refusalOf(outcome.report)?.code).toBe('RUN_INCOMPLETE');
   });
 
   // ONE layout rule for a skill ZIP, shared with `vat claude plugin install` and the org upload
@@ -549,8 +554,8 @@ describe('vat skills install — refusals coded at their cause', () => {
       const { report, exited } = await runInstall(source, at());
 
       expect(exited).toBe(ExitCode.ERROR);
-      expect(report.error?.code).toBe('INPUT_UNREADABLE');
-      expect(report.error?.message).toContain(unreadable);
+      expect(refusalOf(report)?.code).toBe('INPUT_UNREADABLE');
+      expect(refusalOf(report)?.message).toContain(unreadable);
       expect(report.examined).toBe(2);
       expect(report.data).toBeNull();
       expect(report.findings.map((finding) => finding.code)).toContain('SKILL_DESCRIPTION_FILLER_OPENER');
@@ -661,7 +666,7 @@ describe('vat skills install — one transaction for the batch', () => {
     const { report, exited } = await installWithFullDiskFor(tempDir, 'skill-two', distSkills, at());
 
     expect(exited).toBe(ExitCode.ERROR);
-    expect(report.error?.code).toBe('RUN_INCOMPLETE');
+    expect(refusalOf(report)?.code).toBe('RUN_INCOMPLETE');
     expect(report.data).toBeNull();
     expect(existsSync(installed('skill-one'))).toBe(false);
     expect(existsSync(installed('skill-two'))).toBe(false);
@@ -674,7 +679,7 @@ describe('vat skills install — one transaction for the batch', () => {
     const { report, exited } = await installWithFullDiskFor(tempDir, 'dup-skill', skillSrc, at({ force: true }));
 
     expect(exited).toBe(ExitCode.ERROR);
-    expect(report.error?.code).toBe('RUN_INCOMPLETE');
+    expect(refusalOf(report)?.code).toBe('RUN_INCOMPLETE');
     await expect(readFile(safePath.join(installed('dup-skill'), 'SKILL.md'), 'utf-8')).resolves.toBe(before);
   });
 

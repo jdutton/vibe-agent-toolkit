@@ -17,14 +17,18 @@ interface FormCase {
 
 const CASES: FormCase[] = [
   {
-    name: 'follows an import in a file the program includes but ESLint ignores (a .d.ts, a *.config.ts)',
+    name: 'follows an import in a file the program includes but ESLint ignores (a .d.ts, a *.config.ts, test/fixtures/**, a .mts)',
     files: {
       'packages/a/src/types/ambient.d.ts': "import type { T } from '../../../b/src/from-dts.js';\nexport type U = T;\n",
       'packages/a/vitest.config.ts': "import { cfg } from '../b/src/from-config.js';\nexport default cfg;\n",
+      'packages/a/test/fixtures/f.ts': "import { fx } from '../../../b/src/from-fixture.js';\nexport const f = fx;\n",
+      'packages/a/src/m.mts': "import { mx } from '../../b/src/from-mts.js';\nexport const m = mx;\n",
       'packages/b/src/from-dts.ts': 'export type T = string;\n',
       'packages/b/src/from-config.ts': 'export const cfg = {};\n',
+      'packages/b/src/from-fixture.ts': 'export const fx = 1;\n',
+      'packages/b/src/from-mts.ts': 'export const mx = 1;\n',
     },
-    expected: ['packages/b/src/from-config.ts', 'packages/b/src/from-dts.ts'],
+    expected: ['packages/b/src/from-config.ts', 'packages/b/src/from-dts.ts', 'packages/b/src/from-fixture.ts', 'packages/b/src/from-mts.ts'],
   },
   {
     name: 'maps a .js specifier to a .d.ts',

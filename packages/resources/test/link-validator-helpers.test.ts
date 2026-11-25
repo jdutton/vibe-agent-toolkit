@@ -59,10 +59,10 @@ function makeOptions(overrides: Partial<GitIgnoreCheckOptions> = {}): GitIgnoreC
 
 function makeGitTrackerOptions(
   tracker: { isIgnoredByActiveSet: (p: string) => boolean },
-  overrides: Partial<GitIgnoreCheckOptions> = {},
+  overrides: Omit<Partial<GitIgnoreCheckOptions>, 'gitTracker'> = {},
 ): GitIgnoreCheckOptions {
   return makeOptions({
-    gitTracker: tracker as unknown as GitIgnoreCheckOptions['gitTracker'],
+    gitTracker: tracker as unknown as NonNullable<GitIgnoreCheckOptions['gitTracker']>,
     ...overrides,
   });
 }
@@ -97,7 +97,7 @@ describe('resolutionFailureIssue', () => {
 
   it('returns broken_file with documented absolute_escapes_root message', () => {
     const issue = resolutionFailureIssue(
-      { kind: 'absolute_escapes_root', href: '/../etc/passwd', anchor: undefined },
+      { kind: 'absolute_escapes_root', href: '/../etc/passwd', resolvedPath: '/etc/passwd', anchor: undefined },
       makeLink('/../etc/passwd'),
       SOURCE,
     );

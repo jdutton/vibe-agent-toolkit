@@ -12,7 +12,17 @@ vi.mock('markdown-link-check', () => ({
 	default: vi.fn(),
 }));
 
-const mockedLinkCheck = vi.mocked(markdownLinkCheck);
+/** The three-argument overload the validator calls; `vi.mocked` alone would pick the last (two-argument) one. */
+type LinkCheckWithOptions = (
+	markdown: string,
+	options: { aliveStatusCodes?: number[] },
+	callback: (
+		error: Error | null,
+		results: Array<{ link: string; status: string; statusCode: number; err?: unknown }>,
+	) => void,
+) => void;
+
+const mockedLinkCheck = vi.mocked(markdownLinkCheck as LinkCheckWithOptions);
 
 const EXAMPLE_URL = 'https://www.example.com';
 const GITHUB_URL = 'https://github.com';

@@ -110,10 +110,10 @@ describe('classifyAuthenticatedResponse — returned code is a real CODE_REGISTR
     // exact registry keys, not via the classifier itself.
     const { CODE_REGISTRY } = await import('@vibe-agent-toolkit/schema');
     const codes = [
-      classifyAuthenticatedResponse(401, DEAD).code,
-      classifyAuthenticatedResponse(403, DEAD).code,
-      classifyAuthenticatedResponse(404, DEAD).code,
-      classifyAuthenticatedResponse(404, AMBIGUOUS).code,
+      classifyAuthenticatedResponse(401, DEAD)?.code ?? null,
+      classifyAuthenticatedResponse(403, DEAD)?.code ?? null,
+      classifyAuthenticatedResponse(404, DEAD)?.code ?? null,
+      classifyAuthenticatedResponse(404, AMBIGUOUS)?.code ?? null,
     ];
     for (const code of codes) {
       expect(code).not.toBeNull();

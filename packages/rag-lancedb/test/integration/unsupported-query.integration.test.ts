@@ -180,6 +180,7 @@ describe('unsupported queries are refused rather than widened', () => {
     const result = await suite.provider.query({
       text: QUERY_TEXT,
       limit: 10,
+      // @ts-expect-error -- deliberately values the declared string[] does not admit: an open JSON payload reaches this path unchecked
       filters: { metadata: { tags: value } },
     });
 

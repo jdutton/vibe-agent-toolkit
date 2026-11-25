@@ -148,8 +148,8 @@ describe('assembleChildEnv', () => {
       subjectPluginRoot: null,
     });
 
-    expect(result.env.VENDOR_LICENSE_KEY).toBe('lic-xyz');
-    expect(result.env.CUSTOMER_SNAPSHOT_PATH).toBe('/staged/evals/fixtures/snap.json');
+    expect(result.env['VENDOR_LICENSE_KEY']).toBe('lic-xyz');
+    expect(result.env['CUSTOMER_SNAPSHOT_PATH']).toBe('/staged/evals/fixtures/snap.json');
     expect(result.warnings).toEqual([]);
 
     expect(result.line).toContain('ANTHROPIC_API_KEY(redacted)');
@@ -167,7 +167,7 @@ describe('assembleChildEnv', () => {
       source: {},
       subjectPluginRoot: pluginRoot,
     });
-    expect(result.env.CLAUDE_PLUGIN_ROOT).toBe(pluginRoot);
+    expect(result.env['CLAUDE_PLUGIN_ROOT']).toBe(pluginRoot);
   });
 
   it('lets the protected base value win on a collision and warns', () => {
@@ -177,7 +177,7 @@ describe('assembleChildEnv', () => {
       injectEnv: { PATH: '/evil' },
       subjectPluginRoot: null,
     });
-    expect(result.env.PATH).toBe('/usr/bin');
+    expect(result.env['PATH']).toBe('/usr/bin');
     expect(result.warnings.length).toBeGreaterThan(0);
   });
 });

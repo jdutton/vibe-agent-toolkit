@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 
 import eslint from '@eslint/js';
 import eslintComments from '@eslint-community/eslint-plugin-eslint-comments';
@@ -10,7 +10,7 @@ import security from 'eslint-plugin-security';
 import sonarjs from 'eslint-plugin-sonarjs';
 import unicorn from 'eslint-plugin-unicorn';
 
-import { declaredTypesFiles, gitignorePatterns, IGNORE_FILES, lintTaskRefusal } from './eslint-config-support.js';
+import { gitignorePatterns, IGNORE_FILES, missingDeclaredTypes, programTaskRefusal, workspacePackages } from './eslint-config-support.js';
 import localRules from './packages/utils/eslint/index.cjs';
 
 /**
@@ -364,35 +364,6 @@ export const NO_UNSAFE_BACKLOG = [
 ];
 
 /**
- * Every workspace package: its directory under `packages/` and its manifest name. Read
- * here rather than by a rule module — see {@link selfImportConfigs} for why.
- */
-function workspacePackages() {
-  // 🪤 Resolved against THIS FILE, never against the cwd. `readdirSync('packages')`
-  // is relative to wherever eslint was started, so any invocation from inside a
-  // package — `turbo run lint`, which sets cwd to the package it is linting —
-  // died with `ENOENT: scandir 'packages'` before linting a line. Not a finding
-  // and not a lint error: a config load failure, exit 2, in every package.
-  //
-  // A `URL` rather than a `path.join`: this file is subject to the `no-raw-node-path`
-  // rule it declares two functions below, and a relative `URL` needs no exemption
-  // to be correct on Windows either. The `files:` globs stay strings because flat
-  // config already resolves those against the config file's own directory.
-  const packagesDir = new URL('packages/', import.meta.url);
-  return readdirSync(packagesDir, { withFileTypes: true })
-    // Followed inline (this file cannot import the utils helper): a workspace
-    // package reached through a link is still a package with a name to guard.
-    .filter((entry) => (entry.isSymbolicLink() ? statSync(new URL(`${entry.name}/`, packagesDir)).isDirectory() : entry.isDirectory()))
-    .flatMap((entry) => {
-      const manifest = new URL(`${entry.name}/package.json`, packagesDir);
-      if (!existsSync(manifest)) return [];
-      const { name } = JSON.parse(readFileSync(manifest, 'utf8'));
-      if (typeof name !== 'string' || name.length === 0) return [];
-      return [{ dir: entry.name, name }];
-    });
-}
-
-/**
  * The libraries a plugin rule can be aimed at, each with how the plugin's own metadata names it:
  * the rule's name, or its `meta.docs.description`. A rule matching a marker whose `packages` no
  * manifest here depends on inspects calls into code this repo never runs — it can never fire, and
@@ -431,18 +402,13 @@ function unusedLibraryRulesOff() {
 
 /**
  * A package's `lint` script (`VAT_LINT_TASK=1 eslint .`) refuses to run unless the root `lint`
- * script built first and every workspace package's declared types exist (`lintTaskRefusal()` in
- * `eslint-config-support.js` holds the contract). Turbo keys a lint on the emitted declarations and
- * has no `dependsOn`, so nothing inside turbo orders it after a build.
+ * script built first and every workspace package's declared types exist (`programTaskRefusal()` in
+ * `eslint-config-support.js` holds the contract, shared with every typecheck task). Turbo keys a
+ * lint on the emitted declarations and has no `dependsOn`, so nothing inside turbo orders it after
+ * a build.
  */
 function assertBuiltBeforeLintTask() {
-  const refusal = lintTaskRefusal(process.env, () => workspacePackages().flatMap(({ dir }) => {
-    const where = `packages/${dir}/package.json`;
-    const manifest = JSON.parse(readFileSync(new URL(where, import.meta.url), 'utf8'));
-    return declaredTypesFiles(manifest, where)
-      .filter((types) => !existsSync(new URL(`packages/${dir}/${types}`, import.meta.url)))
-      .map((types) => `packages/${dir}/${types.replace(/^\.\//, '')}`);
-  }));
+  const refusal = programTaskRefusal('lint', process.env, missingDeclaredTypes);
   if (refusal !== undefined) throw new Error(refusal);
 }
 

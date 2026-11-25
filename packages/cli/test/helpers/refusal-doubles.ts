@@ -53,7 +53,7 @@ export async function spiedModule(
 export function refuseOnDefault<M extends object, K extends keyof M & string>(module: M, name: K, target: string, error: Error): void {
   const real = module[name] as (...args: never[]) => unknown;
   // `spyOn`'s overloads cannot see a generic key as a method name; the cast restates that `name` is one.
-  const spy = vi.spyOn(module as Record<K, (...args: never[]) => unknown>, name);
+  const spy = vi.spyOn(module as Record<string, (...args: never[]) => unknown>, name);
   spy.mockImplementation(refusingOnly(target, error, real));
 }
 
@@ -75,7 +75,7 @@ export function refusingOnly<F extends (...args: never[]) => unknown>(
     // what these doubles stand in for, and stringifying one would compare
     // `[object Object]` against a path.
     if (typeof path === 'string' && safePath.resolve(path) === resolvedTarget) throw error;
-    return (real as (...args: unknown[]) => unknown)(path, ...rest);
+    return Reflect.apply(real, undefined, [path, ...rest]) as unknown;
   }) as unknown as F;
 }
 
@@ -84,7 +84,7 @@ export function refusingOnly<F extends (...args: never[]) => unknown>(
  * handing to {@link refusingOnly} as the delegate.
  */
 export function realBehind<F extends (...args: never[]) => unknown>(spied: F): F {
-  return vi.mocked(spied as (...args: unknown[]) => unknown).getMockImplementation() as unknown as F;
+  return vi.mocked<(...args: never[]) => unknown>(spied).getMockImplementation() as unknown as F;
 }
 
 /** What `fn` threw — a test fails when it returns instead. */

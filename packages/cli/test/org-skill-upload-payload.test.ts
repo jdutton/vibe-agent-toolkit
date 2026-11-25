@@ -36,7 +36,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { buildOrgCommandEnding } from '../src/commands/claude/org/helpers.js';
-import type { SkillUploadResult } from '../src/commands/claude/org/skills.js';
+import type { SkillUploadFailure, SkillUploadResult } from '../src/commands/claude/org/skills.js';
 import {
   buildUploadBodyOrRefuse,
   collectSkillUploadFiles,
@@ -1512,7 +1512,7 @@ describe('summarizeNpmInstall', () => {
   });
 
   it('does not report success when EVERY skill failed', () => {
-    const errors = [
+    const errors: SkillUploadFailure[] = [
       { skill: 'a', error: { code: 'EXTERNAL_API_FAILED', message: '403 forbidden' } },
       { skill: 'b', error: { code: 'USAGE_INVALID', message: 'over the upload ceiling' } },
       { skill: 'c', error: { code: 'USAGE_INVALID', message: 'SKILL.md has no usable frontmatter "name" field' } },

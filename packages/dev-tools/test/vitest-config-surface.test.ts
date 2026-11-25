@@ -60,7 +60,7 @@ function findVitestConfigFiles(): string[] {
   const rootFiles = readdirSync(PROJECT_ROOT).filter((name) => isConfig(name)).map((name) => safePath.join(PROJECT_ROOT, name));
   const packagesDir = safePath.join(PROJECT_ROOT, 'packages');
   const packageFiles = readdirSync(packagesDir, { withFileTypes: true })
-    .filter((entry) => direntKindFollowingSync(packagesDir, entry) === 'directory')
+    .filter((entry) => direntKindFollowingSync(packagesDir, entry, packagesDir) === 'directory')
     .flatMap((entry) => {
       const dir = safePath.join(packagesDir, entry.name);
       return readdirSync(dir).filter((name) => isConfig(name)).map((name) => safePath.join(dir, name));

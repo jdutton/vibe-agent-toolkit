@@ -47,6 +47,9 @@ describe('scanUserContext', () => {
       pluginsDir: mockPluginsDir,
       skillsDir: mockSkillsDir,
       marketplacesDir: mockMarketplacesDir,
+      pluginsCacheDir: safePath.join(mockPluginsDir, 'cache'),
+      knownMarketplacesPath: safePath.join(mockPluginsDir, 'known_marketplaces.json'),
+      installedPluginsPath: safePath.join(mockPluginsDir, 'installed_plugins.json'),
       userSettingsPath: safePath.join(mockClaudeDir, 'settings.json'),
       userDotJsonPath: safePath.join(tempDir, '.claude.json'),
     });

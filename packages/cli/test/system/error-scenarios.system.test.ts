@@ -104,7 +104,7 @@ describe('Error scenarios (system test)', () => {
     );
 
     expect(result.status).toBe(2);
-    expect(parsed.status).toBe('error');
+    expect(parsed['status']).toBe('error');
   });
 
   it('should refuse a scan of an empty directory as a finding, not crash or pass', () => {
@@ -116,9 +116,9 @@ describe('Error scenarios (system test)', () => {
     // Not a system error (2) and not a clean pass (0): a scan of nothing is the
     // run-integrity refusal, exit 1.
     expect(result.status).toBe(1);
-    expect(parsed.status).toBe('findings');
-    expect(parsed.examined).toBe(0);
-    expect((parsed.findings as { code: string }[]).map((finding) => finding.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
+    expect(parsed['status']).toBe('findings');
+    expect(parsed['examined']).toBe(0);
+    expect((parsed['findings'] as { code: string }[]).map((finding) => finding.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
   });
 
   it('should handle markdown parse errors gracefully', () => {
@@ -158,8 +158,8 @@ describe('Error scenarios (system test)', () => {
     );
 
     expect(result.status).toBe(1); // Validation error, not system error
-    expect(parsed.status).toBe('findings');
-    expect((parsed.summary as { errors: number }).errors).toBeGreaterThan(0);
+    expect(parsed['status']).toBe('findings');
+    expect((parsed['summary'] as { errors: number }).errors).toBeGreaterThan(0);
   });
 
   it('should handle debug flag correctly', () => {
@@ -216,7 +216,7 @@ describe('Error scenarios (system test)', () => {
     );
 
     expect(result.status).toBe(1);
-    expect((parsed.summary as { errors: number }).errors).toBeGreaterThanOrEqual(3);
+    expect((parsed['summary'] as { errors: number }).errors).toBeGreaterThanOrEqual(3);
 
     // The same findings, one compiler-style line each, under --format text.
     const textResult = executeCli(binPath, ['resources', 'validate', projectDir, '--format', 'text']);
@@ -248,6 +248,6 @@ describe('Error scenarios (system test)', () => {
 
     // Should handle circular refs without infinite loop
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('ok');
+    expect(parsed['status']).toBe('ok');
   });
 });

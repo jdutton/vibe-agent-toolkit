@@ -108,8 +108,8 @@ describe('vat claude marketplace validate (system)', () => {
     expect(status).toBe(0);
     expect(document.status).toBe('ok');
     expect(document.examined).toBe(1);
-    expect(document.data.root).toBe(tempDir);
-    expect(document.data.plugins.map((plugin) => [plugin.name, plugin.path, plugin.manifestRead, plugin.status])).toEqual([
+    expect(document.data?.root).toBe(tempDir);
+    expect(document.data?.plugins.map((plugin) => [plugin.name, plugin.path, plugin.manifestRead, plugin.status])).toEqual([
       ['test-plugin', 'plugins/test-plugin', true, 'ok'],
     ]);
   });
@@ -123,7 +123,7 @@ describe('vat claude marketplace validate (system)', () => {
     // A finding about the directory, exit 1 — the path exists, so it is not a refusal.
     expect(status).toBe(1);
     expect(document.status).toBe('findings');
-    expect(document.data.marketplace).toBeNull();
+    expect(document.data?.marketplace).toBeNull();
     expect(document.findings.map((finding) => finding.code)).toContain('MARKETPLACE_MISSING_MANIFEST');
   });
 

@@ -86,6 +86,24 @@ describe('scratchTmpdirEnv', () => {
     expect(existsSync(dir)).toBe(false);
     expect(() => scratch.current()).toThrow(/no scratch/);
   });
+
+  it('takes the VAT cache with it: VAT_CACHE_DIR is unset inside, so the cache is the scratch\'s own, and restored after', () => {
+    const before = process.env['VAT_CACHE_DIR'];
+    process.env['VAT_CACHE_DIR'] = safePath.join(normalizedTmpdir(), 't20-a-file-wide-cache');
+    const scratch = scratchTmpdirEnv('t20-scratch-');
+    try {
+      scratch.enter();
+      try {
+        expect(process.env['VAT_CACHE_DIR']).toBeUndefined();
+      } finally {
+        scratch.leave();
+      }
+      expect(process.env['VAT_CACHE_DIR']).toBe(safePath.join(normalizedTmpdir(), 't20-a-file-wide-cache'));
+    } finally {
+      if (before === undefined) Reflect.deleteProperty(process.env, 'VAT_CACHE_DIR');
+      else process.env['VAT_CACHE_DIR'] = before;
+    }
+  });
 });
 
 describe('registerScratchTmpdir', () => {

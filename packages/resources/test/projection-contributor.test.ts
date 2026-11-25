@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { ContributorRegistry, extentDigest } from '../src/projection/contributor.js';
 import type { ExtentContribution, ExtentContributor } from '../src/projection/contributor.js';
+import { CONDITION_WITHOUT_REFERENCE } from '../src/schemas/projection-resources.js';
 
 const GIT_KIND = 'git';
 const RES_A = 'res-aaa';
@@ -33,7 +34,7 @@ const NON_EMPTY_TABLES: ReadonlyArray<readonly [string, Partial<ExtentContributi
   ['realizations', { realizations: [{ resourceId: RES_A, extentId: CTX_ONE, path: 'a.md' }] as unknown as ExtentContribution['realizations'] }],
   ['memberships', { memberships: [{ resourceId: RES_A, extentId: CTX_ONE }] }],
   ['tags', { tags: [{ resourceId: RES_A, tag: 'skill', value: null, source: 'config' }] }],
-  ['conditions', { conditions: [{ extentId: CTX_ONE, path: 'a.md', code: 'X', severity: 'info', message: '', resourceId: null }] }],
+  ['conditions', { conditions: [{ extentId: CTX_ONE, path: 'a.md', code: 'X', severity: 'info', message: '', resourceId: null, ...CONDITION_WITHOUT_REFERENCE }] }],
   ['claudeRulePatterns', { claudeRulePatterns: [{ resourceId: RES_A, ordinal: 0, pattern: 'docs/**', literalPrefix: 'docs', witnessPath: null, status: 'inert' }] }],
 ];
 

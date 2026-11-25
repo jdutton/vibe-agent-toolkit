@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import { getResourceSubdirForFile } from '../src/content-type-routing.js';
 import { isSkillPackagingInputError, SkillPackageChecksFailedError } from '../src/packaging-errors.js';
-import { buildSyntheticAssetResource, extractH1Title, findCommonAncestor, generateTargetPath, packageSkills, type SkillPackageOutcome, synthesizeAssetId, type SkillBuildSpec } from '../src/skill-packager.js';
+import { buildSyntheticAssetResource, extractH1Title, findCommonAncestor, generateTargetPath, type PackageSkillResult, packageSkills, type SkillPackageOutcome, synthesizeAssetId, type SkillBuildSpec } from '../src/skill-packager.js';
 import { withSkillRegistries } from '../src/validators/run-skill-registries.js';
 
 import { createFrontmatter, packageInPlace, setupTempDir, type TestPackageSkillOptions } from './test-helpers.js';
@@ -1462,7 +1462,15 @@ describe('packageSkill - gitignored files: source (build path)', () => {
 
 const RECEIPT_LANE_FIELD = 'validation.allow.LINK_MISSING_TARGET';
 const BUILT_LANE_FIELD = 'validation.allow.SKILL_TIME_SENSITIVE_CONTENT';
-const DEAD_ALLOW_FIELD = 'validation.allow.SKILL_TOO_LARGE';
+const DEAD_ALLOW_FIELD = 'validation.allow.SKILL_TOO_MANY_FILES';
+
+/** Every issue a built package reported, on both channels; a build without post-build validation is a failure here. */
+function bothChannelIssues(result: PackageSkillResult): ValidationIssue[] {
+  if (result.postBuildValidation === undefined) {
+    throw new Error('expected the build to run post-build validation');
+  }
+  return [...(result.postBuildIssues ?? []), ...result.postBuildValidation.allErrors];
+}
 
 /**
  * Package a skill carrying three allow entries, one per case, and return every
@@ -1470,7 +1478,7 @@ const DEAD_ALLOW_FIELD = 'validation.allow.SKILL_TOO_LARGE';
  *  - LINK_MISSING_TARGET — a real `error` raised ONLY by the build-receipt lane
  *    (the link target does not exist); the entry suppresses it.
  *  - SKILL_TIME_SENSITIVE_CONTENT — raised ONLY by the built-SKILL.md lane.
- *  - SKILL_TOO_LARGE — matches nothing anywhere (the positive control).
+ *  - SKILL_TOO_MANY_FILES — matches nothing anywhere (the positive control).
  *
  * Covering BOTH directions is the point: a ledger shared one way only still
  * mislabels the other lane's live entry.
@@ -1487,14 +1495,11 @@ async function allowUnusedFromBothBuildLanes() {
       allow: {
         LINK_MISSING_TARGET: [{ paths: ['./gone.md'], reason: 'intentionally absent' }],
         SKILL_TIME_SENSITIVE_CONTENT: [{ paths: ['SKILL.md'], reason: 'dated on purpose' }],
-        SKILL_TOO_LARGE: [{ paths: ['nowhere/**'], reason: 'matches nothing' }],
+        SKILL_TOO_MANY_FILES: [{ paths: ['nowhere/**'], reason: 'matches nothing' }],
       },
     },
   });
-  return [
-    ...(result.postBuildIssues ?? []),
-    ...result.postBuildValidation.allErrors,
-  ].filter(i => i.code === 'ALLOW_UNUSED');
+  return bothChannelIssues(result).filter(i => i.code === 'ALLOW_UNUSED');
 }
 
 describe('packageSkill - one allow-usage ledger across both build lanes', () => {
@@ -1525,15 +1530,15 @@ describe('packageSkill - one allow-usage ledger across both build lanes', () => 
 // ============================================================================
 
 const BATCH_MATCHED_FIELD = 'validation.allow.LINK_MISSING_TARGET';
-const BATCH_DEAD_FIELD = 'validation.allow.SKILL_TOO_LARGE';
+const BATCH_DEAD_FIELD = 'validation.allow.SKILL_TOO_MANY_FILES';
 
 /** Same allow list for both skills — one package-level declaration. */
-const BATCH_VALIDATION = {
+const BATCH_VALIDATION: NonNullable<TestPackageSkillOptions['validation']> = {
   allow: {
     LINK_MISSING_TARGET: [{ paths: ['./gone.md'], reason: 'intentionally absent' }],
-    SKILL_TOO_LARGE: [{ paths: ['nowhere/**'], reason: 'matches nothing' }],
+    SKILL_TOO_MANY_FILES: [{ paths: ['nowhere/**'], reason: 'matches nothing' }],
   },
-} as const;
+};
 
 /** Write `skills/<name>/SKILL.md` under `root` and return its build spec. */
 async function batchSpec(root: string, name: string, body: string): Promise<SkillBuildSpec> {
@@ -1544,7 +1549,7 @@ async function batchSpec(root: string, name: string, body: string): Promise<Skil
     skillPath,
     options: {
       outputPath: safePath.join(root, 'out', name),
-      validation: structuredClone(BATCH_VALIDATION) as TestPackageSkillOptions['validation'],
+      validation: structuredClone(BATCH_VALIDATION),
     },
   };
 }
@@ -1574,7 +1579,7 @@ async function allowUnusedAcrossBatch() {
   const results = outcomes.flatMap(o => (o.status === 'built' ? [o.result] : []));
 
   return [
-    ...results.flatMap(r => [...(r.postBuildIssues ?? []), ...r.postBuildValidation.allErrors]),
+    ...results.flatMap(r => bothChannelIssues(r)),
     ...allowUnusedIssues(ledger),
   ].filter(i => i.code === 'ALLOW_UNUSED');
 }

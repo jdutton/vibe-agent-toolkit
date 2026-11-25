@@ -95,7 +95,7 @@ function bytesFetch(
   let captured: Record<string, string> | undefined;
   const fetchImpl = (async (_url: string | URL, init?: RequestInit): Promise<Response> => {
     if (init?.headers !== undefined) {
-      captured = Object.fromEntries(new Headers(init.headers as HeadersInit));
+      captured = Object.fromEntries(new Headers(init.headers));
     }
     return new Response(Buffer.from(bytes), {
       status,
@@ -392,7 +392,7 @@ describe('fetchAuthenticated — token never persisted (§8)', () => {
     // `<hash[0..2]>/<hash>.json`) is still covered by this test.
     const entries = await fs.readdir(tempDir, { recursive: true, withFileTypes: true });
     for (const entry of entries) {
-      if (direntKindFollowingSync(entry.parentPath, entry) !== 'file') continue;
+      if (direntKindFollowingSync(entry.parentPath, entry, tempDir) !== 'file') continue;
       const full = safePath.join(entry.parentPath, entry.name);
       const raw = await fs.readFile(full);
       expect(raw.toString('utf-8')).not.toContain(TOKEN_DO_NOT_PERSIST);

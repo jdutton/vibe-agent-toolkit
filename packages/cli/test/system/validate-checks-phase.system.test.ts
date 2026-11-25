@@ -8,7 +8,7 @@
  * kill rows are `validate-checks-phase-kill.system.test.ts`.
  */
 
-import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
+import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { storeFilesUnder } from '../helpers/projection-store-probe.js';

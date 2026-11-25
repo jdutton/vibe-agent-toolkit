@@ -208,8 +208,8 @@ describe('Full CLI workflow (system test)', () => {
 
     // Without the flag, external URLs are never fetched → nothing found.
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('ok');
-    expect(parsed.findings).toEqual([]);
+    expect(parsed['status']).toBe('ok');
+    expect(parsed['findings']).toEqual([]);
   });
 });
 
@@ -271,7 +271,7 @@ describe('Dead external URL severity → exit code (system test)', () => {
 
     // Promoted to error → fatal exit.
     expect(result.status).toBe(1);
-    expect(parsed.status).toBe('findings');
+    expect(parsed['status']).toBe('findings');
 
     const dead = findExternalUrlDeadFinding(parsed);
     expect(dead).toBeDefined();

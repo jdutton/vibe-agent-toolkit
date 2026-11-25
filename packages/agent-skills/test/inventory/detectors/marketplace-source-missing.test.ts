@@ -24,7 +24,7 @@ function makeMarketplace(plugins: PluginRef[]): MarketplaceInventory {
 
 describe('detectMarketplacePluginSourceMissing', () => {
 	it('returns no issues when there are no plugins', () => {
-		expect(detectMarketplacePluginSourceMissing(makeMarketplace([]))).toEqual([]);
+		expect(detectMarketplacePluginSourceMissing(makeMarketplace([]), PROJECT_ROOT)).toEqual([]);
 	});
 
 	it('returns no issues when all path-sourced plugins exist', () => {

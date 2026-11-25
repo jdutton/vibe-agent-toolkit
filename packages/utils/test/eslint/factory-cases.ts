@@ -8,7 +8,10 @@
  */
 
 import { BARREL, LINTED_FILE, PATH_UTILS_IMPL, SEAM } from './fixtures.js';
-import type { RuleCases } from './rule-tester.js';
+import type { CaseError, InvalidCase, RuleCases } from './rule-tester.js';
+
+/** What ONE report's rewrite contributes to an invalid case: an autofix `output`, or none. */
+type Rewritten = Pick<InvalidCase, 'output'> & { errors: CaseError[] };
 
 /**
  * @param unsafeCode - The shape that must report.
@@ -24,7 +27,7 @@ import type { RuleCases } from './rule-tester.js';
 export function safeModuleCases(
   unsafeCode: string,
   fixedCode: string,
-  errors: object[],
+  errors: CaseError[],
   settledCode: string = fixedCode,
 ): RuleCases {
   return {
@@ -130,7 +133,7 @@ export function unsafeCallRuleCases(
   const errors = [{ messageId: 'noUnsafeOperation' }];
   const options = [{ exemptFiles: [exemptPath] }];
   /** What ONE report's rewrite produces: an autofix `output`, or the suggestion's text. */
-  const rewritten = (fixedCode: string, suggestedCode: string): { output?: string; errors: object[] } =>
+  const rewritten = (fixedCode: string, suggestedCode: string): Rewritten =>
     valueCallAutofixed
       ? { output: fixedCode, errors }
       : { errors: [{ messageId: 'noUnsafeOperation', suggestions: [{ messageId: 'useSafeCall', output: suggestedCode }] }] };
@@ -279,7 +282,7 @@ function statementOnlyAutofixCases(
   unsafeImport: string,
   safeImport: string,
   options: object[],
-): object[] {
+): InvalidCase[] {
   return [
     // A `URL` (or any constructed) argument: the safe call takes a string path, so the rewrite
     // would not compile — reported with no rewrite at all.
@@ -338,7 +341,7 @@ interface ReferenceCaseSpec {
  */
 function nativeAndValueReferenceCases(
   { unsafeFn, unsafeModule, safeFn, extra, unsafeImport, namespaceImport, safeImport, options }: ReferenceCaseSpec,
-): object[] {
+): InvalidCase[] {
   const noRewrite = [{ messageId: 'noUnsafeOperation', suggestions: [] }];
   const suggested = (code: string, suggestion: string) => ({
     code,
@@ -427,8 +430,8 @@ interface ImportShapeSpec {
  */
 function importShapeCases(
   { unsafeFn, unsafeModule, safeFn, safeModule, extra, unsafeImport, safeImport, options }: ImportShapeSpec,
-  rewritten: (fixedCode: string, suggestedCode: string) => { output?: string; errors: object[] },
-): object[] {
+  rewritten: (fixedCode: string, suggestedCode: string) => Rewritten,
+): InvalidCase[] {
   const ownDeclaration = (existing: string) => {
     const fixed = `${existing}\n${unsafeImport}\n${safeImport}\nconst r = ${safeFn}(x${extra});`;
     return { code: `${existing}\n${unsafeImport}\nconst r = ${unsafeFn}(x);`, filename: LINTED_FILE, options, ...rewritten(fixed, fixed) };
@@ -471,7 +474,7 @@ export interface RewriteTargetSpec {
   safeModule: string;
   options?: object[];
   /** The report each case still carries, with no fix and no suggestion. */
-  errors: object[];
+  errors: CaseError[];
 }
 
 /**
@@ -489,7 +492,7 @@ export interface RewriteTargetSpec {
  */
 export function rewriteTargetCases(
   { preamble, unsafeCall, safeName, safeModule, options = [], errors }: RewriteTargetSpec,
-): object[] {
+): InvalidCase[] {
   const lead = preamble === '' ? '' : `${preamble}\n`;
   const params = 'x: string, a: string, b: string';
   const reported = (code: string) => ({ code, filename: LINTED_FILE, options, errors });

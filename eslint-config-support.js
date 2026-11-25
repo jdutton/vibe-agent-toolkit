@@ -1,9 +1,13 @@
 /**
- * Pure helpers `eslint.config.js` builds its lint guard and ignores from, kept apart so they can be
- * unit-tested without loading every plugin (`packages/dev-tools/test/eslint-config-support.test.ts`).
- * Nothing here touches the filesystem: the config reads the files and passes their text in.
+ * Helpers `eslint.config.js` builds its ignores and its build guard from, and that
+ * `typecheck-task.js` shares the same build guard through, kept apart so they can be unit-tested
+ * without loading every plugin (`packages/dev-tools/test/eslint-config-support.test.ts`). Only
+ * `workspacePackages()` and `missingDeclaredTypes()` read the filesystem, resolved against this
+ * file; every other helper takes the text or the lister it needs.
  * Types: `eslint-config-support.d.ts`.
  */
+
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 
 /**
  * The repository's ignore files. `generate-lint-config.ts --check` asserts this list equals the
@@ -64,25 +68,73 @@ export function declaredTypesFiles(manifest, where) {
 }
 
 /**
- * Why a package lint must not run, or `undefined` when it may.
+ * Why a cached lint or typecheck task must not run, or `undefined` when it may.
  *
- * A package's `lint` script sets `VAT_LINT_TASK=1`; the root `lint` script sets `VAT_LINT_BUILT=1`
- * only after `turbo run build`. Turbo keys a lint on the emitted declarations, so a lint over a
- * missing or stale `dist/` would type against `any` or an old signature and be cached as a pass.
- * An editor, a direct `eslint` run and a test that loads the config set neither signal.
+ * Both tasks check a program against the workspace's emitted declarations and turbo keys both on
+ * those declarations, so a run over a missing or stale `dist/` would type against `any` or an old
+ * signature and be cached as a pass. One signal says the declarations are fresh: the root `lint`,
+ * `lint:fix` and `typecheck` scripts set `VAT_BUILT=1` only after `turbo run build`. A package's
+ * `lint` script sets `VAT_LINT_TASK=1` so that only the cached task is refused: an editor, a direct
+ * `eslint` run and a test that loads the config set neither signal. Every typecheck task runs
+ * through `typecheck-task.js`, so it is always the cached task.
  *
+ * @param {'lint' | 'typecheck'} task - The task asking
  * @param {Record<string, string | undefined>} env - The process environment
  * @param {() => string[]} listMissingTypes - Repo-relative declared types files that do not exist
  * @returns {string | undefined}
  */
-export function lintTaskRefusal(env, listMissingTypes) {
-  if (env.VAT_LINT_TASK !== '1') return undefined;
-  if (env.VAT_LINT_BUILT !== '1') {
-    return 'A package lint reads workspace types from dist/ and is cached on them, so it runs only after a build: run `bun run lint` (or `bun run lint:fix`) from the repo root, which builds first.';
+export function programTaskRefusal(task, env, listMissingTypes) {
+  if (task === 'lint' && env.VAT_LINT_TASK !== '1') return undefined;
+  const rootScript = task === 'lint' ? '`bun run lint` (or `bun run lint:fix`)' : '`bun run typecheck`';
+  if (env.VAT_BUILT !== '1') {
+    return `A ${task} task reads workspace types from dist/ and is cached on them, so it runs only after a build: run ${rootScript} from the repo root, which builds first.`;
   }
   const missing = listMissingTypes();
   if (missing.length > 0) {
-    return `Lint reads workspace types from dist/, and these are not built: ${missing.join(', ')}. Run \`bun run lint\` from the repo root, which builds first.`;
+    return `A ${task} task reads workspace types from dist/, and these are not built: ${missing.join(', ')}. Run ${rootScript} from the repo root, which builds first.`;
   }
   return undefined;
+}
+
+/**
+ * Every workspace package: its directory under `packages/` and its manifest name.
+ *
+ * @returns {Array<{ dir: string, name: string }>}
+ */
+export function workspacePackages() {
+  // 🪤 Resolved against THIS FILE, never against the cwd. `readdirSync('packages')`
+  // is relative to wherever the process was started, so any invocation from inside a
+  // package — `turbo run lint`, which sets cwd to the package it is linting —
+  // died with `ENOENT: scandir 'packages'` before linting a line. Not a finding
+  // and not a lint error: a config load failure, exit 2, in every package.
+  //
+  // A `URL` rather than a `path.join`: this file is subject to the `no-raw-node-path`
+  // rule, and a relative `URL` needs no exemption to be correct on Windows either.
+  const packagesDir = new URL('packages/', import.meta.url);
+  return readdirSync(packagesDir, { withFileTypes: true })
+    // Followed inline (this file cannot import the utils helper): a workspace
+    // package reached through a link is still a package with a name to guard.
+    .filter((entry) => (entry.isSymbolicLink() ? statSync(new URL(`${entry.name}/`, packagesDir)).isDirectory() : entry.isDirectory()))
+    .flatMap((entry) => {
+      const manifest = new URL(`${entry.name}/package.json`, packagesDir);
+      if (!existsSync(manifest)) return [];
+      const { name } = JSON.parse(readFileSync(manifest, 'utf8'));
+      if (typeof name !== 'string' || name.length === 0) return [];
+      return [{ dir: entry.name, name }];
+    });
+}
+
+/**
+ * Every declared `types` file of every workspace package that does not exist, repo-relative.
+ *
+ * @returns {string[]}
+ */
+export function missingDeclaredTypes() {
+  return workspacePackages().flatMap(({ dir }) => {
+    const where = `packages/${dir}/package.json`;
+    const manifest = JSON.parse(readFileSync(new URL(where, import.meta.url), 'utf8'));
+    return declaredTypesFiles(manifest, where)
+      .filter((types) => !existsSync(new URL(`packages/${dir}/${types}`, import.meta.url)))
+      .map((types) => `packages/${dir}/${types.replace(/^\.\//, '')}`);
+  });
 }

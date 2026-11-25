@@ -15,9 +15,9 @@ describe('./path subpath entry', () => {
 
   it('does NOT export fs-touching helpers', async () => {
     const mod: Record<string, unknown> = await import('../src/path.js');
-    expect(mod.normalizedTmpdir).toBeUndefined();
-    expect(mod.mkdirSyncReal).toBeUndefined();
-    expect(mod.normalizePath).toBeUndefined();
+    expect(mod['normalizedTmpdir']).toBeUndefined();
+    expect(mod['mkdirSyncReal']).toBeUndefined();
+    expect(mod['normalizePath']).toBeUndefined();
   });
 });
 
@@ -42,7 +42,7 @@ describe('./fs subpath entry', () => {
 
   it('does NOT re-export the pure path helpers', async () => {
     const mod: Record<string, unknown> = await import('../src/fs.js');
-    expect(mod.safePath).toBeUndefined();
-    expect(mod.toForwardSlash).toBeUndefined();
+    expect(mod['safePath']).toBeUndefined();
+    expect(mod['toForwardSlash']).toBeUndefined();
   });
 });

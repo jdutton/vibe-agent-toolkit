@@ -108,8 +108,8 @@ describe('vat resources validate + deferred files: artifacts (integration)', () 
 
     // `findings` (the info note) at exit 0: nothing at error severity.
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('findings');
-    expect((parsed.summary as { errors: number }).errors).toBe(0);
+    expect(parsed['status']).toBe('findings');
+    expect((parsed['summary'] as { errors: number }).errors).toBe(0);
 
     const issues = flattenIssues(parsed);
     const deferred = issues.filter((i) => i.code === 'LINK_DEFERRED_ARTIFACT');

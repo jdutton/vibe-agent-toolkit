@@ -49,10 +49,10 @@ ${METADATA}
           reason: README link is intentional
 `);
     const seed = loadSeedFile(file);
-    expect(seed.plugins[0].validation?.severity).toEqual({
+    expect(seed.plugins[0]?.validation?.severity).toEqual({
       SKILL_DESCRIPTION_FILLER_OPENER: 'ignore',
     });
-    expect(seed.plugins[0].validation?.allow).toEqual([
+    expect(seed.plugins[0]?.validation?.allow).toEqual([
       { code: 'LINK_TO_NAVIGATION_FILE', reason: 'README link is intentional' },
     ]);
   });

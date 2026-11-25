@@ -71,6 +71,8 @@ export const ruleTester = new RuleTester({
 export type RuleCases = Parameters<RuleTester['run']>[2];
 export type ValidCase = RuleCases['valid'][number];
 export type InvalidCase = RuleCases['invalid'][number];
+/** One expected report of an invalid case: a mutable array of these is what `errors` takes. */
+export type CaseError = RuleTester.TestCaseError;
 
 /** Title of the RuleTester leg every rule suite has — one string, so a grep finds them all. */
 export const RULE_TESTER_CASES = 'passes RuleTester cases';

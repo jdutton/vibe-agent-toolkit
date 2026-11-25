@@ -65,7 +65,7 @@ describe('every rule carries a complete manifest entry', () => {
     const { docs } = rule.meta;
     expect(['problem', 'suggestion', 'layout']).toContain(rule.meta.type);
     expect(typeof docs.description).toBe('string');
-    expect(docs.description.length).toBeGreaterThan(0);
+    expect(docs.description?.length).toBeGreaterThan(0);
     expect(typeof docs.recommended).toBe('boolean');
     if (docs.recommended) {
       expect(['error', 'warn']).toContain(docs.recommendedSeverity);

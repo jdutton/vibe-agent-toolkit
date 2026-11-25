@@ -57,7 +57,6 @@ import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
 import {
   PROJECTION_TABLES,
   StoreQuestionUnavailableError,
-  VAT_CACHE_DIR_ENV,
   type FactStore,
   type PopulationCache,
   type Projection,
@@ -72,6 +71,7 @@ import {
   safePath,
   TEST_USER_STATE_UNDER,
   toForwardSlash,
+  VAT_CACHE_DIR_ENV,
 } from '@vibe-agent-toolkit/utils';
 import { freshGitTreeKey, gitSnapshotFailureOf, gitTreeKey, type GitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 

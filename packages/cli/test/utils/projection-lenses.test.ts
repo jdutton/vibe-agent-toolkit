@@ -22,6 +22,7 @@ import {
   checkStatements,
   DERIVED_TABLES,
   isProjectionTable,
+  type PopulationRun,
   type Projection,
   queryableRelationSpecs,
 } from '@vibe-agent-toolkit/resources';
@@ -207,6 +208,7 @@ describe('evaluateLens', () => {
     root: '/corpus',
     base: undefined,
     cache: undefined,
+    populationRun: {} as PopulationRun,
     logger: createLogger(),
   };
 
@@ -220,8 +222,8 @@ describe('evaluateLens', () => {
   });
 
   it('hands back a lens\'s refusal as it is, with no rows to check', async () => {
-    const refusing: ProjectionLens = { name: 'stub', relations: ['edges'], evaluate: () => ({ refused: 'no base' }) };
-    await expect(evaluateLens(refusing, input)).resolves.toStrictEqual({ refused: 'no base' });
+    const refusing: ProjectionLens = { name: 'stub', relations: ['edges'], evaluate: () => ({ refused: 'no base', refusal: 'USAGE_INVALID' }) };
+    await expect(evaluateLens(refusing, input)).resolves.toStrictEqual({ refused: 'no base', refusal: 'USAGE_INVALID' });
   });
 
   it('refuses rows carrying a relation the lens does not own', async () => {

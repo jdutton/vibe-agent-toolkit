@@ -76,7 +76,7 @@ describe('a link into a file the population could not read', () => {
   it('reports LINK_TARGET_UNREADABLE for an anchor into it, naming the file and the errno', async () => {
     const root = plantTree();
     const unreadableTargets = unreadableTargetsFrom({ unreadable: [
-      { filePath: safePath.join(root, TARGET), code: 'EACCES' },
+      { filePath: safePath.join(root, TARGET), reason: 'permission denied', code: 'EACCES' },
     ], parseRefused: [] });
 
     const issue = await judge(root, ANCHOR_HREF, { unreadableTargets });
@@ -100,7 +100,7 @@ describe('a link into a file the population could not read', () => {
     // The e2e shape: two links, two findings. A ledger that marked the file
     // "already reported" would leave the second link reading as clean.
     const root = plantTree();
-    const unreadableTargets = unreadableTargetsFrom({ unreadable: [{ filePath: safePath.join(root, TARGET) }], parseRefused: [] });
+    const unreadableTargets = unreadableTargetsFrom({ unreadable: [{ filePath: safePath.join(root, TARGET), reason: 'permission denied' }], parseRefused: [] });
 
     const first = await judge(root, ANCHOR_HREF, { unreadableTargets });
     const second = await judge(root, './sub/target.md#nope-unreadable', { unreadableTargets });
@@ -112,7 +112,7 @@ describe('a link into a file the population could not read', () => {
 
   it('omits the errno clause when the platform supplied none', async () => {
     const root = plantTree();
-    const unreadableTargets = unreadableTargetsFrom({ unreadable: [{ filePath: safePath.join(root, TARGET) }], parseRefused: [] });
+    const unreadableTargets = unreadableTargetsFrom({ unreadable: [{ filePath: safePath.join(root, TARGET), reason: 'permission denied' }], parseRefused: [] });
 
     const issue = await judge(root, ANCHOR_HREF, { unreadableTargets });
 
@@ -126,7 +126,7 @@ describe('a link into a file the population could not read', () => {
     // unchecked. The FILE's own refusal is `RESOURCE_UNREADABLE`, reported once
     // against the file, not once per link into it.
     const root = plantTree();
-    const unreadableTargets = unreadableTargetsFrom({ unreadable: [{ filePath: safePath.join(root, TARGET) }], parseRefused: [] });
+    const unreadableTargets = unreadableTargetsFrom({ unreadable: [{ filePath: safePath.join(root, TARGET), reason: 'permission denied' }], parseRefused: [] });
 
     expect(await judge(root, './sub/target.md', { unreadableTargets })).toBeNull();
   });
@@ -159,7 +159,7 @@ describe('a link into a file the population could not read', () => {
     // whole tree.
     const root = plantTree();
     const unreadableTargets = unreadableTargetsFrom({ unreadable: [
-      { filePath: safePath.join(root, 'docs', 'sub', 'other.md'), code: 'EACCES' },
+      { filePath: safePath.join(root, 'docs', 'sub', 'other.md'), reason: 'permission denied', code: 'EACCES' },
     ], parseRefused: [] });
 
     expect(await judge(root, ANCHOR_HREF, { unreadableTargets })).toBeNull();
@@ -193,7 +193,7 @@ describe('a link into a file the population could not read', () => {
   it('is reached only after existence: a MISSING target is still a broken file', async () => {
     const root = plantTree();
     const unreadableTargets = unreadableTargetsFrom({ unreadable: [
-      { filePath: safePath.join(root, 'docs', 'sub', 'nope.md'), code: 'EACCES' },
+      { filePath: safePath.join(root, 'docs', 'sub', 'nope.md'), reason: 'permission denied', code: 'EACCES' },
     ], parseRefused: [] });
 
     const issue = await judge(root, './sub/nope.md#x', { unreadableTargets });

@@ -78,7 +78,7 @@ function setupSkillsBuildTestSuite() {
   type BuildReport = Awaited<ReturnType<typeof runBuildCommand>>['report'];
 
   /** The report's `data`, which every completed run carries. */
-  const dataOf = (report: BuildReport) => {
+  const reportData = (report: BuildReport) => {
     expect(report.data, JSON.stringify(report)).not.toBeNull();
     return report.data as NonNullable<BuildReport['data']>;
   };
@@ -92,7 +92,7 @@ function setupSkillsBuildTestSuite() {
     // fixture's frontmatter carries a `version` field, so a real build may ship a
     // non-blocking finding and publish `findings`; the invariant is the error count.
     expect(report.summary.errors).toBe(0);
-    const skills = dataOf(report).skills;
+    const skills = reportData(report).skills;
     expect(skills.map((row) => row.name)).toEqual([TEST_SKILL_NAME]);
     return skills;
   };
@@ -109,7 +109,7 @@ function setupSkillsBuildTestSuite() {
     setupSingleSkillTest,
     runBuildCommand,
     assertSuccessfulBuild,
-    dataOf,
+    reportData,
     codesOf,
   };
 }
@@ -176,7 +176,7 @@ describe('skills build command (system test)', () => {
     const skills = suite.assertSuccessfulBuild(result, report);
     expect(report.status).toBe('ok');
     expect(report.examined).toBe(1);
-    expect(suite.dataOf(report)).toMatchObject({ dryRun: true, validated: false, outputCommitted: false });
+    expect(suite.reportData(report)).toMatchObject({ dryRun: true, validated: false, outputCommitted: false });
     // Relative to the directory whose config the build read — never `$HOME`.
     expect(skills[0]).toMatchObject({ source: 'resources/skills/SKILL.md', output: `dist/skills/${TEST_SKILL_NAME}` });
     expect(existsSync(safePath.join(tempDir, 'dist'))).toBe(false);
@@ -189,7 +189,7 @@ describe('skills build command (system test)', () => {
     const { result, report } = await suite.runBuildCommand(tempDir);
 
     const skills = suite.assertSuccessfulBuild(result, report);
-    expect(suite.dataOf(report)).toMatchObject({ dryRun: false, validated: true, skillsBuilt: 1, outputCommitted: true });
+    expect(suite.reportData(report)).toMatchObject({ dryRun: false, validated: true, skillsBuilt: 1, outputCommitted: true });
     expect(skills[0]).toMatchObject({ output: `dist/skills/${TEST_SKILL_NAME}` });
 
     // Verify output directory was created
@@ -208,8 +208,8 @@ describe('skills build command (system test)', () => {
 
     expect(result.status).toBe(0);
     expect(report.examined).toBe(1);
-    expect(suite.dataOf(report).skillsBuilt).toBe(1);
-    expect(suite.dataOf(report).skills.map((row) => row.name)).toEqual([SKILL_B_NAME]);
+    expect(suite.reportData(report).skillsBuilt).toBe(1);
+    expect(suite.reportData(report).skills.map((row) => row.name)).toEqual([SKILL_B_NAME]);
 
     // Verify only skill-b was built
     const outputPathB = safePath.join(tempDir, 'dist', 'skills', SKILL_B_NAME);
@@ -253,8 +253,8 @@ describe('skills build command (system test)', () => {
       // The drop is VISIBLE in the machine output: a build that ships fewer
       // skills than it discovered examines both and names the one it set aside.
       expect(report.examined).toBe(2);
-      expect(suite.dataOf(report)).toMatchObject({ skillsBuilt: 1, skillsInPlace: [SKILL_B_NAME] });
-      expect(suite.dataOf(report).skills.map((row) => row.name)).toEqual([SKILL_A_NAME]);
+      expect(suite.reportData(report)).toMatchObject({ skillsBuilt: 1, skillsInPlace: [SKILL_B_NAME] });
+      expect(suite.reportData(report).skills.map((row) => row.name)).toEqual([SKILL_A_NAME]);
       expect(existsSync(safePath.join(tempDir, 'dist', 'skills', SKILL_A_NAME, 'SKILL.md'))).toBe(true);
       expect(existsSync(safePath.join(tempDir, 'dist', 'skills', SKILL_B_NAME))).toBe(false);
 
@@ -274,8 +274,8 @@ describe('skills build command (system test)', () => {
       const { result, report } = await suite.runBuildCommand(tempDir, ['--dry-run']);
 
       expect(result.status).toBe(0);
-      expect(suite.dataOf(report)).toMatchObject({ validated: false, skillsInPlace: [SKILL_B_NAME] });
-      expect(suite.dataOf(report).skills.map((row) => row.name)).toEqual([SKILL_A_NAME]);
+      expect(suite.reportData(report)).toMatchObject({ validated: false, skillsInPlace: [SKILL_B_NAME] });
+      expect(suite.reportData(report).skills.map((row) => row.name)).toEqual([SKILL_A_NAME]);
       expect(result.stderr).toContain(SKILL_B_NAME);
       expect(existsSync(safePath.join(tempDir, 'dist'))).toBe(false);
     });
@@ -309,7 +309,7 @@ describe('skills build command (system test)', () => {
 
       expect(result.status).toBe(0);
       expect(report.examined).toBe(2);
-      expect(suite.dataOf(report)).toMatchObject({ skillsBuilt: 0, skillsInPlace: [SKILL_A_NAME, SKILL_B_NAME], skills: [] });
+      expect(suite.reportData(report)).toMatchObject({ skillsBuilt: 0, skillsInPlace: [SKILL_A_NAME, SKILL_B_NAME], skills: [] });
       // The success line is judged on the REPORT's `examined` (2), not on the
       // built count (0): the run examined both skills and set both aside.
       expect(result.stderr).toContain('Built 0 skill(s) successfully (2 in-place skill(s) not bundled)');
@@ -396,9 +396,9 @@ describe('skills build command (system test)', () => {
         { code: 'SKILL_PACKAGING_FAILED', location: 'resources/skills/skill-a.md' },
       ]);
       expect(report.findings.find((finding) => finding.code === 'SKILL_PACKAGING_FAILED')?.message).toContain("Could not read files: source 'assets/locked.bin'");
-      expect(suite.dataOf(report)).toMatchObject({ skillsBuilt: 1, skillsFailed: 1, outputCommitted: false });
+      expect(suite.reportData(report)).toMatchObject({ skillsBuilt: 1, skillsFailed: 1, outputCommitted: false });
       // Both rows are published; only the refused skill's is in error.
-      expect(suite.dataOf(report).skills.map((row) => row.name)).toEqual([SKILL_A_NAME, SKILL_B_NAME]);
+      expect(suite.reportData(report).skills.map((row) => row.name)).toEqual([SKILL_A_NAME, SKILL_B_NAME]);
     } finally {
       chmodSync(locked, 0o644);
     }
@@ -617,8 +617,8 @@ describe('skills build — framework exit codes (system test)', () => {
     // is on the envelope with its location, and the output was not committed.
     expect(report.status).toBe('findings');
     expect(suite.codesOf(report)).toContain('LINK_MISSING_TARGET');
-    expect(suite.dataOf(report)).toMatchObject({ skillsFailedValidation: 1, outputCommitted: false });
-    expect(suite.dataOf(report).skills).toEqual([
+    expect(suite.reportData(report)).toMatchObject({ skillsFailedValidation: 1, outputCommitted: false });
+    expect(suite.reportData(report).skills).toEqual([
       { name: MISSING_TARGET_SKILL, source: 'skills/SKILL.md', output: `dist/skills/${MISSING_TARGET_SKILL}`, status: 'findings' },
     ]);
     // The severity is rendered as itself, so a reader can tell WHICH finding

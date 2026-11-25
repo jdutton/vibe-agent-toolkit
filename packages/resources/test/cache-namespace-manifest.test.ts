@@ -21,15 +21,17 @@ const manifest = vi.hoisted(() => ({ behaviour: 'real' as ManifestBehaviour }));
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof NodeFs>();
-  const readFileSync: typeof actual.readFileSync = (path, ...rest) => {
+  // One implementation behind `readFileSync`'s overloads: its widest overload's
+  // options, and the cast is the overload set itself.
+  const readFileSync = ((path: NodeFs.PathOrFileDescriptor, options?: Parameters<typeof actual.readFileSync>[1]) => {
     // VAT's own manifest only: the parsers' manifests (under node_modules) are a
     // separate read, and must stay real for the namespace to be computable.
     const target = toForwardSlash(String(path));
     if (manifest.behaviour !== 'real' && target.endsWith('package.json') && !target.includes('/node_modules/')) {
       throw manifest.behaviour.throws;
     }
-    return actual.readFileSync(path, ...rest);
-  };
+    return actual.readFileSync(path, options);
+  }) as typeof actual.readFileSync;
   return { ...actual, readFileSync };
 });
 

@@ -21,6 +21,7 @@ import { CHECK_REPORT_SCHEMA } from '../../src/commands/resources/check-schema.j
 import { buildCheckOutputData, runProjectChecks } from '../../src/commands/resources/check.js';
 import type { AskProjection } from '../../src/utils/projection-query.js';
 import { NO_COLUMNS } from '../helpers/no-columns.js';
+import { reportData } from '../report-envelope.js';
 
 const NAME = 'skills-have-owners';
 const VIOLATIONS_SQL = 'SELECT path FROM skills WHERE owner IS NULL';
@@ -102,7 +103,7 @@ function runOne(
       population: 'derived', lensPopulation: 'none', populationMs: 1, lensMs: 0, lensesEvaluated: [], membersEnumerated: 40,
     },
   });
-  const published = (report.data.checks[0] ?? {}) as Record<string, unknown>;
+  const published = (reportData(report).checks[0] ?? {}) as Record<string, unknown>;
   return { costs, issues, published, report, asked, progress };
 }
 

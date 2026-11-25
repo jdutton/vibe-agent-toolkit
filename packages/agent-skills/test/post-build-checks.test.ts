@@ -219,7 +219,7 @@ describe('checkUnreferencedFiles - files: config dests', () => {
     });
 
     const expectedSchemaDest = toForwardSlash(safePath.join('schemas', 'thing.schema.json'));
-    const sortFn = (a: string, b: string) => a.localeCompare(b);
+    const sortFn = (a?: string, b?: string): number => (a ?? '').localeCompare(b ?? '');
 
     // Both land in the output and, uninformed, both are reported as orphans —
     // these locations ARE the relativePath basis.

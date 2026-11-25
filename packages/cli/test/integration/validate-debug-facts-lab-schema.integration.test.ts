@@ -24,7 +24,7 @@ import { type ChecksPhaseObservation, openDebugFacts, writeDebugFacts } from '..
 import { cleanupTestTempDir, createTestTempDir } from '../system/test-common.js';
 
 /** One decline per condition, keyed by it: a missing condition is a type error. */
-const DECLINES: { readonly [C in GateDecline['condition']]: Extract<GateDecline, { condition: C }> } = {
+const DECLINES: { readonly [C in GateDecline['condition']]: GateDecline & { readonly condition: C } } = {
   debug: { condition: 'debug' },
   cores: { condition: 'cores' },
   'not-hit': { condition: 'not-hit' },

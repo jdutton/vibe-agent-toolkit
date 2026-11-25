@@ -24,6 +24,7 @@ import {
   type ResourcesValidateInput,
 } from '../../../src/commands/resources/validate.js';
 import { publishedReport } from '../../../src/utils/document-writer.js';
+import { reportData } from '../../report-envelope.js';
 
 /** The code the run-integrity refusal carries, shared with `vat resources check`. */
 const RUN_INTEGRITY_CODE = 'RESOURCE_CHECK_BROKEN';
@@ -59,14 +60,14 @@ const severities = (...list: Array<ValidationIssue['severity']>) => list.map((s)
 
 describe('buildResourcesValidateReport — membership provenance', () => {
   it.each(['store', 'derived'] as const)('publishes population: %s as the run observed it', (population) => {
-    expect(report([], { population }).data.population).toBe(population);
+    expect(reportData(report([], { population })).population).toBe(population);
   });
 
   it('refuses a document with no population, because the field is required', () => {
     const built = report([]);
     // The positive control: the same document WITH the field parses.
     expect(RESOURCES_VALIDATE_REPORT_SCHEMA.safeParse(built).success).toBe(true);
-    const withoutPopulation = Object.fromEntries(Object.entries(built.data).filter(([key]) => key !== 'population'));
+    const withoutPopulation = Object.fromEntries(Object.entries(reportData(built)).filter(([key]) => key !== 'population'));
 
     expect(RESOURCES_VALIDATE_REPORT_SCHEMA.safeParse({ ...built, data: withoutPopulation }).success).toBe(false);
   });
@@ -112,7 +113,7 @@ describe('buildResourcesValidateReport — the envelope vocabulary', () => {
   it('publishes each finding flat, located relative to the stated root', () => {
     const built = report([issue('error', 'docs/b.md')]);
 
-    expect(built.data.root).toBe(ROOT);
+    expect(reportData(built).root).toBe(ROOT);
     expect(built.findings).toEqual([
       { code: 'LINK_BROKEN_FILE', severity: 'error', message: 'error finding', location: 'docs/b.md', line: 4 },
     ]);
@@ -128,7 +129,7 @@ describe('the --verbose file rows', () => {
   it('lists every resource validated, the clean ones included, with its own status and summary', () => {
     const built = report([issue('error', 'docs/a.md'), issue('info', 'docs/a.md')], { verbose: true });
 
-    expect(built.data.files).toEqual([
+    expect(reportData(built).files).toEqual([
       { path: 'docs/a.md', status: 'findings', summary: { errors: 1, warnings: 0, info: 1 } },
       { path: 'docs/b.md', status: 'ok', summary: { errors: 0, warnings: 0, info: 0 } },
       { path: 'docs/c.md', status: 'ok', summary: { errors: 0, warnings: 0, info: 0 } },
@@ -163,7 +164,7 @@ describe('collections', () => {
       },
     });
 
-    expect(built.data.collections).toEqual({
+    expect(reportData(built).collections).toEqual({
       guides: { resourceCount: 2, hasSchema: false, filesWithErrors: 1, summary: { errors: 1, warnings: 1, info: 0 } },
       other: {
         resourceCount: 1,
@@ -176,7 +177,7 @@ describe('collections', () => {
   });
 
   it('publishes `{}` for a project that configures none', () => {
-    expect(report([]).data.collections).toEqual({});
+    expect(reportData(report([])).collections).toEqual({});
   });
 });
 

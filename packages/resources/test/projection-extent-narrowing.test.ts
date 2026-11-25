@@ -238,7 +238,7 @@ describe('filesystem extent narrowing', () => {
       [`readFileSync('${LEAF_DOC}`, 'bare-token'],
     ]);
     expect(fromScript).toHaveLength(2);
-    expect(fromScript.filter(([, form]) => DEFAULT_FOLLOW.includes(form))).toStrictEqual([]);
+    expect(fromScript.filter(([, form]) => (DEFAULT_FOLLOW as readonly string[]).includes(form))).toStrictEqual([]);
     expect(DEFAULT_FOLLOW).toStrictEqual([
       'markdown-link',
       'markdown-link-reference',

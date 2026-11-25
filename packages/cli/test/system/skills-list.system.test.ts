@@ -83,7 +83,7 @@ describe('skills list command (system test)', () => {
       expect(firstSkill).toHaveProperty('name');
       expect(firstSkill).toHaveProperty('path');
       expect(firstSkill).toHaveProperty('valid');
-      expect(typeof firstSkill.valid).toBe('boolean');
+      expect(typeof firstSkill?.valid).toBe('boolean');
     }
   });
 

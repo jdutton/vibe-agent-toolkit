@@ -11,8 +11,7 @@
 
 import { readdirSync, readFileSync } from 'node:fs';
 
-import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
-import { WORK_COUNTERS_ENV, type WorkCounterDump } from '@vibe-agent-toolkit/utils';
+import { WORK_COUNTERS_ENV, type WorkCounterDump, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createSuiteContext, executeCli, join, writeTestFile } from '../system/test-common.js';

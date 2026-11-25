@@ -262,8 +262,8 @@ describe('loadResourcesWithConfig (integration test)', () => {
 
       expect(result.config).toBeDefined();
       expect(result.config?.resources?.collections).toBeDefined();
-      expect(result.config?.resources?.collections?.guides).toBeDefined();
-      expect(result.config?.resources?.collections?.guides?.include).toContain('docs/guides/**/*.md');
+      expect(result.config?.resources?.collections?.['guides']).toBeDefined();
+      expect(result.config?.resources?.collections?.['guides']?.include).toContain('docs/guides/**/*.md');
 
       // Registry should have been configured with the converted config
       expect(result.registry).toBeDefined();

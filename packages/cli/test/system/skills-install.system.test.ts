@@ -16,6 +16,7 @@ import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
 import {
   executeCommandAndParse,
+  reportData,
   setupInstallTestSuite,
 } from './test-helpers/index.js';
 
@@ -26,10 +27,8 @@ useScratchTmpdir('vat-scratch-cli-13-');
 const suite = setupInstallTestSuite('vat-skills-install-test-', import.meta.url);
 
 /** The `data` of a completed install report, validated against the published schema. */
-function dataOf(parsed: Record<string, unknown>): PluginInstallData {
-  const report = PLUGIN_INSTALL_REPORT_SCHEMA.parse(parsed);
-  if (report.data === null) throw new Error(`install published no data: ${JSON.stringify(parsed)}`);
-  return report.data;
+function installData(parsed: Record<string, unknown>): PluginInstallData {
+  return reportData(PLUGIN_INSTALL_REPORT_SCHEMA.parse(parsed));
 }
 
 /**
@@ -45,7 +44,7 @@ async function createSimpleSkill(tempDir: string, skillName: string): Promise<st
 /**
  * Helper: Execute install command and verify success. Returns the raw
  * result + parsed YAML so callers can make additional assertions (e.g.
- * `dataOf(parsed).dryRun`) without re-running the command.
+ * `installData(parsed).dryRun`) without re-running the command.
  */
 function executeInstallAndExpectSuccess(
   binPath: string,
@@ -57,10 +56,10 @@ function executeInstallAndExpectSuccess(
   const { result, parsed } = executeCommandAndParse(binPath, args, projectDir);
 
   expect(result.status).toBe(0);
-  expect(parsed.status).toBe('ok');
-  expect(dataOf(parsed).sourceType).toBe(expectedSourceType);
+  expect(parsed['status']).toBe('ok');
+  expect(installData(parsed).sourceType).toBe(expectedSourceType);
 
-  const skills = dataOf(parsed).skills;
+  const skills = installData(parsed).skills;
   expect(skills).toHaveLength(1);
   expect(skills[0]).toHaveProperty('name', expectedSkillName);
 
@@ -76,8 +75,8 @@ function expectDryRunDetects(source: string, sourceType: string, skillName: stri
   );
 
   expect(result.status).toBe(0);
-  expect(parsed.status).toBe('ok');
-  expect(dataOf(parsed)).toMatchObject({ sourceType, dryRun: true });
+  expect(parsed['status']).toBe('ok');
+  expect(installData(parsed)).toMatchObject({ sourceType, dryRun: true });
   // The plan's own line (`plan.describe()`): what the real run would do, and nothing written.
   expect(result.stderr).toContain(`[dry-run] create skill ${skillName} ${safePath.join(suite.skillsDir, skillName)}`);
   expect(existsSync(safePath.join(suite.skillsDir, skillName))).toBe(false);
@@ -168,10 +167,10 @@ describe('claude plugin install command (system test)', () => {
       );
 
       expect(result.status).toBe(0);
-      expect(parsed.status).toBe('ok');
-      expect(dataOf(parsed).sourceType).toBe('local');
+      expect(parsed['status']).toBe('ok');
+      expect(installData(parsed).sourceType).toBe('local');
 
-      const skills = dataOf(parsed).skills;
+      const skills = installData(parsed).skills;
       expect(skills).toHaveLength(1);
       expect(skills[0]).toHaveProperty('name', skillName);
 
@@ -195,7 +194,7 @@ describe('claude plugin install command (system test)', () => {
       );
 
       expect(result.status).toBe(0);
-      const skills = dataOf(parsed).skills;
+      const skills = installData(parsed).skills;
       expect(skills[0]).toHaveProperty('name', customName);
 
       // Verify installed with custom name
@@ -251,7 +250,7 @@ describe('claude plugin install command (system test)', () => {
       );
 
       expect(result.status).toBe(0);
-      expect(parsed.status).toBe('ok');
+      expect(parsed['status']).toBe('ok');
     });
 
     it('should fail without --force if skill exists', async () => {
@@ -290,7 +289,7 @@ describe('claude plugin install command (system test)', () => {
         'my-skill',
         'local'
       );
-      expect(dataOf(parsed).dryRun).toBe(true);
+      expect(installData(parsed).dryRun).toBe(true);
 
       // Verify nothing was actually installed
       expect(existsSync(safePath.join(suite.skillsDir, 'my-skill'))).toBe(false);

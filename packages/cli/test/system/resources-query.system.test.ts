@@ -230,7 +230,7 @@ function databasesUnder(directory: string): string[] {
   const walk = (current: string): void => {
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const child = safePath.join(current, entry.name);
-      if (direntKindFollowingSync(current, entry) === 'directory') {
+      if (direntKindFollowingSync(current, entry, directory) === 'directory') {
         walk(child);
       } else if (entry.name === PROJECTION_DATABASE) {
         found.push(safePath.relative(directory, child));
@@ -587,10 +587,12 @@ describe('vat resources query', () => {
     // redirected temp root, same store selection, `VAT_CACHE_DIR`
     // withheld — and the database appears under it. Without this, "nothing was
     // written to the default location" is indistinguishable from "this suite
-    // cannot see the default location at all".
+    // cannot see the default location at all". Withheld by blanking it: the
+    // shared vitest setup gives every test file its own `VAT_CACHE_DIR`, which
+    // `process.env` would otherwise carry into the child.
     const decoyTmp = safePath.join(storeDir, 'default-location-control');
     const { status, stderr } = query(COUNT_BLOBS, {
-      env: { ...storeSelectedEnv(), ...tmpdirRedirect(decoyTmp) },
+      env: { ...storeSelectedEnv(), ...tmpdirRedirect(decoyTmp), VAT_CACHE_DIR: '' },
     });
 
     expect(status, stderr).toBe(0);

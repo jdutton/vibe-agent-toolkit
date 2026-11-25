@@ -3,6 +3,9 @@
   "tasks": {
     "lint": {
       "inputs": ["$TURBO_EXTENDS$", "$TURBO_ROOT$/packages/dev-tools/src/pin-barrel-exports.ts", "$TURBO_ROOT$/packages/rag/src/embedding-providers/onnx-utils.ts", "$TURBO_ROOT$/packages/rag/test/onnx-model-gate.ts"]
+    },
+    "typecheck": {
+      "inputs": ["$TURBO_EXTENDS$", "$TURBO_ROOT$/packages/dev-tools/src/pin-barrel-exports.ts", "$TURBO_ROOT$/packages/rag/src/embedding-providers/onnx-utils.ts", "$TURBO_ROOT$/packages/rag/test/onnx-model-gate.ts"]
     }
   }
 }

@@ -320,7 +320,15 @@ function admitThrough(store: FakeFactStore, treeHash: string): Promise<Admission
     // each ask is still the cold lane's, so admission's asks are counted at the dispatcher itself.
     const asks = vi.spyOn(population.dispatcher, 'parse');
     try {
-      await registry.crawl({ baseDir: root, ...CRAWLED, outputs: [], unreadable: 'refuse', populationSource: population.source });
+      await registry.crawl({
+        baseDir: root,
+        include: [...CRAWLED.include],
+        exclude: [...CRAWLED.exclude],
+        ignoredRefusals: CRAWLED.ignoredRefusals,
+        outputs: [],
+        unreadable: 'refuse',
+        populationSource: population.source,
+      });
       return {
         outcome,
         resources: registry.getAllResources(),

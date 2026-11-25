@@ -7,6 +7,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { validateFrontmatterLinks } from '../src/frontmatter-link-validator.js';
 import { fragmentIndex, type FragmentIndex } from '../src/link-validator.js';
 
+import { linkOptions } from './test-helpers.js';
+
 describe('validateFrontmatterLinks', () => {
   let projectRoot: string;
   let sourceFile: string;
@@ -43,10 +45,10 @@ describe('validateFrontmatterLinks', () => {
     frontmatter: Record<string, unknown> | undefined,
     schema: object = refSchema,
   ) =>
-    validateFrontmatterLinks(frontmatter, schema, sourceFile, fragmentsByFile, {
+    validateFrontmatterLinks(frontmatter, schema, sourceFile, fragmentsByFile, linkOptions({
       projectRoot,
       skipGitIgnoreCheck: true,
-    });
+    }));
 
   it('returns no issues and no external URLs when path exists', async () => {
     const { issues, externalUrls } = await run({ ref: 'target.md' });
@@ -136,7 +138,7 @@ describe('validateFrontmatterLinks', () => {
         refSchema,
         sourceFile,
         fragmentsByFile,
-        { skipGitIgnoreCheck: true },
+        linkOptions({ skipGitIgnoreCheck: true }),
       );
       expect(issues).toHaveLength(1);
       expect(issues[0]?.code).toBe('FRONTMATTER_LINK_BROKEN');

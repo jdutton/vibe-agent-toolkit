@@ -100,7 +100,7 @@ function makeDeferredArtifacts(): DeferredArtifacts {
  * accidentally matching a real test link target.
  */
 function makeDeferredArtifactsFromRelPaths(
-  opts: { destPaths?: string[]; sourcePaths?: string[]; skillDir?: string; projectRoot?: string } = {},
+  opts: { destPaths?: string[] | undefined; sourcePaths?: string[] | undefined; skillDir?: string; projectRoot?: string } = {},
 ): DeferredArtifacts {
   const skillDir = opts.skillDir ?? PROJECT_ROOT;
   const projectRoot = opts.projectRoot ?? PROJECT_ROOT;
@@ -1516,6 +1516,7 @@ describe('walkLinkGraph', () => {
         excludeRules: [],
         projectRoot: root,
         skillRootPath: skillPath,
+        ownOutputDir: undefined,
         pathProbe,
       });
 
@@ -1740,6 +1741,7 @@ describe('walkLinkGraph', () => {
         excludeRules: [],
         projectRoot: PROJECT_ROOT,
         skillRootPath: SKILL_PATH,
+        ownOutputDir: undefined,
       });
 
       expect(__readCrawlTimingSnapshot().entries).toEqual([]);
@@ -1753,6 +1755,7 @@ describe('walkLinkGraph', () => {
         excludeRules: [],
         projectRoot: root,
         skillRootPath: skillPath,
+        ownOutputDir: undefined,
       };
 
       walkLinkGraph(SKILL_ID, registry, options);
@@ -1778,6 +1781,7 @@ describe('walkLinkGraph', () => {
         excludeRules: [],
         projectRoot: PROJECT_ROOT,
         skillRootPath: SKILL_PATH,
+        ownOutputDir: undefined,
       });
 
       // The early return is a real (cheap) call. A bracket repeated at each
@@ -1795,6 +1799,7 @@ describe('walkLinkGraph', () => {
         excludeRules: [],
         projectRoot: root,
         skillRootPath: skillPath,
+        ownOutputDir: undefined,
         gitTracker: makeGitTrackerStub(() => {
           asked += 1;
           return false;
@@ -1819,6 +1824,7 @@ describe('walkLinkGraph', () => {
         excludeRules: [],
         projectRoot: root,
         skillRootPath: skillPath,
+        ownOutputDir: undefined,
         gitTracker: makeGitTrackerStub(() => false),
       });
 

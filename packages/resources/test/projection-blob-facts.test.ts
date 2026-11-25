@@ -23,9 +23,10 @@ const MISSING_END_TAG = 'missing-end-tag';
 /**
  * A minimal ParseResult. Widen per test rather than restating the whole shape.
  *
- * No `as ParseResult` cast: the five fields below are exactly the required ones
- * (`links`, `headings`, `content`, `sizeBytes`, `estimatedTokenCount`), so this
- * typechecks honestly. A cast here would let a later field addition go unnoticed.
+ * No `as ParseResult` cast: the six fields below are exactly the required ones
+ * (`links`, `headings`, `content`, `sizeBytes`, `estimatedTokenCount`,
+ * `skillText`), so this typechecks honestly. A cast here would let a later field
+ * addition go unnoticed.
  */
 function parseResult(overrides: Partial<ParseResult> = {}): ParseResult {
   return {
@@ -34,6 +35,7 @@ function parseResult(overrides: Partial<ParseResult> = {}): ParseResult {
     links: [],
     headings: [],
     estimatedTokenCount: 2,
+    skillText: null,
     ...overrides,
   };
 }

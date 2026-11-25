@@ -13,6 +13,7 @@ import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { PLUGIN_UNINSTALL_REPORT_SCHEMA } from '../../src/commands/claude/plugin/uninstall-schema.js';
+import { refusalOf } from '../report-envelope.js';
 
 import {
   createTempDirTracker,
@@ -230,7 +231,7 @@ describe('claude plugin uninstall command (system test)', () => {
 
     expect(result.status).toBe(2);
     expect(report).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' } });
-    expect(report.error?.message).toContain('real@mk');
+    expect(refusalOf(report)?.message).toContain('real@mk');
     expect(existsSync(safePath.join(fakeHome, '.claude', 'plugins', 'marketplaces', 'mk', 'plugins', 'real'))).toBe(true);
   });
 

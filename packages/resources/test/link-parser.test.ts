@@ -638,7 +638,7 @@ Content
         assertions: (result) => {
           expect(result.headings).toHaveLength(1);
           expectHeadingStructure(
-            result.headings[0],
+            result.headings[0]!,
             {
               text: 'Main',
               children: [
@@ -852,8 +852,8 @@ date: 2026-04-15
 
       const result = await parseMarkdownFile(mdPath);
 
-      expect(result.frontmatter?.date).toBe('2026-04-15');
-      expect(result.frontmatter?.date).not.toBeInstanceOf(Date);
+      expect(result.frontmatter?.['date']).toBe('2026-04-15');
+      expect(result.frontmatter?.['date']).not.toBeInstanceOf(Date);
     });
 
     it('should capture YAML parsing errors', async () => {

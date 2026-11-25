@@ -12,9 +12,9 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
 import { defaultStoreDirectory, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
-import { type BlobScopedRows, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
+import { emptyBlobRows } from '@vibe-agent-toolkit/resources';
 import { uncoveredBlobWrite } from '@vibe-agent-toolkit/resources/testing';
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { detachGitEnv } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -106,7 +106,7 @@ describe.each([
 
   it('replaces a truncated database with a fresh store', async () => {
     const store = openSqliteFactStore();
-    await store.writeBlobFacts(uncoveredBlobWrite({} as BlobScopedRows));
+    await store.writeBlobFacts(uncoveredBlobWrite(emptyBlobRows()));
     await store.close();
     const bytes = readFileSync(databaseFile());
     writeFileSync(databaseFile(), bytes.subarray(0, Math.floor(bytes.length / 2)));

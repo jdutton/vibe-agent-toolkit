@@ -52,7 +52,6 @@ import {
   PROJECTION_TABLES,
   quoteIdentifier,
   uncoveredContentKeys,
-  VAT_CACHE_DIR_ENV,
 } from '@vibe-agent-toolkit/resources';
 import { FindingSchema, reportSchema } from '@vibe-agent-toolkit/schema';
 import {
@@ -67,6 +66,7 @@ import {
   WORK_COUNTERS_ENV,
   type WorkCounter,
   type WorkCounterDump,
+  VAT_CACHE_DIR_ENV,
 } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { expectAbsenceCause, parseLookupsIn, removeTempDir } from '@vibe-agent-toolkit/utils/testing';

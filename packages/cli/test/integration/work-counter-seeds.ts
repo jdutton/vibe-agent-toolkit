@@ -26,6 +26,7 @@ import {
   type BlobScopedRows,
   computeContentKey,
   type ExtentScopedRows,
+  IGNORE_HOME_SETTLEMENT,
   ParseCache,
   markVatCacheRoot,
   ParseDispatcher,
@@ -37,11 +38,10 @@ import {
   readContentWithKey,
   ResourceRegistry,
   StoreQuestionUnavailableError,
-  VAT_CACHE_DIR_ENV,
   withRunPopulation,
 } from '@vibe-agent-toolkit/resources';
 import { uncoveredBlobWrite } from '@vibe-agent-toolkit/resources/testing';
-import { normalizedTmpdir, readWorkCounters, safePath, toForwardSlash, WORK_COUNTER_NAMES, type WorkCounter } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, readWorkCounters, safePath, toForwardSlash, WORK_COUNTER_NAMES, type WorkCounter, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { createTempDir, removeTempDir, scratchTmpdirEnv } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, expect, vi } from 'vitest';
@@ -745,6 +745,7 @@ function skillTextOutsideRootSeed(): Seed {
         questionCacheOf: () => Promise.reject(new Error('the question never opens its store for this')),
         holdsStore: true,
         collectionsFor: () => Promise.resolve(undefined),
+        onHomeSettled: IGNORE_HOME_SETTLEMENT,
       }, async (population) => {
         await population.source.storedDocument(outside, 'markdown');
         await population.source.storedDocument(outside, 'markdown');
@@ -776,6 +777,7 @@ function skillTextStoreUnopenedSeed(): Seed {
         questionCacheOf: () => Promise.reject(new StoreQuestionUnavailableError(new Error('database is locked'))),
         holdsStore: true,
         collectionsFor: () => Promise.resolve(undefined),
+        onHomeSettled: IGNORE_HOME_SETTLEMENT,
       }, async (population) => {
         await population.source.storedDocument(safePath.join(root, 'SKILL.md'), 'markdown');
         await population.source.storedDocument(safePath.join(root, 'guide.md'), 'markdown');

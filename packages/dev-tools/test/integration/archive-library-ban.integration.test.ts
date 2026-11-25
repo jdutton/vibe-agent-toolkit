@@ -58,7 +58,7 @@ const LOOKALIKES = "import a from 'tarball';\nimport b from './tar.js';\nimport 
 const FORMAT_ARGUMENT = "declare function list(format: string, bytes: Uint8Array): unknown;\nexport const all = [list('tar', new Uint8Array()), list('adm-zip', new Uint8Array())];\n";
 
 describe('the archive-library ban', () => {
-  it.each([
+  it.each<readonly [what: string, file: string, code: string, rule: string]>([
     ['a CLI command', 'packages/cli/src/commands/claude/plugin/second-extractor.ts', STATIC_TAR, STATIC_BAN],
     ['a domain package', 'packages/agent-skills/src/skill-source/sources/second-extractor.ts', STATIC_ZIP, STATIC_BAN],
     ['utils outside the archive module', 'packages/utils/src/second-extractor.ts', STATIC_TAR, STATIC_BAN],

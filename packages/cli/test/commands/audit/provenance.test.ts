@@ -81,16 +81,16 @@ describe('rewritePathsInResults', () => {
       },
     ];
     const rewritten = rewritePathsInResults(results, TEMP_ROOT);
-    expect(rewritten[0].path).toBe(`${SUBPATH}/SKILL.md`);
-    expect(rewritten[1].path).toBe('other/SKILL.md');
-    expect(rewritten[1].issues[0].file).toBe('other/file.md');
-    expect(rewritten[1].linkedFiles[0]).toBe('other/sibling.md');
+    expect(rewritten[0]?.path).toBe(`${SUBPATH}/SKILL.md`);
+    expect(rewritten[1]?.path).toBe('other/SKILL.md');
+    expect(rewritten[1]?.issues[0]?.file).toBe('other/file.md');
+    expect(rewritten[1]?.linkedFiles?.[0]).toBe('other/sibling.md');
   });
 
   it('leaves paths that do not start with the temp root unchanged', () => {
     const results = [{ path: '/some/other/path.md', issues: [] }];
     const rewritten = rewritePathsInResults(results, TEMP_ROOT);
-    expect(rewritten[0].path).toBe('/some/other/path.md');
+    expect(rewritten[0]?.path).toBe('/some/other/path.md');
   });
 
   it('does not mutate the input array', () => {

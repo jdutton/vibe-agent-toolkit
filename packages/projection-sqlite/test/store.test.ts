@@ -173,6 +173,7 @@ function extentBundle(contexts: readonly ContextFixture[], rootId: string = KEY.
       parameterSet: { include: ['**/*.md'], depth: 0 },
       extentDigest: `digest-${fixture.contextId}`,
     })),
+    claudeRulePatterns: [],
   };
 }
 
@@ -1136,7 +1137,7 @@ describe('the blob tier is bounded', () => {
     const evicting = openWithBlobWindow(3);
     const keys = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'].map((seed) => contentKey(seed));
     await evicting.writeBlobFacts(uncoveredBlobWrite({
-      blobs: [], blobReferences: [], blobSections: [], harnessBlobFacts: [], harnessBlobImports: [],
+      blobs: [], blobReferences: [], blobSections: [], harnessBlobFacts: [], harnessBlobImports: [], skillTextFacts: [], skillTextMatches: [],
       blobConditions: keys.flatMap((key) => declinedBlobRows(key).blobConditions),
     }));
     const held = await evicting.readBlobFacts(keys, ALL_BLOB_REQUEST);
@@ -1150,7 +1151,7 @@ describe('the blob tier is bounded', () => {
     // reclaims the surplus — so the bound is still a bound.
     const evicting = openWithBlobWindow(2);
     await evicting.writeBlobFacts(uncoveredBlobWrite({
-      blobs: [], blobReferences: [], blobSections: [], harnessBlobFacts: [], harnessBlobImports: [],
+      blobs: [], blobReferences: [], blobSections: [], harnessBlobFacts: [], harnessBlobImports: [], skillTextFacts: [], skillTextMatches: [],
       blobConditions: ['a', 'b', 'c', 'd'].flatMap((seed) => declinedBlobRows(contentKey(seed)).blobConditions),
     }));
     expect(trackedBlobKeys()).toBe(4);

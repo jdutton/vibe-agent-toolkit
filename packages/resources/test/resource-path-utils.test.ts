@@ -11,7 +11,7 @@ import {
   getResourceAbsolutePath,
   isValidProjectPath,
   normalizeProjectPath,
-} from '../src/types/resource-path-utils.ts';
+} from '../src/types/resource-path-utils.js';
 
 // Shared test constants
 const DOCS_GUIDE_MD = 'docs/guide.md';

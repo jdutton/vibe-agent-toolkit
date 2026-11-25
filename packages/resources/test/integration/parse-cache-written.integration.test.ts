@@ -40,7 +40,7 @@ describe('parse.cache.written', () => {
     const cache = new ParseCache({ cacheDir: root, enabled: true });
     const key = computeContentKey(BYTES, 'markdown');
 
-    const persisted = await cache.setByKey(key, parseMarkdownContent(CONTENT));
+    const persisted = await cache.setByKey(key, parseMarkdownContent(CONTENT, BYTES.length));
 
     expect(persisted).toBe(true);
     expect(readWorkCounters()['parse.cache.written']).toBe(1);
@@ -49,7 +49,7 @@ describe('parse.cache.written', () => {
   it('counts nothing for a setByKey that persisted nothing', async () => {
     const cache = new ParseCache({ cacheDir: root, enabled: false });
 
-    const persisted = await cache.setByKey(computeContentKey(BYTES, 'markdown'), parseMarkdownContent(CONTENT));
+    const persisted = await cache.setByKey(computeContentKey(BYTES, 'markdown'), parseMarkdownContent(CONTENT, BYTES.length));
 
     expect(persisted).toBe(false);
     expect(readWorkCounters()['parse.cache.written']).toBe(0);

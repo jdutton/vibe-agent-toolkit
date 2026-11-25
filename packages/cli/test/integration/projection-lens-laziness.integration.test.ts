@@ -92,7 +92,7 @@ async function runDeclaring(root: string, sql: string): Promise<LensOutcome> {
  * @returns The count
  */
 function countOf(outcome: LensOutcome): number {
-  return Number(outcome.rows[0]?.n);
+  return Number(outcome.rows[0]?.['n']);
 }
 
 describe('lens evaluation is driven by what the run declares', () => {
@@ -119,7 +119,7 @@ describe('lens evaluation is driven by what the run declares', () => {
     // answered. `toEqual`, not `toStrictEqual`: the backend returns
     // null-prototype row objects.
     expect(outcome.rows).toHaveLength(1);
-    expect(outcome.rows[0]?.x).toBe(1);
+    expect(outcome.rows[0]?.['x']).toBe(1);
   });
 
   it('still fills `edges` with real rows when the statement names it', async () => {
@@ -146,8 +146,8 @@ describe('lens evaluation is driven by what the run declares', () => {
     const both = await withQueriedProjection(
       { root, logger, statements: [COUNT_EDGES, COUNT_ALWAYS_LOADED], base: undefined },
       (ask, provenance) => ({
-        edges: Number(ask(COUNT_EDGES)[0]?.n),
-        loads: Number(ask(COUNT_ALWAYS_LOADED)[0]?.n),
+        edges: Number(ask(COUNT_EDGES)[0]?.['n']),
+        loads: Number(ask(COUNT_ALWAYS_LOADED)[0]?.['n']),
         lensesEvaluated: provenance.lensesEvaluated,
       }),
     );
