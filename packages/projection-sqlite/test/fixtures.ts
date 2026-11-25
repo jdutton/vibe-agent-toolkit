@@ -347,7 +347,7 @@ export async function closeGatedHandles(handles: { readonly database: RunDatabas
  */
 function hydrateTables(projection: Projection, tables: readonly (keyof typeof PROJECTION_TABLES)[]): RunDatabase {
   const rootId = projection.roots[0]?.id ?? 'root-1';
-  const relations = new Map(tables.map((key) => [PROJECTION_TABLES[key].name, projection[key]] as const));
+  const relations = new Map(tables.map((key) => [PROJECTION_TABLES[key].name, { rows: projection[key] }] as const));
   return hydrateRunDatabase({ rootId, relations });
 }
 

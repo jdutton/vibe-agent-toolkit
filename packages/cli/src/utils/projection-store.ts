@@ -59,8 +59,9 @@ import {
   StoreQuestionUnavailableError,
   type FactStore,
   type PopulationCache,
-  type Projection,
   type ProjectionTableName,
+  type QueryProjection,
+  type QueryReferenceSource,
   vatCacheRoot,
 } from '@vibe-agent-toolkit/resources';
 import {
@@ -516,7 +517,20 @@ function replaceUnopenableStore(
 }
 
 /**
- * Hydrate the run database from one run's projection: the one handle SQL runs on,
+ * What hydration fills a run database from: the run's own query projection, where its
+ * `blob_references` come from, and the store the run was served from (if any).
+ */
+interface RunHydrationSources {
+  /** The run's populated query projection: every relation's rows but `blob_references`. */
+  readonly projection: QueryProjection;
+  /** Where `blob_references` come from: the run's own rows, or the store for the hit's keys. */
+  readonly blobReferences: QueryReferenceSource;
+  /** The store the population was served from; required by a stored source, `undefined` with none. */
+  readonly store: FactStore | undefined;
+}
+
+/**
+ * Hydrate the run database from one run's population: the one handle SQL runs on,
  * holding exactly the projection tables the plan names, each with this run's rows.
  *
  * 🔑 **This is what keeps the query surface an ANSWER rather than a privilege.**
@@ -526,23 +540,25 @@ function replaceUnopenableStore(
  * would be answerable only where a cache happened to exist, and two callers
  * would hold differently-shaped views of one tree.
  *
- * 🚨 The rows come from `projection` — the run's own population — never from the
- * store: the shared store holds every other repository's rows too. A relation the
- * plan does not name is absent, so a statement reaching it is refused.
+ * 🚨 The rows are the run's own — its projection, or on a store hit the store's
+ * rows for exactly the content keys the hit admitted, copied inside SQLite —
+ * never the store at large: the shared store holds every other repository's rows
+ * too. A relation the plan does not name is absent, so a statement reaching it is refused.
  *
  * Nothing survives the close.
  *
- * @param projection - One run's populated projection
+ * @param sources - The run's projection, its `blob_references` source, and its store
  * @param plan - The relations to hydrate, by SQL name
  * @returns The open run database; close it when done
  * @throws Error When the projection has no root row: a driver invariant, since
  *   `populate()` adds exactly one, and without it there is no id to file the
- *   extent-scoped rows under
+ *   extent-scoped rows under; or when a stored source arrives without its store
  */
 export async function hydrateRunDatabase(
-  projection: Projection,
+  sources: RunHydrationSources,
   plan: Pick<HydrationPlan, 'relations'>,
 ): Promise<ProjectionSqlite.RunDatabase> {
+  const { projection } = sources;
   // The key is read OFF the projection rather than re-derived from the root.
   // The driver mints `roots.id` with `rootIdFor` and every
   // `resolution_contexts.rootId` is a foreign key into it, so taking it from
@@ -559,9 +575,29 @@ export async function hydrateRunDatabase(
   const relations = new Map(plan.relations.map((name) => {
     const key = keyOf.get(name);
     if (key === undefined) throw new Error(`"${name}" is not a projection table, so hydration has no rows for it.`);
-    return [name, projection[key]] as const;
+    return [name, relationSource(sources, key)] as const;
   }));
   return (await loadBackend()).hydrateRunDatabase({ rootId, relations });
+}
+
+/**
+ * Where one projection table's rows come from. `blob_references` is the one table the query
+ * projection does not hold in full: its source is the population's, every other table's the
+ * projection's own rows.
+ *
+ * @param sources - The run's sources
+ * @param key - The table's registry key
+ * @returns Its source
+ * @throws Error When the population named the store and the run holds none
+ */
+function relationSource(sources: RunHydrationSources, key: ProjectionTableName): ProjectionSqlite.RelationSource {
+  if (key !== 'blobReferences') return { rows: sources.projection[key] };
+  const references = sources.blobReferences;
+  if ('rows' in references) return { rows: references.rows };
+  if (sources.store === undefined) {
+    throw new Error('The population was served from a store, but hydration was handed none to copy its references from.');
+  }
+  return { stored: { store: sources.store, contentKeys: references.stored.contentKeys } };
 }
 
 /**

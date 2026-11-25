@@ -446,7 +446,7 @@ async function runBothArms(root: string): Promise<Arms> {
  * @returns The row
  * @throws When the path was not enumerated at all
  */
-function realizationOf(projection: Projection, relativePath: string): ResourceRealizationRow {
+function realizationOf(projection: Pick<Projection, 'resourceRealizations'>, relativePath: string): ResourceRealizationRow {
   const row = projection.resourceRealizations.find((candidate) => candidate.path === relativePath);
   if (row === undefined) throw new Error(`no realization for ${relativePath}`);
   return row;
@@ -459,7 +459,7 @@ function realizationOf(projection: Projection, relativePath: string): ResourceRe
  * @param relativePath - Root-relative, forward-slashed
  * @returns The key, or the empty string when the row carries none
  */
-function keyOf(projection: Projection, relativePath: string): string {
+function keyOf(projection: Pick<Projection, 'resourceRealizations'>, relativePath: string): string {
   return realizationOf(projection, relativePath).contentKey ?? '';
 }
 

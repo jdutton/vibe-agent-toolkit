@@ -252,8 +252,22 @@ export {
   resolveEdges,
   type EdgeEvaluationOptions,
   type EdgeLens,
+  type EdgeLensProjection,
   type EdgeRelation,
 } from './projection/edge-lens.js';
+
+// The query lane's in-memory projection: every table, and of `blob_references` the AST forms
+// only, under their own field, so code reading a lexical reference from it does not compile. The
+// run database takes every form from the population's source instead.
+export {
+  PROJECTION_STORE_ROWS_EVICTED_CODE,
+  queryProjectionOf,
+  type AstReferenceRow,
+  type AstSyntacticForm,
+  type QueryPopulateResult,
+  type QueryProjection,
+  type QueryReferenceSource,
+} from './projection/query-projection.js';
 
 // Where one reference points, as a path. Shared with the closure walk so the
 // corpus has ONE answer to that question.

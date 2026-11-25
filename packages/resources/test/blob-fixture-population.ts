@@ -26,10 +26,11 @@ import { RunContentCache } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
-import { type BlobStage, populate, storedTierReads } from '../src/projection/merge.js';
+import { type BlobStage, populate } from '../src/projection/merge.js';
 import { ProjectionBuilder, type Projection } from '../src/projection/projection.js';
 import { diskRunContentSource } from '../src/projection/run-population.js';
 import { EMPTY_STORED_TIER } from '../src/projection/store-hydration.js';
+import { storedTierReads } from '../src/projection/stored-tier-reads.js';
 import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
 
 import { inOwnRun } from './helpers/population-run.js';

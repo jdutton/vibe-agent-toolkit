@@ -25,7 +25,7 @@ import {
   type PopulationOutcome,
   type PopulationRun,
   type LensRefusalCode,
-  type Projection,
+  type QueryProjection,
 } from '@vibe-agent-toolkit/resources';
 
 import { evaluateChangedFilesLens } from './changed-files-lens.js';
@@ -82,8 +82,8 @@ export function lensPopulationOf(populations: readonly LensEvaluation['populatio
 
 /** Everything a lens may read while evaluating. */
 export interface LensEvaluationInput {
-  /** The resources-lane projection the run already populated. */
-  readonly projection: Projection;
+  /** The resources-lane projection the run already populated: AST references only (`QueryProjection`). */
+  readonly projection: QueryProjection;
   /** Absolute corpus root, for a lens that must populate a lane of its own. */
   readonly root: string;
   /** The run's `--base` ref, or undefined. Only the changed-files lens reads it. */

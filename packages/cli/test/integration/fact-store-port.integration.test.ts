@@ -77,8 +77,9 @@ const PROBE_LINES = [
   'export type PortIsNotARunDatabase = Expect<Equal<FactStore extends RunDatabase ? true : false, false>>;',
   // 18: the opener takes a hydration and nothing else.
   'export type OpenerTakesAHydration = Expect<Equal<Parameters<typeof hydrateRunDatabase>, [hydration: RunDatabaseHydration]>>;',
-  // 19: whose relations are a Map of rows by name — the needed set, not a projection.
-  "export type RelationsAreAMap = Expect<Equal<RunDatabaseHydration['relations'], ReadonlyMap<string, readonly Readonly<Record<string, unknown>>[]>>>;",
+  // 19: whose relations are a Map by name of each relation's source (its rows, or the stored rows
+  // copied inside SQLite): the needed set, not a projection.
+  "export type RelationsAreAMap = Expect<Equal<RunDatabaseHydration['relations'], ReadonlyMap<string, { readonly rows: readonly Readonly<Record<string, unknown>>[] } | { readonly stored: import('@vibe-agent-toolkit/projection-sqlite').StoredRows }>>>;",
   // 20: and it is the only export that produces a run database.
   "export type OnlyOneOpener = Expect<Equal<RunDatabaseOpeners, 'hydrateRunDatabase'>>;",
   // 21, 22: a whole projection handed as the relations does not compile.

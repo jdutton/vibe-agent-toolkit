@@ -35,7 +35,7 @@ import {
   buildReferenceIndex,
   resolveEdges,
   type DerivedTableName,
-  type Projection,
+  type EdgeLensProjection,
   type ResolutionContextRow,
 } from '@vibe-agent-toolkit/resources';
 import { appendAll } from '@vibe-agent-toolkit/utils';
@@ -88,7 +88,7 @@ export const EVALUATED_LENS_RELATIONS = {
  * @param projection - A populated projection
  * @returns The lens rows and the two relations, in step with each other
  */
-export function evaluateAuthoredLenses(projection: Projection): EvaluatedLenses {
+export function evaluateAuthoredLenses(projection: EdgeLensProjection): EvaluatedLenses {
   const lensContexts: ResolutionContextRow[] = [];
   const edges: Record<string, unknown>[] = [];
   const edgeResolutions: Record<string, unknown>[] = [];

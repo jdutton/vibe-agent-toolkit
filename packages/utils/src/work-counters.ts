@@ -47,10 +47,11 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * `store.reads.extent` one per `FactStore.readExtent` (a miss included, since
  * the manifest was read), `store.reads.blob` one per `FactStore.readBlobFacts`
  * that asked for at least one key, and `store.rows.decoded.persistent` the rows
- * either decoded;
+ * either decoded, `store.rows.decoded.repeated` those this process decoded before;
  * `hydration.*` counts loading the per-run run database a query's SQL runs on,
- * which I10 does not bound: one write per hydration that wrote a relation, and
- * the rows of the relations the run's statements name. `statement.explained`
+ * which I10 does not bound: one write per hydration that filled a relation, and
+ * the rows of the relations the run's statements name, inserted (`hydration.rows.written`)
+ * or copied from the store inside SQLite (`hydration.rows.copied`). `statement.explained`
  * counts every `EXPLAIN` the SQL gate prepares — one per gated statement, and
  * the four virtual-table reference reads each handle makes when it is opened.
  *
@@ -102,12 +103,14 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  */
 export const WORK_COUNTER_NAMES = [
   'store.rows.decoded.persistent',
+  'store.rows.decoded.repeated',
   'store.reads.extent',
   'store.reads.blob',
   'store.writes.persistent',
   'store.rows.written.persistent',
   'hydration.writes',
   'hydration.rows.written',
+  'hydration.rows.copied',
   'statement.explained',
   'extent.derived',
   'extent.served',

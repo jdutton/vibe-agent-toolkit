@@ -9,7 +9,7 @@
  * extents silently sums two different populations.
  */
 
-import { ResolutionContextRowSchema, type Projection } from '@vibe-agent-toolkit/resources';
+import { queryProjectionOf, ResolutionContextRowSchema, type Projection, type QueryProjection } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { describe, expect, it } from 'vitest';
@@ -60,8 +60,8 @@ function realization(contextId: string): Projection['resourceRealizations'][numb
  * `resolution_contexts.rootId`) and THROWS for a realization whose extent names
  * none, so a rootless fixture with members now fails loudly instead of quietly.
  */
-function projectionWith(contexts: Projection['resolutionContexts']): Projection {
-  return {
+function projectionWith(contexts: Projection['resolutionContexts']): QueryProjection {
+  return queryProjectionOf({
     roots: [{ id: 'root-x', path: ROOT }],
     resources: [],
     resourceRealizations: contexts.map((context) => ({
@@ -99,7 +99,7 @@ function projectionWith(contexts: Projection['resolutionContexts']): Projection 
     blobConditions: [],
     harnessBlobFacts: [], harnessBlobImports: [],
     skillTextFacts: [], skillTextMatches: [],
-  };
+  });
 }
 
 /** One extent context. */
@@ -109,8 +109,7 @@ function extent(contextId: string, kind = 'filesystem'): Projection['resolutionC
 
 describe('evaluateAuthoredLenses', () => {
   it('mints one lens per extent, each naming the extent it reads over', () => {
-    const { lensContexts } = evaluateAuthoredLenses(
-      projectionWith([extent('ctx-a'), extent('ctx-b', 'agentic-convention')]),
+    const { lensContexts } = evaluateAuthoredLenses(projectionWith([extent('ctx-a'), extent('ctx-b', 'agentic-convention')]),
     );
     expect(lensContexts.map((row) => row.extentContextId)).toEqual(['ctx-a', 'ctx-b']);
     expect(new Set(lensContexts.map((row) => row.species))).toEqual(new Set(['lens']));
@@ -144,8 +143,7 @@ describe('evaluateAuthoredLenses', () => {
     // Nothing in the population mints a lens today. If something ever does, a
     // lens over a lens is not a thing this evaluation models, and it must be
     // skipped rather than silently treated as an extent.
-    const { lensContexts } = evaluateAuthoredLenses(
-      projectionWith([
+    const { lensContexts } = evaluateAuthoredLenses(projectionWith([
         extent('ctx-a'),
         { contextId: 'ctx-lens', species: 'lens', kind: 'wiki', rootId: 'root-x', extentContextId: 'ctx-a', role: null },
       ]),
@@ -165,8 +163,7 @@ describe('evaluateAuthoredLenses', () => {
     // 🚨 The property the file's header always claimed and never tested. Without
     // a non-empty `roots`, `resolveEdges` short-circuits and this file asserts
     // nothing about edges at all — which is what it did.
-    const { edges, edgeResolutions } = evaluateAuthoredLenses(
-      projectionWith([extent('ctx-a'), extent('ctx-b', 'agentic-convention')]),
+    const { edges, edgeResolutions } = evaluateAuthoredLenses(projectionWith([extent('ctx-a'), extent('ctx-b', 'agentic-convention')]),
     );
 
     expect(edges).toHaveLength(2);

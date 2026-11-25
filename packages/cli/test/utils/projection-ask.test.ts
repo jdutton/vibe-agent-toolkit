@@ -4,7 +4,15 @@
  * projection is built in memory and the run database lives in memory.
  */
 
-import { PROJECTION_STATEMENT_REFUSED_CODE, PROJECTION_TABLES, withPopulationRun, type Projection } from '@vibe-agent-toolkit/resources';
+import {
+  PROJECTION_STATEMENT_REFUSED_CODE,
+  PROJECTION_TABLES,
+  queryProjectionOf,
+  withPopulationRun,
+  type Projection,
+  type QueryProjection,
+  type QueryReferenceSource,
+} from '@vibe-agent-toolkit/resources';
 import { isVatError } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -13,16 +21,20 @@ import { askPopulatedProjection, RelationRefusedError } from '../../src/utils/pr
 import { hydrateRunDatabase } from '../../src/utils/projection-store.js';
 
 /** A projection with one root and no other row. */
-function emptyProjection(): Projection {
+function emptyProjection(): QueryProjection {
   const tables = Object.fromEntries(Object.keys(PROJECTION_TABLES).map((key) => [key, []]));
-  return { ...tables, roots: [{ id: 'root-1' }] } as unknown as Projection;
+  return queryProjectionOf({ ...tables, roots: [{ id: 'root-1' }] } as unknown as Projection);
 }
+
+/** The empty projection's `blob_references`: its own rows, none. */
+const NO_REFERENCES: QueryReferenceSource = { rows: [] };
 
 /** Run `work` over the empty projection with `statements` declared. */
 function askEmpty<T>(statements: readonly string[], work: Parameters<typeof askPopulatedProjection<T>>[1]): Promise<T> {
   return withPopulationRun((populationRun) => askPopulatedProjection(
     {
       projection: emptyProjection(),
+      blobReferences: NO_REFERENCES,
       outcome: { population: 'derived' },
       root: '/nowhere',
       logger: createLogger(),
@@ -85,10 +97,10 @@ describe('askPopulatedProjection over an empty projection', () => {
 
 describe('hydrateRunDatabase refuses what it cannot file', () => {
   it('a projection with no root row', async () => {
-    await expect(hydrateRunDatabase({ ...emptyProjection(), roots: [] }, { relations: [] })).rejects.toThrow(/no root row/u);
+    await expect(hydrateRunDatabase({ projection: { ...emptyProjection(), roots: [] }, blobReferences: NO_REFERENCES, store: undefined }, { relations: [] })).rejects.toThrow(/no root row/u);
   });
 
   it('a planned relation that is not a projection table', async () => {
-    await expect(hydrateRunDatabase(emptyProjection(), { relations: ['edges'] })).rejects.toThrow(/not a projection table/u);
+    await expect(hydrateRunDatabase({ projection: emptyProjection(), blobReferences: NO_REFERENCES, store: undefined }, { relations: ['edges'] })).rejects.toThrow(/not a projection table/u);
   });
 });

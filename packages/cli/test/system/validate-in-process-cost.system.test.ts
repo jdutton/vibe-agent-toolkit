@@ -175,8 +175,9 @@ describe('the fixture holds what the cost arms need', () => {
 // ── The stored admission's blob read ─────────────────────────────────────────────────────────
 //
 // The stored admission reads only what the fact reader consumes (`ADMISSION_BLOB_REQUEST`: the
-// reader's tables, and of `blob_references` only the AST forms). Every other reader of the tier
-// (the checks child, a query) still reads every table and every form.
+// reader's tables, and of `blob_references` only the AST forms). The checks child and a query
+// decode every other table whole and only the AST forms of `blob_references`: its lexical rows
+// they copy from the store inside SQLite, never decoded.
 
 /** The statements over the rows the admission does not read: a lexical form, and a harness table. */
 const UNREAD_ROW_QUERIES = {
@@ -230,10 +231,11 @@ describe('the stored admission reads only what the fact reader consumes, warm', 
       expect(admitted, 'the admission request leaves rows unread').toBeLessThan(every);
 
       // The resources phase reads the extent once (membership) and the tier once (the admission);
-      // the checks child reads both whole.
+      // the checks child decodes the extent whole and the tier less its lexical references.
       expect(warm.parent.phases['resources']?.['store.rows.decoded.persistent'], 'validate, resources phase').toBe(membershipRows + admitted);
       expect(warm.parent.phases['skills']?.['store.rows.decoded.persistent'], 'validate, skills phase').toBe(0);
-      expect(warm.child.counters['store.rows.decoded.persistent'], 'the checks child').toBe(extentRows + every);
+      const lexical = storedRowCount(database, 'blobReferences', new Set(LEXICAL_FORMS));
+      expect(warm.child.counters['store.rows.decoded.persistent'], 'the checks child').toBe(extentRows + every - lexical);
     });
   });
 

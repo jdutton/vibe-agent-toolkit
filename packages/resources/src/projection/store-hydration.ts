@@ -295,22 +295,6 @@ export function storedBlobTier(rows: BlobScopedRows, contentKeys: readonly strin
 }
 
 /**
- * Two reads of the tier over disjoint keys, as one: a derivation's base read and
- * its read of the keys a demand promotion added.
- *
- * @param first - The earlier read
- * @param second - A read over keys `first` did not ask about
- * @returns Both reads' rows, table by table, and both covered sets
- */
-export function joinStoredTiers(first: StoredBlobTier, second: StoredBlobTier): StoredBlobTier {
-  const left = first.rows as unknown as RowBundle;
-  const right = second.rows as unknown as RowBundle;
-  const rows: RowBundle = {};
-  for (const table of Object.keys(left)) rows[table] = [...(left[table] ?? []), ...(right[table] ?? [])];
-  return { rows: rows as unknown as BlobScopedRows, covered: new Set([...first.covered, ...second.covered]) };
-}
-
-/**
  * The distinct content keys a set of realizations names.
  *
  * Filters on `contentState === 'keyed'` rather than on a non-null key, for the

@@ -18,8 +18,8 @@ import { resetProjectRootCaches, safePath, toForwardSlash } from '@vibe-agent-to
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { type PopulateResult } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
+import type { QueryPopulateResult } from '../../src/projection/query-projection.js';
 import { buildResourceProjection } from '../../src/projection/resource-population.js';
 import type { ClaudeRulePatternRow } from '../../src/schemas/projection-claude-rules.js';
 import { FakeFactStore } from '../fake-fact-store.js';
@@ -73,7 +73,7 @@ function root(): string {
  * @param store - A store to cache through, or omitted to re-derive
  * @returns The projection the lane produced, and whether the store served it
  */
-async function populateTree(store?: FakeFactStore): Promise<PopulateResult> {
+async function populateTree(store?: FakeFactStore): Promise<QueryPopulateResult> {
   return inOwnRun(buildResourceProjection, {
     root: root(),
     ...(store === undefined ? {} : { cache: { store, treeUnchanged: () => true, treeHash: TREE_HASH } }),
@@ -91,7 +91,7 @@ async function populateTree(store?: FakeFactStore): Promise<PopulateResult> {
  * @param projection - The populated projection
  * @returns One entry per pattern row, in table order
  */
-function patternsByRulePath(projection: Projection): {
+function patternsByRulePath(projection: Pick<Projection, 'claudeRulePatterns' | 'resourceRealizations'>): {
   path: string | undefined;
   pattern: string;
   status: string;

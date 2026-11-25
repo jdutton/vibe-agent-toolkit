@@ -25,26 +25,85 @@
  */
 
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
+import { pathToFileURL } from 'node:url';
 
 import {
   compareRows,
   type DerivedTableName,
   type DerivedTableSpec,
+  type FactStore,
+  PROJECTION_STORE_ROWS_EVICTED_CODE,
   type ProjectionColumnType,
   type RowComparator,
   allDerivedSpecs,
   projectionColumnTypes,
   quoteIdentifier,
 } from '@vibe-agent-toolkit/resources';
-import { countWork, promised } from '@vibe-agent-toolkit/utils';
+import { countWork, promised, VatError } from '@vibe-agent-toolkit/utils';
 
-import { createDerivedTableSql, insertDerivedSql, type QueryableRelation, queryableSpecs } from './schema-sql.js';
+import {
+  BLOB_KEY_COLUMN,
+  BLOB_KEYS_TABLE,
+  createDerivedTableSql,
+  insertDerivedSql,
+  type QueryableRelation,
+  queryableSpecs,
+} from './schema-sql.js';
 import { type GateConnection, openGate, refreshRelationPagesAfter, runGated } from './sql-gate.js';
-import { inTransaction } from './store.js';
+import { BUSY_TIMEOUT_MS, inTransaction, storeDatabasePath } from './store.js';
 import { encodeValue, type SqliteValue } from './values.js';
 
 /** One relation's rows, as a projection or a lens holds them. */
 type RelationRows = readonly Readonly<Record<string, unknown>>[];
+
+/**
+ * The store rows one relation is copied from: the store the run's population was served from, and
+ * exactly the content keys that hit admitted.
+ */
+export interface StoredRows {
+  /** The store the hit was read from: one `openSqliteFactStore` opened in this process. */
+  readonly store: FactStore;
+  /**
+   * The hit's keyed content keys, and only those. 🚨 The store is shared by every root on the
+   * machine; the keys are what keeps the copy to this run's tree.
+   */
+  readonly contentKeys: readonly string[];
+}
+
+/**
+ * Where one hydrated relation's rows come from: the run's own decoded rows, or the store the run was
+ * served from, copied inside SQLite. Required and one of the two, so no relation is hydrated from a
+ * source its caller did not name: a store-off or derived run always passes `rows`.
+ */
+export type RelationSource = { readonly rows: RelationRows } | { readonly stored: StoredRows };
+
+/**
+ * The relations a {@link StoredRows} source may fill, by SQL name. Only a blob-scoped table whose
+ * primary key is the content key and then integer columns: there `ORDER BY` the key equals
+ * `compareRows` (content keys are ASCII, where SQLite's byte order and a code-unit compare agree),
+ * so a copied relation scans in the order a hydrated one does. Asserted against the registry in
+ * `run-database-stored-copy.integration.test.ts`; the query lane asserts it copies exactly these on a hit.
+ */
+export const STORED_COPY_RELATIONS: ReadonlySet<string> = new Set(['blob_references']);
+
+/**
+ * A content key the hit admitted is no longer in the store's ledger when the copy runs: an eviction
+ * landed between the run's read and its copy. Blob rows leave the store only with their `blob_keys`
+ * row, so a held ledger row is proof its rows are the ones the read saw. The caller re-populates:
+ * that population misses on the evicted keys and derives them.
+ */
+class StoredRowsEvictedError extends VatError {
+  /**
+   * @param relation - The relation being copied
+   * @param missing - How many admitted keys the ledger no longer holds
+   */
+  constructor(relation: string, missing: number) {
+    super(
+      PROJECTION_STORE_ROWS_EVICTED_CODE,
+      `${String(missing)} content key(s) this run was served were evicted from the projection store before "${relation}" could be copied from it.`,
+    );
+  }
+}
 
 /** What {@link hydrateRunDatabase} fills a run database with. */
 export interface RunDatabaseHydration {
@@ -54,11 +113,14 @@ export interface RunDatabaseHydration {
    */
   readonly rootId: string;
   /**
-   * Exactly the relations to create and fill, by SQL name, each with the run's own rows. A `Map`,
-   * so a whole `Projection` is not assignable: hydration takes the needed set and nothing else.
+   * Exactly the relations to create and fill, by SQL name, each with where its rows come from. A
+   * `Map`, so a whole `Projection` is not assignable: hydration takes the needed set and nothing else.
    */
-  readonly relations: ReadonlyMap<string, RelationRows>;
+  readonly relations: ReadonlyMap<string, RelationSource>;
 }
+
+/** The schema name the store is attached under while a copy runs, and detached before any statement. */
+const STORE_SCHEMA = 'vat_store';
 
 /**
  * The tree hash a run database's one extent is filed under.
@@ -278,9 +340,12 @@ interface DerivedPlan {
  * - **Canonical order**: each relation's rows are inserted sorted by
  *   `compareRows`, so a statement without `ORDER BY` answers alike whichever
  *   order the population produced them in.
- * - **One transaction of plain `INSERT`s**: nothing to clear, evict or vacuum,
- *   since the database is new. Counted as one `hydration.writes` when it wrote a
- *   relation, and every row as `hydration.rows.written`.
+ * - **Each relation from the source its caller named** ({@link RelationSource}): the run's
+ *   decoded rows in one transaction of plain `INSERT`s (nothing to clear, evict or vacuum,
+ *   since the database is new), or the store's rows copied inside SQLite
+ *   (`copyStoredRelation`). Counted as one `hydration.writes` when it filled a relation,
+ *   every inserted row as `hydration.rows.written` and every copied row as
+ *   `hydration.rows.copied`.
  *
  * 🪤 **This deliberately does not configure the connection the way the
  * file-backed store does, and that is not a tidiness choice.** Every pragma that
@@ -304,33 +369,102 @@ interface DerivedPlan {
  */
 export function hydrateRunDatabase(hydration: RunDatabaseHydration): RunDatabase {
   const byName = new Map(queryableSpecs().map((relation) => [relation.spec.name, relation]));
-  const planned = [...hydration.relations].map(([name, rows]) => {
+  const fromRows: { relation: QueryableRelation; rows: RelationRows }[] = [];
+  const fromStore: { relation: QueryableRelation; stored: StoredRows }[] = [];
+  for (const [name, source] of hydration.relations) {
     const relation = byName.get(name);
     if (relation === undefined) {
       throw new Error(`"${name}" is not a queryable relation, so a run database cannot hold it.`);
     }
-    return { relation, rows };
-  });
+    if ('rows' in source) {
+      fromRows.push({ relation, rows: source.rows });
+    } else if (STORED_COPY_RELATIONS.has(name)) {
+      fromStore.push({ relation, stored: source.stored });
+    } else {
+      throw new Error(`"${name}" cannot be copied from the store: its copy order is not proved to be compareRows' (STORED_COPY_RELATIONS).`);
+    }
+  }
   const database = new DatabaseSync(':memory:');
   try {
     // 🚨 Only what was planned. A relation absent from the map is ABSENT from
     // the database, so a statement naming it fails `no such table` rather than
     // reading an empty table that answers `0`.
-    if (planned.length > 0) {
+    if (fromRows.length > 0) {
       const leading = [hydration.rootId, RUN_TREE_HASH];
       let written = 0;
       inTransaction(database, () => {
-        for (const { relation, rows } of planned) {
+        for (const { relation, rows } of fromRows) {
           written += insertRelation(database, relation, relation.extentKeyed ? leading : [], rows);
         }
       });
-      countWork('hydration.writes', 1);
       countWork('hydration.rows.written', written);
     }
+    let copied = 0;
+    for (const { relation, stored } of fromStore) copied += copyStoredRelation(database, relation, stored);
+    if (fromStore.length > 0) countWork('hydration.rows.copied', copied);
+    if (fromRows.length + fromStore.length > 0) countWork('hydration.writes', 1);
     return new SqliteRunDatabase(database);
   } catch (error) {
     database.close();
     throw error;
+  }
+}
+
+/**
+ * Create one relation and fill it by copying the store's rows for the admitted keys inside SQLite:
+ * no row is decoded into JavaScript or re-encoded.
+ *
+ * The store is attached READ-ONLY for the copy and DETACHED before this returns, success or not, so
+ * no statement the run asks can reach it (the SQL gate maps root pages only after hydration, and
+ * refuses `ATTACH` and schema reads besides). The ledger check and the copy share one read
+ * transaction, so they see one snapshot: a key the ledger holds there has exactly the rows the run's
+ * read saw (blob rows are immutable per key and leave only with their ledger row).
+ *
+ * 🪤 A deferred `BEGIN`, never {@link inTransaction}'s `BEGIN IMMEDIATE`: that takes a write lock on
+ * every attached database, the shared store included.
+ *
+ * @param database - The run database, outside any transaction (`ATTACH` cannot run inside one)
+ * @param relation - A relation in {@link STORED_COPY_RELATIONS}
+ * @param stored - The store and the keys
+ * @returns How many rows it copied
+ * @throws {@link StoredRowsEvictedError} When an admitted key left the store's ledger
+ * @throws Error When the store is not one this package opened, so there is no file to attach
+ */
+function copyStoredRelation(database: DatabaseSync, relation: QueryableRelation, stored: StoredRows): number {
+  const path = storeDatabasePath(stored.store);
+  if (path === undefined) {
+    throw new Error(`"${relation.spec.name}" can be copied only from a store openSqliteFactStore opened in this process.`);
+  }
+  const [keyColumn] = relation.spec.primaryKey;
+  if (keyColumn === undefined) throw new Error(`"${relation.spec.name}" declares no primary key to copy by.`);
+  const keys = [...new Set(stored.contentKeys)];
+  const keysJson = JSON.stringify(keys);
+  const table = quoteIdentifier(relation.spec.name);
+  const columns = projectionColumnTypes(relation.spec).map(([column]) => quoteIdentifier(column)).join(', ');
+  const order = relation.spec.primaryKey.map((column) => quoteIdentifier(column)).join(', ');
+  const admitted = 'IN (SELECT value FROM json_each(?))';
+  database.exec(relation.createSql);
+  // Another connection may be writing the store: wait for it as the store's own connection would.
+  database.exec(`PRAGMA busy_timeout = ${String(BUSY_TIMEOUT_MS)}`);
+  database.prepare(`ATTACH DATABASE ? AS ${STORE_SCHEMA}`).run(`${pathToFileURL(path).href}?mode=ro`);
+  try {
+    database.exec('BEGIN');
+    try {
+      const { held } = database
+        .prepare(`SELECT COUNT(*) AS held FROM ${STORE_SCHEMA}.${quoteIdentifier(BLOB_KEYS_TABLE)} WHERE ${quoteIdentifier(BLOB_KEY_COLUMN)} ${admitted}`)
+        .get(keysJson) as { held: number };
+      if (held !== keys.length) throw new StoredRowsEvictedError(relation.spec.name, keys.length - held);
+      const { changes } = database
+        .prepare(`INSERT INTO main.${table} (${columns}) SELECT ${columns} FROM ${STORE_SCHEMA}.${table} WHERE ${quoteIdentifier(keyColumn)} ${admitted} ORDER BY ${order}`)
+        .run(keysJson);
+      database.exec('COMMIT');
+      return Number(changes);
+    } catch (error) {
+      database.exec('ROLLBACK');
+      throw error;
+    }
+  } finally {
+    database.exec(`DETACH DATABASE ${STORE_SCHEMA}`);
   }
 }
 

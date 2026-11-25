@@ -125,7 +125,7 @@ describe('hydrateRunDatabase', () => {
 
   it('holds exactly the mapped relations: no other table, no extents, no blob_keys', async () => {
     const projection = sampleProjection();
-    const only = hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['blobs', projection.blobs]]) });
+    const only = hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['blobs', { rows: projection.blobs }]]) });
     try {
       expect(only.query(COUNT_BLOBS)[0]?.['n']).toBe(projection.blobs.length);
       for (const name of ['resource_realizations', 'extents', 'blob_keys', 'edges']) {
@@ -137,7 +137,7 @@ describe('hydrateRunDatabase', () => {
   });
 
   it('refuses a name that is not a queryable relation, rather than creating it', () => {
-    expect(() => hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['extents', []]]) }))
+    expect(() => hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['extents', { rows: [] }]]) }))
       .toThrow(/not a queryable relation/u);
   });
 

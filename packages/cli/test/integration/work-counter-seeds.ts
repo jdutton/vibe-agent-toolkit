@@ -18,7 +18,7 @@
 import { writeFileSync } from 'node:fs';
 
 import { readSkillDocument, type SkillTextRun } from '@vibe-agent-toolkit/agent-skills';
-import { hydrateRunDatabase, openSqliteFactStore, type RunDatabase } from '@vibe-agent-toolkit/projection-sqlite';
+import { hydrateRunDatabase, openSqliteFactStore, type RelationSource, type RunDatabase } from '@vibe-agent-toolkit/projection-sqlite';
 import {
   ALL_BLOB_REQUEST,
   ALL_EXTENT_REQUEST,
@@ -178,6 +178,22 @@ function decodeSeed(): Seed {
   };
 }
 
+/** A second read of the row the prepare already read on the same open store: it is decoded again. */
+function secondReadSeed(): Seed {
+  return {
+    prepare: async (scope) => {
+      const store = storeOf(scope);
+      await store.writeBlobFacts(uncoveredBlobWrite(oneBlobRow()));
+      await store.readBlobFacts([BLOB_KEY], ALL_BLOB_REQUEST);
+      return async () => {
+        await store.readBlobFacts([BLOB_KEY], ALL_BLOB_REQUEST);
+        return undefined;
+      };
+    },
+    delta: { 'store.reads.blob': 1, 'store.rows.decoded.persistent': 1, 'store.rows.decoded.repeated': 1 },
+  };
+}
+
 /** A read of an extent never written: one read, nothing decoded. */
 function readMissSeed(): Seed {
   return {
@@ -210,6 +226,7 @@ function writeSeed(rows: 'one blob row' | 'no rows'): Seed {
 
 export const STORE_SEEDS: Readonly<Record<StoreLaneCounter, Seed>> = {
   'store.rows.decoded.persistent': decodeSeed(),
+  'store.rows.decoded.repeated': secondReadSeed(),
   // The blob read that decodes one row: the decode seed counts it too.
   'store.reads.blob': decodeSeed(),
   'store.reads.extent': readMissSeed(),
@@ -245,9 +262,9 @@ function hydratedOneBlob(scope: SeedScope): RunDatabase {
   const projection = oneBlobProjection();
   const database = hydrateRunDatabase({
     rootId: EXTENT_KEY.rootId,
-    relations: new Map<string, readonly Readonly<Record<string, unknown>>[]>([
-      ['blobs', projection.blobs],
-      ['roots', projection.roots],
+    relations: new Map<string, RelationSource>([
+      ['blobs', { rows: projection.blobs }],
+      ['roots', { rows: projection.roots }],
     ]),
   });
   scope.defer(() => database.close());
@@ -472,8 +489,8 @@ const CYCLIC_FRONTMATTER = '---\ncyc: &anchor\n  self: *anchor\n---\n\n# Cyclic\
  * @param files - Root-relative path to content
  * @returns A run of one query over the tree, returning every warning it logged
  */
-function queriedTree(scope: SeedScope, files: Readonly<Record<string, string>>): () => Promise<ActResult> {
-  return queriedTreeAt(scope, files).query;
+function queriedTree(scope: SeedScope, files: Readonly<Record<string, string>>, statement?: string): () => Promise<ActResult> {
+  return queriedTreeAt(scope, files, statement).query;
 }
 
 /**
@@ -483,7 +500,11 @@ function queriedTree(scope: SeedScope, files: Readonly<Record<string, string>>):
  * @param files - The tree, written and committed
  * @returns The root, and the query act
  */
-function queriedTreeAt(scope: SeedScope, files: Readonly<Record<string, string>>): { root: string; query: () => Promise<ActResult> } {
+function queriedTreeAt(
+  scope: SeedScope,
+  files: Readonly<Record<string, string>>,
+  statement = 'SELECT 1 AS x',
+): { root: string; query: () => Promise<ActResult> } {
   // First, so the parse cache (under the temp directory) and every directory
   // below start empty: a parse cache another run filled would turn a dispatch
   // into a hit.
@@ -503,8 +524,10 @@ function queriedTreeAt(scope: SeedScope, files: Readonly<Record<string, string>>
     query: async () => {
       const lines: string[] = [];
       await withQueriedProjection(
-        { root, logger: recordingLogger(lines), statements: ['SELECT 1 AS x'], base: undefined },
-        (ask) => ask('SELECT 1 AS x'),
+        { root, logger: recordingLogger(lines), statements: [statement], base: undefined },
+        (ask) => {
+          lines.push(JSON.stringify(ask(statement)));
+        },
       );
       return lines.join('\n');
     },
@@ -554,6 +577,15 @@ const PLAIN_TREE = { 'a.md': '# A\n\nPlain.\n' };
  * seed holds, so no earlier seed's parse entry in this process answers one of them.
  */
 const IMPORTING_TREE = { 'a.md': '# Imported\n\nPlain.\n', 'CLAUDE.md': '# Memory\n\n@a.md\n' };
+
+/**
+ * A document with a reference of each kind: a markdown link (an AST form) and an `@` import (a
+ * lexical form). Bytes no other seed holds.
+ */
+const REFERENCING_TREE = { 'a.md': '# Referencing\n\nSee [b](./b.md) and @b.md.\n', 'b.md': '# B of the referencing tree\n' };
+
+/** The references {@link REFERENCING_TREE} stores: its AST row and its lexical row. */
+const REFERENCING_ROWS = { ast: 1, lexical: 1 } as const;
 
 /** Two documents of their own bytes, the second edited after the prime, so only its key is uncovered. */
 const EDITED_TREE = { 'a.md': '# Kept\n\nPlain.\n', 'b.md': '# Edited\n\nBefore.\n' };
@@ -661,7 +693,11 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
   // A refusal no store holds forces the whole population again on the second
   // run: re-derived, the cyclic one dispatched and refused again, the stored
   // document's key served from the blob tier the miss reads, and the key's
-  // snapshot and the write path's fresh one taken.
+  // snapshot and the write path's fresh one taken. Two blob reads, no row twice:
+  // the hit reads the AST reference forms, and the derivation, through the same
+  // reader, reads only the forms the hit left out (`stored-tier-reads.ts`).
+  // Red proof, seeded once and reverted: a derivation with a reader of its own
+  // decodes the hit's 3 rows again, `store.rows.decoded.repeated` 3 and decoded 19.
   'store.miss.refusedPairs': {
     prepare: async (scope) => {
       const query = queriedTree(scope, { ...PLAIN_TREE, 'deep.md': CYCLIC_FRONTMATTER });
@@ -669,7 +705,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       return query;
     },
     delta: {
-      'store.rows.decoded.persistent': 19,
+      'store.rows.decoded.persistent': 16,
       'store.reads.extent': 1,
       'store.reads.blob': 2,
       'store.writes.persistent': 2,
@@ -691,6 +727,31 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
   },
   'hydration.writes': hydrationSeed(),
   'hydration.rows.written': hydrationSeed(),
+  // A served query naming `blob_references`: the hit decodes the extent and the blob tier with the
+  // AST references only, and the run database copies every reference form from the store inside
+  // SQLite. `extent.served` below decodes 13 rows over a tree of one document with no reference;
+  // this tree's decoded rows hold its one AST reference and none of its lexical ones, which reach
+  // the answer through `hydration.rows.copied` alone.
+  'hydration.rows.copied': {
+    prepare: async (scope) => {
+      const query = queriedTree(scope, REFERENCING_TREE, 'SELECT COUNT(*) AS n FROM blob_references');
+      await query();
+      return query;
+    },
+    delta: {
+      'store.rows.decoded.persistent': 19 + REFERENCING_ROWS.ast,
+      'store.reads.extent': 1,
+      'store.reads.blob': 1,
+      'hydration.writes': 1,
+      'hydration.rows.copied': REFERENCING_ROWS.ast + REFERENCING_ROWS.lexical,
+      'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
+      'extent.served': 1,
+      'git.calls': 2,
+      'git.snapshots': 1,
+      'fs.lstat': GIT_MARKER_LSTATS,
+    },
+    reported: (result) => Number(/"n":(\d+)/u.exec(result ?? '')?.[1] ?? Number.NaN),
+  },
   'statement.explained': explainedSeed(),
   // The registry's stat of the file it admits: the admission seed counts it too.
   'fs.stat': admissionSeed('stat'),

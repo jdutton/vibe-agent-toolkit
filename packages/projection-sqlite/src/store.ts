@@ -158,7 +158,7 @@ import { decodeValue, encodeValue, type SqliteResultValue, type SqliteValue } fr
  * purpose is to be invisible. Measured lock waits under four concurrent writers
  * were 0–112 ms, so this is roughly two orders of magnitude of headroom.
  */
-const BUSY_TIMEOUT_MS = 5_000;
+export const BUSY_TIMEOUT_MS = 5_000;
 
 /**
  * How many content keys go into one `IN (…)`.
@@ -400,15 +400,127 @@ function openStoreAt(databasePath: string, options: SqliteStoreOptions): FactSto
     // File-backed only, and only here: it is the only store that can have been
     // written by an earlier build. See {@link adoptLegacyBlobKeys}.
     adoptLegacyBlobKeys(database);
-    return new SqliteFactStore(prepareStoreTables(database, {
+    const tables = prepareStoreTables(database, {
       extentsPerRoot: Math.max(1, Math.trunc(options.retainedExtentsPerRoot ?? DEFAULT_RETAINED_EXTENTS_PER_ROOT)),
       roots: Math.max(1, Math.trunc(options.retainedRoots ?? DEFAULT_RETAINED_ROOTS)),
       blobKeys: Math.max(1, Math.trunc(options.retainedBlobKeys ?? DEFAULT_RETAINED_BLOB_KEYS)),
-    }));
+    });
+    const store = new SqliteFactStore(tables, acquireDecodeLedger(databasePath));
+    DATABASE_PATH_OF.set(store, databasePath);
+    return store;
   } catch (error) {
     database.close();
     throw error;
   }
+}
+
+/**
+ * Each open store's database file, by the store object this package handed out. Package-private:
+ * the run database reads it to copy a store's rows inside SQLite ({@link storeDatabasePath}), and
+ * nothing outside this package can reach a store's file through the `FactStore` port.
+ */
+const DATABASE_PATH_OF = new WeakMap<FactStore, string>();
+
+/**
+ * The database file behind a store this package opened.
+ *
+ * @param store - A store {@link openSqliteFactStore} returned
+ * @returns Its database file, or `undefined` for any other `FactStore` (a wrapper, a fake)
+ */
+export function storeDatabasePath(store: FactStore): string | undefined {
+  return DATABASE_PATH_OF.get(store);
+}
+
+/**
+ * What this process has decoded from one store file: per content key (`blob\0<key>`) or tree
+ * (`extent\0<rootId>\0<treeHash>`), the tables it decoded, and for `blobReferences` each form.
+ * A row decoded under an entry already here is decoded twice, counted
+ * `store.rows.decoded.repeated`, which the system arms assert is zero.
+ */
+interface DecodeLedger {
+  /** The store's database file, which keys {@link DECODE_LEDGERS}. */
+  readonly path: string;
+  /** How many open stores share this ledger. */
+  open: number;
+  readonly decoded: Map<string, Set<string>>;
+}
+
+/**
+ * One ledger per database file while any store on it is open: two connections to one file in one
+ * process (a question's connection beside the run's) share it, so a second read through either
+ * counts. It is dropped when the last of them closes, so a later run in the same process (an
+ * in-process test, an embedding tool) starts its own.
+ */
+const DECODE_LEDGERS = new Map<string, DecodeLedger>();
+
+/**
+ * Open the ledger of a store file, or join the one an open store on it holds.
+ *
+ * @param path - The store's database file
+ * @returns The ledger, with this store counted open on it
+ */
+function acquireDecodeLedger(path: string): DecodeLedger {
+  const ledger = DECODE_LEDGERS.get(path) ?? { path, open: 0, decoded: new Map<string, Set<string>>() };
+  ledger.open += 1;
+  DECODE_LEDGERS.set(path, ledger);
+  return ledger;
+}
+
+/**
+ * Leave a ledger; the last store to leave drops it.
+ *
+ * @param ledger - What {@link acquireDecodeLedger} returned
+ */
+function releaseDecodeLedger(ledger: DecodeLedger): void {
+  ledger.open -= 1;
+  if (ledger.open === 0 && DECODE_LEDGERS.get(ledger.path) === ledger) DECODE_LEDGERS.delete(ledger.path);
+}
+
+/**
+ * The ledger entry of one content key.
+ *
+ * @param contentKey - The key
+ * @returns Its entry name in {@link DecodeLedger.decoded}
+ */
+function blobLedgerEntry(contentKey: string): string {
+  return `blob\0${contentKey}`;
+}
+
+/**
+ * The ledger entry of one tree.
+ *
+ * @param key - Which root, which tree
+ * @returns Its entry name in {@link DecodeLedger.decoded}
+ */
+function extentLedgerEntry(key: ExtentKey): string {
+  return `extent\0${key.rootId}\0${key.treeHash}`;
+}
+
+/**
+ * Count the rows one read decodes again, and record what it decoded. Every slot is judged against
+ * the ledger as it stood before this read, so the many rows one read decodes under one slot (a
+ * key's references of one form) count once each, never as repeats of each other.
+ *
+ * @param ledger - The store file's ledger
+ * @param slots - Each decoded row's `[entry, slot]`, one per row
+ * @returns How many of those rows an earlier read had decoded
+ */
+function recordDecoded(ledger: DecodeLedger, slots: readonly (readonly [entry: string, slot: string])[]): number {
+  let repeated = 0;
+  const fresh: (readonly [string, string])[] = [];
+  for (const pair of slots) {
+    if (ledger.decoded.get(pair[0])?.has(pair[1]) === true) repeated += 1;
+    else fresh.push(pair);
+  }
+  for (const [entry, slot] of fresh) {
+    let held = ledger.decoded.get(entry);
+    if (held === undefined) {
+      held = new Set<string>();
+      ledger.decoded.set(entry, held);
+    }
+    held.add(slot);
+  }
+  return repeated;
 }
 
 /** The code {@link StoreUnopenableError} carries. */
@@ -1383,11 +1495,12 @@ function readBlobRows<Table extends BlobScopedTableName>(
   tables: StoreTables,
   contentKeys: readonly string[],
   request: BlobRequest<Table>,
-): { rows: Pick<BlobScopedRows, Table>; decoded: number } {
+): { rows: Pick<BlobScopedRows, Table>; decoded: number; slots: (readonly [entry: string, slot: string])[] } {
   const requested = new Set<string>(request.tables);
   const plans = plansOfScope(tables, 'blob').filter((plan) => requested.has(plan.spec.key));
   const forms = request.referenceForms === 'all' ? 'all' : [...request.referenceForms].sort(compareCodeUnits);
   let decoded = 0;
+  const slots: (readonly [entry: string, slot: string])[] = [];
   const rows = inReadTransaction(tables.database, () => {
     const result: Record<string, unknown[]> = {};
     for (const { spec } of plans) {
@@ -1400,13 +1513,32 @@ function readBlobRows<Table extends BlobScopedTableName>(
         const { statement, values } = blobSelect(tables, plan, batch.length, forms);
         const raw = statement.all(...batch, ...values);
         decoded += raw.length;
+        appendAll(slots, blobSlots(plan, raw));
         const into = result[plan.spec.key];
         if (into !== undefined) appendAll(into, decodeRows(plan, raw));
       }
     }
     return result as unknown as Pick<BlobScopedRows, Table>;
   });
-  return { rows, decoded };
+  return { rows, decoded, slots };
+}
+
+/**
+ * Each decoded blob row's ledger slot: its key's entry, and its table (with its form for a
+ * reference row).
+ *
+ * @param plan - The table the rows came from
+ * @param raw - What SQLite returned
+ * @returns One `[entry, slot]` per row
+ */
+function blobSlots(plan: TablePlan, raw: readonly unknown[]): (readonly [entry: string, slot: string])[] {
+  const keyColumn = blobKeyColumn(plan.spec);
+  const byForm = plan.spec.key === REFERENCE_TABLE;
+  return raw.map((stored) => {
+    const source = stored as Record<string, SqliteResultValue>;
+    const slot = byForm ? `${plan.spec.key}\0${String(source[REFERENCE_FORM_COLUMN])}` : plan.spec.key;
+    return [blobLedgerEntry(String(source[keyColumn])), slot] as const;
+  });
 }
 
 /**
@@ -1423,10 +1555,12 @@ function readExtentRows<Table extends ExtentScopedTableName>(
   tables: StoreTables,
   key: ExtentKey,
   request: ExtentRequest<Table>,
-): { rows: Pick<ExtentScopedRows, Table> | undefined; decoded: number } {
+): { rows: Pick<ExtentScopedRows, Table> | undefined; decoded: number; slots: (readonly [entry: string, slot: string])[] } {
   const requested = new Set<string>(request.tables);
   const plans = plansOfScope(tables, 'extent').filter((plan) => requested.has(plan.spec.key));
+  const entry = extentLedgerEntry(key);
   let decoded = 0;
+  const slots: (readonly [entry: string, slot: string])[] = [];
   const rows = inReadTransaction(tables.database, () => {
     // An extent that was written but holds nothing is a hit with empty tables;
     // one that was never written is a miss. The manifest row is what tells
@@ -1439,11 +1573,12 @@ function readExtentRows<Table extends ExtentScopedTableName>(
     for (const plan of plans) {
       const raw = plan.selectExtent?.all(key.rootId, key.treeHash) ?? [];
       decoded += raw.length;
+      for (let row = 0; row < raw.length; row += 1) slots.push([entry, plan.spec.key]);
       result[plan.spec.key] = [...decodeRows(plan, raw)];
     }
     return result as unknown as Pick<ExtentScopedRows, Table>;
   });
-  return { rows, decoded };
+  return { rows, decoded, slots };
 }
 
 /**
@@ -1456,11 +1591,16 @@ function readExtentRows<Table extends ExtentScopedTableName>(
  */
 class SqliteFactStore implements FactStore {
   readonly #tables: StoreTables;
+  readonly #ledger: DecodeLedger;
   #closed = false;
 
-  /** @param tables - The prepared statements of an open, configured connection */
-  constructor(tables: StoreTables) {
+  /**
+   * @param tables - The prepared statements of an open, configured connection
+   * @param ledger - What this process has decoded from the connection's file
+   */
+  constructor(tables: StoreTables, ledger: DecodeLedger) {
     this.#tables = tables;
+    this.#ledger = ledger;
   }
 
   /** @inheritdoc */
@@ -1468,6 +1608,9 @@ class SqliteFactStore implements FactStore {
     return promised(() => {
       this.#assertOpen();
       writeBlobRows(this.#tables, write);
+      // A key written is a key whose rows may have changed: a read of it decodes rows no earlier
+      // read held, so it is not a repeat.
+      for (const key of uniqueContentKeys(write.rows as unknown as RowBundle)) this.#ledger.decoded.delete(blobLedgerEntry(key));
     });
   }
 
@@ -1479,9 +1622,9 @@ class SqliteFactStore implements FactStore {
     return promised(() => {
       this.#assertOpen();
       const keys = [...new Set(contentKeys)];
-      const { rows, decoded } = readBlobRows(this.#tables, keys, request);
+      const { rows, decoded, slots } = readBlobRows(this.#tables, keys, request);
       // Asking for no keys reads nothing.
-      if (keys.length > 0) countRead('store.reads.blob', decoded);
+      if (keys.length > 0) countRead('store.reads.blob', decoded, recordDecoded(this.#ledger, slots));
       return rows;
     });
   }
@@ -1491,6 +1634,7 @@ class SqliteFactStore implements FactStore {
     return promised(() => {
       this.#assertOpen();
       writeExtentRows(this.#tables, key, rows);
+      this.#ledger.decoded.delete(extentLedgerEntry(key));
     });
   }
 
@@ -1501,9 +1645,9 @@ class SqliteFactStore implements FactStore {
   ): Promise<Pick<ExtentScopedRows, Table> | undefined> {
     return promised(() => {
       this.#assertOpen();
-      const { rows, decoded } = readExtentRows(this.#tables, key, request);
+      const { rows, decoded, slots } = readExtentRows(this.#tables, key, request);
       // A miss included: the manifest was read.
-      countRead('store.reads.extent', decoded);
+      countRead('store.reads.extent', decoded, recordDecoded(this.#ledger, slots));
       return rows;
     });
   }
@@ -1513,6 +1657,7 @@ class SqliteFactStore implements FactStore {
     return promised(() => {
       if (this.#closed) return;
       this.#closed = true;
+      releaseDecodeLedger(this.#ledger);
       try {
         checkpointBestEffort(this.#tables.database);
       } finally {
@@ -1533,8 +1678,9 @@ class SqliteFactStore implements FactStore {
 
 /**
  * Count one completed read, against the port read it was (`store.reads.blob`
- * for `readBlobFacts`, `store.reads.extent` for `readExtent`), and every row it
- * decoded.
+ * for `readBlobFacts`, `store.reads.extent` for `readExtent`), every row it
+ * decoded, and of those the rows an earlier read on the same file had decoded
+ * (`store.rows.decoded.repeated`, {@link DecodeLedger}).
  *
  * After the transaction, so a read that failed counts nothing, not even the
  * rows it decoded from the tables it reached first. Hydration is a counted
@@ -1543,10 +1689,12 @@ class SqliteFactStore implements FactStore {
  *
  * @param read - Which port read completed
  * @param decoded - How many stored rows the read decoded
+ * @param repeated - How many of them this process had decoded before
  */
-function countRead(read: 'store.reads.blob' | 'store.reads.extent', decoded: number): void {
+function countRead(read: 'store.reads.blob' | 'store.reads.extent', decoded: number, repeated: number): void {
   countWork(read, 1);
   countWork('store.rows.decoded.persistent', decoded);
+  countWork('store.rows.decoded.repeated', repeated);
 }
 
 /**

@@ -4,7 +4,7 @@
  * tier once more, alone, and served when the store covers it.
  */
 
-import { readWorkCounters } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, readWorkCounters } from '@vibe-agent-toolkit/utils';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { parseLookupsIn } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -15,11 +15,13 @@ import { blobRowsByKey } from '../src/projection/blob-resource-facts.js';
 import { RunContentCache } from '../src/projection/content-cache.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
-import { afterClosurePromotion, type BlobStage, storedTierReads } from '../src/projection/merge.js';
+import { afterClosurePromotion, type BlobStage } from '../src/projection/merge.js';
 import { type Projection, ProjectionBuilder } from '../src/projection/projection.js';
+import { QUERY_BLOB_REQUEST } from '../src/projection/query-projection.js';
 import { diskRunContentSource } from '../src/projection/run-population.js';
 import { emptyBlobRows, keyedContentKeys, storedBlobTier } from '../src/projection/store-hydration.js';
-import type { BlobScopedRows } from '../src/projection/store.js';
+import { ALL_BLOB_REQUEST, type BlobRequest, type BlobScopedRows, type BlobScopedTableName } from '../src/projection/store.js';
+import { storedTierReads } from '../src/projection/stored-tier-reads.js';
 import type { BlobConditionRow } from '../src/schemas/projection-blobs.js';
 
 import { baseBuilderForRoot, populateBlobsOnOwnDispatcher } from './blob-fixture-population.js';
@@ -81,6 +83,64 @@ describe('a covered key\'s stored rows, in reversed order', () => {
   });
 });
 
+/** Each table's rows in a canonical order, so two tiers compare whatever order their reads joined in. */
+function canonical(rows: BlobScopedRows): Record<string, string[]> {
+  const source = rows as unknown as Record<string, readonly unknown[]>;
+  return Object.fromEntries(Object.entries(source).map(([table, tableRows]) => [table, tableRows.map((row) => JSON.stringify(row)).sort(compareCodeUnits)]));
+}
+
+/** A store that records every blob request it is asked. */
+class RecordingStore extends FakeFactStore {
+  readonly asked: BlobRequest<BlobScopedTableName>[] = [];
+
+  override readBlobFacts<Table extends BlobScopedTableName>(contentKeys: readonly string[], request: BlobRequest<Table>): Promise<Pick<BlobScopedRows, Table>> {
+    this.asked.push(request as unknown as BlobRequest<BlobScopedTableName>);
+    return super.readBlobFacts(contentKeys, request);
+  }
+}
+
+describe('one reader for a hit and the derivation after it', () => {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(suite.beforeEach);
+
+  it('reads of each key only what an earlier read left out, and holds what one whole read holds', async () => {
+    // A markdown link (an AST form), a bare token and an `@` import (lexical forms).
+    writeFileIn(suite.tempDir, 'doc.md', '# Doc\n\nSee [other](./other.md), other.md and @other.md.\n');
+    writeFileIn(suite.tempDir, 'other.md', '# Other\n');
+    const builder = await baseBuilderForRoot(suite.tempDir);
+    await populateBlobsOnOwnDispatcher(builder);
+    const derived = builder.build();
+    const keys = keyedContentKeys(derived);
+    const store = new RecordingStore();
+    await store.writeBlobFacts({ rows: storableBlobFacts({ ...emptyBlobRows(), ...blobTables(derived) }), coveredAtRead: [], settledAtRead: [] });
+    // The premise: the store holds rows of both kinds of form.
+    expect(derived.blobReferences.some((row) => QUERY_BLOB_REQUEST.referenceForms !== 'all' && QUERY_BLOB_REQUEST.referenceForms.has(row.syntacticForm))).toBe(true);
+    expect(derived.blobReferences.some((row) => QUERY_BLOB_REQUEST.referenceForms !== 'all' && !QUERY_BLOB_REQUEST.referenceForms.has(row.syntacticForm))).toBe(true);
+
+    const reader = storedTierReads(store);
+    await reader.cover(keys, QUERY_BLOB_REQUEST);
+    const joined = await reader.cover(keys, ALL_BLOB_REQUEST);
+    await reader.cover(keys, ALL_BLOB_REQUEST);
+    const asked = store.asked.map((request) => ({ tables: request.tables, forms: request.referenceForms === 'all' ? 'all' : [...request.referenceForms].sort(compareCodeUnits) }));
+    const once = await storedTierReads(store).cover(keys, ALL_BLOB_REQUEST);
+
+    expect(asked, 'the hit, then only the forms it left out, and a repeated cover reads nothing').toEqual([
+      { tables: QUERY_BLOB_REQUEST.tables, forms: QUERY_BLOB_REQUEST.referenceForms === 'all' ? 'all' : [...QUERY_BLOB_REQUEST.referenceForms].sort(compareCodeUnits) },
+      { tables: ['blobReferences'], forms: ['at-prefixed', 'bare-token', 'env-anchored'] },
+    ]);
+    expect(canonical(joined.rows)).toEqual(canonical(once.rows));
+    expect([...joined.covered].sort(compareCodeUnits)).toEqual([...once.covered].sort(compareCodeUnits));
+
+    // A later read of one key keeps every earlier key's coverage.
+    const [first] = keys;
+    if (first === undefined || once.covered.size < 2) throw new Error('the premise: two covered keys');
+    const partial = storedTierReads(store);
+    await partial.cover(keys, QUERY_BLOB_REQUEST);
+    expect([...(await partial.cover([first], ALL_BLOB_REQUEST)).covered].sort(compareCodeUnits)).toEqual([...once.covered].sort(compareCodeUnits));
+  });
+});
+
 /** A tracked document and a gitignored one the default deferral leaves unkeyed until a promotion. */
 const TRACKED = 'README.md';
 const IGNORED = 'ignored/notes.md';
@@ -118,7 +178,7 @@ async function primedStore(tracker: GitTracker): Promise<{ store: FakeFactStore;
 /** The stage over `store`, its base read and populate done, as `deriveProjection` runs it. */
 async function stageOverBase(builder: ProjectionBuilder, dispatcher: ParseDispatcher, store: FakeFactStore): Promise<BlobStage> {
   const stage: BlobStage = { dispatcher, content: diskRunContentSource(builder.base().contentCache), tier: storedTierReads(store) };
-  const stored = await stage.tier.cover(keyedContentKeys(builder.base()));
+  const stored = await stage.tier.cover(keyedContentKeys(builder.base()), ALL_BLOB_REQUEST);
   await populateBlobs(builder, { dispatcher, content: stage.content, stored });
   return stage;
 }

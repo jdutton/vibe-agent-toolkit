@@ -19,7 +19,7 @@ export const COUNTED_COST_ROWS: Readonly<Record<number, readonly [WorkCounter, .
   46: ['store.reads.extent', 'store.reads.blob'],
   47: ['store.rows.decoded.persistent'],
   64: ['extent.derived', 'extent.served', 'blob.storeServed', 'harness.pairsDerived'],
-  69: ['hydration.rows.written'],
+  69: ['hydration.rows.written', 'hydration.rows.copied'],
   73: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
   81: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
 };
@@ -39,6 +39,8 @@ const ONE_READ_PER_RUN =
  * {@link COUNTED_COST_ROWS}, every counter is accounted for exactly once.
  */
 export const COUNTERS_WITHOUT_A_COUNTED_ROW: Readonly<Partial<Record<WorkCounter, string>>> = {
+  'store.rows.decoded.repeated':
+    'one reader per stored row per process: a row decoded twice from one store file while it is open, asserted zero in every arm of work-counters-validate.system.test.ts and work-counters-validate-edit.system.test.ts (expectNoRowDecodedTwice); no cost row, since any is a defect',
   'store.writes.persistent': I10_STORE_WRITES,
   'store.rows.written.persistent': I10_STORE_WRITES,
   'hydration.writes': "one per hydration that wrote a relation; row 69 is counted by its rows, not its writes.",

@@ -7,6 +7,7 @@ import { compareCodeUnits, createSymlink, safePath, symlinkCapability, toForward
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { AST_SYNTACTIC_FORMS } from '../src/projection/blob-references.js';
 import { buildClaudeContextPopulation } from '../src/projection/claude-context-population.js';
 import { type PopulationCache } from '../src/projection/merge.js';
 import {
@@ -352,6 +353,31 @@ describe('buildResourceProjection', () => {
     expect(served.outcome).toEqual({ population: 'store', stored: 'hit' });
   });
 
+  it('hands every reference form to the run database, and only the AST forms to the process', async () => {
+    // A markdown link (AST) beside a bare token and an `@` import (lexical).
+    await write(DOC_A, '# A\n\nSee [b](./docs/b.md), docs/b.md and @docs/b.md.\n');
+    await write('docs/b.md', '# B\n');
+    const store = new FakeFactStore();
+    const options = { root: suite.tempDir, cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH } };
+
+    const derived = await inOwnRun(buildResourceProjection, options);
+    const served = await inOwnRun(buildResourceProjection, options);
+
+    // Derived: the run's own rows, every form.
+    if (!('rows' in derived.blobReferences)) throw new Error('a derived population hands its own rows');
+    const forms = new Set(derived.blobReferences.rows.map((row) => row.syntacticForm));
+    expect(forms).toContain('markdown-link');
+    expect([...forms].some((form) => !AST_SYNTACTIC_FORMS.has(form)), 'the fixture carries a lexical form').toBe(true);
+    // Served: the store, for exactly the keys the hit admitted, and the same AST rows in process.
+    expect(served.outcome).toEqual({ population: 'store', stored: 'hit' });
+    if (!('stored' in served.blobReferences)) throw new Error('a hit hands the store');
+    const keyed = new Set(served.projection.resourceRealizations.flatMap((row) => (row.contentKey === null ? [] : [row.contentKey])));
+    expect(new Set(served.blobReferences.stored.contentKeys)).toStrictEqual(keyed);
+    expect(served.projection.astReferences).toStrictEqual(derived.projection.astReferences);
+    expect(derived.projection.astReferences.every((row) => AST_SYNTACTIC_FORMS.has(row.syntacticForm))).toBe(true);
+    expect(derived.projection.astReferences.length).toBeGreaterThan(0);
+  });
+
   it('derives the blob rows a query reads', async () => {
     // These counts are what make the query surface answerable at all — asserted
     // as counts rather than as "not undefined", because four empty tables is
@@ -365,7 +391,7 @@ describe('buildResourceProjection', () => {
 
     expect(projection.blobs.length).toBeGreaterThan(0);
     expect(projection.blobSections.length).toBeGreaterThan(0);
-    expect(projection.blobReferences.length).toBeGreaterThan(0);
+    expect(projection.astReferences.length).toBeGreaterThan(0);
   });
 
   it('describes the same membership as the population lane', async () => {

@@ -69,7 +69,7 @@ describe.skipIf(!symlinkCapability())('declined symlinks reach the projection on
     const planted = root;
     const gitTracker = new GitTracker(planted);
     await gitTracker.initialize({ includeUntracked: true });
-    const { projection } = await withPopulationRun<{ projection: Projection }>(async (run) => build({ root: planted, gitTracker, run }));
+    const { projection } = await withPopulationRun<{ projection: Pick<Projection, 'realizationConditions' | 'resourceRealizations'> }>(async (run) => build({ root: planted, gitTracker, run }));
 
     const declined = projection.realizationConditions.filter((row) => isDeclinedSymlinkCode(row.code));
     const paths = declined.map((row) => row.path);

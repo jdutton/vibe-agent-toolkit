@@ -102,18 +102,16 @@ import {
 import { HARNESS_PROFILES, type HarnessProfile } from './harness/profile.js';
 import { rootIdFor } from './identity.js';
 import { ProjectionBuilder, type Projection } from './projection.js';
+import { QUERY_BLOB_REQUEST, queryProjectionOf, type QueryPopulateResult } from './query-projection.js';
 import { collectionMimeConflictCondition } from './realizations.js';
 import { type CollectionMimeResolver, createCollectionMimeResolver } from './router.js';
 import { diskRunContentSource, type PopulationRun, type RunContentSource } from './run-population.js';
 import {
   assembleProjection,
-  EMPTY_STORED_TIER,
   emptyBlobRows,
-  joinStoredTiers,
   keyedContentKeys,
   selectRequestedContexts,
   selectRequestedRows,
-  storedBlobTier,
   uncoveredContentKeys,
   type RequestedContributor,
   type StoredBlobTier,
@@ -128,8 +126,11 @@ import {
   type ExtentScopedRows,
   type ExtentScopedTableName,
   type FactStore,
+  type BlobRequest,
+  type BlobScopedTableName,
 } from './store.js';
-import { hydratesUnder, readBlobTier } from './stored-admission.js';
+import { hydratesUnder } from './stored-admission.js';
+import { storedTierReads, type StoredTierReads } from './stored-tier-reads.js';
 
 /**
  * The pass number every driver-placed row in the `base` stratum carries.
@@ -641,6 +642,45 @@ export class ClosureNonConvergenceError extends VatError {
  * @throws Whatever a contributor throws — failures propagate unwrapped
  */
 export async function populate(options: PopulateOptions): Promise<PopulateResult> {
+  const { projection, outcome } = await populateReading(options, ALL_BLOB_REQUEST);
+  return { projection, outcome };
+}
+
+/**
+ * {@link populate}, for the query lane: the in-process projection holds the AST reference forms
+ * only (`QueryProjection`), and every form reaches the run database from the source the
+ * population had. On a store hit the lexical rows are never decoded: the hit reads
+ * {@link QUERY_BLOB_REQUEST}, and the run database copies `blob_references` from the store for
+ * exactly the content keys the hit admitted. A derived population, store on or off, hands its own
+ * rows.
+ *
+ * @param options - As {@link populate}
+ * @returns The query projection, the outcome, and where `blob_references` come from
+ */
+export async function populateForQuery(options: PopulateOptions): Promise<QueryPopulateResult> {
+  const { projection, outcome, servedKeys } = await populateReading(options, QUERY_BLOB_REQUEST);
+  return {
+    projection: queryProjectionOf(projection),
+    outcome,
+    blobReferences: servedKeys === undefined ? { rows: projection.blobReferences } : { stored: { contentKeys: servedKeys } },
+  };
+}
+
+/**
+ * {@link populate}'s body, a hit reading the blob tier through `hitRequest`.
+ *
+ * ⚠️ On a hit whose `hitRequest` narrows `blobReferences`, the returned projection holds only the
+ * requested forms: the one caller that narrows ({@link populateForQuery}) turns it into a
+ * `QueryProjection` at once, and that type has no `blobReferences`.
+ *
+ * @param options - As {@link populate}
+ * @param hitRequest - What a store hit decodes of the blob tier
+ * @returns The projection, the outcome, and on a hit that read the blob tier the content keys it admitted
+ */
+async function populateReading(
+  options: PopulateOptions,
+  hitRequest: BlobRequest<BlobScopedTableName>,
+): Promise<PopulateResult & { readonly servedKeys: readonly string[] | undefined }> {
   const { root } = options;
 
   // Resolved BEFORE anything else, and deliberately before the cache is asked:
@@ -660,26 +700,36 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
   // Same `rootIdFor` the identity map mints `roots.id` with — see
   // {@link PopulationCache} on why the caller does not supply it.
   const rootId = rootIdFor(root);
-  const cached = await readCachedProjection(options, rootId, parseContent, routing);
+  // The run's one reader of the stored blob tier: the hit reads through it, and a hit that turns
+  // into a miss (a key uncovered, a pair unsettled) hands the derivation what it already decoded.
+  const tier = storedTierReads(parseContent ? options.cache?.store : undefined);
+  const cached = await readCachedProjection(options, { rootId, parseContent, routing, request: hitRequest, tier });
   if ('hit' in cached) {
     countWork('extent.served', 1);
-    return { projection: cached.hit, outcome: populationOutcome('hit') };
+    return { projection: cached.hit, outcome: populationOutcome('hit'), servedKeys: cached.servedKeys };
   }
 
   // The RUN's one dispatcher — the blob stage's parses, the post-promotion
   // re-run's, every harness pass's memory-file reads, and every other lane of the
   // run share its one pool, which the run's owner shuts down. Built lazily: a
   // run that parses nothing starts no worker.
-  const derived = await deriveProjection(options, { parseContent, routing, dispatcher: options.run.dispatcher });
+  const derived = await deriveProjection(options, { parseContent, routing, dispatcher: options.run.dispatcher, tier });
   const stored = await writeCachedProjection(options, rootId, parseContent, derived, routing);
-  return { projection: derived.projection, outcome: populationOutcome(stored, storeMissFor(cached.missed, derived.projection)) };
+  return {
+    projection: derived.projection,
+    outcome: populationOutcome(stored, storeMissFor(cached.missed, derived.projection)),
+    servedKeys: undefined,
+  };
 }
 
 /**
- * What the store answered: the population, or the pairs it lacked — one content
- * key per pair, empty when it held no extent for this question at all.
+ * What the store answered: the population and the content keys whose blob tier it read (none when
+ * the run parses no content), or the pairs it lacked — one content key per pair, empty when it held
+ * no extent for this question at all.
  */
-type CachedRead = { readonly hit: Projection } | { readonly missed: readonly string[] };
+type CachedRead =
+  | { readonly hit: Projection; readonly servedKeys: readonly string[] | undefined }
+  | { readonly missed: readonly string[] };
 
 /** A store that held nothing for this question. */
 const NOTHING_HELD: CachedRead = { missed: [] };
@@ -692,6 +742,8 @@ interface DerivationRun {
   readonly routing: CollectionMimeResolver;
   /** The run's dispatcher: every parse, and every harness's memory-file read. */
   readonly dispatcher: ParseDispatcher;
+  /** The run's one reader of the stored blob tier, which the store hit read through first. */
+  readonly tier: StoredTierReads;
 }
 
 /**
@@ -704,46 +756,6 @@ interface Derivation {
   readonly coveredAtRead: readonly string[];
   /** The reached pairs the harness passes served from those reads. */
   readonly settledAtRead: readonly HarnessPair[];
-}
-
-/**
- * The stored blob tier one derivation reads: the base stratum's keys first, then
- * any key a demand promotion added that no earlier read asked about.
- */
-export interface StoredTierReads {
-  /** Every read so far, as one tier. */
-  current(): StoredBlobTier;
-  /**
-   * Read the keys no earlier read asked about, only when there are any.
-   *
-   * @param contentKeys - The keys the derivation now holds
-   * @returns Every read so far, as one tier
-   */
-  cover(contentKeys: readonly string[]): Promise<StoredBlobTier>;
-}
-
-/**
- * The tier reads of one derivation, over `store`.
- *
- * @param store - The run's store, or undefined for a run with none (or that parses no content): nothing is read
- * @returns The reads
- */
-export function storedTierReads(store: FactStore | undefined): StoredTierReads {
-  const asked = new Set<string>();
-  let tier = EMPTY_STORED_TIER;
-  return {
-    current: () => tier,
-    cover: async (contentKeys) => {
-      const fresh = contentKeys.filter((key) => !asked.has(key));
-      if (store === undefined || fresh.length === 0) return tier;
-      for (const key of fresh) asked.add(key);
-      // Every table and every form: a covered key's rows are emitted into the
-      // projection, the lexical references and the harness tables included.
-      const read = storedBlobTier(await readBlobTier(store, fresh, ALL_BLOB_REQUEST), fresh);
-      tier = joinStoredTiers(tier, read);
-      return tier;
-    },
-  };
 }
 
 /**
@@ -774,7 +786,7 @@ async function deriveProjection(options: PopulateOptions, run: DerivationRun): P
   // register: full extent derivation is a counted cost).
   countWork('extent.derived', 1);
   const { root, registry, parameters, maxIterations = DEFAULT_MAX_ITERATIONS } = options;
-  const { parseContent, routing, dispatcher } = run;
+  const { parseContent, routing, dispatcher, tier } = run;
   // The RUN's content cache, never a module-level one: a module-level cache would
   // leak bytes across two runs in one process — including two runs over a tree
   // that changed in between, which would describe the wrong corpus with complete
@@ -833,7 +845,7 @@ async function deriveProjection(options: PopulateOptions, run: DerivationRun): P
   const stage: BlobStage = {
     dispatcher,
     content: diskRunContentSource(options.run.content),
-    tier: storedTierReads(parseContent ? options.cache?.store : undefined),
+    tier,
   };
   if (parseContent) await runBlobStage(builder, stage);
   const attemptsBeforeClosure = builder.contentPromotionAttempts;
@@ -1049,18 +1061,26 @@ export function requestedContributors(options: PopulateOptions): readonly Reques
  * while every run pays full price and reports success. The failure surfaces.
  *
  * @param options - The run's options, including its cache if it has one
- * @param rootId - This run's corpus root id
- * @param parseContent - Whether this run reads and parses content at all
- * @param routing - The run's parse routing, whose fingerprint is part of the key
- * @returns The hydrated projection, or the pairs it lacked on a miss — so a
- *   miss a refusal caused can be counted (ADR I10)
+ * @param read - How this run reads the store
+ * @param read.rootId - This run's corpus root id
+ * @param read.parseContent - Whether this run reads and parses content at all
+ * @param read.routing - The run's parse routing, whose fingerprint is part of the key
+ * @param read.request - What the hit decodes of the blob tier
+ * @param read.tier - The run's one reader of the blob tier, which a miss's derivation reads through next
+ * @returns The hydrated projection and the keys its tier was read for, or the pairs it lacked on a
+ *   miss — so a miss a refusal caused can be counted (ADR I10)
  */
 async function readCachedProjection(
   options: PopulateOptions,
-  rootId: string,
-  parseContent: boolean,
-  routing: CollectionMimeResolver,
+  read: {
+    readonly rootId: string;
+    readonly parseContent: boolean;
+    readonly routing: CollectionMimeResolver;
+    readonly request: BlobRequest<BlobScopedTableName>;
+    readonly tier: StoredTierReads;
+  },
 ): Promise<CachedRead> {
+  const { rootId, parseContent, routing } = read;
   const cache = options.cache;
   if (cache === undefined) return NOTHING_HELD;
 
@@ -1079,13 +1099,14 @@ async function readCachedProjection(
   // back, or a hit would hand it blob tables a populate would have left empty
   // — and `'skip'` is a claim about what the caller reads, so honouring it on
   // both paths is what keeps hydrated and populated indistinguishable.
-  if (!parseContent) return { hit: assembleProjection(extent, emptyBlobRows()) };
+  if (!parseContent) return { hit: assembleProjection(extent, emptyBlobRows()), servedKeys: undefined };
 
   const contentKeys = keyedContentKeys(extent);
-  // Every table and every form: the projection serves the lexical references
-  // (edge lenses, claude context, SQL) and the harness tables, which the stored
-  // admission's narrower read leaves out.
-  const blobs = await readBlobTier(cache.store, contentKeys, ALL_BLOB_REQUEST);
+  // Every table; every form for `populate` (its projection serves the lexical
+  // references to claude context and the harness tables, which the stored
+  // admission's narrower read leaves out), the AST forms for the query lane,
+  // whose run database copies the rest from the store.
+  const { rows: blobs } = await read.tier.cover(contentKeys, read.request);
   // See `store-hydration.ts`: an extent written by a run that skipped blob
   // derivation names keys the blob tier does not hold, and accepting it would
   // reduce every closure extent to its own root while reporting success.
@@ -1098,7 +1119,7 @@ async function readCachedProjection(
   // absence would throw at the first strict reader; a miss re-derives it.
   const projection = assembleProjection(extent, blobs);
   const unsettled = harnessUnsettledKeys(projection, HARNESS_PROFILE_LIST);
-  return unsettled.length === 0 ? { hit: projection } : { missed: unsettled };
+  return unsettled.length === 0 ? { hit: projection, servedKeys: contentKeys } : { missed: unsettled };
 }
 
 /**
@@ -1386,7 +1407,9 @@ function contentParsingFor(options: PopulateOptions): boolean {
  */
 async function runBlobStage(builder: ProjectionBuilder, stage: BlobStage): Promise<void> {
   const startedAt = crawlTimingStart();
-  const stored = await stage.tier.cover(keyedContentKeys(builder.base()));
+  // Every table and every form: a covered key's rows are emitted into the projection, the lexical
+  // references and the harness tables included.
+  const stored = await stage.tier.cover(keyedContentKeys(builder.base()), ALL_BLOB_REQUEST);
   await populateBlobs(builder, { dispatcher: stage.dispatcher, content: stage.content, stored });
   recordCrawlPass(CRAWL_BLOB_POPULATE_ID, 'base', BASE_STRATUM_PASS, startedAt);
 }

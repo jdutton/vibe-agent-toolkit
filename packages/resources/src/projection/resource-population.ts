@@ -111,15 +111,16 @@ import {
 import { crawlSourceFor, type CrawlSource, type CrawlSourceKind, type PopulationUnreadablePolicy, type RootListing } from './crawl-source.js';
 import {
   populate,
+  populateForQuery,
   populationOracles,
   readStoredMembership,
   requestedContributors,
   type PopulateOptions,
-  type PopulateResult,
   type PopulationOutcome,
   type TreePopulationOptions,
 } from './merge.js';
 import type { Projection } from './projection.js';
+import type { QueryPopulateResult } from './query-projection.js';
 import type { FactStore } from './store.js';
 import { derivedContentOf, storedContentOf, type StoredContent } from './stored-admission.js';
 
@@ -619,12 +620,12 @@ export async function buildResourceListing(
  *   caller that reports refusals passes the projection to `describeBlobRefusals`,
  *   which reads the stored rows, so a hit reports what the derive did
  */
-export function buildResourceProjection(options: TreePopulationOptions): Promise<PopulateResult> {
+export function buildResourceProjection(options: TreePopulationOptions): Promise<QueryPopulateResult> {
   const root = safePath.resolve(options.root);
   // A projection is built to be read: the root is the tree the verb examines,
   // so no output is declared.
   const source = crawlSourceFor(root, []);
-  return populate(resourcePopulateOptions(options, root, resourceContributors(() => source)));
+  return populateForQuery(resourcePopulateOptions(options, root, resourceContributors(() => source)));
 }
 
 /**

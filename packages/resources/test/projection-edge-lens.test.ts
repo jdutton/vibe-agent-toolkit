@@ -10,6 +10,7 @@ import {
   type EdgeLens,
 } from '../src/projection/edge-lens.js';
 import type { Projection } from '../src/projection/projection.js';
+import { queryProjectionOf } from '../src/projection/query-projection.js';
 import type {
   BlobReferenceRow,
   ReferenceSyntacticForm,
@@ -156,7 +157,7 @@ function projectionWith(
  */
 function candidateFor(rawRef: string, paths: readonly string[] = [SOURCE]) {
   const projection = projectionWith(paths, [reference(SOURCE, 0, rawRef)]);
-  return resolveEdges(projection, LENS).edgeResolutions[0];
+  return resolveEdges(queryProjectionOf(projection), LENS).edgeResolutions[0];
 }
 
 describe('resolveEdges — an edge per admitted reference', () => {
@@ -166,7 +167,7 @@ describe('resolveEdges — an edge per admitted reference', () => {
       [reference(GUIDE, 0, SIBLING_TARGET_HREF)],
     );
 
-    const { edges, edgeResolutions } = resolveEdges(projection, LENS);
+    const { edges, edgeResolutions } = resolveEdges(queryProjectionOf(projection), LENS);
 
     expect(edges).toHaveLength(1);
     expect(edges[0]).toMatchObject({
@@ -202,7 +203,7 @@ describe('resolveEdges — an edge per admitted reference', () => {
       [reference('docs/deep/guide.md', 0, '../target.md')],
     );
 
-    expect(resolveEdges(projection, LENS).edgeResolutions[0]?.dstResource)
+    expect(resolveEdges(queryProjectionOf(projection), LENS).edgeResolutions[0]?.dstResource)
       .toBe(`id:${DOCS_TARGET}`);
   });
 });
@@ -240,7 +241,7 @@ describe('resolveEdges — a destination is not always a resource', () => {
       ],
     );
 
-    const kinds = resolveEdges(projection, LENS).edgeResolutions.map((row) => row.dstKind);
+    const kinds = resolveEdges(queryProjectionOf(projection), LENS).edgeResolutions.map((row) => row.dstKind);
 
     expect(kinds).toEqual(['external', OUT_OF_CORPUS]);
   });
@@ -250,7 +251,7 @@ describe('resolveEdges — an edge with no candidate is a real state', () => {
   it('emits the edge and NO candidate when the token names no file', () => {
     const projection = projectionWith([SOURCE], [reference(SOURCE, 0, '#section-only')]);
 
-    const { edges, edgeResolutions } = resolveEdges(projection, LENS);
+    const { edges, edgeResolutions } = resolveEdges(queryProjectionOf(projection), LENS);
 
     expect(edges).toHaveLength(1);
     expect(edgeResolutions).toHaveLength(0);
@@ -276,7 +277,7 @@ describe('resolveEdges — the authored-only policy', () => {
 
     // One edge, not two: counting the definition too would double-count every
     // inbound reference-style link.
-    expect(resolveEdges(projection, LENS).edges).toHaveLength(1);
+    expect(resolveEdges(queryProjectionOf(projection), LENS).edges).toHaveLength(1);
   });
 
   it('admits no lexer-derived token under authored-only, whatever it looks like', () => {
@@ -288,14 +289,14 @@ describe('resolveEdges — the authored-only policy', () => {
       ],
     );
 
-    expect(resolveEdges(projection, LENS).edges).toHaveLength(0);
+    expect(resolveEdges(queryProjectionOf(projection), LENS).edges).toHaveLength(0);
   });
 
   it('reads references only from the lens\'s own extent', () => {
     const projection = projectionWith([SOURCE], [reference(SOURCE, 0, SOURCE)]);
     const otherExtent = { ...LENS, extentContextId: 'extent:dist' };
 
-    expect(resolveEdges(projection, otherExtent).edges).toHaveLength(0);
+    expect(resolveEdges(queryProjectionOf(projection), otherExtent).edges).toHaveLength(0);
   });
 
   it('picks the LOWEST PATH as the resolution base, not whichever row came first', () => {
@@ -331,7 +332,7 @@ describe('resolveEdges — the authored-only policy', () => {
       ],
     } as unknown as Projection;
 
-    const { edges, edgeResolutions } = resolveEdges(projection, LENS);
+    const { edges, edgeResolutions } = resolveEdges(queryProjectionOf(projection), LENS);
 
     expect(edges).toHaveLength(1);
     // `a.md` sorts below `docs/link.md`, so the root is the base and the target
@@ -364,7 +365,7 @@ describe('resolveEdges — the authored-only policy', () => {
       resourceRealizations: [packaged, queryRealization(SOURCE), queryRealization(TARGET)],
     } as unknown as Projection;
 
-    const { edges, edgeResolutions } = resolveEdges(projection, LENS);
+    const { edges, edgeResolutions } = resolveEdges(queryProjectionOf(projection), LENS);
 
     expect(edges).toHaveLength(1);
     // Read through `a.md`, so `./b.md` is the corpus's own `b.md`.
@@ -383,7 +384,7 @@ describe('resolveEdges — the authored-only policy', () => {
       [reference(SOURCE, 0, EXTERNAL_URL), reference(SOURCE, 1, SOURCE)],
     );
 
-    expect(resolveEdges(projection, LENS).edges.map((edge) => edge.kind))
+    expect(resolveEdges(queryProjectionOf(projection), LENS).edges.map((edge) => edge.kind))
       .toEqual(['external', 'local_file']);
   });
 
@@ -398,7 +399,7 @@ describe('resolveEdges — the authored-only policy', () => {
       [reference(SOURCE, 0, '#section-only'), reference(SOURCE, 1, SOURCE)],
     );
 
-    const { edges, edgeResolutions } = resolveEdges(projection, LENS);
+    const { edges, edgeResolutions } = resolveEdges(queryProjectionOf(projection), LENS);
 
     expect(edges.map((edge) => edge.kind)).toEqual(['anchor', 'local_file']);
     // ⛔ SCOPE: an anchor edge still produces NO candidate. Whether a
@@ -432,7 +433,7 @@ describe('resolveEdges — the authored-only policy', () => {
       resolutionContexts: [...base.resolutionContexts, extentContext('extent:filesystem', ROOT_ID)],
     } as unknown as Projection;
 
-    const { edges, edgeResolutions } = resolveEdges(projection, LENS);
+    const { edges, edgeResolutions } = resolveEdges(queryProjectionOf(projection), LENS);
 
     expect(edges).toHaveLength(1);
     // And it RESOLVES: the target is a member, so it is a resource rather than
@@ -449,7 +450,7 @@ describe('resolveEdges — the authored-only policy', () => {
       resourceExtents: [{ resourceId: `id:${SOURCE}`, extentId: LENS.extentContextId }],
     } as unknown as Projection;
 
-    expect(resolveEdges(projection, LENS).edgeResolutions[0]?.dstKind).toBe('out-of-corpus');
+    expect(resolveEdges(queryProjectionOf(projection), LENS).edgeResolutions[0]?.dstKind).toBe('out-of-corpus');
   });
 
   it('RESOLVES a link to a member with no parsed bytes — an image is a real target', () => {
@@ -471,7 +472,7 @@ describe('resolveEdges — the authored-only policy', () => {
       })),
     } as unknown as Projection;
 
-    const { edges, edgeResolutions } = resolveEdges(projection, LENS);
+    const { edges, edgeResolutions } = resolveEdges(queryProjectionOf(projection), LENS);
 
     // One edge, from the only member that HAS bytes to read.
     expect(edges).toHaveLength(1);
@@ -521,8 +522,8 @@ describe('resolveEdges — the authored-only policy', () => {
       } as unknown as Projection;
     };
 
-    const forward = resolveEdges(build(false), LENS);
-    const reversed = resolveEdges(build(true), LENS);
+    const forward = resolveEdges(queryProjectionOf(build(false)), LENS);
+    const reversed = resolveEdges(queryProjectionOf(build(true)), LENS);
 
     // Non-vacuity: the fixture must actually produce rows, or two empty
     // relations would compare equal and prove nothing.
@@ -573,8 +574,8 @@ describe('resolveEdges — the authored-only policy', () => {
       } as unknown as Projection;
     };
 
-    const forward = resolveEdges(build(false), LENS).edgeResolutions;
-    const reversed = resolveEdges(build(true), LENS).edgeResolutions;
+    const forward = resolveEdges(queryProjectionOf(build(false)), LENS).edgeResolutions;
+    const reversed = resolveEdges(queryProjectionOf(build(true)), LENS).edgeResolutions;
 
     expect(forward).toHaveLength(1);
     // NFD sorts below NFC by code point ('e' < 'é'), the same way every time.
@@ -597,10 +598,10 @@ describe('resolveEdges — the authored-only policy', () => {
       [reference(SOURCE, 0, './b.md'), reference(SOURCE, 1, EXTERNAL_URL)],
     );
 
-    const shared = resolveEdges(projection, LENS, {
-      referencesByBlob: buildReferenceIndex(projection),
+    const shared = resolveEdges(queryProjectionOf(projection), LENS, {
+      referencesByBlob: buildReferenceIndex(queryProjectionOf(projection)),
     });
-    const private_ = resolveEdges(projection, LENS);
+    const private_ = resolveEdges(queryProjectionOf(projection), LENS);
 
     expect(shared.edges.length).toBeGreaterThan(0);
     expect(shared).toEqual(private_);
@@ -617,7 +618,7 @@ describe('resolveEdges — the authored-only policy', () => {
     const projection = projectionWith([SOURCE], [reference(SOURCE, 0, SOURCE)]);
     const rootless = { ...projection, roots: [] } as unknown as Projection;
 
-    expect(() => resolveEdges(rootless, LENS)).toThrow(/no root/);
+    expect(() => resolveEdges(queryProjectionOf(rootless), LENS)).toThrow(/no root/);
   });
 
   it('answers empty, not an error, for a projection that realizes nothing', () => {
@@ -625,7 +626,7 @@ describe('resolveEdges — the authored-only policy', () => {
     // and that is a genuine zero.
     const empty = { ...projectionWith([], []), roots: [] } as unknown as Projection;
 
-    expect(resolveEdges(empty, LENS)).toEqual({ edges: [], edgeResolutions: [] });
+    expect(resolveEdges(queryProjectionOf(empty), LENS)).toEqual({ edges: [], edgeResolutions: [] });
   });
 });
 
@@ -663,7 +664,7 @@ describe('resolveEdges — a federated projection resolves each file against ITS
     // "Federated corpus roots" and the realization schema says the root comes
     // from `resolution_contexts.rootId` via `extentId` precisely so that this
     // stays unambiguous.
-    const { edgeResolutions } = resolveEdges(federated(), LENS);
+    const { edgeResolutions } = resolveEdges(queryProjectionOf(federated()), LENS);
 
     expect(edgeResolutions).toHaveLength(1);
     expect(edgeResolutions[0]).toMatchObject({ dstKind: 'resource', dstResource: 'id:1:docs/x.md' });
@@ -680,7 +681,7 @@ describe('resolveEdges — every emitted row satisfies the shipped schema', () =
       reference(GUIDE, 3, '#anchor-only'),
     ],
   );
-  const relation = resolveEdges(projection, LENS);
+  const relation = resolveEdges(queryProjectionOf(projection), LENS);
 
   it('emits four edges and three candidates — the anchor-only token has no destination', () => {
     expect(relation.edges).toHaveLength(4);

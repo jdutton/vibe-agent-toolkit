@@ -42,6 +42,7 @@ import { createSymlink, parseLookupsIn, symlinkCapability } from '@vibe-agent-to
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
+  expectNoRowDecodedTwice,
   freshValidateArm,
   isConfig,
   probed,
@@ -418,12 +419,14 @@ describe.each([
     // The checks child asks the store the resources phase wrote: it reads no content.
     expect(children['content.read'] ?? 0, 'checks child content reads').toBe(0);
     expect([...childReads.keys()].filter((path) => !isConfig(path)), 'checks child fs reads').toEqual([]);
+    expectNoRowDecodedTwice(storeOnCold);
   });
 
   it('warm: every file under the project root is served from the store; the run reads only the skills lane\'s files outside it', async () => {
     const arm = freshArm(false);
     await validateCounts(cwd, arm);
     const warm = await validateCounts(cwd, arm);
+    expectNoRowDecodedTwice(warm);
     const resources = warm.phases['resources'] as Readonly<Record<WorkCounter, number>>;
     const skills = warm.phases['skills'] as Readonly<Record<WorkCounter, number>>;
     expect(resources).toBeDefined();

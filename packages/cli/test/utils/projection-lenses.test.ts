@@ -23,7 +23,7 @@ import {
   DERIVED_TABLES,
   isProjectionTable,
   type PopulationRun,
-  type Projection,
+  type QueryProjection,
   queryableRelationSpecs,
 } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
@@ -204,7 +204,7 @@ function lensReturning(rows: LensRows, population: LensEvaluation['population'] 
 
 describe('evaluateLens', () => {
   const input = {
-    projection: {} as Projection,
+    projection: {} as QueryProjection,
     root: '/corpus',
     base: undefined,
     cache: undefined,
