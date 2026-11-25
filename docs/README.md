@@ -85,6 +85,9 @@ root `package.json` `scripts` block is the index of what runs them. The list in
 Design records, including for work that is approved but not yet built. They are committed so a
 design survives the worktree it was written in.
 
+- **[Roadmap](./architecture/roadmap.md)** — what VAT builds next across every package, in
+  priority order, and what is placed later or declined.
+
 - **[Fact Extractors](./architecture/fact-extractors.md)** — the accepted, not-yet-built decision
   record for the fact store and the extractor contract, with its living
   [hazard register](./architecture/fact-extractors-hazard-register.md) and the measured
