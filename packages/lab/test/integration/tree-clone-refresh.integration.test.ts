@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TreeOrigin } from '../../src/harness/arm-git.js';
 import { runGit } from '../../src/harness/git-state.js';
 import { type CopyMode, executeClonePlan, planTreeClone, readCloneSource } from '../../src/harness/tree-clone.js';
-import { filteredOperatorCheckout, fixtureArmGit, stubBrokenDeveloperFilter } from '../arm-tree-fixtures.js';
+import { filteredOperatorCheckout, fixtureArmGit, stubBrokenDeveloperFilter, stubDeveloperGitConfig } from '../arm-tree-fixtures.js';
 import { commitAll, initRepo, writeFixtureFile } from '../git-fixtures.js';
 
 const roots: string[] = [];
@@ -109,10 +109,15 @@ describe.skipIf(process.platform === 'win32')("a 'copy' clone of a repository", 
 
 describe("a 'portable' clone of a repository", () => {
   it('is stat-clean, and its index and file bytes equal a fresh checkout of the same commit', async () => {
+    // Windows CI's system config, here on every host: the developer's git rewrites line endings on checkout.
+    stubDeveloperGitConfig(scratch(), '[core]\n\tautocrlf = true\n');
     const source = sourceRepository(false);
     const clone = await cloneOf(source, 'portable', 'operator');
     const fresh = safePath.join(scratch(), 'fresh');
-    expect(runGit(['clone', '--quiet', '--local', source, fresh], source).status).toBe(0);
+    // The reference checks out under the arm's git, which reads no system or global
+    // config: it writes each blob's bytes verbatim, as the fixture wrote the source's.
+    // The developer's git would apply `core.autocrlf` and check out CRLF.
+    expect(fixtureArmGit(scratch())(['clone', '--quiet', '--local', source, fresh], source).status).toBe(0);
 
     expect(runGit(['diff-files', '--quiet'], clone).status).toBe(0);
     const staged = runGit(['ls-files', '-s'], clone);
