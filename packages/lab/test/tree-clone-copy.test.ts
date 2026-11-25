@@ -7,7 +7,13 @@
 import type * as Utils from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
 
+import type { PreparationGit } from '../src/harness/arm-git.js';
 import { executeClonePlan } from '../src/harness/tree-clone.js';
+
+/** A plan of copy steps alone runs no git. */
+const NO_GIT: PreparationGit = () => {
+  throw new Error('this plan runs no git');
+};
 
 const { copyTree } = vi.hoisted(() => ({ copyTree: vi.fn<typeof Utils.copyTree>() }));
 
@@ -28,7 +34,10 @@ describe('executeClonePlan: a copy step the host cannot write', () => {
     });
     copyTree.mockRejectedValueOnce(eperm);
 
-    const refusal = await executeClonePlan({ ok: true, steps: [{ kind: 'copy', from: '/subject/docs', to: '/copy/docs' }] });
+    const refusal = await executeClonePlan(
+      { ok: true, steps: [{ kind: 'copy', from: '/subject/docs', to: '/copy/docs' }] },
+      NO_GIT,
+    );
 
     expect(refusal).toMatch(/^REFUSED: clone step 'copy \/subject\/docs \/copy\/docs' failed: EPERM: operation not permitted, symlink/u);
   });

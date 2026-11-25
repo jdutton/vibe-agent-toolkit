@@ -16,26 +16,17 @@
  *    commit, has the commit's own tree hash.
  *    A step that wrote a non-ignored file fails the preparation, naming it.
  *
- * **Every preparation git runs where the arms' VAT runs** — under the warm-up
- * arm's {@link armStepEnvironment}, the one environment path: the developer's
- * global git config, excludes, `GIT_CONFIG_*` overrides and every name git
- * exports into a hook are gone, `HOME` is the empty arm home and
- * `GIT_CONFIG_NOSYSTEM=1` keeps the machine's system config out too.
+ * **Every preparation git runs where the arms' VAT runs** — the warm-up arm's
+ * `preparationGit` (`arm-git.ts`), the one git every arm tree is touched with.
  * Under the developer's own config a globally-excluded file a prerequisite
  * wrote would vanish from the proof while every arm still saw it.
  */
 
 import { everywhere, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
 
-import {
-  type ArmDirectories,
-  armDirectories,
-  armPlacementRefusal,
-  armStepEnvironment,
-  prepareArmDirectories,
-} from './arm-dirs.js';
+import { armDirectories, armPlacementRefusal, PREPARED_CLONE_NAME, prepareArmDirectories } from './arm-dirs.js';
+import { type PreparationGit, preparationGit } from './arm-git.js';
 import { runRepeats } from './repeat.js';
-import { runCommand } from './run.js';
 import type { SequenceStep } from './sequence.js';
 import type { ResolvedInstrument } from './types.js';
 
@@ -67,9 +58,6 @@ export type PreparedClone =
       readonly removedToolEnv: readonly string[];
     }
   | { readonly ok: false; readonly refusal: string };
-
-/** The prepared clone's name under the arms root; it outlives the capture only once a report names where it is kept (`ArmsRootHandle.keepChild`). */
-export const PREPARED_CLONE_NAME = 'clone';
 
 /**
  * Clone, prepare and prove a subject at one commit.
@@ -115,33 +103,6 @@ export async function prepareClone(preparation: ClonePreparation): Promise<Prepa
   const proven = proveCommitted(git, path, sha, safePath.join(dirs.tmp, 'snapshot-index'));
   // Git runs under the warm-up's own environment, so the run's two lists are the whole record.
   return proven.ok ? { ...proven, removedEnv: run.removed, removedToolEnv: run.removedTool } : proven;
-}
-
-/** One preparation git: its exit (`null` when it never ran or was killed), and trimmed streams. */
-export type PreparationGit = (
-  args: readonly string[],
-  cwd: string,
-  set?: Readonly<Record<string, string>>,
-) => { readonly status: number | null; readonly stdout: string; readonly stderr: string };
-
-/**
- * Git, run the way the arms run VAT: through the lab's own {@link runCommand}
- * under {@link armStepEnvironment}, whose `unset` removes what `runGit`'s
- * merge-over-`process.env` can only override.
- *
- * @param dirs - The warm-up arm, whose home is git's global config
- * @param timeoutMs - Per-command ceiling, as for the steps
- * @returns The runner
- */
-export function preparationGit(dirs: ArmDirectories, timeoutMs: number | undefined): PreparationGit {
-  return (args, cwd, set = {}) => {
-    const ran = runCommand({ command: 'git', leadingArgs: [] }, args, {
-      cwd,
-      env: armStepEnvironment(dirs, { set, unset: [] }).env,
-      ...(timeoutMs === undefined ? {} : { timeoutMs }),
-    });
-    return { status: ran.exitCode, stdout: ran.stdout.trim(), stderr: ran.stderr.trim() };
-  };
 }
 
 /**

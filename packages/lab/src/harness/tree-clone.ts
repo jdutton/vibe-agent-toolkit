@@ -19,7 +19,7 @@ import { lstatSync, readdirSync } from 'node:fs';
 import { copyTree, fsFaultOf, isPathAbsentError, isTreeChangeResidue, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { NEVER_CRAWL_GLOBS } from '@vibe-agent-toolkit/utils/crawl';
 
-import { runGit } from './git-state.js';
+import type { PreparationGit } from './arm-git.js';
 
 /**
  * Never skipped though the crawler skips them: `.git` (the clone needs it) and
@@ -205,25 +205,29 @@ function kindOf(path: string): GitKind {
  * Run a plan's steps in order, stopping at the first that fails.
  *
  * @param plan - An accepted plan
+ * @param git - The arm's git (`arm-git.ts`), for the copy's index refresh and remote:
+ *   under the developer's config a global `core.excludesFile` or a system
+ *   `core.autocrlf` would decide what the copy's index records
  * @returns `null` on success, else a refusal naming the step that failed
  */
-export function executeClonePlan(plan: Extract<ClonePlan, { ok: true }>): Promise<string | null> {
-  return executeFrom(plan.steps, 0);
+export function executeClonePlan(plan: Extract<ClonePlan, { ok: true }>, git: PreparationGit): Promise<string | null> {
+  return executeFrom(plan.steps, 0, git);
 }
 
 /** Steps run one after another, each on what the last left: `index` onward, stopping at the first refusal. */
-async function executeFrom(steps: readonly CloneStep[], index: number): Promise<string | null> {
+async function executeFrom(steps: readonly CloneStep[], index: number, git: PreparationGit): Promise<string | null> {
   const step = steps[index];
   if (step === undefined) return null;
-  const failed = await executeStep(step);
-  return failed ?? executeFrom(steps, index + 1);
+  const failed = await executeStep(step, git);
+  return failed ?? executeFrom(steps, index + 1, git);
 }
 
 /**
  * @param step - One step
+ * @param git - The arm's git
  * @returns `null` on success, else a refusal naming the step
  */
-function executeStep(step: CloneStep): string | null | Promise<string | null> {
+function executeStep(step: CloneStep, git: PreparationGit): string | null | Promise<string | null> {
   switch (step.kind) {
     case 'mkdir': {
       mkdirSyncReal(step.path, { recursive: true });
@@ -236,20 +240,20 @@ function executeStep(step: CloneStep): string | null | Promise<string | null> {
       // `-q` BEFORE `--refresh`: git applies options in order, so a trailing `-q`
       // is not yet read and a modified or skipped tracked file ("needs update")
       // would exit 1. Such a subject is the normal one, and its dirt must stay
-      // visible in the clone. Through the lab's runner, like remove-origin.
-      const refreshed = runGit(['update-index', '-q', '--refresh'], step.repository);
+      // visible in the clone. Through the arm's git, like remove-origin.
+      const refreshed = git(['update-index', '-q', '--refresh'], step.repository);
       return refreshed.status === 0
         ? null
-        : `REFUSED: cannot refresh the clone's index at ${step.repository} (git exit ${refreshed.status}): ${refreshed.stdout.trim()}`;
+        : `REFUSED: cannot refresh the clone's index at ${step.repository} (git exit ${String(refreshed.status)}): ${refreshed.stdout} ${refreshed.stderr}`.trim();
     }
     case 'remove-origin': {
-      // Through the lab's runner, which scrubs an inherited GIT_DIR: a capture
+      // Through the arm's git, which clears an inherited GIT_DIR: a capture
       // launched from a hook must not edit the repository that is committing.
       // A clone with no origin already holds the state this step exists for.
-      const remotes = runGit(['remote'], step.repository);
+      const remotes = git(['remote'], step.repository);
       if (remotes.status !== 0) return `REFUSED: cannot list the clone's remotes at ${step.repository}.`;
       if (!remotes.stdout.split('\n').includes('origin')) return null;
-      return runGit(['remote', 'remove', 'origin'], step.repository).status === 0
+      return git(['remote', 'remove', 'origin'], step.repository).status === 0
         ? null
         : `REFUSED: cannot remove the clone's origin remote at ${step.repository}.`;
     }

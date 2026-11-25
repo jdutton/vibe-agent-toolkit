@@ -16,7 +16,7 @@ afterAll(cleanupVerdictFixtures);
 
 describe('perf arms: git spawns per repetition', () => {
   it('counts one more spawn per round for a timed git status, and the clean arm alike every round', async () => {
-    const report = await captureBuildArms(twelveFileSubject(), [
+    const { report } = await captureBuildArms(twelveFileSubject(), [
       { arm: 'ci-c', state: 'warm', steps: CI_C_STEPS },
       { arm: CI_C_STATUS.arm, state: 'warm', steps: CI_C_STATUS.steps },
     ], null);

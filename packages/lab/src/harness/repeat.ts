@@ -29,6 +29,11 @@
  *    changed anything else in it failed, and the copy removed when the arm ends
  *    — see `subject-copy.ts`. The limit: in a checkout, a write to a gitignored
  *    path or under `.git/` outside the declared writes is not seen.
+ *    An edit arm (`warm-edit<N>`) DOES edit the tree it runs in, so it is
+ *    refused unless that tree is the lab's own prepared clone
+ *    (`<arms root>/clone` under a marked arms root, `preparedCloneRefusal`):
+ *    never a developer's checkout or an operator's subject. Every git it runs
+ *    there is the arm's (`arm-git.ts`).
  */
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
@@ -52,10 +57,13 @@ import {
   armRefusal,
   armStepEnvironment,
   clearArmSubjectOutputs,
+  preparedCloneRefusal,
   prepareArmDirectories,
   removeArmSubject,
 } from './arm-dirs.js';
 import { type ArmEnvironment, clearedEnvironment, mergeArmEnvironments } from './arm-env.js';
+import { preparationGit } from './arm-git.js';
+import { isEditState } from './arm-state.js';
 import type { MeasuredCommandSpec } from './commands.js';
 import { fingerprintFiles } from './fingerprint.js';
 import { type ParseDirectoryResolution, resolveParseCacheDirectory } from './parse-cache.js';
@@ -380,7 +388,7 @@ async function runPreparedArms(
 async function makeSubjectCopy(arm: PreparedArm): Promise<string | null> {
   if (arm.copy === null) return null;
   await removeArmSubject(arm.context.dirs);
-  await copySubject(arm.copy.from, arm.context.dirs.subject);
+  await copySubject(arm.copy.from, arm.context.dirs.subject, arm.context.git);
   return copyFingerprint(arm.context.dirs.subject, arm.copy.writes);
 }
 
@@ -487,6 +495,9 @@ function prepareArm(spec: RepeatSpec): PreparedArm {
   const dirs = armDirectories(spec.arm);
   const placement = armPlacementRefusal(dirs.root, [spec.cwd]);
   if (placement !== null) throw armRefusal(`arm '${spec.arm.arm}': ${placement}`);
+  // An edit arm writes the tree it runs in: only the lab's own prepared clone may receive that.
+  const notOurs = isEditState(spec.arm.state) ? preparedCloneRefusal(spec.arm.root, spec.cwd) : null;
+  if (notOurs !== null) throw armRefusal(`arm '${spec.arm.arm}' edits the tree it runs in: ${notOurs}`);
   const writes = writtenDirectories(spec.steps);
   const copy = writes.length === 0 ? null : { from: spec.cwd, writes };
   if (copy !== null) refuseSubjectArguments(spec);
@@ -495,17 +506,19 @@ function prepareArm(spec: RepeatSpec): PreparedArm {
   const vat = armStepEnvironment(dirs, spec.env);
   const tool = clearedEnvironment(process.env, 'tool', { set: {}, unset: [] }, process.platform);
   let parse: ParseDirectoryResolution | undefined;
+  const timeoutMs = spec.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const context: SequenceContext = {
     instrument: spec.instrument,
     cwd,
     steps: spec.steps,
     dirs,
+    git: preparationGit(dirs, timeoutMs),
     state: spec.arm.state,
     editPaths: spec.editPaths,
     observe: spec.observeRepetitions,
     vatEnv: vat.env,
     toolEnv: tool.env,
-    timeoutMs: spec.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    timeoutMs,
     parseDirectory: () => (parse ??= resolveParseCacheDirectory(spec.instrument, dirs)),
     population: populationExpectation(vat.env, process.platform),
   };

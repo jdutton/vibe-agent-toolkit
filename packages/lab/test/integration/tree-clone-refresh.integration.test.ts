@@ -11,18 +11,20 @@
  * Integration-tier: real files, real git.
  */
 
-import { appendFileSync, lstatSync, mkdtempSync, readFileSync, readlinkSync, rmSync } from 'node:fs';
+import { appendFileSync, lstatSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 
 import { createSymlink, normalizedTmpdir, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { runGit } from '../../src/harness/git-state.js';
 import { type CopyMode, executeClonePlan, planTreeClone, readCloneSource } from '../../src/harness/tree-clone.js';
+import { fixtureArmGit, stubDeveloperGitConfig } from '../arm-tree-fixtures.js';
 import { commitAll, initRepo, writeFixtureFile } from '../git-fixtures.js';
 
 const roots: string[] = [];
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -71,7 +73,7 @@ async function cloneOf(source: string, mode: CopyMode): Promise<string> {
   const destination = safePath.join(scratch(), 'clone');
   const listed = readCloneSource(source, 'fixture');
   if (!listed.ok) throw new Error(listed.refusal);
-  const refusal = await executeClonePlan({ ok: true, steps: planTreeClone(listed.source, destination, mode) });
+  const refusal = await executeClonePlan({ ok: true, steps: planTreeClone(listed.source, destination, mode) }, fixtureArmGit(scratch()));
   expect(refusal).toBeNull();
   return destination;
 }
@@ -119,5 +121,21 @@ describe("a 'portable' clone of a repository", () => {
     expect(lstatSync(link).isSymbolicLink()).toBe(true);
     expect(readlinkSync(link)).toBe('a.txt'); // verbatim, not rewritten to an absolute path into the source
     expect(runGit(['diff-files', '--quiet'], clone).status).toBe(0);
+  });
+});
+
+describe("a clone's index refresh runs under the arm's git", () => {
+  it("refreshes past a developer's global attributes file whose required clean filter always fails", async () => {
+    const source = sourceRepository(false);
+    const home = scratch();
+    const attributes = safePath.join(home, 'attributes');
+    writeFileSync(attributes, '* filter=lab-broken\n');
+    // Under the developer's config every stat-dirty file the refresh re-hashes runs this filter and fails.
+    stubDeveloperGitConfig(
+      home,
+      `[core]\n\tattributesFile = ${attributes}\n[filter "lab-broken"]\n\tclean = false\n\trequired = true\n`,
+    );
+
+    await cloneOf(source, 'portable');
   });
 });

@@ -78,8 +78,11 @@ describe('editRuleViolation', () => {
 
   it("fails a repetition whose exit differs from the same build's clean arm in that round", () => {
     expect(editRuleViolation(input(1, 1, { exitCode: 1, cleanExit: 0 }))).toMatch(/exited 1, the same build's clean arm 0/u);
-    // The clean arm has no repetition this round (its own failure says why): nothing to compare.
-    expect(editRuleViolation(input(1, 1, { exitCode: 1, cleanExit: undefined }))).toBeNull();
+  });
+
+  it('fails a repetition whose clean arm has no repetition this round: a missing exit is never a pass', () => {
+    expect(editRuleViolation(input(1, 1, { exitCode: 0, cleanExit: undefined }))).toMatch(/no clean exit to compare/u);
+    expect(editRuleViolation(input(1, 1, { exitCode: 1, cleanExit: undefined }))).toMatch(/no clean exit to compare/u);
   });
 });
 

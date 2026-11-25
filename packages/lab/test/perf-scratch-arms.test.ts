@@ -6,7 +6,7 @@
 import { isVatError } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { filterCommand, parseFilterLog, snapshotReading, touchSeconds } from '../src/facets/perf/lfs-touch.js';
+import { filterCommand, parseFilterLog, refuseUnlessStoreHit, snapshotReading, touchSeconds } from '../src/facets/perf/lfs-touch.js';
 import { commitsToReplay } from '../src/facets/perf/store-size.js';
 import { ARM_REFUSED_CODE } from '../src/harness/arm-dirs.js';
 
@@ -45,6 +45,19 @@ describe('snapshotReading', () => {
     const reading = snapshotReading({ ok: true, merged: { processes: 1, counters: [{ name: 'git.snapshots', count: 2 }] } });
 
     expect(reading).toEqual({ gitSnapshots: 2, workRefusal: null });
+  });
+});
+
+describe('refuseUnlessStoreHit', () => {
+  it('passes a touched step served from the store', () => {
+    expect(() => refuseUnlessStoreHit({ population: 'store' }, 0)).not.toThrow();
+  });
+
+  it('refuses, with a code, a touched step that derived its population or published none', () => {
+    expect(refusal(() => refuseUnlessStoreHit({ population: 'derived' }, 1))).toBe(
+      "lfs-touch round 1: the touched step reported population 'derived', not 'store' — it measured no store hit",
+    );
+    expect(refusal(() => refuseUnlessStoreHit({ population: null }, 0))).toMatch(/population 'unpublished', not 'store'/u);
   });
 });
 

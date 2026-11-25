@@ -30,8 +30,9 @@
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 
 import type { InstrumentVersion } from '../../envelope/coordinate.js';
-import { armRefusal } from '../../harness/arm-dirs.js';
+import { armDirectories, armRefusal } from '../../harness/arm-dirs.js';
 import type { ArmEnvironment } from '../../harness/arm-env.js';
+import { preparationGit } from '../../harness/arm-git.js';
 import { armStateName, isEditState } from '../../harness/arm-state.js';
 import { exactExit, type MeasuredSequenceSpec } from '../../harness/commands.js';
 import { type AppliedEdits, refuseUnplannableEdit } from '../../harness/edit-step.js';
@@ -256,7 +257,7 @@ export async function captureArms(request: CaptureArmsRequest): Promise<ArmsRepo
   const observed = await Promise.all(runs.map((run) => Promise.all(run.results.map((result) => observe(result)))));
   const judged = request.arms.map((arm, index) => {
     // Every edit arm has a clean arm (refused up front otherwise); a clean arm whose priming failed has no
-    // repetition this round, its own failure says why, and there is no gap to time.
+    // repetition this round, so the edit arm's repetition fails too: no clean exit to compare, no gap to time.
     const clean = observed[cleanArmIndex(request.arms, arm)];
     return (observed[index] ?? []).map((repetition, round) => judgeEditRepetition(arm.state, repetition, clean?.[round]?.result.exitCode));
   });
@@ -317,7 +318,9 @@ function refuseUnplannableEdits(request: CaptureArmsRequest): void {
         `${arm.build}:${arm.arm}:${armStateName(state)} has no clean arm ${arm.build}:${arm.arm}:warm in the invocation: its exit and its gap have nothing to compare with`,
       );
     }
-    refuseUnplannableEdit(request.cwd, { kind: state.kind, count: state.count, paths: request.editPaths }, request.rounds);
+    // The arm's own git, as every round's edit runs; its directories need not exist yet for git to read the tree.
+    const git = preparationGit(armDirectories({ root: request.armsRoot, build: arm.build, arm: arm.arm, state }), request.timeoutMs);
+    refuseUnplannableEdit(git, request.cwd, { kind: state.kind, count: state.count, paths: request.editPaths }, request.rounds);
   }
 }
 
@@ -425,11 +428,12 @@ function editWorkViolation(work: MergedWorkDumps | null, refusal: string | null)
 
 /**
  * @param exit - The edit repetition's exit
- * @param cleanExit - The clean arm's exit in the same round, or `undefined` when there is no clean arm
- * @returns Why the two runs did different work, or `null`
+ * @param cleanExit - The clean arm's exit in the same round, or `undefined` when it has no repetition this round
+ * @returns Why the two runs did different work, or `null`; a missing clean exit is a violation, never a pass
  */
 function editExitViolation(exit: number | null, cleanExit: number | null | undefined): string | null {
-  if (cleanExit === undefined || exit === cleanExit) return null;
+  if (cleanExit === undefined) return "edit rule: the same build's clean arm has no repetition this round — no clean exit to compare";
+  if (exit === cleanExit) return null;
   return `edit rule: the repetition exited ${String(exit)}, the same build's clean arm ${String(cleanExit)} — the edit moved a finding, so it timed a different run`;
 }
 

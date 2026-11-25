@@ -70,6 +70,8 @@ const BACKDATE_SECONDS = 10;
 /** The measured step: one `vat resources validate` process, exit 0. */
 const RESOURCES_VALIDATE = MEASURABLE_COMMANDS['resources-validate-ci'];
 const CLEAN = exactExit(0);
+/** The population a store hit publishes. */
+const STORE_HIT = 'store';
 /** Identity and signing for the fixture commit: the arm's home has no git config. */
 const COMMIT_IDENTITY = ['-c', 'user.name=Lab', '-c', 'user.email=lab@example.invalid', '-c', 'commit.gpgsign=false'];
 
@@ -145,6 +147,7 @@ export async function runLfsTouchArm(build: ScratchBuild, options: LfsTouchOptio
   const rounds = await mapInOrder(seconds, async (second, round) => {
     for (const path of scratch.paths) utimesSync(path, second, second);
     const touched = await measureStep(scratch, `${String(round)}-touched`);
+    refuseUnlessStoreHit(touched, round);
     armGitOrRefuse(scratch.arm, ['update-index', '-q', '--refresh'], scratch.repo);
     const refreshed = await measureStep(scratch, `${String(round)}-refreshed`);
     return { touched, refreshed };
@@ -247,6 +250,22 @@ async function measureStep(scratch: LfsScratch, name: string): Promise<LfsStep> 
   // `resources validate` publishes its population where `resources check` does: `data.population`.
   const population = readProvenance('resources-check', ran.stdout)?.resources ?? null;
   return { ...logged, wallMs: ran.wallMs, population, ...snapshotReading(dumps) };
+}
+
+/**
+ * Refuse a touched step that was not a store hit: the arm measures what a HIT
+ * costs, and a miss (or no published population) re-cleaned files for a
+ * different reason.
+ *
+ * @param step - A round's touched step
+ * @param round - Its round, 0-based
+ * @throws {VatError} `LAB_ARM_REFUSED` naming the population it reported
+ */
+export function refuseUnlessStoreHit(step: Pick<LfsStep, 'population'>, round: number): void {
+  if (step.population === STORE_HIT) return;
+  throw armRefusal(
+    `lfs-touch round ${String(round)}: the touched step reported population '${step.population ?? 'unpublished'}', not '${STORE_HIT}' — it measured no store hit`,
+  );
 }
 
 /**

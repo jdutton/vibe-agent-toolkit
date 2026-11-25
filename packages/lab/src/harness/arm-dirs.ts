@@ -102,6 +102,9 @@ const ARM_MARKER = '.vat-lab-arm';
 /** The file the lab writes into every arms root it creates or adopts empty; its absence means "not ours". */
 const ROOT_MARKER = '.vat-lab-root';
 
+/** The prepared clone's name under the arms root; it outlives the capture only once a report names where it is kept (`ArmsRootHandle.keepChild`). */
+export const PREPARED_CLONE_NAME = 'clone';
+
 /** Every default run directory's name starts with it; what follows is unique to the run. */
 const RUN_PREFIX = 'run-';
 
@@ -922,6 +925,25 @@ function requireMarked(dirs: ArmDirectories): void {
       `'${dirs.root}' exists but carries no ${ARM_MARKER}: the lab did not make it, so it will neither reset nor chmod it. Choose a fresh --arms-dir.`,
     );
   }
+}
+
+/**
+ * Why `cwd` is not the lab's own prepared clone of this arms root: a tree an
+ * arm may edit. The proof is the one the harness records: the clone is
+ * `<armsRoot>/clone` ({@link PREPARED_CLONE_NAME}), and the arms root carries
+ * the lab's {@link ROOT_MARKER}.
+ *
+ * @param armsRoot - The arm's arms root
+ * @param cwd - The tree the arm would edit
+ * @returns The refusal, or `null` when `cwd` is the prepared clone
+ */
+export function preparedCloneRefusal(armsRoot: string, cwd: string): string | null {
+  const clone = safePath.join(armsRoot, PREPARED_CLONE_NAME);
+  if (!isRootMarked(armsRoot)) return `the arms root '${armsRoot}' carries no ${ROOT_MARKER}, so '${cwd}' is not provably the lab's prepared clone`;
+  if (kindOf(clone) !== 'directory' || !samePath(cwd, clone, armsRoot)) {
+    return `'${cwd}' is not the lab's prepared clone '${clone}'`;
+  }
+  return null;
 }
 
 /** @returns Whether the lab's root marker is in `root` */

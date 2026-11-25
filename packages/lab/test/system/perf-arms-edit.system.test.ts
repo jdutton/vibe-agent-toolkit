@@ -17,7 +17,7 @@ afterAll(cleanupVerdictFixtures);
 
 describe('perf arms: warm-edit arms beside a clean warm arm', () => {
   it('edits every repetition, derives and writes the store each round, and reports each gap', async () => {
-    const report = await captureBuildArms(twelveFileSubject(), [
+    const { report } = await captureBuildArms(twelveFileSubject(), [
       { arm: 'ci-c', state: 'warm', steps: CI_C_STEPS },
       { arm: 'ci-c', state: { warm: 'edit', count: 1, kind: 'modify' }, steps: CI_C_STEPS },
       { arm: 'ci-c', state: { warm: 'edit', count: 10, kind: 'modify' }, steps: CI_C_STEPS },

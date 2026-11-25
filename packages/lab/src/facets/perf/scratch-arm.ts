@@ -9,7 +9,7 @@
  */
 
 import { type ArmDirectories, armDirectories, armRefusal, armStepEnvironment, prepareArmDirectories } from '../../harness/arm-dirs.js';
-import { type PreparationGit, preparationGit } from '../../harness/clone.js';
+import { type PreparationGit, preparationGit } from '../../harness/arm-git.js';
 import { type ExitCommitment, exitCommitmentViolation } from '../../harness/commands.js';
 import { runCommand } from '../../harness/run.js';
 import { STDERR_EXCERPT_CHARS } from '../../harness/sequence.js';

@@ -47,6 +47,7 @@ import {
   resetArmHome,
 } from '../../harness/arm-dirs.js';
 import type { ArmEnvironment } from '../../harness/arm-env.js';
+import { type PreparationGit, preparationGit } from '../../harness/arm-git.js';
 import { messageOf } from '../../harness/dumps.js';
 import { runOutcome } from '../../harness/outcome.js';
 import { resolveSubject } from '../../harness/subject.js';
@@ -206,7 +207,7 @@ async function captureSubject(
   // `planBuildVerbs`): the compare checks the claim against both arms.
   const { excluded } = planBuildVerbs(subject, verbSubject, request.instrument.version);
   if (subject.buildVerbs) {
-    const built = await inClone(request, subject, resolved.path, (clonePath) =>
+    const built = await inClone(request, subject, { path: resolved.path, git: preparationGit(dirs, request.timeoutMs) }, (clonePath) =>
       run(planBuildVerbs(subject, { ...verbSubject, path: clonePath }, request.instrument.version).invocations, clonePath),
     );
     if (!built.ok) return built;
@@ -261,16 +262,17 @@ type CloneOutcome = { readonly ok: true; readonly rows: VerdictRow[] } | { reado
  *
  * @param request - The whole request (for the subject set)
  * @param subject - The subject being cloned
- * @param path - Its resolved root
+ * @param source - Its resolved root, and the subject's arm git that refreshes the clone's index
  * @param work - What to run, given the clone's root
  * @returns The rows `work` produced, or a refusal
  */
 async function inClone(
   request: VerdictCaptureRequest,
   subject: VerdictSubject,
-  path: string,
+  source: { readonly path: string; readonly git: PreparationGit },
   work: (clonePath: string) => VerdictRow[],
 ): Promise<CloneOutcome> {
+  const { path, git } = source;
   const { value, leftover } = await withTempDir<CloneOutcome>('vat-lab-verdict-clone-', async (parent) => {
     const clonePath = safePath.join(parent, subject.alias);
     const placement = armPlacementRefusal(clonePath, request.subjects.map((each) => each.path));
@@ -279,7 +281,7 @@ async function inClone(
     if (!listed.ok) return listed;
     const plan = planApfsClone(listed.source, clonePath, process.platform);
     if (!plan.ok) return plan;
-    const failed = await executeClonePlan(plan);
+    const failed = await executeClonePlan(plan, git);
     if (failed !== null) return { ok: false, refusal: failed };
     return { ok: true, rows: work(clonePath) };
   });

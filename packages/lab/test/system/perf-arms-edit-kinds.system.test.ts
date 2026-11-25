@@ -2,7 +2,8 @@
  * The create and delete edit kinds, run by the built candidate beside a clean
  * warm arm of the same build: every round's tree is one the store has not
  * seen (create names its file by round; delete takes a rotating window), so
- * every round is derived and valid, and the subject is left as committed.
+ * every round is derived and valid, and the clone the arms edit is left as
+ * committed.
  *
  * System-tier: real git, the built vat, warm arms under a cleared environment.
  */
@@ -17,10 +18,9 @@ import { captureBuildArms, CI_C_STEPS, repetitionsOf, twelveFileSubject, UNLINKE
 afterAll(cleanupVerdictFixtures);
 
 describe('perf arms: create and delete edit arms', () => {
-  it('makes every round valid for both kinds and restores the subject', async () => {
-    const subject = twelveFileSubject();
-    const report = await captureBuildArms(
-      subject,
+  it('makes every round valid for both kinds and restores the clone', async () => {
+    const { report, clone } = await captureBuildArms(
+      twelveFileSubject(),
       [
         { arm: 'ci-c', state: 'warm', steps: CI_C_STEPS },
         { arm: 'ci-c', state: { warm: 'edit', count: 2, kind: 'create' }, steps: CI_C_STEPS },
@@ -49,6 +49,6 @@ describe('perf arms: create and delete edit arms', () => {
     }
     expect(created.map((repetition) => repetition.edits?.changed)).toEqual([2, 2, 2]);
     expect(deleted.map((repetition) => repetition.edits?.changed)).toEqual([1, 1, 1]);
-    expect(runGit(['status', '--porcelain', '--untracked-files=all'], subject).stdout).toBe('');
+    expect(runGit(['status', '--porcelain', '--untracked-files=all'], clone).stdout).toBe('');
   });
 });

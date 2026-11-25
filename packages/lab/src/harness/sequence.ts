@@ -45,6 +45,7 @@ import { mkdirSyncReal, safePath, WORK_COUNTERS_ENV } from '@vibe-agent-toolkit/
 
 import { type ArmDirectories, armRefusal, entriesOf, resetArmHome, resetColdArm } from './arm-dirs.js';
 import { type ArmEnvironment, mergeArmEnvironments } from './arm-env.js';
+import type { PreparationGit } from './arm-git.js';
 import { isEditState } from './arm-state.js';
 import { type ExitCommitment, exitCommitmentViolation, MAX_EXIT_CODE } from './commands.js';
 import { type AppliedEdits, applyEdits, editCandidates, type EditAction, planEdits, restoreEdits } from './edit-step.js';
@@ -130,6 +131,8 @@ export interface SequenceContext {
   readonly cwd: string;
   readonly steps: readonly SequenceStep[];
   readonly dirs: ArmDirectories;
+  /** Git under the arm's environment: every git an edit arm runs on its tree (`arm-git.ts`). */
+  readonly git: PreparationGit;
   readonly state: ArmState;
   /** The files an edit arm edits (`--edit`), or `null` for the first N tracked markdown files. Read by edit arms only. */
   readonly editPaths: readonly string[] | null;
@@ -204,10 +207,10 @@ export async function runSequence(context: SequenceContext, role: SequenceRole):
   let ran: SequenceResult;
   let restored: string | null;
   try {
-    applied = applyEdits(context.cwd, actions, reached);
+    applied = applyEdits(context.git, context.cwd, actions, reached);
     ran = runSteps(context, role, envs);
   } finally {
-    restored = restoreEdits(context.cwd, reached);
+    restored = restoreEdits(context.git, context.cwd, reached);
   }
   const missed =
     applied.changed === actions.length
@@ -250,7 +253,7 @@ function plannedEdits(context: SequenceContext, round: number): EditAction[] | n
   if (!isEditState(state)) return null;
   let tracked = candidatesByArm.get(context);
   if (tracked === undefined) {
-    tracked = context.editPaths ?? editCandidates(context.cwd);
+    tracked = context.editPaths ?? editCandidates(context.git, context.cwd);
     candidatesByArm.set(context, tracked);
   }
   return planEdits(tracked, { kind: state.kind, count: state.count, paths: context.editPaths }, round);

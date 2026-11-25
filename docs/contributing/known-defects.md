@@ -724,7 +724,7 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 
 ### A same-second edit is served stale when the temp index is racy
 
-- **Severity:** Important · **Effort:** M (closed by the pin) · **User-visible:** yes
+- **Severity:** Important · **Effort:** M (upstream snapshot fix) · **User-visible:** yes
 - **Mechanism:** the tree hash comes from a snapshot through a temporary index. An edit that lands in
   the same filesystem second as the snapshot's own write can leave an index entry git judges
   stat-clean, so the snapshot hashes the old bytes and the edit is served the previous tree's facts.
@@ -733,11 +733,11 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   previous run, then run `vat resources validate`: the run reports `population: store` over the old
   bytes.
 - **Where:** `gitTreeKey` in [`git-tree-key.ts`](../../packages/utils/src/git-tree-key.ts)
-- **Fix:** closed at B2's pin. The hazard-register row stays open until then.
+- **Fix:** closed when VAT pins a vibe-validate release whose snapshot keeps the copied temporary index's mtime, so git rechecks a racy entry and hashes the edit. The hazard-register row stays open until then.
 
 ### An edit outside the cone of a sparse checkout is served stale
 
-- **Severity:** Important · **Effort:** M (closed by the pin) · **User-visible:** yes
+- **Severity:** Important · **Effort:** M (upstream snapshot fix) · **User-visible:** yes
 - **Mechanism:** in a sparse checkout the tree hash covers entries the working tree does not hold.
   The key adds a digest of the absent paths, so the same tree with them present is never served it,
   and a tracked path outside the cone that is present on disk hides bytes, so the key declines. But
@@ -746,11 +746,11 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Reproduce:** traced in code. In a sparse checkout, add a file outside the cone, then run
   `vat resources validate`: the store answers as before the file existed.
 - **Where:** `gitSnapshotAbsentEntries` in [`git-tree-key.ts`](../../packages/utils/src/git-tree-key.ts)
-- **Fix:** closed at B2's pin. The hazard-register row stays open until then.
+- **Fix:** closed when VAT pins a vibe-validate release whose snapshot stages with `git add --all --sparse`, so a file outside the cone is staged and moves the hash. The hazard-register row stays open until then.
 
 ### `git lfs pull` is served stale
 
-- **Severity:** Important · **Effort:** M (closed by B1) · **User-visible:** yes
+- **Severity:** Important · **Effort:** M · **User-visible:** yes
 - **Mechanism:** an LFS file's index entry holds its pointer, and the tree hash follows the pointer.
   `git lfs pull` replaces the pointer's bytes on disk with the real content and moves neither the
   hash nor the entry, so a warm run serves the facts of the pointer text.
@@ -758,7 +758,7 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   `vat resources validate`, run `git lfs pull`, then run it again: the second run reports
   `population: store`.
 - **Where:** `gitTreeKey` in [`git-tree-key.ts`](../../packages/utils/src/git-tree-key.ts)
-- **Fix:** closed by B1: the key carries the pointer, a size probe and a pulled bit.
+- **Fix:** closed when the store key carries each LFS file's pointer, a size probe and whether its content was pulled.
 
 ### An edit to a declared gitignored file is served stale
 
@@ -781,7 +781,7 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   `vat resources validate`, edit a tracked markdown file inside the submodule without committing, run
   it again: the run reports `population: store`.
 - **Where:** `gitTreeKey` in [`git-tree-key.ts`](../../packages/utils/src/git-tree-key.ts)
-- **Fix:** Phase 2 keys submodule contents. The hazard-register row stays accepted until then.
+- **Fix:** closed when each submodule is read as its own repository, its own snapshot and tree key folded into the superproject's key. The hazard-register row stays accepted until then.
 
 ### A control-flow edit to an extractor under an unchanged declared shape is served stale in a dev build
 

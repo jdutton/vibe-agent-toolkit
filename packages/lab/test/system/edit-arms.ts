@@ -1,13 +1,16 @@
 /**
  * What the edit-arm and trace system files share: a twelve-file committed
  * subject, the built candidate as one build `b`, and one three-round
- * `captureArms` invocation over it.
+ * `captureArms` invocation over a lab-shaped clone of it (`<arms root>/clone`
+ * under a marked arms root: the only tree an edit arm may edit).
  */
 
 import { type ArmRepetition, type ArmsReport, captureArms, sequenceSteps } from '../../src/facets/perf/arms.js';
 import { exactExit, MEASURABLE_SEQUENCES } from '../../src/harness/commands.js';
+import { runGit } from '../../src/harness/git-state.js';
 import type { SequenceStep } from '../../src/harness/sequence.js';
 import type { ArmState } from '../../src/harness/types.js';
+import { preparedCloneDirectory } from '../arm-tree-fixtures.js';
 import { tempDir } from '../integration/verdict-fixtures.js';
 
 import { CANDIDATE_SOURCE, CANDIDATE_VAT, candidateSubject } from './candidate-subject.js';
@@ -59,27 +62,33 @@ export function twelveFileSubject(): string {
 export const UNLINKED_PAGES = ['docs/page-1.md', 'docs/page-2.md', 'docs/page-3.md'] as const;
 
 /**
- * One three-round invocation of the given arms of {@link BUILD}.
+ * One three-round invocation of the given arms of {@link BUILD}, in a
+ * `git clone --local` of the subject at the arms root's prepared-clone path.
  *
- * @param cwd - The subject
+ * @param subject - The subject
  * @param arms - Each arm's name, state and steps
  * @param editPaths - `--edit`, or `null` for each edit arm's default candidates
- * @returns The report
+ * @returns The report, and the clone the arms ran in
  */
-export function captureBuildArms(
-  cwd: string,
+export async function captureBuildArms(
+  subject: string,
   arms: readonly { readonly arm: string; readonly state: ArmState; readonly steps: readonly SequenceStep[] }[],
   editPaths: readonly string[] | null,
-): Promise<ArmsReport> {
-  return captureArms({
-    armsRoot: tempDir('lab-edit-arms-'),
-    cwd,
+): Promise<{ readonly report: ArmsReport; readonly clone: string }> {
+  const armsRoot = tempDir('lab-edit-arms-');
+  const clone = preparedCloneDirectory(armsRoot);
+  const cloned = runGit(['clone', '--quiet', '--local', subject, clone], armsRoot);
+  if (cloned.status !== 0) throw new Error(`git clone --local of '${subject}' exited ${String(cloned.status)}`);
+  const report = await captureArms({
+    armsRoot,
+    cwd: clone,
     builds: [{ alias: BUILD, source: CANDIDATE_SOURCE, instrument: CANDIDATE_VAT }],
     arms: arms.map((arm) => ({ build: BUILD, ...arm })),
     rounds: ROUNDS,
     env: { set: {}, unset: [] },
     editPaths,
   });
+  return { report, clone };
 }
 
 /**

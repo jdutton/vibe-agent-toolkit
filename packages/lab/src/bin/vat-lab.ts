@@ -106,11 +106,12 @@ import {
   type ArmsRootHandle,
   underArmsRoot,
   openOutDirectory,
+  PREPARED_CLONE_NAME,
   writePrivateFile,
 } from '../harness/arm-dirs.js';
 import { type ArmEnvironment, armEnvironmentClash, sameArmEnvironment } from '../harness/arm-env.js';
 import { parseArmState } from '../harness/arm-state.js';
-import { PREPARED_CLONE_NAME, prepareClone } from '../harness/clone.js';
+import { prepareClone } from '../harness/clone.js';
 import { indistinguishableArms } from '../harness/closure.js';
 import {
   DEFAULT_MEASURED_COMMANDS,
