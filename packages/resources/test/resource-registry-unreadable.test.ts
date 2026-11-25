@@ -21,7 +21,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { PopulationUnreadablePolicy } from '../src/projection/crawl-source.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
-import type { ValidationIssue } from '../src/schemas/validation-result.js';
+import type { ValidationResult } from '../src/schemas/validation-result.js';
 
 import { crawlInRun } from './helpers/population-run.js';
 
@@ -32,7 +32,7 @@ const LOCKED_TARGET = 'docs/sub/target.md';
 /** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
 
 /** Register a nonexistent file under `tempDir` and return its RESOURCE_UNREADABLE issue. */
-async function unreadableIssue(tempDir: string): Promise<ValidationIssue | undefined> {
+async function unreadableIssue(tempDir: string): Promise<ValidationResult['issues'][number] | undefined> {
   const missingPath = safePath.join(tempDir, MISSING_FILE_NAME);
   const registry = new ResourceRegistry({ baseDir: tempDir });
   await registry.addResources([missingPath]);
@@ -243,7 +243,7 @@ describe.skipIf(CANNOT_DENY_READS)('ResourceRegistry LINK_TARGET_UNREADABLE for 
     );
   });
 
-  async function validateWithTargetLocked(): Promise<ValidationIssue[]> {
+  async function validateWithTargetLocked(): Promise<ValidationResult['issues']> {
     chmodSync(target, 0o000);
     try {
       const registry = new ResourceRegistry({ baseDir: tempDir });

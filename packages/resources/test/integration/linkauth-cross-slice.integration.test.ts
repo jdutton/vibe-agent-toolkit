@@ -88,7 +88,7 @@ function recordingFetch(): {
     const hdrs =
       init?.headers === undefined
         ? {}
-        : Object.fromEntries(new Headers(init.headers as HeadersInit));
+        : Object.fromEntries(new Headers(init.headers));
     requests.push({ url, accept: hdrs['accept'], authorization: hdrs['authorization'] });
     return new Response(Buffer.from(SAMPLE_BODY, 'utf-8'), {
       status: 200,

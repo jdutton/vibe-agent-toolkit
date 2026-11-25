@@ -65,8 +65,8 @@ describe('vat resources scan (system test)', () => {
     const report = RESOURCES_SCAN_REPORT_SCHEMA.parse(JSON.parse(result.stdout));
     expect(report.status).toBe('ok');
     // This fixture has no `.git`, so it is the filesystem enumerator that runs.
-    expect(report.data.extentSource).toBe('filesystem');
-    expect(report.data.files).toHaveLength(1);
+    expect(report.data?.extentSource).toBe('filesystem');
+    expect(report.data?.files).toHaveLength(1);
   });
 
   it('refuses an output format it does not have', async () => {
@@ -165,7 +165,7 @@ describe('vat resources scan (system test)', () => {
     ]);
 
     expect(result.status).toBe(0);
-    const files = RESOURCES_SCAN_REPORT_SCHEMA.parse(parsed).data.files ?? [];
+    const files = RESOURCES_SCAN_REPORT_SCHEMA.parse(parsed).data?.files ?? [];
     expect(files.length).toBeGreaterThan(0);
     expect(files[0]).toHaveProperty('contentKey');
     expect(files[0]?.contentKey).toMatch(/^markdown\.[a-f0-9]{64}$/); // <parserKind>.<SHA-256>
@@ -189,7 +189,7 @@ describe('vat resources scan (system test)', () => {
     ]);
 
     const report = RESOURCES_SCAN_REPORT_SCHEMA.parse(parsed);
-    expect(report.data.root).toBeDefined();
-    expect(report.data.files?.map(f => f.path)).toEqual(['nested/test.md']);
+    expect(report.data?.root).toBeDefined();
+    expect(report.data?.files?.map(f => f.path)).toEqual(['nested/test.md']);
   });
 });

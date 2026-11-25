@@ -40,8 +40,56 @@
       "outputs": ["dist/skills/**"],
       "cache": true
     },
+    // One `tsc --noEmit -p tsconfig.eslint.json` per package: the same program the lint checks,
+    // source and tests alike, so a test file meets the compiler settings source does. Keyed like
+    // `lint`, on what the program reads rather than on `^build`: a program reaches packages its
+    // manifest does not depend on (`vitest.shared.ts` imports a dev-tools file that imports
+    // `schema`), which `^build` neither orders nor hashes. So the root `typecheck` script builds
+    // every package first, and the inputs hold every package's emitted declarations and manifest,
+    // the lockfile and the installed TypeScript: exactly the `lint` inputs that describe the
+    // program, plus the build guard every typecheck runs through (`typecheck-task.js` and what it
+    // imports), all checked by `generate-lint-config.ts --check`, both ways. The guard refuses a run
+    // the root script did not build for (`VAT_BUILT`, passed through, unhashed), as a package lint
+    // is refused, so a stale `dist/` is never checked and cached. A generated
+    // `packages/<pkg>/turbo.json` extends the inputs (`$TURBO_EXTENDS$`) with the files outside the
+    // package that its program reaches.
     "typecheck": {
-      "dependsOn": ["^build"],
+      "dependsOn": [],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/*/dist/**/*.d.ts",
+        "$TURBO_ROOT$/packages/*/dist/**/*.d.cts",
+        "$TURBO_ROOT$/packages/*/package.json",
+        "$TURBO_ROOT$/bun.lock",
+        "$TURBO_ROOT$/node_modules/typescript/package.json",
+        "$TURBO_ROOT$/typecheck-task.js",
+        "$TURBO_ROOT$/eslint-config-support.js"
+      ],
+      "passThroughEnv": ["VAT_BUILT"],
+      "outputs": [],
+      "cache": true
+    },
+    // The root's own TypeScript program (`tsconfig.root.json`: the root vitest configs,
+    // `vitest.shared.ts`, `eslint-config-support.d.ts`), typechecked through the same guard. Not
+    // `$TURBO_DEFAULT$`, which for the root is the whole repository. Its inputs are the program's
+    // root-level files (one prefixed glob), the files outside the root it reaches that no
+    // `globalDependencies` entry hashes (none today: the dev-tools reporter it loads is one), the
+    // same program inputs as `typecheck` (the declarations it reaches in `schema` and `utils`, every
+    // manifest, the lockfile, the installed TypeScript) and the guard.
+    // `generate-lint-config.ts --check` derives all of it from the program, both ways.
+    "//#typecheck:root": {
+      "dependsOn": [],
+      "inputs": [
+        "*.{ts,cts,mts}",
+        "packages/*/dist/**/*.d.ts",
+        "packages/*/dist/**/*.d.cts",
+        "packages/*/package.json",
+        "bun.lock",
+        "node_modules/typescript/package.json",
+        "typecheck-task.js",
+        "eslint-config-support.js"
+      ],
+      "passThroughEnv": ["VAT_BUILT"],
       "outputs": [],
       "cache": true
     },
@@ -72,7 +120,7 @@
     //   without installing it.
     // No `dependsOn`: `^build` would fold the upstream build's hash in, and that
     // changes with every source edit. The root `lint` script runs `turbo run
-    // build` first and then sets `VAT_LINT_BUILT` (passed through, unhashed); a
+    // build` first and then sets `VAT_BUILT` (passed through, unhashed); a
     // package's `lint` without it is refused by `eslint.config.js`.
     "lint": {
       "dependsOn": [],
@@ -99,7 +147,7 @@
         "$TURBO_ROOT$/node_modules/eslint-plugin-unicorn/package.json",
         "$TURBO_ROOT$/node_modules/.bun/@typescript-eslint+*/node_modules/@typescript-eslint/*/package.json"
       ],
-      "passThroughEnv": ["VAT_LINT_BUILT"],
+      "passThroughEnv": ["VAT_BUILT"],
       "outputs": [],
       "cache": true
     },

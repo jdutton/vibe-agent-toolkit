@@ -955,7 +955,7 @@ describe.skipIf(!HOST_GATES.filter.met)(gatedTitle('a clean/smudge filter on one
 
     // Membership miss writes; the query lane is served what it wrote.
     const viaMembership = optionsOver(new FakeFactStore());
-    const members = await inOwnRun(buildResourcePopulation, { ...viaMembership, outputs: [], unreadable: 'refuse' });
+    const members = await inOwnRun(buildResourcePopulation, { ...viaMembership, outputs: [] });
     const served = await inOwnRun(buildResourceProjection, viaMembership);
     expect(members.outcome).toEqual({ population: 'derived', stored: 'written' });
     // The premise: the git enumerator, the one the OID-sharing defect lived on.

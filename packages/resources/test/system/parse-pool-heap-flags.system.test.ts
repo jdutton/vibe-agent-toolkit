@@ -75,21 +75,40 @@ describe('a process-wide heap flag', () => {
   });
 });
 
+/** The sampler's own bound under a 512 MiB flag: the refusal when the sampler stopped the worker. */
+const SAMPLER_BOUND_UNDER_512 = '256 MiB heap, lowered from 1024 MiB by a process-wide V8 heap flag (--max-old-space-size, --max-heap-size or --max-semi-space-size)';
+
+/**
+ * The refusal when V8 stopped the worker at the 512 MiB ceiling the flag applies, as a sample that
+ * landed read it: never the sampler's bound, never a ceiling it calls unknown.
+ */
+const V8_CEILING_UNDER_512 = "V8's own heap ceiling, 512 MiB heap — above the 256 MiB the pool's heap sampler enforces, reached before the sampler read the heap past it";
+
+/** The refusal when V8 stopped the worker before any sample landed: the ceiling is unknown. */
+const V8_CEILING_UNREAD = /^V8's own heap ceiling, reached before the pool's heap sampler read it: .*, unless a process-wide V8 heap flag \(--max-old-space-size, --max-heap-size or --max-semi-space-size\) set it instead$/;
+
 describe('a heap breach while the parent thread stalls', () => {
-  it('is still stopped at the applied limit when every stall is shorter than the window', () => {
+  it('is still stopped as a heap breach, at a bound that names who stopped it, when every stall is shorter than the window', () => {
     // The sampler runs on the parent's event loop, so a parent blocked
     // synchronously reads the worker's heap late. Under a 512 MiB flag the job
-    // is stopped at 256 MiB, and V8's ceiling is 512: a sample up to about two
-    // stalls late (400 ms back to back, so at most ~800 ms) still lands before
-    // the worker reaches it. A stall length is a race, not a seam: 600 ms stalls
-    // once let V8 stop the worker first (3 of 3 runs), and on a later run of the
-    // same host the sampler won every time, so the V8-first case below holds the
-    // thread until the worker is gone instead. See the hazard register's heap-flag row.
+    // is stopped at 256 MiB, and V8's ceiling is 512: on an idle host a sample
+    // about two stalls late (400 ms back to back, so ~800 ms) lands before the
+    // worker reaches 512, and on a loaded one it does not (CI under load: V8
+    // first). WHICH of the two stops it is the machine's race, not a property of
+    // the pool, so it is not asserted; what the pool owes on every machine is:
+    // a heap refusal (never the 60 s wall clock, never an admitted document,
+    // never a crash: the child exits 0), whose bound is exactly the sampler's
+    // when the sampler stopped it and V8's ceiling when V8 did — never a third
+    // thing. Stalls of 400 ms leave the loop turns between them, so a sample
+    // lands and V8's ceiling is named as read: 512 MiB. The V8-first branch with
+    // no sample is pinned below; the sampler-first one deterministically in
+    // `parse-pool.test.ts` (a late first sample just short of the ceiling).
+    // See the hazard register's heap-flag row.
     const outcome = heapBreachUnder(onCommandLine('--max-old-space-size=512'), 1024, 400);
 
     expect(outcome.limit).toBe('heapMb');
-    // Exactly the sampler's bound: a refusal V8 made would name its ceiling.
-    expect(outcome.bound).toBe('256 MiB heap, lowered from 1024 MiB by a process-wide V8 heap flag (--max-old-space-size, --max-heap-size or --max-semi-space-size)');
+    const namesWhoStoppedIt = outcome.bound === SAMPLER_BOUND_UNDER_512 || outcome.bound === V8_CEILING_UNDER_512;
+    expect(namesWhoStoppedIt, outcome.bound).toBe(true);
   });
 
   it('names V8\'s ceiling, never the sampler\'s bound, when V8 stops the worker first — and the process survives', () => {
@@ -100,7 +119,7 @@ describe('a heap breach while the parent thread stalls', () => {
     const outcome = heapBreachUnder(onCommandLine('--max-old-space-size=512'), 1024, UNTIL_THE_WORKER_IS_GONE);
 
     expect(outcome.limit).toBe('heapMb');
-    expect(outcome.bound).toMatch(/^V8's own heap ceiling, reached before the pool's heap sampler read it: .*, unless a process-wide V8 heap flag \(--max-old-space-size, --max-heap-size or --max-semi-space-size\) set it instead$/);
+    expect(outcome.bound).toMatch(V8_CEILING_UNREAD);
     expect(outcome.bound).not.toContain('256 MiB');
   });
 });

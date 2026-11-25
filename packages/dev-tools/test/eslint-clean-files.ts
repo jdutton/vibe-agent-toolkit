@@ -5,8 +5,19 @@
  * them exactly.
  */
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { pathToFileURL } from 'node:url';
+
+import { resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
 import { ESLint, type Linter } from 'eslint';
+
+/**
+ * The repository's root `eslint.config.js`, loaded as a module. It is plain JavaScript with no
+ * declaration file, so each caller names, as `T`, exactly the exports it reads.
+ */
+export async function importRootEslintConfig<T extends object>(): Promise<T> {
+  const configFile = resolveFromImportMeta(import.meta.url, '..', '..', '..', 'eslint.config.js');
+  return (await import(pathToFileURL(configFile).href)) as T;
+}
 
 /** The two rules that carry the repo's import bans: the static half and the dynamic half. */
 export const BAN_RULES = ['no-restricted-imports', 'no-restricted-syntax'] as const;

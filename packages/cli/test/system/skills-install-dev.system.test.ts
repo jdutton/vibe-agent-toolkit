@@ -14,8 +14,9 @@ import * as fs from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, describe, expect, it } from 'vitest';
+import type { z } from 'zod';
 
-import { PLUGIN_INSTALL_REPORT_SCHEMA, type PluginInstallReport } from '../../src/commands/claude/plugin/install-schema.js';
+import { PLUGIN_INSTALL_REPORT_SCHEMA } from '../../src/commands/claude/plugin/install-schema.js';
 
 import {
   createPackageAndHomeContext,
@@ -107,7 +108,7 @@ async function executeDevInstall(
   projectDir: string,
   fakeHome: string,
   extraArgs: string[] = []
-): Promise<{ status: number | null; stderr: string; report: PluginInstallReport }> {
+): Promise<{ status: number | null; stderr: string; report: z.infer<typeof PLUGIN_INSTALL_REPORT_SCHEMA> }> {
   const { result, parsed } = await executeCliAndParseYaml(
     binPath,
     ['claude', 'plugin', 'install', '--dev', ...extraArgs],
@@ -131,7 +132,7 @@ function expectedSkillPath(fakeHome: string, skillName: string): string {
 async function setupAndDevInstall(
   name: string,
   skills: Array<{ name: string; built: boolean }>,
-): Promise<{ fakeHome: string; report: PluginInstallReport }> {
+): Promise<{ fakeHome: string; report: z.infer<typeof PLUGIN_INSTALL_REPORT_SCHEMA> }> {
   const tempDir = createTempDir();
   const { projectDir, fakeHome } = createDevTestProject(tempDir, name, skills);
   const { status, report } = await executeDevInstall(projectDir, fakeHome);

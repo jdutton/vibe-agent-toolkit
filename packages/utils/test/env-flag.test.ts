@@ -89,6 +89,7 @@ function parserCallee(call: ts.CallExpression, bindings: ParserBindings): ts.Ide
   if (ts.isIdentifier(callee)) return bindings.direct.has(callee.text) ? callee : undefined;
   const traced =
     ts.isPropertyAccessExpression(callee) &&
+    ts.isIdentifier(callee.name) &&
     callee.name.text === PARSER_NAME &&
     ts.isIdentifier(callee.expression) &&
     bindings.namespaces.has(callee.expression.text);

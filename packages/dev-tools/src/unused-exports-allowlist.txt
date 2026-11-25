@@ -124,14 +124,11 @@ packages/cli/src/commands/claude/org/helpers.ts QueryParams dead
 packages/cli/src/commands/claude/org/skills.ts HalfDeletedReport dead
 packages/cli/src/commands/claude/org/skills.ts NpmInstallSummary dead
 packages/cli/src/commands/claude/org/skills.ts SkillDeleteResult dead
-packages/cli/src/commands/claude/org/skills.ts SkillUploadFailure dead
 packages/cli/src/commands/claude/org/skills.ts SkillVersionDeleteResult dead
 packages/cli/src/commands/claude/org/skills.ts VersionDeleteFailure dead
 packages/cli/src/commands/claude/org/skills.ts VersionSweep dead
 packages/cli/src/commands/claude/org/skills.ts withDuplicateTitleRemedy dead
 packages/cli/src/commands/claude/org/skills.ts withVersionRootRemedy dead
-packages/cli/src/commands/claude/org/skills.ts ZipEntryFailure dead
-packages/cli/src/commands/claude/org/skills.ts ZipInspection dead
 packages/cli/src/commands/claude/org/skills.ts ZipUnreadable dead
 packages/cli/src/commands/claude/plugin/build.ts ExternalPluginBuildResult dead
 packages/cli/src/commands/claude/plugin/build.ts MarketplaceBuildResult dead
@@ -142,7 +139,6 @@ packages/cli/src/commands/claude/plugin/plugin-files.ts ApplyPluginFilesArgs dea
 packages/cli/src/commands/claude/plugin/plugin-json-merge.ts MergePluginJsonArgs dead
 packages/cli/src/commands/claude/plugin/plugin-json-merge.ts MergePluginJsonResult dead
 packages/cli/src/commands/claude/plugin/plugin-json-merge.ts ResolveVersionLogger dead
-packages/cli/src/commands/claude/plugin/plugin-json-merge.ts VatGeneratedFields dead
 packages/cli/src/commands/claude/plugin/tree-copy.ts RefusedSymlink dead
 packages/cli/src/commands/claude/plugin/tree-copy.ts SymlinkRefusalReason dead
 packages/cli/src/commands/consistency-check.ts ConsistencyCheckResult dead
@@ -332,7 +328,6 @@ packages/resources/src/scan-lines.ts MAX_SCANNED_LINE_LENGTH dead
 packages/resources/src/schemas/link-auth.ts LinkAuthCacheSchema dead
 packages/resources/src/schemas/link-auth.ts ProviderAuthSchema dead
 packages/resources/src/schemas/link-auth.ts ProviderCheckSchema dead
-packages/resources/src/schemas/link-auth.ts ProviderEntry dead
 packages/resources/src/schemas/link-auth.ts ProviderFetchSchema dead
 packages/resources/src/schemas/link-auth.ts ProviderMatchSchema dead
 packages/resources/src/schemas/link-auth.ts RewriteRule dead

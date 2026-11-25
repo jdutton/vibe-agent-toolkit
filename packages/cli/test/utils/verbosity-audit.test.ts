@@ -33,7 +33,8 @@ function issue(
   code: string,
   extra: Partial<ValidationIssue> = {},
 ): ValidationIssue {
-  return { severity, code, message: `${code} fired`, ...extra };
+  // Synthetic codes (`E1`, `A`) stand in for any code: the renderer never looks one up.
+  return { severity, code: code as ValidationIssue['code'], message: `${code} fired`, ...extra };
 }
 
 

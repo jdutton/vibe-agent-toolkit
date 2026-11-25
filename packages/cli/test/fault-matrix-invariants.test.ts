@@ -118,7 +118,7 @@ describe('violations', () => {
   it('I4/I3: residue inside a unit that the run names is not a change to the unit; residue nobody names still is', () => {
     const parked = 'home/skills/.s.vat-staged-x.previous';
     const units = ['home/skills'];
-    const after = new Map([['home/skills', dir()], [parked, dir()], [`${parked}/SKILL.md`, file('old')]]);
+    const after = snap({ 'home/skills': dir(), [parked]: dir(), [`${parked}/SKILL.md`]: file('old') });
     const refused = { ...base(), units, golden: snap({ 'home/skills': dir() }), after };
     expect(violations({ ...refused, outcome: { ...base().outcome, message: `could not remove /c/${parked}` } })).toEqual([]);
     expect(violations(refused)).toEqual([expect.stringContaining('I4: unit home/skills is neither'), expect.stringContaining('I6')]);
@@ -212,7 +212,7 @@ describe('violations', () => {
   // deleted, and the run names it — by code and exact path — while the registry entry goes.
   describe('a directory kept because a sibling could not be examined', () => {
     const KEPT = 'home/skills/s';
-    const keptRun = (findings: CaseEvidence['outcome']['findings']): CaseEvidence => ({
+    const keptRun = (findings: NonNullable<CaseEvidence['outcome']['findings']>): CaseEvidence => ({
       ...withOutcome({ exitCode: 0, refusal: undefined, findings }),
       golden: snap({}),
       registered: [],

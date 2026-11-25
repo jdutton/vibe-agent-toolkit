@@ -127,9 +127,9 @@ function buildSkillsConfig(
   for (const name of names) {
     const entry: Record<string, unknown> = {};
     const test = poolTest?.[name];
-    if (test !== undefined) entry.test = test;
+    if (test !== undefined) entry['test'] = test;
     const files = skillFiles?.[name];
-    if (files !== undefined) entry.files = files;
+    if (files !== undefined) entry['files'] = files;
     config[name] = entry;
   }
   return config;
@@ -145,13 +145,13 @@ function buildConfigYaml(spec: ReferenceFixtureSpec): string {
   const config: Record<string, unknown> = {};
   if (include.length > 0) {
     const skills: Record<string, unknown> = { include };
-    if (spec.skillsDefaults !== undefined) skills.defaults = spec.skillsDefaults;
+    if (spec.skillsDefaults !== undefined) skills['defaults'] = spec.skillsDefaults;
     const skillsConfig = buildSkillsConfig(spec.poolTest, spec.skillFiles);
-    if (skillsConfig !== undefined) skills.config = skillsConfig;
-    config.skills = skills;
+    if (skillsConfig !== undefined) skills['config'] = skillsConfig;
+    config['skills'] = skills;
   }
   if (spec.pluginLocal && spec.pluginLocal.length > 0) {
-    config.claude = {
+    config['claude'] = {
       marketplaces: {
         [MARKETPLACE_NAME]: {
           owner: { name: 'Fixture Owner' },

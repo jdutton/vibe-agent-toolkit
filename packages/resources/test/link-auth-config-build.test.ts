@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { LinkAuthConfigError } from '../src/link-auth/compile-check.js';
 import { resolveAuthenticatedUrl } from '../src/link-auth/resolve.js';
 import { buildLinkAuthEngineConfig } from '../src/link-auth-config-build.js';
-import type { LinkAuthProjectConfig } from '../src/schemas/link-auth.js';
+import type { LinkAuthProjectConfig, ProviderEntry } from '../src/schemas/link-auth.js';
 
 const INLINE_HOST = 'example.com';
 const BEARER_TOKEN_TEMPLATE = 'Bearer ${token}';
@@ -188,7 +188,7 @@ describe('buildLinkAuthEngineConfig — prototype-pollution defense in macro ent
 const VALID_WHEN = String.raw`^https://example\.com/(?<owner>[^/]+)/(?<path>.+)$`;
 
 /** One inline provider with `overrides` applied, as a whole linkAuth config. */
-function provider(overrides: Partial<typeof INLINE_PROVIDER>): LinkAuthProjectConfig {
+function provider(overrides: Partial<Extract<ProviderEntry, { match: unknown }>>): LinkAuthProjectConfig {
   return { providers: [{ ...INLINE_PROVIDER, ...overrides }] };
 }
 

@@ -44,7 +44,7 @@
 import nodeFs from 'node:fs';
 import fs from 'node:fs/promises';
 
-import { FsLookupCache, type PathSpelling, safePath } from '@vibe-agent-toolkit/utils';
+import { FsLookupCache, type PathSpelling, type RealpathRow, safePath } from '@vibe-agent-toolkit/utils';
 import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -560,7 +560,7 @@ describe('link validation fill/judge split', () => {
     expect(() =>
       judgeLink(unresolved, fragments, {
         spellings: new Map<string, PathSpelling>(),
-        realpaths: new Map<string, string>(),
+        realpaths: new Map<string, RealpathRow>(),
         skipGitIgnoreCheck: true,
       }),
     ).toThrow(/resolveLinkEntries/);
@@ -578,11 +578,12 @@ describe('link validation fill/judge split', () => {
       gitTracker: {} as unknown as Required<ValidateLinkOptions>['gitTracker'],
       checkHtmlAnchors: true,
       deferredArtifacts: {} as unknown as Required<ValidateLinkOptions>['deferredArtifacts'],
+      unreadableTargets: new Map(),
     };
 
     const carried = judgeOptionsFrom(everyField, {
       spellings: new Map<string, PathSpelling>(),
-      realpaths: new Map<string, string>(),
+      realpaths: new Map<string, RealpathRow>(),
     });
 
     expect(Object.keys(carried).sort((a, b) => a.localeCompare(b))).toEqual([
@@ -593,6 +594,7 @@ describe('link validation fill/judge split', () => {
       'realpaths',
       'skipGitIgnoreCheck',
       'spellings',
+      'unreadableTargets',
     ]);
     // `fsCache` must not travel — JudgeLinkOptions exists to withhold the
     // handle, and a `{ ...options }` spread would smuggle it past the type.

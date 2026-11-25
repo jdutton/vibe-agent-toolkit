@@ -120,11 +120,10 @@ export function base() {
  *
  * ESLint has supported TypeScript flat configs since 9.18, so this is a real
  * adopter shape — and `./eslint` is the only one of the 14 exports whose types are
- * hand-written rather than emitted by `tsc`. Nothing else in this repo can catch a
- * mistake in them: `utils`' tsconfig includes only `src/**‍/*.ts`, so
- * `bun run typecheck` never reads the declaration, and the repo's own
- * `eslint.config.js` is JavaScript. Without this case, a broken `.d.cts` ships
- * green.
+ * hand-written rather than emitted by `tsc`. `bun run typecheck` compiles the
+ * declaration in place, but only this case proves the PACKED copy resolves and
+ * reads correctly from a consumer under `nodenext`. Without it, a broken or
+ * unshipped `.d.cts` ships green.
  */
 const TS_CONSUMER = `import vat from '@vibe-agent-toolkit/utils/eslint';
 

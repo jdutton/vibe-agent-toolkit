@@ -37,8 +37,8 @@
 
 import { writeFileSync } from 'node:fs';
 
-import { type PopulationCache, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { type PopulationCache } from '@vibe-agent-toolkit/resources';
+import { mkdirSyncReal, safePath, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 // Type-only, purely so the mock factory can spread the real module without an
 // inline `typeof import()` annotation, which this repo's lint forbids.

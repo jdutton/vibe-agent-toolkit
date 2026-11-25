@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
-import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite } from '../test-helpers.js';
+import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite, suiteProvider } from '../test-helpers.js';
 
 // The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.
 describe.skipIf(onnxModelUnreachable())('Similarity Scoring', () => {
@@ -34,10 +34,10 @@ Role-based access control (RBAC) is a common pattern.`
     );
 
     const resource = await createTestResource(testFile, 'auth-doc');
-    await suite.provider.indexResources([resource]);
+    await suiteProvider(suite).indexResources([resource]);
 
     // Query for authentication
-    const result = await suite.provider.query({
+    const result = await suiteProvider(suite).query({
       text: 'authentication methods',
       limit: 5,
     });
@@ -46,6 +46,7 @@ Role-based access control (RBAC) is a common pattern.`
 
     // BUG: _distance field is not included in results
     const firstChunk = result.chunks[0];
+    if (firstChunk === undefined) throw new Error('the query returned no chunk');
 
     // Check for distance metric (raw value from LanceDB)
     expect(firstChunk).toHaveProperty('_distance');
@@ -65,9 +66,9 @@ NoSQL databases include document stores, key-value stores, and graph databases.`
     );
 
     const resource = await createTestResource(testFile, 'db-doc');
-    await suite.provider.indexResources([resource]);
+    await suiteProvider(suite).indexResources([resource]);
 
-    const result = await suite.provider.query({
+    const result = await suiteProvider(suite).query({
       text: 'database types',
       limit: 3,
     });
@@ -76,6 +77,7 @@ NoSQL databases include document stores, key-value stores, and graph databases.`
 
     // BUG: score field is not computed or included
     const firstChunk = result.chunks[0];
+    if (firstChunk === undefined) throw new Error('the query returned no chunk');
 
     // Check for similarity score (0-1 range, higher is better)
     expect(firstChunk).toHaveProperty('score');
@@ -103,10 +105,10 @@ Serverless platforms abstract infrastructure management entirely.`
     );
 
     const resource = await createTestResource(testFile, 'arch-doc');
-    await suite.provider.indexResources([resource]);
+    await suiteProvider(suite).indexResources([resource]);
 
     // Query with high relevance requirement
-    const result = await suite.provider.query({
+    const result = await suiteProvider(suite).query({
       text: 'microservices architecture patterns',
       limit: 10,
     });
@@ -153,9 +155,9 @@ Follows convention over configuration.`
     );
 
     const resource = await createTestResource(testFile, 'prog-doc');
-    await suite.provider.indexResources([resource]);
+    await suiteProvider(suite).indexResources([resource]);
 
-    const result = await suite.provider.query({
+    const result = await suiteProvider(suite).query({
       text: 'Python programming data science',
       limit: 5,
     });

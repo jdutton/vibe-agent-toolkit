@@ -61,9 +61,9 @@ const EMPTY_STORE: SkillTextRun['source'] = { storedDocument: () => Promise.reso
 /** A run's source with no store to ask. */
 const NO_STORE: SkillTextRun['source'] = { storedDocument: () => Promise.resolve(undefined), holdsStore: false };
 
-/** A run over `source` whose dispatcher no parse reaches: it identifies the run. */
-function scanRun(source: SkillTextRun['source']): SkillTextRun {
-  return { source, dispatcher: {} as ParseDispatcher, crawlOnce: (_key, crawl) => crawl() };
+/** A run over `source` whose dispatcher no parse reaches: it identifies the run, a fresh one unless given. */
+function scanRun(source: SkillTextRun['source'], dispatcher: ParseDispatcher = {} as ParseDispatcher): SkillTextRun {
+  return { source, dispatcher, crawlOnce: (_key, crawl) => crawl() };
 }
 
 /** A SKILL.md holding {@link SKILL_TEXT} in a fresh directory. */
@@ -110,7 +110,7 @@ describe('readSkillDocument', () => {
   it('answers from the store without a parse or a count', async () => {
     const source = storeOf(SKILL_TEXT);
     const before = misses();
-    const document = await readSkillDocument('/nowhere/SKILL.md', { source, dispatcher: NO_PARSE }, 'source');
+    const document = await readSkillDocument('/nowhere/SKILL.md', scanRun(source, NO_PARSE), 'source');
     expect(document.frontmatter).toEqual({ name: 'stored' });
     expect(document.skillText.h1).toBe('Heading');
     expect(document.decoding).toEqual(PLAIN_UTF8);
@@ -120,7 +120,7 @@ describe('readSkillDocument', () => {
 
   it('parses a file the store does not serve, counting it once per run', async () => {
     const path = skillFile();
-    const run: SkillTextRun = { source: EMPTY_STORE, dispatcher: ROUTE.dispatcher as ParseDispatcher, crawlOnce: (_key, crawl) => crawl() };
+    const run: SkillTextRun = { source: EMPTY_STORE, dispatcher: ROUTE.dispatcher, crawlOnce: (_key, crawl) => crawl() };
     const before = misses();
     const first = await readSkillDocument(path, run, 'source');
     await readSkillDocument(path, run, 'source');
@@ -140,7 +140,7 @@ describe('readSkillDocument', () => {
 
   it('counts a file a run with no store parses as noStore once per run, never as a miss', async () => {
     const path = skillFile();
-    const run: SkillTextRun = { source: NO_STORE, dispatcher: ROUTE.dispatcher as ParseDispatcher, crawlOnce: (_key, crawl) => crawl() };
+    const run: SkillTextRun = { source: NO_STORE, dispatcher: ROUTE.dispatcher, crawlOnce: (_key, crawl) => crawl() };
     const [missesBefore, noStoresBefore] = [misses(), noStores()];
     await readSkillDocument(path, run, 'source');
     await readSkillDocument(path, run, 'source');
@@ -160,7 +160,7 @@ describe('storedSkillText', () => {
   it('answers from the store without a count', async () => {
     const source = storeOf(SKILL_TEXT);
     const before = misses();
-    const facts = await storedSkillText('/nowhere/ref.md', { source, dispatcher: NO_PARSE });
+    const facts = await storedSkillText('/nowhere/ref.md', scanRun(source, NO_PARSE));
     expect(facts?.h1).toBe('Heading');
     expect(source.storedDocument).toHaveBeenCalledWith('/nowhere/ref.md', 'markdown');
     expect(misses() - before).toBe(0);
@@ -168,7 +168,7 @@ describe('storedSkillText', () => {
 
   it('answers undefined for a file the store does not serve, counting nothing', async () => {
     const before = misses();
-    expect(await storedSkillText('/nowhere/ref.md', { source: EMPTY_STORE, dispatcher: NO_PARSE })).toBeUndefined();
+    expect(await storedSkillText('/nowhere/ref.md', scanRun(EMPTY_STORE, NO_PARSE))).toBeUndefined();
     expect(misses() - before).toBe(0);
   });
 });

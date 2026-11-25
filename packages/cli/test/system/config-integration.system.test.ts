@@ -45,7 +45,7 @@ describe('Config loading integration (system test)', () => {
 
     expect(result.status).toBe(0);
     // Should find docs/test.md and README.md (other/test.md excluded)
-    expect(parsed.examined).toBeGreaterThanOrEqual(2);
+    expect(parsed['examined']).toBeGreaterThanOrEqual(2);
   });
 
   it('should respect exclude patterns from config', () => {
@@ -69,7 +69,7 @@ describe('Config loading integration (system test)', () => {
 
     expect(result.status).toBe(0);
     // Should find docs/guide.md and CLAUDE.md, but not test/* or *.test.md
-    expect(parsed.examined).toBeGreaterThanOrEqual(1);
+    expect(parsed['examined']).toBeGreaterThanOrEqual(1);
   });
 
   it('should use default config when no config file exists', () => {
@@ -83,9 +83,9 @@ describe('Config loading integration (system test)', () => {
     const { result, parsed } = executeScanAndParse(binPath, projectDir);
 
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('ok');
+    expect(parsed['status']).toBe('ok');
     // Should use default **/*.md pattern
-    expect(parsed.examined).toBeGreaterThan(0);
+    expect(parsed['examined']).toBeGreaterThan(0);
   });
 
   it('should find config in parent directory', () => {
@@ -127,7 +127,7 @@ describe('Config loading integration (system test)', () => {
     // every root-relative include AND exclude, so naming a directory scanned trees
     // the project had deliberately excluded. A path argument now narrows `include`
     // only; `exclude` is never discarded.
-    expect(parsed.examined).toBe(1);
+    expect(parsed['examined']).toBe(1);
   });
 
   it('should respect config exclude patterns when no path argument provided', () => {
@@ -157,7 +157,7 @@ describe('Config loading integration (system test)', () => {
 
     expect(result.status).toBe(0);
     // Config exclude should be respected: finds docs/included.md (not excluded/test.md)
-    expect(parsed.examined).toBeGreaterThanOrEqual(1);
+    expect(parsed['examined']).toBeGreaterThanOrEqual(1);
   });
 
   it('should handle validation config options', () => {
@@ -181,7 +181,7 @@ describe('Config loading integration (system test)', () => {
 
     // Config should be loaded and used (even if not all options implemented yet)
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('ok');
+    expect(parsed['status']).toBe('ok');
   });
 
   it('should handle config with only version field', () => {
@@ -197,7 +197,7 @@ describe('Config loading integration (system test)', () => {
 
     // Should use default patterns
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('ok');
+    expect(parsed['status']).toBe('ok');
   });
 
   it('should handle complex nested patterns', () => {
@@ -227,6 +227,6 @@ describe('Config loading integration (system test)', () => {
     expect(result.status).toBe(0);
     // Should find README, docs/api/auth, guides/tutorials/intro, plus CLAUDE.md
     // Should exclude wip.draft.md and test/fixtures/mock.md
-    expect(parsed.examined).toBeGreaterThanOrEqual(3);
+    expect(parsed['examined']).toBeGreaterThanOrEqual(3);
   });
 });

@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 import { CHECKLIST_SECTIONS, type ChecklistSection } from '../../../src/commands/skill/review-checklist.js';
 import { SKILL_REVIEW_REPORT_SCHEMA } from '../../../src/commands/skill/review-schema.js';
 import { buildReviewReport } from '../../../src/commands/skill/review.js';
+import { reportData } from '../../report-envelope.js';
 
 function result(allErrors: ValidationIssue[]): PackagingValidationResult {
   return {
@@ -54,8 +55,8 @@ describe('buildReviewReport', () => {
     expect(report.status).toBe('ok');
     expect(report.examined).toBe(1);
     expect(report.findings).toEqual([]);
-    expect(report.data.skill).toBe('my-skill');
-    expect(report.data.sections.map((row) => row.section)).toEqual([...CHECKLIST_SECTIONS]);
+    expect(reportData(report).skill).toBe('my-skill');
+    expect(reportData(report).sections.map((row) => row.section)).toEqual([...CHECKLIST_SECTIONS]);
   });
 
   it('publishes each finding once, in section order, with the section naming its codes', () => {
@@ -69,7 +70,7 @@ describe('buildReviewReport', () => {
     expect(report.status).toBe('findings');
     expect(report.summary).toEqual({ errors: 1, warnings: 1, info: 0 });
     expect(report.findings.map((finding) => finding.code)).toEqual(['SKILL_NAME_MISMATCHES_DIR', 'SKILL_LENGTH_EXCEEDS_RECOMMENDED']);
-    const bySection = new Map(report.data.sections.map((row) => [row.section, row.codes]));
+    const bySection = new Map(reportData(report).sections.map((row) => [row.section, row.codes]));
     expect(bySection.get('Naming')).toEqual(['SKILL_NAME_MISMATCHES_DIR']);
     expect(bySection.get('Body structure')).toEqual(['SKILL_LENGTH_EXCEEDS_RECOMMENDED']);
     expect(bySection.get('Readability')).toEqual([]);

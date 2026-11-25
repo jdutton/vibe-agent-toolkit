@@ -32,10 +32,11 @@ describe('buildHostileTree', () => {
       expect(link === null).toBe(!can);
       if (link !== null) expect(lstatSync(link).isSymbolicLink()).toBe(true);
     }
-    if (tree().linkOut !== null) expect(existsSync(safePath.join(tree().linkOut, 'secret.txt'))).toBe(true);
-    if (tree().dangling !== null) expect(existsSync(tree().dangling)).toBe(false);
+    const { linkOut, dangling, linkLoop } = tree();
+    if (linkOut !== null) expect(existsSync(safePath.join(linkOut, 'secret.txt'))).toBe(true);
+    if (dangling !== null) expect(existsSync(dangling)).toBe(false);
     // The loop resolves to the root: following it re-enters the tree.
-    if (tree().linkLoop !== null) expect(existsSync(safePath.join(tree().linkLoop, 'loop', 'member', 'file.txt'))).toBe(true);
+    if (linkLoop !== null) expect(existsSync(safePath.join(linkLoop, 'loop', 'member', 'file.txt'))).toBe(true);
   });
 
   it('answers the unreadable field exactly as the read-denial gate does', () => {
@@ -50,7 +51,8 @@ describe('buildHostileTree', () => {
     tree().cleanup();
     expect(existsSync(tree().root)).toBe(false);
     expect(existsSync(tree().outside)).toBe(false);
-    if (tree().rootAlias !== null) expect(lstatSync.bind(null, tree().rootAlias)).toThrow(/ENOENT/);
+    const { rootAlias } = tree();
+    if (rootAlias !== null) expect(lstatSync.bind(null, rootAlias)).toThrow(/ENOENT/);
   });
 
   it('carries a NUL-bearing name, so a sink test reaches the OS refusal too', () => {

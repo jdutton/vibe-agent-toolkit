@@ -26,7 +26,7 @@ function refusal(directory: string, code = 'EACCES', transient = false): Directo
 
 describe('refusedListingMessage', () => {
   it('names the directory root-relative with its errno, states the gap, and appends the remedy', () => {
-    const message = refusedListingMessage(refusal(`${ROOT}/docs/locked`), { root: ROOT, remedy: REMEDY });
+    const message = refusedListingMessage(refusal(`${ROOT}/docs/locked`), { root: ROOT, remedy: REMEDY, side: 'source' });
 
     expect(message).toContain("the directory 'docs/locked'");
     expect(message).toContain('(EACCES)');
@@ -40,7 +40,7 @@ describe('refusedListingMessage', () => {
   // A cloned repository names the directory: shown by its escapes, never as the characters it holds.
   it('shows a hostile directory name by its escapes', () => {
     const rlo = String.fromCodePoint(0x20_2e);
-    const message = refusedListingMessage(refusal(`${ROOT}/a${rlo}b`), { root: ROOT, remedy: REMEDY });
+    const message = refusedListingMessage(refusal(`${ROOT}/a${rlo}b`), { root: ROOT, remedy: REMEDY, side: 'source' });
 
     const bs = '\\';
     expect(message).toContain(`the directory 'a${bs}u202eb'`);
@@ -48,19 +48,19 @@ describe('refusedListingMessage', () => {
   });
 
   it('asserts nothing about what WAS enumerated beneath the directory — the git route lists tracked members', () => {
-    const message = refusedListingMessage(refusal(`${ROOT}/docs/locked`), { root: ROOT, remedy: REMEDY });
+    const message = refusedListingMessage(refusal(`${ROOT}/docs/locked`), { root: ROOT, remedy: REMEDY, side: 'source' });
     expect(message).not.toMatch(/nothing beneath it was enumerated/);
     expect(message).not.toMatch(/declared scan/);
   });
 
   it('calls the scan root itself out by name rather than as an empty path', () => {
-    const message = refusedListingMessage(refusal(ROOT), { root: ROOT, remedy: REMEDY });
+    const message = refusedListingMessage(refusal(ROOT), { root: ROOT, remedy: REMEDY, side: 'source' });
     expect(message).toContain('the scan root itself');
     expect(message).not.toContain("''");
   });
 
   it('replaces the remedy with the re-run clause for a transient refusal', () => {
-    const message = refusedListingMessage(refusal(`${ROOT}/x`, 'EMFILE', true), { root: ROOT, remedy: REMEDY });
+    const message = refusedListingMessage(refusal(`${ROOT}/x`, 'EMFILE', true), { root: ROOT, remedy: REMEDY, side: 'source' });
     expect(message).toContain('EMFILE');
     expect(message).toMatch(/re-run before investigating/);
     expect(message).not.toContain(REMEDY);

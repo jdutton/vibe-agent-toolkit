@@ -25,7 +25,7 @@ const ROOT = safePath.join(normalizedTmpdir(), 'edge-lens-eval-corpus');
  * @param contextId - The extent whose member this is
  * @returns A realization row carrying bytes
  */
-function realization(contextId: string): Record<string, unknown> {
+function realization(contextId: string): Projection['resourceRealizations'][number] {
   return {
     resourceId: `id:${contextId}`,
     extentId: contextId,
@@ -35,6 +35,7 @@ function realization(contextId: string): Record<string, unknown> {
     dir: '',
     depth: 0,
     ext: '.md',
+    mime: 'text/markdown',
     contentKey: `key:${contextId}`,
     contentState: 'keyed',
     mtime: null,
@@ -61,7 +62,7 @@ function realization(contextId: string): Record<string, unknown> {
  */
 function projectionWith(contexts: Projection['resolutionContexts']): Projection {
   return {
-    roots: [{ id: 'root-x', path: ROOT, label: null }],
+    roots: [{ id: 'root-x', path: ROOT }],
     resources: [],
     resourceRealizations: contexts.map((context) => ({
       ...realization(context.contextId),
@@ -72,6 +73,7 @@ function projectionWith(contexts: Projection['resolutionContexts']): Projection 
     })),
     resourceTags: [],
     realizationConditions: [],
+    claudeRulePatterns: [],
     resolutionContexts: contexts,
     zoneProvenance: [],
     blobs: [],

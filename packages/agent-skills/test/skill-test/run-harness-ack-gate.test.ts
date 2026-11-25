@@ -67,6 +67,7 @@ describe('runSkillTestHarness — security ack gate', () => {
     });
 
     expect(result.exitCode).toBe(ExitCode.ERROR);
+    if (result.exitCode !== ExitCode.ERROR) throw new Error('expected a refused run');
     expect(result.reason).toBe('preflight');
     // The missing flag is the invocation's mistake, coded where the harness decides it.
     expect(result).toMatchObject({ refusal: 'USAGE_INVALID' });

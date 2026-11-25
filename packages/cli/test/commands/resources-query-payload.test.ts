@@ -72,7 +72,7 @@ function reportFor(overrides: Partial<ProjectionQueryPayloadInput> = {}): Resour
 }
 
 /** The report's own `data` — the query's part of the envelope. */
-function dataOf(overrides: Partial<ProjectionQueryPayloadInput> = {}): Record<string, unknown> {
+function reportData(overrides: Partial<ProjectionQueryPayloadInput> = {}): Record<string, unknown> {
   return reportFor(overrides).data as unknown as Record<string, unknown>;
 }
 
@@ -91,13 +91,13 @@ describe('the query report', () => {
 
   it('publishes the columns even when the statement selected no row', () => {
     // Rows alone cannot carry the shape of an empty answer.
-    expect(dataOf({ rows: [], columns: ['path'] })['columns']).toEqual(['path']);
+    expect(reportData({ rows: [], columns: ['path'] })['columns']).toEqual(['path']);
   });
 
   it('reports where the lens population came from, beside the resources population', () => {
-    expect(dataOf({ lensPopulation: 'store' })['lensPopulation']).toBe('store');
-    expect(dataOf({ lensPopulation: 'derived' })['lensPopulation']).toBe('derived');
-    expect(dataOf({ lensPopulation: 'none' })['lensPopulation']).toBe('none');
+    expect(reportData({ lensPopulation: 'store' })['lensPopulation']).toBe('store');
+    expect(reportData({ lensPopulation: 'derived' })['lensPopulation']).toBe('derived');
+    expect(reportData({ lensPopulation: 'none' })['lensPopulation']).toBe('none');
   });
 
   it('reports where its rows came from, which is the only cache tell there is', () => {
@@ -105,8 +105,8 @@ describe('the query report', () => {
     // correct re-derivation produce byte-identical rows, so nothing in `rows`
     // can answer "did the cache work" — only this can, and only because the
     // command observes contributor records rather than inspecting the result.
-    const served = dataOf({ population: 'store' });
-    const derived = dataOf({ population: 'derived' });
+    const served = reportData({ population: 'store' });
+    const derived = reportData({ population: 'derived' });
 
     expect(served['population']).toBe('store');
     expect(derived['population']).toBe('derived');
@@ -120,8 +120,8 @@ describe('the query report', () => {
     // 0.29-0.31 s served, so a reader who is told only `population: store` has
     // to take the saving on faith. The millisecond inputs below are STAND-INS
     // chosen to serialize distinctly, not measurements.
-    const served = dataOf({ population: 'store', populationMs: 294 });
-    const derived = dataOf({ population: 'derived', populationMs: 1170 });
+    const served = reportData({ population: 'store', populationMs: 294 });
+    const derived = reportData({ population: 'derived', populationMs: 1170 });
 
     // 5e-11 windows: EXACTNESS assertions, not tolerances.
     expect(served['populationSecs']).toBeCloseTo(0.294, 10);
@@ -141,7 +141,7 @@ describe('the query report', () => {
   it('keeps a sub-millisecond population non-zero', () => {
     // 🔑 Why the measurement is `performance.now()`: a warm store population
     // can land under a millisecond, and a rounded `0` reads as "not measured".
-    const data = dataOf({ populationMs: 0.4 });
+    const data = reportData({ populationMs: 0.4 });
 
     expect(data['populationSecs']).toBeCloseTo(0.0004, 10);
     expect(data['populationSecs']).not.toBe(0);
@@ -161,7 +161,7 @@ describe('the query report', () => {
 
   it('places the population cost immediately after the population origin', () => {
     // Field ORDER is part of the shape: the pair reads as a pair only adjacent.
-    const keys = Object.keys(dataOf());
+    const keys = Object.keys(reportData());
 
     expect(keys[keys.indexOf('population') + 1]).toBe('populationSecs');
   });
@@ -170,14 +170,14 @@ describe('the query report', () => {
     // ⚠️ A deliberate ABSENCE, pinned. The statement always runs against a
     // per-run in-memory database; the two-root system test is what can fail on
     // the defect the old field described — this pins only the shape.
-    const data = dataOf();
+    const data = reportData();
 
     expect(data).not.toHaveProperty('engine');
     expect(data['population']).toBe('derived');
   });
 
   it('publishes the rows and the root, and no second count beside `rows`', () => {
-    const data = dataOf();
+    const data = reportData();
 
     expect(data['rows']).toEqual(ROWS);
     expect(data['root']).toBe('/corpus');

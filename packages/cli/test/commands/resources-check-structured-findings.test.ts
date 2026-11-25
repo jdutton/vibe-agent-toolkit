@@ -32,9 +32,9 @@ const NEAR_COLUMNS: ColumnsOfStatement = () => ['path', 'Finding_Line'];
 
 const EXAMINED_NOTHING = 'RESOURCE_CHECK_EXAMINED_NOTHING';
 const BROKEN = 'RESOURCE_CHECK_BROKEN';
-const POPULATED = {
+const POPULATED: Omit<Extract<ProgressEntry, { kind: 'population' }>, 'kind'> = {
   population: 'derived', lensPopulation: 'none', populationMs: 1, lensMs: 0, lensesEvaluated: [], membersEnumerated: 7,
-} as const;
+};
 
 /**
  * An `ask` answering each statement with fixed rows, or throwing the error it is given.

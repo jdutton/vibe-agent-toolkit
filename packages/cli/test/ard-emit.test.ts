@@ -178,9 +178,9 @@ describe('runArdEmit', () => {
 
     expect(result.entryCount).toBe(1);
     expect(manifest['@context']).toContain('agenticresourcediscovery.org');
-    expect(manifest.entries[0]?.identifier).toBe(`urn:air:example.com:skills:${PUBLISHED_SKILL}`);
-    expect(manifest.entries[0]?.type).toBe('application/ai-skill+md');
-    expect(manifest.entries[0]?.url).toBe(`https://example.com/catalog/skills/${PUBLISHED_SKILL}`);
+    expect(manifest.entries[0]?.['identifier']).toBe(`urn:air:example.com:skills:${PUBLISHED_SKILL}`);
+    expect(manifest.entries[0]?.['type']).toBe('application/ai-skill+md');
+    expect(manifest.entries[0]?.['url']).toBe(`https://example.com/catalog/skills/${PUBLISHED_SKILL}`);
   });
 
   it('builds a document its own published schema accepts', async () => {
@@ -490,7 +490,7 @@ describe('runArdEmit — a bare override block that loses is NAMED, not dropped'
 
     const { result, manifest } = await emitAndRead(root);
 
-    expect(manifest.entries[0]?.capabilities).toEqual(['FromQualifiedKey']);
+    expect(manifest.entries[0]?.['capabilities']).toEqual(['FromQualifiedKey']);
 
     expect(result.shadowed).toEqual([
       {
@@ -594,7 +594,7 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
 
   const reportFrom = (stdout: string): Record<string, unknown> =>
     JSON.parse(stdout) as Record<string, unknown>;
-  const dataOf = (report: Record<string, unknown>): Record<string, unknown> =>
+  const reportData = (report: Record<string, unknown>): Record<string, unknown> =>
     report['data'] as Record<string, unknown>;
 
   it('publishes the skip count beside a finding per skipped surface as JSON', async () => {
@@ -603,8 +603,8 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
     const { stdout } = await captureEmit(root, { format: 'json' });
 
     const report = reportFrom(stdout);
-    expect(dataOf(report)['entryCount']).toBe(0);
-    expect(dataOf(report)['skippedCount']).toBe(1);
+    expect(reportData(report)['entryCount']).toBe(0);
+    expect(reportData(report)['skippedCount']).toBe(1);
     expect(report['examined']).toBe(1);
     expect(report['status']).toBe('findings');
     expect(report['findings']).toEqual([
@@ -625,9 +625,9 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
     const emptyReport = reportFrom((await captureEmit(empty, { format: 'json' })).stdout);
     const fullReport = reportFrom((await captureEmit(full, { format: 'json' })).stdout);
 
-    expect(dataOf(emptyReport)['entryCount']).toBe(0);
-    expect(dataOf(fullReport)['entryCount']).toBe(1);
-    expect(dataOf(fullReport)['skippedCount']).toBe(0);
+    expect(reportData(emptyReport)['entryCount']).toBe(0);
+    expect(reportData(fullReport)['entryCount']).toBe(1);
+    expect(reportData(fullReport)['skippedCount']).toBe(0);
     expect(fullReport['status']).toBe('ok');
   });
 
@@ -667,8 +667,8 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
     const { exitCalls, stdout } = await captureEmit(root, { strict: true, format: 'json' });
 
     const report = reportFrom(stdout);
-    expect(dataOf(report)['entryCount']).toBe(1);
-    expect(dataOf(report)['skippedCount']).toBe(1);
+    expect(reportData(report)['entryCount']).toBe(1);
+    expect(reportData(report)['skippedCount']).toBe(1);
     expect(exitCalls).toEqual([[1]]);
   });
 
@@ -705,7 +705,7 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
       errSpy.mockRestore();
       outSpy.mockRestore();
     }
-    expect(dataOf(reportFrom(stdout))['entryCount']).toBe(0);
+    expect(reportData(reportFrom(stdout))['entryCount']).toBe(0);
     // 🪤 The exit code ALONE cannot see this: `process.exit` is mocked, so
     // Commander's own "unknown option" path exits 1 too — renaming the option
     // in the parser left this case green until it asserted on the message only

@@ -12,14 +12,15 @@
 
 import { chmodSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 
-import { projectionStoreDirectoryName, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
+import { projectionStoreDirectoryName } from '@vibe-agent-toolkit/resources';
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { CANNOT_DENY_READS, type FaultFsSpec } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
+import type { z } from 'zod';
 
-import { CACHE_CLEAR_REPORT_SCHEMA, CACHE_PRUNE_REPORT_SCHEMA, type CacheClearReport } from '../../src/commands/cache/clear-schema.js';
+import { CACHE_CLEAR_REPORT_SCHEMA, CACHE_PRUNE_REPORT_SCHEMA } from '../../src/commands/cache/clear-schema.js';
 import { commitTestFixture } from '../test-helpers.js';
 
 import { cleanupTestTempDir, createTestTempDir, executeCli, faultPreloadArgs, getBinPath, writeFileTree } from './test-common.js';
@@ -52,7 +53,7 @@ async function cacheUnder(root: string, args: string[], extraEnv: Record<string,
 }
 
 /** Run `vat cache clear` under `root` and read its document with the published schema. */
-async function clearUnder(root: string, faults?: FaultFsSpec['faults'], extraEnv: Record<string, string> = {}): Promise<{ status: number | null; stderr: string; report: CacheClearReport }> {
+async function clearUnder(root: string, faults?: FaultFsSpec['faults'], extraEnv: Record<string, string> = {}): Promise<{ status: number | null; stderr: string; report: z.infer<typeof CACHE_CLEAR_REPORT_SCHEMA> }> {
   const result = await cacheUnder(root, ['clear'], extraEnv, faults);
   return { status: result.status, stderr: result.stderr, report: CACHE_CLEAR_REPORT_SCHEMA.parse(yaml.parse(result.stdout)) };
 }

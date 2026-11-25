@@ -21,7 +21,7 @@
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node ../../typecheck-task.js tsconfig.eslint.json",
     "lint": "VAT_LINT_TASK=1 eslint . --max-warnings=0"
   },
   "keywords": [

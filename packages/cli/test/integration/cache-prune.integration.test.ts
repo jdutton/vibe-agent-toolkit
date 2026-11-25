@@ -10,8 +10,8 @@ import { existsSync, promises as fs } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
-import { markVatCacheRoot, VAT_CACHE_DIR_ENV, VAT_CACHE_TAG_FILE, vatCacheRoot } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { markVatCacheRoot, VAT_CACHE_TAG_FILE, vatCacheRoot } from '@vibe-agent-toolkit/resources';
+import { mkdirSyncReal, safePath, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { recognisedCacheRoot } from '../../src/commands/cache/cache-measure.js';
@@ -164,6 +164,9 @@ describe('recognisedCacheRoot', () => {
     markVatCacheRoot();
     expect(recognisedCacheRoot()).toBe(vatCacheRoot());
 
+    // The default location under a temp directory of the test's own: the machine-wide one is
+    // refused in a test process (see `vatCacheRoot`).
+    for (const name of ['TMPDIR', 'TEMP', 'TMP']) vi.stubEnv(name, scratch());
     vi.stubEnv(VAT_CACHE_DIR_ENV, '');
     expect(recognisedCacheRoot().endsWith('/.vat-cache')).toBe(true);
   });

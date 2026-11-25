@@ -40,7 +40,7 @@ import { devNull } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 
-import { allDerivedSpecs, BLOB_NOT_TEXT, PROJECTION_TABLES, quoteIdentifier, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
+import { allDerivedSpecs, BLOB_NOT_TEXT, PROJECTION_TABLES, quoteIdentifier } from '@vibe-agent-toolkit/resources';
 import { FindingSchema, reportSchema } from '@vibe-agent-toolkit/schema';
 import {
   CRAWL_STORE_READ_ID,
@@ -52,6 +52,7 @@ import {
   toForwardSlash,
   WORK_COUNTERS_ENV,
   type WorkCounterDump,
+  VAT_CACHE_DIR_ENV,
 } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { expectAbsenceCause, parseLookupsIn, removeTempDir } from '@vibe-agent-toolkit/utils/testing';

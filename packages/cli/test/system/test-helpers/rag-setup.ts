@@ -132,7 +132,7 @@ export function setupIndexedRagTest(
 export function setupRagTestSuite(
   testName: string,
   binPath: string,
-  getTestOutputDir: (pkg: string, ...segments: string[]) => string
+  getTestOutputDir: (pkg: string, testType: 'unit' | 'integration' | 'system', ...segments: string[]) => string
 ): {
   tempDir: string;
   projectDir: string;

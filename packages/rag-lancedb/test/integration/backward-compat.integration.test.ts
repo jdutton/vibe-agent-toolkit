@@ -93,6 +93,7 @@ describe.skipIf(onnxModelUnreachable())('Backward compatibility', () => {
 
     // Verify chunk has all core fields (from CoreRAGChunk)
     const chunk = result.chunks[0];
+    if (chunk === undefined) throw new Error('the query returned no chunk');
     expect(chunk).toHaveProperty('chunkId');
     expect(chunk).toHaveProperty('resourceId');
     expect(chunk).toHaveProperty('content');

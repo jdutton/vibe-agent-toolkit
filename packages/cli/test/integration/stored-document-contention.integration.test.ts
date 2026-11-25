@@ -26,8 +26,7 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { chmodSync, writeFileSync } from 'node:fs';
 
 import { defaultStoreDirectory, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
-import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal, readWorkCounters, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, readWorkCounters, safePath, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { detachGitEnv } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 

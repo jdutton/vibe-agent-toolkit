@@ -35,7 +35,7 @@ describe('the candidate verdict run on a clean subject', () => {
 
     const result = await captureVerdict({
       instrument: CANDIDATE_VAT,
-      subjects: [{ alias: FIXTURE_ALIAS, path: root, verbs: CI_VERBS, sqlFiles: [], buildVerbs: false, unmeasurableBuildVerbs: {} }],
+      subjects: [{ alias: FIXTURE_ALIAS, path: root, verbs: [...CI_VERBS], sqlFiles: [], buildVerbs: false, unmeasurableBuildVerbs: {} }],
       subjectsDir: root,
       env: { set: {}, unset: [] },
       prepared: {},

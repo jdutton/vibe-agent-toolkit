@@ -56,14 +56,13 @@ import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
 import {
   PROJECTION_TABLES,
   StoreQuestionUnavailableError,
-  VAT_CACHE_DIR_ENV,
   type FactStore,
   type PopulationCache,
   type Projection,
   type ProjectionTableName,
   vatCacheRoot,
 } from '@vibe-agent-toolkit/resources';
-import { fsFaultOf, isReadOnlyFilesystemError, parseEnvBoolean, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { fsFaultOf, isReadOnlyFilesystemError, parseEnvBoolean, safePath, toForwardSlash, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { freshGitTreeKey, gitSnapshotFailureOf, gitTreeKey, type GitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 
 import { noticeToOperator, withNoticeLedger } from './operator-notices.js';

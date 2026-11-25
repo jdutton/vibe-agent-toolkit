@@ -20,7 +20,7 @@ import { DeferredArtifacts } from '../src/deferred-artifacts.js';
 import { fragmentIndex, validateLink, type ValidateLinkOptions } from '../src/link-validator.js';
 import type { SkillFileEntry } from '../src/schemas/project-config.js';
 
-import { createLink } from './test-helpers.js';
+import { createLink, linkOptions } from './test-helpers.js';
 
 const DEST_ENTRY = 'cli-reference.md';
 
@@ -36,15 +36,15 @@ function deferredArtifactsCovering(dest: string, skillDir: string): DeferredArti
  * `skipGitIgnoreCheck` options. Each call site supplies its own `deferredArtifacts`
  * (or omits it) and asserts independently on the returned issue.
  */
-async function validateDestLink(tempDir: string, extraOptions: Partial<ValidateLinkOptions> = {}) {
+async function validateDestLink(tempDir: string, extraOptions: Pick<ValidateLinkOptions, 'deferredArtifacts'> = {}) {
   const sourceFile = safePath.join(tempDir, 'SKILL.md');
   await fs.writeFile(sourceFile, `[ref](./${DEST_ENTRY})\n`, 'utf-8');
 
-  return validateLink(createLink('local_file', `./${DEST_ENTRY}`), sourceFile, fragmentIndex(), {
+  return validateLink(createLink('local_file', `./${DEST_ENTRY}`), sourceFile, fragmentIndex(), linkOptions({
     projectRoot: tempDir,
     skipGitIgnoreCheck: true,
     ...extraOptions,
-  });
+  }));
 }
 
 describe('validateLink + deferredArtifacts', () => {

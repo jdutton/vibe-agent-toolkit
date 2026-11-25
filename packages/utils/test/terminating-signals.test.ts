@@ -234,7 +234,7 @@ describe('handleTerminatingSignals', () => {
     }));
     process.emit('SIGTERM', 'SIGTERM');
 
-    const late = vi.fn(() => new Promise<void>((resolve) => {
+    const late = vi.fn((_signal: string) => new Promise<void>((resolve) => {
       finishLate = resolve;
     }));
     const lateGuard = guard(late);

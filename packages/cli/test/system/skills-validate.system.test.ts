@@ -51,10 +51,10 @@ describe('skills validate command (system test)', () => {
     expect(document.examined).toBeGreaterThan(0);
     // Every validated skill has a row, clean or not: the denominator and the
     // listing can no longer disagree.
-    expect(document.data.skills).toHaveLength(document.examined);
+    expect(document.data?.skills).toHaveLength(document.examined);
     // The envelope's summary is exactly the findings it publishes.
     expect(document.summary.errors + document.summary.warnings + document.summary.info).toBe(document.findings.length);
-    expect(document.data.root).toBe(fixtureDir);
+    expect(document.data?.root).toBe(fixtureDir);
   });
 
   // A refused SKILL.md has no name to key a row by: it is examined, and a run finding.
@@ -275,7 +275,7 @@ describe('skills validate — framework exit codes (system test)', () => {
     // and the suppression is counted on the skill's row, never published.
     expect(result.status).toBe(0);
     expect(document.summary).toMatchObject({ errors: 0 });
-    expect(document.data.skills[0]?.allowed).toBeGreaterThan(0);
+    expect(document.data?.skills[0]?.allowed).toBeGreaterThan(0);
     expect(document.findings.map((f) => f.code)).not.toContain('LINK_TO_GITIGNORED_FILE');
   });
 
@@ -298,8 +298,8 @@ describe('skills validate — framework exit codes (system test)', () => {
     // Each finding states its own code AND severity, flat on the envelope.
     expect(document.findings.filter((f) => f.severity === 'warning').map((f) => f.code)).toContain('LINK_TO_NAVIGATION_FILE');
     // Per-skill counts (`summary`) ride beside the literal per-skill status.
-    expect(document.data.skills[0]?.status).toBe('findings');
-    expect(document.data.skills[0]?.summary).toMatchObject({ errors: 0 });
+    expect(document.data?.skills[0]?.status).toBe('findings');
+    expect(document.data?.skills[0]?.summary).toMatchObject({ errors: 0 });
   });
 
   it('help text uses validation framework language and not stale override language', async () => {

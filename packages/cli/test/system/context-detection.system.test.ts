@@ -1,3 +1,5 @@
+import type { SpawnSyncReturns } from 'node:child_process';
+
 import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { it, beforeAll, afterAll } from 'vitest';
 
@@ -132,7 +134,7 @@ function writeStubBin(dir: string, name: string, marker: string): string {
 }
 
 /** Run the wrapper with `VAT_BIN` pinned to `binPath` and `VAT_ROOT_DIR` cleared. */
-function runWrapperWithBin(binPath: string): ReturnType<typeof spawnSync> {
+function runWrapperWithBin(binPath: string): SpawnSyncReturns<string> {
   return spawnSync(NODE_EXECUTABLE, [wrapperPath], {
     encoding: 'utf-8',
     env: { ...process.env, VAT_BIN: binPath, VAT_ROOT_DIR: undefined },

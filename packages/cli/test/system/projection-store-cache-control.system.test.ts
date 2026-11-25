@@ -44,8 +44,7 @@
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, safePath, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {

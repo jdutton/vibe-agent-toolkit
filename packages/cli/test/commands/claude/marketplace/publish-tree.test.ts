@@ -32,7 +32,7 @@ function seedMarketplaceBuild(
   mkdirSyncReal(pluginDir, { recursive: true });
   const json: Record<string, unknown> = { name: mpName };
   if (plugins.length > 0) {
-    json.plugins = plugins;
+    json['plugins'] = plugins;
   }
   writeFileSync(safePath.join(pluginDir, 'marketplace.json'), JSON.stringify(json));
   return mpName;

@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { fragmentIndex, validateLink } from '../../src/link-validator.js';
 import { isWithinProject } from '../../src/utils.js';
-import { createGitRepo, createLink, setupTempDirTestSuite } from '../test-helpers.js';
+import { createGitRepo, createLink, linkOptions, setupTempDirTestSuite } from '../test-helpers.js';
 
 /**
  * Setup a test project with git and gitignore
@@ -69,10 +69,10 @@ async function validateWithGitIgnoreCheck(
   const link = createLink('local_file', linkHref, 'Test link', 2);
   const headingsMap = fragmentIndex();
 
-  return await validateLink(link, sourceFile, headingsMap, {
+  return await validateLink(link, sourceFile, headingsMap, linkOptions({
     projectRoot,
     skipGitIgnoreCheck: false,
-  });
+  }));
 }
 
 describe('isWithinProject', () => {

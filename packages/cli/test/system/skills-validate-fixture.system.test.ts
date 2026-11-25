@@ -10,7 +10,7 @@ import * as yaml from 'yaml';
 import { SKILLS_VALIDATE_REPORT_SCHEMA } from '../../src/commands/skills/validate-schema.js';
 
 import { getBinPath, getFixturePath } from './test-common.js';
-import { executeSkillsCommandAndExpectYaml } from './test-helpers/index.js';
+import { reportData, executeSkillsCommandAndExpectYaml } from './test-helpers/index.js';
 
 describe('skills validate command - fixture tests (system test)', () => {
   const binPath = getBinPath(import.meta.url);
@@ -29,8 +29,8 @@ describe('skills validate command - fixture tests (system test)', () => {
     expect(document.findings).toEqual([]);
     // Every validated skill has a row — clean ones included — so the rows and
     // `examined` agree without `--verbose`.
-    expect(document.data.skills).toHaveLength(2);
-    for (const skill of document.data.skills) {
+    expect(reportData(document).skills).toHaveLength(2);
+    for (const skill of reportData(document).skills) {
       expect(skill).toEqual({ name: skill.name, status: 'ok', summary: { errors: 0, warnings: 0, info: 0 }, allowed: 0 });
     }
   });

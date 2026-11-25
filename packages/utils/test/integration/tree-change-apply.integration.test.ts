@@ -16,7 +16,7 @@ import { safePath, toForwardSlash } from '../../src/path-core.js';
 import { mkdirSyncReal } from '../../src/path-utils.js';
 import { symlinkCapability } from '../../src/test-helpers.js';
 import { PERMISSIONS_ENFORCED, tmpdirFoldsCase } from '../../src/testing/platform-gates.js';
-import { snapshotTree, subtree } from '../../src/testing/tree-snapshot.js';
+import { type SnapshotEntry, snapshotTree, subtree } from '../../src/testing/tree-snapshot.js';
 import { applyTreePlan, applyTreePlanOrLeftover, TREE_CLEANUP_INCOMPLETE_CODE } from '../../src/tree-change/apply.js';
 import { planTreeChanges, TREE_DEST_OCCUPIED_CODE, type TreeChange } from '../../src/tree-change/plan.js';
 import { TREE_ROLLBACK_INCOMPLETE_CODE } from '../../src/tree-change/rollback-error.js';
@@ -57,7 +57,7 @@ function pluginsOld(): { root: string; upper: string; lower: string } {
   return { root, upper: safePath.join(root, 'plugins', 'Old'), lower: safePath.join(root, 'plugins', 'old') };
 }
 
-const removeOf = (dest: string, label = 'legacy'): TreeChange => ({ op: 'remove', dest, ownership: { kind: 'force' }, label });
+const removeOf = (dest: string, label = 'legacy'): Extract<TreeChange, { op: 'remove' }> => ({ op: 'remove', dest, ownership: { kind: 'force' }, label });
 
 describe('planTreeChanges — the live facts', () => {
   it('takes an empty directory under must-be-free and refuses a non-empty one, writing nothing', async () => {
@@ -208,7 +208,8 @@ describe('applyTreePlan — the happy path', () => {
 
     await applyTreePlan(await planTreeChanges([replaceWith(out, { 'x.txt': 'x' }, 'out')]));
 
-    expect((snapshotTree(root).get('out')?.mode ?? 0).toString(8)).toBe((snapshotTree(root).get('probe')?.mode ?? -1).toString(8));
+    const modeOf = (entry: SnapshotEntry | undefined): number | undefined => (entry !== undefined && 'mode' in entry ? entry.mode : undefined);
+    expect((modeOf(snapshotTree(root).get('out')) ?? 0).toString(8)).toBe((modeOf(snapshotTree(root).get('probe')) ?? -1).toString(8));
   });
 
   // An ino-0 filesystem (FAT, SMB) answers `unknown` for containment: the plan must still copy, and two unrelated changes must both run.

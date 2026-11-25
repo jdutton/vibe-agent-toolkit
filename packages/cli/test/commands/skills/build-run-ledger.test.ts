@@ -91,10 +91,10 @@ async function allowUnusedAcrossBuildRun(cwd: string): Promise<{
     resourcesValidation: {},
   });
   const unused = [
-    ...run.results.flatMap(({ result }) => [
-      ...(result.postBuildIssues ?? []),
-      ...result.postBuildValidation.allErrors,
-    ]),
+    ...run.results.flatMap(({ result }) => {
+      if (result.postBuildValidation === undefined) throw new Error('a built skill carries no post-build validation');
+      return [...(result.postBuildIssues ?? []), ...result.postBuildValidation.allErrors];
+    }),
     ...run.runIssues,
   ].filter((i) => i.code === 'ALLOW_UNUSED');
 

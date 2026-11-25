@@ -198,7 +198,6 @@ const BARREL_EXPORTS = [
   'TreeRoleSchema',
   'UnknownMacroError',
   'UnregisteredProjectionColumnError',
-  'VAT_CACHE_DIR_ENV',
   'VAT_CACHE_TAG_FILE',
   'ValidationIssueSchema',
   'ValidationResultSchema',

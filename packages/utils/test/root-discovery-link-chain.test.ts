@@ -29,7 +29,7 @@ const named = vi.hoisted(() => ({ asked: [] as string[] }));
 
 vi.mock('../src/tree-change/link-chain.js', async (importOriginal) => ({ ...(await importOriginal<object>()), HOST_PATH_FLAVOR: 'win32' }));
 vi.mock('node:fs', async (importOriginal) => {
-  const real = await importOriginal<typeof NodeFs>();
+  const real = await importOriginal<typeof NodeFs & { default: typeof NodeFs }>();
   const { toForwardSlash: forward } = await import('../src/path-core.js');
   const record = (path: fs.PathLike): void => {
     named.asked.push(forward(String(path)));

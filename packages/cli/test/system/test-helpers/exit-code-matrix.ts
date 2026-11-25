@@ -26,7 +26,6 @@ import { chmodSync, rmSync } from 'node:fs';
 import { basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
 import {
   exitCodeForReport,
   type ExitDeterminingDocument,
@@ -34,7 +33,7 @@ import {
   type RefusalCode,
   type ReportStatus,
 } from '@vibe-agent-toolkit/schema';
-import { createSymlink, isPathAbsentError, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { createSymlink, isPathAbsentError, mkdirSyncReal, safePath, symlinkCapability, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { buildWindowsShellLine, shouldUseShell } from '@vibe-agent-toolkit/utils/process';
 import { CANNOT_DENY_READS, findExecutable, gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, expect, type TestContext } from 'vitest';

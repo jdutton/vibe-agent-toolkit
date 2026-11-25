@@ -28,6 +28,7 @@ import { refuseAsyncFs , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/tes
 import { describe, expect, it } from 'vitest';
 
 import { checkSettingsCompatibility } from '../src/settings/settings-compat-checker.js';
+import type { EffectiveSettings } from '../src/settings/settings-merger.js';
 
 import {
   BASH_SKILL,

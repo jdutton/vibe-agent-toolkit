@@ -158,6 +158,7 @@ function queryTopResourceId(cli: CliTarget, query: string): string {
   expect(data.chunks).toHaveLength(1);
 
   const [topHit] = data.chunks;
+  if (topHit === undefined) throw new Error('the query returned no hit');
   return topHit.resourceId;
 }
 

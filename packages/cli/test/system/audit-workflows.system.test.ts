@@ -394,7 +394,7 @@ This skill is in src/ and should be included.
     expect(report.summary.errors).toBeGreaterThan(0);
     // Every finding names the file to open, relative to the stated root.
     expect(new Set(report.findings.map((finding) => finding.location))).toStrictEqual(new Set(['skills/broken/SKILL.md']));
-    expect(report.data.counts.filesWithErrors).toBe(1);
+    expect(report.data?.counts.filesWithErrors).toBe(1);
     expect(result.status).toBe(ExitCode.FINDINGS);
   });
 
@@ -408,15 +408,15 @@ This skill is in src/ and should be included.
     commitAllAndPushMain(localDir);
 
     const local = AUDIT_REPORT_SCHEMA.parse(yaml.parse((await executeCli(binPath, ['audit', localDir], { cwd: tempDir })).stdout));
-    expect(local.data.root).toBe(safePath.resolve(localDir));
-    expect(local.data.provenance).toBeNull();
+    expect(local.data?.root).toBe(safePath.resolve(localDir));
+    expect(local.data?.provenance).toBeNull();
 
     const url = await executeCli(binPath, ['audit', pathToFileURL(bare).href], { cwd: tempDir });
     const remote = AUDIT_REPORT_SCHEMA.parse(yaml.parse(url.stdout));
     // The clone lives in a random tempdir nothing downstream can resolve, so the
     // provenance names the base instead and every path is relative to the clone.
-    expect(remote.data.root, url.stdout).toBeNull();
-    expect(remote.data.provenance).toMatchObject({ url: pathToFileURL(bare).href, ref: 'HEAD' });
-    expect(remote.data.files.map((file) => file.path)).toStrictEqual(['skills/clean/SKILL.md']);
+    expect(remote.data?.root, url.stdout).toBeNull();
+    expect(remote.data?.provenance).toMatchObject({ url: pathToFileURL(bare).href, ref: 'HEAD' });
+    expect(remote.data?.files.map((file) => file.path)).toStrictEqual(['skills/clean/SKILL.md']);
   });
 });

@@ -19,8 +19,8 @@
 import { writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-import { PROJECTION_TABLES, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { PROJECTION_TABLES } from '@vibe-agent-toolkit/resources';
+import { safePath, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { createTempDir, removeTempDir, scratchTmpdirEnv } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';

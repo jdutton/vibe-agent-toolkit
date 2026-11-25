@@ -13,6 +13,7 @@ import { Worker } from 'node:worker_threads';
 
 import {
   forEachInOrder,
+  FsLookupCache,
   isPathAbsentError,
   mkdirSyncReal,
   normalizedTmpdir,
@@ -496,8 +497,16 @@ export interface ValidateLinkOptions {
     /** Expected link property value */
     link?: string;
   };
-  /** Validation options (projectRoot, skipGitIgnoreCheck) */
-  validationOptions?: LinkValidatorOptions;
+  /** Validation options (projectRoot, skipGitIgnoreCheck); {@link linkOptions} adds the run's fsCache */
+  validationOptions?: Omit<LinkValidatorOptions, 'fsCache'>;
+}
+
+/**
+ * Complete a link-validator policy with the per-run {@link FsLookupCache}, rooted
+ * exactly where `validateLink`'s own fallback roots it (the project root, else cwd).
+ */
+export function linkOptions(policy: Omit<LinkValidatorOptions, 'fsCache'>): LinkValidatorOptions {
+  return { ...policy, fsCache: new FsLookupCache(policy.projectRoot ?? process.cwd()) };
 }
 
 /**
@@ -563,7 +572,12 @@ export async function assertValidation(
 ): Promise<ValidationIssue | null> {
   const { sourceFile, link, headingsMap, expected, validationOptions } = options;
 
-  const result = await validateLink(link, sourceFile, headingsMap, validationOptions);
+  const result = await validateLink(
+    link,
+    sourceFile,
+    headingsMap,
+    validationOptions === undefined ? undefined : linkOptions(validationOptions),
+  );
 
   if (expected === null) {
     expectFn(result).toBeNull();

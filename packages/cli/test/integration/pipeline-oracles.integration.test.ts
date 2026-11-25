@@ -44,7 +44,7 @@ import {
 
 const PACKAGE_ROOT = toForwardSlash(fileURLToPath(new URL('../../', import.meta.url)));
 const GOLDEN_DIR = safePath.join(PACKAGE_ROOT, 'test', 'golden', 'pipeline-oracles');
-const UPDATING = process.env.UPDATE_DRIFT_GOLDEN === '1';
+const UPDATING = process.env['UPDATE_DRIFT_GOLDEN'] === '1';
 
 /**
  * Printed on BOTH the missing-golden and the drift branch: the drift branch is

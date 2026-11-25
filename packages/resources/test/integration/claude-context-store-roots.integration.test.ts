@@ -34,6 +34,7 @@ import {
   buildClaudeContextPopulation,
   type ClaudeContextPopulation,
 } from '../../src/projection/claude-context-population.js';
+import type { ExtentContributor } from '../../src/projection/contributor.js';
 import { AgenticConventionContributor } from '../../src/projection/contributors/agentic-convention.js';
 import {
   CLAUDE_IMPORT_KIND,
@@ -149,11 +150,12 @@ describe('buildClaudeContextPopulation root discovery', () => {
     // simply stop hitting and the lane would crawl, exactly as the case below
     // shows it does. This test is what makes that a decision rather than a
     // silent, permanent regression back to two populations per run.
-    const declared = [
+    const contributors: readonly ExtentContributor[] = [
       new AgenticConventionContributor(),
       new ClaudeRulesScopeContributor(),
       new ClaudeImportExtentContributor('CLAUDE.md'),
-    ].filter((contributor) => contributor.registrationQuestion !== undefined);
+    ];
+    const declared = contributors.filter((contributor) => contributor.registrationQuestion !== undefined);
 
     expect(declared.map((contributor) => contributor.id)).toEqual([]);
   });

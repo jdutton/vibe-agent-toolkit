@@ -156,7 +156,7 @@ describe('Zod Introspection', () => {
         // Lazy schema for recursive type (simplified to avoid deep nesting)
         interface Node {
           value: string;
-          children?: Node[];
+          children?: Node[] | undefined;
         }
         const schema: z.ZodType<Node> = z.lazy(() =>
           z.object({
@@ -526,7 +526,7 @@ describe('Zod Introspection', () => {
     it('should handle recursive schemas with lazy', () => {
       interface Category {
         name: string;
-        subcategories?: Category[];
+        subcategories?: Category[] | undefined;
       }
 
       const categorySchema: z.ZodType<Category> = z.lazy(() =>

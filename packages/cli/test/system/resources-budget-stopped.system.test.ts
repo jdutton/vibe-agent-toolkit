@@ -82,13 +82,23 @@ describe.skipIf(process.platform === 'win32')('a supervised run stopped and cont
     project = createTestTempDir('vat-budget-stopped-');
     writeFileTree(project, { 'a.md': '# Alpha\n', 'vibe-agent-toolkit.config.yaml': 'resources: {}\n' });
     spawnSync(gitExecutable(), ['init', '--quiet'], { cwd: project });
-    // One complete in-process run sizes the bound: spawn, population and one cheap statement.
-    measured = measureBudget(() => {
+  });
+
+  /**
+   * Size this case's bound from one complete in-process run, taken right beside it: spawn,
+   * population and one cheap statement. Never once per file: a probe taken while the machine was
+   * quiet sized a 3 s bound that a loaded runner then spent on the child's boot alone (killed
+   * "before the child process had finished starting"), as `measureBudget` warns.
+   *
+   * @returns The baseline and the bound
+   */
+  function measureBesideCase(): MeasuredBudget {
+    return measureBudget(() => {
       const startedAt = Date.now();
       spawnSync(NODE_EXECUTABLE, [BIN_PATH, 'resources', 'query', MD_ROWS, '--budget', '0'], { cwd: project });
       return Date.now() - startedAt;
     });
-  });
+  }
 
   afterEach(() => {
     // A red case must leave nothing stopped or running: continue the group, then kill both.
@@ -109,6 +119,7 @@ describe.skipIf(process.platform === 'win32')('a supervised run stopped and cont
    * @returns The supervisor's pid, once the child has written its own
    */
   async function startPausedQuery(): Promise<number> {
+    measured = measureBesideCase();
     const { budgetSeconds } = measured;
     const marker = safePath.join(scratch(), 'paused-child.pid');
     running = startVat(project, ['resources', 'query', MD_ROWS, '--budget', String(budgetSeconds)], {
@@ -135,7 +146,8 @@ describe.skipIf(process.platform === 'win32')('a supervised run stopped and cont
     process.kill(-supervisorPid, 'SIGCONT');
 
     const ending = await (running as LiveVat).ended;
-    expect(ending.code, ending.stderr).toBe(0);
+    // The bound this case derived, beside the run's own words: a red here says which side moved.
+    expect(ending.code, `${JSON.stringify(measured)} ${ending.stderr}`).toBe(0);
     expect(ending.document['error'], ending.stderr).toBeUndefined();
     expect(JSON.stringify(ending.document)).toContain('a.md');
   });

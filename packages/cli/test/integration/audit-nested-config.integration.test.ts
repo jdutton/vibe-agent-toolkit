@@ -132,7 +132,7 @@ async function auditAndCollectLinkOutside(
   pkgMarker: string,
 ): Promise<{
   result: Awaited<ReturnType<typeof runAudit>>[number] | undefined;
-  linkOutsideIssues: Array<{ code: string; message: string }>;
+  linkOutsideIssues: Array<{ code: string; message: string; severity: string }>;
 }> {
   const results = await runAudit(scanDir, { recursive: true });
   const result = results.find(r => r.path.includes(pkgMarker));

@@ -40,8 +40,7 @@
 
 import { chmodSync, rmSync, writeFileSync } from 'node:fs';
 
-import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
-import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { createSymlink, mkdirSyncReal, safePath, symlinkCapability, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 

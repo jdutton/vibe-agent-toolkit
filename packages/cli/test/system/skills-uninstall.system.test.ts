@@ -8,8 +8,9 @@
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
+import type { z } from 'zod';
 
-import { PLUGIN_UNINSTALL_REPORT_SCHEMA, type PluginUninstallReport } from '../../src/commands/claude/plugin/uninstall-schema.js';
+import { PLUGIN_UNINSTALL_REPORT_SCHEMA } from '../../src/commands/claude/plugin/uninstall-schema.js';
 
 import {
   createPackageAndHomeContext,
@@ -133,7 +134,7 @@ async function setupInstalledPlugin(suite: ReturnType<typeof setupUninstallTestS
 }
 
 /** The report `vat claude plugin uninstall` published, validated against its schema. */
-function uninstallReport(stdout: string): PluginUninstallReport {
+function uninstallReport(stdout: string): z.infer<typeof PLUGIN_UNINSTALL_REPORT_SCHEMA> {
   return PLUGIN_UNINSTALL_REPORT_SCHEMA.parse(yaml.parse(stdout));
 }
 

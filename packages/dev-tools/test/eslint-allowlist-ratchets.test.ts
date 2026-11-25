@@ -29,9 +29,12 @@ import { atLeastTierTimeout } from '@vibe-agent-toolkit/utils/testing';
 import { ESLint } from 'eslint';
 import { describe, expect, inject, it } from 'vitest';
 
-import { LINK_FOLLOWING_FS_CALLS } from '../../../eslint.config.js';
+import { filesWithoutFinding, findingCounts, importRootEslintConfig } from './eslint-clean-files.js';
 
-import { filesWithoutFinding, findingCounts } from './eslint-clean-files.js';
+/** The one `eslint.config.js` export this file reads: each listed file and its link-following call count. */
+const { LINK_FOLLOWING_FS_CALLS } = await importRootEslintConfig<{
+  readonly LINK_FOLLOWING_FS_CALLS: Readonly<Record<string, number>>;
+}>();
 
 const REPO_ROOT = resolveFromImportMeta(import.meta.url, '..', '..', '..');
 

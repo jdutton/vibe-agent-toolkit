@@ -221,7 +221,7 @@ describe('planFromFacts — ownership', () => {
     ['force', FORCE],
     ['vat-state', { kind: 'vat-state' }],
     ['must-be-free', FREE],
-    ['vat-made, recognised', { kind: 'vat-made', recognise: () => ({ owned: true }) }],
+    ['vat-made, recognised', { kind: 'vat-made', recognise: () => ({ owned: true }) as const }],
   ] as const)('refuses a replace-file over a DIRECTORY under %s ownership, saying it is a directory', (_kind, ownership) => {
     const facts = world({ '/p/out': { kind: 'directory' } });
     const file = { op: 'replace-file', dest: '/p/out', ownership, contents: 'x', label: 'config.yaml' } as const;

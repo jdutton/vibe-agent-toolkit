@@ -79,7 +79,7 @@ describe('a run holding two roots', () => {
     const [first] = projection.roots;
     if (first === undefined) throw new Error('the fixture projection has no root row');
     const twoRoots: Projection = { ...projection, roots: [...projection.roots, { ...first, id: 'root-2', path: '/b' }] };
-    const outcome = await askPopulatedProjection(
+    const outcome = await withPopulationRun((populationRun) => askPopulatedProjection(
       {
         projection: twoRoots,
         outcome: { population: 'derived' },
@@ -88,10 +88,11 @@ describe('a run holding two roots', () => {
         statements: [NAMES_REALIZATIONS, NAMES_BLOBS],
         base: undefined,
         cache: undefined,
+        populationRun,
         populationStart: performance.now(),
       },
       (ask) => ({ blobs: ask(NAMES_BLOBS), refused: thrownBy(() => ask(NAMES_REALIZATIONS)) }),
-    );
+    ));
 
     expect(outcome.blobs[0]?.['n']).toBe(projection.blobs.length);
     expect(isVatError(outcome.refused, PROJECTION_STATEMENT_REFUSED_CODE), String(outcome.refused)).toBe(true);
@@ -104,7 +105,7 @@ describe('a run holding two roots', () => {
 
 /** The issues one run of these checks raises, every check's statement declared to the run. */
 async function issuesOf(checks: Readonly<Record<string, { description: string; sql: string }>>): Promise<readonly { message: string }[]> {
-  return askPopulatedProjection(
+  return withPopulationRun((populationRun) => askPopulatedProjection(
     {
       projection,
       outcome: { population: 'derived' },
@@ -113,6 +114,7 @@ async function issuesOf(checks: Readonly<Record<string, { description: string; s
       statements: Object.values(checks).map((check) => check.sql),
       base: undefined,
       cache: undefined,
+      populationRun,
       populationStart: performance.now(),
     },
     (ask, _provenance, _extent, _projection, columnsOf) => runProjectChecks({
@@ -125,7 +127,7 @@ async function issuesOf(checks: Readonly<Record<string, { description: string; s
       membersEnumerated: projection.blobs.length,
       warn: () => undefined,
     }).issues,
-  );
+  ));
 }
 
 describe('a check reads only the relations it names itself', () => {

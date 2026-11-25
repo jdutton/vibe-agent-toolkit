@@ -77,7 +77,7 @@ describe('a failing command honours the --format it was given', () => {
 
   /** Everything the command wrote to stdout, joined. */
   const publishedDocument = (): string =>
-    stdoutSpy.mock.calls.map((call) => String(call[0])).join('');
+    stdoutSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('');
 
   it('publishes `vat claude context --format json` failures as JSON', async () => {
     await expect(

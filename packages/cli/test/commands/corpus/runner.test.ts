@@ -1,6 +1,6 @@
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 
-import { countBySeverity, resultStatus } from '@vibe-agent-toolkit/schema';
+import { countBySeverity, resultStatus, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, normalizedTmpdir, recordSuppressedFault, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import type * as Utils from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
@@ -17,6 +17,7 @@ import {
 } from '../../../src/commands/corpus/runner.js';
 import type { PluginEntry } from '../../../src/commands/corpus/seed.js';
 import { CommandRefusalError } from '../../../src/utils/command-refusal.js';
+import { reportData } from '../../report-envelope.js';
 
 /** The in-process audit, replaced only where a test makes it throw; every other call runs the real one. */
 const { getValidationResults } = vi.hoisted(() => ({ getValidationResults: vi.fn() }));
@@ -208,7 +209,7 @@ describe('auditOnePlugin — validation overlay', () => {
 
     const overlayPath = safePath.join(pluginDir, 'vibe-agent-toolkit.config.yaml');
     const written = yaml.parse(readFileSync(overlayPath, 'utf-8')) as Record<string, unknown>;
-    expect((written.skills as Record<string, unknown>).defaults).toEqual({
+    expect((written['skills'] as Record<string, unknown>)['defaults']).toEqual({
       validation: { severity: { LINK_TO_NAVIGATION_FILE: 'ignore' } },
     });
   });
@@ -246,7 +247,7 @@ function makeMultiSkillPluginDir(skillNames: string[]): string {
 async function runReviewedAudit(pluginDir: string, name: string): Promise<string> {
   const runDir = makeRunDir();
   const entry: PluginEntry = { source: pluginDir, name, ...META };
-  const row = await auditOnePlugin(entry, { runDir, withReview: true, debug: false });
+  const row = await auditOnePlugin(entry, { runDir, withReview: true, debug: false, leftovers: [] });
   expect(row.review.status).toBe('ok');
   expect(row.review.output_path).toBe(`${name}-review.md`);
   // A real (subprocess-backed) clean run carries the distribution too.
@@ -295,7 +296,7 @@ describe('auditOnePlugin — --with-review', () => {
 
     const entry: PluginEntry = { source: root, name: 'empty', ...META };
 
-    const row = await auditOnePlugin(entry, { runDir, withReview: true, debug: false });
+    const row = await auditOnePlugin(entry, { runDir, withReview: true, debug: false, leftovers: [] });
 
     expect(row.audit.status).toBe('findings');
     expect(row.audit.summary).toEqual({ errors: 1, warnings: 0, info: 0 });
@@ -304,7 +305,7 @@ describe('auditOnePlugin — --with-review', () => {
     // The finding itself lives in the per-plugin audit report, beside the
     // (empty) file rows, so the row's counts are backed by a message.
     const auditDoc = AUDIT_REPORT_SCHEMA.parse(yaml.parse(readFileSync(safePath.join(runDir, 'empty-audit.yaml'), 'utf-8')));
-    expect(auditDoc.data.files).toEqual([]);
+    expect(reportData(auditDoc).files).toEqual([]);
     expect(auditDoc.findings.map((i) => [i.code, i.severity])).toEqual([[RUN_INTEGRITY_CODE, 'error']]);
     expect(auditDoc.findings[0]?.message).toContain('0 files');
     expect(row.review.status).toBe('error');
@@ -316,7 +317,7 @@ describe('auditOnePlugin — --with-review', () => {
     const runDir = makeRunDir();
     const entry: PluginEntry = { source: '/does/not/exist', name: 'ghost', ...META };
 
-    const row = await auditOnePlugin(entry, { runDir, withReview: true, debug: false });
+    const row = await auditOnePlugin(entry, { runDir, withReview: true, debug: false, leftovers: [] });
 
     // Audit is unloadable so review is skipped (don't review what didn't audit)
     expect(row.audit.status).toBe('unloadable');
@@ -407,11 +408,11 @@ describe('buildReviewOutcome', () => {
 });
 
 /** One per-file audit result carrying the given issues — the unit `files_scanned` counts. */
-function auditResult(issues: Array<{ code: string; severity: 'error' | 'warning' | 'info' }>) {
+function auditResult(issues: Array<Pick<ValidationIssue, 'code' | 'severity'>>) {
   const published = issues.map((i) => ({ ...i, message: `${i.code} fired` }));
   return {
     path: safePath.resolve('/corpus-b/SKILL.md'),
-    type: 'agent-skill',
+    type: 'agent-skill' as const,
     status: resultStatus(published),
     description: 'fixture',
     issues: published,
@@ -437,7 +438,7 @@ describe('buildAuditOutcome', () => {
     expect(audit.files_scanned).toBe(0);
     expect(audit.findings_emitted).toBe(1);
     expect(audit.output_path).toBe(AUDIT_DOC);
-    expect(AUDIT_REPORT_SCHEMA.parse(document).data.files).toEqual([]);
+    expect(reportData(AUDIT_REPORT_SCHEMA.parse(document)).files).toEqual([]);
     expect(document.examined).toBe(0);
     expect(document.findings.map((f) => f.code)).toEqual([RUN_INTEGRITY_CODE]);
     expect(document.findings[0]?.severity).toBe('error');
@@ -466,7 +467,7 @@ describe('buildAuditOutcome', () => {
 
   it('rolls real findings up unchanged', () => {
     const { audit, document } = buildAuditOutcome(
-      [auditResult([{ code: 'SKILL_DESCRIPTION_SHORT', severity: 'warning' }])],
+      [auditResult([{ code: 'SKILL_DESCRIPTION_TOO_LONG', severity: 'warning' }])],
       12,
       AUDIT_DOC,
       ROOT,

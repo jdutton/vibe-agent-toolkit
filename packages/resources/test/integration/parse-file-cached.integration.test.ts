@@ -23,8 +23,8 @@ import { promises as fs } from 'node:fs';
 import { FS_FAULT_CODE, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import type { ParserKind } from '../../src/content-key.js';
 import type { ParseResult } from '../../src/link-parser.js';
+import type { DocumentParserKind } from '../../src/mime-type.js';
 import { ParseCache, type ParseCacheStats } from '../../src/parse-cache.js';
 import { parseFileCached } from '../../src/parse-dispatcher.js';
 import { parseHtmlFile, parseMarkdownFile } from '../test-helpers.js';
@@ -148,7 +148,7 @@ function setupParseFileCachedSuite(): {
  */
 async function coldThenWarm(
   filePath: string,
-  parserKind: ParserKind,
+  parserKind: DocumentParserKind,
   cacheDir: string,
 ): Promise<ColdWarm> {
   const coldCache = new ParseCache({ cacheDir });

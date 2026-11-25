@@ -27,7 +27,7 @@ import {
 } from './helpers/context-query-rows.js';
 
 /** The numbered patterns a file with this frontmatter stores in `harness_blob_facts.paths`. */
-function patternsOf(frontmatter: Readonly<Record<string, unknown>>): DeclaredPattern[] {
+function patternsOf(frontmatter: Readonly<Record<string, unknown>>): readonly DeclaredPattern[] {
   return declaredPatterns(harnessPaths(frontmatter));
 }
 

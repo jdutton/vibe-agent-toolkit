@@ -259,6 +259,7 @@ describe('hasExtension parity across producers', () => {
       sizeBytes: 0,
       headings: [],
       estimatedTokenCount: 0,
+      skillText: null,
       links: [{
         text: 'q',
         href: rawRef,

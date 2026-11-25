@@ -424,7 +424,7 @@ describe('skills package — the claude.ai ZIP ceiling (system test)', () => {
       severity: 'error',
       location: expect.stringMatching(/SKILL\.md$/),
     })]);
-    expect(report.data.outputPath).toBeNull();
+    expect(report.data?.outputPath).toBeNull();
     expect(existsSync(`${outputDir}.zip`)).toBe(false);
     expect(existsSync(outputDir)).toBe(false);
   });

@@ -125,7 +125,7 @@ describe('OpenAIEmbeddingProvider - Unit Tests', () => {
 });
 
 describe('OpenAIEmbeddingProvider - Integration Tests', () => {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env['OPENAI_API_KEY'];
   const skipMessage = 'Skipping OpenAI integration test (no OPENAI_API_KEY)';
 
   beforeEach(() => {
