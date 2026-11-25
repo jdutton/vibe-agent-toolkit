@@ -1866,7 +1866,6 @@ describe('the clocks and the breaker', () => {
     // clock; once `parserLoaded` has reached the pool, the parse runs another 0.9 × timeMs and
     // answers. A clock armed at dispatch would have stopped it at timeMs. Past a whole timeMs of
     // parse clock, it is refused at timeMs.
-    const deadline = settleDeadline();
     vi.useFakeTimers(TEST_CLOCK);
     const entry = await seedWorkerEntry(heldLoadAndAnswer());
     const dir = safePath.resolve(entry, '..');
@@ -1883,7 +1882,7 @@ describe('the clocks and the breaker', () => {
         await fs.rm(safePath.join(dir, 'go'));
         vi.advanceTimersByTime(parseMs);
         await fs.writeFile(safePath.join(dir, 'answer'), '');
-        outcomes.push(await settledBy(outcome, deadline));
+        outcomes.push(await outcome);
         await fs.rm(safePath.join(dir, 'answer'));
       }
     } finally {
@@ -1936,7 +1935,6 @@ describe('the clocks and the breaker', () => {
     // three times, a markdown document answered between each stop. Any answer ending the run would
     // leave the HTML document a per-run death and the install judged sound. A reused thread passes
     // its heap check first: the load hangs, never the check, whose loss is no load stop.
-    const deadline = settleDeadline();
     vi.useFakeTimers(TEST_CLOCK);
     const entry = await seedWorkerEntry(intercepting("request?.kind === 'html'", [
       'if (request.settleHeap) parentPort.postMessage({ id: request.id, reuseCheck: { usedBytes: 0, collectMs: null, checkMs: 0, retire: false } });',
@@ -1952,10 +1950,10 @@ describe('the clocks and the breaker', () => {
       const pending = pool.parse('html', '<p>hung</p>', 11).then(() => 'answered', (error: unknown) => error);
       for (let stop = 0; stop < 3; stop += 1) {
         await consumeMarker(htmlMarker);
-        answers.push(await settledBy(outcomeOf(pool, `# between ${String(stop)}\n`), deadline));
+        answers.push(await outcomeOf(pool, `# between ${String(stop)}\n`));
         vi.advanceTimersByTime(150);
       }
-      html = await settledBy(pending, deadline);
+      html = await pending;
     } finally {
       vi.useRealTimers();
     }
@@ -1974,7 +1972,6 @@ describe('the clocks and the breaker', () => {
     // stopped twice more, on threads that never load, and ends as parser-unavailable of its own.
     // Had the late `parserLoaded` been dropped, those three stops would be a run, the install
     // judged broken, and the markdown document after them refused.
-    const deadline = settleDeadline();
     vi.useFakeTimers(TEST_CLOCK);
     const entry = await seedWorkerEntry(htmlLoadsOnGo());
     const marker = (name: string): string => safePath.join(safePath.resolve(entry, '..'), name);
@@ -2002,8 +1999,8 @@ describe('the clocks and the breaker', () => {
         await consumeMarker(marker('html'));
         vi.advanceTimersByTime(150);
       }
-      html = await settledBy(pending, deadline);
-      after = await settledBy(outcomeOf(pool, '# after\n'), deadline);
+      html = await pending;
+      after = await outcomeOf(pool, '# after\n');
     } finally {
       vi.advanceTimersByTime(150);
       vi.useRealTimers();
@@ -2018,7 +2015,6 @@ describe('the clocks and the breaker', () => {
     // Two threads stopped at their load clock holding an HTML document; the third answers it with a
     // failure, as a thread whose parser import failed would. A second HTML document's stop is then
     // the third of the run, the install is judged broken, and a markdown document is refused.
-    const deadline = settleDeadline();
     vi.useFakeTimers(TEST_CLOCK);
     const entry = await seedWorkerEntry(intercepting("request?.kind === 'html'", [
       // The thread that answered the failure is reused for the next document: it checks its heap and
@@ -2043,12 +2039,12 @@ describe('the clocks and the breaker', () => {
       // The next thread answers with a failure: armed while this one holds the document.
       await fs.writeFile(marker('fail'), '');
       vi.advanceTimersByTime(150);
-      first = await settledBy(pending, deadline);
+      first = await pending;
       const second = pool.parse('html', '<p>b</p>', 8).then(() => 'answered', (error: unknown) => error);
       await consumeMarker(marker('html'));
       vi.advanceTimersByTime(150);
-      await settledBy(second, deadline);
-      after = await settledBy(outcomeOf(pool, '# after\n'), deadline);
+      await second;
+      after = await outcomeOf(pool, '# after\n');
     } finally {
       vi.advanceTimersByTime(150);
       vi.useRealTimers();
@@ -2081,36 +2077,6 @@ function htmlLoadsOnGo(): string {
     '} : listener);',
     `await import(${JSON.stringify(BUILT_WORKER)});`,
   ].join('\n');
-}
-
-/**
- * The wall-clock time one clock test's waits share, in ms: under the unit tier's test timeout, so a
- * job that never settles reaches the test's assertion as `unsettled` rather than timing the test
- * out — and leaving the pool's clocks on fake timers for teardown to drain.
- */
-const SETTLE_BUDGET_MS = 10_000;
-
-/**
- * @returns When a clock test's shared wait budget ({@link SETTLE_BUDGET_MS}), started now, runs out
- */
-function settleDeadline(): number {
-  return Date.now() + SETTLE_BUDGET_MS;
-}
-
-/**
- * Wait, on no fake clock, for `outcome` — until `deadline` at the latest.
- *
- * @param outcome - A job's outcome
- * @param deadline - When the test's shared budget runs out ({@link settleDeadline})
- * @returns What it settled to, or `unsettled`
- */
-async function settledBy(outcome: Promise<unknown>, deadline: number): Promise<unknown> {
-  let settled: { value: unknown } | undefined;
-  outcome.then((value) => {
-    settled = { value };
-  }, () => undefined);
-  while (settled === undefined && Date.now() < deadline) await new Promise((resolve) => setImmediate(resolve));
-  return settled === undefined ? 'unsettled' : settled.value;
 }
 
 /**
