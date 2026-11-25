@@ -722,6 +722,80 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Fix:** incremental repopulation — reuse stored blob facts for held content keys (which also
   skips their blob-tier rewrite) and content keys for stat-unchanged paths. Its own change.
 
+### A same-second edit is served stale when the temp index is racy
+
+- **Severity:** Important · **Effort:** M (closed by the pin) · **User-visible:** yes
+- **Mechanism:** the tree hash comes from a snapshot through a temporary index. An edit that lands in
+  the same filesystem second as the snapshot's own write can leave an index entry git judges
+  stat-clean, so the snapshot hashes the old bytes and the edit is served the previous tree's facts.
+  The fault is in git and in the snapshot's caller; VAT only reads the hash.
+- **Reproduce:** traced in code. Edit a tracked file within the second of a snapshot taken by the
+  previous run, then run `vat resources validate`: the run reports `population: store` over the old
+  bytes.
+- **Where:** `gitTreeKey` in [`git-tree-key.ts`](../../packages/utils/src/git-tree-key.ts)
+- **Fix:** closed at B2's pin. The hazard-register row stays open until then.
+
+### An edit outside the cone of a sparse checkout is served stale
+
+- **Severity:** Important · **Effort:** M (closed by the pin) · **User-visible:** yes
+- **Mechanism:** in a sparse checkout the tree hash covers entries the working tree does not hold.
+  The key adds a digest of the absent paths, so the same tree with them present is never served it,
+  and a tracked path outside the cone that is present on disk hides bytes, so the key declines. But
+  a new file outside the cone is not an index entry, and `git add` in a sparse checkout skips it, so
+  it moves neither the hash nor the digest.
+- **Reproduce:** traced in code. In a sparse checkout, add a file outside the cone, then run
+  `vat resources validate`: the store answers as before the file existed.
+- **Where:** `gitSnapshotAbsentEntries` in [`git-tree-key.ts`](../../packages/utils/src/git-tree-key.ts)
+- **Fix:** closed at B2's pin. The hazard-register row stays open until then.
+
+### `git lfs pull` is served stale
+
+- **Severity:** Important · **Effort:** M (closed by B1) · **User-visible:** yes
+- **Mechanism:** an LFS file's index entry holds its pointer, and the tree hash follows the pointer.
+  `git lfs pull` replaces the pointer's bytes on disk with the real content and moves neither the
+  hash nor the entry, so a warm run serves the facts of the pointer text.
+- **Reproduce:** traced in code. Commit an LFS-tracked markdown file, run
+  `vat resources validate`, run `git lfs pull`, then run it again: the second run reports
+  `population: store`.
+- **Where:** `gitTreeKey` in [`git-tree-key.ts`](../../packages/utils/src/git-tree-key.ts)
+- **Fix:** closed by B1: the key carries the pointer, a size probe and a pulled bit.
+
+### An edit to a declared gitignored file is served stale
+
+- **Severity:** Important · **Effort:** L · **User-visible:** yes
+- **Mechanism:** an edit to a declared gitignored file, or to a file a symlink resolves to inside
+  ignored territory, is served stale; extent rows carrying such observations can differ between
+  writers of one key. Git's tree hash cannot see ignored territory, and the extent rows hold the
+  disk observations made at the time of writing.
+- **Reproduce:** traced in code. Declare a gitignored file as an input, run
+  `vat resources validate`, edit the file, run it again: the run reports `population: store`.
+- **Where:** observations in [`realizations.ts`](../../packages/resources/src/projection/realizations.ts)
+- **Fix:** none designed. The hazard-register row records it as accepted and deferred.
+
+### An uncommitted edit inside a submodule is served stale
+
+- **Severity:** Important · **Effort:** L · **User-visible:** yes
+- **Mechanism:** the superproject's tree hash holds a submodule as one commit id. Uncommitted bytes
+  inside the submodule move no hash the key reads.
+- **Reproduce:** traced in code. In a repository with a populated submodule, run
+  `vat resources validate`, edit a tracked markdown file inside the submodule without committing, run
+  it again: the run reports `population: store`.
+- **Where:** `gitTreeKey` in [`git-tree-key.ts`](../../packages/utils/src/git-tree-key.ts)
+- **Fix:** Phase 2 keys submodule contents. The hazard-register row stays accepted until then.
+
+### A control-flow edit to an extractor under an unchanged declared shape is served stale in a dev build
+
+- **Severity:** Minor · **Effort:** S (accepted) · **User-visible:** yes (developers of VAT only)
+- **Mechanism:** a dev build's cache namespace digests the declared shape and the resolved parser
+  versions, not the built output: fingerprinting built output was measured and rejected (65
+  namespaces, 267 MB). An edit that changes an extractor's control flow and leaves its declared
+  shape alone keeps the namespace, so the store serves facts the old code wrote.
+- **Reproduce:** edit an extractor's body without changing what it declares, rebuild, run
+  `vat resources validate` on a tree the previous build populated.
+- **Where:** [`cache-namespace.ts`](../../packages/resources/src/cache-namespace.ts)
+- **Fix:** none; the remedy is `vat cache clear`. Released builds are not affected: their namespace
+  changes with the version.
+
 ### A cold membership or build run holds every non-ignored file's bytes in memory
 
 - **Blocks:** the stable tag

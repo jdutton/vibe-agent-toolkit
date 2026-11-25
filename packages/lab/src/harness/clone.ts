@@ -106,6 +106,8 @@ export async function prepareClone(preparation: ClonePreparation): Promise<Prepa
     arm,
     env: { set: {}, unset: [] },
     ...(preparation.timeoutMs === undefined ? {} : { timeoutMs: preparation.timeoutMs }),
+    editPaths: null,
+    observeRepetitions: false,
   });
   const violation = run.results[0]?.violation ?? null;
   if (violation !== null) return refused(`preparing '${path}': ${violation}`);
@@ -116,7 +118,7 @@ export async function prepareClone(preparation: ClonePreparation): Promise<Prepa
 }
 
 /** One preparation git: its exit (`null` when it never ran or was killed), and trimmed streams. */
-type PreparationGit = (
+export type PreparationGit = (
   args: readonly string[],
   cwd: string,
   set?: Readonly<Record<string, string>>,
@@ -131,7 +133,7 @@ type PreparationGit = (
  * @param timeoutMs - Per-command ceiling, as for the steps
  * @returns The runner
  */
-function preparationGit(dirs: ArmDirectories, timeoutMs: number | undefined): PreparationGit {
+export function preparationGit(dirs: ArmDirectories, timeoutMs: number | undefined): PreparationGit {
   return (args, cwd, set = {}) => {
     const ran = runCommand({ command: 'git', leadingArgs: [] }, args, {
       cwd,

@@ -10,6 +10,7 @@ import type { InstrumentVersion, SubjectRef, SubjectVersion } from '../envelope/
 
 import type { ArmEnvironment } from './arm-env.js';
 import type { MeasuredCommandSpec } from './commands.js';
+import type { EditKind } from './edit-step.js';
 
 /**
  * How the caller named a vat to measure.
@@ -87,6 +88,24 @@ export interface ResolvedSubject {
  * the same thing by construction. See `repeat.ts`.
  */
 export type CacheMode = 'warm' | 'cold';
+
+/**
+ * An edit arm's state: warm, with `count` files edited by `kind` before every
+ * measured repetition (see `edit-step.ts`). Spelled `warm-edit<N>[:<kind>]`
+ * (`arm-state.ts`).
+ */
+export interface EditState {
+  readonly warm: 'edit';
+  readonly count: number;
+  readonly kind: EditKind;
+}
+
+/**
+ * The state of a `perf arms` arm: a cache mode, or an edit arm's. Part of the
+ * arm's identity (`<build>:<sequence>:<state>`), so `warm-edit1` and
+ * `warm-edit50` of one build are two arms with their own directories.
+ */
+export type ArmState = CacheMode | EditState;
 
 /**
  * Machine-load readings taken around the capture.

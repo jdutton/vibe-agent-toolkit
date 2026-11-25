@@ -102,6 +102,18 @@ export interface RepeatSpec {
    * setup's I/O into a repeat's measurement.
    */
   readonly envFor?: RepeatEnvFor;
+  /**
+   * The files an edit arm (`arm.state` an `EditState`) edits, as `--edit` names
+   * them; `null`, the first N tracked markdown files with no frontmatter
+   * (`edit-step.ts`). Read by edit arms only; every caller states it.
+   */
+  readonly editPaths: readonly string[] | null;
+  /**
+   * Whether every measured repetition gets its own fresh work-dump and git-trace
+   * directories (`sequence.ts`, `RepetitionObservation`). The arms facet sets it;
+   * a facet that sets its own `VAT_WORK_COUNTERS` per repeat through `envFor` does not.
+   */
+  readonly observeRepetitions: boolean;
 }
 
 /** Per-repeat variables for the measured run; see {@link RepeatSpec.envFor}. */
@@ -242,6 +254,8 @@ export async function measureSpec(
     ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
     env: request.env,
     ...(envFor === undefined ? {} : { envFor }),
+    editPaths: null,
+    observeRepetitions: false,
   });
   return {
     spec,
@@ -334,14 +348,15 @@ async function runPreparedArms(
   // Before any measured child: an arm that cannot judge its population is refused whole, not after round 1.
   for (const [index, arm] of arms.entries()) parseDirectoryRefusal(arm, specs[index]?.arm.arm ?? '');
   // One sequence at a time, never concurrently: a measurement shares the machine with nothing of its own.
-  const priming = await mapInOrder(arms, (arm) => (arm.context.state === 'warm' ? primed(arm) : null));
+  // A warm arm and an edit arm prime alike: an edit arm is a warm arm that edits before each measured run.
+  const priming = await mapInOrder(arms, (arm) => (arm.context.state === 'cold' ? null : primed(arm)));
   const results = arms.map((): SequenceResult[] => []);
   const roundNumbers = Array.from({ length: rounds }, (_, round) => round);
   await forEachInOrder(roundNumbers, (round) =>
     forEachInOrder(arms, async (arm, index) => {
       if ((priming[index]?.violation ?? null) !== null) return;
       await clearWrittenOutputs(arm);
-      const run = await runSequence(arm.context, { kind: 'measured', vatEnv: arm.measuredEnv(round) });
+      const run = await runSequence(arm.context, { kind: 'measured', vatEnv: arm.measuredEnv(round), round });
       results[index]?.push(strayWrite(arm, copies[index] ?? null, run));
     }),
   );
@@ -365,7 +380,7 @@ async function runPreparedArms(
 async function makeSubjectCopy(arm: PreparedArm): Promise<string | null> {
   if (arm.copy === null) return null;
   await removeArmSubject(arm.context.dirs);
-  copySubject(arm.copy.from, arm.context.dirs.subject);
+  await copySubject(arm.copy.from, arm.context.dirs.subject);
   return copyFingerprint(arm.context.dirs.subject, arm.copy.writes);
 }
 
@@ -486,6 +501,8 @@ function prepareArm(spec: RepeatSpec): PreparedArm {
     steps: spec.steps,
     dirs,
     state: spec.arm.state,
+    editPaths: spec.editPaths,
+    observe: spec.observeRepetitions,
     vatEnv: vat.env,
     toolEnv: tool.env,
     timeoutMs: spec.timeoutMs ?? DEFAULT_TIMEOUT_MS,

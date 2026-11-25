@@ -27,6 +27,7 @@ export function armsRequest(probe: Probe, overrides: Partial<CaptureArmsRequest>
     ],
     rounds: 3,
     env: { set: {}, unset: [] },
+    editPaths: null,
     ...overrides,
   };
 }

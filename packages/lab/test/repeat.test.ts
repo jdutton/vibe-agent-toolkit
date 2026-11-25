@@ -40,7 +40,7 @@ function sequence(exitCode: number, violation: string | null = null): SequenceRe
  */
 function stepsExited(exits: readonly number[], violation: string | null = null): SequenceResult {
   const steps = exits.map((exitCode, index) => ({ ...result({ exitCode }), name: `s${String(index)}`, timed: true, provenance: null }));
-  return { ...result({ exitCode: exits.find((code) => code !== 0) ?? 0 }), steps, violation };
+  return { ...result({ exitCode: exits.find((code) => code !== 0) ?? 0 }), steps, violation, edits: null, observed: null };
 }
 
 describe('materializeArgs', () => {

@@ -25,6 +25,7 @@ describe('captureArms provenance', () => {
       arms: [{ build: 'old', arm: 'A', state: 'cold', steps: [probeStep(['a'])] }],
       rounds: 1,
       env: { set: {}, unset: [] },
+      editPaths: null,
     });
 
     expect(report.builds).toEqual([{ alias: 'old', source, instrument: probe.instrument.version }]);

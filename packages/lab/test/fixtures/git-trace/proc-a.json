@@ -1,0 +1,6 @@
+{"event":"version","evt":"3","exe":"2.47.0"}
+{"event":"start","argv":["git","--attr-source","HEAD","--literal-pathspecs","status"]}
+{"event":"child_start","child_id":0,"child_class":"?","use_shell":false,"argv":["git","rev-list","--objects"]}
+{"event":"exit","code":0}
+{"event":"start","argv":["git","-c","core.x=y","add","-A"]}
+{"event":"start","argv":["git","-C","some/dir","ls-files"]}

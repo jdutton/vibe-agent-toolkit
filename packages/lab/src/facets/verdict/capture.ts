@@ -271,17 +271,17 @@ async function inClone(
   path: string,
   work: (clonePath: string) => VerdictRow[],
 ): Promise<CloneOutcome> {
-  const { value, leftover } = await withTempDir<CloneOutcome>('vat-lab-verdict-clone-', (parent) => {
+  const { value, leftover } = await withTempDir<CloneOutcome>('vat-lab-verdict-clone-', async (parent) => {
     const clonePath = safePath.join(parent, subject.alias);
     const placement = armPlacementRefusal(clonePath, request.subjects.map((each) => each.path));
-    if (placement !== null) return Promise.resolve({ ok: false, refusal: `REFUSED: the build-verb clone: ${placement}.` });
+    if (placement !== null) return { ok: false, refusal: `REFUSED: the build-verb clone: ${placement}.` };
     const listed = readCloneSource(path, subject.alias);
-    if (!listed.ok) return Promise.resolve(listed);
+    if (!listed.ok) return listed;
     const plan = planApfsClone(listed.source, clonePath, process.platform);
-    if (!plan.ok) return Promise.resolve(plan);
-    const failed = executeClonePlan(plan);
-    if (failed !== null) return Promise.resolve({ ok: false, refusal: failed });
-    return Promise.resolve({ ok: true, rows: work(clonePath) });
+    if (!plan.ok) return plan;
+    const failed = await executeClonePlan(plan);
+    if (failed !== null) return { ok: false, refusal: failed };
+    return { ok: true, rows: work(clonePath) };
   });
   // A clone the OS will not remove is no measurement to stand on: the capture stops on it.
   if (leftover !== undefined) throw leftover;

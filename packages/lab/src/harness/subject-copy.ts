@@ -4,14 +4,13 @@
  *
  * A measured subject never receives anything. So an arm whose steps declare
  * `writes` runs in `<arm>/subject`, a copy made once per capture from the real
- * subject (APFS copy-on-write on macOS, a real copy on Linux), with every
+ * subject (APFS copy-on-write on macOS, a real copy elsewhere: `cp -R`, or `copyTree` on Windows), with every
  * written directory deleted inside it before each repeat — a repeat that found
  * the last one's `dist/` would time an incremental build — and the whole copy
  * removed when the arm's repeats end.
  *
  * ## Refusals
  *
- * - **Windows.** No `cp`; the copy is not implemented there.
  * - **A git worktree subject.** Its `.git` is a file pointing into the main
  *   repository's git directory, so git run in the copy would read and write the
  *   REAL repository's index for the worktree. Point the subject at a full
@@ -30,7 +29,7 @@ import { hasParentTraversalSegment, isAbsolutePath, toForwardSlash } from '@vibe
 import { gitFindRoot } from '@vibe-agent-toolkit/utils/git';
 
 import { armRefusal } from './arm-dirs.js';
-import { type ClonePlan, executeClonePlan, readCloneSource, planTreeClone } from './tree-clone.js';
+import { type ClonePlan, type CopyMode, executeClonePlan, readCloneSource, planTreeClone } from './tree-clone.js';
 
 /**
  * Every subject-relative directory any of `steps` writes, each once.
@@ -52,6 +51,12 @@ export function writtenDirectories(steps: readonly { readonly name: string; read
   return written;
 }
 
+/** APFS copy-on-write on macOS, `cp -R` on Linux, `copyTree` where there is no `cp` (Windows). */
+function copyModeFor(platform: NodeJS.Platform): CopyMode {
+  if (platform === 'darwin') return 'clone';
+  return platform === 'win32' ? 'portable' : 'copy';
+}
+
 /**
  * Plan the copy of `subject` into `destination`.
  *
@@ -61,9 +66,6 @@ export function writtenDirectories(steps: readonly { readonly name: string; read
  * @returns The plan, or a refusal
  */
 export function planSubjectCopy(subject: string, destination: string, platform: NodeJS.Platform): ClonePlan {
-  if (platform === 'win32') {
-    return { ok: false, refusal: 'REFUSED: a command that writes its subject runs in a copy of it, and the lab cannot copy a tree on Windows.' };
-  }
   const listed = readCloneSource(subject, subject);
   if (!listed.ok) return listed;
   if (listed.source.git === 'file') {
@@ -84,7 +86,7 @@ export function planSubjectCopy(subject: string, destination: string, platform: 
         "repository's top level, or at a tree no repository encloses.",
     };
   }
-  return { ok: true, steps: planTreeClone(listed.source, destination, platform === 'darwin' ? 'clone' : 'copy') };
+  return { ok: true, steps: planTreeClone(listed.source, destination, copyModeFor(platform)) };
 }
 
 /**
@@ -94,8 +96,8 @@ export function planSubjectCopy(subject: string, destination: string, platform: 
  * @param destination - The arm's copy; must not exist yet
  * @throws {VatError} `ARM_REFUSED` when the copy cannot be planned or made
  */
-export function copySubject(subject: string, destination: string): void {
+export async function copySubject(subject: string, destination: string): Promise<void> {
   const plan = planSubjectCopy(subject, destination, process.platform);
-  const refusal = plan.ok ? executeClonePlan(plan) : plan.refusal;
+  const refusal = plan.ok ? await executeClonePlan(plan) : plan.refusal;
   if (refusal !== null) throw armRefusal(refusal);
 }

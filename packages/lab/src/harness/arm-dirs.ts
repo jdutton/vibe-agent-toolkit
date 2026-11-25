@@ -90,7 +90,8 @@ import {
 import type { InstrumentVersion } from '../envelope/coordinate.js';
 
 import { type ArmEnvironment, type ClearedEnvironment, clearedEnvironment, envNameSpelling, mergeArmEnvironments } from './arm-env.js';
-import type { CacheMode } from './types.js';
+import { armStateSegment } from './arm-state.js';
+import type { ArmState } from './types.js';
 
 /** The code of every refusal to lay out, reset or place an arm — what a CLI dispatches on. */
 export const ARM_REFUSED_CODE = 'LAB_ARM_REFUSED';
@@ -121,7 +122,8 @@ export interface ArmDescriptor {
   readonly build: string;
   /** The arm's name (`A`, `B`, `C`, or a measured command's name). */
   readonly arm: string;
-  readonly state: CacheMode;
+  /** Its directory names it in `armStateSegment`'s spelling (`warm`, `cold`, `warm-edit1`, `warm-edit1-create`). */
+  readonly state: ArmState;
 }
 
 /** An arm's directories, absolute. */
@@ -186,7 +188,7 @@ export function armDirectories(descriptor: ArmDescriptor): ArmDirectories {
       throw armRefusal(`arm directories: ${field} '${value}' is not a plain directory-name segment`);
     }
   }
-  return layout(safePath.join(descriptor.root, `${descriptor.build}-${descriptor.arm}-${descriptor.state}`), [descriptor.root]);
+  return layout(safePath.join(descriptor.root, `${descriptor.build}-${descriptor.arm}-${armStateSegment(descriptor.state)}`), [descriptor.root]);
 }
 
 /** An invocation's arms root, and whether it is the lab's to remove when the capture ends. */

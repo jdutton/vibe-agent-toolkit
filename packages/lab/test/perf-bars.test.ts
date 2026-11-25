@@ -94,7 +94,7 @@ describe('judgeBars', () => {
     build,
     arm: name,
     state: 'cold' as const,
-    summary: { medianMs, minMs },
+    summary: { medianMs, minMs, iqrMs: 1 },
     failure: null,
     repetitions,
   });
@@ -104,6 +104,7 @@ describe('judgeBars', () => {
       expectedExits: [{ build: 'cand', sequence: 'ci-c', step: 'validate-ci', exit: 1 }],
       prerequisites: ['npm ci'],
       timeoutMs: 60_000,
+      edits: [{ arm: 'cand:ci-c:warm-edit1', kind: 'modify' as const, count: 1, paths: ['docs/a.md'] }],
     },
     builds: [
       { alias: 'rc11', source: { kind: 'dist', path: '/builds/rc11' }, instrument: { version: '0.2.0-rc.11', commit: null, dirty: null, closure: 'a'.repeat(64) } },
@@ -167,6 +168,31 @@ describe('judgeBars', () => {
     expect(judged.ok ? judged.results.map((result) => result.verdict) : judged.refusal).toEqual(['pass']);
   });
 
+  it('holds a bar naming an edit arm to rule 5: noise-bound, never passed, when a scaled IQR reaches the margin', () => {
+    const editArm = (build: string, iqrMs: number) => ({
+      build,
+      arm: 'ci-c',
+      state: { warm: 'edit' as const, count: 1, kind: 'modify' as const },
+      summary: { medianMs: 1000, minMs: 1000, iqrMs },
+      failure: null,
+      repetitions: Array.from({ length: 5 }, () => clean),
+    });
+    // 1000 <= 1.05*1000 holds on both statistics, by a margin of 50 ms.
+    const verdict = (candIqr: number, rcIqr: number): string => {
+      const judged = judgeBars({ ...report, arms: [editArm('cand', candIqr), editArm('rc11', rcIqr)] }, [bar('cand:ci-c:warm-edit1<=1.05*rc11:ci-c:warm-edit1')]);
+      return judged.ok ? (judged.results[0]?.verdict ?? 'none') : judged.refusal;
+    };
+
+    expect(verdict(10, 10)).toBe('pass');
+    expect(verdict(50, 10)).toBe('noise-bound');
+    // 48 ms on the right side scales by the factor to 50.4 ms, at the margin.
+    expect(verdict(10, 48)).toBe('noise-bound');
+    // A bar over clean and cold arms only is not gated: rc11:ci-a's IQR is far past this bar's margin.
+    const noisyCold = { ...report, arms: report.arms.map((each) => (each.arm === 'ci-a' && each.summary !== null ? { ...each, summary: { ...each.summary, iqrMs: 500 } } : each)) };
+    const judged = judgeBars(noisyCold, [bar('cand:ci-c:cold<=1.15*rc11:ci-a:cold')]);
+    expect(judged.ok ? judged.results[0]?.verdict : judged.refusal).toBe('pass');
+  });
+
   it('refuses a bar naming an arm the report does not hold', () => {
     const judged = judgeBars(report, [bar('cand:ci-a:warm<=1*rc11:ci-a:cold')]);
 
@@ -208,9 +234,13 @@ describe('judgeBars', () => {
         '  --expect-exit cand:ci-c:validate-ci=1',
         '  --prerequisite npm ci',
         '  --timeout-ms 60000',
+        '  --edit docs/a.md',
       ].join('\n'),
     );
-    const none = renderBars({ ...report, inputs: { env: { set: {}, unset: [] }, expectedExits: [], prerequisites: [], timeoutMs: null } }, results);
-    expect(none).toContain('Inputs: none — no --env, --unset, --expect-exit, --prerequisite or --timeout-ms');
+    const none = renderBars(
+      { ...report, inputs: { env: { set: {}, unset: [] }, expectedExits: [], prerequisites: [], timeoutMs: null, edits: [] } },
+      results,
+    );
+    expect(none).toContain('Inputs: none — no --env, --unset, --expect-exit, --prerequisite, --timeout-ms or --edit');
   });
 });

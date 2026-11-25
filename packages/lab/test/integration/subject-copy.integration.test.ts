@@ -134,10 +134,12 @@ describe('writtenDirectories', () => {
 });
 
 describe('planSubjectCopy', () => {
-  it('refuses Windows', () => {
+  it('plans a portable copy on Windows, where there is no cp to spawn', () => {
     const probe = setupProbe(PREFIX);
-    expect(planSubjectCopy(probe.cwd, safePath.join(probe.armsRoot, 'copy'), 'win32')).toMatchObject({ ok: false, refusal: expect.stringContaining('Windows') });
-  });
+    const plan = planSubjectCopy(probe.cwd, safePath.join(probe.armsRoot, 'copy'), 'win32');
+    if (!plan.ok) throw new Error(plan.refusal);
+    expect(plan.steps.some((s) => s.kind === 'copy')).toBe(true);
+    expect(plan.steps.some((s) => s.kind === 'spawn')).toBe(false);  });
 
   it('refuses a git worktree subject, whose .git is a file', () => {
     const probe = setupProbe(PREFIX);

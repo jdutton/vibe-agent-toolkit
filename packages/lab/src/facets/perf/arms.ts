@@ -7,21 +7,44 @@
  * repetition broke its sequence rule or a step exited otherwise than committed,
  * the failure and no statistic at all. Each repetition carries what a bar needs
  * to assert on: every step's exit, its full stderr, and the population its
- * document reported. Bars over these numbers are `bars.ts`'s.
+ * document reported. Bars over these numbers are `bars.ts`'s and `gaps.ts`'s.
+ *
+ * ## Observed repetitions and the edit arm
+ *
+ * Every measured repetition runs with its own fresh `VAT_WORK_COUNTERS` and
+ * `GIT_TRACE2_EVENT` directories (`sequence.ts`); the report keeps each
+ * repetition's merged work counters (`readWorkDumps`, the work facet's one
+ * reader) and its git spawn count (`countGitTrace`). An edit arm
+ * (`warm-edit<N>[:<kind>]`, `edit-step.ts`) is judged here on what only the
+ * dump shows: a repetition is valid only when it read the store's extent
+ * (`store.reads.extent >= 1`) and wrote the store (`store.writes.persistent >= 1`),
+ * and only when its exit equals the same build's clean warm arm's in that
+ * round — an edit that moved a finding would time a different run
+ * ({@link editRuleViolation}; under an `exact` commitment the step rule
+ * already catches a differing exit). An edit arm with no clean arm of its
+ * build and sequence in the invocation is refused before anything runs. Each edit
+ * arm's gap to that clean arm, and each build's marginal per-file cost, travel
+ * in the report (`gaps.ts`).
  */
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 
 import type { InstrumentVersion } from '../../envelope/coordinate.js';
+import { armRefusal } from '../../harness/arm-dirs.js';
 import type { ArmEnvironment } from '../../harness/arm-env.js';
+import { armStateName, isEditState } from '../../harness/arm-state.js';
 import { exactExit, type MeasuredSequenceSpec } from '../../harness/commands.js';
+import { type AppliedEdits, refuseUnplannableEdit } from '../../harness/edit-step.js';
 import { type RecordedExit, recordExits } from '../../harness/exit-record.js';
+import { countGitTrace } from '../../harness/git-trace.js';
 import { judgeLoad, readLoad } from '../../harness/load-guard.js';
 import type { StepProvenance } from '../../harness/provenance.js';
 import { armRunFailure, commandStep, type RepeatSpec, runInterleaved } from '../../harness/repeat.js';
 import type { SequenceResult, SequenceStep } from '../../harness/sequence.js';
-import type { CacheMode, InstrumentSource, LoadReadings, ResolvedInstrument } from '../../harness/types.js';
+import type { ArmState, InstrumentSource, LoadReadings, ResolvedInstrument } from '../../harness/types.js';
+import { countOf, type MergedWorkDumps, readWorkDumps } from '../work/dump.js';
 
+import { type ArmGap, armGaps, type MarginalCost, marginalCosts, renderGaps } from './gaps.js';
 import { type PerfSummary, summarize } from './stats.js';
 
 /** One build under measurement, by the alias its arms name it with. */
@@ -45,7 +68,7 @@ export interface ArmSelection {
   readonly build: string;
   /** The arm's name (`A`, `B`, `C`), part of its directory name. */
   readonly arm: string;
-  readonly state: CacheMode;
+  readonly state: ArmState;
   readonly steps: readonly SequenceStep[];
 }
 
@@ -62,6 +85,8 @@ export interface CaptureArmsRequest {
   /** The caller's own environment, layered over every arm's. */
   readonly env: ArmEnvironment;
   readonly timeoutMs?: number;
+  /** The files every edit arm edits (`--edit`); `null`, each edit arm's first N tracked markdown files with no frontmatter. */
+  readonly editPaths: readonly string[] | null;
 }
 
 /** One step of one repetition, as the report keeps it. */
@@ -82,13 +107,26 @@ export interface ArmRepetition {
   readonly exitCode: number | null;
   readonly violation: string | null;
   readonly steps: readonly ArmStepRecord[];
+  /** What an edit arm's repetition edited, and how many paths git saw changed; `null` for every other run. */
+  readonly edits: AppliedEdits | null;
+  /** The repetition's work counters, every VAT process's dump summed; `null` when unobserved or unreadable. */
+  readonly work: MergedWorkDumps | null;
+  /** Why the dumps could not be read (a build that predates work counters), or `null`. */
+  readonly workRefusal: string | null;
+  /** Git processes the repetition started, every step's; `null` when unobserved or unreadable. */
+  readonly gitSpawns: number | null;
+  /** {@link ArmRepetition.gitSpawns} by verb. */
+  readonly gitByVerb: Readonly<Record<string, number>> | null;
+  /** Why the git trace could not be read, or `null`. */
+  readonly traceRefusal: string | null;
 }
 
 /** One arm's result. */
 export interface ArmReport {
   readonly build: string;
   readonly arm: string;
-  readonly state: CacheMode;
+  /** In its spelling: `warm`, `cold`, `warm-edit<N>[:<kind>]`. */
+  readonly state: string;
   /** Inherited names the arm's VAT steps did not receive. */
   readonly removedEnv: readonly string[];
   /** Inherited names the arm's tool steps did not receive. */
@@ -114,6 +152,10 @@ export interface ArmsReport {
   /** The machine load across every round, as `perf run` records it. */
   readonly load: LoadReadings;
   readonly arms: readonly ArmReport[];
+  /** Every measured edit arm's gap to its same-build clean arm (`gaps.ts`). */
+  readonly gaps: readonly ArmGap[];
+  /** Every build's marginal per-file cost, where it has a one-file and a wider edit arm of one kind. */
+  readonly marginals: readonly MarginalCost[];
 }
 
 /**
@@ -202,37 +244,193 @@ export async function captureArms(request: CaptureArmsRequest): Promise<ArmsRepo
       runs: request.rounds,
       arm: { root: request.armsRoot, build: arm.build, arm: arm.arm, state: arm.state },
       env: request.env,
+      observeRepetitions: true,
+      editPaths: request.editPaths,
       ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
     };
   });
+  refuseUnplannableEdits(request);
   const loadBefore = readLoad();
   const runs = await runInterleaved(specs, request.rounds);
   const loadAfter = readLoad();
+  const observed = await Promise.all(runs.map((run) => Promise.all(run.results.map((result) => observe(result)))));
+  const judged = request.arms.map((arm, index) => {
+    // Every edit arm has a clean arm (refused up front otherwise); a clean arm whose priming failed has no
+    // repetition this round, its own failure says why, and there is no gap to time.
+    const clean = observed[cleanArmIndex(request.arms, arm)];
+    return (observed[index] ?? []).map((repetition, round) => judgeEditRepetition(arm.state, repetition, clean?.[round]?.result.exitCode));
+  });
+  const arms = request.arms.map((arm, index) => {
+    const run = runs[index];
+    const repetitions = judged[index];
+    /* c8 ignore next -- one run per spec; guards noUncheckedIndexedAccess */
+    if (run === undefined || repetitions === undefined) throw new Error(`captureArms: no run for arm '${arm.arm}'`);
+    const results = repetitions.map((repetition) => repetition.result);
+    const refused = armRunFailure({ priming: run.priming, results });
+    return {
+      build: arm.build,
+      arm: arm.arm,
+      state: armStateName(arm.state),
+      removedEnv: run.removed,
+      removedToolEnv: run.removedTool,
+      npmNetworkEnv: run.npmNetwork,
+      exits: recordExits(arm.steps, results),
+      priming: run.priming === null ? null : repetitionOf({ result: run.priming, ...UNOBSERVED }),
+      repetitions: repetitions.map((repetition) => repetitionOf(repetition)),
+      summary: refused === null ? summarize(results.map((result) => result.wallMs)) : null,
+      failure: refused,
+    };
+  });
+  const gaps = armGaps(
+    arms.map((arm, index) => {
+      const selection = request.arms[index];
+      /* c8 ignore next -- one report per selection; guards noUncheckedIndexedAccess */
+      if (selection === undefined) throw new Error(`captureArms: no selection for arm '${arm.arm}'`);
+      return { ...arm, state: selection.state };
+    }),
+  );
   return {
     cwd: request.cwd,
     rounds: request.rounds,
     builds: request.builds.map((build) => ({ alias: build.alias, source: build.source, instrument: build.instrument.version })),
     load: judgeLoad(loadBefore.loadAvg1, loadAfter.loadAvg1, loadAfter.cpus),
-    arms: request.arms.map((arm, index) => {
-      const run = runs[index];
-      /* c8 ignore next -- one run per spec; guards noUncheckedIndexedAccess */
-      if (run === undefined) throw new Error(`captureArms: no run for arm '${arm.arm}'`);
-      const refused = armRunFailure(run);
-      return {
-        build: arm.build,
-        arm: arm.arm,
-        state: arm.state,
-        removedEnv: run.removed,
-        removedToolEnv: run.removedTool,
-        npmNetworkEnv: run.npmNetwork,
-        exits: recordExits(arm.steps, run.results),
-        priming: run.priming === null ? null : repetitionOf(run.priming),
-        repetitions: run.results.map((result) => repetitionOf(result)),
-        summary: refused === null ? summarize(run.results.map((result) => result.wallMs)) : null,
-        failure: refused,
-      };
-    }),
+    arms,
+    gaps,
+    marginals: marginalCosts(gaps),
   };
+}
+
+/**
+ * Refuse, before anything runs (priming included), an edit arm that cannot
+ * make its edit every round (`refuseUnplannableEdit`), or that has no clean
+ * warm arm of its build and sequence to be judged and gapped against.
+ *
+ * @param request - The capture
+ * @throws {VatError} `LAB_ARM_REFUSED` naming the arm, the numbers or the path
+ */
+function refuseUnplannableEdits(request: CaptureArmsRequest): void {
+  for (const arm of request.arms) {
+    const { state } = arm;
+    if (!isEditState(state)) continue;
+    if (cleanArmIndex(request.arms, arm) === -1) {
+      throw armRefusal(
+        `${arm.build}:${arm.arm}:${armStateName(state)} has no clean arm ${arm.build}:${arm.arm}:warm in the invocation: its exit and its gap have nothing to compare with`,
+      );
+    }
+    refuseUnplannableEdit(request.cwd, { kind: state.kind, count: state.count, paths: request.editPaths }, request.rounds);
+  }
+}
+
+/**
+ * @param arms - Every arm
+ * @param arm - An arm
+ * @returns The index of the same build's clean warm arm of the same sequence, or -1
+ */
+function cleanArmIndex(arms: readonly ArmSelection[], arm: ArmSelection): number {
+  return arms.findIndex((other) => other.build === arm.build && other.arm === arm.arm && other.state === 'warm');
+}
+
+/** One repetition, with what its dumps and trace showed. */
+interface ObservedRepetition {
+  readonly result: SequenceResult;
+  readonly work: MergedWorkDumps | null;
+  readonly workRefusal: string | null;
+  readonly git: { readonly spawns: number; readonly byVerb: Readonly<Record<string, number>> } | null;
+  readonly traceRefusal: string | null;
+}
+
+/** What a run nobody observed shows. */
+const UNOBSERVED = { work: null, workRefusal: null, git: null, traceRefusal: null } as const;
+
+/**
+ * Read one repetition's work dumps and git trace.
+ *
+ * @param result - A measured repetition
+ * @returns It, with what its observation directories hold
+ */
+async function observe(result: SequenceResult): Promise<ObservedRepetition> {
+  const { observed } = result;
+  if (observed === null) return { result, ...UNOBSERVED };
+  const work = await readWorkDumps(observed.workDir);
+  let git: ObservedRepetition['git'] = null;
+  let traceRefusal: string | null = null;
+  try {
+    git = countGitTrace(observed.traceDir);
+  } catch (error: unknown) {
+    traceRefusal = error instanceof Error ? error.message : String(error);
+  }
+  return {
+    result,
+    work: work.ok ? work.merged : null,
+    workRefusal: work.ok ? null : work.refusal,
+    git,
+    traceRefusal,
+  };
+}
+
+/**
+ * The edit rule's half only the dump shows, and the clean arm's exit.
+ *
+ * @param state - The arm's state
+ * @param repetition - One observed repetition
+ * @param cleanExit - The same build's clean warm arm's exit in this round; `undefined` when there is no clean arm
+ * @returns The repetition, with the violation set when it broke the rule
+ */
+function judgeEditRepetition(state: ArmState, repetition: ObservedRepetition, cleanExit: number | null | undefined): ObservedRepetition {
+  const { result } = repetition;
+  if (!isEditState(state) || result.violation !== null) return repetition;
+  const violation = editRuleViolation({ work: repetition.work, workRefusal: repetition.workRefusal, exitCode: result.exitCode, cleanExit });
+  return violation === null ? repetition : { ...repetition, result: { ...result, violation } };
+}
+
+/** What the edit rule's dump and exit halves read from one edit repetition. */
+export interface EditRuleInput {
+  /** The repetition's merged work dumps, or `null` when they could not be read. */
+  readonly work: MergedWorkDumps | null;
+  /** Why {@link EditRuleInput.work} is `null`. */
+  readonly workRefusal: string | null;
+  readonly exitCode: number | null;
+  /** The same build's clean warm arm's exit in this round; `undefined` when that arm has no repetition this round. */
+  readonly cleanExit: number | null | undefined;
+}
+
+/**
+ * The edit rule's halves the step documents cannot show: the dump read the
+ * store's extent and wrote the store, and the exit equals the clean arm's.
+ *
+ * Under an `exact` exit commitment a differing exit is already a step
+ * violation, so the exit half bites only when a step's commitment admits more
+ * than one code; it stays, so no commitment can let an edit that moved a
+ * finding time a different run.
+ *
+ * @param input - See {@link EditRuleInput}
+ * @returns The violation, or `null`
+ */
+export function editRuleViolation(input: EditRuleInput): string | null {
+  return editWorkViolation(input.work, input.workRefusal) ?? editExitViolation(input.exitCode, input.cleanExit);
+}
+
+/**
+ * @param work - The repetition's merged dumps, or `null`
+ * @param refusal - Why there are none
+ * @returns Why the dump does not show the store read and written, or `null`
+ */
+function editWorkViolation(work: MergedWorkDumps | null, refusal: string | null): string | null {
+  if (work === null) return `edit rule: the repetition's work dumps cannot be read — ${refusal ?? 'it was not observed'}`;
+  const reads = countOf(work, 'store.reads.extent') ?? 0;
+  const writes = countOf(work, 'store.writes.persistent') ?? 0;
+  if (reads >= 1 && writes >= 1) return null;
+  return `edit rule: the work dump shows store.reads.extent ${String(reads)} and store.writes.persistent ${String(writes)}; an edit run reads the store's extent and writes the store`;
+}
+
+/**
+ * @param exit - The edit repetition's exit
+ * @param cleanExit - The clean arm's exit in the same round, or `undefined` when there is no clean arm
+ * @returns Why the two runs did different work, or `null`
+ */
+function editExitViolation(exit: number | null, cleanExit: number | null | undefined): string | null {
+  if (cleanExit === undefined || exit === cleanExit) return null;
+  return `edit rule: the repetition exited ${String(exit)}, the same build's clean arm ${String(cleanExit)} — the edit moved a finding, so it timed a different run`;
 }
 
 /**
@@ -249,14 +447,15 @@ export function renderArmsReport(report: ArmsReport): string {
     const { minMs, medianMs, iqrMs } = arm.summary;
     return `${name}: min ${ms(minMs)}  median ${ms(medianMs)}  IQR ${ms(iqrMs)}  (${String(arm.repetitions.length)} rounds)`;
   });
-  return [`perf arms — ${String(report.rounds)} interleaved rounds in ${report.cwd}`, ...lines].join('\n');
+  return [`perf arms — ${String(report.rounds)} interleaved rounds in ${report.cwd}`, ...lines, ...renderGaps(report.gaps, report.marginals)].join('\n');
 }
 
 /**
- * @param result - One sequence's outcome
+ * @param repetition - One sequence's outcome, with what its observation showed
  * @returns The report's view of it
  */
-function repetitionOf(result: SequenceResult): ArmRepetition {
+function repetitionOf(repetition: ObservedRepetition): ArmRepetition {
+  const { result } = repetition;
   return {
     wallMs: result.wallMs,
     exitCode: result.exitCode,
@@ -269,5 +468,11 @@ function repetitionOf(result: SequenceResult): ArmRepetition {
       stderr: step.stderr,
       provenance: step.provenance,
     })),
+    edits: result.edits,
+    work: repetition.work,
+    workRefusal: repetition.workRefusal,
+    gitSpawns: repetition.git?.spawns ?? null,
+    gitByVerb: repetition.git?.byVerb ?? null,
+    traceRefusal: repetition.traceRefusal,
   };
 }

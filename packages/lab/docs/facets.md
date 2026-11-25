@@ -32,8 +32,7 @@ intermediate launcher — an `npx:` build included: every facet resolves it to i
 cwd-resolving wrapper (`harness/npx-install.ts`). `test/integration/memory-probe.integration.test.ts`
 pins the independence, and it can only go red on Linux: macOS's `maxRSS` carries nothing over, and
 the test needs `sh`, so it is skipped on Windows, where a process is created rather than forked —
-argued there, not measured. A command that writes its subject (`build`) runs in a copy of it, which
-the lab cannot make on Windows, so that spec is refused there; a repeat that changed the copy outside
+argued there, not measured. A command that writes its subject (`build`) runs in a copy of it, with its git index refreshed; a repeat that changed the copy outside
 its declared `writes` (`dist/`) fails. In a git checkout that check sees only git's population —
 tracked files and untracked ones no ignore rule matches — so a write to a gitignored path (or under
 `.git/`) outside `writes` is not caught; outside a checkout every file is checked.

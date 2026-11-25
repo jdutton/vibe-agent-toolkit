@@ -264,9 +264,10 @@ subject. `build` WRITES the subject's `dist/` and is committed to exit 0 only â€
 exits 1 stopped at an error finding and skipped its later phases. A spec names what it writes
 (`writes: ['dist']`, required on every spec), and an arm with any written directory never runs in
 the real subject: it runs in `<arm>/subject`, one copy per capture (APFS copy-on-write on macOS, a
-real `cp -R` on Linux, minus the regenerable caches), with each written directory deleted inside it
+real `cp -R` on Linux, a `copyTree` copy with links kept verbatim on Windows, minus the regenerable
+caches), its git index then refreshed so the copy reads stat-clean, with each written directory deleted inside it
 before every repeat (warm priming included) so no repeat times an incremental build, and the copy
-removed when the arm ends. It refuses Windows, a git-worktree subject (git in the copy would write
+removed when the arm ends. It refuses a git-worktree subject (git in the copy would write
 the real repository's worktree index), and a writing step whose arguments name the real subject.
 `verify` reads the built `dist/` tree, so a subject measured with it must have been built.
 `claude-context-all` is subject-less for the same reason â€” `--all` sweeps every path the projection

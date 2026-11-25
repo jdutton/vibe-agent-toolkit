@@ -87,6 +87,10 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * then is a `storeMiss`. `outsideRoot`: a question about a file outside the run's root, answered
  * nothing without opening the store, and also a `storeMiss` (or `noStore`) when scanned.
  *
+ * `git.snapshots` counts the git tree snapshots taken (`gitTreeSnapshot` memo misses, one per
+ * snapshot however many git processes it starts), so a run's snapshot count reads straight off a
+ * dump.
+ *
  * `checks.gate.rows.read` counts the tier rows the admission request reads for the checks overlap
  * gate, summed per member (resource-scanning-and-caching.md 3.7b).
  */
@@ -122,6 +126,7 @@ export const WORK_COUNTER_NAMES = [
   'skillText.storeUnopened',
   'skillText.outsideRoot',
   'git.calls',
+  'git.snapshots',
   'checks.gate.rows.read',
 ] as const;
 
