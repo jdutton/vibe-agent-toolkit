@@ -80,8 +80,10 @@ CHANGELOG.md uses a strict format. **RC/prerelease versions NEVER get their own 
    `pre-release` is `pre-publish` (full validation, CHANGELOG entry for the current version on a
    stable release, all packages built and version-synchronized, package metadata complete, no
    uncommitted or untracked files) plus the release-readiness checks: a marketplace publish
-   dry-run, no tag of this version already on the remote, and on a stable release a non-empty
-   stamped CHANGELOG section with nothing left under `[Unreleased]`.
+   dry-run, no tag of this version already on the remote, the npm registry guard (every package
+   removed from the repo is deprecated on npm; on an RC, a prerelease or missing `latest` is a
+   warning), and on a stable release a non-empty stamped CHANGELOG section with nothing left under
+   `[Unreleased]`. It needs network access to npmjs.org.
 
    **Do NOT skip this step** - the CI publish workflow runs the same check against the pushed tag and will fail if it finds issues.
 
@@ -160,6 +162,15 @@ hand list; make a package `private: true` to hold it back from publishing.
 The publish workflow asserts that the pushed tag equals the root `package.json` version before it
 builds anything, then runs `bun run pre-publish -- --release-readiness --tag <version>` (in CI the
 remote tag must exist and name the manifest version; locally, without `--tag`, it must be absent).
+
+The same release-readiness run reads the npm registry (`npm-registry-guard.ts`): a package in the
+`@vibe-agent-toolkit` scope, or `vibe-agent-toolkit`, that is no longer a workspace package fails
+until it is deprecated; on an RC, a package whose `latest` is a prerelease or that is not on npm
+is a warning. After a stable publish, the workflow's `verify-dist-tags` job (it runs whenever the
+npm publish step succeeded, and can be re-run alone) polls the registry, cache-busted, for up to
+15 minutes and fails if any published package's `latest` is not the release. The guard never
+writes to npm (an owner ruling): it prints the `npm deprecate` / `npm dist-tag` commands, which
+need a one-time password when run from a maintainer's machine. Why `latest` can sit on an RC: [traps](contributing/traps.md#a-package-first-published-as-an-rc-keeps-latest-on-that-rc-and-latest-cannot-be-removed).
 
 ### Changelog fragments
 

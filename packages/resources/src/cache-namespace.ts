@@ -34,8 +34,9 @@
  *   through identical code yield identical facts, and the version moves on
  *   every release, so a released build's parsers are consistent by
  *   construction and need no second number tracking them.
- * - **Dev checkout:** `0.1.42-dev-<6 hex>` over the package root path *and*
- *   `ParseFactsSchema`'s own shape.
+ * - **Dev checkout:** `0.1.42-dev-<6 hex>` over the package root path,
+ *   `ParseFactsSchema`'s own shape, and the digest of the skill-text
+ *   declaration a markdown parse applies (`SKILL_TEXT_DECLARATION`).
  *
  * ## The bound on "consistent by construction"
  *
@@ -93,6 +94,18 @@
  * nothing there reads a file or an mtime — while changing what an entry
  * contains moves it every time, without anyone deciding to.
  *
+ * Its third input is the digest of the skill-text declaration
+ * (`skillTextDeclarationDigest(SKILL_TEXT_DECLARATION)`): every regex and
+ * constant the skill-text core applies to a markdown parse, whose record each
+ * entry holds (`ParseFacts.skillText`). So the dev namespace also covers the
+ * declaration: a pattern edit in a dev checkout lands in a new namespace and
+ * cold-starts the WHOLE parse cache, every entry of every kind with it, and the
+ * projection store beneath the namespace too. That churn is accepted: it is one
+ * rescan per pattern edit, against a skill-text record that was the old
+ * pattern's answer under a valid key. A published build needs none of it, since
+ * its namespace is the package version. What no input covers is a change to the
+ * core's control flow with the declaration unchanged: that is mechanism 3's.
+ *
  * Three mechanisms therefore divide the work, and none of them is a second
  * version number:
  *
@@ -101,10 +114,11 @@
  *    plausible answer. That covers every change to a stored shape except the
  *    addition of an *optional* field, where "written before the field existed"
  *    and "legitimately absent" are the same bytes.
- * 2. **The shape digest here**, which covers that last case by not letting the
- *    two kinds of entry share a directory in the first place. It is derived
- *    from the schema, so unlike the constant it replaced it cannot fall behind
- *    what the schema actually says.
+ * 2. **The shape and declaration digests here**, which cover that last case by
+ *    not letting the two kinds of entry share a directory in the first place,
+ *    and a pattern edit by the same move. Both are derived (from the schema,
+ *    and from the declaration the core applies), so unlike the constant they
+ *    replaced they cannot fall behind what they stand for.
  * 3. **`vat cache clear`**, for what neither can see: a change to what a parse
  *    *means* with its shape unchanged — swap the token estimator and every warm
  *    entry keeps serving the old count under a perfectly valid, correctly named
@@ -130,6 +144,7 @@ import {
 
 import { vatCacheRoot } from './cache-root.js';
 import { parseFactsShapeSource } from './schemas/parse-facts.js';
+import { SKILL_TEXT_DECLARATION, skillTextDeclarationDigest } from './skill-text/declaration.js';
 
 /** Hex digits of the dev discriminator. Short on purpose — it is a cache path, not a security boundary. */
 const DEV_FINGERPRINT_LENGTH = 6;
@@ -181,26 +196,30 @@ function isInstalled(moduleDir: string): boolean {
 }
 
 /**
- * The dev discriminator: a pure digest of where this checkout lives and what a
- * cache entry is shaped like in it.
+ * The dev discriminator: a pure digest of where this checkout lives, what a
+ * cache entry is shaped like in it, and which skill-text declaration its
+ * markdown entries were computed under.
  *
- * Both inputs are values, not lookups: this touches no filesystem and reads no
+ * All three inputs are values, not lookups: this touches no filesystem and reads no
  * module state, so it is stable across a rebuild by construction. That is
  * exactly the property the namespace exists to have, and keeping it a pure
  * function is what lets a test assert it without fighting the process-level
  * memo in {@link vatCacheNamespace}.
  *
- * The two inputs separate different things and are both needed: the path keeps
- * two worktrees apart, the shape keeps two entry formats apart within one.
+ * The three inputs separate different things and are all needed: the path keeps
+ * two worktrees apart, the shape keeps two entry formats apart within one, and
+ * the declaration digest keeps two skill-text pattern sets apart within one
+ * format (see "Why the shape, and not the build").
  *
  * @param moduleDir - Directory this package's code was resolved from
  * @param parseFactsShape - From `parseFactsShapeSource()`; see that docstring
  *   for why it is derived rather than declared
+ * @param skillTextDeclaration - From `skillTextDeclarationDigest(SKILL_TEXT_DECLARATION)`
  * @returns Six lowercase hex digits
  */
-export function devNamespaceDigest(moduleDir: string, parseFactsShape: string): string {
+export function devNamespaceDigest(moduleDir: string, parseFactsShape: string, skillTextDeclaration: string): string {
   return createHash('sha256')
-    .update(`vat-cache-namespace\0${toForwardSlash(moduleDir)}\0${parseFactsShape}`, 'utf-8')
+    .update(`vat-cache-namespace\0${toForwardSlash(moduleDir)}\0${parseFactsShape}\0${skillTextDeclaration}`, 'utf-8')
     .digest('hex')
     .slice(0, DEV_FINGERPRINT_LENGTH);
 }
@@ -227,7 +246,7 @@ export function vatCacheNamespace(): string {
     return cached;
   }
 
-  cached = `${version}-dev-${devNamespaceDigest(moduleDir, parseFactsShapeSource())}`;
+  cached = `${version}-dev-${devNamespaceDigest(moduleDir, parseFactsShapeSource(), skillTextDeclarationDigest(SKILL_TEXT_DECLARATION))}`;
   return cached;
 }
 

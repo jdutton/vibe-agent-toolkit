@@ -18,9 +18,9 @@ import {
   collectionMimeConflictCondition,
   collectRealization,
   resolveRealPath,
-  relativize,
   type RealizationContext,
 } from '../src/projection/realizations.js';
+import { relativize } from '../src/projection/root-relative-path.js';
 import { type CollectionMimeResolver, createCollectionMimeResolver } from '../src/projection/router.js';
 import { PROJECTION_TABLES } from '../src/projection/table-registry.js';
 import type { CollectionConfig } from '../src/schemas/project-config.js';

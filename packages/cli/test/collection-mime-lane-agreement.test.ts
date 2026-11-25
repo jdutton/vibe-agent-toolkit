@@ -57,7 +57,7 @@ import * as yaml from 'yaml';
 import { buildSharedValidationContext, skillsValidateRegistries } from '../src/commands/skills/validate.js';
 import { laneById } from '../src/pipeline-oracles/lanes.js';
 import { createLogger } from '../src/utils/logger.js';
-import { withRunContext } from '../src/utils/resource-loader.js';
+import { NO_HOME_SETTLED_LISTENER, withRunContext } from '../src/utils/resource-loader.js';
 
 import { setupCorpusFixture } from './pipeline-oracles/helpers/corpus-fixture.js';
 
@@ -178,7 +178,7 @@ describe('the projection lane and ResourceRegistry agree about a declared mimeTy
 
   /** The corpus's markdown, crawled in a run of its own under `options`. */
   const markdownRegistry = (options: { config?: ProjectConfig }): Promise<ResourceRegistry> =>
-    withRunContext({ root: corpus.root() }, async (run) => (await ResourceRegistry.fromCrawl(
+    withRunContext({ projectionStore: 'on-demand', root: corpus.root(), outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => (await ResourceRegistry.fromCrawl(
       { ignoredRefusals: 'record', outputs: [], unreadable: 'refuse', baseDir: corpus.root(), include: ['**/*.md'], populationSource: run.population.source },
       options,
     )).registry);
@@ -217,7 +217,7 @@ describe('every shipped registry-construction site reaches the projection lane v
   });
 
   it('skillsValidateRegistries — the views `vat skills validate` shares', async () => {
-    const registry = await withRunContext({ root: corpus.root() }, (run) =>
+    const registry = await withRunContext({ projectionStore: 'on-demand', root: corpus.root(), outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
       skillsValidateRegistries(run, corpus.root(), CONFIG).forRoot(corpus.root(), { outputs: [], unreadable: 'refuse' }),
     );
 
@@ -237,7 +237,7 @@ describe('every shipped registry-construction site reaches the projection lane v
       packagingConfig: {},
     };
 
-    const registry = await withRunContext({ root: corpus.root() }, async (run) => {
+    const registry = await withRunContext({ projectionStore: 'on-demand', root: corpus.root(), outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
       const context = await buildSharedValidationContext([skill], [], CONFIG, createLogger(), run);
       return context.registries.forRoot(corpus.root(), { outputs: [], unreadable: 'refuse' });
     });

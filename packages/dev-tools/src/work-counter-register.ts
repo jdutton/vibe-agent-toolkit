@@ -15,10 +15,13 @@ export const COUNTED_STATUS_PREFIX = 'accepted, counted';
 
 /** Register line number to the counters that count that row. */
 export const COUNTED_COST_ROWS: Readonly<Record<number, readonly [WorkCounter, ...WorkCounter[]]>> = {
-  57: ['extent.derived', 'extent.served'],
-  58: ['store.rows.decoded.persistent', 'hydration.rows.written'],
-  62: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
-  70: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
+  43: ['skillText.storeMiss', 'skillText.noStore', 'skillText.storeUnopened', 'skillText.outsideRoot'],
+  45: ['store.reads.extent', 'store.reads.blob'],
+  46: ['store.rows.decoded.persistent'],
+  62: ['extent.derived', 'extent.served'],
+  63: ['hydration.rows.written'],
+  67: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
+  75: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
 };
 
 /** I10's own term for the store's write side, which no counted row restates. */
@@ -36,20 +39,25 @@ const ONE_READ_PER_RUN =
  * {@link COUNTED_COST_ROWS}, every counter is accounted for exactly once.
  */
 export const COUNTERS_WITHOUT_A_COUNTED_ROW: Readonly<Partial<Record<WorkCounter, string>>> = {
-  'store.reads.persistent': 'I10 store reads',
   'store.writes.persistent': I10_STORE_WRITES,
   'store.rows.written.persistent': I10_STORE_WRITES,
-  'hydration.writes': "one per hydration that wrote a relation; row 58 is counted by its rows, not its writes.",
+  'hydration.writes': "one per hydration that wrote a relation; row 63 is counted by its rows, not its writes.",
   'statement.explained': 'the schema-introspection row\'s cost, an enforced row, not a counted cost',
   'store.miss.refusedPairs': 'the store-miss row, an enforced row, not a counted cost',
   'parse.refused.load': 'load-dependent, bounded by I8; reported only',
+  'parse.cache.written':
+    "the parse cache's write side as reported (a worker killed after writing but before replying goes uncounted), which validate's checks overlap reads as its post-spawn parent writes (resource-scanning-and-caching.md 3.7b); no cost row",
   'content.hashed': UNBUILT_REHASH_BASELINE,
   'content.hashedBytes': UNBUILT_REHASH_BASELINE,
   'content.read': ONE_READ_PER_RUN,
   'fs.stat': ONE_READ_PER_RUN,
+  'fs.lstat':
+    'the link-chain walk and the realization lstat, counted by syscall: per path, the components walked below the root plus one per link hop, enforced by relation per phase in validate-in-process-cost.system.test.ts and work-counters-skill-review.system.test.ts',
   'registry.built': ONE_READ_PER_RUN,
   'registry.admitted': ONE_READ_PER_RUN,
   'git.calls': 'I10 git calls; git is no longer pinned, so no cost row restates them',
+  'checks.gate.rows.read':
+    "the tier rows validate's checks overlap gate reads to judge its members, summed per member (a content key several members share counts once per member), kept off every store counter so the overlapped and sequential runs count alike, but for the shared tier read when no crawled member reads the tier (resource-scanning-and-caching.md 3.7b); no cost row",
 };
 
 /** A counted cost row whose counter waits on its mechanism. */
@@ -64,12 +72,12 @@ export interface UncountedCostRow {
 export const UNCOUNTED_COST_ROWS: Readonly<Record<number, UncountedCostRow>> = {
   31: { mechanism: 'start-time probe', status: 'unbuilt' },
   36: { mechanism: 'code identity', status: 'unbuilt' },
-  45: { mechanism: 'lease claim', status: 'unbuilt' },
-  55: { mechanism: 'leases and pinned bytes', status: 'unbuilt' },
-  56: { mechanism: 'stat memo', status: 'unbuilt' },
-  59: { mechanism: 'lens', status: 'unbuilt' },
-  60: { mechanism: 'racy re-hash', status: 'unbuilt' },
-  78: {
+  50: { mechanism: 'lease claim', status: 'unbuilt' },
+  60: { mechanism: 'leases and pinned bytes', status: 'unbuilt' },
+  61: { mechanism: 'stat memo', status: 'unbuilt' },
+  64: { mechanism: 'lens', status: 'unbuilt' },
+  65: { mechanism: 'racy re-hash', status: 'unbuilt' },
+  83: {
     mechanism: "worker round trip (measured by the lab's parse-facet tier row, not a work counter)",
     status: 'unbuilt',
   },

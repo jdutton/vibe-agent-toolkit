@@ -50,9 +50,12 @@
  * | `resourceTags` | a kept realization or membership names the identity |
  * | `claudeRulePatterns` | a kept realization or membership names the identity |
  *
- * The identity rows are reached through the registry rather than named here —
- * see {@link identityTableKeys} — so a later context-less identity table is
- * recovered rather than silently absent from every hydrated projection.
+ * Each row of that table is one reconstruction step of {@link EXTENT_STEP_TABLES}
+ * (`roots` the roots step, the other three the identity step), and a caller
+ * names the steps it needs in its {@link ExtentRequest}: membership reads three
+ * context-scoped tables and runs neither. A step whose tables the request does
+ * not name, or a requested table the stored rows lack, is an
+ * {@link StoreRequestUnmetError}: an absent table never reads as empty.
  *
  * That reconstruction is a claim, and the claim is falsifiable rather than
  * argued: `exportProjection` emits a byte-identical document from a projection,
@@ -80,10 +83,49 @@
  * derived, and one such key makes the whole extent a miss.
  */
 
+import { VatError } from '@vibe-agent-toolkit/utils';
+
 import { canonicalJson } from './digest.js';
 import type { Projection } from './projection.js';
-import type { BlobScopedRows, ExtentScopedRows } from './store.js';
+import {
+  EXTENT_STEP_TABLES,
+  type BlobScopedRows,
+  type ExtentRequest,
+  type ExtentScopedRows,
+  type ExtentScopedTableName,
+  type ExtentStep,
+} from './store.js';
 import { PROJECTION_TABLES } from './table-registry.js';
+
+/** The `code` a {@link StoreRequestUnmetError} carries — dispatch on this, never on the message. */
+export const STORE_REQUEST_UNMET = 'STORE_REQUEST_UNMET';
+
+/**
+ * A store request that cannot be answered, on either tier. On the extent tier:
+ * a step whose tables the request does not name, a context-less table requested
+ * without the step that narrows it, or a requested table the stored rows do not
+ * carry. On the blob tier: a store answer missing a requested table, a backend
+ * that ignored the request; reading the absent table as empty would serve every
+ * key as uncovered. A VAT or backend bug, never a property of the corpus;
+ * recognise it with `isVatError(error, StoreRequestUnmetError.code)`.
+ */
+export class StoreRequestUnmetError extends VatError {
+  /** The code every instance carries. */
+  static readonly code = STORE_REQUEST_UNMET;
+
+  /**
+   * @param tier - The tier whose request is unmet
+   * @param table - The table the request or the stored rows lack
+   * @param reason - Why it was needed
+   */
+  constructor(
+    readonly tier: 'extent' | 'blob',
+    readonly table: string,
+    reason: string,
+  ) {
+    super(STORE_REQUEST_UNMET, `The ${tier} request cannot be answered: ${table} ${reason}. This is a VAT bug.`);
+  }
+}
 
 /**
  * One contributor a run registered, and the parameters it will run under.
@@ -118,14 +160,14 @@ const IDENTITY_COLUMN = 'resourceId';
  *   when some registered contributor has no matching provenance row
  */
 export function selectRequestedContexts(
-  extent: ExtentScopedRows,
+  extent: Pick<ExtentScopedRows, 'zoneProvenance'>,
   requested: readonly RequestedContributor[],
 ): readonly string[] | undefined {
   // Keyed by `(contributorId, canonical parameterSet)` in one string rather than
   // nested maps: the pair is the question, and splitting it across two lookups
   // invites a later edit to check only the first half.
   const contextsByQuestion = new Map<string, string[]>();
-  for (const row of extent.zoneProvenance) {
+  for (const row of requestedTable(extent, PROJECTION_TABLES.zoneProvenance.key)) {
     const question = questionKey(row.contributorId, row.parameterSet);
     const contexts = contextsByQuestion.get(question) ?? [];
     contextsByQuestion.set(question, contexts);
@@ -145,47 +187,53 @@ export function selectRequestedContexts(
 }
 
 /**
- * Narrow a stored extent to the contexts one run is owed.
+ * Narrow a stored extent to the contexts one run is owed, in the tables and
+ * with the reconstruction steps the request names.
  *
- * @param extent - What {@link FactStore.readExtent} returned
- * @param options - Which contexts, and whose root
- * @param options.contexts - Context ids from {@link selectRequestedContexts}
- * @param options.rootId - This run's corpus root id, which `populate()` records
- *   a `roots` row for before any contributor runs — so it is kept whether or not
- *   a context happens to name it
- * @returns The same eight tables, holding only this run's rows
+ * @param extent - What {@link FactStore.readExtent} returned for `request`
+ * @param request - The tables the caller reads and the steps to run over them
+ * @param selection - Which contexts, and whose root
+ * @param selection.contexts - Context ids from {@link selectRequestedContexts}
+ * @param selection.rootId - This run's corpus root id, which `populate()` records
+ *   a `roots` row for before any contributor runs — so the roots step keeps it
+ *   whether or not a context happens to name it
+ * @returns The requested tables, holding only this run's rows
+ * @throws An {@link StoreRequestUnmetError} when a step's table is not
+ *   requested, a context-less table is requested without its step, or a
+ *   requested table is absent from `extent`
  */
-export function selectRequestedRows(
-  extent: ExtentScopedRows,
-  options: { contexts: readonly string[]; rootId: string },
-): ExtentScopedRows {
-  const contexts = new Set(options.contexts);
+export function selectRequestedRows<Table extends ExtentScopedTableName>(
+  extent: Pick<ExtentScopedRows, Table>,
+  request: ExtentRequest<Table>,
+  selection: { contexts: readonly string[]; rootId: string },
+): Pick<ExtentScopedRows, Table> {
+  assertRequestComplete(request);
+  const contexts = new Set(selection.contexts);
   const source = extent as unknown as RowBundle;
   const kept: RowBundle = {};
 
-  for (const spec of Object.values(PROJECTION_TABLES)) {
-    const column = spec.contextColumn;
-    if (spec.scope !== 'extent' || column === undefined) continue;
-    kept[spec.key] = (source[spec.key] ?? []).filter((row) => contexts.has(String(row[column])));
+  for (const table of request.tables) {
+    const column = PROJECTION_TABLES[table].contextColumn;
+    if (column !== undefined) kept[table] = rowsOf(source, table).filter((row) => contexts.has(String(row[column])));
   }
 
-  // The context-less IDENTITY tables, by reachability from what was kept above.
-  // Read off the registry rather than named one by one: a context-less table
-  // that nobody remembered to list here would hydrate as `undefined` — not as an
-  // empty table, which is a cache miss a reader can diagnose, but as a missing
-  // field that is a TypeError at whichever consumer touches it first.
-  const identities = referencedIdentities(kept);
-  for (const key of identityTableKeys()) {
-    kept[key] = rowsNaming(source, key, IDENTITY_COLUMN, identities);
+  const steps = new Set<ExtentStep>(request.steps);
+  if (steps.has('identity')) {
+    // The context-less IDENTITY tables, by reachability from what was kept above.
+    const identities = referencedIdentities(kept);
+    for (const table of stepOutputs('identity')) {
+      kept[table] = rowsNaming(source, table, IDENTITY_COLUMN, identities);
+    }
+  }
+  if (steps.has('roots')) {
+    const roots = new Set<string>([selection.rootId]);
+    for (const row of rowsOf(kept, PROJECTION_TABLES.resolutionContexts.key)) {
+      roots.add(String(row['rootId']));
+    }
+    kept[PROJECTION_TABLES.roots.key] = rowsNaming(source, PROJECTION_TABLES.roots.key, 'id', roots);
   }
 
-  const roots = new Set<string>([options.rootId]);
-  for (const row of kept[PROJECTION_TABLES.resolutionContexts.key] ?? []) {
-    roots.add(String(row['rootId']));
-  }
-  kept[PROJECTION_TABLES.roots.key] = rowsNaming(source, PROJECTION_TABLES.roots.key, 'id', roots);
-
-  return kept as unknown as ExtentScopedRows;
+  return kept as unknown as Pick<ExtentScopedRows, Table>;
 }
 
 /**
@@ -280,23 +328,71 @@ function questionKey(contributorId: string, parameterSet: unknown): string {
 }
 
 /**
- * Every extent-scoped table that is keyed on an identity rather than partitioned
- * by context — `resources`, `resource_tags` and `claude_rule_patterns` today.
+ * The context-less tables a step narrows: the ones of its
+ * {@link EXTENT_STEP_TABLES} entry with no context column (the rest it only
+ * reads).
  *
- * Derived, not listed: a context-less table is recovered by reachability, and
- * the only thing that decides whether this reconstruction can reach it is
- * whether it names an identity at all. `roots` is the one context-less table
- * this does not cover, because it is keyed on a ROOT rather than an identity and
- * is reconstructed from the run's own root plus the kept contexts.
- *
- * @returns The registry keys of the identity-keyed context-less tables
+ * @param step - The step
+ * @returns The registry keys it rebuilds
  */
-function identityTableKeys(): readonly string[] {
-  return Object.values(PROJECTION_TABLES)
-    .filter((spec) => spec.scope === 'extent'
-      && spec.contextColumn === undefined
-      && (spec.columns as readonly string[]).includes(IDENTITY_COLUMN))
-    .map((spec) => spec.key);
+function stepOutputs(step: ExtentStep): readonly ExtentScopedTableName[] {
+  return EXTENT_STEP_TABLES[step].filter((table) => PROJECTION_TABLES[table].contextColumn === undefined);
+}
+
+/**
+ * Refuse a request whose steps and tables disagree.
+ *
+ * The type already refuses a step without its tables ({@link ExtentStepsFor});
+ * this is the same rule for a request built where the type cannot see it (a
+ * cast, a widened variable, JavaScript), plus its converse: a context-less
+ * table requested without the step that narrows it would be handed back
+ * unnarrowed, every context's rows at once.
+ *
+ * @param request - The request
+ * @throws An {@link StoreRequestUnmetError} on either disagreement
+ */
+function assertRequestComplete<Table extends ExtentScopedTableName>(request: ExtentRequest<Table>): void {
+  const tables = new Set<ExtentScopedTableName>(request.tables);
+  const steps = new Set<ExtentStep>(request.steps);
+  for (const step of steps) {
+    const missing = EXTENT_STEP_TABLES[step].find((table) => !tables.has(table));
+    if (missing !== undefined) throw new StoreRequestUnmetError('extent', missing, `is read by the ${step} step but not requested`);
+  }
+  for (const table of tables) {
+    if (PROJECTION_TABLES[table].contextColumn !== undefined) continue;
+    const narrowedBy = (Object.keys(EXTENT_STEP_TABLES) as ExtentStep[]).filter((step) => stepOutputs(step).includes(table));
+    if (!narrowedBy.some((step) => steps.has(step))) {
+      throw new StoreRequestUnmetError('extent', table, `has no context column and is requested without the step that narrows it (${narrowedBy.join(', ')})`);
+    }
+  }
+}
+
+/**
+ * One table of a bundle, which must be there: a requested table the stored
+ * rows do not carry is a backend that ignored the request, and reading it as
+ * empty would serve a membership with no members as a hit.
+ *
+ * @param bundle - The rows
+ * @param table - The table
+ * @returns Its rows
+ * @throws An {@link StoreRequestUnmetError} when the bundle lacks it
+ */
+function rowsOf(bundle: RowBundle, table: string): readonly Record<string, unknown>[] {
+  const rows = bundle[table];
+  if (rows === undefined) throw new StoreRequestUnmetError('extent', table, 'was requested and is absent from the stored rows');
+  return rows;
+}
+
+/**
+ * {@link rowsOf} for one table of a typed extent answer, keeping the table's row type.
+ *
+ * @param extent - The stored rows
+ * @param table - The table, which must be there
+ * @returns Its rows
+ * @throws An {@link StoreRequestUnmetError} when `extent` lacks it
+ */
+function requestedTable<Table extends ExtentScopedTableName>(extent: Pick<ExtentScopedRows, Table>, table: Table): ExtentScopedRows[Table] {
+  return rowsOf(extent as unknown as RowBundle, table) as unknown as ExtentScopedRows[Table];
 }
 
 /**
@@ -312,7 +408,7 @@ function identityTableKeys(): readonly string[] {
 function referencedIdentities(kept: RowBundle): ReadonlySet<string> {
   const identities = new Set<string>();
   for (const key of [PROJECTION_TABLES.resourceRealizations.key, PROJECTION_TABLES.resourceExtents.key]) {
-    for (const row of kept[key] ?? []) identities.add(String(row['resourceId']));
+    for (const row of rowsOf(kept, key)) identities.add(String(row['resourceId']));
   }
   return identities;
 }
@@ -332,5 +428,5 @@ function rowsNaming(
   column: string,
   wanted: ReadonlySet<string>,
 ): readonly Record<string, unknown>[] {
-  return (source[table] ?? []).filter((row) => wanted.has(String(row[column])));
+  return rowsOf(source, table).filter((row) => wanted.has(String(row[column])));
 }

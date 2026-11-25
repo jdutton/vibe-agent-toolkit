@@ -7,14 +7,19 @@
  * (enforced by `packages/dev-tools/test/parser-kind-router-boundary.test.ts`).
  * A directory is not routed here: callers that walk directories keep their own
  * `isDirectory` test.
+ *
+ * A lane outside the projection (the registry's read and sizing tally, `vat
+ * validate`'s checks overlap gate) routes through {@link parseRoutingFor} and
+ * {@link parserKindForResolvedPath}, so it reaches the projection lane's verdict.
  */
 
 import { matchesCollection } from '../collection-matcher.js';
 import { NO_PARSER_KIND, type ParserKind } from '../content-key.js';
 import { mimeTypeForPath, parserKindForMimeType } from '../mime-type.js';
-import type { CollectionConfig } from '../schemas/project-config.js';
+import type { CollectionConfig, ProjectConfig } from '../schemas/project-config.js';
 
 import { canonicalJson } from './digest.js';
+import { relativize } from './root-relative-path.js';
 
 /**
  * The type of one path: the run's collection resolver's answer when it has one,
@@ -174,4 +179,45 @@ export function createCollectionMimeResolver(
       return mimeTypeForPath(absolutePath);
     },
   };
+}
+
+/**
+ * The parser kind a resolved path goes to through a run's collection MIME resolver,
+ * so a declared `mimeType` overrides the extension table.
+ *
+ * @param absolutePath - The resolved path to route
+ * @param resolver - The run's collection MIME resolver; it falls back to the
+ *   built-in table for every path no declaration matches
+ * @param baseDir - The directory declarations are relative to, or undefined to
+ *   match them against the absolute path
+ * @returns The parser kind, or `none` when nothing parses this type
+ */
+export function parserKindForResolvedPath(
+  absolutePath: string,
+  resolver: CollectionMimeResolver,
+  baseDir: string | undefined,
+): ParserKind {
+  return parserKindForMime(mimeFor(resolver, absolutePath, baseDir === undefined ? absolutePath : relativize(absolutePath, baseDir)));
+}
+
+/**
+ * A parse routing: its collection MIME resolver and the directory declarations are relative to
+ * (`undefined` for a registry not yet given one, which matches declarations against the absolute path).
+ */
+export interface ParseRouting<Base extends string | undefined> {
+  readonly resolver: CollectionMimeResolver;
+  readonly baseDir: Base;
+}
+
+/**
+ * The one constructor of a parse routing from a project config: the registry's read and sizing,
+ * `vat validate`'s checks overlap gate, and a caller judging what the gate decides all build theirs
+ * here, never a resolver of their own.
+ *
+ * @param config - The project config, if there is one
+ * @param baseDir - The directory collection declarations are relative to
+ * @returns The routing
+ */
+export function parseRoutingFor<Base extends string | undefined>(config: ProjectConfig | undefined, baseDir: Base): ParseRouting<Base> {
+  return { resolver: createCollectionMimeResolver(config?.resources?.collections), baseDir };
 }

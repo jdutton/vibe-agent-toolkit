@@ -21,6 +21,12 @@
  * There is no cold-only category: a fact warm validate needs that the store lacks
  * becomes a blob fact (an extractor fact), never an exception list.
  *
+ * One blob fact is not a `ResourceMetadata` field: `skillText`, the skill-text
+ * record of a markdown blob (`skill_text_facts`, `skill_text_matches`), which
+ * the skills lane reads through `storedDocument` rather than a resource. It is
+ * on {@link BlobResourceFacts} beside the mapped fields, `null` for a blob that
+ * is not markdown.
+ *
  * {@link RESOURCE_METADATA_FACT_SOURCES} and {@link RESOURCE_LINK_FACT_SOURCES} are
  * checked against `ResourceMetadata`'s and `ResourceLink`'s keys by the type
  * system: a field added to either schema and not mapped here, or mapped here and
@@ -41,29 +47,35 @@
  * ## What the reader refuses
  *
  * The rows are checked against the counts the `blobs` row carries (`linkCount`,
- * `headingCount`, `findingCount`), their numbering is checked for gaps and repeats
- * (`astIndex`, each table's `ordinal`), and they are checked against what a parse
+ * `headingCount`, `findingCount`) and the `skill_text_facts` row carries
+ * (`matchCount`), their numbering is checked for gaps and repeats
+ * (`astIndex`, each table's `ordinal`), a markdown blob must have its one
+ * `skill_text_facts` row and no other blob any, and they are checked against what a parse
  * can produce (an AST link has text, an unresolved reference has a line, the
  * frontmatter decodes). A mismatch is `uncovered`, never a guess or a throw: a
  * warm run derives the blob again rather than validate a partial resource.
  */
 
-import { isVatError } from '@vibe-agent-toolkit/utils';
+import { isVatError, type TextProvenance } from '@vibe-agent-toolkit/utils';
 
 import { decodeFrontmatterValue, FRONTMATTER_VALUE_MALFORMED } from '../frontmatter-codec.js';
 import { toHeadingTree } from '../heading-tree.js';
 import { classifyLink } from '../link-classify.js';
 import type { ParseResult } from '../link-parser.js';
 import type { FlatHeading } from '../parse-capabilities.js';
+import { skillTextHeld } from '../parse-limits.js';
 import type { BlobConditionRow, BlobReferenceRow, BlobRow, BlobSectionRow } from '../schemas/projection-blobs.js';
+import type { SkillTextFactsRow, SkillTextMatchRow } from '../schemas/projection-skill-text.js';
 import type { HtmlParseError, ResourceLink, ResourceMetadata, UnresolvedReference } from '../schemas/resource-metadata.js';
+import { SkillTextFactsSchema, type SkillTextFacts, type SkillTextMatch } from '../schemas/skill-text-facts.js';
 
 import { BLOB_FINDING_CONDITION_CODES } from './blob-facts.js';
 import { BLOB_NOT_TEXT, parserKindOf } from './blob-population.js';
 import { NODE_TYPE_OF_AST_FORM } from './blob-references.js';
 import { notAdmittedEntriesByBlob, type NotAdmittedEntry } from './blob-refusals.js';
 import { NOT_TEXT_RESOURCE_FACTS } from './document-facts.js';
-import type { BlobScopedRows } from './store.js';
+import { restoredMatchText } from './skill-text-match-text.js';
+import type { BlobScopedRows, BlobScopedTableName } from './store.js';
 
 /** A pure function of the bytes, held per content key in the blob tier. */
 const BLOB_FACT = 'blob-fact';
@@ -193,13 +205,34 @@ const FLAT_HEADING_FIELDS: FieldReaders<FlatHeading, BlobSectionRow> = {
   line: (row) => row.lineStart ?? undefined,
 };
 
-/** The content-addressed half of a `ResourceMetadata`. */
-export type BlobResourceFacts = Omit<Pick<ResourceMetadata, BlobFactField>, 'links'> & { links: BlobLink[] };
+/**
+ * The content-addressed half of a `ResourceMetadata`, and the blob's skill-text
+ * record (`ParseResult.skillText`): required, `null` for a blob that is not
+ * markdown or whose record is past the bound the store holds (`skillTextHeld`).
+ */
+export type BlobResourceFacts = Omit<Pick<ResourceMetadata, BlobFactField>, 'links'> & {
+  links: BlobLink[];
+  /**
+   * Whether the frontmatter block is valid YAML but not a mapping
+   * (`ParseResult.frontmatterNotAMapping`, the blob's `frontmatterNotAMapping`
+   * column): with `frontmatter` and `frontmatterError`, the parse's whole verdict
+   * on the block, so a skills lane words its refusal without decoding it again.
+   */
+  frontmatterNotAMapping: boolean;
+  skillText: SkillTextFacts | null;
+};
+
+/** How a blob's bytes were decoded: its `blobs` row's `encoding` and `encodingSource`. */
+export type BlobDecoding = Pick<TextProvenance, 'encoding' | 'encodingSource'>;
 
 /** What the blob tier says about one content key. */
 export type BlobFactsOutcome =
-  /** The resource's blob facts. */
-  | { readonly kind: 'facts'; readonly facts: BlobResourceFacts }
+  /**
+   * The resource's blob facts, and how its bytes were decoded into the text
+   * they were parsed from (its `blobs` row's `encoding` and `encodingSource`),
+   * or `null` for bytes that are not text (no `blobs` row, nothing decoded).
+   */
+  | { readonly kind: 'facts'; readonly facts: BlobResourceFacts; readonly decoding: BlobDecoding | null }
   /** Every realization of the key is refused, as the registry lane refuses it. */
   | { readonly kind: 'not-admitted'; readonly entry: NotAdmittedEntry }
   /** The tier holds nothing usable for the key: a warm run derives it again. */
@@ -225,6 +258,9 @@ export function blobResourceFactsOf(parse: ParseResult, contentKey: string): Blo
     ...optionalParseFacts(parse),
     estimatedTokenCount: parse.estimatedTokenCount,
     contentKey,
+    frontmatterNotAMapping: parse.frontmatterNotAMapping === true,
+    // What the store keeps, so a cold resource's facts are the warm one's: a record past its bound is none.
+    skillText: parse.skillText === null || skillTextHeld(parse.skillText) ? parse.skillText : null,
   };
 }
 
@@ -255,32 +291,84 @@ interface KeyRows {
   references: BlobReferenceRow[];
   sections: BlobSectionRow[];
   conditions: BlobConditionRow[];
+  skillTextFacts: SkillTextFactsRow[];
+  skillTextMatches: SkillTextMatchRow[];
 }
 
 /** A rebuild step's answer: the value, or why the rows cannot be trusted. */
 type Rebuilt<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly reason: string };
 
 /**
+ * The blob-scoped tables {@link blobFactsReader} consumes, and no other: what the
+ * stored admission asks the store for. The harness tables are not here: they
+ * describe what one harness reaches, not a resource.
+ *
+ * Held both ways: the reader's input type is these tables only, so reading
+ * another does not compile; and every table here is one whose damage the
+ * in-process cost system test proves changes what a warm run does.
+ */
+export const BLOB_FACT_READER_TABLES = [
+  'blobs',
+  'blobReferences',
+  'blobSections',
+  'blobConditions',
+  'skillTextFacts',
+  'skillTextMatches',
+] as const satisfies readonly BlobScopedTableName[];
+
+/** The rows {@link blobFactsReader} reads: {@link BLOB_FACT_READER_TABLES} only. */
+type BlobFactReaderRows = Pick<BlobScopedRows, (typeof BLOB_FACT_READER_TABLES)[number]>;
+
+/**
+ * What the tier says about one key without building its facts: the kind
+ * {@link BlobFactsReader.outcome} returns for it, and how many of the key's rows
+ * were read to say so.
+ */
+interface BlobTierAnswer {
+  readonly kind: BlobFactsOutcome['kind'];
+  /** The key's rows the admission request reads: its `blobs` row and its reference, section, condition and skill-text rows. */
+  readonly rowsRead: number;
+}
+
+/** The ONE reader of the blob tier's resource facts, over one indexed bundle. */
+export interface BlobFactsReader {
+  /** The key's facts, rebuilt on every ask and never retained by the reader: its caller owns them. */
+  readonly outcome: (contentKey: string) => BlobFactsOutcome;
+  /**
+   * The kind {@link outcome} returns, decided by the same checks of the same rows
+   * without building the facts. A stored frontmatter value is decoded and
+   * dropped: whether it decodes is decided only by decoding it.
+   */
+  readonly answer: (contentKey: string) => BlobTierAnswer;
+}
+
+/**
  * The ONE reader of the blob tier's resource facts.
  *
+ * Its `blobReferences` rows need only the AST forms (`AST_SYNTACTIC_FORMS`):
+ * {@link linksOf} drops every lexical row, so a bundle without them reads the same.
+ *
  * @param rows - Blob-scoped rows for any set of keys, as a store returns them
- * @returns A reader for one key at a time; the bundle is indexed once
+ * @returns The reader; the bundle is indexed once, and nothing decoded is kept
  */
-export function blobFactsReader(rows: BlobScopedRows): (contentKey: string) => BlobFactsOutcome {
+export function blobFactsReader(rows: BlobFactReaderRows): BlobFactsReader {
   const byKey = indexByKey(rows);
-  return (contentKey) => outcomeOf(contentKey, byKey.get(contentKey));
+  return {
+    outcome: (contentKey) => outcomeOf(contentKey, byKey.get(contentKey)),
+    answer: (contentKey) => answerOf(contentKey, byKey.get(contentKey)),
+  };
 }
 
 /**
  * @param rows - The bundle
  * @returns Each key's rows
  */
-function indexByKey(rows: BlobScopedRows): Map<string, KeyRows> {
+function indexByKey(rows: BlobFactReaderRows): Map<string, KeyRows> {
   const byKey = new Map<string, KeyRows>();
   const of = (key: string): KeyRows => {
     let entry = byKey.get(key);
     if (entry === undefined) {
-      entry = { blob: undefined, references: [], sections: [], conditions: [] };
+      entry = { blob: undefined, references: [], sections: [], conditions: [], skillTextFacts: [], skillTextMatches: [] };
       byKey.set(key, entry);
     }
     return entry;
@@ -289,7 +377,35 @@ function indexByKey(rows: BlobScopedRows): Map<string, KeyRows> {
   for (const row of rows.blobReferences) of(row.blob).references.push(row);
   for (const row of rows.blobSections) of(row.blob).sections.push(row);
   for (const row of rows.blobConditions) of(row.blob).conditions.push(row);
+  for (const row of rows.skillTextFacts) of(row.blob).skillTextFacts.push(row);
+  for (const row of rows.skillTextMatches) of(row.blob).skillTextMatches.push(row);
   return byKey;
+}
+
+/** What a key's rows are, before any fact is built: the one classification both of the reader's answers make. */
+type KeyVerdict =
+  /** A `blobs` row: facts, once {@link blobRowsFault} finds nothing wrong with the rows. */
+  | { readonly kind: 'blob'; readonly blob: BlobRow; readonly rows: KeyRows }
+  /** Not text: the constant facts. */
+  | { readonly kind: 'not-text' }
+  | Extract<BlobFactsOutcome, { kind: 'not-admitted' | 'uncovered' }>;
+
+/**
+ * @param contentKey - The key asked about
+ * @param rows - Its rows, if the bundle held any
+ * @returns What its rows are
+ */
+function verdictOf(contentKey: string, rows: KeyRows | undefined): KeyVerdict {
+  // One reason whether or not the key had other rows: what reaches the reader
+  // depends on the request (the admission's omits the lexical reference rows and
+  // the harness tables), so "no rows" would be false for a key the store holds.
+  if (rows === undefined) return { kind: 'uncovered', reason: `the blob tier holds no blobs row for ${contentKey}` };
+  if (rows.blob !== undefined) return { kind: 'blob', blob: rows.blob, rows };
+  // Not text: one rule for both lanes (`document-facts.ts`), so the facts are the constant.
+  if (rows.conditions.some((row) => row.code === BLOB_NOT_TEXT)) return { kind: 'not-text' };
+  const entry = notAdmittedEntriesByBlob(rows.conditions).get(contentKey);
+  if (entry !== undefined) return { kind: 'not-admitted', entry };
+  return { kind: 'uncovered', reason: `the blob tier holds no blobs row for ${contentKey}` };
 }
 
 /**
@@ -298,18 +414,31 @@ function indexByKey(rows: BlobScopedRows): Map<string, KeyRows> {
  * @returns What the tier says about it
  */
 function outcomeOf(contentKey: string, rows: KeyRows | undefined): BlobFactsOutcome {
-  if (rows === undefined) return { kind: 'uncovered', reason: `the blob tier holds no rows for ${contentKey}` };
-  if (rows.blob !== undefined) {
-    const facts = factsOf(rows.blob, rows);
-    return facts.ok ? { kind: 'facts', facts: facts.value } : { kind: 'uncovered', reason: `${contentKey}: ${facts.reason}` };
+  const verdict = verdictOf(contentKey, rows);
+  if (verdict.kind === 'not-text') {
+    return { kind: 'facts', facts: { ...NOT_TEXT_RESOURCE_FACTS, links: [], headings: [], contentKey, frontmatterNotAMapping: false }, decoding: null };
   }
-  // Not text: one rule for both lanes (`document-facts.ts`), so the facts are the constant.
-  if (rows.conditions.some((row) => row.code === BLOB_NOT_TEXT)) {
-    return { kind: 'facts', facts: { ...NOT_TEXT_RESOURCE_FACTS, links: [], headings: [], contentKey } };
-  }
-  const entry = notAdmittedEntriesByBlob(rows.conditions).get(contentKey);
-  if (entry !== undefined) return { kind: 'not-admitted', entry };
-  return { kind: 'uncovered', reason: `the blob tier holds no blobs row for ${contentKey}` };
+  if (verdict.kind !== 'blob') return verdict;
+  const facts = factsOf(verdict.blob, verdict.rows);
+  if (!facts.ok) return { kind: 'uncovered', reason: `${contentKey}: ${facts.reason}` };
+  const { encoding, encodingSource } = verdict.blob;
+  return { kind: 'facts', facts: facts.value, decoding: { encoding, encodingSource } };
+}
+
+/**
+ * @param contentKey - The key asked about
+ * @param rows - Its rows, if the bundle held any
+ * @returns The kind {@link outcomeOf} returns for it, and the rows read to say so
+ */
+function answerOf(contentKey: string, rows: KeyRows | undefined): BlobTierAnswer {
+  const rowCountOf = (held: KeyRows): number =>
+    (held.blob === undefined ? 0 : 1) + held.references.length + held.sections.length + held.conditions.length
+    + held.skillTextFacts.length + held.skillTextMatches.length;
+  const rowsRead = rows === undefined ? 0 : rowCountOf(rows);
+  const verdict = verdictOf(contentKey, rows);
+  if (verdict.kind === 'not-text') return { kind: 'facts', rowsRead };
+  if (verdict.kind !== 'blob') return { kind: verdict.kind, rowsRead };
+  return { kind: blobRowsFault(verdict.blob, verdict.rows) === undefined ? 'facts' : 'uncovered', rowsRead };
 }
 
 /**
@@ -333,16 +462,13 @@ function findings(rows: KeyRows, code: string): BlobConditionRow[] {
 }
 
 /**
- * @param rows - Every row the key holds
- * @returns The unresolved references, or why the rows cannot be one (a reference always has a line)
+ * @param rows - Every row the key holds, already found sound by {@link rowsFault}
+ * @returns The unresolved references
  */
-function unresolvedOf(rows: KeyRows): Rebuilt<UnresolvedReference[]> {
-  const unresolved: UnresolvedReference[] = [];
-  for (const row of findings(rows, 'UNRESOLVED_REFERENCE')) {
-    if (row.line === null) return { ok: false, reason: 'an UNRESOLVED_REFERENCE row has no line' };
-    unresolved.push(buildFrom(UNRESOLVED_REFERENCE_FIELDS, { ...row, line: row.line }));
-  }
-  return { ok: true, value: unresolved };
+function unresolvedOf(rows: KeyRows): UnresolvedReference[] {
+  // `rowsFault` refused a row without a line, so none is skipped here.
+  return findings(rows, 'UNRESOLVED_REFERENCE').flatMap((row) =>
+    row.line === null ? [] : [buildFrom(UNRESOLVED_REFERENCE_FIELDS, { ...row, line: row.line })]);
 }
 
 /**
@@ -390,19 +516,66 @@ function frontmatterOf(blob: BlobRow): Rebuilt<Record<string, unknown> | undefin
   }
 }
 
+/** An AST reference row and the link node type its syntactic form names. */
+interface AstReference {
+  readonly row: BlobReferenceRow;
+  readonly nodeType: BlobLink['nodeType'];
+}
+
 /**
+ * @param references - The key's reference rows
+ * @returns The rows that are AST links (a raw-source reference is not), in stored order
+ */
+function astReferences(references: readonly BlobReferenceRow[]): AstReference[] {
+  return references.flatMap((row) => {
+    const nodeType = NODE_TYPE_OF_AST_FORM.get(row.syntacticForm);
+    return nodeType === undefined ? [] : [{ row, nodeType }];
+  });
+}
+
+/**
+ * Every check of a key's rows that needs no decode, in the order a rebuild meets
+ * them: each AST link row has text and an `astIndex`, numbered 0..n-1; the rows
+ * add up to the `blobs` row's counts; every unresolved reference has a line.
+ *
  * @param blob - The key's `blobs` row
  * @param rows - Every row the key holds
- * @param links - The links rebuilt from the key's reference rows
- * @returns Why the rows do not add up to what the `blobs` row says the parse produced, or `undefined`
+ * @param ast - The key's AST reference rows
+ * @returns Why the rows cannot be trusted, or `undefined`
  */
-function countsFault(blob: BlobRow, rows: KeyRows, links: readonly BlobLink[]): string | undefined {
-  if (links.length !== blob.linkCount) return `${String(links.length)} AST reference rows against linkCount ${String(blob.linkCount)}`;
+function rowsFault(blob: BlobRow, rows: KeyRows, ast: readonly AstReference[]): string | undefined {
+  const unindexed = ast.find(({ row }) => row.text === null || row.astIndex === null);
+  if (unindexed !== undefined) return `AST reference row ${String(unindexed.row.ordinal)} has no text or no astIndex`;
+  if (!isDense(ast.map(({ row }) => row.astIndex ?? -1))) return 'the AST reference rows\' astIndex values have a gap or a repeat';
+  if (ast.length !== blob.linkCount) return `${String(ast.length)} AST reference rows against linkCount ${String(blob.linkCount)}`;
   if (rows.sections.length !== blob.headingCount) {
     return `${String(rows.sections.length)} section rows against headingCount ${String(blob.headingCount)}`;
   }
   if (!isDense(rows.sections.map((row) => row.ordinal))) return 'the section rows\' ordinals have a gap or a repeat';
-  return findingRowsFault(blob, rows);
+  const findingFault = findingRowsFault(blob, rows);
+  if (findingFault !== undefined) return findingFault;
+  return rows.conditions.some((row) => row.code === 'UNRESOLVED_REFERENCE' && row.line === null)
+    ? 'an UNRESOLVED_REFERENCE row has no line'
+    : undefined;
+}
+
+/**
+ * Why a key's `blobs` row and the rows filed under it cannot be rebuilt into
+ * facts, or `undefined` when they can: exactly the refusals of {@link factsOf},
+ * which runs these same checks before it builds anything. The frontmatter value
+ * and the skill-text record are decoded to answer and the decoded values dropped.
+ *
+ * @param blob - The key's `blobs` row
+ * @param rows - Every row the key holds
+ * @returns Why the rows cannot be trusted, or `undefined`
+ */
+function blobRowsFault(blob: BlobRow, rows: KeyRows): string | undefined {
+  const fault = rowsFault(blob, rows, astReferences(rows.references));
+  if (fault !== undefined) return fault;
+  const frontmatter = frontmatterOf(blob);
+  if (!frontmatter.ok) return frontmatter.reason;
+  const skillText = skillTextOf(blob.contentKey, rows);
+  return skillText.ok ? undefined : skillText.reason;
 }
 
 /**
@@ -411,30 +584,82 @@ function countsFault(blob: BlobRow, rows: KeyRows, links: readonly BlobLink[]): 
  * @returns The resource facts, or why the rows cannot be trusted
  */
 function factsOf(blob: BlobRow, rows: KeyRows): Rebuilt<BlobResourceFacts> {
-  const links = linksOf(rows.references);
-  if (!links.ok) return links;
-  const fault = countsFault(blob, rows, links.value);
+  // The checks of `blobRowsFault`, in its order, with the decoded frontmatter and skill-text record kept.
+  const ast = astReferences(rows.references);
+  const fault = rowsFault(blob, rows, ast);
   if (fault !== undefined) return { ok: false, reason: fault };
-  const unresolved = unresolvedOf(rows);
-  if (!unresolved.ok) return unresolved;
   const frontmatter = frontmatterOf(blob);
   if (!frontmatter.ok) return frontmatter;
+  const skillText = skillTextOf(blob.contentKey, rows);
+  if (!skillText.ok) return skillText;
   const parseErrors = findings(rows, 'HTML_PARSE_ERROR').map((row) => buildFrom(HTML_PARSE_ERROR_FIELDS, row));
   return {
     ok: true,
     value: {
-      links: links.value,
+      links: linksOf(ast),
       headings: headingsOf(rows.sections),
       ...(blob.anchors.length > 0 && { anchors: blob.anchors }),
       ...(parseErrors.length > 0 && { parseErrors }),
       // Present for every markdown parse, empty or not; no other parser produces the field.
-      ...(parserKindOf(blob.contentKey) === 'markdown' && { unresolvedReferences: unresolved.value }),
+      ...(parserKindOf(blob.contentKey) === 'markdown' && { unresolvedReferences: unresolvedOf(rows) }),
       ...(frontmatter.value !== undefined && { frontmatter: frontmatter.value }),
       ...(blob.frontmatterError !== null && { frontmatterError: blob.frontmatterError }),
       estimatedTokenCount: blob.tokenEstimate,
       contentKey: blob.contentKey,
+      frontmatterNotAMapping: blob.frontmatterNotAMapping,
+      skillText: skillText.value,
     },
   };
+}
+
+/**
+ * The blob's skill-text record, rebuilt from its `skill_text_facts` row and its
+ * `skill_text_matches` rows in `ordinal` order: what the parse computed, field
+ * for field (`skillTextRowsFor` writes them).
+ *
+ * A markdown blob holds exactly one facts row, and its match rows add up to that
+ * row's `matchCount`, numbered 0..n-1; a blob of any other kind holds none. A
+ * record the store does not hold (`held` false, past its bound) has no match
+ * rows and reads as no record (`null`): the skills lane scans the text itself.
+ * Anything else is a fault, so the key is `uncovered` and derived again, never
+ * served a partial record. The rows are checked by count and numbering only: a
+ * row whose text was altered in place is served as it reads.
+ *
+ * @param contentKey - The blob's key
+ * @param rows - Every row the key holds
+ * @returns The record (`null` for a blob that is not markdown, or a record not held), or why the rows cannot be one
+ */
+function skillTextOf(contentKey: string, rows: KeyRows): Rebuilt<SkillTextFacts | null> {
+  if (parserKindOf(contentKey) !== 'markdown') {
+    return rows.skillTextFacts.length === 0 && rows.skillTextMatches.length === 0
+      ? { ok: true, value: null }
+      : { ok: false, reason: 'a blob that is not markdown holds skill-text rows' };
+  }
+  const [facts, ...extra] = rows.skillTextFacts;
+  if (facts === undefined) return { ok: false, reason: 'the blob tier holds no skill_text_facts row for this markdown blob' };
+  if (extra.length > 0) return { ok: false, reason: 'the blob tier holds more than one skill_text_facts row' };
+  if (!facts.held) {
+    return rows.skillTextMatches.length === 0
+      ? { ok: true, value: null }
+      : { ok: false, reason: 'a skill-text record the store does not hold has skill_text_matches rows' };
+  }
+  if (rows.skillTextMatches.length !== facts.matchCount) {
+    return { ok: false, reason: `${String(rows.skillTextMatches.length)} skill_text_matches rows against matchCount ${String(facts.matchCount)}` };
+  }
+  if (!isDense(rows.skillTextMatches.map((row) => row.ordinal))) return { ok: false, reason: 'the skill_text_matches rows\' ordinals have a gap or a repeat' };
+  const matches: SkillTextMatch[] = [];
+  for (const row of [...rows.skillTextMatches].sort(byOrdinal)) {
+    const matchText = restoredMatchText(row.matchText, row.loneSurrogates);
+    if (matchText === undefined) return { ok: false, reason: `skill_text_matches row ${String(row.ordinal)}'s lone surrogates are not ones its text held` };
+    matches.push({ ordinal: row.ordinal, family: row.family, patternId: row.patternId, line: row.line, matchText });
+  }
+  // The core's own schema is the one contract for a record: a family/pattern
+  // pairing or family order the core never emits is not a record, whatever the
+  // row schemas let through one column at a time.
+  const record = SkillTextFactsSchema.safeParse({ lineCount: facts.lineCount, h1: facts.h1, frontmatterFence: facts.frontmatterFence, matches });
+  return record.success
+    ? { ok: true, value: record.data }
+    : { ok: false, reason: `the skill-text rows are not a record the core emits: ${record.error.message}` };
 }
 
 /**
@@ -442,24 +667,13 @@ function factsOf(blob: BlobRow, rows: KeyRows): Rebuilt<BlobResourceFacts> {
  * Each link's keys are in the order every parser writes them (`ResourceLink`'s
  * own: text, href, type, line, startOffset, endOffset, nodeType).
  *
- * @param references - The key's reference rows
- * @returns The links, or why the rows cannot be links
+ * @param ast - The key's AST reference rows, already found sound by {@link rowsFault}
+ * @returns The links
  */
-function linksOf(references: readonly BlobReferenceRow[]): Rebuilt<BlobLink[]> {
-  const ast = references.flatMap((row) => {
-    const nodeType = NODE_TYPE_OF_AST_FORM.get(row.syntacticForm);
-    return nodeType === undefined ? [] : [{ row, nodeType }];
-  });
-  const links: BlobLink[] = [];
-  const indexes: number[] = [];
-  for (const { row } of ast) {
-    if (row.text === null || row.astIndex === null) return { ok: false, reason: `AST reference row ${String(row.ordinal)} has no text or no astIndex` };
-    indexes.push(row.astIndex);
-  }
-  if (!isDense(indexes)) return { ok: false, reason: 'the AST reference rows\' astIndex values have a gap or a repeat' };
-  ast.sort((left, right) => (left.row.astIndex ?? 0) - (right.row.astIndex ?? 0));
-  for (const { row, nodeType } of ast) {
-    links.push({
+function linksOf(ast: readonly AstReference[]): BlobLink[] {
+  return [...ast]
+    .sort((left, right) => (left.row.astIndex ?? 0) - (right.row.astIndex ?? 0))
+    .map(({ row, nodeType }) => ({
       text: row.text ?? '',
       href: row.rawRef,
       type: classifyLink(row.rawRef),
@@ -467,9 +681,7 @@ function linksOf(references: readonly BlobReferenceRow[]): Rebuilt<BlobLink[]> {
       ...(row.startOffset !== null && { startOffset: row.startOffset }),
       ...(row.endOffset !== null && { endOffset: row.endOffset }),
       nodeType,
-    });
-  }
-  return { ok: true, value: links };
+    }));
 }
 
 /**

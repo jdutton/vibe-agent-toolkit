@@ -24,7 +24,7 @@ import { isDeclinedSymlinkCode } from '../../src/projection/contributors/filesys
 import { GitCrawlSource, type PopulationUnreadablePolicy } from '../../src/projection/crawl-source.js';
 import type { PopulationCache } from '../../src/projection/merge.js';
 import type { IgnoredRefusals } from '../../src/projection/resource-population.js';
-import { withRunPopulation } from '../../src/projection/run-population.js';
+import { IGNORE_HOME_SETTLEMENT, withRunPopulation } from '../../src/projection/run-population.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import { git, nestedRepository } from '../helpers/git-fixture.js';
 
@@ -99,7 +99,7 @@ function crawl(options: {
     return Promise.resolve({ store: emptyStore(), treeHash: snapshot.hash, treeUnchanged: () => true });
   };
   const run = (): Promise<Crawled> => withRunPopulation(
-    { root: home, gitTracker: new GitTracker(home), cacheOf, collectionsFor: () => Promise.resolve(undefined) },
+    { root: home, outputs: [], gitTracker: new GitTracker(home), cacheOf, questionCacheOf: cacheOf, holdsStore: store, collectionsFor: () => Promise.resolve(undefined), onHomeSettled: IGNORE_HOME_SETTLEMENT },
     async (population) => {
       // The CLI opens the store before anything else asks git: the snapshot is then in hand.
       if (store) await cacheOf();

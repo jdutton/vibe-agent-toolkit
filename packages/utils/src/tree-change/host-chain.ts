@@ -12,6 +12,7 @@ import { isPathAbsentError, LINK_CHAIN_REFUSED_CODE } from '../errors/errno-tabl
 import { isVatError, VatError } from '../errors/vat-error.js';
 import { safePath, toForwardSlash } from '../path-core.js';
 import { shownName, visibleText } from '../shown-text.js';
+import { countWork } from '../work-counters.js';
 
 import { type ChainProbe, type ChainRefusal, type ChainRule, type LinkChain, MAX_LINK_HOPS, type PlaceKind, walkLinkChain } from './link-chain.js';
 
@@ -28,6 +29,8 @@ import { type ChainProbe, type ChainRefusal, type ChainRule, type LinkChain, MAX
  */
 export function hostPlaceKind(path: string): PlaceKind {
   try {
+    // Counted at the call, refused or not: `fs.lstat` counts syscalls.
+    countWork('fs.lstat', 1);
     const stats = lstatSync(path);
     if (stats.isSymbolicLink()) return 'link';
     return stats.isDirectory() ? 'directory' : 'file';

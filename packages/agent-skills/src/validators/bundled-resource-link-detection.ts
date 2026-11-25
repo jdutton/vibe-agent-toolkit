@@ -119,34 +119,39 @@ function summariseFiles(relPaths: readonly string[]): string {
 }
 
 /**
- * @param body The SKILL.md text the caller already holds — the validator read it
- *   once at its entry, and a second best-effort read here used to turn a refused
- *   read into an empty body, i.e. into "nothing mentions these files"
+ * @param readBody Reads the SKILL.md text, called at most once and only when a
+ *   bundled file is not covered by a link: the validator's own read when it read
+ *   the file, a read of it when the run's store served it. A refused read throws;
+ *   a best-effort read here once turned a refusal into an empty body, i.e. into
+ *   "nothing mentions these files"
  * @param skillDir Absolute path to the skill directory
  * @param linkedFiles Absolute paths of files reached during BFS link traversal
  * @param locationRoot Root the emitted `location` is expressed relative to
  * @param side The side of the caller's verb the skill tree is on (an author's skill is `source`, a ZIP
  *   extracted into $TMPDIR is `environment`): a directory the walk cannot resolve is a fault there
  */
-export function detectBundledResourceWithoutLinks(
-  body: string,
+export async function detectBundledResourceWithoutLinks(
+  readBody: () => Promise<string>,
   skillDir: string,
   linkedFiles: readonly string[],
   locationRoot: string,
   side: FsSide,
-): ValidationIssue[] {
+): Promise<ValidationIssue[]> {
   const issues: ValidationIssue[] = [];
   const linked = new Set(linkedFiles.map((f) => safePath.resolve(f)));
-
-  for (const sub of BUNDLED_SUBDIRS) {
+  const uncovered = BUNDLED_SUBDIRS.map((sub) => {
     const subPath = safePath.join(skillDir, sub);
     const bundled = listFilesRelative(subPath, skillDir, side);
-    if (bundled.length === 0) continue;
+    const unlinked = bundled.filter((rel) => !linkedFilesCoverFile(linked, safePath.join(skillDir, rel)));
+    return { sub, subPath, bundled, unlinked };
+  }).filter((entry) => entry.unlinked.length > 0);
+  // Read only when a bundled file is not covered by a link: a warm run whose
+  // SKILL.md the store served reads it for nothing else.
+  if (uncovered.length === 0) return issues;
+  const text = await readBody();
 
-    const unreferenced = bundled.filter(
-      (rel) =>
-        !bodyMentionsFile(body, rel) && !linkedFilesCoverFile(linked, safePath.join(skillDir, rel)),
-    );
+  for (const { sub, subPath, bundled, unlinked } of uncovered) {
+    const unreferenced = unlinked.filter((rel) => !bodyMentionsFile(text, rel));
     if (unreferenced.length === 0) continue;
 
     const entry = CODE_REGISTRY.SKILL_REFERENCES_BUT_NO_LINKS;

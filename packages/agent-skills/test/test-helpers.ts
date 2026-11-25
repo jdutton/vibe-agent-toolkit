@@ -8,6 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect } from 'vitest';
 import type { z } from 'zod';
 
 import { packageSkill, packageSkillInto, type PackageSkillOptions, type PackageSkillResult } from '../src/skill-packager.js';
+import type { SkillTextRun } from '../src/skill-text-lane.js';
 import {
   type PackagingValidationResult,
   type SkillPackagingConfig,
@@ -29,6 +30,26 @@ import type { LinkedFileValidationResult, ValidationResult } from '../src/valida
  *
  * @returns The route to pass wherever a `ParseRoute` is taken
  */
+/**
+ * Validate one SKILL.md source-side with no validation overrides, through a
+ * stored-document source the test supplies (a fake store, or none).
+ */
+export function validateSkillThrough(
+  skillPath: string,
+  locationRoot: string,
+  source: SkillTextRun['source'],
+  route: ParseRoute,
+): ReturnType<typeof validateSkill> {
+  return validateSkill({
+    skillPath,
+    locationRoot,
+    validation: {},
+    resourcesValidation: {},
+    side: 'source',
+    run: { source, dispatcher: route.dispatcher },
+  });
+}
+
 export function setupParseRoute(): ParseRoute {
   const dispatcher = new ParseDispatcher(new ParseCache({ enabled: false }), { size: 1 });
   afterAll(() => dispatcher.shutdown());
@@ -198,7 +219,7 @@ export function createSkillAndValidate(
 ): Promise<ValidationResult> {
   const skillPath = safePath.join(tempDir, 'SKILL.md');
   fs.writeFileSync(skillPath, content);
-  return validateSkill({ dispatcher: undefined, resourcesValidation: {}, side: 'source', skillPath, validation: {} });
+  return validateSkill({ run: undefined, resourcesValidation: {}, side: 'source', skillPath, validation: {} });
 }
 
 /**
@@ -247,7 +268,7 @@ export function validateSkillWithTransitiveChecking(
   skillPath: string,
   rootDir?: string,
 ): Promise<ValidationResult> {
-  return validateSkill({ dispatcher: undefined, resourcesValidation: {},
+  return validateSkill({ run: undefined, resourcesValidation: {},
     side: 'source',
     skillPath,
     rootDir: rootDir ?? path.dirname(skillPath),
@@ -266,7 +287,7 @@ export function validateSkillWithUnreferencedFileCheck(
   skillPath: string,
   rootDir: string,
 ): Promise<ValidationResult> {
-  return validateSkill({ dispatcher: undefined, resourcesValidation: {},
+  return validateSkill({ run: undefined, resourcesValidation: {},
     side: 'source',
     skillPath,
     rootDir,

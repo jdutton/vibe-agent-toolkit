@@ -39,6 +39,13 @@ interface StoreRecord {
 const stores: StoreRecord[] = [];
 
 /**
+ * What each next store call (a read or a write, never `close()`) rejects with,
+ * consumed in order; empty means answer normally. Scripts a store another
+ * process holds mid-run.
+ */
+const callFailures: unknown[] = [];
+
+/**
  * What each next `close()` rejects with after closing, consumed in order; empty
  * means close cleanly. Scripts a checkpoint the real backend could not finish.
  */
@@ -63,6 +70,8 @@ function makeStore(): unknown {
   const guarded = <T>(value: T) => (): Promise<T> =>
     new Promise((resolve) => {
       refuseIfClosed();
+      const failure = callFailures.shift();
+      if (failure !== undefined) throw failure;
       resolve(value);
     });
   return {
@@ -91,6 +100,13 @@ export class FakeUnopenableError extends Error {
   }
 }
 
+/** The fake's stand-in for a store the backend says cannot answer now: another process's lock, a read-only file. */
+export class FakeUnavailableNowError extends Error {
+  constructor() {
+    super('database is locked');
+  }
+}
+
 /**
  * What each next open throws instead of opening, consumed in order; empty
  * means open normally. Lets a test script "the file is damaged" and "the
@@ -107,6 +123,7 @@ export const backend = {
   openCalls,
   openFailures,
   closeFailures,
+  callFailures,
   discarded,
   /** The module namespace a `vi.mock('@vibe-agent-toolkit/projection-sqlite', …)` factory returns. */
   moduleExports: (): Record<string, unknown> => ({
@@ -118,6 +135,7 @@ export const backend = {
       return makeStore();
     },
     isStoreUnopenableError: (error: unknown) => error instanceof FakeUnopenableError,
+    isStoreUnavailableNow: (error: unknown) => error instanceof FakeUnavailableNowError,
     discardStoreDatabase: (databasePath: string) => {
       discarded.push(databasePath);
     },
@@ -176,6 +194,7 @@ export function isolateProjectionStoreTests(options: {
     openCalls.options.length = 0;
     openFailures.length = 0;
     closeFailures.length = 0;
+    callFailures.length = 0;
     discarded.length = 0;
     // The process's own "once" ledger: a notice printed outside every scope by an earlier test
     // would otherwise silence the same notice in every later scope of this worker.

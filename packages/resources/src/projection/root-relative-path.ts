@@ -1,7 +1,27 @@
 /**
- * Containment over root-relative, forward-slashed corpus paths — the one place
- * the projection asks "is this path at or below that directory?".
+ * Root-relative, forward-slashed corpus paths: how an absolute path is spelled
+ * relative to a root ({@link relativize}), and the one place the projection asks
+ * "is this path at or below that directory?".
  */
+
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+
+/**
+ * Render an absolute path relative to a root, forward-slashed.
+ *
+ * Every path a realization row or a snapshot prints goes through here. An
+ * absolute path in a golden file makes the golden machine-specific and leaks
+ * `$HOME`; both have bitten this repo before.
+ *
+ * @param absolutePath - Path to render
+ * @param root - Root the path is rendered relative to
+ * @returns Forward-slashed relative path (or the forward-slashed absolute path
+ *   when the target lies outside the root, which is itself worth seeing)
+ */
+export function relativize(absolutePath: string, root: string): string {
+  const rel = safePath.relative(root, absolutePath);
+  return rel === '' ? '.' : toForwardSlash(rel);
+}
 
 /**
  * Is `queryDir` the directory `under`, or somewhere below it?

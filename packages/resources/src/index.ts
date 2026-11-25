@@ -153,6 +153,7 @@ export {
 } from './schemas/projection-blobs.js';
 
 export type { HarnessBlobFactsRow, HarnessBlobImportRow } from './schemas/projection-harness.js';
+export type { SkillTextFactsRow, SkillTextMatchRow } from './schemas/projection-skill-text.js';
 
 // A reached blob with no harness facts — a producer bug. Exported so a command
 // can name it by code (never by message) on its "could not do its job" exit.
@@ -277,13 +278,13 @@ export {
   collectionMimeConflictCondition,
   collectRealization,
   resolveRealPath,
-  relativize,
   COLLECTION_MIME_CONFLICT,
   type ContentDemand,
   type PathShape,
   type RealizationContext,
   type RealPathResolution,
 } from './projection/realizations.js';
+export { relativize } from './projection/root-relative-path.js';
 
 // The per-run content cache: one `readFile` + one SHA-256 per file per
 // population, however many extents realize it and whether or not the blob stage
@@ -376,9 +377,13 @@ export {
 // about blobs, the extent of a tree — so each backend owns its physical
 // strategy instead of inheriting another's.
 export {
+  ALL_BLOB_REQUEST,
+  ALL_EXTENT_REQUEST,
+  type BlobRequest,
   type BlobScopedRows,
   type BlobScopedTableName,
   type ExtentKey,
+  type ExtentRequest,
   type ExtentScopedRows,
   type ExtentScopedTableName,
   type FactStore,
@@ -399,6 +404,7 @@ export {
   keyedContentKeys,
   selectRequestedContexts,
   selectRequestedRows,
+  StoreRequestUnmetError,
   type RequestedContributor,
   uncoveredContentKeys,
 } from './projection/store-hydration.js';
@@ -468,7 +474,10 @@ export {
   type ParserKind,
 } from './content-key.js';
 export type { DocumentParserKind } from './mime-type.js';
-export { parserKindForPath } from './projection/router.js';
+// The run's one parse routing (projection/router.ts): `parserKindForPath` by the built-in table
+// alone, `parserKindForResolvedPath` through the run's collection MIME resolver, so a declared
+// `mimeType` overrides the extension table.
+export { parseRoutingFor, parserKindForPath, parserKindForResolvedPath, type ParseRouting } from './projection/router.js';
 
 // Parse cache: the disk-backed store `ResourceRegistry` files parse facts in,
 // and where it puts them. Exported for two callers only — an operator surface
@@ -542,6 +551,8 @@ export {
 // single-file path classifies them with the predicates, which read `code`.
 export { classifyParseFailure, type ParseFailureKind } from './parse-failure.js';
 export {
+  DEFAULT_PARSE_LIMITS,
+  SKILL_TEXT_HELD_LIMITS,
   ParseLimitError,
   ParseWorkerDiedError,
   isParseLimitError,
@@ -944,14 +955,18 @@ export {
   type IgnoredRefusals,
   type PopulationMembers,
   type ResourcePopulationSource,
+  type StoredDocumentFacts,
 } from './projection/resource-population.js';
 
 // One read, key, parse and admission per file per VAT process run, whichever
 // lane asks (content-keying-and-git.md, rule 4).
 export {
+  IGNORE_HOME_SETTLEMENT,
   RunPopulation,
+  StoreQuestionUnavailableError,
   withPopulationRun,
   withRunPopulation,
+  type HomeSettlement,
   type PopulationRun,
   type RunPopulationOptions,
 } from './projection/run-population.js';
@@ -984,6 +999,7 @@ export {
   CONTENT_PARSING_SKIP,
   ClosureNonConvergenceError,
   describeStoreMiss,
+  MEMBERSHIP_EXTENT_REQUEST,
   POPULATION_ORIGINS,
   populate,
   populationOracles,
@@ -1022,6 +1038,7 @@ export {
   blobFactsReader,
   RESOURCE_LINK_FACT_SOURCES,
   type BlobFactsOutcome,
+  type BlobFactsReader,
 } from './projection/blob-resource-facts.js';
 
 // The declarative closure primitive (zones §7.3): a closure-defined extent is a
@@ -1076,8 +1093,18 @@ export {
   type BlobPopulationResult,
 } from './projection/blob-population.js';
 
-// A warm run's blob tier read failing is the store's refusal, by this code (the CLI's refusal table).
-export { PROJECTION_STORE_READ_FAILED_CODE } from './projection/stored-admission.js';
+// A warm run's blob tier read failing is the store's refusal, by this code (the CLI's refusal table);
+// and what the stored admission reads of the tier, which the CLI's in-process cost arms damage table by table.
+// `hydratesUnder` and `storedComputeBy` are warm admission's own predicates, exported so `vat
+// validate`'s checks overlap gate judges "admitted from the store" by them, never by a copy.
+export {
+  ADMISSION_BLOB_REQUEST,
+  PROJECTION_STORE_READ_FAILED_CODE,
+  hydratesUnder,
+  storedComputeBy,
+  type StoredComputeBy,
+  type StoredContent,
+} from './projection/stored-admission.js';
 
 // Emitting the projection as a document — "no engine" (zones §15 step 6). Rows
 // out; no index, no join, no filter, no query. Two properties are load-bearing:
@@ -1198,3 +1225,22 @@ export {
   type OkfBundleConfig,
   type OkfConfig,
 } from './schemas/project-config.js';
+
+// The skill-text core: the text half of every skills-phase detector, as a pure
+// function of a document's text and the declaration of every pattern it applies.
+// agent-skills rebuilds its issues and evidence from these records.
+export {
+  EXTERNAL_CLI_BINARIES,
+  SKILL_TEXT_DECLARATION,
+  SKILL_TEXT_FAMILY_PATTERNS,
+  skillTextDeclarationDigest,
+  type PatternId,
+  type SkillTextDeclaration,
+  type SkillTextFamily,
+  type SkillTextFamilyPatternId,
+  type VariantId,
+} from './skill-text/declaration.js';
+export { skillTextFactsOf } from './skill-text/core.js';
+// The one frontmatter fence rule: agent-skills' `parseFrontmatter` and the core's body families both apply it.
+export { frontmatterFencesOf, type FrontmatterFences } from './skill-text/frontmatter-fences.js';
+export { type FrontmatterFence, type SkillTextFacts, SkillTextFactsSchema, type SkillTextMatch } from './schemas/skill-text-facts.js';

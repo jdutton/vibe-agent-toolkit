@@ -30,7 +30,15 @@
  *
  * The two decisions are split by the one await between them: {@link storedRoute}
  * says whether the tier must be read at all, and {@link readRoute} what its answer
- * means. Both are pure.
+ * means. Both are pure. {@link storedComputeBy} asks the same two questions
+ * without building any facts, for `vat validate`'s checks overlap gate.
+ *
+ * What the warm read decodes: one tier read per run, for every keyed home member
+ * at once, of {@link ADMISSION_BLOB_REQUEST} only: the fact reader's tables, and
+ * of `blobReferences` only the AST forms. The lexical reference rows and the
+ * harness tables stay undecoded on this path; a projection hit asks for every
+ * table and form (`ALL_BLOB_REQUEST`). Rows of keys no view admits are still
+ * decoded, since the read is one for the whole home.
  */
 
 import { deepFreeze, VatError } from '@vibe-agent-toolkit/utils';
@@ -40,13 +48,14 @@ import type { ParseLimits } from '../parse-limits.js';
 import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
 
 import { parserKindOf } from './blob-population.js';
+import { AST_SYNTACTIC_FORMS } from './blob-references.js';
 import { type NotAdmittedEntry, unkeyedEntry } from './blob-refusals.js';
-import { blobFactsReader, type BlobFactsOutcome } from './blob-resource-facts.js';
+import { BLOB_FACT_READER_TABLES, blobFactsReader, type BlobFactsOutcome, type BlobFactsReader } from './blob-resource-facts.js';
 import { POPULATION_PARSE_LIMITS } from './content-cache.js';
 import { parserKindForMime } from './router.js';
 import type { AdmittedFacts } from './run-population.js';
-import { keyedContentKeys } from './store-hydration.js';
-import type { BlobScopedRows, FactStore } from './store.js';
+import { keyedContentKeys, StoreRequestUnmetError } from './store-hydration.js';
+import type { BlobRequest, BlobScopedRows, BlobScopedTableName, FactStore } from './store.js';
 
 /**
  * What the store holds about one member's bytes: its realization's content columns. The store's
@@ -62,7 +71,7 @@ export interface StoredMember {
    * The blob tier's answer for the members' keyed content: read from the store
    * on first ask, once, and handed back every later time.
    */
-  readonly facts: () => Promise<(contentKey: string) => BlobFactsOutcome>;
+  readonly facts: () => Promise<BlobFactsReader>;
 }
 
 /**
@@ -73,7 +82,7 @@ export interface StoredContent {
   /** Each member, by absolute path; the first realization of a path speaks for it. */
   readonly members: ReadonlyMap<string, StoredRealization>;
   /** See {@link StoredMember.facts}. */
-  readonly facts: () => Promise<(contentKey: string) => BlobFactsOutcome>;
+  readonly facts: () => Promise<BlobFactsReader>;
 }
 
 /** The code of a blob tier that could not be read ({@link BlobTierReadError}): the store's refusal. */
@@ -97,20 +106,47 @@ class BlobTierReadError extends VatError {
 }
 
 /**
+ * What the stored admission reads of the blob tier: exactly what
+ * {@link blobFactsReader} consumes: its tables, and of `blobReferences` only
+ * the AST forms its links are rebuilt from. The lexical forms and the harness
+ * tables are never decoded on this path; a projection hit, which serves them,
+ * asks for everything. Frozen, its forms set included (`AST_SYNTACTIC_FORMS`
+ * refuses `add`, `delete` and `clear`): every caller shares it.
+ */
+export const ADMISSION_BLOB_REQUEST: BlobRequest<(typeof BLOB_FACT_READER_TABLES)[number]> = deepFreeze({
+  tables: BLOB_FACT_READER_TABLES,
+  referenceForms: AST_SYNTACTIC_FORMS,
+});
+
+/**
  * Read the blob tier for `contentKeys`, a failed read rejecting as the store's
  * ({@link BlobTierReadError}): the one read every lane that reads the tier back
  * goes through, the stored admission and a projection hit alike, so one failure
  * is one refusal whichever lane met it.
  *
+ * It restricts nothing itself: each caller states what it reads, because the
+ * callers read different things (see {@link ADMISSION_BLOB_REQUEST}).
+ *
  * @param store - The run's store
  * @param contentKeys - The keys to read
- * @returns The tier's rows for them
+ * @param request - The tables and reference forms to read
+ * @returns The tier's rows for them, in the requested tables
  * @throws A {@link BlobTierReadError} when the store's read rejects
+ * @throws A {@link StoreRequestUnmetError} when its answer lacks a requested table
  */
-export function readBlobTier(store: FactStore, contentKeys: readonly string[]): Promise<BlobScopedRows> {
-  return store.readBlobFacts(contentKeys).catch((error: unknown) => {
+export async function readBlobTier<Table extends BlobScopedTableName>(
+  store: FactStore,
+  contentKeys: readonly string[],
+  request: BlobRequest<Table>,
+): Promise<Pick<BlobScopedRows, Table>> {
+  const rows = await store.readBlobFacts(contentKeys, request).catch((error: unknown) => {
     throw new BlobTierReadError(error);
   });
+  // Typed as present, but a backend is code outside this module: hold it to the request.
+  const answered: Partial<Record<BlobScopedTableName, unknown>> = rows;
+  const missing = request.tables.find((table) => answered[table] === undefined);
+  if (missing !== undefined) throw new StoreRequestUnmetError('blob', missing, 'was requested and is absent from the stored rows');
+  return rows;
 }
 
 /**
@@ -135,10 +171,10 @@ export function storedContentOf(
     stored.set(path, { contentKey: row.contentKey, contentState: row.contentState, mime: row.mime });
   }
   const keys = keyedContentKeys({ resourceRealizations: members.map(({ row }) => row) });
-  let read: Promise<(contentKey: string) => BlobFactsOutcome> | undefined;
+  let read: Promise<BlobFactsReader> | undefined;
   return {
     members: stored,
-    facts: () => (read ??= readBlobTier(store, keys).then((rows) => blobFactsReader(rows))),
+    facts: () => (read ??= readBlobTier(store, keys, ADMISSION_BLOB_REQUEST).then((rows) => blobFactsReader(rows))),
   };
 }
 
@@ -209,12 +245,64 @@ type ReadRoute =
   | { readonly kind: 'probe'; readonly admitted: AdmittedFacts };
 
 /**
+ * Whether the tier's answer for a key is one admission serves from the store
+ * (facts, or a stated refusal) rather than computing the file cold: the one
+ * reading of a tier answer, {@link readRoute}'s and {@link storedComputeBy}'s.
+ *
+ * @param kind - The tier's answer for the key
+ * @returns True when the store serves it
+ */
+function tierServes(kind: BlobFactsOutcome['kind']): boolean {
+  return kind !== 'uncovered';
+}
+
+/**
  * @param outcome - The one fact reader's answer for the key
  * @returns What to do with it. Stored facts are deep-frozen, as the cold lane's
  *   shared parse is, so every view is handed the same contract either way
  */
 export function readRoute(outcome: BlobFactsOutcome): ReadRoute {
+  if (!tierServes(outcome.kind)) return COMPUTE;
   if (outcome.kind === 'facts') return { kind: 'probe', admitted: { kind: 'facts', facts: deepFreeze(outcome.facts) } };
-  if (outcome.kind === NOT_ADMITTED) return { kind: 'probe', admitted: { kind: NOT_ADMITTED, entry: outcome.entry } };
-  return COMPUTE;
+  return outcome.kind === NOT_ADMITTED ? { kind: 'probe', admitted: { kind: NOT_ADMITTED, entry: outcome.entry } } : COMPUTE;
+}
+
+/** The predicate that sent a member to the cold lane: its stored realization, or the tier's answer for its key. */
+export type StoredComputeBy = 'storedRoute' | 'readRoute';
+
+/** What {@link storedComputeBy} found for one member. */
+interface StoredRouteAnswer {
+  /** The predicate that sends the member cold, or `null` when admission serves it from the store. */
+  readonly computeBy: StoredComputeBy | null;
+  /** The key's tier rows read to say so: none unless its route asked the tier. */
+  readonly rowsRead: number;
+}
+
+/**
+ * Whether a warm admission (`RunPopulation.admit`) would serve one member from the
+ * store, short of the readability probe, decided route-only: {@link storedRoute}
+ * on its realization, then, when the route reads the tier, the kind the one fact
+ * reader would return for its key (`BlobFactsReader.answer`) read through
+ * {@link tierServes}. The predicates are admission's own, so the answer is
+ * admission's, but no facts are built or kept to give it. `vat validate`'s checks
+ * overlap gate asks it of every member. The tier is read only when the route
+ * asks, through the members' one memoized read, so a rejection stays there for
+ * every later caller.
+ *
+ * @param realization - The member's stored realization, or `undefined` when the store holds none for it
+ * @param parserKind - The parser the view routes the file to
+ * @param facts - The members' blob tier ({@link StoredContent.facts})
+ * @returns The predicate that sends it cold, if any, and the tier rows read
+ * @throws What the tier read rejected with
+ */
+export async function storedComputeBy(
+  realization: StoredRealization | undefined,
+  parserKind: string,
+  facts: StoredContent['facts'],
+): Promise<StoredRouteAnswer> {
+  const route = storedRoute(realization, parserKind);
+  if (route.kind === 'compute') return { computeBy: 'storedRoute', rowsRead: 0 };
+  if (route.kind === NOT_ADMITTED) return { computeBy: null, rowsRead: 0 };
+  const answer = (await facts()).answer(route.contentKey);
+  return { computeBy: tierServes(answer.kind) ? null : 'readRoute', rowsRead: answer.rowsRead };
 }

@@ -14,7 +14,7 @@ import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger } from '../../utils/logger.js';
 import { assertReadableDirectoryArgument, projectRootOrNull } from '../../utils/project-root-policy.js';
 import { requireWritableDatabase } from '../../utils/rag-database.js';
-import { loadResourcesWithConfig, withRunContext } from '../../utils/resource-loader.js';
+import { loadResourcesWithConfig, NO_HOME_SETTLED_LISTENER, withRunContext } from '../../utils/resource-loader.js';
 
 import { RAG_GATE, resolveDbPath } from './command-helpers.js';
 import type { RagIndexReport } from './index-schema.js';
@@ -147,7 +147,7 @@ export async function indexCommand(
     // One run around the load. Only plain data leaves it: the registry is the
     // run's view, and holding it through the index would keep every content and
     // parse of the run alive after the run closed.
-    const { allResources, notAdmittedLog, config } = await withRunContext({ root: crawlRoot }, async (run) => {
+    const { allResources, notAdmittedLog, config } = await withRunContext({ projectionStore: 'on-demand', root: crawlRoot, outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
       const loaded = await loadResourcesWithConfig(pathArg, run, logger);
       // The declared population is the admitted one PLUS every file the crawl
       // enumerated and did not admit (unreadable, or its parse refused). Such a

@@ -34,7 +34,7 @@ import { relativeEscapesRoot } from '@vibe-agent-toolkit/utils';
 import type { ReferenceDialect } from '../schemas/project-config.js';
 
 import { resolveDialectRef } from './contributors/reference-dialect.js';
-import { relativize } from './realizations.js';
+import { relativize } from './root-relative-path.js';
 
 /**
  * A scheme-bearing or protocol-relative reference, matched on the raw token.

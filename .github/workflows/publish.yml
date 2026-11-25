@@ -5,13 +5,20 @@ on:
     tags:
       - 'v*.*.*'
 
-permissions:
-  contents: write
-  id-token: write
+permissions: {}
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    # Read by `verify-dist-tags`, which runs whenever the npm publish step
+    # succeeded, however a later step of this job ends.
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is_stable: ${{ steps.version.outputs.is_stable }}
+      npm_published: ${{ steps.npm_publish.outcome == 'success' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -108,6 +115,7 @@ jobs:
         run: bun run resolve-workspace-deps ${{ steps.version.outputs.version }}
 
       - name: Publish to npm
+        id: npm_publish
         run: bun run publish-with-rollback ${{ steps.version.outputs.version }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -136,3 +144,25 @@ jobs:
           gh release create "v${{ steps.version.outputs.version }}" \
             --title "Release v${{ steps.version.outputs.version }}" \
             --notes-file /tmp/release-notes.md
+
+  # Its own job so it can be re-run alone, never holds back the marketplaces or
+  # the release, and is not skipped when a later step of `publish` fails: it runs
+  # whenever the npm publish step succeeded on a stable tag. It polls the
+  # registry (cache-busted) until every package's latest is the release, the set
+  # left stops shrinking for 7 minutes, or 15 minutes pass, then fails printing
+  # the `npm dist-tag add` commands. It never writes to npm (owner ruling).
+  verify-dist-tags:
+    needs: publish
+    if: always() && needs.publish.outputs.npm_published == 'true' && needs.publish.outputs.is_stable == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup toolchain
+        uses: ./.github/actions/setup
+
+      - name: Verify every published package's latest is this release
+        run: bun run npm-registry-guard --after-stable-publish ${{ needs.publish.outputs.version }} --root .

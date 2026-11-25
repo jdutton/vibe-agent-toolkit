@@ -5,11 +5,8 @@
  * finds matching SKILL.md files, and extracts skill names from frontmatter.
  */
 
-import { basename } from 'node:path';
-
-import type { PluginLocalSkillIndex } from '@vibe-agent-toolkit/agent-skills';
+import { type PluginLocalSkillIndex, readSkillDocument, skillNameOf, type SkillTextRun, withSkillTextRun } from '@vibe-agent-toolkit/agent-skills';
 import {
-  type ParseDispatcher,
   parseFileCached,
   type ParseRefusedResource,
   parseRefusedEntryFor,
@@ -17,7 +14,6 @@ import {
   type ParseResult,
   type ParseRoute,
   type SkillsConfig,
-  withParseDispatcher,
 } from '@vibe-agent-toolkit/resources';
 import { followedKindSync, forEachInOrder, fsFaultOf, issueLocation, mapConcurrentFailingInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory, type UnreadablePolicy } from '@vibe-agent-toolkit/utils/crawl';
@@ -146,26 +142,19 @@ export async function declaredNameOrRefuse(
  * which is the exact tell-less drop `includeUntracked` below exists to prevent.
  *
  * A SKILL.md the parse worker refuses has no name: it is `refused`, never a key.
+ *
+ * Served from the run's store when it holds the SKILL.md (its frontmatter and
+ * its skill-text record's H1, `readSkillDocument`), else read and parsed: the
+ * name is one function of the two either way ({@link skillNameOf}).
  */
-async function readSkillName(skillPath: string, dispatcher: ParseDispatcher): Promise<SkillNameRead> {
-  const read = await skillDocumentOrRefused(skillPath, { dispatcher });
-  if (read.kind === 'refused') return read;
-  // The H1 fallback below reads the SAME bytes the parse already decoded, so it
-  // uses `content` rather than a second read of the same path.
-  const { content, frontmatter } = read.document;
-  const name = frontmatter?.['name'];
-  if (typeof name === 'string' && name.length > 0) {
-    return { kind: 'named', name };
+async function readSkillName(skillPath: string, run: SkillTextRun): Promise<SkillNameRead> {
+  try {
+    return { kind: 'named', name: skillNameOf(await readSkillDocument(skillPath, run, 'source'), skillPath) };
+  } catch (error) {
+    const refused = parseRefusedEntryFor(skillPath, error);
+    if (refused === undefined) throw error;
+    return { kind: 'refused', refused };
   }
-  // Fallback: try H1 title
-  // `[ \t]` is a single fixed-width class, not a quantifier, so it cannot compete
-  // with the `[^\n]*` capture for the same space — that ambiguity is what made the
-  // old `\s+([^\n]+)` form backtrack super-linearly. .trim() below is unchanged.
-  const h1Match = /^#[ \t]([^\n]*)$/m.exec(content);
-  if (h1Match?.[1]) {
-    return { kind: 'named', name: h1Match[1].trim() };
-  }
-  return { kind: 'named', name: basename(skillPath, '.md') };
 }
 
 /**
@@ -180,22 +169,22 @@ export type PluginLocalSkillNames = ReadonlyMap<string, string>;
 /**
  * The name of the plugin-local skill in `skillSourceDir` ({@link readSkillName}), or its
  * refusal. The plugin build and `vat verify` both name a plugin-local skill through THIS,
- * so they look up the same config. `dispatcher` is required: the run's, or `undefined` for one
- * read, which holds its own for the call.
+ * so they look up the same config. `run` is required: the run's population (its store and
+ * dispatcher), or `undefined` for one read, which holds its own for the call.
  */
-export function readPluginLocalSkillName(skillSourceDir: string, dispatcher: ParseDispatcher | undefined): Promise<SkillNameRead> {
-  return withParseDispatcher((run) => readSkillName(safePath.join(skillSourceDir, 'SKILL.md'), run), { dispatcher });
+export function readPluginLocalSkillName(skillSourceDir: string, run: SkillTextRun | undefined): Promise<SkillNameRead> {
+  return withSkillTextRun((lane) => readSkillName(safePath.join(skillSourceDir, 'SKILL.md'), lane), run);
 }
 
 /**
  * {@link PluginLocalSkillNames} for every location in `pluginLocal`, or the run's refusal ({@link skillParseRefusal}).
- * `dispatcher` is required, as for {@link readPluginLocalSkillName}: the run's (so a SKILL.md its
- * discovery already parsed is not read again), or `undefined` for one call's own.
+ * `run` is required, as for {@link readPluginLocalSkillName}: the run's population (so a SKILL.md
+ * its store holds or its discovery already parsed is not read again), or `undefined` for one call's own.
  */
 export async function readPluginLocalSkillNames(
   pluginLocal: PluginLocalSkillIndex,
   locationRoot: string,
-  dispatcher: ParseDispatcher | undefined,
+  run: SkillTextRun | undefined,
 ): Promise<PluginLocalSkillNames> {
   // The first location per resolved directory, as before; their reads are independent.
   const firstByKey = new Map<string, (typeof pluginLocal.locations)[number]>();
@@ -204,9 +193,9 @@ export async function readPluginLocalSkillNames(
     if (!firstByKey.has(key)) firstByKey.set(key, loc);
   }
   const entries = [...firstByKey];
-  const read = await withParseDispatcher(
-    (run) => mapConcurrentFailingInOrder(entries, ([, loc]) => readPluginLocalSkillName(loc.skillSourceDir, run)),
-    { dispatcher },
+  const read = await withSkillTextRun(
+    (lane) => mapConcurrentFailingInOrder(entries, ([, loc]) => readPluginLocalSkillName(loc.skillSourceDir, lane)),
+    run,
   );
   return new Map(entries.map(([key], index) => {
     const name = read[index] as SkillNameRead;
@@ -318,6 +307,28 @@ function crawlOneBase(
   });
 }
 
+/**
+ * {@link crawlOneBase}, once per run for a refusing crawl: the run's phases discover the same bases
+ * (`vat validate`'s resources phase, for the skills' declared `files:`, then its skills phase), and
+ * each crawl lists its base with git, the same arguments in the same directory over the same tree.
+ * A degrading crawl hands its refusals to its own caller, so it is never shared; a caller with no
+ * run has no one to share with.
+ */
+function crawlBaseOnce(
+  base: string,
+  globs: string[],
+  projectRoot: string,
+  unreadable: DiscoveryUnreadablePolicy,
+  run: SkillTextRun | undefined,
+): Promise<readonly string[]> {
+  const crawl = (): Promise<string[]> => crawlOneBase(base, globs, projectRoot, unreadable);
+  if (run === undefined || unreadable !== 'refuse') return crawl();
+  // Everything the crawl's result depends on: the base, its globs, and the root its refusal names.
+  // The root resolved, as `base` already is: the phases spell one root differently (a config's
+  // directory and the cwd; on Windows, `D:/x` and `D:\x`), and a spelling is not a second crawl.
+  return run.crawlOnce(JSON.stringify(['skill-discovery', base, globs, safePath.resolve(projectRoot)]), crawl);
+}
+
 /** The knob an adopter has when `skills.include` reaches a directory the crawl cannot list. */
 export const SKILLS_INCLUDE_REMEDY =
   'Fix the permissions on that directory, or narrow the `skills.include` pattern so its base no longer reaches into it.';
@@ -339,15 +350,17 @@ export const SKILLS_INCLUDE_REMEDY =
  * @param projectRoot - Absolute path to project root (where config yaml lives)
  * @param unreadable - What to do with a directory the crawl cannot list —
  *   see {@link DiscoveryUnreadablePolicy}; required, no default
- * @param dispatcher - The run's dispatcher, so each SKILL.md is read and parsed
- *   once per run, or `undefined` for a caller with no run (a dispatcher of its own)
+ * @param run - The run's population, so each SKILL.md its store holds is not read
+ *   at all and every other is read and parsed once per run, and each base is crawled
+ *   once per run, or `undefined` for a caller with no run (a dispatcher of its own,
+ *   no store)
  * @returns The skills it named, with their source paths, and the SKILL.md files the parse worker refused
  */
 export async function discoverSkillsFromConfig(
   skillsConfig: SkillsConfig,
   projectRoot: string,
   unreadable: DiscoveryUnreadablePolicy,
-  dispatcher: ParseDispatcher | undefined,
+  run: SkillTextRun | undefined,
 ): Promise<SkillDiscovery> {
   const { include, exclude } = skillsConfig;
 
@@ -360,7 +373,7 @@ export async function discoverSkillsFromConfig(
   // One base at a time: under `'refuse'` the first unlistable directory in
   // pattern order is the one named, and a degrade handler hears them in order.
   await forEachInOrder(patternsByBase, async ([base, globs]) => {
-    const crawled = await crawlOneBase(base, globs, projectRoot, unreadable);
+    const crawled = await crawlBaseOnce(base, globs, projectRoot, unreadable, run);
     for (const absPath of crawled) {
       if (userExcludeMatcher) {
         const relFromProject = toForwardSlash(safePath.relative(projectRoot, absPath));
@@ -372,9 +385,9 @@ export async function discoverSkillsFromConfig(
 
   // Independent reads, kept in discovery order.
   const skillPaths = [...foundAbsPaths];
-  const names = await withParseDispatcher((route) =>
-    mapConcurrentFailingInOrder(skillPaths, (skillPath) => readSkillName(skillPath, route)),
-  { dispatcher });
+  const names = await withSkillTextRun((lane) =>
+    mapConcurrentFailingInOrder(skillPaths, (skillPath) => readSkillName(skillPath, lane)),
+  run);
   const skills: DiscoveredSkill[] = [];
   const parseRefused: ParseRefusedResource[] = [];
   for (const [index, sourcePath] of skillPaths.entries()) {

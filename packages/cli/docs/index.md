@@ -418,7 +418,8 @@ the external-URL caches never live under it. Put it outside the checkout (in Git
 `$RUNNER_TEMP/vat-cache`, set from a step through `$GITHUB_ENV`): VAT warns when it is inside the
 scanned tree. Key the CI cache on the runner's OS, architecture, Node version, lockfile hash and
 commit, and restore only from keys that share all but the commit; never fall back across lockfile
-hashes. VAT writes a `CACHEDIR.TAG` into a root it creates or finds empty, and `vat cache clear` and
+hashes. Save it from default-branch runs and only restore it on pull requests; the
+`vat-adoption-and-configuration` skill carries a GitHub Actions example. VAT writes a `CACHEDIR.TAG` into a root it creates or finds empty, and `vat cache clear` and
 `vat cache prune` refuse a root without one (other than the default), so point it at a directory
 used only by VAT. Another VAT build never reads the cache; within a build the parse cache and the
 store's blob tier are keyed by file content and hit on any machine with the same bytes, while a

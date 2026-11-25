@@ -467,6 +467,7 @@ describe('dehydrate', () => {
       'estimatedTokenCount',
       'headings',
       'links',
+      'skillText',
       'unresolvedReferences',
     ]);
     expect('content' in facts).toBe(false);

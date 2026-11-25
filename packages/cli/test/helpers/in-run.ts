@@ -8,7 +8,7 @@ import type { PhaseOutcome } from '../../src/commands/phase-utils.js';
 import { runResourcesValidatePhase, type ValidateOptions } from '../../src/commands/resources/validate.js';
 import { runSkillsValidatePhase, type SkillsValidateCommandOptions } from '../../src/commands/skills/validate.js';
 import type { Logger } from '../../src/utils/logger.js';
-import { loadResourcesWithConfig, withRunContext, type ResourceLoadResult } from '../../src/utils/resource-loader.js';
+import { loadResourcesWithConfig, NO_HOME_SETTLED_LISTENER, withRunContext, type ResourceLoadResult } from '../../src/utils/resource-loader.js';
 
 /**
  * `vat skills validate <root>` in a run rooted at `root`.
@@ -18,7 +18,7 @@ import { loadResourcesWithConfig, withRunContext, type ResourceLoadResult } from
  * @returns The phase's outcome
  */
 export function skillsValidateInRun(root: string, options: SkillsValidateCommandOptions = {}): Promise<PhaseOutcome> {
-  return withRunContext({ root }, (run) => runSkillsValidatePhase(root, options, run));
+  return withRunContext({ projectionStore: 'on-demand', root, outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) => runSkillsValidatePhase(root, options, run));
 }
 
 /**
@@ -32,7 +32,7 @@ export function resourcesValidateInRun(
   root: string,
   options: ValidateOptions = {},
 ): Promise<PhaseOutcome> {
-  return withRunContext({ root }, (run) => runResourcesValidatePhase(root, options, run));
+  return withRunContext({ projectionStore: 'on-demand', root, outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) => runResourcesValidatePhase(root, options, run));
 }
 
 /**
@@ -44,5 +44,5 @@ export function resourcesValidateInRun(
  * @returns The load result
  */
 export function loadResourcesInRun(pathArg: string | undefined, projectRoot: string, logger: Logger): Promise<ResourceLoadResult> {
-  return withRunContext({ root: projectRoot }, (run) => loadResourcesWithConfig(pathArg, run, logger));
+  return withRunContext({ projectionStore: 'on-demand', root: projectRoot, outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) => loadResourcesWithConfig(pathArg, run, logger));
 }

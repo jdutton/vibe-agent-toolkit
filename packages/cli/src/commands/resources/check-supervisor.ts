@@ -137,7 +137,7 @@
  */
 
 import { type ChildProcess, spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { closeSync, openSync, readFileSync, readSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { ExitCode, exitCodeForReport, type Report, toFindings, withAddedFindings } from '@vibe-agent-toolkit/schema';
@@ -233,7 +233,20 @@ phase, vat resources query --budget):
   outside kill (TerminateProcess, taskkill /F) of the 'vat' wrapper or of
   this process runs no handler and ends the processes it started with it
   (the OS job object Node puts them in): exit 1, nothing published, the
-  progress directory left behind.`;
+  progress directory left behind.
+  vat validate only: the supervised child can start during the
+  resources phase on a warm store, when every member of the resources
+  population is admitted from the store, and run beside that phase; its
+  stderr is held in a file in the progress directory until the checks phase
+  and printed then. Everything above holds from that start, with these
+  differences. A signal lands late by the
+  longest synchronous stretch of the resources phase, which holds this
+  process's event loop. Ended where it runs no code (SIGKILL, an OOM killer)
+  during that phase, this process leaves a child with no watchdog; on POSIX
+  the child still ends itself on end-of-file, and its one stderr line is in
+  the file in the progress directory left behind, not on the terminal.
+  Windows: a direct node invocation interrupted during that phase
+  exits 2 rather than with STATUS_CONTROL_C_EXIT.`;
 
 /** How many times per budget the parent looks at the log. */
 const POLLS_PER_BUDGET = 10;
@@ -779,16 +792,93 @@ export type SupervisedRun =
     readonly elapsedMs: number;
   };
 
+/** Where an overlapped child's stderr goes: an open write fd on a file at `path`. */
+type OverlapSink = { fd: number; path: string };
+
+/**
+ * An overlapped run's stderr: the sink the child writes, the turn the post-exit stdout grace
+ * waits for, and the run's abandonment. The grace starts at the later of the child's exit and
+ * `graceFrom`, so a parent busy with an earlier phase cannot spend it before the turn reads the run.
+ * `abandoned` settling kills the child through the watchdog's own kill, so a refused kill is
+ * counted and retried as the watchdog's are, never read as a spawn failure.
+ */
+type OverlapStderr = { sink: OverlapSink; graceFrom: Promise<void>; abandoned: Promise<void> };
+
+/** An overlapped run's `stderr.log`: the write fd the child inherits and the read fd the turn copies from. */
+export type OverlapSinkFds = { writeFd: number; readFd: number; path: string };
+
+/** The sink's mode: the child's stderr can carry tree content, so only this user reads it. */
+const OVERLAP_SINK_MODE = 0o600;
+
+/** The most one read of `stderr.log` copies; a larger backlog takes several. */
+const OVERLAP_SINK_READ_BYTES = 64 * 1024;
+
+/**
+ * Create `stderr.log` beside the progress log, and open it twice. Its file I/O lives here, beside
+ * the progress log's, so the supervisor stays the one command module that touches its directory.
+ *
+ * @param logPath - The progress log
+ * @returns Both fds and the file's path
+ */
+export function openOverlapSink(logPath: string): OverlapSinkFds {
+  const path = safePath.join(dirname(logPath), 'stderr.log');
+  const writeFd = openSync(path, 'w', OVERLAP_SINK_MODE);
+  try {
+    return { writeFd, readFd: openSync(path, 'r'), path };
+  } catch (error) {
+    closeSync(writeFd);
+    throw error;
+  }
+}
+
+/**
+ * Close both of a sink's fds, for a spawn given up before either had an owner ({@link superviseRun}
+ * closes the write fd, the guard the read fd, only once handed them).
+ *
+ * @param sink - From {@link openOverlapSink}
+ */
+export function closeOverlapSink(sink: OverlapSinkFds): void {
+  try {
+    closeSync(sink.writeFd);
+  } finally {
+    // The read fd closes even when the write fd's close throws.
+    closeSync(sink.readFd);
+  }
+}
+
+/**
+ * Copy everything `stderr.log` holds past `position` through `write`, as raw bytes.
+ *
+ * @param fd - The read fd
+ * @param position - The offset already copied
+ * @param write - Where the bytes go; each chunk is a fresh buffer it may keep
+ * @returns The new offset
+ */
+export function copyOverlapSink(fd: number, position: number, write: (chunk: Buffer) => void): number {
+  let at = position;
+  for (;;) {
+    const buffer = Buffer.allocUnsafe(OVERLAP_SINK_READ_BYTES);
+    const read = readSync(fd, buffer, 0, OVERLAP_SINK_READ_BYTES, at);
+    if (read === 0) return at;
+    at += read;
+    write(buffer.subarray(0, read));
+  }
+}
+
 /**
  * Run a supervised verb as a child, bounded by the budget.
  *
- * `stdio` is `['pipe', 'pipe', 'inherit']`. Its stdin is a pipe this process
+ * `stdio` is `['pipe', 'pipe', 'inherit']`, or the sink's fd in place of `'inherit'` for an
+ * overlapped run (`options.stderr`). Its stdin is a pipe this process
  * holds open and NEVER writes to or ends: it exists only so that the child reads
  * end-of-file the moment this process is gone, however it went (see
  * `endWhenSupervisorGone`). Node closes this end itself once the child has
  * exited. The child's stdout is accumulated so the parent can forward the
- * document verbatim, and its stderr is INHERITED so warnings and blob-stage
- * refusals stream live exactly as they do today.
+ * document verbatim. Its stderr is INHERITED when the run is sequential, so warnings and
+ * blob-stage refusals stream live exactly as they do today. When the run overlaps the resources
+ * phase it goes to `stderr.log` in the progress directory instead, and the checks turn copies it
+ * from offset 0 and follows it while the child runs (docs/architecture/resource-scanning-and-caching.md,
+ * section 3.7b).
  *
  * ⚠️ Asynchronous `spawn`, never `spawnSync`. The parent's event loop is the
  * thing holding the watchdog timer; a synchronous spawn would block it for
@@ -849,6 +939,7 @@ export type SupervisedRun =
  * @param options.log - The progress log both sides agreed on, and the guard {@link withProgressLog} holds over it
  * @param options.budgetMs - How long silence is allowed to last
  * @param options.format - The format the child was asked for, to read its document in
+ * @param options.stderr - `'inherit'` leaves the child's stderr on this process's; a sink makes its fd the child's stderr, and this process closes its own write fd right after the spawn. The sink's `graceFrom` holds the stdout grace until the turn
  * @returns How the child ended, and what it left behind
  */
 export async function superviseRun(options: {
@@ -857,29 +948,39 @@ export async function superviseRun(options: {
   log: ProgressLog;
   budgetMs: number;
   format: 'yaml' | 'json';
+  stderr: 'inherit' | OverlapStderr;
 }): Promise<SupervisedRun> {
   const logPath = options.log.path;
   const startedAt = performance.now();
-  const binary = resolveVatBinPath();
   const wreckage = (): { log: string; elapsedMs: number } =>
     ({ log: readLog(logPath), elapsedMs: performance.now() - startedAt });
+  let binary: string;
   let child: ChildProcess;
   try {
-    child = spawn(process.execPath, [binary, ...options.args], {
-      // ⛔ Never `detached`. A process-group leader is outside the terminal's job control: Ctrl-Z
-      // does not stop it, and under `stty tostop` its stderr write stops it with SIGTTOU, so the
-      // watchdog false-kills a healthy run. In this process's group it receives a terminal Ctrl-C
-      // itself — see `CHECKS_CHILD_TREE` for what that costs.
-      stdio: ['pipe', 'pipe', 'inherit'],
-    });
-  } catch (error) {
-    // The `error` event's ending, through the same resolver: nothing was started.
-    const failed = resolveChildEnding({ code: null, signal: null, killed: false, spawnError: { binary, detail: errorMessageOf(error) } });
-    if (failed.kind !== 'abnormal') throw error;
-    return { outcome: 'abnormal', death: failed.death, ...wreckage() };
+    binary = resolveVatBinPath();
+    try {
+      child = spawn(process.execPath, [binary, ...options.args], {
+        // ⛔ Never `detached`. A process-group leader is outside the terminal's job control: Ctrl-Z
+        // does not stop it, and under `stty tostop` its stderr write stops it with SIGTTOU, so the
+        // watchdog false-kills a healthy run. In this process's group it receives a terminal Ctrl-C
+        // itself — see `CHECKS_CHILD_TREE` for what that costs.
+        stdio: ['pipe', 'pipe', options.stderr === 'inherit' ? 'inherit' : options.stderr.sink.fd],
+      });
+    } catch (error) {
+      // The `error` event's ending, through the same resolver: nothing was started.
+      const failed = resolveChildEnding({ code: null, signal: null, killed: false, spawnError: { binary, detail: errorMessageOf(error) } });
+      if (failed.kind !== 'abnormal') throw error;
+      return { outcome: 'abnormal', death: failed.death, ...wreckage() };
+    }
+    // The guard `withProgressLog` installed now takes this child down with the process too. It is
+    // told before the write fd closes below, so a close that throws leaves no unwatched child.
+    options.log.guard.watch(child);
+  } finally {
+    // The child holds its own copy of the sink's fd now (or never started, or the binary could not
+    // be resolved): the parent's write end closes either way, so the sink file's only writer is
+    // the child.
+    if (options.stderr !== 'inherit') closeSync(options.stderr.sink.fd);
   }
-  // The guard `withProgressLog` installed now takes this child down with the process too.
-  options.log.guard.watch(child);
 
   const chunks: Buffer[] = [];
   child.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -926,7 +1027,7 @@ export async function superviseRun(options: {
     // collects the rest of stdout, and gets a bounded grace to do it (`awaitStdout`).
     child.on('exit', (code, signal) => {
       exited = true;
-      awaitStdout(child, () => {
+      awaitStdout(child, options.stderr === 'inherit' ? null : options.stderr.graceFrom, () => {
         resolve(resolveChildEnding({ code, signal, killed, spawnError, killFailure }));
       });
     });
@@ -947,6 +1048,18 @@ export async function superviseRun(options: {
         reject(error as Error);
       }
     };
+    // The watchdog's kill: a breach's, or an abandonment's. Counted here, so the `error` a refused
+    // kill raises is read as a refused kill and retried at the next breach, never as a spawn failure.
+    const kill = (): void => {
+      killed = true;
+      killAttempts += 1;
+      // SIGKILL, because no code the child could ever gain can handle, ignore
+      // or block it. See this module's header — and note the reason is NOT that
+      // SIGTERM fails to reach a blocked process, which was measured false.
+      killProcessTree(child, CHECKS_CHILD_TREE);
+      const unended = unendedKill(killAttempts, killFailure, child.pid);
+      if (unended !== undefined) resolve(resolveChildEnding({ code: null, signal: null, killed, killFailure: unended }));
+    };
     const judge = (): void => {
       deferred = undefined;
       if (exited) return;
@@ -959,16 +1072,12 @@ export async function superviseRun(options: {
         budgetMs: options.budgetMs,
       });
       state = reading.state;
-      if (!reading.breach) return;
-      killed = true;
-      killAttempts += 1;
-      // SIGKILL, because no code the child could ever gain can handle, ignore
-      // or block it. See this module's header — and note the reason is NOT that
-      // SIGTERM fails to reach a blocked process, which was measured false.
-      killProcessTree(child, CHECKS_CHILD_TREE);
-      const unended = unendedKill(killAttempts, killFailure, child.pid);
-      if (unended !== undefined) resolve(resolveChildEnding({ code: null, signal: null, killed, killFailure: unended }));
+      if (reading.breach) kill();
     };
+    // 🚨 Only a child still running: one that has exited may be reaped, and its pid reused.
+    if (options.stderr !== 'inherit') options.stderr.abandoned.then(guarded(() => {
+      if (!exited) kill();
+    }), () => undefined);
     // 🔑 A late poll — this process may have been stopped — is judged one event-loop turn later:
     // libuv delivers a pending SIGCONT in the poll phase, before `setImmediate`'s check phase.
     const poll = (): void => {
@@ -1020,20 +1129,33 @@ const STDOUT_GRACE_AFTER_EXIT_MS = 2000;
  * {@link STDOUT_GRACE_AFTER_EXIT_MS} has passed, with whatever was read by then, and the stream
  * destroyed so a grandchild holding it cannot hold this process open either.
  *
+ * 🔑 Overlapped, the grace starts only once `graceFrom` settles (the turn), never during an earlier
+ * phase: a synchronous stretch there would let the timer expire before the pipe was read, and a
+ * complete document would end as `unparseable-output`. A `close` before that still settles at once.
+ *
  * @param child - A child that has emitted `exit`
+ * @param graceFrom - The turn the grace waits for; `null` starts it now, as a sequential run does
  * @param settle - Called exactly once
  */
-function awaitStdout(child: ChildProcess, settle: () => void): void {
-  const grace = setTimeout(() => {
-    child.removeListener('close', onClose);
-    child.stdout?.destroy();
-    settle();
-  }, STDOUT_GRACE_AFTER_EXIT_MS);
+function awaitStdout(child: ChildProcess, graceFrom: Promise<void> | null, settle: () => void): void {
+  let grace: NodeJS.Timeout | undefined;
+  let closed = false;
+  const startGrace = (): void => {
+    if (closed) return;
+    grace = setTimeout(() => {
+      child.removeListener('close', onClose);
+      child.stdout?.destroy();
+      settle();
+    }, STDOUT_GRACE_AFTER_EXIT_MS);
+  };
   function onClose(): void {
+    closed = true;
     clearTimeout(grace);
     settle();
   }
   child.once('close', onClose);
+  if (graceFrom === null) startGrace();
+  else graceFrom.then(startGrace, startGrace);
 }
 
 /**
@@ -1069,6 +1191,13 @@ function unendedKill(
 export interface SupervisionGuard {
   /** From now on, every ending of this process takes `child` down with it. */
   watch(child: ChildProcess): void;
+  /**
+   * Hold `fd`, a file in the progress directory, so a takedown closes it BEFORE it removes the
+   * directory: on Windows an open handle refuses the removal.
+   *
+   * @returns The one way the holder closes it: idempotent, and a no-op once a takedown closed it
+   */
+  adoptFd(fd: number): () => void;
 }
 
 /** A progress log, and the guard over its whole life — one value, so neither travels without the other. */
@@ -1111,7 +1240,10 @@ export interface ProgressLog {
  * process then ends.
  *
  * The module header gives why SIGKILL, and why the CHILD must never install a handler. This
- * process may: its event loop is never blocked, which is what makes a handler fire at all.
+ * process may: its event loop is free, which is what makes a handler fire at all. That premise
+ * holds for a sequential run. While a run is overlapped the guard is installed during the
+ * resources phase, whose loop runs synchronous SQLite, so a signal is handled late by the longest
+ * synchronous stretch (section 3.7b of docs/architecture/resource-scanning-and-caching.md).
  *
  * ## ⚠️ What no guard here reaches
  *
@@ -1128,6 +1260,7 @@ export interface ProgressLog {
 function guardSupervision(): SupervisionGuard & { cover(logPath: string): void; release(): void } {
   let child: ChildProcess | undefined;
   let logPath: string | undefined;
+  const heldFds = new Set<number>();
   let takenDown = false;
   // Synchronous, so a signal ends this process inside its own turn — nothing publishes meanwhile.
   const takeDown = (): void => {
@@ -1135,7 +1268,10 @@ function guardSupervision(): SupervisionGuard & { cover(logPath: string): void; 
     takenDown = true;
     // 🚨 Only a child still running: one that has exited may be reaped, and its pid reused by a
     // stranger the kill would then reach.
-    if (child?.exitCode === null && child.signalCode === null) killProcessTree(child, CHECKS_CHILD_TREE);
+    if (isStillRunning(child)) killProcessTree(child, CHECKS_CHILD_TREE);
+    // Before the removal: an fd still open in the directory refuses it on Windows.
+    for (const fd of heldFds) closeSync(fd);
+    heldFds.clear();
     if (logPath !== undefined) disposeProgressDir(logPath);
   };
   const signals = handleTerminatingSignals({ cleanup: takeDown, fallbackExitCode: ExitCode.ERROR });
@@ -1152,11 +1288,17 @@ function guardSupervision(): SupervisionGuard & { cover(logPath: string): void; 
     watch: (spawned) => {
       child = spawned;
     },
+    adoptFd: (fd) => {
+      heldFds.add(fd);
+      return () => {
+        if (heldFds.delete(fd)) closeSync(fd);
+      };
+    },
     release: () => {
       // Still running: hold every handler until it is gone — its `exit`, not its `close`, which a
       // grandchild holding its stdout can delay for ever. Gone, never started, or never spawned:
       // nothing left to take down.
-      if (child?.pid !== undefined && child.exitCode === null && child.signalCode === null) child.once('exit', releaseAll);
+      if (isStillRunning(child)) child.once('exit', releaseAll);
       else releaseAll();
     },
   };
@@ -1174,6 +1316,20 @@ function guardSupervision(): SupervisionGuard & { cover(logPath: string): void; 
  * tree with `taskkill /T`, best-effort (see `killProcessTree`).
  */
 const CHECKS_CHILD_TREE: KillProcessTreeOptions = { groupLeader: false, throughChild: true };
+
+/**
+ * Whether a spawned child started (it has a pid) and has neither exited nor died of a signal yet.
+ * A child that never started has no `exit` to wait for and nothing to kill.
+ *
+ * 🚨 Only such a child may be killed: one that has ended may already be reaped, and its pid reused
+ * by a stranger the kill would then reach.
+ *
+ * @param child - The child, or undefined when none was spawned
+ * @returns True while it runs
+ */
+export function isStillRunning(child: ChildProcess | undefined): child is ChildProcess {
+  return child?.pid !== undefined && child.exitCode === null && child.signalCode === null;
+}
 
 /**
  * Remove the progress log's directory, synchronously, on the way out of this process — and say so
@@ -1679,6 +1835,8 @@ function noOutputRemedy(code: number): string {
   }
   return ` Exit ${code} is not Node's abort code, and the child published no usable copy of the document`
     + ' every path through this command ends by writing — so this is either a termination from'
+    // 🔑 Word for word in both modes: an overlapped child's stderr is replayed at the turn, so in
+    // both modes it is above this report when this process writes it, and the death reads the same.
     + ' outside that left an exit code instead of a signal, or a defect in vat. The child\'s stderr'
     + ' was inherited, so whatever it managed to say is above this report; if there is nothing'
     + ' there either, report this exit code with the platform and the statement that was running.';
@@ -1726,6 +1884,8 @@ const EXIT_DISAGREES_REMEDY
   + ' should never disagree: either something ended the child AFTER it wrote its report — a crash'
   + ' during shutdown, or a termination from outside that left an exit code — or vat has a defect.'
   + ' Which one cannot be told from here, so the report is withheld rather than forwarded as the'
+  // 🔑 Word for word in both modes: an overlapped child's stderr is replayed at the turn, so in both
+  // modes it is above this report when this process writes it, and the death reads the same.
   + ' verdict. The child\'s stderr was inherited, so whatever it said is above this report; re-run'
   + ' it, and if the disagreement repeats, report the exit code with the platform.';
 

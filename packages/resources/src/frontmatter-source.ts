@@ -20,8 +20,23 @@ import { isPlainMapping } from './frontmatter-codec.js';
 import { isStackOverflow } from './parse-limits.js';
 
 /**
+ * A block's source with every line ending `\n`: a CRLF and a lone CR are each
+ * one line ending, as they are to the markdown parser and to the skill
+ * frontmatter fence rule (`frontmatterFencesOf`). The markdown parser hands the
+ * block over with its line endings as found, and `yaml` does not read a lone CR
+ * as one, so the same block would otherwise decode differently depending on
+ * which lane found it.
+ *
+ * @param source - A frontmatter block's YAML body
+ * @returns It with LF line endings
+ */
+function withLfLineEndings(source: string): string {
+  return source.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+}
+
+/**
  * What a frontmatter block's YAML source means — the single implementation of
- * that decision.
+ * that decision. Line endings are normalized first ({@link withLfLineEndings}).
  *
  * ## Acceptance rules (behaviour-preserving — do not "improve" these)
  *
@@ -58,7 +73,7 @@ export function parseFrontmatterSource(source: string): {
   if (source.trim() === '') return {};
   let parsed: unknown;
   try {
-    parsed = yaml.parse(source);
+    parsed = yaml.parse(withLfLineEndings(source));
   } catch (error) {
     if (isStackOverflow(error)) throw error;
     return { frontmatterError: error instanceof Error ? error.message : String(error) };

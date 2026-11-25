@@ -7,11 +7,13 @@ import {
   buildLinkAuthEngineConfig,
   DEFAULT_RESOURCE_INCLUDE,
   gitExtentSelected,
+  IGNORE_HOME_SETTLEMENT,
   ResourceRegistry,
   withRunPopulation,
   type CrawlOptions,
   type CrawlPopulation,
   type FactStore,
+  type HomeSettlement,
   type ParseDispatcher,
   type PopulationCache,
   type ProjectConfig,
@@ -25,7 +27,7 @@ import { loadConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
 import { collectionsOption } from './population-wiring.js';
 import { assertDirectoryArgument } from './project-root-policy.js';
-import { projectionStoreSelected, withLazyPopulationCache } from './projection-store.js';
+import { type OpenedPopulationCache, openQuestionCache, projectionStoreSelected, runThenClose, withLazyPopulationCache } from './projection-store.js';
 
 /**
  * One VAT process run's shared population, registry and parse dispatcher: what
@@ -53,6 +55,15 @@ export interface RunContext {
   /** The run's one parse dispatcher, which the run shuts down. */
   readonly dispatcher: ParseDispatcher;
 }
+
+/** What a run's population calls when its home population settles (`RunPopulationOptions.onHomeSettled`). */
+export type HomeSettledListener = (key: string, settlement: HomeSettlement) => void;
+
+/**
+ * The {@link withRunContext} `homeSettledListener` of every verb that overlaps no work with the home
+ * population: every verb but `vat validate`, whose checks overlap gate listens.
+ */
+export const NO_HOME_SETTLED_LISTENER = (): HomeSettledListener => IGNORE_HOME_SETTLEMENT;
 
 /** The errors that refuse a whole run, by identity: see {@link isRunRefusal}. */
 const runRefusals = new WeakSet<object>();
@@ -106,11 +117,11 @@ export function isRunRefusal(error: unknown): boolean {
 function markingBlobReads(store: FactStore): FactStore {
   return {
     writeBlobFacts: (rows) => store.writeBlobFacts(rows),
-    readBlobFacts: (contentKeys) => store.readBlobFacts(contentKeys).catch((error: unknown) => {
+    readBlobFacts: (contentKeys, request) => store.readBlobFacts(contentKeys, request).catch((error: unknown) => {
       throw markRunRefusal(error);
     }),
     writeExtent: (key, rows) => store.writeExtent(key, rows),
-    readExtent: (key) => store.readExtent(key),
+    readExtent: (key, request) => store.readExtent(key, request),
     close: () => store.close(),
   };
 }
@@ -130,43 +141,106 @@ async function runCacheOf(cacheOf: () => Promise<PopulationCache | undefined>): 
 }
 
 /**
+ * The store as a run's stored-document questions open it: a connection that
+ * never waits on a lock ({@link openQuestionCache}), opened by the first
+ * question that needs it and closed when the run ends ({@link runThenClose}, the
+ * run's own connection's close contract). Its blob tier reads are marked as the
+ * run's refusal, as the run's own connection's are.
+ *
+ * @param root - The run's home root
+ * @param holdsStore - Whether the run has a projection store
+ * @returns The opener, and its open for the closer: `undefined` when nothing asked
+ */
+function questionStoreOf(root: string, holdsStore: boolean): {
+  readonly cacheOf: () => Promise<PopulationCache | undefined>;
+  readonly opening: () => Promise<OpenedPopulationCache | undefined> | undefined;
+} {
+  let opened: Promise<OpenedPopulationCache | undefined> | undefined;
+  return {
+    cacheOf: async () => {
+      if (!holdsStore) return undefined;
+      opened ??= openQuestionCache({ root });
+      const cache = (await opened)?.cache;
+      return cache === undefined ? undefined : { ...cache, store: markingBlobReads(cache.store) };
+    },
+    opening: () => opened,
+  };
+}
+
+/**
  * Run one verb's work with its {@link RunContext}, inside the projection-store
  * scope that answers it.
  *
  * Opening the run reads no file, opens no store and takes no snapshot. The first
- * enumeration of the home root (inside whichever phase asks first) opens the
- * store, takes the snapshot that keys it and initializes the root's ignore
- * oracle; so a phase that refuses at its own guards, or finds nothing to check,
- * refuses or reports exactly as it would alone. A git refusal is the refusal of
+ * enumeration of the home root, or the first stored-document question a skills
+ * lane asks (`RunPopulation.storedDocument`), inside whichever phase asks first,
+ * opens the store, takes the snapshot that keys it and initializes the root's
+ * ignore oracle; so a phase that refuses at its own guards, or finds nothing to
+ * check, refuses or reports exactly as it would alone. A verb that asks only a
+ * stored-document question (a `vat verify` with only non-resource phases)
+ * therefore opens the store for it, and on a cold store
+ * derives the whole home population to answer one skill. The questions open
+ * their own connection, one that never waits on a lock ({@link questionStoreOf}). A git refusal is the refusal of
  * the phase that enumerated; a store that will not open, or whose blob tier
  * cannot be read, is the run's refusal ({@link isRunRefusal}), said once, and no
  * later phase runs.
  * What can still fail here is the parse dispatcher's shutdown when the run ends.
  *
- * @param options - The run's home root, and an ignore oracle to reuse
+ * @param options - The run's home root, the trees it writes (`[]` for a verb that
+ *   only reads; see `RunPopulationOptions.outputs`), an ignore oracle to reuse,
+ *   whether the run has a projection store (`'on-demand'` opens it as above,
+ *   `'none'` declares a run that never opens it (`vat audit`), so its enumerations
+ *   and stored-document questions open no home and take no snapshot), and the
+ *   listener for the home population's settlement
+ * @param options.homeSettledListener - Builds, from the run before `work` starts, what the run
+ *   population calls when its home population settles. Built from the run because what listens
+ *   needs the run's own dispatcher and root; called before any enumeration can settle, since
+ *   enumerations start only inside `work`. A verb that overlaps nothing passes
+ *   {@link NO_HOME_SETTLED_LISTENER}.
  * @param work - The verb's work
  * @returns Whatever `work` returned
  */
 export function withRunContext<T>(
-  options: { readonly root: string; readonly gitTracker?: GitTracker | undefined },
+  options: {
+    readonly root: string;
+    readonly outputs: readonly string[];
+    readonly projectionStore: 'on-demand' | 'none';
+    readonly gitTracker?: GitTracker | undefined;
+    readonly homeSettledListener: (run: RunContext) => HomeSettledListener;
+  },
   work: (run: RunContext) => Promise<T>,
 ): Promise<T> {
   const root = safePath.resolve(options.root);
   const gitTracker = options.gitTracker ?? new GitTracker(root);
-  return withLazyPopulationCache({ root }, (cacheOf) =>
+  // One decision whether the run has a store: what the openers answer and what the
+  // skills lane counts a scan as (`skillText.storeMiss` or `skillText.noStore`).
+  const holdsStore = options.projectionStore === 'on-demand' && projectionStoreSelected();
+  const questionStore = questionStoreOf(root, holdsStore);
+  // Replaced by the verb's listener before `work` starts, so before any enumeration can settle.
+  let listener: HomeSettledListener = IGNORE_HOME_SETTLEMENT;
+  // The questions' connection closes inside the scope, before the run's own.
+  return withLazyPopulationCache({ root }, (cacheOf) => runThenClose(() =>
     withRunPopulation(
       {
         root,
+        outputs: options.outputs,
         gitTracker,
-        cacheOf: () => runCacheOf(cacheOf),
+        cacheOf: holdsStore ? () => runCacheOf(cacheOf) : () => Promise.resolve(undefined),
+        questionCacheOf: questionStore.cacheOf,
+        holdsStore,
         collectionsFor: (enumerated) => Promise.resolve(collectionsOption(enumerated).collections),
+        onHomeSettled: (key, settlement) => listener(key, settlement),
       },
-      (population) => work({
-        population,
-        registry: ResourceRegistry.forRun(population, { baseDir: root, gitTracker }),
-        dispatcher: population.dispatcher,
-      }),
-    ),
+      (population) => {
+        const run: RunContext = {
+          population,
+          registry: ResourceRegistry.forRun(population, { baseDir: root, gitTracker }),
+          dispatcher: population.dispatcher,
+        };
+        listener = options.homeSettledListener(run);
+        return work(run);
+      },
+    ), questionStore.opening),
   );
 }
 
@@ -188,6 +262,7 @@ export function runSkillRegistries(run: RunContext): RunSkillRegistries {
     dispatcher: run.dispatcher,
     includeFor: () => REGISTRY_INCLUDE,
     configFor: projectConfigOrNone,
+    crawlOnce: (key, crawl) => run.population.crawlOnce(key, crawl),
   });
 }
 

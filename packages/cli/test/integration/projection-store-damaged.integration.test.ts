@@ -18,7 +18,7 @@ import { detachGitEnv } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { resetUnscopedNoticeLedger } from '../../src/utils/operator-notices.js';
-import { PROJECTION_STORE_ENV, openPopulationCache } from '../../src/utils/projection-store.js';
+import { PROJECTION_STORE_ENV, openPopulationCache, openQuestionCache } from '../../src/utils/projection-store.js';
 import { captureStderr } from '../projection-store-test-doubles.js';
 import { createTempDirTracker } from '../system/test-common.js';
 import { gitAddAll, initTestGitRepo } from '../test-helpers.js';
@@ -57,11 +57,14 @@ function databaseFile(): string {
   return safePath.join(defaultStoreDirectory(), 'projection.db');
 }
 
+/** Opens one of the store's connections: the run's own, or its stored-document questions'. */
+type Opener = typeof openPopulationCache;
+
 /** Open the population cache, capturing what it told the operator. */
-async function openCapturing(): Promise<{ opened: Awaited<ReturnType<typeof openPopulationCache>>; stderr: string }> {
+async function openCapturing(open: Opener = openPopulationCache): Promise<{ opened: Awaited<ReturnType<Opener>>; stderr: string }> {
   const capture = captureStderr();
   try {
-    const opened = await openPopulationCache({ root: repoRoot });
+    const opened = await open({ root: repoRoot });
     return { opened, stderr: capture.written.join('') };
   } finally {
     capture.restore();
@@ -78,12 +81,18 @@ function expectHealthyDatabase(): void {
   }
 }
 
-describe('a damaged projection.db under VAT_CACHE_DIR', () => {
+// The run's own connection and its stored-document questions' (which only waits
+// no time for a lock) discard a damaged file alike, so a question-only verb never
+// leaves it cold forever.
+describe.each([
+  ['the run\'s own connection', openPopulationCache],
+  ['the stored-document questions\' connection', openQuestionCache],
+] as const)('a damaged projection.db under VAT_CACHE_DIR, opened by %s', (_connection, open) => {
   it('replaces a file of garbage with a fresh store, naming the path and SQLite\'s error', async () => {
     mkdirSyncReal(defaultStoreDirectory(), { recursive: true });
     writeFileSync(databaseFile(), Buffer.alloc(8192, 0x5a));
 
-    const { opened, stderr } = await openCapturing();
+    const { opened, stderr } = await openCapturing(open);
     try {
       expect(opened).toBeDefined();
       expect(stderr).toContain(databaseFile());
@@ -101,7 +110,7 @@ describe('a damaged projection.db under VAT_CACHE_DIR', () => {
     const bytes = readFileSync(databaseFile());
     writeFileSync(databaseFile(), bytes.subarray(0, Math.floor(bytes.length / 2)));
 
-    const { opened, stderr } = await openCapturing();
+    const { opened, stderr } = await openCapturing(open);
     try {
       expect(opened).toBeDefined();
       expect(stderr).toContain(databaseFile());

@@ -61,7 +61,7 @@ const CI_ARGV: Readonly<Record<string, readonly string[]>> = {
 };
 const CI_NAMES = Object.keys(CI_ARGV);
 
-const CWD_SCOPED_NAMES = [...PATHLESS_NAMES, CONTEXT_SWEEP, ...CI_NAMES];
+const CWD_SCOPED_NAMES = [...PATHLESS_NAMES, CONTEXT_SWEEP, 'skills-build', ...CI_NAMES];
 
 /** Every command handed the subject as a positional argument. */
 const SUBJECT_NAMES = [

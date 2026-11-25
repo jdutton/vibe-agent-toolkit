@@ -37,6 +37,7 @@ import { createLogger } from '../utils/logger.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
 import { withRunContext, type RunContext } from '../utils/resource-loader.js';
 
+import type { GateDecision } from './checks-overlap-gate.js';
 import {
   addRetiredOnlyOption,
   applyPhaseSelection,
@@ -60,11 +61,15 @@ import { RESOURCES_VALIDATE_EXAMINED, RESOURCES_VALIDATE_REPORT_SCHEMA } from '.
 import { runResourcesValidatePhase } from './resources/validate.js';
 import { SKILLS_VALIDATE_EXAMINED, SKILLS_VALIDATE_REPORT_SCHEMA } from './skills/validate-schema.js';
 import { runSkillsValidatePhase } from './skills/validate.js';
+import { createValidateChecksOverlap, liveOverlapSeams } from './validate-checks-overlap.js';
 
 /**
  * Surfaces `vat validate` knows how to run, in stable execution order. `checks` runs whenever
  * `resources:` is configured, directly after `resources`. Its supervised child derives its own
- * population of the tree — it does not read the one the `resources` phase built.
+ * population of the tree — it does not read the one the `resources` phase built. On a warm store
+ * whose every member the resources phase admits from it, the child STARTS during the resources
+ * phase and its stderr is held until its turn (`validate-checks-overlap.ts`); its turn, banner
+ * and report stay here, in this order.
  */
 const VALID_SURFACES = ['resources', 'checks', 'skills'] as const;
 
@@ -184,6 +189,11 @@ Checks bound:
   way to give 'vat validate' more time. 'vat resources check --budget <seconds>'
   runs the same checks on their own with a larger bound, so they can pass
   there, but that does not make 'vat validate' pass.
+  On a warm store, with every resource in the population admitted from it,
+  the checks child starts during the resources phase and its stderr is held
+  until the checks phase prints it; the run's output and exit code are the
+  same as a sequential run's, apart from the differences the signal contract
+  above lists.
 
 Arguments:
   None. Scope comes from vibe-agent-toolkit.config.yaml, never from the command
@@ -206,6 +216,17 @@ Example:
 }
 
 /**
+ * Whether a run has a `checks` phase (and its `resources` phase): whenever `resources:` is
+ * configured. The one predicate both the phase selection and the overlap gate's arming read.
+ *
+ * @param config - The project's config, or undefined when there is none
+ * @returns Whether the run has a `checks` phase
+ */
+function hasChecksPhase(config: ProjectConfig | undefined): boolean {
+  return config?.resources !== undefined;
+}
+
+/**
  * Decide which validation surfaces to run.
  *
  * A surface is included only when its config block is present, so coverage is
@@ -225,6 +246,8 @@ Example:
  * @param run.debug - Forwarded to the `checks` phase's child
  * @param run.base - `--base <ref>`, forwarded to the `checks` phase's child; undefined when none was given
  * @param run.context - The run every in-process phase reads through (the `checks` child is a separate process)
+ * @param run.checksTurn - The `checks` phase's first act: disarm the overlap gate and hand back its
+ *   one decision (the child already running, or spawn it now)
  */
 export function selectValidateSurfaces(
   config: ProjectConfig | undefined,
@@ -234,9 +257,10 @@ export function selectValidateSurfaces(
     readonly debug: boolean;
     readonly base: string | undefined;
     readonly context: RunContext;
+    readonly checksTurn: () => Promise<GateDecision>;
   },
 ): PhaseSelection {
-  const { root, verbose, debug, base, context } = run;
+  const { root, verbose, debug, base, context, checksTurn } = run;
   // Forwarded to every surface, exactly as `vat verify` forwards its own. Both
   // validators already accept `-v, --verbose`; only this command lacked the
   // flag, which made the collapsed warning/info detail unreachable HERE while
@@ -245,7 +269,7 @@ export function selectValidateSurfaces(
   // would have to parse back.
   const phases: Phase[] = [];
 
-  if (config?.resources) {
+  if (hasChecksPhase(config)) {
     phases.push({
       name: 'resources',
       schema: RESOURCES_VALIDATE_REPORT_SCHEMA,
@@ -258,7 +282,7 @@ export function selectValidateSurfaces(
       name: 'checks',
       schema: CHECK_REPORT_SCHEMA,
       examined: RESOURCES_CHECK_EXAMINED,
-      run: () => runResourcesCheckPhase({ root, debug, verbose, base }),
+      run: () => runResourcesCheckPhase({ root, debug, verbose, base, decision: checksTurn() }),
     });
   }
 
@@ -293,6 +317,9 @@ export function selectValidateSurfaces(
  * process, so it takes its own git snapshot and opens the projection store
  * while this process holds it open inside the scope below. It asks the resources
  * phase's question, so with a store selected it is served that phase's rows.
+ * When the overlap gate admits it, that child is already running during the
+ * resources phase; the phases themselves still run, announce and report one
+ * after another.
  *
  * @param phases - The surfaces to run, in order
  * @param logger - Where the per-surface banner goes
@@ -335,21 +362,30 @@ async function validateTopLevelCommand(
     // requireProjectRoot returns the discovered root; read config from there so a
     // subdirectory invocation doesn't load an empty config and falsely pass.
     const projectRoot = requireProjectRoot(process.cwd(), COMMAND_NAME);
-    await withRunContext({ root: projectRoot }, async (context) => {
+    const config = loadConfig(projectRoot, 'source');
+    const debug = options.debug === true;
+    // Armed before the resources phase: the gate listens for the home population's settlement.
+    const request = { root: projectRoot, debug, base: options.base, config };
+    const overlap = createValidateChecksOverlap(
+      { ...request, checksPhase: hasChecksPhase(config) },
+      liveOverlapSeams(request, process.env),
+    );
+    await withRunContext({ projectionStore: 'on-demand', root: projectRoot, outputs: [], homeSettledListener: overlap.homeSettledListener }, async (context) => {
       const phases = applyPhaseSelection(
-        selectValidateSurfaces(loadConfig(projectRoot, 'source'), {
+        selectValidateSurfaces(config, {
           root: projectRoot,
           verbose: options.verbose === true,
-          debug: options.debug === true,
+          debug,
           base: options.base,
           context,
+          checksTurn: overlap.checksTurn,
         }),
         logger,
       );
 
       // A header, not a verdict: no ✅ before anything has run.
       logger.info(`🔍 vat validate (surfaces: ${phases.map((p) => p.name).join(' → ')})`);
-      await runPhasesInOrder(phases, logger, results);
+      await overlap.runPhases(() => runPhasesInOrder(phases, logger, results));
     });
   });
   endWithReport('validate', report, ORCHESTRATOR_FORMAT);

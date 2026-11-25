@@ -22,38 +22,40 @@
  *   home root, enumerated through the run's population;
  * - a skill outside the project, with no project root of its own.
  *
- * Warm (a second run over the same store), the resources view is admitted from
- * the store and reads, keys and parses nothing: the run reads only the SKILL.md
- * files skill discovery reaches and the markdown a skill bundles, each once.
+ * Warm (a second run over the same store), every file under the project root is
+ * served from the store: the resources view is admitted from it, and skill
+ * discovery and the skills lane read its `skill_text` facts. The run reads, keys
+ * and parses only the declared fallback, the skills lane's files outside the
+ * project root (which the store does not cover), each once and each counted as a
+ * store miss (`skillText.storeMiss`).
  *
  * Every arm has a private `VAT_CACHE_DIR` (where the projection store and the
  * parse cache live) and temp directory, so no other run's cache turns a cold run
  * warm.
  */
 
-import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 
-import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
+import { DEFAULT_PARSE_LIMITS } from '@vibe-agent-toolkit/resources';
 import {
   mkdirSyncReal,
   toForwardSlash,
-  WORK_COUNTERS_ENV,
   type WorkCounter,
   type WorkCounterDump,
 } from '@vibe-agent-toolkit/utils';
 import { createSymlink, parseLookupsIn, symlinkCapability } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { PROJECTION_STORE_ENV, PROJECTION_STORE_OFF } from '../../src/utils/projection-store.js';
-import { probedReads, readProbeEnv } from '../helpers/fs-read-probe.js';
+import { probedReadsOf } from '../helpers/fs-read-probe.js';
+import { runWithWorkCounters } from '../helpers/work-counter-run.js';
 import { commitTestFixture } from '../test-helpers.js';
 
-import { createSkillMarkdown, createSuiteContext, executeCli, join, writeTestFile } from './test-common.js';
+import { createSkillMarkdown, createSuiteContext, join, writeTestFile } from './test-common.js';
 
 const context = createSuiteContext('vat-work-validate-', import.meta.url);
 
 /** The parse input cap in force (`DEFAULT_PARSE_LIMITS.inputBytes`): one byte past it is refused. */
-const INPUT_CAP_BYTES = 8 * 1024 * 1024;
+const INPUT_CAP_BYTES = DEFAULT_PARSE_LIMITS.inputBytes;
 
 /**
  * The root config's skills block. With `declareFiles`, one skill declares a
@@ -251,13 +253,22 @@ function discoveredSkills(corpus: Corpus): string[] {
 }
 
 /**
- * Which phase reads each SKILL.md first: the resources phase when a skill declares
- * `files:` (its deferred-artifact discovery), else the skills phase. Either way once
- * per run; the later phase is served that read.
+ * The files a warm run's skills lane scans from their text (`skillText.storeMiss`), by
+ * the phase that first reaches each, repository-relative. The store covers the home
+ * root (the project), so the declared fallback is exactly the skills lane's files
+ * outside it: a SKILL.md there is read by the phase that discovers skills first (the
+ * resources phase when a skill declares `files:`, its deferred-artifact discovery, else
+ * the skills phase), and a bundled markdown file there by the skills phase. Every
+ * file under the project root is served from the store, so it costs no read, no key
+ * and no parse.
  */
-function skillMdReadsByPhase(corpus: Corpus): { resources: string[]; skills: string[] } {
-  const all = discoveredSkills(corpus);
-  return corpus.declaresFiles ? { resources: all, skills: [] } : { resources: [], skills: all };
+function fallbackByPhase(corpus: Corpus): { resources: string[]; skills: string[] } {
+  const outside = (path: string): boolean => inProject(corpus, path) === undefined;
+  const skillMd = discoveredSkills(corpus).filter((path) => outside(path));
+  const bundled = bundledMarkdown(corpus).filter((path) => outside(path));
+  return corpus.declaresFiles
+    ? { resources: skillMd, skills: bundled }
+    : { resources: [], skills: [...skillMd, ...bundled] };
 }
 
 /** A relative link target in a document, fragment included. */
@@ -372,18 +383,6 @@ function summed(records: ReadonlyArray<Readonly<Record<WorkCounter, number>>>): 
   return sum;
 }
 
-/** Probe reads per path, for the dumps whose pid is (or is not) `pid`. */
-function readsOf(dumpDir: string, keep: (pid: number) => boolean): Map<string, number> {
-  const reads = new Map<string, number>();
-  for (const name of readdirSync(dumpDir).filter((entry) => entry.startsWith('reads-'))) {
-    const pid = Number(name.split('-')[1]);
-    if (!keep(pid)) continue;
-    const dump = JSON.parse(readFileSync(join(dumpDir, name), 'utf-8')) as { reads: Record<string, number> };
-    for (const [path, count] of Object.entries(dump.reads)) reads.set(path, (reads.get(path) ?? 0) + count);
-  }
-  return reads;
-}
-
 /**
  * Run `vat validate` once in `cwd` and read back what it counted.
  *
@@ -392,39 +391,30 @@ function readsOf(dumpDir: string, keep: (pid: number) => boolean): Map<string, n
  * @returns The parent's counts, per phase, the children's, and the probe's reads
  */
 async function validateCounts(cwd: string, arm: Arm): Promise<RunCounts> {
-  const workDir = context.createTempDir();
-  const probeDir = context.createTempDir();
-  const result = await executeCli(context.binPath, ['validate'], {
-    cwd,
-    env: {
-      [VAT_CACHE_DIR_ENV]: arm.storeDir,
-      ...(arm.storeOff && { [PROJECTION_STORE_ENV]: PROJECTION_STORE_OFF }),
-      [WORK_COUNTERS_ENV]: workDir,
-      TMPDIR: arm.tmpDir,
-      TEMP: arm.tmpDir,
-      TMP: arm.tmpDir,
-      // The probe's root is the repository, so a skill outside the project is counted too.
-      ...readProbeEnv(probeDir, join(cwd, '..')),
-    },
+  // The probe's root is the repository, so a skill outside the project is counted too.
+  const { result, dumps: cli, probeDir } = await runWithWorkCounters(context, cwd, ['validate'], {
+    cacheDir: arm.storeDir,
+    tmpDir: arm.tmpDir,
+    storeOff: arm.storeOff,
+    probeRoot: join(cwd, '..'),
+    cores: null,
   });
+  if (probeDir === null) throw new Error('validateCounts runs with the probe');
   // Positive control: both in-process surfaces ran, so the counts cover them.
   expect(result.stdout, result.stderr).toContain('name: resources');
   expect(result.stdout).toContain('name: skills');
 
-  const cli = readdirSync(workDir)
-    .map((name) => JSON.parse(readFileSync(join(workDir, name), 'utf-8')) as WorkCounterDump)
-    .filter((dump) => dump.role === 'cli');
   const parent = cli.filter((dump) => 'resources' in dump.phases);
   expect(parent, 'exactly one dump is the validate process').toHaveLength(1);
   const parentDump = parent[0] as WorkCounterDump;
   // Positive control: the probe ran in the parent.
-  expect(probedReads(probeDir).dumps).toBeGreaterThan(0);
+  expect(probedReadsOf(probeDir, (pid) => pid === parentDump.pid).dumps).toBeGreaterThan(0);
   return {
     parent: parentDump.counters,
     phases: parentDump.phases,
     children: summed(cli.filter((dump) => dump !== parentDump).map((dump) => dump.counters)),
-    parentReads: readsOf(probeDir, (pid) => pid === parentDump.pid),
-    childReads: readsOf(probeDir, (pid) => pid !== parentDump.pid),
+    parentReads: probedReadsOf(probeDir, (pid) => pid === parentDump.pid).reads,
+    childReads: probedReadsOf(probeDir, (pid) => pid !== parentDump.pid).reads,
     status: result.status,
     stdout: result.stdout,
   };
@@ -507,7 +497,7 @@ describe.each([
     expect([...childReads.keys()].filter((path) => !isConfig(path)), 'checks child fs reads').toEqual([]);
   });
 
-  it('warm: the resources view is admitted from the store; the run reads only discovery\'s SKILL.md files and the bundled markdown', async () => {
+  it('warm: every file under the project root is served from the store; the run reads only the skills lane\'s files outside it', async () => {
     const arm = freshArm(false);
     await validateCounts(cwd, arm);
     const warm = await validateCounts(cwd, arm);
@@ -515,19 +505,19 @@ describe.each([
     const skills = warm.phases['skills'] as Readonly<Record<WorkCounter, number>>;
     expect(resources).toBeDefined();
     expect(skills).toBeDefined();
-    const discovered = discoveredSkills(corpus);
-    const skillMd = skillMdReadsByPhase(corpus);
-    const bundled = bundledMarkdown(corpus);
+    const fallback = fallbackByPhase(corpus);
 
-    // The resources view reads, keys and parses nothing: every member is
-    // admitted from the store. What the phase still reads is the skill discovery
-    // a `files:` entry asks for (`computeDeferredArtifacts`): each SKILL.md
-    // once, its parse answered from the parse cache. The bytes pin the set.
-    expect(resources['content.read'], 'resources phase reads only the SKILL.md files discovery reaches').toBe(skillMd.resources.length);
-    expect(resources['content.hashed'], 'resources phase keys only those').toBe(skillMd.resources.length);
-    expect(resources['content.hashedBytes'], 'resources phase: exactly the discovered SKILL.md bytes').toBe(bytesOf(corpus, skillMd.resources));
-    expect(parseLookupsIn(resources), 'resources phase parse lookups: discovery\'s only').toBe(skillMd.resources.length);
-    expect(resources['parse.cache.hit'], 'each discovery parse is a cache hit').toBe(skillMd.resources.length);
+    // The resources view reads, keys and parses nothing: every member is admitted
+    // from the store, and so is the skill discovery a `files:` entry asks for
+    // (`computeDeferredArtifacts`). What the phase still reads is the declared
+    // fallback: a SKILL.md outside the project, once, its parse answered from the
+    // parse cache, and counted as a store miss. The bytes pin the set.
+    expect(resources['content.read'], 'resources phase reads only the fallback SKILL.md files').toBe(fallback.resources.length);
+    expect(resources['content.hashed'], 'resources phase keys only those').toBe(fallback.resources.length);
+    expect(resources['content.hashedBytes'], 'resources phase: exactly the fallback SKILL.md bytes').toBe(bytesOf(corpus, fallback.resources));
+    expect(parseLookupsIn(resources), 'resources phase parse lookups: the fallback\'s only').toBe(fallback.resources.length);
+    expect(resources['parse.cache.hit'], 'each fallback parse is a cache hit').toBe(fallback.resources.length);
+    expect(resources['skillText.storeMiss'], 'resources phase store misses: the fallback SKILL.md files').toBe(fallback.resources.length);
     // A hydrated member costs a readability probe and the registry's one stat:
     // two per view document. The over-cap file is refused from the store once the
     // same probe finds it still readable: one more.
@@ -541,34 +531,35 @@ describe.each([
     expect(skills['registry.admitted'], 'the skills phase admits only what no earlier phase admitted').toBe(
       skillsOnlyDocuments(corpus).length,
     );
-    // The skills phase reads exactly the SKILL.md files no earlier phase read
-    // (none when the resources phase's discovery read them) plus the markdown
-    // files a skill links: the packager scans each bundled file's text, and the
-    // store-hydrated resources view read none of them. Each once.
-    expect(
-      skills['content.read'],
-      `skills phase content.read = ${skillMd.skills.length} SKILL.md (not read by an earlier phase) + ${bundled.length} bundled markdown`,
-    ).toBe(skillMd.skills.length + bundled.length);
-    expect(skills['content.hashed'], 'skills phase keys exactly what it reads').toBe(skills['content.read']);
-    expect(skills['content.hashedBytes'], 'skills phase: exactly those SKILL.md and bundled markdown bytes').toBe(
-      bytesOf(corpus, [...skillMd.skills, ...bundled]),
+    // The skills phase reads exactly its fallback: a SKILL.md outside the project
+    // that no earlier phase read, and the markdown outside the project a skill
+    // links (the packager scans its text). Each once, each a store miss. Its
+    // parse lookups are the link walk's, one per bundled fallback file, and one
+    // per SKILL.md no earlier phase parsed.
+    expect(skills['content.read'], `skills phase content.read = its fallback: ${fallback.skills.join(', ')}`).toBe(fallback.skills.length);
+    expect(skills['content.hashed'], 'skills phase keys exactly what it reads').toBe(fallback.skills.length);
+    expect(skills['content.hashedBytes'], 'skills phase: exactly the fallback bytes').toBe(bytesOf(corpus, fallback.skills));
+    expect(parseLookupsIn(skills), 'skills phase parse lookups: the fallback\'s only').toBe(fallback.skills.length);
+    expect(skills['skillText.storeMiss'], 'skills phase store misses: its fallback').toBe(fallback.skills.length);
+    expect(warm.parent['skillText.storeMiss'], 'store misses: the declared fallback, nothing else').toBe(
+      fallback.resources.length + fallback.skills.length,
     );
 
     // At the fs boundary, the whole process. The probe counts a read-only open
     // as a content read, so each member admitted from the store shows once for
     // its readability probe (an open and a close, no bytes read), as does the
-    // over-cap file before its stored refusal; on top of that, discovery's
-    // SKILL.md files and the bundled markdown are each read once.
+    // over-cap file before its stored refusal; on top of that, each fallback
+    // file is read once.
     const expected = new Map<string, number>();
     const add = (path: string): void => {
       expected.set(path, (expected.get(path) ?? 0) + 1);
     };
     for (const path of storeAdmittedDocuments(corpus)) add(probed(cwd, path));
     add(probed(cwd, OVER_CAP));
-    for (const path of [...discovered, ...bundled]) add(probedInRepo(cwd, corpus, path));
+    for (const path of [...fallback.resources, ...fallback.skills]) add(probedInRepo(cwd, corpus, path));
     expect(
       sortedEntries(new Map([...warm.parentReads].filter(([path]) => !isConfig(path)))),
-      'warm fs-boundary reads: one probe open per store-admitted member, one read per discovered SKILL.md and bundled file',
+      'warm fs-boundary reads: one probe open per store-admitted member, one read per fallback file',
     ).toEqual(sortedEntries(expected));
   });
 

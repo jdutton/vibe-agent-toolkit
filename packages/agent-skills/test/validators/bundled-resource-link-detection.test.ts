@@ -37,7 +37,7 @@ function makeSkillDir(
 
 function runDetector(skillDir: string, linkedFiles: readonly string[] = []) {
   return detectBundledResourceWithoutLinks(
-    fs.readFileSync(safePath.join(skillDir, 'SKILL.md'), 'utf-8'),
+    () => Promise.resolve(fs.readFileSync(safePath.join(skillDir, 'SKILL.md'), 'utf-8')),
     skillDir,
     linkedFiles,
     skillDir,
@@ -86,13 +86,13 @@ describe('detectBundledResourceWithoutLinks', () => {
   const { getTempDir } = setupTempDir('bundled-resource-detection-');
   afterEach(() => cleanupTestFiles());
 
-  it('emits one issue per bundled subdir with no links', () => {
+  it('emits one issue per bundled subdir with no links', async () => {
     const skillDir = makeSkillDir(getTempDir(), {
       scripts: ['cli.mjs'],
       references: ['detail.md'],
       assets: ['logo.png'],
     });
-    const issues = runDetector(skillDir);
+    const issues = await runDetector(skillDir);
     const dirs = issues.map((i) => i.location).sort((a, b) => (a ?? '').localeCompare(b ?? ''));
     expect(issues).toHaveLength(3);
     for (const issue of issues) {
@@ -104,19 +104,19 @@ describe('detectBundledResourceWithoutLinks', () => {
     expect(dirs).toEqual(['assets', 'references', 'scripts']);
   });
 
-  it('does not fire when a linked file is inside the bundled subdir', () => {
+  it('does not fire when a linked file is inside the bundled subdir', async () => {
     const skillDir = makeSkillDir(getTempDir(), { references: ['detail.md'] });
-    const issues = runDetector(skillDir, [safePath.join(skillDir, 'references', 'detail.md')]);
+    const issues = await runDetector(skillDir, [safePath.join(skillDir, 'references', 'detail.md')]);
     expect(issues).toHaveLength(0);
   });
 
-  it('does not fire when SKILL.md body links into the bundled subdir', () => {
+  it('does not fire when SKILL.md body links into the bundled subdir', async () => {
     const skillDir = makeSkillDir(
       getTempDir(),
       { scripts: ['cli.mjs'] },
       '# sample\n\nSee [the runner](scripts/cli.mjs).\n',
     );
-    const issues = runDetector(skillDir);
+    const issues = await runDetector(skillDir);
     expect(issues).toHaveLength(0);
   });
 
@@ -125,52 +125,52 @@ describe('detectBundledResourceWithoutLinks', () => {
   // directory the check could not see was reported as having nothing in it.
   it('rethrows when a bundled subdir is refused rather than reporting it empty', async () => {
     const skillDir = makeSkillDir(getTempDir(), { references: ['detail.md'] });
-    await withSyncFsRefused('readdirSync', safePath.join(skillDir, 'references'), 'EACCES', () => {
-      expect(() => runDetector(skillDir)).toThrow(/EACCES/);
+    await withSyncFsRefused('readdirSync', safePath.join(skillDir, 'references'), 'EACCES', async () => {
+      await expect(runDetector(skillDir)).rejects.toThrow(/EACCES/);
     });
   });
 
-  it('emits no issues when no bundled subdir exists', () => {
+  it('emits no issues when no bundled subdir exists', async () => {
     const skillDir = makeSkillDir(getTempDir(), {});
-    const issues = runDetector(skillDir);
+    const issues = await runDetector(skillDir);
     expect(issues).toHaveLength(0);
   });
 
-  it('does not fire on empty bundled subdir (treat as not present)', () => {
+  it('does not fire on empty bundled subdir (treat as not present)', async () => {
     const skillDir = makeSkillDir(getTempDir(), { scripts: [] });
-    const issues = runDetector(skillDir);
+    const issues = await runDetector(skillDir);
     expect(issues).toHaveLength(0);
   });
 
   // --- Vocabulary: derived from the content-type routing categories --------
 
-  it('covers every content-type routing category plus the claude-web references dir', () => {
+  it('covers every content-type routing category plus the claude-web references dir', async () => {
     const vocabulary = [...TARGET_SUBDIR_CATEGORIES, CLAUDE_WEB_REFERENCES_SUBDIR];
     for (const sub of vocabulary) {
       const skillDir = makeSkillDir(getTempDir(), { [sub]: ['orphan.md'] });
-      const issues = runDetector(skillDir);
+      const issues = await runDetector(skillDir);
       expect(issues.map((i) => i.location), `subdir "${sub}" is not in the detector vocabulary`)
         .toEqual([sub]);
       fs.rmSync(skillDir, { recursive: true, force: true });
     }
   });
 
-  it('fires on an unreferenced resources/ dir (routing sends every .md there)', () => {
+  it('fires on an unreferenced resources/ dir (routing sends every .md there)', async () => {
     const skillDir = makeSkillDir(getTempDir(), { resources: ['guide.md'] });
-    const issues = runDetector(skillDir);
+    const issues = await runDetector(skillDir);
     expect(issues).toHaveLength(1);
     expect(issues[0]?.location).toBe('resources');
   });
 
   // --- Per-file coverage: one live mention must not mask dead siblings -----
 
-  it('fires for the dead files when only some files in the subdir are mentioned', () => {
+  it('fires for the dead files when only some files in the subdir are mentioned', async () => {
     const skillDir = makeSkillDir(
       getTempDir(),
       { references: [...CORPUS_REFERENCE_FILES] },
       CORPUS_BODY,
     );
-    const issues = runDetector(skillDir);
+    const issues = await runDetector(skillDir);
 
     expect(issues).toHaveLength(1);
     const issue = issues[0];
@@ -187,7 +187,7 @@ describe('detectBundledResourceWithoutLinks', () => {
     }
   });
 
-  it('does not fire when every file in the subdir is mentioned in an inline code span', () => {
+  it('does not fire when every file in the subdir is mentioned in an inline code span', async () => {
     const body = [
       '# command-development',
       '',
@@ -199,28 +199,28 @@ describe('detectBundledResourceWithoutLinks', () => {
       { references: [...CORPUS_REFERENCE_FILES] },
       body,
     );
-    expect(runDetector(skillDir)).toHaveLength(0);
+    expect(await runDetector(skillDir)).toHaveLength(0);
   });
 
-  it('accepts a bare prose path (no backticks, no markdown link) as a reference', () => {
+  it('accepts a bare prose path (no backticks, no markdown link) as a reference', async () => {
     const skillDir = makeSkillDir(
       getTempDir(),
       { scripts: ['cli.mjs'] },
       '# sample\n\nRun scripts/cli.mjs before starting.\n',
     );
-    expect(runDetector(skillDir)).toHaveLength(0);
+    expect(await runDetector(skillDir)).toHaveLength(0);
   });
 
-  it('counts a nested file by its subdir-relative path', () => {
+  it('counts a nested file by its subdir-relative path', async () => {
     const skillDir = makeSkillDir(getTempDir(), {}, '# sample\n\nSee `references/deep/x.md`.\n');
     mkdirSyncReal(safePath.join(skillDir, 'references', 'deep'), { recursive: true });
     fs.writeFileSync(safePath.join(skillDir, 'references', 'deep', 'x.md'), '# x\n');
-    expect(runDetector(skillDir)).toHaveLength(0);
+    expect(await runDetector(skillDir)).toHaveLength(0);
   });
 
-  it('a linked file covers only itself, not its dead siblings', () => {
+  it('a linked file covers only itself, not its dead siblings', async () => {
     const skillDir = makeSkillDir(getTempDir(), { references: ['linked.md', 'orphan.md'] });
-    const issues = runDetector(skillDir, [safePath.join(skillDir, 'references', 'linked.md')]);
+    const issues = await runDetector(skillDir, [safePath.join(skillDir, 'references', 'linked.md')]);
     expect(issues).toHaveLength(1);
     expect(issues[0]?.message).toContain('orphan.md');
     expect(issues[0]?.message).not.toContain('linked.md');

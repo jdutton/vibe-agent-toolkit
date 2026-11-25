@@ -9,7 +9,7 @@
 
 import { lstatSync } from 'node:fs';
 
-import { countWork, followedStatSync, type FsFaultFacts, fsFaultOf, isLinkChainRefusedError, linkResolutionFault, realpathNativeSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { countWork, followedStatSync, type FsFaultFacts, fsFaultOf, isLinkChainRefusedError, linkResolutionFault, realpathNativeSync } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import {
@@ -20,24 +20,8 @@ import {
 } from '../schemas/projection-resources.js';
 
 import { isSizeRefusal, readKeyedContent, type RunContentCache } from './content-cache.js';
+import { relativize } from './root-relative-path.js';
 import { type CollectionMimeConflict, type CollectionMimeResolver, mimeFor, parserKindForMime } from './router.js';
-
-/**
- * Render an absolute path relative to a root, forward-slashed.
- *
- * Every path a realization row or a snapshot prints goes through here. An
- * absolute path in a golden file makes the golden machine-specific and leaks
- * `$HOME`; both have bitten this repo before.
- *
- * @param absolutePath - Path to render
- * @param root - Root the path is rendered relative to
- * @returns Forward-slashed relative path (or the forward-slashed absolute path
- *   when the target lies outside the root, which is itself worth seeing)
- */
-export function relativize(absolutePath: string, root: string): string {
-  const rel = safePath.relative(root, absolutePath);
-  return rel === '' ? '.' : toForwardSlash(rel);
-}
 
 /**
  * When a realization should pay to read and hash a path's bytes.
@@ -159,7 +143,7 @@ interface PathObservation {
  */
 function statObservation(absolutePath: string, root: string): PathObservation {
   try {
-    countWork('fs.stat', 1);
+    countWork('fs.lstat', 1);
     const link = lstatSync(absolutePath);
     if (!link.isSymbolicLink()) {
       return {

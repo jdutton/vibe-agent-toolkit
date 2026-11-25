@@ -17,13 +17,15 @@ import {
 import type {
   BlobScopedRows,
   ExtentKey,
+  ExtentRequest,
   ExtentScopedRows,
+  ExtentScopedTableName,
   FactStore,
 } from '../src/projection/store.js';
 import { ResourceRegistry, type RegistryCrawl } from '../src/resource-registry.js';
 
 import { extentKeyOf, FakeFactStore } from './fake-fact-store.js';
-import { inOwnRun } from './helpers/population-run.js';
+import { inOwnRun, noStoredDocument } from './helpers/population-run.js';
 import { setupSubdirTestSuite } from './test-helpers.js';
 
 /** The plain markdown member every fixture below starts from. */
@@ -126,12 +128,12 @@ async function populationOf(gitTracker?: GitTracker): Promise<string[]> {
  * were written in.
  */
 class ReorderingStore extends FakeFactStore {
-  override async readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
-    const held = await super.readExtent(key);
+  override async readExtent<Table extends ExtentScopedTableName>(key: ExtentKey, request: ExtentRequest<Table>): Promise<Pick<ExtentScopedRows, Table> | undefined> {
+    const held = await super.readExtent(key, request);
     if (held === undefined) return undefined;
     return Object.fromEntries(
       Object.entries(held).map(([table, rows]) => [table, [...(rows as readonly unknown[])].reverse()]),
-    ) as unknown as ExtentScopedRows;
+    ) as unknown as Pick<ExtentScopedRows, Table>;
   }
 }
 
@@ -146,6 +148,8 @@ describe('buildResourcePopulation', () => {
     await write('docs/c.md', '# C\n');
     const cache = { store: new ReorderingStore(), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
     const source: ResourcePopulationSource = {
+      storedDocument: noStoredDocument,
+      holdsStore: false,
       enumerate: (root, outputs) => inOwnRun(buildResourcePopulation, { outputs, root, cache }),
     };
     const crawlOnce = (): Promise<RegistryCrawl> =>
@@ -429,9 +433,9 @@ describe('buildResourceProjection', () => {
 class KeyRecordingStore extends FakeFactStore {
   readonly keysRead: string[] = [];
 
-  override readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
+  override readExtent<Table extends ExtentScopedTableName>(key: ExtentKey, request: ExtentRequest<Table>): Promise<Pick<ExtentScopedRows, Table> | undefined> {
     this.keysRead.push(extentKeyOf(key));
-    return super.readExtent(key);
+    return super.readExtent(key, request);
   }
 }
 

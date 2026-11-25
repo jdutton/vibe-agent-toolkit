@@ -127,7 +127,7 @@ every hazard the store enforces or accepts, with its status and its enforcer kin
 - **Cross-file facts come from SQL; resolve is the escape hatch; relations needing git are core producers.** Rejected: everything as resolve.
 - **git runs with the operator's config; the extent key is git's answer.** The extent key is git's dirty-corrected tree hash and content keys hash the bytes read, so a config, ignore or attributes change that moves membership misses. Content normalized beneath an unchanged tree hash is an open hole until the stat memo lands ([register](./fact-extractors-hazard-register.md)). Every call through `runGit` scrubs git's redirect env and turns its pathspec env off; the spawns vibe-validate's tree snapshot makes are an accepted register row, requested of vibe-validate. Rejected: pinning git, which drops the operator's config. *Amended 2026-11-19: normalization beneath an unchanged tree hash is outside what VAT supports; see [Amendment 2026-11-19](#amendment-2026-11-19-content-identity-per-source).*
 - **`row_set_key` is the one identity of a per-file fact and the unit of eviction.** Rejected: a per-extent presence summary.
-- **The cache namespace's end state is exactly a shape digest of the core and store-protocol tables plus the store-protocol implementation's code identity.** Rejected: a namespace keyed on all code identity.
+- **The cache namespace's end state is exactly a shape digest of the core and store-protocol tables plus the store-protocol implementation's code identity.** Rejected: a namespace keyed on all code identity. Until every stored tier carries code identity, a dev checkout's namespace also carries the digest of the skill-text declaration a markdown parse job applies (`skillTextDeclarationDigest`), beside the parse-facts shape, because those facts live in the parse cache and the store and nothing else keys them on that declaration. Rejected: a dev namespace of the path and parse-facts shape alone, under which a pattern edit in a dev checkout would serve the previous patterns' facts from the parse cache and the store.
 - **Each run gets its own database: only the needed relations, rows restricted to the bound tree's extent; an unhydrated relation does not exist there,** so a statement reaching it refuses. Rejected: an empty schema per relation in the answering database (allowed in a planning database that never answers); an authorizer, which cannot gate rows; TEMP views (I7).
 - **Extent derivation is full until the incremental extent lands,** after its design passes a blind review against: submodules, ignored territory, `.gitignore` edits, non-local contributors, collected base trees, diff/read races. Rejected: any delta, copy-forward included, before then.
 - **TypeScript facts come from per-file syntax.** Rejected: a per-tsconfig Program.
@@ -170,7 +170,8 @@ This ADR changes as follows; each old choice becomes a rejected alternative.
   closing the hole for files whose meaning depends on normalization.
 - **Warm path.** A warm store hit proves the tree unchanged; no lane re-admits or re-hashes files to
   prove it again, and a mid-run re-check uses git's tree comparison. "One run" is one VAT process;
-  the supervised checks child of `vat validate` is a separate process. Enforced by
+  the supervised checks child of `vat validate` is a separate process (on a warm store it can start during the resources phase, see
+  [resource-scanning-and-caching 3.7b](resource-scanning-and-caching.md#37b-the-checks-child-starts-during-the-resources-phase-on-a-warm-store)). Enforced by
   `packages/cli/test/system/work-counters-validate.system.test.ts` (`content.read`,
   `content.hashed`, the parse lookups, `registry.admitted`, `registry.built`). The store is on by
   default; a store-off run is held to correctness only.
@@ -187,11 +188,12 @@ registry views per phase; see [content keying](./content-keying-and-git.md)), fo
 admits through one run but its index step re-reads each file, and `vat audit`, `vat skills build`,
 `vat claude plugin build` and `vat ard emit` are not covered yet. Store hydration is built for the
 resources view: on a warm store hit each member is admitted from its stored blob facts
-(`stored-admission.ts`) with no read, hash or parse; the resources phase still reads and parses each
-discovered `SKILL.md`, as the skills phase reads what it validates, until the skills-phase facts are
-built. Not built: the git-OID path
-(planned with incremental repopulation) and I2's runtime tuple in the parse-cache and blob keys (the
-namespace carries the VAT version only).
+(`stored-admission.ts`) with no read, hash or parse; skill discovery and the skills phase are served
+from stored `skill_text` facts (`skill_text_facts`, `skill_text_matches`), which the markdown parse
+job computes beside the other markdown blob facts, with a per-file fallback that reads and scans a
+file the store does not serve, counted as `skillText.storeMiss`. Not built: the git-OID path
+(planned with incremental repopulation) and I2's runtime tuple in the parse-cache and blob keys (a
+published build's namespace carries the VAT version only).
 
 ## How this ADR changes
 

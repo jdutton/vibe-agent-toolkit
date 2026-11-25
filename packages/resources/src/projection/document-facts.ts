@@ -180,6 +180,8 @@ function unparsedFacts(keyed: KeyedContent): ParseResult {
     // counts as prose. That is the only thing that can honestly be said, and it
     // keeps `proseCodeUnits + codeBlockCodeUnits === content.length` true.
     contentMeasures: measureContent(keyed.content, []),
+    // No parser routes these bytes, and the skills lane scans only markdown-routed text.
+    skillText: null,
     content: keyed.content,
     sizeBytes: keyed.byteLength,
     estimatedTokenCount: estimateTokens(keyed.content),
@@ -201,10 +203,13 @@ export const NOT_TEXT_MESSAGE =
  * count of mojibake, and the blob lane stores none, so the one value both lanes can
  * agree on is the one that says nothing was read as text.
  */
-export const NOT_TEXT_RESOURCE_FACTS: Readonly<Pick<ParseResult, 'links' | 'headings' | 'estimatedTokenCount'>> = Object.freeze({
+export const NOT_TEXT_RESOURCE_FACTS: Readonly<Pick<ParseResult, 'links' | 'headings' | 'estimatedTokenCount' | 'skillText'>> = Object.freeze({
   links: [],
   headings: [],
   estimatedTokenCount: 0,
+  // Nothing was read as text, so there is no skill-text record: a lane that
+  // scans such a file scans it from its text, counted (`skillText.storeMiss`).
+  skillText: null,
 });
 
 /**

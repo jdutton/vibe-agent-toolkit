@@ -1,0 +1,114 @@
+### Breaking
+
+- **The projection has two new blob tables, `skill_text_facts` and `skill_text_matches`**: what the
+  skill validators matched in each markdown file. `vat resources query` and `check` can name them,
+  and the exported projection (`exportProjection`) and its JSON Schemas carry them. A consumer that
+  reads every table of an exported projection handles the two new keys. A record past 16,384
+  matches or 4 MiB is not held (`skill_text_facts.held` false, no match rows), and that file is
+  scanned from its text on every run, with findings unchanged; `skill_text_matches.loneSurrogates`
+  records the lone surrogates a match held, as `matchText` is stored well-formed.
+- **(library) `runCompatDetectors`, `collectUnqualifiedMcpToolIssues`,
+  `collectNonPortableAssetReferenceIssues` and `collectNonPortableCommandIssues`
+  (`@vibe-agent-toolkit/agent-skills`) take a file's skill-text record, not its text**;
+  `runCompatDetectors` also takes the file's parsed frontmatter. Compute the record with `skillTextFactsOf(text, SKILL_TEXT_DECLARATION)` from `@vibe-agent-toolkit/resources`.
+- **(library) `ValidateOptions.run` (`validateSkill`) is required and replaces `dispatcher`**: the
+  run whose store and dispatcher the validation reads through (a `RunPopulation` or
+  `RunSkillRegistries`), or `undefined` to validate with a dispatcher of its own and no store.
+- **(library) `ResourcePopulationSource` has a required `storedDocument(absolutePath, parserKind)`**;
+  a custom source with no store returns `undefined`. **`ResourcePopulationSource.holdsStore` and
+  `RunPopulationOptions.holdsStore` are required**: whether the run has a projection store to ask.
+  `scannedSkillText` and `linkedFileSkillText` take the `SkillTextRun` instead of its dispatcher. **`RunPopulationOptions.outputs` is required**:
+  the trees the run writes, `[]` for a run that writes none.
+- **(library) `RunPopulationOptions.questionCacheOf` is required**: the store as the run's
+  stored-document questions open it, or `undefined` with no store. A caller with no store passes
+  `() => Promise.resolve(undefined)`; one with a store passes a connection that does not wait on a
+  lock, as the CLI's `openQuestionCache` does.
+- **(library) `ParseResult.skillText` is required** (the record for markdown, `null` otherwise); a
+  value you construct adds it.
+- **(library) `BlobResourceFacts` (and so `StoredDocumentFacts.facts`) carries
+  `frontmatterNotAMapping`**: the parse's not-a-mapping verdict on the frontmatter block.
+
+### Added
+
+- **Skill discovery and skill validation read stored facts on a warm run**: with the projection
+  store on, `vat validate`, `vat verify`, `vat resources validate` and `vat skills validate`
+  take each `SKILL.md`'s name, frontmatter and links, and
+  every skill finding's input, from the store instead of reading and parsing the file. Findings are
+  unchanged. No action needed.
+- **`VAT_WORK_COUNTERS` dumps `skillText.storeMiss`**: each file per run that the skills lane scanned
+  from its text because the run's projection store did not serve it. On a cold run it equals the
+  files scanned; on a warm run it is the per-file fallback. A run with the store switched off counts
+  none.
+- **`VAT_WORK_COUNTERS` dumps `skillText.noStore`**: each file per run that the skills lane scanned
+  from its text because the run has no projection store to ask: `vat audit`, which opens none, or
+  the store switched off (`VAT_PROJECTION_STORE=off`, `VAT_CACHE=false`). A run counts its scans
+  under this or `skillText.storeMiss`, never both.
+- **`VAT_WORK_COUNTERS` dumps `skillText.storeUnopened`**: once per run, when the skills lane's
+  optional stored-document question was what opened the projection store or built the home
+  population, and that failed with an expected failure (a read-only `VAT_CACHE_DIR`, another
+  process holding the store's lock, git giving no answer for the root); any other failure refuses
+  the run. That question now answers nothing
+  and the lane reads each file itself, so a verb that never enumerates its home, such as
+  `vat verify` on a project whose skills are all plugin-local, no longer refuses with exit 2. A verb
+  that enumerates its home still refuses as before.
+- **`VAT_WORK_COUNTERS` dumps `skillText.outsideRoot`**: each file per run the skills lane asked the
+  store about that lies outside the run's root, answered without opening the store.
+- **`skill_text_facts.frontmatterFence` (`none`, `unclosed`, `closed`)**, with the same
+  `frontmatterFence` field on the skill-text record (`SkillTextFacts`, `ParseResult.skillText`):
+  where the skill frontmatter fence rule finds a document's fences, so a store-served `SKILL.md`'s
+  frontmatter refusal is worded with no read of the file.
+- **(library) `StoreQuestionUnavailableError` on `@vibe-agent-toolkit/resources`** (code
+  `PROJECTION_STORE_QUESTION_UNAVAILABLE`): what a `RunPopulationOptions.questionCacheOf`
+  implementation throws around a store failure the stored-document question expects (another
+  process's lock, a read-only cache or filesystem); the question answers nothing for it and refuses
+  on any other failure. **`isStoreUnavailableNow(error)` on `@vibe-agent-toolkit/projection-sqlite`**: true when
+  SQLite reports the store contended (`SQLITE_BUSY`, `SQLITE_LOCKED`), read-only
+  (`SQLITE_READONLY`) or unopenable here (`SQLITE_CANTOPEN`: a read-only directory with no
+  database file yet) anywhere in the cause chain. **`isReadOnlyFilesystemError(error)` on
+  `@vibe-agent-toolkit/utils`**: the single-errno question for `EROFS`, which the errno table classes
+  `unsupported` beside faults that are defects.
+- **(library) The skill-text core on `@vibe-agent-toolkit/resources`**: `skillTextFactsOf`,
+  `SKILL_TEXT_DECLARATION`, `skillTextDeclarationDigest`, `SkillTextFactsSchema`,
+  `SKILL_TEXT_FAMILY_PATTERNS`, `EXTERNAL_CLI_BINARIES`, `frontmatterFencesOf`, the
+  `StoredDocumentFacts`, `SkillTextFactsRow`, `SkillTextMatchRow` and `FrontmatterFence` types and
+  the record types,
+  `SKILL_TEXT_HELD_LIMITS` and `DEFAULT_PARSE_LIMITS` (the default parse caps, frozen); on
+  `@vibe-agent-toolkit/agent-skills`, `readSkillDocument`, `skillNameOf`, `withSkillTextRun` and
+  `SkillTextRun`; on `@vibe-agent-toolkit/utils/testing`, `seededRandom`.
+
+### Changed
+
+- **The skills lane's store lookups never wait on another process**: when another `vat` holds the
+  projection store's lock, the lookup answers nothing at once and the file is read instead, where it
+  used to wait up to the store's busy timeout. The lookup's connection discards a damaged
+  `projection.db` with the same notice as the run's own, and closes the same way. A skill outside the project the command runs in (a
+  `vat skill review` of a directory elsewhere) is read directly, without crawling that project.
+  Findings are unchanged.
+- **A frontmatter block whose lines end in a lone CR or CRLF decodes as the same block with LF
+  endings in skill discovery, `validateSkill` and packaging** (`parseFrontmatterSource`). The
+  frontmatter editor and the Claude memory reader keep their own fence handling. The
+  whole-document parse used to call a
+  lone-CR block invalid YAML, while `validateSkill` read the same file as valid. So discovery named
+  such a skill from its H1, and packaging reported SKILL_MISSING_FRONTMATTER, where `validateSkill`
+  accepted it. All three now agree with `validateSkill`.
+- **`validateSkill` reads its SKILL.md once per validation**, through the same document mapping
+  that discovery and the packaging lane use. On a store-served SKILL.md it words every frontmatter
+  refusal (no opening fence, no closing fence, empty, invalid YAML, not a mapping) from stored
+  facts, with no read of the file. `vat verify` no longer reads and keys each built SKILL.md twice.
+- **When the parse of a SKILL.md is refused (a limit, a dead worker), `validateSkill` reports that
+  refusal as its only issue**, as the packaging lane does. Before, it read the frontmatter block
+  alone and then reported the refusal from the link walk, beside findings made from the frontmatter.
+- **On Windows, a process-tree kill runs `taskkill` by its absolute path** under
+  `%SystemRoot%\System32`, never through `PATH`, and refuses with an error naming `SystemRoot` when
+  that variable is missing.
+- **The parse cache and the projection store start cold once after upgrading**: both hold the new
+  skill-text facts. No action needed.
+- **Some runs still scan skill text themselves (time only; findings are unchanged)**: `vat audit`,
+  the marketplace compatibility analyzer and `vat claude org` open no store and scan every file they
+  check, and `vat audit`'s packaging lane rebuilds each bundled markdown file's skill-text record on
+  the main thread though the crawl's parse already computed one in the worker (the SKILL.md is no
+  longer computed twice); on a cold run with the store on, the skills lane scans each bundled markdown file though its
+  parse already computed the same facts; a warm run reads and scans a linked file that is not
+  plain UTF-8 (a BOM, UTF-16) itself, as its findings come from the raw reading; a warm
+  `vat claude plugin build` still reads and scans some of the skills it packages; and
+  `vat skills package` and `vat skill test run` can enumerate the project a second time.

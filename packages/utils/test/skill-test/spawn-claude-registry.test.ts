@@ -24,6 +24,7 @@ vi.mock('node:child_process', () => ({
 }));
 
 const { killAllActiveClaudeChildren, spawnHeadlessClaude } = await import('../../src/skill-test/spawn-claude.js');
+const { windowsTaskkillPath } = await import('../../src/kill-process-tree.js');
 const { parseStreamJsonTranscript } = await import('../../src/skill-test/transcript.js');
 
 /** Minimal fake ChildProcess: an EventEmitter with the stdio surface spawnHeadlessClaude touches. */
@@ -92,7 +93,7 @@ describe('active-children registry (spawn-claude)', () => {
     // shells out to `taskkill /T /F` over the tree. Assert whichever this host uses
     // so the registry behavior is verified on every platform (not skipped on Windows).
     if (process.platform === 'win32') {
-      expect(spawnSync).toHaveBeenCalledWith('taskkill', ['/pid', '4321', '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      expect(spawnSync).toHaveBeenCalledWith(windowsTaskkillPath(process.env), ['/pid', '4321', '/T', '/F'], { stdio: 'ignore', windowsHide: true });
     } else {
       expect(killSpy).toHaveBeenCalledWith(-4321, 'SIGKILL');
     }

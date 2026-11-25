@@ -10,7 +10,7 @@
  * 1. Every `base` contributor runs **once**. What git tracks, what is on disk,
  *    what a package manifest declares — none of it depends on what another
  *    contributor found, so a second pass could only re-derive the same rows.
- * 2. {@link populateBlobs} derives the four blob-keyed tables from the content
+ * 2. {@link populateBlobs} derives the blob-keyed tables from the content
  *    keys the base recorded. Not a contributor — it declares no extent — but
  *    the position is forced: the base is what produces `contentKey` columns and
  *    the closure stratum is what *reads* `blob_references`. Without it every
@@ -65,6 +65,7 @@ import {
   CRAWL_STORE_READ_ID,
   CRAWL_STORE_WRITE_ID,
   crawlTimingStart,
+  deepFreeze,
   forEachInOrder,
   recordContributorInvocation,
   recordCrawlPass,
@@ -112,9 +113,13 @@ import {
   type RequestedContributor,
 } from './store-hydration.js';
 import {
+  ALL_BLOB_REQUEST,
+  ALL_EXTENT_REQUEST,
   splitProjectionByScope,
   type ExtentKey,
+  type ExtentRequest,
   type ExtentScopedRows,
+  type ExtentScopedTableName,
   type FactStore,
 } from './store.js';
 import { readBlobTier } from './stored-admission.js';
@@ -159,13 +164,13 @@ const BASE_STRATUM_PASS = 1;
 const DEFAULT_MAX_ITERATIONS = 8;
 
 /**
- * Parse the content of every distinct keyed path, deriving the four blob-keyed
+ * Parse the content of every distinct keyed path, deriving the blob-keyed
  * tables from it — {@link PopulateOptions.contentParsing}'s default.
  */
 export const CONTENT_PARSING_DERIVE = 'derive';
 
 /**
- * Read and parse nothing, leaving the four blob-keyed tables empty — only sound
+ * Read and parse nothing, leaving the blob-keyed tables empty — only sound
  * when nothing reads them.
  */
 export const CONTENT_PARSING_SKIP = 'skip';
@@ -219,8 +224,9 @@ export interface PopulateOptions {
    * ## What is and is not gated
    *
    * Gated: the blob-derivation stage — one read-and-parse of **every distinct
-   * keyed path**, and the four blob-keyed tables (`blobs`, `blob_references`,
-   * `blob_sections`, `blob_conditions`) derived from it; the store's blob tier
+   * keyed path**, and the blob-keyed tables (`blobs`, `blob_references`,
+   * `blob_sections`, `blob_conditions`, `skill_text_facts`, `skill_text_matches`)
+   * derived from it; the store's blob tier
    * on both the read-back and write-back paths; and the post-fixpoint re-run
    * that would pick up a demand promotion.
    *
@@ -246,7 +252,7 @@ export interface PopulateOptions {
    * can see which registered contributors read them
    * ({@link ContributorRegistry.blobReaders}); it cannot see what the CALLER
    * does with the returned `Projection`. Inferring `'skip'` from "no registered
-   * blob reader" would silently empty four tables under a caller that queries
+   * blob reader" would silently empty those tables under a caller that queries
    * them — token estimates and section trees are exactly the sort of thing a
    * lens reads with no contributor involved.
    *
@@ -965,22 +971,28 @@ async function readCachedProjection(
   const cache = options.cache;
   if (cache === undefined) return NOTHING_HELD;
 
+  // Every table and both reconstruction steps: the projection is assembled
+  // from all of them, where membership reads three.
   const extent = await readStoredExtent(
     options,
     rootId,
     routing,
     requestedContributors(options),
+    ALL_EXTENT_REQUEST,
   );
   if (extent === undefined) return NOTHING_HELD;
 
   // A run that declined to derive the blob tier must also decline to read it
-  // back, or a hit would hand it four tables a populate would have left empty
+  // back, or a hit would hand it blob tables a populate would have left empty
   // — and `'skip'` is a claim about what the caller reads, so honouring it on
   // both paths is what keeps hydrated and populated indistinguishable.
   if (!parseContent) return { hit: assembleProjection(extent, emptyBlobRows()) };
 
   const contentKeys = keyedContentKeys(extent);
-  const blobs = await readBlobTier(cache.store, contentKeys);
+  // Every table and every form: the projection serves the lexical references
+  // (edge lenses, claude context, SQL) and the harness tables, which the stored
+  // admission's narrower read leaves out.
+  const blobs = await readBlobTier(cache.store, contentKeys, ALL_BLOB_REQUEST);
   // See `store-hydration.ts`: an extent written by a run that skipped blob
   // derivation names keys the blob tier does not hold, and accepting it would
   // reduce every closure extent to its own root while reporting success.
@@ -1006,31 +1018,41 @@ async function readCachedProjection(
  * tables, and a caller asking only *which paths are in this tree* has no use
  * for it and should not pay a `readBlobFacts`.
  *
+ * It restricts nothing itself: each caller states the tables and steps it
+ * reads (see {@link MEMBERSHIP_EXTENT_REQUEST}), and every request carries the
+ * three the reuse rule and the staleness gates read here
+ * ({@link StoredExtentGateTable}).
+ *
  * @param options - The run's options, including its cache
  * @param rootId - This run's corpus root id
  * @param routing - The run's parse routing, whose fingerprint is part of the key
  * @param requested - The contributors whose provenance the store must hold
- * @returns The stored rows narrowed to those contributors' contexts, or
- *   `undefined` on any kind of miss
+ * @param request - The tables to read and the reconstruction steps to run
+ * @returns The stored rows narrowed to those contributors' contexts, in the
+ *   requested tables, or `undefined` on any kind of miss
  */
-async function readStoredExtent(
+async function readStoredExtent<Table extends ExtentScopedTableName>(
   options: PopulateOptions,
   rootId: string,
   routing: CollectionMimeResolver,
   requested: readonly RequestedContributor[],
-): Promise<ExtentScopedRows | undefined> {
+  request: ExtentRequest<Table> & ([StoredExtentGateTable] extends [Table] ? unknown : never),
+): Promise<Pick<ExtentScopedRows, Table | StoredExtentGateTable> | undefined> {
   const cache = options.cache;
   if (cache === undefined) return undefined;
 
   const startedAt = crawlTimingStart();
   try {
-    const stored = await cache.store.readExtent(storeKeyFor(options, rootId, cache, routing));
+    // The gate tables are in every request (the parameter's type refuses one
+    // without them), which the compiler cannot carry through the generic.
+    const read = request as unknown as ExtentRequest<Table | StoredExtentGateTable>;
+    const stored = await cache.store.readExtent(storeKeyFor(options, rootId, cache, routing), read);
     if (stored === undefined) return undefined;
 
     const contexts = selectRequestedContexts(stored, requested);
     if (contexts === undefined) return undefined;
 
-    const extent = selectRequestedRows(stored, { contexts, rootId });
+    const extent = selectRequestedRows(stored, read, { contexts, rootId });
     // A stored extent enumerated AROUND a directory it could not list is a hit
     // only while that directory still cannot be listed. The key cannot tell —
     // an ignored directory's mode bit is in no tree hash — so the rows say
@@ -1052,6 +1074,26 @@ async function readStoredExtent(
     recordCrawlPass(CRAWL_STORE_READ_ID, 'base', BASE_STRATUM_PASS, startedAt);
   }
 }
+
+/**
+ * The extent tables {@link readStoredExtent} itself reads: `zoneProvenance`
+ * (the reuse rule, `selectRequestedContexts`), and `realizationConditions` and
+ * `resourceRealizations` (the unlistable and declined-link staleness gates).
+ */
+type StoredExtentGateTable = 'zoneProvenance' | 'realizationConditions' | 'resourceRealizations';
+
+/**
+ * What {@link readStoredMembership} reads of a stored extent: the realization
+ * and condition rows it answers with, and the provenance rows the reuse rule
+ * selects their contexts by. No reconstruction step: membership reads no
+ * identity table and no root, so the context-less tables and the two tables
+ * only the steps read (`resourceExtents`, `resolutionContexts`) are never
+ * decoded. A projection hit reads {@link ALL_EXTENT_REQUEST}. Frozen: every caller shares it.
+ */
+export const MEMBERSHIP_EXTENT_REQUEST: ExtentRequest<StoredExtentGateTable> = deepFreeze({
+  tables: ['resourceRealizations', 'realizationConditions', 'zoneProvenance'],
+  steps: [],
+});
 
 /**
  * A tree's membership as the store holds it: the realization and condition rows
@@ -1120,7 +1162,7 @@ export async function readStoredMembership(
   // read, and the conflicts it would accumulate belong to the run's own
   // instance, which `populate` builds for itself.
   const routing = createCollectionMimeResolver(options.collections);
-  const extent = await readStoredExtent(options, rootIdFor(options.root), routing, requested);
+  const extent = await readStoredExtent(options, rootIdFor(options.root), routing, requested, MEMBERSHIP_EXTENT_REQUEST);
   if (extent === undefined) return undefined;
   countWork('extent.served', 1);
   return {
@@ -1162,7 +1204,7 @@ function unlistableRowsStillHold(conditions: readonly RealizationConditionRow[],
  * fails the coverage check, and re-derives a corpus that was moments from being
  * complete.
  *
- * `writeBlobFacts` is skipped rather than called with four empty tables when the
+ * `writeBlobFacts` is skipped rather than called with every table empty when the
  * run derived none — the call would be a no-op, but skipping it keeps "this run
  * had nothing to say about blobs" distinguishable from "it said there are none"
  * in anything that watches the store.

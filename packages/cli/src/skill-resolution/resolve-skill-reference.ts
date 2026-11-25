@@ -108,7 +108,7 @@ async function loadDeclaredSkillScope(absPath: string): Promise<DeclaredSkillSco
   // `'refuse'`: a reference resolved against a partial declared list can land
   // on `not-found` for a skill that exists. The throw propagates to the
   // command (`vat skill test` wraps it as `SkillBuildError`, named).
-  const byPath = await getDiscoveredSkillsByPath(config.skills, configRoot, 'refuse');
+  const byPath = await getDiscoveredSkillsByPath(config.skills, configRoot, 'refuse', undefined);
   let pluginLocal: PluginLocalSkillIndex | undefined;
   return { configRoot, byPath, pluginLocal: () => (pluginLocal ??= indexPluginLocalSkills(config, configRoot)) };
 }
@@ -258,7 +258,7 @@ export function resolveSkillReference(ref: string, cwd: string): Promise<SkillRe
 }
 
 async function buildBuildable(name: string, sourcePath: string, scope: DeclaredSkillScope): Promise<BuildableReference> {
-  const packagingConfig = (await resolveSkillPackagingConfig(sourcePath, 'refuse')) ?? {};
+  const packagingConfig = (await resolveSkillPackagingConfig(sourcePath, 'refuse', undefined)) ?? {};
   const { distribution, expectedDistDir } = computeSkillDistribution(name, sourcePath, scope);
   return { kind: 'buildable', name, sourcePath, configRoot: scope.configRoot, packagingConfig, distribution, expectedDistDir };
 }

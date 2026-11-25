@@ -9,55 +9,36 @@
  * Plugin-dev's "Mistake 3: Second Person Writing" identifies imperative
  * form as more agent-readable. Heuristic; ships at info to gather corpus
  * signal before any promotion.
+ *
+ * The text half (the targeted modals only — not "are" or "did", so it matches
+ * instructional constructions, not factual ones — outside fences and quotes,
+ * over the frontmatter parser's body) is the skill-text core's
+ * `imperativeBody` family in `@vibe-agent-toolkit/resources`.
  */
 
+import type { SkillTextFacts } from '@vibe-agent-toolkit/resources';
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
-
-// Targeted modals only — excludes "are" and "did" so we match instructional
-// constructions, not factual ones.
-const SECOND_PERSON_OPENER_RE = /^You\s+(should|can|need|must|will|may)\b/i;
-
-const FENCE_RE = /^\s*```/;
-const QUOTE_RE = /^\s*>/;
+import { recordsOf } from './skill-text-records.js';
 
 /**
- * @param body - SKILL.md body (frontmatter stripped).
+ * @param facts - The SKILL.md's skill-text record; its `imperativeBody`
+ *   records are over the body (frontmatter stripped), with body-relative lines.
  * @param location - Project-relative POSIX path of the file, per the
  *   `ValidationIssue` anchor contract. Build it with `issueLocation()`.
  */
 export function detectNonImperativeBody(
-  body: string,
+  facts: SkillTextFacts,
   location: string,
 ): ValidationIssue[] {
-  const issues: ValidationIssue[] = [];
   const entry = CODE_REGISTRY.SKILL_BODY_NOT_IMPERATIVE;
-
-  let inFence = false;
-  const lines = body.split('\n');
-  for (const [idx, line] of lines.entries()) {
-    if (FENCE_RE.test(line)) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) continue;
-    if (QUOTE_RE.test(line)) continue;
-
-    const match = SECOND_PERSON_OPENER_RE.exec(line);
-    if (match) {
-      const lineNumber = idx + 1;
-      const sample = line.slice(0, 80);
-      issues.push({
-        severity: entry.defaultSeverity,
-        code: 'SKILL_BODY_NOT_IMPERATIVE',
-        message: `Second-person opener "${sample.trim()}" — prefer imperative form (e.g. "Configure…").`,
-        location,
-        line: lineNumber,
-        fix: entry.fix,
-        reference: entry.reference,
-      });
-    }
-  }
-
-  return issues;
+  return recordsOf(facts, 'imperativeBody').map(({ line, matchText: sample }) => ({
+    severity: entry.defaultSeverity,
+    code: 'SKILL_BODY_NOT_IMPERATIVE',
+    message: `Second-person opener "${sample.trim()}" — prefer imperative form (e.g. "Configure…").`,
+    location,
+    line,
+    fix: entry.fix,
+    reference: entry.reference,
+  }));
 }

@@ -30,13 +30,17 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 
 import { openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import {
+  ALL_BLOB_REQUEST,
   BLOB_FACT_FIELDS,
   blobFactsReader,
   buildResourceProjection,
   flattenHeadings,
   RESOURCE_LINK_FACT_SOURCES,
+  SKILL_TEXT_DECLARATION,
+  skillTextFactsOf,
   type BlobFactsOutcome,
   type BlobScopedRows,
+  IGNORE_HOME_SETTLEMENT,
   type FactStore,
   type ResourceLink,
   type ResourceMetadata,
@@ -76,6 +80,14 @@ function conditionsOf(rows: BlobScopedRows, code: string): BlobScopedRows['blobC
 
 /** One fixture file per fidelity case; the name is the case. */
 const FIXTURE: Readonly<Record<string, FidelityCase>> = {
+  // A skill-text match cut inside a surrogate pair: the imperative sample's 80th code unit is an
+  // emoji's high surrogate, which SQLite's UTF-8 TEXT cannot hold on its own.
+  'skill-text-split-sample.md': {
+    content: `---\nname: s\n---\n# S\n\nYou should ${'a'.repeat(68)}\u{1F600} tail\n`,
+    precondition: ({ rows }) => {
+      expect(rows.skillTextMatches.some((row) => row.loneSurrogates !== null)).toBe(true);
+    },
+  },
   'baseline.md': {
     content: '---\ntitle: Baseline\n---\n# Baseline\n\nSee [the guide](./f5-parser-order.md#usage).\n',
     precondition: ({ resource }) => {
@@ -226,6 +238,8 @@ function rowsOfKey(key: string, stored: BlobScopedRows): BlobScopedRows {
     blobConditions: stored.blobConditions.filter((row) => row.blob === key),
     harnessBlobFacts: stored.harnessBlobFacts.filter((row) => row.blob === key),
     harnessBlobImports: stored.harnessBlobImports.filter((row) => row.blob === key),
+    skillTextFacts: stored.skillTextFacts.filter((row) => row.blob === key),
+    skillTextMatches: stored.skillTextMatches.filter((row) => row.blob === key),
   };
 }
 
@@ -257,26 +271,31 @@ beforeAll(async () => {
   // A second connection, so every fact comes back through SQLite rather than a handle's memory.
   const reader: FactStore = openSqliteFactStore({ directory: storeDirectory });
   try {
-    const stored = await reader.readBlobFacts([...new Set(keyOf.values())]);
+    const stored = await reader.readBlobFacts([...new Set(keyOf.values())], ALL_BLOB_REQUEST);
     const facts = blobFactsReader(stored);
     const keyAt = (relativePath: string): string => {
       const key = keyOf.get(relativePath);
       if (key === undefined) throw new Error(`the projection keyed no realization at ${relativePath}`);
       return key;
     };
-    read = (relativePath) => facts(keyAt(relativePath));
+    read = (relativePath) => facts.outcome(keyAt(relativePath));
     storedOf = (relativePath) => rowsOfKey(keyAt(relativePath), stored);
   } finally {
     await reader.close();
   }
 
   // The cold lane: the registry, crawled through a run with no store.
+  const noStore = (): Promise<undefined> => Promise.resolve(undefined);
   cold = await withRunPopulation(
     {
       root,
+      outputs: [],
       gitTracker: new GitTracker(root),
-      cacheOf: () => Promise.resolve(undefined),
-      collectionsFor: () => Promise.resolve(undefined),
+      cacheOf: noStore,
+      questionCacheOf: noStore,
+      holdsStore: false,
+      collectionsFor: noStore,
+      onHomeSettled: IGNORE_HOME_SETTLEMENT,
     },
     async (population) => {
       const registry = new ResourceRegistry({ baseDir: root });
@@ -315,6 +334,15 @@ function coldFacts(resource: ResourceMetadata): Record<string, unknown> {
   }
   return facts;
 }
+
+describe('skill-text round trip: the core\'s record over the text === the record read back through SQLite', () => {
+  const markdown = Object.entries(FIXTURE).filter(([name, { content }]) => name.endsWith('.md') && typeof content === 'string');
+
+  it.each(markdown)('%s', (name, { content }) => {
+    const outcome = read(name);
+    expect(outcome.kind === 'facts' && outcome.facts.skillText).toStrictEqual(skillTextFactsOf(content as string, SKILL_TEXT_DECLARATION));
+  });
+});
 
 describe('blob facts round trip: cold registry === one fact reader over the stored rows', () => {
   it('the fixture exercises every case: one cold resource per fixture file', () => {

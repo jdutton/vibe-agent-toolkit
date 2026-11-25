@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { direntKindFollowingSync, isPathAbsentError, isSingleFsSegment, safePath, appendAll } from '@vibe-agent-toolkit/utils';
-import { CommandExecutionError, safeExecResult, safeExecSync } from '@vibe-agent-toolkit/utils/process';
+import { CommandExecutionError, safeExecSync } from '@vibe-agent-toolkit/utils/process';
 
 export { safeExecSync, safeExecResult } from '@vibe-agent-toolkit/utils/process';
 
@@ -154,22 +154,6 @@ export type Color = keyof typeof colors;
  */
 export function log(message: string, color: Color = 'reset'): void {
   console.log(`${colors[color]}${message}${colors.reset}`);
-}
-
-/**
- * Get the version of a package for a specific npm dist-tag
- */
-export function getNpmTagVersion(packageName: string, tag: string): string | null {
-  const result = safeExecResult('npm', ['view', `${packageName}@${tag}`, 'version'], {
-    encoding: 'utf8',
-    stdio: 'pipe',
-  });
-
-  if (result.success && result.stdout) {
-    return result.stdout.toString().trim();
-  }
-
-  return null;
 }
 
 /**

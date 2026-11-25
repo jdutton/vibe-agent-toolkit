@@ -105,6 +105,7 @@ export {
   isNotARegularFileError,
   isPathAbsentError,
   isProcessGoneError,
+  isReadOnlyFilesystemError,
   isRenameContentionError,
   isSymlinkUnsupportedError,
   isTimedOutError,
@@ -323,6 +324,8 @@ export { compareCodeUnits } from './compare-code-units.js';
 // A value shared by reference between readers: a write anywhere inside it throws.
 export { deepFreeze } from './deep-freeze.js';
 
+export { memoized } from './memoized.js';
+
 // The crawl-timing seam: which contributor, stratum and fixpoint pass owns the
 // time it takes to FIND documents.
 //
@@ -371,11 +374,14 @@ export {
 // work, always on, dumped per process when `VAT_WORK_COUNTERS` names a
 // directory. Here, at the bottom of the graph, because `git-run.ts` and
 // `git-snapshot.ts` count, and every package above counts through the same
-// slots. The three `__*ForTest` seams are on `./testing`.
+// slots. The three `__*ForTest` seams are on `./testing`. A git process is counted only by
+// `countGitSpawn`, which names it in the run's git spawn log (`VAT_GIT_SPAWNS`); the two spawn
+// sites are in this package, so it is not exported.
 export {
   countWork,
   forbiddenWorkCountPolicy,
   forbidWorkCounting,
+  GIT_SPAWNS_ENV,
   installWorkCounterDump,
   readWorkCounters,
   WORK_COUNTER_NAMES,
@@ -383,6 +389,9 @@ export {
   WORK_COUNTERS_ENV,
   withWorkPhase,
   type ForbiddenWorkCountPolicy,
+  type GitSpawn,
+  type GitSpawnDump,
+  type LoggedGitSpawn,
   type WorkCounter,
   type WorkCounterDump,
   type WorkCounterRole,

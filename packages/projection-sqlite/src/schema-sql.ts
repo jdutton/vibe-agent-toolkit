@@ -458,6 +458,26 @@ export function selectBlobFactsSql(spec: StoredTableSpec, keyCount: number): str
 }
 
 /**
+ * The `SELECT` that reads one blob-scoped table back for a set of content keys,
+ * keeping only the rows whose `column` holds one of `valueCount` bound values
+ * (bound after the keys).
+ *
+ * @param spec - A blob-scoped table's registry entry
+ * @param keyCount - How many content keys the statement should accept
+ * @param column - The column the values filter on
+ * @param valueCount - How many values the statement should accept
+ * @returns A `SELECT … WHERE <key column> IN (?, …) AND <column> IN (?, …)` statement
+ * @throws RangeError When `keyCount` or `valueCount` is not a positive integer
+ */
+export function selectBlobFactsWhereSql(spec: StoredTableSpec, keyCount: number, column: string, valueCount: number): string {
+  if (!Number.isInteger(valueCount) || valueCount < 1) {
+    throw new RangeError(`A filtered blob-fact statement needs at least one value, got ${valueCount}`);
+  }
+  const placeholders = Array.from({ length: valueCount }, () => '?').join(', ');
+  return `${selectBlobFactsSql(spec, keyCount)} AND ${quoteIdentifier(column)} IN (${placeholders})`;
+}
+
+/**
  * The `DELETE` that removes one blob-scoped table's rows for a set of content keys.
  *
  * @param spec - A blob-scoped table's registry entry

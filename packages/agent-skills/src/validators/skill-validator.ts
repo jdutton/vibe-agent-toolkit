@@ -6,13 +6,8 @@ import {
   isLocalFileLink,
   type NotAdmittedRoots,
   partitionNotAdmitted,
-  parseFileCached,
-  type ParseDispatcher,
-  readContentForParse,
   resolveLocalHref,
   type LinkType,
-  type MeasuredContent,
-  withParseDispatcher,
 } from '@vibe-agent-toolkit/resources';
 import {
   anchoredAt,
@@ -40,7 +35,8 @@ import {
 
 import type { EvidenceRecord } from '../evidence/index.js';
 import { parseRefusalIssue } from '../parse-refusal-issues.js';
-import { parseFrontmatter } from '../parsers/frontmatter-parser.js';
+import { frontmatterVerdictOf } from '../parsers/frontmatter-parser.js';
+import { linkedFileSkillText, readSkillDocument, type SkillDocument, type SkillTextRun, withSkillTextRun } from '../skill-text-lane.js';
 
 import { detectBundledResourceWithoutLinks } from './bundled-resource-link-detection.js';
 import { observationToIssue, runCompatDetectors } from './compat-detectors.js';
@@ -64,19 +60,45 @@ import { isNeverPackagedBasename } from './validation-rules.js';
  * @returns Validation result with all validation issues
  */
 export function validateSkill(options: ValidateOptions): Promise<ValidationResult> {
-  // One dispatcher for every parse this validation makes — the frontmatter and
-  // the whole link walk — or the run's, when the caller holds one.
-  return withParseDispatcher((dispatcher) => validateSkillOn(options, dispatcher), { dispatcher: options.dispatcher });
+  // One run for every read this validation makes — the SKILL.md and the whole
+  // link walk — the caller's when it holds one.
+  return withSkillTextRun((run) => validateSkillOn(options, run), options.run);
 }
 
 /**
- * {@link validateSkill}, on a dispatcher.
+ * The SKILL.md's document for {@link validateSkillOn}, read once for the whole
+ * validation (its frontmatter, its record and the link walk's root): the run's
+ * store's facts when it serves the file, else its bounded read and parse. A
+ * refusal of the read or the parse (a limit, a dead worker) is the result's one
+ * issue; any other failure propagates.
+ *
+ * @param skillPath - The SKILL.md
+ * @param run - The run
+ * @param where - The caller's side, and the root the refusal's location is relative to
+ * @returns The document, or the refusal
+ */
+async function readRootDocument(
+  skillPath: string,
+  run: SkillTextRun,
+  where: { readonly side: ValidateOptions['side']; readonly locationRoot: string },
+): Promise<{ readonly document: SkillDocument } | { readonly refused: ValidationIssue }> {
+  try {
+    return { document: await readSkillDocument(skillPath, run, where.side) };
+  } catch (error) {
+    const refused = parseRefusalIssue(error, skillPath, where.locationRoot);
+    if (refused === undefined) throw error;
+    return { refused };
+  }
+}
+
+/**
+ * {@link validateSkill}, on a run.
  *
  * @param options - Validation options
- * @param dispatcher - Where every parse runs
+ * @param run - Where every read and parse goes
  * @returns Validation result with all validation issues
  */
-async function validateSkillOn(options: ValidateOptions, dispatcher: ParseDispatcher): Promise<ValidationResult> {
+async function validateSkillOn(options: ValidateOptions, run: SkillTextRun): Promise<ValidationResult> {
   const { skillPath } = options;
 
   // Root every emitted location is relative to. A batching caller supplies its
@@ -108,27 +130,16 @@ async function validateSkillOn(options: ValidateOptions, dispatcher: ParseDispat
     return buildResult(skillPath, issues, policy);
   }
 
-  // Read file — held to the parse input cap by its size before it is read, as every lane that
-  // parses it is: past the cap, the limit, never a frontmatter parse of the block at its top.
-  let read: MeasuredContent;
-  try {
-    read = await readContentForParse(skillPath, 'markdown', { dispatcher });
-  } catch (error) {
-    const refused = parseRefusalIssue(error, skillPath, locationRoot);
-    if (refused === undefined) throw error;
-    issues.push(refused);
-    return buildResult(skillPath, issues, policy);
-  }
-  const { content } = read;
-  const lineCount = content.split('\n').length;
-
-  // Parse frontmatter
-  const parseResult = await parseFrontmatter(read, { dispatcher });
+  const read = await readRootDocument(skillPath, run, { side: options.side, locationRoot });
+  if ('refused' in read) return buildResult(skillPath, [read.refused], policy);
+  const { document } = read;
+  const { skillText } = document;
+  const lineCount = skillText.lineCount;
+  // Worded from the document's facts, never a second read of the file.
+  const parseResult = frontmatterVerdictOf(skillText.frontmatterFence, document);
 
   if (!parseResult.success) {
-    // Frontmatter the worker refused (a limit, a dead worker) is there, and is
-    // the author's to simplify: the parse limit, never "add the frontmatter you have".
-    issues.push(parseRefusalIssue(parseResult.cause, skillPath, locationRoot) ?? {
+    issues.push({
       severity: 'error',
       code: 'SKILL_MISSING_FRONTMATTER',
       message: parseResult.error,
@@ -162,17 +173,17 @@ async function validateSkillOn(options: ValidateOptions, dispatcher: ParseDispat
   appendAll(issues, [
     ...validateFrontmatterSchema(frontmatter, skillLocation),
     ...validateFrontmatterRules(frontmatter, skillLocation),
-    ...detectUndeclaredCrossSkillAuth(frontmatter, parseResult.body, skillLocation),
-    ...detectNonImperativeBody(parseResult.body, skillLocation),
+    ...detectUndeclaredCrossSkillAuth(frontmatter, skillText, 'crossSkillAuthBody', skillLocation),
+    ...detectNonImperativeBody(skillText, skillLocation),
   ]);
 
   // Validate warning-level rules (skill-specific)
-  validateWarningRules(content, lineCount, skillLocation, issues);
+  validateWarningRules(lineCount, skillLocation, issues);
 
   // Compat capability detection: collect raw evidence, derive observations,
   // surface each observation as an issue (severity comes from CODE_REGISTRY).
   const { evidence: rootEvidence, observations: rootObservations } =
-    runCompatDetectors(content, skillPath, locationRoot, frontmatter);
+    runCompatDetectors(skillText, skillPath, locationRoot, frontmatter);
   appendAll(allEvidence, rootEvidence);
   for (const obs of rootObservations) {
     issues.push(observationToIssue(obs, skillLocation));
@@ -190,22 +201,17 @@ async function validateSkillOn(options: ValidateOptions, dispatcher: ParseDispat
   // detector. The command now reproduces the number the docs quote. See the
   // sibling call in the linked-file walk below, and the two in
   // packaging-validator.ts that this pair mirrors.
-  collectUnqualifiedMcpToolIssues(content, skillLocation, issues);
+  collectUnqualifiedMcpToolIssues(skillText, skillLocation, issues);
 
   // Transitive link traversal (BFS)
   const skillDir = options.rootDir ?? dirname(skillPath);
-  const linkedFiles = await traverseLinks(skillPath, skillDir, locationRoot, issues, allEvidence, dispatcher);
+  const linkedFiles = await traverseLinks(document, skillPath, skillDir, { locationRoot, side: options.side }, issues, allEvidence, run);
 
   // Bundled-resource link detection — fires after link traversal so the
   // linkedFiles set reflects everything reachable from SKILL.md.
-  const bundledResourceIssues = detectBundledResourceWithoutLinks(
-    content,
-    skillDir,
-    linkedFiles.map((lf) => lf.path),
-    locationRoot,
-    options.side,
-  );
-  appendAll(issues, bundledResourceIssues);
+  const bundled = await bundledResourceIssues(document.text, skillDir, linkedFiles, { locationRoot, side: options.side, skillPath });
+  if ('refused' in bundled) return buildResult(skillPath, [bundled.refused], policy);
+  appendAll(issues, bundled.issues);
 
   // Unreferenced file detection
   if (options.checkUnreferencedFiles) {
@@ -232,6 +238,36 @@ async function validateSkillOn(options: ValidateOptions, dispatcher: ParseDispat
   return result;
 }
 
+
+/**
+ * {@link detectBundledResourceWithoutLinks} for {@link validateSkillOn}. Only a
+ * store-served SKILL.md's body is read here, and the parse limit refuses that
+ * read only when the file grew past the cap during the run (after the store's
+ * record of it). The refusal is then the result's ONE finding (`refused`): the
+ * caller returns it alone, as the cold path returns its own first read's
+ * refusal, before any finding made from the stored facts. Any other failure
+ * propagates.
+ *
+ * @param readBody - The SKILL.md's text, read lazily
+ * @param skillDir - The skill directory
+ * @param linkedFiles - What the link walk reached
+ * @param where - Where findings are located, the caller's side, and the SKILL.md
+ * @returns The findings, or the refusal that replaces every finding
+ */
+async function bundledResourceIssues(
+  readBody: () => Promise<string>,
+  skillDir: string,
+  linkedFiles: readonly LinkedFileWalkRecord[],
+  where: { readonly locationRoot: string; readonly side: ValidateOptions['side']; readonly skillPath: string },
+): Promise<{ readonly issues: ValidationIssue[] } | { readonly refused: ValidationIssue }> {
+  try {
+    return { issues: await detectBundledResourceWithoutLinks(readBody, skillDir, linkedFiles.map((lf) => lf.path), where.locationRoot, where.side) };
+  } catch (error) {
+    const refused = parseRefusalIssue(error, where.skillPath, where.locationRoot);
+    if (refused === undefined) throw error;
+    return { refused };
+  }
+}
 
 // ============================================================================
 // Link Traversal (BFS)
@@ -347,7 +383,6 @@ interface FileProcessResult {
   localLinkCount: number;
   linksValidated: number;
   newPaths: string[];
-  content: string;
 }
 
 /**
@@ -355,14 +390,14 @@ interface FileProcessResult {
  * Returns link validation results and newly discovered paths for BFS.
  */
 function processFileLinks(
-  parseResult: { links: Array<{ type: string; href: string; line?: number | undefined }>; content: string },
+  links: SkillDocument['links'],
   currentPath: string,
   skillDir: string,
   locationRoot: string,
   issues: ValidationIssue[],
   visited: Set<string>,
 ): FileProcessResult {
-  const localLinks = parseResult.links.filter(link => isLocalFileLink(link.type as LinkType));
+  const localLinks = links.filter(link => isLocalFileLink(link.type as LinkType));
   const newPaths: string[] = [];
   let linksValidated = 0;
 
@@ -381,7 +416,7 @@ function processFileLinks(
     }
   }
 
-  return { localLinkCount: localLinks.length, linksValidated, newPaths, content: parseResult.content };
+  return { localLinkCount: localLinks.length, linksValidated, newPaths };
 }
 
 /** A linked file's walk record before its issues are resolved — see {@link validateSkill}. */
@@ -396,17 +431,21 @@ type LinkedFileWalkRecord = Omit<LinkedFileValidationResult, 'issues'>;
  * - Existing .md file -> recurse (add to BFS queue)
  * - Non-markdown asset -> existence check only
  *
+ * The root's document is the one the caller read: the SKILL.md is read once
+ * per validation.
+ *
  * @throws {ParserUnavailableError} If the markdown parser module cannot be
  *   loaded — a broken install fails the validation rather than being demoted to
  *   a per-document finding
  */
 async function traverseLinks(
+  root: SkillDocument,
   skillPath: string,
   skillDir: string,
-  locationRoot: string,
+  { locationRoot, side }: { readonly locationRoot: string; readonly side: ValidateOptions['side'] },
   issues: ValidationIssue[],
   allEvidence: EvidenceRecord[],
-  dispatcher: ParseDispatcher,
+  run: SkillTextRun,
 ): Promise<LinkedFileWalkRecord[]> {
   const resolvedSkillPath = safePath.resolve(skillPath);
   const visited = new Set<string>([resolvedSkillPath]);
@@ -416,9 +455,12 @@ async function traverseLinks(
   // In order: a breadth-first worklist growing from its own results, guarded by
   // `visited`, whose parses share one cache.
   await forEachInOrder(queue, async (currentPath) => {
-    let parseResult;
+    // Each file's links, frontmatter and record: the run's store's when it holds
+    // the file, else its parse, a counted miss.
+    let document: SkillDocument;
     try {
-      parseResult = await parseFileCached(currentPath, 'markdown', { dispatcher });
+      // The SKILL.md is the document the caller already read; every other file is read here.
+      document = currentPath === resolvedSkillPath ? root : await readSkillDocument(currentPath, run, side);
     } catch (error) {
       // A broken INSTALL, not a broken document. The parser loads in the
       // worker — lazily, only on a cache miss, so a fully warm validation loads
@@ -447,16 +489,17 @@ async function traverseLinks(
       return;
     }
 
-    const processed = processFileLinks(parseResult, currentPath, skillDir, locationRoot, issues, visited);
+    const processed = processFileLinks(document.links, currentPath, skillDir, locationRoot, issues, visited);
     appendAll(queue, processed.newPaths);
 
     // Compat capability detection for linked files (root SKILL.md handled by
-    // the top-level invocation). Re-read raw file content so fenced code
-    // blocks remain intact for detectors.
+    // the top-level invocation), over the file's record: the core's output over
+    // its whole text, fenced code blocks intact.
     if (currentPath !== resolvedSkillPath) {
-      const linkedContent = fs.readFileSync(currentPath, 'utf-8');
+      // The raw text this lane has always scanned: the record when the file is plain UTF-8, else a read.
+      const linkedText = linkedFileSkillText(currentPath, document, run);
       const { evidence: linkedEvidence, observations: linkedObservations } =
-        runCompatDetectors(linkedContent, currentPath, locationRoot, parseResult.frontmatter);
+        runCompatDetectors(linkedText, currentPath, locationRoot, document.frontmatter);
       appendAll(allEvidence, linkedEvidence);
       appendAll(issues, linkedObservations.map(obs => observationToIssue(obs, issueLocation(currentPath, locationRoot))));
       // Same detector on each linked file, mirroring the per-bundled-file call
@@ -473,14 +516,14 @@ async function traverseLinks(
       // Whole-file bytes, frontmatter included: the detector strips leading
       // frontmatter itself, so an `allowed-tools:` list cannot seed the
       // vocabulary it then fires against.
-      collectUnqualifiedMcpToolIssues(linkedContent, issueLocation(currentPath, locationRoot), issues);
+      collectUnqualifiedMcpToolIssues(linkedText, issueLocation(currentPath, locationRoot), issues);
     }
 
     // Record linked file result (skip SKILL.md itself — it's the root)
     if (currentPath !== resolvedSkillPath) {
       linkedFiles.push({
         path: currentPath,
-        lineCount: processed.content.split('\n').length,
+        lineCount: document.skillText.lineCount,
         linksFound: processed.localLinkCount,
         linksValidated: processed.linksValidated,
       });
@@ -738,7 +781,6 @@ export function extractImplicitReferences(
 }
 
 function validateWarningRules(
-  _content: string,
   lineCount: number,
   skillLocation: string,
   issues: ValidationIssue[]

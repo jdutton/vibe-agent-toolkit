@@ -12,6 +12,7 @@
     { "path": "../claude-marketplace" },
     { "path": "../dev-tools" },
     { "path": "../discovery" },
+    { "path": "../lab" },
     { "path": "../projection-sqlite" },
     { "path": "../rag" },
     { "path": "../rag-lancedb" },

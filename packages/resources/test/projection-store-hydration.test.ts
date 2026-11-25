@@ -21,16 +21,27 @@
 import { compareCodeUnits, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
+import { MEMBERSHIP_EXTENT_REQUEST } from '../src/projection/merge.js';
 import {
   assembleProjection,
   emptyBlobRows,
+  STORE_REQUEST_UNMET,
   keyedContentKeys,
   selectRequestedContexts,
   selectRequestedRows,
   type RequestedContributor,
   uncoveredContentKeys,
 } from '../src/projection/store-hydration.js';
-import type { BlobScopedRows, ExtentScopedRows } from '../src/projection/store.js';
+import {
+  ALL_BLOB_REQUEST,
+  ALL_EXTENT_REQUEST,
+  EXTENT_STEP_TABLES,
+  type BlobScopedRows,
+  type ExtentRequest,
+  type ExtentScopedRows,
+  type ExtentScopedTableName,
+} from '../src/projection/store.js';
+import { ADMISSION_BLOB_REQUEST } from '../src/projection/stored-admission.js';
 import { PROJECTION_TABLES } from '../src/projection/table-registry.js';
 import type { BlobConditionRow, BlobRow } from '../src/schemas/projection-blobs.js';
 import {
@@ -476,6 +487,15 @@ describe('selectRequestedContexts', () => {
     expect(selectRequestedContexts(storedExtent(), requested)).toBeUndefined();
   });
 
+  it(`throws ${STORE_REQUEST_UNMET} when the stored rows carry no zoneProvenance table, rather than failing on an absent value`, () => {
+    // A backend that ignored the request: the reuse rule's own input is missing, which must name
+    // the table, never surface as a TypeError.
+    const withoutProvenance: Partial<Record<keyof ExtentScopedRows, unknown>> = { ...storedExtent() };
+    delete withoutProvenance.zoneProvenance;
+    expect(() => selectRequestedContexts(withoutProvenance as ExtentScopedRows, []))
+      .toThrow(expect.objectContaining({ code: STORE_REQUEST_UNMET, tier: 'extent', table: 'zoneProvenance' }));
+  });
+
   it('returns an empty array, and NOT undefined, for a run that registered no contributors', () => {
     // The distinction is load-bearing: `undefined` is the miss signal, and a run
     // asking for no contexts is trivially satisfied by any stored extent. An
@@ -510,7 +530,7 @@ describe('selectRequestedRows', () => {
     // filter at all, so a superset hydration is not a tidiness question: the run
     // would see `docs/a.md` twice and report a population the populate path
     // could never have produced.
-    const selected = selectRequestedRows(storedExtent(), { contexts: [CTX_FILESYSTEM], rootId: ROOT_ID });
+    const selected = selectRequestedRows(storedExtent(), ALL_EXTENT_REQUEST, { contexts: [CTX_FILESYSTEM], rootId: ROOT_ID });
 
     expect(selected.resourceRealizations.map((row) => row.extentId)).toEqual([CTX_FILESYSTEM]);
     expect(selected.resourceExtents.map((row) => row.extentId)).toEqual([CTX_FILESYSTEM, CTX_FILESYSTEM]);
@@ -527,7 +547,7 @@ describe('selectRequestedRows', () => {
     // context, and `resources` carries no extent column, so a hit that copied
     // them would hand the run an identity that nothing it can see accounts for —
     // and nothing downstream is positioned to filter it out later.
-    const selected = selectRequestedRows(storedExtent(), { contexts: [CTX_FILESYSTEM], rootId: ROOT_ID });
+    const selected = selectRequestedRows(storedExtent(), ALL_EXTENT_REQUEST, { contexts: [CTX_FILESYSTEM], rootId: ROOT_ID });
 
     expect(sortedKeys(selected.resources.map((row) => row.resourceId)))
       .toEqual(sortedKeys([RES_SHARED, RES_DECLARED]));
@@ -541,7 +561,7 @@ describe('selectRequestedRows', () => {
     // no realization, so a reachability rule that followed realizations only
     // would drop every declared-but-absent entity on a cache hit while the
     // populate path kept it.
-    const selected = selectRequestedRows(storedExtent(), { contexts: [CTX_FILESYSTEM], rootId: ROOT_ID });
+    const selected = selectRequestedRows(storedExtent(), ALL_EXTENT_REQUEST, { contexts: [CTX_FILESYSTEM], rootId: ROOT_ID });
 
     expect(selected.resourceRealizations.map((row) => row.resourceId)).not.toContain(RES_DECLARED);
     expect(selected.resources.map((row) => row.resourceId)).toContain(RES_DECLARED);
@@ -551,7 +571,7 @@ describe('selectRequestedRows', () => {
     // `populate()` records the root row before any contributor runs, so a hit
     // that rebuilt `roots` purely from kept contexts would return a projection
     // with no root at all for a run that declared nothing.
-    const selected = selectRequestedRows(storedExtent(), { contexts: [], rootId: ROOT_ID });
+    const selected = selectRequestedRows(storedExtent(), ALL_EXTENT_REQUEST, { contexts: [], rootId: ROOT_ID });
 
     expect(selected.roots.map((row) => row.id)).toEqual([ROOT_ID]);
   });
@@ -560,7 +580,7 @@ describe('selectRequestedRows', () => {
     // The sibling root is named by no realization and no membership — only by a
     // context's own `rootId` — so this is the disjunct that reachability through
     // identities cannot reach.
-    const selected = selectRequestedRows(storedExtent(), { contexts: [CTX_SIBLING], rootId: ROOT_ID });
+    const selected = selectRequestedRows(storedExtent(), ALL_EXTENT_REQUEST, { contexts: [CTX_SIBLING], rootId: ROOT_ID });
 
     expect(sortedKeys(selected.roots.map((row) => row.id))).toEqual(sortedKeys([ROOT_ID, ROOT_SIBLING]));
   });
@@ -568,9 +588,79 @@ describe('selectRequestedRows', () => {
   it('narrows to exactly the extent-scoped tables the registry declares', () => {
     // Derived from the registry rather than listed, so a further
     // extent-scoped table makes this red instead of arriving silently unhydrated.
-    const selected = selectRequestedRows(storedExtent(), { contexts: [CTX_FILESYSTEM], rootId: ROOT_ID });
+    const selected = selectRequestedRows(storedExtent(), ALL_EXTENT_REQUEST, { contexts: [CTX_FILESYSTEM], rootId: ROOT_ID });
 
     expect(sortedKeys(Object.keys(selected))).toEqual(sortedKeys(tableKeysOfScope('extent')));
+  });
+
+  it('accepts the membership request with no steps, and answers exactly its three tables, narrowed', () => {
+    const selected = selectRequestedRows(storedExtent(), MEMBERSHIP_EXTENT_REQUEST, { contexts: [CTX_FILESYSTEM], rootId: ROOT_ID });
+
+    expect(sortedKeys(Object.keys(selected))).toEqual(sortedKeys(['resourceRealizations', 'realizationConditions', 'zoneProvenance']));
+    expect(selected.resourceRealizations.map((row) => row.extentId)).toEqual([CTX_FILESYSTEM]);
+    expect(selected.zoneProvenance.map((row) => row.contextId)).toEqual([CTX_FILESYSTEM]);
+    expect(selected.realizationConditions).toEqual([]);
+  });
+
+  it('reads only the membership tables: a source holding nothing else answers it', () => {
+    // What the store hands back for the membership request: its three tables and no other.
+    const full = storedExtent();
+    const source = { resourceRealizations: full.resourceRealizations, realizationConditions: full.realizationConditions, zoneProvenance: full.zoneProvenance };
+
+    expect(selectRequestedRows(source, MEMBERSHIP_EXTENT_REQUEST, { contexts: [CTX_BETA], rootId: ROOT_ID }).realizationConditions)
+      .toHaveLength(1);
+  });
+
+  it(`throws ${STORE_REQUEST_UNMET} for the membership request plus the identity step, whose resourceExtents input is missing`, () => {
+    // The type refuses this request; the cast is what a caller the type cannot see would hand in.
+    const request = { ...MEMBERSHIP_EXTENT_REQUEST, steps: ['identity'] } as unknown as ExtentRequest<ExtentScopedTableName>;
+
+    expect(() => selectRequestedRows(storedExtent(), request, { contexts: [CTX_FILESYSTEM], rootId: ROOT_ID }))
+      .toThrow(expect.objectContaining({ code: STORE_REQUEST_UNMET, tier: 'extent', table: 'resourceExtents' }));
+  });
+
+  it(`throws ${STORE_REQUEST_UNMET} for a context-less table requested without the step that narrows it`, () => {
+    // Without the roots step, every root under the key would come back unnarrowed.
+    const request = { tables: [...MEMBERSHIP_EXTENT_REQUEST.tables, 'roots'], steps: [] } as ExtentRequest<ExtentScopedTableName>;
+
+    expect(() => selectRequestedRows(storedExtent(), request, { contexts: [CTX_FILESYSTEM], rootId: ROOT_ID }))
+      .toThrow(expect.objectContaining({ code: STORE_REQUEST_UNMET, tier: 'extent', table: 'roots' }));
+  });
+
+  it(`has no empty fallback: a source missing a requested table throws ${STORE_REQUEST_UNMET} rather than reading it as empty`, () => {
+    // A backend that ignored the request: read as empty, this is a membership with no members, served as a hit.
+    const without = (table: string): ExtentScopedRows =>
+      Object.fromEntries(Object.entries(storedExtent()).filter(([key]) => key !== table)) as unknown as ExtentScopedRows;
+
+    expect(() => selectRequestedRows(without('resourceRealizations'), MEMBERSHIP_EXTENT_REQUEST, { contexts: [CTX_FILESYSTEM], rootId: ROOT_ID }))
+      .toThrow(expect.objectContaining({ code: STORE_REQUEST_UNMET, tier: 'extent', table: 'resourceRealizations' }));
+    // The same for a table only a step reads.
+    expect(() => selectRequestedRows(without('resolutionContexts'), ALL_EXTENT_REQUEST, { contexts: [CTX_FILESYSTEM], rootId: ROOT_ID }))
+      .toThrow(expect.objectContaining({ code: STORE_REQUEST_UNMET, tier: 'extent', table: 'resolutionContexts' }));
+  });
+});
+
+describe('EXTENT_STEP_TABLES', () => {
+  // The step table is written out (a request's type needs its literals), so it is held to the
+  // registry here, both ways.
+  const contextLess = Object.values(PROJECTION_TABLES)
+    .filter((spec) => spec.scope === 'extent' && spec.contextColumn === undefined)
+    .map((spec) => spec.key as string);
+  const outputsOf = (tables: readonly string[]): string[] => tables.filter((table) => contextLess.includes(table));
+
+  it('makes every context-less extent table the output of exactly one step, and every step table extent-scoped', () => {
+    const outputs = Object.values(EXTENT_STEP_TABLES).flatMap((tables) => outputsOf(tables));
+    expect(sortedKeys(outputs)).toEqual(sortedKeys(contextLess));
+    expect(new Set(outputs).size).toBe(outputs.length);
+    expect(sortedKeys(tableKeysOfScope('extent'))).toEqual(expect.arrayContaining([...new Set(Object.values(EXTENT_STEP_TABLES).flat())].sort((left, right) => left.localeCompare(right))));
+  });
+
+  it('gives the identity step every identity-keyed table and the roots step the roots table', () => {
+    const identityKeyed = Object.values(PROJECTION_TABLES)
+      .filter((spec) => spec.scope === 'extent' && spec.contextColumn === undefined && (spec.columns as readonly string[]).includes('resourceId'))
+      .map((spec) => spec.key as string);
+    expect(sortedKeys(outputsOf(EXTENT_STEP_TABLES.identity))).toEqual(sortedKeys(identityKeyed));
+    expect(outputsOf(EXTENT_STEP_TABLES.roots)).toEqual(['roots']);
   });
 });
 
@@ -697,5 +787,18 @@ describe('the stored fixture', () => {
         expect(parsed.success ? undefined : parsed.error.message, spec.name).toBeUndefined();
       }
     }
+  });
+});
+
+describe('the shared read requests', () => {
+  it.each([
+    ['ALL_BLOB_REQUEST', ALL_BLOB_REQUEST],
+    ['ADMISSION_BLOB_REQUEST', ADMISSION_BLOB_REQUEST],
+    ['ALL_EXTENT_REQUEST', ALL_EXTENT_REQUEST],
+    ['MEMBERSHIP_EXTENT_REQUEST', MEMBERSHIP_EXTENT_REQUEST],
+  ] as const)('%s is frozen through its table list, so no caller can widen what another reads', (_name, request) => {
+    expect(Object.isFrozen(request)).toBe(true);
+    expect(Object.isFrozen(request.tables)).toBe(true);
+    expect(() => (request.tables as string[]).push('resources')).toThrow(TypeError);
   });
 });

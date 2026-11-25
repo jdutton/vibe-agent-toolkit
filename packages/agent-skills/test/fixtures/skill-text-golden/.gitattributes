@@ -1,0 +1,10 @@
+# These files ARE the encoding fixtures: CRLF line endings, a UTF-8 BOM and UTF-16LE.
+# The repo-wide `* text=auto eol=lf` would rewrite them to LF on add, so git must store them byte for byte.
+# The UTF-16LE files are not in the repository (they hold NUL bytes): the golden test writes them into
+# its scratch project (`writeSkillTextGolden`), where these lines keep that project's index byte for byte too.
+enc-crlf/SKILL.md -text
+enc-bom/SKILL.md -text
+enc-utf16/SKILL.md -text
+linked-bom/references/guide.md -text
+linked-utf16/references/guide.md -text
+bundled-mention-utf16/SKILL.md -text

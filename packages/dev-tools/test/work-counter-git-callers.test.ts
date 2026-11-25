@@ -43,8 +43,8 @@ const NON_SPAWNING_IMPORTERS: Readonly<Record<string, readonly string[]>> = {
   'packages/utils/src/git-index-links.ts': ['GIT_MODE_SYMLINK'],
 };
 
-/** The count each spawn site must make. */
-const GIT_COUNT = "countWork('git.calls', 1)";
+/** The count each spawn site must make: one named spawn (`countWork` refuses `git.calls`). */
+const GIT_COUNT = 'countGitSpawn({ via: ';
 
 const REPO_ROOT = resolveFromImportMeta(import.meta.url, '..', '..', '..');
 

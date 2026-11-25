@@ -72,7 +72,10 @@
 
 import { createHash } from 'node:crypto';
 
+import { deepFreeze } from '@vibe-agent-toolkit/utils';
+
 import { schemaShapeSource } from '../schemas/parse-facts.js';
+import type { ReferenceSyntacticForm } from '../schemas/projection-blobs.js';
 
 import type { Projection } from './projection.js';
 import { PROJECTION_TABLES, type ProjectionRow, type ProjectionTableName } from './table-registry.js';
@@ -80,7 +83,7 @@ import { PROJECTION_TABLES, type ProjectionRow, type ProjectionTableName } from 
 /** Hex digits kept from the shape digest. Short on purpose — it is a path component. */
 const SHAPE_DIGEST_LENGTH = 12;
 
-/** Pure and mildly expensive: fifteen schemas through the JSON Schema converter. */
+/** Pure and mildly expensive: every table's schema through the JSON Schema converter. */
 let memoizedShapeDigest: string | undefined;
 
 /**
@@ -95,7 +98,7 @@ export type ProjectionTableNamesOfScope<Scope extends string> = {
   [Name in ProjectionTableName]: (typeof PROJECTION_TABLES)[Name]['scope'] extends Scope ? Name : never;
 }[ProjectionTableName];
 
-/** The four tables whose rows are a pure function of a blob's bytes. */
+/** The tables whose rows are a pure function of a blob's bytes. */
 export type BlobScopedTableName = ProjectionTableNamesOfScope<'blob'>;
 
 /** The eight tables whose rows describe what is present in one tree. */
@@ -107,13 +110,101 @@ type ProjectionTablesOf<Names extends ProjectionTableName> = {
 };
 
 /**
- * The blob-keyed half of a projection: `blobs` and the three tables that hang
- * off it.
+ * The blob-keyed half of a projection: `blobs` and the tables that hang off
+ * it.
  */
 export type BlobScopedRows = ProjectionTablesOf<BlobScopedTableName>;
 
+/**
+ * What one {@link FactStore.readBlobFacts} reads: which blob-scoped tables,
+ * and which `blobReferences` rows by syntactic form.
+ *
+ * Required on every read, never defaulted: each caller states what it
+ * consumes, so a caller that reads the lexical forms or the harness tables
+ * (the projection a hit assembles) asks for them, and one that does not (the
+ * stored admission) never decodes them. The answer's type is the requested
+ * tables only, so a caller holding a restricted answer cannot hand it to code
+ * that reads every table (`assembleProjection` does not compile against it).
+ */
+export interface BlobRequest<Table extends BlobScopedTableName> {
+  /** The tables to read; a table not named is not read and is absent from the answer. */
+  readonly tables: readonly Table[];
+  /**
+   * The `blobReferences` rows to read, by `syntacticForm`: `'all'`, or only
+   * those whose form is in the set. Ignored when `tables` omits `blobReferences`.
+   */
+  readonly referenceForms: ReadonlySet<ReferenceSyntacticForm> | 'all';
+}
+
+/** Every blob-scoped table, every reference form: what a projection hit assembles from. Frozen: every caller shares it. */
+export const ALL_BLOB_REQUEST: BlobRequest<BlobScopedTableName> = deepFreeze({
+  tables: Object.values(PROJECTION_TABLES)
+    .filter((spec) => spec.scope === 'blob')
+    .map((spec) => spec.key as BlobScopedTableName),
+  referenceForms: 'all',
+});
+
 /** The tree-scoped half of a projection: everything that is not blob-keyed. */
 export type ExtentScopedRows = ProjectionTablesOf<ExtentScopedTableName>;
+
+/**
+ * The two reconstruction steps `selectRequestedRows` can run over a stored
+ * extent, and the tables each one reads: the context-less tables are not
+ * partitioned by context, so a run's share of them is recovered from the
+ * context-scoped rows it kept.
+ *
+ * - `identity` keeps the identity-keyed tables (`resources`, `resourceTags`,
+ *   `claudeRulePatterns`) whose `resourceId` a kept realization or membership
+ *   names: it reads `resourceRealizations` and `resourceExtents`, and the three
+ *   tables it narrows.
+ * - `roots` keeps the `roots` rows of the run's own root and of every kept
+ *   resolution context: it reads `resolutionContexts`, and `roots`.
+ *
+ * Every context-less extent table is exactly one step's output, so a request
+ * can name one only with its step (a unit test holds this to the registry, both
+ * ways).
+ */
+export const EXTENT_STEP_TABLES = {
+  identity: ['resourceRealizations', 'resourceExtents', 'resources', 'resourceTags', 'claudeRulePatterns'],
+  roots: ['resolutionContexts', 'roots'],
+} as const satisfies Record<string, readonly ExtentScopedTableName[]>;
+
+/** A reconstruction step of {@link EXTENT_STEP_TABLES}. */
+export type ExtentStep = keyof typeof EXTENT_STEP_TABLES;
+
+/**
+ * The steps a request naming `Table` can run: a step is available only when
+ * every table it reads is requested, so a request asking for a step without its
+ * inputs does not compile.
+ */
+export type ExtentStepsFor<Table extends ExtentScopedTableName> = {
+  [Step in ExtentStep]: [(typeof EXTENT_STEP_TABLES)[Step][number]] extends [Table] ? Step : never;
+}[ExtentStep];
+
+/**
+ * What one {@link FactStore.readExtent} reads, and what `selectRequestedRows`
+ * reconstructs from it: which extent-scoped tables, and which reconstruction
+ * steps.
+ *
+ * Required on every read, never defaulted, like {@link BlobRequest}: membership
+ * reads three tables and runs no step, a projection hit reads every table and
+ * runs both. The answer's type is the requested tables only, so a restricted
+ * answer cannot be assembled into a projection.
+ */
+export interface ExtentRequest<Table extends ExtentScopedTableName> {
+  /** The tables to read; a table not named is not read and is absent from the answer. */
+  readonly tables: readonly Table[];
+  /** The reconstruction steps to run; each needs every table it reads in `tables`. */
+  readonly steps: readonly ExtentStepsFor<Table>[];
+}
+
+/** Every extent-scoped table and both steps: what a projection hit assembles from. Frozen: every caller shares it. */
+export const ALL_EXTENT_REQUEST: ExtentRequest<ExtentScopedTableName> = deepFreeze({
+  tables: Object.values(PROJECTION_TABLES)
+    .filter((spec) => spec.scope === 'extent')
+    .map((spec) => spec.key as ExtentScopedTableName),
+  steps: ['identity', 'roots'],
+});
 
 /**
  * Names one immutable snapshot of one corpus.
@@ -197,9 +288,13 @@ export interface FactStore {
    * miss forever.
    *
    * @param contentKeys - The keys to look up; may be empty
-   * @returns The rows held for those keys, across all four blob-scoped tables
+   * @param request - Which tables, and which reference forms, to read
+   * @returns The rows held for those keys, in exactly the requested tables
    */
-  readBlobFacts(contentKeys: readonly string[]): Promise<BlobScopedRows>;
+  readBlobFacts<Table extends BlobScopedTableName>(
+    contentKeys: readonly string[],
+    request: BlobRequest<Table>,
+  ): Promise<Pick<BlobScopedRows, Table>>;
 
   /**
    * Record the extent of one tree — **additively, at context granularity**.
@@ -240,22 +335,27 @@ export interface FactStore {
   writeExtent(key: ExtentKey, rows: ExtentScopedRows): Promise<void>;
 
   /**
-   * Read back everything stored under one tree.
+   * Read back the requested tables stored under one tree.
    *
    * Returns **every** context written under the key, not only the ones the
-   * caller is about to ask about — the store does not know what a caller wants,
-   * and narrowing it here would need a second parameter that duplicates the
-   * `zone_provenance` rows the answer already carries. Selecting the subset a
-   * run is owed is `store-hydration.ts`'s job, which is also where the rule for
-   * the three context-less tables lives.
+   * caller is about to ask about — the store does not know which contexts a
+   * caller wants, and narrowing by context here would need a parameter that
+   * duplicates the `zone_provenance` rows the answer already carries. Selecting
+   * the subset a run is owed is `store-hydration.ts`'s job, which is also where
+   * the rule for the context-less tables lives. Tables, though, are the
+   * caller's to name: a table not requested is never decoded.
    *
    * @param key - Which root, which tree
-   * @returns The eight tables, or `undefined` when this tree was never written.
-   *   The two are distinguishable on purpose: a tree can legitimately hold no
-   *   resources at all, and an empty projection is a different answer from a
-   *   cache miss.
+   * @param request - Which tables to read (its `steps` are the reconstruction's, not the store's)
+   * @returns The requested tables, or `undefined` when this tree was never
+   *   written. The two are distinguishable on purpose: a tree can legitimately
+   *   hold no resources at all, and an empty projection is a different answer
+   *   from a cache miss.
    */
-  readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined>;
+  readExtent<Table extends ExtentScopedTableName>(
+    key: ExtentKey,
+    request: ExtentRequest<Table>,
+  ): Promise<Pick<ExtentScopedRows, Table> | undefined>;
 
   /**
    * Release whatever the backend holds open.
@@ -297,6 +397,13 @@ export interface FactStore {
  *   rows this build would never have kept;
  * - its **partition column** (the harness tables' `harness`), which decides
  *   what a lazy blob-tier write replaces, for the same reason.
+ *
+ * What changes facts without changing their shape is not an input: the
+ * extraction code, and the skill-text declaration whose matches
+ * `skill_text_facts` and `skill_text_matches` hold. The cache namespace above
+ * this directory (`cache-namespace.ts`) separates those, the declaration by its
+ * digest in a dev checkout and by the package version in a published build,
+ * because the parse cache holds the same records and this digest does not key it.
  *
  * @returns Twelve lowercase hex digits, stable across processes and rebuilds
  *

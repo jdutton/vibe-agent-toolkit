@@ -17,7 +17,7 @@
 
 import { rmSync, writeFileSync } from 'node:fs';
 
-import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
+import { ALL_EXTENT_REQUEST, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { gitTreeSnapshot } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -285,7 +285,7 @@ describe('withPopulationCache', () => {
       // returns, so its own frame is gone by the time the provider is reached.
       const buildProvider = (): (() => Promise<unknown>) => {
         const captured = cache;
-        return async () => captured?.store.readExtent({ rootId: 'r', treeHash: captured.treeHash });
+        return async () => captured?.store.readExtent({ rootId: 'r', treeHash: captured.treeHash }, ALL_EXTENT_REQUEST);
       };
       const provider = buildProvider();
 

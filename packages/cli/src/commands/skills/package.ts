@@ -28,7 +28,7 @@ import { endWithRefusal, endWithReport, leftoverIssuesOf, leftoverIssuesOfWarnin
 import { collectPostBuildIssues, formatIssueLines, formatIssueSetHeading } from '../../utils/issue-rendering.js';
 import { createLogger } from '../../utils/logger.js';
 import { readInputFile, requireProjectRoot } from '../../utils/project-root-policy.js';
-import { runSkillRegistries, withRunContext } from '../../utils/resource-loader.js';
+import { runSkillRegistries, NO_HOME_SETTLED_LISTENER, withRunContext } from '../../utils/resource-loader.js';
 import { resolveSkillPath } from '../skill/review.js';
 
 import { packagingFailedIssue } from './build.js';
@@ -212,7 +212,7 @@ async function validateForPackage(
     { side: 'source', origin: 'content', action: `validate the skill at ${skillPath}` },
     () => validateSkill({
       skillPath,
-      dispatcher: undefined,
+      run: undefined,
       rootDir: basePath,
       locationRoot,
       validation: {},
@@ -316,7 +316,10 @@ export function formatSkillValidationLines(validationResult: ValidationResult): 
 }
 
 /**
- * Extract skill name from parse result
+ * The name a refused package's report gives the skill: its frontmatter `name`
+ * when truthy, else the first line whose trimmed text starts `# `, else
+ * `unknown`. The report's own rule, kept apart from the skills lane's naming
+ * (`skillNameOf`), which keys a skill rather than reports it.
  */
 function extractSkillName(parseResult: ParseResult): string {
   if (parseResult.frontmatter?.['name']) {
@@ -584,7 +587,8 @@ async function runPackage(
     return buildSkillsPackageReport({ validation, data: { skill, version: null, outputPath: null, dryRun: options.dryRun === true }, runFindings: [] });
   }
   // One run for the package, rooted at the project root this command required.
-  return withRunContext({ root: projectRoot }, (run) =>
+  // What the package writes is planned inside `packageSkill`, whose crawls pass it.
+  return withRunContext({ projectionStore: 'on-demand', root: projectRoot, outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
     packageAndReport(skillPath, options, { target, formats, registries: runSkillRegistries(run) }, validation, locationRoot, logger),
   );
 }

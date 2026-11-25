@@ -14,7 +14,6 @@ export {
 export { anchorEvidencePath, buildEvidence } from './build-evidence.js';
 export {
   deriveObservationsFromEvidence,
-  EXTERNAL_CLI_BINARIES,
   type DeriveObservationsOptions,
   type DerivationSubject,
 } from './derive-observations.js';

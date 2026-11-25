@@ -71,7 +71,7 @@ import { isDeclinedSymlinkCode } from './projection/contributors/filesystem-exte
 import { declinedLinkApplies, type PopulationUnreadablePolicy } from './projection/crawl-source.js';
 import { contentRoute } from './projection/document-facts.js';
 import { parseFailedEntry, parseFailedMessage } from './projection/parse-failure.js';
-import { collectionMimeConflictFinding, relativize } from './projection/realizations.js';
+import { collectionMimeConflictFinding } from './projection/realizations.js';
 // Type-only, and that is what keeps it acyclic: the projection's population
 // builder is a CALLER of the registry's world, not a dependency of it, so the
 // import is erased before any module graph exists at runtime.
@@ -82,7 +82,7 @@ import type {
   ResourceEnumeration,
   ResourcePopulationSource,
 } from './projection/resource-population.js';
-import { type CollectionMimeResolver, createCollectionMimeResolver, parserKindForMime } from './projection/router.js';
+import { type CollectionMimeResolver, parseRoutingFor, parserKindForResolvedPath } from './projection/router.js';
 import type { AdmittedFacts, AdmittedStat, RunPopulation } from './projection/run-population.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { ProjectConfig, ValidationMode } from './schemas/project-config.js';
@@ -676,7 +676,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * in flight.
    *
    * That is not the "parallel resolver" CLAUDE.md bans — this is the SAME
-   * `createCollectionMimeResolver`, called twice, not a second implementation of
+   * routing constructor (`parseRoutingFor`), called twice, not a second implementation of
    * the rule. What differs per instance is only the conflict accumulator, and
    * that is correct: the projection lane reports conflicts as
    * `realization_conditions` rows, while `ResourceMetadata` has nowhere to put
@@ -1170,14 +1170,10 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // selection is part of a document's parse identity (content-key.ts), so a
     // second resolver here is how the parse route and the key's parse-route
     // component drift apart.
-    this.mimeResolverInstance ??= createCollectionMimeResolver(
-      this.config?.resources?.collections,
-    );
-    const declaredMime = this.mimeResolverInstance.mimeFor(
-      absolutePath,
-      this.baseDir === undefined ? absolutePath : relativize(absolutePath, this.baseDir),
-    );
-    return parserKindForMime(declaredMime);
+    // The resolver is kept (its conflict accumulator is this registry's); the base directory is read
+    // per call, because a crawl may set it after an earlier `addResource` built the resolver.
+    this.mimeResolverInstance ??= parseRoutingFor(this.config, this.baseDir).resolver;
+    return parserKindForResolvedPath(absolutePath, this.mimeResolverInstance, this.baseDir);
   }
 
   /**

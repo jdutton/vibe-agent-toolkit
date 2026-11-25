@@ -39,7 +39,7 @@ const forgedParseEntry: I0Seed = {
   },
   expect: {
     diverges: {
-      relations: ['blobs', 'blob_sections', 'blob_references', 'edges', 'edge_resolutions'],
+      relations: ['blobs', 'blob_sections', 'blob_references', 'edges', 'edge_resolutions', 'skill_text_facts'],
       verbs: ['validate', 'check', 'query'],
     },
   },

@@ -116,7 +116,16 @@ describe('table scopes', () => {
     const blobScoped = Object.values(PROJECTION_TABLES)
       .filter((spec) => spec.scope === 'blob')
       .map((spec) => spec.key);
-    expect(blobScoped).toEqual(['blobs', 'blobReferences', 'blobSections', 'blobConditions', 'harnessBlobFacts', 'harnessBlobImports']);
+    expect(blobScoped).toEqual([
+      'blobs',
+      'blobReferences',
+      'blobSections',
+      'blobConditions',
+      'harnessBlobFacts',
+      'harnessBlobImports',
+      'skillTextFacts',
+      'skillTextMatches',
+    ]);
   });
 
   it('scopes every table that names an extent or a root to extent', () => {

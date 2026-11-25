@@ -14,13 +14,27 @@ vi.mock('node:child_process', async (importOriginal) => ({
 }));
 
 const { killProcessTree } = await import('../src/process.js');
+const { windowsTaskkillPath } = await import('../src/kill-process-tree.js');
 
 const onPosix = process.platform !== 'win32';
 const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor;
 
-/** Run the rest of the test as if on Windows; `afterEach` restores the real platform. */
+/** Where every Windows case below finds the system directory; any host can compute the path. */
+const SYSTEM_ROOT = 'C:/Windows';
+const TASKKILL = 'C:/Windows/System32/taskkill.exe';
+
+/** Run the rest of the test as if on Windows; `afterEach` restores the real platform and env. */
 function asWindows(): void {
   Object.defineProperty(process, 'platform', { value: 'win32' });
+  vi.stubEnv('SystemRoot', SYSTEM_ROOT);
+}
+
+/** Put the real platform and environment back after a case that pretended to be Windows. */
+function restoreHost(): void {
+  Object.defineProperty(process, 'platform', realPlatform);
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  spawnSync.mockReset();
 }
 
 /** A stand-in child whose own `kill` is recorded. */
@@ -29,11 +43,7 @@ function child(pid: number | undefined): { pid: number | undefined; kill: Return
 }
 
 describe('killProcessTree', () => {
-  afterEach(() => {
-    Object.defineProperty(process, 'platform', realPlatform);
-    vi.restoreAllMocks();
-    spawnSync.mockReset();
-  });
+  afterEach(restoreHost);
 
   it('a child with no pid: no kill, no taskkill — only the child\'s own kill when asked to go through it', () => {
     const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
@@ -70,7 +80,7 @@ describe('killProcessTree', () => {
 
     killProcessTree(child(4242), { groupLeader: false, throughChild: false });
 
-    expect(spawnSync).toHaveBeenCalledExactlyOnceWith('taskkill', ['/pid', '4242', '/T', '/F'], expect.anything());
+    expect(spawnSync).toHaveBeenCalledExactlyOnceWith(TASKKILL, ['/pid', '4242', '/T', '/F'], expect.anything());
     expect(kill).not.toHaveBeenCalled();
   });
 
@@ -124,5 +134,32 @@ describe('killProcessTree', () => {
     expect(() => {
       killProcessTree(child(9999), { groupLeader: true, throughChild: false });
     }).toThrow(TypeError);
+  });
+});
+
+describe('windowsTaskkillPath', () => {
+  // A bare `taskkill` resolves through PATH, so a PATH entry ahead of System32 could stand in for
+  // it. The path comes from SystemRoot alone; this only computes it, so it runs on every host.
+  afterEach(restoreHost);
+
+  it('names taskkill.exe in System32 under SystemRoot', () => {
+    expect(windowsTaskkillPath({ SystemRoot: SYSTEM_ROOT })).toBe(TASKKILL);
+  });
+
+  it.each([
+    ['missing', {}],
+    ['empty', { SystemRoot: '' }],
+  ])('refuses a %s SystemRoot by name instead of falling back to PATH', (_label, env) => {
+    expect(() => windowsTaskkillPath(env)).toThrow(/SystemRoot/);
+  });
+
+  it('Windows with no SystemRoot: the tree kill refuses loudly and spawns nothing', () => {
+    asWindows();
+    vi.stubEnv('SystemRoot', undefined);
+
+    expect(() => {
+      killProcessTree(child(4242), { groupLeader: false, throughChild: false });
+    }).toThrow(/SystemRoot/);
+    expect(spawnSync).not.toHaveBeenCalled();
   });
 });

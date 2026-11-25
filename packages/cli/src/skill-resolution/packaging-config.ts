@@ -9,7 +9,7 @@
  * Does NOT compose configs across VAT projects — only the nearest-ancestor
  * `vibe-agent-toolkit.config.yaml` contributes.
  */
-import type { DeclaredEvalSuite, SkillPackagingConfig } from '@vibe-agent-toolkit/agent-skills';
+import type { DeclaredEvalSuite, SkillPackagingConfig, SkillTextRun } from '@vibe-agent-toolkit/agent-skills';
 import type { ValidationConfig } from '@vibe-agent-toolkit/schema';
 import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
 
@@ -53,6 +53,7 @@ export function resetSkillDiscoveryCache(): void {
 export async function resolveProjectDeclaredEvalSuites(
   skillPath: string,
   unreadable: DiscoveryUnreadablePolicy,
+  run: SkillTextRun | undefined,
 ): Promise<DeclaredEvalSuite[]> {
   const projectRoot = findProjectRoot(safePath.resolve(safePath.join(skillPath, '..')));
   if (projectRoot === null) return [];
@@ -63,7 +64,7 @@ export async function resolveProjectDeclaredEvalSuites(
   try {
     const config = loadConfigCached(projectRoot, 'source');
     if (config?.skills !== undefined) {
-      const byPath = await getDiscoveredSkillsByPath(config.skills, projectRoot, unreadable);
+      const byPath = await getDiscoveredSkillsByPath(config.skills, projectRoot, unreadable, run);
       suites = collectDeclaredEvalSuites(
         config.skills,
         [...byPath.entries()].map(([sourcePath, name]) => ({ name, sourcePath })),
@@ -99,17 +100,22 @@ export async function resolveProjectDeclaredEvalSuites(
  * A SKILL.md the parse worker refused has no name: under `'refuse'` it refuses the
  * run like an unlistable directory; under `{ degrade }` it is absent here, and the
  * audit's own validation of that file reports the refusal under its code.
+ *
+ * @param run - The run whose store discovery asks before it reads a SKILL.md, or
+ *   `undefined` outside any run: required, so a caller inside a run cannot leave
+ *   discovery reading every file again beside the run's own reads
  */
 export async function getDiscoveredSkillsByPath(
   skillsSection: NonNullable<ReturnType<typeof loadConfig>>['skills'],
   configRoot: string,
   unreadable: DiscoveryUnreadablePolicy,
+  run: SkillTextRun | undefined,
 ): Promise<Map<string, string>> {
   const cached = skillDiscoveryCache.get(configRoot);
   if (cached !== undefined) return cached;
   const map = new Map<string, string>();
   if (skillsSection !== undefined) {
-    const discovery = await discoverSkillsFromConfig(skillsSection, configRoot, unreadable, undefined);
+    const discovery = await discoverSkillsFromConfig(skillsSection, configRoot, unreadable, run);
     const named = unreadable === 'refuse' ? namedSkillsOrRefuse(discovery, configRoot) : discovery.skills;
     for (const entry of named) {
       map.set(safePath.resolve(entry.sourcePath), entry.name);
@@ -146,6 +152,7 @@ export async function getDiscoveredSkillsByPath(
 export async function resolveSkillPackagingConfig(
   skillPath: string,
   unreadable: DiscoveryUnreadablePolicy,
+  run: SkillTextRun | undefined,
 ): Promise<SkillPackagingConfig | null> {
   const absSkillPath = safePath.resolve(skillPath);
   const skillDir = safePath.resolve(safePath.join(absSkillPath, '..'));
@@ -154,7 +161,7 @@ export async function resolveSkillPackagingConfig(
   const config = loadConfigCached(projectRoot, 'source');
   if (config?.skills === undefined) return null;
 
-  const byPath = await getDiscoveredSkillsByPath(config.skills, projectRoot, unreadable);
+  const byPath = await getDiscoveredSkillsByPath(config.skills, projectRoot, unreadable, run);
   const matchedName = byPath.get(absSkillPath);
   if (matchedName === undefined) return null;
 

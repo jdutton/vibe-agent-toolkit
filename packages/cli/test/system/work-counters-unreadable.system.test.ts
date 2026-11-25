@@ -23,19 +23,17 @@
 import { spawnSync } from 'node:child_process';
 import { chmodSync, utimesSync } from 'node:fs';
 
-import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal, WORK_COUNTERS_ENV, type WorkCounterDump } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
 import { CANNOT_DENY_READS, gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { runWithWorkCounters } from '../helpers/work-counter-run.js';
 import { commitTestFixture } from '../test-helpers.js';
 
 import {
   MARKDOWN_AND_SKILLS_CONFIG,
   createSkillMarkdown,
   createSuiteContext,
-  executeCli,
-  fs,
   join,
   writeTestFile,
 } from './test-common.js';
@@ -110,18 +108,13 @@ const lockedPaths: string[] = [];
 
 /** One run of `vat <args>` in `root`, with a private store and counters. */
 async function run(root: string, args: string[]) {
-  const workDir = context.createTempDir();
-  const result = await executeCli(context.binPath, args, {
-    cwd: root,
-    env: {
-      [VAT_CACHE_DIR_ENV]: context.createTempDir(),
-      [WORK_COUNTERS_ENV]: workDir,
-    },
+  const { result, dumps } = await runWithWorkCounters(context, root, args, {
+    cacheDir: context.createTempDir(),
+    tmpDir: null,
+    storeOff: false,
+    probeRoot: null,
+    cores: null,
   });
-  const dumps = fs
-    .readdirSync(workDir)
-    .map((name) => JSON.parse(fs.readFileSync(join(workDir, name), 'utf-8')) as WorkCounterDump)
-    .filter((dump) => dump.role === 'cli');
   return { ...result, dumps };
 }
 

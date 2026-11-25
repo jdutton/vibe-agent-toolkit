@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/cli",
-  "version": "0.2.0-rc.17",
+  "version": "0.2.0-rc.18",
   "description": "Command-line interface for vibe-agent-toolkit",
   "type": "module",
   "bin": {
@@ -63,6 +63,7 @@
   },
   "devDependencies": {
     "@vibe-agent-toolkit/dev-tools": "workspace:*",
+    "@vibe-agent-toolkit/lab": "workspace:*",
     "@vibe-agent-toolkit/rag": "workspace:*",
     "@vibe-agent-toolkit/rag-lancedb": "workspace:*"
   },

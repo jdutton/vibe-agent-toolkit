@@ -233,6 +233,8 @@ export {
   type PerfBody,
   PerfBodySchema,
   type PerfCommandStats,
+  type ValidateDebugFacts,
+  ValidateDebugFactsSchema,
 } from './facets/perf/types.js';
 
 export {
@@ -316,12 +318,6 @@ export {
   type SeverityCounts,
   type Verdict,
 } from './facets/verdict/extract.js';
-export {
-  buildPathSubstitutions,
-  normalizeCommandOutput,
-  type NormalizeContext,
-  type PathSubstitution,
-} from './facets/verdict/normalize.js';
 export { planApfsClone } from './facets/verdict/clone.js';
 export {
   type CloneDir,

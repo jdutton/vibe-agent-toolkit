@@ -46,8 +46,10 @@ Description:
   keyed by file content) and the projection store, a SQLite database holding
   one whole scanned tree per entry, on by default and by far the larger of
   the two. This is the directory to save and restore between CI runs: key
-  the CI cache on the runner's OS, architecture, Node version and lockfile
-  hash, outside the checkout (in GitHub Actions, $RUNNER_TEMP/vat-cache).
+  the CI cache on the runner's OS, architecture, Node version, lockfile hash
+  and commit, restore only from keys that share all but the commit, save from
+  default-branch runs, and keep it outside the checkout (in GitHub Actions,
+  $RUNNER_TEMP/vat-cache).
   Another VAT build never reads it. Within a build, the parse cache and the
   store's shared blob tier are keyed by file content, so they hit on any
   machine with the same bytes; a stored tree is keyed by the repository's

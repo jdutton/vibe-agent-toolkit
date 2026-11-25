@@ -467,12 +467,16 @@ narrowed in memory.** `writeBlobFacts` clears a partitioned table's rows scoped 
 mentions — because these rows are derived per tree-reach, and a run over another root that holds the
 same bytes without reaching them must not delete facts a different run derived. `readBlobFacts` does
 NOT mirror that: its `SELECT` filters by content key only (`blobKeyPredicate`, `WHERE "blob" IN
-(…)`), so a read hands back every harness's rows for the keys asked for — the `(blob, harness)`
+(…)`; a request names the tables it reads and may narrow `blob_references` by syntactic form, never
+by harness), so a read hands back every harness's rows for the keys asked for — the `(blob, harness)`
 narrowing happens afterward, in memory, in `harnessFactsIndex` / `harnessFrontier`. Symmetrically, a
 stored extent whose blob tier covers every content key it names can still be missing a reached
 blob's harness facts (another root's run filed the bytes without reaching them); reading it back
 treats that as a miss, never a served gap — a store hit requires an empty harness frontier, computed
 in memory over what the read returned, or the read is discarded and the caller re-derives.
+Only a projection hit reads the harness tables (`ALL_BLOB_REQUEST`). A warm run's stored admission
+reads `ADMISSION_BLOB_REQUEST`, the fact reader's tables with `blob_references` in its AST forms
+only, so it decodes no harness row and no lexical reference row.
 
 **Not a subset of `blob_references`, and never read beside it for this question.**
 `blob_references` is VAT's dialect-free record of every reference *candidate*; the two disagree in

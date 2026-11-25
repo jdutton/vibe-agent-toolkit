@@ -21,6 +21,7 @@
 
 import { truncateSync, writeFileSync } from 'node:fs';
 
+import { DEFAULT_PARSE_LIMITS } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -87,7 +88,7 @@ const TEXT: Readonly<Record<string, string>> = {
 const NOT_TEXT = Buffer.from([0x23, 0x20, 0x00, 0x01, 0x02, 0x5b, 0x78, 0x5d, 0x28, 0x79, 0x29, 0x0a]);
 
 /** One byte past the default input cap: refused by size before a byte is read. Untracked, and sparse where the host allows. */
-const OVERSIZE_BYTES = 8 * 1024 * 1024 + 1;
+const OVERSIZE_BYTES = DEFAULT_PARSE_LIMITS.inputBytes + 1;
 
 const FIDELITY_TREE: FixtureTree = {
   committed: (corpus) => {

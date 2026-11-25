@@ -12,7 +12,12 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
 import {
+  ALL_BLOB_REQUEST,
+  ALL_EXTENT_REQUEST,
+  AST_SYNTACTIC_FORMS,
   PROJECTION_TABLES,
+  ReferenceSyntacticFormSchema,
+  type BlobScopedRows,
   type ExtentKey,
   type ExtentScopedRows,
   type FactStore,
@@ -201,18 +206,70 @@ function contextsOf(extent: ExtentScopedRows | undefined): readonly string[] {
     .sort((left, right) => left.localeCompare(right));
 }
 
+/**
+ * {@link sampleBlobRows} with one `blobReferences` row of every syntactic form.
+ *
+ * @returns The bundle, and how many of its reference rows are of an AST form
+ */
+function everyFormRows(): { rows: BlobScopedRows; astRows: number } {
+  const rows = sampleBlobRows();
+  const [template] = rows.blobReferences;
+  if (template === undefined) throw new Error('the sample bundle holds no reference row');
+  const forms = ReferenceSyntacticFormSchema.options;
+  const blobReferences = forms.map((syntacticForm, ordinal) => ({
+    ...template,
+    ordinal,
+    syntacticForm,
+    astIndex: AST_SYNTACTIC_FORMS.has(syntacticForm) ? ordinal : null,
+  }));
+  return { rows: { ...rows, blobReferences }, astRows: forms.filter((form) => AST_SYNTACTIC_FORMS.has(form)).length };
+}
+
+describe('a blob read states what it reads', () => {
+  it('reads only the requested tables and forms', async () => {
+    const { rows, astRows } = everyFormRows();
+    await store.writeBlobFacts(rows);
+    __resetWorkCountersForTest();
+
+    const read = await store.readBlobFacts([FIRST_BLOB], { tables: ['blobs', 'blobReferences'], referenceForms: AST_SYNTACTIC_FORMS });
+
+    expect(Object.keys(read).sort((left, right) => left.localeCompare(right))).toEqual(['blobReferences', 'blobs']);
+    expect(read.blobs).toEqual(rows.blobs);
+    expect(read.blobReferences).toEqual(rows.blobReferences.filter((row) => AST_SYNTACTIC_FORMS.has(row.syntacticForm)));
+    // The lexical rows are not decoded, so they are not counted.
+    expect(readWorkCounters()['store.rows.decoded.persistent']).toBe(rows.blobs.length + astRows);
+    expect(readWorkCounters()['store.reads.blob']).toBe(1);
+    __resetWorkCountersForTest();
+  });
+
+  it('reads every row of every table for every table and every form', async () => {
+    const { rows } = everyFormRows();
+    await store.writeBlobFacts(rows);
+
+    expect(await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST)).toEqual(rows);
+  });
+
+  it('reads no reference row for an empty form set, and still reads the other tables', async () => {
+    const { rows } = everyFormRows();
+    await store.writeBlobFacts(rows);
+
+    const read = await store.readBlobFacts([FIRST_BLOB], { tables: ['blobs', 'blobReferences'], referenceForms: new Set() });
+    expect(read).toEqual({ blobs: rows.blobs, blobReferences: [] });
+  });
+});
+
 describe('blob facts', () => {
   it('round-trips every column kind back into schema-valid rows', async () => {
     const written = sampleBlobRows();
     await store.writeBlobFacts(written);
 
-    const read = await store.readBlobFacts([FIRST_BLOB]) as unknown as Record<string, readonly unknown[]>;
-    expectSchemaValid(read, ['blobs', 'blobReferences', 'blobSections', 'blobConditions', 'harnessBlobFacts', 'harnessBlobImports']);
+    const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST) as unknown as Record<string, readonly unknown[]>;
+    expectSchemaValid(read, ['blobs', 'blobReferences', 'blobSections', 'blobConditions', 'harnessBlobFacts', 'harnessBlobImports', 'skillTextFacts', 'skillTextMatches']);
     expect(read).toEqual(written);
   });
 
   it('returns nothing for a key it has never seen — a miss, not an error', async () => {
-    const read = await store.readBlobFacts([FIRST_BLOB]);
+    const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
     expect(read.blobs).toEqual([]);
     expect(read.blobReferences).toEqual([]);
   });
@@ -223,7 +280,7 @@ describe('blob facts', () => {
     const bare = sampleBlobRows();
     await store.writeBlobFacts({ ...bare, blobReferences: [], blobSections: [], blobConditions: [], harnessBlobFacts: [], harnessBlobImports: [] });
 
-    const read = await store.readBlobFacts([FIRST_BLOB]);
+    const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
     expect(read.blobs).toHaveLength(1);
     expect(read.blobReferences).toEqual([]);
   });
@@ -232,7 +289,7 @@ describe('blob facts', () => {
     await store.writeBlobFacts(sampleBlobRows());
     await store.writeBlobFacts(sampleBlobRows());
 
-    const read = await store.readBlobFacts([FIRST_BLOB]);
+    const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
     expect(read.blobs).toHaveLength(1);
     // The interesting one: `blob_conditions` keys on a nullable `line`, so a
     // conflict clause would NOT have deduplicated this row.
@@ -251,7 +308,7 @@ describe('blob facts', () => {
 
     await store.writeBlobFacts({ ...rootA, harnessBlobFacts: [], harnessBlobImports: [] });
 
-    const read = await store.readBlobFacts([FIRST_BLOB]);
+    const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
     expect(read.blobs).toHaveLength(1);
     expect(read.harnessBlobFacts).toEqual(rootA.harnessBlobFacts);
     expect(read.harnessBlobImports).toEqual(rootA.harnessBlobImports);
@@ -265,7 +322,7 @@ describe('blob facts', () => {
 
     await store.writeBlobFacts({ ...first, harnessBlobFacts: [{ ...facts, injectedTokens: facts.injectedTokens + 1 }], harnessBlobImports: [] });
 
-    const read = await store.readBlobFacts([FIRST_BLOB]);
+    const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
     expect(read.harnessBlobFacts.map((row) => row.injectedTokens)).toEqual([facts.injectedTokens + 1]);
     expect(read.harnessBlobImports).toEqual([]);
   });
@@ -275,7 +332,7 @@ describe('blob facts', () => {
     await store.writeBlobFacts(sampleBlobRows(SECOND_BLOB));
     await store.writeBlobFacts(sampleBlobRows(SECOND_BLOB));
 
-    const read = await store.readBlobFacts([FIRST_BLOB, SECOND_BLOB]);
+    const read = await store.readBlobFacts([FIRST_BLOB, SECOND_BLOB], ALL_BLOB_REQUEST);
     expect(read.blobs).toHaveLength(2);
   });
 
@@ -283,12 +340,12 @@ describe('blob facts', () => {
     await store.writeBlobFacts(sampleBlobRows(FIRST_BLOB));
     await store.writeBlobFacts(sampleBlobRows(SECOND_BLOB));
 
-    const read = await store.readBlobFacts([SECOND_BLOB]);
+    const read = await store.readBlobFacts([SECOND_BLOB], ALL_BLOB_REQUEST);
     expect(read.blobs.map((row) => row.contentKey)).toEqual([SECOND_BLOB]);
   });
 
   it('accepts an empty key list without emitting an IN () that cannot parse', async () => {
-    const read = await store.readBlobFacts([]);
+    const read = await store.readBlobFacts([], ALL_BLOB_REQUEST);
     expect(read.blobs).toEqual([]);
   });
 
@@ -306,7 +363,7 @@ describe('blob facts', () => {
     // `.pyc` or image, while exiting 0.
     await store.writeBlobFacts(declinedBlobRows(FIRST_BLOB));
 
-    const read = await store.readBlobFacts([FIRST_BLOB]);
+    const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
     expect(read.blobs).toEqual([]);
     expect(read.blobConditions).toHaveLength(1);
     expect(read.blobConditions[0]?.code).toBe('BLOB_NOT_TEXT');
@@ -322,7 +379,7 @@ describe('blob facts', () => {
     await store.writeBlobFacts(declinedBlobRows(FIRST_BLOB));
     await store.writeBlobFacts(declinedBlobRows(FIRST_BLOB));
 
-    const read = await store.readBlobFacts([FIRST_BLOB]);
+    const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
     expect(read.blobConditions).toHaveLength(1);
   });
 
@@ -331,7 +388,7 @@ describe('blob facts', () => {
     await store.writeBlobFacts(sampleBlobRows(SECOND_BLOB));
     await store.writeBlobFacts(sampleBlobRows(SECOND_BLOB));
 
-    const read = await store.readBlobFacts([FIRST_BLOB, SECOND_BLOB]);
+    const read = await store.readBlobFacts([FIRST_BLOB, SECOND_BLOB], ALL_BLOB_REQUEST);
     expect(read.blobs.map((row) => row.contentKey)).toEqual([SECOND_BLOB]);
     expect(read.blobConditions.filter((row) => row.blob === FIRST_BLOB)).toHaveLength(1);
   });
@@ -342,7 +399,7 @@ describe('extents', () => {
     const written = sampleExtentRows(KEY.rootId);
     await store.writeExtent(KEY, written);
 
-    const read = await store.readExtent(KEY) as unknown as Record<string, readonly unknown[]>;
+    const read = await store.readExtent(KEY, ALL_EXTENT_REQUEST) as unknown as Record<string, readonly unknown[]>;
     expect(read).toBeDefined();
     expectSchemaValid(read, [
       'roots', 'resources', 'resourceRealizations', 'resourceExtents',
@@ -352,17 +409,32 @@ describe('extents', () => {
     expect(read).toEqual(written);
   });
 
+  it('reads only the requested tables, and decodes only their rows', async () => {
+    const written = sampleExtentRows(KEY.rootId);
+    await store.writeExtent(KEY, written);
+    __resetWorkCountersForTest();
+
+    const read = await store.readExtent(KEY, { tables: ['resourceRealizations', 'realizationConditions', 'zoneProvenance'], steps: [] });
+    expect(read).toEqual({
+      resourceRealizations: written.resourceRealizations,
+      realizationConditions: written.realizationConditions,
+      zoneProvenance: written.zoneProvenance,
+    });
+    expect(readWorkCounters()['store.rows.decoded.persistent'])
+      .toBe(written.resourceRealizations.length + written.realizationConditions.length + written.zoneProvenance.length);
+  });
+
   it('restores an mtime as a Date, not as the string it was stored as', async () => {
     await store.writeExtent(KEY, sampleExtentRows(KEY.rootId));
 
-    const read = await store.readExtent(KEY);
+    const read = await store.readExtent(KEY, ALL_EXTENT_REQUEST);
     const [realization] = read?.resourceRealizations ?? [];
     expect(realization?.mtime).toBeInstanceOf(Date);
     expect(realization?.mtime?.toISOString()).toBe('2026-08-18T12:34:56.789Z');
   });
 
   it('reports a tree it has never seen as undefined', async () => {
-    expect(await store.readExtent(KEY)).toBeUndefined();
+    expect(await store.readExtent(KEY, ALL_EXTENT_REQUEST)).toBeUndefined();
   });
 
   it('distinguishes a written-but-empty extent from an unwritten one', async () => {
@@ -376,10 +448,10 @@ describe('extents', () => {
       resolutionContexts: [], zoneProvenance: [],
     });
 
-    const read = await store.readExtent(KEY);
+    const read = await store.readExtent(KEY, ALL_EXTENT_REQUEST);
     expect(read).toBeDefined();
     expect(read?.roots).toEqual([]);
-    expect(await store.readExtent({ ...KEY, treeHash: 'tree-bbb' })).toBeUndefined();
+    expect(await store.readExtent({ ...KEY, treeHash: 'tree-bbb' }, ALL_EXTENT_REQUEST)).toBeUndefined();
   });
 
   it('keeps two trees of one root apart', async () => {
@@ -392,8 +464,8 @@ describe('extents', () => {
       }],
     });
 
-    expect((await store.readExtent(KEY))?.resources.map((row) => row.resourceId)).toEqual(['res-1']);
-    expect((await store.readExtent(other))?.resources.map((row) => row.resourceId)).toEqual(['res-2']);
+    expect((await store.readExtent(KEY, ALL_EXTENT_REQUEST))?.resources.map((row) => row.resourceId)).toEqual(['res-1']);
+    expect((await store.readExtent(other, ALL_EXTENT_REQUEST))?.resources.map((row) => row.resourceId)).toEqual(['res-2']);
   });
 
   it('keeps two roots at the same tree hash apart', async () => {
@@ -403,8 +475,8 @@ describe('extents', () => {
     await store.writeExtent(KEY, sampleExtentRows(KEY.rootId));
     await store.writeExtent(other, sampleExtentRows('root-2'));
 
-    expect((await store.readExtent(KEY))?.roots.map((row) => row.id)).toEqual(['root-1']);
-    expect((await store.readExtent(other))?.roots.map((row) => row.id)).toEqual(['root-2']);
+    expect((await store.readExtent(KEY, ALL_EXTENT_REQUEST))?.roots.map((row) => row.id)).toEqual(['root-1']);
+    expect((await store.readExtent(other, ALL_EXTENT_REQUEST))?.roots.map((row) => row.id)).toEqual(['root-2']);
   });
 
   it('absorbs the same write twice without duplicating a row', async () => {
@@ -414,8 +486,8 @@ describe('extents', () => {
     await store.writeExtent(KEY, sampleExtentRows(KEY.rootId));
     await store.writeExtent(KEY, sampleExtentRows(KEY.rootId));
 
-    expect((await store.readExtent(KEY))?.resources).toHaveLength(1);
-    expect((await store.readExtent(KEY))?.resourceTags).toHaveLength(1);
+    expect((await store.readExtent(KEY, ALL_EXTENT_REQUEST))?.resources).toHaveLength(1);
+    expect((await store.readExtent(KEY, ALL_EXTENT_REQUEST))?.resourceTags).toHaveLength(1);
   });
 });
 
@@ -430,7 +502,7 @@ describe('extents are additive at context granularity', () => {
       { contextId: FS_CONTEXT, resourceId: 'res-fs', path: 'docs/rewritten.md' },
     ]));
 
-    const read = await store.readExtent(KEY);
+    const read = await store.readExtent(KEY, ALL_EXTENT_REQUEST);
     expect(contextsOf(read)).toEqual([FS_CONTEXT, SKILL_CONTEXT, OTHER_SKILL_CONTEXT]);
     expect(read?.resourceRealizations.filter((row) => row.extentId === SKILL_CONTEXT)).toHaveLength(1);
     expect(read?.resourceExtents.filter((row) => row.extentId === OTHER_SKILL_CONTEXT)).toHaveLength(1);
@@ -449,7 +521,7 @@ describe('extents are additive at context granularity', () => {
       { contextId: FS_CONTEXT, resourceId: SHARED_IDENTITY, path: 'docs/second.md' },
     ]));
 
-    const read = await store.readExtent(KEY);
+    const read = await store.readExtent(KEY, ALL_EXTENT_REQUEST);
     expect(read?.resourceRealizations).toHaveLength(1);
     expect(read?.resourceRealizations[0]?.path).toBe('docs/second.md');
     expect(read?.resolutionContexts).toHaveLength(1);
@@ -464,10 +536,10 @@ describe('extents are additive at context granularity', () => {
     await store.writeExtent(KEY, extentBundle([
       { contextId: FS_CONTEXT, resourceId: SHARED_IDENTITY, condition: 'collided' },
     ]));
-    expect((await store.readExtent(KEY))?.realizationConditions).toHaveLength(1);
+    expect((await store.readExtent(KEY, ALL_EXTENT_REQUEST))?.realizationConditions).toHaveLength(1);
 
     await store.writeExtent(KEY, extentBundle([{ contextId: FS_CONTEXT, resourceId: SHARED_IDENTITY }]));
-    expect((await store.readExtent(KEY))?.realizationConditions).toEqual([]);
+    expect((await store.readExtent(KEY, ALL_EXTENT_REQUEST))?.realizationConditions).toEqual([]);
   });
 
   it('merges a context-less row across two writes, null key column included', async () => {
@@ -478,7 +550,7 @@ describe('extents are additive at context granularity', () => {
     await store.writeExtent(KEY, extentBundle([{ contextId: FS_CONTEXT, resourceId: SHARED_IDENTITY }]));
     await store.writeExtent(KEY, extentBundle([{ contextId: SKILL_CONTEXT, resourceId: SHARED_IDENTITY }]));
 
-    const read = await store.readExtent(KEY);
+    const read = await store.readExtent(KEY, ALL_EXTENT_REQUEST);
     expect(read?.resourceTags).toHaveLength(1);
     expect(read?.resourceTags[0]?.value).toBeNull();
     expect(read?.resources).toHaveLength(1);
@@ -491,7 +563,7 @@ describe('extents are additive at context granularity', () => {
     await store.writeExtent(KEY, extentBundle(BROAD));
     await store.writeExtent(KEY, extentBundle([]));
 
-    const read = await store.readExtent(KEY);
+    const read = await store.readExtent(KEY, ALL_EXTENT_REQUEST);
     expect(read).toBeDefined();
     expect(contextsOf(read)).toEqual([FS_CONTEXT, SKILL_CONTEXT, OTHER_SKILL_CONTEXT]);
     expect(read?.roots).toHaveLength(1);
@@ -503,8 +575,8 @@ describe('extents are additive at context granularity', () => {
     // written by someone else reads as a miss.
     await store.writeExtent(KEY, { ...extentBundle([]), roots: [] });
 
-    expect(await store.readExtent(KEY)).toBeDefined();
-    expect(await store.readExtent({ ...KEY, treeHash: 'tree-never-written' })).toBeUndefined();
+    expect(await store.readExtent(KEY, ALL_EXTENT_REQUEST)).toBeDefined();
+    expect(await store.readExtent({ ...KEY, treeHash: 'tree-never-written' }, ALL_EXTENT_REQUEST)).toBeUndefined();
   });
 });
 
@@ -514,12 +586,12 @@ describe('lifetime', () => {
     await store.close();
 
     store = openSqliteFactStore({ directory });
-    expect((await store.readExtent(KEY))?.resources).toHaveLength(1);
+    expect((await store.readExtent(KEY, ALL_EXTENT_REQUEST))?.resources).toHaveLength(1);
   });
 
   it('rejects use after close rather than silently reopening', async () => {
     await store.close();
-    await expect(store.readExtent(KEY)).rejects.toThrow(/closed/u);
+    await expect(store.readExtent(KEY, ALL_EXTENT_REQUEST)).rejects.toThrow(/closed/u);
     await expect(store.writeBlobFacts(sampleBlobRows())).rejects.toThrow(/closed/u);
   });
 
@@ -571,7 +643,7 @@ describe('decoded rows are counted against the store they came from', () => {
   });
 
   it('a persistent read moves the persistent counter by every row it decoded', async () => {
-    await store.readBlobFacts([FIRST_BLOB]);
+    await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
     expect(readWorkCounters()['store.rows.decoded.persistent']).toBe(bundleRowCount);
     expect(readWorkCounters()['hydration.rows.written']).toBe(0);
   });
@@ -613,12 +685,14 @@ describe('decoded rows are counted against the store they came from', () => {
     }
   });
 
-  it('a persistent read counts one read, of blobs and of an extent alike', async () => {
-    await store.readBlobFacts([FIRST_BLOB]);
-    expect(readWorkCounters()['store.reads.persistent']).toBe(1);
+  it('a persistent read counts one read against the port read it was', async () => {
+    await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
+    expect(readWorkCounters()['store.reads.blob']).toBe(1);
+    expect(readWorkCounters()['store.reads.extent']).toBe(0);
     await store.writeExtent(KEY, sampleExtentRows(KEY.rootId));
-    await store.readExtent(KEY);
-    expect(readWorkCounters()['store.reads.persistent']).toBe(2);
+    await store.readExtent(KEY, ALL_EXTENT_REQUEST);
+    expect(readWorkCounters()['store.reads.blob']).toBe(1);
+    expect(readWorkCounters()['store.reads.extent']).toBe(1);
   });
 
   it('a fact-store write counts one persistent write and every row it wrote, and no hydration', async () => {
@@ -640,26 +714,27 @@ describe('decoded rows are counted against the store they came from', () => {
     const empty = sampleBlobRows();
     await store.writeBlobFacts({
       ...empty, blobs: [], blobReferences: [], blobSections: [], blobConditions: [], harnessBlobFacts: [], harnessBlobImports: [],
+      skillTextFacts: [], skillTextMatches: [],
     });
     expect(readWorkCounters()['store.writes.persistent']).toBe(0);
     expect(readWorkCounters()['store.rows.written.persistent']).toBe(0);
   });
 
   it('a read of no content keys counts no read', async () => {
-    await store.readBlobFacts([]);
-    expect(readWorkCounters()['store.reads.persistent']).toBe(0);
+    await store.readBlobFacts([], ALL_BLOB_REQUEST);
+    expect(readWorkCounters()['store.reads.blob']).toBe(0);
   });
 
   it('a read that fails counts no read', async () => {
     dropTable(directory, lastTableOfScope('blob'));
-    await expect(store.readBlobFacts([FIRST_BLOB])).rejects.toThrow(/no such table/);
-    expect(readWorkCounters()['store.reads.persistent']).toBe(0);
+    await expect(store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST)).rejects.toThrow(/no such table/);
+    expect(readWorkCounters()['store.reads.blob']).toBe(0);
   });
 
   it('a read that fails after decoding earlier tables counts no decoded row', async () => {
     // The LAST blob table: every table read before it decodes its rows first.
     dropTable(directory, lastTableOfScope('blob'));
-    await expect(store.readBlobFacts([FIRST_BLOB])).rejects.toThrow(/no such table/);
+    await expect(store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST)).rejects.toThrow(/no such table/);
     expect(readWorkCounters()['store.rows.decoded.persistent']).toBe(0);
   });
 
@@ -676,8 +751,8 @@ describe('decoded rows are counted against the store they came from', () => {
     await store.writeExtent(KEY, sampleExtentRows(KEY.rootId));
     __resetWorkCountersForTest();
     dropTable(directory, lastTableOfScope('extent'));
-    await expect(store.readExtent(KEY)).rejects.toThrow(/no such table/);
-    expect(readWorkCounters()['store.reads.persistent']).toBe(0);
+    await expect(store.readExtent(KEY, ALL_EXTENT_REQUEST)).rejects.toThrow(/no such table/);
+    expect(readWorkCounters()['store.reads.extent']).toBe(0);
     expect(readWorkCounters()['store.rows.decoded.persistent']).toBe(0);
   });
 });
@@ -763,15 +838,15 @@ describe('eviction', () => {
     const first = treeKey('tree-1', 'root-first');
     await evicting.writeExtent(first, extentBundle(BROAD));
     await evicting.writeExtent(treeKey('tree-1', 'root-second'), extentBundle(BROAD));
-    expect(await store.readExtent(first)).toBeDefined();
+    expect(await store.readExtent(first, ALL_EXTENT_REQUEST)).toBeDefined();
 
     await evicting.writeExtent(treeKey('tree-1', 'root-third'), extentBundle(BROAD));
     await evicting.close();
 
-    expect(await store.readExtent(first)).toBeUndefined();
+    expect(await store.readExtent(first, ALL_EXTENT_REQUEST)).toBeUndefined();
     expect(storedRowTotal(first)).toBe(0);
-    expect(await store.readExtent(treeKey('tree-1', 'root-second'))).toBeDefined();
-    expect(await store.readExtent(treeKey('tree-1', 'root-third'))).toBeDefined();
+    expect(await store.readExtent(treeKey('tree-1', 'root-second'), ALL_EXTENT_REQUEST)).toBeDefined();
+    expect(await store.readExtent(treeKey('tree-1', 'root-third'), ALL_EXTENT_REQUEST)).toBeDefined();
   });
 
   it('counts a root as recent when ANY of its trees was written recently', async () => {
@@ -784,9 +859,9 @@ describe('eviction', () => {
     await evicting.writeExtent(treeKey('tree-1', 'root-new'), extentBundle(BROAD));
     await evicting.close();
 
-    expect(await store.readExtent(treeKey('tree-1', 'root-quiet'))).toBeUndefined();
-    expect(await store.readExtent(treeKey('tree-2', 'root-busy'))).toBeDefined();
-    expect(await store.readExtent(treeKey('tree-1', 'root-new'))).toBeDefined();
+    expect(await store.readExtent(treeKey('tree-1', 'root-quiet'), ALL_EXTENT_REQUEST)).toBeUndefined();
+    expect(await store.readExtent(treeKey('tree-2', 'root-busy'), ALL_EXTENT_REQUEST)).toBeDefined();
+    expect(await store.readExtent(treeKey('tree-1', 'root-new'), ALL_EXTENT_REQUEST)).toBeDefined();
   });
 
   it('keeps every tree while the root is under its retention limit', async () => {
@@ -797,8 +872,8 @@ describe('eviction', () => {
     await evicting.writeExtent(treeKey('tree-2'), extentBundle(BROAD));
     await evicting.close();
 
-    expect(contextsOf(await store.readExtent(treeKey('tree-1')))).toEqual([FS_CONTEXT, SKILL_CONTEXT, OTHER_SKILL_CONTEXT].sort((l, r) => l.localeCompare(r)));
-    expect(await store.readExtent(treeKey('tree-2'))).toBeDefined();
+    expect(contextsOf(await store.readExtent(treeKey('tree-1'), ALL_EXTENT_REQUEST))).toEqual([FS_CONTEXT, SKILL_CONTEXT, OTHER_SKILL_CONTEXT].sort((l, r) => l.localeCompare(r)));
+    expect(await store.readExtent(treeKey('tree-2'), ALL_EXTENT_REQUEST)).toBeDefined();
   });
 
   it('reclaims the ROWS of the oldest tree once the limit is passed, not just its manifest row', async () => {
@@ -820,7 +895,7 @@ describe('eviction', () => {
     // Every table, not the total: a prune that cleared seven of the eight would
     // leave a growing tier behind a green sum.
     expect(Object.values(storedRowCounts(oldest)).every((count) => count === 0)).toBe(true);
-    expect(await store.readExtent(oldest)).toBeUndefined();
+    expect(await store.readExtent(oldest, ALL_EXTENT_REQUEST)).toBeUndefined();
     expect(storedRowTotal(treeKey('tree-3'))).toBe(beforeEviction);
   });
 
@@ -835,9 +910,9 @@ describe('eviction', () => {
     await evicting.writeExtent(treeKey('tree-2'), extentBundle(BROAD));
     await evicting.close();
 
-    expect(await store.readExtent(other)).toBeDefined();
+    expect(await store.readExtent(other, ALL_EXTENT_REQUEST)).toBeDefined();
     expect(storedRowTotal(other)).toBeGreaterThan(0);
-    expect(await store.readExtent(treeKey('tree-1'))).toBeUndefined();
+    expect(await store.readExtent(treeKey('tree-1'), ALL_EXTENT_REQUEST)).toBeUndefined();
   });
 
   it('never evicts the tree it is writing, at a retention of one', async () => {
@@ -848,7 +923,7 @@ describe('eviction', () => {
     const evicting = openWithRetention(1);
     for (const hash of ['tree-1', 'tree-2', 'tree-3']) {
       await evicting.writeExtent(treeKey(hash), extentBundle(BROAD));
-      expect(await evicting.readExtent(treeKey(hash))).toBeDefined();
+      expect(await evicting.readExtent(treeKey(hash), ALL_EXTENT_REQUEST)).toBeDefined();
     }
     await evicting.close();
   });
@@ -865,9 +940,9 @@ describe('eviction', () => {
     await evicting.writeExtent(treeKey('tree-2'), extentBundle(BROAD));
     await evicting.close();
 
-    expect(await store.readExtent(treeKey('tree-2'))).toBeDefined();
+    expect(await store.readExtent(treeKey('tree-2'), ALL_EXTENT_REQUEST)).toBeDefined();
     expect(storedRowTotal(treeKey('tree-2'))).toBeGreaterThan(0);
-    expect(await store.readExtent(treeKey('tree-1'))).toBeUndefined();
+    expect(await store.readExtent(treeKey('tree-1'), ALL_EXTENT_REQUEST)).toBeUndefined();
   });
 
   it('does not tear a read another connection is in the middle of', async () => {
@@ -1013,6 +1088,7 @@ describe('the blob tier is bounded', () => {
     // leave a growing tier behind a green sum.
     expect(blobRowCounts(oldest)).toEqual({
       blobs: 0, blob_references: 0, blob_sections: 0, blob_conditions: 0, harness_blob_facts: 0, harness_blob_imports: 0,
+      skill_text_facts: 0, skill_text_matches: 0,
     });
     expect(trackedBlobKeys()).toBe(2);
     // And the survivors really did survive — an eviction that emptied the tier
@@ -1044,7 +1120,7 @@ describe('the blob tier is bounded', () => {
     const evicting = openWithBlobWindow(1);
     for (const seed of ['a', 'b', 'c']) {
       await evicting.writeBlobFacts(sampleBlobRows(contentKey(seed)));
-      const held = await evicting.readBlobFacts([contentKey(seed)]);
+      const held = await evicting.readBlobFacts([contentKey(seed)], ALL_BLOB_REQUEST);
       expect(held.blobs).toHaveLength(1);
     }
     await evicting.close();
@@ -1062,7 +1138,7 @@ describe('the blob tier is bounded', () => {
       blobs: [], blobReferences: [], blobSections: [], harnessBlobFacts: [], harnessBlobImports: [],
       blobConditions: keys.flatMap((key) => declinedBlobRows(key).blobConditions),
     });
-    const held = await evicting.readBlobFacts(keys);
+    const held = await evicting.readBlobFacts(keys, ALL_BLOB_REQUEST);
     await evicting.close();
 
     expect(new Set(held.blobConditions.map((row) => row.blob))).toEqual(new Set(keys));

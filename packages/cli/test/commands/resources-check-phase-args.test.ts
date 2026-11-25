@@ -17,7 +17,7 @@
  * the root, so a dropped operand would go unnoticed there. This argv is the pin.
  */
 
-import type { Report } from '@vibe-agent-toolkit/schema';
+import type { Report, ValidationIssueCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -31,7 +31,7 @@ const recorded: Array<readonly string[]> = [];
 const PROGRESS_LOG = safePath.join('/minted-by-the-supervisor', 'progress.jsonl');
 
 /** A whole report, so the phase forwards it instead of rebuilding one — built from `check.js` once it is imported. */
-const forwarded: { report?: Report<unknown> } = {};
+const forwarded: { report: Report<unknown> | undefined } = { report: undefined };
 
 vi.mock('../../src/commands/resources/check-supervisor.js', async (importOriginal) => ({
   ...(await importOriginal<typeof SupervisorModule>()),
@@ -42,7 +42,7 @@ vi.mock('../../src/commands/resources/check-supervisor.js', async (importOrigina
     return Promise.resolve({ outcome: 'completed', document: { text: JSON.stringify(report), report } });
   }),
   withProgressLog: vi.fn(async <T>(_verb: SupervisorModule.SupervisedVerb, work: (log: SupervisorModule.ProgressLog) => Promise<T>) => ({
-    value: await work({ path: PROGRESS_LOG, guard: { watch: () => undefined } }),
+    value: await work({ path: PROGRESS_LOG, guard: { watch: () => undefined, adoptFd: () => () => undefined } }),
     leftover: undefined,
   })),
 }));
@@ -54,10 +54,13 @@ const { runPhase } = await import('../../src/commands/phase-utils.js');
 forwarded.report = buildCheckOutputData({
   root: '/corpus',
   durationMs: 200,
-  populated: { population: 'store', populationMs: 100, lensMs: 0, lensesEvaluated: [], membersEnumerated: 1 },
+  populated: { population: 'store', lensPopulation: 'none', populationMs: 100, lensMs: 0, lensesEvaluated: [], membersEnumerated: 1 },
   issues: [],
   costs: [],
 });
+
+/** The checks turn's decision when no gate overlapped: the phase spawns its child itself. */
+const SEQUENTIAL = Promise.resolve({ mode: 'sequential', declinedBy: { condition: 'not-settled' } } as const);
 
 /** The root a `vat validate` run resolved — never touched: the child is not spawned. */
 const ROOT = safePath.join('/resolved', 'project-root');
@@ -65,7 +68,7 @@ const ROOT = safePath.join('/resolved', 'project-root');
 /** The one argv the phase handed the supervisor — its stderr captured, so the run writes nothing to the real one. */
 async function phaseArgs(debug: boolean, base?: string): Promise<readonly string[]> {
   const { exited } = await captureProcessExit(async () => {
-    await runResourcesCheckPhase({ root: ROOT, debug, verbose: false, base });
+    await runResourcesCheckPhase({ root: ROOT, debug, verbose: false, base, decision: SEQUENTIAL });
   });
   expect(exited).toBeUndefined();
   expect(recorded).toHaveLength(1);
@@ -120,7 +123,7 @@ describe('runResourcesCheckPhase — the child\'s argv', () => {
 });
 
 const WARNED = {
-  code: 'CUSTOM:warn-a', severity: 'warning' as const, message: 'a.md is flagged', location: 'docs/a.md',
+  code: 'CUSTOM:warn-a' as ValidationIssueCode, severity: 'warning' as const, message: 'a.md is flagged', location: 'docs/a.md',
 };
 
 /** What the phase printed on stderr for a forwarded report carrying one warning, at `verbose`. */
@@ -129,13 +132,13 @@ async function stderrAt(verbose: boolean): Promise<string> {
   forwarded.report = buildCheckOutputData({
     root: '/corpus',
     durationMs: 200,
-    populated: { population: 'store', populationMs: 100, lensMs: 0, lensesEvaluated: [], membersEnumerated: 1 },
+    populated: { population: 'store', lensPopulation: 'none', populationMs: 100, lensMs: 0, lensesEvaluated: [], membersEnumerated: 1 },
     issues: [WARNED],
     costs: [],
   });
   try {
     const { stderr } = await captureProcessExit(async () => {
-      await runResourcesCheckPhase({ root: ROOT, debug: false, verbose, base: undefined });
+      await runResourcesCheckPhase({ root: ROOT, debug: false, verbose, base: undefined, decision: SEQUENTIAL });
     });
     return stderr;
   } finally {
@@ -194,7 +197,7 @@ async function phaseVerdictFor(check: { examined: string; allowEmpty?: true }, a
         name: 'checks',
         schema: CHECK_REPORT_SCHEMA,
         examined: RESOURCES_CHECK_EXAMINED,
-        run: () => runResourcesCheckPhase({ root: ROOT, debug: false, verbose: false, base: undefined }),
+        run: () => runResourcesCheckPhase({ root: ROOT, debug: false, verbose: false, base: undefined, decision: SEQUENTIAL }),
       })).report;
     });
     if (verdict.report === undefined) throw new Error('the phase produced no verdict');

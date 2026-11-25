@@ -89,8 +89,14 @@ type CapturedParseResultField =
  * - `content`: storing it would make the golden a copy of the corpus. The row
  *   carries `contentMatchesKey` instead, which asserts the parser handed back
  *   the bytes it was keyed on — the property a cache can actually violate.
+ * - `skillText`: not a parser product but the skill-text core over `content`,
+ *   whichever parser ran. Resources' parse tests hold it equal to
+ *   `skillTextFactsOf(content)` on every route (a worker parse, a cache hit,
+ *   BOM, CRLF and UTF-16 input), and agent-skills' skill-text golden holds the
+ *   core's records against the detectors' findings; recording it here would
+ *   make this golden a second copy of that one.
  */
-type UnrecordedParseResultField = 'content';
+type UnrecordedParseResultField = 'content' | 'skillText';
 
 /** Non-empty iff `ParseResult` grew a field neither union mentions. */
 type UnaccountedParseResultFields = Exclude<

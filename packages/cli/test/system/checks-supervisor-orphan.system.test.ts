@@ -23,12 +23,16 @@
  *   handler ends the supervisor with `process.exit`, which no signal handler sees, so the `exit`
  *   guard alone kills the child and removes the progress directory;
  * - a SIGKILL of the supervisor, which runs none of its code (on Windows, `TerminateProcess`). Here
- *   the child stalls ASYNCHRONOUSLY (`child-only-async-stall.mjs`: its population waits on I/O
- *   that never completes). POSIX: it ends ITSELF — the OS closes the stdin pipe its supervisor
+ *   the child stalls ASYNCHRONOUSLY (`child-only-async-stall.mjs`: it parks at its first I/O, in
+ *   the population on a cold store, or just before it publishes on a warm one). POSIX: it ends ITSELF — the OS closes the stdin pipe its supervisor
  *   held, and the child reads end-of-file, says so on stderr and exits 2. Windows: the child sits
  *   in libuv's kill-on-close job object, so the OS terminates it with the supervisor and none of
  *   its code runs (`expectOrphanedChildEnding`). A child blocked inside one SQLite statement reads
  *   nothing until it returns: `checks-supervisor-orphan-loop.system.test.ts`.
+ *
+ * A Ctrl-C, a SIGTERM, an uncaught throw and a SIGKILL under `vat validate` on a warm store with the
+ * checks child OVERLAPPED (spawned during the resources phase, its stderr held in `stderr.log`):
+ * `validate-checks-overlap-ended.system.test.ts`.
  *
  * 🚨 Every "the child is gone within N ms" here starts its clock the moment the SUPERVISOR has
  * exited (`startVat().ended`), never after its stderr drains: the child inherits that stderr, so a

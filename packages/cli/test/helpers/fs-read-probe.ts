@@ -41,11 +41,25 @@ export function readProbeEnv(dumpDir: string, root: string): Record<string, stri
  * @returns Reads per path, and how many dumps were summed
  */
 export function probedReads(dumpDir: string): { readonly reads: Map<string, number>; readonly dumps: number } {
+  return probedReadsOf(dumpDir, () => true);
+}
+
+/**
+ * {@link probedReads} over the processes `keep` admits by pid: one process's reads, or
+ * every other's.
+ *
+ * @param dumpDir - The directory given to {@link readProbeEnv}
+ * @param keep - Whether a process's dumps are summed
+ * @returns Reads per path, and how many dumps were summed
+ */
+export function probedReadsOf(dumpDir: string, keep: (pid: number) => boolean): { readonly reads: Map<string, number>; readonly dumps: number } {
   const reads = new Map<string, number>();
-  const names = readdirSync(dumpDir).filter((name) => name.startsWith('reads-'));
-  for (const name of names) {
+  let dumps = 0;
+  for (const name of readdirSync(dumpDir).filter((entry) => entry.startsWith('reads-'))) {
     const dump = JSON.parse(readFileSync(safePath.join(dumpDir, name), 'utf-8')) as ProbeDump;
+    if (!keep(dump.pid)) continue;
+    dumps += 1;
     for (const [path, count] of Object.entries(dump.reads)) reads.set(path, (reads.get(path) ?? 0) + count);
   }
-  return { reads, dumps: names.length };
+  return { reads, dumps };
 }

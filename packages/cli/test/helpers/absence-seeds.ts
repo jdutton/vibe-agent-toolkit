@@ -29,6 +29,7 @@ import {
   BLOB_UNREADABLE,
   EXTENT_DIRECTORY_UNLISTABLE,
   EXTENT_SYMLINK_NOT_REALIZED,
+  DEFAULT_PARSE_LIMITS,
 } from '@vibe-agent-toolkit/resources';
 import { createSymlink, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { CANNOT_DENY_READS, overOutputRowsMarkdown } from '@vibe-agent-toolkit/utils/testing';
@@ -89,13 +90,8 @@ const limitBreach: I0Seed = {
 };
 
 const OVERSIZE_PATH = 'docs/oversize.md';
-/**
- * One byte past the population's parse input cap (`inputBytes`, 8 MiB). Not
- * imported: the cap is internal to `resources`. If the cap rises past this
- * size, the seed's first check (a `contentState: oversize` row in the
- * reference dump) reds.
- */
-const OVER_INPUT_CAP_BYTES = 8 * 1024 * 1024 + 1;
+/** One byte past the population's parse input cap (`DEFAULT_PARSE_LIMITS.inputBytes`). */
+const OVER_INPUT_CAP_BYTES = DEFAULT_PARSE_LIMITS.inputBytes + 1;
 
 /**
  * A committed markdown file one byte past the input cap, sparse, so it costs no

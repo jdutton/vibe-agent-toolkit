@@ -604,6 +604,23 @@ function renderDivergences(divergences: readonly Divergence[]): string[] {
     + (row.walkerOnly.length > 0 ? ` | walker-only: ${row.walkerOnly.join(', ')}` : ''));
 }
 
+/**
+ * The one skill of the real repository whose two arms differ, and why: a SKILL.md
+ * that links other skills' SKILL.md files (the skill-text golden corpus's planned
+ * case). The walker refuses each linked definition (`skill-definition`); the
+ * closure admits it, because `inventoryRefusals` carries no rule for that branch
+ * (the known-defects.md entry). The sweep leaves this one skill out and agrees on
+ * every other; the KNOWN GAP test below holds its difference exactly, and reds the
+ * day the gap is closed, when the skill goes back into the sweep.
+ */
+const GOLDEN = 'packages/agent-skills/test/fixtures/skill-text-golden';
+const SKILL_DEFINITION_GAP_SKILL = `${GOLDEN}/links-skill-md/SKILL.md`;
+const SKILL_DEFINITION_GAP: readonly AttributedPath[] = [
+  `${GOLDEN}/dup-a/SKILL.md`,
+  `${GOLDEN}/links-skill-md/nested/SKILL.md`,
+  `${GOLDEN}/name-frontmatter-vs-dir/SKILL.md`,
+].map((path) => ({ path, cause: 'skill-definition' }));
+
 // ============================================================================
 // Setup
 // ============================================================================
@@ -673,7 +690,8 @@ describe('inventory extent as a shadow of collectLinkedFiles', () => {
 
     for (const corpus of corpora) {
       if (corpus.spec.label === FIXTURE_CORPUS) continue;
-      const result = await sweep(corpus);
+      // The gap skill is swept by the KNOWN GAP test; every other skill here must agree.
+      const result = await sweep({ ...corpus, skills: corpus.skills.filter((skill) => skill.name !== SKILL_DEFINITION_GAP_SKILL) });
       divergences.push(...result.divergences);
       rows.push(...result.rows);
       followed += result.followed;
@@ -698,6 +716,19 @@ describe('inventory extent as a shadow of collectLinkedFiles', () => {
 
     expect(renderDivergences(divergences)).toEqual([]);
   }, atLeastTierTimeout(inject('tierTestTimeout'), 1_800_000));
+
+  it('KNOWN GAP: the closure admits the SKILL.md files a skill links, which the walker refuses', async () => {
+    // Reds when `inventoryRefusals` expresses `skill-definition`: then delete this
+    // test and SKILL_DEFINITION_GAP, and let the sweep above take the skill back.
+    for (const state of TRACKER_STATES) {
+      const corpus = corpusAt('repo-root', state);
+      const skill = corpus.skills.find((entry) => entry.name === SKILL_DEFINITION_GAP_SKILL);
+      if (skill === undefined) throw new Error(`repo-root[${state}] lost ${SKILL_DEFINITION_GAP_SKILL}`);
+      const { divergence } = await compareSkill(corpus, skill);
+      expect({ state, walkerOnly: divergence?.walkerOnly, closureOnly: divergence?.closureOnly })
+        .toEqual({ state, walkerOnly: [], closureOnly: SKILL_DEFINITION_GAP });
+    }
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 600_000));
 
   it('FIXTURE: with a tracker, the gitignore rule closes the only remaining difference', async () => {
     const corpus = corpusAt(FIXTURE_CORPUS, WITH_TRACKER);

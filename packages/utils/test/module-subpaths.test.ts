@@ -191,6 +191,9 @@ describe('whole-module subpath entries', () => {
     expect(typeof mod.overOutputRowsMarkdown).toBe('function');
     // The absence-cause matcher: planted in resources and claude-marketplace suites, read by the CLI's census.
     expect(typeof mod.expectAbsenceCause).toBe('function');
+    // The verdict normalizer the lab's verdict facet and the CLI system tests share.
+    expect(typeof mod.normalizeCommandOutput).toBe('function');
+    expect(typeof mod.buildPathSubstitutions).toBe('function');
   });
 
   // The harness's vocabulary is exported BY NAME: an `export *` of `fault-spec.ts` made its op table

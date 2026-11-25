@@ -582,6 +582,51 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Fix:** decide what the count means, then either count every `SCAN_PATH_UNREADABLE` issue's
   path or state in the schema docstring that only whole-path refusals are counted.
 
+### A warm `vat validate` checks child re-reads every tracked file while one file's parse is refused
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** no (cost only; the run reports the store miss)
+- **Mechanism:** a refused parse is filed in no store (`storeMissFor`), so the checks child of
+  `vat validate` misses the store and re-derives its whole population on every warm run: it reads
+  and keys every tracked project file and writes the store again, while the parent process serves
+  the same tree from the store. Reproduced.
+- **Where:** [`merge.ts`](../../packages/resources/src/projection/merge.ts) (`storeMissFor`), the
+  checks child spawned by [`validate.ts`](../../packages/cli/src/commands/validate.ts)
+- **Fix:** let the child answer a refused key from the refusal the run already holds, as the
+  parent does, instead of re-deriving the population.
+
+### The inventory extent admits a SKILL.md that another skill links, where the walker refuses it
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** no while the extent stays a shadow; yes
+  if it replaces `collectLinkedFiles`
+- **Mechanism:** the link walker refuses a linked SKILL.md as `skill-definition`, but
+  `inventoryRefusals` carries no rule for that branch, though the packaging translation
+  expresses it (`SKILL_REFUSED_SKILL_DEFINITION`, a `basenames: ['SKILL.md']` rule). So the
+  inventory closure admits every SKILL.md a skill links, in both git-tracker states. Reproduced
+  by the KNOWN GAP test in `inventory-extent-corpus.integration.test.ts`, which holds the
+  difference exactly and reds when the rule lands; delete it then and let the sweep take the
+  skill back.
+- **Where:** [`inventory-extent.ts`](../../packages/claude-marketplace/src/inventory/inventory-extent.ts)
+  (`inventoryRefusals`)
+- **Fix:** add the basename rule between the agent-instruction and gitignore rules, under a new
+  exported label beside the other `INVENTORY_REFUSED_*` labels (barrel, barrel test, the CLI's
+  absence-cause table, the cascade-order unit test).
+
+### `vat inventory` of one SKILL.md parses its whole body
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** no (time only)
+- **Mechanism:** `vat inventory <SKILL.md>` calls `extractClaudeSkillInventory` with no
+  `sharedPopulation`, so the skill's link walk falls back to `crawlSkillLinkRegistry`, whose
+  registry parses the SKILL.md whole, body included, in a parse pool of its own. The frontmatter is
+  parsed again, alone, on the caller's dispatcher. On a SKILL.md of megabytes that is a second full
+  parse for an answer the block already gives. The plugin and marketplace lanes pass a population
+  and do not pay it. Reproduced by `skill-md-input-cap-fallback.integration.test.ts`, which pins the
+  two parses and reds when the second goes.
+- **Where:** [`inventory.ts`](../../packages/cli/src/commands/inventory.ts) (the single-skill
+  branch), [`extract-skill.ts`](../../packages/claude-marketplace/src/inventory/extract-skill.ts)
+  (`registryFor`)
+- **Fix:** build a one-skill population for the single-skill branch, as the plugin lane does, so
+  the walk never builds a registry; then update the pinning test to the block alone.
+
 ## Git and crawl
 
 ### Outside a repository, authored markdown under a tool-output-named directory is not enumerated
@@ -1037,6 +1082,19 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   [`committed-verdict-deltas.integration.test.ts`](../../packages/lab/test/integration/committed-verdict-deltas.integration.test.ts)
 - **Fix:** refuse an orphan marker, and strip markers in the stable fold once the deltas file is
   re-baselined.
+
+### The SIGCONT ordering probe can see the signal after the late timer's `setImmediate`
+
+- **Severity:** Minor (flake) · **Effort:** S to M · **User-visible:** unmeasured
+- **Mechanism:** the `--budget` watchdog judges a late poll one event-loop turn later, on the
+  measured ordering that a pending SIGCONT is delivered before the late timer's `setImmediate`
+  runs. The probe that pins that ordering, at the declared Node floor in CI, once read
+  `{"gapMs":540,"inTimer":false,"inImmediate":false}`: the SIGCONT was not seen by the immediate.
+  The test fails on such a run; whether a supervised run can then misjudge a stop is not measured.
+- **Where:** [`resources-budget-stopped.system.test.ts`](../../packages/cli/test/system/resources-budget-stopped.system.test.ts)
+  line 181
+- **Fix:** establish whether the ordering is a guarantee at the floor or only usual, and if only
+  usual, have the watchdog wait for the signal rather than rely on one turn.
 
 ## Dependencies
 

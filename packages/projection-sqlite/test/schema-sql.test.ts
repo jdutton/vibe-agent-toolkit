@@ -22,6 +22,7 @@ import {
   deleteRowByKeySql,
   insertSql,
   selectBlobFactsSql,
+  selectBlobFactsWhereSql,
   selectExtentSql,
   storedColumns,
   storedPrimaryKey,
@@ -215,6 +216,15 @@ describe('blob-fact statements', () => {
   it('refuses a fractional count, which would emit a wrong placeholder run', () => {
     expect(() => selectBlobFactsSql(PROJECTION_TABLES.blobs, 1.5)).toThrow(RangeError);
   });
+
+  it('filters on one column after the keys, one placeholder per value', () => {
+    expect(selectBlobFactsWhereSql(PROJECTION_TABLES.blobReferences, 2, 'syntacticForm', 3))
+      .toMatch(/WHERE "blob" IN \(\?, \?\) AND "syntacticForm" IN \(\?, \?, \?\)$/);
+  });
+
+  it('refuses an empty value set, which would emit IN ()', () => {
+    expect(() => selectBlobFactsWhereSql(PROJECTION_TABLES.blobReferences, 1, 'syntacticForm', 0)).toThrow(RangeError);
+  });
 });
 
 describe('the registry drives everything', () => {
@@ -231,7 +241,7 @@ describe('the registry drives everything', () => {
     'resolutionContexts',
     'zoneProvenance',
   ];
-  const BLOB_SCOPED = ['blobs', 'blobReferences', 'blobSections', 'blobConditions', 'harnessBlobFacts', 'harnessBlobImports'];
+  const BLOB_SCOPED = ['blobs', 'blobReferences', 'blobSections', 'blobConditions', 'harnessBlobFacts', 'harnessBlobImports', 'skillTextFacts', 'skillTextMatches'];
 
   it('covers every projection table, in registry order', () => {
     expect(allSpecs().map((spec) => spec.key)).toEqual([...EXTENT_SCOPED, ...BLOB_SCOPED]);

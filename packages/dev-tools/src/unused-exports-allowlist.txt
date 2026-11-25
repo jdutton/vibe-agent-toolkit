@@ -40,8 +40,6 @@ packages/agent-skills/src/skill-test/run-harness.ts RunCostSummary dead
 packages/agent-skills/src/skill-test/tier-plan.ts DEFAULT_TIER dead
 packages/agent-skills/src/skill-test/vendor-manifest.ts VendoredManifest dead
 packages/agent-skills/src/test-input.ts ExcludedLinkRef dead
-packages/agent-skills/src/validators/compat-detectors.ts collectBrowserAuthEvidence dead
-packages/agent-skills/src/validators/compat-detectors.ts collectExternalCLIEvidence dead
 packages/agent-skills/src/validators/description-style-detection.ts DescriptionStyleInput dead
 packages/agent-skills/src/validators/description-style-detection.ts DescriptionYamlStyle dead
 packages/agent-skills/src/validators/packaged-size-limit.ts BundleWalk dead
@@ -234,7 +232,6 @@ packages/cli/src/utils/edge-lens-evaluation.ts EvaluatedLenses dead
 packages/cli/src/utils/output.ts WriteAllSyncOptions dead
 packages/cli/src/utils/population-wiring.ts PopulationWiring dead
 packages/cli/src/utils/projection-query.ts PreflightStatement dead
-packages/cli/src/utils/projection-store.ts OpenedPopulationCache dead
 packages/cli/src/utils/relativize-paths.ts PathEntry dead
 packages/cli/src/utils/resource-loader.ts scopeIncludeToSubtree dead
 packages/cli/src/utils/root-argv.ts RootArgvGrammar dead

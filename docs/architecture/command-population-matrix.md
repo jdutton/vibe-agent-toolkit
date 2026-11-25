@@ -177,8 +177,8 @@ and nothing declares which route a new command should reach for.
 **The win is once-per-lifecycle-phase, not incrementality, and the doubled `populate()` in the
 `vat claude context` row above is bounded by that rather than excused by it.** A projection built once and
 read many times beats a walk per check, and that is the whole of the claim. Of the projection's tables only
-the six blob-scoped ones (`blobs`, `blob_references`, `blob_sections`, `blob_conditions`,
-`harness_blob_facts`, `harness_blob_imports`) are keyed
+the blob-scoped ones (`blobs`, `blob_references`, `blob_sections`, `blob_conditions`,
+`harness_blob_facts`, `harness_blob_imports`, `skill_text_facts`, `skill_text_matches`) are keyed
 on content and so survive an edit elsewhere in the tree — and content-keyed reuse of parse work is
 not new work: the cross-process parse cache has shipped it since stage 2 (2026-08-10, `c2a05547`),
 measuring 45× warm over cold on VAT's own 265 tracked markdown files, and
@@ -257,7 +257,7 @@ no blob stage — it reads and parses each admitted resource directly, charged a
 
 | lane | `contentDemand` at enumeration | resulting `contentState` | blob stage (`contentParsing`) |
 |---|---|---|---|
-| resources (membership: `vat resources scan/validate`, `vat rag index`, the packaging registries — the default lane, per [§2](#2-the-selectors-and-the-opt-outs-they-answer-to); query: `vat resources query`, `vat resources check`; and the `claude-context` real pass) | `deferGitignored` (`DEFAULT_CONTENT_DEMAND`), stated at every call — one question, so one store key | `keyed`, or `deferred` for an ignored row, or `none`/`unreadable`/`oversize` | **`CONTENT_PARSING_DERIVE`** (the default) on every miss. A membership hit reads the stored extent alone (`readStoredMembership`), so it hits even where an evicted blob key makes the query lane miss |
+| resources (membership: `vat resources scan/validate`, `vat rag index`, the packaging registries — the default lane, per [§2](#2-the-selectors-and-the-opt-outs-they-answer-to); query: `vat resources query`, `vat resources check`; and the `claude-context` real pass) | `deferGitignored` (`DEFAULT_CONTENT_DEMAND`), stated at every call — one question, so one store key | `keyed`, or `deferred` for an ignored row, or `none`/`unreadable`/`oversize` | **`CONTENT_PARSING_DERIVE`** (the default) on every miss. A membership hit reads the stored extent alone, and of it only `MEMBERSHIP_EXTENT_REQUEST`'s three tables (`readStoredMembership`), so it hits even where an evicted blob key makes the query lane miss |
 | inventory projection (`vat inventory`, plugin dir) | `deferGitignored`, from the same contributor — key eagerly, except where the row's own `gitignored` column is true | `keyed`, or `deferred` for an ignored row, or `none`/`unreadable`/`oversize` | **`CONTENT_PARSING_DERIVE`** (the default). Mandatory here, not a choice: the closure contributor reads the blob-keyed tables, and `populate()` **throws** rather than silently reducing every extent to its own root |
 
 **One question for every resources lane.** Every lane registers `› resourceContributors()` — the
