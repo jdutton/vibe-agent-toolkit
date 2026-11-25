@@ -108,6 +108,23 @@ const PARTITION_COLUMNS: ReadonlyMap<string, string> = new Map(
 );
 
 /**
+ * A row's partition value — the harness path every partitioned blob table is
+ * keyed by. Settled pairs name it as a string, so any other value is a fixture
+ * error, not a partition.
+ *
+ * @param row - A partitioned table's row
+ * @param column - The table's partition column
+ * @returns The partition value
+ */
+function partitionValue(row: Readonly<Record<string, unknown>>, column: string): string {
+  const value = row[column];
+  if (typeof value !== 'string') {
+    throw new TypeError(`partition column ${column} holds a ${typeof value}, not a string`);
+  }
+  return value;
+}
+
+/**
  * One held key's bundle with a later write's rows applied, as the real store's
  * deletes leave it: a replaced key takes the write's unpartitioned rows; in a
  * partitioned table the partitions it replaces (every carried one for a
@@ -125,7 +142,7 @@ function applyWrite(held: RowBundle | undefined, incoming: RowBundle, replaces: 
   // holds nothing: its unpartitioned rows are not written, as in the real store.
   const merged: RowBundle = replaces ? { ...incoming } : { ...(held ?? emptyBlobBundle()) };
   for (const [table, column] of PARTITION_COLUMNS) {
-    const written = (incoming[table] ?? []).filter((row) => replaces || !settled.has(String(row[column])));
+    const written = (incoming[table] ?? []).filter((row) => replaces || !settled.has(partitionValue(row, column)));
     const carried = new Set(written.map((row) => JSON.stringify(row[column])));
     merged[table] = [
       ...(held?.[table] ?? []).filter((row) => !carried.has(JSON.stringify(row[column]))),
