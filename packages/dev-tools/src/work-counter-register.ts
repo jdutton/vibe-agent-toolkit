@@ -56,6 +56,8 @@ export const COUNTERS_WITHOUT_A_COUNTED_ROW: Readonly<Partial<Record<WorkCounter
   'registry.built': ONE_READ_PER_RUN,
   'registry.admitted': ONE_READ_PER_RUN,
   'git.calls': 'I10 git calls; git is no longer pinned, so no cost row restates them',
+  'git.snapshots':
+    "the git tree snapshots taken, a memo miss in gitTreeSnapshot; the parent's snapshot count on a written miss (spec 1.3), enforced by git-snapshot-count.integration.test.ts; no cost row",
   'checks.gate.rows.read':
     "the tier rows validate's checks overlap gate reads to judge its members, summed per member (a content key several members share counts once per member), kept off every store counter so the overlapped and sequential runs count alike, but for the shared tier read when no crawled member reads the tier (resource-scanning-and-caching.md 3.7b); no cost row",
 };

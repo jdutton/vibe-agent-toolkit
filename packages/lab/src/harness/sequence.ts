@@ -23,22 +23,46 @@
  *   sequence ended — and every step that reads a population must report
  *   `store` (see `provenance.ts`). A warm sequence that stops before such a
  *   step is a violation: the rule it exists to check was never checked.
+ *   An edit arm (`warm-edit<N>`, see `edit-step.ts`) primes the same way; each
+ *   measured repetition then edits the tree (untimed), runs its steps, and
+ *   restores the tree (untimed). Its rule inverts the clean one: an edit moves
+ *   the tree key, so the repetition's FIRST step that reads or fills a
+ *   population must report `derived` when it has a reader — a step served from
+ *   the store did not see the edit. Steps after it read what it refilled from
+ *   the edited tree, so they may report `store` and need not run (`ci-b`:
+ *   `resources validate` writes, `resources check` reads). (Its work dump's store
+ *   read and write are judged by the arms facet, which reads the dump.)
+ * - **An observed repetition** (`SequenceContext.observe`) runs with a fresh
+ *   `VAT_WORK_COUNTERS` directory for its VAT steps and a fresh
+ *   `GIT_TRACE2_EVENT` directory for every step, under the arm's
+ *   `repetitions/`; the result names both, for the facet to read.
  */
 
+import { mkdtempSync } from 'node:fs';
+
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath, WORK_COUNTERS_ENV } from '@vibe-agent-toolkit/utils';
 
 import { type ArmDirectories, armRefusal, entriesOf, resetArmHome, resetColdArm } from './arm-dirs.js';
-import type { ArmEnvironment } from './arm-env.js';
+import { type ArmEnvironment, mergeArmEnvironments } from './arm-env.js';
+import type { PreparationGit } from './arm-git.js';
+import { isEditState } from './arm-state.js';
 import { type ExitCommitment, exitCommitmentViolation, MAX_EXIT_CODE } from './commands.js';
+import { type AppliedEdits, applyEdits, editCandidates, type EditAction, planEdits, restoreEdits } from './edit-step.js';
 import { type ParseDirectoryResolution } from './parse-cache.js';
 import type { PopulationExpectation } from './population-expectation.js';
 import { type ProvenanceReader, provenanceViolation, readProvenance, type StepProvenance } from './provenance.js';
 import { runCommand } from './run.js';
-import type { CacheMode, ResolvedInstrument, RunResult } from './types.js';
+import type { ArmState, ResolvedInstrument, RunResult } from './types.js';
+
+/** The variable git writes one trace file per process under, when it names a directory. */
+const GIT_TRACE_VARIABLE = 'GIT_TRACE2_EVENT';
+
+/** The population every step that reads one must report on an edit arm's measured repetition. */
+const DERIVED_POPULATION = 'derived';
 
 /** How much of a failing step's stderr travels with the violation — the one excerpt length every lab failure uses. */
-const STDERR_EXCERPT_CHARS = 200;
+export const STDERR_EXCERPT_CHARS = 200;
 
 /** What one step runs. */
 export type StepCommand =
@@ -87,6 +111,18 @@ export interface SequenceResult extends RunResult {
   readonly steps: readonly StepResult[];
   /** Why this repetition fails the measurement, or `null`. */
   readonly violation: string | null;
+  /** What an edit arm's measured repetition changed before its steps; `null` for every other run. */
+  readonly edits: AppliedEdits | null;
+  /** Where an observed repetition's dumps and traces are; `null` when it was not observed. */
+  readonly observed: RepetitionObservation | null;
+}
+
+/** One observed repetition's directories, made fresh for it. */
+export interface RepetitionObservation {
+  /** `VAT_WORK_COUNTERS` for its VAT steps. */
+  readonly workDir: string;
+  /** `GIT_TRACE2_EVENT` for every step. */
+  readonly traceDir: string;
 }
 
 /** Everything one repetition needs, prepared once per arm. */
@@ -95,7 +131,13 @@ export interface SequenceContext {
   readonly cwd: string;
   readonly steps: readonly SequenceStep[];
   readonly dirs: ArmDirectories;
-  readonly state: CacheMode;
+  /** Git under the arm's environment: every git an edit arm runs on its tree (`arm-git.ts`). */
+  readonly git: PreparationGit;
+  readonly state: ArmState;
+  /** The files an edit arm edits (`--edit`), or `null` for the first N tracked markdown files. Read by edit arms only. */
+  readonly editPaths: readonly string[] | null;
+  /** Whether each measured repetition gets fresh work-dump and trace directories ({@link RepetitionObservation}). */
+  readonly observe: boolean;
   /** The environment for VAT steps. */
   readonly vatEnv: ArmEnvironment;
   /** The environment for tool steps. */
@@ -110,7 +152,18 @@ export interface SequenceContext {
 /** Which run of an arm this is: the priming run, or a measured one. */
 type SequenceRole =
   | { readonly kind: 'priming' }
-  | { readonly kind: 'measured'; readonly vatEnv: ArmEnvironment };
+  | {
+      readonly kind: 'measured';
+      readonly vatEnv: ArmEnvironment;
+      /** The measured round, 0-based: an edit arm's bytes differ per round. */
+      readonly round: number;
+    };
+
+/** The environments one run's steps get. */
+interface StepEnvironments {
+  readonly vat: ArmEnvironment;
+  readonly tool: ArmEnvironment;
+}
 
 /**
  * Refuse a step whose commitment admits vat's system-error exit, or a code no
@@ -144,9 +197,40 @@ export async function runSequence(context: SequenceContext, role: SequenceRole):
     if (violation !== null) return aggregate([], violation);
   }
   await resetArmHome(context.dirs);
+  const observed = role.kind === 'measured' && context.observe ? openObservation(context.dirs) : null;
+  const envs = stepEnvironments(context, role, observed);
+  const actions = role.kind === 'measured' ? plannedEdits(context, role.round) : null;
+  if (actions === null) return { ...runSteps(context, role, envs), observed };
+  // Untimed both ways: the edit is setup, and the tree is restored however the apply or the steps ended.
+  const reached: EditAction[] = [];
+  let applied: AppliedEdits;
+  let ran: SequenceResult;
+  let restored: string | null;
+  try {
+    applied = applyEdits(context.git, context.cwd, actions, reached);
+    ran = runSteps(context, role, envs);
+  } finally {
+    restored = restoreEdits(context.git, context.cwd, reached);
+  }
+  const missed =
+    applied.changed === actions.length
+      ? null
+      : `edit rule: editing ${String(actions.length)} file(s) left ${String(applied.changed)} changed path(s) in git's view`;
+  return { ...ran, violation: ran.violation ?? missed ?? restored, edits: applied, observed };
+}
+
+/**
+ * Run a repetition's steps in order, stopping as CI's `&&` chain does.
+ *
+ * @param context - The arm
+ * @param role - Which run
+ * @param envs - The environments its steps get
+ * @returns The repetition, with no edit and no observation recorded
+ */
+function runSteps(context: SequenceContext, role: SequenceRole, envs: StepEnvironments): SequenceResult {
   const steps: StepResult[] = [];
   for (const [index, step] of context.steps.entries()) {
-    const ran = runStep(context, role, step);
+    const ran = runStep(context, envs, step);
     steps.push(ran);
     const violation = stepViolation(context, role, step, ran, index);
     if (violation !== null) return aggregate(steps, violation);
@@ -154,6 +238,57 @@ export async function runSequence(context: SequenceContext, role: SequenceRole):
     if (ran.exitCode !== 0) return finish(context, role, steps, skippedReaderViolation(context, index));
   }
   return finish(context, role, steps, null);
+}
+
+/** Each arm's edit candidates, read once per arm: the tree is restored after every round. */
+const candidatesByArm = new WeakMap<SequenceContext, readonly string[]>();
+
+/**
+ * @param context - The arm
+ * @param round - The measured round
+ * @returns The round's edits, or `null` for an arm that edits nothing
+ */
+function plannedEdits(context: SequenceContext, round: number): EditAction[] | null {
+  const { state } = context;
+  if (!isEditState(state)) return null;
+  let tracked = candidatesByArm.get(context);
+  if (tracked === undefined) {
+    tracked = context.editPaths ?? editCandidates(context.git, context.cwd);
+    candidatesByArm.set(context, tracked);
+  }
+  return planEdits(tracked, { kind: state.kind, count: state.count, paths: context.editPaths }, round);
+}
+
+/**
+ * Make a measured repetition's fresh dump and trace directories under the arm's `repetitions/`.
+ *
+ * @param dirs - The arm
+ * @returns The directories
+ */
+function openObservation(dirs: ArmDirectories): RepetitionObservation {
+  const parent = safePath.join(dirs.root, 'repetitions');
+  mkdirSyncReal(parent, { recursive: true, mode: 0o700 });
+  const holder = mkdtempSync(safePath.join(parent, 'rep-'));
+  const observation = { workDir: safePath.join(holder, 'work'), traceDir: safePath.join(holder, 'trace') };
+  // Both exist first: git treats a GIT_TRACE2_EVENT that is no directory as one file to append to.
+  for (const dir of [observation.workDir, observation.traceDir]) mkdirSyncReal(dir, { mode: 0o700 });
+  return observation;
+}
+
+/**
+ * @param context - The arm
+ * @param role - Which run
+ * @param observed - The repetition's observation directories, or `null`
+ * @returns The VAT steps' and tool steps' environments
+ */
+function stepEnvironments(context: SequenceContext, role: SequenceRole, observed: RepetitionObservation | null): StepEnvironments {
+  const vat = role.kind === 'measured' ? role.vatEnv : context.vatEnv;
+  if (observed === null) return { vat, tool: context.toolEnv };
+  const trace = { [GIT_TRACE_VARIABLE]: observed.traceDir };
+  return {
+    vat: mergeArmEnvironments(vat, { set: { ...trace, [WORK_COUNTERS_ENV]: observed.workDir }, unset: [] }),
+    tool: mergeArmEnvironments(context.toolEnv, { set: trace, unset: [] }),
+  };
 }
 
 /**
@@ -178,8 +313,10 @@ function finish(context: SequenceContext, role: SequenceRole, steps: readonly St
  * @returns The warm-rule violation naming the first skipped step that reads a population, or `null`
  */
 function skippedReaderViolation(context: SequenceContext, index: number): string | null {
-  if (context.state !== 'warm') return null;
-  const skipped = context.steps.slice(index + 1).find((step) => step.provenance !== 'none');
+  if (context.state === 'cold') return null;
+  // An edit arm judges only its first population step; a reader after it is never required to run.
+  const judged = isEditState(context.state) ? context.steps.slice(0, editJudgedIndex(context.steps) + 1) : context.steps;
+  const skipped = judged.slice(index + 1).find((step) => step.provenance !== 'none');
   if (skipped === undefined) return null;
   const stopper = context.steps[index]?.name ?? String(index);
   return `warm rule: step '${skipped.name}' never ran — the sequence stopped at step '${stopper}' — so its population was never shown to be the store`;
@@ -187,22 +324,16 @@ function skippedReaderViolation(context: SequenceContext, index: number): string
 
 /**
  * @param context - The arm
- * @param role - Which run
+ * @param envs - The run's environments
  * @param step - The step to run
  * @returns Its outcome, with its provenance read
  */
-function runStep(context: SequenceContext, role: SequenceRole, step: SequenceStep): StepResult {
+function runStep(context: SequenceContext, envs: StepEnvironments, step: SequenceStep): StepResult {
   const options = { cwd: context.cwd, timeoutMs: context.timeoutMs };
   const raw =
     step.command.kind === 'vat'
-      ? runCommand(context.instrument, step.command.args, {
-          ...options,
-          env: role.kind === 'measured' ? role.vatEnv : context.vatEnv,
-        })
-      : runCommand({ command: step.command.command, leadingArgs: [] }, step.command.args, {
-          ...options,
-          env: context.toolEnv,
-        });
+      ? runCommand(context.instrument, step.command.args, { ...options, env: envs.vat })
+      : runCommand({ command: step.command.command, leadingArgs: [] }, step.command.args, { ...options, env: envs.tool });
   return { ...raw, name: step.name, timed: step.timed, provenance: readProvenance(step.provenance, raw.stdout) };
 }
 
@@ -229,9 +360,43 @@ function stepViolation(
     const violation = populationViolation(context, `cold rule: after step '${step.name}'`);
     if (violation !== null) return violation;
   }
-  return role.kind === 'measured'
-    ? provenanceViolation(step.name, step.provenance, ran.provenance, context.state, context.population.store)
-    : null;
+  if (role.kind !== 'measured') return null;
+  return isEditState(context.state)
+    ? editProvenanceViolation(context.steps, index, ran.provenance)
+    : provenanceViolation(step.name, step.provenance, ran.provenance, context.state, context.population.store);
+}
+
+/** What the edit rule reads of a step. */
+type EditJudgedStep = Pick<SequenceStep, 'name' | 'provenance' | 'populates'>;
+
+/**
+ * @param steps - An edit arm's sequence
+ * @returns The position of its first step that reads or fills a population — the
+ *   one step whose tree key the edit moved before anything refilled it — or -1
+ */
+function editJudgedIndex(steps: readonly EditJudgedStep[]): number {
+  return steps.findIndex((step) => step.populates || step.provenance !== 'none');
+}
+
+/**
+ * The half of the edit rule a step's document shows: the repetition's first
+ * step that reads or fills a population publishes `derived` (see this module's
+ * header). A later step reads what that step refilled from the edited tree, so
+ * `store` there is the edit seen, not missed (`ci-b`'s `resources check`).
+ *
+ * @param steps - The arm's sequence
+ * @param index - The step that ran
+ * @param provenance - What its document said
+ * @returns The violation, or `null`
+ */
+export function editProvenanceViolation(steps: readonly EditJudgedStep[], index: number, provenance: StepProvenance | null): string | null {
+  const step = steps[index];
+  if (step === undefined || index !== editJudgedIndex(steps) || step.provenance === 'none') return null;
+  const population = provenance?.resources ?? null;
+  if (population === null) return `edit rule: step '${step.name}' published no resources population (absent is never a pass)`;
+  return population === DERIVED_POPULATION
+    ? null
+    : `edit rule: step '${step.name}' reports population '${population}', not '${DERIVED_POPULATION}' — the run did not see the edit`;
 }
 
 /**
@@ -358,5 +523,7 @@ function aggregate(steps: readonly StepResult[], violation: string | null): Sequ
     spawnError: steps.find((step) => step.spawnError !== null)?.spawnError ?? null,
     steps,
     violation,
+    edits: null,
+    observed: null,
   };
 }

@@ -90,7 +90,8 @@ import {
 import type { InstrumentVersion } from '../envelope/coordinate.js';
 
 import { type ArmEnvironment, type ClearedEnvironment, clearedEnvironment, envNameSpelling, mergeArmEnvironments } from './arm-env.js';
-import type { CacheMode } from './types.js';
+import { armStateSegment } from './arm-state.js';
+import type { ArmState } from './types.js';
 
 /** The code of every refusal to lay out, reset or place an arm — what a CLI dispatches on. */
 export const ARM_REFUSED_CODE = 'LAB_ARM_REFUSED';
@@ -100,6 +101,9 @@ const ARM_MARKER = '.vat-lab-arm';
 
 /** The file the lab writes into every arms root it creates or adopts empty; its absence means "not ours". */
 const ROOT_MARKER = '.vat-lab-root';
+
+/** The prepared clone's name under the arms root; it outlives the capture only once a report names where it is kept (`ArmsRootHandle.keepChild`). */
+export const PREPARED_CLONE_NAME = 'clone';
 
 /** Every default run directory's name starts with it; what follows is unique to the run. */
 const RUN_PREFIX = 'run-';
@@ -121,7 +125,8 @@ export interface ArmDescriptor {
   readonly build: string;
   /** The arm's name (`A`, `B`, `C`, or a measured command's name). */
   readonly arm: string;
-  readonly state: CacheMode;
+  /** Its directory names it in `armStateSegment`'s spelling (`warm`, `cold`, `warm-edit1`, `warm-edit1-create`). */
+  readonly state: ArmState;
 }
 
 /** An arm's directories, absolute. */
@@ -186,7 +191,7 @@ export function armDirectories(descriptor: ArmDescriptor): ArmDirectories {
       throw armRefusal(`arm directories: ${field} '${value}' is not a plain directory-name segment`);
     }
   }
-  return layout(safePath.join(descriptor.root, `${descriptor.build}-${descriptor.arm}-${descriptor.state}`), [descriptor.root]);
+  return layout(safePath.join(descriptor.root, `${descriptor.build}-${descriptor.arm}-${armStateSegment(descriptor.state)}`), [descriptor.root]);
 }
 
 /** An invocation's arms root, and whether it is the lab's to remove when the capture ends. */
@@ -920,6 +925,25 @@ function requireMarked(dirs: ArmDirectories): void {
       `'${dirs.root}' exists but carries no ${ARM_MARKER}: the lab did not make it, so it will neither reset nor chmod it. Choose a fresh --arms-dir.`,
     );
   }
+}
+
+/**
+ * Why `cwd` is not the lab's own prepared clone of this arms root: a tree an
+ * arm may edit. The proof is the one the harness records: the clone is
+ * `<armsRoot>/clone` ({@link PREPARED_CLONE_NAME}), and the arms root carries
+ * the lab's {@link ROOT_MARKER}.
+ *
+ * @param armsRoot - The arm's arms root
+ * @param cwd - The tree the arm would edit
+ * @returns The refusal, or `null` when `cwd` is the prepared clone
+ */
+export function preparedCloneRefusal(armsRoot: string, cwd: string): string | null {
+  const clone = safePath.join(armsRoot, PREPARED_CLONE_NAME);
+  if (!isRootMarked(armsRoot)) return `the arms root '${armsRoot}' carries no ${ROOT_MARKER}, so '${cwd}' is not provably the lab's prepared clone`;
+  if (kindOf(clone) !== 'directory' || !samePath(cwd, clone, armsRoot)) {
+    return `'${cwd}' is not the lab's prepared clone '${clone}'`;
+  }
+  return null;
 }
 
 /** @returns Whether the lab's root marker is in `root` */

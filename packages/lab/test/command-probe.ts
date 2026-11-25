@@ -426,6 +426,8 @@ export function probeSpec(probe: Probe, overrides: ProbeSpecOverrides = {}): Rep
     steps: [probeStep(args ?? ['audit'])],
     runs: 2,
     arm: { root: probeArmsRoot(probe), build: 'probe', arm: arm ?? 'audit', state: cache ?? 'warm' },
+    editPaths: null,
+    observeRepetitions: false,
     ...rest,
     env: { set: env ?? {}, unset: [] },
   };

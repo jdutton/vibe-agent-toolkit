@@ -16,9 +16,10 @@
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readdirSync } from 'node:fs';
 
-import { fsFaultOf, isPathAbsentError, isTreeChangeResidue, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { copyTree, fsFaultOf, isPathAbsentError, isTreeChangeResidue, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { NEVER_CRAWL_GLOBS } from '@vibe-agent-toolkit/utils/crawl';
 
+import type { PreparationGit, TreeOrigin } from './arm-git.js';
 import { runGit } from './git-state.js';
 
 /**
@@ -49,6 +50,9 @@ function isSkippedFromClone(relative: string): boolean {
     || SKIPPED_SUFFIXES.some((suffix) => relative === suffix || relative.endsWith(`/${suffix}`));
 }
 
+/** The link policy of a portable copy: a link stays a link, its target as written. */
+const COPIED_LINKS = 'preserve';
+
 /** Whether a tree carries git, and how. */
 export type GitKind = 'directory' | 'file' | 'none';
 
@@ -76,6 +80,14 @@ export interface CloneSource {
 export type CloneStep =
   | { readonly kind: 'spawn'; readonly command: string; readonly args: readonly string[] }
   | { readonly kind: 'mkdir'; readonly path: string }
+  /** Copy one entry through the tree-change `copyTree`, links kept verbatim: no `cp` to spawn, so it runs on Windows. */
+  | { readonly kind: 'copy'; readonly from: string; readonly to: string }
+  /**
+   * Re-stat every tracked file in the clone, so its index no longer holds the
+   * source's mtime, ctime and inode: a copy moves them all, and the clone
+   * reads stat-dirty until git looks again.
+   */
+  | { readonly kind: 'refresh-index'; readonly repository: string }
   /** Remove the clone's `origin` remote, when it has one. */
   | { readonly kind: 'remove-origin'; readonly repository: string };
 
@@ -86,9 +98,10 @@ export type ClonePlan =
 
 /**
  * How an entry is copied: `clone` is APFS copy-on-write (`cp -c`, macOS only),
- * `copy` a real copy. Both keep a link as a link.
+ * `copy` a real copy through `cp -R`, `portable` a real copy through
+ * `copyTree` (no spawn, so Windows has it). All keep a link as a link.
  */
-export type CopyMode = 'clone' | 'copy';
+export type CopyMode = 'clone' | 'copy' | 'portable';
 
 /**
  * The steps copying `source` into `destination`, which must not exist yet.
@@ -96,12 +109,19 @@ export type CopyMode = 'clone' | 'copy';
  * @param source - The subject tree, as listed
  * @param destination - The copy's root
  * @param mode - How each entry is copied
- * @returns The steps, in order
+ * @returns The steps, in order; a repository's end with a `refresh-index`
  */
 export function planTreeClone(source: CloneSource, destination: string, mode: CopyMode): CloneStep[] {
   const steps: CloneStep[] = [];
-  planDir(source.root, source.path, destination, '', mode === 'clone' ? ['-c', '-R'] : ['-R'], steps);
+  planDir(source.root, source.path, destination, '', mode, steps);
+  if (source.git === 'directory') steps.push({ kind: 'refresh-index', repository: destination });
   return steps;
+}
+
+/** The step copying one entry that is cloned whole. */
+function copyStep(mode: CopyMode, from: string, to: string): CloneStep {
+  if (mode === 'portable') return { kind: 'copy', from, to };
+  return { kind: 'spawn', command: 'cp', args: [...(mode === 'clone' ? ['-c', '-R'] : ['-R']), from, to] };
 }
 
 /** Append the steps copying `dir` (at `relative` in the tree) from `from` into `to`. */
@@ -110,7 +130,7 @@ function planDir(
   from: string,
   to: string,
   relative: string,
-  flags: readonly string[],
+  mode: CopyMode,
   steps: CloneStep[],
 ): void {
   steps.push({ kind: 'mkdir', path: to });
@@ -119,9 +139,9 @@ function planDir(
     if (isSkippedFromClone(entryRelative)) continue;
     const child = dir.descend[entry];
     if (child === undefined) {
-      steps.push({ kind: 'spawn', command: 'cp', args: [...flags, safePath.join(from, entry), safePath.join(to, entry)] });
+      steps.push(copyStep(mode, safePath.join(from, entry), safePath.join(to, entry)));
     } else {
-      planDir(child, safePath.join(from, entry), safePath.join(to, entry), entryRelative, flags, steps);
+      planDir(child, safePath.join(from, entry), safePath.join(to, entry), entryRelative, mode, steps);
     }
   }
 }
@@ -182,38 +202,91 @@ function kindOf(path: string): GitKind {
   }
 }
 
+/** The gits a plan runs: the arm's, and which one refreshes the copy's index. */
+interface PlanGit {
+  readonly git: PreparationGit;
+  readonly origin: TreeOrigin;
+}
+
 /**
  * Run a plan's steps in order, stopping at the first that fails.
  *
  * @param plan - An accepted plan
+ * @param git - The arm's git (`arm-git.ts`), for the copy's remote, and its index
+ *   refresh when the source is a lab-made tree
+ * @param origin - Whose config the SOURCE was checked out under: the copy's index
+ *   is refreshed under that config, the arm's for a `'lab-clone'` and the
+ *   developer's for an `'operator'` checkout (see `arm-git.ts`)
  * @returns `null` on success, else a refusal naming the step that failed
  */
-export function executeClonePlan(plan: Extract<ClonePlan, { ok: true }>): string | null {
-  for (const step of plan.steps) {
-    const failed = executeStep(step);
-    if (failed !== null) return failed;
+export function executeClonePlan(
+  plan: Extract<ClonePlan, { ok: true }>,
+  git: PreparationGit,
+  origin: TreeOrigin,
+): Promise<string | null> {
+  return executeFrom(plan.steps, 0, { git, origin });
+}
+
+/** Steps run one after another, each on what the last left: `index` onward, stopping at the first refusal. */
+async function executeFrom(steps: readonly CloneStep[], index: number, gits: PlanGit): Promise<string | null> {
+  const step = steps[index];
+  if (step === undefined) return null;
+  const failed = await executeStep(step, gits);
+  return failed ?? executeFrom(steps, index + 1, gits);
+}
+
+/**
+ * Re-stat the copy's tracked files under the config its source was checked out
+ * under: a filter or `autocrlf` that config carries decides what every re-hashed
+ * file reads as, and `-q` would hide a wrong answer as "modified".
+ *
+ * @param repository - The copy
+ * @param gits - The arm's git, and the source's origin
+ * @returns The exit (`null` when the arm's git never ran) and git's words
+ */
+function refreshIndex(repository: string, gits: PlanGit): { readonly status: number | null; readonly detail: string } {
+  // `-q` BEFORE `--refresh`: git applies options in order, so a trailing `-q`
+  // is not yet read and a modified or skipped tracked file ("needs update")
+  // would exit 1. Such a subject is the normal one, and its dirt must stay
+  // visible in the clone.
+  const args = ['update-index', '-q', '--refresh'];
+  if (gits.origin === 'operator') {
+    const ran = runGit(args, repository);
+    return { status: ran.status, detail: ran.stdout.trim() };
   }
-  return null;
+  const ran = gits.git(args, repository);
+  return { status: ran.status, detail: `${ran.stdout} ${ran.stderr}`.trim() };
 }
 
 /**
  * @param step - One step
+ * @param gits - The arm's git, and the source's origin
  * @returns `null` on success, else a refusal naming the step
  */
-function executeStep(step: CloneStep): string | null {
+function executeStep(step: CloneStep, gits: PlanGit): string | null | Promise<string | null> {
+  const { git } = gits;
   switch (step.kind) {
     case 'mkdir': {
       mkdirSyncReal(step.path, { recursive: true });
       return null;
     }
+    case 'copy': {
+      return copyEntry(step.from, step.to);
+    }
+    case 'refresh-index': {
+      const refreshed = refreshIndex(step.repository, gits);
+      return refreshed.status === 0
+        ? null
+        : `REFUSED: cannot refresh the clone's index at ${step.repository} (git exit ${String(refreshed.status)}): ${refreshed.detail}`.trim();
+    }
     case 'remove-origin': {
-      // Through the lab's runner, which scrubs an inherited GIT_DIR: a capture
+      // Through the arm's git, which clears an inherited GIT_DIR: a capture
       // launched from a hook must not edit the repository that is committing.
       // A clone with no origin already holds the state this step exists for.
-      const remotes = runGit(['remote'], step.repository);
+      const remotes = git(['remote'], step.repository);
       if (remotes.status !== 0) return `REFUSED: cannot list the clone's remotes at ${step.repository}.`;
       if (!remotes.stdout.split('\n').includes('origin')) return null;
-      return runGit(['remote', 'remove', 'origin'], step.repository).status === 0
+      return git(['remote', 'remove', 'origin'], step.repository).status === 0
         ? null
         : `REFUSED: cannot remove the clone's origin remote at ${step.repository}.`;
     }
@@ -223,5 +296,33 @@ function executeStep(step: CloneStep): string | null {
       const stderr = typeof result.stderr === 'string' ? result.stderr.trim() : '';
       return `REFUSED: clone step '${step.command} ${step.args.join(' ')}' failed: ${result.error?.message ?? stderr}`;
     }
+  }
+}
+
+/**
+ * Copy the one entry `from` (a file, a link or a directory) to `to` through
+ * `copyTree`, which copies a directory: walk `from`'s parent under a filter that
+ * keeps only that entry, into `to`'s parent, which an earlier `mkdir` step made.
+ * `links: 'preserve'` keeps a link a link with its target as written (a copier
+ * that follows or absolutizes would point the copy back out of itself).
+ *
+ * @param from - The entry in the source tree
+ * @param to - Where it goes; its parent exists and it does not
+ * @returns `null` on success, else a refusal naming the entry
+ */
+async function copyEntry(from: string, to: string): Promise<string | null> {
+  const name = from.slice(from.lastIndexOf('/') + 1);
+  try {
+    await copyTree(safePath.join(from, '..'), safePath.join(to, '..'), '', {
+      links: COPIED_LINKS,
+      side: 'source',
+      onto: 'fresh',
+      filter: (relative) => relative === name || relative.startsWith(`${name}/`),
+    });
+    return null;
+  } catch (error) {
+    if (fsFaultOf(error) === undefined) throw error;
+    const detail = error instanceof Error ? error.message : String(error);
+    return `REFUSED: clone step 'copy ${from} ${to}' failed: ${detail}`;
   }
 }

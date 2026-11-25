@@ -71,6 +71,8 @@ function coldArm(instrument: ResolvedInstrument, populates = false): RepeatSpec 
     runs: 3,
     arm: { root: mkdtempSync(safePath.join(scratch, 'arms-')), build: 'fetching', arm: 'a', state: 'cold' },
     env: { set: { [LOG_ENV]: safePath.join(scratch, 'fetch.log') }, unset: [] },
+    editPaths: null,
+    observeRepetitions: false,
   };
 }
 

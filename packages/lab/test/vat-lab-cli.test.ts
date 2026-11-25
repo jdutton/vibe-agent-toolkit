@@ -372,8 +372,10 @@ describe('vat-lab <facet> ab — every facet gets the verb, not just the one tha
   it.for(FACETS)('declares ab on %s', (facet) => {
     const group = createProgram().commands.find((candidate) => candidate.name() === facet);
 
-    // `perf` alone also times whole CI sequences, judges bars over them, and attributes CPU profiles.
-    const expected = facet === 'perf' ? ['run', 'compare', 'ab', 'arms', 'bars', 'attribute'] : ['run', 'compare', 'ab'];
+    // `perf` alone also times whole CI sequences, judges bars over them, attributes CPU profiles,
+    // and runs the store-size and touched-LFS arms.
+    const perf = ['run', 'compare', 'ab', 'arms', 'bars', 'attribute', 'store-size', 'lfs-touch'];
+    const expected = facet === 'perf' ? perf : ['run', 'compare', 'ab'];
     expect(group?.commands.map((sub) => sub.name())).toEqual(expected);
   });
 
@@ -502,6 +504,8 @@ describe('vat-lab — every --out is resolved once, by its parser', () => {
       [facet, 'ab'],
     ]),
     ['perf', 'arms'],
+    ['perf', 'store-size'],
+    ['perf', 'lfs-touch'],
     ['verdict', 'run'],
   ] as const;
 
@@ -719,7 +723,7 @@ describe('vat-lab perf arms — the option parsers', () => {
 });
 
 /** An arms report's inputs when the caller chose none. */
-const NO_INPUTS = { env: { set: {}, unset: [] }, expectedExits: [], prerequisites: [], timeoutMs: null };
+const NO_INPUTS = { env: { set: {}, unset: [] }, expectedExits: [], prerequisites: [], timeoutMs: null, edits: [] };
 
 /**
  * @param steps - One round's timed steps and their exits
@@ -777,7 +781,12 @@ async function judge(bars: readonly string[]): Promise<{ readonly stdout: string
         { alias: 'cand', source: { kind: 'dist', path: '/x/vat' }, instrument: { version: '0.2.0', commit: null, dirty: null, closure: 'd'.repeat(64) } },
       ],
       load: { before: null, after: null, cpus: 8, available: false, contaminated: false },
-      arms: [measured('rc11', 'ci-a', 100, 90), measured('cand', 'ci-c', 110, 100)],
+      arms: [
+        measured('rc11', 'ci-a', 100, 90),
+        measured('cand', 'ci-c', 110, 100),
+        { ...measured('cand', 'ci-c', 1000, 1000), state: 'warm' },
+        { ...measured('cand', 'ci-c', 1600, 1600), state: 'warm-edit1' },
+      ],
     }),
   );
   return runLab(['perf', 'bars', report, ...bars.flatMap((bar) => ['--bar', bar])]);
@@ -814,6 +823,18 @@ describe('vat-lab perf bars', () => {
     const { stdout } = await judge(['cand:ci-c:cold<=1.1*rc11:ci-a:cold']);
     expect(process.exitCode).toBe(ExitCode.FINDINGS);
     expect(stdout).toMatch(/^INCONCLUSIVE/mu);
+  });
+
+  it('judges gap bars beside ratio bars, and exits non-zero on a NOISE-BOUND gap bar', async () => {
+    const { stdout } = await judge(['cand:ci-c:cold<=1.15*rc11:ci-a:cold', 'gap(cand:ci-c:warm-edit1) <= 0.7s']);
+    expect(process.exitCode).toBeUndefined();
+    expect(stdout).toMatch(/^PASS {2}cand:ci-c:cold<=1\.15\*rc11:ci-a:cold/mu);
+    expect(stdout).toMatch(/^PASS {2}gap\(cand:ci-c:warm-edit1\) <= 0\.7s {2}\(gap 600\.0ms, bound 700\.0ms\)$/mu);
+
+    // A gap of 600 ms against 600.5 ms: a margin of 0.5 ms, under each arm's IQR of 1 ms.
+    const noisy = await judge(['gap(cand:ci-c:warm-edit1)<=0.6005s']);
+    expect(process.exitCode).toBe(ExitCode.FINDINGS);
+    expect(noisy.stdout).toMatch(/^NOISE-BOUND {2}gap\(cand:ci-c:warm-edit1\)<=0\.6005s/mu);
   });
 
   it('prints what every alias was before the verdicts', async () => {

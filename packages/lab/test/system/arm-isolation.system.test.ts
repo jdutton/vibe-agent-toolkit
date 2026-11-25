@@ -169,6 +169,8 @@ describe('an arm never sees the developer’s VAT, git or Claude state', () => {
       runs: 1,
       arm: { root: tempDir('lab-arm-isolation-arms-'), build: 'cli', arm: 'isolation', state: 'cold' },
       env: { set: {}, unset: [] },
+      editPaths: null,
+      observeRepetitions: false,
     });
 
     const [repetition] = run.results;
@@ -191,6 +193,8 @@ describe('an arm never sees the developer’s VAT, git or Claude state', () => {
       runs: 1,
       arm: { root: armsRoot, build: 'cli', arm: 'context', state: 'cold' },
       env: { set: {}, unset: [] },
+      editPaths: null,
+      observeRepetitions: false,
     });
 
     const stdout = run.results[0]?.stdout ?? '';

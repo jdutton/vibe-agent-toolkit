@@ -67,7 +67,7 @@ export function brokenLinkSubject(): string {
  * @param overrides - Relative path → content, over the clean subject's files
  * @returns The root of a fresh committed subject
  */
-function candidateSubject(overrides: Readonly<Record<string, string>>): string {
+export function candidateSubject(overrides: Readonly<Record<string, string>>): string {
   const root = tempDir('lab-candidate-subject-');
   initRepo(root);
   const files: Record<string, string> = {

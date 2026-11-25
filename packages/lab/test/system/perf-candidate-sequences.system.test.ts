@@ -34,6 +34,7 @@ describe('the candidate CI sequences on a clean subject', () => {
       })),
       rounds: 1,
       env: { set: {}, unset: [] },
+      editPaths: null,
     });
 
     expect(report.arms.map((arm) => [arm.arm, arm.failure])).toEqual(sequences.map((sequence) => [sequence.name, null]));

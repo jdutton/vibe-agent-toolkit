@@ -23,10 +23,17 @@ import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 
 import { InstrumentVersionSchema } from '../../envelope/coordinate.js';
+import { armStateName, isEditState, parseArmState } from '../../harness/arm-state.js';
 import { recaptureRefusal } from '../../harness/dumps.js';
 import { RecordedExitSchema } from '../../harness/exit-record.js';
 import { LoadReadingsSchema } from '../../harness/schemas.js';
-import type { CacheMode } from '../../harness/types.js';
+import type { ArmState } from '../../harness/types.js';
+
+/** An arm state in the report's spelling (`warm`, `cold`, `warm-edit<N>[:<kind>]`), read as the state. */
+const ArmStateSchema = z
+  .string()
+  .transform((text) => parseArmState(text))
+  .pipe(z.custom<ArmState>((state) => state !== null, 'not an arm state (warm, cold or warm-edit<N>[:<kind>])'));
 
 const RepetitionSchema = z
   .object({
@@ -39,7 +46,7 @@ const RepetitionSchema = z
 /**
  * Everything the caller chose that decided the report's numbers: the arm
  * environment, every committed exit, the untimed prerequisites run before round
- * 1, and the per-step timeout.
+ * 1, the per-step timeout, and every edit arm's edit.
  */
 const ArmsInputsSchema = z
   .object({
@@ -49,6 +56,21 @@ const ArmsInputsSchema = z
     ),
     prerequisites: z.array(z.string()),
     timeoutMs: z.number().int().positive().nullable(),
+    /**
+     * Every edit arm's edit, so the arm's identity carries it: `warm-edit1` over
+     * `--edit docs/a.md` and over the default candidates are different arms with one name.
+     */
+    edits: z.array(
+      z
+        .object({
+          arm: z.string(),
+          kind: z.enum(['modify', 'create', 'delete']),
+          count: z.number().int().positive(),
+          /** `--edit` as given, or `null` for the first N tracked markdown files with no frontmatter. */
+          paths: z.array(z.string()).nullable(),
+        })
+        .strict(),
+    ),
   })
   .strict();
 
@@ -78,10 +100,10 @@ const ArmsReportFileSchema = z
         .object({
           build: z.string(),
           arm: z.string(),
-          state: z.enum(['warm', 'cold']),
+          state: ArmStateSchema,
           exits: z.array(RecordedExitSchema),
           repetitions: z.array(RepetitionSchema),
-          summary: z.object({ medianMs: z.number(), minMs: z.number() }).strip().nullable(),
+          summary: z.object({ medianMs: z.number(), minMs: z.number(), iqrMs: z.number() }).strip().nullable(),
           failure: z.string().nullable(),
         })
         .strip(),
@@ -118,21 +140,22 @@ export interface ArmName {
   readonly build: string;
   /** The arm's sequence name. */
   readonly arm: string;
-  readonly state: CacheMode;
+  readonly state: ArmState;
 }
 
-/** One arm, in the `--arm` spelling. */
-const ARM = /^([\w.-]+):([\w-]+):(warm|cold)$/u;
+/** One arm, in the `--arm` spelling; the state is read by `parseArmState`. */
+const ARM = /^([\w.-]+):([\w-]+):(.+)$/u;
 
 /**
  * @param text - An arm in `--arm` spelling
- * @returns The arm it names, or `null` when it is not `<build>:<sequence>:<warm|cold>`
+ * @returns The arm it names, or `null` when it is not `<build>:<sequence>:<warm|cold|warm-edit<N>[:<kind>]>`
  */
 export function parseArmName(text: string): ArmName | null {
   const match = ARM.exec(text.trim());
   if (match === null) return null;
-  const [, build = '', arm = '', state = ''] = match;
-  return { build, arm, state: state as CacheMode };
+  const [, build = '', arm = '', spelled = ''] = match;
+  const state = parseArmState(spelled);
+  return state === null ? null : { build, arm, state };
 }
 
 /**
@@ -140,7 +163,20 @@ export function parseArmName(text: string): ArmName | null {
  * @returns Its `--arm` spelling
  */
 export function armName(arm: ArmName): string {
-  return `${arm.build}:${arm.arm}:${arm.state}`;
+  return `${arm.build}:${arm.arm}:${armStateName(arm.state)}`;
+}
+
+/**
+ * @param arms - Every arm the invocation runs
+ * @param paths - `--edit` as given, or `null`
+ * @returns Each edit arm's edit, for {@link ArmsInputs.edits}
+ */
+export function editInputs(arms: readonly ArmName[], paths: readonly string[] | null): ArmsInputs['edits'] {
+  return arms.flatMap((arm) => {
+    const { state } = arm;
+    if (!isEditState(state)) return [];
+    return [{ arm: armName(arm), kind: state.kind, count: state.count, paths: paths === null ? null : [...paths] }];
+  });
 }
 
 /**
@@ -149,7 +185,8 @@ export function armName(arm: ArmName): string {
  * @returns The arm, or why there is none
  */
 export function findArm<T extends ArmName>(arms: readonly T[], wanted: ArmName): T | string {
-  const found = arms.find((arm) => arm.build === wanted.build && arm.arm === wanted.arm && arm.state === wanted.state);
+  const name = armName(wanted);
+  const found = arms.find((arm) => armName(arm) === name);
   return found ?? `${armName(wanted)} is not in the report`;
 }
 
