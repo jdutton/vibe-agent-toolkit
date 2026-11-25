@@ -29,6 +29,11 @@
  *    changed anything else in it failed, and the copy removed when the arm ends
  *    — see `subject-copy.ts`. The limit: in a checkout, a write to a gitignored
  *    path or under `.git/` outside the declared writes is not seen.
+ *    An edit arm (`warm-edit<N>`) DOES edit the tree it runs in, so it is
+ *    refused unless that tree is the lab's own prepared clone
+ *    (`<arms root>/clone` under a marked arms root, `preparedCloneRefusal`):
+ *    never a developer's checkout or an operator's subject. Every git it runs
+ *    there is the arm's (`arm-git.ts`).
  */
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
@@ -52,10 +57,13 @@ import {
   armRefusal,
   armStepEnvironment,
   clearArmSubjectOutputs,
+  preparedCloneRefusal,
   prepareArmDirectories,
   removeArmSubject,
 } from './arm-dirs.js';
 import { type ArmEnvironment, clearedEnvironment, mergeArmEnvironments } from './arm-env.js';
+import { preparationGit, type TreeOrigin } from './arm-git.js';
+import { isEditState } from './arm-state.js';
 import type { MeasuredCommandSpec } from './commands.js';
 import { fingerprintFiles } from './fingerprint.js';
 import { type ParseDirectoryResolution, resolveParseCacheDirectory } from './parse-cache.js';
@@ -102,6 +110,18 @@ export interface RepeatSpec {
    * setup's I/O into a repeat's measurement.
    */
   readonly envFor?: RepeatEnvFor;
+  /**
+   * The files an edit arm (`arm.state` an `EditState`) edits, as `--edit` names
+   * them; `null`, the first N tracked markdown files with no frontmatter
+   * (`edit-step.ts`). Read by edit arms only; every caller states it.
+   */
+  readonly editPaths: readonly string[] | null;
+  /**
+   * Whether every measured repetition gets its own fresh work-dump and git-trace
+   * directories (`sequence.ts`, `RepetitionObservation`). The arms facet sets it;
+   * a facet that sets its own `VAT_WORK_COUNTERS` per repeat through `envFor` does not.
+   */
+  readonly observeRepetitions: boolean;
 }
 
 /** Per-repeat variables for the measured run; see {@link RepeatSpec.envFor}. */
@@ -242,6 +262,8 @@ export async function measureSpec(
     ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
     env: request.env,
     ...(envFor === undefined ? {} : { envFor }),
+    editPaths: null,
+    observeRepetitions: false,
   });
   return {
     spec,
@@ -334,14 +356,15 @@ async function runPreparedArms(
   // Before any measured child: an arm that cannot judge its population is refused whole, not after round 1.
   for (const [index, arm] of arms.entries()) parseDirectoryRefusal(arm, specs[index]?.arm.arm ?? '');
   // One sequence at a time, never concurrently: a measurement shares the machine with nothing of its own.
-  const priming = await mapInOrder(arms, (arm) => (arm.context.state === 'warm' ? primed(arm) : null));
+  // A warm arm and an edit arm prime alike: an edit arm is a warm arm that edits before each measured run.
+  const priming = await mapInOrder(arms, (arm) => (arm.context.state === 'cold' ? null : primed(arm)));
   const results = arms.map((): SequenceResult[] => []);
   const roundNumbers = Array.from({ length: rounds }, (_, round) => round);
   await forEachInOrder(roundNumbers, (round) =>
     forEachInOrder(arms, async (arm, index) => {
       if ((priming[index]?.violation ?? null) !== null) return;
       await clearWrittenOutputs(arm);
-      const run = await runSequence(arm.context, { kind: 'measured', vatEnv: arm.measuredEnv(round) });
+      const run = await runSequence(arm.context, { kind: 'measured', vatEnv: arm.measuredEnv(round), round });
       results[index]?.push(strayWrite(arm, copies[index] ?? null, run));
     }),
   );
@@ -365,7 +388,7 @@ async function runPreparedArms(
 async function makeSubjectCopy(arm: PreparedArm): Promise<string | null> {
   if (arm.copy === null) return null;
   await removeArmSubject(arm.context.dirs);
-  copySubject(arm.copy.from, arm.context.dirs.subject);
+  await copySubject(arm.copy.from, arm.context.dirs.subject, arm.context.git, arm.copy.origin);
   return copyFingerprint(arm.context.dirs.subject, arm.copy.writes);
 }
 
@@ -451,7 +474,7 @@ interface PreparedArm {
    * The real subject the arm's copy is made from and what its steps write in
    * it, or `null` when no step writes the subject and the arm runs in it.
    */
-  readonly copy: { readonly from: string; readonly writes: readonly string[] } | null;
+  readonly copy: { readonly from: string; readonly writes: readonly string[]; readonly origin: TreeOrigin } | null;
   readonly removed: readonly string[];
   readonly removedTool: readonly string[];
   readonly npmNetwork: readonly string[];
@@ -472,23 +495,38 @@ function prepareArm(spec: RepeatSpec): PreparedArm {
   const dirs = armDirectories(spec.arm);
   const placement = armPlacementRefusal(dirs.root, [spec.cwd]);
   if (placement !== null) throw armRefusal(`arm '${spec.arm.arm}': ${placement}`);
+  // Is the subject the lab's prepared clone, checked out under the arm's git, or an operator's checkout?
+  const notOurs = preparedCloneRefusal(spec.arm.root, spec.cwd);
+  // An edit arm edits the tree it runs in, which is `dirs.subject` when its steps
+  // also declare writes. That copy is the lab's either way, yet the guard
+  // deliberately checks the SOURCE, `spec.cwd`: the edits, the candidate listing
+  // and the restore all run through the arm's git, which reads a tree right only
+  // when the tree was checked out under it (`arm-git.ts`). A copy of an operator's
+  // checkout was checked out under the developer's config, so it is refused too.
+  if (isEditState(spec.arm.state) && notOurs !== null) {
+    throw armRefusal(`arm '${spec.arm.arm}' edits the tree it runs in: ${notOurs}`);
+  }
   const writes = writtenDirectories(spec.steps);
-  const copy = writes.length === 0 ? null : { from: spec.cwd, writes };
+  const copy = writes.length === 0 ? null : { from: spec.cwd, writes, origin: originOf(notOurs) };
   if (copy !== null) refuseSubjectArguments(spec);
   // A writing arm runs in its copy: the cwd every step and every resolution sees.
   const cwd = copy === null ? spec.cwd : dirs.subject;
   const vat = armStepEnvironment(dirs, spec.env);
   const tool = clearedEnvironment(process.env, 'tool', { set: {}, unset: [] }, process.platform);
   let parse: ParseDirectoryResolution | undefined;
+  const timeoutMs = spec.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const context: SequenceContext = {
     instrument: spec.instrument,
     cwd,
     steps: spec.steps,
     dirs,
+    git: preparationGit(dirs, timeoutMs),
     state: spec.arm.state,
+    editPaths: spec.editPaths,
+    observe: spec.observeRepetitions,
     vatEnv: vat.env,
     toolEnv: tool.env,
-    timeoutMs: spec.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    timeoutMs,
     parseDirectory: () => (parse ??= resolveParseCacheDirectory(spec.instrument, dirs)),
     population: populationExpectation(vat.env, process.platform),
   };
@@ -503,6 +541,14 @@ function prepareArm(spec: RepeatSpec): PreparedArm {
       return own === undefined ? vat.env : mergeArmEnvironments(vat.env, { set: own, unset: [] });
     },
   };
+}
+
+/**
+ * @param notOurs - {@link preparedCloneRefusal} of the arm's subject
+ * @returns Whose config the subject was checked out under: the arm's for the lab's prepared clone, else the operator's
+ */
+function originOf(notOurs: string | null): TreeOrigin {
+  return notOurs === null ? 'lab-clone' : 'operator';
 }
 
 /**

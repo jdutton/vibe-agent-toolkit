@@ -9,7 +9,7 @@
 
 
 import { ExitCode, installLastResortExit } from '@vibe-agent-toolkit/schema';
-import { isAbsolutePath, isVatError, parseWholeNumberAtLeast, safePath } from '@vibe-agent-toolkit/utils';
+import { isAbsolutePath, isVatError, parseWholeNumberAtLeast, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { isEntrypoint } from '@vibe-agent-toolkit/utils/process';
 import { Command, InvalidArgumentError } from 'commander';
 
@@ -33,6 +33,7 @@ import {
   armName,
   type ArmsInputs,
   type ArmsReportFile,
+  editInputs,
   findArm,
   parseArmName,
   readArmsReportFile,
@@ -41,9 +42,20 @@ import { captureArms, type ExpectedExit, expectedExitRefusal, renderArmsReport, 
 import { type Bar, judgeBars, parseBar, renderBars } from '../facets/perf/bars.js';
 import { capturePerf } from '../facets/perf/capture.js';
 import { comparePerf } from '../facets/perf/compare.js';
+import { type GapBar, isGapBarText, judgeGapBars, parseGapBar, renderGapBars } from '../facets/perf/gaps.js';
+import {
+  DEFAULT_LFS_FILES,
+  DEFAULT_LFS_ROUNDS,
+  DEFAULT_LFS_SIZE,
+  LFS_FILTER_SCRIPT,
+  renderLfsTouchReport,
+  runLfsTouchArm,
+} from '../facets/perf/lfs-touch.js';
 import { VALIDATE_PHASE_BUCKETS } from '../facets/perf/profile-buckets.js';
 import { attributeReport, renderAttributions } from '../facets/perf/profile-report.js';
 import { renderPerfComparison, renderPerfReport } from '../facets/perf/render.js';
+import type { ScratchBuild } from '../facets/perf/scratch-arm.js';
+import { DEFAULT_STORE_SIZE_COMMITS, renderStoreSizeReport, runStoreSizeArm } from '../facets/perf/store-size.js';
 import { PERF_FACET, PerfBodySchema } from '../facets/perf/types.js';
 import { capturePopulation } from '../facets/population/capture.js';
 import { comparePopulation } from '../facets/population/compare.js';
@@ -94,10 +106,12 @@ import {
   type ArmsRootHandle,
   underArmsRoot,
   openOutDirectory,
+  PREPARED_CLONE_NAME,
   writePrivateFile,
 } from '../harness/arm-dirs.js';
 import { type ArmEnvironment, armEnvironmentClash, sameArmEnvironment } from '../harness/arm-env.js';
-import { PREPARED_CLONE_NAME, prepareClone } from '../harness/clone.js';
+import { parseArmState } from '../harness/arm-state.js';
+import { prepareClone } from '../harness/clone.js';
 import { indistinguishableArms } from '../harness/closure.js';
 import {
   DEFAULT_MEASURED_COMMANDS,
@@ -117,7 +131,7 @@ import { npmInstall, type NpxInstallSite, npxInstallSite } from '../harness/npx-
 import { instrumentLabel, instrumentTrustNotes } from '../harness/render.js';
 import type { SequenceStep } from '../harness/sequence.js';
 import { resolveSubject } from '../harness/subject.js';
-import type { CacheMode, CaptureRequest, InstrumentSource, ResolvedInstrument } from '../harness/types.js';
+import type { ArmState, CacheMode, CaptureRequest, InstrumentSource, ResolvedInstrument } from '../harness/types.js';
 import { readReport, writeReport } from '../store.js';
 
 /*
@@ -174,6 +188,11 @@ export function absoluteArmsDir(value: string): string {
 function isoNow(): string {
   return new Date().toISOString();
 }
+
+/** `--timeout-ms`, declared alike on every verb that runs steps. */
+const STEP_TIMEOUT_OPTION = '--timeout-ms <n>';
+const STEP_TIMEOUT_HELP = 'Kill any one step after this long';
+const parseStepTimeout = wholeNumberAtLeast('--timeout-ms', 1);
 
 /** `--keep-arms`, declared alike on every verb that opens an arms root. */
 const KEEP_ARMS_OPTION = '--keep-arms';
@@ -1222,11 +1241,11 @@ export interface ArmsBuildOption {
   readonly source: InstrumentSource;
 }
 
-/** One `perf arms --arm`: which build runs which CI sequence, cold or warm. */
+/** One `perf arms --arm`: which build runs which CI sequence, cold, warm or warm after an edit. */
 export interface ArmsSelectionOption {
   readonly build: string;
   readonly sequence: MeasuredSequenceSpec;
-  readonly state: CacheMode;
+  readonly state: ArmState;
 }
 
 /**
@@ -1256,23 +1275,44 @@ export function collectArmsBuild(value: string, previous: readonly ArmsBuildOpti
  * @param value - Raw value Commander parsed
  * @param previous - Arms collected so far
  * @returns The accumulated arms
- * @throws {InvalidArgumentError} when the sequence is not registered or the state is not warm/cold
+ * @throws {InvalidArgumentError} when the sequence is not registered or the state is not warm, cold or warm-edit<N>[:<kind>]
  */
 export function collectArmsSelection(
   value: string,
   previous: readonly ArmsSelectionOption[] | undefined,
 ): ArmsSelectionOption[] {
-  const [build = '', name = '', state = '', ...extra] = value.split(':');
+  const [build = '', name = '', ...rest] = value.split(':');
   const sequence = measurableSequence(name);
-  if (build === '' || extra.length > 0 || sequence === undefined) {
+  if (build === '' || sequence === undefined) {
     throw new InvalidArgumentError(
-      `--arm expects <build>:<sequence>:<warm|cold> with a sequence among ${Object.keys(MEASURABLE_SEQUENCES).join(', ')}; got '${value}'.`,
+      `--arm expects <build>:<sequence>:<state> with a sequence among ${Object.keys(MEASURABLE_SEQUENCES).join(', ')}; got '${value}'.`,
     );
   }
-  if (state !== 'warm' && state !== 'cold') {
-    throw new InvalidArgumentError(`--arm expects a state of 'warm' or 'cold'; got '${value}'.`);
+  const state = parseArmState(rest.join(':'));
+  if (state === null) {
+    throw new InvalidArgumentError(`--arm expects a state of 'warm', 'cold' or 'warm-edit<N>[:modify|create|delete]'; got '${value}'.`);
   }
   return [...(previous ?? []), { build, sequence, state }];
+}
+
+/**
+ * A Commander parser for `perf arms --edit <path>`, accumulating: a
+ * subject-relative file every edit arm edits.
+ *
+ * @param value - Raw value Commander parsed
+ * @param previous - Paths collected so far
+ * @returns The accumulated paths, forward-slashed
+ * @throws {InvalidArgumentError} when the path is empty, absolute or already given (one that
+ *   resolves outside the subject is refused by `applyEdits`, which asks the filesystem)
+ */
+export function collectEditPath(value: string, previous: readonly string[] | undefined): string[] {
+  const path = toForwardSlash(value.trim());
+  if (path === '' || isAbsolutePath(path)) {
+    throw new InvalidArgumentError(`--edit expects a path relative to the subject; got '${value}'.`);
+  }
+  // One file edited twice leaves one changed path, so every repetition would fail the edit rule after priming.
+  if (previous?.includes(path) === true) throw new InvalidArgumentError(`--edit names '${path}' more than once.`);
+  return [...(previous ?? []), path];
 }
 
 /**
@@ -1419,6 +1459,8 @@ interface PerfArmsOptions {
   readonly arm?: readonly ArmsSelectionOption[];
   readonly prerequisite?: readonly SequenceStep[];
   readonly expectExit?: readonly ExpectedExit[];
+  /** `--edit`: the files every edit arm edits; absent, each edit arm's first N tracked markdown files. */
+  readonly edit?: readonly string[];
   readonly commit: string;
   readonly rounds: number;
   readonly out: string;
@@ -1525,12 +1567,17 @@ async function captureArmsInto(out: string, root: ArmsRootHandle, inputs: ArmsCa
     rounds: options.rounds,
     env: inputs.env,
     ...timeout,
+    editPaths: options.edit ?? null,
   });
   const recorded: ArmsInputs = {
     env: { set: { ...inputs.env.set }, unset: [...inputs.env.unset] },
     expectedExits: expected.map((exit) => ({ ...exit })),
     prerequisites: (options.prerequisite ?? []).map((step) => step.name),
     timeoutMs: options.timeoutMs ?? null,
+    edits: editInputs(
+      inputs.arms.map((arm) => ({ build: arm.build, arm: arm.sequence.name, state: arm.state })),
+      options.edit ?? null,
+    ),
   };
   const written = safePath.join(out, 'arms-report.json');
   await root.keepChild(PREPARED_CLONE_NAME, (kept) => {
@@ -1551,8 +1598,14 @@ function createPerfArmsCommand(): Command {
     .option('--build <alias=instrument>', "A build to measure, e.g. 'rc11=dist:/path/to/cli/dist' or 'rc11=npx:vibe-agent-toolkit@0.2.0-rc.11' (repeatable)", collectArmsBuild)
     .option(
       '--arm <build:sequence:state>',
-      `An arm to time (repeatable), e.g. 'rc11:ci-b:cold'. Sequences: ${Object.keys(MEASURABLE_SEQUENCES).join(', ')}`,
+      `An arm to time (repeatable), e.g. 'rc11:ci-b:cold' or 'rc11:ci-c:warm-edit1'; a state is warm, cold or ` +
+        `warm-edit<N>[:modify|create|delete] (warm after editing N files each round). Sequences: ${Object.keys(MEASURABLE_SEQUENCES).join(', ')}`,
       collectArmsSelection,
+    )
+    .option(
+      '--edit <path>',
+      'A subject-relative file every warm-edit arm edits (repeatable); default: the first N tracked *.md files with no frontmatter',
+      collectEditPath,
     )
     .option(
       '--prerequisite <command>',
@@ -1569,7 +1622,7 @@ function createPerfArmsCommand(): Command {
     .requiredOption(OUT_OPTION, 'Directory for the report (owner-only)', resolvedOut)
     .option(ARMS_DIR_OPTION, `${ARMS_DIR_HELP}; the clone is <arms-dir>/clone`, absoluteArmsDir)
     .option(KEEP_ARMS_OPTION, KEEP_ARMS_HELP, false)
-    .option('--timeout-ms <n>', 'Kill any one step after this long', wholeNumberAtLeast('--timeout-ms', 1))
+    .option(STEP_TIMEOUT_OPTION, STEP_TIMEOUT_HELP, parseStepTimeout)
     .option(ENV_OPTION, 'Set a variable for every VAT step of every arm (repeatable)', collectEnv('--env'))
     .option(UNSET_OPTION, 'Remove an inherited variable from every VAT step (repeatable)', collectUnset('--unset'))
     .description('Time CI command sequences per (build, arm, cache state), interleaved by round, in a prepared clone')
@@ -1579,32 +1632,44 @@ function createPerfArmsCommand(): Command {
 /**
  * A Commander parser for `perf bars --bar`, accumulating.
  *
- * @param value - Raw value Commander parsed, e.g. `cand:ci-c:cold<=1.15*rc11:ci-a:cold`
+ * @param value - Raw value Commander parsed, e.g. `cand:ci-c:cold<=1.15*rc11:ci-a:cold` or
+ *   `gap(cand:ci-c:warm-edit1)<=0.66*gap(main:ci-c:warm-edit1)`
  * @param previous - Bars collected so far
  * @returns The accumulated bars
  * @throws {InvalidArgumentError} when the bar does not parse or names no factor
  */
-export function collectBar(value: string, previous: readonly Bar[] | undefined): Bar[] {
-  const bar = parseBar(value);
+export function collectBar(value: string, previous: readonly (Bar | GapBar)[] | undefined): (Bar | GapBar)[] {
+  const bar = isGapBarText(value) ? parseGapBar(value) : parseBar(value);
   if (typeof bar === 'string') throw new InvalidArgumentError(`${bar}.`);
   return [...(previous ?? []), bar];
 }
 
 /**
+ * @param bar - A parsed `--bar`
+ * @returns Whether it is a gap bar
+ */
+function isGapBar(bar: Bar | GapBar): bar is GapBar {
+  return 'bound' in bar;
+}
+
+/**
  * Judge every bar over a `perf arms` report: exit 0 only when every bar
- * passes; a failed or INCONCLUSIVE bar exits 1, and a report or bar that
- * cannot be judged is REFUSED.
+ * passes; a failed, INCONCLUSIVE or NOISE-BOUND bar exits 1, and a report or
+ * bar that cannot be judged is REFUSED.
  *
  * @param reportPath - `<out>/arms-report.json`
- * @param options - The bars
+ * @param options - The bars, ratio and gap
  */
-function runPerfBars(reportPath: string, options: { readonly bar: readonly Bar[] }): void {
+function runPerfBars(reportPath: string, options: { readonly bar: readonly (Bar | GapBar)[] }): void {
   const read = readArmsReportFile(safePath.resolve(reportPath));
   if (!read.ok) return refuse(read.refusal);
-  const judged = judgeBars(read.report, options.bar);
+  const judged = judgeBars(read.report, options.bar.filter((bar): bar is Bar => !isGapBar(bar)));
   if (!judged.ok) return refuse(`REFUSED: ${judged.refusal}.`);
-  process.stdout.write(`${renderBars(read.report, judged.results)}\n`);
-  if (judged.results.some((result) => result.verdict !== 'pass')) process.exitCode = ExitCode.FINDINGS;
+  const gaps = judgeGapBars(read.report.arms, options.bar.filter((bar) => isGapBar(bar)));
+  if (!gaps.ok) return refuse(`REFUSED: ${gaps.refusal}.`);
+  process.stdout.write(`${[renderBars(read.report, judged.results), ...renderGapBars(gaps.results)].join('\n')}\n`);
+  const verdicts = [...judged.results, ...gaps.results].map((result) => result.verdict);
+  if (verdicts.some((verdict) => verdict !== 'pass')) process.exitCode = ExitCode.FINDINGS;
 }
 
 /**
@@ -1617,13 +1682,127 @@ function createPerfBarsCommand(): Command {
     .argument('<report>', "A perf arms report (<out>/arms-report.json)")
     .requiredOption(
       '--bar <bar>',
-      "A bar, e.g. 'cand:ci-c:cold<=1.15*rc11:ci-a:cold' — held on median AND min; the factor is required (repeatable)",
+      "A bar, e.g. 'cand:ci-c:cold<=1.15*rc11:ci-a:cold' — held on median AND min; the factor is required — or a gap bar, " +
+        "'gap(cand:ci-c:warm-edit1)<=0.66*gap(main:ci-c:warm-edit1)' or 'gap(cand:ci-c:warm-edit1)<=0.5s' (repeatable)",
       collectBar,
     )
-    .description('Judge pass bars over a perf arms report: pass only when median and min both hold')
-    .action((reportPath: string, options: { readonly bar: readonly Bar[] }) => {
+    .description('Judge pass bars over a perf arms report: pass only when median and min both hold; a gap bar on the median gap, outside the noise')
+    .action((reportPath: string, options: { readonly bar: readonly (Bar | GapBar)[] }) => {
       runPerfBars(reportPath, options);
     });
+}
+
+/** The options `perf store-size` and `perf lfs-touch` both declare. */
+interface ScratchArmOptions extends ArmsRootOptions {
+  readonly build: InstrumentSource;
+  readonly out: string;
+  readonly timeoutMs?: number;
+}
+
+/**
+ * Resolve the one build, run one scratch arm under the invocation's arms root,
+ * and write its report owner-only into `--out`.
+ *
+ * @param subjects - Every tree the arm measures (none for a scratch repository the arm builds)
+ * @param options - The shared options
+ * @param reportName - The report's file name under `--out`
+ * @param run - The arm, handed the arms root and the build
+ * @param render - The report's text form
+ */
+async function runScratchArm<TReport>(
+  subjects: readonly string[],
+  options: ScratchArmOptions,
+  reportName: string,
+  run: (armsRoot: string, build: ScratchBuild) => Promise<TReport>,
+  render: (report: TReport) => string,
+): Promise<void> {
+  const prepared = await prepareInstrument(options.build);
+  const out = openOutDirectory(options.out, subjects);
+  await withArmsRoot(options, subjects, async (root) => {
+    const instrument = await resolveInstrument(prepared, npxInstallSite(root.path, npmInstall));
+    const report = await run(root.path, { alias: buildAlias(instrument.version), instrument });
+    const written = safePath.join(out, reportName);
+    writePrivateFile(written, `${JSON.stringify({ instrument: instrument.version, ...report }, null, 2)}\n`);
+    process.stdout.write(`${render(report)}\nWrote ${written}\n`);
+  });
+}
+
+/**
+ * The options every scratch arm declares.
+ *
+ * @param name - The verb
+ * @param description - Its help line
+ * @returns The command, before its own options
+ */
+function scratchArmCommand(name: string, description: string): Command {
+  return new Command(name)
+    .requiredOption('--build <instrument>', "The build to measure: 'dist:<path>', 'tree:<path>' or 'npx:<spec>'", parseInstrument)
+    .requiredOption(OUT_OPTION, 'Directory for the report (owner-only)', resolvedOut)
+    .option(ARMS_DIR_OPTION, ARMS_DIR_HELP, absoluteArmsDir)
+    .option(KEEP_ARMS_OPTION, KEEP_ARMS_HELP, false)
+    .option(STEP_TIMEOUT_OPTION, STEP_TIMEOUT_HELP, parseStepTimeout)
+    .description(description);
+}
+
+/**
+ * Build `perf store-size`: store bytes per replayed commit.
+ *
+ * @returns The configured command
+ */
+function createPerfStoreSizeCommand(): Command {
+  return scratchArmCommand('store-size', "Replay a subject's last N first-parent commits in a clone, one warm validate each, and report the store's bytes per commit")
+    .argument('<subject>', 'The subject repository; the commits replay in a `git clone --local` of it under the arms root')
+    .option('--commits <n>', 'First-parent commits to replay, ending at HEAD', wholeNumberAtLeast('--commits', 1), DEFAULT_STORE_SIZE_COMMITS)
+    .action((subjectPath: string, options: ScratchArmOptions & { readonly commits: number }) =>
+      refusingArmErrors(() => {
+        const subject = safePath.resolve(subjectPath);
+        return runScratchArm(
+          [subject],
+          options,
+          'store-size-report.json',
+          (armsRoot, build) => runStoreSizeArm(subject, build, { armsRoot, commits: options.commits, timeoutMs: options.timeoutMs }),
+          renderStoreSizeReport,
+        );
+      }),
+    );
+}
+
+/** `perf lfs-touch`'s own options. */
+interface LfsTouchFlags {
+  readonly files: number;
+  readonly size: number;
+  readonly rounds: number;
+}
+
+/**
+ * Build `perf lfs-touch`: a touched LFS file's clean-filter work on a store hit.
+ *
+ * @returns The configured command
+ */
+function createPerfLfsTouchCommand(): Command {
+  return scratchArmCommand('lfs-touch', 'Build a scratch repository of LFS-filtered files and count the clean-filter runs and bytes a warm resources validate costs after a touch, and after an index refresh')
+    .option('--files <n>', 'Filtered files, N', wholeNumberAtLeast('--files', 1), DEFAULT_LFS_FILES)
+    .option('--size <bytes>', 'Bytes per file, S', wholeNumberAtLeast('--size', 1), DEFAULT_LFS_SIZE)
+    .option('--rounds <n>', 'Rounds, each a touched and a refreshed step', wholeNumberAtLeast('--rounds', 1), DEFAULT_LFS_ROUNDS)
+    .action((options: ScratchArmOptions & LfsTouchFlags) =>
+      refusingArmErrors(() =>
+        runScratchArm(
+          [],
+          options,
+          'lfs-touch-report.json',
+          (armsRoot, build) =>
+            runLfsTouchArm(build, {
+              armsRoot,
+              files: options.files,
+              size: options.size,
+              rounds: options.rounds,
+              filterScript: LFS_FILTER_SCRIPT,
+              timeoutMs: options.timeoutMs,
+            }),
+          renderLfsTouchReport,
+        ),
+      ),
+    );
 }
 
 /**
@@ -1726,7 +1905,7 @@ function createVerdictCommand(): Command {
     .requiredOption(OUT_OPTION, 'Directory to write one report per alias into; outside every subject', resolvedOut)
     .option(ARMS_DIR_OPTION, `${ARMS_DIR_HELP}; each alias's arm is <arms-dir>/<alias>`, absoluteArmsDir)
     .option(KEEP_ARMS_OPTION, KEEP_ARMS_HELP, false)
-    .option('--timeout-ms <n>', 'Kill any one verb after this long', wholeNumberAtLeast('--timeout-ms', 1))
+    .option(STEP_TIMEOUT_OPTION, 'Kill any one verb after this long', parseStepTimeout)
     .option(ENV_OPTION, 'Set a variable for every child of this arm (repeatable)', collectEnv('--env'))
     .option(UNSET_OPTION, 'Remove an inherited variable from every child of this arm (repeatable)', collectUnset('--unset'))
     .option(
@@ -1979,7 +2158,9 @@ export function createProgram(): Command {
       })
         .addCommand(createPerfArmsCommand())
         .addCommand(createPerfBarsCommand())
-        .addCommand(createPerfAttributeCommand()),
+        .addCommand(createPerfAttributeCommand())
+        .addCommand(createPerfStoreSizeCommand())
+        .addCommand(createPerfLfsTouchCommand()),
     )
     .addCommand(
       createFacetCommand({

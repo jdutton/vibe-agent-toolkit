@@ -326,6 +326,151 @@ and never reads an arm no bar names; an arm that failed still fails each bar ove
 decided the numbers — `--env`, `--unset`, `--expect-exit`, `--prerequisite`, `--timeout-ms` — as
 `arms-report.json` records them.
 
+## Edit arms, gap bars, store size and touched LFS files
+
+A clean `warm` arm answers "does an unchanged tree hit the store". The questions a developer feels
+are "what does one edit cost" and "what does fifty cost". Those are arms of their own, judged
+against a clean arm of the same build in the same invocation.
+
+### The `warm-edit<N>[:<kind>]` state
+
+The state slot of an arm name (`<build>:<sequence>:<state>`) accepts `warm-edit<N>` beside `warm` and
+`cold`: `main:ci-c:warm-edit1`, `main:ci-c:warm-edit50:create`. `<N>` is how many files each repetition
+edits; `<kind>` is `modify` (the default), `create` or `delete`. The edit is part of the arm's
+identity, so `warm-edit1` and `warm-edit50` of one build are two arms with two rows. `--arm`, `--bar`
+and the report spell the state the same way.
+
+The count and the kind live only in the arm name; there is no flag for either.
+
+- An edit arm edits and restores the tree it runs in, so it runs only in the lab's prepared clone,
+  `<arms root>/clone` under a marked arms root: any other working directory is refused before
+  anything runs, a copy of an operator's checkout included. The edits and restores run through the
+  arm's git, which reads a tree right only when the tree was checked out under it.
+
+- `--edit <path>` (repeatable) names the files to edit, relative to the subject, and applies only to
+  edit arms; it is global, so every edit arm of the invocation edits from the same paths. Every
+  `--edit` path must be a tracked file of the subject: an untracked one is refused before priming,
+  since `git checkout` could not restore it.
+- Without `--edit`, each edit arm picks from every tracked `*.md` file with no frontmatter, in
+  code-unit order. A count above the candidates is refused before anything runs, naming the count.
+- Every round's tree is one the store has not seen. `modify` appends `\n<!-- lab edit round <r> -->\n`
+  to the first `<N>` candidates. `create` writes `lab-edit-<r>-<i>.md` beside the i-th of them.
+  `delete` removes a rotating window: round r deletes the `<N>` candidates from offset `r*N`, so no
+  two rounds delete the same files; a delete arm whose rounds need more files than there are
+  (`rounds * N` above the candidates) is refused before anything runs, naming both numbers.
+- A deleted file that something links to moves a finding, and the exit rule below fails the arm.
+  Point a delete arm at pages nothing links to, with `--edit`.
+- Every edit and every restore is untimed. `modify` and `delete` are restored with
+  `git checkout -- <path>` and a created file is removed, also when the edit itself fails part-way.
+  Each repetition records the edited paths and how many paths `git status` reports changed after the
+  edit (untracked files included, so a created file counts); an edit whose changed count differs from
+  the number of files it named is a violation.
+- The report's `inputs.edits` records every edit arm's name, kind, count and `--edit` paths (`null`
+  for the default candidates), so two invocations of `warm-edit1` over different files stay
+  distinguishable. Each edit arm needs a clean `warm` arm of the same build and sequence in the
+  invocation; one without is refused before anything runs.
+
+One invocation interleaves the clean arm and its edit arms per build, round by round, so every gap is
+measured under one machine load:
+
+```bash
+vat-lab perf arms ../subject --build main=dist:/path/to/packages/cli/dist \
+  --arm main:ci-c:warm --arm main:ci-c:warm-edit1 --arm main:ci-c:warm-edit50 --rounds 5 \
+  --arms-dir /tmp/lab-arms --out ./arms
+```
+
+**The edit arm's warm rule.** The clean warm rule (a step publishes `population: store`) is false for
+an edit arm: an edit moves the tree key, so the extent is derived. An edit repetition is valid only when
+the resources provenance of its first step that reads or fills a population is `derived` (a later step
+reads what that step refilled from the edited tree, so `ci-b`'s `resources check` may report `store`)
+**and** its work dump shows `store.reads.extent >= 1` and
+`store.writes.persistent >= 1`. A run that reports `population: store`, or one that wrote nothing,
+violates the rule: it did not do the work an edit costs, so its time is not an edit's time. So does an
+exit code that differs from the same build's clean arm in that round, since an edit that moved a
+finding would time a different run. (Under the default exact exit commitment a differing exit is
+already a step violation; the clean-arm check also holds when `--expect-exit` admits another code.)
+A round whose clean arm has no repetition (its priming failed) fails the edit arm's repetition too:
+there is no clean exit to compare, so no gap to time.
+
+**Work dumps per repetition.** Every arm repetition runs with `VAT_WORK_COUNTERS` pointed at a fresh
+directory and the report keeps the merged counters for that repetition. With `GIT_TRACE2_EVENT` set
+per repetition it also keeps `gitSpawns`, the count of git processes the repetition started.
+
+### Gap bars
+
+A **gap** is `median(edit arm) - median(clean arm)` of one build in one invocation. A gap is never
+computed across two builds or across two invocations. `vat-lab perf bars` accepts two gap forms
+beside the ratio form above:
+
+```text
+gap(<build>:<seq>:warm-edit<N>) <= <factor>*gap(<build>:<seq>:warm-edit<N>)
+gap(<build>:<seq>:warm-edit<N>) <= <seconds>s
+```
+
+The first compares two builds' gaps (a candidate's one-file gap against a baseline's); the second
+holds one gap under an absolute time. A gap bar naming an edit arm with no clean arm of the same
+build in the invocation is refused. When one build has two edit arms, the report also records the
+marginal per-file cost, `(gap(warm-edit<N>) - gap(warm-edit1)) / (N - 1)`, with each arm's IQR.
+
+A gap bar, and a ratio bar that names an edit arm on either side, is judged only when every arm it
+reads has an IQR smaller than the bar's margin: the distance between the left value (the gap, or the
+left median) and the bound it is held to (the scaled right gap or median, or the seconds). Each arm
+is gated on its own IQR, and a right-side arm's IQR is scaled by the bar's factor, as its value is.
+Otherwise the bar is reported NOISE-BOUND, never passed, and `perf bars` exits non-zero; re-run the
+invocation with more rounds. A ratio bar over clean and cold arms only keeps the median-and-min rule
+above.
+
+### Store size per commit
+
+`runStoreSizeArm` replays a subject's last N first-parent commits in the clone, oldest first, one warm
+`validate` each, and reports per commit the store's size in bytes and the step's wall time. The size
+is `page_count * page_size` read through a read-write connection after
+`PRAGMA wal_checkpoint(TRUNCATE)`, so the write-ahead log's timing never moves it; the `-wal` file
+alone is not the measure: once the CLI has closed, SQLite has removed it, so it is absent (or empty). A growth that tracks a
+commit's diff is the expected shape; growth out of proportion to it is the finding.
+
+```bash
+vat-lab perf store-size ../subject --build dist:/path/to/packages/cli/dist --commits 20 --out ./store-size
+```
+
+`--commits` defaults to 20 and is refused when HEAD has fewer first-parent commits. The clone is
+prepared at the oldest of them; row 1 is that commit's validate into an empty arm store, and each later
+row carries the same store forward one commit. A commit whose `validate` exits other than 0 or 1 stops
+the arm. The report is `<out>/store-size-report.json`. `--arms-dir`, `--keep-arms` and `--timeout-ms`
+work as for `perf arms`.
+
+### Touched LFS files
+
+`lfs-touch` builds a scratch repository whose `filter.lfs.clean` and `filter.lfs.smudge` run a
+lab-owned filter script and count its work. The measured step is one warm `vat resources validate`,
+so the checks child's own snapshot never enters the count. Every fixture file is backdated ten seconds
+before the commit and before the refresh, so no index entry is racily clean. The arm reports, from the
+filter's own log, how many times git ran the filter and over how many bytes, with the whole step's wall
+time and `git.snapshots` from the repetition's work dump.
+
+- After a `touch` of N files of S bytes, git re-cleans each: the log shows at least N invocations and
+  N x S bytes per run, while the tree hash is unchanged and the run is a store hit with one snapshot.
+- After `git update-index --refresh`, the log shows 0 invocations: git has recorded the files clean.
+- The `io` facet cannot see this work: it counts Node calls in VAT's process, not bytes and not git's
+  children. Defaults are N = 100 files of S = 2 MB.
+- The scratch repository sets `GIT_CONFIG_NOSYSTEM=1` and `core.autocrlf=false`.
+
+```bash
+vat-lab perf lfs-touch --build dist:/path/to/packages/cli/dist --files 100 --size 2097152 --rounds 3 --out ./lfs
+```
+
+`--files` (N, default 100), `--size` (S in bytes, default 2,097,152) and `--rounds` (default 3) are
+whole numbers of at least 1. Each round is one touched step and one refreshed step. Round r's touch
+moves every filtered file's mtime to the fixture's backdated second minus r, so every touch is a second
+no file and no index entry has held (Git for Windows sees no ctime change from a touch, so a repeated
+mtime would read clean there), and the bytes and the tree hash never change. A build that emits no
+`git.snapshots` counter reports it unread, with the reason, never 0. The filter is
+`test/fixtures/lfs-filter.mjs`, run as `"<runtime>" "<script>" clean|smudge`, the runtime being the one
+running the lab; a runtime or script path holding `"`, `$`, a backtick or (on POSIX) a backslash is refused. Its
+`clean` writes an LFS-style pointer. Git runs under the arm's
+environment (no system or global config), so a machine's git-lfs `filter.lfs.process` never replaces
+it. The report is `<out>/lfs-touch-report.json`.
+
 ## The three axes
 
 Every report is a measurement at a coordinate, and carries the whole triple or it is comparable to

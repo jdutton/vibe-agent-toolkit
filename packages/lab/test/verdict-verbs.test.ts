@@ -105,6 +105,7 @@ describe('planApfsClone', () => {
         { kind: 'spawn', command: 'cp', args: ['-c', '-R', '/work/tree/.claude/rules', '/tmp/clone/.claude/rules'] },
         { kind: 'spawn', command: 'cp', args: ['-c', '-R', '/work/tree/.git', '/tmp/clone/.git'] },
         { kind: 'spawn', command: 'cp', args: ['-c', '-R', '/work/tree/docs', '/tmp/clone/docs'] },
+        { kind: 'refresh-index', repository: '/tmp/clone' },
         { kind: 'remove-origin', repository: '/tmp/clone' },
       ],
     });

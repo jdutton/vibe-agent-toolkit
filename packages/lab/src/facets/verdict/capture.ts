@@ -47,6 +47,7 @@ import {
   resetArmHome,
 } from '../../harness/arm-dirs.js';
 import type { ArmEnvironment } from '../../harness/arm-env.js';
+import { type PreparationGit, preparationGit, type TreeOrigin } from '../../harness/arm-git.js';
 import { messageOf } from '../../harness/dumps.js';
 import { runOutcome } from '../../harness/outcome.js';
 import { resolveSubject } from '../../harness/subject.js';
@@ -206,7 +207,10 @@ async function captureSubject(
   // `planBuildVerbs`): the compare checks the claim against both arms.
   const { excluded } = planBuildVerbs(subject, verbSubject, request.instrument.version);
   if (subject.buildVerbs) {
-    const built = await inClone(request, subject, resolved.path, (clonePath) =>
+    // A `--prepared` subject is the lab's clone, checked out under the arm's git; any other is the operator's checkout.
+    const origin: TreeOrigin = request.prepared[subject.alias] === undefined ? 'operator' : 'lab-clone';
+    const source = { path: resolved.path, git: preparationGit(dirs, request.timeoutMs), origin };
+    const built = await inClone(request, subject, source, (clonePath) =>
       run(planBuildVerbs(subject, { ...verbSubject, path: clonePath }, request.instrument.version).invocations, clonePath),
     );
     if (!built.ok) return built;
@@ -261,27 +265,29 @@ type CloneOutcome = { readonly ok: true; readonly rows: VerdictRow[] } | { reado
  *
  * @param request - The whole request (for the subject set)
  * @param subject - The subject being cloned
- * @param path - Its resolved root
+ * @param source - Its resolved root, the subject's arm git, and whose config the root was
+ *   checked out under, which decides the git that refreshes the clone's index (`arm-git.ts`)
  * @param work - What to run, given the clone's root
  * @returns The rows `work` produced, or a refusal
  */
 async function inClone(
   request: VerdictCaptureRequest,
   subject: VerdictSubject,
-  path: string,
+  source: { readonly path: string; readonly git: PreparationGit; readonly origin: TreeOrigin },
   work: (clonePath: string) => VerdictRow[],
 ): Promise<CloneOutcome> {
-  const { value, leftover } = await withTempDir<CloneOutcome>('vat-lab-verdict-clone-', (parent) => {
+  const { path, git, origin } = source;
+  const { value, leftover } = await withTempDir<CloneOutcome>('vat-lab-verdict-clone-', async (parent) => {
     const clonePath = safePath.join(parent, subject.alias);
     const placement = armPlacementRefusal(clonePath, request.subjects.map((each) => each.path));
-    if (placement !== null) return Promise.resolve({ ok: false, refusal: `REFUSED: the build-verb clone: ${placement}.` });
+    if (placement !== null) return { ok: false, refusal: `REFUSED: the build-verb clone: ${placement}.` };
     const listed = readCloneSource(path, subject.alias);
-    if (!listed.ok) return Promise.resolve(listed);
+    if (!listed.ok) return listed;
     const plan = planApfsClone(listed.source, clonePath, process.platform);
-    if (!plan.ok) return Promise.resolve(plan);
-    const failed = executeClonePlan(plan);
-    if (failed !== null) return Promise.resolve({ ok: false, refusal: failed });
-    return Promise.resolve({ ok: true, rows: work(clonePath) });
+    if (!plan.ok) return plan;
+    const failed = await executeClonePlan(plan, git, origin);
+    if (failed !== null) return { ok: false, refusal: failed };
+    return { ok: true, rows: work(clonePath) };
   });
   // A clone the OS will not remove is no measurement to stand on: the capture stops on it.
   if (leftover !== undefined) throw leftover;

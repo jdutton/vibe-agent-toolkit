@@ -42,7 +42,7 @@ import {
 } from '@vibe-agent-toolkit/resources';
 import { uncoveredBlobWrite } from '@vibe-agent-toolkit/resources/testing';
 import { normalizedTmpdir, readWorkCounters, safePath, toForwardSlash, WORK_COUNTER_NAMES, type WorkCounter, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
-import { GitTracker } from '@vibe-agent-toolkit/utils/git';
+import { GitTracker, gitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 import { createTempDir, removeTempDir, scratchTmpdirEnv } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, expect, vi } from 'vitest';
 
@@ -564,9 +564,10 @@ const EDITED_B = '# Edited\n\nAfter.\n';
 export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
   // A cold population: the one document parsed and keyed, the extent derived
   // and written to the store, and git asked for the tree: the key's snapshot
-  // and its flag listing, then the write path's fresh pair. The statement names
-  // no relation, so the run database is hydrated with none. The miss reads the
-  // blob tier once in derivation, to reuse covered keys; an empty store covers none.
+  // and its flag listing, then the write path's fresh pair: two snapshots. The
+  // statement names no relation, so the run database is hydrated with none. The
+  // miss reads the blob tier once in derivation, to reuse covered keys; an empty
+  // store covers none.
   'extent.derived': {
     prepare: (scope) => queriedTree(scope, PLAIN_TREE),
     delta: {
@@ -580,11 +581,13 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'parse.cache.written': 1,
       ...readAndKeyed(PLAIN_TREE['a.md']),
       'git.calls': 6,
+      'git.snapshots': 2,
       'fs.lstat': GIT_MARKER_LSTATS + FIRST_POPULATION_LSTATS,
     },
   },
   // The same tree again: the extent served from the store, nothing parsed,
-  // nothing hashed, two git calls (the key's snapshot and its flag listing).
+  // nothing hashed, two git calls (the key's snapshot and its flag listing):
+  // one snapshot, no fresh one, since nothing is written.
   'extent.served': {
     prepare: async (scope) => {
       const query = queriedTree(scope, PLAIN_TREE);
@@ -598,6 +601,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
       'extent.served': 1,
       'git.calls': 2,
+      'git.snapshots': 1,
       'fs.lstat': GIT_MARKER_LSTATS,
     },
   },
@@ -620,6 +624,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'content.hashed': 2,
       'content.hashedBytes': Buffer.byteLength(IMPORTING_TREE['a.md'] + IMPORTING_TREE['CLAUDE.md'], 'utf8'),
       'git.calls': 6,
+      'git.snapshots': 2,
       'fs.lstat': GIT_MARKER_LSTATS + FIRST_POPULATION_LSTATS,
     },
   },
@@ -649,12 +654,14 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'content.hashed': 2,
       'content.hashedBytes': Buffer.byteLength(EDITED_TREE['a.md'] + EDITED_B, 'utf8'),
       'git.calls': 6,
+      'git.snapshots': 2,
       'fs.lstat': GIT_MARKER_LSTATS,
     },
   },
   // A refusal no store holds forces the whole population again on the second
-  // run: re-derived, the cyclic one dispatched and refused again, and the
-  // stored document's key served from the blob tier the miss reads.
+  // run: re-derived, the cyclic one dispatched and refused again, the stored
+  // document's key served from the blob tier the miss reads, and the key's
+  // snapshot and the write path's fresh one taken.
   'store.miss.refusedPairs': {
     prepare: async (scope) => {
       const query = queriedTree(scope, { ...PLAIN_TREE, 'deep.md': CYCLIC_FRONTMATTER });
@@ -677,6 +684,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'content.hashed': 2,
       'content.hashedBytes': Buffer.byteLength(PLAIN_TREE['a.md'] + CYCLIC_FRONTMATTER, 'utf8'),
       'git.calls': 6,
+      'git.snapshots': 2,
       'fs.lstat': GIT_MARKER_LSTATS,
     },
     reported: (result) => Number(/store miss: (\d+) refused/u.exec(result ?? '')?.[1] ?? Number.NaN),
@@ -702,6 +710,23 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       return undefined;
     },
     delta: { 'git.calls': 1 },
+  },
+  // Two snapshot requests in one bracket: the memo miss takes the one snapshot
+  // (one git call), and the hit takes none. The repository's root is found
+  // before, unmeasured, so the act walks no chain.
+  'git.snapshots': {
+    prepare: (scope) => {
+      const root = scope.dir();
+      writeFileSync(safePath.join(root, 'a.md'), PLAIN_TREE['a.md'], 'utf8');
+      commitTestFixture(root);
+      gitTreeSnapshot({ cwd: root });
+      return () => withGitSnapshotCache(() => {
+        expect(gitTreeSnapshot({ cwd: root }).ok).toBe(true);
+        expect(gitTreeSnapshot({ cwd: root }).ok).toBe(true);
+        return undefined;
+      });
+    },
+    delta: { 'git.calls': 1, 'git.snapshots': 1 },
   },
   'skillText.storeMiss': skillTextScanSeed(true),
   'skillText.noStore': skillTextScanSeed(false),

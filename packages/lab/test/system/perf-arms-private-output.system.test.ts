@@ -61,6 +61,7 @@ describe('vat-lab perf arms — what it writes is owner-only', () => {
       expectedExits: [],
       prerequisites: [],
       timeoutMs: null,
+      edits: [],
     });
   });
 

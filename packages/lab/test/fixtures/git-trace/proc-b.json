@@ -1,0 +1,3 @@
+{"event":"start","argv":["git","--super-prefix","sub/","--git-dir",".git","rev-parse","HEAD"]}
+{"event":"def_param","param":"k","value":"v"}
+{"event":"start","argv":["git","--config-env","k=V","--work-tree","wt","--namespace","ns","--git-dir=.git","--no-replace-objects","diff"]}

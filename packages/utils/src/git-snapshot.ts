@@ -51,7 +51,7 @@ import { type GitRunResult, runGit } from './git-run.js';
 import { gitFindRoot, gitLsFiles } from './git-utils.js';
 import { toForwardSlash } from './path-core.js';
 import { normalizedTmpdir, safePath } from './path-utils.js';
-import { countGitSpawn } from './work-counters.js';
+import { countGitSpawn, countWork } from './work-counters.js';
 
 /** How many unreadable paths a refusal names before it summarizes the rest. */
 const NAMED_UNREADABLE_PATHS = 5;
@@ -357,6 +357,7 @@ function takeSnapshot(cwd: string, repositoryRoot: string): GitSnapshotOutcome {
   // One call, however many git processes the snapshot starts inside it: that
   // number is `@vibe-validate/git`'s and is not knowable here.
   countGitSpawn({ via: 'snapshot', args: [], cwd });
+  countWork('git.snapshots', 1);
   const snapshot = getGitTreeSnapshot({ cwd });
   if (snapshot === null) return snapshotFailure(cwd, repositoryRoot);
 

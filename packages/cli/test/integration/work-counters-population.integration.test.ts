@@ -1,4 +1,4 @@
-/** The population's counters and the git spawn counter, each moved by a seed by an exact amount. */
+/** The population's counters and the git counters, each moved by a seed by an exact amount. */
 
 import { describe, it } from 'vitest';
 
