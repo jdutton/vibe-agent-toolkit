@@ -11,7 +11,7 @@
  * Integration-tier: real files, real git.
  */
 
-import { appendFileSync, lstatSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, lstatSync, mkdtempSync, readFileSync, readlinkSync, rmSync } from 'node:fs';
 
 import { createSymlink, normalizedTmpdir, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TreeOrigin } from '../../src/harness/arm-git.js';
 import { runGit } from '../../src/harness/git-state.js';
 import { type CopyMode, executeClonePlan, planTreeClone, readCloneSource } from '../../src/harness/tree-clone.js';
-import { fixtureArmGit, stubDeveloperGitConfig } from '../arm-tree-fixtures.js';
+import { filteredOperatorCheckout, fixtureArmGit, stubBrokenDeveloperFilter } from '../arm-tree-fixtures.js';
 import { commitAll, initRepo, writeFixtureFile } from '../git-fixtures.js';
 
 const roots: string[] = [];
@@ -137,47 +137,26 @@ describe("a 'portable' clone of a repository", () => {
 describe("a lab-made clone's index refresh runs under the arm's git", () => {
   it("refreshes past a developer's global attributes file whose required clean filter always fails", async () => {
     const source = sourceRepository(false);
-    const home = scratch();
-    const attributes = safePath.join(home, 'attributes');
-    writeFileSync(attributes, '* filter=lab-broken\n');
-    // Under the developer's config every stat-dirty file the refresh re-hashes runs this filter and fails.
-    stubDeveloperGitConfig(
-      home,
-      `[core]\n\tattributesFile = ${attributes}\n[filter "lab-broken"]\n\tclean = false\n\trequired = true\n`,
-    );
+    stubBrokenDeveloperFilter(scratch());
 
     await cloneOf(source, 'portable', 'lab-clone');
   });
 });
 
-/** A committed repository whose `.txt` files pass a clean filter defined only in the stubbed global config. */
-function filteredOperatorCheckout(): string {
-  stubDeveloperGitConfig(scratch(), '[filter "lab-upper"]\n\tclean = tr a-z A-Z\n\tsmudge = cat\n');
-  const source = safePath.join(scratch(), 'source');
-  writeFixtureFile(source, '.gitattributes', '*.txt filter=lab-upper\n');
-  writeFixtureFile(source, 'a.txt', 'alpha\n');
-  initRepo(source);
-  commitAll(source, 'fixture');
-  // The operator's own checkout is clean under the config it was made with.
-  expect(runGit(['diff-files', '--quiet'], source).status).toBe(0);
-  return source;
+/** The operator checkout of `filteredOperatorCheckout`, its filter not marked required. */
+function operatorCheckout(): string {
+  return filteredOperatorCheckout(safePath.join(scratch(), 'source'), scratch(), false);
 }
 
-/**
- * An operator's checkout was made under the developer's config, as an LFS
- * checkout is: the repository's `.gitattributes` names a filter only the
- * developer's GLOBAL config defines. Re-hashed without that filter every such
- * file reads modified, and `update-index -q` hides it.
- */
 describe("an operator subject's copy refreshes under the developer's config", () => {
   it("is stat-clean under the developer's config, whose global clean filter the arm's git does not carry", async () => {
-    const copy = await cloneOf(filteredOperatorCheckout(), 'portable', 'operator');
+    const copy = await cloneOf(operatorCheckout(), 'portable', 'operator');
 
     expect(runGit(['diff-files', '--quiet'], copy).status).toBe(0);
   });
 
   it("control: the same checkout refreshed as a lab clone reads its filtered file modified under the arm's git", async () => {
-    const copy = await cloneOf(filteredOperatorCheckout(), 'portable', 'lab-clone');
+    const copy = await cloneOf(operatorCheckout(), 'portable', 'lab-clone');
 
     expect(fixtureArmGit(scratch())(['diff-files', '--name-only'], copy).stdout).toBe('a.txt');
   });
