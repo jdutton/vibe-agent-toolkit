@@ -11,6 +11,7 @@ import {
   createMarkdownWithFrontmatter,
   createSchemaFile,
   createTestTempDir,
+  reportData,
   executeCli,
   executeValidateAndParse,
   setupTestProject,
@@ -539,7 +540,7 @@ describe('Resources validate with collections (system test)', () => {
       'level',
     ]);
 
-    expect((parsed.summary as { errors: number }).errors).toBeGreaterThanOrEqual(2);
+    expect((parsed['summary'] as { errors: number }).errors).toBeGreaterThanOrEqual(2);
   });
 
   // 🚨 `--collection` must not drop what the collection's own glob matched and
@@ -609,7 +610,7 @@ describe('Resources validate with collections (system test)', () => {
 
     const whole = executeValidateAndParse(binPath, projectDir);
     expect(whole.result.status).toBe(1);
-    const collections = RESOURCES_VALIDATE_REPORT_SCHEMA.parse(whole.parsed).data.collections;
+    const collections = reportData(RESOURCES_VALIDATE_REPORT_SCHEMA.parse(whole.parsed)).collections;
     expect(collections['docs-collection']).toMatchObject({ resourceCount: 1, filesWithErrors: 1, summary: { errors: 1 } });
     expect(collections['guides-collection']).toMatchObject({ resourceCount: 1, filesWithErrors: 0, summary: { errors: 0 } });
 
@@ -620,7 +621,7 @@ describe('Resources validate with collections (system test)', () => {
     expect(scoped.result.status).toBe(0);
     expect(report.status).toBe('ok');
     expect(report.examined).toBe(1);
-    expect(Object.keys(report.data.collections)).toEqual(['guides-collection']);
+    expect(Object.keys(reportData(report).collections)).toEqual(['guides-collection']);
 
     // A filter naming no declared collection is the invocation's mistake:
     // refused before anything is examined.

@@ -20,6 +20,8 @@ import { ParseLimitError } from '../src/parse-limits.js';
 import type { ParsePool, ParsePoolOptions } from '../src/parse-pool.js';
 import { __readParseTimingSnapshot } from '../src/parse-timing.js';
 import { POPULATION_PARSE_LIMITS } from '../src/projection/content-cache.js';
+import { skillTextFactsOf } from '../src/skill-text/core.js';
+import { SKILL_TEXT_DECLARATION } from '../src/skill-text/declaration.js';
 
 import { TIGHT_LIMITS } from './parse-limit-fixtures.js';
 
@@ -78,7 +80,14 @@ function recordingPool(answer: () => Promise<ParseResult>): {
   };
 }
 
-const PARSED: ParseResult = { links: [], headings: [], content: '# hi\n', sizeBytes: 5, estimatedTokenCount: 1 };
+const PARSED: ParseResult = {
+  links: [],
+  headings: [],
+  content: DOCUMENT.content,
+  sizeBytes: 5,
+  estimatedTokenCount: 1,
+  skillText: skillTextFactsOf(DOCUMENT.content, SKILL_TEXT_DECLARATION),
+};
 
 /**
  * One run of one document through a fresh dispatcher over a recording pool.

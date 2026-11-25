@@ -6,13 +6,14 @@ import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/u
 import { archiveEntriesOfDirectory, tarFixture } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
+import type { z } from 'zod';
 
-import { SKILLS_LIST_REPORT_SCHEMA, type SkillsListReport } from '../../src/commands/skills/list-schema.js';
+import { SKILLS_LIST_REPORT_SCHEMA } from '../../src/commands/skills/list-schema.js';
 import { listCommand } from '../../src/commands/skills/list.js';
 import { captureCommand } from '../helpers/stdout-capture.js';
 
 /** Run the list lane over `pathArg`: the report it published, validated against its registry schema, at exit 0. */
-async function runListCommand(pathArg: string): Promise<SkillsListReport> {
+async function runListCommand(pathArg: string): Promise<z.infer<typeof SKILLS_LIST_REPORT_SCHEMA>> {
   const { stdout, exited, stderr } = await captureCommand(() => listCommand(pathArg, {}));
   expect(exited, stderr).toBe(ExitCode.OK);
   return SKILLS_LIST_REPORT_SCHEMA.parse(yaml.parse(stdout));

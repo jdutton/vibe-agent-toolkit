@@ -605,8 +605,9 @@ The lint hash keys on the declarations present in `dist/`, not on the source tha
 them. A package lint run without the root script's build first reads whatever `dist/` holds and
 turbo caches that verdict under those declarations.
 **Tell:** a lint result that changes after `bun run build` with no source edit.
-**Remedy:** run lint only through `bun run lint`/`lint:fix`, which build first and set
-`VAT_LINT_BUILT=1`; a package `lint` without it is refused. Never set `VAT_LINT_BUILT` by hand.
+**Remedy:** run lint only through `bun run lint`/`lint:fix`, and typecheck only through
+`bun run typecheck`, which build first and set `VAT_BUILT=1`; a package `lint` or any typecheck task
+without it is refused. Never set `VAT_BUILT` by hand.
 
 ### A personal ignore hides a lintable file from turbo
 

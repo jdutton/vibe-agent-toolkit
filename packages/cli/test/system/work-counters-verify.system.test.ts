@@ -9,7 +9,7 @@
  * built first, without the probe, so the counts are `vat verify`'s alone.
  */
 
-import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
+import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { probedReads, readProbeEnv } from '../helpers/fs-read-probe.js';

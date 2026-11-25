@@ -64,7 +64,8 @@ describe('NEVER_CONTENT_GLOBS — the never-authored part of NEVER_CRAWL_GLOBS',
   });
 
   it('is NEVER_CRAWL_GLOBS less only the tool-output names an author may also use', () => {
-    expect(NEVER_CRAWL_GLOBS.filter((glob) => !NEVER_CONTENT_GLOBS.includes(glob)).toSorted((a, b) => a.localeCompare(b)))
+    const content: readonly string[] = NEVER_CONTENT_GLOBS;
+    expect(NEVER_CRAWL_GLOBS.filter((glob) => !content.includes(glob)).toSorted((a, b) => a.localeCompare(b)))
       .toEqual(['**/.test-output/**', '**/.turbo/**', '**/coverage/**']);
   });
 

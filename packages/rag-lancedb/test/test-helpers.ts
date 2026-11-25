@@ -272,3 +272,12 @@ export function setupLanceDBTestSuite(autoCreateProvider = false): {
   return suite;
 }
 
+/**
+ * The provider a `setupLanceDBTestSuite(true)` suite created in its `beforeEach`.
+ *
+ * @throws When the suite holds no provider: it was set up without `autoCreateProvider`
+ */
+export function suiteProvider(suite: { readonly provider: LanceDBRAGProvider | null }): LanceDBRAGProvider {
+  if (suite.provider === null) throw new Error('the suite holds no provider: set it up with autoCreateProvider');
+  return suite.provider;
+}

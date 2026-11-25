@@ -138,8 +138,8 @@ describe('comparePopulation', () => {
       row([A, B]),
     );
 
-    expect(verdict.kind).toBe('unmeasurable');
-    expect(String(verdict.reason)).toContain('baseline row failed');
+    expect(verdict['kind']).toBe('unmeasurable');
+    expect(String(verdict['reason'])).toContain('baseline row failed');
   });
 
   it('REFUSES to subtract a real population from one that enumerated nothing', () => {
@@ -147,15 +147,15 @@ describe('comparePopulation', () => {
     // reads as a population explosion rather than as "the baseline found none".
     const verdict = verdictOf(row([]), row([A, B, C]));
 
-    expect(verdict.kind).toBe('unmeasurable');
-    expect(String(verdict.reason)).toContain('enumerated no files at all');
+    expect(verdict['kind']).toBe('unmeasurable');
+    expect(String(verdict['reason'])).toContain('enumerated no files at all');
   });
 
   it('REFUSES two sides captured under different cache modes', () => {
     const verdict = verdictOf(row([A]), row([A], { cache: 'cold' }));
 
-    expect(verdict.kind).toBe('unmeasurable');
-    expect(String(verdict.reason)).toContain('cache mode differs');
+    expect(verdict['kind']).toBe('unmeasurable');
+    expect(String(verdict['reason'])).toContain('cache mode differs');
   });
 
   it('refuses a report of another facet outright', () => {

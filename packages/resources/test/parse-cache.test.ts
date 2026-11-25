@@ -1,11 +1,11 @@
 import { promises as fs } from 'node:fs';
 
-import { isPathAbsentError, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, normalizedTmpdir, safePath, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { VAT_CACHE_DIR_ENV, recogniseVatCacheRoot, vatCacheRoot } from '../src/cache-root.js';
+import { recogniseVatCacheRoot, vatCacheRoot } from '../src/cache-root.js';
 import { computeContentKey, type KeyedContent, type ParserKind } from '../src/content-key.js';
 import { parseHtmlContent } from '../src/html-link-parser.js';
 import { type ParseResult, parseMarkdownContent } from '../src/link-parser.js';
@@ -441,15 +441,14 @@ describe('fixture distinguishability', () => {
 
 describe('parseCacheDirectory', () => {
   it('sits under a per-build namespace, not directly beside the other tenants', () => {
-    expect(parseCacheDirectory()).toBe(
-      safePath.join(normalizedTmpdir(), '.vat-cache', vatCacheNamespace(), 'parse'),
-    );
+    // Relative to the cache root, which the shared setup points at this file's own directory; the
+    // default root's spelling is `cache-root.integration.test.ts`'s question.
+    expect(parseCacheDirectory()).toBe(safePath.join(vatCacheRoot(), vatCacheNamespace(), 'parse'));
   });
 
   it('leaves the build-independent tenants OUTSIDE the namespace', () => {
     // URL reachability and fetched link content are facts about the world, not
     // about this build. Namespacing them would re-fetch on every VAT upgrade.
-    expect(vatCacheRoot()).toBe(safePath.join(normalizedTmpdir(), '.vat-cache'));
     expect(parseCacheDirectory().startsWith(vatCacheRoot())).toBe(true);
     expect(vatCacheNamespaceRoot()).not.toBe(vatCacheRoot());
   });

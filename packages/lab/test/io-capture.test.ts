@@ -538,14 +538,14 @@ describe('captureIo — the counter preload', () => {
 
   it('APPENDS to a NODE_OPTIONS inherited from the surrounding process', async () => {
     const probe = setupProbe(PREFIX);
-    const original = process.env.NODE_OPTIONS;
-    process.env.NODE_OPTIONS = '--no-warnings';
+    const original = process.env['NODE_OPTIONS'];
+    process.env['NODE_OPTIONS'] = '--no-warnings';
 
     try {
       await capture(probe, { runs: 1 });
     } finally {
-      if (original === undefined) delete process.env.NODE_OPTIONS;
-      else process.env.NODE_OPTIONS = original;
+      if (original === undefined) delete process.env['NODE_OPTIONS'];
+      else process.env['NODE_OPTIONS'] = original;
     }
 
     // The other base. `runRepeats` merges the capture's env over `process.env`,
@@ -558,14 +558,14 @@ describe('captureIo — the counter preload', () => {
 
   it('honours an arm that UNSETS an inherited NODE_OPTIONS — the preload stands alone', async () => {
     const probe = setupProbe(PREFIX);
-    const original = process.env.NODE_OPTIONS;
-    process.env.NODE_OPTIONS = '--no-warnings';
+    const original = process.env['NODE_OPTIONS'];
+    process.env['NODE_OPTIONS'] = '--no-warnings';
 
     try {
       await capture(probe, { runs: 1, unset: ['NODE_OPTIONS'] });
     } finally {
-      if (original === undefined) delete process.env.NODE_OPTIONS;
-      else process.env.NODE_OPTIONS = original;
+      if (original === undefined) delete process.env['NODE_OPTIONS'];
+      else process.env['NODE_OPTIONS'] = original;
     }
 
     // Reading the base from `process.env` would resurrect the value the arm
@@ -576,13 +576,13 @@ describe('captureIo — the counter preload', () => {
 
   it('CONTROL: with no NODE_OPTIONS anywhere, the preload stands alone', async () => {
     const probe = setupProbe(PREFIX);
-    const original = process.env.NODE_OPTIONS;
-    delete process.env.NODE_OPTIONS;
+    const original = process.env['NODE_OPTIONS'];
+    delete process.env['NODE_OPTIONS'];
 
     try {
       await capture(probe, { runs: 1 });
     } finally {
-      if (original !== undefined) process.env.NODE_OPTIONS = original;
+      if (original !== undefined) process.env['NODE_OPTIONS'] = original;
     }
 
     // Pins the empty base: an implementation that always prefixed a separator,
@@ -800,7 +800,6 @@ describe('captureIo — the envelope', () => {
       facet: IO_FACET,
       subject,
       capturedAt: CAPTURED_AT,
-      arms: { root: probeArmsRoot(probe), build: 'probe' },
     });
   });
 

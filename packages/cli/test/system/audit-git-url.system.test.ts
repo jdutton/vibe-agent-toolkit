@@ -19,7 +19,7 @@ import { parse } from 'yaml';
 import { AUDIT_REPORT_SCHEMA } from '../../src/commands/audit-schema.js';
 import { runAuditCli } from '../test-helpers.js';
 
-const NET_AVAILABLE = process.env.NET_AVAILABLE === '1';
+const NET_AVAILABLE = process.env['NET_AVAILABLE'] === '1';
 
 /** The stderr line naming the source — the human half of `data.provenance`. */
 const PROVENANCE_LINE = /Audited: .+ @ .+ \(commit [a-f0-9]{8}\)/;
@@ -33,8 +33,8 @@ describe.skipIf(!NET_AVAILABLE)('vat audit <git-url> — system test', () => {
 
       expect(report.examined).toBe(0);
       expect(report.findings.map((finding) => finding.code)).toStrictEqual(['RESOURCE_CHECK_BROKEN']);
-      expect(report.data.root).toBeNull();
-      expect(report.data.provenance?.commit).toMatch(/^[a-f0-9]{40}$/);
+      expect(report.data?.root).toBeNull();
+      expect(report.data?.provenance?.commit).toMatch(/^[a-f0-9]{40}$/);
       expect(result.stderr).toMatch(PROVENANCE_LINE);
       expect(result.status).toBe(ExitCode.FINDINGS);
     }
@@ -46,8 +46,8 @@ describe.skipIf(!NET_AVAILABLE)('vat audit <git-url> — system test', () => {
       const result = runAuditCli('octocat/Hello-World');
       const report = AUDIT_REPORT_SCHEMA.parse(parse(result.stdout));
 
-      expect(report.data.provenance?.url).toBe('https://github.com/octocat/Hello-World.git');
-      expect(report.data.root).toBeNull();
+      expect(report.data?.provenance?.url).toBe('https://github.com/octocat/Hello-World.git');
+      expect(report.data?.root).toBeNull();
       expect(result.stderr).toMatch(PROVENANCE_LINE);
       expect(result.status).toBe(ExitCode.FINDINGS);
     }

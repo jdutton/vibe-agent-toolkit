@@ -38,7 +38,7 @@ export function validateSkillThrough(
   skillPath: string,
   locationRoot: string,
   source: SkillTextRun['source'],
-  route: ParseRoute,
+  route: RunParseRoute,
 ): ReturnType<typeof validateSkill> {
   return validateSkill({
     skillPath,
@@ -46,11 +46,14 @@ export function validateSkillThrough(
     validation: {},
     resourcesValidation: {},
     side: 'source',
-    run: { source, dispatcher: route.dispatcher },
+    run: { source, dispatcher: route.dispatcher, crawlOnce: (_key, crawl) => crawl() },
   });
 }
 
-export function setupParseRoute(): ParseRoute {
+/** A parse route that carries a run's dispatcher, as {@link setupParseRoute} builds. */
+export type RunParseRoute = ParseRoute & { dispatcher: ParseDispatcher };
+
+export function setupParseRoute(): RunParseRoute {
   const dispatcher = new ParseDispatcher(new ParseCache({ enabled: false }), { size: 1 });
   afterAll(() => dispatcher.shutdown());
   return { dispatcher };

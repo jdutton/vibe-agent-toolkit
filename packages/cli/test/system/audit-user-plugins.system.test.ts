@@ -24,7 +24,7 @@ import {
   getBinPath,
 } from './test-common.js';
 import { getTestFixturesPath } from './test-fixture-loader.js';
-import { executeCli, parseYamlOutput } from './test-helpers/index.js';
+import { reportData, executeCli, parseYamlOutput } from './test-helpers/index.js';
 
 describe('Audit User Plugins Fixture (system test)', () => {
   let binPath: string;
@@ -58,16 +58,16 @@ describe('Audit User Plugins Fixture (system test)', () => {
       const report = AUDIT_REPORT_SCHEMA.parse(parseYamlOutput(stdout));
       expect(report.status).toBe('findings');
       // A directory audit, not `--user`: no hierarchy.
-      expect(report.data.hierarchical).toBeNull();
+      expect(report.data?.hierarchical).toBeNull();
 
       // Should have scanned files
       expect(report.examined).toBeGreaterThan(0);
 
       // Should have some errors (fixture contains skills with validation issues)
-      expect(report.data.counts.filesWithErrors).toBeGreaterThan(0);
+      expect(report.data?.counts.filesWithErrors).toBeGreaterThan(0);
 
       // Should have some successes too
-      expect(report.data.counts.filesPassed).toBeGreaterThan(0);
+      expect(report.data?.counts.filesPassed).toBeGreaterThan(0);
     });
 
     it('should validate singleton marketplace (anthropic-agent-skills)', () => {
@@ -84,7 +84,7 @@ describe('Audit User Plugins Fixture (system test)', () => {
       // Nothing at error severity; any info or warning finding is still `findings`.
       expect(report.summary.errors).toBe(0);
       expect(report.examined).toBeGreaterThan(0);
-      expect(report.data.counts.filesPassed).toBeGreaterThan(0);
+      expect(report.data?.counts.filesPassed).toBeGreaterThan(0);
     });
 
     it('should validate standard marketplace (claude-plugins-official)', () => {
@@ -101,7 +101,7 @@ describe('Audit User Plugins Fixture (system test)', () => {
 
       // Should have scanned at least the marketplace manifest
       expect(report.examined).toBeGreaterThan(0);
-      expect(report.data.counts.filesPassed).toBeGreaterThan(0);
+      expect(report.data?.counts.filesPassed).toBeGreaterThan(0);
     });
 
     it('should validate cached plugins', () => {
@@ -125,7 +125,7 @@ describe('Audit User Plugins Fixture (system test)', () => {
       ]);
 
       const report = AUDIT_REPORT_SCHEMA.parse(parseYamlOutput(stdout));
-      const { filesPassed, filesWithWarnings, filesWithErrors, pathsUnreadable } = report.data.counts;
+      const { filesPassed, filesWithWarnings, filesWithErrors, pathsUnreadable } = reportData(report).counts;
 
       // Should report files scanned
       expect(report.examined).toBeGreaterThan(0);
@@ -133,7 +133,7 @@ describe('Audit User Plugins Fixture (system test)', () => {
       // Sanity check: passed + warnings + errors equals the files read, and
       // every row is a file read or a refused path.
       expect(report.examined).toBe(filesPassed + filesWithWarnings + filesWithErrors);
-      expect(report.data.files).toHaveLength(report.examined + pathsUnreadable);
+      expect(report.data?.files).toHaveLength(report.examined + pathsUnreadable);
     });
   });
 });

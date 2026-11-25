@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 import { validateFrontmatter } from '../src/frontmatter-validator.js';
 
@@ -7,7 +7,7 @@ const URI_REFERENCE = 'uri-reference';
 const SPEC_PATH = '/docs/specs/design.md';
 
 function expectNoUnknownFormatWarnings(
-  warnSpy: ReturnType<typeof vi.spyOn>,
+  warnSpy: MockInstance<typeof console.warn>,
   data: Record<string, unknown>,
   schema: Record<string, unknown>
 ): void {
@@ -111,7 +111,7 @@ describe('validateFrontmatter', () => {
   });
 
   describe('format registration (ajv-formats)', () => {
-    let warnSpy: ReturnType<typeof vi.spyOn>;
+    let warnSpy: MockInstance<typeof console.warn>;
 
     beforeEach(() => {
       // Ajv 8 routes unknown-format messages through self.logger.warn(),

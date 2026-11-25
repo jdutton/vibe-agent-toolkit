@@ -26,7 +26,7 @@
 
 import { cpSync, rmSync } from 'node:fs';
 
-import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
+import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { expect } from 'vitest';
 
 import { DEFAULT_BUDGET_SECONDS } from '../../../src/commands/resources/check-supervisor.js';

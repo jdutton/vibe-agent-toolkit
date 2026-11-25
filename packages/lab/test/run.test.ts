@@ -84,7 +84,7 @@ describe('runCommand', () => {
     // cmd.exe were left to resolve would come back as exit code 9009 rather than
     // a spawn failure, silently inverting this control.
     const missing = safePath.join(normalizedTmpdir(), 'vat-lab-no-such-binary-9f31c7');
-    const neverRan = runCommand({ command: missing, leadingArgs: [], version: VERSION }, [], {
+    const neverRan = runCommand({ command: missing, leadingArgs: [] }, [], {
       cwd: process.cwd(),
       env: EMPTY_ARM_ENVIRONMENT,
     });
@@ -106,7 +106,7 @@ describe('runCommand', () => {
 
   it('reports a bare command that is not on PATH as a spawn failure', () => {
     const unresolvable = runCommand(
-      { command: 'vat-lab-no-such-command-9f31c7', leadingArgs: [], version: VERSION },
+      { command: 'vat-lab-no-such-command-9f31c7', leadingArgs: [] },
       [],
       { cwd: process.cwd(), env: EMPTY_ARM_ENVIRONMENT },
     );
@@ -120,7 +120,7 @@ describe('runCommand', () => {
   it('MERGES env over process.env rather than replacing it', () => {
     // Guard first: if the parent had no PATH, the inherited-value assertion below
     // would compare undefined to undefined and pass against any implementation.
-    expect(process.env.PATH).toBeTruthy();
+    expect(process.env['PATH']).toBeTruthy();
 
     const result = runScript(
       'process.stdout.write(JSON.stringify({' +
@@ -133,7 +133,7 @@ describe('runCommand', () => {
     const seen = JSON.parse(result.stdout) as { mine: string | null; inherited: string | null };
     expect(seen.mine).toBe('probe-value');
     // Not merely "present": the parent's own value, so a rebuilt PATH would fail.
-    expect(seen.inherited).toBe(process.env.PATH);
+    expect(seen.inherited).toBe(process.env['PATH']);
   });
 
   it('passes the arm environment to the child and nothing arm-owned it did not set', () => {

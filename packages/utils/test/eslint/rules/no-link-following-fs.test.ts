@@ -9,15 +9,15 @@
 
 import { describe, it } from 'vitest';
 
-import { RULE_TESTER_CASES, type RuleCases, expectRulePasses } from '../rule-tester.js';
+import { type CaseError, RULE_TESTER_CASES, type RuleCases, expectRulePasses } from '../rule-tester.js';
 
 const RULE = 'no-link-following-fs';
 const SRC = '/repo/packages/cli/src/commands/build.ts';
 const TEST_FILE = '/repo/packages/cli/test/commands/build.test.ts';
 const OUTSIDE = '/repo/scripts/release.ts';
 const ALLOWED = 'packages/utils/src/link-following.ts';
-const ERR = [{ messageId: 'follows' }] as const;
-const UNTYPED = [{ messageId: 'untypedLink' }] as const;
+const ERR: CaseError[] = [{ messageId: 'follows' }];
+const UNTYPED: CaseError[] = [{ messageId: 'untypedLink' }];
 
 const CASES: RuleCases = {
   valid: [

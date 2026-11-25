@@ -19,7 +19,7 @@ import type { RunResult } from '../src/harness/types.js';
  * @returns A complete result
  */
 function result(overrides: Partial<RunResult> = {}): RunResult {
-  return { wallMs: 1, exitCode: 0, stdout: '', stderr: '', spawnError: null, ...overrides };
+  return { wallMs: 1, exitCode: 0, started: true, stdout: '', stderr: '', spawnError: null, ...overrides };
 }
 
 /**

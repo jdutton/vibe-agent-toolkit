@@ -18,7 +18,7 @@
  * module) to a unit test that has no use for either.
  */
 
-import { type EmbeddingProvider, partialIndexResultOf, type ResourceMetadata } from '@vibe-agent-toolkit/rag';
+import { type EmbeddingProvider, partialIndexResultOf } from '@vibe-agent-toolkit/rag';
 import type * as ResourcesModule from '@vibe-agent-toolkit/resources';
 import { isVatError, RAG_DATABASE_UNREADABLE_CODE, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -95,7 +95,7 @@ afterEach(async () => {
  *
  * @returns The absent-file resources
  */
-function missingResources(): ResourceMetadata[] {
+function missingResources(): ResourcesModule.ResourceMetadata[] {
   return [
     createBareResource('gone-1', safePath.join(suite.tempDir, 'gone-1.md')),
     createBareResource('gone-2', safePath.join(suite.tempDir, 'gone-2.md')),

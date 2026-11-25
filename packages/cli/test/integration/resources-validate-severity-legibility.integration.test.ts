@@ -85,7 +85,7 @@ describe('vat resources validate severity legibility (integration)', () => {
     const { report } = await validateReport([tempDir, '--verbose']);
 
     // Two files carry a finding, but only doc.md carries an *error*.
-    const errorFiles = (report.data.files ?? []).filter((row) => row.summary.errors > 0).map((row) => row.path);
+    const errorFiles = (report.data?.files ?? []).filter((row) => row.summary.errors > 0).map((row) => row.path);
     expect(errorFiles).toEqual(['doc.md']);
     expect(report.summary.errors).toBe(1);
   });
@@ -113,6 +113,6 @@ describe('vat resources validate severity legibility (integration)', () => {
     expect(status).toBe(0);
     expect(report.status).toBe('findings');
     expect(report.summary).toEqual({ errors: 0, warnings: 0, info: 1 });
-    expect(report.data.files?.every((row) => row.summary.errors === 0)).toBe(true);
+    expect(report.data?.files?.every((row) => row.summary.errors === 0)).toBe(true);
   });
 });

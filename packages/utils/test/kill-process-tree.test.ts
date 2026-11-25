@@ -5,7 +5,7 @@
 
 import type * as ChildProcessModule from 'node:child_process';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 const spawnSync = vi.hoisted(() => vi.fn());
 vi.mock('node:child_process', async (importOriginal) => ({
@@ -38,8 +38,8 @@ function restoreHost(): void {
 }
 
 /** A stand-in child whose own `kill` is recorded. */
-function child(pid: number | undefined): { pid: number | undefined; kill: ReturnType<typeof vi.fn> } {
-  return { pid, kill: vi.fn(() => true) };
+function child(pid: number | undefined): { pid: number | undefined; kill: Mock<(signal: NodeJS.Signals) => boolean> } {
+  return { pid, kill: vi.fn((_signal: NodeJS.Signals) => true) };
 }
 
 describe('killProcessTree', () => {

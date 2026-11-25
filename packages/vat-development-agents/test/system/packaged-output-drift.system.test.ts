@@ -92,7 +92,7 @@ const FIXTURES_ROOT = safePath.join(PACKAGE_ROOT, 'test', 'fixtures');
 // The cli is a workspace dependency, so `^build` has built its binary.
 const CLI_BIN = safePath.join(PACKAGE_ROOT, '../cli/dist/bin.js');
 
-const UPDATING = process.env.UPDATE_DRIFT_GOLDEN === '1';
+const UPDATING = process.env['UPDATE_DRIFT_GOLDEN'] === '1';
 const itUnlessUpdating = it.skipIf(UPDATING);
 
 /** One packaged bundle tree under this gate. */

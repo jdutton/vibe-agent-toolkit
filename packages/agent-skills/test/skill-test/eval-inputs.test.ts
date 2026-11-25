@@ -78,8 +78,8 @@ describe('parseEvalSuite', () => {
     });
     const suite = parseEvalSuite(extended);
     // Unknown fields pass through untouched rather than erroring.
-    expect((suite as Record<string, unknown>)._category_note).toBe('three categories: recognition / guidance / recovery');
-    expect((suite.evals[0] as Record<string, unknown>).category).toBe('guidance-correctness');
+    expect((suite as Record<string, unknown>)['_category_note']).toBe('three categories: recognition / guidance / recovery');
+    expect((suite.evals[0] as Record<string, unknown>)['category']).toBe('guidance-correctness');
   });
 
   it('accepts a descriptive string id (skill-creator encourages descriptive eval names)', () => {

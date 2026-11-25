@@ -10,10 +10,10 @@
 
 import { describe, it } from 'vitest';
 
-import { RULE_TESTER_CASES, type RuleCases, expectRulePasses } from '../rule-tester.js';
+import { type CaseError, RULE_TESTER_CASES, type RuleCases, expectRulePasses } from '../rule-tester.js';
 
 const RULE = 'no-literal-test-timeout';
-const LITERAL = [{ messageId: 'literalTimeout' }] as const;
+const LITERAL: CaseError[] = [{ messageId: 'literalTimeout' }];
 
 const CASES: RuleCases = {
   valid: [

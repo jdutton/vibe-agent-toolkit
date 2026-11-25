@@ -141,7 +141,7 @@ describe('runSkillBuild - a collapsed findings block says how to see it', () => 
 });
 
 /** The report's `data` for a run over the named skills, sources under `cwd`. */
-function dataOf(cwd: string, run: SkillBuildRun, names: readonly string[]): ReturnType<typeof skillsBuildWork>['data'] {
+function reportData(cwd: string, run: SkillBuildRun, names: readonly string[]): ReturnType<typeof skillsBuildWork>['data'] {
   const skills = names.map((name) => ({ name, sourcePath: safePath.join(cwd, 'skills', name, 'SKILL.md') }));
   return skillsBuildWork({ cwd, skills, setAside: { inPlace: [], pluginOnly: [] }, dryRun: false, run, setAsideIssues: [] }).data;
 }
@@ -157,7 +157,7 @@ describe('runSkillBuild - a published output path exists exactly when the run co
     // nobody was told to read. The paths are the swap's target, never a claim.
     const cwd = createTempDir();
     const run = await build(cwd, [['good', CLEAN_BODY], ['bad', BROKEN_BODY]]);
-    const data = dataOf(cwd, run, ['good', 'bad']);
+    const data = reportData(cwd, run, ['good', 'bad']);
 
     expect(data.outputCommitted).toBe(false);
     expect(data.skills.map((row) => row.status)).toEqual(['ok', 'findings']);
@@ -167,7 +167,7 @@ describe('runSkillBuild - a published output path exists exactly when the run co
   it('publishes a path that exists for every row of a promoted run', async () => {
     const cwd = createTempDir();
     const run = await build(cwd, [['good', CLEAN_BODY]]);
-    const data = dataOf(cwd, run, ['good']);
+    const data = reportData(cwd, run, ['good']);
 
     expect(data.outputCommitted).toBe(true);
     expect(data.skills.map((row) => existsSync(safePath.join(cwd, row.output)))).toEqual([true]);

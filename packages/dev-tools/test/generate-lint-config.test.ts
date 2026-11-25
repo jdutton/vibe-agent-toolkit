@@ -7,8 +7,13 @@ import {
   renderPackageTurbo,
   renderTsconfigEslint,
   ROOT_LINT_EXTENSIONS,
+  ROOT_TYPECHECK_SCRIPT,
   rootLintInputFindings,
+  rootTypecheckScriptFindings,
   staleLintFiles,
+  TYPECHECK_SCRIPT,
+  typecheckInputFindings,
+  typecheckScriptFindings,
 } from '../src/generate-lint-config.js';
 
 import { cleanupTestTempDir, createTestTempDir, writeFiles } from './test-helpers.js';
@@ -29,16 +34,35 @@ function manifest(dir: string, scripts: Record<string, string>): Record<string, 
   return { [`packages/${dir}/package.json`]: JSON.stringify({ name: `@scope/${dir}`, scripts }) };
 }
 
+/**
+ * Write a workspace of fixture packages and return their lint plans.
+ *
+ * @param root - The workspace root
+ * @param packages - Each package's directory, its scripts and the files ESLint lints in it
+ * @returns One plan per package, none with foreign files
+ */
+function workspace(
+  root: string,
+  packages: ReadonlyArray<readonly [dir: string, scripts: Record<string, string>, lintable: string[]]>,
+): Array<{ dir: string; lintable: string[]; foreign: string[] }> {
+  writeFiles(root, {
+    'package.json': JSON.stringify({ name: 'fixture', workspaces: ['packages/*'] }),
+    ...Object.assign({}, ...packages.map(([dir, scripts]) => manifest(dir, scripts))),
+  });
+  return packages.map(([dir, , lintable]) => ({ dir, lintable, foreign: [] }));
+}
+
 /** A root turbo.json (with a comment, as turbo allows) declaring both lint tasks' inputs. */
 function turbo(lint: string[], rootLint: string[]): string {
   return `// comment\n${JSON.stringify({ tasks: { lint: { inputs: lint }, '//#lint:root': { inputs: rootLint } } })}`;
 }
 
 describe('renderPackageTurbo', () => {
-  it('adds a lint entry extending the root inputs, keeping every other task', () => {
+  it('adds lint and typecheck entries extending the root inputs, keeping every other task', () => {
     const current = JSON.stringify({ extends: ['//'], tasks: { 'test:integration': { cache: true } } });
     const rendered = JSON.parse(renderPackageTurbo(current, ['packages/b/x.ts']) ?? 'null') as { tasks: Record<string, unknown> };
-    expect(rendered.tasks).toEqual({ 'test:integration': { cache: true }, lint: { inputs: ['$TURBO_EXTENDS$', '$TURBO_ROOT$/packages/b/x.ts'] } });
+    const inputs = { inputs: ['$TURBO_EXTENDS$', '$TURBO_ROOT$/packages/b/x.ts'] };
+    expect(rendered.tasks).toEqual({ 'test:integration': { cache: true }, lint: inputs, typecheck: inputs });
   });
 
   it('reads a package turbo.json with comments, as turbo does', () => {
@@ -51,8 +75,8 @@ describe('renderPackageTurbo', () => {
     expect(JSON.parse(renderPackageTurbo(current, []) ?? 'null')).toEqual({ extends: ['//'], tags: ['leaf'] });
   });
 
-  it('removes the lint entry when nothing is foreign, and the file when no task is left', () => {
-    const onlyLint = JSON.stringify({ extends: ['//'], tasks: { lint: { inputs: ['$TURBO_EXTENDS$'] } } });
+  it('removes the lint and typecheck entries when nothing is foreign, and the file when no task is left', () => {
+    const onlyLint = JSON.stringify({ extends: ['//'], tasks: { lint: { inputs: ['$TURBO_EXTENDS$'] }, typecheck: { inputs: ['$TURBO_EXTENDS$'] } } });
     expect(renderPackageTurbo(onlyLint, [])).toBeNull();
     expect(renderPackageTurbo(undefined, [])).toBeNull();
     const withOther = JSON.stringify({ extends: ['//'], tasks: { lint: {}, build: { cache: true } } });
@@ -103,26 +127,69 @@ describe('lintScriptFindings', () => {
   const tempRoot = useTempRoot();
 
   it('requires the one lint script where ESLint lints a file and forbids one where it lints none', () => {
-    writeFiles(tempRoot(), {
-      'package.json': JSON.stringify({ name: 'fixture', workspaces: ['packages/*'] }),
-      ...manifest('good', { lint: LINT_SCRIPT }),
-      ...manifest('missing', {}),
-      ...manifest('variant', { lint: 'eslint . --cache' }),
-      ...manifest('empty', { lint: LINT_SCRIPT }),
-      ...manifest('umbrella', {}),
-    });
-    const plans = [
-      { dir: 'good', lintable: ['packages/good/src/a.ts'], foreign: [] },
-      { dir: 'missing', lintable: ['packages/missing/test/a.test.ts'], foreign: [] },
-      { dir: 'variant', lintable: ['packages/variant/eslint/r.cjs'], foreign: [] },
-      { dir: 'empty', lintable: [], foreign: [] },
-      { dir: 'umbrella', lintable: [], foreign: [] },
-    ];
+    const plans = workspace(tempRoot(), [
+      ['good', { lint: LINT_SCRIPT }, ['packages/good/src/a.ts']],
+      ['missing', {}, ['packages/missing/test/a.test.ts']],
+      ['variant', { lint: 'eslint . --cache' }, ['packages/variant/eslint/r.cjs']],
+      ['empty', { lint: LINT_SCRIPT }, []],
+      ['umbrella', {}, []],
+    ]);
     expect(lintScriptFindings(tempRoot(), plans).map((f) => `${f.path}: ${f.message}`)).toEqual([
       expect.stringMatching(/^packages\/missing\/package\.json: `lint` must be exactly "VAT_LINT_TASK=1 eslint \. --max-warnings=0"; found undefined/),
       expect.stringMatching(/^packages\/variant\/package\.json: `lint` must be exactly .*found "eslint \. --cache"/),
       expect.stringMatching(/^packages\/empty\/package\.json: `lint` is declared but ESLint lints no file/),
     ]);
+  });
+});
+
+describe('typecheckScriptFindings', () => {
+  const tempRoot = useTempRoot();
+
+  it('requires the one typecheck script where a TypeScript program exists and forbids one where none does', () => {
+    const plans = workspace(tempRoot(), [
+      ['good', { typecheck: TYPECHECK_SCRIPT }, ['packages/good/src/a.ts']],
+      ['missing', {}, ['packages/missing/test/a.test.ts']],
+      ['unguarded', { typecheck: 'tsc --noEmit -p tsconfig.eslint.json' }, ['packages/unguarded/src/a.ts']],
+      ['jsonly', { typecheck: TYPECHECK_SCRIPT }, ['packages/jsonly/eslint/r.cjs']],
+      ['umbrella', {}, []],
+    ]);
+    expect(typecheckScriptFindings(tempRoot(), plans).map((f) => `${f.path}: ${f.message}`)).toEqual([
+      expect.stringMatching(/^packages\/missing\/package\.json: `typecheck` must be exactly "node \.\.\/\.\.\/typecheck-task\.js tsconfig\.eslint\.json"; found undefined/),
+      expect.stringMatching(/^packages\/unguarded\/package\.json: `typecheck` must be exactly .*found "tsc --noEmit -p tsconfig\.eslint\.json"/),
+      expect.stringMatching(/^packages\/jsonly\/package\.json: `typecheck` is declared but the package has no tsconfig\.eslint\.json program/),
+    ]);
+  });
+});
+
+describe('rootTypecheckScriptFindings', () => {
+  const tempRoot = useTempRoot();
+  const rootRepo = (scripts: Record<string, string>, withProgram: boolean): string[] => {
+    writeFiles(tempRoot(), {
+      'package.json': JSON.stringify({ name: 'root', scripts }),
+      ...(withProgram ? { 'tsconfig.root.json': '{}' } : {}),
+    });
+    return rootTypecheckScriptFindings(tempRoot()).map((f) => `${f.path}: ${f.message}`);
+  };
+
+  it('derives the script from the root program it checks', () => {
+    expect(ROOT_TYPECHECK_SCRIPT).toBe('node typecheck-task.js tsconfig.root.json');
+  });
+
+  it('accepts exactly the guarded script when the root program exists', () => {
+    expect(rootRepo({ 'typecheck:root': ROOT_TYPECHECK_SCRIPT }, true)).toEqual([]);
+  });
+
+  it.each([
+    ['missing', {}],
+    ['unguarded', { 'typecheck:root': 'tsc --noEmit -p tsconfig.root.json' }],
+    ['another program', { 'typecheck:root': 'node typecheck-task.js tsconfig.json' }],
+  ])('refuses a %s script when the root program exists', (_name, scripts: Record<string, string>) => {
+    expect(rootRepo(scripts, true)).toEqual([expect.stringMatching(/^package\.json: `typecheck:root` must be exactly "node typecheck-task\.js tsconfig\.root\.json"; found /)]);
+  });
+
+  it('refuses the script when there is no root program, and accepts its absence', () => {
+    expect(rootRepo({ 'typecheck:root': ROOT_TYPECHECK_SCRIPT }, false)).toEqual([expect.stringMatching(/^package\.json: `typecheck:root` is declared but there is no tsconfig\.root\.json program/)]);
+    expect(rootRepo({}, false)).toEqual([]);
   });
 });
 
@@ -153,6 +220,48 @@ describe('linterInputFindings', () => {
     });
     expect(linterInputFindings(tempRoot()).map((f) => f.message)).toEqual([
       expect.stringMatching(/"lint" task.*Missing: @scope\/eslint-plugin-b\. Not imported: stale-plugin\./),
+    ]);
+  });
+});
+
+/** A `lint` task's inputs: the program's and the linter's. */
+const TYPECHECK_LINT = [
+  '$TURBO_DEFAULT$',
+  '$TURBO_ROOT$/packages/utils/eslint/**',
+  '$TURBO_ROOT$/packages/*/dist/**/*.d.ts',
+  '$TURBO_ROOT$/packages/*/package.json',
+  '$TURBO_ROOT$/bun.lock',
+  '$TURBO_ROOT$/eslint-config-support.js',
+  '$TURBO_ROOT$/node_modules/eslint/package.json',
+  '$TURBO_ROOT$/node_modules/typescript/package.json',
+];
+/** The inputs of {@link TYPECHECK_LINT} that describe the program. */
+const PROGRAM_INPUTS = ['$TURBO_DEFAULT$', '$TURBO_ROOT$/packages/*/dist/**/*.d.ts', '$TURBO_ROOT$/packages/*/package.json', '$TURBO_ROOT$/bun.lock', '$TURBO_ROOT$/node_modules/typescript/package.json'];
+/** The typecheck guard: the task script and the one root file it imports. */
+const GUARD_INPUTS = ['$TURBO_ROOT$/typecheck-task.js', '$TURBO_ROOT$/guard.js'];
+
+/** Write a root turbo.json whose `lint` task carries {@link TYPECHECK_LINT} and `typecheck` the given inputs, and a guard importing `guard.js`. */
+function withTypecheck(root: string, typecheck: string[]): void {
+  writeFiles(root, {
+    'turbo.json': `// comment\n${JSON.stringify({ tasks: { lint: { inputs: TYPECHECK_LINT }, typecheck: { inputs: typecheck } } })}`,
+    'typecheck-task.js': "import { refuse } from './guard.js';\nimport { spawnSync } from 'node:child_process';\n",
+  });
+}
+
+describe('typecheckInputFindings', () => {
+  const tempRoot = useTempRoot();
+
+  it('accepts exactly the lint inputs that describe the program, plus the guard files', () => {
+    withTypecheck(tempRoot(), [...PROGRAM_INPUTS, ...GUARD_INPUTS]);
+    expect(typecheckInputFindings(tempRoot())).toEqual([]);
+  });
+
+  it('flags a program input it lacks, a guard file it lacks and a linter input it hashes', () => {
+    withTypecheck(tempRoot(), [...PROGRAM_INPUTS.filter((input) => !input.includes('dist/')), GUARD_INPUTS[0] ?? '', '$TURBO_ROOT$/node_modules/eslint/package.json']);
+    expect(typecheckInputFindings(tempRoot()).map((f) => f.message)).toEqual([
+      expect.stringMatching(/does not hash \$TURBO_ROOT\$\/packages\/\*\/dist\/\*\*\/\*\.d\.ts/),
+      expect.stringMatching(/does not hash \$TURBO_ROOT\$\/guard\.js/),
+      expect.stringMatching(/hashes \$TURBO_ROOT\$\/node_modules\/eslint\/package\.json, which is neither/),
     ]);
   });
 });

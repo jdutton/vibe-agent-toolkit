@@ -87,7 +87,7 @@ describe('writeRunReport', () => {
     // No `schema_version` — the package version is the only version this
     // project has, and a reader's own strict schema is what decides readability.
     expect(written).not.toHaveProperty('schema_version');
-    expect(written.totals).toEqual({
+    expect(written['totals']).toEqual({
       plugins: 4,
       audit_ok: 1,
       audit_findings: 2,
@@ -104,9 +104,9 @@ describe('writeRunReport', () => {
     report.flags.with_review = true;
 
     const runDir = writeRunReport(report, outDir);
-    const totals = readSummary(runDir).totals as Record<string, number>;
-    expect(totals.reviewed).toBe(1);
-    expect(totals.review_error).toBe(0);
+    const totals = readSummary(runDir)['totals'] as Record<string, number>;
+    expect(totals['reviewed']).toBe(1);
+    expect(totals['review_error']).toBe(0);
   });
 
   it('counts rows whose review lane failed in review_error', async () => {
@@ -130,9 +130,9 @@ describe('writeRunReport', () => {
     report.flags.with_review = true;
 
     const runDir = writeRunReport(report, outDir);
-    const totals = readSummary(runDir).totals as Record<string, number>;
-    expect(totals.reviewed).toBe(2);
-    expect(totals.review_error).toBe(1);
+    const totals = readSummary(runDir)['totals'] as Record<string, number>;
+    expect(totals['reviewed']).toBe(2);
+    expect(totals['review_error']).toBe(1);
   });
 
   it('creates a date-sha-named subdirectory under outDir', async () => {

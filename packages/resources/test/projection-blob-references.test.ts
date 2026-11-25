@@ -20,7 +20,7 @@ const HREF = './b.md';
 const MARKDOWN_LINK = 'markdown-link';
 
 function parseResult(overrides: Partial<ParseResult>): ParseResult {
-  return { content: '', sizeBytes: 0, links: [], headings: [], estimatedTokenCount: 0, ...overrides };
+  return { content: '', sizeBytes: 0, links: [], headings: [], estimatedTokenCount: 0, skillText: null, ...overrides };
 }
 
 /**

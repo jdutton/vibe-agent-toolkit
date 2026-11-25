@@ -67,12 +67,11 @@ import {
   isUnderRoot,
   mkdirSyncReal,
   normalizedTmpdir,
+  refuseSharedTempState,
   safePath,
   toForwardSlash,
+  VAT_CACHE_DIR_ENV,
 } from '@vibe-agent-toolkit/utils';
-
-/** The environment variable naming the persistable cache directory. */
-export const VAT_CACHE_DIR_ENV = 'VAT_CACHE_DIR';
 
 /** The tag file's name, fixed by the Cache Directory Tagging specification. */
 export const VAT_CACHE_TAG_FILE = 'CACHEDIR.TAG';
@@ -115,11 +114,24 @@ function defaultVatCacheRoot(): string {
  * Read from the environment on every call, so a test or a harness that sets
  * the variable later is honoured.
  *
+ * In a test process (`VAT_TEST_USER_STATE_UNDER` armed by the shared vitest
+ * setup, inherited by every `vat` child) the default is refused: it is one
+ * directory the developer's own runs and every test worker share. The setup
+ * gives each test file its own `VAT_CACHE_DIR`; a test that unsets it must
+ * also move the temp directory.
+ *
  * @returns Absolute path, forward-slashed
+ * @throws Error in a test process, when the root would be the machine-wide default
  */
 export function vatCacheRoot(): string {
   const configured = process.env[VAT_CACHE_DIR_ENV];
-  if (configured === undefined || configured === '') return defaultVatCacheRoot();
+  if (configured === undefined || configured === '') {
+    return refuseSharedTempState(
+      defaultVatCacheRoot(),
+      'The VAT cache root',
+      `Set ${VAT_CACHE_DIR_ENV} to the test's own directory, or point TMPDIR (TEMP and TMP on Windows) at one.`,
+    );
+  }
   return safePath.resolve(configured);
 }
 

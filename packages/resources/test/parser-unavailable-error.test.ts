@@ -130,7 +130,7 @@ function loaderEacces(): Error & { code: string } {
  *
  * @returns A freshly evaluated `parser-loader.js` and its `parse-cache.js`
  */
-async function freshParseCache(): Promise<typeof ParserLoaderModule & typeof ParseCacheModule> {
+async function freshParseCache(): Promise<Pick<typeof ParserLoaderModule, 'loadParser'> & typeof ParseCacheModule> {
   vi.resetModules();
   const { loadParser } = await import('../src/parser-loader.js');
   return { ...(await import('../src/parse-cache.js')), loadParser };
@@ -148,7 +148,7 @@ async function freshParseCache(): Promise<typeof ParserLoaderModule & typeof Par
  * @returns The thrown value, or `undefined` if the load unexpectedly succeeded
  */
 async function loadFailure(
-  mod: typeof ParserLoaderModule,
+  mod: Pick<typeof ParserLoaderModule, 'loadParser'>,
   kind: 'markdown' | 'html' = 'markdown',
 ): Promise<unknown> {
   return mod.loadParser(kind).then(

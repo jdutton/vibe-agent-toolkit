@@ -30,13 +30,8 @@ import {
   getValidationResults,
   resetAuditCaches,
 } from '../../src/commands/audit.js';
+import { silentLogger } from '../test-doubles.js';
 import { runAuditCli } from '../test-helpers.js';
-
-const silentLogger = {
-  info: (_msg: string) => {},
-  error: (_msg: string) => {},
-  debug: (_msg: string) => {},
-};
 
 const UNREADABLE = 0o000;
 const READABLE = 0o755;
@@ -324,7 +319,7 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit under a config whose skills.includ
   let lockedDir: string;
   let alphaSkillMd: string;
 
-  interface ReportIssue { code: string; location?: string }
+  interface ReportIssue { code: string; location?: string; message: string }
   interface ReportFile { path: string; type: string }
   interface Report { status: string; findings: ReportIssue[]; data: { files: ReportFile[] } }
 

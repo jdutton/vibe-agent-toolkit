@@ -16,7 +16,7 @@
 import { chmodSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
+import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';

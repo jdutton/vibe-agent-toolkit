@@ -107,8 +107,8 @@ describe('judgeBars', () => {
       edits: [{ arm: 'cand:ci-c:warm-edit1', kind: 'modify' as const, count: 1, paths: ['docs/a.md'] }],
     },
     builds: [
-      { alias: 'rc11', source: { kind: 'dist', path: '/builds/rc11' }, instrument: { version: '0.2.0-rc.11', commit: null, dirty: null, closure: 'a'.repeat(64) } },
-      { alias: 'cand', source: { kind: 'tree', path: '/work/vat' }, instrument: { version: '0.2.0', commit: 'abcdef0123456789', dirty: false, closure: 'b'.repeat(64) } },
+      { alias: 'rc11', source: { kind: 'dist' as const, path: '/builds/rc11' }, instrument: { version: '0.2.0-rc.11', commit: null, dirty: null, closure: 'a'.repeat(64) } },
+      { alias: 'cand', source: { kind: 'tree' as const, path: '/work/vat' }, instrument: { version: '0.2.0', commit: 'abcdef0123456789', dirty: false, closure: 'b'.repeat(64) } },
     ],
     load: { before: 1, after: 2, cpus: 8, available: true, contaminated: false },
     arms: [

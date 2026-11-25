@@ -13,6 +13,7 @@ import {
   getValidationResults,
   resetAuditCaches,
 } from '../../src/commands/audit.js';
+import { silentLogger } from '../test-doubles.js';
 
 // Constants for test fixtures
 const CLAUDE_PLUGIN_DIRNAME = '.claude-plugin';
@@ -28,12 +29,6 @@ const TEST_PLUGIN_DESCRIPTION = 'Test plugin';
 const TEST_AUTHOR_NAME = 'VAT Test Suite';
 
 // Silent logger for tests (no stderr output)
-const silentLogger = {
-  info: (_msg: string) => {},
-  error: (_msg: string) => {},
-  debug: (_msg: string) => {},
-};
-
 // Helper to run audit validation directly (no CLI subprocess)
 // options.recursive defaults to true (recursive by default), set to false to disable
 /** Write a registry file, audit it, and expect one result with nothing actionable. */
@@ -140,8 +135,8 @@ describe('audit command (integration)', () => {
       const results = await runAudit(pluginDir);
 
       expect(results).toHaveLength(1);
-      expect(results[0].summary).toMatchObject({ errors: 0, warnings: 0 });
-      expect(results[0].metadata?.name).toBe(TEST_PLUGIN_NAME);
+      expect(results[0]?.summary).toMatchObject({ errors: 0, warnings: 0 });
+      expect(results[0]?.metadata?.name).toBe(TEST_PLUGIN_NAME);
     });
 
     it('should detect plugin validation errors', async () => {
@@ -153,7 +148,7 @@ describe('audit command (integration)', () => {
       const results = await runAudit(pluginDir);
 
       expect(results).toHaveLength(1);
-      expect(results[0].summary.errors).toBeGreaterThan(0);
+      expect(results[0]?.summary.errors).toBeGreaterThan(0);
     });
 
     it('should warn when plugin.json is missing version field', async () => {
@@ -166,9 +161,9 @@ describe('audit command (integration)', () => {
       const results = await runAudit(pluginDir);
 
       expect(results).toHaveLength(1);
-      expect(results[0].summary).toMatchObject({ errors: 0 });
-      expect(results[0].summary.warnings).toBeGreaterThan(0);
-      const codes = results[0].issues.map((i) => i.code);
+      expect(results[0]?.summary).toMatchObject({ errors: 0 });
+      expect(results[0]?.summary.warnings).toBeGreaterThan(0);
+      const codes = results[0]?.issues.map((i) => i.code);
       expect(codes).toContain('PLUGIN_MISSING_VERSION');
       // Plugin-recommended-fields detector also fires (info severity) for
       // missing author/license — detailed coverage in plugin-validator.test.ts.
@@ -199,7 +194,7 @@ describe('audit command (integration)', () => {
 
       // 1 plugin manifest + 2 skills
       expect(results).toHaveLength(3);
-      expect(results[0].type).toBe('claude-plugin');
+      expect(results[0]?.type).toBe('claude-plugin');
       const skillResults = results.filter((r) => r.type === 'agent-skill');
       expect(skillResults).toHaveLength(2);
       const skillNames = skillResults.map((r) => r.metadata?.name).sort((a, b) => (a ?? '').localeCompare(b ?? ''));
@@ -275,12 +270,12 @@ describe('audit command (integration)', () => {
       const results = await runAudit(marketplaceDir);
 
       expect(results).toHaveLength(1);
-      const codes = results[0].issues.map((i) => i.code);
+      const codes = results[0]?.issues.map((i) => i.code);
       expect(codes).toContain('MARKETPLACE_PLUGIN_SOURCE_MISSING');
       // The verdict follows the findings: an error-severity finding cannot sit
       // under `status: success` with an all-zero counts block beside it.
-      expect(results[0].summary).toEqual(countBySeverity(results[0].issues));
-      expect(results[0].summary.errors).toBeGreaterThanOrEqual(1);
+      expect(results[0]?.summary).toEqual(countBySeverity(results[0]?.issues ?? []));
+      expect(results[0]?.summary.errors).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -337,7 +332,7 @@ This is a test skill.
       const results = await runAudit(skillFile);
 
       expect(results).toHaveLength(1);
-      expect(results[0].summary).toMatchObject({ errors: 0, warnings: 0 });
+      expect(results[0]?.summary).toMatchObject({ errors: 0, warnings: 0 });
     });
 
     it('audits a tree holding an agent.yaml cleanly: the file is not classified, and adds no finding', async () => {
@@ -380,8 +375,8 @@ This is a test skill.
       const results = await runAudit(unknownFile);
 
       expect(results).toHaveLength(1);
-      expect(results[0].summary.errors).toBeGreaterThan(0);
-      expect(results[0].issues.some(i => i.code === 'UNKNOWN_FORMAT')).toBe(true);
+      expect(results[0]?.summary.errors).toBeGreaterThan(0);
+      expect(results[0]?.issues.some(i => i.code === 'UNKNOWN_FORMAT')).toBe(true);
     });
   });
 
@@ -479,7 +474,7 @@ description: Test skill
 
       expect(results).toHaveLength(1);
       // Should have validation errors (name contains spaces)
-      expect(results[0].issues.length).toBeGreaterThan(0);
+      expect(results[0]?.issues.length).toBeGreaterThan(0);
     });
   });
 });

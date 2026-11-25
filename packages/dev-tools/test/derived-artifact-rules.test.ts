@@ -56,7 +56,7 @@ function writeWorkspace(
   }
 }
 
-const GOOD_SCRIPTS = { build: STANDARD_COMPILE, typecheck: STANDARD_SCRIPTS.typecheck, clean: STANDARD_SCRIPTS.clean };
+const GOOD_SCRIPTS = { build: STANDARD_COMPILE, clean: STANDARD_SCRIPTS.clean };
 
 // `alpha`, `beta` and `gamma` are not packages of this repository: the fixture
 // sources below name them, and the same scan run over this file ignores them.
@@ -142,13 +142,13 @@ describe('derived-artifact rules on fixture trees', () => {
     it('flags a missing tier script, an orphan tier script, a variant spelling, and a root-owned script', () => {
       writeWorkspace(root, {
         dir: 'lib',
-        scripts: { ...GOOD_SCRIPTS, typecheck: 'tsc --build --dry', 'test:system': STANDARD_SCRIPTS['test:system'], 'duplication-check': 'jscpd' },
+        scripts: { ...GOOD_SCRIPTS, clean: 'rimraf dist', 'test:system': STANDARD_SCRIPTS['test:system'], 'duplication-check': 'jscpd' },
         tests: ['a.test.ts'],
       });
 
       const messages = checkPackageScripts(root).map((f) => f.message);
       expect(messages).toEqual([
-        expect.stringContaining('`typecheck` must be exactly "tsc --noEmit"'),
+        expect.stringContaining('`clean` must be exactly'),
         expect.stringContaining('`test:unit` must be exactly'),
         expect.stringContaining('`test:watch` must be exactly'),
         expect.stringContaining('`test:system` is declared but the package has no matching test tier'),

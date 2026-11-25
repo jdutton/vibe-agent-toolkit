@@ -22,15 +22,12 @@ import { setupTestProject } from './project-setup.js';
  * Handles output with --- document markers
  */
 export function parseYamlOutput(stdout: string): Record<string, unknown> {
-  // Extract content between --- markers
-  const parts = stdout.split('---\n').filter(part => part.trim());
-
-  if (parts.length === 0) {
+  // Extract content between --- markers, and parse the first document
+  // (there should only be one valid document)
+  const yamlContent = stdout.split('---\n').find(part => part.trim());
+  if (yamlContent === undefined) {
     throw new Error('No YAML content found in output');
   }
-
-  // Parse the first document (there should only be one valid document)
-  const yamlContent = parts[0];
   return yaml.parse(yamlContent) as Record<string, unknown>;
 }
 

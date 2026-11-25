@@ -32,19 +32,19 @@ describe('analyzeCompatibility against local plugins', () => {
   it.skipIf(!hasPlugins)('analyzes all locally installed plugins without errors', async () => {
     // Followed throughout: a `--dev` install puts these here as links.
     const marketplaces = readdirSync(PLUGINS_DIR, { withFileTypes: true })
-      .filter(d => direntKindFollowingSync(PLUGINS_DIR, d) === 'directory');
+      .filter(d => direntKindFollowingSync(PLUGINS_DIR, d, PLUGINS_DIR) === 'directory');
 
     const results: CompatibilityResult[] = [];
 
     for (const marketplace of marketplaces) {
       const mDir = safePath.resolve(PLUGINS_DIR, marketplace.name);
       const plugins = readdirSync(mDir, { withFileTypes: true })
-        .filter(d => direntKindFollowingSync(mDir, d) === 'directory');
+        .filter(d => direntKindFollowingSync(mDir, d, PLUGINS_DIR) === 'directory');
 
       for (const plugin of plugins) {
         const pDir = safePath.resolve(mDir, plugin.name);
         const versions = readdirSync(pDir, { withFileTypes: true })
-          .filter(d => direntKindFollowingSync(pDir, d) === 'directory');
+          .filter(d => direntKindFollowingSync(pDir, d, PLUGINS_DIR) === 'directory');
         const lastVersion = versions.at(-1);
         if (!lastVersion) continue;
         const latestDir = safePath.resolve(pDir, lastVersion.name);

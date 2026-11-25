@@ -26,6 +26,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -44,7 +45,9 @@ import {
   anchorsBelowRoot,
   pluginManifestLocations,
 } from '../anchor-contract-helpers.js';
+import { reportData } from '../report-envelope.js';
 import { silentLogger } from '../test-doubles.js';
+
 
 /**
  * Synthetic absolute paths, resolved rather than written as literals — on
@@ -84,7 +87,7 @@ function scanPayload(verbose: boolean, extentSource: 'git' | 'filesystem' = 'fil
     notAdmitted: { count: 0, findings: [] },
   });
   RESOURCES_SCAN_REPORT_SCHEMA.parse(report);
-  return report.data;
+  return reportData(report);
 }
 
 describe('resources scan payload', () => {
@@ -212,7 +215,7 @@ describe('marketplace validate payload', () => {
    * (the identity the run keys on) carrying findings whose `location` is
    * ALREADY relative to the marketplace root.
    */
-  const pluginResult = {
+  const pluginResult: ValidationResult = {
     path: PLUGIN_DIR,
     type: 'claude-plugin',
     status: 'findings',
@@ -228,7 +231,7 @@ describe('marketplace validate payload', () => {
     ],
     summary: { errors: 1, warnings: 0, info: 0 },
     metadata: { name: 'alpha' },
-  } as const;
+  };
 
   it('states the marketplace root once and publishes each plugin path relative to it', () => {
     const report = buildMarketplaceValidateReport({
@@ -242,11 +245,11 @@ describe('marketplace validate payload', () => {
       durationMs: 7,
     });
 
-    expect(report.data.root).toBe(ROOT);
+    expect(reportData(report).root).toBe(ROOT);
     // The root is stated under its own name; a second absolute `path` beside it
     // is how a document ends up naming the machine it ran on twice.
     expect(report.data).not.toHaveProperty('path');
-    expect(report.data.plugins).toEqual([
+    expect(reportData(report).plugins).toEqual([
       {
         name: 'alpha',
         source: './plugins/alpha',
@@ -259,7 +262,7 @@ describe('marketplace validate payload', () => {
     // Re-basing is not idempotent: a `location` that arrives root-relative
     // must be published byte-for-byte, not run through `relative()` again.
     expect(report.findings).toEqual(pluginResult.issues);
-    expectNoAbsolutePaths(report.data.plugins);
+    expectNoAbsolutePaths(reportData(report).plugins);
     expectNoAbsolutePaths(report.findings);
   });
 
@@ -277,9 +280,9 @@ describe('marketplace validate payload', () => {
       durationMs: 2,
     });
 
-    expect(report.data.root).toBe(ROOT);
+    expect(reportData(report).root).toBe(ROOT);
     expect(report.data).not.toHaveProperty('path');
-    expect(report.data.marketplace).toBeNull();
+    expect(reportData(report).marketplace).toBeNull();
   });
 });
 

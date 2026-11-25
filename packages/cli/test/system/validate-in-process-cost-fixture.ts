@@ -26,8 +26,8 @@
 import { cpSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-import { BUILTIN_CHECKS, PROJECTION_TABLES, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
-import { mapWithConcurrency, safePath, type WorkCounter, type WorkCounterDump } from '@vibe-agent-toolkit/utils';
+import { BUILTIN_CHECKS, PROJECTION_TABLES } from '@vibe-agent-toolkit/resources';
+import { mapWithConcurrency, safePath, type WorkCounter, type WorkCounterDump, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { expect } from 'vitest';
 
 import type { ValidateDebugFacts } from '../../src/commands/validate-debug-facts.js';

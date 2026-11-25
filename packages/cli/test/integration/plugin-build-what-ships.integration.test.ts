@@ -137,13 +137,13 @@ function writeFixture(tempDir: string, poolSelector = '[]', extra?: (skillsDir: 
 }
 
 /** Every file under `root`, as forward-slash paths relative to it. */
-function walkFiles(root: string, prefix = ''): string[] {
+function walkFiles(root: string, prefix = '', within = root): string[] {
   if (!existsSync(root)) return [];
   const out: string[] = [];
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     const abs = safePath.join(root, entry.name);
     const rel = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
-    if (direntKindFollowingSync(root, entry) === 'directory') out.push(...walkFiles(abs, rel));
+    if (direntKindFollowingSync(root, entry, within) === 'directory') out.push(...walkFiles(abs, rel, within));
     else out.push(rel);
   }
   return out;

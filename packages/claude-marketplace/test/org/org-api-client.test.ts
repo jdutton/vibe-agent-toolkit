@@ -171,7 +171,7 @@ function interceptConnectDeadline(currentCall: () => CapturedCall | undefined): 
     fn: () => void, ms?: number, ...rest: unknown[]
   ) => {
     if (ms !== CONNECT_TIMEOUT_MS) {
-      return (realSetTimeout as (...a: unknown[]) => unknown)(fn, ms, ...rest);
+      return realSetTimeout<unknown[]>(fn, ms, ...rest);
     }
     const call = currentCall();
     const handle = {
@@ -257,7 +257,7 @@ function createFakeTransport(
 
   const requester = (options: unknown, callback: (res: unknown) => void): unknown => {
     const chunks: Buffer[] = [];
-    const req: EventEmitter & Record<string, unknown> = Object.assign(new EventEmitter(), {});
+    const req: EventEmitter & Record<string, unknown> = Object.assign(new EventEmitter(), {} as Record<string, unknown>);
     const call: CapturedCall = {
       options: options as CapturedCall['options'],
       body: Buffer.alloc(0),

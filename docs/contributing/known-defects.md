@@ -1095,16 +1095,6 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   - add a tiny fixture embedding model;
   - or provision both in CI.
 
-### Test files are never typechecked
-
-- **Severity:** Minor · **Effort:** M · **User-visible:** no
-- **Mechanism:** `tsc --build` covers `src` only. A latent `TS2345` sits at `cli-runner.ts:34`:
-  `yamlContent` is `string | undefined` and is passed to `yaml.parse`. Narrowing gaps in tests
-  pass review because nothing compiles them.
-- **Where:** [`cli-runner.ts:33-34`](../../packages/cli/test/system/test-helpers/cli-runner.ts)
-- **Fix:** add a `tsconfig.test.json` per package with a `typecheck:tests` step, and fix what it
-  reports.
-
 ### Nothing enforces that a non-overridable code is refused as an override key
 
 - **Severity:** Minor · **Effort:** M · **User-visible:** no

@@ -2709,7 +2709,7 @@ describe('scrubControlArmEnv — the exemption rules nothing was standing on', (
       ['CLAUDE_PLUGIN_ROOT'],
     );
 
-    expect(result.env.CLAUDE_PLUGIN_ROOT).toBeUndefined();
+    expect(result.env['CLAUDE_PLUGIN_ROOT']).toBeUndefined();
     expect(result.droppedForbiddenKey).toEqual(['CLAUDE_PLUGIN_ROOT']);
   });
 

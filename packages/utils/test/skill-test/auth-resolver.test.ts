@@ -16,13 +16,13 @@ describe('resolveAuth', () => {
   it('inherit scrubs the key when a subscription is present (post-scrub re-probe)', () => {
     const r = resolveAuth({ mode: 'inherit', sourceEnv: SUB_ENV, probe: realisticProbe });
     expect(r.effectiveMechanism).toBe('subscription');
-    expect(r.forwardedEnv.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(r.forwardedEnv['ANTHROPIC_API_KEY']).toBeUndefined();
   });
 
   it('subscription forces OAuth, scrubs the key', () => {
     const r = resolveAuth({ mode: 'subscription', sourceEnv: SUB_ENV, probe: realisticProbe });
     expect(r.effectiveMechanism).toBe('subscription');
-    expect(r.forwardedEnv.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(r.forwardedEnv['ANTHROPIC_API_KEY']).toBeUndefined();
   });
 
   it('subscription exits 2 when no subscription is logged in', () => {
@@ -33,7 +33,7 @@ describe('resolveAuth', () => {
   it('api-key requires a key, forwards it', () => {
     const r = resolveAuth({ mode: 'api-key', sourceEnv: SUB_ENV, probe: realisticProbe });
     expect(r.effectiveMechanism).toBe('api-key');
-    expect(r.forwardedEnv.ANTHROPIC_API_KEY).toBe('sk');
+    expect(r.forwardedEnv['ANTHROPIC_API_KEY']).toBe('sk');
   });
 
   it('api-key exits 2 when no key present', () => {
@@ -61,7 +61,7 @@ describe('resolveAuth', () => {
   it('auto keeps the key (no scrub) and reports api-key when a key is present', () => {
     const r = resolveAuth({ mode: 'auto', sourceEnv: SUB_ENV, probe: realisticProbe });
     expect(r.effectiveMechanism).toBe('api-key');
-    expect(r.forwardedEnv.ANTHROPIC_API_KEY).toBe('sk');
+    expect(r.forwardedEnv['ANTHROPIC_API_KEY']).toBe('sk');
   });
 
   it('inherit does NOT scrub when the post-scrub re-probe is not logged in', () => {
@@ -71,7 +71,7 @@ describe('resolveAuth', () => {
       env['ANTHROPIC_API_KEY'] ? { loggedIn: true, authMethod: 'api-key' } : { loggedIn: false };
     const r = resolveAuth({ mode: 'inherit', sourceEnv: SUB_ENV, probe: noSubWithoutKey });
     expect(r.effectiveMechanism).toBe('api-key');
-    expect(r.forwardedEnv.ANTHROPIC_API_KEY).toBe('sk');
+    expect(r.forwardedEnv['ANTHROPIC_API_KEY']).toBe('sk');
   });
 
   it('inherit handles a null re-probe as not-logged-in (no scrub)', () => {
@@ -79,7 +79,7 @@ describe('resolveAuth', () => {
       env['ANTHROPIC_API_KEY'] ? { loggedIn: true } : null;
     const r = resolveAuth({ mode: 'inherit', sourceEnv: SUB_ENV, probe: nullWithoutKey });
     expect(r.effectiveMechanism).toBe('api-key');
-    expect(r.forwardedEnv.ANTHROPIC_API_KEY).toBe('sk');
+    expect(r.forwardedEnv['ANTHROPIC_API_KEY']).toBe('sk');
   });
 
   it('subscription exits 2 when the probe returns null', () => {
@@ -106,7 +106,7 @@ describe('resolveAuth', () => {
   it('forwards modelVars names into the built env (allowlist extension)', () => {
     const env = { CLAUDE_CONFIG_DIR: '/c', ANTHROPIC_API_KEY: 'sk', ANTHROPIC_MODEL: 'claude-x' } as NodeJS.ProcessEnv;
     const r = resolveAuth({ mode: 'auto', sourceEnv: env, modelVars: ['ANTHROPIC_MODEL'], probe: realisticProbe });
-    expect(r.forwardedEnv.ANTHROPIC_MODEL).toBe('claude-x');
+    expect(r.forwardedEnv['ANTHROPIC_MODEL']).toBe('claude-x');
   });
 
   it('passes through authMethod and apiKeySource from the probe when present', () => {

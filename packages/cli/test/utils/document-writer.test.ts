@@ -459,7 +459,7 @@ describe('the other writer entry points', () => {
  * `publishSupervisedEnding`: the one place a supervised verb (`vat resources check`,
  * `vat resources query --budget`) publishes what its run came to, through this writer.
  */
-const SUPERVISED_WARNED = { code: 'CUSTOM:warn-a', severity: 'warning' as const, message: 'a.md is flagged', location: 'docs/a.md' };
+const SUPERVISED_WARNED = { code: 'CUSTOM:warn-a' as const, severity: 'warning' as const, message: 'a.md is flagged', location: 'docs/a.md' };
 
 /** A whole check report carrying one warning. */
 const SUPERVISED_REPORT = buildCheckOutputData({

@@ -17,8 +17,8 @@
 
 import { rmSync, writeFileSync } from 'node:fs';
 
-import { ALL_EXTENT_REQUEST, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { ALL_EXTENT_REQUEST } from '@vibe-agent-toolkit/resources';
+import { mkdirSyncReal, safePath, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { gitTreeSnapshot } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 

@@ -6,13 +6,12 @@
 
 import { promises as fs } from 'node:fs';
 
-import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath, TEST_USER_STATE_UNDER, toForwardSlash, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { parseCacheDirectory, vatCacheNamespace, vatCacheNamespaceRoot } from '../../src/cache-namespace.js';
 import {
-  VAT_CACHE_DIR_ENV,
   VAT_CACHE_TAG_FILE,
   markVatCacheRoot,
   recogniseVatCacheRoot,
@@ -37,12 +36,28 @@ afterEach(async () => {
 
 describe('vatCacheRoot', () => {
   it('defaults to .vat-cache under the temp directory when VAT_CACHE_DIR is unset', () => {
+    stubTmpdir(scratch);
     vi.stubEnv(VAT_CACHE_DIR_ENV, undefined);
     expect(vatCacheRoot()).toBe(safePath.join(normalizedTmpdir(), '.vat-cache'));
   });
 
   it('treats an empty VAT_CACHE_DIR as unset', () => {
+    stubTmpdir(scratch);
     vi.stubEnv(VAT_CACHE_DIR_ENV, '');
+    expect(vatCacheRoot()).toBe(safePath.join(normalizedTmpdir(), '.vat-cache'));
+  });
+
+  // The shared setup arms TEST_USER_STATE_UNDER and gives every test file its own VAT_CACHE_DIR;
+  // a test that unsets it without moving the temp directory would share the developer's cache.
+  it.each([undefined, ''])('refuses the machine-wide default in a test process when VAT_CACHE_DIR is %j', (value) => {
+    vi.stubEnv(VAT_CACHE_DIR_ENV, value);
+    expect(() => vatCacheRoot()).toThrow(/shared by every process on this machine: refusing to use it in a test process/);
+    expect(() => vatCacheNamespaceRoot()).toThrow(`Set ${VAT_CACHE_DIR_ENV}`);
+  });
+
+  it('answers the machine-wide default outside a test process, unchanged', () => {
+    vi.stubEnv(TEST_USER_STATE_UNDER, undefined);
+    vi.stubEnv(VAT_CACHE_DIR_ENV, undefined);
     expect(vatCacheRoot()).toBe(safePath.join(normalizedTmpdir(), '.vat-cache'));
   });
 
@@ -75,6 +90,7 @@ describe('vatLinkCacheDirectory', () => {
   });
 
   it('is not inside the default cache root either', () => {
+    vi.stubEnv(TEST_USER_STATE_UNDER, undefined);
     vi.stubEnv(VAT_CACHE_DIR_ENV, undefined);
     expect(vatLinkCacheDirectory().startsWith(`${vatCacheRoot()}/`)).toBe(false);
   });

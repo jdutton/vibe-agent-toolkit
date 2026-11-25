@@ -29,7 +29,9 @@ const SCOPED_PATH = 'dist/skills/demo';
 
 /** Parse `argv` through a real command, capturing stderr and the exit code. */
 async function runCommand(command: Command, argv: string[]): Promise<CapturedExit> {
-  return captureProcessExit(() => command.parseAsync(argv, { from: 'user' }));
+  return captureProcessExit(async () => {
+    await command.parseAsync(argv, { from: 'user' });
+  });
 }
 
 describe('rejectPositionalArguments', () => {

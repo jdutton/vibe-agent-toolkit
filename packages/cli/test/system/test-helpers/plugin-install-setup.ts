@@ -10,7 +10,9 @@ import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { expect } from 'vitest';
 
 import { PLUGIN_INSTALL_REPORT_SCHEMA } from '../../../src/commands/claude/plugin/install-schema.js';
+import { refusalOf } from '../../report-envelope.js';
 import { executeCliAndParseYaml, fakeHomeEnv, writeTestFile } from '../test-common.js';
+
 
 /** Write `content` at `filePath`, creating its directory. */
 export function plantFile(filePath: string, content: string): void {
@@ -135,7 +137,7 @@ export async function expectInputRefusal(binPath: string, fakeHome: string, args
   const { status, report } = await runInstall(binPath, fakeHome, args);
   expect(status).toBe(2);
   expect(report).toMatchObject({ status: 'error', error: { code: 'INPUT_UNREADABLE' } });
-  for (const mention of mentions) expect(report.error?.message).toContain(mention);
+  for (const mention of mentions) expect(refusalOf(report)?.message).toContain(mention);
 }
 
 /** The plugin keys Claude's registry under `claudeDir` holds. */

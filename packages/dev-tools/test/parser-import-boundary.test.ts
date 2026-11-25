@@ -202,7 +202,7 @@ describe('only the parse worker\'s closure imports a parser', () => {
     [...packageSources()]
       .filter(([file]) => !PRIVATE_PACKAGES.some((prefix) => toForwardSlash(file).startsWith(prefix)))
   );
-  const importers = new Map([...files].map(([file, body]) => [file, parserImports(body)]).filter(([, found]) => found.length > 0) as Array<[string, string[]]>);
+  const importers = new Map([...files].map(([file, body]) => [file, parserImports(body)] as const).filter(([, found]) => found.length > 0));
 
   it('finds the importers — at least the worker and the markdown composer', () => {
     expect([...importers.keys()]).toEqual(expect.arrayContaining([

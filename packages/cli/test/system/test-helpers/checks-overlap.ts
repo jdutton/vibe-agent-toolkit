@@ -28,8 +28,8 @@ import { homedir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 
-import { PROJECTION_TABLES, quoteIdentifier, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal, normalizePath, safePath, WORK_COUNTER_NAMES, WORK_COUNTERS_ENV, type WorkCounter, type WorkCounterDump } from '@vibe-agent-toolkit/utils';
+import { PROJECTION_TABLES, quoteIdentifier } from '@vibe-agent-toolkit/resources';
+import { mkdirSyncReal, normalizePath, safePath, WORK_COUNTER_NAMES, WORK_COUNTERS_ENV, type WorkCounter, type WorkCounterDump, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { normalizeCommandOutput, type NormalizeContext } from '@vibe-agent-toolkit/utils/testing';
 import { expect } from 'vitest';
 

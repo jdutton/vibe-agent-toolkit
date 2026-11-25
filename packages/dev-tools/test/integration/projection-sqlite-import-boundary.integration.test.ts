@@ -21,8 +21,12 @@ import { ESLint } from 'eslint';
 import picomatch from 'picomatch';
 import { describe, expect, it } from 'vitest';
 
-import { PROJECTION_SQLITE_IMPORTERS } from '../../../../eslint.config.js';
-import { syntaxRuleLinter } from '../eslint-clean-files.js';
+import { importRootEslintConfig, syntaxRuleLinter } from '../eslint-clean-files.js';
+
+/** The one `eslint.config.js` export this file reads: the globs exempt from the boundary rule. */
+const { PROJECTION_SQLITE_IMPORTERS } = await importRootEslintConfig<{
+  readonly PROJECTION_SQLITE_IMPORTERS: readonly string[];
+}>();
 
 const REPO_ROOT = resolveFromImportMeta(import.meta.url, '..', '..', '..', '..');
 const BACKEND = '@vibe-agent-toolkit/projection-sqlite';

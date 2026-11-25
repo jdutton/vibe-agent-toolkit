@@ -16,10 +16,10 @@ describe('withPluginRootEnv', () => {
 
   it('injects CLAUDE_PLUGIN_ROOT when the subject is plugin-distributed', () => {
     const out = withPluginRootEnv(base, '/harness/staged/acme-platform-abc123');
-    expect(out.CLAUDE_PLUGIN_ROOT).toBe('/harness/staged/acme-platform-abc123');
+    expect(out['CLAUDE_PLUGIN_ROOT']).toBe('/harness/staged/acme-platform-abc123');
     // The rest of the env is preserved verbatim.
-    expect(out.PATH).toBe('/usr/bin');
-    expect(out.ANTHROPIC_API_KEY).toBe('sk-test');
+    expect(out['PATH']).toBe('/usr/bin');
+    expect(out['ANTHROPIC_API_KEY']).toBe('sk-test');
   });
 
   it('leaves the env unchanged when the subject is standalone (null plugin root)', () => {

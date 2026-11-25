@@ -7,8 +7,7 @@
 import type { SpawnSyncReturns } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 
-import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
-import { safePath, WORK_COUNTERS_ENV, type WorkCounterDump } from '@vibe-agent-toolkit/utils';
+import { safePath, WORK_COUNTERS_ENV, type WorkCounterDump, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { expect } from 'vitest';
 
 import { VALIDATE_DEBUG_FACTS_ENV, type ValidateDebugFacts } from '../../src/commands/validate-debug-facts.js';

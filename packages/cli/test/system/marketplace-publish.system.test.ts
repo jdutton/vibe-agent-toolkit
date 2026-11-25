@@ -6,8 +6,9 @@ import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
+import type { z } from 'zod';
 
-import { MARKETPLACE_PUBLISH_REPORT_SCHEMA, type MarketplacePublishReport } from '../../src/commands/claude/marketplace/publish-schema.js';
+import { MARKETPLACE_PUBLISH_REPORT_SCHEMA } from '../../src/commands/claude/marketplace/publish-schema.js';
 import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
 import {
@@ -131,7 +132,7 @@ async function setupAndDryRunPublish(
 }
 
 /** The publish document, read through the published schema. */
-function reportOf(stdout: string): MarketplacePublishReport {
+function reportOf(stdout: string): z.infer<typeof MARKETPLACE_PUBLISH_REPORT_SCHEMA> {
   return MARKETPLACE_PUBLISH_REPORT_SCHEMA.parse(yaml.parse(stdout));
 }
 

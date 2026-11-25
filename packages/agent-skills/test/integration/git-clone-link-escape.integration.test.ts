@@ -221,7 +221,7 @@ describe('cloneGitSource refuses a committed link by its text before checkout, o
 
   // A repository chooses how many names its root holds: the refusal lists 50 and counts the rest.
   it('lists only the first 50 names of a crowded root, counting the rest', () => {
-    const entries = Array.from({ length: 53 }, (_, index) => ({ mode: '100644', quotedPath: `n${index.toString().padStart(2, '0')}`, bytes: Buffer.from('x\n') }));
+    const entries = Array.from({ length: 53 }, (_, index) => ({ mode: '100644' as const, quotedPath: `n${index.toString().padStart(2, '0')}`, bytes: Buffer.from('x\n') }));
     const { clone } = cloneIndexEntries(entries);
     let thrown: unknown;
     try {

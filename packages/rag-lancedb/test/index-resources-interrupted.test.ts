@@ -45,7 +45,7 @@
  * needs no seam of any kind.
  */
 
-import type { ResourceMetadata } from '@vibe-agent-toolkit/rag';
+import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 

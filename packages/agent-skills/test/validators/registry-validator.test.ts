@@ -34,7 +34,7 @@ async function createAndValidateRegistry(
  * Helper to assert schema validation errors
  */
 function assertSchemaError(result: unknown): void {
-	const validationResult = result as { status: string; issues: Array<{ code: string }> };
+	const validationResult = result as { status: string; summary: { errors: number }; issues: Array<{ code: string }> };
 	expect(validationResult.summary.errors).toBeGreaterThan(0);
 	expect(
 		validationResult.issues.some((i) => i.code === 'REGISTRY_INVALID_SCHEMA'),

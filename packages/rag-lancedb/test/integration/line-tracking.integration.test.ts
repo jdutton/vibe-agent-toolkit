@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
-import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite } from '../test-helpers.js';
+import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite, suiteProvider } from '../test-helpers.js';
 
 // The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.
 describe.skipIf(onnxModelUnreachable())('Line Number Tracking', () => {
@@ -42,9 +42,9 @@ Line 16 provides closing remarks.`
     );
 
     const resource = await createTestResource(testFile, 'multiline-doc');
-    await suite.provider.indexResources([resource]);
+    await suiteProvider(suite).indexResources([resource]);
 
-    const result = await suite.provider.query({
+    const result = await suiteProvider(suite).query({
       text: 'second section',
       limit: 10,
     });
@@ -87,9 +87,9 @@ Line 16 provides closing remarks.`
     );
 
     const resource = await createTestResource(testFile, 'ordered-doc');
-    await suite.provider.indexResources([resource]);
+    await suiteProvider(suite).indexResources([resource]);
 
-    const result = await suite.provider.query({
+    const result = await suiteProvider(suite).query({
       text: 'information',
       limit: 10,
     });
@@ -109,7 +109,7 @@ Line 16 provides closing remarks.`
       const currChunk = sortedChunks[i];
 
       // Current chunk should start after previous chunk ends
-      if (prevChunk?.endLine !== undefined && currChunk.startLine !== undefined) {
+      if (prevChunk?.endLine !== undefined && currChunk?.startLine !== undefined) {
         expect(currChunk.startLine).toBeGreaterThan(prevChunk.endLine);
       }
     }
@@ -137,10 +137,10 @@ Line 13: Use exponential backoff for retries.`
     );
 
     const resource = await createTestResource(testFile, 'api-doc');
-    await suite.provider.indexResources([resource]);
+    await suiteProvider(suite).indexResources([resource]);
 
     // User searches for rate limiting info
-    const result = await suite.provider.query({
+    const result = await suiteProvider(suite).query({
       text: 'rate limits requests per minute',
       limit: 5,
     });

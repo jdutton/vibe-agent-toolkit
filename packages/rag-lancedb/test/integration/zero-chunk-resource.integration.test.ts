@@ -23,7 +23,8 @@
  * accepted an empty `createTable` would pass the test the defect fails.
  */
 
-import type { IndexResult, ResourceMetadata } from '@vibe-agent-toolkit/rag';
+import type { IndexResult } from '@vibe-agent-toolkit/rag';
+import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';

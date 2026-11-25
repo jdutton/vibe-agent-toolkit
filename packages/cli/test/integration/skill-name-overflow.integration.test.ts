@@ -56,7 +56,7 @@ describe('a SKILL.md the parse worker refuses', () => {
   });
 
   it('reads as refused, so a refused package report still publishes', async () => {
-    await expect(skillDocumentOrRefused(safePath.join(skillDir, 'SKILL.md'), {})).resolves.toMatchObject({ kind: 'refused' });
+    await expect(skillDocumentOrRefused(safePath.join(skillDir, 'SKILL.md'), { dispatcher: undefined })).resolves.toMatchObject({ kind: 'refused' });
   });
 });
 

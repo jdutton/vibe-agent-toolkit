@@ -9,6 +9,9 @@ import type { ChunkableResource } from '../../src/chunking/chunk-resource.js';
 import { chunkResource, enrichChunks } from '../../src/chunking/chunk-resource.js';
 import { ApproximateTokenCounter } from '../../src/token-counters/approximate-token-counter.js';
 
+/** The file facts every resource carries; chunking reads none of them. */
+const FILE_FACTS = { contentKey: `markdown.${'0'.repeat(64)}`, sizeBytes: 0, modifiedAt: new Date(0) };
+
 describe('chunkResource', () => {
   const tokenCounter = new ApproximateTokenCounter();
   const TEST_RESOURCE_ID = 'test-resource';
@@ -17,8 +20,8 @@ describe('chunkResource', () => {
     const resource: ChunkableResource = {
       id: TEST_RESOURCE_ID,
       filePath: '/test.md',
+      ...FILE_FACTS,
       content: '# Heading 1\n\nContent under heading 1.\n\n## Heading 2\n\nContent under heading 2.',
-      contentHash: 'abc123',
       estimatedTokenCount: 20,
       links: [],
       headings: [
@@ -61,8 +64,8 @@ describe('chunkResource', () => {
     const resource: ChunkableResource = {
       id: TEST_RESOURCE_ID,
       filePath: '/test.md',
+      ...FILE_FACTS,
       content: '# Main\n\nContent.\n\n## Sub\n\nMore content.',
-      contentHash: 'abc123',
       estimatedTokenCount: 15,
       links: [],
       headings: [
@@ -100,8 +103,8 @@ describe('chunkResource', () => {
     const resource: ChunkableResource = {
       id: TEST_RESOURCE_ID,
       filePath: '/test.md',
+      ...FILE_FACTS,
       content: '# H1\n\nContent 1.\n\n# H2\n\nContent 2.\n\n# H3\n\nContent 3.',
-      contentHash: 'abc123',
       estimatedTokenCount: 20,
       links: [],
       headings: [
@@ -134,8 +137,8 @@ describe('chunkResource', () => {
     const resource: ChunkableResource = {
       id: TEST_RESOURCE_ID,
       filePath: '/test.md',
+      ...FILE_FACTS,
       content: 'Plain text without headings.',
-      contentHash: 'abc123',
       estimatedTokenCount: 10,
       links: [],
       headings: [],
@@ -159,8 +162,8 @@ describe('chunkResource', () => {
     const resource: ChunkableResource = {
       id: TEST_RESOURCE_ID,
       filePath: '/test.md',
+      ...FILE_FACTS,
       content: '# H1\n\nShort content.',
-      contentHash: 'abc123',
       estimatedTokenCount: 10,
       links: [],
       headings: [{ level: 1, text: 'H1', slug: 'h1', line: 1 }],
@@ -196,8 +199,8 @@ function resourceOf(content: string, headings: HeadingNode[]): ChunkableResource
   return {
     id: 'preamble-resource',
     filePath: '/preamble.md',
+    ...FILE_FACTS,
     content,
-    contentHash: 'abc123',
     estimatedTokenCount: 20,
     links: [],
     headings,
@@ -357,8 +360,8 @@ function createResource(
   return {
     id: resourceId,
     filePath,
+    ...FILE_FACTS,
     content: 'Test content',
-    contentHash: 'abc123',
     estimatedTokenCount: 10,
     links: [],
     headings: [],
