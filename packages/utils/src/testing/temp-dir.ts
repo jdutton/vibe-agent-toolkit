@@ -121,7 +121,6 @@ export function tempDirTracker(prefix: string): { create: () => string; cleanupA
 /** The environment variables the host temp directory is read from: TMPDIR (POSIX), TEMP and TMP (win32). */
 const TMPDIR_ENV_NAMES = ['TMPDIR', 'TEMP', 'TMP'] as const;
 
-
 /**
  * ⛔ DESTRUCTIVE CODE: make a fresh scratch directory THE temp directory for one test.
  *

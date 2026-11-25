@@ -16,7 +16,7 @@ must fire at creation time (the package-list registration); everything else is h
    (`bun run --cwd packages/dev-tools generate:tsconfig-refs`, see the next step) and the lint wiring
    (`bun run generate:lint-config`: `tsconfig.eslint.json` and any `turbo.json` lint and typecheck
    inputs; the `lint` script is `VAT_LINT_TASK=1 eslint . --max-warnings=0` and the `typecheck`
-   script is `tsc --noEmit -p tsconfig.eslint.json`). `validate-structure` checks both.
+   script is `node ../../typecheck-task.js tsconfig.eslint.json`). `validate-structure` checks both.
 4. Do **not** hand-edit `tsconfig.json` `references` (root or per-package): they are generated from
    workspace dependencies by `bun run generate:tsconfig-refs`, and `validate-structure` checks the
    committed file against the generator.

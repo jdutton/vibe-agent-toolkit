@@ -80,8 +80,10 @@ function backlogDiagnostics(program: ts.Program, rootNames: readonly string[]): 
  * included.) It answers the same type question as per-package lint only if two things hold, and
  * both are asserted rather than assumed:
  *
- * - every package's `tsconfig.eslint.json` (the program its lint uses) resolves to the base
- *   options but for emit, so a package that adds a type-affecting option fails here, naming it;
+ * - the `tsconfig.eslint.json` (the program its lint uses) of each package holding a backlog file
+ *   resolves to the base options but for emit, so such a package that adds a type-affecting option
+ *   fails here, naming it (a package with no backlog file is not checked: none of its files is in
+ *   this program);
  * - the program types every listed file without a diagnostic. An import this one program cannot
  *   resolve (a workspace package whose `dist/` is missing, a path only a project reference would
  *   reach) types as `any`, which is exactly what the pair reports: a cleaned file would look dirty

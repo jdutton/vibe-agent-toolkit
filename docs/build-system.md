@@ -56,19 +56,27 @@ These scripts map to:
   touch `packages/*/schemas`, which hold tracked files.
 - `clean:deps`: `rimraf --glob node_modules 'packages/*/node_modules'` — removes the root **and every
   package's** `node_modules` (dependency reset, not a build clean). Requires a `bun install` after.
-- `typecheck`: `turbo run build && turbo run typecheck && bun run typecheck:root`. Each package's
-  own `typecheck` is `tsc --noEmit -p tsconfig.eslint.json`: the same generated program its lint
-  checks, source and tests together, under the same compiler settings. A package's `src/` alone is
+- `typecheck`: `turbo run build && VAT_BUILT=1 turbo run typecheck typecheck:root --continue`. Each
+  package's own `typecheck` is `node ../../typecheck-task.js tsconfig.eslint.json`, which runs
+  `tsc --noEmit -p tsconfig.eslint.json` after the build guard a package lint passes (see
+  [Lint](#lint)): without `VAT_BUILT=1` from the root script, or with a declared `types` file
+  missing, it refuses rather than check against a stale `dist/` and cache the pass. It checks the
+  same generated program its lint checks, source and tests together, under the same compiler
+  settings. A package's `src/` alone is
   also compiled by its `build`. Like the lint, the task is keyed on what its program reads, not on
   `^build`: a program reaches packages its manifest does not depend on (`vitest.shared.ts` imports
   a dev-tools file that imports `schema`), which `^build` would neither build first nor hash. So the
   script builds every package first, and the task hashes every package's emitted declarations and
   manifest, the lockfile and the installed TypeScript: exactly the lint inputs that describe the
   program (see [Lint](#lint)), plus the out-of-package files the generated
-  `packages/<pkg>/turbo.json` lists. `validate-structure` checks the script and both input lists,
-  each both ways. `typecheck:root` is `tsc --noEmit -p tsconfig.root.json`, the root's own
-  TypeScript (the three root vitest configs, `vitest.shared.ts`, `eslint-config-support.d.ts`): run
-  every time, never cached, so it has no inputs to drift.
+  `packages/<pkg>/turbo.json` lists, plus the guard's own files (`typecheck-task.js`,
+  `eslint-config-support.js`). `typecheck:root` is `node typecheck-task.js tsconfig.root.json`, the
+  root's own TypeScript (the three root vitest configs, `vitest.shared.ts`,
+  `eslint-config-support.d.ts`), cached as `//#typecheck:root`. Its inputs are the root-level
+  TypeScript (`*.{ts,cts,mts}`), each file below the root its program reaches that no
+  `globalDependencies` entry already hashes, the same declaration, manifest, lockfile and TypeScript
+  inputs, and the guard. `validate-structure` checks the script and all three input lists against
+  the programs TypeScript builds, each both ways.
 
 ## How It Works
 
@@ -120,7 +128,7 @@ When creating a new package:
 5. Run `bun run generate:lint-config`: it writes the package's `tsconfig.eslint.json` and, when the
    package reaches into another by a relative import, its `turbo.json` lint and typecheck inputs.
    Give it the `lint` script `VAT_LINT_TASK=1 eslint . --max-warnings=0` if ESLint lints any of its
-   files, and none if it lints none; give it `typecheck`: `tsc --noEmit -p tsconfig.eslint.json` if
+   files, and none if it lints none; give it `typecheck`: `node ../../typecheck-task.js tsconfig.eslint.json` if
    it has a `tsconfig.eslint.json`, and none if it has none. `validate-structure` fails on a stale
    generated file or a wrong script.
 
@@ -153,7 +161,7 @@ re-lints every package, because the glob is not narrowed to each package's depen
 
 Nothing inside turbo orders `lint` after `build`, so the order is enforced by signals. A package's
 `lint` script sets `VAT_LINT_TASK=1`; `eslint.config.js` then refuses to load unless the root script
-set `VAT_LINT_BUILT=1` after its build (a pass-through env, not hashed) and every declared `types`
+set `VAT_BUILT=1` after its build (a pass-through env, not hashed) and every declared `types`
 file of every package exists. Without that refusal an unresolved import types as `any` and turbo
 caches the pass. Run lint only through `bun run lint` or `bun run lint:fix`. `lint:fix` bypasses
 the cache (`--cache=local:,remote:`): a cached verdict would skip the fix. It keeps

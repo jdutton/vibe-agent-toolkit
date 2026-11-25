@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { declaredTypesFiles, gitignorePatterns, lintTaskRefusal } from '../../../eslint-config-support.js';
+import { declaredTypesFiles, gitignorePatterns, programTaskRefusal } from '../../../eslint-config-support.js';
 
 describe('gitignorePatterns', () => {
   it('matches an unanchored pattern at any depth, below the ignore file\'s directory', () => {
@@ -44,25 +44,33 @@ describe('declaredTypesFiles', () => {
   });
 });
 
-describe('lintTaskRefusal', () => {
+describe('programTaskRefusal', () => {
   const none = (): string[] => [];
 
-  it('lets a run without VAT_LINT_TASK through without looking for types (an editor, a test)', () => {
-    expect(lintTaskRefusal({}, () => {
+  it('lets a lint run without VAT_LINT_TASK through without looking for types (an editor, a test)', () => {
+    expect(programTaskRefusal('lint', {}, () => {
       throw new Error('must not be called');
     })).toBeUndefined();
   });
 
   it('refuses a package lint the root script did not build for', () => {
-    expect(lintTaskRefusal({ VAT_LINT_TASK: '1' }, none)).toMatch(/runs only after a build: run `bun run lint`/);
+    expect(programTaskRefusal('lint', { VAT_LINT_TASK: '1' }, none)).toMatch(/runs only after a build: run `bun run lint`/);
+  });
+
+  it('refuses every typecheck the root script did not build for: a typecheck task has no unguarded form', () => {
+    expect(programTaskRefusal('typecheck', {}, none)).toMatch(/A typecheck task .* runs only after a build: run `bun run typecheck`/);
+    expect(programTaskRefusal('typecheck', { VAT_LINT_TASK: '1' }, none)).toMatch(/runs only after a build/);
   });
 
   it('refuses a built run while a declared types file is missing, naming it', () => {
-    expect(lintTaskRefusal({ VAT_LINT_TASK: '1', VAT_LINT_BUILT: '1' }, () => ['packages/u/dist/path.d.ts']))
+    expect(programTaskRefusal('lint', { VAT_LINT_TASK: '1', VAT_BUILT: '1' }, () => ['packages/u/dist/path.d.ts']))
       .toMatch(/these are not built: packages\/u\/dist\/path\.d\.ts/);
+    expect(programTaskRefusal('typecheck', { VAT_BUILT: '1' }, () => ['packages/u/dist/path.d.ts']))
+      .toMatch(/these are not built: packages\/u\/dist\/path\.d\.ts\. Run `bun run typecheck`/);
   });
 
   it('lets a built run with every types file present through', () => {
-    expect(lintTaskRefusal({ VAT_LINT_TASK: '1', VAT_LINT_BUILT: '1' }, none)).toBeUndefined();
+    expect(programTaskRefusal('lint', { VAT_LINT_TASK: '1', VAT_BUILT: '1' }, none)).toBeUndefined();
+    expect(programTaskRefusal('typecheck', { VAT_BUILT: '1' }, none)).toBeUndefined();
   });
 });
