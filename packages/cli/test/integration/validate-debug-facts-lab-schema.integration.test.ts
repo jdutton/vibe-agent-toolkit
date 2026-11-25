@@ -28,7 +28,6 @@ const DECLINES: { readonly [C in GateDecline['condition']]: GateDecline & { read
   debug: { condition: 'debug' },
   cores: { condition: 'cores' },
   'not-hit': { condition: 'not-hit' },
-  limits: { condition: 'limits' },
   disarmed: { condition: 'disarmed' },
   'not-settled': { condition: 'not-settled' },
   rejected: { condition: 'rejected', error: 'the tier read failed' },

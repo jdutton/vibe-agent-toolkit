@@ -3,14 +3,12 @@
  * blob tier, and an overlapped child run whose exit, turn and abandonment a test drives.
  */
 
-import {
-  ParseDispatcher,
-  type BlobFactsOutcome,
-  type BlobFactsReader,
-  type HomeSettlement,
-  type ParseCache,
-  type ResourceEnumeration,
-  type StoredContent,
+import type {
+  BlobFactsOutcome,
+  BlobFactsReader,
+  HomeSettlement,
+  ResourceEnumeration,
+  StoredContent,
 } from '@vibe-agent-toolkit/resources';
 
 import type { SupervisedRun } from '../../src/commands/resources/check-supervisor.js';
@@ -19,8 +17,6 @@ import type { OverlappedRun, OverlappedTurn } from '../../src/commands/resources
 export const ROOT = '/repo';
 export const HOME_KEY = '[] home';
 export const MARKDOWN_KEY = `markdown.${'a'.repeat(64)}`;
-/** The run's limits when they are the population's: what a dispatcher with no named limits resolves. */
-export const POPULATION_LIMITS = new ParseDispatcher({ enabled: false, stats: { hits: 0, misses: 0 } } as unknown as ParseCache, {}).limits;
 
 type Realization = StoredContent['members'] extends ReadonlyMap<string, infer R> ? R : never;
 

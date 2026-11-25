@@ -12,7 +12,9 @@
  *   derived home carries content too (its own projection's blob rows, which admission after a miss
  *   reads), but a child spawned beside a miss would read a store the parent has only just written,
  *   with no handoff of the tree it was written under, so a miss stays sequential;
- * - (d) the run parses under the limits the store's facts were filed under (`hydratesUnder`);
+ * - (d) the run parses under the limits the store's facts were filed under: decided once per run,
+ *   where the run's store is resolved (`hydratesUnder`), so a run under other limits has no store,
+ *   settles not-hit and declines at (c);
  * - (e) every stored member is admitted from the store by admission's OWN predicates
  *   (`storedComputeBy`: `storedRoute`, then the kind the one fact reader would return for the
  *   key, over whichever rows the population carried: `StoredContent.facts` is the one reader
@@ -54,12 +56,10 @@
  */
 
 import {
-  hydratesUnder,
   parserKindForResolvedPath,
   storedComputeBy,
   type BlobFactsReader,
   type HomeSettlement,
-  type ParseLimits,
   type ParseRouting,
   type StoredComputeBy,
   type StoredContent,
@@ -75,7 +75,7 @@ export type GateDecline =
    * `not-settled`: the turn came before any settlement for the child's key (a run with no store
    * never sends one).
    */
-  | { readonly condition: 'debug' | 'cores' | 'not-hit' | 'limits' | 'disarmed' | 'not-settled' }
+  | { readonly condition: 'debug' | 'cores' | 'not-hit' | 'disarmed' | 'not-settled' }
   /**
    * The judgment failed: the failure's message (or its string), for the dump to show. Copied as it
    * is, unlike `member`'s path: a message that names an absolute path carries it into the dump.
@@ -96,7 +96,6 @@ export const GATE_DECLINE_CONDITIONS: ReadonlyArray<GateDecline['condition']> = 
   debug: true,
   cores: true,
   'not-hit': true,
-  limits: true,
   disarmed: true,
   'not-settled': true,
   rejected: true,
@@ -122,8 +121,6 @@ export interface ChecksOverlapGateOptions {
   readonly cores: () => number;
   /** The home population's memo key for the child's outputs (`RunPopulation.homeKey`). */
   readonly childHomeKey: string;
-  /** The run dispatcher's resolved limits: condition (d). */
-  readonly limits: ParseLimits;
   /** The resources phase's parse routing, which admission routes each member by: condition (e). */
   readonly routing: ParseRouting<string>;
   /**
@@ -186,7 +183,6 @@ export function createChecksOverlapGate(options: ChecksOverlapGateOptions): Chec
     if (!settlement.ok) return rejected(settlement.error);
     const { outcome, stored } = settlement.enumeration;
     if (outcome.stored !== 'hit' || stored === null) return decline({ condition: 'not-hit' });
-    if (!hydratesUnder(options.limits)) return decline({ condition: 'limits' });
     // (e) ranges over EVERY member of the home population, not only the ones the resources crawl
     // admits: the spec requires every member to route `read`, which makes the parent compute
     // nothing anywhere in the population after the spawn. That is stronger than the post-spawn

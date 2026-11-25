@@ -50,7 +50,7 @@ import { createChecksOverlapGate } from '../../src/commands/checks-overlap-gate.
 import { checkGitInstalled } from '../../src/commands/doctor.js';
 import type { Logger } from '../../src/utils/logger.js';
 import { withQueriedProjection } from '../../src/utils/projection-query.js';
-import { HOME_KEY, hit, keyed as keyedRealization, POPULATION_LIMITS, ROOT } from '../helpers/overlap-gate-fixtures.js';
+import { HOME_KEY, hit, keyed as keyedRealization, ROOT } from '../helpers/overlap-gate-fixtures.js';
 import { commitTestFixture } from '../test-helpers.js';
 
 /** The fact store's counters. */
@@ -740,7 +740,6 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
         debug: false,
         cores: () => 2,
         childHomeKey: HOME_KEY,
-        limits: POPULATION_LIMITS,
         routing: parseRoutingFor(undefined, ROOT),
         spawn: () => Promise.reject(new Error('the seed never spawns')),
       });
