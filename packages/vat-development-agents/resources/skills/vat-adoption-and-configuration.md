@@ -168,34 +168,48 @@ phases:
 
 `vat validate` runs the declared `resources.checks` (standing SQL assertions) and VAT's default-on built-in checks as its `checks` phase whenever `resources:` is configured — the same supervised run as `vat resources check`, under that command's default bound (300 s without progress), which `vat validate` cannot change. `vat verify` does not run them. Reach for `vat resources check` directly when you need `--check <name>` or a different `--budget` — a larger budget lets the checks pass there, not inside `vat validate`. Otherwise do not add a `vat resources check` CI step beside `vat validate`: it runs the same checks twice. What interrupting a checks run does on each platform: `vat resources check --help`. See `vibe-agent-toolkit:vat-knowledge-resources`.
 
-## VAT writes a cache to disk, and CI should know where
+## VAT writes a cache to disk, and CI should persist it
 
 Every resource-scanning verb populates a projection and, by default, keeps it in a SQLite file
-under the cache root — `VAT_CACHE_DIR`, else `<tmpdir>/.vat-cache/` — beside the parse cache:
-about 71 MB for a 12,600-file repository, bounded at three trees per repository and 50,000
-content keys. `vat cache clear` reclaims everything; `vat cache prune` drops every entry VAT wrote
-that this build does not use.
+under the cache root (`VAT_CACHE_DIR`, else `<tmpdir>/.vat-cache/`) beside the parse cache. A warm
+`vat validate` is served from that store. A CI job that restores it re-parses only the files whose
+bytes changed; a stored whole tree is reused only when the repository's tree is identical, such as a
+rerun of the same commit. VAT writes `CACHEDIR.TAG`, `<namespace>/parse/` and
+`<namespace>/projection-<shape>/projection.db` under the root; the external-link caches live in
+`<tmpdir>/.vat-link-cache` and never travel with it, since they are network verdicts and one user's
+credentialed content. Size: one 12,600-file repository measured 71 MB of projection store alone;
+measure yours with `du` after a warm run. Internals: [where the caches live](https://github.com/jdutton/vibe-agent-toolkit/blob/main/docs/architecture/resource-scanning-and-caching.md#37a--where-the-caches-live-and-persisting-them-between-ci-runs).
 
-- **Persist `VAT_CACHE_DIR` between CI runs** to start warm. Point it at a directory used only by
-  VAT, outside the checkout (`$RUNNER_TEMP/vat-cache` in GitHub Actions; VAT warns when it is inside the
-  scanned tree). VAT tags a new or empty directory with `CACHEDIR.TAG` on first use; `clear` and
-  `prune` refuse an untagged one. A relative path resolves against the current directory.
-- **Key the CI cache per run, restore from the same toolchain.** Key on OS, architecture, Node
-  version, lockfile hash and commit, and restore only from keys sharing everything but the commit.
-  The commit in the key lets each run save a fresh cache (an exact hit never saves, so a key
-  without it freezes the cache at its first save). Never fall back across lockfile hashes: VAT's
-  parser dependencies are semver ranges, so a different lockfile can resolve a different parser
-  under the same VAT namespace. A project that runs VAT from source rather than an installed
-  release must also key on VAT's source, since its lockfile pins none of VAT's code.
-- **What hits where.** Another VAT build never reads the cache. Within a build, the parse cache and
-  the store's blob tier are keyed by file content and hit on any machine with the same bytes; a
-  stored tree is keyed by the repository's identity and path, so it misses when the checkout moves
-  or line endings differ: a cold scan, never a wrong answer. A store SQLite finds corrupt or not a
-  database at open is discarded with a warning and rebuilt.
-- **Run `vat cache prune` before the save** so the cache stops growing with every release. It
-  removes every namespace but this build's and every other projection shape's store, nothing it
-  does not recognise as VAT's, and no store a running VAT has open.
-- **Give concurrent jobs on one runner separate `VAT_CACHE_DIR`s.** Otherwise they share one file.
+- **Point `VAT_CACHE_DIR` at a directory used only by VAT, outside the checkout**
+  (`$RUNNER_TEMP/vat-cache` in GitHub Actions; VAT warns when it is inside the scanned tree), and
+  persist that whole directory. VAT tags a new or empty directory with `CACHEDIR.TAG`; `vat cache
+  clear` and `vat cache prune` refuse an untagged one. Give concurrent jobs on one runner separate
+  directories.
+- **Save on pushes to the default branch; only restore on pull requests.** Every run writes the
+  facts of files it missed, so saving after each default-branch run keeps the cache warm, and a
+  pull request never overwrites it.
+- **Run `vat cache prune` before the save.** It drops every other release's namespace and every
+  other store shape, so the cache does not grow with each release. Within one release the store
+  keeps the three most recent trees per root, the eight most recent roots and 50,000 content keys;
+  the parse cache keeps everything until `vat cache clear`, or until `vat cache prune` runs under
+  another release.
+- **Key the cache on** runner OS, architecture, installed Node version,
+  lockfile hash and the commit, with restore keys the same string without the commit, so a restore
+  never crosses OSes, machine kinds, lockfiles or Node versions. The namespace of an installed VAT
+  is only its version, VAT's parser dependencies are caret ranges a lockfile change can move, and
+  Node's Unicode tables feed the parser. A project running VAT from source must also key on VAT's
+  source.
+- **A foreign or stale cache misses; it never answers wrong.** The parse cache and the store's blob
+  tier are keyed by parser route and the bytes' SHA-256; a stored tree is keyed by the checkout's
+  real path and its git tree hash. A `projection.db` SQLite finds corrupt is discarded with a
+  warning and the run continues cold.
+- **The cache holds fragments of your repository's text.** No whole file bodies, but frontmatter
+  values, headings, link text and targets, skill-text match strings and finding messages that may
+  quote source, in both the store and the parse cache. Treat it under the same data-handling rules
+  as the repository.
+- **Tooling that reads the cache** locates it with `vatCacheRoot()`, `vatCacheNamespace()` and
+  `vatCacheNamespaceRoot()` from `@vibe-agent-toolkit/resources`, never a hard-coded
+  `<tmpdir>/.vat-cache`.
 - **`VAT_PROJECTION_STORE=off`** opts out of the store alone; **`VAT_CACHE=0`** vetoes every VAT
   cache. Either costs a full re-derivation on every run.
 
@@ -203,26 +217,37 @@ that this build does not use.
 # GitHub Actions (job steps)
 steps:
   - uses: actions/checkout@v7
-  # The runner context is not available in a job-level env:, so set the variable from a step.
-  # bash on every OS: under Windows' default pwsh, $RUNNER_TEMP is an unset variable.
-  - shell: bash
-    run: echo "VAT_CACHE_DIR=$RUNNER_TEMP/vat-cache" >> "$GITHUB_ENV"   # outside the checkout
   - uses: actions/setup-node@v7
     id: node
     with:
       node-version: 24
-  - uses: actions/cache@v6
+  # The runner context is not available in a job-level env:, so set the variable from a step.
+  # bash on every OS: under Windows' default pwsh, $RUNNER_TEMP is an unset variable.
+  - shell: bash
+    run: echo "VAT_CACHE_DIR=$RUNNER_TEMP/vat-cache" >> "$GITHUB_ENV"
+  - uses: actions/cache/restore@v6
+    id: vat-cache
     with:
       path: ${{ env.VAT_CACHE_DIR }}
-      key: vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('**/package-lock.json', '**/bun.lock') }}-${{ github.sha }}
+      key: vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock', '**/bun.lock') }}-${{ github.sha }}
       restore-keys: |
-        vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('**/package-lock.json', '**/bun.lock') }}-
+        vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock', '**/bun.lock') }}-
   - run: npm ci
   - run: npx --no-install vat validate
-  - if: always()               # actions/cache saves in its post step, after this one
+  - if: ${{ !cancelled() && github.ref_name == github.event.repository.default_branch }}
     continue-on-error: true    # a prune failure must not redden a green job
-    run: npx --no-install vat cache prune   # drop what this build does not use before the cache is saved
+    run: npx --no-install vat cache prune
+  - if: ${{ !cancelled() && github.ref_name == github.event.repository.default_branch }}
+    uses: actions/cache/save@v6
+    with:
+      path: ${{ env.VAT_CACHE_DIR }}
+      # Reuse the restore step's key: hashFiles here would also hash lockfiles that npm ci
+      # just unpacked under node_modules, and a different key is never restored.
+      key: ${{ steps.vat-cache.outputs.cache-primary-key }}
 ```
+
+Other CI systems follow the same rules: in Azure Pipelines, `Cache@2` with `path:
+$(Agent.TempDirectory)/vat-cache` and `VAT_CACHE_DIR` set to the same path, the same key terms, and `restoreKeys` without the commit.
 
 ## First-Time Setup Checklist
 

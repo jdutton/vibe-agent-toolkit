@@ -39,8 +39,8 @@
 - **CI can persist VAT's caches.** Save and restore `VAT_CACHE_DIR` outside the checkout (in
   GitHub Actions, `$RUNNER_TEMP/vat-cache`, set from a step through `$GITHUB_ENV`), keyed on OS,
   architecture, Node version, lockfile hash and commit, and restore only from the same toolchain
-  and lockfile. The CLI docs and the `vat-adoption-and-configuration` skill carry a GitHub Actions
-  example. A run warns when the cache root is inside the scanned tree.
+  and lockfile. Save from default-branch runs and only restore on pull requests. The
+  `vat-adoption-and-configuration` skill carries a GitHub Actions example. A run warns when the cache root is inside the scanned tree.
 - **Library exports.** `@vibe-agent-toolkit/projection-sqlite`: `discardStoreDatabase`,
   `isStoreInUse`, `isStoreUnopenableError` and the `StoreUnopenableError` type.
   `@vibe-agent-toolkit/resources`: `vatLinkCacheDirectory`, `recogniseVatCacheRoot`,

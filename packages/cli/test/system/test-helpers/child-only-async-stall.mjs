@@ -1,7 +1,10 @@
 /**
  * Test-only preload (`NODE_OPTIONS=--import "<file: URL>"`): a supervised `vat resources check`
- * CHILD stalls ASYNCHRONOUSLY, until its ceiling, right after it appends its `started` progress entry — its
- * event loop keeps turning, but the population waits on I/O that never completes.
+ * CHILD stalls ASYNCHRONOUSLY, until its ceiling, once it has appended its `started` progress entry — its
+ * event loop keeps turning, but it parks at the first continuation it would wait on. On a cold
+ * store that is the population's first I/O; on a warm store, which serves the population and runs
+ * every check without I/O, it is the turn of the loop just before it publishes
+ * (`letSupervisorLossSurface`).
  *
  * The sibling `child-only-stall-in-population.mjs` stalls with `Atomics.wait`, which blocks the
  * thread: nothing in the child runs again, which is what a statement blocked inside SQLite looks
@@ -9,10 +12,13 @@
  * child does on its own while its event loop is free.
  *
  * Once `started` is on disk, every asynchronous filesystem call and child-process spawn the child
- * makes never completes, and a timer keeps the loop alive (a promise nobody will settle does not).
+ * makes never completes, nor does any `setImmediate` callback (a warm store needs none of the
+ * others), and a timer keeps the loop alive (a promise nobody will settle does not).
  * `syncBuiltinESMExports()` makes the ESM bindings the CLI imports see the patches.
  *
- * - `TEST_CHILD_PID_FILE`: the child writes its pid there once it has stalled.
+ * - `TEST_CHILD_PID_FILE`: the child writes its pid there once it has PARKED — the first of those
+ *   continuations it swallows. A child that ran on without parking never writes it, so a case that
+ *   waits on the file fails loudly instead of racing a child that is not stalled at all.
  * - `TEST_CHILD_TRACE_FILE`: the child appends `exit:<code>` there as it exits — the one way a
  *   case can read the exit code of a process that is not its own child.
  * - `TEST_CHILD_MAX_STALL_MS` (required): the stall's ceiling. Past it the child kills itself
@@ -29,6 +35,8 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { PassThrough } from 'node:stream';
+
+import { onChildStarted } from './on-child-started.mjs';
 
 /** The asynchronous filesystem calls a population makes, in both API shapes. */
 const FS_CALLS = ['access', 'lstat', 'open', 'opendir', 'readdir', 'readFile', 'readlink', 'realpath', 'stat'];
@@ -62,33 +70,45 @@ if (process.argv.includes('--supervised-by')) {
     return stub;
   };
 
+  /** The child is parked: one of its continuations will never run. Its pid is written now, once. */
+  let parked = false;
+  const park = () => {
+    if (parked) return;
+    parked = true;
+    const pidFile = process.env['TEST_CHILD_PID_FILE'];
+    if (pidFile !== undefined) fs.writeFileSync(pidFile, String(process.pid), 'utf-8');
+  };
+
+  /** `real`, until the child stalls; then `instead()` in its place, the child parked. */
+  const untilStalled = (real, instead) => (...args) => {
+    if (!stalled) return real(...args);
+    park();
+    return instead(...args);
+  };
+
   for (const name of ['spawn', 'execFile']) {
-    const real = childProcess[name];
-    childProcess[name] = (...args) => (stalled ? neverEnding() : real(...args));
+    childProcess[name] = untilStalled(childProcess[name], neverEnding);
   }
   for (const name of FS_CALLS) {
-    const realPromise = fs.promises[name];
-    if (typeof realPromise === 'function') {
-      fs.promises[name] = (...args) => (stalled ? new Promise(() => {}) : realPromise(...args));
+    if (typeof fs.promises[name] === 'function') {
+      fs.promises[name] = untilStalled(fs.promises[name], () => new Promise(() => {}));
     }
-    const realCallback = fs[name];
-    if (typeof realCallback === 'function') {
+    if (typeof fs[name] === 'function') {
       // The callback is simply never called.
-      fs[name] = (...args) => (stalled ? undefined : realCallback(...args));
+      fs[name] = untilStalled(fs[name], () => undefined);
     }
   }
+  // A warm store serves the population without any of the above, so the child would run on to
+  // publish. Its callback is swallowed too: it parks at its next turn of the loop
+  // (`letSupervisorLossSurface` at the latest), still reading stdin. A real immediate of nothing is
+  // returned, so `clearImmediate` and `unref` still work.
+  const realSetImmediate = globalThis.setImmediate;
+  globalThis.setImmediate = untilStalled(realSetImmediate, () => realSetImmediate(() => {}));
 
-  const append = fs.appendFileSync;
-  fs.appendFileSync = (path, data, ...rest) => {
-    const result = append(path, data, ...rest);
-    if (typeof data === 'string' && data.includes('"kind":"started"')) {
-      stalled = true;
-      // Keeps the loop alive (a promise nobody will settle does not) until the ceiling.
-      setTimeout(() => process.kill(process.pid, 'SIGKILL'), ceiling);
-      const pidFile = process.env['TEST_CHILD_PID_FILE'];
-      if (pidFile !== undefined) fs.writeFileSync(pidFile, String(process.pid), 'utf-8');
-    }
-    return result;
-  };
+  onChildStarted(() => {
+    stalled = true;
+    // Keeps the loop alive (a promise nobody will settle does not) until the ceiling.
+    setTimeout(() => process.kill(process.pid, 'SIGKILL'), ceiling);
+  });
   syncBuiltinESMExports();
 }
