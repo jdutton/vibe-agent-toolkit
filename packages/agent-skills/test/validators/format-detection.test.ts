@@ -5,6 +5,7 @@ import { withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import { detectResourceFormat, enumerateSurfaces } from '../../src/validators/format-detection.js';
+import type { ResourceFormat } from '../../src/validators/types.js';
 import {
 	createAmbiguousDirectory,
 	createTestPlugin,
@@ -15,6 +16,11 @@ const SURFACE_TYPE_CLAUDE_PLUGIN = 'claude-plugin';
 const MARKETPLACE_JSON = 'marketplace.json';
 const STANDALONE_SKILL_FIXTURE = 'standalone-skill';
 const SURFACE_TYPE_AGENT_SKILL = 'agent-skill';
+
+/** The reason an `unknown` answer carries; any other answer carries none. */
+function reasonOf(format: ResourceFormat): string | undefined {
+	return format.type === 'unknown' ? format.reason : undefined;
+}
 
 describe('detectResourceFormat', () => {
 	const { getTempDir } = setupTempDir('format-detection-test-');
@@ -49,7 +55,7 @@ describe('detectResourceFormat', () => {
 
 			expect(result.type).toBe('unknown');
 			expect(result.path).toBe(emptyDir);
-			expect(result.reason).toContain('no .claude-plugin');
+			expect(reasonOf(result)).toContain('no .claude-plugin');
 		});
 	});
 
@@ -134,7 +140,7 @@ describe('detectResourceFormat', () => {
 
 			expect(result.type).toBe('unknown');
 			expect(result.path).toBe(ambiguousDir);
-			expect(result.reason).toContain('both plugin.json and marketplace.json');
+			expect(reasonOf(result)).toContain('both plugin.json and marketplace.json');
 		});
 
 		// The co-located check reads marketplace.json. When that read or parse fails
@@ -150,14 +156,14 @@ describe('detectResourceFormat', () => {
 
 			const notJson = await detectResourceFormat(ambiguousDir);
 			expect(notJson.type).toBe('unknown');
-			expect(notJson.reason).toMatch(/marketplace\.json could not be read.*JSON/);
+			expect(reasonOf(notJson)).toMatch(/marketplace\.json could not be read.*JSON/);
 
 			fs.writeFileSync(marketplaceJson, '{}');
 			const refused = await withSyncFsRefused('readFileSync', marketplaceJson, 'EACCES', () =>
 				detectResourceFormat(ambiguousDir),
 			);
 			expect(refused.type).toBe('unknown');
-			expect(refused.reason).toMatch(/marketplace\.json could not be read.*EACCES/);
+			expect(reasonOf(refused)).toMatch(/marketplace\.json could not be read.*EACCES/);
 		});
 	});
 
@@ -202,7 +208,7 @@ describe('detectResourceFormat', () => {
 
 			expect(result.type).toBe('unknown');
 			expect(result.path).toBe(jsonPath);
-			expect(result.reason).toContain('not a recognized registry');
+			expect(reasonOf(result)).toContain('not a recognized registry');
 		});
 
 		it('should return unknown for file without .json extension', async () => {
@@ -214,7 +220,7 @@ describe('detectResourceFormat', () => {
 
 			expect(result.type).toBe('unknown');
 			expect(result.path).toBe(txtPath);
-			expect(result.reason).toContain('Not a JSON file');
+			expect(reasonOf(result)).toContain('Not a JSON file');
 		});
 
 		it('should be case-sensitive for registry filenames', async () => {
@@ -226,7 +232,7 @@ describe('detectResourceFormat', () => {
 
 			expect(result.type).toBe('unknown');
 			expect(result.path).toBe(registryPath);
-			expect(result.reason).toContain('not a recognized registry');
+			expect(reasonOf(result)).toContain('not a recognized registry');
 		});
 	});
 
@@ -238,7 +244,7 @@ describe('detectResourceFormat', () => {
 
 			expect(result.type).toBe('unknown');
 			expect(result.path).toBe(nonExistentPath);
-			expect(result.reason).toContain('does not exist');
+			expect(reasonOf(result)).toContain('does not exist');
 		});
 
 		it('should handle permission errors gracefully', async (ctx) => {
@@ -258,7 +264,7 @@ describe('detectResourceFormat', () => {
 
 				expect(result.type).toBe('unknown');
 				expect(result.path).toBe(restrictedDir);
-				expect(result.reason).toBeDefined();
+				expect(reasonOf(result)).toBeDefined();
 			} finally {
 				// Restore permissions for cleanup
 				fs.chmodSync(restrictedDir, 0o755);

@@ -14,7 +14,7 @@
  */
 
 import { ExternalPluginSourceSchema } from '@vibe-agent-toolkit/resources';
-import { FindingSchema, reportSchema, type Report } from '@vibe-agent-toolkit/schema';
+import { FindingSchema, reportSchema } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
 import type { ExaminedDeclaration } from '../../../utils/run-integrity.js';
@@ -56,5 +56,3 @@ export type PluginBuildData = z.infer<typeof PluginBuildDataSchema>;
 
 /** The document this command publishes. */
 export const PLUGIN_BUILD_REPORT_SCHEMA = reportSchema(PluginBuildDataSchema, FindingSchema);
-
-export type PluginBuildReport = Report<PluginBuildData>;

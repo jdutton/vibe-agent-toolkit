@@ -31,7 +31,7 @@ resources:
     const config = await parseConfigFile(configPath);
 
     expect(config.resources?.collections).toHaveProperty('rag-kb');
-    expect(config.resources?.collections['rag-kb']?.include).toEqual(['docs']);
+    expect(config.resources?.collections?.['rag-kb']?.include).toEqual(['docs']);
   });
 
   it('should parse config with validation settings', async () => {
@@ -50,7 +50,7 @@ resources:
 
     const config = await parseConfigFile(configPath);
 
-    const skillsCollection = config.resources?.collections['skills'];
+    const skillsCollection = config.resources?.collections?.['skills'];
     expect(skillsCollection?.validation?.frontmatterSchema).toBe('schemas/skill.schema.json');
     expect(skillsCollection?.validation?.mode).toBe('strict');
     expect(skillsCollection?.validation?.checkUrlLinks).toBe(true);
@@ -69,7 +69,7 @@ resources:
 
     const config = await parseConfigFile(configPath);
 
-    const ragCollection = config.resources?.collections['rag-kb'];
+    const ragCollection = config.resources?.collections?.['rag-kb'];
     expect(ragCollection?.exclude).toEqual(['**/README.md', '**/node_modules/**']);
   });
 
@@ -93,7 +93,7 @@ resources:
     await writeFile(configPath, content);
 
     const config = await parseConfigFile(configPath);
-    expect(config.resources?.collections['test']?.include).toEqual(['docs']);
+    expect(config.resources?.collections?.['test']?.include).toEqual(['docs']);
   });
 
   it('warns about a version key, naming it and the file, and drops it', async () => {
@@ -570,9 +570,9 @@ resources:
 
     const config = await parseConfigFile(configPath);
 
-    expect(config.resources?.collections.docs?.validation?.externalUrls?.enabled).toBe(true);
-    expect(config.resources?.collections.docs?.validation?.externalUrls?.timeout).toBe(10000);
-    expect(config.resources?.collections.docs?.validation?.externalUrls?.retryOn429).toBe(true);
-    expect(config.resources?.collections.docs?.validation?.externalUrls?.ignorePatterns).toEqual(['^https://localhost']);
+    expect(config.resources?.collections?.['docs']?.validation?.externalUrls?.enabled).toBe(true);
+    expect(config.resources?.collections?.['docs']?.validation?.externalUrls?.timeout).toBe(10000);
+    expect(config.resources?.collections?.['docs']?.validation?.externalUrls?.retryOn429).toBe(true);
+    expect(config.resources?.collections?.['docs']?.validation?.externalUrls?.ignorePatterns).toEqual(['^https://localhost']);
   });
 });

@@ -535,7 +535,6 @@ export {
   type ParseCacheStats,
 } from './parse-cache.js';
 export {
-  VAT_CACHE_DIR_ENV,
   VAT_CACHE_TAG_FILE,
   markVatCacheRoot,
   recogniseVatCacheRoot,

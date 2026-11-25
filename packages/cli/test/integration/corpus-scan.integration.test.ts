@@ -111,8 +111,8 @@ describe('vat corpus scan — integration', () => {
     expect(statSync(summaryPath).isFile()).toBe(true);
 
     const summary = yaml.parse(readFileSync(summaryPath, 'utf-8')) as Record<string, unknown>;
-    expect(summary.plugins as unknown[]).toHaveLength(2);
-    expect((summary.totals as Record<string, number>).plugins).toBe(2);
+    expect(summary['plugins'] as unknown[]).toHaveLength(2);
+    expect((summary['totals'] as Record<string, number>)['plugins']).toBe(2);
 
     const cleanAudit = safePath.join(runDir, 'clean-audit.yaml');
     const noisyAudit = safePath.join(runDir, 'noisy-audit.yaml');
@@ -145,9 +145,9 @@ describe('vat corpus scan — integration', () => {
       unknown
     >;
 
-    const totals = summary.totals as Record<string, number>;
-    expect(totals.unloadable).toBe(1);
-    expect(totals.audit_ok + totals.audit_findings).toBe(1);
+    const totals = summary['totals'] as Record<string, number>;
+    expect(totals['unloadable']).toBe(1);
+    expect(Number(totals['audit_ok']) + Number(totals['audit_findings'])).toBe(1);
   });
 });
 

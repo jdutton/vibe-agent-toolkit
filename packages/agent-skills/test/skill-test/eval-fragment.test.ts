@@ -293,6 +293,7 @@ describe('parseEvalFragment — grader text cannot forge an operator line', () =
       fragmentWith({
         friction: [{ severity: 'high', category: PATH_ASSUMPTION, message: FORGED, evidence: FORGED, subjectFile: FORGED }],
       }),
+      warnUnwatched,
     );
     expect(fragment.friction?.[0]).toEqual({
       severity: 'error',
@@ -306,6 +307,7 @@ describe('parseEvalFragment — grader text cannot forge an operator line', () =
   it('sanitizes expectation text and evidence', () => {
     const fragment = parseEvalFragment(
       fragmentWith({ expectations: [{ text: FORGED, passed: false, evidence: FORGED }] }),
+      warnUnwatched,
     );
     expect(fragment.expectations[0]?.text).toBe(FORGED_CLEAN);
     expect(fragment.expectations[0]?.evidence).toBe(FORGED_CLEAN);
@@ -322,6 +324,7 @@ describe('parseEvalFragment — grader text cannot forge an operator line', () =
           passed: true,
         },
       }),
+      warnUnwatched,
     );
     expect(fragment.tool?.mustRun?.[0]?.name).toBe(FORGED_CLEAN);
     expect(fragment.tool?.mustRun?.[0]?.evidence).toBe(FORGED_CLEAN);

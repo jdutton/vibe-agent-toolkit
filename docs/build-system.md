@@ -56,8 +56,19 @@ These scripts map to:
   touch `packages/*/schemas`, which hold tracked files.
 - `clean:deps`: `rimraf --glob node_modules 'packages/*/node_modules'` — removes the root **and every
   package's** `node_modules` (dependency reset, not a build clean). Requires a `bun install` after.
-- `typecheck`: `turbo run typecheck`, whose task `dependsOn: ["^build"]` — so a typecheck builds every
-  upstream package first. Each package's own `typecheck` is `tsc --noEmit`, not `tsc --build`.
+- `typecheck`: `turbo run build && turbo run typecheck && bun run typecheck:root`. Each package's
+  own `typecheck` is `tsc --noEmit -p tsconfig.eslint.json`: the same generated program its lint
+  checks, source and tests together, under the same compiler settings. A package's `src/` alone is
+  also compiled by its `build`. Like the lint, the task is keyed on what its program reads, not on
+  `^build`: a program reaches packages its manifest does not depend on (`vitest.shared.ts` imports
+  a dev-tools file that imports `schema`), which `^build` would neither build first nor hash. So the
+  script builds every package first, and the task hashes every package's emitted declarations and
+  manifest, the lockfile and the installed TypeScript: exactly the lint inputs that describe the
+  program (see [Lint](#lint)), plus the out-of-package files the generated
+  `packages/<pkg>/turbo.json` lists. `validate-structure` checks the script and both input lists,
+  each both ways. `typecheck:root` is `tsc --noEmit -p tsconfig.root.json`, the root's own
+  TypeScript (the three root vitest configs, `vitest.shared.ts`, `eslint-config-support.d.ts`): run
+  every time, never cached, so it has no inputs to drift.
 
 ## How It Works
 
@@ -97,7 +108,7 @@ These scripts map to:
    `.tsc-staging` directory that is swapped into `dist/` at the end, so `dist/` stays continuously
    readable to a concurrent consumer. `tsc --build` proper survives only in `build:packages`
    (`tsc --build && cd packages/schema && bun run generate:schemas`), and the root `references` array
-   below is what makes that script — and every package's `tsc --noEmit` typecheck — resolve correctly.
+   below is what makes that script resolve correctly.
 
 ## Configuring New Package Builds
 
@@ -107,9 +118,11 @@ When creating a new package:
 3. Add the package to root tsconfig.json `references` array
 4. Run `bun install` to update workspace links
 5. Run `bun run generate:lint-config`: it writes the package's `tsconfig.eslint.json` and, when the
-   package reaches into another by a relative import, its `turbo.json` lint inputs. Give it the
-   `lint` script `VAT_LINT_TASK=1 eslint . --max-warnings=0` if ESLint lints any of its files, and
-   none if it lints none. `validate-structure` fails on a stale generated file or a wrong script.
+   package reaches into another by a relative import, its `turbo.json` lint and typecheck inputs.
+   Give it the `lint` script `VAT_LINT_TASK=1 eslint . --max-warnings=0` if ESLint lints any of its
+   files, and none if it lints none; give it `typecheck`: `tsc --noEmit -p tsconfig.eslint.json` if
+   it has a `tsconfig.eslint.json`, and none if it has none. `validate-structure` fails on a stale
+   generated file or a wrong script.
 
 ## Lint
 

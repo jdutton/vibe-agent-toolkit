@@ -96,7 +96,9 @@ nothing to register; `tsconfig.json` `references` are generated, never hand-edit
 ## Code standards
 
 - TypeScript ES2024 / NodeNext / strict with `noUncheckedIndexedAccess`, `noImplicitOverride`,
-  `exactOptionalPropertyTypes` (`tsconfig.base.json`). (enforced by: `bun run typecheck`)
+  `exactOptionalPropertyTypes` (`tsconfig.base.json`), test files included. (enforced by:
+  `bun run typecheck`, one `tsconfig.eslint.json` program per package plus `tsconfig.root.json` for
+  the root's own TypeScript)
 - ESLint zero warnings; cognitive complexity ≤ 15 in `src`, ≤ 20 in `test`; `no-explicit-any` is an
   error in `src` and off in `test`; every `eslint-disable` directive carries a description.
   Custom rules live in `packages/utils/eslint/` — see

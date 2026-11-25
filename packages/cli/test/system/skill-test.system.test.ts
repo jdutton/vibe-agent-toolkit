@@ -59,7 +59,7 @@ const authed = (() => {
   const r = spawnSync('claude', ['auth', 'status', '--json'], { encoding: 'utf8' });
   if (r.status !== 0) return false;
   try {
-    return (JSON.parse(r.stdout) as Record<string, unknown>).loggedIn === true;
+    return (JSON.parse(r.stdout) as Record<string, unknown>)['loggedIn'] === true;
   } catch (error) {
     // A `claude auth status --json` that printed something other than JSON is
     // "not logged in" for the purposes of gating these cases; anything else

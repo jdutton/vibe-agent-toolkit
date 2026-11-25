@@ -28,7 +28,7 @@ import type { ResourcePopulationSource } from '../src/projection/resource-popula
 import { ResourceRegistry } from '../src/resource-registry.js';
 import type { ProjectConfig } from '../src/schemas/project-config.js';
 import type { RealizationConditionRow } from '../src/schemas/projection-resources.js';
-import type { ValidationIssue } from '../src/schemas/validation-result.js';
+import type { ValidationResult } from '../src/schemas/validation-result.js';
 
 import { crawlInRun, noStoredDocument } from './helpers/population-run.js';
 
@@ -56,7 +56,7 @@ function configTyping(second: string | undefined): ProjectConfig {
  * Crawl `root` under `config` through a population that is told no collections,
  * so the registry's own resolver is the only witness, and validate.
  */
-async function validateCrawled(root: string, config: ProjectConfig): Promise<ValidationIssue[]> {
+async function validateCrawled(root: string, config: ProjectConfig): Promise<ValidationResult['issues']> {
   const registry = new ResourceRegistry({ baseDir: root, config });
   await crawlInRun(registry, { ignoredRefusals: 'record', unreadable: 'refuse', outputs: [], baseDir: root, include: ['**/*.md'] });
   return (await registry.validate({ skipGitIgnoreCheck: true })).issues;

@@ -1,21 +1,27 @@
 #!/usr/bin/env tsx
 /**
- * Derive every package's lint configuration from what ESLint lints and what those files import.
+ * Derive every package's lint and typecheck configuration from what ESLint lints and what those
+ * files import.
  *
- * A package's `lint` is cached by turbo, so its verdict is only as fresh as its inputs. The root
+ * Both tasks check ONE program per package, `tsconfig.eslint.json` (source and tests alike): the
+ * typed lint reads it through typescript-eslint and `typecheck` runs `tsc --noEmit -p` on it. A
+ * package's `lint` and `typecheck` are cached by turbo, so each verdict is only as fresh as its inputs. The root
  * `turbo.json` gives every package's lint the inputs every package shares (its own files, every
  * package's emitted declarations, the manifests, the rules, the installed linter). This generator
  * owns the parts that differ per package:
  *
- * - `packages/<pkg>/tsconfig.eslint.json`, the program a package's lint type-checks, one canonical
- *   text, for every package that holds a lintable TypeScript file;
- * - `packages/<pkg>/turbo.json` `tasks.lint.inputs`: the files OUTSIDE the package that its files
- *   reach by a relative import (a shared test helper, a dev-tools generator), and what those import
- *   in turn. Such a file is part of the package's program but is not in its default inputs, so
- *   without it an edit there would replay a cached lint the edit had changed.
+ * - `packages/<pkg>/tsconfig.eslint.json`, the program a package's lint and typecheck check, one
+ *   canonical text, for every package that holds a lintable TypeScript file;
+ * - `packages/<pkg>/turbo.json` `tasks.lint.inputs` and `tasks.typecheck.inputs`: the files OUTSIDE
+ *   the package that its files reach by a relative import (a shared test helper, a dev-tools
+ *   generator), and what those import in turn. Such a file is part of the package's program but is
+ *   not in its default inputs, so without it an edit there would replay a cached lint or typecheck
+ *   the edit had changed.
  *
  * It also checks what it cannot generate: every package with a lintable file declares `lint` as
- * {@link LINT_SCRIPT} and a package without one declares none; ESLint lints no file git ignores
+ * {@link LINT_SCRIPT} and a package without one declares none; every package with a
+ * `tsconfig.eslint.json` declares `typecheck` as {@link TYPECHECK_SCRIPT} and a package without one
+ * declares none; ESLint lints no file git ignores
  * (turbo hashes only what git does not ignore); and the lint tasks' installed-linter inputs name
  * exactly the packages `eslint.config.js` imports, plus `eslint` and `typescript`.
  *
@@ -50,6 +56,13 @@ import { readWorkspaceGraph } from './workspace-graph.js';
  */
 export const LINT_SCRIPT = 'VAT_LINT_TASK=1 eslint . --max-warnings=0';
 const TSCONFIG_ESLINT = 'tsconfig.eslint.json';
+/**
+ * The one per-package typecheck: the same program the lint checks, so a test file is held to the
+ * same compiler settings as source. The package's own source is also compiled by its `build`.
+ */
+export const TYPECHECK_SCRIPT = `tsc --noEmit -p ${TSCONFIG_ESLINT}`;
+/** The tasks whose per-package inputs this generator owns: both check the package's one program. */
+const PROGRAM_TASKS = ['lint', 'typecheck'] as const;
 const TURBO_JSON = 'turbo.json';
 /** The marker turbo expands to the root's inputs for the same task. */
 const TURBO_EXTENDS = '$TURBO_EXTENDS$';
@@ -78,7 +91,7 @@ export function renderTsconfigEslint(): string {
     $schema: 'https://json.schemastore.org/tsconfig',
     extends: '../../tsconfig.base.json',
     compilerOptions: { noEmit: true, composite: false },
-    include: ['**/*.ts', '**/*.tsx', '**/*.cts'],
+    include: ['**/*.ts', '**/*.tsx', '**/*.cts', '**/*.mts'],
     exclude: ['**/dist', '**/node_modules', '**/coverage', '**/generated', '**/.tsc-staging'],
   });
 }
@@ -189,15 +202,17 @@ export function planLintConfig(repoRoot: string): Promise<PackageLintPlan[]> {
 
 /**
  * The text `packages/<dir>/turbo.json` should hold, or null when it should not exist. The generator
- * owns ONE key, `tasks.lint`; every other task in the file is kept.
+ * owns `tasks.lint` and `tasks.typecheck`; every other task in the file is kept.
  */
 export function renderPackageTurbo(currentText: string | undefined, foreign: readonly string[]): string | null {
   const { tasks: currentTasks, ...rest } = currentText === undefined ? { extends: ['//'] } : parseJsonc(TURBO_JSON, currentText);
   const tasks = { ...(currentTasks as Record<string, unknown> | undefined) };
-  if (foreign.length === 0) {
-    delete tasks['lint'];
-  } else {
-    tasks['lint'] = { inputs: [TURBO_EXTENDS, ...foreign.map((rel) => `${TURBO_ROOT}${rel}`)] };
+  for (const task of PROGRAM_TASKS) {
+    if (foreign.length === 0) {
+      delete tasks[task];
+    } else {
+      tasks[task] = { inputs: [TURBO_EXTENDS, ...foreign.map((rel) => `${TURBO_ROOT}${rel}`)] };
+    }
   }
   const config = Object.keys(tasks).length === 0 ? rest : { ...rest, tasks };
   const meaningful = Object.keys(config).filter((key) => key !== 'extends' && key !== '$schema');
@@ -209,6 +224,11 @@ function readIfExists(repoRoot: string, relPath: string): string | undefined {
   return followedKindSync(path, repoRoot) === 'file' ? readFileSync(path, 'utf8') : undefined;
 }
 
+/** Does the package hold a lintable TypeScript file, and so a `tsconfig.eslint.json` program? */
+function hasProgram(plan: PackageLintPlan): boolean {
+  return plan.lintable.some((rel) => /\.(?:[cm]?ts|tsx)$/.test(rel));
+}
+
 /** Every generated file not in the state the generator writes. */
 export function staleLintFiles(repoRoot: string, plans: readonly PackageLintPlan[]): StaleLintFile[] {
   const tsconfigText = renderTsconfigEslint();
@@ -216,7 +236,7 @@ export function staleLintFiles(repoRoot: string, plans: readonly PackageLintPlan
     const stale: StaleLintFile[] = [];
     const tsconfigRel = `packages/${plan.dir}/${TSCONFIG_ESLINT}`;
     const currentTsconfig = readIfExists(repoRoot, tsconfigRel);
-    const expectedTsconfig = plan.lintable.some((rel) => /\.(?:[cm]?ts|tsx)$/.test(rel)) ? tsconfigText : null;
+    const expectedTsconfig = hasProgram(plan) ? tsconfigText : null;
     if ((currentTsconfig ?? null) !== expectedTsconfig) stale.push({ relPath: tsconfigRel, expected: expectedTsconfig });
     const turboRel = `packages/${plan.dir}/${TURBO_JSON}`;
     const currentTurbo = readIfExists(repoRoot, turboRel);
@@ -239,6 +259,25 @@ export function lintScriptFindings(repoRoot: string, plans: readonly PackageLint
     }
     if (plan.lintable.length === 0 && lint !== undefined) {
       return [finding(path, '`lint` is declared but ESLint lints no file in this package; ESLint refuses a run where every file is ignored.')];
+    }
+    return [];
+  });
+}
+
+/**
+ * Rule: a package with a `tsconfig.eslint.json` program declares `typecheck` exactly as
+ * {@link TYPECHECK_SCRIPT}; one without declares none (there is nothing for `tsc` to check).
+ */
+export function typecheckScriptFindings(repoRoot: string, plans: readonly PackageLintPlan[]): ValidationError[] {
+  const manifests = new Map(readWorkspaceGraph(repoRoot).packages.map((pkg) => [pkg.dir, pkg.manifest]));
+  return plans.flatMap((plan) => {
+    const typecheck = ((manifests.get(plan.dir)?.['scripts'] ?? {}) as Record<string, string>)['typecheck'];
+    const path = `packages/${plan.dir}/package.json`;
+    if (hasProgram(plan) && typecheck !== TYPECHECK_SCRIPT) {
+      return [finding(path, `\`typecheck\` must be exactly ${JSON.stringify(TYPECHECK_SCRIPT)}; found ${JSON.stringify(typecheck)}. Without it the package's test files are never type-checked.`)];
+    }
+    if (!hasProgram(plan) && typecheck !== undefined) {
+      return [finding(path, `\`typecheck\` is declared but the package has no ${TSCONFIG_ESLINT} program to check.`)];
     }
     return [];
   });
@@ -317,6 +356,31 @@ export function configImportFindings(repoRoot: string): ValidationError[] {
   });
 }
 
+/**
+ * A `lint` input that describes what the package's program reads, rather than the linter: its own
+ * files, any package's emitted declarations or manifest, the lockfile, the installed TypeScript.
+ */
+function isProgramInput(input: string): boolean {
+  return input === '$TURBO_DEFAULT$' || input.startsWith(`${TURBO_ROOT}packages/*/`)
+    || input === `${TURBO_ROOT}bun.lock` || input === `${TURBO_ROOT}node_modules/typescript/package.json`;
+}
+
+/**
+ * Rule: the root `typecheck` task hashes exactly the `lint` inputs that describe the program, both
+ * ways. Both tasks check the same program, so an input one lacks is an edit that replays the other's
+ * cached verdict (a `schema` export change replaying `utils`'s typecheck, which reaches `schema`
+ * only through `vitest.shared.ts`).
+ */
+export function typecheckInputFindings(repoRoot: string): ValidationError[] {
+  const tasks = (rootTurbo(repoRoot)['tasks'] ?? {}) as Record<string, { inputs?: string[] }>;
+  const expected = (tasks['lint']?.inputs ?? []).filter((input) => isProgramInput(input));
+  const declared = tasks['typecheck']?.inputs ?? [];
+  return [
+    ...expected.filter((input) => !declared.includes(input)).map((input) => finding(TURBO_JSON, `The "typecheck" task does not hash ${input}, which the "lint" task hashes for the same program.`)),
+    ...declared.filter((input) => !expected.includes(input)).map((input) => finding(TURBO_JSON, `The "typecheck" task hashes ${input}, which is not a "lint" input describing the program.`)),
+  ];
+}
+
 /** The repository's ignore files as `eslint-config-support.js` lists them (the list `eslint.config.js` reads). */
 async function declaredIgnoreFiles(repoRoot: string): Promise<readonly string[]> {
   const support = (await import(pathToFileURL(safePath.join(repoRoot, 'eslint-config-support.js')).href)) as { IGNORE_FILES: readonly string[] };
@@ -371,7 +435,7 @@ async function rootLintedFiles(repoRoot: string): Promise<string[]> {
   return files.filter((_, index) => linted[index]);
 }
 
-/** Every lint-config finding, for `validate-structure`: generated files, scripts, git agreement and linter inputs. */
+/** Every lint-config finding, for `validate-structure`: generated files, lint and typecheck scripts, git agreement and linter inputs. */
 export async function collectLintConfigFindings(repoRoot: string): Promise<ValidationError[]> {
   const plans = await planLintConfig(repoRoot);
   const stale = staleLintFiles(repoRoot, plans).map((file) =>
@@ -379,9 +443,11 @@ export async function collectLintConfigFindings(repoRoot: string): Promise<Valid
   return [
     ...stale,
     ...lintScriptFindings(repoRoot, plans),
+    ...typecheckScriptFindings(repoRoot, plans),
     ...gitignoredLintFindings(repoRoot, plans),
     ...linterInputFindings(repoRoot),
     ...configImportFindings(repoRoot),
+    ...typecheckInputFindings(repoRoot),
     ...ignoreFileFindings(repoRoot, await declaredIgnoreFiles(repoRoot)),
     ...rootLintInputFindings(repoRoot, await rootLintedFiles(repoRoot)),
   ];

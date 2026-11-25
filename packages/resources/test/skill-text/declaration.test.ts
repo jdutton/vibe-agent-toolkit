@@ -135,7 +135,8 @@ describe('skillTextDeclarationDigest', () => {
   it('moves with array order', () => {
     const reordered = [...SKILL_TEXT_DECLARATION.timeSensitive.patterns].reverse();
     const timeSensitive = { ...SKILL_TEXT_DECLARATION.timeSensitive, patterns: reordered };
-    expect(skillTextDeclarationDigest({ ...SKILL_TEXT_DECLARATION, timeSensitive } as typeof SKILL_TEXT_DECLARATION)).not.toBe(digest);
+    // The declaration's type IS its pattern order (a literal tuple), so a reordered copy cannot be typed as one.
+    expect(skillTextDeclarationDigest({ ...SKILL_TEXT_DECLARATION, timeSensitive } as unknown as typeof SKILL_TEXT_DECLARATION)).not.toBe(digest);
   });
 
   it('does not move with object key order', () => {

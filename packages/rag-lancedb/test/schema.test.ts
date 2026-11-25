@@ -2,7 +2,7 @@
  * Tests for LanceDB schema mapping
  */
 
-import type { CoreRAGChunk } from '@vibe-agent-toolkit/rag';
+import type { CoreRAGChunk, DefaultRAGMetadata } from '@vibe-agent-toolkit/rag';
 import { DefaultRAGMetadataSchema } from '@vibe-agent-toolkit/rag';
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
@@ -281,7 +281,7 @@ describe('chunkToLanceRow (generic)', () => {
   });
 
   it('should handle optional metadata fields with sentinel values', () => {
-    const chunk: CoreRAGChunk & { filePath: string } = {
+    const chunk: CoreRAGChunk & DefaultRAGMetadata = {
       chunkId: TEST_CHUNK_ID,
       resourceId: TEST_RESOURCE_ID,
       content: TEST_CONTENT,
@@ -325,39 +325,39 @@ describe('lanceRowToChunk (generic)', () => {
     expect(chunk.chunkId).toBe(TEST_CHUNK_ID);
     expect(chunk.embedding).toEqual(TEST_EMBEDDING);
     expect(chunk.embeddedAt).toEqual(TEST_DATE);
-    expect(chunk.filePath).toBe(TEST_FILE_PATH);
-    expect(chunk.tags).toEqual(['test', 'example']);
-    expect(chunk.type).toBe(TEST_DOCUMENTATION_TYPE);
-    expect(chunk.title).toBe(TEST_TITLE);
-    expect(chunk.headingPath).toBe(TEST_HEADING_PATH);
-    expect(chunk.headingLevel).toBe(2);
-    expect(chunk.startLine).toBe(10);
-    expect(chunk.endLine).toBe(20);
+    expect(chunk['filePath']).toBe(TEST_FILE_PATH);
+    expect(chunk['tags']).toEqual(['test', 'example']);
+    expect(chunk['type']).toBe(TEST_DOCUMENTATION_TYPE);
+    expect(chunk['title']).toBe(TEST_TITLE);
+    expect(chunk['headingPath']).toBe(TEST_HEADING_PATH);
+    expect(chunk['headingLevel']).toBe(2);
+    expect(chunk['startLine']).toBe(10);
+    expect(chunk['endLine']).toBe(20);
   });
 
   it('should handle sentinel values as undefined', () => {
     const row = createTestRowWithSentinelValues();
     const chunk = lanceRowToChunk(row, DefaultRAGMetadataSchema);
 
-    expect(chunk.filePath).toBe(TEST_FILE_PATH);
-    expect(chunk.tags).toBeUndefined();
-    expect(chunk.type).toBeUndefined();
-    expect(chunk.title).toBeUndefined();
-    expect(chunk.headingPath).toBeUndefined();
-    expect(chunk.headingLevel).toBeUndefined();
-    expect(chunk.startLine).toBeUndefined();
-    expect(chunk.endLine).toBeUndefined();
+    expect(chunk['filePath']).toBe(TEST_FILE_PATH);
+    expect(chunk['tags']).toBeUndefined();
+    expect(chunk['type']).toBeUndefined();
+    expect(chunk['title']).toBeUndefined();
+    expect(chunk['headingPath']).toBeUndefined();
+    expect(chunk['headingLevel']).toBeUndefined();
+    expect(chunk['startLine']).toBeUndefined();
+    expect(chunk['endLine']).toBeUndefined();
   });
 
   it('should deserialize custom metadata types', () => {
     const row = createTestRowWithCustomMetadata();
     const chunk = lanceRowToChunk(row, CustomMetadataSchema);
 
-    expect(chunk.author).toBe('Alice');
-    expect(chunk.publishedAt).toEqual(TEST_DATE);
-    expect(chunk.version).toBe(2);
-    expect(chunk.categories).toEqual(['tech', 'docs']);
-    expect(chunk.config).toEqual({ key: 'value' });
+    expect(chunk['author']).toBe('Alice');
+    expect(chunk['publishedAt']).toEqual(TEST_DATE);
+    expect(chunk['version']).toBe(2);
+    expect(chunk['categories']).toEqual(['tech', 'docs']);
+    expect(chunk['config']).toEqual({ key: 'value' });
   });
 });
 

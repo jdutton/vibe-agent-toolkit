@@ -43,11 +43,11 @@ const SRC_DIR = safePath.resolve(import.meta.dirname, '../../src');
  */
 const VARIADIC_OPTION = /(['"`])(--?[^'"`\n]*\.{3}[>\]])\1/g;
 
-function* walkTypeScript(dir: string): Generator<string> {
+function* walkTypeScript(dir: string, within: string): Generator<string> {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = safePath.join(dir, entry.name);
-    if (direntKindFollowingSync(dir, entry) === 'directory') {
-      yield* walkTypeScript(full);
+    if (direntKindFollowingSync(dir, entry, within) === 'directory') {
+      yield* walkTypeScript(full, within);
     } else if (entry.name.endsWith('.ts')) {
       yield full;
     }
@@ -70,7 +70,7 @@ function isCommentLine(line: string): boolean {
 /** Every `file: flags-string` this package declares as a variadic option. */
 function findVariadicOptions(): string[] {
   const found: string[] = [];
-  for (const file of walkTypeScript(SRC_DIR)) {
+  for (const file of walkTypeScript(SRC_DIR, SRC_DIR)) {
     const relative = toForwardSlash(safePath.relative(SRC_DIR, file));
     for (const line of readFileSync(file, 'utf8').split('\n')) {
       if (isCommentLine(line)) continue;

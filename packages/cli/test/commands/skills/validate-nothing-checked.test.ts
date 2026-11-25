@@ -36,6 +36,7 @@ import type { SkillsValidateReport } from '../../../src/commands/skills/validate
 import { buildSkillsValidateReport, nothingDiscoveredLine } from '../../../src/commands/skills/validate.js';
 import { resetSkillDiscoveryCache } from '../../../src/skill-resolution/packaging-config.js';
 import { skillsValidateInRun } from '../../helpers/in-run.js';
+import { reportData } from '../../report-envelope.js';
 
 import { publishedSkillsValidate } from './skills-validate-document.js';
 
@@ -76,7 +77,7 @@ function expectRefusedOverNothing(exitCode: number, document: SkillsValidateRepo
   expect(exitCode).toBe(1);
   expect(document.status).toBe('findings');
   expect(document.examined).toBe(0);
-  expect(document.data.skills).toEqual([]);
+  expect(reportData(document).skills).toEqual([]);
   expect(document.summary).toEqual({ errors: 1, warnings: 0, info: 0 });
   expect(document.findings.map((finding) => [finding.code, finding.severity])).toEqual([[RUN_INTEGRITY_CODE, 'error']]);
   expect(document.findings[0]?.message).toContain('skills.include');
@@ -111,7 +112,7 @@ describe('vat skills validate refuses a run that discovered no skill', () => {
     const { document } = await publishedSkillsValidate(writeProject(`skills:\n  include:\n    - "${MATCHING_GLOB}"\n`));
 
     expect(document.examined).toBe(1);
-    expect(document.data.skills.map((skill) => skill.name)).toEqual(['alpha']);
+    expect(reportData(document).skills.map((skill) => skill.name)).toEqual(['alpha']);
     expect(document.findings.map((finding) => finding.code)).not.toContain(RUN_INTEGRITY_CODE);
   });
 });

@@ -12,9 +12,12 @@ import {
   isBundledSubdirPath,
 } from '../../src/validators/referenced-path-missing.js';
 
+/** No run: each parse builds its own one-thread pool. */
+const NO_RUN = { dispatcher: undefined } as const;
+
 /** The detector as a one-off check, outside any run. */
 const missingIn = (docs: readonly string[], dir: string, target: PackagingTarget) =>
-  detectMissingReferencedPaths(docs, dir, target, { dispatcher: undefined });
+  detectMissingReferencedPaths(docs, dir, target, NO_RUN);
 
 let root: string;
 
@@ -66,7 +69,7 @@ const AUTHORED_SETUP_SH = 'resources/setup.sh';
  * actually making.
  */
 async function expectNoCandidateAndNoFinding(dir: string): Promise<void> {
-  await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'))).resolves.toEqual([]);
+  await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'), NO_RUN)).resolves.toEqual([]);
   await expect(missingIn(skillMdOf(dir), dir, CLAUDE_CODE)).resolves.toEqual([]);
 }
 
@@ -167,7 +170,7 @@ describe('isBundledSubdirPath — the rule that earns the precision', () => {
     const dir = writeSkill(`Open \`${token}\` first.`);
 
     expect(isBundledSubdirPath(token)).toBe(admitted);
-    await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md')))
+    await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'), NO_RUN))
       .resolves.toEqual(admitted ? [token] : []);
   });
 });
@@ -231,7 +234,7 @@ describe('detectMissingReferencedPaths', () => {
     // existence test cleared the path only if a candidate was produced at all —
     // a lexer change that stopped emitting `scripts/run.mjs` would otherwise
     // leave this green while silently killing the detector.
-    await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md')))
+    await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'), NO_RUN))
       .resolves.toEqual(['scripts/run.mjs']);
     await expect(missingIn(skillMdOf(dir), dir, CLAUDE_CODE)).resolves.toEqual([]);
   });
@@ -313,7 +316,7 @@ describe('detectMissingReferencedPaths', () => {
       { [routed]: 'shipped\n' },
     );
 
-    await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'))).resolves.toEqual([authored]);
+    await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'), NO_RUN)).resolves.toEqual([authored]);
     await expect(missingIn(skillMdOf(dir), dir, CLAUDE_CODE)).resolves.toEqual([]);
   });
 
@@ -342,7 +345,7 @@ describe('detectMissingReferencedPaths', () => {
       [shipped]: 'shipped\n',
     });
 
-    await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'))).resolves.toEqual([authored]);
+    await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'), NO_RUN)).resolves.toEqual([authored]);
     await expect(missingIn(skillMdOf(dir), dir, target)).resolves.toEqual([]);
   });
 
@@ -369,7 +372,7 @@ describe('detectMissingReferencedPaths', () => {
     const authored = AUTHORED_SETUP_SH;
     const dir = writeSkill(`\`\`\`bash\nbash ${authored}\n\`\`\``);
 
-    await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'))).resolves.toEqual([authored]);
+    await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'), NO_RUN)).resolves.toEqual([authored]);
     await expect(missingIn(skillMdOf(dir), dir, CLAUDE_CODE))
       .resolves.toMatchObject([{ link: authored }]);
   });
@@ -496,12 +499,12 @@ describe('bundledPathCandidates', () => {
   it('de-duplicates a path referenced several times', async () => {
     const dir = writeSkill('`scripts/x.mjs` then `scripts/x.mjs` again.');
 
-    await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'))).resolves.toEqual(['scripts/x.mjs']);
+    await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'), NO_RUN)).resolves.toEqual(['scripts/x.mjs']);
   });
 
   it('ignores a bare filename with no slash', async () => {
     const dir = writeSkill('Open `SKILL.md` and `run.mjs`.');
 
-    await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'))).resolves.toEqual([]);
+    await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'), NO_RUN)).resolves.toEqual([]);
   });
 });

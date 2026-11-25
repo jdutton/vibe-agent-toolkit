@@ -134,7 +134,7 @@ describe('errorDiagnostics', () => {
     // Cross-realm and hand-built errors reach here with `stack` undefined;
     // `stack` is optional in the type, so the fallback is not theoretical.
     const stackless = new RangeError('out of range');
-    stackless.stack = undefined;
+    delete stackless.stack;
     expect(errorDiagnostics(stackless)).toBe('RangeError: out of range');
   });
 

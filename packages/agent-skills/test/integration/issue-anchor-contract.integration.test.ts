@@ -100,7 +100,6 @@ beforeAll(async () => {
 
   const validated = await validateSkill({ run: undefined, resourcesValidation: {}, side: 'source', skillPath, checkUnreferencedFiles: true, validation: {} });
   const packaged = await validateForPackagingInRun(skillPath, {}, undefined, 'source', {
-    dispatcher: undefined,
     unreadable: 'refuse',
     outputs: [],
     gitTracker,

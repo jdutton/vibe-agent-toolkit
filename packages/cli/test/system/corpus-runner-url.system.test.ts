@@ -79,9 +79,9 @@ describe('auditOnePlugin — URL source (integration)', () => {
     expect(row.audit.output_path).toBe('foo-audit.yaml');
     // A cloned source's root is a random tempdir: the document names the URL instead.
     const document = AUDIT_REPORT_SCHEMA.parse(yaml.parse(readFileSync(safePath.join(runDir, 'foo-audit.yaml'), 'utf-8')));
-    expect(document.data.root).toBeNull();
-    expect(document.data.provenance?.url).toBe(entry.source);
-    expect(document.data.files.map((file) => file.path)).toStrictEqual(['plugins/foo/SKILL.md']);
+    expect(document.data?.root).toBeNull();
+    expect(document.data?.provenance?.url).toBe(entry.source);
+    expect(document.data?.files.map((file) => file.path)).toStrictEqual(['plugins/foo/SKILL.md']);
   });
 
   it('records unloadable when the clone fails (bad URL)', async () => {

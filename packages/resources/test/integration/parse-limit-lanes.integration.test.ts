@@ -12,7 +12,6 @@ import { writeFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -29,6 +28,7 @@ import {
 import { describeBlobRefusals } from '../../src/projection/blob-refusals.js';
 import { splitProjectionByScope } from '../../src/projection/store.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
+import type { ValidationResult } from '../../src/schemas/validation-result.js';
 import { baseBuilderForRoot, conditionsWithCode, populateBlobsOnOwnDispatcher } from '../blob-fixture-population.js';
 import { deeplyNestedQuote } from '../parse-limit-fixtures.js';
 import { countFilesUnder, setupSubdirTestSuite } from '../test-helpers.js';
@@ -66,7 +66,7 @@ async function writeCorpus(): Promise<void> {
  * @param code - The finding code b.md's refusal is expected under
  * @returns Those findings
  */
-async function registryRefusalsOfB(code: string): Promise<ValidationIssue[]> {
+async function registryRefusalsOfB(code: string): Promise<ValidationResult['issues']> {
   const registry = new ResourceRegistry({
     baseDir: suite.tempDir,
     parseCache: new ParseCache({ enabled: false }),
@@ -228,7 +228,7 @@ describe('a parse with no dispatcher of a document the bounded route refuses', (
     // No dispatcher passed: the call still parses in a bounded worker (there is
     // no unbounded lane), so it is refused, and leaves nothing a later run would serve.
     await expect(
-      parseFileCached(file, 'markdown', { cache: new ParseCache({ cacheDir, enabled: true }) }),
+      parseFileCached(file, 'markdown', { dispatcher: undefined, cache: new ParseCache({ cacheDir, enabled: true }) }),
     ).rejects.toMatchObject({ code: 'PARSE_LIMIT_EXCEEDED' });
     expect(await countFilesUnder(cacheDir)).toBe(0);
 

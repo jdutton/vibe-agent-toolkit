@@ -53,6 +53,7 @@ import {
   type MarketplaceValidateReportInput,
 } from '../../../../src/commands/claude/marketplace/validate.js';
 import { publishedReport } from '../../../../src/utils/document-writer.js';
+import { reportData } from '../../../report-envelope.js';
 
 /** The code the run-integrity refusal carries, shared with every other gate. */
 const RUN_INTEGRITY_CODE = 'RESOURCE_CHECK_BROKEN';
@@ -135,7 +136,7 @@ describe('marketplace validate — a declared local plugin the run did not valid
     const report = reportFor([ALPHA], 1, [validated(stray)]);
 
     expect(report.summary.errors).toBe(1);
-    expect(report.data.plugins.map((plugin) => plugin.name)).toEqual(['stray']);
+    expect(reportData(report).plugins.map((plugin) => plugin.name)).toEqual(['stray']);
     expect(refusalIn(report)?.message).toContain('`alpha` (./plugins/alpha)');
     expect(refusalIn(report)?.message).not.toContain('stray');
   });
@@ -191,7 +192,7 @@ describe('marketplace validate — a declared local plugin the run did not valid
     expect(report.status).toBe('ok');
     expect(report.examined).toBe(2);
     expect(report.findings).toEqual([]);
-    expect(report.data.plugins.map((p) => [p.name, p.source, p.path, p.manifestRead, p.status])).toEqual([
+    expect(reportData(report).plugins.map((p) => [p.name, p.source, p.path, p.manifestRead, p.status])).toEqual([
       ['alpha', './plugins/alpha', 'plugins/alpha', true, 'ok'],
       ['beta', './plugins/beta', 'plugins/beta', true, 'ok'],
     ]);
@@ -204,7 +205,7 @@ describe('marketplace validate — a declared local plugin the run did not valid
     const report = reportFor([ALPHA], 1, [validated(ALPHA)], { undeclared: ['plugins/stray'] });
 
     expect(report.status).toBe('ok');
-    expect(report.data.undeclared).toEqual(['plugins/stray']);
+    expect(reportData(report).undeclared).toEqual(['plugins/stray']);
     expect(report.findings).toEqual([]);
   });
 
@@ -238,7 +239,7 @@ describe('marketplace validate — a declared local plugin the run did not valid
     }));
 
     expect(report.status).toBe('findings');
-    expect(report.data.marketplace).toBeNull();
+    expect(reportData(report).marketplace).toBeNull();
     expect(codesOf(report)).toEqual(['MARKETPLACE_MISSING_MANIFEST', RUN_INTEGRITY_CODE]);
   });
 });

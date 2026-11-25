@@ -14,8 +14,9 @@ must fire at creation time (the package-list registration); everything else is h
    publish order is derived from workspace dependencies (`publishedPackagesInDependencyOrder()` in
    `packages/dev-tools/src/workspace-graph.ts`). Generated files: tsconfig references
    (`bun run --cwd packages/dev-tools generate:tsconfig-refs`, see the next step) and the lint wiring
-   (`bun run generate:lint-config`: `tsconfig.eslint.json` and any `turbo.json` lint inputs; the
-   `lint` script is `VAT_LINT_TASK=1 eslint . --max-warnings=0`). `validate-structure` checks both.
+   (`bun run generate:lint-config`: `tsconfig.eslint.json` and any `turbo.json` lint and typecheck
+   inputs; the `lint` script is `VAT_LINT_TASK=1 eslint . --max-warnings=0` and the `typecheck`
+   script is `tsc --noEmit -p tsconfig.eslint.json`). `validate-structure` checks both.
 4. Do **not** hand-edit `tsconfig.json` `references` (root or per-package): they are generated from
    workspace dependencies by `bun run generate:tsconfig-refs`, and `validate-structure` checks the
    committed file against the generator.

@@ -9,7 +9,7 @@ import { writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
-import ts from 'typescript/lib/tsserverlibrary';
+import ts from 'typescript/lib/tsserverlibrary.js';
 import { describe, it, expect, beforeEach, afterEach, beforeAll } from 'vitest';
 
 import { clearCache } from '../../src/language-service/markdown-cache.js';
@@ -27,7 +27,7 @@ function testDefinitionAtPosition(
   tsCode: string,
   markdownFiles: Record<string, string>,
   searchString: string,
-): ts.DefinitionInfo[] | undefined {
+): readonly ts.DefinitionInfo[] | undefined {
   const { languageService, fileName } = createLanguageServiceProject(projectDir, tsCode, markdownFiles);
   const position = tsCode.indexOf(searchString) + 1;
   return languageService.getDefinitionAtPosition(fileName, position);
@@ -219,7 +219,7 @@ const frag = Core.fragments.purposeDriven;
 
       const diagnostics = languageService.getSemanticDiagnostics(fileName);
 
-      const markdownError = diagnostics.find((d) => d.messageText.toString().includes('missing.md'));
+      const markdownError = diagnostics.find((d) => ts.flattenDiagnosticMessageText(d.messageText, '\n').includes('missing.md'));
       expect(markdownError).toBeDefined();
     });
 
@@ -237,7 +237,7 @@ const frag = Core.fragments.nonExistent;
       const diagnostics = languageService.getSemanticDiagnostics(fileName);
 
       const fragmentError = diagnostics.find((d) =>
-        d.messageText.toString().includes('nonExistent'),
+        ts.flattenDiagnosticMessageText(d.messageText, '\n').includes('nonExistent'),
       );
       expect(fragmentError).toBeDefined();
     });
@@ -256,8 +256,7 @@ const frag = Core.fragments.purposeDriven;
       const diagnostics = languageService.getSemanticDiagnostics(fileName);
 
       const markdownErrors = diagnostics.filter((d) => {
-        const message = d.messageText.toString();
-        // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- Logical OR is correct for boolean operations
+        const message = ts.flattenDiagnosticMessageText(d.messageText, '\n');
         return message.includes('markdown') || message.includes('fragment');
       });
       expect(markdownErrors).toHaveLength(0);

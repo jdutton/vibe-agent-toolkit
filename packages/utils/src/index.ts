@@ -209,7 +209,7 @@ export * from './zod-introspection.js';
 export * from './skill-targets.js';
 
 // The fail-closed guard for user state in a test process
-export { requireTestScratch, TEST_USER_STATE_UNDER } from './test-scratch-guard.js';
+export { refuseSharedTempState, requireTestScratch, TEST_USER_STATE_UNDER } from './test-scratch-guard.js';
 
 // Glob pattern helpers (isGlob, staticGlobBase, globMagicRemainder)
 export * from './glob/glob-pattern.js';
@@ -325,6 +325,9 @@ export { compareCodeUnits } from './compare-code-units.js';
 export { deepFreeze } from './deep-freeze.js';
 
 export { memoized } from './memoized.js';
+
+// The VAT cache root's override, spelled once for the cache root and the test scratch.
+export { VAT_CACHE_DIR_ENV } from './vat-cache-env.js';
 
 // The crawl-timing seam: which contributor, stratum and fixpoint pass owns the
 // time it takes to FIND documents.

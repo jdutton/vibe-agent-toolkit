@@ -26,7 +26,7 @@ interface FakeHandle {
 const calls: string[] = [];
 const handles: FakeHandle[] = [];
 const faults: { open?: Error; write?: Error; read?: Error } = {};
-let fileOnDisk = Buffer.alloc(0);
+let fileOnDisk: Buffer = Buffer.alloc(0);
 /** The mode an exclusive create gives a file: `0644` under `umask 022`, unless a test says otherwise. */
 let createdMode = 0o100644;
 

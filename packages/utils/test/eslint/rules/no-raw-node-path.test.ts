@@ -43,7 +43,8 @@ const NAME = RULE.rawPath;
 function pathFunctionRuleCases(fn: WrappedPathFunction): RuleCases {
   const unsafeMemberCode = `import path from 'node:path'; const p = path.${fn}(a, b);`;
   const unsafeMemberOutput = `import path from 'node:path';\n${SAFE_IMPORT} const p = safePath.${fn}(a, b);`;
-  const errors = [{ messageId: 'noUnsafePathFn' }];
+  const error = { messageId: 'noUnsafePathFn' };
+  const errors = [error];
   const options = PATH_EXEMPT_OPTIONS;
   const decoy = (filename: string) => ({
     code: unsafeMemberCode, filename, options, output: unsafeMemberOutput, errors,
@@ -180,7 +181,7 @@ function pathFunctionRuleCases(fn: WrappedPathFunction): RuleCases {
           `const a2 = ${fn}(c, d);`,
           `const a3 = ${fn}(e, f);`,
         ].join('\n'),
-        errors: [errors[0], errors[0], errors[0]],
+        errors: [error, error, error],
       },
       // Same shape through the namespace import.
       {
@@ -197,7 +198,7 @@ function pathFunctionRuleCases(fn: WrappedPathFunction): RuleCases {
           `const a1 = safePath.${fn}(a, b);`,
           `const a2 = path.${fn}(c, d);`,
         ].join('\n'),
-        errors: [errors[0], errors[0]],
+        errors: [error, error],
       },
       // BARE, UNBOUND call in a file that ALREADY has `safePath` — what a
       // half-applied fix leaves behind. Detection used to require having seen

@@ -12,8 +12,8 @@
 
 import { writeFileSync } from 'node:fs';
 
-import { ALL_EXTENT_REQUEST, StoreQuestionUnavailableError, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { ALL_EXTENT_REQUEST, emptyBlobRows, StoreQuestionUnavailableError } from '@vibe-agent-toolkit/resources';
+import { mkdirSyncReal, safePath, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { backend, captureStderr, FakeUnavailableNowError, isolateProjectionStoreTests } from '../projection-store-test-doubles.js';
@@ -111,7 +111,7 @@ describe('the stored-document questions\' connection', () => {
       const defect = new Error('a defect in the backend');
       backend.callFailures.push(locked, defect);
       const store = opened?.cache.store;
-      const first = await store?.writeBlobFacts({}).then(() => undefined, (error: unknown) => error);
+      const first = await store?.writeBlobFacts(emptyBlobRows()).then(() => undefined, (error: unknown) => error);
       const second = await store?.readExtent({ rootId: 'r', treeHash: 'h' }, ALL_EXTENT_REQUEST).then(() => undefined, (error: unknown) => error);
       expect(first).toBeInstanceOf(StoreQuestionUnavailableError);
       expect((first as Error).cause).toBe(locked);

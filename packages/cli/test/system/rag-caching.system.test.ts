@@ -6,6 +6,7 @@
 
 import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { RAG_INDEX_REPORT_SCHEMA, type RagIndexData } from '../../src/commands/rag/index-schema.js';
+import { reportData } from '../report-envelope.js';
 
 import {
   describe,
@@ -21,10 +22,8 @@ import {
 const binPath = getBinPath(import.meta.url);
 
 /** An index run's counters, from its document validated by the verb's published schema. */
-function dataOf(parsed: Record<string, unknown>): RagIndexData {
-  const { data } = RAG_INDEX_REPORT_SCHEMA.parse(parsed);
-  if (data === null) throw new Error('rag index published no data');
-  return data;
+function indexData(parsed: Record<string, unknown>): RagIndexData {
+  return reportData(RAG_INDEX_REPORT_SCHEMA.parse(parsed));
 }
 const suite = setupRagTestSuite('caching', binPath, getTestOutputDir);
 
@@ -43,14 +42,14 @@ describe.skipIf(onnxModelUnreachable())('RAG caching and incremental updates (sy
     );
 
     expect(firstResult.status).toBe(0);
-    expect(firstParsed.status).toBe('ok');
+    expect(firstParsed['status']).toBe('ok');
 
     // All files should be skipped (content hash matches)
-    const skippedCount = dataOf(firstParsed).resourcesSkipped;
+    const skippedCount = indexData(firstParsed).resourcesSkipped;
     expect(skippedCount).toBeGreaterThan(0);
-    expect(dataOf(firstParsed).resourcesIndexed).toBe(0);
-    expect(dataOf(firstParsed).chunksCreated).toBe(0);
-    expect(dataOf(firstParsed).chunksDeleted).toBe(0);
+    expect(indexData(firstParsed).resourcesIndexed).toBe(0);
+    expect(indexData(firstParsed).chunksCreated).toBe(0);
+    expect(indexData(firstParsed).chunksDeleted).toBe(0);
 
     // Second re-index should also skip all files
     const { result: secondResult, parsed: secondParsed } = await executeCliAndParseYaml(
@@ -60,13 +59,13 @@ describe.skipIf(onnxModelUnreachable())('RAG caching and incremental updates (sy
     );
 
     expect(secondResult.status).toBe(0);
-    expect(secondParsed.status).toBe('ok');
+    expect(secondParsed['status']).toBe('ok');
 
     // CRITICAL: All files should still be skipped (content hash matches)
-    expect(dataOf(secondParsed).resourcesSkipped).toBe(skippedCount);
-    expect(dataOf(secondParsed).resourcesIndexed).toBe(0);
-    expect(dataOf(secondParsed).chunksCreated).toBe(0);
-    expect(dataOf(secondParsed).chunksDeleted).toBe(0);
+    expect(indexData(secondParsed).resourcesSkipped).toBe(skippedCount);
+    expect(indexData(secondParsed).resourcesIndexed).toBe(0);
+    expect(indexData(secondParsed).chunksCreated).toBe(0);
+    expect(indexData(secondParsed).chunksDeleted).toBe(0);
   });
 
   it('should detect and re-index changed files', async () => {
@@ -82,7 +81,7 @@ describe.skipIf(onnxModelUnreachable())('RAG caching and incremental updates (sy
       { cwd: suite.projectDir }
     );
 
-    expect(dataOf(firstParsed).resourcesIndexed).toBeGreaterThanOrEqual(1);
+    expect(indexData(firstParsed).resourcesIndexed).toBeGreaterThanOrEqual(1);
 
     // Re-index without changes - should skip
     const { parsed: secondParsed } = await executeCliAndParseYaml(
@@ -91,8 +90,8 @@ describe.skipIf(onnxModelUnreachable())('RAG caching and incremental updates (sy
       { cwd: suite.projectDir }
     );
 
-    expect(dataOf(secondParsed).resourcesSkipped).toBeGreaterThan(0);
-    expect(dataOf(secondParsed).resourcesIndexed).toBe(0);
+    expect(indexData(secondParsed).resourcesSkipped).toBeGreaterThan(0);
+    expect(indexData(secondParsed).resourcesIndexed).toBe(0);
 
     // Modify the file
     fs.writeFileSync(testFile, '# Modified Content\n\nThis content has been changed.');
@@ -104,9 +103,9 @@ describe.skipIf(onnxModelUnreachable())('RAG caching and incremental updates (sy
       { cwd: suite.projectDir }
     );
 
-    expect(dataOf(thirdParsed).resourcesUpdated).toBe(1);
-    expect(dataOf(thirdParsed).chunksDeleted).toBeGreaterThan(0);
-    expect(dataOf(thirdParsed).chunksCreated).toBeGreaterThan(0);
+    expect(indexData(thirdParsed).resourcesUpdated).toBe(1);
+    expect(indexData(thirdParsed).chunksDeleted).toBeGreaterThan(0);
+    expect(indexData(thirdParsed).chunksCreated).toBeGreaterThan(0);
 
     // Clean up
     fs.unlinkSync(testFile);

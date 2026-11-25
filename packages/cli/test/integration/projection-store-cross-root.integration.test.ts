@@ -11,8 +11,7 @@
  * Every other equivalence suite runs one corpus, so none of them could see it.
  */
 
-import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {

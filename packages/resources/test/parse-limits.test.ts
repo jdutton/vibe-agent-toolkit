@@ -243,7 +243,7 @@ describe('expandedSize over a !!set and a !!omap', () => {
  * @returns A parse result carrying it and nothing else
  */
 function withFrontmatter(frontmatter: Record<string, unknown>): ParseResult {
-  return { links: [], headings: [], frontmatter, content: '', sizeBytes: 0, estimatedTokenCount: 0 };
+  return { links: [], headings: [], frontmatter, content: '', sizeBytes: 0, estimatedTokenCount: 0, skillText: null };
 }
 
 /**

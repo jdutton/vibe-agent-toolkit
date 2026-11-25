@@ -56,7 +56,7 @@ export function storeFilesUnder(root: string): string[] {
   const visit = (directory: string): void => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const child = safePath.join(directory, entry.name);
-      if (direntKindFollowingSync(directory, entry) === 'directory') visit(child);
+      if (direntKindFollowingSync(directory, entry, root) === 'directory') visit(child);
       else if (entry.name === 'projection.db') found.push(child);
     }
   };

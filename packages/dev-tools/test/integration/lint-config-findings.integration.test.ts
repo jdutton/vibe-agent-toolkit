@@ -11,12 +11,14 @@ import {
   LINT_SCRIPT,
   renderTsconfigEslint,
   ROOT_LINT_EXTENSIONS,
+  TYPECHECK_SCRIPT,
 } from '../../src/generate-lint-config.js';
 import { cleanupTestTempDir, commitAllAsRepo, createTestTempDir, writeFiles } from '../test-helpers.js';
 
 /** A root turbo.json whose two lint tasks carry `lint` and `rootLint` as inputs. */
 function turboWith(lint: readonly string[], rootLint: readonly string[]): string {
-  return JSON.stringify({ tasks: { lint: { inputs: lint }, '//#lint:root': { inputs: rootLint } } });
+  const typecheck = lint.filter((input) => input === '$TURBO_DEFAULT$' || input.endsWith('node_modules/typescript/package.json'));
+  return JSON.stringify({ tasks: { lint: { inputs: lint }, typecheck: { inputs: typecheck }, '//#lint:root': { inputs: rootLint } } });
 }
 
 /** A repository whose lint wiring is right in every respect the checks read. */
@@ -32,7 +34,7 @@ function writeCleanRepo(root: string): void {
       ['$TURBO_DEFAULT$', '$TURBO_ROOT$/eslint-config-support.js', '$TURBO_ROOT$/.gitignore', ...linterInputs.map((n) => `$TURBO_ROOT$/node_modules/${n}/package.json`)],
       [`*.${ROOT_LINT_EXTENSIONS}`, '.gitignore', ...linterInputs.map((n) => `node_modules/${n}/package.json`)],
     ),
-    'packages/a/package.json': JSON.stringify({ name: 'a', type: 'module', scripts: { lint: LINT_SCRIPT } }),
+    'packages/a/package.json': JSON.stringify({ name: 'a', type: 'module', scripts: { lint: LINT_SCRIPT, typecheck: TYPECHECK_SCRIPT } }),
     'packages/a/src/x.ts': 'export const x = 1;\n',
   });
 }
@@ -110,7 +112,7 @@ describe('collectLintConfigFindings', () => {
   it('reports a stale generated file, a wrong script, an unhashed config import and a root lint place', async () => {
     writeCleanRepo(root);
     writeFiles(root, {
-      'packages/a/package.json': JSON.stringify({ name: 'a', type: 'module', scripts: { lint: 'eslint .' } }),
+      'packages/a/package.json': JSON.stringify({ name: 'a', type: 'module', scripts: { lint: 'eslint .', typecheck: TYPECHECK_SCRIPT } }),
       'eslint.config.js': "import './eslint-config-support.js';\nimport './more.js';\nexport default [{ files: ['**/*.ts', '**/*.js'] }];\n",
       'more.js': 'export {};\n',
       'tools/run.js': 'export {};\n',

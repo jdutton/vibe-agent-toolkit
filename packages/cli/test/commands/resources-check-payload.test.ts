@@ -45,6 +45,7 @@ import {
 import { createLogger, type Logger } from '../../src/utils/logger.js';
 import type { AskProjection } from '../../src/utils/projection-query.js';
 import { NO_COLUMNS } from '../helpers/no-columns.js';
+import { reportData } from '../report-envelope.js';
 
 /**
  * A logger that captures what reached stderr, and nothing else.
@@ -392,7 +393,7 @@ function documentFor(options: Parameters<typeof runWithClock>[0]): {
 } {
   const { issues, costs } = runWithClock(options);
   const payload = buildCheckOutputData(payloadInput({ issues, costs }));
-  return { payload, checks: payload.data.checks as PublishedCheck[] };
+  return { payload, checks: reportData(payload).checks as PublishedCheck[] };
 }
 
 describe('buildCheckOutputData — the published schema', () => {
@@ -848,8 +849,8 @@ describe('the check payload', () => {
     const ran = buildCheckOutputData(payloadInput({ costs: costsOf(2) }));
     const none = buildCheckOutputData(payloadInput({ costs: [] }));
 
-    expect(ran.data.checksRun).toBe(2);
-    expect(none.data.checksRun).toBe(0);
+    expect(reportData(ran).checksRun).toBe(2);
+    expect(reportData(none).checksRun).toBe(0);
     expect(ran.status).toBe('ok');
     // Two documents that differ ONLY in the denominator. Drop the field and
     // these become equal, which is the ambiguity it exists to remove.
@@ -858,7 +859,7 @@ describe('the check payload', () => {
 
   it('reports where the lens population came from, separately from the resources population', () => {
     const lens = (lensPopulation: PopulatedRun['lensPopulation']): unknown =>
-      buildCheckOutputData(payloadInput({ population: 'store', lensPopulation })).data.lensPopulation;
+      reportData(buildCheckOutputData(payloadInput({ population: 'store', lensPopulation }))).lensPopulation;
 
     expect(lens('store')).toBe('store');
     expect(lens('derived')).toBe('derived');
@@ -866,9 +867,9 @@ describe('the check payload', () => {
   });
 
   it('reports where the population came from, which is the only cache tell', () => {
-    expect(buildCheckOutputData(payloadInput({ population: 'store' })).data.population)
+    expect(reportData(buildCheckOutputData(payloadInput({ population: 'store' }))).population)
       .toBe('store');
-    expect(buildCheckOutputData(payloadInput({ population: 'derived' })).data.population)
+    expect(reportData(buildCheckOutputData(payloadInput({ population: 'derived' }))).population)
       .toBe('derived');
   });
 
@@ -910,7 +911,7 @@ describe('the check payload', () => {
     const payload = buildCheckOutputData(payloadInput({ costs: costsOf(3), durationMs: 1500 }));
 
     expect(payload.status).toBe('ok');
-    expect(payload.data.root).toBe('/corpus');
+    expect(reportData(payload).root).toBe('/corpus');
     expect(payload.summary).toStrictEqual({ errors: 0, warnings: 0, info: 0 });
     expect(payload.durationMs).toBe(1500);
   });
@@ -968,7 +969,7 @@ describe('the check payload publishes what each rule cost', () => {
         checks: TWO_VIOLATED, ask: ASK_NO_ROWS, ...(only === undefined ? {} : { only }),
       });
 
-      expect(payload.data.checksRun).toBe(checks.length);
+      expect(reportData(payload).checksRun).toBe(checks.length);
       expect(checks.map((check) => check.name))
         .toStrictEqual(only === undefined ? [FIRST, SECOND] : [SECOND]);
     }
@@ -978,7 +979,7 @@ describe('the check payload publishes what each rule cost', () => {
     const { payload, checks } = documentFor({ checks: {}, ask: ASK_NO_ROWS });
 
     expect(checks).toStrictEqual([]);
-    expect(payload.data.checksRun).toBe(0);
+    expect(reportData(payload).checksRun).toBe(0);
   });
 
   it('charges the shared population to NOBODY, and publishes it beside them', () => {
@@ -992,9 +993,9 @@ describe('the check payload publishes what each rule cost', () => {
     });
     const payload = buildCheckOutputData(payloadInput({ issues, costs, populationMs: 1230 }));
 
-    expect(payload.data.populationSecs).toBeCloseTo(1.23, 10);
+    expect(reportData(payload).populationSecs).toBeCloseTo(1.23, 10);
     // Untouched by the population, and not summed with it.
-    expect(payload.data.checks.map((check) => check.durationSecs))
+    expect(reportData(payload).checks.map((check) => check.durationSecs))
       .toStrictEqual([0.005, 0.005]);
   });
 
@@ -1003,7 +1004,7 @@ describe('the check payload publishes what each rule cost', () => {
     // total then its breakdown. A reader who has to scroll to pair them will
     // not pair them.
     const report = buildCheckOutputData(payloadInput({ costs: costsOf(1) }));
-    const keys = Object.keys(report.data);
+    const keys = Object.keys(reportData(report));
 
     expect(keys.indexOf('populationSecs')).toBe(keys.indexOf('population') + 1);
     expect(keys.indexOf('checks')).toBe(keys.indexOf('checksRun') + 1);
@@ -1182,7 +1183,7 @@ describe('a run that ran no checks at all is a failure, not a pass', () => {
     // produces.
     const payload = buildCheckOutputData(payloadInput({ costs: [] }));
 
-    expect(payload.data.checksRun).toBe(0);
+    expect(reportData(payload).checksRun).toBe(0);
     expect(payload.summary.errors).toBeGreaterThan(0);
   });
 
@@ -1569,8 +1570,8 @@ describe('the built-in check set runs without any config', () => {
     });
     const payload = buildCheckOutputData(payloadInput({ issues, costs }));
 
-    expect(payload.data.checksRun).toBe(5);
-    expect(payload.data.checks as PublishedCheck[]).toStrictEqual([
+    expect(reportData(payload).checksRun).toBe(5);
+    expect(reportData(payload).checks as PublishedCheck[]).toStrictEqual([
       { name: INERT_CHECK_NAME, durationSecs: 0.001, rows: 1, builtin: true },
       { name: FRONTMATTER_CHECK_NAME, durationSecs: 0.001, rows: 0, builtin: true },
       { name: LINK_CHECK_NAME, durationSecs: 0.001, rows: 0, builtin: true },

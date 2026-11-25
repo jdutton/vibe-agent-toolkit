@@ -36,10 +36,10 @@ const THEIRS = 'theirs.md';
  * @param repo - The repository standing in for the one being committed
  */
 function enterHookOf(repo: string): void {
-  process.env.GIT_DIR = safePath.join(repo, '.git');
-  process.env.GIT_WORK_TREE = repo;
-  process.env.GIT_INDEX_FILE = safePath.join(repo, '.git', 'index');
-  process.env.GIT_PREFIX = '';
+  process.env['GIT_DIR'] = safePath.join(repo, '.git');
+  process.env['GIT_WORK_TREE'] = repo;
+  process.env['GIT_INDEX_FILE'] = safePath.join(repo, '.git', 'index');
+  process.env['GIT_PREFIX'] = '';
 }
 
 describe('git helpers under a hook environment', () => {
@@ -110,7 +110,7 @@ describe('git helpers under a hook environment', () => {
       expect(before).toContain(OURS);
 
       // Exactly the shape git uses to carry `-c key=value` into a hook.
-      process.env.GIT_CONFIG_PARAMETERS = `'core.excludesFile'='${excludesFile}'`;
+      process.env['GIT_CONFIG_PARAMETERS'] = `'core.excludesFile'='${excludesFile}'`;
 
       expect(gitLsFiles({ cwd: ours, unreadable: refuseUnreadableFixture(ours), includeUntracked: true })).toContain(OURS);
     } finally {

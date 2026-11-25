@@ -24,6 +24,8 @@ import { OKF_VALIDATE_REPORT_SCHEMA } from '../src/commands/okf/validate-schema.
 import { summarizeOkfBundles, unreadableRootRefusal, type CheckedOkfBundle } from '../src/commands/okf/validate.js';
 import { publishedReport, refusalReport } from '../src/utils/document-writer.js';
 
+import { reportData } from './report-envelope.js';
+
 // Built from the cwd rather than a `/`-rooted literal, so the root has a drive
 // letter on Windows and `issueLocation` relativizes it the same way everywhere.
 const PROJECT_ROOT = safePath.resolve('okf-project');
@@ -145,14 +147,14 @@ describe('summarizeOkfBundles', () => {
     expect(summary.findings.map((f) => [f.code, f.severity])).toEqual([['RESOURCE_CHECK_BROKEN', 'error']]);
     expect(summary.summary).toEqual({ errors: 1, warnings: 0, info: 0 });
     expect(exitCodeForReport(summary)).toBe(1);
-    expect(summary.data.bundles).toEqual([]);
+    expect(reportData(summary).bundles).toEqual([]);
   });
 
   it('names the config key to add, so the fix does not need a docs lookup', () => {
     const summary = summarize([]);
 
-    expect(summary.data.notice).toBeDefined();
-    expect(summary.data.notice).toContain('okf.bundles');
+    expect(reportData(summary).notice).toBeDefined();
+    expect(reportData(summary).notice).toContain('okf.bundles');
   });
 
   it('is ok, with the documents it read as the denominator, when a bundle produced no findings', () => {
@@ -160,7 +162,7 @@ describe('summarizeOkfBundles', () => {
 
     expect(summary.status).toBe('ok');
     expect(summary.examined).toBe(1);
-    expect(summary.data.notice).toBeUndefined();
+    expect(reportData(summary).notice).toBeUndefined();
   });
 
   it('reports findings, with the file to open as a project-relative location', () => {
@@ -237,7 +239,7 @@ describe('summarizeOkfBundles', () => {
   it('keeps the per-bundle rows free of findings — the envelope carries them once', () => {
     const summary = summarize([report('a', [finding('error')])]);
 
-    expect(summary.data.bundles).toEqual([{
+    expect(reportData(summary).bundles).toEqual([{
       bundle: 'a',
       root: './bundles/a',
       conceptDocuments: ['concepts/a.md'],
@@ -252,7 +254,7 @@ describe('summarizeOkfBundles', () => {
 
     expect(summary.status).toBe('findings');
     expect(summary.examined).toBe(0);
-    expect(summary.data.bundles).toHaveLength(1);
+    expect(reportData(summary).bundles).toHaveLength(1);
   });
 
   describe('a bundle root holding no markdown at all', () => {
@@ -267,8 +269,8 @@ describe('summarizeOkfBundles', () => {
     it('says so in the notice, naming the bundle', () => {
       const summary = summarize([emptyReport('empty')]);
 
-      expect(summary.data.notice).toBeDefined();
-      expect(summary.data.notice).toContain("'empty'");
+      expect(reportData(summary).notice).toBeDefined();
+      expect(reportData(summary).notice).toContain("'empty'");
       expect(summary.status).toBe('findings');
       expect(summary.findings.map((f) => f.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
       expect(exitCodeForReport(summary)).toBe(1);
@@ -278,7 +280,7 @@ describe('summarizeOkfBundles', () => {
       const summary = summarize([emptyReport('empty'), report('knowledge')]);
 
       expect(summary.status).toBe('ok');
-      expect(summary.data.notice).toContain("'empty'");
+      expect(reportData(summary).notice).toContain("'empty'");
       expect(exitCodeForReport(summary)).toBe(0);
     });
 
@@ -307,8 +309,8 @@ describe('summarizeOkfBundles', () => {
     it('names every empty bundle, not just the first', () => {
       const summary = summarize([emptyReport('one'), emptyReport('two')]);
 
-      expect(summary.data.notice).toContain("'one'");
-      expect(summary.data.notice).toContain("'two'");
+      expect(reportData(summary).notice).toContain("'one'");
+      expect(reportData(summary).notice).toContain("'two'");
     });
 
     it('stays silent when the bundle held documents', () => {
@@ -316,7 +318,7 @@ describe('summarizeOkfBundles', () => {
       // both assertions above and mean nothing.
       const summary = summarize([report('knowledge')]);
 
-      expect(summary.data.notice).toBeUndefined();
+      expect(reportData(summary).notice).toBeUndefined();
     });
 
     it('counts a reserved-only bundle as read, not as empty', () => {
@@ -327,7 +329,7 @@ describe('summarizeOkfBundles', () => {
         { ...only, report: { ...only.report, reservedDocuments: ['index.md'] } },
       ]);
 
-      expect(summary.data.notice).toBeUndefined();
+      expect(reportData(summary).notice).toBeUndefined();
       expect(summary.examined).toBe(1);
     });
   });

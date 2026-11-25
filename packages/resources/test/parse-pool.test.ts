@@ -1207,6 +1207,18 @@ describe('a heap past its bound', () => {
     expect(served).toBeGreaterThanOrEqual(3);
   }, 60_000);
 
+  it('stops a breach at the sampler\'s bound when a stalled parent\'s first sample lands just short of V8\'s ceiling', async () => {
+    // The parent-stall window (hazard register, heap-flag row) without a wall-clock stall: the
+    // first sample of the job lands late, after the heap ran from nothing to 1 MiB short of V8's
+    // ceiling (512 MiB, as under a 512 MiB flag). Anywhere in the window a sample that lands still
+    // stops the job at the sampler's own bound, never a ceiling V8 did not reach.
+    const { bound, served, bounds } = await heapRefusalUnder(({ ceilingMb }) => [ceilingMb - 1], { ceilingMb: 512 });
+
+    expect(bounds?.appliedMb).toBe(256);
+    expect(bound).toBe(ParseLimitError.heap(256, resolveParseLimits(undefined).heapMb).bound);
+    expect(served).toBeGreaterThanOrEqual(1);
+  }, 60_000);
+
   it('judges a job on a reused thread on the same stop as a fresh thread\'s, and not a sample before', async () => {
     const { pool } = await reusedHeapTestPool();
     const heap = scriptedHeap(({ appliedMb, stopMb }) => [appliedMb + 1, stopMb, stopMb + 1], 'as-read');

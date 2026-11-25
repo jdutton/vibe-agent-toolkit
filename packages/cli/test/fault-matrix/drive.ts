@@ -104,6 +104,9 @@ export function makeCaseRoot(base: string): CaseRoot {
   vi.stubEnv('CLAUDE_CONFIG_DIR', '');
   // The parse cache under TMPDIR is ambient state no verb here owns: its writes would be faulted, and it would be TMPDIR residue.
   vi.stubEnv('VAT_CACHE', '0');
+  // The cache root is the default under the case's own TMPDIR (`vat cache clear` empties it), not the
+  // per-file VAT_CACHE_DIR vitest.setup.js sets: blank is unset to `vatCacheRoot()`.
+  vi.stubEnv('VAT_CACHE_DIR', '');
   if (process.platform === 'win32') {
     vi.stubEnv('USERPROFILE', r.home);
     vi.stubEnv('TEMP', r.tmp);

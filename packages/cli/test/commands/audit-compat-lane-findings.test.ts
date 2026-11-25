@@ -20,6 +20,13 @@ const CONFLICT = {
   settingsLevel: 'managed',
 } as const;
 
+/** A second conflict on the same policy, for a different tool. */
+const EDIT_CONFLICT = {
+  ...CONFLICT,
+  value: 'Edit',
+  detail: 'Tool "Edit" in skills/deploy/SKILL.md blocked by org policy (permissions.deny)',
+} as const;
+
 /** A plugin the analyzer read whole, with nothing unchecked. */
 const ANALYZED: CompatLaneAnswer['compatibility'] = { unchecked: [] };
 
@@ -36,7 +43,7 @@ describe('compatLaneIssues', () => {
   });
 
   it('files each settings conflict as one finding on the plugin, naming the policy that blocks it', () => {
-    const [issue, ...rest] = issuesOf({ compatibility: ANALYZED, settings: { compatible: false, conflicts: [CONFLICT, { ...CONFLICT, value: 'Edit', detail: 'Tool "Edit" in skills/deploy/SKILL.md blocked by org policy (permissions.deny)' }] } });
+    const [issue, ...rest] = issuesOf({ compatibility: ANALYZED, settings: { compatible: false, conflicts: [CONFLICT, EDIT_CONFLICT] } });
 
     expect(issue).toMatchObject({ code: 'SETTINGS_POLICY_CONFLICT', severity: 'warning', location: PLUGIN });
     expect(issue?.message).toContain(CONFLICT.detail);

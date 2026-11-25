@@ -175,9 +175,9 @@ async function judged(errno: InjectedErrno): Promise<{ issues: Map<string, { cod
   const refusedPaths = new Set([safePath.join(root, 'docs', 'locked.md'), safePath.join(root, 'docs', 'secret.md'), safePath.join(parent, 'away', 'notes.md')]);
   // One rule per refused path: a rule fails ONE matching call, so a shared rule would refuse only the first.
   const refused = scratch.watch(installFaultFs({ within: parent, faults: [...refusedPaths].map((refusedPath) => ({ op: 'realpath' as const, path: (path: string) => path === refusedPath, errno, nth: 1, everyTry: true })) }));
-  const options = { projectRoot: root, skipGitIgnoreCheck: false };
+  const options = { projectRoot: root, skipGitIgnoreCheck: false, fsCache: new FsLookupCache(root) };
 
-  const tables = await fillLinkFacts(resolved, new FsLookupCache(root), options);
+  const tables = await fillLinkFacts(resolved, options.fsCache, options);
   const judge = judgeOptionsFrom(options, tables);
   const issues = new Map(resolved.map((entry) => {
     const issue = judgeLink(entry, fragmentIndex(), judge);

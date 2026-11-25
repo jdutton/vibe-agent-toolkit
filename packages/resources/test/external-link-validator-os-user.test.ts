@@ -22,10 +22,11 @@ const userInfoStub = vi.hoisted(() => ({ behaviour: 'real' as UserInfoBehaviour 
 
 vi.mock('node:os', async (importOriginal) => {
   const actual = await importOriginal<typeof NodeOs>();
-  const userInfo: typeof actual.userInfo = (...args) => {
+  // One implementation behind `userInfo`'s three overloads: the cast is the overload set itself.
+  const userInfo = ((options?: NodeOs.UserInfoOptions) => {
     if (userInfoStub.behaviour !== 'real') throw userInfoStub.behaviour.throws;
-    return actual.userInfo(...args);
-  };
+    return options === undefined ? actual.userInfo() : actual.userInfo(options);
+  }) as typeof actual.userInfo;
   return { ...actual, userInfo };
 });
 

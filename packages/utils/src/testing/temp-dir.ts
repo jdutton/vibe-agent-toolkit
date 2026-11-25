@@ -20,6 +20,7 @@ import fs, { mkdtemp } from 'node:fs/promises';
 
 import { isUnderRoot } from '../path-containment.js';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '../path-utils.js';
+import { VAT_CACHE_DIR_ENV } from '../vat-cache-env.js';
 
 /**
  * Mint a fresh temp directory under the host's (short-name-resolved) tmpdir.
@@ -120,11 +121,13 @@ export function tempDirTracker(prefix: string): { create: () => string; cleanupA
 /** The environment variables the host temp directory is read from: TMPDIR (POSIX), TEMP and TMP (win32). */
 const TMPDIR_ENV_NAMES = ['TMPDIR', 'TEMP', 'TMP'] as const;
 
+
 /**
  * ⛔ DESTRUCTIVE CODE: make a fresh scratch directory THE temp directory for one test.
  *
  * `enter()` mints the scratch under the real temp directory and points `TMPDIR` / `TEMP` /
- * `TMP` at it; `leave()` restores them and removes the scratch. Everything a verb makes and
+ * `TMP` at it, unsetting `VAT_CACHE_DIR` so the VAT cache lives in it too; `leave()` restores
+ * them and removes the scratch. Everything a verb makes and
  * disposes of under the temp directory — and every child a test spawns, which inherits the
  * environment — then lands in the scratch, so neither the run nor a mutation of its disposal
  * code can reach the real temp directory. Framework-free: the caller registers the two with its
@@ -139,8 +142,9 @@ export function scratchTmpdirEnv(prefix: string): { enter: () => string; leave: 
     enter: () => {
       // Made under the REAL temp directory, then made the temp directory.
       scratch = createTempDir(prefix);
-      saved = TMPDIR_ENV_NAMES.map((name) => [name, process.env[name]] as const);
+      saved = [...TMPDIR_ENV_NAMES, VAT_CACHE_DIR_ENV].map((name) => [name, process.env[name]] as const);
       for (const name of TMPDIR_ENV_NAMES) process.env[name] = scratch;
+      Reflect.deleteProperty(process.env, VAT_CACHE_DIR_ENV);
       return scratch;
     },
     leave: () => {

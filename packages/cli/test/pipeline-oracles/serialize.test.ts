@@ -543,7 +543,7 @@ describe('relativize', () => {
 /** A one-row divergence report whose row carries `fault`. */
 function reportFaulting(fault: string | null): SymlinkDivergenceReport {
   return {
-    laneId: 'resources-validate',
+    laneId: 'resources',
     corpus: 'c',
     inGitRepo: false,
     counts: { gitRoute: null, walkNoFollow: 1, walkFollow: 1 },

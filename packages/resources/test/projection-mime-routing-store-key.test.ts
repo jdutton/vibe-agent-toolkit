@@ -118,7 +118,16 @@ class KeyRecordingStore implements FactStore {
     if (!this.servesBlobTier) {
       throw new Error('this arm declines the blob tier and must never read it');
     }
-    return { blobs: [], blobReferences: [], blobSections: [], blobConditions: [], harnessBlobFacts: [], harnessBlobImports: [] };
+    return {
+      blobs: [],
+      blobReferences: [],
+      blobSections: [],
+      blobConditions: [],
+      harnessBlobFacts: [],
+      harnessBlobImports: [],
+      skillTextFacts: [],
+      skillTextMatches: [],
+    };
   }
 
   async close(): Promise<void> {

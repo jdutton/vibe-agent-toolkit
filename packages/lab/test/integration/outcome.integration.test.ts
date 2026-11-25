@@ -12,7 +12,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { runOutcome } from '../../src/harness/outcome.js';
-import { cleanupProbes, PROBE_EXIT_CODE_ENV, PROBE_FAIL_TOKEN, setupProbe } from '../command-probe.js';
+import { cleanupProbes, PROBE_EXIT_CODE_ENV, PROBE_FAIL_TOKEN, PROBE_VERSION, setupProbe } from '../command-probe.js';
 
 afterAll(() => {
   cleanupProbes();
@@ -39,7 +39,7 @@ describe('runOutcome', () => {
 
   it('reports not-run with the spawn error for a missing executable', () => {
     const outcome = runOutcome(
-      { command: 'definitely-not-a-real-vat-binary-xyz', leadingArgs: [], version: { version: '0.0.0-test', commit: null, dirty: null } },
+      { command: 'definitely-not-a-real-vat-binary-xyz', leadingArgs: [], version: PROBE_VERSION },
       ['audit'],
       { cwd: process.cwd(), env: { set: {}, unset: [] } },
     );

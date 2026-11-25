@@ -22,7 +22,7 @@
     "generate:schemas": "tsx scripts/generate-json-schemas.ts",
     "test:unit": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit -p tsconfig.eslint.json",
     "lint": "VAT_LINT_TASK=1 eslint . --max-warnings=0",
     "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging"
   },

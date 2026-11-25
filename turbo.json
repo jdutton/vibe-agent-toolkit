@@ -40,8 +40,26 @@
       "outputs": ["dist/skills/**"],
       "cache": true
     },
+    // One `tsc --noEmit -p tsconfig.eslint.json` per package: the same program the lint checks,
+    // source and tests alike, so a test file meets the compiler settings source does. Keyed like
+    // `lint`, on what the program reads rather than on `^build`: a program reaches packages its
+    // manifest does not depend on (`vitest.shared.ts` imports a dev-tools file that imports
+    // `schema`), which `^build` neither orders nor hashes. So the root `typecheck` script builds
+    // every package first, and the inputs hold every package's emitted declarations and manifest,
+    // the lockfile and the installed TypeScript: exactly the `lint` inputs that describe the
+    // program (`generate-lint-config.ts --check`, both ways). An unbuilt package fails loudly as
+    // TS2307, never a cached pass. A generated `packages/<pkg>/turbo.json` extends the inputs
+    // (`$TURBO_EXTENDS$`) with the files outside the package that its program reaches.
     "typecheck": {
-      "dependsOn": ["^build"],
+      "dependsOn": [],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/*/dist/**/*.d.ts",
+        "$TURBO_ROOT$/packages/*/dist/**/*.d.cts",
+        "$TURBO_ROOT$/packages/*/package.json",
+        "$TURBO_ROOT$/bun.lock",
+        "$TURBO_ROOT$/node_modules/typescript/package.json"
+      ],
       "outputs": [],
       "cache": true
     },
