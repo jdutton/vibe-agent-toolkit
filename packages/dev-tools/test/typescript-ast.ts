@@ -36,9 +36,22 @@ export function shippingImporters(detect: (body: string) => string[]): ShippingI
   return { files, importers };
 }
 
-/** `body` as a TypeScript AST. Comments are trivia, so a JSDoc example is never an import. */
+/** Each text's AST, once parsed — see {@link sourceOf}. */
+const parsed = new Map<string, ts.SourceFile>();
+
+/**
+ * `body` as a TypeScript AST. Comments are trivia, so a JSDoc example is never an import.
+ *
+ * Parsed once per text per test file: several structure tests scan every
+ * shipping source, and the parse is the bulk of each scan's cost.
+ */
 export function sourceOf(body: string): ts.SourceFile {
-  return ts.createSourceFile('module.ts', body, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+  let source = parsed.get(body);
+  if (source === undefined) {
+    source = ts.createSourceFile('module.ts', body, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+    parsed.set(body, source);
+  }
+  return source;
 }
 
 /** Every node of `source`, depth first. */

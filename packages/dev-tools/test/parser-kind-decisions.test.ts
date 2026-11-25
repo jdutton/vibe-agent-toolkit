@@ -42,6 +42,7 @@ import { type DocumentParserKind, parserKindForPath } from '@vibe-agent-toolkit/
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
+import { packageSources } from './package-sources.js';
 import { nodesOf, shippingImporters, sourceOf } from './typescript-ast.js';
 
 /** The document parser kinds, bound to the type: a kind added there and not here fails to compile. */
@@ -130,6 +131,14 @@ const EXTENSION_SITES: ReadonlyMap<string, ReviewedSite> = new Map([
   ['packages/utils/src/testing/archive-fixtures.ts', { count: 3, reason: 'names hostile archive entries a fixture plants, not a parse' }],
 ]);
 
+/**
+ * A text pre-check: every routed extension (`.md`, `.markdown`, `.html`, `.htm`,
+ * `.txt`) contains one of these, so a file matching none holds no routed literal
+ * and its parse is skipped. A detector self-test holds every extension the MIME
+ * table routes against it.
+ */
+const MAY_SPELL_ROUTED_EXTENSION = /md|markdown|htm|txt/i;
+
 /** Whether `text` is an extension the router hands to a document parser. */
 function isRoutedExtension(text: string): boolean {
   return /^\.[a-z0-9]+$/i.test(text) && parserKindForPath(`x${text}`) !== 'none';
@@ -165,6 +174,8 @@ function valueNodesOf(body: string): ts.Node[] {
 
 /** The kind literals `body` holds in value positions. */
 function kindLiterals(body: string): string[] {
+  // A literal's text is spelled in the source, so a file naming no kind holds none: skip its walk.
+  if (!KINDS.some((kind) => body.includes(kind))) return [];
   return valueNodesOf(body)
     .filter((node): node is ts.StringLiteralLike => ts.isStringLiteralLike(node))
     .map((node) => node.text)
@@ -173,6 +184,7 @@ function kindLiterals(body: string): string[] {
 
 /** The uses of {@link CONTRACT_CONSTANT} in `body`: every reference, never an import or export specifier. */
 function contractUses(body: string): string[] {
+  if (!body.includes(CONTRACT_CONSTANT)) return [];
   const nodes = nodesOf(sourceOf(body));
   const specifierNames = new Set<ts.Node>(
     nodes
@@ -190,6 +202,7 @@ function contractUses(body: string): string[] {
  * whose value is the bare constant. Each would let a use escape {@link contractUses}.
  */
 function contractRebindings(body: string): string[] {
+  if (!body.includes(CONTRACT_CONSTANT)) return [];
   const source = sourceOf(body);
   return nodesOf(source).flatMap((node) => {
     if ((ts.isImportSpecifier(node) || ts.isExportSpecifier(node) || ts.isBindingElement(node)) && node.propertyName !== undefined) {
@@ -222,6 +235,7 @@ function isDotlessRoutedExtension(text: string): boolean {
 
 /** The routed-extension literals in `body`: string, dotless, template and regex literals. */
 function extensionLiterals(body: string): string[] {
+  if (!MAY_SPELL_ROUTED_EXTENSION.test(body)) return [];
   return nodesOf(sourceOf(body)).flatMap((node) => {
     if (ts.isStringLiteralLike(node)) {
       return isRoutedExtension(node.text) || isDotlessRoutedExtension(node.text) ? [node.text] : [];
@@ -345,6 +359,13 @@ describe('the parser-decision detectors', () => {
       'md',
       'txt',
     ]);
+  });
+
+  it('skip only files that cannot spell a routed extension: every one the MIME table routes passes the pre-check', () => {
+    const table = packageSources().get(MIME_TABLE) ?? '';
+    const routed = [...table.matchAll(/'(\.[a-z0-9]+)'/gi)].map((match) => match[1] ?? '').filter((ext) => isRoutedExtension(ext));
+    expect(routed.length).toBeGreaterThanOrEqual(5);
+    expect(routed.filter((ext) => !MAY_SPELL_ROUTED_EXTENSION.test(ext))).toEqual([]);
   });
 
   it('hold a reviewed list both ways', () => {
