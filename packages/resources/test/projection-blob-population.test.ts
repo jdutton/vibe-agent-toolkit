@@ -6,13 +6,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { ParseCache } from '../src/parse-cache.js';
 import { withParseDispatcher } from '../src/parse-dispatcher.js';
-import {
-  BLOB_CONTENT_CHANGED,
-  BLOB_NOT_TEXT,
-  BLOB_UNREADABLE,
-  parserKindOf,
-  type BlobPopulationResult,
-} from '../src/projection/blob-population.js';
+import { BLOB_CONTENT_CHANGED, BLOB_NOT_TEXT, BLOB_UNREADABLE } from '../src/projection/blob-condition-codes.js';
+import { type BlobPopulationResult } from '../src/projection/blob-population.js';
 import { RunContentCache } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { extentContextId } from '../src/projection/contributors/context-id.js';
@@ -26,12 +21,14 @@ import {
   type Projection,
 } from '../src/projection/projection.js';
 import { collectRealization } from '../src/projection/realizations.js';
+import { parserKindOf } from '../src/projection/router.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
 import {
   IN_CRAWL_ORDER,
   baseBuilderForRoot,
   populateBlobsOnOwnDispatcher,
+  storeOffBlobStage,
   type RealizationOrder,
 } from './blob-fixture-population.js';
 import { inOwnRun } from './helpers/population-run.js';
@@ -714,7 +711,7 @@ describe('afterClosurePromotion', () => {
     const before = builder.contentPromotionAttempts;
     const key = await builder.ensureContentKey(DOC_A);
 
-    await withParseDispatcher(async (dispatcher) => afterClosurePromotion(builder, before, dispatcher), { cache: NO_CACHE });
+    await withParseDispatcher(async (dispatcher) => afterClosurePromotion(builder, before, storeOffBlobStage(builder, dispatcher)), { cache: NO_CACHE });
 
     expect(builder.build().blobs).toHaveLength(2);
     expect(builder.build().blobs.map((row) => row.contentKey)).toContain(key);
@@ -735,7 +732,7 @@ describe('afterClosurePromotion', () => {
     expect(builder.contentPromotionAttempts).toBe(before + 1);
     expect(builder.contentPromotions).toBe(0);
 
-    await withParseDispatcher(async (dispatcher) => afterClosurePromotion(builder, before, dispatcher), { cache: NO_CACHE });
+    await withParseDispatcher(async (dispatcher) => afterClosurePromotion(builder, before, storeOffBlobStage(builder, dispatcher)), { cache: NO_CACHE });
 
     // Nothing new was derivable, because no key entered the projection.
     expect(builder.build().blobs).toHaveLength(1);

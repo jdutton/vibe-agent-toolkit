@@ -37,22 +37,25 @@
 import { writeFileSync } from 'node:fs';
 
 import { DEFAULT_PARSE_LIMITS } from '@vibe-agent-toolkit/resources';
-import {
-  mkdirSyncReal,
-  toForwardSlash,
-  type WorkCounter,
-  type WorkCounterDump,
-} from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, toForwardSlash, type WorkCounter } from '@vibe-agent-toolkit/utils';
 import { createSymlink, parseLookupsIn, symlinkCapability } from '@vibe-agent-toolkit/utils/testing';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
-import { probedReadsOf } from '../helpers/fs-read-probe.js';
-import { runWithWorkCounters } from '../helpers/work-counter-run.js';
+import {
+  freshValidateArm,
+  isConfig,
+  probed,
+  readTwice,
+  validateCounts as validateCountsOf,
+  validateCountsSuite,
+  type ValidateArm,
+  type ValidateRunCounts,
+} from '../helpers/work-counters-validate.js';
 import { commitTestFixture } from '../test-helpers.js';
 
-import { createSkillMarkdown, createSuiteContext, join, writeTestFile } from './test-common.js';
+import { createSkillMarkdown, join, writeTestFile } from './test-common.js';
 
-const context = createSuiteContext('vat-work-validate-', import.meta.url);
+const context = validateCountsSuite('vat-work-validate-', import.meta.url);
 
 /** The parse input cap in force (`DEFAULT_PARSE_LIMITS.inputBytes`): one byte past it is refused. */
 const INPUT_CAP_BYTES = DEFAULT_PARSE_LIMITS.inputBytes;
@@ -176,11 +179,6 @@ const symlinks = symlinkCapability();
 /** Whether the probe can parse a path: markdown or HTML. */
 function isDocument(path: string): boolean {
   return /\.(?:md|html?)$/u.test(path);
-}
-
-/** A config file: read by the config loader in every process, outside the population. */
-function isConfig(path: string): boolean {
-  return path.endsWith('vibe-agent-toolkit.config.yaml');
 }
 
 /** A path relative to the project root, or `undefined` for one outside it. */
@@ -336,99 +334,24 @@ function plant(corpus: Corpus): string {
   return project;
 }
 
-beforeAll(() => {
-  context.setup();
-});
-
-afterAll(() => {
-  context.cleanup();
-});
-
-/** One arm's private store and temp directory, and whether its store is on. */
-interface Arm {
-  readonly storeDir: string;
-  readonly tmpDir: string;
-  readonly storeOff: boolean;
-}
-
 /** A fresh arm: nothing cached anywhere it can reach. */
-function freshArm(storeOff: boolean): Arm {
-  return { storeDir: context.createTempDir(), tmpDir: context.createTempDir(), storeOff };
-}
-
-/** What one `vat validate` run counted. */
-interface RunCounts {
-  /** The `vat validate` process's own counters. */
-  readonly parent: Readonly<Record<WorkCounter, number>>;
-  /** Its counters per phase. */
-  readonly phases: Readonly<Record<string, Readonly<Record<WorkCounter, number>>>>;
-  /** Every other CLI process's counters, summed: the supervised checks child. */
-  readonly children: Readonly<Record<WorkCounter, number>>;
-  /** Content reads per path in the parent process, from the probe, relative to the probe's root. */
-  readonly parentReads: ReadonlyMap<string, number>;
-  /** Content reads per path in the child processes, from the probe. */
-  readonly childReads: ReadonlyMap<string, number>;
-  /** The run's exit status. */
-  readonly status: number | null;
-  /** The run's report. */
-  readonly stdout: string;
-}
-
-/** Sum counter records. */
-function summed(records: ReadonlyArray<Readonly<Record<WorkCounter, number>>>): Record<WorkCounter, number> {
-  const sum = {} as Record<WorkCounter, number>;
-  for (const record of records) {
-    for (const [name, value] of Object.entries(record) as Array<[WorkCounter, number]>) sum[name] = (sum[name] ?? 0) + value;
-  }
-  return sum;
+function freshArm(storeOff: boolean): ValidateArm {
+  return freshValidateArm(context, storeOff);
 }
 
 /**
- * Run `vat validate` once in `cwd` and read back what it counted.
+ * Run `vat validate` once in `cwd` and read back what it counted; every corpus here has
+ * skills, so the skills phase ran too.
  *
  * @param cwd - The project root
  * @param arm - Where its caches live
  * @returns The parent's counts, per phase, the children's, and the probe's reads
  */
-async function validateCounts(cwd: string, arm: Arm): Promise<RunCounts> {
-  // The probe's root is the repository, so a skill outside the project is counted too.
-  const { result, dumps: cli, probeDir } = await runWithWorkCounters(context, cwd, ['validate'], {
-    cacheDir: arm.storeDir,
-    tmpDir: arm.tmpDir,
-    storeOff: arm.storeOff,
-    probeRoot: join(cwd, '..'),
-    cores: null,
-  });
-  if (probeDir === null) throw new Error('validateCounts runs with the probe');
-  // Positive control: both in-process surfaces ran, so the counts cover them.
-  expect(result.stdout, result.stderr).toContain('name: resources');
-  expect(result.stdout).toContain('name: skills');
-
-  const parent = cli.filter((dump) => 'resources' in dump.phases);
-  expect(parent, 'exactly one dump is the validate process').toHaveLength(1);
-  const parentDump = parent[0] as WorkCounterDump;
-  // Positive control: the probe ran in the parent.
-  expect(probedReadsOf(probeDir, (pid) => pid === parentDump.pid).dumps).toBeGreaterThan(0);
-  return {
-    parent: parentDump.counters,
-    phases: parentDump.phases,
-    children: summed(cli.filter((dump) => dump !== parentDump).map((dump) => dump.counters)),
-    parentReads: probedReadsOf(probeDir, (pid) => pid === parentDump.pid).reads,
-    childReads: probedReadsOf(probeDir, (pid) => pid !== parentDump.pid).reads,
-    status: result.status,
-    stdout: result.stdout,
-  };
-}
-
-/** Paths the parent's probe saw read more than once, config files aside. */
-function readTwice(reads: ReadonlyMap<string, number>): string[] {
-  return [...reads].filter(([path, count]) => count > 1 && !isConfig(path)).map(([path]) => path);
-}
-
-/** The probe's key for a project-relative path: the probe is rooted one directory above the project. */
-function probed(cwd: string, path: string): string {
-  const name = cwd.slice(cwd.lastIndexOf('/') + 1);
-  return `${name}/${path}`;
+async function validateCounts(cwd: string, arm: ValidateArm): Promise<ValidateRunCounts> {
+  const counts = await validateCountsOf(context, cwd, arm);
+  // Positive control: the skills surface ran, so the counts cover it.
+  expect(counts.stdout).toContain('name: skills');
+  return counts;
 }
 
 /**
@@ -458,7 +381,7 @@ describe.each([
   ['a skill with no project root', NO_ROOT],
 ] as const)('vat validate admits each file once per run: %s', (_shape, corpus) => {
   let cwd: string;
-  let storeOnCold: RunCounts;
+  let storeOnCold: ValidateRunCounts;
 
   beforeAll(() => {
     cwd = plant(corpus);

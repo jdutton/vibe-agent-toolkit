@@ -29,14 +29,16 @@
  *
  * ## What the namespace is
  *
- * - **Installed VAT:** the package version, e.g. `0.1.42`. Two machines running
- *   the same release share a namespace, which is the point — identical bytes
- *   through identical code yield identical facts, and the version moves on
- *   every release, so a released build's parsers are consistent by
- *   construction and need no second number tracking them.
+ * - **Installed VAT:** `0.1.42-p<6 hex>`: the package version, then a digest of
+ *   the resolved parser versions (see below). Two machines running the same
+ *   release that resolve the same parsers share a namespace, which is the
+ *   point — identical bytes through identical code yield identical facts, and
+ *   the version moves on every release, so a released build's own code is
+ *   consistent by construction and needs no second number tracking it.
  * - **Dev checkout:** `0.1.42-dev-<6 hex>` over the package root path,
- *   `ParseFactsSchema`'s own shape, and the digest of the skill-text
- *   declaration a markdown parse applies (`SKILL_TEXT_DECLARATION`).
+ *   `ParseFactsSchema`'s own shape, the digest of the skill-text
+ *   declaration a markdown parse applies (`SKILL_TEXT_DECLARATION`), and the
+ *   same resolved parser versions.
  *
  * ## The bound on "consistent by construction"
  *
@@ -51,19 +53,19 @@
  *
  * That is a **wrongness** class, not the coldness class the rest of this
  * docstring reasons about: precisely the failure the namespace exists to
- * prevent, arriving through the one door it does not guard.
+ * prevent, arriving through the one door it does not guard. Because the store
+ * only ever adds rows for a key it does not cover (insert-only reuse by content
+ * key), a row written under one resolution would be served under another.
  *
- * **This is not an argument for a version constant, and one must not be added in
- * answer to it.** A hand-bumped integer is banned in this repo (see the closing
- * paragraph, and it was already removed from this very file once), and it would
- * not even address this: the drift lives in a *dependency resolution* that no
- * human-maintained number tracks — it would move only when someone remembered,
- * which is exactly the failure mode. The two honest options are to derive the
- * discriminator from the **resolved dependency set** (the versions actually
- * installed, read the way {@link readVersion} reads this package's own), or to
- * leave the mechanism as it is and write the bound down. This paragraph is the
- * second option, taken deliberately: recorded as a known limit rather than
- * silently asserted away.
+ * **The resolved parser versions are therefore an input to the namespace, in
+ * every build** (ADR decision D17): the versions of the parsers named above, read
+ * from the resolved packages at run time the way {@link readVersion} reads this
+ * package's own. This is not a version constant, and one must not be added: a
+ * hand-bumped integer is banned in this repo (see the closing paragraph, and it
+ * was already removed from this very file once), and it would not address this,
+ * because the drift lives in a *dependency resolution* that no human-maintained
+ * number tracks. The digest reads what is installed, so it moves when the
+ * resolution does and at no other time.
  *
  * The path component is load-bearing and must survive any future change here:
  * every worktree on a machine reads the same version out of the same manifest,
@@ -134,6 +136,7 @@
 
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 
 import {
   isPathAbsentError,
@@ -148,6 +151,9 @@ import { SKILL_TEXT_DECLARATION, skillTextDeclarationDigest } from './skill-text
 
 /** Hex digits of the dev discriminator. Short on purpose — it is a cache path, not a security boundary. */
 const DEV_FINGERPRINT_LENGTH = 6;
+
+/** The four parsers whose resolved versions are an input to every namespace (ADR decision D17). */
+const PARSER_PACKAGES = ['remark-parse', 'yaml', 'parse5', 'github-slugger'] as const;
 
 /** Resolved once — neither the version nor the install location changes mid-process. */
 let cached: string | undefined;
@@ -185,6 +191,72 @@ function readVersion(moduleDir: string): string {
 }
 
 /**
+ * The version a resolved parser package declares: the nearest `package.json`
+ * above its entry point that names a version.
+ *
+ * Resolved from the entry point, not `<name>/package.json`, because a package
+ * with an `exports` map need not export its manifest. A nested stub manifest
+ * (`{"type":"commonjs"}` under a `dist/` directory) names no version and is
+ * walked past. A manifest that cannot be read or is not JSON stays loud, as in
+ * {@link readVersion}; no manifest at all is a broken install and also loud.
+ */
+function parserVersion(resolveEntry: NodeJS.Require, name: string): string {
+  let directory = safePath.join(resolveEntry.resolve(name), '..');
+  for (;;) {
+    try {
+      // A dependency's own published manifest, written by the package manager.
+      // eslint-disable-next-line local/no-raw-text-decode -- path derived from a resolved entry point; own dependency manifest, so the encoding is not discovered
+      const parsed: unknown = JSON.parse(readFileSync(safePath.join(directory, 'package.json'), 'utf8'));
+      const version = typeof parsed === 'object' && parsed !== null ? (parsed as { version?: unknown }).version : undefined;
+      if (typeof version === 'string' && version !== '') return version;
+    } catch (error) {
+      if (!isPathAbsentError(error)) throw error;
+    }
+    const parent = safePath.join(directory, '..');
+    if (parent === directory) throw new Error(`No package.json naming a version above the entry point of ${name}`);
+    directory = parent;
+  }
+}
+
+/**
+ * The versions of the parsers VAT depends on, as installed: read from the
+ * resolved packages at run time, never written down.
+ *
+ * @param moduleDir - Directory this package's code was resolved from
+ * @returns One `{ name, version }` per parser, in declaration order
+ */
+export function resolvedParserVersions(moduleDir: string): readonly { name: string; version: string }[] {
+  const resolveEntry = createRequire(safePath.join(moduleDir, 'cache-namespace.js'));
+  return PARSER_PACKAGES.map((name) => ({ name, version: parserVersion(resolveEntry, name) }));
+}
+
+/**
+ * Six hex digits over the sorted `name`/`version` pairs (NUL-separated, which no package name holds), so the order a list is
+ * given in cannot move it. Pure, so a test asserts it without the process memo.
+ *
+ * @param list - From {@link resolvedParserVersions}
+ * @returns Six lowercase hex digits
+ */
+export function parserVersionsDigest(list: readonly { name: string; version: string }[]): string {
+  const entries = list.map(({ name, version }) => `${name}\0${version}`).sort((left, right) => left.localeCompare(right));
+  return createHash('sha256')
+    .update(`vat-parser-versions\0${entries.join('\0')}`, 'utf-8')
+    .digest('hex')
+    .slice(0, DEV_FINGERPRINT_LENGTH);
+}
+
+/**
+ * The installed build's namespace: the package version, then the parser digest.
+ *
+ * @param version - The package version
+ * @param parserDigest - From {@link parserVersionsDigest}
+ * @returns `<version>-p<6 hex>`
+ */
+export function installedNamespaceName(version: string, parserDigest: string): string {
+  return `${version}-p${parserDigest}`;
+}
+
+/**
  * Is this module running from an installed package rather than a source checkout?
  *
  * `node_modules` in the resolved path is the signal. It is the one marker that
@@ -197,29 +269,31 @@ function isInstalled(moduleDir: string): boolean {
 
 /**
  * The dev discriminator: a pure digest of where this checkout lives, what a
- * cache entry is shaped like in it, and which skill-text declaration its
- * markdown entries were computed under.
+ * cache entry is shaped like in it, which skill-text declaration its markdown
+ * entries were computed under, and which parser versions are resolved.
  *
- * All three inputs are values, not lookups: this touches no filesystem and reads no
+ * All four inputs are values, not lookups: this touches no filesystem and reads no
  * module state, so it is stable across a rebuild by construction. That is
  * exactly the property the namespace exists to have, and keeping it a pure
  * function is what lets a test assert it without fighting the process-level
  * memo in {@link vatCacheNamespace}.
  *
- * The three inputs separate different things and are all needed: the path keeps
+ * The four inputs separate different things and are all needed: the path keeps
  * two worktrees apart, the shape keeps two entry formats apart within one, and
  * the declaration digest keeps two skill-text pattern sets apart within one
- * format (see "Why the shape, and not the build").
+ * format (see "Why the shape, and not the build"), and the parser versions keep
+ * two dependency resolutions apart.
  *
  * @param moduleDir - Directory this package's code was resolved from
  * @param parseFactsShape - From `parseFactsShapeSource()`; see that docstring
  *   for why it is derived rather than declared
  * @param skillTextDeclaration - From `skillTextDeclarationDigest(SKILL_TEXT_DECLARATION)`
+ * @param parserVersions - From `parserVersionsDigest(resolvedParserVersions(moduleDir))`
  * @returns Six lowercase hex digits
  */
-export function devNamespaceDigest(moduleDir: string, parseFactsShape: string, skillTextDeclaration: string): string {
+export function devNamespaceDigest(moduleDir: string, parseFactsShape: string, skillTextDeclaration: string, parserVersions: string): string {
   return createHash('sha256')
-    .update(`vat-cache-namespace\0${toForwardSlash(moduleDir)}\0${parseFactsShape}\0${skillTextDeclaration}`, 'utf-8')
+    .update(`vat-cache-namespace\0${toForwardSlash(moduleDir)}\0${parseFactsShape}\0${skillTextDeclaration}\0${parserVersions}`, 'utf-8')
     .digest('hex')
     .slice(0, DEV_FINGERPRINT_LENGTH);
 }
@@ -227,11 +301,11 @@ export function devNamespaceDigest(moduleDir: string, parseFactsShape: string, s
 /**
  * The namespace directory name for this build of VAT.
  *
- * @returns `<version>` when installed, `<version>-dev-<6 hex>` from a checkout
+ * @returns `<version>-p<6 hex>` when installed, `<version>-dev-<6 hex>` from a checkout
  *
  * @example
  * ```typescript
- * vatCacheNamespace(); // '0.1.42'  (installed)
+ * vatCacheNamespace(); // '0.1.42-p3fa9c0'  (installed)
  * vatCacheNamespace(); // '0.1.42-dev-9f2c1a'  (worktree, stable across rebuilds)
  * ```
  */
@@ -240,13 +314,14 @@ export function vatCacheNamespace(): string {
 
   const moduleDir = safePath.join(resolveFromImportMeta(import.meta.url), '..');
   const version = readVersion(moduleDir);
+  const parsers = parserVersionsDigest(resolvedParserVersions(moduleDir));
 
   if (isInstalled(moduleDir)) {
-    cached = version;
+    cached = installedNamespaceName(version, parsers);
     return cached;
   }
 
-  cached = `${version}-dev-${devNamespaceDigest(moduleDir, parseFactsShapeSource(), skillTextDeclarationDigest(SKILL_TEXT_DECLARATION))}`;
+  cached = `${version}-dev-${devNamespaceDigest(moduleDir, parseFactsShapeSource(), skillTextDeclarationDigest(SKILL_TEXT_DECLARATION), parsers)}`;
   return cached;
 }
 

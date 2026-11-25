@@ -386,7 +386,9 @@ export {
   type ExtentRequest,
   type ExtentScopedRows,
   type ExtentScopedTableName,
+  type BlobFactsWrite,
   type FactStore,
+  type HarnessPair,
   type ProjectionTableNamesOfScope,
   isProjectionStoreDirectoryName,
   projectionShapeDigest,
@@ -400,12 +402,14 @@ export {
 // reinterpret — a store holds rows, this decides what they are worth.
 export {
   assembleProjection,
+  EMPTY_STORED_TIER,
   emptyBlobRows,
   keyedContentKeys,
   selectRequestedContexts,
   selectRequestedRows,
   StoreRequestUnmetError,
   type RequestedContributor,
+  type StoredBlobTier,
   uncoveredContentKeys,
 } from './projection/store-hydration.js';
 
@@ -968,6 +972,7 @@ export {
 // One read, key, parse and admission per file per VAT process run, whichever
 // lane asks (content-keying-and-git.md, rule 4).
 export {
+  diskRunContentSource,
   IGNORE_HOME_SETTLEMENT,
   RunPopulation,
   StoreQuestionUnavailableError,
@@ -975,6 +980,7 @@ export {
   withRunPopulation,
   type HomeSettlement,
   type PopulationRun,
+  type RunContentSource,
   type RunPopulationOptions,
 } from './projection/run-population.js';
 export type { PopulationUnreadablePolicy } from './projection/crawl-source.js';
@@ -1042,6 +1048,7 @@ export { BLOB_FINDING_CONDITION_CODES } from './projection/blob-facts.js';
 // in projection-sqlite holds against the cold registry.
 export {
   BLOB_FACT_FIELDS,
+  type BlobCoverageRows,
   blobFactsReader,
   RESOURCE_LINK_FACT_SOURCES,
   type BlobFactsOutcome,
@@ -1087,18 +1094,9 @@ export { resolveDialectRef } from './projection/contributors/reference-dialect.j
 // nothing else, and the run reports success. Every keyed blob is derived,
 // including the non-markdown ones, because the raw-source reference lexer is
 // what lets a skill's `.mjs` scripts be closure members at all.
-export {
-  BLOB_CONTENT_CHANGED,
-  BLOB_NOT_TEXT,
-  BLOB_PARSE_FAILED,
-  BLOB_PARSE_LIMIT_EXCEEDED,
-  BLOB_PARSE_WORKER_DIED,
-  BLOB_UNREADABLE,
-  parserKindOf,
-  populateBlobs,
-  type BlobPopulationOptions,
-  type BlobPopulationResult,
-} from './projection/blob-population.js';
+export { populateBlobs, type BlobPopulationOptions, type BlobPopulationResult } from './projection/blob-population.js';
+export { BLOB_CONTENT_CHANGED, BLOB_NOT_TEXT, BLOB_PARSE_FAILED, BLOB_PARSE_LIMIT_EXCEEDED, BLOB_PARSE_WORKER_DIED, BLOB_UNREADABLE } from './projection/blob-condition-codes.js';
+export { parserKindOf } from './projection/router.js';
 
 // A warm run's blob tier read failing is the store's refusal, by this code (the CLI's refusal table);
 // and what the stored admission reads of the tier, which the CLI's in-process cost arms damage table by table.

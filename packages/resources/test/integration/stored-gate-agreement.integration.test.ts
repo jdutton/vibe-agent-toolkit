@@ -145,7 +145,7 @@ async function inRun<T>(
  */
 async function fileTheStore(collections: Readonly<Record<string, CollectionConfig>> | undefined = undefined): Promise<void> {
   await inRun(store, collections, async (_population, stored) => {
-    expect(stored, 'the cold run is a derive').toBeNull();
+    expect(stored, 'the cold run carries its own projection\'s rows').not.toBeNull();
   });
   await writeFile(safePath.join(root, LATE), '# Late\n');
 }
@@ -207,7 +207,7 @@ function viewOf(transform: (rows: DamageableRows) => DamageableRows): FactStore 
       if (missing !== undefined) throw new Error(`the view damages ${missing}, which this read did not request`);
       return { ...rows, ...transform(rows as unknown as DamageableRows) };
     },
-    writeBlobFacts: (rows) => store.writeBlobFacts(rows),
+    writeBlobFacts: (write) => store.writeBlobFacts(write),
     readExtent: (key, request) => store.readExtent(key, request),
     writeExtent: (key, rows) => store.writeExtent(key, rows),
     close: () => store.close(),

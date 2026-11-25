@@ -72,7 +72,7 @@ export function hit(members: Record<string, Realization>, facts: StoredContent['
     conditions: [],
     outcome: { population: 'store', stored: 'hit' },
     extentSource: 'git',
-    stored: { members: new Map(Object.entries(members)), facts },
+    stored: { members: new Map(Object.entries(members)), facts, readByRun: false },
   };
   return { ok: true, enumeration };
 }

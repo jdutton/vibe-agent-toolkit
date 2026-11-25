@@ -236,3 +236,72 @@ export interface ParseRouting<Base extends string | undefined> {
 export function parseRoutingFor<Base extends string | undefined>(config: ProjectConfig | undefined, baseDir: Base): ParseRouting<Base> {
   return { resolver: createCollectionMimeResolver(config?.resources?.collections), baseDir };
 }
+
+/**
+ * Every parser kind, keyed by itself.
+ *
+ * The redundant-looking `markdown: 'markdown'` earns its place twice over. The
+ * KEY set is what `satisfies Record<ParserKind, ParserKind>` checks for
+ * exhaustiveness, so a fourth kind added in `content-key.ts` stops this file
+ * compiling instead of falling into an else-branch. The VALUES are already typed
+ * as the union, so {@link parserKindOf} can hand one back without casting a
+ * substring of a key into a type nobody checked.
+ *
+ * The shape exists because the else-branch shape has now shipped the same defect
+ * twice, one level apart. `parserKindForPath` was
+ * `endsWith('.html') ? html : markdown` and handed every `.ts` file in a
+ * repository to remark; {@link parserKindOf} was
+ * `startsWith('html.') ? 'html' : 'markdown'` and, the instant `none` existed,
+ * silently relabelled every `none.` key as markdown — with no type error
+ * anywhere, because both arms of that ternary are valid {@link ParserKind}s.
+ */
+const PARSER_KIND_BY_NAME = {
+  markdown: 'markdown',
+  html: 'html',
+  none: 'none',
+} as const satisfies Record<ParserKind, ParserKind>;
+
+/**
+ * `<kind>.` → the kind it names, derived from {@link PARSER_KIND_BY_NAME} rather
+ * than written out again, so a prefix table and a kind set cannot drift apart.
+ *
+ * The `.` is part of the lookup key on purpose: matching bare kind names would
+ * make a future `markdown-lite` collide with `markdown`, which is the same class
+ * of near-miss `startsWith` invited.
+ */
+const PARSER_KIND_BY_PREFIX = new Map<string, ParserKind>(
+  Object.values(PARSER_KIND_BY_NAME).map((kind) => [`${kind}.`, kind]),
+);
+
+/**
+ * The parser a blob's bytes were routed to, read back off its own key.
+ *
+ * `computeContentKey` mixes the parser kind into the hash preimage *and* spells
+ * it as the key's prefix, so the key is the authoritative record of the routing
+ * decision the base already made. Calling `parserKindForPath` again here would
+ * be a second run of the discriminator against a path — and at least one shipped
+ * caller deliberately parses `.html` as markdown, so the two answers can
+ * legitimately differ.
+ *
+ * Exported for one reason: the mislabel this function shipped is invisible to
+ * `tsc` — every branch returns a valid {@link ParserKind} — so the only thing
+ * that can catch it is a test that asks all three prefixes directly.
+ *
+ * @param contentKey - A `<parserKind>.<sha256>` key
+ * @returns The parser kind the key names
+ * @throws {Error} If the key names no kind. Unreachable through
+ *   `ContentKeySchema`, which is exactly why guessing would be worse: a default
+ *   would derive a whole blob's worth of real-looking facts under a parser
+ *   nothing routed those bytes to, and nothing downstream could tell.
+ */
+export function parserKindOf(contentKey: string): ParserKind {
+  const kind = PARSER_KIND_BY_PREFIX.get(contentKey.slice(0, contentKey.indexOf('.') + 1));
+  if (kind === undefined) {
+    throw new Error(
+      `Content key "${contentKey}" names no parser kind. Keys are minted only by `
+      + '`computeContentKey` and validated by `ContentKeySchema`, so this is a producer bug '
+      + 'rather than anything the corpus did.',
+    );
+  }
+  return kind;
+}

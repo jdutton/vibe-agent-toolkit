@@ -19,13 +19,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { ParseCache } from '../../src/parse-cache.js';
 import { parseFileCached } from '../../src/parse-dispatcher.js';
 import { __setParseWorkerEntryForTest, type ParsePoolOptions } from '../../src/parse-pool.js';
-import {
-  BLOB_PARSE_FAILED,
-  BLOB_PARSE_LIMIT_EXCEEDED,
-  BLOB_PARSE_WORKER_DIED,
-  storableBlobFacts,
-  type BlobPopulationResult,
-} from '../../src/projection/blob-population.js';
+import { BLOB_PARSE_FAILED, BLOB_PARSE_LIMIT_EXCEEDED, BLOB_PARSE_WORKER_DIED } from '../../src/projection/blob-condition-codes.js';
+import { storableBlobFacts, type BlobPopulationResult } from '../../src/projection/blob-population.js';
 import { describeBlobRefusals } from '../../src/projection/blob-refusals.js';
 import { splitProjectionByScope } from '../../src/projection/store.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';

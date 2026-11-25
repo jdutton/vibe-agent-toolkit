@@ -69,14 +69,7 @@ import { type NotAdmittedLog, parseRefusal } from '../not-admitted.js';
 import { ParseLimitError } from '../parse-limits.js';
 import type { ParseRefusedResource, UnreadableResource } from '../resource-registry.js';
 
-import {
-  BLOB_CONTENT_CHANGED,
-  BLOB_NOT_TEXT,
-  BLOB_PARSE_FAILED,
-  BLOB_PARSE_LIMIT_EXCEEDED,
-  BLOB_PARSE_WORKER_DIED,
-  BLOB_UNREADABLE,
-} from './blob-population.js';
+import { BLOB_CONTENT_CHANGED, BLOB_NOT_TEXT, BLOB_PARSE_FAILED, BLOB_PARSE_LIMIT_EXCEEDED, BLOB_PARSE_WORKER_DIED, BLOB_UNREADABLE } from './blob-condition-codes.js';
 import { POPULATION_PARSE_LIMITS } from './content-cache.js';
 import { formatParseFailures, parseFailedEntry, parseFailureOf } from './parse-failure.js';
 import type { Projection } from './projection.js';

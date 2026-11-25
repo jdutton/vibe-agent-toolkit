@@ -13,7 +13,8 @@ import { describe, expect, it } from 'vitest';
 
 import { resolveParseLimits } from '../../src/parse-limits.js';
 import { RULE_SCOPE_TAG } from '../../src/projection/agentic-tags.js';
-import { BLOB_PARSE_LIMIT_EXCEEDED, storableBlobFacts } from '../../src/projection/blob-population.js';
+import { BLOB_PARSE_LIMIT_EXCEEDED } from '../../src/projection/blob-condition-codes.js';
+import { storableBlobFacts } from '../../src/projection/blob-population.js';
 import { describeBlobRefusals, notAdmittedRealizations } from '../../src/projection/blob-refusals.js';
 import { whatLoadsAt, type LoadedContext } from '../../src/projection/claude-context-query.js';
 import type { Projection } from '../../src/projection/projection.js';

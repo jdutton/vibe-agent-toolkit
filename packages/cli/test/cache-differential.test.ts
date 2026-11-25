@@ -197,7 +197,7 @@ function holeDump(blob: string, contentKey: string): Record<string, unknown> {
 
 /** A recorded run's cell, for a run no test reads it of. */
 const NO_DIRS: ArmDirs = { root: '', tmp: '', home: '', store: '', timing: '', parse: '' };
-const NO_CELL = { work: [], cell: { dirs: NO_DIRS, corpus: '' } } as const;
+const NO_CELL = { work: [], extentsBefore: [], cell: { dirs: NO_DIRS, corpus: '' } } as const;
 
 /** A query run the store served. */
 function servedQuery(label: keyof DifferentialResult['runs'], document: Record<string, unknown>) {

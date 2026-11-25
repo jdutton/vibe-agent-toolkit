@@ -40,6 +40,7 @@ import {
   VAT_CACHE_DIR_ENV,
   withRunPopulation,
 } from '@vibe-agent-toolkit/resources';
+import { uncoveredBlobWrite } from '@vibe-agent-toolkit/resources/testing';
 import { normalizedTmpdir, readWorkCounters, safePath, toForwardSlash, WORK_COUNTER_NAMES, type WorkCounter } from '@vibe-agent-toolkit/utils';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { createTempDir, removeTempDir, scratchTmpdirEnv } from '@vibe-agent-toolkit/utils/testing';
@@ -167,7 +168,7 @@ function decodeSeed(): Seed {
   return {
     prepare: async (scope) => {
       const store = storeOf(scope);
-      await store.writeBlobFacts(oneBlobRow());
+      await store.writeBlobFacts(uncoveredBlobWrite(oneBlobRow()));
       return async () => {
         await store.readBlobFacts([BLOB_KEY], ALL_BLOB_REQUEST);
         return undefined;
@@ -197,7 +198,7 @@ function writeSeed(rows: 'one blob row' | 'no rows'): Seed {
     prepare: (scope) => {
       const store = storeOf(scope);
       return async () => {
-        await (rows === 'one blob row' ? store.writeBlobFacts(oneBlobRow()) : store.writeExtent(EXTENT_KEY, EMPTY_EXTENT));
+        await (rows === 'one blob row' ? store.writeBlobFacts(uncoveredBlobWrite(oneBlobRow())) : store.writeExtent(EXTENT_KEY, EMPTY_EXTENT));
         return undefined;
       };
     },
@@ -472,6 +473,17 @@ const CYCLIC_FRONTMATTER = '---\ncyc: &anchor\n  self: *anchor\n---\n\n# Cyclic\
  * @returns A run of one query over the tree, returning every warning it logged
  */
 function queriedTree(scope: SeedScope, files: Readonly<Record<string, string>>): () => Promise<ActResult> {
+  return queriedTreeAt(scope, files).query;
+}
+
+/**
+ * {@link queriedTree}, with the committed tree's root: for a seed that edits the tree between runs.
+ *
+ * @param scope - The seed's scope
+ * @param files - The tree, written and committed
+ * @returns The root, and the query act
+ */
+function queriedTreeAt(scope: SeedScope, files: Readonly<Record<string, string>>): { root: string; query: () => Promise<ActResult> } {
   // First, so the parse cache (under the temp directory) and every directory
   // below start empty: a parse cache another run filled would turn a dispatch
   // into a hit.
@@ -486,13 +498,16 @@ function queriedTree(scope: SeedScope, files: Readonly<Record<string, string>>):
   // current directory's chain from the filesystem root (`fs.lstat`), a count set
   // by where the checkout lives, not by the population the act measures.
   markVatCacheRoot();
-  return async () => {
-    const lines: string[] = [];
-    await withQueriedProjection(
-      { root, logger: recordingLogger(lines), statements: ['SELECT 1 AS x'], base: undefined },
-      (ask) => ask('SELECT 1 AS x'),
-    );
-    return lines.join('\n');
+  return {
+    root,
+    query: async () => {
+      const lines: string[] = [];
+      await withQueriedProjection(
+        { root, logger: recordingLogger(lines), statements: ['SELECT 1 AS x'], base: undefined },
+        (ask) => ask('SELECT 1 AS x'),
+      );
+      return lines.join('\n');
+    },
   };
 }
 
@@ -534,15 +549,29 @@ function admissionSeed(label: string): Seed {
 /** One plain document: what every population seed's tree holds. */
 const PLAIN_TREE = { 'a.md': '# A\n\nPlain.\n' };
 
+/**
+ * A memory file importing a document: the harness pass derives a pair for each. Bytes no other
+ * seed holds, so no earlier seed's parse entry in this process answers one of them.
+ */
+const IMPORTING_TREE = { 'a.md': '# Imported\n\nPlain.\n', 'CLAUDE.md': '# Memory\n\n@a.md\n' };
+
+/** Two documents of their own bytes, the second edited after the prime, so only its key is uncovered. */
+const EDITED_TREE = { 'a.md': '# Kept\n\nPlain.\n', 'b.md': '# Edited\n\nBefore.\n' };
+
+/** `b.md`'s bytes after the edit. */
+const EDITED_B = '# Edited\n\nAfter.\n';
+
 export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
   // A cold population: the one document parsed and keyed, the extent derived
   // and written to the store, and git asked for the tree: the key's snapshot
   // and its flag listing, then the write path's fresh pair. The statement names
-  // no relation, so the run database is hydrated with none.
+  // no relation, so the run database is hydrated with none. The miss reads the
+  // blob tier once in derivation, to reuse covered keys; an empty store covers none.
   'extent.derived': {
     prepare: (scope) => queriedTree(scope, PLAIN_TREE),
     delta: {
       'store.reads.extent': 1,
+      'store.reads.blob': 1,
       'store.writes.persistent': 2,
       'store.rows.written.persistent': 13,
       'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
@@ -572,8 +601,60 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'fs.lstat': GIT_MARKER_LSTATS,
     },
   },
+  // A cold population over a memory file that imports the plain document: the
+  // harness pass derives the memory file's pair and the imported document's,
+  // and everything else is the cold `extent.derived` seed's over two documents.
+  'harness.pairsDerived': {
+    prepare: (scope) => queriedTree(scope, IMPORTING_TREE),
+    delta: {
+      'store.reads.extent': 1,
+      'store.reads.blob': 1,
+      'store.writes.persistent': 2,
+      'store.rows.written.persistent': 26,
+      'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
+      'extent.derived': 1,
+      'harness.pairsDerived': 2,
+      'parse.dispatched': 2,
+      'parse.cache.written': 2,
+      'content.read': 2,
+      'content.hashed': 2,
+      'content.hashedBytes': Buffer.byteLength(IMPORTING_TREE['a.md'] + IMPORTING_TREE['CLAUDE.md'], 'utf8'),
+      'git.calls': 6,
+      'fs.lstat': GIT_MARKER_LSTATS + FIRST_POPULATION_LSTATS,
+    },
+  },
+  // A written miss after a prime, one file edited: the tree moves, so the extent
+  // misses, and the unedited document's key is served from the stored blob tier:
+  // read once in derivation, its 3 rows decoded and not written again, and no
+  // parse lookup for it. Both documents are still read and keyed by the crawl.
+  'blob.storeServed': {
+    prepare: async (scope) => {
+      const { root, query } = queriedTreeAt(scope, EDITED_TREE);
+      await query();
+      writeFileSync(safePath.join(root, 'b.md'), EDITED_B, 'utf8');
+      return query;
+    },
+    delta: {
+      'store.reads.extent': 1,
+      'store.reads.blob': 1,
+      'store.rows.decoded.persistent': 3,
+      'store.writes.persistent': 2,
+      'store.rows.written.persistent': 16,
+      'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
+      'extent.derived': 1,
+      'blob.storeServed': 1,
+      'parse.dispatched': 1,
+      'parse.cache.written': 1,
+      'content.read': 2,
+      'content.hashed': 2,
+      'content.hashedBytes': Buffer.byteLength(EDITED_TREE['a.md'] + EDITED_B, 'utf8'),
+      'git.calls': 6,
+      'fs.lstat': GIT_MARKER_LSTATS,
+    },
+  },
   // A refusal no store holds forces the whole population again on the second
-  // run: re-derived, both documents dispatched, the cyclic one refused again.
+  // run: re-derived, the cyclic one dispatched and refused again, and the
+  // stored document's key served from the blob tier the miss reads.
   'store.miss.refusedPairs': {
     prepare: async (scope) => {
       const query = queriedTree(scope, { ...PLAIN_TREE, 'deep.md': CYCLIC_FRONTMATTER });
@@ -581,15 +662,16 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       return query;
     },
     delta: {
-      'store.rows.decoded.persistent': 16,
+      'store.rows.decoded.persistent': 19,
       'store.reads.extent': 1,
-      'store.reads.blob': 1,
+      'store.reads.blob': 2,
       'store.writes.persistent': 2,
-      'store.rows.written.persistent': 16,
+      'store.rows.written.persistent': 13,
       'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
       'extent.derived': 1,
       'store.miss.refusedPairs': 1,
-      'parse.dispatched': 2,
+      'blob.storeServed': 1,
+      'parse.dispatched': 1,
       'parse.refused.keyDetermined': 1,
       'content.read': 2,
       'content.hashed': 2,

@@ -463,7 +463,7 @@ excusing only blobs a reader could not read (deleted since keyed).
 
 **The store deletes by the `(blob, harness)` pair; a read is by content key alone, and the pair is
 narrowed in memory.** `writeBlobFacts` clears a partitioned table's rows scoped to exactly the
-`(blob, harness)` pairs the write carries — never every row for a content key the bundle merely
+`(blob, harness)` pairs the write carries that its read did not settle — never every row for a content key the bundle merely
 mentions — because these rows are derived per tree-reach, and a run over another root that holds the
 same bytes without reaching them must not delete facts a different run derived. `readBlobFacts` does
 NOT mirror that: its `SELECT` filters by content key only (`blobKeyPredicate`, `WHERE "blob" IN

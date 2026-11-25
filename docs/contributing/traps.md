@@ -303,7 +303,7 @@ store's rows** (153,245 of 193,605 on a 12,602-file adopter tree) and extent evi
 attribute a single one of them, because a blob fact belongs to bytes rather than to a tree. Its
 "bound" was the release namespace rotating, which is not a bound — and the day the store became the
 default was the day that stopped being survivable. `writeBlobFacts` now keeps the 50,000 most
-recently written content keys, sized from a measured ~5.3 KB per key on two corpora, with a manifest
+recently held content keys (a write re-stamps every key it holds), sized from a measured ~5.3 KB per key on two corpora, with a manifest
 table of its own and a one-time adoption pass for the rows a pre-manifest store already holds.
 **Tell:** a cache directory growing on every edit; a `.db` written under `--no-cache`; a tier whose
 eviction policy is a sentence about something else rotating.

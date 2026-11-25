@@ -96,7 +96,7 @@ async function populateOnce(): Promise<{ thrown: unknown; projection: ReturnType
 
   let thrown: unknown;
   try {
-    await built.withParseDispatcher((dispatcher) => built.populateBlobs(builder, { dispatcher }), { cache: new built.ParseCache({ enabled: false }) });
+    await built.withParseDispatcher((dispatcher) => built.populateBlobs(builder, { dispatcher, content: built.diskRunContentSource(builder.base().contentCache), stored: built.EMPTY_STORED_TIER }), { cache: new built.ParseCache({ enabled: false }) });
   } catch (error) {
     thrown = error;
   }

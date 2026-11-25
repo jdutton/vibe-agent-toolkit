@@ -12,6 +12,7 @@
 
 import type * as NodeFs from 'node:fs';
 
+import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type ManifestBehaviour = 'real' | { readonly throws: unknown };
@@ -21,7 +22,10 @@ const manifest = vi.hoisted(() => ({ behaviour: 'real' as ManifestBehaviour }));
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof NodeFs>();
   const readFileSync: typeof actual.readFileSync = (path, ...rest) => {
-    if (manifest.behaviour !== 'real' && String(path).endsWith('package.json')) {
+    // VAT's own manifest only: the parsers' manifests (under node_modules) are a
+    // separate read, and must stay real for the namespace to be computable.
+    const target = toForwardSlash(String(path));
+    if (manifest.behaviour !== 'real' && target.endsWith('package.json') && !target.includes('/node_modules/')) {
       throw manifest.behaviour.throws;
     }
     return actual.readFileSync(path, ...rest);

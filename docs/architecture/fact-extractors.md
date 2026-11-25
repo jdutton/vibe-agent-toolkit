@@ -64,7 +64,8 @@ stored trace; moving each input class alone must miss.
 **I3. One answer to "is this pair present".** One per-pair answer for every consumer: statements,
 strata, resolve, the registry and non-git lanes. *Fails:* the gap
 I1 forbids. *Enforcer:* a lint rule makes one module the only reader of fact tables, and an undeclared
-read throws at run time.
+read throws at run time; one predicate per tier; immutability of blob and harness rows for torn reads; the writer
+replaces what was uncovered at read or evicted since.
 
 **I4. One answer to "which extractors read this path".** Every lane gets the same (instance, variant)
 set for a path. Which instances read a path is an extent fact, never in a
@@ -82,6 +83,8 @@ extension literal; it refuses an aliased or re-bound `MARKDOWN_BY_CONTRACT`, so 
 **I5. Pure producers.** Extract is a pure function of (bytes, options, declared inputs). Resolve is pure over its declared reads and sources. *Fails:*
 rows unlike their key, shared across trees. *Enforcer:* the conformance suite fails a set of impure
 extractors and gates every built-in; plugins per the [register](./fact-extractors-hazard-register.md).
+
+**Per-file purity (owner ruling 2026-11-25).** A file's parse depends only on its contents and the VAT config, which fixes its parser route. Nothing else a run observes may reach a per-file row. The multi-file layer is a pure function of the manifest, the per-file rows and a closed list of per-run observations: stat results, realpath and link resolution, ignore-oracle verdicts, untracked listings, config and schemas. *Enforcer:* no member file is read a second time on a miss, counted per path at the `node:fs` boundary, proved red by a seeded read.
 
 **I6. Only key-determined outcomes persist.** A row set is stored whole or not at all, an outcome only
 if the key preimage plus the recorded limit determine it, so time, heap, stack-depth
@@ -136,7 +139,7 @@ every hazard the store enforces or accepts, with its status and its enforcer kin
 - **`row_set_key` is the one identity of a per-file fact and the unit of eviction.** Rejected: a per-extent presence summary.
 - **The cache namespace's end state is exactly a shape digest of the core and store-protocol tables plus the store-protocol implementation's code identity.** Rejected: a namespace keyed on all code identity. Until every stored tier carries code identity, a dev checkout's namespace also carries the digest of the skill-text declaration a markdown parse job applies (`skillTextDeclarationDigest`), beside the parse-facts shape, because those facts live in the parse cache and the store and nothing else keys them on that declaration. Rejected: a dev namespace of the path and parse-facts shape alone, under which a pattern edit in a dev checkout would serve the previous patterns' facts from the parse cache and the store.
 - **Each run gets its own database: only the needed relations, rows restricted to the bound tree's extent; an unhydrated relation does not exist there,** so a statement reaching it refuses. Rejected: an empty schema per relation in the answering database (allowed in a planning database that never answers); an authorizer, which cannot gate rows; TEMP views (I7).
-- **Extent derivation is full until the incremental extent lands,** after its design passes a blind review against: submodules, ignored territory, `.gitignore` edits, non-local contributors, collected base trees, diff/read races. Rejected: any delta, copy-forward included, before then.
+- **Extent derivation is full: every extent row is derived from the current tree's manifest, the per-file facts its content keys name, and the multi-file layer recomputed from those rows.** Per-file facts are reused from the store by content key, so a miss extracts only the files whose key the store does not cover; nothing is copied forward from an extent of another tree. Rejected: copying any extent row forward from a stored extent, and patching a stored extent by a diff against another tree; either needs a design that passes a blind review against submodules, ignored territory, `.gitignore` edits, non-local contributors, collected base trees and diff/read races. Rejected: re-deriving on every miss the per-file facts the store holds, which made a one-file edit cost a whole-tree extraction (was: extent derivation full until the incremental extent lands, any delta rejected before then; reuse by content key is not a delta, since no extent row survives from another tree).
 - **TypeScript facts come from per-file syntax.** Rejected: a per-tsconfig Program.
 - **Routability is a traversal rule in `resources`:** the link walker follows links only out of matching members. Rejected: membership or routing making a file traversable.
 - **Store off is one flag/env pair.** Rejected: a second control.
@@ -200,7 +203,7 @@ from stored `skill_text` facts (`skill_text_facts`, `skill_text_matches`), which
 job computes beside the other markdown blob facts, with a per-file fallback that reads and scans a
 file the store does not serve, counted as `skillText.storeMiss`. Not built: the git-OID path
 (planned with incremental repopulation) and I2's runtime tuple in the parse-cache and blob keys (a
-published build's namespace carries the VAT version only).
+published build's namespace carries the VAT version and the parser versions' digest only).
 
 ## How this ADR changes
 

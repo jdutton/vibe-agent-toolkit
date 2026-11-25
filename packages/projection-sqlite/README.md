@@ -47,7 +47,8 @@ import { openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 const store = openSqliteFactStore();
 
 const { blobs, extent } = splitProjectionByScope(projection);
-await store.writeBlobFacts(blobs);
+// Nothing was read first, so nothing is covered: every held key is written.
+await store.writeBlobFacts({ rows: blobs, coveredAtRead: [], settledAtRead: [] });
 await store.writeExtent({ rootId, treeHash }, extent);
 
 // Every table; a caller that reads fewer names them, and the rest are never decoded.
@@ -106,7 +107,8 @@ kind) gets a full table scan, and would have to bring its own indexes.
 
 The database lives at
 `<vatCacheNamespaceRoot()>/projection-<shape digest>/projection.db`. The
-namespace already moves on every VAT release (and in a source checkout with the
+namespace already moves on every VAT release and on a change to a parser
+dependency's version (and in a source checkout with the
 parse-facts shape and the skill-text declaration); the shape digest is derived from
 the row schemas themselves, so a schema edit lands in a different file rather
 than being read back as rows this build would misinterpret. There is no version
@@ -143,7 +145,7 @@ and are reused, so it stops growing but never shrinks.
 are a pure function of bytes and are shared by every tree and root containing
 those bytes, so they cannot be attributed to one extent without a scan that could
 race another process between its `writeBlobFacts` and its `writeExtent`. Instead
-a `blob_keys` manifest records when each content key was last written, and a
+a `blob_keys` manifest records when a write last held each content key, and a
 write keeps the newest `retainedBlobKeys` — default
 `DEFAULT_RETAINED_BLOB_KEYS = 50_000`, a ~265 MB ceiling an operator can check
 with `du`. The window is **global**, because a blob fact has no root: every

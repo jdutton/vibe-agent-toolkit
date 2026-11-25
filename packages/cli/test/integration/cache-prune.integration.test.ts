@@ -76,6 +76,22 @@ describe('pruneCacheRoot', () => {
     expect((await fs.readdir(safePath.join(root, CURRENT))).sort(byName)).toEqual(['parse', KEPT_STORE]);
   });
 
+  it('removes every namespace but this build\'s, an installed build\'s -p<hex> spelling included', async () => {
+    const root = await populatedRoot(scratch());
+    // This build's own installed-style name, and a sibling of a prerelease, whose suffix holds a second `-`.
+    const current = `${CURRENT}-pabc123`;
+    const sibling = `${CURRENT}-rc.1-p0f9e8d`;
+    await put(root, `${current}/${KEPT_STORE}/projection.db`, 'kept');
+    await put(root, `${sibling}/parse/ab/facts.json`, '{"s":1}');
+
+    const { data } = await pruneCacheRoot({ root, namespace: current, keptStore: KEPT_STORE, dryRun: false, storeInUse });
+
+    expect(data.removed).toContain(sibling);
+    expect(data.removed).toContain(CURRENT);
+    expect(existsSync(safePath.join(root, sibling))).toBe(false);
+    expect(existsSync(safePath.join(root, current, KEPT_STORE))).toBe(true);
+  });
+
   it('leaves every entry it does not recognise as VAT\'s, at the root and inside the namespace', async () => {
     const root = await populatedRoot(scratch());
     // A VAT_CACHE_DIR that someone else also writes into: none of this is VAT's to delete.

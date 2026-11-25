@@ -71,7 +71,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ParseCache, ParserUnavailableError } from '../src/parse-cache.js';
 import type { ParsePoolPolicy } from '../src/parse-dispatcher.js';
 import { reviveParserThrow } from '../src/parse-limits.js';
-import { BLOB_PARSE_FAILED, storableBlobFacts } from '../src/projection/blob-population.js';
+import { BLOB_PARSE_FAILED } from '../src/projection/blob-condition-codes.js';
+import { storableBlobFacts } from '../src/projection/blob-population.js';
 import { blobFactsReader } from '../src/projection/blob-resource-facts.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 

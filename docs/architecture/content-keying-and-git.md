@@ -67,7 +67,7 @@ What is built:
   (`packages/agent-skills/src/validators/run-skill-registries.ts`).
 - Rule 2's git-OID path is planned, together with incremental repopulation, and is not built. Until
   it lands every path is keyed by VAT's content key, which rule 2 permits for any file.
-- Rule 3 is partial: the cache namespace carries the VAT version; the runtime tuple (Node and its
+- Rule 3 is partial: the cache namespace carries the VAT version and a digest of the resolved parser versions; the runtime tuple (Node and its
   Unicode version) is not yet in the parse-cache or blob keys.
 
 ## 1. Overview

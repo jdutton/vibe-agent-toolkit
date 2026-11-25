@@ -7,7 +7,10 @@
  * realization ({@link StoredContent}). A file whose realization the store holds
  * under the parser this view routes it to is built from the blob tier's facts
  * through the one fact reader (`blobFactsReader`), so a warm run reads, hashes
- * and parses nothing for it. Every other file is computed exactly as a cold run
+ * and parses nothing for it. A derived population (a miss) hands the same shape
+ * over the blob rows it just derived ({@link derivedContentOf}): one reader, two
+ * row sources, so a run admits after a miss as it admits on a hit, reading no
+ * store. Every other file is computed exactly as a cold run
  * computes it: the decision only ever chooses BETWEEN the stored answer and the
  * cold code, never a third answer, so a warm run's findings are the cold run's.
  *
@@ -47,12 +50,17 @@ import { NO_PARSER_KIND } from '../content-key.js';
 import type { ParseLimits } from '../parse-limits.js';
 import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
 
-import { parserKindOf } from './blob-population.js';
 import { AST_SYNTACTIC_FORMS } from './blob-references.js';
 import { type NotAdmittedEntry, unkeyedEntry } from './blob-refusals.js';
-import { BLOB_FACT_READER_TABLES, blobFactsReader, type BlobFactsOutcome, type BlobFactsReader } from './blob-resource-facts.js';
+import {
+  BLOB_FACT_READER_TABLES,
+  type BlobCoverageRows,
+  blobFactsReader,
+  type BlobFactsOutcome,
+  type BlobFactsReader,
+} from './blob-resource-facts.js';
 import { POPULATION_PARSE_LIMITS } from './content-cache.js';
-import { parserKindForMime } from './router.js';
+import { parserKindOf , parserKindForMime } from './router.js';
 import type { AdmittedFacts } from './run-population.js';
 import { keyedContentKeys, StoreRequestUnmetError } from './store-hydration.js';
 import type { BlobRequest, BlobScopedRows, BlobScopedTableName, FactStore } from './store.js';
@@ -69,20 +77,34 @@ export interface StoredMember {
   readonly realization: StoredRealization;
   /**
    * The blob tier's answer for the members' keyed content: read from the store
-   * on first ask, once, and handed back every later time.
+   * (a hit) or the run's projection (a miss) on first ask, once, and handed back
+   * every later time.
    */
   readonly facts: () => Promise<BlobFactsReader>;
+  /** See {@link StoredContent.readByRun}. */
+  readonly readByRun: boolean;
 }
 
 /**
- * What a store hit holds about the members it enumerated: each member's
- * stored realization, by absolute path, and one lazily read blob tier.
+ * What a population holds about the members it enumerated: each member's
+ * realization, by absolute path, and one lazily read blob tier, from the store
+ * on a hit ({@link storedContentOf}) or from the run's projection on a miss
+ * ({@link derivedContentOf}).
  */
 export interface StoredContent {
   /** Each member, by absolute path; the first realization of a path speaks for it. */
   readonly members: ReadonlyMap<string, StoredRealization>;
   /** See {@link StoredMember.facts}. */
   readonly facts: () => Promise<BlobFactsReader>;
+  /**
+   * Whether this run already read every member: `true` for a derived population, whose derive
+   * read each member through the run's content cache, so admission takes readability from that
+   * read and touches no member's file again (the cache serves every later read the bytes the run
+   * first saw); `false` for a hit, whose members the run has not read, so admission opens each
+   * once, as the cold read's own open would. Required: a population that omitted it would either probe
+   * files the run already read or serve files it never opened.
+   */
+  readonly readByRun: boolean;
 }
 
 /** The code of a blob tier that could not be read ({@link BlobTierReadError}): the store's refusal. */
@@ -149,21 +171,25 @@ export async function readBlobTier<Table extends BlobScopedTableName>(
   return rows;
 }
 
+/** A population's members, each realization with its absolute path. */
+type MemberRealizations = ReadonlyArray<{ readonly path: string; readonly row: ResourceRealizationRow }>;
+
 /**
- * The stored content of a hit's members.
+ * The members' content, its tier answered by `rowsOf`: the one shape both row
+ * sources share ({@link storedContentOf}, {@link derivedContentOf}), so both are
+ * read by the one fact reader through {@link ADMISSION_BLOB_REQUEST}.
  *
- * The tier is read for the members' keyed content keys on the first ask, ONCE
- * (the promise is the memo), and only when something asks: a run that admits
- * nothing from the store reads no blob row. A store that throws is not a miss:
- * it surfaces as a {@link BlobTierReadError}, and the run refuses.
+ * The rows are asked for on the first ask, ONCE (the promise is the memo), and
+ * only when something asks.
  *
- * @param members - The hit's member realizations, each with its absolute path
- * @param store - The store the hit was read from
- * @returns The members' stored content
+ * @param members - The members' realizations
+ * @param rowsOf - The admission request's rows for the members' keyed content keys
+ * @returns The members' content
  */
-export function storedContentOf(
-  members: ReadonlyArray<{ readonly path: string; readonly row: ResourceRealizationRow }>,
-  store: FactStore,
+function contentOf(
+  members: MemberRealizations,
+  rowsOf: (keys: readonly string[]) => Promise<BlobCoverageRows>,
+  readByRun: boolean,
 ): StoredContent {
   const stored = new Map<string, StoredRealization>();
   for (const { path, row } of members) {
@@ -174,8 +200,58 @@ export function storedContentOf(
   let read: Promise<BlobFactsReader> | undefined;
   return {
     members: stored,
-    facts: () => (read ??= readBlobTier(store, keys, ADMISSION_BLOB_REQUEST).then((rows) => blobFactsReader(rows))),
+    facts: () => (read ??= rowsOf(keys).then((rows) => blobFactsReader(rows))),
+    readByRun,
   };
+}
+
+/**
+ * The stored content of a hit's members.
+ *
+ * The tier is read for the members' keyed content keys on the first ask, ONCE,
+ * and only when something asks: a run that admits nothing from the store reads
+ * no blob row. A store that throws is not a miss: it surfaces as a
+ * {@link BlobTierReadError}, and the run refuses.
+ *
+ * @param members - The hit's member realizations, each with its absolute path
+ * @param store - The store the hit was read from
+ * @returns The members' stored content
+ */
+export function storedContentOf(members: MemberRealizations, store: FactStore): StoredContent {
+  return contentOf(members, (keys) => readBlobTier(store, keys, ADMISSION_BLOB_REQUEST), false);
+}
+
+/**
+ * The content of a derived population's members, answered from the run's own
+ * projection: after a miss, admission admits from the blob rows the run just
+ * derived, through the same fact reader and the same request as a hit, and
+ * reads no store (D9). A member whose key the projection holds no rows for is
+ * uncovered, and computed the cold way, as on a hit.
+ *
+ * Only the admission request's rows are handed to the reader
+ * ({@link ADMISSION_BLOB_REQUEST}: its tables, and of `blobReferences` the AST
+ * forms), so a member's answer and the rows counted to give it are the ones a
+ * store read of the same rows gives.
+ *
+ * @param members - The population's member realizations, each with its absolute path
+ * @param projection - The population's projection
+ * @returns The members' content
+ */
+export function derivedContentOf(members: MemberRealizations, projection: BlobCoverageRows): StoredContent {
+  return contentOf(members, () => {
+    // Taken on the first ask only, as a store read is: a run that admits nothing filters nothing.
+    const { referenceForms } = ADMISSION_BLOB_REQUEST;
+    return Promise.resolve({
+      blobs: projection.blobs,
+      blobReferences: referenceForms === 'all'
+        ? projection.blobReferences
+        : projection.blobReferences.filter((row) => referenceForms.has(row.syntacticForm)),
+      blobSections: projection.blobSections,
+      blobConditions: projection.blobConditions,
+      skillTextFacts: projection.skillTextFacts,
+      skillTextMatches: projection.skillTextMatches,
+    });
+  }, true);
 }
 
 /**
@@ -189,6 +265,7 @@ export function respelledContent(stored: StoredContent, respell: (path: string) 
   return {
     members: new Map([...stored.members].map(([path, member]) => [respell(path), member])),
     facts: stored.facts,
+    readByRun: stored.readByRun,
   };
 }
 

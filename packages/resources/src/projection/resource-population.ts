@@ -91,7 +91,11 @@
 import { compareCodeUnits, safePath, type TextProvenance } from '@vibe-agent-toolkit/utils';
 
 import type { ParserKind } from '../content-key.js';
-import { RealizationConditionRowSchema, type RealizationConditionRow } from '../schemas/projection-resources.js';
+import {
+  RealizationConditionRowSchema,
+  type RealizationConditionRow,
+  type ResourceRealizationRow,
+} from '../schemas/projection-resources.js';
 import type { JsonValue } from '../schemas/projection-shared.js';
 import type { SkillTextFacts } from '../schemas/skill-text-facts.js';
 
@@ -117,7 +121,7 @@ import {
 } from './merge.js';
 import type { Projection } from './projection.js';
 import type { FactStore } from './store.js';
-import { storedContentOf, type StoredContent } from './stored-admission.js';
+import { derivedContentOf, storedContentOf, type StoredContent } from './stored-admission.js';
 
 /**
  * Where a registry crawl's file population comes from: a run's enumeration of
@@ -263,11 +267,13 @@ export interface ResourceEnumeration {
    */
   readonly extentSource: CrawlSourceKind;
   /**
-   * What the store holds about each member, when the store served this
-   * population: the realization's content columns by path, and the blob tier
-   * they name, read on first ask (`stored-admission.ts`). `null` for a derived
-   * population and for a listing: their members are read, keyed and parsed by
-   * the run, so there is nothing stored to admit them from.
+   * What the population holds about each member: the realization's content
+   * columns by path, and the blob tier they name, read on first ask
+   * (`stored-admission.ts`): from the store when the store served this
+   * population, from the run's own projection when it was derived (a miss), so
+   * admission after a miss computes nothing the derive already did. `null` for
+   * a listing: it keys and parses nothing, so its members are read, keyed and
+   * parsed by the run.
    */
   readonly stored: StoredContent | null;
 }
@@ -363,6 +369,34 @@ function resourcePopulateOptions(options: TreePopulationOptions, root: string, c
 }
 
 /**
+ * Where a population's admission reads its members' blob tier from: the store
+ * a hit was read from, the projection a miss derived, or nowhere for a listing,
+ * which derives no blob row. A required choice, so no lane drops its rows by
+ * omission.
+ */
+type AdmissionRows =
+  | { readonly from: 'store'; readonly store: FactStore }
+  | { readonly from: 'projection'; readonly projection: Projection }
+  | { readonly from: 'none' };
+
+/** A listing's {@link AdmissionRows}. */
+const NO_ADMISSION_ROWS: AdmissionRows = { from: 'none' };
+
+/**
+ * @param members - The population's members, each with its absolute path
+ * @param rows - Where their blob tier is read from
+ * @returns Their content, or `null` for a listing
+ */
+function admissionContentOf(
+  members: ReadonlyArray<{ readonly path: string; readonly row: ResourceRealizationRow }>,
+  rows: AdmissionRows,
+): StoredContent | null {
+  if (rows.from === 'store') return storedContentOf(members, rows.store);
+  if (rows.from === 'projection') return derivedContentOf(members, rows.projection);
+  return null;
+}
+
+/**
  * A population's membership: the ONE conversion from realization and condition
  * rows to a {@link ResourceEnumeration}, on a store hit and on a derive alike.
  *
@@ -376,7 +410,7 @@ function resourcePopulateOptions(options: TreePopulationOptions, root: string, c
  * @param rows.realizationConditions - Its `realization_conditions`
  * @param extentSource - The enumerator the run selected
  * @param outcome - Whether the store served the rows
- * @param store - The store that served them, or `null` when they were derived or listed
+ * @param admissionRows - Where admission reads the members' blob tier from
  * @returns The members and what the population said about itself
  */
 function membershipOf(
@@ -384,7 +418,7 @@ function membershipOf(
   rows: Pick<Projection, 'resourceRealizations' | 'realizationConditions'>,
   extentSource: CrawlSourceKind,
   outcome: PopulationOutcome,
-  store: FactStore | null,
+  admissionRows: AdmissionRows,
 ): ResourceEnumeration {
   const members = rows.resourceRealizations
     // `filesOnly: true` is the crawl contract every resources caller passes; the
@@ -405,7 +439,7 @@ function membershipOf(
     conditions: canonicalConditions(rows.realizationConditions),
     outcome,
     extentSource,
-    stored: store === null ? null : storedContentOf(members, store),
+    stored: admissionContentOf(members, admissionRows),
   };
 }
 
@@ -479,11 +513,15 @@ async function membershipThrough(
   // derive below would have produced.
   const stored = await readStoredMembership(populateOptions, requestedContributors(populateOptions));
   // A hit carries what the store holds about each member, so the registry can
-  // admit it from the blob tier; a derive has read every member into the run.
-  if (stored !== undefined) return membershipOf(root, stored, source.kind, stored.outcome, options.cache?.store ?? null);
+  // admit it from the blob tier; a derive carries the blob rows it just derived,
+  // so the registry admits from them and computes nothing twice (D9).
+  if (stored !== undefined) {
+    const store = options.cache?.store;
+    return membershipOf(root, stored, source.kind, stored.outcome, store === undefined ? NO_ADMISSION_ROWS : { from: 'store', store });
+  }
 
   const { projection, outcome } = await populate(populateOptions);
-  return membershipOf(root, projection, source.kind, outcome, null);
+  return membershipOf(root, projection, source.kind, outcome, { from: 'projection', projection });
 }
 
 /**
@@ -539,7 +577,7 @@ export async function buildResourceListing(
     parameters: { [filesystem.id]: DECLINE_IGNORED },
     ...populationOracles({ ...options, cache: undefined }),
   });
-  return membershipOf(root, projection, source.kind, outcome, null);
+  return membershipOf(root, projection, source.kind, outcome, NO_ADMISSION_ROWS);
 }
 
 /**

@@ -421,8 +421,9 @@ move or restore clears leases.
   **parse cache only** — the projection's own `blobs.bytes` column, and any linked-content fetch
   cache, are separate tenants where the full-copy reasoning still applies.
 - **Namespacing is version-based, with a dev-checkout escape hatch.** For an installed VAT, the
-  namespace is the package version alone (e.g. `0.1.42`) — deliberately, so every machine on the same
-  release shares one cache. Version alone is insufficient for a **dev checkout**, so there the
+  namespace is the package version plus a `-p<6 hex>` digest of the resolved versions of the parser
+  dependencies (e.g. `0.1.42-p3fa91c`) — deliberately, so every machine on the same release and
+  parser resolution shares one cache. Version alone is insufficient for a **dev checkout**, so there the
   namespace gets a `-dev-<hash>` suffix over three inputs: the package-root path, which separates one
   worktree from another, a digest of `ParseFactsSchema`'s own shape, which separates two entry
   formats within one worktree, and a digest of the skill-text declaration a markdown parse applies

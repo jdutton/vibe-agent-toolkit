@@ -51,6 +51,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { readFileSync } from 'node:fs';
 
 import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
 import {
@@ -63,7 +64,15 @@ import {
   type ProjectionTableName,
   vatCacheRoot,
 } from '@vibe-agent-toolkit/resources';
-import { fsFaultOf, isReadOnlyFilesystemError, parseEnvBoolean, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import {
+  fsFaultOf,
+  isPathAbsentError,
+  isReadOnlyFilesystemError,
+  parseEnvBoolean,
+  safePath,
+  TEST_USER_STATE_UNDER,
+  toForwardSlash,
+} from '@vibe-agent-toolkit/utils';
 import { freshGitTreeKey, gitSnapshotFailureOf, gitTreeKey, type GitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 
 import { noticeToOperator, withNoticeLedger } from './operator-notices.js';
@@ -232,7 +241,7 @@ export interface OpenedPopulationCache {
  */
 function storeKeyOrNotice(root: string): GitTreeSnapshot | null {
   const snapshot = gitTreeKey({ cwd: root });
-  if (snapshot.ok) return snapshot;
+  if (snapshot.ok) return withTestTreeHash(snapshot);
   // Not "the selector is set": the store is on by default, so most users who
   // see this never wrote the variable.
   noticeToOperator(
@@ -243,6 +252,45 @@ function storeKeyOrNotice(root: string): GitTreeSnapshot | null {
     root,
   );
   return null;
+}
+
+/**
+ * The variable a TEST names a file with: while the file exists, the store is keyed with the hash
+ * it holds in place of the snapshot's. Honoured only in a test process ({@link TEST_USER_STATE_UNDER}
+ * set); no user sets either.
+ *
+ * It exists for one proof, the edit oracle's red seed (`cache-differential.ts`): a run made to key
+ * the pre-edit tree after an edit is served the pre-edit extent, and the oracle must name the
+ * edited path. The stale key cannot come from the environment instead: `runGit` scrubs an inherited
+ * `GIT_INDEX_FILE`, so a test cannot point the snapshot at another index. A file, not a value, so
+ * one cell's environment can prime on the real key (no file yet) and measure on the primed one.
+ *
+ * ⚠️ Under the seam a run can be served but never file an extent: `treeUnchanged` compares a fresh
+ * snapshot's hash with the seamed one, which never agree, so every miss is `skipped-tree-changed`.
+ * No seed may rely on a write made under the seam. An empty (whitespace-only) file throws.
+ */
+export const TEST_TREE_HASH_FILE_ENV = 'VAT_TEST_TREE_HASH_FILE';
+
+/**
+ * `snapshot`, keyed by {@link TEST_TREE_HASH_FILE_ENV}'s file when a test process named one that
+ * exists; otherwise `snapshot` itself. Only the hash changes: the entries stay the snapshot's.
+ *
+ * @param snapshot - The snapshot that keys the tree
+ * @returns The snapshot, its hash replaced under the test seam
+ */
+function withTestTreeHash(snapshot: GitTreeSnapshot): GitTreeSnapshot {
+  const file = process.env[TEST_TREE_HASH_FILE_ENV]?.trim() ?? '';
+  const inTest = (process.env[TEST_USER_STATE_UNDER]?.trim() ?? '') !== '';
+  if (file === '' || !inTest) return snapshot;
+  let hash: string;
+  try {
+    hash = readFileSync(file, 'utf-8').trim();
+  } catch (error) {
+    if (isPathAbsentError(error)) return snapshot;
+    throw error;
+  }
+  if (hash.length === 0) throw new Error(`${TEST_TREE_HASH_FILE_ENV} names ${file}, which holds no tree hash`);
+  return { ...snapshot, hash };
 }
 
 /**
@@ -333,7 +381,7 @@ function codingFailures(store: FactStore, coded: (error: unknown) => unknown): F
     throw coded(error);
   };
   return {
-    writeBlobFacts: (rows) => store.writeBlobFacts(rows).catch(rethrowCoded),
+    writeBlobFacts: (write) => store.writeBlobFacts(write).catch(rethrowCoded),
     readBlobFacts: (contentKeys, request) => store.readBlobFacts(contentKeys, request).catch(rethrowCoded),
     writeExtent: (key, rows) => store.writeExtent(key, rows).catch(rethrowCoded),
     readExtent: (key, request) => store.readExtent(key, request).catch(rethrowCoded),

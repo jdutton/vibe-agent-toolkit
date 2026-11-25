@@ -27,8 +27,10 @@
  *
  * ## Both writes replace, and both are one transaction
  *
- * `writeBlobFacts` deletes every blob-scoped table's rows for the content keys it is
- * about to write and inserts those. Replace rather than insert-if-absent for a
+ * `writeBlobFacts` deletes every blob-scoped table's rows for the content keys it
+ * replaces — those its caller's read did not cover, and those evicted since —
+ * and inserts those; a covered key still in the ledger is only re-stamped (see
+ * {@link writeBlobRows}). Replace rather than insert-if-absent for a
  * specific reason — see `schema-sql.ts` on SQLite's treatment of NULL in a
  * primary key, which makes a conflict clause unable to dedup the tables whose key
  * holds a nullable column. 🪤 The keys it clears are the union of what **every** blob-scoped table names,
@@ -88,7 +90,7 @@
  * A blob fact belongs to bytes, not to a tree, so extent eviction can attribute
  * none of it, and its only bound used to be the release namespace rotating.
  * That is not a bound, and the tier is 153,245 of a 12,602-file adopter store's
- * 193,605 rows. So {@link BLOB_KEYS_TABLE} records each key's last derivation
+ * 193,605 rows. So {@link BLOB_KEYS_TABLE} records when a write last held each key
  * and {@link writeBlobRows} keeps the
  * {@link SqliteStoreOptions.retainedBlobKeys} newest, on exactly `writeExtent`'s
  * terms: amortized into the write that grew it, unable to select the keys that
@@ -104,6 +106,7 @@ import { unlinkSync } from 'node:fs';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 
 import {
+  type BlobFactsWrite,
   type BlobReferenceRow,
   type BlobRequest,
   type BlobScopedRows,
@@ -353,7 +356,7 @@ interface TablePlan {
  * @example
  * const store = openSqliteFactStore();
  * const { blobs, extent } = splitProjectionByScope(projection);
- * await store.writeBlobFacts(blobs);
+ * await store.writeBlobFacts({ rows: blobs, coveredAtRead: [], settledAtRead: [] });
  * await store.writeExtent({ rootId, treeHash }, extent);
  * await store.close();
  */
@@ -777,8 +780,10 @@ interface StoreTables {
   readonly forgetExtent: StatementSync;
   /** Which roots are past the machine-wide root window — see {@link DEFAULT_RETAINED_ROOTS}. */
   readonly rootsPastRetention: StatementSync;
-  /** The blob tier's three eviction statements — see {@link BLOB_KEYS_TABLE}. */
+  /** The blob tier's ledger statements — see {@link BLOB_KEYS_TABLE}. */
   readonly recordBlobKey: StatementSync;
+  /** Whether one key has a ledger row: the writer's "evicted since the read?" lookup. */
+  readonly blobKeyPresent: StatementSync;
   readonly blobKeysPastRetention: StatementSync;
   readonly forgetBlobKey: StatementSync;
   /** Blob-fact statements memoized by table and placeholder count — see {@link TablePlan}. */
@@ -847,6 +852,9 @@ function prepareStoreTables(database: DatabaseSync, retention: Retention): Store
       `INSERT OR REPLACE INTO ${quoteIdentifier(BLOB_KEYS_TABLE)}`
       + ` (${quoteIdentifier(BLOB_KEY_COLUMN)}, ${quoteIdentifier(WRITTEN_AT_COLUMN)}) VALUES (?, ?)`,
     ),
+    blobKeyPresent: database.prepare(
+      `SELECT 1 FROM ${quoteIdentifier(BLOB_KEYS_TABLE)} WHERE ${quoteIdentifier(BLOB_KEY_COLUMN)} = ?`,
+    ),
     blobKeysPastRetention: database.prepare(
       `SELECT ${quoteIdentifier(BLOB_KEY_COLUMN)} FROM ${quoteIdentifier(BLOB_KEYS_TABLE)}`
       + ` ORDER BY ${quoteIdentifier(WRITTEN_AT_COLUMN)} DESC, "rowid" DESC LIMIT -1 OFFSET ?`,
@@ -858,11 +866,14 @@ function prepareStoreTables(database: DatabaseSync, retention: Retention): Store
   };
 }
 
+/** A table bundle seen structurally: table key to rows. */
+type RowBundle = Record<string, readonly Record<string, unknown>[]>;
+
 /**
  * Write blob facts: the row writer behind `FactStore.writeBlobFacts`.
  *
- * The range this write clears is the union of the content keys **every**
- * blob-scoped table names, not the keys `blobs` alone names — see
+ * The held keys are the union of the content keys **every** blob-scoped table
+ * names, not the keys `blobs` alone names — see
  * {@link uniqueContentKeys} for why the difference is the whole feature.
  *
  * ⛔ Except in a PARTITIONED table (`partitionColumn` — the harness tables),
@@ -871,33 +882,89 @@ function prepareStoreTables(database: DatabaseSync, retention: Retention): Store
  * over another root that holds the same bytes without reaching them must not
  * delete the facts this one derived.
  *
+ * ## Replace what the read did not cover; re-stamp everything held
+ *
+ * The held keys are the content keys `write.rows` names. Inside one
+ * `BEGIN IMMEDIATE` transaction:
+ *
+ * 1. each held key the caller's read covered is looked up in the ledger by
+ *    primary key. That answers "was it evicted since the read", not "is it
+ *    present": rows leave only with their ledger row, and are immutable per
+ *    key, so a key still in the ledger is unchanged since the read;
+ * 2. the held keys not covered at read, and the covered ones gone from the
+ *    ledger, are replaced (delete then insert); so is every carried harness
+ *    pair not settled at read. A covered key still in the ledger keeps its rows;
+ * 3. every held key is re-stamped, after the inserts;
+ * 4. the window is applied past `max(retention, held keys)`.
+ *
  * A write naming no content key writes nothing and counts nothing.
  *
  * @param tables - The connection's statements
- * @param rows - The blob-scoped tables; any of them may be empty
+ * @param write - The held rows and what the caller's read covered
  */
-function writeBlobRows(tables: StoreTables, rows: BlobScopedRows): void {
-  const bundle = rows as unknown as Record<string, readonly Record<string, unknown>[]>;
-  const contentKeys = uniqueContentKeys(bundle);
-  if (contentKeys.length === 0) return;
+function writeBlobRows(tables: StoreTables, write: BlobFactsWrite): void {
+  const bundle = write.rows as unknown as RowBundle;
+  const held = uniqueContentKeys(bundle);
+  if (held.length === 0) return;
 
   let evicted = 0;
   let written = 0;
   inTransaction(tables.database, () => {
-    clearSpaceForBlobs(tables, bundle, contentKeys);
-    written = insertBundle(tables, bundle, 'blob', []);
-    // AFTER the rows, and BEFORE the eviction, for the reason `writeExtentRows`
-    // records its manifest row before evicting: a key not yet in the ordering
-    // is a key the window cannot see, so a small retention would drop the very
-    // keys this write just inserted.
+    const replaced = keysToReplace(tables, held, write.coveredAtRead);
+    const replacing = rowsToReplace(bundle, replaced, write.settledAtRead);
+    clearSpaceForBlobs(tables, replacing, [...replaced]);
+    written = insertBundle(tables, replacing, 'blob', []);
+    // EVERY held key, AFTER the rows and BEFORE the eviction, for the reason
+    // `writeExtentRows` records its manifest row before evicting: a key not
+    // re-stamped keeps its old place in the ordering, so a window smaller than
+    // the store would evict a covered key this write holds.
     const writtenAt = new Date().toISOString();
-    for (const key of contentKeys) tables.recordBlobKey.run(key, writtenAt);
-    evicted = evictBlobKeysPastRetention(tables, contentKeys.length);
+    for (const key of held) tables.recordBlobKey.run(key, writtenAt);
+    evicted = evictBlobKeysPastRetention(tables, held.length);
   });
   countWrite(written);
   // Outside the transaction, because SQLite refuses `incremental_vacuum`
   // inside one — the same arrangement, and the same reason, as `writeExtentRows`.
   if (evicted > 0) tables.database.exec('PRAGMA incremental_vacuum');
+}
+
+/**
+ * The held keys a blob write replaces: those its read did not cover, and the
+ * covered ones evicted since — a ledger lookup per covered key, under the
+ * write lock, so an eviction cannot land between the lookup and the insert.
+ *
+ * @param tables - The connection's statements
+ * @param held - The keys the write holds rows for
+ * @param coveredAtRead - The keys the caller's read covered
+ * @returns The keys to delete and insert
+ */
+function keysToReplace(tables: StoreTables, held: readonly string[], coveredAtRead: readonly string[]): ReadonlySet<string> {
+  const covered = new Set(coveredAtRead);
+  return new Set(held.filter((key) => !covered.has(key) || tables.blobKeyPresent.get(key) === undefined));
+}
+
+/**
+ * The rows of one blob write that replace what the store holds: every row of a
+ * replaced key, and each partitioned row whose pair was not settled at read.
+ *
+ * @param bundle - The write's rows
+ * @param replaced - {@link keysToReplace}
+ * @param settledAtRead - The pairs the caller's read settled
+ * @returns The rows to insert, every blob-scoped table present
+ */
+function rowsToReplace(bundle: RowBundle, replaced: ReadonlySet<string>, settledAtRead: BlobFactsWrite['settledAtRead']): RowBundle {
+  const settled = new Set(settledAtRead.map((pair) => pairId(pair.contentKey, pair.harness)));
+  const replacing: RowBundle = {};
+  for (const spec of allSpecs().filter((candidate) => candidate.scope === 'blob')) {
+    const column = blobKeyColumn(spec);
+    const partition = spec.partitionColumn;
+    replacing[spec.key] = (bundle[spec.key] ?? []).filter((row) => {
+      const key = String(row[column]);
+      if (replaced.has(key)) return true;
+      return partition !== undefined && !settled.has(pairId(key, String(row[partition])));
+    });
+  }
+  return replacing;
 }
 
 /**
@@ -1053,19 +1120,19 @@ function forgetBlobKeys(tables: StoreTables, contentKeys: readonly string[]): vo
  * would make the window count a key the store no longer holds, and rows with no
  * manifest row would be unevictable for good.
  *
- * ⛔ The offset is never less than the keys this write recorded. They hold the
- * newest rowids, so an offset of the window alone cut the write's OWN oldest
- * keys whenever one write named more keys than the window — and because the
- * coverage check is all-or-nothing, a tree that size then missed on every run
- * while paying for every write. The surplus is reclaimed by the next, smaller
- * write.
+ * ⛔ The offset is never less than the keys this write holds, every one of which
+ * it re-stamped, replaced or not. They hold the newest rowids, so an offset of
+ * the window alone cut the write's OWN oldest keys whenever one write held more
+ * keys than the window — and because the coverage check is all-or-nothing, a
+ * tree that size then missed on every run while paying for every write. The
+ * surplus is reclaimed by the next, smaller write.
  *
  * @param tables - The connection's statements
- * @param written - How many keys the calling write recorded
+ * @param held - How many keys the calling write holds and re-stamped
  * @returns How many keys were evicted
  */
-function evictBlobKeysPastRetention(tables: StoreTables, written: number): number {
-  const offset = Math.max(tables.retention.blobKeys, written);
+function evictBlobKeysPastRetention(tables: StoreTables, held: number): number {
+  const offset = Math.max(tables.retention.blobKeys, held);
   const victims = (tables.blobKeysPastRetention.all(offset) as {
     contentKey: string;
   }[]).map((row) => row.contentKey);
@@ -1397,10 +1464,10 @@ class SqliteFactStore implements FactStore {
   }
 
   /** @inheritdoc */
-  writeBlobFacts(rows: BlobScopedRows): Promise<void> {
+  writeBlobFacts(write: BlobFactsWrite): Promise<void> {
     return promised(() => {
       this.#assertOpen();
-      writeBlobRows(this.#tables, rows);
+      writeBlobRows(this.#tables, write);
     });
   }
 
@@ -1619,10 +1686,21 @@ function partitionPairs(bundle: Record<string, readonly Record<string, unknown>[
     const column = blobKeyColumn(spec);
     for (const row of bundle[spec.key] ?? []) {
       const pair = [String(row[column]), String(row[partition])] as const;
-      pairs.set(`${pair[0]}\0${pair[1]}`, pair);
+      pairs.set(pairId(...pair), pair);
     }
   }
   return [...pairs.values()];
+}
+
+/**
+ * One comparable string per `(blob, partition)` pair.
+ *
+ * @param blob - The content key
+ * @param partition - The partition value (the harness)
+ * @returns A string equal exactly when the pairs are
+ */
+function pairId(blob: string, partition: string): string {
+  return `${blob}\0${partition}`;
 }
 
 /**

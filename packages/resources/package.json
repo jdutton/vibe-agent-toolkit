@@ -14,6 +14,10 @@
       "types": "./dist/parse-conformance.d.ts",
       "default": "./dist/parse-conformance.js"
     },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
+    },
     "./schemas/*": "./schemas/*"
   },
   "files": [

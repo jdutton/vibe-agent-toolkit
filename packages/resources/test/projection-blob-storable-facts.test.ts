@@ -12,13 +12,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import {
-  BLOB_CONTENT_CHANGED,
-  BLOB_NOT_TEXT,
-  BLOB_PARSE_FAILED,
-  BLOB_UNREADABLE,
-  storableBlobFacts,
-} from '../src/projection/blob-population.js';
+import { BLOB_CONTENT_CHANGED, BLOB_NOT_TEXT, BLOB_PARSE_FAILED, BLOB_UNREADABLE } from '../src/projection/blob-condition-codes.js';
+import { storableBlobFacts } from '../src/projection/blob-population.js';
 import { describeBlobRefusals } from '../src/projection/blob-refusals.js';
 import { emptyBlobRows } from '../src/projection/store-hydration.js';
 import type { BlobConditionRow } from '../src/schemas/projection-blobs.js';

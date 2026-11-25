@@ -52,6 +52,7 @@ import { CONTENT_PARSING_SKIP, describeStoreMiss, populate, type PopulationOutco
 import type { Projection } from '../src/projection/projection.js';
 import type { ContentDemand } from '../src/projection/realizations.js';
 import type {
+  BlobFactsWrite,
   BlobRequest,
   BlobScopedRows,
   BlobScopedTableName,
@@ -189,9 +190,9 @@ class HarnesslessFactStore implements FactStore {
    */
   constructor(private readonly inner: FactStore) {}
 
-  /** @param rows - Passed through */
-  writeBlobFacts(rows: BlobScopedRows): Promise<void> {
-    return this.inner.writeBlobFacts(rows);
+  /** @param write - Passed through */
+  writeBlobFacts(write: BlobFactsWrite): Promise<void> {
+    return this.inner.writeBlobFacts(write);
   }
 
   /**

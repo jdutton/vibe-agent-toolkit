@@ -15,10 +15,11 @@
  * bundled markdown file is served from the store, so `skillText.storeMiss` and
  * `content.read` do not move outside the name reads (which run with no run, so
  * they read every time). With the store off every scan is a `skillText.noStore`
- * and none a miss; with it on, none is a `skillText.noStore`. The cold runs
- * scan each markdown file of the corpus
+ * and none a miss; with it on, none is a `skillText.noStore`. The store-off run
+ * scans each markdown file of the corpus
  * exactly once: every skill's SKILL.md and every other markdown file, each
- * bundled by a skill. With half the skill-text records deleted (their keys'
+ * bundled by a skill. The store-on cold run scans none: its miss derives every
+ * one, and the run answers from those rows. With half the skill-text records deleted (their keys'
  * other facts kept), each lane scans exactly the files whose record is gone,
  * plus its declared fallback, and still reproduces the golden.
  *
@@ -176,11 +177,13 @@ describe('the skills phase reproduces the skill-text golden', () => {
     expect([configFreeMoved['skillText.noStore'], configFreeMoved['skillText.storeMiss']]).toEqual([configFreeScanned().size, 0]);
   });
 
-  it('with the store on, cold: every file the packaging lane reads scanned from its text once', async () => {
+  it('with the store on, cold: the packaging lane is served from the run\'s own derived projection', async () => {
     vi.stubEnv('VAT_PROJECTION_STORE', 'sqlite');
     const { text, packagingMoved } = await capture();
     expectGolden(text);
-    expect([packagingMoved['skillText.storeMiss'], packagingMoved['skillText.noStore']]).toEqual([skillLaneScannedFiles(root).length, 0]);
+    // The miss derives every file the lane reads, and the run admits and answers from those rows:
+    // nothing is scanned from its text, and nothing is a miss.
+    expect([packagingMoved['skillText.storeMiss'], packagingMoved['skillText.noStore']]).toEqual([0, 0]);
   });
 
   it('with the store on, warm: served from the store but the declared fallback', async () => {

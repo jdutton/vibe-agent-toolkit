@@ -48,10 +48,10 @@
 
 import { open } from 'node:fs/promises';
 
-import { countWork, deepFreeze, isVatError, memoized, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { countWork, deepFreeze, isPathAbsentError, isVatError, memoized, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { GIT_NO_ANSWER_CODE, gitFindRoot, gitLinksCheckedOutAsFiles, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
-import type { ParserKind } from '../content-key.js';
+import type { KeyedContent, ParserKind } from '../content-key.js';
 import { defaultParseCache } from '../parse-cache.js';
 import { ParseDispatcher } from '../parse-dispatcher.js';
 import type { CollectionConfig } from '../schemas/project-config.js';
@@ -59,7 +59,7 @@ import { isWithinProject, sameDirectory } from '../utils.js';
 
 import type { NotAdmittedEntry } from './blob-refusals.js';
 import type { BlobResourceFacts } from './blob-resource-facts.js';
-import { RunContentCache } from './content-cache.js';
+import { readKeyedContent, RunContentCache } from './content-cache.js';
 import { RootListing, type PopulationUnreadablePolicy } from './crawl-source.js';
 import type { PopulationCache } from './merge.js';
 import {
@@ -70,6 +70,7 @@ import {
   type ResourcePopulationSource,
   type StoredDocumentFacts,
 } from './resource-population.js';
+import { parserKindOf } from './router.js';
 import { hydratesUnder, readRoute, respelledContent, storedRoute, type StoredMember } from './stored-admission.js';
 
 /**
@@ -132,6 +133,44 @@ export interface PopulationRun {
   readonly content: RunContentCache;
   /** The run's one parse dispatcher, under the population's parse limits. */
   readonly dispatcher: ParseDispatcher;
+}
+
+/**
+ * Where a population reads one blob's bytes: the ONE reader the blob stage and
+ * the harness pass both read through, so the two cannot read a blob two ways.
+ */
+export interface RunContentSource {
+  /**
+   * The bytes at `absolutePath`, keyed under the parser kind `contentKey` names,
+   * or null when the file is gone. The answer's `key` may differ from
+   * `contentKey` (the file was rewritten): each caller decides what that means
+   * for it. Any other failure rejects.
+   *
+   * @param entry - The blob's path and the key the population recorded for it
+   */
+  read(entry: { readonly absolutePath: string; readonly contentKey: string }): Promise<KeyedContent | null>;
+}
+
+/**
+ * The on-disk source, through the run's cache: the same bytes the base keyed.
+ *
+ * @param cache - The run's content cache
+ * @returns The source
+ */
+export function diskRunContentSource(cache: RunContentCache): RunContentSource {
+  return {
+    read: async ({ absolutePath, contentKey }) => {
+      // Outside the `try`: a key naming no parser kind is a producer bug, and
+      // reading it as "gone" would blame the corpus for it.
+      const parserKind = parserKindOf(contentKey);
+      try {
+        return await readKeyedContent(absolutePath, parserKind, cache);
+      } catch (error) {
+        if (isPathAbsentError(error)) return null;
+        throw error;
+      }
+    },
+  };
 }
 
 /**
@@ -322,10 +361,10 @@ export class RunPopulation implements PopulationRun {
     // A file that cannot be read now is the cold lane's: its read raises the cold error, an
     // oversize file's included (the cold lane opens it before it refuses it by its size).
     if (route.kind === 'not-admitted') {
-      return (await this.#probe(absolutePath)) === null ? { kind: 'not-admitted', entry: route.entry } : compute();
+      return (await this.#readable(absolutePath, stored)) === null ? { kind: 'not-admitted', entry: route.entry } : compute();
     }
     const read = readRoute((await stored.facts()).outcome(route.contentKey));
-    if (read.kind === 'compute' || (await this.#probe(absolutePath)) !== null) return compute();
+    if (read.kind === 'compute' || (await this.#readable(absolutePath, stored)) !== null) return compute();
     if (read.admitted.kind === 'facts') countWork('registry.admitted', 1);
     return read.admitted;
   }
@@ -475,7 +514,7 @@ export class RunPopulation implements PopulationRun {
     const { facts, decoding } = outcome;
     const { skillText } = facts;
     if (skillText === null) return undefined;
-    if ((await this.#probe(absolutePath)) !== null) return undefined;
+    if ((await this.#readable(absolutePath, stored)) !== null) return undefined;
     return deepFreeze({ facts: { ...facts, skillText }, decoding });
   }
 
@@ -492,6 +531,21 @@ export class RunPopulation implements PopulationRun {
   }
 
   /**
+   * {@link #probe}, unless the run already read the member (a derived population,
+   * `StoredMember.readByRun`): then readability is that read's, and the member's
+   * file is not touched again. The run's content cache hands every later read the
+   * bytes it first saw, so a second open could only disagree with what the run
+   * already admitted.
+   *
+   * @param absolutePath - The file, resolved
+   * @param stored - What the population holds about it
+   * @returns The refusal, or `null` when the file can be read
+   */
+  #readable(absolutePath: string, stored: StoredMember): Promise<{ readonly refused: unknown } | null> {
+    return stored.readByRun ? Promise.resolve(null) : this.#probe(absolutePath);
+  }
+
+  /**
    * Record what a store hit holds about its members, under the spelling the
    * crawl asked by, so {@link admit} can admit them from it. Nothing is
    * recorded for a run whose dispatcher parses under other limits than the ones
@@ -504,7 +558,7 @@ export class RunPopulation implements PopulationRun {
     const { stored } = enumeration;
     if (stored === null || !hydratesUnder(this.dispatcher.limits)) return;
     for (const [path, realization] of stored.members) {
-      if (!this.#stored.has(path)) this.#stored.set(path, { realization, facts: stored.facts });
+      if (!this.#stored.has(path)) this.#stored.set(path, { realization, facts: stored.facts, readByRun: stored.readByRun });
     }
   }
 

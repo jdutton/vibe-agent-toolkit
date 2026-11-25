@@ -196,8 +196,8 @@ measure yours with `du` after a warm run. Internals: [where the caches live](htt
 - **Key the cache on** runner OS, architecture, installed Node version,
   lockfile hash and the commit, with restore keys the same string without the commit, so a restore
   never crosses OSes, machine kinds, lockfiles or Node versions. The namespace of an installed VAT
-  is only its version, VAT's parser dependencies are caret ranges a lockfile change can move, and
-  Node's Unicode tables feed the parser. A project running VAT from source must also key on VAT's
+  is its version plus a digest of its resolved parser versions (`<version>-p<6 hex>`), which does not
+  cover Node's Unicode tables, and those feed the parser. A project running VAT from source must also key on VAT's
   source.
 - **A foreign or stale cache misses; it never answers wrong.** The parse cache and the store's blob
   tier are keyed by parser route and the bytes' SHA-256; a stored tree is keyed by the checkout's

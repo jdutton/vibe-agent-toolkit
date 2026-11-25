@@ -1,6 +1,7 @@
 /**
- * The harness pass's on-disk reader: the bytes while they still key to the
- * blob, null when the file is gone or rewritten, and every other failure loud.
+ * The run's on-disk content source, which the blob stage and the harness pass
+ * both read through: the bytes keyed under the blob's parser kind, null when the
+ * file is gone, and every other failure loud.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -11,8 +12,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { computeContentKey } from '../../src/content-key.js';
 import { RunContentCache } from '../../src/projection/content-cache.js';
-import { diskHarnessContentReader } from '../../src/projection/harness/harness-pass.js';
 import type { HarnessFrontierEntry } from '../../src/projection/harness/reach.js';
+import { diskRunContentSource } from '../../src/projection/run-population.js';
 
 const WIDGETS = '# acme widgets\n';
 
@@ -33,35 +34,38 @@ function entryFor(content: string): { absolutePath: string; entry: HarnessFronti
   return { absolutePath, entry: { contentKey, path: 'CLAUDE.md', rootId: 'acme', absolutePath } };
 }
 
-describe('diskHarnessContentReader', () => {
+describe('diskRunContentSource', () => {
   afterEach(() => {
     for (const directory of made.splice(0)) rmSync(directory, { recursive: true, force: true });
   });
 
-  it('reads the bytes while they still key to the blob, measured in them', async () => {
+  it('reads the bytes under the blob\'s key, measured in them', async () => {
     const { entry } = entryFor(WIDGETS);
-    await expect(diskHarnessContentReader(new RunContentCache())(entry)).resolves.toMatchObject({
+    await expect(diskRunContentSource(new RunContentCache()).read(entry)).resolves.toMatchObject({
+      key: entry.contentKey,
       content: WIDGETS,
       byteLength: Buffer.byteLength(WIDGETS, 'utf8'),
     });
   });
 
-  it('answers null when the bytes no longer key to the blob', async () => {
+  it('answers rewritten bytes under their own key, for the caller to refuse', async () => {
     const { absolutePath, entry } = entryFor(WIDGETS);
     writeFileSync(absolutePath, '# rewritten\n', 'utf-8');
-    await expect(diskHarnessContentReader(new RunContentCache())(entry)).resolves.toBeNull();
+    const read = await diskRunContentSource(new RunContentCache()).read(entry);
+    expect(read?.content).toBe('# rewritten\n');
+    expect(read?.key).not.toBe(entry.contentKey);
   });
 
   it('answers null when the file is gone', async () => {
     const { absolutePath, entry } = entryFor(WIDGETS);
     rmSync(absolutePath);
-    await expect(diskHarnessContentReader(new RunContentCache())(entry)).resolves.toBeNull();
+    await expect(diskRunContentSource(new RunContentCache()).read(entry)).resolves.toBeNull();
   });
 
   it('rethrows a failure that is not an absence', async () => {
     const { absolutePath, entry } = entryFor(WIDGETS);
     rmSync(absolutePath);
     mkdirSyncReal(absolutePath);
-    await expect(diskHarnessContentReader(new RunContentCache())(entry)).rejects.toThrow();
+    await expect(diskRunContentSource(new RunContentCache()).read(entry)).rejects.toThrow();
   });
 });

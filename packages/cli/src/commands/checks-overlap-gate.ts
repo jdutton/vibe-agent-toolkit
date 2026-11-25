@@ -8,11 +8,16 @@
  * - (a) `--debug` is off: the child's first `--debug` line describes its stderr stream, which an
  *   overlapped child holds as a file;
  * - (b) at least two cores (`os.availableParallelism()`);
- * - (c) the home population for the child's outputs (`childHomeKey`) settled as a store hit;
+ * - (c) the home population for the child's outputs (`childHomeKey`) settled as a store hit. A
+ *   derived home carries content too (its own projection's blob rows, which admission after a miss
+ *   reads), but a child spawned beside a miss would read a store the parent has only just written,
+ *   with no handoff of the tree it was written under, so a miss stays sequential;
  * - (d) the run parses under the limits the store's facts were filed under (`hydratesUnder`);
  * - (e) every stored member is admitted from the store by admission's OWN predicates
  *   (`storedComputeBy`: `storedRoute`, then the kind the one fact reader would return for the
- *   key), under the parser the run's one routing sends it to (`parserKindForResolvedPath`). The
+ *   key, over whichever rows the population carried: `StoredContent.facts` is the one reader
+ *   whatever its row source), under the parser the run's one routing sends it to
+ *   (`parserKindForResolvedPath`). The
  *   check is route-only: it builds no member's facts and keeps nothing it read, so the parent's
  *   memory is admission's alone. The rows its predicates check are counted
  *   `checks.gate.rows.read`, summed per member, and no other counter. The tier read itself is the population's shared

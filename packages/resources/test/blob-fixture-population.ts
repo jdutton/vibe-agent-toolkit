@@ -20,14 +20,16 @@ import { writeFile } from 'node:fs/promises';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ParseCache } from '../src/parse-cache.js';
-import { type ParsePoolPolicy, withParseDispatcher } from '../src/parse-dispatcher.js';
+import { type ParseDispatcher, type ParsePoolPolicy, withParseDispatcher } from '../src/parse-dispatcher.js';
 import { type BlobPopulationResult, populateBlobs } from '../src/projection/blob-population.js';
 import { RunContentCache } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
-import { populate } from '../src/projection/merge.js';
+import { type BlobStage, populate, storedTierReads } from '../src/projection/merge.js';
 import { ProjectionBuilder, type Projection } from '../src/projection/projection.js';
+import { diskRunContentSource } from '../src/projection/run-population.js';
+import { EMPTY_STORED_TIER } from '../src/projection/store-hydration.js';
 import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
 
 import { inOwnRun } from './helpers/population-run.js';
@@ -134,5 +136,21 @@ export function populateBlobsOnOwnDispatcher(
   builder: ProjectionBuilder,
   dispatch: { cache?: ParseCache; policy?: ParsePoolPolicy } = {},
 ): Promise<BlobPopulationResult> {
-  return withParseDispatcher((dispatcher) => populateBlobs(builder, { dispatcher }), dispatch);
+  return withParseDispatcher((dispatcher) => populateBlobs(builder, {
+    dispatcher,
+    content: diskRunContentSource(builder.base().contentCache),
+    stored: EMPTY_STORED_TIER,
+  }), dispatch);
+}
+
+/**
+ * The blob stage a store-off run drives: the given dispatcher, the disk source over the builder's cache, and
+ * no stored tier — what a suite driving `afterClosurePromotion` by hand stands in for.
+ *
+ * @param builder - The builder the stage derives into
+ * @param dispatcher - The run's dispatcher
+ * @returns The stage
+ */
+export function storeOffBlobStage(builder: ProjectionBuilder, dispatcher: ParseDispatcher): BlobStage {
+  return { dispatcher, content: diskRunContentSource(builder.base().contentCache), tier: storedTierReads(undefined) };
 }

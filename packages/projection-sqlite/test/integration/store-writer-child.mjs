@@ -17,6 +17,13 @@
  *   mode `contended` — rewrite ONE shared extent `iterations` times, so a
  *                      concurrent reader can look for a torn read
  *
+ * Usage: node store-writer-child.mjs <directory> <writerId> covering <retainedBlobKeys> <barrier> <peers> <keys>
+ *   mode `covering`  — one run's blob write: read the tier for `keys` (comma
+ *                      separated) and call each key with a `blobs` row covered,
+ *                      wait until `peers` writers have read (a `<writerId>.ready`
+ *                      file each under `barrier`), then write every key through
+ *                      the port with that coverage
+ *
  * `retention` is `retainedExtentsPerRoot`, and it is a parameter because the
  * `distinct` arm writes one tree PER WRITER under a single root. That arm asks
  * whether a concurrent write LOSES rows — the failure that rejected `pglite`,
@@ -27,11 +34,17 @@
  * retention policy itself is pinned in `test/store.test.ts`.
  */
 
+import { readdirSync, writeFileSync } from 'node:fs';
+import { setTimeout as sleep } from 'node:timers/promises';
+
 import { openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
-import { forEachInOrder } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, safePath } from '@vibe-agent-toolkit/utils';
 
 const [directory, writerId, mode, iterationsRaw, retentionRaw] = process.argv.slice(2);
 const iterations = Number(iterationsRaw);
+
+/** How long a `covering` writer waits for its peers before giving up. */
+const BARRIER_DEADLINE_MS = 15_000;
 
 /** A content key of the shape the schema requires: `<parserKind>.<64 hex>`. */
 function key(writer, index) {
@@ -40,7 +53,7 @@ function key(writer, index) {
   return `markdown.${digits}`;
 }
 
-/** The `blobs` row for one key; the child tables stay empty here. */
+/** One key's rows: a `blobs` row and one `claude-code` harness pair; the other blob tables stay empty. */
 function blobBundle(contentKey) {
   return {
     blobs: [{
@@ -96,23 +109,68 @@ function extentBundle(rootId, count) {
   };
 }
 
-const store = openSqliteFactStore(
-  retentionRaw === undefined ? { directory } : { directory, retainedExtentsPerRoot: Number(retentionRaw) },
-);
-try {
-  // In order: each write is one transaction, and the contention under test is between processes, not
-  // between this writer's own writes — overlapping them would measure something else.
-  const indexes = Array.from({ length: iterations }, (_, index) => index);
-  if (mode === 'distinct') {
-    await forEachInOrder(indexes, (index) => store.writeBlobFacts(blobBundle(key(writerId, index))));
-    await store.writeExtent({ rootId: 'root-shared', treeHash: `tree-${writerId}` }, extentBundle('r', 1));
-  } else {
-    // Alternate the row count so a stale half is detectable rather than
-    // accidentally matching the fresh half.
-    await forEachInOrder(indexes, (index) =>
-      store.writeExtent({ rootId: 'root-shared', treeHash: 'tree-contended' }, extentBundle('r', (index % 3) + 1)),
-    );
+/** The rows of several keys as one bundle. */
+function mergedBundle(contentKeys) {
+  const merged = {};
+  for (const contentKey of contentKeys) {
+    for (const [table, rows] of Object.entries(blobBundle(contentKey))) merged[table] = [...(merged[table] ?? []), ...rows];
   }
-} finally {
-  await store.close();
+  return merged;
 }
+
+/** Wait until `peers` writers have each left a ready file under `barrier`. */
+async function awaitPeers(barrier, peers, deadline = Date.now() + BARRIER_DEADLINE_MS) {
+  if (readdirSync(barrier).filter((name) => name.endsWith('.ready')).length >= peers) return;
+  if (Date.now() > deadline) throw new Error(`writer ${writerId}: the barrier never filled`);
+  await sleep(2);
+  await awaitPeers(barrier, peers, deadline);
+}
+
+/** One run's blob write against a store other writers share: read, decide coverage, barrier, write. */
+async function coveringWrite() {
+  const [, , , retention, barrier, peers, keysRaw] = process.argv.slice(2);
+  const held = keysRaw.split(',');
+  const store = openSqliteFactStore({ directory, retainedBlobKeys: Number(retention) });
+  try {
+    const read = await store.readBlobFacts(held, { tables: ['blobs'], referenceForms: 'all' });
+    const covered = read.blobs.map((row) => row.contentKey);
+    writeFileSync(safePath.join(barrier, `${writerId}.ready`), '');
+    await awaitPeers(barrier, Number(peers));
+    await store.writeBlobFacts({
+      rows: mergedBundle(held),
+      coveredAtRead: covered,
+      settledAtRead: covered.map((contentKey) => ({ contentKey, harness: 'claude-code' })),
+    });
+  } finally {
+    await store.close();
+  }
+}
+
+/** The `distinct` and `contended` arms: `iterations` writes, in order. */
+async function repeatedWrites() {
+  const store = openSqliteFactStore(
+    retentionRaw === undefined ? { directory } : { directory, retainedExtentsPerRoot: Number(retentionRaw) },
+  );
+  try {
+    // In order: each write is one transaction, and the contention under test is between processes, not
+    // between this writer's own writes — overlapping them would measure something else.
+    const indexes = Array.from({ length: iterations }, (_, index) => index);
+    if (mode === 'distinct') {
+      await forEachInOrder(indexes, (index) =>
+        store.writeBlobFacts({ rows: blobBundle(key(writerId, index)), coveredAtRead: [], settledAtRead: [] }),
+      );
+      await store.writeExtent({ rootId: 'root-shared', treeHash: `tree-${writerId}` }, extentBundle('r', 1));
+    } else {
+      // Alternate the row count so a stale half is detectable rather than
+      // accidentally matching the fresh half.
+      await forEachInOrder(indexes, (index) =>
+        store.writeExtent({ rootId: 'root-shared', treeHash: 'tree-contended' }, extentBundle('r', (index % 3) + 1)),
+      );
+    }
+  } finally {
+    await store.close();
+  }
+}
+
+if (mode === 'covering') await coveringWrite();
+else await repeatedWrites();

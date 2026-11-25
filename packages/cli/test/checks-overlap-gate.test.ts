@@ -96,15 +96,17 @@ describe('createChecksOverlapGate', () => {
   it('declines a home the store did not serve', async () => {
     const fake = fakeSpawn();
     const gate = gateOf({ spawn: fake.spawn });
+    // A derived home carries its own projection's rows, every member admitted from them: only the
+    // outcome can decline it, so a gate that read the content alone would spawn here.
+    const { tier, settlement } = ADMITTED_HOME();
+    if (!settlement.ok) throw new Error('the fixture settles');
     const derived: ResourceEnumeration = {
-      paths: [],
-      conditions: [],
+      ...settlement.enumeration,
       outcome: { population: 'derived', stored: 'written' },
-      extentSource: 'git',
-      stored: null,
     };
     gate.onHomeSettled(HOME_KEY, { ok: true, enumeration: derived });
     expect(await gate.decision).toEqual({ mode: 'sequential', declinedBy: { condition: 'not-hit' } });
+    expect(tier.reads).toBe(0);
     expect(fake.calls).toBe(0);
   });
 

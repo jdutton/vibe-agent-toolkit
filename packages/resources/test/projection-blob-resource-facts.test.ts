@@ -13,8 +13,8 @@ import { describe, expect, it } from 'vitest';
 
 import { parseHtmlContent } from '../src/html-link-parser.js';
 import { parseMarkdownContent, type ParseResult } from '../src/link-parser.js';
+import { BLOB_NOT_TEXT, BLOB_PARSE_FAILED } from '../src/projection/blob-condition-codes.js';
 import { blobConditionsFor, blobRowFor, skillTextRowsFor } from '../src/projection/blob-facts.js';
-import { BLOB_NOT_TEXT, BLOB_PARSE_FAILED } from '../src/projection/blob-population.js';
 import { blobReferencesFor } from '../src/projection/blob-references.js';
 import { blobFactsReader, type BlobFactsOutcome } from '../src/projection/blob-resource-facts.js';
 import { blobSectionsFor } from '../src/projection/blob-sections.js';

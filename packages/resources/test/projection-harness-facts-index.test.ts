@@ -1,7 +1,7 @@
 import { compareCodeUnits } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { BLOB_PARSE_LIMIT_EXCEEDED, BLOB_PARSE_WORKER_DIED } from '../src/projection/blob-population.js';
+import { BLOB_PARSE_LIMIT_EXCEEDED, BLOB_PARSE_WORKER_DIED } from '../src/projection/blob-condition-codes.js';
 import { harnessFactsIndex, HarnessFactsAbsentError, HARNESS_FACTS_ABSENT } from '../src/projection/harness/facts-index.js';
 import { HARNESS_PROFILES } from '../src/projection/harness/profile.js';
 import type { BlobConditionRow } from '../src/schemas/projection-blobs.js';

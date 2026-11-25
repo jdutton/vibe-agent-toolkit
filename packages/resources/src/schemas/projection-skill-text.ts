@@ -6,7 +6,8 @@
  * markdown blob facts like `blob_sections`: written by the same write as the
  * blob's other rows, evicted with them, and read back by the one fact reader
  * (`blobFactsReader`). A markdown blob with a `blobs` row has exactly one
- * `skill_text_facts` row; any other blob has none. A record past its bound
+ * `skill_text_facts` row; any other blob has none. A markdown blob
+ * without its facts row is uncovered (`uncoveredContentKeys`), so the next write replaces it. A record past its bound
  * (`skillTextHeld`) is not kept: its facts row says `held` false and it has no
  * match rows.
  *

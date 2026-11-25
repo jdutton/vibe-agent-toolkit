@@ -7,8 +7,11 @@ import { z } from 'zod';
 
 import {
   devNamespaceDigest,
+  installedNamespaceName,
   isVatCacheRootEntryName,
   parseCacheDirectory,
+  parserVersionsDigest,
+  resolvedParserVersions,
   vatCacheNamespace,
   vatCacheNamespaceRoot,
 } from '../src/cache-namespace.js';
@@ -56,6 +59,7 @@ async function restampModules(dir: string, epochSeconds: number): Promise<void> 
 /** A stand-in for the shape input, so path-only tests state what they hold fixed. */
 const A_SHAPE = '{"type":"object"}';
 const A_DECLARATION = skillTextDeclarationDigest(SKILL_TEXT_DECLARATION);
+const A_PARSERS = parserVersionsDigest([{ name: 'yaml', version: '2.6.1' }]);
 
 describe('devNamespaceDigest', () => {
   let tempDir: string;
@@ -74,11 +78,11 @@ describe('devNamespaceDigest', () => {
     // a negative control by construction: it was RED before, because both the
     // size (different body length) and the mtime move below.
     await writeRebuiltModules(tempDir, 'export const version = 1;');
-    const before = devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION);
+    const before = devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION, A_PARSERS);
 
     await writeRebuiltModules(tempDir, 'export const version = 2; // rebuilt, and longer than before');
     await restampModules(tempDir, Date.now() / 1000 + 3600);
-    const after = devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION);
+    const after = devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION, A_PARSERS);
 
     expect(after).toBe(before);
   });
@@ -88,30 +92,31 @@ describe('devNamespaceDigest', () => {
     // recorded each missing module as `<name>:absent`, so mid-clean runs got
     // their own namespace; nothing about a parse fact changed.
     await writeRebuiltModules(tempDir, 'export const version = 1;');
-    const populated = devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION);
+    const populated = devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION, A_PARSERS);
 
     await Promise.all(REBUILT_MODULE_FILES.map(async (name) => fs.rm(safePath.join(tempDir, name))));
 
-    expect(devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION)).toBe(populated);
+    expect(devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION, A_PARSERS)).toBe(populated);
   });
 
-  it('depends on the module directory, the entry shape and the skill-text declaration, and NOTHING else', () => {
+  it('depends on the module directory, the entry shape, the skill-text declaration and the parser versions, and NOTHING else', () => {
     // Pins the whole input set, so a fourth input cannot appear quietly. A
     // hand-bumped parser-revision constant was once an argument here and must
     // not return: every input is DERIVED — the path from where this code was
     // resolved, the shape from `ParseFactsSchema` itself, the declaration digest
-    // from the patterns the skill-text core applies — so none can fall behind
+    // from the patterns the skill-text core applies, the parser versions from the
+    // resolved packages — so none can fall behind
     // what it stands for. What is left over lives in `vat cache clear` (a change
     // of meaning, at unchanged shape and declaration).
-    expect(devNamespaceDigest).toHaveLength(3);
+    expect(devNamespaceDigest).toHaveLength(4);
   });
 
   it('moves when the module directory moves, so two worktrees never share a namespace', () => {
     // The one thing the path component is for. Every worktree reads the same
     // version from the same manifest, so without this, branch A and branch B
     // would collide — precisely when invalidation matters most.
-    expect(devNamespaceDigest(safePath.join(tempDir, 'other-worktree'), A_SHAPE, A_DECLARATION)).not.toBe(
-      devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION)
+    expect(devNamespaceDigest(safePath.join(tempDir, 'other-worktree'), A_SHAPE, A_DECLARATION, A_PARSERS)).not.toBe(
+      devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION, A_PARSERS)
     );
   });
 
@@ -119,7 +124,7 @@ describe('devNamespaceDigest', () => {
     // The counterpart. Without this input, adding an OPTIONAL field to
     // `ParseFacts` leaves every pre-existing entry valid, correctly keyed and
     // silently missing the new field — the exact defect that shipped once.
-    expect(devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION)).not.toBe(devNamespaceDigest(tempDir, '{"type":"array"}', A_DECLARATION));
+    expect(devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION, A_PARSERS)).not.toBe(devNamespaceDigest(tempDir, '{"type":"array"}', A_DECLARATION, A_PARSERS));
   });
 
   it('moves when the skill-text declaration moves, so a pattern edit never serves the old pattern\'s records', () => {
@@ -128,18 +133,74 @@ describe('devNamespaceDigest', () => {
     // key unchanged, so only this input sends a dev checkout to a new namespace.
     const edited = skillTextDeclarationDigest({ ...SKILL_TEXT_DECLARATION, h1: /^#[ \t]([^\n]+)$/m });
     expect(edited).not.toBe(A_DECLARATION);
-    expect(devNamespaceDigest(tempDir, A_SHAPE, edited)).not.toBe(devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION));
+    expect(devNamespaceDigest(tempDir, A_SHAPE, edited, A_PARSERS)).not.toBe(devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION, A_PARSERS));
+  });
+
+  it('moves when the resolved parser versions move, so a dependency resolution never serves another\'s rows', () => {
+    const other = parserVersionsDigest([{ name: 'yaml', version: '2.6.2' }]);
+    expect(devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION, other)).not.toBe(devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION, A_PARSERS));
   });
 
   it('cannot be confused by moving the boundary between its inputs', () => {
     // Concatenating inputs into one hash without a separator lets ('ab', 'c')
     // and ('a', 'bc') collide. Cheap to get wrong, invisible when wrong.
-    expect(devNamespaceDigest(`${tempDir}/x`, 'y', A_DECLARATION)).not.toBe(devNamespaceDigest(tempDir, '/xy', A_DECLARATION));
-    expect(devNamespaceDigest(tempDir, `${A_SHAPE}z`, 'w')).not.toBe(devNamespaceDigest(tempDir, A_SHAPE, 'zw'));
+    expect(devNamespaceDigest(`${tempDir}/x`, 'y', A_DECLARATION, A_PARSERS)).not.toBe(devNamespaceDigest(tempDir, '/xy', A_DECLARATION, A_PARSERS));
+    expect(devNamespaceDigest(tempDir, `${A_SHAPE}z`, 'w', A_PARSERS)).not.toBe(devNamespaceDigest(tempDir, A_SHAPE, 'zw', A_PARSERS));
   });
 
   it('is six lowercase hex digits, so it is safe as a path segment', () => {
-    expect(devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION)).toMatch(/^[0-9a-f]{6}$/u);
+    expect(devNamespaceDigest(tempDir, A_SHAPE, A_DECLARATION, A_PARSERS)).toMatch(/^[0-9a-f]{6}$/u);
+  });
+});
+
+describe('parserVersionsDigest', () => {
+  it('differs for yaml 2.6.1 and 2.6.2, so a parser resolution change moves the namespace', () => {
+    expect(parserVersionsDigest([{ name: 'yaml', version: '2.6.1' }])).not.toBe(parserVersionsDigest([{ name: 'yaml', version: '2.6.2' }]));
+  });
+
+  it('does not depend on the order the list is given in, and is six lowercase hex digits', () => {
+    const forward = [{ name: 'yaml', version: '2.6.1' }, { name: 'parse5', version: '7.3.0' }];
+    expect(parserVersionsDigest([...forward].reverse())).toBe(parserVersionsDigest(forward));
+    expect(parserVersionsDigest(forward)).toMatch(/^[0-9a-f]{6}$/u);
+  });
+
+  it('cannot be confused by moving a boundary between a name and a version', () => {
+    expect(parserVersionsDigest([{ name: 'a', version: 'b@c' }])).not.toBe(parserVersionsDigest([{ name: 'a@b', version: 'c' }]));
+  });
+});
+
+describe('installedNamespaceName', () => {
+  it('begins with the package version and carries the parser digest as a -p suffix', () => {
+    const digest = parserVersionsDigest([{ name: 'yaml', version: '2.6.1' }]);
+    expect(installedNamespaceName('0.1.42', digest)).toBe(`0.1.42-p${digest}`);
+    expect(installedNamespaceName('0.1.42', digest).startsWith('0.1.42')).toBe(true);
+  });
+
+  it('is shaped like a namespace name, including a prerelease version\'s', () => {
+    expect(isVatCacheRootEntryName(installedNamespaceName('0.1.42', 'abc123'))).toBe(true);
+    expect(isVatCacheRootEntryName(installedNamespaceName('0.2.0-rc.1', 'abc123'))).toBe(true);
+  });
+});
+
+describe('resolvedParserVersions', () => {
+  it('names the four parsers this package declares, each with the version installed', () => {
+    const moduleDir = safePath.join(resolveFromImportMeta(import.meta.url), '..', '..', 'src');
+    const resolved = resolvedParserVersions(moduleDir);
+    expect(resolved.map((entry) => entry.name).sort((left, right) => left.localeCompare(right))).toEqual(['github-slugger', 'parse5', 'remark-parse', 'yaml']);
+    for (const entry of resolved) expect(entry.version, entry.name).toMatch(/^\d+\.\d+\.\d+/u);
+  });
+
+  it('stays loud when a resolvable parser has no manifest naming a version', async () => {
+    const root = await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'vat-parser-fixture-'));
+    try {
+      const packageDir = safePath.join(root, 'node_modules', 'remark-parse');
+      await fs.mkdir(packageDir, { recursive: true });
+      await fs.writeFile(safePath.join(packageDir, 'index.js'), 'module.exports = {};');
+      await fs.writeFile(safePath.join(packageDir, 'package.json'), '{"name":"remark-parse"}');
+      expect(() => resolvedParserVersions(root)).toThrow(/No package\.json naming a version/u);
+    } finally {
+      await removeScratchDir(root);
+    }
   });
 });
 
@@ -199,7 +260,7 @@ describe('vatCacheNamespace', () => {
     // Ties the memoized entry point to the function the tests above exercise:
     // without this, `devNamespaceDigest` could drift into being decoration.
     const moduleDir = safePath.join(resolveFromImportMeta(import.meta.url), '..', '..', 'src');
-    expect(vatCacheNamespace().endsWith(`-dev-${devNamespaceDigest(moduleDir, parseFactsShapeSource(), A_DECLARATION)}`)).toBe(true);
+    expect(vatCacheNamespace().endsWith(`-dev-${devNamespaceDigest(moduleDir, parseFactsShapeSource(), A_DECLARATION, parserVersionsDigest(resolvedParserVersions(moduleDir)))}`)).toBe(true);
   });
 
   it('is stable within a process, so two lookups cannot disagree', () => {

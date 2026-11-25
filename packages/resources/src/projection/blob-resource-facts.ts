@@ -69,11 +69,12 @@ import type { SkillTextFactsRow, SkillTextMatchRow } from '../schemas/projection
 import type { HtmlParseError, ResourceLink, ResourceMetadata, UnresolvedReference } from '../schemas/resource-metadata.js';
 import { SkillTextFactsSchema, type SkillTextFacts, type SkillTextMatch } from '../schemas/skill-text-facts.js';
 
+import { BLOB_NOT_TEXT } from './blob-condition-codes.js';
 import { BLOB_FINDING_CONDITION_CODES } from './blob-facts.js';
-import { BLOB_NOT_TEXT, parserKindOf } from './blob-population.js';
 import { NODE_TYPE_OF_AST_FORM } from './blob-references.js';
 import { notAdmittedEntriesByBlob, type NotAdmittedEntry } from './blob-refusals.js';
 import { NOT_TEXT_RESOURCE_FACTS } from './document-facts.js';
+import { parserKindOf } from './router.js';
 import { restoredMatchText } from './skill-text-match-text.js';
 import type { BlobScopedRows, BlobScopedTableName } from './store.js';
 
@@ -286,7 +287,11 @@ export function optionalParseFacts(source: OptionalParseFacts): OptionalParseFac
 }
 
 /** One key's rows, gathered in one pass over the bundle. */
-interface KeyRows {
+/**
+ * One key's blob-tier rows, each table in the order a parse emits it: the shape
+ * {@link blobRowsByKey} hands back, and the one place that order is decided.
+ */
+export interface BlobKeyRows {
   blob: BlobRow | undefined;
   references: BlobReferenceRow[];
   sections: BlobSectionRow[];
@@ -316,8 +321,11 @@ export const BLOB_FACT_READER_TABLES = [
   'skillTextMatches',
 ] as const satisfies readonly BlobScopedTableName[];
 
-/** The rows {@link blobFactsReader} reads: {@link BLOB_FACT_READER_TABLES} only. */
-type BlobFactReaderRows = Pick<BlobScopedRows, (typeof BLOB_FACT_READER_TABLES)[number]>;
+/**
+ * The rows {@link blobFactsReader} reads: {@link BLOB_FACT_READER_TABLES} only. The one type every
+ * blob-tier coverage question takes, so none can read a table outside that list.
+ */
+export type BlobCoverageRows = Pick<BlobScopedRows, (typeof BLOB_FACT_READER_TABLES)[number]>;
 
 /**
  * What the tier says about one key without building its facts: the kind
@@ -351,8 +359,8 @@ export interface BlobFactsReader {
  * @param rows - Blob-scoped rows for any set of keys, as a store returns them
  * @returns The reader; the bundle is indexed once, and nothing decoded is kept
  */
-export function blobFactsReader(rows: BlobFactReaderRows): BlobFactsReader {
-  const byKey = indexByKey(rows);
+export function blobFactsReader(rows: BlobCoverageRows): BlobFactsReader {
+  const byKey = blobRowsByKey(rows);
   return {
     outcome: (contentKey) => outcomeOf(contentKey, byKey.get(contentKey)),
     answer: (contentKey) => answerOf(contentKey, byKey.get(contentKey)),
@@ -360,12 +368,18 @@ export function blobFactsReader(rows: BlobFactReaderRows): BlobFactsReader {
 }
 
 /**
- * @param rows - The bundle
- * @returns Each key's rows
+ * Group a bundle's rows by key, each table in the order a parse emits it: conditions by finding
+ * code ({@link conditionOrder}) then ordinal, sections, references and skill-text matches by
+ * ordinal. The ONE grouping and ordering of stored blob rows: the reader rebuilds facts from it,
+ * and the blob stage emits a covered key's rows from it, so a served key's rows land in a
+ * projection exactly where a parse would put them.
+ *
+ * @param rows - The bundle, in whatever order a store returns it
+ * @returns Each key's rows, ordered
  */
-function indexByKey(rows: BlobFactReaderRows): Map<string, KeyRows> {
-  const byKey = new Map<string, KeyRows>();
-  const of = (key: string): KeyRows => {
+export function blobRowsByKey(rows: BlobCoverageRows): Map<string, BlobKeyRows> {
+  const byKey = new Map<string, BlobKeyRows>();
+  const of = (key: string): BlobKeyRows => {
     let entry = byKey.get(key);
     if (entry === undefined) {
       entry = { blob: undefined, references: [], sections: [], conditions: [], skillTextFacts: [], skillTextMatches: [] };
@@ -379,13 +393,33 @@ function indexByKey(rows: BlobFactReaderRows): Map<string, KeyRows> {
   for (const row of rows.blobConditions) of(row.blob).conditions.push(row);
   for (const row of rows.skillTextFacts) of(row.blob).skillTextFacts.push(row);
   for (const row of rows.skillTextMatches) of(row.blob).skillTextMatches.push(row);
+  for (const entry of byKey.values()) {
+    entry.conditions.sort(conditionOrder);
+    entry.sections.sort(byOrdinal);
+    entry.references.sort(byOrdinal);
+    entry.skillTextMatches.sort(byOrdinal);
+  }
   return byKey;
+}
+
+/**
+ * The order a parse emits one key's conditions in: by finding code, in the order
+ * {@link BLOB_FINDING_CONDITION_CODES} lists them, then by ordinal. A refusal code (a key's only
+ * condition) is no finding code and ranks first. So does a code no parse emits: rows carrying one
+ * are damaged, and {@link findingRowsFault} refuses them whatever their order.
+ *
+ * @param left - A condition row
+ * @param right - Another
+ * @returns Their order
+ */
+function conditionOrder(left: BlobConditionRow, right: BlobConditionRow): number {
+  return BLOB_FINDING_CONDITION_CODES.indexOf(left.code) - BLOB_FINDING_CONDITION_CODES.indexOf(right.code) || byOrdinal(left, right);
 }
 
 /** What a key's rows are, before any fact is built: the one classification both of the reader's answers make. */
 type KeyVerdict =
   /** A `blobs` row: facts, once {@link blobRowsFault} finds nothing wrong with the rows. */
-  | { readonly kind: 'blob'; readonly blob: BlobRow; readonly rows: KeyRows }
+  | { readonly kind: 'blob'; readonly blob: BlobRow; readonly rows: BlobKeyRows }
   /** Not text: the constant facts. */
   | { readonly kind: 'not-text' }
   | Extract<BlobFactsOutcome, { kind: 'not-admitted' | 'uncovered' }>;
@@ -395,7 +429,7 @@ type KeyVerdict =
  * @param rows - Its rows, if the bundle held any
  * @returns What its rows are
  */
-function verdictOf(contentKey: string, rows: KeyRows | undefined): KeyVerdict {
+function verdictOf(contentKey: string, rows: BlobKeyRows | undefined): KeyVerdict {
   // One reason whether or not the key had other rows: what reaches the reader
   // depends on the request (the admission's omits the lexical reference rows and
   // the harness tables), so "no rows" would be false for a key the store holds.
@@ -413,7 +447,7 @@ function verdictOf(contentKey: string, rows: KeyRows | undefined): KeyVerdict {
  * @param rows - Its rows, if the bundle held any
  * @returns What the tier says about it
  */
-function outcomeOf(contentKey: string, rows: KeyRows | undefined): BlobFactsOutcome {
+function outcomeOf(contentKey: string, rows: BlobKeyRows | undefined): BlobFactsOutcome {
   const verdict = verdictOf(contentKey, rows);
   if (verdict.kind === 'not-text') {
     return { kind: 'facts', facts: { ...NOT_TEXT_RESOURCE_FACTS, links: [], headings: [], contentKey, frontmatterNotAMapping: false }, decoding: null };
@@ -430,8 +464,8 @@ function outcomeOf(contentKey: string, rows: KeyRows | undefined): BlobFactsOutc
  * @param rows - Its rows, if the bundle held any
  * @returns The kind {@link outcomeOf} returns for it, and the rows read to say so
  */
-function answerOf(contentKey: string, rows: KeyRows | undefined): BlobTierAnswer {
-  const rowCountOf = (held: KeyRows): number =>
+function answerOf(contentKey: string, rows: BlobKeyRows | undefined): BlobTierAnswer {
+  const rowCountOf = (held: BlobKeyRows): number =>
     (held.blob === undefined ? 0 : 1) + held.references.length + held.sections.length + held.conditions.length
     + held.skillTextFacts.length + held.skillTextMatches.length;
   const rowsRead = rows === undefined ? 0 : rowCountOf(rows);
@@ -453,19 +487,19 @@ function byOrdinal(left: { readonly ordinal: number }, right: { readonly ordinal
 /**
  * The finding conditions of one code, in the order the parse emitted them.
  *
- * @param rows - Every row the key holds
+ * @param rows - Every row the key holds, ordered by {@link blobRowsByKey}
  * @param code - The finding code
  * @returns Its rows by ordinal
  */
-function findings(rows: KeyRows, code: string): BlobConditionRow[] {
-  return rows.conditions.filter((row) => row.code === code).sort(byOrdinal);
+function findings(rows: BlobKeyRows, code: string): BlobConditionRow[] {
+  return rows.conditions.filter((row) => row.code === code);
 }
 
 /**
  * @param rows - Every row the key holds, already found sound by {@link rowsFault}
  * @returns The unresolved references
  */
-function unresolvedOf(rows: KeyRows): UnresolvedReference[] {
+function unresolvedOf(rows: BlobKeyRows): UnresolvedReference[] {
   // `rowsFault` refused a row without a line, so none is skipped here.
   return findings(rows, 'UNRESOLVED_REFERENCE').flatMap((row) =>
     row.line === null ? [] : [buildFrom(UNRESOLVED_REFERENCE_FIELDS, { ...row, line: row.line })]);
@@ -489,7 +523,7 @@ function isDense(numbers: readonly number[]): boolean {
  * @param rows - Every row the key holds
  * @returns Why the finding rows cannot be trusted, or `undefined`
  */
-function findingRowsFault(blob: BlobRow, rows: KeyRows): string | undefined {
+function findingRowsFault(blob: BlobRow, rows: BlobKeyRows): string | undefined {
   let total = 0;
   for (const code of BLOB_FINDING_CONDITION_CODES) {
     const ordinals = rows.conditions.filter((row) => row.code === code).map((row) => row.ordinal);
@@ -543,7 +577,7 @@ function astReferences(references: readonly BlobReferenceRow[]): AstReference[] 
  * @param ast - The key's AST reference rows
  * @returns Why the rows cannot be trusted, or `undefined`
  */
-function rowsFault(blob: BlobRow, rows: KeyRows, ast: readonly AstReference[]): string | undefined {
+function rowsFault(blob: BlobRow, rows: BlobKeyRows, ast: readonly AstReference[]): string | undefined {
   const unindexed = ast.find(({ row }) => row.text === null || row.astIndex === null);
   if (unindexed !== undefined) return `AST reference row ${String(unindexed.row.ordinal)} has no text or no astIndex`;
   if (!isDense(ast.map(({ row }) => row.astIndex ?? -1))) return 'the AST reference rows\' astIndex values have a gap or a repeat';
@@ -569,7 +603,7 @@ function rowsFault(blob: BlobRow, rows: KeyRows, ast: readonly AstReference[]): 
  * @param rows - Every row the key holds
  * @returns Why the rows cannot be trusted, or `undefined`
  */
-function blobRowsFault(blob: BlobRow, rows: KeyRows): string | undefined {
+function blobRowsFault(blob: BlobRow, rows: BlobKeyRows): string | undefined {
   const fault = rowsFault(blob, rows, astReferences(rows.references));
   if (fault !== undefined) return fault;
   const frontmatter = frontmatterOf(blob);
@@ -583,7 +617,7 @@ function blobRowsFault(blob: BlobRow, rows: KeyRows): string | undefined {
  * @param rows - Every row the key holds
  * @returns The resource facts, or why the rows cannot be trusted
  */
-function factsOf(blob: BlobRow, rows: KeyRows): Rebuilt<BlobResourceFacts> {
+function factsOf(blob: BlobRow, rows: BlobKeyRows): Rebuilt<BlobResourceFacts> {
   // The checks of `blobRowsFault`, in its order, with the decoded frontmatter and skill-text record kept.
   const ast = astReferences(rows.references);
   const fault = rowsFault(blob, rows, ast);
@@ -629,7 +663,7 @@ function factsOf(blob: BlobRow, rows: KeyRows): Rebuilt<BlobResourceFacts> {
  * @param rows - Every row the key holds
  * @returns The record (`null` for a blob that is not markdown, or a record not held), or why the rows cannot be one
  */
-function skillTextOf(contentKey: string, rows: KeyRows): Rebuilt<SkillTextFacts | null> {
+function skillTextOf(contentKey: string, rows: BlobKeyRows): Rebuilt<SkillTextFacts | null> {
   if (parserKindOf(contentKey) !== 'markdown') {
     return rows.skillTextFacts.length === 0 && rows.skillTextMatches.length === 0
       ? { ok: true, value: null }
@@ -648,7 +682,7 @@ function skillTextOf(contentKey: string, rows: KeyRows): Rebuilt<SkillTextFacts 
   }
   if (!isDense(rows.skillTextMatches.map((row) => row.ordinal))) return { ok: false, reason: 'the skill_text_matches rows\' ordinals have a gap or a repeat' };
   const matches: SkillTextMatch[] = [];
-  for (const row of [...rows.skillTextMatches].sort(byOrdinal)) {
+  for (const row of rows.skillTextMatches) {
     const matchText = restoredMatchText(row.matchText, row.loneSurrogates);
     if (matchText === undefined) return { ok: false, reason: `skill_text_matches row ${String(row.ordinal)}'s lone surrogates are not ones its text held` };
     matches.push({ ordinal: row.ordinal, family: row.family, patternId: row.patternId, line: row.line, matchText });
@@ -688,9 +722,9 @@ function linksOf(ast: readonly AstReference[]): BlobLink[] {
  * The heading tree, slugged by replaying the one stateful slugger over the titles in
  * document order - exactly as the parse slugged them - and nested the parse's way.
  *
- * @param sections - The key's section rows
+ * @param sections - The key's section rows, ordered by {@link blobRowsByKey}
  * @returns The heading tree
  */
 function headingsOf(sections: readonly BlobSectionRow[]): ResourceMetadata['headings'] {
-  return toHeadingTree([...sections].sort(byOrdinal).map((row) => buildFrom(FLAT_HEADING_FIELDS, row)));
+  return toHeadingTree(sections.map((row) => buildFrom(FLAT_HEADING_FIELDS, row)));
 }
