@@ -1,3 +1,6 @@
+// The ambient types of `markdown-link-check` (it ships none), referenced here so they travel with
+// this import into any program that reaches this file, not only resources' own.
+/// <reference path="./types/markdown-link-check.d.ts" />
 import { userInfo } from 'node:os';
 
 import type { IssueCode } from '@vibe-agent-toolkit/schema';

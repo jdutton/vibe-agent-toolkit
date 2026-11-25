@@ -29,13 +29,24 @@
 
 import { fileURLToPath } from 'node:url';
 
+import type { CoverageReporter, TestUserConfig } from 'vitest/node';
+
 import { TestTierBudgetReporter } from './packages/dev-tools/src/test-tier-budget-reporter.js';
+
+/** A mutable array: vitest's `coverage.reporter` rejects a readonly tuple. */
+const UNIT_COVERAGE_REPORTERS: CoverageReporter[] = ['text', 'json', 'html'];
+/**
+ * ['default', { summary: false }] is the vitest v3 replacement for the deprecated 'basic'
+ * reporter. Typed as a tuple: inferred, it widens to an array vitest's `reporters` rejects.
+ */
+const SYSTEM_TIER_REPORTERS: Array<['default', { summary: boolean }]> = [['default', { summary: false }]];
 
 const setupFilePath = fileURLToPath(new URL('./vitest.setup.js', import.meta.url));
 const forkRssBudgetSetupPath = fileURLToPath(new URL('./vitest.fork-rss-budget.setup.js', import.meta.url));
 const repoRoot = fileURLToPath(new URL('./', import.meta.url));
 
-type ReporterEntry = string | readonly [string, Record<string, unknown>] | TestTierBudgetReporter;
+/** One entry of vitest's own `reporters` list: a name, a `[name, options]` pair or a reporter. */
+type ReporterEntry = Extract<NonNullable<TestUserConfig['reporters']>, readonly unknown[]>[number];
 
 /**
  * The reporters of a ROOT config — `vitest.config.ts`, `vitest.integration.config.ts`,
@@ -277,7 +288,7 @@ export function createUnitTestConfig(overrides: UnitTestConfigOverrides = {}) {
     reporters: ['default'],
     coverage: {
       provider: 'v8' as const,
-      reporter: ['text', 'json', 'html'] as const,
+      reporter: UNIT_COVERAGE_REPORTERS,
       // Mirrors the root config's list minus the repo-wide paths; a per-package
       // run is a convenience, the root `test:coverage` run is the gate.
       exclude: [
@@ -426,10 +437,8 @@ export function createSystemTestConfig(overrides: SystemTestConfigOverrides = {}
     server: { deps: { inline: inlineDeps } },
     // Windows rmSync on large fixture trees can take significant time.
     teardownTimeout: 120_000,
-    // ['default', { summary: false }] is the vitest v3 replacement for the
-    // deprecated 'basic' reporter. Skipping the per-test streaming summary
-    // reduces main<->worker RPC pressure.
-    reporters: [['default', { summary: false }]],
+    // Skipping the per-test streaming summary reduces main<->worker RPC pressure.
+    reporters: SYSTEM_TIER_REPORTERS,
     // Tests emitting verbose console output pile RPC traffic onto the channel
     // every task update rides; write worker stdout directly instead.
     disableConsoleIntercept: true,

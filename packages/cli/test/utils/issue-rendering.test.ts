@@ -64,6 +64,7 @@ import {
   sumSeverityCounts,
 } from '../../src/utils/issue-rendering.js';
 import { renderedLabels } from '../helpers/rendered-labels.js';
+import { reportData } from '../report-envelope.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -152,9 +153,11 @@ function validationResult(issues: ValidationIssue[]): ValidationResult {
 }
 
 /** One `validation.allow` suppression record. */
-function allowRecord(code: string): PackagingValidationResult['ignoredErrors'][number] {
+function allowRecord(
+  code: PackagingValidationResult['ignoredErrors'][number]['code'],
+): PackagingValidationResult['ignoredErrors'][number] {
   return {
-    code: code as ValidationIssue['code'],
+    code,
     location: 'a/SKILL.md:3',
     reason: 'known and accepted',
   };
@@ -521,7 +524,7 @@ describe('vat skills validate — buildSkillsValidateReport', () => {
     const report = validateReport([
       packagingResult('a', [issue('warning', 'W1'), issue('warning', 'W1'), issue('info', 'I1')], [{ path: 'x.md', reason: 'gitignored' }]),
     ]);
-    expect(report.data.skills).toStrictEqual([
+    expect(reportData(report).skills).toStrictEqual([
       { name: 'a', status: 'findings', summary: { errors: 0, warnings: 2, info: 1 }, allowed: 0 },
     ]);
   });
@@ -529,8 +532,8 @@ describe('vat skills validate — buildSkillsValidateReport', () => {
   it('publishes an allowed COUNT, and the row of a skill whose findings were all allowed', () => {
     // A skill with an empty `allErrors` and a non-empty `ignoredErrors`: the
     // adopter is suppressing something here, and that fact must not vanish.
-    const report = validateReport([packagingResult('a', [], [], [allowRecord('LINK_BROKEN'), allowRecord('LINK_BROKEN')])]);
-    expect(report.data.skills).toStrictEqual([{ name: 'a', status: 'ok', summary: { errors: 0, warnings: 0, info: 0 }, allowed: 2 }]);
+    const report = validateReport([packagingResult('a', [], [], [allowRecord('LINK_MISSING_TARGET'), allowRecord('LINK_MISSING_TARGET')])]);
+    expect(reportData(report).skills).toStrictEqual([{ name: 'a', status: 'ok', summary: { errors: 0, warnings: 0, info: 0 }, allowed: 2 }]);
     expect(report.findings).toEqual([]);
   });
 
@@ -539,7 +542,7 @@ describe('vat skills validate — buildSkillsValidateReport', () => {
     // and a reader reconciling 92 validated against 62 rows could not tell
     // "validated and clean" from "never validated". Every validated skill is a row.
     const report = validateReport([packagingResult('clean', []), packagingResult('noisy', [issue('warning', 'W1')])]);
-    expect(report.data.skills.map((row) => row.name)).toEqual(['clean', 'noisy']);
+    expect(reportData(report).skills.map((row) => row.name)).toEqual(['clean', 'noisy']);
     expect(report.examined).toBe(2);
   });
 
@@ -549,14 +552,14 @@ describe('vat skills validate — buildSkillsValidateReport', () => {
     // run-level ALLOW_UNUSED warnings. The batch deliberately contains a CLEAN
     // skill and a non-empty run bucket, so a dropped addend shows.
     const results = [
-      packagingResult('a', [issue('warning', 'W1'), issue('info', 'I1')], [], [allowRecord('LINK_BROKEN')]),
+      packagingResult('a', [issue('warning', 'W1'), issue('info', 'I1')], [], [allowRecord('LINK_MISSING_TARGET')]),
       packagingResult('clean', []),
       packagingResult('b', [issue('error', 'E1')]),
     ];
     const runIssues = [issue('warning', 'ALLOW_UNUSED'), issue('warning', 'ALLOW_UNUSED')];
 
     const report = validateReport(results, runIssues);
-    const perSkill = countsFromSkillRows(report.data.skills);
+    const perSkill = countsFromSkillRows(reportData(report).skills);
     // Guards against a vacuous pass: every bucket non-trivial, the run bucket non-empty.
     expect(perSkill).toEqual({ errors: 1, warnings: 1, info: 1 });
     expect(report.summary).toEqual(sumSeverityCounts([perSkill, { errors: 0, warnings: 2, info: 0 }]));
@@ -564,16 +567,16 @@ describe('vat skills validate — buildSkillsValidateReport', () => {
   });
 
   it('counts an allow-suppressed issue nowhere but `allowed`', () => {
-    const report = validateReport([packagingResult('a', [issue('warning', 'W1')], [], [allowRecord('LINK_BROKEN')])]);
+    const report = validateReport([packagingResult('a', [issue('warning', 'W1')], [], [allowRecord('LINK_MISSING_TARGET')])]);
     expect(report.summary).toEqual({ errors: 0, warnings: 1, info: 0 });
-    expect(report.data.skills[0]?.allowed).toBe(1);
+    expect(reportData(report).skills[0]?.allowed).toBe(1);
     expect(report.findings.map((finding) => finding.code)).toEqual(['W1']);
   });
 
   it('publishes an issue the adopter resolved to `ignore` nowhere', () => {
     const report = validateReport([packagingResult('a', [issue('ignore', 'SILENCED'), issue('warning', 'W1')])]);
     expect(report.findings.map((finding) => finding.code)).toEqual(['W1']);
-    expect(report.data.skills[0]?.summary).toEqual({ errors: 0, warnings: 1, info: 0 });
+    expect(reportData(report).skills[0]?.summary).toEqual({ errors: 0, warnings: 1, info: 0 });
   });
 });
 
@@ -672,7 +675,7 @@ describe('vat skills validate — formatValidationReportLines', () => {
           issue('info', 'NON_PORTABLE_ASSET_REFERENCE'),
         ]),
         packagingResult('clean', []),
-        packagingResult('allowed-only', [], [], [allowRecord('LINK_BROKEN')]),
+        packagingResult('allowed-only', [], [], [allowRecord('LINK_MISSING_TARGET')]),
       ],
       [],
       3,
@@ -902,7 +905,7 @@ describe('vat skills build — skillsBuildWork', () => {
     // from issue channels called the run clean while the command exited 1.
     const report = reportOf({
       results: [{ name: 'ok', result: packageResult(undefined, undefined) }],
-      failures: [{ name: 'boom', message: THREW }],
+      failures: [{ name: 'boom', message: THREW, error: new Error(THREW) }],
     }, ['ok', 'boom']);
 
     expect(report.findings).toEqual([
@@ -915,7 +918,7 @@ describe('vat skills build — skillsBuildWork', () => {
   it('keeps built-then-invalid apart from could-not-package: one is built, the other failed', () => {
     const report = reportOf({
       results: [{ name: 'invalid', result: packageResult(undefined, [issue('error', 'E1')]) }],
-      failures: [{ name: 'threw', message: THREW }],
+      failures: [{ name: 'threw', message: THREW, error: new Error(THREW) }],
       skillsWithErrors: ['invalid'],
     }, ['invalid', 'threw']);
 
@@ -935,7 +938,7 @@ describe('vat skills build — skillsBuildWork', () => {
   it('sums the envelope from every population at once, and drops what the config ignored', () => {
     const report = reportOf({
       results: [{ name: 'invalid', result: packageResult([issue('warning', 'W1'), issue('ignore', 'SILENCED')], [issue('error', 'E1')]) }],
-      failures: [{ name: 'threw', message: THREW }],
+      failures: [{ name: 'threw', message: THREW, error: new Error(THREW) }],
       validationFailures: [{ name: 'rejected', issues: [issue('error', 'E2'), issue('info', 'I1')] }],
       runIssues: [issue('warning', 'ALLOW_UNUSED')],
       skillsWithErrors: ['invalid'],
@@ -1108,6 +1111,7 @@ describe('vat skills validate — formatValidationReportLines at default verbosi
         ]),
       ],
       [],
+      1,
       false,
     );
     const rendered = lines.join('\n');
@@ -1137,6 +1141,7 @@ describe('vat skills validate — formatValidationReportLines at default verbosi
         packagingResult(SKILL, [issue('error', 'LINK_BROKEN')]),
       ],
       [],
+      3,
       false,
     );
 
@@ -1150,6 +1155,7 @@ describe('vat skills validate — formatValidationReportLines at default verbosi
     const lines = formatValidationReportLines(
       [packagingResult(SKILL, [issue('ignore', 'LINK_BROKEN')])],
       [],
+      1,
       false,
     );
 

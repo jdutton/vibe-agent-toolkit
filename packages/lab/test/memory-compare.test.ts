@@ -100,6 +100,7 @@ describe('compareMemory', () => {
 
     expect(verdict.kind).toBe('changed');
     if (verdict.kind !== 'changed') return;
+    if (!('peak' in verdict)) throw new Error('a changed verdict of the out-of-heap shape, which carries no peak');
     expect(verdict.peak.delta).toBeCloseTo(4.4 * GIB_KB);
     expect(verdict.peak.ratio).toBeCloseTo(5.4);
     expect(comparison.axis).toBe('instrument');
@@ -132,6 +133,7 @@ describe('compareMemory', () => {
 
     expect(verdict.kind).toBe('changed');
     if (verdict.kind !== 'changed') return;
+    if (!('peak' in verdict)) throw new Error('a changed verdict of the out-of-heap shape, which carries no peak');
     expect(verdict.processes).toEqual({ before: 1, after: 2 });
   });
 

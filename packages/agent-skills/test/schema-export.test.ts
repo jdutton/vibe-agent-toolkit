@@ -11,7 +11,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import Ajv, { type ValidateFunction } from 'ajv';
+import { Ajv, type ValidateFunction } from 'ajv';
 import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 

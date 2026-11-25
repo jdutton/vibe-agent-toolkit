@@ -58,6 +58,7 @@ export function queryRealization(path: string): ResourceRealizationRow {
     gitignored: false,
     isSymlink: false,
     symlinkResolves: null,
+    mime: null,
   };
 }
 

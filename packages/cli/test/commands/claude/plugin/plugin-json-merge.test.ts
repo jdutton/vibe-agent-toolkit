@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   mergePluginJson,
   resolveVersion,
+  type VatGeneratedFields,
 } from '../../../../src/commands/claude/plugin/plugin-json-merge.js';
 
 describe('mergePluginJson', () => {
@@ -105,7 +106,7 @@ describe('mergePluginJson', () => {
   // `owner` can express (name, email). Everything else — notably `url`, which VAT's
   // config has NO field for — passes through from the author's plugin.json instead
   // of being destroyed: dropping it is data loss, not a precedence policy.
-  const mergeAuthor = (author: unknown, vat = vatFields) =>
+  const mergeAuthor = (author: unknown, vat: VatGeneratedFields = vatFields) =>
     mergePluginJson({ vat, configDescription: undefined, authorJson: { author } });
 
   it('keeps the config author when plugin.json declares no author', () => {

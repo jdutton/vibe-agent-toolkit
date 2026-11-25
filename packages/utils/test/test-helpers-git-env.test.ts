@@ -101,8 +101,8 @@ describe('detachGitEnv covers exactly what the shipped scrub removes', () => {
     expect(CANDIDATE_GIT_ENV.length).toBeGreaterThan(INHERITED_GIT_ENV.length);
     // And the operator's channel must have survived, which is the half of the
     // boundary that is NOT symmetric with the hazard list.
-    expect(scrubbed.GIT_CONFIG_COUNT).toBe(SENTINEL);
-    expect(scrubbed.GIT_SSH_COMMAND).toBe(SENTINEL);
+    expect(scrubbed['GIT_CONFIG_COUNT']).toBe(SENTINEL);
+    expect(scrubbed['GIT_SSH_COMMAND']).toBe(SENTINEL);
   });
 
   it('actually clears them, and restores what was there before', () => {
@@ -123,13 +123,13 @@ describe('detachGitEnv covers exactly what the shipped scrub removes', () => {
     // The half that is NOT symmetric with the scrub's hazard list: these are
     // git's env-only configuration channel, which a test may be using on purpose
     // to keep a clone off the network. Clearing them is a measured regression.
-    saved.set('GIT_CONFIG_COUNT', process.env.GIT_CONFIG_COUNT);
-    process.env.GIT_CONFIG_COUNT = '1';
-    delete process.env.GIT_DIR;
+    saved.set('GIT_CONFIG_COUNT', process.env['GIT_CONFIG_COUNT']);
+    process.env['GIT_CONFIG_COUNT'] = '1';
+    delete process.env['GIT_DIR'];
     saved.set('GIT_DIR', undefined);
 
     const restore = detachGitEnv();
-    expect(process.env.GIT_CONFIG_COUNT).toBe('1');
+    expect(process.env['GIT_CONFIG_COUNT']).toBe('1');
 
     restore();
     // Restored as unset rather than as the string 'undefined'.

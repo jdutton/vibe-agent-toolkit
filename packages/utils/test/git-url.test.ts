@@ -175,21 +175,21 @@ describe('nonInteractiveGitOverrides', () => {
   });
 
   it("disables git's terminal prompt for an inferred shorthand URL", () => {
-    expect(forShorthand().env.GIT_TERMINAL_PROMPT).toBe('0');
+    expect(forShorthand().env['GIT_TERMINAL_PROMPT']).toBe('0');
   });
 
   it('short-circuits the entire askpass chain for an inferred shorthand URL', () => {
     // git consults GIT_ASKPASS → core.askPass → SSH_ASKPASS *before* it ever
     // honours GIT_TERMINAL_PROMPT, so the prompt flag alone leaves the stall open.
     const overrides = forShorthand();
-    expect(overrides.env.GIT_ASKPASS).toBe('');
-    expect(overrides.env.SSH_ASKPASS).toBe('');
+    expect(overrides.env['GIT_ASKPASS']).toBe('');
+    expect(overrides.env['SSH_ASKPASS']).toBe('');
     expect(overrides.configArgs).toEqual(['-c', 'core.askPass=']);
   });
 
   it('forbids credential-helper escalation without disabling the helpers', () => {
     const overrides = forShorthand();
-    expect(overrides.env.GCM_INTERACTIVE).toBe('never');
+    expect(overrides.env['GCM_INTERACTIVE']).toBe('never');
     // A stored, non-interactive credential must still be usable, so we must not
     // reset the helper list or suppress system/global config.
     expect(overrides.env).not.toHaveProperty('GIT_CONFIG_NOSYSTEM');
@@ -203,7 +203,7 @@ describe('nonInteractiveGitOverrides', () => {
 
   it('applies to shorthand with a ref and subpath too', () => {
     const overrides = nonInteractiveGitOverrides(parseGitUrl(`foo/bar#main:${SUBPATH_BAZ}`));
-    expect(overrides.env.GIT_TERMINAL_PROMPT).toBe('0');
+    expect(overrides.env['GIT_TERMINAL_PROMPT']).toBe('0');
   });
 });
 

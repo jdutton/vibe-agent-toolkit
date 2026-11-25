@@ -8,8 +8,9 @@
 
 import { homedir } from 'node:os';
 
-import { canonicalPath, normalizedTmpdir, relativeEscapesRoot, safePath } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it } from 'vitest';
+import { vatCacheRoot } from '@vibe-agent-toolkit/resources';
+import { canonicalPath, normalizedTmpdir, relativeEscapesRoot, safePath, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
+import { describe, expect, it, vi } from 'vitest';
 
 // Both are the test process's own environment paths: each is its own edge.
 const isUnder = (root: string, path: string): boolean => !relativeEscapesRoot(safePath.relative(canonicalPath(root, root), canonicalPath(path, path)));
@@ -24,5 +25,25 @@ describe('vitest.setup.js — the Claude configuration a test sees by default', 
 
   it('is not under the real home directory\'s Claude configuration', () => {
     expect(isUnder(safePath.join(homedir(), '.claude'), configured), configured).toBe(false);
+  });
+});
+
+describe('vitest.setup.js — the VAT cache a test sees by default', () => {
+  const configured = process.env[VAT_CACHE_DIR_ENV] ?? '';
+
+  it('is this test file\'s own directory under the temp directory, never the machine-wide default', () => {
+    expect(configured).not.toBe('');
+    expect(isUnder(normalizedTmpdir(), configured), configured).toBe(true);
+    expect(vatCacheRoot()).toBe(safePath.resolve(configured));
+    expect(vatCacheRoot()).not.toBe(safePath.join(normalizedTmpdir(), '.vat-cache'));
+  });
+
+  it('is refused, not silently shared, when a test unsets it without moving the temp directory', () => {
+    vi.stubEnv(VAT_CACHE_DIR_ENV, undefined);
+    try {
+      expect(() => vatCacheRoot()).toThrow(/shared by every process on this machine/);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

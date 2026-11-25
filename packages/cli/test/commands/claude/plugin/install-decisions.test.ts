@@ -94,14 +94,14 @@ describe('assertPackagePluginNames', () => {
   const pkg = (replaces: Record<string, unknown>) => ({ name: '@scope/pkg', vat: { replaces } }) as never;
 
   it('refuses a replaced flat skill that is not one path segment as the package\'s content, before anything is listed', () => {
-    const refusal = refusalOf(() => assertPackagePluginNames('/pkg/marketplaces', ['mp'], pkg({ flatSkills: ['../victim'] }), '1.0.0', 'source'));
+    const refusal = refusalOf(() => assertPackagePluginNames('/pkg/marketplaces', ['mp'], pkg({ flatSkills: ['../victim'] }), '1.0.0', 'source', '/pkg'));
     expect(refusal.refusal).toBe('INPUT_UNREADABLE');
     expect(refusal.message).toContain('"../victim"');
     expect(refusal.message).toContain('nothing was changed');
   });
 
   it('accepts a package with no marketplace and well-formed replaced names', () => {
-    expect(() => assertPackagePluginNames('/pkg/marketplaces', [], pkg({ flatSkills: ['old-skill'], plugins: ['old'] }), '1.0.0', 'source')).not.toThrow();
+    expect(() => assertPackagePluginNames('/pkg/marketplaces', [], pkg({ flatSkills: ['old-skill'], plugins: ['old'] }), '1.0.0', 'source', '/pkg')).not.toThrow();
   });
 });
 

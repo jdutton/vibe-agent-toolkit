@@ -18,6 +18,7 @@
  * detect a per-code tally, its ordering, or an omitted zero bucket.
  */
 
+import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -27,6 +28,7 @@ import {
 } from '../../src/commands/claude/marketplace/validate.js';
 import { createResourcesCommand } from '../../src/commands/resources/index.js';
 import { buildResourcesValidateReport } from '../../src/commands/resources/validate.js';
+import { reportData } from '../report-envelope.js';
 
 // ---------------------------------------------------------------------------
 // vat resources validate
@@ -85,7 +87,7 @@ describe('vat resources validate — the default listing and --verbose', () => {
   });
 
   it('lists every resource under --verbose, the clean one included', () => {
-    expect(resourceReport(true).data.files?.map((row) => [row.path, row.status])).toEqual([
+    expect(reportData(resourceReport(true)).files?.map((row) => [row.path, row.status])).toEqual([
       ['docs/a.md', 'findings'],
       ['docs/b.md', 'findings'],
       ['docs/clean.md', 'ok'],
@@ -108,9 +110,9 @@ describe('vat resources validate — the default listing and --verbose', () => {
 
 function marketplaceIssue(
   location: string | undefined,
-  code: string,
-  severity: 'error' | 'warning' | 'info',
-) {
+  code: ValidationIssue['code'],
+  severity: ValidationIssue['severity'],
+): ValidationIssue {
   return {
     severity,
     code,
@@ -137,7 +139,7 @@ const BETA = 'plugins/beta/skills/x/SKILL.md';
 
 const MARKETPLACE_ISSUES = [
   marketplaceIssue(ALPHA, 'PLUGIN_MISSING_VERSION', 'error'),
-  marketplaceIssue(BETA, 'SKILL_DESCRIPTION_SHORT', 'info'),
+  marketplaceIssue(BETA, 'SKILL_DESCRIPTION_TOO_LONG', 'info'),
   marketplaceIssue(ALPHA, 'PLUGIN_MISSING_VERSION', 'error'),
   marketplaceIssue(ALPHA, 'PLUGIN_MISSING_AUTHOR', 'warning'),
   marketplaceIssue(undefined, 'MARKETPLACE_MISSING_LICENSE', 'error'),
@@ -177,7 +179,7 @@ describe('vat claude marketplace validate — every finding, flat', () => {
   });
 
   it('states the root once, un-rebased, beside the findings relative to it', () => {
-    expect(buildMarketplaceValidateReport(MARKETPLACE_INPUT).data.root).toBe(MARKETPLACE_INPUT.root);
+    expect(reportData(buildMarketplaceValidateReport(MARKETPLACE_INPUT)).root).toBe(MARKETPLACE_INPUT.root);
   });
 });
 

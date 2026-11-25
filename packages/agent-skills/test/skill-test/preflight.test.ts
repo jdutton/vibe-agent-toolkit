@@ -51,7 +51,8 @@ describe('runPreflight', () => {
     expect(r.passed).toBe(false);
     const check = r.checks.find(c => c.name.includes('--no-session-persistence'));
     expect(check?.passed).toBe(false);
-    expect(check?.suggestion).toMatch(/nonce|answer key/i);
+    if (check?.passed !== false) throw new Error('expected the --no-session-persistence check to fail');
+    expect(check.suggestion).toMatch(/nonce|answer key/i);
   });
 
   // Every flag vat's argv actually carries must be checked by SOMETHING — either

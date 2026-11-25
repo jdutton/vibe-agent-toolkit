@@ -82,10 +82,10 @@ function enterBystanderHook(): Bystander {
   fixtureGit(dir, ['commit', '--quiet', '-m', 'bystander']);
 
   const gitDir = safePath.join(dir, '.git');
-  process.env.GIT_DIR = gitDir;
-  process.env.GIT_WORK_TREE = dir;
-  process.env.GIT_INDEX_FILE = safePath.join(gitDir, 'index');
-  process.env.GIT_PREFIX = '';
+  process.env['GIT_DIR'] = gitDir;
+  process.env['GIT_WORK_TREE'] = dir;
+  process.env['GIT_INDEX_FILE'] = safePath.join(gitDir, 'index');
+  process.env['GIT_PREFIX'] = '';
 
   return {
     dir,

@@ -64,22 +64,22 @@ afterEach(() => {
 describe('cloneGitSource — non-interactive clone for inferred shorthand URLs', () => {
   it('disables the terminal prompt and the whole askpass chain', () => {
     const { args, env } = captureCloneSpawn('foo/bar');
-    expect(env.GIT_TERMINAL_PROMPT).toBe('0');
-    expect(env.GIT_ASKPASS).toBe('');
-    expect(env.SSH_ASKPASS).toBe('');
-    expect(env.GCM_INTERACTIVE).toBe('never');
+    expect(env['GIT_TERMINAL_PROMPT']).toBe('0');
+    expect(env['GIT_ASKPASS']).toBe('');
+    expect(env['SSH_ASKPASS']).toBe('');
+    expect(env['GCM_INTERACTIVE']).toBe('never');
     // `-c` must precede the subcommand for git to accept it.
     expect(args.slice(0, 3)).toEqual(['-c', 'core.askPass=', 'clone']);
   });
 
   it('still inherits the ambient environment (helpers can answer non-interactively)', () => {
     const { env } = captureCloneSpawn('foo/bar');
-    expect(env.PATH).toBe(process.env.PATH);
+    expect(env['PATH']).toBe(process.env['PATH']);
   });
 
   it('applies to shorthand with a ref', () => {
     const { args, env } = captureCloneSpawn('foo/bar#main');
-    expect(env.GIT_TERMINAL_PROMPT).toBe('0');
+    expect(env['GIT_TERMINAL_PROMPT']).toBe('0');
     expect(args).toContain('--branch');
   });
 });

@@ -5,7 +5,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { __resetWorkCountersForTest, PARSE_LOOKUP_COUNTERS, workSpentNow } from '../src/testing.js';
-import { countWork, WORK_COUNTER_NAMES, type WorkCounter } from '../src/work-counters.js';
+import { countWork, WORK_COUNTER_NAMES } from '../src/work-counters.js';
 
 describe('workSpentNow().parseLookups', () => {
   beforeEach(() => {
@@ -14,7 +14,7 @@ describe('workSpentNow().parseLookups', () => {
 
   it('counts one lookup per document the parse lane answered, never a second dispatch of one', () => {
     // Written out, not derived: the test states the definition rather than restating its code.
-    const answered: readonly WorkCounter[] = [
+    const answered: readonly Parameters<typeof countWork>[0][] = [
       'parse.cache.hit',
       'parse.dispatched',
       'parse.refused.keyDetermined',

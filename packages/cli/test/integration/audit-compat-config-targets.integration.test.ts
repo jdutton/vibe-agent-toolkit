@@ -23,12 +23,7 @@ import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { runCompatAnalysis, type VATProjectContext } from '../../src/commands/audit.js';
-
-const silentLogger = {
-  info: (_msg: string) => {},
-  error: (_msg: string) => {},
-  debug: (_msg: string) => {},
-};
+import { silentLogger } from '../test-doubles.js';
 
 const COMPAT_TARGET_UNDECLARED = 'COMPAT_TARGET_UNDECLARED';
 const COMPAT_TARGET_INCOMPATIBLE = 'COMPAT_TARGET_INCOMPATIBLE';

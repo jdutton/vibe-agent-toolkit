@@ -10,10 +10,10 @@
 import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 
-import type { MarketplaceValidateReport } from '@vibe-agent-toolkit/schema';
 import { createSymlink, mkdirSyncReal, normalizePath, relativeEscapesRoot, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { MarketplaceValidateReport } from '../src/commands/claude/marketplace/validate-schema.js';
 import { runMarketplaceValidatePhase } from '../src/commands/claude/marketplace/validate.js';
 import { treeCopyPlugin } from '../src/commands/claude/plugin/tree-copy.js';
 import { toEnumerationRow } from '../src/pipeline-oracles/aliases.js';

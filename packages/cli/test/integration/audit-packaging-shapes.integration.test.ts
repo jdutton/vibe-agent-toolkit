@@ -4,15 +4,10 @@ import { describe, expect, it } from 'vitest';
 
 import type { AuditCommandOptions } from '../../src/commands/audit.js';
 import { deriveScanRoot, getValidationResults, resetAuditCaches } from '../../src/commands/audit.js';
+import { silentLogger } from '../test-doubles.js';
 
 const MISMATCH_CODE = 'SKILL_CLAUDE_PLUGIN_NAME_MISMATCH';
 const SURFACE_TYPE_CLAUDE_PLUGIN = 'claude-plugin';
-
-const silentLogger = {
-  info: (_msg: string) => {},
-  error: (_msg: string) => {},
-  debug: (_msg: string) => {},
-};
 
 async function runAudit(targetPath: string, options: AuditCommandOptions = {}) {
   resetAuditCaches();

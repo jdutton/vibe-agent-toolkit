@@ -58,7 +58,7 @@ async function supervised(run: SupervisedRun, leftover: unknown): Promise<{ docu
   vi.mocked(superviseRun).mockResolvedValue(run);
   vi.mocked(withProgressLog).mockImplementation(async (_verb, work) => ({
     value: await work({ path: '/scratch/progress.jsonl', guard: undefined as never }),
-    ...(leftover === undefined ? {} : { leftover }),
+    leftover,
   }));
   const captured = await captureCommand(() => superviseQuery({
     sql: 'SELECT 1 AS n',

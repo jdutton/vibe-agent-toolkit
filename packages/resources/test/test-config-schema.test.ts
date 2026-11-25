@@ -44,7 +44,7 @@ describe('TestConfigSchema', () => {
         VENDOR_REGION: 'us',
       },
     });
-    expect(parsed.env?.CUSTOMER_SNAPSHOT_PATH).toBe('${fixturesDir}/snapshot.json');
+    expect(parsed.env?.['CUSTOMER_SNAPSHOT_PATH']).toBe('${fixturesDir}/snapshot.json');
   });
 
   it('accepts a passEnv array', () => {

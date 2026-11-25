@@ -25,7 +25,7 @@ import type * as ArchiveModule from '@vibe-agent-toolkit/utils/archive';
 import { installFaultFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { inspectZipArchive, warnUnportableReferences } from '../src/commands/claude/org/skills.js';
+import { inspectZipArchive, warnUnportableReferences, type ZipInspection } from '../src/commands/claude/org/skills.js';
 
 import type { ZipFixtureEntry } from './helpers/zip-fixtures.js';
 import { skillMdBytes, writeZipFixture } from './helpers/zip-fixtures.js';
@@ -78,6 +78,13 @@ const NESTED_SKILL_MD = 'demo/resources/example/SKILL.md';
 /** The root SKILL.md of the archive fixtures that model a real bundle. */
 const BUNDLE_SKILL_MD = 'my-skill/SKILL.md';
 
+/** Inspect an archive the test built to be readable, failing loudly if VAT could not read it. */
+async function inspectReadableZip(zipPath: string): Promise<ZipInspection> {
+  const inspected = await inspectZipArchive(zipPath);
+  if ('archiveUnreadable' in inspected) throw new Error(`expected a readable archive: ${inspected.archiveUnreadable}`);
+  return inspected;
+}
+
 beforeAll(() => {
   tempDir = safePath.join(normalizedTmpdir(), `vat-adopter-findings-${process.pid}`);
   mkdirSyncReal(tempDir, { recursive: true });
@@ -97,7 +104,7 @@ describe('inspectZipArchive', () => {
       [SKILL_MD, skillMdBytes('demo')],
     ]);
 
-    const inspected = await inspectZipArchive(zipPath);
+    const inspected = await inspectReadableZip(zipPath);
 
     expect(inspected).toBeDefined();
     expect(inspected?.uncompressedBytes).toBeGreaterThanOrEqual(4 * 1024 * 1024);
@@ -109,7 +116,7 @@ describe('inspectZipArchive', () => {
   it('reads the declared name out of the archive, which is what makes a title divergence visible', async () => {
     const zipPath = writeZip('wiki-lint-v2.zip', [['wiki-lint/SKILL.md', skillMdBytes('wiki-lint')]]);
 
-    const inspected = await inspectZipArchive(zipPath);
+    const inspected = await inspectReadableZip(zipPath);
 
     // `wiki-lint-v2.zip` would publish under the filename; the archive says
     // otherwise, and now VAT can tell the operator so.
@@ -185,7 +192,7 @@ describe('inspectZipArchive', () => {
       [SKILL_MD, Buffer.from('---\ndescription: No name field at all.\n---\n', 'utf8')],
     ]);
 
-    const inspected = await inspectZipArchive(zipPath);
+    const inspected = await inspectReadableZip(zipPath);
 
     expect(inspected?.declaredName).toBeUndefined();
   });
@@ -281,7 +288,7 @@ describe('inspectZipArchive', () => {
       ['demo/payload.bin', Buffer.alloc(API_SKILL_MAX_UPLOAD_BYTES + 1, 0x41)],
     ]);
 
-    const inspected = await inspectZipArchive(zipPath);
+    const inspected = await inspectReadableZip(zipPath);
 
     expect(inspected?.uncompressedBytes).toBeGreaterThan(API_SKILL_MAX_UPLOAD_BYTES);
     expect(inspected?.declaredName).toBeUndefined();
@@ -299,7 +306,7 @@ describe('inspectZipArchive', () => {
       ['my-skill/node_modules/dep/index.js', Buffer.from('module.exports = {};', 'utf8')],
     ]);
 
-    const inspected = await inspectZipArchive(zipPath);
+    const inspected = await inspectReadableZip(zipPath);
 
     expect(inspected?.neverUploaded).toContain('my-skill/evals/evals.json');
     expect(inspected?.neverUploaded).toContain('my-skill/node_modules/dep/index.js');
@@ -432,7 +439,7 @@ describe('warnUnportableReferences', () => {
       BUNDLE_ROOT,
       {
         allow: {
-          SKILL_DESCRIPTION_TOO_LONG: [{ paths: ['SKILL.md'], reason: 'Reviewed.' }],
+          SKILL_LENGTH_EXCEEDS_RECOMMENDED: [{ paths: ['SKILL.md'], reason: 'Reviewed.' }],
         },
       },
       logger,

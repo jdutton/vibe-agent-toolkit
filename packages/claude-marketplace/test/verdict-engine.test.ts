@@ -1,3 +1,4 @@
+import type { Observation } from '@vibe-agent-toolkit/agent-skills';
 import { describe, it, expect } from 'vitest';
 
 import type { Target } from '../src/types.js';
@@ -12,8 +13,8 @@ const CHAT: Target = 'claude-chat';
 const COWORK: Target = 'claude-cowork';
 const CODE: Target = 'claude-code';
 
-function obs(code: string, payload?: Record<string, unknown>) {
-  return { code, description: code, payload, supportingEvidence: [] };
+function obs(code: string, payload?: Record<string, unknown>): Observation {
+  return { code, description: code, ...(payload !== undefined && { payload }), supportingEvidence: [] };
 }
 
 describe('computeVerdicts', () => {

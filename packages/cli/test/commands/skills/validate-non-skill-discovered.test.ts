@@ -32,6 +32,7 @@ import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/u
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { resetSkillDiscoveryCache } from '../../../src/skill-resolution/packaging-config.js';
+import { reportData } from '../../report-envelope.js';
 
 import { publishedSkillsValidate } from './skills-validate-document.js';
 
@@ -95,7 +96,7 @@ describe('vat skills validate refuses a discovered file that is not a skill', ()
     // The glob matched one file, so one was checked — the refusal is on the
     // file, not a zero-denominator run-integrity refusal.
     expect(document.examined).toBe(1);
-    const [row] = document.data.skills;
+    const [row] = reportData(document).skills;
     expect(row?.status).toBe('findings');
     expect(row?.summary.errors).toBe(1);
     const refusal = document.findings.find((issue) => issue.code === MISSING_FRONTMATTER);
@@ -114,8 +115,8 @@ describe('vat skills validate refuses a discovered file that is not a skill', ()
     expect(document.examined).toBe(2);
     // Exactly one finding refused a file, and it is beta's; alpha's row is clean.
     expect(document.findings.filter((i) => i.code === MISSING_FRONTMATTER).map((i) => i.location)).toEqual([BETA_PATH]);
-    expect(document.data.skills.filter((row) => row.summary.errors > 0)).toHaveLength(1);
-    expect(document.data.skills.find((row) => row.name === 'alpha')?.summary.errors).toBe(0);
+    expect(reportData(document).skills.filter((row) => row.summary.errors > 0)).toHaveLength(1);
+    expect(reportData(document).skills.find((row) => row.name === 'alpha')?.summary.errors).toBe(0);
   });
 
   it('two real skills stay green — the refusal is off the populated, well-formed path', async () => {

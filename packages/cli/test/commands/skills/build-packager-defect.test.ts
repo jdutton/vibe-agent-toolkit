@@ -17,7 +17,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 
-import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { ExitCode, type Report } from '@vibe-agent-toolkit/schema';
 import { safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -64,7 +64,7 @@ async function buildWithPackagerThrowing(cwd: string, thrown: Error[]): Promise<
 }
 
 /** What `vat skills build` would publish for the project, and the exit code that document derives. */
-async function publishedBuild(cwd: string, thrown: Error[]): Promise<ReturnType<typeof publishedPhase>> {
+async function publishedBuild(cwd: string, thrown: Error[]): Promise<ReturnType<typeof publishedPhase<Report<unknown>>>> {
   await seedProject(cwd, thrown);
   await writeFile(safePath.join(cwd, 'vibe-agent-toolkit.config.yaml'), 'skills:\n  include: ["skills/**/SKILL.md"]\n');
   return publishedPhase('skills build', await runSkillsBuildPhase(cwd, {}, []));

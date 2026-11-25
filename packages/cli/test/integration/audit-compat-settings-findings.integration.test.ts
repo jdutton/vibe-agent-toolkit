@@ -25,7 +25,7 @@ interface Envelope {
   status: string;
   summary: { errors: number; warnings: number; info: number };
   findings: Array<{ code: string; severity: string; location?: string; message: string }>;
-  data: { counts: { filesWithWarnings: number; filesPassed: number }; files: Array<{ type: string; status: string; summary: { warnings: number } }> };
+  data: { counts: { filesWithWarnings: number; filesPassed: number }; files: Array<{ type: string; status: string; summary: { warnings: number }; compatibility?: { unchecked?: Array<{ path: string }> } }> };
 }
 
 let tempDir: string;
@@ -85,7 +85,7 @@ describe('vat audit --compat --settings: a settings conflict is a finding', () =
     mkdirSyncReal(safePath.join(broken, 'hooks'), { recursive: true });
     fs.writeFileSync(safePath.join(broken, HOOKS), '{ this is not JSON');
 
-    const envelope = parseYaml(runAuditCli(broken, ['--compat']).stdout) as Envelope & { data: { files: Array<{ type: string; compatibility?: { unchecked?: Array<{ path: string }> } }> } };
+    const envelope = parseYaml(runAuditCli(broken, ['--compat']).stdout) as Envelope;
 
     // The premise: the block lists the file.
     expect(envelope.data.files.find((file) => file.type === 'claude-plugin')?.compatibility?.unchecked?.map((entry) => entry.path)).toEqual([HOOKS]);

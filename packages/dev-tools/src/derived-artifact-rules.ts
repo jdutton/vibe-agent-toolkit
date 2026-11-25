@@ -180,9 +180,11 @@ export function checkLockfileWorkspaceResolutions(repoRoot: string): ValidationE
   return findings;
 }
 
-/** The scripts every TypeScript project carries, and what they must say. */
+/**
+ * The scripts every TypeScript project carries, and what they must say. `typecheck` is not here:
+ * `generate-lint-config.ts` owns it, because it checks the package's `tsconfig.eslint.json` program.
+ */
 export const STANDARD_SCRIPTS = {
-  typecheck: 'tsc --noEmit',
   clean: 'rimraf --glob dist "*.tsbuildinfo" .tsc-staging',
   'test:unit': 'vitest run',
   'test:watch': 'vitest',

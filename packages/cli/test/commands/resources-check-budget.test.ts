@@ -60,6 +60,7 @@ import {
   runProjectChecks,
 } from '../../src/commands/resources/check.js';
 import { NO_COLUMNS } from '../helpers/no-columns.js';
+import { reportData, reportError } from '../report-envelope.js';
 
 /** The log lines a run writes before it hangs on its second rule. */
 const POPULATION: ProgressEntry = {
@@ -406,9 +407,9 @@ describe('buildInterruptedCheckInput', () => {
     const report = buildCheckOutputData(killed([STARTED, { kind: 'not-admitted', findings: [unreadable] }]));
 
     expect(report.status).toBe('error');
-    expect(report.error?.code).toBe('RUN_INCOMPLETE');
-    expect(report.error?.message).toContain('before its population completed');
-    expect(report.error?.message).not.toContain('docs/locked.md');
+    expect(reportError(report).code).toBe('RUN_INCOMPLETE');
+    expect(reportError(report).message).toContain('before its population completed');
+    expect(reportError(report).message).not.toContain('docs/locked.md');
     expect(report.findings.map((finding) => finding.code)).toStrictEqual(['RESOURCE_UNREADABLE']);
     expect(report.findings[0]?.location).toBe('docs/locked.md');
   });
@@ -483,7 +484,7 @@ describe('buildInterruptedCheckInput', () => {
     const payload = buildCheckOutputData(killed([POPULATION]));
     const issues = payload.findings;
 
-    expect(payload.data.checksRun).toBe(0);
+    expect(reportData(payload).checksRun).toBe(0);
     expect(payload.summary.errors).toBeGreaterThan(0);
     expect(issues.map((issue) => issue.code)).toStrictEqual(['RESOURCE_CHECK_BROKEN']);
   });
@@ -534,8 +535,8 @@ describe('buildInterruptedCheckInput', () => {
 
     expect(payload.status).toBe('error');
     expect(exitCodeForReport(payload)).toBe(ExitCode.ERROR);
-    expect(payload.error.code).toBe('RUN_INCOMPLETE');
-    expect(payload.error.message).toContain('before its population completed');
+    expect(reportError(payload).code).toBe('RUN_INCOMPLETE');
+    expect(reportError(payload).message).toContain('before its population completed');
     // The envelope's error branch: the reason is in `error`, not in `findings`.
     expect(payload.findings).toStrictEqual([]);
     // No refusal document carries `durationMs`.
@@ -561,19 +562,19 @@ describe('buildInterruptedCheckInput', () => {
     const payload = buildCheckOutputData(killed([STARTED]));
 
     expect(payload.examined).toBe(0);
-    expect(payload.data.population).toBeNull();
+    expect(reportData(payload).population).toBeNull();
     // `null`, not `'none'`: no population happened at all, lens or otherwise.
-    expect(payload.data.lensPopulation).toBeNull();
-    expect(payload.data.populationSecs).toBeNull();
-    expect(payload.data.lensSecs).toBeNull();
-    expect(payload.data.lensesEvaluated).toBeNull();
-    expect(payload.data.checksRun).toBe(0);
+    expect(reportData(payload).lensPopulation).toBeNull();
+    expect(reportData(payload).populationSecs).toBeNull();
+    expect(reportData(payload).lensSecs).toBeNull();
+    expect(reportData(payload).lensesEvaluated).toBeNull();
+    expect(reportData(payload).checksRun).toBe(0);
   });
 
   it('names the budget and the population in that error, so the operator can raise it', () => {
     // 🚨 Asserted with the words, not a digit: the sentence beside it quotes
     // measured timings, and a bare `/2/` was once satisfied by one of those.
-    const { error } = buildCheckOutputData(killed([STARTED]));
+    const error = reportError(buildCheckOutputData(killed([STARTED])));
 
     expect(error.message).toContain('no progress for 2s');
     expect(error.message).toContain('before its population completed');
@@ -586,8 +587,8 @@ describe('buildInterruptedCheckInput', () => {
     const payload = buildCheckOutputData(killed([]));
 
     expect(exitCodeForReport(payload)).toBe(ExitCode.ERROR);
-    expect(payload.error.message).toContain('before the child process had finished starting');
-    expect(payload.error.message).not.toContain('before its population completed');
+    expect(reportError(payload).message).toContain('before the child process had finished starting');
+    expect(reportError(payload).message).not.toContain('before its population completed');
   });
 });
 
@@ -1002,14 +1003,14 @@ describe('the document a run that DIED publishes', () => {
     const payload = buildCheckOutputData(died(ABORTED, [STARTED]));
 
     expect(exitCodeForReport(payload)).toBe(ExitCode.ERROR);
-    expect(payload.data.population).toBeNull();
-    expect(payload.error.message).toContain(ABORTED);
+    expect(reportData(payload).population).toBeNull();
+    expect(reportError(payload).message).toContain(ABORTED);
   });
 
   it('does not blame the budget in that error either', () => {
     // 🪤 The name promises an ABSENCE and the assertion was a presence, so a
     // message that said both things would have passed. Both halves now.
-    const message = buildCheckOutputData(died(ABORTED, [STARTED])).error.message;
+    const message = reportError(buildCheckOutputData(died(ABORTED, [STARTED]))).message;
 
     expect(message).toMatch(/died|terminated/i);
     expect(message).not.toMatch(/Raise it with `--budget/);

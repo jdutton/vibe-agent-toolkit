@@ -21,7 +21,7 @@ import {
   getBinPath,
   writeTestFile,
 } from './test-common.js';
-import { executeCli, parseYamlOutput } from './test-helpers/index.js';
+import { reportData, executeCli, parseYamlOutput } from './test-helpers/index.js';
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -87,7 +87,7 @@ function runCompatAuditAndParse(
   expect(status).toBe(0);
   expect(stdout).toBeTruthy();
 
-  const files = AUDIT_REPORT_SCHEMA.parse(parseYamlOutput(stdout)).data.files as Array<Record<string, unknown>>;
+  const files = reportData(AUDIT_REPORT_SCHEMA.parse(parseYamlOutput(stdout))).files as Array<Record<string, unknown>>;
   expect(files).toBeDefined();
 
   return { files };
@@ -217,8 +217,8 @@ This skill has no plugin.json so no compat analysis applies.
     const report = AUDIT_REPORT_SCHEMA.parse(parseYamlOutput(stdout));
 
     // The --user path publishes the hierarchy beside the file rows; compat rides on the rows
-    expect(report.data.hierarchical).not.toBeNull();
-    const files = report.data.files as Array<Record<string, unknown>>;
+    expect(reportData(report).hierarchical).not.toBeNull();
+    const files = reportData(report).files as Array<Record<string, unknown>>;
     expect(files.length).toBeGreaterThan(0);
 
     // At least one file entry should have compatibility data (the plugin)

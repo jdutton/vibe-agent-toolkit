@@ -213,7 +213,7 @@ describe('readPopulationDocument', () => {
 
   it('REFUSES a document that reported a count but listed no files', () => {
     const document = JSON.parse(scanDocument()) as Record<string, unknown>;
-    delete document.files;
+    delete document['files'];
 
     const result = readPopulationDocument(JSON.stringify(document));
 

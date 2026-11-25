@@ -13,6 +13,8 @@ import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe
 import { archiveEntriesOfDirectory, CANNOT_DENY_READS, resolveExecutable, tarFixture, zipFixture } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { refusalOf } from '../report-envelope.js';
+
 import {
   createTempDirTracker,
   executeCliAndParseYaml,
@@ -115,7 +117,7 @@ describe('claude plugin install command (system test)', () => {
 
     expect(status).toBe(2);
     expect(report).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' }, data: null });
-    expect(report.error?.message).toContain('--force');
+    expect(refusalOf(report)?.message).toContain('--force');
     expect(fs.existsSync(safePath.join(claudeDir, 'skills', SKILL_ALPHA))).toBe(false);
   });
 
@@ -149,7 +151,7 @@ describe('claude plugin install command (system test)', () => {
 
       expect(status).toBe(2);
       expect(report).toMatchObject({ status: 'error', error: { code: 'RUN_INCOMPLETE' }, data: null });
-      expect(report.error?.message).toContain(lockedSkillsDir);
+      expect(refusalOf(report)?.message).toContain(lockedSkillsDir);
     } finally {
       chmodSync(lockedSkillsDir, 0o755);
     }
@@ -312,8 +314,8 @@ describe('claude plugin install command (system test)', () => {
 
     expect(status).toBe(2);
     expect(report).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' } });
-    expect(report.error?.message).toContain('No SKILL.md');
-    expect(report.error?.message).toContain(docsDir);
+    expect(refusalOf(report)?.message).toContain('No SKILL.md');
+    expect(refusalOf(report)?.message).toContain(docsDir);
     expect(fs.existsSync(safePath.join(claudeDir, 'skills', 'docs'))).toBe(false);
   });
 
@@ -330,7 +332,7 @@ describe('claude plugin install command (system test)', () => {
 
     expect(status).toBe(2);
     expect(report).toMatchObject({ status: 'error', error: { code: 'INPUT_UNREADABLE' } });
-    expect(report.error?.message).toContain(notZip);
+    expect(refusalOf(report)?.message).toContain(notZip);
     expect(fs.readFileSync(existing, 'utf-8')).toBe('# keep me\n');
   });
 
@@ -351,7 +353,7 @@ describe('claude plugin install command (system test)', () => {
 
     expect(status).toBe(2);
     expect(report).toMatchObject({ status: 'error', error: { code: 'INPUT_UNREADABLE' } });
-    expect(report.error?.message).toContain(corrupt);
+    expect(refusalOf(report)?.message).toContain(corrupt);
     expect(fs.readFileSync(existing, 'utf-8')).toBe('# previous\n');
   });
 
@@ -425,7 +427,7 @@ describe('claude plugin install command (system test)', () => {
 
       expect(status).toBe(2);
       expect(report).toMatchObject({ status: 'error', error: { code: 'RUN_INCOMPLETE' } });
-      expect(report.error?.message).toContain(lockedTmp);
+      expect(refusalOf(report)?.message).toContain(lockedTmp);
       expect(fs.readFileSync(existing, 'utf-8')).toBe('# precious\n');
     } finally {
       chmodSync(lockedTmp, 0o755);
@@ -534,7 +536,7 @@ describe('claude plugin install command (system test)', () => {
 
     expect(status, JSON.stringify(report)).toBe(2);
     expect(report).toMatchObject({ status: 'error', error: { code: 'INPUT_UNREADABLE' } });
-    expect(report.error?.message).toContain('plugins/out-plugin is a symbolic link to a path outside it');
+    expect(refusalOf(report)?.message).toContain('plugins/out-plugin is a symbolic link to a path outside it');
     expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES))).toBe(false);
   });
 });

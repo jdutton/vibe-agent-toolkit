@@ -182,8 +182,9 @@ describe('vat audit <git-url> — cleanup', () => {
     // tests see a clean count. We do NOT touch other vat-audit-* dirs
     // that may exist from concurrent runs.
     const match = /temp dir preserved: (\S+)/.exec(result.stderr);
-    if (match) {
-      fs.rmSync(match[1], { recursive: true, force: true });
+    const preserved = match?.[1];
+    if (preserved !== undefined) {
+      fs.rmSync(preserved, { recursive: true, force: true });
     }
   });
 });

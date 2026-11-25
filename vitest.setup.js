@@ -18,9 +18,11 @@
 // so token spend stays opt-in only.
 // VAT_FAULT_MATRIX=full selects the fault matrix's whole injection product for a
 // local run (packages/cli/test/fault-matrix/matrix.ts); scrubbed, it could never be chosen.
-import { realpathSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter } from 'node:path';
+import { delimiter, join } from 'node:path';
+
+import { afterAll } from 'vitest';
 
 const PRESERVE_ENV = new Set(['VAT_SKILL_TEST_E2E', 'VAT_FAULT_MATRIX']);
 
@@ -57,3 +59,26 @@ for (const key of Object.keys(process.env)) {
 // Both spellings of the temp directory (on macOS `/var/…` is a link to `/private/var/…`): the
 // resolver compares spellings and makes no filesystem call of its own.
 process.env.VAT_TEST_USER_STATE_UNDER = [...new Set([tmpdir(), realpathSync.native(tmpdir())])].join(delimiter);
+
+// ⛔ Never let a test share the machine-wide VAT cache. Unset, VAT_CACHE_DIR is
+// `<tmpdir>/.vat-cache`: the developer's own cache, and one SQLite projection store every
+// parallel worker would contend on (busy waits), with each file's verdict depending on what
+// ran before it. So every test file gets its own empty directory, removed when the file ends
+// (this setup runs once per file; isolation is on in every tier). A `vat` child spawned with
+// `process.env` inherits it. A test that sets its own VAT_CACHE_DIR still does; one that
+// unsets it without moving TMPDIR is refused by `vatCacheRoot()` (the guard armed above).
+// The link-verdict cache (`<tmpdir>/.vat-link-cache`) is NOT moved by VAT_CACHE_DIR, by
+// design; only a test that checks external URLs reaches it.
+// (enforced by: packages/dev-tools/test/vitest-setup-env.test.ts; the refusal by
+// packages/resources/test/integration/cache-root.integration.test.ts)
+const fileCacheDir = mkdtempSync(join(tmpdir(), 'vat-test-file-cache-'));
+process.env.VAT_CACHE_DIR = fileCacheDir;
+afterAll(() => {
+	try {
+		rmSync(fileCacheDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+	} catch (error) {
+		// Never fail a test file for its scratch cache (a Windows handle a child still holds):
+		// say so, and leave the directory to the OS's temp cleanup.
+		process.stderr.write(`vitest.setup.js: could not remove the test cache ${fileCacheDir}: ${String(error)}\n`);
+	}
+});

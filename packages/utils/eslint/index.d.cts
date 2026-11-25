@@ -18,10 +18,11 @@
  * describes, and `index.cjs` is CommonJS inside a `"type": "module"` package.
  *
  * This file exists because `eslint.config.ts` is supported from ESLint 9.18.
- * Without it, an adopter writing one gets TS7016 on the import. It is NOT covered
- * by `bun run typecheck` (utils' tsconfig includes only `src/**‍/*.ts`), so the
- * packaged-artifact integration test compiles a consumer fixture against it
- * instead — see `test/integration/eslint-recommended-config.integration.test.ts`.
+ * Without it, an adopter writing one gets TS7016 on the import. `bun run typecheck`
+ * compiles it, and dev-tools' `eslint-allowlist-ratchets.test.ts` holds it to
+ * `ESLint.Plugin`; the packaged-artifact integration test compiles a consumer
+ * fixture against the SHIPPED copy — see
+ * `test/integration/eslint-recommended-config.integration.test.ts`.
  */
 
 declare const plugin: plugin.Plugin;
@@ -30,7 +31,8 @@ declare namespace plugin {
   /** A rule module, opaque here — adopters hand these to ESLint, never call them. */
   interface RuleModule {
     meta?: Record<string, unknown>;
-    create: (context: unknown) => Record<string, unknown>;
+    /** Returns ESLint's rule visitor: selector → handler. */
+    create: (context: unknown) => Record<string, ((...args: unknown[]) => void) | undefined>;
   }
 
   /** A flat-config object, as returned by `configs.recommended`. */

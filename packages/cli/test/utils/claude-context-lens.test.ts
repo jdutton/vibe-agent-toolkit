@@ -1,4 +1,4 @@
-import { emptyBlobRows } from '@vibe-agent-toolkit/resources';
+import { emptyBlobRows, type PopulationRun } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -18,6 +18,9 @@ vi.mock('../../src/commands/audit/distributed-tree.js', () => ({
 import { evaluateClaudeContextLens } from '../../src/utils/claude-context-lens.js';
 // eslint-disable-next-line import/first -- must come after vi.mock calls
 import { createLogger } from '../../src/utils/logger.js';
+
+/** The population run handed to the (mocked) population builder, which never reads it. */
+const STUB_RUN = {} as PopulationRun;
 
 /** A projection whose only rows are one blob declined as not text, at a path typed as markdown. */
 function declinedMarkdown(): object {
@@ -40,6 +43,7 @@ describe('evaluateClaudeContextLens — publishes the population the claude-cont
 
     const result = await evaluateClaudeContextLens({
       root: safePath.resolve('/project'),
+      run: STUB_RUN,
       cache: undefined,
       logger: createLogger(),
     });
@@ -52,7 +56,7 @@ describe('evaluateClaudeContextLens — publishes the population the claude-cont
     const logger = createLogger();
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
 
-    await evaluateClaudeContextLens({ root: safePath.resolve('/project'), cache: undefined, logger });
+    await evaluateClaudeContextLens({ root: safePath.resolve('/project'), run: STUB_RUN, cache: undefined, logger });
 
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]?.[0])).toMatch(/^claude-context population: blob derivation declined 1 of 1 blob\(s\)/);

@@ -12,11 +12,13 @@
  * import edge (`from "…"`) and semantically a sentence. Admitting double quotes
  * put it in range, and it must NOT be reported as a package.
  *
- * Not compiled (tsconfig includes `src/**` only) and not linted
+ * Not built (the build tsconfig includes `src/**` only) and not linted
  * (`**\/test/fixtures/**` is ignored), so these unresolvable packages are inert.
+ * The test-program typecheck does see them, hence the directives.
  */
 
 import 'side-effect-pkg';
+// @ts-expect-error -- a fixture edge: the package deliberately does not exist.
 import defaultImport from "double-quoted-pkg";
 
 export { id } from './re-exported.js';
@@ -25,6 +27,7 @@ export { id } from './re-exported.js';
  * @returns A package loaded through a single-quoted dynamic import
  */
 export async function lazySingle(): Promise<unknown> {
+  // @ts-expect-error -- a fixture edge: the package deliberately does not exist.
   return import('dynamic-single-pkg');
 }
 
@@ -32,6 +35,7 @@ export async function lazySingle(): Promise<unknown> {
  * @returns A package loaded through a double-quoted dynamic import
  */
 export async function lazyDouble(): Promise<unknown> {
+  // @ts-expect-error -- a fixture edge: the package deliberately does not exist.
   return await import("dynamic-double-pkg");
 }
 

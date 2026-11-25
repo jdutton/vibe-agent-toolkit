@@ -2,7 +2,7 @@ import { delimiter } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { normalizedTmpdir, requireTestScratch, safePath, TEST_USER_STATE_UNDER, toForwardSlash } from '../src/index.js';
+import { normalizedTmpdir, refuseSharedTempState, requireTestScratch, safePath, TEST_USER_STATE_UNDER, toForwardSlash } from '../src/index.js';
 
 const TEMP = toForwardSlash(normalizedTmpdir());
 /** A sibling of the temp directory: absolute on every platform, and never inside it. */
@@ -52,5 +52,41 @@ describe('requireTestScratch', () => {
   it('does nothing when the variable is unset', () => {
     vi.stubEnv(TEST_USER_STATE_UNDER, undefined);
     expect(requireTestScratch(OUTSIDE, 'The Claude directory')).toBe(OUTSIDE);
+  });
+});
+
+describe('refuseSharedTempState', () => {
+  const SHARED = /shared by every process on this machine: refusing to use it in a test process/;
+  const shared = safePath.join(TEMP, '.vat-cache');
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('throws for a directory directly in the named temp tree, naming it and the remedy', () => {
+    const refuse = (): string => refuseSharedTempState(shared, 'The cache root', 'Set VAT_CACHE_DIR.');
+    expect(refuse).toThrow(SHARED);
+    expect(refuse).toThrow(`The cache root resolves to ${shared}`);
+    expect(refuse).toThrow('Set VAT_CACHE_DIR.');
+  });
+
+  it('answers a directory one level deeper (a test\'s own scratch temp directory), unchanged', () => {
+    const scratch = safePath.join(TEMP, 'vat-test-scratch-x', '.vat-cache');
+    expect(refuseSharedTempState(scratch, 'The cache root', 'x')).toBe(scratch);
+  });
+
+  it('answers a directory outside the tree, unchanged: that is requireTestScratch\'s question', () => {
+    expect(refuseSharedTempState(OUTSIDE, 'The cache root', 'x')).toBe(OUTSIDE);
+  });
+
+  it('throws for a directory directly in ANY tree the variable lists', () => {
+    const second = safePath.resolve(TEMP, '..', 'vat-second-tree');
+    vi.stubEnv(TEST_USER_STATE_UNDER, [TEMP, second].join(delimiter));
+    expect(() => refuseSharedTempState(safePath.join(second, '.vat-cache'), 'The cache root', 'x')).toThrow(SHARED);
+  });
+
+  it.each(['', '   ', undefined])('does nothing when the variable is %j: no user sets it', (value) => {
+    vi.stubEnv(TEST_USER_STATE_UNDER, value);
+    expect(refuseSharedTempState(shared, 'The cache root', 'x')).toBe(shared);
   });
 });

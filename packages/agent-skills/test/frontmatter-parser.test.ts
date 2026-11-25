@@ -21,8 +21,8 @@ describe('parseFrontmatter', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.frontmatter.name).toBe('my-skill');
-      expect(result.frontmatter.description).toBe('Does something useful');
+      expect(result.frontmatter['name']).toBe('my-skill');
+      expect(result.frontmatter['description']).toBe('Does something useful');
       expect(result.body).toBe('# Content here');
     }
   });
@@ -52,7 +52,7 @@ describe('parseFrontmatter', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.frontmatter.metadata).toEqual({
+      expect(result.frontmatter['metadata']).toEqual({
         version: '1.0.0',
         author: 'Jeff',
       });
@@ -120,7 +120,7 @@ description: [unclosed array
 
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.frontmatter.name).toBe('my-skill');
+      expect(result.frontmatter['name']).toBe('my-skill');
     }
   });
 });

@@ -215,8 +215,10 @@ describe('vatCacheNamespace', () => {
 });
 
 describe('cache layout', () => {
+  // The test setup points VAT_CACHE_DIR at a per-file directory, so the root is that directory here; the
+  // default spelling (`<tmpdir>/.vat-cache`) is pinned in cache-root.integration.test.ts.
   it('keeps the shared root free of the namespace', () => {
-    expect(vatCacheRoot()).toBe(safePath.join(normalizedTmpdir(), '.vat-cache'));
+    expect(vatCacheRoot()).not.toContain(vatCacheNamespace());
   });
 
   it('puts build-dependent tenants under the namespace', () => {

@@ -94,7 +94,7 @@ function expectRefusedBeforeCheckout(run: () => unknown, expected: Record<string
   expect(calls.some((args) => args[0] === 'read-tree')).toBe(false);
 }
 
-const link = (path: string, oid: string, bytes: Buffer | string): FakeLink => ({ path, oid, bytes: Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes) });
+const link = (path: FakeLink['path'], oid: string, bytes: Buffer | string): FakeLink => ({ path, oid, bytes: Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes) });
 
 beforeEach(() => {
   spawnSyncMock.mockReset();

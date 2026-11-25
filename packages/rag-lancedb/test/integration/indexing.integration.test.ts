@@ -28,6 +28,7 @@ import { readFile, rm, writeFile } from 'node:fs/promises';
 import { computeContentKey } from '@vibe-agent-toolkit/resources';
 import { RAG_DATABASE_UNREADABLE_CODE, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { type ZodObject, type ZodRawShape, z } from 'zod';
 
 import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { resolveChunkingConfig } from '../../src/chunking-config.js';
@@ -42,7 +43,7 @@ const TEST_MARKDOWN_CONTENT_FOR_METADATA = '# Test\n\nContent here.';
 async function indexTestChunksWithMetadata<TMetadata extends Record<string, unknown>>(
   provider: LanceDBRAGProvider<TMetadata>,
   tempDir: string,
-  schema: { shape: Record<string, unknown> },
+  schema: ZodObject<ZodRawShape>,
   metadataValues: TMetadata
 ): Promise<void> {
   const doc = await createTestMarkdownFile(tempDir, 'doc.md', TEST_MARKDOWN_CONTENT_FOR_METADATA);
@@ -453,8 +454,6 @@ Content for section 4 with even more text.`
 
   describe('Custom Metadata Filtering', () => {
     it.skipIf(onnxModelUnreachable())('should filter by string metadata field', async () => {
-      const { z } = await import('zod');
-
       // Define custom metadata schema
       type CustomMetadata = { domain: string; priority: number };
       const CustomSchema = z.object({
@@ -580,8 +579,6 @@ Content for section 4 with even more text.`
     });
 
     it.skipIf(onnxModelUnreachable())('should filter by number metadata field', async () => {
-      const { z } = await import('zod');
-
       type CustomMetadata = { priority: number };
       const CustomSchema = z.object({ priority: z.number() });
 
@@ -608,8 +605,6 @@ Content for section 4 with even more text.`
     });
 
     it.skipIf(onnxModelUnreachable())('should filter by boolean metadata field', async () => {
-      const { z } = await import('zod');
-
       type CustomMetadata = { active: boolean };
       const CustomSchema = z.object({ active: z.boolean() });
 
@@ -636,8 +631,6 @@ Content for section 4 with even more text.`
     });
 
     it.skipIf(onnxModelUnreachable())('should filter by array metadata field with LIKE query', async () => {
-      const { z } = await import('zod');
-
       type CustomMetadata = { tags: string[] };
       const CustomSchema = z.object({ tags: z.array(z.string()) });
 
@@ -653,6 +646,7 @@ Content for section 4 with even more text.`
       // Query with tags filter (should match substring)
       const result = await customProvider.query({
         text: 'content',
+        // @ts-expect-error -- deliberately a bare string for an array field: the filter matches it as a substring of the stored CSV
         filters: { metadata: { tags: 'auth' } },
       });
 
@@ -665,8 +659,6 @@ Content for section 4 with even more text.`
     });
 
     it.skipIf(onnxModelUnreachable())('should combine multiple metadata filters', async () => {
-      const { z } = await import('zod');
-
       type CustomMetadata = { domain: string; priority: number };
       const CustomSchema = z.object({
         domain: z.string(),
@@ -773,6 +765,15 @@ Content for section 4 with even more text.`
   });
 
   describe('Frontmatter Indexing', () => {
+    // The two tests over a custom `title`/`category`/`priority` schema hold their provider here: its
+    // type is not the suite's default-metadata `provider`. Closed before the suite removes tempDir.
+    let customProvider: LanceDBRAGProvider<{ title: string; category: string; priority: number }> | undefined;
+
+    afterEach(async () => {
+      await customProvider?.close();
+      customProvider = undefined;
+    });
+
     it.skipIf(onnxModelUnreachable())('should preserve default metadata fields from frontmatter', async () => {
       // RED: This is the ACTUAL bug!
       // enrichChunks() receives frontmatter: {} instead of parseResult.frontmatter
@@ -799,9 +800,9 @@ Important security information.`
       // Verify frontmatter is present
       console.log('Frontmatter before indexing:', resource.frontmatter);
       expect(resource.frontmatter).toBeDefined();
-      expect(resource.frontmatter?.tags).toEqual(['security', 'authentication']);
-      expect(resource.frontmatter?.type).toBe('guide');
-      expect(resource.frontmatter?.title).toBe('Security Best Practices');
+      expect(resource.frontmatter?.['tags']).toEqual(['security', 'authentication']);
+      expect(resource.frontmatter?.['type']).toBe('guide');
+      expect(resource.frontmatter?.['title']).toBe('Security Best Practices');
 
       // Index the resource
       const indexResult = await provider.indexResources([resource]);
@@ -829,7 +830,6 @@ Important security information.`
       // has no custom columns, so the batch is refused up front naming them — never one per-resource
       // "Found field not in schema" error after an update had already deleted the resource's chunks.
 
-      const { z } = await import('zod');
       const { DefaultRAGMetadataSchema } = await import('@vibe-agent-toolkit/rag');
 
       // First: Create table with DEFAULT schema (no custom fields)
@@ -887,8 +887,6 @@ Content.`
       // If the first resource has no frontmatter, LanceDB infers schema without custom fields
       // Then second resource with frontmatter fails: "Found field not in schema"
 
-      const { z } = await import('zod');
-
       const CustomMetadataSchema = z.object({
         title: z.string(),
         category: z.string(),
@@ -897,7 +895,7 @@ Content.`
 
       type CustomMetadata = z.infer<typeof CustomMetadataSchema>;
 
-      provider = await LanceDBRAGProvider.create<CustomMetadata>({
+      customProvider = await LanceDBRAGProvider.create<CustomMetadata>({
         dbPath,
         metadataSchema: CustomMetadataSchema,
       });
@@ -914,7 +912,7 @@ Content.`
       plainResource.frontmatter = undefined;
 
       // Index first resource (creates table with NO custom metadata columns)
-      const result1 = await provider.indexResources([plainResource]);
+      const result1 = await customProvider.indexResources([plainResource]);
       expect(result1.resourcesIndexed).toBe(1);
 
       // Second resource: HAS frontmatter
@@ -936,7 +934,7 @@ Authentication and authorization.`
 
       // BUG: This should succeed but will fail with "Found field not in schema: title"
       // because the table was created from first resource without custom columns
-      const result2 = await provider.indexResources([resourceWithMeta]);
+      const result2 = await customProvider.indexResources([resourceWithMeta]);
       expect(result2.resourcesIndexed).toBe(1); // Should succeed
       expect(result2.errors?.length ?? 0).toBe(0); // Should have no errors
     });
@@ -945,8 +943,6 @@ Authentication and authorization.`
       // RED: Write failing test first
       // This test demonstrates the bug: frontmatter is being overwritten with {}
       // in indexResource() method, so custom metadata never gets indexed
-
-      const { z } = await import('zod');
 
       // Define custom metadata schema
       const CustomMetadataSchema = z.object({
@@ -958,7 +954,7 @@ Authentication and authorization.`
       type CustomMetadata = z.infer<typeof CustomMetadataSchema>;
 
       // Create provider with custom schema
-      provider = await LanceDBRAGProvider.create<CustomMetadata>({
+      customProvider = await LanceDBRAGProvider.create<CustomMetadata>({
         dbPath,
         metadataSchema: CustomMetadataSchema,
       });
@@ -992,12 +988,12 @@ This document covers authentication and authorization.`
       expect(resource.frontmatter).toHaveProperty('title');
 
       // Index the resource
-      const indexResult = await provider.indexResources([resource]);
+      const indexResult = await customProvider.indexResources([resource]);
       expect(indexResult.resourcesIndexed).toBe(1);
       expect(indexResult.chunksCreated).toBeGreaterThan(0);
 
       // Query and verify custom metadata was indexed
-      const queryResult = await provider.query({
+      const queryResult = await customProvider.query({
         text: 'authentication',
       });
 

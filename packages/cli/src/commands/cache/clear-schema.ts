@@ -19,7 +19,7 @@
  * that does not exist is considered and holds nothing to prune (`ok`).
  */
 
-import { FindingSchema, reportSchema, type Report } from '@vibe-agent-toolkit/schema';
+import { FindingSchema, reportSchema } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
 import type { ExaminedDeclaration } from '../../utils/run-integrity.js';
@@ -66,8 +66,6 @@ export type CacheClearData = z.infer<typeof CacheClearDataSchema>;
 
 /** The document `vat cache clear` publishes. */
 export const CACHE_CLEAR_REPORT_SCHEMA = reportSchema(CacheClearDataSchema, FindingSchema);
-
-export type CacheClearReport = Report<CacheClearData>;
 
 const CachePruneDataSchema = z.object({
   /** Absolute path of the cache root pruned. */

@@ -18,6 +18,8 @@ export {
 } from './cli-runner.js';
 export type { CliResult } from './cli-runner.js';
 
+export { reportData } from '../../report-envelope.js';
+
 export { createTestTempDir } from '../test-common.js';
 export {
   createTempProject,

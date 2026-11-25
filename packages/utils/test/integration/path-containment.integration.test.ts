@@ -57,29 +57,33 @@ describe('isUnderRoot', () => {
 
   describe('a symlink', () => {
     it('inside the root that points OUTSIDE is outside — the spelling lies, the filesystem does not', ({ skip }) => {
-      if (tree().linkOut === null) skip('host cannot create symlinks');
-      expect(isUnderRoot(tree().root, tree().linkOut)).toBe('outside');
+      const { linkOut } = tree();
+      if (linkOut === null) return skip('host cannot create symlinks');
+      expect(isUnderRoot(tree().root, linkOut)).toBe('outside');
       // …and so is anything reached through it, present or not.
-      expect(isUnderRoot(tree().root, safePath.join(tree().linkOut, 'secret.txt'))).toBe('outside');
-      expect(isUnderRoot(tree().root, safePath.join(tree().linkOut, 'not-there'))).toBe('outside');
+      expect(isUnderRoot(tree().root, safePath.join(linkOut, 'secret.txt'))).toBe('outside');
+      expect(isUnderRoot(tree().root, safePath.join(linkOut, 'not-there'))).toBe('outside');
     });
 
     it('inside the root that points inside is inside', ({ skip }) => {
-      if (tree().linkIn === null) skip('host cannot create symlinks');
-      expect(isUnderRoot(tree().root, tree().linkIn)).toBe('inside');
+      const { linkIn } = tree();
+      if (linkIn === null) return skip('host cannot create symlinks');
+      expect(isUnderRoot(tree().root, linkIn)).toBe('inside');
     });
 
     it('is judged against the root\'s OWN realpath, so a root reached through a link still contains its members', ({ skip }) => {
-      if (tree().rootAlias === null) skip('host cannot create symlinks');
+      const { rootAlias } = tree();
+      if (rootAlias === null) return skip('host cannot create symlinks');
       // The alias is a link OUTSIDE the tree pointing at the root; a member
       // spelled through the alias and one spelled directly are the same file.
-      expect(isUnderRoot(tree().rootAlias, tree().member)).toBe('inside');
-      expect(isUnderRoot(tree().root, safePath.join(tree().rootAlias, 'member'))).toBe('inside');
+      expect(isUnderRoot(rootAlias, tree().member)).toBe('inside');
+      expect(isUnderRoot(tree().root, safePath.join(rootAlias, 'member'))).toBe('inside');
     });
 
     it('that dangles is inside by its own entry — a delete removes the link, not a target', ({ skip }) => {
-      if (tree().dangling === null) skip('host cannot create symlinks');
-      expect(isUnderRoot(tree().root, tree().dangling)).toBe('inside');
+      const { dangling } = tree();
+      if (dangling === null) return skip('host cannot create symlinks');
+      expect(isUnderRoot(tree().root, dangling)).toBe('inside');
     });
   });
 
@@ -115,10 +119,11 @@ describe('isUnderRoot', () => {
   });
 
   it('refuses to answer for a path the OS refuses to examine, rather than reading it as absent', ({ skip }) => {
-    if (tree().unreadable === null) skip('host cannot deny reads');
+    const { unreadable } = tree();
+    if (unreadable === null) return skip('host cannot deny reads');
     // The unreadable directory itself has a realpath (its parent can be read);
     // a child of it cannot be examined at all.
-    expect(() => isUnderRoot(tree().root, safePath.join(tree().unreadable, 'child'))).toThrow(/EACCES/);
+    expect(() => isUnderRoot(tree().root, safePath.join(unreadable, 'child'))).toThrow(/EACCES/);
   });
 });
 
@@ -130,13 +135,13 @@ describe('canonicalPath', () => {
 
   it('spells a path reached through a link to the root exactly as the root\'s own members', ({ skip }) => {
     const alias = tree().rootAlias;
-    if (alias === null) skip('host cannot create symlinks');
+    if (alias === null) return skip('host cannot create symlinks');
     expect(canonicalPath(safePath.join(alias, 'member'), alias)).toBe(canonicalPath(tree().member, tree().root));
   });
 
   it('canonicalizes a missing path from its deepest existing ancestor, keeping the missing tail', ({ skip }) => {
     const alias = tree().rootAlias;
-    if (alias === null) skip('host cannot create symlinks');
+    if (alias === null) return skip('host cannot create symlinks');
     expect(canonicalPath(safePath.join(alias, 'not', 'there'), alias)).toBe(`${canonicalPath(tree().root, tree().root)}/not/there`);
   });
 });

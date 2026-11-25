@@ -14,8 +14,8 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 
-import { ADMISSION_BLOB_REQUEST, AST_SYNTACTIC_FORMS, MEMBERSHIP_EXTENT_REQUEST, PROJECTION_TABLES, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
-import { compareCodeUnits, toForwardSlash, type WorkCounter, type WorkCounterDump } from '@vibe-agent-toolkit/utils';
+import { ADMISSION_BLOB_REQUEST, AST_SYNTACTIC_FORMS, MEMBERSHIP_EXTENT_REQUEST, PROJECTION_TABLES } from '@vibe-agent-toolkit/resources';
+import { compareCodeUnits, toForwardSlash, type WorkCounter, type WorkCounterDump, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 

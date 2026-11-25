@@ -92,7 +92,7 @@ function spyStderr() {
 function parseBaselineFlag(argv: string[]): unknown {
   const command = createSkillTestRunCommand();
   command.parseOptions(['my-skill', ...argv]);
-  return command.opts().baseline;
+  return command.opts()['baseline'];
 }
 
 /**
@@ -108,7 +108,7 @@ function publishedSummarySchema(): Record<string, unknown> {
     properties?: Record<string, unknown>;
   };
   const root = schema.properties ?? Object.values(schema.definitions ?? {})[0]?.properties ?? {};
-  return root.summary as Record<string, unknown>;
+  return root['summary'] as Record<string, unknown>;
 }
 
 /**
@@ -119,7 +119,7 @@ function publishedSummarySchema(): Record<string, unknown> {
 function parseConfigureBaselineFlag(argv: string[]): unknown {
   const command = createSkillTestConfigureCommand();
   command.parseOptions(['my-skill', ...argv]);
-  return command.opts().baseline;
+  return command.opts()['baseline'];
 }
 
 /**
@@ -662,7 +662,7 @@ function installRunSpies() {
 async function runAndCaptureOpts(
   subject: string,
   options: Parameters<typeof runSkillTestRun>[1],
-): Promise<Record<string, unknown>> {
+): Promise<harness.RunHarnessOptions> {
   const { harnessSpy } = installRunSpies();
   await runSkillTestRun(subject, options);
   // 🪤 The LAST call, not the first. `installRunSpies` may have already run in
@@ -674,7 +674,9 @@ async function runAndCaptureOpts(
   // override assertion silently examined the un-overridden call and read
   // `baseline: true`. `.at(-1)` is this run's call whether the spy was fresh
   // or reused.
-  return harnessSpy.mock.calls.at(-1)?.[0] as unknown as Record<string, unknown>;
+  const opts = harnessSpy.mock.calls.at(-1)?.[0];
+  if (opts === undefined) throw new Error('runSkillTestHarness was never called');
+  return opts;
 }
 
 const ENV_TEST_SKILL = './acme-skill';
@@ -1044,7 +1046,7 @@ describe('vat skill test run (path target honors declared test: config — #7)',
     resetSkillDiscoveryCache();
     const { harnessSpy, stderrSpy } = installRunSpies();
     await runSkillTestRun(fx.poolDistDir(BASELINED), { iUnderstandThisRunsSkillCode: true });
-    expect((harnessSpy.mock.calls[0]?.[0] as unknown as Record<string, unknown>).baseline).toBe(true);
+    expect(harnessSpy.mock.calls[0]?.[0].baseline).toBe(true);
     // ...and the doubling is ANNOUNCED, not silent — the merge must route through
     // resolveBaseline, not a bare `??`.
     expect(stderrSpy.mock.calls.some((c) => String(c[0]).includes('committed config'))).toBe(true);
@@ -1207,7 +1209,7 @@ describe('resolveSubjectForTest (an in-place subject — publish: false — is s
     resetSkillDiscoveryCache();
     vi.spyOn(process, 'cwd').mockReturnValue(fx.root);
     const opts = await runAndCaptureOpts(DECLARED_POOL, { iUnderstandThisRunsSkillCode: true });
-    expect(opts['subjectInPlace']).toBe(true);
+    expect(opts.subjectInPlace).toBe(true);
   });
 });
 

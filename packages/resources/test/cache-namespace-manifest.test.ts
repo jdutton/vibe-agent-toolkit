@@ -20,12 +20,14 @@ const manifest = vi.hoisted(() => ({ behaviour: 'real' as ManifestBehaviour }));
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof NodeFs>();
-  const readFileSync: typeof actual.readFileSync = (path, ...rest) => {
+  // One implementation behind `readFileSync`'s overloads: its widest overload's
+  // options, and the cast is the overload set itself.
+  const readFileSync = ((path: NodeFs.PathOrFileDescriptor, options?: Parameters<typeof actual.readFileSync>[1]) => {
     if (manifest.behaviour !== 'real' && String(path).endsWith('package.json')) {
       throw manifest.behaviour.throws;
     }
-    return actual.readFileSync(path, ...rest);
-  };
+    return actual.readFileSync(path, options);
+  }) as typeof actual.readFileSync;
   return { ...actual, readFileSync };
 });
 

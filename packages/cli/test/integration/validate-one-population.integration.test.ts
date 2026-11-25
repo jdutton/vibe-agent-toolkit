@@ -41,8 +41,7 @@
  * for this test to go green while proving nothing.
  */
 
-import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { chargedCalls, storeFilesUnder } from '../helpers/projection-store-probe.js';

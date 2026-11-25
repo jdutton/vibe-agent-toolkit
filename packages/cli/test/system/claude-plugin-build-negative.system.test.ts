@@ -6,8 +6,9 @@ import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
+import type { z } from 'zod';
 
-import { PLUGIN_BUILD_REPORT_SCHEMA, type PluginBuildReport } from '../../src/commands/claude/plugin/build-schema.js';
+import { PLUGIN_BUILD_REPORT_SCHEMA } from '../../src/commands/claude/plugin/build-schema.js';
 
 import {
   createSkillMarkdown,
@@ -62,7 +63,7 @@ async function runSkillsThenPluginBuild(tempDir: string): ReturnType<typeof exec
 }
 
 /** The build's stdout, read through the published schema. */
-function reportOf(stdout: string): PluginBuildReport {
+function reportOf(stdout: string): z.infer<typeof PLUGIN_BUILD_REPORT_SCHEMA> {
   return PLUGIN_BUILD_REPORT_SCHEMA.parse(yaml.parse(stdout));
 }
 
@@ -442,7 +443,7 @@ claude:
       location: 'plugins/p1/skills/strict/SKILL.md',
     }));
     expect(result.stdout).not.toContain(toForwardSlash(tempDir));
-    expect(report.data.marketplaces[0]).toMatchObject({
+    expect(report.data?.marketplaces[0]).toMatchObject({
       name: 'mp1',
       status: 'findings',
       reason: expect.stringMatching(/post-build validation errors: strict$/),

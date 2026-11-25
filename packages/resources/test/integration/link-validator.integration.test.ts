@@ -20,7 +20,7 @@ import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from
 import { fragmentIndex, validateLink, type FragmentIndex } from '../../src/link-validator.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import { crawlInRun } from '../helpers/population-run.js';
-import { assertValidation, createGitRepo, createLink, setupSubdirTestSuite, type ValidateLinkOptions } from '../test-helpers.js';
+import { assertValidation, createGitRepo, createLink, linkOptions, setupSubdirTestSuite, type ValidateLinkOptions } from '../test-helpers.js';
 
 /**
  * Helper to test that a non-ignored file linking to a gitignored file returns an error.
@@ -800,18 +800,18 @@ describe('validateLink', () => {
 
     it('resolves /docs/foo.md against projectRoot', async () => {
       const link = createLink('local_file', '/docs/foo.md', 'Leading slash', 1);
-      const result = await validateLink(link, sourceFile, fragmentIndex(), {
+      const result = await validateLink(link, sourceFile, fragmentIndex(), linkOptions({
         projectRoot,
         skipGitIgnoreCheck: true,
-      });
+      }));
       expect(result).toBeNull();
     });
 
     it('emits absolute_no_root broken_file when projectRoot is undefined', async () => {
       const link = createLink('local_file', '/docs/foo.md', 'Leading slash', 1);
-      const result = await validateLink(link, sourceFile, fragmentIndex(), {
+      const result = await validateLink(link, sourceFile, fragmentIndex(), linkOptions({
         skipGitIgnoreCheck: true,
-      });
+      }));
       expect(result).not.toBeNull();
       expect(result?.code).toBe('LINK_BROKEN_FILE');
       expect(result?.message).toContain('requires a configured projectRoot');
@@ -819,10 +819,10 @@ describe('validateLink', () => {
 
     it('emits absolute_escapes_root broken_file when leading-/ escapes projectRoot', async () => {
       const link = createLink('local_file', '/../escape.md', 'Escape', 1);
-      const result = await validateLink(link, sourceFile, fragmentIndex(), {
+      const result = await validateLink(link, sourceFile, fragmentIndex(), linkOptions({
         projectRoot,
         skipGitIgnoreCheck: true,
-      });
+      }));
       expect(result).not.toBeNull();
       expect(result?.code).toBe('LINK_BROKEN_FILE');
       expect(result?.message).toContain('escapes the project root via path traversal');
@@ -836,10 +836,10 @@ describe('validateLink', () => {
           new Set(['foo', 'section-a']),
         ],
       ]);
-      const result = await validateLink(link, sourceFile, headings, {
+      const result = await validateLink(link, sourceFile, headings, linkOptions({
         projectRoot,
         skipGitIgnoreCheck: true,
-      });
+      }));
       expect(result).toBeNull();
     });
 
@@ -887,10 +887,10 @@ describe('validateLink', () => {
     it('never triggers a directory error for external folder-shaped URL', async () => {
       // https://x.com/docs/ is classified as external — validateLink must return null.
       const link = createLink('external', 'https://x.com/docs/', 'External dir URL', 1);
-      const result = await validateLink(link, sourceFile, fragmentIndex(), {
+      const result = await validateLink(link, sourceFile, fragmentIndex(), linkOptions({
         projectRoot,
         skipGitIgnoreCheck: true,
-      });
+      }));
       expect(result).toBeNull();
     });
   });
@@ -916,10 +916,10 @@ describe('validateLink', () => {
 
     it('passes for HTML href="dir/" where dir exists as a directory', async () => {
       const link = createLink('local_directory', 'dir/', 'Dir link', 1);
-      const result = await validateLink(link, htmlSourceFile, fragmentIndex(), {
+      const result = await validateLink(link, htmlSourceFile, fragmentIndex(), linkOptions({
         projectRoot: htmlProjectRoot,
         skipGitIgnoreCheck: true,
-      });
+      }));
       expect(result).toBeNull();
       // Confirm no "directory" phrasing in result (result is null, so diagnostics contain none)
     });

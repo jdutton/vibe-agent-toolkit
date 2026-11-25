@@ -26,7 +26,7 @@ const at = (...segments: string[]): string => safePath.resolve('/vat-decisions',
 const OUT = at('out');
 
 function planned(existing: EntryKind, ownership: Ownership['kind'] = 'force'): PlannedChange {
-  const owner = ownership === 'vat-made' ? { kind: ownership, recognise: () => ({ owned: true }) } as const : { kind: ownership };
+  const owner: Ownership = ownership === 'vat-made' ? { kind: ownership, recognise: () => ({ owned: true }) } : { kind: ownership };
   return { change: { op: 'replace-file', dest: OUT, ownership: owner, contents: '', label: 'the output' }, existing, action: existing === 'absent' ? 'create' : 'replace' };
 }
 

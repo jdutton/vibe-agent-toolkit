@@ -17,6 +17,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
 
 import { AUDIT_SETTINGS_REPORT_SCHEMA } from '../../src/commands/audit-settings-schema.js';
+import { reportData } from '../report-envelope.js';
 
 import { cleanupTestTempDir, createTestTempDir, executeCli, fakeHomeEnv, getBinPath, writeTestFile } from './test-common.js';
 
@@ -72,7 +73,7 @@ describe('vat audit settings — one stated root (system test)', () => {
     const { result, report } = await runSettings(projectDir, fakeHome, []);
 
     expect(result.status, result.stderr).toBe(0);
-    expect(report.data.root).toBe(toForwardSlash(projectDir));
+    expect(report.data?.root).toBe(toForwardSlash(projectDir));
     const paths: Array<{ trail: string; value: string }> = [];
     pathsIn({ findings: report.findings, data: { ...report.data, root: undefined } }, '', paths);
     // The data side is exercised; the one finding lies outside the root, so it has no location.
@@ -91,7 +92,8 @@ describe('vat audit settings — one stated root (system test)', () => {
   it('spells every probed settings path against data.root in --show-paths', async () => {
     const { report } = await runSettings(projectDir, fakeHome, ['--show-paths']);
     const paths: Array<{ trail: string; value: string }> = [];
-    pathsIn(report.data.mode === 'paths' ? report.data.paths : [], 'paths', paths);
+    const data = reportData(report);
+    pathsIn(data.mode === 'paths' ? data.paths : [], 'paths', paths);
 
     expect(paths.length).toBeGreaterThan(0);
     // A candidate path may not exist — that is what the probe reports — but it is never absolute.
@@ -113,9 +115,11 @@ describe('vat audit settings — one stated root (system test)', () => {
     const shown = await runSettings(bareProject, bareHome, ['--show-paths'], configDir);
 
     expect(effective.result.status, effective.result.stderr).toBe(0);
-    const userLayers = effective.report.data.mode === 'effective' ? effective.report.data.layers.filter((l) => l.level === 'user') : [];
+    const effectiveData = reportData(effective.report);
+    const userLayers = effectiveData.mode === 'effective' ? effectiveData.layers.filter((l) => l.level === 'user') : [];
     expect(userLayers.map((l) => l.file)).toEqual(['../relocated-config/settings.json']);
-    const shownUser = shown.report.data.mode === 'paths' ? shown.report.data.paths.filter((p) => p.level === 'user') : [];
+    const shownData = reportData(shown.report);
+    const shownUser = shownData.mode === 'paths' ? shownData.paths.filter((p) => p.level === 'user') : [];
     expect(shownUser.map((p) => p.path)).toEqual(['../relocated-config/settings.json']);
   });
 });

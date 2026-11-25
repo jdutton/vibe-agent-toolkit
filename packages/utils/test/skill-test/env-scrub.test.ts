@@ -39,39 +39,39 @@ const SNAPSHOT_PATH = '/x/snapshot.json';
 describe('buildForwardedEnv', () => {
   it('forwards CLAUDE_CONFIG_DIR and the inference credential when not scrubbing', () => {
     const env = buildForwardedEnv(BASE, { scrubInferenceKey: false });
-    expect(env.CLAUDE_CONFIG_DIR).toBe('/home/u/.claude');
-    expect(env.ANTHROPIC_API_KEY).toBe('sk-key');
+    expect(env['CLAUDE_CONFIG_DIR']).toBe('/home/u/.claude');
+    expect(env['ANTHROPIC_API_KEY']).toBe('sk-key');
   });
 
   it('ALWAYS scrubs ANTHROPIC_ADMIN_API_KEY', () => {
     const env = buildForwardedEnv(BASE, { scrubInferenceKey: false });
-    expect(env.ANTHROPIC_ADMIN_API_KEY).toBeUndefined();
+    expect(env['ANTHROPIC_ADMIN_API_KEY']).toBeUndefined();
   });
 
   it('never forwards arbitrary ANTHROPIC_* (no prefix forwarding)', () => {
     const env = buildForwardedEnv(BASE, { scrubInferenceKey: false });
-    expect(env.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(env['ANTHROPIC_BASE_URL']).toBeUndefined();
   });
 
   it('scrubs the inference credential when scrubInferenceKey is true', () => {
     const env = buildForwardedEnv(BASE, { scrubInferenceKey: true });
-    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
-    expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
-    expect(env.CLAUDE_CONFIG_DIR).toBe('/home/u/.claude');
+    expect(env['ANTHROPIC_API_KEY']).toBeUndefined();
+    expect(env['ANTHROPIC_AUTH_TOKEN']).toBeUndefined();
+    expect(env['CLAUDE_CONFIG_DIR']).toBe('/home/u/.claude');
   });
 
   it('deletes CLAUDECODE and CLAUDE_CODE_* session vars', () => {
     const env = buildForwardedEnv(BASE, { scrubInferenceKey: false });
-    expect(env.CLAUDECODE).toBeUndefined();
-    expect(env.CLAUDE_CODE_SESSION_ID).toBeUndefined();
-    expect(env.CLAUDE_CODE_CHILD_SESSION).toBeUndefined();
+    expect(env['CLAUDECODE']).toBeUndefined();
+    expect(env['CLAUDE_CODE_SESSION_ID']).toBeUndefined();
+    expect(env['CLAUDE_CODE_CHILD_SESSION']).toBeUndefined();
   });
 
   it('forwards PATH and HOME (process essentials) and listed model vars', () => {
     const env = buildForwardedEnv(BASE, { scrubInferenceKey: false, modelVars: ['ANTHROPIC_MODEL'] });
-    expect(env.PATH).toBe('/usr/bin');
-    expect(env.HOME).toBe('/home/u');
-    expect(env.ANTHROPIC_MODEL).toBe('claude-x');
+    expect(env['PATH']).toBe('/usr/bin');
+    expect(env['HOME']).toBe('/home/u');
+    expect(env['ANTHROPIC_MODEL']).toBe('claude-x');
   });
 
   it('forwards POSIX username vars USER/LOGNAME (load-bearing for macOS Keychain subscription auth)', () => {
@@ -79,8 +79,8 @@ describe('buildForwardedEnv', () => {
     // Even with the inference key scrubbed (the --auth subscription path), USER must survive
     // or `claude auth status` can't read the login Keychain and reports loggedIn:false.
     const env = buildForwardedEnv(source, { scrubInferenceKey: true });
-    expect(env.USER).toBe('jeff');
-    expect(env.LOGNAME).toBe('jeff');
+    expect(env['USER']).toBe('jeff');
+    expect(env['LOGNAME']).toBe('jeff');
   });
 
   it('forwards Windows process essentials (APPDATA/LOCALAPPDATA/SystemDrive/windir/PATHEXT/COMSPEC)', () => {
@@ -94,12 +94,12 @@ describe('buildForwardedEnv', () => {
       COMSPEC: 'C:/Windows/System32/cmd.exe',
     } as NodeJS.ProcessEnv;
     const env = buildForwardedEnv(winSource, { scrubInferenceKey: false });
-    expect(env.APPDATA).toBe('C:/Users/u/AppData/Roaming');
-    expect(env.LOCALAPPDATA).toBe('C:/Users/u/AppData/Local');
-    expect(env.SystemDrive).toBe('C:');
-    expect(env.windir).toBe('C:/Windows');
-    expect(env.PATHEXT).toBe('.COM;.EXE;.BAT;.CMD');
-    expect(env.COMSPEC).toBe('C:/Windows/System32/cmd.exe');
+    expect(env['APPDATA']).toBe('C:/Users/u/AppData/Roaming');
+    expect(env['LOCALAPPDATA']).toBe('C:/Users/u/AppData/Local');
+    expect(env['SystemDrive']).toBe('C:');
+    expect(env['windir']).toBe('C:/Windows');
+    expect(env['PATHEXT']).toBe('.COM;.EXE;.BAT;.CMD');
+    expect(env['COMSPEC']).toBe('C:/Windows/System32/cmd.exe');
   });
 });
 
@@ -109,7 +109,7 @@ describe('applyDeclaredEnv', () => {
       source: DECLARED_SOURCE,
       passEnv: ['VENDOR_LICENSE_KEY'],
     });
-    expect(result.env.VENDOR_LICENSE_KEY).toBe('lic-123');
+    expect(result.env['VENDOR_LICENSE_KEY']).toBe('lic-123');
     expect(result.passedThrough).toContain('VENDOR_LICENSE_KEY');
     expect(result.warnings).toHaveLength(0);
   });
@@ -119,7 +119,7 @@ describe('applyDeclaredEnv', () => {
       source: DECLARED_SOURCE,
       passEnv: ['MISSING_VENDOR_VAR'],
     });
-    expect(result.env.MISSING_VENDOR_VAR).toBeUndefined();
+    expect(result.env['MISSING_VENDOR_VAR']).toBeUndefined();
     expect(result.passedThrough).not.toContain('MISSING_VENDOR_VAR');
     expect(result.warnings).toHaveLength(0);
   });
@@ -129,7 +129,7 @@ describe('applyDeclaredEnv', () => {
       source: { ...DECLARED_SOURCE, PATH: '/evil/bin' },
       passEnv: ['PATH'],
     });
-    expect(result.env.PATH).toBe('/usr/bin');
+    expect(result.env['PATH']).toBe('/usr/bin');
     expect(result.passedThrough).not.toContain('PATH');
     expect(result.warnings.some((w) => w.includes('PATH'))).toBe(true);
   });
@@ -139,7 +139,7 @@ describe('applyDeclaredEnv', () => {
       source: DECLARED_SOURCE,
       injectEnv: { CUSTOMER_SNAPSHOT_PATH: SNAPSHOT_PATH },
     });
-    expect(result.env.CUSTOMER_SNAPSHOT_PATH).toBe(SNAPSHOT_PATH);
+    expect(result.env['CUSTOMER_SNAPSHOT_PATH']).toBe(SNAPSHOT_PATH);
     expect(result.injected).toContain('CUSTOMER_SNAPSHOT_PATH');
   });
 
@@ -148,7 +148,7 @@ describe('applyDeclaredEnv', () => {
       source: DECLARED_SOURCE,
       injectEnv: { PATH: '/evil/bin' },
     });
-    expect(result.env.PATH).toBe('/usr/bin');
+    expect(result.env['PATH']).toBe('/usr/bin');
     expect(result.injected).not.toContain('PATH');
     expect(result.warnings.some((w) => w.includes('PATH'))).toBe(true);
   });
@@ -159,7 +159,7 @@ describe('applyDeclaredEnv', () => {
       passEnv: ['FOO'],
       injectEnv: { FOO: 'explicit' },
     });
-    expect(result.env.FOO).toBe('explicit');
+    expect(result.env['FOO']).toBe('explicit');
     expect(result.injected).toContain('FOO');
     expect(result.passedThrough).not.toContain('FOO');
   });
@@ -252,7 +252,7 @@ describe('credential-routing deny list (FIX A)', () => {
       source: DECLARED_SOURCE,
       injectEnv: { MY_FLAG: 'hello' },
     });
-    expect(result.env.MY_FLAG).toBe('hello');
+    expect(result.env['MY_FLAG']).toBe('hello');
     expect(result.injected).toContain('MY_FLAG');
     expect(result.warnings).toHaveLength(0);
   });

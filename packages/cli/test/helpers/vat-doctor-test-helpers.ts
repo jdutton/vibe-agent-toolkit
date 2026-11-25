@@ -119,7 +119,7 @@ export async function mockDoctorEnvironment(
 
   // Cast to vi.Mock type (mocked modules return Mock types)
   // eslint-disable-next-line local/no-child-process-execSync -- mocks execSync to fake each command; it never spawns
-  vi.mocked(execSync).mockImplementation((cmd: string): Buffer => {
+  vi.mocked(execSync).mockImplementation((cmd: string) => {
     const cmdStr = cmd.toString();
 
     if (cmdStr.includes('npm view vibe-agent-toolkit version')) {

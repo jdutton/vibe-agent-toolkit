@@ -28,7 +28,7 @@ import { executeCli } from './test-helpers/cli-runner.js';
 // child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
 useScratchTmpdir('vat-scratch-cli-5-');
 
-const NET = process.env.NET_AVAILABLE === '1';
+const NET = process.env['NET_AVAILABLE'] === '1';
 
 const META = {
   bucket: 'official',
@@ -105,7 +105,7 @@ describe('vat corpus scan — system (local sources)', () => {
       if (!firstRun) throw new Error('no run dir created');
       const summaryPath = safePath.join(outDir, firstRun, 'summary.yaml');
       const summary = yaml.parse(readFileSync(summaryPath, 'utf-8')) as Record<string, unknown>;
-      expect(summary.plugins as unknown[]).toHaveLength(1);
+      expect(summary['plugins'] as unknown[]).toHaveLength(1);
     }
   );
 });

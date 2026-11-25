@@ -254,7 +254,7 @@ describe('authTransport — cross-origin header stripping (§8)', () => {
  */
 function callWithRetry(
   impl: typeof fetch,
-  sleep: ReturnType<typeof vi.fn>,
+  sleep: (ms: number) => Promise<void>,
   overrides: { maxRetries?: number; maxRetryAfterMs?: number } = {},
 ): Promise<Response> {
   return authTransport(ORIGIN_URL, AUTH_HEADERS, impl, {

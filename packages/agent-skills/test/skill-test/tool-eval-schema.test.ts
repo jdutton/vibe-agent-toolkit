@@ -17,7 +17,7 @@ const validBody = {
   mustSucceed: [{ name: 'csvsum', succeeded: true, evidence: 'no is_error on the invoking tool_result' }],
   sequence: [{ steps: ['read', 'edit'], satisfied: true, evidence: 'read then edit' }],
   passed: true,
-} as const;
+} satisfies ToolVerdictBody;
 
 const validVerdict = { evalId: EVAL_ID, ...validBody } as const;
 
