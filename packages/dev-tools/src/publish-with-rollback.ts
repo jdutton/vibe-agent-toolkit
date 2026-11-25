@@ -12,13 +12,13 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import semver from 'semver';
 
 import { log, safeExecResult, safeExecSync } from './common.js';
+import { NPM_SCOPE, UMBRELLA_PACKAGE_NAME } from './npm-registry-guard.js';
 import { publishedPackagesInDependencyOrder } from './workspace-graph.js';
 
 const PROJECT_ROOT = process.cwd();
 const MANIFEST_PATH = safePath.join(PROJECT_ROOT, '.publish-manifest.json');
-const VIBE_AGENT_TOOLKIT_SCOPE = '@vibe-agent-toolkit/';
+const VIBE_AGENT_TOOLKIT_SCOPE = `${NPM_SCOPE}/`;
 const PACKAGES_DIR = 'packages';
-const UMBRELLA_PACKAGE_NAME = 'vibe-agent-toolkit';
 
 /**
  * The packages to publish, dependencies first.

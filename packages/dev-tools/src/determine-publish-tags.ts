@@ -31,7 +31,8 @@ import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import semver from 'semver';
 
-import { log, getNpmTagVersion, PROJECT_ROOT } from './common.js';
+import { log, PROJECT_ROOT } from './common.js';
+import { decideUpdateNext, NPM_REGISTRY, registryGet, sleepMs } from './npm-registry-guard.js';
 
 /**
  * Output GitHub Actions output variable
@@ -135,32 +136,32 @@ if (isStable) {
   }
 
   if (packageName) {
+    let decision: Awaited<ReturnType<typeof decideUpdateNext>>;
     try {
-      const currentNextVersion = getNpmTagVersion(packageName, 'next');
-
-      if (currentNextVersion) {
-        log(`  Current @next version: ${currentNextVersion}`, 'blue');
-
-        // Compare versions using semver
-        if (semver.gt(version, currentNextVersion)) {
-          log(`  ✓ ${version} > ${currentNextVersion}`, 'green');
-          log('  → Will update @next to this stable version', 'green');
-          updateNext = true;
-        } else {
-          log(`  - ${version} <= ${currentNextVersion}`, 'yellow');
-          log('  → Will NOT update @next (already newer or equal)', 'yellow');
-        }
-      } else {
-        log('  ⚠ No current @next version found on npm', 'yellow');
-        log('  → Will update @next to this stable version', 'green');
-        updateNext = true;
-      }
+      decision = await decideUpdateNext({
+        version,
+        packageName,
+        get: registryGet(NPM_REGISTRY),
+        retry: { tries: 3, waitMs: 5000, sleep: sleepMs },
+      });
     } catch (error) {
+      // Fail closed: an outage is not "no @next tag". This step runs before
+      // anything is published, so stopping here costs only a re-run.
       const message = error instanceof Error ? error.message : String(error);
-      log(`  ✗ Failed to query npm registry: ${message}`, 'red');
-      log('  → Defaulting to update @next (safer)', 'yellow');
-      updateNext = true;
+      log(`  ✗ Failed to read @next from the npm registry after 3 tries: ${message}`, 'red');
+      process.exit(ExitCode.ERROR);
     }
+
+    updateNext = decision.updateNext;
+    if (decision.currentNext === undefined) {
+      log('  ⚠ No current @next version found on npm', 'yellow');
+    } else {
+      log(`  Current @next version: ${decision.currentNext}`, 'blue');
+    }
+    log(
+      updateNext ? '  → Will update @next to this stable version' : '  → Will NOT update @next (already newer or equal)',
+      updateNext ? 'green' : 'yellow',
+    );
   }
 }
 

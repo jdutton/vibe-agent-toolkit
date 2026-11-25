@@ -815,6 +815,25 @@ npm's read replicas lag the write by minutes, unevenly per package; a sweep seco
 **Remedy:** poll `https://registry.npmjs.org/<name>` every ~30 s until the missing set is empty or
 stops shrinking; a stable count over minutes is the real failure. `npm view` adds its own cache.
 
+### A package first published as an RC keeps `latest` on that RC, and `latest` cannot be removed
+
+npm gives a brand-new package's first publish the `latest` dist-tag even under `--tag next`, so a
+package added during an RC series installs that RC for everyone who asks for it unversioned.
+`npm dist-tag rm <pkg> latest` is refused with E400: the tag can only be moved, by the next stable
+publish or `npm dist-tag add <pkg>@<stable> latest`. A 404 for a few minutes after a green publish
+is npm's asynchronous processing ([above](#a-registry-read-right-after-a-publish-reports-packages-missing-that-are-there)),
+not a failed publish; on top of it the CDN serves a package document for `max-age=300` keyed on
+the full URL, so a read needs a unique query parameter to see past it. A package whose every
+version was unpublished answers 200 with only `name` and `modified` (sometimes
+`time.unpublished`): that is "not on npm", like a 404.
+**Tell:** `npm view <pkg> dist-tags` shows `latest` older than `next` and a prerelease.
+**Remedy:** none until a stable release; publishing a placeholder stable is not the fix. The
+registry guard (`npm-registry-guard.ts`) reports it as a warning on every RC and, after a stable
+publish, fails if any package's `latest` is not the release, printing the `npm dist-tag` command.
+A package removed from the repository stays on npm: the guard fails until it is deprecated
+(`npm deprecate <pkg> "<message>"`). The guard never writes to npm (an owner ruling); run from a
+maintainer's machine, both commands need a one-time password.
+
 ### An accepted-risk ignore register rots silently
 
 `osv-scanner.toml`'s reasons were written against a tree that moved: 11 of 17 entries were dead,

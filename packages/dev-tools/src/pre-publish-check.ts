@@ -22,10 +22,13 @@
  * 14. No stale unreleased content (stable versions only)
  * 15. CHANGELOG section non-empty (stable versions only)
  * 16. No known defect marked as blocking the stable tag (stable versions only)
+ * 17. The npm registry guard (`npm-registry-guard.ts`): a package on npm that is no longer a
+ *     workspace package must be deprecated; on a prerelease, a prerelease or absent `latest`
+ *     is reported as a warning
  *
  * Usage:
- *   tsx packages/dev-tools/src/pre-publish-check.ts --root DIR [--allow-branch BRANCH] [--skip-git-checks] [--release-readiness] [--tag VERSION]
- *   bun run pre-publish [--allow-branch BRANCH] [--skip-git-checks] [--release-readiness] [--tag VERSION]
+ *   tsx packages/dev-tools/src/pre-publish-check.ts --root DIR [--allow-branch BRANCH] [--skip-git-checks] [--release-readiness] [--tag VERSION] [--registry URL]
+ *   bun run pre-publish [--allow-branch BRANCH] [--skip-git-checks] [--release-readiness] [--tag VERSION] [--registry URL]
  *
  * `--root` is required, never defaulted to this checkout: every check reads the
  * tree it names (git included), so a fixture tree can drive the whole script.
@@ -45,6 +48,14 @@ import { runGit } from '@vibe-agent-toolkit/utils/git';
 
 import { log, safeExecSync } from './common.js';
 import { isPrereleaseVersion, readKnownDefects, releaseReadinessDefectRefusal } from './known-defects-gate.js';
+import {
+  checkBeforePublish,
+  findingsExitCode,
+  guardWorkspacePackages,
+  NPM_REGISTRY,
+  printFindings,
+  registryGet,
+} from './npm-registry-guard.js';
 import { DEPENDENCY_FIELDS } from './resolve-workspace-deps.js';
 import { publishedPackagesInDependencyOrder } from './workspace-graph.js';
 
@@ -101,6 +112,8 @@ let releaseReadiness = false;
 let rootArg: string | undefined;
 /** The version the pushed tag names, when running inside the publish workflow. */
 let publishingTag: string | undefined;
+/** The npm registry the release-readiness registry guard reads. */
+let registry = NPM_REGISTRY;
 
 let i = 0;
 while (i < args.length) {
@@ -112,6 +125,10 @@ while (i < args.length) {
     continue;
   } else if (args[i] === '--root' && nextArg) {
     rootArg = safePath.resolve(nextArg);
+    i += 2;
+    continue;
+  } else if (args[i] === '--registry' && nextArg) {
+    registry = nextArg;
     i += 2;
     continue;
   } else if (args[i] === '--tag' && nextArg) {
@@ -143,6 +160,8 @@ Options:
   --tag VERSION          The pushed tag's version (publish workflow only). Replaces the
                          "tag absent" check with: the tag names the manifest version and
                          EXISTS on the remote — the release is the tag that was pushed.
+  --registry URL         The npm registry the release-readiness registry guard reads
+                         (default: ${NPM_REGISTRY})
   --help, -h             Show this help message
 
 Exit codes:
@@ -692,6 +711,26 @@ if (releaseReadiness) {
       process.exit(ExitCode.FINDINGS);
     }
     log('✓ No known defect blocks this version', 'green');
+  }
+
+  // Check 17: the npm registry guard. Removed packages must be deprecated; on a
+  // prerelease, a package whose `latest` the RC cannot move is reported. It
+  // reads the registry and never writes it: the fixes need the owner's OTP.
+  console.log('');
+  console.log(`Checking the npm registry (${registry})...`);
+  try {
+    const findings = await checkBeforePublish({
+      version: currentVersion,
+      workspacePackages: guardWorkspacePackages(projectRoot),
+      get: registryGet(registry),
+    });
+    printFindings(findings);
+    if (findingsExitCode(findings) !== ExitCode.OK) process.exit(ExitCode.FINDINGS);
+    log('✓ No removed package is left undeprecated on npm', 'green');
+  } catch (error) {
+    log('✗ Could not read the npm registry', 'red');
+    console.error(`  ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(ExitCode.ERROR);
   }
 
   // Check 14 & 15: CHANGELOG content checks (stable versions only)
