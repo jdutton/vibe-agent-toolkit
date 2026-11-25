@@ -7,6 +7,7 @@
 
 import { type PluginLocalSkillIndex, readSkillDocument, skillNameOf, type SkillTextRun, withSkillTextRun } from '@vibe-agent-toolkit/agent-skills';
 import {
+  MARKDOWN_BY_CONTRACT,
   parseFileCached,
   type ParseRefusedResource,
   parseRefusedEntryFor,
@@ -84,7 +85,7 @@ interface SkillDiscovery {
  */
 export async function skillDocumentOrRefused(skillPath: string, route: ParseRoute): Promise<SkillDocumentRead> {
   try {
-    return { kind: 'parsed', document: await parseFileCached(skillPath, 'markdown', route) };
+    return { kind: 'parsed', document: await parseFileCached(skillPath, MARKDOWN_BY_CONTRACT, route) };
   } catch (error) {
     const refused = parseRefusedEntryFor(skillPath, error);
     if (refused === undefined) throw error;

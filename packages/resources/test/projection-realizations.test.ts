@@ -17,12 +17,11 @@ import {
   COLLECTION_MIME_CONFLICT,
   collectionMimeConflictCondition,
   collectRealization,
-  createCollectionMimeResolver,
   resolveRealPath,
-  relativize,
-  type CollectionMimeResolver,
   type RealizationContext,
 } from '../src/projection/realizations.js';
+import { relativize } from '../src/projection/root-relative-path.js';
+import { type CollectionMimeResolver, createCollectionMimeResolver } from '../src/projection/router.js';
 import { PROJECTION_TABLES } from '../src/projection/table-registry.js';
 import type { CollectionConfig } from '../src/schemas/project-config.js';
 import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';

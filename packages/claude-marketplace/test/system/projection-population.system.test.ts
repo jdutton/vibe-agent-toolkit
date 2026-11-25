@@ -81,7 +81,6 @@ import {
   DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
   GitExtentContributor,
-  PackageExtentContributor,
   populate,
   relativize,
   type ExtentContributor,
@@ -198,7 +197,6 @@ function buildRegistry(skillPaths: readonly string[]): {
 
   add(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
   add(new GitExtentContributor());
-  add(new PackageExtentContributor());
 
   for (const skillPath of skillPaths) {
     add(new SkillExtentContributor(skillPath));

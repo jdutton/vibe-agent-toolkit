@@ -65,10 +65,6 @@ import {
   ExtentDeclarationSchema,
   notAdmittedIssues,
   notAdmittedRealizations,
-  PACKAGE_NOT_INSTALLED,
-  PACKAGE_RESOLUTION_FAILED,
-  PACKAGE_SUBPATH_ABSENT,
-  PACKAGE_SUBPATH_NOT_EXPORTED,
   REALIZATION_PATH_COLLISION,
   REALIZATION_PROMOTION_UNREADABLE,
   type ContentState,
@@ -100,8 +96,6 @@ interface AbsenceMemberEntry {
 
 /** The `resolution_contexts.kind` of the filesystem extent. */
 const FILESYSTEM_KIND = 'filesystem';
-/** The `resolution_contexts.kind` of a package extent. */
-const PACKAGE_KIND = 'package';
 
 /** The domain key of a content state: `contentState:<state>`. */
 function stateKey<const State extends ContentState>(state: State): `contentState:${State}` {
@@ -160,18 +154,6 @@ export const ABSENCE_MEMBERS = {
     tier: 'lower',
     scope: 'A realization whose read the OS refused when it was keyed.',
   },
-  [PACKAGE_RESOLUTION_FAILED]: {
-    signature: { code: PACKAGE_RESOLUTION_FAILED, extentKind: PACKAGE_KIND },
-    tier: 'lower',
-    scope: 'A package or subpath whose resolution failed for a reason that is neither absence nor an exports exclusion.',
-  },
-  [PACKAGE_SUBPATH_NOT_EXPORTED]: {
-    // The package-level row names the package it could not locate; the subpath-level one names none.
-    signature: { code: PACKAGE_SUBPATH_NOT_EXPORTED, extentKind: PACKAGE_KIND, resourceIdPresent: true },
-    tier: 'lower',
-    scope: 'The package-level row only: an exports map that hides the package\'s own manifest, so the package was not located.',
-    exemptRemainder: 'The subpath-level row is a declared exclusion: the located package\'s exports map hides that one subpath.',
-  },
   [MANIFEST_UNREADABLE]: {
     signature: { code: MANIFEST_UNREADABLE },
     tier: 'lower',
@@ -212,9 +194,7 @@ export const ABSENCE_EXEMPTIONS: Readonly<Record<string, string>> = {
   [CLOSURE_REFERENCE_UNRESOLVED]: `${TRUE_EMPTY} A broken link.`,
   [EXTENT_SYMLINK_TARGET_UNRESOLVED]: `${TRUE_EMPTY} A dangling link.`,
   [CLOSURE_ROOT_ABSENT]: TRUE_EMPTY,
-  [PACKAGE_SUBPATH_ABSENT]: TRUE_EMPTY,
   [PLUGIN_NOT_INSTALLED]: 'A legal state, per its own docs: an uninstalled plugin has no realization to compute.',
-  [PACKAGE_NOT_INSTALLED]: 'A legal state, per its own docs: a declared, uninstalled dependency has no realization to compute.',
   [CLOSURE_REFERENCE_OUTSIDE_ROOT]: OUTSIDE_ROOT,
   [EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT]: OUTSIDE_ROOT,
   [EXTENT_SYMLINK_TARGET_UNREADABLE]: 'A declared decline: Claude Code reads nothing through the link either.',

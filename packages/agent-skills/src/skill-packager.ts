@@ -19,6 +19,7 @@ import { basename, dirname } from 'node:path';
 
 import {
   DeferredArtifacts,
+  MARKDOWN_BY_CONTRACT,
   ResourceRegistry,
   openFrontmatter,
   parseFileCached,
@@ -1519,7 +1520,7 @@ function unreadableFault(entry: UnreadableResource, ctx: FsFaultContext): unknow
 async function parseSkillOrRefuse(skillPath: string, dispatcher: ParseDispatcher): Promise<Awaited<ReturnType<typeof parseFileCached>>> {
   try {
     // On the run's dispatcher: the run holds one pool open, never one per parse.
-    return await parseFileCached(skillPath, 'markdown', { dispatcher, side: 'source' });
+    return await parseFileCached(skillPath, MARKDOWN_BY_CONTRACT, { dispatcher, side: 'source' });
   } catch (error) {
     const refused = parseRefusedEntryFor(skillPath, error);
     if (refused === undefined) throw error;

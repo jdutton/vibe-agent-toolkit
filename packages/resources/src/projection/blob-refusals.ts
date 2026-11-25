@@ -63,7 +63,8 @@
 
 import { safePath, TextTooLargeError } from '@vibe-agent-toolkit/utils';
 
-import { isTextMimeType, parserKindForMimeType } from '../mime-type.js';
+import { NO_PARSER_KIND } from '../content-key.js';
+import { isTextMimeType } from '../mime-type.js';
 import { type NotAdmittedLog, parseRefusal } from '../not-admitted.js';
 import { ParseLimitError } from '../parse-limits.js';
 import type { ParseRefusedResource, UnreadableResource } from '../resource-registry.js';
@@ -79,6 +80,7 @@ import {
 import { POPULATION_PARSE_LIMITS } from './content-cache.js';
 import { formatParseFailures, parseFailedEntry, parseFailureOf } from './parse-failure.js';
 import type { Projection } from './projection.js';
+import { parserKindForMime } from './router.js';
 
 /** The three tables the line is a function of — every one of them stored. */
 export type BlobRefusalRows = Pick<Projection, 'blobs' | 'blobConditions' | 'resourceRealizations'>;
@@ -380,7 +382,7 @@ export function unkeyedEntry(row: Pick<Projection['resourceRealizations'][number
     return { log: 'unreadable', entry: { reason: 'its bytes could not be read when the realization was keyed' } };
   }
   if (row.contentState !== 'oversize') return undefined;
-  if (parserKindForMimeType(row.mime) !== null) {
+  if (parserKindForMime(row.mime) !== NO_PARSER_KIND) {
     return { log: 'parseRefused', entry: parseRefusal(new ParseLimitError('inputBytes', POPULATION_PARSE_LIMITS.inputBytes)) };
   }
   return { log: 'unreadable', entry: { reason: 'too large to decode', code: TextTooLargeError.code } };

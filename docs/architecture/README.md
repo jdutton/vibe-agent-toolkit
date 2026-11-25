@@ -297,6 +297,7 @@ that nothing in `src/**` or any vitest entry file reaches, so an export a spec i
 
 ## Related references
 
+- [Roadmap](./roadmap.md) — what VAT builds next across every package, in priority order, and what is placed later or declined, each with what would change that.
 - [Skill Packaging Shapes](./skill-packaging.md) — the four recognized artifact shapes (standalone skill, skill-claude-plugin, claude-plugin, claude-marketplace) with layouts and applicable validation.
 - [CLI Architecture](./cli.md) — command structure, output conventions, why the CLI layer stays "dumb," and CLI-specific testing patterns.
 - [Resource Scanning and Object Caching](./resource-scanning-and-caching.md) — how VAT discovers and reads resource bytes: the git-tracked vs. non-git scanning taxonomy, the two-lane cost model, symlink handling, the one content-decoding seam (§3.5), and the object-level content cache.

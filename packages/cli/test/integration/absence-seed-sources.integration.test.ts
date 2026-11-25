@@ -105,7 +105,7 @@ describe('the lower-tier finder\'s own controls', () => {
   const HEADER = [
     "import { CANNOT_DENY_READS, expectAbsenceCause, PERMISSIONS_ENFORCED } from '@vibe-agent-toolkit/utils/testing';",
     "import { symlinkCapability } from '@vibe-agent-toolkit/utils';",
-    "import { BLOB_CONTENT_CHANGED, BLOB_UNREADABLE, PACKAGE_SUBPATH_NOT_EXPORTED } from '../src/codes.js';",
+    "import { BLOB_CONTENT_CHANGED, BLOB_UNREADABLE, EXTENT_DIRECTORY_UNLISTABLE } from '../src/codes.js';",
     '',
   ].join('\n');
   /** One fixture file, without the shared imports, holding one test titled `t`. */
@@ -213,11 +213,10 @@ describe('the lower-tier finder\'s own controls', () => {
   });
 
   it('reds a signature missing a field of the member\'s, or stating one with another value', () => {
-    const member = resources.PACKAGE_SUBPATH_NOT_EXPORTED;
+    const member = resources.EXTENT_DIRECTORY_UNLISTABLE;
     const call = (signature: string): string => `it('t', () => { expectAbsenceCause(rowsOf(c), ${signature}); });`;
-    expect(judge(call("{ code: PACKAGE_SUBPATH_NOT_EXPORTED, extentKind: 'package', resourceIdPresent: true }"), member)).toEqual([]);
-    expect(judge(call("{ code: PACKAGE_SUBPATH_NOT_EXPORTED, extentKind: 'package' }"), member).join('\n')).toMatch(/signature/);
-    expect(judge(call("{ code: PACKAGE_SUBPATH_NOT_EXPORTED, extentKind: 'package', resourceIdPresent: false }"), member).join('\n')).toMatch(/signature/);
-    expect(judge(call("{ code: PACKAGE_SUBPATH_NOT_EXPORTED, extentKind: 'filesystem', resourceIdPresent: true }"), member).join('\n')).toMatch(/signature/);
+    expect(judge(call("{ code: EXTENT_DIRECTORY_UNLISTABLE, extentKind: 'filesystem' }"), member)).toEqual([]);
+    expect(judge(call('{ code: EXTENT_DIRECTORY_UNLISTABLE }'), member).join('\n')).toMatch(/signature/);
+    expect(judge(call("{ code: EXTENT_DIRECTORY_UNLISTABLE, extentKind: 'git' }"), member).join('\n')).toMatch(/signature/);
   });
 });

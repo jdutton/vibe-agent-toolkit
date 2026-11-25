@@ -86,8 +86,8 @@ function resolveBundleRoot(specifier: string, baseDir: string): string {
  *
  * `resolveAssetReference` wraps the resolver's throw as the `cause` of its own
  * actionable error, so the code is read one level down. Not exported from
- * `@vibe-agent-toolkit/utils` and not shared with `package-extent.ts`, whose
- * `errorCodeOf` answers a different question (WHICH condition code to file).
+ * `@vibe-agent-toolkit/utils` and not shared with any condition-filing reader:
+ * mapping a resolver code to WHICH condition code to file is a different question.
  */
 const MODULE_RESOLUTION_CODES: ReadonlySet<string> = new Set([
   'MODULE_NOT_FOUND',

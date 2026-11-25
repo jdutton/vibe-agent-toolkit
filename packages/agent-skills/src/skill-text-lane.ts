@@ -17,6 +17,7 @@ import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import {
+  MARKDOWN_BY_CONTRACT,
   type ParseDispatcher,
   readContentForParse,
   type ResourceLink,
@@ -213,7 +214,7 @@ export function readSkillDocument(skillPath: string, run: SkillTextRun | undefin
 
 /** {@link readSkillDocument}, on a run. */
 async function readSkillDocumentOn(skillPath: string, run: SkillTextRun, side: FsSide): Promise<SkillDocument> {
-  const stored = await run.source.storedDocument(skillPath, 'markdown');
+  const stored = await run.source.storedDocument(skillPath, MARKDOWN_BY_CONTRACT);
   if (stored !== undefined) {
     const { frontmatter, frontmatterError, frontmatterNotAMapping, links, skillText } = stored.facts;
     return {
@@ -223,11 +224,11 @@ async function readSkillDocumentOn(skillPath: string, run: SkillTextRun, side: F
       links,
       skillText,
       decoding: stored.decoding,
-      text: async () => (await readContentForParse(skillPath, 'markdown', { dispatcher: run.dispatcher })).content,
+      text: async () => (await readContentForParse(skillPath, MARKDOWN_BY_CONTRACT, { dispatcher: run.dispatcher })).content,
     };
   }
   const keyed = await withFsFault({ side, origin: 'content', action: `read ${skillPath}`, path: skillPath }, () =>
-    readContentForParse(skillPath, 'markdown', { dispatcher: run.dispatcher }),
+    readContentForParse(skillPath, MARKDOWN_BY_CONTRACT, { dispatcher: run.dispatcher }),
   );
   const parsed = await run.dispatcher.parse(keyed);
   if (parsed.skillText === null) throw new Error(`The markdown parse of ${skillPath} carried no skill-text record`);
