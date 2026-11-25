@@ -22,7 +22,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 
 import type { ABSENCE_MEMBER_KEYS } from '../helpers/absence-causes.js';
 import { LOWER_TIER_SEEDS, seedFilePath, seedFileText, SYSTEM_SEEDS, type SeedFileKey } from '../helpers/absence-seeds.js';
-import { judgedMember, judgeLowerTierTest, lowerTierCallSites, type JudgedMember } from '../helpers/lower-tier-finder.js';
+import { judgeLowerTierTest, lowerTierCallSites } from '../helpers/lower-tier-finder.js';
 
 const REPO_ROOT = safePath.resolve(fileURLToPath(new URL('../../../..', import.meta.url)));
 
@@ -38,7 +38,7 @@ describe('the seeds against their source files', () => {
 
   it.each(LOWER_TIER_SEEDS.map((seed) => [seed.member, seed] as const))('lower-tier seed %s names a test that plants its member', (member, seed) => {
     const source = readFileSync(safePath.join(REPO_ROOT, seed.file), 'utf-8');
-    expect(judgeLowerTierTest(source, seed.file, seed.testName, judgedMember(member))).toEqual([]);
+    expect(judgeLowerTierTest(source, seed.file, seed.testName, member)).toEqual([]);
   });
 
   it('maps every expectAbsenceCause call outside utils and the harness to exactly one lower-tier seed, reached no other way', () => {
@@ -99,28 +99,19 @@ describe('the call-site scan\'s own controls', () => {
 
 describe('the lower-tier finder\'s own controls', () => {
   type Member = (typeof ABSENCE_MEMBER_KEYS)[number];
-  const UNREADABLE: Member = resources.BLOB_UNREADABLE;
+  const UNREADABLE = resources.BLOB_UNREADABLE;
   const SIGNATURE = '{ code: BLOB_UNREADABLE }';
-  /**
-   * A fixture member whose signature carries `resourceIdPresent`, which no
-   * enumerated member's does: the judge must hold a seed to every field.
-   */
-  const FIXTURE_CODE = 'FIXTURE_RESOURCE_ID_PRESENT';
-  const FIXTURE_MEMBER: JudgedMember = {
-    name: FIXTURE_CODE,
-    signature: { code: FIXTURE_CODE, extentKind: 'package', resourceIdPresent: true },
-  };
   /** The imports every fixture's names resolve through. */
   const HEADER = [
     "import { CANNOT_DENY_READS, expectAbsenceCause, PERMISSIONS_ENFORCED } from '@vibe-agent-toolkit/utils/testing';",
     "import { symlinkCapability } from '@vibe-agent-toolkit/utils';",
-    `import { BLOB_CONTENT_CHANGED, BLOB_UNREADABLE, ${FIXTURE_CODE} } from '../src/codes.js';`,
+    "import { BLOB_CONTENT_CHANGED, BLOB_UNREADABLE, EXTENT_DIRECTORY_UNLISTABLE } from '../src/codes.js';",
     '',
   ].join('\n');
   /** One fixture file, without the shared imports, holding one test titled `t`. */
-  const judgeRaw = (text: string, member: JudgedMember = judgedMember(UNREADABLE)): string[] => judgeLowerTierTest(text, 'fixture.ts', 't', member);
+  const judgeRaw = (text: string, member: Member = UNREADABLE): string[] => judgeLowerTierTest(text, 'fixture.ts', 't', member);
   /** One fixture file, with the shared imports, holding one test titled `t`. */
-  const judge = (body: string, member?: JudgedMember): string[] => judgeRaw(HEADER + body, member);
+  const judge = (body: string, member: Member = UNREADABLE): string[] => judgeRaw(HEADER + body, member);
   /** A test titled `t` with the given callee chain and one plain call. */
   const gated = (chain: string): string => `${chain}('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`;
 
@@ -222,10 +213,10 @@ describe('the lower-tier finder\'s own controls', () => {
   });
 
   it('reds a signature missing a field of the member\'s, or stating one with another value', () => {
+    const member = resources.EXTENT_DIRECTORY_UNLISTABLE;
     const call = (signature: string): string => `it('t', () => { expectAbsenceCause(rowsOf(c), ${signature}); });`;
-    expect(judge(call(`{ code: ${FIXTURE_CODE}, extentKind: 'package', resourceIdPresent: true }`), FIXTURE_MEMBER)).toEqual([]);
-    expect(judge(call(`{ code: ${FIXTURE_CODE}, extentKind: 'package' }`), FIXTURE_MEMBER).join('\n')).toMatch(/signature/);
-    expect(judge(call(`{ code: ${FIXTURE_CODE}, extentKind: 'package', resourceIdPresent: false }`), FIXTURE_MEMBER).join('\n')).toMatch(/signature/);
-    expect(judge(call(`{ code: ${FIXTURE_CODE}, extentKind: 'filesystem', resourceIdPresent: true }`), FIXTURE_MEMBER).join('\n')).toMatch(/signature/);
+    expect(judge(call("{ code: EXTENT_DIRECTORY_UNLISTABLE, extentKind: 'filesystem' }"), member)).toEqual([]);
+    expect(judge(call('{ code: EXTENT_DIRECTORY_UNLISTABLE }'), member).join('\n')).toMatch(/signature/);
+    expect(judge(call("{ code: EXTENT_DIRECTORY_UNLISTABLE, extentKind: 'git' }"), member).join('\n')).toMatch(/signature/);
   });
 });

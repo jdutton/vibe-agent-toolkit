@@ -1,16 +1,17 @@
 /**
  * The projection router: the one module that composes "path -> mime -> parser kind".
  *
- * Each function is pinned against the composition the sites spelled before the
- * router existed, so moving a site onto it cannot change an answer.
+ * Each function is pinned to concrete answers, never to the composition it
+ * performs, so a change to the routing tables shows here as a changed answer.
  */
 
 import { describe, expect, it } from 'vitest';
 
 import { NO_PARSER_KIND } from '../src/content-key.js';
-import { mimeTypeForPath, parserKindForMimeType } from '../src/mime-type.js';
+import { mimeTypeForPath } from '../src/mime-type.js';
 import {
   createCollectionMimeResolver,
+  MARKDOWN_BY_CONTRACT,
   mimeFor,
   parserKindForMime,
   parserKindForPath,
@@ -29,12 +30,26 @@ describe('parserKindForMime', () => {
 });
 
 describe('parserKindForPath', () => {
-  it.each(['/a/doc.md', '/a/page.html', '/a/module.ts', '/a/NOTES', '/a/README'])(
-    '%s answers what the inline composition answered',
-    (path) => {
-      expect(parserKindForPath(path)).toBe(parserKindForMimeType(mimeTypeForPath(path)) ?? NO_PARSER_KIND);
-    },
-  );
+  it.each([
+    ['/a/doc.md', 'markdown'],
+    ['/a/guide.markdown', 'markdown'],
+    ['/a/notes.txt', 'markdown'],
+    ['/a/README', 'markdown'],
+    ['/a/page.html', 'html'],
+    ['/a/page.htm', 'html'],
+    ['/a/PAGE.HTML', 'html'],
+    ['/a/module.ts', NO_PARSER_KIND],
+    ['/a/NOTES', NO_PARSER_KIND],
+    ['/a/blob.unknown-to-vat', NO_PARSER_KIND],
+  ] as const)('%s -> %s', (path, expected) => {
+    expect(parserKindForPath(path)).toBe(expected);
+  });
+});
+
+describe('MARKDOWN_BY_CONTRACT', () => {
+  it('is the kind the router hands a .md file', () => {
+    expect(MARKDOWN_BY_CONTRACT).toBe(parserKindForPath('SKILL.md'));
+  });
 });
 
 describe('mimeFor', () => {

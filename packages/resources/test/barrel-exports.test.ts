@@ -135,6 +135,7 @@ const BARREL_EXPORTS = [
   'LinkAuthConfigError',
   'LinkNodeTypeSchema',
   'LinkTypeSchema',
+  'MARKDOWN_BY_CONTRACT',
   'MEMBERSHIP_EXTENT_REQUEST',
   'MissingCapabilityError',
   'NO_DECLARED_MIME_TYPES',

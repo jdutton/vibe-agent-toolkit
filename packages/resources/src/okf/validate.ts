@@ -29,6 +29,7 @@ import { parseRefusedEntry } from '../not-admitted.js';
 import { type ParseDispatcher, parseFileCached, withParseDispatcher } from '../parse-dispatcher.js';
 import { classifyParseFailure } from '../parse-failure.js';
 import type { PerRunParseRefusal } from '../parse-limits.js';
+import { MARKDOWN_BY_CONTRACT } from '../projection/router.js';
 import type { ParseRefusedResource } from '../resource-registry.js';
 
 import {
@@ -187,7 +188,7 @@ async function inspectDocument(
   try {
     // The bounded route, on the bundle's one dispatcher: a miss parses in the
     // worker pool under its limits, a hit loads no parser at all.
-    parsed = await parseFileCached(absolutePath, 'markdown', { dispatcher });
+    parsed = await parseFileCached(absolutePath, MARKDOWN_BY_CONTRACT, { dispatcher });
   } catch (error) {
     // ⛔ Only the allowlist is the document's: a broken parser install, or any
     // other VAT defect, is rethrown untouched by the classifier — reported as a

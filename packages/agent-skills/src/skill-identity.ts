@@ -11,7 +11,7 @@
  * a path, so every lane answers the question the same way.
  */
 
-import { isPerRunParseRefusal, type MeasuredContent, type ParseRoute, readContentForParse } from '@vibe-agent-toolkit/resources';
+import { isPerRunParseRefusal, MARKDOWN_BY_CONTRACT, type MeasuredContent, type ParseRoute, readContentForParse } from '@vibe-agent-toolkit/resources';
 import { isPathAbsentError } from '@vibe-agent-toolkit/utils';
 
 import { parseFrontmatter } from './parsers/frontmatter-parser.js';
@@ -36,7 +36,7 @@ import { parseFrontmatter } from './parsers/frontmatter-parser.js';
 export async function readDeclaredSkillName(skillMdPath: string, route: ParseRoute): Promise<string | undefined> {
   let read: MeasuredContent;
   try {
-    read = await readContentForParse(skillMdPath, 'markdown', route);
+    read = await readContentForParse(skillMdPath, MARKDOWN_BY_CONTRACT, route);
   } catch (error) {
     if (isPathAbsentError(error)) return undefined;
     throw error;

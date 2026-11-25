@@ -68,9 +68,16 @@ read throws at run time.
 
 **I4. One answer to "which extractors read this path".** Every lane gets the same (instance, variant)
 set for a path. Which instances read a path is an extent fact, never in a
-`row_set_key`; the chosen variant enters as an option; `mime` enters only through those two. *Fails:* lanes disagree on a file's facts. *Enforcer:* `projection/router.ts` is the only
-router, held by the tree test `dev-tools/test/parser-kind-router-boundary.test.ts`; every lane routes a
-fixture tree alike (`resources/test/projection-mime-routing-sites.test.ts`).
+`row_set_key`; the chosen variant enters as an option; `mime` enters only through those two. *Fails:* lanes disagree on a file's facts. *Enforcer:* `projection/router.ts` is the one router
+module: only it composes the MIME tables (`dev-tools/test/parser-kind-router-boundary.test.ts`), and
+every lane that routes through it routes a re-typed fixture alike
+(`resources/test/projection-mime-routing-sites.test.ts`). A kind a contract fixes (a `SKILL.md`, a
+frontmatter block) is the router's `MARKDOWN_BY_CONTRACT`. The parser-kind decisions still made
+outside the router, by extension or by a literal kind, are listed and recorded as a known defect
+([parser-kind decisions outside the router](../contributing/known-defects.md#parser-kind-decisions-outside-the-router)).
+`dev-tools/test/parser-kind-decisions.test.ts` holds three counted lists both ways: the files holding
+a kind literal, the files using `MARKDOWN_BY_CONTRACT`, and the files holding a parser-routed
+extension literal; it refuses an aliased or re-bound `MARKDOWN_BY_CONTRACT`, so no use escapes the count.
 
 **I5. Pure producers.** Extract is a pure function of (bytes, options, declared inputs). Resolve is pure over its declared reads and sources. *Fails:*
 rows unlike their key, shared across trees. *Enforcer:* the conformance suite fails a set of impure

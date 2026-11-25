@@ -10,6 +10,7 @@ import {
 import {
 	classifyParseFailure,
 	loadConfig,
+	MARKDOWN_BY_CONTRACT,
 	type ParseDispatcher,
 	type ParseRefusedResource,
 	parseRefusedEntryFor,
@@ -211,7 +212,7 @@ async function parseFrontmatterFields(
 	let description: string | undefined;
 	try {
 		const route = { dispatcher };
-		const read = await readContentForParse(absolute, 'markdown', route);
+		const read = await readContentForParse(absolute, MARKDOWN_BY_CONTRACT, route);
 		const parsed = await parseFrontmatter(read, route);
 		if (parsed.success) {
 			const fm = parsed.frontmatter;

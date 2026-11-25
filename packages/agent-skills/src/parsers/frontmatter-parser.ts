@@ -2,6 +2,7 @@ import {
   frontmatterFencesOf,
   type FrontmatterFence,
   isPerRunParseRefusal,
+  MARKDOWN_BY_CONTRACT,
   type MeasuredContent,
   parseContentCached,
   parseInputRefusal,
@@ -200,7 +201,7 @@ function refused(error: Parameters<typeof parseRefusal>[0]): FrontmatterError {
 async function decodeBlock(source: string, body: string, route: ParseRoute): Promise<FrontmatterResult> {
   let parsed: Awaited<ReturnType<typeof parseContentCached>>;
   try {
-    parsed = await parseContentCached(`---\n${source}\n---\n`, 'markdown', route);
+    parsed = await parseContentCached(`---\n${source}\n---\n`, MARKDOWN_BY_CONTRACT, route);
   } catch (error) {
     if (!isPerRunParseRefusal(error)) throw error;
     return refused(error);

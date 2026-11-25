@@ -476,8 +476,15 @@ export {
 export type { DocumentParserKind } from './mime-type.js';
 // The run's one parse routing (projection/router.ts): `parserKindForPath` by the built-in table
 // alone, `parserKindForResolvedPath` through the run's collection MIME resolver, so a declared
-// `mimeType` overrides the extension table.
-export { parseRoutingFor, parserKindForPath, parserKindForResolvedPath, type ParseRouting } from './projection/router.js';
+// `mimeType` overrides the extension table. `MARKDOWN_BY_CONTRACT` is the kind of a document a
+// contract makes markdown (a `SKILL.md`, a frontmatter block).
+export {
+  MARKDOWN_BY_CONTRACT,
+  parseRoutingFor,
+  parserKindForPath,
+  parserKindForResolvedPath,
+  type ParseRouting,
+} from './projection/router.js';
 
 // Parse cache: the disk-backed store `ResourceRegistry` files parse facts in,
 // and where it puts them. Exported for two callers only — an operator surface

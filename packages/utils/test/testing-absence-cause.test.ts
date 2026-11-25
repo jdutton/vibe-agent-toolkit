@@ -16,7 +16,7 @@ import {
 
 const PACKAGE_EXTENT = 'ctx-package';
 const FILESYSTEM_EXTENT = 'ctx-filesystem';
-const NOT_EXPORTED = 'SAMPLE_CONDITION_CODE';
+const SAMPLE_CODE = 'SAMPLE_CONDITION_CODE';
 
 /** One row of each table an absence cause is observed in, and the contexts naming two extents. */
 function rows(): AbsenceRows {
@@ -24,10 +24,9 @@ function rows(): AbsenceRows {
     blobConditions: [{ code: 'BLOB_UNREADABLE' }],
     resourceRealizations: [{ contentState: 'keyed' }, { contentState: 'oversize' }],
     realizationConditions: [
-      { code: NOT_EXPORTED, extentId: PACKAGE_EXTENT, resourceId: 'res-package' },
-      { code: NOT_EXPORTED, extentId: PACKAGE_EXTENT, resourceId: null },
-      { code: 'EXTENT_DIRECTORY_UNLISTABLE', extentId: FILESYSTEM_EXTENT, resourceId: 'res-dir' },
-      { code: 'ORPHAN', extentId: 'ctx-nowhere', resourceId: null },
+      { code: SAMPLE_CODE, extentId: PACKAGE_EXTENT },
+      { code: 'EXTENT_DIRECTORY_UNLISTABLE', extentId: FILESYSTEM_EXTENT },
+      { code: 'ORPHAN', extentId: 'ctx-nowhere' },
     ],
     resolutionContexts: [
       { contextId: PACKAGE_EXTENT, kind: 'package' },
@@ -37,15 +36,14 @@ function rows(): AbsenceRows {
 }
 
 describe('absenceObservations', () => {
-  it('reads one observation per row, each condition carrying its extent kind and whether it names a resource', () => {
+  it('reads one observation per row, each condition carrying its extent kind', () => {
     expect(absenceObservations(rows())).toEqual([
       { table: 'blob_conditions', code: 'BLOB_UNREADABLE' },
       { table: 'resource_realizations', contentState: 'keyed' },
       { table: 'resource_realizations', contentState: 'oversize' },
-      { table: 'realization_conditions', code: NOT_EXPORTED, extentId: PACKAGE_EXTENT, extentKind: 'package', resourceIdPresent: true },
-      { table: 'realization_conditions', code: NOT_EXPORTED, extentId: PACKAGE_EXTENT, extentKind: 'package', resourceIdPresent: false },
-      { table: 'realization_conditions', code: 'EXTENT_DIRECTORY_UNLISTABLE', extentId: FILESYSTEM_EXTENT, extentKind: 'filesystem', resourceIdPresent: true },
-      { table: 'realization_conditions', code: 'ORPHAN', extentId: 'ctx-nowhere', extentKind: null, resourceIdPresent: false },
+      { table: 'realization_conditions', code: SAMPLE_CODE, extentId: PACKAGE_EXTENT, extentKind: 'package' },
+      { table: 'realization_conditions', code: 'EXTENT_DIRECTORY_UNLISTABLE', extentId: FILESYSTEM_EXTENT, extentKind: 'filesystem' },
+      { table: 'realization_conditions', code: 'ORPHAN', extentId: 'ctx-nowhere', extentKind: null },
     ]);
   });
 });
@@ -60,10 +58,8 @@ describe('matchesAbsenceCause', () => {
   const blob = at(0);
   const keyed = at(1);
   const oversize = at(2);
-  const packageLevel = at(3);
-  const subpathLevel = at(4);
-  const unlistable = at(5);
-  const orphan = at(6);
+  const unlistable = at(4);
+  const orphan = at(5);
 
   it('matches a code signature in either condition table, and a state only on a realization', () => {
     expect(matchesAbsenceCause(blob, { code: 'BLOB_UNREADABLE' })).toBe(true);
@@ -80,24 +76,12 @@ describe('matchesAbsenceCause', () => {
     expect(matchesAbsenceCause(orphan, { code: 'ORPHAN', extentKind: 'package' })).toBe(false);
     expect(matchesAbsenceCause(blob, { code: 'BLOB_UNREADABLE', extentKind: 'filesystem' })).toBe(false);
   });
-
-  it('reads resourceIdPresent as the row\'s shape alone, whatever the extent kind', () => {
-    expect(matchesAbsenceCause(unlistable, { code: 'EXTENT_DIRECTORY_UNLISTABLE', resourceIdPresent: true })).toBe(true);
-    expect(matchesAbsenceCause(orphan, { code: 'ORPHAN', resourceIdPresent: false })).toBe(true);
-    expect(matchesAbsenceCause(orphan, { code: 'ORPHAN', resourceIdPresent: true })).toBe(false);
-  });
-
-  it('tells a package-level row from a subpath-level one by shape', () => {
-    const packageLevelSignature = { code: NOT_EXPORTED, extentKind: 'package', resourceIdPresent: true };
-    expect(matchesAbsenceCause(packageLevel, packageLevelSignature)).toBe(true);
-    expect(matchesAbsenceCause(subpathLevel, packageLevelSignature)).toBe(false);
-  });
 });
 
 describe('expectAbsenceCause', () => {
   it('returns the rows carrying the cause, so the caller can assert on them too', () => {
-    expect(expectAbsenceCause(rows(), { code: NOT_EXPORTED, extentKind: 'package', resourceIdPresent: true })).toEqual([
-      { table: 'realization_conditions', code: NOT_EXPORTED, extentId: PACKAGE_EXTENT, extentKind: 'package', resourceIdPresent: true },
+    expect(expectAbsenceCause(rows(), { code: SAMPLE_CODE, extentKind: 'package' })).toEqual([
+      { table: 'realization_conditions', code: SAMPLE_CODE, extentId: PACKAGE_EXTENT, extentKind: 'package' },
     ]);
   });
 

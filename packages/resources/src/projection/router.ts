@@ -11,11 +11,15 @@
  * A lane outside the projection (the registry's read and sizing tally, `vat
  * validate`'s checks overlap gate) routes through {@link parseRoutingFor} and
  * {@link parserKindForResolvedPath}, so it reaches the projection lane's verdict.
+ * A kind a contract fixes is {@link MARKDOWN_BY_CONTRACT}. The parser-kind
+ * decisions still spelled outside this module are a counted, reviewed list,
+ * recorded as a known defect ("parser-kind decisions outside the router") and
+ * held by `packages/dev-tools/test/parser-kind-decisions.test.ts`.
  */
 
 import { matchesCollection } from '../collection-matcher.js';
 import { NO_PARSER_KIND, type ParserKind } from '../content-key.js';
-import { mimeTypeForPath, parserKindForMimeType } from '../mime-type.js';
+import { type DocumentParserKind, mimeTypeForPath, parserKindForMimeType } from '../mime-type.js';
 import type { CollectionConfig, ProjectConfig } from '../schemas/project-config.js';
 
 import { canonicalJson } from './digest.js';
@@ -52,6 +56,17 @@ export function mimeFor(
 export function parserKindForMime(mime: string | null): ParserKind {
   return parserKindForMimeType(mime) ?? NO_PARSER_KIND;
 }
+
+/**
+ * The parser kind of a document a CONTRACT makes markdown, whatever its path
+ * says: a `SKILL.md`, a Claude Code skill, agent or command file, an OKF
+ * document, or a frontmatter block cut out of one. Only the sites a contract
+ * decides may use it, a counted list held both ways by
+ * `packages/dev-tools/test/parser-kind-decisions.test.ts`, so a decision the
+ * path makes cannot be relabelled a contract. A document whose PATH decides
+ * takes {@link parserKindForPath} or {@link parserKindForResolvedPath}.
+ */
+export const MARKDOWN_BY_CONTRACT = 'markdown' satisfies DocumentParserKind;
 
 /**
  * Which parser handles a document, judged by its path alone.

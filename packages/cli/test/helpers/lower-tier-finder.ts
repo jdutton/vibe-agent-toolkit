@@ -25,26 +25,9 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import type { AbsenceSignature } from '@vibe-agent-toolkit/utils/testing';
 import ts from 'typescript';
 
 import { memberEntry, type AbsenceMember } from './absence-causes.js';
-
-/** A member as the judge reads it: its name, for messages, and the signature its seed must state. */
-export interface JudgedMember {
-  readonly name: string;
-  readonly signature: AbsenceSignature;
-}
-
-/**
- * The judged form of an enumerated member.
- *
- * @param member - The member's domain key
- * @returns Its name and its enumerated signature
- */
-export function judgedMember(member: AbsenceMember): JudgedMember {
-  return { name: member, signature: memberEntry(member).signature };
-}
 
 const CALLEE = 'expectAbsenceCause';
 const TESTING_MODULE = '@vibe-agent-toolkit/utils/testing';
@@ -472,18 +455,18 @@ function testSkipped(test: ts.CallExpression, source: ts.SourceFile, imports: Im
 }
 
 /** The problems with one counted call: rows written by hand, a signature not the member's own. */
-function callProblems(call: ts.CallExpression, member: JudgedMember, source: ts.SourceFile, imports: Imports): string[] {
+function callProblems(call: ts.CallExpression, member: AbsenceMember, source: ts.SourceFile, imports: Imports): string[] {
   const problems: string[] = [];
   const [rows, signatureArgument] = call.arguments;
   if (rows === undefined || isHandWritten(rows, source)) problems.push(`rows written by hand: ${call.getText(source)}`);
-  const wanted = signatureText(Object.fromEntries(Object.entries(member.signature).map(([name, value]) => [name, JSON.stringify(value)])));
+  const wanted = signatureText(Object.fromEntries(Object.entries(memberEntry(member).signature).map(([name, value]) => [name, JSON.stringify(value)])));
   const found = signatureOf(signatureArgument, source, imports);
-  if (found === undefined || signatureText(found) !== wanted) problems.push(`signature is not ${member.name}'s own ${wanted}: ${signatureArgument?.getText(source) ?? '(none)'}`);
+  if (found === undefined || signatureText(found) !== wanted) problems.push(`signature is not ${member}'s own ${wanted}: ${signatureArgument?.getText(source) ?? '(none)'}`);
   return problems;
 }
 
 /** The problems with the test's calls: none counted, a return before every counted one, or no counted one with a clean call. */
-function callsProblems(test: ts.CallExpression, member: JudgedMember, source: ts.SourceFile, imports: Imports): string[] {
+function callsProblems(test: ts.CallExpression, member: AbsenceMember, source: ts.SourceFile, imports: Imports): string[] {
   const callback = callbackOf(test);
   const candidates = callback === undefined ? [] : absenceCallsIn(test, imports).filter((call) => counts(call, callback.body));
   if (candidates.length === 0) return [`no counted ${CALLEE} call: one must be a statement of the test body, or the direct argument of expect(...) there`];
@@ -500,10 +483,10 @@ function callsProblems(test: ts.CallExpression, member: JudgedMember, source: ts
  * @param text - The test file's source
  * @param fileName - Its name, for the parser
  * @param testName - The title as written
- * @param member - The member the row seeds ({@link judgedMember} for an enumerated one)
+ * @param member - The member the row seeds
  * @returns Every problem found; empty when the test plants the member
  */
-export function judgeLowerTierTest(text: string, fileName: string, testName: string, member: JudgedMember): string[] {
+export function judgeLowerTierTest(text: string, fileName: string, testName: string, member: AbsenceMember): string[] {
   const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
   const imports = importsOf(source);
   const strays = straysIn(source, imports);
