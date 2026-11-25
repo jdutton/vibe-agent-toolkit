@@ -14,7 +14,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { applyEdits, editCandidates, type EditAction, refuseUnplannableEdit, restoreEdits } from '../../src/harness/edit-step.js';
 import { runRepeats } from '../../src/harness/repeat.js';
-import { fixtureArmGit, preparedCloneDirectory, stubDeveloperGitConfig } from '../arm-tree-fixtures.js';
+import { cloneAsPrepared, fixtureArmGit, preparedCloneDirectory, stubDeveloperGitConfig } from '../arm-tree-fixtures.js';
 import { cleanupProbes, probeSpec, setupProbe } from '../command-probe.js';
 import { commitAll, git as fixtureGit, initRepo, writeFixtureFile } from '../git-fixtures.js';
 
@@ -208,5 +208,21 @@ describe('an edit that did not land', () => {
     expect(missed.changed).toBe(0);
     expect(missed.violation).toBe("edit rule: editing 1 file(s) left 0 changed path(s) in git's view");
     expect(readFileSync(safePath.join(missed.clone, 'a.md'), 'utf-8')).toBe(PAGE);
+  });
+});
+
+describe("a test's prepared clone", () => {
+  it("checks out under the arm's git: under a developer's core.autocrlf=true every page still reads unchanged to the arms", () => {
+    const subject = committedTree(tempDir('lab-prepared-subject-'));
+    // Windows CI's system config, here on every host: the developer's git would check out CRLF.
+    stubDeveloperGitConfig(tempDir('lab-prepared-home-'), '[core]\n\tautocrlf = true\n');
+    const clone = cloneAsPrepared(subject, tempDir('lab-prepared-arms-'), tempDir('lab-prepared-scratch-'));
+    const git = fixtureArmGit(tempDir('lab-prepared-arm-'));
+
+    expect(readFileSync(safePath.join(clone, 'a.md'), 'utf-8')).toBe(PAGE);
+    // Re-hash every file, stat ignored, as VAT's snapshot does: a racily-clean index must not hide a rewrite.
+    expect(git(['update-index', '-q', '--really-refresh'], clone).status).toBe(0);
+    expect(git(['ls-files'], clone).stdout.split('\n')).toHaveLength(4); // positive control: four tracked pages
+    expect(git(['status', '--porcelain', '--untracked-files=all'], clone).stdout).toBe('');
   });
 });

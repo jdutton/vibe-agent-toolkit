@@ -37,6 +37,25 @@ export function preparedCloneDirectory(armsRoot: string): string {
 }
 
 /**
+ * Mark `armsRoot` as the lab's and `git clone --local` the subject into its
+ * prepared-clone directory, as `prepareClone` (`clone.ts`) does: under the
+ * arm's git, so the checkout writes each blob's bytes as the arms' git and VAT
+ * will read them. Under the developer's git a system `core.autocrlf=true`
+ * (Windows CI) checks out CRLF, and every text file reads modified to the arms.
+ *
+ * @param subject - A committed repository
+ * @param armsRoot - A fresh or empty absolute directory
+ * @param scratch - A directory the test owns, outside `armsRoot`, for the arm git's home
+ * @returns The clone, `<armsRoot>/clone`
+ */
+export function cloneAsPrepared(subject: string, armsRoot: string, scratch: string): string {
+  const clone = preparedCloneDirectory(armsRoot);
+  const cloned = fixtureArmGit(scratch)(['clone', '--quiet', '--local', subject, clone], armsRoot);
+  if (cloned.status !== 0) throw new Error(`git clone --local of '${subject}' exited ${String(cloned.status)}: ${cloned.stderr}`);
+  return clone;
+}
+
+/**
  * Give the test process a developer's global git config: written to a fresh
  * HOME's `.gitconfig`, which HOME and `GIT_CONFIG_GLOBAL` both name, so the
  * lab's `runGit` (which inherits the process environment) reads it and an arm's
