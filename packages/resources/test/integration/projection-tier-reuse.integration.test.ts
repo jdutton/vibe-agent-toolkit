@@ -28,7 +28,7 @@ import { crawlSourceFor } from '../../src/projection/crawl-source.js';
 import { serializeProjection } from '../../src/projection/export.js';
 import { populate, type PopulationCache, type PopulationOutcome } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
-import type { PopulationMembers } from '../../src/projection/resource-population.js';
+import { buildResourcePopulation, type PopulationMembers } from '../../src/projection/resource-population.js';
 import { parserKindOf } from '../../src/projection/router.js';
 import { IGNORE_HOME_SETTLEMENT, withRunPopulation } from '../../src/projection/run-population.js';
 import { keyedContentKeys, uncoveredContentKeys } from '../../src/projection/store-hydration.js';
@@ -358,6 +358,24 @@ describe('stored admission after a written miss', () => {
     expect(fresh.outcome).toEqual({ population: 'store', stored: 'hit' });
     expect(miss.resources.map((resource) => resource.filePath)).toEqual(fresh.resources.map((resource) => resource.filePath));
     expect(miss.resources).toEqual(fresh.resources);
+  });
+
+  it('a store-off derive carries no rows, so admission computes every member', async () => {
+    // Store-off is the cache differential's reference arm: admitting it through the reader the
+    // store-on arm also uses would make the two agree whatever that reader answers.
+    const off = await inOwnRun(buildResourcePopulation, { root, outputs: [], gitTracker: new GitTracker(root) });
+    expect(off.outcome).toEqual({ population: 'derived', stored: 'no-store' });
+    expect(off.stored?.members.size ?? 0, 'a store-off derive carried its projection\'s rows for admission').toBe(0);
+
+    const on = await inOwnRun(buildResourcePopulation, {
+      root,
+      outputs: [],
+      gitTracker: new GitTracker(root),
+      cache: { store: new FakeFactStore(), treeHash: PRIMED, treeUnchanged: () => true },
+    });
+    expect(on.outcome).toEqual({ population: 'derived', stored: 'written' });
+    expect(on.stored?.members.size, 'the store-on derive carries every member for admission').toBe(on.paths.length);
+    expect(on.paths).toEqual(off.paths);
   });
 });
 

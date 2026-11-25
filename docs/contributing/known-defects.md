@@ -757,17 +757,19 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Blocks:** the stable tag
 - **Severity:** Important · **Effort:** L · **User-visible:** yes (time, not answers)
 - **Mechanism:** every resources lane asks the store one question, keyed by the tree hash and the
-  git index. Any edit misses that key, and the miss re-populates the whole tree: every non-ignored
-  file read and hashed, the blob stage, the harness pass and a full blob-tier rewrite. Before, a
-  membership-only command (`vat resources scan`, `vat resources validate`) keyed nothing, so the
-  pre-commit edit loop is slower than it was.
+  git index. Any edit misses that key, and the miss re-populates the whole tree. What remains after
+  reuse of stored per-file facts: every non-ignored file is still read and hashed, and the extent
+  (membership, realizations, edges) is fully derived; only the parsing of unchanged files is reused,
+  served from the stored blob tier. Before, a membership-only command (`vat resources scan`,
+  `vat resources validate`) keyed nothing, so the pre-commit edit loop is slower than it was.
 - **Reproduce:** on a committed tree with the store on, run `vat resources validate`, edit one
-  `.md`, run it again: the second run reports `population: derived` and costs a cold run.
+  `.md`, run it again: the second run reports `population: derived`; it reads and hashes every
+  file and derives the whole extent, and parses only the edited file.
 - **Where:** `buildResourcePopulation` in
   [`resource-population.ts`](../../packages/resources/src/projection/resource-population.ts);
   `populate` in [`merge.ts`](../../packages/resources/src/projection/merge.ts)
-- **Fix:** incremental repopulation — reuse stored blob facts for held content keys (which also
-  skips their blob-tier rewrite) and content keys for stat-unchanged paths. Its own change.
+- **Fix:** reuse content keys for stat-unchanged paths (skipping the read and hash), and derive the
+  extent incrementally. Its own change.
 
 ### A same-second edit is served stale when the temp index is racy
 
@@ -829,19 +831,6 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   it again: the run reports `population: store`.
 - **Where:** `gitTreeKey` in [`git-tree-key.ts`](../../packages/utils/src/git-tree-key.ts)
 - **Fix:** closed when each submodule is read as its own repository, its own snapshot and tree key folded into the superproject's key. The hazard-register row stays accepted until then.
-
-### A control-flow edit to an extractor under an unchanged declared shape is served stale in a dev build
-
-- **Severity:** Minor · **Effort:** S (accepted) · **User-visible:** yes (developers of VAT only)
-- **Mechanism:** a dev build's cache namespace digests the declared shape and the resolved parser
-  versions, not the built output: fingerprinting built output was measured and rejected (65
-  namespaces, 267 MB). An edit that changes an extractor's control flow and leaves its declared
-  shape alone keeps the namespace, so the store serves facts the old code wrote.
-- **Reproduce:** edit an extractor's body without changing what it declares, rebuild, run
-  `vat resources validate` on a tree the previous build populated.
-- **Where:** [`cache-namespace.ts`](../../packages/resources/src/cache-namespace.ts)
-- **Fix:** none; the remedy is `vat cache clear`. Released builds are not affected: their namespace
-  changes with the version.
 
 ### A cold membership or build run holds every non-ignored file's bytes in memory
 

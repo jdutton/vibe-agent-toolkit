@@ -596,7 +596,7 @@ describe('vat resources query', () => {
     });
 
     expect(status, stderr).toBe(0);
-    // `.vat-cache/<version>-dev-<digest>/projection-<shapeDigest>/projection.db`
+    // `.vat-cache/<version>/projection-<shapeDigest>/projection.db`
     // — the middle segments are a namespace and a shape digest this suite has no
     // business pinning, which is why the shape is asserted and not the path.
     const found = databasesUnder(decoyTmp);

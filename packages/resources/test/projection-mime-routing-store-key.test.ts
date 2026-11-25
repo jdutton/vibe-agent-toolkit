@@ -26,12 +26,15 @@
 import { describe, expect, it } from 'vitest';
 
 import { NO_DECLARED_MIME_TYPES } from '../src/index.js';
+import { defaultParseCache } from '../src/parse-cache.js';
+import { ParseDispatcher } from '../src/parse-dispatcher.js';
+import type { ParseLimits } from '../src/parse-limits.js';
 import { buildClaudeContextPopulation } from '../src/projection/claude-context-population.js';
-import { POPULATION_PARSE_LIMITS } from '../src/projection/content-cache.js';
+import { POPULATION_PARSE_LIMITS, RunContentCache } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
-import { CONTENT_PARSING_SKIP, populate } from '../src/projection/merge.js';
+import { CONTENT_PARSING_SKIP, populate, type PopulateOptions } from '../src/projection/merge.js';
 import { createCollectionMimeResolver } from '../src/projection/router.js';
 import type {
   BlobFactsWrite,
@@ -141,22 +144,35 @@ class KeyRecordingStore implements FactStore {
  * key the run asked under.
  *
  * @param collections - The project's collections, or undefined to declare none
+ * @param dispatcherLimits - Limits the run's dispatcher parses under, or undefined for the defaults
  * @returns The `treeHash` half of the key, which is where ambient inputs land
  */
 async function storeKeyFor(
   collections: Readonly<Record<string, CollectionConfig>> | undefined,
+  dispatcherLimits?: Partial<Omit<ParseLimits, 'inputBytes'>>,
 ): Promise<string> {
   const store = new KeyRecordingStore();
   const registry = new ContributorRegistry();
   registry.register(new FilesystemExtentContributor(() => crawlSourceFor(fixture.root(), []), 'deferred'));
-
-  await inOwnRun(populate, {
+  const options: Omit<PopulateOptions, 'run'> = {
     root: fixture.root(),
     registry,
     contentParsing: CONTENT_PARSING_SKIP,
     cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH },
     ...(collections !== undefined && { collections }),
-  });
+  };
+
+  if (dispatcherLimits === undefined) {
+    await inOwnRun(populate, options);
+  } else {
+    const content = new RunContentCache();
+    const dispatcher = new ParseDispatcher(defaultParseCache(), { content, limits: dispatcherLimits });
+    try {
+      await populate({ ...options, run: { content, dispatcher } });
+    } finally {
+      await dispatcher.shutdown();
+    }
+  }
 
   const [key] = store.readKeys;
   if (key === undefined) throw new Error('the run asked the store nothing — nothing to compare');
@@ -232,12 +248,18 @@ describe('the projection store key and the input cap', () => {
     // A warm run builds the registry from stored parse facts, so a parse a run under another limit
     // would have refused (or let through) is not this run's answer: every limit is the question,
     // never the input cap alone.
+    //
+    // The arms stand for two releases whose default limits differ: the population's limits and
+    // the run's dispatcher move together, as they do in a release (both resolve the defaults).
+    // Within one release, a run whose dispatcher parses under other limits than the population's
+    // never reaches the key at all: it runs store-off (`hydratesUnder`, gated where the run's store is resolved, `populationOracles`; that
+    // contract is held by projection-store-parse-limits.integration.test.ts).
     const limits = POPULATION_PARSE_LIMITS as { outputRows: number };
     const configured = limits.outputRows;
     const underLimit = async (outputRows: number): Promise<string> => {
       limits.outputRows = outputRows;
       try {
-        return await storeKeyFor(undefined);
+        return await storeKeyFor(undefined, { outputRows });
       } finally {
         limits.outputRows = configured;
       }

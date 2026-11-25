@@ -1237,7 +1237,6 @@ export {
   EXTERNAL_CLI_BINARIES,
   SKILL_TEXT_DECLARATION,
   SKILL_TEXT_FAMILY_PATTERNS,
-  skillTextDeclarationDigest,
   type PatternId,
   type SkillTextDeclaration,
   type SkillTextFamily,

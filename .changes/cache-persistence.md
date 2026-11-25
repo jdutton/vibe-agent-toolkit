@@ -29,8 +29,7 @@
 ### Added
 
 - **`vat cache prune` removes every cache entry VAT wrote that this build does not use**: every
-  namespace but this build's (older and newer releases, and under the shared default root other
-  worktrees' and other VATs' namespaces), what older releases kept at the root (the link-cache files
+  namespace but this build's (older and newer releases), what older releases kept at the root (the link-cache files
   and the root-level `parse/` directory), and projection stores of another shape. It removes only
   names VAT recognises as its own, never anything else in the directory, and leaves (listed under
   `inUse`) any entry holding a projection store a running VAT has open. It reports what it removed

@@ -754,8 +754,8 @@ verdicts about the network at a moment and one OS user's credentialed content, s
 carried them would replay stale or another user's answers. `vat cache clear` removes both
 locations.
 
-**A foreign cache must miss, never fail.** Every tier sits under the build namespace, so another
-VAT build never reads it. Within a build, each tier has its own key: the parse cache and the
+**A foreign cache must miss, never fail.** Every tier sits under the version namespace, so another
+VAT version never reads it (builds of one version share it by decision; see `cache-namespace.ts`). Within a build, each tier has its own key: the parse cache and the
 store's blob tier are keyed by file content and hit on any machine holding the same bytes; the
 store's extent is keyed by the scanned root's identity and path, so it misses when the checkout
 moves or line endings change the bytes. That is by design (line endings are not semantic), and a
@@ -790,8 +790,8 @@ current directory (those comparisons fold case, which only ever refuses more). `
 `USAGE_INVALID` with nothing deleted.
 
 **`vat cache prune`** removes only entries VAT recognises as its own: at the root, every namespace
-but this build's (`isVatCacheRootEntryName` — older and newer releases alike, and under the shared
-default root other worktrees' and other VATs' namespaces too) and what older releases kept there
+but this version's (`isVatCacheRootEntryName`: older and newer releases alike, prereleases
+included; every checkout and install of one version shares its namespace) and what older releases kept there
 (the link-cache files and the root-level `parse/` directory); inside this build's namespace, every
 projection store but this shape's (`projectionStoreDirectoryName()`, the one owner of that name,
 which the store also uses). The lab does not import it: it judges another build's namespace, so it
@@ -1142,7 +1142,7 @@ cost for a CLI dependency, not a browser bundle.
   the committed artefacts they constrain, and those are the authority: this file, [Content Keying and
   Git](./content-keying-and-git.md), [Resource Projection §5](./resource-projection.md), the
   docstrings in `packages/resources/src/content-key.ts` ("Why there is no git rung here") and
-  `packages/resources/src/cache-namespace.ts` (the rejected build fingerprint, with the measurement
-  that rejected it), and `packages/cli/src/pipeline-oracles/README.md` for the oracles the
+  `packages/resources/src/cache-namespace.ts` (why the namespace is the version alone; the rejected
+  build fingerprint and its measurement are in Resource Projection §5), and `packages/cli/src/pipeline-oracles/README.md` for the oracles the
   enumeration and parse-fact measurements are taken with. A claim here that has lost its provenance
   is re-measured, not looked up.

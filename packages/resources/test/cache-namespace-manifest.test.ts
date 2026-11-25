@@ -12,7 +12,6 @@
 
 import type * as NodeFs from 'node:fs';
 
-import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type ManifestBehaviour = 'real' | { readonly throws: unknown };
@@ -24,10 +23,7 @@ vi.mock('node:fs', async (importOriginal) => {
   // One implementation behind `readFileSync`'s overloads: its widest overload's
   // options, and the cast is the overload set itself.
   const readFileSync = ((path: NodeFs.PathOrFileDescriptor, options?: Parameters<typeof actual.readFileSync>[1]) => {
-    // VAT's own manifest only: the parsers' manifests (under node_modules) are a
-    // separate read, and must stay real for the namespace to be computable.
-    const target = toForwardSlash(String(path));
-    if (manifest.behaviour !== 'real' && target.endsWith('package.json') && !target.includes('/node_modules/')) {
+    if (manifest.behaviour !== 'real' && String(path).endsWith('package.json')) {
       throw manifest.behaviour.throws;
     }
     return actual.readFileSync(path, options);

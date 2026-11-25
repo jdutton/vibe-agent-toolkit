@@ -107,9 +107,10 @@ kind) gets a full table scan, and would have to bring its own indexes.
 
 The database lives at
 `<vatCacheNamespaceRoot()>/projection-<shape digest>/projection.db`. The
-namespace already moves on every VAT release and on a change to a parser
-dependency's version (and in a source checkout with the
-parse-facts shape and the skill-text declaration); the shape digest is derived from
+namespace is the VAT version and moves on every release, and on nothing else:
+within one version a change to VAT's code or its resolved dependencies is not
+seen, and a developer clears the cache (`vat cache clear`) when they want a
+cold one. The shape digest is derived from
 the row schemas themselves, so a schema edit lands in a different file rather
 than being read back as rows this build would misinterpret. There is no version
 number and no migration — the old directory goes cold, and only the OS temporary

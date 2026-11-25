@@ -11,11 +11,10 @@ import { CONTENT_KEY_PATTERN } from '../content-key.js';
  * consumed it — the exported document carried it and no reader ever branched on
  * it — so every bump was cost without a beneficiary.
  *
- * ⚠️ It becomes a real question again the moment a projection is *stored* rather
- * than returned in-process, because then a file can outlive the build that
- * wrote it. The answer at that point is a **derived** digest of the row schemas'
- * own shape, exactly as the parse cache does with `parseFactsShapeSource()` —
- * not this constant reinstated. Do not add it back.
+ * ⚠️ A projection is now *stored*, so a file can outlive the build that wrote
+ * it. What separates two shapes is a **derived** digest of the row schemas' own
+ * shape, `projectionShapeDigest()` in `projection/store.ts` — not this constant
+ * reinstated. Do not add it back.
  */
 
 /**

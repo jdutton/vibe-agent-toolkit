@@ -125,10 +125,16 @@ validation:
           description: 'Compares every file with every other, so it has no incremental form. Full tier only.'
           runScope: ci
 
-    # The `vat` dogfood steps, one at a time: each populates the machine-wide
+    # The `vat` dogfood steps, one at a time: each populates the checkout's
     # projection store (SQLite, one writer at a time with a 5 s busy timeout), and
     # five cold populations at once on a CI runner can time a writer out. Serial,
     # the first populates and the rest reuse it.
+    #
+    # The store lives under VAT_CACHE_DIR, which `bun run validate` sets for every
+    # step from packages/dev-tools/src/gate-vat-cache-dir.ts: CI's own value when
+    # set, else one directory per checkout. The cache namespace is the VAT version
+    # alone, so worktrees on the shared default root would be served each other's
+    # rows (not enforced: a bare `vibe-validate validate` skips it).
     - name: 'VAT dogfood'
       parallel: false
       steps:

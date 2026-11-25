@@ -109,7 +109,7 @@
 import { compareCodeUnits, countWork, safePath } from '@vibe-agent-toolkit/utils';
 import type { TextProvenance } from '@vibe-agent-toolkit/utils/text';
 
-import type { KeyedContent, ParsableContent, ParserKind } from '../content-key.js';
+import type { KeyedContent, ParsableContent } from '../content-key.js';
 import type { ParseResult } from '../link-parser.js';
 import { parseRefusal } from '../not-admitted.js';
 import { type ParseDispatcher, driveInOrder, tallyParsable } from '../parse-dispatcher.js';
@@ -462,15 +462,13 @@ function emitServedBlob(builder: ProjectionBuilder, { rows }: ServedBlob, counts
 }
 
 /**
- * The parser kind a content key names, or a throw for a key that names none: {@link parserKindOf}
- * is the one judge.
+ * Throw for a content key that names no parser kind: {@link parserKindOf} is the one judge.
  *
  * @param contentKey - The key
- * @returns The kind it names
  * @throws What {@link parserKindOf} throws for a key naming no kind
  */
-function assertKeyNamesParserKind(contentKey: string): ParserKind {
-  return parserKindOf(contentKey);
+function assertKeyNamesParserKind(contentKey: string): void {
+  parserKindOf(contentKey);
 }
 
 /**

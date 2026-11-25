@@ -76,8 +76,8 @@ across two adopters — would produce one row, computed once, reused everywhere.
 **Update, stage 3 in progress:** the table *shapes* below are now ✅ shipped as Zod schemas with
 generated JSON Schema — `packages/resources/src/schemas/projection-blobs.ts` and
 `projection-resources.ts`. There is deliberately **no** contract-version constant: the hand-bumped
-`PROJECTION_SCHEMA_VERSION` is removed, and a *stored* projection would take a derived digest of the
-row schemas' shape instead (the parse cache's `parseFactsShapeSource()` is the pattern).
+`PROJECTION_SCHEMA_VERSION` is removed, and the stored projection's directory carries a derived
+digest of the row schemas' shape instead (`projectionShapeDigest()` in `projection/store.ts`).
 
 **Population is ✅ real for the shipped tables.** `populate()` derives rows from `ParseFacts`
 and `ResourceRegistry` at runtime. What remains 🔷 proposed is the REMAINDER described below:
@@ -389,8 +389,8 @@ Extent derivation stays full until the incremental extent lands, its design blin
 namespace isolates the shapes of the core and store-protocol tables and the code identity of the
 store-protocol implementation, and only those. Instance schemas and extractor and resolve code
 identity live in `row_set_key` and the resolve memo key, never in the namespace, so an extractor edit
-misses only what changed. Package version and worktree path leave the namespace once every stored
-tier carries code identity — until then the version-based namespacing below is what ships. Eviction
+misses only what changed. The package version leaves the namespace once every stored tier carries
+code identity; until then the version-only namespacing below is what ships. Eviction
 covers every tier, extents included, and never makes a running answer read facts as absent (I7). A
 move or restore clears leases.
 
@@ -420,23 +420,22 @@ move or restore clears leases.
   **source**, so any secret sitting in frontmatter is stored verbatim; and this narrowing is about the
   **parse cache only** — the projection's own `blobs.bytes` column, and any linked-content fetch
   cache, are separate tenants where the full-copy reasoning still applies.
-- **Namespacing is version-based, with a dev-checkout escape hatch.** For an installed VAT, the
-  namespace is the package version plus a `-p<6 hex>` digest of the resolved versions of the parser
-  dependencies (e.g. `0.1.42-p3fa91c`) — deliberately, so every machine on the same release and
-  parser resolution shares one cache. Version alone is insufficient for a **dev checkout**, so there the
-  namespace gets a `-dev-<hash>` suffix over three inputs: the package-root path, which separates one
-  worktree from another, a digest of `ParseFactsSchema`'s own shape, which separates two entry
-  formats within one worktree, and a digest of the skill-text declaration a markdown parse applies
-  (`skillTextDeclarationDigest`), which separates two pattern sets, so a pattern edit cold-starts the
-  parse cache and the projection store beneath the namespace. All are **derived**, and that is the settled position after two
-  attempts at hand-maintaining the second half: a build fingerprint of the emitted parser modules
-  (rejected — 65 namespaces holding 267 MB, because every rebuild minted one) and then a hand-bumped
-  `PARSER_BEHAVIOR_REVISION` (rejected — a second versioning scheme carried alongside the version
-  that already works, protecting only developers, who are the one audience that knows when they
-  changed a parser). The shape digest keeps what the build fingerprint was for without its churn:
-  rebuilding unchanged code cannot move it, since it reads no file and no mtime. What is left over —
-  a change to what a parse *means*, at unchanged shape — is `vat cache clear`, not a number. Three
-  earlier hand-bumped constants are gone on the same reasoning
+- **The namespace is the VAT version, and nothing else.** It has one input: the package version
+  (e.g. `0.1.42`), the same for an installed build and a source checkout of that version, so every
+  machine and every checkout on one version shares one cache. Within one version the cache is not
+  invalidated by a change to VAT's code or to the dependencies it resolves: a parser edit, a
+  dependency resolving another minor under a semver range, a skill-text pattern edit or an added
+  optional field all leave the namespace where it was, and entries written before the change are
+  served after it. That is the ruled trade, keeping invalidation simple: a developer who changes
+  what VAT derives clears the cache when they want a cold one (`vat cache clear` deletes the whole
+  cache root; `vat cache prune` removes every other version's namespace and every other-shape
+  store). VAT's own CI is not exposed: its `actions/cache` key hashes `bun.lock` and the `src/` of
+  the packages the CLI runs (`.github/workflows/validate.yml`). Earlier builds digested more into
+  the namespace (a checkout's path, `ParseFactsSchema`'s shape, the skill-text declaration, the
+  resolved dependency versions, and before those a build fingerprint of the emitted parser modules,
+  rejected at 65 namespaces holding 267 MB); none survives. A hand-bumped
+  `PARSER_BEHAVIOR_REVISION` was rejected too: a second versioning scheme carried alongside the
+  version. Three earlier hand-bumped constants are gone on the same reasoning
   (`CONTENT_KEY_SCHEMA_VERSION`, `PARSE_CACHE_SCHEMA_VERSION`, `PARSER_BEHAVIOR_REVISION`).
   `external-link-cache.ts` followed, and is the interesting case: it is a tenant that deliberately
   lives OUTSIDE the namespace — external reachability is a fact about the world, not about this
@@ -456,9 +455,9 @@ move or restore clears leases.
   structural spot-check. An entry whose *shape* this build cannot account for — a wrong field type,
   a fact the envelope has no field for — is a miss. The one shape change it cannot see is the
   addition of an **optional** field, where "written before the field existed" and "legitimately
-  absent" are the same bytes. No validator can separate those, so that class is closed one level up
-  instead — by the shape digest in the namespace above, which puts the two kinds of entry in
-  different directories rather than trying to tell them apart on read.
+  absent" are the same bytes. No validator can separate those; across releases the version
+  namespace above keeps the two kinds of entry apart, and within one version the developer who adds
+  such a field clears the cache.
 - **Fail-soft covers corruption, not wrongness.** Any read failure is a cache miss; any write failure
   is a no-op. Neither that nor the schema above covers a well-formed entry bound to the wrong
   content — that is what the scanning doc's key rules exist to close.

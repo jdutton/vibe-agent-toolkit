@@ -359,7 +359,6 @@ const BARREL_EXPORTS = [
   'selectRequestedContexts',
   'selectRequestedRows',
   'serializeProjection',
-  'skillTextDeclarationDigest',
   'skillTextFactsOf',
   'splitProjectionByScope',
   'sqlSpanAt',

@@ -30,8 +30,8 @@ for a consumer to read. Under pre-1.0 the package version is the only contract.
 ## Do this instead
 
 - **Derive it from the shape itself** — a digest of the schema's own declaration, as
-  `parseFactsShapeSource()` does for the parse cache and `parseTimingShapeSource()` does for the
-  timing dumps. Adding, renaming or reordering a field moves the digest with zero human action;
+  `projectionShapeDigest()` does for the stored projection's directory and `parseFactsShapeSource()`
+  does for a parse-conformance report. Adding, renaming or reordering a field moves the digest with zero human action;
   rewording prose does not move it.
 - **Or invalidate explicitly** — delete the stored data when it stops being valid.
 - **Or ask a different question.** Most "version" checks conflate *"can I parse this?"* (a schema

@@ -270,10 +270,12 @@ export interface ResourceEnumeration {
    * What the population holds about each member: the realization's content
    * columns by path, and the blob tier they name, read on first ask
    * (`stored-admission.ts`): from the store when the store served this
-   * population, from the run's own projection when it was derived (a miss), so
-   * admission after a miss computes nothing the derive already did. `null` for
-   * a listing: it keys and parses nothing, so its members are read, keyed and
-   * parsed by the run.
+   * population, from the run's own projection when it was derived under a store
+   * (a miss), so admission after a miss computes nothing the derive already did.
+   * `null` for a listing: it keys and parses nothing, so its members are read,
+   * keyed and parsed by the run. `null` for a derive with no store too: store-off
+   * is the reference arm, so its admission computes rather than reading the
+   * rows through the reader the store-on arm uses.
    */
   readonly stored: StoredContent | null;
 }
@@ -370,9 +372,10 @@ function resourcePopulateOptions(options: TreePopulationOptions, root: string, c
 
 /**
  * Where a population's admission reads its members' blob tier from: the store
- * a hit was read from, the projection a miss derived, or nowhere for a listing,
- * which derives no blob row. A required choice, so no lane drops its rows by
- * omission.
+ * a hit was read from, the projection a miss under a store derived, or nowhere
+ * for a listing, which derives no blob row, and for a store-off derive, which
+ * computes as the reference the store-on run is checked against. A required
+ * choice, so no lane drops its rows by omission.
  */
 type AdmissionRows =
   | { readonly from: 'store'; readonly store: FactStore }
@@ -513,15 +516,20 @@ async function membershipThrough(
   // derive below would have produced.
   const stored = await readStoredMembership(populateOptions, requestedContributors(populateOptions));
   // A hit carries what the store holds about each member, so the registry can
-  // admit it from the blob tier; a derive carries the blob rows it just derived,
-  // so the registry admits from them and computes nothing twice (D9).
+  // admit it from the blob tier; a derive with a store carries the blob rows it
+  // just derived, so the registry admits from them and computes nothing twice
+  // (D9). A store-off derive carries none and computes: it is the reference arm
+  // the store-on run is checked against, so it must not admit through the same
+  // reader. "Store-off" is the run's resolved store (`populationOracles`), never
+  // the caller's: a store the run may not use is no store here either.
+  const { cache } = populateOptions;
   if (stored !== undefined) {
-    const store = options.cache?.store;
-    return membershipOf(root, stored, source.kind, stored.outcome, store === undefined ? NO_ADMISSION_ROWS : { from: 'store', store });
+    return membershipOf(root, stored, source.kind, stored.outcome, cache === undefined ? NO_ADMISSION_ROWS : { from: 'store', store: cache.store });
   }
 
   const { projection, outcome } = await populate(populateOptions);
-  return membershipOf(root, projection, source.kind, outcome, { from: 'projection', projection });
+  const admissionRows: AdmissionRows = cache === undefined ? NO_ADMISSION_ROWS : { from: 'projection', projection };
+  return membershipOf(root, projection, source.kind, outcome, admissionRows);
 }
 
 /**

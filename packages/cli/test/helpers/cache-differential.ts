@@ -863,12 +863,31 @@ function holdsSkillText(database: DatabaseSync, key: string): boolean {
   return (database.prepare(`SELECT COUNT(*) AS n FROM ${facts} WHERE "blob" = ?`).get(key) as { n: number }).n > 0;
 }
 
+/** Every key whose skill-text record the store holds, sorted. */
+function skillTextKeysIn(database: DatabaseSync): string[] {
+  const facts = quoteIdentifier(PROJECTION_TABLES.skillTextFacts.name);
+  return (database.prepare(`SELECT "blob" AS key FROM ${facts} ORDER BY "blob"`).all() as { key: string }[]).map((row) => row.key);
+}
+
+/**
+ * Every key whose skill-text record the cell's store holds, read by raw SQL.
+ *
+ * @param dirs - A primed cell, or any cache directory holding one store
+ * @returns The keys, sorted
+ */
+export function storedSkillTextKeys(dirs: Pick<ArmDirs, 'store'>): string[] {
+  return withStore(dirs, skillTextKeysIn);
+}
+
 /**
  * Delete the skill-text rows of every other key that has them, in sorted order, by raw
  * SQL, and nothing else (a seed's plant, after a warm arm's prime): the key keeps its
  * `blobs` row and every other blob fact, so the store still accounts for it and serves
- * its resource facts, and only its skill-text record is gone. No verb re-derives it:
- * the skills lane scans each file of such a key, as it does with no store.
+ * its resource facts, and only its skill-text record is gone. The writer never leaves a
+ * markdown blob so, and the one blob-tier predicate (`uncoveredContentKeys`) calls such a
+ * key uncovered: the next population that asks it (`vat validate`'s checks child)
+ * re-derives the key and writes its record back, while the skills lane, which reads the
+ * record and never repairs it, scans each file of such a key, as it does with no store.
  *
  * @param dirs - The primed cell, or any cache directory holding one store
  * @param mustEvict - Keys deleted whatever their place in the order: a case the caller needs evicted
@@ -876,8 +895,7 @@ function holdsSkillText(database: DatabaseSync, key: string): boolean {
  */
 export function evictHalfTheSkillText(dirs: Pick<ArmDirs, 'store'>, mustEvict: readonly string[]): string[] {
   return withStore(dirs, (database) => {
-    const facts = quoteIdentifier(PROJECTION_TABLES.skillTextFacts.name);
-    const keys = (database.prepare(`SELECT "blob" AS key FROM ${facts} ORDER BY "blob"`).all() as { key: string }[]).map((row) => row.key);
+    const keys = skillTextKeysIn(database);
     expect(mustEvict.filter((key) => !keys.includes(key)), 'keys to evict that hold no skill-text record').toEqual([]);
     const evicted = keys.filter((key, index) => index % 2 === 0 || mustEvict.includes(key));
     expect(evicted.length, 'a skill-text eviction deletes a record').toBeGreaterThan(0);
@@ -1023,6 +1041,12 @@ type SeedExpectation =
   | { readonly agrees: { readonly because: string; readonly storeDeclines: StoreDeclines | null } }
   | { readonly refuses: { readonly cause: AbsenceMember; readonly perVerb: Readonly<Partial<Record<VerbName, number>>> } }
   | { readonly agreesAndMisses: { readonly arm: ArmName } }
+  /**
+   * Every arm answers as store-off does, and the seed's own consumed check holds `arm`'s
+   * measured runs in place of that arm's tell: for a plant the store repairs, which the arm's
+   * tell (a warm run only reads) would call a regression.
+   */
+  | { readonly agreesAndRepairs: { readonly arm: ArmName; readonly because: string } }
   /**
    * An edit the warm arm's miss serves from the stored blob tier: it extracts exactly the
    * keys `uncovered` names and reuses every other ({@link expectEditServed}). `uncovered` is
@@ -1303,6 +1327,7 @@ function seedClaims(seed: I0Seed | undefined, arm: ArmName): boolean {
   if (seed === undefined) return false;
   const expectation = seed.expect;
   if ('agreesAndMisses' in expectation) return expectation.agreesAndMisses.arm === arm;
+  if ('agreesAndRepairs' in expectation) return expectation.agreesAndRepairs.arm === arm;
   if ('editServed' in expectation) return expectation.editServed.arm === arm;
   if ('staleServed' in expectation) return expectation.staleServed.arm === arm;
   if ('documentsHole' in expectation) return expectation.documentsHole.arm === arm;
@@ -1846,7 +1871,9 @@ function diskKeyOf(corpus: string, path: string, storedKey: string): string {
 
 /**
  * An edit seed's tell over its warm arm, in order: the oracle on every verb; agreement with
- * store-off, row order included; then per verb: the store after the run leaves exactly the
+ * store-off (exit code, findings in order, and the dump's rows; the dump sorts its rows, `ORDER BY
+ * relation, row` in `DUMP_SQL`, so row ORDER is not compared here: the tier-reuse integration test's
+ * "row for row, in order" `toEqual` holds it); then per verb: the store after the run leaves exactly the
  * refused keys uncovered; and from its {@link populationCounts} and its {@link EDIT_VERBS} row:
  * `extent.derived` its populations; parse lookups; `blob.storeServed`; its extent reads; a
  * write; and a derived origin.
@@ -1971,7 +1998,7 @@ function expectDocumentsHole(result: DifferentialResult, arm: ArmName): void {
 export function expectSeed(seed: I0Seed, result: DifferentialResult): void {
   const expectation = seed.expect;
   if ('diverges' in expectation) expectDiverges(result, expectation.diverges);
-  else if ('agrees' in expectation) expectSameAnswers(result);
+  else if ('agrees' in expectation || 'agreesAndRepairs' in expectation) expectSameAnswers(result);
   else if ('refuses' in expectation) expectRefuses(result, expectation.refuses);
   else if ('agreesAndMisses' in expectation) expectAgreesAndMisses(result, expectation.agreesAndMisses.arm);
   else if ('editServed' in expectation) expectEditServed(result, expectation.editServed.arm);
@@ -2258,6 +2285,7 @@ export function seedTitle(seed: I0Seed): string {
   const expectation = seed.expect;
   if ('documentsHole' in expectation) return `${seed.name} documents the hole: ${expectation.documentsHole.because}`;
   if ('agrees' in expectation) return `${seed.name} agrees: ${expectation.agrees.because}`;
+  if ('agreesAndRepairs' in expectation) return `${seed.name} agrees and repairs: ${expectation.agreesAndRepairs.because}`;
   return `${seed.name}: ${Object.keys(expectation)[0] ?? ''}`;
 }
 

@@ -84,6 +84,19 @@ describe('armDirectoryEnvironment', () => {
     expect(dirs.npmCache).toBe(safePath.join(dirs.root, 'npm-cache'));
   });
 
+  it('gives two builds of one version separate cache directories, since VAT names its cache namespace by version alone', () => {
+    // `perf arms --build main=... --build cand=...` over two checkouts of one version: both builds
+    // write the same namespace (the version), so only the arm's own VAT_CACHE_DIR keeps cand from
+    // reading main's warm cache. Neither directory may lie inside the other.
+    const cacheDirOf = (build: string): string =>
+      armDirectoryEnvironment(armDirectories({ root: out, build, arm: 'C', state: 'warm' }), 'darwin').set['VAT_CACHE_DIR'] ?? '';
+    const main = cacheDirOf('main');
+    const cand = cacheDirOf('cand');
+    expect(main).not.toBe(cand);
+    expect(main.startsWith(`${cand}/`)).toBe(false);
+    expect(cand.startsWith(`${main}/`)).toBe(false);
+  });
+
   it('also points USERPROFILE at the arm home on Windows', () => {
     const dirs = armDirectories({ root: out, build: 'cand', arm: 'C', state: 'cold' });
     expect(armDirectoryEnvironment(dirs, 'win32').set['USERPROFILE']).toBe(dirs.home);

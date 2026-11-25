@@ -126,8 +126,9 @@ The third is **in the persisted contract, not in prose**:
   `definition` / `htmlAttribute` — three mdast node names and one parse5 fact, stored per link row.
 
 ⚠️ **That makes the first spec step a schema change, not a docstring pass.** `nodeType` is a field a
-second implementation must be able to populate, so renaming it to producer-neutral kinds moves
-`parseFactsShapeSource()`, which cold-starts every parse cache on upgrade. Its current shape also
+second implementation must be able to populate, so renaming it to producer-neutral kinds changes
+`ParseFactsSchema`: a parse-cache read is schema-validated, so every stored entry carrying an old name
+misses and is re-parsed, and every conformance report's `factsShape` moves. Its current shape also
 carries a real invariant worth preserving: an absent `nodeType` means "some producer did not say",
 never "the link is markdown". Sequencing it as *cheapest first* was wrong.
 
@@ -530,8 +531,9 @@ In dependency order, each item independently landable:
 
 1. **Close the producer-named leaks** in `ParseResult` so the contract names no implementation's node
    types. ⚠️ **Not cheap, and not prose-only**: two are docstrings, but `LinkNodeTypeSchema` is a
-   persisted enum of mdast node names, so this moves `parseFactsShapeSource()` and cold-starts every
-   parse cache on upgrade. Land it deliberately, not as a warm-up.
+   persisted enum of mdast node names, so this changes `ParseFactsSchema`, and every stored
+   parse-cache entry carrying an old name fails its schema-validated read and is re-parsed. Land it
+   deliberately, not as a warm-up.
 2. **Make `rewriteHtmlLinks` async** and defer parse5 behind the barrel's lazy wrapper. Add parse5
    to `PARSER_NEEDLES` — the test moves from documenting the gap to enforcing its closure.
    ⚠️ **This is worth ~10 ms and roughly 5% of the `resources` barrel.** Its justification is

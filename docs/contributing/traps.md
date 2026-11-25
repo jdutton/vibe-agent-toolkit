@@ -289,6 +289,19 @@ like a working cache, and pure overhead. The store lives at
 **Remedy:** before believing a null result from a feature, enumerate every input the feature is
 AND-ed behind; proving one switch took effect proves nothing about the ones you did not set.
 
+### Two checkouts of one VAT version serve each other's facts from one cache root
+
+The cache namespace is the VAT version alone, so every checkout of one version shares the namespace
+and the store under whatever cache root they share. Two worktrees on the default
+`<tmpdir>/.vat-cache`, one with an extractor edit and one without, are served each other's rows: a
+key one of them filed is covered for the other, and the edited code never runs on it. `bun run
+validate` gives each checkout its own `VAT_CACHE_DIR` (`gate-vat-cache-dir.ts`, CI's value when
+set); a bare `vibe-validate validate` or a hand-run `bun run vat` does not.
+**Tell:** a warm run in one worktree disagrees with a cold run of the same tree, or an extractor
+edit changes nothing until `vat cache clear`; the run's facts were filed by the other worktree.
+**Remedy:** run the gate as `bun run validate`; for hand runs, set `VAT_CACHE_DIR` per checkout
+(the path `bun packages/dev-tools/src/gate-vat-cache-dir.ts` prints) or clear the cache.
+
 ### `--no-cache` must reach every cache, and a store must evict
 
 `VAT_CACHE=0` / `--no-cache` once bypassed the parse cache and still wrote the projection store; and

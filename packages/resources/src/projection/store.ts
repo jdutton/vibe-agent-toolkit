@@ -405,11 +405,9 @@ export interface FactStore {
  * in its path so two incompatible shapes cannot share a directory.
  *
  * `schemas/projection-shared.ts` records that `PROJECTION_SCHEMA_VERSION` was
- * removed, and states exactly what replaces it if a projection is ever stored
- * rather than returned in-process: *"a **derived** digest of the row schemas'
- * own shape, exactly as the parse cache does with `parseFactsShapeSource()` —
- * not this constant reinstated."* Storing a projection is that moment, and this
- * is that digest.
+ * removed, and that a stored projection takes a **derived** digest of the row
+ * schemas' own shape in its place, never that constant reinstated. This is
+ * that digest.
  *
  * It is not a version. Nobody bumps it, no reader branches on it, and there is
  * no migration path — a schema edit simply lands in a different directory, the
@@ -434,9 +432,8 @@ export interface FactStore {
  * What changes facts without changing their shape is not an input: the
  * extraction code, and the skill-text declaration whose matches
  * `skill_text_facts` and `skill_text_matches` hold. The cache namespace above
- * this directory (`cache-namespace.ts`) separates those, the declaration by its
- * digest in a dev checkout and by the package version in a published build,
- * because the parse cache holds the same records and this digest does not key it.
+ * this directory (`cache-namespace.ts`) separates those by the VAT version
+ * only; within one version a developer who changes them clears the cache.
  *
  * @returns Twelve lowercase hex digits, stable across processes and rebuilds
  *

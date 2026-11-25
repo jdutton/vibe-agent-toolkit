@@ -132,7 +132,7 @@ jobs:
       # hashes, because a different lockfile can resolve a different parser.
       # VAT's own CI differs from an adopter's here. An adopter runs an installed VAT, so
       # its lockfile pins VAT's code and the cache namespace names that release. This
-      # checkout runs VAT from source: the lockfile pins none of it, and the dev namespace
+      # checkout runs VAT from source: the lockfile pins none of it, and the namespace (the version)
       # does not change when parsing or extraction does. Without the source digest a PR
       # that changes extraction restores main's cache, and its dogfood steps check main's
       # parser output. The digest covers the packages the CLI runs (utils, schema,

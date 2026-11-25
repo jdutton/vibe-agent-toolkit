@@ -11,9 +11,8 @@
  * ## Why a schema here, when the parse cache's namespace does the job elsewhere
  *
  * The parse cache closes its shape hole one level up, in `cache-namespace.ts`:
- * entries live under a directory named for something that moves (the VAT
- * version, or a digest of the entry schema's own shape), so two entry formats
- * never share a directory. **That option is not available to this cache, by
+ * entries live under a directory named for the VAT version, so two releases'
+ * entry formats never share a directory. **That option is not available to this cache, by
  * design.** `cache-namespace.ts` deliberately keeps authenticated link content
  * *outside* the namespace — it is a fact about the world, not about this build,
  * and re-fetching every URL on a VAT upgrade would be pure waste. Nothing in
@@ -65,7 +64,7 @@
  * A schema cannot catch the addition of an *optional* field: "written before the
  * field existed" and "legitimately absent" are the same bytes, and no amount of
  * strictness separates them (see `schemas/parse-facts.ts`, which has that hole
- * and closes it with a namespace digest). **This envelope has no optional
+ * and closes it across releases with the version namespace). **This envelope has no optional
  * fields, so today the schema is complete** — every shape change is visible.
  *
  * Keep it that way. Adding one optional field to {@link ContentMetadataSchema}

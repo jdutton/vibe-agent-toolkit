@@ -556,7 +556,11 @@ describe('a warm run only hydrates under the limits its facts were stored under'
     const variation = { limits: { timeMs: POPULATION_PARSE_LIMITS.timeMs + 1 } };
     const warm = await runOnce(true, variation);
     const off = await runOnce(false, variation);
-    expect(warm.outcome).toBe('hit');
+    // Such a run has no store it may use (decided where its store is resolved), so it is a
+    // store-off run throughout: no stored membership either, never a membership hit beside a
+    // computed admission.
+    expect(warm.outcome).toBe('no-store');
+    expect(warm.outcome).toBe(off.outcome);
     expect(findingsOf(warm)).toEqual(findingsOf(off));
     expect(warm.work.reads).toBe(Object.keys(TREE).length);
   });

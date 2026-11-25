@@ -63,9 +63,16 @@ stored trace; moving each input class alone must miss.
 
 **I3. One answer to "is this pair present".** One per-pair answer for every consumer: statements,
 strata, resolve, the registry and non-git lanes. *Fails:* the gap
-I1 forbids. *Enforcer:* a lint rule makes one module the only reader of fact tables, and an undeclared
-read throws at run time; one predicate per tier; immutability of blob and harness rows for torn reads; the writer
-replaces what was uncovered at read or evicted since.
+I1 forbids. *Enforcer:* one predicate per tier: for the blob tier, the `blobFactsReader` answer,
+which stored admission and the checks gate both ask (`storedComputeBy` in `stored-admission.ts`),
+and which `uncoveredContentKeys` (`store-hydration.ts`) applies for the projection hit
+(`readCachedProjection` in `merge.ts`) and the derivation's reuse read (`storedBlobTier`, called
+from `storedTierReads` in `merge.ts`); for the harness tier, `harnessUnsettledKeys`; `projection-tier-reuse.integration.test.ts` holds the reuse read to the same answer
+for a partly covered key; `store-concurrency.integration.test.ts` shows no reader half a replaced
+extent; the blob writer contract (`resources/testing`, run against every store) replaces what was
+uncovered at read or evicted since. *Not enforced:* that no other module reads the fact tables or
+writes a predicate of its own (`local/projection-sqlite-import-boundary` limits only which files
+import the backend), and no run-time check throws on an undeclared read.
 
 **I4. One answer to "which extractors read this path".** Every lane gets the same (instance, variant)
 set for a path. Which instances read a path is an extent fact, never in a
@@ -84,7 +91,7 @@ extension literal; it refuses an aliased or re-bound `MARKDOWN_BY_CONTRACT`, so 
 rows unlike their key, shared across trees. *Enforcer:* the conformance suite fails a set of impure
 extractors and gates every built-in; plugins per the [register](./fact-extractors-hazard-register.md).
 
-**Per-file purity (owner ruling 2026-11-25).** A file's parse depends only on its contents and the VAT config, which fixes its parser route. Nothing else a run observes may reach a per-file row. The multi-file layer is a pure function of the manifest, the per-file rows and a closed list of per-run observations: stat results, realpath and link resolution, ignore-oracle verdicts, untracked listings, config and schemas. *Enforcer:* no member file is read a second time on a miss, counted per path at the `node:fs` boundary, proved red by a seeded read.
+**Per-file purity (owner ruling 2026-11-25).** A file's parse depends only on its contents and the VAT config, which fixes its parser route. Nothing else a run observes may reach a per-file row. The multi-file layer is a pure function of the manifest, the per-file rows and a closed list of per-run observations: stat results, realpath and link resolution, ignore-oracle verdicts, untracked listings, config and schemas. *Enforcer:* in the `vat validate` parent process on a one-file warm miss, no member is read a second time and no path under the project's parent directory is read beyond the members, the config, its schemas and the ignore files, counted per path at the `node:fs` boundary (`work-counters-validate-edit.system.test.ts`, proved red by a seeded read of each link target in `resolveLinkEntry`). *Not enforced:* reads of files outside that directory, environment and clock observations, the skill and audit link resolvers, and reads in child processes.
 
 **I6. Only key-determined outcomes persist.** A row set is stored whole or not at all, an outcome only
 if the key preimage plus the recorded limit determine it, so time, heap, stack-depth
@@ -137,7 +144,7 @@ every hazard the store enforces or accepts, with its status and its enforcer kin
 - **Cross-file facts come from SQL; resolve is the escape hatch; relations needing git are core producers.** Rejected: everything as resolve.
 - **git runs with the operator's config; the extent key is git's answer.** The extent key is git's dirty-corrected tree hash and content keys hash the bytes read, so a config, ignore or attributes change that moves membership misses. Content normalized beneath an unchanged tree hash is an open hole until the stat memo lands ([register](./fact-extractors-hazard-register.md)). Every call through `runGit` scrubs git's redirect env and turns its pathspec env off; the spawns vibe-validate's tree snapshot makes are an accepted register row, requested of vibe-validate. Rejected: pinning git, which drops the operator's config. *Amended 2026-11-19: normalization beneath an unchanged tree hash is outside what VAT supports; see [Amendment 2026-11-19](#amendment-2026-11-19-content-identity-per-source).*
 - **`row_set_key` is the one identity of a per-file fact and the unit of eviction.** Rejected: a per-extent presence summary.
-- **The cache namespace's end state is exactly a shape digest of the core and store-protocol tables plus the store-protocol implementation's code identity.** Rejected: a namespace keyed on all code identity. Until every stored tier carries code identity, a dev checkout's namespace also carries the digest of the skill-text declaration a markdown parse job applies (`skillTextDeclarationDigest`), beside the parse-facts shape, because those facts live in the parse cache and the store and nothing else keys them on that declaration. Rejected: a dev namespace of the path and parse-facts shape alone, under which a pattern edit in a dev checkout would serve the previous patterns' facts from the parse cache and the store.
+- **The cache namespace's end state is exactly a shape digest of the core and store-protocol tables plus the store-protocol implementation's code identity.** Rejected: a namespace keyed on all code identity. Until every stored tier carries code identity, the namespace is the VAT version and nothing else, in a dev checkout as in an installed build: within one version no code, dependency or skill-text declaration change invalidates the cache, and a developer clears it (`vat cache clear`) when they want it cold. Rejected (owner ruling 2026-11-25, cache invalidation kept simple): a dev namespace digesting the checkout path, the parse-facts shape and the skill-text declaration (`skillTextDeclarationDigest`), and a namespace digesting the resolved dependency versions, which separated what a developer can clear and grew the namespace's inputs past the version.
 - **Each run gets its own database: only the needed relations, rows restricted to the bound tree's extent; an unhydrated relation does not exist there,** so a statement reaching it refuses. Rejected: an empty schema per relation in the answering database (allowed in a planning database that never answers); an authorizer, which cannot gate rows; TEMP views (I7).
 - **Extent derivation is full: every extent row is derived from the current tree's manifest, the per-file facts its content keys name, and the multi-file layer recomputed from those rows.** Per-file facts are reused from the store by content key, so a miss extracts only the files whose key the store does not cover; nothing is copied forward from an extent of another tree. Rejected: copying any extent row forward from a stored extent, and patching a stored extent by a diff against another tree; either needs a design that passes a blind review against submodules, ignored territory, `.gitignore` edits, non-local contributors, collected base trees and diff/read races. Rejected: re-deriving on every miss the per-file facts the store holds, which made a one-file edit cost a whole-tree extraction (was: extent derivation full until the incremental extent lands, any delta rejected before then; reuse by content key is not a delta, since no extent row survives from another tree).
 - **TypeScript facts come from per-file syntax.** Rejected: a per-tsconfig Program.
@@ -203,7 +210,7 @@ from stored `skill_text` facts (`skill_text_facts`, `skill_text_matches`), which
 job computes beside the other markdown blob facts, with a per-file fallback that reads and scans a
 file the store does not serve, counted as `skillText.storeMiss`. Not built: the git-OID path
 (planned with incremental repopulation) and I2's runtime tuple in the parse-cache and blob keys (a
-published build's namespace carries the VAT version and the parser versions' digest only).
+namespace carries the VAT version only).
 
 ## How this ADR changes
 

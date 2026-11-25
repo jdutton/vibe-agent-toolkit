@@ -10,7 +10,9 @@
  * - 1-file arm, exact: one parse lookup, every other distinct key served from the stored blob
  *   tier (`blob.storeServed`), and the edited blob's one harness pair derived (it is reached
  *   through an `@`-import). The run reads each member at most once and nothing else (purity).
- * - N-file arm, bounds: at most N lookups, at least `distinct keys - N` served, at most N pairs.
+ * - N-file arm, exact: N lookups, `distinct keys - N` served, and one pair derived per edited file
+ *   the harness reaches. The edit covers reached and unreached files, so a miss that re-derives
+ *   every reached pair, or derives a pair for an unreached edit, misses the count.
  */
 
 import { appendFileSync } from 'node:fs';
@@ -44,18 +46,35 @@ function documentPath(index: number): string {
   return `docs/a${String(index).padStart(2, '0')}.md`;
 }
 
-/** The documents `CLAUDE.md` imports: the harness reaches these, and the memory file. */
-const IMPORTED = [documentPath(1), documentPath(2)];
+/**
+ * The documents `CLAUDE.md` imports: the harness reaches these, and the memory file. Six reached
+ * pairs, more than the N-file arm's edits reach, so a miss that re-derives every reached pair
+ * cannot pass its exact count.
+ */
+const IMPORTED = [documentPath(1), documentPath(2), documentPath(3), documentPath(4), documentPath(5)];
+
+/** Every blob the harness reaches. */
+const REACHED = ['CLAUDE.md', ...IMPORTED];
+
+/**
+ * A document holding a markdown link to the 1-file arm's edited document, so the link resolver
+ * runs over a target the miss must read: a resolver that opens it reads that member twice.
+ */
+const LINKING = documentPath(12);
+
+/** A document's bytes: its own, and for {@link LINKING} a link to the first document. */
+function documentBody(index: number): string {
+  const path = documentPath(index);
+  const link = path === LINKING ? ` See [the first document](./${documentPath(1).slice('docs/'.length)}).` : '';
+  return `# Document ${String(index)}\n\nBody of ${path}.${link}\n`;
+}
 
 /** The corpus, each file with bytes of its own. */
 const CORPUS: Readonly<Record<string, string>> = {
   'vibe-agent-toolkit.config.yaml': 'resources:\n  include:\n    - "**/*.md"\n',
   '.gitignore': 'ignored/\n',
   'CLAUDE.md': ['# Memory', '', ...IMPORTED.map((path) => `@${path}`), ''].join('\n'),
-  ...Object.fromEntries(Array.from({ length: DOCUMENTS }, (_, index) => {
-    const path = documentPath(index + 1);
-    return [path, `# Document ${String(index + 1)}\n\nBody of ${path}.\n`];
-  })),
+  ...Object.fromEntries(Array.from({ length: DOCUMENTS }, (_, index) => [documentPath(index + 1), documentBody(index + 1)])),
 };
 
 const MEMBERS = Object.keys(CORPUS);
@@ -94,8 +113,11 @@ async function expectPrimedStoreSettled(arm: ValidateArm): Promise<void> {
   try {
     const rows = await store.readBlobFacts(keys, ALL_BLOB_REQUEST);
     expect(uncoveredContentKeys(rows, keys), 'uncovered keys in the primed store').toEqual([]);
+    // Positive control for purity: the linking document's link is a stored reference, so the resolver has a target.
+    expect(rows.blobReferences.filter((row) => row.blob === committedKey(LINKING)).map((row) => row.rawRef), 'the linking document\'s references')
+      .toContain('./a01.md');
     const settled = new Set(rows.harnessBlobFacts.map((row) => row.blob));
-    const reached = ['CLAUDE.md', ...IMPORTED].map((path) => committedKey(path));
+    const reached = REACHED.map((path) => committedKey(path));
     expect(reached.filter((key) => !settled.has(key)), 'unsettled harness pairs in the primed store').toEqual([]);
   } finally {
     await store.close();
@@ -125,6 +147,8 @@ describe('vat validate after an edit pays for the edited files only', () => {
     edit(cwd, edited);
     const miss = await validateCounts(context, cwd, arm);
     // The config is a member too, but every process's config loader reads it, so purity allows it on its own terms.
+    // Red proof, seeded once and reverted: `resolveLinkEntry` (`link-validator.ts`) reading each resolved target
+    // with `readFileSync` reads the edited `docs/a01.md` twice through {@link LINKING}'s link: 1 failure, this arm.
     expectPureMiss(miss.parentReads, cwd, { members: MEMBERS.filter((path) => !isConfig(path)), schemas: [] });
     const resources = resourcesPhase(miss.phases);
     expect(resources['blob.storeServed'], 'blob.storeServed: every distinct key but the edited one').toBe(DISTINCT_KEYS - 1);
@@ -132,13 +156,25 @@ describe('vat validate after an edit pays for the edited files only', () => {
     expect(resources['harness.pairsDerived'], 'harness pairs derived: the edited, reached blob\'s').toBe(1);
   });
 
-  it('N-file arm: at most N lookups, at least distinct keys minus N served, at most N pairs', async () => {
+  // Red proofs, each seeded once in `packages/resources/src` and reverted:
+  // - re-deriving every reached pair on a miss (`harness-pass.ts`: the stored pair never `held`):
+  //   `harness.pairsDerived` 6 against exactly 2 here and 1 in the 1-file arm, 2 failures;
+  // - counting each served blob twice (`blob-population.ts` `emitServedBlob`: `countWork(.., 2)`):
+  //   `blob.storeServed` 22 against exactly 11 here, and 28 against 14 in the 1-file arm, 2 failures.
+  it('N-file arm: N lookups, distinct keys minus N served, one pair per reached edit', async () => {
     const { cwd, arm } = await primed();
-    const edited = [documentPath(1), documentPath(2), documentPath(5), documentPath(6)];
+    const edited = [documentPath(1), documentPath(2), documentPath(7), documentPath(8)];
+    const reachedEdits = edited.filter((path) => REACHED.includes(path)).length;
+    // Guards: the edit reaches some pairs and not all, and leaves some files unreached, so a miss
+    // that derives every reached pair, or one per edited file, misses the exact count.
+    expect(reachedEdits, 'the edit reaches some harness pairs').toBeGreaterThan(0);
+    expect(reachedEdits, 'the edit reaches fewer pairs than the corpus').toBeLessThan(REACHED.length);
+    expect(reachedEdits, 'the edit holds unreached files').toBeLessThan(edited.length);
     edit(cwd, edited);
     const resources = resourcesPhase((await validateCounts(context, cwd, arm)).phases);
-    expect(resources['blob.storeServed'], 'blob.storeServed: at least distinct keys minus N').toBeGreaterThanOrEqual(DISTINCT_KEYS - edited.length);
-    expect(parseLookupsIn(resources), 'parse lookups: at most N').toBeLessThanOrEqual(edited.length);
-    expect(resources['harness.pairsDerived'], 'harness pairs derived: at most N files\'').toBeLessThanOrEqual(edited.length);
+    // Every edited file has bytes of its own, so each unedited key is served exactly once.
+    expect(resources['blob.storeServed'], 'blob.storeServed: distinct keys minus N').toBe(DISTINCT_KEYS - edited.length);
+    expect(parseLookupsIn(resources), 'parse lookups: the N edited files').toBe(edited.length);
+    expect(resources['harness.pairsDerived'], 'harness pairs derived: the reached edited files\'').toBe(reachedEdits);
   });
 });

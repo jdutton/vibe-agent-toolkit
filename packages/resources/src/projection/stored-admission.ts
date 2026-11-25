@@ -29,7 +29,8 @@
  * - any other state (`unreadable`, `deferred`, `none`): cold.
  *
  * And none of it unless the run parses under the limits the store's facts were
- * filed under ({@link hydratesUnder}).
+ * filed under ({@link hydratesUnder}): a run that does not has no store, decided
+ * once where its store is resolved (`populationOracles`, `RunPopulation`).
  *
  * The two decisions are split by the one await between them: {@link storedRoute}
  * says whether the tier must be read at all, and {@link readRoute} what its answer

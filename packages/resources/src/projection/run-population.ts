@@ -264,6 +264,13 @@ export interface RunPopulationOptions {
   readonly onHomeSettled: (key: string, settlement: HomeSettlement) => void;
 }
 
+/** A run's store options when it has no store it may use. */
+const WITHOUT_STORE: Pick<RunPopulationOptions, 'cacheOf' | 'questionCacheOf' | 'holdsStore'> = {
+  cacheOf: () => Promise.resolve(undefined),
+  questionCacheOf: () => Promise.resolve(undefined),
+  holdsStore: false,
+};
+
 /** One VAT process run's shared reads, parses, admissions and enumerations. */
 export class RunPopulation implements PopulationRun {
   /** The run's home root, resolved. */
@@ -317,7 +324,12 @@ export class RunPopulation implements PopulationRun {
    * @param run - The run's content cache and dispatcher, which {@link withRunPopulation} owns
    */
   constructor(options: RunPopulationOptions, run: PopulationRun) {
-    this.#options = options;
+    // The run's store is resolved here, once, for every reader of it: a run that
+    // parses under other limits than the store's facts were filed under
+    // ({@link hydratesUnder}) has no store, as `populationOracles` decides for a
+    // lane, so it opens none, lists its roots, and counts every skills-lane scan
+    // `skillText.noStore`, exactly as a store-off run does.
+    this.#options = hydratesUnder(run.dispatcher.limits) ? options : { ...options, ...WITHOUT_STORE };
     this.root = safePath.resolve(options.root);
     this.gitTracker = options.gitTracker;
     this.content = run.content;
@@ -325,7 +337,7 @@ export class RunPopulation implements PopulationRun {
     this.source = {
       enumerate: (root, outputs, unreadable, members) => this.#enumerate(root, outputs, unreadable, members),
       storedDocument: (absolutePath, parserKind) => this.storedDocument(absolutePath, parserKind),
-      holdsStore: options.holdsStore,
+      holdsStore: this.#options.holdsStore,
     };
   }
 
@@ -388,9 +400,12 @@ export class RunPopulation implements PopulationRun {
    * store, or `undefined`: the skills lane then scans the file's text itself and
    * counts it (`skillText.storeMiss`, or `skillText.noStore` in a run with no
    * store, {@link RunPopulationOptions.holdsStore}). Never reads the file's
-   * bytes, and answers from the store alone: a run's own admission of the file
-   * (a cold parse on a store miss, an evicted key, a store-off run) is never an
-   * answer here, so every file the store does not serve is a counted scan.
+   * bytes. The answer is read through {@link StoredContent.facts}, the reader
+   * admission uses, so it covers what the run holds for the member: the store's
+   * rows for a member the store serves, and the run's own derived rows for a
+   * member the run derived (`StoredMember.readByRun`). A file with no such
+   * answer (a store-off run, a key the tier does not hold, a refused key) is a
+   * counted scan.
    *
    * Answers only for a member of the home population a store hit recorded,
    * so a file outside the run's root (judged by real path,
@@ -400,8 +415,8 @@ export class RunPopulation implements PopulationRun {
    * (`#openHome`), so a lane asking before any phase enumerated the home
    * is served all the same: no caller has to open it first.
    *
-   * (none is recorded unless the run parses under the limits the store's facts
-   * were filed under, {@link hydratesUnder}), whose stored realization routes to
+   * It answers for a recorded member (none is recorded for a run with no store
+   * it may use, see the constructor), whose stored realization routes to
    * `parserKind` ({@link storedRoute}), whose blob facts the tier holds (read
    * once, through the hit's one memo), and which is readable now (the run's one
    * probe of the path, shared with {@link admit}, counted `fs.stat`).
@@ -496,7 +511,7 @@ export class RunPopulation implements PopulationRun {
     const cache = await this.#options.questionCacheOf();
     if (cache === undefined) return undefined;
     const home = await this.#populate(this.#options.outputs, cache);
-    if (home.stored !== null && hydratesUnder(this.dispatcher.limits)) await home.stored.facts();
+    if (home.stored !== null) await home.stored.facts();
     return home;
   }
 
@@ -547,16 +562,14 @@ export class RunPopulation implements PopulationRun {
 
   /**
    * Record what a store hit holds about its members, under the spelling the
-   * crawl asked by, so {@link admit} can admit them from it. Nothing is
-   * recorded for a run whose dispatcher parses under other limits than the ones
-   * the store's facts were filed under ({@link hydratesUnder}): every member is
-   * then computed.
+   * crawl asked by, so {@link admit} can admit them from it. A run with no store
+   * it may use (see the constructor) lists its roots, so it records nothing.
    *
    * @param enumeration - A resolved enumeration
    */
   #recordStored(enumeration: ResourceEnumeration): void {
     const { stored } = enumeration;
-    if (stored === null || !hydratesUnder(this.dispatcher.limits)) return;
+    if (stored === null) return;
     for (const [path, realization] of stored.members) {
       if (!this.#stored.has(path)) this.#stored.set(path, { realization, facts: stored.facts, readByRun: stored.readByRun });
     }

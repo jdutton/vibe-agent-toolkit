@@ -87,7 +87,7 @@
     "check:osv-scan": "tsx packages/dev-tools/src/osv-ignore-scan.ts",
     "check:overrides": "tsx packages/dev-tools/src/override-register.ts",
     "seed:test-tier-budget": "tsx packages/dev-tools/src/test-tier-budget-seed.ts",
-    "validate": "CI=1 vibe-validate validate --force",
+    "validate": "CI=1 VAT_CACHE_DIR=$(tsx packages/dev-tools/src/gate-vat-cache-dir.ts) vibe-validate validate --force",
     "validate-structure": "tsx packages/dev-tools/src/validate-repo-structure.ts",
     "validate-version": "tsx packages/dev-tools/src/validate-version.ts",
     "pre-commit": "vibe-validate pre-commit",

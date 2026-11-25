@@ -129,7 +129,7 @@ import {
   type ExtentScopedTableName,
   type FactStore,
 } from './store.js';
-import { readBlobTier } from './stored-admission.js';
+import { hydratesUnder, readBlobTier } from './stored-admission.js';
 
 /**
  * The pass number every driver-placed row in the `base` stratum carries.
@@ -328,6 +328,17 @@ export interface PopulateOptions {
  * pair of spreads, and a fourth would have written a fourth copy — one of which
  * would eventually pass `undefined` and quietly change what the store is asked.
  *
+ * ## The one decision whether a run may use its store
+ *
+ * The store is carried only when the run parses under the limits its facts were
+ * filed under ({@link hydratesUnder}). A parse the run's own limits stop is never
+ * stored, so under other limits no stored row can stand for this run. Decided
+ * here, where every lane resolves the run's store, so every reader downstream
+ * (the stored membership read, `populate`'s extent hit and blob-tier read,
+ * admission, the write) gets the store or none, and such a run is a store-off
+ * run in every count. `RunPopulation` makes the same decision for the run's own
+ * handle, so a run whose limits differ never opens its store.
+ *
  * @param options - Whatever the lane received from ITS caller
  * @returns A spreadable object carrying only the oracles that are actually present
  */
@@ -337,10 +348,11 @@ export function populationOracles(options: {
   cache?: PopulationCache | undefined;
   collections?: Readonly<Record<string, CollectionConfig>> | undefined;
 }): Pick<PopulateOptions, 'run' | 'gitTracker' | 'cache' | 'collections'> {
+  const { cache } = options;
   return {
     run: options.run,
     ...(options.gitTracker !== undefined && { gitTracker: options.gitTracker }),
-    ...(options.cache !== undefined && { cache: options.cache }),
+    ...(cache !== undefined && hydratesUnder(options.run.dispatcher.limits) && { cache }),
     ...(options.collections !== undefined && { collections: options.collections }),
   };
 }
@@ -620,7 +632,8 @@ export class ClosureNonConvergenceError extends VatError {
  * and no record that git was ever asked, which is exactly the empty-extent-as-a-
  * result posture `ContributorRegistry.forKind` already refuses.
  *
- * @param options - Root, contributors, per-contributor parameters and the cap
+ * @param options - Root, contributors, per-contributor parameters and the cap;
+ *   its store as {@link populationOracles} resolved it for the run
  * @returns The frozen projection every registered contributor agreed on, and
  *   the {@link PopulationOutcome} that says whether the store served it
  * @throws {@link ClosureNonConvergenceError} when the closure stratum is still
