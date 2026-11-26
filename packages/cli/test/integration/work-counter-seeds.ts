@@ -44,6 +44,7 @@ import { NO_GIT_MEMBERS,
   type Projection,
   readContentWithKey,
   ResourceRegistry,
+  RunContentCache,
   StoreQuestionUnavailableError,
   withRunPopulation,
 } from '@vibe-agent-toolkit/resources';
@@ -51,7 +52,7 @@ import { testContentKey, uncoveredBlobWrite } from '@vibe-agent-toolkit/resource
 import { normalizedTmpdir, readWorkCounters, safePath, toForwardSlash, WORK_COUNTER_NAMES, type WorkCounter, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { GitTracker, gitTreeSnapshot, openGitObjectReaders, runGitOrThrow, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 import { createTempDir, removeTempDir, scratchTmpdirEnv } from '@vibe-agent-toolkit/utils/testing';
-import { afterEach, beforeAll, expect, vi } from 'vitest';
+import { afterEach, expect, vi } from 'vitest';
 
 import { createChecksOverlapGate } from '../../src/commands/checks-overlap-gate.js';
 import { checkGitInstalled } from '../../src/commands/doctor.js';
@@ -496,22 +497,29 @@ export const PARSE_SEEDS: Readonly<Record<ParseCounter, Seed>> = {
   },
 };
 
-/** Read one object through a reader that asks git its version, so the once-per-process probe is spent. */
-async function settleGitVersionProbe(): Promise<void> {
-  const root = createTempDir('vat-work-seed-probe-');
-  try {
-    runGitOrThrow(['init', '-q'], { cwd: root });
-    const oid = runGitOrThrow(['hash-object', '-w', '--stdin'], { cwd: root, input: 'probe\n' }).trim();
-    const objects = openGitObjectReaders({});
-    try {
-      await objects.read(root, oid);
-    } finally {
-      await objects.close();
-    }
-  } finally {
-    removeTempDir(root);
-  }
-}
+/**
+ * Whether this git takes `--no-lazy-fetch`, asked once at load, unmeasured. Asking spends the
+ * object reader's once-per-process `git --version` probe here, in setup, so no seed's count holds
+ * it whichever seed runs first. And it states the version every count below depends on: the
+ * production run opens its readers asking git, so a seed cannot hand that run a version as the
+ * `content.gitRead` seed hands its own reader one.
+ */
+const LAZY_FETCH_GUARDED = ((): boolean => {
+  const objects = openGitObjectReaders({});
+  const guarded = objects.guardsLazyFetch();
+  // Nothing to wait for: no reader has started, so the set holds no child, and close never rejects.
+  objects.close().catch(() => undefined);
+  return guarded;
+})();
+
+/**
+ * The git calls of a population that keys its members from a fresh snapshot: the key's snapshot,
+ * its flag listing and its LFS attribute listing, the write path's fresh three, the members
+ * listing and the one `cat-file --batch` reader. A git before 2.45 cannot be told not to fetch a
+ * missing object, so the members first ask whether the repository is a partial clone: two
+ * `git config` calls (`isPartialClone`).
+ */
+const POPULATION_GIT_CALLS = 10 + (LAZY_FETCH_GUARDED ? 0 : 2);
 
 /** A logger that keeps what it is told, so a seed can read back a warning. */
 function recordingLogger(lines: string[]): Logger {
@@ -660,7 +668,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'parse.cache.written': 1,
       'content.gitRead': 1,
       'fs.stat': 1,
-      'git.calls': 10,
+      'git.calls': POPULATION_GIT_CALLS,
       'git.snapshots': 2,
       'fs.lstat': GIT_MARKER_LSTATS + FIRST_POPULATION_LSTATS,
     },
@@ -702,7 +710,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'parse.cache.written': 2,
       'content.gitRead': 2,
       'fs.stat': 2,
-      'git.calls': 10,
+      'git.calls': POPULATION_GIT_CALLS,
       'git.snapshots': 2,
       'fs.lstat': GIT_MARKER_LSTATS + FIRST_POPULATION_LSTATS,
     },
@@ -733,7 +741,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'parse.cache.written': 1,
       'content.gitRead': 1,
       'fs.stat': 2,
-      'git.calls': 10,
+      'git.calls': POPULATION_GIT_CALLS,
       'git.snapshots': 2,
       'fs.lstat': GIT_MARKER_LSTATS,
     },
@@ -767,7 +775,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'content.gitRead': 1,
       // Each of the two members the re-derivation keys is probed once.
       'fs.stat': 2,
-      'git.calls': 10,
+      'git.calls': POPULATION_GIT_CALLS,
       'git.snapshots': 2,
       'fs.lstat': GIT_MARKER_LSTATS,
     },
@@ -958,6 +966,7 @@ function skillTextScanSeed(holdsStore: boolean): Seed {
       const run: SkillTextRun = {
         source: { storedDocument: () => Promise.resolve(undefined), holdsStore },
         dispatcher: dispatcherOf(scope),
+        content: new RunContentCache(NO_GIT_MEMBERS),
         crawlOnce: (_key, crawl) => crawl(),
       };
       return async () => {
@@ -1042,9 +1051,6 @@ function expectedDelta(moves: Partial<Record<WorkCounter, number>>): Record<Work
  */
 export function seedScope(): SeedScope {
   const disposers: Array<() => Promise<void> | void> = [];
-  // Unmeasured: the git object reader asks git its version once per process, so the first seed
-  // to read an object would count one git call more than the same seed run after another.
-  beforeAll(settleGitVersionProbe);
   afterEach(async () => {
     vi.unstubAllEnvs();
     // Newest first, one at a time: a store closes before its directory goes.

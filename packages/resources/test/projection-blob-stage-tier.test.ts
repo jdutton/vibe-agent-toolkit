@@ -22,7 +22,7 @@ import { storedHarnessRows } from '../src/projection/harness/harness-pass.js';
 import { afterClosurePromotion, type BlobStage } from '../src/projection/merge.js';
 import { type Projection, ProjectionBuilder } from '../src/projection/projection.js';
 import { QUERY_BLOB_REQUEST } from '../src/projection/query-projection.js';
-import { diskRunContentSource } from '../src/projection/run-population.js';
+import { runContentSource } from '../src/projection/run-population.js';
 import { emptyBlobRows, keyedContentKeys, storedBlobTier, type StoredBlobTier } from '../src/projection/store-hydration.js';
 import {
   ALL_BLOB_REQUEST,
@@ -88,7 +88,7 @@ describe('a covered key\'s stored rows, in reversed order', () => {
     const stored = storedBlobTier(reversed({ ...emptyBlobRows(), ...blobTables(derived) }), keys);
     expect([...stored.covered], 'every key is covered, so every row is served').toEqual(keys);
     const served = await baseBuilderForRoot(suite.tempDir);
-    await withParseDispatcher((dispatcher) => populateBlobs(served, { dispatcher, content: diskRunContentSource(served.base().contentCache), stored }));
+    await withParseDispatcher((dispatcher) => populateBlobs(served, { dispatcher, content: runContentSource(served.base().contentCache), stored }));
 
     expect(blobTables(served.build())).toEqual(blobTables(derived));
   });
@@ -572,7 +572,7 @@ async function primedStore(tracker: GitTracker): Promise<{ store: FakeFactStore;
 
 /** The stage over `store`, its base read and populate done, as `deriveProjection` runs it. */
 async function stageOverBase(builder: ProjectionBuilder, dispatcher: ParseDispatcher, store: FakeFactStore): Promise<BlobStage> {
-  const stage: BlobStage = { dispatcher, content: diskRunContentSource(builder.base().contentCache), tier: tierOver(store) };
+  const stage: BlobStage = { dispatcher, content: runContentSource(builder.base().contentCache), tier: tierOver(store) };
   const stored = await stage.tier.cover(keyedContentKeys(builder.base()), ALL_BLOB_REQUEST);
   await populateBlobs(builder, { dispatcher, content: stage.content, stored });
   return stage;

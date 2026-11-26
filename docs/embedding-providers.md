@@ -446,6 +446,7 @@ in the config exists to cover.
 
 ```typescript
 import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
+import { NO_GIT_MEMBERS, RunContentCache } from '@vibe-agent-toolkit/resources';
 import { OllamaEmbeddingProvider } from './ollama-embedding-provider.js';
 
 // Create custom provider
@@ -462,7 +463,7 @@ const ragProvider = new LanceDBRAGProvider({
 });
 
 // Index documents
-await ragProvider.indexResources(resources);
+await ragProvider.indexResources(resources, new RunContentCache(NO_GIT_MEMBERS));
 
 // Query works seamlessly
 const results = await ragProvider.query({
@@ -673,7 +674,7 @@ Need embeddings?
 ```typescript
 // WRONG - Different providers for indexing vs querying
 const indexProvider = new OnnxEmbeddingProvider(); // 384 dims
-await ragProvider.indexResources(resources);
+await ragProvider.indexResources(resources, new RunContentCache(NO_GIT_MEMBERS));
 
 const queryProvider = new OpenAIEmbeddingProvider({ apiKey }); // 1536 dims
 await ragProvider.query({ query: 'test' }); // Won't work - dimension mismatch
@@ -858,7 +859,7 @@ Error: Vector dimension mismatch. Expected 384, got 1536.
 
 **Solution:** You switched providers after indexing. Either:
 1. Clear the store, then re-index with the new provider — `vat rag clear && vat rag index`, or
-   `await ragProvider.clear()` followed by `await ragProvider.indexResources(resources)`.
+   `await ragProvider.clear()` followed by `await ragProvider.indexResources(resources, content)`.
    ⚠️ `vat rag index` on its own is **not** enough: change detection is a content hash of the
    source document, so an unchanged file is skipped and its stale vectors survive. There is no
    `--force`.

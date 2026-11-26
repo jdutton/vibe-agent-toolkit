@@ -95,7 +95,7 @@ const CONTRACT_SITES: ReadonlyMap<string, ReviewedSite> = new Map([
   ['packages/agent-skills/src/parsers/frontmatter-parser.ts', { count: 1, reason: 'a frontmatter block cut out of a document' }],
   ['packages/agent-skills/src/skill-identity.ts', { count: 1, reason: 'a SKILL.md' }],
   ['packages/agent-skills/src/skill-packager.ts', { count: 1, reason: 'a SKILL.md' }],
-  ['packages/agent-skills/src/skill-text-lane.ts', { count: 3, reason: 'a SKILL.md' }],
+  ['packages/agent-skills/src/skill-text-lane.ts', { count: 4, reason: 'a SKILL.md; the raw UTF-8 text the linked-file and implicit-reference scans run over' }],
   ['packages/claude-marketplace/src/inventory/extract-skill.ts', { count: 1, reason: 'a SKILL.md' }],
   ['packages/claude-marketplace/src/settings/settings-compat-checker.ts', { count: 1, reason: 'a SKILL.md' }],
   ['packages/cli/src/commands/skills/skill-discovery.ts', { count: 1, reason: 'a SKILL.md' }],

@@ -103,7 +103,7 @@ ${paragraph.repeat(3)}
 
     // Index all resources
     console.log(`Indexing ${NUM_RESOURCES} resources...`);
-    const indexResult = await suite.provider.indexResources(resources, suite.objects);
+    const indexResult = await suite.provider.indexResources(resources, suite.content);
 
     // Verify indexing succeeded
     expect(indexResult.errors).toEqual([]);

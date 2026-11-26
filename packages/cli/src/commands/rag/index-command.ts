@@ -7,7 +7,6 @@ import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
 import { notAdmittedCount, notAdmittedFindings } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { openGitObjectReaders } from '@vibe-agent-toolkit/utils/git';
 
 import { refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
@@ -145,17 +144,24 @@ export async function indexCommand(
     // URI-reference resolution, so cwd is fine here. The crawl is the run's only
     // lane: the registry it admits is data once the run closes.
     const crawlRoot = projectRoot ?? process.cwd();
-    // One run around the load. Only plain data leaves it: the registry is the
-    // run's view, and holding it through the index would keep every content and
-    // parse of the run alive after the run closed.
-    const { allResources, notAdmittedLog, config } = await withRunContext({ projectionStore: 'on-demand', root: crawlRoot, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
+    // One run around the load. Plain data leaves it, and the run's content
+    // reader: the index reads each resource's text through it, so a file the
+    // crawl read is indexed from that same read, never read a second time. The
+    // run reads every file from disk (`memberBytes: 'disk'`, as a build does), so
+    // the reader needs nothing the run closes; the registry view does not leave it.
+    const { allResources, notAdmittedLog, config, content } = await withRunContext({ memberBytes: 'disk', projectionStore: 'on-demand', root: crawlRoot, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
       const loaded = await loadResourcesWithConfig(pathArg, run, logger);
       // The declared population is the admitted one PLUS every file the crawl
       // enumerated and did not admit (unreadable, or its parse refused). Such a
       // file never reaches `indexResources`, so it is in none of the provider's
       // counters: it is reported and counted here, through the one contract every
       // crawling verb uses, or a corpus missing a document is reported clean.
-      return { allResources: loaded.registry.getAllResources(), notAdmittedLog: loaded.registry.getNotAdmitted(), config: loaded.config };
+      return {
+        allResources: loaded.registry.getAllResources(),
+        notAdmittedLog: loaded.registry.getNotAdmitted(),
+        config: loaded.config,
+        content: run.population.content,
+      };
     });
     const notAdmittedFiles = notAdmittedCount(notAdmittedLog);
     notAdmitted = notAdmittedFindings(
@@ -176,16 +182,7 @@ export async function indexCommand(
       resource.id,
       toForwardSlash(safePath.relative(crawlRoot, resource.filePath)),
     ]));
-    // One owner of the index's git object readers: a git-keyed resource's text
-    // is read from the object its key names. Closed (and each child awaited)
-    // however the index ends.
-    const objects = openGitObjectReaders({});
-    let indexResult: IndexResult;
-    try {
-      indexResult = await ragProvider.indexResources(allResources, objects);
-    } finally {
-      await objects.close();
-    }
+    const indexResult = await ragProvider.indexResources(allResources, content);
     indexed = indexResult;
     await ragProvider.close();
 

@@ -13,7 +13,8 @@
  * keyed from disk, which is always sound, never shared.
  *
  * A partial clone on a git that cannot refuse a lazy fetch (before 2.45) has no members: a read
- * could otherwise download. The run then keys every file from disk, and says so once per process.
+ * could otherwise download. So has one whose partial-clone probe gave no answer: it may be one. The
+ * run then keys every file from disk, and says so once per repository.
  */
 
 import { isPartialClone } from './git-changed-files.js';
@@ -54,15 +55,20 @@ const KEY_KIND_BY_LENGTH: ReadonlyMap<number, GitMemberKeyKind> = new Map([
   [64, 'git-sha256'],
 ]);
 
-/** Whether this process has said a partial clone keys from disk. */
-let noticed = false;
+/** The repository roots this process has said key from disk as a (possible) partial clone. */
+const noticed = new Set<string>();
 
-/** Say once per process that a partial clone's files key from disk. */
-function noticePartialClone(repositoryRoot: string): void {
-  if (noticed) return;
-  noticed = true;
+/**
+ * Say once per repository that a partial clone's files key from disk.
+ *
+ * @param partial - true for a partial clone, undefined when git could not say whether it is one
+ */
+function noticePartialClone(repositoryRoot: string, partial: true | undefined): void {
+  if (noticed.has(repositoryRoot)) return;
+  noticed.add(repositoryRoot);
+  const is = partial === true ? 'is a partial clone' : 'may be a partial clone (git could not say whether it is one)';
   process.emitWarning(
-    `${shownName(repositoryRoot)} is a partial clone, and this git (before 2.45) has no --no-lazy-fetch, so reading`
+    `${shownName(repositoryRoot)} ${is}, and this git (before 2.45) has no --no-lazy-fetch, so reading`
       + ' its objects could fetch them: VAT keys its files from disk instead. Git 2.45 or later reads them from git.',
     { type: 'VatNotice', code: 'VAT_GIT_MEMBERS_PARTIAL_CLONE' },
   );
@@ -112,13 +118,17 @@ class MemberSet implements GitMembers {
  *
  * @param key - The tree's key
  * @param objects - The run's object readers, which every size and read goes through
- * @returns The members, or null for a partial clone on a git before 2.45
+ * @returns The members, or null for a partial clone (or a repository git cannot say is not one) on a
+ *   git before 2.45
  * @throws {Error} For an object name of neither length, or of both lengths in one snapshot
  */
 export function gitMembersOf(key: GitTreeKey, objects: GitObjectReaders): GitMembers | null {
-  if (!objects.guardsLazyFetch() && isPartialClone(key.repositoryRoot)) {
-    noticePartialClone(key.repositoryRoot);
-    return null;
+  if (!objects.guardsLazyFetch()) {
+    const partial = isPartialClone(key.repositoryRoot);
+    if (partial !== false) {
+      noticePartialClone(key.repositoryRoot, partial);
+      return null;
+    }
   }
   const excluded = new Set([...key.absent, ...key.lfs.pointers.map(({ absolutePath }) => absolutePath)]);
   const members = new Map<string, GitMember>();

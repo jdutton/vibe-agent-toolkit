@@ -470,17 +470,23 @@ function scopeKeyOf(): (root: string) => GitTreeKey | null {
 
 /**
  * A run's git members: the members of the snapshot that keys `root`'s store, the same one
- * {@link openCacheWith} keys it by, for a run that holds a store; none for a run without one, whose
- * files all key from disk. The keyer is taken from the scope now, at the run's construction, and
- * asked at the run's first read of a path under `root`, so a run that reads nothing there takes
+ * {@link openCacheWith} keys it by, for a run that reads members from git; none for any other run,
+ * whose files all key from disk. The keyer is taken from the scope now, at the run's construction,
+ * and asked at the run's first read of a path under `root`, so a run that reads nothing there takes
  * no snapshot for it.
  *
+ * ONE predicate decides `readsMembers` for every run: the store is selected
+ * ({@link projectionStoreSelected}), and for a run opened by `withRunContext` the verb reads members
+ * from git (`memberBytes: 'git'`, never a build lane). Not "the store opened": a lazily opened run
+ * fixes its membership at construction, before its store is asked for, and a store that declines to
+ * open over a tree git keyed still leaves a snapshot whose members key the same bytes.
+ *
  * @param root - The run's home root
- * @param holdsStore - Whether the run holds a projection store
+ * @param readsMembers - Whether the run reads its members from git
  * @returns The run's members
  */
-export function storeMembersOf(root: string, holdsStore: boolean): PopulationMembersOf {
-  if (!holdsStore) return NO_GIT_MEMBERS;
+export function storeMembersOf(root: string, readsMembers: boolean): PopulationMembersOf {
+  if (!readsMembers) return NO_GIT_MEMBERS;
   const keyOf = scopeKeyOf();
   return {
     root,

@@ -68,6 +68,7 @@ import {
   keyedFromBytes,
   type ParserKind,
   readContentWithKey,
+  readKeyedBytes,
   refuseContentBySize,
 } from '../content-key.js';
 import { isParseLimitError, type ParseLimits, resolveParseLimits } from '../parse-limits.js';
@@ -150,7 +151,7 @@ interface FoundMember {
 export interface ContentCacheStats {
   /** Reads served from an entry already held for the same path. */
   readonly hits: number;
-  /** Reads that touched the disk. */
+  /** Reads that were not held: each one read its bytes, a member's from git, any other file's from disk. */
   readonly misses: number;
   /** Distinct `(path, parserKind)` pairs held. */
   readonly entries: number;
@@ -179,7 +180,14 @@ export class RunContentCache {
   #misses = 0;
   #bytesHeld = 0;
   readonly #membersOf: RunMembersOf;
-  #members: { readonly members: GitMembers | null } | undefined;
+  /** The members, or why resolving them threw: asked once per run, a failure held and rethrown, never retried. */
+  #members: { readonly members: GitMembers | null } | { readonly failed: unknown } | undefined;
+  /**
+   * The bytes of each held entry whose decode is not plain UTF-8 (a BOM, UTF-16, UTF-32), by the
+   * entry's key: kept from the read that filled the entry, so {@link readWithBytes} never reads a
+   * file a second time. A plain UTF-8 entry's content is its bytes' own reading, so it holds none.
+   */
+  readonly #undecodedBytes = new Map<string, Uint8Array>();
   /** {@link openRefusal}'s answer by resolved path: one probe (one `fs.stat`) per file per run, whichever lane asks. */
   readonly #openRefusals = new Map<string, Promise<OpenRefusal | null>>();
 
@@ -189,6 +197,15 @@ export class RunContentCache {
    */
   constructor(membersOf: RunMembersOf) {
     this.#membersOf = membersOf;
+  }
+
+  /**
+   * How this run keys a file git holds: by its object ID (`'git'`, a run with members) or by a hash
+   * of its disk bytes (`'disk'`, a run built with {@link NO_GIT_MEMBERS}). Two runs that differ here
+   * file one path under different content keys, so a stored extent answers only runs of its own kind.
+   */
+  get memberKeys(): 'git' | 'disk' {
+    return this.#membersOf === NO_GIT_MEMBERS ? 'disk' : 'git';
   }
 
   /**
@@ -278,20 +295,40 @@ export class RunContentCache {
     if (this.#refused.has(key)) throw this.#refused.get(key);
 
     const found = this.#memberAt(absolutePath);
-    if (found !== undefined) return this.#hold(key, await this.#readMember(found, absolutePath, key, parserKind));
-
     this.#misses += 1;
+    if (found !== undefined) {
+      const member = await this.#readMember(found, absolutePath, key, parserKind);
+      return this.#hold(key, member.keyed, member.bytes);
+    }
+
     // The population's own cap, never a caller's: the dispatcher, the store key and the refusal
     // sentence read the same {@link POPULATION_PARSE_LIMITS}, so no run reads past the cap on one
     // lane and refuses at it on the next.
-    let keyed: KeyedContent;
+    let read: { readonly keyed: KeyedContent; readonly bytes: Uint8Array };
     try {
-      keyed = await readContentWithKey(absolutePath, parserKind, POPULATION_PARSE_LIMITS.inputBytes);
+      read = await readKeyedBytes(absolutePath, parserKind, POPULATION_PARSE_LIMITS.inputBytes);
     } catch (error) {
       if (isSizeRefusal(error)) this.#refused.set(key, error);
       throw error;
     }
-    return this.#hold(key, keyed);
+    return this.#hold(key, read.keyed, read.bytes);
+  }
+
+  /**
+   * {@link read}, with the bytes the content was decoded from when its decode is not plain UTF-8
+   * (`null` when it is: the content is then exactly the bytes' UTF-8 reading), for a lane that
+   * scans a file's undecoded text rather than its decoded content. The same one read per file per
+   * run: a member's bytes from git, any other file's from disk, held to the same cap and refused the
+   * same way.
+   *
+   * @param absolutePath - Absolute path to read
+   * @param parserKind - The parser its content routes to, which files the read
+   * @returns The read, and its bytes when its decode is not plain UTF-8
+   * @throws What {@link read} throws
+   */
+  async readWithBytes(absolutePath: string, parserKind: ParserKind): Promise<{ readonly keyed: KeyedContent; readonly bytes: Uint8Array | null }> {
+    const keyed = await this.read(absolutePath, parserKind);
+    return { keyed, bytes: this.#undecodedBytes.get(cacheKey(absolutePath, parserKind)) ?? null };
   }
 
   /**
@@ -301,7 +338,8 @@ export class RunContentCache {
   #memberAt(absolutePath: string): FoundMember | undefined {
     const source = this.#membersOf;
     if (source === null || relativeEscapesRoot(safePath.relative(source.root, absolutePath))) return undefined;
-    this.#members ??= { members: source.resolve() };
+    this.#members ??= resolvedMembers(source);
+    if ('failed' in this.#members) throw this.#members.failed;
     const { members } = this.#members;
     const member = members?.memberAt(toForwardSlash(safePath.resolve(absolutePath)));
     return members === null || member === undefined ? undefined : { member, members };
@@ -327,16 +365,24 @@ export class RunContentCache {
   }
 
   /** A member's bytes from git, decoded under its member key once its size is admitted. */
-  async #readMember(found: FoundMember, absolutePath: string, key: string, parserKind: ParserKind): Promise<KeyedContent> {
+  async #readMember(
+    found: FoundMember,
+    absolutePath: string,
+    key: string,
+    parserKind: ParserKind,
+  ): Promise<{ readonly keyed: KeyedContent; readonly bytes: Uint8Array }> {
     await this.#admitMember(found, absolutePath, key, parserKind);
     const bytes = await found.members.bytesOf(found.member);
-    return keyedFromBytes(bytes, parserKind, memberKey(found.member, parserKind));
+    return { keyed: keyedFromBytes(bytes, parserKind, memberKey(found.member, parserKind)), bytes };
   }
 
-  /** Hold one read for the rest of the run. */
-  #hold(key: string, keyed: KeyedContent): KeyedContent {
+  /** Hold one read for the rest of the run, with its bytes when its decode is not plain UTF-8. */
+  #hold(key: string, keyed: KeyedContent, bytes: Uint8Array): KeyedContent {
     this.#entries.set(key, keyed);
     this.#bytesHeld += keyed.byteLength;
+    if (!isPlainUtf8Decoding(keyed.decoding)) {
+      this.#undecodedBytes.set(key, bytes);
+    }
     return keyed;
   }
 
@@ -393,6 +439,26 @@ export async function keyOfContent(
   return cache === null
     ? (await readContentWithKey(absolutePath, parserKind, null)).key
     : cache.key(absolutePath, parserKind);
+}
+
+/**
+ * Whether a decode is the plain UTF-8 reading of its bytes: UTF-8 assumed, with no BOM. Any other
+ * (a BOM-marked UTF-8, UTF-16 or UTF-32 file) decodes to other text than `readFileSync(path, 'utf-8')`.
+ *
+ * @param decoding - How the bytes were decoded
+ * @returns `true` for plain UTF-8
+ */
+export function isPlainUtf8Decoding(decoding: Pick<KeyedContent['decoding'], 'encoding' | 'encodingSource'>): boolean {
+  return decoding.encoding === 'utf-8' && decoding.encodingSource === 'assumed';
+}
+
+/** A members source's answer, or why it threw: held, so a failed resolve is never asked again. */
+function resolvedMembers(source: RunMembersSource): { readonly members: GitMembers | null } | { readonly failed: unknown } {
+  try {
+    return { members: source.resolve() };
+  } catch (error) {
+    return { failed: error };
+  }
 }
 
 /** A member's key: its object name, under the parser kind its content routes to. */

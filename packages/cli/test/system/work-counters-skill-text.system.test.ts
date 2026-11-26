@@ -95,7 +95,8 @@ const NONE: Cost = { miss: 0, reads: 0, hashed: 0, gitRead: 0, lookups: 0 };
  *   counted once per file per run, and the lane reads it through the run's one
  *   content read, which a file another phase already read costs nothing.
  * - `laneOpens`: the opens that reach costs at the fs boundary. Each counted read is
- *   one; the over-cap document adds its cap check, an open that reads nothing.
+ *   one. A member's readability open is not a lane's: the admission makes it, once per member
+ *   ({@link expectedOpens}).
  * - `admission`: what the run's first admission of it spends whatever lane asks:
  *   only a parse-refused file, whose refusal no store holds, costs anything.
  */
@@ -108,9 +109,10 @@ const CATEGORY: { readonly [Name in Category]: { readonly lane: Cost; readonly l
   // committed, but outside the home root the run's members are built for, so it is no member:
   // read and hashed from disk, as store off reads it.
   outsideHome: { lane: { miss: 1, reads: 1, hashed: 1, gitRead: 0, lookups: 1 }, laneOpens: 1, admission: NONE },
-  // Refused at the run's content read by its size (`parse.refused.inputCap.read`, the size
-  // git's object header gives, so no open), then read whole from disk by the lane, counted
-  // and never keyed: it scans text, it does not parse.
+  // Refused at the run's content read by its size (`parse.refused.inputCap.read`): opened once
+  // for its readability probe, as every member is (the admission's open, not the lane's), then
+  // sized by git's object header, so its bytes are never read from git. Then read whole from disk
+  // by the lane, counted and never keyed: it scans text, it does not parse.
   overCap: { lane: { miss: 1, reads: 1, hashed: 0, gitRead: 0, lookups: 1 }, laneOpens: 1, admission: NONE },
   // Read for its markdown (the store holds its HTML facts), the markdown parse a cache hit.
   otherParser: { lane: { miss: 1, reads: 0, hashed: 0, gitRead: 1, lookups: 1 }, laneOpens: 0, admission: NONE },

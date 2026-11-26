@@ -31,7 +31,7 @@ import { lstatSync, readFileSync, type Stats } from 'node:fs';
 import { compareCodeUnits } from './compare-code-units.js';
 import { fsFaultOf, isPathAbsentError } from './errors/errno-table.js';
 import { batchCheckOf, frameBatchRecord } from './git-cat-file.js';
-import { type GitBytesRunResult, runGitBytes } from './git-run.js';
+import { type GitBytesRunResult, OBJECT_READ_ENV, runGitBytes } from './git-run.js';
 import type { GitSnapshotEntry, GitTreeKeyFailure } from './git-snapshot.js';
 import { decodeUtf8Exactly } from './text-content.js';
 
@@ -244,10 +244,11 @@ function parsePointer(bytes: Uint8Array): ParsedPointer | undefined {
 
 /**
  * The options a pass spawn runs with: from the root, `input` on stdin, the whole answer however
- * large (the runner clamps it to its own cap). Every spawn is counted `git.calls` by the runner.
+ * large (the runner clamps it to its own cap), and no replace ref answering for an object
+ * ({@link OBJECT_READ_ENV}). Every spawn is counted `git.calls` by the runner.
  */
-function overInput(repositoryRoot: string, input: string): { cwd: string; input: string; maxBuffer: number } {
-  return { cwd: repositoryRoot, input, maxBuffer: Number.MAX_SAFE_INTEGER };
+function overInput(repositoryRoot: string, input: string): { cwd: string; env: Record<string, string>; input: string; maxBuffer: number } {
+  return { cwd: repositoryRoot, env: { ...OBJECT_READ_ENV }, input, maxBuffer: Number.MAX_SAFE_INTEGER };
 }
 
 /** The pass's failure for one command git did not answer. */

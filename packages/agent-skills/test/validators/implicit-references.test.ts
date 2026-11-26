@@ -3,11 +3,12 @@
  * file references (backtick, bold, DOT, bare prose, @-prefix).
  */
 
+import { NO_GIT_MEMBERS, RunContentCache } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
+import { refuseAsyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
-import { extractImplicitReferences } from '../../src/validators/skill-validator.js';
+import { extractImplicitReferences, type ImplicitReference } from '../../src/validators/skill-validator.js';
 import {
   createSkillContent,
   createTransitiveSkillStructure,
@@ -31,6 +32,11 @@ function visitedSet(tempDir: string, ...extraFiles: string[]): Set<string> {
   return files;
 }
 
+/** {@link extractImplicitReferences} over a run's reader of its own, which reads from disk. */
+function implicitRefs(tempDir: string, unreferenced: readonly string[], visited: ReadonlySet<string>): Promise<ImplicitReference[]> {
+  return extractImplicitReferences(tempDir, unreferenced, visited, new RunContentCache(NO_GIT_MEMBERS));
+}
+
 /** Create a skill with a companion file, run extractImplicitReferences, return results */
 function detectCompanionRef(tempDir: string, skillBody: string) {
   createTransitiveSkillStructure(
@@ -38,7 +44,7 @@ function detectCompanionRef(tempDir: string, skillBody: string) {
     { [COMPANION_FILE]: COMPANION_CONTENT },
     createSkillContent(SKILL_FRONTMATTER, skillBody),
   );
-  return extractImplicitReferences(tempDir, [COMPANION_FILE], visitedSet(tempDir));
+  return implicitRefs(tempDir, [COMPANION_FILE], visitedSet(tempDir));
 }
 
 describe('extractImplicitReferences', () => {
@@ -56,14 +62,14 @@ describe('extractImplicitReferences', () => {
     ['@-prefixed', '\n# Skill\n\n@companion.md'],
     ['./prefixed', '\n# Skill\n\nSee ./companion.md'],
     ['sentence-ending period', '\n# Skill\n\nSee companion.md. This document has details.'],
-  ])('should detect %s file path', (_label, body) => {
-    const results = detectCompanionRef(getTempDir(), body);
+  ])('should detect %s file path', async (_label, body) => {
+    const results = await detectCompanionRef(getTempDir(), body);
 
     expect(results).toHaveLength(1);
     expect(results[0]?.referencedFile).toBe(COMPANION_FILE);
   });
 
-  it('should detect subdirectory path', () => {
+  it('should detect subdirectory path', async () => {
     const tempDir = getTempDir();
     const subPath = 'references/domain-template.md';
     createTransitiveSkillStructure(
@@ -72,7 +78,7 @@ describe('extractImplicitReferences', () => {
       createSkillContent(SKILL_FRONTMATTER, '\n# Skill\n\nSee `references/domain-template.md` for details.'),
     );
 
-    const results = extractImplicitReferences(tempDir, [subPath], visitedSet(tempDir));
+    const results = await implicitRefs(tempDir, [subPath], visitedSet(tempDir));
 
     expect(results).toHaveLength(1);
     expect(results[0]?.referencedFile).toBe(subPath);
@@ -82,15 +88,15 @@ describe('extractImplicitReferences', () => {
   // Non-matching tests
   // ---------------------------------------------------------------------------
 
-  it('should NOT match file path inside a URL', () => {
-    const results = detectCompanionRef(
+  it('should NOT match file path inside a URL', async () => {
+    const results = await detectCompanionRef(
       getTempDir(), '\n# Skill\n\nSee https://example.com/companion.md for docs.',
     );
     expect(results).toHaveLength(0);
   });
 
-  it('should NOT match substring of another filename', () => {
-    const results = detectCompanionRef(
+  it('should NOT match substring of another filename', async () => {
+    const results = await detectCompanionRef(
       getTempDir(), '\n# Skill\n\nSee not-companion.md for details.',
     );
     expect(results).toHaveLength(0);
@@ -100,7 +106,7 @@ describe('extractImplicitReferences', () => {
   // Edge cases
   // ---------------------------------------------------------------------------
 
-  it('should report multiple implicit references from one file', () => {
+  it('should report multiple implicit references from one file', async () => {
     const tempDir = getTempDir();
     createTransitiveSkillStructure(
       tempDir,
@@ -111,14 +117,14 @@ describe('extractImplicitReferences', () => {
       createSkillContent(SKILL_FRONTMATTER, '\n# Skill\n\nSee `alpha.md` and `beta.md` for details.'),
     );
 
-    const results = extractImplicitReferences(tempDir, ['alpha.md', 'beta.md'], visitedSet(tempDir));
+    const results = await implicitRefs(tempDir, ['alpha.md', 'beta.md'], visitedSet(tempDir));
 
     expect(results).toHaveLength(2);
     const files = results.map(r => r.referencedFile).sort((a, b) => a.localeCompare(b));
     expect(files).toEqual(['alpha.md', 'beta.md']);
   });
 
-  it('should find references in non-SKILL.md visited files', () => {
+  it('should find references in non-SKILL.md visited files', async () => {
     const tempDir = getTempDir();
     createTransitiveSkillStructure(
       tempDir,
@@ -129,8 +135,7 @@ describe('extractImplicitReferences', () => {
       createSkillContent(SKILL_FRONTMATTER, '\n# Skill\n\nSee [linked](./linked.md).'),
     );
 
-    const results = extractImplicitReferences(
-      tempDir, ['orphan.md'], visitedSet(tempDir, 'linked.md'),
+    const results = await implicitRefs(tempDir, ['orphan.md'], visitedSet(tempDir, 'linked.md'),
     );
 
     expect(results).toHaveLength(1);
@@ -149,16 +154,19 @@ describe('extractImplicitReferences', () => {
       createSkillContent(SKILL_FRONTMATTER, '\n# Skill\n\nSee `companion.md`.'),
     );
     const vanished = safePath.resolve(tempDir, 'gone.md');
-    expect(extractImplicitReferences(tempDir, [COMPANION_FILE], visitedSet(tempDir, 'gone.md'))).toHaveLength(1);
+    expect(await implicitRefs(tempDir, [COMPANION_FILE], visitedSet(tempDir, 'gone.md'))).toHaveLength(1);
     expect(vanished).not.toBe('');
 
     const skillMd = safePath.resolve(tempDir, 'SKILL.md');
-    await withSyncFsRefused('readFileSync', skillMd, 'EACCES', () => {
-      expect(() => extractImplicitReferences(tempDir, [COMPANION_FILE], visitedSet(tempDir))).toThrow(/EACCES/);
-    });
+    const restore = refuseAsyncFs('open', skillMd, 'EACCES');
+    try {
+      await expect(implicitRefs(tempDir, [COMPANION_FILE], visitedSet(tempDir))).rejects.toThrow(/EACCES/);
+    } finally {
+      restore();
+    }
   });
 
-  it('should return empty array when no implicit references found', () => {
+  it('should return empty array when no implicit references found', async () => {
     const tempDir = getTempDir();
     createTransitiveSkillStructure(
       tempDir,
@@ -166,12 +174,12 @@ describe('extractImplicitReferences', () => {
       createSkillContent(SKILL_FRONTMATTER, '\n# Skill\n\nNo mentions of any files here.'),
     );
 
-    const results = extractImplicitReferences(tempDir, ['orphan.md'], visitedSet(tempDir));
+    const results = await implicitRefs(tempDir, ['orphan.md'], visitedSet(tempDir));
 
     expect(results).toHaveLength(0);
   });
 
-  it('should NOT match when basename is ambiguous (multiple files with same name)', () => {
+  it('should NOT match when basename is ambiguous (multiple files with same name)', async () => {
     const tempDir = getTempDir();
     createTransitiveSkillStructure(
       tempDir,
@@ -182,17 +190,16 @@ describe('extractImplicitReferences', () => {
       createSkillContent(SKILL_FRONTMATTER, '\n# Skill\n\nSee `shared.md` for details.'),
     );
 
-    const results = extractImplicitReferences(
-      tempDir, ['dir1/shared.md', 'dir2/shared.md'], visitedSet(tempDir),
+    const results = await implicitRefs(tempDir, ['dir1/shared.md', 'dir2/shared.md'], visitedSet(tempDir),
     );
 
     expect(results).toHaveLength(0);
   });
 
-  it('should report correct line number', () => {
+  it('should report correct line number', async () => {
     const tempDir = getTempDir();
     const body = '\n# Skill\n\nLine 1.\nLine 2.\nLine 3.\nLine 4.\nSee `companion.md` here.';
-    const results = detectCompanionRef(tempDir, body);
+    const results = await detectCompanionRef(tempDir, body);
 
     expect(results).toHaveLength(1);
     // Frontmatter is 4 lines (---\nname: ...\ndescription: ...\n---) + body lines

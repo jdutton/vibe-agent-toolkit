@@ -2,7 +2,7 @@
  * A run's content cache over a tree key's members: a member is keyed by its git object name with
  * no read and no hash, read from git's object store only when its bytes are asked for, refused by
  * its object's size, and a missing object refuses only its own path. A run with no members reads
- * disk exactly as before. `readContentByKey` reads a key's bytes from where the key says they are.
+ * disk exactly as before.
  */
 
 import { chmodSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
@@ -21,7 +21,7 @@ import {
 import { __resetWorkCountersForTest, createTempDir, plantFiles, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { computeContentKey, formatContentKey, readContentByKey } from '../../src/content-key.js';
+import { computeContentKey, formatContentKey } from '../../src/content-key.js';
 import { NO_GIT_MEMBERS, POPULATION_PARSE_LIMITS, RunContentCache, type RunMembersSource } from '../../src/projection/content-cache.js';
 import { collectRealization } from '../../src/projection/realizations.js';
 import { type PopulationRun, withPopulationRun } from '../../src/projection/run-population.js';
@@ -198,24 +198,16 @@ describe('RunContentCache over members', () => {
   });
 });
 
-describe('readContentByKey', () => {
-  it('reads a git key\'s object from the repository holding the path', async () => {
-    autocrlfCheckout();
-    const key = formatContentKey({ parserKind: 'markdown', keyKind: 'git-sha1', hex: oidOf(DOC) });
+describe('RunContentCache stats over members', () => {
+  it('counts a member read from git as a miss, as a disk read is, and its second ask as a hit', async () => {
+    committed({ [DOC]: LF_TEXT });
+    const cache = new RunContentCache(treeMembers());
 
-    const keyed = await readContentByKey(safePath.join(dir, DOC), key, objects);
+    await cache.read(safePath.join(dir, DOC), 'markdown');
+    await cache.read(safePath.join(dir, DOC), 'markdown');
 
-    expect(keyed).toMatchObject({ key, content: LF_TEXT, parserKind: 'markdown', byteLength: LF_TEXT.length });
-    expect(readCounts()).toMatchObject({ read: 0, hashed: 0, gitRead: 1 });
-  });
-
-  it('reads a sha256 key\'s file from disk and keys it again, so a changed file says so', async () => {
-    plantFiles(dir, { [DOC]: LF_TEXT });
-    const key = computeContentKey(Buffer.from(LF_TEXT), 'markdown');
-
-    expect((await readContentByKey(safePath.join(dir, DOC), key, objects)).key).toBe(key);
-    writeFileSync(safePath.join(dir, DOC), CRLF_TEXT);
-    expect((await readContentByKey(safePath.join(dir, DOC), key, objects)).key).not.toBe(key);
+    expect(readCounts()).toMatchObject({ read: 0, gitRead: 1 });
+    expect(cache.stats).toMatchObject({ misses: 1, hits: 1, entries: 1 });
   });
 });
 

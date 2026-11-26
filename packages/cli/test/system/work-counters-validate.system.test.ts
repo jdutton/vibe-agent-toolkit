@@ -317,6 +317,11 @@ function sortedEntries(counts: ReadonlyMap<string, number>): Array<[string, numb
   return [...counts].sort(([a], [b]) => a.localeCompare(b));
 }
 
+/** The total byte length of some corpus files, repository-relative. */
+function bytesOf(corpus: Corpus, paths: readonly string[]): number {
+  return paths.reduce((sum, path) => sum + Buffer.byteLength(corpus.files[path] ?? ''), 0);
+}
+
 /** Documents outside the project root (a skill with no project root): no population keys them. */
 function outsideDocuments(corpus: Corpus): string[] {
   return Object.keys(corpus.files).filter((path) => inProject(corpus, path) === undefined && isDocument(path));
@@ -451,6 +456,8 @@ describe.each([
     // are built for, so it is read and hashed from disk; nothing is read from git.
     expect(resources['content.read'], 'resources phase reads only the fallback SKILL.md files, from disk').toBe(fallback.resources.length);
     expect(resources['content.hashed'], 'resources phase hashes only the fallback SKILL.md files').toBe(fallback.resources.length);
+    // The bytes pin the set: another file of the same count would hash other bytes.
+    expect(resources['content.hashedBytes'], 'resources phase: exactly the fallback SKILL.md bytes').toBe(bytesOf(corpus, fallback.resources));
     expect(resources['content.gitRead'], 'resources phase reads nothing from git').toBe(0);
     expect(parseLookupsIn(resources), 'resources phase parse lookups: the fallback\'s only').toBe(fallback.resources.length);
     expect(resources['parse.cache.hit'], 'each fallback parse is a cache hit').toBe(fallback.resources.length);
@@ -475,6 +482,7 @@ describe.each([
     // per SKILL.md no earlier phase parsed.
     expect(skills['content.read'], `skills phase content.read = its fallback, from disk: ${fallback.skills.join(', ')}`).toBe(fallback.skills.length);
     expect(skills['content.hashed'], 'skills phase hashes only its fallback').toBe(fallback.skills.length);
+    expect(skills['content.hashedBytes'], 'skills phase: exactly the fallback bytes').toBe(bytesOf(corpus, fallback.skills));
     expect(skills['content.gitRead'], 'skills phase reads nothing from git').toBe(0);
     expect(parseLookupsIn(skills), 'skills phase parse lookups: the fallback\'s only').toBe(fallback.skills.length);
     expect(skills['skillText.storeMiss'], 'skills phase store misses: its fallback').toBe(fallback.skills.length);

@@ -13,15 +13,17 @@
  * a bundled file's text otherwise.
  */
 
-import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import {
+  isPlainUtf8Decoding,
   MARKDOWN_BY_CONTRACT,
+  NO_GIT_MEMBERS,
   type ParseDispatcher,
   readContentForParse,
   type ResourceLink,
   type ResourcePopulationSource,
+  RunContentCache,
   SKILL_TEXT_DECLARATION,
   skillTextFactsOf,
   type SkillTextFacts,
@@ -38,6 +40,13 @@ import { countWork, type FsSide, safePath, type TextProvenance, withFsFault } fr
 export interface SkillTextRun {
   readonly source: Pick<ResourcePopulationSource, 'storedDocument' | 'holdsStore'>;
   readonly dispatcher: ParseDispatcher;
+  /**
+   * The run's one content reader, which its dispatcher parses through: a lane that reads a file's
+   * bytes beside its parse (a linked file's raw scan, the implicit-reference scan) reads through it,
+   * so a member is read once per run, from git in a run that reads members from git, from disk in
+   * any other.
+   */
+  readonly content: RunContentCache;
   /**
    * One skill discovery crawl per key per run: the first caller's `crawl`, its rejection included,
    * handed to every later caller of the key. A run's phases discover the same include bases (`vat
@@ -64,8 +73,13 @@ const NO_STORE: SkillTextRun['source'] = { storedDocument: () => Promise.resolve
  */
 export function withSkillTextRun<T>(work: (run: SkillTextRun) => Promise<T>, run: SkillTextRun | undefined): Promise<T> {
   if (run !== undefined) return work(run);
-  // A run of one call: nothing to share a crawl with, so each crawls.
-  return withParseDispatcher((dispatcher) => work({ source: NO_STORE, dispatcher, crawlOnce: (_key, crawl) => crawl() }), { dispatcher: undefined });
+  // A run of one call: nothing to share a crawl with, so each crawls; no store, so no member reads
+  // from git, and its dispatcher parses through its own content reader.
+  const content = new RunContentCache(NO_GIT_MEMBERS);
+  return withParseDispatcher(
+    (dispatcher) => work({ source: NO_STORE, dispatcher, content, crawlOnce: (_key, crawl) => crawl() }),
+    { policy: { content } },
+  );
 }
 
 /** How a document's bytes were decoded: what the store's `blobs` row and a read's `KeyedContent` both say. */
@@ -165,36 +179,38 @@ export function scannedSkillText(file: string, text: string, run: SkillTextRun):
 }
 
 /**
- * Whether a document's bytes decode to exactly what a plain UTF-8 read of them
- * gives: UTF-8 assumed, with no BOM. A BOM-marked file (UTF-8 with a BOM,
- * UTF-16, UTF-32) decodes to other text than `readFileSync(path, 'utf-8')`.
- *
- * @param decoding - How the bytes were decoded
- * @returns `true` for plain UTF-8
- */
-function isPlainUtf8(decoding: SkillDocumentDecoding): boolean {
-  return decoding.encoding === 'utf-8' && decoding.encodingSource === 'assumed';
-}
-
-/**
  * The skill-text record a linked file's compat and MCP scans run over. The
  * validator's linked-file lane has always scanned the file's raw UTF-8 text
  * (`readFileSync(path, 'utf-8')`: a UTF-8 BOM kept, UTF-16 and UTF-32 left
  * undecoded), not its decoded content. For a plain UTF-8 file the two are the
  * same text, so the document's record serves. For any other file the lane
- * reads the raw text and scans it, as it always did: a `content.read` and a
- * scan ({@link countScan}), counted.
+ * scans the raw text, as it always did: the run's read of the file
+ * ({@link rawUtf8Text}, one read per file per run, a member's from git in
+ * a run that reads members from git) and a scan ({@link countScan}), counted.
  *
  * @param file - The linked file, absolute
  * @param document - Its document
  * @param run - The run
  * @returns The record to scan
  */
-export function linkedFileSkillText(file: string, document: SkillDocument, run: SkillTextRun): SkillTextFacts {
-  if (isPlainUtf8(document.decoding)) return document.skillText;
-  const raw = readFileSync(file, 'utf-8');
-  countWork('content.read', 1);
-  return scannedSkillText(file, raw, run);
+export async function linkedFileSkillText(file: string, document: SkillDocument, run: SkillTextRun): Promise<SkillTextFacts> {
+  if (isPlainUtf8Decoding(document.decoding)) return document.skillText;
+  return scannedSkillText(file, await rawUtf8Text(file, run.content), run);
+}
+
+/**
+ * A file's raw UTF-8 text, what `readFileSync(path, 'utf-8')` gives (a UTF-8 BOM kept, UTF-16 and
+ * UTF-32 left undecoded), from the run's one read of it: the text this package's raw scans (the
+ * linked-file lane's, the implicit-reference scan's) have always run over. Not a decode of the
+ * file's content: its content is the run's decoded read, and these scans deliberately do not use it.
+ *
+ * @param file - The file, absolute
+ * @param content - The run's content reader
+ * @returns The text
+ */
+export async function rawUtf8Text(file: string, content: RunContentCache): Promise<string> {
+  const { keyed, bytes } = await content.readWithBytes(file, MARKDOWN_BY_CONTRACT);
+  return bytes === null ? keyed.content : Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('utf-8');
 }
 
 /**

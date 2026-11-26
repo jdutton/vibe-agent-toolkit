@@ -177,12 +177,13 @@ export interface RunContentSource {
 }
 
 /**
- * The on-disk source, through the run's cache: the same bytes the base keyed.
+ * The run's source, through its content cache: the same bytes the base keyed, a git member's from
+ * git and any other file's from disk, one read per file per run.
  *
  * @param cache - The run's content cache
  * @returns The source
  */
-export function diskRunContentSource(cache: RunContentCache): RunContentSource {
+export function runContentSource(cache: RunContentCache): RunContentSource {
   return {
     read: async ({ absolutePath, contentKey }) => {
       const { parserKind } = contentKeyParts(contentKey);
@@ -214,6 +215,13 @@ export async function withPopulationRun<T>(
 ): Promise<T> {
   // One owner of the readers: this run. The members read through them, and so
   // does any lane of the run that reads a git-keyed blob.
+  //
+  // No AbortSignal, deliberately. The run has none to pass: nothing upstream of it
+  // cancels a run, and its other children (the dispatcher's pool) die with the
+  // process too. A signal of its own would need a SIGINT handler in every run, and
+  // installing one changes how the process dies (node:sqlite then outlives a
+  // SIGINT; see `handleTerminatingSignals`). The readers need none to end: each
+  // `cat-file` child exits on stdin EOF when vat dies, and `finally` closes them.
   const objects = openGitObjectReaders({});
   // The dispatcher parses through the run's content cache, so a file any lane
   // parses by path is read once per run whichever lane read it first.

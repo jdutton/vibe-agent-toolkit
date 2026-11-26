@@ -4,12 +4,27 @@
  * suite.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { isVatError } from '../src/errors/vat-error.js';
 import { gitMembersOf } from '../src/git-members.js';
 import { GitObjectMissingError, type GitObjectReaders } from '../src/git-object-reader.js';
+import type * as GitRunModule from '../src/git-run.js';
 import type { GitSnapshotEntry, GitTreeKey } from '../src/git-snapshot.js';
+
+/** What the partial-clone probe's `git config` answers, by its second argument (`--get`, `--get-regexp`). */
+const config = vi.hoisted(() => ({ answers: new Map<string, GitRunModule.GitRunResult>() }));
+
+vi.mock('../src/git-run.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof GitRunModule>();
+  return {
+    ...actual,
+    runGit: (args: readonly string[], options?: GitRunModule.GitRunOptions): GitRunModule.GitRunResult => {
+      const answer = args[0] === 'config' ? config.answers.get(args[1] ?? '') : undefined;
+      return answer ?? actual.runGit(args, options);
+    },
+  };
+});
 
 const ROOT = '/repo';
 const SHA1 = (digit: string): string => digit.repeat(40);
@@ -125,6 +140,43 @@ describe('gitMembersOf', () => {
     const refused = await members?.sizeOf({ oid: SHA1('7'), keyKind: 'git-sha1' }).then(() => undefined, (error: unknown) => error);
     expect(refused).toBeInstanceOf(Error);
     expect(isVatError(refused)).toBe(false);
+  });
+
+  describe('on a git before 2.45, which cannot refuse a lazy fetch', () => {
+    const notSet: GitRunModule.GitRunResult = { ok: false, status: 1, stdout: '', stderr: '' };
+    const set: GitRunModule.GitRunResult = { ok: true, status: 0, stdout: 'origin', stderr: '' };
+    const failed: GitRunModule.GitRunResult = { ok: false, status: 128, stdout: '', stderr: 'fatal: bad config line 1' };
+    const old = (): GitObjectReaders => ({ ...scripted(), guardsLazyFetch: () => false });
+    const at = (root: string): GitTreeKey => ({ ...keyOf([entry('a.md', SHA1('1'))]), repositoryRoot: root });
+    let warn: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      warn = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+      warn.mockRestore();
+      config.answers.clear();
+    });
+
+    it('has members when git says no partial-clone key is set', () => {
+      config.answers.set('--get', notSet).set('--get-regexp', notSet);
+      expect(gitMembersOf(at('/not-partial'), old())).not.toBeNull();
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it.for(['--get', '--get-regexp'])('has no members, and says it may be a partial clone, when the %s probe gives no answer', (probe) => {
+      config.answers.set('--get', notSet).set('--get-regexp', notSet).set(probe, failed);
+      expect(gitMembersOf(at(`/unknown${probe}`), old())).toBeNull();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toContain('may be a partial clone');
+    });
+
+    it('notices once per repository, not once per process', () => {
+      config.answers.set('--get', set);
+      for (const root of ['/partial-one', '/partial-two', '/partial-one']) expect(gitMembersOf(at(root), old()), root).toBeNull();
+      expect(warn.mock.calls.map((call: unknown[]) => String(call[0]).split(' ')[0])).toStrictEqual(['"/partial-one"', '"/partial-two"']);
+    });
   });
 
   it('reads a member\'s bytes through the reader it was given', async () => {

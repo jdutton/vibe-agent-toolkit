@@ -1123,8 +1123,21 @@ type SeedExpectation =
    * git's stored bytes do not. Store-on keys and reads git's bytes, so `arm` is served exactly
    * what its prime derived ({@link expectCheckoutStable}); store-off reads the working tree and
    * may differ in its dump, though never in which paths it realizes.
+   *
+   * `storeOffReads` says how the measured tree's disk bytes stand to git's, which decides what the
+   * dump may differ in: `'git bytes'` when the checkout holds exactly git's stored bytes, so the
+   * dumps agree outright; `{ otherBytes }` when it does not, so the dumps MUST differ, and only in
+   * the blob-scoped relations, the {@link KEY_MOVED_COLUMNS} and the path-scoped relations named
+   * in `parsedRelations`: those derived from what was parsed (a filter that stores a pointer in
+   * place of the text leaves store-on no links to resolve). Required: only the seed knows.
    */
-  | { readonly checkoutStable: { readonly arm: ArmName; readonly because: string } };
+  | {
+    readonly checkoutStable: {
+      readonly arm: ArmName;
+      readonly because: string;
+      readonly storeOffReads: 'git bytes' | { readonly otherBytes: { readonly parsedRelations: readonly string[] } };
+    };
+  };
 
 /** The recorded runs, by label and verb. */
 export type RecordedRuns = Readonly<Partial<Record<RunLabel, Readonly<Partial<Record<VerbName, RunRecord>>>>>>;
@@ -2233,16 +2246,42 @@ function expectStaleServed(result: DifferentialResult, stale: { readonly arm: Ar
   }
 }
 
-function expectCheckoutStable(result: DifferentialResult, arm: ArmName): void {
+/**
+ * A checkout-stable seed's claim ({@link SeedExpectation}'s `checkoutStable`): the arm is served, it
+ * serves exactly its prime's dump, and that dump differs from store-off's only as `storeOffReads`
+ * allows.
+ *
+ * @param result - The recorded runs
+ * @param stable - The arm, and how the measured checkout's bytes stand to git's
+ */
+function expectCheckoutStable(result: DifferentialResult, stable: Extract<SeedExpectation, { checkoutStable: unknown }>['checkoutStable']): void {
+  const { arm, storeOffReads } = stable;
   for (const verb of result.verbs) {
     const run = result.measured[arm][verb];
     if (run === undefined) throw new Error(`no ${arm} run of ${verb}`);
     expect(storeCharges(run), `${arm} ${verb} must be served`).toEqual([CRAWL_STORE_READ_ID]);
     expectOrigin(run, 'store');
   }
-  // Store-off reads the working tree, so it may answer otherwise: a clean filter stores other
-  // bytes, and every fact parsed from them (edges, tags) differs. Only the dump may differ.
-  for (const divergence of divergences(result).filter((found) => found.arm === arm)) expect(divergence.verb).toBe('query');
+  // Store-off reads the working tree. Where it holds git's bytes the two agree outright. Where it
+  // does not, the key that names the bytes moves, and so does every blob-scoped fact parsed from
+  // them and every path-scoped fact the seed names as parsed: only the dump may differ, and in it
+  // nothing else. Any other path-scoped relation that differs is a store-on defect, whatever its
+  // prime agreed to, since the warm-equals-prime check below compares store-on with store-on.
+  const found = divergences(result).filter((divergence) => divergence.arm === arm);
+  if (storeOffReads === 'git bytes') {
+    expect(found, `${arm}: the checkout holds git's bytes, so store-off answers as store-on does`).toEqual([]);
+  } else {
+    const allowed = new Set([
+      ...DUMPED_RELATIONS.filter((relation) => relation.blobScoped).map((relation) => relation.name),
+      ...Object.keys(KEY_MOVED_COLUMNS),
+      ...storeOffReads.otherBytes.parsedRelations,
+    ]);
+    expect(found.length, `${arm}: store-off reads other bytes, so the dump differs`).toBeGreaterThan(0);
+    for (const divergence of found) {
+      expect(divergence.verb).toBe('query');
+      expect(divergence.relations.filter((name) => !allowed.has(name)), `${arm}: only what the bytes decide diverges`).toEqual([]);
+    }
+  }
   const reference = result.measured.storeOff.query;
   const warm = result.measured[arm].query;
   const primed = result.runs[`${arm}:prime`]?.query;
@@ -2273,7 +2312,7 @@ export function expectSeed(seed: I0Seed, result: DifferentialResult): void {
   else if ('agreesAndMisses' in expectation) expectAgreesAndMisses(result, expectation.agreesAndMisses.arm);
   else if ('editServed' in expectation) expectEditServed(result, expectation.editServed.arm, expectation.editServed.storeOffReadsOtherBytes);
   else if ('staleServed' in expectation) expectStaleServed(result, expectation.staleServed);
-  else expectCheckoutStable(result, expectation.checkoutStable.arm);
+  else expectCheckoutStable(result, expectation.checkoutStable);
   const consumed: Partial<Record<RunLabel, Partial<Record<VerbName, RunRecord>>>> = {};
   for (const label of seed.consumed.runs) {
     const runs = result.runs[label];

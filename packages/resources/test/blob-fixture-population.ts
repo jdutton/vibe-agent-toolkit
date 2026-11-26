@@ -28,7 +28,7 @@ import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/proj
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { type BlobStage, populate } from '../src/projection/merge.js';
 import { ProjectionBuilder, type Projection } from '../src/projection/projection.js';
-import { diskRunContentSource } from '../src/projection/run-population.js';
+import { runContentSource } from '../src/projection/run-population.js';
 import { EMPTY_STORED_TIER } from '../src/projection/store-hydration.js';
 import { storedTierReads } from '../src/projection/stored-reads.js';
 import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
@@ -139,7 +139,7 @@ export function populateBlobsOnOwnDispatcher(
 ): Promise<BlobPopulationResult> {
   return withParseDispatcher((dispatcher) => populateBlobs(builder, {
     dispatcher,
-    content: diskRunContentSource(builder.base().contentCache),
+    content: runContentSource(builder.base().contentCache),
     stored: EMPTY_STORED_TIER,
   }), dispatch);
 }
@@ -153,5 +153,5 @@ export function populateBlobsOnOwnDispatcher(
  * @returns The stage
  */
 export function storeOffBlobStage(builder: ProjectionBuilder, dispatcher: ParseDispatcher): BlobStage {
-  return { dispatcher, content: diskRunContentSource(builder.base().contentCache), tier: storedTierReads(undefined) };
+  return { dispatcher, content: runContentSource(builder.base().contentCache), tier: storedTierReads(undefined) };
 }

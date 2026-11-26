@@ -44,6 +44,7 @@ vi.mock('../src/git-snapshot.js', async (importOriginal) => {
 
 const { GIT_FAILED_CODE, GIT_SNAPSHOT_INDEX_HIDES_CODE, gitSnapshotFailureOf } = await import('../src/git-no-answer.js');
 const { gitTreeKey } = await import('../src/git-tree-key.js');
+const { safePath } = await import('../src/path-utils.js');
 
 /** A listing git wrote, exit 0. */
 function listed(bytes: Uint8Array): GitRunModule.GitBytesRunResult {
@@ -105,7 +106,7 @@ describe('gitTreeKey over a scripted flag listing', () => {
     const key = gitTreeKey({ cwd: ROOT });
     if (!key.ok) throw new Error(`declined: ${gitSnapshotFailureOf(key).reason}`);
     expect(key.hash).not.toBe(SNAPSHOT.hash);
-    expect(key.absent).toStrictEqual(new Set([`${ROOT}/gone.md`]));
+    expect(key.absent).toStrictEqual(new Set([safePath.resolve(ROOT, 'gone.md')]));
     script(entries(['H', 'a.md'], [tag, 'other.md']));
     const other = gitTreeKey({ cwd: ROOT });
     expect(other.ok && other.hash, 'another absent set, another key').not.toBe(key.hash);

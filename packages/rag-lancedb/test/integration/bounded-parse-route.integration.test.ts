@@ -70,7 +70,7 @@ async function admitted(
  * @returns The index result
  */
 async function indexedOne(resources: Awaited<ReturnType<typeof admitted>>): Promise<Awaited<ReturnType<LanceDBRAGProvider['indexResources']>>> {
-  const result = await suite.provider?.indexResources(resources, suite.objects);
+  const result = await suite.provider?.indexResources(resources, suite.content);
   if (result === undefined) throw new Error('the suite created no provider');
   expect(result.errors).toStrictEqual([]);
   expect(result.resourcesIndexed).toBe(1);

@@ -41,7 +41,7 @@ describe('LanceDBRAGProvider - Database Size Calculation', () => {
 
     // Create and index test resource
     const resource = await createTestResource(testFilePath);
-    await suite.provider.indexResources([resource], suite.objects);
+    await suite.provider.indexResources([resource], suite.content);
 
     // Get stats
     const stats = await suite.provider.getStats();

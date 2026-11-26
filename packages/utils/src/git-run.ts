@@ -111,6 +111,13 @@ const PATHSPEC_ENV: Readonly<Record<string, string>> = {
 };
 
 /**
+ * Set for every read of git's object store by object name (`cat-file --batch`, `--batch-check`):
+ * without it git answers a name with its `refs/replace/*` replacement's bytes under the name asked,
+ * so the bytes would not hash to the name that keys them, and no framing check can see it.
+ */
+export const OBJECT_READ_ENV: Readonly<Record<string, string>> = { GIT_NO_REPLACE_OBJECTS: '1' };
+
+/**
  * The env object a call hands the spawn, layered over the inherited (scrubbed) one.
  *
  * @param options - The call's options

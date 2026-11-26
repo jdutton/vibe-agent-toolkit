@@ -67,7 +67,7 @@ async function indexTwoDocuments(): Promise<LanceDBRAGProvider> {
   await provider.indexResources([
     await createTestResource(publicPath, PUBLIC_DOC),
     await createTestResource(restrictedPath, RESTRICTED_DOC),
-  ], suite.objects);
+  ], suite.content);
 
   return provider;
 }

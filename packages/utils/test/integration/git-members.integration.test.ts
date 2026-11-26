@@ -90,7 +90,8 @@ describe('gitMembersOf over a real repository', () => {
       git(dir, 'config', 'remote.origin.promisor', 'true');
     });
 
-    it('has no members on a git before 2.45, noticed once per process', async () => {
+    // The notice is remembered per repository, and this test's repository is its own: order-independent.
+    it('has no members on a git before 2.45, noticed once for the repository', async () => {
       const warn = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
       const old = openGitObjectReaders({ gitVersion: [2, 44] });
       try {

@@ -303,6 +303,7 @@ export { relativize } from './projection/root-relative-path.js';
 // lifetime is one `ProjectionBuilder`, because two populations of a changed tree
 // sharing bytes would describe the wrong corpus confidently.
 export {
+  isPlainUtf8Decoding,
   NO_GIT_MEMBERS,
   RunContentCache,
   readKeyedContent,
@@ -508,7 +509,6 @@ export {
   isParsableContent,
   orderContentKeys,
   parseContentKey,
-  readContentByKey,
   readContentWithKey,
   type ContentKey,
   type ContentKeyParts,
@@ -1012,8 +1012,8 @@ export {
 // One read, key, parse and admission per file per VAT process run, whichever
 // lane asks (content-keying-and-git.md, rule 4).
 export {
-  diskRunContentSource,
   IGNORE_HOME_SETTLEMENT,
+  runContentSource,
   RunPopulation,
   StoreQuestionUnavailableError,
   withPopulationRun,

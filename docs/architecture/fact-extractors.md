@@ -58,7 +58,7 @@ artifact is uncacheable; exempt: the plugin conformance record's runtime tuple
 *Enforcer:* an observed-inputs instrument shows every input is in the key or the
 stored trace; moving each input class alone must miss.
 
-- **I2a. Content is the bytes used.** The content key hashes the working-tree bytes alone: no parser kind, path, origin, commit, git OID or cleaned blob. Every byte a producer or stratum consumes is re-hashed at use; a mismatch refuses the pair and writes nothing. A stat-tuple match is trusted only under git's racy rule. *Fails:* rows filed under bytes other than those read. *Enforcer:* a planning-to-use race test; a stat-seam re-hash test. *Amended 2026-11-19; see [Amendment 2026-11-19](#amendment-2026-11-19-content-identity-per-source).*
+- **I2a. Content is the bytes used.** The content key hashes the working-tree bytes alone: no parser kind, path, origin, commit, git OID or cleaned blob. Every byte a producer or stratum consumes is re-hashed at use; a mismatch refuses the pair and writes nothing. A stat-tuple match is trusted only under git's racy rule. *Fails:* rows filed under bytes other than those read. *Enforcer:* a planning-to-use race test; a stat-seam re-hash test. *Amended 2026-11-19, and 2026-11-24 for snapshot members keyed by object id; see [Amendment 2026-11-19](#amendment-2026-11-19-content-identity-per-source).*
 - **I2b. Code identity is the code that runs:** the closure loaded from a phase's entry modules, lazy imports included, hashed from compiled source, plus the runtime tuple; never the host's whole closure, a lockfile or a version. A warm hit validates it without importing. *Fails:* rows keyed under code that did not make them, or a rebuild missing everything. *Enforcer:* code edits, both ways: code that runs misses, code that does not run never does.
 
 **I3. One answer to "is this pair present".** One per-pair answer for every consumer: statements,
@@ -183,27 +183,42 @@ This ADR changes as follows; each old choice becomes a rejected alternative.
 - **I2a, content key.** Was (before 2026-11-19): the content key hashes the working-tree bytes
   alone, never a git OID or cleaned blob, and every consumed byte is re-hashed at use. Was
   (2026-11-19): a file git holds (tracked, unmodified since the index) is identified by its git blob
-  object id, any other file by VAT's content key. Now (2026-11-24): in a run whose tree git keyed, a
-  **snapshot member** is keyed by the object id its repository's dirty-corrected snapshot reports,
+  object id, any other file by VAT's content key. Now (2026-11-24, build lanes amended 2026-11-26):
+  in a cached validation run whose tree git keyed, a **snapshot member** is keyed by the object id its repository's dirty-corrected snapshot reports,
   of kind `git-sha1` or `git-sha256` by the repository's object format, and its bytes are read from
   that repository's object store by that id, never from disk. A snapshot member is every regular-file
-  path (`100644`, `100755`) the snapshot lists, tracked or untracked and not ignored, except an
-  absent skip-worktree entry and a path the key reads as a Git LFS pointer; those, and every other
-  file the run reads, are keyed by SHA-256 of the bytes read from disk (kind `sha256`). A path is a
+  path (`100644`, `100755`) the snapshot lists inside the root the store keys, tracked or untracked
+  and not ignored (`git add --all` stages an untracked file no ignore rule covers), except an absent
+  skip-worktree entry and a path the key reads as a Git LFS pointer; those, a file outside the run's
+  root even when the snapshot lists it, and every other file the run reads, are keyed by SHA-256 of
+  the bytes read from disk (kind `sha256`). On a git older than 2.45 a partial clone has no members,
+  so a read can never lazy-fetch: every file is keyed from disk, with the
+  `VAT_GIT_MEMBERS_PARTIAL_CLONE` notice once per repository. A path is a
   member only at the spelling the snapshot gives it. The tree is not keyed, and its run is uncached,
   when a skip-worktree file is on disk inside a directory a sparse index holds collapsed, when two
-  snapshot paths are one file on the volume (same `dev` and `ino`), or when an LFS path is in neither
+  snapshot paths may be one file on the volume (one `dev` and the same `ino`, or an `ino` of 0, which
+  cannot prove them distinct), or when an LFS path is in neither
   pulled nor pointer state. The parser kind qualifies a key and is never hashed. One byte string under
   one parser kind has at most one key per key kind. The run's manifest is the only source of a file's
-  identity for every lane. The lanes that use a member's facts or offsets read its object-store bytes:
-  parsing, the packager's markdown link rewrite and RAG indexing. Plain copies in `vat build` still
-  copy working-tree bytes, which differ from the blob only under eol conversion or a clean filter. A
-  member needs no re-hash at use: its bytes come from the object store under the id that names them,
+  identity for every lane. Every lane reads through the run's one content cache. Every object read
+  runs with `GIT_NO_REPLACE_OBJECTS=1`, so a replace ref never answers for an object id. The build
+  lanes read disk by owner ruling: `vat skills build`, `vat skills package`, `vat build`'s skills
+  lane, `vat claude plugin build`, `vat skill test run`, the packager's link rewrite and its plain
+  copies, and `vat rag index` have no members; they read every file from the working tree and key it
+  by its disk checksum, one read per file per build, through the run's content cache. A build ships
+  working-tree bytes (CRLF on an autocrlf checkout), and its link rewrite uses facts parsed from those
+  same bytes.
+  A member needs no re-hash at use: its bytes come from the object store under the id that names them,
   and a missing object makes that one path unreadable while the run continues. A member's facts
   describe its blob, so a file whose meaning exists only after a smudge filter other than Git LFS is
-  extracted as its stored form. A store-off run keys every file from disk. Rejected: SHA-256 of a
-  member's disk bytes beside its object id; reading members from disk; a table mapping object ids to
-  SHA-256 keys.
+  extracted as its stored form; non-LFS filters are out of scope by owner ruling. A store-off run keys
+  every file from disk. Rejected: SHA-256 of a member's disk bytes beside its object id; reading a
+  validation run's members from disk; a build shipping git's stored form, because a build ships what
+  the developer sees on disk; a second content reader beside the run's cache; a table mapping object
+  ids to SHA-256 keys. Rejected (the 2026-11-19 choice):
+  keying only tracked files unmodified since the index by object id, because the dirty-corrected
+  snapshot already hashed every edited and untracked file it lists, so keying them again from disk
+  reads and hashes them a second time.
 - **Normalization beneath an unchanged tree hash.** Was: an open hole until the stat memo lands.
   Now: outside what VAT supports; VAT does not defend against normalization differences. Rejected:
   closing the hole for files whose meaning depends on normalization.
@@ -223,16 +238,20 @@ This ADR changes as follows; each old choice becomes a rejected alternative.
 
 Built: the one-read rule, as one admission per VAT process run (`RunContext`, `RunPopulation`, and
 registry views per phase; see [content keying](./content-keying-and-git.md)), for `vat validate`,
-`vat verify`, `vat resources validate`, `vat skills validate` and `vat resources scan`; `vat rag index`
-admits through one run but its index step re-reads each file, and `vat audit`, `vat skills build`,
-`vat claude plugin build` and `vat ard emit` are not covered yet. Store hydration is built for the
+`vat verify`, `vat resources validate`, `vat skills validate`, `vat resources scan`, and the build
+lanes `vat skills build`, `vat skills package`, `vat claude plugin build`, `vat skill test run` and
+`vat rag index` (each opens its run before skill discovery, so a file is read once);
+`vat audit` and `vat ard emit` are not covered yet. Store hydration is built for the
 resources view: on a warm store hit each member is admitted from its stored blob facts
 (`stored-admission.ts`) with no read, hash or parse; skill discovery and the skills phase are served
 from stored `skill_text` facts (`skill_text_facts`, `skill_text_matches`), which the markdown parse
 job computes beside the other markdown blob facts, with a per-file fallback that reads and scans a
-file the store does not serve, counted as `skillText.storeMiss`. Not built: the git-OID path
-(planned with incremental repopulation) and I2's runtime tuple in the parse-cache and blob keys (a
-namespace carries the VAT version only).
+file the store does not serve, counted as `skillText.storeMiss`. Built: snapshot members keyed by
+object id and read from git's object store in the cached validation lanes (I2a, amended
+2026-11-24), and the build lanes reading every file from disk through the run's content cache (I2a,
+amended 2026-11-26).
+Not built: incremental repopulation, and I2's runtime tuple
+in the parse-cache and blob keys (a namespace carries the VAT version only).
 
 ## How this ADR changes
 

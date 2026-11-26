@@ -3,7 +3,8 @@
  * run's skill discovery and the plugin-local name lookup both parse, is read
  * exactly once at the `node:fs` boundary with the projection store off. With the
  * store on it is a git member, keyed by its object and served from the store the
- * build filled, so the boundary never opens it.
+ * build filled, so the boundary sees it opened once, for its readability probe (an
+ * open and a close, no bytes read), and never read.
  *
  * The companion of `work-counters-validate.system.test.ts` for `vat verify`,
  * whose in-process phases share one run (rule 4 of "Decision: content identity

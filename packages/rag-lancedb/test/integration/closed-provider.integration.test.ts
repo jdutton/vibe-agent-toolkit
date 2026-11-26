@@ -70,7 +70,7 @@ describe('LanceDBRAGProvider after close()', () => {
     const { a, provider } = await openWithResource();
     await provider.close();
 
-    const result = await provider.indexResources([a], suite.objects);
+    const result = await provider.indexResources([a], suite.content);
 
     expect(result.errors).toEqual([]);
     expect(result.resourcesIndexed).toBe(1);
@@ -83,7 +83,7 @@ describe('LanceDBRAGProvider after close()', () => {
 
   it('deleteResource() and getDocument() reach the tables', async () => {
     const { a, provider } = await openWithResource();
-    await provider.indexResources([a], suite.objects);
+    await provider.indexResources([a], suite.content);
     await provider.close();
 
     // "Not found" after a close was a lie: the row is there.

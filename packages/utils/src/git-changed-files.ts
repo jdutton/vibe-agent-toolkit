@@ -875,7 +875,7 @@ function bytesOf(subcommand: string, root: string, result: ReturnType<typeof run
 function diffRecords(root: string, from: string, to: string): { ok: true; records: GitNameStatusRecord[] } | Refusal {
   const listing = bytesOf('diff-tree', root, runGitBytes(['diff-tree', '-r', '-M', '-l0', '--name-status', '-z', from, to], { cwd: root }));
   if (listing.ok) return parseNameStatusZ(listing.stdout);
-  if (listing.kind !== 'repository' || !isPartialClone(root)) return listing;
+  if (listing.kind !== 'repository' || isPartialClone(root) !== true) return listing;
   return {
     ok: false,
     kind: 'repository',
@@ -884,12 +884,29 @@ function diffRecords(root: string, from: string, to: string): { ok: true; record
   };
 }
 
-/** Whether the repository is a partial clone: `extensions.partialClone` or any `remote.<name>.promisor` set. */
-export function isPartialClone(root: string): boolean {
-  const extension = runGit(['config', '--get', 'extensions.partialClone'], { cwd: root });
-  if (extension.ok && extension.stdout !== '') return true;
-  const promisor = runGit(['config', '--get-regexp', String.raw`^remote\..*\.promisor$`], { cwd: root });
-  return promisor.ok && promisor.stdout !== '';
+/**
+ * Whether one `git config --get`-style probe found its key: `undefined` when git gave no answer.
+ * git exits 1, with nothing to say, for a key that is not set; anything else that is not success is
+ * no answer.
+ */
+function configSet(root: string, args: readonly string[]): boolean | undefined {
+  const probe = runGit(['config', ...args], { cwd: root });
+  if (probe.ok) return probe.stdout !== '';
+  return probe.status === 1 && probe.error === undefined && probe.stderr === '' ? false : undefined;
+}
+
+/**
+ * Whether the repository is a partial clone: `extensions.partialClone` or any `remote.<name>.promisor` set.
+ *
+ * @returns `undefined` when git could not say: a caller that must not lazy-fetch treats that as a
+ *   partial clone
+ */
+export function isPartialClone(root: string): boolean | undefined {
+  const extension = configSet(root, ['--get', 'extensions.partialClone']);
+  if (extension === true) return true;
+  const promisor = configSet(root, ['--get-regexp', String.raw`^remote\..*\.promisor$`]);
+  if (promisor === true) return true;
+  return extension === undefined || promisor === undefined ? undefined : false;
 }
 
 /** The fix for a merge base a shallow history cannot vouch for. */

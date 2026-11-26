@@ -935,6 +935,29 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Fix:** capture git's stderr into the refusal, and make the store's warning name the real
   failure.
 
+### Validation reads a filtered member in git's stored form, not the working tree's
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** yes
+- **Status:** out of scope by owner ruling. VAT neither refuses nor declines for a non-LFS
+  filter; the key's `check-attr filter` pass uses the value only to tell LFS paths apart.
+- **Mechanism:** with the projection store on, the cached validation lanes (`vat validate`,
+  `vat resources query` and `check`, `vat claude context`, inventory) read each member's bytes from
+  git's object store. A filter that transforms content between the blob and the working tree
+  therefore changes what VAT sees:
+  - a git-crypt checkout (unlocked): validation reads the ciphertext, so markdown parses as noise,
+    its links are not found, and link checks pass with nothing to check;
+  - `working-tree-encoding` (for example UTF-16): VAT reads the blob's encoding (UTF-8), not the
+    working tree's;
+  - `ident`: VAT sees the collapsed `$Id$`.
+
+  Build lanes and `vat rag index` read the working tree, so they are not affected.
+- **Reproduce:** in a git-crypt repository, unlock, run `vat validate` with the store on: a
+  broken link in an encrypted markdown file is not reported.
+- **Where:** [`git-members.ts`](../../packages/utils/src/git-members.ts) (membership),
+  [`git-lfs.ts`](../../packages/utils/src/git-lfs.ts) (the `check-attr filter` pass)
+- **Fix:** if it comes back into scope, exclude a path whose `filter` attribute is set (any value,
+  not only `lfs`) from members, so it is read and keyed from disk.
+
 ## Windows
 
 ### `isSingleFsSegment` does not consider Win32 name normalisation

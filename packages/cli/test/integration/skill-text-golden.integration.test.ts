@@ -130,7 +130,7 @@ function thisTree(root: string): SkillsLane {
   const { defaults, config: perSkill } = skillsConfig;
   return {
     root,
-    withRun: (work) => withRunContext({ projectionStore: 'on-demand', root, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) => work({
+    withRun: (work) => withRunContext({ memberBytes: 'git', projectionStore: 'on-demand', root, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) => work({
       discover: () => discoverSkillsFromConfig(skillsConfig, root, 'refuse', run.population),
       sharedContext: (listed, discovered) => buildSharedValidationContext(
         validatedSkillsOf(listed),
@@ -195,10 +195,11 @@ describe('the skills phase reproduces the skill-text golden', () => {
     expect(textWork(configFreeMoved)).toEqual({
       'skillText.storeMiss': NOT_PLAIN_UTF8_LINKED.length,
       'skillText.noStore': 0,
-      // The bundled-resource check reads each SKILL.md by its key, a git member's from git; the
-      // not-plain linked files are scanned raw from disk.
-      'content.read': NOT_PLAIN_UTF8_LINKED.length,
-      'content.gitRead': BUNDLED_UNLINKED.length,
+      // Every read goes through the run's one reader, which reads a git member from git: the
+      // bundled-resource check's read of each SKILL.md by its key, and the raw scan of each
+      // not-plain linked file. Nothing is read from disk.
+      'content.read': 0,
+      'content.gitRead': BUNDLED_UNLINKED.length + NOT_PLAIN_UTF8_LINKED.length,
       'parse.dispatched': 0,
     });
   });

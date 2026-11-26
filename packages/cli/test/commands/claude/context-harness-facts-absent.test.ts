@@ -33,6 +33,7 @@ vi.mock('@vibe-agent-toolkit/resources', async (importOriginal) => {
 vi.mock('../../../src/utils/projection-store.js', () => ({
   withPopulationCache: (_options: unknown, run: (cache: undefined) => Promise<unknown>) => run(undefined),
   // No store, so no members: every file keys from disk.
+  projectionStoreSelected: () => false,
   storeMembersOf: () => null,
 }));
 

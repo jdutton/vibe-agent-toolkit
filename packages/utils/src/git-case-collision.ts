@@ -9,8 +9,10 @@
  *
  * The rule is exact per pair, never a guess from the platform: the snapshot's paths are folded in
  * memory by `foldedSegment` (stricter than any one volume), and only a pair that folds alike is
- * asked of the volume, by an `lstat` of both absolute spellings. It collides when both exist and
- * share `dev` and `ino`. No pair that folds alike costs no `lstat`.
+ * asked of the volume, by an `lstat` of each absolute spelling (once per spelling). Every pair within
+ * a fold group is compared. A pair collides when both exist on one `dev` and share `ino`, or when
+ * either reports `ino` 0 (some SMB and FAT volumes): such a volume cannot prove two spellings
+ * apart, so they may be one file. No pair that folds alike costs no `lstat`.
  */
 
 import { lstatSync } from 'node:fs';
@@ -41,14 +43,32 @@ export function lstatIdentity(absolutePath: string): FileIdentity | undefined {
   }
 }
 
-/** Whether two identities name one file: both known, same volume and inode (an inode of 0 proves nothing). */
-function sameFile(left: FileIdentity | undefined, right: FileIdentity | undefined): boolean {
-  if (left === undefined || right === undefined || left.ino === 0n) return false;
-  return left.dev === right.dev && left.ino === right.ino;
+/**
+ * Whether two identities may name one file: both known, on one volume, and one inode, or an inode of
+ * 0 on either side, which cannot prove them apart.
+ */
+function mayBeOneFile(left: FileIdentity | undefined, right: FileIdentity | undefined): boolean {
+  if (left === undefined || right === undefined) return false;
+  if (left.dev !== right.dev) return false;
+  return left.ino === 0n || right.ino === 0n || left.ino === right.ino;
+}
+
+/** The first pair of `group` (snapshot order) that may be one file; each spelling is asked of the volume once. */
+function collisionIn(
+  group: ReadonlyArray<{ readonly absolutePath: string; readonly gitPath: string }>,
+  identityOf: (absolutePath: string) => FileIdentity | undefined,
+): readonly [string, string] | undefined {
+  const identities = group.map((entry) => identityOf(entry.absolutePath));
+  for (let right = 1; right < group.length; right++) {
+    for (let left = 0; left < right; left++) {
+      if (mayBeOneFile(identities[left], identities[right])) return [group[left]?.gitPath ?? '', group[right]?.gitPath ?? ''];
+    }
+  }
+  return undefined;
 }
 
 /**
- * The first pair of snapshot paths that fold alike and name one file on disk.
+ * The first pair of snapshot paths that fold alike and may name one file on disk.
  *
  * @param entries - The snapshot's entries
  * @param identityOf - The volume's answer for one absolute path ({@link lstatIdentity})
@@ -67,16 +87,18 @@ export function caseCollisionOf(
     }
     return folded;
   };
-  const seen = new Map<string, { readonly absolutePath: string; readonly gitPath: string }>();
+  const groups = new Map<string, Array<{ readonly absolutePath: string; readonly gitPath: string }>>();
   for (const entry of entries) {
     // A git path is `/`-separated by git's own contract: fold each segment between the slashes.
     const folded = entry.gitPath.replaceAll(/[^/]+/g, foldOf);
-    const other = seen.get(folded);
-    if (other === undefined) {
-      seen.set(folded, entry);
-    } else if (sameFile(identityOf(other.absolutePath), identityOf(entry.absolutePath))) {
-      return [other.gitPath, entry.gitPath];
-    }
+    const group = groups.get(folded);
+    if (group === undefined) groups.set(folded, [entry]);
+    else group.push(entry);
+  }
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const collision = collisionIn(group, identityOf);
+    if (collision !== undefined) return collision;
   }
   return undefined;
 }

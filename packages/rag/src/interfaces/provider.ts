@@ -5,8 +5,7 @@
  * Separates read operations (RAGQueryProvider) from write operations (RAGAdminProvider).
  */
 
-import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
-import type { GitObjectReaders } from '@vibe-agent-toolkit/utils/git';
+import type { ResourceMetadata, RunContentCache } from '@vibe-agent-toolkit/resources';
 
 import type { IndexResult } from '../schemas/admin.js';
 import type { CoreRAGChunk } from '../schemas/core-chunk.js';
@@ -182,11 +181,12 @@ export interface RAGAdminProvider<TMetadata extends Record<string, unknown> = De
    * - Skips unchanged resources
    *
    * @param resources - Resources to index
-   * @param objects - The caller's git object readers: a git-keyed resource's text is read from the
-   *   object its key names, through them. The caller owns and closes them
+   * @param content - The run's content reader that admitted `resources`: each resource's text is
+   *   read through it, so the text indexed is the run's one read of the file, the bytes its facts
+   *   were parsed from
    * @param onProgress - Optional callback for progress updates (called after each resource)
    */
-  indexResources(resources: ResourceMetadata[], objects: GitObjectReaders, onProgress?: ProgressCallback): Promise<IndexResult>;
+  indexResources(resources: ResourceMetadata[], content: RunContentCache, onProgress?: ProgressCallback): Promise<IndexResult>;
 
   /**
    * Update a specific resource

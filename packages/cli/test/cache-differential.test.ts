@@ -186,11 +186,13 @@ describe('where a run says its answer came from', () => {
 });
 
 /** A dump: one row in a blob-scoped relation, and one in each relation a hole moves a column of. */
-function holeDump(blob: string, contentKey: string): Record<string, unknown> {
+function holeDump(blob: string, contentKey: string, tag = 'alpha'): Record<string, unknown> {
   const rows = [
     { relation: 'blobs', row: JSON.stringify({ contentKey: blob }) },
     { relation: 'resource_realizations', row: JSON.stringify({ path: 'docs/two.md', contentKey }) },
     { relation: 'zone_provenance', row: JSON.stringify({ zone: 'repo', extentDigest: `digest-of-${contentKey}` }) },
+    // A path-scoped relation no key moves: it must agree across the arms.
+    { relation: 'resource_tags', row: JSON.stringify({ resourceId: 'res-two', tag, value: null, source: 'frontmatter' }) },
   ];
   return { status: 'success', data: { population: 'store', rows } };
 }
@@ -204,11 +206,15 @@ function servedQuery(label: keyof DifferentialResult['runs'], document: Record<s
   return { label, verb: 'query', status: 0, stdout: '', stderr: '', document, origins: VERBS.query.originsOf(document), charged: [CRAWL_STORE_READ_ID], ...NO_CELL } as const;
 }
 
-/** The reference reads the new bytes; the warm arm was primed on the old ones, then measured. */
-function holeResult(measuredBlob: string): DifferentialResult {
-  const prime = servedQuery('warmSameHistory:prime', holeDump('old-blob', 'old-key'));
-  const measured = servedQuery('warmSameHistory:measured', holeDump(measuredBlob, 'old-key'));
-  const reference = servedQuery('storeOff:measured', holeDump('new-blob', 'new-key'));
+/**
+ * The reference reads `referenceBlob` under its own key; the warm arm was primed on the old bytes,
+ * then measured. `storeOnTag` is the path-scoped tag both store-on runs hold; store-off holds `alpha`.
+ */
+function holeResult(measuredBlob: string, referenceBlob = 'new-blob', storeOnTag = 'alpha'): DifferentialResult {
+  const prime = servedQuery('warmSameHistory:prime', holeDump('old-blob', 'old-key', storeOnTag));
+  const measured = servedQuery('warmSameHistory:measured', holeDump(measuredBlob, 'old-key', storeOnTag));
+  const referenceKey = referenceBlob === 'old-blob' ? 'old-key' : 'new-key';
+  const reference = servedQuery('storeOff:measured', holeDump(referenceBlob, referenceKey));
   return {
     arms: ['storeOff', 'warmSameHistory'],
     verbs: ['query'],
@@ -218,22 +224,47 @@ function holeResult(measuredBlob: string): DifferentialResult {
   };
 }
 
-describe('a checkout-stable seed', () => {
-  const seed: I0Seed = {
+/** A checkout-stable seed over {@link holeResult}, its checkout's bytes standing to git's as `storeOffReads` says. */
+function checkoutStableSeed(storeOffReads: Extract<I0Seed['expect'], { checkoutStable: unknown }>['checkoutStable']['storeOffReads']): I0Seed {
+  return {
     name: 'hole',
     needs: null,
     arms: ['storeOff', 'warmSameHistory'],
     verbs: ['query'],
-    expect: { checkoutStable: { arm: 'warmSameHistory', because: 'git bytes do not move' } },
+    expect: { checkoutStable: { arm: 'warmSameHistory', because: 'git bytes do not move', storeOffReads } },
     consumed: { runs: [], check: () => undefined },
   };
+}
+
+describe('a checkout-stable seed', () => {
+  const otherBytes = checkoutStableSeed({ otherBytes: { parsedRelations: [] } });
 
   it('holds when the warm run serves exactly what its prime derived', () => {
-    expect(() => expectSeed(seed, holeResult('old-blob'))).not.toThrow();
+    expect(() => expectSeed(otherBytes, holeResult('old-blob'))).not.toThrow();
   });
 
   it('reds when the warm run serves blob facts its prime never derived', () => {
-    expect(() => expectSeed(seed, holeResult('neither-blob'))).toThrow();
+    expect(() => expectSeed(otherBytes, holeResult('neither-blob'))).toThrow();
+  });
+
+  it('reds when a path-scoped relation differs the same way in both store-on runs', () => {
+    // Warm equals prime, so only the comparison with store-off can see it.
+    expect(() => expectSeed(otherBytes, holeResult('old-blob', 'new-blob', 'corrupted'))).toThrow(/only what the bytes decide diverges/u);
+  });
+
+  it('holds that path-scoped divergence when the seed names it as parsed from the other bytes', () => {
+    const parsed = checkoutStableSeed({ otherBytes: { parsedRelations: ['resource_tags'] } });
+    expect(() => expectSeed(parsed, holeResult('old-blob', 'new-blob', 'corrupted'))).not.toThrow();
+  });
+
+  it('reds when store-off reads other bytes and nothing differs', () => {
+    expect(() => expectSeed(otherBytes, holeResult('old-blob', 'old-blob'))).toThrow(/store-off reads other bytes, so the dump differs/u);
+  });
+
+  it('reds when the checkout holds git\'s bytes and anything differs', () => {
+    const gitBytes = checkoutStableSeed('git bytes');
+    expect(() => expectSeed(gitBytes, holeResult('old-blob', 'old-blob'))).not.toThrow();
+    expect(() => expectSeed(gitBytes, holeResult('old-blob'))).toThrow(/store-off answers as store-on does/u);
   });
 });
 
@@ -385,14 +416,16 @@ describe('the hydration tell', () => {
   });
 
   it('holds a phase that read evicted git members from git and parsed only the ones that are text', () => {
-    // Two evicted git members (one not text, declined before a parse) and one untracked file from disk.
-    // Every member but the untracked file is probed (an evicted git member too, its bytes from git).
+    // Two evicted git members (one not text, declined before a parse) and one Git LFS path, which is
+    // no member, from disk. (An untracked file the ignore rules leave is a member, keyed by its
+    // object like a tracked one.) Every git member is probed (an evicted one too, its bytes from
+    // git); the LFS path's read is its own probe.
     const mixed: HydrationFacts = {
       members: 10,
       evicted: [
         { path: 'docs/a.md', bytes: 5, contentKey: 'k1', member: true, parsed: true },
         { path: 'docs/binary.md', bytes: 4, contentKey: 'k2', member: true, parsed: false },
-        { path: 'docs/untracked.md', bytes: 7, contentKey: 'k3', member: false, parsed: true },
+        { path: 'docs/lfs-tracked.md', bytes: 7, contentKey: 'k3', member: false, parsed: true },
       ],
       refusedFromStore: 1,
     };

@@ -8,7 +8,9 @@
 import { writeFileSync } from 'node:fs';
 
 import {
+  NO_GIT_MEMBERS,
   type ParseDispatcher,
+  RunContentCache,
   SKILL_TEXT_DECLARATION,
   skillTextFactsOf,
   type StoredDocumentFacts,
@@ -63,7 +65,7 @@ const NO_STORE: SkillTextRun['source'] = { storedDocument: () => Promise.resolve
 
 /** A run over `source` whose dispatcher no parse reaches: it identifies the run, a fresh one unless given. */
 function scanRun(source: SkillTextRun['source'], dispatcher: ParseDispatcher = {} as ParseDispatcher): SkillTextRun {
-  return { source, dispatcher, crawlOnce: (_key, crawl) => crawl() };
+  return { source, dispatcher, content: new RunContentCache(NO_GIT_MEMBERS), crawlOnce: (_key, crawl) => crawl() };
 }
 
 /** A SKILL.md holding {@link SKILL_TEXT} in a fresh directory. */
@@ -120,7 +122,7 @@ describe('readSkillDocument', () => {
 
   it('parses a file the store does not serve, counting it once per run', async () => {
     const path = skillFile();
-    const run: SkillTextRun = { source: EMPTY_STORE, dispatcher: ROUTE.dispatcher, crawlOnce: (_key, crawl) => crawl() };
+    const run: SkillTextRun = { source: EMPTY_STORE, dispatcher: ROUTE.dispatcher, content: new RunContentCache(NO_GIT_MEMBERS), crawlOnce: (_key, crawl) => crawl() };
     const before = misses();
     const first = await readSkillDocument(path, run, 'source');
     await readSkillDocument(path, run, 'source');
@@ -140,7 +142,7 @@ describe('readSkillDocument', () => {
 
   it('counts a file a run with no store parses as noStore once per run, never as a miss', async () => {
     const path = skillFile();
-    const run: SkillTextRun = { source: NO_STORE, dispatcher: ROUTE.dispatcher, crawlOnce: (_key, crawl) => crawl() };
+    const run: SkillTextRun = { source: NO_STORE, dispatcher: ROUTE.dispatcher, content: new RunContentCache(NO_GIT_MEMBERS), crawlOnce: (_key, crawl) => crawl() };
     const [missesBefore, noStoresBefore] = [misses(), noStores()];
     await readSkillDocument(path, run, 'source');
     await readSkillDocument(path, run, 'source');
@@ -204,20 +206,20 @@ describe('scannedSkillText', () => {
 });
 
 describe('linkedFileSkillText', () => {
-  it('serves a plain UTF-8 file from its document, reading and counting nothing', () => {
+  it('serves a plain UTF-8 file from its document, reading and counting nothing', async () => {
     const document = documentWith(undefined, 'Heading');
     const [missesBefore, readsBefore] = [misses(), reads()];
-    expect(linkedFileSkillText('/nowhere/ref.md', document, scanRun(EMPTY_STORE))).toBe(document.skillText);
+    expect(await linkedFileSkillText('/nowhere/ref.md', document, scanRun(EMPTY_STORE))).toBe(document.skillText);
     expect([misses() - missesBefore, reads() - readsBefore]).toEqual([0, 0]);
   });
 
-  it('scans the raw UTF-8 text of a BOM-marked file, BOM kept, counted as a read and a miss', () => {
+  it('scans the raw UTF-8 text of a BOM-marked file, BOM kept, counted as a read and a miss', async () => {
     const path = safePath.join(getTempDir(), 'ref.md');
     const raw = '\uFEFF```bash\naz login\n```\n';
     writeFileSync(path, raw);
     const document = { ...documentWith(undefined, null), decoding: { encoding: 'utf-8', encodingSource: 'bom' } } as const;
     const [missesBefore, readsBefore] = [misses(), reads()];
-    const facts = linkedFileSkillText(path, document, scanRun(EMPTY_STORE));
+    const facts = await linkedFileSkillText(path, document, scanRun(EMPTY_STORE));
     expect(facts).toEqual(skillTextFactsOf(raw, SKILL_TEXT_DECLARATION));
     expect(facts).not.toEqual(skillTextFactsOf(raw.slice(1), SKILL_TEXT_DECLARATION));
     expect([misses() - missesBefore, reads() - readsBefore]).toEqual([1, 1]);

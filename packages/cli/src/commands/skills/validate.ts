@@ -456,7 +456,7 @@ export function skillsValidateRegistries(
     registry: run.registry,
     source: run.population.source,
     dispatcher: run.dispatcher,
-    objects: run.population.objects,
+    content: run.population.content,
     includeFor: (root) => (root === shared ? SHARED_ROOT_INCLUDE : REGISTRY_INCLUDE),
     configFor: (root) => (root === shared ? Promise.resolve(config) : projectConfigOrNone(root)),
     crawlOnce: (key, crawl) => run.population.crawlOnce(key, crawl),

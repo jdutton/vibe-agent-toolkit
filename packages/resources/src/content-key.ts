@@ -68,7 +68,10 @@
  * snapshot lists; never a symlink, a submodule, an absent skip-worktree entry or
  * a Git LFS pointer path) by the object ID the dirty-corrected snapshot reports,
  * and reads its bytes from git's object store by that ID ({@link keyedFromBytes}
- * composes the decode with the key; {@link readContentByKey} reads by a key).
+ * composes the decode with the key). Only a cached validation lane's run keys members this way;
+ * a build lane and `vat rag index` key every file from disk, since what they ship or index is the
+ * working tree. Every read of a member goes through the run's one reader (`RunContentCache`), so no
+ * lane of that run reads a member a second way.
  * The three ways an OID goes wrong as a key for DISK bytes do not reach it: the
  * snapshot hashes a dirty file's edit, not the index's committed bytes; a
  * symlink is no member; and the bytes parsed are the object's, read under the
@@ -130,9 +133,8 @@
 
 import { createHash } from 'node:crypto';
 
-import { countWork, safePath } from '@vibe-agent-toolkit/utils';
+import { countWork } from '@vibe-agent-toolkit/utils';
 import { exceedsDecodableLength, readDecodableBytes, TextTooLargeError } from '@vibe-agent-toolkit/utils/fs';
-import { gitFindRoot, GitObjectReadError, type GitObjectReaders } from '@vibe-agent-toolkit/utils/git';
 import { decodeTextContent, type TextProvenance } from '@vibe-agent-toolkit/utils/text';
 import { z } from 'zod';
 
@@ -473,6 +475,25 @@ export async function readContentWithKey<K extends ParserKind>(
   parserKind: K,
   inputBytes: number | null,
 ): Promise<KeyedContent<K>> {
+  return (await readKeyedBytes(filePath, parserKind, inputBytes)).keyed;
+}
+
+/**
+ * {@link readContentWithKey}, with the raw bytes it keyed beside the keyed content: for the run's
+ * cache, which keeps the plain UTF-8 reading of a file whose decode is not one
+ * (`RunContentCache.rawText`) without reading it a second time.
+ *
+ * @param filePath - Absolute path to read
+ * @param parserKind - The parser this content will actually be handed to
+ * @param inputBytes - The run's parse input cap, or `null` when the read is for the bytes themselves
+ * @returns The keyed content and the bytes it was decoded from
+ * @throws What {@link readContentWithKey} throws
+ */
+export async function readKeyedBytes<K extends ParserKind>(
+  filePath: string,
+  parserKind: K,
+  inputBytes: number | null,
+): Promise<{ readonly keyed: KeyedContent<K>; readonly bytes: Uint8Array }> {
   // Read as bytes and decode here, rather than letting readFile decode: the key
   // must be over what was on disk, the decode is lossy, and `readFile(path,
   // 'utf-8')` offers no BOM or encoding handling at all.
@@ -493,7 +514,7 @@ export async function readContentWithKey<K extends ParserKind>(
   // `TextProvenance` holds. A decoder that learns to report a fourth fact about
   // its input then reaches the projection without an edit here — and, more to the
   // point, cannot be silently dropped here either.
-  return keyBytes(bytes, parserKind);
+  return { keyed: keyBytes(bytes, parserKind), bytes };
 }
 
 /**
@@ -518,38 +539,6 @@ export function refuseContentBySize(size: number, parserKind: ParserKind, inputB
     throw breach;
   }
   if (exceedsDecodableLength(size)) throw new TextTooLargeError(size);
-}
-
-/**
- * Read the bytes a key names, from where the key says they are, and key them again.
- *
- * - A git key (`git-sha1`, `git-sha256`) names an object: it is read from the object store of the
- *   repository holding `absolutePath`, through `objects`, and decoded under that same key. The
- *   working tree is not read, so the bytes are git's stored form (eol-normalized, clean-filtered).
- * - A `sha256` key names bytes on disk: the file is read and keyed afresh, so a file changed since
- *   it was keyed comes back under another key, and the caller's comparison says so.
- *
- * For a caller that holds a key a population minted and needs the bytes behind it (a build, an
- * index), never for a parse: nothing is held to the parse input cap.
- *
- * @param absolutePath - The file the key was minted for
- * @param contentKey - Its key
- * @param objects - The caller's object readers, which a git key's read goes through
- * @returns The content, keyed: `contentKey` itself for a git key
- * @throws What the object read rejects with (`GitObjectMissingError` for an object git does not
- *   hold), `GitObjectReadError` when no repository holds the path, and what a disk read throws
- */
-export async function readContentByKey(
-  absolutePath: string,
-  contentKey: ContentKey,
-  objects: GitObjectReaders,
-): Promise<KeyedContent> {
-  const { parserKind, keyKind, hex } = contentKeyParts(contentKey);
-  if (keyKind === 'sha256') return readContentWithKey(absolutePath, parserKind, null);
-  const directory = safePath.resolve(absolutePath, '..');
-  const repositoryRoot = gitFindRoot(directory);
-  if (repositoryRoot === null) throw new GitObjectReadError(directory, `no git repository holds ${absolutePath}, so ${contentKey} names nothing to read`);
-  return keyedFromBytes(await objects.read(repositoryRoot, hex), parserKind, contentKey);
 }
 
 /**

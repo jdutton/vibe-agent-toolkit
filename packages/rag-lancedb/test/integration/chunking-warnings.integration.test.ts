@@ -34,7 +34,7 @@ describe('chunking-config warnings', () => {
     });
     const filePath = await createTestMarkdownFile(suite.tempDir, 'a.md', '# A\n\nSome prose.\n');
 
-    const result = await provider.indexResources([await createTestResource(filePath, 'a')], suite.objects);
+    const result = await provider.indexResources([await createTestResource(filePath, 'a')], suite.content);
     await provider.close();
 
     expect(result.warnings).toEqual([expect.stringMatching(/targetChunkSize 1024 exceeds the 256-token limit/)]);

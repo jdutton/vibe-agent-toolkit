@@ -22,6 +22,7 @@ import {
 import {
   frameBatchRecord,
   nonInteractiveGitOverrides,
+  OBJECT_READ_ENV,
   parseBatchHeader,
   runGit as runGitSafely,
   runGitBytes,
@@ -71,13 +72,14 @@ function runGit(args: string[], envOverlay: Record<string, string>, cwd?: string
 }
 
 /**
- * The options every read of the clone's object store runs with: inside the clone, scrubbed, capped.
+ * The options every read of the clone's object store runs with: inside the clone, scrubbed, capped,
+ * and with replace refs off ({@link OBJECT_READ_ENV}), so a name reads the object it names.
  * The reads themselves call `runGitBytes` with their argv inline — `local/no-text-git-object-read`
  * holds every object-store argv to it — so what the store holds arrives as the BYTES git wrote,
  * never through a UTF-8 decode, and each judgment decodes them itself.
  */
 function objectStoreRead(cloneDir: string, input?: string): Parameters<typeof runGitBytes>[1] {
-  return { cwd: cloneDir, ...(input === undefined ? {} : { input }), env: {}, timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER };
+  return { cwd: cloneDir, ...(input === undefined ? {} : { input }), env: OBJECT_READ_ENV, timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER };
 }
 
 /**

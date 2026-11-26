@@ -106,8 +106,9 @@ export function expectUnreadableRefusal(verb: string, args: (path: string) => st
 }
 
 /**
- * Run `args` in a directory holding only a `vibe-agent-toolkit.config.yaml` made
- * by `makeConfig`, and expect `INPUT_UNREADABLE` at exit 2. The mode is restored either way.
+ * Run `args` in a directory holding a `vibe-agent-toolkit.config.yaml` made by
+ * `makeConfig` (and whatever it writes beside it), and expect `INPUT_UNREADABLE` at
+ * exit 2. The config's mode is restored either way.
  */
 export function expectConfigRefusal(name: string, args: readonly string[], makeConfig: (configPath: string) => void): void {
   const cwd = safePath.join(matrixTempDir(), name);

@@ -70,7 +70,7 @@ import {
 } from '../../utils/issue-rendering.js';
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
-import { runSkillRegistries, NO_HOME_SETTLED_LISTENER, withRunContext } from '../../utils/resource-loader.js';
+import { runSkillRegistries, NO_HOME_SETTLED_LISTENER, withRunContext, type RunContext } from '../../utils/resource-loader.js';
 import { verdictBanner } from '../../utils/run-integrity.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig, publishScope } from '../../utils/skill-packaging-config.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
@@ -905,6 +905,12 @@ export interface SkillBuildRunInput {
    * file not admitted is REPORTED under, in both validation lanes. The packager reads no config: it refuses every refused file a skill reaches.
    */
   resourcesValidation: ValidationConfig;
+  /**
+   * The build's ONE run ({@link withSkillBuildRun}), opened before discovery: the skills were
+   * named from it, and the validation lanes and the packaging read through it, so each input
+   * file is read once per build whichever lane asks first.
+   */
+  run: RunContext;
 }
 
 /** What the build wrote into the staged tree, before the plan decides whether it lands. */
@@ -980,6 +986,29 @@ export async function runSkillBuild(input: SkillBuildRunInput): Promise<SkillBui
   return { ...holder.built.run, outputCommitted: true, residue: leftoverIssuesOfWarnings(warnings) };
 }
 
+/**
+ * Run `work` in the ONE run of a `vat skills build` in `cwd`: discovery names the skills from it,
+ * and {@link runSkillBuild} validates and packages them through it, so each input file — every
+ * SKILL.md included — is read once per build. Opened before the staged tree exists, so it declares
+ * the writes known then (`RunTree`): the destination {@link buildTarget} replaces, and what the
+ * rest of the invocation writes (`runOutputs`). Each crawl inside the build adds the staged tree.
+ *
+ * @param cwd - The build's root
+ * @param onlySkill - `--skill <name>`, or `undefined` for a full build
+ * @param runOutputs - What the invocation writes besides `dist/skills`
+ * @param work - The build, given its run
+ * @returns Whatever `work` returned
+ */
+export function withSkillBuildRun<T>(
+  cwd: string,
+  onlySkill: string | undefined,
+  runOutputs: readonly string[],
+  work: (run: RunContext) => Promise<T>,
+): Promise<T> {
+  const outputs = [buildTarget(cwd, onlySkill).dest, ...runOutputs];
+  return withRunContext({ memberBytes: 'disk', projectionStore: 'on-demand', root: cwd, tree: 'writes', outputs, homeSettledListener: NO_HOME_SETTLED_LISTENER }, work);
+}
+
 /** The build itself, into `staged`: every skill validated, the ones that qualified packaged, the outcome judged. */
 async function buildInto(input: SkillBuildRunInput, target: BuildTarget, staged: string): Promise<BuiltSkills> {
   const { specs, cwd, logger, projectSkills, verbose } = input;
@@ -993,8 +1022,8 @@ async function buildInto(input: SkillBuildRunInput, target: BuildTarget, staged:
   const buildable: BuildSkillSpec[] = [];
   const validationFailures: SkillValidationFailure[] = [];
 
-  // ONE run over the WHOLE build — both validation lanes and the packaging —
-  // rather than over `packageSkills` alone: every enumeration of the SOURCE tree
+  // ONE run over the WHOLE build — discovery, both validation lanes and the packaging —
+  // rather than over `packageSkills` alone ({@link withSkillBuildRun}): every enumeration of the SOURCE tree
   // this build performs reads through the run's one population, and the run's
   // skill registries serve each root's view to every skill, so one run means one
   // crawl per root; a run per phase would buy a second crawl to save the first.
@@ -1012,61 +1041,60 @@ async function buildInto(input: SkillBuildRunInput, target: BuildTarget, staged:
   // run would keep answering for a tree that has since changed.
   const suiteProbe = conventionalSuiteProbe();
   // What this run writes — the tree it replaces and the staging it builds it in — declared
-  // ONCE for every crawl of the project (which lists `dist/` too): a fault on, in or above
-  // them is the run's destination, never its input.
+  // for every crawl of the project inside the build (which lists `dist/` too): a fault on, in
+  // or above them is the run's destination, never its input. The run itself declared the
+  // destination when it opened ({@link withSkillBuildRun}); the staged tree is named only now.
   const outputs = [target.dest, staged, ...input.runOutputs];
 
-  const outcomes = await withRunContext({ projectionStore: 'on-demand', root: cwd, tree: 'writes', outputs, homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
-    const registries = runSkillRegistries(run);
-    // In order: shared registries, suite probe and logger; failures listed in spec order.
-    await forEachInOrder(specs, async (spec) => {
-      const { skill, packagingConfig } = spec;
-      logger.info(`\nBuilding skill: ${skill.name}`);
-      logger.info(`   Source: ${skill.sourcePath}`);
-      logger.info(`   Output: ${finalOutputPath(cwd, skill.name)}`);
+  const registries = runSkillRegistries(input.run);
+  // In order: shared registries, suite probe and logger; failures listed in spec order.
+  await forEachInOrder(specs, async (spec) => {
+    const { skill, packagingConfig } = spec;
+    logger.info(`\nBuilding skill: ${skill.name}`);
+    logger.info(`   Source: ${skill.sourcePath}`);
+    logger.info(`   Output: ${finalOutputPath(cwd, skill.name)}`);
 
-      const failure = await validateSkillBeforeBuild({
-        skillName: skill.name,
-        sourcePath: skill.sourcePath,
-        packagingConfig,
-        resourcesValidation: input.resourcesValidation,
-        logger,
-        locationRoot: cwd,
-        allowLedger,
-        projectSkills,
-        suiteProbe,
-        registries,
-        verbose,
-        outputs,
-      });
-      if (failure) {
-        validationFailures.push(failure);
-        return;
-      }
-      buildable.push(spec);
+    const failure = await validateSkillBeforeBuild({
+      skillName: skill.name,
+      sourcePath: skill.sourcePath,
+      packagingConfig,
+      resourcesValidation: input.resourcesValidation,
+      logger,
+      locationRoot: cwd,
+      allowLedger,
+      projectSkills,
+      suiteProbe,
+      registries,
+      verbose,
+      outputs,
     });
-
-    // Build the skills that qualified, with a shared registry.
-    //
-    // `projectSkills` is the run's declared eval suites — the whole project's, not
-    // `specs`'. `--skill x` narrows what gets BUILT; it never narrows what counts as
-    // test input, because an excluded skill's suite is still an answer key that must
-    // not ship inside x's bundle.
-    const buildSpecs: SkillBuildSpec[] = buildable.map(({ skill, packagingConfig }) => ({
-      skillPath: skill.sourcePath,
-      options: packagingConfigToPackageOptions(
-        packagingConfig,
-        // Into the staged tree, not dist/skills: see `buildTarget`.
-        { skillPath: skill.sourcePath, outputPath: target.bundleIn(staged, skill.name) },
-        projectSkills,
-        suiteProbe,
-      ),
-    }));
-
-    // `packageSkills` crawls THE packaging registry for the run, through the same
-    // registries the validation above used.
-    return packageSkills(buildSpecs, cwd, allowLedger, { registries, outputs });
+    if (failure) {
+      validationFailures.push(failure);
+      return;
+    }
+    buildable.push(spec);
   });
+
+  // Build the skills that qualified, with a shared registry.
+  //
+  // `projectSkills` is the run's declared eval suites — the whole project's, not
+  // `specs`'. `--skill x` narrows what gets BUILT; it never narrows what counts as
+  // test input, because an excluded skill's suite is still an answer key that must
+  // not ship inside x's bundle.
+  const buildSpecs: SkillBuildSpec[] = buildable.map(({ skill, packagingConfig }) => ({
+    skillPath: skill.sourcePath,
+    options: packagingConfigToPackageOptions(
+      packagingConfig,
+      // Into the staged tree, not dist/skills: see `buildTarget`.
+      { skillPath: skill.sourcePath, outputPath: target.bundleIn(staged, skill.name) },
+      projectSkills,
+      suiteProbe,
+    ),
+  }));
+
+  // `packageSkills` crawls THE packaging registry for the run, through the same
+  // registries the validation above used.
+  const outcomes = await packageSkills(buildSpecs, cwd, allowLedger, { registries, outputs });
 
   throwPackagerDefect(outcomes);
   const packaged = judgeOutcomes(buildable, outcomes, stagedPathMapper(cwd, staged, target.dest), logger, verbose);
@@ -1221,6 +1249,7 @@ async function prepareBuild(
   options: SkillsBuildCommandOptions,
   logger: ReturnType<typeof createLogger>,
   startTime: number,
+  run: RunContext,
 ): Promise<PreparedBuild> {
   const empty = { cwd, skills: [], setAside: NO_SKILLS, dryRun: options.dryRun === true, setAsideIssues: [] };
   // Spec §7: `vat skills build` requires a projectRoot. The resolved root is
@@ -1239,8 +1268,9 @@ async function prepareBuild(
 
   logger.info(`Discovering skills from config...`);
   // `'refuse'`: a build that silently ships fewer skills is the drop this
-  // command exists to prevent — the coded throw is the report's refusal.
-  const discoveredSkills = namedSkillsOrRefuse(await discoverSkillsFromConfig(skillsConfig, cwd, 'refuse', undefined), cwd);
+  // command exists to prevent — the coded throw is the report's refusal. Through the build's
+  // run, so the SKILL.md read that names a skill is the one every later lane is served.
+  const discoveredSkills = namedSkillsOrRefuse(await discoverSkillsFromConfig(skillsConfig, cwd, 'refuse', run.population), cwd);
   if (discoveredSkills.length === 0) {
     // Before the staging swap, so a glob typo never promotes an EMPTY dist/skills.
     logger.error(`No SKILL.md files found matching include patterns: ${skillsConfig.include.join(', ')}`);
@@ -1318,23 +1348,28 @@ export async function runSkillsBuildPhase(
     // invocation's mistake (or the input's, when the OS refuses it) — never a
     // silent build of nothing.
     assertScopableSkillsPath(SCOPE_SUBJECT, pathArg);
-    const prepared = await prepareBuild(cwd, options, logger, startTime);
-    if (prepared.kind === 'done') return prepared;
-    const { buildSpecs, setAside, projectSkills, resourcesValidation } = prepared;
-    finished = skillsBuildWork({
-      cwd, skills: buildSpecs.map((spec) => spec.skill), setAside, dryRun: false, run: undefined, setAsideIssues: [],
+    const built = await withSkillBuildRun(cwd, options.skill, runOutputs, async (context) => {
+      const prepared = await prepareBuild(cwd, options, logger, startTime, context);
+      if (prepared.kind === 'done') return prepared;
+      const { buildSpecs, setAside, projectSkills, resourcesValidation } = prepared;
+      finished = skillsBuildWork({
+        cwd, skills: buildSpecs.map((spec) => spec.skill), setAside, dryRun: false, run: undefined, setAsideIssues: [],
+      });
+      const run = await runSkillBuild({
+        specs: buildSpecs,
+        cwd,
+        logger,
+        projectSkills,
+        onlySkill: options.skill,
+        verbose: options.verbose === true,
+        runOutputs,
+        resourcesValidation,
+        run: context,
+      });
+      return { kind: 'built' as const, buildSpecs, setAside, run };
     });
-
-    const run = await runSkillBuild({
-      specs: buildSpecs,
-      cwd,
-      logger,
-      projectSkills,
-      onlySkill: options.skill,
-      verbose: options.verbose === true,
-      runOutputs,
-      resourcesValidation,
-    });
+    if (built.kind === 'done') return built;
+    const { buildSpecs, setAside, run } = built;
     for (const line of formatRunIssueLines(run.runIssues)) {
       logger.info(line);
     }

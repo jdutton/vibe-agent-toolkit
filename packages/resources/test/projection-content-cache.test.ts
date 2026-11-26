@@ -1,4 +1,4 @@
-import { mkdtempSync, truncateSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, truncateSync, writeFileSync } from 'node:fs';
 
 import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { MAX_DECODABLE_BYTES, mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
@@ -106,6 +106,34 @@ describe('RunContentCache', () => {
     await cache.read(safePath.join(root, 'project', DOC), 'markdown');
     await cache.read(safePath.join(root, 'project', DOC), 'html');
     expect(asked).toBe(1);
+  });
+
+  it('asks for its members once even when resolving them throws, and rethrows that failure', async () => {
+    let asked = 0;
+    const failure = new Error('the snapshot failed');
+    const cache = new RunContentCache({
+      root,
+      resolve: () => {
+        asked += 1;
+        throw failure;
+      },
+    });
+
+    await expect(cache.read(docPath(), 'markdown')).rejects.toBe(failure);
+    await expect(cache.key(docPath(), 'html')).rejects.toBe(failure);
+    expect(asked).toBe(1);
+  });
+
+  it('reads a file whose decode is not plain UTF-8 once for both its content and its bytes', async () => {
+    const bom = safePath.join(root, 'bom.md');
+    writeFileSync(bom, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(ORIGINAL)]));
+    const cache = new RunContentCache(NO_GIT_MEMBERS);
+
+    expect((await cache.read(bom, 'markdown')).content).toBe(ORIGINAL);
+    const held = await cache.readWithBytes(bom, 'markdown');
+    expect(held.bytes === null ? null : Buffer.from(held.bytes)).toEqual(readFileSync(bom));
+    expect((await cache.readWithBytes(docPath(), 'markdown')).bytes, 'a plain UTF-8 read holds no bytes').toBeNull();
+    expect(cache.stats).toMatchObject({ misses: 2, hits: 1 });
   });
 });
 

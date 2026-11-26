@@ -11,13 +11,17 @@ conflicting conclusion is marked superseded in place and its measurements are ke
    `core.autocrlf` and clean/smudge filters do not change what a file means to VAT. A file whose
    meaning depends on them is outside what VAT supports. VAT does not defend against normalization
    differences.
-2. **There is no single universal content hash. Content identity is per source.** When the run's
-   tree is keyed by git (the projection store on), every regular file its snapshot lists (tracked,
+2. **There is no single universal content hash. Content identity is per source.** When a cached
+   validation run's tree is keyed by git (the projection store on), every regular file its snapshot lists (tracked,
    modified or not, and untracked files no ignore rule covers) is a **member**: its content identity
    is the blob object id the snapshot reports (`git-sha1` or `git-sha256`), and its bytes are read
-   from the object store by that id. Every other file (ignored, build output, outside any
-   repository, a Git LFS pointer path, an absent skip-worktree entry, or any file in a run with no
-   tree key) is keyed by VAT's content key over its disk bytes (`sha256`). The two need not name the same object: an
+   from the object store by that id. Members are resolved only for paths inside the root the store
+   keys. Every other file (ignored, build output, outside any repository, outside the run's root even
+   when the snapshot lists it, a Git LFS pointer path, an absent skip-worktree entry, every file of a
+   partial clone on a git older than 2.45, or any file in a run with no tree key) is keyed by VAT's
+   content key over its disk bytes (`sha256`). A build lane has no members: it reads every file
+   from the working tree and keys it by its disk checksum (`sha256`), so a build ships the bytes on
+   disk. The two need not name the same object: an
    identical file inside and outside git keying differently is accepted. The worst case hashes each
    file once each way, which is O(2n) = O(n). On one system, git-held and non-git files are a closed
    set: every file is exactly one of the two.
@@ -52,11 +56,11 @@ What is built:
 - Rule 4 is built for `vat validate`, `vat verify`, `vat resources validate`, `vat skills validate`
   and `vat resources scan`. Each opens the run: `RunContext { population, registry,
   dispatcher }` (`withRunContext()` in `packages/cli/src/utils/resource-loader.ts`); phase runners
-  require it, and there is no ambient context. Not covered yet: `vat audit`, `vat skills build`,
-  `vat claude plugin build` (so `vat build`) and `vat ard emit`, which still read a file once per
-  lane that asks. `vat rag index` admits its corpus through one run, but its index step re-reads each file
-  it indexes (a member from git's object store by its key, any other file from disk, re-hashed), so
-  it reads each file twice. The run opens its projection store
+  require it, and there is no ambient context. `vat skills build`, `vat skills package`,
+  `vat claude plugin build` (so `vat build`), `vat skill test run` and `vat rag index` each open
+  one run, opened before skill discovery, and read every file once through its content cache, from
+  disk. Not covered yet: `vat audit` and
+  `vat ard emit`, which still read a file once per lane that asks. The run opens its projection store
   on its first enumeration, so a phase that refuses at its own guards opens nothing. On a warm store
   hit a view admits each member from its stored blob facts, reading, hashing and parsing nothing for
   it (`packages/resources/src/projection/stored-admission.ts`); a member the store does not cover is
@@ -69,14 +73,30 @@ What is built:
   ids, duplicates, links, population conditions and parse refusals with the same code. Views never
   share link objects. Skills take one view per project root per run from `RunSkillRegistries`
   (`packages/agent-skills/src/validators/run-skill-registries.ts`).
-- Rule 2 is built for every lane that reads through the run's content cache. A member is keyed
-  from the snapshot with no read and no hash; its bytes come from one long-lived
+- Rule 2 is built. The cached validation lanes (`vat validate`, `vat verify`, `vat resources
+  scan`, `query` and `check`, `vat skill review`, `vat claude context`, `vat inventory`) key each
+  member from the snapshot with no read and no hash; its bytes come from one long-lived
   `git cat-file --batch` per repository (`openGitObjectReaders`, `packages/utils/src/git-object-reader.ts`),
-  only when a parse or a build needs them, and its size from one `git cat-file --batch-check`
-  (`gitMembersOf`, `packages/utils/src/git-members.ts`). The packager's markdown link rewrite and
-  `vat rag index` read a member by its key (`readContentByKey`, `packages/resources/src/content-key.ts`).
-  Plain copies in `vat build` still copy working-tree bytes. Incremental repopulation of the extent
-  is not built.
+  only when a parse needs them, and its size from one `git cat-file --batch-check`
+  (`gitMembersOf`, `packages/utils/src/git-members.ts`). Every object read runs with
+  `GIT_NO_REPLACE_OBJECTS=1` (`OBJECT_READ_ENV`, `packages/utils/src/git-run.ts`), so a replace
+  ref never answers for an object id. A missing object marks that one path unreadable and the run
+  continues. The build lanes read disk by owner ruling: `vat skills build`, `vat skills package`,
+  `vat build`'s skills lane, `vat claude plugin build`, `vat skill test run`, the packager's markdown
+  link rewrite and its plain copies, and `vat rag index` read every file from the working tree and
+  key it by its disk checksum, one read per file per build, through the run's content cache with
+  no git members (`memberBytes: 'disk'` on `withRunContext`,
+  `packages/cli/src/utils/resource-loader.ts`). A build ships working-tree bytes (CRLF on an
+  autocrlf checkout), and its link rewrite uses facts parsed from those same bytes. There is one
+  content reader: every lane, parse, packager, RAG, skill-text lane and skill validator, reads
+  through the run's content cache.
+  The stored extent is filed per member key scheme: the extent store key folds in whether the run
+  keys git members by object id or every file from disk (`memberKeys`, read off the run's content
+  cache by `storeKeyFor`, `packages/resources/src/projection/merge.ts`). A build lane is never
+  served the extent a validation lane filed, whose content keys its disk read would contradict, and
+  a validation lane keeps its own extent warm beside a build's. `vat build`'s validation and build
+  phases therefore do not share an extent.
+  Incremental repopulation of the extent is not built.
 - Rule 3 is partial: the cache namespace carries the VAT version and nothing else; the runtime tuple (Node and its
   Unicode version) is not yet in the parse-cache or blob keys.
 
@@ -107,7 +127,7 @@ what is *built* from those bytes. This document covers only the identity questio
 |---|---|---|
 | preimage | the **cleaned** content — after `text`/`eol` attributes, `core.autocrlf`, `core.eol`, `working-tree-encoding` and any `filter.*` clean filter | the **raw working-tree bytes**, exactly as `readFile` returned them |
 | algorithm | SHA-1 (or SHA-256 in a `sha256` repository), over `blob <len>\0` + content | plain SHA-256 of the raw bytes, no domain separator; the parser kind qualifies the key text and is never hashed |
-| shape | 40 hex chars | `<parserKind>.<keyKind>.<hex>`, `keyKind` one of `sha256` (64 hex, the only kind VAT mints), `git-sha1` (40) or `git-sha256` (64), the git kinds format-only so far; `CONTENT_KEY_PATTERN` in `content-key.ts` |
+| shape | 40 hex chars | `<parserKind>.<keyKind>.<hex>`, `keyKind` one of `sha256` (64 hex), `git-sha1` (40) or `git-sha256` (64), the git kinds minted for snapshot members; `CONTENT_KEY_PATTERN` in `content-key.ts` |
 | stable across machines? | **yes** | **no** |
 | computed by | git, already, during enumeration | VAT, on read |
 
@@ -117,9 +137,9 @@ VAT's key states its own preimage in the code that produces it:
 > `// was on disk, the decode is lossy, and readFile(path, 'utf-8') offers no BOM or encoding`
 > `// handling at all.`
 >
-> — `packages/resources/src/content-key.ts:462-464`
+> — `readContentWithKey`, `packages/resources/src/content-key.ts`
 
-The reason it is raw bytes and not the decoded string is written out at `content-key.ts:84-108`: UTF-8
+The reason it is raw bytes and not the decoded string is written out in the `content-key.ts` module header, "Why the preimage is RAW BYTES": UTF-8
 decoding is many-to-one on invalid input, so `[c2]`, `[e2 82]` and `[ff]` all decode to one U+FFFD and
 would collapse to one key. That argument is about decoding, and it settles decoding. It says nothing
 about git, and it must not be read as though it did.
@@ -141,12 +161,13 @@ repository at one instant, because two paths can share cleaned content while sit
 only one this document endorses: *the OID is the most sound key for content, and it is unsound as a
 byte-identical-on-disk key.* The distinction is the whole subject.
 
-`packages/resources/src/content-key.ts` encodes the operative rule that follows: a git blob OID may
-never *become* the key, and may not stand in for a read either.
+The rule that followed was that a git blob OID may never *become* the key, and may not stand in
+for a read either.
 
 **Superseded** by [the decision](#decision-content-identity-is-per-source), rules 1 and 2: for a file
 git holds, the OID is its content identity. The byte-identity gap above is real and is outside what
-VAT supports. The code comment still states the old rule until the git-OID path lands.
+VAT supports. The `content-key.ts` module header, "The git rung", states the current rule: an object
+ID keys the object's own bytes, read from git's object store, and never stands in for a disk read.
 
 ## 3. The portability inversion
 
@@ -620,7 +641,7 @@ read-elimination device across paths, and its numbers settle that question. The 
 a member for a different reason: it is the member's content identity (rule 2), and git's
 normalization is not semantic (rule 1), so no eligibility gate is needed. What it eliminates is not
 the cross-path duplicates measured here but every read and hash of an unchanged member: the snapshot
-already names each member's OID, so a run reads only the members a parse or a build needs. The
+already names each member's OID, so a validation run reads only the members a parse needs. The
 temp-index snapshot of 10.3 is paid anyway, since it is the store key.
 
 ### 10.1 The three decisive numbers

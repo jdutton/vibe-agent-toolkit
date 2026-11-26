@@ -18,9 +18,8 @@ import { z } from 'zod';
 
 import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
-import { createTempDir, createTestMarkdownFile, fileContentKey, gitObjectReadersPerTest } from '../test-helpers.js';
+import { createTempDir, createTestMarkdownFile, fileContentKey, indexReader } from '../test-helpers.js';
 
-const objects = gitObjectReadersPerTest();
 
 // The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.
 describe.skipIf(onnxModelUnreachable())('Custom metadata system tests', () => {
@@ -142,7 +141,7 @@ describe.skipIf(onnxModelUnreachable())('Custom metadata system tests', () => {
       ];
 
       // Index all resources
-      const indexResult = await provider.indexResources(resources, objects);
+      const indexResult = await provider.indexResources(resources, indexReader());
       expect(indexResult.errors).toEqual([]);
       expect(indexResult.resourcesIndexed).toBe(3);
 
@@ -249,7 +248,7 @@ describe.skipIf(onnxModelUnreachable())('Custom metadata system tests', () => {
         },
       ];
 
-      const indexResultV1 = await providerV1.indexResources(resourcesV1, objects);
+      const indexResultV1 = await providerV1.indexResources(resourcesV1, indexReader());
       expect(indexResultV1.errors).toEqual([]);
       expect(indexResultV1.resourcesIndexed).toBe(1);
 
@@ -315,7 +314,7 @@ describe.skipIf(onnxModelUnreachable())('Custom metadata system tests', () => {
         },
       ];
 
-      const indexResultV2 = await providerV2.indexResources(resourcesV2, objects);
+      const indexResultV2 = await providerV2.indexResources(resourcesV2, indexReader());
       expect(indexResultV2.errors).toEqual([]);
       expect(indexResultV2.resourcesIndexed).toBe(1);
 
@@ -401,7 +400,7 @@ describe.skipIf(onnxModelUnreachable())('Custom metadata system tests', () => {
       ];
 
       // Index the resource
-      const indexResult = await provider.indexResources(resources, objects);
+      const indexResult = await provider.indexResources(resources, indexReader());
       expect(indexResult.errors).toEqual([]);
       expect(indexResult.resourcesIndexed).toBe(1);
 

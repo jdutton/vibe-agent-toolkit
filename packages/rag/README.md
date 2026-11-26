@@ -494,7 +494,7 @@ Read/write provider interface for building and managing RAG databases.
 
 ```typescript
 interface RAGAdminProvider extends RAGQueryProvider {
-  indexResources(resources: ResourceMetadata[]): Promise<IndexResult>;
+  indexResources(resources: ResourceMetadata[], content: RunContentCache, onProgress?: ProgressCallback): Promise<IndexResult>;
   updateResource(resourceId: string): Promise<void>;
   deleteResource(resourceId: string): Promise<void>;
   clear(): Promise<void>;

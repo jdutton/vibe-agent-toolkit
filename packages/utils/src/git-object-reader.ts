@@ -8,7 +8,7 @@
  * - Never `--filters` or `--textconv`: the bytes are the stored blob's, and its header size is the
  *   unfiltered size.
  * - The environment is the one a non-ambient `runGit` gets ({@link scrubbedGitEnv}), with
- *   `GIT_TERMINAL_PROMPT=0` and `GIT_NO_LAZY_FETCH=1`; from git 2.45 the global `--no-lazy-fetch`
+ *   `GIT_TERMINAL_PROMPT=0`, `GIT_NO_LAZY_FETCH=1` and `GIT_NO_REPLACE_OBJECTS=1`; from git 2.45 the global `--no-lazy-fetch`
  *   too. A partial clone must never fetch inside a read: a missing object is an answer, not a
  *   download.
  * - A missing object rejects that one read with {@link GitObjectMissingError}; the child keeps
@@ -25,7 +25,7 @@ import type { ChildProcess } from 'node:child_process';
 
 import { VatError } from './errors/vat-error.js';
 import { type BatchFrame, type BatchHeader, batchCheckOf, frameBatchRecord } from './git-cat-file.js';
-import { runGit, runGitBytes, scrubbedGitEnv } from './git-run.js';
+import { OBJECT_READ_ENV, runGit, runGitBytes, scrubbedGitEnv } from './git-run.js';
 import { shownName } from './shown-text.js';
 import { spawnHardened } from './spawn-hardened.js';
 import { decodeTextContent } from './text-content.js';
@@ -37,8 +37,11 @@ const MAX_LIVE_READERS = 4;
 /** The first git (major, minor) that takes the global `--no-lazy-fetch`. */
 const NO_LAZY_FETCH_SINCE: GitVersion = [2, 45];
 
-/** Over the scrubbed environment: never prompt, never fetch an object a partial clone lacks. */
-const READER_ENV: Readonly<Record<string, string>> = { GIT_TERMINAL_PROMPT: '0', GIT_NO_LAZY_FETCH: '1' };
+/**
+ * Over the scrubbed environment: never prompt, never fetch an object a partial clone lacks, never
+ * answer a name with its replace ref's replacement ({@link OBJECT_READ_ENV}).
+ */
+const READER_ENV: Readonly<Record<string, string>> = { ...OBJECT_READ_ENV, GIT_TERMINAL_PROMPT: '0', GIT_NO_LAZY_FETCH: '1' };
 
 /** A whole object name: 40 hex (SHA-1) or 64 hex (SHA-256), lowercase, as git writes them. */
 const OBJECT_NAME = /^(?:[\da-f]{40}|[\da-f]{64})$/;
@@ -193,6 +196,8 @@ class BatchReader {
 
   /** Take stdout bytes in; settle every whole answer they complete. */
   private receive(chunk: Buffer): void {
+    // A stopped child owes nothing: what it still writes is dropped, never buffered and re-framed.
+    if (this.failure !== undefined) return;
     this.chunks.push(chunk);
     this.held += chunk.length;
     if (this.held < this.needed) return;
@@ -201,7 +206,12 @@ class BatchReader {
     let frame = frameBatchRecord(bytes, at);
     while (frame.kind !== 'header-incomplete' && frame.kind !== 'body-incomplete') {
       const next = this.settle(frame);
-      if (next === undefined) return;
+      if (next === undefined) {
+        this.chunks = [];
+        this.held = 0;
+        this.needed = 0;
+        return;
+      }
       at = next;
       frame = frameBatchRecord(bytes, at);
     }

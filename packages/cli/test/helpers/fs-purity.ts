@@ -38,8 +38,9 @@ function isIgnoreFile(path: string): boolean {
 export function expectPureMiss(reads: ReadonlyMap<string, number>, cwd: string, allowed: PurityAllowed): void {
   const members = new Set(allowed.members.map((path) => probed(cwd, path)));
   const schemas = new Set(allowed.schemas.map((path) => probed(cwd, path)));
-  // Positive control: the probe saw the run read its config, so an empty map is not a pass.
-  expect([...reads.keys()].filter((path) => isConfig(path)).length, 'the probe saw no config read').toBeGreaterThan(0);
+  // Positive control: the probe saw a member's one disk access, its readability open, so an empty
+  // map is not a pass, and neither is a probe that watches the config but not the members.
+  expect([...reads.keys()].filter((path) => members.has(path)).length, 'the probe saw no member\'s readability open').toBeGreaterThan(0);
   const fromDisk = [...reads].filter(([path, count]) => members.has(path) && count > 1).map(([path, count]) => `${path} x${String(count)}`);
   expect(fromDisk, 'a git member opened past its readability probe in the parent').toEqual([]);
   const outside = [...reads.keys()].filter((path) => !members.has(path) && !schemas.has(path) && !isConfig(path) && !isIgnoreFile(path) && !isGitInternal(path));

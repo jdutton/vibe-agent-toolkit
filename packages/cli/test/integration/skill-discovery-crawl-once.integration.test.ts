@@ -26,6 +26,7 @@ function recordingRun(lane: SkillTextRun): { run: SkillTextRun; asked: string[];
   const run: SkillTextRun = {
     source: lane.source,
     dispatcher: lane.dispatcher,
+    content: lane.content,
     crawlOnce: (key, crawl) => {
       asked.push(key);
       let result = held.get(key);

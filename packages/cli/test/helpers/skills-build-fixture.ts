@@ -10,7 +10,7 @@ import type { SkillPackagingConfig } from '@vibe-agent-toolkit/agent-skills';
 import type { ValidationConfig } from '@vibe-agent-toolkit/schema';
 import { forEachInOrder, mapInOrder, safePath } from '@vibe-agent-toolkit/utils';
 
-import { runSkillBuild, type BuildSkillSpec, type SkillBuildRun, type SkillBuildRunInput } from '../../src/commands/skills/build.js';
+import { runSkillBuild, withSkillBuildRun, type BuildSkillSpec, type SkillBuildRun, type SkillBuildRunInput } from '../../src/commands/skills/build.js';
 import type { Logger } from '../../src/utils/logger.js';
 import { silentLogger as SILENT_LOGGER } from '../test-doubles.js';
 
@@ -100,7 +100,7 @@ export async function build(
   const specs: BuildSkillSpec[] = await mapInOrder(skills, ([name, body, description]) => writeSkill(cwd, name, body, description ?? CLEAN_DESCRIPTION));
   // `[]`: these fixtures declare no eval suites, so the project-wide test-input
   // list is genuinely empty — not a lane declining to supply it.
-  const input: SkillBuildRunInput = {
+  return runSkillBuildInRun({
     specs,
     cwd,
     logger: options.logger ?? SILENT_LOGGER,
@@ -109,8 +109,12 @@ export async function build(
     verbose: options.verbose ?? false,
     runOutputs: [],
     resourcesValidation: options.resourcesValidation ?? {},
-  };
-  return runSkillBuild(input);
+  });
+}
+
+/** {@link runSkillBuild} in the build's own run, as `vat skills build` opens it ({@link withSkillBuildRun}). */
+export function runSkillBuildInRun(input: Omit<SkillBuildRunInput, 'run'>): Promise<SkillBuildRun> {
+  return withSkillBuildRun(input.cwd, input.onlySkill, input.runOutputs, (run) => runSkillBuild({ ...input, run }));
 }
 
 /** Seed `dist/skills/<name>/SKILL.md` for each name, as a previous build would have. */

@@ -40,7 +40,7 @@ Role-based access control (RBAC) is a common pattern.`
     );
 
     const resource = await createTestResource(testFile, 'auth-doc');
-    await suiteProvider(suite).indexResources([resource], suite.objects);
+    await suiteProvider(suite).indexResources([resource], suite.content);
 
     // Query for authentication
     const result = await suiteProvider(suite).query({
@@ -72,7 +72,7 @@ NoSQL databases include document stores, key-value stores, and graph databases.`
     );
 
     const resource = await createTestResource(testFile, 'db-doc');
-    await suiteProvider(suite).indexResources([resource], suite.objects);
+    await suiteProvider(suite).indexResources([resource], suite.content);
 
     const result = await suiteProvider(suite).query({
       text: 'database types',
@@ -111,7 +111,7 @@ Serverless platforms abstract infrastructure management entirely.`
     );
 
     const resource = await createTestResource(testFile, 'arch-doc');
-    await suiteProvider(suite).indexResources([resource], suite.objects);
+    await suiteProvider(suite).indexResources([resource], suite.content);
 
     // Query with high relevance requirement
     const result = await suiteProvider(suite).query({
@@ -161,7 +161,7 @@ Follows convention over configuration.`
     );
 
     const resource = await createTestResource(testFile, 'prog-doc');
-    await suiteProvider(suite).indexResources([resource], suite.objects);
+    await suiteProvider(suite).indexResources([resource], suite.content);
 
     const result = await suiteProvider(suite).query({
       text: 'Python programming data science',

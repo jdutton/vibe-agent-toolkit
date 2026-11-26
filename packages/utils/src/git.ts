@@ -26,6 +26,7 @@
 // `gitIsMissing` is deliberately NOT here: classify git's silence through `gitNoAnswerFor` or, for a
 // snapshot, `gitSnapshotFailureOf` — the one classifier — so no caller decides the cause with its own sentence.
 export {
+  OBJECT_READ_ENV,
   runGit,
   runGitBytes,
   runGitOrThrow,

@@ -22,11 +22,12 @@ import {
   type PopulationUnreadablePolicy,
   ResourceRegistry,
   type ResourcePopulationSource,
+  type RunContentCache,
   withRunPopulation,
 } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { type DirectoryRefusal, settleCrawlRefusal, type UnreadablePolicy } from '@vibe-agent-toolkit/utils/crawl';
-import { type GitObjectReaders, GitTracker } from '@vibe-agent-toolkit/utils/git';
+import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import { LINK_GRAPH_MEMBER_GLOBS } from '../link-graph-members.js';
 
@@ -66,10 +67,11 @@ export interface RunSkillRegistriesOptions {
    */
   readonly dispatcher: ParseDispatcher;
   /**
-   * The run's git object readers (`PopulationRun.objects`): the packager reads a git-keyed
-   * resource's bytes through them. Owned and closed by the run.
+   * The run's one content reader (`PopulationRun.content`): every lane of the run that reads a
+   * file's bytes beside its parse (the packager's link rewrite, the skill validator's raw scans)
+   * reads through it, so the bytes are the ones the run parsed, read once per run.
    */
-  readonly objects: GitObjectReaders;
+  readonly content: RunContentCache;
   /**
    * The include set a root's view crawls. `vat skills validate` crawls markdown
    * only (`**\/*.md`) for the one project root its batch shares, and
@@ -108,8 +110,8 @@ export class RunSkillRegistries {
   readonly source: ResourcePopulationSource;
   /** The run's one parse dispatcher (see {@link RunSkillRegistriesOptions.dispatcher}). */
   readonly dispatcher: ParseDispatcher;
-  /** The run's git object readers (see {@link RunSkillRegistriesOptions.objects}). */
-  readonly objects: GitObjectReaders;
+  /** The run's one content reader (see {@link RunSkillRegistriesOptions.content}). */
+  readonly content: RunContentCache;
   readonly #options: RunSkillRegistriesOptions;
   readonly #views = new Map<string, Promise<CrawledView>>();
 
@@ -118,7 +120,7 @@ export class RunSkillRegistries {
     this.registry = options.registry;
     this.source = options.source;
     this.dispatcher = options.dispatcher;
-    this.objects = options.objects;
+    this.content = options.content;
   }
 
   /**
@@ -293,7 +295,7 @@ export function withSkillRegistries<T>(root: string, work: (registries: RunSkill
       registry: ResourceRegistry.forRun(population, { baseDir: resolved, gitTracker }),
       source: population.source,
       dispatcher: population.dispatcher,
-      objects: population.objects,
+      content: population.content,
       includeFor: () => REGISTRY_INCLUDE,
       configFor: projectConfigOrNone,
       crawlOnce: (key, crawl) => population.crawlOnce(key, crawl),

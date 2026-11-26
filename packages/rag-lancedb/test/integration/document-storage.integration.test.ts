@@ -63,7 +63,7 @@ Content in section 1 about testing.`
     );
 
     const resource = await createTestResource(filePath, 'doc-1');
-    const result = await suite.provider.indexResources([resource], suite.objects);
+    const result = await suite.provider.indexResources([resource], suite.content);
     expect(result.resourcesIndexed).toBe(1);
     expect(result.errors).toEqual([]);
 
@@ -104,7 +104,7 @@ This references [another file](./other.md) for details.`
     // Verify links were parsed
     expect(resource.links.some((l) => l.type === 'local_file')).toBe(true);
 
-    const result = await suite.provider.indexResources([resource], suite.objects);
+    const result = await suite.provider.indexResources([resource], suite.content);
     expect(result.resourcesIndexed).toBe(1);
 
     await reconnectProvider(suite, { contentTransform });
@@ -135,7 +135,7 @@ Important security information about authentication.`
     const resource = await createTestResource(filePath, 'meta-doc');
     expect(resource.frontmatter).toBeDefined();
 
-    const result = await suite.provider.indexResources([resource], suite.objects);
+    const result = await suite.provider.indexResources([resource], suite.content);
     expect(result.resourcesIndexed).toBe(1);
 
     await reconnectProvider(suite);
@@ -157,7 +157,7 @@ Important security information about authentication.`
     );
 
     const resource = await createTestResource(filePath, 'no-store-doc');
-    await suite.provider.indexResources([resource], suite.objects);
+    await suite.provider.indexResources([resource], suite.content);
 
     const doc = await suite.provider.getDocument('no-store-doc');
     expect(doc).toBeNull();
@@ -173,7 +173,7 @@ Important security information about authentication.`
     );
 
     const resource = await createTestResource(filePath, 'existing-doc');
-    await suite.provider.indexResources([resource], suite.objects);
+    await suite.provider.indexResources([resource], suite.content);
 
     await reconnectProvider(suite);
 
@@ -190,7 +190,7 @@ Important security information about authentication.`
       '# Original\n\nOriginal content here.'
     );
     const resource = await createTestResource(originalPath, UPDATE_DOC_ID);
-    await suite.provider.indexResources([resource], suite.objects);
+    await suite.provider.indexResources([resource], suite.content);
 
     const modifiedPath = await createTestMarkdownFile(
       suite.tempDir,
@@ -198,7 +198,7 @@ Important security information about authentication.`
       '# Modified\n\nCompletely different content after modification.'
     );
     const modifiedResource = await createTestResource(modifiedPath, UPDATE_DOC_ID);
-    const updateResult = await suite.provider.indexResources([modifiedResource], suite.objects);
+    const updateResult = await suite.provider.indexResources([modifiedResource], suite.content);
     expect(updateResult.resourcesUpdated).toBe(1);
 
     await reconnectProvider(suite);
@@ -222,7 +222,7 @@ Important security information about authentication.`
         '# Delete Me\n\nThis document will be deleted.'
       );
       const resource = await createTestResource(filePath, DELETE_DOC_ID);
-      await suite.provider.indexResources([resource], suite.objects);
+      await suite.provider.indexResources([resource], suite.content);
 
       await reconnectProvider(suite);
 
@@ -247,7 +247,7 @@ Important security information about authentication.`
       '# Default\n\nDefault configuration test.'
     );
     const resource = await createTestResource(filePath, 'default-doc');
-    await suite.provider.indexResources([resource], suite.objects);
+    await suite.provider.indexResources([resource], suite.content);
 
     const stats = await suite.provider.getStats();
     expect(stats.totalChunks).toBeGreaterThan(0);
@@ -273,7 +273,7 @@ Important security information about authentication.`
     const resource1 = await createTestResource(file1, 'multi-1');
     const resource2 = await createTestResource(file2, 'multi-2');
 
-    const result = await suite.provider.indexResources([resource1, resource2], suite.objects);
+    const result = await suite.provider.indexResources([resource1, resource2], suite.content);
     expect(result.resourcesIndexed).toBe(2);
 
     await reconnectProvider(suite);
@@ -296,7 +296,7 @@ Important security information about authentication.`
       '# Batch One\n\nFirst batch content.'
     );
     const resource1 = await createTestResource(file1, 'batch-1');
-    await suite.provider.indexResources([resource1], suite.objects);
+    await suite.provider.indexResources([resource1], suite.content);
 
     const file2 = await createTestMarkdownFile(
       suite.tempDir,
@@ -304,7 +304,7 @@ Important security information about authentication.`
       '# Batch Two\n\nSecond batch content.'
     );
     const resource2 = await createTestResource(file2, 'batch-2');
-    await suite.provider.indexResources([resource2], suite.objects);
+    await suite.provider.indexResources([resource2], suite.content);
 
     await reconnectProvider(suite);
 
@@ -326,7 +326,7 @@ Important security information about authentication.`
       '# Chunk Test\n\nContent here.'
     );
     const resource = await createTestResource(filePath, 'chunk-doc');
-    const result = await suite.provider.indexResources([resource], suite.objects);
+    const result = await suite.provider.indexResources([resource], suite.content);
 
     await reconnectProvider(suite);
 
@@ -355,7 +355,7 @@ Important security information about authentication.`
       'titled-doc',
     );
 
-    const result = await suite.provider.indexResources([bare, titled], suite.objects);
+    const result = await suite.provider.indexResources([bare, titled], suite.content);
     expect(result.errors).toEqual([]);
     expect(result.resourcesIndexed).toBe(2);
 

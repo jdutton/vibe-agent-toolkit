@@ -48,7 +48,7 @@ Line 16 provides closing remarks.`
     );
 
     const resource = await createTestResource(testFile, 'multiline-doc');
-    await suiteProvider(suite).indexResources([resource], suite.objects);
+    await suiteProvider(suite).indexResources([resource], suite.content);
 
     const result = await suiteProvider(suite).query({
       text: 'second section',
@@ -93,7 +93,7 @@ Line 16 provides closing remarks.`
     );
 
     const resource = await createTestResource(testFile, 'ordered-doc');
-    await suiteProvider(suite).indexResources([resource], suite.objects);
+    await suiteProvider(suite).indexResources([resource], suite.content);
 
     const result = await suiteProvider(suite).query({
       text: 'information',
@@ -143,7 +143,7 @@ Line 13: Use exponential backoff for retries.`
     );
 
     const resource = await createTestResource(testFile, 'api-doc');
-    await suiteProvider(suite).indexResources([resource], suite.objects);
+    await suiteProvider(suite).indexResources([resource], suite.content);
 
     // User searches for rate limiting info
     const result = await suiteProvider(suite).query({

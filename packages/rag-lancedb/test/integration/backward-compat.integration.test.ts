@@ -39,7 +39,7 @@ describe.skipIf(onnxModelUnreachable())('Backward compatibility', () => {
 
     // Index the resource using default metadata
     const resource = await createTestResource(filePath, 'test-doc');
-    const result = await suite.provider.indexResources([resource], suite.objects);
+    const result = await suite.provider.indexResources([resource], suite.content);
 
     // Verify indexing worked
     expect(result.errors).toEqual([]);
@@ -65,7 +65,7 @@ describe.skipIf(onnxModelUnreachable())('Backward compatibility', () => {
     // Index resources
     const securityResource = await createTestResource(securityDoc, SECURITY_DOC_ID);
     const apiResource = await createTestResource(apiDoc, 'api-doc');
-    await suite.provider.indexResources([securityResource, apiResource], suite.objects);
+    await suite.provider.indexResources([securityResource, apiResource], suite.content);
 
     // Query without filters - should return results
     const allResults = await suite.provider.query({ text: TEST_SEARCH_TERM, limit: 10 });
@@ -89,7 +89,7 @@ describe.skipIf(onnxModelUnreachable())('Backward compatibility', () => {
       '# Test\n\nSome content for testing.'
     );
     const resource = await createTestResource(filePath, 'test-id');
-    await suite.provider.indexResources([resource], suite.objects);
+    await suite.provider.indexResources([resource], suite.content);
 
     // Query to get chunks
     const result = await suite.provider.query({ text: 'content', limit: 5 });

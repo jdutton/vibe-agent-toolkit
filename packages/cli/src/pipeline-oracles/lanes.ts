@@ -105,7 +105,7 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
       };
     },
     build: async (projectRoot) => {
-      const loaded = await withRunContext({ projectionStore: 'on-demand', root: projectRoot, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) => loadResourcesWithConfig(undefined, run, createLogger()));
+      const loaded = await withRunContext({ memberBytes: 'git', projectionStore: 'on-demand', root: projectRoot, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) => loadResourcesWithConfig(undefined, run, createLogger()));
       return loaded.registry;
     },
   },
@@ -121,7 +121,7 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
       filesOnly: true,
     }),
     // An oracle arm is a complete population or nothing: refuse, like the verbs it mirrors.
-    build: (projectRoot) => withRunContext({ projectionStore: 'on-demand', root: projectRoot, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
+    build: (projectRoot) => withRunContext({ memberBytes: 'git', projectionStore: 'on-demand', root: projectRoot, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
       runSkillRegistries(run).forRoot(projectRoot, { outputs: [], unreadable: 'refuse' }),
     ),
   },
@@ -136,7 +136,7 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
       absolute: true,
       filesOnly: true,
     }),
-    build: (projectRoot) => withRunContext({ projectionStore: 'on-demand', root: projectRoot, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
+    build: (projectRoot) => withRunContext({ memberBytes: 'disk', projectionStore: 'on-demand', root: projectRoot, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
       runSkillRegistries(run).packagingRegistry(projectRoot, []),
     ),
   },
@@ -171,7 +171,7 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
     // learned to route parsing through the project's declared collection
     // `mimeType`s and this copy did not, so the oracle described a lane nobody
     // runs. Naming the builder is what makes that class of drift impossible.
-    build: (projectRoot) => withRunContext({ projectionStore: 'on-demand', root: projectRoot, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
+    build: (projectRoot) => withRunContext({ memberBytes: 'git', projectionStore: 'on-demand', root: projectRoot, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
       skillsValidateRegistries(run, projectRoot, loadConfig(projectRoot, 'source'))
         .forRoot(projectRoot, { unreadable: 'refuse', outputs: [] }),
     ),

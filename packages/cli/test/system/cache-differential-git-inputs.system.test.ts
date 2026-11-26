@@ -70,7 +70,12 @@ function seededKeyStable(runs: RecordedRuns): void {
 }
 
 /** One checkout seed: state A and B differ only in a global input, beneath one tree hash. */
-function checkoutSeed(name: string, stateA: NonNullable<I0Seed['stateA']>, toB: NonNullable<I0Seed['toB']>): I0Seed {
+function checkoutSeed(
+  name: string,
+  storeOffReads: Extract<I0Seed['expect'], { checkoutStable: unknown }>['checkoutStable']['storeOffReads'],
+  stateA: NonNullable<I0Seed['stateA']>,
+  toB: NonNullable<I0Seed['toB']>,
+): I0Seed {
   return {
     name,
     needs: null,
@@ -78,7 +83,7 @@ function checkoutSeed(name: string, stateA: NonNullable<I0Seed['stateA']>, toB: 
     verbs: ['query'],
     stateA,
     toB,
-    expect: { checkoutStable: { arm: 'warmSameHistory', because: STABLE_BECAUSE } },
+    expect: { checkoutStable: { arm: 'warmSameHistory', because: STABLE_BECAUSE, storeOffReads } },
     consumed: { runs: ['warmSameHistory:prime', 'warmSameHistory:measured'], check: seededKeyStable },
   };
 }
@@ -111,6 +116,8 @@ const globalExcludes: I0Seed = {
 
 const autocrlfFlip = checkoutSeed(
   'autocrlfFlip',
+  // State B checks the file out with LF, which is what git stores: store-off reads git's bytes.
+  'git bytes',
   (corpus, git) => {
     git(['config', '--global', 'core.autocrlf', 'true']);
     recheckout(corpus, git);
@@ -152,6 +159,10 @@ function filterCommand(script: string, mode: 'clean' | 'smudge'): string {
 
 const cleanSmudge = checkoutSeed(
   'cleanSmudge',
+  // Git stores every markdown file as a pointer; the checkout holds the smudged text of all but the
+  // seeded file. Store-on parses pointers, store-off the text, so each fact parsed from a link, an
+  // import or a rule's frontmatter is store-off's alone.
+  { otherBytes: { parsedRelations: ['claude_context_loads', 'claude_rule_patterns', 'edge_resolutions', 'edges', 'resource_tags'] } },
   (corpus, git, dirs) => {
     const script = safePath.join(dirs.home, 'fake-filter.cjs');
     writeFileSync(script, FAKE_FILTER_SCRIPT);
@@ -174,6 +185,8 @@ const cleanSmudge = checkoutSeed(
 
 const globalAttributesEol = checkoutSeed(
   'globalAttributesEol',
+  // CRLF on disk, LF in git: the keys move, and nothing parsed from a path does.
+  { otherBytes: { parsedRelations: [] } },
   (corpus) => {
     expect(corpusBytes(corpus, SEEDED).includes('\r\n'), 'state A holds LF').toBe(false);
     return Promise.resolve();

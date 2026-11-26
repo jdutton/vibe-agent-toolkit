@@ -8,6 +8,7 @@ import {
   partitionNotAdmitted,
   resolveLocalHref,
   type LinkType,
+  type RunContentCache,
 } from '@vibe-agent-toolkit/resources';
 import {
   anchoredAt,
@@ -36,7 +37,7 @@ import {
 import type { EvidenceRecord } from '../evidence/index.js';
 import { parseRefusalIssue } from '../parse-refusal-issues.js';
 import { frontmatterVerdictOf } from '../parsers/frontmatter-parser.js';
-import { linkedFileSkillText, readSkillDocument, type SkillDocument, type SkillTextRun, withSkillTextRun } from '../skill-text-lane.js';
+import { linkedFileSkillText, rawUtf8Text, readSkillDocument, type SkillDocument, type SkillTextRun, withSkillTextRun } from '../skill-text-lane.js';
 
 import { detectBundledResourceWithoutLinks } from './bundled-resource-link-detection.js';
 import { observationToIssue, runCompatDetectors } from './compat-detectors.js';
@@ -215,7 +216,7 @@ async function validateSkillOn(options: ValidateOptions, run: SkillTextRun): Pro
 
   // Unreferenced file detection
   if (options.checkUnreferencedFiles) {
-    detectUnreferencedFiles(skillPath, skillDir, locationRoot, linkedFiles, issues);
+    await detectUnreferencedFiles(skillPath, skillDir, locationRoot, linkedFiles, issues, run.content);
   }
 
   // Build metadata
@@ -497,7 +498,7 @@ async function traverseLinks(
     // its whole text, fenced code blocks intact.
     if (currentPath !== resolvedSkillPath) {
       // The raw text this lane has always scanned: the record when the file is plain UTF-8, else a read.
-      const linkedText = linkedFileSkillText(currentPath, document, run);
+      const linkedText = await linkedFileSkillText(currentPath, document, run);
       const { evidence: linkedEvidence, observations: linkedObservations } =
         runCompatDetectors(linkedText, currentPath, locationRoot, document.frontmatter);
       appendAll(allEvidence, linkedEvidence);
@@ -538,13 +539,14 @@ async function traverseLinks(
  *
  * Excludes SKILL.md, CLAUDE.md, and navigation file patterns (README.md, etc.).
  */
-function detectUnreferencedFiles(
+async function detectUnreferencedFiles(
   skillPath: string,
   skillDir: string,
   locationRoot: string,
   linkedFiles: readonly LinkedFileWalkRecord[],
   issues: ValidationIssue[],
-): void {
+  content: RunContentCache,
+): Promise<void> {
   // Collect all visited paths (SKILL.md + linked files)
   const visitedPaths = new Set<string>([safePath.resolve(skillPath)]);
   for (const lf of linkedFiles) {
@@ -574,7 +576,7 @@ function detectUnreferencedFiles(
   }
 
   // Check for implicit references among unreferenced files
-  const implicitRefs = extractImplicitReferences(skillDir, unreferencedFiles, visitedPaths);
+  const implicitRefs = await extractImplicitReferences(skillDir, unreferencedFiles, visitedPaths, content);
 
   for (const relPath of unreferencedFiles) {
     const absPath = safePath.resolve(skillDir, relPath);
@@ -708,16 +710,19 @@ function findBoundedMatch(line: string, candidate: string): number {
 }
 
 /**
- * Scan a single file's lines for implicit references to unreferenced files.
+ * Scan a single file's lines for implicit references to unreferenced files: its raw UTF-8 text,
+ * read through the run's one content reader (the read the BFS's parse was made from, so no second
+ * read of the file).
  */
-function scanFileForReferences(
+async function scanFileForReferences(
   visitedPath: string,
   candidates: Map<string, string>,
   results: ImplicitReference[],
-): void {
+  reader: RunContentCache,
+): Promise<void> {
   let content: string;
   try {
-    content = fs.readFileSync(visitedPath, 'utf-8');
+    content = await rawUtf8Text(visitedPath, reader);
   } catch (error) {
     // The BFS already read this file, so "not there now" is a race with nothing
     // left to scan. A refusal is not that: skipping it silently dropped every
@@ -759,13 +764,15 @@ function scanFileForReferences(
  * @param skillDir - Absolute path to the skill directory
  * @param unreferencedFiles - Relative paths of .md files not found by BFS traversal
  * @param visitedFiles - Absolute paths of files visited during BFS (to scan for references)
+ * @param content - The run's one content reader, which each visited file's text is read through
  * @returns Array of implicit references found
  */
-export function extractImplicitReferences(
+export async function extractImplicitReferences(
   _skillDir: string,
   unreferencedFiles: readonly string[],
   visitedFiles: ReadonlySet<string>,
-): ImplicitReference[] {
+  content: RunContentCache,
+): Promise<ImplicitReference[]> {
   if (unreferencedFiles.length === 0) {
     return [];
   }
@@ -773,9 +780,8 @@ export function extractImplicitReferences(
   const candidates = buildCandidateMap(unreferencedFiles);
   const results: ImplicitReference[] = [];
 
-  for (const visitedPath of visitedFiles) {
-    scanFileForReferences(visitedPath, candidates, results);
-  }
+  // In order: the results keep the visited files' order.
+  await forEachInOrder([...visitedFiles], (visitedPath) => scanFileForReferences(visitedPath, candidates, results, content));
 
   return results;
 }

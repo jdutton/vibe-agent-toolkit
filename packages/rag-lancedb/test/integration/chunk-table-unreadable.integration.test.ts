@@ -49,7 +49,7 @@ async function openSuiteProvider(): Promise<LanceDBRAGProvider> {
 async function indexOneDocument(): Promise<Awaited<ReturnType<typeof createTestResource>>> {
   const resource = await createTestResource(await createTestMarkdownFile(suite.tempDir, 'doc.md', '# Doc\n\nSome prose.\n'), 'doc');
   const provider = await openProvider();
-  await provider.indexResources([resource], suite.objects);
+  await provider.indexResources([resource], suite.content);
   await provider.close();
   return resource;
 }
@@ -83,7 +83,7 @@ describe('a chunk table LanceDB cannot read', () => {
     connection.close();
     const resource = await createTestResource(await createTestMarkdownFile(suite.tempDir, 'doc.md', '# Doc\n\nSome prose.\n'), 'doc');
 
-    const failure = await failureOf(async () => (await openSuiteProvider()).indexResources([resource], suite.objects));
+    const failure = await failureOf(async () => (await openSuiteProvider()).indexResources([resource], suite.content));
 
     expect(failure.code).toBe(RAG_DATABASE_UNREADABLE_CODE);
     expect(failure.message).toContain('resourceid');
@@ -94,7 +94,7 @@ describe('a chunk table LanceDB cannot read', () => {
   // `index` used to write the new model's vectors into it truncated, and `stats` reported it ok.
   describe('a table another embedding model wrote (its vector size differs)', () => {
     it.each([
-      ['index', async (provider: LanceDBRAGProvider) => provider.indexResources([await doc2()], suite.objects)],
+      ['index', async (provider: LanceDBRAGProvider) => provider.indexResources([await doc2()], suite.content)],
       ['query', (provider: LanceDBRAGProvider) => provider.query({ text: 'prose' })],
       ['stats', (provider: LanceDBRAGProvider) => provider.getStats()],
     ] as const)('%s refuses it, naming both sizes', async (_verb, run) => {
@@ -110,7 +110,7 @@ describe('a chunk table LanceDB cannot read', () => {
     it('index writes nothing into it', async () => {
       await indexOneDocument();
 
-      await failureOf(async () => (await openWiderProvider()).indexResources([await doc2()], suite.objects));
+      await failureOf(async () => (await openWiderProvider()).indexResources([await doc2()], suite.content));
 
       const connection = await lancedb.connect(suite.dbPath);
       const table = await connection.openTable('rag_chunks');

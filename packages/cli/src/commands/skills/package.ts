@@ -20,15 +20,15 @@ import {
 } from '@vibe-agent-toolkit/agent-skills';
 import type { ParseResult } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Gate, type Report, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, followedStatSync, issueLocation, isVatError, requireFollowedStatSync, safePath, toForwardSlash, withFsFault, appendAll } from '@vibe-agent-toolkit/utils';
+import { everywhere, findProjectRoot, followedStatSync, issueLocation, isVatError, requireFollowedStatSync, safePath, toForwardSlash, withFsFault, appendAll } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, leftoverIssuesOf, leftoverIssuesOfWarnings, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { collectPostBuildIssues, formatIssueLines, formatIssueSetHeading } from '../../utils/issue-rendering.js';
 import { createLogger } from '../../utils/logger.js';
-import { readInputFile, requireProjectRoot } from '../../utils/project-root-policy.js';
-import { runSkillRegistries, NO_HOME_SETTLED_LISTENER, withRunContext } from '../../utils/resource-loader.js';
+import { requireInputPath, requireProjectRoot } from '../../utils/project-root-policy.js';
+import { runSkillRegistries, NO_HOME_SETTLED_LISTENER, withRunContext, type RunContext } from '../../utils/resource-loader.js';
 import { resolveSkillPath } from '../skill/review.js';
 
 import { packagingFailedIssue } from './build.js';
@@ -203,16 +203,18 @@ async function validateForPackage(
   skillPath: string,
   basePath: string,
   locationRoot: string,
-  logger: ReturnType<typeof createLogger>
+  logger: ReturnType<typeof createLogger>,
+  run: RunContext,
 ): Promise<ValidationResult> {
   logger.info(`\n🔍 Validating skill...`);
   // `{}`: this verb reads no project config (nor does `packageSkill` below). The gate
-  // reads only the skill: a read the OS refuses is the input's, of its content.
+  // reads only the skill: a read the OS refuses is the input's, of its content. Through the
+  // package's run, so the packager below is served the reads this gate made.
   const validationResult = await withFsFault(
     { side: 'source', origin: 'content', action: `validate the skill at ${skillPath}` },
     () => validateSkill({
       skillPath,
-      run: undefined,
+      run: run.population,
       rootDir: basePath,
       locationRoot,
       validation: {},
@@ -550,18 +552,19 @@ function failedChecksReport(
 /**
  * The SKILL.md the argument names, or the invocation's refusal — the same
  * policy `vat skill review` applies to its path: a path naming nothing is
- * `USAGE_INVALID`, one the OS will not stat or read is `INPUT_UNREADABLE`.
- * Decided here, before the validator, whose own existence probe cannot tell
- * the two apart and whose read is uncoded.
+ * `USAGE_INVALID`, one the OS will not stat is `INPUT_UNREADABLE`. Decided here,
+ * before the validator, whose own existence probe cannot tell the two apart, by a
+ * `stat` that reads nothing: a file the OS stats but will not READ is refused by
+ * the gate's coded read, the run's one read of it.
  */
 function resolvePackageSource(skillPath: string): string {
   const skillFile = resolveSkillPath(skillPath);
-  readInputFile(skillFile, { origin: 'argument', message: `Path does not exist: ${skillFile}` });
+  requireInputPath(skillFile, skillFile, { origin: 'argument', message: `Path does not exist: ${skillFile}` }, everywhere('source'));
   return skillFile;
 }
 
 /** One run, as the report it publishes: the gate's failure, a dry run's preview, or the package. */
-async function runPackage(
+function runPackage(
   skillPathArg: string,
   options: SkillsPackageCommandOptions,
   logger: ReturnType<typeof createLogger>
@@ -575,22 +578,23 @@ async function runPackage(
   const target = resolveTarget(options.target ?? DEFAULT_TARGET);
   const formats = resolvePackageFormats(options.formats);
 
-  // VALIDATE FIRST - shift left to catch errors early.
-  const skillDir = dirname(skillPath);
-  const locationRoot = findProjectRoot(skillDir) ?? skillDir;
-  const validation = await validateForPackage(skillPath, resolveBasePath(options, skillPath), locationRoot, logger);
-  logger.info('');
+  // One run for the package, rooted at the project root this command required, opened before the
+  // gate so the gate and the packager read each file once between them. What the package writes
+  // is planned inside `packageSkill`, whose crawls pass it.
+  return withRunContext({ memberBytes: 'disk', projectionStore: 'on-demand', root: projectRoot, tree: 'writes', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
+    // VALIDATE FIRST - shift left to catch errors early.
+    const skillDir = dirname(skillPath);
+    const locationRoot = findProjectRoot(skillDir) ?? skillDir;
+    const validation = await validateForPackage(skillPath, resolveBasePath(options, skillPath), locationRoot, logger, run);
+    logger.info('');
 
-  if (validation.summary.errors > 0) {
-    // The gate stopped it: nothing was packaged, and the document says so.
-    const skill = validation.metadata?.name ?? basename(skillDir);
-    return buildSkillsPackageReport({ validation, data: { skill, version: null, outputPath: null, dryRun: options.dryRun === true }, runFindings: [] });
-  }
-  // One run for the package, rooted at the project root this command required.
-  // What the package writes is planned inside `packageSkill`, whose crawls pass it.
-  return withRunContext({ projectionStore: 'on-demand', root: projectRoot, tree: 'writes', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
-    packageAndReport(skillPath, options, { target, formats, registries: runSkillRegistries(run) }, validation, locationRoot, logger),
-  );
+    if (validation.summary.errors > 0) {
+      // The gate stopped it: nothing was packaged, and the document says so.
+      const skill = validation.metadata?.name ?? basename(skillDir);
+      return buildSkillsPackageReport({ validation, data: { skill, version: null, outputPath: null, dryRun: options.dryRun === true }, runFindings: [] });
+    }
+    return packageAndReport(skillPath, options, { target, formats, registries: runSkillRegistries(run) }, validation, locationRoot, logger);
+  });
 }
 
 async function packageCommand(

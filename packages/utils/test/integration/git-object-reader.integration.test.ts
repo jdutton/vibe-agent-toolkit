@@ -58,6 +58,9 @@ describe('openGitObjectReaders', () => {
 
   beforeEach(() => {
     readers = openGitObjectReaders({});
+    // Spend the once-per-process version probe (and this set's memo) here, so every test's
+    // `git.calls` count is exact whether it runs alone or after the others.
+    readers.guardsLazyFetch();
   });
 
   afterEach(async () => {
@@ -75,7 +78,6 @@ describe('openGitObjectReaders', () => {
       Buffer.alloc(3 * 1024 * 1024, 0x61),
     ];
     const oids = bodies.map((body, index) => blobOf(root, `f${String(index)}`, body));
-    readers.guardsLazyFetch(); // the once-per-process version probe, outside the count
     const read = await counted('git.calls', async () =>
       counted('content.gitRead', async () => Promise.all([...oids, oids[0] ?? ''].map(async (oid) => readers.read(root, oid)))));
     const expected = [...bodies, bodies[0] ?? Buffer.alloc(0)];
@@ -89,6 +91,16 @@ describe('openGitObjectReaders', () => {
     const oid = blobOf(root, 'a.md', Buffer.from('sha256 bytes\n'));
     expect(oid).toHaveLength(64);
     expect(Buffer.from(await readers.read(root, oid)).toString()).toBe('sha256 bytes\n');
+  });
+
+  it('reads the object its name names, never a replace ref\'s replacement, and sizes it so', async () => {
+    const root = repository();
+    const real = blobOf(root, 'real.md', Buffer.from('real\n'));
+    const replacement = blobOf(root, 'evil.md', Buffer.from('replacement bytes\n'));
+    git(root, 'replace', real, replacement);
+    expect(git(root, 'cat-file', '-p', real), 'the control: git honours the replace ref by default').toBe('replacement bytes');
+    expect(Buffer.from(await readers.read(root, real)).toString()).toBe('real\n');
+    expect((await readers.sizes(root, [real])).get(real)).toBe(5);
   });
 
   it('rejects a missing object alone, as GitObjectMissingError, and keeps reading through the same child', async () => {
@@ -187,7 +199,9 @@ describe('openGitObjectReaders', () => {
     }
   });
 
-  it('asks this git its version when none is given', () => {
-    expect(readers.guardsLazyFetch()).toBe(true);
+  it('asks this git its version when none is given, and agrees with it', () => {
+    const [major, minor] = git(process.cwd(), '--version').replace(/^git version /, '').split('.').map(Number);
+    const installed = (major ?? 0) > 2 || ((major ?? 0) === 2 && (minor ?? 0) >= 45);
+    expect(readers.guardsLazyFetch()).toBe(installed);
   });
 });

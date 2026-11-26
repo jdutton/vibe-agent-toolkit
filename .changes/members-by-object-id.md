@@ -1,31 +1,83 @@
 ### Breaking
 
-- **With the projection store on, a tracked regular file's content key is its git object id**
-  (`git-sha1` or `git-sha256`) in `vat resources scan` and `vat resources query` output, and the
-  file is parsed, and shipped by the packager's markdown link rewrite and by `vat rag index`, in
-  git's stored form (eol-normalized, clean-filtered). Plain asset copies in `vat build` and
-  store-off runs still use the bytes on disk. A Windows checkout with `core.autocrlf=true` now
-  parses and ships those files with LF line endings.
-- **Library (`@vibe-agent-toolkit/rag`): `RAGAdminProvider.indexResources(resources, objects,
-  onProgress?)` takes a required `GitObjectReaders`** (`openGitObjectReaders()` from
-  `@vibe-agent-toolkit/utils/git`); close it after indexing.
+- **With the projection store on, the cached validation lanes key a snapshot member by its git
+  object id** (`git-sha1` or `git-sha256`) in `vat resources scan` and `vat resources query` output,
+  and read its bytes from git. The lanes are `vat validate`, `vat verify`, `vat resources scan`,
+  `query` and `check`, `vat skill review`, `vat claude context` and `vat inventory`. A member is
+  every regular file the snapshot lists inside the run's root: tracked files, modified or not, and
+  untracked files no ignore rule covers (`git add --all` stages them). Validation parses a member in
+  git's stored form (eol-normalized, clean-filtered), so a Windows checkout with
+  `core.autocrlf=true` now validates those files with LF line endings. Store-off runs, and files outside
+  the run's root even when the snapshot lists them, are keyed and read from disk.
+- **Builds read the working tree.** `vat skills build`, `vat skills package`, `vat build`'s skills
+  lane, `vat claude plugin build`, `vat skill test run` and `vat rag index` read every file from
+  disk and key it by its checksum, once per file per build. A build ships working-tree bytes (CRLF
+  on an autocrlf checkout), and the packager's link rewrite uses facts parsed from those same bytes.
+- **Library (`@vibe-agent-toolkit/rag`, `@vibe-agent-toolkit/rag-lancedb`):
+  `indexResources(resources, content: RunContentCache, onProgress?)` takes the run's content
+  reader.** Each resource's text is read through it and checked against the content key the crawl
+  gave it. A caller outside a VAT run passes `new RunContentCache(NO_GIT_MEMBERS)`.
+- **Library (`@vibe-agent-toolkit/resources`): `readContentByKey` is removed.** Every lane reads
+  through the run's `RunContentCache`.
+- **Library (`@vibe-agent-toolkit/resources`): `new RunContentCache(membersOf)` takes a required
+  members provider** (`RunMembersOf`: `{ root, resolve }`, or `NO_GIT_MEMBERS` to key every file
+  from disk), and **`RunPopulationOptions.membersOf` is required** (`PopulationMembersOf`, or
+  `null`).
 - **Library (`@vibe-agent-toolkit/resources`, `@vibe-agent-toolkit/agent-skills`):
-  `withPopulationRun` takes a required members provider before its work (`{ root, resolve }`, or
-  `NO_GIT_MEMBERS` to key every file from disk), and `RunSkillRegistries` takes the run's required `objects`.**
+  `withPopulationRun` takes a required members provider before its work, and `RunSkillRegistries`
+  takes the run's required `objects`.**
+- **Two new refusal mappings.** A member's object missing from git's store
+  (`GIT_OBJECT_MISSING`) refuses as `INPUT_UNREADABLE`; an object reader that exited or could not
+  start (`GIT_OBJECT_READ_FAILED`) refuses as `BACKEND_UNAVAILABLE`. A missing object does not
+  decline the store key: it marks that one path unreadable and the run continues.
+
+### Added
+
+- **`@vibe-agent-toolkit/utils/git`:**
+  - `OBJECT_READ_ENV`: the environment every object read runs with (`GIT_NO_REPLACE_OBJECTS=1`).
+  - `openGitObjectReaders()` and `GitObjectReaders` (with `GitObjectReadersOptions`, `GitVersion`):
+    one long-lived `git cat-file --batch` per repository, at most four live, lazy fetch refused.
+  - `gitMembersOf()` and `GitMembers` (with `GitMember`, `GitMemberKeyKind`): a tree key's members,
+    each with its object id and key kind.
+  - `GitObjectMissingError` (code `GIT_OBJECT_MISSING`) and `GitObjectReadError` (code
+    `GIT_OBJECT_READ_FAILED`).
+  - `parseBatchHeader()`, `frameBatchRecord()` and `batchCheckOf()` (with `BatchHeader`,
+    `BatchFrame`): the one `git cat-file` framer.
+  - A `case-collision` failure kind on `GitTreeKeyFailure`, and an `absent` field on `GitTreeKey`
+    (the absent skip-worktree entries, as git listed them).
+- **`@vibe-agent-toolkit/resources`:** `NO_GIT_MEMBERS`, and the types `RunMembersOf` and
+  `PopulationMembersOf`.
+- **The `VAT_GIT_MEMBERS_PARTIAL_CLONE` notice.** On a git older than 2.45, which has no
+  `--no-lazy-fetch`, a partial clone has no members: VAT keys and reads its files from disk, so no
+  read can fetch from the remote, and says so once per repository. A repository whose partial-clone
+  probe gets no answer from git is treated the same way, and the notice says it "may be a partial
+  clone".
 
 ### Changed
 
-- **A one-file edit on a large repository reads and hashes about one file instead of every file.**
-  Unchanged tracked files are keyed from git's snapshot with no read. Measured on the adopter's
-  repository, a warm `vat validate` after a one-file edit went from 24,827 file reads
-  and 446 MB hashed to one object read from git and nothing hashed.
+- **A one-file edit on a large repository makes VAT read and hash about one file instead of every
+  file.** Unchanged members are keyed from git's snapshot with no read. Measured on a large adopter
+  repository, a warm `vat validate` after a one-file edit went from 24,827 file reads and 446 MB
+  hashed to one object read from git and nothing hashed. The claim covers VAT's own reads: VAT still
+  opens each member once per run for its readability check (counted as `fs.stat`), and git's own
+  hashing inside the snapshot is not counted by any VAT counter.
 - **assume-unchanged, and skip-worktree on a file present on disk, no longer decline the projection
   store's key or refuse `changed_files`.** The one remaining index-flag decline is a skip-worktree
   file on disk inside a directory a sparse index holds collapsed while
   `sparse.expectFilesOutsideOfPatterns` is true; unset that setting to clear it.
 - **A tree whose index holds two paths the volume stores as one file (`A.md` and `a.md` on a
-  case-folding volume) runs without the store, with a notice naming both.** Remove one from the
-  index (`git rm --cached -- <path>`) to restore it.
+  case-folding volume) runs without the store, with a notice naming both.** Every pair of paths that
+  fold alike is compared, and a volume that reports an inode of 0 cannot prove two spellings
+  distinct, so such a pair also runs without the store unless the two are on different devices.
+  Remove one from the index (`git rm --cached -- <path>`) to restore it.
+- **Git filters other than Git LFS are out of scope.** VAT neither refuses nor declines for them; a
+  cached validation lane reads a filtered member in git's stored form.
+
+### Fixed
+
+- **A replace ref could answer for an object VAT reads from git.** Every object read, the content
+  reader and the Git LFS pass, now runs with `GIT_NO_REPLACE_OBJECTS=1`, so VAT reads the object the
+  snapshot names. Fixed; no action needed.
 
 ### Removed
 
