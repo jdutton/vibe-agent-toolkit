@@ -2,21 +2,25 @@
  * Which snapshot entries are Git LFS pointers, and whether each one is pulled.
  *
  * Under `filter=lfs` git stores a POINTER blob (a few lines naming the content's sha256 and size),
- * so the snapshot's tree hash holds the pointer whether the disk holds the content (pulled) or the
- * pointer itself (not pulled). `gitTreeKey` keys the two apart from what this reads; the one
- * working-tree file it reads is a pointer's whose content is exactly as long as the pointer (step 3).
+ * so the snapshot's tree hash holds the pointer whether the disk holds the content (pulled) or a
+ * pointer (not pulled). `gitTreeKey` keys the two apart from what this reads; the working-tree
+ * files it reads are pointers' files small enough to be a pointer (step 3).
  *
  * 1. One `git check-attr --stdin -z filter` over the members: the paths whose `filter` is `lfs`.
  * 2. One `git cat-file --batch-check` over their blobs: a pointer is small (under
  *    {@link POINTER_CANDIDATE_BYTES}), so a larger blob is an ordinary file (one committed before
  *    its attribute) and is never read. One `git cat-file --batch` over the small ones; a blob is a
- *    pointer when it parses by git-lfs's own grammar ({@link readPointerBlob}: `ext-` extension
- *    lines and the older version URLs included). A small blob that opens with a version line naming
- *    a git-lfs spec but does not parse is malformed, and declines the key; any other is ordinary.
- * 3. One `lstat` per pointer: the disk's size is the content's (pulled) or the pointer's (not
- *    pulled). When the two sizes are equal, the file's bytes are read and compared with the
- *    pointer's. Any other answer cannot tell: undecidable. An `lstat` or read the OS refuses is its
- *    own failure, never a crash.
+ *    pointer when it parses by git-lfs's own grammar ({@link parsePointer}: `ext-` extension lines
+ *    and the older version URLs included). Any other blob is ordinary: git-lfs's smudge writes a
+ *    blob it cannot parse unchanged, so the disk holds the blob as it would without the filter.
+ * 3. One `lstat` per pointer. What a file not pulled holds is a pointer naming the same oid: the
+ *    canonical encoding git-lfs's smudge writes, the blob itself when no smudge ran, or either with
+ *    git's line-ending conversion. Content is never a pointer naming its own sha256 (an extension's
+ *    input never one naming its output's), so the file is not pulled when its bytes parse as a
+ *    pointer naming the pointer's oid, and pulled otherwise. A file of
+ *    {@link ON_DISK_POINTER_BYTES} or more cannot be such a pointer and is pulled without a read.
+ *    Absent, or not a regular file: undecidable. An `lstat` or read the OS refuses is its own
+ *    failure, never a crash.
  *
  * Every git answer must name every object it was asked about; one that leaves any out is unreadable.
  * No spawn beyond `check-attr` when no member is `filter=lfs`, and none at all with no member.
@@ -28,17 +32,24 @@ import { compareCodeUnits } from './compare-code-units.js';
 import { fsFaultOf, isPathAbsentError } from './errors/errno-table.js';
 import { type GitBytesRunResult, runGitBytes } from './git-run.js';
 import type { GitSnapshotEntry, GitTreeKeyFailure } from './git-snapshot.js';
-import { decodeTextContent, decodeUtf8Exactly } from './text-content.js';
+import { decodeUtf8Exactly } from './text-content.js';
 
-/** A blob at least this large is never a pointer (a real pointer is about 130 bytes). */
+/** A blob at least this large is never a pointer (a real pointer is about 130 bytes; git-lfs's `BlobSizeCutoff`). */
 const POINTER_CANDIDATE_BYTES = 1024;
+
+/**
+ * A working-tree file at least this large is no pointer naming a candidate blob's oid. A blob under
+ * {@link POINTER_CANDIDATE_BYTES} encodes canonically in at most 12 bytes more (the alpha version URL
+ * is the shortest), and git's line-ending conversion at most doubles it.
+ */
+const ON_DISK_POINTER_BYTES = 2 * POINTER_CANDIDATE_BYTES;
 
 /** The modes of a regular file, the only entries a filter applies to. */
 const BLOB_MODES: ReadonlySet<string> = new Set(['100644', '100755']);
 
 /*
  * git-lfs's pointer grammar, as `decodeKV` in its `lfs/pointer.go` reads one: the blob trimmed of
- * surrounding whitespace, then `key value` lines (a trailing CR dropped, blank lines skipped) with
+ * surrounding white space as Go's `bytes.TrimSpace` trims it, then `key value` lines (a trailing CR dropped, blank lines skipped) with
  * `version`, `oid`, `size` in that order and `ext-<digit>-<name>` lines anywhere before `size`.
  */
 
@@ -68,8 +79,15 @@ const OID_VALUE = /^sha256:([0-9a-f]{64})$/;
 /** A `size` value as `strconv.ParseInt(value, 10, 64)` takes it. */
 const SIZE_VALUE = /^[+-]?\d+$/;
 
-/** A blob's first line that names a git-lfs spec version: a pointer, or a malformed one. */
-const VERSION_LINE = /^version [^\n]*(?:git-media|hawser|git-lfs)/;
+/**
+ * The code points Go's `unicode.IsSpace` holds, which `bytes.TrimSpace` trims: U+0085 among them,
+ * U+FEFF not (JavaScript's `trim()` differs on both).
+ */
+const GO_SPACE: ReadonlySet<string> = new Set([
+  '\t', '\n', '\v', '\f', '\r', ' ', '\u0085', '\u00A0', '\u1680',
+  '\u2000', '\u2001', '\u2002', '\u2003', '\u2004', '\u2005', '\u2006', '\u2007', '\u2008', '\u2009', '\u200A',
+  '\u2028', '\u2029', '\u202F', '\u205F', '\u3000',
+]);
 
 /** One entry the snapshot holds as an LFS pointer. */
 export interface LfsPointerEntry {
@@ -77,10 +95,12 @@ export interface LfsPointerEntry {
   readonly gitPath: string;
   /** Absolute, forward-slashed. */
   readonly absolutePath: string;
-  /** The content's sha256, hex, as the pointer names it. */
+  /** The sha256, hex, the pointer names: the content's, or for an extended pointer its extensions' output's. */
   readonly lfsOid: string;
-  /** The disk holds the content (`true`) or the pointer (`false`). */
+  /** The disk holds the content (`true`) or a pointer (`false`). */
   readonly pulled: boolean;
+  /** The pointer has `ext-` lines: a pulled file holds the extensions' input, whose sha256 is not `lfsOid`. */
+  readonly extended: boolean;
 }
 
 /** A pointer's file the OS would not let the pass `lstat` or read. */
@@ -96,10 +116,8 @@ interface LfsUnreadFile {
 interface LfsState {
   readonly ok: true;
   readonly pointers: readonly LfsPointerEntry[];
-  /** git paths of pointers whose file is neither its pointer nor its content by size, sorted. */
+  /** git paths of pointers whose file is absent or not a regular file, sorted. */
   readonly undecidable: readonly string[];
-  /** git paths of small `filter=lfs` blobs that open with a spec version line and do not parse, sorted. */
-  readonly malformed: readonly string[];
   /** Pointers' files the OS would not let the pass `lstat` or read, by git path. */
   readonly unread: readonly LfsUnreadFile[];
 }
@@ -112,20 +130,12 @@ type LfsStateFailure = DistributiveOmit<
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
-/** A candidate pointer blob's facts, before the disk is looked at. */
+/** A pointer's facts the key needs. */
 interface ParsedPointer {
   readonly lfsOid: string;
-  /** The content's size, as the pointer declares it. */
-  readonly size: number;
-  /** The pointer blob's own bytes: a file not pulled holds exactly these. */
-  readonly bytes: Uint8Array;
+  /** It has `ext-` lines. */
+  readonly extended: boolean;
 }
-
-/** What one small `filter=lfs` blob is. */
-type PointerRead =
-  | { readonly kind: 'pointer'; readonly pointer: ParsedPointer }
-  | { readonly kind: 'malformed' }
-  | { readonly kind: 'ordinary' };
 
 /** A pointer's lines by key, before their values are checked. */
 interface PointerFields {
@@ -191,32 +201,44 @@ function extensionsValid(extensions: ReadonlyMap<string, string>): boolean {
  * The pointer `fields` declare, when every value is one git-lfs takes (`decodeKV`).
  *
  * @param fields - The pointer's lines by key
- * @param blob - The blob's bytes
  * @returns The pointer, or `undefined`
  */
-function pointerOfFields({ keys, extensions }: PointerFields, blob: Uint8Array): ParsedPointer | undefined {
+function pointerOfFields({ keys, extensions }: PointerFields): ParsedPointer | undefined {
   const lfsOid = OID_VALUE.exec(keys.get('oid') ?? '')?.[1];
   const declared = keys.get('size') ?? '';
   const size = Number(declared);
   if (!POINTER_VERSIONS.has(keys.get('version') ?? '') || lfsOid === undefined) return undefined;
+  // A size past 2^53 git-lfs reads and this declines: a known divergence, content-keying-and-git.md 7.1.
   if (!SIZE_VALUE.test(declared) || !Number.isSafeInteger(size) || size < 0) return undefined;
   if (!extensionsValid(extensions)) return undefined;
-  return { lfsOid, size, bytes: blob };
+  return { lfsOid, extended: extensions.size > 0 };
 }
 
 /**
- * Read a small blob by git-lfs's pointer grammar (the module header).
+ * `text` without the leading and trailing code points Go's `bytes.TrimSpace` drops ({@link GO_SPACE}).
  *
- * @param blob - The blob's bytes
- * @returns A pointer; malformed, when it opens with a version line naming a git-lfs spec and does
- *   not parse; otherwise ordinary
+ * @param text - The text
+ * @returns The text, trimmed
  */
-function readPointerBlob(blob: Uint8Array): PointerRead {
-  const text = decodeUtf8Exactly(blob)?.trim();
-  const fields = text === undefined ? undefined : pointerFieldsOf(text);
-  const pointer = fields === undefined ? undefined : pointerOfFields(fields, blob);
-  if (pointer !== undefined) return { kind: 'pointer', pointer };
-  return VERSION_LINE.test(decodeTextContent(blob).text.trimStart()) ? { kind: 'malformed' } : { kind: 'ordinary' };
+function goTrimSpace(text: string): string {
+  const points = [...text];
+  let start = 0;
+  let end = points.length;
+  while (start < end && GO_SPACE.has(points[start] ?? '')) start += 1;
+  while (end > start && GO_SPACE.has(points[end - 1] ?? '')) end -= 1;
+  return points.slice(start, end).join('');
+}
+
+/**
+ * Read bytes by git-lfs's pointer grammar (the module header): a blob, or a pointer's file on disk.
+ *
+ * @param bytes - The bytes
+ * @returns The pointer they are, or `undefined` when git-lfs would not read them as one
+ */
+function parsePointer(bytes: Uint8Array): ParsedPointer | undefined {
+  const text = decodeUtf8Exactly(bytes);
+  const fields = text === undefined ? undefined : pointerFieldsOf(goTrimSpace(text));
+  return fields === undefined ? undefined : pointerOfFields(fields);
 }
 
 /**
@@ -304,7 +326,7 @@ function unreadFile(operation: LfsUnreadFile['operation'], error: unknown): Pull
   return { kind: 'unread', operation, errno: fault.errno };
 }
 
-/** A file exactly as long as its pointer: pulled when its bytes are not the pointer's. */
+/** A file small enough to be a pointer: pulled unless its bytes are a pointer naming the same oid. */
 function pulledByBytes(absolutePath: string, pointer: ParsedPointer): PulledState {
   let bytes: Buffer;
   try {
@@ -312,10 +334,10 @@ function pulledByBytes(absolutePath: string, pointer: ParsedPointer): PulledStat
   } catch (error) {
     return unreadFile('read', error);
   }
-  return { kind: 'decided', pulled: !bytes.equals(pointer.bytes) };
+  return { kind: 'decided', pulled: parsePointer(bytes)?.lfsOid !== pointer.lfsOid };
 }
 
-/** Whether the file on disk is the pointer's content, the pointer, or neither. */
+/** Whether the file on disk holds the pointer's content, a pointer, or neither (the module header, step 3). */
 function pulledState(absolutePath: string, pointer: ParsedPointer): PulledState {
   let stats: Stats;
   try {
@@ -323,11 +345,8 @@ function pulledState(absolutePath: string, pointer: ParsedPointer): PulledState 
   } catch (error) {
     return isPathAbsentError(error) ? UNDECIDABLE : unreadFile('lstat', error);
   }
-  const pointerBytes = pointer.bytes.length;
   if (!stats.isFile()) return UNDECIDABLE;
-  if (pointer.size === pointerBytes) return stats.size === pointerBytes ? pulledByBytes(absolutePath, pointer) : UNDECIDABLE;
-  if (stats.size === pointer.size) return { kind: 'decided', pulled: true };
-  return stats.size === pointerBytes ? { kind: 'decided', pulled: false } : UNDECIDABLE;
+  return stats.size < ON_DISK_POINTER_BYTES ? pulledByBytes(absolutePath, pointer) : { kind: 'decided', pulled: true };
 }
 
 /** The `filter=lfs` members, by one `check-attr` that must name every member. */
@@ -356,15 +375,15 @@ function candidateBlobs(repositoryRoot: string, oids: readonly string[]): { read
   return { ok: true, candidates: oids.filter((oid) => (sizes.get(oid) ?? POINTER_CANDIDATE_BYTES) < POINTER_CANDIDATE_BYTES) };
 }
 
-/** What each blob among `oids` is, by one `batch-check` and, for the small ones, one `batch` that must hold every one. */
+/** The pointers among `oids`, by one `batch-check` and, for the small ones, one `batch` that must hold every one. */
 function pointerBlobs(
   repositoryRoot: string,
   oids: readonly string[],
-): { readonly ok: true; readonly blobs: ReadonlyMap<string, PointerRead> } | LfsStateFailure {
+): { readonly ok: true; readonly blobs: ReadonlyMap<string, ParsedPointer | undefined> } | LfsStateFailure {
   const sized = candidateBlobs(repositoryRoot, oids);
   if (!sized.ok) return sized;
   const { candidates } = sized;
-  const blobs = new Map<string, PointerRead>();
+  const blobs = new Map<string, ParsedPointer | undefined>();
   if (candidates.length === 0) return { ok: true, blobs };
   const command = 'git cat-file --batch';
   const read = runGitBytes(['cat-file', '--batch'], overInput(repositoryRoot, candidates.map((oid) => `${oid}\n`).join('')));
@@ -374,7 +393,7 @@ function pointerBlobs(
   for (const oid of candidates) {
     const blob = objects.get(oid);
     if (blob === undefined) return unreadable(command, 'no bytes for an object it was asked about');
-    blobs.set(oid, readPointerBlob(blob));
+    blobs.set(oid, parsePointer(blob));
   }
   return { ok: true, blobs };
 }
@@ -387,7 +406,7 @@ function pointerBlobs(
  * @returns The pointers and the undecidable paths, or why git gave no usable answer
  */
 export function readLfsState(repositoryRoot: string, members: readonly GitSnapshotEntry[]): LfsState | LfsStateFailure {
-  const none: LfsState = { ok: true, pointers: [], undecidable: [], malformed: [], unread: [] };
+  const none: LfsState = { ok: true, pointers: [], undecidable: [], unread: [] };
   if (members.length === 0) return none;
   const attributed = filteredMembers(repositoryRoot, members);
   if (!attributed.ok) return attributed;
@@ -397,22 +416,19 @@ export function readLfsState(repositoryRoot: string, members: readonly GitSnapsh
   if (!read.ok) return read;
   const pointers: LfsPointerEntry[] = [];
   const undecidable: string[] = [];
-  const malformed: string[] = [];
   const unread: LfsUnreadFile[] = [];
   for (const entry of filtered) {
-    const blob = read.blobs.get(entry.oid);
-    if (blob?.kind === 'malformed') malformed.push(entry.gitPath);
-    if (blob?.kind !== 'pointer') continue;
-    const state = pulledState(entry.absolutePath, blob.pointer);
+    const pointer = read.blobs.get(entry.oid);
+    if (pointer === undefined) continue;
+    const state = pulledState(entry.absolutePath, pointer);
     if (state.kind === 'undecidable') undecidable.push(entry.gitPath);
     else if (state.kind === 'unread') unread.push({ gitPath: entry.gitPath, operation: state.operation, errno: state.errno });
-    else pointers.push({ gitPath: entry.gitPath, absolutePath: entry.absolutePath, lfsOid: blob.pointer.lfsOid, pulled: state.pulled });
+    else pointers.push({ gitPath: entry.gitPath, absolutePath: entry.absolutePath, ...pointer, pulled: state.pulled });
   }
   return {
     ok: true,
     pointers,
     undecidable: undecidable.toSorted(compareCodeUnits),
-    malformed: malformed.toSorted(compareCodeUnits),
     unread: unread.toSorted((left, right) => compareCodeUnits(left.gitPath, right.gitPath)),
   };
 }

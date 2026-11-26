@@ -2,10 +2,10 @@
  * `gitTreeKey` over a repository whose files go through an LFS filter.
  *
  * Under `filter=lfs` the index holds a POINTER blob, so a file's own bytes never reach the tree
- * hash: the same tree hash describes the file pulled (its content on disk) and not pulled (its
- * pointer on disk). The key tells the two apart from each pointer's declared size and the file's
- * size on disk, and declines a tree where the sizes cannot tell (the content is exactly the
- * pointer's length, or the pointer was checked out CRLF).
+ * hash: the same tree hash describes the file pulled (its content on disk) and not pulled (a
+ * pointer on disk). The key tells the two apart by reading a file small enough to be a pointer: not
+ * pulled when it is a pointer naming the same oid (the blob itself, its canonical encoding as
+ * git-lfs's smudge writes it, or either CRLF), pulled otherwise.
  *
  * The filter is an emulated clean/smudge pair (`test/fixtures/lfs-filter.mjs`), never a machine's
  * git-lfs: git runs under a home inside the fixture with no system config. Every fixture file is
@@ -39,6 +39,9 @@ const spawns = vi.hoisted(() => ({
 /** The absolute paths whose `lstat` or read the filesystem refuses (`EACCES`). */
 const refused = vi.hoisted(() => ({ lstat: new Set<string>(), read: new Set<string>() }));
 
+/** Absolute paths whose `lstat` answers another path's: a file replaced after the snapshot. */
+const replaced = vi.hoisted(() => new Map<string, string>());
+
 vi.mock('../../src/git-run.js', async (importOriginal) => {
   const actual = await importOriginal<typeof GitRunModule>();
   return {
@@ -62,7 +65,8 @@ vi.mock('node:fs', async (importOriginal) => {
     ...actual,
     lstatSync: ((...args: Parameters<typeof Fs.lstatSync>) => {
       if (refused.lstat.has(String(args[0]))) throw eacces(args[0]);
-      return actual.lstatSync(...args);
+      const stand = replaced.get(String(args[0]));
+      return stand === undefined ? actual.lstatSync(...args) : actual.lstatSync(stand);
     }) as typeof Fs.lstatSync,
     readFileSync: ((...args: Parameters<typeof Fs.readFileSync>) => {
       if (refused.read.has(String(args[0]))) throw eacces(args[0]);
@@ -107,6 +111,17 @@ function keyed(): Extract<ReturnType<typeof gitTreeKey>, { ok: true }> {
   return key;
 }
 
+/** Key the tree after `notPulled` and again after `pulled`: the first not pulled, the second pulled, the keys apart. */
+function expectKeyMovesAcrossPull(notPulled: () => void, pulled: () => void): void {
+  notPulled();
+  const before = keyed();
+  pulled();
+  const after = keyed();
+  expect(before.lfs.pointers).toEqual([expect.objectContaining({ pulled: false })]);
+  expect(after.lfs.pointers).toEqual([expect.objectContaining({ pulled: true })]);
+  expect(after.hash).not.toBe(before.hash);
+}
+
 /** The declined key's cause, as the one classifier states it. */
 function declined(): { code: string; reason: string } {
   const key = gitTreeKey({ cwd: repo });
@@ -131,6 +146,7 @@ beforeEach(() => {
   spawns.rewritten.clear();
   refused.lstat.clear();
   refused.read.clear();
+  replaced.clear();
 });
 
 afterEach(() => {
@@ -177,13 +193,7 @@ describe('gitTreeKey over LFS pointers', () => {
     // 128 bytes declare `size 128`, and that pointer is 128 bytes too: only the bytes tell.
     const exact = 'x'.repeat(128);
     expect(Buffer.byteLength(pointerOf(exact)), 'premise').toBe(128);
-    writeAndRefresh('big.bin', pointerOf(exact));
-    const notPulled = keyed();
-    writeAndRefresh('big.bin', exact);
-    const pulled = keyed();
-    expect(notPulled.lfs.pointers).toEqual([expect.objectContaining({ pulled: false })]);
-    expect(pulled.lfs.pointers).toEqual([expect.objectContaining({ pulled: true })]);
-    expect(pulled.hash).not.toBe(notPulled.hash);
+    expectKeyMovesAcrossPull(() => writeAndRefresh('big.bin', pointerOf(exact)), () => writeAndRefresh('big.bin', exact));
   });
 
   it('declines content exactly as long as its pointer when its bytes cannot be read, naming no pull as the remedy', () => {
@@ -191,6 +201,13 @@ describe('gitTreeKey over LFS pointers', () => {
     refused.read.add(safePath.join(repo, 'big.bin'));
     const cause = refusedFileCause();
     expect(cause.reason).not.toContain('git lfs pull');
+  });
+
+  it('declines a pointer whose path is no regular file by the time it is looked at, naming the file', () => {
+    replaced.set(safePath.join(repo, 'big.bin'), dir);
+    const cause = declined();
+    expect(cause.code).toBe(GIT_SNAPSHOT_INDEX_HIDES_CODE);
+    expect(cause.reason).toContain('absent or no regular file on disk: "big.bin".');
   });
 
   it('declines, never throws, when the OS refuses to lstat a pointer\'s file', () => {
@@ -257,15 +274,12 @@ describe('gitTreeKey over files filter=lfs names that are not pointers', () => {
     ['an oid that is not hex', `${V1}\noid sha256:not-hex\nsize 3000\n`],
     ['two extensions of one priority', `${V1}\next-0-a sha256:${HEX_A}\next-0-b sha256:${HEX_B}\noid sha256:${HEX_C}\nsize 3000\n`],
     ['a line past size', `${V1}\noid sha256:${HEX_C}\nsize 3000\nextra line\n`],
-  ])('declines a small blob that opens with a pointer\'s version line but is no pointer: %s', ([, malformed]) => {
+    ['a byte order mark before the version line (Go\'s TrimSpace keeps it)', `\uFEFF${V1}\noid sha256:${HEX_C}\nsize 3000\n`],
+  ])('keys a small blob git-lfs cannot read as a pointer as an ordinary file, as smudge writes it unchanged: %s', ([, malformed]) => {
     commitRawUnderLfs(malformed ?? '');
-    const key = gitTreeKey({ cwd: repo });
-    if (key.ok) throw new Error('the key was taken');
-    expect(key.kind).toBe('lfs-malformed');
-    const cause = gitSnapshotFailureOf(key);
-    expect(cause.code).toBe(GIT_SNAPSHOT_INDEX_HIDES_CODE);
-    expect(cause.reason).toContain('small.bin');
-    expect(cause.reason).not.toContain('git lfs pull');
+    const key = keyed();
+    expect(key.hash).toBe(snapshotHash());
+    expect(key.lfs.pointers).toEqual([]);
   });
 
   it('keys a small blob with no pointer version line as an ordinary file', () => {
@@ -276,22 +290,64 @@ describe('gitTreeKey over files filter=lfs names that are not pointers', () => {
   });
 });
 
+/** The pointer git-lfs writes for HEX_C at 3,000 bytes: its canonical encoding. */
+const CANONICAL_C = `${V1}\noid sha256:${HEX_C}\nsize 3000\n`;
+
 describe('gitTreeKey over pointers git-lfs reads beyond the canonical three lines', () => {
-  it.for([
-    ['an ext- extension line', `${V1}\next-0-foo sha256:${HEX_A}\noid sha256:${HEX_C}\nsize 3000\n`],
-    ['two ext- lines, by priority', `${V1}\next-0-foo sha256:${HEX_A}\next-1-bar sha256:${HEX_B}\noid sha256:${HEX_C}\nsize 3000\n`],
-    ['the pre-release hawser version', `version https://hawser.github.com/spec/v1\noid sha256:${HEX_C}\nsize 3000\n`],
-    ['the alpha git-media version', `version http://git-media.io/v/2\noid sha256:${HEX_C}\nsize 3000\n`],
-  ])('reads %s as a pointer, not an ordinary file', ([, pointer]) => {
-    commitRawUnderLfs(pointer ?? '');
+  /** Each pointer as committed, and the canonical encoding smudge writes for it. */
+  const READ_AS_POINTERS = [
+    ['an ext- extension line', `${V1}\next-0-foo sha256:${HEX_A}\noid sha256:${HEX_C}\nsize 3000\n`, undefined],
+    ['two ext- lines, by priority', `${V1}\next-0-foo sha256:${HEX_A}\next-1-bar sha256:${HEX_B}\noid sha256:${HEX_C}\nsize 3000\n`, undefined],
+    [
+      'two ext- lines out of priority order',
+      `${V1}\next-1-bar sha256:${HEX_B}\next-0-foo sha256:${HEX_A}\noid sha256:${HEX_C}\nsize 3000\n`,
+      `${V1}\next-0-foo sha256:${HEX_A}\next-1-bar sha256:${HEX_B}\noid sha256:${HEX_C}\nsize 3000\n`,
+    ],
+    ['the pre-release hawser version', `version https://hawser.github.com/spec/v1\noid sha256:${HEX_C}\nsize 3000\n`, CANONICAL_C],
+    ['the alpha git-media version', `version http://git-media.io/v/2\noid sha256:${HEX_C}\nsize 3000\n`, CANONICAL_C],
+    ['a trailing NEL, which Go\'s TrimSpace drops', `${CANONICAL_C}\u0085`, CANONICAL_C],
+  ] as const;
+
+  it.for(READ_AS_POINTERS)('reads %s as a pointer not pulled, as git leaves it with no smudge filter', ([, pointer]) => {
+    commitRawUnderLfs(pointer);
     const key = keyed();
-    expect(key.lfs.pointers).toEqual([{ absolutePath: safePath.join(repo, 'small.bin'), lfsOid: HEX_C, pulled: false }]);
+    expect(key.lfs.pointers).toEqual([expect.objectContaining({ absolutePath: safePath.join(repo, 'small.bin'), lfsOid: HEX_C, pulled: false })]);
     expect(key.hash).not.toBe(snapshotHash());
+  });
+
+  it.for(READ_AS_POINTERS)('reads %s as a pointer not pulled when smudge wrote its canonical encoding', ([, pointer, canonical]) => {
+    commitRawUnderLfs(pointer);
+    fixture.stageAs('small.bin', canonical ?? pointer, pointer);
+    expect(keyed().lfs.pointers).toEqual([expect.objectContaining({ lfsOid: HEX_C, pulled: false })]);
+  });
+
+  it('moves the key across a pull when the content is exactly as long as the canonical encoding, not the pointer', () => {
+    const content = 'x'.repeat(128);
+    const oid = createHash('sha256').update(content).digest('hex');
+    const hawser = `version https://hawser.github.com/spec/v1\noid sha256:${oid}\nsize 128\n`;
+    const canonical = `${V1}\noid sha256:${oid}\nsize 128\n`;
+    expect([Buffer.byteLength(canonical), Buffer.byteLength(hawser)], 'premise').toEqual([128, 127]);
+    commitRawUnderLfs(hawser);
+    expectKeyMovesAcrossPull(
+      () => fixture.stageAs('small.bin', canonical, hawser),
+      () => fixture.stageAs('small.bin', content, hawser),
+    );
+  });
+
+  const extended = `${V1}\next-0-foo sha256:${HEX_A}\noid sha256:${HEX_C}\nsize 3000\n`;
+
+  it.for([
+    ['exactly as long as the pointer', 'y'.repeat(Buffer.byteLength(extended))],
+    ['neither the pointer\'s length nor the declared size', 'z'.repeat(50)],
+  ])('reads an ext- pointer\'s file %s as pulled: an extension\'s input has no size the pointer declares', ([, content]) => {
+    commitRawUnderLfs(extended);
+    fixture.stageAs('small.bin', content ?? '', extended);
+    expect(keyed().lfs.pointers).toEqual([expect.objectContaining({ lfsOid: HEX_C, pulled: true, extended: true })]);
   });
 });
 
 describe('gitTreeKey over an LFS pointer checked out CRLF', () => {
-  it('declines a pointer core.autocrlf checked out with CRLF: its size is neither the pointer\'s nor the content\'s', () => {
+  it('keys a pointer core.autocrlf checked out with CRLF as not pulled: the disk holds the pointer', () => {
     git('config', 'core.autocrlf', 'true');
     configureFilter();
     commit({ '.gitattributes': '*.bin filter=lfs diff=lfs merge=lfs\n', 'big.bin': CONTENT });
@@ -300,8 +356,6 @@ describe('gitTreeKey over an LFS pointer checked out CRLF', () => {
     expect(readFileSync(safePath.join(repo, 'big.bin'), 'utf8'), 'premise: the pointer, CRLF').toBe(pointerOf(CONTENT).replaceAll('\n', '\r\n'));
     backdate('big.bin');
     git('update-index', '-q', '--refresh');
-    const cause = declined();
-    expect(cause.code).toBe(GIT_SNAPSHOT_INDEX_HIDES_CODE);
-    expect(cause.reason).toContain('big.bin');
+    expect(keyed().lfs.pointers).toEqual([expect.objectContaining({ pulled: false })]);
   });
 });

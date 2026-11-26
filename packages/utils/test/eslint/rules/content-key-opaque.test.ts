@@ -1,6 +1,7 @@
 /**
  * `content-key-opaque` — a `ContentKey` is opaque outside its one parser: no cast mints one (or an
- * array or object of them), no member access, index, spread, destructure, iteration or regex call
+ * array or object of them, or an `as never`/`as any` cast landing where one is expected), no
+ * user-written `x is ContentKey` guard mints one, no member access, index, spread, destructure, iteration or regex call
  * reads into one, no `compareCodeUnits`/`localeCompare` orders one. Equality is the whole text, so
  * `===` between two keys is the contract and is not reported. The brand is found through the type checker, so the VALID cases pin the decoys a
  * name match would get wrong (a type NAMED `ContentKey` with another brand, a plain string, an array
@@ -70,8 +71,31 @@ const CASES: RuleCases = {
     at('type Loose = string & { readonly __brand: string }; declare const loose: Loose; const cut = loose.slice(0, 4);'),
     // The parser itself, allowed by its full repo-relative path.
     { ...at('const minted = text as ContentKey; const cut = key.slice(0, 4);', typedCaseFile(PARSER_FILE)), options: ALLOW },
+    // A `never`/`any` cast where no key is expected mints nothing: a number slot, a string argument, no context.
+    at('const count: number = text as never; declare function say(s: string): void; say(text as any); const loose = text as any;'),
+    // A type guard on another type, and a key guard in the parser itself.
+    at('function isText(x: unknown): x is string { return typeof x === "string"; } const isNum = (x: unknown): x is number => typeof x === "number";'),
+    { ...at('function isKey(x: string): x is ContentKey { return x.length > 0; }', typedCaseFile(PARSER_FILE)), options: ALLOW },
   ],
   invalid: [
+    // A `never` or `any` cast where a key is expected mints one: a key-typed binding, argument, property, return.
+    flagged("const minted: ContentKey = 'x' as never;", 'assertion'),
+    flagged('declare function take(k: ContentKey): void; take(text as any);', 'assertion'),
+    flagged('const row: { key: ContentKey } = { key: text as never };', 'assertion'),
+    flagged('function f(): ContentKey | undefined { return text as any; }', 'assertion'),
+    // ...and where values holding keys one level in are expected.
+    flagged('const minted: readonly ContentKey[] = JSON.parse(text) as never;', 'assertion'),
+    // A `never` cast hidden under a key assertion: the outer cast reads `never` as keyed, the inner one mints.
+    flagged('const minted = text as never as ContentKey;', 'assertion'),
+    // An `any` cast under a key assertion that mints already: the outer cast reports, once.
+    flagged('const minted = text as any as ContentKey;', 'assertion'),
+    // A user-written guard or assertion function naming a key type mints keys nothing parsed.
+    flagged('function isKey(x: string): x is ContentKey { return x.length > 0; }', 'guard'),
+    flagged('const isKey = (x: unknown): x is ContentKey => typeof x === "string";', 'guard'),
+    flagged('function assertKey(x: unknown): asserts x is ContentKey { if (typeof x !== "string") throw new Error("no"); }', 'guard'),
+    flagged('const all = [text].filter((k): k is ContentKey => k.length > 0);', 'guard'),
+    flagged('class Keys { has(x: unknown): x is ContentKey { return x !== null; } }', 'guard'),
+    flagged('function areKeys(x: unknown): x is ContentKey[] { return Array.isArray(x); }', 'guard'),
     // A cast mints a key without the parser.
     flagged('const minted = text as ContentKey;', 'assertion'),
     flagged('const minted = <ContentKey>text;', 'assertion'),

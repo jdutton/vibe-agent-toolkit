@@ -39,6 +39,12 @@ export interface LfsFixtureRepo {
   writeAndRefresh(relative: string, content: string): void;
   /** Configure the emulated filter as `filter.lfs.clean` and `filter.lfs.smudge`. */
   configureFilter(): void;
+  /**
+   * Write `content` to `relative`, backdate it, and stage it as the blob `blob`: what git-lfs's
+   * clean makes of a file the emulated filter cannot clean (a non-canonical pointer's canonical
+   * encoding on disk, a file an extension cleans). The emulated filter is configured afterwards.
+   */
+  stageAs(relative: string, content: string, blob: string): void;
   /** Plant `files`, backdate them, and commit them. */
   commit(files: Readonly<Record<string, string>>): void;
 }
@@ -86,7 +92,7 @@ export function lfsPointerOf(content: string): string {
  * @param mode - The filter's direction
  * @returns The command
  */
-export function lfsFilterCommand(filterScript: string, mode: 'clean' | 'smudge'): string {
+export function lfsFilterCommand(filterScript: string, mode: 'clean' | 'smudge' | 'clean-to'): string {
   return `"${toForwardSlash(process.execPath)}" "${toForwardSlash(filterScript)}" ${mode}`;
 }
 
@@ -128,6 +134,11 @@ export function createLfsFixtureRepo(options: { readonly dir: string; readonly f
     for (const relative of relatives) utimesSync(safePath.join(repo, relative), seconds, seconds);
   };
 
+  const configureFilter = (): void => {
+    git('config', 'filter.lfs.clean', lfsFilterCommand(options.filterScript, 'clean'));
+    git('config', 'filter.lfs.smudge', lfsFilterCommand(options.filterScript, 'smudge'));
+  };
+
   git('init', '-q');
   git('config', 'core.autocrlf', 'false');
   return {
@@ -140,9 +151,15 @@ export function createLfsFixtureRepo(options: { readonly dir: string; readonly f
       backdate(relative);
       git('update-index', '-q', '--refresh');
     },
-    configureFilter: () => {
-      git('config', 'filter.lfs.clean', lfsFilterCommand(options.filterScript, 'clean'));
-      git('config', 'filter.lfs.smudge', lfsFilterCommand(options.filterScript, 'smudge'));
+    configureFilter,
+    stageAs: (relative, content, blob) => {
+      const blobFile = safePath.join(options.dir, 'clean-to.blob');
+      writeFileSync(blobFile, blob);
+      git('config', 'filter.lfs.clean', `${lfsFilterCommand(options.filterScript, 'clean-to')} "${toForwardSlash(blobFile)}"`);
+      plantFiles(repo, { [relative]: content });
+      backdate(relative);
+      git('add', '--', relative);
+      configureFilter();
     },
     commit: (files) => {
       plantFiles(repo, files);

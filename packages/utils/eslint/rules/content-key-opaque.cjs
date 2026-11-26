@@ -15,6 +15,12 @@
  *   `ContentKey[]` to `readonly ContentKey[]`, asserting `[]` or a partial row whose key field is a
  *   key already mints nothing and is not reported. Deeper holders (a row table, a whole projection)
  *   are not searched: the rule sees keys one level into the asserted type;
+ * - an `as never` or `as any` cast (`'x' as never`, `<any>x`) where a key, or values holding keys one
+ *   level in, is expected: the checker's contextual type at the cast (a key-typed binding, argument,
+ *   property or return). Its own target carries no brand, so it is judged by where it lands;
+ * - a user-written type guard or assertion function naming a key, or values holding keys one level
+ *   in (`(x): x is ContentKey`, `asserts x is ContentKey[]`): a guard is a cast with a check nothing
+ *   ties to the format's parser;
  * - ANY member access on a branded value (`key.slice(…)`, `key.length`, `key.toString()`,
  *   `key[0]`), a spread of one (`[...key]`, `{ ...key }`), a destructure of one (`const [c] = key`),
  *   iterating one (`for (const c of key)`), and one handed to a `RegExp`'s `test`/`exec`: each reads
@@ -90,6 +96,20 @@ function typeServices(context) {
   return { checker: services.program.getTypeChecker(), nodeMap: services.esTreeNodeToTSNodeMap };
 }
 
+/**
+ * Whether `type` is `any` or `unknown`: a value the checker knows nothing about. Read off the type
+ * itself, never its non-nullable form: that turns `unknown` into `{}`.
+ */
+function isOpaque(type) {
+  return (type.getFlags() & (ANY_FLAG | UNKNOWN_FLAG)) !== 0;
+}
+
+/** Whether `node` is `x as const`: it narrows literals and makes nothing a key. */
+function isConstAssertion(node) {
+  const annotation = node.typeAnnotation;
+  return annotation?.type === 'TSTypeReference' && annotation.typeName.type === 'Identifier' && annotation.typeName.name === 'const';
+}
+
 module.exports = {
   meta: {
     type: 'problem',
@@ -102,7 +122,7 @@ module.exports = {
       recommended: false,
       recommendedSeverity: 'error',
       category: 'Correctness',
-      bans: 'a cast to `ContentKey` or to an array/object of them, any member access, index, spread, destructure, iteration or regex call on a `ContentKey`, `compareCodeUnits`/`localeCompare` with one (type-aware)',
+      bans: 'a cast to `ContentKey` or to an array/object of them (or an `as never`/`as any` cast where one is expected), a user-written `x is ContentKey` guard, any member access, index, spread, destructure, iteration or regex call on a `ContentKey`, `compareCodeUnits`/`localeCompare` with one (type-aware)',
       useInstead: '`parseContentKey`, `formatContentKey`, `contentKeyParts`, `orderContentKeys`; `===` compares two',
     },
     schema: [
@@ -121,6 +141,9 @@ module.exports = {
       read:
         "{{form}} reads into a ContentKey's text: a second parser of the format. Use contentKeyParts(key), or " +
         'pass the key along whole.',
+      guard:
+        'A type guard to a ContentKey (or to values holding them) mints keys nothing parsed. Read the value with ' +
+        'parseContentKey(…) instead.',
       comparator:
         "'{{name}}' orders ContentKeys by their text. Use orderContentKeys(…) (a bare .sort() is fine: key order is " +
         'text order).',
@@ -183,14 +206,6 @@ module.exports = {
       return members.length > 0 && members.every((member) => isBrand(member, tsNode));
     }
 
-    /**
-     * Whether `type` is `any` or `unknown`: a value the checker knows nothing about. Read off the type
-     * itself, never its non-nullable form: that turns `unknown` into `{}`.
-     */
-    function isOpaque(type) {
-      return (type.getFlags() & (ANY_FLAG | UNKNOWN_FLAG)) !== 0;
-    }
-
     /** One object member's slots, by name: `<i>` type arguments, `[keyType]` index values, properties. */
     function memberSlots(member, tsNode) {
       const typeArguments = member.target === undefined ? [] : checker.getTypeArguments(member);
@@ -207,6 +222,16 @@ module.exports = {
       return new Map(containers.flatMap((member) => memberSlots(member, tsNode)));
     }
 
+    /** The slots of `type` one level in that hold keys. */
+    function keySlotsOf(type, tsNode) {
+      return [...slotsOf(type, tsNode)].filter(([, slot]) => carriesBrand(slot, tsNode));
+    }
+
+    /** Whether `type` is a key, or holds keys one level in (an array, record, container or object of them). */
+    function holdsKeys(type, tsNode) {
+      return carriesBrand(type, tsNode) || keySlotsOf(type, tsNode).length > 0;
+    }
+
     /**
      * Whether asserting `node` mints a key: its target is a key, or holds keys one level in (an
      * array, record, container or object of them), and the value asserted is not already a key there.
@@ -217,21 +242,43 @@ module.exports = {
       if (target === null || source === null) return false;
       const { tsNode } = target;
       if (carriesBrand(target.type, tsNode)) return !isKeyedType(source.type, tsNode);
-      const keySlots = [...slotsOf(target.type, tsNode)].filter(([, type]) => carriesBrand(type, tsNode));
+      const keySlots = keySlotsOf(target.type, tsNode);
       if (keySlots.length === 0) return false;
       if (isOpaque(source.type)) return true;
       const sourceSlots = slotsOf(source.type, tsNode);
       return keySlots.some(([name]) => sourceSlots.has(name) && !isKeyedType(sourceSlots.get(name), tsNode));
     }
 
-    /** Whether `node` is `x as const`: it narrows literals and makes nothing a key. */
-    function isConstAssertion(node) {
-      const annotation = node.typeAnnotation;
-      return annotation?.type === 'TSTypeReference' && annotation.typeName.type === 'Identifier' && annotation.typeName.name === 'const';
+    /** Whether `node` is a type assertion other than `as const`. */
+    function isMintingForm(node) {
+      return (node.type === 'TSAsExpression' || node.type === 'TSTypeAssertion') && !isConstAssertion(node);
+    }
+
+    /**
+     * Whether `node` is an `as never` / `as any` cast where a key (or values holding keys one level
+     * in) is expected: the checker's contextual type at the cast. Its own target carries no brand, so
+     * `mintsKey` cannot see it. Under an outer assertion that mints already, the outer one reports.
+     */
+    function castsIntoKeySlot(node) {
+      const target = typeOf(node);
+      if (target === null || (target.type.getFlags() & (ANY_FLAG | NEVER_FLAG)) === 0) return false;
+      if (isMintingForm(node.parent) && mintsKey(node.parent)) return false;
+      const expected = checker.getContextualType(target.tsNode);
+      return expected !== undefined && holdsKeys(expected, target.tsNode);
     }
 
     function checkAssertion(node) {
-      if (!isConstAssertion(node) && mintsKey(node)) context.report({ node, messageId: 'assertion' });
+      if (isMintingForm(node) && (mintsKey(node) || castsIntoKeySlot(node))) context.report({ node, messageId: 'assertion' });
+    }
+
+    /** A user-written `x is ContentKey` / `asserts x is ContentKey` guard mints keys nothing parsed. */
+    function checkPredicate(node) {
+      const tsType = node.typeAnnotation === null || node.typeAnnotation === undefined
+        ? undefined
+        : nodeMap.get(node.typeAnnotation.typeAnnotation);
+      if (tsType !== undefined && holdsKeys(checker.getTypeFromTypeNode(tsType), tsType)) {
+        context.report({ node, messageId: 'guard' });
+      }
     }
 
     function reportRead(node, form) {
@@ -267,6 +314,7 @@ module.exports = {
     return {
       TSAsExpression: checkAssertion,
       TSTypeAssertion: checkAssertion,
+      TSTypePredicate: checkPredicate,
       CallExpression(node) {
         const callee = node.callee;
         if (calledName(callee) === 'compareCodeUnits') {

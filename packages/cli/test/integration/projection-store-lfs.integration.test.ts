@@ -12,7 +12,7 @@
  * is under test is the guard, not the engine.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
 
 import {
   ContributorRegistry,
@@ -115,6 +115,17 @@ describe('treeUnchanged checks a pulled LFS file against what the run read', () 
     expect(await treeUnchangedAt(safePath.join(fixture.repo, 'sub'), realizedAtLfsDoc(keyedAt(OTHER_HEX)))).toBe(true);
   });
 
+  it('does not ask about a pulled file whose pointer has extension lines: its bytes are the extensions\' input', async () => {
+    const extDoc = 'docs/ext.md';
+    const content = '# Extended\n';
+    const pointer = `version https://git-lfs.github.com/spec/v1\next-0-foo sha256:${OTHER_HEX}\noid sha256:${'cd'.repeat(32)}\n`
+      + `size ${Buffer.byteLength(content)}\n`;
+    fixture.stageAs(extDoc, content, pointer);
+    const extPath = safePath.join(fixture.repo, extDoc);
+    const realized: RealizedContentKeys = (absolutePath) => (absolutePath === extPath ? keyedAt(lfsOidOf(content)) : undefined);
+    expect(await treeUnchangedAt(fixture.repo, realized)).toBe(true);
+  });
+
   it('does not ask about a file that is not pulled', async () => {
     fixture.writeAndRefresh(LFS_DOC, lfsPointerOf(CONTENT));
     expect(await treeUnchangedAt(fixture.repo, realizedAtLfsDoc(keyedAt(OTHER_HEX)))).toBe(true);
@@ -149,11 +160,14 @@ describe('the notice that no LFS filter is configured', () => {
   });
 });
 
-describe('an LFS file the key cannot decide', () => {
-  it('opens no store and says why, as every tree git cannot key', async () => {
-    // A pointer written CRLF cleans to the committed pointer, so its stat is recorded clean, but its
-    // size on disk is neither the pointer's nor the content's.
-    fixture.writeAndRefresh(LFS_DOC, lfsPointerOf(CONTENT).replaceAll('\n', '\r\n'));
+describe('an LFS file the key cannot read', () => {
+  // A mode the OS enforces: not on Windows, and not for root.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('opens no store and says why, as every tree git cannot key', async () => {
+    // The pointer on disk is staged stat-clean and stays so (the mode change moves only its ctime,
+    // which git is told not to trust), so git never reads it; the key must, and is refused.
+    fixture.stageAs(LFS_DOC, lfsPointerOf(CONTENT), lfsPointerOf(CONTENT));
+    fixture.git('config', 'core.trustctime', 'false');
+    chmodSync(safePath.join(fixture.repo, LFS_DOC), 0o000);
     const stderr = captureStderr();
     try {
       expect(await openPopulationCache({ root: fixture.repo })).toBeUndefined();
@@ -162,7 +176,7 @@ describe('an LFS file the key cannot decide', () => {
     }
     const written = stderr.written.join('');
     expect(written).toContain('git cannot key this tree');
-    expect(written).toContain(LFS_DOC);
+    expect(written).toContain(`The OS would not let VAT read the Git LFS file "${LFS_DOC}"`);
   });
 });
 

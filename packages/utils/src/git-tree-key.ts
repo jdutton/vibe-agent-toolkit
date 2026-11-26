@@ -30,10 +30,10 @@
  * **Git LFS.** Under `filter=lfs` the snapshot holds a pointer blob, so one hash describes a file
  * pulled (its content on disk) and not pulled (its pointer on disk). After the flags, the key reads
  * which regular-file entries are pointers and whether each is pulled (`readLfsState`, three spawns
- * at most and one `lstat` per pointer; a file is read only when its content is exactly as long as its
- * pointer), and appends a digest of the pointers' paths and pulled bits. A pointer whose file is
- * neither declines the key (`lfs-undecidable`), as does a malformed pointer (`lfs-malformed`) and a
- * pointer's file the OS will not let VAT look at (`lfs-file-unread`). Whether a `filter.lfs.*` key is
+ * at most and one `lstat` per pointer; a file is read only when it is small enough to be a pointer),
+ * and appends a digest of the pointers' paths and pulled bits. A pointer whose file is absent or no
+ * regular file declines the key (`lfs-undecidable`), as does a pointer's file the OS will not let
+ * VAT look at (`lfs-file-unread`). Whether a `filter.lfs.*` key is
  * configured is read too (only when there are pointers, else `not-asked`): it does not enter the
  * hash, since a stat-clean pulled file keys alike either way.
  */
@@ -158,18 +158,15 @@ function namedPaths(paths: readonly string[]): string[] {
 }
 
 /**
- * Why the LFS pass's reading cannot key the tree: a file it could not look at, a malformed pointer,
- * or a pointer neither pulled nor not; `undefined` when it can.
+ * Why the LFS pass's reading cannot key the tree: a file it could not look at, or a pointer neither
+ * pulled nor not; `undefined` when it can.
  */
 function lfsDeclineOf(cwd: string, repositoryRoot: string, state: Extract<LfsReadState, { ok: true }>): GitTreeKeyFailure | undefined {
-  const { undecidable, malformed, unread } = state;
+  const { undecidable, unread } = state;
   const [first] = unread;
   if (first !== undefined) {
     const { gitPath, operation, errno } = first;
     return { ok: false, kind: 'lfs-file-unread', cwd, repositoryRoot, path: shownName(gitPath), operation, errno, unreadCount: unread.length };
-  }
-  if (malformed.length > 0) {
-    return { ok: false, kind: 'lfs-malformed', cwd, repositoryRoot, malformed: namedPaths(malformed), malformedCount: malformed.length };
   }
   if (undecidable.length > 0) {
     return { ok: false, kind: 'lfs-undecidable', cwd, repositoryRoot, undecidable: namedPaths(undecidable), undecidableCount: undecidable.length };
@@ -221,7 +218,7 @@ function keyOf(cwd: string, snapshot: GitTreeSnapshot): GitTreeKey | GitTreeKeyF
     ...snapshot,
     hash: `${snapshot.hash}${absentSuffix(absent)}${lfsSuffix(lfs.pointers)}`,
     lfs: {
-      pointers: lfs.pointers.map(({ absolutePath, lfsOid, pulled }) => ({ absolutePath, lfsOid, pulled })),
+      pointers: lfs.pointers.map(({ absolutePath, lfsOid, pulled, extended }) => ({ absolutePath, lfsOid, pulled, extended })),
       filter: lfs.filter,
     },
   };

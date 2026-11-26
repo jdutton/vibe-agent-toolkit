@@ -135,8 +135,8 @@ export interface GitHiddenEntry {
 
 /**
  * A snapshot git took but cannot key the tree with (`gitTreeKey`): its index hides working-tree
- * bytes from it, an LFS file's disk bytes cannot be told apart, a `filter=lfs` blob is a malformed
- * pointer, an LFS file could not be looked at, or git would not say whether any is so. Classified by
+ * bytes from it, an LFS pointer's file is absent or no regular file, an LFS file could not be looked
+ * at, or git would not say whether any is so. Classified by
  * `gitSnapshotFailureOf`.
  */
 export type GitTreeKeyFailure =
@@ -175,9 +175,8 @@ export type GitTreeKeyFailure =
   | {
     readonly ok: false;
     /**
-     * An LFS pointer's file is neither its pointer nor its content by size (the two sizes are
-     * equal, the pointer was checked out CRLF, or the path is not a regular file): the hash holds
-     * the pointer, and VAT cannot tell which bytes the disk holds.
+     * An LFS pointer's file is absent or not a regular file (a race with the snapshot): the hash
+     * holds the pointer, and VAT cannot tell which bytes the disk holds.
      */
     readonly kind: 'lfs-undecidable';
     readonly cwd: string;
@@ -189,21 +188,7 @@ export type GitTreeKeyFailure =
   }
   | {
     readonly ok: false;
-    /**
-     * A small `filter=lfs` blob opens with a version line naming a git-lfs spec but does not parse
-     * by git-lfs's pointer grammar: VAT cannot tell what git-lfs makes of it.
-     */
-    readonly kind: 'lfs-malformed';
-    readonly cwd: string;
-    readonly repositoryRoot: string;
-    /** The first such paths, repository-relative, as a message shows them (`shownName`), sorted. */
-    readonly malformed: readonly string[];
-    /** How many such paths in all. */
-    readonly malformedCount: number;
-  }
-  | {
-    readonly ok: false;
-    /** The OS would not let VAT `lstat` an LFS pointer's file, or read one exactly as long as its pointer. */
+    /** The OS would not let VAT `lstat` an LFS pointer's file, or read one small enough to be a pointer. */
     readonly kind: 'lfs-file-unread';
     readonly cwd: string;
     readonly repositoryRoot: string;
@@ -242,10 +227,12 @@ export type GitTreeKeyFailure =
 export interface LfsPointer {
   /** Absolute, forward-slashed. */
   readonly absolutePath: string;
-  /** The content's sha256, hex, as the pointer names it. */
+  /** The sha256, hex, the pointer names: the content's, or for an extended pointer its extensions' output's. */
   readonly lfsOid: string;
-  /** The disk holds the content (`true`) or the pointer itself (`false`). */
+  /** The disk holds the content (`true`) or a pointer (`false`). */
   readonly pulled: boolean;
+  /** The pointer has `ext-` lines: a pulled file holds the extensions' input, whose sha256 is not `lfsOid`. */
+  readonly extended: boolean;
 }
 
 /** What `gitTreeKey` read of the tree's Git LFS files. */

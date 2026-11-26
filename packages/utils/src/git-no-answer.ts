@@ -231,9 +231,9 @@ export function snapshotAttemptCause(root: string, attempt: GitAttempt, sparseCh
  * account states ({@link snapshotAttemptCause}).
  *
  * A key git declined (`gitTreeKey`) is classified here too: its index hides working-tree bytes
- * from the snapshot, an LFS file on disk is neither its pointer nor its content, or a `filter=lfs`
- * blob is a malformed pointer (`GIT_SNAPSHOT_INDEX_HIDES` all three); the OS would not let VAT look
- * at an LFS file (`GIT_SNAPSHOT_UNREADABLE`); or git would not answer what says whether.
+ * from the snapshot, or an LFS pointer's file is absent or no regular file (`GIT_SNAPSHOT_INDEX_HIDES`
+ * both); the OS would not let VAT look at an LFS file (`GIT_SNAPSHOT_UNREADABLE`); or git would not
+ * answer what says whether.
  *
  * @param failure - What {@link gitTreeSnapshot} or `gitTreeKey` returned instead of a snapshot
  * @returns The cause, its reason one or more whole sentences
@@ -241,7 +241,6 @@ export function snapshotAttemptCause(root: string, attempt: GitAttempt, sparseCh
 export function gitSnapshotFailureOf(failure: GitSnapshotFailure | GitTreeKeyFailure): GitNoAnswer {
   if (failure.kind === 'index-hides') return indexHidesCause(failure);
   if (failure.kind === 'lfs-undecidable') return lfsUndecidableCause(failure);
-  if (failure.kind === 'lfs-malformed') return lfsMalformedCause(failure);
   if (failure.kind === 'lfs-file-unread') return lfsFileUnreadCause(failure);
   if (failure.kind === 'flags-unlisted' || failure.kind === 'flags-unreadable') return flagsUnlistedCause(failure);
   if (failure.kind === 'lfs-unlisted' || failure.kind === 'lfs-unreadable') return lfsUnlistedCause(failure);
@@ -324,8 +323,8 @@ function lfsUnlistedCause(failure: Extract<GitTreeKeyFailure, { kind: 'lfs-unlis
 }
 
 /**
- * The cause of a key declined because an LFS file on disk is neither its pointer nor its content:
- * the files named, the cause, and the two commands that settle it.
+ * The cause of a key declined because an LFS pointer's file is absent or no regular file: the files
+ * named, the cause, and the two commands that settle it.
  *
  * @param failure - The declined key
  * @returns The cause
@@ -336,36 +335,16 @@ function lfsUndecidableCause(failure: Extract<GitTreeKeyFailure, { kind: 'lfs-un
     : '';
   return {
     code: GIT_SNAPSHOT_INDEX_HIDES_CODE,
-    reason: `${failure.undecidableCount} Git LFS file(s) in ${shownName(failure.repositoryRoot)} are neither their pointer`
-      + ` nor their content on disk, by size: ${failure.undecidable.join(', ')}${more}. git's snapshot holds each one's`
-      + ' pointer, so VAT cannot tell which bytes the disk holds and cannot key this tree. (A pointer checked out with'
-      + ' CRLF line endings does this, as does a path that is no regular file.) Run git update-index --refresh,'
+    reason: `${failure.undecidableCount} Git LFS file(s) in ${shownName(failure.repositoryRoot)} are absent or no regular`
+      + ` file on disk: ${failure.undecidable.join(', ')}${more}. git's snapshot holds each one's pointer, so VAT cannot`
+      + ' tell which bytes the disk holds and cannot key this tree. Run git update-index --refresh,'
       + ' or git lfs pull to fetch the content, and run again.',
   };
 }
 
 /**
- * The cause of a key declined because a small `filter=lfs` blob opens with a git-lfs version line
- * but is no pointer by git-lfs's grammar: the files named, and the fix in the commit.
- *
- * @param failure - The declined key
- * @returns The cause
- */
-function lfsMalformedCause(failure: Extract<GitTreeKeyFailure, { kind: 'lfs-malformed' }>): GitNoAnswer {
-  const more = failure.malformedCount > failure.malformed.length ? ` and ${failure.malformedCount - failure.malformed.length} more` : '';
-  return {
-    code: GIT_SNAPSHOT_INDEX_HIDES_CODE,
-    reason: `${failure.malformedCount} file(s) in ${shownName(failure.repositoryRoot)} marked filter=lfs are committed as a`
-      + ` Git LFS pointer that git-lfs cannot read: ${failure.malformed.join(', ')}${more}. Each opens with a pointer's`
-      + ' version line but does not parse as one, so VAT cannot tell what the disk holds for it and cannot key this tree.'
-      + ' Commit the file again through the LFS filter (git add --renormalize <path>), or remove its filter=lfs'
-      + ' attribute, and run again.',
-  };
-}
-
-/**
  * The cause of a key declined because the OS would not let VAT `lstat` an LFS pointer's file, or
- * read one exactly as long as its pointer: the file and the errno named.
+ * read one small enough to be a pointer: the file and the errno named.
  *
  * @param failure - The declined key
  * @returns The cause

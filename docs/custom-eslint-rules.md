@@ -89,7 +89,9 @@ Most are listed with their exempt files in `eslint.config.js`. One has no exempt
 - **`content-key-opaque`**, type-aware, over every package's `.ts`/`.cts`, `src` and `test` alike:
   a `ContentKey` (`string & { readonly __brand: 'ContentKey' }`) is opaque outside the files that
   own its format. It reports a type assertion to the brand, or to an array, record, object or
-  container of keys, from values not already keys; any member access, index, spread, destructure
+  container of keys, from values not already keys; an `as never`/`as any` cast where the checker's
+  contextual type expects a key (or values holding keys one level in); a user-written type guard or
+  assertion function naming a key (`x is ContentKey`); any member access, index, spread, destructure
   or iteration of a key, and a key handed to a `RegExp`'s `test`/`exec` (each reads into the text);
   and `compareCodeUnits`/`localeCompare` on a key. The brand is found by the type checker, never by
   the type's name. Two keys are equal exactly when their text is, so `===` between keys is the

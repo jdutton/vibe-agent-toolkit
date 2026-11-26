@@ -480,7 +480,8 @@ function treeStillKeyedBy(key: GitTreeKey, root: string, realized: RealizedConte
 /**
  * {@link treeStillKeyedBy}'s check of one LFS pointer: the run keyed its pulled file as the
  * content the pointer names (a `sha256` key, the plain SHA-256 of the bytes, which is what an LFS
- * oid is).
+ * oid is). A pointer with extension lines is not asked about: its oid is the extensions' output's,
+ * and the working tree holds their input, so no read of it would ever match.
  *
  * @param pointer - One pointer of the bracket's key
  * @param root - The absolute corpus root
@@ -488,7 +489,7 @@ function treeStillKeyedBy(key: GitTreeKey, root: string, realized: RealizedConte
  * @returns True when the pointer raises no doubt about the run's reads
  */
 function pulledPointerReadAsItsOid(pointer: LfsPointer, root: string, realized: RealizedContentKeys): boolean {
-  if (!pointer.pulled || relativeEscapesRoot(safePath.relative(root, pointer.absolutePath))) return true;
+  if (!pointer.pulled || pointer.extended || relativeEscapesRoot(safePath.relative(root, pointer.absolutePath))) return true;
   const read = realized(pointer.absolutePath);
   if (read?.contentKey == null) return true;
   const { keyKind, hex } = contentKeyParts(read.contentKey);

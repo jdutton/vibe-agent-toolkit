@@ -393,7 +393,7 @@ export class FakeFactStore implements FactStore {
         const value = row[column];
         const key = typeof value === 'string' ? parseContentKey(value) : undefined;
         if (key === undefined) {
-          throw new TypeError(`the store double expected '${table}.${column}' to hold a content key, got ${String(value)}`);
+          throw new TypeError(`the store double expected '${table}.${column}' to hold a content key, got ${typeof value === 'string' ? value : typeof value}`);
         }
         const bundle = incoming.get(key) ?? emptyBlobBundle();
         incoming.set(key, bundle);

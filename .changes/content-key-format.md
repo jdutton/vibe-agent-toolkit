@@ -39,26 +39,28 @@
   together, as identical bytes under two parser kinds never did.
 - **Library (`@vibe-agent-toolkit/utils/git`): `GitSnapshotEntry` gains required `oid` and `gitPath`**
   (git's own spelling of the path). **`gitTreeKey()` and `freshGitTreeKey()` return a `GitTreeKey`**,
-  the snapshot plus a required `lfs: LfsReading` (each Git LFS pointer's `absolutePath`, `lfsOid` and
-  `pulled`, and `filter`: `configured`, `not-configured`, or `not-asked` when there is no pointer).
-  `GitTreeKeyFailure` gains the kinds `lfs-undecidable`, `lfs-malformed`, `lfs-file-unread`,
+  the snapshot plus a required `lfs: LfsReading` (each Git LFS pointer's `absolutePath`, `lfsOid`,
+  `pulled` and `extended`, and `filter`: `configured`, `not-configured`, or `not-asked` when there is
+  no pointer). `GitTreeKeyFailure` gains the kinds `lfs-undecidable`, `lfs-file-unread`,
   `lfs-unlisted` and `lfs-unreadable`; `gitSnapshotFailureOf` classifies them.
 
 ### Fixed
 
 - **After `git lfs pull`, the next run re-reads the pulled files instead of serving the pointers'
   facts from the store.** The store key now reads which files are Git LFS pointers and whether each
-  is pulled. Every keyed run spawns one `git check-attr` over the tree's files; when any is
-  `filter=lfs` it also spawns `git cat-file --batch-check`, `git cat-file --batch` for blobs under
-  1024 bytes, and `git config` when pointers exist, parses by git-lfs's own pointer grammar
-  (extension lines and older version URLs included), and makes one `lstat` per pointer, reading a
-  file only when its content is exactly as long as its pointer. The write-time guard repeats the pass
-  on a fresh key. A file that is neither
-  its pointer nor its content declines the key, naming `git update-index --refresh` and
-  `git lfs pull`. A small `filter=lfs` blob that opens like a pointer and does not parse, a pointer's
-  file the OS will not let VAT look at, and a git answer that leaves out anything it was asked about
-  decline the key too. A pull that lands
-  during a run, or a pulled file whose bytes no longer match its pointer, keeps that run's rows out of
+  is pulled. A keyed run whose tree has any regular file spawns one `git check-attr` over those files
+  (a tree with none spawns nothing); when any is `filter=lfs` it also spawns
+  `git cat-file --batch-check`, `git cat-file --batch` for blobs under 1024 bytes, and `git config`
+  when pointers exist, parses by git-lfs's own pointer grammar (extension lines and older version URLs
+  included; a blob git-lfs cannot parse is an ordinary file, as its smudge writes it unchanged), and
+  makes one `lstat` per pointer, reading a file under 2048 bytes: a pointer naming the same oid on
+  disk (the canonical encoding git-lfs's smudge writes, or the blob itself with no smudge) is not
+  pulled, anything else is. The write-time guard repeats the pass on a fresh key. A pointer's file
+  that is absent or no regular file declines the key, naming `git update-index --refresh` and
+  `git lfs pull`. A pointer's file the OS will not let VAT look at, and a git answer that leaves out
+  anything it was asked about decline the key too. A pull that lands
+  during a run, or a pulled file whose bytes no longer match its pointer (not asked of a pointer with
+  extension lines, whose working-tree bytes are the extensions' input), keeps that run's rows out of
   the store.
 - **A notice when a tree holds pulled Git LFS files and no git-lfs filter is configured**, once per root
   per command, naming `git lfs install` and `git update-index --refresh`. Without the filter a pulled

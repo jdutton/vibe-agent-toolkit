@@ -394,34 +394,45 @@ the pointer's facts from the store: `git lfs pull` refreshes the index stat and 
 working-tree file only in step 4's one case:
 
 1. **Attributes.** One `git check-attr --stdin -z filter` over the members' git paths, sorted; the
-   paths whose `filter` is `lfs` go on. With no such path the pass ends here: one spawn per keyed run.
+   paths whose `filter` is `lfs` go on. With no such path the pass ends here: one spawn per keyed run
+   whose tree has a regular-file member, and none when it has none.
 2. **Size filter.** One `git cat-file --batch-check` over their blob oids. A blob of 1024 bytes or
    more is never a pointer (a file committed before its attribute, an incomplete migration) and is
    never read. One `git cat-file --batch` over the smaller ones.
 3. **Pointer parse, by git-lfs's grammar.** A blob is a pointer when git-lfs would read it as one
-   (`decodeKV` in git-lfs's `lfs/pointer.go`): trimmed of surrounding whitespace, `key value` lines
+   (`decodeKV` in git-lfs's `lfs/pointer.go`): trimmed of surrounding white space as Go's
+   `bytes.TrimSpace` trims it (U+0085 included, a byte order mark not), `key value` lines
    (a trailing CR dropped, blank lines skipped) holding `version`, `oid sha256:<64 lowercase hex>` and
    a non-negative `size`, in that order, with any `ext-<digit>-<name> sha256:<hex>` extension lines
    before `size` (no two of one priority). The version is any of git-lfs's three:
    `https://git-lfs.github.com/spec/v1`, the pre-release `https://hawser.github.com/spec/v1` and the
-   alpha `http://git-media.io/v/2`. A small blob that opens with a version line naming a git-lfs spec
-   but does not parse is malformed, and declines the key (`lfs-malformed`): VAT cannot tell what
-   git-lfs makes of it. Any other small blob is an ordinary member, keyed as before.
-4. **Size probe.** One `lstat` per pointer. With `n` the content's size the pointer declares and `p`
-   the pointer's own length: a regular file of size `n` (and `n != p`) is pulled; of size `p` (and
-   `n != p`) is not pulled. When `n == p` and the file is that size, its bytes are read and compared
-   with the pointer's: the pointer's bytes are not pulled, any other bytes are pulled. Anything else
-   (another size, not a regular file, absent) is undecidable. For a pointer with extension lines `n`
-   is the size of the object after its extensions ran, so a pulled file an extension changed the size
-   of is undecidable too.
+   alpha `http://git-media.io/v/2`. Any other small blob is an ordinary member, keyed as before,
+   including one that opens with a version line and does not parse: git-lfs's smudge writes a blob
+   it cannot parse to the working tree unchanged, so the disk holds that blob as it would with no
+   filter at all.
+4. **Pulled probe.** One `lstat` per pointer. A file not pulled holds a pointer naming the same oid,
+   though not always the blob's bytes: git-lfs's smudge writes the pointer's canonical encoding
+   (`Pointer.Encoded`: the current version URL, extension lines sorted by priority, `size` in decimal,
+   LF line endings), so a pointer committed with an older version URL or unsorted extension lines is
+   another set of bytes on disk; with no smudge filter git writes the blob itself; and git's
+   line-ending conversion (`core.autocrlf=true` and a `filter=lfs` line without `-text`) runs before
+   the filter, so with no filter the pointer lands CRLF. Content is never a pointer naming its own
+   sha256, and an extension's input never one naming its output's. So a regular file is read and
+   parsed by the same grammar: a pointer naming the pointer's oid is not pulled, anything else is
+   pulled. A file of 2048 bytes or more is pulled without a read: the canonical encoding of a blob
+   under 1024 bytes is at most 12 bytes longer, and line-ending conversion at most doubles it. Sizes
+   decide nothing, which matters most for a pointer with extension lines: its `size` is the object's
+   after its extensions ran, not the working-tree file's. A path that is absent or not a regular file
+   (a race with the snapshot) is undecidable.
+
+Two divergences from git-lfs are known and accepted as contrived: a pointer blob padded past 1024
+bytes (git-lfs parses only its first 1024 bytes) and a `size` above 2^53 are pointers to git-lfs and
+ordinary members here, so a pull of either does not move the key.
 
 An undecidable pointer declines the key (`lfs-undecidable`), classified like `index-hides`
 (`GIT_SNAPSHOT_INDEX_HIDES`): the reason names the files and their count, the cause (an LFS file that
-is neither its pointer nor its content on disk) and the remedy, `git update-index --refresh` or
-`git lfs pull`. The run then answers without the store. A pointer checked out with CRLF line endings
-(`core.autocrlf=true` and a `filter=lfs` line without `-text`) is one such case: its size is neither.
-A malformed pointer is classified the same way, its remedy to commit the file again through the
-filter (`git add --renormalize`) or drop its attribute. An `lstat` or read the OS refuses (anything
+is absent or no regular file on disk) and the remedy, `git update-index --refresh` or
+`git lfs pull`. The run then answers without the store. An `lstat` or read the OS refuses (anything
 but absent) declines the key as `lfs-file-unread`, classified `GIT_SNAPSHOT_UNREADABLE` with the file
 and the errno named. A `check-attr`, `cat-file` or `config` spawn that fails declines the key as
 `lfs-unlisted`, and an answer VAT cannot read as `lfs-unreadable`, both classified like
@@ -431,8 +442,9 @@ absent answer is never read as "not LFS".
 When pointers exist the hash gains a suffix, `<tree hash>[+absent:<digest>][+lfs:<digest>]`, the
 `+lfs:` digest a SHA-256 over each pointer's git path and pulled bit, sorted by path. Pulling or
 un-pulling any pointer moves the key; a tree with no pointer keys exactly as before. The key also
-carries the reading (`GitTreeKey.lfs`: each pointer's absolute path, `lfsOid` and pulled bit, and
-`filter`), a required field so every consumer of the key sees it.
+carries the reading (`GitTreeKey.lfs`: each pointer's absolute path, `lfsOid`, pulled bit and
+whether it has extension lines (`extended`), and `filter`), a required field so every consumer of the
+key sees it.
 
 ### 7.2 What a pulled file and a pointer parse as
 
@@ -455,7 +467,10 @@ A run takes its store key at the start and checks it again before filing the ext
 The check also compares content: for every pulled pointer under the run's root, the key the run
 realized for that path must be a `sha256` key whose hex equals the pointer's oid. A file changed after
 the snapshot without changing size fails it, and the extent is not filed. Only what the run read is
-checked: pointers not pulled, paths outside the root, paths the run realized without reading their
+checked: pointers not pulled, pointers with extension lines (their oid is the extensions' output's
+and the working tree holds the input, so the check could never pass and would stop every extent
+write in a repository that uses an extension; the tree hash and the pulled bit still guard them),
+paths outside the root, paths the run realized without reading their
 bytes (no content key), and paths the run realized nothing at are not. The last are the usual case
 for LFS: an image or archive no collection includes fed no fact to the extent, and the key already
 carries its pulled bit. Failing on them would stop every extent write in a repository with pulled
@@ -495,9 +510,16 @@ Measured with git-lfs 3.8.1 and git 2.54 under a scratch `HOME`:
 
 Tests use an emulated clean/smudge pair (`packages/utils/test/fixtures/lfs-filter.mjs`) that turns
 content into the same pointer the real filter does.
+For what git-lfs's own clean makes of a file and the emulation cannot (a non-canonical pointer's
+canonical encoding, an extension's input), the fixture stages the file through a clean filter that
+writes the committed blob (`stageAs`). Measured with git-lfs 3.8.1, `git lfs smudge` under
+`GIT_LFS_SKIP_SMUDGE=1` writes the canonical encoding for a hawser pointer and for unsorted extension
+lines, reads a pointer with a trailing U+0085, and writes unchanged a byte-order-marked pointer and
+one with a line past `size`.
 `packages/utils/test/integration/git-tree-key-lfs.integration.test.ts` covers pulled against not
-pulled, `n == p`, a CRLF pointer, a large blob and a malformed small blob under `filter=lfs`, and the
-key without the filter configured.
+pulled, content as long as the pointer or its canonical encoding, non-canonical and extended pointers
+with the blob or its canonical encoding on disk, an extended pointer's pulled file, a CRLF pointer,
+a large blob and unparseable small blobs under `filter=lfs`, and the key without the filter configured.
 
 ## 8. Accepted consequence: the two lanes cache different things
 
