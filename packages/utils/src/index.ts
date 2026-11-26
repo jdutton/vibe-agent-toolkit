@@ -149,6 +149,7 @@ export {
   realpathNativeSync,
   requireFollowedStat,
   requireFollowedStatSync,
+  withoutPlaceKindSnapshot,
   withPlaceKindSnapshot,
 } from './link-following.js';
 // The one fold for "are these two names one entry on some volume".
@@ -172,7 +173,6 @@ export type {
   ComponentMatch,
   FilenameMatch,
   PathProbe,
-  PathProbeStats,
   PathSpelling,
   PathSpellingRequest,
   PathSpellingTable,

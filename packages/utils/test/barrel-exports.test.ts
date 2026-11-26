@@ -240,6 +240,7 @@ const BARREL_EXPORTS = [
   'withPlaceKindSnapshot',
   'withTempDir',
   'withWorkPhase',
+  'withoutPlaceKindSnapshot',
   'workCountsObserved',
   'writeFileUnder',
   'writeTimingDump',

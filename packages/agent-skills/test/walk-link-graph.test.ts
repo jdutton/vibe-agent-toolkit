@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import nodeFs, { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { DeferredArtifacts } from '@vibe-agent-toolkit/resources';
@@ -11,9 +11,12 @@ import {
   CRAWL_WALKER_ID,
   FsLookupCache,
   mkdirSyncReal,
+  readWorkCounters,
   safePath,
   symlinkCapability,
   toForwardSlash,
+  withoutPlaceKindSnapshot,
+  withPlaceKindSnapshot,
 } from '@vibe-agent-toolkit/utils';
 import type { PathProbe } from '@vibe-agent-toolkit/utils';
 import { __readCrawlTimingSnapshot, __setCrawlTimingForTest, installFaultFs } from '@vibe-agent-toolkit/utils/testing';
@@ -650,6 +653,45 @@ describe('walkLinkGraph: followed links leaving the skill directory', () => {
     expect(walkLinkGraph(SKILL_ID, createSkillGuideRegistry(), defaultOptions()).outsideSkillDirLinks).toEqual([]);
   });
 });
+
+/** A skill linking `docs/guide.md` and, three times over two spellings, the unregistered `asset.png`. */
+function plantedSkill(root: string): { registry: WalkableRegistry; skillPath: string } {
+  const skillPath = safePath.resolve(root, 'SKILL.md');
+  const guidePath = safePath.resolve(root, 'docs/guide.md');
+  mkdirSyncReal(dirname(guidePath), { recursive: true });
+  writeFileSync(skillPath, '# Skill\n');
+  writeFileSync(guidePath, '# Guide\n');
+  writeFileSync(safePath.resolve(root, 'asset.png'), 'png\n');
+  // The asset is deliberately absent from the registry, so each link to it
+  // reaches both the classifier and the not-in-registry existence check.
+  // `../asset.png` from docs/ and `./asset.png` from the root resolve to the
+  // same absolute path.
+  const skill = createMockResource(SKILL_ID, skillPath, [
+    createLocalLink('guide', './docs/guide.md', GUIDE_ID),
+    createLocalLink('asset once', './asset.png'),
+    createLocalLink('asset again', './asset.png'),
+  ]);
+  const guide = createMockResource(GUIDE_ID, guidePath, [
+    createLocalLink('asset from docs', '../asset.png'),
+  ]);
+  return { registry: createMockRegistry([skill, guide]), skillPath };
+}
+
+/** `fs.lstat` and the kernel's followed `statSync` calls one walk of the planted skill costs. */
+function walkCost(root: string, around: (walk: () => void) => void): { lstat: number; stat: number } {
+  const { registry, skillPath } = plantedSkill(root);
+  const walk = (): void => {
+    walkLinkGraph(SKILL_ID, registry, { maxDepth: 5, excludeRules: [], projectRoot: root, skillRootPath: skillPath, ownOutputDir: undefined });
+  };
+  const stat = vi.spyOn(nodeFs, 'statSync');
+  const before = readWorkCounters()['fs.lstat'];
+  try {
+    around(walk);
+    return { lstat: readWorkCounters()['fs.lstat'] - before, stat: stat.mock.calls.length };
+  } finally {
+    stat.mockRestore();
+  }
+}
 
 describe('walkLinkGraph', () => {
   describe('skill resource not found', () => {
@@ -1478,57 +1520,39 @@ describe('walkLinkGraph', () => {
   });
 
   describe('path-attribute probing (pass 1′)', () => {
+
+
     /**
-     * The walk's `exists`/`isDirectory` questions are answered once per DISTINCT
-     * target, not once per link naming it.
-     *
-     * This assertion is the only one in the suite that dies when the memo dies.
-     * Every other test here asserts the walk's RESULT, and an always-miss probe
-     * returns identical results — just after more syscalls. A cache test with no
-     * count assertion is theatre.
+     * Inside a run, every link target's components are read once, by the run's
+     * place-kind snapshot, however many links and probe sites name them; the
+     * kernel is never asked to stat a target, the walk of its chain is the answer.
      */
-    it('probes each distinct link target once, however many links name it', () => {
+    it('reads each component of the targets once in a run, and never stats a target', () => {
       const root = getTempDir();
-      const skillPath = safePath.resolve(root, 'SKILL.md');
-      const guidePath = safePath.resolve(root, 'docs/guide.md');
-      const assetPath = safePath.resolve(root, 'asset.png');
-      mkdirSyncReal(dirname(guidePath), { recursive: true });
-      writeFileSync(skillPath, '# Skill\n');
-      writeFileSync(guidePath, '# Guide\n');
-      writeFileSync(assetPath, 'png\n');
-
-      // The asset is deliberately absent from the registry, so each link to it
-      // takes BOTH probe sites: the classifier's, and the not-in-registry
-      // existence check that used to be a second `existsSync` of the same path.
-      // `../asset.png` from docs/ and `./asset.png` from the root resolve to the
-      // same absolute path — which is exactly the collapse under test.
-      const skill = createMockResource(SKILL_ID, skillPath, [
-        createLocalLink('guide', './docs/guide.md', GUIDE_ID),
-        createLocalLink('asset once', './asset.png'),
-        createLocalLink('asset again', './asset.png'),
-      ]);
-      const guide = createMockResource(GUIDE_ID, guidePath, [
-        createLocalLink('asset from docs', '../asset.png'),
-      ]);
-
-      const pathProbe = new FsLookupCache(root);
-      walkLinkGraph(SKILL_ID, createMockRegistry([skill, guide]), {
-        maxDepth: 5,
-        excludeRules: [],
-        projectRoot: root,
-        skillRootPath: skillPath,
-        ownOutputDir: undefined,
-        pathProbe,
-      });
-
-      const { probes, misses } = pathProbe.probeStats;
-      // Two distinct targets on disk: docs/guide.md and asset.png.
-      expect(misses).toBe(2);
-      // And they were asked about more often than that — otherwise the memo
-      // would be collapsing nothing and this test would prove nothing.
-      expect(probes).toBeGreaterThan(misses);
+      // docs, docs/guide.md, asset.png.
+      expect(walkCost(root, (walk) => withPlaceKindSnapshot(root, walk))).toEqual({ lstat: 3, stat: 0 });
     });
 
+    /**
+     * Outside a run — and inside one that writes, which walks afresh — the walk
+     * is its own snapshot: it writes nothing while it runs, so each component is
+     * read once per walk, as in a run.
+     */
+    it('reads each component once per walk outside a run, and inside a run that writes', () => {
+      const root = getTempDir();
+      expect(walkCost(root, (walk) => walk())).toEqual({ lstat: 3, stat: 0 });
+      // Another walk of the same tree reads it again: nothing outlives the walk.
+      expect(walkCost(root, (walk) => withoutPlaceKindSnapshot(walk))).toEqual({ lstat: 3, stat: 0 });
+    });
+
+    /** Two walks in one run share the run's snapshot: the second reads nothing. */
+    it('shares the run\'s snapshot across walks', () => {
+      const root = getTempDir();
+      expect(walkCost(root, (walk) => withPlaceKindSnapshot(root, () => {
+        walk();
+        walk();
+      })).lstat).toBe(3);
+    });
     /**
      * A target that `existsSync` finds but `statSync` cannot answer for used to
      * VANISH: the classifier returned `{ kind: 'skipped' }`, so the link was

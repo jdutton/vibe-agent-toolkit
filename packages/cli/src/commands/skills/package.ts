@@ -588,7 +588,7 @@ async function runPackage(
   }
   // One run for the package, rooted at the project root this command required.
   // What the package writes is planned inside `packageSkill`, whose crawls pass it.
-  return withRunContext({ projectionStore: 'on-demand', root: projectRoot, outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
+  return withRunContext({ projectionStore: 'on-demand', root: projectRoot, tree: 'writes', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
     packageAndReport(skillPath, options, { target, formats, registries: runSkillRegistries(run) }, validation, locationRoot, logger),
   );
 }

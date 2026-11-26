@@ -1791,7 +1791,7 @@ export function getValidationResults(
 async function withAuditRun<T>(locationRoot: string, work: (run: RunContext) => Promise<T>): Promise<T> {
 	const repositoryRoot = gitFindRoot(locationRoot);
 	const gitTracker = repositoryRoot === null ? undefined : await getOrCreateGitTracker(repositoryRoot);
-	return withRunContext({ projectionStore: 'none', root: locationRoot, outputs: [], gitTracker, homeSettledListener: NO_HOME_SETTLED_LISTENER }, work);
+	return withRunContext({ projectionStore: 'none', root: locationRoot, tree: 'read-only', outputs: [], gitTracker, homeSettledListener: NO_HOME_SETTLED_LISTENER }, work);
 }
 
 /** The command's options inside `run`: its skill registries ride with them. */

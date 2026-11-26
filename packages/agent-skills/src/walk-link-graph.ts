@@ -44,6 +44,7 @@ import {
   relativeEscapesRoot,
   toForwardSlash,
   safePath,
+  withPlaceKindSnapshot,
 } from '@vibe-agent-toolkit/utils';
 import { type GitTracker, isGitIgnored } from '@vibe-agent-toolkit/utils/git';
 import picomatch from 'picomatch';
@@ -210,13 +211,10 @@ export interface WalkLinkGraphOptions {
   gitTracker?: GitTracker;
   /**
    * Optional {@link FsLookupCache} to answer this walk's `exists`/`isDirectory`
-   * questions (pass 1′). Omitted, the walk builds its own and discards it.
-   *
-   * ⚠️ **Only inject one when nothing writes to the tree between the walks that
-   * share it.** The cache holds a snapshot, so a probe taken before a build
-   * step answers questions asked after it. `packageSkill` writes `dist/` per
-   * skill and therefore must NOT share a probe across skills. Provided mainly
-   * so callers can read {@link FsLookupCache.probeStats} back.
+   * questions (pass 1′). Omitted, the walk builds its own. Its probe keeps no
+   * memo, so sharing one across walks shares nothing stale: what stands where
+   * is the place-kind snapshot's to keep (`withPlaceKindSnapshot`: the run's,
+   * or this walk's own).
    */
   pathProbe?: FsLookupCache;
 }
@@ -317,17 +315,11 @@ interface WalkState {
    *
    * Link targets are not in the enumeration by construction: they are
    * discovered by parsing, so their `exists`/`isDirectory` attributes have to
-   * be filled after the fact. Filling them once per distinct path, rather than
-   * once per link, is the whole of the change — several documents linking the
-   * same README asked the same two syscalls that many times.
-   *
-   * **Scoped to one walk, deliberately.** `packageSkill` writes into `dist/`
-   * between skills, so a probe shared across skills would answer a
-   * post-build question from a pre-build snapshot — exactly the staleness
-   * {@link FsLookupCache}'s own docs warn about.
-   *
-   * That scoping costs most of the collapse on the packager lane, where
-   * targets rarely repeat inside one skill's walk. Correctness wins.
+   * be filled after the fact. The probe answers from the walk of the target's
+   * link chain and keeps nothing itself: the place-kind snapshot reads each
+   * component once — the run's, across links, lanes and skills, in a run that
+   * writes nothing; this walk's own otherwise, so in a run that writes
+   * (`packageSkill` writes `dist/` between skills) no answer predates a build step.
    */
   pathProbe: FsLookupCache;
   /**
@@ -360,7 +352,8 @@ interface ExcludeMatcher {
  *
  * `exists`, `isDirectory` and `insideProject` are unconditional and cheap: the
  * first two come from {@link FsLookupCache.probe}, which every target pays for
- * anyway and which memoizes them across links; the third is pure path math.
+ * anyway (one walk of its chain, its components kept by the run's place-kind
+ * snapshot); the third is pure path math.
  *
  * `gitignored` is neither, so it is read through {@link readGitignored} at the
  * point the cascade reaches it. The oracle behind it is a `git check-ignore`
@@ -375,10 +368,11 @@ interface ExcludeMatcher {
  *
  * ## Built per ask, not memoized — on purpose
  *
- * Storing the row would shadow the probe's own memo and silently zero out
- * {@link FsLookupCache.probeStats}, the one observable that dies when the probe
- * memo dies. Each layer keeps its own counted memo instead: the probe counts
- * syscalls avoided, {@link WalkState.gitignoreFacts} collapses oracle calls.
+ * Storing the row would be a second memo of what stands at a path, beside the
+ * run's place-kind snapshot that already keeps it (its observable is the
+ * `fs.lstat` work counter). One link's row is built once and read by both of
+ * that link's sites ({@link checkExclusions} returns it to {@link processLink});
+ * {@link WalkState.gitignoreFacts} collapses oracle calls, which no snapshot keeps.
  *
  * Rebuilding the row costs one `safePath.relative` per ask — pure string math
  * on two absolute paths, no syscall. **That is a small net ADDITION, not
@@ -404,8 +398,8 @@ interface PathFacts {
 /**
  * Build the pass-1′ row for one link target.
  *
- * The two syscalls come from {@link FsLookupCache.probe}, which memoizes them
- * across links, so repeated calls for the same path are free of I/O.
+ * The two columns come from {@link FsLookupCache.probe}: one walk of the
+ * target's chain, free of I/O for components the run already read.
  */
 function fillPathFacts(targetPath: string, options: WalkLinkGraphOptions, state: WalkState): PathFacts {
   const { exists, isDirectory } = state.pathProbe.probe(targetPath);
@@ -734,7 +728,9 @@ function applyExclusionVerdict(
  *
  * Pass 1′ fills the row, pass 4 judges it, and the recording is a third step.
  *
- * @returns true if the link was excluded or deferred (caller should skip to next link)
+ * @returns `undefined` if the link was excluded or deferred (caller should skip
+ *   to next link); otherwise the row, for the caller's existence check to read
+ *   rather than probe the same target again
  */
 function checkExclusions(
   targetPath: string,
@@ -743,12 +739,12 @@ function checkExclusions(
   options: WalkLinkGraphOptions,
   excludeMatchers: ExcludeMatcher[],
   state: WalkState,
-): boolean {
+): PathFacts | undefined {
   const facts = fillPathFacts(targetPath, options, state);
   const verdict = classifyExclusion(targetPath, options, excludeMatchers, facts)
     ?? classifyGitignored(targetPath, options, facts, state);
-  if (verdict === undefined) return false;
-  return applyExclusionVerdict(verdict, targetPath, sourcePath, link, facts, state);
+  if (verdict === undefined) return facts;
+  return applyExclusionVerdict(verdict, targetPath, sourcePath, link, facts, state) ? undefined : facts;
 }
 
 /**
@@ -778,7 +774,8 @@ function processLink(
   const targetPath = resolveHrefToPath(hrefWithoutAnchor, currentResource.filePath, options.projectRoot);
 
   // Check structural exclusions (deferred, directory, boundary, navigation, pattern, gitignore)
-  if (checkExclusions(targetPath, currentResource.filePath, link, options, excludeMatchers, state)) {
+  const facts = checkExclusions(targetPath, currentResource.filePath, link, options, excludeMatchers, state);
+  if (facts === undefined) {
     return;
   }
 
@@ -789,10 +786,9 @@ function processLink(
 
   if (targetResource) {
     processRegistryResource(targetResource, targetPath, currentResource.filePath, link, currentDepth, options, state);
-    // Straight to the probe, not through `fillPathFacts`: this site wants one
-    // column, and building a whole row to read it would compute an
-    // `insideProject` the caller immediately discards. The probe memo makes it free.
-  } else if (state.pathProbe.probe(targetPath).exists) {
+    // The classifier's own row for this link: the same question of the same
+    // path, so it is read, never probed a second time.
+  } else if (facts.exists) {
     // Not in registry — non-markdown asset that exists on disk.
     //
     // ⚠️ `currentDepth` is deliberately NOT consulted here, and its absence is
@@ -945,9 +941,14 @@ export function walkLinkGraph(
   // `try`/`finally` rather than a record before each `return`: the early exit
   // for an unknown skill id is a real (cheap) call and must still be counted,
   // and a throw must not silently drop a bracket.
+  //
+  // The walk is synchronous and writes nothing, so it is a snapshot of its own
+  // (`withPlaceKindSnapshot`): each component its targets pass through is read
+  // once per walk, also inside a run that writes and walks afresh. Inside a run
+  // that already keeps the project, the walk uses the run's snapshot.
   const startedAt = crawlTimingStart();
   try {
-    return walkLinkGraphBody(skillResourceId, registry, options);
+    return withPlaceKindSnapshot(options.projectRoot, () => walkLinkGraphBody(skillResourceId, registry, options));
   } finally {
     recordCrawlPass(CRAWL_WALKER_ID, 'crawl', CRAWL_PASS_INSIDE, startedAt);
   }

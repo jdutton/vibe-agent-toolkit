@@ -1,17 +1,18 @@
 /**
  * `withPlaceKindSnapshot`: inside the bracket, the link-chain walk's `lstat` of a component strictly
- * beneath the bracket's root is taken once and reused; an absent answer, a path outside the root,
+ * beneath the bracket's root is taken once and reused, an absent answer included; a path outside the root
  * and any walk outside a bracket are asked of the kernel every time. Counted by `fs.lstat`, which
  * counts syscalls (a memo hit counts zero).
  */
-import { chmodSync, writeFileSync } from 'node:fs';
+import { chmodSync, rmSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { assertLocalChain, withPlaceKindSnapshot } from '../src/link-following.js';
+import { assertLocalChain, withoutPlaceKindSnapshot, withPlaceKindSnapshot } from '../src/link-following.js';
 import { safePath } from '../src/path-utils.js';
 import { createSymlink, symlinkCapability } from '../src/test-helpers.js';
+import { hostPlaceKind } from '../src/tree-change/host-chain.js';
 import { HOST_PATH_FLAVOR } from '../src/tree-change/link-chain.js';
 import { __resetWorkCountersForTest, readWorkCounters } from '../src/work-counters.js';
 
@@ -56,13 +57,41 @@ describe('withPlaceKindSnapshot', () => {
     expect(lstatsOfWalk(x, root)).toBe(3);
   });
 
-  it('asks an absent answer again, so a file created mid-bracket is seen', () => {
+  it('keeps an absent answer for the bracket, as it keeps every other kind', () => {
     const z = safePath.join(root, 'a', 'b', 'z.md');
     withPlaceKindSnapshot(root, () => {
       expect(assertLocalChain(z, root, HOST_PATH_FLAVOR)).toBe('nothing');
+      // Created by someone else mid-run: the run's first answer stands, and costs no lstat.
       writeFileSync(z, 'z');
-      // a and b from the snapshot; z.md asked again and found.
-      expect(lstatsOfWalk(z, root)).toBe(1);
+      __resetWorkCountersForTest();
+      expect(assertLocalChain(z, root, HOST_PATH_FLAVOR)).toBe('nothing');
+      expect(readWorkCounters()['fs.lstat']).toBe(0);
+    });
+    // The next run reads it afresh.
+    expect(lstatsOfWalk(z, root)).toBe(3);
+  });
+
+  it('a bracket opened inside one that already keeps its tree uses that memo, not a fresh one', () => {
+    withPlaceKindSnapshot(root, () => {
+      expect(lstatsOfWalk(x, root)).toBe(3);
+      // The same tree, and a tree beneath it: everything they walk is the open memo's already.
+      expect(withPlaceKindSnapshot(root, () => lstatsOfWalk(x, root))).toBe(0);
+      expect(withPlaceKindSnapshot(safePath.join(root, 'a'), () => lstatsOfWalk(x, root))).toBe(0);
+    });
+  });
+
+  it('a bracket opened inside a writing one keeps its own memo for its own work', () => {
+    withPlaceKindSnapshot(root, () => {
+      lstatsOfWalk(x, root);
+      withoutPlaceKindSnapshot(() => {
+        // Work that writes nothing inside the writer (a synchronous walk) reads each component once,
+        // from an empty memo: nothing the enclosing reader kept.
+        withPlaceKindSnapshot(root, () => {
+          expect(lstatsOfWalk(x, root)).toBe(3);
+          expect(lstatsOfWalk(x, root)).toBe(0);
+        });
+        expect(lstatsOfWalk(x, root)).toBe(3);
+      });
     });
   });
 
@@ -107,6 +136,39 @@ describe('withPlaceKindSnapshot', () => {
       }
       // a was answered (a directory); b and x.md are asked now that the OS answers.
       expect(lstatsOfWalk(x, root)).toBe(2);
+    });
+  });
+
+  it('walks afresh inside a writing bracket nested in a snapshot, and sees its own writes', () => {
+    withPlaceKindSnapshot(root, () => {
+      // The reading run memoizes a, b and x.md.
+      expect(lstatsOfWalk(x, root)).toBe(3);
+      withoutPlaceKindSnapshot(() => {
+        // Every component is asked again: the outer snapshot is not consulted.
+        expect(lstatsOfWalk(x, root)).toBe(3);
+        // The writer replaces the file it read by a directory, and reads it again.
+        rmSync(x);
+        mkdirSyncReal(x);
+        __resetWorkCountersForTest();
+        expect(hostPlaceKind(x)).toBe('directory');
+        expect(readWorkCounters()['fs.lstat']).toBe(1);
+      });
+    });
+  });
+
+  it('re-reads a memoized link replaced by a directory mid-run, never throwing readlink\'s EINVAL', ({ skip }) => {
+    // Skipped where this host cannot create a symlink (Windows without Developer Mode or the privilege).
+    const cap = symlinkCapability() ?? skip();
+    const link = safePath.join(root, 'a', 'b', 'l');
+    createSymlink(cap, 'x.md', link, 'file');
+    withPlaceKindSnapshot(root, () => {
+      // a, b, l (a link: memoized), then x.md through its text.
+      expect(assertLocalChain(link, root, HOST_PATH_FLAVOR)).toBe('local');
+      // Another process replaces the link by a directory: the memo still says 'link'.
+      rmSync(link);
+      mkdirSyncReal(link);
+      expect(assertLocalChain(link, root, HOST_PATH_FLAVOR)).toBe('local');
+      expect(hostPlaceKind(link)).toBe('directory');
     });
   });
 });
