@@ -90,12 +90,6 @@ export {
   expandPatterns,
 } from './pattern-expander.js';
 
-// Collection matching
-export {
-  matchesCollection,
-  getCollectionsForFile,
-} from './collection-matcher.js';
-
 // Link validation
 export type { ValidateLinkOptions } from './link-validator.js';
 export { validateLink } from './link-validator.js';

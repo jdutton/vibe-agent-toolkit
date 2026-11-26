@@ -6,6 +6,7 @@
  * chain whose every text has not been read.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { lstatSync, readlinkSync } from 'node:fs';
 
 import { isPathAbsentError, LINK_CHAIN_REFUSED_CODE } from '../errors/errno-table.js';
@@ -16,9 +17,39 @@ import { countWork } from '../work-counters.js';
 
 import { type ChainProbe, type ChainRefusal, type ChainRule, type LinkChain, MAX_LINK_HOPS, type PlaceKind, walkLinkChain } from './link-chain.js';
 
+/** The place kinds read inside one {@link withPlaceKindMemo} bracket, and the trees they may be kept for. */
+interface PlaceKindMemo {
+  /** Each tree root's `${root}/`, forward-slashed, precomputed once: a path kept is strictly beneath one. */
+  readonly prefixes: readonly string[];
+  /** What stood at each path when first read: never `absent`, never a refusal. */
+  readonly kinds: Map<string, PlaceKind>;
+}
+
+/**
+ * The memo of the bracket now open. `AsyncLocalStorage`, never a module-level `Map`, for the reason
+ * `withGitSnapshotCache` gives: a process-wide memo would hand a stale kind to anything that changes
+ * a tree and walks it again in one process (a vitest worker, a long-lived host).
+ */
+const placeKindsInBracket = new AsyncLocalStorage<PlaceKindMemo>();
+
+/**
+ * Run `run` with {@link hostPlaceKind} answering a path strictly beneath any of `roots` from a memo
+ * after its first `lstat`. Reached through `withPlaceKindSnapshot` (`link-following.ts`), which
+ * names each root in the spelling the walk under it uses.
+ *
+ * @param roots - Absolute tree roots, forward-slashed, exactly as the walk spells the paths beneath them
+ * @param run - The work; its return value is passed straight through, so an async `run` keeps the memo for its whole promise
+ */
+export function withPlaceKindMemo<T>(roots: readonly string[], run: () => T): T {
+  const prefixes = roots.map((root) => (root.endsWith('/') ? root : `${root}/`));
+  return placeKindsInBracket.run({ prefixes, kinds: new Map<string, PlaceKind>() }, run);
+}
+
 /**
  * What stands at `path`, a link there not followed. A probe the OS refuses is thrown raw, for the
- * caller to classify.
+ * caller to classify. Inside a {@link withPlaceKindMemo} bracket a path beneath its root is
+ * `lstat`ed once and its kind reused (an `absent` answer is asked again); a memo hit counts no
+ * `fs.lstat`.
  *
  * ⚠️ "Not followed" is `lstat`'s word, and on Windows libuv keeps it only for what it calls a
  * symbolic link: a junction to a volume (`\??\Volume{…}\`) and a reparse point of another tag
@@ -28,6 +59,24 @@ import { type ChainProbe, type ChainRefusal, type ChainRule, type LinkChain, MAX
  * kernel reparses it.
  */
 export function hostPlaceKind(path: string): PlaceKind {
+  const snapshot = placeKindsInBracket.getStore();
+  if (snapshot === undefined || !isKeptBy(snapshot, path)) return lstatPlaceKind(path);
+  const known = snapshot.kinds.get(path);
+  if (known !== undefined) return known;
+  const kind = lstatPlaceKind(path);
+  // An absent place may be created by the run itself: asked again. A refusal threw above: never kept.
+  if (kind !== 'absent') snapshot.kinds.set(path, kind);
+  return kind;
+}
+
+/** Whether `memo` keeps the kind at `path`: strictly beneath one of its roots, compared as spelled. */
+function isKeptBy(memo: PlaceKindMemo, path: string): boolean {
+  const spelled = toForwardSlash(path);
+  return memo.prefixes.some((prefix) => spelled.startsWith(prefix));
+}
+
+/** {@link hostPlaceKind}'s own `lstat`, no snapshot consulted. */
+function lstatPlaceKind(path: string): PlaceKind {
   try {
     // Counted at the call, refused or not: `fs.lstat` counts syscalls.
     countWork('fs.lstat', 1);

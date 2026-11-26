@@ -100,6 +100,11 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  *
  * `checks.gate.rows.read` counts the tier rows the admission request reads for the checks overlap
  * gate, summed per member (resource-scanning-and-caching.md 3.7b).
+ *
+ * `collection.matchers.compiled` counts every collection whose include/exclude patterns are
+ * compiled to a matcher (`compileCollectionMatcher`, the one place a collection's globs are
+ * compiled): once per collection per holder of the config (a registry, a MIME resolver, a scoped
+ * filter), never once per file matched.
  */
 export const WORK_COUNTER_NAMES = [
   'store.rows.decoded.persistent',
@@ -139,6 +144,7 @@ export const WORK_COUNTER_NAMES = [
   'git.calls',
   'git.snapshots',
   'checks.gate.rows.read',
+  'collection.matchers.compiled',
 ] as const;
 
 /**

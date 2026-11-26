@@ -237,6 +237,7 @@ const BARREL_EXPORTS = [
   'withFsFault',
   'withFsFaultSync',
   'withOuterBracket',
+  'withPlaceKindSnapshot',
   'withTempDir',
   'withWorkPhase',
   'workCountsObserved',

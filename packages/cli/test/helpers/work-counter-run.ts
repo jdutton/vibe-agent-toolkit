@@ -7,7 +7,7 @@
 import type { SpawnSyncReturns } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 
-import { safePath, WORK_COUNTERS_ENV, type WorkCounter, type WorkCounterDump, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash, WORK_COUNTERS_ENV, type WorkCounter, type WorkCounterDump, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { expect } from 'vitest';
 
 import { VALIDATE_DEBUG_FACTS_ENV, type ValidateDebugFacts } from '../../src/commands/validate-debug-facts.js';
@@ -139,4 +139,25 @@ export function cliDumps<T extends { readonly role: string }>(directory: string)
   return readdirSync(directory)
     .map((name) => JSON.parse(readFileSync(safePath.join(directory, name), 'utf-8')) as T)
     .filter((dump) => dump.role === 'cli');
+}
+
+/** `path` and each of its ancestors below the root, forward-slashed: `a/b/c.md` gives `a`, `a/b`, `a/b/c.md`. */
+function componentPrefixes(path: string): string[] {
+  const parts = toForwardSlash(path).split('/');
+  return parts.map((_, index) => parts.slice(0, index + 1).join('/'));
+}
+
+/**
+ * How many `fs.lstat`s the link-chain walks of `added` cost a run that walks `present` either way:
+ * each component below the root that no `present` path passes through, once. A run that writes
+ * nothing walks inside `withPlaceKindSnapshot`, so a component is read once however many paths,
+ * lanes or walks pass through it.
+ *
+ * @param added - Root-relative paths the run walks in addition
+ * @param present - Root-relative paths the run walks either way
+ * @returns The components below the root new to the run
+ */
+export function newComponentsBelowRoot(added: readonly string[], present: readonly string[]): number {
+  const known = new Set(present.flatMap(componentPrefixes));
+  return new Set(added.flatMap(componentPrefixes).filter((prefix) => !known.has(prefix))).size;
 }

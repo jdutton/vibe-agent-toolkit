@@ -19,7 +19,7 @@ import {
   type ProjectConfig,
   type RunPopulation,
 } from '@vibe-agent-toolkit/resources';
-import { relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { relativeEscapesRoot, safePath, toForwardSlash, withPlaceKindSnapshot } from '@vibe-agent-toolkit/utils';
 import { GitTracker, gitTreeSnapshot } from '@vibe-agent-toolkit/utils/git';
 
 import { CommandRefusalError } from './command-refusal.js';
@@ -201,17 +201,26 @@ function questionStoreOf(root: string, holdsStore: boolean): {
  * @param work - The verb's work
  * @returns Whatever `work` returned
  */
-export function withRunContext<T>(
-  options: {
-    readonly root: string;
-    readonly outputs: readonly string[];
-    readonly projectionStore: 'on-demand' | 'none';
-    readonly gitTracker?: GitTracker | undefined;
-    readonly homeSettledListener: (run: RunContext) => HomeSettledListener;
-  },
-  work: (run: RunContext) => Promise<T>,
-): Promise<T> {
+export async function withRunContext<T>(options: RunContextOptions, work: (run: RunContext) => Promise<T>): Promise<T> {
   const root = safePath.resolve(options.root);
+  const open = (): Promise<T> => openRunContext(root, options, work);
+  // A run that writes nothing under its tree reads each path component's kind once
+  // (`withPlaceKindSnapshot`); a run that writes must see its own writes, so it walks afresh.
+  // Async, so a refused root realpath rejects like every other run failure, never throws.
+  return await (options.outputs.length > 0 ? open() : withPlaceKindSnapshot(root, open));
+}
+
+/** What {@link withRunContext} is asked to open. */
+interface RunContextOptions {
+  readonly root: string;
+  readonly outputs: readonly string[];
+  readonly projectionStore: 'on-demand' | 'none';
+  readonly gitTracker?: GitTracker | undefined;
+  readonly homeSettledListener: (run: RunContext) => HomeSettledListener;
+}
+
+/** {@link withRunContext}'s run, its `root` resolved. */
+function openRunContext<T>(root: string, options: RunContextOptions, work: (run: RunContext) => Promise<T>): Promise<T> {
   const gitTracker = options.gitTracker ?? new GitTracker(root);
   // One decision whether the run has a store: what the openers answer and what the
   // skills lane counts a scan as (`skillText.storeMiss` or `skillText.noStore`).

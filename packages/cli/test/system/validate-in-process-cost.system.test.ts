@@ -20,7 +20,7 @@ import picomatch from 'picomatch';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { queryVerb, VERBS } from '../helpers/cache-differential.js';
-import { runWithWorkCounters } from '../helpers/work-counter-run.js';
+import { newComponentsBelowRoot, runWithWorkCounters } from '../helpers/work-counter-run.js';
 import { writeCommittedCorpus } from '../test-helpers.js';
 
 import { createSuiteContext, executeCli } from './test-common.js';
@@ -279,7 +279,8 @@ describe('the stored admission reads only what the fact reader consumes, warm', 
 // directory. Each side of the relation is derived from the fixture's own paths. The cost fixture
 // against the same fixture plus one decoy document nested below the root, both warm: the resources
 // phase admits the decoy from the store, and its warm admission walks the decoy's path, one
-// `lstat` per component below the root. The decoy is outside the skills view, so the skills phase
+// `lstat` per component below the root that no fixture path already passes through (the run reads
+// each component once). The decoy is outside the skills view, so the skills phase
 // and the checks phase do the same work either way.
 //
 // Cold minus warm is not held: what one more member costs a cold run depends on whether the
@@ -308,7 +309,10 @@ describe('fs.lstat per phase, warm, by relation', () => {
     const withDecoy = lstatsByPhase(decoyed.warm);
     // The phases that walk paths in the parent, so the relation below is not over zeros.
     for (const phase of ['resources', 'skills'] as const) expect(without[phase], `${phase}: the phase counted fs.lstat`).toBeGreaterThan(0);
-    const walkBelowRoot = toForwardSlash(DECOY).split('/').length;
+    // Only the decoy's components the fixture's own paths do not already pass through: the run
+    // reads each component once (`withPlaceKindSnapshot`).
+    const walkBelowRoot = newComponentsBelowRoot([DECOY], Object.keys(IN_PROCESS_COST_FIXTURE));
+    expect(walkBelowRoot, 'the decoy adds components below the root').toBeGreaterThan(0);
     expect({
       resources: (withDecoy.resources ?? 0) - (without.resources ?? 0),
       skills: (withDecoy.skills ?? 0) - (without.skills ?? 0),

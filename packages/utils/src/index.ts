@@ -149,6 +149,7 @@ export {
   realpathNativeSync,
   requireFollowedStat,
   requireFollowedStatSync,
+  withPlaceKindSnapshot,
 } from './link-following.js';
 // The one fold for "are these two names one entry on some volume".
 export { foldedSegment } from './name-fold.js';

@@ -37,7 +37,7 @@ import {
 } from '@vibe-agent-toolkit/schema';
 import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
-import { matchesCollection } from './collection-matcher.js';
+import { compileCollectionMatcher } from './collection-matcher.js';
 import { isParseLimitError, isPerRunParseRefusal, limitRefusalClause, type PerRunParseRefusal } from './parse-limits.js';
 import type { ParseRefusedResource, UnreadableResource } from './resource-registry.js';
 import type { CollectionConfig } from './schemas/project-config.js';
@@ -226,7 +226,7 @@ export function partitionNotAdmitted(
 
 /**
  * The not-admitted files a `--collection` covers: those its own include and
- * exclude patterns match — the same `matchesCollection` the registry assigns
+ * exclude patterns match — the same `compileCollectionMatcher` the registry assigns
  * membership with, since a file never admitted has no membership of its own.
  *
  * @param log - The registry's logs
@@ -235,9 +235,10 @@ export function partitionNotAdmitted(
  */
 export function notAdmittedInScope(log: NotAdmittedLog, collection: CollectionConfig | undefined): NotAdmittedLog {
   if (collection === undefined) return log;
+  const matches = compileCollectionMatcher(collection);
   return {
-    unreadable: log.unreadable.filter((entry) => matchesCollection(entry.filePath, collection)),
-    parseRefused: log.parseRefused.filter((entry) => matchesCollection(entry.filePath, collection)),
+    unreadable: log.unreadable.filter((entry) => matches(entry.filePath)),
+    parseRefused: log.parseRefused.filter((entry) => matches(entry.filePath)),
   };
 }
 

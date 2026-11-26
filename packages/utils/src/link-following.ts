@@ -30,7 +30,7 @@ import { promisify } from 'node:util';
 
 import { isFinalPathUnanswerableError, isPathAbsentError, isUnresolvableLinkError } from './errors/errno-table.js';
 import { relativeEscapesRoot, safePath, toForwardSlash } from './path-core.js';
-import { LinkChainRefusedError, walkHostChain } from './tree-change/host-chain.js';
+import { LinkChainRefusedError, walkHostChain, withPlaceKindMemo } from './tree-change/host-chain.js';
 import { HOST_PATH_FLAVOR, type LinkChain, namedPathRoot, type PathFlavor } from './tree-change/link-chain.js';
 
 /**
@@ -68,6 +68,54 @@ export function edgeRealpathSync(path: string): string {
     if (!nativeAnswerNeedsJsWalk(error)) throw error;
     return nodeFs.realpathSync(path);
   }
+}
+
+/**
+ * Run work that walks many paths under one tree, and `lstat` each component beneath it ONCE.
+ *
+ * Every following call here walks its path's chain component by component first, and the lanes of
+ * one run (registry admission, the skills link graph, `FsLookupCache.realpath`, `isWithinProject`)
+ * walk the same files, each re-reading the shared ancestor directories: on a ~25k-file tree a warm
+ * `vat validate` made 66,289 such `lstat`s over 6,298 distinct paths. Inside this bracket a
+ * component strictly beneath `root` is read once and its kind (directory, file, link) reused;
+ * outside it, or for a path not beneath `root`, every walk asks the kernel as before.
+ *
+ * `root` is kept in both spellings a walk beneath it can take: as named, and as its real path (a
+ * walk beneath a tree starts from the tree's real path, {@link walkWithin}). A root not there is
+ * kept as named only; the OS refusing the root's realpath is thrown raw, as the first walk would.
+ *
+ * @throws The raw errno of the root's realpath the OS refused (not an absent root)
+ *
+ * ## What it deliberately does NOT do
+ *
+ * - A component another process changes mid-run (a directory replaced by a link, a file by a
+ *   directory) is not read again: the first answer stands for the bracket, the contract
+ *   `withGitSnapshotCache` states for its snapshot. A link's TEXT is still read on every walk.
+ * - An `absent` answer is never kept (the run may create the path), nor is a refused `lstat`
+ *   (thrown, for the caller to classify, and asked again next time).
+ * - It is opened only around a run that writes nothing under its tree: a run that writes would
+ *   replace what it already read, and must see its own writes.
+ *
+ * Async-scoped (`AsyncLocalStorage`), so it spans the run's `await`s and two runs open at once in one
+ * process keep their own; nesting is safe, the inner bracket starting an empty memo.
+ *
+ * @param root - The tree the run walks: absolute, or relative to cwd; either separator
+ * @param run - The work; its return value is passed straight through, so an async `run` keeps the
+ *   snapshot for its whole promise
+ * @returns Whatever `run` returned
+ */
+export function withPlaceKindSnapshot<T>(root: string, run: () => T): T {
+  const named = toForwardSlash(safePath.resolve(root));
+  const roots = [named];
+  try {
+    const real = realRootOf(named);
+    if (real !== named) roots.push(real);
+  } catch (error: unknown) {
+    // A root not there (yet): nothing is walked beneath it, so the named spelling alone is kept.
+    // Any other refusal is the run's own, thrown as its first walk would have thrown it.
+    if (!isPathAbsentError(error)) throw error;
+  }
+  return withPlaceKindMemo(roots, run);
 }
 
 /** Where the walk of `path` begins: beneath `within`'s real path, or — for a path outside it — from its own root. */

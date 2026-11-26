@@ -4,7 +4,7 @@
  */
 
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   checkPackagedTestInput,
@@ -419,5 +419,43 @@ describe('testInputLinkIssues', () => {
     );
 
     expect(issues[0]?.message).toContain('skills/demo/evals/fixtures/a.txt');
+  });
+});
+
+describe('testInputLinkIssues containment', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const linkAt = (path: string): { path: string; linkHref: string } => ({ path, linkHref: path });
+
+  it('counts the dir itself as inside', () => {
+    expect(testInputLinkIssues([linkAt(DEFAULT_EVALS_DIR)], [DEFAULT_EVALS_DIR], PROJECT_ROOT)).toHaveLength(1);
+  });
+
+  it('counts a nested path as inside', () => {
+    expect(
+      testInputLinkIssues([linkAt(`${DEFAULT_EVALS_DIR}/fixtures/deep/a.txt`)], [DEFAULT_EVALS_DIR], PROJECT_ROOT),
+    ).toHaveLength(1);
+  });
+
+  it('does not count a sibling sharing the dir name as a prefix (/a/bc is not inside /a/b)', () => {
+    expect(
+      testInputLinkIssues([linkAt(`${DEFAULT_EVALS_DIR}-old/notes.md`)], [DEFAULT_EVALS_DIR], PROJECT_ROOT),
+    ).toEqual([]);
+    expect(testInputLinkIssues([linkAt(`${DEFAULT_EVALS_DIR}x`)], [DEFAULT_EVALS_DIR], PROJECT_ROOT)).toEqual([]);
+  });
+
+  it('resolves each dir and each excluded ref at most once (E + D, not E x D)', () => {
+    const dirCount = 4;
+    const refCount = 25;
+    const dirs = Array.from({ length: dirCount }, (_, i) => `${PROJECT_ROOT}/skills/s${i}/evals`);
+    // Every ref misses every dir, so a per-pair containment check would resolve for each pair.
+    const refs = Array.from({ length: refCount }, (_, i) => linkAt(`${SKILL_DIR}/references/r${i}.md`));
+    const resolveSpy = vi.spyOn(safePath, 'resolve');
+
+    expect(testInputLinkIssues(refs, dirs, PROJECT_ROOT)).toEqual([]);
+
+    expect(resolveSpy.mock.calls.length).toBeLessThanOrEqual(refCount + dirCount);
   });
 });

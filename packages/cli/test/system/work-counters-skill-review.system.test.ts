@@ -27,15 +27,16 @@
  * where the machine keeps them. It is held exactly by relation instead, each side derived from
  * the layout's own paths: beside a tree it equals alone; cold it exceeds warm by the store's two
  * canonicalizations of the run's root, each a walk of the root's real path from the filesystem
- * root; and a home exceeds the same home without its decoys by each decoy's two walks below the
- * root (the registry's and the identity's) plus its realization's one lstat.
+ * root; and a home exceeds the same home without its decoys by the decoys' components below the
+ * root that the bare home does not pass through, each read once in the run, plus each decoy's
+ * realization's one lstat.
  */
 
 import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { normalizePath } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { runWithWorkCounters } from '../helpers/work-counter-run.js';
+import { newComponentsBelowRoot, runWithWorkCounters } from '../helpers/work-counter-run.js';
 import { commitTestFixture } from '../test-helpers.js';
 
 import { createSuiteContext, join, writeFileTree } from './test-common.js';
@@ -238,11 +239,12 @@ describe('vat skill review on one skill', () => {
     for (const [label, { root, cold, warm }] of [['alone', alone], ['home', home], ['bare home', bare]] as const) {
       expect(cold - warm, `${label}: the cold run's two canonicalizations of its root`).toBe(2 * componentsFromRoot(root));
     }
-    // Each decoy: the registry's walk and the identity's walk of its components below the home,
-    // and its realization's one lstat.
-    const decoyWork = Object.keys(IN_HOME.files)
-      .filter((path) => path.endsWith('.md') && !(path in BARE_HOME.files))
-      .reduce((sum, path) => sum + 2 * toForwardSlash(path.slice(`${IN_HOME.cwd}/`.length)).split('/').length + 1, 0);
+    // The decoys' components below the home that the bare home's paths do not pass through, each
+    // read once however many walks pass through it (`withPlaceKindSnapshot`), and each decoy's
+    // realization's one lstat.
+    const belowHome = (paths: string[]): string[] => paths.map((path) => toForwardSlash(path).slice(`${IN_HOME.cwd}/`.length));
+    const decoyPaths = Object.keys(IN_HOME.files).filter((path) => path.endsWith('.md') && !(path in BARE_HOME.files));
+    const decoyWork = newComponentsBelowRoot(belowHome(decoyPaths), belowHome(Object.keys(BARE_HOME.files))) + decoyPaths.length;
     expect({ cold: home.cold - bare.cold, warm: home.warm - bare.warm }, 'a home over the same home without its decoys').toEqual({ cold: decoyWork, warm: decoyWork });
   });
 
