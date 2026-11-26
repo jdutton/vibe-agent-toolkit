@@ -21,6 +21,7 @@
 import { compareCodeUnits, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
+import type { ContentKey } from '../src/content-key.js';
 import { MEMBERSHIP_EXTENT_REQUEST } from '../src/projection/merge.js';
 import {
   assembleProjection,
@@ -53,6 +54,7 @@ import {
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 import type { SkillTextFactsRow } from '../src/schemas/projection-skill-text.js';
 import type { ResolutionContextRow, ZoneProvenanceRow } from '../src/schemas/projection-zones.js';
+import { testContentKey } from '../src/testing.js';
 
 /** The corpus root this run is over. */
 const ROOT_ID = 'root-main';
@@ -129,10 +131,10 @@ type ContentColumns = Pick<ResourceRealizationRow, 'contentKey' | 'contentState'
  * accidentally share one.
  *
  * @param seed - Distinguishes this key from every other in the file
- * @returns A key of the form `markdown.<64 hex digits>`
+ * @returns A markdown key
  */
-function contentKey(seed: number): string {
-  return `markdown.${seed.toString(16).padStart(64, '0')}`;
+function contentKey(seed: number): ContentKey {
+  return testContentKey('markdown', String(seed));
 }
 
 const KEY_SHARED = contentKey(1);
@@ -145,7 +147,7 @@ const KEY_BETA = contentKey(3);
  * @param key - The content key those bytes produced
  * @returns The `keyed`/non-null pair the row schema pins together
  */
-function keyedContent(key: string): ContentColumns {
+function keyedContent(key: ContentKey): ContentColumns {
   return { contentKey: key, contentState: 'keyed' };
 }
 
@@ -358,7 +360,7 @@ function tableKeysOfScope(scope: 'blob' | 'extent'): readonly string[] {
  * @param key - The content key
  * @returns The row
  */
-function blobRow(key: string): BlobRow {
+function blobRow(key: ContentKey): BlobRow {
   return {
     contentKey: key,
     bytes: 0,
@@ -388,7 +390,7 @@ function blobRow(key: string): BlobRow {
  * @param key - The content key it declined to parse
  * @returns The row
  */
-function blobConditionRow(key: string, code: string): BlobConditionRow {
+function blobConditionRow(key: ContentKey, code: string): BlobConditionRow {
   return { blob: key, code, ordinal: 0, severity: 'info', message: 'NUL byte within the sniff window', line: null };
 }
 
@@ -398,7 +400,7 @@ function blobConditionRow(key: string, code: string): BlobConditionRow {
  * @param key - The markdown blob's key
  * @returns A held record with no matches
  */
-function skillTextFactsRow(key: string): SkillTextFactsRow {
+function skillTextFactsRow(key: ContentKey): SkillTextFactsRow {
   return { blob: key, lineCount: 1, h1: null, frontmatterFence: 'none', matchCount: 0, held: true };
 }
 

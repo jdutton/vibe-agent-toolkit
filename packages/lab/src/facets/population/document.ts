@@ -20,7 +20,27 @@ import { z } from 'zod';
 import { parseDocument } from '../../harness/document-shape.js';
 import { LaneFieldsSchema, laneOfDocument, type ReportedLane } from '../../harness/lane.js';
 
-import type { PopulationEntry, PopulationIdentity } from './types.js';
+import type { PopulationEntry, PopulationIdentity, PopulationIdentityScheme } from './types.js';
+
+/** A kind-hashed key, printed by the builds after rc.17 and before the qualified key. */
+const KIND_HASHED_KEY = /^[a-z]+\.[0-9a-f]{64}$/;
+
+/** A qualified key: the key kind names how the hex was made, and fixes its length. */
+const QUALIFIED_KEY = /^[a-z]+\.(?:sha256\.[0-9a-f]{64}|git-sha1\.[0-9a-f]{40}|git-sha256\.[0-9a-f]{64})$/;
+
+/**
+ * Which key scheme a document's `contentKey` text speaks.
+ *
+ * @param text - The printed key
+ * @returns The scheme, or `undefined` when the text is neither shape
+ */
+function keySchemeOf(text: string): KeyScheme | undefined {
+  if (QUALIFIED_KEY.test(text)) return 'contentKey';
+  return KIND_HASHED_KEY.test(text) ? 'kindHashedKey' : undefined;
+}
+
+/** The two schemes a printed `contentKey` can speak. */
+type KeyScheme = Exclude<PopulationIdentityScheme, 'checksum'>;
 
 /**
  * The part of a `vat resources scan` document this facet reads.
@@ -52,11 +72,14 @@ const ScanDocumentSchema = LaneFieldsSchema.extend({
         /** rc.17 and earlier. */
         checksum: z.string().regex(/^[0-9a-f]{64}$/).optional(),
         /**
-         * Every later build. This pattern restates the resources package's CONTENT_KEY_PATTERN on
-         * purpose: the lab reads other builds' output and has no runtime dependency on resources
-         * (it is a devDependency only), so it cannot import the current build's definition.
+         * Every later build, in one of two shapes: kind-hashed `<kind>.<hex>`, or qualified
+         * `<kind>.<keyKind>.<hex>`. These patterns restate the shapes on purpose: the lab reads
+         * other builds' output and has no runtime dependency on resources (it is a devDependency
+         * only), so it cannot import the current build's definition.
          */
-        contentKey: z.string().regex(/^[a-z]+\.[0-9a-f]{64}$/).optional(),
+        contentKey: z.string().refine((text) => keySchemeOf(text) !== undefined, {
+          message: 'not a content key (`<kind>.<hex>` or `<kind>.<keyKind>.<hex>`)',
+        }).optional(),
       })
         .strip() /* a row ANOTHER vat build printed: keep only the fields a population compares on */
         .refine((file) => (file.checksum === undefined) !== (file.contentKey === undefined), {
@@ -169,7 +192,7 @@ export function readPopulationDocument(stdout: string): PopulationDocumentResult
 function toEntry(file: { path: string; checksum?: string | undefined; contentKey?: string | undefined }): PopulationEntry {
   const identity: PopulationIdentity = file.contentKey === undefined
     ? { scheme: 'checksum', value: file.checksum as string }
-    : { scheme: 'contentKey', value: file.contentKey };
+    : { scheme: keySchemeOf(file.contentKey) as KeyScheme, value: file.contentKey };
   return { path: file.path, identity };
 }
 

@@ -8,7 +8,7 @@
 import { compareCodeUnits, readWorkCounters, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
 
-import { computeContentKey, keyContent } from '../src/content-key.js';
+import { computeContentKey, equalContentKeys, keyContent, type ContentKey } from '../src/content-key.js';
 import { ParseLimitError, ParseWorkerDiedError } from '../src/parse-limits.js';
 import { BLOB_PARSE_LIMIT_EXCEEDED, BLOB_PARSE_WORKER_DIED } from '../src/projection/blob-condition-codes.js';
 import { harnessRowsFor } from '../src/projection/blob-facts.js';
@@ -61,7 +61,7 @@ function builderFor(files: Readonly<Record<string, string>>, deferred: readonly 
 }
 
 /** The content key a fixture file's bytes are filed under. */
-function keyOf(markdown: string): string {
+function keyOf(markdown: string): ContentKey {
   return computeContentKey(Buffer.from(markdown, 'utf-8'), 'markdown');
 }
 
@@ -223,7 +223,7 @@ describe('runHarnessPass', () => {
       'big.md': '# big — pretend it is past the cliff\n\n@after.md\n',
       'after.md': '# after — behind the oversize file\n',
     };
-    const realBlob = builderFor(files).base().blobs.find((row) => row.contentKey === keyOf(files['big.md']));
+    const realBlob = builderFor(files).base().blobs.find((row) => equalContentKeys(row.contentKey, keyOf(files['big.md'])) === true);
     if (realBlob === undefined) throw new Error('fixture: big.md has no blob row');
     const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() });
     builder.addRoot({ id: builder.identities.rootId, path: ROOT });
@@ -232,7 +232,7 @@ describe('runHarnessPass', () => {
     // parser most of a second to say nothing new.
     builder.addBlob({ ...realBlob, bytes: CLAUDE_OVERSIZE_BYTES + 1 });
     for (const [path, markdown] of Object.entries(files)) addFile(builder, { path, refs: [], markdown }, ROOT);
-    expect(builder.base().blobs.find((row) => row.contentKey === keyOf(files['big.md']))?.bytes).toBe(CLAUDE_OVERSIZE_BYTES + 1);
+    expect(builder.base().blobs.find((row) => equalContentKeys(row.contentKey, keyOf(files['big.md'])) === true)?.bytes).toBe(CLAUDE_OVERSIZE_BYTES + 1);
 
     await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), IN_PROCESS_HARNESS_FACTS, NO_STORED_HARNESS_ROWS);
 
@@ -251,7 +251,7 @@ describe('runHarnessPass', () => {
 
     await runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), derive, NO_STORED_HARNESS_ROWS);
 
-    expect(builder.base().harnessBlobFacts.filter((row) => row.blob === keyOf(shared))).toHaveLength(1);
+    expect(builder.base().harnessBlobFacts.filter((row) => equalContentKeys(row.blob, keyOf(shared)) === true)).toHaveLength(1);
     expect(derive).toHaveBeenCalledTimes(2);
   });
 
@@ -418,8 +418,8 @@ describe('runHarnessPass', () => {
       expect(result).toMatchObject({ derived: 3, refused: 1, unreadable: 0 });
       expect(derivedPaths(builder, files)).toEqual(['CLAUDE.md', 'docs/a.md', 'docs/b.md']);
       const deepKey = keyOf(files['docs/deep.md']);
-      expect(builder.base().harnessBlobFacts.some((row) => row.blob === deepKey)).toBe(false);
-      expect(builder.base().blobConditions.filter((row) => row.blob === deepKey).map((row) => row.code)).toEqual([blobCode]);
+      expect(builder.base().harnessBlobFacts.some((row) => equalContentKeys(row.blob, deepKey) === true)).toBe(false);
+      expect(builder.base().blobConditions.filter((row) => equalContentKeys(row.blob, deepKey) === true).map((row) => row.code)).toEqual([blobCode]);
       // Settled, not stuck: the refused blob leaves the frontier, and its imports are never followed.
       expect(harnessFrontier(builder.base(), CLAUDE_CODE)).toEqual([]);
       expect(derive).toHaveBeenCalledTimes(4);

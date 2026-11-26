@@ -11,12 +11,14 @@
 export {
   BLOB_WRITER_CONTRACT,
   contractBlobRows,
-  contractContentKey,
   uncoveredBlobWrite,
   type BlobWriterContractCase,
   type BlobWriterContractFactory,
   type BlobWriterContractSubject,
 } from './testing/blob-writer-contract.js';
+
+// The one way a fixture writes a content key it did not compute from bytes.
+export { testContentKey } from './testing/test-content-key.js';
 
 // The query lane's view of a projection, for suites that build one from fixture rows.
 export { queryProjectionOf } from './projection/query-projection.js';

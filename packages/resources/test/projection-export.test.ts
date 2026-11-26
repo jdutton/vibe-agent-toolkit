@@ -1,6 +1,7 @@
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
+import type { ContentKey } from '../src/content-key.js';
 import { RunContentCache } from '../src/projection/content-cache.js';
 import {
   ROOT_PATH_PLACEHOLDER,
@@ -12,6 +13,7 @@ import { ProjectionBuilder, type Projection } from '../src/projection/projection
 import { PROJECTION_TABLES, type ProjectionTableName } from '../src/projection/table-registry.js';
 import type { BlobReferenceRow } from '../src/schemas/projection-blobs.js';
 import { CONDITION_WITHOUT_REFERENCE, type RootRow } from '../src/schemas/projection-resources.js';
+import { testContentKey } from '../src/testing.js';
 
 import { EXPECTED_TABLES } from './helpers/expected-projection-tables.js';
 
@@ -34,8 +36,8 @@ const PATH_B = 'docs/b.md';
 const CONTRIBUTOR_ID = 'builtin:filesystem';
 const CONDITION_CODE = 'PARSE_ODDITY';
 
-const BLOB_A = `markdown.${'a'.repeat(64)}`;
-const BLOB_B = `markdown.${'b'.repeat(64)}`;
+const BLOB_A = testContentKey('markdown', 'a');
+const BLOB_B = testContentKey('markdown', 'b');
 
 /**
  * Section ordinals chosen so string order and numeric order disagree: sorting
@@ -51,7 +53,7 @@ interface Side {
   readonly extentId: string;
   readonly resourceId: string;
   readonly path: string;
-  readonly blob: string;
+  readonly blob: ContentKey;
   readonly sectionOrdinal: number;
 }
 
@@ -90,7 +92,7 @@ const SIDE_B: Side = {
  * @param blob - The content key the reference was found in
  * @returns A complete reference row with `ordinal` appended last
  */
-function referenceRow(blob: string): BlobReferenceRow {
+function referenceRow(blob: ContentKey): BlobReferenceRow {
   const row = {
     blob,
     rawRef: './other.md',

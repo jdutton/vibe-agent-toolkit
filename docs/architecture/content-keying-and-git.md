@@ -96,8 +96,8 @@ what is *built* from those bytes. This document covers only the identity questio
 | | git blob OID | VAT `contentKey` |
 |---|---|---|
 | preimage | the **cleaned** content — after `text`/`eol` attributes, `core.autocrlf`, `core.eol`, `working-tree-encoding` and any `filter.*` clean filter | the **raw working-tree bytes**, exactly as `readFile` returned them |
-| algorithm | SHA-1 (or SHA-256 in a `sha256` repository), over `blob <len>\0` + content | SHA-256 over a domain-separated preimage, prefixed with the parser kind |
-| shape | 40 hex chars | `<parserKind>.<64 hex chars>` — `content-key.ts:185` |
+| algorithm | SHA-1 (or SHA-256 in a `sha256` repository), over `blob <len>\0` + content | plain SHA-256 of the raw bytes, no domain separator; the parser kind qualifies the key text and is never hashed |
+| shape | 40 hex chars | `<parserKind>.<keyKind>.<hex>`, `keyKind` one of `sha256` (64 hex, the only kind VAT mints), `git-sha1` (40) or `git-sha256` (64), the git kinds format-only so far; `CONTENT_KEY_PATTERN` in `content-key.ts` |
 | stable across machines? | **yes** | **no** |
 | computed by | git, already, during enumeration | VAT, on read |
 
@@ -107,7 +107,7 @@ VAT's key states its own preimage in the code that produces it:
 > `// was on disk, the decode is lossy, and readFile(path, 'utf-8') offers no BOM or encoding`
 > `// handling at all.`
 >
-> — `packages/resources/src/content-key.ts:360-362`
+> — `packages/resources/src/content-key.ts:462-464`
 
 The reason it is raw bytes and not the decoded string is written out at `content-key.ts:84-108`: UTF-8
 decoding is many-to-one on invalid input, so `[c2]`, `[e2 82]` and `[ff]` all decode to one U+FFFD and
@@ -362,8 +362,10 @@ Through 0.2.0-rc.11 the git crawl source offered each regular file's blob OID as
 path's read. A blob OID names *cleaned* content, so under a per-path clean/smudge filter or
 `working-tree-encoding` the second path was filed under the first path's key with the first path's
 text — on every resources lane, since they all ask the store one question. The hint was removed
-outright: every path is keyed from its own working-tree bytes, and the snapshot no longer carries an
-OID. Pinned by the clean/smudge cases in `git-hostile-config.system.test.ts`.
+outright: every path is keyed from its own working-tree bytes. Pinned by the clean/smudge cases in
+`git-hostile-config.system.test.ts`. The snapshot's entries carry each blob's `oid` and git's own
+spelling of its path (`gitPath`) again, for the store key's LFS pass ([section 7](#7-git-lfs-pointers-are-keyed-by-whether-they-are-pulled))
+only; neither is a content key or a stand-in for a read.
 
 Anyone reintroducing an OID-keyed shortcut — one that *eliminates reads* — owns §10 as well. That was proposed, measured and refuted,
 and the entire prize it reached for is 45 reads.
@@ -373,35 +375,111 @@ clean/smudge and `working-tree-encoding` cases are outside what VAT supports (ru
 the content identity of a git-held file (rule 2). The removal stands in code until the planned
 git-OID path replaces it.
 
-## 7. Git LFS: a documented limitation, not a feature to build
+## 7. Git LFS: pointers are keyed by whether they are pulled
 
 Git LFS is the one divergence that is a genuine *indirection* rather than an encoding difference. Under
-LFS the committed blob is a ~130-byte **pointer** — three lines of `version` / `oid` / `size` — and the
-working tree holds the real content only when a smudge filter ran.
+`filter=lfs` the committed blob is a small **pointer**, three lines of `version` / `oid sha256:` /
+`size`, and the working tree holds the real content only when the smudge filter ran (a *pulled* file).
 
-**VAT's defined behaviour: LFS-managed files are never parsed.** Recording that a large binary exists,
-and that something points at it, is the whole obligation. Anything that "parsed" such a file would be
-parsing the pointer.
+The snapshot's tree hash holds the pointer either way, so one tree hash describes two different disks.
+Before the store key read LFS, a `git lfs pull` left the tree hash unchanged and the next run served
+the pointer's facts from the store: `git lfs pull` refreshes the index stat and leaves
+`git write-tree` byte-identical (7.5), so nothing in the tree hash moves.
 
-Two properties make this a limitation VAT can state rather than a silent hazard:
+### 7.1 The key reads which entries are pointers and whether each is pulled
 
-- **It is declared, not inferred.** LFS is configured in `.gitattributes`, so an LFS-managed path is
-  detectable rather than surprising.
-- **It is pinned by a test, in both directions.**
-  `packages/resources/test/system/git-hostile-config.system.test.ts:1163-1223` covers it:
-  - *No LFS installed* — the shape every VAT run over an LFS repository without `git lfs` sees. The
-    pointer **is** the file, and the test asserts the degenerate case explicitly rather than assuming
-    it is inert: 130 bytes, zero headings, and one outbound reference —
-    `https://git-lfs.github.com/spec/v1`, the pointer's own `version` line, *"a link the document does
-    not have."*
-  - *Genuinely LFS-tracked* — gated on `git lfs` being installed, skipped rather than failed when it
-    is not. Asserts the split directly: the committed blob contains the pointer while the working tree
-    holds the document.
+`gitTreeKey` (`packages/utils/src/git-tree-key.ts`), after the index-flag pass, runs the LFS pass
+`readLfsState` (`packages/utils/src/git-lfs.ts`) over the snapshot's regular-file entries (modes
+`100644` and `100755`, absent skip-worktree entries excluded). It reads no working-tree file and
+hashes nothing:
 
-🔷 **The gap worth naming**: the second arm proves the split exists but does not yet pin VAT's
-behaviour over an LFS-managed `.md`/`.html` — the case where a naive path parses a 130-byte pointer as
-if it were the prose it stands in for. That is the test the ruling above needs in order to be enforced
-rather than merely documented.
+1. **Attributes.** One `git check-attr --stdin -z filter` over the members' git paths, sorted; the
+   paths whose `filter` is `lfs` go on. With no such path the pass ends here: one spawn per keyed run.
+2. **Size filter.** One `git cat-file --batch-check` over their blob oids. A blob of 1024 bytes or
+   more is never a pointer (a file committed before its attribute, an incomplete migration) and is
+   never read. One `git cat-file --batch` over the smaller ones.
+3. **Strict pointer parse.** A blob is a pointer only when it is exactly
+   `version https://git-lfs.github.com/spec/v1`, `oid sha256:<64 lowercase hex>`, `size <decimal>`,
+   in that order, LF line endings, nothing else. Anything else (a malformed small blob, an `ext-`
+   extension pointer) is an ordinary member, keyed as before.
+4. **Size probe.** One `lstat` per pointer. With `n` the content's size the pointer declares and `p`
+   the pointer's own length: a regular file of size `n` (and `n != p`) is pulled; of size `p` (and
+   `n != p`) is not pulled. Anything else (`n == p`, another size, not a regular file, absent) is
+   undecidable.
+
+An undecidable pointer declines the key (`lfs-undecidable`), classified like `index-hides`
+(`GIT_SNAPSHOT_INDEX_HIDES`): the reason names the files and their count, the cause (an LFS file that
+is neither its pointer nor its content on disk, by size) and the remedy, `git update-index --refresh`
+or `git lfs pull`. The run then answers without the store. A pointer checked out with CRLF line
+endings (`core.autocrlf=true` and a `filter=lfs` line without `-text`) is one such case: its size is
+neither. A `check-attr`, `cat-file` or `config` spawn that fails declines the key as `lfs-unlisted`,
+and an answer VAT cannot read as `lfs-unreadable`; both are classified like `flags-unlisted`.
+
+When pointers exist the hash gains a suffix, `<tree hash>[+absent:<digest>][+lfs:<digest>]`, the
+`+lfs:` digest a SHA-256 over each pointer's git path and pulled bit, sorted by path. Pulling or
+un-pulling any pointer moves the key; a tree with no pointer keys exactly as before. The key also
+carries the reading (`GitTreeKey.lfs`: each pointer's absolute path, `lfsOid` and pulled bit, and
+`filterConfigured`), a required field so every consumer of the key sees it.
+
+### 7.2 What a pulled file and a pointer parse as
+
+Population reads the working tree, so a pulled file is read and parsed as its content and a file not
+pulled is read and parsed as its pointer: a 130-byte markdown document whose one outbound reference is
+`https://git-lfs.github.com/spec/v1`, the pointer's own `version` line (pinned by the no-filter case in
+`packages/resources/test/system/git-hostile-config.system.test.ts`). Because a `sha256` content key is
+the plain SHA-256 of the raw bytes ([section 2](#2-two-identities-two-preimages)), an unchanged pulled
+file's key is `<parserKind>.sha256.<pointer oid>`: the pointer's `oid sha256:` is the same digest.
+
+### 7.3 The write-time guards
+
+A run takes its store key at the start and checks it again before filing the extent
+(`writeCachedProjection` in `packages/resources/src/projection/merge.ts`, through
+`PopulationCache.treeUnchanged`, which takes what the run realized at each path). The CLI's check
+(`treeStillKeyedBy` in `packages/cli/src/utils/projection-store.ts`) re-keys the tree from a fresh snapshot
+(`freshGitTreeKey`), which runs the same LFS pass, so a `git lfs pull` that lands mid-run moves the
+`+lfs:` suffix and the extent is not filed (`skipped-tree-changed`).
+
+The check also compares content: for every pulled pointer under the run's root, the key the run
+realized for that path must be a `sha256` key whose hex equals the pointer's oid. A file changed after
+the snapshot without changing size fails it, and the extent is not filed. Only what the run read is
+checked: pointers not pulled, paths outside the root, paths the run realized without reading their
+bytes (no content key), and paths the run realized nothing at are not. The last are the usual case
+for LFS: an image or archive no collection includes fed no fact to the extent, and the key already
+carries its pulled bit. Failing on them would stop every extent write in a repository with pulled
+binaries.
+
+### 7.4 No filter configured
+
+The key does not depend on whether a `filter.lfs.*` key is configured: a stat-clean pulled file keys
+alike either way, since nothing re-cleans it. `git config --get-regexp ^filter\.lfs\.` is asked only
+when pointers exist (exit 1 means not configured), and its answer rides on the key as
+`filterConfigured`. Without the filter, git cannot re-clean a pulled file whose stat moved: it hashes
+the content in place of the pointer, the tree hash moves and the store misses (correct, never stale).
+So a keyed run whose tree has pointers and no configured filter prints one notice per root per command
+run (`noticeLfsFilterAbsent` in `packages/cli/src/utils/projection-store.ts`), saying this environment
+configures no git-lfs filter and naming `git lfs install` and `git update-index --refresh`. An LFS
+repository with the filter configured stays quiet.
+
+### 7.5 Measured git-lfs behaviour the design rests on
+
+Measured with git-lfs 3.8.1 and git 2.54 under a scratch `HOME`:
+
+- The pointer for a 3,011-byte file is 129 bytes; `git lfs pointer --check` refuses a 3,357-byte
+  pointer-shaped file. Under 1024 bytes is a sound test for "could be a pointer".
+- `git lfs pull` refreshes the index stat (the entry's mtime and inode move, `git diff-files` is
+  empty), and `git write-tree` is byte-identical before and after. After a real pull the index is
+  stat-clean, which is why a pulled file keys alike with and without the filter configured.
+- The clean filter writes `.git/lfs/objects` (one object after one `git add`).
+- The configured filter is `filter.lfs.process = git-lfs filter-process`. A `touch`ed LFS file under
+  the snapshot's temp-index `add --all` runs `git-lfs filter-process`: a stat-dirty LFS file is
+  re-cleaned on every snapshot until `git update-index --refresh` settles its stat. That cost is
+  accepted and recorded in the [hazard register](./fact-extractors-hazard-register.md).
+
+Tests use an emulated clean/smudge pair (`packages/utils/test/fixtures/lfs-filter.mjs`) that turns
+content into the same pointer the real filter does.
+`packages/utils/test/integration/git-tree-key-lfs.integration.test.ts` covers pulled against not
+pulled, `n == p`, a CRLF pointer, a large blob and a malformed small blob under `filter=lfs`, and the
+key without the filter configured.
 
 ## 8. Accepted consequence: the two lanes cache different things
 

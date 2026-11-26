@@ -82,6 +82,7 @@
 import { relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { gitLsOthers, gitNoAnswerError } from '@vibe-agent-toolkit/utils/git';
 
+import type { ContentKey } from '../../content-key.js';
 import type { ClaudeRulePatternRow } from '../../schemas/projection-claude-rules.js';
 import type { HarnessBlobFactsRow } from '../../schemas/projection-harness.js';
 import type {
@@ -194,7 +195,7 @@ const FRONTIER = Symbol('frontier');
  * @returns The stored `paths`, null, {@link FRONTIER} or {@link FACTS_REFUSED}
  */
 function rulePathsOf(
-  contentKey: string | null,
+  contentKey: ContentKey | null,
   derivedBlobs: ReadonlySet<string>,
   facts: HarnessFactsIndex,
 ): HarnessBlobFactsRow['paths'] | typeof FRONTIER | typeof FACTS_REFUSED {

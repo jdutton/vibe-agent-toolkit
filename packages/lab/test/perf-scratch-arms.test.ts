@@ -76,8 +76,8 @@ describe('parseFilterLog', () => {
 
 describe('filterCommand', () => {
   it('double-quotes the runtime and the script', () => {
-    expect(filterCommand('/opt/node 24/bin/node', '/lab/test/fixtures/lfs-filter.mjs', 'clean')).toBe(
-      '"/opt/node 24/bin/node" "/lab/test/fixtures/lfs-filter.mjs" clean',
+    expect(filterCommand('/opt/node 24/bin/node', '/utils/test/fixtures/lfs-filter.mjs', 'clean')).toBe(
+      '"/opt/node 24/bin/node" "/utils/test/fixtures/lfs-filter.mjs" clean',
     );
   });
 

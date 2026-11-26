@@ -16,6 +16,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { BLOB_PARSE_FAILED, describeBlobRefusals } from '@vibe-agent-toolkit/resources';
+import { testContentKey } from '@vibe-agent-toolkit/resources/testing';
 import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -51,7 +52,7 @@ function vatParseFailedWarning(failure: string): string {
   const line = describeBlobRefusals({
     blobs: [],
     resourceRealizations: [],
-    blobConditions: [{ blob: 'markdown.0', code: BLOB_PARSE_FAILED, ordinal: 0, severity: 'warning', message, line: null }],
+    blobConditions: [{ blob: testContentKey('markdown', '0'), code: BLOB_PARSE_FAILED, ordinal: 0, severity: 'warning', message, line: null }],
   });
   if (line === undefined) throw new Error('describeBlobRefusals reported nothing for a failed parse');
   return `resources population: ${line}`;

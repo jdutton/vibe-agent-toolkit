@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { CONTENT_KEY_PATTERN } from '../content-key.js';
+import { CONTENT_KEY_PATTERN, type ContentKey } from '../content-key.js';
 
 /*
  * There is deliberately no `PROJECTION_SCHEMA_VERSION` here.
@@ -52,9 +52,14 @@ export const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
 
 /**
  * A content key as produced by `computeContentKey` in `content-key.ts` —
- * `<parserKind>.<sha256>`. This is the primary key of the `blobs` table and
+ * `<parserKind>.<keyKind>.<hex>`. This is the primary key of the `blobs` table and
  * the foreign key every blob-keyed and path-dependent table joins through.
+ *
+ * Still a `ZodString` at runtime, so the emitted JSON Schema carries the same
+ * `pattern` and the shape digest sees the same declaration; typed to parse to the
+ * branded {@link ContentKey}, which the regex is exactly the proof of, so every
+ * row type inferred from it carries the brand.
  */
 export const ContentKeySchema = z.string().regex(CONTENT_KEY_PATTERN)
-  .describe('A parser-kind-qualified content key: "<parserKind>.<sha256>"');
+  .describe('A content key: "<parserKind>.<keyKind>.<hex>" (keyKind sha256 | git-sha1 | git-sha256)') as unknown as z.ZodType<ContentKey, z.ZodStringDef, string>;
 

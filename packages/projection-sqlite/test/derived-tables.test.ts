@@ -12,12 +12,12 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-import { DERIVED_TABLES, PROJECTION_TABLES, allDerivedSpecs } from '@vibe-agent-toolkit/resources';
+import { DERIVED_TABLES, EXTENT_KEY_COLUMNS, PROJECTION_TABLES, allDerivedSpecs } from '@vibe-agent-toolkit/resources';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
 
-import { EXTENT_KEY_COLUMNS, createDerivedTableSql, insertDerivedSql } from '../src/schema-sql.js';
-import { openSqliteFactStore } from '../src/store.js';
+import { createDerivedTableSql, insertDerivedSql } from '../src/schema-sql.js';
+import { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } from '../src/store.js';
 
 import { hydrateEveryTable, sampleProjection } from './fixtures.js';
 
@@ -212,7 +212,7 @@ describe('the shared on-disk fact store cannot take a lens evaluation', () => {
   // rows. The factory returns the `FactStore` port, which has no such method.
   it('has no writeDerived, in the type or on the handle', async () => {
     const directory = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-derived-refusal-'));
-    const onDisk = openSqliteFactStore({ directory });
+    const onDisk = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
     try {
       // @ts-expect-error -- a lens's rows never reach the fact store
       expect(onDisk.writeDerived).toBeUndefined();
@@ -227,7 +227,7 @@ describe('the shared on-disk fact store cannot take a lens evaluation', () => {
     // The DDL split is the second line of defence, and it is what makes the
     // "why are these two schemas different?" cleanup dangerous.
     const directory = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-derived-absent-'));
-    const onDisk = openSqliteFactStore({ directory });
+    const onDisk = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
     await onDisk.close();
     const raw = new DatabaseSync(safePath.join(directory, 'projection.db'), { readOnly: true });
     try {

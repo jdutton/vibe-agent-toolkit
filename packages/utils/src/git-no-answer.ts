@@ -231,14 +231,17 @@ export function snapshotAttemptCause(root: string, attempt: GitAttempt, sparseCh
  * account states ({@link snapshotAttemptCause}).
  *
  * A key git declined (`gitTreeKey`) is classified here too: its index hides working-tree bytes
- * from the snapshot (`GIT_SNAPSHOT_INDEX_HIDES`), or git would not list the flags that say whether.
+ * from the snapshot, or an LFS file on disk is neither its pointer nor its content
+ * (`GIT_SNAPSHOT_INDEX_HIDES` both), or git would not answer what says whether.
  *
  * @param failure - What {@link gitTreeSnapshot} or `gitTreeKey` returned instead of a snapshot
  * @returns The cause, its reason one or more whole sentences
  */
 export function gitSnapshotFailureOf(failure: GitSnapshotFailure | GitTreeKeyFailure): GitNoAnswer {
   if (failure.kind === 'index-hides') return indexHidesCause(failure);
+  if (failure.kind === 'lfs-undecidable') return lfsUndecidableCause(failure);
   if (failure.kind === 'flags-unlisted' || failure.kind === 'flags-unreadable') return flagsUnlistedCause(failure);
+  if (failure.kind === 'lfs-unlisted' || failure.kind === 'lfs-unreadable') return lfsUnlistedCause(failure);
   const ran = gitRunFailureOf(SNAPSHOT_ATTEMPT, failure.cwd, failure.attempt);
   if (ran !== undefined) return snapshotAttemptCause(failure.cwd, failure.attempt, false);
   if (failure.repositoryRoot === null) return { code: GIT_NO_ANSWER_CODE, reason: `${notARepositoryReason(failure.cwd)}.` };
@@ -253,26 +256,89 @@ export function gitSnapshotFailureOf(failure: GitSnapshotFailure | GitTreeKeyFai
 /** The flag listing's command, as a reason names it. */
 const FLAGS_LISTING = 'git ls-files -v';
 
+/** What a git command of the key's did, as {@link keyUnlistedCause} reads it. */
+type KeyListing =
+  | { readonly kind: 'unlisted'; readonly command: string; readonly attempt: GitAttempt }
+  | { readonly kind: 'unreadable'; readonly reason: string };
+
 /**
- * The cause of a key declined because git gave no usable flag listing. A git that did not run is
- * git's (`GIT_NOT_FOUND`, a missing directory); every other cause is `GIT_FAILED`, with the key's
- * own remedy, never one written for another lane.
+ * The cause of a key declined because a git command it asks gave no usable answer. A git that did
+ * not run is git's (`GIT_NOT_FOUND`, a missing directory); every other cause is `GIT_FAILED`, with
+ * the key's own remedy, never one written for another lane.
+ *
+ * @param repositoryRoot - The root the key was asked for
+ * @param could - What VAT cannot tell, as the reason's opening clause (ends in a colon)
+ * @param listing - What the command did
+ * @returns The cause
+ */
+function keyUnlistedCause(repositoryRoot: string, could: string, listing: KeyListing): GitNoAnswer {
+  const remedy = ' Run again; if it keeps failing, check that git runs here.';
+  if (listing.kind === 'unreadable') return { code: GIT_FAILED_CODE, reason: `${could} ${listing.reason}${remedy}` };
+  const { command, attempt } = listing;
+  const ran = gitRunFailureOf(command, repositoryRoot, attempt);
+  if (ran !== undefined && ran.code !== GIT_FAILED_CODE) return ran;
+  const { error, stderr } = attempt;
+  const gitSaid = stderr === '' ? '' : ` git said: ${stderr}`;
+  const what = error === undefined
+    ? `${command} failed.${gitSaid}`
+    : `${command} did not run to completion (${error.message}).`;
+  return { code: GIT_FAILED_CODE, reason: `${could} ${what}${remedy}` };
+}
+
+/**
+ * The cause of a key declined because git gave no usable flag listing ({@link keyUnlistedCause}).
  *
  * @param failure - The declined key
  * @returns The cause
  */
 function flagsUnlistedCause(failure: Extract<GitTreeKeyFailure, { kind: 'flags-unlisted' | 'flags-unreadable' }>): GitNoAnswer {
   const could = `VAT cannot tell whether git's index in ${shownName(failure.repositoryRoot)} hides any file from the snapshot:`;
-  const remedy = ' Run again; if it keeps failing, check that git runs here.';
-  if (failure.kind === 'flags-unreadable') return { code: GIT_FAILED_CODE, reason: `${could} ${failure.reason}${remedy}` };
-  const ran = gitRunFailureOf(FLAGS_LISTING, failure.repositoryRoot, failure.attempt);
-  if (ran !== undefined && ran.code !== GIT_FAILED_CODE) return ran;
-  const { error, stderr } = failure.attempt;
-  const gitSaid = stderr === '' ? '' : ` git said: ${stderr}`;
-  const what = error === undefined
-    ? `${FLAGS_LISTING} failed.${gitSaid}`
-    : `${FLAGS_LISTING} did not run to completion (${error.message}).`;
-  return { code: GIT_FAILED_CODE, reason: `${could} ${what}${remedy}` };
+  return keyUnlistedCause(
+    failure.repositoryRoot,
+    could,
+    failure.kind === 'flags-unreadable'
+      ? { kind: 'unreadable', reason: failure.reason }
+      : { kind: 'unlisted', command: FLAGS_LISTING, attempt: failure.attempt },
+  );
+}
+
+/**
+ * The cause of a key declined because a git command of the LFS pass (`check-attr`, `cat-file`,
+ * `config`) gave no usable answer ({@link keyUnlistedCause}).
+ *
+ * @param failure - The declined key
+ * @returns The cause
+ */
+function lfsUnlistedCause(failure: Extract<GitTreeKeyFailure, { kind: 'lfs-unlisted' | 'lfs-unreadable' }>): GitNoAnswer {
+  const could = `VAT cannot tell which files in ${shownName(failure.repositoryRoot)} are Git LFS pointers, or whether each is pulled:`;
+  return keyUnlistedCause(
+    failure.repositoryRoot,
+    could,
+    failure.kind === 'lfs-unreadable'
+      ? { kind: 'unreadable', reason: failure.reason }
+      : { kind: 'unlisted', command: failure.command, attempt: failure.attempt },
+  );
+}
+
+/**
+ * The cause of a key declined because an LFS file on disk is neither its pointer nor its content:
+ * the files named, the cause, and the two commands that settle it.
+ *
+ * @param failure - The declined key
+ * @returns The cause
+ */
+function lfsUndecidableCause(failure: Extract<GitTreeKeyFailure, { kind: 'lfs-undecidable' }>): GitNoAnswer {
+  const more = failure.undecidableCount > failure.undecidable.length
+    ? ` and ${failure.undecidableCount - failure.undecidable.length} more`
+    : '';
+  return {
+    code: GIT_SNAPSHOT_INDEX_HIDES_CODE,
+    reason: `${failure.undecidableCount} Git LFS file(s) in ${shownName(failure.repositoryRoot)} are neither their pointer`
+      + ` nor their content on disk, by size: ${failure.undecidable.join(', ')}${more}. git's snapshot holds each one's`
+      + ' pointer, so VAT cannot tell which bytes the disk holds and cannot key this tree. (A pointer checked out with'
+      + ' CRLF line endings, or content exactly as long as its pointer, does this.) Run git update-index --refresh,'
+      + ' or git lfs pull to fetch the content, and run again.',
+  };
 }
 
 /**

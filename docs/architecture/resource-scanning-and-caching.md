@@ -537,7 +537,8 @@ only to keep running second.
 
 #### The content key does NOT move
 
-`computeContentKey` hashes **raw bytes**, and that is unchanged. Its own docstring measures why:
+`computeContentKey` hashes **raw bytes** (a `sha256` key's hex is the plain SHA-256 of them, the parser
+kind an unhashed qualifier in the key text), and that is unchanged. Its own docstring measures why:
 `[c2]`, `[e2 82]` and `[ff]` all decode to U+FFFD, so a key over the decoded string would file three
 different files under one name. The consequence worth stating plainly is that **a decoder improvement
 changes what VAT can read and invalidates no cached parse** — and that two encodings of one document
@@ -659,7 +660,8 @@ the corpus:
 1,949 → 1,447 ms, VAT 733 → 518 ms).
 
 ⚠️ Flipping this makes the store every adopter's problem, so the bound came first: `projection-sqlite`
-bounds the blob tier as well as the extent tier — see `DEFAULT_RETAINED_BLOB_KEYS` there.
+bounds the blob tier as well as the extent tier — the blob tier by a byte budget over the logical bytes
+of each key's rows, the newest keys kept while they fit; see `DEFAULT_BLOB_TIER_BUDGET_BYTES` there.
 
 🚨 **The store makes the POPULATION cheap and is never what SQL reads.** It is one database shared by
 every root on the machine, so a statement run against it answered from other repositories. Each run
@@ -1048,8 +1050,9 @@ by every lane. Caches are per machine kind. The git-OID key is planned, not buil
   computed — which is also the join key the memo above would use. `git add --all` re-hashes only
   what the index's stat cache shows as changed, so a clean tree reads nothing. Two costs worth
   naming: it writes loose blob objects into the target repo's `.git/objects` (not a pure read), and
-  git OIDs are SHA-1 against VAT's `<parserKind>.<sha256>`, so adopting them is a key-format change
-  to be compared as sorted multisets, not a swap.
+  git OIDs are SHA-1 over git's `blob <len>\0` preimage against VAT's `<parserKind>.sha256.<hex>`,
+  so adopting them is a key-kind change (the key text reserves `git-sha1` and `git-sha256` for it;
+  keys of two kinds are never comparable) to be compared as sorted multisets, not a swap.
 
   **⚠️ Correction — "replaces the SHA-256 read" is warm-only and bounded. Read `content-key.ts`
   before building this.** That module's docstring ("Why there is no git rung here") already

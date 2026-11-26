@@ -12,6 +12,7 @@ import { lstatSync } from 'node:fs';
 import { countWork, followedStatSync, type FsFaultFacts, fsFaultOf, isLinkChainRefusedError, linkResolutionFault, realpathNativeSync } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
+import type { ContentKey } from '../content-key.js';
 import {
   CONDITION_WITHOUT_REFERENCE,
   type ContentState,
@@ -291,7 +292,7 @@ export async function collectRealization(
   const dot = basename.lastIndexOf('.');
 
   // Typed BEFORE the bytes are keyed, because the type decides the parser and
-  // the parser is mixed into the content key. Resolving it afterwards would let
+  // the parser kind is part of the content key. Resolving it afterwards would let
   // a row carry a `mime` its own `contentKey` disagrees with.
   //
   // A directory is not asked: `mime` is "what this FILE is", and a directory has
@@ -412,7 +413,7 @@ async function keyOrState(
   context: RealizationContext,
   observed: ObservedPath,
   mime: string | null,
-): Promise<{ contentKey: string | null; contentState: ContentState }> {
+): Promise<{ contentKey: ContentKey | null; contentState: ContentState }> {
   if (!observed.hasBytes) {
     return { contentKey: null, contentState: 'none' };
   }

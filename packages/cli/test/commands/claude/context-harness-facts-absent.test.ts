@@ -11,10 +11,11 @@
  */
 
 import { HarnessFactsAbsentError, type Projection } from '@vibe-agent-toolkit/resources';
+import { testContentKey } from '@vibe-agent-toolkit/resources/testing';
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const BLOB = 'markdown.' + 'a'.repeat(64);
+const BLOB = testContentKey('markdown', 'a');
 
 vi.mock('@vibe-agent-toolkit/resources', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();

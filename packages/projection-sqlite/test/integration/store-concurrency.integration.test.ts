@@ -18,13 +18,13 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-import { ALL_BLOB_REQUEST, ALL_EXTENT_REQUEST, PROJECTION_TABLES } from '@vibe-agent-toolkit/resources';
-import { contractBlobRows, contractContentKey, uncoveredBlobWrite } from '@vibe-agent-toolkit/resources/testing';
+import { ALL_BLOB_REQUEST, ALL_EXTENT_REQUEST, type ContentKey, PROJECTION_TABLES } from '@vibe-agent-toolkit/resources';
+import { contractBlobRows, testContentKey, uncoveredBlobWrite } from '@vibe-agent-toolkit/resources/testing';
 import { resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { openSqliteFactStore, type SqliteStoreOptions } from '../../src/store.js';
+import { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore, type SqliteStoreOptions } from '../../src/store.js';
 
 /** The writer script, beside this file. */
 const WRITER = resolveFromImportMeta(import.meta.url, 'store-writer-child.mjs');
@@ -106,8 +106,8 @@ function runChild(args: readonly string[]): Promise<{ code: number; stderr: stri
 }
 
 /** Open a store on the shared directory. */
-function open(options: Omit<SqliteStoreOptions, 'directory'> = {}) {
-  return openSqliteFactStore({ ...options, directory });
+function open(options: Partial<Omit<SqliteStoreOptions, 'directory'>> = {}) {
+  return openSqliteFactStore({ blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, ...options, directory });
 }
 
 describe('connection configuration', () => {
@@ -169,8 +169,7 @@ describe('concurrent writers', () => {
       // throws nothing and exits 0.
       const keys = Array.from({ length: WRITERS * BLOBS_EACH }, (_, flat) => {
         const seed = `w${Math.floor(flat / BLOBS_EACH)}${flat % BLOBS_EACH}`;
-        const digits = seed.padEnd(64, '0').slice(0, 64).replaceAll(/[^\da-f]/gu, '0');
-        return `markdown.${digits}`;
+        return testContentKey('markdown', seed);
       });
       const facts = await store.readBlobFacts([...new Set(keys)], ALL_BLOB_REQUEST);
       expect(facts.blobs).toHaveLength(new Set(keys).size);
@@ -225,9 +224,15 @@ describe('concurrent writers', () => {
  * uncovered marker of its own and its own three covered keys, so the union
  * (10) is larger than either held set (6), which is the window.
  */
-const UNCOVERED = ['7', '8'].map((seed) => contractContentKey(seed));
-const MARKER_OF = { A: contractContentKey('a'), B: contractContentKey('b') } as const;
+/** A key of the two-writer arm, of the kind every contract key is. */
+function armKey(seed: string): ContentKey {
+  return testContentKey('markdown', seed);
+}
+
+const UNCOVERED = ['7', '8'].map((seed) => armKey(seed));
+const MARKER_OF = { A: armKey('a'), B: armKey('b') } as const;
 const COVERED_BY = { A: ['1', '2', '3'], B: ['4', '5', '6'] } as const;
+/** The window, in keys; each writer's budget is this many keys' recorded bytes. */
 const TWO_WRITER_WINDOW = 6;
 
 type Writer = keyof typeof COVERED_BY;
@@ -242,11 +247,11 @@ type Writer = keyof typeof COVERED_BY;
  * a writer that re-stamps only what it replaced then evicts them.
  */
 async function seedInterleaved(): Promise<void> {
-  const store = open({ retainedBlobKeys: 100 });
+  const store = open();
   try {
     for (let index = 0; index < COVERED_BY.A.length; index += 1) {
       for (const seeds of [COVERED_BY.A, COVERED_BY.B]) {
-        await store.writeBlobFacts(uncoveredBlobWrite(contractBlobRows(contractContentKey(seeds[index] ?? ''))));
+        await store.writeBlobFacts(uncoveredBlobWrite(contractBlobRows(armKey(seeds[index] ?? ''))));
       }
     }
   } finally {
@@ -277,6 +282,25 @@ function ledgerAndRows(): { ledger: Map<string, number>; rows: Map<string, Set<s
 }
 
 /**
+ * The bytes one seeded key records: every key of the arm carries the same rows
+ * but its key, and every key is the same length, so all record alike, which is
+ * what lets a byte budget of N keys' bytes hold exactly N keys.
+ *
+ * @returns The one size every seeded key records
+ */
+function oneKeyBytes(): number {
+  const database = new DatabaseSync(safePath.join(directory, 'projection.db'), { readOnly: true });
+  try {
+    const sizes = new Set((database.prepare('SELECT "bytes" FROM "blob_keys"').all() as { bytes: number }[]).map((row) => row.bytes));
+    const [size] = sizes;
+    if (sizes.size !== 1 || size === undefined) throw new Error(`the seeded keys record ${sizes.size} sizes, not one`);
+    return size;
+  } finally {
+    database.close();
+  }
+}
+
+/**
  * Which writer committed second, from the ledger: each writer's marker is a key
  * only it holds and never covers, so it replaces and stamps it in its own
  * transaction, and transactions are serialized, so the later commit holds the
@@ -301,12 +325,13 @@ function laterWriter(ledger: ReadonlyMap<string, number>): Writer | undefined {
 describe('two writers sharing one store', () => {
   it('leave the ledger and the rows agreeing, and keep the later writer\'s whole held set', async () => {
     await seedInterleaved();
+    const windowBytes = TWO_WRITER_WINDOW * oneKeyBytes();
     const barrier = mkdirSyncReal(safePath.join(directory, 'barrier'));
     const heldBy = (writer: Writer): string[] =>
-      [...UNCOVERED, MARKER_OF[writer], ...COVERED_BY[writer].map((seed) => contractContentKey(seed))];
+      [...UNCOVERED, MARKER_OF[writer], ...COVERED_BY[writer].map((seed) => armKey(seed))];
 
     const results = await Promise.all((['A', 'B'] as const).map((writer) =>
-      runChild([writer, 'covering', String(TWO_WRITER_WINDOW), barrier, '2', heldBy(writer).join(',')])));
+      runChild([writer, 'covering', String(windowBytes), barrier, '2', heldBy(writer).join(',')])));
 
     for (const [index, result] of results.entries()) {
       expect(result.code, `writer ${index}: ${result.stderr}`).toBe(0);

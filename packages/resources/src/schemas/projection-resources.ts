@@ -172,11 +172,11 @@ export type ContentState = z.infer<typeof ContentStateSchema>;
  *
  * ⚠️ **`mime` can be CONFIG-dependent, and that reaches the content key.** A
  * collection may declare a `mimeType` (see `CollectionConfigSchema`), which
- * changes which parser a path routes to, and the parser kind is mixed into the
- * content key's digest preimage. So editing `vibe-agent-toolkit.config.yaml` can
+ * changes which parser a path routes to, and the parser kind is part of the
+ * content key's text. So editing `vibe-agent-toolkit.config.yaml` can
  * change a file's `contentKey`, and every cached parse fact filed under the old
  * key becomes unreachable the instant the declaration moves. That is sound and
- * free — the digest IS the invalidation, and no hand-maintained version constant
+ * free — the key text IS the invalidation, and no hand-maintained version constant
  * decides it — but it does mean `content-key.ts`'s "path-independent" framing is
  * now a statement about the *key function*, not about the *routing decision* that
  * feeds it.

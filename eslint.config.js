@@ -352,6 +352,18 @@ export const LINK_FOLLOWING_FS_CALLS = {
 const LINK_FOLLOWING_FS_ALLOW = { allowFiles: Object.keys(LINK_FOLLOWING_FS_CALLS) };
 
 /**
+ * The files that may read, mint, order or compare a `ContentKey` by its text
+ * (`local/content-key-opaque`), each with its reason. Asserted both ways:
+ * `dev-tools/test/integration/content-key-opaque-ratchet.integration.test.ts` lints each with the
+ * exemption lifted and fails on one the rule no longer reports; an unlisted file that offends is
+ * the gate itself.
+ */
+export const CONTENT_KEY_OPAQUE_ALLOW = [
+  'packages/resources/src/content-key.ts', // the parser and formatter: the format's one owner
+  'packages/resources/test/content-key.test.ts', // the format's own suite: it pins the key's spelling
+];
+
+/**
  * Files still carrying `@typescript-eslint/no-unsafe-member-access` /
  * `no-unsafe-assignment` findings, with the count measured when the ratchet was seeded. A
  * ratchet: the block that consumes this list applies both rules at `error` to
@@ -1368,6 +1380,17 @@ export default [
     },
     rules: {
       'local/fact-store-access-boundary': 'error',
+    },
+  },
+  // A ContentKey's text has one owner (see CONTENT_KEY_OPAQUE_ALLOW). Type-aware, so exactly the
+  // files `typedProgramConfigs()` gives a program: every package's `.ts`/`.cts`, src and test alike.
+  {
+    files: ['packages/*/**/*.ts', 'packages/*/**/*.cts'],
+    plugins: {
+      local: localRules,
+    },
+    rules: {
+      'local/content-key-opaque': ['error', { allowFiles: CONTENT_KEY_OPAQUE_ALLOW }],
     },
   },
   // The skill-text core computes from SKILL_TEXT_DECLARATION alone, so the declaration's digest

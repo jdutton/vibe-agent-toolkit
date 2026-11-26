@@ -6,6 +6,7 @@ import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { ResourceRegistry } from '../src/resource-registry.js';
+import { testContentKey } from '../src/testing.js';
 
 /**
  * Register everything in `dir` by ENUMERATING it, the way a crawl does, rather
@@ -134,7 +135,7 @@ describe('ResourceRegistry indexes', () => {
 
   describe('getResourcesByContentKey', () => {
     it('should return empty array for non-existent content key', () => {
-      const resources = registry.getResourcesByContentKey(`markdown.${'a'.repeat(64)}`);
+      const resources = registry.getResourcesByContentKey(testContentKey('markdown', 'a'));
       expect(resources).toEqual([]);
     });
 

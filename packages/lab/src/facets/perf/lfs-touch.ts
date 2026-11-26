@@ -2,8 +2,8 @@
  * The touched-LFS arm: what a store HIT costs when git must re-clean filtered files.
  *
  * It builds a scratch repository under the arms root whose `filter.lfs.clean`
- * and `filter.lfs.smudge` run the lab's own filter script
- * (`test/fixtures/lfs-filter.mjs`) as `"<runtime>" "<script>" clean|smudge`,
+ * and `filter.lfs.smudge` run the repository's emulated LFS filter
+ * (`packages/utils/test/fixtures/lfs-filter.mjs`) as `"<runtime>" "<script>" clean|smudge`,
  * the runtime running the lab (git runs a filter through `sh`, so never a bare
  * `node`), commits N files of S bytes under it, and primes one warm store with
  * an untimed `vat resources validate`. Then each round:
@@ -48,11 +48,11 @@ import { countOf, readWorkDumps, type WorkDumpsRead } from '../work/dump.js';
 import { armGitOrRefuse, openScratchArm, runArmVat, type ScratchArm, type ScratchBuild } from './scratch-arm.js';
 
 /**
- * The lab's filter script. The lab is private and runs from its checkout, and
- * `src/facets/perf/` and `dist/facets/perf/` sit at one depth under the package,
- * so one relative path reaches it from both.
+ * The emulated LFS filter, a utils test fixture. The lab is private and runs from its
+ * checkout, and `src/facets/perf/` and `dist/facets/perf/` sit at one depth under the
+ * package, so one relative path reaches it from both.
  */
-export const LFS_FILTER_SCRIPT = resolveFromImportMeta(import.meta.url, '../../../test/fixtures/lfs-filter.mjs');
+export const LFS_FILTER_SCRIPT = resolveFromImportMeta(import.meta.url, '../../../../utils/test/fixtures/lfs-filter.mjs');
 
 /** Default `--files`. */
 export const DEFAULT_LFS_FILES = 100;

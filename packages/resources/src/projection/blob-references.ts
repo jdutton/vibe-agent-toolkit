@@ -71,6 +71,7 @@
  * meaning belongs to a lens (resource-projection.md §5).
  */
 
+import type { ContentKey } from '../content-key.js';
 import type { ParseResult } from '../link-parser.js';
 import { detectVariableExpansion, EXTENSION_SUFFIX, stripQueryOrFragment } from '../reference-lexer.js';
 import type { LexicalReference } from '../schemas/parse-facts.js';
@@ -240,7 +241,7 @@ interface OrderedCandidate {
  * @param parsed - The parse result whose `links` and `lexicalReferences` are unified
  * @returns One row per candidate, ordered by `(line, column)`, the position-less last
  */
-export function blobReferencesFor(contentKey: string, parsed: ParseResult): BlobReferenceRow[] {
+export function blobReferencesFor(contentKey: ContentKey, parsed: ParseResult): BlobReferenceRow[] {
   const candidates: OrderedCandidate[] = [
     ...astCandidates(contentKey, parsed.links),
     ...lexicalCandidates(contentKey, parsed.lexicalReferences ?? []),
@@ -307,7 +308,7 @@ function compareCandidates(left: OrderedCandidate, right: OrderedCandidate): num
  * @param links - `ParseResult.links`, in the producing parser's own order
  * @returns One candidate per link, positioned or not
  */
-function astCandidates(contentKey: string, links: readonly ResourceLink[]): OrderedCandidate[] {
+function astCandidates(contentKey: ContentKey, links: readonly ResourceLink[]): OrderedCandidate[] {
   return links.map<OrderedCandidate>((link, sequence) => ({
     // A position-less link is a row too (null line and span): see
     // {@link blobReferencesFor}. Its line and its offsets are read
@@ -374,7 +375,7 @@ function spanOf(link: ResourceLink): Pick<BlobReferenceRow, 'startOffset' | 'end
  * @returns One candidate per lexical reference
  */
 function lexicalCandidates(
-  contentKey: string,
+  contentKey: ContentKey,
   references: readonly LexicalReference[],
 ): OrderedCandidate[] {
   return references.map((reference, sequence) => ({
@@ -396,7 +397,7 @@ function lexicalCandidates(
  * @param reference - One lexer token
  * @returns The row, less its ordinal
  */
-function lexicalRow(contentKey: string, reference: LexicalReference): Omit<BlobReferenceRow, 'ordinal'> {
+function lexicalRow(contentKey: ContentKey, reference: LexicalReference): Omit<BlobReferenceRow, 'ordinal'> {
   const { raw, ...columns } = reference;
   const checked: ExactLexicalColumns = columns;
 

@@ -95,6 +95,12 @@ function makeStore(): unknown {
 // started passing a directory of its own is visible here.
 const openCalls = { count: 0, options: [] as unknown[] };
 
+/**
+ * The fake backend's `DEFAULT_BLOB_TIER_BUDGET_BYTES`: a value no real default
+ * has, so an open that carries it took its budget from the backend's export.
+ */
+export const FAKE_BLOB_TIER_BUDGET_BYTES = 4242;
+
 /** The fake's stand-in for the backend's `StoreUnopenableError`. */
 export class FakeUnopenableError extends Error {
   constructor(readonly databasePath: string) {
@@ -129,6 +135,7 @@ export const backend = {
   discarded,
   /** The module namespace a `vi.mock('@vibe-agent-toolkit/projection-sqlite', …)` factory returns. */
   moduleExports: (): Record<string, unknown> => ({
+    DEFAULT_BLOB_TIER_BUDGET_BYTES: FAKE_BLOB_TIER_BUDGET_BYTES,
     openSqliteFactStore: (...args: unknown[]) => {
       openCalls.count += 1;
       openCalls.options.push(args[0]);

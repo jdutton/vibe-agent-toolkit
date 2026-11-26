@@ -142,7 +142,7 @@ describe('collectRealization', () => {
   it('keys the bytes of THIS realization, not of the identity', async () => {
     const row = await nestedRow();
 
-    expect(row.contentKey).toMatch(/^markdown\.[\da-f]{64}$/u);
+    expect(row.contentKey).toMatch(/^markdown\.sha256\.[\da-f]{64}$/u);
     expect(row.contentState).toBe('keyed');
   });
 
@@ -436,7 +436,7 @@ describe('the mime column', () => {
 
     expect(row.mime).toBe(TEXT_TYPESCRIPT);
     // The type is recorded; the parser is still none. Both facts, separately.
-    expect(row.contentKey).toMatch(/^none\.[\da-f]{64}$/u);
+    expect(row.contentKey).toMatch(/^none\.sha256\.[\da-f]{64}$/u);
   });
 
   it('types an extensionless well-known from its basename', async () => {
@@ -484,7 +484,7 @@ describe('collection-declared mime', () => {
     expect(row.mime).toBe(TEXT_MARKDOWN);
     // The declaration reaches the parser, not just the column: the key's prefix
     // is what every downstream stage reads the parser kind back off.
-    expect(row.contentKey).toMatch(/^markdown\.[\da-f]{64}$/u);
+    expect(row.contentKey).toMatch(/^markdown\.sha256\.[\da-f]{64}$/u);
   });
 
   it('falls through to the extension table when no matching collection declares one', async () => {

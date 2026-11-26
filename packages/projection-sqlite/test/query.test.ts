@@ -39,7 +39,7 @@ import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { hydrateRunDatabase, type RunDatabase } from '../src/run-database.js';
-import { openSqliteFactStore } from '../src/store.js';
+import { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } from '../src/store.js';
 
 import { FIRST_BLOB, hydrateEveryTable, sampleProjection, SECOND_BLOB } from './fixtures.js';
 
@@ -563,7 +563,7 @@ describe('the file-backed fact store answers no SQL, and holds what the run data
     // The type says so (the factory returns `FactStore`); this pins that no
     // method hides behind the narrowed type either. A statement there would
     // answer from every repository on the machine.
-    const onDisk = openSqliteFactStore({ directory });
+    const onDisk = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
     try {
       // @ts-expect-error -- the port has no SQL surface
       expect(onDisk.query).toBeUndefined();
@@ -577,7 +577,7 @@ describe('the file-backed fact store answers no SQL, and holds what the run data
   });
 
   it('returns the same rows from every table as the run database, for the same projection', async () => {
-    const writer = openSqliteFactStore({ directory });
+    const writer = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
     const { blobs, extent } = splitProjectionByScope(sampleProjection([FIRST_BLOB, SECOND_BLOB]));
     await writer.writeBlobFacts(uncoveredBlobWrite(blobs));
     await writer.writeExtent({ rootId: 'root-1', treeHash: 'tree-aaa' }, extent);

@@ -12,11 +12,16 @@
 
 import { describe, expect, it } from 'vitest';
 
+import type { ContentKey } from '../src/content-key.js';
 import { BLOB_CONTENT_CHANGED, BLOB_NOT_TEXT, BLOB_PARSE_FAILED, BLOB_UNREADABLE } from '../src/projection/blob-condition-codes.js';
 import { storableBlobFacts } from '../src/projection/blob-population.js';
 import { describeBlobRefusals } from '../src/projection/blob-refusals.js';
 import { emptyBlobRows } from '../src/projection/store-hydration.js';
 import type { BlobConditionRow } from '../src/schemas/projection-blobs.js';
+import { testContentKey } from '../src/testing.js';
+
+const K1 = testContentKey('markdown', 'k1');
+const K2 = testContentKey('markdown', 'k2');
 
 /**
  * One condition row for one key.
@@ -25,23 +30,23 @@ import type { BlobConditionRow } from '../src/schemas/projection-blobs.js';
  * @param code - The condition code
  * @returns The row
  */
-function conditionFor(blob: string, code: string): BlobConditionRow {
+function conditionFor(blob: ContentKey, code: string): BlobConditionRow {
   return { blob, code, ordinal: 0, severity: 'warning', message: `${code} happened`, line: null };
 }
 
 describe('storableBlobFacts', () => {
   it('keeps the conditions that are facts about the bytes', () => {
-    const blobConditions = [conditionFor('k1', BLOB_NOT_TEXT), conditionFor('k2', BLOB_PARSE_FAILED)];
+    const blobConditions = [conditionFor(K1, BLOB_NOT_TEXT), conditionFor(K2, BLOB_PARSE_FAILED)];
     const stored = storableBlobFacts({ ...emptyBlobRows(), blobConditions });
 
     expect(stored.blobConditions).toStrictEqual(blobConditions);
   });
 
   it('drops the conditions that are facts about one read attempt', () => {
-    const kept = conditionFor('k3', BLOB_NOT_TEXT);
+    const kept = conditionFor(testContentKey('markdown', 'k3'), BLOB_NOT_TEXT);
     const stored = storableBlobFacts({
       ...emptyBlobRows(),
-      blobConditions: [conditionFor('k1', BLOB_UNREADABLE), kept, conditionFor('k2', BLOB_CONTENT_CHANGED)],
+      blobConditions: [conditionFor(K1, BLOB_UNREADABLE), kept, conditionFor(K2, BLOB_CONTENT_CHANGED)],
     });
 
     // The key those rows named is now held by nothing, so the next run
@@ -55,7 +60,7 @@ describe('storableBlobFacts', () => {
     // and a hit — served only what was filed — does not.
     const run = {
       ...emptyBlobRows(),
-      blobConditions: [conditionFor('k1', BLOB_UNREADABLE), conditionFor('k2', BLOB_PARSE_FAILED)],
+      blobConditions: [conditionFor(K1, BLOB_UNREADABLE), conditionFor(K2, BLOB_PARSE_FAILED)],
     };
     const realizations = { resourceRealizations: [] };
 

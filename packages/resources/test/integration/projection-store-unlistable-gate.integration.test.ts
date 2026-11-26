@@ -28,7 +28,7 @@ import { crawlSourceFor } from '../../src/projection/crawl-source.js';
 import { populate } from '../../src/projection/merge.js';
 import type { ExtentKey, ExtentRequest, ExtentScopedRows, ExtentScopedTableName } from '../../src/projection/store.js';
 import { CONDITION_WITHOUT_REFERENCE } from '../../src/schemas/projection-resources.js';
-import { FakeFactStore } from '../fake-fact-store.js';
+import { FakeFactStore, WIDE_BLOB_BUDGET_BYTES } from '../fake-fact-store.js';
 import { inOwnRun } from '../helpers/population-run.js';
 import { setupSubdirTestSuite } from '../test-helpers.js';
 
@@ -98,7 +98,7 @@ describe('a stored EXTENT_DIRECTORY_UNLISTABLE row that no longer holds turns a 
   });
 
   it('serves the stored extent when no unlistable row is stored (control)', async () => {
-    const store = new UnlistableRowStore();
+    const store = new UnlistableRowStore(WIDE_BLOB_BUDGET_BYTES);
     expect(await derivedThrough(store)).toBe(true);
 
     expect(await derivedThrough(store)).toBe(false);
@@ -106,7 +106,7 @@ describe('a stored EXTENT_DIRECTORY_UNLISTABLE row that no longer holds turns a 
   });
 
   it('re-enumerates when the row names a directory that is gone', async () => {
-    const store = new UnlistableRowStore();
+    const store = new UnlistableRowStore(WIDE_BLOB_BUDGET_BYTES);
     await derivedThrough(store);
     store.inject = true;
 
@@ -115,7 +115,7 @@ describe('a stored EXTENT_DIRECTORY_UNLISTABLE row that no longer holds turns a 
   });
 
   it('re-enumerates when the row names a directory that now lists', async () => {
-    const store = new UnlistableRowStore();
+    const store = new UnlistableRowStore(WIDE_BLOB_BUDGET_BYTES);
     await derivedThrough(store);
     await mkdir(safePath.join(suite.tempDir, ROW_DIR), { recursive: true });
     store.inject = true;

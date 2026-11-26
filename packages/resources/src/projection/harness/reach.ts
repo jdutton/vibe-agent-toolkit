@@ -50,6 +50,7 @@
 
 import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
 
+import { type ContentKey, orderContentKeys } from '../../content-key.js';
 import { type ExtentDeclaration, ExtentDeclarationSchema } from '../../schemas/project-config.js';
 import type { BlobRow } from '../../schemas/projection-blobs.js';
 import type { ResourceRealizationRow, RootRow } from '../../schemas/projection-resources.js';
@@ -72,7 +73,7 @@ export interface HarnessReachView extends HarnessFactsView {
 
 /** One blob the harness reaches whose facts are not derived yet. */
 export interface HarnessFrontierEntry {
-  readonly contentKey: string;
+  readonly contentKey: ContentKey;
   /** A root-relative path the blob is realized at — the least in code-unit order among those reached. */
   readonly path: string;
   /** The corpus root's id. */
@@ -88,10 +89,10 @@ interface ReachContext {
   /** Root-relative path → its first non-directory realization. */
   readonly files: ReadonlyMap<string, ResourceRealizationRow>;
   /** Every content key with a `blobs` row. */
-  readonly content: ReadonlySet<string>;
+  readonly content: ReadonlySet<ContentKey>;
   readonly facts: HarnessFactsIndex;
   /** Content key → the least path it was reached at, for the keys with no facts. */
-  readonly frontier: Map<string, string>;
+  readonly frontier: Map<ContentKey, string>;
 }
 
 /** Where a walk starts, and how many hops it may still take from there (`Infinity` for none). */
@@ -138,7 +139,7 @@ export function harnessFrontier(view: HarnessReachView, profile: HarnessProfile)
   walk(context, loaderSeeds(context), true);
   walk(context, declaredSeeds(view, context), false);
   return [...context.frontier]
-    .sort(([left], [right]) => compareCodeUnits(left, right))
+    .sort(([left], [right]) => orderContentKeys(left, right))
     .map(([contentKey, path]) => ({
       contentKey,
       path,
@@ -295,7 +296,7 @@ function importTargets(context: ReachContext, hop: Seed, loader: boolean): strin
  * @param contentKey - The blob
  * @param path - Where it was reached
  */
-function noteFrontier(context: ReachContext, contentKey: string, path: string): void {
+function noteFrontier(context: ReachContext, contentKey: ContentKey, path: string): void {
   const known = context.frontier.get(contentKey);
   if (known === undefined || compareCodeUnits(path, known) < 0) context.frontier.set(contentKey, path);
 }

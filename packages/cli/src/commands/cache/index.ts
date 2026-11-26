@@ -67,8 +67,8 @@ Description:
   a machine that has scanned a few projects reaches the hundreds of MB.
 
   Only the projection store evicts anything on its own: it keeps the three
-  most recently written trees per root and the 50,000 most recently written
-  content keys. vat cache prune removes every namespace but this build's
+  most recently written trees per root, and the most recently written content
+  keys whose facts fit about 265 MB. vat cache prune removes every namespace but this build's
   (older and newer releases, and under the shared default root other
   worktrees' and other VATs' too) and every other projection shape's store;
   vat cache clear removes everything.

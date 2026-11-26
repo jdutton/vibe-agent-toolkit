@@ -85,7 +85,7 @@ export const VALIDATE_PHASE_BUCKETS: readonly BucketRule[] = [
   },
   {
     bucket: 'store open',
-    functionName: /^(?:openSqliteFactStore|openStoreAt|configure|enableWal|createSchema|prepareStoreTables|adoptLegacyBlobKeys)$/u,
+    functionName: /^(?:openSqliteFactStore|openStoreAt|configure|enableWal|createSchema|prepareStoreTables)$/u,
     url: PROJECTION_STORE,
   },
   {

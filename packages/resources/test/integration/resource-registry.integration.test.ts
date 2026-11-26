@@ -13,6 +13,7 @@ import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 
 import { ResourceRegistry } from '../../src/resource-registry.js';
+import { testContentKey } from '../../src/testing.js';
 import type { ResourceMetadata } from '../../src/types.js';
 import { crawlInRun } from '../helpers/population-run.js';
 import { findPackageRoot, setupSubdirTestSuite } from '../test-helpers.js';
@@ -900,7 +901,7 @@ tags: test
           sizeBytes: 10,
           estimatedTokenCount: 3,
           modifiedAt: new Date(),
-          contentKey: `markdown.${'a'.repeat(64)}`,
+          contentKey: testContentKey('markdown', 'a'),
         };
         const resource2: ResourceMetadata = {
           ...resource1,

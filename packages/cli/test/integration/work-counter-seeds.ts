@@ -18,7 +18,13 @@
 import { writeFileSync } from 'node:fs';
 
 import { readSkillDocument, type SkillTextRun } from '@vibe-agent-toolkit/agent-skills';
-import { hydrateRunDatabase, openSqliteFactStore, type RelationSource, type RunDatabase } from '@vibe-agent-toolkit/projection-sqlite';
+import {
+  DEFAULT_BLOB_TIER_BUDGET_BYTES,
+  hydrateRunDatabase,
+  openSqliteFactStore,
+  type RelationSource,
+  type RunDatabase,
+} from '@vibe-agent-toolkit/projection-sqlite';
 import {
   ALL_BLOB_REQUEST,
   ALL_EXTENT_REQUEST,
@@ -40,7 +46,7 @@ import {
   StoreQuestionUnavailableError,
   withRunPopulation,
 } from '@vibe-agent-toolkit/resources';
-import { uncoveredBlobWrite } from '@vibe-agent-toolkit/resources/testing';
+import { testContentKey, uncoveredBlobWrite } from '@vibe-agent-toolkit/resources/testing';
 import { normalizedTmpdir, readWorkCounters, safePath, toForwardSlash, WORK_COUNTER_NAMES, type WorkCounter, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { GitTracker, gitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 import { createTempDir, removeTempDir, scratchTmpdirEnv } from '@vibe-agent-toolkit/utils/testing';
@@ -110,7 +116,7 @@ const FIRST_POPULATION_LSTATS = 2;
 const TMP_DEPTH = toForwardSlash(normalizedTmpdir()).split('/').filter((part) => part !== '' && !/^[A-Za-z]:$/u.test(part)).length;
 
 /** A content key the store seeds file rows under. */
-const BLOB_KEY = 'markdown.seed';
+const BLOB_KEY = testContentKey('markdown', 'seed');
 
 /** One `blobs` row and nothing else: one row written, one row decoded. */
 function oneBlobRow(): BlobScopedRows {
@@ -158,7 +164,7 @@ const EXTENT_KEY = { rootId: 'seed-root', treeHash: 'seed-tree' };
  * @returns The open store
  */
 function storeOf(scope: SeedScope): ReturnType<typeof openSqliteFactStore> {
-  const store = openSqliteFactStore({ directory: scope.dir() });
+  const store = openSqliteFactStore({ directory: scope.dir(), blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
   scope.defer(() => store.close());
   return store;
 }
@@ -595,8 +601,9 @@ const EDITED_B = '# Edited\n\nAfter.\n';
 
 export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
   // A cold population: the one document parsed and keyed, the extent derived
-  // and written to the store, and git asked for the tree: the key's snapshot
-  // and its flag listing, then the write path's fresh pair: two snapshots. The
+  // and written to the store, and git asked for the tree: the key's snapshot,
+  // its flag listing and its LFS attribute listing (`check-attr`), then the write
+  // path's fresh three: two snapshots. The
   // statement names no relation, so the run database is hydrated with none. The
   // miss reads the blob tier once in derivation, to reuse covered keys; an empty
   // store covers none.
@@ -612,14 +619,14 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'parse.dispatched': 1,
       'parse.cache.written': 1,
       ...readAndKeyed(PLAIN_TREE['a.md']),
-      'git.calls': 6,
+      'git.calls': 8,
       'git.snapshots': 2,
       'fs.lstat': GIT_MARKER_LSTATS + FIRST_POPULATION_LSTATS,
     },
   },
   // The same tree again: the extent served from the store, nothing parsed,
-  // nothing hashed, two git calls (the key's snapshot and its flag listing):
-  // one snapshot, no fresh one, since nothing is written.
+  // nothing hashed, three git calls (the key's snapshot, its flag listing and its
+  // LFS attribute listing): one snapshot, no fresh one, since nothing is written.
   'extent.served': {
     prepare: async (scope) => {
       const query = queriedTree(scope, PLAIN_TREE);
@@ -632,7 +639,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'store.reads.blob': 1,
       'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
       'extent.served': 1,
-      'git.calls': 2,
+      'git.calls': 3,
       'git.snapshots': 1,
       'fs.lstat': GIT_MARKER_LSTATS,
     },
@@ -655,7 +662,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'content.read': 2,
       'content.hashed': 2,
       'content.hashedBytes': Buffer.byteLength(IMPORTING_TREE['a.md'] + IMPORTING_TREE['CLAUDE.md'], 'utf8'),
-      'git.calls': 6,
+      'git.calls': 8,
       'git.snapshots': 2,
       'fs.lstat': GIT_MARKER_LSTATS + FIRST_POPULATION_LSTATS,
     },
@@ -685,7 +692,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'content.read': 2,
       'content.hashed': 2,
       'content.hashedBytes': Buffer.byteLength(EDITED_TREE['a.md'] + EDITED_B, 'utf8'),
-      'git.calls': 6,
+      'git.calls': 8,
       'git.snapshots': 2,
       'fs.lstat': GIT_MARKER_LSTATS,
     },
@@ -720,7 +727,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'content.read': 2,
       'content.hashed': 2,
       'content.hashedBytes': Buffer.byteLength(PLAIN_TREE['a.md'] + CYCLIC_FRONTMATTER, 'utf8'),
-      'git.calls': 6,
+      'git.calls': 8,
       'git.snapshots': 2,
       'fs.lstat': GIT_MARKER_LSTATS,
     },
@@ -747,7 +754,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'hydration.rows.copied': REFERENCING_ROWS.ast + REFERENCING_ROWS.lexical,
       'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
       'extent.served': 1,
-      'git.calls': 2,
+      'git.calls': 3,
       'git.snapshots': 1,
       'fs.lstat': GIT_MARKER_LSTATS,
     },

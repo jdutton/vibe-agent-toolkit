@@ -27,7 +27,7 @@
 
 import { countWork, forEachInOrder } from '@vibe-agent-toolkit/utils';
 
-import type { MeasuredContent } from '../../content-key.js';
+import { equalContentKeys, type ContentKey, type MeasuredContent } from '../../content-key.js';
 import type { ParseDispatcher } from '../../parse-dispatcher.js';
 import { isPerRunParseRefusal } from '../../parse-limits.js';
 import type { HarnessBlobFactsRow, HarnessBlobImportRow } from '../../schemas/projection-harness.js';
@@ -115,7 +115,7 @@ interface HarnessPassResult {
   /** Frontier blobs whose bytes were gone or no longer keyed to them. */
   readonly unreadable: number;
   /** Their content keys — excused from {@link assertHarnessSettled}, and nothing else. */
-  readonly unreadableKeys: ReadonlySet<string>;
+  readonly unreadableKeys: ReadonlySet<ContentKey>;
 }
 
 /**
@@ -149,7 +149,7 @@ export async function runHarnessPass(
   deriveFacts: HarnessFactsDeriver,
   stored: StoredHarnessRows,
 ): Promise<HarnessPassResult> {
-  const tally: FrontierTally = { derived: 0, served: [], refused: 0, unreadable: new Set<string>() };
+  const tally: FrontierTally = { derived: 0, served: [], refused: 0, unreadable: new Set<ContentKey>() };
   // One round per frontier, each only after the last one's rows are in the builder.
   const drain = async (profile: HarnessProfile, attempted: Set<string>): Promise<void> => {
     const frontier = harnessFrontier(builder.base(), profile).filter((entry) => !tally.unreadable.has(entry.contentKey));
@@ -196,7 +196,7 @@ interface FrontierTally {
   readonly served: HarnessPair[];
   refused: number;
   /** The keys whose bytes were gone or no longer keyed to them. */
-  readonly unreadable: Set<string>;
+  readonly unreadable: Set<ContentKey>;
 }
 
 /** The stored rows a pass serves first, where other bytes come from, and what runs over them. */
@@ -237,7 +237,7 @@ async function settleFrontier(
     const content = await sources.readContent.read(entry);
     // Gone, or rewritten since the base keyed it: deriving from other bytes would
     // file one blob's facts under another blob's key.
-    if (content?.key !== entry.contentKey) {
+    if (content === null || equalContentKeys(content.key, entry.contentKey) !== true) {
       tally.unreadable.add(entry.contentKey);
       return;
     }
@@ -258,7 +258,7 @@ async function settleFrontier(
 async function derivePair(
   builder: ProjectionBuilder,
   profile: HarnessProfile,
-  contentKey: string,
+  contentKey: ContentKey,
   content: MeasuredContent,
   deriveFacts: HarnessFactsDeriver,
   tally: FrontierTally,
@@ -289,7 +289,7 @@ async function derivePair(
  * @param profiles - The harnesses to check
  * @returns One content key per unsettled pair, profile by profile
  */
-export function harnessUnsettledKeys(view: HarnessReachView, profiles: readonly HarnessProfile[]): string[] {
+export function harnessUnsettledKeys(view: HarnessReachView, profiles: readonly HarnessProfile[]): ContentKey[] {
   return profiles.flatMap((profile) => harnessFrontier(view, profile).map((entry) => entry.contentKey));
 }
 

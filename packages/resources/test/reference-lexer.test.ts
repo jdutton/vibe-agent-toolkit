@@ -7,6 +7,7 @@ import {
   findLexicalReferences,
 } from '../src/reference-lexer.js';
 import { openRemarkSession } from '../src/remark-parser.js';
+import { testContentKey } from '../src/testing.js';
 
 /** Hoisted because `sonarjs/no-duplicate-string` fires at three uses. */
 const AT_README = '@README.md';
@@ -254,7 +255,7 @@ describe('hasExtension parity across producers', () => {
     const lexed = lex(`See ${rawRef} for details.\n`);
     expect(lexed[0]?.hasExtension).toBe(true);
 
-    const astRows = blobReferencesFor(`markdown.${'c'.repeat(64)}`, {
+    const astRows = blobReferencesFor(testContentKey('markdown', 'c'), {
       content: '',
       sizeBytes: 0,
       headings: [],

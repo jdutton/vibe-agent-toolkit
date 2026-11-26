@@ -8,6 +8,8 @@
 
 import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 
+import type { ContentKey } from '../content-key.js';
+
 /**
  * Resource type discriminator for type-safe handling
  */
@@ -73,8 +75,8 @@ export interface BaseResource {
   /** Last modification timestamp */
   modifiedAt: Date;
 
-  /** Content key of the bytes read (`<parserKind>.<sha256>`, content-key.ts) */
-  contentKey: string;
+  /** Content key of the bytes read (`<parserKind>.<keyKind>.<hex>`, content-key.ts) */
+  contentKey: ContentKey;
 
   /** Collections this resource belongs to (empty for Phase 1) */
   collections: string[];

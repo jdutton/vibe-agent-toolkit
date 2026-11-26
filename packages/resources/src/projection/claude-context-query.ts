@@ -81,6 +81,7 @@
 import { strongerSeverity, type Severity } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
+import type { ContentKey } from '../content-key.js';
 import { estimateTokens } from '../link-classify.js';
 import type { ParseRefusedResource } from '../resource-registry.js';
 import { ExtentDeclarationSchema } from '../schemas/project-config.js';
@@ -442,7 +443,7 @@ interface RealizationIndex {
   /** Path → `resourceId`. ⚠️ LAST row wins, for the same reason. */
   readonly idByPath: ReadonlyMap<string, string>;
   /** Path → `contentKey`, keyless rows omitted — `severityFor`'s `keyOf`. */
-  readonly contentKeyByPath: ReadonlyMap<string, string>;
+  readonly contentKeyByPath: ReadonlyMap<string, ContentKey>;
 }
 
 /**
@@ -453,7 +454,7 @@ interface RealizationIndex {
  *   holds the shape of.
  */
 interface ContextQueryIndex extends RealizationIndex {
-  readonly blobByContentKey: ReadonlyMap<string, BlobRow>;
+  readonly blobByContentKey: ReadonlyMap<ContentKey, BlobRow>;
   /** Claude Code's facts per blob — absent is a thrown error, never zero. */
   readonly facts: HarnessFactsIndex;
   /** Reference key → whether the token is path-shaped — `severityFor`'s `shapeOf`. */
@@ -537,7 +538,7 @@ function indexRealizations(rows: readonly ResourceRealizationRow[]): Realization
   const firstRealizationById = new Map<string, ResourceRealizationRow>();
   const pathById = new Map<string, string>();
   const idByPath = new Map<string, string>();
-  const contentKeyByPath = new Map<string, string>();
+  const contentKeyByPath = new Map<string, ContentKey>();
 
   for (const row of rows) {
     if (!realizationByPath.has(row.path)) realizationByPath.set(row.path, row);
@@ -1133,7 +1134,7 @@ const DOT_CLAUDE_RULES_SEGMENT = /(?:^|\/)\.claude\/rules(?:\/|$)/;
 function severityFor(
   row: RealizationConditionRow,
   shapeOf: ReadonlyMap<string, boolean>,
-  keyOf: ReadonlyMap<string, string>,
+  keyOf: ReadonlyMap<string, ContentKey>,
 ): Severity {
   // ⛔ ONLY the unresolved code is ever escalated, which is what keeps
   // CLOSURE_REFERENCE_OUTSIDE_ROOT at `info` by construction rather than by a
@@ -1181,7 +1182,7 @@ function referenceKey(reference: Pick<BlobReferenceRow, 'blob' | 'rawRef'> & { r
  * @param rawRef - The reference exactly as authored
  * @returns The composite key
  */
-function joinKey(blob: string, line: number, rawRef: string): string {
+function joinKey(blob: ContentKey, line: number, rawRef: string): string {
   return [blob, String(line), rawRef].join(' ');
 }
 

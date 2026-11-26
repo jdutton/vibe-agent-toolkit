@@ -409,6 +409,20 @@ export {
   splitProjectionByScope,
 } from './projection/store.js';
 
+// The store's bookkeeping tables as data (a backend builds their DDL from it;
+// the shape digest hashes it), and the measure the blob tier's byte budget is
+// kept in.
+export {
+  type BookkeepingColumn,
+  type BookkeepingColumnType,
+  type BookkeepingTable,
+  type EncodedStoreValue,
+  type StoreBookkeepingTables,
+  EXTENT_KEY_COLUMNS,
+  STORE_BOOKKEEPING_TABLES,
+  blobRowBytes,
+} from './projection/store-bookkeeping.js';
+
 // The reuse rule over that seam: whether a stored extent answers THIS run's
 // question, and how a projection is put back together from the rows that do.
 // Exported because it is the half a second backend must not be free to
@@ -480,11 +494,22 @@ export { classifyLink, isLocalFileLink } from './link-classify.js';
 // `parseFileCached` and a `ParseDispatcher` accept. `isParsableContent`
 // is the narrowing between them, and is exported because there is no other way
 // for a caller holding a path-routed blob to reach the parse path.
+// A key is a branded `ContentKey`, `<parserKind>.<keyKind>.<hex>`: `parseContentKey` is the one
+// parser, `contentKeyParts` reads its fields back (the parser kind a blob was routed to), and keys
+// compare through `equalContentKeys` and sort through `orderContentKeys`.
 export {
   computeContentKey,
+  contentKeyParts,
+  equalContentKeys,
+  formatContentKey,
   inMemoryContent,
   isParsableContent,
+  orderContentKeys,
+  parseContentKey,
   readContentWithKey,
+  type ContentKey,
+  type ContentKeyParts,
+  type KeyKind,
   type KeyedContent,
   type MeasuredContent,
   type ParsableContent,
@@ -1036,6 +1061,8 @@ export {
   type PopulateResult,
   type PopulationCache,
   type PopulationOutcome,
+  type RealizedContent,
+  type RealizedContentKeys,
   type StoredMembership,
   type StoreMiss,
   type TreePopulationOptions,
@@ -1108,7 +1135,6 @@ export { resolveDialectRef } from './projection/contributors/reference-dialect.j
 // what lets a skill's `.mjs` scripts be closure members at all.
 export { populateBlobs, type BlobPopulationOptions, type BlobPopulationResult } from './projection/blob-population.js';
 export { BLOB_CONTENT_CHANGED, BLOB_NOT_TEXT, BLOB_PARSE_FAILED, BLOB_PARSE_LIMIT_EXCEEDED, BLOB_PARSE_WORKER_DIED, BLOB_UNREADABLE } from './projection/blob-condition-codes.js';
-export { parserKindOf } from './projection/router.js';
 
 // A warm run's blob tier read failing is the store's refusal, by this code (the CLI's refusal table);
 // and what the stored admission reads of the tier, which the CLI's in-process cost arms damage table by table.

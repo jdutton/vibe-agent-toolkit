@@ -85,6 +85,7 @@
 
 import { relativeEscapesRoot, safePath } from '@vibe-agent-toolkit/utils';
 
+import type { ContentKey } from '../content-key.js';
 import { resolveLocalHref } from '../utils.js';
 
 import type { LoadedContextAnswer } from './claude-context-query.js';
@@ -351,7 +352,7 @@ function buildResult(
   targets: ReadonlyMap<string, readonly DiscoveryCitation[]>,
   reachOf: ReadonlyMap<string, DiscoveryReach>,
 ): DiscoverableContext {
-  const realizationOf = new Map<string, { resourceId: string; contentKey: string | null }>();
+  const realizationOf = new Map<string, { resourceId: string; contentKey: ContentKey | null }>();
   for (const row of projection.resourceRealizations) {
     if (!realizationOf.has(row.path)) realizationOf.set(row.path, row);
   }

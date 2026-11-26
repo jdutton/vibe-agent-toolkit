@@ -107,6 +107,7 @@ import { Worker } from 'node:worker_threads';
 
 import { countWork, followedKindSync, forbiddenWorkCountPolicy, type ForbiddenWorkCountPolicy } from '@vibe-agent-toolkit/utils';
 
+import type { ContentKey } from './content-key.js';
 import { decodeFrontmatterValue, encodeFrontmatterValue } from './frontmatter-codec.js';
 import type { ParseResult } from './link-parser.js';
 import type { DocumentParserKind } from './mime-type.js';
@@ -278,7 +279,7 @@ interface ParseWorkerParseRequest {
    * A worker that re-derived a key would file entries under a key no reader ever
    * looks up, and every run would stay silently cold.
    */
-  cacheKey?: string;
+  cacheKey?: ContentKey;
 }
 
 /**
@@ -585,7 +586,7 @@ export interface ParsePool {
     kind: DocumentParserKind,
     content: string,
     byteLength: number,
-    cacheKey: string,
+    cacheKey: ContentKey,
   ): Promise<ParseResult | null>;
   /**
    * Run a harness's memory-file read off-thread, under the same limits as a
@@ -1035,7 +1036,7 @@ class WorkerParsePool implements ParsePool {
     kind: DocumentParserKind,
     content: string,
     byteLength: number,
-    cacheKey: string,
+    cacheKey: ContentKey,
   ): Promise<ParseResult | null> {
     return parseAnswer(await this.#enqueue({ type: 'parse', kind, content, byteLength, cacheKey }));
   }

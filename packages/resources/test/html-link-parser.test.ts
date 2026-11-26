@@ -4,6 +4,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 
 import { parseHtmlContent } from '../src/html-link-parser.js';
 import { blobReferencesFor } from '../src/projection/blob-references.js';
+import { testContentKey } from '../src/testing.js';
 import type { ResourceLink } from '../src/types.js';
 
 import { parseHtmlFile, scratchFixtureWriter } from './test-helpers.js';
@@ -546,7 +547,7 @@ describe('A4 — protocol-relative and query-string/fragment hrefs', () => {
   it('sees the .md extension through a trailing query string (finding: lexicalFeatures in blob-references.ts)', () => {
     const source = '<a href="./guide.md?v=2">a</a>';
     const parsed = parseHtmlContent(source, source.length);
-    const rows = blobReferencesFor(`html.${'f'.repeat(64)}`, parsed);
+    const rows = blobReferencesFor(testContentKey('html', 'f'), parsed);
 
     expect(rows.map((row) => row.hasExtension)).toEqual([true]);
   });

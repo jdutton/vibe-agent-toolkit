@@ -6,9 +6,10 @@ import { harnessFactsIndex, HarnessFactsAbsentError, HARNESS_FACTS_ABSENT } from
 import { HARNESS_PROFILES } from '../src/projection/harness/profile.js';
 import type { BlobConditionRow } from '../src/schemas/projection-blobs.js';
 import { HarnessIdSchema } from '../src/schemas/projection-harness.js';
+import { testContentKey } from '../src/testing.js';
 
-const KEY = 'markdown.' + 'a'.repeat(64);
-const OTHER = 'markdown.' + 'b'.repeat(64);
+const KEY = testContentKey('markdown', 'a');
+const OTHER = testContentKey('markdown', 'b');
 
 describe('harnessFactsIndex', () => {
   const view = {

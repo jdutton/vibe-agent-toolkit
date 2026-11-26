@@ -5,6 +5,7 @@ import {
   ContentKeySchema,
   JsonValueSchema,
 } from '../src/schemas/projection-shared.js';
+import { testContentKey } from '../src/testing.js';
 
 describe('the removed contract version', () => {
   it('exports no hand-bumped version constant', () => {
@@ -27,7 +28,7 @@ describe('the removed contract version', () => {
 
 describe('ContentKeySchema', () => {
   it('accepts a well-formed key', () => {
-    expect(ContentKeySchema.safeParse('markdown.' + '0'.repeat(64)).success).toBe(true);
+    expect(ContentKeySchema.safeParse(testContentKey('markdown', '0')).success).toBe(true);
   });
 
   it('rejects a malformed key', () => {

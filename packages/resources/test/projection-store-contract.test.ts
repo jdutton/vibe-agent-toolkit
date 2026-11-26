@@ -12,7 +12,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { Projection } from '../src/projection/projection.js';
 import { quoteIdentifier } from '../src/projection/sql-identifiers.js';
-import { projectionShapeDigest, splitProjectionByScope } from '../src/projection/store.js';
+import { STORE_BOOKKEEPING_TABLES, type StoreBookkeepingTables } from '../src/projection/store-bookkeeping.js';
+import { projectionShapeDigest, shapeDigestOf, splitProjectionByScope } from '../src/projection/store.js';
 import { PROJECTION_TABLES, type ProjectionTableName } from '../src/projection/table-registry.js';
 import { BlobRowSchema } from '../src/schemas/projection-blobs.js';
 import { HarnessBlobFactsRowSchema } from '../src/schemas/projection-harness.js';
@@ -297,6 +298,37 @@ describe('projectionShapeDigest', () => {
     const dropped = await digestUnderRegistry(registryWithColumn('harnessBlobImports', 'partitionColumn', undefined));
 
     expect(dropped).not.toBe(projectionShapeDigest());
+  });
+});
+
+/**
+ * The declaration with one `blob_keys` column replaced.
+ *
+ * @param column - Which column
+ * @param replacement - What it becomes
+ * @returns The perturbed declaration
+ */
+function withBlobKeysColumn(column: string, replacement: { name: string; type: 'TEXT' | 'INTEGER' }): StoreBookkeepingTables {
+  const { blobKeys } = STORE_BOOKKEEPING_TABLES;
+  return {
+    ...STORE_BOOKKEEPING_TABLES,
+    blobKeys: { ...blobKeys, columns: blobKeys.columns.map((each) => (each.name === column ? replacement : each)) },
+  };
+}
+
+describe('shapeDigestOf: the store bookkeeping tables are part of the shape', () => {
+  it('is what projectionShapeDigest memoizes for the registry and the bookkeeping declaration', () => {
+    expect(shapeDigestOf(PROJECTION_TABLES, STORE_BOOKKEEPING_TABLES)).toBe(projectionShapeDigest());
+  });
+
+  it('moves when a bookkeeping column changes its type', () => {
+    expect(shapeDigestOf(PROJECTION_TABLES, withBlobKeysColumn('bytes', { name: 'bytes', type: 'TEXT' })))
+      .not.toBe(shapeDigestOf(PROJECTION_TABLES, STORE_BOOKKEEPING_TABLES));
+  });
+
+  it('moves when a bookkeeping column is renamed', () => {
+    expect(shapeDigestOf(PROJECTION_TABLES, withBlobKeysColumn('bytes', { name: 'byteCount', type: 'INTEGER' })))
+      .not.toBe(shapeDigestOf(PROJECTION_TABLES, STORE_BOOKKEEPING_TABLES));
   });
 });
 

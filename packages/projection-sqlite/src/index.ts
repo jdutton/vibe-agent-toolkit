@@ -46,15 +46,15 @@
  */
 
 // The statements, built from the projection table registry. Engine-free, so the
-// schema's shape is testable without SQLite and without the version floor.
+// schema's shape is testable without SQLite and without the version floor. The
+// bookkeeping tables' DDL is built from `STORE_BOOKKEEPING_TABLES` in `resources`.
 export {
-  CREATE_EXTENTS_TABLE_SQL,
   EXTENTS_TABLE,
-  EXTENT_KEY_COLUMNS,
   type StoredTableSpec,
   WRITTEN_AT_COLUMN,
   allSpecs,
   blobKeyColumn,
+  createBookkeepingTableSql,
   createTableSql,
   deleteBlobFactsSql,
   deleteExtentContextSql,
@@ -79,6 +79,7 @@ export {
 // The fact store: the `FactStore` port over a file, and nothing else. Opens WAL
 // with the pragmas in the one order that survives contention — see `store.ts`.
 export {
+  DEFAULT_BLOB_TIER_BUDGET_BYTES,
   type SqliteStoreOptions,
   type StoreUnopenableError,
   defaultStoreDirectory,

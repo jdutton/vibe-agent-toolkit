@@ -9,6 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 
+import type { ContentKey } from '../src/content-key.js';
 import { parseRefusal } from '../src/not-admitted.js';
 import { ParseLimitError } from '../src/parse-limits.js';
 import { AST_SYNTACTIC_FORMS } from '../src/projection/blob-references.js';
@@ -28,14 +29,15 @@ import {
 } from '../src/projection/stored-admission.js';
 import { runStoredReads } from '../src/projection/stored-reads.js';
 import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
+import { testContentKey } from '../src/testing.js';
 
 import { noDatabaseFile } from './fake-fact-store.js';
 
-const MARKDOWN_KEY = `markdown.${'a'.repeat(64)}`;
-const NONE_KEY = `none.${'b'.repeat(64)}`;
+const MARKDOWN_KEY = testContentKey('markdown', 'a');
+const NONE_KEY = testContentKey('none', 'b');
 const COMPUTE = { kind: 'compute' };
 
-const keyed = (contentKey: string, mime: string): StoredRealization => ({ contentKey, contentState: 'keyed', mime });
+const keyed = (contentKey: ContentKey, mime: string): StoredRealization => ({ contentKey, contentState: 'keyed', mime });
 const unkeyed = (contentState: StoredRealization['contentState'], mime: string | null): StoredRealization => ({ contentKey: null, contentState, mime });
 
 describe('storedRoute: before the tier is read', () => {

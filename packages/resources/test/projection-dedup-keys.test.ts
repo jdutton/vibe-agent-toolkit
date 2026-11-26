@@ -59,12 +59,13 @@ import {
   type ProjectionTableName,
 } from '../src/projection/table-registry.js';
 import { HarnessIdSchema } from '../src/schemas/projection-harness.js';
+import { testContentKey } from '../src/testing.js';
 
 /** A corpus root. Nothing here touches disk; the builder only needs a string. */
 const ROOT = '/vat-corpus/dedup';
 
-const BLOB_BASE = `markdown.${'a'.repeat(64)}`;
-const BLOB_ALT = `html.${'b'.repeat(64)}`;
+const BLOB_BASE = testContentKey('markdown', 'a');
+const BLOB_ALT = testContentKey('html', 'b');
 
 /** The base path, shared by the two tables whose key names a path. */
 const PATH_BASE = 'lib/base.md';

@@ -27,9 +27,12 @@
  * level, not. `vibe-validate` accepts this cost on every commit it gates; a VAT
  * lane that adopts it inherits the same trade rather than a different one.
  *
- * No blob OID is carried: one OID can name two different working-tree byte
- * strings (clean/smudge, `working-tree-encoding`, `eol`), so nothing may stand
- * an OID in for a read — see `packages/resources/src/content-key.ts`.
+ * Each entry carries git's blob OID and git's spelling of its path, for git's
+ * own questions about the entry (`gitTreeKey`'s LFS pass asks `check-attr` and
+ * `cat-file` with them). The OID is never a content key: one OID can name two
+ * different working-tree byte strings (clean/smudge, `working-tree-encoding`,
+ * `eol`), so nothing may stand an OID in for a read — see
+ * `packages/resources/src/content-key.ts`.
  *
  * ## ⚠️ Two consumers want the SAME snapshot — see {@link withGitSnapshotCache}
  *
@@ -60,6 +63,13 @@ const NAMED_UNREADABLE_PATHS = 5;
 export interface GitSnapshotEntry {
   /** Absolute, forward-slashed path, resolved against the repository root. */
   absolutePath: string;
+  /** Root-relative, forward-slashed, spelled exactly as git spelled it: what git is asked about the entry with. */
+  gitPath: string;
+  /**
+   * The blob OID of the bytes git would store for the path now (after a clean filter: an LFS
+   * pointer's, not the content's), a commit's for a submodule. Never a content key (see above).
+   */
+  oid: string;
   /** Git's six-digit mode, verbatim: `100644`, `100755`, `120000`, `160000`. */
   mode: string;
   /** Mode `120000`. */
@@ -125,7 +135,8 @@ export interface GitHiddenEntry {
 
 /**
  * A snapshot git took but cannot key the tree with (`gitTreeKey`): its index hides working-tree
- * bytes from it, or git would not say whether it does. Classified by `gitSnapshotFailureOf`.
+ * bytes from it, an LFS file's disk bytes cannot be told apart, or git would not say whether either
+ * is so. Classified by `gitSnapshotFailureOf`.
  */
 export type GitTreeKeyFailure =
   | {
@@ -159,10 +170,74 @@ export type GitTreeKeyFailure =
     readonly repositoryRoot: string;
     /** VAT's account of the listing, never git's words. */
     readonly reason: string;
+  }
+  | {
+    readonly ok: false;
+    /**
+     * An LFS pointer's file is neither its pointer nor its content by size (the two sizes are
+     * equal, the pointer was checked out CRLF, or the path is not a regular file): the hash holds
+     * the pointer, and VAT cannot tell which bytes the disk holds.
+     */
+    readonly kind: 'lfs-undecidable';
+    readonly cwd: string;
+    readonly repositoryRoot: string;
+    /** The first such paths, repository-relative, as a message shows them (`shownName`), sorted. */
+    readonly undecidable: readonly string[];
+    /** How many such paths in all. */
+    readonly undecidableCount: number;
+  }
+  | {
+    readonly ok: false;
+    /** A git command of the LFS pass (`check-attr`, `cat-file`, `config`) gave no usable answer. */
+    readonly kind: 'lfs-unlisted';
+    readonly cwd: string;
+    readonly repositoryRoot: string;
+    /** The command, as a reason names it (`git check-attr`). */
+    readonly command: string;
+    /** What it did. */
+    readonly attempt: { readonly ok: boolean; readonly stderr: string; readonly error?: Error };
+  }
+  | {
+    readonly ok: false;
+    /** A git command of the LFS pass wrote an answer VAT cannot read. */
+    readonly kind: 'lfs-unreadable';
+    readonly cwd: string;
+    readonly repositoryRoot: string;
+    /** The command, as a reason names it. */
+    readonly command: string;
+    /** VAT's account of the answer, never git's words. */
+    readonly reason: string;
   };
 
+/** One LFS pointer in a keyed tree. */
+export interface LfsPointer {
+  /** Absolute, forward-slashed. */
+  readonly absolutePath: string;
+  /** The content's sha256, hex, as the pointer names it. */
+  readonly lfsOid: string;
+  /** The disk holds the content (`true`) or the pointer itself (`false`). */
+  readonly pulled: boolean;
+}
+
+/** What `gitTreeKey` read of the tree's Git LFS files. */
+export interface LfsReading {
+  /** Every entry the snapshot holds as an LFS pointer, in the snapshot's order. */
+  readonly pointers: readonly LfsPointer[];
+  /**
+   * Whether the repository configures a `filter.lfs.*` key; asked only when there are pointers,
+   * so `false` with none.
+   */
+  readonly filterConfigured: boolean;
+}
+
+/**
+ * A tree's key: the snapshot, its hash extended by what the snapshot alone does not describe (absent
+ * skip-worktree paths, which LFS pointers are pulled), and what it read of the tree's LFS files.
+ */
+export type GitTreeKey = GitTreeSnapshot & { readonly lfs: LfsReading };
+
 /** A key for the tree, or why git cannot give one. */
-export type GitTreeKeyOutcome = GitTreeSnapshot | GitSnapshotFailure | GitTreeKeyFailure;
+export type GitTreeKeyOutcome = GitTreeKey | GitSnapshotFailure | GitTreeKeyFailure;
 
 /**
  * The snapshots taken inside the bracket now open, keyed by repository root.
@@ -367,6 +442,8 @@ function takeSnapshot(cwd: string, repositoryRoot: string): GitSnapshotOutcome {
     repositoryRoot,
     entries: snapshot.entries.map((entry) => ({
       absolutePath: safePath.resolve(repositoryRoot, entry.path),
+      gitPath: entry.path,
+      oid: entry.oid,
       mode: entry.mode,
       isSymlink: entry.mode === GIT_MODE_SYMLINK,
       isSubmodule: entry.mode === GIT_MODE_GITLINK,

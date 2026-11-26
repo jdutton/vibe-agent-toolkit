@@ -70,6 +70,7 @@ import {
   type ContentState,
   type ResourceRealizationRow,
 } from '@vibe-agent-toolkit/resources';
+import { testContentKey } from '@vibe-agent-toolkit/resources/testing';
 import { REFUSAL_CODES } from '@vibe-agent-toolkit/schema';
 import {
   absenceObservations,
@@ -230,7 +231,7 @@ export const CONTENT_STATE_KEYS: readonly string[] = ContentStateSchema.options.
 // ── Surfaced codes, asked of production ─────────────────────────────────────
 
 /** A content key for a probe row: well-formed, and naming no blob. */
-const PROBE_CONTENT_KEY = `markdown.${'0'.repeat(64)}`;
+const PROBE_CONTENT_KEY = testContentKey('markdown', '0');
 const PROBE_ROOT = process.cwd();
 
 /** The mimes a state is probed under: one a parser reads, and none. */

@@ -32,6 +32,7 @@
 
 import { appendAll, compareCodeUnits, VatError } from '@vibe-agent-toolkit/utils';
 
+import { parseContentKey, type ContentKey } from '../content-key.js';
 import { ReferenceSyntacticFormSchema, type ReferenceSyntacticForm } from '../schemas/projection-blobs.js';
 
 import { EMPTY_STORED_TIER, emptyBlobRows, StoreRequestUnmetError, storedBlobTier, type StoredBlobTier } from './store-hydration.js';
@@ -102,7 +103,7 @@ export interface StoreReads {
    * @throws A {@link BlobTierReadError} when the store's read rejects
    * @throws A {@link StoreRequestUnmetError} when its answer lacks a requested table
    */
-  blobs<Table extends BlobScopedTableName>(contentKeys: readonly string[], request: BlobRequest<Table>): Promise<Pick<BlobScopedRows, Table>>;
+  blobs<Table extends BlobScopedTableName>(contentKeys: readonly ContentKey[], request: BlobRequest<Table>): Promise<Pick<BlobScopedRows, Table>>;
   /**
    * The rows of `request` for one tree, from one read, read only when the run does not already hold them.
    *
@@ -195,7 +196,7 @@ function keyColumnOf(table: BlobScopedTableName): string {
  * @param request - The tables and reference forms to read
  * @returns The tier's rows for them, in the requested tables
  */
-async function readBlobTier(store: FactStore, contentKeys: readonly string[], request: BlobRequest<BlobScopedTableName>): Promise<TableRows> {
+async function readBlobTier(store: FactStore, contentKeys: readonly ContentKey[], request: BlobRequest<BlobScopedTableName>): Promise<TableRows> {
   const rows = await store.readBlobFacts(contentKeys, request).catch((error: unknown) => {
     throw new BlobTierReadError(error);
   });
@@ -213,13 +214,14 @@ async function readBlobTier(store: FactStore, contentKeys: readonly string[], re
  * @param keys - The keys it read
  * @param rows - Its answer
  * @returns Each key's {@link HeldBlob}, every requested table present
+ * @throws {BlobTierReadError} When a stored row's key column holds no content key: a damaged store
  */
-function heldByKey(request: BlobRequest<BlobScopedTableName>, keys: readonly string[], rows: TableRows): Map<string, HeldBlob> {
-  const byKey = new Map<string, Record<string, Readonly<Record<string, unknown>>[]>>();
+function heldByKey(request: BlobRequest<BlobScopedTableName>, keys: readonly ContentKey[], rows: TableRows): Map<ContentKey, HeldBlob> {
+  const byKey = new Map<ContentKey, Record<string, Readonly<Record<string, unknown>>[]>>();
   for (const key of keys) byKey.set(key, Object.fromEntries(request.tables.map((table) => [table, []])));
   for (const table of request.tables) {
     const column = keyColumnOf(table);
-    for (const row of rows[table] ?? []) byKey.get(String(row[column]))?.[table]?.push(row);
+    for (const row of rows[table] ?? []) byKey.get(storedKeyOf(table, column, row))?.[table]?.push(row);
   }
   const tables = new Set(request.tables);
   const forms = formsOf(request);
@@ -227,14 +229,32 @@ function heldByKey(request: BlobRequest<BlobScopedTableName>, keys: readonly str
 }
 
 /**
- * The keys a blob write may move: those its read did not cover, and those it carries a harness
- * pair for that its read did not settle. Every other key's stored rows are the ones the run read.
+ * The content key a stored row is filed under, read through the one parser.
+ *
+ * @param table - The row's table
+ * @param column - The table's key column
+ * @param row - A row the store answered
+ * @returns The key
+ * @throws {BlobTierReadError} When the column holds no content key: a damaged store
+ */
+function storedKeyOf(table: BlobScopedTableName, column: string, row: Readonly<Record<string, unknown>>): ContentKey {
+  const text = String(row[column]);
+  const key = parseContentKey(text);
+  if (key === undefined) throw new BlobTierReadError(new Error(`a stored ${table} row's ${column} is "${text}", not a content key`));
+  return key;
+}
+
+/**
+ * The keys a blob write may move, as their text: those its read did not cover, and those it
+ * carries a harness pair for that its read did not settle. Every other key's stored rows are the
+ * ones the run read. Text, because the write's rows are the run's own and are only matched
+ * against the keys the run holds, never read back as keys.
  *
  * @param write - The write
- * @returns The keys whose held rows the write may make stale
+ * @returns The texts of the keys whose held rows the write may make stale
  */
 function keysMovedBy(write: BlobFactsWrite): ReadonlySet<string> {
-  const covered = new Set(write.coveredAtRead);
+  const covered = new Set<string>(write.coveredAtRead);
   const settled = new Set(write.settledAtRead.map((pair) => `${pair.contentKey}\0${pair.harness}`));
   const moved = new Set<string>();
   const rows = write.rows as unknown as TableRows;
@@ -258,7 +278,7 @@ function keysMovedBy(write: BlobFactsWrite): ReadonlySet<string> {
  * @param request - What the caller reads
  * @returns The requested tables, and of `blobReferences` the requested forms, in key order
  */
-function answerOf(held: ReadonlyMap<string, HeldBlob>, keys: readonly string[], request: BlobRequest<BlobScopedTableName>): TableRows {
+function answerOf(held: ReadonlyMap<string, HeldBlob>, keys: readonly ContentKey[], request: BlobRequest<BlobScopedTableName>): TableRows {
   const forms = formsOf(request);
   const answer: Record<string, Readonly<Record<string, unknown>>[]> = {};
   for (const table of request.tables) {
@@ -319,13 +339,13 @@ function widenedExtentRequest(held: HeldExtent | undefined, request: ExtentReque
  * @returns Its reads
  */
 function storeReads(store: FactStore): StoreReads {
-  const blobs = new Map<string, HeldBlob>();
+  const blobs = new Map<ContentKey, HeldBlob>();
   const extents = new Map<string, HeldExtent>();
   const extentId = (key: ExtentKey): string => `${key.rootId}\0${key.treeHash}`;
   return {
-    blobs: async <Table extends BlobScopedTableName>(contentKeys: readonly string[], request: BlobRequest<Table>) => {
+    blobs: async <Table extends BlobScopedTableName>(contentKeys: readonly ContentKey[], request: BlobRequest<Table>) => {
       const keys = [...new Set(contentKeys)];
-      const pending = new Map<string, { readonly request: BlobRequest<BlobScopedTableName>; readonly keys: string[] }>();
+      const pending = new Map<string, { readonly request: BlobRequest<BlobScopedTableName>; readonly keys: ContentKey[] }>();
       for (const key of keys) {
         const held = blobs.get(key);
         if (held !== undefined && holdsBlob(held, request)) continue;
@@ -355,7 +375,8 @@ function storeReads(store: FactStore): StoreReads {
     },
     writeBlobs: async (write) => {
       await store.writeBlobFacts(write);
-      for (const key of keysMovedBy(write)) blobs.delete(key);
+      const moved = keysMovedBy(write);
+      for (const key of blobs.keys()) if (moved.has(key)) blobs.delete(key);
     },
     writeTree: async (key, rows) => {
       await store.writeExtent(key, rows);
@@ -397,7 +418,7 @@ export interface StoredTierReads {
    * @param request - The tables and reference forms the caller consumes
    * @returns Every key asked so far, as one tier: each key's rows under every request asked of it
    */
-  cover(contentKeys: readonly string[], request: BlobRequest<BlobScopedTableName>): Promise<StoredBlobTier>;
+  cover(contentKeys: readonly ContentKey[], request: BlobRequest<BlobScopedTableName>): Promise<StoredBlobTier>;
 }
 
 /**
@@ -408,7 +429,7 @@ export interface StoredTierReads {
  * @returns The population's tier
  */
 export function storedTierReads(reads: StoreReads | undefined): StoredTierReads {
-  const asked = new Map<string, BlobRequest<BlobScopedTableName>>();
+  const asked = new Map<ContentKey, BlobRequest<BlobScopedTableName>>();
   let tier = EMPTY_STORED_TIER;
   return {
     current: () => tier,
@@ -418,7 +439,7 @@ export function storedTierReads(reads: StoreReads | undefined): StoredTierReads 
         const before = asked.get(key);
         asked.set(key, before === undefined ? request : widenedBlobRequest({ tables: new Set(before.tables), forms: formsOf(before), rows: {} }, request));
       }
-      const groups = new Map<string, { readonly request: BlobRequest<BlobScopedTableName>; readonly keys: string[] }>();
+      const groups = new Map<string, { readonly request: BlobRequest<BlobScopedTableName>; readonly keys: ContentKey[] }>();
       for (const [key, keyRequest] of asked) {
         const id = requestId(keyRequest);
         const group = groups.get(id) ?? { request: keyRequest, keys: [] };

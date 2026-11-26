@@ -1,6 +1,7 @@
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
+import { equalContentKeys } from '../src/content-key.js';
 import { RunContentCache } from '../src/projection/content-cache.js';
 import type { ExtentContribution } from '../src/projection/contributor.js';
 import {
@@ -441,7 +442,9 @@ describe('ClaudeImportExtentContributor — remaining §10 cases', () => {
       .map((row) => row.contentKey);
     expect(importerKeys).toHaveLength(2);
     expect(new Set(importerKeys).size).toBe(1);
-    expect(base.blobReferences.filter((row) => row.blob === importerKeys[0])).toHaveLength(1);
+    const [importerKey] = importerKeys;
+    if (importerKey === undefined || importerKey === null) throw new Error('fixture: the importers are not keyed');
+    expect(base.blobReferences.filter((row) => equalContentKeys(row.blob, importerKey) === true)).toHaveLength(1);
 
     expect(memberPaths(await contributeFrom(files, A_CLAUDE_MD)))
       .toEqual([A_CLAUDE_MD, 'a/notes.md']);

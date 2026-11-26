@@ -9,8 +9,9 @@ import {
   ResourceTagRowSchema,
   RootRowSchema,
 } from '../src/schemas/projection-resources.js';
+import { testContentKey } from '../src/testing.js';
 
-const VALID_KEY = 'markdown.' + '0'.repeat(64);
+const VALID_KEY = testContentKey('markdown', '0');
 const GUIDE_PATH = 'docs/guide.md';
 const SOURCE_EXTENT = 'tree:source';
 
@@ -52,7 +53,7 @@ describe('ResourceRowSchema', () => {
   });
 
   it('rejects a contentKey column — the packager rewrites content, so two realizations of one identity have two content keys', () => {
-    const row = { ...base, contentKey: 'markdown.' + '0'.repeat(64) };
+    const row = { ...base, contentKey: testContentKey('markdown', '0') };
     expect(ResourceRowSchema.safeParse(row).success).toBe(false);
   });
 
@@ -95,7 +96,7 @@ describe('ResourceRealizationRowSchema', () => {
       basenameLower: 'docs-guide.md',
       dir: 'dist/skills/x',
       depth: 3,
-      contentKey: 'markdown.' + '1'.repeat(64),
+      contentKey: testContentKey('markdown', '1'),
     };
     expect(ResourceRealizationRowSchema.safeParse(dist).success).toBe(true);
     expect(dist.contentKey).not.toBe(base.contentKey);

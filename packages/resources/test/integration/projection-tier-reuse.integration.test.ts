@@ -22,14 +22,11 @@ import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { parseLookupsIn, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ContributorRegistry } from '../../src/projection/contributor.js';
-import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
-import { crawlSourceFor } from '../../src/projection/crawl-source.js';
+import { contentKeyParts, type ContentKey, equalContentKeys, orderContentKeys } from '../../src/content-key.js';
 import { serializeProjection } from '../../src/projection/export.js';
-import { populate, type PopulationCache, type PopulationOutcome } from '../../src/projection/merge.js';
+import type { PopulationCache, PopulationOutcome } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
 import { buildResourcePopulation, type PopulationMembers } from '../../src/projection/resource-population.js';
-import { parserKindOf } from '../../src/projection/router.js';
 import { IGNORE_HOME_SETTLEMENT, withRunPopulation } from '../../src/projection/run-population.js';
 import { keyedContentKeys, uncoveredContentKeys } from '../../src/projection/store-hydration.js';
 import {
@@ -47,7 +44,8 @@ import { storedComputeBy, storedContentOf } from '../../src/projection/stored-ad
 import { runStoredReads } from '../../src/projection/stored-reads.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { ResourceMetadata } from '../../src/schemas/resource-metadata.js';
-import { FakeFactStore } from '../fake-fact-store.js';
+import { FakeFactStore, WIDE_BLOB_BUDGET_BYTES } from '../fake-fact-store.js';
+import { keyedContentKeyOf as keyOf, populateFilesystemExtent } from '../helpers/filesystem-population.js';
 import { inOwnRun } from '../helpers/population-run.js';
 import { createCommittedRepo } from '../test-helpers.js';
 
@@ -90,31 +88,19 @@ afterEach(() => {
 async function populateThrough(
   cache: { readonly store: FakeFactStore; readonly treeHash: string; readonly treeUnchanged: boolean } | undefined,
 ): Promise<{ readonly projection: Projection; readonly outcome: PopulationOutcome }> {
-  const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
-  return inOwnRun(populate, {
+  return populateFilesystemExtent(
     root,
-    registry,
-    ...(cache === undefined
-      ? {}
-      : { cache: { store: cache.store, treeHash: cache.treeHash, treeUnchanged: () => cache.treeUnchanged } }),
-  });
-}
-
-/** The keyed content key a projection files `path` under. */
-function keyOf(projection: Projection, path: string): string {
-  const row = projection.resourceRealizations.find((realization) => realization.path === path && realization.contentState === 'keyed');
-  if (row?.contentKey === undefined || row.contentKey === null) throw new Error(`${path} is not keyed in the projection`);
-  return row.contentKey;
+    cache === undefined ? undefined : { store: cache.store, treeHash: cache.treeHash, treeUnchanged: () => cache.treeUnchanged },
+  );
 }
 
 /** The keys `store` does not cover, by the one predicate, over every blob table. */
-async function uncoveredIn(store: FakeFactStore, keys: readonly string[]): Promise<string[]> {
+async function uncoveredIn(store: FakeFactStore, keys: readonly ContentKey[]): Promise<ContentKey[]> {
   return uncoveredContentKeys(await store.readBlobFacts(keys, ALL_BLOB_REQUEST), keys);
 }
 
 /** Whether a blob-scoped row is filed under `key`: `blobs` by `contentKey`, every other table by `blob`. */
-function filedUnder(row: unknown, key: string): boolean {
+function filedUnder(row: unknown, key: ContentKey): boolean {
   const record = row as { readonly contentKey?: unknown; readonly blob?: unknown };
   return record.blob === key || record.contentKey === key;
 }
@@ -123,7 +109,7 @@ function filedUnder(row: unknown, key: string): boolean {
  * Replace what `store` holds for `key` with its rows minus `table`'s, through the port alone:
  * forget the key, then write its other rows back as a replace (covered by nothing at read).
  */
-async function dropTableRows(store: FakeFactStore, key: string, table: BlobScopedTableName): Promise<void> {
+async function dropTableRows(store: FakeFactStore, key: ContentKey, table: BlobScopedTableName): Promise<void> {
   const held = await store.readBlobFacts([key], ALL_BLOB_REQUEST);
   store.forgetBlobFacts(key);
   const rows = { ...held, [table]: [] } as BlobScopedRows;
@@ -145,12 +131,12 @@ class RecordingStore extends FakeFactStore {
  * answered: an eviction landing between the two reads, in the store's own override.
  */
 class TornReadStore extends FakeFactStore {
-  #tearing: string | undefined;
+  #tearing: ContentKey | undefined;
   #armed = false;
   torn = 0;
 
   /** @param key - The key the next read after an answered extent read drops */
-  tear(key: string): void {
+  tear(key: ContentKey): void {
     this.#tearing = key;
   }
 
@@ -164,7 +150,7 @@ class TornReadStore extends FakeFactStore {
   }
 
   override async readBlobFacts<Table extends BlobScopedTableName>(
-    contentKeys: readonly string[],
+    contentKeys: readonly ContentKey[],
     request: BlobRequest<Table>,
   ): Promise<Pick<BlobScopedRows, Table>> {
     const rows = await super.readBlobFacts(contentKeys, request);
@@ -181,14 +167,14 @@ class TornReadStore extends FakeFactStore {
 
 describe('one coverage predicate for the hit, the reuse read and stored admission', () => {
   it('calls a key with a blobs row and no skill-text row uncovered everywhere, and one run covers it again', async () => {
-    const store = new RecordingStore();
+    const store = new RecordingStore(WIDE_BLOB_BUDGET_BYTES);
     const primed = await populateThrough({ store, treeHash: PRIMED, treeUnchanged: true });
     expect(primed.outcome).toEqual({ population: 'derived', stored: 'written' });
     const keys = keyedContentKeys(primed.projection);
     // The four documents and the .gitignore the repository is committed with.
     expect(keys).toHaveLength(5);
     const k = keyOf(primed.projection, EDITED);
-    expect(parserKindOf(k), 'the dropped row is a markdown key\'s skill text').toBe('markdown');
+    expect(contentKeyParts(k).parserKind, 'the dropped row is a markdown key\'s skill text').toBe('markdown');
 
     await dropTableRows(store, k, 'skillTextFacts');
     const held = await store.readBlobFacts([k], ALL_BLOB_REQUEST);
@@ -199,12 +185,12 @@ describe('one coverage predicate for the hit, the reuse read and stored admissio
     const members = primed.projection.resourceRealizations.map((row) => ({ path: safePath.join(root, row.path), row }));
     const stored = storedContentOf(members, runStoredReads().of(store));
     const admission = await Promise.all(keys.map(async (key) => {
-      const member = members.find(({ row }) => row.contentKey === key);
+      const member = members.find(({ row }) => row.contentKey !== null && equalContentKeys(row.contentKey, key) === true);
       if (member === undefined) throw new Error(`no member keyed ${key}`);
-      const answer = await storedComputeBy(member.row, parserKindOf(key), stored.facts);
+      const answer = await storedComputeBy(member.row, contentKeyParts(key).parserKind, stored.facts);
       return [key, answer.computeBy] as const;
     }));
-    expect(Object.fromEntries(admission)).toEqual(Object.fromEntries(keys.map((key) => [key, key === k ? 'readRoute' : null])));
+    expect(Object.fromEntries(admission)).toEqual(Object.fromEntries(keys.map((key) => [key, equalContentKeys(key, k) === true ? 'readRoute' : null])));
 
     // The hit: the extent is held, K is not covered, so the run derives and writes.
     const healed = await populateThrough({ store, treeHash: PRIMED, treeUnchanged: true });
@@ -218,7 +204,7 @@ describe('one coverage predicate for the hit, the reuse read and stored admissio
   });
 
   it('the reuse read calls the same key uncovered: the partial-tier miss writes every other key as covered at read', async () => {
-    const store = new RecordingStore();
+    const store = new RecordingStore(WIDE_BLOB_BUDGET_BYTES);
     const primed = await populateThrough({ store, treeHash: PRIMED, treeUnchanged: true });
     const keys = keyedContentKeys(primed.projection);
     const k = keyOf(primed.projection, EDITED);
@@ -229,16 +215,16 @@ describe('one coverage predicate for the hit, the reuse read and stored admissio
 
     expect(store.writes).toHaveLength(1);
     const [write] = store.writes;
-    expect([...(write?.coveredAtRead ?? [])].sort((a, b) => a.localeCompare(b)))
-      .toEqual(keys.filter((key) => key !== k).sort((a, b) => a.localeCompare(b)));
+    expect([...(write?.coveredAtRead ?? [])].sort(orderContentKeys))
+      .toEqual(keys.filter((key) => equalContentKeys(key, k) !== true).sort(orderContentKeys));
   });
 });
 
 /** Prime, then edit {@link EDITED} and run under the edited tree's key with the tree reported moved. */
-async function movedRun(): Promise<{ readonly store: RecordingStore; readonly unchanged: readonly string[]; readonly outcome: PopulationOutcome }> {
-  const store = new RecordingStore();
+async function movedRun(): Promise<{ readonly store: RecordingStore; readonly unchanged: readonly ContentKey[]; readonly outcome: PopulationOutcome }> {
+  const store = new RecordingStore(WIDE_BLOB_BUDGET_BYTES);
   const primed = await populateThrough({ store, treeHash: PRIMED, treeUnchanged: true });
-  const unchanged = keyedContentKeys(primed.projection).filter((key) => key !== keyOf(primed.projection, EDITED));
+  const unchanged = keyedContentKeys(primed.projection).filter((key) => equalContentKeys(key, keyOf(primed.projection, EDITED)) !== true);
   await writeFile(safePath.join(root, EDITED), '# Two\n\nEdited, and on to [three](./three.md).\n');
   store.writes.length = 0;
   store.writeExtentCalls = 0;
@@ -260,14 +246,14 @@ describe('the race guard with reuse', () => {
   it('files the moved run\'s blob facts with what its read covered', async () => {
     const { store, unchanged } = await movedRun();
     const [write] = store.writes;
-    expect([...(write?.coveredAtRead ?? [])].sort((a, b) => a.localeCompare(b)))
-      .toEqual([...unchanged].sort((a, b) => a.localeCompare(b)));
+    expect([...(write?.coveredAtRead ?? [])].sort(orderContentKeys))
+      .toEqual([...unchanged].sort(orderContentKeys));
   });
 });
 
 describe('a torn read', () => {
   it('a key evicted between the extent read and the blob read is a miss, and answers as store-off does', async () => {
-    const store = new TornReadStore();
+    const store = new TornReadStore(WIDE_BLOB_BUDGET_BYTES);
     const primed = await populateThrough({ store, treeHash: PRIMED, treeUnchanged: true });
     store.tear(keyOf(primed.projection, EDITED));
 
@@ -345,7 +331,7 @@ function admitThrough(store: FakeFactStore, treeHash: string): Promise<Admission
 
 describe('stored admission after a written miss', () => {
   it('admission after a written miss computes nothing', async () => {
-    const store = new FakeFactStore();
+    const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
     expect((await admitThrough(store, PRIMED)).outcome).toEqual({ population: 'derived', stored: 'written' });
     await writeFile(safePath.join(root, EDITED), '# Two\n\nEdited, and on to [three](./three.md).\n');
 
@@ -372,7 +358,7 @@ describe('stored admission after a written miss', () => {
       root,
       outputs: [],
       gitTracker: new GitTracker(root),
-      cache: { store: new FakeFactStore(), treeHash: PRIMED, treeUnchanged: () => true },
+      cache: { store: new FakeFactStore(WIDE_BLOB_BUDGET_BYTES), treeHash: PRIMED, treeUnchanged: () => true },
     });
     expect(on.outcome).toEqual({ population: 'derived', stored: 'written' });
     expect(on.stored?.members.size, 'the store-on derive carries every member for admission').toBe(on.paths.length);
@@ -382,7 +368,7 @@ describe('stored admission after a written miss', () => {
 
 describe('an extent miss reuses covered keys', () => {
   it('parses only the edited key, serves every other key from the tier, and answers as store-off does', async () => {
-    const store = new FakeFactStore();
+    const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
     const primed = await populateThrough({ store, treeHash: PRIMED, treeUnchanged: true });
     // The four documents and the .gitignore: the edit leaves four keys covered, three markdown and one `none.`.
     expect(keyedContentKeys(primed.projection)).toHaveLength(5);
@@ -406,7 +392,7 @@ describe('an extent miss reuses covered keys', () => {
 
   it('files a served harness pair as settled at read', async () => {
     await writeFile(safePath.join(root, 'CLAUDE.md'), '# Memory\n\n@docs/one.md\n');
-    const store = new RecordingStore();
+    const store = new RecordingStore(WIDE_BLOB_BUDGET_BYTES);
     const primed = await populateThrough({ store, treeHash: PRIMED, treeUnchanged: true });
     const memory = { contentKey: keyOf(primed.projection, 'CLAUDE.md'), harness: 'claude-code' };
     expect(primed.projection.harnessBlobFacts.map(({ blob, harness }) => ({ contentKey: blob, harness })), 'the premise: the memory file\'s pair is reached').toContainEqual(memory);

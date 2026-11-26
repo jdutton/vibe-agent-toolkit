@@ -23,7 +23,7 @@ import type { Projection } from '../../src/projection/projection.js';
 import type { QueryPopulateResult } from '../../src/projection/query-projection.js';
 import { buildResourceProjection } from '../../src/projection/resource-population.js';
 import type { ClaudeRulePatternRow } from '../../src/schemas/projection-claude-rules.js';
-import { FakeFactStore } from '../fake-fact-store.js';
+import { FakeFactStore, WIDE_BLOB_BUDGET_BYTES } from '../fake-fact-store.js';
 import { git } from '../helpers/git-fixture.js';
 import { inOwnRun } from '../helpers/population-run.js';
 import { plantTree, razeTree } from '../helpers/temp-corpus.js';
@@ -125,7 +125,7 @@ describe('claude_rule_patterns through the resources lane', () => {
   });
 
   it('keeps every row across a store round trip, on a hit that ran no contributor', async () => {
-    const store = new FakeFactStore();
+    const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
     const { projection: populated } = await populateTree(store);
     const { projection: hydrated, outcome } = await populateTree(store);
 

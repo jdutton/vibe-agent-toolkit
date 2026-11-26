@@ -26,25 +26,40 @@
  * key; a key needs a parser-kind prefix; so the absence of a parser has to be
  * spellable.
  *
- * ## Why the parser kind is IN the digest, not just in a prefix
+ * ## The key text: `<parserKind>.<keyKind>.<hex>`
+ *
+ * A key is a {@link ContentKey}: a branded string minted only by
+ * {@link formatContentKey} (and so by {@link computeContentKey}) or recognized by
+ * {@link parseContentKey}, the one parser. `keyKind` names how the hex was made:
+ * `sha256` (64 lowercase hex, the plain SHA-256 of the raw bytes — the only kind
+ * minted here), `git-sha1` (40) and `git-sha256` (64), git object IDs, which are
+ * format-only so far. Two keys of different key kinds are not comparable
+ * ({@link equalContentKeys} says so rather than answering `false`): one byte
+ * string has a key of each kind, and they never group together.
+ *
+ * ## The parser kind is an unhashed qualifier, and that is still self-invalidating
  *
  * VAT selects its parser by TYPING the path — `mime-type.ts` answers *what this
  * is*, `parserKindForPath` turns that into *what runs over it*, so
  * identical bytes at `x.md` and `x.html` legitimately produce different parse
- * results. That is realizable on the **empty file**, which git keys as
- * `e69de29…` in both cases. A key that carried the parser kind only as a display
- * prefix would still let a caller that compares digests conflate the two. So the
- * parser kind is mixed into the hash preimage, and the prefix is a
- * human-readable convenience.
+ * results. That is realizable on the **empty file**. So the parser kind is part
+ * of the key's identity: it is IN the key text, and two keys are equal only when
+ * their whole text is. Code compares keys through {@link equalContentKeys} or
+ * the full text, never the hex alone; the hex is a field of the key, not the key.
  *
- * That mixing is also what makes a **routing change** self-invalidating. When
- * `.ts` stopped routing to markdown and started routing to `none`, its bytes did
- * not change: a key over bytes alone would keep serving the stale remark facts
- * out of a cache that looks perfectly healthy. Because the kind is in the
- * preimage, every affected entry became unreachable the instant the routing
- * moved — and no hand-maintained schema or cache version decided it. That is
- * deliberate: a number someone must remember to bump is not a contract, and this
- * project prohibits them. The digest *is* the invalidation.
+ * It is deliberately NOT in the hash preimage. A `sha256` key's hex is the plain
+ * SHA-256 of the raw bytes, with no domain separator, so it can be compared with
+ * a digest something else computed over the same bytes — a Git LFS pointer's
+ * `oid sha256:` is exactly that, and the content check that a pulled file is the
+ * pointer's object compares the two.
+ *
+ * A **routing change** is still self-invalidating. When `.ts` stopped routing to
+ * markdown and started routing to `none`, its bytes did not change, but its key
+ * did: `markdown.sha256.<hex>` became `none.sha256.<hex>`, a key no stored row is
+ * filed under, so the stale remark facts became unreachable the instant the
+ * routing moved — and no hand-maintained schema or cache version decided it. That
+ * is deliberate: a number someone must remember to bump is not a contract, and
+ * this project prohibits them. The key text *is* the invalidation.
  *
  * ## Why there is no git rung here
  *
@@ -139,7 +154,7 @@ export const NO_PARSER_KIND = 'none';
  * The values are bare identifier words, which is why they can be spliced into a
  * regex below without escaping. Keep them that way.
  */
-const PARSER_KINDS = ['markdown', 'html', NO_PARSER_KIND] as const;
+export const PARSER_KINDS = ['markdown', 'html', NO_PARSER_KIND] as const;
 
 /**
  * Which parser a document is routed to. This is part of a document's identity,
@@ -163,26 +178,125 @@ export const DOCUMENT_PARSER_KINDS: readonly DocumentParserKind[] = PARSER_KINDS
   (kind): kind is DocumentParserKind => kind !== NO_PARSER_KIND,
 );
 
-/** Domain separator, so this keyspace can never be confused with a git SHA-1. */
-const KEY_DOMAIN = 'vat-content-key';
+/**
+ * Every key kind, as values, and how many lowercase hex characters each carries.
+ *
+ * The one place key kinds are enumerated: {@link KeyKind} and
+ * {@link CONTENT_KEY_PATTERN} are derived from it, for the reason
+ * {@link PARSER_KINDS} gives. Bare words of `[a-z0-9-]`, spliced into a regex
+ * unescaped (a `-` outside a character class is literal). No kind word is a
+ * proper prefix of another, which is what makes {@link orderContentKeys} (text
+ * order) agree with the tuple order (parserKind, keyKind, hex); a test asserts it
+ * over every pair.
+ */
+const KEY_KIND_HEX_LENGTHS = { sha256: 64, 'git-sha1': 40, 'git-sha256': 64 } as const;
+
+/** How a key's hex was made: see {@link KEY_KIND_HEX_LENGTHS}. */
+export type KeyKind = keyof typeof KEY_KIND_HEX_LENGTHS;
+
+/** Every key kind, in declaration order. */
+export const KEY_KINDS: readonly KeyKind[] = Object.keys(KEY_KIND_HEX_LENGTHS) as KeyKind[];
 
 /**
- * The exact shape {@link computeContentKey} produces — `<parserKind>.<64
- * lowercase hex chars>`. Exported so every consumer that must recognize a
- * well-formed key (the parse cache's on-disk safety check, the projection
- * schema's `ContentKeySchema`) shares one definition instead of two regexes
- * that can silently drift apart.
+ * A content key: `<parserKind>.<keyKind>.<hex>`. Branded so a plain string cannot
+ * stand in for one: a value of this type came from {@link formatContentKey},
+ * {@link computeContentKey}, {@link parseContentKey} or `ContentKeySchema`, all of
+ * which hold it to {@link CONTENT_KEY_PATTERN}.
+ */
+export type ContentKey = string & { readonly __brand: 'ContentKey' };
+
+/** The three fields a {@link ContentKey}'s text spells. */
+export interface ContentKeyParts {
+  readonly parserKind: ParserKind;
+  readonly keyKind: KeyKind;
+  readonly hex: string;
+}
+
+/**
+ * The exact shape of a {@link ContentKey}: `<parserKind>.<keyKind>.<hex>`, the hex
+ * length fixed per key kind. Exported so every consumer that must recognize a
+ * well-formed key in a non-TypeScript form (the projection schema's JSON-Schema
+ * `pattern`) shares the one definition; TypeScript code recognizes a key with
+ * {@link parseContentKey}.
  *
- * Built from {@link PARSER_KINDS} rather than spelling the alternation out, so
- * "two regexes that can drift" does not quietly become "a regex and a union that
- * can drift" the first time a kind is added.
+ * Built from {@link PARSER_KINDS} and {@link KEY_KIND_HEX_LENGTHS} rather than
+ * spelling the alternations out, so a kind added to either reaches the pattern.
  */
 export const CONTENT_KEY_PATTERN =
-  // eslint-disable-next-line security/detect-non-literal-regexp -- built from PARSER_KINDS, a module-private `as const` array of bare identifier words; no input reaches it
-  new RegExp(String.raw`^(?:${PARSER_KINDS.join('|')})\.[0-9a-f]{64}$`);
+  // eslint-disable-next-line security/detect-non-literal-regexp -- built from PARSER_KINDS and KEY_KIND_HEX_LENGTHS, module-private `as const` bare words and integers; no input reaches it
+  new RegExp(String.raw`^(?:${PARSER_KINDS.join('|')})\.(?:${
+    KEY_KINDS.map((keyKind) => String.raw`${keyKind}\.[0-9a-f]{${KEY_KIND_HEX_LENGTHS[keyKind]}}`).join('|')
+  })$`);
 
 /**
- * Compute the content key for a document.
+ * The one parser: `text` as a {@link ContentKey} when it is one, else `undefined`.
+ *
+ * @param text - Any string
+ * @returns The key, or `undefined` for anything {@link CONTENT_KEY_PATTERN} refuses
+ */
+export function parseContentKey(text: string): ContentKey | undefined {
+  return CONTENT_KEY_PATTERN.test(text) ? (text as ContentKey) : undefined;
+}
+
+/**
+ * Spell a key from its parts.
+ *
+ * @param parts - The parser kind, key kind and hex
+ * @returns The key
+ * @throws {Error} When the parts do not spell a well-formed key (a hex of the wrong length or case)
+ */
+export function formatContentKey(parts: ContentKeyParts): ContentKey {
+  const text = `${parts.parserKind}.${parts.keyKind}.${parts.hex}`;
+  const key = parseContentKey(text);
+  if (key === undefined) throw new Error(`"${text}" is not a well-formed ${parts.keyKind} content key`);
+  return key;
+}
+
+/**
+ * Read a key's three fields back off its text.
+ *
+ * @param key - A key
+ * @returns Its parser kind, key kind and hex
+ */
+export function contentKeyParts(key: ContentKey): ContentKeyParts {
+  const first = key.indexOf('.');
+  const second = key.indexOf('.', first + 1);
+  return {
+    parserKind: key.slice(0, first) as ParserKind,
+    keyKind: key.slice(first + 1, second) as KeyKind,
+    hex: key.slice(second + 1),
+  };
+}
+
+/**
+ * Whether two keys name one content under one parser.
+ *
+ * @param a - A key
+ * @param b - Another key
+ * @returns `'not-comparable'` when the key kinds differ (one byte string has a key of each kind, so
+ *   a difference there says nothing); otherwise whether the two texts are equal
+ */
+export function equalContentKeys(a: ContentKey, b: ContentKey): boolean | 'not-comparable' {
+  if (contentKeyParts(a).keyKind !== contentKeyParts(b).keyKind) return 'not-comparable';
+  return a === b;
+}
+
+/**
+ * The one order over keys: code-unit order of the text, which is the tuple order (parserKind,
+ * keyKind, hex) because no kind word is a proper prefix of another. It is also SQLite's `BINARY`
+ * collation over the stored text, so an `ORDER BY` and this order agree.
+ *
+ * @param a - A key
+ * @param b - Another key
+ * @returns Negative, zero or positive, as `Array.prototype.sort` takes
+ */
+export function orderContentKeys(a: ContentKey, b: ContentKey): number {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
+/**
+ * Compute the content key for a document: `<parserKind>.sha256.<SHA-256 of the raw bytes>`.
  *
  * Takes **raw bytes**, not a decoded string, and the type is the enforcement:
  * a caller holding only a decoded string cannot reach this function without
@@ -199,14 +313,11 @@ export const CONTENT_KEY_PATTERN =
  * computeContentKey(empty, 'markdown') !== computeContentKey(empty, 'html'); // true
  * ```
  */
-export function computeContentKey(bytes: Uint8Array, parserKind: ParserKind): string {
+export function computeContentKey(bytes: Uint8Array, parserKind: ParserKind): ContentKey {
   countWork('content.hashed', 1);
   countWork('content.hashedBytes', bytes.byteLength);
-  const digest = createHash('sha256')
-    .update(`${KEY_DOMAIN}\0${parserKind}\0`, 'utf-8')
-    .update(bytes)
-    .digest('hex');
-  return `${parserKind}.${digest}`;
+  const hex = createHash('sha256').update(bytes).digest('hex');
+  return formatContentKey({ parserKind, keyKind: 'sha256', hex });
 }
 
 /**
@@ -245,7 +356,7 @@ export interface KeyedContent<K extends ParserKind = ParserKind> {
    */
   decoding: TextProvenance;
   /** The key computed over the RAW BYTES this content was decoded from. */
-  key: string;
+  key: ContentKey;
   /** The parser this content routes to. */
   parserKind: K;
   /**

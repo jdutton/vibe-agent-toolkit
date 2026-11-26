@@ -94,9 +94,6 @@ packages/cli/src/commands/audit-settings.ts AuditSettingsOptions dead
 packages/cli/src/commands/audit-settings.ts FormattedProvenanceValue dead
 packages/cli/src/commands/audit-settings.ts runAuditSettings dead
 packages/cli/src/commands/audit.ts auditCommand test-only
-packages/cli/src/commands/audit/cache-detector.ts CacheStalenessResult dead
-packages/cli/src/commands/audit/cache-detector.ts FreshEntry dead
-packages/cli/src/commands/audit/cache-detector.ts StaleEntry dead
 packages/cli/src/commands/audit/distributed-tree.ts SkillTreeProvenance dead
 packages/cli/src/commands/audit/git-url-clone.ts CloneAndAuditContext dead
 packages/cli/src/commands/audit/git-url-clone.ts CloneOptions dead

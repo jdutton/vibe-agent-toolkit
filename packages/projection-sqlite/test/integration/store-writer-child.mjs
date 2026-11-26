@@ -17,7 +17,7 @@
  *   mode `contended` — rewrite ONE shared extent `iterations` times, so a
  *                      concurrent reader can look for a torn read
  *
- * Usage: node store-writer-child.mjs <directory> <writerId> covering <retainedBlobKeys> <barrier> <peers> <keys>
+ * Usage: node store-writer-child.mjs <directory> <writerId> covering <blobTierBudgetBytes> <barrier> <peers> <keys>
  *   mode `covering`  — one run's blob write: read the tier for `keys` (comma
  *                      separated) and call each key with a `blobs` row covered,
  *                      wait until `peers` writers have read (a `<writerId>.ready`
@@ -37,7 +37,8 @@
 import { readdirSync, writeFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-import { openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
+import { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
+import { testContentKey } from '@vibe-agent-toolkit/resources/testing';
 import { forEachInOrder, safePath } from '@vibe-agent-toolkit/utils';
 
 const [directory, writerId, mode, iterationsRaw, retentionRaw] = process.argv.slice(2);
@@ -46,11 +47,9 @@ const iterations = Number(iterationsRaw);
 /** How long a `covering` writer waits for its peers before giving up. */
 const BARRIER_DEADLINE_MS = 15_000;
 
-/** A content key of the shape the schema requires: `<parserKind>.<64 hex>`. */
+/** This writer's `index`th content key; the parent derives the same keys to count them. */
 function key(writer, index) {
-  const seed = `${writer}${index}`;
-  const digits = seed.padEnd(64, '0').slice(0, 64).replaceAll(/[^\da-f]/gu, '0');
-  return `markdown.${digits}`;
+  return testContentKey('markdown', `${writer}${index}`);
 }
 
 /** One key's rows: a `blobs` row and one `claude-code` harness pair; the other blob tables stay empty. */
@@ -128,9 +127,9 @@ async function awaitPeers(barrier, peers, deadline = Date.now() + BARRIER_DEADLI
 
 /** One run's blob write against a store other writers share: read, decide coverage, barrier, write. */
 async function coveringWrite() {
-  const [, , , retention, barrier, peers, keysRaw] = process.argv.slice(2);
+  const [, , , budget, barrier, peers, keysRaw] = process.argv.slice(2);
   const held = keysRaw.split(',');
-  const store = openSqliteFactStore({ directory, retainedBlobKeys: Number(retention) });
+  const store = openSqliteFactStore({ directory, blobTierBudgetBytes: Number(budget) });
   try {
     const read = await store.readBlobFacts(held, { tables: ['blobs'], referenceForms: 'all' });
     const covered = read.blobs.map((row) => row.contentKey);
@@ -149,7 +148,9 @@ async function coveringWrite() {
 /** The `distinct` and `contended` arms: `iterations` writes, in order. */
 async function repeatedWrites() {
   const store = openSqliteFactStore(
-    retentionRaw === undefined ? { directory } : { directory, retainedExtentsPerRoot: Number(retentionRaw) },
+    retentionRaw === undefined
+      ? { directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES }
+      : { directory, retainedExtentsPerRoot: Number(retentionRaw), blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES },
   );
   try {
     // In order: each write is one transaction, and the contention under test is between processes, not

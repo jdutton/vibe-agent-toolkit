@@ -46,7 +46,7 @@ import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 
 import { vatLinkCacheDirectory } from './cache-root.js';
 import { getCollectionsForFile } from './collection-matcher.js';
-import { type KeyedContent, type ParserKind, readContentWithKey } from './content-key.js';
+import { type ContentKey, type KeyedContent, type ParserKind, readContentWithKey } from './content-key.js';
 import type { DeferredArtifacts } from './deferred-artifacts.js';
 import {
   validateFrontmatterLinks,
@@ -733,7 +733,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private readonly resourcesByPath: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesById: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesByName: Map<string, ResourceMetadata[]> = new Map();
-  private readonly resourcesByContentKey: Map<string, ResourceMetadata[]> = new Map();
+  private readonly resourcesByContentKey: Map<ContentKey, ResourceMetadata[]> = new Map();
 
   /**
    * Frontmatter-sourced external URLs keyed by resource absolute path.
@@ -2483,7 +2483,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * bytes routed to different parsers (a `.md` and a `.html`) are not returned
    * together.
    *
-   * @param contentKey - Content key to search for (`<parserKind>.<sha256>`)
+   * @param contentKey - Content key to search for (`<parserKind>.<keyKind>.<hex>`); a group is one key kind
    * @returns Array of resources with that content key (empty if none found)
    *
    * @example
@@ -2496,7 +2496,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * }
    * ```
    */
-  getResourcesByContentKey(contentKey: string): ResourceMetadata[] {
+  getResourcesByContentKey(contentKey: ContentKey): ResourceMetadata[] {
     return this.resourcesByContentKey.get(contentKey) ?? [];
   }
 
@@ -2584,7 +2584,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * Returns an array where each element is an array of resources
    * that have the same content key (identical bytes, same parse route).
    * Only groups with 2+ resources are included. Identical bytes routed to
-   * different parsers are not duplicates: the key includes the parse route.
+   * different parsers are not duplicates: the key includes the parse route. A group is one key kind: two key kinds of one byte string are not comparable and never grouped.
    *
    * @returns Array of duplicate groups
    *
@@ -2785,7 +2785,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * - byPath: Single resource per absolute path (Map)
    * - byId: Single resource per unique ID (Map)
    * - byName: Multiple resources per filename (Map<string, Array>)
-   * - byContentKey: Multiple resources per content key (Map<string, Array>)
+   * - byContentKey: Multiple resources per content key (Map<ContentKey, Array>)
    *
    * @param resource - Resource to index
    */

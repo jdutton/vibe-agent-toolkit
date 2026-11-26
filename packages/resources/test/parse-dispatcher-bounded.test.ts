@@ -22,13 +22,14 @@ import { __readParseTimingSnapshot } from '../src/parse-timing.js';
 import { POPULATION_PARSE_LIMITS } from '../src/projection/content-cache.js';
 import { skillTextFactsOf } from '../src/skill-text/core.js';
 import { SKILL_TEXT_DECLARATION } from '../src/skill-text/declaration.js';
+import { testContentKey } from '../src/testing.js';
 
 import { TIGHT_LIMITS } from './parse-limit-fixtures.js';
 
 const DOCUMENT: ParsableContent = {
   content: '# hi\n',
   decoding: { encoding: 'utf-8', encodingSource: 'assumed', replacementCharacters: 0 },
-  key: `markdown.${'0'.repeat(64)}`,
+  key: testContentKey('markdown', '0'),
   parserKind: 'markdown',
   byteLength: 5,
 };

@@ -6,7 +6,7 @@ import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { recogniseVatCacheRoot, vatCacheRoot } from '../src/cache-root.js';
-import { computeContentKey, type KeyedContent, type ParserKind } from '../src/content-key.js';
+import { computeContentKey, contentKeyParts, type KeyedContent, type ParserKind } from '../src/content-key.js';
 import { parseHtmlContent } from '../src/html-link-parser.js';
 import { type ParseResult, parseMarkdownContent } from '../src/link-parser.js';
 import {
@@ -145,6 +145,20 @@ const LOSSY_STRING_LENGTH = 7;
 const LOSSY_REENCODED_LENGTH = 10;
 
 const SHARD_LENGTH = 2;
+
+/**
+ * `keyed` carrying `text` as its key: a key no parser produced, which only an untyped source (a
+ * damaged entry, a JSON round trip) can hand over. Forged the way such a source would, as a whole
+ * struct nothing checked, so the cache's own key guard is what refuses it. The one place this suite
+ * mints a malformed key; every other key here is computed from bytes.
+ *
+ * @param keyed - Well-formed content
+ * @param text - The forged key text
+ * @returns The content under the forged key
+ */
+function withForgedKey(keyed: KeyedContent, text: string): KeyedContent {
+  return { ...keyed, key: text } as KeyedContent;
+}
 
 // POSIX permission bits. `chmod` on Windows only toggles the read-only flag,
 // so the tests that use these are POSIX-only (see the `skipIf` guards).
@@ -378,7 +392,7 @@ const MISS_ROUTES: readonly MissRoute[] = [
     arrange: (suite) =>
       Promise.resolve({
         cache: suite.makeCache(),
-        keyed: { ...keyedFromText(SIMPLE_DOC), key: UNSAFE_KEY },
+        keyed: withForgedKey(keyedFromText(SIMPLE_DOC), UNSAFE_KEY),
       }),
   },
   {
@@ -606,7 +620,7 @@ describe('ParseCache round trip', () => {
     const keyed = keyedFromText(SIMPLE_DOC);
     await suite.makeCache().set(keyed, freshParse(keyed));
 
-    const shardDir = safePath.join(suite.dir(), keyed.key.slice(-SHARD_LENGTH));
+    const shardDir = safePath.join(suite.dir(), contentKeyParts(keyed.key).hex.slice(-SHARD_LENGTH));
     const names = await fs.readdir(shardDir);
 
     expect(names).toEqual([`${keyed.key}.json`]);
@@ -725,7 +739,7 @@ describe('ParseCache SAFE_KEY rejects traversal (not just separators)', () => {
   it('treats a key of exactly ".." as unsafe, never escaping the cache directory', async () => {
     const cacheDir = safePath.join(suite.dir(), 'nested', 'cache');
     const cache = suite.makeCache({ cacheDir });
-    const keyed = { ...keyedFromText(SIMPLE_DOC), key: DOT_DOT_KEY };
+    const keyed = withForgedKey(keyedFromText(SIMPLE_DOC), DOT_DOT_KEY);
 
     await cache.set(keyed, freshParse(keyed));
 
@@ -737,7 +751,7 @@ describe('ParseCache SAFE_KEY rejects traversal (not just separators)', () => {
   });
 
   it('reads a key of exactly ".." as a miss', async () => {
-    const keyed = { ...keyedFromText(SIMPLE_DOC), key: DOT_DOT_KEY };
+    const keyed = withForgedKey(keyedFromText(SIMPLE_DOC), DOT_DOT_KEY);
 
     expect(await suite.makeCache().get(keyed)).toBeNull();
   });
@@ -781,7 +795,7 @@ describe('ParseCache fail-soft writes', () => {
       const keyed = keyedFromText(SIMPLE_DOC);
       const cacheDir = safePath.join(suite.dir(), 'cache');
       const cache = suite.makeCache({ cacheDir });
-      const shardDir = safePath.join(cacheDir, keyed.key.slice(-SHARD_LENGTH));
+      const shardDir = safePath.join(cacheDir, contentKeyParts(keyed.key).hex.slice(-SHARD_LENGTH));
 
       // Simulate another local user pre-creating the shard directory, wide
       // open, before VAT ever touches it. `mkdir`'s mode is masked by the
@@ -811,7 +825,7 @@ describe('ParseCache fail-soft writes', () => {
       const cacheDir = safePath.join(suite.dir(), 'cache');
       const cache = suite.makeCache({ cacheDir });
       const keyed = keyedFromText(SIMPLE_DOC);
-      const shardDir = safePath.join(cacheDir, keyed.key.slice(-SHARD_LENGTH));
+      const shardDir = safePath.join(cacheDir, contentKeyParts(keyed.key).hex.slice(-SHARD_LENGTH));
 
       expect(await cache.set(keyed, freshParse(keyed))).toBe(true);
 
@@ -839,7 +853,7 @@ describe('ParseCache fail-soft writes', () => {
     const cacheDir = safePath.join(suite.dir(), 'cache');
     const cache = suite.makeCache({ cacheDir });
     const keyed = keyedFromText(SIMPLE_DOC);
-    const shardDir = safePath.join(cacheDir, keyed.key.slice(-SHARD_LENGTH));
+    const shardDir = safePath.join(cacheDir, contentKeyParts(keyed.key).hex.slice(-SHARD_LENGTH));
     await fs.mkdir(shardDir, { recursive: true, mode: MODE_WORLD_WRITABLE });
     await fs.chmod(shardDir, MODE_WORLD_WRITABLE);
 
@@ -946,7 +960,7 @@ describe('ParseCache maintenance', () => {
     const cacheDir = safePath.join(suite.dir(), 'nested', 'parse');
     await suite.makeCache({ cacheDir }).set(keyed, freshParse(keyed));
 
-    const stats = await fs.stat(safePath.join(cacheDir, keyed.key.slice(-SHARD_LENGTH)));
+    const stats = await fs.stat(safePath.join(cacheDir, contentKeyParts(keyed.key).hex.slice(-SHARD_LENGTH)));
 
     expect(stats.mode & PERMISSION_BITS).toBe(MODE_RW_OWNER);
   });

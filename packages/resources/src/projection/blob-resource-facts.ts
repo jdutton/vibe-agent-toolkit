@@ -58,6 +58,7 @@
 
 import { isVatError, type TextProvenance } from '@vibe-agent-toolkit/utils';
 
+import { type ContentKey, contentKeyParts } from '../content-key.js';
 import { decodeFrontmatterValue, FRONTMATTER_VALUE_MALFORMED } from '../frontmatter-codec.js';
 import { toHeadingTree } from '../heading-tree.js';
 import { classifyLink } from '../link-classify.js';
@@ -74,7 +75,6 @@ import { BLOB_FINDING_CONDITION_CODES } from './blob-facts.js';
 import { NODE_TYPE_OF_AST_FORM } from './blob-references.js';
 import { notAdmittedEntriesByBlob, type NotAdmittedEntry } from './blob-refusals.js';
 import { NOT_TEXT_RESOURCE_FACTS } from './document-facts.js';
-import { parserKindOf } from './router.js';
 import { restoredMatchText } from './skill-text-match-text.js';
 import type { BlobScopedRows, BlobScopedTableName } from './store.js';
 
@@ -252,7 +252,7 @@ export type BlobFactsOutcome =
  * @param contentKey - The key of the bytes parsed
  * @returns The resource's blob facts
  */
-export function blobResourceFactsOf(parse: ParseResult, contentKey: string): BlobResourceFacts {
+export function blobResourceFactsOf(parse: ParseResult, contentKey: ContentKey): BlobResourceFacts {
   return {
     links: parse.links,
     headings: parse.headings,
@@ -341,13 +341,13 @@ interface BlobTierAnswer {
 /** The ONE reader of the blob tier's resource facts, over one indexed bundle. */
 export interface BlobFactsReader {
   /** The key's facts, rebuilt on every ask and never retained by the reader: its caller owns them. */
-  readonly outcome: (contentKey: string) => BlobFactsOutcome;
+  readonly outcome: (contentKey: ContentKey) => BlobFactsOutcome;
   /**
    * The kind {@link outcome} returns, decided by the same checks of the same rows
    * without building the facts. A stored frontmatter value is decoded and
    * dropped: whether it decodes is decided only by decoding it.
    */
-  readonly answer: (contentKey: string) => BlobTierAnswer;
+  readonly answer: (contentKey: ContentKey) => BlobTierAnswer;
 }
 
 /**
@@ -377,9 +377,9 @@ export function blobFactsReader(rows: BlobCoverageRows): BlobFactsReader {
  * @param rows - The bundle, in whatever order a store returns it
  * @returns Each key's rows, ordered
  */
-export function blobRowsByKey(rows: BlobCoverageRows): Map<string, BlobKeyRows> {
-  const byKey = new Map<string, BlobKeyRows>();
-  const of = (key: string): BlobKeyRows => {
+export function blobRowsByKey(rows: BlobCoverageRows): Map<ContentKey, BlobKeyRows> {
+  const byKey = new Map<ContentKey, BlobKeyRows>();
+  const of = (key: ContentKey): BlobKeyRows => {
     let entry = byKey.get(key);
     if (entry === undefined) {
       entry = { blob: undefined, references: [], sections: [], conditions: [], skillTextFacts: [], skillTextMatches: [] };
@@ -429,7 +429,7 @@ type KeyVerdict =
  * @param rows - Its rows, if the bundle held any
  * @returns What its rows are
  */
-function verdictOf(contentKey: string, rows: BlobKeyRows | undefined): KeyVerdict {
+function verdictOf(contentKey: ContentKey, rows: BlobKeyRows | undefined): KeyVerdict {
   // One reason whether or not the key had other rows: what reaches the reader
   // depends on the request (the admission's omits the lexical reference rows and
   // the harness tables), so "no rows" would be false for a key the store holds.
@@ -447,7 +447,7 @@ function verdictOf(contentKey: string, rows: BlobKeyRows | undefined): KeyVerdic
  * @param rows - Its rows, if the bundle held any
  * @returns What the tier says about it
  */
-function outcomeOf(contentKey: string, rows: BlobKeyRows | undefined): BlobFactsOutcome {
+function outcomeOf(contentKey: ContentKey, rows: BlobKeyRows | undefined): BlobFactsOutcome {
   const verdict = verdictOf(contentKey, rows);
   if (verdict.kind === 'not-text') {
     return { kind: 'facts', facts: { ...NOT_TEXT_RESOURCE_FACTS, links: [], headings: [], contentKey, frontmatterNotAMapping: false }, decoding: null };
@@ -464,7 +464,7 @@ function outcomeOf(contentKey: string, rows: BlobKeyRows | undefined): BlobFacts
  * @param rows - Its rows, if the bundle held any
  * @returns The kind {@link outcomeOf} returns for it, and the rows read to say so
  */
-function answerOf(contentKey: string, rows: BlobKeyRows | undefined): BlobTierAnswer {
+function answerOf(contentKey: ContentKey, rows: BlobKeyRows | undefined): BlobTierAnswer {
   const rowCountOf = (held: BlobKeyRows): number =>
     (held.blob === undefined ? 0 : 1) + held.references.length + held.sections.length + held.conditions.length
     + held.skillTextFacts.length + held.skillTextMatches.length;
@@ -635,7 +635,7 @@ function factsOf(blob: BlobRow, rows: BlobKeyRows): Rebuilt<BlobResourceFacts> {
       ...(blob.anchors.length > 0 && { anchors: blob.anchors }),
       ...(parseErrors.length > 0 && { parseErrors }),
       // Present for every markdown parse, empty or not; no other parser produces the field.
-      ...(parserKindOf(blob.contentKey) === 'markdown' && { unresolvedReferences: unresolvedOf(rows) }),
+      ...(contentKeyParts(blob.contentKey).parserKind === 'markdown' && { unresolvedReferences: unresolvedOf(rows) }),
       ...(frontmatter.value !== undefined && { frontmatter: frontmatter.value }),
       ...(blob.frontmatterError !== null && { frontmatterError: blob.frontmatterError }),
       estimatedTokenCount: blob.tokenEstimate,
@@ -663,8 +663,8 @@ function factsOf(blob: BlobRow, rows: BlobKeyRows): Rebuilt<BlobResourceFacts> {
  * @param rows - Every row the key holds
  * @returns The record (`null` for a blob that is not markdown, or a record not held), or why the rows cannot be one
  */
-function skillTextOf(contentKey: string, rows: BlobKeyRows): Rebuilt<SkillTextFacts | null> {
-  if (parserKindOf(contentKey) !== 'markdown') {
+function skillTextOf(contentKey: ContentKey, rows: BlobKeyRows): Rebuilt<SkillTextFacts | null> {
+  if (contentKeyParts(contentKey).parserKind !== 'markdown') {
     return rows.skillTextFacts.length === 0 && rows.skillTextMatches.length === 0
       ? { ok: true, value: null }
       : { ok: false, reason: 'a blob that is not markdown holds skill-text rows' };

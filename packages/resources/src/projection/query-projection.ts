@@ -17,6 +17,7 @@
 
 import { deepFreeze } from '@vibe-agent-toolkit/utils';
 
+import type { ContentKey } from '../content-key.js';
 import type { LexicalReference } from '../schemas/parse-facts.js';
 import type { BlobReferenceRow, ReferenceSyntacticForm } from '../schemas/projection-blobs.js';
 
@@ -49,7 +50,7 @@ export interface QueryProjection extends Omit<Projection, 'blobReferences'> {
  */
 export type QueryReferenceSource =
   | { readonly rows: readonly BlobReferenceRow[] }
-  | { readonly stored: { readonly store: FactStore; readonly contentKeys: readonly string[] } };
+  | { readonly stored: { readonly store: FactStore; readonly contentKeys: readonly ContentKey[] } };
 
 /**
  * Where a query-lane store hit's `blob_references` reach the run database from: `'copy'` reads the

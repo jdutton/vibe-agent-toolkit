@@ -8,14 +8,13 @@
  * a SQLite error message that names none of these decisions.
  */
 
-import { PROJECTION_TABLES } from '@vibe-agent-toolkit/resources';
+import { EXTENT_KEY_COLUMNS, PROJECTION_TABLES, STORE_BOOKKEEPING_TABLES } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
 import {
-  CREATE_EXTENTS_TABLE_SQL,
-  EXTENT_KEY_COLUMNS,
   allSpecs,
   blobKeyColumn,
+  createBookkeepingTableSql,
   createTableSql,
   deleteBlobFactsSql,
   deleteExtentContextSql,
@@ -102,7 +101,29 @@ describe('createTableSql', () => {
     for (const spec of allSpecs()) {
       expect(createTableSql(spec)).toContain('CREATE TABLE IF NOT EXISTS');
     }
-    expect(CREATE_EXTENTS_TABLE_SQL).toContain('CREATE TABLE IF NOT EXISTS');
+    expect(createBookkeepingTableSql(STORE_BOOKKEEPING_TABLES.extents)).toContain('CREATE TABLE IF NOT EXISTS');
+  });
+});
+
+describe('createBookkeepingTableSql', () => {
+  it('builds blob_keys from the declaration the shape digest hashes', () => {
+    expect(createBookkeepingTableSql(STORE_BOOKKEEPING_TABLES.blobKeys)).toBe(
+      'CREATE TABLE IF NOT EXISTS "blob_keys" ("contentKey" TEXT NOT NULL, "writtenAt" TEXT NOT NULL,'
+      + ' "bytes" INTEGER NOT NULL, PRIMARY KEY ("contentKey"))',
+    );
+  });
+
+  it('follows an edit of the declaration, so no second copy of the DDL can drift from it', () => {
+    const { blobKeys } = STORE_BOOKKEEPING_TABLES;
+    const edited = { ...blobKeys, columns: [...blobKeys.columns, { name: 'lastRead', type: 'TEXT' as const }] };
+    expect(createBookkeepingTableSql(edited)).toContain('"lastRead" TEXT NOT NULL, PRIMARY KEY ("contentKey")');
+  });
+
+  it('builds extents with the extent key leading its columns and its primary key', () => {
+    expect(createBookkeepingTableSql(STORE_BOOKKEEPING_TABLES.extents)).toBe(
+      'CREATE TABLE IF NOT EXISTS "extents" ("storeRootId" TEXT NOT NULL, "storeTreeHash" TEXT NOT NULL,'
+      + ' "writtenAt" TEXT NOT NULL, PRIMARY KEY ("storeRootId", "storeTreeHash"))',
+    );
   });
 });
 

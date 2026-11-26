@@ -106,7 +106,6 @@ Registry files track installed plugins and known marketplaces:
 **Validation checks**:
 - File exists and is valid JSON
 - Schema validation against registry schema
-- Content keys match installed versions (cache staleness)
 
 ### 4. Agent Skills (SKILL.md files)
 
@@ -141,7 +140,7 @@ vat audit --user
 **What it checks**:
 - All plugins in `~/.claude/plugins/`
 - All marketplaces and their plugins
-- Cache staleness (content keys vs installed versions)
+- Cache staleness (a cached skill's findings against its installed source's)
 - All skills within plugins
 
 **Output format**:

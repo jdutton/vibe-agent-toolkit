@@ -32,7 +32,7 @@
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
-import type { KeyedContent } from '../content-key.js';
+import type { ContentKey, KeyedContent } from '../content-key.js';
 import type {
   BlobConditionRow,
   BlobReferenceRow,
@@ -821,7 +821,7 @@ export class ProjectionBuilder {
    */
   #rewriteRealizations(
     rows: readonly ResourceRealizationRow[],
-    contentKey: string | null,
+    contentKey: ContentKey | null,
     contentState: ContentState,
   ): void {
     for (const row of rows) {

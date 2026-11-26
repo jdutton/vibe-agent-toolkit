@@ -19,6 +19,7 @@
 
 import { VatError } from '@vibe-agent-toolkit/utils';
 
+import type { ContentKey } from '../../content-key.js';
 import type { BlobConditionRow } from '../../schemas/projection-blobs.js';
 import type { HarnessBlobFactsRow, HarnessBlobImportRow } from '../../schemas/projection-harness.js';
 import { PARSE_REFUSAL_BLOB_CODES } from '../blob-population.js';
@@ -46,7 +47,7 @@ export class HarnessFactsAbsentError extends VatError {
    */
   constructor(
     readonly harness: HarnessId,
-    readonly contentKey: string,
+    readonly contentKey: ContentKey,
     readonly path: string | null,
   ) {
     super(
@@ -71,11 +72,11 @@ export interface HarnessFactsView {
 /** One harness's facts, by blob. */
 export interface HarnessFactsIndex {
   /** undefined = not derived. NEVER coerce to 0/null/[] — that is the bug this module exists to stop. */
-  factsOf(contentKey: string): HarnessBlobFactsRow | undefined;
+  factsOf(contentKey: ContentKey): HarnessBlobFactsRow | undefined;
   /** Throws HarnessFactsAbsentError. Use wherever the caller already knows the harness reached the blob. */
-  requireFacts(contentKey: string, path: string | null): HarnessBlobFactsRow;
+  requireFacts(contentKey: ContentKey, path: string | null): HarnessBlobFactsRow;
   /** Imports of a DERIVED blob, in ordinal order; throws HarnessFactsAbsentError when the blob has no facts row. */
-  requireImports(contentKey: string, path: string | null): readonly HarnessBlobImportRow[];
+  requireImports(contentKey: ContentKey, path: string | null): readonly HarnessBlobImportRow[];
   /** Every import row of this harness, in table order — for a reader that wants the whole table, never per blob. */
   imports(): readonly HarnessBlobImportRow[];
   /**
@@ -89,7 +90,7 @@ export interface HarnessFactsIndex {
    * and the query names the file instead of classifying it. The population
    * reports it by name through its refusal rows. Never a facts row (I1).
    */
-  refused(contentKey: string): boolean;
+  refused(contentKey: ContentKey): boolean;
 }
 
 /**
@@ -150,11 +151,11 @@ export function harnessFactsIndex(view: HarnessFactsView, harness: HarnessId): H
  * @returns The index
  */
 function buildIndex(view: HarnessFactsView, harness: HarnessId): HarnessFactsIndex {
-  const facts = new Map<string, HarnessBlobFactsRow>();
+  const facts = new Map<ContentKey, HarnessBlobFactsRow>();
   for (const row of view.harnessBlobFacts) {
     if (row.harness === harness) facts.set(row.blob, row);
   }
-  const imports = new Map<string, HarnessBlobImportRow[]>();
+  const imports = new Map<ContentKey, HarnessBlobImportRow[]>();
   const all: HarnessBlobImportRow[] = [];
   for (const row of view.harnessBlobImports) {
     if (row.harness !== harness) continue;
@@ -172,7 +173,7 @@ function buildIndex(view: HarnessFactsView, harness: HarnessId): HarnessFactsInd
 
   const refused = new Set(view.blobConditions.filter((row) => PARSE_REFUSAL_BLOB_CODES.has(row.code)).map((row) => row.blob));
 
-  const requireFacts = (contentKey: string, path: string | null): HarnessBlobFactsRow => {
+  const requireFacts = (contentKey: ContentKey, path: string | null): HarnessBlobFactsRow => {
     const row = facts.get(contentKey);
     if (row === undefined) throw new HarnessFactsAbsentError(harness, contentKey, path);
     return row;

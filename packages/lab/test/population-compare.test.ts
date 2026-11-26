@@ -13,6 +13,8 @@
  * of "the command found nothing".
  */
 
+import { formatContentKey } from '@vibe-agent-toolkit/resources';
+import { testContentKey } from '@vibe-agent-toolkit/resources/testing';
 import { describe, expect, it } from 'vitest';
 
 import type { ReportEnvelope } from '../src/envelope/envelope.js';
@@ -180,6 +182,44 @@ describe('comparePopulation', () => {
     expect(comparison.ok).toBe(false);
     if (comparison.ok) return;
     expect(comparison.refusal).toMatch(/'population' report was captured by a lab whose report shape differs.*re-capture it/u);
+  });
+
+  describe('across key schemes and key kinds (a kind-hashed baseline against a qualified candidate)', () => {
+    const HEX = 'a'.repeat(64);
+    const kindHashed: PopulationEntry = { path: 'a.md', identity: { scheme: 'kindHashedKey', value: `markdown.${HEX}` } };
+    const qualified: PopulationEntry = {
+      path: 'a.md',
+      identity: key(formatContentKey({ parserKind: 'markdown', keyKind: 'sha256', hex: HEX })),
+    };
+    const gitKeyed: PopulationEntry = {
+      path: 'a.md',
+      identity: key(formatContentKey({ parserKind: 'markdown', keyKind: 'git-sha1', hex: 'a'.repeat(40) })),
+    };
+
+    it('reports a kind-hashed and a qualified key on one path as incomparable, not changed', () => {
+      expect(verdictOf(row([kindHashed]), row([qualified]))).toEqual({
+        kind: 'content-incomparable',
+        reason: expect.stringContaining('kindHashedKey') as unknown,
+      });
+    });
+
+    it('reports two qualified keys of different key kinds on one path as incomparable, not changed', () => {
+      expect(verdictOf(row([qualified]), row([gitKeyed]))).toEqual({
+        kind: 'content-incomparable',
+        reason: expect.stringContaining('git-sha1') as unknown,
+      });
+    });
+
+    it('compares two qualified keys of one key kind', () => {
+      const moved: PopulationEntry = { path: 'a.md', identity: key(testContentKey('markdown', 'moved')) };
+      expect(verdictOf(row([qualified]), row([moved]))).toEqual({
+        kind: 'changed',
+        added: [],
+        removed: [],
+        changed: ['a.md'],
+        contentComparison: { kind: 'compared' },
+      });
+    });
   });
 
   describe('across identity schemes (an rc.17 baseline against a content-key candidate)', () => {

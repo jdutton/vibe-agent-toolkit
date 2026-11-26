@@ -15,6 +15,7 @@
  *    the same.
  */
 
+import { testContentKey } from '@vibe-agent-toolkit/resources/testing';
 import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -42,8 +43,8 @@ const CAPTURED_AT = '2026-08-17T00:00:00.000Z';
 const SPEC = { name: 'population', args: ['scan'] } as const;
 
 /** Content identities. Distinct, so a swap between two files is visible. */
-const SUM_A = `markdown.${'a'.repeat(64)}`;
-const SUM_B = `markdown.${'b'.repeat(64)}`;
+const SUM_A = testContentKey('markdown', 'a');
+const SUM_B = testContentKey('markdown', 'b');
 
 /** Temp-directory prefix, so a stray probe directory names this suite. */
 const PROBE_PREFIX = 'lab-population-';

@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 
 import { ResourceMetadataSchema } from '../src/schemas/resource-metadata.js';
+import { testContentKey } from '../src/testing.js';
 
-const VALID_CONTENT_KEY = `markdown.${'a'.repeat(64)}`;
+const VALID_CONTENT_KEY = testContentKey('markdown', 'a');
 
 describe('ResourceMetadataSchema with content key', () => {
   const TEST_FILE_PATH = '/path/to/test.md';
@@ -38,8 +39,9 @@ describe('ResourceMetadataSchema with content key', () => {
 
   it.each([
     ['a bare SHA-256 (the old checksum shape)', 'a'.repeat(64)],
-    ['an unknown parser kind', `yaml.${'a'.repeat(64)}`],
-    ['uppercase hex', `markdown.${'A'.repeat(64)}`],
+    ['an unknown parser kind', `yaml.sha256.${'a'.repeat(64)}`],
+    ['uppercase hex', `markdown.sha256.${'A'.repeat(64)}`],
+    ['no key kind (the old format)', `markdown.${'a'.repeat(64)}`],
   ])('should reject %s', (_label, contentKey) => {
     const result = ResourceMetadataSchema.safeParse(createBaseMetadata({ contentKey }));
     expect(result.success).toBe(false);
@@ -81,7 +83,7 @@ describe('ResourceMetadataSchema HTML fields', () => {
     sizeBytes: 1,
     estimatedTokenCount: 1,
     modifiedAt: new Date(),
-    contentKey: `html.${'a'.repeat(64)}`,
+    contentKey: testContentKey('html', 'a'),
   };
 
   it('accepts optional anchors and parseErrors', () => {

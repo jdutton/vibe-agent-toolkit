@@ -193,7 +193,8 @@ measure yours with `du` after a warm run. Internals: [where the caches live](htt
   pull request never overwrites it.
 - **Run `vat cache prune` before the save.** It drops every other release's namespace and every
   other store shape, so the cache does not grow with each release. Within one release the store
-  keeps the three most recent trees per root, the eight most recent roots and 50,000 content keys;
+  keeps the three most recent trees per root, the eight most recent roots and the most recent
+  content keys whose facts fit about 265 MB;
   the parse cache keeps everything until `vat cache clear`, or until `vat cache prune` runs under
   another release.
 - **Key the cache on** runner OS, architecture, installed Node version,

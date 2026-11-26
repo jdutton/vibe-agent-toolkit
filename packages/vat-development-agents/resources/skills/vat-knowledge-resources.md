@@ -140,7 +140,8 @@ as text. They are **not** decoded, because decoding needs a table spec and arbit
 
 **The projection store is ON by default.** VAT writes a SQLite cache of each scanned tree under
 `<tmpdir>/.vat-cache/` — roughly 71 MB for a 12,600-file repository, bounded at three trees per
-repository, eight repositories and 50,000 content keys, and `vat cache clear` reclaims it.
+repository, eight repositories and about 265 MB of per-file facts (the most recent content keys
+that fit), and `vat cache clear` reclaims it.
 `VAT_PROJECTION_STORE=off` opts out of the store alone; `VAT_CACHE=0` vetoes every VAT cache. The store makes the POPULATION
 cheap and is never itself queried.
 

@@ -12,8 +12,9 @@ import {
   BlobReferenceRowSchema,
 } from '../src/schemas/projection-blobs.js';
 import { ResourceLinkSchema, type LinkNodeType, type ResourceLink } from '../src/schemas/resource-metadata.js';
+import { testContentKey } from '../src/testing.js';
 
-const CONTENT_KEY = `markdown.${'c'.repeat(64)}`;
+const CONTENT_KEY = testContentKey('markdown', 'c');
 const AT_TOKEN = '@docs/setup.md';
 const HREF = './b.md';
 /** The `syntacticForm` of a `'link'` node — the one this file names three times. */
@@ -333,7 +334,7 @@ const HTML = [
   '</body></html>',
 ].join('\n');
 
-const HTML_KEY = `html.${'d'.repeat(64)}`;
+const HTML_KEY = testContentKey('html', 'd');
 
 /** The two units composed: real parse, then real row derivation. */
 function htmlRows(): BlobReferenceRow[] {
@@ -436,7 +437,7 @@ describe('blobReferencesFor over real HTML parser output', () => {
 const RECONSTRUCTED_ANCHOR_HTML =
   '<a href="./x.md"><div><a href="./y.md"><div>d</div></a></div>';
 
-const RECONSTRUCTED_KEY = `html.${'e'.repeat(64)}`;
+const RECONSTRUCTED_KEY = testContentKey('html', 'e');
 
 /** Real parser output for {@link RECONSTRUCTED_ANCHOR_HTML}. */
 function reconstructedParse(): ParseResult {
@@ -485,7 +486,7 @@ function halfPositionedLink(drop: 'line' | 'offsets'): ResourceLink {
 const POSITIONLESS_MARKDOWN =
   'See domain:www.anthropic.com for more.\n\nAnd [the handbook](./handbook.md) too.\n';
 
-const POSITIONLESS_KEY = `markdown.${'f'.repeat(64)}`;
+const POSITIONLESS_KEY = testContentKey('markdown', 'f');
 
 /**
  * The location-less branch, end to end through both real units.

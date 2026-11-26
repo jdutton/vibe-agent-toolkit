@@ -7,8 +7,9 @@ import {
   BlobRowSchema,
   BlobSectionRowSchema,
 } from '../src/schemas/projection-blobs.js';
+import { testContentKey } from '../src/testing.js';
 
-const VALID_KEY = 'markdown.' + '0'.repeat(64);
+const VALID_KEY = testContentKey('markdown', '0');
 
 describe('BlobRowSchema', () => {
   const minimalBlob = {

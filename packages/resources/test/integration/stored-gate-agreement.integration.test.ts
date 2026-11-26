@@ -24,6 +24,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { equalContentKeys, type ContentKey } from '../../src/content-key.js';
 import { ParseCache } from '../../src/parse-cache.js';
 import { ParseDispatcher } from '../../src/parse-dispatcher.js';
 import { reviveParserThrow } from '../../src/parse-limits.js';
@@ -36,7 +37,7 @@ import { storedComputeBy, type StoredContent } from '../../src/projection/stored
 import { runStoredReads } from '../../src/projection/stored-reads.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { CollectionConfig, ProjectConfig } from '../../src/schemas/project-config.js';
-import { FakeFactStore, noDatabaseFile } from '../fake-fact-store.js';
+import { FakeFactStore, noDatabaseFile, WIDE_BLOB_BUDGET_BYTES } from '../fake-fact-store.js';
 import { failingParsePolicy } from '../helpers/failing-parse-policy.js';
 import { createCommittedRepo } from '../test-helpers.js';
 
@@ -62,13 +63,13 @@ const NOTE = 'notes/n.json';
 const RETYPED: Readonly<Record<string, CollectionConfig>> = { notes: { include: ['notes/*.json'], mimeType: 'text/markdown' } };
 
 let root = '';
-let store = new FakeFactStore();
+let store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
 
 beforeEach(async () => {
   // A real parse in both lanes: the on-disk parse cache would serve what an earlier build parsed.
   vi.stubEnv('VAT_CACHE', '0');
   root = createCommittedRepo('vat-stored-gate-agreement-', { files: { ...TREE }, gitignore: '' });
-  store = new FakeFactStore();
+  store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
   const handle = await open(safePath.join(root, OVERSIZE), 'w');
   try {
     await handle.truncate(POPULATION_PARSE_LIMITS.inputBytes + 1);
@@ -157,7 +158,7 @@ async function fileTheStore(collections: Readonly<Record<string, CollectionConfi
  * @param view - The store as the case leaves it
  * @returns Every ask with both answers, and the hit's content keys by root-relative path
  */
-async function bothAnswers(view: FactStore): Promise<{ answers: Answers[]; keys: ReadonlyMap<string, string> }> {
+async function bothAnswers(view: FactStore): Promise<{ answers: Answers[]; keys: ReadonlyMap<string, ContentKey> }> {
   return inRun(view, undefined, async (population, stored) => {
     if (stored === null) throw new Error('the warm run did not hit');
     // The gate's routing from the constructor `vat validate`'s `gateOptionsFor` calls (that lives in
@@ -180,7 +181,7 @@ async function bothAnswers(view: FactStore): Promise<{ answers: Answers[]; keys:
       });
       answers.push({ ask: `${relative(ask.path)} as ${ask.parserKind}`, gate, admission: !computed });
     }
-    const keys = new Map<string, string>();
+    const keys = new Map<string, ContentKey>();
     for (const [path, realization] of stored.members) {
       if (realization.contentKey !== null) keys.set(relative(path), realization.contentKey);
     }
@@ -216,6 +217,13 @@ function viewOf(transform: (rows: DamageableRows) => DamageableRows): FactStore 
   };
 }
 
+/** The key `path` was filed under, which the fixture must have keyed. */
+function keyAt(keys: ReadonlyMap<string, ContentKey>, path: string): ContentKey {
+  const key = keys.get(path);
+  if (key === undefined) throw new Error(`no key for ${path}`);
+  return key;
+}
+
 /** The served flag of each ask, by the gate's answer: the agreement already asserted. */
 function served(answers: readonly Answers[]): Record<string, boolean> {
   for (const { ask, gate, admission } of answers) expect({ ask, gate }, 'the gate agrees with admission').toEqual({ ask, gate: admission });
@@ -246,8 +254,7 @@ describe('the gate\'s member check and warm admission agree on the same store', 
   it('a key with no blob rows: computed by both', async () => {
     await fileTheStore();
     const { keys } = await bothAnswers(store);
-    const evicted = keys.get('docs/b.md');
-    if (evicted === undefined) throw new Error('no key for docs/b.md');
+    const evicted = keyAt(keys, 'docs/b.md');
     store.forgetBlobFacts(evicted);
     expect(served((await bothAnswers(store)).answers)).toEqual({ ...UNTOUCHED, 'docs/b.md as markdown': false });
   });
@@ -255,17 +262,17 @@ describe('the gate\'s member check and warm admission agree on the same store', 
   it('a damaged blob, its section rows short of headingCount: computed by both', async () => {
     await fileTheStore();
     const { keys } = await bothAnswers(store);
-    const damaged = keys.get('docs/b.md');
-    const view = viewOf((rows) => ({ ...rows, blobSections: rows.blobSections.filter((row) => row.blob !== damaged) }));
+    const damaged = keyAt(keys, 'docs/b.md');
+    const view = viewOf((rows) => ({ ...rows, blobSections: rows.blobSections.filter((row) => equalContentKeys(row.blob, damaged) !== true) }));
     expect(served((await bothAnswers(view)).answers)).toEqual({ ...UNTOUCHED, 'docs/b.md as markdown': false });
   });
 
   it('a damaged blob, an AST reference row missing against linkCount: computed by both', async () => {
     await fileTheStore();
     const { keys } = await bothAnswers(store);
-    const damaged = keys.get('docs/a.md');
+    const damaged = keyAt(keys, 'docs/a.md');
     const view = viewOf((rows) => {
-      const dropped = rows.blobReferences.find((row) => row.blob === damaged && row.astIndex !== null);
+      const dropped = rows.blobReferences.find((row) => equalContentKeys(row.blob, damaged) === true && row.astIndex !== null);
       if (dropped === undefined) throw new Error('docs/a.md filed no AST reference row');
       return { ...rows, blobReferences: rows.blobReferences.filter((row) => row !== dropped) };
     });
@@ -275,10 +282,10 @@ describe('the gate\'s member check and warm admission agree on the same store', 
   it('a damaged blob, its frontmatter value not decoding: computed by both', async () => {
     await fileTheStore();
     const { keys } = await bothAnswers(store);
-    const damaged = keys.get('docs/a.md');
+    const damaged = keyAt(keys, 'docs/a.md');
     const view = viewOf((rows) => ({
       ...rows,
-      blobs: rows.blobs.map((row) => (row.contentKey === damaged ? { ...row, frontmatterValue: 'not the codec encoding' } : row)),
+      blobs: rows.blobs.map((row) => (equalContentKeys(row.contentKey, damaged) === true ? { ...row, frontmatterValue: 'not the codec encoding' } : row)),
     }));
     expect(served((await bothAnswers(view)).answers)).toEqual({ ...UNTOUCHED, 'docs/a.md as markdown': false });
   });

@@ -11,7 +11,7 @@
 
 import { writeFile } from 'node:fs/promises';
 
-import { ParseCache, ResourceRegistry, type ProjectConfig } from '@vibe-agent-toolkit/resources';
+import { contentKeyParts, ParseCache, ResourceRegistry, type ProjectConfig } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -89,7 +89,7 @@ describe('rag indexing on the bounded parse route', () => {
       { 'page.txt': '<h1 id="alpha">Alpha</h1>\n<p>alpha prose</p>\n' },
       { resources: { collections: { pages: { include: ['**/*.txt'], mimeType: 'text/html' } } } },
     );
-    expect(resources.map((resource) => resource.contentKey.split('.')[0])).toStrictEqual(['html']);
+    expect(resources.map((resource) => contentKeyParts(resource.contentKey).parserKind)).toStrictEqual(['html']);
 
     const result = await suite.provider?.indexResources(resources);
 

@@ -167,7 +167,7 @@ export const ResourceMetadataSchema = z.object({
   estimatedTokenCount: z.number().int().nonnegative().describe('Estimated token count for LLM context (roughly 1 token per 4 chars)'),
   modifiedAt: z.date().describe('Last modified timestamp'),
   contentKey: ContentKeySchema.describe(
-    'The content key of the bytes read: "<parserKind>.<sha256>" over the raw bytes and the parse route, so identical bytes routed to different parsers have different keys',
+    'The content key of the bytes read: "<parserKind>.sha256.<SHA-256 of the raw bytes>", qualified by the parse route, so identical bytes routed to different parsers have different keys',
   ),
   collections: z.array(z.string()).optional()
     .describe('Collection names this resource belongs to (populated when using config-based discovery)'),

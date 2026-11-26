@@ -47,7 +47,7 @@
 
 import { deepFreeze } from '@vibe-agent-toolkit/utils';
 
-import { NO_PARSER_KIND } from '../content-key.js';
+import { type ContentKey, contentKeyParts, NO_PARSER_KIND } from '../content-key.js';
 import type { ParseLimits } from '../parse-limits.js';
 import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
 
@@ -61,7 +61,7 @@ import {
   type BlobFactsReader,
 } from './blob-resource-facts.js';
 import { POPULATION_PARSE_LIMITS } from './content-cache.js';
-import { parserKindOf , parserKindForMime } from './router.js';
+import { parserKindForMime } from './router.js';
 import type { AdmittedFacts } from './run-population.js';
 import { keyedContentKeys } from './store-hydration.js';
 import type { BlobRequest } from './store.js';
@@ -139,7 +139,7 @@ type MemberRealizations = ReadonlyArray<{ readonly path: string; readonly row: R
  */
 function contentOf(
   members: MemberRealizations,
-  rowsOf: (keys: readonly string[]) => Promise<BlobCoverageRows>,
+  rowsOf: (keys: readonly ContentKey[]) => Promise<BlobCoverageRows>,
   readByRun: boolean,
 ): StoredContent {
   const stored = new Map<string, StoredRealization>();
@@ -241,7 +241,7 @@ type StoredRoute =
   /** Refused by its size before any read, as cold refuses it, once the file is still readable now. */
   | { readonly kind: 'not-admitted'; readonly entry: NotAdmittedEntry }
   /** Ask the tier about this key. */
-  | { readonly kind: 'read'; readonly contentKey: string };
+  | { readonly kind: 'read'; readonly contentKey: ContentKey };
 
 const COMPUTE = { kind: 'compute' } as const;
 const NOT_ADMITTED = 'not-admitted';
@@ -254,7 +254,7 @@ const NOT_ADMITTED = 'not-admitted';
 export function storedRoute(realization: StoredRealization | undefined, parserKind: string): StoredRoute {
   if (realization === undefined) return COMPUTE;
   if (realization.contentState === 'keyed' && realization.contentKey !== null) {
-    return parserKindOf(realization.contentKey) === parserKind ? { kind: 'read', contentKey: realization.contentKey } : COMPUTE;
+    return contentKeyParts(realization.contentKey).parserKind === parserKind ? { kind: 'read', contentKey: realization.contentKey } : COMPUTE;
   }
   if (realization.contentState !== 'oversize') return COMPUTE;
   // Only a kind a parser reads is refused at the one input cap, in a sentence that names the cap.

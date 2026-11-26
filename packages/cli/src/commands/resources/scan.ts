@@ -2,7 +2,7 @@
  * Resources scan command - discover markdown resources
  */
 
-import { type CrawlSourceKind, notAdmittedCount, notAdmittedFindings, notAdmittedInScope } from '@vibe-agent-toolkit/resources';
+import { type ContentKey, type CrawlSourceKind, notAdmittedCount, notAdmittedFindings, notAdmittedInScope } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import { refusalCodeOf } from '../../utils/command-refusal.js';
@@ -37,7 +37,7 @@ interface ScanResource {
   filePath: string;
   links: readonly unknown[];
   headings: HeadingWithChildren[];
-  contentKey: string;
+  contentKey: ContentKey;
 }
 
 export interface ScanPayloadInput {

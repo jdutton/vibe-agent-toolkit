@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 
+import type { ContentKey } from '../src/content-key.js';
 import { parseHtmlContent } from '../src/html-link-parser.js';
 import { parseMarkdownContent, type ParseResult } from '../src/link-parser.js';
 import { BLOB_NOT_TEXT, BLOB_PARSE_FAILED } from '../src/projection/blob-condition-codes.js';
@@ -21,15 +22,16 @@ import { blobSectionsFor } from '../src/projection/blob-sections.js';
 import type { BlobScopedRows } from '../src/projection/store.js';
 import { skillTextFactsOf } from '../src/skill-text/core.js';
 import { SKILL_TEXT_DECLARATION } from '../src/skill-text/declaration.js';
+import { testContentKey } from '../src/testing.js';
 
-const CONTENT_KEY = `markdown.${'c'.repeat(64)}`;
+const CONTENT_KEY = testContentKey('markdown', 'c');
 /** A key whose `blobs` row the bundle does not hold. */
-const OTHER_KEY = `markdown.${'e'.repeat(64)}`;
+const OTHER_KEY = testContentKey('markdown', 'e');
 const DOC = '# Title\n\nSee [a](./a.md) and [x][missing].\n\n## Next\n';
 
 /** A document the skill-text core matches more than once, across two families. */
 const SKILL_DOC = '# Skill\n\nData as of March 2024.\n\nRun `sed -i x` here.\n\n${CLAUDE_PLUGIN_ROOT}/scripts/a.sh\n';
-const SKILL_KEY = `markdown.${'5'.repeat(64)}`;
+const SKILL_KEY = testContentKey('markdown', '5');
 
 /**
  * The rows the blob lane writes for {@link SKILL_DOC}.
@@ -57,7 +59,7 @@ function rowsOfDoc(): BlobScopedRows {
  * @param parsed - Its parse
  * @returns Every blob-scoped table, harness tables empty
  */
-function rowsOf(contentKey: string, source: string, parsed: ParseResult): BlobScopedRows {
+function rowsOf(contentKey: ContentKey, source: string, parsed: ParseResult): BlobScopedRows {
   const skillText = parsed.skillText === null ? undefined : skillTextRowsFor(contentKey, parsed.skillText);
   return {
     blobs: [blobRowFor(contentKey, source.length, { encoding: 'utf-8', encodingSource: 'assumed', replacementCharacters: 0 }, parsed)],
@@ -78,7 +80,7 @@ function rowsOf(contentKey: string, source: string, parsed: ParseResult): BlobSc
  * @param rows - The bundle
  * @returns The outcome for a key
  */
-function agreedReader(rows: Parameters<typeof blobFactsReader>[0]): (contentKey: string) => BlobFactsOutcome {
+function agreedReader(rows: Parameters<typeof blobFactsReader>[0]): (contentKey: ContentKey) => BlobFactsOutcome {
   const reader = blobFactsReader(rows);
   return (contentKey) => {
     const outcome = reader.outcome(contentKey);
@@ -102,11 +104,11 @@ describe('blobFactsReader', () => {
     const held = 1 + rows.blobReferences.length + rows.blobSections.length + rows.blobConditions.length
       + rows.skillTextFacts.length + rows.skillTextMatches.length;
     expect(reader.answer(CONTENT_KEY)).toEqual({ kind: 'facts', rowsRead: held });
-    expect(reader.answer(`markdown.${'d'.repeat(64)}`)).toEqual({ kind: 'uncovered', rowsRead: 0 });
+    expect(reader.answer(testContentKey('markdown', 'd'))).toEqual({ kind: 'uncovered', rowsRead: 0 });
   });
 
   it('agrees on a key whose every realization is refused (not-admitted)', () => {
-    const refusedKey = `markdown.${'9'.repeat(64)}`;
+    const refusedKey = testContentKey('markdown', '9');
     const outcome = agreedReader({
       blobs: [],
       blobReferences: [],
@@ -136,7 +138,7 @@ describe('blobFactsReader', () => {
   });
 
   it('carries the key of a not-text blob, which has no blobs row', () => {
-    const notTextKey = `markdown.${'f'.repeat(64)}`;
+    const notTextKey = testContentKey('markdown', 'f');
     const outcome = agreedReader({
       blobs: [],
       blobReferences: [],
@@ -177,7 +179,7 @@ describe('blobFactsReader', () => {
   });
 
   it('is uncovered for a key the bundle does not hold', () => {
-    expect(agreedReader(rowsOfDoc())(`markdown.${'d'.repeat(64)}`).kind).toBe('uncovered');
+    expect(agreedReader(rowsOfDoc())(testContentKey('markdown', 'd')).kind).toBe('uncovered');
   });
 
   // The reader never sees the lexical reference rows or the harness tables when
@@ -205,7 +207,7 @@ describe('blobFactsReader', () => {
     const halfPositioned = { ...located };
     delete halfPositioned.startOffset;
     delete halfPositioned.endOffset;
-    const htmlKey = `html.${'e'.repeat(64)}`;
+    const htmlKey = testContentKey('html', 'e');
     const outcome = agreedReader(rowsOf(htmlKey, source, { ...parsed, links: [halfPositioned] }))(htmlKey);
     expect(outcome.kind).toBe('facts');
     if (outcome.kind !== 'facts') return;
@@ -250,7 +252,7 @@ describe('blobFactsReader', () => {
 
   it('carries no skill-text record for an HTML blob', () => {
     const source = '<p><a href="./a.md">A</a></p>\n';
-    const htmlKey = `html.${'e'.repeat(64)}`;
+    const htmlKey = testContentKey('html', 'e');
     const outcome = agreedReader(rowsOf(htmlKey, source, parseHtmlContent(source, source.length)))(htmlKey);
     expect(outcome.kind === 'facts' && outcome.facts.skillText).toBeNull();
   });
@@ -299,7 +301,7 @@ describe('blobFactsReader', () => {
 
   it('is uncovered when a blob that is not markdown holds skill-text rows', () => {
     const source = '<p>x</p>\n';
-    const htmlKey = `html.${'e'.repeat(64)}`;
+    const htmlKey = testContentKey('html', 'e');
     const rows = rowsOf(htmlKey, source, parseHtmlContent(source, source.length));
     const strayFacts = { blob: htmlKey, lineCount: 1, h1: null, frontmatterFence: 'none', matchCount: 0, held: true } as const;
     const outcome = agreedReader({ ...rows, skillTextFacts: [strayFacts] })(htmlKey);

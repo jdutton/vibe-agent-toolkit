@@ -195,20 +195,16 @@ resources (→ utils)
 - **Validators**: Reuses validators from `agent-skills` and `claude-marketplace` packages
   - Plugin validator (`claude-marketplace`): Schema validation for plugin manifests
   - Marketplace validator: Schema validation for marketplace manifests
-  - Registry validator: Schema validation + content-key staleness detection
+  - Registry validator: Schema validation
   - Skill validator: Frontmatter, links, naming conventions, length checks
   - Inventory detectors: `COMPONENT_DECLARED_BUT_MISSING`, `COMPONENT_PRESENT_BUT_UNDECLARED`, `REFERENCE_TARGET_MISSING`, `MARKETPLACE_PLUGIN_SOURCE_MISSING` (set algebra over the inventory)
 - **Hierarchical Output**: Groups results into marketplace → plugin → skill structure
   - Used for `--user` flag to show plugin relationships
   - Flat output for single resource audits
-- **Cache Detection**: Uses ResourceRegistry content keys to detect staleness
-  - Compares cache content keys with installed plugin content keys
-  - Identifies outdated cached plugins
 
 **Key Components:**
 - `audit.ts` - Main audit command with auto-detection
 - `hierarchical-output.ts` - Builds hierarchical YAML structure for user-level audits
-- `cache-detector.ts` - Compares cache and installed content keys (future enhancement)
 
 **Integration:**
 - Uses validators from `@vibe-agent-toolkit/agent-skills` and `@vibe-agent-toolkit/claude-marketplace`
@@ -218,7 +214,6 @@ resources (→ utils)
   - `detectResourceFormat()` - Resource type detection (`agent-skills`)
   - Inventory extractors and detectors — see [Skill Packaging — Inventory Layer](./skill-packaging.md#inventory-layer)
 - Uses ResourceRegistry from `@vibe-agent-toolkit/resources`
-  - Content-key-based staleness detection
   - Plugin relationship tracking
 - Uses `detectFormat()` from `@vibe-agent-toolkit/discovery`
   - Detects Agent Skills

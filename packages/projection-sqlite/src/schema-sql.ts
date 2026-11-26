@@ -41,9 +41,12 @@
  */
 
 import {
+  EXTENT_KEY_COLUMNS,
   isProjectionTable,
   PROJECTION_TABLES,
   queryableRelationSpecs,
+  STORE_BOOKKEEPING_TABLES,
+  type BookkeepingTable,
   type DerivedTableSpec,
   type ProjectionColumnKind,
   type ProjectionColumnTypeSource,
@@ -75,99 +78,83 @@ const SQLITE_TYPES: Readonly<Record<ProjectionColumnKind, string>> = {
 };
 
 /**
- * The columns naming which tree an extent-scoped row was observed in.
+ * A column a bookkeeping table must declare, by name, read from the
+ * declaration and checked once at load: a renamed column fails here, naming
+ * itself, rather than at the first statement on a user's store.
  *
- * Order matters: they lead both the column list and the primary key, so
- * `WHERE storeRootId = ? AND storeTreeHash = ?` is a prefix of the key's own
- * index.
- *
- * 🪤 **Prefixed, and not simply `rootId`, because `resolution_contexts` already
- * declares a `rootId`** — SQLite rejects the `CREATE TABLE` outright, which is
- * how this was found. Renaming is not merely a way around the clash: the two
- * columns are genuinely different facts. A projection may be **federated over
- * several roots** (`roots` is a table precisely so that it can be), so a row's
- * own `rootId` names which of those roots the row belongs to, while this names
- * the whole snapshot the store filed the projection under. Collapsing them
- * would make a federated projection unreadable.
+ * @param table - The declared table
+ * @param name - The column the statements here bind
+ * @returns `name`
+ * @throws TypeError When the declaration has no such column
  */
-export const EXTENT_KEY_COLUMNS = ['storeRootId', 'storeTreeHash'] as const;
+function declaredColumn(table: BookkeepingTable, name: string): string {
+  if (!table.columns.some((column) => column.name === name)) {
+    throw new TypeError(`The bookkeeping table "${table.name}" declares no "${name}" column`);
+  }
+  return name;
+}
 
 /**
- * The table recording that an extent was written at all.
+ * The table recording that an extent was written at all — see
+ * `STORE_BOOKKEEPING_TABLES` in `resources`, which declares it.
  *
  * Without it, "this tree holds no resources" and "this tree was never scanned"
  * are the same empty result — and they are different answers, one a hit and one
  * a miss. A projection with zero rows is legal (an empty corpus, a tree whose
  * every file was excluded), so emptiness cannot stand in for absence.
- */
-export const EXTENTS_TABLE = 'extents';
-
-/** Column of {@link EXTENTS_TABLE} holding when the extent was last written. */
-export const WRITTEN_AT_COLUMN = 'writtenAt';
-
-/**
- * DDL for the extent manifest.
  *
- * `writtenAt` is the handle eviction steers by: `store.ts` orders a root's trees
- * by it and reclaims everything past the retention window. It was declared
- * before anything read it because a cache whose rows carry no age has no prune
- * to design — the alternative when the directory grows is deleting all of it.
- *
- * Ordering is by this column and then by `rowid`, which the table has because it
+ * Ordering is by `writtenAt` and then by `rowid`, which the table has because it
  * is an ordinary rowid table. The tie-break is not decoration: an ISO-8601
  * string has millisecond resolution and two writes inside one millisecond are
  * ordinary, so `writtenAt` alone leaves the victim unspecified.
  */
-export const CREATE_EXTENTS_TABLE_SQL
-  = `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(EXTENTS_TABLE)} (`
-    + `${quoteIdentifier('storeRootId')} TEXT NOT NULL, `
-    + `${quoteIdentifier('storeTreeHash')} TEXT NOT NULL, `
-    + `${quoteIdentifier(WRITTEN_AT_COLUMN)} TEXT NOT NULL, `
-    + `PRIMARY KEY (${quoteIdentifier('storeRootId')}, ${quoteIdentifier('storeTreeHash')}))`;
+export const EXTENTS_TABLE = STORE_BOOKKEEPING_TABLES.extents.name;
+
+/** Column of both bookkeeping tables holding when the row was last written. */
+export const WRITTEN_AT_COLUMN = declaredColumn(
+  STORE_BOOKKEEPING_TABLES.extents,
+  declaredColumn(STORE_BOOKKEEPING_TABLES.blobKeys, 'writtenAt'),
+);
 
 /**
- * The table recording when each content key's blob facts were last derived.
+ * The table recording, per content key, when a write last held its blob facts
+ * and how many logical bytes those facts measure.
  *
  * What {@link EXTENTS_TABLE} is for the extent tier: the record of what may be
  * reclaimed and in what order. Blob rows carry no tree and no root, so an extent
  * eviction has no key to attribute them by; one row per content key gives them
- * one. `store.ts` keeps the newest `retainedBlobKeys`, ordered by this column
- * then `rowid` — same ordering and same tie-break reason as the extent manifest.
+ * one. `store.ts` keeps the newest keys whose bytes fit the blob tier's budget,
+ * ordered by `writtenAt` then `rowid`, same tie-break reason as the extent
+ * manifest.
  *
  * ⚠️ WRITE recency, not use recency: a write re-stamps every key it holds,
  * covered or not, but a run served whole from the store writes nothing, so its
  * keys age as if idle. The cheap side of the trade — evicting a key still in
  * use costs one re-derivation — against a write on every read path.
  */
-export const BLOB_KEYS_TABLE = 'blob_keys';
+export const BLOB_KEYS_TABLE = STORE_BOOKKEEPING_TABLES.blobKeys.name;
 
 /** Column of {@link BLOB_KEYS_TABLE} holding the content key itself. */
-export const BLOB_KEY_COLUMN = 'contentKey';
+export const BLOB_KEY_COLUMN = declaredColumn(STORE_BOOKKEEPING_TABLES.blobKeys, 'contentKey');
 
-/** DDL for the blob-key manifest. See {@link BLOB_KEYS_TABLE}. */
-export const CREATE_BLOB_KEYS_TABLE_SQL
-  = `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(BLOB_KEYS_TABLE)} (`
-    + `${quoteIdentifier(BLOB_KEY_COLUMN)} TEXT NOT NULL PRIMARY KEY, `
-    + `${quoteIdentifier(WRITTEN_AT_COLUMN)} TEXT NOT NULL)`;
+/** Column of {@link BLOB_KEYS_TABLE} holding the key's stored rows' logical bytes (`blobRowBytes`). */
+export const BLOB_BYTES_COLUMN = declaredColumn(STORE_BOOKKEEPING_TABLES.blobKeys, 'bytes');
 
 /**
- * The statement that adopts blob rows a pre-manifest store already holds.
+ * The `CREATE TABLE` for one bookkeeping table, built from its declaration and
+ * from nothing else: the declaration is what the shape digest hashes, so a
+ * column edited there moves the store's directory and changes this DDL together.
+ * Every column is `NOT NULL`.
  *
- * 🪤 Without it the bound holds only for brand-new stores: a store an earlier
- * build of the same cache namespace wrote carries blob rows no manifest row
- * names, invisible to an eviction that walks the manifest. Adoption files them
- * at the empty string, which sorts before every ISO-8601 timestamp, so rows of
- * unknown age go first — the safe direction, costing one cold re-derivation.
- *
- * @param spec - A blob-scoped table's registry entry
- * @returns An `INSERT OR IGNORE … SELECT DISTINCT` over that table's key column
+ * @param table - A bookkeeping table's declaration
+ * @returns A complete `CREATE TABLE IF NOT EXISTS` statement
  */
-export function adoptBlobKeysSql(spec: StoredTableSpec): string {
-  return `INSERT OR IGNORE INTO ${quoteIdentifier(BLOB_KEYS_TABLE)}`
-    + ` (${quoteIdentifier(BLOB_KEY_COLUMN)}, ${quoteIdentifier(WRITTEN_AT_COLUMN)})`
-    + ` SELECT DISTINCT ${quoteIdentifier(blobKeyColumn(spec))}, ''`
-    + ` FROM ${quoteIdentifier(spec.name)}`;
+export function createBookkeepingTableSql(table: BookkeepingTable): string {
+  const definitions = table.columns.map((column) => `${quoteIdentifier(column.name)} ${column.type} NOT NULL`);
+  const key = table.primaryKey.map((column) => quoteIdentifier(column)).join(', ');
+  return `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(table.name)} (${definitions.join(', ')}, PRIMARY KEY (${key}))`;
 }
+
 
 /**
  * A projection table, as this module needs to see it.
@@ -499,11 +486,36 @@ export function deleteBlobFactsSql(spec: StoredTableSpec, keyCount: number): str
  * @throws TypeError When the table declares no partition column
  */
 export function deleteBlobPartitionSql(spec: StoredTableSpec): string {
+  return `DELETE FROM ${quoteIdentifier(spec.name)} WHERE ${blobPartitionPredicate(spec)}`;
+}
+
+/**
+ * The `SELECT` of one partitioned blob-scoped table's stored rows for ONE
+ * `(blob, partition)` pair, every declared column: what a write measures
+ * before {@link deleteBlobPartitionSql} clears the pair, so the key's recorded
+ * bytes lose exactly what the delete takes. A prefix of the table's primary key.
+ *
+ * @param spec - A blob-scoped table's registry entry, declaring `partitionColumn`
+ * @returns A `SELECT … WHERE <key column> = ? AND <partition column> = ?` statement
+ * @throws TypeError When the table declares no partition column
+ */
+export function selectBlobPartitionSql(spec: StoredTableSpec): string {
+  const names = spec.columns.map((column) => quoteIdentifier(column)).join(', ');
+  return `SELECT ${names} FROM ${quoteIdentifier(spec.name)} WHERE ${blobPartitionPredicate(spec)}`;
+}
+
+/**
+ * `<key column> = ? AND <partition column> = ?` for a partitioned blob table.
+ *
+ * @param spec - A blob-scoped table's registry entry
+ * @returns The predicate, bound as `(blob, partition)`
+ * @throws TypeError When the table declares no partition column
+ */
+function blobPartitionPredicate(spec: StoredTableSpec): string {
   if (spec.partitionColumn === undefined) {
-    throw new TypeError(`Table "${spec.name}" declares no partition column to scope a delete by`);
+    throw new TypeError(`Table "${spec.name}" declares no partition column to scope a statement by`);
   }
-  return `DELETE FROM ${quoteIdentifier(spec.name)} WHERE ${quoteIdentifier(blobKeyColumn(spec))} = ?`
-    + ` AND ${quoteIdentifier(spec.partitionColumn)} = ?`;
+  return `${quoteIdentifier(blobKeyColumn(spec))} = ? AND ${quoteIdentifier(spec.partitionColumn)} = ?`;
 }
 
 /**

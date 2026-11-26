@@ -18,8 +18,8 @@
  * drift from it. The rules here are syntactic (an import is an import,
  * a `process.exit(2)` is a literal), so a bare parser and only that rule
  * answer the question in a fraction of a typed program's time; the type-aware
- * `NO_UNSAFE_BACKLOG` ratchet is the same shape in
- * `test/integration/no-unsafe-backlog-ratchet.integration.test.ts`.
+ * lists (`NO_UNSAFE_BACKLOG`, `CONTENT_KEY_OPAQUE_ALLOW`) are the same shape over
+ * one typed program, `test/integration/typed-list-ratchet.ts`.
  */
 
 import tsparser from '@typescript-eslint/parser';

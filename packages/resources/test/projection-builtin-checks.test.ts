@@ -38,6 +38,7 @@ import {
   EXTENT_SYMLINK_TARGET_UNRESOLVED,
 } from '../src/projection/contributors/filesystem-extent.js';
 import type { ClaudeRulePatternRow } from '../src/schemas/projection-claude-rules.js';
+import { testContentKey } from '../src/testing.js';
 
 /** The rules file every case below declares its patterns in. */
 const RULES_FILE = '.claude/rules/demo.md';
@@ -222,7 +223,7 @@ describe('CLAUDE_RULE_GLOB_INERT — one finding per dead glob', () => {
 });
 
 /** The key the broken rules file's blob is filed under. */
-const BROKEN_KEY = 'markdown.broken';
+const BROKEN_KEY = testContentKey('markdown', 'broken');
 /** What the YAML parser said about it — content, never a path. */
 const YAML_ERROR = 'Unresolved alias (the anchor must be set before the alias): */x/*.ts';
 

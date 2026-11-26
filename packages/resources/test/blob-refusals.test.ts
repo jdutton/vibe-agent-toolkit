@@ -19,6 +19,7 @@ import { POPULATION_PARSE_LIMITS } from '../src/projection/content-cache.js';
 import { parseFailedMessage, parseFailureOf } from '../src/projection/parse-failure.js';
 import type { BlobConditionRow, BlobRow } from '../src/schemas/projection-blobs.js';
 import type { ContentState, ResourceRealizationRow } from '../src/schemas/projection-resources.js';
+import { testContentKey } from '../src/testing.js';
 
 /** A derived blob; only the columns this function reads matter. */
 function blob(contentKey: string, overrides: Partial<BlobRow> = {}): BlobRow {
@@ -249,7 +250,7 @@ describe('describeBlobRefusals', () => {
 
   it('names the blobs it mis-decoded, how many characters were lost, and that they were guesses', () => {
     const line = describeBlobRefusals(rowsOf({
-      blobs: [...blobs(1377), ...blobs(3, { replacementCharacters: 1000 }).map((row, index) => ({ ...row, contentKey: `markdown.bad-${index.toString()}` }))],
+      blobs: [...blobs(1377), ...blobs(3, { replacementCharacters: 1000 }).map((row, index) => ({ ...row, contentKey: testContentKey('markdown', `bad-${index.toString()}`) }))],
     }));
 
     expect(line).toContain('mis-decoded 3 of 1380 blob(s) into 3000 replacement character(s)');

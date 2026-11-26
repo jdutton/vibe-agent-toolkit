@@ -40,7 +40,7 @@ import { devNull } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 
-import { openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
+import { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import {
   ALL_BLOB_REQUEST,
   allDerivedSpecs,
@@ -48,7 +48,9 @@ import {
   BLOB_PARSE_LIMIT_EXCEEDED,
   BLOB_PARSE_WORKER_DIED,
   computeContentKey,
-  parserKindOf,
+  type ContentKey,
+  contentKeyParts,
+  parseContentKey,
   PROJECTION_TABLES,
   quoteIdentifier,
   uncoveredContentKeys,
@@ -927,12 +929,25 @@ export function evictHalfTheSkillText(dirs: Pick<ArmDirs, 'store'>, mustEvict: r
  * @param dirs - A primed cell, or any cache directory holding one store
  * @returns Root-relative path to its content key
  */
-export function storedContentKeys(dirs: Pick<ArmDirs, 'store'>): Map<string, string> {
+export function storedContentKeys(dirs: Pick<ArmDirs, 'store'>): Map<string, ContentKey> {
   const realizations = quoteIdentifier(PROJECTION_TABLES.resourceRealizations.name);
   const rows = withStore(dirs, (database) => database
     .prepare(`SELECT DISTINCT "path", "contentKey" FROM ${realizations} WHERE "contentState" = 'keyed' ORDER BY "path"`)
     .all() as unknown as Array<{ path: string; contentKey: string }>);
-  return new Map(rows.map((row) => [row.path, row.contentKey]));
+  return new Map(rows.map((row) => [row.path, parseStoredKey(row.contentKey)]));
+}
+
+/**
+ * A content key read back as text (a store row, a dump), parsed by the one parser.
+ *
+ * @param text - The key's text
+ * @returns The key
+ * @throws When the text is not a content key: a store or dump holding one is the defect
+ */
+function parseStoredKey(text: string): ContentKey {
+  const key = parseContentKey(text);
+  if (key === undefined) throw new Error(`not a content key: ${text}`);
+  return key;
 }
 
 /**
@@ -1367,7 +1382,7 @@ function newTreeKeys(reference: RunRecord | undefined): string[] {
 
 /** Whether a content key names a document parser, so a miss looks a parse up for it. */
 function hasParser(contentKey: string): boolean {
-  return parserKindOf(contentKey) !== 'none';
+  return contentKeyParts(parseStoredKey(contentKey)).parserKind !== 'none';
 }
 
 /**
@@ -1454,9 +1469,10 @@ async function recordUncoveredAfter(dirs: ArmDirs, reference: RunRecord | undefi
 export async function primedUncovered(dirs: ArmDirs, keys: readonly string[]): Promise<string[]> {
   const [file, ...others] = storeFilesUnder(dirs.store);
   if (file === undefined || others.length > 0) throw new Error(`expected one projection store under ${dirs.store}`);
-  const store = openSqliteFactStore({ directory: safePath.join(file, '..') });
+  const store = openSqliteFactStore({ directory: safePath.join(file, '..'), blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+  const asked = keys.map((key) => parseStoredKey(key));
   try {
-    return uncoveredContentKeys(await store.readBlobFacts(keys, ALL_BLOB_REQUEST), keys);
+    return uncoveredContentKeys(await store.readBlobFacts(asked, ALL_BLOB_REQUEST), asked);
   } finally {
     await store.close();
   }
@@ -1867,7 +1883,7 @@ function diskKeyOf(corpus: string, path: string, storedKey: string): string {
   } catch (error) {
     return isPathAbsentError(error) ? 'absent' : `unreadable: ${String(error)}`;
   }
-  return computeContentKey(bytes, parserKindOf(storedKey));
+  return computeContentKey(bytes, contentKeyParts(parseStoredKey(storedKey)).parserKind);
 }
 
 /**

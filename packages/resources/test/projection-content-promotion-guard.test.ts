@@ -83,7 +83,7 @@ const TRACKED_DOC = 'README.md';
 const DEFERRED_DOC_CONTENT = '# Notes\n\n[b](./b.md)\n';
 
 /** A markdown content key, which is what a promoted row must carry. */
-const MARKDOWN_KEY = /^markdown\.[\da-f]{64}$/u;
+const MARKDOWN_KEY = /^markdown\.sha256\.[\da-f]{64}$/u;
 
 const suite = setupSubdirTestSuite('content-promotion-guard-');
 

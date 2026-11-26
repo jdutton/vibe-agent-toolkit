@@ -7,6 +7,7 @@
 
 import type { CoreRAGChunk, TokenCounter } from '@vibe-agent-toolkit/rag';
 import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
+import { testContentKey } from '@vibe-agent-toolkit/resources/testing';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -56,7 +57,7 @@ function makeResource(overrides?: Partial<ResourceMetadata>): ResourceMetadata {
     sizeBytes: 100,
     estimatedTokenCount: 20,
     modifiedAt: new Date(),
-    contentKey: `markdown.${'a'.repeat(64)}`,
+    contentKey: testContentKey('markdown', 'a'),
     ...overrides,
   };
 }
