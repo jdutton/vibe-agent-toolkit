@@ -4,28 +4,32 @@
  * population asked first. Nothing else calls the port's reads or writes
  * (`local/fact-store-access-boundary`).
  *
- * ## A key's blob rows are held per unit, each read with the key's presence
+ * ## A key's blob rows are held per unit, one read per unit, each read with the key's presence
  *
  * The run holds a content key's blob rows in UNITS: one per non-partitioned table, one per
- * reference form of `blobReferences`, and one for the harness tables together. A request reads,
- * for each key, only the units it does not hold, and a repeated request reads nothing, so no row
- * is decoded twice in a run. Every read returns, in the rows' own transaction, which of its keys
- * the ledger holds (`present`).
+ * reference form of `blobReferences`, and one for the two harness tables together. Each unit of a
+ * key holds ONE promise of its rows, registered, in flight or settled, before the request that
+ * reads it awaits anything. A request reads, for each key, only the units with no promise yet, and
+ * awaits the promise of every unit it asks for: overlapping callers share one read per unit, a
+ * repeated request reads nothing, and no row is decoded twice in a run. A read that rejects
+ * withdraws the promises it registered, so a later request reads those units again. Every read
+ * returns, in the rows' own transaction, which of its keys the ledger holds (`present`).
  *
  * Joining units from several reads is sound because blob rows are a function of the key under one
  * VAT version and leave the store only with the key's ledger row: an evict-and-rewrite files the
  * same rows again. So every read that finds the key present returns rows of the same set, and the
- * one hazard is a read that finds it gone. A key a read finds absent drops everything held for it
- * and is held as ABSENT: every later request is answered with no rows and reads nothing, until a
- * write forgets it. Without that check, an eviction between two reads would leave the key judged
- * covered on its first read's rows (the coverage predicate reads no lexical reference) with its
- * second read's rows missing. A key's `blobReferences` rows are kept in primary-key order, so rows
- * joined from several reads equal one whole read's.
+ * one hazard is a read that finds it gone. A key any read finds absent is absent for the rest of
+ * the run, whichever read settles last: every request is answered with no rows for it and reads
+ * nothing, and no read that finds it present, whenever it began, revives it. Only a write that
+ * moves the key forgets that. Without the check, an eviction between two reads would leave the
+ * key judged covered on its first read's rows (the coverage predicate reads no lexical reference)
+ * with its second read's rows missing. A key's `blobReferences` rows are answered in primary-key
+ * order, so rows joined from several reads equal one whole read's.
  *
- * The harness tables are one unit because they are derived lazily, per `(key, harness)` pair, and
- * a pair's facts and imports must come from one read. A pair the store gains after the key's
- * harness read is not held: the harness pass finds it unsettled and derives it, and its write
- * forgets the key.
+ * The harness tables are one unit per key, not per `(key, harness)` pair: a pair's facts and
+ * imports must come from one read, and the pairs are derived lazily. A pair the store gains after
+ * the key's harness read is not held: the harness pass finds it unsettled and derives it, and its
+ * write forgets the key.
  *
  * Extent rows are not immutable: a tree is rewritten in place. So a tree is still held from ONE
  * read, and a request wider than it holds reads the tree again, whole, under both requests: a tree
@@ -36,8 +40,9 @@
  * Blob rows are immutable per key and leave only with their ledger row, so a key held with its
  * rows stays right for the run. What a run holds for a key that a write then fills (a key its read
  * did not cover, or one a harness pass added a pair to) is no longer what the store holds, so the
- * write forgets it, and the next ask reads it. An extent write rewrites its tree, so it forgets the
- * tree.
+ * write forgets it, absence included, and the next ask reads it. A read still in flight for a
+ * forgotten key settles into what the run no longer holds. An extent write rewrites its tree, so it
+ * forgets the tree.
  */
 
 import { appendAll, compareCodeUnits, VatError } from '@vibe-agent-toolkit/utils';
@@ -48,7 +53,6 @@ import { ReferenceSyntacticFormSchema, type ReferenceSyntacticForm } from '../sc
 import { compareRows } from './export.js';
 import { EMPTY_STORED_TIER, emptyBlobRows, StoreRequestUnmetError, storedBlobTier, type StoredBlobTier } from './store-hydration.js';
 import {
-  ALL_BLOB_REQUEST,
   type BlobFactsWrite,
   type BlobRequest,
   type BlobScopedRows,
@@ -99,27 +103,27 @@ const compareReferences = compareRows(PROJECTION_TABLES.blobReferences);
 type TableRows = Partial<Record<string, readonly Readonly<Record<string, unknown>>[]>>;
 
 /**
- * What a run holds of one content key: the tables it holds (every table but `blobReferences`,
- * the harness tables always both or neither), the reference forms it holds, and their rows.
+ * One unit of a key's blob rows: a non-partitioned table, one reference form of `blobReferences`,
+ * or the harness tables together.
  */
-interface HeldBlob {
-  readonly tables: ReadonlySet<BlobScopedTableName>;
-  readonly forms: ReadonlySet<ReferenceSyntacticForm>;
-  readonly rows: TableRows;
+interface BlobUnit {
+  readonly id: string;
+  readonly tables: readonly BlobScopedTableName[];
+  /** The one form of `blobReferences` it holds, or `undefined` for a unit of whole tables. */
+  readonly form: ReferenceSyntacticForm | undefined;
 }
 
-/** A key held before any read: nothing. */
-const NOTHING_HELD: HeldBlob = { tables: new Set(), forms: new Set(), rows: {} };
+/** The harness tables, one unit per key. */
+const HARNESS_UNIT: BlobUnit = { id: 'harness', tables: HARNESS_TABLES, form: undefined };
 
 /**
- * A key a read found absent from the store's ledger: it holds every unit with no rows, so every
- * later request is answered with none and reads nothing, until a write forgets it.
+ * What a run holds of one content key: a promise of each unit's rows, in flight or settled, and
+ * whether any read found the key absent from the ledger (sticky until a write forgets the key).
  */
-const ABSENT: HeldBlob = {
-  tables: new Set(ALL_BLOB_REQUEST.tables.filter((table) => table !== REFERENCES)),
-  forms: EVERY_FORM,
-  rows: {},
-};
+interface HeldKey {
+  absent: boolean;
+  readonly units: Map<string, Promise<TableRows>>;
+}
 
 /** What a run holds of one tree: the request its one read answered, and that read's rows, or `undefined` for a tree never written. */
 interface HeldExtent {
@@ -187,44 +191,73 @@ function unionOf(left: BlobRequest<BlobScopedTableName>, right: BlobRequest<Blob
 }
 
 /**
- * The units of `request` a key does not hold, as the one request that reads them: a requested
- * harness table brings the other, so a `(key, harness)` pair's facts and imports come from one read.
+ * The unit a table other than `blobReferences` is held in.
+ *
+ * @param table - The table
+ * @returns The harness unit for a harness table, else the table's own
+ */
+function unitOfTable(table: BlobScopedTableName): BlobUnit {
+  return HARNESS_TABLES.includes(table) ? HARNESS_UNIT : { id: table, tables: [table], form: undefined };
+}
+
+/**
+ * The unit one reference form is held in.
+ *
+ * @param form - The form
+ * @returns Its unit of `blobReferences`
+ */
+function unitOfForm(form: ReferenceSyntacticForm): BlobUnit {
+  return { id: `${REFERENCES}\0${form}`, tables: [REFERENCES], form };
+}
+
+/**
+ * The units a request asks for.
+ *
+ * @param request - The request
+ * @returns Each unit once
+ */
+function unitsOf(request: BlobRequest<BlobScopedTableName>): BlobUnit[] {
+  const units = new Map<string, BlobUnit>();
+  for (const table of request.tables) {
+    for (const unit of table === REFERENCES ? [...formsOf(request)].map((form) => unitOfForm(form)) : [unitOfTable(table)]) units.set(unit.id, unit);
+  }
+  return [...units.values()];
+}
+
+/**
+ * The units of `request` a key holds no promise of, as the one request that reads them: a
+ * requested harness table brings the other, so a `(key, harness)` pair's facts and imports come
+ * from one read.
  *
  * @param held - What the run holds of the key
  * @param request - What the caller reads
  * @returns The request for what is missing, its tables in the caller's order and its forms the
  *   caller's when it holds none of them, or `undefined` when the key holds every unit asked
  */
-function missingFrom(held: HeldBlob, request: BlobRequest<BlobScopedTableName>): BlobRequest<BlobScopedTableName> | undefined {
+function missingFrom(held: HeldKey, request: BlobRequest<BlobScopedTableName>): BlobRequest<BlobScopedTableName> | undefined {
   const asked = formsOf(request);
-  const forms = new Set([...asked].filter((form) => !held.forms.has(form)));
+  const forms = new Set([...asked].filter((form) => !held.units.has(unitOfForm(form).id)));
   const tables = request.tables.flatMap((table) => {
     if (table === REFERENCES) return forms.size > 0 ? [REFERENCES] : [];
-    return (HARNESS_TABLES.includes(table) ? HARNESS_TABLES : [table]).filter((unit) => !held.tables.has(unit));
+    const unit = unitOfTable(table);
+    return held.units.has(unit.id) ? [] : unit.tables;
   });
   if (tables.length === 0) return undefined;
   return { tables: [...new Set(tables)], referenceForms: forms.size === asked.size ? request.referenceForms : forms };
 }
 
 /**
- * What a present key holds after a read adds its units.
+ * One unit's rows out of one key's rows.
  *
- * @param held - What it held before
- * @param read - What the read asked for: units the key did not hold
- * @param rows - The read's rows of the key
- * @returns Both, `blobReferences` in primary-key order
+ * @param unit - The unit
+ * @param keyRows - The key's rows, by table, from a read that asked for the unit
+ * @returns The unit's tables, of `blobReferences` only its form
  */
-function heldAfter(held: HeldBlob, read: BlobRequest<BlobScopedTableName>, rows: TableRows): HeldBlob {
-  const merged: TableRows = { ...held.rows };
-  for (const table of read.tables) {
-    const added = rows[table] ?? [];
-    merged[table] = table === REFERENCES ? [...(held.rows[table] ?? []), ...added].sort(compareReferences) : added;
-  }
-  return {
-    tables: new Set([...held.tables, ...read.tables.filter((table) => table !== REFERENCES)]),
-    forms: new Set([...held.forms, ...formsOf(read)]),
-    rows: merged,
-  };
+function rowsOfUnit(unit: BlobUnit, keyRows: Readonly<Record<string, readonly Readonly<Record<string, unknown>>[]>> | undefined): TableRows {
+  return Object.fromEntries(unit.tables.map((table) => {
+    const rows = keyRows?.[table] ?? [];
+    return [table, unit.form === undefined ? rows : rows.filter((row) => row['syntacticForm'] === unit.form)];
+  }));
 }
 
 /**
@@ -340,22 +373,34 @@ function keysMovedBy(write: BlobFactsWrite): ReadonlySet<string> {
 }
 
 /**
- * The rows a caller asked for, out of what the keys hold.
+ * One key's rows out of its units' settled rows.
  *
- * @param held - What the run holds, by key
- * @param keys - The caller's keys, each held
- * @param request - What the caller reads
- * @returns The requested tables, and of `blobReferences` the requested forms, in key order
+ * @param held - What the run holds of the key
+ * @param units - The settled rows of each unit the caller asked for
+ * @returns Their rows by table, `blobReferences` in primary-key order; none for a key a read found absent
  */
-function answerOf(held: ReadonlyMap<string, HeldBlob>, keys: readonly ContentKey[], request: BlobRequest<BlobScopedTableName>): TableRows {
-  const forms = formsOf(request);
+function keyRowsOf(held: HeldKey, units: readonly TableRows[]): TableRows {
+  if (held.absent) return {};
+  const merged: Record<string, Readonly<Record<string, unknown>>[]> = {};
+  for (const unitRows of units) {
+    for (const [table, rows] of Object.entries(unitRows)) merged[table] = [...(merged[table] ?? []), ...(rows ?? [])];
+  }
+  merged[REFERENCES]?.sort(compareReferences);
+  return merged;
+}
+
+/**
+ * The rows a caller asked for, out of each key's rows.
+ *
+ * @param keyRows - Each of the caller's keys' rows, in the caller's key order
+ * @param request - What the caller reads
+ * @returns Exactly the requested tables, in key order
+ */
+function answerOf(keyRows: readonly TableRows[], request: BlobRequest<BlobScopedTableName>): TableRows {
   const answer: Record<string, Readonly<Record<string, unknown>>[]> = {};
   for (const table of request.tables) {
     const rows: Readonly<Record<string, unknown>>[] = [];
-    for (const key of keys) {
-      const keyRows = held.get(key)?.rows[table] ?? [];
-      appendAll(rows, table === REFERENCES ? keyRows.filter((row) => forms.has(row['syntacticForm'] as ReferenceSyntacticForm)) : keyRows);
-    }
+    for (const held of keyRows) appendAll(rows, held[table] ?? []);
     answer[table] = rows;
   }
   return answer;
@@ -401,32 +446,75 @@ function widenedExtentRequest(held: HeldExtent | undefined, request: ExtentReque
   };
 }
 
+/** One group read's answer, split by key: which keys the ledger holds, and each key's rows. */
+interface GroupRead {
+  readonly present: ReadonlySet<ContentKey>;
+  readonly byKey: ReadonlyMap<ContentKey, Readonly<Record<string, readonly Readonly<Record<string, unknown>>[]>>>;
+}
+
 /**
- * Read, for each key, the units of `request` it does not hold: one read per group of keys missing
- * the same units. A key the read finds present adds them to what it holds; a key it finds absent
- * drops what it held and is held {@link ABSENT}.
+ * Register a key's promise of one unit's rows from a group read: settling, it marks the key absent
+ * when the read finds it so; rejecting, it withdraws itself, so a later request reads the unit again.
+ *
+ * @param key - The key
+ * @param held - What the run holds of it: updated in place
+ * @param unit - A unit the read asks for that the key holds no promise of
+ * @param read - The group read
+ */
+function registerUnit(key: ContentKey, held: HeldKey, unit: BlobUnit, read: Promise<GroupRead>): void {
+  const rows = read.then(({ present, byKey }) => {
+    if (!present.has(key)) held.absent = true;
+    return rowsOfUnit(unit, byKey.get(key));
+  });
+  held.units.set(unit.id, rows);
+  rows.catch(() => {
+    if (held.units.get(unit.id) === rows) held.units.delete(unit.id);
+  });
+}
+
+/**
+ * Start, for each key, the read of the units of `request` it holds no promise of: one read per
+ * group of keys missing the same units, each unit's promise registered before anything is awaited.
+ * A key a read found absent reads nothing.
  *
  * @param store - The store
- * @param blobs - What the run holds, by key: updated in place
- * @param keys - The caller's keys
+ * @param held - What the run holds of each of the caller's keys: updated in place
  * @param request - What the caller reads
  */
-async function readMissingUnits(store: FactStore, blobs: Map<ContentKey, HeldBlob>, keys: readonly ContentKey[], request: BlobRequest<BlobScopedTableName>): Promise<void> {
-  const pending = new Map<string, { readonly request: BlobRequest<BlobScopedTableName>; readonly keys: ContentKey[] }>();
-  for (const key of keys) {
-    const missing = missingFrom(blobs.get(key) ?? NOTHING_HELD, request);
+function readMissingUnits(store: FactStore, held: ReadonlyMap<ContentKey, HeldKey>, request: BlobRequest<BlobScopedTableName>): void {
+  const groups = new Map<string, { readonly request: BlobRequest<BlobScopedTableName>; readonly keys: ContentKey[] }>();
+  for (const [key, keyHeld] of held) {
+    const missing = keyHeld.absent ? undefined : missingFrom(keyHeld, request);
     if (missing === undefined) continue;
     const id = requestId(missing);
-    const group = pending.get(id) ?? { request: missing, keys: [] };
+    const group = groups.get(id) ?? { request: missing, keys: [] };
     group.keys.push(key);
-    pending.set(id, group);
+    groups.set(id, group);
   }
-  const reads = await Promise.all([...pending.values()].map(async (group) => ({ group, read: await readBlobTier(store, group.keys, group.request) })));
-  for (const { group, read } of reads) {
-    for (const [key, rows] of rowsByKey(group.request, group.keys, read.rows)) {
-      blobs.set(key, read.present.has(key) ? heldAfter(blobs.get(key) ?? NOTHING_HELD, group.request, rows) : ABSENT);
+  for (const group of groups.values()) {
+    const read = readBlobTier(store, group.keys, group.request).then(({ rows, present }) => ({ present, byKey: rowsByKey(group.request, group.keys, rows) }));
+    const units = unitsOf(group.request);
+    for (const key of group.keys) {
+      const keyHeld = held.get(key);
+      if (keyHeld !== undefined) for (const unit of units) registerUnit(key, keyHeld, unit, read);
     }
   }
+}
+
+/**
+ * One key's rows of the units a caller asks for, once every unit's read has settled.
+ *
+ * @param held - What the run holds of the key, every unit asked registered unless it is absent
+ * @param units - The units the caller asks for
+ * @returns Its rows, none when a read found it absent
+ */
+async function settledRowsOf(held: HeldKey, units: readonly BlobUnit[]): Promise<TableRows> {
+  const pending = held.absent ? [] : units.map((unit) => {
+    const rows = held.units.get(unit.id);
+    if (rows === undefined) throw new TypeError(`the stored blob unit ${unit.id} was asked and never registered`);
+    return rows;
+  });
+  return keyRowsOf(held, await Promise.all(pending));
 }
 
 /**
@@ -436,14 +524,24 @@ async function readMissingUnits(store: FactStore, blobs: Map<ContentKey, HeldBlo
  * @returns Its reads
  */
 function storeReads(store: FactStore): StoreReads {
-  const blobs = new Map<ContentKey, HeldBlob>();
+  const blobs = new Map<ContentKey, HeldKey>();
   const extents = new Map<string, HeldExtent>();
   const extentId = (key: ExtentKey): string => `${key.rootId}\0${key.treeHash}`;
+  const heldOf = (key: ContentKey): HeldKey => {
+    let held = blobs.get(key);
+    if (held === undefined) {
+      held = { absent: false, units: new Map() };
+      blobs.set(key, held);
+    }
+    return held;
+  };
   return {
     blobs: async <Table extends BlobScopedTableName>(contentKeys: readonly ContentKey[], request: BlobRequest<Table>) => {
-      const keys = [...new Set(contentKeys)];
-      await readMissingUnits(store, blobs, keys, request);
-      return answerOf(blobs, keys, request) as unknown as Pick<BlobScopedRows, Table>;
+      const held = new Map([...new Set(contentKeys)].map((key) => [key, heldOf(key)] as const));
+      readMissingUnits(store, held, request);
+      const units = unitsOf(request);
+      const keyRows = await Promise.all([...held.values()].map((keyHeld) => settledRowsOf(keyHeld, units)));
+      return answerOf(keyRows, request) as unknown as Pick<BlobScopedRows, Table>;
     },
     extent: async <Table extends ExtentScopedTableName>(key: ExtentKey, request: ExtentRequest<Table>) => {
       const id = extentId(key);

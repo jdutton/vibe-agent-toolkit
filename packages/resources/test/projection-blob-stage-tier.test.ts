@@ -17,6 +17,7 @@ import { blobRowsByKey } from '../src/projection/blob-resource-facts.js';
 import { RunContentCache } from '../src/projection/content-cache.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
+import { compareRows } from '../src/projection/export.js';
 import { storedHarnessRows } from '../src/projection/harness/harness-pass.js';
 import { afterClosurePromotion, type BlobStage } from '../src/projection/merge.js';
 import { type Projection, ProjectionBuilder } from '../src/projection/projection.js';
@@ -33,13 +34,14 @@ import {
   EXTENT_STEP_TABLES,
   type HarnessPair,
 } from '../src/projection/store.js';
-import { runStoredReads, storedTierReads } from '../src/projection/stored-reads.js';
+import { PROJECTION_STORE_READ_FAILED_CODE, runStoredReads, storedTierReads } from '../src/projection/stored-reads.js';
+import { PROJECTION_TABLES } from '../src/projection/table-registry.js';
 import { type BlobConditionRow, type ReferenceSyntacticForm, ReferenceSyntacticFormSchema } from '../src/schemas/projection-blobs.js';
 import type { HarnessBlobFactsRow, HarnessBlobImportRow } from '../src/schemas/projection-harness.js';
 import { testContentKey } from '../src/testing.js';
 
 import { baseBuilderForRoot, populateBlobsOnOwnDispatcher } from './blob-fixture-population.js';
-import { FakeFactStore, WIDE_BLOB_BUDGET_BYTES } from './fake-fact-store.js';
+import { FailingBlobStore, FakeFactStore, WIDE_BLOB_BUDGET_BYTES } from './fake-fact-store.js';
 import { createGitRepo, setupSubdirTestSuite, writeFileIn } from './test-helpers.js';
 
 const suite = setupSubdirTestSuite('blob-stage-tier-');
@@ -214,42 +216,6 @@ describe('one reader for a hit and the derivation after it', () => {
     expect([...joined.covered].sort(orderContentKeys)).toEqual([...once.covered].sort(orderContentKeys));
   });
 
-  it('judges a key evicted between a hit and the wider read uncovered, holding none of its rows', async () => {
-    const derived = await twoDocuments();
-    const keys = keyedContentKeys(derived);
-    const [evicted] = keys;
-    if (evicted === undefined || keys.length < 2) throw new Error('the premise: two keyed documents');
-    const store = await recordingStoreOf(derived);
-
-    const reader = tierOver(store);
-    const hit = await reader.cover(keys, QUERY_BLOB_REQUEST);
-    expect(hit.covered.has(evicted), 'the hit covered it').toBe(true);
-    // Another process's eviction, between the hit's read and the derivation's.
-    store.forgetBlobFacts(evicted);
-    const widened = await reader.cover(keys, ALL_BLOB_REQUEST);
-
-    expect(widened.covered.has(evicted), 'a key gone from the store is not covered').toBe(false);
-    expect(widened.rows.blobs.some((row) => row.contentKey === evicted), 'no row of it from the earlier read').toBe(false);
-    expect(widened.rows.blobReferences.some((row) => row.blob === evicted), 'neither form of reference').toBe(false);
-    expect([...widened.covered].sort(orderContentKeys)).toEqual(keys.filter((key) => key !== evicted).sort(orderContentKeys));
-  });
-
-  it('over a store blind to presence, judges the evicted key covered on the hit\'s rows: the mutant the check catches', async () => {
-    const derived = await twoDocuments();
-    const keys = keyedContentKeys(derived);
-    const gone = keys.at(-1);
-    if (gone === undefined || keys.length < 2) throw new Error('the premise: two keyed documents');
-    const blind = await filledWith(new PresenceBlindStore(WIDE_BLOB_BUDGET_BYTES), derived);
-    const tier = tierOver(blind);
-
-    expect((await tier.cover(keys, QUERY_BLOB_REQUEST)).covered.has(gone)).toBe(true);
-    blind.forgetBlobFacts(gone);
-    const { covered, rows } = await tier.cover(keys, ALL_BLOB_REQUEST);
-
-    expect(covered.has(gone), 'without presence, two snapshots join').toBe(true);
-    expect(rows.blobs.filter((row) => row.contentKey === gone), 'on the first read\'s rows').toHaveLength(1);
-  });
-
   it('merges a narrow read and a wider one into a whole read\'s reference rows, in order', async () => {
     // An `@` import (lexical) on a line before a markdown link (AST): the two reads' ordinals interleave.
     writeFileIn(suite.tempDir, 'doc.md', '# Doc\n\nSee @other.md.\n\nThen [other](./other.md).\n');
@@ -258,8 +224,11 @@ describe('one reader for a hit and the derivation after it', () => {
     await populateBlobsOnOwnDispatcher(builder);
     const derived = builder.build();
     const keys = keyedContentKeys(derived);
-    const firstAst = derived.blobReferences.findIndex((row) => AST_SYNTACTIC_FORMS.has(row.syntacticForm));
-    expect(derived.blobReferences.slice(0, Math.max(firstAst, 0)).some((row) => LEXICAL_FORMS.has(row.syntacticForm)), 'the premise: a lexical row precedes an AST row').toBe(true);
+    // The premise, in the order a key holds its rows (primary key), not the order a parse emits them.
+    const inKeyOrder = derived.blobReferences.toSorted(compareRows(PROJECTION_TABLES.blobReferences));
+    const firstAst = inKeyOrder.findIndex((row) => AST_SYNTACTIC_FORMS.has(row.syntacticForm));
+    expect(firstAst, 'the premise: an AST row').toBeGreaterThan(0);
+    expect(inKeyOrder.slice(0, firstAst).some((row) => LEXICAL_FORMS.has(row.syntacticForm)), 'the premise: a lexical row precedes an AST row').toBe(true);
     const store = await recordingStoreOf(derived);
 
     const reader = tierOver(store);
@@ -300,6 +269,153 @@ describe('one reader for a hit and the derivation after it', () => {
     await partial.cover(keys, QUERY_BLOB_REQUEST);
 
     expect([...(await partial.cover([first], ALL_BLOB_REQUEST)).covered].sort(orderContentKeys)).toEqual([...once.covered].sort(orderContentKeys));
+  });
+});
+
+describe.each([
+  { over: 'an honest store', make: (): RecordingStore => new RecordingStore(WIDE_BLOB_BUDGET_BYTES), test: it },
+  // The mutant the presence check catches: to the reader, a store blind to presence is a reader
+  // that joins two snapshots without the check, so the unchanged body must fail over it.
+  { over: 'a store blind to presence', make: (): RecordingStore => new PresenceBlindStore(WIDE_BLOB_BUDGET_BYTES), test: it.fails },
+])('a torn read over $over', ({ make, test }) => {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(suite.beforeEach);
+
+  test('judges a key evicted between a hit and the wider read uncovered, holding none of its rows', async () => {
+    const derived = await twoDocuments();
+    const keys = keyedContentKeys(derived);
+    const [evicted] = keys;
+    if (evicted === undefined || keys.length < 2) throw new Error('the premise: two keyed documents');
+    const store = await filledWith(make(), derived);
+
+    const reader = tierOver(store);
+    const hit = await reader.cover(keys, QUERY_BLOB_REQUEST);
+    expect(hit.covered.has(evicted), 'the hit covered it').toBe(true);
+    // Another process's eviction, between the hit's read and the derivation's.
+    store.forgetBlobFacts(evicted);
+    const widened = await reader.cover(keys, ALL_BLOB_REQUEST);
+
+    expect(widened.covered.has(evicted), 'a key gone from the store is not covered').toBe(false);
+    expect(widened.rows.blobs.some((row) => row.contentKey === evicted), 'no row of it from the earlier read').toBe(false);
+    expect(widened.rows.blobReferences.some((row) => row.blob === evicted), 'neither form of reference').toBe(false);
+    expect([...widened.covered].sort(orderContentKeys)).toEqual(keys.filter((key) => key !== evicted).sort(orderContentKeys));
+  });
+});
+
+/** One read a {@link HeldStore} holds until the test releases it. */
+interface HeldRead {
+  readonly release: () => void;
+}
+
+/**
+ * A store whose reads, while `holding`, wait for the test to release them: answered from the ledger
+ * at the release, or, when `snapshotAtCall`, from the ledger at the call (a read whose transaction
+ * ran before an eviction and whose answer arrives after it).
+ */
+class HeldStore extends RecordingStore {
+  holding = false;
+  snapshotAtCall = false;
+  readonly held: HeldRead[] = [];
+
+  override readBlobFacts<Table extends BlobScopedTableName>(contentKeys: readonly ContentKey[], request: BlobRequest<Table>): Promise<BlobFactsRead<Table>> {
+    if (!this.holding) return super.readBlobFacts(contentKeys, request);
+    const gate = Promise.withResolvers<undefined>();
+    this.held.push({ release: () => { gate.resolve(undefined); } });
+    if (this.snapshotAtCall) {
+      const answer = super.readBlobFacts(contentKeys, request);
+      return gate.promise.then(async () => answer);
+    }
+    return gate.promise.then(async () => super.readBlobFacts(contentKeys, request));
+  }
+}
+
+/** Let every started call reach its store read, and every released read settle. */
+async function settled(): Promise<void> {
+  await new Promise((resolve) => { setImmediate(resolve); });
+}
+
+/** An answer's reference rows as sorted text: a row held twice shows twice. */
+function referenceTexts(rows: Pick<BlobScopedRows, 'blobReferences'>): string[] {
+  return rows.blobReferences.map((row) => JSON.stringify(row)).sort(compareCodeUnits);
+}
+
+/** A held-read store filled with two documents, and one of their keys. */
+async function heldStoreOfOneKey(): Promise<{ key: ContentKey; store: HeldStore }> {
+  const derived = await twoDocuments();
+  const [key] = keyedContentKeys(derived);
+  if (key === undefined) throw new Error('the premise: a keyed document');
+  return { key, store: await filledWith(new HeldStore(WIDE_BLOB_BUDGET_BYTES), derived) };
+}
+
+describe('overlapping calls on one key', () => {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(suite.beforeEach);
+
+  it('share one read, and each answer holds each reference once', async () => {
+    const { key, store } = await heldStoreOfOneKey();
+    const whole = await runStoredReads().of(store).blobs([key], ALL_BLOB_REQUEST);
+    expect(whole.blobReferences.length, 'the premise: the key holds references').toBeGreaterThan(0);
+    const before = store.asked.length;
+    const reads = runStoredReads().of(store);
+
+    store.holding = true;
+    const first = reads.blobs([key], ALL_BLOB_REQUEST);
+    const second = reads.blobs([key], ALL_BLOB_REQUEST);
+    await settled();
+    for (const read of store.held) read.release();
+    const answers = await Promise.all([first, second]);
+
+    for (const answer of answers) expect(referenceTexts(answer), 'each reference once').toEqual(referenceTexts(whole));
+    expect(store.asked.length - before, 'the store is asked once').toBe(1);
+  });
+
+  it('keep a key a read found absent absent, whatever a read begun before it answers', async () => {
+    const { key, store } = await heldStoreOfOneKey();
+    const reads = runStoredReads().of(store);
+    const held = await reads.blobs([key], { tables: ['blobs', 'blobReferences'], referenceForms: AST_SYNTACTIC_FORMS });
+    expect(held.blobs, 'the premise: the key is held').toHaveLength(1);
+
+    store.holding = true;
+    // B: the lexical references, read before the eviction and answered after it.
+    store.snapshotAtCall = true;
+    const wider = reads.blobs([key], { tables: ['blobReferences'], referenceForms: LEXICAL_FORMS });
+    await settled();
+    // A: the harness unit, read after the eviction and answered first.
+    store.snapshotAtCall = false;
+    const harness = reads.blobs([key], { tables: ['harnessBlobFacts'], referenceForms: 'all' });
+    await settled();
+    store.forgetBlobFacts(key);
+    const [readB, readA] = store.held;
+    if (readA === undefined || readB === undefined) throw new Error('the premise: both reads are held');
+    readA.release();
+    await settled();
+    readB.release();
+    const answers: readonly object[] = [await harness, await wider];
+    store.holding = false;
+    const after = await reads.blobs([key], ALL_BLOB_REQUEST);
+
+    expect(store.held, 'the premise: two reads, one per unit').toHaveLength(2);
+    expect(held.blobReferences.length, 'the premise: the key held rows before the eviction').toBeGreaterThan(0);
+    expect(storedBlobTier(after, [key]).covered.has(key), 'a key a read found gone is not covered').toBe(false);
+    for (const answer of [...answers, after]) {
+      expect(Object.values(answer).flat(), 'and holds none of its rows').toEqual([]);
+    }
+  });
+
+  it('read a unit again after its read rejected, the rejection coded as the store\'s', async () => {
+    const derived = await twoDocuments();
+    const keys = keyedContentKeys(derived);
+    const store = await filledWith(new FailingBlobStore(WIDE_BLOB_BUDGET_BYTES), derived);
+    const reads = runStoredReads().of(store);
+
+    store.failBlobs = true;
+    await expect(reads.blobs(keys, ALL_BLOB_REQUEST)).rejects.toMatchObject({ code: PROJECTION_STORE_READ_FAILED_CODE, cause: store.failure });
+    store.failBlobs = false;
+    const retried = await reads.blobs(keys, ALL_BLOB_REQUEST);
+
+    expect(retried.blobs.map((row) => row.contentKey).sort(orderContentKeys)).toEqual([...keys].sort(orderContentKeys));
   });
 });
 
