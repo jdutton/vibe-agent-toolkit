@@ -578,16 +578,25 @@ function referencesAfterEviction(error: StoredRowsEvictedError, cache: Populatio
 /**
  * The run's refusal when its one retry found rows evicted again.
  *
+ * A write's eviction never selects what that write holds (`evictPastBudget` in projection-sqlite's
+ * store), so what this query read and lost is another run's write to the same store; the budgets are fixed
+ * in the build, so the remedies are what a user controls: when the runs happen, which store each
+ * uses (`VAT_CACHE_DIR`), and, for the row-set tier, how many row sets this tree holds.
+ *
  * @param error - The second attempt's eviction
  * @returns The refusal
  */
 function evictedTwice(error: StoredRowsEvictedError): VatError {
+  const rowSetRemedy = error.eviction.tier === 'rowSet'
+    ? ' If it keeps happening while other runs share the store, this tree\'s row sets are a large share of the'
+      + ' store\'s fixed row-set budget: route files the query does not need away with resources.extractors.data.exclude.'
+    : '';
   return new VatError(
     PROJECTION_STORE_ROWS_EVICTED_CODE,
-    `${error.message} It happened again on the run's one retry, so the run is refused. The projection store is`
-    + ' evicting rows faster than one query can read them: another run is filling it at the same time, or its'
-    + ' budget (DEFAULT_BLOB_TIER_BUDGET_BYTES, DEFAULT_ROW_SET_TIER_BUDGET_BYTES for the row-set tier) is too'
-    + ' small for this tree. Run again once the concurrent run has finished.',
+    `${error.message} It happened again on the run's one retry, so the run is refused. Another run wrote to the`
+    + ' projection store while this query read it, and the store evicted rows this query held to keep within its'
+    + ' fixed budget. Run again once the other run has finished, or give concurrent runs separate stores with'
+    + ` VAT_CACHE_DIR.${rowSetRemedy}`,
     { cause: error },
   );
 }

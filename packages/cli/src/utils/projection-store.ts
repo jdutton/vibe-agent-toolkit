@@ -731,7 +731,7 @@ export const TEST_EVICT_ROW_SET_BEFORE_VALUES_ENV = 'VAT_TEST_EVICT_ROW_SET_BEFO
 /**
  * The data stage's seams for one query attempt: {@link NO_DATA_STAGE_SEAMS} unless a test process
  * listed this attempt in {@link TEST_EVICT_ROW_SET_ENV} or {@link TEST_EVICT_ROW_SET_BEFORE_VALUES_ENV}
- * and the run has a store. The eviction is the backend's own test function, never a port member.
+ * and the run has a store. The eviction is the backend's `./testing` function, never a port member.
  *
  * @param store - The run's store, or `undefined` with the store off
  * @param attempt - The query attempt, from 1
@@ -742,10 +742,10 @@ export async function dataStageSeamsFor(store: FactStore | undefined, attempt: n
   const afterWrite = attemptListed(TEST_EVICT_ROW_SET_ENV, attempt);
   const beforeValues = attemptListed(TEST_EVICT_ROW_SET_BEFORE_VALUES_ENV, attempt);
   if (store === undefined || !inTest || (!afterWrite && !beforeValues)) return NO_DATA_STAGE_SEAMS;
-  const backend = await loadBackend();
+  const { evictRowSetForTest } = await import('@vibe-agent-toolkit/projection-sqlite/testing');
   const evictFirst = (facts: readonly RowSetId[]): void => {
     const [first] = facts;
-    if (first !== undefined) backend.evictRowSetForTest(store, first);
+    if (first !== undefined) evictRowSetForTest(store, first);
   };
   return {
     afterWrite: afterWrite ? evictFirst : NO_DATA_STAGE_SEAMS.afterWrite,

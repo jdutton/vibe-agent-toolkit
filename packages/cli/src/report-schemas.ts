@@ -48,16 +48,7 @@
  */
 
 import { FrictionReportSchema } from '@vibe-agent-toolkit/agent-skills';
-import {
-  ChangedFileRowSchema,
-  ClaudeContextChainRowSchema,
-  ClaudeContextLoadRowSchema,
-  EdgeResolutionRowSchema,
-  EdgeRowSchema,
-  isProjectionTable,
-  LensEntryPointRowSchema,
-  storedRelationSpecs,
-} from '@vibe-agent-toolkit/resources';
+import { queryableRelationSpecs } from '@vibe-agent-toolkit/resources';
 import { ExitCode, type ExitCodeValue, type Report, type ReportZodSchema } from '@vibe-agent-toolkit/schema';
 import type { ZodTypeAny } from 'zod';
 
@@ -521,30 +512,24 @@ const LEGACY = [
   },
 ] as const satisfies readonly LegacyShape[];
 
-/** Relations VAT publishes to adopter SQL that no projection table materialises (the per-lens derived rows). */
-const DERIVED_RELATION_SCHEMAS: ReadonlyArray<readonly [string, ZodTypeAny]> = [
-  ['projection-edges', EdgeRowSchema],
-  ['projection-edge-resolutions', EdgeResolutionRowSchema],
-  ['projection-lens-entry-points', LensEntryPointRowSchema],
-  ['projection-claude-context-chains', ClaudeContextChainRowSchema],
-  ['projection-claude-context-loads', ClaudeContextLoadRowSchema],
-  ['projection-changed-files', ChangedFileRowSchema],
-];
-
-/** Every relation `vat resources query` / `check` expose to an adopter's SQL, as a file artifact. */
-const PROJECTION_RELATIONS: readonly PublishedArtifactShape[] = [
-  ...storedRelationSpecs().filter(isProjectionTable).map((spec) => [`projection-${spec.name.replaceAll('_', '-')}`, spec.schema] as const),
-  ...DERIVED_RELATION_SCHEMAS,
-].map(([name, schema]) => ({
-  kind: 'artifact',
-  channel: 'file',
-  name,
-  publishers: ['resources query', 'resources check'],
-  schema,
-  schemaFile: `packages/resources/schemas/${name}.json`,
-  writer: 'projection-store',
-  reason: 'A relation VAT publishes to adopter SQL; its row shape is what a check or query statement reads.',
-}));
+/**
+ * Every relation `vat resources query` / `check` expose to an adopter's SQL, as a file artifact —
+ * read off `queryableRelationSpecs()`, the one list the planner and the SQL gate read, so a relation
+ * a statement can name always ships its row shape.
+ */
+const PROJECTION_RELATIONS: readonly PublishedArtifactShape[] = queryableRelationSpecs().map(({ name: relation, schema }) => {
+  const name = `projection-${relation.replaceAll('_', '-')}`;
+  return {
+    kind: 'artifact',
+    channel: 'file',
+    name,
+    publishers: ['resources query', 'resources check'],
+    schema,
+    schemaFile: `packages/resources/schemas/${name}.json`,
+    writer: 'projection-store',
+    reason: 'A relation VAT publishes to adopter SQL; its row shape is what a check or query statement reads.',
+  };
+});
 
 const ARTIFACTS: readonly PublishedArtifactShape[] = [
   {

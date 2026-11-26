@@ -10,7 +10,8 @@
 
 import { DatabaseSync } from 'node:sqlite';
 
-import { DEFAULT_BLOB_TIER_BUDGET_BYTES, DEFAULT_ROW_SET_TIER_BUDGET_BYTES, evictRowSetForTest, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
+import { DEFAULT_BLOB_TIER_BUDGET_BYTES, DEFAULT_ROW_SET_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
+import { evictRowSetForTest } from '@vibe-agent-toolkit/projection-sqlite/testing';
 import { DEFAULT_PARSE_LIMITS, parseContentKey, quoteIdentifier, type RowSetId } from '@vibe-agent-toolkit/resources';
 import { safePath, type WorkCounter, type WorkCounterDump } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, expect } from 'vitest';
@@ -377,6 +378,8 @@ export const DATA_DEFECTS: readonly DataDefect[] = [
   { name: 'nulByte', path: DEFECT_PATH, bytes: () => `{"a": "x${NUL}y"}\n`, cause: 'defective:BLOB_NOT_TEXT' },
   { name: 'malformed', path: DEFECT_PATH, bytes: () => '{"a": }\n', cause: 'defective:DATA_PARSE_ERROR' },
   { name: 'commentInStrict', path: DEFECT_PATH, bytes: () => '{\n  // no comments in strict JSON\n  "a": 1\n}\n', cause: 'defective:DATA_PARSE_ERROR' },
+  { name: 'mismatchedCloser', path: DEFECT_PATH, bytes: () => `${'[},'.repeat(100_000)}\n`, cause: 'defective:DATA_PARSE_ERROR' },
+  { name: 'loneSurrogateKeys', path: DEFECT_PATH, bytes: () => String.raw`{"name": "a", "\uD800": 1, "\uD801": 2}` + '\n', cause: 'defective:DATA_LONE_SURROGATE' },
   { name: 'pastInputBytes', path: DEFECT_PATH, bytes: () => `["${'a'.repeat(DEFAULT_PARSE_LIMITS.inputBytes)}"]\n`, cause: 'defective:PARSE_LIMIT_EXCEEDED' },
   { name: 'pastOutputRows', path: DEFECT_PATH, bytes: () => `[${Array.from({ length: DEFAULT_PARSE_LIMITS.outputRows + 1 }, () => '0').join(',')}]\n`, cause: 'defective:PARSE_LIMIT_EXCEEDED' },
   { name: 'pastOutputDepth', path: DEFECT_PATH, bytes: () => `${'['.repeat(DEFAULT_PARSE_LIMITS.outputDepth + 1)}${']'.repeat(DEFAULT_PARSE_LIMITS.outputDepth + 1)}\n`, cause: 'defective:PARSE_LIMIT_EXCEEDED' },

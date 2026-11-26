@@ -54,6 +54,15 @@ describe('a data extraction on the parse pool', () => {
     await expect(extractOnPool(pool, '[1]')).resolves.toMatchObject({ outcome: 'rows' });
   });
 
+  it('answers mismatched closers as the document\'s defect, not a stack limit', async () => {
+    const pool = limitedPool();
+    await expect(extractOnPool(pool, '[},'.repeat(100_000))).resolves.toStrictEqual({
+      outcome: 'defect',
+      code: 'DATA_PARSE_ERROR',
+      message: 'CloseBracketExpected at line 1, column 2',
+    });
+  });
+
   it('is stopped at its row cap over the whole row set', async () => {
     const pool = limitedPool({ outputRows: 4 });
     await expect(limitStoppedAt(extractOnPool(pool, '[1, 2]'))).resolves.toBe('outputRows');

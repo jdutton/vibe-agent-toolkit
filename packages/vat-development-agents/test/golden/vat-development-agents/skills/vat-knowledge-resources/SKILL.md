@@ -144,8 +144,10 @@ as text. They are **not** decoded, because decoding needs a table spec and arbit
 
 **The projection store is ON by default.** VAT writes a SQLite cache of each scanned tree under
 `<tmpdir>/.vat-cache/` — roughly 71 MB for a 12,600-file repository, bounded at three trees per
-repository, eight repositories and about 265 MB of per-file facts (the most recent content keys
-that fit), and `vat cache clear` reclaims it.
+repository, eight repositories and two separate budgets for per-file facts: about 265 MB of pages
+for the most recent content keys whose facts fit, and 190 MB of stored row bytes for the most recent
+`data__*` row sets that fit (their size on disk is not measured, so add it on top). `vat cache clear`
+reclaims it.
 `VAT_PROJECTION_STORE=off` opts out of the store alone; `VAT_CACHE=0` vetoes every VAT cache. The store makes the POPULATION
 cheap and is never itself queried.
 
@@ -264,9 +266,10 @@ source type: `1` is an integer, `1.0` a real, `true` the integer 1, so read `typ
 boolean from a number.
 
 **A routed file with no rows refuses the statement**, naming the file: `INPUT_UNREADABLE` when it
-is `defective` (malformed, a comment in a strict `json` file, not text, past a size or depth cap:
-fix it, route it as `jsonc`, or `exclude` it), `RUN_INCOMPLETE` when this run could not decide
-(time or memory cap, changed or unreadable mid-run: run again). `data__routes` still answers, so
+is `defective` (malformed, a comment in a strict `json` file, not text, a lone surrogate, past a
+size or depth cap, or a read the filesystem refused: fix it, route it as `jsonc`, or `exclude` it),
+`RUN_INCOMPLETE` when this run could not decide (time or memory cap, changed or gone mid-run, out
+of file descriptors or busy: run again). `data__routes` still answers, so
 `SELECT path, state, code FROM data__routes WHERE state <> 'facts'` lists them.
 
 ### Relations that are COMPUTED, not stored — and are skipped unless you name them

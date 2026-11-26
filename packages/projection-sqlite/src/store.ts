@@ -273,8 +273,10 @@ export const DEFAULT_BLOB_TIER_BUDGET_BYTES = 190_000_000;
  * 369 in 2.15 MB. Scaling this repository's figure by the blob tier's headroom
  * rule (a 1.375 file-to-ledger ratio) would give a budget the adopter's one
  * tree overruns, so the bound is the blob tier's instead: about 88 times that
- * adopter, room for many corpora on one machine, and the same file-size
- * ceiling a reader already accepts for the blob tier.
+ * adopter, and room for many corpora on one machine.
+ *
+ * ⚠️ A SECOND budget on top of the blob tier's, not a share of it; its
+ * page-to-ledger ratio is unmeasured, so no page figure is claimed.
  *
  * **Global** and independent of the blob tier's: a large data corpus evicts
  * row sets, never blob facts, and the reverse.

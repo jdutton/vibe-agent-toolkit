@@ -56,8 +56,8 @@ function coldRun(sql: string, seam?: { readonly variable: string; readonly attem
 }
 
 /**
- * A second eviction inside the retry refuses: the run exits non-zero naming the repeat, the row-set
- * budget and a concurrent run. The error is a `VatError` coded `PROJECTION_STORE_ROWS_EVICTED`
+ * A second eviction inside the retry refuses: the run exits non-zero naming the repeat, a concurrent
+ * run, and the remedies a user controls (a separate store, routing data files away). The error is a `VatError` coded `PROJECTION_STORE_ROWS_EVICTED`
  * (`projection-query.ts` `evictedTwice`), but that code is in no published report's closed refusal
  * set, so the report envelope carries it as `INTERNAL_ERROR`, as the blob tier's repeat always has.
  *
@@ -68,8 +68,9 @@ function expectEvictedTwice(run: CountedQuery): void {
   const error = run.document['error'] as { code: string; message: string };
   expect(error.code).toBe('INTERNAL_ERROR');
   expect(error.message).toContain('It happened again on the run\'s one retry, so the run is refused.');
-  expect(error.message).toContain('DEFAULT_ROW_SET_TIER_BUDGET_BYTES');
-  expect(error.message).toContain('another run is filling it');
+  expect(error.message).toContain('Another run wrote to the projection store while this query read it');
+  expect(error.message).toContain('give concurrent runs separate stores with VAT_CACHE_DIR');
+  expect(error.message).toContain('resources.extractors.data.exclude');
 }
 
 describe('a row set evicted while a query holds it', () => {

@@ -6,12 +6,16 @@
  * It runs in the parse worker only (ADR I8): `parser-loader.ts` is its one
  * importer, held by `packages/dev-tools/test/parser-import-boundary.test.ts`.
  *
- * ## Depth before the parse
+ * ## Structure before the parse
  *
- * `jsonc-parser`'s `parseTree` recurses once per level of nesting, so a deep
- * document would overflow the worker's stack before any cap saw it. The depth
- * is measured first with the library's own scanner, which is a loop over
- * tokens: a container is one level deeper than the one holding it, a scalar
+ * `jsonc-parser`'s `parseTree` recurses once per open bracket or brace, and its
+ * error recovery skips a closer that does not match, so a deep or malformed
+ * document would overflow the worker's stack before any cap saw it. The text is
+ * scanned first with the library's own scanner, a loop over tokens that keeps a
+ * stack of the containers open: a closer that does not match the innermost open
+ * container, or closes one when none is open, is a `DATA_PARSE_ERROR` without a
+ * parse, so every text the parser sees nests exactly as deep as the scan
+ * measured. A container is one level deeper than the one holding it, a scalar
  * root measures 0 (the convention `expandedSize` in `parse-limits.ts` keeps).
  * Past `outputDepth` the document is refused without being parsed.
  *
@@ -22,9 +26,15 @@
  * are one line break each. The last occurrence of a key wins: every earlier
  * occurrence and all of its descendants are `shadowed`, and each occurrence
  * after the first raises one `DATA_DUPLICATE_KEY` at the later member. A number
- * whose lexeme is not exactly the double it reads as raises `DATA_LOSSY_NUMBER`.
+ * whose lexeme's exact decimal value differs from that of its double's shortest
+ * round-trip form, or whose double is not finite, raises `DATA_LOSSY_NUMBER`.
  * The whole row set is held to the output caps by `factsOutputBreach`, the one
  * rule every worker answer is held to.
+ *
+ * A key or string holding a lone UTF-16 surrogate (an unpaired escape in
+ * U+D800 to U+DFFF, which RFC 8259 admits) is `DATA_LONE_SURROGATE`: no UTF-8
+ * text holds it, so two such keys a JavaScript string tells apart would be
+ * stored as one.
  */
 
 import { createRequire } from 'node:module';
@@ -78,16 +88,19 @@ export interface ExtractedDataRows {
 /** The output caps an extraction is held to. */
 type DataOutputLimitName = 'outputDepth' | 'outputRows' | 'outputBytes';
 
+/** The document defects the bytes alone decide. */
+export type DataDefectCode = 'DATA_PARSE_ERROR' | 'DATA_LONE_SURROGATE';
+
 /**
  * What one extraction answers: the rows; a document defect the bytes alone
- * decide (`DATA_PARSE_ERROR`); or an output cap the bytes breach. The breach is
+ * decide ({@link DataDefectCode}); or an output cap the bytes breach. The breach is
  * a value, not a throw, so the worker can post the limit and what was found as
  * it does for every other job (`settleJob` in `parse-pool.ts` turns it into a
  * `ParseLimitError`).
  */
 export type DataExtraction =
   | { readonly outcome: 'rows'; readonly rows: ExtractedDataRows }
-  | { readonly outcome: 'defect'; readonly code: 'DATA_PARSE_ERROR'; readonly message: string }
+  | { readonly outcome: 'defect'; readonly code: DataDefectCode; readonly message: string }
   | { readonly outcome: 'breach'; readonly limit: DataOutputLimitName; readonly found: number };
 
 /**
@@ -119,10 +132,15 @@ const PARSE_OPTIONS: Readonly<Record<DataVariant, JsoncParser.ParseOptions>> = {
  *
  * @param input - The decoded text, its variant and whether its bytes had a BOM
  * @param limits - The output caps in force
- * @returns The rows, a `DATA_PARSE_ERROR` defect, or the output cap breached
+ * @returns The rows, a {@link DataDefectCode} defect, or the output cap breached
  */
 export function extractDataRows(input: DataExtractInput, limits: Pick<ParseLimits, DataOutputLimitName>): DataExtraction {
-  const depth = measuredDepth(input.text);
+  const lines = lineStarts(input.text);
+  const scan = scanStructure(input.text);
+  if (typeof scan !== 'number') {
+    return { outcome: 'defect', code: 'DATA_PARSE_ERROR', message: placedMessage(jsonc.printParseErrorCode(scan.error), scan.offset, lines) };
+  }
+  const depth = scan;
   const expanded = { rows: 0, bytes: 0, depth };
   // The one cap rule, applied to the depth alone before anything recurses.
   const deep = factsOutputBreach({}, limits, expanded);
@@ -130,13 +148,17 @@ export function extractDataRows(input: DataExtractInput, limits: Pick<ParseLimit
 
   const errors: JsoncParser.ParseError[] = [];
   const root = jsonc.parseTree(input.text, errors, PARSE_OPTIONS[input.variant]);
-  const lines = lineStarts(input.text);
   const [first] = errors;
   if (first !== undefined || root === undefined) {
     return { outcome: 'defect', code: 'DATA_PARSE_ERROR', message: parseErrorMessage(first, input.text.length, lines) };
   }
 
-  const { nodes, conditions } = walk(root, input.text, lines);
+  const walked = walk(root, input.text, lines);
+  if ('lone' in walked) {
+    const what = walked.lone.inKey ? 'A key' : 'A string';
+    return { outcome: 'defect', code: 'DATA_LONE_SURROGATE', message: placedMessage(`${what} holds a lone UTF-16 surrogate`, walked.lone.offset, lines) };
+  }
+  const { nodes, conditions } = walked;
   const rows: ExtractedDataRows = {
     files: [{ documents: 1, bom: input.bom, nodeCount: nodes.length, maxDepth: depth }],
     documents: [{ doc: DOC, rootType: root.type as DataNodeType, nodeCount: nodes.length, maxDepth: depth }],
@@ -148,24 +170,51 @@ export function extractDataRows(input: DataExtractInput, limits: Pick<ParseLimit
   return { outcome: 'rows', rows };
 }
 
+/** A closer the structure scan refused: the error the parse would name, and where the closer is. */
+interface StructureError {
+  readonly error: JsoncParser.ParseErrorCode;
+  readonly offset: number;
+}
+
+/** Each closer token, by the opener it closes. */
+const CLOSER_OF: ReadonlyMap<JsoncParser.SyntaxKind, JsoncParser.SyntaxKind> = new Map([
+  [jsonc.SyntaxKind.OpenBraceToken, jsonc.SyntaxKind.CloseBraceToken],
+  [jsonc.SyntaxKind.OpenBracketToken, jsonc.SyntaxKind.CloseBracketToken],
+]);
+
+/** The error a parse names when the innermost open container is not closed by what closes it. */
+const UNCLOSED: ReadonlyMap<JsoncParser.SyntaxKind, JsoncParser.ParseErrorCode> = new Map([
+  [jsonc.SyntaxKind.CloseBraceToken, jsonc.ParseErrorCode.CloseBraceExpected],
+  [jsonc.SyntaxKind.CloseBracketToken, jsonc.ParseErrorCode.CloseBracketExpected],
+]);
+
 /**
  * How deep the text's containers nest, by the scanner alone (a loop, never a
- * recursion): each open brace or bracket is one level deeper than the one
- * holding it. A close past the root is ignored; the parse reports it.
+ * recursion), with a stack of the closers the open containers expect: each
+ * open brace or bracket is one level deeper than the one holding it. A closer
+ * that matches no open container ends the scan, because the parse would skip
+ * it and keep nesting past the depth measured.
  *
  * @param text - The document
- * @returns The deepest nesting; 0 for a scalar root
+ * @returns The deepest nesting (0 for a scalar root), or the mismatched closer
  */
-function measuredDepth(text: string): number {
+function scanStructure(text: string): number | StructureError {
   const scanner = jsonc.createScanner(text, true);
-  let open = 0;
+  const expected: JsoncParser.SyntaxKind[] = [];
   let deepest = 0;
-  for (let token = scanner.scan(); token !== jsonc.SyntaxKind.EOF; token = scanner.scan()) {
-    if (token === jsonc.SyntaxKind.OpenBraceToken || token === jsonc.SyntaxKind.OpenBracketToken) {
-      open += 1;
-      deepest = Math.max(deepest, open);
-    } else if ((token === jsonc.SyntaxKind.CloseBraceToken || token === jsonc.SyntaxKind.CloseBracketToken) && open > 0) {
-      open -= 1;
+  let scanned = 0;
+  for (let kind = scanner.scan(); kind !== jsonc.SyntaxKind.EOF; kind = scanner.scan(), scanned += 1) {
+    const closer = CLOSER_OF.get(kind);
+    if (closer !== undefined) {
+      expected.push(closer);
+      deepest = Math.max(deepest, expected.length);
+    } else if (UNCLOSED.has(kind)) {
+      const innermost = expected.pop();
+      if (innermost === kind) continue;
+      const offset = scanner.getTokenOffset();
+      if (innermost !== undefined) return { error: UNCLOSED.get(innermost) as JsoncParser.ParseErrorCode, offset };
+      const error = scanned === 0 ? jsonc.ParseErrorCode.ValueExpected : jsonc.ParseErrorCode.EndOfFileExpected;
+      return { error, offset };
     }
   }
   return deepest;
@@ -221,8 +270,18 @@ function positionOf(offset: number, starts: readonly number[]): Position {
  */
 function parseErrorMessage(error: JsoncParser.ParseError | undefined, length: number, starts: readonly number[]): string {
   const name = error === undefined ? 'ValueExpected' : jsonc.printParseErrorCode(error.error);
-  const { line, column } = positionOf(error?.offset ?? length, starts);
-  return `${name} at line ${String(line)}, column ${String(column)}`;
+  return placedMessage(name, error?.offset ?? length, starts);
+}
+
+/**
+ * @param what - What is wrong
+ * @param offset - Where, as a UTF-16 offset into the text
+ * @param starts - {@link lineStarts} of the text
+ * @returns A defect's message: what, then its 1-based line and column
+ */
+function placedMessage(what: string, offset: number, starts: readonly number[]): string {
+  const { line, column } = positionOf(offset, starts);
+  return `${what} at line ${String(line)}, column ${String(column)}`;
 }
 
 /** A value node waiting to be numbered, with what its parent decided about it. */
@@ -243,20 +302,38 @@ interface PendingNode {
   readonly repeatIn: string | null;
 }
 
+/** Where a key or string holds a lone surrogate. */
+interface LoneSurrogate {
+  readonly inKey: boolean;
+  readonly offset: number;
+}
+
+/**
+ * @param pending - A node and its parent's decisions
+ * @returns Where its key, or its string value, holds a lone surrogate; undefined when neither does
+ */
+function loneSurrogateIn(pending: PendingNode): LoneSurrogate | undefined {
+  if (pending.key !== null && !pending.key.isWellFormed()) return { inKey: true, offset: pending.offset };
+  const { node } = pending;
+  if (node.type === 'string' && !(node.value as string).isWellFormed()) return { inKey: false, offset: node.offset };
+  return undefined;
+}
+
 /**
  * Number every node in pre-order and raise the conditions, by an explicit
- * stack (never a recursion).
+ * stack (never a recursion). The first key or string holding a lone surrogate
+ * ends the walk: the document has no rows.
  *
  * @param root - The parsed tree, error-free
  * @param text - The document
  * @param starts - {@link lineStarts} of the text
- * @returns The node and condition rows
+ * @returns The node and condition rows, or the first lone surrogate
  */
 function walk(
   root: JsoncParser.Node,
   text: string,
   starts: readonly number[],
-): { nodes: ExtractedDataNode[]; conditions: ExtractedDataCondition[] } {
+): { nodes: ExtractedDataNode[]; conditions: ExtractedDataCondition[] } | { lone: LoneSurrogate } {
   const nodes: ExtractedDataNode[] = [];
   const conditions: ExtractedDataCondition[] = [];
   const stack: PendingNode[] = [
@@ -264,6 +341,8 @@ function walk(
   ];
   while (stack.length > 0) {
     const pending = stack.pop() as PendingNode;
+    const lone = loneSurrogateIn(pending);
+    if (lone !== undefined) return { lone };
     const row = nodeRow(pending, nodes.length, text, starts);
     nodes.push(row);
     for (const condition of conditionsOf(pending, row)) {

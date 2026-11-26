@@ -191,6 +191,6 @@ describe('data pair causes and their seeds, both ways', () => {
       expect(dataPairCauseOf({ state, code })).toBe(key);
     }
     expect(() => dataPairCauseOf({ state: 'facts', code: null })).toThrow(/no registered data pair cause/);
-    expect(() => dataPairCauseOf({ state: 'defective', code: 'BLOB_UNREADABLE' })).toThrow(/no registered data pair cause/);
+    expect(() => dataPairCauseOf({ state: 'refused', code: 'DATA_PARSE_ERROR' })).toThrow(/no registered data pair cause/);
   });
 });

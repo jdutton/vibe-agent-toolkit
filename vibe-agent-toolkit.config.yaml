@@ -179,19 +179,31 @@ resources:
       severity: error
       sql: |-
         -- Replaces the TypeScript engine-floor rule that lived in
-        -- packages/dev-tools/src/validate-repo-structure.ts. One semantic difference:
-        -- an unreadable or unparseable manifest is no longer a per-file finding.
-        -- Naming data__values refuses the whole statement (INPUT_UNREADABLE, or
-        -- RUN_INCOMPLETE) while ANY routed JSON/JSONC file has no rows, so the check
-        -- is reported broken instead. A second, broader one: TS enumerated the
-        -- packages/ directory on disk; this sees only routed (not git-ignored)
-        -- manifests, and a root floor with no package manifest at all is a finding.
+        -- packages/dev-tools/src/validate-repo-structure.ts. Differences from it:
+        --  * An unreadable or unparseable file is no longer a per-file finding, and
+        --    the file need not be a manifest. Naming data__values refuses the whole
+        --    statement (INPUT_UNREADABLE, or RUN_INCOMPLETE) while ANY routed file
+        --    of any kind has no rows: every tracked tsconfig*.json and jsconfig*.json
+        --    (routed as JSONC by default), any routed fixture, any include glob's
+        --    match. The check is then reported broken and asserts nothing about the
+        --    floor until that file is fixed or excluded.
+        --  * A manifest with a UTF-8 BOM, or in UTF-16, is decoded and checked like
+        --    any other; JSON.parse refused it, so the TS rule reported it.
+        --  * TS enumerated packages/ on disk; this sees only routed (not git-ignored,
+        --    not excluded) manifests, and a root floor with no package manifest at
+        --    all is a finding.
+        --  * A manifest is checked whichever variant routes it: a jsonc glob changes
+        --    how a package.json is read, not whether the rule applies to it.
+        --
+        -- Every join is within one root: a package is compared only with the floor
+        -- of the package.json at its own root, never another root's. The system test
+        -- runs `vat resources check` over one root, so no case pins this join.
         --
         -- Equality is the TS rule's `!==`: same JSON type and same value, and an
         -- object or array never equals anything. `shown` renders a value the way
-        -- the message prints it.
+        -- the message prints it: a number as its source lexeme.
         WITH engine_node AS (
-          SELECT path, type, value,
+          SELECT root, path, type, value,
                  CASE type
                    WHEN 'string' THEN value
                    WHEN 'number' THEN lexeme
@@ -199,40 +211,44 @@ resources:
                    ELSE type
                  END AS shown
           FROM data__values
-          WHERE variant = 'json' AND pointer = '/engines/node'
+          WHERE pointer = '/engines/node'
+        ),
+        root_manifest AS (
+          SELECT root FROM data__routes WHERE path = 'package.json'
         ),
         root_floor AS (
-          SELECT type AS floorType, value AS floor, shown AS floorShown
+          SELECT root, type AS floorType, value AS floor, shown AS floorShown
           FROM engine_node WHERE path = 'package.json'
         ),
         -- GLOB's `*` crosses `/`, so the second pattern keeps this one level deep.
         manifests AS (
-          SELECT path FROM data__routes
-          WHERE variant = 'json'
-            AND path GLOB 'packages/*/package.json'
+          SELECT root, path FROM data__routes
+          WHERE path GLOB 'packages/*/package.json'
             AND path NOT GLOB 'packages/*/*/package.json'
         )
         SELECT 'package.json' AS path,
-               'Root package.json is absent, so there is no floor to derive and the rule cannot run.' AS problem
-        WHERE NOT EXISTS (SELECT 1 FROM data__routes WHERE path = 'package.json' AND variant = 'json')
+               'Root package.json is not routed (absent, git-ignored, or excluded from the data instance), so there is no floor to derive and the rule cannot run.' AS problem
+        WHERE NOT EXISTS (SELECT 1 FROM root_manifest)
         UNION ALL
         SELECT 'package.json',
                'Root package.json declares no engines.node. Every other manifest is checked against it, so there is no floor to derive and the rule cannot run.'
-        WHERE EXISTS (SELECT 1 FROM data__routes WHERE path = 'package.json' AND variant = 'json')
-          AND NOT EXISTS (SELECT 1 FROM root_floor)
+        FROM root_manifest r
+        WHERE NOT EXISTS (SELECT 1 FROM root_floor f WHERE f.root = r.root)
         UNION ALL
         SELECT 'packages',
                'No packages/<name>/package.json is routed, so the floor is checked against nothing.'
-        WHERE EXISTS (SELECT 1 FROM root_floor) AND NOT EXISTS (SELECT 1 FROM manifests)
+        FROM root_floor f
+        WHERE NOT EXISTS (SELECT 1 FROM manifests m WHERE m.root = f.root)
         UNION ALL
         SELECT m.path,
                'Published package declares no engines.node. Adopters get no install-time signal about the Node floor. Add "engines": { "node": "'
                  || f.floorShown || '" } to match the root manifest.'
-        FROM manifests m CROSS JOIN root_floor f
-        WHERE m.path NOT IN (SELECT path FROM engine_node)
+        FROM manifests m
+        JOIN root_floor f ON f.root = m.root
+        WHERE NOT EXISTS (SELECT 1 FROM engine_node e WHERE e.root = m.root AND e.path = m.path)
           AND NOT EXISTS (
             SELECT 1 FROM data__values p
-            WHERE p.path = m.path AND p.variant = 'json' AND p.pointer = '/private'
+            WHERE p.root = m.root AND p.path = m.path AND p.pointer = '/private'
               AND p.type = 'boolean' AND p.value = 1
           )
         UNION ALL
@@ -240,8 +256,8 @@ resources:
                'engines.node is "' || e.shown || '" but the root manifest declares "' || f.floorShown
                  || '". Every package in this monorepo ships one floor; change the root and all packages together, never one of them.'
         FROM manifests m
-        JOIN engine_node e ON e.path = m.path
-        CROSS JOIN root_floor f
+        JOIN engine_node e ON e.root = m.root AND e.path = m.path
+        JOIN root_floor f ON f.root = m.root
         WHERE NOT (e.type = f.floorType AND e.type NOT IN ('object', 'array') AND e.value IS f.floor)
         ORDER BY path
 

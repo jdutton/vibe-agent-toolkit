@@ -1,0 +1,66 @@
+{
+  "$ref": "#/definitions/projection-data--routes",
+  "definitions": {
+    "projection-data--routes": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "The id of the root the path is under"
+        },
+        "path": {
+          "type": "string",
+          "description": "The routed file, relative to its root"
+        },
+        "blob": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(?:markdown|html|none)\\.(?:sha256\\.[0-9a-f]{64}|git-sha1\\.[0-9a-f]{40}|git-sha256\\.[0-9a-f]{64})$",
+              "description": "A content key: \"<parserKind>.<keyKind>.<hex>\" (keyKind sha256 | git-sha1 | git-sha256)"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The content key of the bytes, or null when the run holds none"
+        },
+        "variant": {
+          "type": "string",
+          "enum": [
+            "json",
+            "jsonc"
+          ],
+          "description": "How the bytes were parsed: `json` strict (no comments, no trailing commas), `jsonc` with comments and trailing commas"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "facts",
+            "defective",
+            "refused"
+          ],
+          "description": "`facts`: the pair's rows are held; `defective`: its bytes cannot yield rows (malformed, not text, a byte-determined limit); `refused`: this run could not decide (unreadable, changed under the run, a per-run limit, a worker death)"
+        },
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why the pair is not `facts`, or null when it is"
+        }
+      },
+      "required": [
+        "root",
+        "path",
+        "blob",
+        "variant",
+        "state",
+        "code"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the derived `data__routes` relation"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

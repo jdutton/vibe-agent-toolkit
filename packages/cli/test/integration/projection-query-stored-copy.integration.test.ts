@@ -212,12 +212,14 @@ describe('data__* row sets on a store hit', () => {
     expect(answered.rows).toEqual(derived.rows);
   });
 
-  it('refuses the run when the one retry finds a row set evicted again, naming the budget and a concurrent run', async () => {
+  it('refuses the run when the one retry finds a row set evicted again, naming the concurrent run and what a user can do', async () => {
     const tree = await primed('1,2');
     const refused = await ask(tree, NODES_PER_FILE).catch((error: unknown) => error);
 
     expect(isVatError(refused, PROJECTION_STORE_ROWS_EVICTED_CODE), String(refused)).toBe(true);
-    expect(String(refused)).toMatch(/DEFAULT_ROW_SET_TIER_BUDGET_BYTES/u);
-    expect(String(refused)).toMatch(/another run/u);
+    expect(String(refused)).toMatch(/Another run wrote to the projection store while this query read it/u);
+    expect(String(refused)).toMatch(/Run again once the other run has finished, or give concurrent runs separate stores with VAT_CACHE_DIR/u);
+    expect(String(refused), 'a row-set eviction names the config that shrinks the tier').toMatch(/resources\.extractors\.data\.exclude/u);
+    expect(String(refused), 'never a library constant no CLI user can set').not.toMatch(/DEFAULT_\w+_BUDGET_BYTES/u);
   });
 });

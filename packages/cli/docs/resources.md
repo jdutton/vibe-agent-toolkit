@@ -577,7 +577,9 @@ One variant per path, decided in this order: `exclude` removes it; a `jsonc` glo
 anchored at the project root and match dot directories; `**/node_modules/**` is never read. The
 block is strict: an unknown key is a config error. A declared block that routes no file in the tree
 refuses a statement naming a `data__*` relation (`CONFIG_INVALID`) unless it sets
-`allowEmpty: true`; only `true` is accepted.
+`allowEmpty: true`; only `true` is accepted. An `include` glob that matches no `.json` or `.jsonc`
+file in the tree is `CONFIG_INVALID` too, naming the glob, even when the defaults route other
+files; `allowEmpty: true` excuses it.
 
 ## Integration with vibe-validate
 

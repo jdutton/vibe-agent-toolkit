@@ -282,6 +282,8 @@ export interface DataRouting {
   readonly jsonc: PathMatcher;
   /** The `include` globs: a match is routed by its extension. */
   readonly include: PathMatcher;
+  /** Each `include` glob with its own matcher, so one that routes nothing can be named. */
+  readonly includeGlobs: ReadonlyArray<{ readonly glob: string; readonly matches: PathMatcher }>;
 }
 
 /**
@@ -298,6 +300,7 @@ export function dataRoutingFor(config: ProjectConfig | undefined): DataRouting {
     exclude: compileGlobs(data?.exclude),
     jsonc: compileGlobs(data?.jsonc),
     include: compileGlobs(data?.include),
+    includeGlobs: (data?.include ?? []).map((glob) => ({ glob, matches: compileGlobs([glob]) })),
   };
 }
 
@@ -324,4 +327,32 @@ export function dataRouteFor(relativePath: string, routing: DataRouting): DataVa
   const byDefault = DEFAULT_DATA_ROUTES.find((route) => route.matches(relativePath));
   if (byDefault !== undefined) return byDefault.variant;
   return routing.include(relativePath) ? variantByExtension(relativePath) : undefined;
+}
+
+/**
+ * Why a routing is a config error over one run's extent, or undefined when it is not: a declared
+ * instance that routed no path, or an `include` glob that matches no `.json` or `.jsonc` path outside
+ * `**\/node_modules/**` (a typo, or a glob for another extension, which `include` never routes). Such
+ * a glob is named even when the defaults route other files, since it would otherwise be ignored
+ * without a word. `allowEmpty: true` excuses both. A glob whose paths an earlier rule also decides
+ * (`exclude`, `jsonc`, a default) still matches, so it is not named. Pure.
+ *
+ * @param routedCount - How many paths the routing routed in the extent
+ * @param paths - Every path the extent holds that the routing was asked about
+ * @param routing - The project's routing, from {@link dataRoutingFor}
+ * @returns The `CONFIG_INVALID` message, or undefined
+ */
+export function dataRoutingEmptiness(routedCount: number, paths: readonly string[], routing: DataRouting): string | undefined {
+  if (!routing.declared || routing.allowEmpty) return undefined;
+  if (routedCount === 0) {
+    return 'resources.extractors.data is declared, but it routed no file in this run\'s extent. Fix its globs,'
+      + ' or set allowEmpty: true when an empty instance is expected.';
+  }
+  const candidates = paths.filter((path) => !NEVER_DATA(path) && variantByExtension(path) !== undefined);
+  const inert = routing.includeGlobs.filter(({ matches }) => !candidates.some((path) => matches(path)));
+  if (inert.length === 0) return undefined;
+  const named = inert.map(({ glob }) => `resources.extractors.data.include glob "${glob}"`).join(', ');
+  return `${named} matches no .json or .jsonc file in this run's extent, so it routes nothing.`
+    + ' Fix the glob (an include routes by extension; list another extension under jsonc instead),'
+    + ' or set allowEmpty: true when it is expected to match nothing.';
 }

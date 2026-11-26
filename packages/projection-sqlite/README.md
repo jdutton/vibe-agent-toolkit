@@ -42,9 +42,17 @@ boundary, or every invocation prints it.
 
 ```typescript
 import { ALL_EXTENT_REQUEST, splitProjectionByScope } from '@vibe-agent-toolkit/resources';
-import { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
+import {
+  DEFAULT_BLOB_TIER_BUDGET_BYTES,
+  DEFAULT_ROW_SET_TIER_BUDGET_BYTES,
+  openSqliteFactStore,
+} from '@vibe-agent-toolkit/projection-sqlite';
 
-const store = openSqliteFactStore({ blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+// Both budgets are required: one per byte-budgeted tier.
+const store = openSqliteFactStore({
+  blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES,
+  rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES,
+});
 
 const { blobs, extent } = splitProjectionByScope(projection);
 // Nothing was read first, so nothing is covered: every held key is written.
@@ -80,7 +88,7 @@ await database.close();
 
 The relations are a `Map`, so a whole `Projection` is not assignable: a relation
 absent from it is absent from the database, and a statement reaching one is
-refused. The database holds no `extents` or `blob_keys`. Every statement passes
+refused. The database holds no `extents`, `blob_keys` or `row_set_keys`. Every statement passes
 the gate in `sql-gate.ts` first: one statement, a query, every placeholder
 bound, nothing attached, and — read off its `EXPLAIN` program — no schema
 table, no virtual table but the four JSON walkers, and no connection-state
@@ -89,13 +97,15 @@ opens (the JSON walkers' pointers on that connection), one per gated call.
 
 ## What it stores, and where
 
-The projection tables split in two, by the `scope` each declares in
-`PROJECTION_TABLES`:
+The store holds three tiers. The projection tables split in two, by the `scope`
+each declares in `PROJECTION_TABLES`; the row-set tables (`ROW_SET_TABLES`) are
+the third:
 
 | scope | tables | keyed by | lifetime |
 |---|---|---|---|
 | `blob` | `blobs`, `blob_references`, `blob_sections`, `blob_conditions`, `harness_blob_facts`, `harness_blob_imports`, `skill_text_facts`, `skill_text_matches` | content key — the two harness tables are additionally partitioned by `harness`: a write clears exactly the `(blob, harness)` pairs it carries, but a read selects by content key alone and returns every harness's rows for it, since these rows are derived only for what one tree's harness reaches; narrowing to one harness happens in memory (`harnessFactsIndex`), not in the SQL | bounded by the `blob_keys` ledger — a pure function of the bytes, shared by every tree containing them, and retained while its key is among the newest whose recorded bytes fit `blobTierBudgetBytes` |
 | `extent` | the other nine, `claude_rule_patterns` among them | `(storeRootId, storeTreeHash)` | forever *for that tree* — the extent of a tree is a pure function of that tree |
+| row set | `data__files` (the `data` instance's head table: one row per stored row set), `data__documents`, `data__nodes`, `data__conditions` | a row set, `(contentKey, instance, variant)`: each table leads its primary key with `blob` and `variant`, and the instance is the table's own | bounded by the `row_set_keys` ledger — like a blob fact, a pure function of the bytes (read as that variant) and shared by every tree containing them, retained while its row set is among the newest whose recorded bytes fit `rowSetTierBudgetBytes` |
 
 Extent-scoped tables carry two extra leading columns holding that key, and their
 primary key is prefixed with it, so reading one tree is a key-range scan and no
@@ -153,9 +163,25 @@ bytes fit `blobTierBudgetBytes` and evicts the rest, in the same transaction;
 the keys the write itself holds are never evicted, whatever their size or
 timestamps (they are excluded by key). The
 option is required: the CLI passes `DEFAULT_BLOB_TIER_BUDGET_BYTES`
-(190,000,000), about 265 MB of database pages an operator can check with `du`
-(the arithmetic is on the constant). The budget is **global**, because a blob
-fact has no root: every repository on the machine shares it.
+(190,000,000), about 265 MB of database pages for the blob tier (the arithmetic
+is on the constant). The budget is **global**, because a blob fact has no root:
+every repository on the machine shares it.
+
+**Row sets are evicted the same way, against a budget of their own.** The
+`row_set_keys` ledger records, for each row set (`contentKey`, `instance`,
+`variant`), when a write last held it and the `storedRowBytes` of its rows. A
+`writeRowSets` keeps the newest row sets whose bytes fit `rowSetTierBudgetBytes`
+and evicts the rest in the same transaction, never one the write holds; an
+evicted row set leaves every table of its instance together with its ledger row.
+Both tiers run the one eviction statement (`tierPastBudgetSql`) over their own
+ledger and identity columns. The option is required: the CLI passes
+`DEFAULT_ROW_SET_TIER_BUDGET_BYTES` (190,000,000). It is global too, and
+independent of the blob tier's: filling either tier evicts nothing from the other.
+
+The file is therefore bounded by **two** byte budgets plus the extent tier's
+retention, not by one. The 265 MB figure is the blob tier's alone; the row-set
+tier's page-to-ledger ratio has not been measured, so the file can hold up to a
+further 190,000,000 ledger bytes of row sets, plus their page overhead, beyond it.
 
 ## Traps this package exists to have already solved
 

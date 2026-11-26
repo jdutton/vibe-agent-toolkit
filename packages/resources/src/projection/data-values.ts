@@ -5,8 +5,9 @@
  *
  * The last occurrence of a key wins (the fact layer's one meaning of a duplicate key): a node the
  * extractor marked `shadowed`, itself or through an ancestor, has no row, so `{"a": {"x": 1}, "a":
- * {"y": 2}}` answers `/a` and `/a/y`, never `/a/x`, and the relation's key `(root, path, variant,
- * doc, pointer)` is unique by construction.
+ * {"y": 2}}` answers `/a` and `/a/y`, never `/a/x`. The relation's key `(root, path, variant,
+ * doc, pointer)` is unique as stored text too: the extractor refuses a key holding a lone surrogate
+ * (`DATA_LONE_SURROGATE`), the one way two distinct JavaScript keys encode to one UTF-8 string.
  */
 
 import type { DataNodeRow, DataRouteRow, DataValueRow } from '../schemas/projection-data.js';

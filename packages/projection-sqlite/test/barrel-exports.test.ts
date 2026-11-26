@@ -26,7 +26,6 @@ const BARREL_EXPORTS = [
   'deleteExtentSql',
   'deleteRowByKeySql',
   'discardStoreDatabase',
-  'evictRowSetForTest',
   'hydrateRunDatabase',
   'insertSql',
   'isCopyEligible',

@@ -229,15 +229,14 @@ export type ResourceCheck = z.infer<typeof ResourceCheckSchema>;
  */
 const DataExtractorConfigSchema = z.object({
   include: z.array(z.string()).optional()
-    .describe('Globs, anchored at the project root, of further files the data instance reads beyond its defaults. A matched path is routed by its extension: `.json` as strict JSON, `.jsonc` as JSONC; a path with any other extension is not routed. A `jsonc` glob, an `exclude` glob and the defaults all decide before `include` does.'),
+    .describe('Globs, anchored at the project root, of further files the data instance reads beyond its defaults. A matched path is routed by its extension: `.json` as strict JSON, `.jsonc` as JSONC; a path with any other extension is not routed. A `jsonc` glob, an `exclude` glob and the defaults all decide before `include` does. A glob that matches no `.json` or `.jsonc` file in the bound extent is a config error (CONFIG_INVALID, naming the glob) on a run that reads a `data__*` relation, even when the defaults route other files.'),
   jsonc: z.array(z.string()).optional()
     .describe('Globs, anchored at the project root, of files read as JSONC (comments and trailing commas allowed) whatever their extension, e.g. `**/turbo.json` or `.vscode/*.json`. Beats the defaults (`**/package.json` is otherwise strict JSON) and `include`; loses only to `exclude`.'),
   exclude: z.array(z.string()).optional()
     .describe('Globs, anchored at the project root, of files the data instance never reads, defaults included. Beats every other rule. `**/node_modules/**` is always excluded and need not be listed.'),
   allowEmpty: z.literal(true).optional()
-    .describe('Declare that a run whose data instance examined no file is a legitimate answer. Without it, a declared `data` block that routes nothing in the bound extent is a config error. Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead.'),
+    .describe('Declare that a run whose data instance examined no file is a legitimate answer. Without it, a declared `data` block that routes nothing in the bound extent, or an `include` glob that matches no `.json` or `.jsonc` file there, is a config error. Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead.'),
 }).strict().describe('The data instance\'s routing: which JSON and JSONC files become `data__*` rows, and as which variant');
-
 
 /**
  * Structured-row extractors. Strict: a misspelled or not-yet-built extractor is refused rather than

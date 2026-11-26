@@ -43,6 +43,8 @@ interface Realized {
   readonly text?: string;
   /** The key the population recorded, when it differs from the text's own. */
   readonly recorded?: ContentKey;
+  /** The errno every read of the path rejects with, as the OS would raise it. */
+  readonly fault?: string;
 }
 
 /** The fixture projection: one root, one extent, the given realizations. */
@@ -60,17 +62,19 @@ function projectionOf(files: readonly Realized[]): DataStageProjection {
 
 /** A reader over the fixture's files, counting reads per path. */
 function contentOf(files: readonly Realized[], reads: Map<string, number> = new Map()): DataStageContent {
-  const byPath = new Map(files.map((file) => [`${ROOT}/${file.path}`, file.text]));
+  const byPath = new Map(files.map((file) => [`${ROOT}/${file.path}`, file]));
   const read = (absolutePath: string, parserKind: ParserKind): KeyedContent | null => {
     reads.set(absolutePath, (reads.get(absolutePath) ?? 0) + 1);
-    const text = byPath.get(absolutePath);
-    return text === undefined ? null : keyContent(text, parserKind);
+    const file = byPath.get(absolutePath);
+    if (file?.fault !== undefined) throw Object.assign(new Error(`${file.fault}: open '${absolutePath}'`), { code: file.fault, syscall: 'open', path: absolutePath });
+    return file?.text === undefined ? null : keyContent(file.text, parserKind);
   };
   return {
-    read: ({ absolutePath }) => Promise.resolve(read(absolutePath, 'none')),
-    readUnkeyed: (absolutePath, parserKind) => {
+    read: async ({ absolutePath }) => read(absolutePath, 'none'),
+    readUnkeyed: async (absolutePath, parserKind) => {
       const keyed = read(absolutePath, parserKind);
-      return keyed === null ? Promise.reject(Object.assign(new Error('gone'), { code: 'ENOENT' })) : Promise.resolve(keyed);
+      if (keyed === null) throw Object.assign(new Error('gone'), { code: 'ENOENT' });
+      return keyed;
     },
   };
 }
@@ -199,6 +203,12 @@ describe('runDataStage: routing states', () => {
     expect((await stage(files, { routing: dataRoutingFor({ resources: { extractors: { data: {} } } }) })).outcome).toBe('examined-nothing');
     expect((await stage(files, { routing: dataRoutingFor({ resources: { extractors: { data: { allowEmpty: true } } } }) })).outcome).toBe('staged');
   });
+
+  it('refuses as examined-nothing an include glob that routes nothing, though the defaults route a file', async () => {
+    const files = [{ path: 'package.json', text: '{"name":"a"}' }, { path: 'notes/a.yaml', text: 'a: 1' }];
+    const result = await stage(files, { routing: dataRoutingFor({ resources: { extractors: { data: { include: ['notes/*.yaml'] } } } }) });
+    expect(result).toMatchObject({ outcome: 'examined-nothing', message: expect.stringContaining('include glob "notes/*.yaml"') });
+  });
 });
 
 describe('runDataStage: the refusal it lists', () => {
@@ -224,7 +234,7 @@ describe('runDataStage: the refusal it lists', () => {
     expect(staged(await stage([{ path: 'package.json', text: '{}' }])).refusal).toBeUndefined();
   });
 
-  it('counts each failed pair once in rowSet.refused, and each extraction in rowSet.extracted', async () => {
+  it('counts every failed routed pair in rowSet.refused, two paths sharing one row set twice, and each extraction once', async () => {
     const moved = await countersMovedBy(() => stage([
       { path: 'a/package.json', text: '{"a":1}' },
       { path: 'b/package.json', text: '{"a":1}' },
@@ -232,7 +242,66 @@ describe('runDataStage: the refusal it lists', () => {
       { path: 'd/package.json', text: '{' },
       { path: 'e/package.json', state: 'unreadable' },
     ]));
-    expect(moved).toStrictEqual({ 'rowSet.extracted': 1, 'rowSet.storeServed': 0, 'rowSet.refused': 2, 'rowSet.rows.decoded': 0 });
+    expect(moved).toStrictEqual({ 'rowSet.extracted': 1, 'rowSet.storeServed': 0, 'rowSet.refused': 3, 'rowSet.rows.decoded': 0 });
+  });
+});
+
+describe('runDataStage: a filesystem fault takes its refusal from the one fault table', () => {
+  it('makes a refused or failed read (EACCES, EPERM, EIO) defective, INPUT_UNREADABLE, with the remedy of the fault table', async () => {
+    const result = staged(await stage([
+      { path: 'keyed/package.json', text: '{}', fault: 'EACCES' },
+      { path: 'deferred/package.json', state: 'deferred', fault: 'EPERM' },
+      { path: 'device/package.json', text: '{"d":1}', fault: 'EIO' },
+    ]));
+    expect(result.derived.dataRoutes?.map(({ path, state, code }) => `${path} ${state} ${code ?? ''}`)).toStrictEqual([
+      'keyed/package.json defective BLOB_UNREADABLE',
+      'deferred/package.json defective BLOB_UNREADABLE',
+      'device/package.json defective BLOB_UNREADABLE',
+    ]);
+    expect(result.refusal?.refusal).toBe('INPUT_UNREADABLE');
+    expect(result.refusal?.pairs[0]?.remedy).toMatch(/^Grant read permission .*resources\.extractors\.data\.exclude$/u);
+    expect(result.refusal?.pairs[2]?.remedy).toMatch(/^Check the disk or network share/u);
+    expect(result.refusal?.pairs[0]?.detail).toBe('reading it failed with EACCES');
+  });
+
+  it('keeps a machine fault (EMFILE, ENFILE, EBUSY) refused, RUN_INCOMPLETE, with the table\'s remedy', async () => {
+    const result = staged(await stage([
+      { path: 'a/package.json', text: '{}', fault: 'EMFILE' },
+      { path: 'b/package.json', state: 'deferred', fault: 'ENFILE' },
+      { path: 'c/package.json', text: '{"c":1}', fault: 'EBUSY' },
+    ]));
+    expect(result.derived.dataRoutes?.map(({ state, code }) => `${state} ${code ?? ''}`)).toStrictEqual(Array.from({ length: 3 }, () => 'refused BLOB_UNREADABLE'));
+    expect(result.refusal?.refusal).toBe('RUN_INCOMPLETE');
+    expect(result.refusal?.pairs.map((pair) => pair.remedy)).toStrictEqual([
+      'Free disk space, quota or open files on this machine, then re-run',
+      'Free disk space, quota or open files on this machine, then re-run',
+      'Wait for whatever holds the path to release it, then re-run',
+    ]);
+  });
+
+  it('reads a route the population left unreadable again, so the fault it reports is this read\'s', async () => {
+    const result = staged(await stage([
+      { path: 'denied/package.json', state: 'unreadable', fault: 'EACCES' },
+      { path: 'exhausted/package.json', state: 'unreadable', fault: 'EMFILE' },
+      { path: 'readable/package.json', state: 'unreadable', text: '{"now": true}' },
+      { path: 'gone/package.json', state: 'unreadable' },
+    ]));
+    expect(result.derived.dataRoutes?.map(({ path, state, code }) => `${path} ${state} ${code ?? ''}`)).toStrictEqual([
+      'denied/package.json defective BLOB_UNREADABLE',
+      'exhausted/package.json refused BLOB_UNREADABLE',
+      'readable/package.json facts ',
+      'gone/package.json refused BLOB_UNREADABLE',
+    ]);
+  });
+
+  it('names what a refused pair is and what a user can do about it, never a limit no one can set', async () => {
+    const result = staged(await stage([{ path: 'time/package.json', text: '{"timeMs": 1}' }], {
+      extractor: extractorOf((_variant, input) => (input.content.includes('timeMs') ? new ParseLimitError('timeMs', 1) : undefined)),
+    }));
+    const remedy = result.refusal?.pairs[0]?.remedy ?? '';
+    expect(remedy).toMatch(/^run again/u);
+    expect(remedy).toMatch(/resources\.extractors\.data\.exclude/u);
+    expect(remedy).not.toMatch(/too low/u);
   });
 });
 

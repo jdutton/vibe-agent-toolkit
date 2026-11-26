@@ -44,7 +44,7 @@ export type DataNodeType = z.infer<typeof DataNodeTypeSchema>;
 
 /** The conditions a data file's parse reports beside its rows. */
 const DataConditionCodeSchema = z.enum(['DATA_DUPLICATE_KEY', 'DATA_LOSSY_NUMBER'])
-  .describe('`DATA_DUPLICATE_KEY`: a key repeated in one object (the later member wins); `DATA_LOSSY_NUMBER`: a number whose double is not its lexeme\'s exact value');
+  .describe('`DATA_DUPLICATE_KEY`: a key repeated in one object (the later member wins); `DATA_LOSSY_NUMBER`: a number whose lexeme\'s exact decimal value differs from that of its double\'s shortest round-trip form, or whose double is not finite');
 
 /** Where a routed pair's facts stand. */
 const DataRouteStateSchema = z.enum(['facts', 'defective', 'refused'])

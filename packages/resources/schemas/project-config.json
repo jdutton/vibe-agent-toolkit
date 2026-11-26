@@ -940,7 +940,7 @@
                       "items": {
                         "type": "string"
                       },
-                      "description": "Globs, anchored at the project root, of further files the data instance reads beyond its defaults. A matched path is routed by its extension: `.json` as strict JSON, `.jsonc` as JSONC; a path with any other extension is not routed. A `jsonc` glob, an `exclude` glob and the defaults all decide before `include` does."
+                      "description": "Globs, anchored at the project root, of further files the data instance reads beyond its defaults. A matched path is routed by its extension: `.json` as strict JSON, `.jsonc` as JSONC; a path with any other extension is not routed. A `jsonc` glob, an `exclude` glob and the defaults all decide before `include` does. A glob that matches no `.json` or `.jsonc` file in the bound extent is a config error (CONFIG_INVALID, naming the glob) on a run that reads a `data__*` relation, even when the defaults route other files."
                     },
                     "jsonc": {
                       "type": "array",
@@ -959,7 +959,7 @@
                     "allowEmpty": {
                       "type": "boolean",
                       "const": true,
-                      "description": "Declare that a run whose data instance examined no file is a legitimate answer. Without it, a declared `data` block that routes nothing in the bound extent is a config error. Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead."
+                      "description": "Declare that a run whose data instance examined no file is a legitimate answer. Without it, a declared `data` block that routes nothing in the bound extent, or an `include` glob that matches no `.json` or `.jsonc` file there, is a config error. Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead."
                     }
                   },
                   "additionalProperties": false,

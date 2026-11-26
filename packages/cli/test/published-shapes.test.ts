@@ -18,6 +18,7 @@
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
+import { queryableRelationSpecs } from '@vibe-agent-toolkit/resources';
 import { ExitCode, REPORT_ENVELOPE_KEYS } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { resolveFromImportMeta } from '@vibe-agent-toolkit/utils/fs';
@@ -25,6 +26,7 @@ import { Command } from 'commander';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
+import { RESOURCES_SCHEMA_TARGETS } from '../../dev-tools/src/generate-resources-json-schemas.js';
 import { findEmittedSchemaDrift, renderEmittedSchema } from '../../dev-tools/src/pin-emitted-schemas.js';
 import { CLI_SCHEMA_TARGETS, CLI_SCHEMAS_DIR } from '../scripts/generate-json-schemas.js';
 import { COMMAND_LOADERS } from '../src/command-loaders.js';
@@ -304,6 +306,23 @@ describe('JSON Schema files ↔ registry', () => {
       if (entry.schemaFile === null || entry.schema === null) continue;
       const committed = readFileSync(safePath.join(REPO_ROOT, entry.schemaFile), 'utf-8');
       expect(committed, entry.name).toBe(renderEmittedSchema({ name: entry.name, schema: entry.schema }));
+    }
+  });
+
+  // Both directions, by name AND by row schema: a relation a statement can name with no published
+  // shape is as wrong as a published shape no statement can name.
+  it('publishes exactly the relations a statement can name, from their own row schemas', () => {
+    const queryable = new Map(queryableRelationSpecs().map((spec) => [`projection-${spec.name.replaceAll('_', '-')}`, spec.schema]));
+    const registered = fileArtifacts.filter((entry) => entry.writer === 'projection-store');
+    const generated = RESOURCES_SCHEMA_TARGETS.filter((target) => target.name.startsWith('projection-'));
+    for (const published of [registered, generated]) {
+      expect(published.map((entry) => entry.name)).toStrictEqual([...queryable.keys()]);
+      // By render, not identity: the generator reads the resources source, this suite its build.
+      for (const entry of published) {
+        const schema = queryable.get(entry.name);
+        if (entry.schema === null || schema === undefined) throw new Error(`${entry.name} publishes no schema`);
+        expect(renderEmittedSchema({ name: entry.name, schema: entry.schema }), entry.name).toBe(renderEmittedSchema({ name: entry.name, schema }));
+      }
     }
   });
 

@@ -15,59 +15,25 @@
  * target added here and never generated — fails a unit test rather than
  * shipping a stale artifact. See `pin-emitted-schemas.ts`.
  *
- * The **table** schemas are not listed by hand: they are the projection tables of
- * `storedRelationSpecs()`, the registry that also supplies `exportProjection` its
- * primary keys.
+ * The **relation** schemas are not listed by hand: they are every relation of
+ * `queryableRelationSpecs()` (projection tables, row-set tables and derived
+ * relations), the one list a `vat resources query` / `check` statement can name.
+ * `packages/cli/test/published-shapes.test.ts` holds this list and the published
+ * registry equal to it in both directions.
  */
 
 import { presenceImplies } from '@vibe-agent-toolkit/schema';
 
 import { BUILTIN_CHECK_NAMES } from '../../resources/src/projection/builtin-check-names.js';
-import { isProjectionTable, storedRelationSpecs } from '../../resources/src/projection/derived-table-registry.js';
+import { queryableRelationSpecs } from '../../resources/src/projection/derived-table-registry.js';
 import { OkfConceptFrontmatterSchema } from '../../resources/src/schemas/okf-concept.js';
 import { ProjectConfigSchema } from '../../resources/src/schemas/project-config.js';
-import { ChangedFileRowSchema } from '../../resources/src/schemas/projection-changed-files.js';
-import {
-  ClaudeContextChainRowSchema,
-  ClaudeContextLoadRowSchema,
-} from '../../resources/src/schemas/projection-claude-context.js';
-import {
-  EdgeResolutionRowSchema,
-  EdgeRowSchema,
-} from '../../resources/src/schemas/projection-edges.js';
-import { LensEntryPointRowSchema } from '../../resources/src/schemas/projection-zones.js';
 
 import { isEntrypoint, PROJECT_ROOT } from './common.js';
 import { writeEmittedSchemas, type EmittedSchemaTarget } from './pin-emitted-schemas.js';
 
 /** Where resources commits its artifacts, relative to the repo root. */
 export const RESOURCES_SCHEMAS_DIR = `${PROJECT_ROOT}/packages/resources/schemas`;
-
-/**
- * Row schemas that are **not** projection tables, and their schema filenames.
- *
- * `edges`, `edge_resolutions` and `lens_entry_points` are absent from
- * the projection tables on purpose — zones.md §2 places them in the
- * derived-per-lens column, so they are the output of evaluating a lens rather
- * than rows anything materialises. ⚠️ They ARE referenced under `projection/`:
- * `derived-table-registry.ts` imports `EdgeRowSchema` and
- * `EdgeResolutionRowSchema` to declare the derived relations.
- * They still have committed JSON Schemas, so they are still generated; the list
- * is separate so that "generated but not a table" is a visible, deliberate
- * category rather than three entries indistinguishable from the thirteen.
- *
- * Adding a schema here is therefore a claim: *this row shape is published but
- * no projection table holds it.* Anything that IS a table belongs in the
- * registry, where the compiler checks it against `Projection`.
- */
-const NON_TABLE_ROW_SCHEMAS: readonly EmittedSchemaTarget[] = [
-  { name: 'projection-edges', schema: EdgeRowSchema },
-  { name: 'projection-edge-resolutions', schema: EdgeResolutionRowSchema },
-  { name: 'projection-lens-entry-points', schema: LensEntryPointRowSchema },
-  { name: 'projection-claude-context-chains', schema: ClaudeContextChainRowSchema },
-  { name: 'projection-claude-context-loads', schema: ClaudeContextLoadRowSchema },
-  { name: 'projection-changed-files', schema: ChangedFileRowSchema },
-];
 
 /**
  * Schemas that describe an EXTERNAL format rather than one of VAT's own rows.
@@ -137,11 +103,10 @@ function emitCheckRefusals(document: SchemaNode): void {
 
 /** Every JSON Schema `packages/resources` ships under `schemas/`. */
 export const RESOURCES_SCHEMA_TARGETS: readonly EmittedSchemaTarget[] = [
-  ...storedRelationSpecs().filter(isProjectionTable).map((spec) => ({
+  ...queryableRelationSpecs().map((spec) => ({
     name: `projection-${spec.name.replaceAll('_', '-')}`,
     schema: spec.schema,
   })),
-  ...NON_TABLE_ROW_SCHEMAS,
   ...EXTERNAL_FORMAT_SCHEMAS,
   ...CONFIG_SCHEMAS,
 ];

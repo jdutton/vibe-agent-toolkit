@@ -30,6 +30,7 @@ import {
   compareRows,
   compareRowSetIds,
   type ContentKey,
+  ContentKeySchema,
   type DerivedTableName,
   type DerivedTableSpec,
   type FactStore,
@@ -109,10 +110,11 @@ export type RelationSource = { readonly rows: RelationRows } | { readonly stored
  * A stored relation keyed by content — a blob-scoped projection table or a row-set table; an extent
  * table has no content key to filter by — that one derivation writes in full (no `partitionColumn`:
  * a partitioned table is written per pair as a run reaches it, so a key's stored rows can be a
- * subset of what this run would hold), and whose every primary-key column is the content-key column
- * (the first), an enum of ASCII literals, or an integer. There `ORDER BY` the key equals
- * `compareRows` (content keys and ASCII text order alike under SQLite's `BINARY` and a code-unit
- * compare), so a copied relation scans in the order a hydrated one does.
+ * subset of what this run would hold), whose first primary-key column is its content key (declared
+ * as a `ContentKeySchema`, the column a copy filters by), and whose every other primary-key column
+ * is an enum of ASCII literals or an integer. There `ORDER BY` the key equals `compareRows` (content
+ * keys and ASCII text order alike under SQLite's `BINARY` and a code-unit compare), so a copied
+ * relation scans in the order a hydrated one does.
  *
  * Derived from the spec, never listed. **Eligible is not copied:** which relations a lane copies
  * stays that lane's decision. Asserted both ways over every stored relation in
@@ -128,7 +130,36 @@ export function isCopyEligible(spec: QueryableRelationSpec): boolean {
   if (contentKeyColumn === undefined) return false;
   const kinds = new Map(projectionColumnTypes(spec));
   const shape = projectionRowShape(spec.schema);
+  if (!isContentKeyColumn(shape[contentKeyColumn])) return false;
   return rest.every((column) => kinds.get(column)?.kind === 'integer' || isAsciiEnum(shape[column]));
+}
+
+/** A Zod schema's definition, read structurally: this package takes no dependency on Zod. */
+type SchemaDefinition = { readonly typeName?: unknown; readonly checks?: unknown; readonly values?: unknown } | undefined;
+
+/**
+ * The pattern sources a string column's schema checks, or `undefined` for any other schema.
+ *
+ * @param schema - A column's schema
+ * @returns Its regex checks' sources, in declaration order
+ */
+function stringPatterns(schema: unknown): readonly string[] | undefined {
+  const definition = (schema as { readonly _def?: SchemaDefinition } | undefined)?._def;
+  if (definition?.typeName !== 'ZodString' || !Array.isArray(definition.checks)) return undefined;
+  return (definition.checks as readonly { readonly kind?: unknown; readonly regex?: unknown }[])
+    .flatMap((check) => (check.kind === 'regex' && check.regex instanceof RegExp ? [check.regex.source] : []));
+}
+
+/**
+ * Whether a column is declared as a content key: a non-null string holding exactly
+ * `ContentKeySchema`'s patterns, so a copy's filter by content key selects what it names.
+ *
+ * @param schema - The column's schema, as the row shape declares it
+ * @returns True for a content-key column
+ */
+function isContentKeyColumn(schema: unknown): boolean {
+  const patterns = stringPatterns(schema);
+  return patterns !== undefined && patterns.length > 0 && JSON.stringify(patterns) === JSON.stringify(stringPatterns(ContentKeySchema));
 }
 
 /** The first code unit past ASCII. */
@@ -142,7 +173,7 @@ const ASCII_LIMIT = 0x80;
  * @returns True for an enum of ASCII literals
  */
 function isAsciiEnum(schema: unknown): boolean {
-  const definition = (schema as { readonly _def?: { readonly typeName?: unknown; readonly values?: unknown } } | undefined)?._def;
+  const definition = (schema as { readonly _def?: SchemaDefinition } | undefined)?._def;
   if (definition?.typeName !== 'ZodEnum' || !Array.isArray(definition.values)) return false;
   return definition.values.every((value: unknown) => typeof value === 'string'
     && [...value].every((unit) => (unit.codePointAt(0) ?? ASCII_LIMIT) < ASCII_LIMIT));
@@ -551,8 +582,23 @@ function blobCopyFilter(relation: string, keyColumn: string, contentKeys: readon
   };
 }
 
-/** The row-set ledger, and the columns of its key: content key, instance, variant. */
+/** The row-set ledger. */
 const ROW_SET_LEDGER = STORE_BOOKKEEPING_TABLES.rowSetKeys;
+
+/**
+ * One of the row-set ledger's key columns, by the `RowSetId` field it holds, quoted: bound by NAME,
+ * as `store.ts` binds the ledger key, so a reordered declaration cannot swap two columns here.
+ *
+ * @param name - The column, a `RowSetId` field
+ * @returns The quoted column
+ * @throws TypeError When the ledger's key does not name the column
+ */
+function rowSetLedgerColumn(name: keyof RowSetId): string {
+  if (!(ROW_SET_LEDGER.primaryKey as readonly string[]).includes(name)) {
+    throw new TypeError(`"${ROW_SET_LEDGER.name}" keys a row set on no '${name}' column`);
+  }
+  return quoteIdentifier(name);
+}
 
 /**
  * The row-set tier's filter: `(blob, variant)` matched as a PAIR against the ids, and every id
@@ -575,10 +621,10 @@ function rowSetCopyFilter(spec: RowSetTableEntry, ids: readonly RowSetId[]): Cop
   const parameter = JSON.stringify(unique.map((id) => [id.contentKey, id.variant]));
   const pair = (source: string): string => `json_extract(${source}, '$[0]'), json_extract(${source}, '$[1]')`;
   const [blobColumn, variantColumn] = spec.primaryKey;
-  const [ledgerKey, ledgerInstance, ledgerVariant] = ROW_SET_LEDGER.primaryKey.map((column) => quoteIdentifier(column));
-  if (blobColumn === undefined || variantColumn === undefined || ledgerKey === undefined || ledgerInstance === undefined || ledgerVariant === undefined) {
-    throw new TypeError(`"${spec.name}" and "${ROW_SET_LEDGER.name}" must each key a row set by content key and variant.`);
+  if (blobColumn === undefined || variantColumn === undefined) {
+    throw new TypeError(`"${spec.name}" must key a row set by content key and variant.`);
   }
+  const ledgerHolds = `${rowSetLedgerColumn('instance')} = ? AND (${rowSetLedgerColumn('contentKey')}, ${rowSetLedgerColumn('variant')}) = (${pair('ids.value')})`;
   return {
     where: `(${quoteIdentifier(blobColumn)}, ${quoteIdentifier(variantColumn)}) IN (SELECT ${pair('value')} FROM json_each(?))`,
     parameter,
@@ -586,7 +632,7 @@ function rowSetCopyFilter(spec: RowSetTableEntry, ids: readonly RowSetId[]): Cop
       // Which ids the ledger does NOT hold, by their position in the bound array: exactly the
       // evicted ids, with no text form of an id rebuilt from a row.
       const gone = database
-        .prepare(`SELECT ids.key AS position FROM json_each(?) AS ids WHERE NOT EXISTS (SELECT 1 FROM ${STORE_SCHEMA}.${quoteIdentifier(ROW_SET_LEDGER.name)} WHERE ${ledgerInstance} = ? AND (${ledgerKey}, ${ledgerVariant}) = (${pair('ids.value')})) ORDER BY ids.key`)
+        .prepare(`SELECT ids.key AS position FROM json_each(?) AS ids WHERE NOT EXISTS (SELECT 1 FROM ${STORE_SCHEMA}.${quoteIdentifier(ROW_SET_LEDGER.name)} WHERE ${ledgerHolds}) ORDER BY ids.key`)
         .all(parameter, spec.instance) as { position: number }[];
       const missing = gone.flatMap(({ position }) => unique.slice(position, position + 1));
       if (missing.length > 0) throw new StoredRowsEvictedError({ tier: 'rowSet', relation: spec.name, ids: missing });

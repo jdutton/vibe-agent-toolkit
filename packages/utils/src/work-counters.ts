@@ -108,8 +108,8 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  *
  * `rowSet.*` counts the row-set tier (the `data` instance's stored rows), only in a run whose
  * statements name a row-set relation or a derived relation a row-set instance produces:
- * `rowSet.extracted` one per routed pair extracted from its bytes; `rowSet.storeServed` one per
- * routed pair the coverage read found stored; `rowSet.refused` one per routed pair that is
+ * `rowSet.extracted` one per row set extracted from its bytes; `rowSet.storeServed` one per
+ * row set the coverage read found stored (paths with the same bytes and variant share one row set); `rowSet.refused` one per routed pair that is
  * defective or refused; `rowSet.rows.decoded` the row-set rows decoded into JavaScript from the
  * store, head rows included. A copy counts in `hydration.rows.copied`, a repeat decode in
  * `store.rows.decoded.repeated`.

@@ -501,10 +501,12 @@ const DATA_STAGE_UNIT = 'packages/resources/test/projection-data-stage.test.ts';
  *
  * The lower tier holds the per-run states: a worker death and a time limit need a hostile
  * worker, and a vanished or rewritten file needs a race, which no corpus plants (the worker
- * death has no system seam, `absence-seeds.ts`).
+ * death has no system seam, `absence-seeds.ts`). It also holds a read the filesystem refuses,
+ * which a corpus can plant only as a mode-000 file, unportable to Windows.
  */
 export const DATA_PAIR_CAUSES = {
-  'defective:DATA_PARSE_ERROR': { state: 'defective', code: 'DATA_PARSE_ERROR', tier: 'system', seededBy: ['malformed', 'commentInStrict'] },
+  'defective:DATA_PARSE_ERROR': { state: 'defective', code: 'DATA_PARSE_ERROR', tier: 'system', seededBy: ['malformed', 'commentInStrict', 'mismatchedCloser'] },
+  'defective:DATA_LONE_SURROGATE': { state: 'defective', code: 'DATA_LONE_SURROGATE', tier: 'system', seededBy: ['loneSurrogateKeys'] },
   'defective:BLOB_NOT_TEXT': { state: 'defective', code: BLOB_NOT_TEXT, tier: 'system', seededBy: ['nulByte'] },
   'defective:PARSE_LIMIT_EXCEEDED': {
     state: 'defective',
@@ -529,6 +531,12 @@ export const DATA_PAIR_CAUSES = {
     code: BLOB_CONTENT_CHANGED,
     tier: 'lower',
     seededBy: [`${DATA_STAGE_UNIT} > names each extraction failure by its state and code`],
+  },
+  'defective:BLOB_UNREADABLE': {
+    state: 'defective',
+    code: BLOB_UNREADABLE,
+    tier: 'lower',
+    seededBy: [`${DATA_STAGE_UNIT} > makes a refused or failed read (EACCES, EPERM, EIO) defective, INPUT_UNREADABLE, with the remedy of the fault table`],
   },
   'refused:BLOB_UNREADABLE': {
     state: 'refused',

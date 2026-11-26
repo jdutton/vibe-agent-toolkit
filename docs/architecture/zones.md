@@ -1186,9 +1186,9 @@ window to answer it cheaply was open, and that it has since shut.
    not an absent consumer. Both row shapes have committed, npm-**published** JSON Schemas:
    `packages/resources/schemas/projection-edges.json` and `projection-edge-resolutions.json` are
    tracked, shipped by `package.json` `files` + `exports: { "./schemas/*": … }`, and have been
-   readable by any consumer since v0.2.0-rc.6. `generate-resources-json-schemas.ts` states the
-   intent outright — a schema in `NON_TABLE_ROW_SCHEMAS` is a claim that *this row shape is
-   published but no projection table holds it*. So the change did exactly what that paragraph said
+   readable by any consumer since v0.2.0-rc.6. `generate-resources-json-schemas.ts` publishes a
+   schema for every relation a statement can name, derived from `queryableRelationSpecs()`, so a
+   published schema is a claim that *a consumer may read rows of this shape*. So the change did exactly what that paragraph said
    it owed: it regenerated both published artifacts, landed a diff under `schemas/`, and carries a
    CHANGELOG entry. ⇒ **The window this item was guarding is now shut for any FURTHER edge-schema
    correction** — the next one costs a migration, so it is no longer a free-swing item.

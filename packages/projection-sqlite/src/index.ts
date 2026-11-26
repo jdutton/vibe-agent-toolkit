@@ -76,7 +76,7 @@ export {
 
 // The fact store: the `FactStore` port over a file, and nothing else. Opens WAL
 // with the pragmas in the one order that survives contention — see `store.ts`.
-// `evictRowSetForTest` is a test seam, deliberately outside the port.
+// Its eviction test seam is on `./testing`, deliberately outside the port and this barrel.
 export {
   DEFAULT_BLOB_TIER_BUDGET_BYTES,
   DEFAULT_ROW_SET_TIER_BUDGET_BYTES,
@@ -85,7 +85,6 @@ export {
   type StoreUnopenableError,
   defaultStoreDirectory,
   discardStoreDatabase,
-  evictRowSetForTest,
   isStoreInUse,
   isStoreUnavailableNow,
   isStoreUnopenableError,

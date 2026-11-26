@@ -178,6 +178,33 @@ describe('extractDataRows: duplicate keys (last occurrence wins)', () => {
     expect(rows.conditions.map((condition) => condition.code)).toStrictEqual(['DATA_DUPLICATE_KEY']);
   });
 
+  it('shadows every grandchild of an earlier occurrence, under an array and under an object', () => {
+    const shadowing = (text: string): (string | boolean)[][] =>
+      rowsOf(text).nodes.map(({ pointer, shadowed }) => [pointer, shadowed]);
+    expect(shadowing('{"a": [1, [2]], "a": 2}')).toStrictEqual([
+      ['', false],
+      ['/a', true],
+      ['/a/0', true],
+      ['/a/1', true],
+      ['/a/1/0', true],
+      ['/a', false],
+    ]);
+    expect(shadowing('{"a": {"b": {"c": 1}}, "a": 2}')).toStrictEqual([
+      ['', false],
+      ['/a', true],
+      ['/a/b', true],
+      ['/a/b/c', true],
+      ['/a', false],
+    ]);
+  });
+
+  it('names the object a nested key repeats in', () => {
+    const rows = rowsOf('{"o": {"p": {"k": 1, "k": 2}}}');
+    expect(rows.conditions.map(({ message }) => message)).toStrictEqual([
+      'The key "k" repeats in the object at /o/p; the last occurrence wins.',
+    ]);
+  });
+
   it('raises one condition per occurrence after the first, numbered in pre-order with the other codes', () => {
     const rows = rowsOf('{"k": 1, "k": 9007199254740993, "o": {"k": 1}, "k": 3}');
     expect(rows.conditions.map(({ seq, code, node }) => ({ seq, code, node }))).toStrictEqual([
@@ -213,6 +240,65 @@ describe('extractDataRows: defects', () => {
       message: 'ValueExpected at line 1, column 7',
     });
     expect(extractUnder('', {})).toMatchObject({ outcome: 'defect', code: 'DATA_PARSE_ERROR' });
+  });
+
+  it('refuses a closer that does not match the open container, before the parse recurses', () => {
+    // Each `}` closes nothing a `[` opened: a count-only depth scan reads this as depth 1, while the
+    // parser's error recovery skips the `}` and nests once per `[`, deep enough to overflow its stack.
+    expect(extractUnder('[},'.repeat(100_000), {})).toStrictEqual({
+      outcome: 'defect',
+      code: 'DATA_PARSE_ERROR',
+      message: 'CloseBracketExpected at line 1, column 2',
+    });
+    expect(extractUnder('{"a": [1}', {})).toStrictEqual({
+      outcome: 'defect',
+      code: 'DATA_PARSE_ERROR',
+      message: 'CloseBracketExpected at line 1, column 9',
+    });
+    expect(extractUnder('{"a": 1]', {})).toStrictEqual({
+      outcome: 'defect',
+      code: 'DATA_PARSE_ERROR',
+      message: 'CloseBraceExpected at line 1, column 8',
+    });
+  });
+
+  it('refuses a closer with nothing open', () => {
+    expect(extractUnder('[]]', {})).toStrictEqual({
+      outcome: 'defect',
+      code: 'DATA_PARSE_ERROR',
+      message: 'EndOfFileExpected at line 1, column 3',
+    });
+    expect(extractUnder('}', {})).toStrictEqual({
+      outcome: 'defect',
+      code: 'DATA_PARSE_ERROR',
+      message: 'ValueExpected at line 1, column 1',
+    });
+  });
+});
+
+describe('extractDataRows: lone surrogates (no UTF-8 text holds them)', () => {
+  it('refuses two keys that differ only by a lone surrogate, rather than storing two keys that collide as text', () => {
+    expect(extractUnder(String.raw`{"name":"a","engines":{"node":">=22"},"\uD800":1,"\uD801":2}`, {})).toStrictEqual({
+      outcome: 'defect',
+      code: 'DATA_LONE_SURROGATE',
+      message: 'A key holds a lone UTF-16 surrogate at line 1, column 39',
+    });
+  });
+
+  it('refuses a string value holding a lone surrogate, at the value', () => {
+    expect(extractUnder(String.raw`{"a": "x\uDC00"}`, {})).toStrictEqual({
+      outcome: 'defect',
+      code: 'DATA_LONE_SURROGATE',
+      message: 'A string holds a lone UTF-16 surrogate at line 1, column 7',
+    });
+    expect(extractUnder(String.raw`["\uD83D"]`, {}, 'jsonc')).toMatchObject({ outcome: 'defect', code: 'DATA_LONE_SURROGATE' });
+  });
+
+  it('accepts an escaped surrogate pair, which is one well-formed code point', () => {
+    // Built, not typed: an escaped pair typed into this file is normalized into the character itself.
+    const slash = String.fromCodePoint(0x5c);
+    const pair = `["${slash}uD83D${slash}uDE00"]`;
+    expect(scalarOf(rowsOf(pair), '/0')).toStrictEqual({ type: 'string', value: '\u{1F600}', lexeme: null });
   });
 });
 

@@ -1719,17 +1719,20 @@ answers.
 
 | Code | State | What |
 |---|---|---|
-| `DATA_PARSE_ERROR` | defective | The text is not valid under the path's variant: malformed JSON, or a comment or trailing comma in a file routed as strict `json` (route it as `jsonc` if the tool reading it allows them). The message names the first error, its line and column |
+| `DATA_PARSE_ERROR` | defective | The text is not valid under the path's variant: malformed JSON, or a comment or trailing comma in a file routed as strict `json` (route it as `jsonc` if the tool reading it allows them). The message names the first error, its line and column. A closer that does not match the innermost open bracket or brace, or closes one when none is open, is named before the file is parsed: the message names that closer even when an earlier error exists |
+| `DATA_LONE_SURROGATE` | defective | A key or string holds a lone UTF-16 surrogate: an escape in `\uD800` to `\uDFFF` with no partner. RFC 8259 admits it, but no UTF-8 text can hold it, so two keys that differ only by one would be stored as the same key. The message says whether a key or a string holds it, and its line and column. Fix the file (escape the whole code point, or remove the escape), or route it away with `exclude` in `resources.extractors.data` |
 | `BLOB_NOT_TEXT` | defective | The bytes are not text, by the one predicate the blob lane uses (a NUL in the first 8000 decoded code units; a UTF-16 file with its BOM is text); the same code the blob lane records for a binary file |
-| `PARSE_LIMIT_EXCEEDED` (input, output rows, output bytes, depth) | defective | The file breaches a cap its bytes decide: its size, its node count, the size of its rows, or its nesting depth. Depth is measured before the parse, so a deeply nested file stops at the cap without recursing |
+| `PARSE_LIMIT_EXCEEDED` (input, output rows, output bytes, depth) | defective | The file breaches a cap its bytes decide: its size, its node count, the size of its rows, or its nesting depth. Depth is measured by a token scan before the parse, and a closer that does not match is `DATA_PARSE_ERROR` before the parse too, so neither a deeply nested file nor a malformed one recurses past the cap |
 | `PARSE_LIMIT_EXCEEDED` (time, heap, stack) | refused | The parse ran out of time, heap or stack in this run |
 | `PARSE_WORKER_DIED` | refused | The parse worker died holding the file |
 | `BLOB_CONTENT_CHANGED` | refused | The file's bytes changed between the run keying it and the data stage reading it |
-| `BLOB_UNREADABLE` | refused | The file could not be read |
+| `BLOB_UNREADABLE` | defective or refused | The file could not be read. The fault table under "Filesystem faults: which refusal" decides, for a source found as content: `defective` (`INPUT_UNREADABLE`, with the table's remedy) for a refused permission, a failed device or any other class the table answers `INPUT_UNREADABLE`; `refused` (`RUN_INCOMPLETE`) for the classes it answers `RUN_INCOMPLETE`, such as descriptors exhausted or a busy path. A file gone since the run listed it is `refused` |
 
 A declared `resources.extractors.data` block that routes no file in the bound extent refuses the
 run `CONFIG_INVALID` when a statement names a `data__*` relation, unless the block sets
-`allowEmpty: true`.
+`allowEmpty: true`. An `include` glob that matches no `.json` or `.jsonc` file in the bound extent
+is `CONFIG_INVALID` too, naming the glob, even when the defaults route other files; `allowEmpty:
+true` excuses it.
 
 ### QA-snapshot invariants
 
