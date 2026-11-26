@@ -9,7 +9,8 @@
  * extents silently sums two different populations.
  */
 
-import { queryProjectionOf, ResolutionContextRowSchema, type Projection, type QueryProjection } from '@vibe-agent-toolkit/resources';
+import { ResolutionContextRowSchema, type Projection, type QueryProjection } from '@vibe-agent-toolkit/resources';
+import { queryProjectionOf } from '@vibe-agent-toolkit/resources/testing';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { describe, expect, it } from 'vitest';

@@ -109,6 +109,13 @@ export interface ProjectionLens {
    */
   readonly relations: readonly DerivedTableName[];
   /**
+   * Whether the lens populates through the run's store: its population reads every blob form of
+   * the keys it shares with the query's, so the query population reads them whole first
+   * (`populateForQuery`'s `'rows'`) and the run decodes each key once. Required, so a new lens
+   * states it.
+   */
+  readonly populates: boolean;
+  /**
    * Produce the rows.
    *
    * @param input - The projection, the root, and the run's oracles
@@ -124,6 +131,7 @@ export const AUTHORED_LINK_LENS: ProjectionLens = {
   name: 'authored-link',
   relations: ['lensContexts', 'edges', 'edgeResolutions'],
   // Reads the run's projection, so it populates nothing of its own.
+  populates: false,
   evaluate: ({ projection }) => ({ rows: evaluateAuthoredLenses(projection), population: null }),
 };
 
@@ -131,6 +139,7 @@ export const AUTHORED_LINK_LENS: ProjectionLens = {
 export const CLAUDE_CONTEXT_LENS: ProjectionLens = {
   name: 'claude-context',
   relations: ['claudeContextChains', 'claudeContextLoads'],
+  populates: true,
   evaluate: ({ root, populationRun, cache, logger }) => evaluateClaudeContextLens({ root, run: populationRun, cache, logger }),
 };
 
@@ -138,6 +147,7 @@ export const CLAUDE_CONTEXT_LENS: ProjectionLens = {
 export const CHANGED_FILES_LENS: ProjectionLens = {
   name: 'changed-files',
   relations: ['changedFiles'],
+  populates: false,
   evaluate: ({ root, base }) => evaluateChangedFilesLens(root, base),
 };
 
@@ -203,7 +213,7 @@ export interface HydrationPlan {
  * @returns The plan
  */
 export function planHydration(input: { readonly statements: readonly string[]; readonly roots: readonly unknown[] }): HydrationPlan {
-  const named = new Set(input.statements.flatMap((sql) => relationsNamedBy(sql, queryableRelationNames())));
+  const named = namedRelations(input.statements);
   const rootless: ReadonlySet<string> = input.roots.length > 1 ? new Set(rootlessPathRelations()) : new Set();
   const withheld = new Map<string, string>();
   for (const name of named) {
@@ -226,6 +236,30 @@ export function planHydration(input: { readonly statements: readonly string[]; r
     lenses,
     withheld,
   };
+}
+
+/**
+ * Every queryable relation some statement names, by the scan the SQL gate also reads.
+ *
+ * @param statements - The statements
+ * @returns The relations they name, by SQL name
+ */
+function namedRelations(statements: readonly string[]): ReadonlySet<string> {
+  return new Set(statements.flatMap((sql) => relationsNamedBy(sql, queryableRelationNames())));
+}
+
+/**
+ * Whether some lens a statement names populates ({@link ProjectionLens.populates}): decided from
+ * the statements before the query population runs, so that population reads what the lens reads
+ * next. It may over-select (a lens a multi-root run withholds), which costs the decode the copy
+ * would have saved and never an answer.
+ *
+ * @param statements - Every statement the run may ask
+ * @returns True when a named lens populates
+ */
+export function namesPopulatingLens(statements: readonly string[]): boolean {
+  const named = namedRelations(statements);
+  return PROJECTION_LENSES.some((lens) => lens.populates && lensRelationNames(lens).some((name) => named.has(name)));
 }
 
 /**

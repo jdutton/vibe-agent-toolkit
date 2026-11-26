@@ -45,7 +45,7 @@
  * decoded, since the read is one for the whole home.
  */
 
-import { deepFreeze, VatError } from '@vibe-agent-toolkit/utils';
+import { deepFreeze } from '@vibe-agent-toolkit/utils';
 
 import { NO_PARSER_KIND } from '../content-key.js';
 import type { ParseLimits } from '../parse-limits.js';
@@ -63,8 +63,9 @@ import {
 import { POPULATION_PARSE_LIMITS } from './content-cache.js';
 import { parserKindOf , parserKindForMime } from './router.js';
 import type { AdmittedFacts } from './run-population.js';
-import { keyedContentKeys, StoreRequestUnmetError } from './store-hydration.js';
-import type { BlobRequest, BlobScopedRows, BlobScopedTableName, FactStore } from './store.js';
+import { keyedContentKeys } from './store-hydration.js';
+import type { BlobRequest } from './store.js';
+import type { StoreReads } from './stored-reads.js';
 
 /**
  * What the store holds about one member's bytes: its realization's content columns. The store's
@@ -108,26 +109,6 @@ export interface StoredContent {
   readonly readByRun: boolean;
 }
 
-/** The code of a blob tier that could not be read ({@link BlobTierReadError}): the store's refusal. */
-export const PROJECTION_STORE_READ_FAILED_CODE = 'PROJECTION_STORE_READ_FAILED';
-
-/**
- * The blob tier could not be read. The store's failure, never a file's: coded,
- * so the per-file read classifier cannot file it as a file's errno whatever the
- * store's own error carries, and the run refuses.
- */
-class BlobTierReadError extends VatError {
-  /** @param cause - What the store's blob read rejected with */
-  constructor(cause: unknown) {
-    super(
-      PROJECTION_STORE_READ_FAILED_CODE,
-      `The projection store's blob facts could not be read: ${cause instanceof Error ? cause.message : String(cause)}. `
-        + 'The store is a cache: clear it (`vat cache clear`) or point VAT_CACHE_DIR elsewhere.',
-      { cause },
-    );
-  }
-}
-
 /**
  * What the stored admission reads of the blob tier: exactly what
  * {@link blobFactsReader} consumes: its tables, and of `blobReferences` only
@@ -140,37 +121,6 @@ export const ADMISSION_BLOB_REQUEST: BlobRequest<(typeof BLOB_FACT_READER_TABLES
   tables: BLOB_FACT_READER_TABLES,
   referenceForms: AST_SYNTACTIC_FORMS,
 });
-
-/**
- * Read the blob tier for `contentKeys`, a failed read rejecting as the store's
- * ({@link BlobTierReadError}): the one read every lane that reads the tier back
- * goes through, the stored admission and a projection hit alike, so one failure
- * is one refusal whichever lane met it.
- *
- * It restricts nothing itself: each caller states what it reads, because the
- * callers read different things (see {@link ADMISSION_BLOB_REQUEST}).
- *
- * @param store - The run's store
- * @param contentKeys - The keys to read
- * @param request - The tables and reference forms to read
- * @returns The tier's rows for them, in the requested tables
- * @throws A {@link BlobTierReadError} when the store's read rejects
- * @throws A {@link StoreRequestUnmetError} when its answer lacks a requested table
- */
-export async function readBlobTier<Table extends BlobScopedTableName>(
-  store: FactStore,
-  contentKeys: readonly string[],
-  request: BlobRequest<Table>,
-): Promise<Pick<BlobScopedRows, Table>> {
-  const rows = await store.readBlobFacts(contentKeys, request).catch((error: unknown) => {
-    throw new BlobTierReadError(error);
-  });
-  // Typed as present, but a backend is code outside this module: hold it to the request.
-  const answered: Partial<Record<BlobScopedTableName, unknown>> = rows;
-  const missing = request.tables.find((table) => answered[table] === undefined);
-  if (missing !== undefined) throw new StoreRequestUnmetError('blob', missing, 'was requested and is absent from the stored rows');
-  return rows;
-}
 
 /** A population's members, each realization with its absolute path. */
 type MemberRealizations = ReadonlyArray<{ readonly path: string; readonly row: ResourceRealizationRow }>;
@@ -212,14 +162,14 @@ function contentOf(
  * The tier is read for the members' keyed content keys on the first ask, ONCE,
  * and only when something asks: a run that admits nothing from the store reads
  * no blob row. A store that throws is not a miss: it surfaces as a
- * {@link BlobTierReadError}, and the run refuses.
+ * `BlobTierReadError` (`stored-reads.ts`), and the run refuses.
  *
  * @param members - The hit's member realizations, each with its absolute path
- * @param store - The store the hit was read from
+ * @param reads - The run's reads of the store the hit was read from
  * @returns The members' stored content
  */
-export function storedContentOf(members: MemberRealizations, store: FactStore): StoredContent {
-  return contentOf(members, (keys) => readBlobTier(store, keys, ADMISSION_BLOB_REQUEST), false);
+export function storedContentOf(members: MemberRealizations, reads: StoreReads): StoredContent {
+  return contentOf(members, (keys) => reads.blobs(keys, ADMISSION_BLOB_REQUEST), false);
 }
 
 /**

@@ -331,7 +331,6 @@ const BARREL_EXPORTS = [
   'projectionRowShape',
   'projectionShapeDigest',
   'projectionStoreDirectoryName',
-  'queryProjectionOf',
   'queryableRelationNames',
   'queryableRelationSpecs',
   'quoteIdentifier',

@@ -102,7 +102,7 @@ import {
 import { HARNESS_PROFILES, type HarnessProfile } from './harness/profile.js';
 import { rootIdFor } from './identity.js';
 import { ProjectionBuilder, type Projection } from './projection.js';
-import { QUERY_BLOB_REQUEST, queryProjectionOf, type QueryPopulateResult } from './query-projection.js';
+import { QUERY_BLOB_REQUEST, queryProjectionOf, type QueryPopulateResult, type QueryReferences } from './query-projection.js';
 import { collectionMimeConflictCondition } from './realizations.js';
 import { type CollectionMimeResolver, createCollectionMimeResolver } from './router.js';
 import { diskRunContentSource, type PopulationRun, type RunContentSource } from './run-population.js';
@@ -130,7 +130,7 @@ import {
   type BlobScopedTableName,
 } from './store.js';
 import { hydratesUnder } from './stored-admission.js';
-import { storedTierReads, type StoredTierReads } from './stored-tier-reads.js';
+import { storedTierReads, type StoreReads, type StoredTierReads } from './stored-reads.js';
 
 /**
  * The pass number every driver-placed row in the `base` stratum carries.
@@ -649,20 +649,28 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
 /**
  * {@link populate}, for the query lane: the in-process projection holds the AST reference forms
  * only (`QueryProjection`), and every form reaches the run database from the source the
- * population had. On a store hit the lexical rows are never decoded: the hit reads
- * {@link QUERY_BLOB_REQUEST}, and the run database copies `blob_references` from the store for
- * exactly the content keys the hit admitted. A derived population, store on or off, hands its own
- * rows.
+ * population had.
+ *
+ * - `'copy'`: on a store hit the lexical rows are never decoded. The hit reads
+ *   {@link QUERY_BLOB_REQUEST}, and the run database copies `blob_references` from the store the
+ *   hit read, for exactly the content keys it admitted.
+ * - `'rows'`: the hit reads every form, as {@link populate} does, and hands its own rows. For a run
+ *   whose next reader of the tier reads every form (a lens that populates), so the run reads each
+ *   key once; and for a run repopulating after a copy found a key evicted, so it cannot fail where a
+ *   store-off run succeeds.
+ *
+ * A derived population, store on or off, hands its own rows either way.
  *
  * @param options - As {@link populate}
+ * @param references - Where a store hit's `blob_references` reach the run database from
  * @returns The query projection, the outcome, and where `blob_references` come from
  */
-export async function populateForQuery(options: PopulateOptions): Promise<QueryPopulateResult> {
-  const { projection, outcome, servedKeys } = await populateReading(options, QUERY_BLOB_REQUEST);
+export async function populateForQuery(options: PopulateOptions, references: QueryReferences): Promise<QueryPopulateResult> {
+  const { projection, outcome, served } = await populateReading(options, references === 'copy' ? QUERY_BLOB_REQUEST : ALL_BLOB_REQUEST);
   return {
     projection: queryProjectionOf(projection),
     outcome,
-    blobReferences: servedKeys === undefined ? { rows: projection.blobReferences } : { stored: { contentKeys: servedKeys } },
+    blobReferences: served === undefined || references === 'rows' ? { rows: projection.blobReferences } : { stored: served },
   };
 }
 
@@ -680,7 +688,7 @@ export async function populateForQuery(options: PopulateOptions): Promise<QueryP
 async function populateReading(
   options: PopulateOptions,
   hitRequest: BlobRequest<BlobScopedTableName>,
-): Promise<PopulateResult & { readonly servedKeys: readonly string[] | undefined }> {
+): Promise<PopulateResult & { readonly served: StoredHit | undefined }> {
   const { root } = options;
 
   // Resolved BEFORE anything else, and deliberately before the cache is asked:
@@ -702,11 +710,12 @@ async function populateReading(
   const rootId = rootIdFor(root);
   // The run's one reader of the stored blob tier: the hit reads through it, and a hit that turns
   // into a miss (a key uncovered, a pair unsettled) hands the derivation what it already decoded.
-  const tier = storedTierReads(parseContent ? options.cache?.store : undefined);
+  const tier = storedTierReads(parseContent ? storeReadsOf(options) : undefined);
   const cached = await readCachedProjection(options, { rootId, parseContent, routing, request: hitRequest, tier });
   if ('hit' in cached) {
     countWork('extent.served', 1);
-    return { projection: cached.hit, outcome: populationOutcome('hit'), servedKeys: cached.servedKeys };
+    const served = cached.servedKeys === undefined || options.cache === undefined ? undefined : { store: options.cache.store, contentKeys: cached.servedKeys };
+    return { projection: cached.hit, outcome: populationOutcome('hit'), served };
   }
 
   // The RUN's one dispatcher — the blob stage's parses, the post-promotion
@@ -718,7 +727,7 @@ async function populateReading(
   return {
     projection: derived.projection,
     outcome: populationOutcome(stored, storeMissFor(cached.missed, derived.projection)),
-    servedKeys: undefined,
+    served: undefined,
   };
 }
 
@@ -733,6 +742,22 @@ type CachedRead =
 
 /** A store that held nothing for this question. */
 const NOTHING_HELD: CachedRead = { missed: [] };
+
+/** The store a hit read its blob tier from, and the content keys it admitted. */
+interface StoredHit {
+  readonly store: FactStore;
+  readonly contentKeys: readonly string[];
+}
+
+/**
+ * The run's reads of the population's store: the one way a population reaches it.
+ *
+ * @param options - The population's options
+ * @returns The reads, or undefined for a population with no store
+ */
+function storeReadsOf(options: PopulateOptions): StoreReads | undefined {
+  return options.cache === undefined ? undefined : options.run.stored.of(options.cache.store);
+}
 
 /** What {@link populate} decided before deriving, and the run's one dispatcher. */
 interface DerivationRun {
@@ -1160,7 +1185,7 @@ async function readStoredExtent<Table extends ExtentScopedTableName>(
     // The gate tables are in every request (the parameter's type refuses one
     // without them), which the compiler cannot carry through the generic.
     const read = request as unknown as ExtentRequest<Table | StoredExtentGateTable>;
-    const stored = await cache.store.readExtent(storeKeyFor(options, rootId, cache, routing), read);
+    const stored = await options.run.stored.of(cache.store).extent(storeKeyFor(options, rootId, cache, routing), read);
     if (stored === undefined) return undefined;
 
     const contexts = selectRequestedContexts(stored, requested);
@@ -1261,13 +1286,17 @@ export interface StoredMembership {
  * @param options - The options the caller will populate with, unmodified
  * @param requested - The already-known contributors whose contexts must be
  *   stored, each with the parameter set `options.parameters` gives it
+ * @param request - What the run reads of the extent: {@link MEMBERSHIP_EXTENT_REQUEST} for a run
+ *   that reads membership alone, {@link ALL_EXTENT_REQUEST} for one whose population reads the whole
+ *   extent next, so the run reads the tree once (`stored-reads.ts`)
  * @returns The realization and condition rows of exactly those contributors'
  *   contexts with the hit outcome, or `undefined` when the store cannot answer —
  *   in which case the caller populates
  */
-export async function readStoredMembership(
+export async function readStoredMembership<Table extends ExtentScopedTableName>(
   options: PopulateOptions,
   requested: readonly RequestedContributor[],
+  request: ExtentRequest<Table> & ([StoredExtentGateTable] extends [Table] ? unknown : never),
 ): Promise<StoredMembership | undefined> {
   if (options.cache === undefined) return undefined;
 
@@ -1276,7 +1305,7 @@ export async function readStoredMembership(
   // read, and the conflicts it would accumulate belong to the run's own
   // instance, which `populate` builds for itself.
   const routing = createCollectionMimeResolver(options.collections);
-  const extent = await readStoredExtent(options, rootIdFor(options.root), routing, requested, MEMBERSHIP_EXTENT_REQUEST);
+  const extent = await readStoredExtent(options, rootIdFor(options.root), routing, requested, request);
   if (extent === undefined) return undefined;
   countWork('extent.served', 1);
   return {
@@ -1346,10 +1375,11 @@ async function writeCachedProjection(
   // the tree did meanwhile. The extent is keyed by the tree, so it is not. What
   // the reads covered and settled is re-stamped, not rewritten.
   const { coveredAtRead, settledAtRead } = derived;
-  if (parseContent) await cache.store.writeBlobFacts({ rows: storableBlobFacts(blobs), coveredAtRead, settledAtRead });
+  const reads = options.run.stored.of(cache.store);
+  if (parseContent) await reads.writeBlobs({ rows: storableBlobFacts(blobs), coveredAtRead, settledAtRead });
   const unchanged = cache.treeUnchanged();
   if (unchanged) {
-    await cache.store.writeExtent(storeKeyFor(options, rootId, cache, routing), extent);
+    await reads.writeTree(storeKeyFor(options, rootId, cache, routing), extent);
   }
   recordCrawlPass(CRAWL_STORE_WRITE_ID, 'base', BASE_STRATUM_PASS, startedAt);
   return unchanged ? 'written' : 'skipped-tree-changed';

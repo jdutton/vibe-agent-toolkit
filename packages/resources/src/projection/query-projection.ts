@@ -23,10 +23,10 @@ import type { BlobReferenceRow, ReferenceSyntacticForm } from '../schemas/projec
 import { AST_SYNTACTIC_FORMS } from './blob-references.js';
 import type { PopulationOutcome } from './merge.js';
 import type { Projection } from './projection.js';
-import { ALL_BLOB_REQUEST, type BlobRequest, type BlobScopedTableName } from './store.js';
+import { ALL_BLOB_REQUEST, type BlobRequest, type BlobScopedTableName, type FactStore } from './store.js';
 
 /** A reference form a parser's AST produces: every form but the lexer's. */
-export type AstSyntacticForm = Exclude<ReferenceSyntacticForm, LexicalReference['syntacticForm']>;
+type AstSyntacticForm = Exclude<ReferenceSyntacticForm, LexicalReference['syntacticForm']>;
 
 /** A `blob_references` row of an AST form. */
 export type AstReferenceRow = BlobReferenceRow & { readonly syntacticForm: AstSyntacticForm };
@@ -41,13 +41,22 @@ export interface QueryProjection extends Omit<Projection, 'blobReferences'> {
 }
 
 /**
- * Where the run database's `blob_references` come from: the run's own decoded rows (store off, or
- * a derived population), or the store a hit was served from, restricted to exactly the content keys
- * the hit admitted. Required and one of the two: there is no default lane.
+ * Where the run database's `blob_references` come from: the run's own decoded rows (store off, a
+ * derived population, or a hit that read every form), or the store a hit was served from,
+ * restricted to exactly the content keys the hit admitted. The store is the one the hit read, set
+ * by the population: never one the caller supplies beside it. Required and one of the two: there
+ * is no default lane.
  */
 export type QueryReferenceSource =
   | { readonly rows: readonly BlobReferenceRow[] }
-  | { readonly stored: { readonly contentKeys: readonly string[] } };
+  | { readonly stored: { readonly store: FactStore; readonly contentKeys: readonly string[] } };
+
+/**
+ * Where a query-lane store hit's `blob_references` reach the run database from: `'copy'` reads the
+ * AST forms and copies every form from the store inside SQLite; `'rows'` reads every form and hands
+ * them (`populateForQuery`). Required, so a caller states it.
+ */
+export type QueryReferences = 'copy' | 'rows';
 
 /**
  * The code a run database's hydration refuses with when a content key the hit admitted left the

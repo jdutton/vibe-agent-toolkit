@@ -62,7 +62,7 @@ import type {
   ExtentScopedTableName,
   FactStore,
 } from '../src/projection/store.js';
-import { PROJECTION_STORE_READ_FAILED_CODE } from '../src/projection/stored-admission.js';
+import { PROJECTION_STORE_READ_FAILED_CODE } from '../src/projection/stored-reads.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
 import { FailingBlobStore, FakeFactStore } from './fake-fact-store.js';
@@ -778,7 +778,7 @@ describe('populate through a projection store', () => {
 
       // One read: the extent hit's coverage read finds the keys uncovered and
       // misses, and derivation reuses what that read decoded through the
-      // population's one tier reader (`stored-tier-reads.ts`) instead of reading
+      // run's one store reader (`stored-reads.ts`) instead of reading
       // the same keys again.
       expect(store.readBlobFactsCalls).toBe(1);
       expect(deriving.contributorRuns).toContain(`${FILESYSTEM_ID}@1`);

@@ -693,11 +693,11 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
   // A refusal no store holds forces the whole population again on the second
   // run: re-derived, the cyclic one dispatched and refused again, the stored
   // document's key served from the blob tier the miss reads, and the key's
-  // snapshot and the write path's fresh one taken. Two blob reads, no row twice:
-  // the hit reads the AST reference forms, and the derivation, through the same
-  // reader, reads only the forms the hit left out (`stored-tier-reads.ts`).
-  // Red proof, seeded once and reverted: a derivation with a reader of its own
-  // decodes the hit's 3 rows again, `store.rows.decoded.repeated` 3 and decoded 19.
+  // snapshot and the write path's fresh one taken. Two blob reads: the hit reads
+  // the AST reference forms, and the derivation, through the same reader, reads the
+  // key again whole (`stored-reads.ts`), so a key's rows come from one transaction.
+  // The hit's 3 rows are decoded again: `store.rows.decoded.repeated` 3, the cost of
+  // a hit turned miss, which a store eviction can tear otherwise.
   'store.miss.refusedPairs': {
     prepare: async (scope) => {
       const query = queriedTree(scope, { ...PLAIN_TREE, 'deep.md': CYCLIC_FRONTMATTER });
@@ -705,7 +705,8 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       return query;
     },
     delta: {
-      'store.rows.decoded.persistent': 16,
+      'store.rows.decoded.persistent': 19,
+      'store.rows.decoded.repeated': 3,
       'store.reads.extent': 1,
       'store.reads.blob': 2,
       'store.writes.persistent': 2,
@@ -1016,6 +1017,9 @@ export function seedCases<K extends WorkCounter>(seeds: Readonly<Record<K, Seed>
  * @param seed - The seed
  */
 export async function runSeed(scope: SeedScope, counter: WorkCounter, seed: Seed): Promise<void> {
+  // Read before the prepare too: the counts are observed from their first read on
+  // (`workCountsObserved`), and a seed's prepare does work its act is measured against.
+  readWorkCounters();
   const act = await seed.prepare(scope);
   const before = readWorkCounters();
   const result = await act();

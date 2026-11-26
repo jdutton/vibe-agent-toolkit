@@ -25,7 +25,6 @@
  */
 
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
-import { pathToFileURL } from 'node:url';
 
 import {
   compareRows,
@@ -50,7 +49,7 @@ import {
   queryableSpecs,
 } from './schema-sql.js';
 import { type GateConnection, openGate, refreshRelationPagesAfter, runGated } from './sql-gate.js';
-import { BUSY_TIMEOUT_MS, inTransaction, storeDatabasePath } from './store.js';
+import { failAfter, inTransaction, SqliteFactStore } from './store.js';
 import { encodeValue, type SqliteValue } from './values.js';
 
 /** One relation's rows, as a projection or a lens holds them. */
@@ -61,7 +60,11 @@ type RelationRows = readonly Readonly<Record<string, unknown>>[];
  * exactly the content keys that hit admitted.
  */
 export interface StoredRows {
-  /** The store the hit was read from: one `openSqliteFactStore` opened in this process. */
+  /**
+   * The store the hit was read from. The copy reads it through the store itself
+   * (`SqliteFactStore.attachedTo`), so only a store `openSqliteFactStore` opened, and still open,
+   * can be copied from: a wrapper or a fake has no file to attach, and refuses.
+   */
   readonly store: FactStore;
   /**
    * The hit's keyed content keys, and only those. 🚨 The store is shared by every root on the
@@ -428,12 +431,13 @@ export function hydrateRunDatabase(hydration: RunDatabaseHydration): RunDatabase
  * @param stored - The store and the keys
  * @returns How many rows it copied
  * @throws {@link StoredRowsEvictedError} When an admitted key left the store's ledger
- * @throws Error When the store is not one this package opened, so there is no file to attach
+ * @throws Error When the store is not one this package opened, so there is no file to attach, or
+ *   it is closed
  */
 function copyStoredRelation(database: DatabaseSync, relation: QueryableRelation, stored: StoredRows): number {
-  const path = storeDatabasePath(stored.store);
-  if (path === undefined) {
-    throw new Error(`"${relation.spec.name}" can be copied only from a store openSqliteFactStore opened in this process.`);
+  const { store } = stored;
+  if (!(store instanceof SqliteFactStore)) {
+    throw new TypeError(`"${relation.spec.name}" can be copied only from a store openSqliteFactStore opened; a wrapped or fake store has no file to attach.`);
   }
   const [keyColumn] = relation.spec.primaryKey;
   if (keyColumn === undefined) throw new Error(`"${relation.spec.name}" declares no primary key to copy by.`);
@@ -444,10 +448,7 @@ function copyStoredRelation(database: DatabaseSync, relation: QueryableRelation,
   const order = relation.spec.primaryKey.map((column) => quoteIdentifier(column)).join(', ');
   const admitted = 'IN (SELECT value FROM json_each(?))';
   database.exec(relation.createSql);
-  // Another connection may be writing the store: wait for it as the store's own connection would.
-  database.exec(`PRAGMA busy_timeout = ${String(BUSY_TIMEOUT_MS)}`);
-  database.prepare(`ATTACH DATABASE ? AS ${STORE_SCHEMA}`).run(`${pathToFileURL(path).href}?mode=ro`);
-  try {
+  return store.attachedTo(database, STORE_SCHEMA, () => {
     database.exec('BEGIN');
     try {
       const { held } = database
@@ -460,12 +461,9 @@ function copyStoredRelation(database: DatabaseSync, relation: QueryableRelation,
       database.exec('COMMIT');
       return Number(changes);
     } catch (error) {
-      database.exec('ROLLBACK');
-      throw error;
+      failAfter(error, () => database.exec('ROLLBACK'));
     }
-  } finally {
-    database.exec(`DETACH DATABASE ${STORE_SCHEMA}`);
-  }
+  });
 }
 
 /**

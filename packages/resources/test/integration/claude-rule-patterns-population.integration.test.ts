@@ -18,6 +18,7 @@ import { resetProjectRootCaches, safePath, toForwardSlash } from '@vibe-agent-to
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import type { TreePopulationOptions } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
 import type { QueryPopulateResult } from '../../src/projection/query-projection.js';
 import { buildResourceProjection } from '../../src/projection/resource-population.js';
@@ -26,6 +27,9 @@ import { FakeFactStore } from '../fake-fact-store.js';
 import { git } from '../helpers/git-fixture.js';
 import { inOwnRun } from '../helpers/population-run.js';
 import { plantTree, razeTree } from '../helpers/temp-corpus.js';
+
+/** The query lane's population, copying a hit's references as `vat resources query` does with no populating lens. */
+const buildCopying = (options: TreePopulationOptions): Promise<QueryPopulateResult> => buildResourceProjection(options, 'copy');
 
 /** The rules file whose `paths:` list every assertion below is about. */
 const SCOPED_RULE = '.claude/rules/scoped.md';
@@ -74,7 +78,7 @@ function root(): string {
  * @returns The projection the lane produced, and whether the store served it
  */
 async function populateTree(store?: FakeFactStore): Promise<QueryPopulateResult> {
-  return inOwnRun(buildResourceProjection, {
+  return inOwnRun(buildCopying, {
     root: root(),
     ...(store === undefined ? {} : { cache: { store, treeUnchanged: () => true, treeHash: TREE_HASH } }),
   });
@@ -206,7 +210,7 @@ async function populateIgnoredTree(
     // Positive control on the oracle: an unusable tracker answers "nothing is
     // ignored", and every row below would be the non-repository answer.
     expect(gitTracker.isUsable()).toBe(true);
-    const { projection } = await inOwnRun(buildResourceProjection, {
+    const { projection } = await inOwnRun(buildCopying, {
       root: dir, gitTracker, });
     // The premise: the ignored file is never realized, so no witness can exist.
     const realized = new Set(projection.resourceRealizations.map((row) => toForwardSlash(safePath.join(corpus, row.path))));

@@ -13,15 +13,11 @@
  * Integration tier: it loads the repo's whole ESLint config and parses the tree.
  */
 
-import { readFileSync } from 'node:fs';
-
-import { resolveFromImportMeta, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { crawlDirectorySync } from '@vibe-agent-toolkit/utils/crawl';
-import { ESLint } from 'eslint';
+import { resolveFromImportMeta } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 import { describe, expect, it } from 'vitest';
 
-import { importRootEslintConfig, syntaxRuleLinter } from '../eslint-clean-files.js';
+import { exemptionDrift, filesTheRuleReports, importRootEslintConfig, syntaxRuleLinter } from '../eslint-clean-files.js';
 
 /** The one `eslint.config.js` export this file reads: the globs exempt from the boundary rule. */
 const { PROJECTION_SQLITE_IMPORTERS } = await importRootEslintConfig<{
@@ -33,9 +29,6 @@ const BACKEND = '@vibe-agent-toolkit/projection-sqlite';
 /** Whether a repo-relative file lies in the backend's own package. */
 const inBackendPackage = picomatch('packages/projection-sqlite/**');
 const RULE = 'local/projection-sqlite-import-boundary';
-
-/** The extensions the rule is enabled for in `eslint.config.js`. */
-const SCRIPT_EXTENSIONS = '{ts,cts,mts,js,cjs,mjs}';
 
 const lint = syntaxRuleLinter(REPO_ROOT, [RULE]);
 
@@ -54,37 +47,10 @@ const SHAPES: ReadonlyArray<readonly [shape: string, code: string]> = [
  * Every script under a package's `src` or `test` that imports the backend, repo-relative: each file
  * the rule reports when it is enabled everywhere, exemptions included.
  */
-async function backendImporters(): Promise<string[]> {
-  const eslint = new ESLint({
-    cwd: REPO_ROOT,
-    ruleFilter: ({ ruleId }) => ruleId === RULE,
-    overrideConfig: [
-      { files: ['**/*.ts', '**/*.cts'], languageOptions: { parserOptions: { project: null, projectService: false } } },
-      // After the repo's own blocks, so it reaches the files `PROJECTION_SQLITE_IMPORTERS` exempts.
-      { files: [`**/*.${SCRIPT_EXTENSIONS}`], rules: { [RULE]: 'error' } },
-    ],
-  });
-  const files = crawlDirectorySync({
-    outputs: [],
-    baseDir: REPO_ROOT,
-    include: [`packages/*/src/**/*.${SCRIPT_EXTENSIONS}`, `packages/*/test/**/*.${SCRIPT_EXTENSIONS}`],
-    includeUntracked: true,
-    absolute: false,
-    unreadable: { refuse: { root: REPO_ROOT, remedy: 'Fix the directory permissions and re-run.', side: 'source' } },
-  });
-  const importers: string[] = [];
-  for (const file of files.map((each) => toForwardSlash(each))) {
-    const text = readFileSync(safePath.join(REPO_ROOT, file), 'utf-8');
-    // Only a narrowing, never the verdict: a file outside the package reaches into it only through a
-    // specifier that spells its directory or package name, and every file inside it is linted.
-    if (!inBackendPackage(file) && !text.includes('projection-sqlite')) continue;
-    const [result] = await eslint.lintText(text, { filePath: safePath.join(REPO_ROOT, file) });
-    const messages = result?.messages ?? [];
-    const fatal = messages.find((message) => message.fatal === true);
-    if (fatal !== undefined) throw new Error(`${file}: ${fatal.message}`);
-    if (messages.some((message) => message.ruleId === RULE)) importers.push(file);
-  }
-  return importers;
+function backendImporters(): Promise<string[]> {
+  // Only a narrowing, never the verdict: a file outside the package reaches into it only through a
+  // specifier that spells its directory or package name, and every file inside it is linted.
+  return filesTheRuleReports(REPO_ROOT, RULE, (file, text) => inBackendPackage(file) || text.includes('projection-sqlite'));
 }
 
 describe('the projection-sqlite import boundary', () => {
@@ -101,12 +67,8 @@ describe('the projection-sqlite import boundary', () => {
   });
 
   it('exempts exactly the files that import the backend, both ways', async () => {
-    const importers = await backendImporters();
-    const matchers = PROJECTION_SQLITE_IMPORTERS.map((glob) => [glob, picomatch(glob)] as const);
-
-    // Every importer is exempt (the lint says the same from the other side).
-    expect(importers.filter((file) => !matchers.some(([, matches]) => matches(file)))).toEqual([]);
-    // Every exemption is in use: a glob that matches no importer is a stale hole.
-    expect(matchers.filter(([, matches]) => !importers.some((file) => matches(file))).map(([glob]) => glob)).toEqual([]);
+    // Every importer is exempt (the lint says the same from the other side), and every exemption is
+    // in use: a glob that matches no importer is a stale hole.
+    expect(exemptionDrift(await backendImporters(), PROJECTION_SQLITE_IMPORTERS)).toEqual({ unexempted: [], unused: [] });
   });
 });

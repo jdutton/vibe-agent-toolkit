@@ -260,6 +260,9 @@ let throwOnForbidden = false;
 /** Whether {@link installWorkCounterDump} has been called with the dump on. */
 let dumpInstalled = false;
 
+/** See {@link workCountsObserved}. */
+let countsObserved = false;
+
 /** The exit writes {@link installWorkCounterDump} registered, so a test reset can take them back. */
 const dumpListeners: Array<() => void> = [];
 
@@ -275,6 +278,18 @@ const dumpListeners: Array<() => void> = [];
 export function countWork(counter: Exclude<WorkCounter, 'git.calls'>, n: number): void {
   if ((counter as WorkCounter) === 'git.calls') throw new RangeError("'git.calls' is counted by countGitSpawn, which names the spawn");
   add(counter, n);
+}
+
+/**
+ * Whether anything will read this thread's counts, so work kept only to be counted (the store's
+ * record of every row it decoded) costs nothing when no reader observes. Set by every way the
+ * counts are read: the dump's install, an in-process read, a test reset. Gated work done before the
+ * first read is not kept.
+ *
+ * @returns True when the counts dump is installed, the counts were read in process, or a test reset them
+ */
+export function workCountsObserved(): boolean {
+  return countsObserved;
 }
 
 /**
@@ -366,6 +381,7 @@ function countsOf(slots: Float64Array): Record<WorkCounter, number> {
  * @returns A snapshot; later counts do not change it
  */
 export function readWorkCounters(): Readonly<Record<WorkCounter, number>> {
+  countsObserved = true;
   return countsOf(counts);
 }
 
@@ -426,7 +442,10 @@ export function installWorkCounterDump(role: WorkCounterRole): void {
   if (counts === null && spawns === null) return;
   if (dumpInstalled) throw new Error('installWorkCounterDump was called twice in one process');
   dumpInstalled = true;
-  if (counts !== null) onExitWrite(DUMP_NOUN, counts, DUMP_BASENAME, () => buildDump(role));
+  if (counts !== null) {
+    countsObserved = true;
+    onExitWrite(DUMP_NOUN, counts, DUMP_BASENAME, () => buildDump(role));
+  }
   if (spawns !== null) {
     spawnLogInstalled = true;
     onExitWrite(SPAWN_DUMP_NOUN, spawns, SPAWN_DUMP_BASENAME, (): GitSpawnDump => ({ pid: process.pid, role, spawns: readGitSpawns() }));
@@ -478,6 +497,7 @@ export function __resetWorkCountersForTest(): void {
   reportedForbidden = false;
   throwOnForbidden = false;
   dumpInstalled = false;
+  countsObserved = true;
   for (const listener of dumpListeners) process.off('exit', listener);
   dumpListeners.length = 0;
 }

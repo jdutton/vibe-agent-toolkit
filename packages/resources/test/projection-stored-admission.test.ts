@@ -26,6 +26,7 @@ import {
   storedRoute,
   type StoredRealization,
 } from '../src/projection/stored-admission.js';
+import { runStoredReads } from '../src/projection/stored-reads.js';
 import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
 
 const MARKDOWN_KEY = `markdown.${'a'.repeat(64)}`;
@@ -225,7 +226,7 @@ describe('storedContentOf: the members\' stored content', () => {
       member('/r/b.md', keyed(MARKDOWN_KEY, 'text/markdown')),
       member('/r/c.json', keyed(NONE_KEY, 'application/json')),
       member('/r/big.md', unkeyed('oversize', 'text/markdown')),
-    ], store);
+    ], runStoredReads().of(store));
     expect(reads, 'nothing asked yet').toEqual([]);
     const [first, second] = await Promise.all([stored.facts(), stored.facts()]);
     await stored.facts();
@@ -241,13 +242,13 @@ describe('storedContentOf: the members\' stored content', () => {
     const stored = storedContentOf([
       member('/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown')),
       member('/r/a.md', unkeyed('unreadable', 'text/markdown')),
-    ], store);
+    ], runStoredReads().of(store));
     expect(stored.members.get('/r/a.md')).toEqual(keyed(MARKDOWN_KEY, 'text/markdown'));
   });
 
   it('respells every path and shares the one tier read', async () => {
     const { store, reads } = countingStore();
-    const stored = storedContentOf([member('/tmp/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown'))], store);
+    const stored = storedContentOf([member('/tmp/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown'))], runStoredReads().of(store));
     const respelled = respelledContent(stored, (path) => path.replace('/tmp/', '/private/tmp/'));
     expect([...respelled.members.keys()]).toEqual(['/private/tmp/r/a.md']);
     await respelled.facts();
@@ -258,20 +259,20 @@ describe('storedContentOf: the members\' stored content', () => {
   it('rejects a failed tier read as the store\'s, never as a file\'s errno', async () => {
     const errno = Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT', syscall: 'open', path: '/store/blobs' });
     const { store } = countingStore(errno);
-    const stored = storedContentOf([member('/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown'))], store);
+    const stored = storedContentOf([member('/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown'))], runStoredReads().of(store));
     await expect(stored.facts()).rejects.toMatchObject({ code: 'PROJECTION_STORE_READ_FAILED', cause: errno });
   });
 
   it('refuses, by code, a store that answers without a requested table, never reading it as empty', async () => {
     const withoutOne = Object.fromEntries(Object.entries(emptyBlobRows()).filter(([table]) => table !== 'skillTextMatches'));
     const store: FactStore = { ...countingStore().store, readBlobFacts: () => Promise.resolve(withoutOne as BlobScopedRows) };
-    const stored = storedContentOf([member('/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown'))], store);
+    const stored = storedContentOf([member('/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown'))], runStoredReads().of(store));
     await expect(stored.facts()).rejects.toMatchObject({ code: STORE_REQUEST_UNMET, tier: 'blob', table: 'skillTextMatches' });
   });
 
   it('names the remedy: the store is a cache, so clear it or move it', async () => {
     const { store } = countingStore(new Error('database disk image is malformed'));
-    const stored = storedContentOf([member('/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown'))], store);
+    const stored = storedContentOf([member('/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown'))], runStoredReads().of(store));
     await expect(stored.facts()).rejects.toThrow(/database disk image is malformed.*`vat cache clear`.*VAT_CACHE_DIR/s);
   });
 });

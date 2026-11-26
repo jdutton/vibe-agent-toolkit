@@ -17,3 +17,6 @@ export {
   type BlobWriterContractFactory,
   type BlobWriterContractSubject,
 } from './testing/blob-writer-contract.js';
+
+// The query lane's view of a projection, for suites that build one from fixture rows.
+export { queryProjectionOf } from './projection/query-projection.js';

@@ -1,17 +1,19 @@
 /**
  * The query lane's `blob_references` on a store hit: copied from the store inside SQLite for
- * exactly the keys the hit admitted. Three claims through the real lane and the real backend:
+ * exactly the keys the hit admitted. Four claims through the real lane and the real backend:
  * no other repository's rows reach the run database from the store both share, the copy holds
- * what a store-off run derives, and a key evicted between the hit and the copy makes the lane
- * populate again rather than answer short.
+ * what a store-off run derives (and ran: every row counted copied), a key evicted between the hit
+ * and the copy makes the lane populate again rather than answer short, and that second population
+ * hands its own rows, never a second copy, and repeats none of the first's warnings.
  */
 
 import { writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
 import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
-import { safePath, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
-import { createTempDir, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
+import { PROJECTION_STORE_ROWS_EVICTED_CODE } from '@vibe-agent-toolkit/resources';
+import { readWorkCounters, safePath, VAT_CACHE_DIR_ENV, VatError } from '@vibe-agent-toolkit/utils';
+import { __resetWorkCountersForTest, createTempDir, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { storeFilesUnder } from '../helpers/projection-store-probe.js';
@@ -69,13 +71,14 @@ function plantTree(files: Readonly<Record<string, string>>): string {
  *
  * @param root - The tree
  * @param statement - The SQL
+ * @param warnings - Where the lane's warnings go, if the caller reads them
  * @returns The rows, and the population's outcome
  */
-async function ask(root: string, statement: string): Promise<{ rows: unknown; population: string }> {
+async function ask(root: string, statement: string, warnings: string[] = []): Promise<{ rows: unknown; population: string }> {
   const noop = (): void => undefined;
   let answer: { rows: unknown; population: string } | undefined;
   await withQueriedProjection(
-    { root, logger: { info: noop, warn: noop, error: noop, debug: noop }, statements: [statement], base: undefined },
+    { root, logger: { info: noop, warn: (message) => warnings.push(message), error: noop, debug: noop }, statements: [statement], base: undefined },
     (query, provenance) => {
       answer = { rows: query(statement), population: provenance.population };
     },
@@ -100,11 +103,14 @@ describe('blob_references on a store hit', () => {
     await ask(treeA, EVERY_REFERENCE);
     await ask(treeB, EVERY_REFERENCE);
 
+    __resetWorkCountersForTest();
     const served = await ask(treeA, EVERY_REFERENCE);
+    const copied = readWorkCounters()['hydration.rows.copied'];
     vi.stubEnv(PROJECTION_STORE_ENV, 'off');
     const derived = await ask(treeA, EVERY_REFERENCE);
 
     expect(served.population).toBe('store');
+    expect(copied, 'the served run copied every row it answers with').toBe((derived.rows as unknown[]).length);
     expect(derived.population).toBe('derived');
     // The premise: both kinds of form, so a copy that drops either differs.
     expect(JSON.stringify(derived.rows)).toContain('"markdown-link"');
@@ -138,5 +144,32 @@ describe('blob_references on a store hit', () => {
     expect(evicted, 'the eviction ran, between the hit and its copy').toHaveLength(1);
     expect(answered.population, 'the second population misses on the evicted key and derives').toBe('derived');
     expect(answered.rows).toEqual(derived.rows);
+  });
+
+  it('populates again from its own rows, warning once, when the copy refuses although the store holds the key', async () => {
+    const cache = createTempDir('vat-stored-copy-cache-');
+    made.push(cache);
+    vi.stubEnv(VAT_CACHE_DIR_ENV, cache);
+    // A refused binary member, so each population has a warning to give.
+    const tree = plantTree({ ...TREE_A, 'blob.md': '\u0000\u0001\u0002 binary\n' });
+    const derived = await ask(tree, EVERY_REFERENCE);
+    let refused = 0;
+    // The race the retry exists for, seen from the copy: the ledger misses a key a moment after the
+    // hit read it, and the key is back (filed again) by the time the lane populates again.
+    beforeFirstCopy = () => {
+      refused += 1;
+      throw new VatError(PROJECTION_STORE_ROWS_EVICTED_CODE, 'a key this run was served was evicted before the copy');
+    };
+    const warnings: string[] = [];
+    __resetWorkCountersForTest();
+
+    const answered = await ask(tree, EVERY_REFERENCE, warnings);
+
+    expect(refused, 'the copy refused once').toBe(1);
+    expect(answered.population, 'the second population is served from the store again').toBe('store');
+    expect(readWorkCounters()['hydration.rows.copied'], 'and hands its own rows: no second copy to refuse').toBe(0);
+    expect(answered.rows).toEqual(derived.rows);
+    expect(warnings.length, 'the premise: the population warns').toBeGreaterThan(0);
+    expect(warnings, 'each warning once').toEqual([...new Set(warnings)]);
   });
 });

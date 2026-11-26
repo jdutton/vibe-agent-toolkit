@@ -44,6 +44,7 @@ import {
   type ExtentScopedTableName,
 } from '../../src/projection/store.js';
 import { storedComputeBy, storedContentOf } from '../../src/projection/stored-admission.js';
+import { runStoredReads } from '../../src/projection/stored-reads.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { ResourceMetadata } from '../../src/schemas/resource-metadata.js';
 import { FakeFactStore } from '../fake-fact-store.js';
@@ -196,7 +197,7 @@ describe('one coverage predicate for the hit, the reuse read and stored admissio
 
     // Stored admission: K is sent cold by the tier's answer; every other member is served.
     const members = primed.projection.resourceRealizations.map((row) => ({ path: safePath.join(root, row.path), row }));
-    const stored = storedContentOf(members, store);
+    const stored = storedContentOf(members, runStoredReads().of(store));
     const admission = await Promise.all(keys.map(async (key) => {
       const member = members.find(({ row }) => row.contentKey === key);
       if (member === undefined) throw new Error(`no member keyed ${key}`);

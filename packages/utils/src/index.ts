@@ -391,6 +391,7 @@ export {
   WORK_COUNTER_ROLES,
   WORK_COUNTERS_ENV,
   withWorkPhase,
+  workCountsObserved,
   type ForbiddenWorkCountPolicy,
   type GitSpawn,
   type GitSpawnDump,

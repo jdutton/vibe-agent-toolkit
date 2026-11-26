@@ -261,11 +261,9 @@ export {
 // run database takes every form from the population's source instead.
 export {
   PROJECTION_STORE_ROWS_EVICTED_CODE,
-  queryProjectionOf,
-  type AstReferenceRow,
-  type AstSyntacticForm,
   type QueryPopulateResult,
   type QueryProjection,
+  type QueryReferences,
   type QueryReferenceSource,
 } from './projection/query-projection.js';
 
@@ -1115,9 +1113,9 @@ export { parserKindOf } from './projection/router.js';
 // and what the stored admission reads of the tier, which the CLI's in-process cost arms damage table by table.
 // `hydratesUnder` and `storedComputeBy` are warm admission's own predicates, exported so `vat
 // validate`'s checks overlap gate judges "admitted from the store" by them, never by a copy.
+export { PROJECTION_STORE_READ_FAILED_CODE } from './projection/stored-reads.js';
 export {
   ADMISSION_BLOB_REQUEST,
-  PROJECTION_STORE_READ_FAILED_CODE,
   hydratesUnder,
   storedComputeBy,
   type StoredComputeBy,

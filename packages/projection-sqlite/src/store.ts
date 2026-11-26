@@ -123,7 +123,7 @@ import {
   markVatCacheRoot,
   vatCacheNamespaceRoot,
 } from '@vibe-agent-toolkit/resources';
-import { VatError, classifyFsFault, compareCodeUnits, countWork, everywhere, isPathAbsentError, isVatError, pathPresent, promised, safePath, appendAll } from '@vibe-agent-toolkit/utils';
+import { VatError, classifyFsFault, compareCodeUnits, countWork, everywhere, isPathAbsentError, isVatError, pathPresent, promised, safePath, appendAll, workCountsObserved } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 
 import {
@@ -148,6 +148,7 @@ import {
   selectBlobFactsWhereSql,
   selectExtentSql,
 } from './schema-sql.js';
+import { readOnlyDatabaseUri } from './sqlite-uri.js';
 import { decodeValue, encodeValue, type SqliteResultValue, type SqliteValue } from './values.js';
 
 /**
@@ -158,7 +159,7 @@ import { decodeValue, encodeValue, type SqliteResultValue, type SqliteValue } fr
  * purpose is to be invisible. Measured lock waits under four concurrent writers
  * were 0–112 ms, so this is roughly two orders of magnitude of headroom.
  */
-export const BUSY_TIMEOUT_MS = 5_000;
+const BUSY_TIMEOUT_MS = 5_000;
 
 /**
  * How many content keys go into one `IN (…)`.
@@ -405,30 +406,12 @@ function openStoreAt(databasePath: string, options: SqliteStoreOptions): FactSto
       roots: Math.max(1, Math.trunc(options.retainedRoots ?? DEFAULT_RETAINED_ROOTS)),
       blobKeys: Math.max(1, Math.trunc(options.retainedBlobKeys ?? DEFAULT_RETAINED_BLOB_KEYS)),
     });
-    const store = new SqliteFactStore(tables, acquireDecodeLedger(databasePath));
-    DATABASE_PATH_OF.set(store, databasePath);
-    return store;
+    const busyTimeoutMs = options.busyTimeoutMs ?? BUSY_TIMEOUT_MS;
+    return new SqliteFactStore(tables, acquireDecodeLedger(databasePath), { path: databasePath, busyTimeoutMs });
   } catch (error) {
     database.close();
     throw error;
   }
-}
-
-/**
- * Each open store's database file, by the store object this package handed out. Package-private:
- * the run database reads it to copy a store's rows inside SQLite ({@link storeDatabasePath}), and
- * nothing outside this package can reach a store's file through the `FactStore` port.
- */
-const DATABASE_PATH_OF = new WeakMap<FactStore, string>();
-
-/**
- * The database file behind a store this package opened.
- *
- * @param store - A store {@link openSqliteFactStore} returned
- * @returns Its database file, or `undefined` for any other `FactStore` (a wrapper, a fake)
- */
-export function storeDatabasePath(store: FactStore): string | undefined {
-  return DATABASE_PATH_OF.get(store);
 }
 
 /**
@@ -1013,17 +996,21 @@ type RowBundle = Record<string, readonly Record<string, unknown>[]>;
  *
  * @param tables - The connection's statements
  * @param write - The held rows and what the caller's read covered
+ * @returns The keys whose stored rows the write changed: every key it replaced, and every key it
+ *   added a partitioned row to; never a covered key it only re-stamped
  */
-function writeBlobRows(tables: StoreTables, write: BlobFactsWrite): void {
+function writeBlobRows(tables: StoreTables, write: BlobFactsWrite): readonly string[] {
   const bundle = write.rows as unknown as RowBundle;
   const held = uniqueContentKeys(bundle);
-  if (held.length === 0) return;
+  if (held.length === 0) return [];
 
   let evicted = 0;
   let written = 0;
+  let changed: readonly string[] = [];
   inTransaction(tables.database, () => {
     const replaced = keysToReplace(tables, held, write.coveredAtRead);
     const replacing = rowsToReplace(bundle, replaced, write.settledAtRead);
+    changed = uniqueContentKeys(replacing);
     clearSpaceForBlobs(tables, replacing, [...replaced]);
     written = insertBundle(tables, replacing, 'blob', []);
     // EVERY held key, AFTER the rows and BEFORE the eviction, for the reason
@@ -1038,6 +1025,7 @@ function writeBlobRows(tables: StoreTables, write: BlobFactsWrite): void {
   // Outside the transaction, because SQLite refuses `incremental_vacuum`
   // inside one — the same arrangement, and the same reason, as `writeExtentRows`.
   if (evicted > 0) tables.database.exec('PRAGMA incremental_vacuum');
+  return changed;
 }
 
 /**
@@ -1145,8 +1133,7 @@ export function inTransaction(database: DatabaseSync, work: () => void): void {
     work();
     database.exec('COMMIT');
   } catch (error) {
-    database.exec('ROLLBACK');
-    throw error;
+    failAfter(error, () => database.exec('ROLLBACK'));
   }
 }
 
@@ -1176,8 +1163,7 @@ function inReadTransaction<T>(database: DatabaseSync, work: () => T): T {
     database.exec('COMMIT');
     return result;
   } catch (error) {
-    database.exec('ROLLBACK');
-    throw error;
+    failAfter(error, () => database.exec('ROLLBACK'));
   }
 }
 
@@ -1495,6 +1481,7 @@ function readBlobRows<Table extends BlobScopedTableName>(
   tables: StoreTables,
   contentKeys: readonly string[],
   request: BlobRequest<Table>,
+  observed: boolean,
 ): { rows: Pick<BlobScopedRows, Table>; decoded: number; slots: (readonly [entry: string, slot: string])[] } {
   const requested = new Set<string>(request.tables);
   const plans = plansOfScope(tables, 'blob').filter((plan) => requested.has(plan.spec.key));
@@ -1513,7 +1500,7 @@ function readBlobRows<Table extends BlobScopedTableName>(
         const { statement, values } = blobSelect(tables, plan, batch.length, forms);
         const raw = statement.all(...batch, ...values);
         decoded += raw.length;
-        appendAll(slots, blobSlots(plan, raw));
+        if (observed) appendAll(slots, blobSlots(plan, raw));
         const into = result[plan.spec.key];
         if (into !== undefined) appendAll(into, decodeRows(plan, raw));
       }
@@ -1555,6 +1542,7 @@ function readExtentRows<Table extends ExtentScopedTableName>(
   tables: StoreTables,
   key: ExtentKey,
   request: ExtentRequest<Table>,
+  observed: boolean,
 ): { rows: Pick<ExtentScopedRows, Table> | undefined; decoded: number; slots: (readonly [entry: string, slot: string])[] } {
   const requested = new Set<string>(request.tables);
   const plans = plansOfScope(tables, 'extent').filter((plan) => requested.has(plan.spec.key));
@@ -1573,7 +1561,7 @@ function readExtentRows<Table extends ExtentScopedTableName>(
     for (const plan of plans) {
       const raw = plan.selectExtent?.all(key.rootId, key.treeHash) ?? [];
       decoded += raw.length;
-      for (let row = 0; row < raw.length; row += 1) slots.push([entry, plan.spec.key]);
+      if (observed) for (let row = 0; row < raw.length; row += 1) slots.push([entry, plan.spec.key]);
       result[plan.spec.key] = [...decodeRows(plan, raw)];
     }
     return result as unknown as Pick<ExtentScopedRows, Table>;
@@ -1589,28 +1577,29 @@ function readExtentRows<Table extends ExtentScopedTableName>(
  * projection (see `run-database.ts`), so a lens's rows can never reach this
  * database — one per VAT release, shared by every root on the machine.
  */
-class SqliteFactStore implements FactStore {
+export class SqliteFactStore implements FactStore {
   readonly #tables: StoreTables;
   readonly #ledger: DecodeLedger;
+  readonly #file: { readonly path: string; readonly busyTimeoutMs: number };
   #closed = false;
 
   /**
    * @param tables - The prepared statements of an open, configured connection
    * @param ledger - What this process has decoded from the connection's file
+   * @param file - The connection's database file, and how long it waits on another writer
    */
-  constructor(tables: StoreTables, ledger: DecodeLedger) {
+  constructor(tables: StoreTables, ledger: DecodeLedger, file: { readonly path: string; readonly busyTimeoutMs: number }) {
     this.#tables = tables;
     this.#ledger = ledger;
+    this.#file = file;
   }
 
   /** @inheritdoc */
   writeBlobFacts(write: BlobFactsWrite): Promise<void> {
     return promised(() => {
       this.#assertOpen();
-      writeBlobRows(this.#tables, write);
-      // A key written is a key whose rows may have changed: a read of it decodes rows no earlier
-      // read held, so it is not a repeat.
-      for (const key of uniqueContentKeys(write.rows as unknown as RowBundle)) this.#ledger.decoded.delete(blobLedgerEntry(key));
+      // Only a key whose stored rows changed leaves the ledger; a re-stamped key keeps its rows.
+      for (const key of writeBlobRows(this.#tables, write)) this.#ledger.decoded.delete(blobLedgerEntry(key));
     });
   }
 
@@ -1622,9 +1611,10 @@ class SqliteFactStore implements FactStore {
     return promised(() => {
       this.#assertOpen();
       const keys = [...new Set(contentKeys)];
-      const { rows, decoded, slots } = readBlobRows(this.#tables, keys, request);
+      const observed = workCountsObserved();
+      const { rows, decoded, slots } = readBlobRows(this.#tables, keys, request, observed);
       // Asking for no keys reads nothing.
-      if (keys.length > 0) countRead('store.reads.blob', decoded, recordDecoded(this.#ledger, slots));
+      if (keys.length > 0) countRead('store.reads.blob', decoded, observed ? recordDecoded(this.#ledger, slots) : 0);
       return rows;
     });
   }
@@ -1634,6 +1624,7 @@ class SqliteFactStore implements FactStore {
     return promised(() => {
       this.#assertOpen();
       writeExtentRows(this.#tables, key, rows);
+      // Every write rewrites the rows of each context it names, in every extent table.
       this.#ledger.decoded.delete(extentLedgerEntry(key));
     });
   }
@@ -1645,9 +1636,10 @@ class SqliteFactStore implements FactStore {
   ): Promise<Pick<ExtentScopedRows, Table> | undefined> {
     return promised(() => {
       this.#assertOpen();
-      const { rows, decoded, slots } = readExtentRows(this.#tables, key, request);
+      const observed = workCountsObserved();
+      const { rows, decoded, slots } = readExtentRows(this.#tables, key, request, observed);
       // A miss included: the manifest was read.
-      countRead('store.reads.extent', decoded, recordDecoded(this.#ledger, slots));
+      countRead('store.reads.extent', decoded, observed ? recordDecoded(this.#ledger, slots) : 0);
       return rows;
     });
   }
@@ -1667,6 +1659,36 @@ class SqliteFactStore implements FactStore {
   }
 
   /**
+   * Attach this store's file to `target` READ-ONLY under `schema`, run `work`, and detach it before
+   * returning, success or not: the one way another connection reads the store's rows inside SQLite.
+   * It waits on another writer as this store's own connection does.
+   *
+   * A detach failing after `work` failed never masks `work`'s error; after a success it is thrown.
+   *
+   * @param target - Another connection, outside any transaction (`ATTACH` cannot run inside one)
+   * @param schema - The name the store is attached under while `work` runs
+   * @param work - What reads the attached store
+   * @returns What `work` returns
+   * @throws Error When the store has been closed
+   */
+  attachedTo<T>(target: DatabaseSync, schema: string, work: () => T): T {
+    this.#assertOpen();
+    target.exec(`PRAGMA busy_timeout = ${String(this.#file.busyTimeoutMs)}`);
+    target.prepare(`ATTACH DATABASE ? AS ${quoteIdentifier(schema)}`).run(readOnlyDatabaseUri(this.#file.path));
+    const detach = (): void => {
+      target.exec(`DETACH DATABASE ${quoteIdentifier(schema)}`);
+    };
+    let result: T;
+    try {
+      result = work();
+    } catch (error) {
+      failAfter(error, detach);
+    }
+    detach();
+    return result;
+  }
+
+  /**
    * @throws Error When the store has been closed
    */
   #assertOpen(): void {
@@ -1674,6 +1696,22 @@ class SqliteFactStore implements FactStore {
       throw new Error('This projection store is closed');
     }
   }
+}
+
+/**
+ * Run `cleanup` after `error`, then throw `error`, even when `cleanup` fails too.
+ *
+ * @param error - What failed
+ * @param cleanup - What must still run
+ * @throws `error`, always
+ */
+export function failAfter(error: unknown, cleanup: () => void): never {
+  try {
+    cleanup();
+  } catch {
+    throw error;
+  }
+  throw error;
 }
 
 /**

@@ -9,7 +9,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { AST_SYNTACTIC_FORMS } from '../src/projection/blob-references.js';
 import { buildClaudeContextPopulation } from '../src/projection/claude-context-population.js';
-import { type PopulationCache } from '../src/projection/merge.js';
+import { type PopulationCache , type TreePopulationOptions } from '../src/projection/merge.js';
+import type { QueryPopulateResult } from '../src/projection/query-projection.js';
 import {
   buildResourcePopulation,
   buildResourceProjection,
@@ -30,6 +31,9 @@ import { ResourceRegistry, type RegistryCrawl } from '../src/resource-registry.j
 import { extentKeyOf, FakeFactStore } from './fake-fact-store.js';
 import { inOwnRun, noStoredDocument } from './helpers/population-run.js';
 import { setupSubdirTestSuite } from './test-helpers.js';
+
+/** The query lane's population, copying a hit's references as `vat resources query` does with no populating lens. */
+const buildCopying = (options: TreePopulationOptions): Promise<QueryPopulateResult> => buildResourceProjection(options, 'copy');
 
 /** The plain markdown member every fixture below starts from. */
 const DOC_A = 'a.md';
@@ -346,8 +350,8 @@ describe('buildResourceProjection', () => {
     const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
     const options = { root: suite.tempDir, cache };
 
-    const derived = await inOwnRun(buildResourceProjection, options);
-    const served = await inOwnRun(buildResourceProjection, options);
+    const derived = await inOwnRun(buildCopying, options);
+    const served = await inOwnRun(buildCopying, options);
 
     expect(derived.outcome).toEqual({ population: 'derived', stored: 'written' });
     expect(served.outcome).toEqual({ population: 'store', stored: 'hit' });
@@ -360,8 +364,8 @@ describe('buildResourceProjection', () => {
     const store = new FakeFactStore();
     const options = { root: suite.tempDir, cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH } };
 
-    const derived = await inOwnRun(buildResourceProjection, options);
-    const served = await inOwnRun(buildResourceProjection, options);
+    const derived = await inOwnRun(buildCopying, options);
+    const served = await inOwnRun(buildCopying, options);
 
     // Derived: the run's own rows, every form.
     if (!('rows' in derived.blobReferences)) throw new Error('a derived population hands its own rows');
@@ -385,7 +389,7 @@ describe('buildResourceProjection', () => {
     await write(DOC_A, '# A\n\nSee [b](./docs/b.md).\n');
     await write('docs/b.md', '# B\n');
 
-    const { projection } = await inOwnRun(buildResourceProjection, {
+    const { projection } = await inOwnRun(buildCopying, {
       root: suite.tempDir,
     });
 
@@ -406,7 +410,7 @@ describe('buildResourceProjection', () => {
     await write(DOC_A, '# A\n');
     await write('docs/b.md', '# B\n');
 
-    const { projection } = await inOwnRun(buildResourceProjection, {
+    const { projection } = await inOwnRun(buildCopying, {
       root: suite.tempDir,
     });
     const realizedFiles = projection.resourceRealizations
@@ -424,7 +428,7 @@ describe('buildResourceProjection', () => {
     // sees.
     const tracker = await buildIgnoredFixture();
 
-    const { projection } = await inOwnRun(buildResourceProjection, {
+    const { projection } = await inOwnRun(buildCopying, {
       root: suite.tempDir,
       gitTracker: tracker,
     });
@@ -445,7 +449,7 @@ describe('buildResourceProjection', () => {
     await write('.claude/rules/scoped.md', RULE_WITH_ONE_DEAD_GLOB);
     await write('docs/guide.md', '# Guide\n');
 
-    const { projection } = await inOwnRun(buildResourceProjection, {
+    const { projection } = await inOwnRun(buildCopying, {
       root: suite.tempDir,
     });
 
@@ -483,7 +487,7 @@ describe('one question for every resources lane', () => {
     const root = suite.tempDir;
 
     const membership = await keyOf((cache) => inOwnRun(buildResourcePopulation, { outputs: [], root, cache }));
-    const query = await keyOf((cache) => inOwnRun(buildResourceProjection, { root, cache }));
+    const query = await keyOf((cache) => inOwnRun(buildCopying, { root, cache }));
     const lens = await keyOf((cache) => inOwnRun(buildClaudeContextPopulation, { root, cache }));
 
     expect(membership).toBeDefined();
@@ -500,7 +504,7 @@ describe('one question for every resources lane', () => {
     const contributorIds = (projection: { zoneProvenance: readonly { contributorId: string }[] }): Set<string> =>
       new Set(projection.zoneProvenance.map((row) => row.contributorId));
 
-    const resources = contributorIds((await inOwnRun(buildResourceProjection, { root })).projection);
+    const resources = contributorIds((await inOwnRun(buildCopying, { root })).projection);
     const lens = contributorIds((await inOwnRun(buildClaudeContextPopulation, { root })).projection);
 
     // The discriminator: the classifiers as well as the enumerator.
@@ -516,14 +520,14 @@ describe('one question for every resources lane', () => {
     const store = new FakeFactStore();
     const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
     const options = { root: suite.tempDir, gitTracker, cache };
-    const { projection } = await inOwnRun(buildResourceProjection, options);
+    const { projection } = await inOwnRun(buildCopying, options);
     const evicted = projection.resourceRealizations.find((row) => row.path === COMMITTED)?.contentKey;
     expect(evicted).toEqual(expect.any(String));
     store.forgetBlobFacts(evicted ?? '');
 
     const membership = await inOwnRun(buildResourcePopulation, { ...options, outputs: [] });
-    const full = await inOwnRun(buildResourceProjection, options);
-    const healed = await inOwnRun(buildResourceProjection, options);
+    const full = await inOwnRun(buildCopying, options);
+    const healed = await inOwnRun(buildCopying, options);
 
     expect(membership.outcome).toEqual({ population: 'store', stored: 'hit' });
     expect(full.outcome).toEqual({ population: 'derived', stored: 'written' });

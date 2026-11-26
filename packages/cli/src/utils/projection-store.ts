@@ -517,16 +517,14 @@ function replaceUnopenableStore(
 }
 
 /**
- * What hydration fills a run database from: the run's own query projection, where its
- * `blob_references` come from, and the store the run was served from (if any).
+ * What hydration fills a run database from: the run's own query projection, and where its
+ * `blob_references` come from (a stored source carries the store the hit read).
  */
 interface RunHydrationSources {
   /** The run's populated query projection: every relation's rows but `blob_references`. */
   readonly projection: QueryProjection;
-  /** Where `blob_references` come from: the run's own rows, or the store for the hit's keys. */
+  /** Where `blob_references` come from: the run's own rows, or the store the hit read, for its keys. */
   readonly blobReferences: QueryReferenceSource;
-  /** The store the population was served from; required by a stored source, `undefined` with none. */
-  readonly store: FactStore | undefined;
 }
 
 /**
@@ -547,12 +545,12 @@ interface RunHydrationSources {
  *
  * Nothing survives the close.
  *
- * @param sources - The run's projection, its `blob_references` source, and its store
+ * @param sources - The run's projection and its `blob_references` source
  * @param plan - The relations to hydrate, by SQL name
  * @returns The open run database; close it when done
  * @throws Error When the projection has no root row: a driver invariant, since
  *   `populate()` adds exactly one, and without it there is no id to file the
- *   extent-scoped rows under; or when a stored source arrives without its store
+ *   extent-scoped rows under
  */
 export async function hydrateRunDatabase(
   sources: RunHydrationSources,
@@ -588,16 +586,10 @@ export async function hydrateRunDatabase(
  * @param sources - The run's sources
  * @param key - The table's registry key
  * @returns Its source
- * @throws Error When the population named the store and the run holds none
  */
 function relationSource(sources: RunHydrationSources, key: ProjectionTableName): ProjectionSqlite.RelationSource {
   if (key !== 'blobReferences') return { rows: sources.projection[key] };
-  const references = sources.blobReferences;
-  if ('rows' in references) return { rows: references.rows };
-  if (sources.store === undefined) {
-    throw new Error('The population was served from a store, but hydration was handed none to copy its references from.');
-  }
-  return { stored: { store: sources.store, contentKeys: references.stored.contentKeys } };
+  return sources.blobReferences;
 }
 
 /**

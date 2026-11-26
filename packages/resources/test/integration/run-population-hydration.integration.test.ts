@@ -33,6 +33,7 @@ import { POPULATION_PARSE_LIMITS, RunContentCache } from '../../src/projection/c
 import { GitCrawlSource } from '../../src/projection/crawl-source.js';
 import type { PopulationCache } from '../../src/projection/merge.js';
 import { IGNORE_HOME_SETTLEMENT, RunPopulation, StoreQuestionUnavailableError } from '../../src/projection/run-population.js';
+import { runStoredReads } from '../../src/projection/stored-reads.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { ProjectConfig } from '../../src/schemas/project-config.js';
 import type { ResourceMetadata } from '../../src/schemas/resource-metadata.js';
@@ -304,7 +305,7 @@ async function withRun<T>(withStore: boolean, variation: RunVariation, work: (po
     holdsStore: true,
     collectionsFor: () => (variation.homeFault === undefined ? Promise.resolve(undefined) : Promise.reject(variation.homeFault)),
     onHomeSettled: IGNORE_HOME_SETTLEMENT,
-  }, { content, dispatcher });
+  }, { content, dispatcher, stored: runStoredReads() });
   try {
     return await work(population, workSpentNow());
   } finally {

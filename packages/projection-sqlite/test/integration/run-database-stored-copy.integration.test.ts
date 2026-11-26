@@ -33,6 +33,7 @@ import {
   type RunDatabase,
 } from '../../src/run-database.js';
 import { blobKeyColumn } from '../../src/schema-sql.js';
+import { SqliteFactStore } from '../../src/store.js';
 import { FIRST_BLOB, SECOND_BLOB, contentKey, sampleBlobRows } from '../fixtures.js';
 
 const THIRD_BLOB = contentKey('c');
@@ -42,7 +43,10 @@ const FORMS = ['markdown-link', 'bare-token', 'at-prefixed', 'html-link', 'env-a
 
 /**
  * One blob's rows with a reference of every form, its references listed in REVERSE ordinal order,
- * so a store that kept insertion order and a copy that dropped the `ORDER BY` would disagree.
+ * so a copy that ordered them any way but the key's (a reversed `ORDER BY`) disagrees with the rows
+ * lane. Not a proof that the `ORDER BY` is needed: the copy's `WHERE` reads the store through its
+ * primary key index, which already yields key order, so a copy without it answers the same here. It
+ * stays because the order is the contract and a plan is SQLite's to change.
  *
  * @param key - The content key
  * @returns The blob-scoped rows
@@ -102,6 +106,29 @@ describe('hydrating a stored relation by copying it inside SQLite', () => {
     expect(copied).toStrictEqual(fromRows);
     expect(new Set(copied.map((row) => row['syntacticForm'])), 'every form, AST and lexical').toStrictEqual(new Set(FORMS));
     expect(copied, 'the control is not vacuous').toHaveLength(FORMS.length * keys.length);
+  });
+
+  it('copies a key named twice once, its held count matching the keys it names', async () => {
+    __resetWorkCountersForTest();
+    const copied = await answersOf({ stored: { store, contentKeys: [FIRST_BLOB, FIRST_BLOB] } });
+    expect(copied).toHaveLength(FORMS.length);
+    expect(readWorkCounters()['hydration.rows.copied']).toBe(FORMS.length);
+  });
+
+  it('refuses a store it cannot attach: a wrapper of the port, and a closed store', async () => {
+    const wrapped: FactStore = {
+      readBlobFacts: (keys, request) => store.readBlobFacts(keys, request),
+      readExtent: (key, request) => store.readExtent(key, request),
+      writeBlobFacts: (write) => store.writeBlobFacts(write),
+      writeExtent: (key, rows) => store.writeExtent(key, rows),
+      close: () => store.close(),
+    };
+    expect(() => hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['blob_references', { stored: { store: wrapped, contentKeys: [FIRST_BLOB] } }]]) }))
+      .toThrow(/only from a store openSqliteFactStore opened/u);
+
+    await store.close();
+    expect(() => hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['blob_references', { stored: { store, contentKeys: [FIRST_BLOB] } }]]) }))
+      .toThrow(/closed/u);
   });
 
   it('holds only the admitted keys, never another key the shared store holds', async () => {
@@ -176,5 +203,62 @@ describe('STORED_COPY_RELATIONS', () => {
       for (const column of rest) expect(kinds.get(column)?.kind, `${name}.${column}`).toBe('integer');
     }
     expect([...STORED_COPY_RELATIONS]).toStrictEqual(['blob_references']);
+  });
+});
+
+/** The schemas a connection has attached, by name. */
+function schemasOf(database: DatabaseSync): string[] {
+  return (database.prepare('PRAGMA database_list').all() as { name: string }[]).map((row) => row.name);
+}
+
+/** The suite's store as the class that attaches. */
+function sqliteStore(): SqliteFactStore {
+  if (!(store instanceof SqliteFactStore)) throw new TypeError('the suite opens a SqliteFactStore');
+  return store;
+}
+
+describe('SqliteFactStore.attachedTo', () => {
+  it('attaches the store read-only and detaches it after the work', () => {
+    const database = new DatabaseSync(':memory:');
+    try {
+      const during = sqliteStore().attachedTo(database, 'held', () => {
+        expect(() => database.exec('DELETE FROM held."blob_keys"')).toThrow(/readonly/u);
+        return schemasOf(database);
+      });
+      expect(during).toContain('held');
+      expect(schemasOf(database)).not.toContain('held');
+    } finally {
+      database.close();
+    }
+  });
+
+  it('detaches after work that throws, and throws the work\'s error', () => {
+    const database = new DatabaseSync(':memory:');
+    const original = new Error('the work failed');
+    try {
+      expect(() => sqliteStore().attachedTo(database, 'held', () => {
+        throw original;
+      })).toThrow(original);
+      expect(schemasOf(database)).not.toContain('held');
+    } finally {
+      database.close();
+    }
+  });
+
+  it('throws the work\'s error when the detach after it fails too', () => {
+    const database = new DatabaseSync(':memory:');
+    const original = new Error('the work failed inside a transaction');
+    try {
+      // An open read transaction on the attached schema makes the DETACH fail.
+      expect(() => sqliteStore().attachedTo(database, 'held', () => {
+        database.exec('BEGIN');
+        database.prepare('SELECT COUNT(*) AS n FROM held."blob_keys"').get();
+        throw original;
+      })).toThrow(original);
+      database.exec('ROLLBACK');
+      database.exec('DETACH DATABASE held');
+    } finally {
+      database.close();
+    }
   });
 });

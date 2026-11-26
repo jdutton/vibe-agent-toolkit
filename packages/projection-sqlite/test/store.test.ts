@@ -695,6 +695,17 @@ describe('a row this process already decoded from the file is counted as repeate
     expect(readWorkCounters()['store.rows.decoded.repeated']).toBe(rows);
   });
 
+  it('a write naming a key its read covered rewrites nothing of it, so it forgets nothing of it', async () => {
+    await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
+    const first = readWorkCounters()['store.rows.decoded.persistent'];
+    // Covered at read and held, with no harness pair to settle: the writer keeps the stored rows.
+    await store.writeBlobFacts({ rows: { ...everyFormRows().rows, harnessBlobFacts: [], harnessBlobImports: [] }, coveredAtRead: [FIRST_BLOB], settledAtRead: [] });
+
+    await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
+
+    expect(readWorkCounters()['store.rows.decoded.repeated']).toBe(first);
+  });
+
   it('a write of a key or tree forgets what was decoded of it', async () => {
     await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
     await store.readExtent(KEY, ALL_EXTENT_REQUEST);

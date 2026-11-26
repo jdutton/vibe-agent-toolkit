@@ -18,11 +18,13 @@ import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/proj
 import { crawlSourceFor, type CrawlSource } from '../src/projection/crawl-source.js';
 import {
   populate,
+  MEMBERSHIP_EXTENT_REQUEST,
   readStoredMembership,
   requestedContributors,
   type PopulationCache,
-} from '../src/projection/merge.js';
+ type TreePopulationOptions } from '../src/projection/merge.js';
 import type { ProjectionBase } from '../src/projection/projection.js';
+import type { QueryPopulateResult } from '../src/projection/query-projection.js';
 import {
   __internal,
   buildResourcePopulation,
@@ -36,6 +38,9 @@ import type { RealizationConditionRow } from '../src/schemas/projection-resource
 import { FakeFactStore } from './fake-fact-store.js';
 import { inOwnRun } from './helpers/population-run.js';
 import { setupSubdirTestSuite } from './test-helpers.js';
+
+/** The query lane's population, copying a hit's references as `vat resources query` does with no populating lens. */
+const buildCopying = (options: TreePopulationOptions): Promise<QueryPopulateResult> => buildResourceProjection(options, 'copy');
 
 const DOC = 'a.md';
 /** NUL bytes after a PNG signature: declined by the blob stage as not text. */
@@ -71,14 +76,14 @@ describe('the resources lane on a store hit', () => {
     await write(BINARY, BINARY_BYTES);
     const options = { root: suite.tempDir, cache: freshCache() };
 
-    const miss = await inOwnRun(buildResourceProjection, options);
+    const miss = await inOwnRun(buildCopying, options);
     expect(miss.outcome.stored).toBe('written');
     const line = describeBlobRefusals(miss.projection);
     expect(line).toContain('1 not text');
 
     // A hit derives nothing, so a report built from the run went silent here.
     // Built from the stored rows, it cannot tell the two apart.
-    const hit = await inOwnRun(buildResourceProjection, options);
+    const hit = await inOwnRun(buildCopying, options);
     expect(hit.outcome.stored).toBe('hit');
     expect(describeBlobRefusals(hit.projection)).toBe(line);
   });
@@ -175,7 +180,7 @@ describe('readStoredMembership', () => {
 
     const stored = await withPopulationRun((run) => {
       const options = { root: suite.tempDir, registry, cache, run };
-      return readStoredMembership(options, requestedContributors(options));
+      return readStoredMembership(options, requestedContributors(options), MEMBERSHIP_EXTENT_REQUEST);
     });
 
     expect(stored).toBeDefined();
@@ -191,7 +196,7 @@ describe('readStoredMembership', () => {
     const { projection, stored } = await withPopulationRun(async (run) => {
       const options = { root: suite.tempDir, registry, cache: freshCache(), run };
       const populated = await populate(options);
-      return { projection: populated.projection, stored: await readStoredMembership(options, requestedContributors(options)) };
+      return { projection: populated.projection, stored: await readStoredMembership(options, requestedContributors(options), MEMBERSHIP_EXTENT_REQUEST) };
     });
 
     const codes = (rows: readonly RealizationConditionRow[]): string[] => rows.map((row) => `${row.code}\t${row.path}`).sort(compareCodeUnits);

@@ -33,6 +33,7 @@ import { parseRoutingFor, parserKindForResolvedPath } from '../../src/projection
 import { type AdmittedFacts, type HomeSettlement, RunPopulation } from '../../src/projection/run-population.js';
 import type { BlobScopedRows, BlobScopedTableName, FactStore } from '../../src/projection/store.js';
 import { storedComputeBy, type StoredContent } from '../../src/projection/stored-admission.js';
+import { runStoredReads } from '../../src/projection/stored-reads.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { CollectionConfig, ProjectConfig } from '../../src/schemas/project-config.js';
 import { FakeFactStore } from '../fake-fact-store.js';
@@ -127,7 +128,7 @@ async function inRun<T>(
     onHomeSettled: (_key, settlement) => {
       settled = settlement;
     },
-  }, { content, dispatcher });
+  }, { content, dispatcher, stored: runStoredReads() });
   try {
     await population.source.enumerate(root, [], 'refuse', { include: INCLUDE, exclude: [], ignoredRefusals: 'record' });
     await new Promise((resolve) => { setImmediate(resolve); });

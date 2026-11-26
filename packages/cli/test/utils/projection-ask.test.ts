@@ -7,12 +7,12 @@
 import {
   PROJECTION_STATEMENT_REFUSED_CODE,
   PROJECTION_TABLES,
-  queryProjectionOf,
   withPopulationRun,
   type Projection,
   type QueryProjection,
   type QueryReferenceSource,
 } from '@vibe-agent-toolkit/resources';
+import { queryProjectionOf } from '@vibe-agent-toolkit/resources/testing';
 import { isVatError } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -97,10 +97,10 @@ describe('askPopulatedProjection over an empty projection', () => {
 
 describe('hydrateRunDatabase refuses what it cannot file', () => {
   it('a projection with no root row', async () => {
-    await expect(hydrateRunDatabase({ projection: { ...emptyProjection(), roots: [] }, blobReferences: NO_REFERENCES, store: undefined }, { relations: [] })).rejects.toThrow(/no root row/u);
+    await expect(hydrateRunDatabase({ projection: { ...emptyProjection(), roots: [] }, blobReferences: NO_REFERENCES }, { relations: [] })).rejects.toThrow(/no root row/u);
   });
 
   it('a planned relation that is not a projection table', async () => {
-    await expect(hydrateRunDatabase({ projection: emptyProjection(), blobReferences: NO_REFERENCES, store: undefined }, { relations: ['edges'] })).rejects.toThrow(/not a projection table/u);
+    await expect(hydrateRunDatabase({ projection: emptyProjection(), blobReferences: NO_REFERENCES }, { relations: ['edges'] })).rejects.toThrow(/not a projection table/u);
   });
 });

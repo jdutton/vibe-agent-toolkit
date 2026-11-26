@@ -285,7 +285,7 @@ export const EMPTY_STORED_TIER: StoredBlobTier = Object.freeze({ rows: emptyBlob
 /**
  * The tier one read answered, judged by the one predicate.
  *
- * @param rows - What `readBlobTier` returned for `contentKeys`, every blob-scoped table
+ * @param rows - What the run's reader (`stored-reads.ts`) read for `contentKeys`, every blob-scoped table
  * @param contentKeys - The keys the read asked about
  * @returns The rows, and the keys among `contentKeys` they cover
  */

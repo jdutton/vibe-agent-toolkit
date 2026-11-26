@@ -90,6 +90,7 @@ class LateStore extends FakeFactStore {
     if (!this.missNext) return super.readExtent(key, request);
     this.missNext = false;
     this.missed += 1;
+    this.readExtentCalls += 1;
     return Promise.resolve(undefined);
   }
 }
@@ -160,19 +161,22 @@ describe('buildClaudeContextPopulation root discovery', () => {
     expect(declared.map((contributor) => contributor.id)).toEqual([]);
   });
 
-  it('is derived when the root list was crawled, even though the real pass hit the store', async () => {
+  it('is derived from its one read when the root list was crawled, even though the store holds the tree', async () => {
     root = await plantTree('vat-claude-store-roots-', TREE);
     const store = new LateStore();
     await populateThrough(store);
+    const readsBefore = store.readExtentCalls;
 
-    // The two passes read the store separately, so a concurrent run can file
-    // the extent between them: the first read misses as if it came before that write.
+    // A concurrent run can file the extent just after this run's read: the read
+    // misses as if it came before that write.
     store.missNext = true;
     const second = await populateThrough(store);
 
     expect(store.missed).toBe(1);
-    // The real pass was served, not re-derived: nothing new was filed.
-    expect(store.writeExtentCalls).toBe(1);
+    // The roots and the real pass share the run's one read of the tree, so the
+    // real pass derives rather than reading a second snapshot, and files it.
+    expect(store.readExtentCalls - readsBefore, 'one read of the tree for the run').toBe(1);
+    expect(store.writeExtentCalls).toBe(2);
     expect(importContexts(second.projection)).toHaveLength(4);
     expect(second.population).toBe('derived');
   });

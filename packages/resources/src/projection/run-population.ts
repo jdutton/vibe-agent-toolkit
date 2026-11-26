@@ -72,6 +72,7 @@ import {
 } from './resource-population.js';
 import { parserKindOf } from './router.js';
 import { hydratesUnder, readRoute, respelledContent, storedRoute, type StoredMember } from './stored-admission.js';
+import { runStoredReads, type RunStoredReads } from './stored-reads.js';
 
 /**
  * One file's admission facts: what a registry admitting it reads, keys and
@@ -133,6 +134,8 @@ export interface PopulationRun {
   readonly content: RunContentCache;
   /** The run's one parse dispatcher, under the population's parse limits. */
   readonly dispatcher: ParseDispatcher;
+  /** The run's one way to its store: every population and lens reads and writes through it. */
+  readonly stored: RunStoredReads;
 }
 
 /**
@@ -187,7 +190,7 @@ export async function withPopulationRun<T>(work: (run: PopulationRun) => Promise
   const content = new RunContentCache();
   const dispatcher = new ParseDispatcher(defaultParseCache(), { content });
   try {
-    return await work({ content, dispatcher });
+    return await work({ content, dispatcher, stored: runStoredReads() });
   } finally {
     await dispatcher.shutdown();
   }
@@ -279,6 +282,7 @@ export class RunPopulation implements PopulationRun {
   readonly gitTracker: GitTracker;
   readonly content: RunContentCache;
   readonly dispatcher: ParseDispatcher;
+  readonly stored: RunStoredReads;
   /** The run's enumerations, every root's through this one source. */
   readonly source: ResourcePopulationSource;
   readonly #admissions = new Map<string, Promise<AdmittedFacts>>();
@@ -334,6 +338,7 @@ export class RunPopulation implements PopulationRun {
     this.gitTracker = options.gitTracker;
     this.content = run.content;
     this.dispatcher = run.dispatcher;
+    this.stored = run.stored;
     this.source = {
       enumerate: (root, outputs, unreadable, members) => this.#enumerate(root, outputs, unreadable, members),
       storedDocument: (absolutePath, parserKind) => this.storedDocument(absolutePath, parserKind),

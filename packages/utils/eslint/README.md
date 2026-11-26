@@ -73,7 +73,7 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:cla
 **The auto-fix writes the import to the subpath in that column**, not to the barrel — `--fix` on a raw `path.join()` inserts `import { safePath } from '@vibe-agent-toolkit/utils/path'`. A file that already reaches the helper through the barrel keeps its existing import and only has the call rewritten: adding a second binding of the same name is a `SyntaxError`, not a redundant import.
 
 <!-- gen:eslint-rules -->
-45 rules; 4 auto-fix. `configs.recommended` enables 17 of them (15 at `error`, 2 at `warn`); `—` in the last column means the rule ships but must be enabled by name.
+46 rules; 4 auto-fix. `configs.recommended` enables 17 of them (15 at `error`, 2 at `warn`); `—` in the last column means the rule ships but must be enabled by name.
 
 #### Path handling
 
@@ -165,6 +165,7 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:cla
 | `commands-import-boundary` | Disallow filesystem and internal-module imports in command modules — a command calls a declared enumeration lane, it does not become one | — | — |  | — |
 | `dirent-type-needs-symlink-check` | Require an isSymbolicLink() check on a Dirent before isFile()/isDirectory() — both are false for a symlink, so an unchecked walk drops links silently | — | — |  | — |
 | `explicit-zod-strictness` | Require every z.object({...}) to declare its unknown-key policy in the same chain — .strict(), .passthrough(), .loose() or an explicit .strip() — because the default silently strips keys | — | — |  | — |
+| `fact-store-access-boundary` | Disallow reaching the FactStore port's stored-fact members outside the files the config names — a run reads stored rows through one reader | — | — |  | — |
 | `no-decaying-referent` | Disallow issue/PR numbers, ISO dates and named people in src comments — they decay in place; the rule belongs in the comment and the history in the commit, CHANGELOG or docs | — | — |  | — |
 | `no-dotdot-containment` | Disallow startsWith('..') / includes('..') / split-and-hunt as a path containment check — use the realpath-based isUnderRoot() helper | — | — |  | — |
 | `no-io-in-unit-tier` | Disallow child_process imports and mkdtemp/spawn/exec calls in unit-tier test files — a test that spawns or writes to disk belongs in the integration or system tier | — | — |  | — |
