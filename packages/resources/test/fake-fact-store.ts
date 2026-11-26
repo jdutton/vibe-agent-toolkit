@@ -304,7 +304,7 @@ function rowSetsById(rows: Partial<RowSetRows>): Map<RowSetIdText, HeldRowSet> {
 function rowSetIdOf(instance: RowSetId['instance'], row: Readonly<Record<string, unknown>>): RowSetId {
   const blob = row['blob'];
   const contentKey = typeof blob === 'string' ? parseContentKey(blob) : undefined;
-  if (contentKey === undefined) throw new TypeError(`a row-set row's blob is not a content key: ${String(blob)}`);
+  if (contentKey === undefined) throw new TypeError(`a row-set row's blob is not a content key: ${JSON.stringify(blob)}`);
   return { contentKey, instance, variant: row['variant'] as RowSetId['variant'] };
 }
 

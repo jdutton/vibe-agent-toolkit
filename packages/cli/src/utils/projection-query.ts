@@ -548,8 +548,8 @@ export async function withQueriedProjection<T>(
       const references = referencesAfterEviction(error, cache, populationRun);
       try {
         return await populateThenAsk({ ...run, logger: unrepeated, references, attempt: 2 }, work);
-      } catch (second) {
-        throw isStoredRowsEvicted(second) ? evictedTwice(second) : second;
+      } catch (error_) {
+        throw isStoredRowsEvicted(error_) ? evictedTwice(error_) : error_;
       }
     }
   }));

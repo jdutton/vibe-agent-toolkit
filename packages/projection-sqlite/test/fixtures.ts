@@ -52,7 +52,7 @@ export function contentKey(seed: string): ContentKey {
  */
 export function storedRowSetText(blob: unknown, instance: unknown, variant: unknown): RowSetIdText {
   const parsed = typeof blob === 'string' ? parseContentKey(blob) : undefined;
-  if (parsed === undefined) throw new TypeError(`a stored row set names no content key: ${String(blob)}`);
+  if (parsed === undefined) throw new TypeError(`a stored row set names no content key: ${JSON.stringify(blob)}`);
   return rowSetIdText({ contentKey: parsed, instance: instance as RowSetId['instance'], variant: variant as RowSetId['variant'] });
 }
 

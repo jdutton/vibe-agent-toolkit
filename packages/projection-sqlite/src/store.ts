@@ -1481,7 +1481,7 @@ function readRowSetRows<Table extends RowSetTableName>(
         decoded += raw.length;
         // One at a time, never spread: a spread of a large read overflows the stack.
         for (const row of decodeRows(plan, raw)) result[plan.spec.key]?.push(row);
-        if (observed) for (let index = 0; index < raw.length; index++) slots.push([rowSetLedgerEntry(text), plan.spec.key]);
+        if (observed) appendAll(slots, raw.map(() => [rowSetLedgerEntry(text), plan.spec.key] as const));
       }
     }
   });
