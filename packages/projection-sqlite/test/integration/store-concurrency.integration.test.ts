@@ -171,7 +171,7 @@ describe('concurrent writers', () => {
         const seed = `w${Math.floor(flat / BLOBS_EACH)}${flat % BLOBS_EACH}`;
         return testContentKey('markdown', seed);
       });
-      const facts = await store.readBlobFacts([...new Set(keys)], ALL_BLOB_REQUEST);
+      const facts = (await store.readBlobFacts([...new Set(keys)], ALL_BLOB_REQUEST)).rows;
       expect(facts.blobs).toHaveLength(new Set(keys).size);
     } finally {
       await store.close();

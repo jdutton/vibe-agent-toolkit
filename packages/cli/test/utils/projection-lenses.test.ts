@@ -199,7 +199,7 @@ describe('the lens registry against DERIVED_TABLES', () => {
  * @returns The lens
  */
 function lensReturning(rows: LensRows, population: LensEvaluation['population'] = null): ProjectionLens {
-  return { name: 'stub', relations: ['edges', 'edgeResolutions'], populates: false, evaluate: () => ({ rows, population }) };
+  return { name: 'stub', relations: ['edges', 'edgeResolutions'], evaluate: () => ({ rows, population }) };
 }
 
 describe('evaluateLens', () => {
@@ -222,7 +222,7 @@ describe('evaluateLens', () => {
   });
 
   it('hands back a lens\'s refusal as it is, with no rows to check', async () => {
-    const refusing: ProjectionLens = { name: 'stub', relations: ['edges'], populates: false, evaluate: () => ({ refused: 'no base', refusal: 'USAGE_INVALID' }) };
+    const refusing: ProjectionLens = { name: 'stub', relations: ['edges'], evaluate: () => ({ refused: 'no base', refusal: 'USAGE_INVALID' }) };
     await expect(evaluateLens(refusing, input)).resolves.toStrictEqual({ refused: 'no base', refusal: 'USAGE_INVALID' });
   });
 

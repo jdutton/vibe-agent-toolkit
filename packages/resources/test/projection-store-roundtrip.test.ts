@@ -53,6 +53,7 @@ import { CONTENT_PARSING_SKIP, describeStoreMiss, populate, type PopulationOutco
 import type { Projection } from '../src/projection/projection.js';
 import type { ContentDemand } from '../src/projection/realizations.js';
 import type {
+  BlobFactsRead,
   BlobFactsWrite,
   BlobRequest,
   BlobScopedRows,
@@ -161,7 +162,7 @@ class BrokenFactStore implements FactStore {
   }
 
   /** @returns Never */
-  async readBlobFacts(): Promise<BlobScopedRows> {
+  async readBlobFacts(): Promise<BlobFactsRead<BlobScopedTableName>> {
     throw new Error(STORE_FAILURE);
   }
 
@@ -205,17 +206,18 @@ class HarnesslessFactStore implements FactStore {
   /**
    * @param contentKeys - The keys to look up
    * @param request - Passed through
-   * @returns What the inner store holds, with both harness tables empty
+   * @returns What the inner store holds, with both harness tables empty, and its presence
    */
   async readBlobFacts<Table extends BlobScopedTableName>(
     contentKeys: readonly ContentKey[],
     request: BlobRequest<Table>,
-  ): Promise<Pick<BlobScopedRows, Table>> {
-    const held: Record<string, readonly unknown[]> = { ...(await this.inner.readBlobFacts(contentKeys, request)) };
+  ): Promise<BlobFactsRead<Table>> {
+    const read = await this.inner.readBlobFacts(contentKeys, request);
+    const held: Record<string, readonly unknown[]> = { ...read.rows };
     for (const table of ['harnessBlobFacts', 'harnessBlobImports']) {
       if (table in held) held[table] = [];
     }
-    return held as unknown as Pick<BlobScopedRows, Table>;
+    return { rows: held as unknown as Pick<BlobScopedRows, Table>, present: read.present };
   }
 
   /**

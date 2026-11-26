@@ -701,10 +701,9 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
   // run: re-derived, the cyclic one dispatched and refused again, the stored
   // document's key served from the blob tier the miss reads, and the key's
   // snapshot and the write path's fresh one taken. Two blob reads: the hit reads
-  // the AST reference forms, and the derivation, through the same reader, reads the
-  // key again whole (`stored-reads.ts`), so a key's rows come from one transaction.
-  // The hit's 3 rows are decoded again: `store.rows.decoded.repeated` 3, the cost of
-  // a hit turned miss, which a store eviction can tear otherwise.
+  // the AST reference forms, and the derivation, through the same reader, reads only
+  // the lexical forms the key does not hold (`stored-reads.ts`), with the key's
+  // presence in the same transaction. No row of the hit is decoded again.
   'store.miss.refusedPairs': {
     prepare: async (scope) => {
       const query = queriedTree(scope, { ...PLAIN_TREE, 'deep.md': CYCLIC_FRONTMATTER });
@@ -712,8 +711,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       return query;
     },
     delta: {
-      'store.rows.decoded.persistent': 19,
-      'store.rows.decoded.repeated': 3,
+      'store.rows.decoded.persistent': 16,
       'store.reads.extent': 1,
       'store.reads.blob': 2,
       'store.writes.persistent': 2,

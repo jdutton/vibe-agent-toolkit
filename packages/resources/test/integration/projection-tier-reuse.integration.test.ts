@@ -31,6 +31,7 @@ import { IGNORE_HOME_SETTLEMENT, withRunPopulation } from '../../src/projection/
 import { keyedContentKeys, uncoveredContentKeys } from '../../src/projection/store-hydration.js';
 import {
   ALL_BLOB_REQUEST,
+  type BlobFactsRead,
   type BlobFactsWrite,
   type BlobRequest,
   type BlobScopedRows,
@@ -96,7 +97,7 @@ async function populateThrough(
 
 /** The keys `store` does not cover, by the one predicate, over every blob table. */
 async function uncoveredIn(store: FakeFactStore, keys: readonly ContentKey[]): Promise<ContentKey[]> {
-  return uncoveredContentKeys(await store.readBlobFacts(keys, ALL_BLOB_REQUEST), keys);
+  return uncoveredContentKeys((await store.readBlobFacts(keys, ALL_BLOB_REQUEST)).rows, keys);
 }
 
 /** Whether a blob-scoped row is filed under `key`: `blobs` by `contentKey`, every other table by `blob`. */
@@ -110,7 +111,7 @@ function filedUnder(row: unknown, key: ContentKey): boolean {
  * forget the key, then write its other rows back as a replace (covered by nothing at read).
  */
 async function dropTableRows(store: FakeFactStore, key: ContentKey, table: BlobScopedTableName): Promise<void> {
-  const held = await store.readBlobFacts([key], ALL_BLOB_REQUEST);
+  const held = (await store.readBlobFacts([key], ALL_BLOB_REQUEST)).rows;
   store.forgetBlobFacts(key);
   const rows = { ...held, [table]: [] } as BlobScopedRows;
   await store.writeBlobFacts({ rows, coveredAtRead: [], settledAtRead: [] });
@@ -152,16 +153,18 @@ class TornReadStore extends FakeFactStore {
   override async readBlobFacts<Table extends BlobScopedTableName>(
     contentKeys: readonly ContentKey[],
     request: BlobRequest<Table>,
-  ): Promise<Pick<BlobScopedRows, Table>> {
-    const rows = await super.readBlobFacts(contentKeys, request);
+  ): Promise<BlobFactsRead<Table>> {
+    const read = await super.readBlobFacts(contentKeys, request);
     const key = this.#tearing;
-    if (!this.#armed || key === undefined) return rows;
+    if (!this.#armed || key === undefined) return read;
     this.#armed = false;
     this.#tearing = undefined;
     this.torn += 1;
-    const source = rows as unknown as Record<string, readonly unknown[]>;
+    const source = read.rows as unknown as Record<string, readonly unknown[]>;
     const kept = Object.fromEntries(Object.entries(source).map(([table, tableRows]) => [table, tableRows.filter((row) => !filedUnder(row, key))]));
-    return kept as unknown as Pick<BlobScopedRows, Table>;
+    // Evicted: its ledger entry goes with its rows.
+    const present = new Set([...read.present].filter((held) => held !== key));
+    return { rows: kept as unknown as Pick<BlobScopedRows, Table>, present };
   }
 }
 
@@ -177,7 +180,7 @@ describe('one coverage predicate for the hit, the reuse read and stored admissio
     expect(contentKeyParts(k).parserKind, 'the dropped row is a markdown key\'s skill text').toBe('markdown');
 
     await dropTableRows(store, k, 'skillTextFacts');
-    const held = await store.readBlobFacts([k], ALL_BLOB_REQUEST);
+    const held = (await store.readBlobFacts([k], ALL_BLOB_REQUEST)).rows;
     expect(held.blobs.map((row) => row.contentKey), 'K keeps its blobs row').toEqual([k]);
     expect(held.skillTextFacts, 'K holds no skill-text row').toEqual([]);
 

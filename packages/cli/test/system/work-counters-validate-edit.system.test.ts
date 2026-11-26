@@ -112,7 +112,7 @@ async function expectPrimedStoreSettled(arm: ValidateArm): Promise<void> {
   if (file === undefined) throw new Error(`no projection store under ${arm.storeDir}`);
   const store = openSqliteFactStore({ directory: safePath.join(file, '..'), blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
   try {
-    const rows = await store.readBlobFacts(keys, ALL_BLOB_REQUEST);
+    const rows = (await store.readBlobFacts(keys, ALL_BLOB_REQUEST)).rows;
     expect(uncoveredContentKeys(rows, keys), 'uncovered keys in the primed store').toEqual([]);
     // Positive control for purity: the linking document's link is a stored reference, so the resolver has a target.
     expect(rows.blobReferences.filter((row) => row.blob === committedKey(LINKING)).map((row) => row.rawRef), 'the linking document\'s references')

@@ -15,7 +15,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { type ContentKey, contentKeyParts } from '../../src/content-key.js';
 import type { PopulationOutcome } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
-import type { BlobRequest, BlobScopedRows, BlobScopedTableName } from '../../src/projection/store.js';
+import type { BlobFactsRead, BlobRequest, BlobScopedTableName } from '../../src/projection/store.js';
 import type { CollectionConfig } from '../../src/schemas/project-config.js';
 import { FakeFactStore, WIDE_BLOB_BUDGET_BYTES } from '../fake-fact-store.js';
 import { keyedContentKeyOf as keyOf, populateFilesystemExtent } from '../helpers/filesystem-population.js';
@@ -44,7 +44,7 @@ class KeyRecordingStore extends FakeFactStore {
   override readBlobFacts<Table extends BlobScopedTableName>(
     contentKeys: readonly ContentKey[],
     request: BlobRequest<Table>,
-  ): Promise<Pick<BlobScopedRows, Table>> {
+  ): Promise<BlobFactsRead<Table>> {
     this.askedKeys.push(...contentKeys);
     return super.readBlobFacts(contentKeys, request);
   }

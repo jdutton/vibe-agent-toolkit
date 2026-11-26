@@ -12,18 +12,30 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { orderContentKeys, type ContentKey } from '../src/content-key.js';
 import { type ParseDispatcher, withParseDispatcher } from '../src/parse-dispatcher.js';
 import { populateBlobs, storableBlobFacts } from '../src/projection/blob-population.js';
+import { AST_SYNTACTIC_FORMS } from '../src/projection/blob-references.js';
 import { blobRowsByKey } from '../src/projection/blob-resource-facts.js';
 import { RunContentCache } from '../src/projection/content-cache.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
+import { storedHarnessRows } from '../src/projection/harness/harness-pass.js';
 import { afterClosurePromotion, type BlobStage } from '../src/projection/merge.js';
 import { type Projection, ProjectionBuilder } from '../src/projection/projection.js';
 import { QUERY_BLOB_REQUEST } from '../src/projection/query-projection.js';
 import { diskRunContentSource } from '../src/projection/run-population.js';
 import { emptyBlobRows, keyedContentKeys, storedBlobTier } from '../src/projection/store-hydration.js';
-import { ALL_BLOB_REQUEST, type BlobRequest, type BlobScopedRows, type BlobScopedTableName, EXTENT_STEP_TABLES } from '../src/projection/store.js';
+import {
+  ALL_BLOB_REQUEST,
+  type BlobFactsRead,
+  type BlobFactsWrite,
+  type BlobRequest,
+  type BlobScopedRows,
+  type BlobScopedTableName,
+  EXTENT_STEP_TABLES,
+  type HarnessPair,
+} from '../src/projection/store.js';
 import { runStoredReads, storedTierReads } from '../src/projection/stored-reads.js';
-import type { BlobConditionRow } from '../src/schemas/projection-blobs.js';
+import { type BlobConditionRow, type ReferenceSyntacticForm, ReferenceSyntacticFormSchema } from '../src/schemas/projection-blobs.js';
+import type { HarnessBlobFactsRow, HarnessBlobImportRow } from '../src/schemas/projection-harness.js';
 import { testContentKey } from '../src/testing.js';
 
 import { baseBuilderForRoot, populateBlobsOnOwnDispatcher } from './blob-fixture-population.js';
@@ -99,24 +111,64 @@ class RecordingStore extends FakeFactStore {
   readonly asked: BlobRequest<BlobScopedTableName>[] = [];
   readonly readKeys: (readonly ContentKey[])[] = [];
 
-  override readBlobFacts<Table extends BlobScopedTableName>(contentKeys: readonly ContentKey[], request: BlobRequest<Table>): Promise<Pick<BlobScopedRows, Table>> {
+  override readBlobFacts<Table extends BlobScopedTableName>(contentKeys: readonly ContentKey[], request: BlobRequest<Table>): Promise<BlobFactsRead<Table>> {
     this.asked.push(request as unknown as BlobRequest<BlobScopedTableName>);
     this.readKeys.push(contentKeys);
     return super.readBlobFacts(contentKeys, request);
   }
 }
 
-/** Each request as the store was asked it: tables, and the reference forms sorted. */
-function askedOf(store: RecordingStore): { tables: readonly string[]; forms: string | string[] }[] {
-  return store.asked.map((request) => ({ tables: request.tables, forms: request.referenceForms === 'all' ? 'all' : [...request.referenceForms].sort(compareCodeUnits) }));
+/** What a store was asked: the tables, and of `blobReferences` the forms, each sorted. */
+interface Asked {
+  readonly tables: readonly string[];
+  readonly forms: string | readonly string[];
+}
+
+/**
+ * A request as {@link askedOf} reports it.
+ *
+ * @param request - The request
+ * @returns Its tables and forms, sorted; no forms when it does not name `blobReferences`
+ */
+function asAsked(request: BlobRequest<BlobScopedTableName>): Asked {
+  const forms = request.referenceForms === 'all' ? 'all' : [...request.referenceForms].sort(compareCodeUnits);
+  return { tables: [...request.tables].sort(compareCodeUnits), forms: request.tables.includes('blobReferences') ? forms : [] };
+}
+
+/** Each request as the store was asked it. */
+function askedOf(store: RecordingStore): Asked[] {
+  return store.asked.map((request) => asAsked(request));
+}
+
+/** A write filing `derived`'s blob tier, covering nothing at read: a derived population's. */
+function derivedWrite(derived: Projection): BlobFactsWrite {
+  return { rows: storableBlobFacts({ ...emptyBlobRows(), ...blobTables(derived) }), coveredAtRead: [], settledAtRead: [] };
+}
+
+/** `store`, holding `derived`'s blob tier. */
+async function filledWith<Store extends FakeFactStore>(store: Store, derived: Projection): Promise<Store> {
+  await store.writeBlobFacts(derivedWrite(derived));
+  return store;
 }
 
 /** A store holding `derived`'s blob tier, recording what it is asked. */
 async function recordingStoreOf(derived: Projection): Promise<RecordingStore> {
-  const store = new RecordingStore(WIDE_BLOB_BUDGET_BYTES);
-  await store.writeBlobFacts({ rows: storableBlobFacts({ ...emptyBlobRows(), ...blobTables(derived) }), coveredAtRead: [], settledAtRead: [] });
-  return store;
+  return filledWith(new RecordingStore(WIDE_BLOB_BUDGET_BYTES), derived);
 }
+
+/**
+ * A store whose answer names every requested key present, whatever its ledger holds: to the reader,
+ * the mutant that joins two reads without the presence check.
+ */
+class PresenceBlindStore extends RecordingStore {
+  override async readBlobFacts<Table extends BlobScopedTableName>(contentKeys: readonly ContentKey[], request: BlobRequest<Table>): Promise<BlobFactsRead<Table>> {
+    const { rows } = await super.readBlobFacts(contentKeys, request);
+    return { rows, present: new Set(contentKeys) };
+  }
+}
+
+/** The lexical forms: every form the query request leaves out. */
+const LEXICAL_FORMS: ReadonlySet<ReferenceSyntacticForm> = new Set(ReferenceSyntacticFormSchema.options.filter((form) => !AST_SYNTACTIC_FORMS.has(form)));
 
 /** A tier over its own run's reads of `store`. */
 function tierOver(store: FakeFactStore): ReturnType<typeof storedTierReads> {
@@ -139,13 +191,13 @@ describe('one reader for a hit and the derivation after it', () => {
   beforeEach(suite.beforeEach);
 
 
-  it('reads a key again whole under a wider request, and holds what one whole read holds', async () => {
+  it('reads under a wider request only the forms it lacks, and holds what one whole read holds', async () => {
     const derived = await twoDocuments();
     const keys = keyedContentKeys(derived);
     const store = await recordingStoreOf(derived);
     // The premise: the store holds rows of both kinds of form.
-    expect(derived.blobReferences.some((row) => QUERY_BLOB_REQUEST.referenceForms !== 'all' && QUERY_BLOB_REQUEST.referenceForms.has(row.syntacticForm))).toBe(true);
-    expect(derived.blobReferences.some((row) => QUERY_BLOB_REQUEST.referenceForms !== 'all' && !QUERY_BLOB_REQUEST.referenceForms.has(row.syntacticForm))).toBe(true);
+    expect(derived.blobReferences.some((row) => AST_SYNTACTIC_FORMS.has(row.syntacticForm))).toBe(true);
+    expect(derived.blobReferences.some((row) => LEXICAL_FORMS.has(row.syntacticForm))).toBe(true);
 
     const reader = tierOver(store);
     await reader.cover(keys, QUERY_BLOB_REQUEST);
@@ -154,9 +206,9 @@ describe('one reader for a hit and the derivation after it', () => {
     const asked = askedOf(store);
     const once = await tierOver(store).cover(keys, ALL_BLOB_REQUEST);
 
-    expect(asked, 'the hit, then every key again whole, and a repeated cover reads nothing').toEqual([
-      { tables: QUERY_BLOB_REQUEST.tables, forms: QUERY_BLOB_REQUEST.referenceForms === 'all' ? 'all' : [...QUERY_BLOB_REQUEST.referenceForms].sort(compareCodeUnits) },
-      { tables: ALL_BLOB_REQUEST.tables, forms: 'all' },
+    expect(asked, 'the hit, then the lexical references alone, and a repeated cover reads nothing').toEqual([
+      asAsked(QUERY_BLOB_REQUEST),
+      asAsked({ tables: ['blobReferences'], referenceForms: LEXICAL_FORMS }),
     ]);
     expect(canonical(joined.rows)).toEqual(canonical(once.rows));
     expect([...joined.covered].sort(orderContentKeys)).toEqual([...once.covered].sort(orderContentKeys));
@@ -182,6 +234,60 @@ describe('one reader for a hit and the derivation after it', () => {
     expect([...widened.covered].sort(orderContentKeys)).toEqual(keys.filter((key) => key !== evicted).sort(orderContentKeys));
   });
 
+  it('over a store blind to presence, judges the evicted key covered on the hit\'s rows: the mutant the check catches', async () => {
+    const derived = await twoDocuments();
+    const keys = keyedContentKeys(derived);
+    const gone = keys.at(-1);
+    if (gone === undefined || keys.length < 2) throw new Error('the premise: two keyed documents');
+    const blind = await filledWith(new PresenceBlindStore(WIDE_BLOB_BUDGET_BYTES), derived);
+    const tier = tierOver(blind);
+
+    expect((await tier.cover(keys, QUERY_BLOB_REQUEST)).covered.has(gone)).toBe(true);
+    blind.forgetBlobFacts(gone);
+    const { covered, rows } = await tier.cover(keys, ALL_BLOB_REQUEST);
+
+    expect(covered.has(gone), 'without presence, two snapshots join').toBe(true);
+    expect(rows.blobs.filter((row) => row.contentKey === gone), 'on the first read\'s rows').toHaveLength(1);
+  });
+
+  it('merges a narrow read and a wider one into a whole read\'s reference rows, in order', async () => {
+    // An `@` import (lexical) on a line before a markdown link (AST): the two reads' ordinals interleave.
+    writeFileIn(suite.tempDir, 'doc.md', '# Doc\n\nSee @other.md.\n\nThen [other](./other.md).\n');
+    writeFileIn(suite.tempDir, 'other.md', '# Other\n');
+    const builder = await baseBuilderForRoot(suite.tempDir);
+    await populateBlobsOnOwnDispatcher(builder);
+    const derived = builder.build();
+    const keys = keyedContentKeys(derived);
+    const firstAst = derived.blobReferences.findIndex((row) => AST_SYNTACTIC_FORMS.has(row.syntacticForm));
+    expect(derived.blobReferences.slice(0, Math.max(firstAst, 0)).some((row) => LEXICAL_FORMS.has(row.syntacticForm)), 'the premise: a lexical row precedes an AST row').toBe(true);
+    const store = await recordingStoreOf(derived);
+
+    const reader = tierOver(store);
+    await reader.cover(keys, QUERY_BLOB_REQUEST);
+    const merged = await reader.cover(keys, ALL_BLOB_REQUEST);
+    const once = await tierOver(store).cover(keys, ALL_BLOB_REQUEST);
+
+    expect(merged.rows.blobReferences).toEqual(once.rows.blobReferences);
+  });
+
+  it('holds a key the store lacks as absent, reading nothing more until a write moves it', async () => {
+    const derived = await twoDocuments();
+    const keys = keyedContentKeys(derived);
+    const store = new RecordingStore(WIDE_BLOB_BUDGET_BYTES);
+    const reads = runStoredReads().of(store);
+
+    expect((await reads.blobs(keys, QUERY_BLOB_REQUEST)).blobs).toEqual([]);
+    expect((await reads.blobs(keys, ALL_BLOB_REQUEST)).blobReferences, 'a wider request is answered with no rows').toEqual([]);
+    expect(store.asked, 'and reads nothing').toHaveLength(1);
+
+    // A derived population files the keys: uncovered at read, so the write moves them.
+    await reads.writeBlobs(derivedWrite(derived));
+    const filed = await reads.blobs(keys, ALL_BLOB_REQUEST);
+
+    expect(store.asked, 'the next ask reads them').toHaveLength(2);
+    expect(filed.blobs.map((row) => row.contentKey).sort(orderContentKeys)).toEqual([...keys].sort(orderContentKeys));
+  });
+
   it('keeps every earlier key\'s coverage when a later read asks for one key', async () => {
     const derived = await twoDocuments();
     const keys = keyedContentKeys(derived);
@@ -194,6 +300,61 @@ describe('one reader for a hit and the derivation after it', () => {
     await partial.cover(keys, QUERY_BLOB_REQUEST);
 
     expect([...(await partial.cover([first], ALL_BLOB_REQUEST)).covered].sort(orderContentKeys)).toEqual([...once.covered].sort(orderContentKeys));
+  });
+});
+
+/**
+ * A harness pass's write of one `(key, claude-code)` pair, unsettled at read: the key's facts and
+ * one import, its read having covered the key.
+ *
+ * @param key - The key
+ * @returns The pair, its facts row, and the write
+ */
+function harnessPairWrite(key: ContentKey): { pair: HarnessPair; facts: HarnessBlobFactsRow; write: BlobFactsWrite } {
+  const pair: HarnessPair = { contentKey: key, harness: 'claude-code' };
+  const facts: HarnessBlobFactsRow = { blob: key, harness: 'claude-code', injectedBytes: 4, injectedTokens: 1, paths: null };
+  const imports: HarnessBlobImportRow[] = [{ blob: key, harness: 'claude-code', ordinal: 0, rawRef: '@other.md', target: 'other.md', line: 3 }];
+  return { pair, facts, write: { rows: { ...emptyBlobRows(), harnessBlobFacts: [facts], harnessBlobImports: imports }, coveredAtRead: [key], settledAtRead: [] } };
+}
+
+describe('the harness tables, one unit per key', () => {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(suite.beforeEach);
+
+  it('are read together when a request names one, and answered as asked', async () => {
+    const derived = await twoDocuments();
+    const keys = keyedContentKeys(derived);
+    const store = await recordingStoreOf(derived);
+
+    const answer = await runStoredReads().of(store).blobs(keys, { tables: ['harnessBlobFacts'], referenceForms: 'all' });
+
+    expect(askedOf(store)).toEqual([asAsked({ tables: ['harnessBlobFacts', 'harnessBlobImports'], referenceForms: 'all' })]);
+    expect(Object.keys(answer)).toEqual(['harnessBlobFacts']);
+  });
+
+  it('hold a pair the store gains after their read as unsettled, until a write moves the key', async () => {
+    const derived = await twoDocuments();
+    const keys = keyedContentKeys(derived);
+    const [key] = keys;
+    if (key === undefined) throw new Error('the premise: a keyed document');
+    const store = await recordingStoreOf(derived);
+    const reads = runStoredReads().of(store);
+    const tier = storedTierReads(reads);
+    const { pair, facts, write } = harnessPairWrite(key);
+
+    await tier.cover(keys, QUERY_BLOB_REQUEST);
+    // Another process's harness pass files the pair, after this run's read.
+    await store.writeBlobFacts(write);
+    const widened = await tier.cover(keys, ALL_BLOB_REQUEST);
+    expect(storedHarnessRows(widened).rowsFor(pair), 'unsettled, so this run\'s harness pass derives it').toBeUndefined();
+
+    // That pass files it unsettled at read: the write moves the key, and the next ask reads it.
+    await reads.writeBlobs(write);
+    const filed = await tier.cover(keys, ALL_BLOB_REQUEST);
+
+    expect(store.readKeys.at(-1), 'the moved key alone').toEqual([key]);
+    expect(storedHarnessRows(filed).rowsFor(pair)?.facts).toEqual(facts);
   });
 });
 

@@ -96,7 +96,7 @@ async function answersOf(source: RelationSource): Promise<readonly Record<string
 
 /** The rows lane's source for `keys`: every form, decoded from the store. */
 async function decodedSource(keys: readonly ContentKey[]): Promise<RelationSource> {
-  const rows = await store.readBlobFacts(keys, ALL_BLOB_REQUEST);
+  const rows = (await store.readBlobFacts(keys, ALL_BLOB_REQUEST)).rows;
   return { rows: rows.blobReferences };
 }
 
@@ -144,7 +144,7 @@ describe('hydrating a stored relation by copying it inside SQLite', () => {
     const database = hydrateRunDatabase({
       rootId: 'root-1',
       relations: new Map<string, RelationSource>([
-        ['blobs', { rows: (await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST)).blobs }],
+        ['blobs', { rows: (await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST)).rows.blobs }],
         ['blob_references', { stored: { store, contentKeys: [FIRST_BLOB, SECOND_BLOB] } }],
       ]),
     });

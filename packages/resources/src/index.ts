@@ -397,6 +397,7 @@ export {
   type ExtentRequest,
   type ExtentScopedRows,
   type ExtentScopedTableName,
+  type BlobFactsRead,
   type BlobFactsWrite,
   type FactStore,
   type StoreAttachTarget,

@@ -23,7 +23,7 @@ afterAll(() => {
 /** A store that holds nothing, so the home population always derives. */
 const EMPTY_STORE: FactStore = {
   writeBlobFacts: () => Promise.resolve(),
-  readBlobFacts: () => Promise.resolve(emptyBlobRows()),
+  readBlobFacts: () => Promise.resolve({ rows: emptyBlobRows(), present: new Set() }),
   writeExtent: () => Promise.resolve(),
   readExtent: () => Promise.resolve(undefined),
   close: () => Promise.resolve(),

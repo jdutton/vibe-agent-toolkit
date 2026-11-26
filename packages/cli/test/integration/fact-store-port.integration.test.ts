@@ -94,9 +94,9 @@ const PROBE_LINES = [
   "import { ALL_BLOB_REQUEST, assembleProjection, type ExtentScopedRows } from '@vibe-agent-toolkit/resources';",
   'declare const store: FactStore;',
   'declare const extent: ExtentScopedRows;',
-  "export const restricted = store.readBlobFacts([], { tables: ['blobs', 'blobReferences'], referenceForms: 'all' }).then((rows) => assembleProjection(extent, rows));",
+  "export const restricted = store.readBlobFacts([], { tables: ['blobs', 'blobReferences'], referenceForms: 'all' }).then(({ rows }) => assembleProjection(extent, rows));",
   // 30: everything assembles; 31: no request does not compile.
-  'export const whole = store.readBlobFacts([], ALL_BLOB_REQUEST).then((rows) => assembleProjection(extent, rows));',
+  'export const whole = store.readBlobFacts([], ALL_BLOB_REQUEST).then(({ rows }) => assembleProjection(extent, rows));',
   'export const unrequested = store.readBlobFacts([]);',
   // 32-33: an extent read states its tables and steps, and membership's answer (three tables, no
   // step) cannot be assembled into a projection; 34: an answer to ALL_EXTENT_REQUEST can.

@@ -16,7 +16,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   emptyBlobRows,
-  type BlobScopedRows,
+  type BlobFactsRead,
+  type BlobScopedTableName,
   type ExtentScopedRows,
   type FactStore,
 } from '../../src/index.js';
@@ -60,7 +61,7 @@ function lockedDirectory(root: string, relative: string): void {
 function emptyStore(): FactStore {
   return {
     writeBlobFacts: () => Promise.resolve(),
-    readBlobFacts: (): Promise<BlobScopedRows> => Promise.resolve(emptyBlobRows()),
+    readBlobFacts: (): Promise<BlobFactsRead<BlobScopedTableName>> => Promise.resolve({ rows: emptyBlobRows(), present: new Set() }),
     writeExtent: () => Promise.resolve(),
     readExtent: (): Promise<ExtentScopedRows | undefined> => Promise.resolve(undefined),
     close: () => Promise.resolve(),

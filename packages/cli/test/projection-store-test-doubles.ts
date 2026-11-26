@@ -78,7 +78,7 @@ function makeStore(): unknown {
   return {
     writeBlobFacts: guarded(undefined),
     // Holds nothing: a warm miss asks the blob tier for reusable facts and gets none.
-    readBlobFacts: guarded(emptyBlobRows()),
+    readBlobFacts: guarded({ rows: emptyBlobRows(), present: new Set() }),
     writeExtent: guarded(undefined),
     readExtent: guarded(undefined),
     close: () => {

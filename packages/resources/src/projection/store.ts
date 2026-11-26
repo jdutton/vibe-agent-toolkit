@@ -165,6 +165,25 @@ export interface BlobRequest<Table extends BlobScopedTableName> {
   readonly referenceForms: ReadonlySet<ReferenceSyntacticForm> | 'all';
 }
 
+/**
+ * What one {@link FactStore.readBlobFacts} answers: the requested rows, and which
+ * of the requested keys the store holds. Both are read in one transaction, so a
+ * key evicted between them cannot be called present beside rows it no longer has.
+ * Required, both: an answer without `present` would leave the caller to infer
+ * presence from rows, which no table can answer (a key may hold no row in the
+ * tables a request names).
+ */
+export interface BlobFactsRead<Table extends BlobScopedTableName> {
+  /** The rows held for the requested keys, in exactly the requested tables. */
+  readonly rows: Pick<BlobScopedRows, Table>;
+  /**
+   * The requested keys the store's ledger tracks: read from the ledger, never
+   * from `rows`. A key with a ledger entry but no row in the requested tables is
+   * present; a key never written, or evicted, is absent.
+   */
+  readonly present: ReadonlySet<ContentKey>;
+}
+
 /** Every blob-scoped table, every reference form: what a projection hit assembles from. Frozen: every caller shares it. */
 export const ALL_BLOB_REQUEST: BlobRequest<BlobScopedTableName> = deepFreeze({
   tables: Object.values(PROJECTION_TABLES)
@@ -343,14 +362,22 @@ export interface FactStore {
    * such keys, so a caller checking `blobs` alone would call every real corpus a
    * miss forever.
    *
+   * 🔑 **Presence is the ledger's answer, not the rows'.** `present` names the
+   * requested keys the store's ledger tracks, read in the same transaction as
+   * `rows`: a key with a ledger entry and no row in the requested tables is
+   * present (a narrow request over a reference-free blob), and a key never
+   * written or evicted is absent. A caller joining two reads checks each key's
+   * presence in the later one, so a key evicted between them is never served
+   * from the earlier read's rows.
+   *
    * @param contentKeys - The keys to look up; may be empty
    * @param request - Which tables, and which reference forms, to read
-   * @returns The rows held for those keys, in exactly the requested tables
+   * @returns The rows held for those keys, in exactly the requested tables, and which of them are present
    */
   readBlobFacts<Table extends BlobScopedTableName>(
     contentKeys: readonly ContentKey[],
     request: BlobRequest<Table>,
-  ): Promise<Pick<BlobScopedRows, Table>>;
+  ): Promise<BlobFactsRead<Table>>;
 
   /**
    * Record the extent of one tree — **additively, at context granularity**.

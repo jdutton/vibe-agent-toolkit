@@ -109,11 +109,13 @@ import { unlinkSync } from 'node:fs';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 
 import {
+  type BlobFactsRead,
   type BlobFactsWrite,
   type BlobReferenceRow,
   type BlobRequest,
   type BlobScopedRows,
   type BlobScopedTableName,
+  type ContentKey,
   type ExtentKey,
   type ExtentRequest,
   type ExtentScopedRows,
@@ -151,6 +153,7 @@ import {
   insertSql,
   selectBlobFactsSql,
   selectBlobFactsWhereSql,
+  selectBlobKeysPresentSql,
   selectBlobPartitionSql,
   selectExtentSql,
 } from './schema-sql.js';
@@ -1591,28 +1594,52 @@ function blobSelect(
 }
 
 /**
+ * Which keys the blob ledger ({@link BLOB_KEYS_TABLE}) tracks: a read's
+ * presence, which decodes no row and so counts as none. Run inside the read's
+ * transaction, so it answers for the same snapshot as the rows.
+ *
+ * @param tables - The connection's statements
+ * @param contentKeys - Distinct keys
+ * @returns The keys the ledger holds: the requested keys themselves, never parsed back from the stored text
+ */
+function ledgerTracked(tables: StoreTables, contentKeys: readonly ContentKey[]): Set<ContentKey> {
+  const present = new Set<ContentKey>();
+  for (const batch of batched(contentKeys)) {
+    const tracked = new Set(cachedStatement(tables, `present:${batch.length}`, () => selectBlobKeysPresentSql(batch.length))
+      .all(...batch)
+      .map((row) => String((row as Record<string, SqliteResultValue>)[BLOB_KEY_COLUMN])));
+    for (const key of batch) if (tracked.has(key)) present.add(key);
+  }
+  return present;
+}
+
+/**
  * Read back the facts held for a set of content keys — see
  * `FactStore.readBlobFacts`. Reads only the requested tables, and of
  * `blobReferences` only the requested forms: a row not asked for is never
- * decoded, so it is not counted in `decoded`.
+ * decoded, so it is not counted in `decoded`. Which keys are present is read
+ * from the ledger ({@link BLOB_KEYS_TABLE}) in the same transaction, and is not
+ * a decoded row.
  *
  * @param tables - The connection's statements
  * @param contentKeys - The keys to look up
  * @param request - Which tables and reference forms to read
- * @returns The rows, and how many stored rows were decoded
+ * @returns The rows, the keys the ledger holds, and how many stored rows were decoded
  */
 function readBlobRows<Table extends BlobScopedTableName>(
   tables: StoreTables,
-  contentKeys: readonly string[],
+  contentKeys: readonly ContentKey[],
   request: BlobRequest<Table>,
   observed: boolean,
-): { rows: Pick<BlobScopedRows, Table>; decoded: number; slots: (readonly [entry: string, slot: string])[] } {
+): BlobFactsRead<Table> & { decoded: number; slots: (readonly [entry: string, slot: string])[] } {
   const requested = new Set<string>(request.tables);
   const plans = plansOfScope(tables, 'blob').filter((plan) => requested.has(plan.spec.key));
   const forms = request.referenceForms === 'all' ? 'all' : [...request.referenceForms].sort(compareCodeUnits);
   let decoded = 0;
   const slots: (readonly [entry: string, slot: string])[] = [];
+  let present: ReadonlySet<ContentKey> = new Set();
   const rows = inReadTransaction(tables.database, () => {
+    present = ledgerTracked(tables, contentKeys);
     const result: Record<string, unknown[]> = {};
     for (const { spec } of plans) {
       result[spec.key] = [];
@@ -1631,7 +1658,7 @@ function readBlobRows<Table extends BlobScopedTableName>(
     }
     return result as unknown as Pick<BlobScopedRows, Table>;
   });
-  return { rows, decoded, slots };
+  return { rows, present, decoded, slots };
 }
 
 /**
@@ -1730,17 +1757,17 @@ export class SqliteFactStore implements FactStore {
 
   /** @inheritdoc */
   readBlobFacts<Table extends BlobScopedTableName>(
-    contentKeys: readonly string[],
+    contentKeys: readonly ContentKey[],
     request: BlobRequest<Table>,
-  ): Promise<Pick<BlobScopedRows, Table>> {
+  ): Promise<BlobFactsRead<Table>> {
     return promised(() => {
       this.#assertOpen();
       const keys = [...new Set(contentKeys)];
       const observed = workCountsObserved();
-      const { rows, decoded, slots } = readBlobRows(this.#tables, keys, request, observed);
+      const { rows, present, decoded, slots } = readBlobRows(this.#tables, keys, request, observed);
       // Asking for no keys reads nothing.
       if (keys.length > 0) countRead('store.reads.blob', decoded, observed ? recordDecoded(this.#ledger, slots) : 0);
-      return rows;
+      return { rows, present };
     });
   }
 
@@ -2020,7 +2047,7 @@ function pairId(blob: string, partition: string): string {
  * @param keys - The keys
  * @yields Batches of at most {@link KEY_BATCH_SIZE}; nothing at all when empty
  */
-function* batched(keys: readonly string[]): Generator<readonly string[]> {
+function* batched<Key extends string>(keys: readonly Key[]): Generator<readonly Key[]> {
   for (let start = 0; start < keys.length; start += KEY_BATCH_SIZE) {
     yield keys.slice(start, start + KEY_BATCH_SIZE);
   }

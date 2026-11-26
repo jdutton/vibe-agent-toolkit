@@ -202,12 +202,12 @@ type DamageableRows = Pick<BlobScopedRows, (typeof DAMAGEABLE_TABLES)[number]>;
 function viewOf(transform: (rows: DamageableRows) => DamageableRows): FactStore {
   return {
     async readBlobFacts(keys, request) {
-      const rows = await store.readBlobFacts(keys, request);
+      const read = await store.readBlobFacts(keys, request);
       // Every read here is the stored admission's, whose request names every table a case damages.
       const requested = new Set<string>(request.tables);
       const missing = DAMAGEABLE_TABLES.find((table) => !requested.has(table));
       if (missing !== undefined) throw new Error(`the view damages ${missing}, which this read did not request`);
-      return { ...rows, ...transform(rows as unknown as DamageableRows) };
+      return { ...read, rows: { ...read.rows, ...transform(read.rows as unknown as DamageableRows) } };
     },
     writeBlobFacts: (write) => store.writeBlobFacts(write),
     readExtent: (key, request) => store.readExtent(key, request),

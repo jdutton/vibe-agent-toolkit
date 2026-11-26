@@ -131,7 +131,7 @@ async function coveringWrite() {
   const held = keysRaw.split(',');
   const store = openSqliteFactStore({ directory, blobTierBudgetBytes: Number(budget) });
   try {
-    const read = await store.readBlobFacts(held, { tables: ['blobs'], referenceForms: 'all' });
+    const read = (await store.readBlobFacts(held, { tables: ['blobs'], referenceForms: 'all' })).rows;
     const covered = read.blobs.map((row) => row.contentKey);
     writeFileSync(safePath.join(barrier, `${writerId}.ready`), '');
     await awaitPeers(barrier, Number(peers));

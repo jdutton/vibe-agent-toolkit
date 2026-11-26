@@ -252,7 +252,7 @@ export function selectRequestedRows<Table extends ExtentScopedTableName>(
  * `uncovered` and derived again. Stored admission and the checks gate ask the
  * same reader, so no caller can call a key covered that another calls uncovered.
  *
- * @param rows - What {@link FactStore.readBlobFacts} returned for
+ * @param rows - The rows {@link FactStore.readBlobFacts} returned for
  *   {@link keyedContentKeys} of the same realizations; only the tables of
  *   `BLOB_FACT_READER_TABLES` are read, and the type admits no others
  * @param contentKeys - The keys those realizations name

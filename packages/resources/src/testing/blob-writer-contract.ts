@@ -174,8 +174,8 @@ function coveredBlobWrite(rows: BlobScopedRows, covered: readonly ContentKey[]):
  * @param keys - The keys
  * @returns The rows, every table
  */
-function heldRows(store: FactStore, keys: readonly ContentKey[]): Promise<BlobScopedRows> {
-  return store.readBlobFacts(keys, ALL_BLOB_REQUEST);
+async function heldRows(store: FactStore, keys: readonly ContentKey[]): Promise<BlobScopedRows> {
+  return (await store.readBlobFacts(keys, ALL_BLOB_REQUEST)).rows;
 }
 
 /**
@@ -426,6 +426,25 @@ export const BLOB_WRITER_CONTRACT: readonly BlobWriterContractCase[] = [
 
       deepStrictEqual(await ledgerBytes(), await storedBytes(), 'the ledger is not the measure of the stored rows');
       deepStrictEqual(trackedKeys(await ledgerBytes()), [a, b, c].sort(orderContentKeys), 'a key left the ledger');
+    }),
+  },
+  {
+    name: 'presence is read in the rows\' transaction, from the ledger and not from the rows',
+    mutant: 'derive present from the returned rows',
+    run: (open) => withStore(open, WIDE_BUDGET, async ({ store, evict }) => {
+      const [kept, evicted, unwritten] = ['present-kept', 'present-evicted', 'present-unwritten'].map((seed) => contractKey(seed));
+      if (kept === undefined || evicted === undefined || unwritten === undefined) throw new Error('three keys');
+      await store.writeBlobFacts(uncoveredBlobWrite(mergedBlobRows([contractBlobRows(kept), contractBlobRows(evicted)])));
+      await evict(evicted);
+
+      const read = await store.readBlobFacts([kept, evicted, unwritten], ALL_BLOB_REQUEST);
+      deepStrictEqual([...read.present].sort(orderContentKeys), [kept], 'presence named another set than the one key the ledger holds');
+      deepStrictEqual(read.rows.blobs.map((row) => row.contentKey), [kept], 'an evicted key kept its rows');
+
+      // contractBlobRows holds no reference: a request for references alone returns no row of the key.
+      const narrow = await store.readBlobFacts([kept], { tables: ['blobReferences'], referenceForms: 'all' });
+      deepStrictEqual(narrow.rows.blobReferences, [], 'the contract key grew a reference row');
+      deepStrictEqual([...narrow.present], [kept], 'a key with no row in the requested tables was called absent');
     }),
   },
 ];

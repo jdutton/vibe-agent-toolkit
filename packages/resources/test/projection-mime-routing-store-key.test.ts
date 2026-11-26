@@ -37,8 +37,9 @@ import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { CONTENT_PARSING_SKIP, populate, type PopulateOptions } from '../src/projection/merge.js';
 import { createCollectionMimeResolver } from '../src/projection/router.js';
 import type {
+  BlobFactsRead,
   BlobFactsWrite,
-  BlobScopedRows,
+  BlobScopedTableName,
   ExtentKey,
   ExtentScopedRows,
   FactStore,
@@ -120,19 +121,22 @@ class KeyRecordingStore implements FactStore {
     // Unreachable under `CONTENT_PARSING_SKIP`, and a no-op when it is reachable.
   }
 
-  async readBlobFacts(_contentKeys: readonly string[]): Promise<BlobScopedRows> {
+  async readBlobFacts(_contentKeys: readonly string[]): Promise<BlobFactsRead<BlobScopedTableName>> {
     if (!this.servesBlobTier) {
       throw new Error('this arm declines the blob tier and must never read it');
     }
     return {
-      blobs: [],
-      blobReferences: [],
-      blobSections: [],
-      blobConditions: [],
-      harnessBlobFacts: [],
-      harnessBlobImports: [],
-      skillTextFacts: [],
-      skillTextMatches: [],
+      rows: {
+        blobs: [],
+        blobReferences: [],
+        blobSections: [],
+        blobConditions: [],
+        harnessBlobFacts: [],
+        harnessBlobImports: [],
+        skillTextFacts: [],
+        skillTextMatches: [],
+      },
+      present: new Set(),
     };
   }
 

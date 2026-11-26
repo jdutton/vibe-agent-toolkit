@@ -33,6 +33,7 @@ import { populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import { blobRowBytes, type EncodedStoreValue } from '../src/projection/store-bookkeeping.js';
 import type {
+  BlobFactsRead,
   BlobFactsWrite,
   BlobRequest,
   BlobScopedRows,
@@ -411,16 +412,17 @@ export class FakeFactStore implements FactStore {
    * backend's.
    *
    * Honours the request as a real backend does: only the requested tables,
-   * and of `blobReferences` only the requested forms.
+   * and of `blobReferences` only the requested forms; presence is the ledger's,
+   * whatever rows the request returns.
    *
    * @param contentKeys - The keys to look up
    * @param request - Which tables and reference forms to read
-   * @returns The rows held for them, in the requested tables
+   * @returns The rows held for them, in the requested tables, and which of them the ledger holds
    */
   readBlobFacts<Table extends BlobScopedTableName>(
     contentKeys: readonly ContentKey[],
     request: BlobRequest<Table>,
-  ): Promise<Pick<BlobScopedRows, Table>> {
+  ): Promise<BlobFactsRead<Table>> {
     this.readBlobFactsCalls++;
     const forms = request.referenceForms;
     const kept = (table: string, row: unknown): boolean =>
@@ -434,7 +436,8 @@ export class FakeFactStore implements FactStore {
         merged[table] = [...(merged[table] ?? []), ...(held[table] ?? []).filter((row) => kept(table, row))];
       }
     }
-    return Promise.resolve(merged as unknown as Pick<BlobScopedRows, Table>);
+    const present = new Set(contentKeys.filter((key) => this.#ledger.has(key)));
+    return Promise.resolve({ rows: merged as unknown as Pick<BlobScopedRows, Table>, present });
   }
 
   /**
@@ -513,7 +516,7 @@ export class FailingBlobStore extends FakeFactStore {
   override readBlobFacts<Table extends BlobScopedTableName>(
     contentKeys: readonly ContentKey[],
     request: BlobRequest<Table>,
-  ): Promise<Pick<BlobScopedRows, Table>> {
+  ): Promise<BlobFactsRead<Table>> {
     if (!this.failBlobs) return super.readBlobFacts(contentKeys, request);
     return Promise.reject(this.failure);
   }
