@@ -190,10 +190,11 @@ const UNCLOSED: ReadonlyMap<JsoncParser.SyntaxKind, JsoncParser.ParseErrorCode> 
 
 /**
  * How deep the text's containers nest, by the scanner alone (a loop, never a
- * recursion), with a stack of the closers the open containers expect: each
- * open brace or bracket is one level deeper than the one holding it. A closer
- * that matches no open container ends the scan, because the parse would skip
- * it and keep nesting past the depth measured.
+ * recursion). It keeps a stack of expected closers: an opener pushes the one
+ * that closes it, and a closer pops the top. The depth is the stack's greatest
+ * height. A closer that is not the top (mismatched) or meets an empty stack
+ * (unopened) ends the scan as a `DATA_PARSE_ERROR` before the parse, because
+ * the parse would skip it and keep nesting past the depth measured.
  *
  * @param text - The document
  * @returns The deepest nesting (0 for a scalar root), or the mismatched closer

@@ -46,9 +46,13 @@ export type DataNodeType = z.infer<typeof DataNodeTypeSchema>;
 const DataConditionCodeSchema = z.enum(['DATA_DUPLICATE_KEY', 'DATA_LOSSY_NUMBER'])
   .describe('`DATA_DUPLICATE_KEY`: a key repeated in one object (the later member wins); `DATA_LOSSY_NUMBER`: a number whose lexeme\'s exact decimal value differs from that of its double\'s shortest round-trip form, or whose double is not finite');
 
-/** Where a routed pair's facts stand. */
+/**
+ * Where a routed pair's facts stand. The one statement of what each state means: the pair-codes
+ * list in `docs/validation-codes.md` (data instance codes) is held to it by a unit test, and every
+ * other document links there rather than restating it.
+ */
 const DataRouteStateSchema = z.enum(['facts', 'defective', 'refused'])
-  .describe('`facts`: the pair\'s rows are held; `defective`: its bytes cannot yield rows (malformed, not text, a byte-determined limit); `refused`: this run could not decide (unreadable, changed under the run, a per-run limit, a worker death)');
+  .describe('`facts`: the pair\'s rows are held; `defective`: the bytes or the file decide it (malformed, not text, a lone surrogate, a cap the bytes decide, a read the filesystem refused or failed), so the same file fails the same way every run: fix the file or exclude it in resources.extractors.data; `refused`: this run decided it (a time, heap or stack cap, a worker death, bytes changed or gone under the run, the machine out of descriptors or the path busy), so a rerun may answer');
 
 const BLOB_DESC = 'The content key of the bytes these rows describe';
 const DOC_DESC = '0-based document ordinal within the file; JSON has one, 0';

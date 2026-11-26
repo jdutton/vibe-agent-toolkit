@@ -195,9 +195,12 @@ resources:
         --  * A manifest is checked whichever variant routes it: a jsonc glob changes
         --    how a package.json is read, not whether the rule applies to it.
         --
-        -- Every join is within one root: a package is compared only with the floor
-        -- of the package.json at its own root, never another root's. The system test
-        -- runs `vat resources check` over one root, so no case pins this join.
+        -- Every finding is per root: each root in the run (`roots`, so a root that
+        -- routes no data file at all still counts) needs its own routed package.json,
+        -- and a package is compared only with the floor of the package.json at its
+        -- own root, never another root's. `vat resources check` takes one path, so
+        -- the system test cannot build two roots;
+        -- packages/cli/test/engine-floor-multi-root.test.ts runs this statement over several.
         --
         -- Equality is the TS rule's `!==`: same JSON type and same value, and an
         -- object or array never equals anything. `shown` renders a value the way
@@ -228,7 +231,8 @@ resources:
         )
         SELECT 'package.json' AS path,
                'Root package.json is not routed (absent, git-ignored, or excluded from the data instance), so there is no floor to derive and the rule cannot run.' AS problem
-        WHERE NOT EXISTS (SELECT 1 FROM root_manifest)
+        FROM roots r
+        WHERE NOT EXISTS (SELECT 1 FROM root_manifest m WHERE m.root = r.id)
         UNION ALL
         SELECT 'package.json',
                'Root package.json declares no engines.node. Every other manifest is checked against it, so there is no floor to derive and the rule cannot run.'
@@ -260,5 +264,128 @@ resources:
         JOIN root_floor f ON f.root = m.root
         WHERE NOT (e.type = f.floorType AND e.type NOT IN ('object', 'array') AND e.value IS f.floor)
         ORDER BY path
+
+    tsconfig-composite:
+      description: >-
+        Every packages/<name>/tsconfig.json sets compilerOptions.composite to true,
+        as the monorepo build (tsc --build over project references) requires.
+      # CLAUDE.md ("TypeScript Monorepo Build System") states this rule; until this
+      # check nothing enforced it. tsconfig.base.json also sets composite, so the
+      # build would survive one package dropping it; the rule asks each package to
+      # state it, so a package that stops extending the base keeps it. Pinned by
+      # packages/cli/test/system/workspace-config-checks.system.test.ts, which reads
+      # this entry from this file.
+      severity: error
+      sql: |-
+        -- Only packages/<name>/tsconfig.json, one level deep: GLOB's `*` crosses
+        -- `/`, so the second pattern drops fixtures under packages/<name>/test/...
+        -- A package with no tsconfig.json (one that compiles nothing) is not a
+        -- finding. The value must be the JSON boolean: `"true"` and `1` are not, and
+        -- `1` and `true` are both stored as INTEGER 1, so the type decides.
+        WITH tsconfigs AS (
+          SELECT DISTINCT root, path FROM data__routes
+          WHERE path GLOB 'packages/*/tsconfig.json'
+            AND path NOT GLOB 'packages/*/*/*'
+        )
+        SELECT t.path AS path,
+               t.path || ' does not set compilerOptions.composite to true. Every package tsconfig must, because the build is tsc --build over project references (docs/build-system.md).' AS problem
+        FROM tsconfigs t
+        WHERE NOT EXISTS (
+          SELECT 1 FROM data__values v
+          WHERE v.root = t.root AND v.path = t.path
+            AND v.pointer = '/compilerOptions/composite'
+            AND v.type = 'boolean' AND v.value = 1
+        )
+        ORDER BY path
+    tsconfig-extends-base:
+      description: >-
+        Every packages/<name>/tsconfig.json extends "../../tsconfig.base.json", so
+        all packages compile under one set of compiler options.
+      # CLAUDE.md ("Adding New Packages") states this rule; until this check nothing
+      # enforced it. Pinned by
+      # packages/cli/test/system/workspace-config-checks.system.test.ts.
+      severity: error
+      sql: |-
+        -- Same scope as tsconfig-composite. `extends` must be exactly the string;
+        -- an array (TypeScript 5 allows one) is a finding even when it names the
+        -- base, because the rule is one shared base and nothing layered on it here.
+        WITH tsconfigs AS (
+          SELECT DISTINCT root, path FROM data__routes
+          WHERE path GLOB 'packages/*/tsconfig.json'
+            AND path NOT GLOB 'packages/*/*/*'
+        ),
+        ext AS (
+          SELECT DISTINCT root, path, type, value FROM data__values WHERE pointer = '/extends'
+        )
+        SELECT DISTINCT t.path AS path,
+               t.path || ' ' ||
+                 CASE
+                   WHEN e.type IS NULL THEN 'sets no extends'
+                   WHEN e.type = 'string' THEN 'extends "' || e.value || '"'
+                   WHEN e.type IN ('array', 'object') THEN 'sets extends to an ' || e.type
+                   WHEN e.type = 'null' THEN 'sets extends to null'
+                   ELSE 'sets extends to a ' || e.type
+                 END
+                 || ' instead of extending "../../tsconfig.base.json". Every package tsconfig must extend the shared base so all packages compile under one set of compiler options.' AS problem
+        FROM tsconfigs t
+        LEFT JOIN ext e ON e.root = t.root AND e.path = t.path
+        WHERE e.type IS NULL OR NOT (e.type = 'string' AND e.value = '../../tsconfig.base.json')
+        ORDER BY path
+    workspace-protocol:
+      description: >-
+        A dependency on a package of this workspace, from the root package.json or
+        any packages/<name>/package.json, uses the workspace protocol (workspace:*).
+      # CLAUDE.md ("TypeScript Monorepo Build System") states this rule; until this
+      # check nothing enforced it. Pinned by
+      # packages/cli/test/system/workspace-config-checks.system.test.ts.
+      severity: error
+      sql: |-
+        -- "Internal" is DERIVED: a key equal to the `name` some routed
+        -- packages/<name>/package.json declares in the same root, never a list of
+        -- names restated here. Matching is on `key`, the decoded member name, so a
+        -- scoped name's `/` (`~1` in the pointer) needs no unescaping. depth 3 is a
+        -- direct member of the section (root 1, section 2), so a key inside a
+        -- malformed entry is never read as a dependency. peerDependenciesMeta is not
+        -- one of the four sections: '/peerDependencies/*' needs the `/` after the
+        -- section name. The root manifest's own name is not a workspace package.
+        WITH manifests AS (
+          SELECT DISTINCT root, path FROM data__routes
+          WHERE path = 'package.json'
+             OR (path GLOB 'packages/*/package.json' AND path NOT GLOB 'packages/*/*/*')
+        ),
+        workspace_names AS (
+          SELECT DISTINCT v.root, v.value AS name
+          FROM manifests m
+          JOIN data__values v ON v.root = m.root AND v.path = m.path
+          WHERE m.path <> 'package.json' AND v.pointer = '/name' AND v.type = 'string'
+        ),
+        deps AS (
+          SELECT DISTINCT d.root, d.path, d.key AS dep, d.type, d.value, d.lexeme,
+                 CASE
+                   WHEN d.pointer GLOB '/dependencies/*' THEN 'dependencies'
+                   WHEN d.pointer GLOB '/devDependencies/*' THEN 'devDependencies'
+                   WHEN d.pointer GLOB '/peerDependencies/*' THEN 'peerDependencies'
+                   ELSE 'optionalDependencies'
+                 END AS section
+          FROM manifests m
+          JOIN data__values d ON d.root = m.root AND d.path = m.path
+          WHERE d.depth = 3
+            AND (d.pointer GLOB '/dependencies/*' OR d.pointer GLOB '/devDependencies/*'
+                 OR d.pointer GLOB '/peerDependencies/*' OR d.pointer GLOB '/optionalDependencies/*')
+        )
+        SELECT d.path AS path,
+               d.path || ' declares ' || d.section || ' "' || d.dep || '" as '
+                 || CASE d.type
+                      WHEN 'string' THEN '"' || d.value || '"'
+                      WHEN 'number' THEN 'a number (' || d.lexeme || ')'
+                      WHEN 'boolean' THEN 'a boolean (' || CASE d.value WHEN 1 THEN 'true' ELSE 'false' END || ')'
+                      WHEN 'null' THEN 'null'
+                      ELSE 'an ' || d.type
+                    END
+                 || '. "' || d.dep || '" is a package in this workspace, so the range must use the workspace protocol ("workspace:*"); a registry range builds against a published copy instead of the local source (docs/build-system.md).' AS problem
+        FROM deps d
+        JOIN workspace_names w ON w.root = d.root AND w.name = d.dep
+        WHERE NOT (d.type = 'string' AND d.value GLOB 'workspace:*')
+        ORDER BY path, section, dep
 
   # Per-code severity overrides available via resources.validation.severity (see docs/validation-codes.md)

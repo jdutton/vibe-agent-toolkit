@@ -959,7 +959,7 @@
                     "allowEmpty": {
                       "type": "boolean",
                       "const": true,
-                      "description": "Declare that a run whose data instance examined no file is a legitimate answer. Without it, a declared `data` block that routes nothing in the bound extent, or an `include` glob that matches no `.json` or `.jsonc` file there, is a config error. Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead."
+                      "description": "Excuses two things that are otherwise config errors: a declared `data` block that routes no file in the bound extent, and an `include` glob that matches no `.json` or `.jsonc` file there (even when the defaults route other files). One key covers both, so setting it for one also silences the other. Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead."
                     }
                   },
                   "additionalProperties": false,

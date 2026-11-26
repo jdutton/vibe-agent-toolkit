@@ -536,7 +536,7 @@ export const DATA_PAIR_CAUSES = {
     state: 'defective',
     code: BLOB_UNREADABLE,
     tier: 'lower',
-    seededBy: [`${DATA_STAGE_UNIT} > makes a refused or failed read (EACCES, EPERM, EIO) defective, INPUT_UNREADABLE, with the remedy of the fault table`],
+    seededBy: [`${DATA_STAGE_UNIT} > makes a refused or failed read (EACCES, EPERM, EIO) defective, INPUT_UNREADABLE, with a remedy for a routed file`],
   },
   'refused:BLOB_UNREADABLE': {
     state: 'refused',

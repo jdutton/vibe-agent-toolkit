@@ -246,7 +246,7 @@ resources:
       include: ['tools/waivers.json']            # by extension: .json strict, .jsonc JSONC
       jsonc: ['**/turbo.json', '.vscode/*.json']  # JSONC whatever the extension
       exclude: ['**/test/fixtures/**']           # never read, defaults included
-      # allowEmpty: true                         # a block that routes nothing is otherwise an error
+      # allowEmpty: true                         # excuses a block that routes nothing AND an include glob that matches nothing
 ```
 
 One variant per path: `exclude`, then `jsonc`, then the defaults, then `include`. Ask
@@ -267,7 +267,7 @@ boolean from a number.
 
 **A routed file with no rows refuses the statement**, naming the file: `INPUT_UNREADABLE` when it
 is `defective` (malformed, a comment in a strict `json` file, not text, a lone surrogate, past a
-size or depth cap, or a read the filesystem refused: fix it, route it as `jsonc`, or `exclude` it),
+size or depth cap, or a read the filesystem refused or failed: fix it, route it as `jsonc`, or `exclude` it),
 `RUN_INCOMPLETE` when this run could not decide (time or memory cap, changed or gone mid-run, out
 of file descriptors or busy: run again). `data__routes` still answers, so
 `SELECT path, state, code FROM data__routes WHERE state <> 'facts'` lists them.

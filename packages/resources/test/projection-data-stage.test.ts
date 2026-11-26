@@ -36,6 +36,10 @@ import type { ContentState } from '../src/schemas/projection-resources.js';
 import { FakeFactStore, WIDE_STORE_BUDGETS } from './fake-fact-store.js';
 
 const ROOT = '/repo';
+/** The config mechanism a defective pair's remedy ends on. */
+const ROUTE_AWAY = 'route it away with resources.extractors.data.exclude';
+const EXHAUSTED_REMEDY = 'free open files, disk space or quota on this machine, then run again';
+const BUSY_REMEDY = 'wait for whatever holds the file to release it, then run again';
 const EVERYTHING: DataDemand = { tables: ['dataFiles', 'dataDocuments', 'dataNodes', 'dataConditions'], routes: true, values: true };
 
 /** One realization the fixture projection holds. */
@@ -255,7 +259,7 @@ describe('runDataStage: the refusal it lists', () => {
 });
 
 describe('runDataStage: a filesystem fault takes its refusal from the one fault table', () => {
-  it('makes a refused or failed read (EACCES, EPERM, EIO) defective, INPUT_UNREADABLE, with the remedy of the fault table', async () => {
+  it('makes a refused or failed read (EACCES, EPERM, EIO) defective, INPUT_UNREADABLE, with a remedy for a routed file', async () => {
     const result = staged(await stage([
       { path: 'keyed/package.json', text: '{}', fault: 'EACCES' },
       { path: 'deferred/package.json', state: 'deferred', fault: 'EPERM' },
@@ -267,12 +271,12 @@ describe('runDataStage: a filesystem fault takes its refusal from the one fault 
       'device/package.json defective BLOB_UNREADABLE',
     ]);
     expect(result.refusal?.refusal).toBe('INPUT_UNREADABLE');
-    expect(result.refusal?.pairs[0]?.remedy).toMatch(/^Grant read permission .*resources\.extractors\.data\.exclude$/u);
-    expect(result.refusal?.pairs[2]?.remedy).toMatch(/^Check the disk or network share/u);
+    expect(result.refusal?.pairs[0]?.remedy).toBe(`grant read permission on the file, or ${ROUTE_AWAY}`);
+    expect(result.refusal?.pairs[2]?.remedy).toBe(`check the disk or network share holding the file, then run again, or ${ROUTE_AWAY}`);
     expect(result.refusal?.pairs[0]?.detail).toBe('reading it failed with EACCES');
   });
 
-  it('keeps a machine fault (EMFILE, ENFILE, EBUSY) refused, RUN_INCOMPLETE, with the table\'s remedy', async () => {
+  it('keeps a machine fault (EMFILE, ENFILE, EBUSY) refused, RUN_INCOMPLETE, with a remedy for a routed file', async () => {
     const result = staged(await stage([
       { path: 'a/package.json', text: '{}', fault: 'EMFILE' },
       { path: 'b/package.json', state: 'deferred', fault: 'ENFILE' },
@@ -281,9 +285,9 @@ describe('runDataStage: a filesystem fault takes its refusal from the one fault 
     expect(result.derived.dataRoutes?.map(({ state, code }) => `${state} ${code ?? ''}`)).toStrictEqual(Array.from({ length: 3 }, () => 'refused BLOB_UNREADABLE'));
     expect(result.refusal?.refusal).toBe('RUN_INCOMPLETE');
     expect(result.refusal?.pairs.map((pair) => pair.remedy)).toStrictEqual([
-      'Free disk space, quota or open files on this machine, then re-run',
-      'Free disk space, quota or open files on this machine, then re-run',
-      'Wait for whatever holds the path to release it, then re-run',
+      EXHAUSTED_REMEDY,
+      EXHAUSTED_REMEDY,
+      BUSY_REMEDY,
     ]);
   });
 
@@ -300,12 +304,28 @@ describe('runDataStage: a filesystem fault takes its refusal from the one fault 
       'gone/package.json refused BLOB_UNREADABLE',
     ]);
     expect(result.refusal?.pairs.map(({ detail }) => detail)).toStrictEqual([
-      'the population could not read it (refused)',
-      'the population could not read it (exhausted)',
+      'the population could not read it: permission was refused',
+      'the population could not read it: the machine ran out of open files, disk space or quota',
       'the file is gone',
     ]);
-    expect(result.refusal?.pairs[0]?.remedy).toMatch(/^Grant read permission .*resources\.extractors\.data\.exclude$/u);
     expect(contentReads.size).toBe(0);
+  });
+
+  // Every class but absence, pinned: a routed file is one the user never named, so no remedy may
+  // send them to "the message" or tell them to "point the command" anywhere.
+  it.each<[Exclude<FsFaultClass, 'absent'>, 'defective' | 'refused', string, string]>([
+    ['refused', 'defective', 'permission was refused', `grant read permission on the file, or ${ROUTE_AWAY}`],
+    ['wrong-type', 'defective', 'it is not a regular file (a directory, a pipe, socket or device, a link loop, or a name too long)', `make the path a regular file, or ${ROUTE_AWAY}`],
+    ['occupied', 'defective', 'something was in the way at the path', `remove what is in the way at the path, or ${ROUTE_AWAY}`],
+    ['unsupported', 'defective', 'its filesystem does not support reading it', `move the file to a filesystem that can read it, or ${ROUTE_AWAY}`],
+    ['device', 'defective', 'its disk or network share failed', `check the disk or network share holding the file, then run again, or ${ROUTE_AWAY}`],
+    ['exhausted', 'refused', 'the machine ran out of open files, disk space or quota', EXHAUSTED_REMEDY],
+    ['busy', 'refused', 'the file was busy', BUSY_REMEDY],
+  ])('gives a population fault of class %s the state %s, its words and a remedy for a routed file', async (faultClass, state, words, remedy) => {
+    const result = staged(await stage([{ path: 'package.json', state: 'unreadable', faultClass }]));
+    expect(result.refusal?.pairs).toStrictEqual([{
+      path: 'package.json', state, code: 'BLOB_UNREADABLE', detail: `the population could not read it: ${words}`, remedy,
+    }]);
   });
 
   it('reads a file the population found unreadable once per run, through the run cache both read through', async () => {

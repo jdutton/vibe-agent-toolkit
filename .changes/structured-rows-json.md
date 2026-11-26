@@ -73,6 +73,9 @@
 
 ### Changed
 
+- **Three more repo rules are `vat resources check` entries over `data__*` rows**: every package
+  `tsconfig.json` sets `compilerOptions.composite: true` and extends `../../tsconfig.base.json`
+  (JSONC rows), and every dependency on a workspace package uses a `workspace:` range.
 - **The repo's Node engine-floor agreement is a `vat resources check`.** The `engine-floor-agreement`
   check in `vibe-agent-toolkit.config.yaml` is SQL over `data__values`, replacing the TypeScript
   rule in `validate-repo-structure.ts`. It checks only routed `package.json` files, so a

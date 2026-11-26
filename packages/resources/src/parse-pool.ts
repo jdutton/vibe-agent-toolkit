@@ -639,7 +639,7 @@ export interface ParsePool {
    * @param content - The decoded file, BOM stripped
    * @param byteLength - Bytes of what was read, held to the input cap
    * @param bom - Whether those bytes carried a BOM
-   * @returns The rows, or a `DATA_PARSE_ERROR` the bytes alone decide
+   * @returns The rows, or a `DATA_PARSE_ERROR` or `DATA_LONE_SURROGATE` the bytes alone decide
    * @throws On the same conditions {@link ParsePool.parse} throws on: a
    *   {@link ParseLimitError} (an output cap, `outputDepth` included, or a run
    *   limit), a `ParseWorkerDiedError`, a parser-unavailable error for a broken install

@@ -10,10 +10,8 @@
  * ## One state per routed pair
  *
  * Every statically routed path has one state this run, carried in `data__routes`: `facts` (its head
- * row was read from the store or extracted now), `defective` (the bytes alone decide the failure:
- * malformed, not text, a byte-determined cap, a read the filesystem refused or failed) or `refused`
- * (the run decided it: the machine out of descriptors or the path busy, the file changed or gone
- * under the run, a time, heap or stack cap, a worker death). A filesystem fault takes its state from
+ * row was read from the store or extracted now), `defective` (the bytes or the file decide it) or
+ * `refused` (this run decided it), as `DataRouteStateSchema` defines them. A filesystem fault takes its state from
  * the one fault table (`fsFaultRefusal`, a source found as content): the fault is `defective` exactly
  * where that table says `INPUT_UNREADABLE`. Only `facts` are stored. A statement
  * naming any other `data__*` relation refuses while any routed pair is not `facts`
@@ -91,6 +89,30 @@ const DEFECTIVE_REMEDY = `fix the file, or ${ROUTE_AWAY}`;
 const REFUSED_REMEDY = 'run again, after stopping whatever is writing the file if it changed or vanished while the run read it;'
   + ` if the same file is refused on every run, the parse is running out of time, heap or stack on it, so ${ROUTE_AWAY}`;
 
+/** What one filesystem fault class means for a routed file: the words a pair's detail renders, and what helps. */
+interface RoutedFault {
+  /** The fault in words, never the class name (`refused` would read as the pair state). */
+  readonly words: string;
+  /** What helps, for a file the user never named: a `defective` pair's ends on {@link ROUTE_AWAY} where it is rendered. */
+  readonly fix: string;
+}
+
+/**
+ * Every fault class but absence, as a routed file meets it. The fault table decides the state; its
+ * remedies are written for an input a command or a config named ("point the command at ...", "the
+ * message names ..."), which a routed file is not, so the words here are the data instance's own.
+ * Keyed by the class list, so a class utils adds fails the typecheck here.
+ */
+const ROUTED_FAULTS: Readonly<Record<Exclude<FsFaultClass, 'absent'>, RoutedFault>> = {
+  refused: { words: 'permission was refused', fix: 'grant read permission on the file' },
+  'wrong-type': { words: 'it is not a regular file (a directory, a pipe, socket or device, a link loop, or a name too long)', fix: 'make the path a regular file' },
+  occupied: { words: 'something was in the way at the path', fix: 'remove what is in the way at the path' },
+  unsupported: { words: 'its filesystem does not support reading it', fix: 'move the file to a filesystem that can read it' },
+  device: { words: 'its disk or network share failed', fix: 'check the disk or network share holding the file, then run again' },
+  exhausted: { words: 'the machine ran out of open files, disk space or quota', fix: 'free open files, disk space or quota on this machine, then run again' },
+  busy: { words: 'the file was busy', fix: 'wait for whatever holds the file to release it, then run again' },
+};
+
 /** Which of the instance's relations a run's statements name. */
 export interface DataDemand {
   /** The named row-set tables, in registry order. */
@@ -139,8 +161,9 @@ export interface DataRefusalPair {
 
 /**
  * Why a statement naming the instance's relations (all but `data__routes`) refuses: some routed pair
- * is not `facts`. `INPUT_UNREADABLE` when any is `defective` (the files must change), else
- * `RUN_INCOMPLETE` (a rerun may answer). Carries every such pair, in route order.
+ * is not `facts`. `INPUT_UNREADABLE` when any is `defective` (each such file needs a fix, or an
+ * `exclude`), else `RUN_INCOMPLETE` (every pair is `refused`: a rerun may answer, the files as they
+ * are). Carries every such pair, in route order.
  */
 export interface DataRefusal {
   readonly refusal: 'INPUT_UNREADABLE' | 'RUN_INCOMPLETE';
@@ -244,7 +267,7 @@ interface PairFailure {
   readonly state: 'defective' | 'refused';
   readonly code: string;
   readonly detail: string;
-  /** The pair's own remedy, when its cause names one (a filesystem fault's, from the fault table). */
+  /** The pair's own remedy, when its cause names one (a filesystem fault's, from {@link ROUTED_FAULTS}). */
   readonly remedy?: string;
 }
 
@@ -347,7 +370,7 @@ function rootsByExtent(projection: DataStageProjection): (extentId: string) => {
 async function resolveRoute(route: Route, content: DataStageContent): Promise<ResolvedRoute> {
   const idOf = (contentKey: ContentKey): ResolvedRoute => ({ route, id: { contentKey, instance: 'data', variant: route.variant } });
   if (route.contentKey !== null) return idOf(route.contentKey);
-  if (route.contentFaultClass !== null) return { route, failure: fsFailureOf(route.contentFaultClass, `the population could not read it (${route.contentFaultClass})`) };
+  if (route.contentFaultClass !== null) return { route, failure: fsFailureOf(route.contentFaultClass, (words) => `the population could not read it: ${words}`) };
   if (route.contentState === 'oversize') {
     return { route, failure: { state: 'defective', code: 'PARSE_LIMIT_EXCEEDED', detail: 'it is past the input cap (inputBytes)' } };
   }
@@ -505,7 +528,7 @@ function failureOf(error: unknown): PairFailure {
   if (isParseWorkerDiedError(error)) return { state: 'refused', code: error.code, detail };
   if (isSizeRefusal(error)) return { state: 'defective', code: 'PARSE_LIMIT_EXCEEDED', detail };
   const fault = fsFaultOf(error);
-  if (fault !== undefined) return fsFailureOf(fault.faultClass, `reading it failed with ${fault.errno}`);
+  if (fault !== undefined) return fsFailureOf(fault.faultClass, () => `reading it failed with ${fault.errno}`);
   throw error;
 }
 
@@ -513,25 +536,24 @@ function failureOf(error: unknown): PairFailure {
  * A filesystem fault on a routed file's read, as a pair state, by the one fault table: the file is
  * a source the run found as content, so the pair is `defective` exactly where the table refuses
  * `INPUT_UNREADABLE` (a refused permission, a failed device, ...) and `refused` where it stops the
- * run (`RUN_INCOMPLETE`: out of descriptors, a busy path), with the table's remedy.
+ * run (`RUN_INCOMPLETE`: out of descriptors, a busy path). The remedy is this instance's own
+ * ({@link ROUTED_FAULTS}), never the table's, which addresses an input someone named.
  *
  * Absence is the one class read otherwise: the population listed the path in this run, so nothing
  * there now is the file vanishing under the run, `refused` like the reader's own "gone"
  * ({@link extractOne}), never the table's restore-the-reference remedy for a path an input names.
  *
  * @param faultClass - The fault's class, as {@link fsFaultOf} read it
- * @param detail - What failed, for every class but absence
+ * @param detailOf - What failed, given the class in words; asked for every class but absence
  * @returns The failure
  */
-function fsFailureOf(faultClass: FsFaultClass, detail: string): PairFailure {
-  const failed = { code: BLOB_UNREADABLE, detail };
-  if (faultClass === 'absent') return { ...failed, state: 'refused', detail: 'the file is gone' };
-  const row = fsFaultRefusal('source', faultClass, 'content');
-  // The table's remedies are sentences; a pair's is rendered inside one (`Remedy: <remedy>.`).
-  const remedy = row.remedy.endsWith('.') ? row.remedy.slice(0, -1) : row.remedy;
-  return row.refusal === 'INPUT_UNREADABLE'
-    ? { ...failed, state: 'defective', remedy: `${remedy}, or ${ROUTE_AWAY}` }
-    : { ...failed, state: 'refused', remedy };
+function fsFailureOf(faultClass: FsFaultClass, detailOf: (words: string) => string): PairFailure {
+  if (faultClass === 'absent') return { code: BLOB_UNREADABLE, state: 'refused', detail: 'the file is gone' };
+  const { words, fix } = ROUTED_FAULTS[faultClass];
+  const failed = { code: BLOB_UNREADABLE, detail: detailOf(words) };
+  return fsFaultRefusal('source', faultClass, 'content').refusal === 'INPUT_UNREADABLE'
+    ? { ...failed, state: 'defective', remedy: `${fix}, or ${ROUTE_AWAY}` }
+    : { ...failed, state: 'refused', remedy: fix };
 }
 
 /** @returns Every table of the instance, empty */

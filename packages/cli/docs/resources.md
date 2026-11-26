@@ -310,10 +310,10 @@ vat resources query "SELECT path, value FROM data__values WHERE pointer = '/engi
 ```
 
 A statement naming any `data__*` relation but `data__routes` is refused while a routed file has no
-rows: `INPUT_UNREADABLE` when a file is `defective` (malformed, not text, past a size or depth cap:
-fix it or `exclude` it), `RUN_INCOMPLETE` when the run could not decide (a time or memory cap, a
-file changed or unreadable mid-run: run again), naming each path, state and code
-([validation-codes.md](../../../docs/validation-codes.md#data-instance-codes)). Ask `data__routes`
+rows: `INPUT_UNREADABLE` when a file is `defective` (the bytes or the file decide it: fix it or
+`exclude` it), `RUN_INCOMPLETE` when every such file is `refused` (this run decided it: run again),
+naming each path, state, code and remedy. Which code is which state:
+[validation-codes.md](../../../docs/validation-codes.md#data-instance-codes). Ask `data__routes`
 which files those are.
 
 `changed_files` lists what THIS CHANGE touched: the working tree (staged or not) plus untracked,
@@ -576,10 +576,10 @@ One variant per path, decided in this order: `exclude` removes it; a `jsonc` glo
 `jsonc`; a default names its variant; an `include` glob routes it by extension. Patterns are
 anchored at the project root and match dot directories; `**/node_modules/**` is never read. The
 block is strict: an unknown key is a config error. A declared block that routes no file in the tree
-refuses a statement naming a `data__*` relation (`CONFIG_INVALID`) unless it sets
-`allowEmpty: true`; only `true` is accepted. An `include` glob that matches no `.json` or `.jsonc`
-file in the tree is `CONFIG_INVALID` too, naming the glob, even when the defaults route other
-files; `allowEmpty: true` excuses it.
+refuses a statement naming a `data__*` relation (`CONFIG_INVALID`), and so does an `include` glob
+that matches no `.json` or `.jsonc` file in the tree, naming the glob, even when the defaults route
+other files. `allowEmpty: true` excuses both: one key, two meanings, so setting it for an empty
+block also silences a mistyped `include` glob. Only `true` is accepted.
 
 ## Integration with vibe-validate
 
