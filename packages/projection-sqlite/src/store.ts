@@ -1562,7 +1562,8 @@ function readExtentRows<Table extends ExtentScopedTableName>(
     for (const plan of plans) {
       const raw = plan.selectExtent?.all(key.rootId, key.treeHash) ?? [];
       decoded += raw.length;
-      if (observed) for (let row = 0; row < raw.length; row += 1) slots.push([entry, plan.spec.key]);
+      // One slot per decoded row; pushed one at a time, since a spread of a large read overflows the stack.
+      if (observed) for (const slot of Array.from(raw, () => [entry, plan.spec.key] as const)) slots.push(slot);
       result[plan.spec.key] = [...decodeRows(plan, raw)];
     }
     return result as unknown as Pick<ExtentScopedRows, Table>;
