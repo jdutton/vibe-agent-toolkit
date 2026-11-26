@@ -18,7 +18,8 @@ import { afterAll, describe, expect, it } from 'vitest';
 
 import {
   emptyBlobRows,
-  type BlobScopedRows,
+  type BlobFactsRead,
+  type BlobScopedTableName,
   type ExtentKey,
   type ExtentScopedRows,
   type FactStore,
@@ -64,7 +65,7 @@ function recordingStore(): FactStore & { touchedRootIds: string[] } {
   return {
     touchedRootIds,
     writeBlobFacts: () => Promise.resolve(),
-    readBlobFacts: (): Promise<BlobScopedRows> => Promise.resolve(emptyBlobRows()),
+    readBlobFacts: (): Promise<BlobFactsRead<BlobScopedTableName>> => Promise.resolve({ rows: emptyBlobRows(), present: new Set() }),
     writeExtent: (key: ExtentKey) => {
       touchedRootIds.push(key.rootId);
       return Promise.resolve();

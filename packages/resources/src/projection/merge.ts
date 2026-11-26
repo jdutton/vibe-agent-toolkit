@@ -672,10 +672,10 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
  * - `'copy'`: on a store hit the lexical rows are never decoded. The hit reads
  *   {@link QUERY_BLOB_REQUEST}, and the run database copies `blob_references` from the store the
  *   hit read, for exactly the content keys it admitted.
- * - `'rows'`: the hit reads every form, as {@link populate} does, and hands its own rows. For a run
- *   whose next reader of the tier reads every form (a lens that populates), so the run reads each
- *   key once; and for a run repopulating after a copy found a key evicted, so it cannot fail where a
- *   store-off run succeeds.
+ * - `'rows'`: the hit reads every form, as {@link populate} does, and hands its own rows. Only for
+ *   a run repopulating after a copy found a key evicted, so it cannot fail where a store-off run
+ *   succeeds. A lens that populates after a `'copy'` hit reads, through the run's one reader, only
+ *   the forms the hit left out, so no stored row is decoded twice either way.
  *
  * A derived population, store on or off, hands its own rows either way.
  *

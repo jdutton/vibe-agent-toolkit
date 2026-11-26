@@ -82,7 +82,6 @@ import {
   evaluateLens,
   lensRelationNames,
   lensPopulationOf,
-  namesPopulatingLens,
   planHydration,
   type LensEvaluation,
   type LensRefusal,
@@ -483,13 +482,12 @@ export async function withQueriedProjection<T>(
   // populates (claude-context) read and parse each file once between them.
   return withPopulationCache({ root }, (cache) => withPopulationRun(async (populationRun) => {
     const run = { root, statements: options.statements, base: options.base, cache, populationRun, populationStart };
-    // A lens that populates reads every blob form next, so the query population reads them whole
-    // and hands its rows; otherwise a hit copies `blob_references` inside SQLite.
-    const references: QueryReferences = namesPopulatingLens(options.statements) ? 'rows' : 'copy';
+    // A hit copies `blob_references` inside SQLite. A lens that populates after it reads, through
+    // the run's one reader, only the reference forms the query population left out.
     const warned = new Set<string>();
     const remembering: Logger = { ...logger, warn: (message) => { warned.add(message); logger.warn(message); } };
     try {
-      return await populateThenAsk({ ...run, logger: remembering, references }, work);
+      return await populateThenAsk({ ...run, logger: remembering, references: 'copy' }, work);
     } catch (error) {
       // A key the hit admitted was evicted before hydration copied its rows: populate again, which
       // misses on that key and derives it, the store's ordinary miss. The second population hands

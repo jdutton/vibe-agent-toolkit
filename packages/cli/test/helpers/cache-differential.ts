@@ -1472,7 +1472,7 @@ export async function primedUncovered(dirs: ArmDirs, keys: readonly string[]): P
   const store = openSqliteFactStore({ directory: safePath.join(file, '..'), blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
   const asked = keys.map((key) => parseStoredKey(key));
   try {
-    return uncoveredContentKeys(await store.readBlobFacts(asked, ALL_BLOB_REQUEST), asked);
+    return uncoveredContentKeys((await store.readBlobFacts(asked, ALL_BLOB_REQUEST)).rows, asked);
   } finally {
     await store.close();
   }

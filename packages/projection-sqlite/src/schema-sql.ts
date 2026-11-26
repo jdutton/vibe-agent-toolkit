@@ -566,7 +566,7 @@ function extentKeyPredicate(): string {
 }
 
 /**
- * `<key column> IN (?, …)`.
+ * `<key column> IN (?, …)` for a blob-scoped table.
  *
  * @param spec - A blob-scoped table's registry entry
  * @param keyCount - How many placeholders to emit
@@ -574,11 +574,36 @@ function extentKeyPredicate(): string {
  * @throws RangeError When `keyCount` is not a positive integer
  */
 function blobKeyPredicate(spec: StoredTableSpec, keyCount: number): string {
+  return contentKeyInPredicate(blobKeyColumn(spec), keyCount);
+}
+
+/**
+ * `<column> IN (?, …)` over content keys.
+ *
+ * @param column - The column holding a content key
+ * @param keyCount - How many placeholders to emit
+ * @returns The predicate
+ * @throws RangeError When `keyCount` is not a positive integer
+ */
+function contentKeyInPredicate(column: string, keyCount: number): string {
   if (!Number.isInteger(keyCount) || keyCount < 1) {
     throw new RangeError(`A blob-fact statement needs at least one content key, got ${keyCount}`);
   }
   const placeholders = Array.from({ length: keyCount }, () => '?').join(', ');
-  return `${quoteIdentifier(blobKeyColumn(spec))} IN (${placeholders})`;
+  return `${quoteIdentifier(column)} IN (${placeholders})`;
+}
+
+/**
+ * The `SELECT` of which of a set of content keys the blob ledger
+ * ({@link BLOB_KEYS_TABLE}) tracks: a read's presence, never a decoded row.
+ *
+ * @param keyCount - How many content keys the statement should accept
+ * @returns A `SELECT <key> FROM blob_keys WHERE <key> IN (?, …)` statement
+ * @throws RangeError When `keyCount` is not a positive integer
+ */
+export function selectBlobKeysPresentSql(keyCount: number): string {
+  const column = quoteIdentifier(BLOB_KEY_COLUMN);
+  return `SELECT ${column} FROM ${quoteIdentifier(BLOB_KEYS_TABLE)} WHERE ${contentKeyInPredicate(BLOB_KEY_COLUMN, keyCount)}`;
 }
 
 /** Every projection table, in registry order, as this module sees them. */

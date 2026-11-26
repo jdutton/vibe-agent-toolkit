@@ -16,7 +16,7 @@ import { AST_SYNTACTIC_FORMS } from '../src/projection/blob-references.js';
 import { BLOB_FACT_READER_TABLES, type BlobFactsOutcome, type BlobFactsReader, type BlobResourceFacts } from '../src/projection/blob-resource-facts.js';
 import { POPULATION_PARSE_LIMITS } from '../src/projection/content-cache.js';
 import { emptyBlobRows, STORE_REQUEST_UNMET } from '../src/projection/store-hydration.js';
-import type { BlobRequest, BlobScopedRows, BlobScopedTableName, FactStore } from '../src/projection/store.js';
+import type { BlobFactsRead, BlobRequest, BlobScopedRows, BlobScopedTableName, FactStore } from '../src/projection/store.js';
 import {
   ADMISSION_BLOB_REQUEST,
   hydratesUnder,
@@ -181,7 +181,7 @@ function countingStore(fails?: Error): { store: FactStore; reads: (readonly stri
     readBlobFacts: (keys, request) => {
       reads.push(keys);
       requests.push(request);
-      return fails === undefined ? Promise.resolve(emptyBlobRows()) : Promise.reject(fails);
+      return fails === undefined ? Promise.resolve({ rows: emptyBlobRows(), present: new Set() }) : Promise.reject(fails);
     },
     writeBlobFacts: () => Promise.resolve(),
     readExtent: () => Promise.resolve(undefined),
@@ -270,16 +270,24 @@ describe('storedContentOf: the members\' stored content', () => {
 
   it('refuses, by code, a store that answers without a requested table, never reading it as empty', async () => {
     const withoutOne = Object.fromEntries(Object.entries(emptyBlobRows()).filter(([table]) => table !== 'skillTextMatches'));
-    const store: FactStore = { ...countingStore().store, readBlobFacts: () => Promise.resolve(withoutOne as BlobScopedRows) };
+    const store: FactStore = { ...countingStore().store, readBlobFacts: () => Promise.resolve({ rows: withoutOne as BlobScopedRows, present: new Set() }) };
     const stored = storedContentOf([member('/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown'))], runStoredReads().of(store));
     await expect(stored.facts()).rejects.toMatchObject({ code: STORE_REQUEST_UNMET, tier: 'blob', table: 'skillTextMatches' });
+  });
+
+  it('refuses, by code, a store that answers without its presence, never inferring it from the rows', async () => {
+    // A backend is code outside the reader: an answer typed whole may still arrive without `present`.
+    const rowsOnly: unknown = { rows: emptyBlobRows() };
+    const store: FactStore = { ...countingStore().store, readBlobFacts: () => Promise.resolve(rowsOnly as BlobFactsRead<BlobScopedTableName>) };
+    const stored = storedContentOf([member('/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown'))], runStoredReads().of(store));
+    await expect(stored.facts()).rejects.toMatchObject({ code: STORE_REQUEST_UNMET, tier: 'blob', table: 'present' });
   });
 
   it('refuses, as the store\'s read, a stored row whose key column holds no content key, never dropping the row', async () => {
     // A damaged store, as an untyped source hands it: the row's key column is text no parser admits.
     const answer = JSON.stringify({ ...emptyBlobRows(), blobs: [{ contentKey: 'markdown.sha256.not-hex' }] });
     const damaged: BlobScopedRows = JSON.parse(answer);
-    const store: FactStore = { ...countingStore().store, readBlobFacts: () => Promise.resolve(damaged) };
+    const store: FactStore = { ...countingStore().store, readBlobFacts: () => Promise.resolve({ rows: damaged, present: new Set() }) };
     const stored = storedContentOf([member('/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown'))], runStoredReads().of(store));
     await expect(stored.facts()).rejects.toMatchObject({
       code: 'PROJECTION_STORE_READ_FAILED',

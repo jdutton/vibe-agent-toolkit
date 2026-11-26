@@ -54,8 +54,9 @@ export type QueryReferenceSource =
 
 /**
  * Where a query-lane store hit's `blob_references` reach the run database from: `'copy'` reads the
- * AST forms and copies every form from the store inside SQLite; `'rows'` reads every form and hands
- * them (`populateForQuery`). Required, so a caller states it.
+ * AST forms and copies every form from the store inside SQLite, as every first population does;
+ * `'rows'` reads every form and hands them, as the one repopulation after a copy found a key
+ * evicted does (`populateForQuery`). Required, so a caller states it.
  */
 export type QueryReferences = 'copy' | 'rows';
 

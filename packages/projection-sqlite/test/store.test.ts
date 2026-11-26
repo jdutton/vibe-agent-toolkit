@@ -28,6 +28,7 @@ import {
   type FactStore,
   type Projection,
   type ProjectionTableName,
+  withPopulationRun,
 } from '@vibe-agent-toolkit/resources';
 import { BLOB_WRITER_CONTRACT, uncoveredBlobWrite, type BlobWriterContractFactory } from '@vibe-agent-toolkit/resources/testing';
 import { compareCodeUnits, isVatError, readWorkCounters, safePath } from '@vibe-agent-toolkit/utils';
@@ -239,7 +240,7 @@ describe('a blob read states what it reads', () => {
     await store.writeBlobFacts(uncoveredBlobWrite(rows));
     __resetWorkCountersForTest();
 
-    const read = await store.readBlobFacts([FIRST_BLOB], { tables: ['blobs', 'blobReferences'], referenceForms: AST_SYNTACTIC_FORMS });
+    const read = (await store.readBlobFacts([FIRST_BLOB], { tables: ['blobs', 'blobReferences'], referenceForms: AST_SYNTACTIC_FORMS })).rows;
 
     expect(Object.keys(read).sort((left, right) => left.localeCompare(right))).toEqual(['blobReferences', 'blobs']);
     expect(read.blobs).toEqual(rows.blobs);
@@ -254,14 +255,14 @@ describe('a blob read states what it reads', () => {
     const { rows } = everyFormRows();
     await store.writeBlobFacts(uncoveredBlobWrite(rows));
 
-    expect(await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST)).toEqual(rows);
+    expect((await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST)).rows).toEqual(rows);
   });
 
   it('reads no reference row for an empty form set, and still reads the other tables', async () => {
     const { rows } = everyFormRows();
     await store.writeBlobFacts(uncoveredBlobWrite(rows));
 
-    const read = await store.readBlobFacts([FIRST_BLOB], { tables: ['blobs', 'blobReferences'], referenceForms: new Set() });
+    const read = (await store.readBlobFacts([FIRST_BLOB], { tables: ['blobs', 'blobReferences'], referenceForms: new Set() })).rows;
     expect(read).toEqual({ blobs: rows.blobs, blobReferences: [] });
   });
 });
@@ -271,13 +272,13 @@ describe('blob facts', () => {
     const written = sampleBlobRows();
     await store.writeBlobFacts(uncoveredBlobWrite(written));
 
-    const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST) as unknown as Record<string, readonly unknown[]>;
+    const read = (await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST)).rows as unknown as Record<string, readonly unknown[]>;
     expectSchemaValid(read, ['blobs', 'blobReferences', 'blobSections', 'blobConditions', 'harnessBlobFacts', 'harnessBlobImports', 'skillTextFacts', 'skillTextMatches']);
     expect(read).toEqual(written);
   });
 
   it('returns nothing for a key it has never seen — a miss, not an error', async () => {
-    const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
+    const read = (await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST)).rows;
     expect(read.blobs).toEqual([]);
     expect(read.blobReferences).toEqual([]);
   });
@@ -288,7 +289,7 @@ describe('blob facts', () => {
     const bare = sampleBlobRows();
     await store.writeBlobFacts(uncoveredBlobWrite({ ...bare, blobReferences: [], blobSections: [], blobConditions: [], harnessBlobFacts: [], harnessBlobImports: [] }));
 
-    const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
+    const read = (await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST)).rows;
     expect(read.blobs).toHaveLength(1);
     expect(read.blobReferences).toEqual([]);
   });
@@ -297,7 +298,7 @@ describe('blob facts', () => {
     await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows()));
     await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows()));
 
-    const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
+    const read = (await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST)).rows;
     expect(read.blobs).toHaveLength(1);
     // The interesting one: `blob_conditions` keys on a nullable `line`, so a
     // conflict clause would NOT have deduplicated this row.
@@ -321,7 +322,7 @@ describe('blob facts', () => {
       settledAtRead: [],
     });
 
-    const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
+    const read = (await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST)).rows;
     expect(read.blobs).toHaveLength(1);
     expect(read.harnessBlobFacts).toEqual(rootA.harnessBlobFacts);
     expect(read.harnessBlobImports).toEqual(rootA.harnessBlobImports);
@@ -337,7 +338,7 @@ describe('blob facts', () => {
 
     await store.writeBlobFacts(uncoveredBlobWrite({ ...rootA, harnessBlobFacts: [], harnessBlobImports: [] }));
 
-    const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
+    const read = (await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST)).rows;
     expect(read.blobs).toHaveLength(1);
     expect(read.harnessBlobFacts).toEqual([]);
     expect(read.harnessBlobImports).toEqual([]);
@@ -351,7 +352,7 @@ describe('blob facts', () => {
 
     await store.writeBlobFacts(uncoveredBlobWrite({ ...first, harnessBlobFacts: [{ ...facts, injectedTokens: facts.injectedTokens + 1 }], harnessBlobImports: [] }));
 
-    const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
+    const read = (await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST)).rows;
     expect(read.harnessBlobFacts.map((row) => row.injectedTokens)).toEqual([facts.injectedTokens + 1]);
     expect(read.harnessBlobImports).toEqual([]);
   });
@@ -361,7 +362,7 @@ describe('blob facts', () => {
     await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(SECOND_BLOB)));
     await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(SECOND_BLOB)));
 
-    const read = await store.readBlobFacts([FIRST_BLOB, SECOND_BLOB], ALL_BLOB_REQUEST);
+    const read = (await store.readBlobFacts([FIRST_BLOB, SECOND_BLOB], ALL_BLOB_REQUEST)).rows;
     expect(read.blobs).toHaveLength(2);
   });
 
@@ -369,12 +370,12 @@ describe('blob facts', () => {
     await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(FIRST_BLOB)));
     await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(SECOND_BLOB)));
 
-    const read = await store.readBlobFacts([SECOND_BLOB], ALL_BLOB_REQUEST);
+    const read = (await store.readBlobFacts([SECOND_BLOB], ALL_BLOB_REQUEST)).rows;
     expect(read.blobs.map((row) => row.contentKey)).toEqual([SECOND_BLOB]);
   });
 
   it('accepts an empty key list without emitting an IN () that cannot parse', async () => {
-    const read = await store.readBlobFacts([], ALL_BLOB_REQUEST);
+    const read = (await store.readBlobFacts([], ALL_BLOB_REQUEST)).rows;
     expect(read.blobs).toEqual([]);
   });
 
@@ -392,7 +393,7 @@ describe('blob facts', () => {
     // `.pyc` or image, while exiting 0.
     await store.writeBlobFacts(uncoveredBlobWrite(declinedBlobRows(FIRST_BLOB)));
 
-    const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
+    const read = (await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST)).rows;
     expect(read.blobs).toEqual([]);
     expect(read.blobConditions).toHaveLength(1);
     expect(read.blobConditions[0]?.code).toBe('BLOB_NOT_TEXT');
@@ -408,7 +409,7 @@ describe('blob facts', () => {
     await store.writeBlobFacts(uncoveredBlobWrite(declinedBlobRows(FIRST_BLOB)));
     await store.writeBlobFacts(uncoveredBlobWrite(declinedBlobRows(FIRST_BLOB)));
 
-    const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
+    const read = (await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST)).rows;
     expect(read.blobConditions).toHaveLength(1);
   });
 
@@ -417,7 +418,7 @@ describe('blob facts', () => {
     await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(SECOND_BLOB)));
     await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(SECOND_BLOB)));
 
-    const read = await store.readBlobFacts([FIRST_BLOB, SECOND_BLOB], ALL_BLOB_REQUEST);
+    const read = (await store.readBlobFacts([FIRST_BLOB, SECOND_BLOB], ALL_BLOB_REQUEST)).rows;
     expect(read.blobs.map((row) => row.contentKey)).toEqual([SECOND_BLOB]);
     expect(read.blobConditions.filter((row) => row.blob === FIRST_BLOB)).toHaveLength(1);
   });
@@ -691,6 +692,21 @@ describe('a row this process already decoded from the file is counted as repeate
     await store.readBlobFacts([FIRST_BLOB], REFERENCES_OF(AST_SYNTACTIC_FORMS));
 
     expect(readWorkCounters()['store.rows.decoded.repeated']).toBe(astRows);
+  });
+
+  it('a run\'s reader asked for the AST forms, then every form, decodes each stored row once', async () => {
+    // The query lane's request: every table, of `blobReferences` the AST forms.
+    const narrow = { tables: ALL_BLOB_REQUEST.tables, referenceForms: AST_SYNTACTIC_FORMS };
+    const stored = Object.values(everyFormRows().rows).reduce((sum, rows) => sum + rows.length, 0);
+
+    await withPopulationRun(async (run) => {
+      const reads = run.stored.of(store);
+      await reads.blobs([FIRST_BLOB], narrow);
+      await reads.blobs([FIRST_BLOB], ALL_BLOB_REQUEST);
+    });
+
+    expect(readWorkCounters()['store.rows.decoded.repeated'], 'no row decoded twice').toBe(0);
+    expect(readWorkCounters()['store.rows.decoded.persistent'], 'every stored row of the key decoded').toBe(stored);
   });
 
   it('a second extent read of the same tree and table counts it again, and of another table nothing', async () => {
@@ -1305,7 +1321,7 @@ describe('the blob tier is bounded', () => {
     const evicting = openWithBlobBudget(1);
     for (const seed of ['a', 'b', 'c']) {
       await evicting.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(contentKey(seed))));
-      const held = await evicting.readBlobFacts([contentKey(seed)], ALL_BLOB_REQUEST);
+      const held = (await evicting.readBlobFacts([contentKey(seed)], ALL_BLOB_REQUEST)).rows;
       expect(held.blobs).toHaveLength(1);
     }
     await evicting.close();
@@ -1323,7 +1339,7 @@ describe('the blob tier is bounded', () => {
       blobs: [], blobReferences: [], blobSections: [], harnessBlobFacts: [], harnessBlobImports: [], skillTextFacts: [], skillTextMatches: [],
       blobConditions: keys.flatMap((key) => declinedBlobRows(key).blobConditions),
     }));
-    const held = await evicting.readBlobFacts(keys, ALL_BLOB_REQUEST);
+    const held = (await evicting.readBlobFacts(keys, ALL_BLOB_REQUEST)).rows;
     await evicting.close();
 
     expect(new Set(held.blobConditions.map((row) => row.blob))).toEqual(new Set(keys));

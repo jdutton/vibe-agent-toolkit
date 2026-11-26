@@ -275,7 +275,7 @@ beforeAll(async () => {
   // A second connection, so every fact comes back through SQLite rather than a handle's memory.
   const reader: FactStore = openSqliteFactStore({ directory: storeDirectory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
   try {
-    const stored = await reader.readBlobFacts([...new Set(keyOf.values())], ALL_BLOB_REQUEST);
+    const stored = (await reader.readBlobFacts([...new Set(keyOf.values())], ALL_BLOB_REQUEST)).rows;
     const facts = blobFactsReader(stored);
     const keyAt = (relativePath: string): ContentKey => {
       const key = keyOf.get(relativePath);
