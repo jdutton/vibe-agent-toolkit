@@ -24,6 +24,7 @@ import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../../src/p
 import { crawlSourceFor } from '../../src/projection/crawl-source.js';
 import { populate, populationOracles, type PopulateResult, type PopulationCache } from '../../src/projection/merge.js';
 import { buildResourcePopulation, type ResourceEnumeration } from '../../src/projection/resource-population.js';
+import { runStoredReads } from '../../src/projection/stored-reads.js';
 import { FakeFactStore } from '../fake-fact-store.js';
 import { createCommittedRepo } from '../test-helpers.js';
 
@@ -78,7 +79,7 @@ async function underRun<T>(
     ? undefined
     : { store: cache.store, treeHash: cache.treeHash, treeUnchanged: () => true };
   try {
-    return await work(populationOracles({ run: { content, dispatcher }, cache: store }));
+    return await work(populationOracles({ run: { content, dispatcher, stored: runStoredReads() }, cache: store }));
   } finally {
     await dispatcher.shutdown();
   }

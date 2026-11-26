@@ -615,7 +615,8 @@ const EXPORTS: readonly ExportedTypeShape[] = [
   ...exported('resource-compiler', ['CompileResult', 'ParseResult'], LIBRARY_RESULT),
   ...exported('resources', [
     'BlobPopulationResult', 'ContentFetchResult', 'OkfBundleReport',
-    'ParseResult', 'PopulateResult', 'ProjectionDocument', 'ResolveLocalHrefResult', 'ValidationResult',
+    'ParseResult', 'PopulateResult', 'ProjectionDocument', 'QueryPopulateResult', 'ResolveLocalHrefResult',
+    'ValidationResult',
   ], LIBRARY_RESULT),
   ...exported('utils', ['ApplyResult'], 'What `applyTreePlan` returns: the warnings of a tree change that is done.'),
   ...exported(SCHEMA_PACKAGE, ['Report', 'OkReport', 'FindingsReport', 'ErrorReport'], 'The union report envelope every report verb publishes; its JSON Schemas are the `report` entries above.'),

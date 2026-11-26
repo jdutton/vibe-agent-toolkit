@@ -200,3 +200,56 @@ describe('work counters', () => {
     expect(WORK_COUNTER_ROLES).toEqual(['wrapper', 'cli']);
   });
 });
+
+describe('workCountsObserved', () => {
+  // The shared vitest setup marks every test observed; these cases start from a process it did not.
+  beforeEach(() => {
+    vi.stubGlobal('__vatWorkCountsObserved', undefined);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it('is true when the shared test setup marks the run observed', async () => {
+    vi.resetModules();
+    const fresh = await import('../src/work-counters.js');
+    expect(fresh.workCountsObserved()).toBe(false);
+    vi.stubGlobal('__vatWorkCountsObserved', true);
+    expect(fresh.workCountsObserved()).toBe(true);
+  });
+
+  it('is false in a process that installed no counts dump', async () => {
+    vi.resetModules();
+    const fresh = await import('../src/work-counters.js');
+    vi.stubEnv(fresh.WORK_COUNTERS_ENV, '');
+    vi.stubEnv(fresh.GIT_SPAWNS_ENV, '');
+    fresh.installWorkCounterDump('cli');
+
+    expect(fresh.workCountsObserved(), 'no dump: the decode ledger costs nothing').toBe(false);
+  });
+
+  it('is true once the counts are read in process, so a delta observes what follows its first read', async () => {
+    vi.resetModules();
+    const fresh = await import('../src/work-counters.js');
+    expect(fresh.workCountsObserved()).toBe(false);
+    fresh.readWorkCounters();
+    expect(fresh.workCountsObserved()).toBe(true);
+  });
+
+  it('is true once the counts dump is installed', async () => {
+    vi.resetModules();
+    const fresh = await import('../src/work-counters.js');
+    const freshTesting = await import('../src/testing.js');
+    vi.stubEnv(fresh.GIT_SPAWNS_ENV, '');
+    vi.stubEnv(fresh.WORK_COUNTERS_ENV, safePath.resolve(fileURLToPath(import.meta.url), '..'));
+    try {
+      fresh.installWorkCounterDump('cli');
+      expect(fresh.workCountsObserved()).toBe(true);
+    } finally {
+      // Takes back the dump's exit write, so the suite writes no file.
+      freshTesting.__resetWorkCountersForTest();
+    }
+  });
+});

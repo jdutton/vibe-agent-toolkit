@@ -66,7 +66,10 @@ import {
   type PopulationCache,
   type PopulationRun,
   type PopulationOutcome,
-  type Projection,
+  PROJECTION_STORE_ROWS_EVICTED_CODE,
+  type QueryProjection,
+  type QueryReferences,
+  type QueryReferenceSource,
 } from '@vibe-agent-toolkit/resources';
 import { forEachInOrder, isVatError, VatError } from '@vibe-agent-toolkit/utils';
 
@@ -79,6 +82,7 @@ import {
   evaluateLens,
   lensRelationNames,
   lensPopulationOf,
+  namesPopulatingLens,
   planHydration,
   type LensEvaluation,
   type LensRefusal,
@@ -478,19 +482,60 @@ export async function withQueriedProjection<T>(
   // ONE population run for the query: the resources population and a lens that
   // populates (claude-context) read and parse each file once between them.
   return withPopulationCache({ root }, (cache) => withPopulationRun(async (populationRun) => {
-    // The cache tell is `populate()`'s own outcome — see `ProjectionProvenance.population`.
-    const { projection, outcome } = await populateAndReport(
-      { root, run: populationRun, cache, logger, population: 'resources' },
-      (wiring) => buildResourceProjection({ root, ...wiring }),
-      (result) => result.projection,
-      (result) => storeMissOf(result.outcome),
-    );
-
-    return askPopulatedProjection(
-      { projection, outcome, root, logger, statements: options.statements, base: options.base, cache, populationRun, populationStart },
-      work,
-    );
+    const run = { root, statements: options.statements, base: options.base, cache, populationRun, populationStart };
+    // A lens that populates reads every blob form next, so the query population reads them whole
+    // and hands its rows; otherwise a hit copies `blob_references` inside SQLite.
+    const references: QueryReferences = namesPopulatingLens(options.statements) ? 'rows' : 'copy';
+    const warned = new Set<string>();
+    const remembering: Logger = { ...logger, warn: (message) => { warned.add(message); logger.warn(message); } };
+    try {
+      return await populateThenAsk({ ...run, logger: remembering, references }, work);
+    } catch (error) {
+      // A key the hit admitted was evicted before hydration copied its rows: populate again, which
+      // misses on that key and derives it, the store's ordinary miss. The second population hands
+      // its own rows (`'rows'`), so it reads no copy and cannot fail where a store-off run succeeds,
+      // and it repeats none of the first's warnings. Once: hydration runs before `work`, so nothing
+      // of the caller's ran.
+      if (!isVatError(error, PROJECTION_STORE_ROWS_EVICTED_CODE)) throw error;
+      const unrepeated: Logger = { ...logger, warn: (message) => { if (!warned.has(message)) logger.warn(message); } };
+      return populateThenAsk({ ...run, logger: unrepeated, references: 'rows' }, work);
+    }
   }));
+}
+
+/** What one query run holds before it populates: see {@link askPopulatedProjection} for each field. */
+interface QueryRun {
+  readonly root: string;
+  readonly logger: Logger;
+  readonly statements: readonly string[];
+  readonly base: string | undefined;
+  readonly cache: PopulationCache | undefined;
+  readonly populationRun: PopulationRun;
+  readonly populationStart: number;
+}
+
+/**
+ * One population of the query lane and its answer: populate the resources projection, then hydrate
+ * and ask it ({@link askPopulatedProjection}).
+ *
+ * @param run - The run's root, logger, statements, base, cache, population run and clock start,
+ *   and where a store hit's `blob_references` come from (`populateForQuery`)
+ * @param work - What runs against the hydrated database
+ * @returns What `work` returns
+ */
+async function populateThenAsk<T>(
+  run: QueryRun & { readonly references: QueryReferences },
+  work: QueriedProjectionWork<T>,
+): Promise<T> {
+  const { root, logger, cache, populationRun, references } = run;
+  // The cache tell is `populate()`'s own outcome — see `ProjectionProvenance.population`.
+  const { projection, outcome, blobReferences } = await populateAndReport(
+    { root, run: populationRun, cache, logger, population: 'resources' },
+    (wiring) => buildResourceProjection({ root, ...wiring }, references),
+    (result) => result.projection,
+    (result) => storeMissOf(result.outcome),
+  );
+  return askPopulatedProjection({ ...run, projection, blobReferences, outcome }, work);
 }
 
 /**
@@ -508,7 +553,9 @@ type QueriedProjectionWork<T> = (
   //
   // ⚠️ Not a second way to ask the same question. Nothing here re-derives,
   // re-filters or re-scopes; a caller wanting a relational answer uses `ask`.
-  projection: Projection,
+  // Of `blob_references` it holds the AST forms only (`astReferences`): a
+  // lexical reference is answerable by SQL alone.
+  projection: QueryProjection,
   // The shape of an answer, which its rows cannot carry when there are none.
   columnsOf: ColumnsOfStatement,
 ) => Promise<T> | T;
@@ -520,7 +567,10 @@ type QueriedProjectionWork<T> = (
  * test can hold what a run database contains without a population.
  *
  * @param run - The populated run
- * @param run.projection - The run's own populated projection: the only source hydration copies from
+ * @param run.projection - The run's own populated projection: what hydration fills every relation
+ *   from but `blob_references`
+ * @param run.blobReferences - Where `blob_references` come from: the projection's own rows, or the
+ *   store the hit was served from, for exactly the keys it admitted (the source carries the store)
  * @param run.outcome - The population's outcome, for the cache tell
  * @param run.root - Absolute corpus root, for a lens that populates a lane of its own
  * @param run.logger - Where a lens's own population reports refused content
@@ -534,16 +584,10 @@ type QueriedProjectionWork<T> = (
  * @returns Whatever `work` returned
  */
 export async function askPopulatedProjection<T>(
-  run: {
-    readonly projection: Projection;
+  run: QueryRun & {
+    readonly projection: QueryProjection;
+    readonly blobReferences: QueryReferenceSource;
     readonly outcome: Pick<PopulationOutcome, 'population'>;
-    readonly root: string;
-    readonly logger: Logger;
-    readonly statements: readonly string[];
-    readonly base: string | undefined;
-    readonly cache: PopulationCache | undefined;
-    readonly populationRun: PopulationRun;
-    readonly populationStart: number;
   },
   work: QueriedProjectionWork<T>,
 ): Promise<T> {
@@ -554,7 +598,7 @@ export async function askPopulatedProjection<T>(
   const plan = planHydration({ statements: run.statements, roots: projection.roots });
   // ONE tree, in a database nothing else can reach, built fresh for this call
   // from this run's own rows and only the relations the plan names.
-  const runDatabase = await hydrateRunDatabase(projection, plan);
+  const runDatabase = await hydrateRunDatabase({ projection, blobReferences: run.blobReferences }, plan);
   try {
     // 🚨 The population clock STOPS HERE, before the lens runs, so
     // `populationSecs` never contains `lensSecs`: the two are published side by

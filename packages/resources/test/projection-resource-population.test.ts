@@ -7,8 +7,10 @@ import { compareCodeUnits, createSymlink, safePath, symlinkCapability, toForward
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { AST_SYNTACTIC_FORMS } from '../src/projection/blob-references.js';
 import { buildClaudeContextPopulation } from '../src/projection/claude-context-population.js';
-import { type PopulationCache } from '../src/projection/merge.js';
+import { type PopulationCache , type TreePopulationOptions } from '../src/projection/merge.js';
+import type { QueryPopulateResult } from '../src/projection/query-projection.js';
 import {
   buildResourcePopulation,
   buildResourceProjection,
@@ -26,9 +28,12 @@ import type {
 } from '../src/projection/store.js';
 import { ResourceRegistry, type RegistryCrawl } from '../src/resource-registry.js';
 
-import { extentKeyOf, FakeFactStore } from './fake-fact-store.js';
+import { extentKeyOf, FakeFactStore, noDatabaseFile } from './fake-fact-store.js';
 import { inOwnRun, noStoredDocument } from './helpers/population-run.js';
 import { setupSubdirTestSuite } from './test-helpers.js';
+
+/** The query lane's population, copying a hit's references as `vat resources query` does with no populating lens. */
+const buildCopying = (options: TreePopulationOptions): Promise<QueryPopulateResult> => buildResourceProjection(options, 'copy');
 
 /** The plain markdown member every fixture below starts from. */
 const DOC_A = 'a.md';
@@ -290,6 +295,11 @@ class CapturingStore implements FactStore {
   async close(): Promise<void> {
     // Nothing is held open.
   }
+
+  /** No database file to attach. */
+  attachedTo(): never {
+    return noDatabaseFile();
+  }
 }
 
 describe('buildResourcePopulation declines the ignored half before paying for it', () => {
@@ -345,11 +355,36 @@ describe('buildResourceProjection', () => {
     const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
     const options = { root: suite.tempDir, cache };
 
-    const derived = await inOwnRun(buildResourceProjection, options);
-    const served = await inOwnRun(buildResourceProjection, options);
+    const derived = await inOwnRun(buildCopying, options);
+    const served = await inOwnRun(buildCopying, options);
 
     expect(derived.outcome).toEqual({ population: 'derived', stored: 'written' });
     expect(served.outcome).toEqual({ population: 'store', stored: 'hit' });
+  });
+
+  it('hands every reference form to the run database, and only the AST forms to the process', async () => {
+    // A markdown link (AST) beside a bare token and an `@` import (lexical).
+    await write(DOC_A, '# A\n\nSee [b](./docs/b.md), docs/b.md and @docs/b.md.\n');
+    await write('docs/b.md', '# B\n');
+    const store = new FakeFactStore();
+    const options = { root: suite.tempDir, cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH } };
+
+    const derived = await inOwnRun(buildCopying, options);
+    const served = await inOwnRun(buildCopying, options);
+
+    // Derived: the run's own rows, every form.
+    if (!('rows' in derived.blobReferences)) throw new Error('a derived population hands its own rows');
+    const forms = new Set(derived.blobReferences.rows.map((row) => row.syntacticForm));
+    expect(forms).toContain('markdown-link');
+    expect([...forms].some((form) => !AST_SYNTACTIC_FORMS.has(form)), 'the fixture carries a lexical form').toBe(true);
+    // Served: the store, for exactly the keys the hit admitted, and the same AST rows in process.
+    expect(served.outcome).toEqual({ population: 'store', stored: 'hit' });
+    if (!('stored' in served.blobReferences)) throw new Error('a hit hands the store');
+    const keyed = new Set(served.projection.resourceRealizations.flatMap((row) => (row.contentKey === null ? [] : [row.contentKey])));
+    expect(new Set(served.blobReferences.stored.contentKeys)).toStrictEqual(keyed);
+    expect(served.projection.astReferences).toStrictEqual(derived.projection.astReferences);
+    expect(derived.projection.astReferences.every((row) => AST_SYNTACTIC_FORMS.has(row.syntacticForm))).toBe(true);
+    expect(derived.projection.astReferences.length).toBeGreaterThan(0);
   });
 
   it('derives the blob rows a query reads', async () => {
@@ -359,13 +394,13 @@ describe('buildResourceProjection', () => {
     await write(DOC_A, '# A\n\nSee [b](./docs/b.md).\n');
     await write('docs/b.md', '# B\n');
 
-    const { projection } = await inOwnRun(buildResourceProjection, {
+    const { projection } = await inOwnRun(buildCopying, {
       root: suite.tempDir,
     });
 
     expect(projection.blobs.length).toBeGreaterThan(0);
     expect(projection.blobSections.length).toBeGreaterThan(0);
-    expect(projection.blobReferences.length).toBeGreaterThan(0);
+    expect(projection.astReferences.length).toBeGreaterThan(0);
   });
 
   it('describes the same membership as the population lane', async () => {
@@ -380,7 +415,7 @@ describe('buildResourceProjection', () => {
     await write(DOC_A, '# A\n');
     await write('docs/b.md', '# B\n');
 
-    const { projection } = await inOwnRun(buildResourceProjection, {
+    const { projection } = await inOwnRun(buildCopying, {
       root: suite.tempDir,
     });
     const realizedFiles = projection.resourceRealizations
@@ -398,7 +433,7 @@ describe('buildResourceProjection', () => {
     // sees.
     const tracker = await buildIgnoredFixture();
 
-    const { projection } = await inOwnRun(buildResourceProjection, {
+    const { projection } = await inOwnRun(buildCopying, {
       root: suite.tempDir,
       gitTracker: tracker,
     });
@@ -419,7 +454,7 @@ describe('buildResourceProjection', () => {
     await write('.claude/rules/scoped.md', RULE_WITH_ONE_DEAD_GLOB);
     await write('docs/guide.md', '# Guide\n');
 
-    const { projection } = await inOwnRun(buildResourceProjection, {
+    const { projection } = await inOwnRun(buildCopying, {
       root: suite.tempDir,
     });
 
@@ -457,7 +492,7 @@ describe('one question for every resources lane', () => {
     const root = suite.tempDir;
 
     const membership = await keyOf((cache) => inOwnRun(buildResourcePopulation, { outputs: [], root, cache }));
-    const query = await keyOf((cache) => inOwnRun(buildResourceProjection, { root, cache }));
+    const query = await keyOf((cache) => inOwnRun(buildCopying, { root, cache }));
     const lens = await keyOf((cache) => inOwnRun(buildClaudeContextPopulation, { root, cache }));
 
     expect(membership).toBeDefined();
@@ -474,7 +509,7 @@ describe('one question for every resources lane', () => {
     const contributorIds = (projection: { zoneProvenance: readonly { contributorId: string }[] }): Set<string> =>
       new Set(projection.zoneProvenance.map((row) => row.contributorId));
 
-    const resources = contributorIds((await inOwnRun(buildResourceProjection, { root })).projection);
+    const resources = contributorIds((await inOwnRun(buildCopying, { root })).projection);
     const lens = contributorIds((await inOwnRun(buildClaudeContextPopulation, { root })).projection);
 
     // The discriminator: the classifiers as well as the enumerator.
@@ -490,14 +525,14 @@ describe('one question for every resources lane', () => {
     const store = new FakeFactStore();
     const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
     const options = { root: suite.tempDir, gitTracker, cache };
-    const { projection } = await inOwnRun(buildResourceProjection, options);
+    const { projection } = await inOwnRun(buildCopying, options);
     const evicted = projection.resourceRealizations.find((row) => row.path === COMMITTED)?.contentKey;
     expect(evicted).toEqual(expect.any(String));
     store.forgetBlobFacts(evicted ?? '');
 
     const membership = await inOwnRun(buildResourcePopulation, { ...options, outputs: [] });
-    const full = await inOwnRun(buildResourceProjection, options);
-    const healed = await inOwnRun(buildResourceProjection, options);
+    const full = await inOwnRun(buildCopying, options);
+    const healed = await inOwnRun(buildCopying, options);
 
     expect(membership.outcome).toEqual({ population: 'store', stored: 'hit' });
     expect(full.outcome).toEqual({ population: 'derived', stored: 'written' });

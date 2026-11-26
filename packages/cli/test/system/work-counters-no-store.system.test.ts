@@ -20,7 +20,7 @@
 import type { WorkCounter } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { runWithWorkCounters } from '../helpers/work-counter-run.js';
+import { runWithWorkCounters, soleProcessCounters } from '../helpers/work-counter-run.js';
 import { writeCommittedCorpus } from '../test-helpers.js';
 
 import { MARKDOWN_AND_SKILLS_CONFIG, createSkillMarkdown, createSuiteContext } from './test-common.js';
@@ -51,17 +51,14 @@ const HELD = ['skillText.storeMiss', 'skillText.noStore', 'store.reads.extent', 
  */
 async function heldCounters(args: readonly string[], storeOff: boolean): Promise<Record<(typeof HELD)[number], number>> {
   const root = writeCommittedCorpus(context.createTempDir(), FILES);
-  const { result, dumps } = await runWithWorkCounters(context, root, args.map((arg) => (arg === '{root}' ? root : arg)), {
+  const run = await runWithWorkCounters(context, root, args.map((arg) => (arg === '{root}' ? root : arg)), {
     cacheDir: context.createTempDir(),
     tmpDir: null,
     storeOff,
     probeRoot: null,
     cores: null,
   });
-  expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-  const [dump, ...others] = dumps;
-  if (dump === undefined || others.length > 0) throw new Error(`expected one CLI process, got ${String(dumps.length)}`);
-  return Object.fromEntries(HELD.map((counter) => [counter, dump.counters[counter]])) as Record<(typeof HELD)[number], number>;
+  return soleProcessCounters(run, HELD);
 }
 
 beforeAll(() => {

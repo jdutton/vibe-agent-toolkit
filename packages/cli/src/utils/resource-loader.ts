@@ -123,6 +123,7 @@ function markingBlobReads(store: FactStore): FactStore {
     writeExtent: (key, rows) => store.writeExtent(key, rows),
     readExtent: (key, request) => store.readExtent(key, request),
     close: () => store.close(),
+    attachedTo: (target, schema, work) => store.attachedTo(target, schema, work),
   };
 }
 

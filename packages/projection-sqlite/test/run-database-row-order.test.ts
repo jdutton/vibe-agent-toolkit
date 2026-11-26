@@ -40,7 +40,7 @@ interface Answers {
 
 /** Hydrate `blob_conditions` from `rows`, in that order, and ask it. */
 async function conditionsAnswers(rows: readonly Record<string, unknown>[]): Promise<Answers> {
-  const database = hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['blob_conditions', rows]]) });
+  const database = hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['blob_conditions', { rows }]]) });
   try {
     return {
       all: database.query('SELECT * FROM "blob_conditions"'),

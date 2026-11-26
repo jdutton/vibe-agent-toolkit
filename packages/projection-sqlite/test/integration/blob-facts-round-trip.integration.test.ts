@@ -260,7 +260,7 @@ beforeAll(async () => {
       root,
       run,
       cache: { store: writer, treeHash: 'blob-round-trip', treeUnchanged: () => true },
-    }));
+    }, 'copy'));
     for (const row of projection.resourceRealizations) {
       if (row.contentKey !== null) keyOf.set(row.path, row.contentKey);
     }

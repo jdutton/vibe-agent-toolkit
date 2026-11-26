@@ -868,6 +868,26 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Fix:** PR 1 slice S6 (inventory on the resources population). Either the two lanes ask one
   question, or the context id carries the parameter set so the two contexts coexist.
 
+### A warm `vat validate` decodes the same stored rows in the parent and again in its checks child
+
+- **Severity:** Minor · **Effort:** M (hand the child the parent's decoded rows, or have the parent
+  answer the checks) · **User-visible:** yes (time, not answers)
+- **Mechanism:** the parent and its supervised checks child are separate processes, each with its
+  own run reader (`PopulationRun.stored`, `stored-reads.ts`), so each decodes what it reads from the
+  one store file. `store.rows.decoded.repeated` is per process and counts neither copy, which is
+  why the system arms assert it zero in each. On one adopter's tree (one sample each), a warm run's
+  parent decoded 126,509 rows and its child 190,349, the parent's rows a subset of the child's
+  request; an edit run's parent decoded 362,807. The child's `blob_references` are copied inside
+  SQLite rather than decoded, so the overlap is the extent and the AST blob tier.
+- **Reproduce:** `VAT_WORK_COUNTERS=<dir> vat validate` twice on a committed tree with the store on;
+  compare `store.rows.decoded.persistent` in the parent's dump (the one with a `resources` phase)
+  with the child's.
+- **Where:** the checks child's population in
+  [`projection-query.ts`](../../packages/cli/src/utils/projection-query.ts)
+  (`withQueriedProjection`); the parent's in the validate orchestrator.
+- **Fix:** a tracked cost, not yet designed: the child is a process of its own so its budget can
+  stop it, which is the reason the rows are not shared today.
+
 ### A tracked file deleted but not yet staged is enumerated, then reported unreadable
 
 - **Severity:** Important · **Effort:** S · **User-visible:** traced, not shown — the mechanism is

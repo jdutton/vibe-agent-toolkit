@@ -13,6 +13,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { emptyBlobRows, type FactStore } from '../../src/index.js';
 import type { PopulationCache } from '../../src/projection/merge.js';
 import { type HomeSettlement, RunPopulation, withRunPopulation } from '../../src/projection/run-population.js';
+import { noDatabaseFile } from '../fake-fact-store.js';
 
 const roots: string[] = [];
 afterAll(() => {
@@ -26,6 +27,7 @@ const EMPTY_STORE: FactStore = {
   writeExtent: () => Promise.resolve(),
   readExtent: () => Promise.resolve(undefined),
   close: () => Promise.resolve(),
+  attachedTo: noDatabaseFile,
 };
 const CACHE: PopulationCache = { store: EMPTY_STORE, treeHash: 'test-tree-hash', treeUnchanged: () => true };
 

@@ -150,6 +150,7 @@ import {
 } from './merge.js';
 import { resourceContributors } from './resource-population.js';
 import type { PopulationRun } from './run-population.js';
+import { ALL_EXTENT_REQUEST } from './store.js';
 
 /**
  * The claude-context population, and ONE provenance for it.
@@ -374,6 +375,10 @@ type ImportRoots =
  * same unlistable-directory staleness gate `populate` applies before serving
  * one.
  *
+ * The whole extent is read, not the membership tables alone: the population that follows reads
+ * the same tree's whole extent, and the run's reader (`stored-reads.ts`) answers it from this one
+ * read, so the run decodes each extent row once.
+ *
  * ⚠️ Only the filesystem contributor is asked for, deliberately: it is the one
  * whose rows are the enumeration, and the roots read nothing any other
  * contributor writes. Asking for more could only cost the hit: the `@`-import
@@ -392,7 +397,7 @@ async function importRoots(
 ): Promise<ImportRoots> {
   const stored = await readStoredMembership(populateOptions, [
     { id: filesystemId, parameterSet: DECLINE_IGNORED },
-  ]);
+  ], ALL_EXTENT_REQUEST);
   if (stored !== undefined) return { population: 'store', roots: claudeImportRootsFrom(stored.resourceRealizations) };
 
   const root = populateOptions.root;

@@ -96,8 +96,10 @@ export {
 // storage contract.
 export {
   type ProjectionCompileProbe,
+  type RelationSource,
   type RunDatabase,
   type RunDatabaseHydration,
+  type StoredRows,
   hydrateRunDatabase,
   openProjectionCompileProbe,
 } from './run-database.js';

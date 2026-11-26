@@ -61,11 +61,12 @@ import type {
   ExtentScopedRows,
   ExtentScopedTableName,
   FactStore,
+  StoreAttachTarget,
 } from '../src/projection/store.js';
-import { PROJECTION_STORE_READ_FAILED_CODE } from '../src/projection/stored-admission.js';
+import { PROJECTION_STORE_READ_FAILED_CODE } from '../src/projection/stored-reads.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
-import { FailingBlobStore, FakeFactStore } from './fake-fact-store.js';
+import { FailingBlobStore, FakeFactStore, noDatabaseFile } from './fake-fact-store.js';
 import { inOwnRun } from './helpers/population-run.js';
 import { setupSubdirTestSuite, useCorpusSuite } from './test-helpers.js';
 
@@ -177,6 +178,11 @@ class BrokenFactStore implements FactStore {
   async close(): Promise<void> {
     throw new Error(STORE_FAILURE);
   }
+
+  /** No database file to attach. */
+  attachedTo(): never {
+    return noDatabaseFile();
+  }
 }
 
 /**
@@ -231,6 +237,10 @@ class HarnesslessFactStore implements FactStore {
   /** @returns The inner store's close */
   close(): Promise<void> {
     return this.inner.close();
+  }
+
+  attachedTo<T>(target: StoreAttachTarget, schema: string, work: () => T): T {
+    return this.inner.attachedTo(target, schema, work);
   }
 }
 
@@ -776,12 +786,11 @@ describe('populate through a projection store', () => {
 
       const deriving = await run({ registry: filesystemOnly(), store });
 
-      // Two reads, each its own question: the extent hit's coverage read finds
-      // the keys uncovered and misses, then derivation reads the tier for the
-      // keys it may reuse, as it does on every deriving path (`deriveProjection`
-      // in merge.ts). Sharing the first read with derivation would be a speed
-      // change, not a correctness one.
-      expect(store.readBlobFactsCalls).toBe(2);
+      // One read: the extent hit's coverage read finds the keys uncovered and
+      // misses, and derivation reuses what that read decoded through the
+      // run's one store reader (`stored-reads.ts`) instead of reading
+      // the same keys again.
+      expect(store.readBlobFactsCalls).toBe(1);
       expect(deriving.contributorRuns).toContain(`${FILESYSTEM_ID}@1`);
       expect(deriving.projection.blobs.length).toBeGreaterThan(0);
       expect(store.writeBlobFactsCalls).toBe(1);

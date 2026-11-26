@@ -25,10 +25,14 @@ import { GitTracker, gitTreeSnapshot, runGitOrThrow } from '@vibe-agent-toolkit/
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { CLAUDE_RULE_GLOB_INERT_CHECK } from '../../src/projection/builtin-checks.js';
-import type { Projection } from '../../src/projection/projection.js';
+import type { TreePopulationOptions } from '../../src/projection/merge.js';
+import type { QueryProjection , QueryPopulateResult } from '../../src/projection/query-projection.js';
 import { buildResourceProjection } from '../../src/projection/resource-population.js';
 import { inOwnRun } from '../helpers/population-run.js';
 import { plantTree, razeTree } from '../helpers/temp-corpus.js';
+
+/** The query lane's population, copying a hit's references as `vat resources query` does with no populating lens. */
+const buildCopying = (options: TreePopulationOptions): Promise<QueryPopulateResult> => buildResourceProjection(options, 'copy');
 
 /** A document whose name carries a backslash — ONE file directly under `docs/`. */
 const BACKSLASH_DOC = String.raw`docs/x\y.md`;
@@ -99,17 +103,17 @@ async function crawled(root: string): Promise<string[]> {
 }
 
 /** The resources lane over `root`, with a real ignore oracle when it is a repository. */
-async function populate(root: string, withGit: boolean): Promise<Projection> {
-  if (!withGit) return (await inOwnRun(buildResourceProjection, { root })).projection;
+async function populate(root: string, withGit: boolean): Promise<QueryProjection> {
+  if (!withGit) return (await inOwnRun(buildCopying, { root })).projection;
   const gitTracker = new GitTracker(root);
   await gitTracker.initialize();
   // Positive control: an unusable tracker would silently turn this into the walk arm.
   expect(gitTracker.isUsable()).toBe(true);
-  return (await inOwnRun(buildResourceProjection, { root, gitTracker })).projection;
+  return (await inOwnRun(buildCopying, { root, gitTracker })).projection;
 }
 
 /** Assert the backslash names survived the lane, in both realization and rule tables. */
-function expectBackslashNamesKept(projection: Projection): void {
+function expectBackslashNamesKept(projection: QueryProjection): void {
   const doc = projection.resourceRealizations.find((row) => row.path === BACKSLASH_DOC);
   expect(doc).toMatchObject({ exists: true, isDirectory: false, dir: 'docs' });
   expect(doc?.contentKey).not.toBeNull();

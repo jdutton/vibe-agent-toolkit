@@ -85,8 +85,12 @@ columns the parser does not yet carry, and the zone modeling several tables depe
 
 ✅ **Querying, shipped.** Each run hydrates a fresh in-memory database with only the projection
 tables its statements name, copied from the run's own populated rows in canonical order
-(`compareRows`), so a statement without `ORDER BY` answers alike warm and cold. Nothing is read
-from the shared store by SQL, and nothing is attached while a statement runs. A relation the run
+(`compareRows`), so a statement without `ORDER BY` answers alike warm and cold. On a store hit,
+`blob_references` alone is copied inside SQLite from the store, attached read-only, for exactly the
+content keys the hit admitted and in primary-key order (equal to `compareRows`); the in-process
+projection holds only its AST reference forms (`QueryProjection.astReferences`), so the lexical rows
+are never decoded. The store is detached before any statement runs, so nothing is attached while one
+runs, and no other repository's rows reach the run database. A relation the run
 did not hydrate does not exist there, so a statement reaching it refuses instead of reading it empty
 (I1), and `EXPLAIN` at prepare refuses schema introspection, so a statement cannot observe which
 relations a run holds. In a run holding more than one root, a relation with a root-relative path

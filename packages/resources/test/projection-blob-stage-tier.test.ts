@@ -1,10 +1,10 @@
 /**
  * The blob stage over a stored tier: a covered key's rows land where a parse would put them,
- * whatever order the store returns them in, and a key a demand promotion adds is read from the
- * tier once more, alone, and served when the store covers it.
+ * whatever order the store returns them in, a key's rows come from one read, and a key a demand
+ * promotion adds is read from the tier once more, alone, and served when the store covers it.
  */
 
-import { readWorkCounters } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, readWorkCounters } from '@vibe-agent-toolkit/utils';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { parseLookupsIn } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -15,11 +15,13 @@ import { blobRowsByKey } from '../src/projection/blob-resource-facts.js';
 import { RunContentCache } from '../src/projection/content-cache.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
-import { afterClosurePromotion, type BlobStage, storedTierReads } from '../src/projection/merge.js';
+import { afterClosurePromotion, type BlobStage } from '../src/projection/merge.js';
 import { type Projection, ProjectionBuilder } from '../src/projection/projection.js';
+import { QUERY_BLOB_REQUEST } from '../src/projection/query-projection.js';
 import { diskRunContentSource } from '../src/projection/run-population.js';
 import { emptyBlobRows, keyedContentKeys, storedBlobTier } from '../src/projection/store-hydration.js';
-import type { BlobScopedRows } from '../src/projection/store.js';
+import { ALL_BLOB_REQUEST, type BlobRequest, type BlobScopedRows, type BlobScopedTableName, EXTENT_STEP_TABLES } from '../src/projection/store.js';
+import { runStoredReads, storedTierReads } from '../src/projection/stored-reads.js';
 import type { BlobConditionRow } from '../src/schemas/projection-blobs.js';
 
 import { baseBuilderForRoot, populateBlobsOnOwnDispatcher } from './blob-fixture-population.js';
@@ -81,6 +83,159 @@ describe('a covered key\'s stored rows, in reversed order', () => {
   });
 });
 
+/** Each table's rows in a canonical order, so two tiers compare whatever order their reads joined in. */
+function canonical(rows: BlobScopedRows): Record<string, string[]> {
+  const source = rows as unknown as Record<string, readonly unknown[]>;
+  return Object.fromEntries(Object.entries(source).map(([table, tableRows]) => [table, tableRows.map((row) => JSON.stringify(row)).sort(compareCodeUnits)]));
+}
+
+/** A store that records every blob request it is asked, and the keys of each. */
+class RecordingStore extends FakeFactStore {
+  readonly asked: BlobRequest<BlobScopedTableName>[] = [];
+  readonly readKeys: (readonly string[])[] = [];
+
+  override readBlobFacts<Table extends BlobScopedTableName>(contentKeys: readonly string[], request: BlobRequest<Table>): Promise<Pick<BlobScopedRows, Table>> {
+    this.asked.push(request as unknown as BlobRequest<BlobScopedTableName>);
+    this.readKeys.push(contentKeys);
+    return super.readBlobFacts(contentKeys, request);
+  }
+}
+
+/** Each request as the store was asked it: tables, and the reference forms sorted. */
+function askedOf(store: RecordingStore): { tables: readonly string[]; forms: string | string[] }[] {
+  return store.asked.map((request) => ({ tables: request.tables, forms: request.referenceForms === 'all' ? 'all' : [...request.referenceForms].sort(compareCodeUnits) }));
+}
+
+/** A store holding `derived`'s blob tier, recording what it is asked. */
+async function recordingStoreOf(derived: Projection): Promise<RecordingStore> {
+  const store = new RecordingStore();
+  await store.writeBlobFacts({ rows: storableBlobFacts({ ...emptyBlobRows(), ...blobTables(derived) }), coveredAtRead: [], settledAtRead: [] });
+  return store;
+}
+
+/** A tier over its own run's reads of `store`. */
+function tierOver(store: FakeFactStore): ReturnType<typeof storedTierReads> {
+  return storedTierReads(runStoredReads().of(store));
+}
+
+/** Two documents with AST and lexical references, populated store-off. */
+async function twoDocuments(): Promise<Projection> {
+  // A markdown link (an AST form), a bare token and an `@` import (lexical forms).
+  writeFileIn(suite.tempDir, 'doc.md', '# Doc\n\nSee [other](./other.md), other.md and @other.md.\n');
+  writeFileIn(suite.tempDir, 'other.md', '# Other\n');
+  const builder = await baseBuilderForRoot(suite.tempDir);
+  await populateBlobsOnOwnDispatcher(builder);
+  return builder.build();
+}
+
+describe('one reader for a hit and the derivation after it', () => {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(suite.beforeEach);
+
+
+  it('reads a key again whole under a wider request, and holds what one whole read holds', async () => {
+    const derived = await twoDocuments();
+    const keys = keyedContentKeys(derived);
+    const store = await recordingStoreOf(derived);
+    // The premise: the store holds rows of both kinds of form.
+    expect(derived.blobReferences.some((row) => QUERY_BLOB_REQUEST.referenceForms !== 'all' && QUERY_BLOB_REQUEST.referenceForms.has(row.syntacticForm))).toBe(true);
+    expect(derived.blobReferences.some((row) => QUERY_BLOB_REQUEST.referenceForms !== 'all' && !QUERY_BLOB_REQUEST.referenceForms.has(row.syntacticForm))).toBe(true);
+
+    const reader = tierOver(store);
+    await reader.cover(keys, QUERY_BLOB_REQUEST);
+    const joined = await reader.cover(keys, ALL_BLOB_REQUEST);
+    await reader.cover(keys, ALL_BLOB_REQUEST);
+    const asked = askedOf(store);
+    const once = await tierOver(store).cover(keys, ALL_BLOB_REQUEST);
+
+    expect(asked, 'the hit, then every key again whole, and a repeated cover reads nothing').toEqual([
+      { tables: QUERY_BLOB_REQUEST.tables, forms: QUERY_BLOB_REQUEST.referenceForms === 'all' ? 'all' : [...QUERY_BLOB_REQUEST.referenceForms].sort(compareCodeUnits) },
+      { tables: ALL_BLOB_REQUEST.tables, forms: 'all' },
+    ]);
+    expect(canonical(joined.rows)).toEqual(canonical(once.rows));
+    expect([...joined.covered].sort(compareCodeUnits)).toEqual([...once.covered].sort(compareCodeUnits));
+  });
+
+  it('judges a key evicted between a hit and the wider read uncovered, holding none of its rows', async () => {
+    const derived = await twoDocuments();
+    const keys = keyedContentKeys(derived);
+    const [evicted] = keys;
+    if (evicted === undefined || keys.length < 2) throw new Error('the premise: two keyed documents');
+    const store = await recordingStoreOf(derived);
+
+    const reader = tierOver(store);
+    const hit = await reader.cover(keys, QUERY_BLOB_REQUEST);
+    expect(hit.covered.has(evicted), 'the hit covered it').toBe(true);
+    // Another process's eviction, between the hit's read and the derivation's.
+    store.forgetBlobFacts(evicted);
+    const widened = await reader.cover(keys, ALL_BLOB_REQUEST);
+
+    expect(widened.covered.has(evicted), 'a key gone from the store is not covered').toBe(false);
+    expect(widened.rows.blobs.some((row) => row.contentKey === evicted), 'no row of it from the earlier read').toBe(false);
+    expect(widened.rows.blobReferences.some((row) => row.blob === evicted), 'neither form of reference').toBe(false);
+    expect([...widened.covered].sort(compareCodeUnits)).toEqual(keys.filter((key) => key !== evicted).sort(compareCodeUnits));
+  });
+
+  it('keeps every earlier key\'s coverage when a later read asks for one key', async () => {
+    const derived = await twoDocuments();
+    const keys = keyedContentKeys(derived);
+    const store = await recordingStoreOf(derived);
+    const once = await tierOver(store).cover(keys, ALL_BLOB_REQUEST);
+    const [first] = keys;
+    if (first === undefined || once.covered.size < 2) throw new Error('the premise: two covered keys');
+
+    const partial = tierOver(store);
+    await partial.cover(keys, QUERY_BLOB_REQUEST);
+
+    expect([...(await partial.cover([first], ALL_BLOB_REQUEST)).covered].sort(compareCodeUnits)).toEqual([...once.covered].sort(compareCodeUnits));
+  });
+});
+
+describe('a run\'s reads of one store', () => {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(suite.beforeEach);
+
+  it('are one reader for every population of the run, and a write forgets only the keys it may move', async () => {
+    writeFileIn(suite.tempDir, 'doc.md', DOCUMENT);
+    writeFileIn(suite.tempDir, 'other.md', '# Other\n');
+    const builder = await baseBuilderForRoot(suite.tempDir);
+    await populateBlobsOnOwnDispatcher(builder);
+    const derived = builder.build();
+    const keys = keyedContentKeys(derived);
+    const [moved, kept] = keys;
+    if (moved === undefined || kept === undefined) throw new Error('the premise: two keyed documents');
+    const store = await recordingStoreOf(derived);
+    const run = runStoredReads();
+
+    await run.of(store).blobs(keys, ALL_BLOB_REQUEST);
+    await run.of(store).blobs(keys, ALL_BLOB_REQUEST);
+    expect(store.asked, 'two asks of one run read once').toHaveLength(1);
+
+    // A write that covered `kept` at read and not `moved`: only `moved` can have changed.
+    await run.of(store).writeBlobs({ rows: storableBlobFacts({ ...emptyBlobRows(), ...blobTables(derived) }), coveredAtRead: [kept], settledAtRead: [] });
+    await run.of(store).blobs(keys, ALL_BLOB_REQUEST);
+    expect(store.asked, 'the re-read asks for the moved key alone').toHaveLength(2);
+    expect(store.readKeys.at(-1)).toEqual([moved]);
+  });
+
+  it('answer a tree from what they hold when a request differs only in its steps', async () => {
+    const store = new FakeFactStore();
+    const tree = { rootId: 'root', treeHash: 'tree' };
+    const reads = runStoredReads().of(store);
+    const tables = EXTENT_STEP_TABLES.identity;
+
+    await reads.extent(tree, { tables, steps: [] });
+    await reads.extent(tree, { tables, steps: [] });
+    expect(store.readExtentCalls, 'the same request reads once').toBe(1);
+
+    // The store runs no step (the caller does, over the rows), so the held rows answer it.
+    await reads.extent(tree, { tables, steps: ['identity'] });
+    expect(store.readExtentCalls, 'a request differing only in its steps reads nothing').toBe(1);
+  });
+});
+
 /** A tracked document and a gitignored one the default deferral leaves unkeyed until a promotion. */
 const TRACKED = 'README.md';
 const IGNORED = 'ignored/notes.md';
@@ -117,8 +272,8 @@ async function primedStore(tracker: GitTracker): Promise<{ store: FakeFactStore;
 
 /** The stage over `store`, its base read and populate done, as `deriveProjection` runs it. */
 async function stageOverBase(builder: ProjectionBuilder, dispatcher: ParseDispatcher, store: FakeFactStore): Promise<BlobStage> {
-  const stage: BlobStage = { dispatcher, content: diskRunContentSource(builder.base().contentCache), tier: storedTierReads(store) };
-  const stored = await stage.tier.cover(keyedContentKeys(builder.base()));
+  const stage: BlobStage = { dispatcher, content: diskRunContentSource(builder.base().contentCache), tier: tierOver(store) };
+  const stored = await stage.tier.cover(keyedContentKeys(builder.base()), ALL_BLOB_REQUEST);
   await populateBlobs(builder, { dispatcher, content: stage.content, stored });
   return stage;
 }

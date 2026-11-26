@@ -280,6 +280,23 @@ export const PROJECTION_SQLITE_IMPORTERS = [
 ];
 
 /**
+ * The files that may reach the `FactStore` port's stored-fact members (`readBlobFacts`,
+ * `readExtent`, `writeBlobFacts`, `writeExtent`) or import the resources testing helpers: the run's
+ * one stored reader, the shipped writer contract suite and the barrel that exports it, and test
+ * suites, which drive a store directly. Everything else reads and writes stored facts through
+ * `run.stored.of(store)`, so `local/fact-store-access-boundary` is enabled everywhere these do not
+ * match; an exact forwarding wrapper of the same name is allowed by the rule itself. Asserted both
+ * ways against the tree by
+ * `dev-tools/test/integration/fact-store-access-boundary.integration.test.ts`.
+ */
+export const FACT_STORE_ACCESSORS = [
+  'packages/resources/src/projection/stored-reads.ts',
+  'packages/resources/src/testing/**',
+  'packages/resources/src/testing.ts',
+  'packages/*/test/**',
+];
+
+/**
  * The allowlist of `local/no-link-following-fs`: the files of product source that may ask the
  * kernel to FOLLOW a link (`stat`, `existsSync`, `realpath`, an untyped `symlink`) with no walk of
  * the chain first, and HOW MANY such calls each holds. NOT a ratchet of offenders — every crawled
@@ -1340,6 +1357,17 @@ export default [
     },
     rules: {
       'local/projection-sqlite-import-boundary': 'error',
+    },
+  },
+  // A run reads and writes stored facts through its one reader (see FACT_STORE_ACCESSORS).
+  {
+    files: ['**/*.{ts,cts,mts,js,cjs,mjs}'],
+    ignores: FACT_STORE_ACCESSORS,
+    plugins: {
+      local: localRules,
+    },
+    rules: {
+      'local/fact-store-access-boundary': 'error',
     },
   },
   // The skill-text core computes from SKILL_TEXT_DECLARATION alone, so the declaration's digest

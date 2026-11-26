@@ -13,7 +13,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import {
   buildResourceProjection,
   PROJECTION_STATEMENT_REFUSED_CODE,
-  type Projection,
+  type QueryProjection,
+  type QueryReferenceSource,
   queryableRelationNames,
   withPopulationRun,
 } from '@vibe-agent-toolkit/resources';
@@ -31,14 +32,15 @@ const NAMES_BLOBS = 'SELECT COUNT(*) AS n FROM blobs';
 const NAMES_REALIZATIONS = 'SELECT path FROM resource_realizations';
 
 let root: string;
-let projection: Projection;
+let projection: QueryProjection;
+let blobReferences: QueryReferenceSource;
 
 beforeAll(async () => {
   root = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-hydration-'));
   mkdirSyncReal(safePath.join(root, 'docs'));
   writeFileSync(safePath.join(root, 'docs', 'a.md'), '# A\n\nSee [b](./b.md).\n');
   writeFileSync(safePath.join(root, 'docs', 'b.md'), '# B\n');
-  ({ projection } = await withPopulationRun((run) => buildResourceProjection({ root, run })));
+  ({ projection, blobReferences } = await withPopulationRun((run) => buildResourceProjection({ root, run }, 'copy')));
 });
 
 afterAll(() => {
@@ -58,7 +60,7 @@ function thrownBy(run: () => unknown): unknown {
 describe('hydrateRunDatabase: a statement naming only blobs', () => {
   it('hydrates exactly the run\'s blob rows, and no other relation exists', async () => {
     expect(projection.blobs.length, 'the fixture holds no blob, so the count below is vacuous').toBeGreaterThan(0);
-    const database = await hydrateRunDatabase(projection, planHydration({ statements: [NAMES_BLOBS], roots: projection.roots }));
+    const database = await hydrateRunDatabase({ projection, blobReferences }, planHydration({ statements: [NAMES_BLOBS], roots: projection.roots }));
     try {
       expect(database.query(NAMES_BLOBS)[0]?.['n']).toBe(projection.blobs.length);
       for (const name of queryableRelationNames().filter((relation) => relation !== 'blobs')) {
@@ -70,7 +72,7 @@ describe('hydrateRunDatabase: a statement naming only blobs', () => {
   });
 
   it('refuses a projection with no root row, since there is no id to file it under', async () => {
-    await expect(hydrateRunDatabase({ ...projection, roots: [] }, { relations: [] })).rejects.toThrow(/no root row/u);
+    await expect(hydrateRunDatabase({ projection: { ...projection, roots: [] }, blobReferences }, { relations: [] })).rejects.toThrow(/no root row/u);
   });
 });
 
@@ -78,10 +80,11 @@ describe('a run holding two roots', () => {
   it('refuses a statement over a withheld relation, naming why and listing none of its columns; blobs answers', async () => {
     const [first] = projection.roots;
     if (first === undefined) throw new Error('the fixture projection has no root row');
-    const twoRoots: Projection = { ...projection, roots: [...projection.roots, { ...first, id: 'root-2', path: '/b' }] };
+    const twoRoots: QueryProjection = { ...projection, roots: [...projection.roots, { ...first, id: 'root-2', path: '/b' }] };
     const outcome = await withPopulationRun((populationRun) => askPopulatedProjection(
       {
         projection: twoRoots,
+        blobReferences,
         outcome: { population: 'derived' },
         root,
         logger: createLogger(),
@@ -108,6 +111,7 @@ async function issuesOf(checks: Readonly<Record<string, { description: string; s
   return withPopulationRun((populationRun) => askPopulatedProjection(
     {
       projection,
+      blobReferences,
       outcome: { population: 'derived' },
       root,
       logger: createLogger(),

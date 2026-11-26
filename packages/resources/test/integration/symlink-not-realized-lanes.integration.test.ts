@@ -22,10 +22,15 @@ import {
   EXTENT_SYMLINK_TARGET_UNRESOLVED,
   isDeclinedSymlinkCode,
 } from '../../src/projection/contributors/filesystem-extent.js';
+import type { TreePopulationOptions } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
+import type { QueryPopulateResult } from '../../src/projection/query-projection.js';
 import { buildResourceProjection } from '../../src/projection/resource-population.js';
 import { withPopulationRun } from '../../src/projection/run-population.js';
 import { plantSymlinkFixture, removeSymlinkFixture } from '../helpers/symlink-fixture.js';
+
+/** The query lane's population, copying a hit's references as `vat resources query` does with no populating lens. */
+const buildCopying = (options: TreePopulationOptions): Promise<QueryPopulateResult> => buildResourceProjection(options, 'copy');
 
 const CLAUDE_TARGET = 'other/CLAUDE.md';
 const CLAUDE_LINK = 'link/CLAUDE.md';
@@ -62,14 +67,14 @@ describe.skipIf(!symlinkCapability())('declined symlinks reach the projection on
   });
 
   it.each([
-    ['the resources lane', buildResourceProjection],
+    ['the resources lane', buildCopying],
     ['the Claude-context lane', buildClaudeContextPopulation],
   ] as const)('%s', async (_label, build) => {
     if (root === undefined) throw new Error('fixture not planted');
     const planted = root;
     const gitTracker = new GitTracker(planted);
     await gitTracker.initialize({ includeUntracked: true });
-    const { projection } = await withPopulationRun<{ projection: Projection }>(async (run) => build({ root: planted, gitTracker, run }));
+    const { projection } = await withPopulationRun<{ projection: Pick<Projection, 'realizationConditions' | 'resourceRealizations'> }>(async (run) => build({ root: planted, gitTracker, run }));
 
     const declined = projection.realizationConditions.filter((row) => isDeclinedSymlinkCode(row.code));
     const paths = declined.map((row) => row.path);

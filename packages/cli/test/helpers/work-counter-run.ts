@@ -7,7 +7,7 @@
 import type { SpawnSyncReturns } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 
-import { safePath, WORK_COUNTERS_ENV, type WorkCounterDump, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
+import { safePath, WORK_COUNTERS_ENV, type WorkCounter, type WorkCounterDump, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { expect } from 'vitest';
 
 import { VALIDATE_DEBUG_FACTS_ENV, type ValidateDebugFacts } from '../../src/commands/validate-debug-facts.js';
@@ -55,6 +55,20 @@ interface WorkCounterRun {
    * declined it. Empty for a run that does not pin its cores, or a verb that writes none.
    */
   readonly debugFacts: readonly ValidateDebugFacts[];
+}
+
+/**
+ * The counters `held` of a run that passed and ran one CLI process.
+ *
+ * @param run - The run
+ * @param held - The counters to read
+ * @returns Each held counter's count in that process
+ */
+export function soleProcessCounters<Counter extends WorkCounter>(run: WorkCounterRun, held: readonly Counter[]): Record<Counter, number> {
+  expect(run.result.status, `${run.result.stdout}\n${run.result.stderr}`).toBe(0);
+  const [dump, ...others] = run.dumps;
+  if (dump === undefined || others.length > 0) throw new Error(`expected one CLI process, got ${String(run.dumps.length)}`);
+  return Object.fromEntries(held.map((counter) => [counter, dump.counters[counter]])) as Record<Counter, number>;
 }
 
 /**

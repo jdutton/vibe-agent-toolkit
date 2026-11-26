@@ -43,8 +43,10 @@ import type {
   ExtentScopedRows,
   FactStore,
 } from '../src/projection/store.js';
+import { runStoredReads } from '../src/projection/stored-reads.js';
 import type { CollectionConfig } from '../src/schemas/project-config.js';
 
+import { noDatabaseFile } from './fake-fact-store.js';
 import { inOwnRun } from './helpers/population-run.js';
 import { setupTempCorpus } from './helpers/temp-corpus.js';
 
@@ -137,6 +139,11 @@ class KeyRecordingStore implements FactStore {
   async close(): Promise<void> {
     // Nothing is held open.
   }
+
+  /** No database file to attach. */
+  attachedTo(): never {
+    return noDatabaseFile();
+  }
 }
 
 /**
@@ -168,7 +175,7 @@ async function storeKeyFor(
     const content = new RunContentCache();
     const dispatcher = new ParseDispatcher(defaultParseCache(), { content, limits: dispatcherLimits });
     try {
-      await populate({ ...options, run: { content, dispatcher } });
+      await populate({ ...options, run: { content, dispatcher, stored: runStoredReads() } });
     } finally {
       await dispatcher.shutdown();
     }

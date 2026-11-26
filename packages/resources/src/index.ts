@@ -252,8 +252,20 @@ export {
   resolveEdges,
   type EdgeEvaluationOptions,
   type EdgeLens,
+  type EdgeLensProjection,
   type EdgeRelation,
 } from './projection/edge-lens.js';
+
+// The query lane's in-memory projection: every table, and of `blob_references` the AST forms
+// only, under their own field, so code reading a lexical reference from it does not compile. The
+// run database takes every form from the population's source instead.
+export {
+  PROJECTION_STORE_ROWS_EVICTED_CODE,
+  type QueryPopulateResult,
+  type QueryProjection,
+  type QueryReferences,
+  type QueryReferenceSource,
+} from './projection/query-projection.js';
 
 // Where one reference points, as a path. Shared with the closure walk so the
 // corpus has ONE answer to that question.
@@ -388,6 +400,7 @@ export {
   type ExtentScopedTableName,
   type BlobFactsWrite,
   type FactStore,
+  type StoreAttachTarget,
   type HarnessPair,
   type ProjectionTableNamesOfScope,
   isProjectionStoreDirectoryName,
@@ -1101,9 +1114,9 @@ export { parserKindOf } from './projection/router.js';
 // and what the stored admission reads of the tier, which the CLI's in-process cost arms damage table by table.
 // `hydratesUnder` and `storedComputeBy` are warm admission's own predicates, exported so `vat
 // validate`'s checks overlap gate judges "admitted from the store" by them, never by a copy.
+export { PROJECTION_STORE_READ_FAILED_CODE } from './projection/stored-reads.js';
 export {
   ADMISSION_BLOB_REQUEST,
-  PROJECTION_STORE_READ_FAILED_CODE,
   hydratesUnder,
   storedComputeBy,
   type StoredComputeBy,

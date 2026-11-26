@@ -59,8 +59,9 @@ import {
   StoreQuestionUnavailableError,
   type FactStore,
   type PopulationCache,
-  type Projection,
   type ProjectionTableName,
+  type QueryProjection,
+  type QueryReferenceSource,
   vatCacheRoot,
 } from '@vibe-agent-toolkit/resources';
 import {
@@ -386,6 +387,8 @@ function codingFailures(store: FactStore, coded: (error: unknown) => unknown): F
     writeExtent: (key, rows) => store.writeExtent(key, rows).catch(rethrowCoded),
     readExtent: (key, request) => store.readExtent(key, request).catch(rethrowCoded),
     close: () => store.close(),
+    // Uncoded: an eviction `work` throws keeps its own code, which the query lane retries on.
+    attachedTo: (target, schema, work) => store.attachedTo(target, schema, work),
   };
 }
 
@@ -516,7 +519,18 @@ function replaceUnopenableStore(
 }
 
 /**
- * Hydrate the run database from one run's projection: the one handle SQL runs on,
+ * What hydration fills a run database from: the run's own query projection, and where its
+ * `blob_references` come from (a stored source carries the store the hit read).
+ */
+interface RunHydrationSources {
+  /** The run's populated query projection: every relation's rows but `blob_references`. */
+  readonly projection: QueryProjection;
+  /** Where `blob_references` come from: the run's own rows, or the store the hit read, for its keys. */
+  readonly blobReferences: QueryReferenceSource;
+}
+
+/**
+ * Hydrate the run database from one run's population: the one handle SQL runs on,
  * holding exactly the projection tables the plan names, each with this run's rows.
  *
  * 🔑 **This is what keeps the query surface an ANSWER rather than a privilege.**
@@ -526,13 +540,14 @@ function replaceUnopenableStore(
  * would be answerable only where a cache happened to exist, and two callers
  * would hold differently-shaped views of one tree.
  *
- * 🚨 The rows come from `projection` — the run's own population — never from the
- * store: the shared store holds every other repository's rows too. A relation the
- * plan does not name is absent, so a statement reaching it is refused.
+ * 🚨 The rows are the run's own — its projection, or on a store hit the store's
+ * rows for exactly the content keys the hit admitted, copied inside SQLite —
+ * never the store at large: the shared store holds every other repository's rows
+ * too. A relation the plan does not name is absent, so a statement reaching it is refused.
  *
  * Nothing survives the close.
  *
- * @param projection - One run's populated projection
+ * @param sources - The run's projection and its `blob_references` source
  * @param plan - The relations to hydrate, by SQL name
  * @returns The open run database; close it when done
  * @throws Error When the projection has no root row: a driver invariant, since
@@ -540,9 +555,10 @@ function replaceUnopenableStore(
  *   extent-scoped rows under
  */
 export async function hydrateRunDatabase(
-  projection: Projection,
+  sources: RunHydrationSources,
   plan: Pick<HydrationPlan, 'relations'>,
 ): Promise<ProjectionSqlite.RunDatabase> {
+  const { projection } = sources;
   // The key is read OFF the projection rather than re-derived from the root.
   // The driver mints `roots.id` with `rootIdFor` and every
   // `resolution_contexts.rootId` is a foreign key into it, so taking it from
@@ -559,9 +575,23 @@ export async function hydrateRunDatabase(
   const relations = new Map(plan.relations.map((name) => {
     const key = keyOf.get(name);
     if (key === undefined) throw new Error(`"${name}" is not a projection table, so hydration has no rows for it.`);
-    return [name, projection[key]] as const;
+    return [name, relationSource(sources, key)] as const;
   }));
   return (await loadBackend()).hydrateRunDatabase({ rootId, relations });
+}
+
+/**
+ * Where one projection table's rows come from. `blob_references` is the one table the query
+ * projection does not hold in full: its source is the population's, every other table's the
+ * projection's own rows.
+ *
+ * @param sources - The run's sources
+ * @param key - The table's registry key
+ * @returns Its source
+ */
+function relationSource(sources: RunHydrationSources, key: ProjectionTableName): ProjectionSqlite.RelationSource {
+  if (key !== 'blobReferences') return { rows: sources.projection[key] };
+  return sources.blobReferences;
 }
 
 /**

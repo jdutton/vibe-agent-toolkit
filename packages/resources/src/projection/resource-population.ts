@@ -110,18 +110,20 @@ import {
 } from './contributors/filesystem-extent.js';
 import { crawlSourceFor, type CrawlSource, type CrawlSourceKind, type PopulationUnreadablePolicy, type RootListing } from './crawl-source.js';
 import {
+  MEMBERSHIP_EXTENT_REQUEST,
   populate,
+  populateForQuery,
   populationOracles,
   readStoredMembership,
   requestedContributors,
   type PopulateOptions,
-  type PopulateResult,
   type PopulationOutcome,
   type TreePopulationOptions,
 } from './merge.js';
 import type { Projection } from './projection.js';
-import type { FactStore } from './store.js';
+import type { QueryPopulateResult, QueryReferences } from './query-projection.js';
 import { derivedContentOf, storedContentOf, type StoredContent } from './stored-admission.js';
+import type { StoreReads } from './stored-reads.js';
 
 /**
  * Where a registry crawl's file population comes from: a run's enumeration of
@@ -378,7 +380,7 @@ function resourcePopulateOptions(options: TreePopulationOptions, root: string, c
  * choice, so no lane drops its rows by omission.
  */
 type AdmissionRows =
-  | { readonly from: 'store'; readonly store: FactStore }
+  | { readonly from: 'store'; readonly reads: StoreReads }
   | { readonly from: 'projection'; readonly projection: Projection }
   | { readonly from: 'none' };
 
@@ -394,7 +396,7 @@ function admissionContentOf(
   members: ReadonlyArray<{ readonly path: string; readonly row: ResourceRealizationRow }>,
   rows: AdmissionRows,
 ): StoredContent | null {
-  if (rows.from === 'store') return storedContentOf(members, rows.store);
+  if (rows.from === 'store') return storedContentOf(members, rows.reads);
   if (rows.from === 'projection') return derivedContentOf(members, rows.projection);
   return null;
 }
@@ -514,7 +516,7 @@ async function membershipThrough(
 
   // Every contributor's context is requested, so a hit is exactly the rows a
   // derive below would have produced.
-  const stored = await readStoredMembership(populateOptions, requestedContributors(populateOptions));
+  const stored = await readStoredMembership(populateOptions, requestedContributors(populateOptions), MEMBERSHIP_EXTENT_REQUEST);
   // A hit carries what the store holds about each member, so the registry can
   // admit it from the blob tier; a derive with a store carries the blob rows it
   // just derived, so the registry admits from them and computes nothing twice
@@ -524,7 +526,7 @@ async function membershipThrough(
   // the caller's: a store the run may not use is no store here either.
   const { cache } = populateOptions;
   if (stored !== undefined) {
-    return membershipOf(root, stored, source.kind, stored.outcome, cache === undefined ? NO_ADMISSION_ROWS : { from: 'store', store: cache.store });
+    return membershipOf(root, stored, source.kind, stored.outcome, cache === undefined ? NO_ADMISSION_ROWS : { from: 'store', reads: populateOptions.run.stored.of(cache.store) });
   }
 
   const { projection, outcome } = await populate(populateOptions);
@@ -615,16 +617,17 @@ export async function buildResourceListing(
  *   omitted to re-derive every time
  * @param options.collections - The project's `resources.collections`, so a
  *   declared `mimeType` routes the file it matches to a parser
+ * @param references - Where a store hit's `blob_references` reach the run database from (`populateForQuery`)
  * @returns The populated projection and `populate()`'s outcome for it. A
  *   caller that reports refusals passes the projection to `describeBlobRefusals`,
  *   which reads the stored rows, so a hit reports what the derive did
  */
-export function buildResourceProjection(options: TreePopulationOptions): Promise<PopulateResult> {
+export function buildResourceProjection(options: TreePopulationOptions, references: QueryReferences): Promise<QueryPopulateResult> {
   const root = safePath.resolve(options.root);
   // A projection is built to be read: the root is the tree the verb examines,
   // so no output is declared.
   const source = crawlSourceFor(root, []);
-  return populate(resourcePopulateOptions(options, root, resourceContributors(() => source)));
+  return populateForQuery(resourcePopulateOptions(options, root, resourceContributors(() => source)), references);
 }
 
 /**

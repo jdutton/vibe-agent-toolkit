@@ -72,6 +72,14 @@ process.env.VAT_TEST_USER_STATE_UNDER = [...new Set([tmpdir(), realpathSync.nati
 // (enforced by: packages/dev-tools/test/vitest-setup-env.test.ts; the refusal by
 // packages/resources/test/integration/cache-root.integration.test.ts)
 const fileCacheDir = mkdtempSync(join(tmpdir(), 'vat-test-file-cache-'));
+
+// Every test file observes its work counts from its first line (`workCountsObserved` in
+// packages/utils/src/work-counters.ts reads this global), so work kept only to be counted (the
+// store's decode ledger) is kept and no test depends on reading the counters before the work it
+// measures. A global, not an import: the root depends on no workspace package, and it loads
+// nothing ahead of a test file's `vi.mock`s.
+// (enforced by: packages/resources/test/work-counts-observed.test.ts)
+globalThis.__vatWorkCountsObserved = true;
 process.env.VAT_CACHE_DIR = fileCacheDir;
 afterAll(() => {
 	try {

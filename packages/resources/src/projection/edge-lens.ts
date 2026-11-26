@@ -45,8 +45,16 @@ import {
   resourceDestination,
   type EdgeDestination,
 } from './edge-destination.js';
-import type { Projection } from './projection.js';
+import type { QueryProjection } from './query-projection.js';
 import { isNonLocalRef, resolveReferencePath } from './reference-resolution.js';
+
+/**
+ * What the lens reads of a projection: the roots, contexts, realizations and extents, and the
+ * AST-form references. Its forms are a subset of the AST forms ({@link AUTHORED_EDGE_FORMS}), so it
+ * reads `astReferences`, never a lexical row: the query lane's projection, which decodes no lexical
+ * row on a store hit, is what it is evaluated over.
+ */
+export type EdgeLensProjection = Pick<QueryProjection, 'roots' | 'resolutionContexts' | 'resourceRealizations' | 'resourceExtents' | 'astReferences'>;
 
 /**
  * The forms a human wrote as a reference, which is the authored-only policy.
@@ -114,9 +122,9 @@ export interface EdgeEvaluationOptions {
  * @returns The index to pass as `options.referencesByBlob`
  */
 export function buildReferenceIndex(
-  projection: Projection,
+  projection: EdgeLensProjection,
 ): ReadonlyMap<string, readonly BlobReferenceRow[]> {
-  return groupReferencesByBlob(projection.blobReferences);
+  return groupReferencesByBlob(projection.astReferences);
 }
 
 /** One evaluation's output — the two relations, in step with each other. */
@@ -186,11 +194,11 @@ export interface EdgeRelation {
  *   zero, the shape the sibling lenses refuse for the same reason
  */
 export function resolveEdges(
-  projection: Projection,
+  projection: EdgeLensProjection,
   lens: EdgeLens,
   options?: EdgeEvaluationOptions,
 ): EdgeRelation {
-  const referencesByBlob = options?.referencesByBlob ?? groupReferencesByBlob(projection.blobReferences);
+  const referencesByBlob = options?.referencesByBlob ?? groupReferencesByBlob(projection.astReferences);
   const visible = visibleRealizations(projection, lens);
   const roots = rootByExtent(projection);
 
@@ -251,7 +259,7 @@ export function resolveEdges(
  * @returns Extent context id → absolute root path, for every extent whose root
  *   the projection carries
  */
-function rootByExtent(projection: Projection): ReadonlyMap<string, string> {
+function rootByExtent(projection: EdgeLensProjection): ReadonlyMap<string, string> {
   const pathByRootId = new Map(projection.roots.map((row) => [row.id, row.path]));
   const byExtent = new Map<string, string>();
   for (const context of projection.resolutionContexts) {
@@ -410,7 +418,7 @@ function edgeKindFor(rawRef: string): string {
  *   sorted by path so the choice does not depend on projection order
  */
 function visibleRealizations(
-  projection: Projection,
+  projection: EdgeLensProjection,
   lens: EdgeLens,
 ): ReadonlyMap<string, readonly ResourceRealizationRow[]> {
   const members = extentMembers(projection, lens);
@@ -539,7 +547,7 @@ function byPath(left: ResourceRealizationRow, right: ResourceRealizationRow): nu
  * @param lens - The lens, for its extent
  * @returns Every `resourceId` the extent claims
  */
-function extentMembers(projection: Projection, lens: EdgeLens): ReadonlySet<string> {
+function extentMembers(projection: EdgeLensProjection, lens: EdgeLens): ReadonlySet<string> {
   const members = new Set<string>();
   for (const row of projection.resourceExtents) {
     if (row.extentId === lens.extentContextId) members.add(row.resourceId);

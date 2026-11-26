@@ -27,6 +27,7 @@ import { storedContentKeys } from '../helpers/cache-differential.js';
 import { expectPureMiss } from '../helpers/fs-purity.js';
 import { storeFilesUnder } from '../helpers/projection-store-probe.js';
 import {
+  expectNoRowDecodedTwice,
   freshValidateArm,
   isConfig,
   validateCounts,
@@ -146,6 +147,7 @@ describe('vat validate after an edit pays for the edited files only', () => {
     const edited = [documentPath(1)];
     edit(cwd, edited);
     const miss = await validateCounts(context, cwd, arm);
+    expectNoRowDecodedTwice(miss);
     // The config is a member too, but every process's config loader reads it, so purity allows it on its own terms.
     // Red proof, seeded once and reverted: `resolveLinkEntry` (`link-validator.ts`) reading each resolved target
     // with `readFileSync` reads the edited `docs/a01.md` twice through {@link LINKING}'s link: 1 failure, this arm.
@@ -171,7 +173,9 @@ describe('vat validate after an edit pays for the edited files only', () => {
     expect(reachedEdits, 'the edit reaches fewer pairs than the corpus').toBeLessThan(REACHED.length);
     expect(reachedEdits, 'the edit holds unreached files').toBeLessThan(edited.length);
     edit(cwd, edited);
-    const resources = resourcesPhase((await validateCounts(context, cwd, arm)).phases);
+    const miss = await validateCounts(context, cwd, arm);
+    expectNoRowDecodedTwice(miss);
+    const resources = resourcesPhase(miss.phases);
     // Every edited file has bytes of its own, so each unedited key is served exactly once.
     expect(resources['blob.storeServed'], 'blob.storeServed: distinct keys minus N').toBe(DISTINCT_KEYS - edited.length);
     expect(parseLookupsIn(resources), 'parse lookups: the N edited files').toBe(edited.length);

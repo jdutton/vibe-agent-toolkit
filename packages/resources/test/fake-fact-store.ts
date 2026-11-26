@@ -362,6 +362,20 @@ export class FakeFactStore implements FactStore {
   async close(): Promise<void> {
     // Nothing is held open.
   }
+
+  /** A store in memory has no database file to attach. */
+  attachedTo(): never {
+    return noDatabaseFile();
+  }
+}
+
+/**
+ * The `attachedTo` of a test double with no database file: it refuses.
+ *
+ * @throws Error Always
+ */
+export function noDatabaseFile(): never {
+  throw new Error('This fact store double has no database file to attach.');
 }
 
 

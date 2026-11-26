@@ -89,6 +89,8 @@ const PROBE_FILES: Readonly<Record<string, string>> = {
   'no-raw-text-decode': REPO_WIDE_PROBE,
   'no-self-package-import': REPO_WIDE_PROBE,
   'no-test-scoped-functions': REPO_WIDE_PROBE,
+  // Scoped to everything outside the store's one reader, so a module that is not it.
+  'fact-store-access-boundary': 'packages/resources/src/projection/merge.ts',
   // Deliberately scoped to the skill-test staging code, so it needs its own.
   'no-unsafe-root-join': 'packages/utils/src/skill-test/spawn-claude.ts',
   'require-justified-skip': REPO_WIDE_PROBE,

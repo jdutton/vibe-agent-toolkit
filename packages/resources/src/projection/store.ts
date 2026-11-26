@@ -216,7 +216,11 @@ export type ExtentStepsFor<Table extends ExtentScopedTableName> = {
 export interface ExtentRequest<Table extends ExtentScopedTableName> {
   /** The tables to read; a table not named is not read and is absent from the answer. */
   readonly tables: readonly Table[];
-  /** The reconstruction steps to run; each needs every table it reads in `tables`. */
+  /**
+   * The reconstruction steps to run; each needs every table it reads in `tables`. Stores ignore
+   * steps: the caller runs them (`selectRequestedRows`), and the run's reader (`holdsExtent` in
+   * stored-reads.ts) relies on that when it compares tables only.
+   */
   readonly steps: readonly ExtentStepsFor<Table>[];
 }
 
@@ -258,6 +262,15 @@ export interface ExtentKey {
    * must agree on this string, and that is the store's whole requirement.
    */
   readonly treeHash: string;
+}
+
+/**
+ * The connection {@link FactStore.attachedTo} attaches a store to: what an attach uses of
+ * `node:sqlite`'s `DatabaseSync`, so the port names no SQLite module.
+ */
+export interface StoreAttachTarget {
+  exec(sql: string): void;
+  prepare(sql: string): { run(...parameters: string[]): unknown };
 }
 
 /**
@@ -398,6 +411,18 @@ export interface FactStore {
    * a lifetime bug in the caller.
    */
   close(): Promise<void>;
+
+  /**
+   * Attach this store read-only to `target` under `schema`, run `work`, and detach it, so a query
+   * copies stored rows inside SQLite. Required, so every wrapper of the port forwards it: a wrapper
+   * that drops it does not compile. A store with no database file to attach throws.
+   *
+   * @param target - The connection, outside any transaction
+   * @param schema - The name the store is attached under while `work` runs
+   * @param work - What reads the attached store
+   * @returns What `work` returns
+   */
+  attachedTo<T>(target: StoreAttachTarget, schema: string, work: () => T): T;
 }
 
 /**

@@ -748,9 +748,10 @@ interface EditVerbScope {
  *   `readCachedProjection` (a miss, derived). One population.
  * - `vat resources query` is one process with no phases, so its counted scope is the process:
  *   the resources population's `populate` (a miss, derived and written), then the claude-context
- *   lens's `importRoots` `readStoredMembership` (served from the extent just written), then the
- *   lens's own `populate` (a miss: its registry adds the `@`-import contributors, so its key
- *   differs; derived over the same tree). Two populations; no phase separates them.
+ *   lens's `importRoots` `readStoredMembership` (the whole extent, under the lens's own key: its
+ *   registry adds the `@`-import contributors, so its key differs; a miss). The lens's own
+ *   `populate` reads nothing: the run's one reader holds that miss, so it derives over the same
+ *   tree. Two populations; no phase separates them.
  *
  * A change that adds or drops a read or a population rewrites this table.
  *
@@ -759,7 +760,7 @@ interface EditVerbScope {
  * population's. If its `@`-import contributors add keys, restate the term from a measured run.
  */
 const EDIT_VERBS = {
-  query: { extentReads: 3, populations: 2 },
+  query: { extentReads: 2, populations: 2 },
   vatValidate: { extentReads: 2, populations: 1 },
 } as const satisfies Partial<Record<VerbName, EditVerbScope>>;
 

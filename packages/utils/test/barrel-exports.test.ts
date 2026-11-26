@@ -239,6 +239,7 @@ const BARREL_EXPORTS = [
   'withOuterBracket',
   'withTempDir',
   'withWorkPhase',
+  'workCountsObserved',
   'writeFileUnder',
   'writeTimingDump',
 ];

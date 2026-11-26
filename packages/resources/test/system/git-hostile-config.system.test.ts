@@ -100,12 +100,17 @@ import {
   EXTENT_SOURCE_GIT,
   type CrawlSourceKind,
 } from '../../src/projection/crawl-source.js';
+import type { TreePopulationOptions } from '../../src/projection/merge.js';
 import { ProjectionBuilder, type Projection } from '../../src/projection/projection.js';
+import type { QueryPopulateResult } from '../../src/projection/query-projection.js';
 import { buildResourcePopulation, buildResourceProjection } from '../../src/projection/resource-population.js';
 import type { ResourceRealizationRow } from '../../src/schemas/projection-resources.js';
 import { populateBlobsOnOwnDispatcher } from '../blob-fixture-population.js';
 import { FakeFactStore } from '../fake-fact-store.js';
 import { inOwnRun } from '../helpers/population-run.js';
+
+/** The query lane's population, copying a hit's references as `vat resources query` does with no populating lens. */
+const buildCopying = (options: TreePopulationOptions): Promise<QueryPopulateResult> => buildResourceProjection(options, 'copy');
 
 /**
  * A content-addressed parse cache would serve a previous run's facts from a
@@ -446,7 +451,7 @@ async function runBothArms(root: string): Promise<Arms> {
  * @returns The row
  * @throws When the path was not enumerated at all
  */
-function realizationOf(projection: Projection, relativePath: string): ResourceRealizationRow {
+function realizationOf(projection: Pick<Projection, 'resourceRealizations'>, relativePath: string): ResourceRealizationRow {
   const row = projection.resourceRealizations.find((candidate) => candidate.path === relativePath);
   if (row === undefined) throw new Error(`no realization for ${relativePath}`);
   return row;
@@ -459,7 +464,7 @@ function realizationOf(projection: Projection, relativePath: string): ResourceRe
  * @param relativePath - Root-relative, forward-slashed
  * @returns The key, or the empty string when the row carries none
  */
-function keyOf(projection: Projection, relativePath: string): string {
+function keyOf(projection: Pick<Projection, 'resourceRealizations'>, relativePath: string): string {
   return realizationOf(projection, relativePath).contentKey ?? '';
 }
 
@@ -956,7 +961,7 @@ describe.skipIf(!HOST_GATES.filter.met)(gatedTitle('a clean/smudge filter on one
     // Membership miss writes; the query lane is served what it wrote.
     const viaMembership = optionsOver(new FakeFactStore());
     const members = await inOwnRun(buildResourcePopulation, { ...viaMembership, outputs: [] });
-    const served = await inOwnRun(buildResourceProjection, viaMembership);
+    const served = await inOwnRun(buildCopying, viaMembership);
     expect(members.outcome).toEqual({ population: 'derived', stored: 'written' });
     // The premise: the git enumerator, the one the OID-sharing defect lived on.
     expect(members.extentSource).toBe('git');
@@ -964,7 +969,7 @@ describe.skipIf(!HOST_GATES.filter.met)(gatedTitle('a clean/smudge filter on one
     expect(keyOf(served.projection, PATH_B)).toBe(ownKeyB);
 
     // Query miss derives and writes on its own.
-    const derived = await inOwnRun(buildResourceProjection, optionsOver(new FakeFactStore()));
+    const derived = await inOwnRun(buildCopying, optionsOver(new FakeFactStore()));
     expect(derived.outcome).toEqual({ population: 'derived', stored: 'written' });
     expect(keyOf(derived.projection, PATH_B)).toBe(ownKeyB);
   });

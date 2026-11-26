@@ -630,6 +630,95 @@ function dropTable(directory: string, table: string): void {
   }
 }
 
+describe('a row this process already decoded from the file is counted as repeated', () => {
+  /** The AST forms' complement: the lexical forms. */
+  const LEXICAL_FORMS = new Set(ReferenceSyntacticFormSchema.options.filter((form) => !AST_SYNTACTIC_FORMS.has(form)));
+  const REFERENCES_OF = (forms: ReadonlySet<string>) => ({ tables: ['blobReferences'] as const, referenceForms: forms as typeof AST_SYNTACTIC_FORMS });
+
+  beforeEach(async () => {
+    await store.writeBlobFacts(uncoveredBlobWrite(everyFormRows().rows));
+    await store.writeExtent(KEY, sampleExtentRows(KEY.rootId));
+    __resetWorkCountersForTest();
+  });
+
+  afterEach(() => {
+    __resetWorkCountersForTest();
+  });
+
+  it('a second read of the same key, table and form counts every row again', async () => {
+    await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
+    expect(readWorkCounters()['store.rows.decoded.repeated']).toBe(0);
+    const first = readWorkCounters()['store.rows.decoded.persistent'];
+
+    await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
+
+    expect(readWorkCounters()['store.rows.decoded.repeated']).toBe(first);
+  });
+
+  it('a read of the forms an earlier read left out repeats nothing, and one of the same forms repeats them', async () => {
+    const { astRows } = everyFormRows();
+    await store.readBlobFacts([FIRST_BLOB], REFERENCES_OF(AST_SYNTACTIC_FORMS));
+    await store.readBlobFacts([FIRST_BLOB], REFERENCES_OF(LEXICAL_FORMS));
+    expect(readWorkCounters()['store.rows.decoded.repeated']).toBe(0);
+
+    await store.readBlobFacts([FIRST_BLOB], REFERENCES_OF(AST_SYNTACTIC_FORMS));
+
+    expect(readWorkCounters()['store.rows.decoded.repeated']).toBe(astRows);
+  });
+
+  it('a second extent read of the same tree and table counts it again, and of another table nothing', async () => {
+    const extent = sampleExtentRows(KEY.rootId);
+    await store.readExtent(KEY, { tables: ['resources'], steps: [] });
+    await store.readExtent(KEY, { tables: ['roots'], steps: [] });
+    expect(readWorkCounters()['store.rows.decoded.repeated']).toBe(0);
+
+    await store.readExtent(KEY, { tables: ['resources'], steps: [] });
+
+    expect(readWorkCounters()['store.rows.decoded.repeated']).toBe(extent.resources.length);
+  });
+
+  it('a second connection on the same file shares the ledger, and the last close drops it', async () => {
+    await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
+    const rows = readWorkCounters()['store.rows.decoded.persistent'];
+    const second = openSqliteFactStore({ directory });
+    try {
+      await second.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
+      expect(readWorkCounters()['store.rows.decoded.repeated']).toBe(rows);
+    } finally {
+      await second.close();
+    }
+    await store.close();
+    store = openSqliteFactStore({ directory });
+
+    await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
+
+    expect(readWorkCounters()['store.rows.decoded.repeated']).toBe(rows);
+  });
+
+  it('a write naming a key its read covered rewrites nothing of it, so it forgets nothing of it', async () => {
+    await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
+    const first = readWorkCounters()['store.rows.decoded.persistent'];
+    // Covered at read and held, with no harness pair to settle: the writer keeps the stored rows.
+    await store.writeBlobFacts({ rows: { ...everyFormRows().rows, harnessBlobFacts: [], harnessBlobImports: [] }, coveredAtRead: [FIRST_BLOB], settledAtRead: [] });
+
+    await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
+
+    expect(readWorkCounters()['store.rows.decoded.repeated']).toBe(first);
+  });
+
+  it('a write of a key or tree forgets what was decoded of it', async () => {
+    await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
+    await store.readExtent(KEY, ALL_EXTENT_REQUEST);
+    await store.writeBlobFacts(uncoveredBlobWrite(everyFormRows().rows));
+    await store.writeExtent(KEY, sampleExtentRows(KEY.rootId));
+
+    await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
+    await store.readExtent(KEY, ALL_EXTENT_REQUEST);
+
+    expect(readWorkCounters()['store.rows.decoded.repeated']).toBe(0);
+  });
+});
+
 describe('decoded rows are counted against the store they came from', () => {
   /** Rows one {@link sampleBlobRows} bundle holds across every blob-scoped table. */
   const bundleRowCount = Object.values(sampleBlobRows() as unknown as Record<string, readonly unknown[]>)
@@ -678,7 +767,7 @@ describe('decoded rows are counted against the store they came from', () => {
 
   it('a hydration counts only the planned relations\' rows', async () => {
     const projection = sampleProjection();
-    const database = hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['blobs', projection.blobs]]) });
+    const database = hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['blobs', { rows: projection.blobs }]]) });
     try {
       expect(readWorkCounters()['hydration.writes']).toBe(1);
       expect(readWorkCounters()['hydration.rows.written']).toBe(projection.blobs.length);

@@ -128,6 +128,19 @@ export function isConfig(path: string): boolean {
 }
 
 /**
+ * Assert no process of the run decoded a stored row it had already decoded: the parent, and every
+ * checks child (summed, each its own process). `store.rows.decoded.repeated` counts a second read of
+ * the same key's table and reference form, or the same tree's table, on one store file, so a second
+ * reader of rows the run already holds fails here whatever path it took.
+ *
+ * @param counts - One run's counters
+ */
+export function expectNoRowDecodedTwice(counts: ValidateRunCounts): void {
+  expect(counts.parent['store.rows.decoded.repeated'], 'rows the vat validate process decoded twice').toBe(0);
+  expect(counts.children['store.rows.decoded.repeated'] ?? 0, 'rows a checks child decoded twice').toBe(0);
+}
+
+/**
  * Paths the probe saw read more than once, config files aside.
  *
  * @param reads - Reads per path, from {@link ValidateRunCounts}

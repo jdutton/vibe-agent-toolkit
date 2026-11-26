@@ -117,13 +117,14 @@ import {
   type ExtentScopedTableName,
   type FactStore,
   type ProjectionColumnType,
+  type StoreAttachTarget,
   projectionColumnTypes,
   projectionStoreDirectoryName,
   quoteIdentifier,
   markVatCacheRoot,
   vatCacheNamespaceRoot,
 } from '@vibe-agent-toolkit/resources';
-import { VatError, classifyFsFault, compareCodeUnits, countWork, everywhere, isPathAbsentError, isVatError, pathPresent, promised, safePath, appendAll } from '@vibe-agent-toolkit/utils';
+import { VatError, classifyFsFault, compareCodeUnits, countWork, everywhere, isPathAbsentError, isVatError, pathPresent, promised, safePath, appendAll, workCountsObserved } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 
 import {
@@ -148,6 +149,7 @@ import {
   selectBlobFactsWhereSql,
   selectExtentSql,
 } from './schema-sql.js';
+import { readOnlyDatabaseUri } from './sqlite-uri.js';
 import { decodeValue, encodeValue, type SqliteResultValue, type SqliteValue } from './values.js';
 
 /**
@@ -400,15 +402,109 @@ function openStoreAt(databasePath: string, options: SqliteStoreOptions): FactSto
     // File-backed only, and only here: it is the only store that can have been
     // written by an earlier build. See {@link adoptLegacyBlobKeys}.
     adoptLegacyBlobKeys(database);
-    return new SqliteFactStore(prepareStoreTables(database, {
+    const tables = prepareStoreTables(database, {
       extentsPerRoot: Math.max(1, Math.trunc(options.retainedExtentsPerRoot ?? DEFAULT_RETAINED_EXTENTS_PER_ROOT)),
       roots: Math.max(1, Math.trunc(options.retainedRoots ?? DEFAULT_RETAINED_ROOTS)),
       blobKeys: Math.max(1, Math.trunc(options.retainedBlobKeys ?? DEFAULT_RETAINED_BLOB_KEYS)),
-    }));
+    });
+    const busyTimeoutMs = options.busyTimeoutMs ?? BUSY_TIMEOUT_MS;
+    return new SqliteFactStore(tables, acquireDecodeLedger(databasePath), { path: databasePath, busyTimeoutMs });
   } catch (error) {
     database.close();
     throw error;
   }
+}
+
+/**
+ * What this process has decoded from one store file: per content key (`blob\0<key>`) or tree
+ * (`extent\0<rootId>\0<treeHash>`), the tables it decoded, and for `blobReferences` each form.
+ * A row decoded under an entry already here is decoded twice, counted
+ * `store.rows.decoded.repeated`, which the system arms assert is zero.
+ */
+interface DecodeLedger {
+  /** The store's database file, which keys {@link DECODE_LEDGERS}. */
+  readonly path: string;
+  /** How many open stores share this ledger. */
+  open: number;
+  readonly decoded: Map<string, Set<string>>;
+}
+
+/**
+ * One ledger per database file while any store on it is open: two connections to one file in one
+ * process (a question's connection beside the run's) share it, so a second read through either
+ * counts. It is dropped when the last of them closes, so a later run in the same process (an
+ * in-process test, an embedding tool) starts its own.
+ */
+const DECODE_LEDGERS = new Map<string, DecodeLedger>();
+
+/**
+ * Open the ledger of a store file, or join the one an open store on it holds.
+ *
+ * @param path - The store's database file
+ * @returns The ledger, with this store counted open on it
+ */
+function acquireDecodeLedger(path: string): DecodeLedger {
+  const ledger = DECODE_LEDGERS.get(path) ?? { path, open: 0, decoded: new Map<string, Set<string>>() };
+  ledger.open += 1;
+  DECODE_LEDGERS.set(path, ledger);
+  return ledger;
+}
+
+/**
+ * Leave a ledger; the last store to leave drops it.
+ *
+ * @param ledger - What {@link acquireDecodeLedger} returned
+ */
+function releaseDecodeLedger(ledger: DecodeLedger): void {
+  ledger.open -= 1;
+  if (ledger.open === 0 && DECODE_LEDGERS.get(ledger.path) === ledger) DECODE_LEDGERS.delete(ledger.path);
+}
+
+/**
+ * The ledger entry of one content key.
+ *
+ * @param contentKey - The key
+ * @returns Its entry name in {@link DecodeLedger.decoded}
+ */
+function blobLedgerEntry(contentKey: string): string {
+  return `blob\0${contentKey}`;
+}
+
+/**
+ * The ledger entry of one tree.
+ *
+ * @param key - Which root, which tree
+ * @returns Its entry name in {@link DecodeLedger.decoded}
+ */
+function extentLedgerEntry(key: ExtentKey): string {
+  return `extent\0${key.rootId}\0${key.treeHash}`;
+}
+
+/**
+ * Count the rows one read decodes again, and record what it decoded. Every slot is judged against
+ * the ledger as it stood before this read, so the many rows one read decodes under one slot (a
+ * key's references of one form) count once each, never as repeats of each other.
+ *
+ * @param ledger - The store file's ledger
+ * @param slots - Each decoded row's `[entry, slot]`, one per row
+ * @returns How many of those rows an earlier read had decoded
+ */
+function recordDecoded(ledger: DecodeLedger, slots: readonly (readonly [entry: string, slot: string])[]): number {
+  let repeated = 0;
+  const fresh: (readonly [string, string])[] = [];
+  for (const pair of slots) {
+    if (ledger.decoded.get(pair[0])?.has(pair[1]) === true) repeated += 1;
+    else fresh.push(pair);
+  }
+  for (const [entry, slot] of fresh) {
+    let held = ledger.decoded.get(entry);
+    if (held === undefined) {
+      held = new Set<string>();
+      ledger.decoded.set(entry, held);
+    }
+    held.add(slot);
+  }
+  return repeated;
 }
 
 /** The code {@link StoreUnopenableError} carries. */
@@ -901,17 +997,21 @@ type RowBundle = Record<string, readonly Record<string, unknown>[]>;
  *
  * @param tables - The connection's statements
  * @param write - The held rows and what the caller's read covered
+ * @returns The keys whose stored rows the write changed: every key it replaced, and every key it
+ *   added a partitioned row to; never a covered key it only re-stamped
  */
-function writeBlobRows(tables: StoreTables, write: BlobFactsWrite): void {
+function writeBlobRows(tables: StoreTables, write: BlobFactsWrite): readonly string[] {
   const bundle = write.rows as unknown as RowBundle;
   const held = uniqueContentKeys(bundle);
-  if (held.length === 0) return;
+  if (held.length === 0) return [];
 
   let evicted = 0;
   let written = 0;
+  let changed: readonly string[] = [];
   inTransaction(tables.database, () => {
     const replaced = keysToReplace(tables, held, write.coveredAtRead);
     const replacing = rowsToReplace(bundle, replaced, write.settledAtRead);
+    changed = uniqueContentKeys(replacing);
     clearSpaceForBlobs(tables, replacing, [...replaced]);
     written = insertBundle(tables, replacing, 'blob', []);
     // EVERY held key, AFTER the rows and BEFORE the eviction, for the reason
@@ -926,6 +1026,7 @@ function writeBlobRows(tables: StoreTables, write: BlobFactsWrite): void {
   // Outside the transaction, because SQLite refuses `incremental_vacuum`
   // inside one — the same arrangement, and the same reason, as `writeExtentRows`.
   if (evicted > 0) tables.database.exec('PRAGMA incremental_vacuum');
+  return changed;
 }
 
 /**
@@ -1033,8 +1134,7 @@ export function inTransaction(database: DatabaseSync, work: () => void): void {
     work();
     database.exec('COMMIT');
   } catch (error) {
-    database.exec('ROLLBACK');
-    throw error;
+    failAfter(error, () => database.exec('ROLLBACK'));
   }
 }
 
@@ -1064,8 +1164,7 @@ function inReadTransaction<T>(database: DatabaseSync, work: () => T): T {
     database.exec('COMMIT');
     return result;
   } catch (error) {
-    database.exec('ROLLBACK');
-    throw error;
+    failAfter(error, () => database.exec('ROLLBACK'));
   }
 }
 
@@ -1383,11 +1482,13 @@ function readBlobRows<Table extends BlobScopedTableName>(
   tables: StoreTables,
   contentKeys: readonly string[],
   request: BlobRequest<Table>,
-): { rows: Pick<BlobScopedRows, Table>; decoded: number } {
+  observed: boolean,
+): { rows: Pick<BlobScopedRows, Table>; decoded: number; slots: (readonly [entry: string, slot: string])[] } {
   const requested = new Set<string>(request.tables);
   const plans = plansOfScope(tables, 'blob').filter((plan) => requested.has(plan.spec.key));
   const forms = request.referenceForms === 'all' ? 'all' : [...request.referenceForms].sort(compareCodeUnits);
   let decoded = 0;
+  const slots: (readonly [entry: string, slot: string])[] = [];
   const rows = inReadTransaction(tables.database, () => {
     const result: Record<string, unknown[]> = {};
     for (const { spec } of plans) {
@@ -1400,13 +1501,32 @@ function readBlobRows<Table extends BlobScopedTableName>(
         const { statement, values } = blobSelect(tables, plan, batch.length, forms);
         const raw = statement.all(...batch, ...values);
         decoded += raw.length;
+        if (observed) appendAll(slots, blobSlots(plan, raw));
         const into = result[plan.spec.key];
         if (into !== undefined) appendAll(into, decodeRows(plan, raw));
       }
     }
     return result as unknown as Pick<BlobScopedRows, Table>;
   });
-  return { rows, decoded };
+  return { rows, decoded, slots };
+}
+
+/**
+ * Each decoded blob row's ledger slot: its key's entry, and its table (with its form for a
+ * reference row).
+ *
+ * @param plan - The table the rows came from
+ * @param raw - What SQLite returned
+ * @returns One `[entry, slot]` per row
+ */
+function blobSlots(plan: TablePlan, raw: readonly unknown[]): (readonly [entry: string, slot: string])[] {
+  const keyColumn = blobKeyColumn(plan.spec);
+  const byForm = plan.spec.key === REFERENCE_TABLE;
+  return raw.map((stored) => {
+    const source = stored as Record<string, SqliteResultValue>;
+    const slot = byForm ? `${plan.spec.key}\0${String(source[REFERENCE_FORM_COLUMN])}` : plan.spec.key;
+    return [blobLedgerEntry(String(source[keyColumn])), slot] as const;
+  });
 }
 
 /**
@@ -1423,10 +1543,13 @@ function readExtentRows<Table extends ExtentScopedTableName>(
   tables: StoreTables,
   key: ExtentKey,
   request: ExtentRequest<Table>,
-): { rows: Pick<ExtentScopedRows, Table> | undefined; decoded: number } {
+  observed: boolean,
+): { rows: Pick<ExtentScopedRows, Table> | undefined; decoded: number; slots: (readonly [entry: string, slot: string])[] } {
   const requested = new Set<string>(request.tables);
   const plans = plansOfScope(tables, 'extent').filter((plan) => requested.has(plan.spec.key));
+  const entry = extentLedgerEntry(key);
   let decoded = 0;
+  const slots: (readonly [entry: string, slot: string])[] = [];
   const rows = inReadTransaction(tables.database, () => {
     // An extent that was written but holds nothing is a hit with empty tables;
     // one that was never written is a miss. The manifest row is what tells
@@ -1439,11 +1562,13 @@ function readExtentRows<Table extends ExtentScopedTableName>(
     for (const plan of plans) {
       const raw = plan.selectExtent?.all(key.rootId, key.treeHash) ?? [];
       decoded += raw.length;
+      // One slot per decoded row; pushed one at a time, since a spread of a large read overflows the stack.
+      if (observed) for (const slot of Array.from(raw, () => [entry, plan.spec.key] as const)) slots.push(slot);
       result[plan.spec.key] = [...decodeRows(plan, raw)];
     }
     return result as unknown as Pick<ExtentScopedRows, Table>;
   });
-  return { rows, decoded };
+  return { rows, decoded, slots };
 }
 
 /**
@@ -1454,20 +1579,29 @@ function readExtentRows<Table extends ExtentScopedTableName>(
  * projection (see `run-database.ts`), so a lens's rows can never reach this
  * database — one per VAT release, shared by every root on the machine.
  */
-class SqliteFactStore implements FactStore {
+export class SqliteFactStore implements FactStore {
   readonly #tables: StoreTables;
+  readonly #ledger: DecodeLedger;
+  readonly #file: { readonly path: string; readonly busyTimeoutMs: number };
   #closed = false;
 
-  /** @param tables - The prepared statements of an open, configured connection */
-  constructor(tables: StoreTables) {
+  /**
+   * @param tables - The prepared statements of an open, configured connection
+   * @param ledger - What this process has decoded from the connection's file
+   * @param file - The connection's database file, and how long it waits on another writer
+   */
+  constructor(tables: StoreTables, ledger: DecodeLedger, file: { readonly path: string; readonly busyTimeoutMs: number }) {
     this.#tables = tables;
+    this.#ledger = ledger;
+    this.#file = file;
   }
 
   /** @inheritdoc */
   writeBlobFacts(write: BlobFactsWrite): Promise<void> {
     return promised(() => {
       this.#assertOpen();
-      writeBlobRows(this.#tables, write);
+      // Only a key whose stored rows changed leaves the ledger; a re-stamped key keeps its rows.
+      for (const key of writeBlobRows(this.#tables, write)) this.#ledger.decoded.delete(blobLedgerEntry(key));
     });
   }
 
@@ -1479,9 +1613,10 @@ class SqliteFactStore implements FactStore {
     return promised(() => {
       this.#assertOpen();
       const keys = [...new Set(contentKeys)];
-      const { rows, decoded } = readBlobRows(this.#tables, keys, request);
+      const observed = workCountsObserved();
+      const { rows, decoded, slots } = readBlobRows(this.#tables, keys, request, observed);
       // Asking for no keys reads nothing.
-      if (keys.length > 0) countRead('store.reads.blob', decoded);
+      if (keys.length > 0) countRead('store.reads.blob', decoded, observed ? recordDecoded(this.#ledger, slots) : 0);
       return rows;
     });
   }
@@ -1491,6 +1626,8 @@ class SqliteFactStore implements FactStore {
     return promised(() => {
       this.#assertOpen();
       writeExtentRows(this.#tables, key, rows);
+      // Every write rewrites the rows of each context it names, in every extent table.
+      this.#ledger.decoded.delete(extentLedgerEntry(key));
     });
   }
 
@@ -1501,9 +1638,10 @@ class SqliteFactStore implements FactStore {
   ): Promise<Pick<ExtentScopedRows, Table> | undefined> {
     return promised(() => {
       this.#assertOpen();
-      const { rows, decoded } = readExtentRows(this.#tables, key, request);
+      const observed = workCountsObserved();
+      const { rows, decoded, slots } = readExtentRows(this.#tables, key, request, observed);
       // A miss included: the manifest was read.
-      countRead('store.reads.extent', decoded);
+      countRead('store.reads.extent', decoded, observed ? recordDecoded(this.#ledger, slots) : 0);
       return rows;
     });
   }
@@ -1513,12 +1651,43 @@ class SqliteFactStore implements FactStore {
     return promised(() => {
       if (this.#closed) return;
       this.#closed = true;
+      releaseDecodeLedger(this.#ledger);
       try {
         checkpointBestEffort(this.#tables.database);
       } finally {
         this.#tables.database.close();
       }
     });
+  }
+
+  /**
+   * Attach this store's file to `target` READ-ONLY under `schema`, run `work`, and detach it before
+   * returning, success or not: the one way another connection reads the store's rows inside SQLite.
+   * It waits on another writer as this store's own connection does.
+   *
+   * A detach failing after `work` failed never masks `work`'s error; after a success it is thrown.
+   *
+   * @param target - Another connection, outside any transaction (`ATTACH` cannot run inside one)
+   * @param schema - The name the store is attached under while `work` runs
+   * @param work - What reads the attached store
+   * @returns What `work` returns
+   * @throws Error When the store has been closed
+   */
+  attachedTo<T>(target: StoreAttachTarget, schema: string, work: () => T): T {
+    this.#assertOpen();
+    target.exec(`PRAGMA busy_timeout = ${String(this.#file.busyTimeoutMs)}`);
+    target.prepare(`ATTACH DATABASE ? AS ${quoteIdentifier(schema)}`).run(readOnlyDatabaseUri(this.#file.path));
+    const detach = (): void => {
+      target.exec(`DETACH DATABASE ${quoteIdentifier(schema)}`);
+    };
+    let result: T;
+    try {
+      result = work();
+    } catch (error) {
+      failAfter(error, detach);
+    }
+    detach();
+    return result;
   }
 
   /**
@@ -1532,9 +1701,26 @@ class SqliteFactStore implements FactStore {
 }
 
 /**
+ * Run `cleanup` after `error`, then throw `error`, even when `cleanup` fails too.
+ *
+ * @param error - What failed
+ * @param cleanup - What must still run
+ * @throws `error`, always
+ */
+export function failAfter(error: unknown, cleanup: () => void): never {
+  try {
+    cleanup();
+  } catch {
+    throw error;
+  }
+  throw error;
+}
+
+/**
  * Count one completed read, against the port read it was (`store.reads.blob`
- * for `readBlobFacts`, `store.reads.extent` for `readExtent`), and every row it
- * decoded.
+ * for `readBlobFacts`, `store.reads.extent` for `readExtent`), every row it
+ * decoded, and of those the rows an earlier read on the same file had decoded
+ * (`store.rows.decoded.repeated`, {@link DecodeLedger}).
  *
  * After the transaction, so a read that failed counts nothing, not even the
  * rows it decoded from the tables it reached first. Hydration is a counted
@@ -1543,10 +1729,12 @@ class SqliteFactStore implements FactStore {
  *
  * @param read - Which port read completed
  * @param decoded - How many stored rows the read decoded
+ * @param repeated - How many of them this process had decoded before
  */
-function countRead(read: 'store.reads.blob' | 'store.reads.extent', decoded: number): void {
+function countRead(read: 'store.reads.blob' | 'store.reads.extent', decoded: number, repeated: number): void {
   countWork(read, 1);
   countWork('store.rows.decoded.persistent', decoded);
+  countWork('store.rows.decoded.repeated', repeated);
 }
 
 /**

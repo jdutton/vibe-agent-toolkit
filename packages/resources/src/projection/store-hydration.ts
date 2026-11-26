@@ -285,29 +285,13 @@ export const EMPTY_STORED_TIER: StoredBlobTier = Object.freeze({ rows: emptyBlob
 /**
  * The tier one read answered, judged by the one predicate.
  *
- * @param rows - What `readBlobTier` returned for `contentKeys`, every blob-scoped table
+ * @param rows - What the run's reader (`stored-reads.ts`) read for `contentKeys`, every blob-scoped table
  * @param contentKeys - The keys the read asked about
  * @returns The rows, and the keys among `contentKeys` they cover
  */
 export function storedBlobTier(rows: BlobScopedRows, contentKeys: readonly string[]): StoredBlobTier {
   const uncovered = new Set(uncoveredContentKeys(rows, contentKeys));
   return { rows, covered: new Set(contentKeys.filter((key) => !uncovered.has(key))) };
-}
-
-/**
- * Two reads of the tier over disjoint keys, as one: a derivation's base read and
- * its read of the keys a demand promotion added.
- *
- * @param first - The earlier read
- * @param second - A read over keys `first` did not ask about
- * @returns Both reads' rows, table by table, and both covered sets
- */
-export function joinStoredTiers(first: StoredBlobTier, second: StoredBlobTier): StoredBlobTier {
-  const left = first.rows as unknown as RowBundle;
-  const right = second.rows as unknown as RowBundle;
-  const rows: RowBundle = {};
-  for (const table of Object.keys(left)) rows[table] = [...(left[table] ?? []), ...(right[table] ?? [])];
-  return { rows: rows as unknown as BlobScopedRows, covered: new Set([...first.covered, ...second.covered]) };
 }
 
 /**
