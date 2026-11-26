@@ -110,6 +110,11 @@ function isConstAssertion(node) {
   return annotation?.type === 'TSTypeReference' && annotation.typeName.type === 'Identifier' && annotation.typeName.name === 'const';
 }
 
+/** Whether `node` is a type assertion other than `as const`. */
+function isMintingForm(node) {
+  return (node.type === 'TSAsExpression' || node.type === 'TSTypeAssertion') && !isConstAssertion(node);
+}
+
 module.exports = {
   meta: {
     type: 'problem',
@@ -247,11 +252,6 @@ module.exports = {
       if (isOpaque(source.type)) return true;
       const sourceSlots = slotsOf(source.type, tsNode);
       return keySlots.some(([name]) => sourceSlots.has(name) && !isKeyedType(sourceSlots.get(name), tsNode));
-    }
-
-    /** Whether `node` is a type assertion other than `as const`. */
-    function isMintingForm(node) {
-      return (node.type === 'TSAsExpression' || node.type === 'TSTypeAssertion') && !isConstAssertion(node);
     }
 
     /**

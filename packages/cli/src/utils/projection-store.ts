@@ -460,7 +460,7 @@ async function openCacheWith(root: string, open: () => Promise<FactStore | undef
  * bracket's, and every pulled LFS file under `root` was read as its pointer's oid.
  *
  * The second half is what the hash cannot say. A pulled file's hash is its pointer's, and its
- * pulled bit is read from its size, so a pulled file edited after the snapshot (same size, or git
+ * pulled bit is read from the file's bytes, so a pulled file edited after the snapshot (git
  * trusting a clean stat) keys alike; the run's own read of it does not. Only what the run read
  * is asked about: a file outside `root`, one not pulled, one the run realized without reading its
  * bytes, and one the run realized nothing at (its crawl does not include it, as an LFS image beside
