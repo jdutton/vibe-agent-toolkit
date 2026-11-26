@@ -117,6 +117,7 @@ import {
   type ExtentScopedTableName,
   type FactStore,
   type ProjectionColumnType,
+  type StoreAttachTarget,
   projectionColumnTypes,
   projectionStoreDirectoryName,
   quoteIdentifier,
@@ -1671,7 +1672,7 @@ export class SqliteFactStore implements FactStore {
    * @returns What `work` returns
    * @throws Error When the store has been closed
    */
-  attachedTo<T>(target: DatabaseSync, schema: string, work: () => T): T {
+  attachedTo<T>(target: StoreAttachTarget, schema: string, work: () => T): T {
     this.#assertOpen();
     target.exec(`PRAGMA busy_timeout = ${String(this.#file.busyTimeoutMs)}`);
     target.prepare(`ATTACH DATABASE ? AS ${quoteIdentifier(schema)}`).run(readOnlyDatabaseUri(this.#file.path));

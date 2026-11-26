@@ -272,6 +272,7 @@ function callsFailing(
       readBlobFacts: (contentKeys, request) => failing(faults.blobRead, () => inner.readBlobFacts(contentKeys, request)),
       readExtent: (key, request) => inner.readExtent(key, request),
       close: () => inner.close(),
+      attachedTo: (target, schema, work) => inner.attachedTo(target, schema, work),
     },
   };
 }

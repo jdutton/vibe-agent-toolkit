@@ -36,7 +36,7 @@ import { storedComputeBy, type StoredContent } from '../../src/projection/stored
 import { runStoredReads } from '../../src/projection/stored-reads.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { CollectionConfig, ProjectConfig } from '../../src/schemas/project-config.js';
-import { FakeFactStore } from '../fake-fact-store.js';
+import { FakeFactStore, noDatabaseFile } from '../fake-fact-store.js';
 import { failingParsePolicy } from '../helpers/failing-parse-policy.js';
 import { createCommittedRepo } from '../test-helpers.js';
 
@@ -212,6 +212,7 @@ function viewOf(transform: (rows: DamageableRows) => DamageableRows): FactStore 
     readExtent: (key, request) => store.readExtent(key, request),
     writeExtent: (key, rows) => store.writeExtent(key, rows),
     close: () => store.close(),
+    attachedTo: noDatabaseFile,
   };
 }
 

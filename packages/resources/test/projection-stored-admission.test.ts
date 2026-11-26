@@ -29,6 +29,8 @@ import {
 import { runStoredReads } from '../src/projection/stored-reads.js';
 import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
 
+import { noDatabaseFile } from './fake-fact-store.js';
+
 const MARKDOWN_KEY = `markdown.${'a'.repeat(64)}`;
 const NONE_KEY = `none.${'b'.repeat(64)}`;
 const COMPUTE = { kind: 'compute' };
@@ -183,6 +185,7 @@ function countingStore(fails?: Error): { store: FactStore; reads: (readonly stri
     readExtent: () => Promise.resolve(undefined),
     writeExtent: () => Promise.resolve(),
     close: () => Promise.resolve(),
+    attachedTo: noDatabaseFile,
   };
   return { store, reads, requests };
 }

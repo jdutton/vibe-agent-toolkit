@@ -1017,9 +1017,6 @@ export function seedCases<K extends WorkCounter>(seeds: Readonly<Record<K, Seed>
  * @param seed - The seed
  */
 export async function runSeed(scope: SeedScope, counter: WorkCounter, seed: Seed): Promise<void> {
-  // Read before the prepare too: the counts are observed from their first read on
-  // (`workCountsObserved`), and a seed's prepare does work its act is measured against.
-  readWorkCounters();
   const act = await seed.prepare(scope);
   const before = readWorkCounters();
   const result = await act();

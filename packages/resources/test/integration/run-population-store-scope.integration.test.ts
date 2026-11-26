@@ -26,6 +26,7 @@ import {
 import type { PopulationCache } from '../../src/projection/merge.js';
 import { IGNORE_HOME_SETTLEMENT, type RunPopulation, withRunPopulation } from '../../src/projection/run-population.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
+import { noDatabaseFile } from '../fake-fact-store.js';
 import { git, nestedRepository } from '../helpers/git-fixture.js';
 
 const roots: string[] = [];
@@ -73,6 +74,7 @@ function recordingStore(): FactStore & { touchedRootIds: string[] } {
       return Promise.resolve(undefined);
     },
     close: () => Promise.resolve(),
+    attachedTo: noDatabaseFile,
   };
 }
 

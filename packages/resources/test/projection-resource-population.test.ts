@@ -28,7 +28,7 @@ import type {
 } from '../src/projection/store.js';
 import { ResourceRegistry, type RegistryCrawl } from '../src/resource-registry.js';
 
-import { extentKeyOf, FakeFactStore } from './fake-fact-store.js';
+import { extentKeyOf, FakeFactStore, noDatabaseFile } from './fake-fact-store.js';
 import { inOwnRun, noStoredDocument } from './helpers/population-run.js';
 import { setupSubdirTestSuite } from './test-helpers.js';
 
@@ -294,6 +294,11 @@ class CapturingStore implements FactStore {
 
   async close(): Promise<void> {
     // Nothing is held open.
+  }
+
+  /** No database file to attach. */
+  attachedTo(): never {
+    return noDatabaseFile();
   }
 }
 

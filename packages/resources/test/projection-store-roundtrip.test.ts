@@ -61,11 +61,12 @@ import type {
   ExtentScopedRows,
   ExtentScopedTableName,
   FactStore,
+  StoreAttachTarget,
 } from '../src/projection/store.js';
 import { PROJECTION_STORE_READ_FAILED_CODE } from '../src/projection/stored-reads.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
-import { FailingBlobStore, FakeFactStore } from './fake-fact-store.js';
+import { FailingBlobStore, FakeFactStore, noDatabaseFile } from './fake-fact-store.js';
 import { inOwnRun } from './helpers/population-run.js';
 import { setupSubdirTestSuite, useCorpusSuite } from './test-helpers.js';
 
@@ -177,6 +178,11 @@ class BrokenFactStore implements FactStore {
   async close(): Promise<void> {
     throw new Error(STORE_FAILURE);
   }
+
+  /** No database file to attach. */
+  attachedTo(): never {
+    return noDatabaseFile();
+  }
 }
 
 /**
@@ -231,6 +237,10 @@ class HarnesslessFactStore implements FactStore {
   /** @returns The inner store's close */
   close(): Promise<void> {
     return this.inner.close();
+  }
+
+  attachedTo<T>(target: StoreAttachTarget, schema: string, work: () => T): T {
+    return this.inner.attachedTo(target, schema, work);
   }
 }
 

@@ -49,7 +49,7 @@ import {
   queryableSpecs,
 } from './schema-sql.js';
 import { type GateConnection, openGate, refreshRelationPagesAfter, runGated } from './sql-gate.js';
-import { failAfter, inTransaction, SqliteFactStore } from './store.js';
+import { failAfter, inTransaction } from './store.js';
 import { encodeValue, type SqliteValue } from './values.js';
 
 /** One relation's rows, as a projection or a lens holds them. */
@@ -61,9 +61,8 @@ type RelationRows = readonly Readonly<Record<string, unknown>>[];
  */
 export interface StoredRows {
   /**
-   * The store the hit was read from. The copy reads it through the store itself
-   * (`SqliteFactStore.attachedTo`), so only a store `openSqliteFactStore` opened, and still open,
-   * can be copied from: a wrapper or a fake has no file to attach, and refuses.
+   * The store the hit was read from. The copy reads it through the port's `attachedTo`, which
+   * every wrapper forwards; a store with no file to attach, or a closed one, throws.
    */
   readonly store: FactStore;
   /**
@@ -431,14 +430,10 @@ export function hydrateRunDatabase(hydration: RunDatabaseHydration): RunDatabase
  * @param stored - The store and the keys
  * @returns How many rows it copied
  * @throws {@link StoredRowsEvictedError} When an admitted key left the store's ledger
- * @throws Error When the store is not one this package opened, so there is no file to attach, or
- *   it is closed
+ * @throws Error When the store has no file to attach, or is closed
  */
 function copyStoredRelation(database: DatabaseSync, relation: QueryableRelation, stored: StoredRows): number {
   const { store } = stored;
-  if (!(store instanceof SqliteFactStore)) {
-    throw new TypeError(`"${relation.spec.name}" can be copied only from a store openSqliteFactStore opened; a wrapped or fake store has no file to attach.`);
-  }
   const [keyColumn] = relation.spec.primaryKey;
   if (keyColumn === undefined) throw new Error(`"${relation.spec.name}" declares no primary key to copy by.`);
   const keys = [...new Set(stored.contentKeys)];

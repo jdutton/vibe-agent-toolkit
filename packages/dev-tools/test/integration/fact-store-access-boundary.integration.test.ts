@@ -24,6 +24,8 @@ const { FACT_STORE_ACCESSORS } = await importRootEslintConfig<{
 const REPO_ROOT = resolveFromImportMeta(import.meta.url, '..', '..', '..', '..');
 const RULE = 'local/fact-store-access-boundary';
 const MEMBERS = ['readBlobFacts', 'readExtent', 'writeBlobFacts', 'writeExtent'];
+/** Text in a specifier that may name the resources testing helpers: the package's, or a relative `testing` one. */
+const TESTING_SPECIFIERS = ['resources/testing', '/testing/', '/testing.js'];
 
 const lint = syntaxRuleLinter(REPO_ROOT, [RULE]);
 const SECOND_READER = 'export const rows = (store: { readBlobFacts(k: string[]): unknown }) => store.readBlobFacts([]);\n';
@@ -44,7 +46,7 @@ describe('the fact store access boundary', () => {
   });
 
   it('exempts exactly the files that reach the port, both ways', async () => {
-    const reported = await filesTheRuleReports(REPO_ROOT, RULE, (_file, text) => MEMBERS.some((member) => text.includes(member)));
+    const reported = await filesTheRuleReports(REPO_ROOT, RULE, (_file, text) => MEMBERS.some((member) => text.includes(member)) || TESTING_SPECIFIERS.some((specifier) => text.includes(specifier)));
 
     expect(exemptionDrift(reported, FACT_STORE_ACCESSORS)).toEqual({ unexempted: [], unused: [] });
   });

@@ -261,6 +261,15 @@ export interface ExtentKey {
 }
 
 /**
+ * The connection {@link FactStore.attachedTo} attaches a store to: what an attach uses of
+ * `node:sqlite`'s `DatabaseSync`, so the port names no SQLite module.
+ */
+export interface StoreAttachTarget {
+  exec(sql: string): void;
+  prepare(sql: string): { run(...parameters: string[]): unknown };
+}
+
+/**
  * The storage port: what a backend for the resource projection implements,
  * and all that a caller holding one may do — read and write blob facts, read an
  * extent, write one additively, and close. It carries no SQL: see "No query"
@@ -398,6 +407,18 @@ export interface FactStore {
    * a lifetime bug in the caller.
    */
   close(): Promise<void>;
+
+  /**
+   * Attach this store read-only to `target` under `schema`, run `work`, and detach it, so a query
+   * copies stored rows inside SQLite. Required, so every wrapper of the port forwards it: a wrapper
+   * that drops it does not compile. A store with no database file to attach throws.
+   *
+   * @param target - The connection, outside any transaction
+   * @param schema - The name the store is attached under while `work` runs
+   * @param work - What reads the attached store
+   * @returns What `work` returns
+   */
+  attachedTo<T>(target: StoreAttachTarget, schema: string, work: () => T): T;
 }
 
 /**

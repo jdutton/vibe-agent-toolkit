@@ -2,7 +2,7 @@
  * `fact-store-access-boundary` — every way a module can reach the store's stored-fact members is
  * an access, a reference handed on included. The rule has no scope of its own: the config that
  * enables it says which files may reach the port. The VALID cases pin the forwarding wrapper and
- * what only looks like an access.
+ * what only looks like an access; the rule also refuses an import of the resources testing helpers.
  */
 
 import { describe, it } from 'vitest';
@@ -12,6 +12,7 @@ import { RULE_TESTER_CASES, type RuleCases, expectRulePasses } from '../rule-tes
 const RULE = 'fact-store-access-boundary';
 const FILE = '/repo/packages/resources/src/projection/merge.ts';
 const error = (name: string): Array<{ messageId: string; data: { name: string } }> => [{ messageId: 'portAccess', data: { name } }];
+const testingImport = (source: string): Array<{ messageId: string; data: { source: string } }> => [{ messageId: 'testingImport', data: { source } }];
 
 const CASES: RuleCases = {
   valid: [
@@ -26,6 +27,8 @@ const CASES: RuleCases = {
     { code: 'export const store = { readBlobFacts: () => Promise.resolve({}) };', filename: FILE },
     { code: "export const name = 'readBlobFacts';", filename: FILE },
     { code: 'export const rows = store[name](keys);', filename: FILE },
+    { code: "import { thing } from '../testing-free.js';", filename: FILE },
+    { code: "import type { BlobWriterContract } from '@vibe-agent-toolkit/resources/testing';", filename: FILE },
   ],
   invalid: [
     { code: 'export const rows = await cache.store.readBlobFacts(keys, request);', filename: FILE, errors: error('readBlobFacts') },
@@ -43,6 +46,24 @@ const CASES: RuleCases = {
       filename: FILE,
       errors: error('readExtent'),
     },
+    // A same-named wrapper whose body does more than forward is a second reader: one that memoizes,
+    // one that hands on other arguments.
+    {
+      code: 'export const wrapped = { readBlobFacts: (keys, request) => memo.get(keys) ?? store.readBlobFacts(keys, request) };',
+      filename: FILE,
+      errors: error('readBlobFacts'),
+    },
+    {
+      code: 'export const wrapped = { readExtent(key, request) { const rows = store.readExtent(key, request); held.set(key, rows); return rows; } };',
+      filename: FILE,
+      errors: error('readExtent'),
+    },
+    { code: 'export const wrapped = { readExtent: (key) => store.readExtent(key, ALL_EXTENT_REQUEST) };', filename: FILE, errors: error('readExtent') },
+    // The testing helpers reach the port; a module importing them would be a reader by proxy.
+    { code: "import { thing } from '@vibe-agent-toolkit/resources/testing';", filename: FILE, errors: testingImport('@vibe-agent-toolkit/resources/testing') },
+    { code: "import { thing } from '../testing/blob-writer-contract.js';", filename: FILE, errors: testingImport('../testing/blob-writer-contract.js') },
+    { code: "export * from '../testing.js';", filename: FILE, errors: testingImport('../testing.js') },
+    { code: "export const loaded = import('../testing.js');", filename: FILE, errors: testingImport('../testing.js') },
   ],
 };
 

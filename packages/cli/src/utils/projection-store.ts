@@ -387,6 +387,8 @@ function codingFailures(store: FactStore, coded: (error: unknown) => unknown): F
     writeExtent: (key, rows) => store.writeExtent(key, rows).catch(rethrowCoded),
     readExtent: (key, request) => store.readExtent(key, request).catch(rethrowCoded),
     close: () => store.close(),
+    // Uncoded: an eviction `work` throws keeps its own code, which the query lane retries on.
+    attachedTo: (target, schema, work) => store.attachedTo(target, schema, work),
   };
 }
 

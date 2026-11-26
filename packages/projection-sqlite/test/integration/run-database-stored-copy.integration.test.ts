@@ -9,7 +9,7 @@
  * reversed the order reds here.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
 import {
@@ -115,16 +115,16 @@ describe('hydrating a stored relation by copying it inside SQLite', () => {
     expect(readWorkCounters()['hydration.rows.copied']).toBe(FORMS.length);
   });
 
-  it('refuses a store it cannot attach: a wrapper of the port, and a closed store', async () => {
+  it('copies through a wrapper of the port, which forwards the attach, and refuses a closed store', async () => {
     const wrapped: FactStore = {
       readBlobFacts: (keys, request) => store.readBlobFacts(keys, request),
       readExtent: (key, request) => store.readExtent(key, request),
       writeBlobFacts: (write) => store.writeBlobFacts(write),
       writeExtent: (key, rows) => store.writeExtent(key, rows),
       close: () => store.close(),
+      attachedTo: (target, schema, work) => store.attachedTo(target, schema, work),
     };
-    expect(() => hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['blob_references', { stored: { store: wrapped, contentKeys: [FIRST_BLOB] } }]]) }))
-      .toThrow(/only from a store openSqliteFactStore opened/u);
+    expect(await answersOf({ stored: { store: wrapped, contentKeys: [FIRST_BLOB] } })).toHaveLength(FORMS.length);
 
     await store.close();
     expect(() => hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['blob_references', { stored: { store, contentKeys: [FIRST_BLOB] } }]]) }))
@@ -217,7 +217,28 @@ function sqliteStore(): SqliteFactStore {
   return store;
 }
 
+/** A directory name holding a backslash: on POSIX a filename character. */
+const BACKSLASHED_NAME = String.raw`cache\dir`;
+
 describe('SqliteFactStore.attachedTo', () => {
+  // On POSIX a backslash is a filename character, so it must reach SQLite as one.
+  it.skipIf(process.platform === 'win32')('attaches a store whose directory name holds a backslash', async () => {
+    const { openSqliteFactStore } = await import('../../src/store.js');
+    // Not safePath.join: it would turn the backslash into a separator.
+    const backslashed = `${directory}/${BACKSLASHED_NAME}`;
+    const opened = openSqliteFactStore({ directory: backslashed });
+    if (!(opened instanceof SqliteFactStore)) throw new TypeError('openSqliteFactStore opens a SqliteFactStore');
+    const database = new DatabaseSync(':memory:');
+    try {
+      expect(existsSync(backslashed), 'the premise: a directory named with a backslash').toBe(true);
+      const tables = opened.attachedTo(database, 'held', () => schemasOf(database));
+      expect(tables).toContain('held');
+    } finally {
+      database.close();
+      await opened.close();
+    }
+  });
+
   it('attaches the store read-only and detaches it after the work', () => {
     const database = new DatabaseSync(':memory:');
     try {

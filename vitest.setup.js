@@ -22,7 +22,7 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
-import { afterAll } from 'vitest';
+import { afterAll, beforeAll } from 'vitest';
 
 const PRESERVE_ENV = new Set(['VAT_SKILL_TEST_E2E', 'VAT_FAULT_MATRIX']);
 
@@ -72,6 +72,22 @@ process.env.VAT_TEST_USER_STATE_UNDER = [...new Set([tmpdir(), realpathSync.nati
 // (enforced by: packages/dev-tools/test/vitest-setup-env.test.ts; the refusal by
 // packages/resources/test/integration/cache-root.integration.test.ts)
 const fileCacheDir = mkdtempSync(join(tmpdir(), 'vat-test-file-cache-'));
+
+// Every test file observes its work counts before its first test (`workCountsObserved`), so work
+// kept only to be counted (the store's decode ledger) is kept from a test's first line and no test
+// depends on reading the counters before the work it measures. A read, which changes no count, in
+// a hook: by then the test file's own imports have loaded, its `vi.mock`s applied, so this loads
+// nothing ahead of a mock. The specifier resolves to the one real path the tests' own imports do,
+// so these are the counters they read; a package that does not link utils counts no work.
+// (enforced by: packages/resources/test/work-counts-observed.test.ts)
+beforeAll(async () => {
+	try {
+		const { readWorkCounters } = await import('@vibe-agent-toolkit/utils');
+		readWorkCounters();
+	} catch (error) {
+		if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error;
+	}
+});
 process.env.VAT_CACHE_DIR = fileCacheDir;
 afterAll(() => {
 	try {

@@ -284,16 +284,17 @@ function pickTables(rows: TableRows, request: ExtentRequest<ExtentScopedTableNam
 }
 
 /**
- * Whether what the run holds of a tree answers a request: every table it asks for, reconstructed by
- * every step it asks for (a step narrows the tables it outputs, so the same tables read without it
- * are other rows).
+ * Whether what the run holds of a tree answers a request: every table it asks for. A request's
+ * steps are not compared: the store reads tables and runs no step (`selectRequestedRows` runs them
+ * over what the read returns, caller-side), so the same tables read under other steps are the same
+ * rows.
  *
  * @param held - What the run holds of the tree
  * @param request - What the caller reads
  * @returns True when no read is needed
  */
 function holdsExtent(held: HeldExtent, request: ExtentRequest<ExtentScopedTableName>): boolean {
-  return request.tables.every((table) => held.request.tables.includes(table)) && request.steps.every((step) => held.request.steps.includes(step));
+  return request.tables.every((table) => held.request.tables.includes(table));
 }
 
 /**

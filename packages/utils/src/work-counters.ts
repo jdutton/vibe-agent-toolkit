@@ -283,8 +283,10 @@ export function countWork(counter: Exclude<WorkCounter, 'git.calls'>, n: number)
 /**
  * Whether anything will read this thread's counts, so work kept only to be counted (the store's
  * record of every row it decoded) costs nothing when no reader observes. Set by every way the
- * counts are read: the dump's install, an in-process read, a test reset. Gated work done before the
- * first read is not kept.
+ * counts are read: the dump's install, an in-process read (every test file's shared setup makes
+ * one before its first test), a test reset. Gated work done before the first read is not kept:
+ * the parse-timing dump reads the counts in process, so a run with it on turns the ledger on
+ * mid-run, from that read.
  *
  * @returns True when the counts dump is installed, the counts were read in process, or a test reset them
  */

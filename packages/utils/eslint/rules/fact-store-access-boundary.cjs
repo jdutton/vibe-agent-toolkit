@@ -14,10 +14,17 @@
  * MAY reach the port (the reader, the backend implementing it, test suites),
  * through its `files`/`ignores`, and every other file it covers may not.
  *
- * One shape is allowed anywhere: a forwarding wrapper, where the access sits in
- * a function that is itself the value of a property or method of the SAME name
+ * One shape is allowed anywhere: a forwarding wrapper, a property or method of
+ * the SAME name whose body is exactly the call, its own parameters handed on in
+ * order, optionally followed by one `.catch(handler)`
  * (`readBlobFacts: (keys, request) => store.readBlobFacts(keys, request)`). A
- * wrapper is still a store, reached through the reader like any other.
+ * wrapper is still a store, reached through the reader like any other; one that
+ * does anything else (memoizes, filters, reads twice) is a second reader.
+ *
+ * It also reports an import of the resources package's testing helpers
+ * (`@vibe-agent-toolkit/resources/testing`, `resources/src/testing/**`) from
+ * any file it covers: those helpers reach the port and are exempt, so a module
+ * importing them would be a second reader by proxy.
  *
  * Known limits: names matched by spelling, so an unrelated object's member of
  * the same name is reported too; and a name reached through data flow (a
@@ -60,14 +67,64 @@ function enclosingFunction(node) {
   return null;
 }
 
-/** Whether `node` sits in a function that is the value of a property or method named `name`. */
+/** The one expression `fn` returns, when its body is nothing else: an arrow's expression, or a lone `return`. */
+function soleReturned(fn) {
+  if (fn.body.type !== 'BlockStatement') return fn.body;
+  const [statement, ...rest] = fn.body.body;
+  return rest.length === 0 && statement?.type === 'ReturnStatement' ? statement.argument : null;
+}
+
+/** `expression` without one trailing `.catch(handler)`. */
+function withoutCatch(expression) {
+  const callee = expression?.type === 'CallExpression' ? expression.callee : null;
+  const isCatch = callee?.type === 'MemberExpression' && memberName(callee) === 'catch' && expression.arguments.length === 1;
+  return isCatch ? callee.object : expression;
+}
+
+/** Whether `call` hands on exactly `fn`'s own parameters, in order. */
+function forwardsParameters(call, fn) {
+  if (call.arguments.length !== fn.params.length) return false;
+  return fn.params.every((param, index) => {
+    const argument = call.arguments[index];
+    return param.type === 'Identifier' && argument?.type === 'Identifier' && argument.name === param.name;
+  });
+}
+
+/**
+ * Whether `node` is the forward of a wrapper named `name`: the function holding it is the value of
+ * a property or method of that name, and its whole body is the call of `node` with its own
+ * parameters, optionally followed by one `.catch(handler)`.
+ */
 function inWrapperNamed(node, name) {
   const fn = enclosingFunction(node);
   const holder = fn?.parent;
   if (holder === undefined || holder === null) return false;
   const isHolder = (holder.type === 'Property' || holder.type === 'MethodDefinition' || holder.type === 'PropertyDefinition')
     && holder.value === fn;
-  return isHolder && keyName(holder) === name;
+  if (!isHolder || keyName(holder) !== name) return false;
+  const call = withoutCatch(soleReturned(fn));
+  return call?.type === 'CallExpression' && call.callee === node && forwardsParameters(call, fn);
+}
+
+/** The resources package's testing entry point, by package specifier. */
+const TESTING_PACKAGE = /^@vibe-agent-toolkit\/resources\/testing(?:\/|$)/u;
+/** The resources package's testing helpers, by source path. */
+const TESTING_SOURCE = /\/packages\/resources\/src\/testing(?:\/|\.[cm]?[jt]s$|$)/u;
+
+/**
+ * The path `source` names, resolved against `filename` as a URL resolves a relative reference (a
+ * file URL's path setter reads a Windows backslash as a separator).
+ */
+function resolvedFrom(filename, source) {
+  const base = new URL('file:///');
+  base.pathname = filename;
+  return new URL(source, base).pathname;
+}
+
+/** Whether `source`, imported from `filename`, names the resources package's testing helpers. */
+function namesTestingHelpers(filename, source) {
+  if (TESTING_PACKAGE.test(source)) return true;
+  return source.startsWith('.') && TESTING_SOURCE.test(resolvedFrom(filename, source));
 }
 
 module.exports = {
@@ -86,11 +143,23 @@ module.exports = {
       portAccess:
         "Do not reach the store's '{{name}}' here. A run reads and writes stored facts through its one reader " +
         '(`run.stored.of(store)`, stored-reads.ts), so no row is read twice.',
+      testingImport:
+        "Do not import '{{source}}' here: the resources testing helpers reach the store's reads and writes, so " +
+        "only tests may use them. Read through the run's one reader (`run.stored.of(store)`, stored-reads.ts).",
     },
   },
 
   create(context) {
+    const filename = context.filename ?? context.getFilename();
+    const checkImport = (node, source, kind) => {
+      if (kind === 'type' || source?.type !== 'Literal' || typeof source.value !== 'string') return;
+      if (namesTestingHelpers(filename, source.value)) context.report({ node, messageId: 'testingImport', data: { source: source.value } });
+    };
     return {
+      ImportDeclaration: (node) => checkImport(node, node.source, node.importKind),
+      ExportNamedDeclaration: (node) => checkImport(node, node.source, node.exportKind),
+      ExportAllDeclaration: (node) => checkImport(node, node.source, node.exportKind),
+      ImportExpression: (node) => checkImport(node, node.source, 'value'),
       MemberExpression: (node) => {
         const name = memberName(node);
         if (name === null || !PORT_MEMBERS.has(name) || inWrapperNamed(node, name)) return;

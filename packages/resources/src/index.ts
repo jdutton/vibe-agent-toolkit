@@ -400,6 +400,7 @@ export {
   type ExtentScopedTableName,
   type BlobFactsWrite,
   type FactStore,
+  type StoreAttachTarget,
   type HarnessPair,
   type ProjectionTableNamesOfScope,
   isProjectionStoreDirectoryName,

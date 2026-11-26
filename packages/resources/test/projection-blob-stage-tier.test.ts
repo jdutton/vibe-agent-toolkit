@@ -220,7 +220,7 @@ describe('a run\'s reads of one store', () => {
     expect(store.readKeys.at(-1)).toEqual([moved]);
   });
 
-  it('read a tree again when a request asks for a step its held read did not run', async () => {
+  it('answer a tree from what they hold when a request differs only in its steps', async () => {
     const store = new FakeFactStore();
     const tree = { rootId: 'root', treeHash: 'tree' };
     const reads = runStoredReads().of(store);
@@ -230,9 +230,9 @@ describe('a run\'s reads of one store', () => {
     await reads.extent(tree, { tables, steps: [] });
     expect(store.readExtentCalls, 'the same request reads once').toBe(1);
 
-    // The step narrows the tables it outputs, so the held rows are not what it answers.
+    // The store runs no step (the caller does, over the rows), so the held rows answer it.
     await reads.extent(tree, { tables, steps: ['identity'] });
-    expect(store.readExtentCalls, 'a step the held read did not run reads again').toBe(2);
+    expect(store.readExtentCalls, 'a request differing only in its steps reads nothing').toBe(1);
   });
 });
 

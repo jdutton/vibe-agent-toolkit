@@ -26,6 +26,10 @@ describe('readOnlyDatabaseUri', () => {
     expect(readOnlyDatabaseUri('/tmp/a b/store.db')).toBe('file:///tmp/a%20b/store.db?mode=ro');
   });
 
+  it('keeps a POSIX backslash a filename character, encoded so the URL parser cannot split on it', () => {
+    expect(readOnlyDatabaseUri(String.raw`/tmp/cache\dir/store.db`)).toBe('file:///tmp/cache%5Cdir/store.db?mode=ro');
+  });
+
   it('refuses a relative path', () => {
     expect(() => readOnlyDatabaseUri('cache/store.db')).toThrow(/not an absolute path/);
   });

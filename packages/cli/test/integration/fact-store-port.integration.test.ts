@@ -1,7 +1,8 @@
 /**
  * The storage port and the run database, held by the compiler.
  *
- * `resources` declares one storage port, `FactStore`, with no SQL on it; `projection-sqlite`
+ * `resources` declares one storage port, `FactStore`, with no SQL on it (its `attachedTo` takes a
+ * connection and runs no statement of its caller's); `projection-sqlite`
  * implements it and declares, beside it, the run database: the one handle SQL runs on, which
  * holds no storage operation and is opened only by hydrating a `Map` of the relations a run
  * names — never from a whole `Projection`. Every claim here is
@@ -60,7 +61,7 @@ const PROBE_LINES = [
   'type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;',
   'type Expect<T extends true> = T;',
   '/** The port, member by member. Adding an operation to it means adding it here, deliberately. */',
-  "type PortMembers = 'writeBlobFacts' | 'readBlobFacts' | 'writeExtent' | 'readExtent' | 'close';",
+  "type PortMembers = 'writeBlobFacts' | 'readBlobFacts' | 'writeExtent' | 'readExtent' | 'close' | 'attachedTo';",
   "type Backend = typeof import('@vibe-agent-toolkit/projection-sqlite');",
   '/** What an export produces: a constructor\'s instance, or a function\'s awaited result. */',
   'type Produces<T> = T extends abstract new (...args: never[]) => infer I ? I : T extends (...args: never[]) => infer R ? Awaited<R> : never;',
