@@ -350,7 +350,6 @@ packages/resources/src/types.ts expandPatterns dead
 packages/resources/src/types.ts FrontmatterExternalUrl dead
 packages/resources/src/types.ts FrontmatterLinkValidationResult dead
 packages/resources/src/types.ts getAllSchemaErrors dead
-packages/resources/src/types.ts getCollectionsForFile dead
 packages/resources/src/types.ts getResourceAbsolutePath dead
 packages/resources/src/types.ts hasSchemaErrors dead
 packages/resources/src/types.ts Heading test-only
@@ -361,7 +360,6 @@ packages/resources/src/types.ts JsonResource dead
 packages/resources/src/types.ts JsonSchemaResource dead
 packages/resources/src/types.ts loadConfig dead
 packages/resources/src/types.ts MarkdownResource dead
-packages/resources/src/types.ts matchesCollection dead
 packages/resources/src/types.ts normalizeProjectPath dead
 packages/resources/src/types.ts parseConfigFile dead
 packages/resources/src/types.ts RegistryStats dead

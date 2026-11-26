@@ -1035,7 +1035,7 @@
   `GIT_SUBPATH_INVALID_CODE`, `SKILL_PACKAGING_INPUT_INVALID_CODE`, `isSkillPackagingInputError`,
   `SKILL_TEST_REFUSAL_BY_ERROR_CODE`.
   `@vibe-agent-toolkit/utils/yaml`: `YAML_EDIT_INPUT_REFUSED_CODE`. `@vibe-agent-toolkit/resources`: `PROJECTION_STATEMENT_REFUSED_CODE`,
-  `LINK_AUTH_CONFIG_CODE`, `matchesCollection`, `ExternalPluginSourceSchema`,
+  `LINK_AUTH_CONFIG_CODE`, `compileCollectionMatcher`, `ExternalPluginSourceSchema`,
   `readConfigText`, `readConfigTextSync`. `@vibe-agent-toolkit/projection-sqlite`:
   `RunDatabase.columns(sql, ...params)`.
 

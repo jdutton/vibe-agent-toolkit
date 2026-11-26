@@ -30,7 +30,7 @@ import { promisify } from 'node:util';
 
 import { isFinalPathUnanswerableError, isPathAbsentError, isUnresolvableLinkError } from './errors/errno-table.js';
 import { relativeEscapesRoot, safePath, toForwardSlash } from './path-core.js';
-import { LinkChainRefusedError, walkHostChain } from './tree-change/host-chain.js';
+import { LinkChainRefusedError, walkHostChain, withoutPlaceKindMemo, withPlaceKindMemo, withWalkPlaceKindMemo } from './tree-change/host-chain.js';
 import { HOST_PATH_FLAVOR, type LinkChain, namedPathRoot, type PathFlavor } from './tree-change/link-chain.js';
 
 /**
@@ -68,6 +68,105 @@ export function edgeRealpathSync(path: string): string {
     if (!nativeAnswerNeedsJsWalk(error)) throw error;
     return nodeFs.realpathSync(path);
   }
+}
+
+/**
+ * Run work that walks many paths under one tree, and `lstat` each component beneath it ONCE.
+ *
+ * Every following call here walks its path's chain component by component first, and the lanes of
+ * one run (registry admission, the skills link graph's `FsLookupCache.probe`,
+ * `FsLookupCache.realpath`, `isWithinProject`) walk the same files, each re-reading the shared
+ * ancestor directories: on a ~25k-file tree a warm `vat validate` made 66,289 such `lstat`s over
+ * 6,298 distinct paths. Inside this bracket a component strictly beneath `root` is read once and its
+ * kind (directory, file, link, absent) reused; outside it, or for a path not beneath `root`, every
+ * walk asks the kernel as before. It is the run's ONE memo of what stands where: no lane keeps its
+ * own copy of a place's kind (`FsLookupCache.probe` answers from the walk, {@link walkedKindSync}).
+ *
+ * `root` is kept in both spellings a walk beneath it can take: as named, and as its real path (a
+ * walk beneath a tree starts from the tree's real path, {@link walkWithin}). A root not there is
+ * kept as named only; the OS refusing the root's realpath is thrown raw, as the first walk would.
+ *
+ * @throws The raw errno of the root's realpath the OS refused (not an absent root)
+ *
+ * ## What it deliberately does NOT do
+ *
+ * - A component another process changes mid-run (a directory replaced by a link, a file by a
+ *   directory) is not read again: the first answer stands for the bracket, the contract
+ *   `withGitSnapshotCache` states for its snapshot. A link's TEXT is still read on every walk, and
+ *   a kept link that is no longer one when its text is read (`readlink`'s `EINVAL`), or is gone
+ *   (`ENOENT`), is dropped from the memo and the walk taken once more.
+ * - Nothing may be written beneath `root` inside it: every shared write primitive refuses such a
+ *   write (`WRITE_UNDER_PLACE_KIND_SNAPSHOT_CODE`), so a run mis-declared as read-only fails at
+ *   its first write instead of reading stale kinds.
+ * - A refused `lstat` is never kept (thrown, for the caller to classify, and asked again next time).
+ *   An `absent` answer is kept like any other: a path another process creates mid-run stays absent
+ *   for the bracket, as a path it deletes stays present.
+ * - It is opened only around a run that writes nothing under its tree: a run that writes would
+ *   replace what it already read, or create what it found absent, and must see its own writes, so
+ *   it opens {@link withoutPlaceKindSnapshot}, which shadows this bracket for everything inside it.
+ *
+ * Async-scoped (`AsyncLocalStorage`), so it spans the run's `await`s and two runs open at once in one
+ * process keep their own. A bracket opened inside one that already keeps every path beneath `root`
+ * uses that one (one run, one memo, however many brackets its work opens: a skill's link walk opens
+ * its own); anywhere else, inside {@link withoutPlaceKindSnapshot} included, it starts an empty memo,
+ * which is how work that writes nothing while it runs (a synchronous walk) reads each component
+ * once inside a run that writes.
+ *
+ * Beside each component's kind the memo keeps each walk's answer, when the walk read no link and
+ * nothing outside the bracket's roots: a function of kept kinds, so a path walked again in the
+ * bracket is answered without walking.
+ *
+ * @param root - The tree the run walks: absolute, or relative to cwd; either separator
+ * @param run - The work; its return value is passed straight through, so an async `run` keeps the
+ *   snapshot for its whole promise
+ * @returns Whatever `run` returned
+ */
+export function withPlaceKindSnapshot<T>(root: string, run: () => T): T {
+  return withPlaceKindMemo(snapshotRootsOf(root), run);
+}
+
+/**
+ * {@link withPlaceKindSnapshot} for a walk that is synchronous and writes nothing anywhere (a
+ * skill's link walk): it also reads each component OUTSIDE `root` once — a link target outside the
+ * project, walked whole from its own root, however many links name it — kept for the walk alone,
+ * never for the run. Every write inside it is refused, outside `root` too.
+ *
+ * @param root - As {@link withPlaceKindSnapshot}
+ * @param run - The walk: synchronous
+ * @returns Whatever `run` returned
+ * @throws TypeError when `run` returns a promise; as {@link withPlaceKindSnapshot} for the root
+ */
+export function withWalkPlaceKindSnapshot<T>(root: string, run: () => T): T {
+  return withWalkPlaceKindMemo(snapshotRootsOf(root), run);
+}
+
+/** A snapshot root in both spellings a walk beneath it can take: as named, and as its real path. */
+function snapshotRootsOf(root: string): string[] {
+  const named = toForwardSlash(safePath.resolve(root));
+  const roots = [named];
+  try {
+    const real = realRootOf(named);
+    if (real !== named) roots.push(real);
+  } catch (error: unknown) {
+    // A root not there (yet): nothing is walked beneath it, so the named spelling alone is kept.
+    // Any other refusal is the run's own, thrown as its first walk would have thrown it.
+    if (!isPathAbsentError(error)) throw error;
+  }
+  return roots;
+}
+
+/**
+ * Run work that writes under the tree it walks: every walk inside it `lstat`s every component, so it
+ * sees its own writes, even when an enclosing {@link withPlaceKindSnapshot} holds a memo (the
+ * bracket shadows it; that memo is used again once this one closes). The bracket a run that writes
+ * opens, where a reading run opens {@link withPlaceKindSnapshot}.
+ *
+ * @param run - The work; its return value is passed straight through, so an async `run` walks afresh
+ *   for its whole promise
+ * @returns Whatever `run` returned
+ */
+export function withoutPlaceKindSnapshot<T>(run: () => T): T {
+  return withoutPlaceKindMemo(run);
 }
 
 /** Where the walk of `path` begins: beneath `within`'s real path, or — for a path outside it — from its own root. */
@@ -271,6 +370,38 @@ export function linkCopyType(path: string, within: string): 'dir' | 'file' {
   const chain = walked.kind === 'edge' ? walkWhole(toForwardSlash(safePath.resolve(path)), HOST_PATH_FLAVOR) : walked;
   if (chain.kind === 'refused') throw new LinkChainRefusedError(path, chain.refusal);
   return chain.kind === 'resolved' && chain.final === 'directory' ? 'dir' : 'file';
+}
+
+/**
+ * What `path` (crawled beneath `within`) leads to, answered by the walk of its chain alone: the
+ * kind `lstat` read where the chain ends, the kernel never asked to follow it. The operator's own
+ * path (`path` is `within`) is the edge, answered by the kernel's `stat` as every edge is (a kind
+ * that is neither a file nor a directory reads as `file`).
+ *
+ * Inside {@link withPlaceKindSnapshot} every component comes from the run's snapshot, so a path
+ * any lane already walked costs no syscall at all — the reason a lane that needs only "is anything
+ * there, and is it a directory" asks this rather than {@link followedKindSync}, whose `stat` would
+ * be paid on every ask.
+ *
+ * ⚠️ It answers where the chain leads as VAT reads it, which is where the kernel's `stat` lands
+ * with two exceptions: a chain of more links than the host kernel follows (32 on macOS, 40 on
+ * Linux) but no more than the walk's 63 (`MAX_LINK_HOPS`) is answered by where it ends, where the
+ * kernel says `ELOOP`; and the walk's place kinds are `lstat`'s, so on Windows a junction to a
+ * volume and a reparse point of another tag read as the directory or file libuv reports for them
+ * (`hostPlaceKind`), as the kernel's `stat` also reports them.
+ *
+ * @returns `absent` for a chain that leads to nothing: absent, dangling, a cycle
+ * @throws LinkChainRefusedError for a chain VAT will not hand the kernel; the raw errno of an
+ *   `lstat`/`readlink` (or the root's realpath) the OS refused
+ */
+export function walkedKindSync(path: string, within: string): 'directory' | 'file' | 'absent' {
+  const walked = walkWithin(path, within, HOST_PATH_FLAVOR);
+  if (walked.kind === 'edge') {
+    const kind = followedKindSync(path, within);
+    return kind === 'other' ? 'file' : kind;
+  }
+  if (walked.kind === 'refused') throw new LinkChainRefusedError(path, walked.refusal);
+  return walked.kind === 'resolved' ? walked.final : 'absent';
 }
 
 /** What a followed path resolves to. */

@@ -13,7 +13,7 @@ import * as path from 'node:path';
 import { conventionalSuiteProbe, packagedFileEntries, type SkillTextRun } from '@vibe-agent-toolkit/agent-skills';
 import {
   DeferredArtifacts,
-  matchesCollection,
+  compileCollectionMatcher,
   notAdmittedCount,
   notAdmittedInScope,
   type CollectionConfig,
@@ -419,7 +419,7 @@ async function runValidation(
  * - One located at a RESOURCE is kept when that resource is in the collection.
  * - One located at a path that never became a resource (a file the glob
  *   matched and could not read, a MIME conflict) is kept when the collection's
- *   OWN include/exclude patterns match that path — the same `matchesCollection`
+ *   OWN include/exclude patterns match that path — the same `compileCollectionMatcher`
  *   the registry assigns membership with.
  *
  * 🚨 Keeping only "findings at the collection's resources" published `ok`, exit
@@ -444,10 +444,11 @@ function inCollectionScope(
   const relative = (resource: { filePath: string }): string => safePath.relative(projectRoot, resource.filePath);
   const resourcePaths = new Set(scope.all.map(relative));
   const inScope = new Set(scope.inScope.map(relative));
+  const matches = compileCollectionMatcher(collection);
   return issues.filter((issue) => {
     if (issue.location === undefined) return true;
     if (resourcePaths.has(issue.location)) return inScope.has(issue.location);
-    return matchesCollection(safePath.resolve(projectRoot, issue.location), collection);
+    return matches(safePath.resolve(projectRoot, issue.location));
   });
 }
 

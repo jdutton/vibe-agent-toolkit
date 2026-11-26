@@ -16,11 +16,14 @@ import {
   spellingWalkRoot,
 } from '../src/fs-utils.js';
 import type { DirectoryListing, RealpathTable } from '../src/fs-utils.js';
+import { withoutPlaceKindSnapshot, withPlaceKindSnapshot } from '../src/link-following.js';
 import { toForwardSlash } from '../src/path-core.js';
+import { mkdirSyncReal } from '../src/path-utils.js';
 import type { SymlinkCapability } from '../src/test-helpers.js';
 import { createSymlinkAsync, symlinkCapability } from '../src/test-helpers.js';
 import { PERMISSIONS_ENFORCED } from '../src/testing/platform-gates.js';
 import { setupAsyncTempDirSuite } from '../src/testing/temp-dir.js';
+import { __resetWorkCountersForTest, readWorkCounters } from '../src/work-counters.js';
 
 
 /** A directory name no fixture plants, so listing it always fails. */
@@ -142,6 +145,18 @@ async function withReaddirRefusedOnce<T>(
  */
 const NFD_NAME = 'cafe\u0301.txt';
 const NFC_NAME = 'caf\u00E9.txt';
+
+/** `fs.lstat` and the kernel's followed `statSync` calls `work` cost. */
+function probeCost(work: () => void): { lstat: number; stat: number } {
+  const stat = vi.spyOn(nodeFs, 'statSync');
+  __resetWorkCountersForTest();
+  try {
+    work();
+    return { lstat: readWorkCounters()['fs.lstat'], stat: stat.mock.calls.length };
+  } finally {
+    stat.mockRestore();
+  }
+}
 
 describe('fs-utils', () => {
   const suite = setupAsyncTempDirSuite('fs-utils');
@@ -312,39 +327,49 @@ describe('fs-utils', () => {
       }
     });
 
-    it('probes a path once however many times it is asked about', async () => {
+
+    it('answers a probe from the walk of its chain, never asking the kernel to stat it', async () => {
       const filePath = safePath.join(tempDir, 'probed.txt');
-      await fs.writeFile(filePath, '');
-      const cache = new FsLookupCache(tempDir);
-
-      const first = cache.probe(filePath);
-      cache.probe(filePath);
-      cache.probe(filePath);
-
-      // The counter is the assertion that dies when the memo dies. Every
-      // assertion below about the VALUES still passes without a memo.
-      expect(cache.probeStats).toEqual({ probes: 3, misses: 1 });
-      expect(first).toEqual({ exists: true, isDirectory: false });
-      expect(cache.probe(filePath)).toBe(first);
-    });
-
-    it('records a directory as existing and a directory', async () => {
       const dirPath = safePath.join(tempDir, 'a-directory');
+      await fs.writeFile(filePath, '');
       await fs.mkdir(dirPath);
       const cache = new FsLookupCache(tempDir);
 
-      expect(cache.probe(dirPath)).toEqual({ exists: true, isDirectory: true });
+      // One component below the tree each, read by `lstat`; the walk's own answer is the probe's.
+      expect(probeCost(() => {
+        expect(cache.probe(filePath)).toEqual({ exists: true, isDirectory: false });
+        expect(cache.probe(dirPath)).toEqual({ exists: true, isDirectory: true });
+      })).toEqual({ lstat: 2, stat: 0 });
     });
 
-    it('records an absent path as absent with no kind answer, and memoizes that too', () => {
-      const cache = new FsLookupCache(tempDir);
+    it('reads each component once per run: the run\'s place-kind snapshot is the probe\'s only memo', async () => {
+      const filePath = safePath.join(tempDir, 'probed.txt');
       const missing = safePath.join(tempDir, 'not-here.txt');
+      await fs.writeFile(filePath, '');
+      const cache = new FsLookupCache(tempDir);
 
-      expect(cache.probe(missing)).toEqual({ exists: false, isDirectory: null });
-      cache.probe(missing);
-
-      // The absent answer is cached: re-asking is the same failed syscall.
-      expect(cache.probeStats).toEqual({ probes: 2, misses: 1 });
+      withPlaceKindSnapshot(tempDir, () => {
+        expect(probeCost(() => {
+          cache.probe(filePath);
+          cache.probe(missing);
+        }).lstat).toBe(2);
+        // The same run asks again, present and absent alike: no syscall.
+        expect(probeCost(() => {
+          expect(cache.probe(filePath)).toEqual({ exists: true, isDirectory: false });
+          expect(cache.probe(missing)).toEqual({ exists: false, isDirectory: null });
+        }).lstat).toBe(0);
+        // Created by someone else mid-run (another process: no snapshot of its own), with a child: a
+        // probe of the child is a different walk, answered 'absent' from the kept answer for
+        // not-here.txt, with no syscall.
+        withoutPlaceKindSnapshot(() => mkdirSyncReal(missing));
+        nodeFs.writeFileSync(safePath.join(missing, 'child.txt'), '');
+        expect(probeCost(() => {
+          expect(cache.probe(safePath.join(missing, 'child.txt'))).toEqual({ exists: false, isDirectory: null });
+        }).lstat).toBe(0);
+      });
+      // Outside a run nothing is kept, the probe's own instance included.
+      expect(probeCost(() => cache.probe(filePath)).lstat).toBe(1);
+      expect(probeCost(() => cache.probe(filePath)).lstat).toBe(1);
     });
 
     it('reports a dangling symlink as absent, matching existsSync rather than lstat', async ({ skip }) => {
@@ -356,54 +381,45 @@ describe('fs-utils', () => {
       await createSymlinkAsync(cap, safePath.join(tempDir, 'no-such-target.txt'), dangling);
       const cache = new FsLookupCache(tempDir);
 
-      // The probe follows the link (its chain read first), so a dangling one reads
+      // The probe follows the link (its chain read), so a dangling one reads
       // as absent. The link-graph walker's classifier depends on exactly this: a
       // target it cannot read is `missing-target`, not a present file.
       expect(cache.probe(dangling)).toEqual({ exists: false, isDirectory: null });
     });
 
-    it('records a present path the OS refuses to stat as "no kind answer", which the link walker reports', async () => {
-      // The chain walk reads the path as present and local, then the kernel's
-      // `statSync` is refused. `isDirectory: null` is what the walker turns into
-      // an `unreadable-target` exclusion, so this IS a reported outcome.
-      const filePath = safePath.join(tempDir, 'refused-stat.txt');
+    it('answers a link by where its chain ends, the kernel never asked', async ({ skip }) => {
+      const cap = symlinkCapability() ?? skip();
+      const dirPath = safePath.join(tempDir, 'real-dir');
+      await fs.mkdir(dirPath);
+      const link = safePath.join(tempDir, 'dir-link');
+      await createSymlinkAsync(cap, dirPath, link, 'dir');
+
+      expect(probeCost(() => {
+        expect(new FsLookupCache(tempDir).probe(link)).toEqual({ exists: true, isDirectory: true });
+      }).stat).toBe(0);
+    });
+
+    it('records a present path whose lstat the OS refuses as "no kind answer", which the link walker reports', async ({ skip }) => {
+      // Unix permission bits; root reads through them.
+      if (!PERMISSIONS_ENFORCED) skip();
+      const sealed = safePath.join(tempDir, 'sealed');
+      await fs.mkdir(sealed);
+      const filePath = safePath.join(sealed, 'inside.txt');
       await fs.writeFile(filePath, '');
-      const spy = vi.spyOn(nodeFs, 'statSync').mockImplementation(() => {
-        throw Object.assign(new Error('EACCES: simulated, stat'), { code: 'EACCES' });
-      });
+      await fs.chmod(sealed, 0o000);
       try {
+        // `isDirectory: null` is what the walker turns into an `unreadable-target` exclusion.
         expect(new FsLookupCache(tempDir).probe(filePath)).toEqual({ exists: true, isDirectory: null });
       } finally {
-        spy.mockRestore();
+        await fs.chmod(sealed, 0o755);
       }
     });
 
-    it('lets a bug thrown from under the stat stay loud instead of recording it as unreadable', async () => {
-      // The catch used to be blind: a TypeError from a validator two frames down
-      // became `isDirectory: null`, and the walker reported the link target as
+    it('lets a bug thrown from under the walk stay loud instead of recording it as unreadable', () => {
+      // The catch used to be blind: a TypeError two frames down became
+      // `isDirectory: null`, and the walker reported the link target as
       // unreadable — a defect reported as an environment problem.
-      const filePath = safePath.join(tempDir, 'bug-under-stat.txt');
-      await fs.writeFile(filePath, '');
-      const spy = vi.spyOn(nodeFs, 'statSync').mockImplementation(() => {
-        throw new TypeError('stats.isDirectory is not a function');
-      });
-      try {
-        expect(() => new FsLookupCache(tempDir).probe(filePath)).toThrow(TypeError);
-      } finally {
-        spy.mockRestore();
-      }
-    });
-
-    it('keeps probe entries per instance, so a fresh run re-probes', async () => {
-      const filePath = safePath.join(tempDir, 'later.txt');
-      const firstRun = new FsLookupCache(tempDir);
-      expect(firstRun.probe(filePath).exists).toBe(false);
-
-      await fs.writeFile(filePath, '');
-
-      // Same instance: still the snapshot it took.
-      expect(firstRun.probe(filePath).exists).toBe(false);
-      expect(new FsLookupCache(tempDir).probe(filePath).exists).toBe(true);
+      expect(() => new FsLookupCache(tempDir).probe(42 as unknown as string)).toThrow(TypeError);
     });
 
     it('is instance-scoped, so a new instance never serves another run stale entries', async () => {
@@ -1052,34 +1068,30 @@ describe('fs-utils', () => {
         });
       });
 
-      it('judges from a filled table, reaching neither readdir nor the followed stat', async () => {
+      it('judges from a filled table, reaching neither readdir nor the link-chain walk', async () => {
         // TWO routes are instrumented, not one. `readdir` is how the fill
-        // reaches disk — but `FsLookupCache.probe` reaches the kernel's `statSync`
-        // (through `link-following.ts`, on the `node:fs` default object), so a judge
-        // that started stat-ing its target is one keystroke away, and a readdir-only
-        // spy stays green straight through that regression. Spying the default
-        // objects, not namespace bindings, is what makes the counts real.
+        // reaches disk — but `FsLookupCache.probe` reaches the filesystem by
+        // walking its target's link chain (`link-following.ts`, one counted
+        // `fs.lstat` per component), so a judge that started probing its target
+        // is one keystroke away, and a readdir-only spy stays green straight
+        // through that regression. The readdir spy is on the default object, not
+        // a namespace binding, which is what makes its count real.
         const root = await plantDeep(tempDir);
         const referrer = safePath.join(root, 'a.md');
         const target = safePath.join(root, 'One', 'Two', 'three.md');
-        const spies = [
-          vi.spyOn(fs, 'readdir'),
-          vi.spyOn(nodeFs, 'statSync'),
-        ];
-        const counts = (): number[] => spies.map((spy) => spy.mock.calls.length);
+        const readdir = vi.spyOn(fs, 'readdir');
+        const counts = (): number[] => [readdir.mock.calls.length, readWorkCounters()['fs.lstat']];
 
         const table = await fillPathSpellings([{ referrer, target }], new FsLookupCache(tempDir));
-        // Positive control for the followed stat: `probe` takes exactly the route a
-        // regressed judge would take, through the same `node:fs` default object.
-        // Without it, the zeros below are indistinguishable from instruments
-        // that never attached to the functions under test.
+        // Positive control for the walk: `probe` takes exactly the route a
+        // regressed judge would take. Without it, the zeros below are
+        // indistinguishable from instruments that never saw the function under test.
         //
-        // It must probe the spelling that is really ON DISK, never the asked-for
-        // `target`: `probe` reaches `statSync` only once the chain walk finds
-        // something there, so on a case-sensitive filesystem (ext4 in CI) `One/Two`
-        // leads to nothing and the control never reaches the syscall it exists to
-        // exercise. The assertion below pins that property rather than trusting
-        // it — `isDirectory: false` is a value only `statSync` can have produced.
+        // It probes the spelling that is really ON DISK, never the asked-for
+        // `target`: on a case-sensitive filesystem (ext4 in CI) `One/Two` leads to
+        // nothing, and `isDirectory: false` is a value only a walk that reached the
+        // file can have produced.
+        __resetWorkCountersForTest();
         const control = new FsLookupCache(tempDir).probe(safePath.join(root, PLANTED_PATH));
         expect(control).toEqual({ exists: true, isDirectory: false });
 
@@ -1091,7 +1103,6 @@ describe('fs-utils', () => {
         expect(counts()).toEqual(beforeJudging);
         vi.restoreAllMocks();
       });
-
       it('throws when the table has no row for this reference', async () => {
         // A miss is a fill/judge divergence, i.e. a programming error, so it
         // is loud rather than degrading to "missing" — a wrong answer wearing

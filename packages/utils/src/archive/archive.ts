@@ -19,6 +19,7 @@ import { forEachInOrder } from '../in-order.js';
 import { toForwardSlash } from '../path-core.js';
 import { openForReading } from '../text-file.js';
 import { makeDirectoryUnder, openFileUnder } from '../tree-change/files.js';
+import { assertNoSnapshotCovers } from '../tree-change/host-chain.js';
 
 import { type ArchiveEntry, ArchiveEntryReadError, type ArchiveFormat, type ArchiveLimits, ArchiveRefusedError, archiveEntryRefusal, placeOf } from './entries.js';
 import { archiveBytesCap, tooLarge } from './limits.js';
@@ -236,6 +237,7 @@ async function writeRecord(archive: string, into: string, record: ArchiveRecord)
  *   refuses, and side `environment` for a write it refuses
  */
 export async function extractArchive(source: ArchiveSource, into: string, options: ArchiveExtractOptions): Promise<readonly ArchiveEntry[]> {
+  assertNoSnapshotCovers(into);
   const opened = await openJudged(source, options);
   try {
     // In order: a directory before what goes in it, and the first failure the only one.

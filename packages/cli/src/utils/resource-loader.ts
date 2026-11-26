@@ -19,7 +19,7 @@ import {
   type ProjectConfig,
   type RunPopulation,
 } from '@vibe-agent-toolkit/resources';
-import { relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { relativeEscapesRoot, safePath, toForwardSlash, withoutPlaceKindSnapshot, withPlaceKindSnapshot } from '@vibe-agent-toolkit/utils';
 import { GitTracker, gitTreeSnapshot } from '@vibe-agent-toolkit/utils/git';
 
 import { CommandRefusalError } from './command-refusal.js';
@@ -27,7 +27,7 @@ import { loadConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
 import { collectionsOption } from './population-wiring.js';
 import { assertDirectoryArgument } from './project-root-policy.js';
-import { type OpenedPopulationCache, openQuestionCache, projectionStoreSelected, runThenClose, withLazyPopulationCache } from './projection-store.js';
+import { cacheRootInsideTree, type OpenedPopulationCache, openQuestionCache, projectionStoreSelected, runThenClose, withLazyPopulationCache } from './projection-store.js';
 
 /**
  * One VAT process run's shared population, registry and parse dispatcher: what
@@ -172,7 +172,9 @@ function questionStoreOf(root: string, holdsStore: boolean): {
  * Run one verb's work with its {@link RunContext}, inside the projection-store
  * scope that answers it.
  *
- * Opening the run reads no file, opens no store and takes no snapshot. The first
+ * Opening the run reads no file, opens no store and takes no git snapshot; a
+ * `'read-only'` run asks only the root's real path, for its place-kind snapshot
+ * (`withPlaceKindSnapshot`). The first
  * enumeration of the home root, or the first stored-document question a skills
  * lane asks (`RunPopulation.storedDocument`), inside whichever phase asks first,
  * opens the store, takes the snapshot that keys it and initializes the root's
@@ -187,8 +189,9 @@ function questionStoreOf(root: string, holdsStore: boolean): {
  * later phase runs.
  * What can still fail here is the parse dispatcher's shutdown when the run ends.
  *
- * @param options - The run's home root, the trees it writes (`[]` for a verb that
- *   only reads; see `RunPopulationOptions.outputs`), an ignore oracle to reuse,
+ * @param options - The run's home root, what it does to its tree ({@link RunTree}:
+ *   `'read-only'` with no outputs, or `'writes'` with the trees it writes that are known
+ *   when it opens, `[]` when it plans them further down), an ignore oracle to reuse,
  *   whether the run has a projection store (`'on-demand'` opens it as above,
  *   `'none'` declares a run that never opens it (`vat audit`), so its enumerations
  *   and stored-document questions open no home and take no snapshot), and the
@@ -201,17 +204,43 @@ function questionStoreOf(root: string, holdsStore: boolean): {
  * @param work - The verb's work
  * @returns Whatever `work` returned
  */
-export function withRunContext<T>(
-  options: {
-    readonly root: string;
-    readonly outputs: readonly string[];
-    readonly projectionStore: 'on-demand' | 'none';
-    readonly gitTracker?: GitTracker | undefined;
-    readonly homeSettledListener: (run: RunContext) => HomeSettledListener;
-  },
-  work: (run: RunContext) => Promise<T>,
-): Promise<T> {
+export async function withRunContext<T>(options: RunContextOptions, work: (run: RunContext) => Promise<T>): Promise<T> {
   const root = safePath.resolve(options.root);
+  const open = (): Promise<T> => openRunContext(root, options, work);
+  // A run that writes nothing under its tree reads each path component's kind once
+  // (`withPlaceKindSnapshot`, which refuses any write beneath the tree); a run that writes must
+  // see its own writes, so it walks afresh (`withoutPlaceKindSnapshot`), whatever snapshot an
+  // enclosing run holds. So does a read-only verb whose VAT cache root lies inside its tree
+  // (noticed to the operator, not refused): VAT writes its own state there.
+  // Async, so a refused root realpath rejects like every other run failure, never throws.
+  const keepsReads = options.tree === 'read-only' && !cacheRootInsideTree(root);
+  return await (keepsReads ? withPlaceKindSnapshot(root, open) : withoutPlaceKindSnapshot(open));
+}
+
+/**
+ * What a run does to its tree, and the trees it writes. Two fields because they answer two
+ * questions: `tree` decides whether the run's walks may reuse what they read
+ * ({@link withRunContext}); `outputs` is the subset of the run's writes known when the run opens,
+ * which decides which side a refused directory is on and keys the home population
+ * (`RunPopulationOptions.outputs`). A verb that plans its writes further down (`vat skills
+ * package`, `vat skill test run`) writes with `outputs: []`, so neither is derived from the other.
+ * The one combination that is a contradiction, a read-only run that declares outputs, does not
+ * compile.
+ */
+type RunTree =
+  | { readonly tree: 'read-only'; readonly outputs: readonly [] }
+  | { readonly tree: 'writes'; readonly outputs: readonly string[] };
+
+/** What {@link withRunContext} is asked to open. */
+type RunContextOptions = RunTree & {
+  readonly root: string;
+  readonly projectionStore: 'on-demand' | 'none';
+  readonly gitTracker?: GitTracker | undefined;
+  readonly homeSettledListener: (run: RunContext) => HomeSettledListener;
+};
+
+/** {@link withRunContext}'s run, its `root` resolved. */
+function openRunContext<T>(root: string, options: RunContextOptions, work: (run: RunContext) => Promise<T>): Promise<T> {
   const gitTracker = options.gitTracker ?? new GitTracker(root);
   // One decision whether the run has a store: what the openers answer and what the
   // skills lane counts a scan as (`skillText.storeMiss` or `skillText.noStore`).

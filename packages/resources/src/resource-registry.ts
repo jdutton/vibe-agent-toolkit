@@ -45,7 +45,7 @@ import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 
 import { vatLinkCacheDirectory } from './cache-root.js';
-import { getCollectionsForFile } from './collection-matcher.js';
+import { compileCollectionMembership } from './collection-matcher.js';
 import { type ContentKey, type KeyedContent, type ParserKind, readContentWithKey } from './content-key.js';
 import type { DeferredArtifacts } from './deferred-artifacts.js';
 import {
@@ -694,6 +694,13 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private mimeResolverInstance?: CollectionMimeResolver | undefined;
 
   /**
+   * Which of this registry's collections a file belongs to: its collections'
+   * patterns compiled once, on the first admission, never once per file. The
+   * config is fixed at construction, so nothing invalidates it.
+   */
+  #collectionsFor: ((filePath: string) => string[]) | undefined;
+
+  /**
    * This registry's parse-pool policy — see {@link ResourceRegistryOptions.parsePool}.
    *
    * Held rather than passed, because `crawl()` reaches `addResources` and a
@@ -1238,9 +1245,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     const id = this.generateId(absolutePath, facts.frontmatter);
 
     // Determine collections if config is present
-    const collections = this.config?.resources?.collections
-      ? getCollectionsForFile(absolutePath, this.config.resources.collections)
-      : undefined;
+    const configured = this.config?.resources?.collections;
+    if (configured !== undefined) {
+      this.#collectionsFor ??= compileCollectionMembership(configured);
+    }
+    const collections = this.#collectionsFor?.(absolutePath);
 
     // Create resource metadata
     const resource: ResourceMetadata = {

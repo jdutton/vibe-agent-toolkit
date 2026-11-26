@@ -84,11 +84,22 @@ export function conventionalSuiteProbe(): ConventionalSuiteProbe {
   };
 }
 
-/** True when `candidate` is inside (or equal to) `dir`. Both are absolute. */
-function isInside(candidate: string, dir: string): boolean {
-  const c = safePath.resolve(candidate);
-  const d = safePath.resolve(dir);
-  return c === d || c.startsWith(`${d}/`);
+/**
+ * A predicate: is `candidate` inside (or equal to) any of `dirs`? All are absolute.
+ *
+ * Each dir is resolved once here, so a caller testing many candidates resolves each
+ * candidate once per call rather than once per (candidate, dir) pair. Build it once,
+ * outside the candidate loop.
+ */
+function insideAnyOf(dirs: readonly string[]): (candidate: string) => boolean {
+  const roots = dirs.map((dir) => {
+    const d = safePath.resolve(dir);
+    return { d, prefix: `${d}/` };
+  });
+  return (candidate) => {
+    const c = safePath.resolve(candidate);
+    return roots.some(({ d, prefix }) => c === d || c.startsWith(prefix));
+  };
 }
 
 /**
@@ -186,8 +197,9 @@ export function resolveTestInputDirs(
 ): string[] {
   const dirs = new Set(declaredTestInputDirs(config, skillDir, hasConventionalSuite));
   for (const skill of projectSkills) {
+    const insideSkill = insideAnyOf([skill.skillDir]);
     for (const dir of declaredTestInputDirs(skill.config, skill.skillDir, hasConventionalSuite)) {
-      if (isInside(dir, skill.skillDir)) dirs.add(dir);
+      if (insideSkill(dir)) dirs.add(dir);
     }
   }
   return [...dirs];
@@ -258,10 +270,11 @@ export function partitionTestInputFileEntries(
   if (testInputDirs.length === 0) return { kept: [...filesConfig], dropped: [] };
   const kept: SkillFileEntry[] = [];
   const dropped: SkillFileEntry[] = [];
+  const inTestInput = insideAnyOf(testInputDirs);
   for (const entry of filesConfig) {
     const effective = isGlob(entry.source) ? staticGlobBase(entry.source) : entry.source;
     const absSource = safePath.resolve(safePath.join(projectRoot, effective));
-    if (testInputDirs.some((dir) => isInside(absSource, dir))) dropped.push(entry);
+    if (inTestInput(absSource)) dropped.push(entry);
     else kept.push(entry);
   }
   return { kept, dropped };
@@ -354,8 +367,9 @@ export function testInputLinkIssues(
   if (excludedDirs.length === 0) return [];
   const issues: ValidationIssue[] = [];
   const seen = new Set<string>();
+  const inExcludedDir = insideAnyOf(excludedDirs);
   for (const ref of excluded) {
-    if (!excludedDirs.some((dir) => isInside(ref.path, dir))) continue;
+    if (!inExcludedDir(ref.path)) continue;
     const location = issueLocation(ref.path, locationRoot);
     if (seen.has(location)) continue;
     seen.add(location);
@@ -396,8 +410,9 @@ export interface CheckPackagedTestInputInput {
 export function checkPackagedTestInput(input: CheckPackagedTestInputInput): ValidationIssue[] {
   if (input.testInputDirs.length === 0) return [];
   const locations = new Set<string>();
+  const inTestInput = insideAnyOf(input.testInputDirs);
   for (const [source, dest] of input.pathMap) {
-    if (input.testInputDirs.some((dir) => isInside(source, dir))) {
+    if (inTestInput(source)) {
       locations.add(toForwardSlash(safePath.relative(input.outputPath, dest)));
     }
   }

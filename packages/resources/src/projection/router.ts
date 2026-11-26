@@ -17,7 +17,7 @@
  * held by `packages/dev-tools/test/parser-kind-decisions.test.ts`.
  */
 
-import { matchesCollection } from '../collection-matcher.js';
+import { type CollectionMatcher, compileCollectionMatcher } from '../collection-matcher.js';
 import { NO_PARSER_KIND, type ParserKind } from '../content-key.js';
 import { type DocumentParserKind, mimeTypeForPath, parserKindForMimeType } from '../mime-type.js';
 import type { CollectionConfig, ProjectConfig } from '../schemas/project-config.js';
@@ -134,8 +134,10 @@ interface DeclaringCollection {
   name: string;
   /** The type it declares. */
   mimeType: string;
-  /** Its patterns, for {@link matchesCollection}. */
+  /** Its patterns, as declared: the fingerprint's input. */
   config: CollectionConfig;
+  /** Its patterns compiled once, when the resolver is built. */
+  matches: CollectionMatcher;
 }
 
 /**
@@ -155,7 +157,9 @@ export function createCollectionMimeResolver(
 ): CollectionMimeResolver {
   const declaring: DeclaringCollection[] = Object.entries(collections ?? {})
     .flatMap(([name, config]) => (
-      config.mimeType === undefined ? [] : [{ name, mimeType: config.mimeType, config }]
+      config.mimeType === undefined
+        ? []
+        : [{ name, mimeType: config.mimeType, config, matches: compileCollectionMatcher(config) }]
     ));
   const conflicts: CollectionMimeConflict[] = [];
   // Keyed on the path: one file is one authoring mistake however many extents realize it.
@@ -174,7 +178,7 @@ export function createCollectionMimeResolver(
     conflicts,
     fingerprint,
     mimeFor(absolutePath: string, relativePath: string): string | null {
-      const matched = declaring.filter((candidate) => matchesCollection(absolutePath, candidate.config));
+      const matched = declaring.filter((candidate) => candidate.matches(absolutePath));
       const winner = matched[0];
       if (winner === undefined) {
         return mimeTypeForPath(absolutePath);

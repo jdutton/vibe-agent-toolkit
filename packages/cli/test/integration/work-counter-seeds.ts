@@ -31,6 +31,7 @@ import {
   blobFactsReader,
   type BlobScopedRows,
   computeContentKey,
+  createCollectionMimeResolver,
   type ExtentScopedRows,
   IGNORE_HOME_SETTLEMENT,
   ParseCache,
@@ -815,6 +816,21 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       return undefined;
     },
     delta: { 'checks.gate.rows.read': 1 },
+  },
+  // A MIME resolver over two declaring collections, asked about three paths:
+  // each collection's patterns compiled once when the resolver is built, none per path.
+  'collection.matchers.compiled': {
+    prepare: () => () => {
+      const resolver = createCollectionMimeResolver({
+        prose: { include: ['docs'], mimeType: 'text/markdown' },
+        data: { include: ['data'], mimeType: 'application/json' },
+      });
+      for (const name of ['a', 'b', 'c']) {
+        expect(resolver.mimeFor(`${ROOT}/docs/${name}.md`, `docs/${name}.md`)).toBe('text/markdown');
+      }
+      return undefined;
+    },
+    delta: { 'collection.matchers.compiled': 2 },
   },
 };
 

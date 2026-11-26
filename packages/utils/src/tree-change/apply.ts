@@ -56,6 +56,7 @@ import { withoutWin32Namespace } from '../win32-namespace.js';
 import { changedDestinationFault, changedSincePlan, fillFaultIsDestinations, finalizeThrows, madeParentStep, TREE_CLEANUP_INCOMPLETE_CODE } from './apply-decisions.js';
 import { copyTree } from './copy-tree.js';
 import { removeEntry, renameFileAtomic } from './files.js';
+import { assertNoSnapshotCovers } from './host-chain.js';
 import { sameEntry } from './identity.js';
 import { destinationNow, isActive, type PlannedChange, type TreePlan } from './plan.js';
 import { TreeRollbackIncompleteError, type TreeRollbackStranded } from './rollback-error.js';
@@ -395,6 +396,8 @@ export async function applyTreePlanOrLeftover(plan: TreePlan, options: ApplyOpti
 }
 
 async function applyStages(plan: TreePlan, options: ApplyOptions): Promise<ApplyResult> {
+  // Refused before anything is staged: every destination, kept and subsumed ones included.
+  for (const planned of plan.changes) assertNoSnapshotCovers(planned.change.dest);
   const slots = plan.changes.filter(isActive).map((planned): Slot => ({ planned, createdParent: undefined, staged: undefined, parked: undefined, spelled: undefined, swapped: false }));
   try {
     await forEachInOrder(slots, stage);

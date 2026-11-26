@@ -1007,7 +1007,7 @@ async function runDeclaredSkillBuild(ref: BuildableReference): Promise<void> {
     );
     // One run per build, rooted at the skill's declaring project, as `vat skills build` is.
     // What the package writes is planned inside `packageSkill`, whose crawls pass it.
-    await withRunContext({ projectionStore: 'on-demand', root: ref.configRoot, outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
+    await withRunContext({ projectionStore: 'on-demand', root: ref.configRoot, tree: 'writes', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
       packageSkill(ref.sourcePath, { ...options, registries: runSkillRegistries(run) }),
     ).catch((error: unknown) => {
       throw asPackagerRefusal(error);

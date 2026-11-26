@@ -13,6 +13,7 @@ import { openForReading } from '../text-file.js';
 
 import { aliasFault, type CopiedEntry, type CopyOnto, foldedNameIsTwin, mayTakeOver, nameOf, parentOf, sameNameWhereFolded } from './copy-decisions.js';
 import { type FileUnderOptions, makeDirectoryUnder, openFileUnder } from './files.js';
+import { assertNoSnapshotCovers } from './host-chain.js';
 import { sameEntry } from './identity.js';
 import type { ProveTreeReadableOptions } from './readable-tree.js';
 import { readingTree, treeReadFault, type TreeVisitor, walkTree } from './tree-walk.js';
@@ -250,6 +251,7 @@ export function copyVisitor(where: CopyDestination, copied: string, side: FsSide
  * @param options - `links`, `filter` and `side`, exactly as `proveTreeReadable` was given them, and `onto`
  */
 export async function copyTree(source: string, root: string, relative: string, options: CopyTreeOptions): Promise<void> {
+  assertNoSnapshotCovers(safePath.join(root, relative));
   await walkTree(source, options, options.side, copyVisitor({ root, relative }, source, options.side, options.onto));
 }
 

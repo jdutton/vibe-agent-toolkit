@@ -14,28 +14,27 @@ import path from 'node:path';
 import { type FsFaultClass, fsFaultOf, isRetryableShortageError, isUnresolvableLinkError } from './errors/errno-table.js';
 import { linkResolutionFault } from './errors/fs-fault.js';
 import { everyInOrder } from './in-order.js';
-import { followedRealpath, followedStatSync } from './link-following.js';
+import { followedRealpath, walkedKindSync } from './link-following.js';
 import { toForwardSlash, toNfc } from './path-core.js';
 import { safePath } from './path-utils.js';
 
 /**
- * What one path looked like the first time this run asked.
+ * What one path looks like, as this run reads it.
  *
- * The two fields are deliberately NOT collapsed into a single `stat` result:
- * they record whether anything resolves there and what the `stat` said *separately*,
- * because callers distinguish three states and only two of them are "the stat
- * worked". See {@link FsLookupCache.probe}.
+ * The two fields are deliberately NOT collapsed into one kind: they record
+ * whether anything resolves there and what the walk read there *separately*,
+ * because callers distinguish three states and only two of them are "the walk
+ * answered". See {@link FsLookupCache.probe}.
  */
 export interface PathProbe {
-  /** Whether the path resolves (its chain read first) — a dangling link or a cycle reads as absent. */
+  /** Whether the path resolves (its chain read) — a dangling link or a cycle reads as absent. */
   readonly exists: boolean;
   /**
-   * `statSync().isDirectory()`.
+   * Whether the place the chain ends at is a directory.
    *
    * `null` means *no answer*, which happens two ways: the path is absent, or
-   * it exists and `statSync` threw anyway (a permission change or a delete
-   * between the two calls). Callers that must tell those apart read
-   * {@link PathProbe.exists} alongside it.
+   * it exists and the OS refused a probe on the way (or VAT refused the chain).
+   * Callers that must tell those apart read {@link PathProbe.exists} alongside it.
    */
   readonly isDirectory: boolean | null;
 }
@@ -148,18 +147,11 @@ function isTransientRefusal(listing: DirectoryListing): boolean {
   return listing.outcome === 'unreadable' && isTransientListingCode(listing.code);
 }
 
-/** How many probes a {@link FsLookupCache} answered, and how many cost syscalls. */
-export interface PathProbeStats {
-  /** Probe calls received. */
-  readonly probes: number;
-  /** Probes that were not already memoized, i.e. that hit the filesystem. */
-  readonly misses: number;
-}
-
 /**
  * Per-run memo for the two filesystem lookups that validation repeats on values
  * which are constant for the whole run: `realpath` of roots, and `readdir` of the
- * directories link targets live in.
+ * directories link targets live in. Its third lookup, {@link FsLookupCache.probe},
+ * keeps nothing: the run's place-kind snapshot is the one memo of what stands where.
  *
  * A markdown corpus resolves thousands of links into a few hundred directories, so
  * the uncached form is an N+1: measured at 9,963 `readdir` calls on a 3,437-document
@@ -192,13 +184,6 @@ export class FsLookupCache {
   /** Path → its canonical path, falling back to the resolved path. */
   readonly #realpaths = new Map<string, Promise<RealpathRow>>();
 
-  /** Path → the existence/kind pair recorded the first time it was probed. */
-  readonly #probes = new Map<string, PathProbe>();
-
-  /** Probe calls received, and how many of them reached the filesystem. */
-  #probeCount = 0;
-  #probeMisses = 0;
-
   /** The listings turned into spelling indexes, built on first use. */
   #spellingIndex: DirectorySpellingIndex | undefined;
 
@@ -230,55 +215,38 @@ export class FsLookupCache {
   }
 
   /**
-   * Probe counters, for tests and `--debug` output.
+   * Does this path exist, and is it a directory — read from the walk of its
+   * link chain beneath this cache's tree ({@link walkedKindSync}), the kernel
+   * never asked to follow it.
    *
-   * A memo whose tests never assert its hit count is theatre: every assertion
-   * about *values* still passes when the memo is disabled, because an
-   * always-miss cache returns the same answers — only more slowly. This is the
-   * one observable that dies when the memo does.
-   */
-  get probeStats(): PathProbeStats {
-    return { probes: this.#probeCount, misses: this.#probeMisses };
-  }
-
-  /**
-   * Does this path exist, and is it a directory — asked once per run.
+   * **Holds no memo of its own.** What stands at each component is the run's
+   * place-kind snapshot's to keep (`withPlaceKindSnapshot`, opened by every run
+   * that writes nothing), so a target any lane already walked — the registry's
+   * admission, `realpath`, `isWithinProject` — costs no syscall here, and one
+   * policy decides what is kept. Outside a run every probe walks afresh.
    *
-   * One followed `stat`, its link chain read beneath this cache's tree first
-   * (`followedStatSync`): a path that resolves to nothing — absent, dangling, a
-   * cycle — is `{ exists: false }`; a probe the OS refused, or a chain VAT will not
-   * hand the kernel (a link to a network or device path), is present with NO
-   * answer (`isDirectory: null`), which the link walker reports as an unreadable
-   * target — so the refusal is SEEN, never read as "not there".
+   * A path that leads to nothing — absent, dangling, a cycle — is
+   * `{ exists: false }`; an `lstat`/`readlink` the OS refused, or a chain VAT
+   * will not hand the kernel (a link to a network or device path), is present
+   * with NO answer (`isDirectory: null`), which the link walker reports as an
+   * unreadable target — so the refusal is SEEN, never read as "not there".
    *
    * Synchronous, unlike this class's other two lookups, because its caller (the
-   * skill link-graph walker) is synchronous throughout. One oracle answering
-   * both shapes beats a second class that differs only in colour.
+   * skill link-graph walker) is synchronous throughout.
    *
    * @param targetPath - Path to probe
-   * @returns The recorded existence/kind pair
+   * @returns The existence/kind pair
    */
   probe(targetPath: string): PathProbe {
-    this.#probeCount++;
-    const cached = this.#probes.get(targetPath);
-    if (cached !== undefined) return cached;
-
-    this.#probeMisses++;
-    let exists = true;
-    let isDirectory: boolean | null = null;
     try {
-      const stats = followedStatSync(targetPath, this.#within);
-      exists = stats !== undefined;
-      isDirectory = stats === undefined ? null : stats.isDirectory();
+      const kind = walkedKindSync(targetPath, this.#within);
+      return kind === 'absent' ? { exists: false, isDirectory: null } : { exists: true, isDirectory: kind === 'directory' };
     } catch (error) {
-      // A bug from under the stat is not a refusal and stays loud: only a fault
-      // the classifier knows, or VAT's own refusal of the chain, is "no answer".
-      if (linkResolutionFault(error) === undefined) exists = false;
+      // A bug from under the walk is not a refusal and stays loud (`linkResolutionFault`
+      // rethrows it): only a fault the classifier knows, or VAT's own refusal of the
+      // chain, is "present, no answer".
+      return { exists: linkResolutionFault(error) !== undefined, isDirectory: null };
     }
-
-    const result: PathProbe = { exists, isDirectory };
-    this.#probes.set(targetPath, result);
-    return result;
   }
 
   /**

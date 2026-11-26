@@ -1,16 +1,33 @@
 /**
- * Collection matching utilities for determining which collections a file belongs to.
+ * Collection matching: which collections a file belongs to.
  *
  * Applies include/exclude pattern rules with precedence (exclude wins).
+ *
+ * A collection's patterns are expanded and compiled once, by
+ * {@link compileCollectionMatcher}; the predicate it returns is what every
+ * caller matches with. There is no per-call form: a holder of a config compiles
+ * it before its loop, so matching N files never compiles N times.
  */
 
 import { basename as getBasename } from 'node:path';
 
-import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { countWork, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
 import { expandPatterns } from './pattern-expander.js';
 import type { CollectionConfig } from './schemas/project-config.js';
+
+/** Whether a file path belongs to the collection it was compiled from. */
+export type CollectionMatcher = (filePath: string) => boolean;
+
+/** The predicate of a pattern list that is empty: matches nothing. */
+const MATCHES_NOTHING = (): boolean => false;
+
+/**
+ * Use dot:true so paths containing dotfile segments (e.g. .claude, .git) are matched correctly.
+ * Without this option, picomatch ** does not descend into directories whose names start with a dot.
+ */
+const PICO_OPTIONS = { dot: true };
 
 /**
  * Check if a pattern is a root-level pattern (e.g., *.md, *.json).
@@ -21,8 +38,24 @@ function isRootLevelPattern(pattern: string): boolean {
   return pattern.startsWith('*') && !pattern.startsWith('**');
 }
 
+/** One pattern list compiled: root-level patterns test the basename, the rest the full path. */
+interface CompiledPatterns {
+  readonly path: (normalizedPath: string) => boolean;
+  readonly basename: (basename: string) => boolean;
+}
+
+function compilePatterns(patterns: string[]): CompiledPatterns {
+  const expanded = expandPatterns(patterns);
+  const root = expanded.filter(isRootLevelPattern);
+  const nonRoot = expanded.filter((pattern) => !isRootLevelPattern(pattern));
+  return {
+    path: nonRoot.length > 0 ? picomatch(nonRoot, PICO_OPTIONS) : MATCHES_NOTHING,
+    basename: root.length > 0 ? picomatch(root, PICO_OPTIONS) : MATCHES_NOTHING,
+  };
+}
+
 /**
- * Check if a file path matches a collection's include/exclude rules.
+ * Compile a collection's include/exclude rules into a predicate, once.
  *
  * Rules:
  * - File must match at least one include pattern
@@ -35,118 +68,62 @@ function isRootLevelPattern(pattern: string): boolean {
  * - Allows matching root-level files regardless of their absolute path
  *
  * Paths are normalized to forward slashes before matching for cross-platform consistency.
+ * Every compile is counted `collection.matchers.compiled`.
  *
- * @param filePath - Absolute file path to check
  * @param collection - Collection configuration with include/exclude patterns
- * @returns True if file belongs to collection
+ * @returns A predicate over absolute file paths: true if the file belongs to the collection
  *
  * @example
  * ```typescript
- * const collection = {
+ * const inDocs = compileCollectionMatcher({
  *   include: ['docs'],
  *   exclude: ['**\/README.md']
- * };
+ * });
  *
- * matchesCollection('/project/docs/guide.md', collection)    // true
- * matchesCollection('/project/docs/README.md', collection)   // false (excluded)
- * matchesCollection('/project/src/index.ts', collection)     // false (not included)
+ * inDocs('/project/docs/guide.md')    // true
+ * inDocs('/project/docs/README.md')   // false (excluded)
+ * inDocs('/project/src/index.ts')     // false (not included)
  * ```
  */
-export function matchesCollection(filePath: string, collection: CollectionConfig): boolean {
-  // Normalize to forward slashes for cross-platform consistency
-  const normalizedPath = toForwardSlash(filePath);
+export function compileCollectionMatcher(collection: CollectionConfig): CollectionMatcher {
+  countWork('collection.matchers.compiled', 1);
+  const include = compilePatterns(collection.include);
+  const exclude = compilePatterns(collection.exclude ?? []);
 
-  // Extract basename for root-level pattern matching
-  const basename = getBasename(filePath);
-
-  // Expand patterns (paths → globs)
-  const includePatterns = expandPatterns(collection.include);
-  const excludePatterns = collection.exclude ? expandPatterns(collection.exclude) : [];
-
-  // Separate root-level patterns from other patterns
-  const includeRootPatterns = includePatterns.filter(isRootLevelPattern);
-  const includeNonRootPatterns = includePatterns.filter((p) => !isRootLevelPattern(p));
-
-  const excludeRootPatterns = excludePatterns.filter(isRootLevelPattern);
-  const excludeNonRootPatterns = excludePatterns.filter((p) => !isRootLevelPattern(p));
-
-  // Use dot:true so paths containing dotfile segments (e.g. .claude, .git) are matched correctly.
-  // Without this option, picomatch ** does not descend into directories whose names start with a dot.
-  const picoOptions = { dot: true };
-
-  // Check excludes first (exclude wins)
-  // Check non-root excludes against full path
-  if (excludeNonRootPatterns.length > 0) {
-    const excludeMatcher = picomatch(excludeNonRootPatterns, picoOptions);
-    if (excludeMatcher(normalizedPath)) {
+  return (filePath: string): boolean => {
+    const normalizedPath = toForwardSlash(filePath);
+    const basename = getBasename(filePath);
+    if (exclude.path(normalizedPath) || exclude.basename(basename)) {
       return false;
     }
-  }
-
-  // Check root-level excludes against basename
-  if (excludeRootPatterns.length > 0) {
-    const excludeRootMatcher = picomatch(excludeRootPatterns, picoOptions);
-    if (excludeRootMatcher(basename)) {
-      return false;
-    }
-  }
-
-  // Check includes (need to match at least one)
-  let matched = false;
-
-  // Check non-root includes against full path
-  if (includeNonRootPatterns.length > 0) {
-    const includeMatcher = picomatch(includeNonRootPatterns, picoOptions);
-    if (includeMatcher(normalizedPath)) {
-      matched = true;
-    }
-  }
-
-  // Check root-level includes against basename
-  if (!matched && includeRootPatterns.length > 0) {
-    const includeRootMatcher = picomatch(includeRootPatterns, picoOptions);
-    if (includeRootMatcher(basename)) {
-      matched = true;
-    }
-  }
-
-  return matched;
+    return include.path(normalizedPath) || include.basename(basename);
+  };
 }
 
 /**
- * Find all collections that a file belongs to.
+ * Compile every collection once, and return the question "which collections
+ * does this file belong to?" — a file can belong to several.
  *
- * A file can belong to multiple collections if it matches their rules.
- *
- * @param filePath - Absolute file path to check
  * @param collections - Map of collection name to collection config
- * @returns Array of collection names the file belongs to
+ * @returns For a file path, the names of the collections it belongs to, in declaration order
  *
  * @example
  * ```typescript
- * const collections = {
+ * const collectionsFor = compileCollectionMembership({
  *   'rag-kb': { include: ['docs'], exclude: ['**\/README.md'] },
  *   'skills': { include: ['**\/SKILL.md'] }
- * };
+ * });
  *
- * getCollectionsForFile('/project/docs/guide.md', collections)
- * // ['rag-kb']
- *
- * getCollectionsForFile('/project/docs/SKILL.md', collections)
- * // ['rag-kb', 'skills']
+ * collectionsFor('/project/docs/guide.md')   // ['rag-kb']
+ * collectionsFor('/project/docs/SKILL.md')   // ['rag-kb', 'skills']
  * ```
  */
-export function getCollectionsForFile(
-  filePath: string,
-  collections: Record<string, CollectionConfig>
-): string[] {
-  const matchingCollections: string[] = [];
-
-  for (const [name, config] of Object.entries(collections)) {
-    if (matchesCollection(filePath, config)) {
-      matchingCollections.push(name);
-    }
-  }
-
-  return matchingCollections;
+export function compileCollectionMembership(
+  collections: Readonly<Record<string, CollectionConfig>>,
+): (filePath: string) => string[] {
+  const matchers = Object.entries(collections).map(
+    ([name, config]) => [name, compileCollectionMatcher(config)] as const,
+  );
+  return (filePath: string): string[] =>
+    matchers.filter(([, matches]) => matches(filePath)).map(([name]) => name);
 }

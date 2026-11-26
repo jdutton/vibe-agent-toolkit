@@ -7,6 +7,7 @@ import { isPathAbsentError } from './errors/errno-table.js';
 import { classifyFsFault } from './errors/fs-fault.js';
 import { edgeRealpathSync, requireSomethingAt } from './link-following.js';
 import { safePath } from './path-core.js';
+import { assertNoSnapshotCovers } from './tree-change/host-chain.js';
 
 /**
  * Re-export every pure path helper so the package barrel keeps exposing the
@@ -159,6 +160,7 @@ export function mkdirSyncReal(
   dirPath: string,
   options?: Parameters<typeof mkdirSync>[1]
 ): string {
+  assertNoSnapshotCovers(dirPath);
   mkdirSync(dirPath, options);
 
   return realpathOrSelf(dirPath, dirPath);

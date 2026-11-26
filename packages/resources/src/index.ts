@@ -723,7 +723,7 @@ export { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
 // The refusal `buildLinkAuthEngineConfig` throws for a provider that cannot
 // compile — named, so a caller can tell a config error from an engine bug.
 export { LINK_AUTH_CONFIG_CODE, LinkAuthConfigError } from './link-auth/compile-check.js';
-export { matchesCollection } from './collection-matcher.js';
+export { compileCollectionMatcher, type CollectionMatcher } from './collection-matcher.js';
 
 // linkAuth pure engine — public API only.
 // Internal helpers (rewrite, build-headers, etc.) stay module-private.

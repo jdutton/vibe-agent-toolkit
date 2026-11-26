@@ -497,6 +497,19 @@ function pulledPointerReadAsItsOid(pointer: LfsPointer, root: string, realized: 
 }
 
 /**
+ * Whether VAT's cache root ({@link vatCacheRoot}) is `root` or lies beneath it: the run then writes
+ * its own state (the store, the parse cache) inside the tree it scans. The one answer for the
+ * operator's notice ({@link noticeCacheRootInsideTree}) and for whether a read-only run may keep
+ * what it reads there (`withRunContext`).
+ *
+ * @param root - The tree a run scans, absolute or relative to cwd
+ */
+export function cacheRootInsideTree(root: string): boolean {
+  const tree = `${toForwardSlash(safePath.resolve(root)).replace(/\/$/u, '')}/`;
+  return `${toForwardSlash(vatCacheRoot())}/`.startsWith(tree);
+}
+
+/**
  * Tell the operator, once, when the cache root sits inside the tree being
  * scanned — a relative `VAT_CACHE_DIR` in a CI workspace, typically, or the
  * default `<tmpdir>/.vat-cache` when the scanned tree contains the temp
@@ -508,9 +521,8 @@ function pulledPointerReadAsItsOid(pointer: LfsPointer, root: string, realized: 
  * @param root - The absolute corpus root
  */
 function noticeCacheRootInsideTree(root: string): void {
+  if (!cacheRootInsideTree(root)) return;
   const cacheRoot = vatCacheRoot();
-  const tree = `${toForwardSlash(safePath.resolve(root)).replace(/\/$/u, '')}/`;
-  if (!`${toForwardSlash(cacheRoot)}/`.startsWith(tree)) return;
   const configured = process.env[VAT_CACHE_DIR_ENV];
   const chosenBy = configured === undefined || configured === ''
     ? `The default cache root (${cacheRoot}, under the temp directory) is inside the scanned tree ${root}. Set ${VAT_CACHE_DIR_ENV} to a directory`

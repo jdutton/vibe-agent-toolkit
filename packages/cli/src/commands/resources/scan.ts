@@ -158,7 +158,7 @@ export async function scanCommand(
 
     // One run around the whole scan: the registry is the run's view, so nothing
     // of it is read after the run closes and releases its contents and parses.
-    const report = await withRunContext({ projectionStore: 'on-demand', root: projectRoot, outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
+    const report = await withRunContext({ projectionStore: 'on-demand', root: projectRoot, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
       const { registry, config, population } = await loadResourcesWithConfig(pathArg, run, logger);
       assertDeclaredCollection(config, options.collection);
 

@@ -272,7 +272,7 @@ export async function reviewCommand(
     const projectSkills = await resolveProjectDeclaredEvalSuites(skillPath, 'refuse', undefined);
     // One run for the review, rooted at the project when there is one and at the
     // skill's own directory when there is none.
-    const result = await withRunContext({ projectionStore: 'on-demand', root: projectRoot ?? dirname(skillPath), outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
+    const result = await withRunContext({ projectionStore: 'on-demand', root: projectRoot ?? dirname(skillPath), tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
       validateSkillForPackaging(skillPath, resolveProjectResourcesValidation(skillPath), packagingConfig, 'source', {
         projectSkills,
         registries: runSkillRegistries(run),

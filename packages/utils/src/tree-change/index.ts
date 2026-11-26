@@ -16,7 +16,7 @@ export type { CopyOnto } from './copy-decisions.js';
 export type { LinkPolicy, TreeWalkOptions } from './tree-walk.js';
 export { refuseEscapingLinks, treeChain, treeContainment } from './link-containment.js';
 export type { LinkContainmentCheck } from './link-containment.js';
-export { isLinkChainRefusedError } from './host-chain.js';
+export { isLinkChainRefusedError, WRITE_UNDER_PLACE_KIND_SNAPSHOT_CODE } from './host-chain.js';
 export { HOST_PATH_FLAVOR, isWithinUnder, untrustedLinkRefusal, untrustedTextRefusal, win32FoldedName } from './link-chain.js';
 export {
   planTreeChanges,
