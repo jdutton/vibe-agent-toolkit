@@ -73,7 +73,7 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:cla
 **The auto-fix writes the import to the subpath in that column**, not to the barrel — `--fix` on a raw `path.join()` inserts `import { safePath } from '@vibe-agent-toolkit/utils/path'`. A file that already reaches the helper through the barrel keeps its existing import and only has the call rewritten: adding a second binding of the same name is a `SyntaxError`, not a redundant import.
 
 <!-- gen:eslint-rules -->
-46 rules; 4 auto-fix. `configs.recommended` enables 17 of them (15 at `error`, 2 at `warn`); `—` in the last column means the rule ships but must be enabled by name.
+47 rules; 4 auto-fix. `configs.recommended` enables 17 of them (15 at `error`, 2 at `warn`); `—` in the last column means the rule ships but must be enabled by name.
 
 #### Path handling
 
@@ -156,6 +156,7 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:cla
 
 | Rule | Bans | Use instead | Subpath | Fix | `recommended` |
 |---|---|---|---|---|---|
+| `content-key-opaque` | a cast to `ContentKey` or to an array/object of them (or an `as never`/`as any` cast where one is expected), a user-written `x is ContentKey` guard, any member access, index, spread, destructure, iteration or regex call on a `ContentKey`, `compareCodeUnits`/`localeCompare` with one (type-aware) | `parseContentKey`, `formatContentKey`, `contentKeyParts`, `orderContentKeys`; `===` compares two | — |  | — |
 | `no-spread-push` | `target.push(...items)` | `appendAll(target, items)` | — |  | — |
 
 #### Other

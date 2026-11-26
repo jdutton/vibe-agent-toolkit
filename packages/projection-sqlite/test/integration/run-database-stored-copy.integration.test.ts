@@ -13,7 +13,9 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
 import {
+  type ContentKey,
   ALL_BLOB_REQUEST,
+  contentKeyParts,
   PROJECTION_STORE_ROWS_EVICTED_CODE,
   PROJECTION_TABLES,
   projectionColumnTypes,
@@ -51,16 +53,16 @@ const FORMS = ['markdown-link', 'bare-token', 'at-prefixed', 'html-link', 'env-a
  * @param key - The content key
  * @returns The blob-scoped rows
  */
-function blobWithEveryForm(key: string): BlobScopedRows {
+function blobWithEveryForm(key: ContentKey): BlobScopedRows {
   const base = sampleBlobRows(key);
   const [template] = base.blobReferences;
   if (template === undefined) throw new Error('the fixture carries no reference row');
-  const references = FORMS.map((syntacticForm, ordinal) => ({ ...template, ordinal, syntacticForm, rawRef: `${syntacticForm}-${key.slice(-4)}-${String(ordinal)}` }));
+  const references = FORMS.map((syntacticForm, ordinal) => ({ ...template, ordinal, syntacticForm, rawRef: `${syntacticForm}-${contentKeyParts(key).hex.slice(-4)}-${String(ordinal)}` }));
   return { ...base, blobReferences: references.toReversed() };
 }
 
 /** The blob tables' rows of several blobs, concatenated. */
-function bundleOf(keys: readonly string[]): BlobScopedRows {
+function bundleOf(keys: readonly ContentKey[]): BlobScopedRows {
   const bundles = keys.map((key) => blobWithEveryForm(key));
   const tables = Object.keys(bundles[0] ?? {}) as (keyof BlobScopedRows)[];
   return Object.fromEntries(tables.map((table) => [table, bundles.flatMap((bundle) => bundle[table] as readonly unknown[])])) as unknown as BlobScopedRows;
@@ -72,8 +74,8 @@ let store: FactStore;
 beforeEach(async () => {
   __resetWorkCountersForTest();
   directory = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-stored-copy-'));
-  const { openSqliteFactStore } = await import('../../src/store.js');
-  store = openSqliteFactStore({ directory });
+  const { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } = await import('../../src/store.js');
+  store = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
   await store.writeBlobFacts(uncoveredBlobWrite(bundleOf([SECOND_BLOB, FIRST_BLOB, THIRD_BLOB])));
 });
 
@@ -93,7 +95,7 @@ async function answersOf(source: RelationSource): Promise<readonly Record<string
 }
 
 /** The rows lane's source for `keys`: every form, decoded from the store. */
-async function decodedSource(keys: readonly string[]): Promise<RelationSource> {
+async function decodedSource(keys: readonly ContentKey[]): Promise<RelationSource> {
   const rows = await store.readBlobFacts(keys, ALL_BLOB_REQUEST);
   return { rows: rows.blobReferences };
 }
@@ -223,10 +225,10 @@ const BACKSLASHED_NAME = String.raw`cache\dir`;
 describe('SqliteFactStore.attachedTo', () => {
   // On POSIX a backslash is a filename character, so it must reach SQLite as one.
   it.skipIf(process.platform === 'win32')('attaches a store whose directory name holds a backslash', async () => {
-    const { openSqliteFactStore } = await import('../../src/store.js');
+    const { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } = await import('../../src/store.js');
     // Not safePath.join: it would turn the backslash into a separator.
     const backslashed = `${directory}/${BACKSLASHED_NAME}`;
-    const opened = openSqliteFactStore({ directory: backslashed });
+    const opened = openSqliteFactStore({ directory: backslashed, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
     if (!(opened instanceof SqliteFactStore)) throw new TypeError('openSqliteFactStore opens a SqliteFactStore');
     const database = new DatabaseSync(':memory:');
     try {

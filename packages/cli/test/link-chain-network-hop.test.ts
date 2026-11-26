@@ -126,7 +126,7 @@ describe.skipIf(SYMLINK_CAP === null)('a link naming a network path is refused b
     const asked = spyOnTheKernel();
 
     const row = toEnumerationRow(
-      { path: 'smb.md', contentKey: null, exists: true, isDirectory: false, gitignored: false, isSymlink: true, symlinkResolves: false } as unknown as Parameters<typeof toEnumerationRow>[0],
+      { path: 'smb.md', contentKey: null, exists: true, isDirectory: false, gitignored: false, isSymlink: true, symlinkResolves: false } as Parameters<typeof toEnumerationRow>[0],
       link,
       root,
     );

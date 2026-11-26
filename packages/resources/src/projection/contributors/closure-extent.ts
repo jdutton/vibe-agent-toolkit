@@ -118,6 +118,7 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
+import type { ContentKey } from '../../content-key.js';
 import {
   ExtentDeclarationSchema,
   type ExtentDeclaration,
@@ -223,7 +224,7 @@ interface WalkContext {
    * ordinal order. `path` is where the walk reached the blob — named by the
    * error a strict source throws for a blob with no harness facts.
    */
-  readonly edgesOf: (contentKey: string, path: string) => readonly ClosureEdge[];
+  readonly edgesOf: (contentKey: ContentKey, path: string) => readonly ClosureEdge[];
   /**
    * The FIRST `refusals` rule that catches this candidate, or `undefined` when
    * the declaration admits it.
@@ -921,7 +922,7 @@ function edgeSourceFor(
   base: IndexableBase,
   declaration: ExtentDeclaration,
   strictness: HarnessFactsStrictness,
-): (contentKey: string, path: string) => readonly ClosureEdge[] {
+): (contentKey: ContentKey, path: string) => readonly ClosureEdge[] {
   if (declaration.referenceDialect !== 'href') {
     return harnessImportsByBlobFor(base, declaration.referenceDialect, strictness);
   }
@@ -1721,7 +1722,7 @@ function indexRealizationsByPath(base: IndexableBase): ReadonlyMap<string, reado
  */
 const referencesByBlobMemo = new WeakMap<
   IndexableBase,
-  MemoizedIndex<ReadonlyMap<string, readonly BlobReferenceRow[]>>
+  MemoizedIndex<ReadonlyMap<ContentKey, readonly BlobReferenceRow[]>>
 >();
 
 /**
@@ -1730,7 +1731,7 @@ const referencesByBlobMemo = new WeakMap<
  * @param base - The projection built so far
  * @returns `contentKey` → its reference rows, ordinal-ordered
  */
-function referencesByBlobFor(base: IndexableBase): ReadonlyMap<string, readonly BlobReferenceRow[]> {
+function referencesByBlobFor(base: IndexableBase): ReadonlyMap<ContentKey, readonly BlobReferenceRow[]> {
   return memoizedIndexFor(
     referencesByBlobMemo,
     base,
@@ -1762,7 +1763,7 @@ function harnessImportsByBlobFor(
   base: IndexableBase,
   dialect: Exclude<ReferenceDialect, 'href'>,
   strictness: HarnessFactsStrictness,
-): (contentKey: string, path: string) => readonly HarnessBlobImportRow[] {
+): (contentKey: ContentKey, path: string) => readonly HarnessBlobImportRow[] {
   const index = harnessFactsIndex(base, harnessForDialect(dialect).id);
   if (strictness === 'frontier') {
     return (contentKey) => index.factsOf(contentKey) === undefined ? [] : index.requireImports(contentKey, null);
@@ -1772,7 +1773,7 @@ function harnessImportsByBlobFor(
 }
 
 /** Per-run memo of the `blobs` key set, on {@link referencesByBlobMemo}'s terms. */
-const blobKeysMemo = new WeakMap<IndexableBase, MemoizedIndex<ReadonlySet<string>>>();
+const blobKeysMemo = new WeakMap<IndexableBase, MemoizedIndex<ReadonlySet<ContentKey>>>();
 
 /**
  * Every content key with a `blobs` row, built once per table state.
@@ -1780,7 +1781,7 @@ const blobKeysMemo = new WeakMap<IndexableBase, MemoizedIndex<ReadonlySet<string
  * @param base - The projection built so far
  * @returns The derived content keys
  */
-function blobKeysFor(base: IndexableBase): ReadonlySet<string> {
+function blobKeysFor(base: IndexableBase): ReadonlySet<ContentKey> {
   return memoizedIndexFor(blobKeysMemo, base, base.blobs.length, () => new Set(base.blobs.map((row) => row.contentKey)));
 }
 
@@ -1794,10 +1795,10 @@ function blobKeysFor(base: IndexableBase): ReadonlySet<string> {
  * @param rows - A blob-keyed edge table
  * @returns `contentKey` → its rows, ordinal-ordered
  */
-function indexByBlob<Row extends { readonly blob: string; readonly ordinal: number }>(
+function indexByBlob<Row extends { readonly blob: ContentKey; readonly ordinal: number }>(
   rows: readonly Row[],
-): ReadonlyMap<string, readonly Row[]> {
-  const byBlob = new Map<string, Row[]>();
+): ReadonlyMap<ContentKey, readonly Row[]> {
+  const byBlob = new Map<ContentKey, Row[]>();
   for (const row of rows) {
     const list = byBlob.get(row.blob);
     if (list === undefined) {

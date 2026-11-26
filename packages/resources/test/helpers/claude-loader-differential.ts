@@ -48,6 +48,7 @@
 import { forEachInOrder } from '@vibe-agent-toolkit/utils';
 import { seededRandom } from '@vibe-agent-toolkit/utils/testing';
 
+import type { ContentKey } from '../../src/content-key.js';
 import { estimateTokens } from '../../src/link-classify.js';
 import { account, type AccountedRow } from '../../src/projection/claude-context-accounting.js';
 import { whatLoadsAt } from '../../src/projection/claude-context-query.js';
@@ -319,7 +320,7 @@ function importRowsOf(
   projection: Projection,
   tree: LoaderTree,
   path: string,
-  contentKey: string | null | undefined,
+  contentKey: ContentKey | null | undefined,
 ): readonly { readonly target: string }[] {
   if (contentKey === null || contentKey === undefined) return [];
   if (!projection.blobs.some((row) => row.contentKey === contentKey)) return [];

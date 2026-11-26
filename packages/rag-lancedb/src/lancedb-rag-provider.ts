@@ -29,7 +29,7 @@ import {
   RAGQuerySchema,
 } from '@vibe-agent-toolkit/rag';
 import {
-  parserKindOf,
+  contentKeyParts,
   readContentWithKey,
   transformContent,
   type ContentTransformOptions,
@@ -926,7 +926,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     // registry already admitted these bytes under the run's limits.
     const keyed = await withFsFault(
       { side: 'source', origin: 'content', action: `read ${resource.filePath}`, path: resource.filePath },
-      () => readContentWithKey(resource.filePath, parserKindOf(resource.contentKey), null),
+      () => readContentWithKey(resource.filePath, contentKeyParts(resource.contentKey).parserKind, null),
     );
     const text = keyed.content;
 

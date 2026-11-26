@@ -76,6 +76,7 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
+import type { ContentKey } from '../content-key.js';
 import type { ParseDispatcher } from '../parse-dispatcher.js';
 import type { CollectionConfig } from '../schemas/project-config.js';
 import type { RealizationConditionRow, ResourceRealizationRow } from '../schemas/projection-resources.js';
@@ -404,9 +405,26 @@ export interface PopulationCache {
    *
    * ⚠️ An edit made AND reverted entirely inside one run is not seen — both
    * snapshots agree. The window is the run itself rather than every run after it.
+   *
+   * `realized` answers what this run read at each path under its root, so an
+   * implementation can check bytes the tree hash does not carry: a Git LFS
+   * file's hash is its pointer's, so a pulled file is checked against what the
+   * run keyed there.
+   *
+   * @param realized - What this run realized at an absolute path under its root
    */
-  treeUnchanged(): boolean;
+  treeUnchanged(realized: RealizedContentKeys): boolean;
 }
+
+/** What a run realized at one path: its key when its bytes were read, and why not otherwise. */
+export type RealizedContent = Pick<ResourceRealizationRow, 'contentKey' | 'contentState'>;
+
+/**
+ * What a run realized at an absolute path under its root: the realization's key and state, or
+ * `undefined` when the run realized nothing there. "Nothing there" and "there, but its bytes were
+ * not read" (a `contentState` other than `keyed`) are two answers, never one.
+ */
+export type RealizedContentKeys = (absolutePath: string) => RealizedContent | undefined;
 
 /**
  * What a population did with the store — the ONE source of whether its rows were
@@ -504,7 +522,7 @@ function populationOutcome(stored: PopulationOutcome['stored'], storeMiss?: Stor
  * @param projection - What this run derived
  * @returns The count, or `undefined` when no refusal explains the miss
  */
-function storeMissFor(missed: readonly string[], projection: Projection): StoreMiss | undefined {
+function storeMissFor(missed: readonly ContentKey[], projection: Projection): StoreMiss | undefined {
   if (missed.length === 0) return undefined;
   const refused = new Set(
     projection.blobConditions.filter((row) => PARSE_REFUSAL_BLOB_CODES.has(row.code)).map((row) => row.blob),
@@ -737,8 +755,8 @@ async function populateReading(
  * no extent for this question at all.
  */
 type CachedRead =
-  | { readonly hit: Projection; readonly servedKeys: readonly string[] | undefined }
-  | { readonly missed: readonly string[] };
+  | { readonly hit: Projection; readonly servedKeys: readonly ContentKey[] | undefined }
+  | { readonly missed: readonly ContentKey[] };
 
 /** A store that held nothing for this question. */
 const NOTHING_HELD: CachedRead = { missed: [] };
@@ -746,7 +764,7 @@ const NOTHING_HELD: CachedRead = { missed: [] };
 /** The store a hit read its blob tier from, and the content keys it admitted. */
 interface StoredHit {
   readonly store: FactStore;
-  readonly contentKeys: readonly string[];
+  readonly contentKeys: readonly ContentKey[];
 }
 
 /**
@@ -778,7 +796,7 @@ interface DerivationRun {
 interface Derivation {
   readonly projection: Projection;
   /** The keys the one blob-tier predicate called covered in the derivation's reads. */
-  readonly coveredAtRead: readonly string[];
+  readonly coveredAtRead: readonly ContentKey[];
   /** The reached pairs the harness passes served from those reads. */
   readonly settledAtRead: readonly HarnessPair[];
 }
@@ -1339,6 +1357,27 @@ function unlistableRowsStillHold(conditions: readonly RealizationConditionRow[],
 }
 
 /**
+ * What a derived run realized at each absolute path under its root, for
+ * {@link PopulationCache.treeUnchanged}. A derivation builds one root (`populate()`
+ * adds only `options.root`), so every row is this root's and its root-relative
+ * `path` joins onto `root`. Where extents realize one path more than once, a keyed
+ * row answers before an unkeyed one: the bytes were read there.
+ *
+ * @param root - This run's corpus root
+ * @param rows - The derived projection's realizations
+ * @returns The lookup
+ */
+function realizedContentKeysOf(root: string, rows: readonly ResourceRealizationRow[]): RealizedContentKeys {
+  const byPath = new Map<string, RealizedContent>();
+  for (const { path, contentKey, contentState } of rows) {
+    const absolutePath = safePath.resolve(root, path);
+    if (byPath.get(absolutePath)?.contentState === 'keyed') continue;
+    byPath.set(absolutePath, { contentKey, contentState });
+  }
+  return (absolutePath) => byPath.get(absolutePath);
+}
+
+/**
  * Record a freshly derived population in the store.
  *
  * Blob facts first, then the extent. The order is the recovery order: a reader
@@ -1377,7 +1416,7 @@ async function writeCachedProjection(
   const { coveredAtRead, settledAtRead } = derived;
   const reads = options.run.stored.of(cache.store);
   if (parseContent) await reads.writeBlobs({ rows: storableBlobFacts(blobs), coveredAtRead, settledAtRead });
-  const unchanged = cache.treeUnchanged();
+  const unchanged = cache.treeUnchanged(realizedContentKeysOf(options.root, extent.resourceRealizations));
   if (unchanged) {
     await reads.writeTree(storeKeyFor(options, rootId, cache, routing), extent);
   }

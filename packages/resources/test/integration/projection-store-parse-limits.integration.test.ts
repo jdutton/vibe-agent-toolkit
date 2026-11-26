@@ -25,7 +25,7 @@ import { crawlSourceFor } from '../../src/projection/crawl-source.js';
 import { populate, populationOracles, type PopulateResult, type PopulationCache } from '../../src/projection/merge.js';
 import { buildResourcePopulation, type ResourceEnumeration } from '../../src/projection/resource-population.js';
 import { runStoredReads } from '../../src/projection/stored-reads.js';
-import { FakeFactStore } from '../fake-fact-store.js';
+import { FakeFactStore, WIDE_BLOB_BUDGET_BYTES } from '../fake-fact-store.js';
 import { createCommittedRepo } from '../test-helpers.js';
 
 /** Frontmatter three mappings deep, `a.b.c`, in both documents. */
@@ -107,7 +107,7 @@ function limitRefused(result: PopulateResult): string[] {
 
 describe('a run under tighter parse limits than the store was filed under', () => {
   it('answers as store-off does on an extent hit', async () => {
-    const store = new FakeFactStore();
+    const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
     await populateUnder(undefined, { store, treeHash: 'tree' });
     const storeOff = await populateUnder(TIGHT, undefined);
     expect(limitRefused(storeOff), 'the premise: the tight limits refuse both documents').toHaveLength(2);
@@ -119,7 +119,7 @@ describe('a run under tighter parse limits than the store was filed under', () =
   });
 
   it('answers as store-off does on an extent miss, where the blob tier would serve the unchanged key', async () => {
-    const store = new FakeFactStore();
+    const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
     await populateUnder(undefined, { store, treeHash: 'tree' });
     await writeFile(safePath.join(root, 'docs/two.md'), `${NESTED}# Two\n\nEdited.\n`);
     const storeOff = await populateUnder(TIGHT, undefined);
@@ -131,7 +131,7 @@ describe('a run under tighter parse limits than the store was filed under', () =
   });
 
   it('reads and writes nothing, and says it ran store-off', async () => {
-    const store = new FakeFactStore();
+    const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
     await populateUnder(undefined, { store, treeHash: 'tree' });
     const before = { ...store };
 
@@ -145,7 +145,7 @@ describe('a run under tighter parse limits than the store was filed under', () =
   });
 
   it('reads no stored membership: the membership lane runs store-off too', async () => {
-    const store = new FakeFactStore();
+    const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
     const primed = await membershipUnder(undefined, { store, treeHash: 'tree' });
     expect(primed.outcome.stored, 'the premise: the prime filed the membership extent').toBe('written');
     const storeOff = await membershipUnder(TIGHT, undefined);

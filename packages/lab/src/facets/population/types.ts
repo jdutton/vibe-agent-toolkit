@@ -61,13 +61,17 @@ export type PopulationAttribution = 'measured' | 'nothing-enumerated' | 'not-mea
  * Which identity scheme a subject's per-file value belongs to.
  *
  * - **`checksum`** — rc.17 and earlier: the SHA-256 of the decoded text.
- * - **`contentKey`** — the content key, `<parserKind>.<sha-256 of the raw bytes>`.
+ * - **`kindHashedKey`** — the builds after rc.17 and before the qualified key:
+ *   `<parserKind>.<hex>`, the parser kind mixed into the hash.
+ * - **`contentKey`** — the qualified content key, `<parserKind>.<keyKind>.<hex>`
+ *   (`keyKind` one of `sha256`, `git-sha1`, `git-sha256`).
  *
  * Two values under different schemes are never equal and never different: they
  * are not comparable, so a comparison across them says so instead of reporting
- * every path as changed.
+ * every path as changed. Two qualified keys of different key kinds are not
+ * comparable either: one byte string has a key of each kind.
  */
-export type PopulationIdentityScheme = 'checksum' | 'contentKey';
+export type PopulationIdentityScheme = 'checksum' | 'kindHashedKey' | 'contentKey';
 
 /** A file's content identity and the scheme that gives the value its meaning. */
 export interface PopulationIdentity {
@@ -86,7 +90,7 @@ export interface PopulationEntry {
    * both sides with different content is a real difference the path list alone
    * cannot show, and recomputing it here would measure the lab's hashing rather
    * than the subject's. It carries its scheme because rc.17 reported a
-   * `checksum` and later builds report a `contentKey`; see
+   * `checksum` and later builds report a `contentKey` in one of two shapes; see
    * {@link PopulationIdentityScheme}.
    */
   readonly identity: PopulationIdentity;
@@ -180,7 +184,7 @@ export interface PopulationBody {
 /** The schema fields describing one enumerated file. */
 export const populationEntryShape = {
   path: z.string().min(1),
-  identity: z.object({ scheme: z.enum(['checksum', 'contentKey']), value: z.string() }).strict(),
+  identity: z.object({ scheme: z.enum(['checksum', 'kindHashedKey', 'contentKey']), value: z.string() }).strict(),
 } as const;
 
 /**

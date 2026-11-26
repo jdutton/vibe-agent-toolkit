@@ -7,6 +7,7 @@
  */
 
 import { parseRoutingFor, type BlobFactsReader, type ResourceEnumeration } from '@vibe-agent-toolkit/resources';
+import { testContentKey } from '@vibe-agent-toolkit/resources/testing';
 import { describe, expect, it, vi } from 'vitest';
 
 import { abandoningUnread, createChecksOverlapGate } from '../src/commands/checks-overlap-gate.js';
@@ -26,7 +27,7 @@ import {
   tierOf,
 } from './helpers/overlap-gate-fixtures.js';
 
-const OTHER_MARKDOWN_KEY = `markdown.${'b'.repeat(64)}`;
+const OTHER_MARKDOWN_KEY = testContentKey('markdown', 'b');
 const RUN = { label: 'the overlapped run' } as unknown as OverlappedRun;
 const PENDING = 'pending';
 

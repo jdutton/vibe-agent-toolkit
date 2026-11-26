@@ -9,6 +9,7 @@ import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { parseLookupsIn } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { orderContentKeys, type ContentKey } from '../src/content-key.js';
 import { type ParseDispatcher, withParseDispatcher } from '../src/parse-dispatcher.js';
 import { populateBlobs, storableBlobFacts } from '../src/projection/blob-population.js';
 import { blobRowsByKey } from '../src/projection/blob-resource-facts.js';
@@ -23,9 +24,10 @@ import { emptyBlobRows, keyedContentKeys, storedBlobTier } from '../src/projecti
 import { ALL_BLOB_REQUEST, type BlobRequest, type BlobScopedRows, type BlobScopedTableName, EXTENT_STEP_TABLES } from '../src/projection/store.js';
 import { runStoredReads, storedTierReads } from '../src/projection/stored-reads.js';
 import type { BlobConditionRow } from '../src/schemas/projection-blobs.js';
+import { testContentKey } from '../src/testing.js';
 
 import { baseBuilderForRoot, populateBlobsOnOwnDispatcher } from './blob-fixture-population.js';
-import { FakeFactStore } from './fake-fact-store.js';
+import { FakeFactStore, WIDE_BLOB_BUDGET_BYTES } from './fake-fact-store.js';
 import { createGitRepo, setupSubdirTestSuite, writeFileIn } from './test-helpers.js';
 
 const suite = setupSubdirTestSuite('blob-stage-tier-');
@@ -45,9 +47,12 @@ function reversed(rows: BlobScopedRows): BlobScopedRows {
   return Object.fromEntries(Object.entries(source).map(([table, tableRows]) => [table, tableRows.toReversed()])) as unknown as BlobScopedRows;
 }
 
+/** The one key {@link conditionRow} files under. */
+const CONDITION_KEY = testContentKey('markdown', 'key');
+
 /** One condition row of `code` at `ordinal`. */
 function conditionRow(code: string, ordinal: number): BlobConditionRow {
-  return { blob: 'markdown.key', code, ordinal, severity: 'warning', message: `${code} ${String(ordinal)}`, line: null };
+  return { blob: CONDITION_KEY, code, ordinal, severity: 'warning', message: `${code} ${String(ordinal)}`, line: null };
 }
 
 describe('a covered key\'s stored rows, in reversed order', () => {
@@ -79,7 +84,7 @@ describe('a covered key\'s stored rows, in reversed order', () => {
 
     const grouped = blobRowsByKey({ ...emptyBlobRows(), blobConditions: inOrder.toReversed() });
 
-    expect(grouped.get('markdown.key')?.conditions).toEqual(inOrder);
+    expect(grouped.get(CONDITION_KEY)?.conditions).toEqual(inOrder);
   });
 });
 
@@ -92,9 +97,9 @@ function canonical(rows: BlobScopedRows): Record<string, string[]> {
 /** A store that records every blob request it is asked, and the keys of each. */
 class RecordingStore extends FakeFactStore {
   readonly asked: BlobRequest<BlobScopedTableName>[] = [];
-  readonly readKeys: (readonly string[])[] = [];
+  readonly readKeys: (readonly ContentKey[])[] = [];
 
-  override readBlobFacts<Table extends BlobScopedTableName>(contentKeys: readonly string[], request: BlobRequest<Table>): Promise<Pick<BlobScopedRows, Table>> {
+  override readBlobFacts<Table extends BlobScopedTableName>(contentKeys: readonly ContentKey[], request: BlobRequest<Table>): Promise<Pick<BlobScopedRows, Table>> {
     this.asked.push(request as unknown as BlobRequest<BlobScopedTableName>);
     this.readKeys.push(contentKeys);
     return super.readBlobFacts(contentKeys, request);
@@ -108,7 +113,7 @@ function askedOf(store: RecordingStore): { tables: readonly string[]; forms: str
 
 /** A store holding `derived`'s blob tier, recording what it is asked. */
 async function recordingStoreOf(derived: Projection): Promise<RecordingStore> {
-  const store = new RecordingStore();
+  const store = new RecordingStore(WIDE_BLOB_BUDGET_BYTES);
   await store.writeBlobFacts({ rows: storableBlobFacts({ ...emptyBlobRows(), ...blobTables(derived) }), coveredAtRead: [], settledAtRead: [] });
   return store;
 }
@@ -154,7 +159,7 @@ describe('one reader for a hit and the derivation after it', () => {
       { tables: ALL_BLOB_REQUEST.tables, forms: 'all' },
     ]);
     expect(canonical(joined.rows)).toEqual(canonical(once.rows));
-    expect([...joined.covered].sort(compareCodeUnits)).toEqual([...once.covered].sort(compareCodeUnits));
+    expect([...joined.covered].sort(orderContentKeys)).toEqual([...once.covered].sort(orderContentKeys));
   });
 
   it('judges a key evicted between a hit and the wider read uncovered, holding none of its rows', async () => {
@@ -174,7 +179,7 @@ describe('one reader for a hit and the derivation after it', () => {
     expect(widened.covered.has(evicted), 'a key gone from the store is not covered').toBe(false);
     expect(widened.rows.blobs.some((row) => row.contentKey === evicted), 'no row of it from the earlier read').toBe(false);
     expect(widened.rows.blobReferences.some((row) => row.blob === evicted), 'neither form of reference').toBe(false);
-    expect([...widened.covered].sort(compareCodeUnits)).toEqual(keys.filter((key) => key !== evicted).sort(compareCodeUnits));
+    expect([...widened.covered].sort(orderContentKeys)).toEqual(keys.filter((key) => key !== evicted).sort(orderContentKeys));
   });
 
   it('keeps every earlier key\'s coverage when a later read asks for one key', async () => {
@@ -188,7 +193,7 @@ describe('one reader for a hit and the derivation after it', () => {
     const partial = tierOver(store);
     await partial.cover(keys, QUERY_BLOB_REQUEST);
 
-    expect([...(await partial.cover([first], ALL_BLOB_REQUEST)).covered].sort(compareCodeUnits)).toEqual([...once.covered].sort(compareCodeUnits));
+    expect([...(await partial.cover([first], ALL_BLOB_REQUEST)).covered].sort(orderContentKeys)).toEqual([...once.covered].sort(orderContentKeys));
   });
 });
 
@@ -221,7 +226,7 @@ describe('a run\'s reads of one store', () => {
   });
 
   it('answer a tree from what they hold when a request differs only in its steps', async () => {
-    const store = new FakeFactStore();
+    const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
     const tree = { rootId: 'root', treeHash: 'tree' };
     const reads = runStoredReads().of(store);
     const tables = EXTENT_STEP_TABLES.identity;
@@ -265,7 +270,7 @@ async function primedStore(tracker: GitTracker): Promise<{ store: FakeFactStore;
   const promotedKey = await builder.ensureContentKey(IGNORED);
   if (promotedKey === null) throw new Error(`${IGNORED} could not be promoted`);
   await populateBlobsOnOwnDispatcher(builder);
-  const store = new FakeFactStore();
+  const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
   await store.writeBlobFacts({ rows: storableBlobFacts({ ...emptyBlobRows(), ...blobTables(builder.build()) }), coveredAtRead: [], settledAtRead: [] });
   return { store, promotedKey };
 }

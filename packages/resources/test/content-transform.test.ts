@@ -5,6 +5,7 @@ import type { ContentTransformOptions, LinkRewriteRule, ResourceLookup } from '.
 import { transformContent } from '../src/content-transform.js';
 import { parseMarkdownContent } from '../src/link-parser.js';
 import type { LinkType, ResourceLink, ResourceMetadata } from '../src/schemas/resource-metadata.js';
+import { testContentKey } from '../src/testing.js';
 
 // ============================================================================
 // Shared test constants
@@ -122,7 +123,7 @@ function createTestResource(overrides: Partial<ResourceMetadata> & Pick<Resource
     sizeBytes: overrides.sizeBytes ?? 1024,
     estimatedTokenCount: overrides.estimatedTokenCount ?? 256,
     modifiedAt: overrides.modifiedAt ?? new Date('2025-01-01'),
-    contentKey: overrides.contentKey ?? 'markdown.abc123def456abc123def456abc123def456abc123def456abc123def456abcd',
+    contentKey: overrides.contentKey ?? testContentKey('markdown', 'resource'),
     ...(overrides.frontmatter !== undefined && { frontmatter: overrides.frontmatter }),
     ...(overrides.collections !== undefined && { collections: overrides.collections }),
   };

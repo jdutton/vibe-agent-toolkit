@@ -1,7 +1,9 @@
 import { SeveritySchema } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
-import { ContentKeySchema, JsonValueSchema } from './projection-shared.js';
+import { ContentKeySchema } from '../content-key.js';
+
+import { JsonValueSchema } from './projection-shared.js';
 
 const BLOB_FK_DESC = 'Foreign key to blobs.contentKey';
 

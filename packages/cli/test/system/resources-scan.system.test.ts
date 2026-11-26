@@ -168,7 +168,7 @@ describe('vat resources scan (system test)', () => {
     const files = RESOURCES_SCAN_REPORT_SCHEMA.parse(parsed).data?.files ?? [];
     expect(files.length).toBeGreaterThan(0);
     expect(files[0]).toHaveProperty('contentKey');
-    expect(files[0]?.contentKey).toMatch(/^markdown\.[a-f0-9]{64}$/); // <parserKind>.<SHA-256>
+    expect(files[0]?.contentKey).toMatch(/^markdown\.sha256\.[a-f0-9]{64}$/); // <parserKind>.<keyKind>.<hex>
   });
 
   it('states one root and reports every --verbose path relative to it', async () => {

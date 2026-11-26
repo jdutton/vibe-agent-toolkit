@@ -43,6 +43,7 @@ import { ResourceRegistry } from '../src/resource-registry.js';
 import { fakePool } from './parse-pool-fixture.js';
 import { setupSubdirTestSuite } from './test-helpers.js';
 
+
 /**
  * A cache that never touches disk.
  *
@@ -191,7 +192,7 @@ describe('registry admission under a parse pool', () => {
     const added = await registry.addResources([lead, alpha, beta]);
 
     expect(record.maxInFlight).toBe(2);
-    const contentKey = added[1]?.contentKey ?? '';
+    const contentKey = added[1]?.contentKey; if (contentKey === undefined) throw new Error('fixture: alpha was not added');
     expect(registry.getResourcesByContentKey(contentKey).map((r) => r.filePath)).toStrictEqual([
       alpha,
       beta,

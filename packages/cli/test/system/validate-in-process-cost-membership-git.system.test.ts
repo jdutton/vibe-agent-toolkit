@@ -130,9 +130,10 @@ function writeGitSpawnFixture(root: string): string {
  * The spawns each phase starts, and why.
  *
  * Warm, store on:
- * - resources: the tree snapshot that keys the store, and the tree key's per-file flag read
- *   (`ls-files -v`, assume-unchanged and skip-worktree), both at the root; then skill discovery's
- *   git-routed crawl of the include base, for the declared files.
+ * - resources: the tree snapshot that keys the store, the tree key's per-file flag read
+ *   (`ls-files -v`, assume-unchanged and skip-worktree) and its one LFS attribute pass
+ *   (`check-attr --stdin -z filter`; no `cat-file`, since no entry is `filter=lfs`), all at the
+ *   root; then skill discovery's git-routed crawl of the include base, for the declared files.
  * - skills: nothing. Its discovery is the resources phase's crawl, held by the run.
  *
  * The crawl's names are the root listing's under the base, but the run holds no root listing to
@@ -154,7 +155,12 @@ function expectedGitSpawns(store: 'warm' | 'off', symlinks: boolean): Record<(ty
   const tracker: NamedSpawn = { via: 'runGit', args: NAME_LISTING, cwd: '.' };
   if (store === 'warm') {
     return {
-      resources: [{ via: 'snapshot', args: [], cwd: '.' }, { via: 'runGit', args: ['ls-files', '-v', '-z'], cwd: '.' }, crawl],
+      resources: [
+        { via: 'snapshot', args: [], cwd: '.' },
+        { via: 'runGit', args: ['ls-files', '-v', '-z'], cwd: '.' },
+        { via: 'runGit', args: ['check-attr', '--stdin', '-z', 'filter'], cwd: '.' },
+        crawl,
+      ],
       skills: [],
     };
   }

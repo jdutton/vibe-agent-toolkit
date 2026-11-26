@@ -42,9 +42,9 @@ boundary, or every invocation prints it.
 
 ```typescript
 import { ALL_EXTENT_REQUEST, splitProjectionByScope } from '@vibe-agent-toolkit/resources';
-import { openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
+import { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 
-const store = openSqliteFactStore();
+const store = openSqliteFactStore({ blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
 
 const { blobs, extent } = splitProjectionByScope(projection);
 // Nothing was read first, so nothing is covered: every held key is written.
@@ -94,7 +94,7 @@ The projection tables split in two, by the `scope` each declares in
 
 | scope | tables | keyed by | lifetime |
 |---|---|---|---|
-| `blob` | `blobs`, `blob_references`, `blob_sections`, `blob_conditions`, `harness_blob_facts`, `harness_blob_imports`, `skill_text_facts`, `skill_text_matches` | content key — the two harness tables are additionally partitioned by `harness`: a write clears exactly the `(blob, harness)` pairs it carries, but a read selects by content key alone and returns every harness's rows for it, since these rows are derived only for what one tree's harness reaches; narrowing to one harness happens in memory (`harnessFactsIndex`), not in the SQL | bounded by the `blob_keys` manifest — a pure function of the bytes, shared by every tree containing them, and retained until it falls out of the newest `DEFAULT_RETAINED_BLOB_KEYS` keys |
+| `blob` | `blobs`, `blob_references`, `blob_sections`, `blob_conditions`, `harness_blob_facts`, `harness_blob_imports`, `skill_text_facts`, `skill_text_matches` | content key — the two harness tables are additionally partitioned by `harness`: a write clears exactly the `(blob, harness)` pairs it carries, but a read selects by content key alone and returns every harness's rows for it, since these rows are derived only for what one tree's harness reaches; narrowing to one harness happens in memory (`harnessFactsIndex`), not in the SQL | bounded by the `blob_keys` ledger — a pure function of the bytes, shared by every tree containing them, and retained while its key is among the newest whose recorded bytes fit `blobTierBudgetBytes` |
 | `extent` | the other nine, `claude_rule_patterns` among them | `(storeRootId, storeTreeHash)` | forever *for that tree* — the extent of a tree is a pure function of that tree |
 
 Extent-scoped tables carry two extra leading columns holding that key, and their
@@ -146,12 +146,16 @@ and are reused, so it stops growing but never shrinks.
 are a pure function of bytes and are shared by every tree and root containing
 those bytes, so they cannot be attributed to one extent without a scan that could
 race another process between its `writeBlobFacts` and its `writeExtent`. Instead
-a `blob_keys` manifest records when a write last held each content key, and a
-write keeps the newest `retainedBlobKeys` — default
-`DEFAULT_RETAINED_BLOB_KEYS = 50_000`, a ~265 MB ceiling an operator can check
-with `du`. The window is **global**, because a blob fact has no root: every
-repository on the machine shares it, and 50,000 holds roughly five
-adopter-sized trees.
+a `blob_keys` ledger records, for each content key, when a write last held it
+and how many bytes its rows store (`blobRowBytes` over the encoded values, kept
+exact as pairs are replaced and added). A write keeps the newest keys whose
+bytes fit `blobTierBudgetBytes` and evicts the rest, in the same transaction;
+the keys the write itself holds are never evicted, whatever their size or
+timestamps (they are excluded by key). The
+option is required: the CLI passes `DEFAULT_BLOB_TIER_BUDGET_BYTES`
+(190,000,000), about 265 MB of database pages an operator can check with `du`
+(the arithmetic is on the constant). The budget is **global**, because a blob
+fact has no root: every repository on the machine shares it.
 
 ## Traps this package exists to have already solved
 

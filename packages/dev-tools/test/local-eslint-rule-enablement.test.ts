@@ -138,6 +138,9 @@ const PROBE_FILES: Readonly<Record<string, string>> = {
   // Scoped to the skill-text directory by glob, the declaration aside; the core is the probe,
   // and the scope itself is held both ways below.
   'skill-text-core-purity': 'packages/resources/src/skill-text/core.ts',
+  // Type-aware and enabled on every package file but its parser; the probe reads stored keys
+  // through that parser, so it is not on the rule's `allowFiles`.
+  'content-key-opaque': 'packages/resources/src/projection/stored-reads.ts',
 };
 
 /** `error` as ESLint normalizes it out of `calculateConfigForFile`. */

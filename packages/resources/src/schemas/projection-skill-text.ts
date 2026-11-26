@@ -18,6 +18,7 @@
 
 import { z } from 'zod';
 
+import { ContentKeySchema } from '../content-key.js';
 import {
   type PatternId,
   SKILL_TEXT_FAMILIES,
@@ -25,7 +26,6 @@ import {
   type SkillTextFamily,
 } from '../skill-text/declaration.js';
 
-import { ContentKeySchema } from './projection-shared.js';
 import { FRONTMATTER_FENCES } from './skill-text-facts.js';
 
 /**

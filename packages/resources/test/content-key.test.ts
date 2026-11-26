@@ -12,6 +12,7 @@
  */
 
 
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
@@ -19,12 +20,21 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
   computeContentKey,
+  type ContentKey,
+  contentKeyParts,
+  formatContentKey,
   isParsableContent,
+  KEY_KINDS,
   type KeyedContent,
+  type KeyKind,
+  orderContentKeys,
+  PARSER_KINDS,
+  parseContentKey,
   type ParserKind,
   readContentWithKey,
 } from '../src/content-key.js';
 import { parserKindForPath } from '../src/projection/router.js';
+import { testContentKey } from '../src/testing.js';
 
 describe('parserKindForPath', () => {
   it.each([
@@ -137,21 +147,21 @@ describe('computeContentKey', () => {
     expect(new Set(keys).size).toBe(3);
   });
 
-  it('separates the kinds in the DIGEST, not merely in the prefix', () => {
-    const digestOf = (key: string): string => key.slice(key.lastIndexOf('.') + 1);
-    const digests = (['markdown', 'html', 'none'] as const).map((kind) =>
-      digestOf(computeContentKey(bytes('<p>x</p>'), kind)),
-    );
-    expect(new Set(digests).size).toBe(3);
+  it('keeps the parser kind out of the digest: one hex under every kind, three keys', () => {
+    // The kind is an unhashed qualifier, so a `sha256` hex can be compared with a digest computed
+    // elsewhere over the same bytes (a Git LFS pointer's oid); the key text still separates them.
+    const keys = (['markdown', 'html', 'none'] as const).map((kind) => computeContentKey(bytes('<p>x</p>'), kind));
+    expect(new Set(keys.map((key) => contentKeyParts(key).hex)).size).toBe(1);
+    expect(new Set(keys).size).toBe(3);
   });
 
   it('⭐ re-keys a file whose ROUTING changed, with no version constant to bump', () => {
-    // The reason `none` is mixed into the preimage rather than being a bare
+    // The reason `none` is part of the key rather than being a bare
     // "skip" flag downstream. A `.ts` file used to route to markdown and now
     // routes to `none`; its bytes did not change, so a key over bytes alone would
     // serve the stale remark facts — 64.7% of the reference rows this change
     // exists to delete — out of a cache that looks perfectly healthy. Because
-    // the kind is IN the digest, every such entry is unreachable the moment the
+    // the kind is IN the key text, every such entry is unreachable the moment the
     // routing moves, and no hand-maintained schema/cache version decides it.
     // (Hand-maintained version constants are prohibited in this project; this is
     // what replaces one.)
@@ -196,13 +206,9 @@ describe('computeContentKey', () => {
     expect(invalid[0]?.byteLength).toBe(invalid[2]?.byteLength);
   });
 
-  it('is not length-extendable across the domain separator', () => {
-    // The preimage is `<domain>\0<version>\0<kind>\0` + content. NUL is used
-    // because it cannot occur in any of the three prefix fields, so no content
-    // string can shift a field boundary and impersonate another (kind, content)
-    // pair. (The separator is written as the ESCAPE `\0`, never as a raw byte:
-    // a source file containing a literal NUL is treated as binary by git and
-    // ripgrep and vanishes from every grep-based sweep.)
+  it('cannot be impersonated by content that spells another kind', () => {
+    // The kind is a field of the key text, not a prefix of the hashed bytes, so no content string
+    // can shift a field boundary and pass for another (kind, content) pair.
     expect(computeContentKey(bytes('markdown x'), 'html')).not.toBe(computeContentKey(bytes('x'), 'markdown'));
   });
 
@@ -210,18 +216,19 @@ describe('computeContentKey', () => {
     // No schema version in the key: invalidation is the cache NAMESPACE's job
     // (one directory per build of VAT), so keys stay stable across releases and
     // a version bump no longer churns every recorded key.
-    expect(computeContentKey(bytes('x'), 'markdown').startsWith('markdown.')).toBe(true);
+    expect(computeContentKey(bytes('x'), 'markdown').startsWith('markdown.sha256.')).toBe(true);
   });
 
-  it('is domain-tagged so it can never be read as a git SHA-1', () => {
+  it('names its key kind, so it can never be read as a git object ID', () => {
     const key = computeContentKey(bytes('x'), 'markdown');
     // Hand-written on purpose, and deliberately NOT `CONTENT_KEY_PATTERN`: this
     // assertion is the independent second opinion the exported pattern is
     // checked against, and reusing it would make the check circular.
-    expect(key).toMatch(/^(markdown|html|none)\.[0-9a-f]{64}$/);
-    // 64 hex chars, and never bare hex — a git blob SHA-1 is 40 bare hex chars,
-    // so the two keyspaces cannot be mixed by accidental hex length.
+    expect(key).toMatch(/^(markdown|html|none)\.sha256\.[0-9a-f]{64}$/);
+    // Never bare hex, and a git object ID of the same bytes is a different key kind, so a different key.
     expect(key).not.toMatch(/^[0-9a-f]+$/);
+    const gitKey = formatContentKey({ ...contentKeyParts(key), keyKind: 'git-sha256' });
+    expect(gitKey).not.toBe(key);
   });
 });
 
@@ -364,5 +371,136 @@ describe('readContentWithKey', () => {
     expect(a.content).toBe('AAA\n');
     expect(b.content).toBe('BBB\n');
     expect(a.key).not.toBe(b.key);
+  });
+});
+
+describe('computeContentKey: the sha256 key text', () => {
+  const sha256Hex = (input: Uint8Array): string => createHash('sha256').update(input).digest('hex');
+
+  it('formats <parserKind>.sha256.<plain SHA-256 of the raw bytes>, no domain separator', () => {
+    const input = bytes('# hi\n');
+    expect(computeContentKey(input, 'markdown')).toBe(`markdown.sha256.${sha256Hex(input)}`);
+  });
+
+  it('gives identical bytes at two paths under one kind one key whose hex is their SHA-256', () => {
+    // The sha256 duplicate bound: the key is a function of (kind, bytes) only and its hex is
+    // exactly the bytes' SHA-256, so two copies are never keyed apart nor two contents together.
+    const first = bytes('shared body\n');
+    const second = Buffer.from('shared body\n', 'utf-8');
+    const a = computeContentKey(first, 'markdown');
+    const b = computeContentKey(second, 'markdown');
+    expect(a).toBe(b);
+    expect(a.slice(a.lastIndexOf('.') + 1)).toBe(sha256Hex(first));
+  });
+});
+
+/** A hex string of `length` characters, all `digit`. */
+const hexOf = (digit: string, length: number): string => digit.repeat(length);
+
+/** The hex length each key kind carries, written out independently of the module. */
+const HEX_LENGTH: Readonly<Record<KeyKind, number>> = { sha256: 64, 'git-sha1': 40, 'git-sha256': 64 };
+
+/** One key per (parser kind, key kind, hex digit): the sample every property below ranges over. */
+const SAMPLE: readonly ContentKey[] = PARSER_KINDS.flatMap((parserKind) =>
+  KEY_KINDS.flatMap((keyKind) =>
+    ['0', '7', 'f'].map((digit) => formatContentKey({ parserKind, keyKind, hex: hexOf(digit, HEX_LENGTH[keyKind]) })),
+  ),
+);
+
+describe('parseContentKey and formatContentKey', () => {
+  it('round-trips every parser kind and key kind: parse(format(k)) == k', () => {
+    for (const parserKind of PARSER_KINDS) {
+      for (const keyKind of KEY_KINDS) {
+        const parts = { parserKind, keyKind, hex: hexOf('a', HEX_LENGTH[keyKind]) };
+        const key = formatContentKey(parts);
+        expect(key).toBe(`${parserKind}.${keyKind}.${parts.hex}`);
+        expect(parseContentKey(key)).toBe(key);
+        expect(contentKeyParts(key)).toEqual(parts);
+      }
+    }
+  });
+
+  it.each([
+    ['a 40-hex sha256', `markdown.sha256.${hexOf('a', 40)}`],
+    ['a 64-hex git-sha1', `markdown.git-sha1.${hexOf('a', 64)}`],
+    ['a 40-hex git-sha256', `markdown.git-sha256.${hexOf('a', 40)}`],
+    ['a 63-hex sha256', `markdown.sha256.${hexOf('a', 63)}`],
+    ['an unknown parser kind', `pdf.sha256.${hexOf('a', 64)}`],
+    ['an unknown key kind', `markdown.md5.${hexOf('a', 64)}`],
+    ['uppercase hex', `markdown.sha256.${hexOf('A', 64)}`],
+    ['a missing key kind (the old format)', `markdown.${hexOf('a', 64)}`],
+    ['a path traversal', `markdown.sha256..${hexOf('a', 63)}`],
+    ['a bare dot-dot', '..'],
+    ['the empty string', ''],
+  ])('refuses %s', (_label, text) => {
+    expect(parseContentKey(text)).toBeUndefined();
+  });
+
+  it('accepts exactly the right hex length per key kind', () => {
+    for (const keyKind of KEY_KINDS) {
+      expect(parseContentKey(`html.${keyKind}.${hexOf('0', HEX_LENGTH[keyKind])}`)).toBeDefined();
+    }
+  });
+
+  it('throws when formatting a malformed part', () => {
+    expect(() => formatContentKey({ parserKind: 'markdown', keyKind: 'sha256', hex: hexOf('a', 40) })).toThrow();
+  });
+});
+
+describe('orderContentKeys', () => {
+  const sign = (n: number): number => Math.sign(n);
+  const textOrder = (a: string, b: string): number => {
+    if (a === b) return 0;
+    return a < b ? -1 : 1;
+  };
+
+  it('equals code-unit text order over a sample spanning every parser kind and key kind', () => {
+    for (const a of SAMPLE) {
+      for (const b of SAMPLE) {
+        expect(sign(orderContentKeys(a, b)), `${a} vs ${b}`).toBe(textOrder(a, b));
+      }
+    }
+  });
+
+  it('is total: antisymmetric, transitive and consistent with equals', () => {
+    for (const x of SAMPLE) {
+      for (const y of SAMPLE) {
+        expect(sign(orderContentKeys(x, y)) + sign(orderContentKeys(y, x)), `${x} vs ${y}`).toBe(0);
+        expect(orderContentKeys(x, y) === 0).toBe(x === y);
+        for (const z of SAMPLE) {
+          if (orderContentKeys(x, y) < 0 && orderContentKeys(y, z) < 0) expect(orderContentKeys(x, z)).toBeLessThan(0);
+        }
+      }
+    }
+  });
+
+  it('agrees with the tuple order (parserKind, keyKind, hex)', () => {
+    const tupleOrder = (a: ContentKey, b: ContentKey): number => {
+      const [pa, pb] = [contentKeyParts(a), contentKeyParts(b)];
+      return textOrder(pa.parserKind, pb.parserKind) || textOrder(pa.keyKind, pb.keyKind) || textOrder(pa.hex, pb.hex);
+    };
+    for (const a of SAMPLE) {
+      for (const b of SAMPLE) expect(sign(orderContentKeys(a, b)), `${a} vs ${b}`).toBe(tupleOrder(a, b));
+    }
+  });
+
+  it('no kind word is a proper prefix of another at the "." boundary, so text order is tuple order', () => {
+    for (const words of [PARSER_KINDS, KEY_KINDS] as const) {
+      for (const a of words) {
+        for (const b of words) {
+          if (a !== b) expect(`${b}.`.startsWith(`${a}.`) || b.startsWith(a), `${a} prefixes ${b}`).toBe(false);
+        }
+      }
+    }
+  });
+});
+
+describe('testContentKey', () => {
+  it('mints a well-formed sha256 key of the kind asked for, one per seed', () => {
+    const key = testContentKey('html', 'a');
+    expect(parseContentKey(key)).toBe(key);
+    expect(contentKeyParts(key)).toMatchObject({ parserKind: 'html', keyKind: 'sha256' });
+    expect(testContentKey('html', 'a')).toBe(key);
+    expect(testContentKey('html', 'b')).not.toBe(key);
   });
 });

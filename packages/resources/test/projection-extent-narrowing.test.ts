@@ -65,6 +65,7 @@
 import { compareCodeUnits } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { contentKeyParts } from '../src/content-key.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { ClosureExtentContributor } from '../src/projection/contributors/closure-extent.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
@@ -184,8 +185,8 @@ function parserKindOf(projection: Projection, path: string): string {
   const key = projection.resourceRealizations.find(
     (row) => row.path === path && row.contentKey !== null,
   )?.contentKey;
-  expect(key, `no keyed realization for ${path}`).toBeTypeOf('string');
-  return (key ?? '').slice(0, (key ?? '').indexOf('.'));
+  if (key === undefined || key === null) throw new Error(`no keyed realization for ${path}`);
+  return contentKeyParts(key).parserKind;
 }
 
 /**

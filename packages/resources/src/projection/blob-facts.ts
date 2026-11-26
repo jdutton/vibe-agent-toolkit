@@ -9,6 +9,7 @@
 
 import type { TextProvenance } from '@vibe-agent-toolkit/utils/text';
 
+import type { ContentKey } from '../content-key.js';
 import { encodeFrontmatterValue } from '../frontmatter-codec.js';
 import type { ParseResult } from '../link-parser.js';
 import { skillTextHeld } from '../parse-limits.js';
@@ -131,7 +132,7 @@ type ExactBlobEncoding =
  * and by then the encoding question has already been answered and thrown away —
  * which is precisely the silence these columns exist to end.
  *
- * @param contentKey - The blob's `<parserKind>.<sha256>` key
+ * @param contentKey - The blob's `<parserKind>.<keyKind>.<hex>` key
  * @param sizeBytes - Raw on-disk byte length, from the caller's `stat()`
  * @param decoding - What the decode of these bytes knew, guessed and lost,
  *   straight off the `KeyedContent` the parse was performed on
@@ -139,7 +140,7 @@ type ExactBlobEncoding =
  * @returns The `blobs` row
  */
 export function blobRowFor(
-  contentKey: string,
+  contentKey: ContentKey,
   sizeBytes: number,
   decoding: ExactBlobEncoding,
   parsed: ParseResult,
@@ -268,7 +269,7 @@ export const BLOB_FINDING_CONDITION_CODES: readonly string[] = Object.keys(FINDI
  *   rows numbered by `ordinal` in the order the parse reported them, so two
  *   identical findings stay two rows and the parser's order survives the store
  */
-export function blobConditionsFor(contentKey: string, parsed: ParseResult): BlobConditionRow[] {
+export function blobConditionsFor(contentKey: ContentKey, parsed: ParseResult): BlobConditionRow[] {
   return Object.entries(FINDING_CONDITIONS).flatMap(([code, findingsOf]) =>
     findingsOf(parsed).map(({ message, line }, ordinal) => ({ blob: contentKey, code, ordinal, severity: 'warning' as const, message, line })),
   );
@@ -285,7 +286,7 @@ export function blobConditionsFor(contentKey: string, parsed: ParseResult): Blob
  *   distinct import target
  */
 export function harnessRowsFor(
-  contentKey: string,
+  contentKey: ContentKey,
   harness: HarnessId,
   facts: HarnessContentFacts,
 ): { facts: HarnessBlobFactsRow; imports: HarnessBlobImportRow[] } {
@@ -320,7 +321,7 @@ export function harnessRowsFor(
  * @returns The facts row and the match rows
  */
 export function skillTextRowsFor(
-  contentKey: string,
+  contentKey: ContentKey,
   facts: SkillTextFacts,
 ): { facts: SkillTextFactsRow; matches: SkillTextMatchRow[] } {
   const held = skillTextHeld(facts);

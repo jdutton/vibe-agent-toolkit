@@ -55,6 +55,7 @@ import { readFileSync } from 'node:fs';
 
 import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
 import {
+  contentKeyParts,
   PROJECTION_TABLES,
   StoreQuestionUnavailableError,
   type FactStore,
@@ -62,6 +63,7 @@ import {
   type ProjectionTableName,
   type QueryProjection,
   type QueryReferenceSource,
+  type RealizedContentKeys,
   vatCacheRoot,
 } from '@vibe-agent-toolkit/resources';
 import {
@@ -69,12 +71,20 @@ import {
   isPathAbsentError,
   isReadOnlyFilesystemError,
   parseEnvBoolean,
+  relativeEscapesRoot,
   safePath,
   TEST_USER_STATE_UNDER,
   toForwardSlash,
   VAT_CACHE_DIR_ENV,
 } from '@vibe-agent-toolkit/utils';
-import { freshGitTreeKey, gitSnapshotFailureOf, gitTreeKey, type GitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
+import {
+  freshGitTreeKey,
+  gitSnapshotFailureOf,
+  gitTreeKey,
+  type GitTreeKey,
+  type LfsPointer,
+  withGitSnapshotCache,
+} from '@vibe-agent-toolkit/utils/git';
 
 import { noticeToOperator, withNoticeLedger } from './operator-notices.js';
 import { isModuleMissing, missingBackendError, type OptionalBackend } from './optional-backend.js';
@@ -240,9 +250,12 @@ export interface OpenedPopulationCache {
  * @param root - The absolute corpus root
  * @returns The snapshot, or `null` when the tree cannot be keyed
  */
-function storeKeyOrNotice(root: string): GitTreeSnapshot | null {
+function storeKeyOrNotice(root: string): GitTreeKey | null {
   const snapshot = gitTreeKey({ cwd: root });
-  if (snapshot.ok) return withTestTreeHash(snapshot);
+  if (snapshot.ok) {
+    noticeLfsFilterAbsent(snapshot, root);
+    return withTestTreeHash(snapshot);
+  }
   // Not "the selector is set": the store is on by default, so most users who
   // see this never wrote the variable.
   noticeToOperator(
@@ -253,6 +266,28 @@ function storeKeyOrNotice(root: string): GitTreeSnapshot | null {
     root,
   );
   return null;
+}
+
+/**
+ * Tell the operator, once per root per command run, that the tree holds pulled Git LFS files and
+ * this environment configures no `filter.lfs.*` key. The key still holds (a pulled file whose index
+ * stat is clean keys as it does with the filter), but git cannot re-clean a pulled file whose stat
+ * moved: it hashes the content in place of the pointer, so the tree's key moves and the store
+ * misses until the stat is recorded again with the filter configured. A file not pulled is its
+ * pointer on disk, which git hashes to the same blob with or without the filter: no notice.
+ *
+ * @param key - The tree's key
+ * @param root - The absolute corpus root
+ */
+function noticeLfsFilterAbsent(key: GitTreeKey, root: string): void {
+  if (key.lfs.filter !== 'not-configured' || !key.lfs.pointers.some((pointer) => pointer.pulled)) return;
+  noticeToOperator(
+    'store',
+    `The projection store keys ${root} with Git LFS files in it, but this environment configures no git-lfs filter`
+    + ' (no filter.lfs.* key): a pulled LFS file whose stat changes is hashed as its content, and the store misses.'
+    + ' Install the filter (git lfs install) and run git update-index --refresh to record the files\' stat again.',
+    `lfs-filter-absent:${root}`,
+  );
 }
 
 /**
@@ -279,7 +314,7 @@ export const TEST_TREE_HASH_FILE_ENV = 'VAT_TEST_TREE_HASH_FILE';
  * @param snapshot - The snapshot that keys the tree
  * @returns The snapshot, its hash replaced under the test seam
  */
-function withTestTreeHash(snapshot: GitTreeSnapshot): GitTreeSnapshot {
+function withTestTreeHash(snapshot: GitTreeKey): GitTreeKey {
   const file = process.env[TEST_TREE_HASH_FILE_ENV]?.trim() ?? '';
   const inTest = (process.env[TEST_USER_STATE_UNDER]?.trim() ?? '') !== '';
   if (file === '' || !inTest) return snapshot;
@@ -410,18 +445,55 @@ async function openCacheWith(root: string, open: () => Promise<FactStore | undef
   noticeCacheRootInsideTree(root);
   const store = await open();
   if (store === undefined) return undefined;
-  const cwd = root;
   return {
     cache: {
       store,
       treeHash: snapshot.hash,
-      treeUnchanged: () => {
-        const fresh = freshGitTreeKey({ cwd });
-        return fresh.ok && fresh.hash === snapshot.hash;
-      },
+      treeUnchanged: (realized) => treeStillKeyedBy(snapshot, root, realized),
     },
     close: () => store.close(),
   };
+}
+
+/**
+ * Whether `key` still describes the tree and the bytes the run read: a fresh key's hash is the
+ * bracket's, and every pulled LFS file under `root` was read as its pointer's oid.
+ *
+ * The second half is what the hash cannot say. A pulled file's hash is its pointer's, and its
+ * pulled bit is read from the file's bytes, so a pulled file edited after the snapshot (git
+ * trusting a clean stat) keys alike; the run's own read of it does not. Only what the run read
+ * is asked about: a file outside `root`, one not pulled, one the run realized without reading its
+ * bytes, and one the run realized nothing at (its crawl does not include it, as an LFS image beside
+ * the markdown usually is) fed no fact to the extent, and the key already carries its pulled bit.
+ *
+ * @param key - The bracket's key
+ * @param root - The absolute corpus root
+ * @param realized - What the run realized at each path under `root`
+ * @returns True when the extent may be filed under `key`
+ */
+function treeStillKeyedBy(key: GitTreeKey, root: string, realized: RealizedContentKeys): boolean {
+  const fresh = freshGitTreeKey({ cwd: root });
+  if (!fresh.ok || fresh.hash !== key.hash) return false;
+  return key.lfs.pointers.every((pointer) => pulledPointerReadAsItsOid(pointer, root, realized));
+}
+
+/**
+ * {@link treeStillKeyedBy}'s check of one LFS pointer: the run keyed its pulled file as the
+ * content the pointer names (a `sha256` key, the plain SHA-256 of the bytes, which is what an LFS
+ * oid is). A pointer with extension lines is not asked about: its oid is the extensions' output's,
+ * and the working tree holds their input, so no read of it would ever match.
+ *
+ * @param pointer - One pointer of the bracket's key
+ * @param root - The absolute corpus root
+ * @param realized - What the run realized at each path under `root`
+ * @returns True when the pointer raises no doubt about the run's reads
+ */
+function pulledPointerReadAsItsOid(pointer: LfsPointer, root: string, realized: RealizedContentKeys): boolean {
+  if (!pointer.pulled || pointer.extended || relativeEscapesRoot(safePath.relative(root, pointer.absolutePath))) return true;
+  const read = realized(pointer.absolutePath);
+  if (read?.contentKey == null) return true;
+  const { keyKind, hex } = contentKeyParts(read.contentKey);
+  return keyKind === 'sha256' && hex === pointer.lfsOid;
 }
 
 /**
@@ -486,11 +558,25 @@ type StorePatience = Pick<ProjectionSqlite.SqliteStoreOptions, 'busyTimeoutMs'>;
 async function loadStore(patience: StorePatience | undefined): Promise<FactStore | undefined> {
   const backend = await loadBackend();
   try {
-    return backend.openSqliteFactStore(patience);
+    return openBudgetedStore(backend, patience);
   } catch (error) {
     if (!backend.isStoreUnopenableError(error)) throw error;
     return replaceUnopenableStore(backend, error, patience);
   }
+}
+
+/**
+ * Open the backend's store under the CLI's blob-tier byte budget.
+ *
+ * The one place the CLI states the bound: the backend requires it, and both the
+ * first open and the replacement of a damaged file open under the same one.
+ *
+ * @param backend - The loaded backend
+ * @param patience - The connection's busy timeout, as {@link loadStore} was asked
+ * @returns The opened store
+ */
+function openBudgetedStore(backend: typeof ProjectionSqlite, patience: StorePatience | undefined): FactStore {
+  return backend.openSqliteFactStore({ ...patience, blobTierBudgetBytes: backend.DEFAULT_BLOB_TIER_BUDGET_BYTES });
 }
 
 /**
@@ -508,7 +594,7 @@ function replaceUnopenableStore(
 ): FactStore | undefined {
   try {
     backend.discardStoreDatabase(error.databasePath);
-    const store = backend.openSqliteFactStore(patience);
+    const store = openBudgetedStore(backend, patience);
     noticeToOperator('store', `${error.message}. Discarded it and started an empty projection store; this run populates without a warm cache.`, error.databasePath);
     return store;
   } catch (retryError) {
@@ -740,7 +826,7 @@ interface ActivePopulationScope {
    * questions' connection ({@link openQuestionCache}) key one tree with one
    * answer, a failed one included, which the snapshot memo does not hold.
    */
-  readonly keyOf: (root: string) => GitTreeSnapshot | null;
+  readonly keyOf: (root: string) => GitTreeKey | null;
 }
 
 /**
@@ -801,8 +887,8 @@ function runOwnedScope<T>(
 ): Promise<T> {
   let opening: Promise<OpenedPopulationCache | undefined> | undefined;
   const opened = (): Promise<OpenedPopulationCache | undefined> => (opening ??= openPopulationCache(options));
-  const keys = new Map<string, GitTreeSnapshot | null>();
-  const keyOf = (root: string): GitTreeSnapshot | null => {
+  const keys = new Map<string, GitTreeKey | null>();
+  const keyOf = (root: string): GitTreeKey | null => {
     const held = keys.get(root);
     if (held !== undefined) return held;
     const key = storeKeyOrNotice(root);

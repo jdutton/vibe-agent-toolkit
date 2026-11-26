@@ -27,6 +27,7 @@ import { createTempDir, gitExecutable, removeScratchDir, removeTempDir, setupAsy
 import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi, type Assertion } from 'vitest';
 
+import type { ContentKey } from '../src/content-key.js';
 import { ExternalLinkValidator } from '../src/external-link-validator.js';
 import { parseHtmlContent } from '../src/html-link-parser.js';
 import { parseMarkdownContent, type ParseResult } from '../src/link-parser.js';
@@ -980,7 +981,7 @@ export function projectionRealizationRow(row: {
   resourceId: string;
   extentId: string;
   path: string;
-  contentKey: string | null;
+  contentKey: ContentKey | null;
   isDirectory?: boolean;
   exists?: boolean;
   gitignored?: boolean;

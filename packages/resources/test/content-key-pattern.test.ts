@@ -17,35 +17,38 @@ const ALL_KINDS = ['markdown', 'html', 'none'] as const;
 describe('CONTENT_KEY_PATTERN', () => {
   it.each(ALL_KINDS)('matches a real computed %s content key', (kind) => {
     const key = computeContentKey(new TextEncoder().encode('hello'), kind);
-    expect(CONTENT_KEY_PATTERN.test(key)).toBe(true);
+    expect(key).toMatch(CONTENT_KEY_PATTERN);
   });
 
-  it('is built from the kind list, and covers exactly it', () => {
+  it('is built from the kind lists, and covers exactly them', () => {
     // A change detector ON PURPOSE. The pattern is assembled from the production
-    // kind array, so it cannot go stale on its own — but THIS FILE can: add a
-    // fourth kind and the acceptance cases above would silently stop covering
-    // one, with everything green. No test file in this repository is
-    // typechecked, so a `satisfies` clause would buy nothing here; pinning the
-    // assembled source against a hand-written expectation is the check that
-    // actually runs.
+    // parser-kind and key-kind lists, so it cannot go stale on its own — but THIS
+    // FILE can: add a fourth kind and the acceptance cases above would silently
+    // stop covering one, with everything green. Pinning the assembled source
+    // against a hand-written expectation is the check that actually runs.
     //
     // If this fails because a kind was added, update `ALL_KINDS` and revisit the
     // rejection table below — do not just re-copy the new source in.
-    expect(CONTENT_KEY_PATTERN.source).toBe(String.raw`^(?:markdown|html|none)\.[0-9a-f]{64}$`);
+    expect(CONTENT_KEY_PATTERN.source).toBe(
+      String.raw`^(?:markdown|html|none)\.(?:sha256\.[0-9a-f]{64}|git-sha1\.[0-9a-f]{40}|git-sha256\.[0-9a-f]{64})$`,
+    );
   });
 
   it.each([
-    ['uppercase hex', 'markdown.' + 'A'.repeat(64)],
-    ['wrong parser kind', 'pdf.' + '0'.repeat(64)],
+    ['uppercase hex', 'markdown.sha256.' + 'A'.repeat(64)],
+    ['wrong parser kind', 'pdf.sha256.' + '0'.repeat(64)],
     // A prefix that CONTAINS a real kind but is not one. An alternation left
     // unanchored inside the group, or widened to `\w+`, accepts these.
-    ['kind with a prefix', 'xmarkdown.' + '0'.repeat(64)],
-    ['kind with a suffix', 'nonetheless.' + '0'.repeat(64)],
-    ['empty kind', '.' + '0'.repeat(64)],
-    ['short digest', 'markdown.' + '0'.repeat(63)],
-    ['long digest', 'markdown.' + '0'.repeat(65)],
+    ['kind with a prefix', 'xmarkdown.sha256.' + '0'.repeat(64)],
+    ['kind with a suffix', 'nonetheless.sha256.' + '0'.repeat(64)],
+    ['key kind with a suffix', 'markdown.sha2566.' + '0'.repeat(64)],
+    ['empty kind', '.sha256.' + '0'.repeat(64)],
+    ['no key kind (the old format)', 'markdown.' + '0'.repeat(64)],
+    ['short digest', 'markdown.sha256.' + '0'.repeat(63)],
+    ['long digest', 'markdown.sha256.' + '0'.repeat(65)],
+    ['a git-sha1 digest under sha256', 'markdown.sha256.' + '0'.repeat(40)],
     ['path traversal attempt', '..'],
-    ['no digest', 'markdown.'],
+    ['no digest', 'markdown.sha256.'],
   ] as const)('rejects %s', (_label, value) => {
     expect(CONTENT_KEY_PATTERN.test(value)).toBe(false);
   });

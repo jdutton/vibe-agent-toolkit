@@ -25,7 +25,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { chmodSync, writeFileSync } from 'node:fs';
 
-import { defaultStoreDirectory, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
+import { DEFAULT_BLOB_TIER_BUDGET_BYTES, defaultStoreDirectory, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import { mkdirSyncReal, readWorkCounters, safePath, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { detachGitEnv } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -145,7 +145,7 @@ describe('a stored-document question under another process\'s write lock', () =>
   it('answers nothing from a cold store, and the verb\'s enumeration still builds the home', async () => {
     // A store that exists and holds nothing. Opening a connection configures it
     // (`PRAGMA auto_vacuum` takes the write lock), so the open is what meets it.
-    await openSqliteFactStore().close();
+    await openSqliteFactStore({ blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES }).close();
     const result = await askUnderLock(makeRepo());
 
     expectAnsweredUnderLock(result);

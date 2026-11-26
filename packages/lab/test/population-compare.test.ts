@@ -13,6 +13,8 @@
  * of "the command found nothing".
  */
 
+import { type ContentKey, contentKeyParts, formatContentKey } from '@vibe-agent-toolkit/resources';
+import { testContentKey } from '@vibe-agent-toolkit/resources/testing';
 import { describe, expect, it } from 'vitest';
 
 import type { ReportEnvelope } from '../src/envelope/envelope.js';
@@ -90,6 +92,19 @@ function verdictOf(
   const first = comparison.commands[0];
   expect(first).toBeDefined();
   return first?.verdict as unknown as Record<string, unknown>;
+}
+
+/**
+ * The verdict two qualified keys on one path must get, read through the resources format: keys of
+ * two key kinds are incomparable, and within one key kind the whole text decides.
+ *
+ * @param before - The baseline key
+ * @param after - The compared key
+ * @returns The verdict kind
+ */
+function expectedKind(before: ContentKey, after: ContentKey): string {
+  if (contentKeyParts(before).keyKind !== contentKeyParts(after).keyKind) return 'content-incomparable';
+  return before === after ? 'unchanged' : 'changed';
 }
 
 describe('comparePopulation', () => {
@@ -180,6 +195,60 @@ describe('comparePopulation', () => {
     expect(comparison.ok).toBe(false);
     if (comparison.ok) return;
     expect(comparison.refusal).toMatch(/'population' report was captured by a lab whose report shape differs.*re-capture it/u);
+  });
+
+  describe('across key schemes and key kinds (a kind-hashed baseline against a qualified candidate)', () => {
+    const HEX = 'a'.repeat(64);
+    const kindHashed: PopulationEntry = { path: 'a.md', identity: { scheme: 'kindHashedKey', value: `markdown.${HEX}` } };
+    const qualified: PopulationEntry = {
+      path: 'a.md',
+      identity: key(formatContentKey({ parserKind: 'markdown', keyKind: 'sha256', hex: HEX })),
+    };
+    const gitKeyed: PopulationEntry = {
+      path: 'a.md',
+      identity: key(formatContentKey({ parserKind: 'markdown', keyKind: 'git-sha1', hex: 'a'.repeat(40) })),
+    };
+
+    it('reports a kind-hashed and a qualified key on one path as incomparable, not changed', () => {
+      expect(verdictOf(row([kindHashed]), row([qualified]))).toEqual({
+        kind: 'content-incomparable',
+        reason: expect.stringContaining('kindHashedKey') as unknown,
+      });
+    });
+
+    it('reports two qualified keys of different key kinds on one path as incomparable, not changed', () => {
+      expect(verdictOf(row([qualified]), row([gitKeyed]))).toEqual({
+        kind: 'content-incomparable',
+        reason: expect.stringContaining('git-sha1') as unknown,
+      });
+    });
+
+    it('groups qualified keys by the key kind the resources format reads off them, and nothing else', () => {
+      // The lab restates the format (it has no runtime dependency on resources); this holds its
+      // reading of the key kind to `contentKeyParts`, over every kind and two parser kinds.
+      const keys = (['markdown', 'none'] as const).flatMap((parserKind) => [
+        formatContentKey({ parserKind, keyKind: 'sha256', hex: 'a'.repeat(64) }),
+        formatContentKey({ parserKind, keyKind: 'git-sha1', hex: 'a'.repeat(40) }),
+        formatContentKey({ parserKind, keyKind: 'git-sha256', hex: 'a'.repeat(64) }),
+      ]);
+      for (const before of keys) {
+        for (const after of keys) {
+          const verdict = verdictOf(row([{ path: 'a.md', identity: key(before) }]), row([{ path: 'a.md', identity: key(after) }]));
+          expect(verdict['kind'], `${before} against ${after}`).toBe(expectedKind(before, after));
+        }
+      }
+    });
+
+    it('compares two qualified keys of one key kind', () => {
+      const moved: PopulationEntry = { path: 'a.md', identity: key(testContentKey('markdown', 'moved')) };
+      expect(verdictOf(row([qualified]), row([moved]))).toEqual({
+        kind: 'changed',
+        added: [],
+        removed: [],
+        changed: ['a.md'],
+        contentComparison: { kind: 'compared' },
+      });
+    });
   });
 
   describe('across identity schemes (an rc.17 baseline against a content-key candidate)', () => {

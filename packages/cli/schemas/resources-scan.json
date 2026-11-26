@@ -174,8 +174,8 @@
                       },
                       "contentKey": {
                         "type": "string",
-                        "pattern": "^(?:markdown|html|none)\\.[0-9a-f]{64}$",
-                        "description": "A parser-kind-qualified content key: \"<parserKind>.<sha256>\""
+                        "pattern": "^(?:markdown|html|none)\\.(?:sha256\\.[0-9a-f]{64}|git-sha1\\.[0-9a-f]{40}|git-sha256\\.[0-9a-f]{64})$",
+                        "description": "A content key: \"<parserKind>.<keyKind>.<hex>\" (keyKind sha256 | git-sha1 | git-sha256)"
                       }
                     },
                     "required": [

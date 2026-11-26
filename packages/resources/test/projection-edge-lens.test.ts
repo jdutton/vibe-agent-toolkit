@@ -19,6 +19,7 @@ import {
   EdgeResolutionRowSchema,
   EdgeRowSchema,
 } from '../src/schemas/projection-edges.js';
+import { testContentKey } from '../src/testing.js';
 
 import { queryRealization } from './helpers/context-query-rows.js';
 
@@ -84,7 +85,7 @@ function reference(
   syntacticForm: ReferenceSyntacticForm = 'markdown-link',
 ): BlobReferenceRow {
   return {
-    blob: `key:${fromPath}`,
+    blob: testContentKey('markdown', fromPath),
     ordinal,
     rawRef,
     text: null,
@@ -315,7 +316,7 @@ describe('resolveEdges — the authored-only policy', () => {
     const symlinked = {
       ...queryRealization('docs/link.md'),
       resourceId: `id:${SOURCE}`,
-      contentKey: `key:${SOURCE}`,
+      contentKey: testContentKey('markdown', SOURCE),
     };
     // BOTH bases resolve, to DIFFERENT files: `./target.md` is `target.md` from
     // the root and `docs/target.md` from `docs/`. That is what makes the
@@ -508,7 +509,7 @@ describe('resolveEdges — the authored-only policy', () => {
     // `rows.sort(byPath)` reverted to `rows.reverse()`. From `docs/` the two
     // bases disagree — `./b.md` is `b.md` from the root and out-of-corpus from
     // `docs/` — which is what makes the comparison discriminating.
-    const alias = { ...queryRealization('docs/zz-alias.md'), resourceId: `id:${SOURCE}`, contentKey: `key:${SOURCE}` };
+    const alias = { ...queryRealization('docs/zz-alias.md'), resourceId: `id:${SOURCE}`, contentKey: testContentKey('markdown', SOURCE) };
 
     const build = (flip: boolean): Projection => {
       const base = projectionWith(
@@ -563,7 +564,7 @@ describe('resolveEdges — the authored-only policy', () => {
       const aliases = [`${nfc}/link.md`, `${nfd}/link.md`].map((path) => ({
         ...queryRealization(path),
         resourceId: `id:${SOURCE}`,
-        contentKey: `key:${SOURCE}`,
+        contentKey: testContentKey('markdown', SOURCE),
       }));
       return {
         ...base,

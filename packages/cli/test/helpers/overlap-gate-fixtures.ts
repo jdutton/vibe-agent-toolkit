@@ -6,21 +6,23 @@
 import type {
   BlobFactsOutcome,
   BlobFactsReader,
+  ContentKey,
   HomeSettlement,
   ResourceEnumeration,
   StoredContent,
 } from '@vibe-agent-toolkit/resources';
+import { testContentKey } from '@vibe-agent-toolkit/resources/testing';
 
 import type { SupervisedRun } from '../../src/commands/resources/check-supervisor.js';
 import type { OverlappedRun, OverlappedTurn } from '../../src/commands/resources/overlapped-supervision.js';
 
 export const ROOT = '/repo';
 export const HOME_KEY = '[] home';
-export const MARKDOWN_KEY = `markdown.${'a'.repeat(64)}`;
+export const MARKDOWN_KEY = testContentKey('markdown', 'a');
 
 type Realization = StoredContent['members'] extends ReadonlyMap<string, infer R> ? R : never;
 
-export const keyed = (contentKey: string): Realization => ({ contentKey, contentState: 'keyed', mime: 'text/markdown' });
+export const keyed = (contentKey: ContentKey): Realization => ({ contentKey, contentState: 'keyed', mime: 'text/markdown' });
 
 /**
  * A reader answering `outcomes` by key, each key one row, counting the keys it answered and the

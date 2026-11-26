@@ -44,9 +44,12 @@ import {
   FilesystemExtentContributor,
   ProjectionBuilder,
   blobReferencesFor,
+  contentKeyParts,
   parseFileCached,
   withParseDispatcher,
+  type ContentKey,
   type ExtentContribution,
+  type ParserKind,
   type ProjectionBase,
   type ResourceRealizationRow,
   type ResourceRegistry,
@@ -93,20 +96,20 @@ import { setupTempDir } from '../test-helpers.js';
 const FIXTURE_ROOT = safePath.resolve(import.meta.dirname, '../fixtures/skill-files/post-build');
 
 /**
- * Every markdown blob's content key begins here — see `computeContentKey`.
+ * Every markdown blob's content key names this parser kind — see `computeContentKey`.
  *
- * The prefix IS the parser kind: `computeContentKey` mixes it into the digest
- * preimage and spells it in the key, so a key naming a different parser is a
- * different document even for identical bytes. That is why `addBlobReferences`
- * filters on it rather than on "has a blob row" — handing an `html.`-keyed blob
- * to the markdown parser and filing the result under that same key is precisely the
- * one-lane-served-the-other's-facts mis-filing `content-key.ts` warns about.
+ * The parser kind is part of the key: `computeContentKey` spells it in the key,
+ * so a key naming a different parser is a different document even for identical
+ * bytes. That is why `addBlobReferences` filters on it rather than on "has a
+ * blob row" — handing an `html.`-keyed blob to the markdown parser and filing the
+ * result under that same key is precisely the one-lane-served-the-other's-facts
+ * mis-filing `content-key.ts` warns about.
  */
-const MARKDOWN_KEY_PREFIX = 'markdown.';
+const MARKDOWN_PARSER_KIND: ParserKind = 'markdown';
 
 /**
  * The kind that names the ABSENCE of a document parser — `content-key.ts`'s
- * third {@link MARKDOWN_KEY_PREFIX} sibling.
+ * third {@link MARKDOWN_PARSER_KIND} sibling.
  *
  * Distinguished from "not markdown" on purpose. A `none.` blob has no AST to
  * lose, so leaving it out of this file's hand-rolled edge population costs
@@ -114,7 +117,12 @@ const MARKDOWN_KEY_PREFIX = 'markdown.';
  * narrowing. {@link addBlobReferences} therefore checks which of the two an
  * un-admitted file is, rather than lumping them together.
  */
-const NONE_KEY_PREFIX = 'none.';
+const NONE_PARSER_KIND: ParserKind = 'none';
+
+/** The parser kind a realization's content key names, or `undefined` for a row never keyed. */
+function parserKindOf(contentKey: ContentKey | null): ParserKind | undefined {
+  return contentKey === null ? undefined : contentKeyParts(contentKey).parserKind;
+}
 
 /**
  * The corpus files that route to NO document parser — `mime-type.ts` types
@@ -146,7 +154,7 @@ const UNPARSED_RELS = [HELPER_REL, CONFIG_ASSET_REL];
  * It was five while `parserKindForPath` routed everything that is not
  * `.html`/`.htm` to remark, which made `templates/config.json` and
  * `skills/shared/helper.mjs` markdown-keyed by accident rather than by intent.
- * Routing by MIME type moved both to {@link NONE_KEY_PREFIX}, and this guard is
+ * Routing by MIME type moved both to {@link NONE_PARSER_KIND}, and this guard is
  * what reported it — deliberately, having been added one step earlier so the
  * change could not narrow this file's population in silence.
  *
@@ -257,7 +265,7 @@ function difference(left: readonly string[], right: readonly string[]): string[]
  * ## Why this helper asserts its own input
  *
  * The filter has to be the content key's parser prefix (see
- * {@link MARKDOWN_KEY_PREFIX} — "has a blob row" would feed an HTML-keyed blob to
+ * {@link MARKDOWN_PARSER_KIND} — "has a blob row" would feed an HTML-keyed blob to
  * the markdown parser), and a prefix filter is exactly the shape that NARROWS in
  * silence: a parser-kind change drops files from this population, the base loses
  * those edges, and the exact member-set equalities downstream keep PASSING while
@@ -266,7 +274,7 @@ function difference(left: readonly string[], right: readonly string[]): string[]
  * That is not hypothetical. It happened: `parserKindForPath` stopped routing
  * everything-but-`.html` to remark and began routing by MIME type, and
  * `templates/config.json` and `skills/shared/helper.mjs` moved to
- * {@link NONE_KEY_PREFIX}. The first version of this file lost both without a
+ * {@link NONE_PARSER_KIND}. The first version of this file lost both without a
  * single test going red.
  *
  * ## The four assertions, and the distinct failure each one catches
@@ -285,7 +293,7 @@ function difference(left: readonly string[], right: readonly string[]): string[]
  *    candidate in any form** — this is what makes excluding them
  *    answer-preserving rather than merely quiet, and it is checked rather than
  *    asserted in prose. Reading a file to count its edges is not the mis-filing
- *    {@link MARKDOWN_KEY_PREFIX} warns about; nothing here is FILED under a key
+ *    {@link MARKDOWN_PARSER_KIND} warns about; nothing here is FILED under a key
  *    the parser did not produce. The day a bundled script grows a markdown link,
  *    this reddens and says so, instead of that edge vanishing from the base.
  */
@@ -299,11 +307,11 @@ async function addBlobReferences(
   // below cannot reach for a `?? ''` fallback that would file a whole file's
   // references under an empty key and leave the base quietly edge-less.
   const admitted = withBytes.flatMap((row) =>
-    row.contentKey?.startsWith(MARKDOWN_KEY_PREFIX) === true
+    row.contentKey !== null && parserKindOf(row.contentKey) === MARKDOWN_PARSER_KIND
       ? [{ contentKey: row.contentKey, path: row.path }]
       : [],
   );
-  const unparsed = withBytes.filter((row) => row.contentKey?.startsWith(MARKDOWN_KEY_PREFIX) !== true);
+  const unparsed = withBytes.filter((row) => parserKindOf(row.contentKey) !== MARKDOWN_PARSER_KIND);
 
   // (1) Non-vacuity: a helper that admitted nothing would leave an edge-less
   // base, and every membership assertion downstream would still agree with itself.
@@ -319,7 +327,7 @@ async function addBlobReferences(
   // (4a) `none.`, not merely "not markdown" — an `html.` blob has an AST, and
   // dropping one would be a narrowing this partition must not silently absorb.
   expect(sortedPaths(
-    unparsed.filter((row) => row.contentKey?.startsWith(NONE_KEY_PREFIX) !== true).map((row) => row.path),
+    unparsed.filter((row) => parserKindOf(row.contentKey) !== NONE_PARSER_KIND).map((row) => row.path),
   )).toEqual([]);
 
   // One parse dispatcher for every read below, shut down after them.

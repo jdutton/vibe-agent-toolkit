@@ -3,6 +3,7 @@
  */
 
 import type { HeadingNode } from '@vibe-agent-toolkit/resources';
+import { testContentKey } from '@vibe-agent-toolkit/resources/testing';
 import { describe, expect, it } from 'vitest';
 
 import type { ChunkableResource } from '../../src/chunking/chunk-resource.js';
@@ -10,7 +11,7 @@ import { chunkResource, enrichChunks } from '../../src/chunking/chunk-resource.j
 import { ApproximateTokenCounter } from '../../src/token-counters/approximate-token-counter.js';
 
 /** The file facts every resource carries; chunking reads none of them. */
-const FILE_FACTS = { contentKey: `markdown.${'0'.repeat(64)}`, sizeBytes: 0, modifiedAt: new Date(0) };
+const FILE_FACTS = { contentKey: testContentKey('markdown', '0'), sizeBytes: 0, modifiedAt: new Date(0) };
 
 describe('chunkResource', () => {
   const tokenCounter = new ApproximateTokenCounter();

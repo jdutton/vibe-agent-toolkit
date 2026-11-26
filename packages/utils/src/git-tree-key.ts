@@ -26,20 +26,34 @@
  *
  * The snapshot itself is unchanged: the crawl and `gitChangedFiles` still take it on such a tree
  * (`gitChangedFiles` makes its own refusal of hidden edits).
+ *
+ * **Git LFS.** Under `filter=lfs` the snapshot holds a pointer blob, so one hash describes a file
+ * pulled (its content on disk) and not pulled (its pointer on disk). After the flags, the key reads
+ * which regular-file entries are pointers and whether each is pulled (`readLfsState`, three spawns
+ * at most and one `lstat` per pointer; a file is read only when it is small enough to be a pointer),
+ * and appends a digest of the pointers' paths and pulled bits. A pointer whose file is absent or no
+ * regular file declines the key (`lfs-undecidable`), as does a pointer's file the OS will not let
+ * VAT look at (`lfs-file-unread`). Whether a `filter.lfs.*` key is
+ * configured is read too (only when there are pointers, else `not-asked`): it does not enter the
+ * hash, since a stat-clean pulled file keys alike either way.
  */
 
 import { createHash } from 'node:crypto';
 
+import { compareCodeUnits } from './compare-code-units.js';
 import { type FlaggedEntry, flaggedEntryOf, hiddenEditEntriesOf } from './git-changed-files.js';
+import { lfsFilterConfigured, lfsMembersOf, type LfsPointerEntry, readLfsState } from './git-lfs.js';
 import { runGitBytes } from './git-run.js';
 import {
   freshGitTreeSnapshot,
   type GitHiddenEntry,
   type GitSnapshotOutcome,
+  type GitTreeKey,
   type GitTreeKeyFailure,
   type GitTreeKeyOutcome,
   type GitTreeSnapshot,
   gitTreeSnapshot,
+  type LfsReading,
 } from './git-snapshot.js';
 import { safePath } from './path-utils.js';
 import { shownName } from './shown-text.js';
@@ -67,7 +81,7 @@ interface IndexFlagReading {
 const readings = new WeakMap<GitTreeSnapshot, IndexFlagReading | GitTreeKeyFailure>();
 
 /** The key per snapshot object, so one snapshot keys as one object every time it is asked. */
-const keyed = new WeakMap<GitTreeSnapshot, GitTreeSnapshot | GitTreeKeyFailure>();
+const keyed = new WeakMap<GitTreeSnapshot, GitTreeKey | GitTreeKeyFailure>();
 
 /** The flags a flagged entry carries, as a declined key names them. */
 function hidingFlagOf({ flags }: FlaggedEntry): GitHiddenEntry['flag'] {
@@ -118,33 +132,96 @@ function readingOf(cwd: string, snapshot: GitTreeSnapshot): IndexFlagReading | G
   return reading;
 }
 
-/**
- * The snapshot, its hash extended by the absent skip-worktree paths when there are any.
- *
- * @param snapshot - The snapshot that keys the tree
- * @param absent - The absent entries' paths, as git listed them (sorted, so one set is one digest)
- * @returns The snapshot itself when nothing is absent
- */
-function keyedSnapshot(snapshot: GitTreeSnapshot, absent: readonly Uint8Array[]): GitTreeSnapshot {
-  if (absent.length === 0) return snapshot;
+/** The `+absent:` digest over the absent entries' paths, as git listed them (sorted: one set, one digest). */
+function absentSuffix(absent: readonly Uint8Array[]): string {
+  if (absent.length === 0) return '';
   const digest = createHash('sha256');
   for (const path of absent) digest.update(path).update(Uint8Array.of(0));
-  return { ...snapshot, hash: `${snapshot.hash}+absent:${digest.digest('hex')}` };
+  return `+absent:${digest.digest('hex')}`;
+}
+
+/** The `+lfs:` digest over each pointer's git path and pulled bit, sorted by path; none without pointers. */
+function lfsSuffix(pointers: readonly LfsPointerEntry[]): string {
+  if (pointers.length === 0) return '';
+  const digest = createHash('sha256');
+  const sorted = [...pointers].sort((left, right) => compareCodeUnits(left.gitPath, right.gitPath));
+  for (const { gitPath, pulled } of sorted) digest.update(gitPath).update('\0').update(pulled ? '1' : '0').update('\0');
+  return `+lfs:${digest.digest('hex')}`;
+}
+
+/** What the LFS pass read, or why git gave no usable answer. */
+type LfsReadState = ReturnType<typeof readLfsState>;
+
+/** The first paths a declined key names, as a message shows them. */
+function namedPaths(paths: readonly string[]): string[] {
+  return paths.slice(0, NAMED_HIDDEN_ENTRIES).map((path) => shownName(path));
 }
 
 /**
- * Whether git's index hides any working-tree bytes from `snapshot`.
+ * Why the LFS pass's reading cannot key the tree: a file it could not look at, or a pointer neither
+ * pulled nor not; `undefined` when it can.
+ */
+function lfsDeclineOf(cwd: string, repositoryRoot: string, state: Extract<LfsReadState, { ok: true }>): GitTreeKeyFailure | undefined {
+  const { undecidable, unread } = state;
+  const [first] = unread;
+  if (first !== undefined) {
+    const { gitPath, operation, errno } = first;
+    return { ok: false, kind: 'lfs-file-unread', cwd, repositoryRoot, path: shownName(gitPath), operation, errno, unreadCount: unread.length };
+  }
+  if (undecidable.length > 0) {
+    return { ok: false, kind: 'lfs-undecidable', cwd, repositoryRoot, undecidable: namedPaths(undecidable), undecidableCount: undecidable.length };
+  }
+  return undefined;
+}
+
+/**
+ * The tree's LFS reading for the key, or why it cannot key the tree.
+ *
+ * @param cwd - The directory the key was asked from
+ * @param snapshot - The snapshot that keys the tree
+ * @param absentPaths - The absent skip-worktree entries' absolute paths: never members
+ * @returns The pointers and whether the filter is configured, or the declined key
+ */
+function lfsOf(
+  cwd: string,
+  snapshot: GitTreeSnapshot,
+  absentPaths: ReadonlySet<string>,
+): { pointers: readonly LfsPointerEntry[]; filter: LfsReading['filter'] } | GitTreeKeyFailure {
+  const { repositoryRoot } = snapshot;
+  const state = readLfsState(repositoryRoot, lfsMembersOf(snapshot.entries, absentPaths));
+  if (!state.ok) return { ...state, cwd, repositoryRoot };
+  const declined = lfsDeclineOf(cwd, repositoryRoot, state);
+  if (declined !== undefined) return declined;
+  const { pointers } = state;
+  if (pointers.length === 0) return { pointers, filter: 'not-asked' };
+  const filter = lfsFilterConfigured(repositoryRoot);
+  if (!filter.ok) return { ...filter, cwd, repositoryRoot };
+  return { pointers, filter: filter.configured ? 'configured' : 'not-configured' };
+}
+
+/**
+ * Whether git's index hides any working-tree bytes from `snapshot`, and which LFS files are pulled.
  *
  * @param cwd - The directory the key was asked from
  * @param snapshot - The snapshot to key with
- * @returns The key, or why it cannot key the tree
+ * @returns The key: the snapshot, its hash extended by the absent paths and the LFS pointers' pulled
+ *   bits when there are any; or why it cannot key the tree
  */
-function keyOf(cwd: string, snapshot: GitTreeSnapshot): GitTreeSnapshot | GitTreeKeyFailure {
+function keyOf(cwd: string, snapshot: GitTreeSnapshot): GitTreeKey | GitTreeKeyFailure {
   const reading = readingOf(cwd, snapshot);
   if ('ok' in reading) return reading;
-  const { hidden, hiddenCount, absent } = reading;
+  const { hidden, hiddenCount, absent, absentPaths } = reading;
   if (hiddenCount > 0) return { ok: false, kind: 'index-hides', cwd, repositoryRoot: snapshot.repositoryRoot, hidden, hiddenCount };
-  return keyedSnapshot(snapshot, absent);
+  const lfs = lfsOf(cwd, snapshot, absentPaths);
+  if ('ok' in lfs) return lfs;
+  return {
+    ...snapshot,
+    hash: `${snapshot.hash}${absentSuffix(absent)}${lfsSuffix(lfs.pointers)}`,
+    lfs: {
+      pointers: lfs.pointers.map(({ absolutePath, lfsOid, pulled, extended }) => ({ absolutePath, lfsOid, pulled, extended })),
+      filter: lfs.filter,
+    },
+  };
 }
 
 /** {@link keyOf}, once per snapshot object. */
@@ -159,7 +236,7 @@ function keyFor(cwd: string, outcome: GitSnapshotOutcome): GitTreeKeyOutcome {
 
 /**
  * The tree's key: {@link gitTreeSnapshot}, unless git's index flags a file assume-unchanged or
- * skip-worktree that hides bytes (see the module header). Classify a failure with `gitSnapshotFailureOf`.
+ * skip-worktree that hides bytes, or an LFS file's disk bytes cannot be told (see the module header). Classify a failure with `gitSnapshotFailureOf`.
  *
  * @param options - Where to look
  * @param options.cwd - Any directory inside the repository; the key covers the whole repository

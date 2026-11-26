@@ -1,7 +1,5 @@
 import { z } from 'zod';
 
-import { CONTENT_KEY_PATTERN } from '../content-key.js';
-
 /*
  * There is deliberately no `PROJECTION_SCHEMA_VERSION` here.
  *
@@ -49,12 +47,4 @@ export const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
     z.record(z.string(), JsonValueSchema),
   ]))
 ).describe('An arbitrary JSON value (frontmatter, condition payloads, etc.)');
-
-/**
- * A content key as produced by `computeContentKey` in `content-key.ts` —
- * `<parserKind>.<sha256>`. This is the primary key of the `blobs` table and
- * the foreign key every blob-keyed and path-dependent table joins through.
- */
-export const ContentKeySchema = z.string().regex(CONTENT_KEY_PATTERN)
-  .describe('A parser-kind-qualified content key: "<parserKind>.<sha256>"');
 

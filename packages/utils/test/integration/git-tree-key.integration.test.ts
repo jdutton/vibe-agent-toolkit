@@ -115,7 +115,7 @@ describe('gitTreeKey over a real repository', () => {
       gitTreeKey({ cwd: dir });
       const first = readWorkCounters()['git.calls'] - before;
       gitTreeKey({ cwd: dir });
-      expect(first, 'the snapshot and the one flag listing').toBe(2);
+      expect(first, 'the snapshot, the one flag listing and the one attribute pass (no path is filter=lfs)').toBe(3);
       expect(readWorkCounters()['git.calls'] - before).toBe(first);
     });
   });

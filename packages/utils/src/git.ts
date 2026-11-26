@@ -71,9 +71,12 @@ export {
   type GitSnapshotEntry,
   type GitSnapshotFailure,
   type GitSnapshotOutcome,
+  type GitTreeKey,
   type GitTreeKeyFailure,
   type GitTreeKeyOutcome,
   type GitTreeSnapshot,
+  type LfsPointer,
+  type LfsReading,
 } from './git-snapshot.js';
 export { freshGitTreeKey, gitSnapshotAbsentEntries, gitTreeKey } from './git-tree-key.js';
 export { loadGitignoreRules } from './gitignore-checker.js';

@@ -106,7 +106,7 @@ import type { QueryPopulateResult } from '../../src/projection/query-projection.
 import { buildResourcePopulation, buildResourceProjection } from '../../src/projection/resource-population.js';
 import type { ResourceRealizationRow } from '../../src/schemas/projection-resources.js';
 import { populateBlobsOnOwnDispatcher } from '../blob-fixture-population.js';
-import { FakeFactStore } from '../fake-fact-store.js';
+import { FakeFactStore, WIDE_BLOB_BUDGET_BYTES } from '../fake-fact-store.js';
 import { inOwnRun } from '../helpers/population-run.js';
 
 /** The query lane's population, copying a hit's references as `vat resources query` does with no populating lens. */
@@ -959,7 +959,7 @@ describe.skipIf(!HOST_GATES.filter.met)(gatedTitle('a clean/smudge filter on one
     });
 
     // Membership miss writes; the query lane is served what it wrote.
-    const viaMembership = optionsOver(new FakeFactStore());
+    const viaMembership = optionsOver(new FakeFactStore(WIDE_BLOB_BUDGET_BYTES));
     const members = await inOwnRun(buildResourcePopulation, { ...viaMembership, outputs: [] });
     const served = await inOwnRun(buildCopying, viaMembership);
     expect(members.outcome).toEqual({ population: 'derived', stored: 'written' });
@@ -969,7 +969,7 @@ describe.skipIf(!HOST_GATES.filter.met)(gatedTitle('a clean/smudge filter on one
     expect(keyOf(served.projection, PATH_B)).toBe(ownKeyB);
 
     // Query miss derives and writes on its own.
-    const derived = await inOwnRun(buildCopying, optionsOver(new FakeFactStore()));
+    const derived = await inOwnRun(buildCopying, optionsOver(new FakeFactStore(WIDE_BLOB_BUDGET_BYTES)));
     expect(derived.outcome).toEqual({ population: 'derived', stored: 'written' });
     expect(keyOf(derived.projection, PATH_B)).toBe(ownKeyB);
   });

@@ -159,15 +159,30 @@ function contentComparisonOf(
   afterByPath: ReadonlyMap<string, PopulationIdentity>,
 ): ContentComparison {
   const mismatch = before
-    .map((entry) => ({ was: entry.identity.scheme, now: afterByPath.get(entry.path)?.scheme }))
+    .map((entry) => {
+      const other = afterByPath.get(entry.path);
+      return { was: identityClass(entry.identity), now: other === undefined ? undefined : identityClass(other) };
+    })
     .find((pair) => pair.now !== undefined && pair.now !== pair.was);
   if (mismatch?.now === undefined) return { kind: 'compared' };
   return {
     kind: 'incomparable',
     reason:
       `the baseline identifies content by \`${mismatch.was}\` and the compared side by \`${mismatch.now}\`, ` +
-      'which are different schemes, so no path is reported as changed or unchanged by content',
+      'which are different schemes or key kinds, so no path is reported as changed or unchanged by content',
   };
+}
+
+/**
+ * What two identities must share to be compared: the scheme, and for a qualified key its key kind
+ * (one byte string has a key of each kind, so values of two kinds never group together).
+ *
+ * @param identity - An identity the document reader already proved is shaped like its scheme
+ * @returns `checksum`, `kindHashedKey`, or `contentKey <keyKind>`
+ */
+function identityClass(identity: PopulationIdentity): string {
+  if (identity.scheme !== 'contentKey') return identity.scheme;
+  return `contentKey ${identity.value.split('.')[1] ?? ''}`;
 }
 
 /**

@@ -20,6 +20,7 @@ import {
   discardStoreDatabase,
   isStoreInUse,
   isStoreUnopenableError,
+  DEFAULT_BLOB_TIER_BUDGET_BYTES,
   openSqliteFactStore,
 } from '../../src/store.js';
 import { sampleExtentRows } from '../fixtures.js';
@@ -44,7 +45,7 @@ function databaseFile(dir: string = directory): string {
 /** What opening the store threw, or `undefined`. */
 async function openFailure(): Promise<unknown> {
   try {
-    const store = openSqliteFactStore({ directory });
+    const store = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
     await store.close();
   } catch (error) {
     return error;
@@ -54,7 +55,7 @@ async function openFailure(): Promise<unknown> {
 
 /** Write a real store holding one extent, and close it. */
 async function writeRealStore(dir: string = directory): Promise<void> {
-  const store = openSqliteFactStore({ directory: dir });
+  const store = openSqliteFactStore({ directory: dir, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
   await store.writeExtent(KEY, sampleExtentRows(KEY.rootId));
   await store.close();
 }
@@ -98,7 +99,7 @@ describe('a damaged store file is reported as unopenable', () => {
     discardStoreDatabase(error.databasePath);
     expect(readdirSync(directory)).toEqual([]);
 
-    const store = openSqliteFactStore({ directory });
+    const store = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
     try {
       expect(await store.readExtent(KEY, ALL_EXTENT_REQUEST)).toBeUndefined();
     } finally {
@@ -112,7 +113,7 @@ describe('close leaves one complete database file', () => {
     // Without a checkpoint, a second open connection keeps SQLite from folding
     // the WAL back on close, and the committed rows live only in `-wal`.
     const bystander = new DatabaseSync(databaseFile(directory), { open: false });
-    const store = openSqliteFactStore({ directory });
+    const store = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
     bystander.open();
     // A finished read: the connection now has the WAL index mapped, holding no
     // transaction — an idle second `vat` process, not a reader mid-snapshot.
@@ -125,7 +126,7 @@ describe('close leaves one complete database file', () => {
       try {
         // Only the database file: what a save that missed `-wal` would carry.
         writeFileSync(databaseFile(copy), readFileSync(databaseFile()));
-        const reopened = openSqliteFactStore({ directory: copy });
+        const reopened = openSqliteFactStore({ directory: copy, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
         try {
           expect((await reopened.readExtent(KEY, ALL_EXTENT_REQUEST))?.resources).toHaveLength(1);
         } finally {
@@ -141,7 +142,7 @@ describe('close leaves one complete database file', () => {
 
   it('closes without failing while a reader holds a snapshot, and the store stays consistent', async () => {
     await writeRealStore();
-    const store = openSqliteFactStore({ directory });
+    const store = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
     await store.writeExtent({ ...KEY, treeHash: 'tree-bbb' }, sampleExtentRows(KEY.rootId));
 
     const reader = new DatabaseSync(databaseFile());
@@ -162,7 +163,7 @@ describe('close leaves one complete database file', () => {
     } finally {
       check.close();
     }
-    const reopened = openSqliteFactStore({ directory });
+    const reopened = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
     try {
       expect((await reopened.readExtent({ ...KEY, treeHash: 'tree-bbb' }, ALL_EXTENT_REQUEST))?.resources).toHaveLength(1);
     } finally {
@@ -173,7 +174,7 @@ describe('close leaves one complete database file', () => {
 
 describe('whether another connection has a store open', () => {
   it('says so while an open store holds it, and not once it is closed', async () => {
-    const store = openSqliteFactStore({ directory });
+    const store = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
     await store.writeExtent(KEY, sampleExtentRows(KEY.rootId));
     expect(isStoreInUse(directory)).toBe(true);
     await store.close();

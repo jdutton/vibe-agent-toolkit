@@ -13,6 +13,7 @@
  */
 
 import {
+  type ContentKey,
   BUILTIN_CHECKS,
   CLAUDE_RULE_FRONTMATTER_INVALID_CHECK,
   CLAUDE_RULE_GLOB_INERT_CHECK,
@@ -37,7 +38,7 @@ const RULES_PATH = '.claude/rules/demo.md';
  * @param key - The content key
  * @returns The row
  */
-function sampleBlob(key: string): BlobRow {
+function sampleBlob(key: ContentKey): BlobRow {
   const [row] = sampleBlobRows(key).blobs;
   if (row === undefined) throw new Error('sampleBlobRows returned no blobs row');
   return row;

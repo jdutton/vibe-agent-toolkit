@@ -51,7 +51,7 @@ import { open } from 'node:fs/promises';
 import { countWork, deepFreeze, isPathAbsentError, isVatError, memoized, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { GIT_NO_ANSWER_CODE, gitFindRoot, gitLinksCheckedOutAsFiles, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
-import type { KeyedContent, ParserKind } from '../content-key.js';
+import { type ContentKey, contentKeyParts, type KeyedContent, type ParserKind } from '../content-key.js';
 import { defaultParseCache } from '../parse-cache.js';
 import { ParseDispatcher } from '../parse-dispatcher.js';
 import type { CollectionConfig } from '../schemas/project-config.js';
@@ -70,7 +70,6 @@ import {
   type ResourcePopulationSource,
   type StoredDocumentFacts,
 } from './resource-population.js';
-import { parserKindOf } from './router.js';
 import { hydratesUnder, readRoute, respelledContent, storedRoute, type StoredMember } from './stored-admission.js';
 import { runStoredReads, type RunStoredReads } from './stored-reads.js';
 
@@ -151,7 +150,7 @@ export interface RunContentSource {
    *
    * @param entry - The blob's path and the key the population recorded for it
    */
-  read(entry: { readonly absolutePath: string; readonly contentKey: string }): Promise<KeyedContent | null>;
+  read(entry: { readonly absolutePath: string; readonly contentKey: ContentKey }): Promise<KeyedContent | null>;
 }
 
 /**
@@ -163,9 +162,7 @@ export interface RunContentSource {
 export function diskRunContentSource(cache: RunContentCache): RunContentSource {
   return {
     read: async ({ absolutePath, contentKey }) => {
-      // Outside the `try`: a key naming no parser kind is a producer bug, and
-      // reading it as "gone" would blame the corpus for it.
-      const parserKind = parserKindOf(contentKey);
+      const { parserKind } = contentKeyParts(contentKey);
       try {
         return await readKeyedContent(absolutePath, parserKind, cache);
       } catch (error) {

@@ -15,7 +15,7 @@ import { toEnumerationRow } from '../../src/pipeline-oracles/aliases.js';
 
 /** The realization fields `toEnumerationRow` projects; the rest never reach the enumeration row. */
 function realizationOf(path: string): ResourceRealizationRow {
-  return { path, contentKey: null, exists: true, isDirectory: false, gitignored: false, isSymlink: false, symlinkResolves: null } as unknown as ResourceRealizationRow;
+  return { path, contentKey: null, exists: true, isDirectory: false, gitignored: false, isSymlink: false, symlinkResolves: null } as ResourceRealizationRow;
 }
 
 const scratch: string[] = [];

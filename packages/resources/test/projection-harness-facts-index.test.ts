@@ -6,9 +6,10 @@ import { harnessFactsIndex, HarnessFactsAbsentError, HARNESS_FACTS_ABSENT } from
 import { HARNESS_PROFILES } from '../src/projection/harness/profile.js';
 import type { BlobConditionRow } from '../src/schemas/projection-blobs.js';
 import { HarnessIdSchema } from '../src/schemas/projection-harness.js';
+import { testContentKey } from '../src/testing.js';
 
-const KEY = 'markdown.' + 'a'.repeat(64);
-const OTHER = 'markdown.' + 'b'.repeat(64);
+const KEY = testContentKey('markdown', 'a');
+const OTHER = testContentKey('markdown', 'b');
 
 describe('harnessFactsIndex', () => {
   const view = {
@@ -28,7 +29,7 @@ describe('harnessFactsIndex', () => {
     const index = harnessFactsIndex(view, 'claude-code');
     expect(() => index.requireFacts(OTHER, 'acme/CLAUDE.md')).toThrow(HarnessFactsAbsentError);
     try { index.requireImports(OTHER, 'acme/CLAUDE.md'); } catch (error) {
-      expect((error as HarnessFactsAbsentError).code).toBe(HARNESS_FACTS_ABSENT);
+      expect(error).toMatchObject({ code: HARNESS_FACTS_ABSENT });
       expect((error as Error).message).toContain('acme/CLAUDE.md');
       expect((error as Error).message).toContain(OTHER);
     }

@@ -28,9 +28,11 @@
 
 import { mkdtempSync, writeFileSync } from 'node:fs';
 
-import { openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
+import { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import {
+  type ContentKey,
   ALL_BLOB_REQUEST,
+  contentKeyParts,
   BLOB_FACT_FIELDS,
   blobFactsReader,
   buildResourceProjection,
@@ -203,8 +205,9 @@ const FIXTURE: Readonly<Record<string, FidelityCase>> = {
     content: '{ "see": "[a link](./baseline.md)" }\n',
     precondition: ({ resource, rows }) => {
       expect(rows.blobs).toHaveLength(1);
-      const key = rows.blobs[0]?.contentKey ?? '';
-      expect(['markdown.', 'html.'].some((parsed) => key.startsWith(parsed)), key).toBe(false);
+      const [blob] = rows.blobs;
+      if (blob === undefined) throw new Error('the bytes keyed no blob');
+      expect(['markdown', 'html'], blob.contentKey).not.toContain(contentKeyParts(blob.contentKey).parserKind);
       expect(resource.links).toEqual([]);
       expect(Object.hasOwn(resource, 'unresolvedReferences')).toBe(false);
     },
@@ -230,16 +233,17 @@ let storedOf: (relativePath: string) => BlobScopedRows;
  * @param stored - Every stored row read back
  * @returns The rows of that key alone
  */
-function rowsOfKey(key: string, stored: BlobScopedRows): BlobScopedRows {
+function rowsOfKey(key: ContentKey, stored: BlobScopedRows): BlobScopedRows {
+  const ofKey = (other: ContentKey): boolean => other === key;
   return {
-    blobs: stored.blobs.filter((row) => row.contentKey === key),
-    blobReferences: stored.blobReferences.filter((row) => row.blob === key),
-    blobSections: stored.blobSections.filter((row) => row.blob === key),
-    blobConditions: stored.blobConditions.filter((row) => row.blob === key),
-    harnessBlobFacts: stored.harnessBlobFacts.filter((row) => row.blob === key),
-    harnessBlobImports: stored.harnessBlobImports.filter((row) => row.blob === key),
-    skillTextFacts: stored.skillTextFacts.filter((row) => row.blob === key),
-    skillTextMatches: stored.skillTextMatches.filter((row) => row.blob === key),
+    blobs: stored.blobs.filter((row) => ofKey(row.contentKey)),
+    blobReferences: stored.blobReferences.filter((row) => ofKey(row.blob)),
+    blobSections: stored.blobSections.filter((row) => ofKey(row.blob)),
+    blobConditions: stored.blobConditions.filter((row) => ofKey(row.blob)),
+    harnessBlobFacts: stored.harnessBlobFacts.filter((row) => ofKey(row.blob)),
+    harnessBlobImports: stored.harnessBlobImports.filter((row) => ofKey(row.blob)),
+    skillTextFacts: stored.skillTextFacts.filter((row) => ofKey(row.blob)),
+    skillTextMatches: stored.skillTextMatches.filter((row) => ofKey(row.blob)),
   };
 }
 
@@ -253,8 +257,8 @@ beforeAll(async () => {
   for (const [name, { content }] of Object.entries(FIXTURE)) writeFileSync(safePath.join(root, name), content);
 
   // The projection lane: derive every blob and file its facts in the store.
-  const writer = openSqliteFactStore({ directory: storeDirectory });
-  const keyOf = new Map<string, string>();
+  const writer = openSqliteFactStore({ directory: storeDirectory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+  const keyOf = new Map<string, ContentKey>();
   try {
     const { projection } = await withPopulationRun((run) => buildResourceProjection({
       root,
@@ -269,11 +273,11 @@ beforeAll(async () => {
   }
 
   // A second connection, so every fact comes back through SQLite rather than a handle's memory.
-  const reader: FactStore = openSqliteFactStore({ directory: storeDirectory });
+  const reader: FactStore = openSqliteFactStore({ directory: storeDirectory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
   try {
     const stored = await reader.readBlobFacts([...new Set(keyOf.values())], ALL_BLOB_REQUEST);
     const facts = blobFactsReader(stored);
-    const keyAt = (relativePath: string): string => {
+    const keyAt = (relativePath: string): ContentKey => {
       const key = keyOf.get(relativePath);
       if (key === undefined) throw new Error(`the projection keyed no realization at ${relativePath}`);
       return key;

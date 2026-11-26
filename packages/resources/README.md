@@ -16,7 +16,7 @@ Markdown resource parsing, validation, and link integrity checking for AI agent 
 - **Track resource collections** - Manage multiple markdown files with automatic ID generation
 - **Resolve cross-references** - Link resources together and track dependencies
 - **Query capabilities** - Find resources by path, ID, or glob patterns with lazy evaluation
-- **Duplicate detection** - Identify duplicate content using content keys (hash of the bytes plus the parse route)
+- **Duplicate detection** - Identify duplicate content using content keys (`<parserKind>.<keyKind>.<hex>`: the parse route and the SHA-256 of the bytes)
 - **Collection operations** - Filter, transform, and materialize resource collections efficiently
 - **GitHub Flavored Markdown** - Full support for GFM including tables, task lists, and autolinks
 
@@ -318,11 +318,18 @@ const readmeFiles = registry.getResourcesByName('README.md');
 console.log(`Found ${readmeFiles.length} README.md files`);
 ```
 
-##### getResourcesByContentKey(contentKey: string): ResourceMetadata[]
+##### getResourcesByContentKey(contentKey: ContentKey): ResourceMetadata[]
 
 Get resources by content key.
 
 Returns all resources with the given content key (identical bytes, same parse route).
+
+A `ContentKey` is the text `<parserKind>.<keyKind>.<hex>`, for example
+`markdown.sha256.<64 hex>`. Read its fields with `contentKeyParts(key)`, admit
+an untrusted string with `parseContentKey(text)` (`undefined` when malformed),
+compare two with `===` (equal exactly when their text is, so keys of two key
+kinds are never equal) and sort with `orderContentKeys`. Tests mint keys with `testContentKey(kind, seed)` from
+`@vibe-agent-toolkit/resources/testing`.
 
 ```typescript
 const resource = registry.getResourceById('readme');

@@ -11,12 +11,13 @@ import { describe, expect, it } from 'vitest';
 import { findBarrelDrift } from '../../dev-tools/src/pin-barrel-exports.js';
 
 const BARREL_EXPORTS = [
-  'CREATE_EXTENTS_TABLE_SQL',
+  'DEFAULT_BLOB_TIER_BUDGET_BYTES',
   'EXTENTS_TABLE',
-  'EXTENT_KEY_COLUMNS',
+  'PROJECTION_STORE_BUDGET_INVALID_CODE',
   'WRITTEN_AT_COLUMN',
   'allSpecs',
   'blobKeyColumn',
+  'createBookkeepingTableSql',
   'createTableSql',
   'decodeValue',
   'defaultStoreDirectory',

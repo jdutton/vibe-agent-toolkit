@@ -22,10 +22,11 @@ import { blobSectionsFor } from '../../src/projection/blob-sections.js';
 import type { BlobScopedRows } from '../../src/projection/store.js';
 import type { SkillTextFacts } from '../../src/schemas/skill-text-facts.js';
 import { SKILL_TEXT_DECLARATION } from '../../src/skill-text/declaration.js';
+import { testContentKey } from '../../src/testing.js';
 
 import { PAST_BOUND_MATCHES } from './past-bound.js';
 
-const KEY = `markdown.${'b'.repeat(64)}`;
+const KEY = testContentKey('markdown', 'b');
 
 /**
  * A record of `count` imperative matches, each with `matchText`.

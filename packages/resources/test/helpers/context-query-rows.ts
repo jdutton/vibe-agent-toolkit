@@ -24,13 +24,14 @@ import type {
   ResourceRealizationRow,
   ResourceTagRow,
 } from '../../src/schemas/projection-resources.js';
+import { testContentKey } from '../../src/testing.js';
 
 /**
  * A realization carrying only the columns the context selectors read.
  *
- * ⚠️ Deliberately NOT a schema-valid content key (`key:<path>`, not
- * `<parserKind>.<sha256>`): these rows are never validated, and a recognisable
- * key makes the facts join in the rules suite readable at a glance. Every
+ * A content key minted per path by `testContentKey`, so a recognisable path
+ * seeds the key and the facts join in the rules suite reads at a glance; a
+ * well-formed key keeps the rows valid against the schema. Every
  * other column is either derived from `path` or the quiet default, so a suite
  * that cares about one of them overrides it at the call site and the override is
  * visible in the test rather than buried here.
@@ -50,7 +51,7 @@ export function queryRealization(path: string): ResourceRealizationRow {
     dir: segments.slice(0, -1).join('/'),
     depth: segments.length - 1,
     ext: '.md',
-    contentKey: `key:${path}`,
+    contentKey: testContentKey('markdown', path),
     contentState: 'keyed',
     mtime: null,
     exists: true,
@@ -91,7 +92,7 @@ export function queryTag(path: string, tag: string, value: string | null): Resou
  */
 export function queryPathsBlob(path: string, paths: readonly string[] | undefined): HarnessBlobFactsRow {
   return {
-    blob: `key:${path}`,
+    blob: testContentKey('markdown', path),
     harness: 'claude-code',
     injectedBytes: 100,
     injectedTokens: 25,

@@ -465,7 +465,7 @@ moves every filtered file's mtime to the fixture's backdated second minus r, so 
 no file and no index entry has held (Git for Windows sees no ctime change from a touch, so a repeated
 mtime would read clean there), and the bytes and the tree hash never change. A build that emits no
 `git.snapshots` counter reports it unread, with the reason, never 0. The filter is
-`test/fixtures/lfs-filter.mjs`, run as `"<runtime>" "<script>" clean|smudge`, the runtime being the one
+`packages/utils/test/fixtures/lfs-filter.mjs`, run as `"<runtime>" "<script>" clean|smudge`, the runtime being the one
 running the lab; a runtime or script path holding `"`, `$`, a backtick or (on POSIX) a backslash is refused. Its
 `clean` writes an LFS-style pointer. Git runs under the arm's
 environment (no system or global config), so a machine's git-lfs `filter.lfs.process` never replaces

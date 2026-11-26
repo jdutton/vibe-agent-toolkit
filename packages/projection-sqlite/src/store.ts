@@ -91,10 +91,13 @@
  * none of it, and its only bound used to be the release namespace rotating.
  * That is not a bound, and the tier is 153,245 of a 12,602-file adopter store's
  * 193,605 rows. So {@link BLOB_KEYS_TABLE} records when a write last held each key
- * and {@link writeBlobRows} keeps the
- * {@link SqliteStoreOptions.retainedBlobKeys} newest, on exactly `writeExtent`'s
+ * and the logical bytes of its stored rows (`blobRowBytes`), and
+ * {@link writeBlobRows} keeps the newest keys whose bytes fit
+ * {@link SqliteStoreOptions.blobTierBudgetBytes}, on exactly `writeExtent`'s
  * terms: amortized into the write that grew it, unable to select the keys that
- * write just recorded, inside the same transaction.
+ * write just recorded, inside the same transaction. Bytes rather than a key
+ * count, because keys differ in size by orders of magnitude: a count bounds
+ * nothing an operator can check with `du`.
  *
  * 🔑 Evicting a key a surviving extent still references is SAFE — that is what
  * makes a global window admissible here and not for extents. `uncoveredContentKeys`
@@ -118,6 +121,8 @@ import {
   type FactStore,
   type ProjectionColumnType,
   type StoreAttachTarget,
+  STORE_BOOKKEEPING_TABLES,
+  blobRowBytes,
   projectionColumnTypes,
   projectionStoreDirectoryName,
   quoteIdentifier,
@@ -128,16 +133,15 @@ import { VatError, classifyFsFault, compareCodeUnits, countWork, everywhere, isP
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 
 import {
+  BLOB_BYTES_COLUMN,
   BLOB_KEYS_TABLE,
   BLOB_KEY_COLUMN,
-  CREATE_BLOB_KEYS_TABLE_SQL,
-  CREATE_EXTENTS_TABLE_SQL,
   EXTENTS_TABLE,
   WRITTEN_AT_COLUMN,
   type StoredTableSpec,
-  adoptBlobKeysSql,
   allSpecs,
   blobKeyColumn,
+  createBookkeepingTableSql,
   createTableSql,
   deleteBlobFactsSql,
   deleteBlobPartitionSql,
@@ -147,6 +151,7 @@ import {
   insertSql,
   selectBlobFactsSql,
   selectBlobFactsWhereSql,
+  selectBlobPartitionSql,
   selectExtentSql,
 } from './schema-sql.js';
 import { readOnlyDatabaseUri } from './sqlite-uri.js';
@@ -211,22 +216,27 @@ const DEFAULT_RETAINED_EXTENTS_PER_ROOT = 3;
 const DEFAULT_RETAINED_ROOTS = 8;
 
 /**
- * How many content keys' blob facts survive a write, when the caller does not
- * say.
+ * The blob tier's budget in logical bytes (`blobRowBytes`), as the CLI opens the
+ * store: about 265 MB of database pages for the blob tier.
  *
- * Arithmetic, not a round number: the blob tier costs **~5.3 KB per content
- * key** on two corpora with nothing in common but the tool — a 12,602-file
- * adopter monorepo (10,398 keys, 153,245 rows, ~55 MB) and VAT itself (2,604
- * keys, 42,948 rows, ~14 MB) — so 50,000 is a ~265 MB ceiling an operator can
- * check with `du`.
+ * Arithmetic, from one fresh store populated by `vat resources validate` and
+ * `vat audit` over this repository, read after `wal_checkpoint(TRUNCATE)`: the
+ * ledger held 3,972 keys and 12,179,272 bytes (3,066 a key); `dbstat` put the
+ * blob tier's pages (its eight tables, their indexes, and `blob_keys`) at
+ * 16,748,544 bytes, 1.375 file bytes per ledger byte. 265 MB / 1.375 is 192.7 MB,
+ * rounded down to 190 MB: about 261 MB of pages, roughly 62,000 keys of this
+ * repository's size. The extent tier is bounded on its own
+ * ({@link DEFAULT_RETAINED_ROOTS}) and is not in this figure.
  *
- * The window is GLOBAL, since a blob fact has no root, so every repository on
- * the machine shares it: below one corpus every run would evict the keys it is
- * about to need. 50,000 holds about five adopter-sized trees. Too low costs
- * cold runs, too high costs disk `vat cache clear` reclaims — both cheap, which
- * is why this is a constant and not a knob every command plumbs.
+ * The budget is **global**, because a blob fact has no root: every repository on
+ * the machine shares it, so a machine scanning several corpora holds the newest
+ * keys of all of them within it. Too low costs a cold parse of the keys evicted;
+ * too high costs disk `vat cache clear` reclaims.
  */
-const DEFAULT_RETAINED_BLOB_KEYS = 50_000;
+export const DEFAULT_BLOB_TIER_BUDGET_BYTES = 190_000_000;
+
+/** The code of the error {@link openSqliteFactStore} throws for a budget that is not a positive finite number. */
+export const PROJECTION_STORE_BUDGET_INVALID_CODE = 'PROJECTION_STORE_BUDGET_INVALID';
 
 /** Retries for the WAL switch, which the busy handler does not cover — see {@link enableWal}. */
 const WAL_SWITCH_ATTEMPTS = 50;
@@ -265,18 +275,22 @@ export interface SqliteStoreOptions {
    */
   readonly retainedRoots?: number;
   /**
-   * How many content keys' blob facts survive a write.
+   * The blob tier's budget, in the logical bytes `blobRowBytes` measures: a
+   * write keeps the newest content keys whose recorded bytes fit it and evicts
+   * the rest, except that the keys the write itself holds are never evicted,
+   * whatever their size (a write larger than the budget holds its own keys until
+   * a later, smaller write reclaims the surplus).
    *
-   * Defaults to {@link DEFAULT_RETAINED_BLOB_KEYS}. Clamped to at least one for
-   * the same reason as {@link SqliteStoreOptions.retainedExtentsPerRoot}, and
-   * exposed for the same narrow reason: a test has to be able to cross the
-   * window without writing 50,000 keys to do it.
+   * Required, with no default here: the caller states the bound it is opening
+   * the store under, and the CLI passes {@link DEFAULT_BLOB_TIER_BUDGET_BYTES}.
+   * A budget that is not a positive finite number is refused with
+   * {@link PROJECTION_STORE_BUDGET_INVALID_CODE}.
    *
    * ⚠️ Global, not per root — a blob fact belongs to bytes, so there is no root
-   * to scope it to. See {@link DEFAULT_RETAINED_BLOB_KEYS} on what that means
-   * for a machine holding several corpora.
+   * to scope it to. See {@link DEFAULT_BLOB_TIER_BUDGET_BYTES} on what that
+   * means for a machine holding several corpora.
    */
-  readonly retainedBlobKeys?: number;
+  readonly blobTierBudgetBytes: number;
 }
 
 /**
@@ -352,17 +366,27 @@ interface TablePlan {
  * connection is configured before either — see this module's note on pragma
  * ordering.
  *
- * @param options - Where to put it and how patient to be
+ * @param options - Where to put it, how patient to be, and the blob tier's budget
  * @returns An open store; close it when done
+ * @throws VatError {@link PROJECTION_STORE_BUDGET_INVALID_CODE} when the budget
+ *   is not a positive finite number — checked here as well as by the type,
+ *   because JavaScript callers (the test children) are not typechecked
  *
  * @example
- * const store = openSqliteFactStore();
+ * const store = openSqliteFactStore({ blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
  * const { blobs, extent } = splitProjectionByScope(projection);
  * await store.writeBlobFacts({ rows: blobs, coveredAtRead: [], settledAtRead: [] });
  * await store.writeExtent({ rootId, treeHash }, extent);
  * await store.close();
  */
-export function openSqliteFactStore(options: SqliteStoreOptions = {}): FactStore {
+export function openSqliteFactStore(options: SqliteStoreOptions): FactStore {
+  const budget: unknown = options.blobTierBudgetBytes;
+  if (typeof budget !== 'number' || !Number.isFinite(budget) || budget <= 0) {
+    throw new VatError(
+      PROJECTION_STORE_BUDGET_INVALID_CODE,
+      `The projection store's blob tier budget must be a positive finite number of bytes, not ${String(budget)}.`,
+    );
+  }
   // The default directory is under the persistable cache root: tag that root
   // (once per process) so `vat cache clear`/`prune` can recognise it as VAT's.
   if (options.directory === undefined) markVatCacheRoot();
@@ -399,13 +423,10 @@ function openStoreAt(databasePath: string, options: SqliteStoreOptions): FactSto
   try {
     configure(database, options.busyTimeoutMs ?? BUSY_TIMEOUT_MS);
     createSchema(database);
-    // File-backed only, and only here: it is the only store that can have been
-    // written by an earlier build. See {@link adoptLegacyBlobKeys}.
-    adoptLegacyBlobKeys(database);
     const tables = prepareStoreTables(database, {
       extentsPerRoot: Math.max(1, Math.trunc(options.retainedExtentsPerRoot ?? DEFAULT_RETAINED_EXTENTS_PER_ROOT)),
       roots: Math.max(1, Math.trunc(options.retainedRoots ?? DEFAULT_RETAINED_ROOTS)),
-      blobKeys: Math.max(1, Math.trunc(options.retainedBlobKeys ?? DEFAULT_RETAINED_BLOB_KEYS)),
+      blobTierBudgetBytes: options.blobTierBudgetBytes,
     });
     const busyTimeoutMs = options.busyTimeoutMs ?? BUSY_TIMEOUT_MS;
     return new SqliteFactStore(tables, acquireDecodeLedger(databasePath), { path: databasePath, busyTimeoutMs });
@@ -697,27 +718,6 @@ export function isStoreInUse(directory: string): boolean {
 }
 
 /**
- * File every content key a pre-manifest store already holds, as the oldest
- * there is.
- *
- * 🪤 What keeps the blob bound from being true only of fresh stores — see
- * {@link adoptBlobKeysSql}. Gated on the manifest being empty, so it costs one
- * indexed `LIMIT 1` per open after the first write; on a genuinely empty store
- * its statements scan empty tables.
- *
- * @param database - An open connection whose schema exists
- */
-function adoptLegacyBlobKeys(database: DatabaseSync): void {
-  const alreadyTracked = database
-    .prepare(`SELECT 1 FROM ${quoteIdentifier(BLOB_KEYS_TABLE)} LIMIT 1`)
-    .get();
-  if (alreadyTracked !== undefined) return;
-  for (const spec of allSpecs()) {
-    if (spec.scope === 'blob') database.exec(adoptBlobKeysSql(spec));
-  }
-}
-
-/**
  * Fold the WAL back into the database file before a close, so the store
  * directory holds one complete `projection.db` — what a CI cache save of
  * `VAT_CACHE_DIR` needs, since it may not carry `-wal` beside it.
@@ -846,18 +846,25 @@ function sleepBriefly(milliseconds: number): void {
  * @param database - An open, configured connection
  */
 function createSchema(database: DatabaseSync): void {
-  database.exec(CREATE_EXTENTS_TABLE_SQL);
-  database.exec(CREATE_BLOB_KEYS_TABLE_SQL);
+  // Built from the declaration the shape digest hashes: a store written before a
+  // bookkeeping column existed lives under another digest, so `IF NOT EXISTS`
+  // never meets a table of another shape.
+  for (const table of Object.values(STORE_BOOKKEEPING_TABLES)) {
+    database.exec(createBookkeepingTableSql(table));
+  }
   for (const spec of allSpecs()) {
     database.exec(createTableSql(spec));
   }
 }
 
-/** How many of each tier a write keeps: see {@link SqliteStoreOptions}. Each already clamped to at least one. */
+/**
+ * How much of each tier a write keeps: see {@link SqliteStoreOptions}. The two
+ * extent counts are already clamped to at least one; the budget is validated at open.
+ */
 interface Retention {
   readonly extentsPerRoot: number;
   readonly roots: number;
-  readonly blobKeys: number;
+  readonly blobTierBudgetBytes: number;
 }
 
 /**
@@ -876,11 +883,17 @@ interface StoreTables {
   readonly forgetExtent: StatementSync;
   /** Which roots are past the machine-wide root window — see {@link DEFAULT_RETAINED_ROOTS}. */
   readonly rootsPastRetention: StatementSync;
-  /** The blob tier's ledger statements — see {@link BLOB_KEYS_TABLE}. */
+  /**
+   * The blob tier's ledger statements — see {@link BLOB_KEYS_TABLE}. A replaced
+   * key is recorded with the bytes this write inserted for it; a key the write
+   * did not replace is re-stamped with its recorded bytes plus a delta (the bytes
+   * of the pairs it re-inserted, less those of the stored pair rows it deleted).
+   */
   readonly recordBlobKey: StatementSync;
+  readonly restampBlobKey: StatementSync;
   /** Whether one key has a ledger row: the writer's "evicted since the read?" lookup. */
   readonly blobKeyPresent: StatementSync;
-  readonly blobKeysPastRetention: StatementSync;
+  readonly blobKeysPastBudget: StatementSync;
   readonly forgetBlobKey: StatementSync;
   /** Blob-fact statements memoized by table and placeholder count — see {@link TablePlan}. */
   readonly blobStatements: Map<string, StatementSync>;
@@ -940,27 +953,55 @@ function prepareStoreTables(database: DatabaseSync, retention: Retention): Store
     forgetExtent: database.prepare(
       `DELETE FROM "${EXTENTS_TABLE}" WHERE "storeRootId" = ? AND "storeTreeHash" = ?`,
     ),
-    // The blob tier's three, mirroring the extent tier's above statement for
-    // statement — including the `rowid` tie-break, which is what makes the keys
-    // a write just recorded unselectable: `INSERT OR REPLACE` re-inserts, so a
-    // refreshed key carries the newest rowid as well as the newest timestamp.
-    recordBlobKey: database.prepare(
-      `INSERT OR REPLACE INTO ${quoteIdentifier(BLOB_KEYS_TABLE)}`
-      + ` (${quoteIdentifier(BLOB_KEY_COLUMN)}, ${quoteIdentifier(WRITTEN_AT_COLUMN)}) VALUES (?, ?)`,
+    // The blob tier's, mirroring the extent tier's above — including the `rowid`
+    // tie-break among the keys the write does not hold. The ones it holds are
+    // protected by key, not by the order (see BLOB_KEYS_PAST_BUDGET_SQL).
+    recordBlobKey: database.prepare(`${RECORD_BLOB_KEY_SQL} VALUES (?, ?, ?)`),
+    // The sub-select reads the row the `REPLACE` is about to delete: SQLite
+    // evaluates the values before it resolves the conflict.
+    restampBlobKey: database.prepare(
+      `${RECORD_BLOB_KEY_SQL} VALUES (?, ?, COALESCE((SELECT ${quoteIdentifier(BLOB_BYTES_COLUMN)}`
+      + ` FROM ${quoteIdentifier(BLOB_KEYS_TABLE)} WHERE ${quoteIdentifier(BLOB_KEY_COLUMN)} = ?), 0) + ?)`,
     ),
     blobKeyPresent: database.prepare(
       `SELECT 1 FROM ${quoteIdentifier(BLOB_KEYS_TABLE)} WHERE ${quoteIdentifier(BLOB_KEY_COLUMN)} = ?`,
     ),
-    blobKeysPastRetention: database.prepare(
-      `SELECT ${quoteIdentifier(BLOB_KEY_COLUMN)} FROM ${quoteIdentifier(BLOB_KEYS_TABLE)}`
-      + ` ORDER BY ${quoteIdentifier(WRITTEN_AT_COLUMN)} DESC, "rowid" DESC LIMIT -1 OFFSET ?`,
-    ),
+    blobKeysPastBudget: database.prepare(BLOB_KEYS_PAST_BUDGET_SQL),
     forgetBlobKey: database.prepare(
       `DELETE FROM ${quoteIdentifier(BLOB_KEYS_TABLE)} WHERE ${quoteIdentifier(BLOB_KEY_COLUMN)} = ?`,
     ),
     blobStatements: new Map<string, StatementSync>(),
   };
 }
+
+/** The ledger insert both blob-key statements share; the caller appends the `VALUES`. */
+const RECORD_BLOB_KEY_SQL = `INSERT OR REPLACE INTO ${quoteIdentifier(BLOB_KEYS_TABLE)}`
+  + ` (${[BLOB_KEY_COLUMN, WRITTEN_AT_COLUMN, BLOB_BYTES_COLUMN].map((column) => quoteIdentifier(column)).join(', ')})`;
+
+/**
+ * The keys past the blob tier's budget. The keys the calling write holds are
+ * named BY KEY (bound as a JSON array, read through `json_each`) and never
+ * selected; their bytes count first. The rest follow newest first (`writtenAt`,
+ * then `rowid`), and one goes once the running sum of recorded bytes up to and
+ * including it passes the budget. Bound as `(heldKeysJson, budget)`.
+ *
+ * By key and not by place in the order: a store restored from a runner whose
+ * clock ran ahead holds `writtenAt` values later than this write's stamp, so
+ * the newest rows are not always the write's own.
+ *
+ * The running sum only grows, so the kept keys are exactly a newest prefix: one
+ * cut, never a knapsack that keeps an old small key behind an evicted big one.
+ * One pass over the ledger (a row per key), never over the stored rows.
+ */
+const BLOB_KEYS_PAST_BUDGET_SQL = `SELECT ${quoteIdentifier(BLOB_KEY_COLUMN)} FROM (`
+  + `SELECT ${quoteIdentifier(BLOB_KEY_COLUMN)}, "held",`
+  + ` SUM(${quoteIdentifier(BLOB_BYTES_COLUMN)}) OVER (ORDER BY "held" DESC, ${quoteIdentifier(WRITTEN_AT_COLUMN)} DESC, "position" DESC`
+  + ' ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "running"'
+  + ` FROM (SELECT ${[BLOB_KEY_COLUMN, BLOB_BYTES_COLUMN, WRITTEN_AT_COLUMN].map((column) => quoteIdentifier(column)).join(', ')},`
+  + ' "rowid" AS "position",'
+  + ` ${quoteIdentifier(BLOB_KEY_COLUMN)} IN (SELECT "value" FROM json_each(?)) AS "held"`
+  + ` FROM ${quoteIdentifier(BLOB_KEYS_TABLE)})`
+  + ') WHERE NOT "held" AND "running" > ?';
 
 /** A table bundle seen structurally: table key to rows. */
 type RowBundle = Record<string, readonly Record<string, unknown>[]>;
@@ -988,10 +1029,25 @@ type RowBundle = Record<string, readonly Record<string, unknown>[]>;
  *    present": rows leave only with their ledger row, and are immutable per
  *    key, so a key still in the ledger is unchanged since the read;
  * 2. the held keys not covered at read, and the covered ones gone from the
- *    ledger, are replaced (delete then insert); so is every carried harness
- *    pair not settled at read. A covered key still in the ledger keeps its rows;
- * 3. every held key is re-stamped, after the inserts;
- * 4. the window is applied past `max(retention, held keys)`.
+ *    ledger, are replaced: every row of the key is deleted, in every table,
+ *    partitioned ones included, then the write's rows are inserted. Every
+ *    carried harness pair not settled at read of a key NOT replaced is replaced
+ *    pair by pair. A covered key still in the ledger keeps its other rows;
+ * 3. every held key is re-stamped, after the inserts, with its bytes: a replaced
+ *    key with what this write inserted for it, any other with its recorded bytes
+ *    plus what this write inserted for it less what it deleted of it;
+ * 4. the newest keys whose bytes fit the budget are kept, the held ones always
+ *    (by key: their bytes count first, and none of them is ever selected).
+ *
+ * ## The ledger is exact
+ *
+ * `blob_keys.bytes` equals `blobRowBytes` summed over the key's stored rows,
+ * by step 3: a replaced key holds exactly the rows this write inserted (which is
+ * why its clear takes its partitioned rows too — another root's lazily derived
+ * pairs for those bytes are re-derived once, the cost of a key that was
+ * uncovered or evicted), and a key not replaced loses exactly the stored rows
+ * of the pairs it deletes, measured by an indexed read of each pair just before
+ * its delete. Nothing sums the stored rows of the store under the lock.
  *
  * A write naming no content key writes nothing and counts nothing.
  *
@@ -1012,15 +1068,20 @@ function writeBlobRows(tables: StoreTables, write: BlobFactsWrite): readonly str
     const replaced = keysToReplace(tables, held, write.coveredAtRead);
     const replacing = rowsToReplace(bundle, replaced, write.settledAtRead);
     changed = uniqueContentKeys(replacing);
-    clearSpaceForBlobs(tables, replacing, [...replaced]);
-    written = insertBundle(tables, replacing, 'blob', []);
+    const deleted = clearSpaceForBlobs(tables, replacing, replaced);
+    const inserted = insertBlobBundle(tables, replacing);
+    written = inserted.rows;
     // EVERY held key, AFTER the rows and BEFORE the eviction, for the reason
     // `writeExtentRows` records its manifest row before evicting: a key not
-    // re-stamped keeps its old place in the ordering, so a window smaller than
+    // re-stamped keeps its old place in the ordering, so a budget smaller than
     // the store would evict a covered key this write holds.
     const writtenAt = new Date().toISOString();
-    for (const key of held) tables.recordBlobKey.run(key, writtenAt);
-    evicted = evictBlobKeysPastRetention(tables, held.length);
+    for (const key of held) {
+      const added = inserted.bytes.get(key) ?? 0;
+      if (replaced.has(key)) tables.recordBlobKey.run(key, writtenAt, added);
+      else tables.restampBlobKey.run(key, writtenAt, key, added - (deleted.get(key) ?? 0));
+    }
+    evicted = evictBlobKeysPastBudget(tables, held);
   });
   countWrite(written);
   // Outside the transaction, because SQLite refuses `incremental_vacuum`
@@ -1169,27 +1230,65 @@ function inReadTransaction<T>(database: DatabaseSync, work: () => T): T {
 }
 
 /**
- * Clear what one blob write replaces: every key it names in an unpartitioned
- * table, and only the pairs it carries in a partitioned one.
+ * Clear what one blob write replaces: every row of a replaced key, in every
+ * table, partitioned ones included; and, of a key not replaced, only the pairs
+ * the write carries rows for in a partitioned table, each measured before its
+ * delete.
  *
  * @param tables - The connection's statements
- * @param bundle - The write's rows
- * @param contentKeys - {@link uniqueContentKeys} of the same rows
+ * @param replacing - {@link rowsToReplace}: the rows the write inserts
+ * @param replaced - {@link keysToReplace}
+ * @returns Per key not replaced, the bytes of the stored rows it deleted
  */
 function clearSpaceForBlobs(
   tables: StoreTables,
-  bundle: Record<string, readonly Record<string, unknown>[]>,
-  contentKeys: readonly string[],
-): void {
-  const pairs = partitionPairs(bundle);
+  replacing: RowBundle,
+  replaced: ReadonlySet<string>,
+): ReadonlyMap<string, number> {
+  forgetBlobKeys(tables, [...replaced]);
+  const pairs = partitionPairs(replacing).filter(([blob]) => !replaced.has(blob));
+  const deleted = new Map<string, number>();
   for (const { spec } of plansOfScope(tables, 'blob')) {
-    if (spec.partitionColumn === undefined) {
-      for (const batch of batched(contentKeys)) blobStatement(tables, 'delete', spec, batch.length).run(...batch);
-      continue;
+    if (spec.partitionColumn === undefined) continue;
+    const { select, remove } = partitionStatements(tables, spec);
+    for (const [blob, partition] of pairs) {
+      const stored = select.all(blob, partition) as Record<string, SqliteResultValue>[];
+      deleted.set(blob, (deleted.get(blob) ?? 0) + sumOf(stored.map((row) => blobRowBytes(Object.values(row)))));
+      remove.run(blob, partition);
     }
-    const statement = partitionStatement(tables, spec);
-    for (const [blob, partition] of pairs) statement.run(blob, partition);
   }
+  return deleted;
+}
+
+/**
+ * Insert every row of a blob bundle, measuring each as it is bound.
+ *
+ * @param tables - The connection's statements
+ * @param bundle - Table key to rows, blob-scoped tables only
+ * @returns How many rows it inserted, and per content key their `blobRowBytes`
+ */
+function insertBlobBundle(tables: StoreTables, bundle: RowBundle): { rows: number; bytes: ReadonlyMap<string, number> } {
+  let rows = 0;
+  const bytes = new Map<string, number>();
+  for (const plan of plansOfScope(tables, 'blob')) {
+    const keyColumn = blobKeyColumn(plan.spec);
+    for (const row of bundle[plan.spec.key] ?? []) {
+      const key = String(row[keyColumn]);
+      bytes.set(key, (bytes.get(key) ?? 0) + blobRowBytes(insertRow(plan, [], row)));
+      rows += 1;
+    }
+  }
+  return { rows, bytes };
+}
+
+/**
+ * The sum of some numbers.
+ *
+ * @param values - The numbers
+ * @returns Their sum; 0 for none
+ */
+function sumOf(values: readonly number[]): number {
+  return values.reduce((total, value) => total + value, 0);
 }
 
 /**
@@ -1212,27 +1311,27 @@ function forgetBlobKeys(tables: StoreTables, contentKeys: readonly string[]): vo
 }
 
 /**
- * Drop every content key past the blob window, rows and manifest alike.
+ * Drop every content key past the blob tier's byte budget, rows and manifest
+ * alike — see {@link BLOB_KEYS_PAST_BUDGET_SQL} for which.
  *
  * Called from inside {@link writeBlobRows}'s transaction, so a key's rows and
  * its manifest row can never be observed apart — a manifest row with no rows
- * would make the window count a key the store no longer holds, and rows with no
+ * would make the budget count bytes the store no longer holds, and rows with no
  * manifest row would be unevictable for good.
  *
- * ⛔ The offset is never less than the keys this write holds, every one of which
- * it re-stamped, replaced or not. They hold the newest rowids, so an offset of
- * the window alone cut the write's OWN oldest keys whenever one write held more
- * keys than the window — and because the coverage check is all-or-nothing, a
- * tree that size then missed on every run while paying for every write. The
- * surplus is reclaimed by the next, smaller write.
+ * ⛔ The keys this write holds are never selected, every one of which it
+ * re-stamped, replaced or not, and they are excluded by key, not by their place
+ * in the order. A cut by bytes alone would take the write's OWN oldest keys
+ * whenever one write held more bytes than the budget — and because the coverage
+ * check is all-or-nothing, a tree that size would then miss on every run while
+ * paying for every write. The surplus is reclaimed by the next, smaller write.
  *
  * @param tables - The connection's statements
- * @param held - How many keys the calling write holds and re-stamped
+ * @param held - The keys the calling write holds and re-stamped
  * @returns How many keys were evicted
  */
-function evictBlobKeysPastRetention(tables: StoreTables, held: number): number {
-  const offset = Math.max(tables.retention.blobKeys, held);
-  const victims = (tables.blobKeysPastRetention.all(offset) as {
+function evictBlobKeysPastBudget(tables: StoreTables, held: readonly string[]): number {
+  const victims = (tables.blobKeysPastBudget.all(JSON.stringify(held), tables.retention.blobTierBudgetBytes) as {
     contentKey: string;
   }[]).map((row) => row.contentKey);
   if (victims.length === 0) return 0;
@@ -1367,11 +1466,25 @@ function insertBundle(
   let inserted = 0;
   for (const plan of plansOfScope(tables, scope)) {
     for (const row of bundle[plan.spec.key] ?? []) {
-      plan.insert.run(...leadingValues, ...plan.columns.map(([column, { kind }]) => encodeValue(kind, row[column])));
+      insertRow(plan, leadingValues, row);
       inserted += 1;
     }
   }
   return inserted;
+}
+
+/**
+ * Insert one row into its table.
+ *
+ * @param plan - The table's plan
+ * @param leadingValues - Values bound before the row's own columns
+ * @param row - The row
+ * @returns The row's own values as bound, encoded (the leading values excluded)
+ */
+function insertRow(plan: TablePlan, leadingValues: readonly string[], row: Readonly<Record<string, unknown>>): readonly SqliteValue[] {
+  const values = plan.columns.map(([column, { kind }]) => encodeValue(kind, row[column]));
+  plan.insert.run(...leadingValues, ...values);
+  return values;
 }
 
 /**
@@ -1400,28 +1513,39 @@ function plansOfScope(tables: StoreTables, scope: 'blob' | 'extent'): readonly T
  * @returns The prepared statement
  */
 function blobStatement(tables: StoreTables, verb: 'select' | 'delete', spec: StoredTableSpec, keyCount: number): StatementSync {
-  const cacheKey = `${verb}:${spec.name}:${keyCount}`;
-  const cached = tables.blobStatements.get(cacheKey);
-  if (cached !== undefined) return cached;
-
-  const sql = verb === 'select' ? selectBlobFactsSql(spec, keyCount) : deleteBlobFactsSql(spec, keyCount);
-  const statement = tables.database.prepare(sql);
-  tables.blobStatements.set(cacheKey, statement);
-  return statement;
+  return cachedStatement(
+    tables,
+    `${verb}:${spec.name}:${keyCount}`,
+    () => (verb === 'select' ? selectBlobFactsSql(spec, keyCount) : deleteBlobFactsSql(spec, keyCount)),
+  );
 }
 
 /**
- * The cached pair-scoped `DELETE` for one partitioned blob table.
+ * The cached pair-scoped `SELECT` and `DELETE` for one partitioned blob table.
  *
  * @param tables - The connection's statements
  * @param spec - A blob-scoped table declaring `partitionColumn`
+ * @returns The prepared statements: the pair's stored rows, and their delete
+ */
+function partitionStatements(tables: StoreTables, spec: StoredTableSpec): { select: StatementSync; remove: StatementSync } {
+  return {
+    select: cachedStatement(tables, `select-partition:${spec.name}`, () => selectBlobPartitionSql(spec)),
+    remove: cachedStatement(tables, `delete-partition:${spec.name}`, () => deleteBlobPartitionSql(spec)),
+  };
+}
+
+/**
+ * A statement prepared once per connection under a cache key.
+ *
+ * @param tables - The connection's statements
+ * @param cacheKey - What names the statement
+ * @param sql - Its text, built only on the first ask
  * @returns The prepared statement
  */
-function partitionStatement(tables: StoreTables, spec: StoredTableSpec): StatementSync {
-  const cacheKey = `delete-partition:${spec.name}`;
+function cachedStatement(tables: StoreTables, cacheKey: string, sql: () => string): StatementSync {
   const cached = tables.blobStatements.get(cacheKey);
   if (cached !== undefined) return cached;
-  const statement = tables.database.prepare(deleteBlobPartitionSql(spec));
+  const statement = tables.database.prepare(sql());
   tables.blobStatements.set(cacheKey, statement);
   return statement;
 }
@@ -1457,12 +1581,11 @@ function blobSelect(
   if (spec.key !== REFERENCE_TABLE || forms === 'all') return { statement: blobStatement(tables, 'select', spec, keyCount), values: [] };
   const formColumn = plan.columns.find(([column]) => column === REFERENCE_FORM_COLUMN);
   if (formColumn === undefined) throw new Error(`${spec.name} declares no ${REFERENCE_FORM_COLUMN} column to filter reference forms on`);
-  const cacheKey = `select-forms:${spec.name}:${keyCount}:${forms.join(',')}`;
-  let statement = tables.blobStatements.get(cacheKey);
-  if (statement === undefined) {
-    statement = tables.database.prepare(selectBlobFactsWhereSql(spec, keyCount, REFERENCE_FORM_COLUMN, forms.length));
-    tables.blobStatements.set(cacheKey, statement);
-  }
+  const statement = cachedStatement(
+    tables,
+    `select-forms:${spec.name}:${keyCount}:${forms.join(',')}`,
+    () => selectBlobFactsWhereSql(spec, keyCount, REFERENCE_FORM_COLUMN, forms.length),
+  );
   const [, { kind }] = formColumn;
   return { statement, values: forms.map((form) => encodeValue(kind, form)) };
 }

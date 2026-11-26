@@ -9,6 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 
+import type { ContentKey } from '../src/content-key.js';
 import { parseRefusal } from '../src/not-admitted.js';
 import { ParseLimitError } from '../src/parse-limits.js';
 import { AST_SYNTACTIC_FORMS } from '../src/projection/blob-references.js';
@@ -28,14 +29,15 @@ import {
 } from '../src/projection/stored-admission.js';
 import { runStoredReads } from '../src/projection/stored-reads.js';
 import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
+import { testContentKey } from '../src/testing.js';
 
 import { noDatabaseFile } from './fake-fact-store.js';
 
-const MARKDOWN_KEY = `markdown.${'a'.repeat(64)}`;
-const NONE_KEY = `none.${'b'.repeat(64)}`;
+const MARKDOWN_KEY = testContentKey('markdown', 'a');
+const NONE_KEY = testContentKey('none', 'b');
 const COMPUTE = { kind: 'compute' };
 
-const keyed = (contentKey: string, mime: string): StoredRealization => ({ contentKey, contentState: 'keyed', mime });
+const keyed = (contentKey: ContentKey, mime: string): StoredRealization => ({ contentKey, contentState: 'keyed', mime });
 const unkeyed = (contentState: StoredRealization['contentState'], mime: string | null): StoredRealization => ({ contentKey: null, contentState, mime });
 
 describe('storedRoute: before the tier is read', () => {
@@ -271,6 +273,18 @@ describe('storedContentOf: the members\' stored content', () => {
     const store: FactStore = { ...countingStore().store, readBlobFacts: () => Promise.resolve(withoutOne as BlobScopedRows) };
     const stored = storedContentOf([member('/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown'))], runStoredReads().of(store));
     await expect(stored.facts()).rejects.toMatchObject({ code: STORE_REQUEST_UNMET, tier: 'blob', table: 'skillTextMatches' });
+  });
+
+  it('refuses, as the store\'s read, a stored row whose key column holds no content key, never dropping the row', async () => {
+    // A damaged store, as an untyped source hands it: the row's key column is text no parser admits.
+    const answer = JSON.stringify({ ...emptyBlobRows(), blobs: [{ contentKey: 'markdown.sha256.not-hex' }] });
+    const damaged: BlobScopedRows = JSON.parse(answer);
+    const store: FactStore = { ...countingStore().store, readBlobFacts: () => Promise.resolve(damaged) };
+    const stored = storedContentOf([member('/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown'))], runStoredReads().of(store));
+    await expect(stored.facts()).rejects.toMatchObject({
+      code: 'PROJECTION_STORE_READ_FAILED',
+      cause: { message: 'a stored blobs row\'s contentKey is "markdown.sha256.not-hex", not a content key' },
+    });
   });
 
   it('names the remedy: the store is a cache, so clear it or move it', async () => {

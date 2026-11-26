@@ -24,8 +24,8 @@
  *
  * `content-key.ts` states the rule this follows: *a key must cover every input
  * the cached value depends on*. A {@link KeyedContent} is a function of the
- * bytes **and** the parser they route to — `computeContentKey` mixes the parser
- * kind into the hash preimage, because identical bytes at `x.md` and `x.html`
+ * bytes **and** the parser they route to — `computeContentKey` qualifies the key
+ * with the parser kind, because identical bytes at `x.md` and `x.html`
  * legitimately produce different parse results. Keying on the path alone would
  * let a caller asking for the `markdown` reading of a path be served the `html`
  * reading of the same path: a well-formed entry with the wrong contents, the one

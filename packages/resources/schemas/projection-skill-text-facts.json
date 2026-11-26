@@ -6,7 +6,7 @@
       "properties": {
         "blob": {
           "type": "string",
-          "pattern": "^(?:markdown|html|none)\\.[0-9a-f]{64}$",
+          "pattern": "^(?:markdown|html|none)\\.(?:sha256\\.[0-9a-f]{64}|git-sha1\\.[0-9a-f]{40}|git-sha256\\.[0-9a-f]{64})$",
           "description": "Foreign key to blobs.contentKey; a markdown blob only"
         },
         "lineCount": {

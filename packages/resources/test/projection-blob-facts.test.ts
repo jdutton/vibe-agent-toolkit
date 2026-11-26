@@ -15,9 +15,10 @@ import { claudeMemoryFactsOf } from '../src/projection/claude-memory.js';
 import { CLAUDE_CODE } from '../src/projection/harness/claude-code.js';
 import { BlobRowSchema } from '../src/schemas/projection-blobs.js';
 import { HarnessBlobFactsRowSchema, HarnessBlobImportRowSchema } from '../src/schemas/projection-harness.js';
+import { testContentKey } from '../src/testing.js';
 
 // Hoisted: sonarjs/no-duplicate-string blocks a literal used 3+ times.
-const CONTENT_KEY = `markdown.${'a'.repeat(64)}`;
+const CONTENT_KEY = testContentKey('markdown', 'a');
 const MISSING_END_TAG = 'missing-end-tag';
 
 /**

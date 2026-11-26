@@ -19,6 +19,7 @@ import { basename, dirname } from 'node:path';
 
 import {
   DeferredArtifacts,
+  formatContentKey,
   MARKDOWN_BY_CONTRACT,
   ResourceRegistry,
   openFrontmatter,
@@ -1811,13 +1812,13 @@ function addBundledAssetsToOutputRegistry(
 
 /**
  * The PLACEHOLDER content key for a synthetic asset: the asset was not read here, so the key is
- * not its bytes'. A `none` key whose digest is all zeros: well-formed under the content key's
- * shape, and no bytes hash to it, so a synthetic asset is never grouped as a duplicate of a real
- * file (an empty `.gitkeep` keys as `none.` plus the SHA-256 of the domain-separated empty input).
+ * not its bytes'. A `none` `sha256` key whose digest is all zeros: well-formed under the content
+ * key's shape, and no known bytes hash to it, so a synthetic asset is never grouped as a duplicate
+ * of a real file (an empty `.gitkeep` keys as `none.sha256.` plus the SHA-256 of the empty input).
  * Every synthetic asset shares it, so the output registry's duplicate groups put them together.
  * A constant, not a computed key: nothing is hashed, so no work counter moves.
  */
-const SYNTHETIC_ASSET_CONTENT_KEY = `none.${'0'.repeat(64)}`;
+const SYNTHETIC_ASSET_CONTENT_KEY = formatContentKey({ parserKind: 'none', keyKind: 'sha256', hex: '0'.repeat(64) });
 
 /**
  * Build a minimal ResourceMetadata record for a non-markdown asset that couldn't

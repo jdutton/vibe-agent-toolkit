@@ -14,10 +14,26 @@
  * one rule the case pins.
  */
 
-import { deepStrictEqual, ok } from 'node:assert/strict';
+import { deepStrictEqual, notStrictEqual, ok, strictEqual } from 'node:assert/strict';
 
+import { compareCodeUnits, forEachInOrder } from '@vibe-agent-toolkit/utils';
+
+import { orderContentKeys, type ContentKey } from '../content-key.js';
 import type { HarnessId } from '../projection/harness/profile.js';
 import { ALL_BLOB_REQUEST, type BlobFactsWrite, type BlobScopedRows, type FactStore } from '../projection/store.js';
+
+import { testContentKey } from './test-content-key.js';
+
+/**
+ * A key the contract writes under one parser kind: which kind is immaterial to a writer, which
+ * files rows by key text alone.
+ *
+ * @param seed - Distinguishes one contract key from another
+ * @returns The key
+ */
+function contractKey(seed: string): ContentKey {
+  return testContentKey('markdown', seed);
+}
 
 /** One store under the contract, and the one operation the port does not offer. */
 export interface BlobWriterContractSubject {
@@ -28,11 +44,27 @@ export interface BlobWriterContractSubject {
    *
    * @param contentKey - The key to evict
    */
-  evict(contentKey: string): Promise<void>;
+  evict(contentKey: ContentKey): Promise<void>;
+  /**
+   * The ledger as the store holds it: each tracked key and the bytes it records.
+   *
+   * @returns Content key to recorded bytes
+   */
+  ledgerBytes(): Promise<Readonly<Record<string, number>>>;
+  /**
+   * `blobRowBytes` summed over each key's STORED rows, measured from the rows
+   * themselves and not from the ledger: what the ledger must equal.
+   *
+   * @returns Content key to the bytes of its stored rows
+   */
+  storedBytes(): Promise<Readonly<Record<string, number>>>;
 }
 
-/** Open a fresh, empty store keeping at most `retainedBlobKeys` content keys. */
-export type BlobWriterContractFactory = (options: { readonly retainedBlobKeys: number }) => Promise<BlobWriterContractSubject>;
+/**
+ * Open a fresh, empty store — a new one on every call, sharing nothing with an
+ * earlier one — whose blob tier is kept within `blobTierBudgetBytes`.
+ */
+export type BlobWriterContractFactory = (options: { readonly blobTierBudgetBytes: number }) => Promise<BlobWriterContractSubject>;
 
 /** One case of the contract. */
 export interface BlobWriterContractCase {
@@ -56,16 +88,6 @@ const HARNESS = 'claude-code';
 const SECOND_HARNESS = 'second-harness' as HarnessId;
 
 /**
- * A content key of the shape the schema requires: `<parserKind>.<64 hex>`.
- *
- * @param seed - One hex digit, repeated
- * @returns The key
- */
-export function contractContentKey(seed: string): string {
-  return `markdown.${seed.repeat(64).slice(0, 64)}`;
-}
-
-/**
  * One key's rows: a `blobs` row and one harness pair, with `wordCount` as the
  * value a case alters to tell a rewrite from a kept row.
  *
@@ -73,7 +95,7 @@ export function contractContentKey(seed: string): string {
  * @param wordCount - The value a rewrite changes
  * @returns Every blob-scoped table
  */
-export function contractBlobRows(contentKey: string, wordCount = 1): BlobScopedRows {
+export function contractBlobRows(contentKey: ContentKey, wordCount = 1): BlobScopedRows {
   return {
     blobs: [{
       contentKey,
@@ -137,7 +159,7 @@ export function uncoveredBlobWrite(rows: BlobScopedRows): BlobFactsWrite {
  * @param covered - The keys covered at read
  * @returns The write
  */
-function coveredBlobWrite(rows: BlobScopedRows, covered: readonly string[]): BlobFactsWrite {
+function coveredBlobWrite(rows: BlobScopedRows, covered: readonly ContentKey[]): BlobFactsWrite {
   return {
     rows,
     coveredAtRead: covered,
@@ -152,7 +174,7 @@ function coveredBlobWrite(rows: BlobScopedRows, covered: readonly string[]): Blo
  * @param keys - The keys
  * @returns The rows, every table
  */
-function heldRows(store: FactStore, keys: readonly string[]): Promise<BlobScopedRows> {
+function heldRows(store: FactStore, keys: readonly ContentKey[]): Promise<BlobScopedRows> {
   return store.readBlobFacts(keys, ALL_BLOB_REQUEST);
 }
 
@@ -160,32 +182,85 @@ function heldRows(store: FactStore, keys: readonly string[]): Promise<BlobScoped
  * Open a store, run `body`, and close the store however `body` ends.
  *
  * @param open - The factory
- * @param retainedBlobKeys - The window
+ * @param blobTierBudgetBytes - The budget
  * @param body - The case
+ * @returns What `body` returns
  */
-async function withStore(
+async function withStore<T>(
   open: BlobWriterContractFactory,
-  retainedBlobKeys: number,
-  body: (subject: BlobWriterContractSubject) => Promise<void>,
-): Promise<void> {
-  const subject = await open({ retainedBlobKeys });
+  blobTierBudgetBytes: number,
+  body: (subject: BlobWriterContractSubject) => Promise<T>,
+): Promise<T> {
+  const subject = await open({ blobTierBudgetBytes });
   try {
-    await body(subject);
+    return await body(subject);
   } finally {
     await subject.store.close();
   }
 }
 
-/** A window no case crosses unless it means to. */
-const WIDE_WINDOW = 1000;
+/** A budget no case crosses unless it means to. */
+const WIDE_BUDGET = 1_000_000_000;
 
-/** The four writer cases, in the order the port's steps run. */
+/**
+ * One key's rows grown by `extra` bytes of harness-read `paths`, so keys of one
+ * shape differ in size by exactly the difference of their `extra`.
+ *
+ * @param contentKey - The key
+ * @param extra - The length of the one path string
+ * @returns Every blob-scoped table
+ */
+function sizedBlobRows(contentKey: ContentKey, extra: number): BlobScopedRows {
+  const rows = contractBlobRows(contentKey);
+  return { ...rows, harnessBlobFacts: rows.harnessBlobFacts.map((row) => ({ ...row, paths: ['x'.repeat(extra)] })) };
+}
+
+/**
+ * What one {@link sizedBlobRows} key measures in the store under test: written
+ * alone to a fresh store with a wide budget, read off its ledger.
+ *
+ * @param open - The factory
+ * @param extra - The size parameter
+ * @returns The key's recorded bytes
+ */
+function measuredSize(open: BlobWriterContractFactory, extra: number): Promise<number> {
+  return withStore(open, WIDE_BUDGET, async ({ store, ledgerBytes }) => {
+    const key = contractKey('probe');
+    await store.writeBlobFacts(uncoveredBlobWrite(sizedBlobRows(key, extra)));
+    const bytes = (await ledgerBytes())[key];
+    ok(bytes !== undefined && bytes > 0, `the probe key recorded ${String(bytes)} bytes`);
+    return bytes;
+  });
+}
+
+/**
+ * Several keys' rows in one bundle, key `i` grown by `extras[i]`.
+ *
+ * @param keys - The keys
+ * @param extras - Their size parameters, by position
+ * @returns The bundle
+ */
+function sizedBundle(keys: readonly ContentKey[], extras: readonly number[]): BlobScopedRows {
+  return mergedBlobRows(keys.map((key, index) => sizedBlobRows(key, extras[index] ?? 0)));
+}
+
+/**
+ * The keys a ledger tracks, sorted.
+ *
+ * @param ledger - The ledger
+ * @returns Its keys in code-unit order
+ */
+function trackedKeys(ledger: Readonly<Record<string, number>>): readonly string[] {
+  return Object.keys(ledger).sort(compareCodeUnits);
+}
+
+/** The writer cases, in the order the port's steps run, then the byte ledger's. */
 export const BLOB_WRITER_CONTRACT: readonly BlobWriterContractCase[] = [
   {
     name: 'a covered key still in the ledger is not rewritten',
     mutant: 'ignore coveredAtRead: replace every held key',
-    run: (open) => withStore(open, WIDE_WINDOW, async ({ store }) => {
-      const key = contractContentKey('a');
+    run: (open) => withStore(open, WIDE_BUDGET, async ({ store }) => {
+      const key = contractKey('a');
       await store.writeBlobFacts(uncoveredBlobWrite(contractBlobRows(key)));
       const first = await heldRows(store, [key]);
 
@@ -197,8 +272,8 @@ export const BLOB_WRITER_CONTRACT: readonly BlobWriterContractCase[] = [
   {
     name: 'a covered key evicted since the read is written again (healing)',
     mutant: 'skip the ledger lookup and trust coveredAtRead',
-    run: (open) => withStore(open, WIDE_WINDOW, async ({ store, evict }) => {
-      const key = contractContentKey('b');
+    run: (open) => withStore(open, WIDE_BUDGET, async ({ store, evict }) => {
+      const key = contractKey('b');
       await store.writeBlobFacts(uncoveredBlobWrite(contractBlobRows(key)));
       await evict(key);
 
@@ -211,10 +286,11 @@ export const BLOB_WRITER_CONTRACT: readonly BlobWriterContractCase[] = [
   },
   {
     name: 'every held key is re-stamped before eviction',
-    mutant: 'stamp only replaced keys and evict past max(retention, replaced)',
-    run: (open) => withStore(open, 3, async ({ store }) => {
-      const covered = ['c', 'd', 'e', 'f'].map((seed) => contractContentKey(seed));
-      const added = contractContentKey('9');
+    mutant: 'stamp only replaced keys and protect only the replaced keys from the budget',
+    // A budget of one byte: only the held keys' exclusion keeps anything.
+    run: (open) => withStore(open, 1, async ({ store }) => {
+      const covered = ['c', 'd', 'e', 'f'].map((seed) => contractKey(seed));
+      const added = contractKey('9');
       await store.writeBlobFacts(uncoveredBlobWrite(mergedBlobRows(covered.map((key) => contractBlobRows(key)))));
 
       const held = [...covered, added];
@@ -222,14 +298,14 @@ export const BLOB_WRITER_CONTRACT: readonly BlobWriterContractCase[] = [
 
       const kept = new Set((await heldRows(store, held)).blobs.map((row) => row.contentKey));
       const lost = held.filter((key) => !kept.has(key));
-      ok(lost.length === 0, `a write evicted ${lost.length} of its own ${held.length} held keys at a window of 3: ${lost.join(', ')}`);
+      ok(lost.length === 0, `a write evicted ${lost.length} of its own ${held.length} held keys at a budget of one byte: ${lost.join(', ')}`);
     }),
   },
   {
     name: 'a covered key keeps its settled pair and gains a newly reached one',
     mutant: 'skip non-replaced partitioned rows: write no pair of a covered key',
-    run: (open) => withStore(open, WIDE_WINDOW, async ({ store }) => {
-      const key = contractContentKey('0');
+    run: (open) => withStore(open, WIDE_BUDGET, async ({ store }) => {
+      const key = contractKey('0');
       await store.writeBlobFacts(uncoveredBlobWrite(contractBlobRows(key)));
       const first = await heldRows(store, [key]);
 
@@ -253,6 +329,103 @@ export const BLOB_WRITER_CONTRACT: readonly BlobWriterContractCase[] = [
         [SECOND_HARNESS],
         'a newly reached pair of a covered key was not written',
       );
+    }),
+  },
+  {
+    name: 'the oldest keys go until the newest fit the byte budget',
+    mutant: 'keep a count of keys (the budget divided by a key\'s mean size) instead of their bytes',
+    run: async (open: BlobWriterContractFactory): Promise<void> => {
+      // Five single-key writes, key i grown by extras[i]; every key is `base`
+      // plus its extra, so the budget (B + C + D = 3 base + 400) cuts the same
+      // keys whatever `base` measures in this store. Newest first after each
+      // write: C's write takes A (3 base + 700); E's takes C and B (3 base + 600).
+      const extras = [400, 100, 200, 100, 300];
+      const base = await measuredSize(open, 0);
+      const budget = 3 * base + 100 + 200 + 100;
+      const keys = ['a', 'b', 'c', 'd', 'e'].map((seed) => contractKey(`budget-${seed}`));
+      const survivors = await withStore(open, budget, async ({ store, ledgerBytes }) => {
+        await forEachInOrder([...keys.entries()], ([index, key]) =>
+          store.writeBlobFacts(uncoveredBlobWrite(sizedBlobRows(key, extras[index] ?? 0))));
+        return trackedKeys(await ledgerBytes());
+      });
+      deepStrictEqual(survivors, keys.slice(3).sort(orderContentKeys), 'the budget kept another set than the newest that fit');
+    },
+  },
+  {
+    name: 'every held key stays even when the held keys alone exceed the budget',
+    mutant: 'cut by bytes alone, without excluding the held keys',
+    run: async (open: BlobWriterContractFactory): Promise<void> => {
+      // Two writes of five keys, each larger than three keys' bytes. Each keeps
+      // all five of its own; the second takes every key of the first.
+      const extras = [100, 150, 200, 250, 300];
+      const budget = 3 * (await measuredSize(open, 100));
+      const first = extras.map((_, index) => contractKey(`first-${index}`));
+      const second = extras.map((_, index) => contractKey(`second-${index}`));
+      await withStore(open, budget, async ({ store, ledgerBytes }) => {
+        await store.writeBlobFacts(uncoveredBlobWrite(sizedBundle(first, extras)));
+        deepStrictEqual(trackedKeys(await ledgerBytes()), [...first].sort(orderContentKeys), 'a write evicted its own held keys');
+        await store.writeBlobFacts(uncoveredBlobWrite(sizedBundle(second, extras)));
+        deepStrictEqual(trackedKeys(await ledgerBytes()), [...second].sort(orderContentKeys), 'the second write kept another set than its own');
+        deepStrictEqual((await heldRows(store, first)).blobs, [], 'an evicted key kept its rows');
+      });
+    },
+  },
+  {
+    name: 'a re-stamped key keeps its recorded bytes',
+    mutant: 're-stamp writes 0 bytes',
+    run: (open) => withStore(open, WIDE_BUDGET, async ({ store, ledgerBytes, storedBytes }) => {
+      const key = contractKey('restamp');
+      await store.writeBlobFacts(uncoveredBlobWrite(sizedBlobRows(key, 50)));
+      const recorded = (await ledgerBytes())[key];
+
+      await store.writeBlobFacts(coveredBlobWrite(sizedBlobRows(key, 50), [key]));
+
+      ok(recorded !== undefined && recorded > 0, `the first write recorded ${String(recorded)} bytes`);
+      strictEqual((await ledgerBytes())[key], recorded, 'a re-stamp changed the recorded bytes');
+      strictEqual((await storedBytes())[key], recorded, 'the recorded bytes are not the stored rows\' bytes');
+    }),
+  },
+  {
+    name: 'a replaced key records the size of the rows that replaced it',
+    mutant: 'record a replaced key as a re-stamp (its old bytes plus the new rows)',
+    run: (open) => withStore(open, WIDE_BUDGET, async ({ store, ledgerBytes, storedBytes }) => {
+      const key = contractKey('resized');
+      await store.writeBlobFacts(uncoveredBlobWrite(sizedBlobRows(key, 10)));
+      const before = (await ledgerBytes())[key];
+
+      await store.writeBlobFacts(uncoveredBlobWrite(sizedBlobRows(key, 300)));
+
+      const after = (await ledgerBytes())[key];
+      notStrictEqual(after, before, 'a replaced key kept its old size');
+      strictEqual(after, (await storedBytes())[key], 'a replaced key\'s recorded bytes are not its stored rows\' bytes');
+    }),
+  },
+  {
+    name: 'the ledger equals the measure of the stored rows for every key after mixed writes',
+    mutant: 'skip subtracting the stored rows of an unsettled pair before its delete',
+    run: (open) => withStore(open, WIDE_BUDGET, async ({ store, ledgerBytes, storedBytes }) => {
+      const [a, b, c] = ['mixed-a', 'mixed-b', 'mixed-c'].map((seed) => contractKey(seed));
+      if (a === undefined || b === undefined || c === undefined) throw new Error('three keys');
+      const pair = (key: ContentKey, harness: HarnessId, extra: number): BlobScopedRows['harnessBlobFacts'][number] =>
+        ({ blob: key, harness, injectedBytes: 1, injectedTokens: 1, paths: ['y'.repeat(extra)] });
+      // Replace: first writes of a and b, b with a second harness's pair.
+      await store.writeBlobFacts(uncoveredBlobWrite(sizedBlobRows(a, 20)));
+      const bRows = sizedBlobRows(b, 30);
+      await store.writeBlobFacts(uncoveredBlobWrite({ ...bRows, harnessBlobFacts: [...bRows.harnessBlobFacts, pair(b, SECOND_HARNESS, 7)] }));
+      // Re-stamp of a, adding a second harness's pair it did not hold.
+      const aRows = sizedBlobRows(a, 20);
+      await store.writeBlobFacts(coveredBlobWrite({ ...aRows, harnessBlobFacts: [...aRows.harnessBlobFacts, pair(a, SECOND_HARNESS, 11)] }, [a]));
+      // A concurrent pair: b covered, its second pair unsettled, so deleted and
+      // re-inserted at another size; c replaced beside it.
+      await store.writeBlobFacts(coveredBlobWrite(
+        mergedBlobRows([{ ...bRows, harnessBlobFacts: [...bRows.harnessBlobFacts, pair(b, SECOND_HARNESS, 90)] }, sizedBlobRows(c, 5)]),
+        [b],
+      ));
+      // A replace of a, which takes its second harness's pair with it.
+      await store.writeBlobFacts(uncoveredBlobWrite(sizedBlobRows(a, 3)));
+
+      deepStrictEqual(await ledgerBytes(), await storedBytes(), 'the ledger is not the measure of the stored rows');
+      deepStrictEqual(trackedKeys(await ledgerBytes()), [a, b, c].sort(orderContentKeys), 'a key left the ledger');
     }),
   },
 ];

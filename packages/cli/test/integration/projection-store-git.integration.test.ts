@@ -22,7 +22,7 @@ import { mkdirSyncReal, safePath, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/
 import { gitTreeSnapshot } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { backend, captureStderr, FakeUnopenableError, isolateProjectionStoreTests, lastStore } from '../projection-store-test-doubles.js';
+import { backend, captureStderr, FAKE_BLOB_TIER_BUDGET_BYTES, FakeUnopenableError, isolateProjectionStoreTests, lastStore } from '../projection-store-test-doubles.js';
 import { createTempDirTracker } from '../system/test-common.js';
 import { gitAddAll, initTestGitRepo } from '../test-helpers.js';
 
@@ -144,7 +144,7 @@ describe('openPopulationCache', () => {
 });
 
 describe('the directory the backend is opened with', () => {
-  it('passes nothing, so the backend opens its default under the cache root', async () => {
+  it('passes no directory, so the backend opens its default under the cache root, under the backend\'s own budget', async () => {
     // Where the store lives is the cache root's question (`VAT_CACHE_DIR`), not
     // this module's: an argument here would be a second resolver for one path.
     process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
@@ -152,7 +152,7 @@ describe('the directory the backend is opened with', () => {
     await opened?.close();
 
     expect(backend.openCalls.count).toBe(1);
-    expect(backend.openCalls.options).toStrictEqual([undefined]);
+    expect(backend.openCalls.options).toStrictEqual([{ blobTierBudgetBytes: FAKE_BLOB_TIER_BUDGET_BYTES }]);
   });
 });
 
@@ -363,10 +363,12 @@ describe('withPopulationCache', () => {
     const arrivedLate = safePath.join(repoRoot, 'moved-mid-scope.md');
 
     try {
+      // The fixture holds no LFS file, so nothing asks what the run realized.
+      const realizedNothing = (): undefined => undefined;
       const verdicts = await withPopulationCache({ root: repoRoot }, async (cache) => {
-        const before = cache?.treeUnchanged();
+        const before = cache?.treeUnchanged(realizedNothing);
         writeFileSync(arrivedLate, '# moved\n', 'utf-8');
-        return { before, after: cache?.treeUnchanged(), memo: hashOf(gitTreeSnapshot({ cwd: repoRoot })), key: cache?.treeHash };
+        return { before, after: cache?.treeUnchanged(realizedNothing), memo: hashOf(gitTreeSnapshot({ cwd: repoRoot })), key: cache?.treeHash };
       });
 
       expect(verdicts.before).toBe(true);

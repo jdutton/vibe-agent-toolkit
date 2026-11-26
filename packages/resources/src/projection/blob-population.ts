@@ -109,7 +109,13 @@
 import { compareCodeUnits, countWork, safePath } from '@vibe-agent-toolkit/utils';
 import type { TextProvenance } from '@vibe-agent-toolkit/utils/text';
 
-import type { KeyedContent, ParsableContent } from '../content-key.js';
+import {
+  type ContentKey,
+  contentKeyParts,
+  type KeyedContent,
+  orderContentKeys,
+  type ParsableContent,
+} from '../content-key.js';
 import type { ParseResult } from '../link-parser.js';
 import { parseRefusal } from '../not-admitted.js';
 import { type ParseDispatcher, driveInOrder, tallyParsable } from '../parse-dispatcher.js';
@@ -126,7 +132,6 @@ import { contentRoute, NOT_TEXT_MESSAGE } from './document-facts.js';
 import { errorLabel } from './error-label.js';
 import { parseFailedMessage } from './parse-failure.js';
 import type { ProjectionBase, ProjectionBuilder } from './projection.js';
-import { parserKindOf } from './router.js';
 import type { RunContentSource } from './run-population.js';
 import type { StoredBlobTier } from './store-hydration.js';
 import type { BlobScopedRows } from './store.js';
@@ -192,7 +197,7 @@ export interface BlobPopulationResult {
    * is null; and `message` could only restate the code. "Which blobs did not get
    * a document parse" is answered exactly, per blob, by `contentKey LIKE
    * 'none.%'` — and answered better than a row could, because the prefix is the
-   * same value that selected the route and is mixed into the digest
+   * same value that selected the route and is part of the key's identity
    * (content-key.ts), so it cannot drift from the routing the way a
    * separately-emitted row can.
    *
@@ -343,7 +348,7 @@ export interface BlobPopulationOptions {
 /** One blob to derive, and the path its bytes are read from. */
 interface BlobTarget {
   /** The blob's content key, exactly as the realization row carries it. */
-  contentKey: string;
+  contentKey: ContentKey;
   /** Root-relative path of the realization chosen to supply the bytes. */
   path: string;
 }
@@ -408,11 +413,11 @@ export async function populateBlobs(
       return held === undefined ? prepareBlob(target, base, { dispatcher, content }) : Promise.resolve(held);
     },
     (prepared) => emitPreparedBlob(builder, prepared, counts),
-    // The key's own prefix is the routing record — see `parserKindOf`, which
-    // is the single authority so this cannot drift from what `prepareBlob`
+    // The key's own parser kind is the routing record — see `contentKeyParts`,
+    // the single authority so this cannot drift from what `prepareBlob`
     // decides, and which answers without touching the file. A served key reaches
     // no parser, so it is tallied as one that has none.
-    (from) => tallyParsable(pending, from, (target) => (served.has(target.contentKey) ? 'none' : parserKindOf(target.contentKey))),
+    (from) => tallyParsable(pending, from, (target) => (served.has(target.contentKey) ? 'none' : contentKeyParts(target.contentKey).parserKind)),
   );
 
   return counts;
@@ -459,16 +464,6 @@ function emitServedBlob(builder: ProjectionBuilder, { rows }: ServedBlob, counts
   for (const row of rows.skillTextMatches) builder.addSkillTextMatch(row);
   counts.blobsServed += 1;
   countWork('blob.storeServed', 1);
-}
-
-/**
- * Throw for a content key that names no parser kind: {@link parserKindOf} is the one judge.
- *
- * @param contentKey - The key
- * @throws What {@link parserKindOf} throws for a key naming no kind
- */
-function assertKeyNamesParserKind(contentKey: string): void {
-  parserKindOf(contentKey);
 }
 
 /**
@@ -625,7 +620,7 @@ function countBytelessRealization(row: ResourceRealizationRow, counts: MutableCo
  * @returns One target per distinct content key, ordered by content key
  */
 function blobTargets(base: ProjectionBase): BlobTarget[] {
-  const pathByKey = new Map<string, string>();
+  const pathByKey = new Map<ContentKey, string>();
 
   for (const row of base.resourceRealizations) {
     if (row.contentState !== 'keyed' || row.contentKey === null) continue;
@@ -637,7 +632,7 @@ function blobTargets(base: ProjectionBase): BlobTarget[] {
 
   return [...pathByKey]
     .map(([contentKey, path]): BlobTarget => ({ contentKey, path }))
-    .sort((left, right) => compareCodeUnits(left.contentKey, right.contentKey));
+    .sort((left, right) => orderContentKeys(left.contentKey, right.contentKey));
 }
 
 /**
@@ -703,9 +698,6 @@ async function prepareBlob(
   base: ProjectionBase,
   lanes: { readonly dispatcher: ParseDispatcher; readonly content: RunContentSource },
 ): Promise<PreparedBlob> {
-  // Asked HERE, before `readTarget`'s `try`: a key naming no kind is a producer
-  // bug, and reporting one as `BLOB_UNREADABLE` would blame the corpus for it.
-  assertKeyNamesParserKind(target.contentKey);
   const keyed = await readTarget(target, base, lanes.content);
   if ('outcome' in keyed) return keyed;
 
@@ -788,7 +780,7 @@ function emitPreparedBlob(
  *
  * `content-cache.ts` holds what the base already read for this path, keyed on
  * `(path, parserKind)` — and the caller got `parserKind` from
- * {@link parserKindOf}, which reads the routing back off the content key, the
+ * `contentKeyParts`, which reads the routing back off the content key, the
  * same answer `collectRealization` recorded it from. So inside `populate()` this
  * is a memo hit, not a third traversal of the file.
  *
@@ -976,8 +968,8 @@ function emitBlobRows(
  * @param parsed - The parse
  * @throws {Error} When the parse's record disagrees with the key's parser kind
  */
-function emitSkillTextRows(builder: ProjectionBuilder, contentKey: string, parsed: ParseResult): void {
-  const isMarkdown = parserKindOf(contentKey) === 'markdown';
+function emitSkillTextRows(builder: ProjectionBuilder, contentKey: ContentKey, parsed: ParseResult): void {
+  const isMarkdown = contentKeyParts(contentKey).parserKind === 'markdown';
   if (isMarkdown !== (parsed.skillText !== null)) {
     throw new Error(
       `The parse filed under ${contentKey} ${isMarkdown ? 'carries no' : 'carries a'} skill-text record. `
@@ -1046,7 +1038,7 @@ export const PARSE_REFUSAL_BLOB_CODES: ReadonlySet<string> = new Set([BLOB_PARSE
  * @param error - What refused it
  * @returns The condition row
  */
-export function parseRefusalCondition(blob: string, error: PerRunParseRefusal): BlobConditionRow {
+export function parseRefusalCondition(blob: ContentKey, error: PerRunParseRefusal): BlobConditionRow {
   const code = isParseLimitError(error) ? BLOB_PARSE_LIMIT_EXCEEDED : BLOB_PARSE_WORKER_DIED;
   return condition(blob, code, parseRefusal(error).reason);
 }
@@ -1064,7 +1056,7 @@ export function parseRefusalCondition(blob: string, error: PerRunParseRefusal): 
  * @param message - What happened
  * @returns The condition row
  */
-function condition(blob: string, code: string, message: string): BlobConditionRow {
+function condition(blob: ContentKey, code: string, message: string): BlobConditionRow {
   // The one row of its code for its blob: a refusal is said once.
   return { blob, code, ordinal: 0, severity: 'warning', message, line: null };
 }

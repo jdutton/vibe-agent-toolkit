@@ -1,12 +1,23 @@
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
+import { type ContentKey, contentKeyParts, formatContentKey } from '../src/content-key.js';
 import { RunContentCache } from '../src/projection/content-cache.js';
 import { exportProjection } from '../src/projection/export.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
 import { PROJECTION_TABLES, type ProjectionTableName } from '../src/projection/table-registry.js';
 
 import { EXPECTED_TABLES } from './helpers/expected-projection-tables.js';
+
+/**
+ * A markdown key whose hex is one repeated digit, so two keys sort by that digit.
+ *
+ * @param digit - The hex digit to repeat
+ * @returns The key
+ */
+function hexKey(digit: string): ContentKey {
+  return formatContentKey({ parserKind: 'markdown', keyKind: 'sha256', hex: digit.repeat(64) });
+}
 
 const ROOT = safePath.join(normalizedTmpdir(), 'vat-table-registry');
 
@@ -254,7 +265,7 @@ describe('PROJECTION_TABLES primary keys', () => {
     // a10, b10. A fixture on a single blob cannot tell those apart, which is
     // exactly the shape of fixture that proves nothing.
     const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() });
-    for (const blob of [`markdown.${'b'.repeat(64)}`, `markdown.${'a'.repeat(64)}`]) {
+    for (const blob of [hexKey('b'), hexKey('a')]) {
       for (const ordinal of [10, 2]) {
         builder.addBlobSection({
           blob,
@@ -274,7 +285,7 @@ describe('PROJECTION_TABLES primary keys', () => {
 
     const rows = exportProjection(builder.build()).tables.blobSections;
 
-    expect(rows.map((row) => [row.blob[9], row.ordinal])).toStrictEqual([
+    expect(rows.map((row) => [contentKeyParts(row.blob).hex[0], row.ordinal])).toStrictEqual([
       ['a', 2],
       ['a', 10],
       ['b', 2],

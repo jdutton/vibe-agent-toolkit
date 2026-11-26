@@ -31,10 +31,11 @@ import diagnosticsChannel from 'node:diagnostics_channel';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
-import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { expectAbsenceCause } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
+import { orderContentKeys } from '../src/content-key.js';
 import { isParserUnavailable, ParseCache } from '../src/parse-cache.js';
 import {
   __closeParkedParseWorkersForTest,
@@ -229,7 +230,7 @@ describe('the blob stage under a parse pool', () => {
 
     const emitted = projection.blobs.map((row) => row.contentKey);
     expect(emitted.length).toBeGreaterThan(1);
-    expect(emitted).toStrictEqual([...emitted].sort(compareCodeUnits));
+    expect(emitted).toStrictEqual([...emitted].sort(orderContentKeys));
   });
 
   it('produces the same rows, in the same order, on two runs', async () => {

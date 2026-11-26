@@ -12,12 +12,14 @@ import { rmSync } from 'node:fs';
 import {
   PROJECTION_TABLES,
   type BlobScopedRows,
+  type ContentKey,
   type CrawlOptions,
   type ExtentScopedRows,
   type Projection,
   type RegistryCrawl,
   type ResourceRegistry,
 } from '@vibe-agent-toolkit/resources';
+import { testContentKey } from '@vibe-agent-toolkit/resources/testing';
 import { vi } from 'vitest';
 
 import {
@@ -27,9 +29,9 @@ import {
   type RunDatabase,
 } from '../src/run-database.js';
 
-/** A content key of the shape `ContentKeySchema` requires: `<parserKind>.<sha256>`. */
-export function contentKey(seed: string): string {
-  return `markdown.${seed.repeat(64).slice(0, 64)}`;
+/** A `markdown` content key for a fixture, minted by the one test-key helper. */
+export function contentKey(seed: string): ContentKey {
+  return testContentKey('markdown', seed);
 }
 
 /** The first fixture blob's key, named once so tests do not restate it. */
@@ -44,7 +46,7 @@ export const SECOND_BLOB = contentKey('b');
  * @param key - Which content key the rows are about
  * @returns Every blob-scoped table
  */
-export function sampleBlobRows(key: string = FIRST_BLOB): BlobScopedRows {
+export function sampleBlobRows(key: ContentKey = FIRST_BLOB): BlobScopedRows {
   return {
     blobs: [{
       contentKey: key,
@@ -265,7 +267,7 @@ export function sampleExtentRows(rootId = 'root-1'): ExtentScopedRows {
  * @param key - Which content key the condition is about
  * @returns The four blob-scoped tables, three of them empty
  */
-export function declinedBlobRows(key: string = FIRST_BLOB): BlobScopedRows {
+export function declinedBlobRows(key: ContentKey = FIRST_BLOB): BlobScopedRows {
   return {
     blobs: [],
     blobReferences: [],
@@ -292,7 +294,7 @@ export function declinedBlobRows(key: string = FIRST_BLOB): BlobScopedRows {
  * @param blobKeys - Which blobs it holds, each with {@link sampleBlobRows}'s rows
  * @returns Every projection table, the blob-scoped and extent-scoped rows together
  */
-export function sampleProjection(blobKeys: readonly string[] = [FIRST_BLOB]): Projection {
+export function sampleProjection(blobKeys: readonly ContentKey[] = [FIRST_BLOB]): Projection {
   const bundles = blobKeys.map((key) => sampleBlobRows(key));
   const tables = Object.keys(sampleBlobRows()) as (keyof BlobScopedRows)[];
   // Each blob-scoped table is the concatenation of every blob's rows for it; an

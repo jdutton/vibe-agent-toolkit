@@ -1,0 +1,377 @@
+/**
+ * `gitTreeKey` over a repository whose files go through an LFS filter.
+ *
+ * Under `filter=lfs` the index holds a POINTER blob, so a file's own bytes never reach the tree
+ * hash: the same tree hash describes the file pulled (its content on disk) and not pulled (a
+ * pointer on disk). The key tells the two apart by reading a file small enough to be a pointer: not
+ * pulled when it is a pointer naming the same oid (the blob itself, its canonical encoding as
+ * git-lfs's smudge writes it, or either CRLF), pulled otherwise.
+ *
+ * The filter is an emulated clean/smudge pair (`test/fixtures/lfs-filter.mjs`), never a machine's
+ * git-lfs: git runs under a home inside the fixture with no system config. Every fixture file is
+ * backdated before each commit, refresh and emulated pull, so no index entry is racily clean and a
+ * stat-clean entry is clean by stat, not by the clock.
+ */
+
+import { createHash } from 'node:crypto';
+import type * as Fs from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { GIT_FAILED_CODE, GIT_SNAPSHOT_INDEX_HIDES_CODE, GIT_SNAPSHOT_UNREADABLE_CODE, gitSnapshotFailureOf } from '../../src/git-no-answer.js';
+import type * as GitRunModule from '../../src/git-run.js';
+import { gitTreeSnapshot } from '../../src/git-snapshot.js';
+import { gitTreeKey } from '../../src/git-tree-key.js';
+import { normalizedTmpdir, resolveFromImportMeta, safePath } from '../../src/path-utils.js';
+import { createLfsFixtureRepo, type LfsFixtureRepo, lfsPointerOf } from '../../src/testing/lfs-fixture.js';
+
+/**
+ * Every `runGitBytes` spawn's args, the one subcommand made to fail, if any, and the answers
+ * rewritten by their command (`check-attr`, `cat-file --batch-check`, `cat-file --batch`).
+ */
+const spawns = vi.hoisted(() => ({
+  args: [] as string[][],
+  failing: undefined as string | undefined,
+  rewritten: new Map<string, string>(),
+}));
+
+/** The absolute paths whose `lstat` or read the filesystem refuses (`EACCES`). */
+const refused = vi.hoisted(() => ({ lstat: new Set<string>(), read: new Set<string>() }));
+
+/** Absolute paths whose `lstat` answers another path's: a file replaced after the snapshot. */
+const replaced = vi.hoisted(() => new Map<string, string>());
+
+vi.mock('../../src/git-run.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof GitRunModule>();
+  return {
+    ...actual,
+    runGitBytes: (args: readonly string[], options: GitRunModule.GitRunOptions) => {
+      spawns.args.push([...args]);
+      if (spawns.failing !== undefined && args[0] === spawns.failing) {
+        return { ok: false, status: 128, stdout: Buffer.alloc(0), stderr: `fatal: ${spawns.failing} refused` };
+      }
+      const result = actual.runGitBytes(args, options);
+      const rewrite = spawns.rewritten.get(args.slice(0, 2).join(' ')) ?? spawns.rewritten.get(args[0] ?? '');
+      return rewrite === undefined || !result.ok ? result : { ...result, stdout: Buffer.from(rewrite) };
+    },
+  };
+});
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof Fs>();
+  const eacces = (path: unknown): Error => Object.assign(new Error(`EACCES: permission denied, '${String(path)}'`), { code: 'EACCES', path });
+  return {
+    ...actual,
+    lstatSync: ((...args: Parameters<typeof Fs.lstatSync>) => {
+      if (refused.lstat.has(String(args[0]))) throw eacces(args[0]);
+      const stand = replaced.get(String(args[0]));
+      return stand === undefined ? actual.lstatSync(...args) : actual.lstatSync(stand);
+    }) as typeof Fs.lstatSync,
+    readFileSync: ((...args: Parameters<typeof Fs.readFileSync>) => {
+      if (refused.read.has(String(args[0]))) throw eacces(args[0]);
+      return actual.readFileSync(...args);
+    }) as typeof Fs.readFileSync,
+  };
+});
+
+const FILTER_SCRIPT = resolveFromImportMeta(import.meta.url, '../fixtures/lfs-filter.mjs');
+
+/** 3,000 bytes: a pointer is 129, so the sizes tell pulled from not pulled. */
+const CONTENT = 'lfs content '.repeat(250);
+
+let dir: string;
+let fixture: LfsFixtureRepo;
+let repo: string;
+
+const git = (...args: string[]): void => fixture.git(...args);
+const backdate = (...relatives: string[]): void => fixture.backdate(...relatives);
+const writeAndRefresh = (relative: string, content: string): void => fixture.writeAndRefresh(relative, content);
+const configureFilter = (): void => fixture.configureFilter();
+const commit = (files: Readonly<Record<string, string>>): void => fixture.commit(files);
+const pointerOf = lfsPointerOf;
+
+const V1 = 'version https://git-lfs.github.com/spec/v1';
+const HEX_A = 'a'.repeat(64);
+const HEX_B = 'b'.repeat(64);
+const HEX_C = 'c'.repeat(64);
+
+/** Commit `text` as `small.bin` raw, then `filter=lfs` over it: the blob is `text` byte for byte. */
+function commitRawUnderLfs(text: string): void {
+  configureFilter();
+  commit({ 'small.bin': text });
+  commit({ '.gitattributes': 'small.bin filter=lfs -text\n' });
+  expect(readFileSync(safePath.join(repo, 'small.bin'), 'utf8'), 'premise: committed raw').toBe(text);
+}
+
+/** The key, or a failed test naming why it declined. */
+function keyed(): Extract<ReturnType<typeof gitTreeKey>, { ok: true }> {
+  const key = gitTreeKey({ cwd: repo });
+  if (!key.ok) throw new Error(`declined: ${gitSnapshotFailureOf(key).reason}`);
+  return key;
+}
+
+/** Key the tree after `notPulled` and again after `pulled`: the first not pulled, the second pulled, the keys apart. */
+function expectKeyMovesAcrossPull(notPulled: () => void, pulled: () => void): void {
+  notPulled();
+  const before = keyed();
+  pulled();
+  const after = keyed();
+  expect(before.lfs.pointers).toEqual([expect.objectContaining({ pulled: false })]);
+  expect(after.lfs.pointers).toEqual([expect.objectContaining({ pulled: true })]);
+  expect(after.hash).not.toBe(before.hash);
+}
+
+/** The declined key's cause, as the one classifier states it. */
+function declined(): { code: string; reason: string } {
+  const key = gitTreeKey({ cwd: repo });
+  if (key.ok) throw new Error('the key was taken');
+  return gitSnapshotFailureOf(key);
+}
+
+/** The snapshot's own hash, unsuffixed. */
+function snapshotHash(): string {
+  const snapshot = gitTreeSnapshot({ cwd: repo });
+  if (!snapshot.ok) throw new Error('no snapshot');
+  return snapshot.hash;
+}
+
+beforeEach(() => {
+  dir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-tree-key-lfs-'));
+  fixture = createLfsFixtureRepo({ dir, filterScript: FILTER_SCRIPT });
+  repo = fixture.repo;
+  for (const [name, value] of Object.entries(fixture.env)) vi.stubEnv(name, value);
+  spawns.args = [];
+  spawns.failing = undefined;
+  spawns.rewritten.clear();
+  refused.lstat.clear();
+  refused.read.clear();
+  replaced.clear();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+/** The key's decline when the OS refused VAT a look at `big.bin`: unreadable, naming the file and the errno. */
+function refusedFileCause(): ReturnType<typeof gitSnapshotFailureOf> {
+  const key = gitTreeKey({ cwd: repo });
+  if (key.ok) throw new Error('the key was taken');
+  expect(key.kind).toBe('lfs-file-unread');
+  const cause = gitSnapshotFailureOf(key);
+  expect(cause.code).toBe(GIT_SNAPSHOT_UNREADABLE_CODE);
+  expect(cause.reason).toContain('big.bin');
+  expect(cause.reason).toContain('EACCES');
+  return cause;
+}
+
+describe('gitTreeKey over LFS pointers', () => {
+  beforeEach(() => {
+    configureFilter();
+    commit({ '.gitattributes': '*.bin filter=lfs diff=lfs merge=lfs -text\n', 'big.bin': CONTENT, 'plain.md': 'plain\n' });
+  });
+
+  it('keys a file pulled apart from the same file not pulled, though the tree hash is one', () => {
+    writeAndRefresh('big.bin', pointerOf(CONTENT));
+    const notPulled = keyed();
+    const notPulledTree = snapshotHash();
+    writeAndRefresh('big.bin', CONTENT);
+    const pulled = keyed();
+    expect(snapshotHash(), 'premise: the pointer, and so the tree, does not move').toBe(notPulledTree);
+    expect(pulled.hash).not.toBe(notPulled.hash);
+    expect(notPulled.lfs.pointers).toEqual([expect.objectContaining({ absolutePath: safePath.join(repo, 'big.bin'), pulled: false })]);
+    expect(pulled.lfs.pointers).toEqual([expect.objectContaining({ pulled: true })]);
+    expect(pulled.lfs.filter).toBe('configured');
+  });
+
+  it('names the pointer\'s LFS oid: the sha256 of the content', () => {
+    expect(keyed().lfs.pointers[0]?.lfsOid).toBe(createHash('sha256').update(CONTENT).digest('hex'));
+  });
+
+  it('keys content exactly as long as its pointer apart from that pointer, by its bytes', () => {
+    // 128 bytes declare `size 128`, and that pointer is 128 bytes too: only the bytes tell.
+    const exact = 'x'.repeat(128);
+    expect(Buffer.byteLength(pointerOf(exact)), 'premise').toBe(128);
+    expectKeyMovesAcrossPull(() => writeAndRefresh('big.bin', pointerOf(exact)), () => writeAndRefresh('big.bin', exact));
+  });
+
+  it('declines content exactly as long as its pointer when its bytes cannot be read, naming no pull as the remedy', () => {
+    writeAndRefresh('big.bin', 'x'.repeat(128));
+    refused.read.add(safePath.join(repo, 'big.bin'));
+    const cause = refusedFileCause();
+    expect(cause.reason).not.toContain('git lfs pull');
+  });
+
+  it('declines a pointer whose path is no regular file by the time it is looked at, naming the file', () => {
+    replaced.set(safePath.join(repo, 'big.bin'), dir);
+    const cause = declined();
+    expect(cause.code).toBe(GIT_SNAPSHOT_INDEX_HIDES_CODE);
+    expect(cause.reason).toContain('absent or no regular file on disk: "big.bin".');
+  });
+
+  it('declines, never throws, when the OS refuses to lstat a pointer\'s file', () => {
+    refused.lstat.add(safePath.join(repo, 'big.bin'));
+    refusedFileCause();
+  });
+
+  it.for(['check-attr', 'cat-file --batch-check', 'cat-file --batch'])(
+    'declines as unreadable when git %s answers for none of the objects it was asked about',
+    (command) => {
+      spawns.rewritten.set(command, '');
+      const key = gitTreeKey({ cwd: repo });
+      if (key.ok) throw new Error(`the key was taken: ${JSON.stringify(key.lfs)}`);
+      expect(key.kind).toBe('lfs-unreadable');
+      expect(gitSnapshotFailureOf(key).code).toBe(GIT_FAILED_CODE);
+    },
+  );
+
+  it('keys the pulled file without the filter configured as it keys it with, and says the filter is absent', () => {
+    const withFilter = keyed();
+    git('config', '--remove-section', 'filter.lfs');
+    const without = keyed();
+    expect(without.hash).toBe(withFilter.hash);
+    expect(withFilter.lfs.filter).toBe('configured');
+    expect(without.lfs.filter).toBe('not-configured');
+  });
+
+  it('moves the tree hash itself for a pulled file touched without the filter: git hashes the content', () => {
+    const tree = snapshotHash();
+    const withFilter = keyed();
+    git('config', '--remove-section', 'filter.lfs');
+    backdate('big.bin');
+    expect(snapshotHash()).not.toBe(tree);
+    const touched = keyed();
+    expect(touched.hash).not.toBe(withFilter.hash);
+    expect(touched.lfs.pointers, 'the raw content is no pointer').toEqual([]);
+    expect(touched.lfs.filter, 'with no pointer, the filter is never asked about').toBe('not-asked');
+  });
+
+  it.for(['check-attr', 'cat-file', 'config'])('declines when git %s fails, as a listing git would not give', (failing) => {
+    spawns.failing = failing;
+    const key = gitTreeKey({ cwd: repo });
+    if (key.ok) throw new Error('the key was taken');
+    expect(key.kind).toBe('lfs-unlisted');
+    const cause = gitSnapshotFailureOf(key);
+    expect(cause.code).toBe(GIT_FAILED_CODE);
+    expect(cause.reason).toContain(`fatal: ${failing} refused`);
+  });
+});
+
+describe('gitTreeKey over files filter=lfs names that are not pointers', () => {
+  it('keys a large blob committed before its attribute as an ordinary file, reading only its size', () => {
+    configureFilter();
+    commit({ 'big.bin': 'r'.repeat(300 * 1024) });
+    commit({ '.gitattributes': 'big.bin filter=lfs -text\n' });
+    spawns.args = [];
+    const key = keyed();
+    expect(key.hash).toBe(snapshotHash());
+    expect(key.lfs.pointers).toEqual([]);
+    expect(spawns.args.filter((args) => args[0] === 'cat-file').map((args) => args[1])).toEqual(['--batch-check']);
+  });
+
+  it.for([
+    ['an oid that is not hex', `${V1}\noid sha256:not-hex\nsize 3000\n`],
+    ['two extensions of one priority', `${V1}\next-0-a sha256:${HEX_A}\next-0-b sha256:${HEX_B}\noid sha256:${HEX_C}\nsize 3000\n`],
+    ['a line past size', `${V1}\noid sha256:${HEX_C}\nsize 3000\nextra line\n`],
+    ['a byte order mark before the version line (Go\'s TrimSpace keeps it)', `\uFEFF${V1}\noid sha256:${HEX_C}\nsize 3000\n`],
+  ])('keys a small blob git-lfs cannot read as a pointer as an ordinary file, as smudge writes it unchanged: %s', ([, malformed]) => {
+    commitRawUnderLfs(malformed ?? '');
+    const key = keyed();
+    expect(key.hash).toBe(snapshotHash());
+    expect(key.lfs.pointers).toEqual([]);
+  });
+
+  it('keys a small blob with no pointer version line as an ordinary file', () => {
+    commitRawUnderLfs('just some small text\n');
+    const key = keyed();
+    expect(key.hash).toBe(snapshotHash());
+    expect(key.lfs.pointers).toEqual([]);
+  });
+});
+
+/** The pointer git-lfs writes for HEX_C at 3,000 bytes: its canonical encoding. */
+const CANONICAL_C = `${V1}\noid sha256:${HEX_C}\nsize 3000\n`;
+
+describe('gitTreeKey over pointers git-lfs reads beyond the canonical three lines', () => {
+  /** Each pointer as committed, and the canonical encoding smudge writes for it. */
+  const READ_AS_POINTERS = [
+    ['an ext- extension line', `${V1}\next-0-foo sha256:${HEX_A}\noid sha256:${HEX_C}\nsize 3000\n`, undefined],
+    ['two ext- lines, by priority', `${V1}\next-0-foo sha256:${HEX_A}\next-1-bar sha256:${HEX_B}\noid sha256:${HEX_C}\nsize 3000\n`, undefined],
+    [
+      'two ext- lines out of priority order',
+      `${V1}\next-1-bar sha256:${HEX_B}\next-0-foo sha256:${HEX_A}\noid sha256:${HEX_C}\nsize 3000\n`,
+      `${V1}\next-0-foo sha256:${HEX_A}\next-1-bar sha256:${HEX_B}\noid sha256:${HEX_C}\nsize 3000\n`,
+    ],
+    ['the pre-release hawser version', `version https://hawser.github.com/spec/v1\noid sha256:${HEX_C}\nsize 3000\n`, CANONICAL_C],
+    ['the alpha git-media version', `version http://git-media.io/v/2\noid sha256:${HEX_C}\nsize 3000\n`, CANONICAL_C],
+    ['a trailing NEL, which Go\'s TrimSpace drops', `${CANONICAL_C}\u0085`, CANONICAL_C],
+  ] as const;
+
+  it.for(READ_AS_POINTERS)('reads %s as a pointer not pulled, as git leaves it with no smudge filter', ([, pointer]) => {
+    commitRawUnderLfs(pointer);
+    const key = keyed();
+    expect(key.lfs.pointers).toEqual([expect.objectContaining({ absolutePath: safePath.join(repo, 'small.bin'), lfsOid: HEX_C, pulled: false })]);
+    expect(key.hash).not.toBe(snapshotHash());
+  });
+
+  it.for(READ_AS_POINTERS)('reads %s as a pointer not pulled when smudge wrote its canonical encoding', ([, pointer, canonical]) => {
+    commitRawUnderLfs(pointer);
+    fixture.stageAs('small.bin', canonical ?? pointer, pointer);
+    expect(keyed().lfs.pointers).toEqual([expect.objectContaining({ lfsOid: HEX_C, pulled: false })]);
+  });
+
+  it('moves the key across a pull when the content is exactly as long as the canonical encoding, not the pointer', () => {
+    const content = 'x'.repeat(128);
+    const oid = createHash('sha256').update(content).digest('hex');
+    const hawser = `version https://hawser.github.com/spec/v1\noid sha256:${oid}\nsize 128\n`;
+    const canonical = `${V1}\noid sha256:${oid}\nsize 128\n`;
+    expect([Buffer.byteLength(canonical), Buffer.byteLength(hawser)], 'premise').toEqual([128, 127]);
+    commitRawUnderLfs(hawser);
+    expectKeyMovesAcrossPull(
+      () => fixture.stageAs('small.bin', canonical, hawser),
+      () => fixture.stageAs('small.bin', content, hawser),
+    );
+  });
+
+  const extended = `${V1}\next-0-foo sha256:${HEX_A}\noid sha256:${HEX_C}\nsize 3000\n`;
+
+  it.for([
+    ['exactly as long as the pointer', 'y'.repeat(Buffer.byteLength(extended))],
+    ['neither the pointer\'s length nor the declared size', 'z'.repeat(50)],
+  ])('reads an ext- pointer\'s file %s as pulled: an extension\'s input has no size the pointer declares', ([, content]) => {
+    commitRawUnderLfs(extended);
+    fixture.stageAs('small.bin', content ?? '', extended);
+    expect(keyed().lfs.pointers).toEqual([expect.objectContaining({ lfsOid: HEX_C, pulled: true, extended: true })]);
+  });
+});
+
+describe('gitTreeKey over an LFS pointer checked out CRLF', () => {
+  it('keys a pointer core.autocrlf checked out with CRLF as not pulled: the disk holds the pointer', () => {
+    git('config', 'core.autocrlf', 'true');
+    configureFilter();
+    commit({ '.gitattributes': '*.bin filter=lfs diff=lfs merge=lfs\n', 'big.bin': CONTENT });
+    rmSync(safePath.join(repo, 'big.bin'));
+    git('checkout', '--', 'big.bin');
+    expect(readFileSync(safePath.join(repo, 'big.bin'), 'utf8'), 'premise: the pointer, CRLF').toBe(pointerOf(CONTENT).replaceAll('\n', '\r\n'));
+    backdate('big.bin');
+    git('update-index', '-q', '--refresh');
+    expect(keyed().lfs.pointers).toEqual([expect.objectContaining({ pulled: false })]);
+  });
+});
+
+describe('the fixture backdate', () => {
+  it('moves a file to a whole second no earlier backdate used, however long passed between them', () => {
+    writeFileSync(safePath.join(repo, 'a.bin'), 'a');
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000_500);
+    backdate('a.bin');
+    const first = statSync(safePath.join(repo, 'a.bin')).mtimeMs;
+    now.mockReturnValue(1_000_001_500);
+    backdate('a.bin');
+    const second = statSync(safePath.join(repo, 'a.bin')).mtimeMs;
+    now.mockRestore();
+    expect(Math.floor(second / 1000), 'a stat git compares by the second sees the touch').not.toBe(Math.floor(first / 1000));
+    expect(second % 1000, 'a whole second').toBe(0);
+    expect(second).toBeLessThanOrEqual(1_000_001_500 - 10_000);
+  });
+});

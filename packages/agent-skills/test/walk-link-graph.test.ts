@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 
 import { DeferredArtifacts } from '@vibe-agent-toolkit/resources';
 import type { ResourceLink, ResourceMetadata, SkillFileEntry } from '@vibe-agent-toolkit/resources';
+import { testContentKey } from '@vibe-agent-toolkit/resources/testing';
 import {
   createSymlink,
   CRAWL_PASS_INSIDE,
@@ -55,7 +56,7 @@ const README_PATH = safePath.resolve('/project/docs/README.md');
 const README_HREF = './docs/README.md';
 
 // A well-formed content key for the mock resources
-const MOCK_CONTENT_KEY = `markdown.${'a'.repeat(64)}`;
+const MOCK_CONTENT_KEY = testContentKey('markdown', 'a');
 
 // Exclude reason literals — avoid string duplication in assertions
 const REASON_SKILL_DEFINITION = 'skill-definition';

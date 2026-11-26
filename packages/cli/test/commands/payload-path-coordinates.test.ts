@@ -27,6 +27,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
+import { testContentKey } from '@vibe-agent-toolkit/resources/testing';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -72,7 +73,7 @@ const SCAN_RESOURCE = {
   filePath: README,
   links: [{}, {}],
   headings: [{ children: [{}] }, {}],
-  contentKey: `markdown.${'a'.repeat(64)}`,
+  contentKey: testContentKey('markdown', 'a'),
 };
 
 /** The scan report's `data` for one README, with and without `--verbose` — parsed with the published schema. */
@@ -96,7 +97,7 @@ describe('resources scan payload', () => {
 
     expect(data.root).toBe(ROOT);
     expect(data.files).toEqual([
-      { path: README_REL, links: 2, anchors: 3, contentKey: `markdown.${'a'.repeat(64)}` },
+      { path: README_REL, links: 2, anchors: 3, contentKey: testContentKey('markdown', 'a') },
     ]);
     expectNoAbsolutePaths(data.files);
   });

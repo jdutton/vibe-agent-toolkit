@@ -86,6 +86,25 @@ Most are listed with their exempt files in `eslint.config.js`. One has no exempt
   exactly that in the projection crawl, and three agent-skills walks had the same shape. Every
   append goes through `appendAll(target, items)` from `@vibe-agent-toolkit/utils`; a spread into an
   array literal (`appendAll(lines, ['header', ...rows])`) is not an argument list and is allowed.
+- **`content-key-opaque`**, type-aware, over every package's `.ts`/`.cts`, `src` and `test` alike:
+  a `ContentKey` (`string & { readonly __brand: 'ContentKey' }`) is opaque outside the files that
+  own its format. It reports a type assertion to the brand, or to an array, record, object or
+  container of keys, from values not already keys; an `as never`/`as any` cast where the checker's
+  contextual type expects a key (or values holding keys one level in); a user-written type guard or
+  assertion function naming a key (`x is ContentKey`); any member access, index, spread, destructure
+  or iteration of a key, and a key handed to a `RegExp`'s `test`/`exec` (each reads into the text);
+  and `compareCodeUnits`/`localeCompare` on a key. The brand is found by the type checker, never by
+  the type's name. Two keys are equal exactly when their text is, so `===` between keys is the
+  contract; a bare `.sort()` and `<`/`>` are allowed: key order is text order. Its `allowFiles` list,
+  `CONTENT_KEY_OPAQUE_ALLOW` in `eslint.config.js` (the parser, `resources/src/content-key.ts`, and
+  its own suite, which pins the key's spelling), is
+  held both ways by `dev-tools/test/integration/content-key-opaque-ratchet.integration.test.ts`.
+  It refuses to run without a program rather than report nothing.
+
+A type-aware rule's RuleTester suite uses `test/eslint/typed-rule-tester.ts` (`expectTypedRulePasses`),
+which types each case through the project service against `test/eslint/fixtures/typed-program/`;
+a typed allowlist registers in `dev-tools/test/integration/typed-list-ratchet.ts`
+(`typedFilesWithoutFinding`) rather than the syntactic `eslint-allowlist-ratchets.test.ts`.
 
 ## Creating New Rules
 

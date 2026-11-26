@@ -86,6 +86,8 @@
 
 import { VatError } from '@vibe-agent-toolkit/utils';
 
+import type { ContentKey } from '../content-key.js';
+
 import { type BlobCoverageRows, blobFactsReader } from './blob-resource-facts.js';
 import { canonicalJson } from './digest.js';
 import type { Projection } from './projection.js';
@@ -258,7 +260,7 @@ export function selectRequestedRows<Table extends ExtentScopedTableName>(
  *   every key is covered. Returned rather than a yes/no so a miss can be counted
  *   and named (ADR I10).
  */
-export function uncoveredContentKeys(rows: BlobCoverageRows, contentKeys: readonly string[]): string[] {
+export function uncoveredContentKeys(rows: BlobCoverageRows, contentKeys: readonly ContentKey[]): ContentKey[] {
   const reader = blobFactsReader(rows);
   return contentKeys.filter((key) => reader.answer(key).kind === 'uncovered');
 }
@@ -276,11 +278,11 @@ export interface StoredBlobTier {
   /** The rows the read returned, every blob-scoped table. */
   readonly rows: BlobScopedRows;
   /** The keys the one predicate called covered in that read. */
-  readonly covered: ReadonlySet<string>;
+  readonly covered: ReadonlySet<ContentKey>;
 }
 
 /** The tier of a run with no store, or one that parses no content: nothing held, nothing covered. */
-export const EMPTY_STORED_TIER: StoredBlobTier = Object.freeze({ rows: emptyBlobRows(), covered: new Set<string>() });
+export const EMPTY_STORED_TIER: StoredBlobTier = Object.freeze({ rows: emptyBlobRows(), covered: new Set<ContentKey>() });
 
 /**
  * The tier one read answered, judged by the one predicate.
@@ -289,7 +291,7 @@ export const EMPTY_STORED_TIER: StoredBlobTier = Object.freeze({ rows: emptyBlob
  * @param contentKeys - The keys the read asked about
  * @returns The rows, and the keys among `contentKeys` they cover
  */
-export function storedBlobTier(rows: BlobScopedRows, contentKeys: readonly string[]): StoredBlobTier {
+export function storedBlobTier(rows: BlobScopedRows, contentKeys: readonly ContentKey[]): StoredBlobTier {
   const uncovered = new Set(uncoveredContentKeys(rows, contentKeys));
   return { rows, covered: new Set(contentKeys.filter((key) => !uncovered.has(key))) };
 }
@@ -305,8 +307,8 @@ export function storedBlobTier(rows: BlobScopedRows, contentKeys: readonly strin
  * @param extent - Extent-scoped rows, already narrowed to one run
  * @returns The keys, deduplicated, in first-seen order
  */
-export function keyedContentKeys(extent: Pick<ExtentScopedRows, 'resourceRealizations'>): readonly string[] {
-  const keys = new Set<string>();
+export function keyedContentKeys(extent: Pick<ExtentScopedRows, 'resourceRealizations'>): readonly ContentKey[] {
+  const keys = new Set<ContentKey>();
   for (const row of extent.resourceRealizations) {
     if (row.contentState === 'keyed' && row.contentKey !== null) keys.add(row.contentKey);
   }

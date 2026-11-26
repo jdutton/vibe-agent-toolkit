@@ -24,11 +24,14 @@
 import { promised } from '@vibe-agent-toolkit/utils';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
+import { type ContentKey, parseContentKey } from '../src/content-key.js';
+import { type ProjectionColumnKind, projectionColumnTypes } from '../src/projection/column-kinds.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
+import { blobRowBytes, type EncodedStoreValue } from '../src/projection/store-bookkeeping.js';
 import type {
   BlobFactsWrite,
   BlobRequest,
@@ -125,31 +128,105 @@ function partitionValue(row: Readonly<Record<string, unknown>>, column: string):
 }
 
 /**
- * One held key's bundle with a later write's rows applied, as the real store's
- * deletes leave it: a replaced key takes the write's unpartitioned rows; in a
- * partitioned table the partitions it replaces (every carried one for a
- * replaced key, the unsettled ones otherwise) take the write's rows, and every
- * other row stays.
+ * A NOT-replaced key's bundle with a later write's rows applied, as the real
+ * store's pair deletes leave it: its unpartitioned rows stay; in a partitioned
+ * table each unsettled partition the write carries takes the write's rows, and
+ * every other row stays. (A replaced key simply takes the write's rows, every
+ * table, partitioned ones included.)
  *
- * @param held - What the double holds for the key, if anything
+ * @param held - What the double holds for the key
  * @param incoming - What the later write carries for it
- * @param replaces - Whether the key is replaced
  * @param settled - The partition values settled at read for this key
- * @returns The merged bundle
+ * @returns The merged bundle, and the bytes the write added and deleted
  */
-function applyWrite(held: RowBundle | undefined, incoming: RowBundle, replaces: boolean, settled: ReadonlySet<string>): RowBundle {
-  // A key not replaced keeps what the double holds, which is nothing when it
-  // holds nothing: its unpartitioned rows are not written, as in the real store.
-  const merged: RowBundle = replaces ? { ...incoming } : { ...(held ?? emptyBlobBundle()) };
+function applyPairWrite(
+  held: RowBundle,
+  incoming: RowBundle,
+  settled: ReadonlySet<string>,
+): { merged: RowBundle; added: number; deleted: number } {
+  const merged: RowBundle = { ...held };
+  let added = 0;
+  let deleted = 0;
   for (const [table, column] of PARTITION_COLUMNS) {
-    const written = (incoming[table] ?? []).filter((row) => replaces || !settled.has(partitionValue(row, column)));
+    const written = (incoming[table] ?? []).filter((row) => !settled.has(partitionValue(row, column)));
     const carried = new Set(written.map((row) => JSON.stringify(row[column])));
-    merged[table] = [
-      ...(held?.[table] ?? []).filter((row) => !carried.has(JSON.stringify(row[column]))),
-      ...written,
-    ];
+    const [removed, kept] = partitioned(held[table] ?? [], (row) => carried.has(JSON.stringify(row[column])));
+    merged[table] = [...kept, ...written];
+    added += tableBytes(table, written);
+    deleted += tableBytes(table, removed);
   }
-  return merged;
+  return { merged, added, deleted };
+}
+
+/**
+ * Split rows by a predicate.
+ *
+ * @param rows - The rows
+ * @param matches - The predicate
+ * @returns The matching rows, then the rest
+ */
+function partitioned<Row>(rows: readonly Row[], matches: (row: Row) => boolean): readonly [Row[], Row[]] {
+  return [rows.filter((row) => matches(row)), rows.filter((row) => !matches(row))];
+}
+
+/**
+ * One value as the SQLite store binds it, by its column's kind — what
+ * `blobRowBytes` measures. The double keeps rows unencoded, so it encodes to
+ * measure: a boolean is 0 or 1, an instant its ISO-8601 text, a JSON value its
+ * serialized text, anything else itself.
+ *
+ * @param kind - The column's kind
+ * @param value - The row's value
+ * @returns The encoded value
+ */
+function encodedForMeasure(kind: ProjectionColumnKind, value: unknown): EncodedStoreValue {
+  if (value === null || value === undefined) return null;
+  if (kind === 'boolean') return value === true ? 1 : 0;
+  if (kind === 'timestamp') return timestampText(value);
+  if (kind === 'json') return JSON.stringify(value);
+  return value as EncodedStoreValue;
+}
+
+/**
+ * A timestamp column's value as the ISO text SQLite stores.
+ *
+ * @param value - A `Date`, or the text or epoch milliseconds of one
+ * @returns Its ISO text
+ * @throws TypeError for any other value: a fixture carrying one is the defect
+ */
+function timestampText(value: unknown): string {
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'string' || typeof value === 'number') return new Date(value).toISOString();
+  throw new TypeError(`not a timestamp: ${typeof value}`);
+}
+
+/** Each blob-scoped table's columns and kinds, read off the registry. */
+const BLOB_COLUMN_TYPES: ReadonlyMap<string, ReturnType<typeof projectionColumnTypes>> = new Map(
+  Object.values(PROJECTION_TABLES)
+    .filter((spec) => spec.scope === BLOB_SCOPE)
+    .map((spec) => [spec.key, projectionColumnTypes(spec)] as const),
+);
+
+/**
+ * The `blobRowBytes` of some rows of one blob-scoped table.
+ *
+ * @param table - The table's {@link Projection} field name
+ * @param rows - Its rows
+ * @returns Their bytes, summed
+ */
+function tableBytes(table: string, rows: readonly Readonly<Record<string, unknown>>[]): number {
+  const columns = BLOB_COLUMN_TYPES.get(table) ?? [];
+  return rows.reduce((total, row) => total + blobRowBytes(columns.map(([column, { kind }]) => encodedForMeasure(kind, row[column]))), 0);
+}
+
+/**
+ * The `blobRowBytes` of every row of a bundle.
+ *
+ * @param bundle - One key's bundle
+ * @returns Their bytes, summed
+ */
+function bundleBytes(bundle: RowBundle): number {
+  return Object.entries(bundle).reduce((total, [table, rows]) => total + tableBytes(table, rows), 0);
 }
 
 /**
@@ -162,6 +239,12 @@ function emptyBlobBundle(): RowBundle {
   for (const table of BLOB_TABLES) bundle[table] = [];
   return bundle;
 }
+
+/**
+ * A blob-tier budget no test corpus reaches: for a test that is not about
+ * eviction, so its keys stay whatever it writes.
+ */
+export const WIDE_BLOB_BUDGET_BYTES = 1_000_000_000;
 
 /**
  * The simplest thing that satisfies {@link FactStore} — and counts what it
@@ -189,21 +272,37 @@ export class FakeFactStore implements FactStore {
   readonly #extents = new Map<string, ExtentScopedRows>();
 
   /** One bundle per content key, which is the granularity the real read takes. */
-  readonly #blobs = new Map<string, RowBundle>();
+  readonly #blobs = new Map<ContentKey, RowBundle>();
 
   /**
-   * The ledger: every held content key, oldest stamp first. A re-stamp deletes
-   * and re-adds the key, so `Map` order is the real store's
-   * `(writtenAt, rowid)` order.
+   * The ledger: every held content key and its recorded bytes, oldest stamp
+   * first. A re-stamp deletes and re-adds the key, so `Map` order is the real
+   * store's `(writtenAt, rowid)` order.
    */
-  readonly #ledger = new Set<string>();
+  readonly #ledger = new Map<ContentKey, number>();
 
-  /** How many content keys a write keeps; unbounded unless a case says otherwise. */
-  readonly #retainedBlobKeys: number;
+  /** The blob tier's budget, in `blobRowBytes`. */
+  readonly #blobTierBudgetBytes: number;
 
-  /** @param retainedBlobKeys - The blob window, as the real store's `retainedBlobKeys` */
-  constructor(retainedBlobKeys = Number.POSITIVE_INFINITY) {
-    this.#retainedBlobKeys = retainedBlobKeys;
+  /**
+   * @param blobTierBudgetBytes - The blob tier's budget, as the real store's
+   *   `blobTierBudgetBytes`; refused unless a positive finite number, as there
+   */
+  constructor(blobTierBudgetBytes: number) {
+    if (!Number.isFinite(blobTierBudgetBytes) || blobTierBudgetBytes <= 0) {
+      throw new RangeError(`the store double needs a positive finite blob budget, not ${String(blobTierBudgetBytes)}`);
+    }
+    this.#blobTierBudgetBytes = blobTierBudgetBytes;
+  }
+
+  /** The ledger as it stands: each tracked key and its recorded bytes. */
+  ledgerBytes(): Readonly<Record<string, number>> {
+    return Object.fromEntries(this.#ledger);
+  }
+
+  /** `blobRowBytes` over each held key's rows, measured from the rows. */
+  storedBytes(): Readonly<Record<string, number>> {
+    return Object.fromEntries([...this.#blobs].map(([key, bundle]) => [key, bundleBytes(bundle)]));
   }
 
   /**
@@ -217,20 +316,20 @@ export class FakeFactStore implements FactStore {
    * @returns The copy
    */
   copy(): FakeFactStore {
-    const copy = new FakeFactStore(this.#retainedBlobKeys);
+    const copy = new FakeFactStore(this.#blobTierBudgetBytes);
     for (const [key, rows] of this.#extents) copy.#extents.set(key, rows);
     for (const [key, bundle] of this.#blobs) copy.#blobs.set(key, bundle);
-    for (const key of this.#ledger) copy.#ledger.add(key);
+    for (const [key, bytes] of this.#ledger) copy.#ledger.set(key, bytes);
     return copy;
   }
 
   /**
    * Record blob facts by the port's replace-and-re-stamp rule: a held key the
-   * read did not cover, or that left the ledger since, is replaced; a covered
-   * key still in the ledger keeps its rows; every held key is re-stamped; then
-   * the window is applied past `max(retention, held keys)`. PARTITIONED rows
-   * (the harness tables) are written per `(blob, partition)`, as the interface
-   * requires — see {@link applyWrite}.
+   * read did not cover, or that left the ledger since, is replaced whole; a
+   * covered key still in the ledger keeps its rows but for its unsettled
+   * PARTITIONED pairs, written per `(blob, partition)` as the interface requires
+   * (see {@link applyPairWrite}); every held key is re-stamped with its bytes;
+   * then the newest keys whose bytes fit the budget are kept, the held ones always.
    *
    * @param write - The held rows and what the read covered
    */
@@ -243,32 +342,58 @@ export class FakeFactStore implements FactStore {
   #mergeBlobFacts(write: BlobFactsWrite): void {
     const incoming = this.#bundlesByKey(write.rows);
     const covered = new Set(write.coveredAtRead);
+    const recorded = new Map<ContentKey, number>();
     for (const [key, bundle] of incoming) {
-      const replaces = !covered.has(key) || !this.#ledger.has(key);
+      const stored = this.#ledger.get(key);
+      const held = this.#blobs.get(key);
+      if (!covered.has(key) || stored === undefined || held === undefined) {
+        this.#blobs.set(key, bundle);
+        recorded.set(key, bundleBytes(bundle));
+        continue;
+      }
       const settled = new Set(write.settledAtRead.filter((pair) => pair.contentKey === key).map((pair) => pair.harness));
-      this.#blobs.set(key, applyWrite(this.#blobs.get(key), bundle, replaces, settled));
+      const { merged, added, deleted } = applyPairWrite(held, bundle, settled);
+      this.#blobs.set(key, merged);
+      recorded.set(key, stored + added - deleted);
     }
-    for (const key of incoming.keys()) {
+    for (const [key, bytes] of recorded) {
       this.#ledger.delete(key);
-      this.#ledger.add(key);
+      this.#ledger.set(key, bytes);
     }
-    const keep = Math.max(this.#retainedBlobKeys, incoming.size);
-    const victims = [...this.#ledger].slice(0, Math.max(0, this.#ledger.size - keep));
-    for (const key of victims) this.forgetBlobFacts(key);
+    for (const key of this.#pastBudget(new Set(incoming.keys()))) this.forgetBlobFacts(key);
+  }
+
+  /**
+   * The keys past the budget, as the real store's `BLOB_KEYS_PAST_BUDGET_SQL`:
+   * the write's own keys are never selected (by key, not by their place in the
+   * order) and their bytes count first; the rest follow newest first, and a key
+   * goes once the running sum of recorded bytes passes the budget.
+   *
+   * @param held - The keys the write held
+   * @returns The keys to evict
+   */
+  #pastBudget(held: ReadonlySet<ContentKey>): readonly ContentKey[] {
+    const newestFirst = [...this.#ledger].reverse();
+    let running = 0;
+    for (const [key, bytes] of newestFirst) if (held.has(key)) running += bytes;
+    return newestFirst.filter(([key, bytes]) => {
+      if (held.has(key)) return false;
+      running += bytes;
+      return running > this.#blobTierBudgetBytes;
+    }).map(([key]) => key);
   }
 
   /** A write's rows, one bundle per content key. */
-  #bundlesByKey(rows: BlobScopedRows): Map<string, RowBundle> {
+  #bundlesByKey(rows: BlobScopedRows): Map<ContentKey, RowBundle> {
     const source = rows as unknown as RowBundle;
-    const incoming = new Map<string, RowBundle>();
+    const incoming = new Map<ContentKey, RowBundle>();
     for (const table of BLOB_TABLES) {
       for (const row of source[table] ?? []) {
         const column = blobKeyColumn(table);
-        const key = row[column];
-        if (typeof key !== 'string') {
-          throw new TypeError(
-            `the store double expected '${table}.${column}' to hold a string content key, got ${typeof key}`,
-          );
+        const value = row[column];
+        const key = typeof value === 'string' ? parseContentKey(value) : undefined;
+        if (key === undefined) {
+          throw new TypeError(`the store double expected '${table}.${column}' to hold a content key, got ${typeof value === 'string' ? value : typeof value}`);
         }
         const bundle = incoming.get(key) ?? emptyBlobBundle();
         incoming.set(key, bundle);
@@ -293,7 +418,7 @@ export class FakeFactStore implements FactStore {
    * @returns The rows held for them, in the requested tables
    */
   readBlobFacts<Table extends BlobScopedTableName>(
-    contentKeys: readonly string[],
+    contentKeys: readonly ContentKey[],
     request: BlobRequest<Table>,
   ): Promise<Pick<BlobScopedRows, Table>> {
     this.readBlobFactsCalls++;
@@ -314,12 +439,12 @@ export class FakeFactStore implements FactStore {
 
   /**
    * Drop every blob row held for one content key, and its ledger entry — a
-   * count-window eviction of that key, which a real backend does in
-   * `evictBlobKeysPastRetention`.
+   * byte-budget eviction of that key, which a real backend does in
+   * `evictBlobKeysPastBudget`.
    *
    * @param contentKey - The key to forget
    */
-  forgetBlobFacts(contentKey: string): void {
+  forgetBlobFacts(contentKey: ContentKey): void {
     this.#blobs.delete(contentKey);
     this.#ledger.delete(contentKey);
   }
@@ -386,7 +511,7 @@ export class FailingBlobStore extends FakeFactStore {
   readonly failure: Error = Object.assign(new Error('ENOENT: no such file or directory, open \'/store/blobs\''), { code: 'ENOENT', errno: -2, syscall: 'open', path: '/store/blobs' });
 
   override readBlobFacts<Table extends BlobScopedTableName>(
-    contentKeys: readonly string[],
+    contentKeys: readonly ContentKey[],
     request: BlobRequest<Table>,
   ): Promise<Pick<BlobScopedRows, Table>> {
     if (!this.failBlobs) return super.readBlobFacts(contentKeys, request);

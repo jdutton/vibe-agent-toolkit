@@ -28,7 +28,7 @@ import {
   EXTENT_DIRECTORY_UNLISTABLE,
 } from '../../src/projection/contributors/filesystem-extent.js';
 import type { Projection } from '../../src/projection/projection.js';
-import { FakeFactStore, populateExtentThrough } from '../fake-fact-store.js';
+import { FakeFactStore, populateExtentThrough, WIDE_BLOB_BUDGET_BYTES } from '../fake-fact-store.js';
 import { createCommittedRepo, writeFileIn } from '../test-helpers.js';
 
 /** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
@@ -69,7 +69,7 @@ describe.skipIf(CANNOT_DENY_READS)('a cached EXTENT_DIRECTORY_UNLISTABLE row is 
   });
 
   it('writes the row on the first run and replays it while the directory is still locked (control)', async () => {
-    const store = new FakeFactStore();
+    const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
 
     const first = await populateThrough(store);
     const second = await populateThrough(store);
@@ -83,7 +83,7 @@ describe.skipIf(CANNOT_DENY_READS)('a cached EXTENT_DIRECTORY_UNLISTABLE row is 
   });
 
   it('re-enumerates instead of replaying the row once the directory can be listed again', async () => {
-    const store = new FakeFactStore();
+    const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
     await populateThrough(store);
 
     chmodSync(locked, 0o755);
@@ -98,7 +98,7 @@ describe.skipIf(CANNOT_DENY_READS)('a cached EXTENT_DIRECTORY_UNLISTABLE row is 
   });
 
   it('re-enumerates when the directory is gone, not only when it is readable', async () => {
-    const store = new FakeFactStore();
+    const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
     await populateThrough(store);
 
     chmodSync(locked, 0o755);

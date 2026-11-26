@@ -43,7 +43,7 @@
 import { forEachInOrder, safePath } from '@vibe-agent-toolkit/utils';
 import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 
-import { computeContentKey, keyContent } from '../../src/content-key.js';
+import { computeContentKey, keyContent, type ContentKey } from '../../src/content-key.js';
 import { parseMarkdownContent } from '../../src/link-parser.js';
 import { mimeTypeForPath } from '../../src/mime-type.js';
 import { blobRowFor, harnessRowsFor } from '../../src/projection/blob-facts.js';
@@ -147,7 +147,7 @@ export const MARKDOWN_LINK: ReferenceSyntacticForm = 'markdown-link';
  * @param file - The fixture file
  * @returns A schema-valid content key (`markdown.<sha256>`)
  */
-function contentKeyFor(file: FixtureFile): string {
+function contentKeyFor(file: FixtureFile): ContentKey {
   const content = file.markdown ?? JSON.stringify(file.refs);
   return computeContentKey(Buffer.from(content, 'utf-8'), 'markdown');
 }
@@ -164,7 +164,7 @@ function contentKeyFor(file: FixtureFile): string {
  * @param isDirectory - True for a directory row
  * @returns `'keyed'` for a real key, `'none'` for a keyless directory, else `'deferred'`
  */
-function contentStateFor(contentKey: string | null, isDirectory: boolean): 'keyed' | 'none' | 'deferred' {
+function contentStateFor(contentKey: ContentKey | null, isDirectory: boolean): 'keyed' | 'none' | 'deferred' {
   if (contentKey !== null) return 'keyed';
   return isDirectory ? 'none' : 'deferred';
 }
@@ -180,7 +180,7 @@ function contentStateFor(contentKey: string | null, isDirectory: boolean): 'keye
 function realizationRow(
   resourceId: string,
   path: string,
-  contentKey: string | null,
+  contentKey: ContentKey | null,
   isDirectory: boolean,
 ): ResourceRealizationRow {
   const lastSlash = path.lastIndexOf('/');
@@ -223,7 +223,7 @@ const FIXTURE_EXTENT_ID = 'ctx-filesystem-fixture';
  * overlap; they are required by `BlobReferenceRowSchema` and this is a fixture
  * concern, not a fact about the content.
  */
-function referenceRow(blob: string, ordinal: number, ref: FixtureRef): BlobReferenceRow {
+function referenceRow(blob: ContentKey, ordinal: number, ref: FixtureRef): BlobReferenceRow {
   const startOffset = ordinal * MAX_FIXTURE_LINE_LENGTH;
   return {
     blob,
@@ -253,7 +253,7 @@ function referenceRow(blob: string, ordinal: number, ref: FixtureRef): BlobRefer
  * gets the hand-built rows instead — see `FixtureFile.markdown`'s docstring
  * for which cases each is the right tool for.
  */
-function referenceRowsFor(contentKey: string, file: FixtureFile): BlobReferenceRow[] {
+function referenceRowsFor(contentKey: ContentKey, file: FixtureFile): BlobReferenceRow[] {
   if (file.markdown !== undefined) {
     const parsed = parseMarkdownContent(file.markdown, Buffer.byteLength(file.markdown));
     return blobReferencesFor(contentKey, parsed);
@@ -338,7 +338,7 @@ export function addFileWithFacts(builder: ProjectionBuilder, file: FixtureFile, 
  * @param markdown - The file's source text
  * @returns The blob row
  */
-function blobRowForFixture(contentKey: string, markdown: string) {
+function blobRowForFixture(contentKey: ContentKey, markdown: string) {
   const bytes = Buffer.byteLength(markdown);
   const parsed = parseMarkdownContent(markdown, bytes);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- `text` is discarded on purpose: it is `markdown` itself for a plain-ASCII fixture, and `decoding` is the only half `blobRowFor` wants

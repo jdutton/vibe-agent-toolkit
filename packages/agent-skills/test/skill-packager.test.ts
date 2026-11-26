@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 
-import { computeContentKey, ResourceRegistry, type ResourceMetadata } from '@vibe-agent-toolkit/resources';
+import { computeContentKey, parseContentKey, ResourceRegistry, type ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { allowUnusedIssues, createAllowUsageLedger, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { FS_FAULT_CODE, toForwardSlash, safePath, TREE_DEST_HOLDS_SOURCE_CODE, TREE_DEST_NOT_OWNED_CODE } from '@vibe-agent-toolkit/utils';
 import { buildHostileTree, CANNOT_DENY_READS, diffSnapshots, HOSTILE_NAMES, installFaultFs, snapshotTree, underTemp } from '@vibe-agent-toolkit/utils/testing';
@@ -1790,7 +1790,7 @@ describe('buildSyntheticAssetResource', () => {
     };
 
     // Still a well-formed content key: the output registry's schema holds every key to that shape.
-    expect(synthetic.contentKey).toMatch(/^none\.[0-9a-f]{64}$/);
+    expect(parseContentKey(synthetic.contentKey)).toBe(synthetic.contentKey);
     expect(ResourceRegistry.fromResources(root, [synthetic, gitkeep]).getDuplicates()).toEqual([]);
   });
 });

@@ -40,15 +40,10 @@
 
 'use strict';
 
+const { memberName } = require('./callee-name.cjs');
+
 /** The port members that reach stored facts. */
 const PORT_MEMBERS = new Set(['readBlobFacts', 'readExtent', 'writeBlobFacts', 'writeExtent']);
-
-/** The member name of a `MemberExpression`, when it is spelled out, or null. */
-function memberName(node) {
-  if (!node.computed && node.property.type === 'Identifier') return node.property.name;
-  if (node.computed && node.property.type === 'Literal' && typeof node.property.value === 'string') return node.property.value;
-  return null;
-}
 
 /** The name of a property or method key, when it is spelled out, or null. */
 function keyName(node) {

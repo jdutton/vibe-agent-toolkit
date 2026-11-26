@@ -14,8 +14,9 @@ import { blobSectionsFor } from '../../src/projection/blob-sections.js';
 import { restoredMatchText, storedMatchText } from '../../src/projection/skill-text-match-text.js';
 import { skillTextFactsOf } from '../../src/skill-text/core.js';
 import { SKILL_TEXT_DECLARATION } from '../../src/skill-text/declaration.js';
+import { testContentKey } from '../../src/testing.js';
 
-const KEY = `markdown.${'e'.repeat(64)}`;
+const KEY = testContentKey('markdown', 'e');
 const EMOJI = '\u{1F600}';
 
 /** A SKILL.md whose imperative sample (80 code units) ends on an emoji's high surrogate. */

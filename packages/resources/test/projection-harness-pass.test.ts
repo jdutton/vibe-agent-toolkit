@@ -8,7 +8,7 @@
 import { compareCodeUnits, readWorkCounters, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
 
-import { computeContentKey, keyContent } from '../src/content-key.js';
+import { computeContentKey, keyContent, type ContentKey } from '../src/content-key.js';
 import { ParseLimitError, ParseWorkerDiedError } from '../src/parse-limits.js';
 import { BLOB_PARSE_LIMIT_EXCEEDED, BLOB_PARSE_WORKER_DIED } from '../src/projection/blob-condition-codes.js';
 import { harnessRowsFor } from '../src/projection/blob-facts.js';
@@ -61,7 +61,7 @@ function builderFor(files: Readonly<Record<string, string>>, deferred: readonly 
 }
 
 /** The content key a fixture file's bytes are filed under. */
-function keyOf(markdown: string): string {
+function keyOf(markdown: string): ContentKey {
   return computeContentKey(Buffer.from(markdown, 'utf-8'), 'markdown');
 }
 

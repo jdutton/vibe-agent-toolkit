@@ -4,8 +4,9 @@ import { parseMarkdownContent } from '../src/link-parser.js';
 import { blobSectionsFor, flattenHeadings } from '../src/projection/blob-sections.js';
 import { BlobSectionRowSchema } from '../src/schemas/projection-blobs.js';
 import type { HeadingNode } from '../src/schemas/resource-metadata.js';
+import { testContentKey } from '../src/testing.js';
 
-const CONTENT_KEY = 'markdown.' + 'b'.repeat(64);
+const CONTENT_KEY = testContentKey('markdown', 'b');
 const USAGE = 'Usage';
 const USAGE_SLUG = 'usage';
 

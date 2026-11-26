@@ -8,17 +8,23 @@
  * about which files those were — a green with no evidence under it.
  */
 
+import { formatContentKey, parseContentKey } from '@vibe-agent-toolkit/resources';
+import { testContentKey } from '@vibe-agent-toolkit/resources/testing';
 import { describe, expect, it } from 'vitest';
 
 import { readPopulationDocument, samePopulation } from '../src/facets/population/document.js';
 
 const HEX_A = 'a'.repeat(64);
 const HEX_B = 'b'.repeat(64);
-const KEY_A = `markdown.${HEX_A}`;
-const KEY_B = `markdown.${HEX_B}`;
+/** The qualified key the current build prints: `<parserKind>.<keyKind>.<hex>`. */
+const KEY_A = testContentKey('markdown', 'a');
+const KEY_B = testContentKey('markdown', 'b');
+/** The kind-hashed key builds between rc.17 and the qualified key printed: `<parserKind>.<hex>`. */
+const KIND_HASHED_A = `markdown.${HEX_A}`;
 
-/** The two identity schemes a document can carry: `checksum` (rc.17 and earlier) and `contentKey`. */
+/** The three identity schemes a document can carry: `checksum` (rc.17 and earlier), a kind-hashed key, a qualified `contentKey`. */
 const CHECKSUM = (value: string) => ({ scheme: 'checksum', value }) as const;
+const KIND_HASHED = (value: string) => ({ scheme: 'kindHashedKey', value }) as const;
 const CONTENT_KEY = (value: string) => ({ scheme: 'contentKey', value }) as const;
 
 /** How every schema refusal opens, before it names the field. */
@@ -274,6 +280,24 @@ describe('readPopulationDocument identity schemes', () => {
     expect(result.document.files).toEqual([{ path: 'a.md', identity: CONTENT_KEY(KEY_A) }]);
   });
 
+  it('reads a qualified key of every key kind as the contentKey scheme', () => {
+    const gitKey = formatContentKey({ parserKind: 'none', keyKind: 'git-sha1', hex: 'c'.repeat(40) });
+    const result = readPopulationDocument(entries([{ path: 'a.md', contentKey: KEY_A }, { path: 'b.md', contentKey: gitKey }]));
+    expect(result.ok, result.ok ? '' : result.refusal).toBe(true);
+    if (!result.ok) return;
+    expect(result.document.files).toEqual([
+      { path: 'a.md', identity: CONTENT_KEY(KEY_A) },
+      { path: 'b.md', identity: CONTENT_KEY(gitKey) },
+    ]);
+  });
+
+  it('reads a kind-hashed key (builds before the qualified key) as its own scheme, never as a qualified key', () => {
+    const result = readPopulationDocument(entries([{ path: 'a.md', contentKey: KIND_HASHED_A }]));
+    expect(result.ok, result.ok ? '' : result.refusal).toBe(true);
+    if (!result.ok) return;
+    expect(result.document.files).toEqual([{ path: 'a.md', identity: KIND_HASHED(KIND_HASHED_A) }]);
+  });
+
   it('reads a file carrying checksum (rc.17 and earlier) as the checksum scheme, never as a content key', () => {
     const result = readPopulationDocument(entries([{ path: 'a.md', checksum: HEX_A }]));
     expect(result.ok, result.ok ? '' : result.refusal).toBe(true);
@@ -289,8 +313,9 @@ describe('readPopulationDocument identity schemes', () => {
     expect(result.refusal).toContain('exactly one');
   });
 
-  it('REFUSES an identity that is not shaped like its scheme (a contentKey with no parser kind, an empty checksum)', () => {
-    for (const file of [{ contentKey: HEX_A }, { contentKey: '' }, { checksum: '' }, { checksum: KEY_A }]) {
+  it('REFUSES an identity that is not shaped like its scheme (a contentKey with no parser kind or a hex of the wrong length, an empty checksum)', () => {
+    const wrongLength = `markdown.git-sha1.${HEX_A}`;
+    for (const file of [{ contentKey: HEX_A }, { contentKey: '' }, { contentKey: wrongLength }, { checksum: '' }, { checksum: KEY_A }]) {
       const result = readPopulationDocument(entries([{ path: 'a.md', ...file }]));
       expect(result.ok, JSON.stringify(file)).toBe(false);
     }
@@ -301,6 +326,24 @@ describe('readPopulationDocument identity schemes', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.refusal).toContain('exactly one');
+  });
+
+  it('reads a text as a qualified key exactly when the resources parser admits it', () => {
+    // The lab restates the qualified shape (it has no runtime dependency on resources); this holds
+    // it to `parseContentKey` over a grid of parser kinds, key-kind words and hex lengths, so a key
+    // kind or a hex length the format gains or changes reds here instead of drifting.
+    const keyKinds = ['sha256', 'git-sha1', 'git-sha256', 'sha1', 'sha512', 'md5', 'git-sha512', 'blake3'];
+    const hexLengths = [32, 39, 40, 41, 63, 64, 65, 128];
+    for (const parserKind of ['markdown', 'html', 'none']) {
+      for (const keyKind of keyKinds) {
+        for (const length of hexLengths) {
+          const text = `${parserKind}.${keyKind}.${'c'.repeat(length)}`;
+          const result = readPopulationDocument(entries([{ path: 'a.md', contentKey: text }]));
+          const readAsKey = result.ok && result.document.files[0]?.identity.scheme === 'contentKey';
+          expect(readAsKey, text).toBe(parseContentKey(text) !== undefined);
+        }
+      }
+    }
   });
 });
 

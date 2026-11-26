@@ -4,6 +4,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { expectAbsenceCause } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { contentKeyParts, type ContentKey, orderContentKeys } from '../src/content-key.js';
 import { ParseCache } from '../src/parse-cache.js';
 import { withParseDispatcher } from '../src/parse-dispatcher.js';
 import { BLOB_CONTENT_CHANGED, BLOB_NOT_TEXT, BLOB_UNREADABLE } from '../src/projection/blob-condition-codes.js';
@@ -21,8 +22,8 @@ import {
   type Projection,
 } from '../src/projection/projection.js';
 import { collectRealization } from '../src/projection/realizations.js';
-import { parserKindOf } from '../src/projection/router.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
+import { testContentKey } from '../src/testing.js';
 
 import {
   IN_CRAWL_ORDER,
@@ -86,9 +87,6 @@ const PARSED_MD_CONTENT = '# notes.md — the markdown twin\n\ndocs live at [b](
 
 /** The directory {@link UNPARSED_TS} and {@link PARSED_MD} live in. */
 const TOOLS_DIR = 'tools';
-
-/** A syntactically valid digest — these tests are about the PREFIX, not the hash. */
-const ANY_DIGEST = 'a'.repeat(64);
 
 /** `syntacticForm` of a reference the markdown AST produced. Only a parser can emit one. */
 const MARKDOWN_LINK = 'markdown-link';
@@ -334,7 +332,7 @@ describe('populateBlobs, through populate()', () => {
     const { projection } = await populateSkillCorpus();
     const runnerKey = projection.resourceRealizations.find((row) => row.path === RUNNER)?.contentKey;
 
-    const lexed = projection.blobReferences.filter((row) => row.blob === runnerKey);
+    const lexed = projection.blobReferences.filter((row) => runnerKey !== undefined && runnerKey !== null && row.blob === runnerKey);
     expect(lexed).toHaveLength(1);
     expect(lexed[0]?.rawRef).toBe('./helper.mjs');
     expect(lexed[0]?.syntacticForm).toBe(BARE_TOKEN);
@@ -414,13 +412,13 @@ describe('populateBlobs', () => {
 
     const { projection } = await inOwnRun(populate, { root: suite.tempDir, registry });
 
-    const keyOf = (path: string): string => {
+    const keyOf = (path: string): ContentKey => {
       const key = projection.resourceRealizations.find((row) => row.path === path)?.contentKey;
-      if (typeof key !== 'string') throw new TypeError(`fixture: ${path} was not keyed`);
+      if (key === undefined || key === null) throw new TypeError(`fixture: ${path} was not keyed`);
       return key;
     };
     const derived = new Set(projection.harnessBlobFacts.map((row) => row.blob));
-    expect([...derived].sort(byCodeUnit)).toEqual([keyOf('CLAUDE.md'), keyOf('src/a.ts')].sort(byCodeUnit));
+    expect([...derived].sort(orderContentKeys)).toEqual([keyOf('CLAUDE.md'), keyOf('src/a.ts')].sort(orderContentKeys));
     expect(derived.has(keyOf('src/b.ts'))).toBe(false);
   });
 
@@ -454,8 +452,8 @@ describe('populateBlobs', () => {
     // The markdown route sees an ATX heading; the HTML route sees none. A fixture
     // whose two answers were equal would not be able to tell the routes apart.
     expect(blobs).toHaveLength(2);
-    expect(blobs.find((row) => row.contentKey.startsWith('markdown.'))?.headingCount).toBe(1);
-    expect(blobs.find((row) => row.contentKey.startsWith('html.'))?.headingCount).toBe(0);
+    expect(blobs.find((row) => contentKeyParts(row.contentKey).parserKind === 'markdown')?.headingCount).toBe(1);
+    expect(blobs.find((row) => contentKeyParts(row.contentKey).parserKind === 'html')?.headingCount).toBe(0);
   });
 
   it('records an unreadable blob as a condition and keeps going', async () => {
@@ -606,7 +604,7 @@ describe('populateBlobs', () => {
     // stage that sorts by content key can make these strings equal.
     expect(blobTablesOf(backward.build())).toBe(blobTablesOf(forward.build()));
     const emitted = forward.build().blobs.map((row) => row.contentKey);
-    const sorted = forward.build().blobs.map((row) => row.contentKey).sort(byCodeUnit);
+    const sorted = forward.build().blobs.map((row) => row.contentKey).sort(orderContentKeys);
     expect(emitted).toEqual(sorted);
   });
 
@@ -865,20 +863,13 @@ describe('populateBlobs, over blobs no document parser routes to', () => {
   });
 });
 
-describe('parserKindOf', () => {
+describe('contentKeyParts reads the routing back off a key', () => {
   it('reads all three kinds off a key, with no else-branch to fall into', () => {
     // The defect this pins is invisible to `tsc`: `startsWith('html.') ? 'html' :
     // 'markdown'` compiles perfectly and silently relabels every `none.` key as
     // markdown, routing a blob with no parser straight back into the parse path.
-    expect(parserKindOf(`none.${ANY_DIGEST}`)).toBe('none');
-    expect(parserKindOf(`markdown.${ANY_DIGEST}`)).toBe('markdown');
-    expect(parserKindOf(`html.${ANY_DIGEST}`)).toBe('html');
-  });
-
-  it('throws on a key naming no kind, rather than guessing one', () => {
-    // Unreachable through the schema, which is exactly why the alternative is
-    // worse: a default would make an impossible key derive real-looking facts.
-    expect(() => parserKindOf(`brainfuck.${ANY_DIGEST}`)).toThrow(/brainfuck/u);
-    expect(() => parserKindOf(ANY_DIGEST)).toThrow();
+    for (const kind of ['none', 'markdown', 'html'] as const) {
+      expect(contentKeyParts(testContentKey(kind, 'a')).parserKind).toBe(kind);
+    }
   });
 });

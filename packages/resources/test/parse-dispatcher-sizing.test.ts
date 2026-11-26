@@ -26,6 +26,7 @@ import {
   tallyParsable,
 } from '../src/parse-dispatcher.js';
 import { defaultParsePoolSize, type ParsePool } from '../src/parse-pool.js';
+import { testContentKey } from '../src/testing.js';
 
 import { type CacheOutcomes, inertPool, mutableCache } from './parse-dispatcher-fixture.js';
 
@@ -42,11 +43,11 @@ const LONG_TAIL = 300;
 function sampleDocument(kind: 'markdown' | 'html', byteLength: number): ParsableContent {
   return {
     content: '',
-    decoding: { encoding: 'utf-8', declared: false, replacements: 0 },
-    key: `${kind}.${'0'.repeat(64)}`,
+    decoding: { encoding: 'utf-8', encodingSource: 'assumed', replacementCharacters: 0 },
+    key: testContentKey(kind, 'sample'),
     parserKind: kind,
     byteLength,
-  } as unknown as ParsableContent;
+  };
 }
 
 /** A zeroed remainder, so a case names only the kind it is about. */

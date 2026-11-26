@@ -16,8 +16,8 @@
  * build, shared by every root on the machine** (`defaultStoreDirectory()` is
  * `<vatCacheRoot()>/<namespace>/projection-<shapeDigest>`, the root being
  * `VAT_CACHE_DIR` or `<tmpdir>/.vat-cache`), it retains three tree
- * hashes per root, and its blob tier is never evicted and carries no tree key at
- * all. `FactStore.readExtent` narrows by `(rootId, treeHash)`; **arbitrary
+ * hashes per root, and its blob tier is bounded only by a machine-wide byte
+ * budget and carries no tree key at all. `FactStore.readExtent` narrows by `(rootId, treeHash)`; **arbitrary
  * SQL does not**, and cannot be made to — a `WHERE` clause the caller wrote is
  * not a key predicate.
  *

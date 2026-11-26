@@ -7,9 +7,10 @@ import { compareCodeUnits, createSymlink, safePath, symlinkCapability, toForward
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { computeContentKey } from '../src/content-key.js';
 import { AST_SYNTACTIC_FORMS } from '../src/projection/blob-references.js';
 import { buildClaudeContextPopulation } from '../src/projection/claude-context-population.js';
-import { type PopulationCache , type TreePopulationOptions } from '../src/projection/merge.js';
+import { type PopulationCache, type RealizedContentKeys, type TreePopulationOptions } from '../src/projection/merge.js';
 import type { QueryPopulateResult } from '../src/projection/query-projection.js';
 import {
   buildResourcePopulation,
@@ -28,7 +29,7 @@ import type {
 } from '../src/projection/store.js';
 import { ResourceRegistry, type RegistryCrawl } from '../src/resource-registry.js';
 
-import { extentKeyOf, FakeFactStore, noDatabaseFile } from './fake-fact-store.js';
+import { extentKeyOf, FakeFactStore, noDatabaseFile, WIDE_BLOB_BUDGET_BYTES } from './fake-fact-store.js';
 import { inOwnRun, noStoredDocument } from './helpers/population-run.js';
 import { setupSubdirTestSuite } from './test-helpers.js';
 
@@ -153,7 +154,7 @@ describe('buildResourcePopulation', () => {
     await write('b.md', '# B\n');
     await write(DOC_A, '# A\n');
     await write('docs/c.md', '# C\n');
-    const cache = { store: new ReorderingStore(), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
+    const cache = { store: new ReorderingStore(WIDE_BLOB_BUDGET_BYTES), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
     const source: ResourcePopulationSource = {
       storedDocument: noStoredDocument,
       holdsStore: false,
@@ -180,7 +181,7 @@ describe('buildResourcePopulation', () => {
     // Two dangling links: two conditions, so their order is observable.
     createSymlink(cap, 'missing-one.md', safePath.join(suite.tempDir, 'dangling-z.md'));
     createSymlink(cap, 'missing-two.md', safePath.join(suite.tempDir, 'dangling-y.md'));
-    const cache = { store: new ReorderingStore(), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
+    const cache = { store: new ReorderingStore(WIDE_BLOB_BUDGET_BYTES), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
 
     const written = await inOwnRun(buildResourcePopulation, { outputs: [], root: suite.tempDir, cache });
     const hit = await inOwnRun(buildResourcePopulation, { outputs: [], root: suite.tempDir, cache });
@@ -192,7 +193,7 @@ describe('buildResourcePopulation', () => {
 
   it('carries the population\'s outcome out with its paths: derived without a store, then written, then a hit', async () => {
     await write(DOC_A, '# A\n');
-    const store = new FakeFactStore();
+    const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
     const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
 
     const uncached = await inOwnRun(buildResourcePopulation, { outputs: [], root: suite.tempDir });
@@ -351,7 +352,7 @@ describe('buildResourceProjection', () => {
 
   it('returns the populate outcome beside the projection', async () => {
     await write(DOC_A, '# A\n');
-    const store = new FakeFactStore();
+    const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
     const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
     const options = { root: suite.tempDir, cache };
 
@@ -362,11 +363,30 @@ describe('buildResourceProjection', () => {
     expect(served.outcome).toEqual({ population: 'store', stored: 'hit' });
   });
 
+  it('asks treeUnchanged with what the run read, at each path under its own root', async () => {
+    const content = '# A\n';
+    await write(DOC_A, content);
+    let realized: RealizedContentKeys | undefined;
+    const treeUnchanged = (lookup: RealizedContentKeys): boolean => {
+      realized = lookup;
+      return true;
+    };
+    const cache = { store: new FakeFactStore(WIDE_BLOB_BUDGET_BYTES), treeUnchanged, treeHash: FIXTURE_TREE_HASH };
+
+    await inOwnRun(buildCopying, { root: suite.tempDir, cache });
+
+    expect(realized?.(safePath.join(suite.tempDir, DOC_A))).toEqual({
+      contentKey: computeContentKey(Buffer.from(content, 'utf-8'), 'markdown'),
+      contentState: 'keyed',
+    });
+    expect(realized?.(safePath.join(dirname(suite.tempDir), DOC_A))).toBeUndefined();
+  });
+
   it('hands every reference form to the run database, and only the AST forms to the process', async () => {
     // A markdown link (AST) beside a bare token and an `@` import (lexical).
     await write(DOC_A, '# A\n\nSee [b](./docs/b.md), docs/b.md and @docs/b.md.\n');
     await write('docs/b.md', '# B\n');
-    const store = new FakeFactStore();
+    const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
     const options = { root: suite.tempDir, cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH } };
 
     const derived = await inOwnRun(buildCopying, options);
@@ -485,7 +505,7 @@ describe('one question for every resources lane', () => {
     await write(DOC_A, '# A\n');
     await write('CLAUDE.md', '# Root\n');
     const keyOf = async (run: (cache: PopulationCache) => Promise<unknown>): Promise<string | undefined> => {
-      const store = new KeyRecordingStore();
+      const store = new KeyRecordingStore(WIDE_BLOB_BUDGET_BYTES);
       await run({ store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH });
       return store.keysRead.at(-1);
     };
@@ -522,13 +542,13 @@ describe('one question for every resources lane', () => {
     // is still stored, so membership — which reads no blob table — hits, and the
     // full lane's coverage gate fails, re-derives and re-writes.
     const gitTracker = await buildIgnoredFixture();
-    const store = new FakeFactStore();
+    const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
     const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
     const options = { root: suite.tempDir, gitTracker, cache };
     const { projection } = await inOwnRun(buildCopying, options);
     const evicted = projection.resourceRealizations.find((row) => row.path === COMMITTED)?.contentKey;
-    expect(evicted).toEqual(expect.any(String));
-    store.forgetBlobFacts(evicted ?? '');
+    if (evicted === undefined || evicted === null) throw new Error(`no content key for ${COMMITTED}`);
+    store.forgetBlobFacts(evicted);
 
     const membership = await inOwnRun(buildResourcePopulation, { ...options, outputs: [] });
     const full = await inOwnRun(buildCopying, options);

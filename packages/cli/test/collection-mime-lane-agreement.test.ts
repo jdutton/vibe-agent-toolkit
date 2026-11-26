@@ -44,6 +44,7 @@ import {
   DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
   ResourceRegistry,
+  contentKeyParts,
   crawlSourceFor,
   populate,
   withPopulationRun,
@@ -162,8 +163,7 @@ async function projectionVerdicts(): Promise<Record<string, Verdict>> {
     if (row.contentKey === null) {
       throw new Error(`"${name}" was never keyed (contentState "${row.contentState}") — no route to read`);
     }
-    // The kind is the key's prefix, up to the first `.` — see `content-key.ts`.
-    verdicts[name] = row.contentKey.startsWith('none.') ? 'unparsed' : 'parsed';
+    verdicts[name] = contentKeyParts(row.contentKey).parserKind === 'none' ? 'unparsed' : 'parsed';
   }
   return verdicts;
 }

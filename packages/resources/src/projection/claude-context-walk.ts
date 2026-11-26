@@ -45,6 +45,7 @@
 
 import { toForwardSlash, appendAll } from '@vibe-agent-toolkit/utils';
 
+import type { ContentKey } from '../content-key.js';
 import type { BlobRow } from '../schemas/projection-blobs.js';
 import type { HarnessBlobFactsRow } from '../schemas/projection-harness.js';
 import type { ResourceRealizationRow, ResourceTagRow } from '../schemas/projection-resources.js';
@@ -103,7 +104,7 @@ type Scope = 'unscoped' | 'scoped' | 'refused';
 interface WalkIndex {
   readonly projection: Projection;
   readonly fileByPath: ReadonlyMap<string, ResourceRealizationRow>;
-  readonly blobByKey: ReadonlyMap<string, BlobRow>;
+  readonly blobByKey: ReadonlyMap<ContentKey, BlobRow>;
   readonly facts: HarnessFactsIndex;
   /** Every rules file, grouped under the directory holding its `.claude/rules`. */
   readonly rulesByHolder: ReadonlyMap<string, readonly string[]>;

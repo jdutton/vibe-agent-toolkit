@@ -138,7 +138,7 @@ import {
 
 import { parseCacheDirectory } from './cache-namespace.js';
 import { markVatCacheRoot } from './cache-root.js';
-import { CONTENT_KEY_PATTERN, type KeyedContent } from './content-key.js';
+import { type ContentKey, contentKeyParts, type KeyedContent, parseContentKey } from './content-key.js';
 import { decodeFrontmatterValue, encodeFrontmatterValue, FRONTMATTER_VALUE_MALFORMED } from './frontmatter-codec.js';
 import type { ParseResult } from './link-parser.js';
 import type { DocumentParserKind } from './mime-type.js';
@@ -165,15 +165,20 @@ const SHARD_LENGTH = 2;
 
 /**
  * Keys are produced by `computeContentKey`, but `get`/`set` take them from a
- * caller-supplied struct. Pinned to the exact shape `computeContentKey`
- * produces — `<parserKind>.<64 lowercase hex chars>` — rather than a loose
- * charset: a charset like `[\w.-]+` still accepts `..` (both characters are
- * in it, and two in a row are not specially excluded), which would let a key
- * of exactly `..` escape the cache directory by one level in the joins below.
- * Pinning to the real shape rules that out structurally. An unexpected shape
- * is treated as a miss/no-op.
+ * caller-supplied struct. Pinned to the exact shape the one parser
+ * (`parseContentKey`) accepts — `<parserKind>.<keyKind>.<hex>` — rather than a
+ * loose charset: a charset like `[\w.-]+` still accepts `..` (both characters
+ * are in it, and two in a row are not specially excluded), which would let a
+ * key of exactly `..` escape the cache directory by one level in the joins
+ * below. No well-formed key holds `..`, so the real shape rules that out
+ * structurally. An unexpected shape is treated as a miss/no-op.
+ *
+ * @param key - What a caller handed in as a key
+ * @returns Whether it is a well-formed key, safe to join into a path
  */
-const SAFE_KEY = CONTENT_KEY_PATTERN;
+function isSafeKey(key: string): boolean {
+  return parseContentKey(key) !== undefined;
+}
 
 /**
  * Disambiguates concurrent temp files within one ISOLATE.
@@ -480,7 +485,7 @@ export class ParseCache {
     // Before the brackets, deliberately: a disabled cache and an unusable key
     // touch no disk, so charging `cache-read-io` here would publish a
     // per-document read cost for a run that never read anything.
-    if (!this.enabled || !SAFE_KEY.test(keyed.key)) return null;
+    if (!this.enabled || !isSafeKey(keyed.key)) return null;
 
     let raw: string;
     const readStartedAt = parseTimingStart();
@@ -561,7 +566,7 @@ export class ParseCache {
    *   under the default limits, the cache is off, or the write failed. A write
    *   failure is REPORTED here as well as counted, never thrown — see below.
    */
-  async setByKey(key: string, result: ParseResult): Promise<boolean> {
+  async setByKey(key: ContentKey, result: ParseResult): Promise<boolean> {
     const persisted = await this[PERSIST](key, result);
     if (persisted) countWork('parse.cache.written', 1);
     return persisted;
@@ -576,9 +581,9 @@ export class ParseCache {
    * @param result - The parse result whose facts to store
    * @returns True when the entry was persisted; see {@link setByKey}
    */
-  async [PERSIST](key: string, result: ParseResult): Promise<boolean> {
+  async [PERSIST](key: ContentKey, result: ParseResult): Promise<boolean> {
     // Outside the bracket for the same reason `get`'s guards are — see there.
-    if (!this.enabled || !SAFE_KEY.test(key)) return false;
+    if (!this.enabled || !isSafeKey(key)) return false;
     if (!storableUnderDefaultLimits(result.sizeBytes, result)) return false;
 
     const startedAt = parseTimingStart();
@@ -601,7 +606,7 @@ export class ParseCache {
    * @param result - The parse result to store
    * @returns True when the entry reached its final path
    */
-  private async write(key: string, result: ParseResult): Promise<boolean> {
+  private async write(key: ContentKey, result: ParseResult): Promise<boolean> {
     const shardDir = this.shardDir(key);
     // Once per root per process (memoized there); best-effort by design.
     if (this.tagsCacheRoot) markVatCacheRoot();
@@ -721,11 +726,11 @@ export class ParseCache {
     return null;
   }
 
-  private shardDir(key: string): string {
-    return safePath.join(this.directory, key.slice(-SHARD_LENGTH));
+  private shardDir(key: ContentKey): string {
+    return safePath.join(this.directory, contentKeyParts(key).hex.slice(-SHARD_LENGTH));
   }
 
-  private entryPath(key: string): string {
+  private entryPath(key: ContentKey): string {
     return safePath.join(this.shardDir(key), `${key}.json`);
   }
 }
@@ -1062,6 +1067,6 @@ async function removeTempQuietly(target: string): Promise<void> {
  * @param result - The parse result whose facts to store
  * @returns True when the entry was persisted; see {@link ParseCache.setByKey}
  */
-export function persistFromWorker(cache: ParseCache, key: string, result: ParseResult): Promise<boolean> {
+export function persistFromWorker(cache: ParseCache, key: ContentKey, result: ParseResult): Promise<boolean> {
   return cache[PERSIST](key, result);
 }

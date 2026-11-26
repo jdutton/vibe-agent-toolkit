@@ -797,18 +797,6 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Where:** `gitSnapshotAbsentEntries` in [`git-tree-key.ts`](../../packages/utils/src/git-tree-key.ts)
 - **Fix:** closed when VAT pins a vibe-validate release whose snapshot stages with `git add --all --sparse`, so a file outside the cone is staged and moves the hash. The hazard-register row stays open until then.
 
-### `git lfs pull` is served stale
-
-- **Severity:** Important · **Effort:** M · **User-visible:** yes
-- **Mechanism:** an LFS file's index entry holds its pointer, and the tree hash follows the pointer.
-  `git lfs pull` replaces the pointer's bytes on disk with the real content and moves neither the
-  hash nor the entry, so a warm run serves the facts of the pointer text.
-- **Reproduce:** traced in code. Commit an LFS-tracked markdown file, run
-  `vat resources validate`, run `git lfs pull`, then run it again: the second run reports
-  `population: store`.
-- **Where:** `gitTreeKey` in [`git-tree-key.ts`](../../packages/utils/src/git-tree-key.ts)
-- **Fix:** closed when the store key carries each LFS file's pointer, a size probe and whether its content was pulled.
-
 ### An edit to a declared gitignored file is served stale
 
 - **Severity:** Important · **Effort:** L · **User-visible:** yes

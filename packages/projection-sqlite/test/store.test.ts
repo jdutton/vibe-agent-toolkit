@@ -8,7 +8,7 @@
  * fixture built the same wrong way.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
 import {
@@ -17,7 +17,12 @@ import {
   AST_SYNTACTIC_FORMS,
   PROJECTION_TABLES,
   ReferenceSyntacticFormSchema,
+  blobRowBytes,
+  projectionColumnTypes,
   type BlobScopedRows,
+  type ContentKey,
+  emptyBlobRows,
+  orderContentKeys,
   type ExtentKey,
   type ExtentScopedRows,
   type FactStore,
@@ -25,14 +30,15 @@ import {
   type ProjectionTableName,
 } from '@vibe-agent-toolkit/resources';
 import { BLOB_WRITER_CONTRACT, uncoveredBlobWrite, type BlobWriterContractFactory } from '@vibe-agent-toolkit/resources/testing';
-import { readWorkCounters, safePath } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, isVatError, readWorkCounters, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { __resetWorkCountersForTest } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { hydrateRunDatabase } from '../src/run-database.js';
-import { EXTENTS_TABLE } from '../src/schema-sql.js';
-import { openSqliteFactStore } from '../src/store.js';
+import { EXTENTS_TABLE, allSpecs, blobKeyColumn } from '../src/schema-sql.js';
+import { DEFAULT_BLOB_TIER_BUDGET_BYTES, PROJECTION_STORE_BUDGET_INVALID_CODE, openSqliteFactStore } from '../src/store.js';
+import { encodeValue, type SqliteResultValue } from '../src/values.js';
 
 import {
   FIRST_BLOB,
@@ -53,7 +59,7 @@ let store: FactStore;
 
 beforeEach(() => {
   directory = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-projection-sqlite-'));
-  store = openSqliteFactStore({ directory });
+  store = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
 });
 
 afterEach(async () => {
@@ -298,22 +304,43 @@ describe('blob facts', () => {
     expect(read.blobConditions).toHaveLength(1);
   });
 
-  it('keeps a key\'s harness facts when a later write of that key carries none', async () => {
+  it('keeps a key\'s harness facts when a later write that covered the key carries none', async () => {
     // Root A's run reached the blob and derived its harness facts; root B's run
-    // holds the same bytes without reaching them, so it writes the key's blob
-    // rows and no harness rows. Clearing the whole key would delete A's facts,
-    // and every later hit on A would read the absence as "never derived".
+    // holds the same bytes without reaching them. Its read covered the key, so
+    // it writes the key's blob rows and no harness rows and replaces nothing:
+    // clearing the key would delete A's facts, and every later hit on A would
+    // read the absence as "never derived".
     const rootA = sampleBlobRows();
     expect(rootA.harnessBlobFacts.length).toBeGreaterThan(0);
     expect(rootA.harnessBlobImports.length).toBeGreaterThan(0);
+    await store.writeBlobFacts(uncoveredBlobWrite(rootA));
+
+    await store.writeBlobFacts({
+      rows: { ...rootA, harnessBlobFacts: [], harnessBlobImports: [] },
+      coveredAtRead: [FIRST_BLOB],
+      settledAtRead: [],
+    });
+
+    const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
+    expect(read.blobs).toHaveLength(1);
+    expect(read.harnessBlobFacts).toEqual(rootA.harnessBlobFacts);
+    expect(read.harnessBlobImports).toEqual(rootA.harnessBlobImports);
+  });
+
+  it('clears a REPLACED key\'s harness facts with the rest of its rows', async () => {
+    // A key the write's read did not cover is replaced whole, partitioned rows
+    // included, so its recorded bytes are exactly the rows that replaced it.
+    // Another root's pairs for those bytes are derived again once — the cost of
+    // a key that was uncovered or evicted.
+    const rootA = sampleBlobRows();
     await store.writeBlobFacts(uncoveredBlobWrite(rootA));
 
     await store.writeBlobFacts(uncoveredBlobWrite({ ...rootA, harnessBlobFacts: [], harnessBlobImports: [] }));
 
     const read = await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
     expect(read.blobs).toHaveLength(1);
-    expect(read.harnessBlobFacts).toEqual(rootA.harnessBlobFacts);
-    expect(read.harnessBlobImports).toEqual(rootA.harnessBlobImports);
+    expect(read.harnessBlobFacts).toEqual([]);
+    expect(read.harnessBlobImports).toEqual([]);
   });
 
   it('replaces a key\'s harness facts for a pair a later write carries', async () => {
@@ -587,7 +614,7 @@ describe('lifetime', () => {
     await store.writeExtent(KEY, sampleExtentRows(KEY.rootId));
     await store.close();
 
-    store = openSqliteFactStore({ directory });
+    store = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
     expect((await store.readExtent(KEY, ALL_EXTENT_REQUEST))?.resources).toHaveLength(1);
   });
 
@@ -680,7 +707,7 @@ describe('a row this process already decoded from the file is counted as repeate
   it('a second connection on the same file shares the ledger, and the last close drops it', async () => {
     await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
     const rows = readWorkCounters()['store.rows.decoded.persistent'];
-    const second = openSqliteFactStore({ directory });
+    const second = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
     try {
       await second.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
       expect(readWorkCounters()['store.rows.decoded.repeated']).toBe(rows);
@@ -688,7 +715,7 @@ describe('a row this process already decoded from the file is counted as repeate
       await second.close();
     }
     await store.close();
-    store = openSqliteFactStore({ directory });
+    store = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
 
     await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
 
@@ -877,8 +904,8 @@ function storedRowCounts(key: ExtentKey): Record<string, number> {
 }
 
 /** A second, read-only connection onto the store file the suite is exercising. */
-function openStoreFile(): DatabaseSync {
-  return new DatabaseSync(safePath.join(directory, 'projection.db'), { readOnly: true });
+function openStoreFile(at: string = directory): DatabaseSync {
+  return new DatabaseSync(safePath.join(at, 'projection.db'), { readOnly: true });
 }
 
 /**
@@ -906,7 +933,7 @@ function countExtentRows(database: DatabaseSync, table: string, key: ExtentKey):
  * convincing.
  */
 function openWithRetention(retainedExtentsPerRoot: number): FactStore {
-  return openSqliteFactStore({ directory, retainedExtentsPerRoot });
+  return openSqliteFactStore({ directory, retainedExtentsPerRoot, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
 }
 
 /** Total rows a tree occupies across every extent-scoped table. */
@@ -925,7 +952,7 @@ describe('eviction', () => {
     // job directory, a subdirectory a command ran from — kept its trees forever.
     // Six copies of one repository measured six roots and six stored trees, none
     // ever reclaimed, in a store that is on by default.
-    const evicting = openSqliteFactStore({ directory, retainedExtentsPerRoot: 3, retainedRoots: 2 });
+    const evicting = openSqliteFactStore({ directory, retainedExtentsPerRoot: 3, retainedRoots: 2, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
     const first = treeKey('tree-1', 'root-first');
     await evicting.writeExtent(first, extentBundle(BROAD));
     await evicting.writeExtent(treeKey('tree-1', 'root-second'), extentBundle(BROAD));
@@ -943,7 +970,7 @@ describe('eviction', () => {
   it('counts a root as recent when ANY of its trees was written recently', async () => {
     // A busy root rewriting its newest tree must not be aged out behind a quiet
     // one, which is the reason retention was per root in the first place.
-    const evicting = openSqliteFactStore({ directory, retainedExtentsPerRoot: 3, retainedRoots: 2 });
+    const evicting = openSqliteFactStore({ directory, retainedExtentsPerRoot: 3, retainedRoots: 2, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
     await evicting.writeExtent(treeKey('tree-1', 'root-busy'), extentBundle(BROAD));
     await evicting.writeExtent(treeKey('tree-1', 'root-quiet'), extentBundle(BROAD));
     await evicting.writeExtent(treeKey('tree-2', 'root-busy'), extentBundle(BROAD));
@@ -1092,13 +1119,77 @@ describe('eviction', () => {
 });
 
 /**
- * A store whose blob window is small enough to cross in a handful of writes.
+ * A store whose blob budget is small enough to cross in a handful of writes.
  *
- * The production window is 50,000 content keys, sized from a measured ~5.3 KB
- * per key; writing that many here would take minutes and prove the same thing.
+ * The production budget is {@link DEFAULT_BLOB_TIER_BUDGET_BYTES}; writing that
+ * many bytes here would take minutes and prove the same thing.
+ *
+ * @param blobTierBudgetBytes - The budget, in `blobRowBytes`
+ * @returns An open store on this case's directory
  */
-function openWithBlobWindow(retainedBlobKeys: number): FactStore {
-  return openSqliteFactStore({ directory, retainedBlobKeys });
+function openWithBlobBudget(blobTierBudgetBytes: number): FactStore {
+  return openSqliteFactStore({ directory, blobTierBudgetBytes });
+}
+
+/** A harness pair's partition value, as the row type declares it. */
+type HarnessId = BlobScopedRows['harnessBlobFacts'][number]['harness'];
+
+/**
+ * The logical bytes a bundle's rows measure, computed outside the store: each
+ * row encoded as the store binds it, then measured. What the ledger must record
+ * for a key whose stored rows are exactly these.
+ *
+ * @param rows - A blob-scoped bundle
+ * @returns Per content key, the `blobRowBytes` of its rows
+ */
+function measuredBytes(rows: BlobScopedRows): Record<string, number> {
+  const bytes: Record<string, number> = {};
+  const bundle = rows as unknown as Record<string, readonly Record<string, unknown>[]>;
+  for (const spec of allSpecs()) {
+    if (spec.scope !== 'blob') continue;
+    const columns = projectionColumnTypes(spec);
+    for (const row of bundle[spec.key] ?? []) {
+      const key = String(row[blobKeyColumn(spec)]);
+      bytes[key] = (bytes[key] ?? 0) + blobRowBytes(columns.map(([column, { kind }]) => encodeValue(kind, row[column])));
+    }
+  }
+  return bytes;
+}
+
+/**
+ * The bytes one key's rows measure.
+ *
+ * @param rows - A bundle naming the key
+ * @param key - The key
+ * @returns Its `blobRowBytes`
+ */
+function keyBytes(rows: BlobScopedRows, key: ContentKey): number {
+  return measuredBytes(rows)[key] ?? 0;
+}
+
+/**
+ * The logical bytes of every key's STORED rows, read from the file rather than
+ * through the store: what the ledger must equal for every key.
+ *
+ * @param at - The store directory
+ * @returns Per content key, the `blobRowBytes` of its stored rows
+ */
+function storedBytes(at: string = directory): Record<string, number> {
+  const database = openStoreFile(at);
+  try {
+    const bytes: Record<string, number> = {};
+    for (const spec of allSpecs()) {
+      if (spec.scope !== 'blob') continue;
+      const keyColumn = blobKeyColumn(spec);
+      for (const row of database.prepare(`SELECT * FROM "${spec.name}"`).all() as Record<string, SqliteResultValue>[]) {
+        const key = String(row[keyColumn]);
+        bytes[key] = (bytes[key] ?? 0) + blobRowBytes(Object.values(row));
+      }
+    }
+    return bytes;
+  } finally {
+    database.close();
+  }
 }
 
 /**
@@ -1113,7 +1204,7 @@ function openWithBlobWindow(retainedBlobKeys: number): FactStore {
  * @param key - The content key to count
  * @returns Table name to row count
  */
-function blobRowCounts(key: string): Record<string, number> {
+function blobRowCounts(key: ContentKey): Record<string, number> {
   const database = openStoreFile();
   try {
     const counts: Record<string, number> = {};
@@ -1131,7 +1222,7 @@ function blobRowCounts(key: string): Record<string, number> {
 }
 
 /** Total rows one content key occupies across every blob-scoped table. */
-function blobRowTotal(key: string): number {
+function blobRowTotal(key: ContentKey): number {
   return Object.values(blobRowCounts(key)).reduce((total, count) => total + count, 0);
 }
 
@@ -1146,11 +1237,16 @@ function trackedBlobKeys(): number {
 }
 
 describe('the blob tier is bounded', () => {
-  it('keeps every content key while the store is under its window', async () => {
+  /** The bytes one {@link sampleBlobRows} key measures; every seed's key is the same length. */
+  const sampleBytes = (): number => keyBytes(sampleBlobRows(contentKey('a')), contentKey('a'));
+  /** The bytes one {@link declinedBlobRows} key measures. */
+  const declinedBytes = (): number => keyBytes(declinedBlobRows(contentKey('a')), contentKey('a'));
+
+  it('keeps every content key while the store is under its budget', async () => {
     // The negative control, and the reason every assertion below means
     // something: an eviction that reclaimed whatever it touched would satisfy
     // all of them.
-    const evicting = openWithBlobWindow(3);
+    const evicting = openWithBlobBudget(3 * sampleBytes());
     await evicting.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(contentKey('a'))));
     await evicting.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(contentKey('b'))));
     await evicting.close();
@@ -1160,12 +1256,12 @@ describe('the blob tier is bounded', () => {
     expect(trackedBlobKeys()).toBe(2);
   });
 
-  it('reclaims the ROWS of the least recently written key once the window is passed', async () => {
+  it('reclaims the ROWS of the least recently written key once the budget is passed', async () => {
     // The defect this closes: blob rows carry no tree and no root, so extent
     // eviction could never attribute them, and the tier grew with nothing but
     // the release namespace rotating to bound it. Measured on a 12,602-file
     // adopter tree it is 153,245 of the store's 193,605 rows.
-    const evicting = openWithBlobWindow(2);
+    const evicting = openWithBlobBudget(2 * sampleBytes());
     const oldest = contentKey('a');
     await evicting.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(oldest)));
     await evicting.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(contentKey('b'))));
@@ -1191,7 +1287,7 @@ describe('the blob tier is bounded', () => {
   it('reclaims a DECLINED blob, which has no blobs row to be found through', async () => {
     // `blob_conditions` is the tier a binary-heavy corpus fills, and it is the
     // one an eviction keyed on `blobs` would never see.
-    const evicting = openWithBlobWindow(1);
+    const evicting = openWithBlobBudget(sampleBytes());
     const declined = contentKey('d');
     await evicting.writeBlobFacts(uncoveredBlobWrite(declinedBlobRows(declined)));
     expect(blobRowCounts(declined)['blobs']).toBe(0);
@@ -1203,12 +1299,10 @@ describe('the blob tier is bounded', () => {
     expect(blobRowTotal(declined)).toBe(0);
   });
 
-  it('never evicts the keys it is writing, at a window of one', async () => {
-    // Structural rather than a special case, exactly as for extents: the keys a
-    // write records are by construction the most recently written, so recency
-    // ordering cannot select them. `INSERT OR REPLACE` re-inserts, which is why
-    // the `rowid` tie-break holds for a REFRESHED key too.
-    const evicting = openWithBlobWindow(1);
+  it('never evicts the keys it is writing, at a budget of one byte', async () => {
+    // The keys a write records are excluded from eviction by key, whatever their
+    // place in the recency order, so a budget smaller than one key keeps them.
+    const evicting = openWithBlobBudget(1);
     for (const seed of ['a', 'b', 'c']) {
       await evicting.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(contentKey(seed))));
       const held = await evicting.readBlobFacts([contentKey(seed)], ALL_BLOB_REQUEST);
@@ -1217,13 +1311,13 @@ describe('the blob tier is bounded', () => {
     await evicting.close();
   });
 
-  it('never evicts the keys it is writing when ONE write names more keys than the window', async () => {
+  it('never evicts the keys it is writing when ONE write holds more bytes than the budget', async () => {
     // ⛔ The case the one-key-per-write test above cannot see. Every key of a
-    // single write shares its timestamp and holds the newest rowids, but an
-    // OFFSET of the window still cut the write's own oldest keys — and the
-    // coverage check is all-or-nothing, so one missing key made every run of a
-    // tree larger than the window a full re-derivation that could never hit.
-    const evicting = openWithBlobWindow(3);
+    // single write shares its timestamp and holds the newest rowids, but a cut
+    // by bytes alone would take the write's own oldest keys — and the coverage
+    // check is all-or-nothing, so one missing key would make every run of a tree
+    // larger than the budget a full re-derivation that could never hit.
+    const evicting = openWithBlobBudget(3 * declinedBytes());
     const keys = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'].map((seed) => contentKey(seed));
     await evicting.writeBlobFacts(uncoveredBlobWrite({
       blobs: [], blobReferences: [], blobSections: [], harnessBlobFacts: [], harnessBlobImports: [], skillTextFacts: [], skillTextMatches: [],
@@ -1235,10 +1329,11 @@ describe('the blob tier is bounded', () => {
     expect(new Set(held.blobConditions.map((row) => row.blob))).toEqual(new Set(keys));
   });
 
-  it('trims back to the window on the next write, and only then', async () => {
-    // The oversized write above holds more than the window until a later write
-    // reclaims the surplus — so the bound is still a bound.
-    const evicting = openWithBlobWindow(2);
+  it('trims back to the budget on the next write, and only then', async () => {
+    // The oversized write above holds more than the budget until a later write
+    // reclaims the surplus — so the bound is still a bound. Room for the next
+    // write's key and one declined key: two keys survive it.
+    const evicting = openWithBlobBudget(sampleBytes() + declinedBytes());
     await evicting.writeBlobFacts(uncoveredBlobWrite({
       blobs: [], blobReferences: [], blobSections: [], harnessBlobFacts: [], harnessBlobImports: [], skillTextFacts: [], skillTextMatches: [],
       blobConditions: ['a', 'b', 'c', 'd'].flatMap((seed) => declinedBlobRows(contentKey(seed)).blobConditions),
@@ -1251,66 +1346,243 @@ describe('the blob tier is bounded', () => {
     expect(trackedBlobKeys()).toBe(2);
   });
 
-  it('holds at least one key however low the caller sets the window', async () => {
-    // Clamped rather than rejected, for the reason the extent retention is:
-    // nothing in the CLI surfaces this option, and a window of zero would delete
-    // the rows it just wrote — a store that pays every write cost and can never
-    // hit.
-    const evicting = openWithBlobWindow(0);
-    await evicting.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(contentKey('a'))));
-    await evicting.close();
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, undefined])(
+    'refuses a budget of %s at open, by its code, before touching the directory',
+    (budget) => {
+      const absent = safePath.join(directory, 'never-created');
+      let thrown: unknown;
+      try {
+        openSqliteFactStore({ directory: absent, blobTierBudgetBytes: budget as number });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(isVatError(thrown) ? thrown.code : thrown).toBe(PROJECTION_STORE_BUDGET_INVALID_CODE);
+      expect(existsSync(absent)).toBe(false);
+    },
+  );
+});
 
-    expect(blobRowTotal(contentKey('a'))).toBeGreaterThan(0);
+/** The harness the fixtures' pairs are filed under, and a second one. */
+const HARNESS = 'claude-code';
+const SECOND_HARNESS = 'second-harness' as HarnessId;
+
+/**
+ * A key's sample rows with one extra harness pair and a resized blob row, so
+ * a rewrite of it measures differently from the first write.
+ *
+ * @param key - The key
+ * @param harness - The pair's harness
+ * @param injectedTokens - The value that tells one pair's rows from another's
+ * @returns The rows
+ */
+function withPair(key: ContentKey, harness: HarnessId, injectedTokens: number): BlobScopedRows {
+  const rows = sampleBlobRows(key);
+  const [facts] = rows.harnessBlobFacts;
+  if (facts === undefined) throw new Error('the sample rows carry a harness pair');
+  return {
+    ...rows,
+    harnessBlobFacts: [...rows.harnessBlobFacts, { ...facts, harness, injectedTokens, paths: ['x'.repeat(injectedTokens)] }],
+  };
+}
+
+describe('the blob ledger records exactly what each key stores', () => {
+  it('records a replaced key at the size of the rows that replaced it, not the rows it had', async () => {
+    const key = contentKey('a');
+    const small = declinedBlobRows(key);
+    const large = sampleBlobRows(key);
+    await store.writeBlobFacts(uncoveredBlobWrite(small));
+    expect(ledgerBytes()[key]).toBe(keyBytes(small, key));
+
+    await store.writeBlobFacts(uncoveredBlobWrite(large));
+
+    expect(keyBytes(large, key)).not.toBe(keyBytes(small, key));
+    expect(ledgerBytes()[key]).toBe(keyBytes(large, key));
   });
 
-  it('adopts the keys of a store written before the manifest existed, as the oldest there are', async () => {
-    // 🪤 Without adoption the bound holds only for stores created after it
-    // shipped: the cache namespace is per RELEASE, so a store an earlier build
-    // of the same release wrote keeps blob rows the manifest never names — rows
-    // no eviction can see, under code that claims a ceiling.
-    await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(contentKey('a'))));
-    await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(contentKey('b'))));
-    await store.close();
-    dropBlobManifest();
-    expect(blobRowTotal(contentKey('a'))).toBeGreaterThan(0);
+  it('keeps a re-stamped key at its recorded bytes', async () => {
+    const key = contentKey('a');
+    await store.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(key)));
+    const recorded = ledgerBytes()[key];
 
-    // Reopening is what adopts; the write that follows is what evicts.
-    const evicting = openWithBlobWindow(1);
-    expect(trackedBlobKeys()).toBe(2);
-    await evicting.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(contentKey('c'))));
-    await evicting.close();
-    // Reassigned so the suite's own `afterEach` closes a live store.
-    store = openSqliteFactStore({ directory });
+    await store.writeBlobFacts({
+      rows: sampleBlobRows(key),
+      coveredAtRead: [key],
+      settledAtRead: [{ contentKey: key, harness: HARNESS }],
+    });
 
-    expect(blobRowTotal(contentKey('a'))).toBe(0);
-    expect(blobRowTotal(contentKey('b'))).toBe(0);
-    expect(blobRowTotal(contentKey('c'))).toBeGreaterThan(0);
+    expect(recorded).toBe(keyBytes(sampleBlobRows(key), key));
+    expect(ledgerBytes()[key]).toBe(recorded);
+  });
+
+  it('equals the measure of the stored rows for every key after mixed writes', async () => {
+    const [a, b, c] = [contentKey('a'), contentKey('b'), contentKey('c')];
+    // Replace: a first write of a and b.
+    await store.writeBlobFacts(uncoveredBlobWrite({ ...sampleBlobRows(a), blobConditions: declinedBlobRows(a).blobConditions }));
+    await store.writeBlobFacts(uncoveredBlobWrite(withPair(b, SECOND_HARNESS, 3)));
+    // Re-stamp of a, adding a second harness's pair it did not hold.
+    await store.writeBlobFacts({
+      rows: withPair(a, SECOND_HARNESS, 5),
+      coveredAtRead: [a],
+      settledAtRead: [{ contentKey: a, harness: HARNESS }],
+    });
+    // A concurrent pair: b covered, its second pair unsettled, so deleted and
+    // re-inserted at another size, beside a replaced c.
+    await store.writeBlobFacts({
+      rows: { ...withPair(b, SECOND_HARNESS, 40), blobs: [...sampleBlobRows(b).blobs, ...sampleBlobRows(c).blobs] },
+      coveredAtRead: [b],
+      settledAtRead: [{ contentKey: b, harness: HARNESS }],
+    });
+    // A replace of a again, which takes its second harness's pair with it.
+    await store.writeBlobFacts(uncoveredBlobWrite(declinedBlobRows(a)));
+
+    expect(ledgerBytes()).toEqual(storedBytes());
+    expect(Object.keys(ledgerBytes()).sort(compareCodeUnits)).toEqual([a, b, c].sort(orderContentKeys));
   });
 });
 
 /**
- * The SQLite store under the shared writer contract: a fresh store on this
- * case's directory, evicting a key as `evictBlobKeysPastRetention` does —
- * every blob-scoped table's rows and the ledger row, in one transaction.
+ * One declined-blob row whose size is set by its message, and its bytes by hand.
+ *
+ * A `blob_conditions` row stores six values: the key (`markdown.sha256.` and 64
+ * hex digits, 80 UTF-8 bytes), `code` `BLOB_NOT_TEXT` (13), `ordinal` 0 (a
+ * number, 8), `severity` `warning` (7), the message (`messageLength` ASCII
+ * bytes) and `line` null (0): 108 bytes plus the message.
+ *
+ * @param key - The content key
+ * @param messageLength - How many bytes the message holds
+ * @returns The rows, `blobConditions` alone
  */
-const openForContract: BlobWriterContractFactory = ({ retainedBlobKeys }) => Promise.resolve({
-  store: openWithBlobWindow(retainedBlobKeys),
-  evict: (key) => {
+function sizedConditionRows(key: ContentKey, messageLength: number): BlobScopedRows {
+  return {
+    blobs: [], blobReferences: [], blobSections: [], harnessBlobFacts: [], harnessBlobImports: [], skillTextFacts: [], skillTextMatches: [],
+    blobConditions: [{ blob: key, code: 'BLOB_NOT_TEXT', ordinal: 0, severity: 'warning', message: 'x'.repeat(messageLength), line: null }],
+  } as BlobScopedRows;
+}
+
+/** What {@link sizedConditionRows} measures for a message of `messageLength` bytes. */
+const conditionRowBytes = (messageLength: number): number => 108 + messageLength;
+
+/** The ledger as the file holds it: each tracked key and its recorded bytes. */
+function ledgerBytes(at: string = directory): Record<string, number> {
+  const database = openStoreFile(at);
+  try {
+    const rows = database.prepare('SELECT "contentKey", "bytes" FROM "blob_keys"').all() as { contentKey: string; bytes: number }[];
+    return Object.fromEntries(rows.map((row) => [row.contentKey, Number(row.bytes)]));
+  } finally {
+    database.close();
+  }
+}
+
+describe('the blob tier is kept within a byte budget', () => {
+  it('evicts the oldest keys until the newest fit, by their bytes and not their count', async () => {
+    // Five single-key writes of unequal size, oldest first; the budget is the
+    // bytes of three of them (B, C, D: 208 + 308 + 208 = 824). Newest first after
+    // each write, a key goes once the running sum passes 824:
+    //   C: C 308, B 516, A 1024 -> A goes;  E: E 408, D 616, C 924 -> C and B go.
+    // A window of three keys would keep C; the byte budget keeps D and E alone.
+    const sizes = { a: 400, b: 100, c: 200, d: 100, e: 300 } as const;
+    const budget = conditionRowBytes(sizes.b) + conditionRowBytes(sizes.c) + conditionRowBytes(sizes.d);
+    const evicting = openSqliteFactStore({ directory, blobTierBudgetBytes: budget });
+    for (const [seed, length] of Object.entries(sizes)) {
+      await evicting.writeBlobFacts(uncoveredBlobWrite(sizedConditionRows(contentKey(seed), length)));
+    }
+    await evicting.close();
+
+    expect(Object.keys(sizes).map((seed) => blobRowTotal(contentKey(seed)))).toEqual([0, 0, 0, 1, 1]);
+    expect(ledgerBytes()).toEqual({
+      [contentKey('d')]: conditionRowBytes(sizes.d),
+      [contentKey('e')]: conditionRowBytes(sizes.e),
+    });
+  });
+
+  it('never evicts a key the write holds, even when its held keys alone exceed the budget', async () => {
+    // Two writes of five keys each, every write larger than a budget of three
+    // keys' bytes. Each write keeps all five of its own keys; the second evicts
+    // every key of the first, since nothing older fits beside it.
+    const budget = 3 * conditionRowBytes(100);
+    const first = ['f1', 'f2', 'f3', 'f4', 'f5'].map((seed) => contentKey(seed));
+    const second = ['s1', 's2', 's3', 's4', 's5'].map((seed) => contentKey(seed));
+    const write = (keys: readonly ContentKey[]): ReturnType<typeof uncoveredBlobWrite> => uncoveredBlobWrite({
+      ...emptyBlobRows(),
+      blobConditions: keys.flatMap((key, index) => sizedConditionRows(key, 100 + 50 * index).blobConditions),
+    });
+    const evicting = openSqliteFactStore({ directory, blobTierBudgetBytes: budget });
+    await evicting.writeBlobFacts(write(first));
+    const afterFirst = first.map((key) => blobRowTotal(key));
+    await evicting.writeBlobFacts(write(second));
+    await evicting.close();
+
+    expect(afterFirst).toEqual([1, 1, 1, 1, 1]);
+    expect(first.map((key) => blobRowTotal(key))).toEqual([0, 0, 0, 0, 0]);
+    expect(second.map((key) => blobRowTotal(key))).toEqual([1, 1, 1, 1, 1]);
+    expect(Object.keys(ledgerBytes()).sort(compareCodeUnits)).toEqual([...second].sort(orderContentKeys));
+  });
+
+  it('never evicts a key the write holds when an older key carries a later timestamp', async () => {
+    // A store restored from a runner whose clock ran ahead holds `writtenAt`
+    // values in this machine's future, so they sort before the keys this write
+    // stamps. The write's own keys are protected by key, not by their place in
+    // the order: both held keys stay and the future-stamped key goes.
+    const budget = 2 * conditionRowBytes(100) + 50;
+    const ahead = contentKey('ahead');
+    const held = [contentKey('h1'), contentKey('h2')];
+    const evicting = openSqliteFactStore({ directory, blobTierBudgetBytes: budget });
+    await evicting.writeBlobFacts(uncoveredBlobWrite(sizedConditionRows(ahead, 100)));
     const database = new DatabaseSync(safePath.join(directory, 'projection.db'));
     try {
-      database.exec('BEGIN IMMEDIATE');
-      for (const spec of Object.values(PROJECTION_TABLES)) {
-        if (spec.scope !== 'blob') continue;
-        database.prepare(`DELETE FROM "${spec.name}" WHERE "${String(spec.primaryKey[0])}" = ?`).run(key);
-      }
-      database.prepare('DELETE FROM "blob_keys" WHERE "contentKey" = ?').run(key);
-      database.exec('COMMIT');
+      database.prepare('UPDATE "blob_keys" SET "writtenAt" = ? WHERE "contentKey" = ?').run('9999-12-31T23:59:59.999Z', ahead);
     } finally {
       database.close();
     }
-    return Promise.resolve();
-  },
+    await evicting.writeBlobFacts(uncoveredBlobWrite({
+      ...emptyBlobRows(),
+      blobConditions: held.flatMap((key) => sizedConditionRows(key, 100).blobConditions),
+    }));
+    await evicting.close();
+
+    expect(held.map((key) => blobRowTotal(key))).toEqual([1, 1]);
+    expect(Object.keys(ledgerBytes()).sort(compareCodeUnits)).toEqual([...held].sort(orderContentKeys));
+  });
 });
+
+/**
+ * The SQLite store under the shared writer contract: a fresh store in a new
+ * directory under this case's, its ledger and stored rows read from the file.
+ */
+const openForContract: BlobWriterContractFactory = ({ blobTierBudgetBytes }) => {
+  // A fresh directory per open: a case opens a probe store before its own.
+  const at = mkdtempSync(safePath.join(directory, 'contract-'));
+  return Promise.resolve({
+    store: openSqliteFactStore({ directory: at, blobTierBudgetBytes }),
+    evict: (key) => evictByHand(at, key),
+    ledgerBytes: () => Promise.resolve(ledgerBytes(at)),
+    storedBytes: () => Promise.resolve(storedBytes(at)),
+  });
+};
+
+/**
+ * Evict one key as `evictBlobKeysPastBudget` does: every blob-scoped table's
+ * rows and the ledger row, in one transaction.
+ *
+ * @param at - The store directory
+ * @param key - The key
+ * @returns Once done
+ */
+function evictByHand(at: string, key: ContentKey): Promise<void> {
+  const database = new DatabaseSync(safePath.join(at, 'projection.db'));
+  try {
+    database.exec('BEGIN IMMEDIATE');
+    for (const spec of Object.values(PROJECTION_TABLES)) {
+      if (spec.scope !== 'blob') continue;
+      database.prepare(`DELETE FROM "${spec.name}" WHERE "${String(spec.primaryKey[0])}" = ?`).run(key);
+    }
+    database.prepare('DELETE FROM "blob_keys" WHERE "contentKey" = ?').run(key);
+    database.exec('COMMIT');
+  } finally {
+    database.close();
+  }
+  return Promise.resolve();
+}
 
 describe('the blob writer contract', () => {
   for (const contractCase of BLOB_WRITER_CONTRACT) {
@@ -1319,16 +1591,6 @@ describe('the blob writer contract', () => {
     });
   }
 });
-
-/** Turn the store on disk back into a pre-manifest one. */
-function dropBlobManifest(): void {
-  const database = new DatabaseSync(safePath.join(directory, 'projection.db'));
-  try {
-    database.exec('DROP TABLE "blob_keys"');
-  } finally {
-    database.close();
-  }
-}
 
 /** The database file's page accounting, read outside the store. */
 function filePages(): { pageCount: number; freelist: number; autoVacuum: number } {
@@ -1389,7 +1651,7 @@ describe('an open that fails after the connection opened releases it', () => {
       writeFileSync(safePath.join(corrupt, 'projection.db'), Buffer.alloc(4096, 0x5a));
       const closes = vi.spyOn(DatabaseSync.prototype, 'close');
 
-      expect(() => openSqliteFactStore({ directory: corrupt })).toThrow(/not a database/u);
+      expect(() => openSqliteFactStore({ directory: corrupt, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES })).toThrow(/not a database/u);
       expect(closes).toHaveBeenCalledTimes(1);
     } finally {
       rmSync(corrupt, { recursive: true, force: true });

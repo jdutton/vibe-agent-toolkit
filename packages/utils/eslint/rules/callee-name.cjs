@@ -1,5 +1,5 @@
 /**
- * Shared by the rules that match a call by name: the identifier a call is
+ * Shared by the rules that match a call or member by name. `calleeName`: the identifier a call is
  * made through, bare (`spawn(…)`) or as the last member of a non-computed
  * member expression (`cp.spawn(…)`), or `null` for any other callee.
  *
@@ -20,4 +20,16 @@ function calleeName(call) {
   return null;
 }
 
-module.exports = { calleeName };
+/**
+ * The member name of a `MemberExpression`, when it is spelled out, or null:
+ * `x.f` and `x['f']` both name `f`.
+ *
+ * @param {object} node - ESTree `MemberExpression` node.
+ */
+function memberName(node) {
+  if (!node.computed && node.property.type === 'Identifier') return node.property.name;
+  if (node.computed && node.property.type === 'Literal' && typeof node.property.value === 'string') return node.property.value;
+  return null;
+}
+
+module.exports = { calleeName, memberName };

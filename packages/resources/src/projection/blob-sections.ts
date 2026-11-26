@@ -14,6 +14,7 @@
 
 import GithubSlugger from 'github-slugger';
 
+import type { ContentKey } from '../content-key.js';
 import { estimateTokens } from '../link-classify.js';
 import type { BlobSectionRow } from '../schemas/projection-blobs.js';
 import type { HeadingNode } from '../schemas/resource-metadata.js';
@@ -96,7 +97,7 @@ interface OpenAncestor {
  * @returns One row per heading, in document order
  */
 export function blobSectionsFor(
-  contentKey: string,
+  contentKey: ContentKey,
   content: string,
   headings: readonly HeadingNode[],
 ): BlobSectionRow[] {

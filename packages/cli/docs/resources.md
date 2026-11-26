@@ -29,7 +29,7 @@ including link integrity checking and anchor validation.
 **Options:**
 - `[path]` - Base directory to crawl (defaults to current directory)
 - `--debug` - Enable debug logging
-- `--verbose` - Add `data.files`: per-file link/anchor counts and content keys (`<parserKind>.<sha-256 of the raw bytes>`)
+- `--verbose` - Add `data.files`: per-file link/anchor counts and content keys (`<parserKind>.sha256.<SHA-256 of the raw bytes>`)
 - `--collection <id>` - Only report files in the named collection (config mode — no path argument).
   A name `resources.collections` does not declare is refused (`USAGE_INVALID`, exit 2)
 - `--format <format>` - `yaml` (default) or `json`. The same document either way
@@ -89,7 +89,7 @@ vat resources scan docs/ --verbose
 #     - path: docs/README.md
 #       links: 5
 #       anchors: 3
-#       contentKey: markdown.47dd7b50af765df240fe2514f029fc697c907fc37a3267e22060f2f9f611975c
+#       contentKey: markdown.sha256.47dd7b50af765df240fe2514f029fc697c907fc37a3267e22060f2f9f611975c
 ```
 
 **Requirements:**

@@ -16,6 +16,7 @@
  * ```
  */
 
+import type { ContentKey } from './content-key.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { ResourceMetadata } from './schemas/resource-metadata.js';
 
@@ -28,7 +29,7 @@ import type { ResourceMetadata } from './schemas/resource-metadata.js';
  */
 export class ResourceCollection implements ResourceCollectionInterface {
   private readonly resources: ResourceMetadata[];
-  private contentKeyIndex: Map<string, ResourceMetadata[]> | null = null;
+  private contentKeyIndex: Map<ContentKey, ResourceMetadata[]> | null = null;
 
   /**
    * Create a new ResourceCollection from an array of resources.
@@ -77,7 +78,7 @@ export class ResourceCollection implements ResourceCollectionInterface {
    * Lazily builds a content-key index on first call. Returns an array where
    * each element is an array of resources that have the same content key
    * (identical bytes, same parse route). Only groups with 2+ resources are
-   * included. Identical bytes routed to different parsers are not duplicates.
+   * included. Identical bytes routed to different parsers are not duplicates, and a group is one key kind (two key kinds of one byte string are not comparable and never grouped).
    *
    * @returns Array of duplicate groups
    */

@@ -43,10 +43,11 @@ say where content lives in one tree, including which instances read each path. *
 **The stage-2 parse cache's actual output shape today (✅ shipped) is not the table set below** — it's
 narrower and purpose-built: `ParseFacts` (`packages/resources/src/parse-cache.ts:161-177`) —
 `{links, headings, estimatedTokenCount, anchors?, parseErrors?, unresolvedReferences?,
-frontmatterSource?, frontmatterError?}`, keyed by content key — **`<parserKind>.<sha256>`**
-(`content-key.ts:107` documents that identical empty bytes key differently under the two parser
-kinds, so the key is not a bare content hash). The content key itself **is shipped and load-bearing
-today** (`computeContentKey`, `content-key.ts:110`; consumed by `readContentWithKey`, `:167`, the
+frontmatterSource?, frontmatterError?}`, keyed by content key — **`<parserKind>.<keyKind>.<hex>`**,
+a `sha256` key's hex the plain SHA-256 of the raw bytes and the parser kind an unhashed qualifier in the key
+text (`content-key.ts:40-62` documents that identical empty bytes key differently under two parser kinds,
+so the key is not a bare content hash). The content key itself **is shipped and load-bearing
+today** (`computeContentKey`, `content-key.ts:316`; consumed by `readContentWithKey`, `:457`, the
 entry point for the whole stage-2 cache) — only *exposing it as a projection column* is proposed.
 Two other details that matter and that the proposed schema below deliberately does *not* preserve:
 **`content` itself is never stored** (`parse-cache.ts:41`) — the confidentiality argument in §5
@@ -55,14 +56,16 @@ correctness testing, `packages/cli/src/pipeline-oracles/types.ts` (`ParseFactRow
 `ConditionFact`), exists as a test oracle, not as a queryable projection.
 
 🎯 **Target, per [fact-extractors.md](./fact-extractors.md) (I2a): the content key is the bytes
-alone.** The parser kind leaves the preimage and `CONTENT_KEY_PATTERN`, which carries no display
-label and stays the one pattern every consumer shares. The parse cache and its `ParseFacts` tenant retire, and the store becomes the one persistent
-tier for per-file facts. The per-format tables are renamed per instance (`<instance>__<table>`), a
-`Breaking` query-surface change. Today the key is `<parserKind>.<sha256>`, as described above.
-`ResourceMetadata.contentKey` is that key, and `getDuplicates` / `getResourcesByContentKey` currently
-treat identical bytes under different parsers as distinct because the parser kind is in the key.
-When the kind leaves the preimage those two flip back to grouping them, which is a `Breaking`
-change the PR that lands the target must list.
+alone.** The parser kind has left the preimage: a `sha256` key's hex is the plain SHA-256 of the
+bytes. It still qualifies the key text, so `CONTENT_KEY_PATTERN` stays the one pattern every consumer
+shares and a routing change still moves the key. What remains of the target: the parse cache and its
+`ParseFacts` tenant retire, and the store becomes the one persistent tier for per-file facts. The
+per-format tables are renamed per instance (`<instance>__<table>`), a `Breaking` query-surface change.
+Today the key is `<parserKind>.<keyKind>.<hex>`, as described above. `ResourceMetadata.contentKey` is
+that key, and `getDuplicates` / `getResourcesByContentKey` group by the whole key text, so identical
+bytes under different parsers, or under two key kinds, are distinct. When the kind leaves the key text
+those two flip back to grouping by parser kind, which is a `Breaking` change the PR that lands the
+target must list.
 
 **The table sets in §2 and §3 below are the proposed (🔷), unbuilt blob-keyed schema** — carried
 over from the (retired, uncommitted) design spec as the target shape for stage 3 ("projection
@@ -77,7 +80,10 @@ across two adopters — would produce one row, computed once, reused everywhere.
 generated JSON Schema — `packages/resources/src/schemas/projection-blobs.ts` and
 `projection-resources.ts`. There is deliberately **no** contract-version constant: the hand-bumped
 `PROJECTION_SCHEMA_VERSION` is removed, and the stored projection's directory carries a derived
-digest of the row schemas' shape instead (`projectionShapeDigest()` in `projection/store.ts`).
+digest of the row schemas' shape instead (`projectionShapeDigest()` in `projection/store.ts`). The
+digest also covers the store's bookkeeping tables (`extents`, `blob_keys`), declared as data in
+`projection/store-bookkeeping.ts` and built into SQL from that declaration, so a bookkeeping column
+change moves the store to a new directory too.
 
 **Population is ✅ real for the shipped tables.** `populate()` derives rows from `ParseFacts`
 and `ResourceRegistry` at runtime. What remains 🔷 proposed is the REMAINDER described below:
@@ -212,11 +218,11 @@ two. Routability is a traversal rule, owned by [fact-extractors.md](./fact-extra
 
 **`checksum` is gone; `ResourceMetadata.contentKey` is the content key.** The registry used to carry two
 identities for one file: `checksum`, a SHA-256 of the *decoded* UTF-8 string (invalid UTF-8 collapses to
-`U+FFFD`, so distinct byte sequences could share one), and the byte-domain content key (`<parserKind>.<sha256>`)
+`U+FFFD`, so distinct byte sequences could share one), and the byte-domain content key (`<parserKind>.<keyKind>.<hex>`)
 the parse cache and the store file facts under. Only the content key remains. It is `ResourceMetadata.contentKey`,
 it is what `vat resources scan --verbose` prints per file, and `getResourcesByContentKey`,
-`getUniqueByContentKey` and `getDuplicates` key on it. Because the key includes the parser kind, identical bytes
-routed to different parsers are not duplicates. Consumers that compared checksums (the audit cache detector, the
+`getUniqueByContentKey` and `getDuplicates` key on it. Because the key text includes the parser kind and the key
+kind, identical bytes routed to different parsers are not duplicates, and a group is always one key kind. Consumers that compared checksums (the
 RAG indexer's changed-since-crawl refusal, the lab population facet) compare content keys; the indexer re-reads the
 file with `readContentWithKey` under the parser kind its resource's key names.
 
@@ -532,7 +538,7 @@ and one finding dissolves most of the demand for the door.
   parameter or an `fs` read to that signature would close history permanently, silently, and for a
   reason having nothing to do with history.
 - **Nothing path-, origin- or commit-derived may ever enter the cache key.** The content key is
-  `<parserKind>.<sha256>` over bytes (§2), and this is one of the reasons: the same blob parsed at
+  `<parserKind>.<keyKind>.<hex>` over bytes (§2), and this is one of the reasons: the same blob parsed at
   HEAD and parsed at a commit from last year must land on the same entry, or any historical pass
   re-parses the entire corpus from cold.
 
@@ -648,7 +654,7 @@ which a bare commit key cannot express.
   describes is a test (`projection-containment.integration.test.ts`).
 - ✅ **Shipped: the store is on by default.** The extent- and blob-scoped tables now cross
   invocations without an opt-in (`VAT_PROJECTION_STORE=off`, or `VAT_CACHE=0` for every cache, is
-  the way back), and the blob tier is bounded by a `blob_keys` manifest rather than growing without
+  the way back), and the blob tier is bounded by a byte budget over its `blob_keys` ledger rather than growing without
   limit. [`packages/projection-sqlite/README.md`](../../packages/projection-sqlite/README.md) owns
   the layout, the retention and the measurements.
 

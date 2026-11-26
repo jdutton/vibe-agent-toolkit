@@ -36,6 +36,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { type ContentKey, contentKeyParts } from '../src/content-key.js';
 import type { Projection } from '../src/projection/projection.js';
 import { parserKindForPath } from '../src/projection/router.js';
 import type { BlobReferenceRow, BlobRow, BlobSectionRow } from '../src/schemas/projection-blobs.js';
@@ -175,8 +176,8 @@ const DIRECTORIES = ['src', 'infra', 'tools', 'docs', 'config'] as const;
 
 /** Everything one path's blob says, gathered by content key rather than by path. */
 interface BlobFacts {
-  /** `<parserKind>.<sha256>` — the prefix IS the routing decision, recorded per blob. */
-  key: string;
+  /** The blob's key: its parser kind IS the routing decision, recorded per blob. */
+  key: ContentKey;
   row: BlobRow | undefined;
   references: readonly BlobReferenceRow[];
   sections: readonly BlobSectionRow[];
@@ -204,12 +205,14 @@ let projection: Projection;
  * @returns Its key and every blob-keyed row filed under that key
  */
 function blobAt(path: string): BlobFacts {
-  const key = projection.resourceRealizations.find((row) => row.path === path)?.contentKey ?? '';
+  const key = projection.resourceRealizations.find((row) => row.path === path)?.contentKey;
+  if (key === undefined || key === null) throw new Error(`fixture: ${path} is not keyed`);
+  const filed = (blob: ContentKey): boolean => blob === key;
   return {
     key,
-    row: projection.blobs.find((blob) => blob.contentKey === key),
-    references: projection.blobReferences.filter((row) => row.blob === key),
-    sections: projection.blobSections.filter((row) => row.blob === key),
+    row: projection.blobs.find((blob) => filed(blob.contentKey)),
+    references: projection.blobReferences.filter((row) => filed(row.blob)),
+    sections: projection.blobSections.filter((row) => filed(row.blob)),
   };
 }
 
@@ -292,7 +295,7 @@ describe('MIME parser routing', () => {
     // a third SHAPE, not a fourth refusal.
     for (const path of [INLINE_LINK_TS, SLUG_PATTERN_TS, MAIN_TF, PROBE_PY, FLOW_MMD, SETTINGS_YAML]) {
       const { key, row } = blobAt(path);
-      expect(key.startsWith('none.'), path).toBe(true);
+      expect(contentKeyParts(key).parserKind, path).toBe('none');
       expect(row?.tokenEstimate ?? 0, path).toBeGreaterThan(0);
       expect(row?.wordCount ?? 0, path).toBeGreaterThan(0);
     }
@@ -345,7 +348,7 @@ describe('MIME parser routing', () => {
     // `text/markdown` — and dropping any one of them would quietly stop parsing
     // a file that every repository carries.
     for (const path of PROSE_ROUTES) {
-      expect(blobAt(path).key.startsWith('markdown.'), path).toBe(true);
+      expect(contentKeyParts(blobAt(path).key).parserKind, path).toBe('markdown');
       expect(formsAt(path), path).toContain(MARKDOWN_LINK);
       expect(blobAt(path).row?.headingCount, path).toBe(1);
     }
@@ -365,14 +368,14 @@ describe('MIME parser routing', () => {
     // see that function change. This is the pin that binds the lanes — no fixture
     // below declares an override, so on this corpus the two must agree exactly,
     // and a change to either alone reds.
-    const keyed = projection.resourceRealizations.filter((row) => row.contentKey !== null);
-    const disagreements = keyed.filter(
-      (row) => row.contentKey?.split('.')[0] !== parserKindForPath(row.path),
+    const keyed = projection.resourceRealizations.flatMap((row) =>
+      row.contentKey === null ? [] : [{ row, kind: contentKeyParts(row.contentKey).parserKind }],
     );
+    const disagreements = keyed.filter(({ row, kind }) => kind !== parserKindForPath(row.path));
 
-    expect(disagreements.map((row) => [row.path, row.mime, row.contentKey])).toEqual([]);
+    expect(disagreements.map(({ row }) => [row.path, row.mime, row.contentKey])).toEqual([]);
     // Not vacuous: the corpus really does exercise all three kinds.
-    expect(new Set(keyed.map((row) => row.contentKey?.split('.')[0]))).toEqual(
+    expect(new Set(keyed.map(({ kind }) => kind))).toEqual(
       new Set(['markdown', 'html', 'none']),
     );
   });
@@ -380,7 +383,7 @@ describe('MIME parser routing', () => {
   it('still routes .html to the HTML parser and not to markdown', () => {
     // `html-link` is an AST form no markdown parse and no lexer can emit, so its
     // presence names the parser that ran.
-    expect(blobAt(PAGE_HTML).key.startsWith('html.')).toBe(true);
+    expect(contentKeyParts(blobAt(PAGE_HTML).key).parserKind).toBe('html');
     expect(formsAt(PAGE_HTML)).toContain(HTML_LINK);
     expect(formsAt(PAGE_HTML)).not.toContain(MARKDOWN_LINK);
   });
