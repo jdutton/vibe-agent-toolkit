@@ -27,7 +27,7 @@ import { loadConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
 import { collectionsOption } from './population-wiring.js';
 import { assertDirectoryArgument } from './project-root-policy.js';
-import { type OpenedPopulationCache, openQuestionCache, projectionStoreSelected, runThenClose, withLazyPopulationCache } from './projection-store.js';
+import { cacheRootInsideTree, type OpenedPopulationCache, openQuestionCache, projectionStoreSelected, runThenClose, withLazyPopulationCache } from './projection-store.js';
 
 /**
  * One VAT process run's shared population, registry and parse dispatcher: what
@@ -208,10 +208,13 @@ export async function withRunContext<T>(options: RunContextOptions, work: (run: 
   const root = safePath.resolve(options.root);
   const open = (): Promise<T> => openRunContext(root, options, work);
   // A run that writes nothing under its tree reads each path component's kind once
-  // (`withPlaceKindSnapshot`); a run that writes must see its own writes, so it walks afresh
-  // (`withoutPlaceKindSnapshot`), whatever snapshot an enclosing run holds.
+  // (`withPlaceKindSnapshot`, which refuses any write beneath the tree); a run that writes must
+  // see its own writes, so it walks afresh (`withoutPlaceKindSnapshot`), whatever snapshot an
+  // enclosing run holds. So does a read-only verb whose VAT cache root lies inside its tree
+  // (noticed to the operator, not refused): VAT writes its own state there.
   // Async, so a refused root realpath rejects like every other run failure, never throws.
-  return await (options.tree === 'read-only' ? withPlaceKindSnapshot(root, open) : withoutPlaceKindSnapshot(open));
+  const keepsReads = options.tree === 'read-only' && !cacheRootInsideTree(root);
+  return await (keepsReads ? withPlaceKindSnapshot(root, open) : withoutPlaceKindSnapshot(open));
 }
 
 /**

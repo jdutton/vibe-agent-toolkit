@@ -16,8 +16,9 @@ import {
   spellingWalkRoot,
 } from '../src/fs-utils.js';
 import type { DirectoryListing, RealpathTable } from '../src/fs-utils.js';
-import { withPlaceKindSnapshot } from '../src/link-following.js';
+import { withoutPlaceKindSnapshot, withPlaceKindSnapshot } from '../src/link-following.js';
 import { toForwardSlash } from '../src/path-core.js';
+import { mkdirSyncReal } from '../src/path-utils.js';
 import type { SymlinkCapability } from '../src/test-helpers.js';
 import { createSymlinkAsync, symlinkCapability } from '../src/test-helpers.js';
 import { PERMISSIONS_ENFORCED } from '../src/testing/platform-gates.js';
@@ -356,6 +357,14 @@ describe('fs-utils', () => {
         expect(probeCost(() => {
           expect(cache.probe(filePath)).toEqual({ exists: true, isDirectory: false });
           expect(cache.probe(missing)).toEqual({ exists: false, isDirectory: null });
+        }).lstat).toBe(0);
+        // Created by someone else mid-run (another process: no snapshot of its own), with a child: a
+        // probe of the child is a different walk, answered 'absent' from the kept answer for
+        // not-here.txt, with no syscall.
+        withoutPlaceKindSnapshot(() => mkdirSyncReal(missing));
+        nodeFs.writeFileSync(safePath.join(missing, 'child.txt'), '');
+        expect(probeCost(() => {
+          expect(cache.probe(safePath.join(missing, 'child.txt'))).toEqual({ exists: false, isDirectory: null });
         }).lstat).toBe(0);
       });
       // Outside a run nothing is kept, the probe's own instance included.

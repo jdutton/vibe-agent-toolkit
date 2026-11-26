@@ -57,18 +57,22 @@ describe('withPlaceKindSnapshot', () => {
     expect(lstatsOfWalk(x, root)).toBe(3);
   });
 
-  it('keeps an absent answer for the bracket, as it keeps every other kind', () => {
+  it('keeps an absent answer for the bracket: a different walk through the absent place costs no lstat', () => {
     const z = safePath.join(root, 'a', 'b', 'z.md');
+    const child = safePath.join(z, 'child.md');
     withPlaceKindSnapshot(root, () => {
       expect(assertLocalChain(z, root, HOST_PATH_FLAVOR)).toBe('nothing');
-      // Created by someone else mid-run: the run's first answer stands, and costs no lstat.
-      writeFileSync(z, 'z');
+      // Created by someone else mid-run, as a directory with a child. A walk of the child is a
+      // different walk (no kept chain answers it), so only the kept absent answer for z.md can
+      // make it 'nothing' without reading z.md again.
+      withoutPlaceKindSnapshot(() => mkdirSyncReal(z));
+      writeFileSync(child, 'child');
       __resetWorkCountersForTest();
-      expect(assertLocalChain(z, root, HOST_PATH_FLAVOR)).toBe('nothing');
+      expect(assertLocalChain(child, root, HOST_PATH_FLAVOR)).toBe('nothing');
       expect(readWorkCounters()['fs.lstat']).toBe(0);
     });
-    // The next run reads it afresh.
-    expect(lstatsOfWalk(z, root)).toBe(3);
+    // The next run reads it afresh: a, b, z.md, child.md.
+    expect(lstatsOfWalk(child, root)).toBe(4);
   });
 
   it('a bracket opened inside one that already keeps its tree uses that memo, not a fresh one', () => {
@@ -166,7 +170,7 @@ describe('withPlaceKindSnapshot', () => {
       expect(assertLocalChain(link, root, HOST_PATH_FLAVOR)).toBe('local');
       // Another process replaces the link by a directory: the memo still says 'link'.
       rmSync(link);
-      mkdirSyncReal(link);
+      withoutPlaceKindSnapshot(() => mkdirSyncReal(link));
       expect(assertLocalChain(link, root, HOST_PATH_FLAVOR)).toBe('local');
       expect(hostPlaceKind(link)).toBe('directory');
     });

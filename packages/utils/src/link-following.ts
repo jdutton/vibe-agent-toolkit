@@ -30,7 +30,7 @@ import { promisify } from 'node:util';
 
 import { isFinalPathUnanswerableError, isPathAbsentError, isUnresolvableLinkError } from './errors/errno-table.js';
 import { relativeEscapesRoot, safePath, toForwardSlash } from './path-core.js';
-import { LinkChainRefusedError, walkHostChain, withoutPlaceKindMemo, withPlaceKindMemo } from './tree-change/host-chain.js';
+import { LinkChainRefusedError, walkHostChain, withoutPlaceKindMemo, withPlaceKindMemo, withWalkPlaceKindMemo } from './tree-change/host-chain.js';
 import { HOST_PATH_FLAVOR, type LinkChain, namedPathRoot, type PathFlavor } from './tree-change/link-chain.js';
 
 /**
@@ -93,8 +93,11 @@ export function edgeRealpathSync(path: string): string {
  * - A component another process changes mid-run (a directory replaced by a link, a file by a
  *   directory) is not read again: the first answer stands for the bracket, the contract
  *   `withGitSnapshotCache` states for its snapshot. A link's TEXT is still read on every walk, and
- *   a kept link that is no longer one when its text is read (`readlink`'s `EINVAL`) is dropped
- *   from the memo and the walk taken again.
+ *   a kept link that is no longer one when its text is read (`readlink`'s `EINVAL`), or is gone
+ *   (`ENOENT`), is dropped from the memo and the walk taken once more.
+ * - Nothing may be written beneath `root` inside it: every shared write primitive refuses such a
+ *   write (`WRITE_UNDER_PLACE_KIND_SNAPSHOT_CODE`), so a run mis-declared as read-only fails at
+ *   its first write instead of reading stale kinds.
  * - A refused `lstat` is never kept (thrown, for the caller to classify, and asked again next time).
  *   An `absent` answer is kept like any other: a path another process creates mid-run stays absent
  *   for the bracket, as a path it deletes stays present.
@@ -119,6 +122,26 @@ export function edgeRealpathSync(path: string): string {
  * @returns Whatever `run` returned
  */
 export function withPlaceKindSnapshot<T>(root: string, run: () => T): T {
+  return withPlaceKindMemo(snapshotRootsOf(root), run);
+}
+
+/**
+ * {@link withPlaceKindSnapshot} for a walk that is synchronous and writes nothing anywhere (a
+ * skill's link walk): it also reads each component OUTSIDE `root` once — a link target outside the
+ * project, walked whole from its own root, however many links name it — kept for the walk alone,
+ * never for the run. Every write inside it is refused, outside `root` too.
+ *
+ * @param root - As {@link withPlaceKindSnapshot}
+ * @param run - The walk: synchronous
+ * @returns Whatever `run` returned
+ * @throws TypeError when `run` returns a promise; as {@link withPlaceKindSnapshot} for the root
+ */
+export function withWalkPlaceKindSnapshot<T>(root: string, run: () => T): T {
+  return withWalkPlaceKindMemo(snapshotRootsOf(root), run);
+}
+
+/** A snapshot root in both spellings a walk beneath it can take: as named, and as its real path. */
+function snapshotRootsOf(root: string): string[] {
   const named = toForwardSlash(safePath.resolve(root));
   const roots = [named];
   try {
@@ -129,7 +152,7 @@ export function withPlaceKindSnapshot<T>(root: string, run: () => T): T {
     // Any other refusal is the run's own, thrown as its first walk would have thrown it.
     if (!isPathAbsentError(error)) throw error;
   }
-  return withPlaceKindMemo(roots, run);
+  return roots;
 }
 
 /**

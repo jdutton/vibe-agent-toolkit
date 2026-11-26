@@ -21,6 +21,7 @@ import { safePath, toForwardSlash } from '../path-core.js';
 import { normalizedTmpdir } from '../path-utils.js';
 
 import { entryInTheWayFault, renameRetryDelay, tempDirRefusal } from './apply-decisions.js';
+import { assertNoSnapshotCovers } from './host-chain.js';
 import { stagingName } from './staging-names.js';
 
 /** The owner's read, write and search bits: what a directory needs for its entries to be removed. */
@@ -48,8 +49,10 @@ function renameTrying(from: string, to: string, attempt: number): Promise<void> 
  * @param to - Its new name, on the same filesystem
  * @throws the rename's raw errno, for the caller to classify on the side it knows
  */
-export function renameFileAtomic(from: string, to: string): Promise<void> {
-  return renameTrying(from, to, 0);
+export async function renameFileAtomic(from: string, to: string): Promise<void> {
+  assertNoSnapshotCovers(from);
+  assertNoSnapshotCovers(to);
+  await renameTrying(from, to, 0);
 }
 
 /**
@@ -91,6 +94,7 @@ async function grantOwnerWalk(level: readonly string[]): Promise<void> {
  * @throws the raw errno of the chmod, listing or removal that failed
  */
 export async function removeEntry(entry: string): Promise<void> {
+  assertNoSnapshotCovers(entry);
   if (!(await removeOnce(entry))) return;
   // `rm` with `force` takes an ENOENT from its own listing for "already gone" and resolves with the entry
   // still there: done is what is not there. Once more; then the non-recursive removal names why it stays.
@@ -174,6 +178,7 @@ async function proveWritable(file: string): Promise<void> {
  * @throws the raw errno, for the caller to classify on the side it knows
  */
 export async function replaceFile(dest: string, contents: string | Uint8Array): Promise<void> {
+  assertNoSnapshotCovers(dest);
   const target = await writeTarget(dest);
   if (target.mode !== undefined) await proveWritable(target.path);
   const temp = stagingName(target.path);
@@ -240,6 +245,7 @@ function segmentsUnderRoot(relative: string): string[] {
  *   standing where a directory goes; any other failure is the raw errno
  */
 export async function makeDirectoryUnder(root: string, relative: string, writing: string): Promise<string> {
+  assertNoSnapshotCovers(safePath.join(root, relative));
   return await plainDirectoryUnder(root, segmentsUnderRoot(relative), writing);
 }
 
@@ -270,6 +276,7 @@ async function createUnder<T>(root: string, relative: string, options: FileUnder
   const segments = segmentsUnderRoot(relative);
   const name = segments.at(-1);
   if (name === undefined) throw new TypeError(`"${relative}" names no file under the tree's root`);
+  assertNoSnapshotCovers(safePath.join(root, relative));
   const target = safePath.join(await plainDirectoryUnder(root, segments.slice(0, -1), options.writing), name);
   if (options.existing === 'replace') {
     const there = await entryAt(target);

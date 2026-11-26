@@ -151,6 +151,7 @@ export {
   requireFollowedStatSync,
   withoutPlaceKindSnapshot,
   withPlaceKindSnapshot,
+  withWalkPlaceKindSnapshot,
 } from './link-following.js';
 // The one fold for "are these two names one entry on some volume".
 export { foldedSegment } from './name-fold.js';
@@ -265,6 +266,7 @@ export {
   isWithinUnder,
   win32FoldedName,
   withTempDir,
+  WRITE_UNDER_PLACE_KIND_SNAPSHOT_CODE,
 } from './tree-change/index.js';
 export type {
   ApplyOptions,

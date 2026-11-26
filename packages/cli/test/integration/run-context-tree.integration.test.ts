@@ -3,10 +3,10 @@
  * component `lstat`ed once), a `'writes'` run walks afresh and sees its own writes — also when it is
  * opened inside a reading bracket. Counted by `fs.lstat`, which counts syscalls (a memo hit counts zero).
  */
-import { rmSync, writeFileSync } from 'node:fs';
+import { existsSync, rmSync, writeFileSync } from 'node:fs';
 
-import { assertLocalChain, HOST_PATH_FLAVOR, mkdirSyncReal, readWorkCounters, safePath, withPlaceKindSnapshot, withTempDir } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it } from 'vitest';
+import { assertLocalChain, HOST_PATH_FLAVOR, isVatError, mkdirSyncReal, readWorkCounters, safePath, VAT_CACHE_DIR_ENV, withPlaceKindSnapshot, withTempDir, WRITE_UNDER_PLACE_KIND_SNAPSHOT_CODE, writeFileUnder } from '@vibe-agent-toolkit/utils';
+import { describe, expect, it, vi } from 'vitest';
 
 import { NO_HOME_SETTLED_LISTENER, withRunContext } from '../../src/utils/resource-loader.js';
 
@@ -55,6 +55,38 @@ describe('withRunContext tree', () => {
           return Promise.resolve();
         });
       });
+    });
+  });
+
+  it('a read-only run that writes under its tree is refused at the write, nothing written', async () => {
+    await withTempDir('vat-run-tree-', async (root) => {
+      seeded(root);
+      const out = safePath.join(root, 'reports');
+      const refused = await withRunContext({ ...RUN, root, tree: 'read-only', outputs: [] }, () =>
+        writeFileUnder(out, 'report.json', '{}', { existing: 'refuse', writing: 'a report' }).then(() => undefined, (error: unknown) => error),
+      );
+      expect(isVatError(refused, WRITE_UNDER_PLACE_KIND_SNAPSHOT_CODE)).toBe(true);
+      expect(existsSync(out)).toBe(false);
+    });
+  });
+
+  it('a read-only run whose VAT cache root is inside its tree writes its cache there, and walks afresh', async () => {
+    await withTempDir('vat-run-tree-', async (root) => {
+      const guide = seeded(root);
+      const cacheRoot = safePath.join(root, '.vat-cache');
+      vi.stubEnv(VAT_CACHE_DIR_ENV, cacheRoot);
+      try {
+        const [first, second] = await withRunContext({ ...RUN, root, tree: 'read-only', outputs: [] }, () => {
+          // What the store and the parse cache do when they open: VAT's own state, inside the tree.
+          mkdirSyncReal(safePath.join(cacheRoot, 'namespace'), { recursive: true });
+          return Promise.resolve([lstatsOfWalk(guide, root), lstatsOfWalk(guide, root)]);
+        });
+        expect(existsSync(safePath.join(cacheRoot, 'namespace'))).toBe(true);
+        // VAT writes under the tree, so nothing read there is kept: the second walk is paid again.
+        expect(second).toBe(first);
+      } finally {
+        vi.unstubAllEnvs();
+      }
     });
   });
 

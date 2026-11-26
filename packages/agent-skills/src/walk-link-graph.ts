@@ -44,7 +44,7 @@ import {
   relativeEscapesRoot,
   toForwardSlash,
   safePath,
-  withPlaceKindSnapshot,
+  withWalkPlaceKindSnapshot,
 } from '@vibe-agent-toolkit/utils';
 import { type GitTracker, isGitIgnored } from '@vibe-agent-toolkit/utils/git';
 import picomatch from 'picomatch';
@@ -209,14 +209,6 @@ export interface WalkLinkGraphOptions {
    * `isGitIgnored()` spawn so one-off callers continue to work unchanged.
    */
   gitTracker?: GitTracker;
-  /**
-   * Optional {@link FsLookupCache} to answer this walk's `exists`/`isDirectory`
-   * questions (pass 1′). Omitted, the walk builds its own. Its probe keeps no
-   * memo, so sharing one across walks shares nothing stale: what stands where
-   * is the place-kind snapshot's to keep (`withPlaceKindSnapshot`: the run's,
-   * or this walk's own).
-   */
-  pathProbe?: FsLookupCache;
 }
 
 // ============================================================================
@@ -943,12 +935,14 @@ export function walkLinkGraph(
   // and a throw must not silently drop a bracket.
   //
   // The walk is synchronous and writes nothing, so it is a snapshot of its own
-  // (`withPlaceKindSnapshot`): each component its targets pass through is read
-  // once per walk, also inside a run that writes and walks afresh. Inside a run
-  // that already keeps the project, the walk uses the run's snapshot.
+  // (`withWalkPlaceKindSnapshot`): each component its targets pass through is read
+  // once per walk, also inside a run that writes and walks afresh, and so is each
+  // component of a target outside the project (walked whole, from its own root).
+  // Inside a run that already keeps the project, the walk uses the run's snapshot
+  // beneath it.
   const startedAt = crawlTimingStart();
   try {
-    return withPlaceKindSnapshot(options.projectRoot, () => walkLinkGraphBody(skillResourceId, registry, options));
+    return withWalkPlaceKindSnapshot(options.projectRoot, () => walkLinkGraphBody(skillResourceId, registry, options));
   } finally {
     recordCrawlPass(CRAWL_WALKER_ID, 'crawl', CRAWL_PASS_INSIDE, startedAt);
   }
@@ -995,7 +989,7 @@ function walkLinkGraphBody(
     followedOutsideSkillDir: [],
     // The tree every link target is crawled in is the project the operator named: each target's
     // link chain beneath it is read by its text before the kernel follows it.
-    pathProbe: options.pathProbe ?? new FsLookupCache(options.projectRoot),
+    pathProbe: new FsLookupCache(options.projectRoot),
     gitignoreFacts: new Map<string, boolean>(),
   };
 

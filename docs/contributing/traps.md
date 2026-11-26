@@ -360,8 +360,9 @@ and state how many tests it reds.
 
 ### An absence pin must name the route the deleted code used
 
-`expect(fsCache.probeStats).toEqual({ probes: 0 })` was true before the deletion too — the package
-had never called `probe()`; the deleted line used `fs.stat`. And a mutant written as a dynamic
+A pin that a package's lookup cache answered zero probes was true before the deletion too — the
+package had never called `probe()`; the deleted line used `fs.stat`. Pin the syscall itself (the
+`fs.lstat` work counter, or a spy on the call the deleted code made). And a mutant written as a dynamic
 `import()` misses a `vi.spyOn` on the default export's property.
 **Tell:** the pin is green at the pre-change commit.
 **Remedy:** `git grep <observable> HEAD -- <package>` before writing the pin; restore the deleted

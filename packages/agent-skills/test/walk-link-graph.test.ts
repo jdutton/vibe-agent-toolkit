@@ -9,7 +9,6 @@ import {
   CRAWL_PASS_INSIDE,
   CRAWL_WALKER_GITIGNORE_ID,
   CRAWL_WALKER_ID,
-  FsLookupCache,
   mkdirSyncReal,
   readWorkCounters,
   safePath,
@@ -18,7 +17,6 @@ import {
   withoutPlaceKindSnapshot,
   withPlaceKindSnapshot,
 } from '@vibe-agent-toolkit/utils';
-import type { PathProbe } from '@vibe-agent-toolkit/utils';
 import { __readCrawlTimingSnapshot, __setCrawlTimingForTest, installFaultFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -347,31 +345,6 @@ function createMockResource(
     modifiedAt: new Date('2024-01-01'),
     contentKey: MOCK_CONTENT_KEY,
   };
-}
-
-/**
- * A probe that answers "present, but unstattable" for ONE path — the exact
- * `{ exists: true, isDirectory: null }` pair {@link FsLookupCache.probe} records
- * when `existsSync` succeeds and `statSync` throws anyway (a permission change,
- * or a delete racing between the two calls).
- *
- * Injected rather than produced by mocking `node:fs`: the probe is the walk's
- * ONE oracle for both of those questions, so overriding it reproduces the state
- * the classifier branches on without mocking a module every other fixture in
- * this file uses for real.
- */
-class UnstattableProbe extends FsLookupCache {
-  readonly #unstattable: string;
-
-  constructor(unstattable: string, within: string) {
-    super(within);
-    this.#unstattable = unstattable;
-  }
-
-  override probe(targetPath: string): PathProbe {
-    if (targetPath === this.#unstattable) return { exists: true, isDirectory: null };
-    return super.probe(targetPath);
-  }
 }
 
 function createLocalLink(text: string, href: string, resolvedId?: string): ResourceLink {
@@ -1553,6 +1526,36 @@ describe('walkLinkGraph', () => {
         walk();
       })).lstat).toBe(3);
     });
+
+    /**
+     * A target outside the project is walked whole, from its own root: the run's snapshot keeps
+     * nothing there, so the walk keeps those components itself, for its own (synchronous,
+     * write-free) duration. A second link to the same outside target costs no `lstat`.
+     */
+    it.each([
+      ['outside a run', (_root: string, walk: () => void) => walk()],
+      ['inside a read-only run', (root: string, walk: () => void) => withPlaceKindSnapshot(root, walk)],
+    ] as const)('reads an outside target\'s components once per walk, %s', (_where, around) => {
+      const base = getTempDir();
+      const root = safePath.join(base, 'project');
+      mkdirSyncReal(root);
+      const skillPath = safePath.join(root, 'SKILL.md');
+      writeFileSync(skillPath, '# Skill\n');
+      writeFileSync(safePath.join(base, 'outside.md'), '# Outside\n');
+      const costOf = (links: number): number => {
+        const skill = createMockResource(SKILL_ID, skillPath, Array.from({ length: links }, (_, at) => createLocalLink(`outside ${at.toString()}`, '../outside.md')));
+        const registry = createMockRegistry([skill]);
+        const before = readWorkCounters()['fs.lstat'];
+        around(root, () => {
+          walkLinkGraph(SKILL_ID, registry, { maxDepth: 5, excludeRules: [], projectRoot: root, skillRootPath: skillPath, ownOutputDir: undefined });
+        });
+        return readWorkCounters()['fs.lstat'] - before;
+      };
+      const once = costOf(1);
+      expect(once).toBeGreaterThan(0);
+      expect(costOf(2)).toBe(once);
+    });
+
     /**
      * A target that `existsSync` finds but `statSync` cannot answer for used to
      * VANISH: the classifier returned `{ kind: 'skipped' }`, so the link was
@@ -1570,12 +1573,14 @@ describe('walkLinkGraph', () => {
       mkdirSyncReal(dirname(target), { recursive: true });
       writeFileSync(target, '# Unreadable\n');
 
-      const result = walkOnDiskLink({
-        tmpDir,
-        linkText: 'unreadable',
-        linkRel: targetRel,
-        overrides: { pathProbe: new UnstattableProbe(target, tmpDir) },
-      });
+      // The OS refuses the target's own `lstat`: present (its directory lists it), with no answer.
+      const session = installFaultFs({ within: tmpDir, faults: [{ op: 'lstat', path: (path) => path === target, errno: 'EACCES' }] });
+      let result: ReturnType<typeof walkLinkGraph>;
+      try {
+        result = walkOnDiskLink({ tmpDir, linkText: 'unreadable', linkRel: targetRel });
+      } finally {
+        session.restore();
+      }
 
       expect(result.excludedReferences).toHaveLength(1);
       expect(result.excludedReferences[0]?.excludeReason).toBe('unreadable-target');

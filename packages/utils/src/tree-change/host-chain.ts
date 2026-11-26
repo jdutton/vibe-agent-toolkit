@@ -30,6 +30,14 @@ interface PlaceKindMemo {
    * second memo of what stands where, the same one read whole.
    */
   readonly chains: Map<string, LinkChain>;
+  /**
+   * What stood at each path OUTSIDE the roots, kept only inside a {@link withWalkPlaceKindMemo}
+   * bracket: a synchronous walk that writes nothing anywhere, so nothing can change under it
+   * while it runs (a link target outside the project, walked whole from its own root, is read
+   * once per walk however many links name it). `undefined` everywhere else: a run keeps nothing
+   * outside its tree, where it writes (its cache, the temp directory).
+   */
+  readonly outside: Map<string, PlaceKind> | undefined;
 }
 
 /**
@@ -57,7 +65,29 @@ export function withPlaceKindMemo<T>(roots: readonly string[], run: () => T): T 
   const prefixes = roots.map((root) => (root.endsWith('/') ? root : `${root}/`));
   const open = placeKindsInBracket.getStore();
   if (open !== undefined && open !== null && prefixes.every((prefix) => isKeptBy(open, prefix) || open.prefixes.includes(prefix))) return run();
-  return placeKindsInBracket.run({ prefixes, kinds: new Map<string, PlaceKind>(), chains: new Map<string, LinkChain>() }, run);
+  return placeKindsInBracket.run({ prefixes, kinds: new Map<string, PlaceKind>(), chains: new Map<string, LinkChain>(), outside: undefined }, run);
+}
+
+/**
+ * {@link withPlaceKindMemo} for a walk that is synchronous and writes nothing anywhere: inside it a
+ * path OUTSIDE `roots` is also `lstat`ed once and its kind reused, for the walk's duration only
+ * ({@link PlaceKindMemo.outside}); beneath `roots` it reads and keeps through the run's memo, as
+ * any bracket does. Reached through `withWalkPlaceKindSnapshot` (`link-following.ts`).
+ *
+ * @param roots - As {@link withPlaceKindMemo}
+ * @param run - The walk: synchronous
+ * @throws TypeError when `run` returns a promise (a defect: work that outlives the call could see a write)
+ */
+export function withWalkPlaceKindMemo<T>(roots: readonly string[], run: () => T): T {
+  return withPlaceKindMemo(roots, () => {
+    const memo = placeKindsInBracket.getStore();
+    if (memo === undefined || memo === null || memo.outside !== undefined) return run();
+    return placeKindsInBracket.run({ ...memo, outside: new Map<string, PlaceKind>() }, () => {
+      const walked = run();
+      if (walked instanceof Promise) throw new TypeError('withWalkPlaceKindMemo: the walk returned a promise; it keeps kinds outside its roots only while it runs, so it must be synchronous');
+      return walked;
+    });
+  });
 }
 
 /**
@@ -89,13 +119,51 @@ export function hostPlaceKind(path: string): PlaceKind {
   if (snapshot === undefined || snapshot === null) return lstatPlaceKind(path);
   // Compared and keyed in one spelling, so a path named either way is one entry.
   const spelled = toForwardSlash(path);
-  if (!isKeptBy(snapshot, spelled)) return lstatPlaceKind(path);
-  const known = snapshot.kinds.get(spelled);
+  const kept = keptKindsOf(snapshot, spelled);
+  if (kept === undefined) return lstatPlaceKind(path);
+  const known = kept.get(spelled);
   if (known !== undefined) return known;
   // A refusal throws here: never kept, asked again next time.
   const kind = lstatPlaceKind(path);
-  snapshot.kinds.set(spelled, kind);
+  kept.set(spelled, kind);
   return kind;
+}
+
+/**
+ * The code of the refusal {@link assertNoSnapshotCovers} throws: a write beneath the tree of a run
+ * that declared it writes nothing there. A defect in the verb, never an input's fault.
+ */
+export const WRITE_UNDER_PLACE_KIND_SNAPSHOT_CODE = 'WRITE_UNDER_PLACE_KIND_SNAPSHOT';
+
+/**
+ * Throw unless writing `path` leaves every answer the open place-kind memo keeps true: refused when
+ * a {@link withPlaceKindMemo} bracket is open (no {@link withoutPlaceKindMemo} inside it) and `path`
+ * is one of its roots or lies beneath one. Such a run declared it writes nothing under its tree,
+ * and its walks would go on reading the kinds kept before the write. Called by every shared write
+ * primitive (`writeFileUnder`, `makeDirectoryUnder`, `replaceFile`, `removeEntry`,
+ * `renameFileAtomic`, `copyTree`, `applyTreePlan`, `extractArchive`, `mkdirSyncReal`), so a verb
+ * whose run is mis-declared fails loudly at its first write. A write outside the roots (VAT's
+ * cache, the temp directory) goes ahead.
+ *
+ * @param path - The path the primitive is about to create, replace or remove: absolute, or relative to cwd; either separator
+ * @throws VatError {@link WRITE_UNDER_PLACE_KIND_SNAPSHOT_CODE} for a path the open memo covers, before anything is written
+ */
+export function assertNoSnapshotCovers(path: string): void {
+  const memo = placeKindsInBracket.getStore();
+  if (memo === undefined || memo === null) return;
+  const spelled = `${toForwardSlash(safePath.resolve(path)).replace(/\/$/u, '')}/`;
+  // A walk that keeps kinds outside its roots writes nothing anywhere.
+  const root = memo.outside === undefined ? memo.prefixes.find((prefix) => spelled.startsWith(prefix)) : spelled;
+  if (root === undefined) return;
+  throw new VatError(
+    WRITE_UNDER_PLACE_KIND_SNAPSHOT_CODE,
+    `Refusing to write ${visibleText(path)}: this run declared it writes nothing under ${visibleText(root)}, so its walks reuse what they read there. A verb that writes under its tree opens its run with tree 'writes' (withoutPlaceKindSnapshot).`,
+  );
+}
+
+/** The map `memo` keeps the kind at the forward-slashed `spelled` in: its tree's, its walk's outside the roots, or none. */
+function keptKindsOf(memo: PlaceKindMemo, spelled: string): Map<string, PlaceKind> | undefined {
+  return isKeptBy(memo, spelled) ? memo.kinds : memo.outside;
 }
 
 /** Whether `memo` keeps the kind at the forward-slashed `spelled`: strictly beneath one of its roots. */
@@ -104,17 +172,20 @@ function isKeptBy(memo: PlaceKindMemo, spelled: string): boolean {
 }
 
 /**
- * Whether `error` is `readlink` refusing, as not a link (`EINVAL`), a place the open memo answered
- * `link` — another process replaced it after the memo's one `lstat` — and the memo entry is now
- * dropped, so a walk taken again reads what stands there. Any other error is the walk's own.
+ * Whether `error`, thrown by the `readlink` of `read` — the place the walk asked, never the
+ * spelling Node reports on the error (on Windows it may be the namespaced `\\?\C:\...` form) — is
+ * that place no longer being the link the open memo kept: replaced by something else (`EINVAL`,
+ * "not a link") or deleted (`ENOENT`, `ENOTDIR`) by another process after the memo's one `lstat`.
+ * The memo entry is then dropped, so a walk taken again reads what stands there now. Any other
+ * error, or a place the memo did not keep as a link, is the walk's own.
  */
-function forgotStaleLink(error: unknown): boolean {
+function forgotStaleLink(error: unknown, read: string): boolean {
   const snapshot = placeKindsInBracket.getStore();
-  if (snapshot === undefined || snapshot === null || !isInvalidArgumentError(error)) return false;
-  const path = (error as { path?: unknown }).path;
-  if (typeof path !== 'string') return false;
-  const spelled = toForwardSlash(path);
-  return snapshot.kinds.get(spelled) === 'link' && snapshot.kinds.delete(spelled);
+  if (snapshot === undefined || snapshot === null) return false;
+  if (!isInvalidArgumentError(error) && !isPathAbsentError(error)) return false;
+  const spelled = toForwardSlash(read);
+  const kept = keptKindsOf(snapshot, spelled);
+  return kept?.get(spelled) === 'link' && kept.delete(spelled);
 }
 
 /** {@link hostPlaceKind}'s own `lstat`, no snapshot consulted. */
@@ -166,15 +237,30 @@ export function walkHostChain(path: string, rule: ChainRule): LinkChain {
   return chain;
 }
 
-/** {@link walkLinkChain} on this host, taken once more when a link the memo kept was replaced mid-run. */
+/** {@link walkLinkChain} on this host, taken once more when a link the memo kept was replaced or deleted mid-run. */
 function walkAfresh(resolved: string, rule: ChainRule, probe: ChainProbe): LinkChain {
+  // The place whose `readlink` failed, as the walk named it: the retry is keyed on what was
+  // asked, never on the path text an error carries.
+  let failedRead: string | undefined;
+  const watched: ChainProbe = {
+    kindAt: probe.kindAt,
+    textAt: (at) => {
+      try {
+        return probe.textAt(at);
+      } catch (error: unknown) {
+        failedRead = at;
+        throw error;
+      }
+    },
+  };
   try {
-    return walkLinkChain(resolved, rule, probe);
+    return walkLinkChain(resolved, rule, watched);
   } catch (error: unknown) {
-    // A link the memo kept, replaced mid-run (`readlink` says "not a link"): the walk is taken once
-    // more, reading that place afresh. Re-read rather than a coded error, so the walk answers what
-    // stands there now and any refusal stays the raw errno every caller's classifier reads.
-    if (!forgotStaleLink(error)) throw error;
+    // A link the memo kept, replaced or deleted mid-run: the walk is taken once more, reading that
+    // place afresh. Re-read rather than a coded error, so the walk answers what stands there now
+    // and any refusal (a second one on the retry included) stays the raw errno every caller's
+    // classifier reads.
+    if (failedRead === undefined || !forgotStaleLink(error, failedRead)) throw error;
     return walkLinkChain(resolved, rule, probe);
   }
 }
