@@ -25,7 +25,7 @@
  *
  * | | `projection-sqlite` | a file-per-table backend |
  * |---|---|---|
- * | {@link FactStore.writeBlobFacts} | one `BEGIN IMMEDIATE` transaction: look up each key covered at read in the ledger, replace the keys uncovered at read or evicted since, re-stamp every held key, evict past `max(retention, held keys)` | a staged file per table, renamed into a content-addressed directory |
+ * | {@link FactStore.writeBlobFacts} | one `BEGIN IMMEDIATE` transaction: look up each key covered at read in the ledger, replace the keys uncovered at read or evicted since, re-stamp every held key, evict the oldest keys past `blobTierBudgetBytes`, never the write's own (excluded by key) | a staged file per table, renamed into a content-addressed directory |
  * | {@link FactStore.writeExtent} | delete-then-insert under the key, one transaction | a file per table under `root=…/tree=…/`, published through a manifest |
  * | {@link FactStore.readExtent} | `SELECT … WHERE rootId = ? AND treeHash = ?` | read the manifest, then scan exactly the files it lists |
  *
@@ -80,7 +80,12 @@ import type { ReferenceSyntacticForm } from '../schemas/projection-blobs.js';
 
 import type { HarnessId } from './harness/profile.js';
 import type { Projection } from './projection.js';
-import { STORE_BOOKKEEPING_TABLES, type StoreBookkeepingTables } from './store-bookkeeping.js';
+import {
+  BLOB_BYTE_MEASURE,
+  STORE_BOOKKEEPING_TABLES,
+  type BlobByteMeasure,
+  type StoreBookkeepingTables,
+} from './store-bookkeeping.js';
 import { PROJECTION_TABLES, type ProjectionRow, type ProjectionTableName } from './table-registry.js';
 
 /** Hex digits kept from the shape digest. Short on purpose — it is a path component. */
@@ -298,8 +303,11 @@ export interface FactStore {
    * ledger, which answers whether the key was evicted since the read, not
    * whether it is present; (2) replaces the keys uncovered at read or evicted
    * since, and the pairs not settled at read; (3) re-stamps every held key,
-   * after the inserts and before eviction; (4) evicts past
-   * `max(retention, held keys)`, so a large tree cannot evict its own keys.
+   * after the inserts and before eviction; (4) keeps the newest keys whose
+   * recorded bytes fit the backend's byte budget and evicts the rest, never a
+   * key the write holds: those are excluded by key, not by timestamp, so neither
+   * a tree larger than the budget nor a store stamped by a faster clock can
+   * evict the write's own keys.
    * Blob and harness rows are immutable per key (per pair for harness rows):
    * identical bytes yield identical rows, so a key still in the ledger is
    * unchanged since the read, and two writers that both replace a key leave
@@ -459,7 +467,10 @@ export interface FactStore {
  *   and `blob_keys`, each column's name and type and the primary key), which a
  *   backend builds its DDL from. A store written before a bookkeeping column
  *   existed cannot be written by a build that records it, so it must be cold
- *   rather than adopted.
+ *   rather than adopted;
+ * - the **byte measure** (`BLOB_BYTE_MEASURE`), the unit `blob_keys.bytes` is
+ *   recorded in: a store recorded under one measure and budgeted under another
+ *   would sum two units.
  *
  * What changes facts without changing their shape is not an input: the
  * extraction code, and the skill-text declaration whose matches
@@ -473,7 +484,7 @@ export interface FactStore {
  * safePath.join(vatCacheNamespaceRoot(), projectionStoreDirectoryName())
  */
 export function projectionShapeDigest(): string {
-  memoizedShapeDigest ??= shapeDigestOf(PROJECTION_TABLES, STORE_BOOKKEEPING_TABLES);
+  memoizedShapeDigest ??= shapeDigestOf(PROJECTION_TABLES, STORE_BOOKKEEPING_TABLES, BLOB_BYTE_MEASURE);
   return memoizedShapeDigest;
 }
 
@@ -484,17 +495,19 @@ type ShapedTableSpec = Pick<
 >;
 
 /**
- * The shape digest of a table registry and a bookkeeping declaration — the pure
- * function {@link projectionShapeDigest} memoizes over the real ones. Exported
- * so a test can ask what a perturbed declaration hashes to.
+ * The shape digest of a table registry, a bookkeeping declaration and a byte
+ * measure — the pure function {@link projectionShapeDigest} memoizes over the
+ * real ones. Exported so a test can ask what a perturbed declaration hashes to.
  *
  * @param tables - The projection table registry
  * @param bookkeeping - The store's bookkeeping tables
+ * @param measure - The byte measure `blob_keys.bytes` is recorded in
  * @returns Twelve lowercase hex digits
  */
 export function shapeDigestOf(
   tables: Readonly<Record<string, ShapedTableSpec>>,
   bookkeeping: StoreBookkeepingTables,
+  measure: BlobByteMeasure,
 ): string {
   const hash = createHash('sha256').update('vat-projection-shape');
   // Registry declaration order, which is `Projection`'s own field order — a
@@ -506,10 +519,12 @@ export function shapeDigestOf(
       + `\0${spec.contextColumn ?? ''}\0${spec.partitionColumn ?? ''}\0${schemaShapeSource(spec.schema)}`,
     );
   }
-  for (const table of [bookkeeping.extents, bookkeeping.blobKeys]) {
+  for (const table of Object.values(bookkeeping)) {
     const columns = table.columns.map((column) => `${column.name} ${column.type}`).join(',');
     hash.update(`\0bookkeeping\0${table.name}\0${columns}\0${table.primaryKey.join(',')}`);
   }
+  // Every field, so a constant added to the measure is digested with no edit here.
+  hash.update(`\0measure\0${JSON.stringify(measure)}`);
   return hash.digest('hex').slice(0, SHAPE_DIGEST_LENGTH);
 }
 

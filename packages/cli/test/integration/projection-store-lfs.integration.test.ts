@@ -121,12 +121,39 @@ describe('treeUnchanged checks a pulled LFS file against what the run read', () 
   });
 });
 
+/** The start of the notice a tree with pulled LFS files and no configured filter gets. */
+const LFS_FILTER_NOTICE = 'with Git LFS files in it, but this environment configures no git-lfs filter';
+
+/** What opening a cache over the fixture wrote to stderr. */
+async function stderrOfOpen(): Promise<string> {
+  const stderr = captureStderr();
+  try {
+    const opened = await openPopulationCache({ root: fixture.repo });
+    await opened?.close();
+  } finally {
+    stderr.restore();
+  }
+  return stderr.written.join('');
+}
+
+describe('the notice that no LFS filter is configured', () => {
+  it('is given when a pulled LFS file is keyed with no filter configured', async () => {
+    fixture.git('config', '--remove-section', 'filter.lfs');
+    expect(await stderrOfOpen()).toContain(LFS_FILTER_NOTICE);
+  });
+
+  it('is not given when no LFS file is pulled: nothing could be re-cleaned', async () => {
+    fixture.writeAndRefresh(LFS_DOC, lfsPointerOf(CONTENT));
+    fixture.git('config', '--remove-section', 'filter.lfs');
+    expect(await stderrOfOpen()).not.toContain(LFS_FILTER_NOTICE);
+  });
+});
+
 describe('an LFS file the key cannot decide', () => {
   it('opens no store and says why, as every tree git cannot key', async () => {
-    // 128 bytes declare `size 128`, and that pointer is 128 bytes too: the size cannot tell.
-    const exact = 'x'.repeat(128);
-    expect(Buffer.byteLength(lfsPointerOf(exact)), 'premise').toBe(128);
-    fixture.writeAndRefresh(LFS_DOC, exact);
+    // A pointer written CRLF cleans to the committed pointer, so its stat is recorded clean, but its
+    // size on disk is neither the pointer's nor the content's.
+    fixture.writeAndRefresh(LFS_DOC, lfsPointerOf(CONTENT).replaceAll('\n', '\r\n'));
     const stderr = captureStderr();
     try {
       expect(await openPopulationCache({ root: fixture.repo })).toBeUndefined();

@@ -849,8 +849,9 @@ function createSchema(database: DatabaseSync): void {
   // Built from the declaration the shape digest hashes: a store written before a
   // bookkeeping column existed lives under another digest, so `IF NOT EXISTS`
   // never meets a table of another shape.
-  database.exec(createBookkeepingTableSql(STORE_BOOKKEEPING_TABLES.extents));
-  database.exec(createBookkeepingTableSql(STORE_BOOKKEEPING_TABLES.blobKeys));
+  for (const table of Object.values(STORE_BOOKKEEPING_TABLES)) {
+    database.exec(createBookkeepingTableSql(table));
+  }
   for (const spec of allSpecs()) {
     database.exec(createTableSql(spec));
   }
@@ -953,9 +954,8 @@ function prepareStoreTables(database: DatabaseSync, retention: Retention): Store
       `DELETE FROM "${EXTENTS_TABLE}" WHERE "storeRootId" = ? AND "storeTreeHash" = ?`,
     ),
     // The blob tier's, mirroring the extent tier's above — including the `rowid`
-    // tie-break, which is what makes the keys a write just recorded the newest:
-    // `INSERT OR REPLACE` re-inserts, so a refreshed key carries the newest rowid
-    // as well as the newest timestamp.
+    // tie-break among the keys the write does not hold. The ones it holds are
+    // protected by key, not by the order (see BLOB_KEYS_PAST_BUDGET_SQL).
     recordBlobKey: database.prepare(`${RECORD_BLOB_KEY_SQL} VALUES (?, ?, ?)`),
     // The sub-select reads the row the `REPLACE` is about to delete: SQLite
     // evaluates the values before it resolves the conflict.
@@ -979,22 +979,29 @@ const RECORD_BLOB_KEY_SQL = `INSERT OR REPLACE INTO ${quoteIdentifier(BLOB_KEYS_
   + ` (${[BLOB_KEY_COLUMN, WRITTEN_AT_COLUMN, BLOB_BYTES_COLUMN].map((column) => quoteIdentifier(column)).join(', ')})`;
 
 /**
- * The keys past the blob tier's budget: newest first (`writtenAt`, then
- * `rowid`), a key goes once the running sum of recorded bytes up to and
- * including it passes the budget — unless it is among the newest `held` rows,
- * the keys the calling write just recorded. Bound as `(held, budget)`.
+ * The keys past the blob tier's budget. The keys the calling write holds are
+ * named BY KEY (bound as a JSON array, read through `json_each`) and never
+ * selected; their bytes count first. The rest follow newest first (`writtenAt`,
+ * then `rowid`), and one goes once the running sum of recorded bytes up to and
+ * including it passes the budget. Bound as `(heldKeysJson, budget)`.
+ *
+ * By key and not by place in the order: a store restored from a runner whose
+ * clock ran ahead holds `writtenAt` values later than this write's stamp, so
+ * the newest rows are not always the write's own.
  *
  * The running sum only grows, so the kept keys are exactly a newest prefix: one
  * cut, never a knapsack that keeps an old small key behind an evicted big one.
  * One pass over the ledger (a row per key), never over the stored rows.
  */
 const BLOB_KEYS_PAST_BUDGET_SQL = `SELECT ${quoteIdentifier(BLOB_KEY_COLUMN)} FROM (`
-  + `SELECT ${quoteIdentifier(BLOB_KEY_COLUMN)}, ROW_NUMBER() OVER recency AS "position",`
-  + ` SUM(${quoteIdentifier(BLOB_BYTES_COLUMN)}) OVER recency AS "running"`
-  + ` FROM ${quoteIdentifier(BLOB_KEYS_TABLE)}`
-  + ` WINDOW recency AS (ORDER BY ${quoteIdentifier(WRITTEN_AT_COLUMN)} DESC, "rowid" DESC`
-  + ' ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)'
-  + ') WHERE "position" > ? AND "running" > ?';
+  + `SELECT ${quoteIdentifier(BLOB_KEY_COLUMN)}, "held",`
+  + ` SUM(${quoteIdentifier(BLOB_BYTES_COLUMN)}) OVER (ORDER BY "held" DESC, ${quoteIdentifier(WRITTEN_AT_COLUMN)} DESC, "position" DESC`
+  + ' ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "running"'
+  + ` FROM (SELECT ${[BLOB_KEY_COLUMN, BLOB_BYTES_COLUMN, WRITTEN_AT_COLUMN].map((column) => quoteIdentifier(column)).join(', ')},`
+  + ' "rowid" AS "position",'
+  + ` ${quoteIdentifier(BLOB_KEY_COLUMN)} IN (SELECT "value" FROM json_each(?)) AS "held"`
+  + ` FROM ${quoteIdentifier(BLOB_KEYS_TABLE)})`
+  + ') WHERE NOT "held" AND "running" > ?';
 
 /** A table bundle seen structurally: table key to rows. */
 type RowBundle = Record<string, readonly Record<string, unknown>[]>;
@@ -1029,7 +1036,8 @@ type RowBundle = Record<string, readonly Record<string, unknown>[]>;
  * 3. every held key is re-stamped, after the inserts, with its bytes: a replaced
  *    key with what this write inserted for it, any other with its recorded bytes
  *    plus what this write inserted for it less what it deleted of it;
- * 4. the newest keys whose bytes fit the budget are kept, the held ones always.
+ * 4. the newest keys whose bytes fit the budget are kept, the held ones always
+ *    (by key: their bytes count first, and none of them is ever selected).
  *
  * ## The ledger is exact
  *
@@ -1073,7 +1081,7 @@ function writeBlobRows(tables: StoreTables, write: BlobFactsWrite): readonly str
       if (replaced.has(key)) tables.recordBlobKey.run(key, writtenAt, added);
       else tables.restampBlobKey.run(key, writtenAt, key, added - (deleted.get(key) ?? 0));
     }
-    evicted = evictBlobKeysPastBudget(tables, held.length);
+    evicted = evictBlobKeysPastBudget(tables, held);
   });
   countWrite(written);
   // Outside the transaction, because SQLite refuses `incremental_vacuum`
@@ -1312,18 +1320,18 @@ function forgetBlobKeys(tables: StoreTables, contentKeys: readonly string[]): vo
  * manifest row would be unevictable for good.
  *
  * ⛔ The keys this write holds are never selected, every one of which it
- * re-stamped, replaced or not. They hold the newest rowids, so a cut by bytes
- * alone would take the write's OWN oldest keys whenever one write held more
- * bytes than the budget — and because the coverage check is all-or-nothing, a
- * tree that size would then miss on every run while paying for every write. The
- * surplus is reclaimed by the next, smaller write.
+ * re-stamped, replaced or not, and they are excluded by key, not by their place
+ * in the order. A cut by bytes alone would take the write's OWN oldest keys
+ * whenever one write held more bytes than the budget — and because the coverage
+ * check is all-or-nothing, a tree that size would then miss on every run while
+ * paying for every write. The surplus is reclaimed by the next, smaller write.
  *
  * @param tables - The connection's statements
- * @param held - How many keys the calling write holds and re-stamped
+ * @param held - The keys the calling write holds and re-stamped
  * @returns How many keys were evicted
  */
-function evictBlobKeysPastBudget(tables: StoreTables, held: number): number {
-  const victims = (tables.blobKeysPastBudget.all(held, tables.retention.blobTierBudgetBytes) as {
+function evictBlobKeysPastBudget(tables: StoreTables, held: readonly string[]): number {
+  const victims = (tables.blobKeysPastBudget.all(JSON.stringify(held), tables.retention.blobTierBudgetBytes) as {
     contentKey: string;
   }[]).map((row) => row.contentKey);
   if (victims.length === 0) return 0;

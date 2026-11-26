@@ -229,7 +229,9 @@ function heldByKey(request: BlobRequest<BlobScopedTableName>, keys: readonly Con
 }
 
 /**
- * The content key a stored row is filed under, read through the one parser.
+ * The content key a stored row is filed under, read through the one parser: a boundary check on
+ * the grouping column a blob read is split by, so a damaged store is refused rather than its rows
+ * silently dropped. The row's other key columns are typed by the store, not parsed per row.
  *
  * @param table - The row's table
  * @param column - The table's key column

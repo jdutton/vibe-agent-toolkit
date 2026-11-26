@@ -88,10 +88,12 @@ Most are listed with their exempt files in `eslint.config.js`. One has no exempt
   array literal (`appendAll(lines, ['header', ...rows])`) is not an argument list and is allowed.
 - **`content-key-opaque`**, type-aware, over every package's `.ts`/`.cts`, `src` and `test` alike:
   a `ContentKey` (`string & { readonly __brand: 'ContentKey' }`) is opaque outside the files that
-  own its format. It reports a type assertion to the brand, a string method that reads into the
-  text (`slice`, `split`, `indexOf`, …), `compareCodeUnits`/`localeCompare` on a key, and `===`/`!==`
-  between two keys; the brand is found by the type checker, never by the type's name. A bare
-  `.sort()` and `<`/`>` are allowed: key order is text order. Its `allowFiles` list,
+  own its format. It reports a type assertion to the brand, or to an array, record, object or
+  container of keys, from values not already keys; any member access, index, spread, destructure
+  or iteration of a key, and a key handed to a `RegExp`'s `test`/`exec` (each reads into the text);
+  and `compareCodeUnits`/`localeCompare` on a key. The brand is found by the type checker, never by
+  the type's name. Two keys are equal exactly when their text is, so `===` between keys is the
+  contract; a bare `.sort()` and `<`/`>` are allowed: key order is text order. Its `allowFiles` list,
   `CONTENT_KEY_OPAQUE_ALLOW` in `eslint.config.js` (the parser, `resources/src/content-key.ts`, and
   its own suite, which pins the key's spelling), is
   held both ways by `dev-tools/test/integration/content-key-opaque-ratchet.integration.test.ts`.

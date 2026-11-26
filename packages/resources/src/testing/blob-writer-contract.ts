@@ -286,8 +286,8 @@ export const BLOB_WRITER_CONTRACT: readonly BlobWriterContractCase[] = [
   },
   {
     name: 'every held key is re-stamped before eviction',
-    mutant: 'stamp only replaced keys and protect only the newest `replaced` ledger rows from the budget',
-    // A budget of one byte: only the held-key floor keeps anything.
+    mutant: 'stamp only replaced keys and protect only the replaced keys from the budget',
+    // A budget of one byte: only the held keys' exclusion keeps anything.
     run: (open) => withStore(open, 1, async ({ store }) => {
       const covered = ['c', 'd', 'e', 'f'].map((seed) => contractKey(seed));
       const added = contractKey('9');
@@ -353,7 +353,7 @@ export const BLOB_WRITER_CONTRACT: readonly BlobWriterContractCase[] = [
   },
   {
     name: 'every held key stays even when the held keys alone exceed the budget',
-    mutant: 'cut by bytes alone, without the held-row floor',
+    mutant: 'cut by bytes alone, without excluding the held keys',
     run: async (open: BlobWriterContractFactory): Promise<void> => {
       // Two writes of five keys, each larger than three keys' bytes. Each keeps
       // all five of its own; the second takes every key of the first.

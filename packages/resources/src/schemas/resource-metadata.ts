@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { ContentKeySchema } from './projection-shared.js';
+import { ContentKeySchema } from '../content-key.js';
 
 /**
  * Type of link found in markdown resources.

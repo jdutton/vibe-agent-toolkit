@@ -6,7 +6,8 @@
  * Declared here, in `resources`, and not as DDL in the backend, because their
  * shape is part of what a stored projection IS: a store whose `blob_keys` lacks
  * a column this build writes cannot be read by it. {@link shapeDigestOf} hashes
- * this declaration beside `PROJECTION_TABLES`, so editing a bookkeeping column
+ * this declaration and the byte measure ({@link BLOB_BYTE_MEASURE}) beside
+ * `PROJECTION_TABLES`, so editing a bookkeeping column or a measure constant
  * moves the store to another directory, exactly as editing a row schema does.
  * The SQLite backend builds the `CREATE TABLE` for each from this declaration
  * and from nothing else.
@@ -30,11 +31,12 @@ export interface BookkeepingTable {
   readonly primaryKey: readonly string[];
 }
 
-/** The two bookkeeping tables, by role. */
-export interface StoreBookkeepingTables {
-  readonly extents: BookkeepingTable;
-  readonly blobKeys: BookkeepingTable;
-}
+/**
+ * The two bookkeeping tables, by role. A record type rather than an interface so
+ * `Object.values` of it is typed: every consumer that walks the tables walks
+ * this one list.
+ */
+export type StoreBookkeepingTables = Readonly<Record<'extents' | 'blobKeys', BookkeepingTable>>;
 
 /**
  * The columns naming which tree an extent-scoped row was observed in.
@@ -60,8 +62,34 @@ export const EXTENT_KEY_COLUMNS = ['storeRootId', 'storeTreeHash'] as const;
 export type EncodedStoreValue = null | number | bigint | string | Uint8Array;
 
 /**
- * The logical bytes of one stored row: a string's UTF-8 length, 8 for a number
- * or bigint, 0 for null, a byte array's length, summed over the row's values.
+ * The byte measure's constants, as data: what each kind of encoded value counts
+ * as. A byte array counts its length, which has no constant.
+ *
+ * {@link shapeDigestOf} hashes this beside the bookkeeping tables, because
+ * `blob_keys.bytes` is recorded in this unit: a store written under one measure
+ * and budgeted under another would sum two units, so changing a constant moves
+ * the store to another directory.
+ */
+export interface BlobByteMeasure {
+  /** What a null counts as. */
+  readonly nullBytes: number;
+  /** What a number or bigint counts as. */
+  readonly numberBytes: number;
+  /** The encoding a string's length is counted in. */
+  readonly stringEncoding: 'utf8' | 'utf16le';
+}
+
+/**
+ * The byte measure {@link blobRowBytes} applies: a null is 0, a number or bigint
+ * 8 (SQLite's widest integer and its real are eight bytes), a string its UTF-8
+ * length.
+ */
+export const BLOB_BYTE_MEASURE: BlobByteMeasure = { nullBytes: 0, numberBytes: 8, stringEncoding: 'utf8' };
+
+/**
+ * The logical bytes of one stored row: each value measured by
+ * {@link BLOB_BYTE_MEASURE} (a string's UTF-8 length, 8 for a number or bigint,
+ * 0 for null) or, for a byte array, its length, summed over the row's values.
  *
  * The unit of the blob tier's byte budget (`blob_keys.bytes`). Logical, not file
  * bytes: page and index overhead are out of the count, and a backend's default
@@ -85,14 +113,11 @@ export function blobRowBytes(values: Iterable<EncodedStoreValue>): number {
  * @returns Its bytes
  */
 function valueBytes(value: EncodedStoreValue): number {
-  if (value === null) return 0;
-  if (typeof value === 'string') return Buffer.byteLength(value, 'utf8');
-  if (typeof value === 'number' || typeof value === 'bigint') return NUMBER_BYTES;
+  if (value === null) return BLOB_BYTE_MEASURE.nullBytes;
+  if (typeof value === 'string') return Buffer.byteLength(value, BLOB_BYTE_MEASURE.stringEncoding);
+  if (typeof value === 'number' || typeof value === 'bigint') return BLOB_BYTE_MEASURE.numberBytes;
   return value.byteLength;
 }
-
-/** What a number or bigint counts as: SQLite's widest integer and its real are eight bytes. */
-const NUMBER_BYTES = 8;
 
 /** The column both bookkeeping tables order eviction by. */
 const WRITTEN_AT: BookkeepingColumn = { name: 'writtenAt', type: 'TEXT' };

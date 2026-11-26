@@ -28,14 +28,15 @@
  *
  * ## The key text: `<parserKind>.<keyKind>.<hex>`
  *
- * A key is a {@link ContentKey}: a branded string minted only by
+ * A key is a {@link ContentKey}: a branded string minted by
  * {@link formatContentKey} (and so by {@link computeContentKey}) or recognized by
- * {@link parseContentKey}, the one parser. `keyKind` names how the hex was made:
+ * {@link parseContentKey}, the one parser, or read back from a store this VAT
+ * version wrote (see {@link ContentKey}). `keyKind` names how the hex was made:
  * `sha256` (64 lowercase hex, the plain SHA-256 of the raw bytes — the only kind
  * minted here), `git-sha1` (40) and `git-sha256` (64), git object IDs, which are
- * format-only so far. Two keys of different key kinds are not comparable
- * ({@link equalContentKeys} says so rather than answering `false`): one byte
- * string has a key of each kind, and they never group together.
+ * format-only so far. Two keys are equal exactly when their text is (`===`), so
+ * keys of different key kinds are never equal: one byte string has a key of each
+ * kind, and they never group together.
  *
  * ## The parser kind is an unhashed qualifier, and that is still self-invalidating
  *
@@ -44,8 +45,8 @@
  * identical bytes at `x.md` and `x.html` legitimately produce different parse
  * results. That is realizable on the **empty file**. So the parser kind is part
  * of the key's identity: it is IN the key text, and two keys are equal only when
- * their whole text is. Code compares keys through {@link equalContentKeys} or
- * the full text, never the hex alone; the hex is a field of the key, not the key.
+ * their whole text is. Code compares keys by the full text (`===`), never the
+ * hex alone; the hex is a field of the key, not the key.
  *
  * It is deliberately NOT in the hash preimage. A `sha256` key's hex is the plain
  * SHA-256 of the raw bytes, with no domain separator, so it can be compared with
@@ -130,6 +131,7 @@ import { createHash } from 'node:crypto';
 import { countWork } from '@vibe-agent-toolkit/utils';
 import { readDecodableBytes } from '@vibe-agent-toolkit/utils/fs';
 import { decodeTextContent, type TextProvenance } from '@vibe-agent-toolkit/utils/text';
+import { z } from 'zod';
 
 import type { DocumentParserKind } from './mime-type.js';
 import { inputBytesBreach } from './parse-limits.js';
@@ -199,9 +201,16 @@ export const KEY_KINDS: readonly KeyKind[] = Object.keys(KEY_KIND_HEX_LENGTHS) a
 
 /**
  * A content key: `<parserKind>.<keyKind>.<hex>`. Branded so a plain string cannot
- * stand in for one: a value of this type came from {@link formatContentKey},
- * {@link computeContentKey}, {@link parseContentKey} or `ContentKeySchema`, all of
- * which hold it to {@link CONTENT_KEY_PATTERN}.
+ * stand in for one. A value of this type is minted by {@link formatContentKey}
+ * (and so {@link computeContentKey}), {@link parseContentKey} or `ContentKeySchema`,
+ * all of which hold it to {@link CONTENT_KEY_PATTERN}; or it is a row read back
+ * from a projection store that this same VAT version wrote. The store lives in
+ * the cache namespace (the VAT version), in a directory named by its shape digest,
+ * so its rows were minted by this code; their key columns are typed by a cast, not
+ * re-parsed per row. The one check on that read is `storedKeyOf` in
+ * `projection/stored-reads.ts`, a boundary check on the grouping column a blob
+ * read is split by, which refuses a damaged store rather than mis-filing its rows.
+ * Two keys are equal exactly when their text is.
  */
 export type ContentKey = string & { readonly __brand: 'ContentKey' };
 
@@ -227,6 +236,21 @@ export const CONTENT_KEY_PATTERN =
   new RegExp(String.raw`^(?:${PARSER_KINDS.join('|')})\.(?:${
     KEY_KINDS.map((keyKind) => String.raw`${keyKind}\.[0-9a-f]{${KEY_KIND_HEX_LENGTHS[keyKind]}}`).join('|')
   })$`);
+
+/**
+ * A content key as a projection row column: `<parserKind>.<keyKind>.<hex>`, as
+ * {@link computeContentKey} produces it —
+ * `<parserKind>.<keyKind>.<hex>`. This is the primary key of the `blobs` table and
+ * the foreign key every blob-keyed and path-dependent table joins through.
+ *
+ * Still a `ZodString` at runtime, so the emitted JSON Schema carries the same
+ * `pattern` and the shape digest sees the same declaration; typed to parse to the
+ * branded {@link ContentKey}, which the regex is exactly the proof of, so every
+ * row type inferred from it carries the brand. Declared here, beside the parser,
+ * because it is one of the format's mints.
+ */
+export const ContentKeySchema = z.string().regex(CONTENT_KEY_PATTERN)
+  .describe('A content key: "<parserKind>.<keyKind>.<hex>" (keyKind sha256 | git-sha1 | git-sha256)') as unknown as z.ZodType<ContentKey, z.ZodStringDef, string>;
 
 /**
  * The one parser: `text` as a {@link ContentKey} when it is one, else `undefined`.
@@ -266,19 +290,6 @@ export function contentKeyParts(key: ContentKey): ContentKeyParts {
     keyKind: key.slice(first + 1, second) as KeyKind,
     hex: key.slice(second + 1),
   };
-}
-
-/**
- * Whether two keys name one content under one parser.
- *
- * @param a - A key
- * @param b - Another key
- * @returns `'not-comparable'` when the key kinds differ (one byte string has a key of each kind, so
- *   a difference there says nothing); otherwise whether the two texts are equal
- */
-export function equalContentKeys(a: ContentKey, b: ContentKey): boolean | 'not-comparable' {
-  if (contentKeyParts(a).keyKind !== contentKeyParts(b).keyKind) return 'not-comparable';
-  return a === b;
 }
 
 /**

@@ -18,7 +18,7 @@
 import { appendFileSync } from 'node:fs';
 
 import { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
-import { ALL_BLOB_REQUEST, computeContentKey, type ContentKey, equalContentKeys, parserKindForPath, uncoveredContentKeys } from '@vibe-agent-toolkit/resources';
+import { ALL_BLOB_REQUEST, computeContentKey, type ContentKey, parserKindForPath, uncoveredContentKeys } from '@vibe-agent-toolkit/resources';
 import { safePath, type WorkCounter } from '@vibe-agent-toolkit/utils';
 import { parseLookupsIn } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
@@ -115,7 +115,7 @@ async function expectPrimedStoreSettled(arm: ValidateArm): Promise<void> {
     const rows = await store.readBlobFacts(keys, ALL_BLOB_REQUEST);
     expect(uncoveredContentKeys(rows, keys), 'uncovered keys in the primed store').toEqual([]);
     // Positive control for purity: the linking document's link is a stored reference, so the resolver has a target.
-    expect(rows.blobReferences.filter((row) => equalContentKeys(row.blob, committedKey(LINKING)) === true).map((row) => row.rawRef), 'the linking document\'s references')
+    expect(rows.blobReferences.filter((row) => row.blob === committedKey(LINKING)).map((row) => row.rawRef), 'the linking document\'s references')
       .toContain('./a01.md');
     const settled = new Set(rows.harnessBlobFacts.map((row) => row.blob));
     const reached = REACHED.map((path) => committedKey(path));

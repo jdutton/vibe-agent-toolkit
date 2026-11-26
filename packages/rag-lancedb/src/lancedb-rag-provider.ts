@@ -30,7 +30,6 @@ import {
 } from '@vibe-agent-toolkit/rag';
 import {
   contentKeyParts,
-  equalContentKeys,
   readContentWithKey,
   transformContent,
   type ContentTransformOptions,
@@ -936,7 +935,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     // under old links, headings and frontmatter — so the bytes are re-keyed at
     // use and a mismatch refuses this resource before anything is written for it
     // (ADR I2a). Thrown, it becomes this resource's entry in `result.errors`.
-    if (equalContentKeys(keyed.key, resource.contentKey) !== true) {
+    if (keyed.key !== resource.contentKey) {
       throw new Error(
         `${resource.filePath} changed since it was crawled: its content no longer matches the content key the registry recorded, so it was not indexed. Re-run to index the current content.`,
       );

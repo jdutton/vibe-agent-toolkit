@@ -36,7 +36,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { type ContentKey, contentKeyParts, equalContentKeys } from '../src/content-key.js';
+import { type ContentKey, contentKeyParts } from '../src/content-key.js';
 import type { Projection } from '../src/projection/projection.js';
 import { parserKindForPath } from '../src/projection/router.js';
 import type { BlobReferenceRow, BlobRow, BlobSectionRow } from '../src/schemas/projection-blobs.js';
@@ -207,7 +207,7 @@ let projection: Projection;
 function blobAt(path: string): BlobFacts {
   const key = projection.resourceRealizations.find((row) => row.path === path)?.contentKey;
   if (key === undefined || key === null) throw new Error(`fixture: ${path} is not keyed`);
-  const filed = (blob: ContentKey): boolean => equalContentKeys(blob, key) === true;
+  const filed = (blob: ContentKey): boolean => blob === key;
   return {
     key,
     row: projection.blobs.find((blob) => filed(blob.contentKey)),

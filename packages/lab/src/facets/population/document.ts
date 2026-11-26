@@ -25,7 +25,10 @@ import type { PopulationEntry, PopulationIdentity, PopulationIdentityScheme } fr
 /** A kind-hashed key, printed by the builds after rc.17 and before the qualified key. */
 const KIND_HASHED_KEY = /^[a-z]+\.[0-9a-f]{64}$/;
 
-/** A qualified key: the key kind names how the hex was made, and fixes its length. */
+/**
+ * A qualified key: the key kind names how the hex was made, and fixes its length. Restated, since
+ * resources is a devDependency only; `population-document.test.ts` holds it to `parseContentKey`.
+ */
 const QUALIFIED_KEY = /^[a-z]+\.(?:sha256\.[0-9a-f]{64}|git-sha1\.[0-9a-f]{40}|git-sha256\.[0-9a-f]{64})$/;
 
 /**

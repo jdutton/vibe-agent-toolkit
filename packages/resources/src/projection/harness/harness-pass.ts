@@ -27,7 +27,7 @@
 
 import { countWork, forEachInOrder } from '@vibe-agent-toolkit/utils';
 
-import { equalContentKeys, type ContentKey, type MeasuredContent } from '../../content-key.js';
+import type { ContentKey, MeasuredContent } from '../../content-key.js';
 import type { ParseDispatcher } from '../../parse-dispatcher.js';
 import { isPerRunParseRefusal } from '../../parse-limits.js';
 import type { HarnessBlobFactsRow, HarnessBlobImportRow } from '../../schemas/projection-harness.js';
@@ -237,7 +237,7 @@ async function settleFrontier(
     const content = await sources.readContent.read(entry);
     // Gone, or rewritten since the base keyed it: deriving from other bytes would
     // file one blob's facts under another blob's key.
-    if (content === null || equalContentKeys(content.key, entry.contentKey) !== true) {
+    if (content?.key !== entry.contentKey) {
       tally.unreadable.add(entry.contentKey);
       return;
     }

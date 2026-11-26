@@ -8,7 +8,6 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { equalContentKeys } from '../src/content-key.js';
 import { launchWalk } from '../src/projection/claude-context-walk.js';
 import { CLAUDE_OVERSIZE_BYTES } from '../src/projection/harness/claude-code.js';
 import { HarnessFactsAbsentError } from '../src/projection/harness/facts-index.js';
@@ -32,7 +31,7 @@ async function oversizeChain(): Promise<{ projection: Projection; bigKey: string
   if (bigKey === undefined || bigKey === null) throw new Error('fixture: big.md is not keyed');
   const projection: Projection = {
     ...built,
-    blobs: built.blobs.map((row) => (equalContentKeys(row.contentKey, bigKey) === true ? { ...row, bytes: CLAUDE_OVERSIZE_BYTES + 1 } : row)),
+    blobs: built.blobs.map((row) => (row.contentKey === bigKey ? { ...row, bytes: CLAUDE_OVERSIZE_BYTES + 1 } : row)),
   };
   return { projection, bigKey };
 }

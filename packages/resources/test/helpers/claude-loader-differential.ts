@@ -48,7 +48,7 @@
 import { forEachInOrder } from '@vibe-agent-toolkit/utils';
 import { seededRandom } from '@vibe-agent-toolkit/utils/testing';
 
-import { equalContentKeys, type ContentKey } from '../../src/content-key.js';
+import type { ContentKey } from '../../src/content-key.js';
 import { estimateTokens } from '../../src/link-classify.js';
 import { account, type AccountedRow } from '../../src/projection/claude-context-accounting.js';
 import { whatLoadsAt } from '../../src/projection/claude-context-query.js';
@@ -323,7 +323,7 @@ function importRowsOf(
   contentKey: ContentKey | null | undefined,
 ): readonly { readonly target: string }[] {
   if (contentKey === null || contentKey === undefined) return [];
-  if (!projection.blobs.some((row) => equalContentKeys(row.contentKey, contentKey) === true)) return [];
+  if (!projection.blobs.some((row) => row.contentKey === contentKey)) return [];
   const facts = harnessFactsIndex(projection, CLAUDE_CODE.id);
   if (facts.factsOf(contentKey) !== undefined) return facts.requireImports(contentKey, path);
   return claudeMemoryFactsOf(tree.get(path) ?? '').imports;

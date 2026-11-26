@@ -150,7 +150,8 @@ a `blob_keys` ledger records, for each content key, when a write last held it
 and how many bytes its rows store (`blobRowBytes` over the encoded values, kept
 exact as pairs are replaced and added). A write keeps the newest keys whose
 bytes fit `blobTierBudgetBytes` and evicts the rest, in the same transaction;
-the keys the write itself holds are never evicted, whatever their size. The
+the keys the write itself holds are never evicted, whatever their size or
+timestamps (they are excluded by key). The
 option is required: the CLI passes `DEFAULT_BLOB_TIER_BUDGET_BYTES`
 (190,000,000), about 265 MB of database pages an operator can check with `du`
 (the arithmetic is on the constant). The budget is **global**, because a blob

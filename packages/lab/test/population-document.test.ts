@@ -8,7 +8,7 @@
  * about which files those were — a green with no evidence under it.
  */
 
-import { formatContentKey } from '@vibe-agent-toolkit/resources';
+import { formatContentKey, parseContentKey } from '@vibe-agent-toolkit/resources';
 import { testContentKey } from '@vibe-agent-toolkit/resources/testing';
 import { describe, expect, it } from 'vitest';
 
@@ -326,6 +326,24 @@ describe('readPopulationDocument identity schemes', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.refusal).toContain('exactly one');
+  });
+
+  it('reads a text as a qualified key exactly when the resources parser admits it', () => {
+    // The lab restates the qualified shape (it has no runtime dependency on resources); this holds
+    // it to `parseContentKey` over a grid of parser kinds, key-kind words and hex lengths, so a key
+    // kind or a hex length the format gains or changes reds here instead of drifting.
+    const keyKinds = ['sha256', 'git-sha1', 'git-sha256', 'sha1', 'sha512', 'md5', 'git-sha512', 'blake3'];
+    const hexLengths = [32, 39, 40, 41, 63, 64, 65, 128];
+    for (const parserKind of ['markdown', 'html', 'none']) {
+      for (const keyKind of keyKinds) {
+        for (const length of hexLengths) {
+          const text = `${parserKind}.${keyKind}.${'c'.repeat(length)}`;
+          const result = readPopulationDocument(entries([{ path: 'a.md', contentKey: text }]));
+          const readAsKey = result.ok && result.document.files[0]?.identity.scheme === 'contentKey';
+          expect(readAsKey, text).toBe(parseContentKey(text) !== undefined);
+        }
+      }
+    }
   });
 });
 

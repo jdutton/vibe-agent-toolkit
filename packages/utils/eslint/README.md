@@ -156,7 +156,7 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:cla
 
 | Rule | Bans | Use instead | Subpath | Fix | `recommended` |
 |---|---|---|---|---|---|
-| `content-key-opaque` | `as ContentKey`, a string method on a `ContentKey`, `compareCodeUnits`/`localeCompare` with one, `===`/`!==` between two (type-aware) | `parseContentKey`, `formatContentKey`, `contentKeyParts`, `equalContentKeys`, `orderContentKeys` | — |  | — |
+| `content-key-opaque` | a cast to `ContentKey` or to an array/object of them, any member access, index, spread, destructure, iteration or regex call on a `ContentKey`, `compareCodeUnits`/`localeCompare` with one (type-aware) | `parseContentKey`, `formatContentKey`, `contentKeyParts`, `orderContentKeys`; `===` compares two | — |  | — |
 | `no-spread-push` | `target.push(...items)` | `appendAll(target, items)` | — |  | — |
 
 #### Other

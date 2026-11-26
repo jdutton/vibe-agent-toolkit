@@ -148,16 +148,19 @@ const SHARD_LENGTH = 2;
 
 /**
  * `keyed` carrying `text` as its key: a key no parser produced, which only an untyped source (a
- * damaged entry, a JSON round trip) can hand over. Forged the way such a source would, as a whole
- * struct nothing checked, so the cache's own key guard is what refuses it. The one place this suite
- * mints a malformed key; every other key here is computed from bytes.
+ * damaged entry, a JSON round trip) can hand over. Forged the way such a source would, through a
+ * JSON round trip whose untyped result nothing checked, so the cache's own key guard is what
+ * refuses it. The one place this suite mints a malformed key; every other key here is computed
+ * from bytes.
  *
  * @param keyed - Well-formed content
  * @param text - The forged key text
  * @returns The content under the forged key
  */
 function withForgedKey(keyed: KeyedContent, text: string): KeyedContent {
-  return { ...keyed, key: text } as KeyedContent;
+  const entry = JSON.stringify({ ...keyed, key: text });
+  const forged: KeyedContent = JSON.parse(entry);
+  return forged;
 }
 
 // POSIX permission bits. `chmod` on Windows only toggles the read-only flag,

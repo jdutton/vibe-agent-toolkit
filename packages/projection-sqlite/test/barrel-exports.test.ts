@@ -13,6 +13,7 @@ import { findBarrelDrift } from '../../dev-tools/src/pin-barrel-exports.js';
 const BARREL_EXPORTS = [
   'DEFAULT_BLOB_TIER_BUDGET_BYTES',
   'EXTENTS_TABLE',
+  'PROJECTION_STORE_BUDGET_INVALID_CODE',
   'WRITTEN_AT_COLUMN',
   'allSpecs',
   'blobKeyColumn',

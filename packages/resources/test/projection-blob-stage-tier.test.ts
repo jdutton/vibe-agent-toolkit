@@ -9,7 +9,7 @@ import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { parseLookupsIn } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { equalContentKeys, orderContentKeys, type ContentKey } from '../src/content-key.js';
+import { orderContentKeys, type ContentKey } from '../src/content-key.js';
 import { type ParseDispatcher, withParseDispatcher } from '../src/parse-dispatcher.js';
 import { populateBlobs, storableBlobFacts } from '../src/projection/blob-population.js';
 import { blobRowsByKey } from '../src/projection/blob-resource-facts.js';
@@ -177,9 +177,9 @@ describe('one reader for a hit and the derivation after it', () => {
     const widened = await reader.cover(keys, ALL_BLOB_REQUEST);
 
     expect(widened.covered.has(evicted), 'a key gone from the store is not covered').toBe(false);
-    expect(widened.rows.blobs.some((row) => equalContentKeys(row.contentKey, evicted) === true), 'no row of it from the earlier read').toBe(false);
-    expect(widened.rows.blobReferences.some((row) => equalContentKeys(row.blob, evicted) === true), 'neither form of reference').toBe(false);
-    expect([...widened.covered].sort(orderContentKeys)).toEqual(keys.filter((key) => equalContentKeys(key, evicted) !== true).sort(orderContentKeys));
+    expect(widened.rows.blobs.some((row) => row.contentKey === evicted), 'no row of it from the earlier read').toBe(false);
+    expect(widened.rows.blobReferences.some((row) => row.blob === evicted), 'neither form of reference').toBe(false);
+    expect([...widened.covered].sort(orderContentKeys)).toEqual(keys.filter((key) => key !== evicted).sort(orderContentKeys));
   });
 
   it('keeps every earlier key\'s coverage when a later read asks for one key', async () => {

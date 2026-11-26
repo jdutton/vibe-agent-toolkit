@@ -29,7 +29,7 @@ describe('harnessFactsIndex', () => {
     const index = harnessFactsIndex(view, 'claude-code');
     expect(() => index.requireFacts(OTHER, 'acme/CLAUDE.md')).toThrow(HarnessFactsAbsentError);
     try { index.requireImports(OTHER, 'acme/CLAUDE.md'); } catch (error) {
-      expect((error as HarnessFactsAbsentError).code).toBe(HARNESS_FACTS_ABSENT);
+      expect(error).toMatchObject({ code: HARNESS_FACTS_ABSENT });
       expect((error as Error).message).toContain('acme/CLAUDE.md');
       expect((error as Error).message).toContain(OTHER);
     }

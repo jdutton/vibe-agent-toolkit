@@ -263,7 +263,6 @@ const BARREL_EXPORTS = [
   'discoverableFrom',
   'diskRunContentSource',
   'emptyBlobRows',
-  'equalContentKeys',
   'examinedCount',
   'expandMacro',
   'exportProjection',

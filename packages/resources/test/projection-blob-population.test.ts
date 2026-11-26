@@ -4,7 +4,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { expectAbsenceCause } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { contentKeyParts, type ContentKey, equalContentKeys, orderContentKeys } from '../src/content-key.js';
+import { contentKeyParts, type ContentKey, orderContentKeys } from '../src/content-key.js';
 import { ParseCache } from '../src/parse-cache.js';
 import { withParseDispatcher } from '../src/parse-dispatcher.js';
 import { BLOB_CONTENT_CHANGED, BLOB_NOT_TEXT, BLOB_UNREADABLE } from '../src/projection/blob-condition-codes.js';
@@ -332,7 +332,7 @@ describe('populateBlobs, through populate()', () => {
     const { projection } = await populateSkillCorpus();
     const runnerKey = projection.resourceRealizations.find((row) => row.path === RUNNER)?.contentKey;
 
-    const lexed = projection.blobReferences.filter((row) => runnerKey !== undefined && runnerKey !== null && equalContentKeys(row.blob, runnerKey) === true);
+    const lexed = projection.blobReferences.filter((row) => runnerKey !== undefined && runnerKey !== null && row.blob === runnerKey);
     expect(lexed).toHaveLength(1);
     expect(lexed[0]?.rawRef).toBe('./helper.mjs');
     expect(lexed[0]?.syntacticForm).toBe(BARE_TOKEN);
@@ -349,8 +349,8 @@ describe('populateBlobs, through populate()', () => {
 
     const rowsPerBlob = projection.blobs.map((blob) => ({
       blob: blob.contentKey,
-      sections: projection.blobSections.filter((row) => equalContentKeys(row.blob, blob.contentKey) === true).length,
-      astReferences: projection.blobReferences.filter((row) => equalContentKeys(row.blob, blob.contentKey) === true && row.astIndex !== null).length,
+      sections: projection.blobSections.filter((row) => row.blob === blob.contentKey).length,
+      astReferences: projection.blobReferences.filter((row) => row.blob === blob.contentKey && row.astIndex !== null).length,
     }));
     expect(rowsPerBlob).toEqual(projection.blobs.map((blob) => ({
       blob: blob.contentKey,

@@ -33,7 +33,6 @@ import {
   type ContentKey,
   ALL_BLOB_REQUEST,
   contentKeyParts,
-  equalContentKeys,
   BLOB_FACT_FIELDS,
   blobFactsReader,
   buildResourceProjection,
@@ -235,7 +234,7 @@ let storedOf: (relativePath: string) => BlobScopedRows;
  * @returns The rows of that key alone
  */
 function rowsOfKey(key: ContentKey, stored: BlobScopedRows): BlobScopedRows {
-  const ofKey = (other: ContentKey): boolean => equalContentKeys(other, key) === true;
+  const ofKey = (other: ContentKey): boolean => other === key;
   return {
     blobs: stored.blobs.filter((row) => ofKey(row.contentKey)),
     blobReferences: stored.blobReferences.filter((row) => ofKey(row.blob)),

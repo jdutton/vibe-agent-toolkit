@@ -24,7 +24,7 @@
 import { promised } from '@vibe-agent-toolkit/utils';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
-import { type ContentKey, equalContentKeys, parseContentKey } from '../src/content-key.js';
+import { type ContentKey, parseContentKey } from '../src/content-key.js';
 import { type ProjectionColumnKind, projectionColumnTypes } from '../src/projection/column-kinds.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
@@ -351,7 +351,7 @@ export class FakeFactStore implements FactStore {
         recorded.set(key, bundleBytes(bundle));
         continue;
       }
-      const settled = new Set(write.settledAtRead.filter((pair) => equalContentKeys(pair.contentKey, key) === true).map((pair) => pair.harness));
+      const settled = new Set(write.settledAtRead.filter((pair) => pair.contentKey === key).map((pair) => pair.harness));
       const { merged, added, deleted } = applyPairWrite(held, bundle, settled);
       this.#blobs.set(key, merged);
       recorded.set(key, stored + added - deleted);
@@ -360,22 +360,26 @@ export class FakeFactStore implements FactStore {
       this.#ledger.delete(key);
       this.#ledger.set(key, bytes);
     }
-    for (const key of this.#pastBudget(incoming.size)) this.forgetBlobFacts(key);
+    for (const key of this.#pastBudget(new Set(incoming.keys()))) this.forgetBlobFacts(key);
   }
 
   /**
-   * The keys past the budget: newest first, a key goes once the running sum of
-   * recorded bytes passes the budget, unless it is among the newest `held`.
+   * The keys past the budget, as the real store's `BLOB_KEYS_PAST_BUDGET_SQL`:
+   * the write's own keys are never selected (by key, not by their place in the
+   * order) and their bytes count first; the rest follow newest first, and a key
+   * goes once the running sum of recorded bytes passes the budget.
    *
-   * @param held - How many keys the write held
+   * @param held - The keys the write held
    * @returns The keys to evict
    */
-  #pastBudget(held: number): readonly ContentKey[] {
+  #pastBudget(held: ReadonlySet<ContentKey>): readonly ContentKey[] {
     const newestFirst = [...this.#ledger].reverse();
     let running = 0;
-    return newestFirst.filter(([, bytes], index) => {
+    for (const [key, bytes] of newestFirst) if (held.has(key)) running += bytes;
+    return newestFirst.filter(([key, bytes]) => {
+      if (held.has(key)) return false;
       running += bytes;
-      return index >= held && running > this.#blobTierBudgetBytes;
+      return running > this.#blobTierBudgetBytes;
     }).map(([key]) => key);
   }
 
@@ -435,8 +439,8 @@ export class FakeFactStore implements FactStore {
 
   /**
    * Drop every blob row held for one content key, and its ledger entry — a
-   * count-window eviction of that key, which a real backend does in
-   * `evictBlobKeysPastRetention`.
+   * byte-budget eviction of that key, which a real backend does in
+   * `evictBlobKeysPastBudget`.
    *
    * @param contentKey - The key to forget
    */

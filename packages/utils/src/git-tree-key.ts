@@ -30,10 +30,12 @@
  * **Git LFS.** Under `filter=lfs` the snapshot holds a pointer blob, so one hash describes a file
  * pulled (its content on disk) and not pulled (its pointer on disk). After the flags, the key reads
  * which regular-file entries are pointers and whether each is pulled (`readLfsState`, three spawns
- * at most and one `lstat` per pointer, no file read), and appends a digest of the pointers' paths
- * and pulled bits. A pointer whose file is neither by size declines the key (`lfs-undecidable`).
- * Whether a `filter.lfs.*` key is configured is read too (only when there are pointers): it does not
- * enter the hash, since a stat-clean pulled file keys alike either way.
+ * at most and one `lstat` per pointer; a file is read only when its content is exactly as long as its
+ * pointer), and appends a digest of the pointers' paths and pulled bits. A pointer whose file is
+ * neither declines the key (`lfs-undecidable`), as does a malformed pointer (`lfs-malformed`) and a
+ * pointer's file the OS will not let VAT look at (`lfs-file-unread`). Whether a `filter.lfs.*` key is
+ * configured is read too (only when there are pointers, else `not-asked`): it does not enter the
+ * hash, since a stat-clean pulled file keys alike either way.
  */
 
 import { createHash } from 'node:crypto';
@@ -51,6 +53,7 @@ import {
   type GitTreeKeyOutcome,
   type GitTreeSnapshot,
   gitTreeSnapshot,
+  type LfsReading,
 } from './git-snapshot.js';
 import { safePath } from './path-utils.js';
 import { shownName } from './shown-text.js';
@@ -146,6 +149,34 @@ function lfsSuffix(pointers: readonly LfsPointerEntry[]): string {
   return `+lfs:${digest.digest('hex')}`;
 }
 
+/** What the LFS pass read, or why git gave no usable answer. */
+type LfsReadState = ReturnType<typeof readLfsState>;
+
+/** The first paths a declined key names, as a message shows them. */
+function namedPaths(paths: readonly string[]): string[] {
+  return paths.slice(0, NAMED_HIDDEN_ENTRIES).map((path) => shownName(path));
+}
+
+/**
+ * Why the LFS pass's reading cannot key the tree: a file it could not look at, a malformed pointer,
+ * or a pointer neither pulled nor not; `undefined` when it can.
+ */
+function lfsDeclineOf(cwd: string, repositoryRoot: string, state: Extract<LfsReadState, { ok: true }>): GitTreeKeyFailure | undefined {
+  const { undecidable, malformed, unread } = state;
+  const [first] = unread;
+  if (first !== undefined) {
+    const { gitPath, operation, errno } = first;
+    return { ok: false, kind: 'lfs-file-unread', cwd, repositoryRoot, path: shownName(gitPath), operation, errno, unreadCount: unread.length };
+  }
+  if (malformed.length > 0) {
+    return { ok: false, kind: 'lfs-malformed', cwd, repositoryRoot, malformed: namedPaths(malformed), malformedCount: malformed.length };
+  }
+  if (undecidable.length > 0) {
+    return { ok: false, kind: 'lfs-undecidable', cwd, repositoryRoot, undecidable: namedPaths(undecidable), undecidableCount: undecidable.length };
+  }
+  return undefined;
+}
+
 /**
  * The tree's LFS reading for the key, or why it cannot key the tree.
  *
@@ -158,19 +189,17 @@ function lfsOf(
   cwd: string,
   snapshot: GitTreeSnapshot,
   absentPaths: ReadonlySet<string>,
-): { pointers: readonly LfsPointerEntry[]; filterConfigured: boolean } | GitTreeKeyFailure {
+): { pointers: readonly LfsPointerEntry[]; filter: LfsReading['filter'] } | GitTreeKeyFailure {
   const { repositoryRoot } = snapshot;
   const state = readLfsState(repositoryRoot, lfsMembersOf(snapshot.entries, absentPaths));
   if (!state.ok) return { ...state, cwd, repositoryRoot };
-  const { pointers, undecidable } = state;
-  if (undecidable.length > 0) {
-    const named = undecidable.slice(0, NAMED_HIDDEN_ENTRIES).map((path) => shownName(path));
-    return { ok: false, kind: 'lfs-undecidable', cwd, repositoryRoot, undecidable: named, undecidableCount: undecidable.length };
-  }
-  if (pointers.length === 0) return { pointers, filterConfigured: false };
+  const declined = lfsDeclineOf(cwd, repositoryRoot, state);
+  if (declined !== undefined) return declined;
+  const { pointers } = state;
+  if (pointers.length === 0) return { pointers, filter: 'not-asked' };
   const filter = lfsFilterConfigured(repositoryRoot);
   if (!filter.ok) return { ...filter, cwd, repositoryRoot };
-  return { pointers, filterConfigured: filter.configured };
+  return { pointers, filter: filter.configured ? 'configured' : 'not-configured' };
 }
 
 /**
@@ -193,7 +222,7 @@ function keyOf(cwd: string, snapshot: GitTreeSnapshot): GitTreeKey | GitTreeKeyF
     hash: `${snapshot.hash}${absentSuffix(absent)}${lfsSuffix(lfs.pointers)}`,
     lfs: {
       pointers: lfs.pointers.map(({ absolutePath, lfsOid, pulled }) => ({ absolutePath, lfsOid, pulled })),
-      filterConfigured: lfs.filterConfigured,
+      filter: lfs.filter,
     },
   };
 }

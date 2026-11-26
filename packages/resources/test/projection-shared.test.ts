@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
+import { ContentKeySchema } from '../src/content-key.js';
 import * as projectionShared from '../src/schemas/projection-shared.js';
-import {
-  ContentKeySchema,
-  JsonValueSchema,
-} from '../src/schemas/projection-shared.js';
+import { JsonValueSchema } from '../src/schemas/projection-shared.js';
 import { testContentKey } from '../src/testing.js';
 
 describe('the removed contract version', () => {

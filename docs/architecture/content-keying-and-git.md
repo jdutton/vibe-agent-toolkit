@@ -390,36 +390,49 @@ the pointer's facts from the store: `git lfs pull` refreshes the index stat and 
 
 `gitTreeKey` (`packages/utils/src/git-tree-key.ts`), after the index-flag pass, runs the LFS pass
 `readLfsState` (`packages/utils/src/git-lfs.ts`) over the snapshot's regular-file entries (modes
-`100644` and `100755`, absent skip-worktree entries excluded). It reads no working-tree file and
-hashes nothing:
+`100644` and `100755`, absent skip-worktree entries excluded). It hashes nothing, and reads a
+working-tree file only in step 4's one case:
 
 1. **Attributes.** One `git check-attr --stdin -z filter` over the members' git paths, sorted; the
    paths whose `filter` is `lfs` go on. With no such path the pass ends here: one spawn per keyed run.
 2. **Size filter.** One `git cat-file --batch-check` over their blob oids. A blob of 1024 bytes or
    more is never a pointer (a file committed before its attribute, an incomplete migration) and is
    never read. One `git cat-file --batch` over the smaller ones.
-3. **Strict pointer parse.** A blob is a pointer only when it is exactly
-   `version https://git-lfs.github.com/spec/v1`, `oid sha256:<64 lowercase hex>`, `size <decimal>`,
-   in that order, LF line endings, nothing else. Anything else (a malformed small blob, an `ext-`
-   extension pointer) is an ordinary member, keyed as before.
+3. **Pointer parse, by git-lfs's grammar.** A blob is a pointer when git-lfs would read it as one
+   (`decodeKV` in git-lfs's `lfs/pointer.go`): trimmed of surrounding whitespace, `key value` lines
+   (a trailing CR dropped, blank lines skipped) holding `version`, `oid sha256:<64 lowercase hex>` and
+   a non-negative `size`, in that order, with any `ext-<digit>-<name> sha256:<hex>` extension lines
+   before `size` (no two of one priority). The version is any of git-lfs's three:
+   `https://git-lfs.github.com/spec/v1`, the pre-release `https://hawser.github.com/spec/v1` and the
+   alpha `http://git-media.io/v/2`. A small blob that opens with a version line naming a git-lfs spec
+   but does not parse is malformed, and declines the key (`lfs-malformed`): VAT cannot tell what
+   git-lfs makes of it. Any other small blob is an ordinary member, keyed as before.
 4. **Size probe.** One `lstat` per pointer. With `n` the content's size the pointer declares and `p`
    the pointer's own length: a regular file of size `n` (and `n != p`) is pulled; of size `p` (and
-   `n != p`) is not pulled. Anything else (`n == p`, another size, not a regular file, absent) is
-   undecidable.
+   `n != p`) is not pulled. When `n == p` and the file is that size, its bytes are read and compared
+   with the pointer's: the pointer's bytes are not pulled, any other bytes are pulled. Anything else
+   (another size, not a regular file, absent) is undecidable. For a pointer with extension lines `n`
+   is the size of the object after its extensions ran, so a pulled file an extension changed the size
+   of is undecidable too.
 
 An undecidable pointer declines the key (`lfs-undecidable`), classified like `index-hides`
 (`GIT_SNAPSHOT_INDEX_HIDES`): the reason names the files and their count, the cause (an LFS file that
-is neither its pointer nor its content on disk, by size) and the remedy, `git update-index --refresh`
-or `git lfs pull`. The run then answers without the store. A pointer checked out with CRLF line
-endings (`core.autocrlf=true` and a `filter=lfs` line without `-text`) is one such case: its size is
-neither. A `check-attr`, `cat-file` or `config` spawn that fails declines the key as `lfs-unlisted`,
-and an answer VAT cannot read as `lfs-unreadable`; both are classified like `flags-unlisted`.
+is neither its pointer nor its content on disk) and the remedy, `git update-index --refresh` or
+`git lfs pull`. The run then answers without the store. A pointer checked out with CRLF line endings
+(`core.autocrlf=true` and a `filter=lfs` line without `-text`) is one such case: its size is neither.
+A malformed pointer is classified the same way, its remedy to commit the file again through the
+filter (`git add --renormalize`) or drop its attribute. An `lstat` or read the OS refuses (anything
+but absent) declines the key as `lfs-file-unread`, classified `GIT_SNAPSHOT_UNREADABLE` with the file
+and the errno named. A `check-attr`, `cat-file` or `config` spawn that fails declines the key as
+`lfs-unlisted`, and an answer VAT cannot read as `lfs-unreadable`, both classified like
+`flags-unlisted`. An answer that leaves out any path or object it was asked about is unreadable: an
+absent answer is never read as "not LFS".
 
 When pointers exist the hash gains a suffix, `<tree hash>[+absent:<digest>][+lfs:<digest>]`, the
 `+lfs:` digest a SHA-256 over each pointer's git path and pulled bit, sorted by path. Pulling or
 un-pulling any pointer moves the key; a tree with no pointer keys exactly as before. The key also
 carries the reading (`GitTreeKey.lfs`: each pointer's absolute path, `lfsOid` and pulled bit, and
-`filterConfigured`), a required field so every consumer of the key sees it.
+`filter`), a required field so every consumer of the key sees it.
 
 ### 7.2 What a pulled file and a pointer parse as
 
@@ -446,16 +459,21 @@ checked: pointers not pulled, paths outside the root, paths the run realized wit
 bytes (no content key), and paths the run realized nothing at are not. The last are the usual case
 for LFS: an image or archive no collection includes fed no fact to the extent, and the key already
 carries its pulled bit. Failing on them would stop every extent write in a repository with pulled
-binaries.
+binaries. The check finds what the run read by the pointer's exact absolute path, so a pulled file
+the run read under another spelling (through an in-tree symlink, or a case-different path on a
+case-insensitive filesystem) is not checked: an accepted gap, in the
+[hazard register](./fact-extractors-hazard-register.md).
 
 ### 7.4 No filter configured
 
 The key does not depend on whether a `filter.lfs.*` key is configured: a stat-clean pulled file keys
 alike either way, since nothing re-cleans it. `git config --get-regexp ^filter\.lfs\.` is asked only
-when pointers exist (exit 1 means not configured), and its answer rides on the key as
-`filterConfigured`. Without the filter, git cannot re-clean a pulled file whose stat moved: it hashes
-the content in place of the pointer, the tree hash moves and the store misses (correct, never stale).
-So a keyed run whose tree has pointers and no configured filter prints one notice per root per command
+when pointers exist (exit 1 means not configured), and its answer rides on the key as `filter`:
+`configured`, `not-configured`, or `not-asked` when there is no pointer. Without the filter, git
+cannot re-clean a pulled file whose stat moved: it hashes the content in place of the pointer, the
+tree hash moves and the store misses (correct, never stale). A file not pulled is its pointer on
+disk, which hashes to the same blob with or without the filter. So a keyed run whose tree has at
+least one pulled pointer and no configured filter prints one notice per root per command
 run (`noticeLfsFilterAbsent` in `packages/cli/src/utils/projection-store.ts`), saying this environment
 configures no git-lfs filter and naming `git lfs install` and `git update-index --refresh`. An LFS
 repository with the filter configured stays quiet.

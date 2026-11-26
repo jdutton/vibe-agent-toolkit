@@ -130,7 +130,6 @@ export {
 // The blob-keyed and path-dependent tables that make up VAT's queryable
 // resource projection contract. Population is still proposed.
 export {
-  ContentKeySchema,
   JsonValueSchema,
   type JsonValue,
 } from './schemas/projection-shared.js';
@@ -495,12 +494,12 @@ export { classifyLink, isLocalFileLink } from './link-classify.js';
 // is the narrowing between them, and is exported because there is no other way
 // for a caller holding a path-routed blob to reach the parse path.
 // A key is a branded `ContentKey`, `<parserKind>.<keyKind>.<hex>`: `parseContentKey` is the one
-// parser, `contentKeyParts` reads its fields back (the parser kind a blob was routed to), and keys
-// compare through `equalContentKeys` and sort through `orderContentKeys`.
+// parser, `contentKeyParts` reads its fields back (the parser kind a blob was routed to), two keys
+// are equal exactly when their text is (`===`), and keys sort through `orderContentKeys`.
 export {
   computeContentKey,
   contentKeyParts,
-  equalContentKeys,
+  ContentKeySchema,
   formatContentKey,
   inMemoryContent,
   isParsableContent,

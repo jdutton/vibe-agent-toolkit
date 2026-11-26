@@ -12,7 +12,7 @@
 import { removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { type ContentKey, contentKeyParts, equalContentKeys } from '../../src/content-key.js';
+import { type ContentKey, contentKeyParts } from '../../src/content-key.js';
 import type { PopulationOutcome } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
 import type { BlobRequest, BlobScopedRows, BlobScopedTableName } from '../../src/projection/store.js';
@@ -85,7 +85,7 @@ describe('a routing change between two runs on one store', () => {
     expect(first.outcome).toEqual({ population: 'derived', stored: 'written' });
     const markdownKey = keyOf(first.projection, ROUTED);
     expect(contentKeyParts(markdownKey).parserKind, 'the premise: the declaration routes it to markdown').toBe('markdown');
-    const markdownBlob = first.projection.blobs.find((row) => equalContentKeys(row.contentKey, markdownKey) === true);
+    const markdownBlob = first.projection.blobs.find((row) => row.contentKey === markdownKey);
     expect(markdownBlob?.headingCount, 'the premise: the markdown parse saw the heading').toBe(1);
 
     store.askedKeys.length = 0;
@@ -97,9 +97,9 @@ describe('a routing change between two runs on one store', () => {
     // Same bytes: the hex, the plain SHA-256, is the one thing the two keys share.
     expect(contentKeyParts(noneKey).hex).toBe(contentKeyParts(markdownKey).hex);
 
-    const noneBlob = second.projection.blobs.find((row) => equalContentKeys(row.contentKey, noneKey) === true);
+    const noneBlob = second.projection.blobs.find((row) => row.contentKey === noneKey);
     expect(noneBlob?.headingCount, 'the second run\'s rows are a `none` read, not the markdown parse').toBe(0);
-    expect(second.projection.blobs.some((row) => equalContentKeys(row.contentKey, markdownKey) === true), 'a markdown row reached the second run').toBe(false);
+    expect(second.projection.blobs.some((row) => row.contentKey === markdownKey), 'a markdown row reached the second run').toBe(false);
     expect(store.askedKeys, 'the second run asked the store for the markdown key').not.toContain(markdownKey);
   });
 });

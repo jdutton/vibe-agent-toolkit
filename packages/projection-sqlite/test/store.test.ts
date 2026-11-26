@@ -22,7 +22,6 @@ import {
   type BlobScopedRows,
   type ContentKey,
   emptyBlobRows,
-  equalContentKeys,
   orderContentKeys,
   type ExtentKey,
   type ExtentScopedRows,
@@ -420,7 +419,7 @@ describe('blob facts', () => {
 
     const read = await store.readBlobFacts([FIRST_BLOB, SECOND_BLOB], ALL_BLOB_REQUEST);
     expect(read.blobs.map((row) => row.contentKey)).toEqual([SECOND_BLOB]);
-    expect(read.blobConditions.filter((row) => equalContentKeys(row.blob, FIRST_BLOB) === true)).toHaveLength(1);
+    expect(read.blobConditions.filter((row) => row.blob === FIRST_BLOB)).toHaveLength(1);
   });
 });
 
@@ -1301,11 +1300,8 @@ describe('the blob tier is bounded', () => {
   });
 
   it('never evicts the keys it is writing, at a budget of one byte', async () => {
-    // Structural rather than a special case, exactly as for extents: the keys a
-    // write records are by construction the most recently written, so recency
-    // ordering selects them first and the held-row floor keeps them. `INSERT OR
-    // REPLACE` re-inserts, which is why the `rowid` tie-break holds for a
-    // REFRESHED key too.
+    // The keys a write records are excluded from eviction by key, whatever their
+    // place in the recency order, so a budget smaller than one key keeps them.
     const evicting = openWithBlobBudget(1);
     for (const seed of ['a', 'b', 'c']) {
       await evicting.writeBlobFacts(uncoveredBlobWrite(sampleBlobRows(contentKey(seed))));
@@ -1520,6 +1516,32 @@ describe('the blob tier is kept within a byte budget', () => {
     expect(first.map((key) => blobRowTotal(key))).toEqual([0, 0, 0, 0, 0]);
     expect(second.map((key) => blobRowTotal(key))).toEqual([1, 1, 1, 1, 1]);
     expect(Object.keys(ledgerBytes()).sort(compareCodeUnits)).toEqual([...second].sort(orderContentKeys));
+  });
+
+  it('never evicts a key the write holds when an older key carries a later timestamp', async () => {
+    // A store restored from a runner whose clock ran ahead holds `writtenAt`
+    // values in this machine's future, so they sort before the keys this write
+    // stamps. The write's own keys are protected by key, not by their place in
+    // the order: both held keys stay and the future-stamped key goes.
+    const budget = 2 * conditionRowBytes(100) + 50;
+    const ahead = contentKey('ahead');
+    const held = [contentKey('h1'), contentKey('h2')];
+    const evicting = openSqliteFactStore({ directory, blobTierBudgetBytes: budget });
+    await evicting.writeBlobFacts(uncoveredBlobWrite(sizedConditionRows(ahead, 100)));
+    const database = new DatabaseSync(safePath.join(directory, 'projection.db'));
+    try {
+      database.prepare('UPDATE "blob_keys" SET "writtenAt" = ? WHERE "contentKey" = ?').run('9999-12-31T23:59:59.999Z', ahead);
+    } finally {
+      database.close();
+    }
+    await evicting.writeBlobFacts(uncoveredBlobWrite({
+      ...emptyBlobRows(),
+      blobConditions: held.flatMap((key) => sizedConditionRows(key, 100).blobConditions),
+    }));
+    await evicting.close();
+
+    expect(held.map((key) => blobRowTotal(key))).toEqual([1, 1]);
+    expect(Object.keys(ledgerBytes()).sort(compareCodeUnits)).toEqual([...held].sort(orderContentKeys));
   });
 });
 

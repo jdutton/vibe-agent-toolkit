@@ -125,7 +125,8 @@ export const WRITTEN_AT_COLUMN = declaredColumn(
  * eviction has no key to attribute them by; one row per content key gives them
  * one. `store.ts` keeps the newest keys whose bytes fit the blob tier's budget,
  * ordered by `writtenAt` then `rowid`, same tie-break reason as the extent
- * manifest.
+ * manifest; the keys the writing call holds are excluded by key, never by that
+ * order.
  *
  * ⚠️ WRITE recency, not use recency: a write re-stamps every key it holds,
  * covered or not, but a run served whole from the store writes nothing, so its

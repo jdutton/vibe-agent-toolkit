@@ -112,7 +112,6 @@ import type { TextProvenance } from '@vibe-agent-toolkit/utils/text';
 import {
   type ContentKey,
   contentKeyParts,
-  equalContentKeys,
   type KeyedContent,
   orderContentKeys,
   type ParsableContent,
@@ -817,7 +816,7 @@ async function readTarget(
   }
   if (keyed === null) return unreadable(target, 'the file is gone');
 
-  if (equalContentKeys(keyed.key, target.contentKey) !== true) {
+  if (keyed.key !== target.contentKey) {
     return refused('blobsContentChanged', condition(
       target.contentKey,
       BLOB_CONTENT_CHANGED,

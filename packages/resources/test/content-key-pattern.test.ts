@@ -17,7 +17,7 @@ const ALL_KINDS = ['markdown', 'html', 'none'] as const;
 describe('CONTENT_KEY_PATTERN', () => {
   it.each(ALL_KINDS)('matches a real computed %s content key', (kind) => {
     const key = computeContentKey(new TextEncoder().encode('hello'), kind);
-    expect(CONTENT_KEY_PATTERN.test(key)).toBe(true);
+    expect(key).toMatch(CONTENT_KEY_PATTERN);
   });
 
   it('is built from the kind lists, and covers exactly them', () => {

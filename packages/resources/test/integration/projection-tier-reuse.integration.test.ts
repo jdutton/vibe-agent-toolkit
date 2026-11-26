@@ -22,7 +22,7 @@ import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { parseLookupsIn, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { contentKeyParts, type ContentKey, equalContentKeys, orderContentKeys } from '../../src/content-key.js';
+import { contentKeyParts, type ContentKey, orderContentKeys } from '../../src/content-key.js';
 import { serializeProjection } from '../../src/projection/export.js';
 import type { PopulationCache, PopulationOutcome } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
@@ -185,12 +185,12 @@ describe('one coverage predicate for the hit, the reuse read and stored admissio
     const members = primed.projection.resourceRealizations.map((row) => ({ path: safePath.join(root, row.path), row }));
     const stored = storedContentOf(members, runStoredReads().of(store));
     const admission = await Promise.all(keys.map(async (key) => {
-      const member = members.find(({ row }) => row.contentKey !== null && equalContentKeys(row.contentKey, key) === true);
+      const member = members.find(({ row }) => row.contentKey === key);
       if (member === undefined) throw new Error(`no member keyed ${key}`);
       const answer = await storedComputeBy(member.row, contentKeyParts(key).parserKind, stored.facts);
       return [key, answer.computeBy] as const;
     }));
-    expect(Object.fromEntries(admission)).toEqual(Object.fromEntries(keys.map((key) => [key, equalContentKeys(key, k) === true ? 'readRoute' : null])));
+    expect(Object.fromEntries(admission)).toEqual(Object.fromEntries(keys.map((key) => [key, key === k ? 'readRoute' : null])));
 
     // The hit: the extent is held, K is not covered, so the run derives and writes.
     const healed = await populateThrough({ store, treeHash: PRIMED, treeUnchanged: true });
@@ -216,7 +216,7 @@ describe('one coverage predicate for the hit, the reuse read and stored admissio
     expect(store.writes).toHaveLength(1);
     const [write] = store.writes;
     expect([...(write?.coveredAtRead ?? [])].sort(orderContentKeys))
-      .toEqual(keys.filter((key) => equalContentKeys(key, k) !== true).sort(orderContentKeys));
+      .toEqual(keys.filter((key) => key !== k).sort(orderContentKeys));
   });
 });
 
@@ -224,7 +224,7 @@ describe('one coverage predicate for the hit, the reuse read and stored admissio
 async function movedRun(): Promise<{ readonly store: RecordingStore; readonly unchanged: readonly ContentKey[]; readonly outcome: PopulationOutcome }> {
   const store = new RecordingStore(WIDE_BLOB_BUDGET_BYTES);
   const primed = await populateThrough({ store, treeHash: PRIMED, treeUnchanged: true });
-  const unchanged = keyedContentKeys(primed.projection).filter((key) => equalContentKeys(key, keyOf(primed.projection, EDITED)) !== true);
+  const unchanged = keyedContentKeys(primed.projection).filter((key) => key !== keyOf(primed.projection, EDITED));
   await writeFile(safePath.join(root, EDITED), '# Two\n\nEdited, and on to [three](./three.md).\n');
   store.writes.length = 0;
   store.writeExtentCalls = 0;

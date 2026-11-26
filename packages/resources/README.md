@@ -327,8 +327,8 @@ Returns all resources with the given content key (identical bytes, same parse ro
 A `ContentKey` is the text `<parserKind>.<keyKind>.<hex>`, for example
 `markdown.sha256.<64 hex>`. Read its fields with `contentKeyParts(key)`, admit
 an untrusted string with `parseContentKey(text)` (`undefined` when malformed),
-compare with `equalContentKeys` (`'not-comparable'` across key kinds) and sort
-with `orderContentKeys`. Tests mint keys with `testContentKey(kind, seed)` from
+compare two with `===` (equal exactly when their text is, so keys of two key
+kinds are never equal) and sort with `orderContentKeys`. Tests mint keys with `testContentKey(kind, seed)` from
 `@vibe-agent-toolkit/resources/testing`.
 
 ```typescript

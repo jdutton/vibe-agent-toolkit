@@ -275,6 +275,18 @@ describe('storedContentOf: the members\' stored content', () => {
     await expect(stored.facts()).rejects.toMatchObject({ code: STORE_REQUEST_UNMET, tier: 'blob', table: 'skillTextMatches' });
   });
 
+  it('refuses, as the store\'s read, a stored row whose key column holds no content key, never dropping the row', async () => {
+    // A damaged store, as an untyped source hands it: the row's key column is text no parser admits.
+    const answer = JSON.stringify({ ...emptyBlobRows(), blobs: [{ contentKey: 'markdown.sha256.not-hex' }] });
+    const damaged: BlobScopedRows = JSON.parse(answer);
+    const store: FactStore = { ...countingStore().store, readBlobFacts: () => Promise.resolve(damaged) };
+    const stored = storedContentOf([member('/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown'))], runStoredReads().of(store));
+    await expect(stored.facts()).rejects.toMatchObject({
+      code: 'PROJECTION_STORE_READ_FAILED',
+      cause: { message: 'a stored blobs row\'s contentKey is "markdown.sha256.not-hex", not a content key' },
+    });
+  });
+
   it('names the remedy: the store is a cache, so clear it or move it', async () => {
     const { store } = countingStore(new Error('database disk image is malformed'));
     const stored = storedContentOf([member('/r/a.md', keyed(MARKDOWN_KEY, 'text/markdown'))], runStoredReads().of(store));

@@ -80,6 +80,7 @@ export {
 // with the pragmas in the one order that survives contention — see `store.ts`.
 export {
   DEFAULT_BLOB_TIER_BUDGET_BYTES,
+  PROJECTION_STORE_BUDGET_INVALID_CODE,
   type SqliteStoreOptions,
   type StoreUnopenableError,
   defaultStoreDirectory,

@@ -24,7 +24,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { equalContentKeys, type ContentKey } from '../../src/content-key.js';
+import type { ContentKey } from '../../src/content-key.js';
 import { ParseCache } from '../../src/parse-cache.js';
 import { ParseDispatcher } from '../../src/parse-dispatcher.js';
 import { reviveParserThrow } from '../../src/parse-limits.js';
@@ -263,7 +263,7 @@ describe('the gate\'s member check and warm admission agree on the same store', 
     await fileTheStore();
     const { keys } = await bothAnswers(store);
     const damaged = keyAt(keys, 'docs/b.md');
-    const view = viewOf((rows) => ({ ...rows, blobSections: rows.blobSections.filter((row) => equalContentKeys(row.blob, damaged) !== true) }));
+    const view = viewOf((rows) => ({ ...rows, blobSections: rows.blobSections.filter((row) => row.blob !== damaged) }));
     expect(served((await bothAnswers(view)).answers)).toEqual({ ...UNTOUCHED, 'docs/b.md as markdown': false });
   });
 
@@ -272,7 +272,7 @@ describe('the gate\'s member check and warm admission agree on the same store', 
     const { keys } = await bothAnswers(store);
     const damaged = keyAt(keys, 'docs/a.md');
     const view = viewOf((rows) => {
-      const dropped = rows.blobReferences.find((row) => equalContentKeys(row.blob, damaged) === true && row.astIndex !== null);
+      const dropped = rows.blobReferences.find((row) => row.blob === damaged && row.astIndex !== null);
       if (dropped === undefined) throw new Error('docs/a.md filed no AST reference row');
       return { ...rows, blobReferences: rows.blobReferences.filter((row) => row !== dropped) };
     });
@@ -285,7 +285,7 @@ describe('the gate\'s member check and warm admission agree on the same store', 
     const damaged = keyAt(keys, 'docs/a.md');
     const view = viewOf((rows) => ({
       ...rows,
-      blobs: rows.blobs.map((row) => (equalContentKeys(row.contentKey, damaged) === true ? { ...row, frontmatterValue: 'not the codec encoding' } : row)),
+      blobs: rows.blobs.map((row) => (row.contentKey === damaged ? { ...row, frontmatterValue: 'not the codec encoding' } : row)),
     }));
     expect(served((await bothAnswers(view)).answers)).toEqual({ ...UNTOUCHED, 'docs/a.md as markdown': false });
   });

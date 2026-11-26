@@ -2,7 +2,9 @@ import { SeveritySchema } from '@vibe-agent-toolkit/schema';
 import { FS_FAULT_ERRNOS_BY_CLASS, type FsFaultClass } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
-import { ContentKeySchema, JsonValueSchema } from './projection-shared.js';
+import { ContentKeySchema } from '../content-key.js';
+
+import { JsonValueSchema } from './projection-shared.js';
 
 const EXTENT_FK_DESC = 'Foreign key to resolution_contexts.contextId, species "extent"';
 

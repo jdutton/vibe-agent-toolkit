@@ -12,7 +12,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { Projection } from '../src/projection/projection.js';
 import { quoteIdentifier } from '../src/projection/sql-identifiers.js';
-import { STORE_BOOKKEEPING_TABLES, type StoreBookkeepingTables } from '../src/projection/store-bookkeeping.js';
+import { BLOB_BYTE_MEASURE, STORE_BOOKKEEPING_TABLES, type StoreBookkeepingTables } from '../src/projection/store-bookkeeping.js';
 import { projectionShapeDigest, shapeDigestOf, splitProjectionByScope } from '../src/projection/store.js';
 import { PROJECTION_TABLES, type ProjectionTableName } from '../src/projection/table-registry.js';
 import { BlobRowSchema } from '../src/schemas/projection-blobs.js';
@@ -318,17 +318,28 @@ function withBlobKeysColumn(column: string, replacement: { name: string; type: '
 
 describe('shapeDigestOf: the store bookkeeping tables are part of the shape', () => {
   it('is what projectionShapeDigest memoizes for the registry and the bookkeeping declaration', () => {
-    expect(shapeDigestOf(PROJECTION_TABLES, STORE_BOOKKEEPING_TABLES)).toBe(projectionShapeDigest());
+    expect(shapeDigestOf(PROJECTION_TABLES, STORE_BOOKKEEPING_TABLES, BLOB_BYTE_MEASURE)).toBe(projectionShapeDigest());
   });
 
   it('moves when a bookkeeping column changes its type', () => {
-    expect(shapeDigestOf(PROJECTION_TABLES, withBlobKeysColumn('bytes', { name: 'bytes', type: 'TEXT' })))
-      .not.toBe(shapeDigestOf(PROJECTION_TABLES, STORE_BOOKKEEPING_TABLES));
+    expect(shapeDigestOf(PROJECTION_TABLES, withBlobKeysColumn('bytes', { name: 'bytes', type: 'TEXT' }), BLOB_BYTE_MEASURE))
+      .not.toBe(shapeDigestOf(PROJECTION_TABLES, STORE_BOOKKEEPING_TABLES, BLOB_BYTE_MEASURE));
   });
 
   it('moves when a bookkeeping column is renamed', () => {
-    expect(shapeDigestOf(PROJECTION_TABLES, withBlobKeysColumn('bytes', { name: 'byteCount', type: 'INTEGER' })))
-      .not.toBe(shapeDigestOf(PROJECTION_TABLES, STORE_BOOKKEEPING_TABLES));
+    expect(shapeDigestOf(PROJECTION_TABLES, withBlobKeysColumn('bytes', { name: 'byteCount', type: 'INTEGER' }), BLOB_BYTE_MEASURE))
+      .not.toBe(shapeDigestOf(PROJECTION_TABLES, STORE_BOOKKEEPING_TABLES, BLOB_BYTE_MEASURE));
+  });
+
+  // `blob_keys.bytes` is recorded in this measure, so a store written under one
+  // measure and budgeted under another would evict by a sum of two units.
+  it.each([
+    ['a number', { ...BLOB_BYTE_MEASURE, numberBytes: 4 }],
+    ['a null', { ...BLOB_BYTE_MEASURE, nullBytes: 1 }],
+    ['a string', { ...BLOB_BYTE_MEASURE, stringEncoding: 'utf16le' as const }],
+  ])('moves when the byte measure of %s changes', (_, measure) => {
+    expect(shapeDigestOf(PROJECTION_TABLES, STORE_BOOKKEEPING_TABLES, measure))
+      .not.toBe(shapeDigestOf(PROJECTION_TABLES, STORE_BOOKKEEPING_TABLES, BLOB_BYTE_MEASURE));
   });
 });
 

@@ -15,7 +15,7 @@
 
 import { z } from 'zod';
 
-import { ContentKeySchema } from './projection-shared.js';
+import { ContentKeySchema } from '../content-key.js';
 
 /** Every harness a harness table can name — held equal to `HARNESS_PROFILES`' keys by a test. */
 export const HarnessIdSchema = z.enum(['claude-code'])

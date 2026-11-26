@@ -135,8 +135,9 @@ export interface GitHiddenEntry {
 
 /**
  * A snapshot git took but cannot key the tree with (`gitTreeKey`): its index hides working-tree
- * bytes from it, an LFS file's disk bytes cannot be told apart, or git would not say whether either
- * is so. Classified by `gitSnapshotFailureOf`.
+ * bytes from it, an LFS file's disk bytes cannot be told apart, a `filter=lfs` blob is a malformed
+ * pointer, an LFS file could not be looked at, or git would not say whether any is so. Classified by
+ * `gitSnapshotFailureOf`.
  */
 export type GitTreeKeyFailure =
   | {
@@ -188,6 +189,34 @@ export type GitTreeKeyFailure =
   }
   | {
     readonly ok: false;
+    /**
+     * A small `filter=lfs` blob opens with a version line naming a git-lfs spec but does not parse
+     * by git-lfs's pointer grammar: VAT cannot tell what git-lfs makes of it.
+     */
+    readonly kind: 'lfs-malformed';
+    readonly cwd: string;
+    readonly repositoryRoot: string;
+    /** The first such paths, repository-relative, as a message shows them (`shownName`), sorted. */
+    readonly malformed: readonly string[];
+    /** How many such paths in all. */
+    readonly malformedCount: number;
+  }
+  | {
+    readonly ok: false;
+    /** The OS would not let VAT `lstat` an LFS pointer's file, or read one exactly as long as its pointer. */
+    readonly kind: 'lfs-file-unread';
+    readonly cwd: string;
+    readonly repositoryRoot: string;
+    /** The first such path, repository-relative, as a message shows it (`shownName`). */
+    readonly path: string;
+    readonly operation: 'lstat' | 'read';
+    /** The errno the OS answered for it. */
+    readonly errno: string;
+    /** How many such paths in all. */
+    readonly unreadCount: number;
+  }
+  | {
+    readonly ok: false;
     /** A git command of the LFS pass (`check-attr`, `cat-file`, `config`) gave no usable answer. */
     readonly kind: 'lfs-unlisted';
     readonly cwd: string;
@@ -224,10 +253,10 @@ export interface LfsReading {
   /** Every entry the snapshot holds as an LFS pointer, in the snapshot's order. */
   readonly pointers: readonly LfsPointer[];
   /**
-   * Whether the repository configures a `filter.lfs.*` key; asked only when there are pointers,
-   * so `false` with none.
+   * Whether the repository configures a `filter.lfs.*` key. Asked only when there are pointers, so
+   * `not-asked` with none.
    */
-  readonly filterConfigured: boolean;
+  readonly filter: 'configured' | 'not-configured' | 'not-asked';
 }
 
 /**

@@ -22,7 +22,6 @@ import {
   computeContentKey,
   type ContentKey,
   contentKeyParts,
-  equalContentKeys,
   formatContentKey,
   isParsableContent,
   KEY_KINDS,
@@ -154,7 +153,6 @@ describe('computeContentKey', () => {
     const keys = (['markdown', 'html', 'none'] as const).map((kind) => computeContentKey(bytes('<p>x</p>'), kind));
     expect(new Set(keys.map((key) => contentKeyParts(key).hex)).size).toBe(1);
     expect(new Set(keys).size).toBe(3);
-    expect(new Set(keys.map((key) => equalContentKeys(key, keys[0] as ContentKey)))).toEqual(new Set([true, false]));
   });
 
   it('⭐ re-keys a file whose ROUTING changed, with no version constant to bump', () => {
@@ -227,11 +225,10 @@ describe('computeContentKey', () => {
     // assertion is the independent second opinion the exported pattern is
     // checked against, and reusing it would make the check circular.
     expect(key).toMatch(/^(markdown|html|none)\.sha256\.[0-9a-f]{64}$/);
-    // Never bare hex, and a git object ID of the same bytes is a different key kind: comparing
-    // the two answers 'not-comparable', never a false "equal" or "different".
+    // Never bare hex, and a git object ID of the same bytes is a different key kind, so a different key.
     expect(key).not.toMatch(/^[0-9a-f]+$/);
     const gitKey = formatContentKey({ ...contentKeyParts(key), keyKind: 'git-sha256' });
-    expect(equalContentKeys(key, gitKey)).toBe('not-comparable');
+    expect(gitKey).not.toBe(key);
   });
 });
 
@@ -450,21 +447,6 @@ describe('parseContentKey and formatContentKey', () => {
   });
 });
 
-describe('equalContentKeys', () => {
-  it('is not-comparable across key kinds, even over the same parser kind and hex', () => {
-    const sha = formatContentKey({ parserKind: 'markdown', keyKind: 'sha256', hex: hexOf('a', 64) });
-    const git = formatContentKey({ parserKind: 'markdown', keyKind: 'git-sha256', hex: hexOf('a', 64) });
-    expect(equalContentKeys(sha, git)).toBe('not-comparable');
-  });
-
-  it('is true for one key and false across parser kinds within one key kind', () => {
-    const md = formatContentKey({ parserKind: 'markdown', keyKind: 'sha256', hex: hexOf('a', 64) });
-    const none = formatContentKey({ parserKind: 'none', keyKind: 'sha256', hex: hexOf('a', 64) });
-    expect(equalContentKeys(md, md)).toBe(true);
-    expect(equalContentKeys(md, none)).toBe(false);
-  });
-});
-
 describe('orderContentKeys', () => {
   const sign = (n: number): number => Math.sign(n);
   const textOrder = (a: string, b: string): number => {
@@ -484,7 +466,7 @@ describe('orderContentKeys', () => {
     for (const x of SAMPLE) {
       for (const y of SAMPLE) {
         expect(sign(orderContentKeys(x, y)) + sign(orderContentKeys(y, x)), `${x} vs ${y}`).toBe(0);
-        expect(orderContentKeys(x, y) === 0).toBe(equalContentKeys(x, y) === true);
+        expect(orderContentKeys(x, y) === 0).toBe(x === y);
         for (const z of SAMPLE) {
           if (orderContentKeys(x, y) < 0 && orderContentKeys(y, z) < 0) expect(orderContentKeys(x, z)).toBeLessThan(0);
         }

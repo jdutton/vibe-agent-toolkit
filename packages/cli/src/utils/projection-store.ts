@@ -269,17 +269,18 @@ function storeKeyOrNotice(root: string): GitTreeKey | null {
 }
 
 /**
- * Tell the operator, once per root per command run, that the tree holds Git LFS files and this
- * environment configures no `filter.lfs.*` key. The key still holds (a pulled file whose index
+ * Tell the operator, once per root per command run, that the tree holds pulled Git LFS files and
+ * this environment configures no `filter.lfs.*` key. The key still holds (a pulled file whose index
  * stat is clean keys as it does with the filter), but git cannot re-clean a pulled file whose stat
  * moved: it hashes the content in place of the pointer, so the tree's key moves and the store
- * misses until the stat is recorded again with the filter configured.
+ * misses until the stat is recorded again with the filter configured. A file not pulled is its
+ * pointer on disk, which git hashes to the same blob with or without the filter: no notice.
  *
  * @param key - The tree's key
  * @param root - The absolute corpus root
  */
 function noticeLfsFilterAbsent(key: GitTreeKey, root: string): void {
-  if (key.lfs.pointers.length === 0 || key.lfs.filterConfigured) return;
+  if (key.lfs.filter !== 'not-configured' || !key.lfs.pointers.some((pointer) => pointer.pulled)) return;
   noticeToOperator(
     'store',
     `The projection store keys ${root} with Git LFS files in it, but this environment configures no git-lfs filter`
