@@ -15,7 +15,7 @@
 
 import { createHash } from 'node:crypto';
 import type * as Fs from 'node:fs';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -357,5 +357,21 @@ describe('gitTreeKey over an LFS pointer checked out CRLF', () => {
     backdate('big.bin');
     git('update-index', '-q', '--refresh');
     expect(keyed().lfs.pointers).toEqual([expect.objectContaining({ pulled: false })]);
+  });
+});
+
+describe('the fixture backdate', () => {
+  it('moves a file to a whole second no earlier backdate used, however long passed between them', () => {
+    writeFileSync(safePath.join(repo, 'a.bin'), 'a');
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000_500);
+    backdate('a.bin');
+    const first = statSync(safePath.join(repo, 'a.bin')).mtimeMs;
+    now.mockReturnValue(1_000_001_500);
+    backdate('a.bin');
+    const second = statSync(safePath.join(repo, 'a.bin')).mtimeMs;
+    now.mockRestore();
+    expect(Math.floor(second / 1000), 'a stat git compares by the second sees the touch').not.toBe(Math.floor(first / 1000));
+    expect(second % 1000, 'a whole second').toBe(0);
+    expect(second).toBeLessThanOrEqual(1_000_001_500 - 10_000);
   });
 });

@@ -33,7 +33,7 @@ export interface LfsFixtureRepo {
   readonly env: Readonly<Record<string, string>>;
   /** Run git in the repository with a commit identity; throws on a refusal. */
   git(...args: string[]): void;
-  /** Move each file's mtime at least ten seconds back, to a second no earlier backdate used. */
+  /** Move each file's mtime at least ten seconds back, to a whole second below every earlier backdate's. */
   backdate(...relatives: string[]): void;
   /** Write `content` to `relative`, backdate it, and record its stat in the index (`git update-index --refresh`). */
   writeAndRefresh(relative: string, content: string): void;
@@ -111,7 +111,7 @@ export function createLfsFixtureRepo(options: { readonly dir: string; readonly f
   mkdirSyncReal(repo, { recursive: true });
   writeFileSync(safePath.join(home, '.gitconfig'), '');
   const env = isolatedGitEnv(home);
-  let backdates = 0;
+  let lastBackdate = Number.POSITIVE_INFINITY;
 
   // A plain spawn, not `runGit`: this subpath reaches no third-party package (`subpath-purity`).
   // The inherited `GIT_*` variables are dropped, as `runGit` drops them, so a hook's `GIT_DIR`
@@ -128,10 +128,12 @@ export function createLfsFixtureRepo(options: { readonly dir: string; readonly f
     });
     if (result.status !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr}`, { cause: result.error });
   };
+  // Whole seconds, each below every earlier one: git may compare an mtime by the second, and on
+  // Windows a touch moves only the mtime (ctime is the creation time), so two backdates sharing a
+  // second would leave a changed file stat-clean.
   const backdate = (...relatives: string[]): void => {
-    backdates += 1;
-    const seconds = Date.now() / 1000 - BACKDATE_SECONDS - backdates;
-    for (const relative of relatives) utimesSync(safePath.join(repo, relative), seconds, seconds);
+    lastBackdate = Math.min(Math.floor(Date.now() / 1000) - BACKDATE_SECONDS, lastBackdate - 1);
+    for (const relative of relatives) utimesSync(safePath.join(repo, relative), lastBackdate, lastBackdate);
   };
 
   const configureFilter = (): void => {
@@ -153,9 +155,9 @@ export function createLfsFixtureRepo(options: { readonly dir: string; readonly f
     },
     configureFilter,
     stageAs: (relative, content, blob) => {
-      const blobFile = safePath.join(options.dir, 'clean-to.blob');
-      writeFileSync(blobFile, blob);
-      git('config', 'filter.lfs.clean', `${lfsFilterCommand(options.filterScript, 'clean-to')} "${toForwardSlash(blobFile)}"`);
+      // Beside the repository, where `clean-to` reads it: git runs a filter from the worktree root.
+      writeFileSync(safePath.join(options.dir, 'clean-to.blob'), blob);
+      git('config', 'filter.lfs.clean', lfsFilterCommand(options.filterScript, 'clean-to'));
       plantFiles(repo, { [relative]: content });
       backdate(relative);
       git('add', '--', relative);
