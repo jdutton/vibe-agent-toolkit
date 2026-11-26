@@ -18,7 +18,11 @@
   this run. A closer that does not match the container it closes is `DATA_PARSE_ERROR` before the
   parse, so a malformed file never recurses into a stack limit. A filesystem fault on a routed
   file's read follows the one fault table: `defective` where it answers `INPUT_UNREADABLE` (a
-  refused permission, a failed device), `refused` where it answers `RUN_INCOMPLETE`.
+  refused permission, a failed device), `refused` where it answers `RUN_INCOMPLETE`. A file the
+  population could not read is not read again: its class comes from the one failed read.
+- **`resource_realizations.contentFaultClass`**: the fault class of the read that left a
+  realization `unreadable`, non-null exactly then. A promotion read that fails with no errno is
+  rethrown as a bug, as the eager read already was, rather than recorded as `unreadable`.
 - **Work counters `rowSet.extracted`, `rowSet.storeServed`, `rowSet.refused` and
   `rowSet.rows.decoded`**, all zero in a run that names no `data__*` relation.
 - **Library (`@vibe-agent-toolkit/resources`): the row-set tier.** `ROW_SET_TABLES`,

@@ -29,10 +29,10 @@
  * *different* identity.
  */
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { fsFaultOf, safePath } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
-import type { ContentKey, KeyedContent } from '../content-key.js';
+import type { KeyedContent } from '../content-key.js';
 import type {
   BlobConditionRow,
   BlobReferenceRow,
@@ -43,7 +43,6 @@ import type { ClaudeRulePatternRow } from '../schemas/projection-claude-rules.js
 import type { HarnessBlobFactsRow, HarnessBlobImportRow } from '../schemas/projection-harness.js';
 import { CONDITION_WITHOUT_REFERENCE } from '../schemas/projection-resources.js';
 import type {
-  ContentState,
   RealizationConditionRow,
   ResourceExtentRow,
   ResourceRealizationRow,
@@ -558,8 +557,8 @@ export class ProjectionBuilder {
    *   key. Re-deriving the kind from the path instead is the one thing that
    *   breaks that equivalence, because `mime` may have come from a collection's
    *   declared `mimeType` rather than from the extension tables.
-   * - A read that throws rewrites the rows to `unreadable` with a null key,
-   *   records a {@link REALIZATION_PROMOTION_UNREADABLE} condition per rewritten
+   * - A read the filesystem refuses rewrites the rows to `unreadable` with a null
+   *   key and its fault class, records a {@link REALIZATION_PROMOTION_UNREADABLE} condition per rewritten
    *   row carrying the error's label, and still counts as an
    *   {@link contentPromotionAttempts attempt}. An unreadable file is a fact
    *   about the corpus, and leaving the rows `deferred` would claim nobody had
@@ -570,7 +569,8 @@ export class ProjectionBuilder {
    * - A file refused by its size (too large to decode, or a parsed kind past the run's input
    *   cap) rewrites the rows to `oversize` with a null key
    *   and no condition — the same state, and the same silence, as the eager
-   *   path in `keyOrState` — and still counts as an attempt.
+   *   path in `keyOrState` — and still counts as an attempt. Any other throw is
+   *   a bug, rethrown after the attempt is counted.
    *
    * ## Idempotent, and observably so
    *
@@ -627,9 +627,12 @@ export class ProjectionBuilder {
       // records, and like it no condition row — the state column IS the fact,
       // and nothing about the file needs explaining beyond its size.
       if (isSizeRefusal(error)) {
-        this.#rewriteRealizations(deferred, null, 'oversize');
+        this.#rewriteRealizations(deferred, { contentKey: null, contentState: 'oversize', contentFaultClass: null });
         return null;
       }
+      // `unreadable` is the filesystem refusing the bytes and nothing else, as on the eager path.
+      const fault = fsFaultOf(error);
+      if (fault === undefined) throw error;
       // A row per extent that deferred this path, not one row for the path: a
       // condition is keyed on `(extentId, path)` like the realization it is
       // about, and a single row would leave the other extents' realizations
@@ -654,11 +657,11 @@ export class ProjectionBuilder {
           ...CONDITION_WITHOUT_REFERENCE,
         });
       }
-      this.#rewriteRealizations(deferred, null, 'unreadable');
+      this.#rewriteRealizations(deferred, { contentKey: null, contentState: 'unreadable', contentFaultClass: fault.faultClass });
       return null;
     }
 
-    this.#rewriteRealizations(deferred, keyed.key, 'keyed');
+    this.#rewriteRealizations(deferred, { contentKey: keyed.key, contentState: 'keyed', contentFaultClass: null });
     this.#contentPromotions += 1;
     return keyed.key;
   }
@@ -809,23 +812,21 @@ export class ProjectionBuilder {
   }
 
   /**
-   * Restamp a set of realization rows with one `(contentKey, contentState)` pair.
+   * Restamp a set of realization rows with one set of content columns.
    *
-   * The two columns are written together and never separately: the schema pins
-   * `keyed` ⟺ non-null in both directions, so a helper that could set one
-   * without the other would be a way to build a row the schema rejects.
+   * The columns are written together and never separately: the schema pins
+   * `keyed` ⟺ a key and `unreadable` ⟺ a fault class, so a helper that could set
+   * one without the others would be a way to build a row the schema rejects.
    *
    * @param rows - Rows already present in the table, to be replaced in place
-   * @param contentKey - The key to stamp, or null
-   * @param contentState - The state that key implies
+   * @param content - The key, the state it implies, and the fault of a failed read
    */
   #rewriteRealizations(
     rows: readonly ResourceRealizationRow[],
-    contentKey: ContentKey | null,
-    contentState: ContentState,
+    content: Pick<ResourceRealizationRow, 'contentKey' | 'contentState' | 'contentFaultClass'>,
   ): void {
     for (const row of rows) {
-      this.#realizations.replace({ ...row, contentKey, contentState });
+      this.#realizations.replace({ ...row, ...content });
     }
   }
 

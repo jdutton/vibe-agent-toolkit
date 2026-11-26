@@ -1,8 +1,8 @@
 /**
  * The query lane's wiring of the `data` instance's stage, in process and store off: whether the
  * stage runs at all, and the refusal it hands the statement guard. The routed files are
- * realizations the population could not key, under a root that does not exist: the stage's read of
- * an oversize one never happens, and its read of an unreadable one again finds nothing there.
+ * realizations the population could not key, under a root that does not exist: the stage reads
+ * neither an oversize one nor an unreadable one, whose recorded fault (the file gone) decides it.
  */
 
 import { readWorkCounters, type WorkCounter } from '@vibe-agent-toolkit/utils';

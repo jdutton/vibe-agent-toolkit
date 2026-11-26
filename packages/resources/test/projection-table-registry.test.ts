@@ -113,6 +113,7 @@ const EXPECTED_COLUMNS = {
     'mime',
     'contentKey',
     'contentState',
+    'contentFaultClass',
     'mtime',
     'exists',
     'isDirectory',

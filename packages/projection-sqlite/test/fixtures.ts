@@ -206,6 +206,7 @@ export function realizationRow(fields: {
     mime: 'text/markdown',
     contentKey: FIRST_BLOB,
     contentState: 'keyed',
+    contentFaultClass: null,
     mtime: new Date('2026-08-18T12:34:56.789Z'),
     exists: true,
     isDirectory: false,

@@ -331,7 +331,7 @@ Consequences:
 
 ### Most columns belong to the realization
 
-`contentKey`, `contentState`, `mtime`, `exists`, `isDirectory`, `gitignored`, `isSymlink`,
+`contentKey`, `contentState`, `contentFaultClass`, `mtime`, `exists`, `isDirectory`, `gitignored`, `isSymlink`,
 `symlinkResolves`, `dir`, `depth`, `ext`, `pathLower`, `basenameLower` are all properties of *a path
 in a zone*, not of an identity. `resources` keeps `(resourceId, kind, origin, observed, vatId)`.
 
@@ -343,7 +343,9 @@ too large to decode into a JS string, or a file a parser reads — markdown, HTM
 prose, which routes to the markdown parser — past the parse input cap (`inputBytes`) — both `oversize`, refused by size and never read — an unreadable one:
 its permissions are fine, and a reader told otherwise would look in the wrong place. The pairing
 is pinned by a schema refinement in both directions, so a key without the state — or a state without
-the key — fails to parse rather than being merged into the projection.
+the key — fails to parse rather than being merged into the projection. An `unreadable` row carries
+`contentFaultClass`, the fault class of its one failed read (non-null exactly then, by the same
+refinement), so a consumer states the cause without reading the file again.
 
 `contentKey` is the one that forces the issue: the packager **rewrites content** into the bundle
 (`skill-packager.ts:729-754` repoints bundled links at flattened dist paths), so a resource's source

@@ -32,7 +32,7 @@
  */
 
 import { fsFaultRefusal } from '@vibe-agent-toolkit/schema';
-import { appendAll, countWork, fsFaultOf, safePath, type FsFaultFacts } from '@vibe-agent-toolkit/utils';
+import { appendAll, countWork, fsFaultOf, safePath, type FsFaultClass } from '@vibe-agent-toolkit/utils';
 
 import type { ContentKey, KeyedContent, ParserKind } from '../content-key.js';
 import type { ParseDispatcher } from '../parse-dispatcher.js';
@@ -235,6 +235,7 @@ interface Route {
   readonly variant: DataVariant;
   readonly contentKey: ContentKey | null;
   readonly contentState: QueryProjection['resourceRealizations'][number]['contentState'];
+  readonly contentFaultClass: FsFaultClass | null;
   readonly mime: string | null;
 }
 
@@ -307,6 +308,7 @@ function staticRoutes(projection: DataStageProjection, routing: DataRouting): Ro
       variant,
       contentKey: realization.contentKey,
       contentState: realization.contentState,
+      contentFaultClass: realization.contentFaultClass,
       mime: realization.mime,
     });
   }
@@ -334,9 +336,9 @@ function rootsByExtent(projection: DataStageProjection): (extentId: string) => {
 
 /**
  * A route's row set, or why it has none, from its realization's content state. A deferred
- * realization is read and keyed now, through the run's reader, and so is an unreadable one: the
- * population records that its read failed but not why, so this read's own fault decides the pair's
- * state by the fault table, and a file readable now is read like a deferred one.
+ * realization is read and keyed now, through the run's reader. An unreadable one is never read
+ * again: the fault class the population recorded from its one failed read decides the pair's state
+ * by the fault table.
  *
  * @param route - The route
  * @param content - The run's content reader
@@ -345,6 +347,7 @@ function rootsByExtent(projection: DataStageProjection): (extentId: string) => {
 async function resolveRoute(route: Route, content: DataStageContent): Promise<ResolvedRoute> {
   const idOf = (contentKey: ContentKey): ResolvedRoute => ({ route, id: { contentKey, instance: 'data', variant: route.variant } });
   if (route.contentKey !== null) return idOf(route.contentKey);
+  if (route.contentFaultClass !== null) return { route, failure: fsFailureOf(route.contentFaultClass, `the population could not read it (${route.contentFaultClass})`) };
   if (route.contentState === 'oversize') {
     return { route, failure: { state: 'defective', code: 'PARSE_LIMIT_EXCEEDED', detail: 'it is past the input cap (inputBytes)' } };
   }
@@ -502,7 +505,7 @@ function failureOf(error: unknown): PairFailure {
   if (isParseWorkerDiedError(error)) return { state: 'refused', code: error.code, detail };
   if (isSizeRefusal(error)) return { state: 'defective', code: 'PARSE_LIMIT_EXCEEDED', detail };
   const fault = fsFaultOf(error);
-  if (fault !== undefined) return fsFailureOf(fault);
+  if (fault !== undefined) return fsFailureOf(fault.faultClass, `reading it failed with ${fault.errno}`);
   throw error;
 }
 
@@ -516,13 +519,14 @@ function failureOf(error: unknown): PairFailure {
  * there now is the file vanishing under the run, `refused` like the reader's own "gone"
  * ({@link extractOne}), never the table's restore-the-reference remedy for a path an input names.
  *
- * @param fault - The fault, as {@link fsFaultOf} read it
+ * @param faultClass - The fault's class, as {@link fsFaultOf} read it
+ * @param detail - What failed, for every class but absence
  * @returns The failure
  */
-function fsFailureOf(fault: FsFaultFacts): PairFailure {
-  const failed = { code: BLOB_UNREADABLE, detail: `reading it failed with ${fault.errno}` };
-  if (fault.faultClass === 'absent') return { ...failed, state: 'refused', detail: 'the file is gone' };
-  const row = fsFaultRefusal('source', fault.faultClass, 'content');
+function fsFailureOf(faultClass: FsFaultClass, detail: string): PairFailure {
+  const failed = { code: BLOB_UNREADABLE, detail };
+  if (faultClass === 'absent') return { ...failed, state: 'refused', detail: 'the file is gone' };
+  const row = fsFaultRefusal('source', faultClass, 'content');
   // The table's remedies are sentences; a pair's is rendered inside one (`Remedy: <remedy>.`).
   const remedy = row.remedy.endsWith('.') ? row.remedy.slice(0, -1) : row.remedy;
   return row.refusal === 'INPUT_UNREADABLE'

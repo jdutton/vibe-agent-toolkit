@@ -12,10 +12,8 @@ import { lstatSync } from 'node:fs';
 import { countWork, followedStatSync, type FsFaultFacts, fsFaultOf, isLinkChainRefusedError, linkResolutionFault, realpathNativeSync } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
-import type { ContentKey } from '../content-key.js';
 import {
   CONDITION_WITHOUT_REFERENCE,
-  type ContentState,
   type RealizationConditionRow,
   type ResourceRealizationRow,
 } from '../schemas/projection-resources.js';
@@ -302,7 +300,7 @@ export async function collectRealization(
   // the one for each file, so one authoring mistake surfaced twice.
   const mime = mimeForRealization(absolutePath, rel, isDirectory, context.mimeResolver);
 
-  const { contentKey, contentState } = await keyOrState(absolutePath, context, {
+  const { contentKey, contentState, contentFaultClass } = await keyOrState(absolutePath, context, {
     hasBytes: exists && !isDirectory && symlinkResolves !== false,
     gitignored,
   }, mime);
@@ -320,6 +318,7 @@ export async function collectRealization(
     mime,
     contentKey,
     contentState,
+    contentFaultClass,
     mtime,
     exists,
     isDirectory,
@@ -391,8 +390,8 @@ interface ObservedPath {
  * 3. **Otherwise read.** Success keys it; a file refused by its size is
  *    `oversize`, never read — too large to decode, or, for a kind a parser
  *    reads, past the run's parse input cap (the run's cache holds it to it);
- *    a filesystem refusal is `unreadable`; anything else is a bug and is
- *    rethrown.
+ *    a filesystem refusal is `unreadable`, with its fault class; anything else
+ *    is a bug and is rethrown.
  *
  * A read failure is a fact about the corpus, not an error in the harness — an
  * unreadable file must show up as a row with a null key, not abort the
@@ -406,19 +405,19 @@ interface ObservedPath {
  * @param context - Supplies the demand policy and the run's cache
  * @param observed - What `lstat` already established about this path
  * @param mime - This realization's effective type, which chooses the parser
- * @returns The content key (or null) and the state explaining it
+ * @returns The content key (or null), the state explaining it, and the fault of a read that failed
  */
 async function keyOrState(
   absolutePath: string,
   context: RealizationContext,
   observed: ObservedPath,
   mime: string | null,
-): Promise<{ contentKey: ContentKey | null; contentState: ContentState }> {
+): Promise<Pick<ResourceRealizationRow, 'contentKey' | 'contentState' | 'contentFaultClass'>> {
   if (!observed.hasBytes) {
-    return { contentKey: null, contentState: 'none' };
+    return { contentKey: null, contentState: 'none', contentFaultClass: null };
   }
   if (defers(context.contentDemand ?? 'eager', observed.gitignored)) {
-    return { contentKey: null, contentState: 'deferred' };
+    return { contentKey: null, contentState: 'deferred', contentFaultClass: null };
   }
   try {
     const keyed = await readKeyedContent(
@@ -428,17 +427,18 @@ async function keyOrState(
       parserKindForMime(mime),
       context.contentCache,
     );
-    return { contentKey: keyed.key, contentState: 'keyed' };
+    return { contentKey: keyed.key, contentState: 'keyed', contentFaultClass: null };
   } catch (error) {
     // Refused by its size before any read (see `readDecodableBytes`): too large
     // to become a string, or past the parse input cap a parser would refuse it at.
     if (isSizeRefusal(error)) {
-      return { contentKey: null, contentState: 'oversize' };
+      return { contentKey: null, contentState: 'oversize', contentFaultClass: null };
     }
     // `unreadable` means the filesystem refused the bytes, and that is the
     // only thing it may mean: a bug in the keying is not a fact about the corpus.
-    if (fsFaultOf(error) === undefined) throw error;
-    return { contentKey: null, contentState: 'unreadable' };
+    const fault = fsFaultOf(error);
+    if (fault === undefined) throw error;
+    return { contentKey: null, contentState: 'unreadable', contentFaultClass: fault.faultClass };
   }
 }
 

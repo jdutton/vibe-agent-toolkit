@@ -202,6 +202,7 @@ export const PROJECTION_TABLES = {
     mime: OTHER,
     contentKey: OTHER,
     contentState: OTHER,
+    contentFaultClass: OTHER,
   }, 'extentId'),
   resourceExtents: table('resourceExtents', 'extent', ResourceExtentRowSchema, ['resourceId', 'extentId'], {
     resourceId: OTHER, extentId: OTHER,

@@ -4,14 +4,16 @@
  * reader and extraction runs the real extractor in-thread; the store is the in-memory fake.
  */
 
-import { readWorkCounters } from '@vibe-agent-toolkit/utils';
+import { readWorkCounters, safePath, toForwardSlash, type FsFaultClass } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { keyContent, type ContentKey, type KeyedContent, type ParserKind } from '../src/content-key.js';
 import { DEFAULT_PARSE_LIMITS, ParseLimitError, ParseWorkerDiedError, type ParseLimitName } from '../src/parse-limits.js';
+import { RunContentCache } from '../src/projection/content-cache.js';
 import { extractDataRows } from '../src/projection/data-extractor.js';
 import {
   dataDemandOf,
+  dataStageContentOf,
   NO_DATA_STAGE_SEAMS,
   refusableDataRelations,
   runDataStage,
@@ -23,6 +25,7 @@ import {
   type DataStageSeams,
 } from '../src/projection/data-stage.js';
 import { isStoredRowsEvicted } from '../src/projection/query-projection.js';
+import { collectRealization } from '../src/projection/realizations.js';
 import { dataRoutingFor } from '../src/projection/router.js';
 import type { RowSetId } from '../src/projection/row-set-id.js';
 import type { FactStore, RowSetWrite } from '../src/projection/store.js';
@@ -45,6 +48,8 @@ interface Realized {
   readonly recorded?: ContentKey;
   /** The errno every read of the path rejects with, as the OS would raise it. */
   readonly fault?: string;
+  /** The fault class the population recorded for an `unreadable` state; `absent` when not given. */
+  readonly faultClass?: FsFaultClass;
 }
 
 /** The fixture projection: one root, one extent, the given realizations. */
@@ -55,7 +60,8 @@ function projectionOf(files: readonly Realized[]): DataStageProjection {
     resourceRealizations: files.map((file) => {
       const state = file.state ?? 'keyed';
       const keyed = state === 'keyed' ? file.recorded ?? keyContent(file.text ?? '', 'none').key : null;
-      return { extentId: 'extent-1', path: file.path, contentState: state, contentKey: keyed, mime: 'application/json' };
+      const contentFaultClass = state === 'unreadable' ? file.faultClass ?? 'absent' : null;
+      return { extentId: 'extent-1', path: file.path, contentState: state, contentKey: keyed, contentFaultClass, mime: 'application/json' };
     }),
   } as unknown as DataStageProjection;
 }
@@ -102,6 +108,8 @@ function stage(
     readonly extractor?: DataStageInput['extractor'];
     readonly seams?: DataStageSeams;
     readonly routing?: DataStageInput['routing'];
+    /** Counts the stage's own reads, per absolute path. */
+    readonly contentReads?: Map<string, number>;
   } = {},
 ): Promise<DataStageResult> {
   const { store } = options;
@@ -109,7 +117,7 @@ function stage(
     demand: options.demand ?? EVERYTHING,
     projection: projectionOf(files),
     routing: options.routing ?? dataRoutingFor(undefined),
-    content: contentOf(files),
+    content: contentOf(files, options.contentReads),
     extractor: options.extractor ?? extractorOf(),
     store: store === undefined ? undefined : { store, reads: (options.reads ?? runStoredReads()).of(store) },
     seams: options.seams ?? NO_DATA_STAGE_SEAMS,
@@ -279,19 +287,50 @@ describe('runDataStage: a filesystem fault takes its refusal from the one fault 
     ]);
   });
 
-  it('reads a route the population left unreadable again, so the fault it reports is this read\'s', async () => {
+  it('takes an unreadable route state from the fault the population recorded, and reads it no more', async () => {
+    const contentReads = new Map<string, number>();
     const result = staged(await stage([
-      { path: 'denied/package.json', state: 'unreadable', fault: 'EACCES' },
-      { path: 'exhausted/package.json', state: 'unreadable', fault: 'EMFILE' },
-      { path: 'readable/package.json', state: 'unreadable', text: '{"now": true}' },
-      { path: 'gone/package.json', state: 'unreadable' },
-    ]));
+      { path: 'denied/package.json', state: 'unreadable', faultClass: 'refused', text: '{"now": true}' },
+      { path: 'exhausted/package.json', state: 'unreadable', faultClass: 'exhausted' },
+      { path: 'gone/package.json', state: 'unreadable', faultClass: 'absent' },
+    ], { contentReads }));
     expect(result.derived.dataRoutes?.map(({ path, state, code }) => `${path} ${state} ${code ?? ''}`)).toStrictEqual([
       'denied/package.json defective BLOB_UNREADABLE',
       'exhausted/package.json refused BLOB_UNREADABLE',
-      'readable/package.json facts ',
       'gone/package.json refused BLOB_UNREADABLE',
     ]);
+    expect(result.refusal?.pairs.map(({ detail }) => detail)).toStrictEqual([
+      'the population could not read it (refused)',
+      'the population could not read it (exhausted)',
+      'the file is gone',
+    ]);
+    expect(result.refusal?.pairs[0]?.remedy).toMatch(/^Grant read permission .*resources\.extractors\.data\.exclude$/u);
+    expect(contentReads.size).toBe(0);
+  });
+
+  it('reads a file the population found unreadable once per run, through the run cache both read through', async () => {
+    // A root never written, so the one real read fails ENOENT: absence, whatever the uid.
+    const root = toForwardSlash(safePath.join(import.meta.dirname, 'never-written-root'));
+    const cache = new RunContentCache();
+    const realization = await collectRealization(safePath.join(root, 'package.json'), 'res-1', {
+      root, extentId: 'extent-1', contentCache: cache, observedShape: 'file',
+    });
+    expect(realization.contentState).toBe('unreadable');
+    const result = staged(await runDataStage({
+      demand: EVERYTHING,
+      projection: {
+        roots: [{ id: 'root-1', path: root }],
+        resolutionContexts: [{ contextId: 'extent-1', species: 'extent', kind: 'tree', rootId: 'root-1', extentContextId: null, role: 'primary' }],
+        resourceRealizations: [realization],
+      } as unknown as DataStageProjection,
+      routing: dataRoutingFor(undefined),
+      content: dataStageContentOf(cache),
+      extractor: extractorOf(),
+      store: undefined,
+      seams: NO_DATA_STAGE_SEAMS,
+    }));
+    expect(result.refusal?.pairs.map(({ state, detail }) => `${state} ${detail}`)).toStrictEqual(['refused the file is gone']);
+    expect(cache.stats.misses).toBe(1);
   });
 
   it('names what a refused pair is and what a user can do about it, never a limit no one can set', async () => {

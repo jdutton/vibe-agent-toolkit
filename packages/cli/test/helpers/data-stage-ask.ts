@@ -16,7 +16,7 @@ import { queryProjectionOf } from '@vibe-agent-toolkit/resources/testing';
 import { createLogger } from '../../src/utils/logger.js';
 import { askPopulatedProjection } from '../../src/utils/projection-query.js';
 
-/** The paths a fixture realizes, with the state the population left each in. Every one unkeyed. */
+/** The paths a fixture realizes, with the state the population left each in. Every one unkeyed; an unreadable one was found gone. */
 export type Realized = ReadonlyArray<readonly [path: string, state: ContentState]>;
 
 /** A projection with one root at `root` and the given unkeyed realizations. */
@@ -26,7 +26,9 @@ function projectionOf(root: string, realized: Realized): QueryProjection {
     ...tables,
     roots: [{ id: 'root-1', path: root }],
     resolutionContexts: [{ contextId: 'extent-1', species: 'extent', kind: 'tree', rootId: 'root-1', extentContextId: null, role: 'primary' }],
-    resourceRealizations: realized.map(([path, contentState]) => ({ extentId: 'extent-1', path, contentState, contentKey: null, mime: 'application/json' })),
+    resourceRealizations: realized.map(([path, contentState]) => ({
+      extentId: 'extent-1', path, contentState, contentKey: null, contentFaultClass: contentState === 'unreadable' ? 'absent' : null, mime: 'application/json',
+    })),
   } as unknown as Projection);
 }
 

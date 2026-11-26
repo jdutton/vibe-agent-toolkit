@@ -126,7 +126,7 @@ const FILE_KIND = 'file';
 const SKILL_KIND = 'skill';
 
 /** The columns of a realization that say whether it has bytes, and where they are. */
-type ContentColumns = Pick<ResourceRealizationRow, 'contentKey' | 'contentState'>;
+type ContentColumns = Pick<ResourceRealizationRow, 'contentKey' | 'contentState' | 'contentFaultClass'>;
 
 /**
  * A syntactically real content key — `<parserKind>.<sha256>`, the one shape
@@ -151,11 +151,11 @@ const KEY_BETA = contentKey(3);
  * @returns The `keyed`/non-null pair the row schema pins together
  */
 function keyedContent(key: ContentKey): ContentColumns {
-  return { contentKey: key, contentState: 'keyed' };
+  return { contentKey: key, contentState: 'keyed', contentFaultClass: null };
 }
 
 /** The content columns of a path with no bytes to key at all — a directory, here. */
-const NO_CONTENT: ContentColumns = { contentKey: null, contentState: 'none' };
+const NO_CONTENT: ContentColumns = { contentKey: null, contentState: 'none', contentFaultClass: null };
 
 /**
  * One extent's `resolution_contexts` row.
